@@ -3,16 +3,16 @@
  *
  * Вынесено из `engine/orchestrator.ts` без изменения поведения. Класс
  * `ChatOrchestrator` сохраняет прежние методы-делегации (`_computeMessageCost`,
- * `_estimateUsage`, `_publishLiveUsage`, ...). Тела перенесены дословно,
- * `this._X` заменены на явные параметры.
+ * `_estimateUsage`, ...). Тела перенесены дословно, `this._X` заменены на
+ * явные параметры.
+ *
+ * ADR-118 §4: live-публикация расхода (`stream.usage`) удалена вместе с
+ * событием — расход шага публикуется в `step.finished` (usage/модель/стоимость).
  */
 import type { Session, TokenUsage } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, SystemPromptPayload } from '../../providers/base.js';
 import { computeUsageCost, type UsagePricing } from '../../providers/usage.js';
 import { estimatePromptChars as estimatePromptCharsShared } from '../context/token-ratio.js';
-
-/** ADR-070: окно троттлинга live-события `stream.usage` (~300 мс). */
-export const STREAM_USAGE_THROTTLE_MS = 300;
 
 /** Загрузчик цен модели (как `_modelPriceLoader` оркестратора). */
 export type ModelPriceLoader = (modelName: string) => UsagePricing | null;
@@ -98,79 +98,6 @@ export function estimatePromptChars(
 ): number {
   const systemText = typeof systemPrompt === 'string' ? systemPrompt : (systemPrompt?.text ?? '');
   return estimatePromptCharsShared(messages, systemText, tools);
-}
-
-/**
- * Параметры live-публикации usage (`_publishLiveUsage`).
- */
-export interface PublishLiveUsageParams {
-  publishChunk: (event: string, data: Record<string, unknown>) => void;
-  state: {
-    lastPublishedAt: number;
-    lastSignature: string;
-    /** Опубликован точный output (output>0/reasoning) — форсируем один раз. */
-    exactPublished: boolean;
-    /** Опубликован точный input (Anthropic message_start) — форсируем один раз. */
-    inputExactPublished: boolean;
-  };
-  sessionId: string;
-  streamId: string;
-  iteration: number;
-  agentRole?: string;
-  model?: string;
-  provider?: string;
-  usage: TokenUsage;
-  estimated: boolean;
-  force?: boolean;
-}
-
-/**
- * ADR-070 §2.6: публикация live-статистики стрима (`stream.usage`) через
- * существующий транспорт (publishChunk → EventBus, ADR-024).
- *
- * Троттлинг ~300 мс + дедуп по подписи usage (не спамим одинаковыми
- * значениями). Точный usage (`estimated: false`) приоритетнее оценки и
- * публикуется принудительно при первой же возможности, чтобы панель быстро
- * получила реальные токены. `cost_usd`/`cost_breakdown` добавляются только
- * если у модели заданы цены (иначе `computeUsageCost` возвращает null).
- *
- * Live-значения эфемерны: в сессию/агрегаты НЕ пишутся (персистится только
- * финальное сообщение/`stream.done`).
- */
-export function publishLiveUsage(
-  params: PublishLiveUsageParams,
-  computeCost: (model: string | undefined, usage: TokenUsage | undefined) => ReturnType<typeof computeUsageCost>,
-): void {
-  const signature = [
-    params.estimated ? 'e' : 'x',
-    params.usage.inputTokens,
-    params.usage.outputTokens,
-    params.usage.totalTokens,
-    params.usage.cacheReadTokens ?? 0,
-    params.usage.cacheWriteTokens ?? 0,
-    params.usage.reasoningTokens ?? 0,
-  ].join(':');
-  const now = Date.now();
-  if (!params.force && signature === params.state.lastSignature) return;
-  if (!params.force && now - params.state.lastPublishedAt < STREAM_USAGE_THROTTLE_MS) return;
-  params.state.lastPublishedAt = now;
-  params.state.lastSignature = signature;
-
-  const cost = params.model ? computeCost(params.model, params.usage) : null;
-
-  params.publishChunk('stream.usage', {
-    session_id: params.sessionId,
-    stream_id: params.streamId,
-    iteration: params.iteration,
-    ...(params.agentRole ? { agent_role: params.agentRole } : {}),
-    ...(params.model ? { model: params.model } : {}),
-    ...(params.provider ? { provider: params.provider } : {}),
-    // Копия: провайдеры мутируют объект running total in place — событие
-    // должно нести снимок значений на момент публикации.
-    usage: { ...params.usage },
-    ...(cost ? { cost_usd: cost.costUsd, cost_currency: cost.currency, cost_breakdown: cost.breakdown } : {}),
-    estimated: params.estimated,
-  });
 }
 
 /**

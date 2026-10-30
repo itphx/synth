@@ -7,7 +7,7 @@
  * `_joinAccumulatedTexts`; тип `AssistantMessageStatus` реэкспортируется из
  * `orchestrator.ts` (публичный контракт).
  */
-import type { Message, Part, PromptMeta, TokenUsage } from '@itphx/synth-shared';
+import type { Message, MessageStatus, Part, PromptMeta, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -303,6 +303,19 @@ export type SaveAssistantMessageFn = (
    * `LLMMessage.reasoningBlocks`. `reasoningMeta` остаётся legacy-fallback.
    */
   reasoningBlocks?: ReasoningBlockLike[],
+  /**
+   * ADR-118 §1/§5: привязка сообщения к ходу и шагу + статус сообщения.
+   *
+   * `messageId` — заранее выбранный идентификатор сообщения шага (когда
+   * черновик не был создан — сообщение создаётся сразу с этим id, чтобы
+   * `step.started`/`step.finished` адресовали одно и то же сообщение).
+   */
+  step?: {
+    turnId?: string;
+    stepIndex?: number;
+    status?: MessageStatus;
+    messageId?: string;
+  },
 ) => Promise<string>;
 
 export async function saveAssistantMessage(
@@ -341,6 +354,18 @@ export async function saveAssistantMessage(
   reasoningMeta?: { signature?: string; redacted?: string[] },
   /** Anthropic: все блоки reasoning ответа (пишутся в `parts`). */
   reasoningBlocks?: ReasoningBlockLike[],
+  /**
+   * ADR-118 §1/§5: привязка сообщения к ходу и шагу + статус сообщения.
+   *
+   * `messageId` — заранее выбранный идентификатор сообщения шага (черновик не
+   * был создан — сообщение создаётся сразу с этим id).
+   */
+  step?: {
+    turnId?: string;
+    stepIndex?: number;
+    status?: MessageStatus;
+    messageId?: string;
+  },
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
   const finalContent = content;
@@ -410,7 +435,7 @@ export async function saveAssistantMessage(
   }
 
   const msg: Message = {
-    id: existing?.id ?? generateId(),
+    id: existing?.id ?? step?.messageId ?? generateId(),
     role,
     seq: existing?.seq ?? 0, // filled by addMessage (или уже назначен черновиком)
     origin: 'local',
@@ -435,6 +460,10 @@ export async function saveAssistantMessage(
     ...(summaryOf ? { summaryOf } : {}),
     ...(qaPass !== undefined ? { qa_pass: qaPass } : {}),
     ...(qaReason !== undefined ? { qa_reason: qaReason } : {}),
+    // ADR-118 §1/§5: ход, шаг и статус сообщения («финал» = смена статуса).
+    ...(step?.turnId ? { turnId: step.turnId } : {}),
+    ...(step?.stepIndex !== undefined ? { stepIndex: step.stepIndex } : {}),
+    ...(step?.status ? { status: step.status } : {}),
   };
 
   if (existing) {

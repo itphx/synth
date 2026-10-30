@@ -4,13 +4,19 @@
  * Контракты:
  *  - нет оптимизатора → `internal`-ошибка без побочных эффектов;
  *  - ошибка подготовки суммаризации → `summarization_prep_failed`;
- *  - успешный прогон: `stream.chunk` (agent_role=summary) → сохранение
- *    summary-сообщения (`role=summary`, `skipEvent` — UI получит его через
- *    `stream.done`) → отключение засуммаризированных сообщений (**кроме
- *    pinned**) → `stream.done` с `metadata.type='summary'` → `session.updated`;
- *  - отмена: ровно `stream.cancelled`, без сохранения;
+ *  - успешный прогон: `turn.started` → `step.started` → `part.delta` (текст) /
+ *    `part.updated` (рассуждения) → сохранение summary-сообщения (`role=summary`,
+ *    `skipEvent` — UI получит его через `step.started`/`part.delta`) → отключение
+ *    засуммаризированных сообщений (**кроме pinned**) → `step.finished` →
+ *    `turn.finished` → `session.updated`;
+ *  - отмена: `stream.cancelled`, без сохранения;
  *  - ошибка стрима → единый путь `handleLlmFailure` с контекстом `summary`;
  *  - cancel-токен всегда убирается из реестра.
+ *
+ * ADR-118 §4: `stream.chunk`/`stream.done` удалены — дельты текста идут
+ * `part.delta` (partId `msg:text:0`), рассуждения — `part.updated`
+ * (partId `msg:reasoning:0`), закрытие шага — `step.finished`, хода —
+ * `turn.finished`.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -204,7 +210,7 @@ describe('handleSummarization', () => {
     expect(published).toHaveLength(0);
   });
 
-  it('успешный прогон: summary-сообщение, отключение индексов, stream.done, session.updated', async () => {
+  it('успешный прогон: summary-сообщение, отключение индексов, step.finished, session.updated', async () => {
     SummaryProvider.chunks = [
       { content: 'часть ', isFinal: false, model: 'summary-model' },
       { content: 'и середина', isFinal: false, model: 'summary-model' },
@@ -220,14 +226,19 @@ describe('handleSummarization', () => {
 
     expect(result).toEqual({});
 
-    // Чанки стрима: промежуточные — с контентом, финальный — пустой (контент уходит в stream.done)
-    const chunks = published.filter((p) => p.event === 'stream.chunk');
-    expect(chunks).toHaveLength(3);
-    expect(chunks[0]!.data).toMatchObject({ agent_role: 'summary', provider: 'summary-provider', is_final: false });
-    expect(chunks[0]!.data.content).toBe('часть ');
-    expect(chunks[chunks.length - 1]!.data).toMatchObject({ is_final: true, content: '' });
+    // ADR-118 §4: текст шага — дельтами (финальный чанк текста не несёт).
+    const deltas = published.filter((p) => p.event === 'part.delta');
+    expect(deltas).toHaveLength(2);
+    expect(deltas[0]!.data).toMatchObject({ partId: 'msg:text:0', field: 'text', delta: 'часть ' });
+    expect(deltas[1]!.data).toMatchObject({ partId: 'msg:text:0', field: 'text', delta: 'и середина' });
+    const updated = published.filter((p) => p.event === 'part.updated');
+    expect(updated).toHaveLength(1);
+    expect(updated[0]!.data).toMatchObject({
+      partId: 'msg:reasoning:0',
+      part: { id: 'msg:reasoning:0', type: 'reasoning', data: 'размышление' },
+    });
 
-    // Summary-сообщение сохранено (skipEvent: UI получит его через stream.done).
+    // Summary-сообщение сохранено (skipEvent: UI получит его через step.started/part.delta).
     // Финальный чанк несёт полный текст и заменяет накопленное (контракт провайдеров).
     const stored = (await sessionManager.getSession(sessionId))!;
     const summary = stored.messages.find((m) => m.role === MessageRole.SUMMARY)!;
@@ -246,24 +257,34 @@ describe('handleSummarization', () => {
     expect(stored.messages[1]!.disabled).toBe(false);
     expect(stored.messages[2]!.disabled).toBe(false);
 
-    const done = published.find((p) => p.event === 'stream.done')!;
-    expect(done.data).toMatchObject({
-      stream_id: 'stream1',
-      content: 'итог всей истории',
+    const turnId = 'turn_stream1';
+    expect(published.find((p) => p.event === 'step.started')!.data).toMatchObject({
+      turnId,
+      stepIndex: 0,
+      messageId: summary.id,
+    });
+    const finished = published.find((p) => p.event === 'step.finished')!;
+    expect(finished.data).toMatchObject({
+      turnId,
+      stepIndex: 0,
+      messageId: summary.id,
       status: 'completed',
       model: 'summary-model',
       provider: 'summary-provider',
       usage: USAGE,
-      metadata: { type: 'summary', indices: [0, 1] },
+      agentRole: 'summary',
     });
-    expect(done.data.message_index).toBe(3);
+    expect(published.find((p) => p.event === 'turn.finished')!.data).toMatchObject({
+      turnId,
+      status: 'completed',
+    });
 
     expect(events.find((e) => e.type === 'session.updated')).toMatchObject({
       data: { session_id: sessionId, summarization_pending: false, can_summarize: true },
     });
   });
 
-  it('стоимость добавляется в stream.done только при известных ценах', async () => {
+  it('стоимость добавляется в step.finished только при известных ценах', async () => {
     SummaryProvider.chunks = [{ content: 'итог', isFinal: true, usage: USAGE, model: 'summary-model' }];
     const sessionId = await makeSession([userMessage('a')]);
     const session = (await sessionManager.getSession(sessionId))!;
@@ -272,7 +293,7 @@ describe('handleSummarization', () => {
     await handleSummarization(
       session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, withoutCost,
     );
-    expect(published.find((p) => p.event === 'stream.done')!.data.cost_usd).toBeUndefined();
+    expect(published.find((p) => p.event === 'step.finished')!.data.costUsd).toBeUndefined();
 
     published = [];
     const withCost = makeDeps({
@@ -285,10 +306,10 @@ describe('handleSummarization', () => {
     await handleSummarization(
       session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream2', undefined, withCost,
     );
-    expect(published.find((p) => p.event === 'stream.done')!.data).toMatchObject({ cost_usd: 0.5, cost_currency: 'USD' });
+    expect(published.find((p) => p.event === 'step.finished')!.data).toMatchObject({ costUsd: 0.5, costCurrency: 'USD' });
   });
 
-  it('отмена на середине стрима: stream.cancelled без сохранения и без stream.done', async () => {
+  it('отмена на середине стрима: stream.cancelled без сохранения и без step.finished c контентом', async () => {
     const sessionId = await makeSession([userMessage('a')]);
     const session = (await sessionManager.getSession(sessionId))!;
     const deps = makeDeps();
@@ -306,10 +327,23 @@ describe('handleSummarization', () => {
     );
 
     expect(result).toEqual({});
-    expect(published.map((p) => p.event)).toEqual(['stream.chunk', 'stream.cancelled']);
-    expect(published[1]!.data).toMatchObject({
+    expect(published.map((p) => p.event)).toEqual([
+      'turn.started',
+      'step.started',
+      'part.delta',
+      'stream.cancelled',
+      'step.finished',
+      'turn.finished',
+    ]);
+    const cancelled = published.find((p) => p.event === 'stream.cancelled')!;
+    expect(cancelled.data).toMatchObject({
       stream_id: 'stream1',
       content: 'часть ',
+      status: 'cancelled',
+    });
+    expect(published.find((p) => p.event === 'step.finished')!.data).toMatchObject({
+      turnId: 'turn_stream1',
+      stepIndex: 0,
       status: 'cancelled',
     });
     expect(deps.saveAssistantMessage).not.toHaveBeenCalled();
@@ -376,7 +410,7 @@ describe('handleSummarization', () => {
     expect(events.find((e) => e.type === 'session.updated')!.data.can_summarize).toBe(false);
   });
 
-  it('pending_count в stream.done считается от актуальной сессии', async () => {
+  it('тайминги шага в step.finished считаются по фактическим чанкам', async () => {
     SummaryProvider.chunks = [{ content: 'итог', isFinal: true, usage: USAGE }];
     const sessionId = await makeSession([userMessage('a')]);
     const session = (await sessionManager.getSession(sessionId))!;
@@ -385,8 +419,9 @@ describe('handleSummarization', () => {
       session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, makeDeps(),
     );
 
-    // pendingMessages пуст → 0 (не отрицательное значение)
-    expect(published.find((p) => p.event === 'stream.done')!.data.pending_count).toBe(0);
+    // ADR-118 §4: счётчик чанков шага едет в `step.finished.timings`.
+    const timings = published.find((p) => p.event === 'step.finished')!.data.timings as { chunks: number };
+    expect(timings.chunks).toBe(1);
   });
 
   it('summarizerPrompt уходит в провайдера (не в system prompt основного агента)', async () => {

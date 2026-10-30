@@ -5,7 +5,7 @@
  * `ChatOrchestrator` сохраняет делегацию `_handleSummarization`.
  */
 import type { Message, Session, TokenUsage } from '@itphx/synth-shared';
-import { MessageRole } from '@itphx/synth-shared';
+import { MessageRole, generateId } from '@itphx/synth-shared';
 import type { BaseProvider, CancellationToken, LLMMessage, SystemPromptPayload } from '../../providers/base.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { DebugCollector } from '../../debug.js';
@@ -16,6 +16,17 @@ import { warning } from '../../logger.js';
 import type { SaveAssistantMessageFn } from './persistence.js';
 import type { LlmFailureContext } from './errors.js';
 import { StreamTiming } from './stream-stats.js';
+// ADR-118 §4: суммаризация — ход из одного шага (вызов LLM).
+import {
+  publishPartDelta,
+  publishPartUpdated,
+  publishStepFinished,
+  publishStepStarted,
+  publishTurnFinished,
+  publishTurnStarted,
+  reasoningPartId,
+  textPartId,
+} from './turn-events.js';
 
 /** Зависимости `handleSummarization`. */
 export interface SummarizationDeps {
@@ -87,6 +98,12 @@ export async function handleSummarization(
   let accumulatedReasoning = '';
   let finalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   let finalModel: string | undefined;
+  // ADR-118 §1: суммаризация — ход из одного шага.
+  const turnId = `turn_${streamId}`;
+  const stepMessageId = generateId();
+  let publishedReasoning: string | undefined;
+  publishTurnStarted(publishChunk, { turnId, messageId: message.id });
+  publishStepStarted(publishChunk, { turnId, stepIndex: 0, messageId: stepMessageId });
 
   const cancelToken: CancellationToken = {
     cancelled: false,
@@ -105,16 +122,25 @@ export async function handleSummarization(
       if (chunk.model) finalModel = chunk.model;
       if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
 
-      publishChunk('stream.chunk', {
-        stream_id: streamId,
-        ...streamTiming.next(),
-        content: chunk.isFinal ? '' : chunk.content,
-        reasoning: chunk.reasoning,
-        is_final: chunk.isFinal,
-        agent_role: 'summary',
-        model: finalModel,
-        provider: providerName,
-      });
+      // ADR-118 §4: текст шага — дельтами (`part.delta`), рассуждения — частью
+      // (`part.updated`).
+      streamTiming.next();
+      if (!chunk.isFinal && chunk.content) {
+        publishPartDelta(publishChunk, {
+          messageId: stepMessageId,
+          partId: textPartId(0),
+          field: 'text',
+          delta: chunk.content,
+        });
+      }
+      if (chunk.reasoning && chunk.reasoning !== publishedReasoning) {
+        publishedReasoning = chunk.reasoning;
+        publishPartUpdated(publishChunk, {
+          messageId: stepMessageId,
+          partId: reasoningPartId(0),
+          part: { id: reasoningPartId(0), type: 'reasoning', data: chunk.reasoning },
+        });
+      }
     }
   } catch (e) {
     warning('ORCHESTRATOR', `Summarization stream error: ${e}`);
@@ -133,6 +159,16 @@ export async function handleSummarization(
 
   if (cancelToken.cancelled) {
     publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent, status: 'cancelled' });
+    // ADR-118 §4: ход закрыт отменой.
+    publishStepFinished(publishChunk, {
+      turnId,
+      stepIndex: 0,
+      messageId: stepMessageId,
+      status: 'cancelled',
+      provider: providerName,
+      agentRole: 'summary',
+    });
+    publishTurnFinished(publishChunk, { turnId, status: 'cancelled' });
     deps.cancellationTokens.delete(streamId);
     return {};
   }
@@ -145,6 +181,14 @@ export async function handleSummarization(
     finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
     MessageRole.SUMMARY, prep.indices, true,
     undefined, undefined, undefined, undefined, { duration_ms: durationMs },
+    undefined, undefined, undefined,
+    // ADR-115: медиа-частей ответа в суммаризации нет.
+    undefined,
+    // Anthropic: подпись thinking-блока и блоки reasoning — не передаются.
+    undefined,
+    undefined,
+    // ADR-118 §1/§5: ход, шаг и статус сообщения.
+    { turnId, stepIndex: 0, status: 'completed', messageId: stepMessageId },
   );
 
   // Отключить засуммаризированные сообщения
@@ -160,25 +204,21 @@ export async function handleSummarization(
   const updatedSession = await deps.sessionManager.getSession(session.id);
 
   const chunkStats = streamTiming.snapshot();
-  const doneData: Record<string, unknown> = {
-    stream_id: streamId,
-    content: accumulatedContent,
-    content_chars: accumulatedContent.length,
-    chunks: chunkStats.chunks,
-    ...(chunkStats.firstChunkMs !== undefined ? { first_chunk_ms: chunkStats.firstChunkMs } : {}),
-    ...(chunkStats.lastChunkMs !== undefined ? { last_chunk_ms: chunkStats.lastChunkMs } : {}),
-    message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
-    pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
-    model: finalModel,
-    provider: providerName,
-    usage: finalUsage,
-    duration_ms: durationMs,
+  // ADR-118 §4: `stream.done` удалён — шаг закрывает `step.finished`, ход —
+  // `turn.finished`.
+  publishStepFinished(publishChunk, {
+    turnId,
+    stepIndex: 0,
+    messageId: stepMessageId,
     status: 'completed',
-    ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
-    metadata: { type: 'summary', indices: prep.indices },
-  };
-
-  publishChunk('stream.done', doneData);
+    usage: finalUsage,
+    provider: providerName,
+    ...(finalModel ? { model: finalModel } : {}),
+    ...(messageCost ? { costUsd: messageCost.costUsd, costCurrency: messageCost.currency } : {}),
+    agentRole: 'summary',
+    timings: chunkStats,
+  });
+  publishTurnFinished(publishChunk, { turnId, status: 'completed' });
 
   // Обновить canSummarize
   if (updatedSession) {

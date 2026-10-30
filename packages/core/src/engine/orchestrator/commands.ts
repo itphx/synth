@@ -10,11 +10,25 @@ import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shar
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import { i18n as i18nMeta } from '../system-messages.js';
+// ADR-118 §4: локальный ответ — «шаг без вызова LLM»: свой ход и шаг 0.
+import {
+  publishPartDelta,
+  publishStepFinished,
+  publishStepStarted,
+  publishTurnFinished,
+  publishTurnStarted,
+  textPartId,
+} from './turn-events.js';
 
 /**
  * ADR-046 §7.1: завершение локального ответа (builtin/команда/micro-first) теми
- * же событиями, что обычный стрим — `stream.chunk` + `stream.done`, иначе
- * SSE-цикл `POST /sessions/:id/prompt` не закрывается (ждёт `stream.done`).
+ * же событиями, что обычный стрим — иначе клиент не увидит ни хода, ни его
+ * содержимого.
+ *
+ * ADR-118 §4: `stream.chunk`/`stream.done` удалены без dual-emit — локальный
+ * ответ оформляется как **ход из одного шага**: `turn.started` → `step.started`
+ * → `part.delta` (текст) → `step.finished` → `turn.finished`. Шаг «без вызова
+ * LLM»: `stepIndex` = 0, у него свой `turnId`.
  */
 export function publishLocalCompletion(
   publishChunk: (event: string, data: Record<string, unknown>) => void,
@@ -31,32 +45,30 @@ export function publishLocalCompletion(
     messageId?: string;
   },
 ): void {
-  publishChunk('stream.chunk', {
-    stream_id: streamId,
-    // T14: локальный ответ — один чанк, значит `seq:1` и `t_ms:0`.
-    seq: 1,
-    t_ms: 0,
-    content,
-    is_final: true,
+  const turnId = `turn_${streamId}`;
+  // Сообщение шага: id сохранённого ответа, иначе — детерминированный запасной
+  // (микро-ответ сохраняется после публикации).
+  const messageId = opts?.messageId ?? `msg_${streamId}`;
+  publishTurnStarted(publishChunk, { turnId, messageId });
+  publishStepStarted(publishChunk, { turnId, stepIndex: 0, messageId });
+  if (content) {
+    publishPartDelta(publishChunk, {
+      messageId,
+      partId: textPartId(0),
+      field: 'text',
+      delta: content,
+    });
+  }
+  publishStepFinished(publishChunk, {
+    turnId,
+    stepIndex: 0,
+    messageId,
+    status: 'completed',
+    ...(opts?.usage ? { usage: opts.usage } : {}),
     ...(opts?.model ? { model: opts.model } : {}),
     ...(opts?.provider ? { provider: opts.provider } : {}),
   });
-  publishChunk('stream.done', {
-    stream_id: streamId,
-    content,
-    content_chars: content.length,
-    chunks: 1,
-    first_chunk_ms: 0,
-    last_chunk_ms: 0,
-    pending_count: 0,
-    model: opts?.model ?? 'command',
-    provider: opts?.provider ?? 'command',
-    ...(opts?.messageIndex !== undefined ? { message_index: opts.messageIndex } : {}),
-    ...(opts?.messageId ? { message_id: opts.messageId } : {}),
-    ...(opts?.usage ? { usage: opts.usage } : {}),
-    ...(opts?.durationMs !== undefined ? { duration_ms: opts.durationMs } : {}),
-    ...(opts?.metadata ? { metadata: opts.metadata } : {}),
-  });
+  publishTurnFinished(publishChunk, { turnId, status: 'completed' });
 }
 
 /** Зависимости `finishLocalCommand`. */

@@ -128,8 +128,47 @@ export type StepStartedPayload = {
 };
 
 /**
+ * ADR-118 §4: вложение ответа шага (ADR-115, outbound) — **метаданные**
+ * объекта, без байтов. Шлюз (Telegram/VK) забирает байты по sha256
+ * (`GET /api/v2/attachments/:sha256`) и не обращается к сессии.
+ */
+export type StepAttachmentRef = {
+  /** SHA-256 содержимого (адрес объекта в контуре вложений). */
+  sha256: string;
+  /** MIME по содержимому. */
+  mime: string;
+  /** Размер в байтах. */
+  size: number;
+  /** Имя файла (санитайз), если известно. */
+  name?: string;
+};
+
+/**
+ * ADR-118 §4: тайминги шага — снимок счётчика чанков на момент финала шага.
+ * Число чанков и моменты первого/последнего чанка (мс от старта хода).
+ */
+export type StepTimings = {
+  /** Число чанков шага. */
+  chunks: number;
+  /** Мс от старта хода до первого чанка. */
+  firstChunkMs?: number;
+  /** Мс от старта хода до последнего чанка. */
+  lastChunkMs?: number;
+};
+
+/**
  * ADR-118 §4/§5: payload события `step.finished` (канал сессии) —
  * шаг завершён: статус сообщения + учёт токенов.
+ *
+ * Аддитивные поля `provider`/`model`/`costUsd`/`costCurrency` — данные для
+ * наблюдаемости (ADR-094): счётчика ретраев (`synth_llm_retries_total`) и
+ * стоимости (`synth_llm_cost_total`) больше нечего читать из удалённого
+ * `stream.usage`/`stream.done` — шаг несёт их сам (один шаг = один вызов LLM,
+ * поэтому сумма по шагам равна стоимости хода).
+ *
+ * `attachments`/`debugInfo`/`timings`/`agentRole` — перенос данных удалённых
+ * `stream.done` в шаг: вложения ответа (ADR-115), отладочные данные
+ * (ADR-070), тайминги чанков и роль агента.
  */
 export type StepFinishedPayload = {
   turnId: string;
@@ -139,6 +178,22 @@ export type StepFinishedPayload = {
   status: MessageStatus;
   /** Расход токенов шага (замена `stream.usage`). */
   usage?: TokenUsage;
+  /** Провайдер шага — для метрик (ретраи/стоимость), ADR-094. */
+  provider?: string;
+  /** Модель шага — для метрик (ретраи), ADR-094. */
+  model?: string;
+  /** Стоимость шага (в валюте `costCurrency`) — для `synth_llm_cost_total`. */
+  costUsd?: number;
+  /** Валюта стоимости шага (по умолчанию — USD). */
+  costCurrency?: string;
+  /** Роль агента шага — атрибуция в UI/аналитике. */
+  agentRole?: string;
+  /** Вложения ответа шага (ADR-115, outbound) — метаданные без байтов. */
+  attachments?: StepAttachmentRef[];
+  /** Отладочные данные шага (ADR-070) — payload debug-коллектора. */
+  debugInfo?: Record<string, unknown>;
+  /** Тайминги шага (число чанков, моменты первого/последнего). */
+  timings?: StepTimings;
 };
 
 /**
@@ -170,6 +225,15 @@ export type PartUpdatedPayload = {
  * (`InstanceCapabilities.messageModel`).
  */
 export const MESSAGE_MODEL_VERSION = 2;
+
+/**
+ * ADR-118 §8: имя query-параметра, которым клиент заявляет свою модель
+ * сообщений (`GET /api/v2/events?messageModel=2`).
+ *
+ * Константа живёт в `shared`, потому что её знают и клиент (UI/SDK), и
+ * сервер (гибридный мост `RemoteEventBridge`, `remote/event-bridge.ts`).
+ */
+export const MESSAGE_MODEL_QUERY_PARAM = 'messageModel';
 
 /**
  * ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).

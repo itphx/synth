@@ -2,21 +2,22 @@
  * ADR-095 (шаг 6a): собственные тесты usage/cost-хелперов оркестратора.
  *
  * Контракты: fallback-цепочка модели сообщения (ADR-070 §2.6), best-effort
- * оценка usage, стоимость только при известных ценах, live-событие
- * `stream.usage` (троттлинг + дедуп по подписи + снимок usage) и агрегация
- * статистики сабагентов из tool-результатов `task`.
+ * оценка usage, стоимость только при известных ценах и агрегация статистики
+ * сабагентов из tool-результатов `task`.
+ *
+ * ADR-118 §4: live-событие `stream.usage` удалено — расход шага едет в
+ * `step.finished` (`usage`), поэтому отдельного теста на троттлинг/дедуп
+ * публикации usage больше нет.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Session, TokenUsage } from '@itphx/synth-shared';
 import {
   computeMessageCost,
   resolveMessageModel,
   estimateUsage,
   estimatePromptChars,
-  publishLiveUsage,
   aggregateSubagentStats,
-  STREAM_USAGE_THROTTLE_MS,
 } from './usage.js';
 import type { BaseProvider } from '../../providers/base.js';
 
@@ -25,10 +26,6 @@ const USAGE: TokenUsage = { inputTokens: 100, outputTokens: 10, totalTokens: 110
 function makeSession(settings: Partial<Session['settings']> = {}): Session {
   return { id: 's1', settings: { ...settings } } as unknown as Session;
 }
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 describe('computeMessageCost / resolveMessageModel', () => {
   it('без модели или без usage стоимость не считается', () => {
@@ -108,142 +105,6 @@ describe('estimateUsage / estimatePromptChars', () => {
   it('estimatePromptChars: пустой system/tools ничего не добавляют', () => {
     expect(estimatePromptChars([] as never, undefined)).toBe(0);
     expect(estimatePromptChars([{ content: 'a' }] as never, '', [])).toBe(1);
-  });
-});
-
-describe('publishLiveUsage — троттлинг, дедуп, контракт события', () => {
-  function makeState() {
-    return { lastPublishedAt: 0, lastSignature: '', exactPublished: false, inputExactPublished: false };
-  }
-
-  function call(
-    state: ReturnType<typeof makeState>,
-    publishChunk: (event: string, data: Record<string, unknown>) => void,
-    overrides: Partial<Parameters<typeof publishLiveUsage>[0]> = {},
-    computeCost = vi.fn(() => null),
-  ) {
-    publishLiveUsage(
-      {
-        publishChunk,
-        state,
-        sessionId: 's1',
-        streamId: 'stream1',
-        iteration: 2,
-        usage: { ...USAGE },
-        estimated: false,
-        ...overrides,
-      },
-      computeCost as never,
-    );
-    return computeCost;
-  }
-
-  it('первая публикация несёт контрактные поля и снимок usage', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000_000);
-    const state = makeState();
-    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
-    const usage = { ...USAGE };
-
-    call(state, (event, data) => events.push({ event, data }), {
-      usage,
-      agentRole: 'fixer',
-      model: 'm',
-      provider: 'p',
-      estimated: true,
-    });
-
-    expect(events).toHaveLength(1);
-    expect(events[0]!.event).toBe('stream.usage');
-    expect(events[0]!.data).toMatchObject({
-      session_id: 's1',
-      stream_id: 'stream1',
-      iteration: 2,
-      agent_role: 'fixer',
-      model: 'm',
-      provider: 'p',
-      estimated: true,
-      usage: USAGE,
-    });
-
-    // Снимок: провайдер мутирует running total in place — событие не должно «поехать»
-    usage.inputTokens = 999;
-    expect((events[0]!.data.usage as TokenUsage).inputTokens).toBe(100);
-    expect(state.lastSignature).toBe('e:100:10:110:0:0:0');
-  });
-
-  it('повторная подпись usage не публикуется (дедуп), даже спустя окно троттлинга', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000_000);
-    const state = makeState();
-    const events: unknown[] = [];
-    const publish = (_e: string, d: Record<string, unknown>) => events.push(d);
-
-    call(state, publish);
-    vi.setSystemTime(1_000_000 + STREAM_USAGE_THROTTLE_MS * 10);
-    call(state, publish);
-
-    expect(events).toHaveLength(1);
-  });
-
-  it('другая подпись внутри окна троттлинга не публикуется, после окна — публикуется', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000_000);
-    const state = makeState();
-    const events: Array<Record<string, unknown>> = [];
-    const publish = (_e: string, d: Record<string, unknown>) => events.push(d);
-
-    call(state, publish);
-    vi.setSystemTime(1_000_000 + STREAM_USAGE_THROTTLE_MS - 1);
-    call(state, publish, { usage: { inputTokens: 101, outputTokens: 10, totalTokens: 111 } });
-    expect(events).toHaveLength(1);
-
-    vi.setSystemTime(1_000_000 + STREAM_USAGE_THROTTLE_MS);
-    call(state, publish, { usage: { inputTokens: 101, outputTokens: 10, totalTokens: 111 } });
-    expect(events).toHaveLength(2);
-  });
-
-  it('force публикует даже ту же подпись внутри окна', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000_000);
-    const state = makeState();
-    const events: unknown[] = [];
-    const publish = (_e: string, d: Record<string, unknown>) => events.push(d);
-
-    call(state, publish);
-    call(state, publish, { force: true });
-    expect(events).toHaveLength(2);
-  });
-
-  it('cost не считается без модели; с моделью и ценами поля cost_* добавляются', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000_000);
-    const events: Array<Record<string, unknown>> = [];
-    const publish = (_e: string, d: Record<string, unknown>) => events.push(d);
-
-    const costlessLoader = call(makeState(), publish, {});
-    expect(costlessLoader).not.toHaveBeenCalled();
-    expect(events[0]!.cost_usd).toBeUndefined();
-
-    const withCost = call(makeState(), publish, { model: 'm' }, vi.fn(() => ({
-      costUsd: 1.5,
-      breakdown: { input: 1, output: 0.5, cacheRead: 0, cacheWrite: 0 },
-      currency: 'USD',
-    })) as never);
-    expect(withCost).toHaveBeenCalledWith('m', expect.anything());
-    expect(events[1]).toMatchObject({ cost_usd: 1.5, cost_currency: 'USD' });
-    expect(events[1]!.cost_breakdown).toBeDefined();
-  });
-
-  it('пустые agentRole/model/provider не попадают в событие', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000_000);
-    const events: Array<Record<string, unknown>> = [];
-    call(makeState(), (_e, d) => events.push(d));
-
-    expect(events[0]).not.toHaveProperty('agent_role');
-    expect(events[0]).not.toHaveProperty('model');
-    expect(events[0]).not.toHaveProperty('provider');
   });
 });
 

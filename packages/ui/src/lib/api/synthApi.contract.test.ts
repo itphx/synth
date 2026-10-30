@@ -34,6 +34,7 @@ const EXPECTED_API_METHODS = [
   'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
   'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMemoryFact', 'getMemoryGraph', 'getMemoryStatus', 'getMigrations', 'getModels',
+  'getInstanceCapabilities',
   'getMyIdentities', 'getOAuthCredential', 'getOAuthCredentials', 'getOptimization', 'getPack', 'getPacks', 'getPendingRestore',
   'getPipelineInstances', 'getPipelineRun', 'getPipelineTemplates', 'getPipelines', 'getPlugin', 'getPluginsSettings',
   'getProcess', 'getProcessLogs',

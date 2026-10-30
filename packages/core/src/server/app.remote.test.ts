@@ -419,7 +419,7 @@ describe('createStandaloneApp: RemoteEventBridge и /api/v2/events (runtime)', (
       // То, что сделал бы мост: публикация события удалённой сессии (remote:<id>)
       // и локальной сессии — обе доходят до UI через subscribeAll.
       handle.eventBus.publish('remote:ses-1', 'session.updated', { id: 'remote:ses-1', name: 'x' });
-      handle.eventBus.publish('local-1', 'stream.chunk', { stream_id: 's1' });
+      handle.eventBus.publish('local-1', 'part.delta', { messageId: 'm1', partId: 'msg:text:0', field: 'text', delta: 'x' });
 
       const first = await reader.read();
       expect(decoder.decode(first.value)).toContain('"sessionId":"remote:ses-1"');
@@ -937,12 +937,12 @@ describe('createStandaloneApp: SSE /api/v2/events (standalone, subscribeAll)', (
       // Сессия создана позже (аналог events-funnel: auto-bind/ephemeral во время
       // работы add-on'а). Per-session subscribe терял такие события — subscribeAll
       // обязан доставить.
-      handle.eventBus.publish('ses-after-connect', 'stream.done', { ok: true });
+      handle.eventBus.publish('ses-after-connect', 'turn.finished', { turnId: 't1', status: 'completed' });
 
       const chunk = await reader.read();
       const payload = decoder.decode(chunk.value);
       expect(payload).toContain('"sessionId":"ses-after-connect"');
-      expect(payload).toContain('"stream.done"');
+      expect(payload).toContain('"turn.finished"');
     } finally {
       abort.abort();
       await rm(dir, { recursive: true, force: true }).catch(() => {});

@@ -104,12 +104,28 @@ import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 // ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
-import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, publishLiveUsage, aggregateSubagentStats, type PublishLiveUsageParams } from './orchestrator/usage.js';
+import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, aggregateSubagentStats } from './orchestrator/usage.js';
 import { publishFsChange } from './orchestrator/fs-change.js';
 import { applySteerInjections } from './steering/apply.js';
 import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus } from './orchestrator/persistence.js';
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { StreamTiming } from './orchestrator/stream-stats.js';
+// ADR-118 §1/§4: единая точка публикации `turn.*`/`step.*`/`part.*` и
+// детерминированных идентификаторов частей (`msg:text:N`, `callId`).
+import {
+  publishPartDelta,
+  publishPartUpdated,
+  publishStepFinished,
+  publishStepStarted,
+  publishTurnFinished,
+  publishTurnStarted,
+  reasoningPartId,
+  stepStatusFromMessageStatus,
+  textPartId,
+  toolCallPart,
+  toolCallPartId,
+  turnStatusFromMessageStatus,
+} from './orchestrator/turn-events.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type ProviderOverrides, type RouteProviderDeps } from './orchestrator/routing.js';
 import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn, type CurrentModelPair } from './orchestrator/prompt-info.js';
@@ -992,21 +1008,10 @@ export class ChatOrchestrator {
   }
 
   /**
-   * ADR-070 §2.6: публикация live-статистики стрима (`stream.usage`) через
-   * существующий транспорт (publishChunk → EventBus, ADR-024).
-   *
-   * Троттлинг ~300 мс + дедуп по подписи usage (не спамим одинаковыми
-   * значениями). Точный usage (`estimated: false`) приоритетнее оценки и
-   * публикуется принудительно при первой же возможности, чтобы панель быстро
-   * получила реальные токены. `cost_usd`/`cost_breakdown` добавляются только
-   * если у модели заданы цены (иначе `computeUsageCost` возвращает null).
-   *
-   * Live-значения эфемерны: в сессию/агрегаты НЕ пишутся (персистится только
-   * финальное сообщение/`stream.done`).
+   * ADR-118 §4: live-публикация расхода шага удалена вместе с `stream.usage` —
+   * расход несёт `step.finished` (usage/модель/стоимость шага), а метрики
+   * (`synth_llm_cost_total`) читают его оттуда.
    */
-  private _publishLiveUsage(params: PublishLiveUsageParams): void {
-    publishLiveUsage(params, (model, usage) => this._computeMessageCost(model, usage));
-  }
 
   /**
    * ADR-070 §2.6: агрегация per-message статистики сабагентов из tool-результатов
@@ -3622,9 +3627,8 @@ export class ChatOrchestrator {
     // ADR-070 §2.6: старт прогона — для per-message duration_ms (полная
     // длительность у финального сообщения потока, включая tool-chain).
     const streamStartedAt = Date.now();
-    // T14: тайминги стрима — `seq`/`t_ms` у чанков и сводка в `stream.done`.
-    // Счётчик сквозной по ходу (все итерации Tool Use — один `stream_id`).
-    const streamTiming = new StreamTiming(streamStartedAt);
+    // ADR-118 §4: тайминги шага (число чанков, моменты первого/последнего) —
+    // в `step.finished.timings`. Счётчик заводится на каждый шаг хода.
     const debugCollector = new DebugCollector(session.settings.debugEnabled);
     // ADR-114 §3: рабочий каталог сессии и её привязка к worktree (одним
     // чтением). Привязка нужна тулам (containment от каталога worktree,
@@ -3736,6 +3740,13 @@ export class ChatOrchestrator {
     }, this._processEarlyDeps());
     if (earlyResult) return earlyResult;
 
+    // ADR-118 §1: ход = последовательность шагов. Идентификатор хода стабилен
+    // для всех шагов хода; `turn.started`/`turn.finished` открывают и закрывают
+    // ход в канале сессии.
+    const turnId = `turn_${generateId()}`;
+    /** `turn.started` опубликован (значит, ход нужно закрыть `turn.finished`). */
+    let turnStarted = false;
+
     try {
       // Этап 1 roadmap 0.13 (блок 3): «ход → сессия» — нужно для «Стопа»:
       // `cancel(streamId)` знает только ход, а снимать открытые вопросы нужно
@@ -3750,6 +3761,9 @@ export class ChatOrchestrator {
         effectiveReasoningLevel, sessionMode, planMode, planApproved, author, attempt,
       }, this._processSetupDeps(session));
       if (setup.failed) return setup.result;
+      // ADR-118 §4: ход начался (реплика пользователя — id её сообщения).
+      publishTurnStarted(publishChunk, { turnId, messageId: message.id });
+      turnStarted = true;
       const {
         provider, providerName, modelName, routingDecision, language,
         activeMcpServers, activeMcpSet, toolsPolicy, mcpPolicy,
@@ -3818,15 +3832,14 @@ export class ChatOrchestrator {
        * чанков не было (`ref() === null`) — финал добавляется как раньше.
        */
       let currentDraft: StreamMessageRef | null = null;
+      // ADR-118 §4: тайминги последнего шага хода — в `step.finished` финального
+      // шага (эпилог `process-finalize`).
+      let lastStepTiming: StreamTiming | undefined;
+      // ADR-118 §1: идентификатор сообщения последнего шага хода.
+      let lastStepMessageId: string | undefined;
 
-      // ADR-070 §2.6: live-статистика стрима (`stream.usage`). Состояние
-      // троттлинга — на поток; публикуется через publishChunk (EventBus).
-      const liveUsageState = {
-        lastPublishedAt: 0,
-        lastSignature: '',
-        exactPublished: false,
-        inputExactPublished: false,
-      };
+      // ADR-118 §4: live-статистика расхода удалена вместе с `stream.usage` —
+      // расход шага публикуется в `step.finished` (usage/модель/стоимость).
 
       // Стартовая оценка input сразу после сборки сообщений — чтобы панель
       // статистики не пустовала до первого чанка провайдера.
@@ -3835,23 +3848,6 @@ export class ChatOrchestrator {
       let lastIterationPromptChars = this._estimatePromptChars(
         currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
       );
-      this._publishLiveUsage({
-        publishChunk,
-        state: liveUsageState,
-        sessionId: session.id,
-        streamId,
-        iteration: 0,
-        agentRole: effectiveAgentRole,
-        model: this._resolveMessageModel(undefined, undefined, provider, session),
-        provider: providerName,
-        usage: this._estimateUsage(
-          undefined,
-          lastIterationPromptChars,
-          0,
-        ).usage,
-        estimated: true,
-        force: true,
-      });
 
       // Предупреждение о заполненности контекстного окна (fire-and-forget, не блокирует вызов)
       this._publishContextLimitWarning(session.id, modelName, messagesForLlm);
@@ -3896,16 +3892,10 @@ export class ChatOrchestrator {
         // инъекцией ниже, как при `steer`.
         if (cancelToken.interrupted) {
           cancelToken.interrupted = false;
-          publishChunk('stream.interrupted', {
-            stream_id: streamId,
-            status: 'interrupted',
-            // `boundary` — прерывание применено на границе шага (генерации в
-            // этот момент не было); `generation` — оборвана текущая генерация.
-            reason: 'boundary',
-            model: finalModel,
-            provider: providerName,
-            iteration: toolIteration,
-          });
+          // ADR-118 §4: отдельного события прерывания больше нет — шаг, который
+          // шёл, уже закрыт (`step.finished` со статусом `cancelled`), а
+          // вмешательство пользователя приходит как `message.delivered`.
+          // Граница шага: генерации в этот момент не было.
         }
 
         // ADR-104: вычитка очереди инъекций — на границе шага (здесь же, где
@@ -3943,6 +3933,9 @@ export class ChatOrchestrator {
         let iterationReasoningBlocks: LLMReasoningBlock[] | undefined;
         let toolCalls: Record<string, unknown>[] | undefined = [];
         let chunkModel: string | undefined;
+        // ADR-118 §4: последний опубликованный текст рассуждений шага —
+        // чтобы не публиковать `part.updated` на каждый кумулятивный чанк.
+        let publishedReasoning: string | undefined;
         // ADR-070: usage текущей итерации (running total от провайдера) для live.
         let iterationUsage: TokenUsage | undefined;
 
@@ -3956,12 +3949,23 @@ export class ChatOrchestrator {
           );
         lastIterationPromptChars = iterationPromptChars;
 
+        // ADR-118 §1: шаг = один вызов LLM = одно assistant-сообщение.
+        // Идентификатор сообщения шага известен ДО первого чанка — по нему
+        // публикуются `step.started`, `part.delta` и `part.updated`.
+        const stepIndex = toolIteration;
+        const stepMessageId = generateId();
+        // Тайминги шага (число чанков, моменты первого/последнего) — в
+        // `step.finished.timings` (ADR-118 §4).
+        const stepTiming = new StreamTiming(streamStartedAt);
+        lastStepTiming = stepTiming;
+        lastStepMessageId = stepMessageId;
         // Шаг 2б: черновик частичного стрима этой итерации. Запись создаётся
         // при первом непустом контенте/рассуждении и далее обновляется с
         // троттлингом — стрим не блокируется.
         const draft = new StreamMessageDraft({
           sessionManager: this._sessionManager,
           sessionId: session.id,
+          id: stepMessageId,
           base: {
             role: MessageRole.ASSISTANT,
             origin: 'local',
@@ -3972,10 +3976,16 @@ export class ChatOrchestrator {
             agentRole: effectiveAgentRole,
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
             model: this._resolveMessageModel(undefined, finalModel, provider, session),
+            // ADR-118 §1/§5: сообщение шага несёт ход и индекс шага; статус
+            // `streaming` меняется на терминальный в финале шага.
+            turnId,
+            stepIndex,
+            status: 'streaming',
             metadata: { stream_id: streamId },
           },
           intervalMs: this._streamPersistIntervalMs,
         });
+        publishStepStarted(publishChunk, { turnId, stepIndex, messageId: stepMessageId });
 
         // ADR-117: effort считается на каждый LLM-вызов из **актуальных**
         // настроек: `agent.effort` → `session.settings.effort` → тир уровня
@@ -4036,72 +4046,36 @@ export class ChatOrchestrator {
               redacted: accumulatedReasoningRedacted,
             });
 
-            // ADR-070 §2.6: live-статистика. Anthropic отдаёт input/cache в
-            // `message_start` (output ещё 0), а output — только в `message_delta`
-            // в конце. Поэтому «точным» считаем usage с output>0/reasoning:
-            // при output===0 и input>0 сохраняем точные input/cache, но output
-            // оцениваем из накопленного текста (estimated: true). Полностью
-            // нулевой usage (типично для OpenAI до финала) — оценка обоих, как
-            // раньше. Точный output оценкой не понижаем. Первые точные input и
-            // output публикуем принудительно (сквозь троттлинг), чтобы панель
-            // быстро получила реальные значения.
-            const chunkUsage = iterationUsage;
-            const hasExactOutput = !!chunkUsage
-              && (chunkUsage.outputTokens > 0 || (chunkUsage.reasoningTokens ?? 0) > 0);
-            const hasExactInput = !!chunkUsage && chunkUsage.inputTokens > 0;
-
-            let liveUsage: TokenUsage;
-            let liveEstimated: boolean;
-            let forceLive = false;
-            if (hasExactOutput) {
-              liveUsage = chunkUsage!;
-              liveEstimated = false;
-              forceLive = !liveUsageState.exactPublished;
-              liveUsageState.exactPublished = true;
-            } else {
-              liveUsage = this._estimateUsage(
-                chunkUsage,
-                iterationPromptChars,
-                accumulatedContent.length + accumulatedReasoning.length,
-              ).usage;
-              liveEstimated = true;
-              if (hasExactInput) {
-                // Anthropic: input/cache уже точные — форсируем первый такой снимок.
-                forceLive = !liveUsageState.inputExactPublished;
-                liveUsageState.inputExactPublished = true;
-              }
-            }
-            this._publishLiveUsage({
-              publishChunk,
-              state: liveUsageState,
-              sessionId: session.id,
-              streamId,
-              iteration: toolIteration,
-              agentRole: effectiveAgentRole,
-              model: this._resolveMessageModel(chunkModel, finalModel, provider, session),
-              provider: providerName,
-              usage: liveUsage,
-              estimated: liveEstimated,
-              force: forceLive,
-            });
+            // ADR-118 §4: live-статистика расхода удалена вместе с
+            // `stream.usage` — расход шага публикуется в `step.finished`
+            // (usage/модель/стоимость шага).
 
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
               toolCalls = chunk.toolCalls;
             }
 
-            // Stream UI chunks (content from all iterations; reasoning always)
-            publishChunk('stream.chunk', {
-              stream_id: streamId,
-              // T14: измеримость — номер чанка в стриме и время от его старта.
-              ...streamTiming.next(),
-              content: chunk.isFinal ? '' : chunk.content,
-              reasoning: chunk.reasoning,
-              iteration: toolIteration,
-              is_final: chunk.isFinal,
-              agent_role: effectiveAgentRole,
-              model: chunkModel,
-              provider: providerName,
-            });
+            // ADR-118 §1/§4: текст шага — дельтами (`part.delta`) с
+            // детерминированным `partId` (`msg:text:N`); полный текст шага не
+            // публикуется (его несёт финальное сообщение).
+            stepTiming.next();
+            if (!chunk.isFinal && chunk.content) {
+              publishPartDelta(publishChunk, {
+                messageId: stepMessageId,
+                partId: textPartId(0),
+                field: 'text',
+                delta: chunk.content,
+              });
+            }
+            // Рассуждения — целой частью (`part.updated`): провайдер шлёт их
+            // кумулятивно, дельта здесь бессмысленна.
+            if (chunk.reasoning && chunk.reasoning !== publishedReasoning) {
+              publishedReasoning = chunk.reasoning;
+              publishPartUpdated(publishChunk, {
+                messageId: stepMessageId,
+                partId: reasoningPartId(0),
+                part: { id: reasoningPartId(0), type: 'reasoning', data: chunk.reasoning },
+              });
+            }
           }
         } catch (e) {
           const errMsg = String(e);
@@ -4109,7 +4083,21 @@ export class ChatOrchestrator {
 
           // Шаг 2б: частичный текст сохраняется с interrupted/status='error',
           // таймер останавливается; семантика handleLlmFailure не меняется.
-          await draft.abort(errMsg);
+          await draft.abort(errMsg, 'error');
+
+          // ADR-118 §4: шаг закрыт ошибкой, ход — тоже.
+          publishStepFinished(publishChunk, {
+            turnId,
+            stepIndex,
+            messageId: stepMessageId,
+            status: 'error',
+            ...(iterationUsage ? { usage: iterationUsage } : {}),
+            provider: providerName,
+            ...(chunkModel ? { model: chunkModel } : {}),
+            ...(effectiveAgentRole ? { agentRole: effectiveAgentRole } : {}),
+          });
+          publishTurnFinished(publishChunk, { turnId, status: 'error' });
+          turnStarted = false;
 
           this._cancellationTokens.delete(streamId);
           return this._handleLlmFailure(session.id, streamId, e, attempt, {
@@ -4210,6 +4198,21 @@ export class ChatOrchestrator {
             ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
           });
 
+          // ADR-118 §4: шаг закрыт отменой, ход — тоже.
+          publishStepFinished(publishChunk, {
+            turnId,
+            stepIndex,
+            messageId: stepMessageId,
+            status: 'cancelled',
+            usage: cancelEstimated.usage,
+            provider: providerName,
+            model: cancelModel,
+            ...(cancelCost ? { costUsd: cancelCost.costUsd, costCurrency: cancelCost.currency } : {}),
+            ...(effectiveAgentRole ? { agentRole: effectiveAgentRole } : {}),
+          });
+          publishTurnFinished(publishChunk, { turnId, status: 'cancelled' });
+          turnStarted = false;
+
           this._cancellationTokens.delete(streamId);
           return {};
         }
@@ -4228,6 +4231,7 @@ export class ChatOrchestrator {
           await this._handleInterruptedGeneration({
             session,
             streamId,
+            turnId,
             draft,
             content: accumulatedContent,
             reasoning: accumulatedReasoning,
@@ -4318,6 +4322,9 @@ export class ChatOrchestrator {
           await draft.flush();
           currentDraft = draft.ref();
           await draft.dispose();
+          // ADR-118 §4: `step.finished` финального шага публикует эпилог
+          // (`process-finalize`) — там уже известны вложения ответа, отладочные
+          // данные и тайминги.
           break;
         }
 
@@ -4338,6 +4345,38 @@ export class ChatOrchestrator {
           toolCalls,
           model: chunkModel ?? finalModel,
           metadata: { stream_id: streamId, tool_chain: true },
+          // ADR-118 §5: шаг завершён — статус сообщения терминальный.
+          status: 'completed',
+        });
+
+        // ADR-118 §1/§4: вызовы инструментов — части сообщения шага
+        // (`part.updated`, `partId` = `callId` провайдера).
+        for (const tc of toolCalls) {
+          const callId = typeof tc.id === 'string' ? tc.id : '';
+          if (!callId) continue;
+          publishPartUpdated(publishChunk, {
+            messageId: stepMessageId,
+            partId: toolCallPartId(callId),
+            part: toolCallPart(callId, tc),
+          });
+        }
+        // ADR-118 §4: шаг закрыт (ответ с вызовами инструментов).
+        const toolStepModel = chunkModel ?? finalModel;
+        const toolStepUsage = iterationUsage ?? finalUsage;
+        const toolStepCost = this._computeMessageCost(toolStepModel, toolStepUsage);
+        publishStepFinished(publishChunk, {
+          turnId,
+          stepIndex,
+          messageId: stepMessageId,
+          status: 'completed',
+          usage: toolStepUsage,
+          provider: providerName,
+          ...(toolStepModel ? { model: toolStepModel } : {}),
+          ...(toolStepCost
+            ? { costUsd: toolStepCost.costUsd, costCurrency: toolStepCost.currency }
+            : {}),
+          ...(effectiveAgentRole ? { agentRole: effectiveAgentRole } : {}),
+          timings: stepTiming.snapshot(),
         });
 
         // Tool calls detected — execute them
@@ -5300,7 +5339,7 @@ export class ChatOrchestrator {
       // сообщение, `stream.done`, авто-тайтл, триггеры оптимизации контекста)
       // вынесен в `orchestrator/phases/process-finalize.ts`.
       return runProcessFinalize(
-        { session, streamId, publishChunk, debugCollector, streamStartedAt, streamTiming },
+        { session, streamId, publishChunk, debugCollector, streamStartedAt, streamTiming: lastStepTiming },
         {
           cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
           hadDeny, toolIteration, maxIterations, stepLimitExecuted,
@@ -5309,6 +5348,10 @@ export class ChatOrchestrator {
           currentMessages, promptMeta, loadedTokenRatio, routingDecision,
           provider, providerName, effectiveAgentRole, effectiveReasoningLevel, finalSystemPrompt,
           currentDraft,
+          // ADR-118 §1/§4: ход и финальный шаг (сообщение/индекс).
+          turnId,
+          finalStepIndex: toolIteration,
+          finalStepMessageId: lastStepMessageId,
           // ADR-115 (outbound): медиа-части ответа (`send_attachment`).
           outboundParts,
           // Anthropic: подпись thinking-блока финального сообщения.
@@ -5320,6 +5363,12 @@ export class ChatOrchestrator {
       const errMsg = String(e);
       warning('ORCHESTRATOR', `Unexpected error: ${errMsg}`);
       this._cancellationTokens.delete(streamId);
+      // ADR-118 §4: ход, начатый публикацией `turn.started`, закрывается
+      // терминальным статусом (иначе клиент ждёт конца хода бесконечно).
+      if (turnStarted) {
+        publishTurnFinished(publishChunk, { turnId, status: 'error' });
+        turnStarted = false;
+      }
       // Внешний catch может сработать до инициализации локальных переменных
       // (usage/model/prompt) — сохраняем ошибку с безопасным минимумом.
       return this._handleLlmFailure(session.id, streamId, e, attempt, {
@@ -5755,6 +5804,8 @@ export class ChatOrchestrator {
   private async _handleInterruptedGeneration(args: {
     session: Session;
     streamId: string;
+    /** ADR-118 §1: ход, в котором прервана генерация. */
+    turnId: string;
     draft: StreamMessageDraft;
     content: string;
     reasoning: string;
@@ -5782,7 +5833,7 @@ export class ChatOrchestrator {
     publishChunk: (event: string, data: Record<string, unknown>) => void;
   }): Promise<void> {
     const {
-      session, streamId, draft, content, reasoning, model, providerName, agentRole,
+      session, streamId, turnId, draft, content, reasoning, model, providerName, agentRole,
       usage, iteration, startedAt, promptChars, debugCollector, promptMeta, publishChunk,
       reasoningMeta, reasoningBlocks,
     } = args;
@@ -5829,20 +5880,18 @@ export class ChatOrchestrator {
       );
     }
 
-    publishChunk('stream.interrupted', {
-      stream_id: streamId,
-      content,
-      status: 'interrupted',
-      // `generation` — оборвана текущая генерация; `boundary` — прерывание
-      // применено на границе шага (генерации в этот момент не было).
-      reason: 'generation',
-      model,
-      provider: providerName,
-      iteration,
+    // ADR-118 §4: прерывание генерации = шаг закрыт статусом `cancelled`
+    // (замена удалённого `stream.interrupted`); ход продолжается.
+    publishStepFinished(publishChunk, {
+      turnId,
+      stepIndex: iteration,
+      messageId: draft.messageId(),
+      status: 'cancelled',
       usage: estimated.usage,
-      duration_ms: durationMs,
-      ...(cost ? { cost_usd: cost.costUsd, cost_currency: cost.currency } : {}),
-      ...(estimated.estimated ? { usage_estimated: true } : {}),
+      provider: providerName,
+      ...(model ? { model } : {}),
+      ...(cost ? { costUsd: cost.costUsd, costCurrency: cost.currency } : {}),
+      ...(agentRole ? { agentRole } : {}),
     });
   }
 
@@ -5892,6 +5941,11 @@ export class ChatOrchestrator {
     // саб-агента (`engine/tools/task/run-cycle.ts`): семантика инъекции
     // (лимит, порядок, маркеры, payload событий) не должна расходиться
     // между основной сессией и дочерней.
+    //
+    // ADR-118 §4: `message.injected` удалён без dual-emit — материализация
+    // сообщения в истории публикуется как `message.delivered` (id, `ord`,
+    // роль, автор; без текста — текст в канал сессии не уходит).
+    let deliveredOrd: number | undefined;
     await applySteerInjections({
       sessionManager: this._sessionManager,
       sessionId: session.id,
@@ -5899,11 +5953,20 @@ export class ChatOrchestrator {
       toLlmMessages: (message) => sessionMessagesToLlmFn([message], agentRole, author),
       persist: async (message) => {
         const stored = await this._sessionManager.appendMessage(session.id, message);
+        // ADR-118 §2: `ord` — монотонный порядок записи в истории.
+        deliveredOrd = stored?.ord ?? message.ord;
         // Позиция сообщения в истории (0-based) — как в `GET /:id/messages`,
         // чтобы UI мог добавить его в ленту без полной перезагрузки.
         return { index: (stored?.seq ?? message.seq) - 1 };
       },
-      publishInjected: (event) => publishChunk('message.injected', event),
+      publishInjected: (event) => {
+        publishChunk('message.delivered', {
+          messageId: event.message_id,
+          ord: deliveredOrd ?? 0,
+          role: MessageRole.USER,
+          ...(event.author ? { author: event.author } : {}),
+        });
+      },
       publishDropped: (event) => publishChunk('steer.dropped', event),
       streamId,
     });

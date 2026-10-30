@@ -7,6 +7,7 @@ import { healthApi } from './health'
 import { projectsApi } from './projects'
 import { sessionsApi } from './sessions'
 import { messagesApi } from './messages'
+import { metaApi } from './meta'
 import { queueApi } from './queue'
 import { filesApi } from './files'
 import { workspaceApi } from './workspace'
@@ -420,6 +421,7 @@ export const synthApi = {
   ...projectsApi,
   ...sessionsApi,
   ...messagesApi,
+  ...metaApi,
   ...queueApi,
   ...filesApi,
   ...workspaceApi,

@@ -1,10 +1,16 @@
 import { create } from 'zustand'
 import { appendReasoningBlock, type ReasoningBlock } from '@itphx/synth-shared/utils'
-import type { Part } from '@itphx/synth-shared/types'
+import type { MessageStatus, Part, PartMetadata, PartType } from '@itphx/synth-shared/types'
 import type { StickyNoteData } from '@/lib/api/synthApi'
 import { costCurrencyKey } from '@/lib/currency'
 
-export type DebugData = Record<string, unknown>;
+/**
+ * ADR-118 §5: статус сообщения-хода (`streaming` → терминальный) — контракт
+ * из shared. Реэкспорт: UI-слои импортируют тип из стора (единая точка).
+ */
+export type { MessageStatus }
+
+export type DebugData = Record<string, unknown>
 
 /**
  * Блок рассуждений в ленте. Тип и хелпер накопления живут в shared: провайдер
@@ -18,13 +24,38 @@ export interface IntermediateTextBlockData {
   iteration: number
 }
 
-/** ADR-070 §2.6: статус ответа ассистента (metadata.status), определяет префикс статистики. */
-export type MessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit' | 'interrupted'
+/**
+ * ADR-070 §2.6: статус **ответа** ассистента (`metadata.status`), определяет
+ * префикс статистики. Не путать со статусом сообщения-хода
+ * (`MessageStatus` из `@itphx/synth-shared/types` — ADR-118 §5).
+ */
+export type ResponseStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit' | 'interrupted'
+
+/**
+ * ADR-118 §4: статус доставки сообщения, отражённый в ленте.
+ * - `queued` — принято в очередь и ждёт своей позиции;
+ * - `accepted` — принято и будет обработано следующим;
+ * - `steering` — вмешательство в активный ход (`steer`/`interrupt`).
+ */
+export type MessageDelivery = 'queued' | 'accepted' | 'steering'
 
 export interface MessageData {
+  /** Позиционный индекс в истории (серверный, ADR-118: не идентичность). */
   index: number
+  /** ADR-118 §7: устойчивый идентификатор сообщения — адресация мутаций. */
   id?: string
   seq?: number
+  /**
+   * ADR-118 §2: монотонный порядок записи в истории сессии. Не перенумеровывается
+   * при вставке в середину; `null` — сообщение ещё не материализовано в истории.
+   */
+  ord?: number | null
+  /** ADR-118 §1: идентификатор хода (`Turn`), которому принадлежит сообщение. */
+  turn_id?: string | null
+  /** ADR-118 §1: индекс шага внутри хода (0-based). */
+  step_index?: number | null
+  /** ADR-118 §5: статус сообщения-хода (`streaming` → терминальный). */
+  status?: MessageStatus | null
   origin?: string
   source_msg_id?: string | null
   /** ADR-115: части сообщения; медиа — `image`/`audio`/`video`/`file` с `MediaPartData`. */
@@ -61,6 +92,49 @@ export interface MessageData {
   timestamp?: string
   qa_pass?: boolean
   qa_reason?: string
+  /**
+   * ADR-118 §4: статус доставки сообщения (UI-состояние, не поле DTO).
+   * Показывается маркером у сообщения в ленте.
+   */
+  delivery?: MessageDelivery
+}
+
+/**
+ * ADR-118 §4: часть сообщения в **живом** состоянии.
+ *
+ * Ключ — `{messageId, partId}` (upsert, а не append — ADR-118
+ * «Идемпотентность доставки»). Идентификаторы частей детерминированные
+ * (ADR-118 §1): текст — `msg:text:<ordinal>`, вызов инструмента — `callId`.
+ */
+export interface LivePart {
+  id: string
+  type: PartType
+  /** Накопленный текст части (text/reasoning). */
+  text: string
+  /** Накопленный «сырой» поток (например, JSON-аргументы вызова). */
+  raw?: string
+  /** Структурные данные части (`tool_use`: `{name,args,status,result}`}). */
+  data?: unknown
+  /** Служебные метаданные части (Anthropic thinking: подпись/redacted). */
+  metadata?: PartMetadata
+}
+
+/**
+ * ADR-118 §1: активный ход (`Turn`) сессии — границы группировки в ленте.
+ *
+ * `messageId` — сообщение текущего шага (единственный «живой» источник
+ * контента: ADR-118 §5 — сообщение живёт от первой дельты до терминального
+ * статуса). Агент/модель/провайдер — из `stream.start` (шаг их не несёт).
+ */
+export interface ActiveTurn {
+  turnId: string
+  streamId?: string
+  messageId?: string
+  stepIndex?: number
+  status?: 'streaming' | 'completed' | 'cancelled' | 'error' | 'stopped'
+  agentRole?: string | null
+  model?: string
+  provider?: string
 }
 
 export interface LiveToolCall {
@@ -79,7 +153,7 @@ export interface LiveToolCall {
   subagentIntermediateTextBlocks?: IntermediateTextBlockData[]
 }
 
-/** ADR-070 §2.6: usage в snake_case (как в MessageData/StreamState). */
+/** ADR-070 §2.6: usage в snake_case (как в MessageData). */
 export interface UsageData {
   input_tokens: number
   output_tokens: number
@@ -97,7 +171,7 @@ export interface CostBreakdown {
   cacheWrite?: number
 }
 
-/** ADR-070 §2.6: вклад одного вызова саб-агента (по parent_call_id) в родителе. */
+/** ADR-070 §2.6: live-вклад одного вызова саб-агента (по parent_call_id) в родителе. */
 export interface LiveSubagentCallUsage {
   usage: UsageData
   costUsd?: number
@@ -113,74 +187,12 @@ export interface LiveSubagentSessionUsage {
   usage: UsageData
   /** Номинальная сумма вкладов (обратная совместимость); валюты не смешиваются — см. `costByCurrency`. */
   costUsd?: number
-  /** C2a: валюта агрегата; не задаётся, если вызовы в разных валютах. */
+  /** C2a: валюта `costUsd` (из stream/subagent payload). */
   costCurrency?: string
-  /** C2b: разбивка стоимости агрегата по валютам (код → сумма). */
+  /** C2b: разбивка стоимости по валютам (код → сумма). */
   costByCurrency?: Record<string, number>
   estimated: boolean
   byCall: Record<string, LiveSubagentCallUsage>
-}
-
-export interface StreamState {
-  streamId: string
-  agentRole: string | null
-  content: string
-  reasoningBlocks: ReasoningBlockData[]
-  intermediateTextBlocks: IntermediateTextBlockData[]
-  isStreaming: boolean
-  /** true, когда пришёл первый непустой chunk (content/reasoning) или начался вызов инструмента — признак, что провайдер начал отвечать */
-  hasContent: boolean
-  isRetrying?: boolean
-  model?: string
-  provider?: string
-  usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
-  /** ADR-070 §2.6: live-стоимость ответа (из stream.usage/subagent.progress). */
-  costUsd?: number
-  /** C2a: валюта `costUsd` (из stream.usage/subagent.progress). */
-  costCurrency?: string
-  costBreakdown?: CostBreakdown
-  /** ADR-070 §2.6: usage — best-effort оценка, а не точные токены провайдера. */
-  usageEstimated?: boolean
-  toolCalls: LiveToolCall[]
-  toolIteration: number
-  _lastContentLen: number
-}
-
-export interface StreamDoneMetadata {
-  model?: string
-  content?: string
-  usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
-  debug_info?: Record<string, unknown> | null
-  message_index?: number
-  /** ADR-046 §7.1: id сохранённого assistant-сообщения (stream.done.message_id). */
-  message_id?: string
-  cancelled?: boolean
-  pending_count?: number
-  /** ADR-070 §2.6: статус завершения стрима (stream.done.status). */
-  status?: MessageStatus
-  metadata?: { type?: string; indices?: number[]; [key: string]: unknown }
-  reasoning_blocks?: ReasoningBlockData[]
-  intermediate_text_blocks?: IntermediateTextBlockData[]
-  /** ADR-070 §2.6: длительность прогона (stream.done.duration_ms). */
-  duration_ms?: number
-  /** ADR-070 §2.6: стоимость хода (stream.done.cost_usd). */
-  cost_usd?: number
-  /** C2a: валюта `cost_usd` (stream.done.cost_currency). */
-  cost_currency?: string
-  /** ADR-070 §2.6: разбивка стоимости (stream.done.cost_breakdown). */
-  cost_breakdown?: CostBreakdown
-  /** ADR-070 §2.6: usage — best-effort оценка (stream.done.usage_estimated). */
-  usage_estimated?: boolean
-  /** ADR-070 §2.6: провайдер финального ответа (stream.done.provider). */
-  provider?: string
-  /** T14: длина финального текста ответа (stream.done.content_chars). */
-  content_chars?: number
-  /** T14: число опубликованных `stream.chunk` за стрим (stream.done.chunks). */
-  chunks?: number
-  /** T14: время первого чанка от старта стрима, мс (stream.done.first_chunk_ms). */
-  first_chunk_ms?: number
-  /** T14: время последнего чанка от старта стрима, мс (stream.done.last_chunk_ms). */
-  last_chunk_ms?: number
 }
 
 /** Статус повторной попытки (событие stream.retry): «Повторная попытка N/MAX через X сек». */
@@ -222,6 +234,8 @@ export interface FinalStreamError {
 
 export interface QueueState {
   pendingCount: number
+  /** ADR-118 §4: сообщений-вмешательств (`steer`/`interrupt`), ждущих применения. */
+  steerCount: number
   isStalled: boolean
 }
 
@@ -234,40 +248,47 @@ export interface QueuedMessage {
   attachmentCount?: number
   /**
    * Оптимистичная строка: сообщение отправлено, серверное подтверждение
-   * (`message.queued`) ещё не пришло. Строка показывается сразу при отправке
-   * во время хода и «подтверждается» тем же id (`stream_id` = `message_id`).
+   * (`message.accepted`) ещё не пришло. Строка показывается сразу при отправке
+   * и «подтверждается» тем же id.
    */
   sending?: boolean
 }
 
 /**
- * Сигнал завершения стрима для сессии: инкрементируется в `finishStream`/`cancelStream`.
- * Нужен панели «Статистика» — `finishStream` часто обновляет существующее
- * assistant-сообщение на месте (id не меняется), поэтому `lastAssistantMsg?.id`
- * не срабатывает как триггер перезапроса.
+ * Сортировка сообщений по `ord` (ADR-118 §2) — монотонный порядок записи.
+ *
+ * - сообщения с `ord` идут по нему; при равном `ord` — tie-break по `id`
+ *   (ADR-118 «Порядок и идемпотентность»);
+ * - сообщение без `ord` (ещё не материализовано — живой черновик) встаёт по
+ *   позиционному индексу: оно новее всех записанных.
  */
-function bumpStreamFinishTick(
-  ticks: Record<string, number>,
-  sessionId: string,
-): Record<string, number> {
-  return { ...ticks, [sessionId]: (ticks[sessionId] ?? 0) + 1 }
+export function compareMessagesByOrd(
+  a: Pick<MessageData, 'ord' | 'id' | 'index'>,
+  b: Pick<MessageData, 'ord' | 'id' | 'index'>,
+): number {
+  const ao = a.ord ?? null
+  const bo = b.ord ?? null
+  if (ao !== null && bo !== null) {
+    if (ao !== bo) return ao - bo
+    const aid = a.id ?? ''
+    const bid = b.id ?? ''
+    if (aid === bid) return a.index - b.index
+    return aid < bid ? -1 : 1
+  }
+  if (ao !== null && bo === null) return a.index - b.index
+  if (ao === null && bo !== null) return a.index - b.index
+  return a.index - b.index
 }
 
-/**
- * ADR-070 §2.6: StreamState, созданный только live-usage дочерней сессии саб-агента
- * (без stream.start/контента/тулов). Такой плейсхолдер удаляется терминальным
- * событием `stream.ended`, чтобы не задевать настоящий стрим родителя.
- */
-function isUsageOnlyStream(st: StreamState | undefined): boolean {
-  return !!st && !st.hasContent && st.content.length === 0 && st.toolCalls.length === 0
+/** Сортировка сообщений сессии по `ord` (ADR-118 §2). */
+export function sortMessagesByOrd(messages: MessageData[]): MessageData[] {
+  return [...messages].sort(compareMessagesByOrd)
 }
 
 /**
  * Накопление **дельт** прогресса саб-агента (`subagent.progress` несёт только
  * приращение с прошлой публикации, а не накопленный текст). Блок дописывается:
  * в текущей итерации — в конец последнего блока, в новой — новым блоком.
- * В отличие от `appendReasoningBlock` (кумулятивный reasoning основного
- * стрима) текст здесь не дедуплицируется — дельта значима как есть.
  */
 function appendDeltaBlock<T extends { text: string; iteration: number }>(
   blocks: T[],
@@ -282,26 +303,21 @@ function appendDeltaBlock<T extends { text: string; iteration: number }>(
   return [...blocks, { text: delta, iteration } as T]
 }
 
-type MessageToolCall = NonNullable<MessageData['tool_calls']>[number]
-
-/** Live-вызовы (`LiveToolCall`) → сохраняемая форма сообщения (`tool_calls`). */
-function mapLiveToolCalls(toolCalls: LiveToolCall[]): MessageToolCall[] | null {
-  if (toolCalls.length === 0) return null
-  return toolCalls.map((tc) => ({
-    name: tc.name,
-    args: tc.args,
-    id: tc.callId,
-    result: tc.result,
-    started_at: tc.startedAt,
-    completed_at: tc.completedAt,
-    iteration: tc.iteration,
-  }))
-}
-
 interface ChatStore {
+  /**
+   * ADR-118 §5: **единственный** источник сообщений сессии. Живое сообщение
+   * (статус `streaming`) живёт здесь же — от первой дельты до терминального
+   * статуса; отдельного параллельного массива «стримов» нет.
+   */
   messagesBySession: Record<string, MessageData[]>
+  /**
+   * ADR-118 §4: части сообщений в живом состоянии —
+   * `sessionId → messageId → partId → часть` (upsert по `{messageId, partId}`).
+   */
+  partsBySession: Record<string, Record<string, Record<string, LivePart>>>
+  /** ADR-118 §1: активный ход сессии (границы группировки в ленте). */
+  turnBySession: Record<string, ActiveTurn | null>
   streamFinishTickBySession: Record<string, number>
-  streamingBySession: Record<string, Record<string, StreamState>>
   queueBySession: Record<string, QueueState>
   pendingBySession: Record<string, QueuedMessage[]>
   retryBySession: Record<string, StreamRetry | null>
@@ -313,78 +329,82 @@ interface ChatStore {
   /** ADR-070 §2.6: live-вклад саб-агентов родительской сессии (для StatsTab). */
   liveSubagentUsageBySession: Record<string, LiveSubagentSessionUsage>
   debugModalSessionId: string | null
-  debugModalMessageIndex: number | null
+  /** ADR-118 §7: отладка адресуется по `id` сообщения (индекс нестабилен). */
+  debugModalMessageId: string | null
 
   selectionBySession: Record<string, { mode: boolean; indices: Set<number> }>
 
   setMessages: (sessionId: string, messages: MessageData[]) => void
-  updateMessage: (sessionId: string, index: number, changes: Partial<MessageData>) => void
-  startStream: (sessionId: string, streamId: string, agentRole: string | null, model?: string, provider?: string) => void
-  updateStreamChunk: (sessionId: string, streamId: string, content: string, reasoning: string, model?: string, provider?: string, iteration?: number) => void
-  /**
-   * ADR-104 (этап 2): прерывание генерации (`stream.interrupted`) — ход НЕ
-   * завершается, стрим остаётся живым (с тем же `stream_id`), но накопленный
-   * текст прерванной генерации уже сохранён отдельным сообщением. Сбрасываем
-   * только аккумулятор (текст/рассуждения), сам стрим и его tool-вызовы —
-   * сохраняем: следующая итерация продолжит ту же генерацию.
-   */
-  resetStreamAccumulator: (sessionId: string, streamId: string) => void
-  /**
-   * `stream.retry`: повторная попытка начинается с чистого текста (как в финале),
-   * поэтому сбрасывается весь аккумулятор попытки, включая tool-вызовы неудачной
-   * попытки, — иначе в ленте остаются висящие карточки инструментов и дубли
-   * рассуждений. Стрим при этом остаётся живым.
-   */
-  resetStreamAttempt: (sessionId: string, streamId: string) => void
-  updateStreamUsage: (sessionId: string, streamId: string, data: {
-    usage?: UsageData
-    costUsd?: number
-    costCurrency?: string
-    costBreakdown?: CostBreakdown
-    usageEstimated?: boolean
-    model?: string
-    provider?: string
-    /** ADR-070 §2.6: роль агента (stream.usage.agent_role) — для дочерней сессии. */
-    agentRole?: string
-  }) => void
-  /** ADR-070 §2.6: сброс live-плейсхолдера дочерней сессии (stream.ended). */
-  clearUsageStream: (sessionId: string, streamId?: string) => void
+  /** Upsert сообщения по `id` (ADR-118 §7 — идентификатор устойчив). */
+  upsertMessage: (sessionId: string, message: MessageData) => void
+  /** Точечная правка сообщения по `id`. */
+  updateMessageById: (sessionId: string, messageId: string, changes: Partial<MessageData>) => void
+  /** Удаление сообщения по `id`. */
+  removeMessageById: (sessionId: string, messageId: string) => void
+  /** ADR-118 §5: смена статуса сообщения («финал» = смена статуса). */
+  setMessageStatus: (sessionId: string, messageId: string, status: MessageStatus) => void
+  /** ADR-118 §4: отметка статуса доставки сообщения в ленте. */
+  setMessageDelivery: (sessionId: string, messageId: string, delivery: MessageDelivery) => void
+
+  /** ADR-118 §4: upsert части по `{messageId, partId}`. */
+  upsertPart: (sessionId: string, messageId: string, partId: string, part: LivePart) => void
+  /** ADR-118 §4: дельта части (`part.delta`) — дописывает текст. */
+  appendPartDelta: (
+    sessionId: string,
+    messageId: string,
+    partId: string,
+    field: 'text' | 'raw',
+    delta: string,
+  ) => void
+  /** Точечная правка данных части (вызов инструмента, результат, прогресс). */
+  patchPartData: (
+    sessionId: string,
+    messageId: string,
+    partId: string,
+    patch: Record<string, unknown>,
+  ) => void
+  /** Правка сообщения по **позиционному** индексу (сервер шлёт `indices`). */
+  updateMessageByIndex: (
+    sessionId: string,
+    index: number,
+    changes: Partial<MessageData>,
+  ) => void
+  /** Снять части сообщения (черновик больше не нужен). */
+  clearParts: (sessionId: string, messageId: string) => void
+
+  /** ADR-118 §1: начало хода. */
+  startTurn: (sessionId: string, turn: ActiveTurn) => void
+  /** ADR-118 §1: терминальный статус хода. */
+  finishTurn: (sessionId: string, turnId: string, status?: ActiveTurn['status']) => void
+  /** Точечная правка активного хода (агент/модель/шаг). */
+  patchTurn: (sessionId: string, patch: Partial<ActiveTurn>) => void
+
+  setStreamRetry: (sessionId: string, retry: StreamRetry | null) => void
+  setSubagentRetry: (sessionId: string, retry: SubagentRetryState | null) => void
+  setSubagentResuming: (sessionId: string, state: SubagentResumeState | null) => void
+  setFinalStreamError: (sessionId: string, error: FinalStreamError | null) => void
   updateLiveSubagentUsage: (sessionId: string, callId: string, data: {
-    usage?: UsageData
+    usage: UsageData
     costUsd?: number
     costCurrency?: string
     estimated?: boolean
     model?: string
     provider?: string
   }) => void
-  addToolCall: (sessionId: string, streamId: string, tc: LiveToolCall) => void
-  updateToolCallResult: (sessionId: string, streamId: string, callId: string, result: { content: string; isError?: boolean; metadata?: Record<string, unknown> }) => void
-  updateToolCallSubagentProgress: (sessionId: string, streamId: string, callId: string, patch: { reasoningDelta?: string; contentDelta?: string; iteration?: number }) => void
   /**
    * ADR-111 §detach: переведённые в фон блокирующие прогоны (`task`/`execute_shell`)
    * больше не ждут в активном ходе. `callIds` не заданы — снимаются все running
    * парты этих тулов сессии (то, что переводит кнопка хода и `ctrl+b`).
    */
   dropDetachedToolCalls: (sessionId: string, callIds?: string[]) => void
-  finishStream: (sessionId: string, streamId: string, metadata: StreamDoneMetadata) => void
-  cancelStream: (sessionId: string, streamId: string, status?: MessageStatus, extra?: {
-    usage?: UsageData
-    costUsd?: number
-    costCurrency?: string
-    costBreakdown?: CostBreakdown
-    usageEstimated?: boolean
-  }) => void
-  setStreamRetry: (sessionId: string, retry: StreamRetry | null) => void
-  setStreamRetrying: (sessionId: string, streamId: string, isRetrying: boolean) => void
-  setSubagentRetry: (sessionId: string, retry: SubagentRetryState | null) => void
-  setSubagentResuming: (sessionId: string, state: SubagentResumeState | null) => void
-  setFinalStreamError: (sessionId: string, error: FinalStreamError | null) => void
-  addMessage: (sessionId: string, message: MessageData) => void
+
   setPendingMessages: (sessionId: string, pending: QueuedMessage[]) => void
   setQueueStalled: (sessionId: string, pendingCount: number) => void
   clearQueueState: (sessionId: string) => void
   resetQueueStalled: (sessionId: string) => void
   updateQueueCount: (sessionId: string, pendingCount: number) => void
+  /** ADR-118 §4: счётчики очереди из события `queue.state`. */
+  setQueueCounts: (sessionId: string, pendingCount: number, steerCount: number) => void
   addPendingMessage: (sessionId: string, msg: QueuedMessage) => void
   /**
    * Подтверждение строки очереди серверным событием: строка с тем же `id`
@@ -399,7 +419,7 @@ interface ChatStore {
   addStickyNote: (sessionId: string, note: StickyNoteData) => void
   updateStickyNote: (sessionId: string, noteId: string, changes: Partial<StickyNoteData>) => void
   deleteStickyNote: (sessionId: string, noteId: string) => void
-  openDebugModal: (sessionId: string, messageIndex: number) => void
+  openDebugModal: (sessionId: string, messageId: string) => void
   closeDebugModal: () => void
   setSummarizationPending: (sessionId: string, pending: boolean) => void
 
@@ -414,10 +434,58 @@ interface ChatStore {
   clearSelection: (sessionId: string) => void
 }
 
+/**
+ * Инструментальный вызов (`tool_use`) → часть сообщения (ADR-118 §1:
+ * идентификатор части вызова инструмента — `callId`).
+ */
+export function toolCallToPart(tc: LiveToolCall): LivePart {
+  return {
+    id: tc.callId,
+    type: 'tool_use',
+    text: '',
+    data: {
+      name: tc.name,
+      args: tc.args,
+      status: tc.status,
+      result: tc.result,
+      startedAt: tc.startedAt,
+      completedAt: tc.completedAt,
+      iteration: tc.iteration,
+      parentCallId: tc.parentCallId,
+      subagentReasoningBlocks: tc.subagentReasoningBlocks,
+      subagentIntermediateTextBlocks: tc.subagentIntermediateTextBlocks,
+    },
+  }
+}
+
+/** Часть `tool_use` → инструментальный вызов (для рендера `ToolCallPart`). */
+export function partToToolCall(part: LivePart): LiveToolCall | null {
+  if (part.type !== 'tool_use') return null
+  const d = (part.data ?? {}) as Record<string, unknown>
+  const name = typeof d.name === 'string' ? d.name : 'unknown'
+  const args = (d.args as Record<string, unknown>) || {}
+  const rawResult = d.result as { content: string; isError?: boolean; metadata?: Record<string, unknown> } | undefined
+  const status = d.status === 'done' || rawResult ? 'done' : 'running'
+  return {
+    callId: part.id,
+    name,
+    args,
+    status,
+    result: rawResult,
+    startedAt: typeof d.startedAt === 'string' ? d.startedAt : '',
+    completedAt: typeof d.completedAt === 'string' ? d.completedAt : undefined,
+    iteration: typeof d.iteration === 'number' ? d.iteration : 0,
+    parentCallId: typeof d.parentCallId === 'string' ? d.parentCallId : undefined,
+    subagentReasoningBlocks: d.subagentReasoningBlocks as ReasoningBlockData[] | undefined,
+    subagentIntermediateTextBlocks: d.subagentIntermediateTextBlocks as IntermediateTextBlockData[] | undefined,
+  }
+}
+
 export const useChatStore = create<ChatStore>((set) => ({
   messagesBySession: {},
+  partsBySession: {},
+  turnBySession: {},
   streamFinishTickBySession: {},
-  streamingBySession: {},
   queueBySession: {},
   pendingBySession: {},
   retryBySession: {},
@@ -428,187 +496,219 @@ export const useChatStore = create<ChatStore>((set) => ({
   summarizationPendingBySession: {},
   liveSubagentUsageBySession: {},
   debugModalSessionId: null,
-  debugModalMessageIndex: null,
+  debugModalMessageId: null,
   retryInputBySession: {},
   selectionBySession: {},
 
   setMessages: (sessionId, messages) =>
     set((s) => ({
-      messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
+      messagesBySession: { ...s.messagesBySession, [sessionId]: sortMessagesByOrd(messages) },
     })),
 
-  updateMessage: (sessionId, index, changes) =>
+  upsertMessage: (sessionId, message) =>
     set((s) => {
-      const msgs = [...(s.messagesBySession[sessionId] || [])]
-      const msgIdx = msgs.findIndex((m) => m.index === index)
-      if (msgIdx === -1) return s
-      msgs[msgIdx] = { ...msgs[msgIdx]!, ...changes }
-      return { messagesBySession: { ...s.messagesBySession, [sessionId]: msgs } }
-    }),
-
-  startStream: (sessionId, streamId, agentRole, model, provider) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      // Один ход на сессию. Записи с другим streamId, всё ещё помеченные
-      // `isStreaming`, осиротели: их `stream.done` потерян (разрыв WS, рестарт
-      // сервера). Убираем их, иначе рядом с новым ответом висят их плейсхолдеры.
-      for (const [id, state] of Object.entries(sessionStreams)) {
-        if (id !== streamId && state.isStreaming) delete sessionStreams[id]
-      }
-      sessionStreams[streamId] = {
-        streamId,
-        agentRole,
-        content: '',
-        reasoningBlocks: [],
-        intermediateTextBlocks: [],
-        isStreaming: true,
-        hasContent: false,
-        model,
-        provider,
-        toolCalls: [],
-        toolIteration: 0,
-        _lastContentLen: 0,
-      }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
-  updateStreamChunk: (sessionId, streamId, content, reasoning, model, provider, iteration) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      const existing = sessionStreams[streamId]
-      if (!existing) return s
-      const nextBlocks = appendReasoningBlock(
-        existing.reasoningBlocks,
-        reasoning,
-        iteration ?? existing.toolIteration,
-      )
-      const nextHasContent = existing.hasContent
-        || (typeof content === 'string' && content.length > 0)
-        || (typeof reasoning === 'string' && reasoning.trim().length > 0)
-      sessionStreams[streamId] = {
-        ...existing,
-        content: existing.content + content,
-        reasoningBlocks: nextBlocks,
-        hasContent: nextHasContent,
-        model: model || existing.model,
-        provider: provider || existing.provider,
-      }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
-  // ADR-104 (этап 2): прерывание генерации (`stream.interrupted`). Ход
-  // продолжается (тот же `stream_id`), а накопленный текст прерванной
-  // генерации уже сохранён отдельным сообщением со статусом `interrupted` —
-  // сбрасываем аккумулятор, чтобы следующие чанки не дописались к нему.
-  // Живой стрим (isStreaming) и его tool-вызовы сохраняем.
-  resetStreamAccumulator: (sessionId, streamId) =>
-    set((s) => {
-      const existing = s.streamingBySession[sessionId]?.[streamId]
-      if (!existing) return s
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      sessionStreams[streamId] = {
-        ...existing,
-        content: '',
-        reasoningBlocks: [],
-        intermediateTextBlocks: [],
-        hasContent: false,
-        _lastContentLen: 0,
-      }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
-  // `stream.retry`: новая попытка начинается с чистого текста, как и финальное
-  // сообщение. Сбрасываем весь аккумулятор попытки (включая tool-вызовы), чтобы
-  // неудачная попытка не суммировалась с повтором.
-  resetStreamAttempt: (sessionId, streamId) =>
-    set((s) => {
-      const existing = s.streamingBySession[sessionId]?.[streamId]
-      if (!existing) return s
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      sessionStreams[streamId] = {
-        ...existing,
-        content: '',
-        reasoningBlocks: [],
-        intermediateTextBlocks: [],
-        toolCalls: [],
-        hasContent: false,
-        _lastContentLen: 0,
-        isStreaming: true,
-      }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
-  // ADR-070 §2.6: live-статистика стрима (событие stream.usage). Обновляет
-  // соответствующий StreamState; точный usage не понижается оценкой.
-  // Дочерняя сессия саб-агента не получает stream.start — при первом usage
-  // создаём минимальный StreamState (без контента, `hasContent: false`), чтобы
-  // открытая дочерняя сессия показывала live. MessageList рисует плейсхолдер
-  // только при `hasContent`, поэтому фантомного сообщения не появляется;
-  // терминальное `stream.ended` из task.ts удаляет такой StreamState.
-  updateStreamUsage: (sessionId, streamId, data) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      const existing = sessionStreams[streamId]
-      const base: StreamState = existing ?? {
-        streamId,
-        agentRole: data.agentRole ?? null,
-        content: '',
-        reasoningBlocks: [],
-        intermediateTextBlocks: [],
-        isStreaming: true,
-        hasContent: false,
-        model: data.model,
-        provider: data.provider,
-        toolCalls: [],
-        toolIteration: 0,
-        _lastContentLen: 0,
-      }
-      // Не понижаем точность: если уже есть точный usage, оценка его не перезаписывает
-      // (равно как и вычисленные по ней cost/usageEstimated).
-      const downgrade = base.usage !== undefined
-        && base.usageEstimated !== true
-        && data.usageEstimated === true
-      sessionStreams[streamId] = {
-        ...base,
-        ...(data.usage && !downgrade ? { usage: data.usage } : {}),
-        ...(data.costUsd !== undefined && !downgrade ? { costUsd: data.costUsd } : {}),
-        ...(data.costCurrency !== undefined && !downgrade ? { costCurrency: data.costCurrency } : {}),
-        ...(data.costBreakdown !== undefined && !downgrade ? { costBreakdown: data.costBreakdown } : {}),
-        ...(data.usageEstimated !== undefined && !downgrade ? { usageEstimated: data.usageEstimated } : {}),
-        ...(data.model ? { model: data.model } : {}),
-        ...(data.provider ? { provider: data.provider } : {}),
-        ...(data.agentRole ? { agentRole: data.agentRole } : {}),
-      }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
-  // ADR-070 §2.6: терминальное событие дочерней сессии саб-агента. Удаляет
-  // usage-only StreamState (если streamId не задан — все такие в сессии), не
-  // трогая настоящий стрим с контентом/тулами.
-  clearUsageStream: (sessionId, streamId) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      let changed = false
-      if (streamId) {
-        if (isUsageOnlyStream(sessionStreams[streamId])) {
-          delete sessionStreams[streamId]
-          changed = true
+      const current = s.messagesBySession[sessionId] || []
+      const at = message.id
+        ? current.findIndex((m) => m.id === message.id)
+        : current.findIndex((m) => m.index === message.index)
+      if (at === -1) {
+        return {
+          messagesBySession: {
+            ...s.messagesBySession,
+            [sessionId]: sortMessagesByOrd([...current, message]),
+          },
         }
-      } else {
-        for (const key of Object.keys(sessionStreams)) {
-          if (isUsageOnlyStream(sessionStreams[key])) {
-            delete sessionStreams[key]
-            changed = true
+      }
+      const prev = current[at]!
+      const merged: MessageData = {
+        ...prev,
+        ...message,
+        // Контент из `message.added` может быть усечён (500 симв.); не затираем
+        // уже известный полный контент.
+        content: prev.content || message.content,
+        metadata: { ...(prev.metadata ?? {}), ...(message.metadata ?? {}) },
+      }
+      const next = [...current]
+      next[at] = merged
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: sortMessagesByOrd(next) } }
+    }),
+
+  updateMessageById: (sessionId, messageId, changes) =>
+    set((s) => {
+      const current = s.messagesBySession[sessionId]
+      if (!current) return s
+      const at = current.findIndex((m) => m.id === messageId)
+      if (at === -1) return s
+      const next = [...current]
+      next[at] = { ...next[at]!, ...changes }
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
+    }),
+
+  removeMessageById: (sessionId, messageId) =>
+    set((s) => {
+      const current = s.messagesBySession[sessionId]
+      if (!current) return s
+      const next = current.filter((m) => m.id !== messageId)
+      if (next.length === current.length) return s
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
+    }),
+
+  setMessageStatus: (sessionId, messageId, status) =>
+    set((s) => {
+      const current = s.messagesBySession[sessionId]
+      if (!current) return s
+      const at = current.findIndex((m) => m.id === messageId)
+      if (at === -1) return s
+      const next = [...current]
+      next[at] = { ...next[at]!, status }
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
+    }),
+
+  setMessageDelivery: (sessionId, messageId, delivery) =>
+    set((s) => {
+      const current = s.messagesBySession[sessionId]
+      if (!current) return s
+      const at = current.findIndex((m) => m.id === messageId)
+      if (at === -1) return s
+      const next = [...current]
+      next[at] = { ...next[at]!, delivery }
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
+    }),
+
+  upsertPart: (sessionId, messageId, partId, part) =>
+    set((s) => {
+      const sessionParts = s.partsBySession[sessionId] || {}
+      const messageParts = sessionParts[messageId] || {}
+      if (messageParts[partId] === part) return s
+      return {
+        partsBySession: {
+          ...s.partsBySession,
+          [sessionId]: {
+            ...sessionParts,
+            [messageId]: { ...messageParts, [partId]: part },
+          },
+        },
+      }
+    }),
+
+  appendPartDelta: (sessionId, messageId, partId, field, delta) =>
+    set((s) => {
+      if (!delta) return s
+      const sessionParts = s.partsBySession[sessionId] || {}
+      const messageParts = sessionParts[messageId] || {}
+      const existing = messageParts[partId]
+      const next: LivePart = existing
+        ? field === 'raw'
+          ? { ...existing, raw: (existing.raw ?? '') + delta }
+          : { ...existing, text: existing.text + delta }
+        : {
+            id: partId,
+            type: field === 'raw' ? 'tool_use' : 'text',
+            text: field === 'raw' ? '' : delta,
+            ...(field === 'raw' ? { raw: delta } : {}),
           }
-        }
+      return {
+        partsBySession: {
+          ...s.partsBySession,
+          [sessionId]: {
+            ...sessionParts,
+            [messageId]: { ...messageParts, [partId]: next },
+          },
+        },
       }
-      if (!changed) return s
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
-  // ADR-070 §2.6: live-вклад саб-агентов (событие subagent.progress в родителе).
-  // Событие несёт НАКОПЛЕННЫЙ usage вызова, поэтому вклад вызова перезаписываем,
-  // а агрегат сессии пересчитываем суммой по вызовам.
+  clearParts: (sessionId, messageId) =>
+    set((s) => {
+      const sessionParts = s.partsBySession[sessionId]
+      if (!sessionParts || !sessionParts[messageId]) return s
+      const nextSession = { ...sessionParts }
+      delete nextSession[messageId]
+      return { partsBySession: { ...s.partsBySession, [sessionId]: nextSession } }
+    }),
+
+  patchPartData: (sessionId, messageId, partId, patch) =>
+    set((s) => {
+      const sessionParts = s.partsBySession[sessionId]
+      const messageParts = sessionParts?.[messageId]
+      const existing = messageParts?.[partId]
+      if (!existing) return s
+      const data = (existing.data ?? {}) as Record<string, unknown>
+      return {
+        partsBySession: {
+          ...s.partsBySession,
+          [sessionId]: {
+            ...sessionParts,
+            [messageId]: {
+              ...messageParts,
+              [partId]: { ...existing, data: { ...data, ...patch } },
+            },
+          },
+        },
+      }
+    }),
+
+  updateMessageByIndex: (sessionId, index, changes) =>
+    set((s) => {
+      const current = s.messagesBySession[sessionId]
+      if (!current) return s
+      const at = current.findIndex((m) => m.index === index)
+      if (at === -1) return s
+      const next = [...current]
+      next[at] = { ...next[at]!, ...changes }
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
+    }),
+
+  startTurn: (sessionId, turn) =>
+    set((s) => ({ turnBySession: { ...s.turnBySession, [sessionId]: turn } })),
+
+  finishTurn: (sessionId, turnId, status) =>
+    set((s) => {
+      const current = s.turnBySession[sessionId]
+      if (!current || current.turnId !== turnId) return s
+      return {
+        turnBySession: {
+          ...s.turnBySession,
+          [sessionId]: { ...current, status: status ?? 'completed' },
+        },
+      }
+    }),
+
+  patchTurn: (sessionId, patch) =>
+    set((s) => {
+      const current = s.turnBySession[sessionId]
+      if (!current) return s
+      return {
+        turnBySession: { ...s.turnBySession, [sessionId]: { ...current, ...patch } },
+      }
+    }),
+
+  setStreamRetry: (sessionId, retry) =>
+    set((s) => ({
+      retryBySession: { ...s.retryBySession, [sessionId]: retry },
+    })),
+
+  setSubagentRetry: (sessionId, retry) =>
+    set((s) => ({
+      subagentRetryBySession: { ...s.subagentRetryBySession, [sessionId]: retry },
+    })),
+
+  setSubagentResuming: (sessionId, state) =>
+    set((s) => ({
+      subagentResumingBySession: { ...s.subagentResumingBySession, [sessionId]: state },
+    })),
+
+  setFinalStreamError: (sessionId, error) =>
+    set((s) => {
+      const prev = s.finalErrorBySession[sessionId]
+      // no-op если значение не меняется — иначе лишние перерендеры
+      if (prev === error || (prev === null && error === null)) return s
+      if (prev && error && prev.streamId === error.streamId && prev.error === error.error && prev.errorType === error.errorType) return s
+      return {
+        finalErrorBySession: { ...s.finalErrorBySession, [sessionId]: error },
+      }
+    }),
+
   updateLiveSubagentUsage: (sessionId, callId, data) =>
     set((s) => {
       const sessionUsage = s.liveSubagentUsageBySession[sessionId]
@@ -675,387 +775,31 @@ export const useChatStore = create<ChatStore>((set) => ({
       }
     }),
 
-  addToolCall: (sessionId, streamId, tc) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      const existing = sessionStreams[streamId]
-      if (!existing) return s
-      const idx = existing.toolCalls.findIndex((c) => c.callId === tc.callId)
-      let toolCalls: LiveToolCall[]
-      if (idx >= 0) {
-        // Дедупликация по callId: повторный tool_call.started для того же вызова
-        // обновляет узел (статус/итерация), а не создаёт «призрачный» дубль
-        // (например, при переизлучении read_file reason-моделью в стриме).
-        toolCalls = [...existing.toolCalls]
-        toolCalls[idx] = { ...toolCalls[idx]!, ...tc }
-      } else {
-        toolCalls = [...existing.toolCalls, tc]
-      }
-      sessionStreams[streamId] = {
-        ...existing,
-        toolCalls,
-        // Вызов инструмента — тоже ответ провайдера (как текст/reasoning). Сразу
-        // помечаем стрим содержательным, чтобы плейсхолдер и снятие «processing» в
-        // MessageList срабатывали уже по `tool_call.started`, а не после завершения
-        // инструмента (регресс c11ece3f: фильтр `isStreaming && hasContent`).
-        hasContent: true,
-      }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
-  updateToolCallResult: (sessionId, streamId, callId, result) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      const existing = sessionStreams[streamId]
-      if (!existing) return s
-      const idx = existing.toolCalls.findIndex((tc) => tc.callId === callId)
-      if (idx === -1) return s
-      const updated = [...existing.toolCalls]
-      updated[idx] = {
-        ...updated[idx]!,
-        status: 'done' as const,
-        result,
-        completedAt: new Date().toISOString(),
-      }
-      sessionStreams[streamId] = { ...existing, toolCalls: updated }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
-  updateToolCallSubagentProgress: (sessionId, streamId, callId, patch) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      const existing = sessionStreams[streamId]
-      if (!existing) return s
-      const idx = existing.toolCalls.findIndex((tc) => tc.callId === callId)
-      if (idx === -1) return s
-      const tc = existing.toolCalls[idx]!
-      const updated = [...existing.toolCalls]
-
-      const iter = patch.iteration ?? 0
-      // Размышления/промежуточный текст саб-агента приходят ДЕЛЬТАМИ —
-      // дописываем их к live-блоку (не заменяем накопленный текст целиком).
-      const reasoningBlocks = appendDeltaBlock(
-        tc.subagentReasoningBlocks ?? [],
-        patch.reasoningDelta ?? '',
-        iter,
-      )
-      const intermediateTextBlocks = appendDeltaBlock(
-        tc.subagentIntermediateTextBlocks ?? [],
-        patch.contentDelta ?? '',
-        iter,
-      )
-
-      updated[idx] = { ...tc, subagentReasoningBlocks: reasoningBlocks, subagentIntermediateTextBlocks: intermediateTextBlocks }
-      sessionStreams[streamId] = { ...existing, toolCalls: updated }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
   dropDetachedToolCalls: (sessionId, callIds) =>
     set((s) => {
-      const sessionStreams = s.streamingBySession[sessionId]
-      if (!sessionStreams) return s
+      const sessionParts = s.partsBySession[sessionId]
+      if (!sessionParts) return s
       const targets = callIds && callIds.length > 0 ? new Set(callIds) : null
       let changed = false
-      const nextStreams: Record<string, StreamState> = {}
-      for (const [streamId, streamState] of Object.entries(sessionStreams)) {
-        const toolCalls = streamState.toolCalls.filter((tc) =>
-          targets
-            ? !targets.has(tc.callId)
-            : !(tc.status === 'running' && (tc.name === 'task' || tc.name === 'execute_shell')),
-        )
-        if (toolCalls.length === streamState.toolCalls.length) {
-          nextStreams[streamId] = streamState
-          continue
+      const nextSession: Record<string, Record<string, LivePart>> = {}
+      for (const [messageId, messageParts] of Object.entries(sessionParts)) {
+        const nextMessage: Record<string, LivePart> = {}
+        for (const [partId, part] of Object.entries(messageParts)) {
+          const call = partToToolCall(part)
+          const isDetachable =
+            call != null &&
+            call.status === 'running' &&
+            (call.name === 'task' || call.name === 'execute_shell')
+          if (isDetachable && (!targets || targets.has(call.callId))) {
+            changed = true
+            continue
+          }
+          nextMessage[partId] = part
         }
-        changed = true
-        nextStreams[streamId] = { ...streamState, toolCalls }
+        if (Object.keys(nextMessage).length > 0) nextSession[messageId] = nextMessage
       }
       if (!changed) return s
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: nextStreams } }
-    }),
-
-  finishStream: (sessionId, streamId, metadata) =>
-    set((s) => {
-      const streamFinishTickBySession = bumpStreamFinishTick(s.streamFinishTickBySession, sessionId)
-      // ADR-070 §2.6: стрим завершён — live-вклад саб-агентов сессии больше не
-      // актуален (итог приходит в metadata.subagents финального сообщения).
-      const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
-      delete liveSubagentUsageBySession[sessionId]
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      const streamState = sessionStreams[streamId]
-      // ADR-070 §2.6: status и top-level финальная статистика stream.done
-      // (duration_ms/cost_usd/cost_breakdown/usage_estimated) доносим до metadata
-      // сообщения — «Последний ответ» показывает финал сразу, без refetch.
-      const doneMetadata: Record<string, unknown> = { ...(metadata.metadata || {}) }
-      if (metadata.status !== undefined) doneMetadata.status = metadata.status
-      if (metadata.duration_ms !== undefined) doneMetadata.duration_ms = metadata.duration_ms
-      if (metadata.cost_usd !== undefined) doneMetadata.cost_usd = metadata.cost_usd
-      if (metadata.cost_currency !== undefined) doneMetadata.cost_currency = metadata.cost_currency
-      if (metadata.cost_breakdown !== undefined) doneMetadata.cost_breakdown = metadata.cost_breakdown
-      if (metadata.usage_estimated !== undefined) doneMetadata.usage_estimated = metadata.usage_estimated
-      const statusMetadata = Object.keys(doneMetadata).length > 0 ? doneMetadata : null
-      if (!streamState) {
-        console.warn(`[chatStore] finishStream: no stream state for ${streamId} in session ${sessionId}, adding message from metadata`)
-        if (metadata.content && !metadata.cancelled) {
-          const msgs = [...(s.messagesBySession[sessionId] || [])]
-          const freeIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
-          // Не занимаем index, принадлежащий другому сообщению (user-команде):
-          // при коллизии уходим на следующий свободный.
-          let targetIndex = metadata.message_index ?? freeIndex
-          let existingIdx = msgs.findIndex((m) => m.index === targetIndex)
-          if (existingIdx >= 0 && msgs[existingIdx]!.role === 'user') {
-            existingIdx = -1
-            targetIndex = freeIndex
-          }
-          const patch: MessageData = {
-            index: targetIndex,
-            id: metadata.message_id || undefined,
-            role: 'assistant',
-            content: metadata.content,
-            model: metadata.model || undefined,
-            provider: metadata.provider || undefined,
-            usage: metadata.usage || undefined,
-            metadata: statusMetadata,
-            intermediate_text_blocks: metadata.intermediate_text_blocks || null,
-            reasoning_blocks: metadata.reasoning_blocks || null,
-            debug_data: metadata.debug_info || undefined,
-            tool_calls: (metadata.debug_info?.tool_calls as Array<Record<string, unknown>>)?.map((tc: Record<string, unknown>) => ({
-              name: tc.name as string,
-              args: (tc.args as Record<string, unknown>) || {},
-              id: tc.id as string | undefined,
-              result: tc.result as { content: string; isError?: boolean; metadata?: Record<string, unknown> } | undefined,
-              started_at: tc.started_at as string | undefined,
-              completed_at: tc.completed_at as string | undefined,
-              iteration: tc.iteration as number | undefined,
-            })) || undefined,
-            disabled: false,
-            pinned: false,
-            hidden: false,
-            created_at: new Date().toISOString(),
-          }
-          if (existingIdx >= 0) {
-            msgs[existingIdx] = { ...msgs[existingIdx]!, ...patch }
-          } else {
-            msgs.push(patch)
-          }
-          return {
-            messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
-            streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
-            streamFinishTickBySession,
-            liveSubagentUsageBySession,
-          }
-        }
-        return { streamFinishTickBySession, liveSubagentUsageBySession }
-      }
-
-      if (!metadata.cancelled && (streamState.content || metadata.content)) {
-        const msgs = [...(s.messagesBySession[sessionId] || [])]
-        const fallbackIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
-        // ADR-046 §7.1: index ответа берём из stream.done; при отсутствии —
-        // следующий свободный. Раньше fallback был `+0` и совпадал с index
-        // последнего (user-команды) сообщения, сталкивая ключи списка.
-        let targetIndex = metadata.message_index ?? fallbackIndex
-        const occupant = msgs.find((m) => m.index === targetIndex)
-        // Сливать ответ можно только в assistant/summary/debug (message.added уже
-        // добавил его). Коллизия с user-сообщением — уводим на свободный index.
-        const existingIdx = occupant && occupant.role !== 'user' ? msgs.indexOf(occupant) : -1
-        if (occupant && occupant.role === 'user') targetIndex = fallbackIndex
-
-        const reasoningBlocks = metadata.reasoning_blocks
-          || (streamState.reasoningBlocks.length > 0 ? streamState.reasoningBlocks : undefined)
-        const reasoningJoined = reasoningBlocks
-          ? reasoningBlocks.map((r) => r.text).join('\n\n---\n\n')
-          : undefined
-
-        const intermediateTextBlocks = metadata.intermediate_text_blocks
-          || (streamState.intermediateTextBlocks.length > 0 ? streamState.intermediateTextBlocks : undefined)
-
-        const newMsg: MessageData = {
-          index: existingIdx >= 0 ? msgs[existingIdx]!.index : targetIndex,
-          id: metadata.message_id || undefined,
-          role: metadata.metadata?.type === 'summary' ? 'summary'
-            : metadata.metadata?.type === 'debug_system_message' ? 'debug'
-            : 'assistant',
-          content: metadata.content || streamState.content,
-          agent_role: streamState.agentRole || undefined,
-          model: metadata.model,
-          provider: metadata.provider || streamState.provider || undefined,
-          usage: metadata.usage || undefined,
-          reasoning: reasoningJoined,
-          reasoning_blocks: reasoningBlocks || null,
-          intermediate_text_blocks: intermediateTextBlocks || null,
-          debug_data: metadata.debug_info || undefined,
-          summary_of: metadata.metadata?.indices || null,
-          metadata: statusMetadata,
-          tool_calls: mapLiveToolCalls(streamState.toolCalls),
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          created_at: new Date().toISOString(),
-        }
-
-        if (existingIdx >= 0) {
-          // merge: update existing message with server content
-          msgs[existingIdx] = {
-            ...msgs[existingIdx]!,
-            ...(metadata.message_id ? { id: metadata.message_id } : {}),
-            content: metadata.content || streamState.content,
-            reasoning: reasoningJoined,
-            reasoning_blocks: reasoningBlocks || msgs[existingIdx]!.reasoning_blocks,
-            intermediate_text_blocks: intermediateTextBlocks || msgs[existingIdx]!.intermediate_text_blocks,
-            debug_data: metadata.debug_info || undefined,
-            model: metadata.model || msgs[existingIdx]!.model,
-            provider: metadata.provider || streamState.provider || msgs[existingIdx]!.provider,
-            usage: metadata.usage || msgs[existingIdx]!.usage,
-            summary_of: metadata.metadata?.indices || msgs[existingIdx]!.summary_of,
-            // ADR-070 §2.6: не затираем metadata, пришедшую с message.added
-            // (subagents/tool_results/secrets), — stream.done добавляет поверх
-            // только status и финальную статистику.
-            metadata: statusMetadata
-              ? { ...(msgs[existingIdx]!.metadata || {}), ...statusMetadata }
-              : msgs[existingIdx]!.metadata,
-            tool_calls: mapLiveToolCalls(streamState.toolCalls) ?? msgs[existingIdx]!.tool_calls,
-          }
-        } else {
-          msgs.push(newMsg)
-        }
-
-        // Disable summarized messages from indices
-        if (metadata.metadata?.indices && Array.isArray(metadata.metadata.indices)) {
-          for (const idx of metadata.metadata.indices) {
-            const msgIdx = msgs.findIndex((m) => m.index === idx)
-            if (msgIdx >= 0 && msgs[msgIdx] && !msgs[msgIdx]!.pinned) {
-              msgs[msgIdx] = { ...msgs[msgIdx]!, disabled: true }
-            }
-          }
-        }
-
-        delete sessionStreams[streamId]
-        return {
-          streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
-          messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
-          streamFinishTickBySession,
-          liveSubagentUsageBySession,
-        }
-      }
-
-      delete sessionStreams[streamId]
-      return {
-        streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
-        streamFinishTickBySession,
-        liveSubagentUsageBySession,
-      }
-    }),
-
-  cancelStream: (sessionId, streamId, status, extra) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      delete sessionStreams[streamId]
-      // ADR-070 §2.6: stream.cancelled несёт status + usage/cost/usage_estimated —
-      // если message.added уже добавил assistant-сообщение, сохраняем статистику
-      // в него (по stream_id), чтобы отменённый ответ показывал токены/стоимость.
-      const hasExtra = !!extra
-        && (extra.usage !== undefined || extra.costUsd !== undefined || extra.usageEstimated !== undefined)
-      let messagesBySession = s.messagesBySession
-      if (status || hasExtra) {
-        const msgs = s.messagesBySession[sessionId]
-        if (msgs) {
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const m = msgs[i]!
-            const meta = m.metadata as Record<string, unknown> | null | undefined
-            if (m.role === 'assistant' && meta?.stream_id === streamId) {
-              const next = [...msgs]
-              next[i] = {
-                ...m,
-                ...(extra?.usage ? { usage: extra.usage } : {}),
-                metadata: {
-                  ...(m.metadata || {}),
-                  ...(status ? { status } : {}),
-                  ...(extra?.costUsd !== undefined ? { cost_usd: extra.costUsd } : {}),
-                  ...(extra?.costCurrency !== undefined ? { cost_currency: extra.costCurrency } : {}),
-                  ...(extra?.usageEstimated !== undefined ? { usage_estimated: extra.usageEstimated } : {}),
-                },
-              }
-              messagesBySession = { ...s.messagesBySession, [sessionId]: next }
-              break
-            }
-          }
-        }
-      }
-      // ADR-070 §2.6: отмена завершает стрим — live-вклад саб-агентов сбрасываем.
-      const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
-      delete liveSubagentUsageBySession[sessionId]
-      return {
-        streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
-        ...(messagesBySession !== s.messagesBySession ? { messagesBySession } : {}),
-        streamFinishTickBySession: bumpStreamFinishTick(s.streamFinishTickBySession, sessionId),
-        liveSubagentUsageBySession,
-      }
-    }),
-
-  setStreamRetry: (sessionId, retry) =>
-    set((s) => ({
-      retryBySession: { ...s.retryBySession, [sessionId]: retry },
-    })),
-
-  setStreamRetrying: (sessionId, streamId, isRetrying) =>
-    set((s) => {
-      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
-      const existing = sessionStreams[streamId]
-      if (!existing) return s
-      sessionStreams[streamId] = { ...existing, isRetrying }
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
-    }),
-
-  setSubagentRetry: (sessionId, retry) =>
-    set((s) => ({
-      subagentRetryBySession: { ...s.subagentRetryBySession, [sessionId]: retry },
-    })),
-
-  setSubagentResuming: (sessionId, state) =>
-    set((s) => ({
-      subagentResumingBySession: { ...s.subagentResumingBySession, [sessionId]: state },
-    })),
-
-  setFinalStreamError: (sessionId, error) =>
-    set((s) => {
-      const prev = s.finalErrorBySession[sessionId]
-      // no-op если значение не меняется — иначе лишние перерендеры на каждом chunk
-      if (prev === error || (prev === null && error === null)) return s
-      if (prev && error && prev.streamId === error.streamId && prev.error === error.error && prev.errorType === error.errorType) return s
-      return {
-        finalErrorBySession: { ...s.finalErrorBySession, [sessionId]: error },
-      }
-    }),
-
-  addMessage: (sessionId, message) =>
-    set((s) => {
-      const msgs = [...(s.messagesBySession[sessionId] || [])]
-      // Upsert: повторный `message.added` (например, обновление metadata
-      // user-команды после `commandPrompt`) не плодит копии. Ищем по index,
-      // при отсутствии — по id (сообщения без index).
-      let at = message.index != null ? msgs.findIndex((m) => m.index === message.index) : -1
-      if (at === -1 && message.id) at = msgs.findIndex((m) => m.id === message.id)
-      if (at === -1) {
-        return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...msgs, message] } }
-      }
-      const prev = msgs[at]!
-      msgs[at] = {
-        ...prev,
-        ...(message.id ? { id: message.id } : {}),
-        role: message.role || prev.role,
-        // Контент из message.added может быть усечён (500 симв.); не затираем
-        // уже известный полный контент (например, после stream.done).
-        content: prev.content || message.content,
-        agent_role: message.agent_role ?? prev.agent_role,
-        author: message.author ?? prev.author,
-        model: message.model ?? prev.model,
-        provider: message.provider ?? prev.provider,
-        // metadata объединяем: сохраняем ранее известные поля (subagents/
-        // tool_results/secrets) и добавляем пришедшие (commandPrompt и т.п.).
-        metadata: { ...(prev.metadata ?? {}), ...(message.metadata ?? {}) },
-      }
-      return { messagesBySession: { ...s.messagesBySession, [sessionId]: msgs } }
+      return { partsBySession: { ...s.partsBySession, [sessionId]: nextSession } }
     }),
 
   setPendingMessages: (sessionId, pending) =>
@@ -1067,7 +811,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((s) => ({
       queueBySession: {
         ...s.queueBySession,
-        [sessionId]: { pendingCount, isStalled: true },
+        [sessionId]: { pendingCount, steerCount: 0, isStalled: true },
       },
     })),
 
@@ -1098,7 +842,26 @@ export const useChatStore = create<ChatStore>((set) => ({
       return {
         queueBySession: {
           ...s.queueBySession,
-          [sessionId]: { pendingCount, isStalled: prev?.isStalled ?? false },
+          [sessionId]: {
+            pendingCount,
+            steerCount: prev?.steerCount ?? 0,
+            isStalled: prev?.isStalled ?? false,
+          },
+        },
+      }
+    }),
+
+  setQueueCounts: (sessionId, pendingCount, steerCount) =>
+    set((s) => {
+      const prev = s.queueBySession[sessionId]
+      return {
+        queueBySession: {
+          ...s.queueBySession,
+          [sessionId]: {
+            pendingCount,
+            steerCount,
+            isStalled: prev?.isStalled ?? false,
+          },
         },
       }
     }),
@@ -1112,7 +875,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   upsertPendingMessage: (sessionId, msg) =>
     set((s) => {
       const current = s.pendingBySession[sessionId] || []
-      // Дедуп: оптимистичная строка (id = streamId) и серверное `message.queued`
+      // Дедup: оптимистичная строка (id = id отправки) и серверное `message.accepted`
       // с тем же `message_id` — одна строка, а не две.
       const at = msg.id ? current.findIndex((item) => item.id === msg.id) : -1
       const pending = at >= 0
@@ -1141,8 +904,10 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((s) => {
       const messagesBySession = { ...s.messagesBySession }
       delete messagesBySession[sessionId]
-      const streamingBySession = { ...s.streamingBySession }
-      delete streamingBySession[sessionId]
+      const partsBySession = { ...s.partsBySession }
+      delete partsBySession[sessionId]
+      const turnBySession = { ...s.turnBySession }
+      delete turnBySession[sessionId]
       const queueBySession = { ...s.queueBySession }
       delete queueBySession[sessionId]
       const pendingBySession = { ...s.pendingBySession }
@@ -1157,7 +922,18 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete finalErrorBySession[sessionId]
       const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
       delete liveSubagentUsageBySession[sessionId]
-      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, retryBySession, subagentRetryBySession, subagentResumingBySession, finalErrorBySession, liveSubagentUsageBySession }
+      return {
+        messagesBySession,
+        partsBySession,
+        turnBySession,
+        queueBySession,
+        pendingBySession,
+        retryBySession,
+        subagentRetryBySession,
+        subagentResumingBySession,
+        finalErrorBySession,
+        liveSubagentUsageBySession,
+      }
     }),
 
   setStickyNotes: (sessionId, notes) =>
@@ -1189,11 +965,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       return { stickyNotesBySession: { ...s.stickyNotesBySession, [sessionId]: notes } }
     }),
 
-  openDebugModal: (sessionId, messageIndex) =>
-    set({ debugModalSessionId: sessionId, debugModalMessageIndex: messageIndex }),
+  openDebugModal: (sessionId, messageId) =>
+    set({ debugModalSessionId: sessionId, debugModalMessageId: messageId }),
 
   closeDebugModal: () =>
-    set({ debugModalSessionId: null, debugModalMessageIndex: null }),
+    set({ debugModalSessionId: null, debugModalMessageId: null }),
 
   setSummarizationPending: (sessionId, pending) =>
     set((s) => ({
@@ -1300,4 +1076,13 @@ export const useChatStore = create<ChatStore>((set) => ({
 export function selectLiveSubagentUsage(sessionId: string) {
   return (s: { liveSubagentUsageBySession: Record<string, LiveSubagentSessionUsage> }):
     LiveSubagentSessionUsage | undefined => s.liveSubagentUsageBySession[sessionId]
+}
+
+/**
+ * ADR-118 §5: сообщение сессии со статусом `streaming` — «живой» черновик
+ * (единственный источник live-контента).
+ */
+export function selectStreamingMessage(sessionId: string) {
+  return (s: { messagesBySession: Record<string, MessageData[]> }): MessageData | undefined =>
+    s.messagesBySession[sessionId]?.find((m) => m.status === 'streaming')
 }

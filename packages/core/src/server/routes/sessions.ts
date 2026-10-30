@@ -1282,8 +1282,10 @@ export function createSessionRoutes(
   app.post('/:id/prompt', chainMiddleware([auth.requireAuth, scoped('sessions:prompt'), ...promptMiddleware]), async (c) => {
     const sessionId = c.req.param('id');
 
-    // Гибрид: удалённая сессия исполняется backend — пробрасываем upstream Response
-    // как есть (SSE-стрим), без локального оркестратора.
+    // Гибрид: удалённая сессия исполняется backend. ADR-118 §3: проксируем
+    // **только** подтверждение приёма (`202 {messageId, mode, position}`) —
+    // поток хода больше не проксируется (наблюдение — по шине событий,
+    // ADR-024/ADR-118).
     if (hasRemoteGetter && isRemoteRef(sessionId)) {
       const remoteClient = resolveClient();
       if (!remoteClient) {
@@ -1291,26 +1293,28 @@ export function createSessionRoutes(
       }
       const body = await c.req.json().catch(() => ({}));
       // ADR-104 (этап 3): режим отправки доезжает до удалённой стороны (тело
-      // пробрасывается как есть) и клиент получает явный ответ, если удалённая
-      // сторона режим НЕ применила.
+      // пробрасывается как есть).
       const mode = isSteerMode(body.mode) ? body.mode : DEFAULT_STEER_MODE;
+      // Идентификатор принятого сообщения: `body.messageId` (строка) либо
+      // сгенерированный (существующий механизм `generateStreamId`).
+      const requestedMessageId = typeof body.messageId === 'string' && body.messageId.trim() !== ''
+        ? body.messageId
+        : generateStreamId();
       try {
         const response = await remoteClient.promptSession(toLocalId(sessionId), body, { signal: c.req.raw.signal });
-        if (mode === 'queue') return response;
-        // Удалённая сторона применила режим → отвечает `202` (ack без
-        // SSE-тела). Иначе режим не применён (нет активного хода на удалённой
-        // стороне или удалённая версия режим не знает) — сообщение ушло
-        // обычной очередью, отвечаем явным ack'ом.
+        // Удалённая сторона ответила новым контрактом — проксируем `202`.
         if (response.status === 202) {
-          const payload = await response.json().catch(() => ({}));
-          return c.json({ ...(payload as Record<string, unknown>), mode_applied: true }, 202);
+          const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+          return c.json({
+            messageId: typeof payload.messageId === 'string' ? payload.messageId : requestedMessageId,
+            mode: payload.mode === 'steer' || payload.mode === 'interrupt' ? payload.mode : mode,
+            position: typeof payload.position === 'number' ? payload.position : null,
+          }, 202);
         }
+        // Старая версия сервера (не-202): сообщение принято обычной очередью —
+        // мягкая деградация, поток НЕ проксируем.
         await response.body?.cancel().catch(() => {});
-        return c.json({
-          status: 'queued',
-          mode_applied: false,
-          stream_id: typeof body.messageId === 'string' ? body.messageId : undefined,
-        }, 202);
+        return c.json({ messageId: requestedMessageId, mode: 'queue', position: null }, 202);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
         if (mapped) return mapped;
@@ -1435,6 +1439,9 @@ export function createSessionRoutes(
 
     const streamId = body.messageId || generateStreamId();
     const author = await resolveAuthor(c);
+    // ADR-118 §4: отправитель (`userId` запроса) — адресат адресного события
+    // `message.accepted`. Пустой — событие уходит в канал сессии (broadcast).
+    const senderUserId = (await resolveUserId(c)) || '';
     // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода** (здесь —
     // на постановке в очередь). Не аутентифицирован → не задан → fallback
     // на владельца сессии (совместимость).
@@ -1458,6 +1465,14 @@ export function createSessionRoutes(
       metadata: { ...(body.metadata || {}), stream_id: streamId },
     };
 
+    // ADR-118 §3: идентификатор принятого сообщения — `body.messageId` (если
+    // строка), иначе id, выданный существующим механизмом (`streamId`/
+    // `generateStreamId()`). Один и тот же id уходит в HTTP-ответ `202` и в
+    // событие `message.accepted`.
+    const acceptedMessageId = typeof body.messageId === 'string' && body.messageId.trim() !== ''
+      ? body.messageId
+      : message.id;
+
     // ADR-104: `steer` — вмешательство в активный ход (без прерывания
     // генерации), `interrupt` — прерывание текущей генерации с продолжением
     // хода. Если активного хода нет — ведём себя как обычная очередь
@@ -1467,7 +1482,12 @@ export function createSessionRoutes(
       const steerResult = await enqueueSteerMessage(
         sessionManager, eventBus, sessionId, message, MAX_STEER_INJECTIONS_PER_TURN,
         (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
-        { interrupt: interruptMode, ...(turnPrincipal ? { principal: turnPrincipal } : {}) },
+        {
+          interrupt: interruptMode,
+          ...(turnPrincipal ? { principal: turnPrincipal } : {}),
+          messageId: acceptedMessageId,
+          ...(senderUserId ? { recipient: senderUserId } : {}),
+        },
       );
       if (!steerResult.accepted) {
         return c.json({
@@ -1488,21 +1508,24 @@ export function createSessionRoutes(
         const liveStreamId = session.currentStream?.streamId;
         if (liveStreamId) orchestrator.interrupt(liveStreamId);
       }
-      // Отдельный стрим не запускается — сообщение вплетается в текущий ход,
-      // поэтому отвечаем статусом без SSE.
+      // ADR-118 §3: контракт приёма — `202 {messageId, mode, position}`.
+      // Вмешательство не занимает позицию в очереди (свой счётчик `steerCount`),
+      // поэтому `position` — `null`.
       return c.json({
-        status: interruptMode ? 'interrupted' : 'steered',
-        stream_id: streamId,
-        pending_count: steerResult.pending,
-        // ADR-104 (этап 3): локальная сторона применила режим сама.
-        mode_applied: true,
+        messageId: acceptedMessageId,
+        mode,
+        position: null,
       }, 202);
     }
 
     const result = await enqueueUserMessage(
       sessionManager, eventBus, sessionId, message, queueManager, processMessage,
       (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
-      turnPrincipal ? { principal: turnPrincipal } : undefined,
+      {
+        ...(turnPrincipal ? { principal: turnPrincipal } : {}),
+        messageId: acceptedMessageId,
+        ...(senderUserId ? { recipient: senderUserId } : {}),
+      },
     );
 
     if (!result) {
@@ -1514,41 +1537,15 @@ export function createSessionRoutes(
     // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений.
     await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);
 
-    const signal = c.req.raw.signal;
-
-    return new Response(
-      new ReadableStream({
-        async start(controller) {
-          const encoder = new TextEncoder();
-          try {
-            for await (const event of sseEventStream(eventBus, sessionId, signal)) {
-              const line = `data: ${JSON.stringify(event)}\n\n`;
-              controller.enqueue(encoder.encode(line));
-
-              if (
-                (event.type === 'stream.done' || event.type === 'stream.error' || event.type === 'stream.cancelled')
-                && event.data.stream_id === streamId
-              ) {
-                break;
-              }
-            }
-          } catch {
-            // client disconnected
-          } finally {
-            try { controller.close(); } catch { /* already closed */ }
-          }
-        },
-      }),
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'X-Accel-Buffering': 'no',
-        },
-      },
-    );
+    // ADR-118 §3: контракт приёма — **всегда** `202 {messageId, mode, position}`.
+    // `text/event-stream` больше не возвращается: контракт приёма и контракт
+    // наблюдения разведены (наблюдение за ходом — по шине событий, ADR-024).
+    // Отмена соединения клиентом больше не рвёт наблюдение за ходом.
+    return c.json({
+      messageId: acceptedMessageId,
+      mode: 'queue',
+      position: result.pendingMessages.length,
+    }, 202);
   });
 
   app.get('/:id/messages', auth.requireAuth, scoped('sessions:read'), async (c) => {

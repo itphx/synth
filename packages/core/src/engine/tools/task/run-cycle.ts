@@ -7,7 +7,7 @@
  * поведения.
  */
 import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
-import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock, ReasoningLevel, EffortLevel } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
@@ -335,6 +335,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   const applyChildSteerInjections = async (): Promise<void> => {
     const sessionManager = extra.sessionManager;
     if (!childSessionId || !sessionManager) return;
+    // ADR-118 §4: `message.delivered` несёт `ord` (порядок записи) и
+    // принципал — они есть только у сохранённого сообщения, поэтому
+    // последнее сохранённое сообщение запоминаем в замыкании.
+    let lastPersisted: Message | undefined;
     try {
       await applySteerInjections({
         sessionManager,
@@ -349,6 +353,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           if (!updated) return { index: 0 };
           const index = updated.messages.length - 1;
           const persisted = updated.messages[index]!;
+          lastPersisted = persisted;
           // Сообщение дочерней сессии — как любое другое сообщение ребёнка:
           // `message.added` в канал ребёнка (+ `child.message.added` в канал
           // родителя) через общий хелпер.
@@ -359,11 +364,21 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           }
           return { index };
         },
-        // `message.injected` публикуется в канал **ребёнка**: инъекция
-        // принадлежит его ходу, а позиция сообщения — индекс его истории
-        // (в канале родителя такой индекс попал бы в чужое сообщение).
-        publishInjected: (event) => {
-          extra.eventBus?.publish(childSessionId, 'message.injected', event);
+        // ADR-118 §4: прежний `message.injected` удалён без dual-emit —
+        // материализация сообщения в истории ребёнка публикуется как
+        // `message.delivered` (`messageId`, `ord`, роль, автор, принципал).
+        // Событие идёт в канал **ребёнка**: инъекция принадлежит его ходу.
+        publishInjected: () => {
+          const persisted = lastPersisted;
+          if (!persisted) return;
+          const payload: MessageDeliveredPayload = {
+            messageId: persisted.id,
+            ord: Number.isFinite(persisted.ord) ? (persisted.ord as number) : 0,
+            role: persisted.role,
+            ...(persisted.author ? { author: persisted.author } : {}),
+            ...(persisted.principal ? { principal: persisted.principal } : {}),
+          };
+          extra.eventBus?.publish(childSessionId, 'message.delivered', payload);
         },
         publishDropped: (event) => {
           extra.eventBus?.publish(childSessionId, 'steer.dropped', event);
@@ -506,11 +521,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     const persistChildAssistantMessage = async (
       content: string,
       extraMeta: Record<string, unknown> = {},
+      messageId?: string,
     ): Promise<void> => {
       if (!childSessionId || !extra.sessionManager) return;
       try {
         const assistantMsg: Message = {
-          id: generateId(),
+          id: messageId ?? generateId(),
           role: MessageRole.ASSISTANT,
           seq: 0,
           origin: 'local',
@@ -664,6 +680,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // (кэшированный префикс провайдера), но вызов запрещён `toolChoice`.
       const stepLimitStep = Number.isFinite(effectiveMaxSteps) && iteration + 1 >= effectiveMaxSteps;
       if (stepLimitStep) stepLimitStepDone = true;
+      // ADR-118 §4: id сообщения шага. Assistant-сообщение шага создаётся
+      // уже во время стрима (`step.finished` несёт его `messageId`), поэтому
+      // id выдаётся ЗДЕСЬ, до LLM-вызова, и переиспользуется при записи
+      // сообщения в историю ребёнка.
+      const stepMessageId = generateId();
       // Инструкция «только текст» — assistant-сообщением в запрос, не в историю.
       const requestMessages = stepLimitStep
         ? [
@@ -707,7 +728,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             context_budget_exceeded: true,
             context_budget_tokens: estimatedTokens,
             steps: iteration,
-          });
+          }, stepMessageId);
           // Родителю/UI — сигнал срабатывания предохранителя.
           publish?.('subagent.context_budget', {
             child_session_id: childSessionId,
@@ -842,20 +863,30 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                   });
                 }
 
-                // Live-статистика в дочернюю сессию (если она есть) — открытая
-                // дочерняя сессия показывает токены/стоимость по ходу работы.
+                // ADR-118 §4: live-статистика в дочернюю сессию (если она
+                // есть) — открытая дочерняя сессия показывает токены/стоимость
+                // по ходу работы. Прежний `stream.usage` удалён без dual-emit:
+                // расход шага несёт `step.finished` (`usage`, провайдер/модель,
+                // стоимость). У цикла сабагента своего `turnId`/`stepIndex`
+                // нет: `turnId` = id дочерней сессии, `stepIndex` = номер
+                // итерации, `messageId` = id assistant-сообщения шага.
                 if (childSessionId && extra.eventBus) {
-                  extra.eventBus.publish(childSessionId, 'stream.usage', {
-                    session_id: childSessionId,
-                    stream_id: extra.streamId,
-                    iteration,
-                    agent_role: subagentType,
+                  const stepPayload: StepFinishedPayload = {
+                    turnId: childSessionId,
+                    stepIndex: iteration,
+                    messageId: stepMessageId,
+                    status: 'completed',
+                    usage: liveUsage.usage,
                     ...(liveModel ? { model: liveModel } : {}),
                     ...(liveProvider ? { provider: liveProvider } : {}),
-                    usage: liveUsage.usage,
-                    ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
-                    estimated: liveUsage.estimated,
-                  });
+                    ...(liveCost
+                      ? {
+                        costUsd: liveCost.costUsd,
+                        costCurrency: liveCost.currency,
+                      }
+                      : {}),
+                  };
+                  extra.eventBus.publish(childSessionId, 'step.finished', stepPayload);
                 }
               }
             }
@@ -1040,13 +1071,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (reasoning) subagentReasoning = reasoning;
             // Отчёт — финальный ответ саб-агента: в историю дочерней сессии
             // тем же путём, что и обычный финальный ответ (+ метка лимита шагов).
-            await persistChildAssistantMessage(reportText, stepLimitMeta());
+            await persistChildAssistantMessage(reportText, stepLimitMeta(), stepMessageId);
           } else {
             reportMissing = true;
             finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
             // Детерминированный текст — в историю ребёнка: пустой отчёт иначе
             // оставлял дочернюю сессию без финального ответа вовсе.
-            await persistChildAssistantMessage(finalContent, stepLimitMeta());
+            await persistChildAssistantMessage(finalContent, stepLimitMeta(), stepMessageId);
           }
           break;
         }
@@ -1055,7 +1086,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         if (reasoning) subagentReasoning = reasoning;
 
         // Сохранить финальный ответ ассистента в дочернюю сессию
-        await persistChildAssistantMessage(accumulatedContent);
+        await persistChildAssistantMessage(accumulatedContent, {}, stepMessageId);
         break;
       }
 
@@ -1069,7 +1100,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       if (childSessionId && extra.sessionManager) {
         try {
           const assistantMsg: Message = {
-            id: generateId(),
+            id: stepMessageId,
             role: MessageRole.ASSISTANT,
             seq: 0,
             origin: 'local',
@@ -1459,11 +1490,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         if (reportText) {
           finalContent = reportText;
           if (reasoning) subagentReasoning = reasoning;
-          await persistChildAssistantMessage(reportText, stepLimitMeta());
+          await persistChildAssistantMessage(reportText, stepLimitMeta(), stepMessageId);
         } else {
           reportMissing = true;
           finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
-          await persistChildAssistantMessage(finalContent, stepLimitMeta());
+          await persistChildAssistantMessage(finalContent, stepLimitMeta(), stepMessageId);
         }
         break;
       }

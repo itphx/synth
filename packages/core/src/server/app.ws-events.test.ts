@@ -53,7 +53,9 @@ async function startApp(): Promise<{ app: StandaloneApp; port: number; dir: stri
  * может прийти между `open` и подпиской и потеряться (ws не буферизует).
  */
 function connect(port: number): { ws: WebSocket; received: WsMessage[]; ready: Promise<void> } {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, {
+  // ADR-118 §8: клиент обязан заявить модель сообщений (`messageModel=2`),
+  // иначе соединение закрывается (fail-closed).
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events?messageModel=2`, {
     headers: { Authorization: `Bearer ${API_KEY}` },
   });
   const received: WsMessage[] = [];
@@ -237,8 +239,8 @@ describe('createStandaloneApp: WS /ws/events — сессии, созданны�
       await client.ready;
       await waitForMessage(client.received, (m) => m.type === 'connected');
 
-      app.eventBus.publish(id, 'stream.usage', { session_id: id });
-      await waitForMessage(client.received, (m) => m.type === 'stream.usage' && m.sessionId === id);
+      app.eventBus.publish(id, 'step.finished', { turnId: id, stepIndex: 0, messageId: 'm1', status: 'completed' });
+      await waitForMessage(client.received, (m) => m.type === 'step.finished' && m.sessionId === id);
     } finally {
       client?.ws.terminate();
       await close();
@@ -333,10 +335,10 @@ describe('createStandaloneApp: WS /ws/events — авто-подписка на 
         await waitForCondition(() => app.eventBus.subscriberCount(childId) > 0);
 
         // События ребёнка (стрим саб-агента) приходят на живой WS без переподключения.
-        app.eventBus.publish(childId, 'stream.usage', { session_id: childId, outputTokens: 1 });
-        app.eventBus.publish(childId, 'stream.done', { session_id: childId });
-        await waitForMessage(client.received, (m) => m.type === 'stream.usage' && m.sessionId === childId);
-        await waitForMessage(client.received, (m) => m.type === 'stream.done' && m.sessionId === childId);
+        app.eventBus.publish(childId, 'step.finished', { turnId: childId, stepIndex: 0, messageId: 'm1', status: 'completed' });
+        app.eventBus.publish(childId, 'turn.finished', { turnId: childId, status: 'completed' });
+        await waitForMessage(client.received, (m) => m.type === 'step.finished' && m.sessionId === childId);
+        await waitForMessage(client.received, (m) => m.type === 'turn.finished' && m.sessionId === childId);
       } finally {
         client.ws.terminate();
         await close();
@@ -369,8 +371,8 @@ describe('createStandaloneApp: WS /ws/events — авто-подписка на 
       });
       await waitForCondition(() => app.eventBus.subscriberCount(child.id) > 0);
 
-      app.eventBus.publish(child.id, 'stream.usage', { session_id: child.id });
-      await waitForMessage(client.received, (m) => m.type === 'stream.usage' && m.sessionId === child.id);
+      app.eventBus.publish(child.id, 'step.finished', { turnId: child.id, stepIndex: 0, messageId: 'm1', status: 'completed' });
+      await waitForMessage(client.received, (m) => m.type === 'step.finished' && m.sessionId === child.id);
     } finally {
       client.ws.terminate();
       await close();
@@ -395,8 +397,8 @@ describe('createStandaloneApp: WS /ws/events — авто-подписка по 
       expect(app.eventBus.subscriberCount('imported-1')).toBeGreaterThan(0);
 
       // Последующие события импортированной сессии тоже доходят.
-      app.eventBus.publish('imported-1', 'stream.usage', { session_id: 'imported-1' });
-      await waitForMessage(client.received, (m) => m.type === 'stream.usage' && m.sessionId === 'imported-1');
+      app.eventBus.publish('imported-1', 'step.finished', { turnId: 'imported-1', stepIndex: 0, messageId: 'm1', status: 'completed' });
+      await waitForMessage(client.received, (m) => m.type === 'step.finished' && m.sessionId === 'imported-1');
     } finally {
       client.ws.terminate();
       await close();
@@ -412,7 +414,7 @@ describe('createStandaloneApp: WS /ws/events — авто-подписка по 
 
       // Владелец `other-user` — клиент `local` не должен ни подписаться, ни получить событие.
       app.eventBus.publish('foreign-1', 'session.created', { id: 'foreign-1', owner_id: 'other-user' });
-      app.eventBus.publish('foreign-1', 'stream.usage', { session_id: 'foreign-1' });
+      app.eventBus.publish('foreign-1', 'step.finished', { turnId: 'foreign-1', stepIndex: 0, messageId: 'm1', status: 'completed' });
       await sleep(150);
 
       expect(app.eventBus.subscriberCount('foreign-1')).toBe(0);

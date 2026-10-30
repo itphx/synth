@@ -15,7 +15,7 @@
  * Модуль не зависит от оркестратора — юнит-тестируется с моком
  * `Pick<SessionManager,'appendMessage'|'updateMessage'>` и фейковыми таймерами.
  */
-import type { Message, Part } from '@itphx/synth-shared';
+import type { Message, MessageStatus, Part } from '@itphx/synth-shared';
 import { generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 
@@ -27,7 +27,7 @@ export interface StreamMessageRef {
 
 /** Поля сообщения, которые можно заменить в `finalize`. */
 export type StreamMessagePatch = Partial<
-  Pick<Message, 'content' | 'reasoning' | 'toolCalls' | 'metadata' | 'model' | 'parts'>
+  Pick<Message, 'content' | 'reasoning' | 'toolCalls' | 'metadata' | 'model' | 'parts' | 'status'>
 >;
 
 export interface StreamMessageDraftOptions {
@@ -35,6 +35,14 @@ export interface StreamMessageDraftOptions {
   sessionId: string;
   /** Базовые поля assistant-сообщения (без `id`/`seq`/`content`/`parts`/`createdAt`). */
   base: Omit<Message, 'id' | 'seq' | 'content' | 'parts' | 'createdAt'>;
+  /**
+   * ADR-118 §5: заранее выбранный идентификатор сообщения шага.
+   *
+   * Идентификатор должен быть известен **до** первого чанка — по нему
+   * публикуются `step.started`/`part.delta`. Если не задан — выдаётся
+   * сгенерированный (прежнее поведение).
+   */
+  id?: string;
   /** Минимальный интервал между записями (мс). По умолчанию 1000. */
   intervalMs?: number;
   /** Прирост контента (символы), при котором пишем не дожидаясь интервала. По умолчанию 4096. */
@@ -60,7 +68,7 @@ export class StreamMessageDraft {
   private readonly _warn: (msg: string) => void;
 
   /** Предварительно сгенерированный id (используется при первом append). */
-  private readonly _draftId = generateId();
+  private readonly _draftId: string;
   private _ref: StreamMessageRef | null = null;
 
   private _content = '';
@@ -92,11 +100,22 @@ export class StreamMessageDraft {
     this._warn = options.warn ?? ((msg) => console.warn(msg));
     this._model = options.base.model;
     this._lastPersistedAt = Date.now();
+    this._draftId = options.id ?? generateId();
   }
 
   /** Текущая ссылка на запись черновика (`null` — черновик ещё не создан). */
   ref(): StreamMessageRef | null {
     return this._ref ? { ...this._ref } : null;
+  }
+
+  /**
+   * ADR-118 §5: идентификатор сообщения шага.
+   *
+   * Известен до первой записи — по нему публикуются `step.started` и
+   * `part.delta` (клиент адресует части по `{messageId, partId}`).
+   */
+  messageId(): string {
+    return this._ref?.id ?? this._draftId;
   }
 
   /**
@@ -200,6 +219,9 @@ export class StreamMessageDraft {
       toolCalls: patch.toolCalls,
       model: patch.model ?? this._model,
       metadata,
+      // ADR-118 §5: «финал» = смена статуса сообщения. Черновик жил со
+      // статусом `streaming`, финал — терминальный (`completed` по умолчанию).
+      status: patch.status ?? 'completed',
     });
 
     try {
@@ -233,8 +255,11 @@ export class StreamMessageDraft {
   /**
    * Прервать черновик: сохранить частичный текст с
    * `streaming:false`, `interrupted:true`, `status:'error'`.
+   *
+   * ADR-118 §5: статус сообщения — терминальный (`cancelled` — генерация
+   * прервана, `error` — сбой провайдера); вызывающая сторона решает, какой.
    */
-  async abort(reason?: string): Promise<void> {
+  async abort(reason?: string, status: MessageStatus = 'cancelled'): Promise<void> {
     this._stopTimer();
     this._closed = true;
 
@@ -266,6 +291,7 @@ export class StreamMessageDraft {
         status: 'error',
         ...(reason ? { interrupted_reason: reason } : {}),
       },
+      status,
     });
 
     try {
@@ -287,6 +313,7 @@ export class StreamMessageDraft {
       toolCalls: patch.toolCalls,
       model: patch.model ?? this._model,
       metadata: patch.metadata ?? { ...(this._base.metadata ?? {}) },
+      status: patch.status ?? 'completed',
     });
     try {
       const saved = await this._sessionManager.appendMessage(this._sessionId, message);
@@ -312,6 +339,9 @@ export class StreamMessageDraft {
       reasoning,
       model: this._model,
       metadata: { ...(this._base.metadata ?? {}), streaming: true },
+      // ADR-118 §5: черновик живёт со статусом `streaming` — «финал» это
+      // смена статуса, а не замена объекта.
+      status: 'streaming',
     });
     try {
       const saved = await this._sessionManager.appendMessage(this._sessionId, message);
@@ -378,6 +408,8 @@ export class StreamMessageDraft {
         ...(this._base.metadata ?? {}),
         streaming: flags.streaming,
       },
+      // ADR-118 §5: инкрементальная запись черновика — статус `streaming`.
+      status: 'streaming',
     });
 
     try {
@@ -398,6 +430,8 @@ export class StreamMessageDraft {
     toolCalls?: Record<string, unknown>[];
     model?: string;
     metadata: Record<string, unknown>;
+    /** ADR-118 §5: статус сообщения (`streaming` → терминальный). */
+    status?: MessageStatus;
   }): Message {
     return {
       ...this._base,
@@ -411,6 +445,7 @@ export class StreamMessageDraft {
       ...(this._reasoningRedacted?.length ? { reasoningRedacted: this._reasoningRedacted } : {}),
       ...(overrides.toolCalls !== undefined ? { toolCalls: overrides.toolCalls } : {}),
       ...(overrides.model !== undefined ? { model: overrides.model } : {}),
+      ...(overrides.status !== undefined ? { status: overrides.status } : {}),
       metadata: overrides.metadata,
     };
   }

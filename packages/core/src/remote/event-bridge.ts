@@ -2,15 +2,20 @@
 // Подписывается на SSE GET /api/v2/events удалённого backend, переписывает id
 // в `remote:<...>` и публикует в локальный EventBus → локальный /api/v2/events (SSE/WS) → UI.
 //
+// ADR-118 §8: мост заявляет свою модель сообщений query-параметром
+// `messageModel=2` — удалённая сторона сверяет версию (fail-closed) и либо
+// отдаёт события новой модели (`message.accepted`/`queue.state`/
+// `message.delivered`/`turn.*`/`step.*`/`part.*`), либо отказывает в стриме.
+//
 // Фильтр контента по умолчанию: форвардим ВСЕ события. UI рендерит контент только из
-// событий `stream.chunk`, приходящих через transport (WS/SSE /api/v2/events); тело
-// prompt-стрима UI не читает (enqueueMessage отбрасывает response.body), а событий
-// `message.stream`/`stream.content` в кодовой базе нет. Значит в гибриде мост — ЕДИНСТВЕННЫЙ
-// путь контента до UI, исключать stream.chunk нельзя (иначе двойного вывода не будет,
-// а контента не будет вовсе).
+// событий `part.delta`/`part.updated`, приходящих через transport (WS/SSE
+// /api/v2/events); тело prompt-стрима UI не читает (enqueueMessage отбрасывает
+// response.body). Значит в гибриде мост — ЕДИНСТВЕННЫЙ путь контента до UI,
+// исключать события частей нельзя (иначе двойного вывода не будет, а контента
+// не будет вовсе).
 
 import type { BusEvent, EventType } from '@itphx/synth-shared';
-import { nowISO } from '@itphx/synth-shared';
+import { MESSAGE_MODEL_QUERY_PARAM, MESSAGE_MODEL_VERSION, nowISO } from '@itphx/synth-shared';
 import type { RemoteBackendClient } from './client.js';
 import { toRemoteRef } from './aggregate.js';
 import type { EventBus } from '../events/bus.js';

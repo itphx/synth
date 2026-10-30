@@ -14,7 +14,10 @@ import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import type { TransportMode } from './useUIStore'
-import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
+import type { MessageData, MessageStatus, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageDelivery } from './chatStore'
+import { partText } from '@/lib/messageParts'
+import type { PromptAcceptedResponse } from '@itphx/synth-shared/types'
+import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared/types'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 import { sessionsApi } from '@/lib/api/sessions'
@@ -23,6 +26,21 @@ import { i18nText } from '@/lib/i18n/text'
 import type { QuestionItem, QuestionRecord, SteerMode } from '@itphx/synth-shared/types'
 
 type EventDispatcher = (event: WSEvent) => void
+
+/**
+ * ADR-118 §1: идентификаторы частей детерминированные — текст
+ * `msg:text:<ordinal>`, вызов инструмента — `callId`. По ним части и
+ * дельти адресуются однозначно (upsert, а не append).
+ */
+const TEXT_PART_PREFIX = 'msg:text:'
+
+/** Порядковый номер текстовой части по её id (`msg:text:<ordinal>`). */
+function textPartOrdinal(partId: string): number | null {
+  if (!partId.startsWith(TEXT_PART_PREFIX)) return null
+  const raw = partId.slice(TEXT_PART_PREFIX.length)
+  const n = Number.parseInt(raw, 10)
+  return Number.isFinite(n) ? n : null
+}
 
 // Полный refresh сессии с сервера после событий плана/ToDo (plan.approved,
 // plan.updated, todos.updated). Гарантирует актуальность todos/mode/plan_approved
@@ -44,10 +62,28 @@ function nextStreamId(): string {
   return `stream-${sendSeq}-${Date.now()}`
 }
 
-/** Сессия сейчас в ходе (есть живой стрим) — обычная отправка встанет в очередь. */
+/** Сессия сейчас в ходе (есть активный ход) — обычная отправка встанет в очередь. */
 function isTurnActive(sid: string): boolean {
-  const streams = useChatStore.getState().streamingBySession[sid]
-  return !!streams && Object.values(streams).some((st) => st.isStreaming)
+  const turn = useChatStore.getState().turnBySession[sid]
+  return !!turn && turn.status === 'streaming'
+}
+
+/**
+ * Накопление **дельт** прогресса саб-агента (`subagent.progress` несёт только
+ * приращение с прошлой публикации, а не накопленный текст). Блок дописывается:
+ * в текущей итерации — в конец последнего блока, в новой — новым блоком.
+ */
+function appendDeltaBlock<T extends { text: string; iteration: number }>(
+  blocks: T[],
+  delta: string,
+  iteration: number,
+): T[] {
+  if (!delta) return blocks
+  const last = blocks[blocks.length - 1]
+  if (last && last.iteration === iteration) {
+    return [...blocks.slice(0, -1), { ...last, text: last.text + delta }]
+  }
+  return [...blocks, { text: delta, iteration } as T]
 }
 
 /**
@@ -78,6 +114,22 @@ function reconcileQueueFromApi(sid: string) {
       else chat.clearQueueState(sid)
     })
     .catch(() => {})
+}
+
+/**
+ * ADR-118 §6: последний применённый номер события по сессиям — точка догона.
+ * При реконнекте клиент передаёт максимум в `since`, и сервер отдаёт журнал
+ * строго после него (без разрыва и без дублей).
+ */
+const lastEventSeqBySession = new Map<string, number>()
+
+/** Максимальный номер события по всем сессиям (значение для `since`). */
+function maxEventSeq(): number | undefined {
+  let max: number | undefined
+  for (const value of lastEventSeqBySession.values()) {
+    if (max === undefined || value > max) max = value
+  }
+  return max
 }
 
 /**
@@ -324,20 +376,19 @@ interface TransportState {
   transportMode: TransportMode
   activeTransport: TransportKind
   connected: boolean
+  /** ADR-118 §8: модель сообщений инстанца не совпадает с клиентской. */
+  versionMismatch: boolean
   openSessions: Set<string>
 
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => void
   disconnect: () => void
   setTransportMode: (mode: TransportMode) => void
   /**
-   * ADR-104: `mode` — режим отправки. ADR-115: `attachmentIds` — id
-   * загруженных вложений (`partId`); WS-кадр `send_message` их не несёт,
-   * поэтому с вложениями сообщение уходит HTTP-путём.
-   *
-   * Возвращает `{confirmed}`: `false` — постановка в очередь не подтверждена
-   * за отведённое время (сообщение не потеряно: строка очереди уже показана
-   * оптимистично, очередь сверяется с сервером). Ошибка (сеть/401/валидация)
-   * по-прежнему бросается.
+   * ADR-118 §3: приём сообщения — **всегда** `202 {messageId, mode, position}`.
+   * Ни SSE-ожидания, ни таймаута подтверждения: сервер отвечает сразу.
+   * Возвращается принятый контракт — по `messageId` реплика показывается в ленте
+   * оптимистично (статус доставки — «принято/в очереди/вмешательство»).
+   * Ошибка (сеть/401/валидация) бросается.
    */
   sendMessage: (
     sessionId: string,
@@ -347,7 +398,7 @@ interface TransportState {
     model?: string,
     mode?: SteerMode,
     attachmentIds?: string[],
-  ) => Promise<{ confirmed: boolean }>
+  ) => Promise<PromptAcceptedResponse>
   cancel: (sessionId: string) => void
   /**
    * Ответ на запрос подтверждения. `true` — ответ доставлен (WS-кадр или HTTP),
@@ -391,6 +442,13 @@ export function createDispatcher(): EventDispatcher {
       || (event.session_id as string)
       || (payload.session_id as string)
 
+    // ADR-118 §6: запоминаем номер последнего применённого события по сессии —
+    // точка догона (`since`) при реконнекте.
+    if (sid && typeof event.eventSeq === 'number') {
+      const prev = lastEventSeqBySession.get(sid) ?? 0
+      if (event.eventSeq > prev) lastEventSeqBySession.set(sid, event.eventSeq)
+    }
+
     // ADR-114 §6: инвентарь worktree'ов проекта изменился. Событие идёт в
     // каналы сессий проекта, поэтому проект берём из payload (не из `sid`).
     // Разбираем ДО проверки `sid`: событие — сигнал «перечитай инвентарь».
@@ -406,44 +464,231 @@ export function createDispatcher(): EventDispatcher {
     if (!sid) return
 
     const {
-      addMessage,
-      startStream,
-      updateStreamChunk,
-      updateStreamUsage,
-      resetStreamAccumulator,
-      resetStreamAttempt,
-      clearUsageStream,
+      upsertMessage,
+      updateMessageById,
+      setMessageStatus,
+      setMessageDelivery,
+      upsertPart,
+      appendPartDelta,
+      startTurn,
+      finishTurn,
+      patchTurn,
       updateLiveSubagentUsage,
-      finishStream,
-      cancelStream,
       setStreamRetry,
-      setStreamRetrying,
       setQueueStalled,
       setSummarizationPending,
       updateQueueCount,
+      setQueueCounts,
+      upsertPart,
+      appendPartDelta,
+      patchPartData,
       upsertPendingMessage,
       removeFirstPending,
-      addToolCall,
-      updateToolCallResult,
-      updateToolCallSubagentProgress,
       setSubagentRetry,
       setSubagentResuming,
       setFinalStreamError,
     } = useChatStore.getState()
 
+    /**
+     * ADR-118 §5: сообщение-хода живёт от первой дельты до терминального
+     * статуса. Идентификатор сообщения — из `step.started`/`message.delivered`;
+     * если его ещё нет (старое ядро), берём id хода (`turnId`/`stream_id`).
+     */
+    const liveMessageId = (): string => {
+      const turn = useChatStore.getState().turnBySession[sid]
+      return (payload.messageId as string)
+        || (payload.message_id as string)
+        || turn?.messageId
+        || turn?.turnId
+        || ''
+    }
+
+    /**
+     * Живое сообщение assistant'а: создаётся при первом событии хода
+     * (ADR-118 §5) и живёт до терминального статуса.
+     */
+    const ensureLiveMessage = (
+      messageId: string,
+      extra?: Partial<MessageData>,
+    ): MessageData | undefined => {
+      if (!messageId) return undefined
+      const chat = useChatStore.getState()
+      const existing = chat.messagesBySession[sid]?.find((m) => m.id === messageId)
+      if (existing) {
+        if (extra) chat.updateMessageById(sid, messageId, extra)
+        return useChatStore.getState().messagesBySession[sid]?.find((m) => m.id === messageId)
+      }
+      const msgs = chat.messagesBySession[sid] || []
+      const index = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
+      const turn = chat.turnBySession[sid]
+      const message: MessageData = {
+        index,
+        id: messageId,
+        role: 'assistant',
+        content: '',
+        parts: [],
+        status: 'streaming',
+        turn_id: turn?.turnId ?? null,
+        step_index: turn?.stepIndex ?? null,
+        agent_role: turn?.agentRole ?? undefined,
+        model: turn?.model ?? undefined,
+        provider: turn?.provider ?? undefined,
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        created_at: new Date().toISOString(),
+        ...extra,
+      }
+      chat.upsertMessage(sid, message)
+      return message
+    }
+
     switch (type) {
-      case 'message_queued':
-      case 'message.queued': {
-        const content = (payload.message as string) || ''
-        const agentRole = payload.agent_role as string | undefined
-        const pendingCount = (payload.pending_count as number) || 1
-        const id = typeof payload.message_id === 'string' && payload.message_id !== ''
-          ? payload.message_id
-          : undefined
-        // Дедуп: оптимистичная строка (id = stream_id отправки) заменяется
-        // серверным подтверждением, а не дублируется.
-        upsertPendingMessage(sid, { ...(id ? { id } : {}), content, agentRole: agentRole || null })
-        updateQueueCount(sid, pendingCount)
+      // ADR-118 §4: `message.accepted` — **адресное** подтверждение приёма
+      // (доходит только отправителю). Несёт `messageId`, `mode`, `position`.
+      // Содержания сообщения в событии нет — статус доставки отражаем маркером
+      // в ленте, а саму реплику добавляет `message.delivered`.
+      case 'message.accepted': {
+        const messageId = (payload.messageId as string) || ''
+        if (!messageId) break
+        const mode = (payload.mode as string) || 'queue'
+        const position = typeof payload.position === 'number' ? payload.position : null
+        // `queue` — реплика ждёт очереди (`position` — её номер), `steer`/
+        // `interrupt` — вмешательство в активный ход.
+        const delivery = mode === 'queue'
+          ? (position != null && position > 1 ? 'queued' : 'accepted')
+          : 'steering'
+        setMessageDelivery(sid, messageId, delivery)
+        // Строка очереди: id известен, текст — нет (утечка снята). Строка
+        // заполнится из истории при доставке сообщения.
+        upsertPendingMessage(sid, { id: messageId, content: '', agentRole: null })
+        // Состав очереди уточняем у сервера (тексты и авторы — там).
+        reconcileQueueFromApi(sid)
+        break
+      }
+
+      // ADR-118 §4: `queue.state` — состояние очереди: **только счётчики**
+      // (без текста и автора).
+      case 'queue.state': {
+        setQueueCounts(
+          sid,
+          (payload.pendingCount as number) || 0,
+          (payload.steerCount as number) || 0,
+        )
+        break
+      }
+
+      // ADR-118 §4: `message.delivered` — сообщение материализовано в истории.
+      // Несёт `messageId`, `ord`, роль и автора; **содержания нет** — если
+      // сообщения ещё нет в сторе, догружаем историю и дедупим по `id`/`ord`.
+      case 'message.delivered': {
+        const messageId = (payload.messageId as string) || ''
+        if (!messageId) break
+        const ord = typeof payload.ord === 'number' ? payload.ord : null
+        const role = (payload.role as string) || undefined
+        const author = (payload.author as string) || undefined
+        const known = useChatStore.getState().messagesBySession[sid]?.find((m) => m.id === messageId)
+        if (known) {
+          updateMessageById(sid, messageId, {
+            ...(ord != null ? { ord } : {}),
+            ...(role ? { role } : {}),
+            ...(author ? { author } : {}),
+          })
+          break
+        }
+        // Сообщения в сторе нет — подтягиваем историю (дедуп по id).
+        synthApi.getSessionMessages(sid).then((r) => {
+          const chat = useChatStore.getState()
+          const current = chat.messagesBySession[sid] || []
+          const byId = new Map(current.map((m) => [m.id, m]))
+          for (const m of r.messages) {
+            if (!m.id || byId.has(m.id)) continue
+            byId.set(m.id, m)
+          }
+          chat.setMessages(sid, [...byId.values()])
+        }).catch(() => {})
+        break
+      }
+
+      // ADR-118 §1/§4: начало хода.
+      case 'turn.started': {
+        const turnId = (payload.turnId as string) || ''
+        if (!turnId) break
+        startTurn(sid, {
+          turnId,
+          messageId: (payload.messageId as string) || undefined,
+          status: 'streaming',
+        })
+        break
+      }
+
+      // ADR-118 §1/§4: терминал хода.
+      case 'turn.finished': {
+        const turnId = (payload.turnId as string) || ''
+        if (!turnId) break
+        finishTurn(sid, turnId, (payload.status as 'completed' | 'cancelled' | 'error' | 'stopped') || 'completed')
+        break
+      }
+
+      // ADR-118 §1/§4: шаг хода — assistant-сообщение создаётся здесь и живёт
+      // до `step.finished` («финал» = смена статуса, ADR-118 §5).
+      case 'step.started': {
+        const turnId = (payload.turnId as string) || ''
+        const messageId = (payload.messageId as string) || ''
+        if (!messageId) break
+        const stepIndex = typeof payload.stepIndex === 'number' ? payload.stepIndex : undefined
+        if (turnId) {
+          patchTurn(sid, { turnId, messageId, ...(stepIndex != null ? { stepIndex } : {}) })
+        }
+        ensureLiveMessage(messageId, {
+          ...(turnId ? { turn_id: turnId } : {}),
+          ...(stepIndex != null ? { step_index: stepIndex } : {}),
+          status: 'streaming',
+        })
+        break
+      }
+
+      // ADR-118 §4: шаг завершён — терминальный статус сообщения + учёт токенов.
+      case 'step.finished': {
+        const messageId = (payload.messageId as string) || ''
+        if (!messageId) break
+        const status = (payload.status as 'completed' | 'cancelled' | 'error') || 'completed'
+        ensureLiveMessage(messageId)
+        setMessageStatus(sid, messageId, status)
+        const usage = mapUsage(payload.usage)
+        if (usage) updateMessageById(sid, messageId, { usage })
+        break
+      }
+
+      // ADR-118 §4: дельта части — **upsert** по `{messageId, partId}`.
+      case 'part.delta': {
+        const messageId = (payload.messageId as string) || ''
+        const partId = (payload.partId as string) || ''
+        if (!messageId || !partId) break
+        ensureLiveMessage(messageId)
+        appendPartDelta(
+          sid,
+          messageId,
+          partId,
+          (payload.field as 'text' | 'raw') || 'text',
+          (payload.delta as string) || '',
+        )
+        break
+      }
+
+      // ADR-118 §4: часть обновлена целиком — upsert по `{messageId, partId}`.
+      case 'part.updated': {
+        const messageId = (payload.messageId as string) || ''
+        const partId = (payload.partId as string) || ''
+        const part = payload.part as { id?: string; type?: string; data?: unknown } | undefined
+        if (!messageId || !partId) break
+        ensureLiveMessage(messageId)
+        upsertPart(sid, messageId, partId, {
+          id: partId,
+          type: (part?.type as never) || 'text',
+          text: partText(part?.data),
+          data: part?.data,
+        })
         break
       }
 
@@ -460,8 +705,14 @@ export function createDispatcher(): EventDispatcher {
         const usage = (src.usage as MessageData['usage']) ?? undefined
         const msg: MessageData = {
           index: (src.index as number) ?? (src.message_index as number) ?? (payload.index as number),
+          id: (src.id as string) || (src.message_id as string) || undefined,
           role: (src.role as string) || 'assistant',
           content: (src.content as string) || '',
+          // ADR-118: порядок и принадлежность ходу — из DTO.
+          ord: (src.ord as number | null) ?? null,
+          turn_id: (src.turn_id as string | null) ?? null,
+          step_index: (src.step_index as number | null) ?? null,
+          status: (src.status as MessageData['status']) ?? null,
           agent_role: (src.agent_role as string) || undefined,
           author: (src.author as string) || undefined,
           model: (src.model as string) || undefined,
@@ -479,39 +730,7 @@ export function createDispatcher(): EventDispatcher {
           hidden: false,
           created_at: new Date().toISOString(),
         }
-        addMessage(sid, msg)
-        // ADR-070 §2.6: финальное сообщение дочернего саб-агента несёт usage —
-        // подстраховка к stream.ended: снимаем usage-only live-плейсхолдер, чтобы
-        // после сохранения сообщения панель показывала его итоговую статистику.
-        if (usage) clearUsageStream(sid)
-        break
-      }
-
-      // ADR-104: инъекция во время активного хода — сообщение пользователя,
-      // вброшенное оркестратором на границе шага. Добавляем в ленту с
-      // маркером «вмешательство в ход» (metadata.steer).
-      case 'message_injected':
-      case 'message.injected': {
-        const metadata = {
-          ...((payload.metadata as Record<string, unknown> | undefined) ?? {}),
-          steer: true,
-        }
-        const msg: MessageData = {
-          index: (payload.message_index as number) ?? -1,
-          id: (payload.message_id as string) || undefined,
-          role: 'user',
-          content: (payload.content as string) || '',
-          // ADR-115: части (медиа) инъекции — миниатюра в живой ленте.
-          parts: (payload.parts as MessageData['parts']) ?? undefined,
-          agent_role: (payload.agent_role as string) || undefined,
-          author: (payload.author as string) || undefined,
-          metadata,
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          created_at: new Date().toISOString(),
-        }
-        addMessage(sid, msg)
+        upsertMessage(sid, msg)
         break
       }
 
@@ -527,20 +746,23 @@ export function createDispatcher(): EventDispatcher {
       case 'stream.start': {
         const agentRole = (payload.agent_role as string) || null
         const metadata = payload.metadata as Record<string, unknown> | undefined
-        startStream(sid, payload.stream_id as string, agentRole, payload.model as string | undefined, payload.provider as string | undefined)
+        const streamId = (payload.stream_id as string) || ''
+        // ADR-118 §1: ход начинается; его границы — `turnId`/`streamId`.
+        const turnId = (payload.turnId as string) || streamId
+        if (turnId) {
+          startTurn(sid, {
+            turnId,
+            streamId: streamId || undefined,
+            status: 'streaming',
+            agentRole,
+            model: payload.model as string | undefined,
+            provider: payload.provider as string | undefined,
+          })
+        }
         // Новая попытка — сбрасываем статус ретрая предыдущей
         setStreamRetry(sid, null)
         // Новый стрим — плашка финальной ошибки больше не актуальна
         setFinalStreamError(sid, null)
-        if (metadata?.type === 'summary') {
-          const s = useChatStore.getState()
-          const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
-          const streamId = payload.stream_id as string
-          if (sessionStreams[streamId]) {
-            sessionStreams[streamId] = { ...sessionStreams[streamId]!, agentRole: 'summary' }
-            useChatStore.setState({ streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } })
-          }
-        }
 
         const qs = useChatStore.getState().queueBySession[sid]
         if (qs && qs.pendingCount > 0) {
@@ -571,76 +793,78 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // ADR-118 §4: дельта части приходит отдельным событием (`part.delta`).
+      // Прежний `stream.chunk` (удалён без dual-emit) оставлен как совместимость
+      // со старым ядром: текст кладётся в текстовую часть.
       case 'stream_chunk':
       case 'stream.chunk': {
-        const streamId = payload.stream_id as string
         // Стрим реально пошёл после ретрая — сбрасываем «зависшую» надпись о
-        // повторе (stream.done мог не дойти/быть потерян при разрыве транспорта).
-        const retry = useChatStore.getState().retryBySession[sid]
-        const streamState = useChatStore.getState().streamingBySession[sid]?.[streamId]
-        if (retry && (retry.streamId === streamId || streamState?.isRetrying)) {
-          setStreamRetry(sid, null)
-          setStreamRetrying(sid, streamId, false)
-        }
+        // повторе (финал хода мог не дойти/быть потерян при разрыве транспорта).
+        if (useChatStore.getState().retryBySession[sid]) setStreamRetry(sid, null)
         // Чанки идут — финальная ошибка прошлой попытки больше не актуальна
         setFinalStreamError(sid, null)
-        updateStreamChunk(
-          sid,
-          streamId,
-          (payload.content as string) || '',
-          (payload.reasoning as string) || '',
-          payload.model as string | undefined,
-          payload.provider as string | undefined,
-          payload.iteration as number | undefined,
-        )
+        const messageId = liveMessageId()
+        if (!messageId) break
+        ensureLiveMessage(messageId)
+        const content = (payload.content as string) || ''
+        const reasoning = (payload.reasoning as string) || ''
+        const iteration = (payload.iteration as number) ?? 0
+        if (content) appendPartDelta(sid, messageId, `${TEXT_PART_PREFIX}${iteration}`, 'text', content)
+        if (reasoning) appendPartDelta(sid, messageId, `msg:reasoning:${iteration}`, 'text', reasoning)
         break
       }
 
       // ADR-070 §2.6: live-статистика стрима (кумулятивный usage, cost, model).
-      // Публикуется в родительскую сессию основного стрима и в дочернюю сессию
-      // саб-агента (sid = childSessionId) — общий механизм streamingBySession.
       case 'stream_usage':
       case 'stream.usage': {
-        const streamId = payload.stream_id as string
-        if (!streamId) break
-        updateStreamUsage(sid, streamId, {
+        const messageId = liveMessageId()
+        if (!messageId) break
+        ensureLiveMessage(messageId, {
           usage: mapUsage(payload.usage),
-          costUsd: payload.cost_usd as number | undefined,
-          costCurrency: payload.cost_currency as string | undefined,
-          costBreakdown: mapCostBreakdown(payload.cost_breakdown),
-          usageEstimated: payload.estimated as boolean | undefined,
-          model: payload.model as string | undefined,
-          provider: payload.provider as string | undefined,
-          agentRole: payload.agent_role as string | undefined,
+          metadata: {
+            ...(payload.cost_usd !== undefined ? { cost_usd: payload.cost_usd } : {}),
+            ...(payload.cost_currency !== undefined ? { cost_currency: payload.cost_currency } : {}),
+            ...(payload.cost_breakdown !== undefined ? { cost_breakdown: mapCostBreakdown(payload.cost_breakdown) } : {}),
+            ...(payload.usage_estimated !== undefined ? { usage_estimated: payload.usage_estimated } : {}),
+            ...(payload.duration_ms !== undefined ? { duration_ms: payload.duration_ms } : {}),
+          } as Record<string, unknown>,
+          model: (payload.model as string) || undefined,
+          provider: (payload.provider as string) || undefined,
         })
         break
       }
 
+      // ADR-118 §4: `stream.done` удалён без dual-emit; прежний финал хода —
+      // `step.finished` + `turn.finished`. Совместимость со старым ядром:
+      // финализируем живое сообщение теми же данными.
       case 'stream_done':
       case 'stream.done': {
-        const metadata: StreamDoneMetadata = {
-          model: payload.model as string | undefined,
-          content: payload.content as string | undefined,
-          usage: mapUsage(payload.usage),
-          debug_info: payload.debug_info as Record<string, unknown> | undefined,
-          message_index: payload.message_index as number | undefined,
-          message_id: payload.message_id as string | undefined,
-          cancelled: payload.cancelled as boolean | undefined,
-          pending_count: payload.pending_count as number | undefined,
-          status: payload.status as MessageStatus | undefined,
-          metadata: payload.metadata as { type?: string; indices?: number[]; [key: string]: unknown } | undefined,
-          reasoning_blocks: (payload.reasoning_blocks as Array<{ text: string; iteration: number }>) || undefined,
-          intermediate_text_blocks: (payload.intermediate_text_blocks as Array<{ text: string; iteration: number }>) || undefined,
-          // ADR-070 §2.6: top-level финальная статистика — в metadata оптимистичного
-          // сообщения, чтобы панель показала финал без перезагрузки.
-          provider: payload.provider as string | undefined,
-          duration_ms: payload.duration_ms as number | undefined,
-          cost_usd: payload.cost_usd as number | undefined,
-          cost_currency: payload.cost_currency as string | undefined,
-          cost_breakdown: mapCostBreakdown(payload.cost_breakdown),
-          usage_estimated: payload.usage_estimated as boolean | undefined,
+        const messageId = liveMessageId() || (payload.message_id as string) || ''
+        const status = (payload.status as ResponseStatus) || 'completed'
+        const usage = mapUsage(payload.usage)
+        const metadata = {
+          ...(payload.metadata as Record<string, unknown> | undefined),
+          ...(payload.duration_ms !== undefined ? { duration_ms: payload.duration_ms } : {}),
+          ...(payload.cost_usd !== undefined ? { cost_usd: payload.cost_usd } : {}),
+          ...(payload.cost_currency !== undefined ? { cost_currency: payload.cost_currency } : {}),
+          ...(payload.cost_breakdown !== undefined ? { cost_breakdown: mapCostBreakdown(payload.cost_breakdown) } : {}),
+          ...(payload.usage_estimated !== undefined ? { usage_estimated: payload.usage_estimated } : {}),
         }
-        finishStream(sid, payload.stream_id as string, metadata)
+        if (messageId) {
+          ensureLiveMessage(messageId, {
+            content: (payload.content as string) || undefined,
+            usage,
+            metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+            model: (payload.model as string) || undefined,
+            provider: (payload.provider as string) || undefined,
+            tool_calls: (payload.tool_calls as MessageData['tool_calls']) ?? undefined,
+          })
+          setMessageStatus(
+            sid,
+            messageId,
+            status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'error',
+          )
+        }
         setStreamRetry(sid, null)
         setFinalStreamError(sid, null)
         // Ход завершён — висящих запросов подтверждения по нему быть не может
@@ -657,30 +881,21 @@ export function createDispatcher(): EventDispatcher {
       }
 
       // ADR-070 §2.6: терминальное live-событие дочерней сессии саб-агента
-      // (task.ts). Сообщение ребёнка сохраняется отдельно, поэтому здесь только
-      // снимаем usage-only StreamState — без создания/дубля сообщений.
+      // (task.ts). Сообщение ребёнка сохраняется отдельно.
       case 'stream_ended':
       case 'stream.ended': {
-        clearUsageStream(sid, payload.stream_id as string | undefined)
         break
       }
 
       case 'stream_cancelled':
       case 'stream.cancelled': {
-        // ADR-070 §2.6: событие отмены несёт usage/cost/usage_estimated —
-        // сохраняем их в финализируемом сообщении, а не игнорируем.
-        cancelStream(
-          sid,
-          payload.stream_id as string,
-          payload.status as MessageStatus | undefined,
-          {
-            usage: mapUsage(payload.usage),
-            costUsd: payload.cost_usd as number | undefined,
-            costCurrency: payload.cost_currency as string | undefined,
-            costBreakdown: mapCostBreakdown(payload.cost_breakdown),
-            usageEstimated: payload.usage_estimated as boolean | undefined,
-          },
-        )
+        // ADR-118 §4: отмена хода — `step.finished` со статусом `cancelled`.
+        // Совместимость со старым ядром: финализируем живое сообщение.
+        const messageId = liveMessageId()
+        if (messageId) {
+          ensureLiveMessage(messageId)
+          setMessageStatus(sid, messageId, 'cancelled')
+        }
         setStreamRetry(sid, null)
         // Отмена («Стоп»)/таймаут снимают ожидание подтверждения на бэкенде —
         // полоса не должна оставаться после отмены.
@@ -690,15 +905,12 @@ export function createDispatcher(): EventDispatcher {
 
       // ADR-104 (этап 2): прерывание текущей генерации (`interrupt`). Ход НЕ
       // завершается и НЕ отменяется («Стоп» — отдельный механизм, ADR-005):
-      // следующая итерация Tool Use продолжает ту же генерацию с тем же
-      // `stream_id`. Поэтому стрим НЕ закрываем (никаких finishStream/
-      // cancelStream) — сбрасываем только аккумулятор: накопленный текст
-      // прерванной генерации уже сохранён отдельным сообщением со статусом
-      // `interrupted` (приходит отдельным `message.added`).
+      // накопленный текст прерванной генерации уже сохранён отдельным
+      // сообщением (ADR-118 §4: `step.finished` со статусом `cancelled`).
       case 'stream_interrupted':
       case 'stream.interrupted': {
-        const streamId = payload.stream_id as string
-        if (streamId) resetStreamAccumulator(sid, streamId)
+        const messageId = liveMessageId()
+        if (messageId) setMessageStatus(sid, messageId, 'cancelled')
         break
       }
 
@@ -710,7 +922,7 @@ export function createDispatcher(): EventDispatcher {
         const canRetry = Boolean(payload.can_retry)
 
         if (canRetry) {
-          // Recoverable-ошибка: бэкенд продолжит ретраи. Стрим НЕ завершаем,
+          // Recoverable-ошибка: бэкенд продолжит ретраи. Ход НЕ завершаем,
           // ничего пользователю не показываем — статус ретрая придёт событием
           // stream.retry (отобразится в user-сообщении).
           break
@@ -723,12 +935,15 @@ export function createDispatcher(): EventDispatcher {
           : rawError
 
         // Финальная ошибка (неrecoverable / исчерпаны попытки / отменено):
-        // завершаем стрим, убираем ретраи и индикатор обработки, показываем
+        // завершаем ход, убираем ретраи и индикатор обработки, показываем
         // стандартное уведомление (toast + история) и плашку над полем ввода
         // с возможностью повторить (для recoverable error_type — см. StreamErrorPanel).
         setStreamRetry(sid, null)
-        setStreamRetrying(sid, streamId, false)
-        cancelStream(sid, streamId)
+        const messageId = liveMessageId()
+        if (messageId) {
+          ensureLiveMessage(messageId)
+          setMessageStatus(sid, messageId, 'error')
+        }
         setFinalStreamError(sid, { streamId, error: rawError, errorType: errorType || 'unknown' })
         notifyMessage({ text: error, type: 'error', category: 'error', sessionId: sid })
         break
@@ -741,11 +956,6 @@ export function createDispatcher(): EventDispatcher {
         const attempt = (payload.attempt as number) || 1
         const maxRetries = (payload.max_retries as number) || 3
 
-        // Новая попытка начинается с чистого текста: сбрасываем аккумулятор
-        // неудачной попытки (контент/рассуждения/тулы), иначе в ленте остаются
-        // её висящие блоки, а рассуждения суммируются с повтором.
-        if (streamId) resetStreamAttempt(sid, streamId)
-
         setStreamRetry(sid, {
           streamId,
           attempt,
@@ -753,10 +963,8 @@ export function createDispatcher(): EventDispatcher {
           retryInMs,
           error: payload.error as string | undefined,
         })
-        setStreamRetrying(sid, streamId, true)
         break
       }
-
       case 'queue_stalled':
       case 'queue.stalled': {
         setQueueStalled(sid, (payload.pending_count as number) || 0)
@@ -766,7 +974,7 @@ export function createDispatcher(): EventDispatcher {
       case 'question.asked': {
         const pendingCount = (payload.pending_count as number) || 0
         if (pendingCount > 0) {
-          const hasStream = Object.values(useChatStore.getState().streamingBySession[sid] || {}).some((s) => s.isStreaming)
+          const hasStream = isTurnActive(sid)
           if (!hasStream) {
             setQueueStalled(sid, pendingCount)
           } else {
@@ -1012,56 +1220,47 @@ export function createDispatcher(): EventDispatcher {
 
       case 'tool_call.started':
       case 'tool_call_started': {
-        const streamId = payload.stream_id as string
-        if (!streamId) break
-        // Комментарий/текст модели перед вызовом тула (например, «Запускаю сабагента…»)
-        // коммитим в intermediateTextBlocks на итерации тула сразу, а не только в
-        // tool_call.loop (который срабатывает ПОСЛЕ завершения итерации). Иначе этот
-        // текст до конца работы тула висит в displayContent внизу блока и ломает
-        // порядок (комментарий оказывается ниже блока сабагента).
-        if (!payload.parent_call_id) {
-          useChatStore.setState((s) => {
-            const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
-            const existing = sessionStreams[streamId]
-            if (!existing) return s
-            const iteration = (payload.iteration as number) || 0
-            const segmentText = existing.content.slice(existing._lastContentLen)
-            const nextBlocks = segmentText.trim()
-              ? [...existing.intermediateTextBlocks, { text: segmentText, iteration }]
-              : existing.intermediateTextBlocks
-            const prevLen = existing.content.length
-            sessionStreams[streamId] = {
-              ...existing,
-              intermediateTextBlocks: nextBlocks,
-              _lastContentLen: prevLen,
-            }
-            return { streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } }
-          })
-        }
-        addToolCall(sid, streamId, {
-          callId: payload.call_id as string,
-          name: payload.name as string,
-          args: (payload.arguments as Record<string, unknown>) || {},
-          status: 'running',
-          startedAt: new Date().toISOString(),
-          iteration: (payload.iteration as number) || 0,
-          parentCallId: payload.parent_call_id as string | undefined,
+        const callId = (payload.call_id as string) || ''
+        if (!callId) break
+        const messageId = liveMessageId()
+        if (!messageId) break
+        ensureLiveMessage(messageId)
+        // ADR-118 §1: вызов инструмента — часть сообщения с id = `callId`.
+        upsertPart(sid, messageId, callId, {
+          id: callId,
+          type: 'tool_use',
+          text: '',
+          data: {
+            name: payload.name as string,
+            args: (payload.arguments as Record<string, unknown>) || {},
+            status: 'running',
+            startedAt: new Date().toISOString(),
+            iteration: (payload.iteration as number) || 0,
+            parentCallId: (payload.parent_call_id as string) || undefined,
+          },
         })
         break
       }
 
       case 'tool_call.result':
       case 'tool_call_result': {
-        const streamId = payload.stream_id as string
-        if (!streamId) break
-        updateToolCallResult(sid, streamId, payload.call_id as string, {
-          content: (payload.result as Record<string, unknown>)?.content as string || '',
-          isError: (payload.result as Record<string, unknown>)?.isError as boolean,
-          metadata: (payload.result as Record<string, unknown>)?.metadata as Record<string, unknown> | undefined,
+        const callId = (payload.call_id as string) || ''
+        if (!callId) break
+        const messageId = liveMessageId()
+        if (!messageId) break
+        const result = payload.result as Record<string, unknown> | undefined
+        patchPartData(sid, messageId, callId, {
+          status: 'done',
+          completedAt: new Date().toISOString(),
+          result: {
+            content: (result?.content as string) || '',
+            isError: result?.isError as boolean | undefined,
+            metadata: result?.metadata as Record<string, unknown> | undefined,
+          },
         })
         // Тул завершён (в т.ч. isError) — статус ожидания ретрая этого саб-агента снят
         const taskRetry = useChatStore.getState().subagentRetryBySession[sid]
-        if (taskRetry && taskRetry.callId && taskRetry.callId === (payload.call_id as string)) {
+        if (taskRetry && taskRetry.callId && taskRetry.callId === callId) {
           setSubagentRetry(sid, null)
         }
         break
@@ -1073,30 +1272,35 @@ export function createDispatcher(): EventDispatcher {
         // вкладываются в блок `task` (по parent_call_id, т.е. call_id задачи).
         // Ядро присылает **дельты** (`content_delta`/`reasoning_delta`), которые
         // накапливаются в live-блоке.
-        const streamId = payload.stream_id as string
-        if (!streamId) break
         const parentCallId = (payload.parent_call_id as string) || ''
-        const liveCall = parentCallId
-          ? useChatStore.getState().streamingBySession[sid]?.[streamId]
-            ?.toolCalls.find((tc) => tc.callId === parentCallId)
-          : undefined
-        const lastReasoning = liveCall?.subagentReasoningBlocks?.at(-1)?.text ?? ''
-        const lastContent = liveCall?.subagentIntermediateTextBlocks?.at(-1)?.text ?? ''
-        updateToolCallSubagentProgress(
-          sid,
-          streamId,
-          parentCallId,
-          {
-            reasoningDelta: progressDelta(payload, 'reasoning_delta', 'reasoning', lastReasoning),
-            contentDelta: progressDelta(payload, 'content_delta', 'content', lastContent),
-            iteration: (payload.iteration as number) || 0,
-          },
-        )
+        if (!parentCallId) break
+        const messageId = liveMessageId()
+        if (!messageId) break
+        const parts = useChatStore.getState().partsBySession[sid]?.[messageId] || {}
+        const livePart = parts[parentCallId]
+        const liveData = (livePart?.data ?? {}) as Record<string, unknown>
+        const reasoningBlocks = (liveData.subagentReasoningBlocks as ReasoningBlockData[]) || []
+        const textBlocks = (liveData.subagentIntermediateTextBlocks as IntermediateTextBlockData[]) || []
+        const lastReasoning = reasoningBlocks.at(-1)?.text ?? ''
+        const lastContent = textBlocks.at(-1)?.text ?? ''
+        const iteration = (payload.iteration as number) || 0
+        patchPartData(sid, messageId, parentCallId, {
+          subagentReasoningBlocks: appendDeltaBlock(
+            reasoningBlocks,
+            progressDelta(payload, 'reasoning_delta', 'reasoning', lastReasoning),
+            iteration,
+          ),
+          subagentIntermediateTextBlocks: appendDeltaBlock(
+            textBlocks,
+            progressDelta(payload, 'content_delta', 'content', lastContent),
+            iteration,
+          ),
+        })
         // ADR-070 §2.6: live-вклад саб-агента (для строки статистики в блоке
         // `task` и секции StatsTab). Событие несёт накопленный usage вызова.
         if (parentCallId) {
           updateLiveSubagentUsage(sid, parentCallId, {
-            usage: mapUsage(payload.usage),
+            usage: mapUsage(payload.usage) ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
             costUsd: payload.cost_usd as number | undefined,
             costCurrency: payload.cost_currency as string | undefined,
             estimated: payload.estimated as boolean | undefined,
@@ -1172,34 +1376,6 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      case 'tool_call.loop':
-      case 'tool_call_loop': {
-        const streamId = payload.stream_id as string
-        if (!streamId) break
-        const iteration = (payload.iteration as number) || 0
-        useChatStore.setState((s) => {
-          const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
-          const existing = sessionStreams[streamId]
-          if (!existing) return s
-
-          const segmentText = existing.content.slice(existing._lastContentLen)
-          const nextBlocks = segmentText.trim()
-            ? [...existing.intermediateTextBlocks, { text: segmentText, iteration: existing.toolIteration }]
-            : existing.intermediateTextBlocks
-
-          const prevLen = existing.content.length
-          sessionStreams[streamId] = {
-            ...existing,
-            content: existing.content + '\n\n',
-            intermediateTextBlocks: nextBlocks,
-            toolIteration: iteration,
-            _lastContentLen: prevLen + 2,
-          }
-          return { streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } }
-        })
-        break
-      }
-
       case 'context.summarization_pending': {
         setSummarizationPending(sid, true)
         break
@@ -1208,9 +1384,9 @@ export function createDispatcher(): EventDispatcher {
       case 'context.sliding_window_applied': {
         const indices = payload.disabled_indices as number[] | undefined
         if (indices && Array.isArray(indices) && indices.length > 0) {
-          const { updateMessage } = useChatStore.getState()
+          const { updateMessageByIndex } = useChatStore.getState()
           for (const idx of indices) {
-            updateMessage(sid, idx, { disabled: true })
+            updateMessageByIndex(sid, idx, { disabled: true })
           }
         } else {
           synthApi.getSessionMessages(sid).then((r) => {
@@ -1223,7 +1399,7 @@ export function createDispatcher(): EventDispatcher {
       case 'message.quality_check': {
         const msgIndex = payload.message_index as number | undefined
         if (msgIndex != null) {
-          useChatStore.getState().updateMessage(sid, msgIndex, {
+          useChatStore.getState().updateMessageByIndex(sid, msgIndex, {
             qa_pass: payload.qa_pass as boolean | undefined,
             qa_reason: payload.qa_reason as string | undefined,
           })
@@ -1286,6 +1462,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
   transportMode: 'auto',
   activeTransport: 'disconnected',
   connected: false,
+  versionMismatch: false,
   openSessions: new Set(),
 
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => {
@@ -1356,7 +1533,34 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     })
 
     activeKind = actualMode
-    client.connect(actualMode)
+    // ADR-118 §8: **fail-closed** сверка версий модели сообщений. Сначала
+    // возможности инстанса (`GET /api/v2/meta`); при несовпадении — отказ
+    // подключения с понятным сообщением (тихая деградация запрещена).
+    void synthApi.getInstanceCapabilities()
+      .then((caps) => {
+        if (!supportsMessageModel(caps)) {
+          activeKind = null
+          transportReady = false
+          set({ connected: false, activeTransport: 'disconnected', versionMismatch: true })
+          notifyMessage({
+            text: i18nText('chat.error.messageModelMismatch', {
+              client: String(MESSAGE_MODEL_VERSION),
+              server: String(caps?.messageModel ?? '?'),
+            }),
+            type: 'error',
+            category: 'error',
+          })
+          client.disconnect()
+          return
+        }
+        set({ versionMismatch: false })
+        client.connect(actualMode, { since: maxEventSeq() })
+      })
+      .catch(() => {
+        // Мета недоступна — подключаемся: гейт `messageModel=2` на сервере
+        // всё равно откажет несовместимый клиент.
+        client.connect(actualMode, { since: maxEventSeq() })
+      })
     transport = client
   },
 
@@ -1377,53 +1581,59 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
   },
 
   sendMessage: async (sessionId, text, agentRole, provider, model, mode, attachmentIds) => {
-    // ADR-115: вложения передаются только в теле `POST /sessions/:id/prompt` —
-    // WS-кадр `send_message` такого поля не знает. С вложениями идём HTTP-путём
-    // даже при живом WS, иначе файлы молча потерялись бы.
-    const hasAttachments = (attachmentIds?.length ?? 0) > 0
-    const streamId = nextStreamId()
-    // Сообщение во время хода попадёт в очередь: показываем строку сразу, не
-    // дожидаясь серверного `message.queued` (при backlog'е WS-кадров он
-    // приходил с задержкой и отправка выглядела «зависшей»). Режимы
-    // `steer`/`interrupt` в очередь не встают — для них строки нет.
+    // ADR-118 §3: приём — только HTTP (`POST /sessions/:id/prompt` → `202`).
+    // WS-кадр `send_message` и ожидание ack со «Send timeout» удалены:
+    // подтверждение приходит адресным событием `message.accepted`.
+    const messageId = nextStreamId()
     const isQueueMode = !mode || mode === 'queue'
-    const optimistic = isQueueMode && isTurnActive(sessionId)
-    if (optimistic) {
-      useChatStore.getState().addPendingMessage(sessionId, {
-        id: streamId,
-        content: text,
-        agentRole: agentRole ?? null,
-        ...(attachmentIds && attachmentIds.length > 0 ? { attachmentCount: attachmentIds.length } : {}),
-        sending: true,
-      })
-    }
 
     try {
-      let confirmed = true
-      if (!hasAttachments && transport && transportReady && transport.getTransport() === 'ws') {
-        console.debug('[TransportStore] sendMessage via WS:', sessionId)
-        const ack = await transport.sendMessage(sessionId, text, agentRole, provider, model, mode, streamId)
-        confirmed = ack.confirmed
-      } else {
-        console.debug('[TransportStore] sendMessage via HTTP POST:', sessionId, `(ready=${transportReady}, transport=${transport?.getTransport()})`)
-        await synthApi.enqueueMessage(sessionId, text, {
-          agentRole,
-          model,
-          provider,
-          mode,
-          streamId,
-          attachments: attachmentIds,
+      const accepted = await synthApi.enqueueMessage(sessionId, text, {
+        agentRole,
+        model,
+        provider,
+        mode,
+        streamId: messageId,
+        attachments: attachmentIds,
+      })
+
+      // Реплика показывается оптимистично сразу по `messageId` из ответа.
+      // Статус доставки: `queue` → «принято»/«в очереди», `steer`/`interrupt` →
+      // «вмешательство» (ADR-118 §4).
+      const delivery: MessageDelivery = accepted.mode === 'queue'
+        ? (accepted.position != null && accepted.position > 1 ? 'queued' : 'accepted')
+        : 'steering'
+      const chat = useChatStore.getState()
+      const msgs = chat.messagesBySession[sessionId] || []
+      const nextIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
+      chat.upsertMessage(sessionId, {
+        index: nextIndex,
+        id: accepted.messageId,
+        role: 'user',
+        content: text,
+        ord: null,
+        turn_id: null,
+        status: 'completed',
+        delivery,
+        agent_role: agentRole ?? null,
+        provider: provider ?? null,
+        model: model ?? null,
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        created_at: new Date().toISOString(),
+      })
+      // Строка очереди: id известен, текст — нет (утечка снята, ADR-118 §4).
+      if (isQueueMode && isTurnActive(sessionId)) {
+        useChatStore.getState().upsertPendingMessage(sessionId, {
+          id: accepted.messageId,
+          content: text,
+          agentRole: agentRole ?? null,
         })
       }
-
-      // Не подтверждено за отведённое время — не ошибка: строка очереди остаётся,
-      // состав очереди уточняем у сервера.
-      if (!confirmed) reconcileQueueFromApi(sessionId)
-      return { confirmed }
+      return accepted
     } catch (e) {
-      // Реальная ошибка (сеть/401/валидация) — оптимистичную строку убираем,
-      // чтобы очередь не показывала неотправленное сообщение.
-      if (optimistic) useChatStore.getState().removePendingById(sessionId, streamId)
+      // Реальная ошибка (сеть/401/валидация) — сообщение не показано.
       throw e
     }
   },

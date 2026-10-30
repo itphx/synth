@@ -7,8 +7,9 @@ import { useChatStore } from './chatStore'
 export function resetChatStore(): void {
   useChatStore.setState({
     messagesBySession: {},
+    partsBySession: {},
+    turnBySession: {},
     streamFinishTickBySession: {},
-    streamingBySession: {},
     queueBySession: {},
     pendingBySession: {},
     retryBySession: {},

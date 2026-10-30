@@ -1,13 +1,16 @@
 /**
  * ADR-094: коллекторы событий шины сессии (`EventBus.subscribeAll`).
  *
- * Считаем только терминальные исходы хода — `stream.done`/`stream.error`/
- * `stream.cancelled` — по одному разу на запущенный стрим (`stream.start`).
- * `stream.usage` — live-событие и в счётчики не попадает (иначе двойной учёт);
- * из него берём только provider/model для ретраев и контекста.
+ * Считаем только терминальные исходы хода — по одному разу на запущенный ход.
+ * Начало хода — `turn.started` (ADR-118 §4) либо прежний `stream.start`
+ * (процессор очереди) — это два сигнала одного хода, поэтому второй не
+ * увеличивает счётчик активных ходов. Терминал — `turn.finished` (статус хода)
+ * либо `stream.error`/`stream.cancelled` (контракт вне ADR-118).
  *
- * Стоимость (`synth_llm_cost_total{currency}`) — только терминальные события:
- * `stream.usage` публикуется многократно и не должен суммироваться.
+ * Расход шага (`usage` + стоимость) приходит в `step.finished` — замена
+ * удалённого `stream.usage`/`stream.done` (ADR-118 §4, таблица «Удаляемые
+ * события и их замена»). Стоимость суммируется по шагам: шаг = один вызов
+ * LLM, поэтому сумма шагов равна стоимости хода.
  */
 import type { BusEvent } from '@itphx/synth-shared';
 import type { MetricsRegistry } from '../registry.js';
@@ -16,11 +19,23 @@ import type { EventBus } from '../../events/bus.js';
 /** Исходы хода (контракт ADR-094). */
 export type TurnOutcome = 'ok' | 'error' | 'cancelled';
 
-/** Терминальные типы событий и их исход. */
+/**
+ * Терминальные события вне ADR-118 (контракт не менялся) и их исход.
+ */
 const TERMINAL: Record<string, TurnOutcome> = {
-  'stream.done': 'ok',
   'stream.error': 'error',
   'stream.cancelled': 'cancelled',
+};
+
+/**
+ * Исход хода по терминальному статусу `turn.finished` (ADR-118 §4).
+ * `stopped` — ход остановлен без ошибки, поэтому исход прежний (`ok`).
+ */
+const TURN_OUTCOME: Record<string, TurnOutcome> = {
+  completed: 'ok',
+  error: 'error',
+  cancelled: 'cancelled',
+  stopped: 'ok',
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -60,9 +75,9 @@ export function attachBusMetrics(registry: MetricsRegistry, eventBus: EventBus):
     ['currency'],
   );
 
-  /** sessionId → число активных стримов (защита от двойного терминала). */
+  /** sessionId → число активных ходов (защита от двойного терминала). */
   const active = new Map<string, number>();
-  /** Последние provider/model стрима — для ретраев (в `stream.retry` их нет). */
+  /** Последние provider/model хода — для ретраев (в `stream.retry` их нет). */
   const lastModel = new Map<string, { provider: string; model: string }>();
 
   const rememberModel = (event: BusEvent): void => {
@@ -79,10 +94,14 @@ export function attachBusMetrics(registry: MetricsRegistry, eventBus: EventBus):
 
   const recordCost = (data: Record<string, unknown>): void => {
     // `cost_usd` — исторически USD-поле; `cost` + `currency` — общая форма.
-    const usd = asNumber(data.cost_usd);
+    // ADR-118: шаг несёт `costUsd`/`costCurrency` — читаем оба написания.
+    const usd = asNumber(data.cost_usd) ?? asNumber(data.costUsd);
     const amount = usd ?? asNumber(data.cost);
     if (amount === undefined) return;
-    const currency = asString(data.cost_currency) ?? asString(data.currency) ?? (usd !== undefined ? 'USD' : undefined);
+    const currency = asString(data.cost_currency)
+      ?? asString(data.costCurrency)
+      ?? asString(data.currency)
+      ?? (usd !== undefined ? 'USD' : undefined);
     if (!currency) return;
     cost.inc({ currency }, amount);
   };
@@ -90,15 +109,25 @@ export function attachBusMetrics(registry: MetricsRegistry, eventBus: EventBus):
   const unsubscribe = eventBus.subscribeAll((event: BusEvent) => {
     try {
       const data = asRecord(event.data);
-      if (event.type === 'stream.start') {
-        active.set(event.sessionId, (active.get(event.sessionId) ?? 0) + 1);
-        activeStreams.inc();
+
+      // Начало хода: `turn.started` (ADR-118) либо `stream.start` (прежний
+      // сигнал процессора очереди) — это один и тот же ход, поэтому активный
+      // ход считается один раз.
+      if (event.type === 'turn.started' || event.type === 'stream.start') {
         rememberModel(event);
+        if ((active.get(event.sessionId) ?? 0) === 0) {
+          active.set(event.sessionId, 1);
+          activeStreams.inc();
+        }
         return;
       }
 
-      if (event.type === 'stream.usage') {
+      // ADR-118 §4: `step.finished` несёт расход шага (`usage` + стоимость) —
+      // замена `stream.usage`. Провайдер/модель запоминаем отсюда (в шаге их
+      // несёт сам payload).
+      if (event.type === 'step.finished') {
         rememberModel(event);
+        recordCost(data);
         return;
       }
 
@@ -111,18 +140,20 @@ export function attachBusMetrics(registry: MetricsRegistry, eventBus: EventBus):
         return;
       }
 
-      const outcome = TERMINAL[event.type];
+      // Терминал хода: `turn.finished` (ADR-118) либо `stream.error`/
+      // `stream.cancelled` (контракт вне ADR-118).
+      const outcome = event.type === 'turn.finished'
+        ? TURN_OUTCOME[asString(data.status) ?? '']
+        : TERMINAL[event.type];
       if (!outcome) return;
 
       rememberModel(event);
-      recordCost(data);
 
       // Терминал без наблюдённого старта (коллектор подключён позже/рестарт
       // процесса) не считается, иначе счётчик и gauge разъедутся.
       const running = active.get(event.sessionId) ?? 0;
       if (running <= 0) return;
-      if (running === 1) active.delete(event.sessionId);
-      else active.set(event.sessionId, running - 1);
+      active.delete(event.sessionId);
       turns.inc({ outcome });
       activeStreams.dec();
     } catch {

@@ -208,7 +208,7 @@ describe('Queue API Routes', () => {
   });
 
   describe('POST /api/v2/queue/:sessionId/resume', () => {
-    it('не дублирует: не публикует message.queued, если сообщение уже в истории', async () => {
+    it('не дублирует: не публикует message.accepted, если сообщение уже в истории', async () => {
       const { app, sessionManager, eventBus } = createTestApp(tmpDir);
       const session = await sessionManager.createSession({ title: 'Resume', userId: 'test-user' });
       const msg = makeMessage('зависшее');
@@ -228,11 +228,11 @@ describe('Queue API Routes', () => {
       // stream_id не перегенерирован
       const s = await sessionManager.getSession(session.id);
       expect(s!.pendingMessages[0]!.metadata?.stream_id).toBe(streamId);
-      // message.queued не опубликован (сообщение уже в истории)
-      expect(events.filter((e) => e.type === 'message.queued')).toHaveLength(0);
+      // Сообщение заново не принималось — подтверждения приёма нет.
+      expect(events.filter((e) => e.type === 'message.accepted')).toHaveLength(0);
     });
 
-    it('публикует message.queued с существующим stream_id, если сообщение не в истории', async () => {
+    it('публикует queue.state (только счётчики), если сообщение не в истории', async () => {
       const { app, sessionManager, eventBus } = createTestApp(tmpDir);
       const session = await sessionManager.createSession({ title: 'Resume', userId: 'test-user' });
       const msg = makeMessage('новое');
@@ -245,9 +245,12 @@ describe('Queue API Routes', () => {
       const res = await app.request(`/api/v2/queue/${session.id}/resume`, { method: 'POST' });
       expect(res.status).toBe(200);
 
-      const queued = events.find((e) => e.type === 'message.queued');
-      expect(queued).toBeDefined();
-      expect(queued.data.stream_id).toBe(streamId);
+      const state = events.find((e) => e.type === 'queue.state');
+      expect(state).toBeDefined();
+      expect(state.data).toMatchObject({ pendingCount: 1, steerCount: 0 });
+      // Ни текста, ни автора в `queue.state` нет (ADR-118 §4).
+      expect(state.data.content).toBeUndefined();
+      expect(state.data.author).toBeUndefined();
 
       const s = await sessionManager.getSession(session.id);
       expect(s!.pendingMessages[0]!.metadata?.stream_id).toBe(streamId);

@@ -38,6 +38,13 @@ import { warning } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { dropSteerInjections, isBackgroundNoticeMessage } from '../../steering/apply.js';
 import type { StreamTiming } from '../stream-stats.js';
+// ADR-118 §4: единая точка публикации `step.*`/`turn.*` (замена `stream.done`).
+import {
+  publishStepFinished,
+  publishTurnFinished,
+  stepStatusFromMessageStatus,
+  turnStatusFromMessageStatus,
+} from '../turn-events.js';
 
 /** Результат эпилога `_processMessage` (структурно = `ProcessMessageResult`). */
 export interface ProcessFinalizeResult {
@@ -125,11 +132,26 @@ export interface ProcessFinalizeState {
   /**
    * ADR-115 (outbound): медиа-части ответа, накопленные тулом `send_attachment`
    * за ход. Добавляются к **финальному** сообщению (после текста) — оттуда их
-   * читает `collectOutboundAttachments` для `stream.done.attachments`.
+   * читает `collectOutboundAttachments` для `step.finished.attachments`.
    * Ветка отмены их не сохраняет (ход не завершён — ничего не отправляем).
    * Не задано/пусто — прежнее поведение.
    */
   outboundParts?: Part[];
+  /**
+   * ADR-118 §1: идентификатор хода (стабилен для всех шагов хода) — в
+   * `step.finished`/`turn.finished`.
+   */
+  turnId: string;
+  /**
+   * ADR-118 §1: индекс финального шага хода (0-based) — адресация шага в
+   * `step.finished`.
+   */
+  finalStepIndex: number;
+  /**
+   * ADR-118 §1: идентификатор сообщения финального шага (его адресуют
+   * `step.started`/`step.finished` и `part.*`).
+   */
+  finalStepMessageId?: string;
 }
 
 /** Зависимости эпилога `_processMessage`. */
@@ -279,6 +301,8 @@ export async function runProcessFinalize(
     roleBlocked, roleBlockedTool, roleBlockedAgent,
     currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft, outboundParts,
     finalReasoningMeta,
+    // ADR-118 §1: ход и финальный шаг.
+    turnId, finalStepIndex, finalStepMessageId,
   } = state;
   let { finalContent, finalModel, finalUsage, fallbackI18n } = state;
   /** Шаг-лимит реально исполнялся (синтетический assistant-префилл в запросе). */
@@ -363,6 +387,8 @@ export async function runProcessFinalize(
       finalReasoningMeta,
       // Блоки reasoning со своими подписями — в `parts` сообщения (мульти-блок).
       allReasoning,
+      // ADR-118 §1/§5: ход, шаг и терминальный статус сообщения.
+      { turnId, stepIndex: finalStepIndex, status: 'cancelled', messageId: finalStepMessageId },
     );
 
     publishChunk('stream.cancelled', {
@@ -376,6 +402,10 @@ export async function runProcessFinalize(
       ...(cancelCost ? { cost_usd: cancelCost.costUsd, cost_currency: cancelCost.currency } : {}),
       ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
     });
+
+    // ADR-118 §4: ход закрыт отменой. Шаг, который шёл, закрыт в цикле
+    // (`step.finished` со статусом `cancelled`) — здесь шага в полёте нет.
+    publishTurnFinished(publishChunk, { turnId, status: 'cancelled' });
 
     deps.unregister(streamId);
     return {};
@@ -490,7 +520,7 @@ export async function runProcessFinalize(
   const durationMs = Date.now() - streamStartedAt;
   const messageCost = deps.computeMessageCost(finalModel, finalUsage);
   const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
-  const savedContent = await deps.saveAssistantMessage(
+  await deps.saveAssistantMessage(
     session.id, finalContent, streamId, effectiveAgentRole,
     finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
     MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
@@ -507,6 +537,8 @@ export async function runProcessFinalize(
     finalReasoningMeta,
     // Блоки reasoning со своими подписями — в `parts` сообщения (мульти-блок).
     allReasoning,
+    // ADR-118 §1/§5: ход, шаг и терминальный статус сообщения.
+    { turnId, stepIndex: finalStepIndex, status: 'completed', messageId: finalStepMessageId },
   );
 
   // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
@@ -526,58 +558,49 @@ export async function runProcessFinalize(
   // сравнивает серверный `last_chunk_ms` с моментом прихода события у клиента.
   const chunkStats = streamTiming?.snapshot();
 
-  const doneData: Record<string, unknown> = {
-    stream_id: streamId,
-    content: savedContent,
-    content_chars: savedContent.length,
-    ...(chunkStats
-      ? {
-          chunks: chunkStats.chunks,
-          ...(chunkStats.firstChunkMs !== undefined ? { first_chunk_ms: chunkStats.firstChunkMs } : {}),
-          ...(chunkStats.lastChunkMs !== undefined ? { last_chunk_ms: chunkStats.lastChunkMs } : {}),
-        }
-      : {}),
-    message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
-    pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
-    model: finalModel,
-    provider: providerName,
-    usage: finalUsage,
-    duration_ms: durationMs,
-    status: deps.resolveAssistantStatus(false, fallbackI18n ? { i18n: fallbackI18n } : undefined),
-    ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
-    reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
-    intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
-    // Паритет с сабагентом (`metadata.step_limit_reached`): ход завершён
-    // исполненным шагом-лимитом (текстового отчёта могло не быть).
-    ...(stepLimitReached ? { step_limit_reached: true } : {}),
-  };
+  // ADR-118 §4: `stream.done` удалён без dual-emit — финальный шаг закрывает
+  // `step.finished` (статус, расход, вложения ответа, отладочные данные,
+  // тайминги), ход — `turn.finished`.
+  const messageStatus = deps.resolveAssistantStatus(
+    false,
+    fallbackI18n ? { i18n: fallbackI18n } : undefined,
+  );
 
-  // ADR-036: проброс secrets в real-time событие — UI раскрывает плейсхолдеры
-  // без перезагрузки списка сообщений (см. transportStore/chatStore).
-  if (finalContent) {
-    const secrets = await deps.getAssistantSecrets(session.id, savedContent);
-    if (Object.keys(secrets).length > 0) {
-      doneData.metadata = { secrets };
-    }
-  }
-
-  // ADR-115 (outbound): вложения финального ответа — аддитивное поле, только
-  // метаданные (`sha256`/`mime`/`size`/`name`). Байты шлюз забирает по sha
-  // (`GET /api/v2/attachments/:sha256`), доступ к сессии ему не нужен.
-  // Нет медиа-частей — поля нет вовсе (прежний контракт события).
+  // ADR-115 (outbound): вложения финального ответа — метаданные без байтов.
+  // Байты шлюз забирает по sha (`GET /api/v2/attachments/:sha256`), доступ к
+  // сессии ему не нужен. Нет медиа-частей — поля нет вовсе.
   const attachments = updatedSession
     ? collectOutboundAttachments(updatedSession.messages, streamId)
     : [];
-  if (attachments.length > 0) {
-    doneData.attachments = attachments;
-  }
-
   const debugInfo = debugCollector.getDebugInfo();
-  if (debugInfo) {
-    doneData.debug_info = debugInfo;
-  }
 
-  publishChunk('stream.done', doneData);
+  publishStepFinished(publishChunk, {
+    turnId,
+    stepIndex: finalStepIndex,
+    messageId: finalStepMessageId ?? '',
+    status: stepStatusFromMessageStatus(messageStatus),
+    usage: finalUsage,
+    provider: providerName,
+    ...(finalModel ? { model: finalModel } : {}),
+    ...(messageCost ? { costUsd: messageCost.costUsd, costCurrency: messageCost.currency } : {}),
+    ...(effectiveAgentRole ? { agentRole: effectiveAgentRole } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(debugInfo ? { debugInfo } : {}),
+    ...(chunkStats
+      ? {
+          timings: {
+            chunks: chunkStats.chunks,
+            ...(chunkStats.firstChunkMs !== undefined ? { firstChunkMs: chunkStats.firstChunkMs } : {}),
+            ...(chunkStats.lastChunkMs !== undefined ? { lastChunkMs: chunkStats.lastChunkMs } : {}),
+          },
+        }
+      : {}),
+  });
+
+  publishTurnFinished(publishChunk, {
+    turnId,
+    status: turnStatusFromMessageStatus(messageStatus),
+  });
 
   // 8.5. Auto-rename session on first exchange
   if (updatedSession) {

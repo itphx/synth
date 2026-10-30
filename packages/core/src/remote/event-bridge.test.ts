@@ -45,13 +45,33 @@ afterEach(() => {
 });
 
 describe('RemoteEventBridge', () => {
+  it('заявляет свою модель сообщений в query-параметре (ADR-118 §8)', async () => {
+    const bus = new EventBus();
+    const request = vi.fn().mockResolvedValue(closedResponse());
+    const client = makeClient(request);
+    const bridge = new RemoteEventBridge({
+      client,
+      getToken: async () => 'tok',
+      eventBus: bus,
+      backendUrl: 'http://backend.test',
+    });
+    bridge.start();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    const path = request.mock.calls[0]?.[1] as string;
+    expect(path).toContain('/api/v2/events');
+    expect(path).toContain('messageModel=2');
+
+    bridge.stop();
+  });
+
   it('публикует события в eventBus с remote:<id> и переписанными вложенными id', async () => {
     const bus = new EventBus();
     const received: BusEvent[] = [];
     bus.subscribeAll((e) => received.push(e));
 
     const client = makeClient(vi.fn().mockResolvedValue(sseResponse([
-      'data: {"type":"stream.chunk","sessionId":"ses-1","data":{"stream_id":"st1","content":"привет"},"timestamp":"t1"}\n\n',
+      'data: {"type":"part.delta","sessionId":"ses-1","data":{"messageId":"m1","partId":"msg:text:0","field":"text","delta":"привет"},"timestamp":"t1"}\n\n',
       'data: {"type":"session.updated","sessionId":"ses-1","data":{"id":"ses-1","project_id":"prj-1","parent_id":"ses-0"},"timestamp":"t2"}\n\n',
       'data: {"type":"subagent.resume.started","sessionId":"ses-1","data":{"child_session_id":"ses-2","parent_session_id":"ses-1"},"timestamp":"t3"}\n\n',
     ])));
@@ -65,7 +85,7 @@ describe('RemoteEventBridge', () => {
     bridge.start();
 
     await vi.waitFor(() => expect(received.length).toBe(3));
-    expect(received[0]!).toMatchObject({ type: 'stream.chunk', sessionId: 'remote:ses-1' });
+    expect(received[0]!).toMatchObject({ type: 'part.delta', sessionId: 'remote:ses-1' });
     expect(received[1]!).toMatchObject({ type: 'session.updated', sessionId: 'remote:ses-1' });
     expect(received[1]!.data.id).toBe('remote:ses-1');
     expect(received[1]!.data.project_id).toBe('remote:prj-1');
@@ -114,7 +134,7 @@ describe('RemoteEventBridge', () => {
     const request = vi.fn()
       .mockResolvedValueOnce(errorResponse())
       .mockResolvedValueOnce(sseResponse([
-        'data: {"type":"stream.chunk","sessionId":"ses-1","data":{"stream_id":"st1","content":"ok"},"timestamp":"t"}\n\n',
+        'data: {"type":"part.delta","sessionId":"ses-1","data":{"messageId":"m1","partId":"msg:text:0","field":"text","delta":"ok"},"timestamp":"t"}\n\n',
       ]));
 
     const client = makeClient(request);
@@ -214,8 +234,8 @@ describe('RemoteEventBridge', () => {
     bus.subscribeAll((e) => received.push(e));
 
     const client = makeClient(vi.fn().mockResolvedValue(sseResponse([
-      'data: {"type":"stream.chunk","sessionId":"ses-1","data":{"stream_id":"st1","content":"x"},"timestamp":"t"}\n\n',
-      'data: {"type":"stream.done","sessionId":"ses-1","data":{"stream_id":"st1"},"timestamp":"t"}\n\n',
+      'data: {"type":"part.delta","sessionId":"ses-1","data":{"messageId":"m1","partId":"msg:text:0","field":"text","delta":"x"},"timestamp":"t"}\n\n',
+      'data: {"type":"turn.finished","sessionId":"ses-1","data":{"turnId":"t1","status":"completed"},"timestamp":"t"}\n\n',
     ])));
 
     const bridge = new RemoteEventBridge({
@@ -223,12 +243,12 @@ describe('RemoteEventBridge', () => {
       getToken: async () => 'tok',
       eventBus: bus,
       backendUrl: 'http://backend.test',
-      shouldForward: (e) => e.type !== 'stream.chunk',
+      shouldForward: (e) => e.type !== 'part.delta',
     });
     bridge.start();
 
     await vi.waitFor(() => expect(received.length).toBe(1));
-    expect(received[0]!.type).toBe('stream.done');
+    expect(received[0]!.type).toBe('turn.finished');
     bridge.stop();
   });
 
@@ -266,7 +286,7 @@ describe('RemoteEventBridge', () => {
 
     const client = makeClient(vi.fn().mockResolvedValue(sseResponse([
       'data: {"type":"connected","data":{},"timestamp":"t"}\n\n',
-      'data: {"type":"stream.chunk","sessionId":"ses-1","data":{"stream_id":"st1","content":"x"},"timestamp":"t"}\n\n',
+      'data: {"type":"part.delta","sessionId":"ses-1","data":{"messageId":"m1","partId":"msg:text:0","field":"text","delta":"x"},"timestamp":"t"}\n\n',
     ])));
 
     const bridge = new RemoteEventBridge({
@@ -278,7 +298,7 @@ describe('RemoteEventBridge', () => {
     bridge.start();
 
     await vi.waitFor(() => expect(received.length).toBe(1));
-    expect(received[0]!.type).toBe('stream.chunk');
+    expect(received[0]!.type).toBe('part.delta');
     bridge.stop();
   });
 });

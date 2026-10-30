@@ -3,12 +3,18 @@
  *
  * Контракты (порядок side-effect'ов и отсутствие двойных публикаций):
  *  - отмена до финального сохранения → assistant (status=cancelled) → ровно
- *    одно `stream.cancelled`, **без** `stream.done`; tool-chain уже записан
+ *    одно `stream.cancelled`, **без** `step.finished`; tool-chain уже записан
  *    пошагово в цикле (шаг 2а) — в эпилоге его нет;
- *  - фоллбек-тексты (лимит итераций / deny / пустой ответ) и статус в `stream.done`;
+ *  - фоллбек-тексты (лимит итераций / deny / пустой ответ) и статус — в
+ *    сохранённом assistant-сообщении и в `step.finished`/`turn.finished`;
  *  - quality-check/escalation (ADR-034): перевызов на fallback-модели без
  *    assistant-сообщений с toolUse, событие `message.quality_check`;
- *  - secrets в `stream.done`, `unregister` ровно один раз.
+ *  - secrets из ответа — в metadata сохранённого сообщения (ADR-036),
+ *    `unregister` ровно один раз.
+ *
+ * ADR-118 §4: `stream.done` удалён без dual-emit — финал шага публикуется
+ * `step.finished` (статус, usage, вложения ответа, тайминги), ход закрывает
+ * `turn.finished`.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -145,6 +151,10 @@ describe('runProcessFinalize', () => {
       providerName: 'prov',
       effectiveAgentRole: 'fixer',
       effectiveReasoningLevel: undefined,
+      // ADR-118 §1: ход и финальный шаг.
+      turnId: 'turn1',
+      finalStepIndex: 0,
+      finalStepMessageId: 'msg-step-0',
       ...overrides,
     };
   }
@@ -184,7 +194,7 @@ describe('runProcessFinalize', () => {
   }
 
   describe('ветка отмены', () => {
-    it('assistant(status=cancelled) → stream.cancelled, без stream.done', async () => {
+    it('assistant(status=cancelled) → stream.cancelled, без step.finished', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
       const state = makeState({ cancelledBeforeFinal: true, finalContent: '' });
@@ -199,7 +209,9 @@ describe('runProcessFinalize', () => {
       expect(saveCall[8]).toBe(true);         // isCancelled
       expect(saveCall[17]).toMatchObject({ duration_ms: expect.any(Number) });
 
-      expect(published.map((p) => p.event)).toEqual(['stream.cancelled']);
+      // ADR-118 §4: отмена закрывает ход (`turn.finished`), шага в полёте нет —
+      // `step.finished` в эпилоге не публикуется.
+      expect(published.map((p) => p.event)).toEqual(['stream.cancelled', 'turn.finished']);
       expect(published[0]!.data).toMatchObject({
         stream_id: 'stream1',
         content: '',
@@ -208,6 +220,7 @@ describe('runProcessFinalize', () => {
         provider: 'prov',
         usage: USAGE,
       });
+      expect(published[1]!.data).toMatchObject({ turnId: 'turn1', status: 'cancelled' });
 
       // Сообщение сохранено со статусом cancelled (статистика отмены не теряется)
       const stored = (await sessionManager.getSession(sessionId))!;

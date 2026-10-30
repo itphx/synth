@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import { memo } from 'react'
+import { Fragment, memo } from 'react'
 import { MarkdownContent } from './MarkdownContent'
 import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
@@ -24,8 +24,12 @@ import { useChatStore } from '@/stores/chatStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useI18n, useResolveI18n } from '@/lib/i18n'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
+import { buildPartsView } from '@/lib/messageParts'
+import { buildUsageSegments } from '@/lib/statsSegments'
+import { moveSessionToBackground } from '@/lib/backgroundDetach'
+import { StatsPopoverButton } from './StatsPopoverButton'
 import { synthApi } from '@/lib/api/synthApi'
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
 
 function useToolCallData(toolCalls: MessageData['tool_calls']) {
@@ -94,6 +98,21 @@ interface ChatMessageProps {
    * пока провайдер ещё не вернул ни одного чанка. null — статус не показываем.
    */
   pending?: PendingStreamStatus | null
+  /**
+   * ADR-118 §1: заголовок агента/модели — только у **первого** сегмента хода.
+   * Последующие сегменты того же хода рисуются без заголовка.
+   */
+  showHeader?: boolean
+  /**
+   * ADR-118 §1: сегмент хода, склеенный с предыдущим (без визуального зазора).
+   */
+  compact?: boolean
+  /** ADR-118 §5: остановка живого хода (кнопка «Стоп» в живом сообщении). */
+  onStop?: () => void
+  /** Статус повторной попытки — показывается в живом сообщении. */
+  retry?: StreamRetry | null
+  onRetryNow?: () => void
+  onCancelRetry?: () => void
 }
 
 export interface PendingStreamStatus {
@@ -119,6 +138,12 @@ function ChatMessageInner({
   isSelected,
   onToggleSelect,
   pending,
+  showHeader = true,
+  compact = false,
+  onStop,
+  retry,
+  onRetryNow,
+  onCancelRetry,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -159,12 +184,13 @@ function ChatMessageInner({
   // Отладка открыта глобально (chatStore) — подсветить кнопку только у того
   // сообщения и сессии, для которых вызвано окно.
   const debugModalSessionId = useChatStore((s) => s.debugModalSessionId)
-  const debugModalMessageIndex = useChatStore((s) => s.debugModalMessageIndex)
+  const debugModalMessageId = useChatStore((s) => s.debugModalMessageId)
   const debugActive =
-    !!sessionId && debugModalSessionId === sessionId && debugModalMessageIndex === message.index
+    !!sessionId && debugModalSessionId === sessionId && !!message.id && debugModalMessageId === message.id
 
   const containerClass = cn(
-    'flex px-4 py-3 group',
+    'flex px-4 group',
+    compact ? 'py-0' : 'py-3',
     selectionMode ? 'flex-row items-start' : 'flex-col',
     isUser && 'items-end',
     isAssistant && 'items-start'
@@ -216,11 +242,61 @@ function ChatMessageInner({
   }
 
   const toolCalls = message.tool_calls || []
-  const liveToolCalls = useToolCallData(toolCalls)
-  const reasoningBlocks = getReasoningBlocks(message)
+  const fallbackToolCalls = useToolCallData(toolCalls)
+  const fallbackReasoning = getReasoningBlocks(message)
   const intermediateTextBlocks = getIntermediateTextBlocks(message)
   const intermediateTextMode = useUIStore((s) => s.intermediateTextDisplay)
   const isInline = intermediateTextMode !== 'bottom'
+
+  /**
+   * ADR-118 §5: единственный источник контента — **части**. Живое сообщение
+   * (статус `streaming`) и финальное рисуются одним компонентом: текст,
+   * рассуждения и вызовы инструментов собираются из частей (`parts` из DTO +
+   * накопленное живое состояние `partsBySession`).
+   */
+  const livePartMap = useChatStore((s) => {
+    if (!sessionId || !message.id) return undefined
+    return s.partsBySession[sessionId]?.[message.id]
+  })
+  const liveParts = useMemo(
+    () => (livePartMap ? Object.values(livePartMap) : undefined),
+    [livePartMap]
+  )
+  const partsView = useMemo(
+    () => buildPartsView(message.parts, liveParts, {
+      content: message.content,
+      reasoningBlocks: fallbackReasoning,
+      toolCalls: fallbackToolCalls,
+    }),
+    [message.parts, liveParts, message.content, fallbackReasoning, fallbackToolCalls]
+  )
+  const liveToolCalls = partsView.toolCalls
+  const reasoningBlocks = partsView.reasoning
+  const isLive = message.status === 'streaming'
+
+  /**
+   * ADR-111 §detach + ADR-070 §2.6: живое сообщение несёт индикатор хода,
+   * live-статистику, «В фон» и «Стоп» (прежде — отдельная плашка
+   * `StreamingPlaceholder`; теперь — тот же компонент, что и финальное).
+   */
+  const [detaching, setDetaching] = useState(false)
+  const detachTargets = liveToolCalls.filter(
+    (c) => c.status === 'running' && (c.name === 'task' || c.name === 'execute_shell'),
+  )
+  const canDetach = isLive && !!sessionId && detachTargets.length > 0
+  const handleBackground = () => {
+    if (!sessionId || detaching) return
+    setDetaching(true)
+    void moveSessionToBackground(sessionId, {
+      callIds: detachTargets.map((c) => c.callId),
+    }).finally(() => setDetaching(false))
+  }
+  const liveSegments = useMemo(() => buildUsageSegments({
+    usage: message.usage ?? undefined,
+    costUsd: typeof message.metadata?.cost_usd === 'number' ? message.metadata.cost_usd : undefined,
+    costCurrency: typeof message.metadata?.cost_currency === 'string' ? message.metadata.cost_currency : undefined,
+    tokenPrefix: message.metadata?.usage_estimated === true ? '~' : '',
+  }, t), [message.usage, message.metadata, t])
 
   // ADR-046 §7.1: локальный ответ системной (builtin) команды — нейтральный
   // system-блок без шапки агента/статистики; команда и вывод объединены
@@ -260,14 +336,26 @@ function ChatMessageInner({
   }
 
   const bottomContent = !isInline && intermediateTextBlocks.length > 0
-    ? [...intermediateTextBlocks.map((it) => it.text), message.content].filter(Boolean).join('\n\n')
+    ? [...intermediateTextBlocks.map((it) => it.text), partsView.text].filter(Boolean).join('\n\n')
     : null
-  const displayContent = bottomContent ?? message.content
+  const displayContent = bottomContent ?? partsView.text
 
   // ADR-115: вложения приходят частями сообщения (у user и у assistant —
   // ассистент может вернуть картинку/файл через тул).
   const messageParts = message.parts ?? []
   const hasAttachments = hasMediaParts(messageParts)
+
+  /**
+   * ADR-118 §4: статус доставки реплики — маркер у сообщения
+   * («принято»/«в очереди»/«вмешательство»).
+   */
+  const deliveryLabel = message.delivery
+    ? message.delivery === 'queued'
+      ? t('chat.message.delivery.queued')
+      : message.delivery === 'steering'
+        ? t('chat.message.delivery.steering')
+        : t('chat.message.delivery.accepted')
+    : null
 
   // ADR-046 §7.1: reasoning / intermediate / tool-call блоки. Для assistant
   // рендерятся в пузыре напрямую, для summary/debug — внутри Notice-тела.
@@ -650,8 +738,16 @@ function ChatMessageInner({
           </span>
         )}
 
-        {isAssistant && (
+        {isAssistant && showHeader && (
           <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
+        )}
+
+        {isLive && (
+          <span className="mb-1 inline-flex gap-0.5 self-start" aria-hidden="true">
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+          </span>
         )}
 
         {partsContent}
@@ -663,6 +759,16 @@ function ChatMessageInner({
             onOriginClick={handleOriginClick}
             processing={pending?.status === 'processing'}
           />
+        )}
+
+        {deliveryLabel && (
+          <span
+            className="mb-1 inline-flex items-center gap-1 self-end rounded-sm bg-muted/40 px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground"
+            data-testid="message-delivery"
+          >
+            <Icon name="time" className="size-3" />
+            {deliveryLabel}
+          </span>
         )}
 
         {hasAttachments && sessionId && (

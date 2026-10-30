@@ -136,7 +136,7 @@ describe('QueueProcessor — очистка состояния при ошибк
     const s = await sessionManager.getSession(sessionId);
     expect(s!.pendingMessages).toHaveLength(0);
     expect(s!.status.blocked).toBeUndefined();
-    expect(events.some((e) => e.type === 'stream.done' || e.type === 'stream.error')).toBe(false);
+    expect(events.some((e) => e.type === 'stream.error')).toBe(false);
   });
 
   it('cancelRetry() снимает pending, разблокирует сессию и публикует финальный stream.error', async () => {
@@ -459,7 +459,7 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
   });
 });
 
-describe('QueueProcessor — message.added с вложением (ADR-115)', () => {
+describe('QueueProcessor — материализация сообщения (ADR-118 §4, ADR-115)', () => {
   let sessionManager: SessionManager;
   let eventBus: EventBus;
   let tmpDir: string;
@@ -474,7 +474,7 @@ describe('QueueProcessor — message.added с вложением (ADR-115)', () 
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('публикует parts: медиа-часть как есть, текст обрезан до 500', async () => {
+  it('message.delivered: сообщение материализовано с ord, части в истории не испорчены', async () => {
     const longText = 'а'.repeat(900);
     const session = await sessionManager.createSession({ title: 'Parts' });
     const msg: Message = {
@@ -497,28 +497,28 @@ describe('QueueProcessor — message.added с вложением (ADR-115)', () 
     const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
     await processor.start();
 
-    const added = events.find((e) => e.type === 'message.added');
-    expect(added).toBeDefined();
-    const parts = added!.data.parts as Array<{ type: string; data: unknown }>;
-    expect(parts).toHaveLength(2);
-    expect(parts[0]!.type).toBe('text');
-    expect(parts[0]!.data).toHaveLength(500);
-    expect(parts[1]!.type).toBe('image');
-    expect(parts[1]!.data).toMatchObject({
+    // ADR-118 §4: материализация сообщения в истории — `message.delivered`
+    // (`messageId`, `ord`, роль, автор, принципал).
+    const delivered = events.find((e) => e.type === 'message.delivered');
+    expect(delivered).toBeDefined();
+    expect(delivered!.data).toMatchObject({ messageId: msg.id, role: 'user', ord: 1 });
+
+    // Сообщение в истории не испорчено: медиа-часть как есть, текст целиком.
+    const s = await sessionManager.getSession(session.id);
+    const saved = s!.messages.find((m) => m.id === msg.id)!;
+    expect(saved.parts).toHaveLength(2);
+    expect(saved.parts[0]!.type).toBe('text');
+    expect((saved.parts[0]!.data as string)).toHaveLength(900);
+    expect(saved.parts[1]!.type).toBe('image');
+    expect(saved.parts[1]!.data).toMatchObject({
       blobPath: 'attachments/ab/abcdef',
       mime: 'image/jpeg',
       size: 2048,
       name: 'Yeti 2.jpg',
     });
-    // content события по-прежнему обрезан (отдельная задача — не раздувать событие).
-    expect((added!.data.content as string).length).toBeLessThanOrEqual(500);
-    // Сообщение в истории не испорчено снимком для события.
-    const s = await sessionManager.getSession(session.id);
-    const saved = s!.messages.find((m) => m.id === msg.id)!;
-    expect((saved.parts[0]!.data as string)).toHaveLength(900);
   });
 
-  it('текстовое сообщение без вложения → parts содержит только текст', async () => {
+  it('текстовое сообщение без вложения → в истории только текстовая часть', async () => {
     const session = await sessionManager.createSession({ title: 'NoParts' });
     const msg: Message = { ...makeMessage(), parts: [] };
     await sessionManager.addPendingMessage(session.id, msg);
@@ -527,10 +527,12 @@ describe('QueueProcessor — message.added с вложением (ADR-115)', () 
     const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
     await processor.start();
 
-    const added = events.find((e) => e.type === 'message.added');
-    expect(added).toBeDefined();
-    const parts = added!.data.parts as Array<{ type: string }>;
-    expect(parts.map((p) => p.type)).toEqual(['text']);
+    const delivered = events.find((e) => e.type === 'message.delivered');
+    expect(delivered).toBeDefined();
+
+    const s = await sessionManager.getSession(session.id);
+    const saved = s!.messages.find((m) => m.id === msg.id)!;
+    expect(saved.parts.map((p) => p.type)).toEqual(['text']);
   });
 });
 
@@ -647,10 +649,13 @@ describe('requeueMessages — маркеры и переполнение оче�
     });
 
     expect(result).toEqual({ requeued: 1, dropped: 0 });
-    const queued = events.find((e) => e.type === 'message.queued');
-    expect(queued).toBeDefined();
-    // Аддитивное поле: UI адресует строку по серверному id.
-    expect(queued!.data.message_id).toBe(message.id);
+    // ADR-118 §4: очередь изменилась — `queue.state` (только счётчики).
+    const state = events.find((e) => e.type === 'queue.state');
+    expect(state).toBeDefined();
+    expect(state!.data).toMatchObject({ pendingCount: 1, steerCount: 0 });
+    // Ни текста, ни автора в `queue.state` нет (устранение утечки `message.queued`).
+    expect(state!.data.content).toBeUndefined();
+    expect(state!.data.author).toBeUndefined();
     const saved = (await sessionManager.getSession(session.id))!;
     expect(saved.pendingMessages).toHaveLength(1);
     expect(saved.pendingMessages[0]!.metadata?.steer).toBeUndefined();
@@ -679,7 +684,7 @@ describe('requeueMessages — маркеры и переполнение оче�
     expect(dropped).toBeDefined();
     expect(dropped!.data.reason).toBe('limit');
     expect(dropped!.data.dropped_count).toBe(1);
-    expect(events.some((e) => e.type === 'message.queued')).toBe(false);
+    expect(events.some((e) => e.type === 'queue.state')).toBe(false);
   });
 });
 
@@ -725,8 +730,8 @@ describe('QueueProcessor — «Стоп» сохраняет background_run_resu
   });
 });
 
-/** `message.queued` несёт `message_id` — UI адресует строку очереди по id. */
-describe('enqueueUserMessage — message_id в событии очереди', () => {
+/** ADR-118 §4: `message.accepted` — подтверждение приёма (`messageId`/`mode`/`position`). */
+describe('enqueueUserMessage — message.accepted в событии приёма', () => {
   let sessionManager: SessionManager;
   let eventBus: EventBus;
   let tmpDir: string;
@@ -741,7 +746,7 @@ describe('enqueueUserMessage — message_id в событии очереди', (
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('message.queued.message_id = id сообщения', async () => {
+  it('message.accepted: messageId = id сообщения, mode = queue, position = 1', async () => {
     const session = await sessionManager.createSession({ title: 'Q' });
     const events: BusEvent[] = [];
     eventBus.subscribe(session.id, (e) => events.push(e));
@@ -756,8 +761,14 @@ describe('enqueueUserMessage — message_id в событии очереди', (
       (async () => ({})) as never,
     );
 
-    const queued = events.find((e) => e.type === 'message.queued');
-    expect(queued).toBeDefined();
-    expect(queued!.data.message_id).toBe(message.id);
+    const accepted = events.find((e) => e.type === 'message.accepted');
+    expect(accepted).toBeDefined();
+    expect(accepted!.data.messageId).toBe(message.id);
+    expect(accepted!.data.mode).toBe('queue');
+    expect(accepted!.data.position).toBe(1);
+    // Состояние очереди — только счётчики.
+    const state = events.find((e) => e.type === 'queue.state');
+    expect(state).toBeDefined();
+    expect(state!.data).toMatchObject({ pendingCount: 1, steerCount: 0 });
   });
 });

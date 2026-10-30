@@ -3,12 +3,18 @@
  *
  * Контракты:
  *  - провайдер недоступен → `provider_not_found` без стрима и сохранения;
- *  - успешный прогон: `stream.chunk` (agent_role=debug) → debug-сообщение
- *    (`role=debug`, `skipEvent`) → `stream.done` с `metadata.type`;
+ *  - успешный прогон: `turn.started` → `step.started` → `part.delta` (текст) /
+ *    `part.updated` (рассуждения) → debug-сообщение (`role=debug`, `skipEvent`)
+ *    → `step.finished` (usage/стоимость) → `turn.finished`;
  *  - системный промпт и user-реплика зависят от языка сессии;
  *  - отмена на середине стрима → `stream.cancelled` без сохранения;
  *  - ошибка стрима → единый `handleLlmFailure` с контекстом `debug`;
  *  - cancel-токен всегда убирается из реестра (успех/отмена/ошибка).
+ *
+ * ADR-118 §4: `stream.chunk`/`stream.done` удалены — дельты текста идут
+ * `part.delta` (partId `msg:text:0`), рассуждения — `part.updated`
+ * (partId `msg:reasoning:0`), закрытие шага — `step.finished`, хода —
+ * `turn.finished`.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -164,7 +170,7 @@ describe('handleDebugSystemMessage', () => {
     expect(result.error).toContain('unspecified');
   });
 
-  it('успешный прогон: debug-сообщение, stream.done и уровень размышлений прокинут в провайдера', async () => {
+  it('успешный прогон: debug-сообщение, step.finished и уровень размышлений прокинут в провайдера', async () => {
     DebugProvider.chunks = [
       { content: 'подтверждаю ', isFinal: false, model: 'debug-model' },
       { content: 'отладочное сообщение получено', isFinal: true, usage: USAGE, model: 'debug-model', reasoning: 'r' },
@@ -181,10 +187,16 @@ describe('handleDebugSystemMessage', () => {
     expect(result).toEqual({});
     expect(deps.getProvider).toHaveBeenCalledWith('debug-provider', session, 'high');
 
-    const chunks = published.filter((p) => p.event === 'stream.chunk');
-    expect(chunks).toHaveLength(2);
-    expect(chunks[0]!.data).toMatchObject({ agent_role: 'debug', provider: 'debug-provider', is_final: false });
-    expect(chunks[1]!.data).toMatchObject({ is_final: true, content: '' });
+    // ADR-118 §4: текст шага — дельтами, рассуждения — частью.
+    const deltas = published.filter((p) => p.event === 'part.delta');
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]!.data).toMatchObject({ partId: 'msg:text:0', field: 'text', delta: 'подтверждаю ' });
+    const updated = published.filter((p) => p.event === 'part.updated');
+    expect(updated).toHaveLength(1);
+    expect(updated[0]!.data).toMatchObject({
+      partId: 'msg:reasoning:0',
+      part: { id: 'msg:reasoning:0', type: 'reasoning', data: 'r' },
+    });
 
     const stored = (await sessionManager.getSession(sessionId))!;
     const debugMessage = stored.messages.find((m) => m.role === MessageRole.DEBUG)!;
@@ -194,20 +206,26 @@ describe('handleDebugSystemMessage', () => {
       reasoning: 'r',
       metadata: { status: 'completed' },
     });
-    // UI получает сообщение через stream.done — message.added не публикуется
+    // UI получает сообщение через step.started/part.delta — message.added не публикуется
     expect(events.filter((e) => e.type === 'message.added')).toHaveLength(0);
 
-    const done = published.find((p) => p.event === 'stream.done')!;
-    expect(done.data).toMatchObject({
-      stream_id: 'stream1',
-      content: 'отладочное сообщение получено',
+    const turnId = 'turn_stream1';
+    const stepStarted = published.find((p) => p.event === 'step.started')!;
+    expect(stepStarted.data).toMatchObject({ turnId, stepIndex: 0, messageId: debugMessage.id });
+    const finished = published.find((p) => p.event === 'step.finished')!;
+    expect(finished.data).toMatchObject({
+      turnId,
+      stepIndex: 0,
+      messageId: debugMessage.id,
       status: 'completed',
       model: 'debug-model',
       provider: 'debug-provider',
       usage: USAGE,
-      metadata: { type: 'debug_system_message' },
-      message_index: 0,
-      pending_count: 0,
+      agentRole: 'debug',
+    });
+    expect(published.find((p) => p.event === 'turn.finished')!.data).toMatchObject({
+      turnId,
+      status: 'completed',
     });
     expect(cancellationTokens.has('stream1')).toBe(false);
   });
@@ -234,7 +252,7 @@ describe('handleDebugSystemMessage', () => {
     }
   });
 
-  it('отмена на середине стрима → stream.cancelled без сохранения и без stream.done', async () => {
+  it('отмена на середине стрима → stream.cancelled без сохранения и без step.finished c контентом', async () => {
     const sessionId = await makeSession();
     const session = (await sessionManager.getSession(sessionId))!;
     const deps = makeDeps();
@@ -247,8 +265,22 @@ describe('handleDebugSystemMessage', () => {
     );
 
     expect(result).toEqual({});
-    expect(published.map((p) => p.event)).toEqual(['stream.chunk', 'stream.cancelled']);
-    expect(published[1]!.data).toMatchObject({ stream_id: 'stream1', content: 'часть', status: 'cancelled' });
+    expect(published.map((p) => p.event)).toEqual([
+      'turn.started',
+      'step.started',
+      'part.delta',
+      'stream.cancelled',
+      'step.finished',
+      'turn.finished',
+    ]);
+    const cancelled = published.find((p) => p.event === 'stream.cancelled')!;
+    expect(cancelled.data).toMatchObject({ stream_id: 'stream1', content: 'часть', status: 'cancelled' });
+    const finished = published.find((p) => p.event === 'step.finished')!;
+    expect(finished.data).toMatchObject({ turnId: 'turn_stream1', stepIndex: 0, status: 'cancelled' });
+    expect(published.find((p) => p.event === 'turn.finished')!.data).toMatchObject({
+      turnId: 'turn_stream1',
+      status: 'cancelled',
+    });
     expect(deps.saveAssistantMessage).not.toHaveBeenCalled();
     expect((await sessionManager.getSession(sessionId))!.messages).toHaveLength(0);
     expect(cancellationTokens.has('stream1')).toBe(false);
@@ -291,8 +323,8 @@ describe('handleDebugSystemMessage', () => {
       session, makeMessage(), new AbortController().signal, publish(), collector, 'stream1', undefined, undefined, deps,
     );
 
-    const done = published.find((p) => p.event === 'stream.done')!;
-    expect(done.data).toMatchObject({ cost_usd: 0.75, cost_currency: 'USD' });
+    const finished = published.find((p) => p.event === 'step.finished')!;
+    expect(finished.data).toMatchObject({ costUsd: 0.75, costCurrency: 'USD' });
     expect(collector.getDebugInfo()).toMatchObject({
       session: { session_id: sessionId, context_optimization: 'debug_system_message' },
     });

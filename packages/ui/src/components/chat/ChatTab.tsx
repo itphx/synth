@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
-import { useChatStore, type MessageData, type QueuedMessage, type StreamState } from '@/stores/chatStore'
+import { useChatStore, type MessageData, type QueuedMessage } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
@@ -32,7 +32,6 @@ interface ChatTabProps {
 // Стабильные пустые референсы: иначе каждый рендер создаёт новые []/{}/Set,
 // ломая мемоизацию memo-детей (MessageList и пр.).
 const EMPTY_MESSAGES: MessageData[] = []
-const EMPTY_STREAMS: Record<string, StreamState> = {}
 const EMPTY_PENDING: QueuedMessage[] = []
 const EMPTY_STICKY: StickyNoteData[] = []
 const EMPTY_INDICES: Set<number> = new Set()
@@ -93,7 +92,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
   const messagesBySession = useChatStore(s => s.messagesBySession)
-  const streamingBySession = useChatStore(s => s.streamingBySession)
+  const turnBySession = useChatStore(s => s.turnBySession)
   const queueBySession = useChatStore(s => s.queueBySession)
   const pendingBySession = useChatStore(s => s.pendingBySession)
   const retryBySession = useChatStore(s => s.retryBySession)
@@ -101,9 +100,9 @@ export function ChatTab({ tab }: ChatTabProps) {
   const stickyNotesBySession = useChatStore(s => s.stickyNotesBySession)
   const summarizationPendingBySession = useChatStore(s => s.summarizationPendingBySession)
   const debugModalSessionId = useChatStore(s => s.debugModalSessionId)
-  const debugModalMessageIndex = useChatStore(s => s.debugModalMessageIndex)
+  const debugModalMessageId = useChatStore(s => s.debugModalMessageId)
   const setMessages = useChatStore(s => s.setMessages)
-  const updateMessage = useChatStore(s => s.updateMessage)
+  const updateMessageById = useChatStore(s => s.updateMessageById)
   const clearQueueState = useChatStore(s => s.clearQueueState)
   const resetQueueStalled = useChatStore(s => s.resetQueueStalled)
   const updateQueueCount = useChatStore(s => s.updateQueueCount)
@@ -114,26 +113,26 @@ export function ChatTab({ tab }: ChatTabProps) {
   const closeDebugModal = useChatStore(s => s.closeDebugModal)
   const setRetryInput = useChatStore(s => s.setRetryInput)
   const setStreamRetry = useChatStore(s => s.setStreamRetry)
-  const setStreamRetrying = useChatStore(s => s.setStreamRetrying)
 
   const sessionId = tab.data.sessionId || tab.id
   const messages = messagesBySession[sessionId] || EMPTY_MESSAGES
-  const streams = streamingBySession[sessionId] || EMPTY_STREAMS
   const queue = queueBySession[sessionId]
   const pending = pendingBySession[sessionId] || EMPTY_PENDING
   const stickyNotes = stickyNotesBySession[sessionId] || EMPTY_STICKY
   const streamRetry = retryBySession[sessionId]
   const summarizationPending = summarizationPendingBySession[sessionId] || false
   const finalError = finalErrorBySession[sessionId] || null
-  const isStreaming = Object.values(streams).some((s) => s.isStreaming)
-  const hasActiveStream = Object.values(streams).some((s) => s.isStreaming)
+  // ADR-118 §1: единственный источник «идёт ход» — активный ход (`turnBySession`).
+  const activeTurn = turnBySession[sessionId] ?? null
+  const isStreaming = activeTurn?.status === 'streaming'
+  const hasActiveStream = isStreaming
 
   // ADR-111 §detach: `ctrl+b` переводит все блокирующие прогоны активной сессии
   // в фон — только пока ход идёт (вне стрима переводить нечего).
   useBackgroundHotkey(sessionId, isStreaming)
   const isEmpty = messages.length === 0 && !hasActiveStream && pending.length === 0 && !summarizationPending
-  const debugMessage = debugModalSessionId && debugModalMessageIndex != null
-    ? messages.find((m) => m.index === debugModalMessageIndex) ?? null
+  const debugMessage = debugModalSessionId && debugModalMessageId
+    ? messages.find((m) => m.id === debugModalMessageId) ?? null
     : null
 
   // B8: последнее сообщение дочерней сессии — ошибка провайдера → плашка «Продолжить»
@@ -199,8 +198,7 @@ export function ChatTab({ tab }: ChatTabProps) {
           setSessionOrigin((sessData.session_origin as string) || null)
           const pendingMsgs = sessData.pending_messages as MessageData[] | undefined
           if (pendingMsgs && pendingMsgs.length > 0) {
-            const hasActiveStream = sessData.current_stream != null
-              || Object.values(streamingBySession[sessionId] || {}).some((s) => s.isStreaming)
+            const hasActiveStream = sessData.current_stream != null || isStreaming
             const displayMsgs = hasActiveStream ? pendingMsgs.slice(1) : pendingMsgs
             if (displayMsgs.length > 0) {
               setPendingMessages(sessionId, displayMsgs.map(toQueuedMessage))
@@ -264,15 +262,15 @@ export function ChatTab({ tab }: ChatTabProps) {
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
         useChatStore.getState().setStreamRetry(sessionId, null)
         // ADR-115: id загруженных вложений уходят в тело запроса промпта.
-        const result = await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
-        // Неподтверждённая отправка — не ошибка: сообщение показано строкой
-        // очереди сразу, а состав очереди сверяется с сервером. Ошибкой
-        // остаются сеть/валидация/401 (ниже — catch).
-        if (result.confirmed) {
-          notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
-        } else {
-          notify({ text: t('chat.message.unconfirmed'), type: 'info', category: 'queue', sessionId })
-        }
+        // ADR-118 §3: ответ — `202 {messageId, mode, position}`; реплика уже
+        // показана в ленте оптимистично по `messageId`.
+        const accepted = await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
+        notify({
+          text: t('chat.message.sent'),
+          type: 'info',
+          category: 'message',
+          sessionId,
+        })
       } catch (e) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
         // Ошибку пробрасываем композеру: он не очищает вложения при неудаче.
@@ -306,12 +304,12 @@ export function ChatTab({ tab }: ChatTabProps) {
     try {
       await synthApi.retryQueueNow(sessionId)
       // Стрим снова «работает»: статус ретрая снимем по следующему
-      // stream.retry (если снова упадёт) или stream.done (если получится).
-      setStreamRetrying(sessionId, streamRetry?.streamId || '', false)
+      // событию ретрая (если снова упадёт) или по финалу хода.
+      setStreamRetry(sessionId, null)
     } catch {
       notify({ text: t('chat.error.retryNow'), type: 'error', category: 'error', sessionId })
     }
-  }, [sessionId, streamRetry, setStreamRetrying, notify, t])
+  }, [sessionId, streamRetry, setStreamRetry, notify, t])
 
   const handleCancelRetry = useCallback(async () => {
     try {
@@ -394,7 +392,8 @@ export function ChatTab({ tab }: ChatTabProps) {
     async (msg: MessageData) => {
       try {
         const result = await synthApi.toggleMessage(sessionId, msg.index)
-        updateMessage(sessionId, msg.index, { disabled: result.disabled })
+        // ADR-118 §7: локальное состояние адресуется по `id` (индекс нестабилен).
+        if (msg.id) updateMessageById(sessionId, msg.id, { disabled: result.disabled })
         notify({
           text: result.disabled ? t('chat.message.disabled') : t('chat.message.enabled'),
           type: 'info',
@@ -405,14 +404,14 @@ export function ChatTab({ tab }: ChatTabProps) {
         notify({ text: t('chat.error.toggleMessage'), type: 'error', category: 'error', sessionId })
       }
     },
-    [sessionId, updateMessage, notify, t]
+    [sessionId, updateMessageById, notify, t]
   )
 
   const handlePin = useCallback(
     async (msg: MessageData) => {
       try {
         const result = await synthApi.pinMessage(sessionId, msg.index)
-        updateMessage(sessionId, msg.index, { pinned: result.pinned })
+        if (msg.id) updateMessageById(sessionId, msg.id, { pinned: result.pinned })
         notify({
           text: result.pinned ? t('chat.message.pinned') : t('chat.message.unpinned'),
           type: 'info',
@@ -423,7 +422,40 @@ export function ChatTab({ tab }: ChatTabProps) {
         notify({ text: t('chat.error.pinMessage'), type: 'error', category: 'error', sessionId })
       }
     },
-    [sessionId, updateMessage, notify, t]
+    [sessionId, updateMessageById, notify, t]
+  )
+
+  /**
+   * ADR-118 §10: pin на **контейнере хода** — пин всех сегментов хода.
+   * Серверный вызов — пакетный (`POST /messages/:id/batch`), локальное
+   * состояние адресуется по `id` (индекс нестабилен).
+   */
+  const handlePinTurn = useCallback(
+    async (segments: MessageData[]) => {
+      const targets = segments.filter((m) => !!m.id)
+      if (targets.length === 0) return
+      const pinned = !targets.every((m) => m.pinned)
+      try {
+        await synthApi.batchMessages(
+          sessionId,
+          'pin',
+          targets.map((m) => m.index),
+          pinned,
+        )
+        for (const m of targets) {
+          updateMessageById(sessionId, m.id!, { pinned })
+        }
+        notify({
+          text: pinned ? t('chat.message.pinned') : t('chat.message.unpinned'),
+          type: 'info',
+          category: 'message',
+          sessionId,
+        })
+      } catch {
+        notify({ text: t('chat.error.pinMessage'), type: 'error', category: 'error', sessionId })
+      }
+    },
+    [sessionId, updateMessageById, notify, t]
   )
 
   const handleDelete = useCallback(
@@ -465,8 +497,9 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleDebug = useCallback(
     (msg: MessageData) => {
-      if (msg.debug_data && Object.keys(msg.debug_data as object).length > 0) {
-        openDebugModal(sessionId, msg.index)
+      if (msg.debug_data && Object.keys(msg.debug_data as object).length > 0 && msg.id) {
+        // ADR-118 §7: отладка адресуется по `id` сообщения (индекс нестабилен).
+        openDebugModal(sessionId, msg.id)
       } else {
         notify({ text: t('chat.debug.noData'), type: 'info', category: 'system', sessionId })
       }
@@ -510,7 +543,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         return
       }
       const hasActiveStream = data.current_stream != null
-        || Object.values(useChatStore.getState().streamingBySession[sessionId] || {}).some((s) => s.isStreaming)
+        || useChatStore.getState().turnBySession[sessionId]?.status === 'streaming'
       const displayMsgs = hasActiveStream ? pendingMsgs.slice(1) : pendingMsgs
       if (displayMsgs.length === 0) {
         clearQueueState(sessionId)
@@ -804,11 +837,12 @@ export function ChatTab({ tab }: ChatTabProps) {
           {!inputExpanded && (
             <MessageList
               messages={messages}
-              streams={streams}
+              turn={activeTurn}
               sessionId={sessionId}
               onCopy={handleCopy}
               onToggle={handleToggle}
               onPin={handlePin}
+              onPinTurn={handlePinTurn}
               onDelete={handleDelete}
               onRetry={handleRetry}
               onDebug={handleDebug}

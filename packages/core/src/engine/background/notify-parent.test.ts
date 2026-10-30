@@ -108,7 +108,7 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
     expect(createProcessor.mock.calls[0]?.[0]).toBe('session-1');
   });
 
-  it('успех: публикуется `message.queued`, а не `message.added` (историю пополнит процессор)', async () => {
+  it('успех: публикуется `message.accepted`, а не `message.added` (историю пополнит процессор)', async () => {
     const { manager } = mockSessionManager();
     const eventBus = new EventBus();
     const events: Array<{ type: string }> = [];
@@ -122,7 +122,7 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
 
     await notify('session-1', buildNotification());
 
-    expect(events.map((e) => e.type)).toContain('message.queued');
+    expect(events.map((e) => e.type)).toContain('message.accepted');
     expect(events.map((e) => e.type)).not.toContain('message.added');
   });
 
@@ -146,7 +146,7 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
     expect(types).toContain('message.added');
     expect(types).toContain('session.updated');
     // Fallback-путь не ставит сообщение в очередь повторно.
-    expect(types).not.toContain('message.queued');
+    expect(types).not.toContain('message.accepted');
   });
 
   it('отказ постановки и отказ записи → уведомление молча теряется (без публикаций)', async () => {
@@ -173,8 +173,8 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
   it('активный ход: уведомление уходит в steerInbox, очередь и автоход не трогаются', async () => {
     const { manager, addPendingMessage, addMessage, enqueueSteerMessage } = mockSessionManager();
     const eventBus = new EventBus();
-    const events: Array<{ type: string }> = [];
-    eventBus.subscribe('session-1', (e) => events.push({ type: e.type }));
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe('session-1', (e) => events.push({ type: e.type, data: e.data }));
     const createProcessor = vi.fn();
     const notify = createBackgroundParentNotifier({
       sessionManager: manager as unknown as SessionManager,
@@ -194,8 +194,12 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
     expect(createProcessor).not.toHaveBeenCalled();
     // Маркер вмешательства выставлен — сообщение вклинится в ход.
     expect(message.metadata?.steer).toBe(true);
-    // Обычная очередь не публикуется (её нет).
-    expect(events.map((e) => e.type)).not.toContain('message.queued');
+    // Обычная очередь не публикуется (её нет): подтверждение приёма —
+    // вмешательство (`mode: 'steer'`), а не позиция в очереди.
+    const accepted = events.find((e) => e.type === 'message.accepted');
+    expect(accepted).toBeDefined();
+    expect(accepted!.data.mode).toBe('steer');
+    expect(accepted!.data.position).toBeNull();
     expect(events.map((e) => e.type)).not.toContain('message.added');
   });
 

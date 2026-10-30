@@ -1,16 +1,80 @@
-import type { AuthorityPrincipal, Message, Session } from '@itphx/synth-shared';
+import type { AuthorityPrincipal, Message, PromptMode, QueueStatePayload, Session } from '@itphx/synth-shared';
 import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEER_INTERRUPT_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { EventBus } from '../events/bus.js';
-// ADR-115: части сообщения в live-событии — иначе UI не покажет вложение до перезагрузки.
-import { snapshotPartsForEvent } from '../events/part-snapshot.js';
 import type { ContextOptimizer } from '../engine/context/optimizer.js';
 import { isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../engine/llm-error.js';
 import type { AnalyticsRecorder } from '../analytics/recorder.js';
 import { sessionAxes } from '../analytics/recorder.js';
+// ADR-118 §2: `ord` — монотонный счётчик сессии (выдаётся при материализации
+// записи в истории). Тот же помощник, что и в `SessionManager.addMessage`.
+import { nextOrd } from '../storage/message-write.js';
 
 const MAX_PENDING = 5;
+
+/**
+ * ADR-118 §4: `queue.state` — состояние очереди сессии: **только счётчики**
+ * (`pendingCount`, `steerCount`), без текста и без автора (устранение утечки
+ * `message.queued`).
+ *
+ * Публикуется в канал сессии при каждом изменении очереди: приём сообщения,
+ * извлечение из очереди, отмена/сброс.
+ */
+export function publishQueueState(
+  eventBus: EventBus,
+  sessionId: string,
+  state: QueueStatePayload,
+): void {
+  eventBus.publish(sessionId, 'queue.state', {
+    pendingCount: Math.max(0, state.pendingCount),
+    steerCount: Math.max(0, state.steerCount),
+  });
+}
+
+/** Счётчики очереди сессии: обычная очередь + очередь вмешательств. */
+function queueCounts(session: Session | null | undefined): QueueStatePayload {
+  return {
+    pendingCount: session?.pendingMessages.length ?? 0,
+    steerCount: session?.steerInbox?.length ?? 0,
+  };
+}
+
+/**
+ * ADR-118 §3/§4: подтверждение приёма сообщения — **адресное** событие
+ * `message.accepted` (`messageId`, `mode`, `position`).
+ *
+ * Адресат — отправитель (`userId`): событие доставляется только подписчику с
+ * совпадающим `recipient`. Отправитель известен на границе HTTP — он
+ * приходит в опциях (`recipient`); не задан — событие уходит в канал сессии
+ * (broadcast, единственный пользователь standalone).
+ *
+ * Публикуется только для пользовательского ввода: системные сообщения
+ * (например, запрос суммаризации) вводом пользователя не являются.
+ */
+function publishMessageAccepted(
+  eventBus: EventBus,
+  sessionId: string,
+  params: {
+    messageId: string;
+    mode: PromptMode;
+    position: number | null;
+    role: MessageRole;
+    recipient?: string;
+  },
+): void {
+  if (params.role !== MessageRole.USER) return;
+  eventBus.publish(
+    sessionId,
+    'message.accepted',
+    {
+      messageId: params.messageId,
+      mode: params.mode,
+      position: params.position,
+    },
+    params.recipient ? { recipient: params.recipient } : {},
+  );
+}
 
 interface RetryDelays {
   [streamId: string]: number;
@@ -116,7 +180,7 @@ export class QueueProcessor {
   private async _handleStopRequest(): Promise<void> {
     this._cancelled = true;
 
-    const streamId = await this.sessionManager.withLock(this.sessionId, async (s) => {
+    const { id: streamId, counts } = await this.sessionManager.withLock(this.sessionId, async (s) => {
       const id = s.currentStream?.streamId;
       // «Стоп» очищает очередь, но уведомления о завершении фоновых прогонов
       // (ADR-111/ADR-113) не теряются: результат фоновой работы остаётся ждать
@@ -131,8 +195,11 @@ export class QueueProcessor {
       s.currentStream = undefined;
       s.updatedAt = nowISO();
       await this.sessionManager.saveSession(s);
-      return id;
+      return { id, counts: queueCounts(s) };
     });
+
+    // ADR-118 §4: очередь изменилась (сброс) — состояние очереди в канале сессии.
+    publishQueueState(this.eventBus, this.sessionId, counts);
 
     // Дублирующей публикации нет: если отмену уже отработал оркестратор
     // (graceful → `stream.cancelled` + успешная ветка сняла currentStream),
@@ -169,6 +236,8 @@ export class QueueProcessor {
       s.status.blockedAt = undefined;
       s.currentStream = undefined;
       await this.sessionManager.saveSession(s);
+      // ADR-118 §4: очередь изменилась (отмена ретрая) — состояние очереди.
+      publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
     });
 
     this.wakeBackoff();
@@ -315,6 +384,12 @@ export class QueueProcessor {
             );
             alreadyInHistory = already;
             if (!already) {
+              // ADR-118 §2: `ord` — монотонный счётчик сессии, выдаётся при
+              // материализации записи в историю (считаем ДО push — иначе
+              // счётчик не учтёт себя). Ранее выданные `ord` не перенумеровываются.
+              if (!Number.isFinite(message.ord)) {
+                message.ord = nextOrd(s.messages);
+              }
               s.messages.push(message);
             }
           }
@@ -325,19 +400,18 @@ export class QueueProcessor {
 
         if (!session) break;
 
-        // Для пользовательских сообщений — уведомить UI о появлении сообщения
+        // ADR-118 §4: сообщение материализовано в истории — `message.delivered`
+        // (канал сессии): `messageId`, `ord` (монотонный порядок записи), роль,
+        // автор и принципал. Прежний `message.added` с усечённым содержимым
+        // удалён без dual-emit.
         if (!isSystemMessage && !alreadyInHistory) {
-          const userMsgIndex = session.messages.length - 1;
-          this.eventBus.publish(this.sessionId, 'message.added', {
-            message_index: userMsgIndex,
-            role: message.role,
-            content: message.content.slice(0, 500),
-            // ADR-115: части сообщения (медиа — как есть, текст — с лимитом).
-            // Без них UI-лента не покажет вложение до перезагрузки страницы.
-            parts: snapshotPartsForEvent(message.parts),
-            author: message.author,
-            agent_role: message.agentRole,
-            metadata: message.metadata || undefined,
+          const delivered = session.messages[session.messages.length - 1] ?? message;
+          this.eventBus.publish(this.sessionId, 'message.delivered', {
+            messageId: delivered.id,
+            ord: Number.isFinite(delivered.ord) ? (delivered.ord as number) : 0,
+            role: delivered.role,
+            ...(delivered.author ? { author: delivered.author } : {}),
+            ...(delivered.principal ? { principal: delivered.principal } : {}),
           });
           // ADR-102: точка персиста пользовательского сообщения (ось `user`).
           void this.analytics?.recordActivity('messages_user', sessionAxes(session));
@@ -434,6 +508,8 @@ export class QueueProcessor {
               s.status.blockedAt = undefined;
               s.currentStream = undefined;
               await this.sessionManager.saveSession(s);
+              // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
+              publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
             });
 
             this.eventBus.publish(this.sessionId, 'stream.error', {
@@ -477,6 +553,8 @@ export class QueueProcessor {
           s.currentStream = undefined;
           s.updatedAt = nowISO();
           await this.sessionManager.saveSession(s);
+          // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
+          publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
         });
 
         delete this._retryDelays[streamId];
@@ -498,6 +576,8 @@ export class QueueProcessor {
             s.status.blockedAt = undefined;
             s.currentStream = undefined;
             await this.sessionManager.saveSession(s);
+            // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
+            publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
           });
         } catch (lockErr) {
           console.warn(`[QueueProcessor] Не удалось очистить сессию ${this.sessionId}: ${String(lockErr)}`);
@@ -705,6 +785,16 @@ export interface SteerEnqueueOptions {
    * принципал текущего хода не меняется.
    */
   principal?: AuthorityPrincipal;
+  /**
+   * ADR-118 §3/§4: идентификатор принятого сообщения — тот же, что в HTTP-ответе
+   * `202 {messageId, mode, position}`. Не задан — `message.id`.
+   */
+  messageId?: string;
+  /**
+   * ADR-118 §4: отправитель (`userId`) — адресат события `message.accepted`
+   * (адресная доставка). Не задан — событие уходит в канал сессии.
+   */
+  recipient?: string;
 }
 
 /**
@@ -761,6 +851,20 @@ export async function enqueueSteerMessage(
     return { accepted: false, reason: 'limit', pending: result.pending };
   }
 
+  // ADR-118 §3/§4: подтверждение приёма — адресное `message.accepted`.
+  // Вмешательство не занимает позицию в обычной очереди (у него свой счётчик
+  // `steerCount` в `queue.state`), поэтому `position` — `null`.
+  publishMessageAccepted(eventBus, sessionId, {
+    messageId: options?.messageId ?? message.id,
+    mode: options?.interrupt ? 'interrupt' : 'steer',
+    position: null,
+    role: message.role,
+    ...(options?.recipient ? { recipient: options.recipient } : {}),
+  });
+  // ADR-118 §4: состояние очереди — только счётчики (без текста и автора).
+  const session = await sessionManager.getSession(sessionId);
+  publishQueueState(eventBus, sessionId, queueCounts(session));
+
   return { accepted: true, pending: result.pending };
 }
 
@@ -774,6 +878,16 @@ export interface EnqueueOptions {
    * (ни при отложенном исполнении, ни после перезапуска).
    */
   principal?: AuthorityPrincipal;
+  /**
+   * ADR-118 §3/§4: идентификатор принятого сообщения — тот же, что в HTTP-ответе
+   * `202 {messageId, mode, position}`. Не задан — `message.id`.
+   */
+  messageId?: string;
+  /**
+   * ADR-118 §4: отправитель (`userId`) — адресат события `message.accepted`
+   * (адресная доставка). Не задан — событие уходит в канал сессии.
+   */
+  recipient?: string;
 }
 
 /**
@@ -791,7 +905,6 @@ export async function enqueueUserMessage(
 ): Promise<Session | null> {
   if (!message.metadata) message.metadata = {};
   if (!message.metadata.stream_id) message.metadata.stream_id = generateStreamId();
-  const enqueueStreamId = message.metadata.stream_id;
 
   // ADR-036: обфусцируем user-сообщение ДО сохранения в историю, чтобы в
   // session.messages и message.added попадал плейсхолдер, а не реальный секрет.
@@ -825,14 +938,19 @@ export async function enqueueUserMessage(
     }
   }
 
-  eventBus.publish(sessionId, 'message.queued', {
-    stream_id: enqueueStreamId,
-    message_id: message.id,
-    pending_count: session.pendingMessages.length,
-    message: message.content,
-    agent_role: message.agentRole,
-    author: message.author,
+  // ADR-118 §3/§4: подтверждение приёма — **адресное** событие
+  // `message.accepted` (`messageId`, `mode`, `position`). Позиция — 1-based
+  // в очереди (`pendingMessages`), `null` — если сообщение уже материализовано
+  // в истории (у нас это не так: очередь приняла его только что).
+  publishMessageAccepted(eventBus, sessionId, {
+    messageId: options?.messageId ?? message.id,
+    mode: 'queue',
+    position: session.pendingMessages.length,
+    role: message.role,
+    ...(options?.recipient ? { recipient: options.recipient } : {}),
   });
+  // ADR-118 §4: состояние очереди — только счётчики (без текста и автора).
+  publishQueueState(eventBus, sessionId, queueCounts(session));
 
   processorManager.createProcessor(sessionId, sessionManager, eventBus, processMessage);
 
@@ -843,7 +961,7 @@ export async function enqueueUserMessage(
 export interface RequeueMessagesOptions {
   /** Менеджер сессий — запись в `pendingMessages`. */
   sessionManager: SessionManager;
-  /** Шина событий сессии — публикация `message.queued` (не задана — без события). */
+  /** Шина событий сессии — публикация `queue.state` (не задана — без события). */
   eventBus?: EventBus;
   /** Сессия, в очередь которой возвращаются сообщения. */
   sessionId: string;
@@ -866,8 +984,9 @@ export interface RequeueMessagesOptions {
  *
  * Общий путь для остатка steer-очереди (ADR-104 × ADR-111/ADR-113): уведомления
  * фоновых прогонов не теряются ни в конце хода, ни при «Стопе». Сообщение
- * получает `stream_id` (как в `enqueueUserMessage`), публикуется `message.queued`
- * и — при `autostart` — поднимается процессор очереди.
+ * получает `stream_id` (как в `enqueueUserMessage`), публикуется состояние
+ * очереди (`queue.state` — только счётчики, ADR-118 §4) и — при `autostart` —
+ * поднимается процессор очереди.
  *
  * Очередь переполнена (`MAX_PENDING`) — сообщение не принято: публикуется
  * `steer.dropped` (`reason: 'limit'`), как у `enqueueSteerMessage`; вызывающий
@@ -902,14 +1021,11 @@ export async function requeueMessages(
       continue;
     }
     requeued++;
-    opts.eventBus?.publish(opts.sessionId, 'message.queued', {
-      stream_id: streamId,
-      message_id: message.id,
-      pending_count: session.pendingMessages.length,
-      message: message.content,
-      agent_role: message.agentRole,
-      author: message.author,
-    });
+    // ADR-118 §4: очередь изменилась — состояние очереди (счётчики, без
+    // текста и автора). Прежний `message.queued` удалён без dual-emit.
+    if (opts.eventBus) {
+      publishQueueState(opts.eventBus, opts.sessionId, queueCounts(session));
+    }
   }
   if (requeued > 0 && opts.autostart) {
     opts.autostart.processorManager.createProcessor(

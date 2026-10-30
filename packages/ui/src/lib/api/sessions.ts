@@ -9,7 +9,7 @@ import type {
   SessionStats,
   TodoItem,
 } from '@itphx/synth-shared'
-import type { SessionMode, SteerMode } from '@itphx/synth-shared/types'
+import type { PromptAcceptedResponse, SessionMode, SteerMode } from '@itphx/synth-shared/types'
 import type { EntityOrigin } from './common'
 import { BASE_URL, fetchJSON } from './base'
 
@@ -262,7 +262,11 @@ export const sessionsApi = {
     })
   },
 
-  // API v2: отправить сообщение без чтения SSE-стрима (для SSE-режима)
+  /**
+   * ADR-118 §3: приём сообщения — **всегда** `202 {messageId, mode, position}`
+   * (без SSE-ожидания и без таймаута подтверждения). `messageId` — идентификатор
+   * принятого сообщения: по нему UI показывает реплику оптимистично.
+   */
   async enqueueMessage(sessionId: string, message: string, options?: {
     agentRole?: string
     streamId?: string
@@ -280,7 +284,7 @@ export const sessionsApi = {
      * тело как `attachments`; пустой — поле не появляется.
      */
     attachments?: string[]
-  }): Promise<void> {
+  }): Promise<PromptAcceptedResponse> {
     const body: Record<string, unknown> = {
       content: message,
       stream: true,
@@ -304,6 +308,15 @@ export const sessionsApi = {
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: 'Enqueue failed' }))
       throw new Error(error.detail || `HTTP ${response.status}`)
+    }
+
+    // ADR-118 §3: контракт приёма — `202 {messageId, mode, position}`.
+    // Старый сервер (не-202) — принимаем как `queue` с известным id.
+    const payload = await response.json().catch(() => null) as Partial<PromptAcceptedResponse> | null
+    return {
+      messageId: payload?.messageId || body.messageId as string,
+      mode: payload?.mode || (options?.mode && options.mode !== 'queue' ? options.mode : 'queue'),
+      position: typeof payload?.position === 'number' ? payload.position : null,
     }
   },
 

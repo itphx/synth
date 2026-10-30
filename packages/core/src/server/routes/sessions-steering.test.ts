@@ -113,8 +113,11 @@ function makeSteerMessage(content: string): Message {
 
 /** Тело ошибки API: `{ error: { code, message } }`. */
 type ErrorBody = { error: { code: string; message: string } };
-/** Тело успешного ответа `mode=steer`: `{ status, stream_id, pending_count }`. */
-type SteeredBody = { status: string; stream_id: string; pending_count: number };
+/**
+ * ADR-118 §3: тело ответа приёма — `{ messageId, mode, position }`.
+ * `position` — `null` для вмешательств (`steer`/`interrupt`).
+ */
+type AcceptedBody = { messageId: string; mode: string; position: number | null };
 
 describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-104)', () => {
   let tmpDir: string;
@@ -127,7 +130,7 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('mode=interrupt при активном ходе → 202 interrupted, сообщение в очереди инъекций', async () => {
+  it('mode=interrupt при активном ходе → 202 interrupt, сообщение в очереди инъекций', async () => {
     const { app, sessionManager, orchestrator } = createTestApp(tmpDir, { running: true });
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
     // Живой стрим хода — `currentStream.streamId` (его прерывает оркестратор).
@@ -148,10 +151,11 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
       body: JSON.stringify({ content: 'прерви и сделай иначе', mode: 'interrupt' }),
     });
     expect(res.status).toBe(202);
-    const body = (await res.json()) as SteeredBody;
-    expect(body.status).toBe('interrupted');
-    expect(body.stream_id).toBeTruthy();
-    expect(body.pending_count).toBe(1);
+    const body = (await res.json()) as AcceptedBody;
+    expect(body.mode).toBe('interrupt');
+    expect(body.messageId).toBeTruthy();
+    // Вмешательство не занимает позицию в обычной очереди.
+    expect(body.position).toBeNull();
 
     const fresh = (await sessionManager.getSession(session.id))!;
     // В обычную очередь сообщение не попало — оно ждёт вплетения в ход.
@@ -161,8 +165,8 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
     // Маркер режима: `steer` + `interrupt` (UI рисует «прерывание хода»).
     expect(fresh.steerInbox![0]!.metadata?.steer).toBe(true);
     expect(fresh.steerInbox![0]!.metadata?.interrupt).toBe(true);
-    // `stream_id` ответа — id стрима вплетаемого сообщения (как при `steer`).
-    expect(fresh.steerInbox![0]!.metadata?.stream_id).toBe(body.stream_id);
+    // id стрима вплетаемого сообщения — серверный (в ответе его нет).
+    expect(fresh.steerInbox![0]!.metadata?.stream_id).toBeTruthy();
 
     // Текущая генерация прервана — ход при этом НЕ завершается.
     expect(orchestrator.interrupt).toHaveBeenCalledWith('stream-live-1');
@@ -178,7 +182,11 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
       body: JSON.stringify({ content: 'обычное сообщение', mode: 'interrupt' }),
       signal: controller.signal,
     });
-    expect(res.status).toBe(200);
+    // ADR-118 §3: контракт приёма — всегда `202 {messageId, mode, position}`.
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as AcceptedBody;
+    expect(body.mode).toBe('queue');
+    expect(body.position).toBe(1);
     controller.abort();
 
     const fresh = (await sessionManager.getSession(session.id))!;
@@ -220,7 +228,10 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
       body: JSON.stringify({ content: 'обычное сообщение' }),
       signal: controller.signal,
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as AcceptedBody;
+    expect(body.mode).toBe('queue');
+    expect(body.position).toBe(1);
     controller.abort();
 
     const fresh = (await sessionManager.getSession(session.id))!;
@@ -240,7 +251,10 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
       body: JSON.stringify({ content: 'вмешательство', mode: 'steer' }),
       signal: controller.signal,
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as AcceptedBody;
+    expect(body.mode).toBe('queue');
+    expect(body.position).toBe(1);
     controller.abort();
 
     const fresh = (await sessionManager.getSession(session.id))!;
@@ -248,7 +262,7 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
     expect(fresh.steerInbox ?? []).toHaveLength(0);
   });
 
-  it('mode=steer при активном ходе → 202 steered, сообщение в очереди инъекций', async () => {
+  it('mode=steer при активном ходе → 202 steer, сообщение в очереди инъекций', async () => {
     const { app, sessionManager } = createTestApp(tmpDir, { running: true });
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
     const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
@@ -257,9 +271,11 @@ describe('POST /api/v2/sessions/:id/prompt — режим отправки (ADR-
       body: JSON.stringify({ content: 'вмешательство', mode: 'steer' }),
     });
     expect(res.status).toBe(202);
-    const body = (await res.json()) as SteeredBody;
-    expect(body.status).toBe('steered');
-    expect(body.pending_count).toBe(1);
+    const body = (await res.json()) as AcceptedBody;
+    expect(body.mode).toBe('steer');
+    expect(body.messageId).toBeTruthy();
+    // Вмешательство не занимает позицию в обычной очереди.
+    expect(body.position).toBeNull();
 
     const fresh = (await sessionManager.getSession(session.id))!;
     // В обычную очередь сообщение не попало — оно ждёт вплетения в ход.

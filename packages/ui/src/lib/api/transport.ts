@@ -1,10 +1,14 @@
-import type { SteerMode } from '@itphx/synth-shared/types'
+// ADR-118 §3: отправка сообщения идёт через HTTP (`POST /sessions/:id/prompt`),
+// поэтому тип `SteerMode` в транспортном слое больше не нужен.
+import { MESSAGE_MODEL_QUERY_PARAM, MESSAGE_MODEL_VERSION } from '@itphx/synth-shared/types'
 
 export interface WSEvent {
   type: string
   session_id?: string
   sessionId?: string
   data?: Record<string, unknown>
+  /** ADR-118 §6: номер события в пределах сессии — основа догона (`since`). */
+  eventSeq?: number
 }
 
 export type TransportKind = 'ws' | 'sse' | 'disconnected'
@@ -20,21 +24,13 @@ export interface TransportClientCallbacks {
 const HEARTBEAT_INTERVAL = 25_000
 const INITIAL_RECONNECT_DELAY = 1_000
 const MAX_RECONNECT_DELAY = 60_000
-/**
- * Ожидание подтверждения отправки. 30 с: ack (`queued`/`message.queued`) идёт
- * тем же упорядоченным WS-каналом, что и поток live-событий (прогресс
- * саб-агентов и т.п.), поэтому при всплеске событий он может прийти заметно
- * позже постановки в очередь. По истечении срока сообщение **не считается
- * потерянным**: отправка возвращает `{confirmed: false}`, а UI сверяет очередь
- * с сервером (`GET /sessions/:id`), а не показывает ошибку.
- */
-const SEND_TIMEOUT = 30_000
 
-/** Итог отправки: подтверждена ли постановка в очередь сервером. */
-export interface SendResult {
-  confirmed: boolean
-  streamId: string
-}
+/**
+ * ADR-118 §3: отправка сообщения **не** ждёт подтверждения по транспорту.
+ * Контракт приёма — `202 {messageId, mode, position}` из
+ * `POST /sessions/:id/prompt`; подтверждение приходит адресным событием
+ * `message.accepted`. Поэтому ack-ожидания и таймаута «Send timeout» здесь нет.
+ */
 
 export class TransportClient {
   private ws: WebSocket | null = null
@@ -45,21 +41,25 @@ export class TransportClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempts = 0
   private intentionalClose = false
-  private counter = 0
   private backendReady = false
-  private pending = new Map<string, {
-    sessionId: string
-    resolve: (confirmed: boolean) => void
-    reject: (e: Error) => void
-    timer: ReturnType<typeof setTimeout>
-  }>()
+  /** ADR-118 §6: номер последнего виденного события — точка догона (`since`). */
+  private since: number | undefined
 
   constructor(callbacks: TransportClientCallbacks) {
     this.callbacks = callbacks
   }
 
-  connect(mode: 'ws' | 'sse'): void {
+  /**
+   * Подключение к транспорту событий.
+   *
+   * ADR-118 §8: клиент **обязан** заявить свою модель сообщений
+   * (`messageModel=2`) — иначе сервер откажет в соединении (fail-closed).
+   * ADR-118 §6: `since` — номер последнего применённого события: сервер
+   * сначала отдаёт журнал строго после него (догон без разрыва и дублей).
+   */
+  connect(mode: 'ws' | 'sse', opts?: { since?: number }): void {
     this.intentionalClose = false
+    this.since = typeof opts?.since === 'number' ? opts.since : undefined
     if (mode === 'sse') {
       this.connectSSE()
     } else {
@@ -70,7 +70,6 @@ export class TransportClient {
   disconnect(): void {
     this.intentionalClose = true
     this.cleanupTransport()
-    this.rejectPending(new Error('Disconnected'))
     this.transport = 'disconnected'
     this.callbacks.onDisconnect?.('manual')
   }
@@ -84,57 +83,10 @@ export class TransportClient {
   }
 
   /**
-   * Отправка сообщения по WS-кадру `send_message`.
-   *
-   * `streamId` можно передать заранее (его генерирует вызывающий слой): по нему
-   * клиент сопоставляет оптимистичную строку очереди с серверным `message_id`
-   * (сервер использует `stream_id` кадра как id сообщения).
-   *
-   * Ack приходит кадром `queued` (сразу при приёме) либо событием
-   * `message.queued` из шины (тот же `stream_id`). Таймаут — не ошибка:
-   * возвращаем `{confirmed: false}`, сообщение остаётся в очереди сервера и
-   * сверяется с ним отдельно.
+   * ADR-118 §3: отправка сообщения по WS-кадру `send_message` **удалена** —
+   * приём идёт через `POST /sessions/:id/prompt` (`202 {messageId, mode,
+   * position}`), без SSE-ожидания и без таймаута подтверждения.
    */
-  async sendMessage(
-    sessionId: string,
-    text: string,
-    agentRole?: string,
-    provider?: string,
-    model?: string,
-    mode?: SteerMode,
-    streamId?: string,
-  ): Promise<SendResult> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket not connected')
-    }
-    const id = streamId || `stream-${++this.counter}-${Date.now()}`
-    return new Promise<SendResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        resolve({ confirmed: false, streamId: id })
-      }, SEND_TIMEOUT)
-      this.pending.set(id, {
-        sessionId,
-        resolve: (confirmed) => resolve({ confirmed, streamId: id }),
-        reject,
-        timer,
-      })
-      this.ws!.send(JSON.stringify({
-        type: 'send_message',
-        session_id: sessionId,
-        content: text,
-        stream_id: id,
-        agent_role: agentRole,
-        provider,
-        model,
-        // ADR-104: режим отправки (`queue` по умолчанию, `steer` — вмешательство
-        // в активный ход, `interrupt` — прерывание генерации с продолжением
-        // хода). Не задан — сервер трактует как `queue`.
-        ...(mode && mode !== 'queue' ? { mode } : {}),
-      }))
-    })
-  }
-
   cancel(sessionId: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
     this.ws.send(JSON.stringify({ type: 'cancel', session_id: sessionId }))
@@ -171,12 +123,25 @@ export class TransportClient {
     }))
   }
 
+  /**
+   * Query-параметры подключения: версия модели сообщений (ADR-118 §8,
+   * fail-closed) и точка догона (ADR-118 §6).
+   */
+  private transportQuery(): string {
+    const params = new URLSearchParams()
+    params.set(MESSAGE_MODEL_QUERY_PARAM, String(MESSAGE_MODEL_VERSION))
+    if (typeof this.since === 'number' && this.since > 0) {
+      params.set('since', String(this.since))
+    }
+    return `?${params.toString()}`
+  }
+
   private connectWS(): void {
     this.cleanupTransport()
     this.transport = 'ws'
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${location.host}/ws/events`
+    const url = `${protocol}//${location.host}/ws/events${this.transportQuery()}`
     console.debug('[WS] Connecting:', url)
 
     try {
@@ -195,7 +160,6 @@ export class TransportClient {
       this.ws.onclose = (e) => {
         console.debug('[WS] Closed: code=', e.code, 'reason=', e.reason, 'wasClean=', e.wasClean)
         this.stopHeartbeat()
-        this.rejectPending(new Error('WebSocket closed'))
         if (!this.intentionalClose) {
           this.callbacks.onDisconnect?.(`WS closed: ${e.code}`)
           this.scheduleReconnect()
@@ -217,41 +181,10 @@ export class TransportClient {
             return
           }
 
-          // Ack отправки: кадр `queued` (сервер принял `send_message`) или
-          // событие `message.queued` из шины (тот же `stream_id` — сервер
-          // публикует его после фактической постановки в очередь).
-          if (
-            data.type === 'queued'
-            || data.type === 'message_queued'
-            || data.type === 'message.queued'
-          ) {
-            const streamId = (data.stream_id as string)
-              || (data.data?.stream_id as string)
-              || ''
-            if (streamId) {
-              const pending = this.pending.get(streamId)
-              if (pending) {
-                clearTimeout(pending.timer)
-                pending.resolve(true)
-                this.pending.delete(streamId)
-              }
-            }
-          }
-
-          // Server-side отказ (нет сессии, нет прав, лимит вмешательств) —
-          // это настоящая ошибка отправки, а не «ещё не подтверждено»:
-          // снимаем ожидание ближайшего кадра этой сессии.
-          if (data.type === 'error') {
-            const sid = (data.session_id as string) || (data.sessionId as string)
-            const message = (data.data?.error as string) || (data.error as string) || 'Send failed'
-            for (const [id, pending] of this.pending) {
-              if (sid && pending.sessionId !== sid) continue
-              clearTimeout(pending.timer)
-              this.pending.delete(id)
-              pending.reject(new Error(message))
-              break
-            }
-          }
+          // ADR-118 §3: ack-кадра `queued` больше нет — подтверждение приёма
+          // приходит адресным событием `message.accepted` (его разбирает
+          // диспетчер стора). Серверный отказ (`error`) — обычное событие
+          // транспорта, его обработает диспетчер.
 
           this.callbacks.onEvent(data as WSEvent)
         } catch (e) {
@@ -267,7 +200,7 @@ export class TransportClient {
     this.cleanupTransport()
     this.transport = 'sse'
 
-    const url = '/api/v2/events'
+    const url = `/api/v2/events${this.transportQuery()}`
     console.debug('[SSE] Connecting:', url)
 
     try {
@@ -331,14 +264,6 @@ export class TransportClient {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
     }
-  }
-
-  private rejectPending(error: Error): void {
-    for (const [, pending] of this.pending) {
-      clearTimeout(pending.timer)
-      pending.reject(error)
-    }
-    this.pending.clear()
   }
 
   private cleanupTransport(): void {

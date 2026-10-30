@@ -2,11 +2,16 @@
  * ADR-095 (шаг 6a): собственные тесты локальных ответов `/`-команд (ADR-046 §7).
  *
  * Контракты:
- *  - `publishLocalCompletion` завершает стрим теми же событиями, что обычный
- *    ответ (`stream.chunk` + `stream.done`) — иначе SSE-цикл промпта не закрывается;
+ *  - `publishLocalCompletion` завершает локальный ответ как **ход из одного
+ *    шага** (`turn.started` → `step.started` → `part.delta` → `step.finished` →
+ *    `turn.finished`) — иначе клиент не увидит ни хода, ни его содержимого;
  *  - `finishLocalCommand` помечает user-команду и ответ эфемерными, сохраняет
  *    user-сообщение ДО `addMessage` (иначе `updateSession` перезапишет сессию),
  *    публикует upsert user-команды и отдаёт реальные `message_index`/`message_id`.
+ *
+ * ADR-118 §4: `stream.chunk`/`stream.done` удалены без dual-emit; расход шага
+ * едет в `step.finished.usage`, а `duration_ms`/`metadata`/`message_index` из
+ * контракта события убраны.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -40,33 +45,43 @@ function makeUserMessage(content = '/help'): Message {
 }
 
 describe('publishLocalCompletion', () => {
-  it('публикует stream.chunk (is_final) и stream.done с дефолтами command', () => {
+  it('публикует ход из одного шага: turn.started → step.started → part.delta → step.finished → turn.finished', () => {
     const published: Published[] = [];
     publishLocalCompletion((event, data) => published.push({ event, data }), 's1', 'ответ');
 
-    expect(published.map((p) => p.event)).toEqual(['stream.chunk', 'stream.done']);
-    expect(published[0]!.data).toEqual({
-      stream_id: 's1',
-      // T14: локальный ответ — один чанк.
-      seq: 1,
-      t_ms: 0,
-      content: 'ответ',
-      is_final: true,
+    expect(published.map((p) => p.event)).toEqual([
+      'turn.started',
+      'step.started',
+      'part.delta',
+      'step.finished',
+      'turn.finished',
+    ]);
+    const turnId = 'turn_s1';
+    const messageId = 'msg_s1';
+    expect(published[0]!.data).toEqual({ turnId, messageId });
+    expect(published[1]!.data).toEqual({ turnId, stepIndex: 0, messageId });
+    expect(published[2]!.data).toEqual({
+      messageId,
+      partId: 'msg:text:0',
+      field: 'text',
+      delta: 'ответ',
     });
-    expect(published[1]!.data).toMatchObject({
-      stream_id: 's1',
-      content: 'ответ',
-      pending_count: 0,
-      model: 'command',
-      provider: 'command',
+    expect(published[3]!.data).toEqual({
+      turnId,
+      stepIndex: 0,
+      messageId,
+      status: 'completed',
     });
-    expect(published[1]!.data).not.toHaveProperty('message_index');
-    expect(published[1]!.data).not.toHaveProperty('message_id');
-    expect(published[1]!.data).not.toHaveProperty('usage');
-    expect(published[1]!.data).not.toHaveProperty('duration_ms');
+    expect(published[4]!.data).toEqual({ turnId, status: 'completed' });
+    // ADR-118 §4: прежние поля `stream.done` (`pending_count`/`message_index`/
+    // `message_id`/`usage`/`duration_ms`) в контракте события больше нет.
+    expect(published[3]!.data).not.toHaveProperty('usage');
+    expect(published[3]!.data).not.toHaveProperty('duration_ms');
+    expect(published[3]!.data).not.toHaveProperty('message_index');
+    expect(published[3]!.data).not.toHaveProperty('message_id');
   });
 
-  it('model/provider/usage/duration/metadata и index/id прокидываются, когда заданы', () => {
+  it('model/provider/usage прокидываются в step.finished, messageId шага — заданный', () => {
     const published: Published[] = [];
     const usage: TokenUsage = { inputTokens: 1, outputTokens: 2, totalTokens: 3 };
     publishLocalCompletion(
@@ -84,16 +99,20 @@ describe('publishLocalCompletion', () => {
       },
     );
 
-    expect(published[0]!.data).toMatchObject({ model: 'micro:small_talk', provider: 'micro' });
-    expect(published[1]!.data).toMatchObject({
+    const finished = published.find((p) => p.event === 'step.finished')!;
+    expect(finished.data).toMatchObject({
+      turnId: 'turn_s1',
+      stepIndex: 0,
+      messageId: 'msg-1',
+      status: 'completed',
       model: 'micro:small_talk',
       provider: 'micro',
       usage,
-      duration_ms: 12,
-      metadata: { command: true },
-      message_index: 4,
-      message_id: 'msg-1',
     });
+    // `duration_ms`/`metadata`/`message_index` в ADR-118-контракт шага не входят.
+    expect(finished.data).not.toHaveProperty('duration_ms');
+    expect(finished.data).not.toHaveProperty('metadata');
+    expect(finished.data).not.toHaveProperty('message_index');
   });
 });
 

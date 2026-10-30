@@ -8,8 +8,8 @@ import {
   MAX_STEER_INJECTIONS_PER_TURN,
   STEERING_ERROR_CODES,
 } from '@itphx/synth-shared';
-import type { Message, Session } from '@itphx/synth-shared';
-import { enqueueSteerMessage } from '../../queue/processor.js';
+import type { Message, QueueStatePayload, Session } from '@itphx/synth-shared';
+import { enqueueSteerMessage, publishQueueState } from '../../queue/processor.js';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
@@ -150,10 +150,14 @@ export function createQueueRoutes(
         throw err;
       }
     }
+    let counts: QueueStatePayload = { pendingCount: 0, steerCount: 0 };
     await sessionManager.safeUpdate(sessionId, async (session) => {
       session.pendingMessages = [];
+      counts = { pendingCount: 0, steerCount: session.steerInbox?.length ?? 0 };
     });
     queueManager.stop(sessionId);
+    // ADR-118 §4: очередь сброшена — состояние очереди (счётчики, без текста).
+    publishQueueState(eventBus, sessionId, counts);
     return c.json({ cleared: true });
   });
 
@@ -210,6 +214,8 @@ export function createQueueRoutes(
     let remainingCount = 0;
     /** Найден ли элемент по `id` внутри `safeUpdate` (гонка: исчез между чтениями). */
     let idRemoved = false;
+    /** ADR-118 §4: счётчики очереди после извлечения сообщений. */
+    let counts: QueueStatePayload = { pendingCount: 0, steerCount: 0 };
 
     await sessionManager.safeUpdate(sessionId, async (s) => {
       let removedStreamIds: string[] = [];
@@ -256,6 +262,10 @@ export function createQueueRoutes(
         s.status.blockedAt = undefined;
         s.currentStream = undefined;
       }
+      counts = {
+        pendingCount: s.pendingMessages.length,
+        steerCount: s.steerInbox?.length ?? 0,
+      };
     });
 
     // Элемент исчез между чтением и записью (параллельный `/return`/`/steer`) —
@@ -267,6 +277,9 @@ export function createQueueRoutes(
     if (remainingCount === 0 && !activeStreamId) {
       queueManager.stop(sessionId);
     }
+
+    // ADR-118 §4: сообщения извлечены из очереди — состояние очереди.
+    publishQueueState(eventBus, sessionId, counts);
 
     return c.json({ texts });
   });
@@ -349,6 +362,10 @@ export function createQueueRoutes(
       }, 409);
     }
 
+    // ADR-118 §4: отправитель (`userId` запроса) — адресат адресного события
+    // `message.accepted`.
+    const senderUserId = (await resolveUserId(c)) || '';
+
     // Сначала ставим в очередь инъекций — при отказе (лимит) очередь и история
     // остаются нетронутыми (сообщение не теряется).
     const steered = await enqueueSteerMessage(
@@ -358,6 +375,11 @@ export function createQueueRoutes(
       message,
       MAX_STEER_INJECTIONS_PER_TURN,
       opts?.obfuscate,
+      {
+        // ADR-118 §3/§4: подтверждение приёма — адресное `message.accepted`.
+        messageId: message.id,
+        ...(senderUserId ? { recipient: senderUserId } : {}),
+      },
     );
     if (!steered.accepted) {
       return c.json({
@@ -386,6 +408,12 @@ export function createQueueRoutes(
     // `pending_count` в семействе queue-роутов — длина `pendingMessages`
     // (как у `/clear`/`/resume`), а не размер steer-очереди.
     const updated = await sessionManager.getSession(sessionId);
+    // ADR-118 §4: сообщение перешло из очереди в очередь вмешательств —
+    // состояние очереди (счётчики, без текста и автора).
+    publishQueueState(eventBus, sessionId, {
+      pendingCount: updated?.pendingMessages.length ?? 0,
+      steerCount: updated?.steerInbox?.length ?? 0,
+    });
     return c.json({ steered: true, pending_count: updated?.pendingMessages.length ?? 0 }, 202);
   });
 
@@ -417,32 +445,23 @@ export function createQueueRoutes(
     // Используем существующий stream_id первого pending-сообщения, НЕ генерируем
     // новый — иначе Phase 1 нового процессора повторно запушит сообщение в историю.
     // Если stream_id отсутствует — генерируем один раз и сохраняем.
-    const firstMsg = session.pendingMessages[0];
-    let streamId: string | undefined;
-    let alreadyInHistory = false;
-    if (firstMsg) {
+    if (session.pendingMessages[0]) {
       await sessionManager.safeUpdate(sessionId, async (s) => {
         const p = s.pendingMessages[0];
         if (!p) return;
         if (!p.metadata) p.metadata = {};
         if (!p.metadata.stream_id) p.metadata.stream_id = generateStreamId();
-        streamId = p.metadata.stream_id as string;
-        alreadyInHistory = s.messages.some(
-          (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
-        );
       });
-
-      if (streamId && !alreadyInHistory) {
-        eventBus.publish(sessionId, 'message.queued', {
-          stream_id: streamId,
-          message_id: firstMsg.id,
-          pending_count: session.pendingMessages.length,
-          message: firstMsg.content,
-          agent_role: firstMsg.agentRole,
-          author: firstMsg.author,
-        });
-      }
     }
+
+    // ADR-118 §4: очередь снова обрабатывается — состояние очереди (счётчики,
+    // без текста и автора). Прежний `message.queued` удалён без dual-emit:
+    // сообщение не принято заново (его приём уже подтверждён), а о его
+    // материализации сообщает `message.delivered` из процессора очереди.
+    publishQueueState(eventBus, sessionId, {
+      pendingCount: session.pendingMessages.length,
+      steerCount: session.steerInbox?.length ?? 0,
+    });
 
     queueManager.createProcessor(
       sessionId, sessionManager, eventBus, processMessage as never,
