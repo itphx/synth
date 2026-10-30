@@ -215,6 +215,125 @@ describe('sessionMessagesToLlm — фильтрация и инвариант to
   });
 });
 
+describe('sessionMessagesToLlm — thinking только своей пары provider+model (ADR-117)', () => {
+  const ownPair = { provider: 'anthropic', model: 'claude-sonnet-4-5' };
+
+  function assistantWithThinking(extra: Partial<Message> = {}): Message {
+    return msg({
+      role: MessageRole.ASSISTANT,
+      content: 'ответ',
+      agentRole: 'fixer',
+      reasoning: 'мысль',
+      reasoningSignature: 'sig-legacy',
+      reasoningRedacted: ['opaque-legacy'],
+      parts: [
+        makeTextPart('ответ'),
+        { id: 'r1', type: 'reasoning', data: 'блок A', metadata: { signature: 'sig-a' } },
+      ],
+      ...extra,
+    });
+  }
+
+  const ownPairMessage = () => assistantWithThinking({ ...ownPair });
+
+  it('сообщение той же пары — reasoning и блоки прокидываются', () => {
+    const llm = sessionMessagesToLlm([ownPairMessage()], 'fixer', 'user', ownPair);
+
+    expect(llm[0]!.reasoning).toBe('мысль');
+    expect(llm[0]!.reasoningSignature).toBe('sig-legacy');
+    expect(llm[0]!.reasoningRedacted).toEqual(['opaque-legacy']);
+    expect(llm[0]!.reasoningBlocks).toEqual([{ text: 'блок A', signature: 'sig-a' }]);
+  });
+
+  it('смена модели у того же агента — thinking не прокидывается, контент остаётся', () => {
+    const llm = sessionMessagesToLlm([ownPairMessage()], 'fixer', 'user', {
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+    });
+
+    expect(llm[0]!.role).toBe(MessageRole.ASSISTANT);
+    expect(llm[0]!.content).toBe('ответ');
+    expect(llm[0]!.reasoning).toBeUndefined();
+    expect(llm[0]!.reasoningBlocks).toBeUndefined();
+    expect(llm[0]!.reasoningSignature).toBeUndefined();
+    expect(llm[0]!.reasoningRedacted).toBeUndefined();
+  });
+
+  it('смена только провайдера или только модели — thinking не прокидывается', () => {
+    const otherProvider = sessionMessagesToLlm([ownPairMessage()], 'fixer', 'user', {
+      provider: 'openrouter',
+      model: ownPair.model,
+    });
+    const otherModel = sessionMessagesToLlm([ownPairMessage()], 'fixer', 'user', {
+      provider: ownPair.provider,
+      model: 'claude-haiku-4-5',
+    });
+
+    expect(otherProvider[0]!.reasoningBlocks).toBeUndefined();
+    expect(otherModel[0]!.reasoningBlocks).toBeUndefined();
+  });
+
+  it('legacy-сообщение без provider/model — блоки сохраняются (совместимость round-trip)', () => {
+    const legacy = assistantWithThinking();
+    const llm = sessionMessagesToLlm([legacy], 'fixer', 'user', {
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+    });
+
+    expect(llm[0]!.reasoning).toBe('мысль');
+    expect(llm[0]!.reasoningBlocks).toEqual([{ text: 'блок A', signature: 'sig-a' }]);
+  });
+
+  it('неполная пара сообщения (известен только provider) — блоки сохраняются', () => {
+    const llm = sessionMessagesToLlm(
+      [assistantWithThinking({ provider: 'anthropic' })],
+      'fixer',
+      'user',
+      { provider: 'deepseek', model: 'deepseek-flash' },
+    );
+
+    expect(llm[0]!.reasoningBlocks).toBeDefined();
+  });
+
+  it('текущая пара не задана — прежнее поведение (блоки есть)', () => {
+    const llm = sessionMessagesToLlm([ownPairMessage()], 'fixer', 'user');
+
+    expect(llm[0]!.reasoning).toBe('мысль');
+    expect(llm[0]!.reasoningBlocks).toBeDefined();
+  });
+
+  it('чужой агент при совпадающей паре — thinking всё равно не прокидывается', () => {
+    const foreign = assistantWithThinking({ agentRole: 'researcher', ...ownPair });
+    const llm = sessionMessagesToLlm([foreign], 'fixer', 'user', ownPair);
+
+    expect(llm[0]!.reasoning).toBeUndefined();
+    expect(llm[0]!.reasoningBlocks).toBeUndefined();
+    expect(llm[0]!.reasoningSignature).toBeUndefined();
+    expect(llm[0]!.reasoningRedacted).toBeUndefined();
+  });
+
+  it('фильтр пары не ломает tool-chain: assistant(toolCalls) чужой модели остаётся парным', () => {
+    const assistant = assistantWithTool('', 'call_1', 'fixer');
+    assistant.provider = 'anthropic';
+    assistant.model = 'claude-sonnet-4-5';
+    const tool = msg({
+      role: MessageRole.TOOL,
+      content: 'результат',
+      toolCallId: 'call_1',
+      agentRole: 'fixer',
+    });
+
+    const llm = sessionMessagesToLlm([assistant, tool], 'fixer', 'user', {
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+    });
+
+    expect(llm[0]).toMatchObject({ role: MessageRole.ASSISTANT });
+    expect(llm[0]!.toolUse).toHaveLength(1);
+    expect(llm[1]).toMatchObject({ role: MessageRole.TOOL, toolCallId: 'call_1' });
+  });
+});
+
 describe('buildPromptHistoryInfo — read-only слой истории', () => {
   it('messages.count совпадает с реальной отправкой, disabled/hidden/info — в excluded', () => {
     const messages = [

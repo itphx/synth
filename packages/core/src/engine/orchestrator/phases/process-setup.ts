@@ -654,7 +654,12 @@ export async function runProcessSetup(
 
   // 3. Convert messages for LLM (без summary — они уже в system prompt)
   const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
-  let baseLlmMessages = sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
+  // ADR-117: пара текущего запроса — thinking чужих provider/model в историю не
+  // идёт (модель у агента могли сменить в этой же сессии).
+  let baseLlmMessages = sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author, {
+    provider: providerName,
+    model: provider.model || modelName || session.settings.model || '',
+  });
 
   // ADR-115: вложения — гидратация ссылок blob → base64 и фильтр модальностей
   // модели непосредственно перед отправкой. Ошибка чтения отдельного объекта

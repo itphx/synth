@@ -112,7 +112,7 @@ import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream
 import { StreamTiming } from './orchestrator/stream-stats.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type ProviderOverrides, type RouteProviderDeps } from './orchestrator/routing.js';
-import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn } from './orchestrator/prompt-info.js';
+import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn, type CurrentModelPair } from './orchestrator/prompt-info.js';
 import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
 import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
 import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
@@ -2443,7 +2443,10 @@ export class ChatOrchestrator {
           }
         }
 
-        const llm = sessionMessagesToLlmFn([message], args.agentRole, args.author);
+        const llm = sessionMessagesToLlmFn([message], args.agentRole, args.author, {
+          provider: args.providerName,
+          model: args.modelId,
+        });
         let hydrated = llm;
         if (hydrate) {
           try {
@@ -5693,8 +5696,9 @@ export class ChatOrchestrator {
     messages: Message[],
     currentAgentRole?: string,
     currentAuthor?: string,
+    currentPair?: CurrentModelPair,
   ): LLMMessage[] {
-    return sessionMessagesToLlmFn(messages, currentAgentRole, currentAuthor);
+    return sessionMessagesToLlmFn(messages, currentAgentRole, currentAuthor, currentPair);
   }
 
   /**

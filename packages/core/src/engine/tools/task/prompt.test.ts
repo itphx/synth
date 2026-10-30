@@ -284,3 +284,70 @@ describe('messageToLLMMessage', () => {
     expect(llm.reasoningBlocks).toEqual([{ text: 'блок', signature: 'sig-a' }]);
   });
 });
+
+describe('messageToLLMMessage — thinking только своей пары provider+model (ADR-117)', () => {
+  const ownPair = { provider: 'anthropic', model: 'claude-sonnet-4-5' };
+
+  function msg(extra: Partial<Message> = {}): Message {
+    return {
+      id: 'msg-1',
+      role: MessageRole.ASSISTANT,
+      seq: 0,
+      origin: 'local',
+      parts: [
+        { id: 'p1', type: 'text', data: 'ответ' },
+        { id: 'p2', type: 'reasoning', data: 'блок A', metadata: { signature: 'sig-a' } },
+      ],
+      content: 'ответ',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...extra,
+    } as Message;
+  }
+
+  it('совпадение пары — блоки прокидываются', () => {
+    const llm = messageToLLMMessage(msg(ownPair), undefined, ownPair);
+
+    expect(llm.reasoningBlocks).toEqual([{ text: 'блок A', signature: 'sig-a' }]);
+  });
+
+  it('смена модели — блоки не прокидываются, контент и toolUse не трогаются', () => {
+    const toolCalls = [{ id: 'c1', function: { name: 'read_file', arguments: '{}' } }];
+    const llm = messageToLLMMessage(
+      msg({ ...ownPair, toolCalls }),
+      undefined,
+      { provider: 'deepseek', model: 'deepseek-flash' },
+    );
+
+    expect(llm.reasoningBlocks).toBeUndefined();
+    expect(llm.content).toBe('ответ');
+    expect(llm.toolUse).toBe(toolCalls);
+  });
+
+  it('legacy-сообщение без provider/model — блоки сохраняются', () => {
+    const llm = messageToLLMMessage(msg(), undefined, {
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+    });
+
+    expect(llm.reasoningBlocks).toEqual([{ text: 'блок A', signature: 'sig-a' }]);
+  });
+
+  it('пара не передана — прежнее поведение (блоки есть)', () => {
+    const llm = messageToLLMMessage(msg(ownPair), 'fixer');
+
+    expect(llm.reasoningBlocks).toEqual([{ text: 'блок A', signature: 'sig-a' }]);
+  });
+
+  it('чужой агент при совпадающей паре — блоки не прокидываются', () => {
+    const llm = messageToLLMMessage(
+      msg({ ...ownPair, agentRole: 'leader' }),
+      'fixer',
+      ownPair,
+    );
+
+    expect(llm.reasoningBlocks).toBeUndefined();
+  });
+});

@@ -114,8 +114,12 @@ export async function appendResumeMarker(
  * Скрытые и отключённые сообщения в контекст не идут.
  */
 export function resumeInitialMessages(child: Session): LLMMessage[] {
+  // Пара прогона ребёнка — из настроек дочерней сессии (`prepareChildSession`
+  // пишет туда фактическую пару).
+  const childPair = { provider: child.settings.provider, model: child.settings.model };
   return child.messages
     .filter((m) => !m.hidden && !m.disabled)
-    // Роль ребёнка: блоки thinking чужих агентов не прокидываются (ADR-117).
-    .map((message) => messageToLLMMessage(message, child.settings.agentRole));
+    // Роль ребёнка: блоки thinking чужих агентов и сообщений, порождённых
+    // другой парой provider+model, не прокидываются (ADR-117).
+    .map((message) => messageToLLMMessage(message, child.settings.agentRole, childPair));
 }

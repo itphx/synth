@@ -33,6 +33,37 @@ function normalizeRoleForOwnership(role: string | undefined): string | undefined
 }
 
 /**
+ * Пара `provider`+`model` текущего LLM-запроса (ADR-117).
+ *
+ * Передаётся в маппинг истории, чтобы не прокидывать thinking-блоки чужого
+ * протокола: подпись `thinking` валидна только для той модели, которая её
+ * выдала (строгий Anthropic на чужую подпись отвечает `400`, остальные просто
+ * платят лишними токенами).
+ */
+export interface CurrentModelPair {
+  provider?: string;
+  model?: string;
+}
+
+/**
+ * Reasoning сообщения принадлежит другой модели, чем текущий запрос.
+ *
+ * Фильтр срабатывает только когда **обе** половины пары известны и у сообщения
+ * (`provider`+`model`), и у текущего запроса: иначе судить не о чем —
+ * legacy-сообщения (без пары) и вызовы без пары сохраняют прежнее поведение
+ * (round-trip старых сессий не ломается).
+ */
+function isReasoningForeignModel(message: Message, current?: CurrentModelPair): boolean {
+  const msgProvider = message.provider;
+  const msgModel = message.model;
+  if (!msgProvider || !msgModel) return false;
+  const currentProvider = current?.provider;
+  const currentModel = current?.model;
+  if (!currentProvider || !currentModel) return false;
+  return msgProvider !== currentProvider || msgModel !== currentModel;
+}
+
+/**
  * Маппинг истории сессии в LLM-сообщения (ADR-070 §2.8, ADR-041, tool-chain).
  *
  * Defensive pairing (фикс «осиротевших» tool): id вызовов, для которых уже
@@ -40,11 +71,16 @@ function normalizeRoleForOwnership(role: string | undefined): string | undefined
  * вызова в этой же выдаче; всё остальное (disabled/hidden assistant, или
  * результат без вызова) уходит user-текстом — `tool` без `tool_calls`
  * ломает OpenAI-совместимые API и Anthropic.
+ *
+ * `currentPair` — пара `provider`+`model` текущего запроса (ADR-117): thinking
+ * сообщения, порождённого другой парой (у агента сменили модель), не
+ * прокидывается — остальной контент и tool-chain не меняются.
  */
 export function sessionMessagesToLlm(
   messages: Message[],
   currentAgentRole?: string,
   currentAuthor?: string,
+  currentPair?: CurrentModelPair,
 ): LLMMessage[] {
   const result: LLMMessage[] = [];
 
@@ -131,6 +167,10 @@ export function sessionMessagesToLlm(
       content = withAttribution(msg);
     }
 
+    // «Своё» **и** порождено той же парой provider+model, что текущий запрос —
+    // только тогда thinking возвращается модели (ADR-117).
+    const reasoningAllowed = isOwnAssistant && !isReasoningForeignModel(msg, currentPair);
+
     result.push({
       id: '',
       role: llmRole,
@@ -141,17 +181,19 @@ export function sessionMessagesToLlm(
       branchId: '',
       toolUse,
       toolCallId: isPairedTool ? msg.toolCallId : undefined,
-      // Reasoning чужого агента не прокидываем; у tool-сообщений его нет.
-      reasoning: isOwnAssistant ? msg.reasoning : undefined,
+      // ADR-117: reasoning прокидывается только «своему» assistant-сообщению
+      // **той же** пары provider+model, что у текущего запроса (смена модели у
+      // агента делает подписи thinking чужими протоколу).
+      reasoning: reasoningAllowed ? msg.reasoning : undefined,
       // Anthropic: блоки thinking со своими подписями — восстанавливаются из
       // частей сообщения (мульти-блочный ответ), fallback — legacy-поля
       // `reasoning`+`reasoningSignature`. Без них tool-loop отвергается API.
-      reasoningBlocks: isOwnAssistant ? reasoningBlocksOfMessage(msg) : undefined,
+      reasoningBlocks: reasoningAllowed ? reasoningBlocksOfMessage(msg) : undefined,
       // Anthropic: подпись thinking-блока и opaque-данные `redacted_thinking`
       // персистятся вместе с сообщением — без них tool-loop отвергается API
       // («thinking не возвращён в историю»). Только «свои» assistant-сообщения.
-      reasoningSignature: isOwnAssistant ? msg.reasoningSignature : undefined,
-      reasoningRedacted: isOwnAssistant ? msg.reasoningRedacted : undefined,
+      reasoningSignature: reasoningAllowed ? msg.reasoningSignature : undefined,
+      reasoningRedacted: reasoningAllowed ? msg.reasoningRedacted : undefined,
       agentRole: msg.agentRole,
     });
   }

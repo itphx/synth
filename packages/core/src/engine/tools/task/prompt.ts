@@ -99,7 +99,11 @@ export function buildSubagentUnavailableToolsSection(
   return renderUnavailableTools(unavailable, language);
 }
 
-export function messageToLLMMessage(msg: Message, currentAgentRole?: string): LLMMessage {
+export function messageToLLMMessage(
+  msg: Message,
+  currentAgentRole?: string,
+  currentPair?: { provider?: string; model?: string },
+): LLMMessage {
   const roleMap: Record<string, LLMMessage['role']> = {
     [MessageRole.USER]: 'user',
     [MessageRole.ASSISTANT]: 'assistant',
@@ -131,11 +135,35 @@ export function messageToLLMMessage(msg: Message, currentAgentRole?: string): LL
     // Чужой агент — как в `_sessionMessagesToLlm`: его размышления не
     // прокидываются (при `context_mode: inherit` история родителя попадает в
     // дочерний прогон, а модель у ребёнка может быть другая — подпись чужого
-    // провайдера/модели API не примет).
+    // провайдера/модели API не примет). По той же причине сравнимается пара
+    // `provider`+`model`: если сообщение порождено другой моделью, чем прогон
+    // ребёнка (`currentPair`), thinking не возвращается.
     reasoningBlocks: isOwnAgentMessage(msg.agentRole, currentAgentRole)
+      && !isForeignModelMessage(msg, currentPair)
       ? toLlmReasoningBlocks(reasoningBlocksOfMessage(msg))
       : undefined,
   };
+}
+
+/**
+ * Сообщение порождено другой парой `provider`+`model`, чем текущий прогон
+ * (ADR-117).
+ *
+ * Фильтр срабатывает только когда **обе** половины известны и у сообщения, и у
+ * прогона: legacy-сообщения (без пары) и вызовы без пары сохраняют прежнее
+ * поведение — round-trip старых сессий не ломается.
+ */
+function isForeignModelMessage(
+  msg: Message,
+  currentPair?: { provider?: string; model?: string },
+): boolean {
+  const msgProvider = msg.provider;
+  const msgModel = msg.model;
+  if (!msgProvider || !msgModel) return false;
+  const currentProvider = currentPair?.provider;
+  const currentModel = currentPair?.model;
+  if (!currentProvider || !currentModel) return false;
+  return msgProvider !== currentProvider || msgModel !== currentModel;
 }
 
 /**

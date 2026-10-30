@@ -312,12 +312,18 @@ export const taskTool: ToolDefinition = {
     const messages: LLMMessage[] = [];
 
     if ((contextMode === 'inherit' || contextMode === 'last_n') && childMessages.length > 0) {
+      // Пара прогона ребёнка — фактический провайдер/модель саб-агента.
+      const childPair = {
+        provider: resolution.providerName,
+        model: resolution.provider?.model || resolution.modelName,
+      };
       for (const msg of childMessages) {
         if (msg.hidden || msg.disabled) continue;
         // Роль ребёнка: при `inherit`/`last_n` в историю попадают реплики
         // родителя (другой агент) — его thinking-блоки не прокидываются
-        // (ADR-117, как в `resumeInitialMessages`).
-        messages.push(messageToLLMMessage(msg, agentDef.id));
+        // (ADR-117, как в `resumeInitialMessages`); блоки сообщений, порождённых
+        // другой парой provider+model, — тоже.
+        messages.push(messageToLLMMessage(msg, agentDef.id, childPair));
       }
     }
 
