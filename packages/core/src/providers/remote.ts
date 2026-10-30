@@ -9,7 +9,8 @@
 //   3. this.apiKey как последний fallback.
 // Если токена нет — ProviderError (оркестратор не ретраит бесконечно).
 
-import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, ReasoningLevel, TokenUsage } from '@itphx/synth-shared';
+import { effortForReasoningLevel } from '@itphx/synth-shared';
 import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken, type ChatOptions } from './base.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
 import { info } from '../logger.js';
@@ -36,6 +37,13 @@ export interface RemoteProviderOptions {
    * серверных провайдеров называются их настоящими именами).
    */
   provider?: string;
+  /**
+   * ADR-117: уровень размышлений, с которым создан провайдер (из сессии при
+   * создании в пуле). Используется как fallback для `reasoning_effort`, когда
+   * вызов не передал явный `ChatOptions.effort` (иначе поле терялось бы у
+   * путей, которые опции не собирают).
+   */
+  reasoningLevel?: ReasoningLevel;
 }
 
 /** Путь LLM Proxy на backend. */
@@ -82,6 +90,7 @@ export class RemoteProvider extends BaseProvider {
       maxTokens: opts.maxTokens,
       name: opts.name ?? 'synth-remote',
       type: opts.type ?? 'remote',
+      reasoningLevel: opts.reasoningLevel,
     });
     this._getToken = opts.getToken;
     this._providerName = opts.provider ?? opts.name;
@@ -412,6 +421,14 @@ export class RemoteProvider extends BaseProvider {
       if (options?.toolChoice) body.tool_choice = options.toolChoice;
     }
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    // ADR-117: тир усилия в OpenAI-совместимом поле прокси (`reasoning_effort`).
+    // Приоритет: явный `ChatOptions.effort` → tier из `reasoningLevel`; нет
+    // значения — поля в теле нет (старый сервер поле просто не знает: схема
+    // запроса не strict, неизвестный ключ отбрасывается — деградация аддитивная).
+    // Guard `compatibility.supportsEffortUpdates` применяет удалённая сторона:
+    // у неё есть каталог провайдера/модели, а решение всё равно за ней.
+    const effort = options?.effort ?? effortForReasoningLevel(this.reasoningLevel);
+    if (effort) body.reasoning_effort = effort;
     // ADR-070 §2.2: prompt_cache_key пробрасывается на backend LLM Proxy, который
     // исполняет провайдера с этим именем; при cachePolicy:'none' — не отправляем.
     if (

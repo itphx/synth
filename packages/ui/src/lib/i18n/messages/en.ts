@@ -2056,6 +2056,10 @@ export const dict = {
   'admin.agents.reasoning': 'Reasoning',
   'admin.agents.reasoning.unset': 'Not set',
   'admin.agents.reasoning.none': 'Off',
+  'admin.agents.effort': 'Reasoning effort',
+  'admin.agents.effort.auto': 'Auto (from reasoning level)',
+  'admin.agents.effortHint':
+    'The tier is sent to the provider in output_config.effort only when the model/provider has “Effort mode (output_config)” enabled (supportsEffortUpdates); otherwise the parameter is ignored. xhigh and max are set here only.',
   'admin.agents.capabilities': 'Capabilities',
   'admin.agents.icon': 'Icon',
   'admin.agents.color': 'Color',

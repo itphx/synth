@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { AgentDefinition } from '@itphx/synth-shared';
-import { SERVICE_SCOPE_SETS } from '@itphx/synth-shared';
+import { SERVICE_SCOPE_SETS, EFFORT_LEVELS, isEffortLevel } from '@itphx/synth-shared';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import {
@@ -28,6 +28,7 @@ export interface AgentRouteMessages {
   idRequired: (c: Context) => string;
   invalidAgentId: (c: Context) => string;
   invalidRoleFile: (c: Context) => string;
+  invalidEffort: (c: Context) => string;
   agentNotFound: (c: Context) => string;
   agentOverrideNotFound: (c: Context) => string;
 }
@@ -82,6 +83,8 @@ const DEFAULT_MESSAGES: AgentRouteMessages = {
   idRequired: () => 'ID обязателен',
   invalidAgentId: () => 'ID агента может содержать только латиницу, цифры, дефис и подчёркивание',
   invalidRoleFile: () => 'Имя файла роли должно быть именем файла без путей и «..»',
+  invalidEffort:
+    () => `Некорректный тир усилия (effort): допустимые значения — ${EFFORT_LEVELS.join(', ')}`,
   agentNotFound: () => 'Агент не найден',
   agentOverrideNotFound: () => 'Override не найден',
 };
@@ -103,6 +106,8 @@ const AGENT_FIELDS = (a: AgentDefinition, isBuiltin: boolean) => ({
   provider: a.provider || null,
   model: a.model || null,
   reasoning_level: a.reasoningLevel ?? null,
+  // ADR-117: явный тир усилия агента (`xhigh`/`max` — только так); `null` — авто.
+  effort: a.effort ?? null,
   context_file: a.contextFile || null,
   // ADR-046 §6.2: группы агента (привязка скиллов по `metadata.synth.groups`).
   groups: a.groups ?? null,
@@ -261,6 +266,14 @@ export function createAgentRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidAgentId(c) } }, 400);
     }
 
+    // ADR-117: тир усилия агента (`xhigh`/`max` задаются только явно). `null` —
+    // сброс в «авто» (тир из уровня размышлений), невалидное значение — 400:
+    // контракт запроса, а не «тихий» игнор.
+    const effortInput = body.effort;
+    if (effortInput !== undefined && effortInput !== null && !isEffortLevel(effortInput)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidEffort(c) } }, 400);
+    }
+
     const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
     const existing = await agentStore.load(id);
 
@@ -281,6 +294,11 @@ export function createAgentRoutes(
       topP: body.top_p ?? body.topP ?? existing?.topP,
       topK: body.top_k ?? body.topK ?? existing?.topK,
       reasoningLevel: body.reasoning_level ?? body.reasoningLevel ?? existing?.reasoningLevel ?? builtin?.reasoningLevel,
+      // `null` — сброс в «авто» (тир из уровня размышлений), undefined —
+      // «не передано» (сохраняем прежнее значение записи).
+      effort: effortInput === null
+        ? undefined
+        : (isEffortLevel(effortInput) ? effortInput : (existing?.effort ?? builtin?.effort)),
       isOverridden: true,
       icon: body.icon ?? existing?.icon,
       color: body.color ?? existing?.color,

@@ -147,6 +147,10 @@ export class SessionManager {
         // не теряется при создании — иначе `POST /sessions` с `reasoningLevel`
         // не применял effort до `PATCH`.
         reasoningLevel: data.settings?.reasoningLevel,
+        // ADR-117: явный тир усилия (effort) — `xhigh`/`max` не выводятся из
+        // `reasoningLevel`; без проброса в whitelist они терялись бы при
+        // создании (`POST /sessions`, дочерняя сессия саб-агента).
+        effort: data.settings?.effort,
         maxTokens: data.settings?.maxTokens ?? 4096,
         debugEnabled: data.settings?.debugEnabled ?? true,
         streamEnabled: data.settings?.streamEnabled ?? true,

@@ -3977,12 +3977,16 @@ export class ChatOrchestrator {
           intervalMs: this._streamPersistIntervalMs,
         });
 
-        // ADR-117: effort считается на каждый LLM-вызов из **актуального**
-        // `reasoningLevel` (агент → сессия): смена настройки между шагами/ходами
-        // подхватывается без пересоздания провайдера (effort едет в опциях).
-        const llmEffort = effortForReasoningLevel(
-          agentDef?.reasoningLevel ?? session.settings.reasoningLevel,
-        );
+        // ADR-117: effort считается на каждый LLM-вызов из **актуальных**
+        // настроек: `agent.effort` → `session.settings.effort` → тир уровня
+        // размышлений (`agent.reasoningLevel` → `session.settings.reasoningLevel`).
+        // Смена настройки между шагами/ходами подхватывается без пересоздания
+        // провайдера (effort едет в опциях).
+        const llmEffort = agentDef?.effort
+          ?? session.settings.effort
+          ?? effortForReasoningLevel(
+            agentDef?.reasoningLevel ?? session.settings.reasoningLevel,
+          );
 
         try {
           for await (const chunk of provider.chatAsync(

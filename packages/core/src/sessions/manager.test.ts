@@ -134,6 +134,23 @@ describe('SessionManager', () => {
     expect(bare.settings.reasoningLevel).toBeUndefined();
   });
 
+  it('createSession сохраняет effort (xhigh/max не выводятся из reasoningLevel)', async () => {
+    const session = await manager.createSession({ settings: { effort: 'xhigh' } });
+    expect(session.settings.effort).toBe('xhigh');
+
+    // Переживает перезагрузку из хранилища.
+    const reloaded = await manager.getSession(session.id);
+    expect(reloaded!.settings.effort).toBe('xhigh');
+
+    // Не задано — undefined (тир из уровня размышлений), без подмены на дефолт.
+    const bare = await manager.createSession({});
+    expect(bare.settings.effort).toBeUndefined();
+
+    // `max` — тоже явный тир, сохраняется как есть.
+    const max = await manager.createSession({ settings: { effort: 'max' } });
+    expect((await manager.getSession(max.id))!.settings.effort).toBe('max');
+  });
+
   it('createSession без провайдера и без сессионных mcpToolSettings не задаёт их', async () => {
     const session = await manager.createSession({});
     expect(session.settings.mcpToolSettings).toBeUndefined();

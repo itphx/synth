@@ -569,3 +569,93 @@ describe('RemoteProvider — tool_choice на шаге (лимит шагов)',
     expect(body.tools).toBeUndefined();
   });
 });
+
+describe('RemoteProvider — reasoning_effort (ADR-117)', () => {
+  function sseResponse(events: string[]): Response {
+    return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  function readBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    const init = fetchMock.mock.calls[0]![1] as { body: string };
+    return JSON.parse(init.body) as Record<string, unknown>;
+  }
+
+  async function drain(gen: AsyncGenerator<LLMChunk>): Promise<void> {
+    const chunks: LLMChunk[] = [];
+    for await (const chunk of gen) chunks.push(chunk);
+    expect(chunks.length).toBeGreaterThanOrEqual(0);
+  }
+
+  it('стрим: явный options.effort уезжает в reasoning_effort', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    await drain(provider.chatAsync([makeMessage()], 'system', undefined, undefined, undefined, {
+      effort: 'xhigh',
+    }));
+
+    expect(readBody(fetchMock).reasoning_effort).toBe('xhigh');
+  });
+
+  it('non-stream: явный options.effort уезжает в reasoning_effort', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    await provider.chat([makeMessage()], 'system', undefined, false, undefined, { effort: 'max' });
+
+    expect(readBody(fetchMock).reasoning_effort).toBe('max');
+  });
+
+  it('fallback: без options.effort тир выводится из reasoningLevel провайдера', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider({ reasoningLevel: 'high' });
+    await drain(provider.chatAsync([makeMessage()], 'system'));
+
+    expect(readBody(fetchMock).reasoning_effort).toBe('high');
+  });
+
+  it('явный options.effort приоритетнее reasoningLevel', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider({ reasoningLevel: 'low' });
+    await drain(provider.chatAsync([makeMessage()], 'system', undefined, undefined, undefined, {
+      effort: 'high',
+    }));
+
+    expect(readBody(fetchMock).reasoning_effort).toBe('high');
+  });
+
+  it('без effort и без reasoningLevel поля в теле нет (стрим и non-stream)', async () => {
+    const streamFetch = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    vi.stubGlobal('fetch', streamFetch);
+    await drain(makeProvider().chatAsync([makeMessage()], 'system'));
+    expect(readBody(streamFetch).reasoning_effort).toBeUndefined();
+
+    const plainFetch = vi.fn().mockResolvedValue(jsonResponse({
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }));
+    vi.stubGlobal('fetch', plainFetch);
+    await makeProvider().chat([makeMessage()], 'system');
+    expect(readBody(plainFetch).reasoning_effort).toBeUndefined();
+  });
+
+  it("reasoningLevel 'none'/'default' — поля нет (effort-тиром «выключить» нельзя)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await drain(makeProvider({ reasoningLevel: 'none' }).chatAsync([makeMessage()], 'system'));
+    expect(readBody(fetchMock).reasoning_effort).toBeUndefined();
+  });
+});

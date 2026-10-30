@@ -2034,6 +2034,10 @@ export const dict = {
   'admin.agents.reasoning': 'Размышления',
   'admin.agents.reasoning.unset': 'Не задано',
   'admin.agents.reasoning.none': 'Отключено',
+  'admin.agents.effort': 'Усилие рассуждений',
+  'admin.agents.effort.auto': 'Авто (из уровня размышлений)',
+  'admin.agents.effortHint':
+    'Тир уходит провайдеру в output_config.effort только при включённом «Режим effort (output_config)» у модели/провайдера (supportsEffortUpdates); иначе параметр игнорируется. xhigh и max задаются только здесь.',
   'admin.agents.capabilities': 'Возможности',
   'admin.agents.icon': 'Иконка',
   'admin.agents.color': 'Цвет',

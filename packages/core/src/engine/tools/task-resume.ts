@@ -352,7 +352,9 @@ export async function runSubagentResume(
       // Sampling агента — для QA-эскалации (fallback-модель из пула).
       topP: resumeTopP,
       topK: resumeTopK,
-      // ADR-117: effort продолжения — из `reasoningLevel` (агент → настройки ребёнка).
+      // ADR-117: effort продолжения — `agent.effort` → настройки ребёнка
+      // (`reasoningLevel` — отдельным полем, `effort` приоритетнее).
+      effort: agentDef.effort ?? child.settings.effort,
       reasoningLevel: agentDef.reasoningLevel ?? child.settings.reasoningLevel,
       tools: subagentTools,
       childSessionId: child.id,

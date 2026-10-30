@@ -346,3 +346,79 @@ describe('AgentsPanel — агент по умолчанию (ADR-072)', () => {
     expect(reset.className).toContain('border-muted-foreground')
   })
 })
+
+describe('AgentsPanel — усилие рассуждений (effort, ADR-117)', () => {
+  /** Открывает форму редактирования агента через кнопку Edit. */
+  async function openEditor(container: HTMLElement): Promise<void> {
+    const editButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Edit',
+    ) as HTMLButtonElement | undefined
+    expect(editButton).toBeDefined()
+    await act(async () => {
+      editButton!.click()
+    })
+    await act(async () => {})
+  }
+
+  const effortTrigger = (container: HTMLElement) =>
+    container.querySelector('[data-testid="agent-effort"]') as HTMLElement
+
+  const save = async (container: HTMLElement): Promise<Record<string, unknown>> => {
+    const button = container.querySelector('[data-testid="agent-save"]') as HTMLButtonElement
+    await act(async () => {
+      button.click()
+    })
+    await act(async () => {})
+    expect(apiMock.saveAgent).toHaveBeenCalledTimes(1)
+    const call = apiMock.saveAgent.mock.calls[0] as unknown as [Record<string, unknown>]
+    return call[0]
+  }
+
+  it('«Авто» (тир не задан): поле в payload не отправляется', async () => {
+    apiMock.getAllAgents.mockResolvedValue({ agents: [agent('main', ['primary'])], default_agent: null })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    // «Авто» (пустое значение) — стартовое состояние у агента без сохранённого тира.
+    expect(effortTrigger(container)).toBeTruthy()
+
+    const payload = await save(container)
+    expect('effort' in payload).toBe(false)
+  })
+
+  it('round-trip: сохранённый тир виден в форме, выбранный уходит в payload', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{ ...agent('main', ['primary']), effort: 'xhigh' }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    expect(effortTrigger(container).textContent).toContain('xhigh')
+
+    // `max` — только явный тир (из уровня размышлений не выводится).
+    await selectOption(effortTrigger(container), 'max')
+
+    const payload = await save(container)
+    expect(payload.effort).toBe('max')
+  })
+
+  it('сброс сохранённого тира в «Авто» передаётся явным null', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{ ...agent('main', ['primary']), effort: 'high' }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    await selectOption(effortTrigger(container), 'Auto (from reasoning level)')
+
+    const payload = await save(container)
+    // `null` = «поле не задано» на сервере (как у temperature); без него
+    // прежнее значение осталось бы в записи агента.
+    expect(payload.effort).toBeNull()
+  })
+})

@@ -1477,4 +1477,32 @@ describe('run-cycle — effort из reasoningLevel (ADR-117)', () => {
       expect(chatAsync.mock.calls[0]![5]).toBeUndefined();
     }
   });
+
+  it('явный config.effort доходит до ChatOptions.effort (xhigh — только так)', async () => {
+    const { provider, chatAsync } = scriptedProvider([
+      [{ isFinal: true, content: 'ok', model: 'test-model' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider }),
+      effort: 'xhigh',
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(chatAsync.mock.calls[0]![5]).toEqual({ effort: 'xhigh' });
+  });
+
+  it('config.effort приоритетнее reasoningLevel', async () => {
+    const { provider, chatAsync } = scriptedProvider([
+      [{ isFinal: true, content: 'ok', model: 'test-model' }],
+    ]);
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({ provider }),
+      effort: 'max',
+      reasoningLevel: 'low',
+    }));
+
+    expect(chatAsync.mock.calls[0]![5]).toEqual({ effort: 'max' });
+  });
 });

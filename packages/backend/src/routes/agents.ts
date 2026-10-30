@@ -44,6 +44,7 @@ export function createAgentRoutes(
         idRequired: (c) => t('errors.validation.idRequired', undefined, c),
         invalidAgentId: (c) => t('errors.validation.invalidAgentId', undefined, c),
         invalidRoleFile: (c) => t('errors.validation.invalidRoleFile', undefined, c),
+        invalidEffort: (c) => t('errors.validation.invalidEffort', undefined, c),
         agentNotFound: (c) => t('errors.notFound.agent', undefined, c),
         agentOverrideNotFound: (c) => t('errors.notFound.agentOverride', undefined, c),
       },

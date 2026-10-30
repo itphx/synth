@@ -152,6 +152,9 @@ export const taskTool: ToolDefinition = {
     const usesOwnModel = resolution.providerName !== resolution.parentProviderName
       || resolution.modelName !== resolution.parentModelName;
     if (agentDef?.reasoningLevel) childRoutingOverrides.reasoningLevel = agentDef.reasoningLevel;
+    // ADR-117: явный тир усилия агента фиксируется в настройках ребёнка —
+    // продолжение (`task({task_id})`/`task-resume`) берёт его оттуда.
+    if (agentDef?.effort) childRoutingOverrides.effort = agentDef.effort;
     if (params.routing_strategy) {
       if (params.routing_strategy === 'none') {
         childRoutingOverrides.routingEnabled = false;
@@ -382,7 +385,9 @@ export const taskTool: ToolDefinition = {
       // Sampling агента — для QA-эскалации (у fallback-модели остаётся sampling агента).
       topP: agentTopP,
       topK: agentTopK,
-      // ADR-117: effort прогона — из `reasoningLevel` (агент → настройки родителя).
+      // ADR-117: effort прогона — `agent.effort` → настройки родителя
+      // (`reasoningLevel` — отдельным полем, ниже `effort` приоритетнее).
+      effort: agentDef.effort ?? extra.parentSessionSettings?.effort,
       reasoningLevel: agentDef.reasoningLevel ?? extra.parentSessionSettings?.reasoningLevel,
       tools,
       childSessionId,
@@ -805,7 +810,9 @@ async function continueChildSession(opts: {
     // Sampling агента — для QA-эскалации (fallback-модель из пула).
     topP: agentTopP,
     topK: agentTopK,
-    // ADR-117: effort продолжения — из `reasoningLevel` (агент → настройки ребёнка).
+    // ADR-117: effort продолжения — `agent.effort` → настройки ребёнка
+    // (`reasoningLevel` — отдельным полем, `effort` приоритетнее).
+    effort: agentDef.effort ?? child.settings.effort,
     reasoningLevel: agentDef.reasoningLevel ?? child.settings.reasoningLevel,
     tools: extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers),
     childSessionId: child.id,

@@ -13,6 +13,7 @@ import {
   ANALYTICS_EXPORT_FORMATS,
   STEER_MODES,
   DEFAULT_STEER_MODE,
+  EFFORT_LEVELS,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey, SessionParticipantRole } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
@@ -117,6 +118,11 @@ export const sessionSettingsSchema = z.object({
   provider: z.string().optional(),
   model: z.string().optional(),
   reasoningLevel: z.enum(['default', 'none', 'low', 'medium', 'high']).optional(),
+  /**
+   * ADR-117: явный тир усилия (effort) — `xhigh`/`max` задаются только так.
+   * Невалидное значение → 400 (`VALIDATION_ERROR`), а не тихий игнор.
+   */
+  effort: z.enum(EFFORT_LEVELS).optional(),
   // Без дефолта: `undefined` = дефолт модели (поле не отправляется провайдеру).
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().min(1).max(200000).default(4096),

@@ -141,8 +141,55 @@ describe('Agent API Routes — CRUD (core superset)', () => {
     expect((await store.load('temp-agent'))?.temperature).toBeUndefined();
   });
 
-  it('GET /agents/:id отдаёт builtin и 404 для неизвестного', async () => {
+  it('POST /agents: effort принимается, отдаётся, сбрасывается null-ом, невалидный — 400', async () => {
     const app = createTestApp();
+
+    // 1. Явный тир (`xhigh` из уровня размышлений не выводится) — сохраняется.
+    const created = await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'effort-agent', display_name: 'Effort', effort: 'xhigh' }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody: any = await created.json();
+    expect(createdBody.effort).toBe('xhigh');
+    expect((await store.load('effort-agent'))?.effort).toBe('xhigh');
+
+    // 2. Поле отдаётся в списке (`GET /agents/all`).
+    const all = await app.request('/api/v2/agents/all');
+    const list: any = await all.json();
+    expect(list.agents.find((a: any) => a.id === 'effort-agent').effort).toBe('xhigh');
+
+    // 3. Поле не передано — прежнее значение сохраняется.
+    await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'effort-agent', display_name: 'Effort' }),
+    });
+    expect((await store.load('effort-agent'))?.effort).toBe('xhigh');
+
+    // 4. `null` — сброс в «Авто» (тир из уровня размышлений).
+    const reset = await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'effort-agent', display_name: 'Effort', effort: null }),
+    });
+    expect(reset.status).toBe(200);
+    expect((await store.load('effort-agent'))?.effort).toBeUndefined();
+
+    // 5. Невалидное значение — 400, запись не меняется.
+    const invalid = await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'effort-agent', display_name: 'Effort', effort: 'ultra' }),
+    });
+    expect(invalid.status).toBe(400);
+    const invalidBody: any = await invalid.json();
+    expect(invalidBody.error.code).toBe('VALIDATION_ERROR');
+    expect((await store.load('effort-agent'))?.effort).toBeUndefined();
+  });
+
+  it('GET /agents/:id отдаёт builtin и 404 для неизвестного', async () => {    const app = createTestApp();
     const ok = await app.request('/api/v2/agents/assistant');
     expect(ok.status).toBe(200);
     const agent: any = await ok.json();

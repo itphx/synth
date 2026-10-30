@@ -378,4 +378,52 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
     await runTurn(session.id);
     expect(StepLimitScriptProvider.calls[0]!.options).toBeUndefined();
   });
+
+  it('ADR-117: agent.effort приоритетнее session.effort и reasoningLevel (xhigh/max)', async () => {
+    // Агент задаёт `xhigh` — его нет в шкале reasoningLevel, только явным тиром.
+    agentRegistry.register({ ...agentRegistry.get('fixer')!, effort: 'xhigh' });
+    StepLimitScriptProvider.configure([{ content: 'ok' }]);
+    const session = await sessionManager.createSession({
+      title: 'Effort priority',
+      userId: 'u1',
+      settings: { provider: 'steplimit', model: 'm', agentRole: 'fixer' },
+    });
+    await sessionManager.withLock(session.id, async (s) => {
+      s.settings = { ...s.settings, effort: 'max', reasoningLevel: 'low' };
+      await sessionManager.updateSession(s);
+    });
+
+    await runTurn(session.id);
+    // Приоритет: agent.effort → session.effort → reasoningLevel.
+    expect(StepLimitScriptProvider.calls[0]!.options).toEqual({ effort: 'xhigh' });
+  });
+
+  it('ADR-117: session.effort (max) приоритетнее маппинга reasoningLevel', async () => {
+    StepLimitScriptProvider.configure([{ content: 'ok' }]);
+    const session = await sessionManager.createSession({
+      title: 'Session effort',
+      userId: 'u1',
+      settings: { provider: 'steplimit', model: 'm', agentRole: 'fixer' },
+    });
+    await sessionManager.withLock(session.id, async (s) => {
+      s.settings = { ...s.settings, effort: 'max', reasoningLevel: 'high' };
+      await sessionManager.updateSession(s);
+    });
+
+    await runTurn(session.id);
+    // `max` из настроек сессии, а не `high` из `reasoningLevel`.
+    expect(StepLimitScriptProvider.calls[0]!.options).toEqual({ effort: 'max' });
+  });
+
+  it('ADR-117: agent.effort=undefined не перекрывает session.effort', async () => {
+    StepLimitScriptProvider.configure([{ content: 'ok' }]);
+    const session = await sessionManager.createSession({
+      title: 'Session effort only',
+      userId: 'u1',
+      settings: { provider: 'steplimit', model: 'm', agentRole: 'fixer', effort: 'medium' },
+    });
+
+    await runTurn(session.id);
+    expect(StepLimitScriptProvider.calls[0]!.options).toEqual({ effort: 'medium' });
+  });
 });

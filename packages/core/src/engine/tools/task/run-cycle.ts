@@ -7,7 +7,7 @@
  * поведения.
  */
 import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
-import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock, ReasoningLevel } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock, ReasoningLevel, EffortLevel } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
@@ -84,6 +84,12 @@ export interface SubagentRunConfig {
    * effort едет в `ChatOptions`, провайдер не кэшируется с «зашитым» значением.
    */
   reasoningLevel?: ReasoningLevel;
+  /**
+   * ADR-117: явный тир усилия прогона (`agent.effort` → настройки дочерней
+   * сессии). Приоритетнее `reasoningLevel`; нужен для `xhigh`/`max`.
+   * Считается на **каждый** LLM-вызов цикла вместе с `reasoningLevel`.
+   */
+  effort?: EffortLevel;
   tools?: ToolForLLM[];
   /** Дочерняя сессия (если есть) — в неё пишется история саб-агента. */
   childSessionId?: string;
@@ -737,9 +743,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       for (let attempt = 1; attempt <= retryMaxAttempts; attempt++) {
         if (isAborted()) break;
         try {
-          // ADR-117: effort — из `reasoningLevel` прогона на каждый вызов
+          // ADR-117: effort — из явного тира прогона (`agent.effort`/настройки
+          // ребёнка), иначе из `reasoningLevel`; считается на каждый вызов
           // (смена настройки между вызовами подхватывается, провайдер кэширован).
-          const effort = effortForReasoningLevel(config.reasoningLevel);
+          const effort = config.effort ?? effortForReasoningLevel(config.reasoningLevel);
           for await (const chunk of effectiveProvider.chatAsync(
             requestMessages,
             llmSystemPrompt || undefined,

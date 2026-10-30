@@ -1,6 +1,7 @@
 // agents: домен API v2 (ADR-095) — объект `agentsApi` и его DTO.
 
 import { BASE_URL, fetchJSON } from './base'
+import type { EffortLevel } from '@itphx/synth-shared/types'
 
 export type AgentMode = 'primary' | 'subagent' | 'system'
 
@@ -16,6 +17,11 @@ export interface AgentInfo {
   mode: 'simple' | 'orchestrator'
   agent_mode: AgentMode[] | null
   reasoning_level?: string | null
+  /**
+   * ADR-117: явный тир усилия агента (`low|medium|high|xhigh|max`).
+   * Отсутствует/`null` — «Авто»: тир выводится из уровня размышлений.
+   */
+  effort?: EffortLevel | null
   max_steps: number | null
   provider: string | null
   model: string | null

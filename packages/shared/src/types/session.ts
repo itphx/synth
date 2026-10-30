@@ -2,6 +2,8 @@ import type { PermissionConfig, McpServerToolSettings } from './permission.js';
 import type { Message } from './message.js';
 import type { PromptState } from './prompt.js';
 import type { SessionWorktree } from './worktree.js';
+// ADR-117: тир усилия (effort) — значение, общее для агента и сессии.
+import type { EffortLevel } from './llm.js';
 
 // --- SessionOrigin ---
 export type SessionOrigin = 'user' | 'fork' | 'subagent';
@@ -60,6 +62,17 @@ export interface SessionSettings {
   model?: string;
   /** Уровень размышлений модели. Для openai/generic — reasoning_effort, anthropic — thinking, ollama — think. */
   reasoningLevel?: ReasoningLevel;
+  /**
+   * ADR-117: явный тир усилия (effort) сессии — `low|medium|high|xhigh|max`.
+   *
+   * Приоритет при выборе тира на LLM-вызов:
+   * `ChatOptions.effort` → `agent.effort` → это поле →
+   * `effortForReasoningLevel(agent.reasoningLevel ?? reasoningLevel)`.
+   * Нужен для `xhigh`/`max`: из `reasoningLevel` они не выводятся (шкалы не
+   * совпадают). Параметр уходит провайдеру только при
+   * `compatibility.supportsEffortUpdates` у модели.
+   */
+  effort?: EffortLevel;
   /**
    * Температура генерации. `undefined` — дефолт модели: поле `temperature`
    * вообще не отправляется провайдеру (не подменяется на 0.7).

@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { TOOL_CAPABILITY_META } from '@itphx/synth-shared/types'
+import { TOOL_CAPABILITY_META, EFFORT_LEVELS } from '@itphx/synth-shared/types'
 import { synthApi, type AgentInfo, type AgentMode, type ProviderInfo, type ModelGroup } from '@/lib/api/synthApi'
 import { Icon, isIconName } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
@@ -69,6 +69,11 @@ interface AgentForm {
   top_p: number
   top_k: number
   reasoning_level: string
+  /**
+   * ADR-117: явный тир усилия (`low|medium|high|xhigh|max`); `''` — «Авто»
+   * (тир выводится из уровня размышлений, поле в запрос не отправляется).
+   */
+  effort: string
   agent_mode: AgentMode[]
   context_file: string
   capabilities: string[]
@@ -80,7 +85,7 @@ interface AgentForm {
 const emptyForm = (): AgentForm => ({
   id: '', display_name: '', description: '', provider: '', model: '',
   // undefined = Auto (дефолт модели), а не 0.7 — значение задаёт пользователь
-  temperature: undefined, top_p: 0, top_k: 0, reasoning_level: '',
+  temperature: undefined, top_p: 0, top_k: 0, reasoning_level: '', effort: '',
   agent_mode: ['primary'], context_file: '',
   capabilities: [], max_steps: 0, icon: '', color: '',
 })
@@ -98,6 +103,8 @@ function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): Agent
     top_p: (detail?.topP as number) ?? 0,
     top_k: (detail?.topK as number) ?? 0,
     reasoning_level: (a.reasoning_level || (detail?.reasoningLevel as string) || ''),
+    // «Авто» = пустая строка: тир выводится из уровня размышлений.
+    effort: a.effort || (detail?.effort as string) || '',
     agent_mode: agentMode,
     context_file: a.context_file || (detail?.contextFile as string) || '',
     capabilities: (detail?.capabilities as string[]) || a.capabilities,
@@ -118,6 +125,8 @@ export const AgentsPanel = () => {
   const [saving, setSaving] = useState(false)
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [models, setModels] = useState<{ provider: string; models: { id: string; name: string }[] }[]>([])
+  /** Сохранённый в агенте тир усилия ('' — «Авто»): нужен, чтобы сброс ушёл `null`. */
+  const [savedEffort, setSavedEffort] = useState('')
   const [contextFiles, setContextFiles] = useState<string[]>([])
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [defaultAgentInfo, setDefaultAgentInfo] = useState<{
@@ -211,18 +220,22 @@ export const AgentsPanel = () => {
 
   const handleCreate = () => {
     setForm(emptyForm())
+    setSavedEffort('')
     setCreating(true)
     setError('')
   }
 
   const handleEdit = async (a: AgentInfo) => {
     setError('')
+    let next: AgentForm
     try {
       const detail = await synthApi.getAgentDetail(a.id)
-      setForm(buildForm(a, detail))
+      next = buildForm(a, detail)
     } catch {
-      setForm(buildForm(a))
+      next = buildForm(a)
     }
+    setForm(next)
+    setSavedEffort(next.effort)
     setExpanded(a.id)
     setCreating(false)
   }
@@ -258,6 +271,14 @@ export const AgentsPanel = () => {
         top_p: form.top_p || undefined,
         top_k: form.top_k || undefined,
         reasoning_level: form.reasoning_level || undefined,
+        // ADR-117: «Авто» — поле не отправляется (тир выводится из уровня
+        // размышлений). Если у агента тир был сохранён, сброс идёт явным
+        // `null` — иначе сервер оставил бы прежнее значение (как у temperature).
+        ...(form.effort
+          ? { effort: form.effort }
+          : savedEffort
+            ? { effort: null }
+            : {}),
         // legacy mode, kept for backward compat — always "simple"
         mode: 'simple',
         agent_mode: form.agent_mode,
@@ -322,6 +343,16 @@ export const AgentsPanel = () => {
       : level === 'none'
         ? t('admin.agents.reasoning.none')
         : t(`chat.reasoning.${level}`)
+
+  /**
+   * ADR-117: подпись тира усилия. `low|medium|high` — те же подписи, что у
+   * уровня размышлений; `xhigh`/`max` — значения протокола (своих уровней
+   * размышлений у них нет).
+   */
+  const effortLabel = (level: string): string =>
+    level === 'low' || level === 'medium' || level === 'high'
+      ? t(`chat.reasoning.${level}`)
+      : level
 
   const renderForm = () => (
     <div ref={formRef}>
@@ -489,6 +520,24 @@ export const AgentsPanel = () => {
               {reasoningOptions().map((level) => (
                 <SelectItem key={level} value={level}>
                   {reasoningLabel(level)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </SelectField>
+
+          <SelectField
+            label={t('admin.agents.effort')}
+            description={t('admin.agents.effortHint')}
+            value={form.effort}
+            onValueChange={(value) => setForm({ ...form, effort: value })}
+            ariaLabel={t('admin.agents.effort')}
+            triggerTestId="agent-effort"
+          >
+            <SelectContent>
+              <SelectItem value="">{t('admin.agents.effort.auto')}</SelectItem>
+              {EFFORT_LEVELS.map((level) => (
+                <SelectItem key={level} value={level}>
+                  {effortLabel(level)}
                 </SelectItem>
               ))}
             </SelectContent>
