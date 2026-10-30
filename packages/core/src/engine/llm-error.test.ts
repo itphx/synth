@@ -73,6 +73,14 @@ describe('isLlmErrorRecoverable — объединённый набор патт
     expect(isLlmErrorRecoverable(new Error(msg), msg, 'no_user_query')).toBe(false);
   });
 
+  // ADR-117: стрим без `finish_reason` — incomplete-stream, повтор не помогает.
+  it.each([
+    'Провайдер закрыл стрим без finish_reason (model=gpt-4o)',
+    'OpenAI Chat stream ended without finish_reason',
+  ])('отсутствие finish_reason: %s → unrecoverable (false)', (msg) => {
+    expect(isLlmErrorRecoverable(new Error(msg), msg)).toBe(false);
+  });
+
   // Recoverable-строки должны остаться восполняемыми.
   it.each([
     'fetch failed: ECONNREFUSED',

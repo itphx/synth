@@ -118,6 +118,9 @@ describe('провайдеры — таймаут только на ожидан
     const gen = provider.chatAsync([], undefined, undefined, undefined, undefined);
 
     handle.push('data: {"choices":[{"delta":{"content":"привет"}}]}\n\n');
+    // `finish_reason` — обязательный признак корректного завершения стрима
+    // (`compatibility.requireFinishReason`, ADR-117).
+    handle.push('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
     const firstP = gen.next();
     abortStreamOnSignal(getSignal()!, handle);
     const first = await firstP;

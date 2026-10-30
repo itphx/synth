@@ -1630,13 +1630,17 @@ agents:
 | `requireAssistantAfterTool` | Нужен assistant-турн после `tool`-результатов (Mistral-семейство) | `false` (эвристика) |
 | `streamUsage` | Отправлять `stream_options: {include_usage: true}` в стриме | `true` |
 | `supportsToolChoice` | Провайдер понимает `tool_choice` | `true` (у нативного Ollama — `false`) |
+| `cacheFormat` | Формат inline-маркеров prompt-cache (`cache_control: {type:'ephemeral'}`): `anthropic` — последний tool + system + граница последнего сообщения; `alibaba` — system + граница последнего сообщения (без tools). Бюджет — ≤4 breakpoint'а; при заданном значении `prompt_cache_key` **не** отправляется | Не задан (только `prompt_cache_key`) |
+| `requireFinishReason` | Требовать `finish_reason` в стриме: провайдер, закрывший стрим без него, отдал недописанный ответ (incomplete-stream, не ретраится) | `true` |
 
 - **Приоритет:** явное значение **модели** → явное значение **провайдера** → **эвристика** →
   встроенный дефолт (`resolveModelCompatibility`). Эвристики (`detectCompatibilityHeuristics`)
   применяются только к незаданным полям: `requireReasoning` — тип/имя провайдера `deepseek`, URL с
   `deepseek.com`, id модели с `deepseek`; `requireAssistantAfterTool` — `mistral`/`devstral`/`codestral`/
-  `pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField` и `streamUsage`
-  не эвристицируются: локальные OpenAI-совместимые серверы часто не знают `max_completion_tokens`.
+  `pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField`, `streamUsage`,
+  `cacheFormat` и `requireFinishReason` не эвристицируются: локальные OpenAI-совместимые серверы часто
+  не знают `max_completion_tokens`, а inline-маркеры кэша и требование `finish_reason` включаются только
+  явным значением (поведение существующих записей каталога не меняется).
 - **Где задаётся:** `POST`/`PATCH /api/v2/providers` — поле `compatibility` (дефолты провайдера);
   `POST /api/v2/models` — `compatibility` (перекрытие для конкретной модели). `GET` отдаёт поле
   **только если оно задано**.

@@ -294,6 +294,7 @@ describe('OpenAIProvider — reasoning (reasoning_content + reasoning)', () => {
       JSON.stringify({ choices: [{ index: 0, delta: { content: '', reasoning: 'Thinking' } }] }),
       JSON.stringify({ choices: [{ index: 0, delta: { content: '', reasoning: ' Process' } }] }),
       JSON.stringify({ choices: [{ index: 0, delta: { content: 'Answer' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
       '[DONE]',
     ])));
 
@@ -317,6 +318,7 @@ describe('OpenAIProvider — reasoning (reasoning_content + reasoning)', () => {
       JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: '.\n' } }] }),
       JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'Step 2' } }] }),
       JSON.stringify({ choices: [{ index: 0, delta: { content: 'Done' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
       '[DONE]',
     ])));
 
@@ -335,6 +337,7 @@ describe('OpenAIProvider — reasoning (reasoning_content + reasoning)', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
       JSON.stringify({ choices: [{ index: 0, delta: { content: '', reasoning: '' } }] }),
       JSON.stringify({ choices: [{ index: 0, delta: { content: 'hi' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
       '[DONE]',
     ])));
 
@@ -349,6 +352,7 @@ describe('OpenAIProvider — reasoning (reasoning_content + reasoning)', () => {
   it('chatAsync: приоритет reasoning_content над reasoning в одном delta', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
       JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'RC', reasoning: 'R' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
       '[DONE]',
     ])));
 
@@ -363,6 +367,7 @@ describe('OpenAIProvider — reasoning (reasoning_content + reasoning)', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
       JSON.stringify({ choices: [{ index: 0, delta: { reasoning: '.' } }] }),
       JSON.stringify({ choices: [{ index: 0, delta: { reasoning: ' next' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
       '[DONE]',
     ])));
 
@@ -753,7 +758,10 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
 
 describe('OpenAIProvider — tool_choice на шаге (лимит шагов)', () => {
   function sseResponse(): Response {
-    return new Response('data: [DONE]\n\n', {
+    // `finish_reason` обязателен: без него стрим считается недописанным
+    // (`compatibility.requireFinishReason`, ADR-117).
+    const finish = JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    return new Response(`data: ${finish}\n\ndata: [DONE]\n\n`, {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
     });
@@ -980,5 +988,287 @@ describe('OpenAIProvider — compatibility (слой opencode)', () => {
     expect(disabledBody.stream_options).toBeUndefined();
     // Без stream_options usage приходит в финальном чанке (эндпоинт прислал) — парсинг не сломан.
     expect(chunks.find((c) => c.isFinal)!.usage!.totalTokens).toBe(7);
+  });
+});
+
+describe('OpenAIProvider — cacheFormat: inline-маркеры cache_control (ADR-117)', () => {
+  type OpenAIPrivate = {
+    _formatMessages(messages: LLMMessage[], systemPrompt?: string): Array<Record<string, unknown>>;
+    _applyPromptCacheKey(
+      body: Record<string, unknown>,
+      systemPrompt?: SystemPromptPayload,
+      compatibility?: Record<string, unknown>,
+    ): void;
+    _applyInlineCacheMarkers(
+      body: Record<string, unknown>,
+      systemPrompt?: SystemPromptPayload,
+      compatibility?: Record<string, unknown>,
+    ): void;
+  };
+
+  function okResponse(): Response {
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: {} }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  function makeTools(count = 2): Record<string, unknown>[] {
+    return Array.from({ length: count }, (_, i) => ({
+      type: 'function',
+      function: { name: `tool_${i}`, description: '', parameters: {} },
+    }));
+  }
+
+  const chatMessages: LLMMessage[] = [
+    makeMessage({ role: 'user', content: 'привет' }),
+    makeMessage({ role: 'assistant', content: 'здравствуй' }),
+    makeMessage({ role: 'user', content: 'ещё вопрос' }),
+  ];
+
+  /** Сколько `cache_control`-маркеров в теле (tools + части контента). */
+  function countMarkers(body: Record<string, unknown>): number {
+    let count = 0;
+    const tools = body.tools as Array<Record<string, unknown>> | undefined;
+    for (const tool of tools ?? []) if (tool.cache_control !== undefined) count += 1;
+    for (const message of body.messages as Array<Record<string, unknown>>) {
+      const content = message.content;
+      if (!Array.isArray(content)) continue;
+      for (const part of content as Array<Record<string, unknown>>) {
+        if (part.cache_control !== undefined) count += 1;
+      }
+    }
+    return count;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function sendChat(
+    compatibility: Record<string, unknown> | undefined,
+    payload: SystemPromptPayload | undefined = { text: 'sys', cacheKey: 'sess-1', cachePolicy: 'auto' },
+  ): Promise<Record<string, unknown>> {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      ...(compatibility ? { compatibility: compatibility as never } : {}),
+    });
+    await provider.chat(chatMessages, payload, makeTools());
+    return JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+  }
+
+  it('anthropic: маркеры на последнем tool, system и границе последнего сообщения; prompt_cache_key нет', async () => {
+    const body = await sendChat({ cacheFormat: 'anthropic' });
+    const tools = body.tools as Array<Record<string, unknown>>;
+    const messages = body.messages as Array<Record<string, unknown>>;
+
+    // tools: маркер ровно на последнем дефинишне (AUTO-набор).
+    expect(tools[0]!.cache_control).toBeUndefined();
+    expect(tools[tools.length - 1]!.cache_control).toEqual({ type: 'ephemeral' });
+
+    // system: контент — массив частей с маркером (как в opencode AUTO).
+    const system = messages[0]!;
+    expect(system.role).toBe('system');
+    expect((system.content as Array<Record<string, unknown>>)[0]).toEqual({
+      type: 'text',
+      text: 'sys',
+      cache_control: { type: 'ephemeral' },
+    });
+
+    // граница последнего сообщения (tail: 1) — строковый контент развёрнут в часть.
+    const last = messages[messages.length - 1]!;
+    expect(last.role).toBe('user');
+    expect(last.content).toEqual([
+      { type: 'text', text: 'ещё вопрос', cache_control: { type: 'ephemeral' } },
+    ]);
+
+    // Механизмы не смешиваются: inline-маркеры вместо ключа.
+    expect(body.prompt_cache_key).toBeUndefined();
+    expect(countMarkers(body)).toBe(3);
+    expect(countMarkers(body)).toBeLessThanOrEqual(4);
+  });
+
+  it('alibaba: system + граница последнего сообщения, маркера на tools нет; prompt_cache_key нет', async () => {
+    const body = await sendChat({ cacheFormat: 'alibaba' });
+    const tools = body.tools as Array<Record<string, unknown>>;
+    const messages = body.messages as Array<Record<string, unknown>>;
+
+    for (const tool of tools) expect(tool.cache_control).toBeUndefined();
+    expect((messages[0]!.content as Array<Record<string, unknown>>)[0]!.cache_control).toEqual({
+      type: 'ephemeral',
+    });
+    expect(messages[messages.length - 1]!.content).toEqual([
+      { type: 'text', text: 'ещё вопрос', cache_control: { type: 'ephemeral' } },
+    ]);
+    expect(body.prompt_cache_key).toBeUndefined();
+    expect(countMarkers(body)).toBe(2);
+  });
+
+  it('без cacheFormat: прежнее поведение — только prompt_cache_key, маркеров нет', async () => {
+    const body = await sendChat(undefined);
+    expect(body.prompt_cache_key).toBe('sess-1');
+    expect(countMarkers(body)).toBe(0);
+    // system-контент остаётся прежним (без cache_control).
+    expect((body.messages as Array<Record<string, unknown>>)[0]!.content).toEqual([
+      { type: 'text', text: 'sys' },
+    ]);
+  });
+
+  it('cachePolicy none + cacheFormat: ни маркеров, ни prompt_cache_key', async () => {
+    const body = await sendChat({ cacheFormat: 'anthropic' }, { text: 'sys', cacheKey: 'sess-1', cachePolicy: 'none' });
+    expect(countMarkers(body)).toBe(0);
+    expect(body.prompt_cache_key).toBeUndefined();
+  });
+
+  it('уже стоящие маркеры не дублируются и учитываются в бюджете (≤4)', async () => {
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { cacheFormat: 'anthropic' } as never,
+    }) as unknown as OpenAIPrivate;
+    const tools = makeTools();
+    tools[tools.length - 1]!.cache_control = { type: 'ephemeral' };
+    const body: Record<string, unknown> = {
+      tools,
+      messages: [
+        { role: 'system', content: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }] },
+        { role: 'user', content: [{ type: 'text', text: 'q', cache_control: { type: 'ephemeral' } }] },
+        // Ещё один маркер — бюджет (4) исчерпан до запуска политики.
+        { role: 'assistant', content: [{ type: 'text', text: 'a', cache_control: { type: 'ephemeral' } }] },
+      ],
+    };
+    provider._applyInlineCacheMarkers(body, undefined, { cacheFormat: 'anthropic' });
+    expect(countMarkers(body)).toBe(4);
+    // Дубликатов нет: инструменты и system сохранили по одному маркеру.
+    expect(tools[tools.length - 1]!.cache_control).toEqual({ type: 'ephemeral' });
+  });
+
+  it('бюджет считает system из двух частей: последний блок тоже маркируется, лимит не превышен', () => {
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { cacheFormat: 'anthropic' } as never,
+    }) as unknown as OpenAIPrivate;
+    const body: Record<string, unknown> = {
+      tools: makeTools(),
+      messages: [
+        { role: 'system', content: [{ type: 'text', text: 'stable' }, { type: 'text', text: 'rest' }] },
+        { role: 'user', content: 'q' },
+      ],
+    };
+    provider._applyInlineCacheMarkers(body, undefined, { cacheFormat: 'anthropic' });
+    const systemParts = (body.messages as Array<Record<string, unknown>>)[0]!.content as Array<Record<string, unknown>>;
+    expect(systemParts[0]!.cache_control).toEqual({ type: 'ephemeral' });
+    expect(systemParts[1]!.cache_control).toEqual({ type: 'ephemeral' });
+    expect(countMarkers(body)).toBe(4);
+  });
+
+  it('пустой system не ломает политику: маркер только на tools и последнем сообщении', () => {
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { cacheFormat: 'anthropic' } as never,
+    }) as unknown as OpenAIPrivate;
+    const body: Record<string, unknown> = {
+      tools: makeTools(),
+      messages: [{ role: 'user', content: 'q' }],
+    };
+    provider._applyInlineCacheMarkers(body, undefined, { cacheFormat: 'anthropic' });
+    expect(countMarkers(body)).toBe(2);
+  });
+
+  it('последнее сообщение без текста (tool-result) — маркер на последней части', () => {
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { cacheFormat: 'anthropic' } as never,
+    }) as unknown as OpenAIPrivate;
+    const body: Record<string, unknown> = {
+      messages: [
+        {
+          role: 'tool',
+          content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }],
+        },
+      ],
+    };
+    provider._applyInlineCacheMarkers(body, undefined, { cacheFormat: 'anthropic' });
+    const parts = (body.messages as Array<Record<string, unknown>>)[0]!.content as Array<Record<string, unknown>>;
+    expect(parts[0]!.cache_control).toEqual({ type: 'ephemeral' });
+  });
+});
+
+describe('OpenAIProvider — requireFinishReason (ADR-117)', () => {
+  function sseResponse(events: string[]): Response {
+    return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  const contentChunk = JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' } }] });
+  const finishChunk = JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+
+  async function drain(gen: AsyncIterable<LLMChunk>): Promise<LLMChunk[]> {
+    const out: LLMChunk[] = [];
+    for await (const chunk of gen) out.push(chunk);
+    return out;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('стрим без finish_reason по умолчанию → ошибка (incomplete-stream)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([contentChunk, '[DONE]'])));
+    const provider = new OpenAIProvider(plainParams);
+    await expect(drain(provider.chatAsync([makeMessage()]))).rejects.toThrow(/finish_reason/);
+  });
+
+  it('requireFinishReason: false → прежнее толерантное поведение (успех)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([contentChunk, '[DONE]'])));
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { requireFinishReason: false },
+    });
+    const chunks = await drain(provider.chatAsync([makeMessage()]));
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.content).toBe('ok');
+  });
+
+  it('стрим с finish_reason → успех (дефолт)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([contentChunk, finishChunk, '[DONE]'])));
+    const provider = new OpenAIProvider(plainParams);
+    const chunks = await drain(provider.chatAsync([makeMessage()]));
+    expect(chunks.find((c) => c.isFinal)!.content).toBe('ok');
+  });
+
+  it('finish_reason: null не считается завершением', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      contentChunk,
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: null }] }),
+      '[DONE]',
+    ])));
+    const provider = new OpenAIProvider(plainParams);
+    await expect(drain(provider.chatAsync([makeMessage()]))).rejects.toThrow(/finish_reason/);
+  });
+
+  it('ошибка невосстановимая для ретрай-цикла (не путается с transport-ошибками)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([contentChunk, '[DONE]'])));
+    const provider = new OpenAIProvider(plainParams);
+    const { isLlmErrorRecoverable } = await import('../engine/llm-error.js');
+    let caught: unknown;
+    try {
+      await drain(provider.chatAsync([makeMessage()]));
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(isLlmErrorRecoverable(caught)).toBe(false);
+  });
+
+  it('пользовательская отмена не превращается в ошибку finish_reason', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([contentChunk])));
+    const provider = new OpenAIProvider(plainParams);
+    const token = { cancelled: true, cancel: () => {} };
+    const chunks = await drain(provider.chatAsync([makeMessage()], undefined, undefined, undefined, token));
+    expect(chunks).toEqual([]);
   });
 });

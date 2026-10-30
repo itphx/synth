@@ -1872,8 +1872,14 @@
   пустой строкой, если reasoning нет), `maxTokensField` (`max_tokens` — дефолт; `max_completion_tokens`
   только явным значением, иначе локальные серверы ломаются), `requireAssistantAfterTool`
   (assistant-«мост» после `tool`-результатов, Mistral-семейство), `streamUsage`
-  (`stream_options.include_usage`, дефолт включён), `supportsToolChoice` (у нативного Ollama — `false`).
-  Два уровня: `ProviderConfig.compatibility` — дефолты провайдера, `ModelConfig.compatibility` —
+  (`stream_options.include_usage`, дефолт включён), `supportsToolChoice` (у нативного Ollama — `false`),
+  `cacheFormat` (`anthropic`/`alibaba` — inline-маркеры `cache_control` в openai-теле: последний tool +
+  system + хвост / только system + хвост, бюджет ≤4, `prompt_cache_key` при заданном значении не
+  отправляется; без `cacheFormat` — прежний implicit prefix caching), `requireFinishReason` (дефолт
+  `true` — стрим без `finish_reason` = incomplete-stream, ошибка невосстановимая: паттерн в
+  `UNRECOVERABLE_PATTERNS`). `supportsEffortUpdates` из opencode **не переносим**: это флаг mid-turn
+  обновления effort (`output_config.effort` на каждое сообщение), а `reasoningLevel` у нас задаётся на
+  запрос и посреди хода не меняется — поле без механики было бы мёртвым. Два уровня: `ProviderConfig.compatibility` — дефолты провайдера, `ModelConfig.compatibility` —
   перекрывает их по каждому полю; `ModelConfig.requiresReasoning` — **shorthand** для
   `compatibility.requireReasoning` (нормализация `compatibility.requireReasoning ?? requiresReasoning`).
   Порядок резолва — **модель → провайдер → эвристика → дефолт** (`resolveModelCompatibility`); явный

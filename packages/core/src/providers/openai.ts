@@ -19,9 +19,141 @@ import {
 } from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
-import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
+import { ContextLengthExceededError, ProviderError, RateLimitError } from './exceptions.js';
 // ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
+
+/**
+ * ADR-117: бюджет `cache_control` breakpoint'ов на запрос (паритет с
+ * `BREAKPOINT_CAP` в opencode, `packages/ai/src/cache-policy.ts`).
+ */
+const MAX_CACHE_BREAKPOINTS = 4;
+
+/** Маркер inline-кэша для провайдера (`cache_control: {type:'ephemeral'}`). */
+function ephemeralCacheControl(): Record<string, unknown> {
+  return { type: 'ephemeral' };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * ADR-117: сколько `cache_control`-маркеров уже стоит в теле запроса
+ * (tools + части контента сообщений). Уже стоящие маркеры не дублируются и
+ * расходуют бюджет.
+ */
+function countCacheMarkers(body: Record<string, unknown>): number {
+  let count = 0;
+  const tools = body.tools;
+  if (Array.isArray(tools)) {
+    for (const tool of tools) {
+      if (isRecord(tool) && tool.cache_control !== undefined) count += 1;
+    }
+  }
+  const messages = body.messages;
+  if (Array.isArray(messages)) {
+    for (const message of messages) {
+      if (!isRecord(message) || !Array.isArray(message.content)) continue;
+      for (const part of message.content) {
+        if (isRecord(part) && part.cache_control !== undefined) count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+/** Тип функции-маркера: ставит `cache_control` на часть, если бюджет не исчерпан. */
+type CacheMark = (target: Record<string, unknown>) => boolean;
+
+function createCacheMark(budget: { remaining: number }): CacheMark {
+  return (target: Record<string, unknown>): boolean => {
+    if (budget.remaining <= 0) return false;
+    // Уже стоящий маркер не дублируем и бюджет не тратим.
+    if (target.cache_control !== undefined) return false;
+    target.cache_control = ephemeralCacheControl();
+    budget.remaining -= 1;
+    return true;
+  };
+}
+
+/** Маркер на последнем tool-дефинишне (AUTO-набор, `tools: true`). */
+function markLastTool(tools: unknown, mark: CacheMark): void {
+  if (!Array.isArray(tools) || tools.length === 0) return;
+  const last = tools[tools.length - 1];
+  if (isRecord(last)) mark(last);
+}
+
+/**
+ * Маркеры границ system: первый и последний **различные** блоки (как AUTO в
+ * opencode, `markSystemBoundaries`). У нас system обычно одним блоком — тогда
+ * ровно один маркер.
+ */
+function markSystemBoundaries(messages: unknown, mark: CacheMark): void {
+  if (!Array.isArray(messages)) return;
+  const system = messages.find((message) => isRecord(message) && message.role === 'system') as
+    | Record<string, unknown>
+    | undefined;
+  if (!system) return;
+  const parts = system.content;
+  if (typeof parts === 'string') {
+    if (parts.length === 0) return;
+    const part: Record<string, unknown> = { type: 'text', text: parts };
+    if (!mark(part)) return;
+    system.content = [part];
+    return;
+  }
+  if (!Array.isArray(parts) || parts.length === 0) return;
+  const first = parts[0];
+  if (isRecord(first)) mark(first);
+  if (parts.length >= 2) {
+    const last = parts[parts.length - 1];
+    // Один и тот же блок дважды не маркируем.
+    if (isRecord(last) && last !== first) mark(last);
+  }
+}
+
+/**
+ * Маркер границы последнего сообщения (`messages: {tail: 1}`): последняя
+ * текстовая часть, а если её нет — последняя часть контента (tool-result-only
+ * сообщение тоже получает breakpoint). Строковый контент разворачивается в
+ * массив частей — так маркер и живёт на проводе (`{type:'text', text,
+ * cache_control}`).
+ */
+function markLastMessageBoundary(messages: unknown, mark: CacheMark): void {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+  const last = messages[messages.length - 1];
+  if (!isRecord(last)) return;
+  const content = last.content;
+
+  if (typeof content === 'string') {
+    if (content.length === 0) return;
+    const part: Record<string, unknown> = { type: 'text', text: content };
+    if (!mark(part)) return;
+    last.content = [part];
+    return;
+  }
+  if (!Array.isArray(content) || content.length === 0) return;
+
+  let target: Record<string, unknown> | undefined;
+  for (let i = content.length - 1; i >= 0; i--) {
+    const part = content[i];
+    if (isRecord(part) && part.type === 'text') {
+      target = part;
+      break;
+    }
+  }
+  if (!target) {
+    for (let i = content.length - 1; i >= 0; i--) {
+      const part = content[i];
+      if (isRecord(part)) {
+        target = part;
+        break;
+      }
+    }
+  }
+  if (target) mark(target);
+}
 
 /**
  * Имя файла для `file`-блока вложения (ADR-115).
@@ -68,7 +200,8 @@ export class OpenAIProvider extends BaseProvider {
     }
     if (stream) body.stream = true;
     if (this.maxTokens && this.maxTokens > 0) body[compatibility.maxTokensField] = this.maxTokens;
-    this._applyPromptCacheKey(body, systemPrompt);
+    this._applyPromptCacheKey(body, systemPrompt, compatibility);
+    this._applyInlineCacheMarkers(body, systemPrompt, compatibility);
 
     const headers = this._getHeaders();
     if (debugCollector?.enabled) {
@@ -135,7 +268,8 @@ export class OpenAIProvider extends BaseProvider {
       if (options?.toolChoice) body.tool_choice = options.toolChoice;
     }
     if (this.maxTokens && this.maxTokens > 0) body[compatibility.maxTokensField] = this.maxTokens;
-    this._applyPromptCacheKey(body, systemPrompt);
+    this._applyPromptCacheKey(body, systemPrompt, compatibility);
+    this._applyInlineCacheMarkers(body, systemPrompt, compatibility);
 
     const headers = this._getHeaders();
     if (debugCollector?.enabled) {
@@ -146,6 +280,11 @@ export class OpenAIProvider extends BaseProvider {
     let accumulatedReasoning = '';
     let accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
+    // ADR-117: `finish_reason` — признак корректного завершения стрима.
+    // Провайдер, закрывший соединение без него, отдал недописанный ответ;
+    // ловим это после чтения (дефолт — ошибка, `requireFinishReason: false` —
+    // прежнее толерантное поведение).
+    let finishReasonSeen = false;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
@@ -228,6 +367,8 @@ export class OpenAIProvider extends BaseProvider {
 
               const choices = chunkData.choices as Array<Record<string, unknown>> | undefined;
               const delta = choices?.[0]?.delta as Record<string, unknown> | undefined;
+              // Пустая строка/`null` завершением не считаются.
+              if (choices?.[0]?.finish_reason) finishReasonSeen = true;
 
               if (delta) {
                 // Reasoning приходит в разных форматах: DeepSeek — `reasoning_content`,
@@ -331,6 +472,18 @@ export class OpenAIProvider extends BaseProvider {
       }
 
       if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
+        // ADR-117: стрим закончился без `finish_reason` — incomplete-stream.
+        // `ProviderError` + `finish_reason` в тексте: `classifyLlmError`/
+        // `isLlmErrorRecoverable` относят это к невосстановимым ошибкам
+        // (повтор не поможет — провайдер недописал ответ), транспортные
+        // ошибки (network/timeout/rate_limit) по-прежнему ретраятся.
+        if (compatibility.requireFinishReason && !finishReasonSeen) {
+          throw new ProviderError(
+            `Провайдер закрыл стрим без finish_reason (model=${this.model})`,
+            this.name,
+          );
+        }
+
         debugCollector?.captureApiResponse({
           usage: accumulatedUsage,
           model: this.model,
@@ -593,11 +746,54 @@ export class OpenAIProvider extends BaseProvider {
    * ADR-070 §2.2: OpenAI не поддерживает явный cache_control — используется
    * implicit prefix caching через `prompt_cache_key` (стабильный id сессии).
    * При `cachePolicy: 'none'` ключ не отправляется.
+   *
+   * ADR-117: при заданном `compatibility.cacheFormat` ключ **не отправляется** —
+   * провайдер ориентирован на inline-маркеры (`_applyInlineCacheMarkers`), а
+   * это разные механизмы (как в opencode).
    */
-  private _applyPromptCacheKey(body: Record<string, unknown>, systemPrompt?: SystemPromptInput): void {
+  private _applyPromptCacheKey(
+    body: Record<string, unknown>,
+    systemPrompt?: SystemPromptInput,
+    compatibility: ResolvedModelCompatibility = this._resolveCompatibility(),
+  ): void {
+    if (compatibility.cacheFormat) return;
     if (typeof systemPrompt !== 'object' || systemPrompt === null) return;
     if (systemPrompt.cachePolicy === 'none') return;
     if (systemPrompt.cacheKey) body.prompt_cache_key = systemPrompt.cacheKey;
+  }
+
+  /**
+   * ADR-117: inline-маркеры prompt-cache (`cache_control: {type:'ephemeral'}`)
+   * для OpenAI-совместимых провайдеров, которые кешируют только по явным
+   * маркерам. Набор задаётся данными — `compatibility.cacheFormat`:
+   *
+   *  - `anthropic` — как AUTO в opencode: последний tool-дефинишн, границы
+   *    system и граница последнего сообщения (`tail: 1`);
+   *  - `alibaba` — как QWEN в opencode: system и граница последнего сообщения,
+   *    **без** маркера на tools (Qwen кеширует tools вместе с system-промптом).
+   *
+   * Бюджет — не больше `MAX_CACHE_BREAKPOINTS` на запрос; уже стоящие маркеры
+   * не дублируются и учитываются. `cachePolicy: 'none'` — ни одного маркера.
+   * Без `cacheFormat` метод ничего не делает: поведение прежних провайдеров
+   * (в т.ч. system-контент частями, который ждут не все эндпоинты) не меняется.
+   */
+  private _applyInlineCacheMarkers(
+    body: Record<string, unknown>,
+    systemPrompt: SystemPromptInput | undefined,
+    compatibility: ResolvedModelCompatibility = this._resolveCompatibility(),
+  ): void {
+    const format = compatibility.cacheFormat;
+    if (!format) return;
+    const payload = typeof systemPrompt === 'object' && systemPrompt !== null ? systemPrompt : undefined;
+    if (payload?.cachePolicy === 'none') return;
+
+    const budget = { remaining: MAX_CACHE_BREAKPOINTS - countCacheMarkers(body) };
+    if (budget.remaining <= 0) return;
+    const mark = createCacheMark(budget);
+
+    if (format === 'anthropic') markLastTool(body.tools, mark);
+    markSystemBoundaries(body.messages, mark);
+    markLastMessageBoundary(body.messages, mark);
   }
 
   private _getHeaders(): Record<string, string> {

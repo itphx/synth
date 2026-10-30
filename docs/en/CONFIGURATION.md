@@ -1593,14 +1593,17 @@ rather than hardcoded per provider type. The same object exists on two levels:
 | `requireAssistantAfterTool` | An assistant turn is required after `tool` results (Mistral family) | `false` (heuristic) |
 | `streamUsage` | Send `stream_options: {include_usage: true}` in the stream | `true` |
 | `supportsToolChoice` | The provider understands `tool_choice` | `true` (native Ollama — `false`) |
+| `cacheFormat` | Prompt-cache inline marker format (`cache_control: {type:'ephemeral'}`): `anthropic` — last tool + system + last message boundary; `alibaba` — system + last message boundary (no tools). Budget — ≤4 breakpoints; when set, `prompt_cache_key` is **not** sent | Unset (`prompt_cache_key` only) |
+| `requireFinishReason` | Require `finish_reason` in the stream: a provider that closes the stream without it returned an incomplete answer (incomplete-stream, not retried) | `true` |
 
 - **Priority:** the explicit **model** value → the explicit **provider** value → the **heuristic** →
   the built-in default (`resolveModelCompatibility`). Heuristics (`detectCompatibilityHeuristics`) apply
   only to unset fields: `requireReasoning` — provider type/name `deepseek`, a URL containing
   `deepseek.com`, a model id containing `deepseek`; `requireAssistantAfterTool` — `mistral`/`devstral`/
-  `codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField` and
-  `streamUsage` are not heuristically detected: local OpenAI-compatible servers often do not know
-  `max_completion_tokens`.
+  `codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField`,
+  `streamUsage`, `cacheFormat` and `requireFinishReason` are not heuristically detected: local
+  OpenAI-compatible servers often do not know `max_completion_tokens`, and cache inline markers plus the
+  `finish_reason` requirement are enabled explicitly only (existing catalog entries keep their behavior).
 - **Where it is set:** `POST`/`PATCH /api/v2/providers` — the `compatibility` field (provider defaults);
   `POST /api/v2/models` — `compatibility` (override for a specific model). `GET` returns the field
   **only when set**.

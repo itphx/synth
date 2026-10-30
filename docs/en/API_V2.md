@@ -592,7 +592,9 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 > **Provider compatibility layer — `compatibility` (ADR-117, 2026-10-30).** An optional
 > `ModelCompatibility` object: `reasoningField` (the openai-chat reasoning field name, default
 > `reasoning_content`), `requireReasoning`, `maxTokensField` (`max_tokens` \| `max_completion_tokens`),
-> `requireAssistantAfterTool`, `streamUsage`, `supportsToolChoice`. Here these are the **provider defaults**
+> `requireAssistantAfterTool`, `streamUsage`, `supportsToolChoice`, `cacheFormat` (`anthropic` \| `alibaba` —
+> `cache_control` inline markers, budget ≤4; when set, `prompt_cache_key` is not sent), `requireFinishReason`
+> (default `true`). Here these are the **provider defaults**
 > for all its models; a model overrides fields pointwise (`ModelConfig.compatibility`, §5.10). Semantics —
 > **replacement**: the object replaces the value entirely (a field missing from the object means “auto”,
 > not “keep the previous value”), `null`/`{}` — reset, the field absent — unchanged; an unknown field or a
@@ -614,8 +616,9 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 > **Model compatibility — `compatibility` and `requires_reasoning` (ADR-117, 2026-10-30).** A model may
 > override the provider compatibility layer (§5.9) with the `compatibility` field — the same object
 > (`reasoningField`, `requireReasoning`, `maxTokensField`, `requireAssistantAfterTool`, `streamUsage`,
-> `supportsToolChoice`), semantics are **replacement**: the object replaces the value entirely,
-> `null`/`{}` — reset, the field absent — unchanged, an unknown field/type → `400 VALIDATION_ERROR`.
+> `supportsToolChoice`, `cacheFormat`, `requireFinishReason`), semantics are **replacement**: the object
+> replaces the value entirely, `null`/`{}` — reset, the field absent — unchanged, an unknown field/type →
+> `400 VALIDATION_ERROR`.
 > `requires_reasoning` (the camelCase `requiresReasoning` too) is a **shorthand** for
 > `compatibility.requireReasoning`: `true` — the reasoning field is mandatory on **every** assistant
 > message (an empty string when there is no reasoning), `false` — force off, `null` — reset (clears both

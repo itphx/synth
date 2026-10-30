@@ -39,7 +39,8 @@
 
 1. **Один контракт на двух уровнях.** `ModelCompatibility` (`shared/types/provider.ts`):
    `reasoningField`, `requireReasoning`, `maxTokensField`, `requireAssistantAfterTool`,
-   `streamUsage`, `supportsToolChoice`. `ProviderConfig.compatibility` — дефолты для всех моделей
+   `streamUsage`, `supportsToolChoice`, `cacheFormat`, `requireFinishReason`.
+   `ProviderConfig.compatibility` — дефолты для всех моделей
    провайдера, `ModelConfig.compatibility` — перекрывает их по каждому полю. `ModelConfig.requiresReasoning`
    остаётся **shorthand** для `compatibility.requireReasoning` (обратная совместимость записей,
    созданных между `ea20dc45` и `f3d1b780`; нормализация — `compatibility.requireReasoning ?? requiresReasoning`).
@@ -75,7 +76,37 @@
    изменений; неизвестное поле или неверный тип → `400 VALIDATION_ERROR` (опечатка не теряется молча).
    `GET` отдаёт `compatibility`, только если он задан. `requires_reasoning: null` у модели сбрасывает
    и shorthand, и `compatibility.requireReasoning`.
-8. **UI.** В формах провайдера и модели — сворачиваемый блок «Расширенные параметры»
+8. **Inline-кэш и `finish_reason` — тот же слой (2026-10-30, второй заход).**
+   - `cacheFormat: 'anthropic' | 'alibaba'` включает **inline-маркеры** prompt-cache в теле
+     OpenAI-совместимого запроса (`cache_control: {type:'ephemeral'}` на частях контента и на
+     tool-дефинишне) — паритет с `cacheFormat`/`CachePolicy` в opencode
+     (`packages/ai/src/cache-policy.ts`). `anthropic` = AUTO (`tools: true`, `system: true`,
+     `messages: {tail: 1}`), `alibaba` = QWEN (`system: true`, `messages: {tail: 1}`, **без** tools:
+     Qwen кеширует tools вместе с system). Бюджет — `BREAKPOINT_CAP = 4` на запрос: уже стоящие
+     маркеры не дублируются и расходуют бюджет, порядок заполнения — tools → system → хвост.
+     System-контент при маркировке — массив частей (`{type:'text', text, cache_control}`).
+     При заданном `cacheFormat` `prompt_cache_key` **не** отправляется: это разные механизмы, и
+     провайдер, ориентированный на маркеры, полагается только на них (как в opencode). Без
+     `cacheFormat` поведение прежнее (только implicit prefix caching), поэтому запросы к обычным
+     OpenAI-совместимым эндпоинтам не меняются.
+   - `requireFinishReason` (дефолт **`true`**, как `request.model.compatibility?.requireFinishReason
+     ?? true` в opencode): стрим, закрытый без `finish_reason`, — недописанный ответ
+     (incomplete-stream) → `ProviderError` «Провайдер закрыл стрим без finish_reason». Ошибка
+     **невосстановимая**: в `UNRECOVERABLE_PATTERNS` (`engine/llm-error.ts`) добавлен паттерн
+     `finish_reason`, поэтому `isLlmErrorRecoverable` не ретраит её (как прочие invalid-output), а
+     транспортные ошибки (`network`/`timeout`/`rate_limit`) сохраняют прежнюю политику повторов.
+     Явный `false` возвращает толерантное поведение (провайдер без `finish_reason`).
+   - **`supportsEffortUpdates` — осознанно не реализован.** В opencode это флаг механизма
+     «обновление effort **посреди хода**» (`output_config.effort` на каждое сообщение, `effort`
+     как часть запроса — steering уровня размышлений). У нас такого механизма нет: `reasoningLevel`
+     задаётся **на запрос** из агента/сессии (`AgentDefinition.reasoningLevel` →
+     `provider.reasoningLevel`), mid-turn обновлений не существует. Поле без механики было бы
+     мёртвым кодом (и ложно обещало бы возможность). Если механизм появится, понадобится:
+     маппинг `reasoningLevel` → `output_config.effort` для Anthropic 5.x (масштаб `low|medium|high`
+     → effort-тиры провайдера), применение на **границе шага** (там же, где ADR-104 применяет
+     steer-инъекции), `strip` для моделей/провайдеров без поддержки и матрица тестов на
+     «каждое сообщение несёт актуальный effort».
+9. **UI.** В формах провайдера и модели — сворачиваемый блок «Расширенные параметры»
    (`components/admin/CompatibilityFields.tsx`): tri-state «Авто / Да / Нет» (явный `false` не
    схлопывается в «авто»), селект поля reasoning с вариантом «своё значение», «изменено»-бейдж;
    полная очистка у сущности с сохранёнными параметрами отправляет `compatibility: null`.
@@ -101,13 +132,18 @@
 - **Хорошо:** кастомные и прокси-провайдеры настраиваются данными, без релиза ядра; шаг-лимит
   работает на DeepSeek; thinking-Anthropic проходит tool-loop; Ollama не получает неизвестное поле;
   дефекты вида «400 у конкретного шлюза» лечатся в админке.
-- **Цена:** контракт шире (6 полей × 2 уровня + shorthand), поверхность для расхождения UI/сервера.
+- **Цена:** контракт шире (8 полей × 2 уровня + shorthand), поверхность для расхождения UI/сервера.
   Риск закрыт replace-семантикой, строгой валидацией и unit-тестами payload/round-trip в UI.
 - **Осознанные отличия от opencode:** дефолт `max_tokens`; `reasoningField` из ответа модели
   авто-детектится по известным полям (`reasoning_content`/`reasoning`), произвольное имя задаётся
   только конфигом.
-- **Остатки:** авто-определения для `maxTokensField`/`streamUsage` нет (только явное значение или
-  дефолт); существующие записи каталога не мигрируются (совместимость — через эвристики и дефолты);
+- **Остатки:** авто-определения для `maxTokensField`/`streamUsage`/`cacheFormat` нет (только явное
+  значение или дефолт) — так существующие записи каталога не начинают внезапно ставить маркеры;
+  `cacheFormat`/`requireFinishReason` пока не выводятся в UI-форме «Расширенные параметры» (API/каталог
+  принимают их уже сейчас). ⚠️ Пока полей нет в черновике UI, сохранение провайдера/модели из админки
+  (replace-семантика `compatibility`) их **сбрасывает** — до появления полей в форме задавать их через
+  API; при первом UI-заходе добавить оба поля в `CompatibilityDraft`/`compatibilityFromDraft`;
+ существующие записи каталога не мигрируются (совместимость — через эвристики и дефолты);
   блоки thinking фильтруются по **роли агента**, а не по фактической паре provider/model — при смене
   модели/провайдера у того же агента сохранённые подписи всё равно уйдут в историю (симметрично
   `engine/tools/task/resume-target.ts`); подпись реплеится только когда thinking включён в этом
@@ -120,8 +156,10 @@
 - контракт и резолв — `packages/shared/src/types/provider.ts` (`ModelCompatibility`,
   `ResolvedModelCompatibility`, `detectCompatibilityHeuristics`, `mergeModelCompatibility`,
   `resolveModelCompatibility`, `parseModelCompatibilityInput`);
-- провайдеры — `packages/core/src/providers/base.ts` (`resolveProviderCompatibility`), `openai.ts`,
-  `ollama.ts`, `anthropic.ts` (`resolveThinkingBudget`, порядок блоков, подпись);
+- провайдеры — `packages/core/src/providers/base.ts` (`resolveProviderCompatibility`), `openai.ts`
+  (`_applyInlineCacheMarkers` — маркеры `cache_control` при `cacheFormat`, `finish_reason`-контроль
+  стрима, `_applyPromptCacheKey` без ключа при `cacheFormat`), `ollama.ts`, `anthropic.ts`
+  (`resolveThinkingBudget`, порядок блоков, подпись);
 - проброс — `engine/router/{utils,provider-pool}.ts`, `server/app/deps.ts`, `backend/app/deps.ts`,
   шаги пайплайнов и aux-модели вложений;
 - API — `server/routes/{providers,models}.ts`; UI — `components/admin/CompatibilityFields.tsx`,

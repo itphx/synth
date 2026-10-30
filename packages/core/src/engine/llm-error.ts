@@ -57,6 +57,10 @@ const UNRECOVERABLE_PATTERNS = [
   'unknown field', 'bad request', 'validation',
   'err_invalid_arg_type', 'cannot read properties',
   'is not a function', 'is not defined',
+  // ADR-117: провайдер закрыл стрим без `finish_reason` — недописанный ответ
+  // (incomplete-stream). Повтор не помогает: ответ испорчен на стороне
+  // провайдера, поэтому ошибка невосстановимая (как прочие invalid-output).
+  'finish_reason',
 ];
 
 /**

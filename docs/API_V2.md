@@ -706,7 +706,9 @@ sha256, небезопасный путь в архиве, небезопасн�
 > **Слой совместимости провайдера — `compatibility` (ADR-117, 2026-10-30).** Необязательный объект
 > `ModelCompatibility`: `reasoningField` (имя reasoning-поля openai-chat, дефолт `reasoning_content`),
 > `requireReasoning`, `maxTokensField` (`max_tokens` \| `max_completion_tokens`), `requireAssistantAfterTool`,
-> `streamUsage`, `supportsToolChoice`. Здесь это **дефолты провайдера** для всех его моделей; модель
+> `streamUsage`, `supportsToolChoice`, `cacheFormat` (`anthropic` \| `alibaba` — inline-маркеры
+> `cache_control`, бюджет ≤4; при заданном значении `prompt_cache_key` не отправляется),
+> `requireFinishReason` (дефолт `true`). Здесь это **дефолты провайдера** для всех его моделей; модель
 > перекрывает поля точечно (`ModelConfig.compatibility`, §5.10). Семантика — **замена**: объект
 > заменяет значение целиком (отсутствующее в объекте поле означает «авто», а не «сохранить прежнее»),
 > `null`/`{}` — сброс, поле не передано — без изменений; неизвестное поле или неверный тип →
@@ -736,7 +738,8 @@ sha256, небезопасный путь в архиве, небезопасн�
 > **Совместимость модели — `compatibility` и `requires_reasoning` (ADR-117, 2026-10-30).** Модель может
 > перекрывать провайдерский слой совместимости (§5.9) полем `compatibility` — тот же объект
 > (`reasoningField`, `requireReasoning`, `maxTokensField`, `requireAssistantAfterTool`, `streamUsage`,
-> `supportsToolChoice`), семантика **замены**: объект заменяет значение целиком, `null`/`{}` — сброс,
+> `supportsToolChoice`, `cacheFormat`, `requireFinishReason`), семантика **замены**: объект заменяет
+> значение целиком, `null`/`{}` — сброс,
 > поле не передано — без изменений, неизвестное поле/тип → `400 VALIDATION_ERROR`.
 > `requires_reasoning` (camelCase `requiresReasoning` тоже) — **shorthand** для
 > `compatibility.requireReasoning`: `true` — поле reasoning обязательно у **каждого** assistant-сообщения

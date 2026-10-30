@@ -56,6 +56,31 @@ export function hasPriceInput(body: unknown): boolean {
 export type MaxTokensField = 'max_tokens' | 'max_completion_tokens';
 
 /**
+ * Формат inline-маркеров prompt-cache в теле OpenAI-совместимого запроса
+ * (`cache_control: { type: 'ephemeral' }` на частях контента и на
+ * tool-дефинишнах) — аналог `cacheFormat` в opencode
+ * (`packages/ai/src/cache-policy.ts`).
+ *
+ *  - `anthropic` — полный AUTO-набор: последний tool-дефинишн, system-блок и
+ *    граница последнего сообщения (`tail: 1`);
+ *  - `alibaba` — QWEN-набор: system-блок и граница последнего сообщения,
+ *    **без** маркера на tools (Qwen кеширует tools вместе с system-промптом и
+ *    игнорирует маркеры на дефинишнах).
+ *
+ * Не задан — inline-маркеры не ставятся, работает прежний механизм:
+ * implicit prefix caching через `prompt_cache_key`.
+ */
+export type CacheFormat = 'anthropic' | 'alibaba';
+
+/** Канонические значения `cacheFormat` (для валидации входных данных API). */
+export const CACHE_FORMATS = ['anthropic', 'alibaba'] as const;
+
+/** Проверка, что значение — допустимый формат inline-маркеров кэша. */
+export function isCacheFormat(value: unknown): value is CacheFormat {
+  return typeof value === 'string' && (CACHE_FORMATS as readonly string[]).includes(value);
+}
+
+/**
  * Явные особенности протокола провайдера/модели (аналог `Compatibility` в
  * opencode, `packages/schema/src/model-compatibility.ts`).
  *
@@ -88,6 +113,24 @@ export interface ModelCompatibility {
    * `/api/chat` — `false` (эвристика по `type: 'ollama'`).
    */
   supportsToolChoice?: boolean;
+  /**
+   * Формат inline-маркеров prompt-cache (`cache_control`). Не задан — маркеры
+   * не ставятся, кэш работает через implicit prefix caching
+   * (`prompt_cache_key`). Задан — маркеры ставятся, а `prompt_cache_key` **не
+   * отправляется**: это разные механизмы, и провайдер, ориентированный на
+   * inline-маркеры, полагается только на них (как в opencode).
+   *
+   * Бюджет — не больше 4 breakpoint'ов на запрос (как `BREAKPOINT_CAP`).
+   */
+  cacheFormat?: CacheFormat;
+  /**
+   * Требовать `finish_reason` в стриме OpenAI-совместимого протокола.
+   * Дефолт **`true`** (как в opencode, `packages/ai/src/protocols/openai-chat.ts`):
+   * провайдер, закрывший стрим без `finish_reason`, — недописанный ответ
+   * (incomplete-stream). `false` — прежнее толерантное поведение (стрим
+   * считается завершённым).
+   */
+  requireFinishReason?: boolean;
 }
 
 /**
@@ -107,6 +150,12 @@ export interface ResolvedModelCompatibility {
   requireAssistantAfterTool: boolean;
   streamUsage: boolean;
   supportsToolChoice: boolean;
+  requireFinishReason: boolean;
+  /**
+   * Формат inline-маркеров кэша; `undefined` — маркеры не ставятся (в отличие
+   * от прочих полей, «не задано» здесь — осмысленное состояние, а не дефолт).
+   */
+  cacheFormat?: CacheFormat;
 }
 
 /** Контекст, по которому считаются эвристики совместимости. */
@@ -132,6 +181,8 @@ export const MODEL_COMPATIBILITY_KEYS = [
   'requireAssistantAfterTool',
   'streamUsage',
   'supportsToolChoice',
+  'cacheFormat',
+  'requireFinishReason',
 ] as const;
 
 /**
@@ -224,6 +275,15 @@ export function resolveModelCompatibility(
       ?? providerCompat?.supportsToolChoice
       ?? heuristics.supportsToolChoice
       ?? true,
+    // Дефолт — `true` (как в opencode): стрим без `finish_reason` считается
+    // недописанным. Явный `false` возвращает толерантное поведение.
+    requireFinishReason: modelCompat?.requireFinishReason
+      ?? providerCompat?.requireFinishReason
+      ?? heuristics.requireFinishReason
+      ?? true,
+    // Inline-маркеры кэша — только явным значением: эвристики по типу
+    // провайдера не ставятся, иначе менялось бы поведение существующих записей.
+    cacheFormat: modelCompat?.cacheFormat ?? providerCompat?.cacheFormat ?? heuristics.cacheFormat,
   };
 }
 
@@ -276,7 +336,20 @@ export function parseModelCompatibilityInput(
     }
     replaced.maxTokensField = value;
   }
-  for (const key of ['requireReasoning', 'requireAssistantAfterTool', 'streamUsage', 'supportsToolChoice'] as const) {
+  if ('cacheFormat' in input) {
+    const value = input.cacheFormat;
+    if (!isCacheFormat(value)) {
+      return { ok: false, reason: 'compatibility.cacheFormat должен быть anthropic или alibaba' };
+    }
+    replaced.cacheFormat = value;
+  }
+  for (const key of [
+    'requireReasoning',
+    'requireAssistantAfterTool',
+    'streamUsage',
+    'supportsToolChoice',
+    'requireFinishReason',
+  ] as const) {
     if (!(key in input)) continue;
     const value = input[key];
     if (typeof value !== 'boolean') {

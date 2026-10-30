@@ -16,6 +16,7 @@ describe('resolveModelCompatibility — порядок «модель → про
       requireAssistantAfterTool: false,
       streamUsage: true,
       supportsToolChoice: true,
+      requireFinishReason: true,
     });
   });
 
@@ -66,6 +67,27 @@ describe('resolveModelCompatibility — порядок «модель → про
       modelId: 'gpt-5',
     });
     expect(resolveModelCompatibility(undefined, undefined, heuristics).maxTokensField).toBe('max_tokens');
+  });
+
+  it('requireFinishReason: дефолт true, явный false сильнее дефолта и эвристики', () => {
+    expect(resolveModelCompatibility().requireFinishReason).toBe(true);
+    expect(resolveModelCompatibility(undefined, { requireFinishReason: false }).requireFinishReason).toBe(false);
+    // Модель перекрывает провайдера.
+    expect(
+      resolveModelCompatibility({ requireFinishReason: false }, { requireFinishReason: true }).requireFinishReason,
+    ).toBe(true);
+    expect(resolveModelCompatibility({ requireFinishReason: false }).requireFinishReason).toBe(false);
+  });
+
+  it('cacheFormat: не задан → undefined (маркеры не ставятся), модель перекрывает провайдера', () => {
+    expect(resolveModelCompatibility().cacheFormat).toBeUndefined();
+    expect(resolveModelCompatibility({ cacheFormat: 'anthropic' }).cacheFormat).toBe('anthropic');
+    expect(
+      resolveModelCompatibility({ cacheFormat: 'anthropic' }, { cacheFormat: 'alibaba' }).cacheFormat,
+    ).toBe('alibaba');
+    // Эвристики cacheFormat не задают — поведение существующих записей не меняется.
+    const heuristics = detectCompatibilityHeuristics({ providerType: 'openai', modelId: 'claude-sonnet-4' });
+    expect(resolveModelCompatibility(undefined, undefined, heuristics).cacheFormat).toBeUndefined();
   });
 });
 
@@ -143,6 +165,34 @@ describe('parseModelCompatibilityInput — API-контракт', () => {
     expect(parseModelCompatibilityInput({ reasoningField: '' }).ok).toBe(false);
     expect(parseModelCompatibilityInput([]).ok).toBe(false);
     expect(parseModelCompatibilityInput('x').ok).toBe(false);
+  });
+
+  it('cacheFormat: принимаются только anthropic/alibaba', () => {
+    expect(parseModelCompatibilityInput({ cacheFormat: 'anthropic' })).toEqual({
+      ok: true,
+      value: { cacheFormat: 'anthropic' },
+    });
+    expect(parseModelCompatibilityInput({ cacheFormat: 'alibaba' })).toEqual({
+      ok: true,
+      value: { cacheFormat: 'alibaba' },
+    });
+    for (const bad of ['openai', 'qwen', '', null, 1]) {
+      const result = parseModelCompatibilityInput({ cacheFormat: bad });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain('cacheFormat');
+    }
+  });
+
+  it('requireFinishReason: boolean, false сохраняется явно', () => {
+    expect(parseModelCompatibilityInput({ requireFinishReason: false })).toEqual({
+      ok: true,
+      value: { requireFinishReason: false },
+    });
+    expect(parseModelCompatibilityInput({ requireFinishReason: true })).toEqual({
+      ok: true,
+      value: { requireFinishReason: true },
+    });
+    expect(parseModelCompatibilityInput({ requireFinishReason: 'no' }).ok).toBe(false);
   });
 
   it('пустой объект — нет совместимости', () => {
