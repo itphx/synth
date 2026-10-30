@@ -102,7 +102,7 @@ describe('transportStore dispatcher: части сообщения (ADR-118 §4)
 })
 
 describe('transportStore dispatcher: step.finished — учёт шага (замена stream.usage/stream.done)', () => {
-  it('маппит usage camelCase → snake_case и фиксирует статус шага', () => {
+  it('маппит usage camelCase → snake_case и фиксирует статус шага', async () => {
     dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
     dispatch(makeEvent('step.finished', 's1', {
       turnId: 't1',
@@ -124,8 +124,13 @@ describe('transportStore dispatcher: step.finished — учёт шага (зам
       timings: { chunks: 12, firstChunkMs: 120 },
     }))
 
+    // ADR-118 §5: статус шага меняется **после** сверки с историей — иначе в
+    // окне RTT текст шага мигал бы пустым (части DTO ещё не пришли).
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().messagesBySession['s1']!.find((m) => m.id === 'm1')!.status)
+        .toBe('completed')
+    })
     const msg = useChatStore.getState().messagesBySession['s1']!.find((m) => m.id === 'm1')!
-    expect(msg.status).toBe('completed')
     expect(msg.usage).toEqual({
       input_tokens: 1_700_000,
       output_tokens: 33_300,
@@ -143,7 +148,7 @@ describe('transportStore dispatcher: step.finished — учёт шага (зам
     })
   })
 
-  it('metadata шага мёржится с уже известной (части/аттачменты не теряются)', () => {
+  it('metadata шага мёржится с уже известной (части/аттачменты не теряются)', async () => {
     useChatStore.getState().upsertMessage('s1', {
       index: 0,
       id: 'm1',
@@ -161,17 +166,21 @@ describe('transportStore dispatcher: step.finished — учёт шага (зам
       turnId: 't1', stepIndex: 0, messageId: 'm1', status: 'error', costUsd: 1,
     }))
 
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().messagesBySession['s1']![0]!.status).toBe('error')
+    })
     const msg = useChatStore.getState().messagesBySession['s1']![0]!
-    expect(msg.status).toBe('error')
     expect(msg.metadata).toMatchObject({ existing: true, cost_usd: 1 })
   })
 
-  it('step.finished со статусом cancelled — сообщение отменено', () => {
+  it('step.finished со статусом cancelled — сообщение отменено', async () => {
     dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
     dispatch(makeEvent('step.finished', 's1', {
       turnId: 't1', stepIndex: 0, messageId: 'm1', status: 'cancelled',
     }))
-    expect(useChatStore.getState().messagesBySession['s1']![0]!.status).toBe('cancelled')
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().messagesBySession['s1']![0]!.status).toBe('cancelled')
+    })
   })
 })
 

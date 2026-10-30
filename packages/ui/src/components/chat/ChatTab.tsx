@@ -4,7 +4,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useChatStore, type MessageData, type QueuedMessage } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useTransportStore, restoreLiveTurnFromHistory } from '@/stores/transportStore'
+import { useTransportStore, restoreLiveTurnFromHistory, restoreLiveTurnFromSession } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
 import { attachmentContentUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
@@ -193,6 +193,13 @@ export function ChatTab({ tab }: ChatTabProps) {
           // Кладём актуальные данные сессии (включая mode) в стор —
           // иначе PlanActModeToggle не увидит mode и покажет дефолт 'act'.
           useSessionsStore.getState().upsertSession(session)
+          // ADR-118 §5: признак активного хода из API (`current_stream` /
+          // `status.blocked`). Истории может не хватить: идёт длинный
+          // инструмент, шаг с текстом уже `completed`, а следующего
+          // assistant-сообщения ещё нет — сообщения со статусом `streaming`
+          // в истории нет, и без этого ход не восстановить (нет индикатора,
+          // «Стоп» и `ctrl+b`).
+          restoreLiveTurnFromSession(sessionId, session)
           const s = session?.settings as Record<string, unknown> | undefined
           if (s) {
             const { setSelectedProvider, setSelectedModel } = useProvidersStore.getState()

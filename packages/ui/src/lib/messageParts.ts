@@ -103,6 +103,28 @@ export function partToToolResult(
   }
 }
 
+/**
+ * Live-части для рендера сообщения.
+ *
+ * - **во время шага** (`status: 'streaming'`) — источник истины;
+ * - у **финального** сообщения — фоллбек, пока части из истории не пришли
+ *   (окно между `step.finished` и ответом `GET /messages`): части DTO ещё
+ *   пусты, и без фоллбэка текст, который пользователь уже видел, исчезал бы
+ *   на миг (ADR-118 §5).
+ *
+ * Как только у сообщения есть части из истории, live-части не используются:
+ * id частей `msg:text:<ordinal>` совпадают у разных шагов, и «застрявшие»
+ * live-части давали бы в блоке хода текст чужого шага.
+ */
+export function resolveLiveParts(
+  liveParts: LivePart[] | undefined,
+  opts: { isLive: boolean; dtoParts?: Part[] | null },
+): LivePart[] | undefined {
+  if (!liveParts || liveParts.length === 0) return undefined
+  if (opts.isLive) return liveParts
+  return (opts.dtoParts?.length ?? 0) > 0 ? undefined : liveParts
+}
+
 /** Представление сообщения по частям (ADR-118 §1). */
 export interface PartsView {
   /** Итоговый текст сообщения (текстовые части по порядку). */

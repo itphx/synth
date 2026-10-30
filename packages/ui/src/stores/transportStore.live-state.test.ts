@@ -114,11 +114,12 @@ describe('transportStore: опоздавшие события не ломают 
     dispatch(makeEvent('step.started', { turnId: 't1', messageId: 'm1', stepIndex: 0 }))
     dispatch(makeEvent('step.finished', { turnId: 't1', messageId: 'm1', status: 'completed' }))
 
-    // Финал шага: живые части сняты (после сверки с историей).
+    // Финал шага: статус меняется **после** сверки с историей (ADR-118 §5),
+    // живые части снимаются тогда же.
     await vi.waitFor(() => {
-      expect(useChatStore.getState().partsBySession['s1']?.['m1']).toBeUndefined()
+      expect(statusOf('m1')).toBe('completed')
     })
-    expect(statusOf('m1')).toBe('completed')
+    expect(useChatStore.getState().partsBySession['s1']?.['m1']).toBeUndefined()
 
     // Поздняя дельта к финальному сообщению — мусор: игнорируем.
     dispatch(makeEvent('part.delta', {
@@ -132,10 +133,15 @@ describe('transportStore: опоздавшие события не ломают 
     expect(statusOf('m1')).toBe('completed')
   })
 
-  it('part.updated к сообщению со статусом completed игнорируется', () => {
+  it('part.updated к сообщению со статусом completed игнорируется', async () => {
     dispatch(makeEvent('turn.started', { turnId: 't1', messageId: 'm-user' }))
     dispatch(makeEvent('step.started', { turnId: 't1', messageId: 'm1', stepIndex: 0 }))
     dispatch(makeEvent('step.finished', { turnId: 't1', messageId: 'm1', status: 'completed' }))
+
+    // Ждём финализации шага (после сверки с историей).
+    await vi.waitFor(() => {
+      expect(statusOf('m1')).toBe('completed')
+    })
 
     dispatch(makeEvent('part.updated', {
       messageId: 'm1',

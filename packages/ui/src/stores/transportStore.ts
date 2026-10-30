@@ -86,6 +86,13 @@ export function resetEventSeqTracking(): void {
 /**
  * ADR-118 §4/§5: подтянуть историю сессии и **свести** её с живым состоянием.
  *
+ * Загрузка истории — **single-flight** на сессию: `step.finished` приходит на
+ * каждый шаг хода, а полная загрузка — тяжёлый запрос (в tool-loop из 10
+ * шагов получалось 10 загрузок). Пока идёт одна, следующие запросы не
+ * запускаются — вместо них помечается «нужен ещё один после завершения»
+ * (trailing run). Данные применяются полностью: обещание вызывающего
+ * резолвится после последнего прогона.
+ *
  * Ключ сведения — `id` сообщения:
  * - сообщения в сторе нет — берём запись сервера как есть;
  * - сообщение уже в сторе (живое) — **сервер — источник истины** по
@@ -97,34 +104,97 @@ export function resetEventSeqTracking(): void {
  * Серверные `null`/`undefined` **не затирают** живые значения сообщения
  * (`status`/`turn_id`/`step_index`/`parts`/`content`): иначе мерж истории
  * снимал индикатор текущего хода и выпадал сегмент из блока хода. Для
- * сообщения со статусом `streaming` части и контент вообще не перезаписываются
- * — источник там живой (live).
+ * сообщения со статусом `streaming`, у которого сервер **ещё не зафиксировал
+ * финал** (нет терминального `status`), части и контент вообще не
+ * перезаписываются — источник там живой (live).
  *
  * Ошибка сети молча игнорируется: история — уточнение, а не источник правды о
  * ходе (живой ход восстанавливается из событий). Результат — `true`, если
  * история сведена с живым состоянием.
  */
 export function mergeHistory(sid: string): Promise<boolean> {
-  return synthApi.getSessionMessages(sid).then((r) => {
-    const chat = useChatStore.getState()
-    const current = chat.messagesBySession[sid] || []
-    const byId = new Map(current.map((m) => [m.id, m]))
-    for (const m of r.messages) {
-      if (!m.id) continue
-      const known = byId.get(m.id)
-      if (!known) {
-        byId.set(m.id, m)
-        continue
-      }
-      byId.set(m.id, mergeKnownMessage(known, m))
-    }
-    const merged = [...byId.values()]
-    chat.setMessages(sid, merged)
-    // ADR-118 §5: в истории мог появиться живой ход (другой клиент) —
-    // восстанавливаем границы, иначе он отрисуется как мёртвое сообщение.
-    restoreLiveTurnFromHistory(sid, merged)
+  const state = historyMergeState(sid)
+  if (state.running) {
+    // Загрузка уже идёт — второй запрос не запускаем: помечаем «нужен ещё
+    // один после завершения» (trailing run).
+    state.pending = true
+    return new Promise<boolean>((resolve) => { state.waiters.push(resolve) })
+  }
+  state.running = true
+  state.pending = false
+  return new Promise<boolean>((resolve) => {
+    state.waiters.push(resolve)
+    void runHistoryMergeLoop(sid, state)
+  })
+}
+
+/** Состояние single-flight загрузки истории по сессиям. */
+interface HistoryMergeState {
+  /** Идёт ли сейчас загрузка истории. */
+  running: boolean
+  /** Нужен ещё один прогон после текущего. */
+  pending: boolean
+  /** Ожидающие промисы вызывающих. */
+  waiters: Array<(ok: boolean) => void>
+}
+
+const historyMergeStates = new Map<string, HistoryMergeState>()
+
+function historyMergeState(sid: string): HistoryMergeState {
+  let state = historyMergeStates.get(sid)
+  if (!state) {
+    state = { running: false, pending: false, waiters: [] }
+    historyMergeStates.set(sid, state)
+  }
+  return state
+}
+
+/** Один прогон: загрузка истории + сведение её с живым состоянием. */
+async function fetchHistory(sid: string): Promise<boolean> {
+  try {
+    const r = await synthApi.getSessionMessages(sid)
+    applyHistory(sid, r.messages)
     return true
-  }).catch(() => false)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Цикл прогонов загрузки: пока во время загрузки пришли новые запросы —
+ * нужен ещё один прогон (иначе последние изменения остались бы незамеченными).
+ */
+async function runHistoryMergeLoop(sid: string, state: HistoryMergeState): Promise<void> {
+  let ok = false
+  for (;;) {
+    ok = await fetchHistory(sid)
+    if (!state.pending) break
+    state.pending = false
+  }
+  state.running = false
+  const waiters = state.waiters.splice(0)
+  for (const resolve of waiters) resolve(ok)
+}
+
+/** Свести загруженную историю с живым состоянием стора. */
+function applyHistory(sid: string, messages: MessageData[]): void {
+  const chat = useChatStore.getState()
+  const current = chat.messagesBySession[sid] || []
+  const byId = new Map(current.map((m) => [m.id, m]))
+  for (const m of messages) {
+    if (!m.id) continue
+    const known = byId.get(m.id)
+    if (!known) {
+      byId.set(m.id, m)
+      continue
+    }
+    byId.set(m.id, mergeKnownMessage(known, m))
+  }
+  const merged = [...byId.values()]
+  chat.setMessages(sid, merged)
+  // ADR-118 §5: в истории мог появиться живой ход (другой клиент) —
+  // восстанавливаем границы, иначе он отрисуется как мёртвое сообщение.
+  restoreLiveTurnFromHistory(sid, merged)
 }
 
 /**
@@ -132,7 +202,10 @@ export function mergeHistory(sid: string): Promise<boolean> {
  *
  * - `null`/`undefined` из сервера не затирают заданные клиентские значения;
  * - у живого сообщения (`status: 'streaming'`) части и контент — источник
- *   live, серверные значения их не перезаписывают;
+ *   live, серверные значения их не перезаписывают — **пока сервер не
+ *   зафиксировал финал сообщения**: у записи с терминальным `status`
+ *   части/контент — источник истины (иначе финальный шаг остался бы без
+ *   текста: live-части снимаются на финале шага);
  * - реплика пользователя: текст остаётся пользовательским — в серверной
  *   записи он с плейсхолдерами вложений (ADR-115), а в ленте вложение
  *   рисуется отдельной галереей;
@@ -146,8 +219,12 @@ function mergeKnownMessage(known: MessageData, m: MessageData): MessageData {
   if (m.step_index == null && known.step_index != null) merged.step_index = known.step_index
   if (m.parts == null && known.parts != null) merged.parts = known.parts
   if (m.content == null && known.content != null) merged.content = known.content
-  // Живое сообщение: части/контент — источник live (ADR-118 §5).
-  if (known.status === 'streaming') {
+  // Живое сообщение: части/контент — источник live (ADR-118 §5). Но если
+  // сервер уже зафиксировал финал шага (терминальный `status`), его запись —
+  // источник истины: live-части снимаются на финале шага, и без них текст
+  // шага пропал бы.
+  const serverFinal = isTerminalMessageStatus(m.status)
+  if (known.status === 'streaming' && !serverFinal) {
     merged.parts = known.parts
     merged.content = known.content
   }
@@ -158,6 +235,19 @@ function mergeKnownMessage(known: MessageData, m: MessageData): MessageData {
       ? { metadata: { ...(known.metadata ?? {}), ...(m.metadata ?? {}) } }
       : {}),
   }
+}
+
+/**
+ * Есть ли у сообщения в сторе содержимое из истории (части DTO или текст).
+ *
+ * Нужен на финале шага: `mergeHistory` может вернуть `true`, но записи шага
+ * в ответе ещё нет (сервер сохраняет асинхронно) — тогда live-части остаются
+ * единственным источником текста и снимать их нельзя (ADR-118 §5).
+ */
+function hasHistoryContent(sid: string, messageId: string): boolean {
+  const message = useChatStore.getState().messagesBySession[sid]?.find((m) => m.id === messageId)
+  if (!message) return false
+  return (message.parts?.length ?? 0) > 0 || (message.content ?? '').length > 0
 }
 
 /**
@@ -189,6 +279,55 @@ export function restoreLiveTurnFromHistory(sessionId: string, messages: MessageD
     ...(last.agent_role ? { agentRole: last.agent_role } : {}),
     ...(last.model ? { model: last.model } : {}),
     ...(last.provider ? { provider: last.provider } : {}),
+  })
+}
+
+/** Непустая строка из произвольного значения (DTO API без типизации). */
+function asNonEmptyString(value: unknown): string {
+  return typeof value === 'string' && value !== '' ? value : ''
+}
+
+/**
+ * ADR-118 §5: восстановление **живого хода** по признакам активного хода из
+ * `GET /sessions/:id` (`current_stream`, `status.blocked`).
+ *
+ * Истории (`GET /sessions/:id/messages`) для этого может не хватить: идёт
+ * длинный инструмент, шаг с текстом уже `completed`, а следующего
+ * assistant-сообщения ещё нет — сообщения со статусом `streaming` в истории
+ * нет, значит `restoreLiveTurnFromHistory` выходит, ход не восстанавливается,
+ * и в UI нет ни индикатора, ни «Стоп», ни `ctrl+b`.
+ *
+ * API отдаёт признак активного хода: `current_stream` (идёт стрим) и
+ * `status.blocked` (ход ждёт подтверждения). По ним границы хода
+ * восстанавливаются; id хода — `current_stream.turn_id`/`stream_id`, иначе
+ * берутся из истории.
+ *
+ * Идемпотентно: уже восстановленный (или идущий) ход не перетирается.
+ */
+export function restoreLiveTurnFromSession(sessionId: string, session: unknown): void {
+  if (!session || typeof session !== 'object') return
+  const data = session as Record<string, unknown>
+  const current = useChatStore.getState().turnBySession[sessionId]
+  if (current && current.status === 'streaming') return
+  const stream = (data.current_stream ?? null) as Record<string, unknown> | null
+  const status = (data.status ?? null) as Record<string, unknown> | null
+  const blocked = status?.blocked
+  const hasStream = stream != null
+  if (!hasStream && !blocked) return
+  const turnId = asNonEmptyString(stream?.turn_id) || asNonEmptyString(stream?.stream_id)
+  if (!turnId) {
+    // Границы хода из истории (сообщение со статусом `streaming`).
+    restoreLiveTurnFromHistory(
+      sessionId,
+      useChatStore.getState().messagesBySession[sessionId] ?? [],
+    )
+    return
+  }
+  const agentRole = asNonEmptyString(stream?.agent_role)
+  useChatStore.getState().startTurn(sessionId, {
+    turnId,
+    status: 'streaming',
+    ...(agentRole ? { agentRole } : {}),
   })
 }
 
@@ -874,7 +1013,6 @@ export function createDispatcher(): EventDispatcher {
         // Опоздавшее событие прошлого хода: сообщения нет и активного хода нет —
         // создавать нечего (финальное сообщение не воскрешаем).
         const live = ensureLiveMessage(messageId, undefined, { turnId: turnId || undefined })
-        if (live) setMessageStatus(sid, messageId, status)
         // Замена удалённых `stream.usage`/`stream.done`: расход, модель и
         // стоимость шага приходят здесь (ADR-118 §4) — кладём в сообщение,
         // иначе статистика/аналитика теряют live-данные.
@@ -900,12 +1038,24 @@ export function createDispatcher(): EventDispatcher {
         // мержит dto-части с live-частями по `id`, и «застрявшие» live-части
         // шага давали в блоке хода текст чужого шага).
         //
-        // Порядок: сначала история (источник истины), потом снятие live-частей
-        // — иначе текст шага на миг «мигнул» бы пустым сообщением. Снимаем
-        // части только после успешной сверки: при сетевой ошибке текст шага
-        // остался бы в live-частях и не потерялся.
+        // Порядок: **сначала история** (источник истины) — и только потом
+        // смена статуса и снятие live-частей. Иначе в окне RTT между
+        // `step.finished` и ответом `GET /messages` сообщение было бы
+        // «финальным» с пустыми частями (`ensureLiveMessage` создаёт
+        // `parts: []`, `content: ''`), и текст, который пользователь уже видел,
+        // исчезал бы.
+        //
+        // Мерж не удался — статус не меняем и live-части не снимаем: текст шага
+        // остаётся видимым, а финальный статус поставит `turn.finished`.
+        if (!live) break
         void mergeHistory(sid).then((merged) => {
-          if (merged) clearParts(sid, messageId)
+          if (!merged) return
+          setMessageStatus(sid, messageId, status)
+          // История могла ещё не содержать шаг (персист асинхронный): тогда
+          // единственный источник текста — live-части, и снимать их нельзя
+          // (текст пропал бы насовсем). Снимаем только когда содержимое шага
+          // действительно пришло из истории.
+          if (hasHistoryContent(sid, messageId)) clearParts(sid, messageId)
         })
         break
       }

@@ -24,7 +24,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useI18n, useResolveI18n } from '@/lib/i18n'
 import type { MessageData, LivePart, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
-import { buildPartsView } from '@/lib/messageParts'
+import { buildPartsView, resolveLiveParts } from '@/lib/messageParts'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { moveSessionToBackground } from '@/lib/backgroundDetach'
 import { StatsPopoverButton } from './StatsPopoverButton'
@@ -318,15 +318,17 @@ function ChatMessageInner({
     return s.partsBySession[sessionId]?.[message.id]
   })
   /**
-   * Live-части — **только во время шага**. У финального сообщения источник
-   * истины — части/контент из истории: live-части шага уже не актуальны
-   * (`buildPartsView` мержит их с частями DTO по `id`), и «застрявшие» части
-   * давали в блоке хода текст чужого шага.
+   * Live-части — источник истины **во время шага**. У финального сообщения
+   * источник истины — части/контент из истории («застрявшие» части шага давали
+   * в блоке хода текст чужого шага), но пока части из истории не пришли
+   * (окно между `step.finished` и ответом `GET /messages`) live-части остаются
+   * фоллбеком — иначе текст, который пользователь уже видел, исчезал бы на
+   * миг (ADR-118 §5).
    */
   const liveParts = useMemo(() => {
-    if (!isLive || !livePartMap) return undefined
-    return Object.values(livePartMap).map(normalizeLiveToolPart)
-  }, [isLive, livePartMap])
+    const parts = livePartMap ? Object.values(livePartMap).map(normalizeLiveToolPart) : undefined
+    return resolveLiveParts(parts, { isLive, dtoParts: message.parts })
+  }, [isLive, livePartMap, message.parts])
   const partsView = useMemo(
     () => buildPartsView(message.parts, liveParts, {
       content: message.content,

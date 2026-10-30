@@ -175,4 +175,65 @@ describe('ChatTab — восстановление живого хода из и
       status: 'streaming',
     })
   })
+
+  it('current_stream из GET /sessions/:id восстанавливает ход без streaming-сообщения', async () => {
+    // История без `streaming`: шаг с текстом завершён, идёт длинный инструмент,
+    // следующего assistant-сообщения ещё нет.
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValue({
+      session_id: SESSION,
+      messages: [
+        {
+          id: 'msg-user', index: 0, ord: 1, role: 'user', content: 'запусти',
+          disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:00.000Z',
+          turn_id: 'turn-9',
+        },
+        {
+          id: 'msg-step', index: 1, ord: 2, role: 'assistant', content: 'Запускаю команду.',
+          status: 'completed', turn_id: 'turn-9', step_index: 0,
+          disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:01.000Z',
+        },
+      ],
+    } as never)
+    vi.mocked(synthApi.getSession).mockResolvedValue({
+      id: SESSION,
+      settings: {},
+      session_origin: null,
+      pending_messages: [],
+      sticky_notes: [],
+      status: {},
+      current_stream: { turn_id: 'turn-9' },
+    } as never)
+
+    const container = await mount()
+
+    // Границы хода восстановлены → индикатор («Стоп» в композере, ctrl+b).
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-9',
+      status: 'streaming',
+    })
+    expect(container.querySelector('button[title="Stop"]')).not.toBeNull()
+  })
+
+  it('status.blocked из GET /sessions/:id восстанавливает ожидающий ход', async () => {
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValue({
+      session_id: SESSION,
+      messages: LIVE_MESSAGES,
+    } as never)
+    vi.mocked(synthApi.getSession).mockResolvedValue({
+      id: SESSION,
+      settings: {},
+      session_origin: null,
+      pending_messages: [],
+      sticky_notes: [],
+      status: { blocked: 'permission' },
+      current_stream: null,
+    } as never)
+
+    await mount()
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-1',
+      status: 'streaming',
+    })
+  })
 })

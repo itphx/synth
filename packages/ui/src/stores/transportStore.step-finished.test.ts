@@ -107,4 +107,85 @@ describe('transportStore dispatcher: финализация шага (ADR-118 §
     // Живые части на месте — текст шага остался виден.
     expect(useChatStore.getState().partsBySession['s1']?.['m1']).toBeDefined()
   })
+
+  it('статус шага не меняется до завершения сверки с историей (нет пустого окна RTT)', async () => {
+    let resolveFetch: (value: unknown) => void = () => {}
+    getSessionMessages.mockImplementation(
+      () => new Promise((resolve) => { resolveFetch = resolve }) as never,
+    )
+
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    dispatch(makeEvent('part.delta', 's1', {
+      messageId: 'm1',
+      partId: 'msg:text:0',
+      field: 'text',
+      delta: 'Запускаю команду.',
+    }))
+    dispatch(makeEvent('step.finished', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1', status: 'completed' }))
+
+    // Запрос истории ещё в полёте: статус не финальный, live-части на месте.
+    const pending = useChatStore.getState().messagesBySession['s1']!.find((m) => m.id === 'm1')!
+    expect(pending.status).toBe('streaming')
+    expect(useChatStore.getState().partsBySession['s1']?.['m1']).toBeDefined()
+
+    resolveFetch({ session_id: 's1', messages: [serverMessage()] })
+    await vi.waitFor(() => {
+      const done = useChatStore.getState().messagesBySession['s1']!.find((m) => m.id === 'm1')!
+      expect(done.status).toBe('completed')
+      expect(useChatStore.getState().partsBySession['s1']?.['m1']).toBeUndefined()
+    })
+  })
+
+  it('история вернулась без шага — live-части остаются (текст не пропадает насовсем)', async () => {
+    // Сервер сохраняет шаг асинхронно: запрос истории успешен, но записи ещё нет.
+    getSessionMessages.mockResolvedValue({ session_id: 's1', messages: [] })
+
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    dispatch(makeEvent('part.delta', 's1', {
+      messageId: 'm1',
+      partId: 'msg:text:0',
+      field: 'text',
+      delta: 'Запускаю команду.',
+    }))
+    dispatch(makeEvent('step.finished', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1', status: 'completed' }))
+
+    await vi.waitFor(() => {
+      expect(getSessionMessages).toHaveBeenCalled()
+      const message = useChatStore.getState().messagesBySession['s1']!.find((m) => m.id === 'm1')!
+      expect(message.status).toBe('completed')
+    })
+    // Live-части не сняты: только из них сейчас берётся текст шага.
+    expect(useChatStore.getState().partsBySession['s1']?.['m1']).toBeDefined()
+  })
+
+  it('пачка step.finished схлопывается в ≤ 2 загрузки истории, данные применяются', async () => {
+    let calls = 0
+    const resolvers: Array<(value: unknown) => void> = []
+    getSessionMessages.mockImplementation(() => {
+      calls += 1
+      return new Promise((resolve) => { resolvers.push(resolve) }) as never
+    })
+
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    // Tool-loop: финал шага приходит на каждый шаг хода.
+    for (let i = 0; i < 5; i += 1) {
+      dispatch(makeEvent('step.finished', 's1', { turnId: 't1', stepIndex: i, messageId: 'm1', status: 'completed' }))
+    }
+
+    // Запрос уже идёт — второй не запускается (single-flight).
+    expect(calls).toBe(1)
+
+    // Завершение текущего прогона запускает ровно один trailing-прогон.
+    await vi.waitFor(() => expect(resolvers.length).toBe(1))
+    resolvers[0]!({ session_id: 's1', messages: [] })
+    await vi.waitFor(() => expect(calls).toBe(2))
+    resolvers[1]!({ session_id: 's1', messages: [serverMessage()] })
+
+    await vi.waitFor(() => {
+      const message = useChatStore.getState().messagesBySession['s1']!.find((m) => m.id === 'm1')!
+      expect(message.status).toBe('completed')
+      expect(message.parts).toEqual([{ id: 'msg:text:0', type: 'text', data: 'Запускаю команду.' }])
+    })
+    expect(calls).toBeLessThanOrEqual(2)
+  })
 })

@@ -246,4 +246,23 @@ describe('ChatMessage: live-части — только во время шага
 
     expect(markdowns(container)).toEqual(['Текст из истории'])
   })
+
+  it('финальный статус с пустыми parts — текст берётся из live-частей (окно RTT)', async () => {
+    // Шаг только что финализирован, история ещё не пришла: у сообщения части
+    // пусты, а текст шага живёт в live-частях. Без фоллбэка он исчезал бы.
+    useChatStore.getState().upsertPart(SESSION, 'final-empty', 'msg:text:0', {
+      id: 'msg:text:0',
+      type: 'text',
+      text: 'Запускаю команду.',
+    })
+
+    const container = await renderChat(msg({
+      id: 'final-empty',
+      status: 'completed',
+      content: '',
+      parts: [],
+    }))
+
+    expect(markdowns(container)).toEqual(['Запускаю команду.'])
+  })
 })
