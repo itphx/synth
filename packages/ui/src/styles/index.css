@@ -719,7 +719,9 @@ html.device-tablet .notifications-popup {
 .markdown-content .md-code-pre {
   max-width: 100%;
   margin: 0;
-  padding: 0.5rem 0.7rem;
+  /* Поля симметричные: справа не меньше слева, чтобы при горизонтальном
+     скролле текст не прилипал к рамке блока. */
+  padding: 0.5rem 0.9rem 0.5rem 0.75rem;
   overflow-x: auto;
   border: 0;
   background: transparent;
@@ -732,6 +734,10 @@ html.device-tablet .notifications-popup {
 
 .markdown-content .md-code-pre code {
   display: block;
+  /* Ширина — по содержимому: длинная строка растягивает блок (его и
+     прокручивает `pre`), короткая не уже контейнера. */
+  width: max-content;
+  min-width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
@@ -745,14 +751,18 @@ html.device-tablet .notifications-popup {
   position: relative;
   display: block;
   min-height: 1.5em;
-  padding-left: 3.25em;
+  /* Гаттер под номера: колонка в 3 знака (`ch`) + зазор ~0.8ch.
+     Компактно, но номера выровнены по правому краю и не прыгают. */
+  padding-left: 3.8ch;
   white-space: pre;
 }
 
 .markdown-content .md-code-line::before {
   position: absolute;
   left: 0;
-  width: 2.5em;
+  /* Номер в колонке шириной 3 знака: 1–999 помещаются, 4-значные
+     выходят влево в поле `pre` (не обрезаются). */
+  width: 3ch;
   color: var(--muted-foreground);
   text-align: right;
   opacity: 0.7;
@@ -786,14 +796,15 @@ html.device-tablet .notifications-popup {
   position: relative;
   display: block;
   min-height: 1.5em;
-  padding-left: 3.25em;
+  /* Те же отступы, что у `.md-code-line` (гаттер под номера). */
+  padding-left: 3.8ch;
   white-space: pre;
 }
 
 .markdown-content .md-code-pre.shiki .line::before {
   position: absolute;
   left: 0;
-  width: 2.5em;
+  width: 3ch;
   color: var(--muted-foreground);
   text-align: right;
   opacity: 0.7;
