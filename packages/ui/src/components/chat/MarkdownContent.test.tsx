@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
@@ -42,6 +42,17 @@ async function flushEffects(): Promise<void> {
     await Promise.resolve()
     await Promise.resolve()
   })
+}
+
+/** Аксессор `innerHTML` (в jsdom лежит на `Element.prototype`). */
+function innerHtmlDescriptor(): PropertyDescriptor {
+  let proto: object | null = Object.getPrototypeOf(document.createElement('div'))
+  while (proto) {
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'innerHTML')
+    if (descriptor?.set && descriptor.get) return descriptor
+    proto = Object.getPrototypeOf(proto)
+  }
+  throw new Error('innerHTML accessor not found')
 }
 
 beforeEach(() => {
@@ -240,5 +251,69 @@ describe('MarkdownContent: подсветка кода (shiki)', () => {
 
     expect(highlightCode).not.toHaveBeenCalled()
     expect(container.querySelector('.md-code')?.getAttribute('data-numbered')).toBe('true')
+  })
+
+  it('двойное монтирование эффекта (StrictMode) — подсветка всё равно применяется один раз', async () => {
+    // Отложенный промис: момент применения результата контролируем тестом.
+    let resolveHighlight: ((html: string) => void) | null = null
+    vi.mocked(highlightCode).mockImplementation(
+      () => new Promise<string | null>((resolve) => { resolveHighlight = resolve }),
+    )
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push({ root, container })
+
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <MarkdownContent content={'```ts\nconst a = 1\n```'} />
+        </StrictMode>,
+      )
+    })
+
+    // Считаем применения подсветки: innerHTML блока ставится ровно один раз.
+    const code = container.querySelector('code')!
+    const descriptor = innerHtmlDescriptor()
+    let applied = 0
+    Object.defineProperty(code, 'innerHTML', {
+      configurable: true,
+      get() { return descriptor.get!.call(this) },
+      set(value: string) { applied += 1; descriptor.set!.call(this, value) },
+    })
+
+    await act(async () => {
+      resolveHighlight!('<span class="line">HIGHLIGHTED</span>')
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(applied).toBe(1)
+    expect(highlightCode).toHaveBeenCalledTimes(1)
+    const pre = container.querySelector('pre.md-code-pre')
+    expect(pre?.classList.contains('shiki')).toBe(true)
+    expect(code.innerHTML).toContain('HIGHLIGHTED')
+    const block = container.querySelector('.md-code')
+    expect(block?.getAttribute('data-highlighted')).toBe('1')
+    expect(block?.getAttribute('data-highlighting')).toBeNull()
+  })
+
+  it('повторный рендер с тем же html не перезапускает токенизацию', async () => {
+    vi.mocked(highlightCode).mockResolvedValue('<span class="line">HIGHLIGHTED</span>')
+    const content = '```ts\nconst a = 1\n```'
+    const { root, container } = await renderTree(content)
+    await flushEffects()
+
+    expect(highlightCode).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      root.render(<MarkdownContent content={content} />)
+    })
+    await flushEffects()
+
+    expect(highlightCode).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('pre.md-code-pre')?.classList.contains('shiki')).toBe(true)
+    expect(container.querySelector('.md-code')?.getAttribute('data-highlighted')).toBe('1')
   })
 })

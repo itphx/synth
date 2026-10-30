@@ -112,6 +112,14 @@ function createMarkdownRenderer(): Renderer {
 
 const markdownRenderer = createMarkdownRenderer()
 
+/**
+ * Подсветка «в полёте» по блоку кода: промисы переиспользуются между прогонами
+ * эффекта. В StrictMode эффект монтируется дважды — второй прогон ждёт тот же
+ * промис, а не начинает токенизацию заново и не пропускает блок навсегда.
+ * Ключ — сам блок: пересозданный блок (новый `html`) получает свою подсветку.
+ */
+const pendingHighlights = new WeakMap<HTMLElement, Promise<string | null>>()
+
 /** Копирование в буфер: ошибки глушим — рендер не должен ломаться (нет API, отказ прав). */
 async function writeClipboard(value: string): Promise<boolean> {
   try {
@@ -158,39 +166,56 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
   const containerRef = useRef<HTMLDivElement | null>(null)
 
   /**
+   * Объект для `dangerouslySetInnerHTML` должен быть **стабильным** между
+   * рендерами: React 19 сравнивает пропсы по идентичности и пересоздаёт
+   * `innerHTML` при каждом новом объекте — иначе любой ререндер чата стирал бы
+   * разметку блоков кода (и применённую подсветку), а эффект, зависящий от
+   * `html`, не перезапускался бы.
+   */
+  const htmlProp = useMemo(() => ({ __html: html }), [html])
+
+  /**
    * Подсветка кода (shiki, лениво) — только для «устоявшихся» блоков: во время
    * стриминга не трогаем (иначе DOM пересобирается на каждой дельте), а после
    * завершения шага (`streaming: false`) подсвечиваем один раз — маркер
    * `data-highlighted` не даёт повторять работу при перерисовках.
+   *
+   * Эффект устойчив к двойному монтированию (StrictMode): уже начатая
+   * подсветка не отменяется cleanup'ом, а переиспользуется (тот же промис).
+   * Результат применяется только если блок ещё в DOM и текст не изменился.
    */
   useEffect(() => {
     const container = containerRef.current
     if (!container || streaming) return
-    let cancelled = false
     const blocks = Array.from(container.querySelectorAll<HTMLElement>('.md-code[data-lang]'))
     for (const block of blocks) {
       const lang = block.dataset.lang ?? ''
       if (!lang || lang === 'text') continue
-      if (block.dataset.highlighted === '1' || block.dataset.highlighting === '1') continue
+      if (block.dataset.highlighted === '1') continue
       const pre = block.querySelector<HTMLElement>('pre.md-code-pre')
       const code = pre?.querySelector('code')
       if (!pre || !code) continue
       const source = code.textContent ?? ''
       if (!source) continue
-      // Маркер «в полёте»: эффект может перезапуститься, пока идёт await.
+      // Уже начатая подсветка — ждём тот же промис (повторный прогон эффекта).
+      if (pendingHighlights.has(block)) continue
+      // Маркер «в полёте»: видно, что блок ждёт токенизацию.
       block.dataset.highlighting = '1'
-      void highlightCode(source, lang).then((highlighted) => {
+      const pending = highlightCode(source, lang).catch(() => null)
+      pendingHighlights.set(block, pending)
+      void pending.then((highlighted) => {
         delete block.dataset.highlighting
-        if (cancelled || !block.isConnected) return
+        if (!highlighted) return
+        // Блок уже подсвечен (повторный прогон) — ничего не делаем.
+        if (block.dataset.highlighted === '1') return
+        // Блок отсоединён (пересоздан/размонтирован) — результат не применяем.
+        if (!block.isConnected) return
         // Контент изменился, пока шёл await — результат устарел, не применяем.
-        if (!highlighted || (code.textContent ?? '') !== source) return
+        if ((code.textContent ?? '') !== source) return
         code.innerHTML = highlighted
         pre.classList.add('shiki')
         block.dataset.highlighted = '1'
       })
-    }
-    return () => {
-      cancelled = true
     }
   }, [html, streaming])
 
@@ -226,7 +251,7 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
       className={`markdown-content text-sm leading-relaxed ${className}`}
       ref={containerRef}
       onClick={handleClick}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={htmlProp}
     />
   )
 }
