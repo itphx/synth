@@ -5,6 +5,7 @@ import { isDefaultTitle } from '@itphx/synth-shared';
 import type { Session } from '@itphx/synth-shared';
 import type { SessionManager } from './manager.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../providers/base.js';
+import { isUserDialogueMessage } from './user-messages.js';
 import { warning } from '../logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -79,9 +80,9 @@ export async function autoTitleSession(
     if (session.parentId) return null;
     if (!isDefaultTitle(session.title)) return null;
 
-    const userMsgs = session.messages.filter(
-      (m) => m.role === 'user' && !m.metadata?.synthetic,
-    );
+    // Только реплики пользователя диалога: steer-инъекции, уведомления
+    // фоновых прогонов и сообщения шедулера — служебные (см. `user-messages.ts`).
+    const userMsgs = session.messages.filter(isUserDialogueMessage);
     if (userMsgs.length === 0) return null;
     if (userMsgs.length > 1) return null;
 

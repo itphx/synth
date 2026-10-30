@@ -35,7 +35,7 @@ function makeMockAgentRegistry(
         return {
           id,
           agentMode: ['subagent'],
-          maxSteps: 1,
+          maxSteps: 2,
           ...(agentTemperature !== undefined ? { temperature: agentTemperature } : {}),
           ...agentOverrides,
         };
@@ -784,7 +784,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     let capturedMcp: string[] | undefined;
     const registry = {
       get: (id: string) => (id === 'explore'
-        ? { id, agentMode: ['subagent'], maxSteps: 1 }
+        ? { id, agentMode: ['subagent'], maxSteps: 2 }
         : undefined),
       getSubagents: () => [{ id: 'explore' }],
       getToolsForAgent: (_id: string, mcp?: string[]) => {

@@ -890,4 +890,43 @@ describe('runProcessFinalize', () => {
       ).toHaveLength(0);
     });
   });
+
+  /**
+   * Авто-тайтл запускается только при **одной** реплике пользователя. Steer-
+   * инъекция персистится на границе шага до финализации — без фильтра
+   * служебных сообщений ход выглядел «вторым» и заголовок не ставился.
+   */
+  describe('авто-тайтл: служебные user-сообщения не считаются репликами', () => {
+    it('первое сообщение + steer-инъекция → заголовок всё равно генерируется', async () => {
+      const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } as never });
+      const addUser = async (content: string, metadata?: Record<string, unknown>): Promise<void> => {
+        await sessionManager.addMessage(session.id, {
+          id: generateId(),
+          role: MessageRole.USER,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(content)],
+          content,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          ...(metadata ? { metadata } : {}),
+        });
+      };
+      await addUser('вопрос пользователя');
+      await addUser('Первй тест', { steer: true });
+
+      const provider = new FakeProvider({ content: 'Заголовок хода' } as LLMResponse);
+      await runProcessFinalize(
+        makeArgs(session.id),
+        makeState({ finalContent: 'ответ модели', provider }),
+        makeDeps(),
+      );
+
+      await vi.waitFor(async () => {
+        expect((await sessionManager.getSession(session.id))!.title).toBe('Заголовок хода');
+      });
+    });
+  });
 });

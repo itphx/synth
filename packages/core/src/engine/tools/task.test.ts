@@ -40,7 +40,7 @@ function makeMockAgentRegistry(subagents: string[] = ['explore']): MockAgentRegi
         return {
           id,
           agentMode: ['subagent'],
-          maxSteps: 1,
+          maxSteps: 2,
         };
       }
       return undefined;

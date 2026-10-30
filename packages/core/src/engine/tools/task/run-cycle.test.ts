@@ -31,6 +31,7 @@ import { ToolRegistry } from '../registry.js';
 import { LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
 import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { runSubagent, SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS, type SubagentRunConfig } from './run-cycle.js';
+import { t as sm } from '../../system-messages.js';
 import type { TaskExtra } from './types.js';
 
 interface Chunk {
@@ -241,7 +242,7 @@ describe('run-cycle — лимит шагов: финальный отчёт', (
     const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
 
     const result = await runSubagent(makeConfig({
-      maxSteps: 2,
+      maxSteps: 3,
       tools: llmTools(),
       extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
       childSessionId: child.id,
@@ -339,7 +340,7 @@ describe('run-cycle — предохранитель бюджета контек
     const { registry } = makeRegistry({ noop: () => ({ content: 'x'.repeat(400) }) });
 
     const result = await runSubagent(makeConfig({
-      maxSteps: 1,
+      maxSteps: 2,
       extra: makeExtra({
         provider, sessionManager, subagentMaxInputTokens: 50, toolRegistry: registry,
       }),
@@ -349,7 +350,7 @@ describe('run-cycle — предохранитель бюджета контек
     expect(calls()).toBe(2);
     expect(result.content).toContain(report);
     expect(result.metadata!.step_limit_reached).toBe(true);
-    expect(result.metadata!.step_limit).toBe(1);
+    expect(result.metadata!.step_limit).toBe(2);
     expect(result.metadata!.context_budget_exceeded).toBeUndefined();
   });
 });
@@ -456,7 +457,7 @@ describe('run-cycle — цикл Tool Use', () => {
     expect(toolCalls[0]!.result.content).toContain('ghost_tool');
   });
 
-  it('maxSteps=1: финальный шаг-отчёт — обычный шаг с toolChoice=none + маркер steps_limit', async () => {
+  it('maxSteps=2: финальный шаг-отчёт — обычный шаг с toolChoice=none + маркер steps_limit', async () => {
     // Провайдер на первом шаге просит тул (лимит шагов не даёт бесконечного
     // цикла), на втором — отвечает текстом: это финальный шаг-отчёт.
     const { provider, calls, chatAsync } = scriptedProvider([
@@ -466,7 +467,7 @@ describe('run-cycle — цикл Tool Use', () => {
     const { registry, counters } = makeRegistry({ noop: () => ({ content: 'ok' }) });
 
     const result = await runSubagent(makeConfig({
-      maxSteps: 1,
+      maxSteps: 2,
       tools: llmTools(),
       extra: makeExtra({ provider, toolRegistry: registry }),
     }));
@@ -494,7 +495,7 @@ describe('run-cycle — цикл Tool Use', () => {
     const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
 
     await runSubagent(makeConfig({
-      maxSteps: 1,
+      maxSteps: 2,
       extra: makeExtra({
         provider,
         sessionManager,
@@ -512,37 +513,72 @@ describe('run-cycle — цикл Tool Use', () => {
     expect(chatAsync.mock.calls[1]![1]).toBe('SYS');
     const reportMessages = snapshots[1]!;
     expect(reportMessages.at(-1)!.role).toBe('assistant');
-    expect(reportMessages.at(-1)!.content).toBe('ЛИМИТ ШАГОВ (1) — ТОЛЬКО ТЕКСТ');
+    expect(reportMessages.at(-1)!.content).toBe('ЛИМИТ ШАГОВ (2) — ТОЛЬКО ТЕКСТ');
 
     // …и это сообщение НЕ попадает в историю дочерней сессии.
     const saved = (await sessionManager.getSession(child.id))!;
     expect(saved.messages.some((m) => m.content.includes('ЛИМИТ ШАГОВ'))).toBe(false);
   });
 
-  it('maxSteps=1: toolCall на шаге-отчёте не исполняется, цикл не падает', async () => {
+  it('maxSteps=2: toolCall на шаге-отчёте не исполняется, но пара assistant→tool сохраняется', async () => {
     // Модель проигнорировала требование и снова попросила инструмент —
-    // вызов не исполняется, результат — маркер «шаги исчерпаны».
+    // вызов не исполняется, но парный tool-результат с ошибкой пишется
+    // (иначе assistant(tool_calls) остался бы без пары).
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
     const { provider, calls } = scriptedProvider([
-      [toolCallChunk('noop')],
-      [toolCallChunk('noop')],
+      [toolCallChunk('noop', {}, 'c1')],
+      [toolCallChunk('noop', {}, 'c2')],
     ]);
     const { registry, counters } = makeRegistry({ noop: () => ({ content: 'ok' }) });
 
     const result = await runSubagent(makeConfig({
-      maxSteps: 1,
-      extra: makeExtra({ provider, toolRegistry: registry }),
+      maxSteps: 2,
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
     }));
 
     expect(counters.noop).toBe(1);
     expect(calls()).toBe(2);
     expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('exhausted the step limit (1)');
+    expect(result.content).toContain('exhausted the step limit (2)');
     expect(result.metadata!.step_limit_reached).toBe(true);
     // Пустой отчёт — `report_missing` (успех без текстового отчёта).
     expect(result.metadata!.report_missing).toBe(true);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const limitAssistant = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.toolCalls?.length === 1
+        && (m.toolCalls[0] as { id?: string }).id === 'c2',
+    );
+    expect(limitAssistant).toBeDefined();
+    const limitTool = saved.messages.find(
+      (m) => m.role === MessageRole.TOOL && m.toolCallId === 'c2',
+    );
+    expect(limitTool?.content).toBe(
+      sm('tool.disabled_by_step_limit', { tool: 'noop', limit: '2' }),
+    );
+    expect(limitTool?.metadata?.isError).toBe(true);
   });
 
-  it('maxSteps=2: третья итерация — шаг-лимит (tools в запросе, toolChoice=none, assistant-инструкция)', async () => {
+  it('maxSteps=1: шаг-лимит наступает сразу — без tool call ответ модели это отчёт', async () => {
+    const { provider, calls, chatAsync } = scriptedProvider([
+      [{ isFinal: true, content: 'готово' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 1,
+      extra: makeExtra({ provider }),
+    }));
+
+    expect(calls()).toBe(1);
+    expect(chatAsync.mock.calls[0]![5]).toEqual({ toolChoice: 'none' });
+    expect(result.content).toContain('готово');
+    expect(result.metadata!.step_limit_reached).toBe(true);
+  });
+
+  it('maxSteps=3: третья итерация — шаг-лимит (tools в запросе, toolChoice=none, assistant-инструкция)', async () => {
     // Механика opencode: лимит не «выход из цикла + отдельный вызов без
     // инструментов», а ещё один обычный шаг того же цикла.
     const parent = await sessionManager.createSession({ title: 'P' });
@@ -556,7 +592,7 @@ describe('run-cycle — цикл Tool Use', () => {
     const { registry, counters } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
 
     const result = await runSubagent(makeConfig({
-      maxSteps: 2,
+      maxSteps: 3,
       tools: llmTools(),
       extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
       childSessionId: child.id,
@@ -576,12 +612,12 @@ describe('run-cycle — цикл Tool Use', () => {
     const limitMessages = snapshots[2]!;
     expect(limitMessages.at(-1)!.role).toBe('assistant');
     expect(limitMessages.at(-1)!.content).toContain('MAXIMUM STEPS REACHED');
-    expect(limitMessages.at(-1)!.content).toContain('(2)');
+    expect(limitMessages.at(-1)!.content).toContain('(3)');
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain(report);
     expect(result.metadata!.step_limit_reached).toBe(true);
-    expect(result.metadata!.step_limit).toBe(2);
+    expect(result.metadata!.step_limit).toBe(3);
     expect(result.metadata!.report_missing).toBeUndefined();
     // Инструменты на шаге-лимите не исполнялись — счётчик прежний.
     const toolCalls = result.metadata!.tool_calls as Array<{ iteration: number }>;
@@ -1240,7 +1276,7 @@ describe('run-cycle — отмена', () => {
     });
 
     const result = await runSubagent(makeConfig({
-      maxSteps: 1,
+      maxSteps: 2,
       extra: makeExtra({ provider, toolRegistry: registry }),
       ctx: makeCtx({ abortSignal: ac.signal }),
     }));
@@ -1270,7 +1306,7 @@ describe('run-cycle — отмена', () => {
     const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
 
     const result = await runSubagent(makeConfig({
-      maxSteps: 1,
+      maxSteps: 2,
       extra: makeExtra({ provider, toolRegistry: registry }),
       ctx: makeCtx({ abortSignal: ac.signal }),
     }));

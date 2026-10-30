@@ -32,7 +32,7 @@ afterAll(() => {
   vi.restoreAllMocks();
 });
 
-function userMessage(content: string): Message {
+function userMessage(content: string, metadata?: Record<string, unknown>): Message {
   return {
     id: generateId(),
     role: MessageRole.USER,
@@ -44,6 +44,7 @@ function userMessage(content: string): Message {
     disabled: false,
     pinned: false,
     hidden: false,
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -86,6 +87,64 @@ describe('autoTitleSession — LLM-заголовок', () => {
     expect(title).toBeNull();
     expect(chat).not.toHaveBeenCalled();
     expect((await sessionManager.getSession(session.id))!.title).toBe('Мой заголовок');
+  });
+});
+
+describe('autoTitleSession — служебные user-сообщения не считаются репликами', () => {
+  it('первое сообщение + steer-инъекция → заголовок всё равно генерируется', async () => {
+    const session = await sessionManager.createSession();
+    await sessionManager.addMessage(session.id, userMessage('Как настроить сборку проекта?'));
+    // Steer-инъекция (ADR-104) персистится как user-сообщение с metadata.steer.
+    await sessionManager.addMessage(session.id, userMessage('Первй тест', { steer: true }));
+    const { provider, chat } = titleProvider({ content: 'Настройка сборки' });
+
+    const title = await autoTitleSession(
+      (await sessionManager.getSession(session.id))!,
+      sessionManager,
+      provider,
+    );
+
+    expect(title).toBe('Настройка сборки');
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it('первое сообщение + steer-инъекция → фоллбек из первого сообщения', async () => {
+    const session = await sessionManager.createSession();
+    await sessionManager.addMessage(session.id, userMessage('Почини сборку, пожалуйста'));
+    await sessionManager.addMessage(session.id, userMessage('уточнение в ход', { steer: true }));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { provider } = titleProvider({ throws: new Error('provider down') });
+
+    const title = await autoTitleSession(
+      (await sessionManager.getSession(session.id))!,
+      sessionManager,
+      provider,
+    );
+
+    expect(title).toBe('Почини сборку, пожалуйста');
+  });
+
+  it('уведомление фонового прогона и сообщение шедулера — не реплики пользователя', async () => {
+    const session = await sessionManager.createSession();
+    await sessionManager.addMessage(session.id, userMessage('Первый вопрос'));
+    await sessionManager.addMessage(
+      session.id,
+      userMessage('<process>ok</process>', { type: 'background_run_result', kind: 'process' }),
+    );
+    await sessionManager.addMessage(
+      session.id,
+      userMessage('ночная задача', { scheduler: true, schedule_id: 'sch_1' }),
+    );
+    const { provider, chat } = titleProvider({ content: 'Первый вопрос' });
+
+    const title = await autoTitleSession(
+      (await sessionManager.getSession(session.id))!,
+      sessionManager,
+      provider,
+    );
+
+    expect(title).toBe('Первый вопрос');
+    expect(chat).toHaveBeenCalledTimes(1);
   });
 });
 

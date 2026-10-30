@@ -99,6 +99,11 @@ export const SYSTEM_MESSAGES = {
   'tool.not_found': 'Tool "{tool}" not found',
   'tool.permission_denied_default': 'Access denied by the security policy',
   'tool.doom_loop': 'Error: tool "{tool}" called {count} time(s) with the same arguments. Loop broken.',
+  // Шаг-лимит (паритет с opencode): провайдер вернул tool call, хотя
+  // `toolChoice: 'none'` вызов запрещает. Вызов не исполняется, но парный
+  // `tool`-результат пишется — иначе assistant(tool_calls) останется без пары.
+  'tool.disabled_by_step_limit':
+    'Error: tool "{tool}" was not executed — tools are disabled after the maximum agent steps ({limit})',
   'tool.empty_output': '(empty output)',
   'tool.output_truncated': '\n... (output truncated)',
   'tool.shell_error': 'Error: {message}',

@@ -627,7 +627,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
       // Лимит исчерпан — этот шаг финальный: инструменты остаются в запросе
       // (кэшированный префикс провайдера), но вызов запрещён `toolChoice`.
-      const stepLimitStep = Number.isFinite(effectiveMaxSteps) && iteration >= effectiveMaxSteps;
+      const stepLimitStep = Number.isFinite(effectiveMaxSteps) && iteration + 1 >= effectiveMaxSteps;
       if (stepLimitStep) stepLimitStepDone = true;
       // Инструкция «только текст» — assistant-сообщением в запрос, не в историю.
       const requestMessages = stepLimitStep
@@ -933,10 +933,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
       // Шаг-лимит: инструменты в запросе остались (кэш провайдера), но вызов
       // запрещён `toolChoice: 'none'`. Ответ мог прийти нестандартным — с
-      // `toolCalls`; исполнять их НЕЛЬЗЯ, ответ считается текстовым.
-      if (stepLimitStep && toolCalls && toolCalls.length > 0) {
-        toolCalls = [];
-      }
+      // `toolCalls`; исполнять их НЕЛЬЗЯ, но пара assistant(tool_calls) → tool
+      // сохраняется: ниже на каждый вызов пишется error-результат
+      // `tool.disabled_by_step_limit` (паритет с opencode).
 
       if (!toolCalls || toolCalls.length === 0) {
         // Шаг-лимит — отчёт о проделанной работе. Пустой/пробельный ответ —
@@ -1026,6 +1025,81 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       for (const tc of toolCalls) {
         const tcId = (tc.id as string) || `subcall_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
+
+        // Шаг-лимит (паритет с opencode): вызов запрещён `toolChoice: 'none'`,
+        // но провайдер его вернул. Не исполняем — пишем парный error-результат,
+        // чтобы assistant(tool_calls) не остался без `tool`.
+        if (stepLimitStep) {
+          const toolName = func?.name || 'unknown';
+          const limitParams = { tool: toolName, limit: stepLimitValue };
+          const limited: ToolResult = {
+            content: sm('tool.disabled_by_step_limit', limitParams),
+            isError: true,
+            metadata: {
+              i18n: i18nMeta('tool.disabled_by_step_limit', limitParams),
+              isError: true,
+            },
+          };
+          const tcStartedAt = new Date().toISOString();
+          publish?.('tool_call.result', {
+            stream_id: extra.streamId,
+            session_id: extra.sessionId,
+            call_id: tcId,
+            name: toolName,
+            result: limited,
+            iteration: stepIteration,
+            parent_call_id: extra.callId,
+          });
+          allSubagentToolCalls.push({
+            name: toolName,
+            args: {},
+            id: tcId,
+            result: { content: limited.content, isError: true },
+            started_at: tcStartedAt,
+            completed_at: new Date().toISOString(),
+            iteration: stepIteration,
+          });
+          messages.push({
+            id: '', role: 'tool',
+            content: limited.content,
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            disabled: false, pinned: false, branchId: '',
+            toolCallId: tcId,
+          });
+          if (childSessionId && extra.sessionManager) {
+            try {
+              const toolResultMsg: Message = {
+                id: generateId(),
+                role: MessageRole.TOOL,
+                seq: 0,
+                origin: 'local',
+                parts: [makeTextPart(limited.content)],
+                content: limited.content,
+                createdAt: nowISO(),
+                disabled: false,
+                pinned: false,
+                hidden: false,
+                toolCallId: tcId,
+                metadata: {
+                  ...(limited.metadata ?? {}),
+                  stream_id: extra.streamId,
+                  tool_chain: true,
+                  tool_name: toolName,
+                  args: {},
+                },
+              };
+              const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
+              if (updated && extra.eventBus) {
+                const idx = updated.messages.length - 1;
+                await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
+              }
+            } catch {
+              // не фатально
+            }
+          }
+          continue;
+        }
+
         if (!func?.name) continue;
 
         const toolName = func.name;
@@ -1280,6 +1354,22 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         if (subagentUserDenied) {
           subagentDenied = true;
         }
+      }
+
+      // Шаг-лимит: вызовы не исполнялись — цикл завершаем отчётом (механика
+      // opencode). Парные tool-результаты выше уже в истории дочерней сессии.
+      if (stepLimitStep) {
+        const reportText = accumulatedContent.trim();
+        stepLimitReached = true;
+        if (reportText) {
+          finalContent = reportText;
+          if (reasoning) subagentReasoning = reasoning;
+          await persistChildAssistantMessage(reportText);
+        } else {
+          reportMissing = true;
+          finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
+        }
+        break;
       }
 
       publish?.('tool_call.loop', {

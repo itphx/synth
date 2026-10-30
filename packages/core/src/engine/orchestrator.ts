@@ -3916,7 +3916,7 @@ export class ChatOrchestrator {
         // инструменты остаются в запросе (кэшированный префикс провайдера),
         // вызов запрещается `toolChoice: 'none'`, инструкция «только текст»
         // вставляется assistant-сообщением в запрос (не в историю).
-        const stepLimitStep = Number.isFinite(maxIterations) && toolIteration >= maxIterations;
+        const stepLimitStep = Number.isFinite(maxIterations) && toolIteration + 1 >= maxIterations;
         if (stepLimitStep) {
           stepLimitStepDone = true;
           stepLimitExecuted = true;
@@ -4231,12 +4231,10 @@ export class ChatOrchestrator {
         }
 
         // Шаг-лимит: ответ мог прийти нестандартным — с `toolCalls`, хотя
-        // `toolChoice: 'none'` вызов запрещает. Исполнять их НЕЛЬЗЯ: ответ
-        // считается текстовым (отчётом о проделанной работе).
-        if (stepLimitStep && toolCalls && toolCalls.length > 0) {
-          warning('ORCHESTRATOR', `Шаг-лимит: провайдер вернул ${toolCalls.length} tool call(s) при toolChoice='none' — вызовы не исполняются`);
-          toolCalls = [];
-        }
+        // `toolChoice: 'none'` вызов запрещает. Вызовы НЕ исполняются, но и не
+        // выбрасываются: ниже на каждый пишется парный `tool`-результат с
+        // ошибкой `tool.disabled_by_step_limit` (паритет с opencode) — иначе
+        // assistant(tool_calls) остался бы без пары.
 
         // No tool calls — final response
         if (!toolCalls || toolCalls.length === 0) {
@@ -4290,6 +4288,10 @@ export class ChatOrchestrator {
           agentRole: effectiveAgentRole,
         });
 
+        if (stepLimitStep && toolCalls.length > 0) {
+          warning('ORCHESTRATOR', `Шаг-лимит: провайдер вернул ${toolCalls.length} tool call(s) при toolChoice='none' — вызовы не исполняются`);
+        }
+
         // Execute each tool call
         // ADR-070 §2.8: durable state-сообщение о смене режима (plan_enter/
         // plan_exit) вставляется **после всего батча** tool-вызовов итерации —
@@ -4299,6 +4301,44 @@ export class ChatOrchestrator {
         for (const tc of toolCalls) {
           const tcId = (tc.id as string) || `call_${Date.now()}`;
           const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
+
+          // Шаг-лимит (паритет с opencode): вызов запрещён `toolChoice: 'none'`,
+          // но провайдер его вернул. Не исполняем, а отвечаем модели парным
+          // error-результатом — assistant(tool_calls) не должен осиротеть.
+          if (stepLimitStep) {
+            const limitParams = { tool: func?.name || 'unknown', limit: String(maxIterations) };
+            const limited = {
+              content: sm('tool.disabled_by_step_limit', limitParams),
+              isError: true,
+              metadata: {
+                i18n: i18nMeta('tool.disabled_by_step_limit', limitParams),
+                isError: true,
+              },
+            };
+            currentMessages.push({
+              id: '',
+              role: 'tool',
+              content: limited.content,
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              disabled: false,
+              pinned: false,
+              branchId: '',
+              toolCallId: tcId,
+            });
+            publishChunk('tool_call.result', {
+              stream_id: streamId,
+              session_id: session.id,
+              call_id: tcId,
+              name: limitParams.tool,
+              result: limited,
+              iteration: toolIteration,
+            });
+            await this._persistToolResult(
+              session.id, streamId, providerName, effectiveAgentRole,
+              chunkModel ?? finalModel, limitParams.tool, {}, tcId, limited,
+            );
+            continue;
+          }
 
           if (!func?.name) {
             // «Кривой» вызов модели (нет имени инструмента): пропустить его
@@ -5097,6 +5137,14 @@ export class ChatOrchestrator {
             branchId: '',
             toolCallId: tcId,
           });
+        }
+
+        // Шаг-лимит: вызовы не исполнялись — ход завершается сразу после
+        // парных tool-результатов. Текст ответа модели (если был) становится
+        // отчётом; пустой — `session.steps_limit` (см. process-finalize).
+        if (stepLimitStep) {
+          finalContent = accumulatedContent;
+          break;
         }
 
         // ADR-070 §2.8: durable `mode_change` — после ВСЕХ tool-результатов

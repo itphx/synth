@@ -44,7 +44,7 @@ function makeAgentRegistry(
       ? {
           id,
           agentMode: ['subagent'],
-          maxSteps: 1,
+          maxSteps: 2,
           ...(agentTemperature !== undefined ? { temperature: agentTemperature } : {}),
           ...agentOverrides,
         }

@@ -125,6 +125,7 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
   let tmpDir: string;
   let sessionManager: SessionManager;
   let orchestrator: ChatOrchestrator;
+  let agentRegistry: ReturnType<typeof createAgentRegistry>;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-step-limit-'));
@@ -133,10 +134,11 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
 
     const toolRegistry = createToolRegistry();
     // Лимит шагов берётся из определения агента: подменяем maxSteps у `fixer`
-    // (реестр хранит запись по id, `register` её заменяет).
-    const agentRegistry = createAgentRegistry(toolRegistry);
+    // (реестр хранит запись по id, `register` её заменяет). opencode-семантика:
+    // `maxSteps: 2` — один рабочий шаг + шаг-лимит.
+    agentRegistry = createAgentRegistry(toolRegistry);
     const fixer = agentRegistry.get('fixer')!;
-    agentRegistry.register({ ...fixer, maxSteps: 1 });
+    agentRegistry.register({ ...fixer, maxSteps: 2 });
 
     orchestrator = new ChatOrchestrator({
       sessionManager,
@@ -176,7 +178,7 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
     return (tools ?? []).map((t) => (t.function as { name: string }).name);
   }
 
-  it('maxSteps=1: шаг-лимит — обычный шаг (tools в запросе, toolChoice=none), tool call не исполняется, ход завершается отчётом', async () => {
+  it('maxSteps=2: шаг-лимит — обычный шаг (tools в запросе, toolChoice=none), tool call не исполняется, ход завершается отчётом', async () => {
     // Шаг 1 — работа (tool call). Шаг 2 — лимит: провайдер, игнорируя
     // `toolChoice: 'none'`, вернул и текст отчёта, и tool call; вызов
     // исполняться не должен, текст — финальный ответ хода.
@@ -217,6 +219,23 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
     expect(finalMessage?.content).toContain('ОТЧЁТ: лимит шагов исчерпан');
     expect(finalMessage?.metadata?.status).not.toBe('error');
 
+    // (г2) Паритет с opencode: assistant(tool_calls) шага-лимита сохранён и
+    // получил парный `tool`-результат с ошибкой — вызов не исполнялся.
+    const limitAssistant = after.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content.includes('ОТЧЁТ: лимит шагов исчерпан'),
+    );
+    expect(limitAssistant?.toolCalls).toHaveLength(1);
+    const limitCallId = (limitAssistant!.toolCalls![0] as { id: string }).id;
+    const limitToolResult = after.messages.find(
+      (m) => m.role === MessageRole.TOOL && m.toolCallId === limitCallId,
+    );
+    expect(limitToolResult).toBeDefined();
+    expect(limitToolResult!.content).toBe(
+      sm('tool.disabled_by_step_limit', { tool: 'todo_add', limit: '2' }),
+    );
+    expect(limitToolResult!.metadata?.isError).toBe(true);
+    expect(limitToolResult!.metadata?.i18n).toMatchObject({ key: 'tool.disabled_by_step_limit' });
+
     // (д) На шаге-лимите последнее сообщение запроса — синтетический
     // assistant-префилл с требованием «только текст».
     const limitMessages = calls[1]!.messages;
@@ -240,7 +259,7 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
     }
   });
 
-  it('maxSteps=1: пустой ответ на шаге-лимите → отчёт session.steps_limit + step_limit_reached', async () => {
+  it('maxSteps=2: пустой ответ на шаге-лимите → отчёт session.steps_limit + step_limit_reached', async () => {
     StepLimitScriptProvider.configure([
       { toolCalls: [{ name: 'todo_add', args: { todos: [{ content: 'step-1' }] } }] },
       { content: '' },
@@ -255,12 +274,15 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
 
     const after = (await sessionManager.getSession(session.id))!;
     const finalMessage = [...after.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
-    expect(finalMessage?.content).toBe(sm('session.steps_limit', { limit: '1' }));
+    expect(finalMessage?.content).toBe(sm('session.steps_limit', { limit: '2' }));
     expect(finalMessage?.metadata?.status).toBe('limit');
     expect(finalMessage?.metadata?.step_limit_reached).toBe(true);
   });
 
-  it('maxSteps=1: без tool call ход завершается обычным ответом (шаг-лимит не наступает)', async () => {
+  it('maxSteps=1: шаг-лимит наступает сразу — без tool call ход завершается ответом модели', async () => {
+    // opencode-семантика: `step` с 1, `stepLimitReached = step >= maxSteps`,
+    // поэтому при `maxSteps: 1` единственный шаг — финальный.
+    agentRegistry.register({ ...agentRegistry.get('fixer')!, maxSteps: 1 });
     StepLimitScriptProvider.configure([{ content: 'готово' }]);
     const session = await sessionManager.createSession({
       title: 'StepLimitNoTools',
@@ -272,10 +294,51 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
 
     const calls = StepLimitScriptProvider.calls;
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.options).toBeUndefined();
+    expect(calls[0]!.options).toEqual({ toolChoice: 'none' });
 
     const after = (await sessionManager.getSession(session.id))!;
     const finalMessage = [...after.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
     expect(finalMessage?.content).toBe('готово');
+    expect(finalMessage?.metadata?.step_limit_reached).toBe(true);
+  });
+
+  it('maxSteps=1: tool call на единственном шаге не исполняется, но пара assistant→tool сохраняется', async () => {
+    agentRegistry.register({ ...agentRegistry.get('fixer')!, maxSteps: 1 });
+    StepLimitScriptProvider.configure([
+      { toolCalls: [{ name: 'todo_add', args: { todos: [{ content: 'limit-only' }] } }] },
+    ]);
+    const session = await sessionManager.createSession({
+      title: 'StepLimitOnly',
+      userId: 'u1',
+      settings: { provider: 'steplimit', model: 'm', agentRole: 'fixer' },
+    });
+
+    await runTurn(session.id);
+
+    // Рабочих шагов нет — единственный вызов LLM это шаг-лимит.
+    expect(StepLimitScriptProvider.calls).toHaveLength(1);
+    expect(StepLimitScriptProvider.calls[0]!.options).toEqual({ toolChoice: 'none' });
+
+    const after = (await sessionManager.getSession(session.id))!;
+    // Вызов не исполнялся.
+    expect((after.todos ?? []).map((t) => t.content)).toEqual([]);
+    // Пара assistant(tool_calls) → tool сохранена.
+    const limitAssistant = after.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
+    );
+    expect(limitAssistant).toBeDefined();
+    const limitCallId = (limitAssistant!.toolCalls![0] as { id: string }).id;
+    const limitToolResult = after.messages.find(
+      (m) => m.role === MessageRole.TOOL && m.toolCallId === limitCallId,
+    );
+    expect(limitToolResult?.content).toBe(
+      sm('tool.disabled_by_step_limit', { tool: 'todo_add', limit: '1' }),
+    );
+    expect(limitToolResult?.metadata?.isError).toBe(true);
+
+    const finalMessage = [...after.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(finalMessage.content).toBe(sm('session.steps_limit', { limit: '1' }));
+    expect(finalMessage.metadata?.status).toBe('limit');
+    expect(finalMessage.metadata?.step_limit_reached).toBe(true);
   });
 });

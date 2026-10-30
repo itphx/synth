@@ -32,6 +32,7 @@ import type { ModelRouter, RoutingDecision } from '../../router/router.js';
 import type { SaveAssistantMessageFn, AssistantMessageStatus } from '../persistence.js';
 import type { ProviderOverrides } from '../routing.js';
 import { autoTitleSession } from '../../../sessions/auto-title.js';
+import { isUserDialogueMessage } from '../../../sessions/user-messages.js';
 import { warning } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { dropSteerInjections, isBackgroundNoticeMessage } from '../../steering/apply.js';
@@ -575,9 +576,10 @@ export async function runProcessFinalize(
 
   // 8.5. Auto-rename session on first exchange
   if (updatedSession) {
-    const userMsgCount = updatedSession.messages.filter(
-      (m) => m.role === MessageRole.USER && !m.metadata?.synthetic && !m.ephemeral,
-    ).length;
+    // Только реплики пользователя диалога: steer-инъекции, уведомления
+    // фоновых прогонов и сообщения шедулера не делают ход «вторым сообщением»
+    // (см. `sessions/user-messages.ts`).
+    const userMsgCount = updatedSession.messages.filter(isUserDialogueMessage).length;
     if (userMsgCount === 1) {
       const titleAgentDef = deps.agentRegistry?.get('title');
       let titleProvider = provider;
