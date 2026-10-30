@@ -322,3 +322,139 @@ describe('routes/providers (core): default_provider из явной пары pro
     expect(body.providers.every((p) => p.is_default === false)).toBe(true);
   });
 });
+
+describe('routes/providers (core): compatibility (слой opencode)', () => {
+  let tmpDir: string;
+  let stores: Awaited<ReturnType<typeof makeApp>>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-providers-compat-'));
+    stores = await makeApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('POST → GET: compatibility round-trip, виден в списке', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'mistral',
+      type: 'openai',
+      base_url: 'https://api.mistral.ai/v1',
+      compatibility: { requireAssistantAfterTool: true, streamUsage: false },
+    }));
+    expect(res.status).toBe(201);
+    expect((await res.json() as { compatibility?: unknown }).compatibility).toEqual({
+      requireAssistantAfterTool: true,
+      streamUsage: false,
+    });
+    expect(stores.providerCache.get('mistral')?.compatibility).toEqual({
+      requireAssistantAfterTool: true,
+      streamUsage: false,
+    });
+
+    const detail = await (await stores.app.request('/mistral')).json() as { compatibility?: unknown };
+    expect(detail.compatibility).toEqual({ requireAssistantAfterTool: true, streamUsage: false });
+
+    const list = await (await stores.app.request('/')).json() as {
+      providers: Array<{ name: string; compatibility?: unknown }>;
+    };
+    expect(list.providers.find((p) => p.name === 'mistral')?.compatibility).toEqual({
+      requireAssistantAfterTool: true,
+      streamUsage: false,
+    });
+  });
+
+  it('PATCH: объект заменяет прежнюю совместимость целиком, null-сброс', async () => {
+    await stores.providerStore.save('p1', {
+      name: 'p1', type: 'openai', baseUrl: 'http://p.local', enabled: true,
+      compatibility: { requireReasoning: true, maxTokensField: 'max_completion_tokens' },
+    });
+    stores.providerCache.set('p1', await stores.providerStore.load('p1') as ProviderConfig);
+
+    const patched = await stores.app.request('/p1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ compatibility: { streamUsage: false } }),
+    });
+    expect(patched.status).toBe(200);
+    // Замена, не наложение: прежние поля не наследуются.
+    expect(stores.providerCache.get('p1')?.compatibility).toEqual({ streamUsage: false });
+
+    const reset = await stores.app.request('/p1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ compatibility: null }),
+    });
+    expect(reset.status).toBe(200);
+    expect(stores.providerCache.get('p1')?.compatibility).toBeUndefined();
+  });
+
+  it('PATCH: {requireReasoning:false} оставляет только это поле (снять одно, не теряя семантику «авто»)', async () => {
+    await stores.providerStore.save('p2', {
+      name: 'p2', type: 'openai', baseUrl: 'http://p.local', enabled: true,
+      compatibility: { requireReasoning: true, maxTokensField: 'max_tokens' },
+    });
+    stores.providerCache.set('p2', await stores.providerStore.load('p2') as ProviderConfig);
+
+    const patched = await stores.app.request('/p2', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ compatibility: { requireReasoning: false } }),
+    });
+    expect(patched.status).toBe(200);
+    expect(stores.providerCache.get('p2')?.compatibility).toEqual({ requireReasoning: false });
+  });
+
+  it('PATCH без поля compatibility не трогает прежнее значение', async () => {
+    await stores.providerStore.save('p3', {
+      name: 'p3', type: 'openai', baseUrl: 'http://p.local', enabled: true,
+      compatibility: { requireReasoning: true, maxTokensField: 'max_tokens' },
+    });
+    stores.providerCache.set('p3', await stores.providerStore.load('p3') as ProviderConfig);
+
+    const patched = await stores.app.request('/p3', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ default_model: 'other-model' }),
+    });
+    expect(patched.status).toBe(200);
+    expect(stores.providerCache.get('p3')?.compatibility).toEqual({
+      requireReasoning: true,
+      maxTokensField: 'max_tokens',
+    });
+  });
+
+  it('POST-upsert без поля compatibility сохраняет прежнее значение', async () => {
+    await stores.app.request('/', postJSON({
+      name: 'p4',
+      type: 'openai',
+      base_url: 'https://api.example.com/v1',
+      compatibility: { requireReasoning: true, maxTokensField: 'max_tokens' },
+    }));
+
+    const res = await stores.app.request('/', postJSON({
+      name: 'p4',
+      type: 'openai',
+      base_url: 'https://api.example.com/v1',
+      default_model: 'm2',
+    }));
+    expect(res.status).toBe(200);
+    expect(stores.providerCache.get('p4')?.compatibility).toEqual({
+      requireReasoning: true,
+      maxTokensField: 'max_tokens',
+    });
+  });
+
+  it('неизвестное поле compatibility → 400 VALIDATION_ERROR', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'bad',
+      type: 'openai',
+      base_url: 'https://api.example.com/v1',
+      compatibility: { reasoningFeild: 'reasoning' },
+    }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+});

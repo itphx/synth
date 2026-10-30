@@ -5,11 +5,11 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
-  ProviderConfig, ModelConfig, ToolsDisabledConfig, WebhooksConfig,
+  ProviderConfig, ModelConfig, ModelCompatibility, ToolsDisabledConfig, WebhooksConfig,
   SummarizationConfig, DecisionConfig, Message,
 } from '@itphx/synth-shared';
 import {
-  ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
+  ensureDataDir, mergeModelCompatibility, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
   resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir,
   resolveExecutionConfig,
   readTlsRuntimeSettings,
@@ -987,21 +987,32 @@ export async function createBackendDeps(
   };
 
   /**
-   * Thinking-модели DeepSeek: явный override `ModelConfig.requiresReasoning`
-   * (провайдер требует `reasoning_content` у assistant-сообщений).
-   * `undefined` — автоопределение по провайдеру/имени модели.
+   * Совместимость протокола по каталогу: `provider.compatibility` (JSON
+   * провайдера) + shorthand `ModelConfig.requiresReasoning` +
+   * `model.compatibility` (каталог/ручной override). Порядок слоёв —
+   * provider → shorthand → модель (модель перекрывает).
+   * `undefined` — явных значений нет, работают эвристики провайдера.
    */
-  const resolveModelRequiresReasoning = (
+  const resolveModelCompatibility = (
     providerName: string,
     modelId: string,
-  ): boolean | undefined => {
-    const direct = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
-    if (direct?.requiresReasoning !== undefined) return direct.requiresReasoning;
-    for (const model of modelCache.values()) {
-      if (model.provider !== providerName || model.requiresReasoning === undefined) continue;
-      if (model.name === modelId) return model.requiresReasoning;
+  ): ModelCompatibility | undefined => {
+    const providerCompat = providerCache.get(providerName)?.compatibility;
+    let model = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
+    if (!model) {
+      for (const candidate of modelCache.values()) {
+        if (candidate.provider !== providerName) continue;
+        if (candidate.name === modelId) {
+          model = candidate;
+          break;
+        }
+      }
     }
-    return undefined;
+    const shorthand: ModelCompatibility | undefined = model?.requiresReasoning !== undefined
+      ? { requireReasoning: model.requiresReasoning }
+      : undefined;
+    if (!providerCompat && !shorthand && !model?.compatibility) return undefined;
+    return mergeModelCompatibility(providerCompat, shorthand, model?.compatibility);
   };
 
   const orchestrator = new ChatOrchestrator({
@@ -1050,8 +1061,8 @@ export async function createBackendDeps(
     // ADR-115: модальности модели — из её конфига (общий резолвер инстанса,
     // выше: им же пользуются шаги пайплайнов).
     resolveModelModalities,
-    // Thinking-модели DeepSeek: явный override `ModelConfig.requiresReasoning`.
-    resolveModelRequiresReasoning,
+    // Совместимость протокола (provider+model) из каталога.
+    resolveModelCompatibility,
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).
     attachmentsConfig: () => attachmentsSettings.getConfig(),
@@ -1194,7 +1205,10 @@ export async function createBackendDeps(
     }
     const model = opts?.model?.trim() || sharedConfig.defaultModel || '';
     const provider = orchestrator.wrapProviderWithGateway(
-      ProviderFactory.create(providerName, toCoreProviderConfig(sharedConfig, model)),
+      ProviderFactory.create(
+        providerName,
+        toCoreProviderConfig(sharedConfig, model, undefined, resolveModelCompatibility(providerName, model)),
+      ),
     );
     const vectors: number[][] = [];
     for (const text of texts) {
@@ -1466,7 +1480,7 @@ export async function createBackendDeps(
       resolveLlmDefaults,
       loadProviderConfig: providerLoader,
       toProviderConfig: (shared, model) =>
-        toCoreProviderConfig(shared, model, undefined, resolveModelRequiresReasoning(shared.name, model)),
+        toCoreProviderConfig(shared, model, undefined, resolveModelCompatibility(shared.name, model)),
       createProvider: (name, config, temperature, topP, topK) =>
         ProviderFactory.create(name, config, temperature, topP, topK),
       wrapProvider: (provider) => orchestrator.wrapProviderWithGateway(provider),
@@ -1539,7 +1553,10 @@ export async function createBackendDeps(
           const sharedConfig = providerLoader(provider);
           if (!sharedConfig) return null;
           return orchestrator.wrapProviderWithGateway(
-            ProviderFactory.create(provider, toCoreProviderConfig(sharedConfig, model)),
+            ProviderFactory.create(
+              provider,
+              toCoreProviderConfig(sharedConfig, model, undefined, resolveModelCompatibility(provider, model)),
+            ),
           );
         } catch {
           return null;

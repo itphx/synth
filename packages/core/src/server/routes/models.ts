@@ -4,7 +4,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ModelConfig, ProviderConfig, ContextSource, AttachmentModality } from '@itphx/synth-shared';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
-import { hasPriceInput, lookupContextWindow, parseCurrencyInput } from '@itphx/synth-shared';
+import { hasPriceInput, lookupContextWindow, parseCurrencyInput, parseModelCompatibilityInput } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/index.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -263,6 +263,7 @@ export function createModelRoutes(
         timeout: 30,
         currency: provider.currency,
         numCtx: provider.numCtx,
+        compatibility: provider.compatibility,
       };
 
       if (!providerConfig.url) continue;
@@ -507,6 +508,8 @@ export function createModelRoutes(
            * провайдеру/имени модели (см. `ModelConfig.requiresReasoning`).
            */
           ...(m.requiresReasoning !== undefined ? { requiresReasoning: m.requiresReasoning } : {}),
+          /** Особенности протокола модели (перекрывают провайдерские). */
+          ...(m.compatibility ? { compatibility: m.compatibility } : {}),
         })),
       };
     });
@@ -555,13 +558,38 @@ export function createModelRoutes(
     // ADR-115: модальности модели — ручной override (аддитивно к каталогу API).
     const modalities = resolveModalitiesInput(body.modalities, existing?.modalities);
 
-    // Thinking-модели DeepSeek: явный override поведения `reasoning_content`
-    // (аддитивно, необязательно). `null`/отсутствие — автоопределение.
-    const requiresReasoning = 'requires_reasoning' in body
-      ? (body.requires_reasoning === null ? undefined : body.requires_reasoning)
-      : ('requiresReasoning' in body
-        ? (body.requiresReasoning === null ? undefined : body.requiresReasoning)
-        : existing?.requiresReasoning);
+    // Совместимость протокола: объект — **замена** целиком (UI присылает полный
+    // объект из черновика; отсутствующее поле = «авто»), `null`/пустой объект —
+    // сброс, поле не передано — без изменений; неизвестные поля/неверные
+    // типы → 400.
+    const parsedCompatibility = parseModelCompatibilityInput(body.compatibility, existing?.compatibility);
+    if (!parsedCompatibility.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedCompatibility.reason } }, 400);
+    }
+    let compatibility = parsedCompatibility.value;
+
+    // Thinking-модели DeepSeek: shorthand `requires_reasoning` (аддитивно,
+    // необязательно). `null` — сброс обоих: и shorthand, и
+    // `compatibility.requireReasoning` (одно поведение, один сброс).
+    const reasoningField = 'requires_reasoning' in body ? 'requires_reasoning' : ('requiresReasoning' in body ? 'requiresReasoning' : null);
+    let requiresReasoning = existing?.requiresReasoning;
+    if (reasoningField) {
+      const raw = body[reasoningField];
+      if (raw === null) {
+        requiresReasoning = undefined;
+        if (compatibility?.requireReasoning !== undefined) {
+          const rest: typeof compatibility = { ...compatibility };
+          delete rest.requireReasoning;
+          compatibility = Object.keys(rest).length > 0 ? rest : undefined;
+        }
+      } else if (typeof raw === 'boolean') {
+        requiresReasoning = raw;
+      } else {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: 'requires_reasoning должен быть boolean или null' },
+        }, 400);
+      }
+    }
 
     const model: ModelConfig = {
       id: modelId,
@@ -583,6 +611,7 @@ export function createModelRoutes(
       currency,
       ...(modalities ? { modalities } : {}),
       ...(requiresReasoning !== undefined ? { requiresReasoning } : {}),
+      ...(compatibility ? { compatibility } : {}),
     };
 
     await modelStore.save(modelId, model);

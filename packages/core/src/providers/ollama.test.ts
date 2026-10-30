@@ -650,3 +650,66 @@ describe('OllamaProvider — вложения (ADR-115)', () => {
     expect(formatted[0]!.images).toBeUndefined();
   });
 });
+
+describe('OllamaProvider — compatibility (think / tool_choice)', () => {
+  function okResponse(): Response {
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'ok' } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const tools = [{
+    type: 'function',
+    function: { name: 'noop', description: 'noop', parameters: { type: 'object', properties: {} } },
+  }];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function bodyOf(
+    reasoningLevel: 'none' | 'low' | 'medium' | 'high' | 'default',
+    extra: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new OllamaProvider({ ...baseParams, reasoningLevel, ...extra });
+    await provider.chat([makeMessage({ role: 'user', content: 'hi' })], undefined, tools, undefined, undefined, {
+      toolChoice: 'auto',
+    });
+    return JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+  }
+
+  it('think: low|medium|high → true, none → false, default → поле не отправляется', async () => {
+    vi.unstubAllGlobals();
+    expect((await bodyOf('low')).think).toBe(true);
+    vi.unstubAllGlobals();
+    expect((await bodyOf('medium')).think).toBe(true);
+    vi.unstubAllGlobals();
+    expect((await bodyOf('high')).think).toBe(true);
+    vi.unstubAllGlobals();
+    expect((await bodyOf('none')).think).toBe(false);
+    vi.unstubAllGlobals();
+    expect((await bodyOf('default'))).not.toHaveProperty('think');
+  });
+
+  it('tool_choice: нативный Ollama (type=ollama) по умолчанию не отправляет', async () => {
+    vi.unstubAllGlobals();
+    const body = await bodyOf('default', { type: 'ollama' });
+    expect(body).not.toHaveProperty('tool_choice');
+    expect(body.tools).toBeDefined();
+  });
+
+  it('tool_choice: явный supportsToolChoice=true отправляет', async () => {
+    vi.unstubAllGlobals();
+    const body = await bodyOf('default', { type: 'ollama', compatibility: { supportsToolChoice: true } });
+    expect(body.tool_choice).toBe('auto');
+  });
+
+  it('tool_choice: явный supportsToolChoice=false не отправляет даже при generic-типе', async () => {
+    vi.unstubAllGlobals();
+    const body = await bodyOf('default', { compatibility: { supportsToolChoice: false } });
+    expect(body).not.toHaveProperty('tool_choice');
+  });
+});

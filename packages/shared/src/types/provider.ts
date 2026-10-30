@@ -43,6 +43,251 @@ export function hasPriceInput(body: unknown): boolean {
     || 'cache_write_price' in b || 'cacheWritePrice' in b;
 }
 
+// --- Совместимость провайдеров/моделей (слой как в opencode) ---
+
+/**
+ * Поле лимита вывода в теле запроса OpenAI-совместимого протокола.
+ *
+ * Наш дефолт — `max_tokens` (намеренное отличие от opencode, где дефолт
+ * `max_completion_tokens`): локальные и кастомные OpenAI-совместимые серверы
+ * часто не знают `max_completion_tokens`, и молчаливая смена дефолта ломала бы
+ * их. `max_completion_tokens` отправляется только при **явном** значении.
+ */
+export type MaxTokensField = 'max_tokens' | 'max_completion_tokens';
+
+/**
+ * Явные особенности протокола провайдера/модели (аналог `Compatibility` в
+ * opencode, `packages/schema/src/model-compatibility.ts`).
+ *
+ * Один и тот же контракт объявлен на двух уровнях: `ProviderConfig.compatibility`
+ * (дефолты для всех моделей провайдера) и `ModelConfig.compatibility`
+ * (перекрывает провайдерские поля точечно).
+ */
+export interface ModelCompatibility {
+  /**
+   * Имя поля reasoning в assistant-сообщениях openai-chat.
+   * По умолчанию `'reasoning_content'` (DeepSeek); OpenRouter/RouterAI — `'reasoning'`.
+   */
+  reasoningField?: string;
+  /**
+   * Требовать поле reasoning у **каждого** assistant-сообщения, даже пустым
+   * (thinking-режим DeepSeek: `reasoning_content` обязателен в истории).
+   */
+  requireReasoning?: boolean;
+  /** Поле лимита вывода: `max_tokens` (дефолт) | `max_completion_tokens` (только явно). */
+  maxTokensField?: MaxTokensField;
+  /** Провайдеру нужен assistant-турн после tool-результатов (Mistral-семейство). */
+  requireAssistantAfterTool?: boolean;
+  /**
+   * Отправлять `stream_options: {include_usage: true}` в стриме
+   * (OpenAI-совместимые). Дефолт `true` — как в opencode.
+   */
+  streamUsage?: boolean;
+  /**
+   * Провайдер понимает `tool_choice`. Дефолт `true`; для нативного Ollama
+   * `/api/chat` — `false` (эвристика по `type: 'ollama'`).
+   */
+  supportsToolChoice?: boolean;
+}
+
+/**
+ * Дефолты провайдера, наследуемые моделями. Набор полей совпадает с
+ * `ModelCompatibility`; отдельный алиас оставлен, чтобы смысл был явным.
+ */
+export type ProviderCompatibility = ModelCompatibility;
+
+/**
+ * Полностью разрешённая совместимость: каждое поле заполнено — явное значение
+ * модели → явное значение провайдера → эвристика (или встроенный дефолт).
+ */
+export interface ResolvedModelCompatibility {
+  reasoningField: string;
+  requireReasoning: boolean;
+  maxTokensField: MaxTokensField;
+  requireAssistantAfterTool: boolean;
+  streamUsage: boolean;
+  supportsToolChoice: boolean;
+}
+
+/** Контекст, по которому считаются эвристики совместимости. */
+export interface CompatibilityContext {
+  /** Тип провайдера (`openai`/`ollama`/`deepseek`/…). */
+  providerType?: string;
+  /** Имя провайдера как в конфиге. */
+  providerName?: string;
+  /** Базовый URL (для эвристик вида `deepseek.com`). */
+  baseUrl?: string;
+  /** Идентификатор модели. */
+  modelId?: string;
+}
+
+/** Эвристические значения совместимости (применяются только без явных). */
+export type CompatibilityHeuristics = Partial<ResolvedModelCompatibility>;
+
+/** Ключи контракта — для валидации входных данных API. */
+export const MODEL_COMPATIBILITY_KEYS = [
+  'reasoningField',
+  'requireReasoning',
+  'maxTokensField',
+  'requireAssistantAfterTool',
+  'streamUsage',
+  'supportsToolChoice',
+] as const;
+
+/**
+ * Эвристики совместимости — те же, что в opencode
+ * (`packages/ai/src/protocols/openai-chat.ts`):
+ *
+ *  - `requireReasoning`: тип/имя провайдера `deepseek`, URL ~ `deepseek.com`,
+ *    модель ~ `deepseek`;
+ *  - `requireAssistantAfterTool`: Mistral-семейство (`mistral`, `devstral`,
+ *    `codestral`, `pixtral`, `mixtral`);
+ *  - `supportsToolChoice`: `false` для нативного Ollama (`type: 'ollama'`).
+ *
+ * `maxTokensField` намеренно **не** эвристируется: наш дефолт — `max_tokens`,
+ * `max_completion_tokens` только при явном значении (локальные серверы).
+ */
+export function detectCompatibilityHeuristics(
+  context: CompatibilityContext,
+): CompatibilityHeuristics {
+  const type = (context.providerType ?? '').toLowerCase();
+  const name = (context.providerName ?? '').toLowerCase();
+  const url = (context.baseUrl ?? '').toLowerCase();
+  const model = (context.modelId ?? '').toLowerCase();
+
+  const requireReasoning = type === 'deepseek'
+    || name === 'deepseek'
+    || url.includes('deepseek.com')
+    || model.includes('deepseek');
+
+  const mistral = ['mistral', 'devstral', 'codestral', 'pixtral', 'mixtral']
+    .some((family) => model.includes(family));
+
+  return {
+    requireReasoning,
+    requireAssistantAfterTool: mistral,
+    supportsToolChoice: type !== 'ollama',
+  };
+}
+
+/**
+ * Наложение слоёв совместимости: `undefined`-поля не перетирают значение.
+ * Поздние слои приоритетнее (провайдер → shorthand → модель).
+ */
+export function mergeModelCompatibility(
+  ...layers: Array<ModelCompatibility | undefined>
+): ModelCompatibility {
+  const merged: Record<string, unknown> = {};
+  for (const layer of layers) {
+    if (!layer) continue;
+    for (const [key, value] of Object.entries(layer)) {
+      if (value !== undefined) merged[key] = value;
+    }
+  }
+  return merged as ModelCompatibility;
+}
+
+/**
+ * Разрешение итоговой совместимости.
+ *
+ * Порядок: **явное значение модели → явное значение провайдера → эвристика →
+ * встроенный дефолт**. `reasoningField`, заданный явно на любом уровне, сам по
+ * себе означает `requireReasoning: true` (как в opencode) — если
+ * `requireReasoning` не переопределён явно (в т.ч. `false`).
+ */
+export function resolveModelCompatibility(
+  providerCompat?: ModelCompatibility,
+  modelCompat?: ModelCompatibility,
+  heuristics: CompatibilityHeuristics = {},
+): ResolvedModelCompatibility {
+  const explicitReasoningField = modelCompat?.reasoningField ?? providerCompat?.reasoningField;
+  const explicitRequireReasoning = modelCompat?.requireReasoning ?? providerCompat?.requireReasoning;
+  const requireReasoning = explicitRequireReasoning
+    ?? (explicitReasoningField !== undefined ? true : (heuristics.requireReasoning ?? false));
+
+  return {
+    reasoningField: explicitReasoningField ?? heuristics.reasoningField ?? 'reasoning_content',
+    requireReasoning,
+    maxTokensField: modelCompat?.maxTokensField
+      ?? providerCompat?.maxTokensField
+      ?? heuristics.maxTokensField
+      ?? 'max_tokens',
+    requireAssistantAfterTool: modelCompat?.requireAssistantAfterTool
+      ?? providerCompat?.requireAssistantAfterTool
+      ?? heuristics.requireAssistantAfterTool
+      ?? false,
+    streamUsage: modelCompat?.streamUsage
+      ?? providerCompat?.streamUsage
+      ?? heuristics.streamUsage
+      ?? true,
+    supportsToolChoice: modelCompat?.supportsToolChoice
+      ?? providerCompat?.supportsToolChoice
+      ?? heuristics.supportsToolChoice
+      ?? true,
+  };
+}
+
+/** Результат строгого разбора поля `compatibility` из тела запроса. */
+export type CompatibilityInputResult =
+  | { ok: true; value: ModelCompatibility | undefined }
+  | { ok: false; reason: string };
+
+/**
+ * Строгий разбор `compatibility` из тела API. Семантика — **замена**:
+ * - `undefined` — поле не передано (сохранить existing);
+ * - `null` — явно сбросить;
+ * - объект — **заменить** значение целиком (UI присылает полный объект из
+ *   черновика, поэтому отсутствующее в объекте поле означает «авто», а не
+ *   «оставить как было»); пустой объект равнозначен сбросу;
+ * - неизвестные поля и значения неверного типа — ошибка (не терять опечатки
+ *   молча); иное — ошибка.
+ */
+export function parseModelCompatibilityInput(
+  raw: unknown,
+  existing?: ModelCompatibility,
+): CompatibilityInputResult {
+  if (raw === undefined) return { ok: true, value: existing };
+  if (raw === null) return { ok: true, value: undefined };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, reason: 'compatibility должен быть объектом или null' };
+  }
+
+  const input = raw as Record<string, unknown>;
+  for (const key of Object.keys(input)) {
+    if (!(MODEL_COMPATIBILITY_KEYS as readonly string[]).includes(key)) {
+      return { ok: false, reason: `compatibility: неизвестное поле «${key}»` };
+    }
+  }
+
+  // Присланный объект — полное новое значение: прежние поля не наследуются.
+  const replaced: ModelCompatibility = {};
+
+  if ('reasoningField' in input) {
+    const value = input.reasoningField;
+    if (typeof value !== 'string' || value.trim() === '') {
+      return { ok: false, reason: 'compatibility.reasoningField должен быть непустой строкой' };
+    }
+    replaced.reasoningField = value.trim();
+  }
+  if ('maxTokensField' in input) {
+    const value = input.maxTokensField;
+    if (value !== 'max_tokens' && value !== 'max_completion_tokens') {
+      return { ok: false, reason: 'compatibility.maxTokensField должен быть max_tokens или max_completion_tokens' };
+    }
+    replaced.maxTokensField = value;
+  }
+  for (const key of ['requireReasoning', 'requireAssistantAfterTool', 'streamUsage', 'supportsToolChoice'] as const) {
+    if (!(key in input)) continue;
+    const value = input[key];
+    if (typeof value !== 'boolean') {
+      return { ok: false, reason: `compatibility.${key} должен быть boolean` };
+    }
+    replaced[key] = value;
+  }
+
+  return { ok: true, value: Object.keys(replaced).length > 0 ? replaced : undefined };
+}
+
 // --- Provider ---
 export interface ProviderConfig {
   name: string;
@@ -61,6 +306,12 @@ export interface ProviderConfig {
    * путём Ollama (`/api/chat`).
    */
   numCtx?: number;
+  /**
+   * Особенности протокола провайдера (дефолты для всех его моделей):
+   * поле reasoning, лимит вывода, `stream_options`, поддержка `tool_choice`.
+   * Модель перекрывает поля точечно (`ModelConfig.compatibility`).
+   */
+  compatibility?: ModelCompatibility;
 }
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
@@ -120,9 +371,17 @@ export interface ModelConfig {
    */
   modalities?: AttachmentModality[];
   /**
-   * Провайдер требует `reasoning_content` у assistant-сообщений
-   * (thinking-модели DeepSeek); `undefined` — автоопределение по
-   * провайдеру/имени модели, `false` — принудительно выключить.
+   * Особенности протокола модели (перекрывает `ProviderConfig.compatibility`
+   * по каждому полю). Например, для одной модели провайдера нужен
+   * `max_completion_tokens`, для остальных — дефолт.
+   */
+  compatibility?: ModelCompatibility;
+  /**
+   * Shorthand для `compatibility.requireReasoning` (thinking-модели DeepSeek):
+   * провайдер требует `reasoning_content` у assistant-сообщений;
+   * `undefined` — автоопределение по провайдеру/имени модели, `false` —
+   * принудительно выключить. Нормализация:
+   * `compatibility.requireReasoning ?? requiresReasoning`.
    */
   requiresReasoning?: boolean;
 }

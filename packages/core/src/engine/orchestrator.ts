@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -277,12 +277,12 @@ export interface OrchestratorOptions {
    */
   resolveModelModalities?: (providerName: string, modelId: string) => AttachmentModality[] | undefined;
   /**
-   * Явный override `ModelConfig.requiresReasoning` (thinking-модели DeepSeek):
-   * провайдер требует `reasoning_content` у assistant-сообщений. `undefined` —
-   * автоопределение по провайдеру/имени модели (эвристика в провайдере).
-   * Резолвер задаёт точка сборки по `modelCache`.
+   * Совместимость протокола по каталогу: слияние `provider.compatibility` и
+   * `model.compatibility` (включая shorthand `requiresReasoning`).
+   * `undefined` — явных значений нет, работают эвристики провайдера
+   * (deepseek/mistral/Ollama). Резолвер задаёт точка сборки по кешам.
    */
-  resolveModelRequiresReasoning?: (providerName: string, modelId: string) => boolean | undefined;
+  resolveModelCompatibility?: (providerName: string, modelId: string) => ModelCompatibility | undefined;
   /**
    * ADR-115: live-конфиг вложений (`attachments.*`, runtime-настройки поверх
    * config). Читается **на каждый ход** — изменение `workspaceFallback`
@@ -721,10 +721,10 @@ export class ChatOrchestrator {
    */
   private readonly _resolveModalities: ((providerName: string, modelId: string) => AttachmentModality[] | undefined) | null;
   /**
-   * Явный override `ModelConfig.requiresReasoning` (thinking-модели DeepSeek);
-   * `undefined` — автоопределение в провайдере.
+   * Совместимость протокола по каталогу (provider+model); `undefined` —
+   * автоопределение в провайдере эвристиками.
    */
-  private readonly _resolveModelRequiresReasoning: ((providerName: string, modelId: string) => boolean | undefined) | null;
+  private readonly _resolveModelCompatibility: ((providerName: string, modelId: string) => ModelCompatibility | undefined) | null;
   /**
    * ADR-115: live-конфиг вложений (runtime-настройки поверх config).
    * `undefined` — резолвер не задан: `workspaceFallback` считается включённым
@@ -1128,8 +1128,8 @@ export class ChatOrchestrator {
     this._blobs = options.blobs ?? null;
     // ADR-115: модальности из конфига модели приоритетнее справочника.
     this._resolveModalities = options.resolveModelModalities ?? null;
-    // Thinking-модели DeepSeek: явный override `ModelConfig.requiresReasoning`.
-    this._resolveModelRequiresReasoning = options.resolveModelRequiresReasoning ?? null;
+    // Совместимость протокола (provider+model) из каталога.
+    this._resolveModelCompatibility = options.resolveModelCompatibility ?? null;
     // ADR-115: live-конфиг вложений — проверяется на каждый ход в
     // `_processSetupDeps().hydrateAttachments` (без рестарта).
     if (options.attachmentsConfig) this._attachmentsConfig = options.attachmentsConfig;
@@ -1271,7 +1271,7 @@ export class ChatOrchestrator {
       gatewayConfig ?? undefined,
       gatewayConfig || this._metrics ? this._poolGatewayFactory(gatewayConfig ?? DISABLED_GATEWAY_CONFIG) : undefined,
       this._decisionGatewayFactory(),
-      options.resolveModelRequiresReasoning,
+      options.resolveModelCompatibility,
     );
     this._providerPool = pool;
 
@@ -2639,7 +2639,7 @@ export class ChatOrchestrator {
         sharedConfig,
         target.model,
         undefined,
-        this._resolveModelRequiresReasoning?.(target.provider, target.model),
+        this._resolveModelCompatibility?.(target.provider, target.model),
       ),
     );
     // Инвариант 3: LLM-вызов только через GatewayProvider. Обёртка с
@@ -5454,8 +5454,8 @@ export class ChatOrchestrator {
       optimizer: this._optimizer,
       router: this._router,
       // Thinking-модели DeepSeek: явный override из каталога моделей.
-      ...(this._resolveModelRequiresReasoning
-        ? { resolveModelRequiresReasoning: this._resolveModelRequiresReasoning }
+      ...(this._resolveModelCompatibility
+        ? { resolveModelCompatibility: this._resolveModelCompatibility }
         : {}),
       gateway: {
         gatewayConfig: this._gatewayConfig,

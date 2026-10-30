@@ -46,7 +46,18 @@ export interface ContextOptimizerGatewayHooks {
   filters?: LlmFilterRegistry;
 }
 
-function toCoreProviderConfig(shared: SharedProviderConfig, model: string): { url: string; apiKey: string; model: string; timeout?: number; name?: string; type?: string } {
+function toCoreProviderConfig(
+  shared: SharedProviderConfig,
+  model: string,
+): {
+  url: string;
+  apiKey: string;
+  model: string;
+  timeout?: number;
+  name?: string;
+  type?: string;
+  compatibility?: SharedProviderConfig['compatibility'];
+} {
   return {
     name: shared.name,
     type: shared.type,
@@ -54,6 +65,9 @@ function toCoreProviderConfig(shared: SharedProviderConfig, model: string): { ur
     apiKey: shared.apiKey || '',
     model,
     timeout: shared.timeout,
+    // Провайдерский уровень совместимости; модель-уровень у суммаризации
+    // неизвестен (это aux-вызов) — недостающее доберут эвристики.
+    ...(shared.compatibility ? { compatibility: shared.compatibility } : {}),
   };
 }
 

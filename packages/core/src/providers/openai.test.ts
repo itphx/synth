@@ -818,3 +818,167 @@ describe('OpenAIProvider — tool_choice на шаге (лимит шагов)',
     expect(body.tools).toBeUndefined();
   });
 });
+
+describe('OpenAIProvider — compatibility (слой opencode)', () => {
+  type OpenAIPrivate = {
+    _formatMessages(messages: LLMMessage[], systemPrompt?: string): Array<Record<string, unknown>>;
+  };
+
+  function sseResponse(events: string[]): Response {
+    return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  async function drain(gen: AsyncIterable<LLMChunk>): Promise<LLMChunk[]> {
+    const out: LLMChunk[] = [];
+    for await (const chunk of gen) out.push(chunk);
+    return out;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reasoningField: reasoning / reasoning_text / кастом; по умолчанию reasoning_content', () => {
+    for (const field of ['reasoning', 'reasoning_text', 'custom_reasoning']) {
+      const provider = new OpenAIProvider({
+        ...plainParams,
+        compatibility: { reasoningField: field },
+      }) as unknown as OpenAIPrivate;
+      const formatted = provider._formatMessages([makeMessage({ role: 'assistant', reasoning: 'думал' })]);
+      expect(formatted[0]![field]).toBe('думал');
+      expect(formatted[0]!.reasoning_content).toBeUndefined();
+    }
+    const defaultProvider = new OpenAIProvider(plainParams) as unknown as OpenAIPrivate;
+    expect(
+      defaultProvider._formatMessages([makeMessage({ role: 'assistant', reasoning: 'думал' })])[0]!.reasoning_content,
+    ).toBe('думал');
+  });
+
+  it('requireReasoning: явный true у недефолтного провайдера', () => {
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { requireReasoning: true },
+    }) as unknown as OpenAIPrivate;
+    expect(provider._formatMessages([makeMessage({ role: 'assistant' })])[0]!.reasoning_content).toBe('');
+  });
+
+  it('requireReasoning=false сильнее deepseek-эвристики и в форме compatibility', () => {
+    const provider = new OpenAIProvider({
+      ...baseParams,
+      compatibility: { requireReasoning: false },
+    }) as unknown as OpenAIPrivate;
+    expect(provider._formatMessages([makeMessage({ role: 'assistant' })])[0]!.reasoning_content).toBeUndefined();
+  });
+
+  it('maxTokensField: дефолт max_tokens, max_completion_tokens только явно', async () => {
+    const fetchDefault = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'ok' } }], usage: {},
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchDefault);
+    const defaultProvider = new OpenAIProvider({ ...plainParams, maxTokens: 100 });
+    await defaultProvider.chat([makeMessage()]);
+    const defaultBody = JSON.parse(fetchDefault.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(defaultBody.max_tokens).toBe(100);
+    expect(defaultBody.max_completion_tokens).toBeUndefined();
+
+    vi.unstubAllGlobals();
+    const fetchCompat = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'ok' } }], usage: {},
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchCompat);
+    const compatProvider = new OpenAIProvider({
+      ...plainParams,
+      maxTokens: 100,
+      compatibility: { maxTokensField: 'max_completion_tokens' },
+    });
+    await compatProvider.chat([makeMessage()]);
+    const compatBody = JSON.parse(fetchCompat.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(compatBody.max_completion_tokens).toBe(100);
+    expect(compatBody.max_tokens).toBeUndefined();
+  });
+
+  it('requireAssistantAfterTool: вставка «Done.» перед user после tool-результата, пары не рвутся', () => {
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { requireAssistantAfterTool: true },
+    }) as unknown as OpenAIPrivate;
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        toolUse: [{ id: 'call_1', type: 'function', function: { name: 'noop', arguments: '{}' } }],
+      }),
+      makeMessage({ role: 'tool', toolCallId: 'call_1', content: 'result' }),
+      makeMessage({ role: 'user', content: 'next' }),
+    ]);
+    expect(formatted.map((m) => m.role)).toEqual(['assistant', 'tool', 'assistant', 'user']);
+    expect(formatted[1]!.tool_call_id).toBe('call_1');
+    expect(formatted[2]).toEqual({ role: 'assistant', content: 'Done.' });
+    expect(formatted[3]!.content).toBe('next');
+  });
+
+  it('requireAssistantAfterTool: история на tool-результате замыкается assistant-турном', () => {
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { requireAssistantAfterTool: true },
+    }) as unknown as OpenAIPrivate;
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        toolUse: [{ id: 'call_1', type: 'function', function: { name: 'noop', arguments: '{}' } }],
+      }),
+      makeMessage({ role: 'tool', toolCallId: 'call_1', content: 'result' }),
+    ]);
+    expect(formatted.at(-1)).toEqual({ role: 'assistant', content: 'Done.' });
+  });
+
+  it('requireAssistantAfterTool: mistral-эвристика включает вставку без явного compatibility', () => {
+    const provider = new OpenAIProvider({
+      ...plainParams,
+      model: 'mistral-large-latest',
+    }) as unknown as OpenAIPrivate;
+    const formatted = provider._formatMessages([
+      makeMessage({ role: 'tool', toolCallId: 'call_1', content: 'result' }),
+      makeMessage({ role: 'user', content: 'next' }),
+    ]);
+    expect(formatted.map((m) => m.role)).toEqual(['tool', 'assistant', 'user']);
+
+    const nonMistral = new OpenAIProvider(plainParams) as unknown as OpenAIPrivate;
+    expect(nonMistral._formatMessages([
+      makeMessage({ role: 'tool', toolCallId: 'call_1', content: 'result' }),
+      makeMessage({ role: 'user', content: 'next' }),
+    ]).map((m) => m.role)).toEqual(['tool', 'user']);
+  });
+
+  it('streamUsage: по умолчанию include_usage; false — без stream_options, usage всё равно парсится', async () => {
+    const events = [
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' } }] }),
+      JSON.stringify({
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      }),
+      '[DONE]',
+    ];
+    const fetchDefault = vi.fn().mockResolvedValue(sseResponse(events));
+    vi.stubGlobal('fetch', fetchDefault);
+    const defaultProvider = new OpenAIProvider(plainParams);
+    await drain(defaultProvider.chatAsync([makeMessage()]));
+    const defaultBody = JSON.parse(fetchDefault.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(defaultBody.stream_options).toEqual({ include_usage: true });
+
+    vi.unstubAllGlobals();
+    const fetchDisabled = vi.fn().mockResolvedValue(sseResponse(events));
+    vi.stubGlobal('fetch', fetchDisabled);
+    const disabledProvider = new OpenAIProvider({
+      ...plainParams,
+      compatibility: { streamUsage: false },
+    });
+    const chunks = await drain(disabledProvider.chatAsync([makeMessage()]));
+    const disabledBody = JSON.parse(fetchDisabled.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(disabledBody.stream_options).toBeUndefined();
+    // Без stream_options usage приходит в финальном чанке (эндпоинт прислал) — парсинг не сломан.
+    expect(chunks.find((c) => c.isFinal)!.usage!.totalTokens).toBe(7);
+  });
+});

@@ -4,7 +4,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ProviderConfig } from '@itphx/synth-shared';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
-import { parseCurrencyInput, renderIcon } from '@itphx/synth-shared';
+import { parseCurrencyInput, parseModelCompatibilityInput, renderIcon } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../index.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -122,6 +122,7 @@ export function createProviderRoutes(
         is_default: pair?.provider === p.name,
         currency: p.currency,
         num_ctx: p.numCtx,
+        ...(p.compatibility ? { compatibility: p.compatibility } : {}),
         ...renderIcon(p.icon, p.baseUrl),
       })),
       default_provider: defaultProviderName,
@@ -157,6 +158,14 @@ export function createProviderRoutes(
     if (!parsedNumCtx.ok) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.numCtxInvalid(c) } }, 400);
     }
+    // Совместимость протокола: объект — **замена** целиком (UI присылает полный
+    // объект из черновика), `null`/пустой объект — сброс, поле отсутствует —
+    // без изменений (при upsert сохраняется прежнее значение); неизвестные
+    // поля/неверные типы → 400, чтобы опечатка не терялась молча.
+    const parsedCompatibility = parseModelCompatibilityInput(body.compatibility, existing?.compatibility);
+    if (!parsedCompatibility.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedCompatibility.reason } }, 400);
+    }
     const provider: ProviderConfig = {
       name,
       type: body.type || existing?.type || 'openai',
@@ -168,6 +177,7 @@ export function createProviderRoutes(
       icon: body.icon !== undefined ? body.icon : (existing?.icon ?? ''),
       currency: resolvedCurrency.currency,
       numCtx: parsedNumCtx.defined ? parsedNumCtx.value : existing?.numCtx,
+      ...(parsedCompatibility.value ? { compatibility: parsedCompatibility.value } : {}),
     };
     await store.save(name, provider);
     providerCache.set(name, provider);
@@ -200,6 +210,12 @@ export function createProviderRoutes(
     if (!parsedNumCtx.ok) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.numCtxInvalid(c) } }, 400);
     }
+    // Совместимость: объект — замена целиком, `null`/пустой объект — сброс,
+    // поле не передано — без изменений.
+    const parsedCompatibility = parseModelCompatibilityInput(body.compatibility, existing.compatibility);
+    if (!parsedCompatibility.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedCompatibility.reason } }, 400);
+    }
     const provider: ProviderConfig = {
       ...existing,
       type: body.type || existing.type,
@@ -211,6 +227,7 @@ export function createProviderRoutes(
       icon: body.icon !== undefined ? body.icon : existing.icon,
       currency: resolvedCurrency.currency,
       numCtx: parsedNumCtx.defined ? parsedNumCtx.value : existing.numCtx,
+      ...(parsedCompatibility.value ? { compatibility: parsedCompatibility.value } : { compatibility: undefined }),
     };
     await store.save(name, provider);
     providerCache.set(name, provider);
@@ -268,6 +285,7 @@ export function createProviderRoutes(
           model: provider.defaultModel || '',
           timeout: 30,
           numCtx: provider.numCtx,
+          compatibility: provider.compatibility,
         });
         const models = await instance.listModels();
         return c.json({

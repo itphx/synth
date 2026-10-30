@@ -1,4 +1,16 @@
-import type { AttachmentModality, TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency, DecisionQuestion, DecisionResponse } from '@itphx/synth-shared';
+import type {
+  AttachmentModality,
+  TokenUsage,
+  LLMChunk,
+  LLMResponse,
+  ReasoningLevel,
+  Currency,
+  DecisionQuestion,
+  DecisionResponse,
+  ModelCompatibility,
+  ResolvedModelCompatibility,
+} from '@itphx/synth-shared';
+import { detectCompatibilityHeuristics, resolveModelCompatibility } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
 import { warning } from '../logger.js';
 import { ProviderError } from './exceptions.js';
@@ -354,9 +366,16 @@ export interface ProviderConfig {
   topK?: number;
   reasoningLevel?: ReasoningLevel;
   /**
-   * Провайдер требует `reasoning_content` у assistant-сообщений даже при пустом
-   * reasoning (thinking-модели DeepSeek). `undefined` — автоопределение
-   * (`detectRequiresReasoning`), `false` — принудительно выключить.
+   * Особенности протокола провайдера/модели (общий контракт с UI —
+   * `ModelCompatibility`): поле reasoning, лимит вывода, `stream_options`,
+   * `tool_choice`. Сюда приходит уже слитый provider.compatibility +
+   * model.compatibility (модель победила); недостающее добирает эвристика.
+   */
+  compatibility?: ModelCompatibility;
+  /**
+   * Shorthand для `compatibility.requireReasoning` (thinking-модели DeepSeek).
+   * @deprecated Используйте `compatibility.requireReasoning`; поле сохранено
+   * для обратной совместимости прямого конструирования провайдера.
    */
   requiresReasoning?: boolean;
   /** Лимит выходных токенов (max_tokens у OpenAI/Anthropic). */
@@ -371,9 +390,8 @@ export interface ProviderConfig {
  * `compatibility.reasoningField != null || provider === 'deepseek' ||
  * baseURL ~ 'deepseek.com' || modelID.includes('deepseek')`.
  *
- * У нас нет `compatibility`-полей каталога, поэтому эвристика та же, но по
- * доступным значениям конфига; явный `ProviderConfig.requiresReasoning`
- * приоритетнее (проверяется вызывающим кодом).
+ * @deprecated Эвристика сохранена как fallback и используется через
+ * `resolveProviderCompatibility`; прямой вызов оставлен для совместимости.
  */
 export function detectRequiresReasoning(input: {
   type?: string;
@@ -381,11 +399,40 @@ export function detectRequiresReasoning(input: {
   url?: string;
   model?: string;
 }): boolean {
-  const type = (input.type ?? '').toLowerCase();
-  const name = (input.name ?? '').toLowerCase();
-  if (type === 'deepseek' || name === 'deepseek') return true;
-  if ((input.url ?? '').toLowerCase().includes('deepseek.com')) return true;
-  return (input.model ?? '').toLowerCase().includes('deepseek');
+  return detectCompatibilityHeuristics({
+    providerType: input.type,
+    providerName: input.name,
+    baseUrl: input.url,
+    modelId: input.model,
+  }).requireReasoning ?? false;
+}
+
+/**
+ * Единая точка разрешения совместимости на стороне провайдера.
+ *
+ * Сливает явный `compatibility` (уже provider+model с уровня резолвера),
+ * shorthand `requiresReasoning` и эвристики opencode (deepseek, mistral,
+ * Ollama `tool_choice`). Порядок: явное значение → shorthand → эвристика.
+ */
+export function resolveProviderCompatibility(input: {
+  type?: string;
+  name?: string;
+  url?: string;
+  model?: string;
+  compatibility?: ModelCompatibility;
+  requiresReasoning?: boolean;
+}): ResolvedModelCompatibility {
+  const heuristics = detectCompatibilityHeuristics({
+    providerType: input.type,
+    providerName: input.name,
+    baseUrl: input.url,
+    modelId: input.model,
+  });
+  const explicit: ModelCompatibility = { ...(input.compatibility ?? {}) };
+  if (explicit.requireReasoning === undefined && input.requiresReasoning !== undefined) {
+    explicit.requireReasoning = input.requiresReasoning;
+  }
+  return resolveModelCompatibility(undefined, explicit, heuristics);
 }
 
 /**
@@ -510,7 +557,15 @@ export abstract class BaseProvider {
   name: string;
   type: string;
   reasoningLevel: ReasoningLevel;
-  /** `undefined` — автоопределение (`detectRequiresReasoning`). */
+  /**
+   * Особенности протокола (слитые provider+model); `undefined` — только
+   * эвристики.
+   */
+  compatibility?: ModelCompatibility;
+  /**
+   * Shorthand `compatibility.requireReasoning`; `undefined` —
+   * автоопределение (`resolveProviderCompatibility`).
+   */
   requiresReasoning?: boolean;
   maxTokens?: number;
   numCtx?: number;
@@ -526,6 +581,7 @@ export abstract class BaseProvider {
     name?: string;
     type?: string;
     reasoningLevel?: ReasoningLevel;
+    compatibility?: ModelCompatibility;
     requiresReasoning?: boolean;
     maxTokens?: number;
     numCtx?: number;
@@ -540,6 +596,7 @@ export abstract class BaseProvider {
     this.name = params.name ?? 'unknown';
     this.type = params.type ?? 'generic';
     this.reasoningLevel = params.reasoningLevel ?? 'default';
+    this.compatibility = params.compatibility;
     this.requiresReasoning = params.requiresReasoning;
     this.maxTokens = params.maxTokens;
     this.numCtx = params.numCtx;
@@ -692,6 +749,7 @@ export class ProviderFactory {
       name: config.name || name,
       type: providerType,
       reasoningLevel: config.reasoningLevel,
+      compatibility: config.compatibility,
       requiresReasoning: config.requiresReasoning,
       maxTokens: config.maxTokens,
       numCtx: config.numCtx,

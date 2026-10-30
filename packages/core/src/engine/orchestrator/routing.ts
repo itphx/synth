@@ -5,8 +5,8 @@
  * `ChatOrchestrator` сохраняет делегации `_getProvider`, `_getEffectiveModel`,
  * `_resolveModelContextWindow`, `_wrapWithGateway`, `_routeProvider`.
  */
-import type { Message, ProviderConfig as SharedProviderConfig, Session, ReasoningLevel, LLMGatewayConfig } from '@itphx/synth-shared';
-import { lookupContextWindow } from '@itphx/synth-shared';
+import type { Message, ProviderConfig as SharedProviderConfig, Session, ReasoningLevel, LLMGatewayConfig, ModelCompatibility } from '@itphx/synth-shared';
+import { lookupContextWindow, mergeModelCompatibility } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/base.js';
 import type { ProviderConfig as CoreProviderConfig, BaseProvider } from '../../providers/base.js';
 import { GatewayProvider, DISABLED_GATEWAY_CONFIG } from '../gateway/index.js';
@@ -17,13 +17,20 @@ import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ModelRouter, RoutingDecision } from '../router/router.js';
 import { warning } from '../../logger.js';
 
-/** ADR-084: безопасный дефолт gateway-конфига для decision-провайдеров. */
+/**
+ * Конфиг инстанса → конфиг ядра (ADR-084).
+ *
+ * `compatibility`: `provider.compatibility` (JSON провайдера) + модель
+ * (резолвер по каталогу), модель перекрывает провайдера; недостающее —
+ * эвристика в провайдере.
+ */
 export function toCoreProviderConfig(
   shared: SharedProviderConfig,
   model: string,
   reasoningLevel?: ReasoningLevel,
-  requiresReasoning?: boolean,
+  compatibility?: ModelCompatibility,
 ): CoreProviderConfig {
+  const merged = mergeModelCompatibility(shared.compatibility, compatibility);
   return {
     name: shared.name,
     type: shared.type,
@@ -32,7 +39,7 @@ export function toCoreProviderConfig(
     model,
     timeout: shared.timeout,
     reasoningLevel,
-    requiresReasoning,
+    ...(Object.keys(merged).length > 0 ? { compatibility: merged } : {}),
     numCtx: shared.numCtx,
   };
 }
@@ -118,10 +125,12 @@ export interface GetProviderDeps {
   optimizer: ContextOptimizer | null;
   gateway: GatewayWrapDeps;
   /**
-   * Явный override `ModelConfig.requiresReasoning` (thinking-модели DeepSeek):
-   * `undefined` — автоопределение по провайдеру/имени модели.
+   * Совместимость из каталога: слияние `provider.compatibility` (JSON
+   * провайдера) и `model.compatibility` (каталог моделей, включая shorthand
+   * `requiresReasoning`). `undefined` — явных значений нет, работают
+   * эвристики провайдера.
    */
-  resolveModelRequiresReasoning?: (providerName: string, modelName: string) => boolean | undefined;
+  resolveModelCompatibility?: (providerName: string, modelName: string) => ModelCompatibility | undefined;
 }
 
 /** Создаёт провайдера для сессии (без роутера) или `null` при ошибке/отсутствии. */
@@ -147,7 +156,7 @@ export function getProvider(
           sharedConfig,
           effectiveModel,
           reasoningLevel ?? session.settings.reasoningLevel,
-          deps.resolveModelRequiresReasoning?.(providerName, effectiveModel),
+          deps.resolveModelCompatibility?.(providerName, effectiveModel),
         ),
         maxTokens: session.settings.maxTokens,
         // Приоритет: явный provider.numCtx > ModelConfig.contextWindow.

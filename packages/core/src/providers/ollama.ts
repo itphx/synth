@@ -1,6 +1,7 @@
-import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, TokenUsage, ResolvedModelCompatibility } from '@itphx/synth-shared';
 import {
   BaseProvider,
+  resolveProviderCompatibility,
   resolveSystemPromptText,
   toNonNegativeNumber,
   type DetailedModelInfo,
@@ -29,6 +30,31 @@ export class OllamaProvider extends BaseProvider {
     return this.name;
   }
 
+  /**
+   * Совместимость: явный `compatibility` (provider+model) → эвристика.
+   * Для нативного Ollama `/api/chat` `supportsToolChoice` по умолчанию `false`
+   * (поля `tool_choice` сервер не знает).
+   */
+  private _resolveCompatibility(): ResolvedModelCompatibility {
+    return resolveProviderCompatibility({
+      type: this.type,
+      name: this.name,
+      url: this.url,
+      model: this.model,
+      compatibility: this.compatibility,
+      requiresReasoning: this.requiresReasoning,
+    });
+  }
+
+  /**
+   * `think` нативного `/api/chat`: `low|medium|high` → `true`, `none` → `false`,
+   * `default` → поле не отправляется (дефолт модели).
+   */
+  private _applyThink(body: Record<string, unknown>): void {
+    if (this.reasoningLevel === 'none') body.think = false;
+    else if (this.reasoningLevel !== 'default') body.think = true;
+  }
+
   async chat(
     messages: LLMMessage[],
     systemPrompt?: SystemPromptInput,
@@ -49,13 +75,15 @@ export class OllamaProvider extends BaseProvider {
       stream: !!stream,
     };
     this._applyTemperature(body);
-    if (this.reasoningLevel === 'low') body.think = true;
-    else if (this.reasoningLevel === 'none') body.think = false;
+    this._applyThink(body);
     if (tools?.length) {
       body.tools = this._formatTools(tools);
-      // OpenAI-совместимое поле (Ollama его игнорирует, но контракт общий);
+      // `tool_choice` — только если провайдер его понимает (у нативного
+      // Ollama /api/chat — нет: `supportsToolChoice` по умолчанию `false`);
       // без инструментов не отправляем — часть API отвечает ошибкой.
-      if (options?.toolChoice) body.tool_choice = options.toolChoice;
+      if (options?.toolChoice && this._resolveCompatibility().supportsToolChoice) {
+        body.tool_choice = options.toolChoice;
+      }
     }
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
@@ -108,13 +136,15 @@ export class OllamaProvider extends BaseProvider {
       stream: true,
     };
     this._applyTemperature(body);
-    if (this.reasoningLevel === 'low') body.think = true;
-    else if (this.reasoningLevel === 'none') body.think = false;
+    this._applyThink(body);
     if (tools?.length) {
       body.tools = this._formatTools(tools);
-      // OpenAI-совместимое поле (Ollama его игнорирует, но контракт общий);
+      // `tool_choice` — только если провайдер его понимает (у нативного
+      // Ollama /api/chat — нет: `supportsToolChoice` по умолчанию `false`);
       // без инструментов не отправляем — часть API отвечает ошибкой.
-      if (options?.toolChoice) body.tool_choice = options.toolChoice;
+      if (options?.toolChoice && this._resolveCompatibility().supportsToolChoice) {
+        body.tool_choice = options.toolChoice;
+      }
     }
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 

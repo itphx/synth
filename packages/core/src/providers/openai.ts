@@ -1,7 +1,7 @@
-import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, TokenUsage, ResolvedModelCompatibility } from '@itphx/synth-shared';
 import {
   BaseProvider,
-  detectRequiresReasoning,
+  resolveProviderCompatibility,
   fetchModelsCatalog,
   parseArchitectureModalities,
   redactAttachmentPayloadForDebug,
@@ -50,7 +50,8 @@ export class OpenAIProvider extends BaseProvider {
   ): Promise<LLMResponse> {
     info('OPENAI', `чат: model=${this.model}, сообщений=${messages.length}`);
 
-    const formattedMessages = this._formatMessages(messages, systemPrompt);
+    const compatibility = this._resolveCompatibility();
+    const formattedMessages = this._formatMessages(messages, systemPrompt, compatibility);
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
@@ -66,7 +67,7 @@ export class OpenAIProvider extends BaseProvider {
       if (options?.toolChoice) body.tool_choice = options.toolChoice;
     }
     if (stream) body.stream = true;
-    if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    if (this.maxTokens && this.maxTokens > 0) body[compatibility.maxTokensField] = this.maxTokens;
     this._applyPromptCacheKey(body, systemPrompt);
 
     const headers = this._getHeaders();
@@ -109,17 +110,20 @@ export class OpenAIProvider extends BaseProvider {
     cancellationToken?: CancellationToken,
     options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
-    info('OPENAI', `чатAsync: model=${this.model}, сообщений=${messages.length}`);
+    info('OPENAI', `chatAsync: model=${this.model}, сообщений=${messages.length}`);
 
-    const formattedMessages = this._formatMessages(messages, systemPrompt);
+    const compatibility = this._resolveCompatibility();
+    const formattedMessages = this._formatMessages(messages, systemPrompt, compatibility);
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
       stream: true,
-      // ADR-070 §2.3: просим провайдера прислать usage в стриме — иначе
-      // cached_tokens/reasoning_tokens в статистику не попадают.
-      stream_options: { include_usage: true },
     };
+    // ADR-070 §2.3: просим провайдера прислать usage в стриме — иначе
+    // cached_tokens/reasoning_tokens в статистику не попадают. Дефолт —
+    // включено (как в opencode); `compatibility.streamUsage: false` — не
+    // отправляем (эндпоинт не знает поля), usage тогда остаётся нулевым.
+    if (compatibility.streamUsage) body.stream_options = { include_usage: true };
     this._applyTemperature(body);
     if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
@@ -130,7 +134,7 @@ export class OpenAIProvider extends BaseProvider {
       // отвечает ошибкой); поле задаётся вызывающим слоем (финальный шаг).
       if (options?.toolChoice) body.tool_choice = options.toolChoice;
     }
-    if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    if (this.maxTokens && this.maxTokens > 0) body[compatibility.maxTokensField] = this.maxTokens;
     this._applyPromptCacheKey(body, systemPrompt);
 
     const headers = this._getHeaders();
@@ -227,11 +231,20 @@ export class OpenAIProvider extends BaseProvider {
 
               if (delta) {
                 // Reasoning приходит в разных форматах: DeepSeek — `reasoning_content`,
-                // OpenRouter/RouterAI — `reasoning`. Приоритет у `reasoning_content`
-                // (текущее поведение DeepSeek/itphx), пустые строки пропускаем.
+                // OpenRouter/RouterAI — `reasoning`; имя поля можно задать явно
+                // (`compatibility.reasoningField`). Приоритет — у настроенного
+                // поля, затем `reasoning_content`, затем `reasoning`; пустые
+                // строки пропускаем.
+                const configuredField = compatibility.reasoningField;
+                const custom = configuredField !== 'reasoning_content' && configuredField !== 'reasoning'
+                  && typeof delta[configuredField] === 'string'
+                  ? delta[configuredField] as string
+                  : undefined;
                 const rc = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : undefined;
                 const r = typeof delta.reasoning === 'string' ? delta.reasoning : undefined;
-                const reasoningDelta = rc !== undefined && rc !== '' ? rc : r !== undefined && r !== '' ? r : undefined;
+                const reasoningDelta = custom !== undefined && custom !== ''
+                  ? custom
+                  : rc !== undefined && rc !== '' ? rc : r !== undefined && r !== '' ? r : undefined;
                 // DeepSeek-модели иногда шлют служебные '.'/'.\\n' как отдельные
                 // reasoning_content-чанки — пропускаем. У поля `reasoning`
                 // (OpenRouter/RouterAI) такого фильтра нет: точки там осмысленны.
@@ -387,25 +400,35 @@ export class OpenAIProvider extends BaseProvider {
     return result;
   }
 
+  /**
+   * Итоговая совместимость провайдера: явный `compatibility` (provider+model)
+   * → shorthand `requiresReasoning` → эвристики opencode (deepseek/mistral).
+   */
+  private _resolveCompatibility(): ResolvedModelCompatibility {
+    return resolveProviderCompatibility({
+      type: this.type,
+      name: this.name,
+      url: this.url,
+      model: this.model,
+      compatibility: this.compatibility,
+      requiresReasoning: this.requiresReasoning,
+    });
+  }
+
   private _formatMessages(
     messages: LLMMessage[],
     systemPrompt?: SystemPromptInput,
+    compatibility: ResolvedModelCompatibility = this._resolveCompatibility(),
   ): Array<Record<string, unknown>> {
     const formatted: Array<Record<string, unknown>> = [];
 
-    // DeepSeek thinking-модели требуют `reasoning_content` у **каждого**
+    // DeepSeek thinking-модели требуют поле reasoning у **каждого**
     // assistant-сообщения, даже если reasoning пуст (иначе 400 «The
     // `reasoning_content` in the thinking mode must be passed back»).
-    // Поведение opencode: явный override провайдера → автоопределение по
-    // типу/имени/URL/модели. Ломается на синтетических assistant-префиллах
-    // (шаг-лимит, `maxStepsAssistantMessage`) без reasoning.
-    const requireReasoning = this.requiresReasoning
-      ?? detectRequiresReasoning({
-        type: this.type,
-        url: this.url,
-        name: this.name,
-        model: this.model,
-      });
+    // Имя поля — `compatibility.reasoningField` (по умолчанию
+    // `reasoning_content`), требование — `requireReasoning`; порядок резолва:
+    // явное модели → явное провайдера → эвристика (deepseek).
+    const { reasoningField, requireReasoning, requireAssistantAfterTool } = compatibility;
 
     const systemText = resolveSystemPromptText(systemPrompt);
     if (systemText) {
@@ -418,6 +441,14 @@ export class OpenAIProvider extends BaseProvider {
     for (const msg of messages) {
       if (msg.disabled) continue;
       if (msg.role === 'info' || msg.role === 'model') continue;
+
+      // Mistral-семейство: между tool-результатами и следующим user-сообщением
+      // обязателен assistant-турн (opencode `bridgeTools`). Вставка идёт
+      // **после** tool-результата, поэтому пары `tool_calls`/`tool_call_id`
+      // не рвутся.
+      if (requireAssistantAfterTool && msg.role === 'user' && formatted.at(-1)?.role === 'tool') {
+        formatted.push({ role: 'assistant', content: 'Done.' });
+      }
 
       const entry: Record<string, unknown> = {
         role: msg.role,
@@ -455,16 +486,24 @@ export class OpenAIProvider extends BaseProvider {
       }
       if (msg.toolCallId) entry.tool_call_id = msg.toolCallId;
 
-      // DeepSeek reasoning-модели требуют возврат reasoning_content в повторной
+      // DeepSeek reasoning-модели требуют возврат reasoning в повторной
       // истории (иначе 400 «The reasoning_content ... must be passed back»).
       // При `requireReasoning` поле отправляется всегда — пустой строкой, если
       // reasoning нет (opencode: `reasoning.length === 0 → requireReasoning ? '' : undefined`).
+      // Имя поля — из `compatibility.reasoningField` (не только DeepSeek:
+      // OpenRouter/RouterAI — `reasoning`).
       if (msg.role === 'assistant') {
         const rc = msg.reasoning ?? (requireReasoning ? '' : undefined);
-        if (rc !== undefined) entry.reasoning_content = rc;
+        if (rc !== undefined) entry[reasoningField] = rc;
       }
 
       formatted.push(entry);
+    }
+
+    // История закончилась tool-результатом — замыкаем assistant-турном
+    // (Mistral-семейство не принимает ответ, начинающийся с tool).
+    if (requireAssistantAfterTool && formatted.at(-1)?.role === 'tool') {
+      formatted.push({ role: 'assistant', content: 'Done.' });
     }
 
     return formatted;
@@ -573,8 +612,10 @@ export class OpenAIProvider extends BaseProvider {
     const message = choices?.[0]?.message as Record<string, unknown> | undefined;
     const content = String(message?.content ?? '');
     const toolCalls = message?.tool_calls as Record<string, unknown>[] | undefined;
-    // `reasoning_content` (DeepSeek) либо `reasoning` (OpenRouter/RouterAI).
-    const reasoning = (message?.reasoning_content ?? message?.reasoning) as string | undefined;
+    // Настроенное поле (`compatibility.reasoningField`), затем
+    // `reasoning_content` (DeepSeek) и `reasoning` (OpenRouter/RouterAI).
+    const reasoningField = this._resolveCompatibility().reasoningField;
+    const reasoning = (message?.[reasoningField] ?? message?.reasoning_content ?? message?.reasoning) as string | undefined;
 
     return {
       content,

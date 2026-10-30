@@ -9,10 +9,22 @@
  * поэтому пул сам GatewayProvider не создаёт.
  */
 
-import type { ProviderConfig as SharedProviderConfig, LLMGatewayConfig, ReasoningLevel } from '@itphx/synth-shared';
+import type { ProviderConfig as SharedProviderConfig, LLMGatewayConfig, ReasoningLevel, ModelCompatibility } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/base.js';
 import type { BaseProvider } from '../../providers/base.js';
 import { toCoreProviderConfig } from './utils.js';
+
+/**
+ * Стабильный ключ совместимости для кеша провайдеров: порядок полей
+ * сортируется, чтобы одинаковые наборы давали один ключ.
+ */
+function _compatibilityKey(compatibility: ModelCompatibility | undefined): string {
+  if (!compatibility) return 'auto';
+  const entries = Object.entries(compatibility)
+    .filter(([, value]) => value !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return entries.length > 0 ? JSON.stringify(entries) : 'auto';
+}
 
 export class ProviderPool {
   private readonly _cache = new Map<string, BaseProvider>();
@@ -24,24 +36,24 @@ export class ProviderPool {
   /** ADR-084: фабрика обвязки decision-провайдеров (применяется всегда). */
   private _decisionGatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
   /**
-   * Резолвер явного override `ModelConfig.requiresReasoning` (thinking-модели
-   * DeepSeek). `undefined` — автоопределение в провайдере; резолвер не задан —
-   * поведение прежнее (эвристика).
+   * Резолвер совместимости по каталогу: слияние `provider.compatibility` и
+   * `model.compatibility` (включая shorthand `requiresReasoning`).
+   * `undefined` — явных значений нет, работают эвристики провайдера.
    */
-  private readonly _modelRequiresReasoning: ((providerName: string, modelName: string) => boolean | undefined) | null;
+  private readonly _modelCompatibility: ((providerName: string, modelName: string) => ModelCompatibility | undefined) | null;
 
   constructor(
     providerLoader: (name: string) => SharedProviderConfig | null,
     gatewayConfig?: LLMGatewayConfig,
     gatewayFactory?: (inner: BaseProvider) => BaseProvider,
     decisionGatewayFactory?: (inner: BaseProvider) => BaseProvider,
-    modelRequiresReasoning?: (providerName: string, modelName: string) => boolean | undefined,
+    modelCompatibility?: (providerName: string, modelName: string) => ModelCompatibility | undefined,
   ) {
     this._providerLoader = providerLoader;
     this._gatewayConfig = gatewayConfig ?? null;
     this._gatewayFactory = gatewayFactory ?? null;
     this._decisionGatewayFactory = decisionGatewayFactory ?? null;
-    this._modelRequiresReasoning = modelRequiresReasoning ?? null;
+    this._modelCompatibility = modelCompatibility ?? null;
   }
 
   getProvider(
@@ -59,12 +71,12 @@ export class ProviderPool {
     const sharedConfig = this._providerLoader(providerName);
     if (!sharedConfig) return null;
     const effectiveModel = modelName || sharedConfig.defaultModel || '';
-    // Явный override `ModelConfig.requiresReasoning` (если каталог моделей
-    // подключён); иначе — автоопределение в провайдере. Входит в ключ кэша:
-    // смена override в каталоге не должна отдавать старый экземпляр.
-    const requiresReasoning = this._modelRequiresReasoning?.(providerName, effectiveModel);
+    // Совместимость из каталога (provider+model, если он подключён); иначе —
+    // автоопределение в провайдере. Входит в ключ кэша: смена `compatibility`
+    // в каталоге не должна отдавать старый экземпляр.
+    const compatibility = this._modelCompatibility?.(providerName, effectiveModel);
 
-    const cacheKey = `${providerName}:${modelName}:${temperature ?? 'auto'}:${reasoningLevel ?? 'none'}:${maxTokens ?? ''}:${numCtx ?? ''}:${topP ?? 'auto'}:${topK ?? 'auto'}:${requiresReasoning ?? 'auto'}`;
+    const cacheKey = `${providerName}:${modelName}:${temperature ?? 'auto'}:${reasoningLevel ?? 'none'}:${maxTokens ?? ''}:${numCtx ?? ''}:${topP ?? 'auto'}:${topK ?? 'auto'}:${_compatibilityKey(compatibility)}`;
     const cached = this._cache.get(cacheKey);
     if (cached) return cached;
 
@@ -73,7 +85,7 @@ export class ProviderPool {
         sharedConfig,
         effectiveModel,
         reasoningLevel,
-        requiresReasoning,
+        compatibility,
       );
       coreConfig.maxTokens = maxTokens;
       // Приоритет: явный provider.numCtx (из shared-конфига) > переданный
@@ -106,21 +118,21 @@ export class ProviderPool {
    */
   getDecisionProvider(providerName: string, modelName: string): BaseProvider | null {
     const model = modelName || '';
-    const cacheKey = `decision:${providerName}:${model}`;
-    const cached = this._decisionCache.get(cacheKey);
-    if (cached) return cached;
-
     const sharedConfig = this._providerLoader(providerName);
     if (!sharedConfig) return null;
 
+    const effectiveModel = model || sharedConfig.defaultModel || '';
+    const compatibility = this._modelCompatibility?.(providerName, effectiveModel);
+    const cacheKey = `decision:${providerName}:${model}:${_compatibilityKey(compatibility)}`;
+    const cached = this._decisionCache.get(cacheKey);
+    if (cached) return cached;
+
     try {
-      const effectiveModel = model || sharedConfig.defaultModel || '';
-      const requiresReasoning = this._modelRequiresReasoning?.(providerName, effectiveModel);
       const coreConfig = toCoreProviderConfig(
         sharedConfig,
         effectiveModel,
         undefined,
-        requiresReasoning,
+        compatibility,
       );
       const provider = ProviderFactory.create(providerName, coreConfig);
       const wrapped = this._decisionGatewayFactory
