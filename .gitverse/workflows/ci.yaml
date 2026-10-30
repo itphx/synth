@@ -348,13 +348,14 @@ jobs:
   # Docker-ветку не сужаем: она исполняется на собственном раннере.
   #
   # Потолок 30 минут — у облачного раннера GitVerse (замер: 30:01 при выставленных 90);
-  # на self-hosted лимита нет. `timeout-minutes: 25` оставлен как страховка для
-  # облачного fallback-прогона.
+  # на self-hosted лимита нет. Джоба собирает 10 сборок (5 flavor'ов × 2 образа) + smoke,
+  # поэтому на холодную 25 минут мало: 60 — с запасом, а при облачном fallback всё равно
+  # срежет 30-минутный потолок.
   images:
     name: Образы (сборка + smoke)
     runs-on: synth-ci
     needs: [test-backend, test-executor]
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
