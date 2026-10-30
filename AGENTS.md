@@ -653,6 +653,7 @@ docker-демон, нет облачного лимита в 30 минут, кэ
 | steering / сообщение во время хода / interrupt | [ADR-104](./docs/arch_decisions/adr-104-mid-turn-steering.md), [docs/API_V2.md](./docs/API_V2.md) §5.5, [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) («Чат: отправка во время хода и очередь») |
 | конфиг | [ADR-023](./docs/arch_decisions/adr-023-configuration.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 | routing / микро-слой | [ADR-034](./docs/arch_decisions/adr-034-model-routing.md), [ADR-035](./docs/arch_decisions/adr-035-micro-model-first.md), [ADR-084](./docs/arch_decisions/adr-084-decision-models-clef.md), [docs/ROUTING.md](./docs/ROUTING.md) |
+| провайдеры / модели / совместимость | [docs/PROVIDERS.md](./docs/PROVIDERS.md) (протоколы, слой `compatibility`, особенности OpenAI-chat / Anthropic / Ollama, лимит шагов), [docs/LLM_PROVIDERS.md](./docs/LLM_PROVIDERS.md) (dev-креды и локальные модели), [ADR-117](./docs/arch_decisions/adr-117-provider-compatibility.md), [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) |
 | безопасность / gateway | [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) |
 | безопасность клиента / целостность / аттестация гибрида | [PROP-073](./docs/arch_decisions/prop-073-client-integrity-hybrid.md) |
 | soft-delete / скрытие / retention / аудит-режим | [PROP-074](./docs/arch_decisions/prop-074-soft-delete-retention.md) |

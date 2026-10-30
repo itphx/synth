@@ -1579,6 +1579,9 @@ the API: `POST /api/v2/models` (create/update; unknown fields are ignored) and `
 (sync with the provider catalog). Catalog fields (prices, `contextWindow`, `modalities`,
 `compatibility`) are **model properties** — there are no separate `config.yaml` keys for them.
 
+Protocol and compatibility behaviour in detail (heuristics, resolution order, OpenAI-chat / Anthropic /
+Ollama specifics, step limit) — [PROVIDERS.md](./PROVIDERS.md).
+
 **Provider/model compatibility (`compatibility`, ADR-117, parity with opencode).** Protocol differences
 of compatible gateways and proxies (field names, output limit, `tool_choice`) are described by data
 rather than hardcoded per provider type. The same object exists on two levels:

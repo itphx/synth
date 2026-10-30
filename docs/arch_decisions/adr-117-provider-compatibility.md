@@ -111,6 +111,11 @@
    схлопывается в «авто»), селект поля reasoning с вариантом «своё значение», «изменено»-бейдж;
    полная очистка у сущности с сохранёнными параметрами отправляет `compatibility: null`.
 
+**Справочная спецификация** — [PROVIDERS.md](../PROVIDERS.md): протоколы и нормализация URL, таблица
+полей `compatibility` с дефолтами и порядком резолва, особенности OpenAI-chat / Anthropic / Ollama,
+механика лимита шагов, диагностика «симптом → настройка» и известные ограничения. ADR фиксирует
+решение и обоснование, спецификация — «как устроено и что настраивать».
+
 ## Альтернативы
 
 - **Хардкод по типу провайдера** (`if type === 'deepseek'`). Отвергнуто: шлюзы и прокси
@@ -137,17 +142,18 @@
 - **Осознанные отличия от opencode:** дефолт `max_tokens`; `reasoningField` из ответа модели
   авто-детектится по известным полям (`reasoning_content`/`reasoning`), произвольное имя задаётся
   только конфигом.
-- **Остатки:** авто-определения для `maxTokensField`/`streamUsage`/`cacheFormat` нет (только явное
-  значение или дефолт) — так существующие записи каталога не начинают внезапно ставить маркеры;
-  `cacheFormat`/`requireFinishReason` пока не выводятся в UI-форме «Расширенные параметры» (API/каталог
-  принимают их уже сейчас). ⚠️ Пока полей нет в черновике UI, сохранение провайдера/модели из админки
-  (replace-семантика `compatibility`) их **сбрасывает** — до появления полей в форме задавать их через
-  API; при первом UI-заходе добавить оба поля в `CompatibilityDraft`/`compatibilityFromDraft`;
- существующие записи каталога не мигрируются (совместимость — через эвристики и дефолты);
-  блоки thinking фильтруются по **роли агента**, а не по фактической паре provider/model — при смене
-  модели/провайдера у того же агента сохранённые подписи всё равно уйдут в историю (симметрично
-  `engine/tools/task/resume-target.ts`); подпись реплеится только когда thinking включён в этом
-  запросе.
+- **Остатки:**
+  - авто-определения для `maxTokensField`/`streamUsage`/`cacheFormat` нет (только явное значение или
+    дефолт) — так существующие записи каталога не начинают внезапно ставить маркеры;
+  - существующие записи каталога не мигрируются (совместимость — через эвристики и дефолты);
+  - фильтр thinking-блоков учитывает **роль агента и пару `provider/model`** (`4fe6a36b`): блоки
+    отбрасываются, только когда обе половины пары известны — и у сообщения, и у текущего запроса — и
+    они расходятся; legacy-сообщения без пары сохраняют прежнее поведение (`sessionMessagesToLlm`
+    принимает `currentPair`, `engine/orchestrator/prompt-info.ts`). Остаток: `buildPromptHistoryInfo`
+    пару не передаёт, поэтому счётчик reasoning-символов в диагностике промпта может учитывать блоки,
+    которые в запрос не уйдут (косметика статистики);
+  - подпись thinking реплеится только когда thinking включён в этом запросе; при выключенном блоки в
+    историю не уходят.
 
 ## Статус в коде
 
@@ -163,17 +169,21 @@
 - проброс — `engine/router/{utils,provider-pool}.ts`, `server/app/deps.ts`, `backend/app/deps.ts`,
   шаги пайплайнов и aux-модели вложений;
 - API — `server/routes/{providers,models}.ts`; UI — `components/admin/CompatibilityFields.tsx`,
-  `lib/api/compatibility.ts`, панели `ProvidersPanel`/`ModelsPanel`; i18n ru/en;
+  `lib/api/compatibility.ts`, панели `ProvidersPanel`/`ModelsPanel`; i18n ru/en. Форма покрывает **все
+  восемь** полей, включая `cacheFormat` и `requireFinishReason` (`f3ab0140`: `CompatibilityDraft`,
+  `CompatibilityFields.tsx`, payload; тесты UI — 2413), поэтому сохранение из админки их не сбрасывает;
 - персист подписи — `packages/shared/src/types/{llm,message}.ts`,
   `storage/file-store.ts`, `packages/storage-postgres/src/migrations/028-message-reasoning-signature.ts`,
   контрактный паспорт порта сессий; наружу не сериализуется (`server/serialize.ts`);
 - **мульти-блочная подпись thinking** (`91be3f89`) — `Part.metadata {signature?, redacted?}` у
   reasoning-частей, `LLMReasoningBlock`/`reasoningBlocks` в LLM-контракте, `engine/reasoning-blocks.ts`,
   сбор блоков в Anthropic (stream/non-stream) и реплей по блокам, персист `metadata` частей
-  (file + PG), `messageToLLMMessage(msg, currentAgentRole?)` с фильтром по роли агента, `content` при
-  наличии `parts` — без reasoning-частей; `optimizer.ts` переведён на общий `toCoreProviderConfig`;
-- справка — [CONFIGURATION.md](../CONFIGURATION.md) §«Каталог моделей», [API_V2.md](../API_V2.md)
-  §5.9/§5.10, `packages/{core,ui}/AGENTS.md`.
+  (file + PG), `messageToLLMMessage(msg, currentAgentRole?, currentPair?)` с фильтром по роли агента **и**
+  паре `provider/model` (`4fe6a36b`), `content` при наличии `parts` — без reasoning-частей;
+  `optimizer.ts` переведён на общий `toCoreProviderConfig`;
+- справка — [PROVIDERS.md](../PROVIDERS.md) (спецификация: протоколы, поля `compatibility`,
+  особенности протоколов, лимит шагов, диагностика), [CONFIGURATION.md](../CONFIGURATION.md)
+  §«Каталог моделей», [API_V2.md](../API_V2.md) §5.9/§5.10, `packages/{core,ui}/AGENTS.md`.
 
 ## История
 
@@ -182,5 +192,6 @@
 - 2026-10-30 — **мульти-блочная подпись thinking реализована** (`91be3f89`): за ход reasoning приходит
   несколькими блоками, и подпись живёт на каждом блоке (`Part.metadata` ↔ `LLMReasoningBlock`), а не
   одним полем на сообщение; реплей — по блокам (`redacted_thinking → thinking → text → tool_use`),
-  `content` без reasoning-частей при наличии `parts`; остаток — фильтрация блоков по роли агента, а не
-  по паре provider/model (см. «Последствия → Остатки»).
+  `content` без reasoning-частей при наличии `parts`; фильтрация блоков учитывает роль агента **и** пару
+  provider/model (`4fe6a36b`: блоки отбрасываются только когда обе половины пары известны и расходятся),
+  остаток — `buildPromptHistoryInfo` пару не передаёт (косметика диагностики; см. «Последствия → Остатки»).

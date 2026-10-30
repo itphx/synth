@@ -4,6 +4,10 @@
 
 Synth supports providers of types `openai`, `anthropic`, `ollama`, `decision` and `systemone` (validated by `synth config provider add --type`).
 
+> **Specification:** protocols, the compatibility layer (`compatibility`), OpenAI-chat / Anthropic /
+> Ollama specifics and the step limit — [PROVIDERS.md](./PROVIDERS.md). This page covers dev
+> credentials, local models and initial setup only.
+
 ## Development providers
 
 | Name | Type | Purpose |
