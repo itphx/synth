@@ -54,6 +54,30 @@ describe('compatibility: черновик формы ↔ сохранённый 
       requireAssistantAfterTool: true,
     })
   })
+
+  it('cacheFormat и requireFinishReason: сохранённые значения переживают round-trip', () => {
+    const saved = { cacheFormat: 'alibaba' as const, requireFinishReason: false }
+    const draft = draftFromCompatibility(saved)
+    expect(draft.cacheFormat).toBe('alibaba')
+    expect(draft.requireFinishReason).toBe('false')
+    expect(compatibilityFromDraft(draft)).toEqual(saved)
+  })
+
+  it('cacheFormat/requireFinishReason: «авто» не попадает в объект, явные значения — попадают', () => {
+    const auto = draftFromCompatibility({})
+    expect(auto.cacheFormat).toBe('')
+    expect(auto.requireFinishReason).toBe('')
+
+    const explicit = {
+      ...emptyCompatibilityDraft(),
+      cacheFormat: 'anthropic' as const,
+      requireFinishReason: 'true' as const,
+    }
+    expect(compatibilityFromDraft(explicit)).toEqual({
+      cacheFormat: 'anthropic',
+      requireFinishReason: true,
+    })
+  })
 })
 
 describe('compatibility: payload запроса', () => {
@@ -85,5 +109,33 @@ describe('compatibility: payload запроса', () => {
     expect(isCompatibilitySaved(undefined)).toBe(false)
     expect(isCompatibilitySaved({})).toBe(false)
     expect(isCompatibilitySaved({ supportsToolChoice: false })).toBe(true)
+  })
+
+  it('cacheFormat/requireFinishReason уходят в payload (только заданное)', () => {
+    const draft = {
+      ...emptyCompatibilityDraft(),
+      cacheFormat: 'alibaba' as const,
+      requireFinishReason: 'false' as const,
+    }
+    expect(buildCompatibilityPayload(draft, false)).toEqual({
+      cacheFormat: 'alibaba',
+      requireFinishReason: false,
+    })
+  })
+
+  it('«авто» у cacheFormat/requireFinishReason поля не добавляет', () => {
+    const draft = { ...emptyCompatibilityDraft(), reasoningField: 'reasoning' as const }
+    expect(buildCompatibilityPayload(draft, true)).toEqual({ reasoningField: 'reasoning' })
+    expect(buildCompatibilityPayload(emptyCompatibilityDraft(), false)).toBeUndefined()
+  })
+
+  it('сброс cacheFormat/requireFinishReason у сохранённой сущности → compatibility: null', () => {
+    const saved = draftFromCompatibility({ cacheFormat: 'anthropic', requireFinishReason: true })
+    const cleared = {
+      ...saved,
+      cacheFormat: '' as const,
+      requireFinishReason: '' as const,
+    }
+    expect(buildCompatibilityPayload(cleared, true)).toBeNull()
   })
 })

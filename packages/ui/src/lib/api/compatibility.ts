@@ -27,6 +27,12 @@ export const REASONING_FIELD_OPTIONS = ['reasoning_content', 'reasoning', 'reaso
 
 export const MAX_TOKENS_FIELD_OPTIONS = ['max_tokens', 'max_completion_tokens'] as const
 
+/** Формат inline-маркеров prompt-cache; `''` — авто (`prompt_cache_key`). */
+export type CompatibilityCacheFormat = '' | 'anthropic' | 'alibaba'
+
+/** Известные форматы inline-маркеров — предлагаются в селекте. */
+export const CACHE_FORMAT_OPTIONS = ['anthropic', 'alibaba'] as const
+
 /** Черновик формы: всё строковое, чтобы «авто» отличалось от явного значения. */
 export interface CompatibilityDraft {
   /** `''` — авто, известное имя, либо `COMPATIBILITY_CUSTOM`. */
@@ -39,6 +45,10 @@ export interface CompatibilityDraft {
   requireAssistantAfterTool: CompatibilityTristate
   streamUsage: CompatibilityTristate
   supportsToolChoice: CompatibilityTristate
+  /** `''` — авто (только `prompt_cache_key`), иначе inline-маркеры `cache_control`. */
+  cacheFormat: CompatibilityCacheFormat
+  /** `''` — авто (сервер: да). */
+  requireFinishReason: CompatibilityTristate
 }
 
 export function emptyCompatibilityDraft(): CompatibilityDraft {
@@ -50,6 +60,8 @@ export function emptyCompatibilityDraft(): CompatibilityDraft {
     requireAssistantAfterTool: '',
     streamUsage: '',
     supportsToolChoice: '',
+    cacheFormat: '',
+    requireFinishReason: '',
   }
 }
 
@@ -87,6 +99,9 @@ export function draftFromCompatibility(value?: ModelCompatibility | null): Compa
   draft.requireAssistantAfterTool = tristateToDraft(value.requireAssistantAfterTool)
   draft.streamUsage = tristateToDraft(value.streamUsage)
   draft.supportsToolChoice = tristateToDraft(value.supportsToolChoice)
+  draft.cacheFormat =
+    value.cacheFormat === 'anthropic' || value.cacheFormat === 'alibaba' ? value.cacheFormat : ''
+  draft.requireFinishReason = tristateToDraft(value.requireFinishReason)
   return draft
 }
 
@@ -111,6 +126,9 @@ export function compatibilityFromDraft(draft: CompatibilityDraft): ModelCompatib
   if (streamUsage !== undefined) out.streamUsage = streamUsage
   const supportsToolChoice = tristateToBool(draft.supportsToolChoice)
   if (supportsToolChoice !== undefined) out.supportsToolChoice = supportsToolChoice
+  if (draft.cacheFormat) out.cacheFormat = draft.cacheFormat
+  const requireFinishReason = tristateToBool(draft.requireFinishReason)
+  if (requireFinishReason !== undefined) out.requireFinishReason = requireFinishReason
   return Object.keys(out).length > 0 ? out : null
 }
 

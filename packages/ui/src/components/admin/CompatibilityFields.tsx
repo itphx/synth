@@ -4,6 +4,7 @@ import { Icon } from '@/components/icon/Icon'
 import { SelectContent, SelectItem } from '@/components/ui/select'
 import { useI18n } from '@/lib/i18n'
 import {
+  CACHE_FORMAT_OPTIONS,
   COMPATIBILITY_CUSTOM,
   MAX_TOKENS_FIELD_OPTIONS,
   REASONING_FIELD_OPTIONS,
@@ -157,6 +158,28 @@ export function CompatibilityFields({ draft, onChange, saved = false }: Compatib
           </SelectField>
 
           <SelectField
+            label={t('admin.compatibility.cacheFormat')}
+            tooltip={t('admin.compatibility.cacheFormatHint')}
+            value={draft.cacheFormat}
+            onValueChange={(value) =>
+              update({ cacheFormat: value as CompatibilityDraft['cacheFormat'] })
+            }
+            ariaLabel={t('admin.compatibility.cacheFormat')}
+            triggerTestId="compatibility-cache-format"
+            items={[
+              { value: '', label: t('admin.compatibility.cacheFormatAuto') },
+              ...CACHE_FORMAT_OPTIONS.map((value) => ({ value, label: value })),
+            ]}
+          >
+            <SelectContent>
+              <SelectItem value="">{t('admin.compatibility.cacheFormatAuto')}</SelectItem>
+              {CACHE_FORMAT_OPTIONS.map((value) => (
+                <SelectItem key={value} value={value}>{value}</SelectItem>
+              ))}
+            </SelectContent>
+          </SelectField>
+
+          <SelectField
             label={t('admin.compatibility.requireAssistantAfterTool')}
             tooltip={t('admin.compatibility.requireAssistantAfterToolHint')}
             value={draft.requireAssistantAfterTool}
@@ -209,6 +232,34 @@ export function CompatibilityFields({ draft, onChange, saved = false }: Compatib
               {tristateItems.map((item) => (
                 <SelectItem key={item.value || 'auto'} value={item.value}>{item.label}</SelectItem>
               ))}
+            </SelectContent>
+          </SelectField>
+
+          <SelectField
+            label={t('admin.compatibility.requireFinishReason')}
+            tooltip={t('admin.compatibility.requireFinishReasonHint')}
+            value={draft.requireFinishReason}
+            onValueChange={(value) =>
+              update({ requireFinishReason: value as CompatibilityTristate })
+            }
+            ariaLabel={t('admin.compatibility.requireFinishReason')}
+            triggerTestId="compatibility-require-finish-reason"
+            items={tristateItems.map((item) => ({
+              ...item,
+              label: item.value === ''
+                ? t('admin.compatibility.autoWith', { value: t('admin.compatibility.yes') })
+                : item.label,
+            }))}
+          >
+            <SelectContent>
+              <SelectItem value="">
+                {t('admin.compatibility.autoWith', { value: t('admin.compatibility.yes') })}
+              </SelectItem>
+              {tristateItems
+                .filter((item) => item.value !== '')
+                .map((item) => (
+                  <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                ))}
             </SelectContent>
           </SelectField>
         </div>
