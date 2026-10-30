@@ -228,8 +228,26 @@ describe('finishLocalCommand', () => {
     ]);
   });
 
-  it('agentRole берётся из user-сообщения, при отсутствии — из настроек сессии', async () => {
-    const withRole = await setup({ agentRole: 'fixer' });
+  it('ADR-118 §1: часть сохранённого ответа — с id `msg:text:0` (как в стриме)', async () => {
+    const { session, userMessage } = await setup();
+    const published: Published[] = [];
+
+    await finishLocalCommand(
+      session, userMessage, (event, data) => published.push({ event, data }), 'вывод /help', 'stream1',
+      { name: 'help' },
+      { sessionManager, eventBus, publishLocalCompletion },
+    );
+
+    const stored = (await sessionManager.getSession(session.id))!;
+    const assistant = stored.messages[1]!;
+    expect(assistant.parts.map((p) => p.id)).toEqual(['msg:text:0']);
+    // Тот же id, что и в опубликованной дельте текста шага.
+    const delta = published.find((p) => p.event === 'part.delta')!;
+    expect(delta.data.partId).toBe('msg:text:0');
+    expect(delta.data.messageId).toBe(assistant.id);
+  });
+
+  it('agentRole берётся из user-сообщения, при отсутствии — из настроек сессии', async () => {    const withRole = await setup({ agentRole: 'fixer' });
     const commandUser = { ...withRole.userMessage, agentRole: 'researcher' };
     await finishLocalCommand(
       withRole.session, commandUser, () => {}, 'out', 'stream1', { name: 'skills' },

@@ -4,7 +4,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useChatStore, type MessageData, type QueuedMessage } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useTransportStore } from '@/stores/transportStore'
+import { useTransportStore, restoreLiveTurnFromHistory } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
 import { attachmentContentUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
@@ -173,6 +173,12 @@ export function ChatTab({ tab }: ChatTabProps) {
         const result = await synthApi.getSessionMessages(sessionId)
         if (cancelled) return
         setMessages(sessionId, result.messages)
+        // ADR-118 §5: в истории может быть **идущий ход** (сообщение со
+        // `status: 'streaming'`) — после перезагрузки страницы его границы
+        // надо восстановить, иначе лента рисует идущий шаг как обычное
+        // сообщение (нет «Стоп», нет индикатора хода, очередь считает
+        // ход неидущим).
+        restoreLiveTurnFromHistory(sessionId, result.messages)
 
         // Агенты и данные сессии параллельно (независимы друг от друга)
         const [agentsResp, session] = await Promise.all([
@@ -470,6 +476,9 @@ export function ChatTab({ tab }: ChatTabProps) {
         await synthApi.deleteMessage(sessionId, msg.id)
         const result = await synthApi.getSessionMessages(sessionId)
         setMessages(sessionId, result.messages)
+        // ADR-118 §5: перезагрузка истории не должна терять границы
+        // идущего хода (см. первичную загрузку выше).
+        restoreLiveTurnFromHistory(sessionId, result.messages)
         notify({ text: t('chat.message.deleted'), type: 'info', category: 'message', sessionId })
       } catch {
         notify({ text: t('chat.error.deleteMessage'), type: 'error', category: 'error', sessionId })
@@ -487,6 +496,9 @@ export function ChatTab({ tab }: ChatTabProps) {
         const result = await synthApi.retryMessage(sessionId, msg.id)
         const reloadResult = await synthApi.getSessionMessages(sessionId)
         setMessages(sessionId, reloadResult.messages)
+        // ADR-118 §5: перезагрузка истории не должна терять границы
+        // идущего хода (см. первичную загрузку выше).
+        restoreLiveTurnFromHistory(sessionId, reloadResult.messages)
         // ADR-115: вложения возвращаются в композер вместе с текстом (маркеры
         // уже в `content` — повторной вставки не будет). `restore` — до
         // `setRetryInput`, чтобы к моменту появления текста чипы уже были.

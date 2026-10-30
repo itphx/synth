@@ -18,6 +18,7 @@ import {
   publishTurnFinished,
   publishTurnStarted,
   textPartId,
+  withDeterministicPartIds,
 } from './turn-events.js';
 
 /**
@@ -112,7 +113,9 @@ export async function finishLocalCommand(
     role: MessageRole.ASSISTANT,
     seq: 0,
     origin: 'local',
-    parts: [makeTextPart(output)],
+    // ADR-118 §1: часть локального ответа — с тем же детерминированным id,
+    // что и в стриме (`msg:text:0`), иначе клиент нарисует текст дважды.
+    parts: withDeterministicPartIds([makeTextPart(output)]),
     content: output,
     createdAt: nowISO(),
     disabled: false,

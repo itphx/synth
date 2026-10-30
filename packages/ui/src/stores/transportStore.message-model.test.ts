@@ -56,7 +56,7 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks.api }))
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 
 import { useTransportStore, createDispatcher, resetEventSeqTracking, restoreLiveTurnFromHistory } from './transportStore'
-import { useChatStore } from './chatStore'
+import { useChatStore, type MessageData } from './chatStore'
 import { resetChatStore } from './testUtils'
 import { notifyMessage } from '@/hooks/useNotification'
 import type { WSEvent } from '@/lib/api/transport'
@@ -192,5 +192,46 @@ describe('transportStore: восстановление живого хода и�
     ])
 
     expect(useChatStore.getState().turnBySession['s1']).toBeUndefined()
+  })
+
+  it('идемпотентность: повторный вызов с той же историей не меняет ход', () => {
+    const messages: MessageData[] = [
+      {
+        index: 0, id: 'm-step', role: 'assistant', content: 'част', ord: 2,
+        status: 'streaming', turn_id: 't1', step_index: 0, model: 'gpt',
+        disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:01Z',
+      },
+    ]
+
+    restoreLiveTurnFromHistory('s1', messages)
+    const first = useChatStore.getState().turnBySession['s1']
+    restoreLiveTurnFromHistory('s1', messages)
+    const second = useChatStore.getState().turnBySession['s1']
+
+    expect(second).toEqual(first)
+    expect(second).toMatchObject({ turnId: 't1', messageId: 'm-step', status: 'streaming' })
+  })
+
+  it('идущий ход не перетирается историей (границы живого хода свежее истории)', () => {
+    const messages: MessageData[] = [
+      {
+        index: 0, id: 'm-step', role: 'assistant', content: 'част', ord: 2,
+        status: 'streaming', turn_id: 't1', step_index: 0,
+        disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:01Z',
+      },
+    ]
+
+    restoreLiveTurnFromHistory('s1', messages)
+    // Следующий шаг хода (живое событие `step.started`).
+    useChatStore.getState().patchTurn('s1', { messageId: 'm-step-2', stepIndex: 1 })
+    // Перезагрузка истории со «старым» снимком — границы хода не откатываются.
+    restoreLiveTurnFromHistory('s1', messages)
+
+    expect(useChatStore.getState().turnBySession['s1']).toMatchObject({
+      turnId: 't1',
+      messageId: 'm-step-2',
+      stepIndex: 1,
+      status: 'streaming',
+    })
   })
 })

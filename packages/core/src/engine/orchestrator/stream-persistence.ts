@@ -18,6 +18,7 @@
 import type { Message, MessageStatus, Part } from '@itphx/synth-shared';
 import { generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
+import { withDeterministicPartIds } from './turn-events.js';
 
 /** Ссылка на запись черновика в истории (нужна финальному `updateMessage`). */
 export interface StreamMessageRef {
@@ -437,7 +438,11 @@ export class StreamMessageDraft {
       ...this._base,
       id: this._ref?.id ?? this._draftId,
       seq: this._ref?.seq ?? 0,
-      parts: overrides.parts,
+      // ADR-118 §1: части черновика — с теми же детерминированными id, что и
+      // в стриме (`msg:text:N`) и в финальном сообщении шага: финализация
+      // заменяет набор частей, и id остаются стабильными (клиент мержит части
+      // по id — иначе текст ответа дублируется).
+      parts: withDeterministicPartIds(overrides.parts),
       content: overrides.content,
       createdAt: nowISO(),
       ...(overrides.reasoning !== undefined ? { reasoning: overrides.reasoning } : {}),

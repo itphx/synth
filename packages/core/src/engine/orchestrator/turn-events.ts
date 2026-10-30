@@ -41,6 +41,50 @@ export function toolCallPartId(callId: string): string {
   return callId;
 }
 
+/**
+ * `callId` провайдера из данных части вызова инструмента.
+ *
+ * Часть приходит либо из стрима (сырые данные провайдера — `{id, type, function}`),
+ * либо из legacy-разбора хранилища (`{name, args}` — там `callId` неизвестен).
+ */
+function toolCallIdOf(part: Part): string | undefined {
+  const data = part.data as { id?: unknown } | null | undefined;
+  return typeof data?.id === 'string' && data.id !== '' ? data.id : undefined;
+}
+
+/**
+ * ADR-118 §1: детерминированные идентификаторы частей при персисте.
+ *
+ * Персист assistant-сообщения обязан выдавать те же `partId`, что и стрим
+ * (`part.delta`/`part.updated`): клиент мержит части по id, поэтому случайный
+ * id даёт две текстовые части одного ответа — текст отрисовывается дважды.
+ *
+ * Правила: текст — `msg:text:<ordinal>` (по порядку текстовых частей),
+ * рассуждения — `msg:reasoning:<ordinal>`, вызов инструмента — `callId`
+ * провайдера; остальные части (медиа ADR-115 и пр.) — без изменений.
+ *
+ * Функция идемпотентна: повторный вызов на уже размеченных частях ничего
+ * не меняет.
+ */
+export function withDeterministicPartIds(parts: readonly Part[]): Part[] {
+  let textOrdinal = 0;
+  let reasoningOrdinal = 0;
+  return parts.map((part) => {
+    if (!part || typeof part !== 'object') return part;
+    if (part.type === 'text') {
+      return { ...part, id: textPartId(textOrdinal++) };
+    }
+    if (part.type === 'reasoning') {
+      return { ...part, id: reasoningPartId(reasoningOrdinal++) };
+    }
+    if (part.type === 'tool_use') {
+      const callId = toolCallIdOf(part);
+      return callId ? { ...part, id: toolCallPartId(callId) } : part;
+    }
+    return part;
+  });
+}
+
 /** `turn.started` — ход начался (реплика пользователя). */
 export function publishTurnStarted(publish: PublishEvent, payload: TurnStartedPayload): void {
   publish('turn.started', { ...payload });

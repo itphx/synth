@@ -32,6 +32,8 @@ import {
   type AssistantMessageStatus,
   type SaveAssistantMessageDeps,
 } from './persistence.js';
+import { StreamMessageDraft } from './stream-persistence.js';
+import { withDeterministicPartIds } from './turn-events.js';
 import { sessionMessagesToLlm } from './prompt-info.js';
 import { serializeMessage } from '../../server/serialize.js';
 
@@ -195,6 +197,87 @@ describe('saveAssistantMessage / persistToolChain', () => {
     const added = events.filter((e) => e.type === 'message.added');
     expect(added).toHaveLength(1);
     expect(added[0]!.data).toMatchObject({ message_index: 0, role: MessageRole.ASSISTANT, content: 'ответ' });
+  });
+
+  it('ADR-118 §1: части assistant-сообщения — с детерминированными id (`msg:text:N`, `msg:reasoning:N`)', async () => {
+    const session = await newSession();
+
+    await saveAssistantMessage(
+      deps(), session.id, 'ответ', 'stream1', 'fixer', USAGE, 'm', undefined,
+      debugCollector, false, 'prov',
+      MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined,
+      // Блоки reasoning (Anthropic, мульти-блок) — в `parts` с своими id.
+      [{ text: 'думаю', signature: 'sig-1' }, { text: 'ещё думаю', signature: 'sig-2' }],
+    );
+
+    const saved = (await sessionManager.getSession(session.id))!.messages[0]!;
+    expect(saved.parts.map((p) => p.id)).toEqual(['msg:text:0', 'msg:reasoning:0', 'msg:reasoning:1']);
+    expect(saved.parts.map((p) => p.type)).toEqual(['text', 'reasoning', 'reasoning']);
+  });
+
+  it('ADR-118 §1: медиа-части сохраняют свой id (своя адресация ADR-115)', async () => {
+    const session = await newSession();
+    const media = makeMediaPart('image', {
+      blobPath: 'attachments/ab/deadbeef',
+      sha256: 'deadbeef',
+      mime: 'image/png',
+      size: 8,
+      name: 'shot.png',
+    });
+
+    await saveAssistantMessage(
+      deps(), session.id, 'смотри', 'stream1', 'fixer', USAGE, 'm', undefined,
+      debugCollector, false, 'prov',
+      MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, [media], undefined, undefined,
+    );
+
+    const saved = (await sessionManager.getSession(session.id))!.messages[0]!;
+    expect(saved.parts.map((p) => p.id)).toEqual(['msg:text:0', media.id]);
+  });
+
+  it('ADR-118 §1: финализация черновика (updateMessage) не плодит части — id стабильны', async () => {
+    const session = await newSession();
+    const draft = new StreamMessageDraft({
+      sessionManager,
+      sessionId: session.id,
+      id: 'msg-draft-1',
+      base: {
+        role: MessageRole.ASSISTANT,
+        origin: 'local',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { stream_id: 'stream1' },
+      },
+    });
+    draft.push('черновик', '');
+    await draft.flush();
+    const ref = draft.ref();
+    expect(ref).not.toBeNull();
+
+    // Части черновика — уже детерминированные (`msg:text:0`).
+    const drafted = (await sessionManager.getSession(session.id))!.messages[0]!;
+    expect(drafted.parts.map((p) => p.id)).toEqual(['msg:text:0']);
+
+    await saveAssistantMessage(
+      deps(), session.id, 'финальный ответ', 'stream1', 'fixer', USAGE, 'm', undefined,
+      debugCollector, false, 'prov',
+      MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      ref ?? undefined,
+    );
+
+    const messages = (await sessionManager.getSession(session.id))!.messages;
+    // Дубликата сообщения нет — финал ЗАМЕНИЛ черновик.
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.id).toBe('msg-draft-1');
+    // Набор частей заменён, id текста — тот же (`msg:text:0`): клиент, мержущий
+    // части по id, не получит вторую текстовую часть.
+    expect(messages[0]!.parts.map((p) => p.id)).toEqual(['msg:text:0']);
   });
 
   it('ADR-115 (outbound): медиа-части (`extraParts`) — в `parts` после текста + ссылки blob', async () => {
@@ -635,5 +718,44 @@ describe('saveAssistantMessage — debug-коллектор', () => {
 
     const saved = (await sessionManager.getSession(session.id))!.messages[0]!;
     expect(saved.debugData).toMatchObject({ raw_model_response: 'ответ' });
+  });
+});
+
+describe('withDeterministicPartIds (ADR-118 §1)', () => {
+  it('текст — `msg:text:<ordinal>` по порядку, рассуждения — `msg:reasoning:<ordinal>`', () => {
+    const parts = withDeterministicPartIds([
+      { id: 'uuid-1', type: 'text', data: 'первый' },
+      { id: 'uuid-2', type: 'reasoning', data: 'думаю' },
+      { id: 'uuid-3', type: 'text', data: 'второй' },
+      { id: 'uuid-4', type: 'reasoning', data: 'ещё думаю' },
+    ]);
+    expect(parts.map((p) => p.id)).toEqual([
+      'msg:text:0', 'msg:reasoning:0', 'msg:text:1', 'msg:reasoning:1',
+    ]);
+    // Данные частей не меняются — меняется только адресация.
+    expect(parts.map((p) => p.data)).toEqual(['первый', 'думаю', 'второй', 'ещё думаю']);
+  });
+
+  it('вызов инструмента — `callId` провайдера', () => {
+    const parts = withDeterministicPartIds([
+      { id: 'uuid-1', type: 'tool_use', data: { id: 'call_abc', type: 'function', function: { name: 'read_file' } } },
+    ]);
+    expect(parts[0]!.id).toBe('call_abc');
+  });
+
+  it('медиа-части (ADR-115) и части без callId — без изменений', () => {
+    const media = { id: 'media-1', type: 'image' as const, data: { blobPath: 'attachments/ab/x' } };
+    const legacyTool = { id: 'uuid-legacy', type: 'tool_use' as const, data: { name: 'read_file', args: {} } };
+    const parts = withDeterministicPartIds([media, legacyTool]);
+    expect(parts[0]!.id).toBe('media-1');
+    expect(parts[1]!.id).toBe('uuid-legacy');
+  });
+
+  it('идемпотентна: повторный вызов не меняет id', () => {
+    const once = withDeterministicPartIds([
+      { id: 'uuid-1', type: 'text', data: 'текст' },
+      { id: 'uuid-2', type: 'reasoning', data: 'думаю' },
+    ]);
+    expect(withDeterministicPartIds(once).map((p) => p.id)).toEqual(once.map((p) => p.id));
   });
 });

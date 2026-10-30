@@ -749,49 +749,6 @@ function ChatMessageInner({
           <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
         )}
 
-        {isLive && (
-          <span className="mb-1 inline-flex gap-0.5 self-start" aria-hidden="true">
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
-          </span>
-        )}
-
-        {/*
-          ADR-118 §5: живое сообщение несёт индикатор активности хода — прежняя
-          отдельная плашка `StreamingPlaceholder` теперь здесь: live-статистика
-          и «В фон» (ADR-111 §detach). Остановка хода — общей кнопкой композера.
-        */}
-        {isLive && (
-          <div className="mb-1 flex flex-wrap items-center gap-1 self-start text-[11px] text-muted-foreground">
-            {liveSegments.length > 0 && (
-              <StatsPopoverButton>
-                <span className="flex flex-nowrap items-center gap-1 whitespace-nowrap" data-testid="live-stats">
-                  {liveSegments.map((segment, i) => (
-                    <Fragment key={segment}>
-                      {i > 0 && <span aria-hidden="true">·</span>}
-                      <span>{segment}</span>
-                    </Fragment>
-                  ))}
-                </span>
-              </StatsPopoverButton>
-            )}
-            {canDetach && (
-              <button
-                type="button"
-                onClick={handleBackground}
-                disabled={detaching}
-                title={t('chat.background.hint')}
-                aria-label={t('chat.background.move')}
-                className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-interactive-hover disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
-              >
-                <Icon name="download" className="size-3" />
-                {t('chat.background.move')}
-              </button>
-            )}
-          </div>
-        )}
-
         {isLive && retry && (
           <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
         )}
@@ -836,6 +793,58 @@ function ChatMessageInner({
             onRetryNow={pending.onRetryNow}
             onCancelRetry={pending.onCancelRetry}
           />
+        )}
+
+        {/*
+          ADR-118 §1/§5: индикатор активности хода, live-статистика и «В фон»
+          (ADR-111 §detach) — в **конце** содержимого сегмента.
+
+          Живой сегмент в склеенном блоке хода всегда последний, поэтому
+          индикатор должен стоять в конце блока, а не над содержимым
+          сегмента (иначе он визуально попадает в середину ответа —
+          между предыдущим сегментом и текущим). Прежняя отдельная плашка
+          `StreamingPlaceholder` заменена этим блоком.
+        */}
+        {isLive && (
+          <span
+            className="mt-1 inline-flex gap-0.5 self-start"
+            aria-hidden="true"
+            data-testid="live-indicator"
+          >
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+          </span>
+        )}
+
+        {isLive && (
+          <div className="mt-1 flex flex-wrap items-center gap-1 self-start text-[11px] text-muted-foreground">
+            {liveSegments.length > 0 && (
+              <StatsPopoverButton>
+                <span className="flex flex-nowrap items-center gap-1 whitespace-nowrap" data-testid="live-stats">
+                  {liveSegments.map((segment, i) => (
+                    <Fragment key={segment}>
+                      {i > 0 && <span aria-hidden="true">·</span>}
+                      <span>{segment}</span>
+                    </Fragment>
+                  ))}
+                </span>
+              </StatsPopoverButton>
+            )}
+            {canDetach && (
+              <button
+                type="button"
+                onClick={handleBackground}
+                disabled={detaching}
+                title={t('chat.background.hint')}
+                aria-label={t('chat.background.move')}
+                className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-interactive-hover disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
+              >
+                <Icon name="download" className="size-3" />
+                {t('chat.background.move')}
+              </button>
+            )}
+          </div>
         )}
 
         {actionsVisible && (

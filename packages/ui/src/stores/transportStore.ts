@@ -73,6 +73,10 @@ export function resetEventSeqTracking(): void {
  * `turnBySession` не восстановлен, лента рисует его как обычное (мёртвое)
  * сообщение и не показывает индикатор работы, а «Стоп»/«В фон» не видят хода.
  * Восстанавливаем границы хода по последнему такому сообщению.
+ *
+ * Идемпотентно: уже восстановленный (или идущий) ход не перетирается —
+ * перезагрузка истории со «старым» снимком не должна откатывать границы
+ * хода, который идёт прямо сейчас (в сторе он свежее истории).
  */
 export function restoreLiveTurnFromHistory(sessionId: string, messages: MessageData[]): void {
   const streaming = messages.filter((m) => m.status === 'streaming')
@@ -80,6 +84,8 @@ export function restoreLiveTurnFromHistory(sessionId: string, messages: MessageD
   if (!last) return
   const turnId = last.turn_id || last.id || ''
   if (!turnId) return
+  const current = useChatStore.getState().turnBySession[sessionId]
+  if (current && current.status === 'streaming') return
   useChatStore.getState().startTurn(sessionId, {
     turnId,
     ...(last.id ? { messageId: last.id } : {}),

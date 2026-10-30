@@ -14,6 +14,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { DebugCollector } from '../../debug.js';
 import { makeReasoningParts, type ReasoningBlockLike } from '../reasoning-blocks.js';
+import { withDeterministicPartIds } from './turn-events.js';
 import { computeCacheHitRate, computeUsageCost, type UsageCost } from '../../providers/usage.js';
 import type { ObfuscationMapStore } from '../gateway/index.js';
 import { PLACEHOLDER_PATTERN } from '../gateway/index.js';
@@ -183,7 +184,9 @@ export async function persistToolChain(
       role: MessageRole.ASSISTANT,
       seq: 0,
       origin: 'local',
-      parts: [makeTextPart(iterText)],
+      // ADR-118 §1: части tool-chain — с теми же детерминированными id, что и
+      // у шага в стриме (`msg:text:N`), иначе клиент нарисует текст дважды.
+      parts: withDeterministicPartIds([makeTextPart(iterText)]),
       content: iterText,
       toolCalls: raw.calls,
       createdAt: nowISO(),
@@ -209,7 +212,8 @@ export async function persistToolChain(
         role: MessageRole.TOOL,
         seq: 0,
         origin: 'local',
-        parts: [makeTextPart(toolContent)],
+        // ADR-118 §1: части сообщения — с детерминированными id (`msg:text:N`).
+        parts: withDeterministicPartIds([makeTextPart(toolContent)]),
         content: toolContent,
         toolCallId: tc.id as string,
         createdAt: nowISO(),
@@ -445,7 +449,14 @@ export async function saveAssistantMessage(
     origin: 'local',
     // ADR-115 (outbound): текст + reasoning-блоки (со своими подписями
     // Anthropic) + медиа-части ответа (`send_attachment`).
-    parts: [makeTextPart(finalContent), ...makeReasoningParts(reasoningBlocks), ...(extraParts ?? [])],
+    // ADR-118 §1: id частей — те же детерминированные, что и в стриме
+    // (`msg:text:N` / `msg:reasoning:N` / `callId`), иначе клиент, мержущий
+    // части по id, нарисует текст ответа дважды (dto-часть + live-часть).
+    parts: withDeterministicPartIds([
+      makeTextPart(finalContent),
+      ...makeReasoningParts(reasoningBlocks),
+      ...(extraParts ?? []),
+    ]),
     content: finalContent,
     createdAt: nowISO(),
     disabled: false,
