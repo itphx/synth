@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-30 (**§5.5** — `stream.done.step_limit_reached` / `metadata.step_limit_reached` и статус `limit` (`session.steps_limit`); **§5.10** — `requires_reasoning` у модели — **переведено**); RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
+> ⚠️ RU-версия обновлена 2026-10-30 (**§5.5** — `stream.done.step_limit_reached` / `metadata.step_limit_reached` и статус `limit` (`session.steps_limit`); **§5.10** — `compatibility` модели (ADR-117) и `requires_reasoning` как shorthand; **§5.9** — `compatibility` провайдера; **§5.6** — reasoning-подписи наружу не отдаются — **переведено**); RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -440,6 +440,13 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | POST | `/api/v2/messages/:sessionId/:index/retry` | both | auth | Disable from index and return the text `{content}` |
 | GET | `/api/v2/messages/:sessionId/:index/debug` | both | auth | Debug data for a message |
 
+> **Thinking/reasoning service fields are never exposed (ADR-117).** `reasoningSignature` (the Anthropic
+> thinking block signature) and `reasoningRedacted` (opaque `redacted_thinking` data) are stored on the
+> message and persisted (the file store and PostgreSQL, migration `028-message-reasoning-signature`), but
+> they **do not** appear in public responses (`GET /sessions/:id/messages`, the `message.added`/
+> `session.updated` events, session export): they are provider-protocol data needed only to replay the
+> history to the Anthropic API. The `reasoning` field (the reasoning text) is returned as before.
+
 ### 5.7 Queue — `/api/v2/queue`
 
 | Method | Path | Build | RBAC | Purpose |
@@ -554,6 +561,7 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 | GET | `/api/v2/providers` | both | auth / auth | Provider list |
 | POST | `/api/v2/providers` | both | ADMIN / auth | Create/update |
 | GET | `/api/v2/providers/:name` | both | ADMIN / auth | One (apiKey masked) |
+| PATCH | `/api/v2/providers/:name` | both | ADMIN / auth | Partial update (`num_ctx`, `compatibility`, …) |
 | DELETE | `/api/v2/providers/:name` | both | ADMIN / auth | Delete |
 | POST | `/api/v2/providers/:name/test` | both | ADMIN / auth | Connection test |
 | POST | `/api/v2/providers/fetch-icon` | backend | ADMIN | Domain favicon (a raw data URL); the UI stores the icon already compressed (a small PNG data URL) |
@@ -573,6 +581,19 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 > path is a separate provider `type: openai`/`generic`). An alternative —
 > a window on the Ollama side (`OLLAMA_CONTEXT_LENGTH`/Modelfile).
 
+> **Provider compatibility layer — `compatibility` (ADR-117, 2026-10-30).** An optional
+> `ModelCompatibility` object: `reasoningField` (the openai-chat reasoning field name, default
+> `reasoning_content`), `requireReasoning`, `maxTokensField` (`max_tokens` \| `max_completion_tokens`),
+> `requireAssistantAfterTool`, `streamUsage`, `supportsToolChoice`. Here these are the **provider defaults**
+> for all its models; a model overrides fields pointwise (`ModelConfig.compatibility`, §5.10). Semantics —
+> **replacement**: the object replaces the value entirely (a field missing from the object means “auto”,
+> not “keep the previous value”), `null`/`{}` — reset, the field absent — unchanged; an unknown field or a
+> wrong type → `400 VALIDATION_ERROR` (a typo is never silently lost). `GET /api/v2/providers` and
+> `GET /:name` return `compatibility` **only when set**. Resolution priority — model → provider →
+> heuristic → default; heuristics: DeepSeek (`requireReasoning`), the Mistral family
+> (`requireAssistantAfterTool`), native Ollama (`supportsToolChoice: false`). Details and examples —
+> [CONFIGURATION.md](../CONFIGURATION.md) §“Model catalog”.
+
 ### 5.10 Models — `/api/v2/models`
 
 | Method | Path | Build | RBAC (backend / core) | Purpose |
@@ -582,14 +603,20 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 | POST | `/api/v2/models/fetch` | both | ADMIN / auth | Sync with the providers |
 | DELETE | `/api/v2/models/:id` | both | ADMIN / auth | Delete |
 
-> **DeepSeek thinking-model compatibility — `requires_reasoning` (2026-10-30).** An optional model field:
-> such a provider requires `reasoning_content` on **every** assistant message (an empty string when there is
-> no reasoning). `POST /api/v2/models` accepts `requires_reasoning` (the camelCase `requiresReasoning` too):
-> `true` — force on, `false` — force off, `null` — reset to auto detection (the heuristic: the provider
-> type/name is `deepseek`, the URL contains `deepseek.com`, the model id contains `deepseek`).
-> `GET /api/v2/models` returns `requiresReasoning` **only when the value is set**: an absent field means auto
-> detection, not `false`. Needed for DeepSeek-compatible gateways with a non-default provider/model name
-> (we have no catalog `compatibility` fields as opencode does).
+> **Model compatibility — `compatibility` and `requires_reasoning` (ADR-117, 2026-10-30).** A model may
+> override the provider compatibility layer (§5.9) with the `compatibility` field — the same object
+> (`reasoningField`, `requireReasoning`, `maxTokensField`, `requireAssistantAfterTool`, `streamUsage`,
+> `supportsToolChoice`), semantics are **replacement**: the object replaces the value entirely,
+> `null`/`{}` — reset, the field absent — unchanged, an unknown field/type → `400 VALIDATION_ERROR`.
+> `requires_reasoning` (the camelCase `requiresReasoning` too) is a **shorthand** for
+> `compatibility.requireReasoning`: `true` — the reasoning field is mandatory on **every** assistant
+> message (an empty string when there is no reasoning), `false` — force off, `null` — reset (clears both
+> the shorthand and `compatibility.requireReasoning`). Normalization — `compatibility.requireReasoning ??
+> requiresReasoning`. `GET /api/v2/models` returns `compatibility` and `requiresReasoning` **only when
+> set**: an absent field means auto detection (the heuristic: provider type/name `deepseek`, a URL with
+> `deepseek.com`, a model id with `deepseek`), not `false`. Needed for DeepSeek-compatible gateways with a
+> non-default provider/model name and for proxies with a different reasoning field name (`reasoning`) or
+> output limit. Field/priority reference — [CONFIGURATION.md](../CONFIGURATION.md) §“Model catalog”.
 
 ### 5.11 Agents — `/api/v2/agents`
 

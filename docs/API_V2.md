@@ -443,6 +443,13 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/messages/:sessionId/:index/retry` | оба | auth | Отключить с index и вернуть текст `{content}` |
 | GET | `/api/v2/messages/:sessionId/:index/debug` | оба | auth | Отладочные данные сообщения |
 
+> **Служебные поля reasoning наружу не отдаются (ADR-117).** `reasoningSignature` (подпись
+> Anthropic thinking-блока) и `reasoningRedacted` (opaque-данные `redacted_thinking`) хранятся в
+> сообщении и персистятся (файловый store и PostgreSQL, миграция `028-message-reasoning-signature`),
+> но в публичный ответ (`GET /sessions/:id/messages`, события `message.added`/`session.updated`,
+> экспорт сессии) **не попадают**: это данные протокола провайдера, нужные только для реплея истории
+> в API Anthropic. Поле `reasoning` (текст рассуждений) отдаётся как раньше.
+
 ### 5.6.1 Вложения сообщений — `/api/v2/sessions/:id/attachments*` (оба, ADR-115)
 
 Мультимодальный ввод ([ADR-115](./arch_decisions/adr-115-multimodal-input.md)): файл загружается
@@ -668,6 +675,7 @@ sha256, небезопасный путь в архиве, небезопасн�
 | GET | `/api/v2/providers` | оба | auth / auth | Список провайдеров |
 | POST | `/api/v2/providers` | оба | ADMIN / auth | Создать/обновить |
 | GET | `/api/v2/providers/:name` | оба | ADMIN / auth | Один (apiKey маскирован) |
+| PATCH | `/api/v2/providers/:name` | оба | ADMIN / auth | Частичное обновление (в т.ч. `num_ctx`, `compatibility`) |
 | DELETE | `/api/v2/providers/:name` | оба | ADMIN / auth | Удалить |
 | POST | `/api/v2/providers/:name/test` | оба | ADMIN / auth | Тест подключения |
 | POST | `/api/v2/providers/fetch-icon` | backend | ADMIN | Favicon домена (сырой data-URL); UI сохраняет иконку уже сжатой (маленький PNG data-URL) |
@@ -687,6 +695,19 @@ sha256, небезопасный путь в архиве, небезопасн�
 > путь — отдельный провайдер `type: openai`/`generic`). Альтернатива —
 > окно на стороне Ollama (`OLLAMA_CONTEXT_LENGTH`/Modelfile).
 
+> **Слой совместимости провайдера — `compatibility` (ADR-117, 2026-10-30).** Необязательный объект
+> `ModelCompatibility`: `reasoningField` (имя reasoning-поля openai-chat, дефолт `reasoning_content`),
+> `requireReasoning`, `maxTokensField` (`max_tokens` \| `max_completion_tokens`), `requireAssistantAfterTool`,
+> `streamUsage`, `supportsToolChoice`. Здесь это **дефолты провайдера** для всех его моделей; модель
+> перекрывает поля точечно (`ModelConfig.compatibility`, §5.10). Семантика — **замена**: объект
+> заменяет значение целиком (отсутствующее в объекте поле означает «авто», а не «сохранить прежнее»),
+> `null`/`{}` — сброс, поле не передано — без изменений; неизвестное поле или неверный тип →
+> `400 VALIDATION_ERROR` (опечатка не теряется молча). `GET /api/v2/providers` и `GET /:name` отдают
+> `compatibility`, **только если он задан**. Приоритет резолва — модель → провайдер → эвристика →
+> дефолт; эвристики: DeepSeek (`requireReasoning`), Mistral-семейство (`requireAssistantAfterTool`),
+> нативный Ollama (`supportsToolChoice: false`). Подробности и примеры — [CONFIGURATION.md](./CONFIGURATION.md)
+> §«Каталог моделей».
+
 ### 5.10 Models — `/api/v2/models`
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
@@ -704,14 +725,20 @@ sha256, небезопасный путь в архиве, небезопасн�
 > (вложения не фильтруются, несовместимый тип отклоняет сам провайдер). Фоллбэка `['text']` и
 > справочника модальностей в ядре нет.
 
-> **Совместимость с thinking-моделями DeepSeek — `requires_reasoning` (2026-10-30).** Необязательное
-> поле модели: такой провайдер требует `reasoning_content` у **каждого** assistant-сообщения (пустой
-> строкой, если reasoning нет). `POST /api/v2/models` принимает `requires_reasoning` (camelCase
-> `requiresReasoning` тоже): `true` — включить принудительно, `false` — выключить, `null` — сброс к
-> автоопределению (эвристика: тип/имя провайдера `deepseek`, URL с `deepseek.com`, id модели с
-> `deepseek`). `GET /api/v2/models` отдаёт `requiresReasoning`, **только если значение задано**: поля
-> нет — автоопределение, а не `false`. Нужно для DeepSeek-совместимых шлюзов с недефолтным именем
-> провайдера/модели (`compatibility`-полей каталога, как в opencode, у нас нет).
+> **Совместимость модели — `compatibility` и `requires_reasoning` (ADR-117, 2026-10-30).** Модель может
+> перекрывать провайдерский слой совместимости (§5.9) полем `compatibility` — тот же объект
+> (`reasoningField`, `requireReasoning`, `maxTokensField`, `requireAssistantAfterTool`, `streamUsage`,
+> `supportsToolChoice`), семантика **замены**: объект заменяет значение целиком, `null`/`{}` — сброс,
+> поле не передано — без изменений, неизвестное поле/тип → `400 VALIDATION_ERROR`.
+> `requires_reasoning` (camelCase `requiresReasoning` тоже) — **shorthand** для
+> `compatibility.requireReasoning`: `true` — поле reasoning обязательно у **каждого** assistant-сообщения
+> (пустой строкой, если reasoning нет), `false` — принудительно выключить, `null` — сброс (снимает и
+> shorthand, и `compatibility.requireReasoning`). Нормализация — `compatibility.requireReasoning ??
+> requiresReasoning`. `GET /api/v2/models` отдаёт `compatibility` и `requiresReasoning`, **только если
+> значения заданы**: отсутствие поля означает автоопределение (эвристика: тип/имя провайдера `deepseek`,
+> URL с `deepseek.com`, id модели с `deepseek`), а не `false`. Нужно для DeepSeek-совместимых шлюзов с
+> недефолтным именем провайдера/модели и для прокси с другим именем reasoning-поля (`reasoning`) или
+> лимита вывода. Справка по полям и приоритету — [CONFIGURATION.md](./CONFIGURATION.md) §«Каталог моделей».
 
 ### 5.11 Agents — `/api/v2/agents`
 

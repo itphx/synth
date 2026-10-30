@@ -625,8 +625,10 @@
   `role.unavailable` (тул недоступен агенту), ask→deny пользователя или запрет политики —
   возвращается модели как обычный `tool_result` с причиной; следующая LLM-итерация
   запускается, модель может выбрать другой инструмент. Защита от зацикливания: doom-loop,
-  лимит шагов/итераций (`AgentDefinition.maxSteps`, `session.max_iterations`) и счётчик
-  одинаковых deny-вызовов (`MAX_REPEATED_DENY_COUNT = 5` подряд → ход завершается).
+  лимит шагов (`AgentDefinition.maxSteps`; без него — `DEFAULT_MAX_ITERATIONS = Infinity`;
+  `session.max_iterations` в основном цикле больше не используется — он остался у шагов
+  пайплайнов) и счётчик одинаковых deny-вызовов (`MAX_REPEATED_DENY_COUNT = 5` подряд → ход
+  завершается).
   `session.role_tool_blocked` (`{tool}`, `{agent}`; статус `stopped`) — только фоллбек-текст,
   если модель так и не дала содержательного ответа (`process-finalize.ts` + `persistence.ts`).
   Саб-агент `task` ведёт себя так же (`run-cycle.ts`): `subagentDenied` — лишь фоллбек
@@ -1830,20 +1832,45 @@
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла, очистка `pendingMessages`, снятие `blocked`/флага и `stream.cancelled` ровно один раз).
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote, `DecisionProvider` (ADR-084: типы `decision` (RouterAI, `POST {base}/decisions`) и `systemone` (Ollama, `POST {base}/v1/systemone`) — endpoint выбирается по типу провайдера). Prompt-cache (ADR-070, `CachePolicy = 'auto' | 'none'` в `base.ts`): `SystemPromptPayload` (`text`/`stablePrefix`/`cacheKey`/`cachePolicy`) — Anthropic отдаёт `system` массивом блоков с `cache_control` (≤4 breakpoint'а, два system), OpenAI/Remote — `prompt_cache_key` (= id сессии) + `stream_options.include_usage`; `usage.ts` — нормализация usage и `computeCacheHitRate` (`cacheReadTokens / inputTokens`, 0 при нуле). Нормализация по провайдерам: Anthropic — `input = input_tokens + cacheRead + cacheWrite`; OpenAI — `prompt_tokens_details.cached_tokens` → `cacheRead`; Remote — usage из ответа прокси в тот же контракт; Ollama — cache-полей нет (`cacheRead = cacheWrite = 0`).
-  **Thinking-модели DeepSeek — `requiresReasoning` (parity с opencode, 2026-10-30).**
-  `ProviderConfig.requiresReasoning?: boolean` (`base.ts`) + экспортируемая эвристика
-  `detectRequiresReasoning({type,name,url,model})` → `true`, если тип/имя провайдера `deepseek`,
-  URL содержит `deepseek.com` или id модели содержит `deepseek`; явное значение приоритетнее.
-  `OpenAIProvider._formatMessages` при `requireReasoning` отправляет `reasoning_content` у
-  **каждого** assistant-сообщения — пустой строкой, если reasoning нет (для остальных провайдеров
-  прежнее «только при непустом reasoning»). Без этого DeepSeek отвечает `400` «The
-  `reasoning_content` in the thinking mode must be passed back to the API» — ломался синтетический
-  assistant-префилл шага-лимита (`engine/llm/max-steps.ts`). Явный override — `ModelConfig.requiresReasoning`
-  (`shared/types/provider.ts`; `undefined` — автоопределение, `false` — принудительно выключить),
-  проброс: `ChatOrchestratorOptions.resolveModelRequiresReasoning` → `ProviderPool` (значение входит
-  в `cacheKey`) и `toCoreProviderConfig` (4-й параметр, `engine/router/{utils,routing}.ts`); резолвер
-  каталога собирается в `server/app/deps.ts` и `backend/app/deps.ts` (им же пользуются шаги пайплайнов).
-  Поле — только у провайдеров `openai`-типа; Anthropic/Ollama его не используют.
+  **Слой совместимости провайдеров и моделей (ADR-117, parity с opencode, 2026-10-30).**
+  `ModelCompatibility` (`shared/types/provider.ts`) описывает различия протокола данными, а не
+  хардкодом по типу провайдера: `reasoningField` (имя reasoning-поля в assistant-сообщениях openai-chat,
+  дефолт `reasoning_content`), `requireReasoning` (поле обязательно у **каждого** assistant-сообщения,
+  пустой строкой, если reasoning нет), `maxTokensField` (`max_tokens` — дефолт; `max_completion_tokens`
+  только явным значением, иначе локальные серверы ломаются), `requireAssistantAfterTool`
+  (assistant-«мост» после `tool`-результатов, Mistral-семейство), `streamUsage`
+  (`stream_options.include_usage`, дефолт включён), `supportsToolChoice` (у нативного Ollama — `false`).
+  Два уровня: `ProviderConfig.compatibility` — дефолты провайдера, `ModelConfig.compatibility` —
+  перекрывает их по каждому полю; `ModelConfig.requiresReasoning` — **shorthand** для
+  `compatibility.requireReasoning` (нормализация `compatibility.requireReasoning ?? requiresReasoning`).
+  Порядок резолва — **модель → провайдер → эвристика → дефолт** (`resolveModelCompatibility`); явный
+  `reasoningField` сам означает `requireReasoning: true`, если `requireReasoning` не переопределён.
+  Эвристики (`detectCompatibilityHeuristics`, только для незаданных полей): `requireReasoning` — тип/имя
+  провайдера `deepseek`, URL с `deepseek.com`, id модели с `deepseek`; `requireAssistantAfterTool` —
+  `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`.
+  Резолв каталога собирается в `server/app/deps.ts` и `backend/app/deps.ts` (им же пользуются шаги
+  пайплайнов и aux-модели вложений); `ProviderPool` кладёт значение в `cacheKey`, `toCoreProviderConfig` —
+  в конфиг провайдера (`engine/router/{utils,routing}.ts`); внутри провайдера —
+  `resolveProviderCompatibility` (`providers/base.ts`, явное → shorthand → эвристика);
+  `detectRequiresReasoning` оставлен как deprecated-fallback. `OpenAIProvider._formatMessages` берёт имя
+  поля и требование из резолва, ставит assistant-«мост» после `tool`-сообщений (и в конце истории, если
+  она закончилась `tool`), выбирает поле лимита вывода и `stream_options`. Без `requireReasoning`
+  DeepSeek отвечал `400` «The `reasoning_content` in the thinking mode must be passed back to the API» —
+  ломался синтетический assistant-префилл шага-лимита (`engine/llm/max-steps.ts`).
+  API: `POST`/`PATCH /api/v2/providers`, `POST /api/v2/models` принимают `compatibility` как **полную
+  замену** (`null`/`{}` — сброс, поле не передано — без изменений, неизвестное поле/тип → 400);
+  `GET` отдаёт поле, только если оно задано (`server/routes/{providers,models}.ts`).
+  **Anthropic: round-trip thinking.** При `reasoningLevel: 'high'` бюджет thinking считается от
+  фактического `max_tokens` (`resolveThinkingBudget`: не больше половины и строго меньше лимита,
+  минимум 1024; места нет — thinking выключен, а не `400`), `temperature` принудительно `1`,
+  `tool_choice: 'required'` коэрсится в `'auto'`. Подпись блока (`reasoningSignature`) и opaque-данные
+  `redacted_thinking` (`reasoningRedacted`) собираются в стриме и non-stream (пустая подпись
+  `signature: ""` допустима — так отвечает RouterAI для qwen), персистятся (file-store + PostgreSQL,
+  миграция `028-message-reasoning-signature`) и реплеятся в порядке
+  `redacted_thinking → thinking → text → tool_use`; при выключенном thinking блоки в историю не уходят.
+  Наружу через API эти поля не отдаются (`server/serialize.ts`) — служебные данные протокола.
+  **Ollama (`/api/chat`).** `think` включается для `low|medium|high` (`none` — `false`, `default` — поле
+  не отправляется); `tool_choice` не отправляется при `supportsToolChoice: false` (`providers/ollama.ts`).
 - `profiles.ts` — реестр серверных профилей гибрида.
 - `prompts/` (system, roles, subagents, security), `definitions/`
   (`protected-paths.json`, `shell-policy.json`), `dictionaries/` — ассеты движка.

@@ -59,6 +59,7 @@
 | ADR-112 | Вопрос пользователю посреди хода (question) | ✅ Реализовано | [adr-112-user-questions-mid-turn.md](./adr-112-user-questions-mid-turn.md) |
 | ADR-113 | Фоновые процессы — реестр, control plane и исполнитель | ✅ Реализовано | [adr-113-background-processes.md](./adr-113-background-processes.md) |
 | ADR-114 | Git worktrees — per-session рабочий каталог | ✅ Реализовано | [adr-114-git-worktrees.md](./adr-114-git-worktrees.md) |
+| ADR-117 | Слой совместимости провайдеров/моделей (`compatibility`: reasoning-поле, лимит вывода, `tool_choice`) и Anthropic thinking round-trip | ✅ Реализовано | [adr-117-provider-compatibility.md](./adr-117-provider-compatibility.md) |
 
 ## Частично
 
@@ -146,4 +147,4 @@
 
 ---
 
-Всего документов: 106 (Решения: 47, Частично: 19, Принятые предложения: 6, Предложения: 24, Vision: 8, Icebox: 1, Legacy: 1).
+Всего документов: 107 (Решения: 48, Частично: 19, Принятые предложения: 6, Предложения: 24, Vision: 8, Icebox: 1, Legacy: 1).

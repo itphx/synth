@@ -1614,28 +1614,71 @@ agents:
 `storage.backend=postgres`), читаются типом `ModelConfig` из `@itphx/synth-shared`. Правка — через API:
 `POST /api/v2/models` (создать/обновить; неизвестные поля игнорируются) и `POST /api/v2/models/fetch`
 (синхронизация с каталогом провайдера). Поля каталога (цены, `contextWindow`, `modalities`,
-`requiresReasoning`) — **свойства модели**, отдельных ключей в `config.yaml` у них нет.
+`compatibility`) — **свойства модели**, отдельных ключей в `config.yaml` у них нет.
 
-**`requiresReasoning` — совместимость с thinking-моделями DeepSeek** (поведение взято из opencode).
-Такой провайдер требует `reasoning_content` у **каждого** assistant-сообщения, даже когда reasoning
-пуст; иначе DeepSeek отвечает `400` «The `reasoning_content` in the thinking mode must be passed back
-to the API» — это ломало синтетический assistant-префилл шага-лимита.
+**Совместимость провайдера и модели (`compatibility`, ADR-117, parity с opencode).** Различия
+протокола у совместимых шлюзов и прокси (имена полей, лимит вывода, `tool_choice`) описываются
+данными, а не хардкодом по типу провайдера. Один и тот же объект объявлен на двух уровнях:
+`ProviderConfig.compatibility` (дефолты для всех моделей провайдера) и `ModelConfig.compatibility`
+(перекрывает провайдерские поля точечно).
 
-| Значение | Поведение |
-|---|---|
-| не задано (`undefined`) — **дефолт** | Автоопределение (`detectRequiresReasoning`): тип или имя провайдера `deepseek`, URL с `deepseek.com`, либо id модели с `deepseek` |
-| `true` | `reasoning_content` отправляется всегда (пустой строкой, если reasoning нет) — для DeepSeek-совместимых шлюзов с недефолтным именем провайдера/модели |
-| `false` | Принудительно выключить — модель с `deepseek` в имени, которая поле не требует |
+| Поле | Назначение | По умолчанию |
+|---|---|---|
+| `reasoningField` | Имя поля reasoning в assistant-сообщениях openai-chat. Явное значение само включает `requireReasoning`, если тот не переопределён | `reasoning_content` |
+| `requireReasoning` | Поле reasoning обязательно у **каждого** assistant-сообщения — пустой строкой, если reasoning нет (thinking-модели DeepSeek) | Авто (эвристика) |
+| `maxTokensField` | Поле лимита вывода: `max_tokens` \| `max_completion_tokens` | `max_tokens` (`max_completion_tokens` — только явно) |
+| `requireAssistantAfterTool` | Нужен assistant-турн после `tool`-результатов (Mistral-семейство) | `false` (эвристика) |
+| `streamUsage` | Отправлять `stream_options: {include_usage: true}` в стриме | `true` |
+| `supportsToolChoice` | Провайдер понимает `tool_choice` | `true` (у нативного Ollama — `false`) |
 
-- **Где задаётся:** `POST /api/v2/models` — поле `requires_reasoning` (принимается и camelCase
-  `requiresReasoning`), `null` — сброс к автоопределению. Хранится в записи каталога модели, наружу
-  отдаётся `GET /api/v2/models` (`requiresReasoning`) **только если задано**; отсутствие поля означает
-  автоопределение, а не `false`.
-- **Область:** только провайдеры `openai`-типа (OpenAI-совместимый чат). Anthropic и Ollama поле не
-  используют — у них прежнее поведение.
-- **Зачем явный override:** у нас нет `compatibility`-полей каталога провайдера (как в opencode),
-  поэтому автоопределение опирается на доступные значения конфига; если шлюз называется иначе —
-  поле задаётся вручную.
+- **Приоритет:** явное значение **модели** → явное значение **провайдера** → **эвристика** →
+  встроенный дефолт (`resolveModelCompatibility`). Эвристики (`detectCompatibilityHeuristics`)
+  применяются только к незаданным полям: `requireReasoning` — тип/имя провайдера `deepseek`, URL с
+  `deepseek.com`, id модели с `deepseek`; `requireAssistantAfterTool` — `mistral`/`devstral`/`codestral`/
+  `pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField` и `streamUsage`
+  не эвристицируются: локальные OpenAI-совместимые серверы часто не знают `max_completion_tokens`.
+- **Где задаётся:** `POST`/`PATCH /api/v2/providers` — поле `compatibility` (дефолты провайдера);
+  `POST /api/v2/models` — `compatibility` (перекрытие для конкретной модели). `GET` отдаёт поле
+  **только если оно задано**.
+- **Семантика API — замена:** `compatibility` объект — **полная замена** (UI присылает весь черновик,
+  поэтому отсутствующее в объекте поле означает «авто», а не «сохранить прежнее»), `null`/`{}` — сброс,
+  поле не передано — без изменений. Неизвестное поле или неверный тип → `400 VALIDATION_ERROR`
+  (опечатка не теряется молча).
+- **Shorthand.** `ModelConfig.requiresReasoning` (поле `requires_reasoning`, оно же `requiresReasoning`
+  в `POST /api/v2/models`) — сокращение для `compatibility.requireReasoning`: `true`/`false` —
+  явное значение, `null` — сброс (снимает и shorthand, и `compatibility.requireReasoning`).
+  Нормализация — `compatibility.requireReasoning ?? requiresReasoning`. Поле оставлено для записей
+  каталога, созданных до появления `compatibility`.
+- **Кто использует:** OpenAI-совместимый путь (`providers/openai.ts`) — имя reasoning-поля, пустая
+  строка при `requireReasoning`, поле лимита вывода, assistant-«мост» после `tool`, `stream_options`;
+  Ollama — `think` и отказ от `tool_choice`; Anthropic — см. ниже. Значение входит в ключ кэша
+  провайдеров (`ProviderPool`), поэтому смена `compatibility` пересоздаёт экземпляр провайдера.
+
+```json
+// PATCH /api/v2/providers/deepseek-gw — дефолты провайдера
+{ "compatibility": { "reasoningField": "reasoning", "requireReasoning": true } }
+
+// POST /api/v2/models — перекрытие для одной модели (полная замена объекта)
+{ "id": "qwen3.7-flash", "provider": "routerai",
+  "compatibility": { "maxTokensField": "max_completion_tokens", "streamUsage": false } }
+
+// сброс к авто/дефолтам
+{ "compatibility": null }
+```
+
+**Anthropic: thinking-блоки и бюджет.** При `reasoningLevel: high` бюджет thinking считается от
+**фактического** `max_tokens` запроса (`resolveThinkingBudget`): не больше половины лимита и строго
+меньше него, минимум 1024 токена; если места нет (`max_tokens` ≤ минимума) — thinking не включается,
+запрос уходит обычным (вместо `400` «max_tokens must be greater than thinking.budget_tokens»). При
+включённом thinking `temperature` принудительно становится `1`, а `tool_choice: required` коэрсится в
+`auto` (Anthropic запрещает принудительный вызов). Подпись thinking-блока (`signature`) и
+opaque-данные `redacted_thinking` сохраняются в сообщении и возвращаются в историю в порядке
+`redacted_thinking → thinking → text → tool_use`; пустая подпись (`signature: ""`) допустима. При
+выключенном thinking блоки в историю не уходят. Наружу через API эти служебные поля не отдаются.
+
+**Ollama (`/api/chat`).** `think` включается для `low|medium|high` (`none` — `false`, `default` —
+поле не отправляется); `tool_choice` не отправляется (`compatibility.supportsToolChoice: false`
+по умолчанию для `type: 'ollama'`) — нативный сервер этого поля не знает.
 
 ### Git-операции (`git.*`, ADR-076)
 

@@ -385,6 +385,14 @@
 - **Мобильные тач-таргеты ≥40px** (ADR-044): секция помечена классом `credentials-panel` — якорь правил `styles/index.css` (кнопки, поля и нативный `select` формы привязки ≥ `--control-height-touch` в зонах телефон/планшет и при coarse-указателе).
 - i18n — `credentials.*` + `settings.category.credentials` (ru/en).
 
+## Совместимость провайдеров и моделей (ADR-117)
+
+- **Блок «Расширенные параметры»** — `components/admin/CompatibilityFields.tsx` в формах провайдера (`ProvidersPanel`) и модели (`ModelsPanel`, теперь create/edit): сворачиваемый, по умолчанию развёрнут, если у сущности уже сохранён `compatibility`, иначе свёрнут; бейдж «изменено» (`hasCompatibilityDraftChanges`).
+- **Контролы:** `reasoningField` — селект известных имён (`reasoning_content`/`reasoning`/`reasoning_text`) + «своё значение» (`COMPATIBILITY_CUSTOM`), `maxTokensField` — авто/`max_tokens`/`max_completion_tokens`, остальные четыре — tri-state «Авто / Да / Нет» (`CompatibilityTristate` = `''|'true'|'false'`): черновик строковый, поэтому явный `false` не схлопывается в «авто».
+- **Payload (`buildCompatibilityPayload`):** «авто» → поля в теле нет; полная очистка у сущности, где параметры были сохранены (`isCompatibilitySaved`), отправляет `compatibility: null` — сервер трактует объект как **полную замену**, поэтому частичный объект означает «остальное — авто». У сущности без сохранённых параметров пустой черновик не отправляет поле вовсе.
+- **API-слой** — `lib/api/compatibility.ts` (`CompatibilityDraft`, `emptyCompatibilityDraft`/`draftFromCompatibility`/`compatibilityFromDraft`, `hasCompatibilityDraftChanges`, `buildCompatibilityPayload`, `isCompatibilitySaved`); типы `ModelCompatibility` — из `@itphx/synth-shared/types` (без бандла core). Домены `lib/api/providers.ts` и `lib/api/models.ts` несут `compatibility` в DTO.
+- **i18n** — `admin.compatibility.*` (ru/en, паритет). Тесты: `ProvidersPanel.test.tsx`, `ModelsPanel.test.tsx` (payload/round-trip/сброс), `lib/api/compatibility.test.ts`.
+
 ## Мобильный / PWA
 
 - Полные конвенции (зоны ≤768 / 769–1199 / ≥1200, дроверы, touch-first, PWA-шелл, баннер обновления) — в [ADR-044](../../docs/arch_decisions/adr-044-mobile-adaptive-ui-pwa.md) и кратко в корневом `AGENTS.md`; классами/баннером конкретно здесь не дублируются.

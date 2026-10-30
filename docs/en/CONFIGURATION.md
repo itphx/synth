@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **новая секция «Каталог моделей»** — `ModelConfig.requiresReasoning` и `requires_reasoning` в `POST /api/v2/models` — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -1577,28 +1577,73 @@ The instance models are catalog records (the file `{dataDir}/models/<id>.json`, 
 `storage.backend=postgres`) typed as `ModelConfig` from `@itphx/synth-shared`. They are edited through
 the API: `POST /api/v2/models` (create/update; unknown fields are ignored) and `POST /api/v2/models/fetch`
 (sync with the provider catalog). Catalog fields (prices, `contextWindow`, `modalities`,
-`requiresReasoning`) are **model properties** — there are no separate `config.yaml` keys for them.
+`compatibility`) are **model properties** — there are no separate `config.yaml` keys for them.
 
-**`requiresReasoning` — compatibility with DeepSeek thinking models** (the behaviour is taken from
-opencode). Such a provider requires `reasoning_content` on **every** assistant message, even when the
-reasoning is empty; otherwise DeepSeek answers `400` “The `reasoning_content` in the thinking mode must
-be passed back to the API” — this broke the synthetic assistant prefill of the step-limit step.
+**Provider/model compatibility (`compatibility`, ADR-117, parity with opencode).** Protocol differences
+of compatible gateways and proxies (field names, output limit, `tool_choice`) are described by data
+rather than hardcoded per provider type. The same object exists on two levels:
+`ProviderConfig.compatibility` (defaults for all models of the provider) and `ModelConfig.compatibility`
+(overrides provider fields pointwise).
 
-| Value | Behaviour |
-|---|---|
-| not set (`undefined`) — **default** | Auto detection (`detectRequiresReasoning`): the provider type or name is `deepseek`, the URL contains `deepseek.com`, or the model id contains `deepseek` |
-| `true` | `reasoning_content` is always sent (empty string when there is no reasoning) — for DeepSeek-compatible gateways with a non-default provider/model name |
-| `false` | Force off — a model with `deepseek` in its name that does not require the field |
+| Field | Purpose | Default |
+|---|---|---|
+| `reasoningField` | Name of the reasoning field in openai-chat assistant messages. An explicit value itself turns on `requireReasoning` unless that is overridden | `reasoning_content` |
+| `requireReasoning` | The reasoning field is mandatory on **every** assistant message — an empty string when there is no reasoning (DeepSeek thinking models) | Auto (heuristic) |
+| `maxTokensField` | Output limit field: `max_tokens` \| `max_completion_tokens` | `max_tokens` (`max_completion_tokens` — explicit only) |
+| `requireAssistantAfterTool` | An assistant turn is required after `tool` results (Mistral family) | `false` (heuristic) |
+| `streamUsage` | Send `stream_options: {include_usage: true}` in the stream | `true` |
+| `supportsToolChoice` | The provider understands `tool_choice` | `true` (native Ollama — `false`) |
 
-- **Where it is set:** `POST /api/v2/models` — the `requires_reasoning` field (the camelCase
-  `requiresReasoning` is accepted too), `null` — reset to auto detection. It is stored in the model
-  catalog record and returned by `GET /api/v2/models` (`requiresReasoning`) **only when set**; an absent
-  field means auto detection, not `false`.
-- **Scope:** only providers of the `openai` type (OpenAI-compatible chat). Anthropic and Ollama do not
-  use the field — their behaviour is unchanged.
-- **Why an explicit override:** we have no provider-catalog `compatibility` fields (as opencode does), so
-  auto detection relies on the available config values; a gateway with a different name needs the field
-  to be set manually.
+- **Priority:** the explicit **model** value → the explicit **provider** value → the **heuristic** →
+  the built-in default (`resolveModelCompatibility`). Heuristics (`detectCompatibilityHeuristics`) apply
+  only to unset fields: `requireReasoning` — provider type/name `deepseek`, a URL containing
+  `deepseek.com`, a model id containing `deepseek`; `requireAssistantAfterTool` — `mistral`/`devstral`/
+  `codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField` and
+  `streamUsage` are not heuristically detected: local OpenAI-compatible servers often do not know
+  `max_completion_tokens`.
+- **Where it is set:** `POST`/`PATCH /api/v2/providers` — the `compatibility` field (provider defaults);
+  `POST /api/v2/models` — `compatibility` (override for a specific model). `GET` returns the field
+  **only when set**.
+- **API semantics — replacement:** the `compatibility` object is a **full replacement** (the UI sends
+  the whole draft, so a field missing from the object means “auto”, not “keep the previous value”),
+  `null`/`{}` — reset, the field absent — unchanged. An unknown field or a wrong type →
+  `400 VALIDATION_ERROR` (a typo is never silently lost).
+- **Shorthand.** `ModelConfig.requiresReasoning` (the `requires_reasoning` field, also `requiresReasoning`
+  in `POST /api/v2/models`) is a shorthand for `compatibility.requireReasoning`: `true`/`false` — an
+  explicit value, `null` — reset (clears both the shorthand and `compatibility.requireReasoning`).
+  Normalization — `compatibility.requireReasoning ?? requiresReasoning`. The field is kept for catalog
+  records created before `compatibility` existed.
+- **Who uses it:** the OpenAI-compatible path (`providers/openai.ts`) — the reasoning field name, an
+  empty string under `requireReasoning`, the output limit field, the assistant bridge after `tool`,
+  `stream_options`; Ollama — `think` and skipping `tool_choice`; Anthropic — see below. The value is part
+  of the provider cache key (`ProviderPool`), so changing `compatibility` recreates the provider instance.
+
+```json
+// PATCH /api/v2/providers/deepseek-gw — provider defaults
+{ "compatibility": { "reasoningField": "reasoning", "requireReasoning": true } }
+
+// POST /api/v2/models — override for a single model (the object is fully replaced)
+{ "id": "qwen3.7-flash", "provider": "routerai",
+  "compatibility": { "maxTokensField": "max_completion_tokens", "streamUsage": false } }
+
+// reset to auto/defaults
+{ "compatibility": null }
+```
+
+**Anthropic: thinking blocks and budget.** With `reasoningLevel: high` the thinking budget is derived
+from the **actual** request `max_tokens` (`resolveThinkingBudget`): no more than half the limit and
+strictly less than it, at least 1024 tokens; if there is no room (`max_tokens` ≤ the minimum) thinking is
+not enabled and the request goes as a regular one (instead of `400` “max_tokens must be greater than
+thinking.budget_tokens”). With thinking enabled `temperature` is forced to `1`, and
+`tool_choice: required` is coerced to `auto` (Anthropic forbids a forced call). The thinking block
+signature (`signature`) and the opaque `redacted_thinking` data are stored on the message and replayed
+into the history in the order `redacted_thinking → thinking → text → tool_use`; an empty signature
+(`signature: ""`) is valid. With thinking disabled the blocks are not replayed. These service fields are
+never exposed through the API.
+
+**Ollama (`/api/chat`).** `think` is enabled for `low|medium|high` (`none` — `false`, `default` — the
+field is not sent); `tool_choice` is not sent (`compatibility.supportsToolChoice: false` by default for
+`type: 'ollama'`) — the native server does not know this field.
 
 ### Git operations (`git.*`, ADR-076)
 
