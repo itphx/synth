@@ -80,7 +80,7 @@ beforeEach(() => {
 })
 
 describe('transportStore.sendMessage: контракт 202 (ADR-118 §3)', () => {
-  it('вне хода → реплика сразу в ленте по messageId ответа, статус «принято»', async () => {
+  it('вне хода → реплика сразу в ленте по messageId ответа', async () => {
     mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-new', mode: 'queue', position: null })
 
     const accepted = await useTransportStore.getState().sendMessage('s1', 'привет')
@@ -96,12 +96,11 @@ describe('transportStore.sendMessage: контракт 202 (ADR-118 §3)', () =>
       id: 'm-new',
       role: 'user',
       content: 'привет',
-      delivery: 'accepted',
     })
     expect(useChatStore.getState().pendingBySession['s1']).toBeUndefined()
   })
 
-  it('во время хода с позицией > 1 → «в очереди» и строка очереди', async () => {
+  it('во время хода с позицией > 1 → строка очереди', async () => {
     startTurn()
     mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-new', mode: 'queue', position: 2 })
 
@@ -109,14 +108,13 @@ describe('transportStore.sendMessage: контракт 202 (ADR-118 §3)', () =>
 
     expect(useChatStore.getState().messagesBySession['s1']!.at(-1)).toMatchObject({
       id: 'm-new',
-      delivery: 'queued',
     })
     const pending = useChatStore.getState().pendingBySession['s1']!
     expect(pending).toHaveLength(1)
     expect(pending[0]).toMatchObject({ id: 'm-new', content: 'следующее' })
   })
 
-  it('режим steer → маркер вмешательства, строки очереди нет', async () => {
+  it('режим steer → строка очереди не создаётся', async () => {
     startTurn()
     mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-steer', mode: 'steer', position: null })
 
@@ -124,7 +122,6 @@ describe('transportStore.sendMessage: контракт 202 (ADR-118 §3)', () =>
 
     expect(useChatStore.getState().messagesBySession['s1']!.at(-1)).toMatchObject({
       id: 'm-steer',
-      delivery: 'steering',
     })
     expect(useChatStore.getState().pendingBySession['s1']).toBeUndefined()
   })

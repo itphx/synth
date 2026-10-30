@@ -853,7 +853,6 @@ export function ChatTab({ tab }: ChatTabProps) {
               onDebug={handleDebug}
               onFork={handleFork}
               readOnly={isReadOnly}
-              onStop={handleStop}
               isSubagent={isSubagent}
               selectionMode={selectionMode}
               selectedIds={selectedIds}

@@ -8,7 +8,7 @@ export { parseTtl, startEphemeralSweeper, DEFAULT_EPHEMERAL_SWEEP_INTERVAL_MS } 
 export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
 export type { SessionStatsDeps } from './sessions/stats.js';
 export {
-  EventBus, INSTANCE_EVENT_CHANNEL, sseEventStream,
+  EventBus, INSTANCE_EVENT_CHANNEL,
   // ADR-118: адресная доставка (`recipient`), нумерация событий (`eventSeq`),
   // журнал событий для догона и общий гейт модели сообщений транспорта.
   EVENT_JOURNAL_SIZE, MAX_JOURNAL_SESSIONS,

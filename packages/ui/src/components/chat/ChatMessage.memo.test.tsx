@@ -116,7 +116,6 @@ function Harness({ initialMessages }: { initialMessages: MessageData[] }) {
         onRetry={noopMsg}
         onDebug={noopMsg}
         onFork={noopMsg}
-        onStop={noop}
         onToggleSelect={stableToggleSelect}
       />
     </I18nProvider>

@@ -331,8 +331,8 @@
   в backend): `{messageModel: 2, eventSeq: true, replay: true, version}`.
 - **Гейт версии клиента:** WS `/ws/events` без `messageModel=2` закрывается кодом `1008`
   (`messageModel=2 required`), SSE `GET /api/v2/events` отвечает `426 UPGRADE_REQUIRED`; догон —
-  `?since=`/`Last-Event-ID`, SSE-кадр несёт `id: <eventSeq>`. Сессионный SSE
-  `GET /:id/events` гейта и нумерации не имеет (остаток).
+  `?since=`/`Last-Event-ID`, SSE-кадр несёт `id: <eventSeq>`. Сессионного SSE нет —
+  канал наблюдения один (глобальный `GET /api/v2/events`, ADR-118).
 - **Миграция данных** — `storage/migrations.ts` (`migrateMessageStreamV2`, маркер
   `message-stream-v2`, запуск из `storage/instance-meta.ts`): построчно через `updateMessage`,
   идемпотентна, старые ответы разбиваются по итерациям; PostgreSQL — миграция `029`.

@@ -31,14 +31,6 @@ export interface IntermediateTextBlockData {
  */
 export type ResponseStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit' | 'interrupted'
 
-/**
- * ADR-118 §4: статус доставки сообщения, отражённый в ленте.
- * - `queued` — принято в очередь и ждёт своей позиции;
- * - `accepted` — принято и будет обработано следующим;
- * - `steering` — вмешательство в активный ход (`steer`/`interrupt`).
- */
-export type MessageDelivery = 'queued' | 'accepted' | 'steering'
-
 export interface MessageData {
   /** Позиционный индекс в истории (серверный, ADR-118: не идентичность). */
   index: number
@@ -92,11 +84,6 @@ export interface MessageData {
   timestamp?: string
   qa_pass?: boolean
   qa_reason?: string
-  /**
-   * ADR-118 §4: статус доставки сообщения (UI-состояние, не поле DTO).
-   * Показывается маркером у сообщения в ленте.
-   */
-  delivery?: MessageDelivery
 }
 
 /**
@@ -326,8 +313,6 @@ interface ChatStore {
   removeMessageById: (sessionId: string, messageId: string) => void
   /** ADR-118 §5: смена статуса сообщения («финал» = смена статуса). */
   setMessageStatus: (sessionId: string, messageId: string, status: MessageStatus) => void
-  /** ADR-118 §4: отметка статуса доставки сообщения в ленте. */
-  setMessageDelivery: (sessionId: string, messageId: string, delivery: MessageDelivery) => void
 
   /** ADR-118 §4: upsert части по `{messageId, partId}`. */
   upsertPart: (sessionId: string, messageId: string, partId: string, part: LivePart) => void
@@ -545,17 +530,6 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (at === -1) return s
       const next = [...current]
       next[at] = { ...next[at]!, status }
-      return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
-    }),
-
-  setMessageDelivery: (sessionId, messageId, delivery) =>
-    set((s) => {
-      const current = s.messagesBySession[sessionId]
-      if (!current) return s
-      const at = current.findIndex((m) => m.id === messageId)
-      if (at === -1) return s
-      const next = [...current]
-      next[at] = { ...next[at]!, delivery }
       return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
     }),
 

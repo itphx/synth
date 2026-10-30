@@ -57,7 +57,8 @@ import { createProjectAccess } from './projects.js';
  *
  * RBAC: core-фабрика параметризуется `resolveUserId`/`resolveOwner`/`resolveAuthor`,
  * `canAccess` (владелец|ADMIN) и EventHub-хуками; remote/hybrid-ветки отключены
- * (getRemoteClient не передаётся). `GET /:id/events` на backend не регистрируется.
+ * (getRemoteClient не передаётся). Сессионного SSE нет: наблюдение за ходом —
+ * единственный глобальный канал `GET /api/v2/events` (ADR-118).
  *
  * Исключения из общего prefix-guard'а (собственные правила, роуты зарегистрированы
  * до guard'а): `/:id/mcp` (владелец|ADMIN, ADR-071 §2.4) и `/:id/secrets`
@@ -763,7 +764,6 @@ export function createSessionRoutes(
       promptMiddleware: [createRateLimiter(30, 60_000)],
       forkMiddleware: [forkRateLimit],
       mergeMiddleware: [mergeRateLimit],
-      enableSessionEvents: false,
       resolveDefaultAgent,
       // ADR-036: право видеть РЕАЛЬНЫЕ значения секретов (плейсхолдер → значение)
       // в обычном чтении сессии (`GET /sessions/:id`, `GET /sessions/:id/messages`,

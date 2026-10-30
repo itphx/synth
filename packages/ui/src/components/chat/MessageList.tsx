@@ -84,7 +84,6 @@ interface MessageListProps {
   onDebug: (msg: MessageData) => void
   onFork: (msg: MessageData) => void
   readOnly?: boolean
-  onStop: () => void
   /** true если сессия — дочерняя (сабагент) */
   isSubagent?: boolean
   selectionMode?: boolean
@@ -131,7 +130,6 @@ export function MessageList({
   onDebug,
   onFork,
   readOnly,
-  onStop,
   isSubagent,
   selectionMode,
   selectedIds,
@@ -312,7 +310,6 @@ export function MessageList({
         // ADR-118 §1: заголовок агента/модели — только у первого сегмента хода.
         showHeader={first}
         compact={!first}
-        onStop={onStop}
         retry={retry}
         onRetryNow={onRetryNow}
         onCancelRetry={onCancelRetry}

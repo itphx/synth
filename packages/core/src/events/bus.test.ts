@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { EventBus, sseEventStream, EVENT_JOURNAL_SIZE, INSTANCE_EVENT_CHANNEL } from './bus.js';
+import { EventBus, EVENT_JOURNAL_SIZE, INSTANCE_EVENT_CHANNEL } from './bus.js';
 import type { BusEvent } from '@itphx/synth-shared';
 
 describe('EventBus', () => {
@@ -300,104 +300,5 @@ describe('EventBus — eventSeq и журнал событий (ADR-118 §6)', (
     expect(journal).toHaveLength(EVENT_JOURNAL_SIZE);
     // Последнее событие в буфере — самое свежее.
     expect((journal[journal.length - 1] as BusEvent).data.i).toBe(EVENT_JOURNAL_SIZE + 24);
-  });
-});
-
-describe('sseEventStream', () => {
-  let bus: EventBus;
-
-  beforeEach(() => {
-    bus = new EventBus();
-  });
-
-  it('yields события по мере публикации', async () => {
-    const abort = new AbortController();
-    const generator = sseEventStream(bus, 's1', abort.signal);
-
-    // Публикуем с задержкой — генератор ждёт в Promise
-    setTimeout(() => {
-      bus.publish('s1', 'part.delta', { content: 'hello' });
-    }, 10);
-
-    const first = await generator.next();
-    expect(first.done).toBe(false);
-    expect(first.value.type).toBe('part.delta');
-    expect(first.value.data.content).toBe('hello');
-
-    // Закрываем
-    abort.abort();
-    const done = await generator.next();
-    expect(done.done).toBe(true);
-  });
-
-  it('буферизует события в ожидании итерации', async () => {
-    const abort = new AbortController();
-    const generator = sseEventStream(bus, 's1', abort.signal);
-
-    // Публикуем event пока генератор в Promise-await (после первого next())
-    const firstPromise = generator.next();
-
-    // Даём микрозадаче subscribe выполниться
-    await new Promise((r) => setTimeout(r, 0));
-
-    bus.publish('s1', 'message.added', { index: 0 });
-    bus.publish('s1', 'message.added', { index: 1 });
-
-    const first = await firstPromise;
-    expect(first.value.type).toBe('message.added');
-    expect(first.value.data.index).toBe(0);
-
-    const second = await generator.next();
-    expect(second.value.type).toBe('message.added');
-    expect(second.value.data.index).toBe(1);
-
-    abort.abort();
-    await generator.next();
-  });
-
-  it('AbortSignal обрывает до итерации', async () => {
-    const abort = new AbortController();
-    abort.abort();
-    const generator = sseEventStream(bus, 's1', abort.signal);
-
-    const result = await generator.next();
-    expect(result.done).toBe(true);
-    expect(bus.subscriberCount('s1')).toBe(0);
-  });
-
-  it('AbortSignal обрывает во время ожидания Promise', async () => {
-    const abort = new AbortController();
-    const generator = sseEventStream(bus, 's1', abort.signal);
-
-    // Запускаем итерацию (subscribe, затем Promise-await)
-    const resultPromise = generator.next();
-
-    // Ждём микрозадачу чтобы subscribe выполнился
-    await new Promise((r) => setTimeout(r, 0));
-
-    // Абортим пока ждёт Promise
-    abort.abort();
-
-    const result = await resultPromise;
-    expect(result.done).toBe(true);
-    expect(bus.subscriberCount('s1')).toBe(0);
-  });
-
-  it('finally отписывает подписчика при обрыве после yield', async () => {
-    const abort = new AbortController();
-    const generator = sseEventStream(bus, 's1', abort.signal);
-
-    // Запускаем итерацию
-    const firstPromise = generator.next();
-    await new Promise((r) => setTimeout(r, 0));
-
-    bus.publish('s1', 'part.delta', {});
-    await firstPromise;
-
-    // Абортим
-    abort.abort();
-    const done = await generator.next();
-    expect(done.done).toBe(true);
-    expect(bus.subscriberCount('s1')).toBe(0);
   });
 });

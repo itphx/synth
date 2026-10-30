@@ -198,8 +198,7 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
   It supports the client messages `ping`→`pong`, `cancel`,
   `permission_reply`, `permission_hold`. EventHub automatically subscribes
   the client to all of the user's sessions.
-- Core standalone: the same WS `/ws/events` and SSE `/api/v2/events`;
-  additionally there is a session SSE `GET /api/v2/sessions/:id/events`.
+- Core standalone: the same WS `/ws/events` and SSE `/api/v2/events`.
 - Both send the keepalive comment `:keepalive` every 30 s.
 
 > Event transport — only WS `/ws/events` and SSE `GET /api/v2/events`.
@@ -423,7 +422,6 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | POST | `/api/v2/sessions/:id/permissions/:approvalId` | both | auth (**write**) | Answer to a permission request (`permission.asked`) **over HTTP** — the path for an SSE/non-WS client (the `permission_reply` WS frame is unavailable there). Body: `{action: 'allow'\|'deny'\|'hold', once?: boolean, turn_id?: string, digest?: string}`. `allow`/`deny` — the same semantics as over WS: `permission.replied` is published, and with an approval registry attached only the holder of a covering grant is accepted (ADR-106 Ф3); `once` — “allow once” (do not add an allow rule to the session); `turn_id`/`digest` — binding to the turn (compared with the registry binding). `hold` — “stop the timer”: `permission.hold` is published (auto-deny by timeout is disabled), the registry is untouched. Responses: 200 `{status:'ok', action}`; 400 `VALIDATION_ERROR` (unknown `action` or empty `approvalId`); 403 `APPROVAL_DENIED` with `details.reason` (`unknown_approval`\|`already_consumed`\|`turn_mismatch`\|`digest_mismatch`\|`no_grant`) — the answer is rejected, the action is not performed (`already_consumed` means for the client “already answered”); 403/404 — by the general session access rules (see below). Access — the boundary prefix guard (`write` kind derived from the method); there are no checks in the handler (invariant 16) |
 | POST | `/api/v2/sessions/:id/resume-subagent` | both | auth | Resume a subagent → 202 |
 | POST | `/api/v2/sessions/:id/summarize` | both | auth | Request summarization `{status:'enqueued', stream_id}` |
-| GET | `/api/v2/sessions/:id/events` | core | auth | Session SSE stream |
 | POST | `/api/v2/sessions/:id/debug-system-message` | backend | auth | Debug system message |
 | GET | `/api/v2/sessions/:id/optimization` | backend | auth | Context optimization settings |
 | PATCH | `/api/v2/sessions/:id/optimization` | backend | auth | Update the optimization settings |

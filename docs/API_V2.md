@@ -198,8 +198,7 @@ interface BusEvent {
   Поддерживает клиентские сообщения `ping`→`pong`, `send_message`, `cancel`,
   `permission_reply`, `permission_hold`. EventHub автоматически подписывает
   клиента на все сессии пользователя.
-- Core standalone: тот же WS `/ws/events` и SSE `/api/v2/events`;
-  дополнительно есть сессионный SSE `GET /api/v2/sessions/:id/events`.
+- Core standalone: тот же WS `/ws/events` и SSE `/api/v2/events`.
 - Оба отдают keepalive-комментарий `:keepalive` раз в 30 с.
 
 > Транспорт событий — только WS `/ws/events` и SSE `GET /api/v2/events`.
@@ -219,9 +218,9 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 поток; дубли отсекаются по `eventSeq`. SSE-кадр несёт строку `id: <eventSeq>` перед
 `data:` — подписчик возвращает её в `Last-Event-ID`.
 
-> Сессионный SSE `GET /api/v2/sessions/:id/events` (core-only) — вспомогательный
-> поток: гейта `messageModel` и нумерации `id:` у него нет. Контракт наблюдения за
-> ходом — глобальные WS/SSE + события §3.3.
+> Контракт наблюдения за ходом — только глобальные WS/SSE + события §3.3.
+> Сессионного SSE нет (`GET /api/v2/sessions/:id/events` удалён, ADR-118): второй
+> поток без гейта `messageModel` и нумерации `id:` давал двойную доставку.
 
 > **Тайминги шага.** `step.finished` несёт аддитивное `timings?: {chunks,
 > firstChunkMs?, lastChunkMs?}` — число чанков шага и моменты первого/последнего
@@ -484,7 +483,6 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/sessions/:id/background` | оба | auth (**write**) | Перевести идущие блокирующие прогоны сессии в фон (detach, ADR-111): тело необязательно `{type?: 'subagent'\|'process'}` (нет тела/поля — все); → 200 `{detached: [{id, kind, title?}], sessionId, failed?: [{id, kind, code, message?}]}`; `failed` присутствует только при непустом массиве (код `BACKGROUND_LIMIT` — исчерпан лимит фоновых прогонов, `DETACH_FAILED` — прочий отказ; остальные прогоны при этом переводятся); пустой `detached` — нечего переводить (**не** ошибка, запрос идемпотентен); 400 `VALIDATION_ERROR` (неизвестный `type`), 400 `DETACH_UNSUPPORTED` (удалённая сессия гибрида — живого хэндла прогона нет), 403/404 — по правилам доступа к сессии (см. ниже) |
 | POST | `/api/v2/sessions/:id/resume-subagent` | оба | auth | Возобновить саб-агента → 202 |
 | POST | `/api/v2/sessions/:id/summarize` | оба | auth | Запросить суммаризацию `{status:'enqueued', stream_id}` |
-| GET | `/api/v2/sessions/:id/events` | core | auth | Сессионный SSE-стрим |
 | POST | `/api/v2/sessions/:id/debug-system-message` | backend | auth | Отладочное системное сообщение |
 | GET | `/api/v2/sessions/:id/optimization` | backend | auth | Настройки оптимизации контекста |
 | PATCH | `/api/v2/sessions/:id/optimization` | backend | auth | Обновить настройки оптимизации |

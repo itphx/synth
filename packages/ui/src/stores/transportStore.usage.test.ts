@@ -176,13 +176,12 @@ describe('transportStore dispatcher: step.finished — учёт шага (зам
 })
 
 describe('transportStore dispatcher: очередь и приём (ADR-118 §4)', () => {
-  it('message.accepted → маркер доставки и строка очереди без потери текста', () => {
+  it('message.accepted → строка очереди без потери текста', () => {
     useChatStore.getState().upsertMessage('s1', {
       index: 0,
       id: 'm-user',
       role: 'user',
       content: 'привет',
-      delivery: 'accepted',
       disabled: false,
       pinned: false,
       hidden: false,
@@ -192,30 +191,19 @@ describe('transportStore dispatcher: очередь и приём (ADR-118 §4)'
 
     dispatch(makeEvent('message.accepted', 's1', { messageId: 'm-user', mode: 'queue', position: 2 }))
 
-    const msg = useChatStore.getState().messagesBySession['s1']![0]!
-    expect(msg.delivery).toBe('queued')
     const pending = useChatStore.getState().pendingBySession['s1']!
     expect(pending).toHaveLength(1)
     expect(pending[0]).toMatchObject({ id: 'm-user', content: 'привет' })
     expect(pending[0]!.sending).toBe(false)
   })
 
-  it('message.accepted с mode=steer → маркер вмешательства в ход', () => {
+  it('message.accepted с mode=steer не создаёт маркера доставки у сообщения', () => {
     useChatStore.getState().upsertMessage('s1', {
       index: 0, id: 'm1', role: 'user', content: 'в ход',
       disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:00Z',
     })
     dispatch(makeEvent('message.accepted', 's1', { messageId: 'm1', mode: 'steer', position: null }))
-    expect(useChatStore.getState().messagesBySession['s1']![0]!.delivery).toBe('steering')
-  })
-
-  it('message.accepted первого в очереди → «принято» (не «в очереди»)', () => {
-    useChatStore.getState().upsertMessage('s1', {
-      index: 0, id: 'm1', role: 'user', content: 'x',
-      disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:00Z',
-    })
-    dispatch(makeEvent('message.accepted', 's1', { messageId: 'm1', mode: 'queue', position: 1 }))
-    expect(useChatStore.getState().messagesBySession['s1']![0]!.delivery).toBe('accepted')
+    expect(useChatStore.getState().messagesBySession['s1']![0]).not.toHaveProperty('delivery')
   })
 
   it('queue.state обновляет только счётчики (без текста и автора)', () => {

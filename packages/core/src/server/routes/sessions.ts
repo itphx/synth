@@ -1,4 +1,3 @@
-import { ReadableStream } from 'node:stream/web';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
@@ -7,7 +6,7 @@ import type { SessionTree } from '../../sessions/manager.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { Message, Session, QuestionStatus, SessionWorktree, AttachmentsConfig } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
-import { enqueueUserMessage, enqueueSteerMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
+import { enqueueUserMessage, enqueueSteerMessage, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
@@ -208,8 +207,6 @@ export interface SessionRoutesOptions {
   forkMiddleware?: Middleware[];
   /** Доп. middleware на POST /:id/messages/merge (rate limiter; backend). */
   mergeMiddleware?: Middleware[];
-  /** Регистрировать core-only роут `GET /:id/events`. Core — true; backend — false. */
-  enableSessionEvents?: boolean;
   messages?: Partial<SessionRouteMessages>;
   /**
    * Агент по умолчанию для новой сессии без `settings.agentRole` (runtime-настройка
@@ -448,7 +445,6 @@ export function createSessionRoutes(
   const resolveUserId = opts.resolveUserId ?? (() => LOCAL_USER_ID);
   const resolveOwner = opts.resolveOwner ?? resolveUserId;
   const forkWithOwner = opts.forkWithOwner ?? false;
-  const enableSessionEvents = opts.enableSessionEvents ?? true;
   const resolveAuthor = opts.resolveAuthor ?? (() => LOCAL_USER_ID);
   const resolveDefaultAgent = opts.resolveDefaultAgent ?? (() => DEFAULT_AGENT_ID);
   const promptMessageId = opts.promptMessageId ?? 'generated';
@@ -1936,42 +1932,6 @@ export function createSessionRoutes(
     }
     return c.json({ status: 'enqueued', stream_id: streamId });
   });
-
-  // Core-only: сессионный SSE-стрим. У managed backend есть только глобальный
-  // `/api/v2/events`, поэтому backend передаёт enableSessionEvents: false.
-  if (enableSessionEvents) {
-    app.get('/:id/events', auth.requireAuth, async (c) => {
-      const sessionId = c.req.param('id');
-      const signal = c.req.raw.signal;
-
-      return new Response(
-        new ReadableStream({
-          async start(controller) {
-            const encoder = new TextEncoder();
-            try {
-              for await (const event of sseEventStream(eventBus, sessionId, signal)) {
-                const line = `data: ${JSON.stringify(event)}\n\n`;
-                controller.enqueue(encoder.encode(line));
-              }
-            } catch {
-              // disconnected
-            } finally {
-              try { controller.close(); } catch { /* already closed */ }
-            }
-          },
-        }),
-        {
-          status: 200,
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'X-Accel-Buffering': 'no',
-          },
-        },
-      );
-    });
-  }
 
   app.get('/:id/children', auth.requireAuth, async (c) => {
     const children = await sessionManager.getChildren(c.req.param('id'));

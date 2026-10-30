@@ -5,7 +5,7 @@
 
 **Решение:** `EventBus` — async pub/sub для событий сессии. Публикация события адресуется `sessionId` + `type` + `data`; все подписчики этой сессии получают его независимо от того, кто инициировал действие (отправитель, наблюдатель, фоновая задача). Один канал событий — все клиенты видят одно и то же.
 
-**Контекст:** прототип (ADR-009 в `archive/AGENTS_OLD.md`) ввёл `SessionEventBus` на asyncio.Queue, чтобы UI-наблюдатели, открывшие сессию, видели streaming так же, как отправитель. Публиковались события `message_added`, `stream_start`, `stream_chunk`, `stream_done`, `queue_stalled` — и SSE-эндпоинт `/api/sessions/{id}/events` отдавал их наблюдателям. В TS-стеке сохранены и суть (единый канал событий сессии), и SSE-потребитель (см. `sseEventStream`).
+**Контекст:** прототип (ADR-009 в `archive/AGENTS_OLD.md`) ввёл `SessionEventBus` на asyncio.Queue, чтобы UI-наблюдатели, открывшие сессию, видели streaming так же, как отправитель. Публиковались события `message_added`, `stream_start`, `stream_chunk`, `stream_done`, `queue_stalled` — и SSE-эндпоинт `/api/sessions/{id}/events` отдавал их наблюдателям. В TS-стеке сохранена суть (единый канал событий сессии); сессионного SSE-потребителя больше нет — наблюдение идёт через WS `/ws/events` и глобальный SSE `GET /api/v2/events` (ADR-024, ADR-118).
 
 **Эволюция:** `EventBus` — локальный слой публикации; поверх него ADR-024 добавил сетевое распределение (EventHub на backend, TransportClient в UI). Шина осталась транспортонезависимой: она не знает про WS/SSE.
 
@@ -14,7 +14,6 @@
 | Компонент | Файл | Назначение |
 |---|---|---|
 | `EventBus` | `packages/core/src/events/bus.ts` | subscribe/unsubscribe по `sessionId`, `subscribeAll` (глобальные подписчики), `publish`, диагностика по подписчикам |
-| `sseEventStream()` | `packages/core/src/events/bus.ts` | async generator-обёртка для SSE-подписки на сессию |
 | Типы событий | `packages/shared/src/types/index.ts` (`EventType`, `BusEvent`) | единый перечень: `stream.*`, `message.*`, `queue.stalled`, `permission.*`, `question.*`, `plan.approved`, `todos.updated`, `subagent.*`, `tool_call.*`, `context.*` и др. |
 
 **Особенности реализации:**

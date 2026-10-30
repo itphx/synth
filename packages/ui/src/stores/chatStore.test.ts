@@ -324,32 +324,7 @@ describe('chatStore: setMessageStatus (ADR-118 §5)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 5. Доставка сообщения (ADR-118 §4)
-// ---------------------------------------------------------------------------
-
-describe('chatStore: setMessageDelivery (ADR-118 §4)', () => {
-  it('отражает accepted / queued / steering, не задевая прочие поля', () => {
-    useChatStore.getState().upsertMessage('s1', msg({ index: 0, id: 'm1', content: 'привет' }))
-
-    for (const delivery of ['accepted', 'queued', 'steering'] as const) {
-      useChatStore.getState().setMessageDelivery('s1', 'm1', delivery)
-
-      const list = useChatStore.getState().messagesBySession['s1']!
-      expect(list).toHaveLength(1)
-      expect(list[0]).toMatchObject({ id: 'm1', content: 'привет', delivery })
-    }
-  })
-
-  it('неизвестный id — no-op', () => {
-    useChatStore.getState().upsertMessage('s1', msg({ index: 0, id: 'm1' }))
-    useChatStore.getState().setMessageDelivery('s1', 'missing', 'queued')
-
-    expect(useChatStore.getState().messagesBySession['s1']![0]!.delivery).toBeUndefined()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// 6. Очередь: setQueueCounts (ADR-118 §4)
+// 5. Очередь: setQueueCounts (ADR-118 §4)
 // ---------------------------------------------------------------------------
 
 describe('chatStore: счётчики очереди (ADR-118 §4)', () => {
@@ -383,7 +358,7 @@ describe('chatStore: счётчики очереди (ADR-118 §4)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 7. removeMessageById и «закрепить/обработать все сегменты хода разом»
+// 6. removeMessageById и «закрепить/обработать все сегменты хода разом»
 // ---------------------------------------------------------------------------
 
 describe('chatStore: удаление и пакетная правка сегментов хода', () => {
@@ -444,7 +419,7 @@ describe('chatStore: удаление и пакетная правка сегм�
 })
 
 // ---------------------------------------------------------------------------
-// 8. Мультисессионность
+// 7. Мультисессионность
 // ---------------------------------------------------------------------------
 
 describe('chatStore: состояние по сессиям не смешивается', () => {

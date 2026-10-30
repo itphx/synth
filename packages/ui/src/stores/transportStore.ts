@@ -14,7 +14,7 @@ import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import type { TransportMode } from './useUIStore'
-import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageDelivery } from './chatStore'
+import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData } from './chatStore'
 import { partText } from '@/lib/messageParts'
 import type { PromptAcceptedResponse } from '@itphx/synth-shared/types'
 import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared/types'
@@ -498,7 +498,6 @@ export function createDispatcher(): EventDispatcher {
       upsertMessage,
       updateMessageById,
       setMessageStatus,
-      setMessageDelivery,
       upsertPart,
       appendPartDelta,
       startTurn,
@@ -575,19 +574,11 @@ export function createDispatcher(): EventDispatcher {
     switch (type) {
       // ADR-118 §4: `message.accepted` — **адресное** подтверждение приёма
       // (доходит только отправителю). Несёт `messageId`, `mode`, `position`.
-      // Содержания сообщения в событии нет — статус доставки отражаем маркером
-      // в ленте, а саму реплику добавляет `message.delivered`.
+      // Содержания сообщения в событии нет — саму реплику добавляет
+      // `message.delivered`; здесь ведём только строку очереди и её позицию.
       case 'message.accepted': {
         const messageId = (payload.messageId as string) || ''
         if (!messageId) break
-        const mode = (payload.mode as string) || 'queue'
-        const position = typeof payload.position === 'number' ? payload.position : null
-        // `queue` — реплика ждёт очереди (`position` — её номер), `steer`/
-        // `interrupt` — вмешательство в активный ход.
-        const delivery = mode === 'queue'
-          ? (position != null && position > 1 ? 'queued' : 'accepted')
-          : 'steering'
-        setMessageDelivery(sid, messageId, delivery)
         // Строка очереди: id известен; текст берём из уже показанной
         // оптимистичной строки (сервер его в событии не присылает — утечка снята).
         // Неизвестной строки нет — заполнится из истории при доставке.
@@ -1726,11 +1717,6 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     })
 
     // Реплика показывается оптимистично сразу по `messageId` из ответа.
-    // Статус доставки: `queue` → «принято»/«в очереди», `steer`/`interrupt` →
-    // «вмешательство» (ADR-118 §4).
-    const delivery: MessageDelivery = accepted.mode === 'queue'
-      ? (accepted.position != null && accepted.position > 1 ? 'queued' : 'accepted')
-      : 'steering'
     const chat = useChatStore.getState()
     const msgs = chat.messagesBySession[sessionId] || []
     const nextIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
@@ -1742,7 +1728,6 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       ord: null,
       turn_id: null,
       status: 'completed',
-      delivery,
       agent_role: agentRole ?? null,
       provider: provider ?? null,
       model: model ?? null,

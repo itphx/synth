@@ -108,8 +108,6 @@ interface ChatMessageProps {
    * ADR-118 §1: сегмент хода, склеенный с предыдущим (без визуального зазора).
    */
   compact?: boolean
-  /** ADR-118 §5: остановка живого хода (кнопка «Стоп» в живом сообщении). */
-  onStop?: () => void
   /** Статус повторной попытки — показывается в живом сообщении. */
   retry?: StreamRetry | null
   onRetryNow?: () => void
@@ -141,7 +139,6 @@ function ChatMessageInner({
   pending,
   showHeader = true,
   compact = false,
-  onStop,
   retry,
   onRetryNow,
   onCancelRetry,
@@ -348,18 +345,6 @@ function ChatMessageInner({
   // ассистент может вернуть картинку/файл через тул).
   const messageParts = message.parts ?? []
   const hasAttachments = hasMediaParts(messageParts)
-
-  /**
-   * ADR-118 §4: статус доставки реплики — маркер у сообщения
-   * («принято»/«в очереди»/«вмешательство»).
-   */
-  const deliveryLabel = message.delivery
-    ? message.delivery === 'queued'
-      ? t('chat.message.delivery.queued')
-      : message.delivery === 'steering'
-        ? t('chat.message.delivery.steering')
-        : t('chat.message.delivery.accepted')
-    : null
 
   // ADR-046 §7.1: reasoning / intermediate / tool-call блоки. Для assistant
   // рендерятся в пузыре напрямую, для summary/debug — внутри Notice-тела.
@@ -756,8 +741,8 @@ function ChatMessageInner({
 
         {/*
           ADR-118 §5: живое сообщение несёт индикатор активности хода — прежняя
-          отдельная плашка `StreamingPlaceholder` теперь здесь: live-статистика,
-          «В фон» (ADR-111 §detach) и «Стоп».
+          отдельная плашка `StreamingPlaceholder` теперь здесь: live-статистика
+          и «В фон» (ADR-111 §detach). Остановка хода — общей кнопкой композера.
         */}
         {isLive && (
           <div className="mb-1 flex flex-wrap items-center gap-1 self-start text-[11px] text-muted-foreground">
@@ -786,18 +771,6 @@ function ChatMessageInner({
                 {t('chat.background.move')}
               </button>
             )}
-            {onStop && (
-              <button
-                type="button"
-                onClick={onStop}
-                title={t('chat.input.stop')}
-                aria-label={t('chat.input.stop')}
-                className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-destructive transition-colors hover:bg-destructive/10"
-              >
-                <Icon name="stop" className="size-3" />
-                {t('chat.input.stop')}
-              </button>
-            )}
           </div>
         )}
 
@@ -814,16 +787,6 @@ function ChatMessageInner({
             onOriginClick={handleOriginClick}
             processing={pending?.status === 'processing'}
           />
-        )}
-
-        {deliveryLabel && (
-          <span
-            className="mb-1 inline-flex items-center gap-1 self-end rounded-sm bg-muted/40 px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground"
-            data-testid="message-delivery"
-          >
-            <Icon name="time" className="size-3" />
-            {deliveryLabel}
-          </span>
         )}
 
         {hasAttachments && sessionId && (

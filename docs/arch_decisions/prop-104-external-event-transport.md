@@ -120,7 +120,7 @@ Sticky-сессии (`backend.service.sessionAffinity: ClientIP` на Service ba
 | Шина событий — **in-process**: `EventBus` держит `_subscribers` (по `sessionId`) и `_globalSubscribers` в памяти процесса | `packages/core/src/events/bus.ts:22-24` |
 | Публикация — синхронный обход подписчиков в памяти; исключение обработчика глушится; без подписчиков — предупреждение «EVENT LOST» | `packages/core/src/events/bus.ts:89-117` |
 | Инстансный канал ADR-101 — та же шина: `publishInstance` → `INSTANCE_EVENT_CHANNEL = 'instance'` | `packages/core/src/events/bus.ts:16`, `packages/core/src/events/bus.ts:71-73` |
-| SSE-хелпер шины (`sseEventStream`) — обёртка над локальной подпиской | `packages/core/src/events/bus.ts:132-169` |
+| SSE-хелпер шины (`sseEventStream`) — **удалён** (сессионного SSE нет; канал один — глобальный `GET /api/v2/events`, ADR-118) | — |
 | Managed-хаб `EventHub` подписывается на **локальную** шину: per-session — `eventBus.subscribe`, watch-all — `eventBus.subscribeAll` | `packages/backend/src/events/hub.ts:31-34`, `packages/backend/src/events/hub.ts:117`, `packages/backend/src/events/hub.ts:136` |
 | `EventBus` и `EventHub` создаются **в одном процессе** (`new EventBus()` → `new EventHub(eventBus, …)`) — общая шина на процесс | `packages/backend/src/app/deps.ts:285`, `packages/backend/src/app/deps.ts:672` |
 | Standalone-core: та же шина, отдельный инстанс `EventBus` | `packages/core/src/server/app/deps.ts:316` |
