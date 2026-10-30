@@ -86,6 +86,13 @@ export interface ProcessFinalizeState {
   roleBlockedAgent?: string;
   toolIteration: number;
   maxIterations: number;
+  /**
+   * Шаг-лимит (`AgentDefinition.maxSteps`) действительно исполнялся: в запросе
+   * был синтетический assistant-префилл с требованием «только текст». Эпилог
+   * подставляет отчёт `session.steps_limit` и `metadata.step_limit_reached`.
+   * Не задано (прежние вызовы/лимит не наступил) — прежнее поведение.
+   */
+  stepLimitExecuted?: boolean;
   lastIterationPromptChars: number;
   allReasoning: Array<{ text: string; iteration: number }>;
   allIntermediateTexts: Array<{ text: string; iteration: number }>;
@@ -258,12 +265,14 @@ export async function runProcessFinalize(
   const {
     cancelledBeforeFinal, lastChunkModel, provider, providerName, effectiveAgentRole,
     allToolCalls, allIntermediateTexts, allReasoning,
-    lastIterationPromptChars, promptMeta, toolIteration, maxIterations,
+    lastIterationPromptChars, promptMeta, maxIterations,
     hadDeny, routingDecision, effectiveReasoningLevel,
     roleBlocked, roleBlockedTool, roleBlockedAgent,
     currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft, outboundParts,
   } = state;
   let { finalContent, finalModel, finalUsage, fallbackI18n } = state;
+  /** Шаг-лимит реально исполнялся (синтетический assistant-префилл в запросе). */
+  const stepLimitReached = state.stepLimitExecuted === true;
 
   // ADR-104 (решение 2026-10-28): ход заканчивается — снимаем неприменённые
   // инъекции из очереди. Границы шага больше не будет, поэтому сообщение,
@@ -354,10 +363,14 @@ export async function runProcessFinalize(
     return {};
   }
 
-  // 7. Handle max iterations exceeded
-  if (toolIteration >= maxIterations && !finalContent) {
-    finalContent = sm('session.max_iterations');
-    fallbackI18n = i18nMeta('session.max_iterations');
+  // 7. Handle step limit reached (механика opencode): отчёт по лимиту шагов —
+  // свой текст (паритет с сабагентом `task.steps_limit_empty`), а не
+  // «лимит итераций инструментов». Флаг приходит из цикла: только исполненный
+  // шаг-лимит даёт такой отчёт, иначе прежние ветки фоллбеков.
+  if (stepLimitReached && !finalContent) {
+    const params = { limit: String(maxIterations) };
+    finalContent = sm('session.steps_limit', params);
+    fallbackI18n = i18nMeta('session.steps_limit', params);
   }
 
   // Защита от пустого финального ответа: если цикл завершился (в т.ч.
@@ -464,7 +477,7 @@ export async function runProcessFinalize(
     finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
     MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
     qaPass, qaReason,
-    { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), duration_ms: durationMs },
+    { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), ...(stepLimitReached ? { step_limit_reached: true } : {}), duration_ms: durationMs },
     promptMeta,
     messageCost,
     currentDraft ?? undefined,
@@ -511,6 +524,9 @@ export async function runProcessFinalize(
     ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
     reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
     intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
+    // Паритет с сабагентом (`metadata.step_limit_reached`): ход завершён
+    // исполненным шагом-лимитом (текстового отчёта могло не быть).
+    ...(stepLimitReached ? { step_limit_reached: true } : {}),
   };
 
   // ADR-036: проброс secrets в real-time событие — UI раскрывает плейсхолдеры

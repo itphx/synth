@@ -1,4 +1,8 @@
 export const dict = {
+  // Движковые ключи (ADR-041) en не дублирует — деградация на content;
+  // здесь только новые, добавленные вместе с ru для паритета.
+  'session.steps_limit':
+    'The step limit ({limit}) is exhausted: the agent stopped at the step limit without a textual report',
   'common.loading': 'Loading...',
   'common.language.english': 'English',
   'common.language.russian': 'Russian',

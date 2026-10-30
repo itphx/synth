@@ -10,6 +10,14 @@ const baseParams = {
   timeout: 30,
 };
 
+/** Провайдер вне DeepSeek-эвристики: `reasoning_content` не требуется. */
+const plainParams = {
+  url: 'http://api.plain.example/v1/chat/completions',
+  apiKey: 'key',
+  model: 'gpt-4o',
+  timeout: 30,
+};
+
 // Доступ к приватным методам для юнит-проверки.
 type OpenAIPrivate = {
   _formatMessages(messages: LLMMessage[], systemPrompt?: string): Array<Record<string, unknown>>;
@@ -85,16 +93,56 @@ describe('OpenAIProvider — нормализация function.arguments и reas
     expect((tc.function as Record<string, unknown>).arguments).toBeUndefined();
   });
 
-  it('_formatMessages: assistant с reasoning → reasoning_content; без reasoning → нет', () => {
-    const withReasoning = provider._formatMessages([
+  it('_formatMessages: assistant с reasoning → reasoning_content; без reasoning → нет (обычный провайдер)', () => {
+    const plain = new OpenAIProvider(plainParams) as unknown as OpenAIPrivate;
+    const withReasoning = plain._formatMessages([
       makeMessage({ role: 'assistant', reasoning: 'подумал и решил' }),
     ]);
     expect(withReasoning[0]!.reasoning_content).toBe('подумал и решил');
 
-    const withoutReasoning = provider._formatMessages([
+    const withoutReasoning = plain._formatMessages([
       makeMessage({ role: 'assistant' }),
     ]);
     expect(withoutReasoning[0]!.reasoning_content).toBeUndefined();
+  });
+
+  it('_formatMessages: DeepSeek требует reasoning_content всегда — пустой строкой', () => {
+    // Модель `...deepseek...` (эвристика по имени модели).
+    const byModel = provider._formatMessages([makeMessage({ role: 'assistant' })]);
+    expect(byModel[0]!.reasoning_content).toBe('');
+
+    // Явный тип/имя провайдера `deepseek` на недефолтном URL/модели.
+    const byType = new OpenAIProvider({
+      ...plainParams,
+      type: 'deepseek',
+      name: 'deepseek',
+      model: 'chat',
+    }) as unknown as OpenAIPrivate;
+    expect(byType._formatMessages([makeMessage({ role: 'assistant' })])[0]!.reasoning_content).toBe('');
+
+    // URL `api.deepseek.com`.
+    const byUrl = new OpenAIProvider({
+      ...plainParams,
+      url: 'https://api.deepseek.com/v1/chat/completions',
+    }) as unknown as OpenAIPrivate;
+    expect(byUrl._formatMessages([makeMessage({ role: 'assistant' })])[0]!.reasoning_content).toBe('');
+
+    // Явный `requiresReasoning: true` — сильнее эвристики (недефолтный провайдер).
+    const explicit = new OpenAIProvider({ ...plainParams, requiresReasoning: true }) as unknown as OpenAIPrivate;
+    expect(explicit._formatMessages([makeMessage({ role: 'assistant' })])[0]!.reasoning_content).toBe('');
+  });
+
+  it('_formatMessages: requiresReasoning=false сильнее deepseek-эвристики', () => {
+    const disabled = new OpenAIProvider({ ...baseParams, requiresReasoning: false }) as unknown as OpenAIPrivate;
+    const formatted = disabled._formatMessages([makeMessage({ role: 'assistant' })]);
+    expect(formatted[0]!.reasoning_content).toBeUndefined();
+  });
+
+  it('_formatMessages: синтетический assistant-префилл шага-лимита получает reasoning_content="" (регресс 400 DeepSeek)', async () => {
+    const { maxStepsAssistantMessage } = await import('../engine/llm/max-steps.js');
+    const formatted = provider._formatMessages([maxStepsAssistantMessage('report text only')]);
+    expect(formatted[0]!.role).toBe('assistant');
+    expect(formatted[0]!.reasoning_content).toBe('');
   });
 });
 
@@ -114,7 +162,9 @@ describe('OpenAIProvider — prompt_cache_key (ADR-070 §2.2)', () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    const provider = new OpenAIProvider(baseParams);
+    // Обычный провайдер (не DeepSeek): assistant без reasoning не получает
+    // `reasoning_content` — проверяем только cache-поле.
+    const provider = new OpenAIProvider(plainParams);
     const payload: SystemPromptPayload = { text: 'sys', cacheKey: 'sess-1', cachePolicy: 'auto' };
     await provider.chat([makeMessage()], payload);
 

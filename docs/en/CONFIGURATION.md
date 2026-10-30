@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **новая секция «Каталог моделей»** — `ModelConfig.requiresReasoning` и `requires_reasoning` в `POST /api/v2/models` — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -1553,6 +1553,15 @@ limits), not a "keep working" hint.
 
 - **The step limit has priority.** The final report step of `maxSteps` (the opencode mechanics)
   is not treated as a budget overrun; otherwise the step-limit report would never be produced.
+- **The step-limit report (the opencode mechanics).** The agent step limit is set in the **agent
+  definition** (`AgentDefinition.maxSteps`, the “Agents” admin panel), not in `agents.*`. When the limit
+  is exhausted one more ordinary step runs: the tools stay in the request, the call is forbidden with
+  `tool_choice: 'none'`, and the “text only” instruction is inserted as an assistant prefill. With no
+  textual report the **main** agent gets the `session.steps_limit` text (`{limit}`: “the step limit is
+  exhausted…”), the answer status is `limit`, and `step_limit_reached: true` is set on the final message
+  and in `stream.done`; the **subagent** gets `task.steps_limit_empty`/`task.steps_limit` (`[steps_limit]`).
+  Earlier this branch of the main loop substituted the unrelated `session.max_iterations` (it now remains
+  only for pipeline steps).
 - **The estimate is unavailable** (no data/empty prompt) — do not block (fail-open).
 - The estimate uses the chars-per-token heuristic (default 4): it is a safeguard, not an exact
   token count of the model.
@@ -1561,6 +1570,35 @@ limits), not a "keep working" hint.
 agents:
   subagentMaxInputTokens: 150000
 ```
+
+### Model catalog (`{dataDir}/models/`, `ModelConfig`)
+
+The instance models are catalog records (the file `{dataDir}/models/<id>.json`, or the DB when
+`storage.backend=postgres`) typed as `ModelConfig` from `@itphx/synth-shared`. They are edited through
+the API: `POST /api/v2/models` (create/update; unknown fields are ignored) and `POST /api/v2/models/fetch`
+(sync with the provider catalog). Catalog fields (prices, `contextWindow`, `modalities`,
+`requiresReasoning`) are **model properties** — there are no separate `config.yaml` keys for them.
+
+**`requiresReasoning` — compatibility with DeepSeek thinking models** (the behaviour is taken from
+opencode). Such a provider requires `reasoning_content` on **every** assistant message, even when the
+reasoning is empty; otherwise DeepSeek answers `400` “The `reasoning_content` in the thinking mode must
+be passed back to the API” — this broke the synthetic assistant prefill of the step-limit step.
+
+| Value | Behaviour |
+|---|---|
+| not set (`undefined`) — **default** | Auto detection (`detectRequiresReasoning`): the provider type or name is `deepseek`, the URL contains `deepseek.com`, or the model id contains `deepseek` |
+| `true` | `reasoning_content` is always sent (empty string when there is no reasoning) — for DeepSeek-compatible gateways with a non-default provider/model name |
+| `false` | Force off — a model with `deepseek` in its name that does not require the field |
+
+- **Where it is set:** `POST /api/v2/models` — the `requires_reasoning` field (the camelCase
+  `requiresReasoning` is accepted too), `null` — reset to auto detection. It is stored in the model
+  catalog record and returned by `GET /api/v2/models` (`requiresReasoning`) **only when set**; an absent
+  field means auto detection, not `false`.
+- **Scope:** only providers of the `openai` type (OpenAI-compatible chat). Anthropic and Ollama do not
+  use the field — their behaviour is unchanged.
+- **Why an explicit override:** we have no provider-catalog `compatibility` fields (as opencode does), so
+  auto detection relies on the available config values; a gateway with a different name needs the field
+  to be set manually.
 
 ### Git operations (`git.*`, ADR-076)
 

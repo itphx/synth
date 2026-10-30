@@ -353,10 +353,39 @@ export interface ProviderConfig {
   topP?: number;
   topK?: number;
   reasoningLevel?: ReasoningLevel;
+  /**
+   * Провайдер требует `reasoning_content` у assistant-сообщений даже при пустом
+   * reasoning (thinking-модели DeepSeek). `undefined` — автоопределение
+   * (`detectRequiresReasoning`), `false` — принудительно выключить.
+   */
+  requiresReasoning?: boolean;
   /** Лимит выходных токенов (max_tokens у OpenAI/Anthropic). */
   maxTokens?: number;
   /** Размер контекста модели (num_ctx у Ollama). */
   numCtx?: number;
+}
+
+/**
+ * Автоопределение «провайдер требует `reasoning_content`» — поведение
+ * opencode (`packages/ai/src/protocols/openai-chat.ts:581-586`):
+ * `compatibility.reasoningField != null || provider === 'deepseek' ||
+ * baseURL ~ 'deepseek.com' || modelID.includes('deepseek')`.
+ *
+ * У нас нет `compatibility`-полей каталога, поэтому эвристика та же, но по
+ * доступным значениям конфига; явный `ProviderConfig.requiresReasoning`
+ * приоритетнее (проверяется вызывающим кодом).
+ */
+export function detectRequiresReasoning(input: {
+  type?: string;
+  name?: string;
+  url?: string;
+  model?: string;
+}): boolean {
+  const type = (input.type ?? '').toLowerCase();
+  const name = (input.name ?? '').toLowerCase();
+  if (type === 'deepseek' || name === 'deepseek') return true;
+  if ((input.url ?? '').toLowerCase().includes('deepseek.com')) return true;
+  return (input.model ?? '').toLowerCase().includes('deepseek');
 }
 
 /**
@@ -481,6 +510,8 @@ export abstract class BaseProvider {
   name: string;
   type: string;
   reasoningLevel: ReasoningLevel;
+  /** `undefined` — автоопределение (`detectRequiresReasoning`). */
+  requiresReasoning?: boolean;
   maxTokens?: number;
   numCtx?: number;
 
@@ -495,6 +526,7 @@ export abstract class BaseProvider {
     name?: string;
     type?: string;
     reasoningLevel?: ReasoningLevel;
+    requiresReasoning?: boolean;
     maxTokens?: number;
     numCtx?: number;
   }) {
@@ -508,6 +540,7 @@ export abstract class BaseProvider {
     this.name = params.name ?? 'unknown';
     this.type = params.type ?? 'generic';
     this.reasoningLevel = params.reasoningLevel ?? 'default';
+    this.requiresReasoning = params.requiresReasoning;
     this.maxTokens = params.maxTokens;
     this.numCtx = params.numCtx;
   }
@@ -659,6 +692,7 @@ export class ProviderFactory {
       name: config.name || name,
       type: providerType,
       reasoningLevel: config.reasoningLevel,
+      requiresReasoning: config.requiresReasoning,
       maxTokens: config.maxTokens,
       numCtx: config.numCtx,
     });

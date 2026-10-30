@@ -22,6 +22,10 @@ export const ENGINE_MESSAGE_KEYS_REGISTRY = ENGINE_MESSAGE_KEYS;
 export const SYSTEM_MESSAGES = {
   // --- Сессия: статусы, заголовки, ссылки ---
   'session.max_iterations': '(tool iteration limit reached)',
+  // Отчёт по исполненному шагу-лимиту основного агента (механика opencode):
+  // пустой ответ на финальном шаге — говорим, что лимит шагов исчерпан.
+  'session.steps_limit':
+    'The step limit ({limit}) is exhausted: the agent stopped at the step limit without a textual report',
   'session.stopped': 'Processing stopped: {reason}',
   'session.stopped_reason_denied': 'the user denied the request',
   'session.denied_blocked': 'Could not proceed: the action was blocked by the security policy',

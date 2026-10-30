@@ -1,6 +1,7 @@
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import {
   BaseProvider,
+  detectRequiresReasoning,
   fetchModelsCatalog,
   parseArchitectureModalities,
   redactAttachmentPayloadForDebug,
@@ -392,6 +393,20 @@ export class OpenAIProvider extends BaseProvider {
   ): Array<Record<string, unknown>> {
     const formatted: Array<Record<string, unknown>> = [];
 
+    // DeepSeek thinking-модели требуют `reasoning_content` у **каждого**
+    // assistant-сообщения, даже если reasoning пуст (иначе 400 «The
+    // `reasoning_content` in the thinking mode must be passed back»).
+    // Поведение opencode: явный override провайдера → автоопределение по
+    // типу/имени/URL/модели. Ломается на синтетических assistant-префиллах
+    // (шаг-лимит, `maxStepsAssistantMessage`) без reasoning.
+    const requireReasoning = this.requiresReasoning
+      ?? detectRequiresReasoning({
+        type: this.type,
+        url: this.url,
+        name: this.name,
+        model: this.model,
+      });
+
     const systemText = resolveSystemPromptText(systemPrompt);
     if (systemText) {
       formatted.push({
@@ -442,8 +457,11 @@ export class OpenAIProvider extends BaseProvider {
 
       // DeepSeek reasoning-модели требуют возврат reasoning_content в повторной
       // истории (иначе 400 «The reasoning_content ... must be passed back»).
-      if (msg.role === 'assistant' && msg.reasoning) {
-        entry.reasoning_content = msg.reasoning;
+      // При `requireReasoning` поле отправляется всегда — пустой строкой, если
+      // reasoning нет (opencode: `reasoning.length === 0 → requireReasoning ? '' : undefined`).
+      if (msg.role === 'assistant') {
+        const rc = msg.reasoning ?? (requireReasoning ? '' : undefined);
+        if (rc !== undefined) entry.reasoning_content = rc;
       }
 
       formatted.push(entry);

@@ -986,6 +986,24 @@ export async function createBackendDeps(
     return prefixMatch;
   };
 
+  /**
+   * Thinking-модели DeepSeek: явный override `ModelConfig.requiresReasoning`
+   * (провайдер требует `reasoning_content` у assistant-сообщений).
+   * `undefined` — автоопределение по провайдеру/имени модели.
+   */
+  const resolveModelRequiresReasoning = (
+    providerName: string,
+    modelId: string,
+  ): boolean | undefined => {
+    const direct = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
+    if (direct?.requiresReasoning !== undefined) return direct.requiresReasoning;
+    for (const model of modelCache.values()) {
+      if (model.provider !== providerName || model.requiresReasoning === undefined) continue;
+      if (model.name === modelId) return model.requiresReasoning;
+    }
+    return undefined;
+  };
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -1032,6 +1050,8 @@ export async function createBackendDeps(
     // ADR-115: модальности модели — из её конфига (общий резолвер инстанса,
     // выше: им же пользуются шаги пайплайнов).
     resolveModelModalities,
+    // Thinking-модели DeepSeek: явный override `ModelConfig.requiresReasoning`.
+    resolveModelRequiresReasoning,
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).
     attachmentsConfig: () => attachmentsSettings.getConfig(),
@@ -1445,7 +1465,8 @@ export async function createBackendDeps(
     resolvePipelineStepProvider(ctx, {
       resolveLlmDefaults,
       loadProviderConfig: providerLoader,
-      toProviderConfig: toCoreProviderConfig,
+      toProviderConfig: (shared, model) =>
+        toCoreProviderConfig(shared, model, undefined, resolveModelRequiresReasoning(shared.name, model)),
       createProvider: (name, config, temperature, topP, topK) =>
         ProviderFactory.create(name, config, temperature, topP, topK),
       wrapProvider: (provider) => orchestrator.wrapProviderWithGateway(provider),

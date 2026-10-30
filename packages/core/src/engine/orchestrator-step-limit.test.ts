@@ -21,6 +21,8 @@ import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { ChatOptions, LLMMessage, SystemPromptInput } from '../providers/base.js';
+import { OpenAIProvider } from '../providers/openai.js';
+import { t as sm } from './system-messages.js';
 import type { ContextBuilder } from './context/builder.js';
 import { createToolRegistry } from './tools/index.js';
 import { createAgentRegistry } from './agents/index.js';
@@ -31,8 +33,9 @@ interface ScriptStep {
   content?: string;
 }
 
-/** Записанный LLM-вызов шага: инструменты и опции (6-й аргумент `chatAsync`). */
+/** Записанный LLM-вызов шага: сообщения, инструменты и опции (6-й аргумент `chatAsync`). */
 interface RecordedCall {
+  messages: LLMMessage[];
   tools?: Record<string, unknown>[];
   options?: ChatOptions;
 }
@@ -62,14 +65,14 @@ class StepLimitScriptProvider extends BaseProvider {
   }
 
   async *chatAsync(
-    _messages: LLMMessage[],
+    messages: LLMMessage[],
     _systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: unknown,
     options?: ChatOptions,
   ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
-    StepLimitScriptProvider.calls.push({ tools, options });
+    StepLimitScriptProvider.calls.push({ messages, tools, options });
     const step = this._currentStep();
     const stepIndex = StepLimitScriptProvider._step;
     const toolCalls = step.toolCalls?.map((t) => ({
@@ -213,6 +216,48 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
     const finalMessage = [...after.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
     expect(finalMessage?.content).toContain('ОТЧЁТ: лимит шагов исчерпан');
     expect(finalMessage?.metadata?.status).not.toBe('error');
+
+    // (д) На шаге-лимите последнее сообщение запроса — синтетический
+    // assistant-префилл с требованием «только текст».
+    const limitMessages = calls[1]!.messages;
+    const last = limitMessages[limitMessages.length - 1]!;
+    expect(last.role).toBe('assistant');
+    expect(last.content).toContain('MAXIMUM STEPS REACHED');
+
+    // (е) DeepSeek требует `reasoning_content` у **каждого** assistant-сообщения.
+    // Старый код отправлял префилл без поля → 400 «The `reasoning_content` in
+    // the thinking mode must be passed back to the API».
+    const formatter = new OpenAIProvider({
+      url: 'https://api.deepseek.com/v1/chat/completions',
+      apiKey: 'k',
+      model: 'deepseek-flash',
+    }) as unknown as { _formatMessages(messages: LLMMessage[]): Array<Record<string, unknown>> };
+    const formatted = formatter._formatMessages(limitMessages);
+    const assistants = formatted.filter((m) => m.role === 'assistant');
+    expect(assistants.length).toBeGreaterThan(0);
+    for (const entry of assistants) {
+      expect(entry.reasoning_content).toBeDefined();
+    }
+  });
+
+  it('maxSteps=1: пустой ответ на шаге-лимите → отчёт session.steps_limit + step_limit_reached', async () => {
+    StepLimitScriptProvider.configure([
+      { toolCalls: [{ name: 'todo_add', args: { todos: [{ content: 'step-1' }] } }] },
+      { content: '' },
+    ]);
+    const session = await sessionManager.createSession({
+      title: 'StepLimitEmpty',
+      userId: 'u1',
+      settings: { provider: 'steplimit', model: 'm', agentRole: 'fixer' },
+    });
+
+    await runTurn(session.id);
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const finalMessage = [...after.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
+    expect(finalMessage?.content).toBe(sm('session.steps_limit', { limit: '1' }));
+    expect(finalMessage?.metadata?.status).toBe('limit');
+    expect(finalMessage?.metadata?.step_limit_reached).toBe(true);
   });
 
   it('maxSteps=1: без tool call ход завершается обычным ответом (шаг-лимит не наступает)', async () => {

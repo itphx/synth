@@ -131,6 +131,7 @@ describe('runProcessFinalize', () => {
       hadDeny: false,
       toolIteration: 1,
       maxIterations: 10,
+      stepLimitExecuted: false,
       lastIterationPromptChars: 400,
       allReasoning: [],
       allIntermediateTexts: [],
@@ -258,22 +259,44 @@ describe('runProcessFinalize', () => {
   });
 
   describe('фоллбек-тексты и статус', () => {
-    it('лимит итераций при пустом ответе → session.max_iterations, статус limit', async () => {
+    it('шаг-лимит при пустом ответе → session.steps_limit + step_limit_reached, статус limit', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
 
       await runProcessFinalize(
         makeArgs(sessionId),
-        makeState({ finalContent: '', toolIteration: 10, maxIterations: 10 }),
+        makeState({ finalContent: '', toolIteration: 10, maxIterations: 10, stepLimitExecuted: true }),
         deps,
       );
 
+      const expected = sm('session.steps_limit', { limit: '10' });
       const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
-      expect(saveCall[1]).toBe(sm('session.max_iterations'));
-      expect(saveCall[17]).toMatchObject({ i18n: { key: 'session.max_iterations' } });
+      expect(saveCall[1]).toBe(expected);
+      expect(saveCall[17]).toMatchObject({
+        i18n: { key: 'session.steps_limit', params: { limit: '10' } },
+        step_limit_reached: true,
+      });
       expect(published[0]!.data).toMatchObject({
-        content: sm('session.max_iterations'),
+        content: expected,
         status: 'limit',
+        step_limit_reached: true,
+      });
+    });
+
+    it('непустой финальный ответ на шаге-лимите → текст сохраняется, step_limit_reached=true', async () => {
+      const sessionId = await makeSession();
+      const deps = makeDeps();
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ finalContent: 'готово', toolIteration: 10, maxIterations: 10, stepLimitExecuted: true }),
+        deps,
+      );
+
+      expect(published[0]!.data).toMatchObject({
+        content: 'готово',
+        status: 'completed',
+        step_limit_reached: true,
       });
     });
 

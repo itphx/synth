@@ -9,6 +9,7 @@ export function toCoreProviderConfig(
   shared: SharedProviderConfig,
   model: string,
   reasoningLevel?: ReasoningLevel,
+  requiresReasoning?: boolean,
 ): CoreProviderConfig {
   return {
     name: shared.name,
@@ -18,6 +19,7 @@ export function toCoreProviderConfig(
     model,
     timeout: shared.timeout,
     reasoningLevel,
+    requiresReasoning,
     numCtx: shared.numCtx,
   };
 }

@@ -501,6 +501,12 @@ export function createModelRoutes(
            * модальностей в ядре нет — решение 2026-10-27).
            */
           ...(m.modalities && m.modalities.length > 0 ? { modalities: m.modalities } : {}),
+          /**
+           * Thinking-модели DeepSeek: провайдер требует `reasoning_content` у
+           * assistant-сообщений. Не задано — автоопределение по
+           * провайдеру/имени модели (см. `ModelConfig.requiresReasoning`).
+           */
+          ...(m.requiresReasoning !== undefined ? { requiresReasoning: m.requiresReasoning } : {}),
         })),
       };
     });
@@ -549,6 +555,14 @@ export function createModelRoutes(
     // ADR-115: модальности модели — ручной override (аддитивно к каталогу API).
     const modalities = resolveModalitiesInput(body.modalities, existing?.modalities);
 
+    // Thinking-модели DeepSeek: явный override поведения `reasoning_content`
+    // (аддитивно, необязательно). `null`/отсутствие — автоопределение.
+    const requiresReasoning = 'requires_reasoning' in body
+      ? (body.requires_reasoning === null ? undefined : body.requires_reasoning)
+      : ('requiresReasoning' in body
+        ? (body.requiresReasoning === null ? undefined : body.requiresReasoning)
+        : existing?.requiresReasoning);
+
     const model: ModelConfig = {
       id: modelId,
       name: body.name || existing?.name || modelId,
@@ -568,6 +582,7 @@ export function createModelRoutes(
       priceSource,
       currency,
       ...(modalities ? { modalities } : {}),
+      ...(requiresReasoning !== undefined ? { requiresReasoning } : {}),
     };
 
     await modelStore.save(modelId, model);

@@ -119,4 +119,10 @@ export interface ModelConfig {
    * захардкоженного справочника модальностей нет (решение 2026-10-27).
    */
   modalities?: AttachmentModality[];
+  /**
+   * Провайдер требует `reasoning_content` у assistant-сообщений
+   * (thinking-модели DeepSeek); `undefined` — автоопределение по
+   * провайдеру/имени модели, `false` — принудительно выключить.
+   */
+  requiresReasoning?: boolean;
 }

@@ -585,6 +585,16 @@
   вызов запрещён `toolChoice: 'none'`, инструкция «отвечай только текстом» вставляется
   **assistant-сообщением** (в историю не пишется). Провайдер вернул tool call несмотря на
   запрет — вызовы не исполняются, ответ считается текстовым отчётом.
+  **Отчёт по лимиту шагов — свой текст у каждого цикла.** Саб-агент: пустой ответ на шаге-лимите →
+  `task.steps_limit_empty` (`{limit}`), а страховка `task.steps_limit` (`[steps_limit]`) дописывается
+  к результату тула после отчёта — всегда, когда шаг-лимит исполнялся (короткая причина + лимит).
+  Основной агент: пустой ответ →
+  `session.steps_limit` (`{limit}`, паритет с саб-агентом; раньше подставлялся посторонний
+  `session.max_iterations`), статус ответа — `limit` (`persistence.ts`), а `step_limit_reached: true`
+  кладётся в метаданные финального assistant-сообщения **и** в `stream.done`. Флаг `stepLimitExecuted`
+  ставит сам цикл (`orchestrator.ts`) — отчёт подставляется только когда шаг-лимит реально исполнялся;
+  прежняя ветка `toolIteration >= maxIterations → session.max_iterations` в основном цикле не
+  используется (ключ остался для шагов пайплайнов, `engine/pipelines/executors/agent-step.ts`).
   **Предохранитель бюджета контекста саб-агента (`agents.subagentMaxInputTokens`).**
   В цикле саб-агента (`engine/tools/task/run-cycle.ts`) перед **каждым** LLM-вызовом
   считается оценка промпта: `estimatePromptChars(messages, systemPrompt, tools)` →
@@ -683,8 +693,10 @@
   `C:\…`, `\\server\share`); `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075; исключения — `WORKSPACE_FREE_TOOLS`: `ssh_keys_list`, ресурс инстанса, ADR-076); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   `ContextConfig.getMaxStepsPrompt(language)` — требование «только текст» для
-  финального шага-отчёта саб-агента по лимиту шагов (`prompts/system/MAX_STEPS.{lang}.md`;
-  override — `{dataDir}/user/system/MAX_STEPS.{lang}.md`; пустая строка, если файла нет).
+  финального шага-отчёта по лимиту шагов — у **саб-агента** (`run-cycle.ts`) и **основного** агента
+  (`orchestrator.ts`; общий модуль сборки — `engine/llm/max-steps.ts`, `prompts/system/MAX_STEPS.{lang}.md`;
+  override — `{dataDir}/user/system/MAX_STEPS.{lang}.md`; пустая строка, если файла нет — тогда
+  встроенный fallback `MAX_STEPS_FALLBACK_PROMPT`).
   Системный промпт (ADR-070): `composer.ts` — `SystemPromptComposer` (единственная точка сборки
   промпта основной сессии и саб-агентов: `compose()` идемпотентно собирает из состояния, `manifest()` —
   манифест источников; типы `ComposedPrompt`/`PromptBlock`, **`PromptBlockProvider`-шов**
@@ -1818,12 +1830,26 @@
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла, очистка `pendingMessages`, снятие `blocked`/флага и `stream.cancelled` ровно один раз).
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote, `DecisionProvider` (ADR-084: типы `decision` (RouterAI, `POST {base}/decisions`) и `systemone` (Ollama, `POST {base}/v1/systemone`) — endpoint выбирается по типу провайдера). Prompt-cache (ADR-070, `CachePolicy = 'auto' | 'none'` в `base.ts`): `SystemPromptPayload` (`text`/`stablePrefix`/`cacheKey`/`cachePolicy`) — Anthropic отдаёт `system` массивом блоков с `cache_control` (≤4 breakpoint'а, два system), OpenAI/Remote — `prompt_cache_key` (= id сессии) + `stream_options.include_usage`; `usage.ts` — нормализация usage и `computeCacheHitRate` (`cacheReadTokens / inputTokens`, 0 при нуле). Нормализация по провайдерам: Anthropic — `input = input_tokens + cacheRead + cacheWrite`; OpenAI — `prompt_tokens_details.cached_tokens` → `cacheRead`; Remote — usage из ответа прокси в тот же контракт; Ollama — cache-полей нет (`cacheRead = cacheWrite = 0`).
+  **Thinking-модели DeepSeek — `requiresReasoning` (parity с opencode, 2026-10-30).**
+  `ProviderConfig.requiresReasoning?: boolean` (`base.ts`) + экспортируемая эвристика
+  `detectRequiresReasoning({type,name,url,model})` → `true`, если тип/имя провайдера `deepseek`,
+  URL содержит `deepseek.com` или id модели содержит `deepseek`; явное значение приоритетнее.
+  `OpenAIProvider._formatMessages` при `requireReasoning` отправляет `reasoning_content` у
+  **каждого** assistant-сообщения — пустой строкой, если reasoning нет (для остальных провайдеров
+  прежнее «только при непустом reasoning»). Без этого DeepSeek отвечает `400` «The
+  `reasoning_content` in the thinking mode must be passed back to the API» — ломался синтетический
+  assistant-префилл шага-лимита (`engine/llm/max-steps.ts`). Явный override — `ModelConfig.requiresReasoning`
+  (`shared/types/provider.ts`; `undefined` — автоопределение, `false` — принудительно выключить),
+  проброс: `ChatOrchestratorOptions.resolveModelRequiresReasoning` → `ProviderPool` (значение входит
+  в `cacheKey`) и `toCoreProviderConfig` (4-й параметр, `engine/router/{utils,routing}.ts`); резолвер
+  каталога собирается в `server/app/deps.ts` и `backend/app/deps.ts` (им же пользуются шаги пайплайнов).
+  Поле — только у провайдеров `openai`-типа; Anthropic/Ollama его не используют.
 - `profiles.ts` — реестр серверных профилей гибрида.
 - `prompts/` (system, roles, subagents, security), `definitions/`
   (`protected-paths.json`, `shell-policy.json`), `dictionaries/` — ассеты движка.
   `prompts/system/MAX_STEPS.{ru,en}.md` — требование «только текст» для
-  принудительного финального шага-отчёта саб-агента по лимиту шагов
-  (механика opencode; загрузчик — `ContextConfig.getMaxStepsPrompt`,
+  финального шага-отчёта по лимиту шагов (саб-агент и основной агент;
+  механика opencode; загрузчик — `ContextConfig.getMaxStepsPrompt`,
   override — `{dataDir}/user/system/MAX_STEPS.{lang}.md`).
 
 ## Правила добавления тула / роута

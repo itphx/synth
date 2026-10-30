@@ -277,6 +277,13 @@ export interface OrchestratorOptions {
    */
   resolveModelModalities?: (providerName: string, modelId: string) => AttachmentModality[] | undefined;
   /**
+   * Явный override `ModelConfig.requiresReasoning` (thinking-модели DeepSeek):
+   * провайдер требует `reasoning_content` у assistant-сообщений. `undefined` —
+   * автоопределение по провайдеру/имени модели (эвристика в провайдере).
+   * Резолвер задаёт точка сборки по `modelCache`.
+   */
+  resolveModelRequiresReasoning?: (providerName: string, modelId: string) => boolean | undefined;
+  /**
    * ADR-115: live-конфиг вложений (`attachments.*`, runtime-настройки поверх
    * config). Читается **на каждый ход** — изменение `workspaceFallback`
    * применяется без рестарта.
@@ -714,6 +721,11 @@ export class ChatOrchestrator {
    */
   private readonly _resolveModalities: ((providerName: string, modelId: string) => AttachmentModality[] | undefined) | null;
   /**
+   * Явный override `ModelConfig.requiresReasoning` (thinking-модели DeepSeek);
+   * `undefined` — автоопределение в провайдере.
+   */
+  private readonly _resolveModelRequiresReasoning: ((providerName: string, modelId: string) => boolean | undefined) | null;
+  /**
    * ADR-115: live-конфиг вложений (runtime-настройки поверх config).
    * `undefined` — резолвер не задан: `workspaceFallback` считается включённым
    * (поведение по умолчанию), материализация отброшенных вложений выполняется.
@@ -1116,6 +1128,8 @@ export class ChatOrchestrator {
     this._blobs = options.blobs ?? null;
     // ADR-115: модальности из конфига модели приоритетнее справочника.
     this._resolveModalities = options.resolveModelModalities ?? null;
+    // Thinking-модели DeepSeek: явный override `ModelConfig.requiresReasoning`.
+    this._resolveModelRequiresReasoning = options.resolveModelRequiresReasoning ?? null;
     // ADR-115: live-конфиг вложений — проверяется на каждый ход в
     // `_processSetupDeps().hydrateAttachments` (без рестарта).
     if (options.attachmentsConfig) this._attachmentsConfig = options.attachmentsConfig;
@@ -1257,6 +1271,7 @@ export class ChatOrchestrator {
       gatewayConfig ?? undefined,
       gatewayConfig || this._metrics ? this._poolGatewayFactory(gatewayConfig ?? DISABLED_GATEWAY_CONFIG) : undefined,
       this._decisionGatewayFactory(),
+      options.resolveModelRequiresReasoning,
     );
     this._providerPool = pool;
 
@@ -2620,7 +2635,12 @@ export class ChatOrchestrator {
     }
     const rawProvider = ProviderFactory.create(
       target.provider,
-      toCoreProviderConfig(sharedConfig, target.model),
+      toCoreProviderConfig(
+        sharedConfig,
+        target.model,
+        undefined,
+        this._resolveModelRequiresReasoning?.(target.provider, target.model),
+      ),
     );
     // Инвариант 3: LLM-вызов только через GatewayProvider. Обёртка с
     // привязкой к сессии (карта обфускации/аудит), без сессии — пул-вариант.
@@ -3830,6 +3850,13 @@ export class ChatOrchestrator {
       // шаг-лимит (механика opencode). `DEFAULT_MAX_ITERATIONS` — Infinity,
       // лимит наступает только при явном `maxSteps` агента.
       let stepLimitStepDone = false;
+      /**
+       * Шаг-лимит действительно исполнялся (в запросе был синтетический
+       * assistant-префилл). Эпилог по этому флагу подставляет отчёт
+       * `session.steps_limit` и помечает `step_limit_reached` — иначе пустой
+       * ответ отдавался бы как «лимит итераций» без связи с реальным шагом.
+       */
+      let stepLimitExecuted = false;
       while (toolIteration < maxIterations || !stepLimitStepDone) {
         // Отмена до входа в итерацию (уже абортированный signal, «Стоп» на
         // стартовом stream.usage) — обрабатываем общей веткой отмены ниже.
@@ -3884,7 +3911,10 @@ export class ChatOrchestrator {
         // вызов запрещается `toolChoice: 'none'`, инструкция «только текст»
         // вставляется assistant-сообщением в запрос (не в историю).
         const stepLimitStep = Number.isFinite(maxIterations) && toolIteration >= maxIterations;
-        if (stepLimitStep) stepLimitStepDone = true;
+        if (stepLimitStep) {
+          stepLimitStepDone = true;
+          stepLimitExecuted = true;
+        }
         const stepMessages: LLMMessage[] = stepLimitStep
           ? [
             ...currentMessages,
@@ -5109,7 +5139,7 @@ export class ChatOrchestrator {
         { session, streamId, publishChunk, debugCollector, streamStartedAt, streamTiming },
         {
           cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
-          hadDeny, toolIteration, maxIterations,
+          hadDeny, toolIteration, maxIterations, stepLimitExecuted,
           roleBlocked, roleBlockedTool, roleBlockedAgent,
           lastIterationPromptChars, allReasoning, allIntermediateTexts, allToolCalls,
           currentMessages, promptMeta, loadedTokenRatio, routingDecision,
@@ -5423,6 +5453,10 @@ export class ChatOrchestrator {
       providerLoader: this._providerLoader,
       optimizer: this._optimizer,
       router: this._router,
+      // Thinking-модели DeepSeek: явный override из каталога моделей.
+      ...(this._resolveModelRequiresReasoning
+        ? { resolveModelRequiresReasoning: this._resolveModelRequiresReasoning }
+        : {}),
       gateway: {
         gatewayConfig: this._gatewayConfig,
         gatewayPatternStore: this._gatewayPatternStore,

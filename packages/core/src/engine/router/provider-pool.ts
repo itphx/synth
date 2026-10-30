@@ -23,17 +23,25 @@ export class ProviderPool {
   private _gatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
   /** ADR-084: фабрика обвязки decision-провайдеров (применяется всегда). */
   private _decisionGatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
+  /**
+   * Резолвер явного override `ModelConfig.requiresReasoning` (thinking-модели
+   * DeepSeek). `undefined` — автоопределение в провайдере; резолвер не задан —
+   * поведение прежнее (эвристика).
+   */
+  private readonly _modelRequiresReasoning: ((providerName: string, modelName: string) => boolean | undefined) | null;
 
   constructor(
     providerLoader: (name: string) => SharedProviderConfig | null,
     gatewayConfig?: LLMGatewayConfig,
     gatewayFactory?: (inner: BaseProvider) => BaseProvider,
     decisionGatewayFactory?: (inner: BaseProvider) => BaseProvider,
+    modelRequiresReasoning?: (providerName: string, modelName: string) => boolean | undefined,
   ) {
     this._providerLoader = providerLoader;
     this._gatewayConfig = gatewayConfig ?? null;
     this._gatewayFactory = gatewayFactory ?? null;
     this._decisionGatewayFactory = decisionGatewayFactory ?? null;
+    this._modelRequiresReasoning = modelRequiresReasoning ?? null;
   }
 
   getProvider(
@@ -48,18 +56,24 @@ export class ProviderPool {
     /** top-k агента; `0`/undefined — не задано (дефолт провайдера). */
     topK?: number,
   ): BaseProvider | null {
-    const cacheKey = `${providerName}:${modelName}:${temperature ?? 'auto'}:${reasoningLevel ?? 'none'}:${maxTokens ?? ''}:${numCtx ?? ''}:${topP ?? 'auto'}:${topK ?? 'auto'}`;
-    const cached = this._cache.get(cacheKey);
-    if (cached) return cached;
-
     const sharedConfig = this._providerLoader(providerName);
     if (!sharedConfig) return null;
+    const effectiveModel = modelName || sharedConfig.defaultModel || '';
+    // Явный override `ModelConfig.requiresReasoning` (если каталог моделей
+    // подключён); иначе — автоопределение в провайдере. Входит в ключ кэша:
+    // смена override в каталоге не должна отдавать старый экземпляр.
+    const requiresReasoning = this._modelRequiresReasoning?.(providerName, effectiveModel);
+
+    const cacheKey = `${providerName}:${modelName}:${temperature ?? 'auto'}:${reasoningLevel ?? 'none'}:${maxTokens ?? ''}:${numCtx ?? ''}:${topP ?? 'auto'}:${topK ?? 'auto'}:${requiresReasoning ?? 'auto'}`;
+    const cached = this._cache.get(cacheKey);
+    if (cached) return cached;
 
     try {
       const coreConfig = toCoreProviderConfig(
         sharedConfig,
-        modelName || sharedConfig.defaultModel || '',
+        effectiveModel,
         reasoningLevel,
+        requiresReasoning,
       );
       coreConfig.maxTokens = maxTokens;
       // Приоритет: явный provider.numCtx (из shared-конфига) > переданный
@@ -100,7 +114,14 @@ export class ProviderPool {
     if (!sharedConfig) return null;
 
     try {
-      const coreConfig = toCoreProviderConfig(sharedConfig, model || sharedConfig.defaultModel || '');
+      const effectiveModel = model || sharedConfig.defaultModel || '';
+      const requiresReasoning = this._modelRequiresReasoning?.(providerName, effectiveModel);
+      const coreConfig = toCoreProviderConfig(
+        sharedConfig,
+        effectiveModel,
+        undefined,
+        requiresReasoning,
+      );
       const provider = ProviderFactory.create(providerName, coreConfig);
       const wrapped = this._decisionGatewayFactory
         ? this._decisionGatewayFactory(provider)

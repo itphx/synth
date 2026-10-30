@@ -18,7 +18,12 @@ import type { ModelRouter, RoutingDecision } from '../router/router.js';
 import { warning } from '../../logger.js';
 
 /** ADR-084: безопасный дефолт gateway-конфига для decision-провайдеров. */
-export function toCoreProviderConfig(shared: SharedProviderConfig, model: string, reasoningLevel?: ReasoningLevel): CoreProviderConfig {
+export function toCoreProviderConfig(
+  shared: SharedProviderConfig,
+  model: string,
+  reasoningLevel?: ReasoningLevel,
+  requiresReasoning?: boolean,
+): CoreProviderConfig {
   return {
     name: shared.name,
     type: shared.type,
@@ -27,6 +32,7 @@ export function toCoreProviderConfig(shared: SharedProviderConfig, model: string
     model,
     timeout: shared.timeout,
     reasoningLevel,
+    requiresReasoning,
     numCtx: shared.numCtx,
   };
 }
@@ -111,6 +117,11 @@ export interface GetProviderDeps {
   providerLoader: (name: string) => SharedProviderConfig | null;
   optimizer: ContextOptimizer | null;
   gateway: GatewayWrapDeps;
+  /**
+   * Явный override `ModelConfig.requiresReasoning` (thinking-модели DeepSeek):
+   * `undefined` — автоопределение по провайдеру/имени модели.
+   */
+  resolveModelRequiresReasoning?: (providerName: string, modelName: string) => boolean | undefined;
 }
 
 /** Создаёт провайдера для сессии (без роутера) или `null` при ошибке/отсутствии. */
@@ -132,7 +143,12 @@ export function getProvider(
     const provider = ProviderFactory.create(
       providerName,
       {
-        ...toCoreProviderConfig(sharedConfig, effectiveModel, reasoningLevel ?? session.settings.reasoningLevel),
+        ...toCoreProviderConfig(
+          sharedConfig,
+          effectiveModel,
+          reasoningLevel ?? session.settings.reasoningLevel,
+          deps.resolveModelRequiresReasoning?.(providerName, effectiveModel),
+        ),
         maxTokens: session.settings.maxTokens,
         // Приоритет: явный provider.numCtx > ModelConfig.contextWindow.
         numCtx: sharedConfig.numCtx ?? (contextWindow > 0 ? contextWindow : undefined),

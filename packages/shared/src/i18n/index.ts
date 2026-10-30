@@ -13,6 +13,7 @@
  */
 export const ENGINE_MESSAGE_KEYS = [
   'session.max_iterations',
+  'session.steps_limit',
   'session.stopped',
   'session.stopped_reason_denied',
   'session.denied_blocked',
@@ -485,6 +486,7 @@ export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
 
 export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> = {
   'session.max_iterations': [],
+  'session.steps_limit': ["limit"],
   'session.stopped': ["reason"],
   'session.stopped_reason_denied': [],
   'session.denied_blocked': [],

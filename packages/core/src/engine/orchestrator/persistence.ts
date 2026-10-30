@@ -73,6 +73,7 @@ export function resolveAssistantStatus(
     case 'session.role_tool_blocked':
       return 'stopped';
     case 'session.max_iterations':
+    case 'session.steps_limit':
       return 'limit';
     case 'session.empty_response':
     case 'router.timeout':

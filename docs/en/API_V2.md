@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
+> ⚠️ RU-версия обновлена 2026-10-30 (**§5.5** — `stream.done.step_limit_reached` / `metadata.step_limit_reached` и статус `limit` (`session.steps_limit`); **§5.10** — `requires_reasoning` у модели — **переведено**); RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -427,6 +427,8 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > **Questions and a restart (ADR-112).** The wait for an answer to a question lives in the process memory: after a restart the unfinished questions are marked `cancelled` with the reason `interrupted`, the turn is not resumed (like the other tool-loop pauses). The question record itself survives the restart (the journal in the `QuestionRepository`). By default the question waits for an answer **without a timeout** (`questions.timeoutMs = 0`); the `question` tool may set a deadline (`timeout`, ≥ 5 minutes — not recommended: it aborts the wait).
 > **Answer attachments — `stream.done.attachments` (ADR-115, outbound).** The `stream.done` event (SSE of `POST /sessions/:id/prompt`, `GET /sessions/:id/events`) carries an additive `attachments?: Array<{sha256, mime, size, name?}>` — the media parts of the **final** assistant message of the turn (`image`/`audio`/`video`/`file`) in message order; with no media parts the field is absent. A gateway downloads the bytes by sha: `GET /api/v2/attachments/:sha256` (§5.6.1, RU only for now) — no session access needed. Field shape, source and download status codes — §5.6.1.
 
+> **Main-agent step limit — `step_limit_reached` (2026-10-30).** When a turn ends with an **executed** step limit (`AgentDefinition.maxSteps`, the opencode mechanics: an ordinary step, `tool_choice: 'none'`, the “text only” instruction delivered as a synthetic assistant prefill), `stream.done` carries the additive `step_limit_reached: true`, and the final assistant message — `metadata.step_limit_reached: true` (parity with the `task` subagent). If the model gave no textual report, the text of the `session.steps_limit` key (`{limit}`, “the step limit is exhausted…”) is substituted and the answer `status` becomes `limit` (the unrelated `session.max_iterations` is no longer used in this branch of the main loop — it remains for pipeline steps). The fields are additive: without the step limit they are absent.
+
 ### 5.6 Messages — `/api/v2/messages`
 
 | Method | Path | Build | RBAC | Purpose |
@@ -579,6 +581,15 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 | POST | `/api/v2/models` | both | ADMIN / auth | Create/update |
 | POST | `/api/v2/models/fetch` | both | ADMIN / auth | Sync with the providers |
 | DELETE | `/api/v2/models/:id` | both | ADMIN / auth | Delete |
+
+> **DeepSeek thinking-model compatibility — `requires_reasoning` (2026-10-30).** An optional model field:
+> such a provider requires `reasoning_content` on **every** assistant message (an empty string when there is
+> no reasoning). `POST /api/v2/models` accepts `requires_reasoning` (the camelCase `requiresReasoning` too):
+> `true` — force on, `false` — force off, `null` — reset to auto detection (the heuristic: the provider
+> type/name is `deepseek`, the URL contains `deepseek.com`, the model id contains `deepseek`).
+> `GET /api/v2/models` returns `requiresReasoning` **only when the value is set**: an absent field means auto
+> detection, not `false`. Needed for DeepSeek-compatible gateways with a non-default provider/model name
+> (we have no catalog `compatibility` fields as opencode does).
 
 ### 5.11 Agents — `/api/v2/agents`
 
