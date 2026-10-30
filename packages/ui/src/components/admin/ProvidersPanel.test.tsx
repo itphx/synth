@@ -485,3 +485,164 @@ describe('ProvidersPanel: модель по умолчанию провайде�
     expect(tooltips.some((el) => el.getAttribute('aria-label') === 'admin.providers.defaultModelHint')).toBe(true)
   })
 })
+
+describe('ProvidersPanel: расширенные параметры (совместимость)', () => {
+  const baseProvider: ProviderInfo = {
+    name: 'itphx',
+    type: 'openai',
+    icon: '',
+    url: 'https://api.example.com/v1',
+    model: 'model',
+    enabled: true,
+  }
+
+  function mockProviders(providers: ProviderInfo[]) {
+    vi.mocked(synthApi.getProviders).mockResolvedValueOnce({
+      providers,
+      default_provider: providers[0]?.name ?? '',
+    })
+  }
+
+  async function openAdd(host: HTMLElement) {
+    await act(async () => {
+      findButton(host, 'admin.providers.add').click()
+    })
+  }
+
+  async function openEdit(host: HTMLElement) {
+    await act(async () => {
+      findButtonByLabel(host, 'admin.providers.edit').click()
+    })
+  }
+
+  async function toggleCompatibility(host: HTMLElement) {
+    await act(async () => {
+      (host.querySelector('[data-testid="compatibility-toggle"]') as HTMLElement).click()
+    })
+  }
+
+  /** Выбрать пункт в select по data-testid триггера и подстроке текста пункта. */
+  async function pickOption(host: HTMLElement, triggerTestId: string, optionText: string) {
+    const trigger = host.querySelector(`[data-testid="${triggerTestId}"]`) as HTMLElement | null
+    expect(trigger).toBeTruthy()
+    await act(async () => {
+      trigger!.click()
+    })
+    const option = [...document.body.querySelectorAll('[role="option"]')].find((o) =>
+      (o.textContent ?? '').includes(optionText),
+    ) as HTMLElement | undefined
+    expect(option).toBeTruthy()
+    await act(async () => {
+      option!.click()
+    })
+    await act(async () => {})
+  }
+
+  async function save(host: HTMLElement) {
+    const saveButton = host.querySelector('[data-testid="provider-save"]') as HTMLButtonElement | null
+    expect(saveButton).toBeTruthy()
+    await act(async () => {
+      saveButton!.click()
+    })
+    await act(async () => {})
+  }
+
+  function savedBody(): Record<string, unknown> {
+    const call = vi.mocked(synthApi.createProvider).mock.calls.at(-1)
+    expect(call).toBeTruthy()
+    return call![0] as Record<string, unknown>
+  }
+
+  it('у новой сущности блок свёрнут, у сохранённой совместимости — раскрыт', async () => {
+    mockProviders([{ ...baseProvider, compatibility: { reasoningField: 'reasoning' } }])
+    const host = await renderPanel()
+
+    await openAdd(host)
+    expect(host.querySelector('[data-testid="compatibility-panel"]')).toBeNull()
+    expect(host.textContent).toContain('admin.compatibility.title')
+
+    await act(async () => {
+      findButton(host, 'admin.providers.cancel').click()
+    })
+    await openEdit(host)
+    // Сохранённые параметры видны сразу — не нужно искать по свёрнутому блоку.
+    expect(host.querySelector('[data-testid="compatibility-panel"]')).toBeTruthy()
+    const reasoningTrigger = host.querySelector('[data-testid="compatibility-reasoning-field"]')
+    expect(reasoningTrigger!.textContent).toContain('reasoning')
+  })
+
+  it('сохранённые значения раскрываются в контролах и уходят обратно без изменений', async () => {
+    mockProviders([{
+      ...baseProvider,
+      compatibility: { reasoningField: 'reasoning', requireReasoning: false },
+    }])
+    const host = await renderPanel()
+    await openEdit(host)
+
+    expect(
+      host.querySelector('[data-testid="compatibility-require-reasoning"]')!.textContent,
+    ).toContain('admin.compatibility.no')
+
+    await save(host)
+    expect(savedBody().compatibility).toEqual({ reasoningField: 'reasoning', requireReasoning: false })
+  })
+
+  it('tri-state: «Нет» уходит явным false, «Авто» — поле отсутствует', async () => {
+    mockProviders([])
+    const host = await renderPanel()
+    await openAdd(host)
+    await setInputValue(
+      host.querySelector('input[placeholder="https://api.example.com/v1"]') as HTMLInputElement,
+      'https://api.example.com/v1',
+    )
+    const nameLabel = Array.from(host.querySelectorAll('label')).find(
+      (l) => (l.textContent ?? '').trim() === 'admin.providers.name',
+    )!
+    await setInputValue(nameLabel.parentElement!.querySelector('input') as HTMLInputElement, 'new-provider')
+
+    await toggleCompatibility(host)
+    await pickOption(host, 'compatibility-require-reasoning', 'admin.compatibility.no')
+    await save(host)
+
+    expect(savedBody().compatibility).toEqual({ requireReasoning: false })
+  })
+
+  it('всё «авто» у новой сущности → поле compatibility не отправляется', async () => {
+    mockProviders([])
+    const host = await renderPanel()
+    await openAdd(host)
+    const nameLabel = Array.from(host.querySelectorAll('label')).find(
+      (l) => (l.textContent ?? '').trim() === 'admin.providers.name',
+    )!
+    await setInputValue(nameLabel.parentElement!.querySelector('input') as HTMLInputElement, 'new-provider')
+    await save(host)
+
+    expect('compatibility' in savedBody()).toBe(false)
+  })
+
+  it('очистка всех полей у существующей сущности отправляет compatibility: null', async () => {
+    mockProviders([{ ...baseProvider, compatibility: { requireReasoning: true } }])
+    const host = await renderPanel()
+    await openEdit(host)
+
+    await pickOption(host, 'compatibility-require-reasoning', 'admin.compatibility.auto')
+    await save(host)
+
+    expect('compatibility' in savedBody()).toBe(true)
+    expect(savedBody().compatibility).toBeNull()
+  })
+
+  it('произвольное имя поля рассуждений сохраняется через «своё значение»', async () => {
+    mockProviders([{ ...baseProvider, compatibility: { reasoningField: 'reasoning_details' } }])
+    const host = await renderPanel()
+    await openEdit(host)
+
+    // «Своё значение» выбрано автоматически, input заполнен сохранённым именем.
+    const custom = host.querySelector('[data-testid="compatibility-reasoning-custom"]') as HTMLInputElement | null
+    expect(custom).toBeTruthy()
+    expect(custom!.value).toBe('reasoning_details')
+
+    await save(host)
+    expect(savedBody().compatibility).toEqual({ reasoningField: 'reasoning_details' })
+  })
+})

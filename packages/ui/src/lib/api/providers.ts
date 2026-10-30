@@ -1,6 +1,7 @@
 // providers: домен API v2 (ADR-095) — объект `providersApi` и его DTO.
 
 import { BASE_URL, fetchJSON } from './base'
+import type { ModelCompatibility } from './compatibility'
 
 export interface ProviderInfo {
   name: string
@@ -12,6 +13,11 @@ export interface ProviderInfo {
   is_default?: boolean
   /** Валюта по умолчанию для моделей провайдера. */
   currency?: string
+  /**
+   * Слой совместимости (переопределения эвристик провайдера). `undefined`/`null`
+   * — все поля «авто». Тип — `lib/api/compatibility` (общий с моделями).
+   */
+  compatibility?: ModelCompatibility | null
 }
 
 /** Результат `POST /providers/fetch-icon` (admin). */

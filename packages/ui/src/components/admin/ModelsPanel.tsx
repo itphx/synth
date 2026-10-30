@@ -22,6 +22,14 @@ import {
   TextField,
   ToggleField,
 } from '../ui/settings'
+import { CompatibilityFields } from './CompatibilityFields'
+import {
+  buildCompatibilityPayload,
+  draftFromCompatibility,
+  emptyCompatibilityDraft,
+  isCompatibilitySaved,
+  type CompatibilityDraft,
+} from '@/lib/api/compatibility'
 
 type EditingPrices = Record<string, {
   inputPrice: string
@@ -100,6 +108,13 @@ export const ModelsPanel = () => {
   const [addOutPrice, setAddOutPrice] = useState('')
   const [addSaving, setAddSaving] = useState(false)
   const [addError, setAddError] = useState('')
+  // Редактируемая модель (null — форма создаёт новую). Форма одна: при
+  // редактировании она предзаполняется, provider/name блокируются.
+  const [editingModel, setEditingModel] = useState<ModelInfo | null>(null)
+  // Слой совместимости: черновик контролов + признак «уже сохранены параметры»
+  // (различает «не отправлять поле» и явный сброс `compatibility: null`).
+  const [compatibility, setCompatibility] = useState<CompatibilityDraft>(emptyCompatibilityDraft)
+  const [hadCompatibility, setHadCompatibility] = useState(false)
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   const load = useCallback(async () => {
@@ -360,6 +375,51 @@ export const ModelsPanel = () => {
     } catch { /* ignore */ }
   }
 
+  /** Открыть пустую форму создания модели (сбрасывает режим редактирования). */
+  const openAddForm = () => {
+    setEditingModel(null)
+    setAddProvider('')
+    setAddName('')
+    setAddCtx('')
+    setAddInPrice('')
+    setAddOutPrice('')
+    setCompatibility(emptyCompatibilityDraft())
+    setHadCompatibility(false)
+    setAddError('')
+    setShowAddForm(true)
+  }
+
+  /**
+   * Открыть форму для существующей модели (создание/редактирование — одна форма).
+   * Значения переносятся как есть, чтобы сохранение без правок не меняло запись.
+   */
+  const openEditModel = (model: ModelInfo) => {
+    setEditingModel(model)
+    setAddProvider(model.provider)
+    setAddName(model.name)
+    setAddCtx(model.context_window !== undefined ? String(model.context_window) : '')
+    setAddInPrice(model.input_price !== undefined ? String(model.input_price) : '')
+    setAddOutPrice(model.output_price !== undefined ? String(model.output_price) : '')
+    setCompatibility(draftFromCompatibility(model.compatibility))
+    setHadCompatibility(isCompatibilitySaved(model.compatibility))
+    setAddError('')
+    setShowAddForm(true)
+  }
+
+  const closeAddForm = () => {
+    setShowAddForm(false)
+    setEditingModel(null)
+    setAddError('')
+  }
+
+  // Форма живёт над списком: при открытии/смене модели прокручиваем к ней,
+  // иначе редактирование строки из глубины списка выглядит как «ничего не произошло».
+  useEffect(() => {
+    if (!showAddForm) return
+    const section = document.querySelector('[data-settings-section="models-add-manual"]')
+    ;(section as HTMLElement | null)?.scrollIntoView?.({ block: 'start' })
+  }, [showAddForm, editingModel])
+
   const handleAddModel = async () => {
     setAddError('')
     if (!addProvider || !addName.trim()) {
@@ -368,22 +428,35 @@ export const ModelsPanel = () => {
     }
     setAddSaving(true)
     try {
-      const fullId = `${addProvider}/${addName.trim()}`
+      const fullId = editingModel?.id ?? `${addProvider}/${addName.trim()}`
       const body: Record<string, unknown> = {
         id: fullId,
         name: addName.trim(),
         provider: addProvider,
-        enabled: true,
+        // Редактирование не должно включать выключенную модель: сохраняем статус.
+        enabled: editingModel ? editingModel.enabled : true,
       }
-      if (addCtx !== '') {
+      // При редактировании отправляем контекст/цены только если их изменили:
+      // иначе неизменная форма переписала бы источник контекста (`reference` → `manual`).
+      const ctxChanged = !editingModel
+        || addCtx !== (editingModel.context_window !== undefined ? String(editingModel.context_window) : '')
+      if (addCtx !== '' && ctxChanged) {
         const w = parseInt(addCtx, 10)
         if (!isNaN(w)) { body.context_window = w; body.context_source = 'manual' }
       }
-      if (addInPrice !== '') { const v = parseFloat(addInPrice); if (!isNaN(v)) body.input_price = v }
-      if (addOutPrice !== '') { const v = parseFloat(addOutPrice); if (!isNaN(v)) body.output_price = v }
+      const inChanged = !editingModel
+        || addInPrice !== (editingModel.input_price !== undefined ? String(editingModel.input_price) : '')
+      if (addInPrice !== '' && inChanged) { const v = parseFloat(addInPrice); if (!isNaN(v)) body.input_price = v }
+      const outChanged = !editingModel
+        || addOutPrice !== (editingModel.output_price !== undefined ? String(editingModel.output_price) : '')
+      if (addOutPrice !== '' && outChanged) { const v = parseFloat(addOutPrice); if (!isNaN(v)) body.output_price = v }
+
+      const compatibilityPayload = buildCompatibilityPayload(compatibility, hadCompatibility)
+      if (compatibilityPayload !== undefined) body.compatibility = compatibilityPayload
 
       await synthApi.saveModel(body)
       setShowAddForm(false)
+      setEditingModel(null)
       setAddName('')
       setAddCtx('')
       setAddInPrice('')
@@ -692,6 +765,36 @@ export const ModelsPanel = () => {
     </button>
   )
 
+  /** Открыть форму модели для редактирования (в т.ч. слой совместимости). */
+  const renderEditButton = (model: ModelInfo) => (
+    <button
+      onClick={() => openEditModel(model)}
+      className={cn(
+        'rounded text-muted-foreground/60 hover:text-primary transition-colors',
+        isPhone
+          ? 'h-[var(--control-height-touch)] w-[var(--control-height-touch)] flex items-center justify-center shrink-0'
+          : 'p-0.5',
+      )}
+      aria-label={t('admin.models.editModel')}
+      title={t('admin.models.editModel')}
+    >
+      <Icon name="edit-2" className="size-3.5" />
+    </button>
+  )
+
+  /** Бейдж «есть сохранённые расширенные параметры» — иначе это не видно в списке. */
+  const renderCompatibilityBadge = (model: ModelInfo) => (
+    isCompatibilitySaved(model.compatibility) ? (
+      <span
+        data-testid="model-compatibility-badge"
+        className="px-1 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground shrink-0"
+        title={t('admin.compatibility.title')}
+      >
+        {t('admin.compatibility.badgeShort')}
+      </span>
+    ) : null
+  )
+
   /** Удаление модели. */
   const renderDeleteButton = (model: ModelInfo) => (
     <Button
@@ -733,6 +836,8 @@ export const ModelsPanel = () => {
               {model.name}
             </span>
           </div>
+          {renderCompatibilityBadge(model)}
+          {renderEditButton(model)}
         </div>
 
         {/* Контекстное окно */}
@@ -822,6 +927,8 @@ export const ModelsPanel = () => {
           <span className={cn('font-medium truncate min-w-0 flex-1', !model.enabled && 'opacity-50')}>
             {model.name}
           </span>
+          {renderCompatibilityBadge(model)}
+          {renderEditButton(model)}
           {renderDefaultButton(model, pinLabel)}
           {renderDeleteButton(model)}
         </div>
@@ -931,7 +1038,7 @@ export const ModelsPanel = () => {
           />
           <Button
             variant="outline"
-            onClick={() => setShowAddForm(true)}
+            onClick={openAddForm}
             className="shrink-0 border-dashed hover:border-solid hover:bg-muted"
             data-testid="models-add-button"
           >
@@ -1038,7 +1145,7 @@ export const ModelsPanel = () => {
       {showAddForm && (
         <SettingsSection
           id="models-add-manual"
-          title={t('admin.models.addManual')}
+          title={editingModel ? t('admin.models.editManual') : t('admin.models.addManual')}
         >
           {addError && (
             <div className="bg-status-error/10 border border-status-error/30 rounded p-2 text-xs text-status-error min-w-0 break-words">
@@ -1052,6 +1159,7 @@ export const ModelsPanel = () => {
               value={addProvider}
               onValueChange={setAddProvider}
               ariaLabel={t('admin.models.provider')}
+              disabled={!!editingModel}
             >
               <SelectContent>
                 <SelectItem value="">—</SelectItem>
@@ -1067,6 +1175,7 @@ export const ModelsPanel = () => {
               onChange={(e) => setAddName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddModel()}
               placeholder="gpt-4o"
+              disabled={!!editingModel}
             />
             <NumberField
               label={t('admin.models.contextK')}
@@ -1101,11 +1210,17 @@ export const ModelsPanel = () => {
               />
             </div>
           </div>
+          <CompatibilityFields
+            key={editingModel?.id ?? 'new'}
+            draft={compatibility}
+            onChange={setCompatibility}
+            saved={hadCompatibility}
+          />
           <SettingsActions
             onSave={handleAddModel}
-            onCancel={() => { setShowAddForm(false); setAddError('') }}
+            onCancel={closeAddForm}
             saving={addSaving}
-            saveLabel={t('admin.models.addButton')}
+            saveLabel={editingModel ? t('admin.models.save') : t('admin.models.addButton')}
             cancelLabel={t('admin.models.cancel')}
             saveTestId="model-add-save"
             cancelTestId="model-add-cancel"

@@ -35,7 +35,7 @@ const apiMock = vi.hoisted(() => ({
   setDefaultModel: vi.fn(async (pair: { provider: string; model: string }) => ({ defaultModel: pair })),
   resetDefaultModel: vi.fn(async () => ({ status: 'restored', defaultModel: null, isOverridden: false, defaults: null })),
   fetchModels: vi.fn(async () => ({ fetched: 0, new: 0, enriched: 0 })),
-  saveModel: vi.fn(async () => ({})),
+  saveModel: vi.fn(async (_data: Record<string, unknown>) => ({})),
   deleteModel: vi.fn(async () => undefined),
 }))
 
@@ -634,5 +634,161 @@ describe('ModelsPanel: глобальный поиск по названию', (
 
     expect(container.textContent).toContain('No models match “zzz”')
     expect(container.querySelector('[data-testid="models-scroll"]')).toBeNull()
+  })
+})
+
+describe('ModelsPanel: расширенные параметры (совместимость)', () => {
+  async function openAddForm(container: HTMLElement) {
+    const add = container.querySelector('[data-testid="models-add-button"]') as HTMLButtonElement
+    expect(add).toBeTruthy()
+    await act(async () => {
+      add.click()
+    })
+  }
+
+  async function openEditForm(container: HTMLElement) {
+    const edit = container.querySelector('button[aria-label="Edit model"]') as HTMLButtonElement | null
+    expect(edit).toBeTruthy()
+    await act(async () => {
+      edit!.click()
+    })
+  }
+
+  async function toggleCompatibility(container: HTMLElement) {
+    const toggle = container.querySelector('[data-testid="compatibility-toggle"]') as HTMLElement
+    expect(toggle).toBeTruthy()
+    await act(async () => {
+      toggle.click()
+    })
+  }
+
+  async function pickOption(container: HTMLElement, triggerTestId: string, optionText: string) {
+    const trigger = container.querySelector(`[data-testid="${triggerTestId}"]`) as HTMLElement | null
+    expect(trigger).toBeTruthy()
+    await act(async () => {
+      trigger!.click()
+    })
+    const option = [...document.body.querySelectorAll('[role="option"]')].find((o) =>
+      (o.textContent ?? '').trim() === optionText,
+    ) as HTMLElement | undefined
+    expect(option).toBeTruthy()
+    await act(async () => {
+      option!.click()
+    })
+    await act(async () => {})
+  }
+
+  async function save(container: HTMLElement) {
+    const saveButton = container.querySelector('[data-testid="model-add-save"]') as HTMLButtonElement
+    expect(saveButton).toBeTruthy()
+    await act(async () => {
+      saveButton.click()
+    })
+    await act(async () => {})
+  }
+
+  function lastSavedBody(): Record<string, unknown> {
+    const call = apiMock.saveModel.mock.calls.at(-1)
+    expect(call).toBeTruthy()
+    return call![0] as Record<string, unknown>
+  }
+
+  it('в форме создания блок свёрнут, в форме редактирования сохранённой модели — раскрыт', async () => {
+    apiMock.getModels.mockResolvedValue([
+      {
+        provider: { name: 'itphx', type: 'openai', icon: '', defaultModel: '', currency: 'USD' },
+        models: [
+          {
+            id: 'itphx/m1',
+            name: 'm1',
+            provider: 'itphx',
+            enabled: true,
+            isDefault: false,
+            compatibility: { reasoningField: 'reasoning', supportsToolChoice: false },
+          },
+        ],
+      },
+    ])
+    const container = await renderPanel()
+
+    await openAddForm(container)
+    expect(container.querySelector('[data-testid="compatibility-panel"]')).toBeNull()
+    expect(container.textContent).toContain('Advanced options')
+
+    await act(async () => {
+      (container.querySelector('[data-testid="model-add-cancel"]') as HTMLButtonElement).click()
+    })
+
+    await openEditForm(container)
+    expect(container.querySelector('[data-testid="compatibility-panel"]')).toBeTruthy()
+    expect(
+      container.querySelector('[data-testid="compatibility-reasoning-field"]')!.textContent,
+    ).toContain('reasoning')
+    expect(
+      container.querySelector('[data-testid="compatibility-supports-tool-choice"]')!.textContent,
+    ).toContain('No')
+  })
+
+  it('tri-state в редактировании: «Нет» уходит явным false', async () => {
+    const container = await renderPanel()
+    await openEditForm(container)
+    await toggleCompatibility(container)
+    await pickOption(container, 'compatibility-require-reasoning', 'No')
+    await save(container)
+
+    expect(lastSavedBody().compatibility).toEqual({ requireReasoning: false })
+  })
+
+  it('всё «авто» в редактировании без сохранённых параметров → compatibility не отправляется', async () => {
+    const container = await renderPanel()
+    await openEditForm(container)
+    await save(container)
+
+    expect('compatibility' in lastSavedBody()).toBe(false)
+  })
+
+  it('очистка у модели с сохранёнными параметрами отправляет compatibility: null', async () => {
+    apiMock.getModels.mockResolvedValue([
+      {
+        provider: { name: 'itphx', type: 'openai', icon: '', defaultModel: '', currency: 'USD' },
+        models: [
+          {
+            id: 'itphx/m1',
+            name: 'm1',
+            provider: 'itphx',
+            enabled: true,
+            isDefault: false,
+            compatibility: { requireReasoning: true },
+          },
+        ],
+      },
+    ])
+    const container = await renderPanel()
+    await openEditForm(container)
+    await pickOption(container, 'compatibility-require-reasoning', 'Auto')
+    await save(container)
+
+    expect('compatibility' in lastSavedBody()).toBe(true)
+    expect(lastSavedBody().compatibility).toBeNull()
+  })
+
+  it('в списке модель с сохранёнными параметрами помечена бейджем', async () => {
+    apiMock.getModels.mockResolvedValue([
+      {
+        provider: { name: 'itphx', type: 'openai', icon: '', defaultModel: '', currency: 'USD' },
+        models: [
+          {
+            id: 'itphx/m1',
+            name: 'm1',
+            provider: 'itphx',
+            enabled: true,
+            isDefault: false,
+            compatibility: { streamUsage: false },
+          },
+        ],
+      },
+    ])
+    const container = await renderPanel()
+    expect(container.querySelector('[data-testid="model-compatibility-badge"]')).toBeTruthy()
   })
 })

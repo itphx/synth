@@ -18,9 +18,17 @@ import {
   ToggleField,
 } from '../ui/settings'
 import { ProviderIcon, describeProviderIcon, PROVIDER_RI_ICONS, PROVIDER_BRAND_NAMES } from './ProviderIcon'
+import { CompatibilityFields } from './CompatibilityFields'
 import { downscaleIconDataUrl, isOversizedIcon } from '@/lib/imageIcon'
 import { CURRENCY_OPTIONS, currencySymbol } from '@/lib/currency'
 import { useProvidersStore } from '@/stores/providersStore'
+import {
+  buildCompatibilityPayload,
+  draftFromCompatibility,
+  emptyCompatibilityDraft,
+  isCompatibilitySaved,
+  type CompatibilityDraft,
+} from '@/lib/api/compatibility'
 
 interface FetchIconResult {
   icon?: string | null
@@ -55,6 +63,10 @@ export const ProvidersPanel = () => {
     enabled: true, icon: '', currency: 'USD',
   })
   const [error, setError] = useState('')
+  // Слой совместимости: черновик контролов + признак «у сущности уже сохранены
+  // параметры» (нужен, чтобы отличить «ничего не отправлять» от `compatibility: null`).
+  const [compatibility, setCompatibility] = useState<CompatibilityDraft>(emptyCompatibilityDraft)
+  const [hadCompatibility, setHadCompatibility] = useState(false)
   const [fetchingIcon, setFetchingIcon] = useState(false)
   const [fetchedIcon, setFetchedIcon] = useState<FetchIconResult | null>(null)
   const [iconUncompressed, setIconUncompressed] = useState(false)
@@ -86,6 +98,8 @@ export const ProvidersPanel = () => {
       const heavy = isOversizedIcon(p.icon)
       setEditName(p.name)
       setForm({ name: p.name, type: p.type, base_url: p.url, api_key: '', default_model: p.model, timeout: 120, enabled: p.enabled !== false, icon: p.icon || '', currency: p.currency || 'USD' })
+      setCompatibility(draftFromCompatibility(p.compatibility))
+      setHadCompatibility(isCompatibilitySaved(p.compatibility))
       setIconUncompressed(false)
       if (heavy && p.icon) {
         // Сжимаем тяжёлую иконку сразу в форме — обычное «Сохранить» мигрирует запись.
@@ -95,6 +109,8 @@ export const ProvidersPanel = () => {
     } else {
       setEditName('')
       setForm({ name: '', type: 'openai', base_url: '', api_key: '', default_model: '', timeout: 120, enabled: true, icon: '', currency: 'USD' })
+      setCompatibility(emptyCompatibilityDraft())
+      setHadCompatibility(false)
       setIconUncompressed(false)
     }
     setShowForm(true)
@@ -108,6 +124,7 @@ export const ProvidersPanel = () => {
   const handleSave = async () => {
     if (!form.name.trim()) { setError(t('common.nameRequired')); return }
     try {
+      const compatibilityPayload = buildCompatibilityPayload(compatibility, hadCompatibility)
       const body: Record<string, unknown> = {
         name: form.name.trim(),
         type: form.type,
@@ -118,6 +135,9 @@ export const ProvidersPanel = () => {
         enabled: form.enabled,
         icon: form.icon,
         currency: form.currency,
+        // Поле отправляем только когда оно что-то значит: у новой сущности без
+        // настроек — не отправляем вовсе, при полной очистке — явный `null`.
+        ...(compatibilityPayload !== undefined ? { compatibility: compatibilityPayload } : {}),
       }
       await synthApi.createProvider(body)
       setShowForm(false)
@@ -290,6 +310,13 @@ export const ProvidersPanel = () => {
             tooltip={t('settings.help.providers.enabled')}
             enabled={form.enabled}
             onToggle={() => setForm({ ...form, enabled: !form.enabled })}
+          />
+
+          <CompatibilityFields
+            key={editName || 'new'}
+            draft={compatibility}
+            onChange={setCompatibility}
+            saved={hadCompatibility}
           />
 
           {/* Иконка */}

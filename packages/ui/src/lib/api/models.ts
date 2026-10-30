@@ -3,6 +3,7 @@
 import type { ProviderGroupInfo } from './providers'
 import { BASE_URL, fetchJSON } from './base'
 import { normalizeModelInfo } from './modelNormalize'
+import type { ModelCompatibility } from './compatibility'
 
 export interface ModelInfo {
   id: string
@@ -20,6 +21,11 @@ export interface ModelInfo {
   cache_write_price?: number
   /** Валюта цен модели; отсутствует → валюта провайдера → USD. */
   currency?: string
+  /**
+   * Слой совместимости модели (переопределения эвристик). `undefined`/`null` —
+   * все поля «авто»; тип — `lib/api/compatibility` (общий с провайдерами).
+   */
+  compatibility?: ModelCompatibility | null
   /**
    * ADR-115: модальности входа модели (`text`/`image`/`pdf`/`audio`/`video`).
    * Сервер отдаёт поле в `GET /models` и молча отбрасывает вложения, тип которых
