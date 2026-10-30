@@ -772,6 +772,46 @@ html.device-tablet .notifications-popup {
   counter-increment: none;
 }
 
+/* -------------------------------------------------------------
+   Подсвеченный блок (shiki, `lib/markdown/highlight.ts`).
+
+   shiki заменяет содержимое `<code>` на `<span class="line">` с
+   инлайновыми цветами из темы, собранной из CSS-переменных. Строки
+   ведут себя как `.md-code-line` (блок + `white-space: pre`), номера
+   рисует тот же счётчик `md-code-line`, объявленный на `<code>`.
+   Текст между строками (`\n`) в нормальном whitespace не создаёт
+   пустых строк — как и у неразмеченного блока.
+   ------------------------------------------------------------- */
+.markdown-content .md-code-pre.shiki .line {
+  position: relative;
+  display: block;
+  min-height: 1.5em;
+  padding-left: 3.25em;
+  white-space: pre;
+}
+
+.markdown-content .md-code-pre.shiki .line::before {
+  position: absolute;
+  left: 0;
+  width: 2.5em;
+  color: var(--muted-foreground);
+  text-align: right;
+  opacity: 0.7;
+  content: counter(md-code-line);
+  counter-increment: md-code-line;
+  user-select: none;
+  pointer-events: none;
+}
+
+.markdown-content .md-code[data-numbered='false'] .md-code-pre.shiki .line {
+  padding-left: 0;
+}
+
+.markdown-content .md-code[data-numbered='false'] .md-code-pre.shiki .line::before {
+  content: none;
+  counter-increment: none;
+}
+
 .markdown-content .md-inline-code {
   padding: 0.0625rem 0.3rem;
   border-radius: var(--radius-sm, 0.25rem);

@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef } from 'react
 import { marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import { i18nText, useI18nStore } from '@/lib/i18n'
+import { highlightCode } from '@/lib/markdown/highlight'
 
 interface MarkdownContentProps {
   content: string
@@ -154,6 +155,45 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
     }
   }, [])
 
+  const containerRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * Подсветка кода (shiki, лениво) — только для «устоявшихся» блоков: во время
+   * стриминга не трогаем (иначе DOM пересобирается на каждой дельте), а после
+   * завершения шага (`streaming: false`) подсвечиваем один раз — маркер
+   * `data-highlighted` не даёт повторять работу при перерисовках.
+   */
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || streaming) return
+    let cancelled = false
+    const blocks = Array.from(container.querySelectorAll<HTMLElement>('.md-code[data-lang]'))
+    for (const block of blocks) {
+      const lang = block.dataset.lang ?? ''
+      if (!lang || lang === 'text') continue
+      if (block.dataset.highlighted === '1' || block.dataset.highlighting === '1') continue
+      const pre = block.querySelector<HTMLElement>('pre.md-code-pre')
+      const code = pre?.querySelector('code')
+      if (!pre || !code) continue
+      const source = code.textContent ?? ''
+      if (!source) continue
+      // Маркер «в полёте»: эффект может перезапуститься, пока идёт await.
+      block.dataset.highlighting = '1'
+      void highlightCode(source, lang).then((highlighted) => {
+        delete block.dataset.highlighting
+        if (cancelled || !block.isConnected) return
+        // Контент изменился, пока шёл await — результат устарел, не применяем.
+        if (!highlighted || (code.textContent ?? '') !== source) return
+        code.innerHTML = highlighted
+        pre.classList.add('shiki')
+        block.dataset.highlighted = '1'
+      })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [html, streaming])
+
   // Делегирование клика: кнопка копирования живёт в HTML из marked, не в React-дереве.
   const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target
@@ -184,6 +224,7 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
   return (
     <div
       className={`markdown-content text-sm leading-relaxed ${className}`}
+      ref={containerRef}
       onClick={handleClick}
       dangerouslySetInnerHTML={{ __html: html }}
     />

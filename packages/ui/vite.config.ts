@@ -34,6 +34,40 @@ const UI_COMPANION_PACKAGES = new Set([
 
 const MARKDOWN_PACKAGES = new Set(["marked", "dompurify"])
 
+/**
+ * Подсветка кода (shiki) грузится **лениво** (`lib/markdown/highlight.ts`) и в
+ * вендорные группы не попадает: иначе ядро, движок oniguruma, wasm и все
+ * грамматики сливаются в eager `vendor-misc` и ленивость теряется. Без группы
+ * rolldown делает под них отдельные асинхронные чанки, которые грузятся при
+ * первом блоке кода.
+ *
+ * Второй список — транзитивные зависимости shiki (`hast-util-to-html` и его
+ * семейства): приложению они не нужны и тоже должны остаться в ленивых чанках.
+ */
+const LAZY_VENDOR_FAMILIES = [
+  "hast-",
+  "mdast-",
+  "micromark-",
+  "unist-",
+  "vfile",
+  "character-entities",
+  "stringify-entities",
+  "property-information",
+  "ccount",
+  "comma-separated-tokens",
+  "space-separated-tokens",
+  "zwitch",
+  "web-namespaces",
+  "dequal",
+  "devlop",
+  "trim-lines",
+]
+
+function isLazyVendorPackage(pkg: string): boolean {
+  if (pkg === "shiki" || pkg.startsWith("@shikijs/")) return true
+  return LAZY_VENDOR_FAMILIES.some((family) => pkg === family || pkg.startsWith(family))
+}
+
 /** Имя пакета по id модуля (`.../node_modules/<pkg>/...`, включая pnpm-путь). */
 function packageNameFromId(id: string): string | null {
   const marker = "node_modules/"
@@ -49,6 +83,8 @@ function packageNameFromId(id: string): string | null {
 
 /** Группа вендорного чанка для пакета. `null` — модуль не является вендором. */
 function vendorGroupForPackage(pkg: string): string | null {
+  // Ленивые вендоры (shiki) — вне групп: остаются в отдельных async-чанках.
+  if (isLazyVendorPackage(pkg)) return null
   if (REACT_PACKAGES.has(pkg)) return "vendor-react"
   if (
     pkg.startsWith("@radix-ui/") ||

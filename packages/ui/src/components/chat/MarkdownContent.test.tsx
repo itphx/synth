@@ -4,24 +4,51 @@ import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
 import { i18nText } from '@/lib/i18n'
+import { highlightCode } from '@/lib/markdown/highlight'
 import { MarkdownContent, MAX_NUMBERED_CODE_LINES } from './MarkdownContent'
+
+// Подсветка (shiki) — отдельный модуль со своим тестом; здесь проверяем только
+// интеграцию: когда вызывается и как применяется/игнорируется результат.
+vi.mock('@/lib/markdown/highlight', () => ({
+  highlightCode: vi.fn(async () => null),
+}))
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
-async function renderMarkdown(content: string): Promise<HTMLElement> {
+async function renderTree(
+  content: string,
+  streaming = false,
+): Promise<{ root: Root; container: HTMLElement }> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push({ root, container })
   await act(async () => {
-    root.render(<MarkdownContent content={content} />)
+    root.render(<MarkdownContent content={content} streaming={streaming} />)
   })
+  return { root, container }
+}
+
+async function renderMarkdown(content: string): Promise<HTMLElement> {
+  const { container } = await renderTree(content)
   return container
 }
 
+/** Дождаться асинхронного эффекта подсветки (промис + запись в DOM). */
+async function flushEffects(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 beforeEach(() => {
+  const highlight = vi.mocked(highlightCode)
+  highlight.mockReset()
+  // По умолчанию подсветки нет: тесты блоков кода не зависят от shiki.
+  highlight.mockResolvedValue(null)
   Object.defineProperty(navigator, 'clipboard', {
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
     configurable: true,
@@ -170,5 +197,48 @@ describe('MarkdownContent: санитайзер', () => {
     expect(container.querySelector('details')).not.toBeNull()
     expect(container.querySelector('summary')?.textContent).toBe('Подробности')
     expect(container.querySelector('details')?.textContent).toContain('Текст')
+  })
+})
+
+describe('MarkdownContent: подсветка кода (shiki)', () => {
+  it('во время стриминга не подсвечивает, после завершения — применяет HTML', async () => {
+    vi.mocked(highlightCode).mockResolvedValue('<span class="line">HIGHLIGHTED</span>')
+    const content = '```ts\nconst a = 1\n```'
+    const { root, container } = await renderTree(content, true)
+
+    await flushEffects()
+    expect(highlightCode).not.toHaveBeenCalled()
+    expect(container.querySelector('pre.md-code-pre')?.classList.contains('shiki')).toBe(false)
+
+    await act(async () => {
+      root.render(<MarkdownContent content={content} streaming={false} />)
+    })
+    await flushEffects()
+
+    expect(highlightCode).toHaveBeenCalledTimes(1)
+    expect(highlightCode).toHaveBeenCalledWith('const a = 1', 'ts')
+    const pre = container.querySelector('pre.md-code-pre')
+    expect(pre?.classList.contains('shiki')).toBe(true)
+    expect(pre?.querySelector('code')?.innerHTML).toContain('HIGHLIGHTED')
+    expect(container.querySelector('.md-code')?.getAttribute('data-highlighted')).toBe('1')
+  })
+
+  it('null от подсветки блок не ломает (остаётся экранированный текст)', async () => {
+    const container = await renderMarkdown('```mermaid\ngraph TD\n```')
+    await flushEffects()
+
+    expect(highlightCode).toHaveBeenCalled()
+    const pre = container.querySelector('pre.md-code-pre')
+    expect(pre?.classList.contains('shiki')).toBe(false)
+    expect(container.querySelector('.md-code')?.getAttribute('data-highlighted')).toBeNull()
+    expect(container.querySelector('.md-code-line')?.textContent).toBe('graph TD')
+  })
+
+  it('блок без языка (text) на подсветку не отправляется', async () => {
+    const container = await renderMarkdown('```\nplain\n```')
+    await flushEffects()
+
+    expect(highlightCode).not.toHaveBeenCalled()
+    expect(container.querySelector('.md-code')?.getAttribute('data-numbered')).toBe('true')
   })
 })
