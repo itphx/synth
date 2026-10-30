@@ -264,7 +264,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         // ADR-115: id загруженных вложений уходят в тело запроса промпта.
         // ADR-118 §3: ответ — `202 {messageId, mode, position}`; реплика уже
         // показана в ленте оптимистично по `messageId`.
-        const accepted = await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
+        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
         notify({
           text: t('chat.message.sent'),
           type: 'info',

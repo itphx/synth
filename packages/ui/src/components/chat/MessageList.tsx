@@ -1,20 +1,84 @@
-import { useRef, useCallback, useState, useEffect } from 'react'
+import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
-import { StreamingPlaceholder } from './StreamingPlaceholder'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
 import { isVisibleMessage } from './messageVisibility'
-import type { MessageData, StreamState, StreamRetry } from '@/stores/chatStore'
+import {
+  sortMessagesByOrd,
+  useChatStore,
+  type ActiveTurn,
+  type MessageData,
+  type StreamRetry,
+} from '@/stores/chatStore'
+
+/**
+ * Группа сообщений ленты (ADR-118 §1): **сегменты одного хода** склеиваются в
+ * одну группу — заголовок (агент/модель) рисуется только у первого сегмента,
+ * между сегментами нет вертикального зазора.
+ */
+export interface MessageGroup {
+  /** Стабильный ключ группы (для React/виртуализатора). */
+  key: string
+  /** Ход группы; `null` — сообщение вне хода (user/системное). */
+  turnId: string | null
+  messages: MessageData[]
+}
+
+/**
+ * Сгруппировать сообщения по ходу (`turn_id`).
+ *
+ * - порядок — по `ord` (`sortMessagesByOrd`), тай-брейк по `id`;
+ * - соседние сообщения склеиваются, только если у них **один** `turn_id` и ни
+ *   одно из них не user-реплика;
+ * - вставленное user-сообщение (вмешательство, ADR-104) **разделяет** сегменты
+ *   хода: оно само — отдельная группа и не склеивается с соседями своего хода.
+ */
+export function groupMessagesByTurn(messages: MessageData[]): MessageGroup[] {
+  const groups: MessageGroup[] = []
+  let current: MessageGroup | null = null
+
+  for (const msg of sortMessagesByOrd(messages)) {
+    const turnId = msg.turn_id ?? null
+    const prev = current?.messages[current.messages.length - 1]
+    const joinsTurn =
+      current !== null &&
+      turnId !== null &&
+      current.turnId === turnId &&
+      prev !== undefined &&
+      prev.role !== 'user' &&
+      msg.role !== 'user'
+
+    if (joinsTurn && current) {
+      current.messages.push(msg)
+      continue
+    }
+
+    current = {
+      key: `${turnId ? `turn:${turnId}` : 'msg'}:${msg.id ?? msg.index}`,
+      turnId,
+      messages: [msg],
+    }
+    groups.push(current)
+  }
+
+  return groups
+}
 
 interface MessageListProps {
   messages: MessageData[]
-  streams: Record<string, StreamState>
+  /**
+   * ADR-118 §1: активный ход сессии (`turnBySession`) — границы группировки и
+   * источник статуса «идёт обработка» у user-реплики.
+   */
+  turn?: ActiveTurn | null
   /** Сессия — для URL вложений сообщений (ADR-115). */
   sessionId?: string
   onCopy: (msg: MessageData) => void
   onToggle: (msg: MessageData) => void
   onPin: (msg: MessageData) => void
+  /** ADR-118 §10: pin на контейнере хода — все сегменты группы. */
+  onPinTurn?: (segments: MessageData[]) => void
   onDelete: (msg: MessageData) => void
   onRetry: (msg: MessageData) => void
   onDebug: (msg: MessageData) => void
@@ -37,33 +101,30 @@ const VIRTUALIZE_THRESHOLD = 30
 const OVERSCAN = 30
 
 /**
- * Статус активного стрима, связанного с user-сообщением (по metadata.stream_id),
- * пока провайдер ещё не вернул ни одного чанка. null — статус не показываем.
- * Вынесено на уровень модуля, чтобы рендер не создавал замыкание.
+ * Статус «идёт обработка» у последней user-реплики, пока в ходе ещё нет живого
+ * сообщения (первой дельты). Возвращает `null` — статус не показываем.
  */
-function computePending(
-  msg: MessageData,
-  streams: Record<string, StreamState>,
+function computePendingStatus(
+  turn: ActiveTurn | null | undefined,
   retry: StreamRetry | null | undefined,
   onRetryNow?: () => void,
-  onCancelRetry?: () => void
+  onCancelRetry?: () => void,
 ): PendingStreamStatus | null {
-  if (msg.role !== 'user') return null
-  const streamId = msg.metadata?.stream_id as string | undefined
-  if (!streamId) return null
-  const s = streams[streamId]
-  if (!s || !s.isStreaming || s.hasContent) return null
-  const r = retry && retry.streamId === streamId ? retry : null
-  return r ? { status: 'retrying', retry: r, onRetryNow, onCancelRetry } : { status: 'processing' }
+  if (!turn || turn.status !== 'streaming') return null
+  const activeRetry = retry && turn.streamId && retry.streamId === turn.streamId ? retry : null
+  return activeRetry
+    ? { status: 'retrying', retry: activeRetry, onRetryNow, onCancelRetry }
+    : { status: 'processing' }
 }
 
 export function MessageList({
   messages,
-  streams,
+  turn,
   sessionId,
   onCopy,
   onToggle,
   onPin,
+  onPinTurn,
   onDelete,
   onRetry,
   onDebug,
@@ -108,17 +169,67 @@ export function MessageList({
     return () => ro.disconnect()
   }, [])
 
-  const streamEntries = Object.values(streams).filter((s) => s.isStreaming && s.hasContent)
-  const streamContentSize = streamEntries.reduce((sum, s) => sum + s.content.length + s.reasoningBlocks.reduce((rsum, r) => rsum + r.text.length, 0), 0)
+  /**
+   * ADR-118 §5: живой контент — **части** сообщения (`partsBySession`), а не
+   * отдельный «стрим». Для автоскролла хватает объёма накопленного текста.
+   */
+  const livePartsSize = useChatStore((s) => {
+    if (!sessionId) return 0
+    const byMessage = s.partsBySession[sessionId]
+    if (!byMessage) return 0
+    let size = 0
+    for (const parts of Object.values(byMessage)) {
+      for (const part of Object.values(parts)) size += part.text.length + (part.raw?.length ?? 0)
+    }
+    return size
+  })
 
   // Служебные сообщения tool-chain (metadata.tool_chain === true) не рендерятся
   // отдельными пузырями — их визуальное представление уже в финальном сообщении
   // (tool_calls / reasoning_blocks / intermediate_text_blocks). Durable
   // state-сообщения режима/плана/todo (ADR-070 §2.8) тоже скрыты в UI.
-  const visibleMessages = messages.filter(isVisibleMessage)
+  const visibleMessages = useMemo(() => messages.filter(isVisibleMessage), [messages])
+  /** Группы-ходы (ADR-118 §1) — единица рендера и виртуализации. */
+  const groups = useMemo(() => groupMessagesByTurn(visibleMessages), [visibleMessages])
+
+  const hasLiveMessage = useMemo(
+    () => (turn?.messageId ? visibleMessages.some((m) => m.id === turn.messageId) : false),
+    [visibleMessages, turn?.messageId],
+  )
+
+  /**
+   * Статус «обработка/повтор» — только у последней user-реплики и только пока
+   * живого сообщения хода ещё нет (до первой дельты). Мемоизирован, чтобы
+   * `React.memo(ChatMessage)` не сбрасывался на каждом рендере списка.
+   */
+  const pendingByIndex = useMemo(() => {
+    const map = new Map<number, PendingStreamStatus>()
+    if (hasLiveMessage) return map
+    const status = computePendingStatus(turn, retry, onRetryNow, onCancelRetry)
+    if (!status) return map
+    const lastUser = [...visibleMessages].reverse().find((m) => m.role === 'user')
+    if (!lastUser) return map
+    if (turn?.turnId && lastUser.turn_id && lastUser.turn_id !== turn.turnId) return map
+    map.set(lastUser.index, status)
+    return map
+  }, [visibleMessages, turn, hasLiveMessage, retry, onRetryNow, onCancelRetry])
+
+  /**
+   * ADR-118 §10: pin на контейнере хода — у группы из нескольких сегментов
+   * действие первого сегмента пинит **весь** ход. Обработчики мемоизированы,
+   * чтобы `React.memo(ChatMessage)` не сбрасывался на каждом рендере списка.
+   */
+  const pinTurnHandlers = useMemo(() => {
+    if (!onPinTurn) return null
+    const map = new Map<string, (msg: MessageData) => void>()
+    for (const group of groups) {
+      if (group.messages.length > 1) map.set(group.key, () => onPinTurn(group.messages))
+    }
+    return map
+  }, [groups, onPinTurn])
 
   const virtualizer = useVirtualizer({
-    count: visibleMessages.length,
+    count: groups.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 200,
     overscan: OVERSCAN,
@@ -161,7 +272,7 @@ export function MessageList({
         scrollToBottom(false)
       })
     }
-  }, [messages, streamContentSize, streamEntries.length, autoScroll, scrollToBottom])
+  }, [messages, livePartsSize, turn?.status, autoScroll, scrollToBottom])
 
   const shouldVirtualize = visibleMessages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
@@ -176,6 +287,38 @@ export function MessageList({
     }
     lastClickedRef.current = index
   }, [onToggleSelect, onSelectRange])
+
+  const renderSegment = (group: MessageGroup, msg: MessageData, first: boolean) => {
+    // ADR-118 §10: у первого сегмента группы pin пинит весь ход.
+    const pinHandler = (first ? pinTurnHandlers?.get(group.key) : undefined) ?? onPin
+    return (
+      <ChatMessage
+        key={msg.id ?? `${msg.role}-${msg.index}-${msg.created_at}`}
+        message={msg}
+        sessionId={sessionId}
+        onCopy={onCopy}
+        onToggle={onToggle}
+        onPin={pinHandler}
+        onDelete={onDelete}
+        onRetry={onRetry}
+        onDebug={onDebug}
+        onFork={onFork}
+        readOnly={readOnly}
+        isSubagent={isSubagent}
+        selectionMode={selectionMode}
+        isSelected={selectedIndices?.has(msg.index) ?? false}
+        onToggleSelect={handleToggleSelect}
+        pending={pendingByIndex.get(msg.index) ?? null}
+        // ADR-118 §1: заголовок агента/модели — только у первого сегмента хода.
+        showHeader={first}
+        compact={!first}
+        onStop={onStop}
+        retry={retry}
+        onRetryNow={onRetryNow}
+        onCancelRetry={onCancelRetry}
+      />
+    )
+  }
 
   return (
     <div ref={containerRef} className="relative flex-1 overflow-hidden">
@@ -200,66 +343,23 @@ export function MessageList({
                 }}
               >
                 {virtualItems.map((vi) => {
-                  const msg = visibleMessages[vi.index]
-                  if (!msg) return null
+                  const group = groups[vi.index]
+                  if (!group) return null
                   return (
-                    <div key={msg.id || msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
-                      <ChatMessage
-                        message={msg}
-                        sessionId={sessionId}
-                        onCopy={onCopy}
-                        onToggle={onToggle}
-                        onPin={onPin}
-                        onDelete={onDelete}
-                        onRetry={onRetry}
-                        onDebug={onDebug}
-                        onFork={onFork}
-                        readOnly={readOnly}
-                        isSubagent={isSubagent}
-                        selectionMode={selectionMode}
-                        isSelected={selectedIndices?.has(msg.index) ?? false}
-                        onToggleSelect={handleToggleSelect}
-                        pending={computePending(msg, streams, retry, onRetryNow, onCancelRetry)}
-                      />
+                    <div key={group.key} data-index={vi.index} ref={virtualizer.measureElement}>
+                      {group.messages.map((msg, i) => renderSegment(group, msg, i === 0))}
                     </div>
                   )
                 })}
               </div>
             ) : (
-              visibleMessages.map((msg) => (
-                <ChatMessage
-                  key={msg.id || `${msg.role}-${msg.index}-${msg.created_at}`}
-                  message={msg}
-                  sessionId={sessionId}
-                  onCopy={onCopy}
-                  onToggle={onToggle}
-                  onPin={onPin}
-                  onDelete={onDelete}
-                  onRetry={onRetry}
-                  onDebug={onDebug}
-                  onFork={onFork}
-                  readOnly={readOnly}
-                  isSubagent={isSubagent}
-                  selectionMode={selectionMode}
-                  isSelected={selectedIndices?.has(msg.index) ?? false}
-                  onToggleSelect={handleToggleSelect}
-                  pending={computePending(msg, streams, retry, onRetryNow, onCancelRetry)}
-                />
+              groups.map((group) => (
+                <div key={group.key}>
+                  {group.messages.map((msg, i) => renderSegment(group, msg, i === 0))}
+                </div>
               ))
             )}
           </div>
-
-          {streamEntries.map((stream) => (
-            <StreamingPlaceholder
-              key={stream.streamId}
-              stream={stream}
-              sessionId={sessionId}
-              onStop={onStop}
-              retry={retry?.streamId === stream.streamId ? retry : null}
-              onRetryNow={onRetryNow}
-              onCancelRetry={onCancelRetry}
-            />
-          ))}
         </div>
       </ScrollableOverlay>
 

@@ -37,6 +37,7 @@ import { useUIStore } from '@/stores/useUIStore'
 function makeMessage(partial: Partial<MessageData>): MessageData {
   return {
     index: 0,
+    id: 'm1',
     role: 'assistant',
     content: 'Ответ ассистента',
     disabled: false,
@@ -85,7 +86,7 @@ afterEach(async () => {
   }
   document.body.innerHTML = ''
   useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
-  useChatStore.setState({ debugModalSessionId: null, debugModalMessageIndex: null })
+  useChatStore.setState({ debugModalSessionId: null, debugModalMessageId: null })
 })
 
 describe('ChatMessage: статистика (единый поповер)', () => {
@@ -132,7 +133,7 @@ describe('ChatMessage: статистика (единый поповер)', () =
       centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
       activeCenterTabId: 'chat-s1',
     })
-    useChatStore.setState({ debugModalSessionId: 's1', debugModalMessageIndex: 0 })
+    useChatStore.setState({ debugModalSessionId: 's1', debugModalMessageId: 'm1' })
     const container = await renderChat(makeMessage({ index: 0, debug_data: { prompt: 'x' } }))
     const btn = container.querySelector('button[title="Debug"]') as HTMLButtonElement
     expect(btn).not.toBeNull()
@@ -144,7 +145,7 @@ describe('ChatMessage: статистика (единый поповер)', () =
       centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
       activeCenterTabId: 'chat-s1',
     })
-    useChatStore.setState({ debugModalSessionId: 's1', debugModalMessageIndex: 1 })
+    useChatStore.setState({ debugModalSessionId: 's1', debugModalMessageId: 'm2' })
     const container = await renderChat(makeMessage({ index: 0, debug_data: { prompt: 'x' } }))
     const btn = container.querySelector('button[title="Debug"]') as HTMLButtonElement
     expect(btn).not.toBeNull()
@@ -173,7 +174,7 @@ describe('ChatMessage: статистика (единый поповер)', () =
       centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
       activeCenterTabId: 'chat-s1',
     })
-    useChatStore.setState({ debugModalSessionId: 'other', debugModalMessageIndex: 0 })
+    useChatStore.setState({ debugModalSessionId: 'other', debugModalMessageId: 'm1' })
     const container = await renderChat(makeMessage({ index: 0, debug_data: { prompt: 'x' } }))
     const btn = container.querySelector('button[title="Debug"]') as HTMLButtonElement
     expect(btn).not.toBeNull()

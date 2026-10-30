@@ -212,7 +212,8 @@ interface WsFrame {
 
 /** Клиент `/ws/events`: кадры собираются в массив. */
 function connect(actor: Actor): { ws: WebSocket; frames: WsFrame[]; ready: Promise<void> } {
-  const ws = new WebSocket(`ws://127.0.0.1:${sandbox.port}/ws/events`, {
+  // ADR-118 §8: клиент обязан заявить модель сообщений (`messageModel=2`).
+  const ws = new WebSocket(`ws://127.0.0.1:${sandbox.port}/ws/events?messageModel=2`, {
     headers: { Authorization: `Bearer ${actor}` },
   });
   const frames: WsFrame[] = [];
@@ -434,9 +435,11 @@ describe('ADR-104: interrupt не создаёт новый ход', () => {
 
     // Машинного кода отказа `STEERING_INTERRUPT_UNSUPPORTED` больше нет (удалён
     // вместе с этапом 2): `interrupt` реализован, отказа не бывает.
-    const queued = await waitForFrame(client.frames, (f) => f.type === 'message.queued');
-    expect(queued, 'сообщение должно встать в очередь').toBeDefined();
-    expect(queued?.data?.message, 'в очередь легла именно наша реплика').toBe('перебить');
+    // ADR-118 §4: приём сообщения подтверждает `message.accepted`; текста реплики
+    // в событии нет (он живёт в очереди) — состав очереди проверяем ниже.
+    const accepted = await waitForFrame(client.frames, (f) => f.type === 'message.accepted');
+    expect(accepted, 'сообщение должно встать в очередь').toBeDefined();
+    expect(accepted?.data?.mode, 'без активного хода режим — queue').toBe('queue');
     await sleep(100);
     expect(client.frames.filter((f) => f.type === 'error'), 'ошибки быть не должно').toHaveLength(0);
 

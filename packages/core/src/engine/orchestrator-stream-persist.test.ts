@@ -311,8 +311,11 @@ describe('ChatOrchestrator: персистентность частичного 
     // assistant-сообщений ровно по одному.
     expect(session.messages.filter((m) => m.role !== MessageRole.SYSTEM)).toHaveLength(2);
 
-    const done = chunks.find((c) => c.event === 'stream.done')!;
-    expect(done.data.content).toBe('Часть 1 Часть 2');
+    // ADR-118 §4: финал хода — `step.finished` (статус шага) + `turn.finished`.
+    const finished = chunks.filter((c) => c.event === 'step.finished');
+    expect(finished).toHaveLength(1);
+    expect(finished[0]!.data).toMatchObject({ status: 'completed', messageId: assistants[0]!.id });
+    expect(chunks.find((c) => c.event === 'turn.finished')?.data.status).toBe('completed');
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });

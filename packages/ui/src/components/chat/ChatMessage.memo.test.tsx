@@ -44,7 +44,7 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.scrollTo !== 'fun
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { MessageList } from './MessageList'
-import type { MessageData, StreamState } from '@/stores/chatStore'
+import type { MessageData } from '@/stores/chatStore'
 
 /**
  * Регресс-тест на восстановление React.memo(ChatMessage).
@@ -59,8 +59,6 @@ import type { MessageData, StreamState } from '@/stores/chatStore'
  * (`displayContent = ... ?? message.content`). Значит рост счётчика чтений
  * означает именно повторный рендер ChatMessageInner.
  */
-
-const EMPTY_STREAMS: Record<string, StreamState> = {}
 
 const noop = () => {}
 const noopMsg: (msg: MessageData) => void = noop
@@ -111,7 +109,6 @@ function Harness({ initialMessages }: { initialMessages: MessageData[] }) {
     <I18nProvider>
       <MessageList
         messages={scenario.messages}
-        streams={EMPTY_STREAMS}
         onCopy={noopMsg}
         onToggle={noopMsg}
         onPin={noopMsg}

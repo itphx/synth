@@ -84,7 +84,13 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
     const enqueueSteerMessage = vi.fn(async (_sessionId: string, _message: Message) =>
       opts?.steerResult ?? { accepted: true, pending: 1 },
     );
-    const manager = { addPendingMessage, addMessage, enqueueSteerMessage };
+    const manager = {
+      addPendingMessage,
+      addMessage,
+      enqueueSteerMessage,
+      // ADR-118 §4: `enqueueSteerMessage` публикует `queue.state` по снимку сессии.
+      getSession: vi.fn(async () => opts?.pendingResult === null ? null : baseSession),
+    };
     return { manager, addPendingMessage, addMessage, enqueueSteerMessage };
   }
 
@@ -297,8 +303,11 @@ describe('createBackgroundParentNotifier — сквозной сценарий (
     );
     expect(notifications).toHaveLength(1);
     expect(notifications[0]?.content).toContain('<process');
-    // Ровно одно событие `message.added` — второй копии нет.
-    expect(added.filter((e) => e.type === 'message.added')).toHaveLength(1);
+    // Ровно одно событие материализации сообщения (`message.delivered`,
+    // ADR-118 — `message.added` для user-сообщений больше не публикуется):
+    // второй копии нет.
+    expect(added.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+    expect(added.filter((e) => e.type === 'message.added')).toHaveLength(0);
   });
 
   it('переполненная очередь pending → fallback: уведомление попадает в историю один раз', async () => {

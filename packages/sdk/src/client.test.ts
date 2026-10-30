@@ -149,16 +149,111 @@ describe('SynthClient — namespaces', () => {
     expect(calls[3]?.url).toBe('http://localhost:5000/api/v2/sessions/ses_1/status');
   });
 
-  it('sessions: prompt возвращает сырой Response (SSE)', async () => {
+  it('sessions: prompt возвращает 202-контракт {messageId, mode, position}', async () => {
     const calls: Call[] = [];
     const client = createSynthClient({
       baseUrl: 'http://localhost:5000',
-      fetch: mockFetch(textResponse('data: {}\n\n', 200, 'text/event-stream'), calls),
+      apiKey: 'api',
+      fetch: mockFetch(
+        jsonResponse({ messageId: 'msg_1', mode: 'queue', position: 1 }, 202),
+        calls,
+      ),
     });
-    const res = await client.sessions.prompt('ses_1', { content: 'hi' });
-    expect(res).toBeInstanceOf(Response);
-    expect(res.headers.get('content-type')).toBe('text/event-stream');
+    const accepted = await client.sessions.prompt('ses_1', { content: 'hi' });
+
+    expect(accepted).toEqual({ messageId: 'msg_1', mode: 'queue', position: 1 });
+    expect(calls[0]?.url).toBe('http://localhost:5000/api/v2/sessions/ses_1/prompt');
     expect(calls[0]?.init.method).toBe('POST');
+    expect(headers(calls[0] as Call)).toMatchObject({
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer api',
+    });
+    expect(JSON.parse(calls[0]?.init.body as string)).toEqual({ content: 'hi' });
+  });
+
+  it('meta: GET /meta без аутентификации', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      serviceKey: 'synth_svc_abc',
+      fetch: mockFetch(
+        jsonResponse({ messageModel: 2, eventSeq: true, replay: true, version: '0.12.5' }),
+        calls,
+      ),
+    });
+
+    const capabilities = await client.meta();
+
+    expect(capabilities).toEqual({
+      messageModel: 2,
+      eventSeq: true,
+      replay: true,
+      version: '0.12.5',
+    });
+    expect(first(calls).url).toBe('http://localhost:5000/api/v2/meta');
+    expect(first(calls).init.method).toBe('GET');
+    // Публичный роут: креды не отправляются, даже если они заданы.
+    expect(headers(first(calls)).Authorization).toBeUndefined();
+  });
+
+  it('sessions: messages — DTO сообщения содержит ord/turn_id/step_index/status', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(
+        jsonResponse({
+          session_id: 'ses_1',
+          messages: [
+            {
+              index: 0,
+              id: 'msg_1',
+              seq: 1,
+              ord: 1,
+              turn_id: 'trn_1',
+              step_index: null,
+              status: 'completed',
+              role: 'user',
+              content: 'hi',
+              timestamp: '2026-10-30T00:00:00.000Z',
+            },
+            {
+              index: 1,
+              id: 'msg_2',
+              seq: 2,
+              ord: null,
+              turn_id: 'trn_1',
+              step_index: 0,
+              status: 'streaming',
+              role: 'assistant',
+              content: 'hello',
+              usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 },
+            },
+          ],
+        }),
+        calls,
+      ),
+    });
+
+    const res = await client.sessions.messages('ses_1');
+
+    expect(first(calls).url).toBe('http://localhost:5000/api/v2/sessions/ses_1/messages');
+    expect(res.session_id).toBe('ses_1');
+    expect(res.messages).toHaveLength(2);
+    expect(res.messages[0]).toMatchObject({
+      ord: 1,
+      turn_id: 'trn_1',
+      step_index: null,
+      status: 'completed',
+    });
+    expect(res.messages[1]).toMatchObject({
+      ord: null,
+      turn_id: 'trn_1',
+      step_index: 0,
+      status: 'streaming',
+    });
+    // Неизвестные/новые поля сервера не теряются и не ломают типизацию.
+    expect(res.messages[1]?.usage).toEqual({ input_tokens: 1, output_tokens: 2, total_tokens: 3 });
   });
 
   it('events: journal/bindings/routes — query и разворачивание оболочек', async () => {
@@ -298,7 +393,7 @@ describe('SynthClient — ошибки', () => {
     expect(err.message).toBe('fetch failed');
   });
 
-  it('raw-режим (prompt) тоже бросает SynthApiError при ошибке', async () => {
+  it('prompt бросает SynthApiError при ошибке приёма', async () => {
     const client = createSynthClient({
       baseUrl: 'http://localhost:5000',
       fetch: mockFetch(jsonResponse({ error: { code: 'NOT_FOUND', message: 'нет' } }, 404)),

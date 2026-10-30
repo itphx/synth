@@ -25,6 +25,8 @@ import type {
   EventJournalEntry,
   EventRouteRule,
   EventRouteRuleUpsertRequest,
+  InstanceCapabilities,
+  PromptAcceptedResponse,
   Schedule,
   ScheduleInput,
   ScheduleJob,
@@ -64,8 +66,8 @@ interface RequestOptions {
   body?: unknown;
   query?: SynthQuery;
   headers?: Record<string, string>;
-  /** `true` — вернуть `Response` как есть (например, SSE-поток `prompt`). */
-  raw?: boolean;
+  /** `true` — публичный роут: заголовок `Authorization` не отправляется. */
+  anonymous?: boolean;
 }
 
 /** Query-параметры списка сессий. */
@@ -119,8 +121,8 @@ export interface SessionsNamespace {
   get(id: string): Promise<SerializedSession>;
   patch(id: string, body: SessionPatch): Promise<SerializedSession>;
   remove(id: string): Promise<void>;
-  /** Отправка сообщения; возвращает SSE-поток (`text/event-stream`) как `Response`. */
-  prompt(id: string, body: SessionPromptInput): Promise<Response>;
+  /** Отправка сообщения: `202 {messageId, mode, position}` (ADR-118 §3); наблюдение — по шине событий. */
+  prompt(id: string, body: SessionPromptInput): Promise<PromptAcceptedResponse>;
   messages(id: string): Promise<SessionMessagesResponse>;
   status(id: string): Promise<SessionStatusResponse>;
 }
@@ -244,10 +246,9 @@ export class SynthClient {
       remove: (id) =>
         this._request<void>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
       prompt: (id, body) =>
-        this._request<Response>(`/sessions/${encodeURIComponent(id)}/prompt`, {
+        this._request<PromptAcceptedResponse>(`/sessions/${encodeURIComponent(id)}/prompt`, {
           method: 'POST',
           body,
-          raw: true,
         }),
       messages: (id) =>
         this._request<SessionMessagesResponse>(`/sessions/${encodeURIComponent(id)}/messages`),
@@ -288,6 +289,17 @@ export class SynthClient {
     };
   }
 
+  /**
+   * Возможности инстанса (`GET /meta`, ADR-118 §8) — **без аутентификации**.
+   *
+   * Публичная информация о протоколе инстанса: клиент сверяет свою модель
+   * сообщений с серверной через `supportsMessageModel` (fail-closed). Креды
+   * не отправляются даже если они заданы в опциях.
+   */
+  meta(): Promise<InstanceCapabilities> {
+    return this._request<InstanceCapabilities>('/meta', { anonymous: true });
+  }
+
   private _resolveFetch(): typeof fetch {
     const impl = this._fetch ?? globalThis.fetch;
     if (typeof impl !== 'function') {
@@ -316,7 +328,7 @@ export class SynthClient {
     const url = this._buildUrl(path, options.query);
     const headers: Record<string, string> = { Accept: 'application/json', ...options.headers };
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-    if (this._token) headers.Authorization = `Bearer ${this._token}`;
+    if (this._token && !options.anonymous) headers.Authorization = `Bearer ${this._token}`;
 
     const fetchImpl = this._resolveFetch();
     let response: Response;
@@ -337,9 +349,6 @@ export class SynthClient {
 
     if (!response.ok) {
       throw await this._httpError(response);
-    }
-    if (options.raw) {
-      return response as unknown as T;
     }
     if (response.status === 204) {
       return undefined as T;

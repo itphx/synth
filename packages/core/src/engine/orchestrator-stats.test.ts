@@ -1,6 +1,7 @@
 /**
  * ADR-070 §2.6: per-message duration_ms/cost_usd в metadata финального
- * assistant-сообщения и в событии `stream.done`.
+ * assistant-сообщения; расход/стоимость шага — в `step.finished` (ADR-118 §4:
+ * `stream.usage`/`stream.done` удалены, статистика живёт в сообщениях).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -155,24 +156,26 @@ describe('ChatOrchestrator — per-message stats (ADR-070 §2.6)', () => {
     expect(assistant.metadata?.status).toBe('completed');
   });
 
-  it('событие stream.done несёт duration_ms и cost_usd', async () => {
+  it('событие step.finished несёт usage/costUsd/costCurrency и status', async () => {
     const { events } = await run();
-    const done = events.find((e) => e.type === 'stream.done');
-    expect(done).toBeTruthy();
+    const finished = events.filter((e) => e.type === 'step.finished');
+    expect(finished).toHaveLength(1);
+    const data = finished[0]!.data;
 
-    expect(typeof done!.data.duration_ms).toBe('number');
-    expect(done!.data.duration_ms as number).toBeGreaterThanOrEqual(0);
+    // Расход шага — замена удалённого live-`stream.usage`.
+    expect(data.usage).toMatchObject({ inputTokens: 100, outputTokens: 10 });
+    expect(data.provider).toBe('statsprovider');
 
     const div = 1_000_000;
-    expect(done!.data.cost_usd).toBeCloseTo((100 * 1 + 10 * 2 + 40 * 0.5 + 20 * 1.5) / div, 12);
-    expect(done!.data.cost_currency).toBe('USD');
-    // usage сохранён для обратной совместимости.
-    expect(done!.data.usage).toBeTruthy();
-    // ADR-070 §2.6: status доносится до UI в stream.done.
-    expect(done!.data.status).toBe('completed');
+    expect(data.costUsd).toBeCloseTo((100 * 1 + 10 * 2 + 40 * 0.5 + 20 * 1.5) / div, 12);
+    expect(data.costCurrency).toBe('USD');
+    // ADR-070 §2.6: status доносится до UI в финале шага.
+    expect(data.status).toBe('completed');
+    // Ход закрыт тем же терминальным статусом.
+    expect(events.find((e) => e.type === 'turn.finished')?.data.status).toBe('completed');
   });
 
-  it('RUB-модель: metadata.cost_currency и stream.done.cost_currency = RUB', async () => {
+  it('RUB-модель: metadata.cost_currency и step.finished.costCurrency = RUB', async () => {
     const { session, events } = await run(() =>
       ({ inputPrice: 100, outputPrice: 100, currency: 'RUB' }),
     );
@@ -181,8 +184,8 @@ describe('ChatOrchestrator — per-message stats (ADR-070 §2.6)', () => {
     expect(assistant.metadata?.cost_currency).toBe('RUB');
     expect(assistant.metadata?.cost_usd as number).toBeCloseTo((100 * 100 + 10 * 100) / 1_000_000, 12);
 
-    const done = events.find((e) => e.type === 'stream.done');
-    expect(done!.data.cost_currency).toBe('RUB');
+    const finished = events.find((e) => e.type === 'step.finished');
+    expect(finished!.data.costCurrency).toBe('RUB');
   });
 
   it('модель без цен — cost_usd/cost_breakdown не пишутся, агрегаты сессии нулевые', async () => {

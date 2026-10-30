@@ -1,6 +1,16 @@
 /**
- * ADR-070: live-статистика стрима — событие `stream.usage` (кумулятивный usage,
- * точный либо best-effort оценка, стоимость по ценам модели).
+ * ADR-118 §4: live-статистика стрима (`stream.usage` с троттлингом ~300 мс и
+ * best-effort оценкой) **удалена** — расход шага учитывается один раз, в
+ * `step.finished` (`usage`, `provider`, `model`, `costUsd`/`costCurrency`,
+ * `agentRole`). Один шаг = один вызов LLM, поэтому сумма по шагам равна
+ * расходу хода (ADR-094: из этих полей считаются ретраи и стоимость).
+ *
+ * Смысл прежних проверок сохранён: точный/нулевой usage, отсутствие цен —
+ * нет стоимости, валюта pricing, изоляция оценок от агрегатов сессии.
+ * Проверки именно троттлинга и промежуточных оценок переформулированы —
+ * функций больше нет: вместо них «на шаг ровно одно событие» и «usage шага
+ * отдаётся провайдером как есть» (оценка осталась только в ветке отмены,
+ * `usage_estimated` в `stream.cancelled`).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -72,7 +82,7 @@ function makeProviderClass(chunks: LLMChunk[]) {
 
 type Published = { event: string; data: Record<string, unknown> };
 
-describe('ChatOrchestrator — live stream.usage (ADR-070)', () => {
+describe('ChatOrchestrator — учёт usage по шагу (`step.finished`, ADR-118)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -89,7 +99,7 @@ describe('ChatOrchestrator — live stream.usage (ADR-070)', () => {
   async function run(
     chunks: LLMChunk[],
     modelPriceLoader?: (model: string) => ModelPricing | null,
-  ): Promise<{ events: Published[]; sessionId: string; streamId: string }> {
+  ): Promise<{ events: Published[]; sessionId: string }> {
     ProviderFactory.register('liveusage', makeProviderClass(chunks));
 
     const orchestrator = new ChatOrchestrator({
@@ -124,75 +134,71 @@ describe('ChatOrchestrator — live stream.usage (ADR-070)', () => {
       (event, data) => events.push({ event, data }),
     );
 
-    return { events, sessionId: session.id, streamId: msg.metadata?.stream_id as string };
+    return { events, sessionId: session.id };
   }
 
-  function usageEvents(events: Published[]): Published[] {
-    return events.filter((e) => e.event === 'stream.usage');
+  /** События закрытия шага — замена удалённому `stream.usage`. */
+  function stepEvents(events: Published[]): Published[] {
+    return events.filter((e) => e.event === 'step.finished');
   }
 
-  it('публикует stream.usage с контрактными полями', async () => {
-    const { events, sessionId, streamId } = await run([
-      { content: 'ok', isFinal: true, usage: EXACT_USAGE, model: 'm' },
-    ]);
-
-    const usage = usageEvents(events);
-    expect(usage.length).toBeGreaterThanOrEqual(1);
-    const first = usage[0]!;
-    expect(first.data.session_id).toBe(sessionId);
-    expect(first.data.stream_id).toBe(streamId);
-    expect(first.data.iteration).toBe(0);
-    expect(first.data.usage).toBeDefined();
-    expect(typeof first.data.estimated).toBe('boolean');
-  });
-
-  it('точный usage чанка → estimated: false; стартовая оценка → estimated: true', async () => {
+  it('публикует step.finished с контрактными полями расхода шага', async () => {
     const { events } = await run([
       { content: 'ok', isFinal: true, usage: EXACT_USAGE, model: 'm' },
     ]);
 
-    const usage = usageEvents(events);
-    const exact = usage.find((e) => e.data.estimated === false);
-    const estimated = usage.find((e) => e.data.estimated === true);
-    expect(estimated).toBeDefined();
-    expect(exact).toBeDefined();
-    expect((exact!.data.usage as TokenUsage).inputTokens).toBe(100);
-    expect((exact!.data.usage as TokenUsage).outputTokens).toBe(10);
+    const steps = stepEvents(events);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.data).toMatchObject({
+      turnId: expect.any(String),
+      stepIndex: 0,
+      messageId: expect.any(String),
+      status: 'completed',
+      usage: EXACT_USAGE,
+      provider: 'liveusage',
+      model: 'm',
+      agentRole: 'fixer',
+    });
+    // ADR-118 §4: live-событие `stream.usage` удалено без dual-emit.
+    expect(events.some((e) => e.event === 'stream.usage')).toBe(false);
   });
 
-  it('Anthropic: input>0/output=0 → estimated:true с оценённым output, финал output>0 → estimated:false', async () => {
+  it('точный usage чанка → `usage` шага без полей оценки', async () => {
+    const { events } = await run([
+      { content: 'ok', isFinal: true, usage: EXACT_USAGE, model: 'm' },
+    ]);
+
+    const step = stepEvents(events)[0]!;
+    expect(step.data.usage).toEqual(EXACT_USAGE);
+    // Live-оценки/троттлинга больше нет — в событии нет `estimated`.
+    expect(step.data).not.toHaveProperty('estimated');
+    expect(step.data).not.toHaveProperty('usage_estimated');
+  });
+
+  it('Anthropic: usage шага — из финального чанка (промежуточных снимков нет)', async () => {
     const { events } = await run([
       { content: 'Hello', isFinal: false, usage: { inputTokens: 100, outputTokens: 0, totalTokens: 100 } },
       { content: 'Hello world', isFinal: true, usage: { inputTokens: 100, outputTokens: 5, totalTokens: 105 }, model: 'm' },
     ]);
 
-    const usage = usageEvents(events);
-
-    // Промежуточный снимок: точный input сохранён, output оценён (chars/4 = 5/4).
-    const estimated = usage.find(
-      (e) => e.data.estimated === true && (e.data.usage as TokenUsage).inputTokens === 100,
-    );
-    expect(estimated).toBeDefined();
-    expect((estimated!.data.usage as TokenUsage).outputTokens).toBe(2);
-
-    // Финал: точный output, estimated снят.
-    const exact = usage.find((e) => e.data.estimated === false);
-    expect(exact).toBeDefined();
-    expect((exact!.data.usage as TokenUsage).inputTokens).toBe(100);
-    expect((exact!.data.usage as TokenUsage).outputTokens).toBe(5);
+    const steps = stepEvents(events);
+    expect(steps).toHaveLength(1);
+    // Промежуточный снимок (input=100/output=0) и live-оценка output
+    // (`estimated: true` в `stream.usage`) больше не публикуются: в шаге —
+    // фактические числа финального чанка.
+    expect(steps[0]!.data.usage).toEqual({ inputTokens: 100, outputTokens: 5, totalTokens: 105 });
+    expect(events.filter((e) => e.event === 'stream.usage')).toHaveLength(0);
   });
 
-  it('точный output не понижается оценкой (input=0, output>0 → estimated:false)', async () => {
+  it('нулевой input не «понижает» точный output: usage шага как есть', async () => {
     const { events } = await run([
       { content: 'ok', isFinal: true, usage: { inputTokens: 0, outputTokens: 9, totalTokens: 9 }, model: 'm' },
     ]);
-    const exact = usageEvents(events).find((e) => e.data.estimated === false);
-    expect(exact).toBeDefined();
-    expect((exact!.data.usage as TokenUsage).outputTokens).toBe(9);
-    expect((exact!.data.usage as TokenUsage).inputTokens).toBe(0);
+    const step = stepEvents(events)[0]!;
+    expect(step.data.usage).toEqual({ inputTokens: 0, outputTokens: 9, totalTokens: 9 });
   });
 
-  it('нулевой usage → только оценка (estimated: true), троттлинг не спамит', async () => {
+  it('нулевой usage: на шаг ровно одно событие (live-троттлинга больше нет)', async () => {
     const chunks: LLMChunk[] = [];
     for (let i = 0; i < 5; i++) {
       chunks.push({ content: `часть${i} `, isFinal: false, usage: ZERO_USAGE });
@@ -200,53 +206,62 @@ describe('ChatOrchestrator — live stream.usage (ADR-070)', () => {
     chunks.push({ content: 'итог', isFinal: true, usage: ZERO_USAGE, model: 'm' });
 
     const { events } = await run(chunks);
-    const usage = usageEvents(events);
 
-    // Все чанки в одном окне троттлинга (~300 мс) → только стартовая оценка.
-    expect(usage).toHaveLength(1);
-    expect(usage[0]!.data.estimated).toBe(true);
-    expect((usage[0]!.data.usage as TokenUsage).inputTokens).toBeGreaterThan(0);
+    // Один шаг = один вызов LLM = одно `step.finished`; текст идёт дельтами
+    // (`part.delta`), статистика промежуточных чанков не публикуется вовсе.
+    const steps = stepEvents(events);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.data.usage).toEqual(ZERO_USAGE);
+    expect(events.some((e) => e.event === 'stream.usage')).toBe(false);
+    expect(events.filter((e) => e.event === 'part.delta').length).toBeGreaterThan(0);
   });
 
-  it('без цен модели cost_usd/cost_breakdown не пишутся', async () => {
+  it('без цен модели стоимость шага не пишется', async () => {
     const { events } = await run([
       { content: 'ok', isFinal: true, usage: EXACT_USAGE, model: 'm' },
     ]);
-    const exact = usageEvents(events).find((e) => e.data.estimated === false)!;
-    expect(exact.data.cost_usd).toBeUndefined();
-    expect(exact.data.cost_breakdown).toBeUndefined();
+    const step = stepEvents(events)[0]!;
+    expect(step.data.costUsd).toBeUndefined();
+    expect(step.data.costCurrency).toBeUndefined();
   });
 
-  it('с ценами модели cost_usd/cost_breakdown считаются', async () => {
-    const { events } = await run(
+  it('с ценами модели costUsd/costCurrency в шаге, breakdown — в сообщении', async () => {
+    const { events, sessionId } = await run(
       [{ content: 'ok', isFinal: true, usage: EXACT_USAGE, model: 'm' }],
       (model) => (model === 'm' ? { inputPrice: 1, outputPrice: 2 } : null),
     );
-    const exact = usageEvents(events).find((e) => e.data.estimated === false)!;
+    const step = stepEvents(events)[0]!;
     // 100*1/1e6 + 10*2/1e6 = 0.00012
-    expect(exact.data.cost_usd).toBeCloseTo(0.00012, 12);
-    expect(exact.data.cost_currency).toBe('USD');
-    const breakdown = exact.data.cost_breakdown as Record<string, number>;
+    expect(step.data.costUsd as number).toBeCloseTo(0.00012, 12);
+    expect(step.data.costCurrency).toBe('USD');
+
+    // Разбивка стоимости осталась в metadata сохранённого сообщения
+    // (в событии шага её нет — перенос из удалённого `stream.usage`).
+    const session = (await sessionManager.getSession(sessionId))!;
+    const assistant = [...session.messages]
+      .reverse()
+      .find((m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain)!;
+    expect(assistant.metadata!.cost_usd as number).toBeCloseTo(0.00012, 12);
+    const breakdown = assistant.metadata!.cost_breakdown as Record<string, number>;
     expect(breakdown.input).toBeCloseTo(0.0001, 12);
     expect(breakdown.output).toBeCloseTo(0.00002, 12);
   });
 
-  it('валюта pricing (RUB) прокидывается в stream.usage', async () => {
+  it('валюта pricing (RUB) прокидывается в step.finished', async () => {
     const { events } = await run(
       [{ content: 'ok', isFinal: true, usage: EXACT_USAGE, model: 'm' }],
       (model) => (model === 'm' ? { inputPrice: 1, outputPrice: 2, currency: 'RUB' } : null),
     );
-    const exact = usageEvents(events).find((e) => e.data.estimated === false)!;
-    expect(exact.data.cost_currency).toBe('RUB');
+    expect(stepEvents(events)[0]!.data.costCurrency).toBe('RUB');
   });
 
-  it('live-оценки не попадают в сессию/агрегаты (только финальный usage)', async () => {
+  it('в агрегаты сессии попадает только usage шага (live-оценок больше нет)', async () => {
     const { sessionId } = await run([
       { content: 'ok', isFinal: false, usage: ZERO_USAGE },
       { content: 'итог', isFinal: true, usage: ZERO_USAGE, model: 'm' },
     ]);
     const session = (await sessionManager.getSession(sessionId))!;
-    // Оценки были > 0, но в сессию не записались (точного usage не было).
+    // Промежуточных оценок > 0 не существует — в сессию идут только цифры шага.
     expect(session.inputTokens).toBe(0);
     expect(session.outputTokens).toBe(0);
     expect(session.totalTokens).toBe(0);

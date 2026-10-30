@@ -132,7 +132,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
 - **Схема и миграции (`migrations/*`, `migrate.ts`).** Свой контур версионирования
   (НЕ `meta.json`/ADR-092): таблица `synth_schema_migrations(version int PK, id text,
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
-  (`src/migrations/001-init.ts` … `027-context-files.ts`; **27 миграций**, реестр —
+  (`src/migrations/001-init.ts` … `029-message-stream-v2.ts`; **29 миграций**, реестр —
   `src/migrations/index.ts`, версии строго возрастают) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
   Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
@@ -157,6 +157,9 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `pack_installations`/`pipeline_definitions`/`pipeline_instances` (ADR-086 §5/ADR-100),
   `026_instance_skills` — `instance_skills` (frontmatter в SQL, содержимое — в blob),
   `027_context_files` — `context_files` (системные промпты образа остаются ФС).
+  `028_message_reasoning_signature` — подписи reasoning (ADR-117), `029_message_stream_v2` —
+  аддитивные колонки `messages.ord`/`turn_id`/`step_index`/`status` + индекс `(session_id, ord)`
+  (ADR-118; данные проставляет построчная миграция ядра — `message-stream-v2`, не SQL).
   Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
@@ -265,6 +268,13 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
     Точечная запись (`appendMessage`/`updateMessage`) меняет одну строку `messages`
     (`INSERT … RETURNING *` / `UPDATE … WHERE message_uid`, транзакция + advisory-лок)
     и `sessions.updated_at`, не трогая остальную историю.
+    **ADR-118: `ord` — монотонный порядок.** Выдаётся при `appendMessage` как
+    `MAX(ord)+1` по сессии в той же транзакции (два параллельных append не получат один
+    `ord`); заданный вызывающим `ord` (перенос/миграция) **не перетирается**. `save()` его
+    **не перенумеровывает** (пишет как есть), `updateMessage` — `COALESCE(messages.ord, …)`:
+    уже выданный `ord` иммутабелен, а ещё не выданный (legacy-строка) может быть проставлен
+    (так его заполняет миграция данных ядра `message-stream-v2`). `seq` при этом остаётся
+    позиционным (`1..n`) — `ord` с ним не связан (`ord` ↔ `seq` — many-to-one для legacy).
   - `session_references` — суррогатный `id text PK` + `ordinal int NOT NULL`
     (индекс `(session_id, ordinal)`); **дубликаты одной `ref_session_id`
     разрешены** (разные диапазоны), `addReference` — append, `getReferences` —
@@ -324,7 +334,8 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   только `storage.postgres.sslmode` + `security.tls`.
 
 Позиционная нумерация `seq` (`UNIQUE(session_id, seq)`, нормализация `1..n` при
-записи) — см. «Схема — источник истины» выше (не дублируется).
+записи) — см. «Схема — источник истины» выше (не дублируется); монотонный `ord`
+(ADR-118) — рядом с ней, `seq` не заменяет.
 
 ## Известные расхождения / ограничения
 

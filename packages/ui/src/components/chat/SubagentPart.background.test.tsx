@@ -42,7 +42,7 @@ vi.mock('@/stores/useUIStore', () => {
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
-import { useChatStore, type StreamState } from '@/stores/chatStore'
+import { useChatStore, toolCallToPart, type LiveToolCall } from '@/stores/chatStore'
 import { resetChatStore } from '@/stores/testUtils'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -56,28 +56,25 @@ function makeSubagent(partial: Partial<SubagentPartData>): SubagentPartData {
   }
 }
 
-function runningStream(): StreamState {
+/**
+ * ADR-118 §1/§4: активный ход — части сообщения (`partsBySession`), а не
+ * отдельный StreamState. Running `task`-парт — то, что «В фон» снимает из хода.
+ */
+function runningTaskCall(): LiveToolCall {
   return {
-    streamId: 'st1',
-    agentRole: 'developer',
-    content: '',
-    reasoningBlocks: [],
-    intermediateTextBlocks: [],
-    isStreaming: true,
-    hasContent: true,
-    toolCalls: [
-      {
-        callId: 'call-1',
-        name: 'task',
-        args: {},
-        status: 'running',
-        startedAt: '2026-10-27T00:00:00.000Z',
-        iteration: 0,
-      },
-    ],
-    toolIteration: 0,
-    _lastContentLen: 0,
+    callId: 'call-1',
+    name: 'task',
+    args: {},
+    status: 'running',
+    startedAt: '2026-10-27T00:00:00.000Z',
+    iteration: 0,
   }
+}
+
+/** Число live-партов активного хода родительской сессии. */
+function parentPartCount(): number {
+  const parts = useChatStore.getState().partsBySession.parent ?? {}
+  return Object.values(parts).reduce((sum, messageParts) => sum + Object.keys(messageParts).length, 0)
 }
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
@@ -118,7 +115,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   resetChatStore()
   useChatStore.setState({
-    streamingBySession: { parent: { st1: runningStream() } },
+    turnBySession: { parent: { turnId: 't1', messageId: 'live1', status: 'streaming', agentRole: 'developer' } },
+    partsBySession: {
+      parent: {
+        live1: { 'call-1': toolCallToPart(runningTaskCall()) },
+      },
+    },
   })
   mocks.backgroundSession.mockResolvedValue({
     sessionId: 'parent',
@@ -162,7 +164,7 @@ describe('SubagentPart — кнопка «В фон» (ADR-111 §detach)', () =>
 
     expect(mocks.backgroundSession).toHaveBeenCalledTimes(1)
     expect(mocks.backgroundSession).toHaveBeenCalledWith('parent', { type: 'subagent' })
-    expect(useChatStore.getState().streamingBySession.parent!.st1!.toolCalls).toHaveLength(0)
+    expect(parentPartCount()).toBe(0)
     expect(notificationTexts().some((text) => text.includes('Переведено в фон: 1'))).toBe(true)
     // Кнопка исчезает: повторный клик невозможен.
     expect(findBackgroundButton(container)).toBeUndefined()

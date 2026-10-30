@@ -315,20 +315,31 @@ describe('createStandaloneApp: зеркалирование серверных �
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
         body: JSON.stringify({ content: 'привет зеркалу' }),
       });
-      expect(promptRes.status).toBe(200);
-      const text = await promptRes.text();
-      const events = text.split('\n')
-        .filter((l) => l.startsWith('data: '))
-        .map((l) => JSON.parse(l.slice(6)) as { type: string; data: Record<string, unknown> });
-      const done = events.find((e) => e.type === 'stream.done');
-      expect(done).toBeDefined();
-      expect(String(done!.data.content)).toContain('Ответ зеркала itphx');
+      // ADR-118 §3: приём подтверждается сразу (`202 {messageId, mode, position}`),
+      // поток хода наблюдается по шине событий, а не телом ответа.
+      expect(promptRes.status).toBe(202);
+      const accepted = (await promptRes.json()) as { messageId: string; mode: string };
+      expect(accepted.messageId).toBeTruthy();
+      expect(accepted.mode).toBe('queue');
 
       // RemoteProvider ушёл на сервер с ЯВНЫМ provider (имя зеркала) и моделью сервера.
+      await vi.waitFor(() => {
+        expect(llmProxyCalls.length).toBeGreaterThan(0);
+      }, { timeout: 5000 });
       const proxyCall = llmProxyCalls.find((c) => c.url.includes('/api/v2/llm/chat/completions'));
       expect(proxyCall).toBeDefined();
       expect(proxyCall!.body.provider).toBe('itphx');
       expect(proxyCall!.body.model).toBe('itphx/m1');
+
+      // Ответ зеркала дошёл до истории сессии (финал хода).
+      await vi.waitFor(async () => {
+        const loaded = await handle.app.request(`/api/v2/sessions/${ses.id}/messages`, {
+          headers: { Authorization: 'Bearer test-key' },
+        });
+        const body = (await loaded.json()) as { messages: Array<{ role: string; content: string }> };
+        const assistant = body.messages.filter((m) => m.role === 'assistant').at(-1);
+        expect(String(assistant?.content)).toContain('Ответ зеркала itphx');
+      }, { timeout: 5000 });
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -408,7 +419,7 @@ describe('createStandaloneApp: RemoteEventBridge и /api/v2/events (runtime)', (
       // Мост создан и запущен при подключении.
       expect(handle.remoteEventBridge).toBeDefined();
 
-      const res = await handle.app.request('/api/v2/events', {
+      const res = await handle.app.request('/api/v2/events?messageModel=2', {
         headers: { Authorization: 'Bearer test-key' },
         signal: abort.signal,
       });
@@ -439,7 +450,7 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
    */
   function connectCollecting(port: number, apiKey: string): { ws: Promise<WebSocket>; received: Array<Record<string, unknown>> } {
     const received: Array<Record<string, unknown>> = [];
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events?messageModel=2`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     ws.on('message', (raw: Buffer) => {
@@ -723,7 +734,7 @@ describe('createStandaloneApp: WS /ws/events аутентификация чер
     port: number,
     headers: Record<string, string>,
   ): { ws: Promise<WebSocket>; received: Array<Record<string, unknown>> } {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, { headers });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events?messageModel=2`, { headers });
     const received = collect(ws);
     const opened = new Promise<WebSocket>((resolve, reject) => {
       ws.on('open', () => resolve(ws));
@@ -804,7 +815,7 @@ describe('createStandaloneApp: WS /ws/events аутентификация чер
     const app = await startServer();
     try {
       const result = await new Promise<{ status?: number }>((resolve) => {
-        const s = new WebSocket(`ws://127.0.0.1:${app.port}/ws/events`, {
+        const s = new WebSocket(`ws://127.0.0.1:${app.port}/ws/events?messageModel=2`, {
           headers: { Cookie: 'synth_session=invalid' },
         });
         s.on('unexpected-response', (_req, res) => resolve({ status: res.statusCode }));
@@ -926,7 +937,7 @@ describe('createStandaloneApp: SSE /api/v2/events (standalone, subscribeAll)', (
       const handle = await createStandaloneApp({ port: 0, dataDir: dir, apiKey: 'test-key' });
 
       // Подписчик (внешний add-on) подключается до появления сессии.
-      const res = await handle.app.request('/api/v2/events', {
+      const res = await handle.app.request('/api/v2/events?messageModel=2', {
         headers: { Authorization: 'Bearer test-key' },
         signal: abort.signal,
       });

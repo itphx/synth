@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { appendReasoningBlock, type ReasoningBlock } from '@itphx/synth-shared/utils'
+import { type ReasoningBlock } from '@itphx/synth-shared/utils'
 import type { MessageStatus, Part, PartMetadata, PartType } from '@itphx/synth-shared/types'
 import type { StickyNoteData } from '@/lib/api/synthApi'
 import { costCurrencyKey } from '@/lib/currency'
@@ -283,24 +283,6 @@ export function compareMessagesByOrd(
 /** Сортировка сообщений сессии по `ord` (ADR-118 §2). */
 export function sortMessagesByOrd(messages: MessageData[]): MessageData[] {
   return [...messages].sort(compareMessagesByOrd)
-}
-
-/**
- * Накопление **дельт** прогресса саб-агента (`subagent.progress` несёт только
- * приращение с прошлой публикации, а не накопленный текст). Блок дописывается:
- * в текущей итерации — в конец последнего блока, в новой — новым блоком.
- */
-function appendDeltaBlock<T extends { text: string; iteration: number }>(
-  blocks: T[],
-  delta: string,
-  iteration: number,
-): T[] {
-  if (!delta) return blocks
-  const last = blocks[blocks.length - 1]
-  if (last && last.iteration === iteration) {
-    return [...blocks.slice(0, -1), { ...last, text: last.text + delta }]
-  }
-  return [...blocks, { text: delta, iteration } as T]
 }
 
 interface ChatStore {

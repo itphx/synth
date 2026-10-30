@@ -1431,6 +1431,7 @@ export const dict = {
   'chat.error.retryMessage': 'Failed to retry message',
   'chat.error.clearSession': 'Failed to clear session',
   'chat.error.contextLength': 'Model context window exceeded. Start a new session or shorten the history',
+  'chat.error.messageModelMismatch': 'The instance speaks an incompatible message protocol (client {client}, server {server}). Update the instance or the interface; the live event stream is not connected',
 
   'chat.error.forkFailed': 'Failed to create branch:',
 

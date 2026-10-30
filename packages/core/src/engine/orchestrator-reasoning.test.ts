@@ -110,7 +110,7 @@ describe('ChatOrchestrator: reasoning_blocks без дублей (повтор �
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('финальный stream.done несёт один блок рассуждений', async () => {
+  it('финальное сообщение шага несёт один блок рассуждений (без дубля)', async () => {
     const store = new FileStore({ dataDir: tmpDir });
     const sessionManager = new SessionManager(store);
     const eventBus = new EventBus();
@@ -163,8 +163,14 @@ describe('ChatOrchestrator: reasoning_blocks без дублей (повтор �
     // Две итерации: tool-вызов в первой, финальный ответ во второй.
     expect(MockRepeatReasoningProvider.calls).toBe(2);
 
-    const done = published.find((c) => c.event === 'stream.done')!;
-    const blocks = done.data.reasoning_blocks as Array<{ text: string; iteration: number }>;
+    // ADR-118 §4/§5: `stream.done` удалён — блоки рассуждений хода живут
+    // в `parts` финального assistant-сообщения. Повтор рассуждения в новой
+    // итерации не даёт дубль.
+    const stored = (await sessionManager.getSession(session.id))!;
+    const finalMessage = [...stored.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    const blocks = finalMessage.parts
+      .filter((p) => p.type === 'reasoning')
+      .map((p) => ({ text: p.data as string }));
     expect(blocks).toHaveLength(1);
     expect(blocks[0]!.text).toBe('Думаю');
   });

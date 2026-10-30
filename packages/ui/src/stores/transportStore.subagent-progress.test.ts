@@ -27,33 +27,31 @@ function makeEvent(type: string, sessionId: string, data: Record<string, unknown
 }
 
 const SESSION = 'parent'
-const STREAM = 'st-parent'
+const TURN = 't1'
+const MESSAGE = 'm1'
 const CALL = 'call-1'
 
 /** Ход с одним running-партом `task` (в него и вкладывается прогресс). */
 function startTask(): void {
-  const chat = useChatStore.getState()
-  chat.startStream(SESSION, STREAM, 'assistant')
-  chat.addToolCall(SESSION, STREAM, {
-    callId: CALL,
+  dispatch(makeEvent('turn.started', SESSION, { turnId: TURN, messageId: 'm-user' }))
+  dispatch(makeEvent('step.started', SESSION, { turnId: TURN, stepIndex: 0, messageId: MESSAGE }))
+  dispatch(makeEvent('tool_call.started', SESSION, {
+    call_id: CALL,
     name: 'task',
-    args: {},
-    status: 'running',
-    startedAt: new Date().toISOString(),
+    arguments: {},
     iteration: 0,
-  })
+  }))
 }
 
 function progress(payload: Record<string, unknown>): void {
   dispatch(makeEvent('subagent.progress', SESSION, {
-    stream_id: STREAM,
     parent_call_id: CALL,
     ...payload,
   }))
 }
 
-function taskCall() {
-  return useChatStore.getState().streamingBySession[SESSION]![STREAM]!.toolCalls[0]!
+function taskData(): Record<string, unknown> {
+  return useChatStore.getState().partsBySession[SESSION]![MESSAGE]![CALL]!.data as Record<string, unknown>
 }
 
 beforeEach(() => {
@@ -69,11 +67,11 @@ describe('transportStore dispatcher: subagent.progress (дельты)', () => {
     progress({ reasoning_delta: 'аю', content_delta: 'lo', iteration: 0 })
     progress({ reasoning_delta: 'дальше', content_delta: 'второй шаг', iteration: 1 })
 
-    expect(taskCall().subagentReasoningBlocks).toEqual([
+    expect(taskData().subagentReasoningBlocks).toEqual([
       { text: 'думаю', iteration: 0 },
       { text: 'дальше', iteration: 1 },
     ])
-    expect(taskCall().subagentIntermediateTextBlocks).toEqual([
+    expect(taskData().subagentIntermediateTextBlocks).toEqual([
       { text: 'Hello', iteration: 0 },
       { text: 'второй шаг', iteration: 1 },
     ])
@@ -84,8 +82,8 @@ describe('transportStore dispatcher: subagent.progress (дельты)', () => {
 
     progress({ reasoning_delta: '', content_delta: '', iteration: 0, usage: { inputTokens: 10 } })
 
-    expect(taskCall().subagentReasoningBlocks).toEqual([])
-    expect(taskCall().subagentIntermediateTextBlocks).toEqual([])
+    expect(taskData().subagentReasoningBlocks).toEqual([])
+    expect(taskData().subagentIntermediateTextBlocks).toEqual([])
   })
 })
 
@@ -98,11 +96,11 @@ describe('transportStore dispatcher: subagent.progress (совместимост
     progress({ reasoning: 'думаю', content: 'Hello', iteration: 0 })
     progress({ reasoning: 'думаю дальше', content: 'Hello второй шаг', iteration: 1 })
 
-    expect(taskCall().subagentReasoningBlocks).toEqual([
+    expect(taskData().subagentReasoningBlocks).toEqual([
       { text: 'думаю', iteration: 0 },
       { text: ' дальше', iteration: 1 },
     ])
-    expect(taskCall().subagentIntermediateTextBlocks).toEqual([
+    expect(taskData().subagentIntermediateTextBlocks).toEqual([
       { text: 'Hello', iteration: 0 },
       { text: ' второй шаг', iteration: 1 },
     ])
@@ -115,7 +113,7 @@ describe('transportStore dispatcher: subagent.progress (совместимост
     progress({ content_delta: 'Hello', content: 'Hello', iteration: 0 })
     progress({ content_delta: ' мир', content: 'Hello мир', iteration: 0 })
 
-    expect(taskCall().subagentIntermediateTextBlocks).toEqual([
+    expect(taskData().subagentIntermediateTextBlocks).toEqual([
       { text: 'Hello мир', iteration: 0 },
     ])
   })

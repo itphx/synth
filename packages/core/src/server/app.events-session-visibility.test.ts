@@ -46,7 +46,7 @@ async function startApp(): Promise<{ app: StandaloneApp; port: number; close: ()
 
 /** Клиент `/ws/events` (listener вешается до `open`, иначе кадр теряется). */
 function connect(port: number): { ws: WebSocket; received: WsMessage[]; ready: Promise<void> } {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events?messageModel=2`, {
     headers: { Authorization: `Bearer ${API_KEY}` },
   });
   const received: WsMessage[] = [];

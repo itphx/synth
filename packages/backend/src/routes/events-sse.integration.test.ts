@@ -90,7 +90,8 @@ describe('ADR-052 (этап IV): SSE watch-all для service-key (backend)', ()
   it('service-key (events:watch) получает событие чужой сессии без владения', async () => {
     const key = await createServiceKey({ label: 'tg-gw-sse', roles: ['USER'], scopes: ['events:watch'] });
     const abort = new AbortController();
-    const res = await backend.app.request('/api/v2/events', {
+    // ADR-118 §8: подключение к SSE требует заявленную модель сообщений (fail-closed).
+    const res = await backend.app.request('/api/v2/events?messageModel=2', {
       headers: { Authorization: `Bearer ${key.key}` },
       signal: abort.signal,
     });
@@ -98,19 +99,25 @@ describe('ADR-052 (этап IV): SSE watch-all для service-key (backend)', ()
 
     // Дать хабу зарегистрировать клиента (для all-клиента подписка синхронна).
     await new Promise((r) => setTimeout(r, 30));
-    backend.eventBus.publish('session-foreign-svc', 'stream.done', { answer: 'pong' });
+    // `stream.done` удалён (ADR-118 §4): финал хода — `turn.finished`.
+    backend.eventBus.publish('session-foreign-svc', 'turn.finished', {
+      turnId: 'turn-foreign-svc',
+      status: 'completed',
+    });
 
-    const text = await readFor(res, ['"session-foreign-svc"', 'stream.done']);
+    const text = await readFor(res, ['"session-foreign-svc"', 'turn.finished']);
     abort.abort();
     expect(text).toContain('"session-foreign-svc"');
-    expect(text).toContain('stream.done');
+    expect(text).toContain('turn.finished');
+    // ADR-118 §6: кадр несёт `id:` с номером события (`eventSeq`) — по нему работает догон.
+    expect(text).toMatch(/^id: \d+$/m);
   });
 
   it('обычный USER получает свои сессии, но не чужие', async () => {
     const own = await createSession('own', USER_KEY);
 
     const abort = new AbortController();
-    const res = await backend.app.request('/api/v2/events', {
+    const res = await backend.app.request('/api/v2/events?messageModel=2', {
       headers: { Authorization: `Bearer ${USER_KEY}` },
       signal: abort.signal,
     });
@@ -118,13 +125,16 @@ describe('ADR-052 (этап IV): SSE watch-all для service-key (backend)', ()
 
     // Дать хабу выполнить `listSessions({ userId })` и подписаться на свою сессию.
     await new Promise((r) => setTimeout(r, 50));
-    backend.eventBus.publish('session-foreign-user', 'stream.done', { tag: 'foreign' });
-    backend.eventBus.publish(own, 'stream.done', { tag: 'own' });
+    backend.eventBus.publish('session-foreign-user', 'turn.finished', {
+      turnId: 'turn-foreign-user',
+      status: 'completed',
+    });
+    backend.eventBus.publish(own, 'turn.finished', { turnId: 'turn-own', status: 'completed' });
 
-    const text = await readFor(res, ['"tag":"own"']);
+    const text = await readFor(res, ['"turnId":"turn-own"']);
     abort.abort();
-    expect(text).toContain('"tag":"own"');
-    expect(text).not.toContain('"tag":"foreign"');
+    expect(text).toContain('"turnId":"turn-own"');
+    expect(text).not.toContain('"turnId":"turn-foreign-user"');
   });
 
   it('scope-гейт events:watch не ослаблен: service-key без scope → 403 SCOPE_REQUIRED', async () => {

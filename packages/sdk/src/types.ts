@@ -12,6 +12,8 @@ import type {
   EventBindingApiKey,
   EventBindingApiKeyCreated,
   EventRouteRule,
+  InstanceCapabilities,
+  PromptAcceptedResponse,
   RouteDecision,
   Schedule,
   ScheduleJob,
@@ -41,6 +43,8 @@ export type {
   EventIngestRequest,
   EventRouteRule,
   EventRouteRuleUpsertRequest,
+  InstanceCapabilities,
+  PromptAcceptedResponse,
   PromptRequest,
   PromptRequestInput,
   RouteDecision,
@@ -143,9 +147,44 @@ export interface SerializedSession {
   [key: string]: unknown;
 }
 
+/**
+ * Публичный срез сериализованного сообщения (`serializeMessage` в core).
+ *
+ * Транспортный DTO в snake_case; это подмножество ответа сервера, неизвестные
+ * поля допускаются. Поля `ord`/`turn_id`/`step_index`/`status` — модель хода
+ * ADR-118 (`ord` — монотонный порядок записи, `null` у сообщений до ADR-118).
+ */
+export interface SerializedMessage {
+  id?: string;
+  /** Позиция в отфильтрованном списке истории (перенумеровывается). */
+  index?: number;
+  /** Порядковый номер в сессии (перенумеровывается). */
+  seq?: number;
+  /** ADR-118 §2: монотонный порядок записи в историю (`null` — до ADR-118). */
+  ord?: number | null;
+  /** ADR-118 §1: идентификатор хода, которому принадлежит сообщение. */
+  turn_id?: string | null;
+  /** ADR-118 §1: индекс шага внутри хода (0-based). */
+  step_index?: number | null;
+  /** ADR-118 §5: статус сообщения-хода («финал» — смена статуса). */
+  status?: 'streaming' | 'completed' | 'cancelled' | 'error' | null;
+  role?: string;
+  content?: string;
+  author?: string | null;
+  agent_role?: string | null;
+  model?: string | null;
+  provider?: string | null;
+  ephemeral?: boolean;
+  timestamp?: string;
+  metadata?: Record<string, unknown> | null;
+  tool_calls?: Record<string, unknown>[] | null;
+  tool_call_id?: string | null;
+  [key: string]: unknown;
+}
+
 /** Ответ `GET /sessions/:id/messages`. */
 export interface SessionMessagesResponse {
-  messages: unknown[];
+  messages: SerializedMessage[];
   session_id: string;
 }
 

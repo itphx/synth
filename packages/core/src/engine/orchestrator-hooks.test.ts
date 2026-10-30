@@ -209,12 +209,13 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
     expect(results[0]!.content).toContain('pre_tool_use');
     expect(results[0]!.content).toContain('test-block');
 
-    // Цикл продолжился — модель ответила финальным текстом.
-    const done = chunks.find((c) => c.event === 'stream.done');
-    expect(done?.data.content).toBe('Готово');
+    // Цикл продолжился — модель ответила финальным текстом (в истории шага).
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const finalAssistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(finalAssistant.content).toBe('Готово');
+    expect(chunks.find((c) => c.event === 'turn.finished')?.data.status).toBe('completed');
 
     // В истории — tool-сообщение с hook.blocked (обратная связь модели).
-    const session = (await h.sessionManager.getSession(h.sessionId))!;
     const toolMsg = session.messages.find((m) => m.role === MessageRole.TOOL);
     expect(toolMsg?.content).toContain('test-block');
 
@@ -282,8 +283,10 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
     expect(results[0]!.isError).toBeFalsy();
     expect(results[0]!.content).not.toContain('Hook "pre_tool_use" blocked');
 
-    const done = chunks.find((c) => c.event === 'stream.done');
-    expect(done?.data.content).toBe('Готово');
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const finalAssistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(finalAssistant.content).toBe('Готово');
+    expect(chunks.find((c) => c.event === 'turn.finished')?.data.status).toBe('completed');
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });

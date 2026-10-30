@@ -45,6 +45,20 @@ export interface SessionData {
     index: number
     id?: string
     seq?: number
+    /**
+     * ADR-118 §2: монотонный порядок записи в истории (не перенумеровывается),
+     * `null` — сообщение ещё не материализовано.
+     */
+    ord?: number | null
+    /** ADR-118 §1: идентификатор хода, которому принадлежит сообщение. */
+    turn_id?: string | null
+    /** ADR-118 §1: индекс шага внутри хода (0-based). */
+    step_index?: number | null
+    /**
+     * ADR-118 §5: статус сообщения-хода — `streaming` означает идущий ход
+     * (восстановление живого хода после перезагрузки).
+     */
+    status?: 'streaming' | 'completed' | 'cancelled' | 'error' | null
     origin?: string
     source_msg_id?: string | null
     parts?: Array<{ id: string; type: string; data: unknown }> | null

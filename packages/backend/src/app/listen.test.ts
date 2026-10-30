@@ -88,7 +88,9 @@ describe('createBackendListen: HTTP + WebSocket /ws/events', () => {
   });
 
   it('/ws/events с валидной кредой — апгрейд принят, приходит кадр connected', async () => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, {
+    // ADR-118 §8: клиент обязан заявить модель сообщений (`messageModel=2`) —
+    // иначе соединение закрывается (fail-closed).
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events?messageModel=2`, {
       headers: { Authorization: `Bearer ${USER}` },
     });
     sockets.push(ws);

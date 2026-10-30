@@ -219,6 +219,11 @@
   (`engine/llm-error.ts`); строки движка — по ключам `shared/i18n` (ADR-041).
 - События сессии — локальный `EventBus`; UI слушает через EventHub/TransportClient
   (`/ws/events`) с SSE-фоллбеком (ADR-008/009/024).
+- **Приём и наблюдение разведены (ADR-118).** `POST /api/v2/sessions/:id/prompt` **только
+  принимает** сообщение (`202 {messageId, mode, position}`), наблюдение за ходом — события
+  `turn.*`/`step.*`/`part.*` в шине. Возвращать `text/event-stream` из ответа приёма нельзя:
+  иначе отмена соединения клиентом рвёт наблюдение, а подтверждение приёма теряется.
+  Детали модели — раздел «Поток сообщений v2 (ADR-118)».
 - **Инстансный канал событий (ADR-101).** Прогон пайплайна — не сессия, поэтому его события
   `pipeline.run.*` публикуются в **инстансный канал** той же шины
   (`EventBus.publishInstance`, канал `INSTANCE_EVENT_CHANNEL = 'instance'`, `events/bus.ts`): их
@@ -285,6 +290,54 @@
   `requirePermission`); внутри сессии набор тулов/разрешений одинаков для всех (режим, capabilities
   агента, MCP/скиллы). Эффективные роли доставляются в ход для аудита/attribution; машинный доступ
   интеграций сужается scoped **service-key** (ADR-052), а не ролями отправителя.
+
+## Поток сообщений v2 (ADR-118)
+
+Модель хода: `Turn` (ход) → `Step` (один вызов LLM = **одно assistant-сообщение**) → `Part`.
+Контракты — `shared/types/message-stream.ts` (`PromptAcceptedResponse`, `MessageStatus`,
+`TurnStatus`, payload'ы событий, `InstanceCapabilities`, `supportsMessageModel`,
+`MESSAGE_MODEL_QUERY_PARAM`). Приём и наблюдение разведены: приём — HTTP, наблюдение — шина событий.
+
+- **Приём — всегда `202`.** `POST /api/v2/sessions/:id/prompt` отвечает
+  `202 {messageId, mode, position}` и **не** отдаёт `text/event-stream`
+  (`server/routes/sessions.ts`); обрыв соединения клиентом ход не прерывает. `messageId` — id
+  принятого сообщения (клиентский `messageId` либо выданный сервером), он же уходит в
+  `message.accepted`/`message.delivered`. В гибриде проксируется **только** `202`; ответ старой
+  версии сервера → мягкая деградация `202 {messageId, mode:'queue', position:null}`.
+- **Новые события.** Публикация — `engine/orchestrator/turn-events.ts` (единая точка
+  `turn.*`/`step.*`/`part.*` и детерминированных `partId`: `msg:text:N`, `msg:reasoning:N`,
+  `callId`), очередь — `queue/processor.ts`:
+  `message.accepted` (адресное, `BusEvent.recipient = userId` отправителя),
+  `queue.state` (`{pendingCount, steerCount}` — **без текста и автора**),
+  `message.delivered` (`{messageId, ord, role, author?, principal?}`),
+  `turn.started`/`turn.finished`, `step.started`/`step.finished` (usage, стоимость, `attachments`,
+  `debugInfo`, `timings`), `part.delta`/`part.updated` (upsert по `{messageId, partId}`).
+- **Удалены без dual-emit:** `stream.chunk`, `stream.usage`, `stream.done`, `stream.interrupted`,
+  `message.injected`, `message.queued`. Остаются `stream.start`, `stream.cancelled`, `stream.error`,
+  `stream.retry`, `stream.ended`, `queue.stalled`, `steer.dropped`, `permission.*`, `tool_call.*`,
+  `child.*`. ⚠️ **Остаток:** `message.added` (финальный assistant с усечённым текстом, вставки
+  вложений тулов, дочерние сессии) пока публикуется — см. «Статус в коде» ADR-118.
+- **Шаг = сообщение, «финал» = смена статуса.** Сообщение шага создаётся на `step.started` со
+  `status: 'streaming'`, персистится инкрементально (`engine/orchestrator/stream-persistence.ts`),
+  терминальный статус ставится на `step.finished`. Вложения ответа (ADR-115) — в
+  `step.finished.attachments` (`stream.done.attachments` больше нет).
+- **`ord` — монотонный порядок.** Выдаётся при материализации записи в историю
+  (`storage/message-write.ts`, `nextOrd`), **не перенумеровывается**; `seq` остаётся позиционным.
+  DTO (`server/serialize.ts`) несёт `ord`/`turn_id`/`step_index`/`status`.
+- **Шина** (`events/bus.ts`): адресная доставка по `BusEvent.recipient` (подписчик с чужим
+  `recipient` событие не получает; широковещание — только для гибридного моста), монотонный
+  `eventSeq` и кольцевой журнал для догона (`journalSince`; 200 событий на сессию, до 100 сессий).
+- **`GET /api/v2/meta`** (`server/routes/meta.ts`, **без аутентификации**; монтируется и в core, и
+  в backend): `{messageModel: 2, eventSeq: true, replay: true, version}`.
+- **Гейт версии клиента:** WS `/ws/events` без `messageModel=2` закрывается кодом `1008`
+  (`messageModel=2 required`), SSE `GET /api/v2/events` отвечает `426 UPGRADE_REQUIRED`; догон —
+  `?since=`/`Last-Event-ID`, SSE-кадр несёт `id: <eventSeq>`. Сессионный SSE
+  `GET /:id/events` гейта и нумерации не имеет (остаток).
+- **Миграция данных** — `storage/migrations.ts` (`migrateMessageStreamV2`, маркер
+  `message-stream-v2`, запуск из `storage/instance-meta.ts`): построчно через `updateMessage`,
+  идемпотентна, старые ответы разбиваются по итерациям; PostgreSQL — миграция `029`.
+- **Адресация мутаций** пока по индексу (`server/routes/messages.ts`) — решение ADR-118 §7
+  (только по `id`) не реализовано.
 
 ## Гибрид (core-специфика)
 
@@ -378,7 +431,7 @@
   `streams_active`; `/metrics` пропускается, SSE/WS вне гистограммы), `process.ts` (RSS/heap/CPU/
   event loop lag/uptime/`build_info`), `token.ts` (`SYNTH_METRICS_TOKEN` → `{dataDir}/secrets/metrics-token`;
   `getMetricsTokenStatus`/`writeMetricsToken`/`removeMetricsToken`, минимум 16 символов, атомарно `0600`),
-  `collectors/*` (`bus` — turns/streams/retries/cost, `llm` — `createLlmCallRecorder` для
+  `collectors/*` (`bus` — turns/streams/retries/cost (считаются по `turn.*`/`step.finished`, ADR-118: имена и лейблы не менялись), `llm` — `createLlmCallRecorder` для
   `GatewayProvider.onCall`, `sessions` — 15 c, `storage` — записи/деградация 60 c и `{dataDir}` 300 c,
   `events` — ingest/decisions + журнал 5 мин, `scheduler`, `webhooks`, `hybrid`, `decision`,
   `authority` — `createAuthorityMetrics`: `synth_authority_decisions_total` (ADR-106 Ф1 — решения
@@ -409,7 +462,7 @@
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
-  `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `dictionaries`, `mcp`, `skills`,
+  `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `meta` (ADR-118: `GET /api/v2/meta` — возможности инстанса, без аутентификации), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
   `service-keys`, `webhooks`, `oauth` (ADR-105 Ф4: `/api/v2/oauth/credentials*` — выдача,
   метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`,
@@ -577,7 +630,7 @@
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
 - `engine/attachments/*` — ADR-115: вложения сообщений (сервис, MIME, приватность, GC,
   материализация, обработка aux-моделью). Устройство и правила — §«Вложения (ADR-115)» ниже.
-- `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист/`stream.done`/авто-тайтл); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
+- `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист шага/`turn.finished`/авто-тайтл, ADR-118); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
   **Финальный шаг по лимиту шагов (`AgentDefinition.maxSteps`) — механика opencode**
   (`engine/llm/max-steps.ts`, общий модуль с циклом саб-агента): лимит не обрывает ход
   отдельным вызовом «без инструментов», а добавляет ещё один обычный шаг того же цикла —
@@ -602,7 +655,7 @@
   Основной агент: пустой ответ →
   `session.steps_limit` (`{limit}`, паритет с саб-агентом; раньше подставлялся посторонний
   `session.max_iterations`), статус ответа — `limit` (`persistence.ts`), а `step_limit_reached: true`
-  кладётся в метаданные финального assistant-сообщения **и** в `stream.done`. Флаг `stepLimitExecuted`
+  кладётся в метаданные финального assistant-сообщения (отдельного поля события больше нет: `stream.done` удалён, ADR-118). Флаг `stepLimitExecuted`
   ставит сам цикл (`orchestrator.ts`) — отчёт подставляется только когда шаг-лимит реально исполнялся;
   прежняя ветка `toolIteration >= maxIterations → session.max_iterations` в основном цикле не
   используется (ключ остался для шагов пайплайнов, `engine/pipelines/executors/agent-step.ts`).
@@ -653,9 +706,9 @@
   «переведено в фон»; публикуется `process.detached`. Ответ — `{sessionId, detached[], failed?}`
   (пустой `detached` — штатный исход, не ошибка); гибридная (`remote:`) сессия — `400
   DETACH_UNSUPPORTED` (живого хэндла в этом процессе нет); повторный detach идемпотентен.
-  **Исходящие вложения ответа.** `stream.done` несёт аддитивное
+  **Исходящие вложения ответа.** `step.finished` несёт аддитивное
   `attachments?: Array<{sha256, mime, size, name?}>` — медиа-части **финального**
-  assistant-сообщения хода (`collectOutboundAttachments`, `phases/process-finalize.ts`;
+  assistant-сообщения хода (`collectOutboundAttachments`, `phases/process-finalize.ts`; `stream.done` удалён, ADR-118;
   `saveAssistantMessage` собирает `parts` = текст + накопленные `send_attachment`-части).
   **Seam-методы для движка пайплайнов (ADR-101):** `getComposer()` — тот же инстанс
   `SystemPromptComposer`, что у сессий (промпт агентского шага собирается той же
@@ -983,7 +1036,7 @@
   (поля `content`/`reasoning` с накопленным текстом убраны, пустые дельты не публикуются);
   префикс не совпал (рестарт стрима/новый текст) — публикуется весь текст. Суммарный объём
   дельт на прогон ограничен `SUBAGENT_PROGRESS_MAX_CHARS = 200 000` символов — дальше прогресс
-  не публикуется (debug-лог), итоговый отчёт и `stream.usage` не страдают. Причина: полный текст
+  не публикуется (debug-лог), итоговый отчёт и расход шага (`step.finished.usage`) не страдают. Причина: полный текст
   каждые 300 мс при нескольких параллельных саб-агентах давал мегабайты кадров и задерживал ack
   отправки сообщений в том же WS-канале (в UI — ложный «Send timeout»).
   **Финал ребёнка на шаге-лимите.** Финальное assistant-сообщение **дочерней** сессии несёт
@@ -1045,8 +1098,8 @@
   (`message_id`/`message_seq`), затем `sha256`/`name`/последняя; неоднозначное имя →
   `attach.tool.ambiguous`, нет вложений в указанном сообщении → `attach.tool.not_found`. `send_attachment` (`send-attachment.ts`, `file_read`) — файл
   уходит **получателю ответа**: часть кладётся в коллектор хода (`ctx.extra.outboundAttachments`),
-  финализация добавляет её в `parts` финального assistant-сообщения и в `stream.done.attachments`
-  (шлюзы раздают только их); ошибка/отмена хода ничего не отправляет. Три тула работают только
+  финализация добавляет её в `parts` финального assistant-сообщения и в `step.finished.attachments`
+  (шлюзы раздают только их, ADR-118); ошибка/отмена хода ничего не отправляет. Три тула работают только
   с объектами `attachments/` и общими лимитами `attachments.*` — второй политики нет.
   `list_models` (`list-models.ts`) — capability `models` (группа `read`, разрешён в plan-режиме):
   каталог инстанса через `extra.listModels` (`modelStore.list()`) — `provider/model` +

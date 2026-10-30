@@ -1,10 +1,11 @@
 /**
- * Оптимистичная строка очереди при отправке во время хода.
+ * ADR-118 §3: приём сообщения — `POST /sessions/:id/prompt` → `202
+ * {messageId, mode, position}`.
  *
- * Сообщение во время выполнения тулов должно быть видно сразу, не дожидаясь
- * серверного `message.queued` (ack идёт за backlog'ом live-кадров). Строка
- * добавляется оптимистично (id = stream_id отправки) и подтверждается
- * серверным событием с тем же `message_id` — без дубля.
+ * Ни SSE-ожидания, ни ack-кадра `queued`, ни таймаута «Send timeout» больше нет:
+ * реплика показывается оптимистично по `messageId` из ответа, а статус
+ * доставки (`accepted`/`queued`/`steering`) и очередь уточняются адресным
+ * событием `message.accepted` и `queue.state`.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -27,8 +28,6 @@ const mocks = vi.hoisted(() => {
       this.callbacks.onDisconnect?.('manual')
     })
     getTransport = vi.fn(() => this.kind)
-    /** Отправка: промисом управляет тест (ack/ошибка/таймаут). */
-    sendMessage = vi.fn()
     cancel = vi.fn()
     sendPermissionReply = vi.fn()
     sendPermissionHold = vi.fn()
@@ -41,10 +40,13 @@ const mocks = vi.hoisted(() => {
   }
 
   const instances: MockClient[] = []
-  /** HTTP-слой: постановка в очередь и сверка очереди с сервером. */
+  /** HTTP-слой: приём сообщения и сверка очереди с сервером. */
   const api = {
-    enqueueMessage: vi.fn().mockResolvedValue(undefined),
-    getSession: vi.fn().mockResolvedValue({ id: 's1', messages: [], pending_messages: [] }),
+    enqueueMessage: vi.fn(),
+    getSession: vi.fn().mockResolvedValue({ id: 's1', messages: [] }),
+    getInstanceCapabilities: vi.fn().mockResolvedValue({
+      messageModel: 2, eventSeq: true, replay: true, version: '0.13.0',
+    }),
   }
   return { instances, MockClient, api }
 })
@@ -60,146 +62,121 @@ import type { WSEvent } from '@/lib/api/transport'
 
 const dispatch = createDispatcher()
 
-function connectWs(): InstanceType<typeof mocks.MockClient> {
-  useTransportStore.getState().connect('ws')
-  const client = mocks.instances[mocks.instances.length - 1]!
-  client.callbacks.onBackendReady?.()
-  return client
-}
-
 function makeEvent(type: string, sessionId: string, data: Record<string, unknown>): WSEvent {
   return { type, session_id: sessionId, data }
 }
 
-/** Ход идёт: есть живой стрим (в него и попадёт новое сообщение). */
+/** Ход идёт: обычная отправка встанет в очередь. */
 function startTurn(sessionId = 's1'): void {
-  useChatStore.getState().startStream(sessionId, 'turn-1', 'assistant')
+  dispatch(makeEvent('turn.started', sessionId, { turnId: 't1', messageId: 'm-user' }))
 }
 
 beforeEach(() => {
   useTransportStore.getState().disconnect()
   mocks.instances.length = 0
   vi.clearAllMocks()
+  mocks.api.getSession.mockResolvedValue({ id: 's1', messages: [] })
   resetChatStore()
 })
 
-describe('transportStore.sendMessage: оптимистичная строка очереди', () => {
-  it('во время хода строка появляется сразу, а message.queued её подтверждает без дубля', async () => {
-    const client = connectWs()
-    startTurn()
+describe('transportStore.sendMessage: контракт 202 (ADR-118 §3)', () => {
+  it('вне хода → реплика сразу в ленте по messageId ответа, статус «принято»', async () => {
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-new', mode: 'queue', position: null })
 
-    let resolveSend: (v: { confirmed: boolean }) => void = () => {}
-    client.sendMessage.mockReturnValue(new Promise((resolve) => { resolveSend = resolve }))
+    const accepted = await useTransportStore.getState().sendMessage('s1', 'привет')
 
-    const pendingSend = useTransportStore.getState().sendMessage('s1', 'привет')
-    const streamId = client.sendMessage.mock.calls[0]![6] as string
+    expect(accepted).toEqual({ messageId: 'm-new', mode: 'queue', position: null })
+    expect(mocks.api.enqueueMessage).toHaveBeenCalledTimes(1)
+    // Никакого ожидания SSE/ack: единственный вызов — HTTP-приём.
+    expect(mocks.instances).toHaveLength(0)
 
-    let pending = useChatStore.getState().pendingBySession['s1'] ?? []
-    expect(pending).toHaveLength(1)
-    expect(pending[0]).toMatchObject({ id: streamId, content: 'привет', sending: true })
-
-    // Серверное подтверждение несёт тот же id (stream_id = message_id).
-    dispatch(makeEvent('message.queued', 's1', {
-      message_id: streamId,
-      message: 'привет',
-      pending_count: 1,
-    }))
-    resolveSend({ confirmed: true })
-    await expect(pendingSend).resolves.toEqual({ confirmed: true })
-
-    pending = useChatStore.getState().pendingBySession['s1'] ?? []
-    expect(pending).toHaveLength(1)
-    expect(pending[0]).toMatchObject({ id: streamId, content: 'привет' })
-    expect(pending[0]!.sending).toBe(false)
-  })
-
-  it('настоящая ошибка отправки убирает оптимистичную строку и бросает', async () => {
-    const client = connectWs()
-    startTurn()
-    client.sendMessage.mockRejectedValue(new Error('Session not found'))
-
-    await expect(useTransportStore.getState().sendMessage('s1', 'привет')).rejects.toThrow('Session not found')
-    expect(useChatStore.getState().pendingBySession['s1'] ?? []).toHaveLength(0)
-  })
-
-  it('вне хода оптимистичной строки нет (сообщение сразу станет ходом)', async () => {
-    const client = connectWs()
-    client.sendMessage.mockResolvedValue({ confirmed: true })
-
-    await useTransportStore.getState().sendMessage('s1', 'привет')
-    expect(useChatStore.getState().pendingBySession['s1'] ?? []).toHaveLength(0)
-  })
-
-  it('неподтверждённая отправка ({confirmed:false}) оставляет строку и сверяет очередь', async () => {
-    const client = connectWs()
-    startTurn()
-    client.sendMessage.mockResolvedValue({ confirmed: false })
-
-    const pendingSend = useTransportStore.getState().sendMessage('s1', 'привет')
-    const streamId = client.sendMessage.mock.calls[0]![6] as string
-
-    // Серверное состояние на момент сверки: сообщение уже в очереди, а его
-    // `message_id` совпадает с id оптимистичной строки (`stream_id` отправки).
-    // Первый pending-элемент при живом ходе — сообщение текущего хода, поэтому
-    // в отображаемую очередь идёт `pending_messages.slice(1)`.
-    mocks.api.getSession.mockResolvedValueOnce({
-      id: 's1',
-      messages: [],
-      current_stream: { stream_id: 'turn-1' },
-      pending_messages: [
-        { id: 'turn-1', content: 'сообщение текущего хода' },
-        { id: streamId, content: 'привет' },
-      ],
+    const msgs = useChatStore.getState().messagesBySession['s1']!
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toMatchObject({
+      id: 'm-new',
+      role: 'user',
+      content: 'привет',
+      delivery: 'accepted',
     })
+    expect(useChatStore.getState().pendingBySession['s1']).toBeUndefined()
+  })
 
-    await expect(pendingSend).resolves.toEqual({ confirmed: false })
+  it('во время хода с позицией > 1 → «в очереди» и строка очереди', async () => {
+    startTurn()
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-new', mode: 'queue', position: 2 })
 
-    // Строка не потеряна; серверная сверка очереди выполняется (GET /sessions/:id).
-    expect(useChatStore.getState().pendingBySession['s1'] ?? []).toHaveLength(1)
+    await useTransportStore.getState().sendMessage('s1', 'следующее')
 
-    // Сверка завершилась — строка осталась той же (id/content), признак
-    // «отправляется» снят серверными данными (это делает только reconcile).
-    await vi.waitFor(() => {
-      expect(mocks.api.getSession).toHaveBeenCalledWith('s1')
-      expect(useChatStore.getState().pendingBySession['s1']?.[0]?.sending).not.toBe(true)
+    expect(useChatStore.getState().messagesBySession['s1']!.at(-1)).toMatchObject({
+      id: 'm-new',
+      delivery: 'queued',
     })
-    const pending = useChatStore.getState().pendingBySession['s1'] ?? []
+    const pending = useChatStore.getState().pendingBySession['s1']!
     expect(pending).toHaveLength(1)
-    expect(pending[0]).toMatchObject({ id: streamId, content: 'привет' })
+    expect(pending[0]).toMatchObject({ id: 'm-new', content: 'следующее' })
+  })
+
+  it('режим steer → маркер вмешательства, строки очереди нет', async () => {
+    startTurn()
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-steer', mode: 'steer', position: null })
+
+    await useTransportStore.getState().sendMessage('s1', 'в ход', undefined, undefined, undefined, 'steer')
+
+    expect(useChatStore.getState().messagesBySession['s1']!.at(-1)).toMatchObject({
+      id: 'm-steer',
+      delivery: 'steering',
+    })
+    expect(useChatStore.getState().pendingBySession['s1']).toBeUndefined()
+  })
+
+  it('режим queue в тело запроса не уходит (дефолт сервера)', async () => {
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm1', mode: 'queue', position: null })
+
+    await useTransportStore.getState().sendMessage('s1', 'привет', 'fixer', 'itphx', 'gpt', 'queue')
+
+    const [, text, options] = mocks.api.enqueueMessage.mock.calls[0]!
+    expect(text).toBe('привет')
+    expect(options.mode).toBe('queue')
+    expect(options.agentRole).toBe('fixer')
+    // messageId отправки уходит в тело — сервер вернёт его же в `202`.
+    expect(options.streamId).toMatch(/^stream-/)
+  })
+
+  it('ошибка приёма (сеть/401/валидация) бросается, лента не меняется', async () => {
+    mocks.api.enqueueMessage.mockRejectedValue(new Error('Session not found'))
+
+    await expect(
+      useTransportStore.getState().sendMessage('s1', 'привет'),
+    ).rejects.toThrow('Session not found')
+
+    expect(useChatStore.getState().messagesBySession['s1']).toBeUndefined()
+    expect(useChatStore.getState().pendingBySession['s1']).toBeUndefined()
   })
 })
 
-describe('chatStore.updateToolCallSubagentProgress: накопление дельт', () => {
-  it('дельты content/reasoning дописываются в live-блок task', () => {
-    const chat = useChatStore.getState()
-    chat.startStream('s1', 'turn-1', 'assistant')
-    chat.addToolCall('s1', 'turn-1', {
-      callId: 'call-1',
-      name: 'task',
-      args: {},
-      status: 'running',
-      startedAt: new Date().toISOString(),
-      iteration: 0,
-    })
+describe('transportStore: message.accepted подтверждает отправку (ADR-118 §4)', () => {
+  it('адресное подтверждение снимает «отправляется» с оптимистичной строки', async () => {
+    startTurn()
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-new', mode: 'queue', position: 2 })
 
-    chat.updateToolCallSubagentProgress('s1', 'turn-1', 'call-1', {
-      reasoningDelta: 'дум', contentDelta: 'Hel', iteration: 0,
-    })
-    chat.updateToolCallSubagentProgress('s1', 'turn-1', 'call-1', {
-      reasoningDelta: 'аю', contentDelta: 'lo', iteration: 0,
-    })
-    chat.updateToolCallSubagentProgress('s1', 'turn-1', 'call-1', {
-      reasoningDelta: 'дальше', contentDelta: 'второй шаг', iteration: 1,
-    })
+    await useTransportStore.getState().sendMessage('s1', 'привет')
+    expect(useChatStore.getState().pendingBySession['s1']![0]!.sending).not.toBe(true)
 
-    const call = useChatStore.getState().streamingBySession['s1']!['turn-1']!.toolCalls[0]!
-    expect(call.subagentReasoningBlocks).toEqual([
-      { text: 'думаю', iteration: 0 },
-      { text: 'дальше', iteration: 1 },
-    ])
-    expect(call.subagentIntermediateTextBlocks).toEqual([
-      { text: 'Hello', iteration: 0 },
-      { text: 'второй шаг', iteration: 1 },
-    ])
+    dispatch(makeEvent('message.accepted', 's1', { messageId: 'm-new', mode: 'queue', position: 2 }))
+
+    const pending = useChatStore.getState().pendingBySession['s1']!
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({ id: 'm-new', content: 'привет' })
+    expect(pending[0]!.sending).toBe(false)
+  })
+
+  it('повторное message.accepted не создаёт вторую строку (дедуп по id)', () => {
+    startTurn()
+    useChatStore.getState().upsertPendingMessage('s1', { id: 'm1', content: 'привет' })
+
+    dispatch(makeEvent('message.accepted', 's1', { messageId: 'm1', mode: 'queue', position: 2 }))
+    dispatch(makeEvent('message.accepted', 's1', { messageId: 'm1', mode: 'queue', position: 2 }))
+
+    expect(useChatStore.getState().pendingBySession['s1']).toHaveLength(1)
   })
 })

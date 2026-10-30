@@ -1,10 +1,11 @@
 /**
- * T14 (dogfooding): измеримость стриминга — `seq`/`t_ms` у `stream.chunk` и
- * сводка `chunks`/`first_chunk_ms`/`last_chunk_ms`/`content_chars` в `stream.done`.
+ * T14 (dogfooding): измеримость стриминга в модели ADR-118.
  *
- * Поля аддитивные: старые клиенты их не читают, а сервер по ним сравнивает
- * момент последнего чанка с моментом прихода `stream.done` в UI (где задержка —
- * сервер или рендер).
+ * `stream.chunk` с `seq`/`t_ms` и сводкой `stream.done` удалены (ADR-118 §4).
+ * Теперь дельты текста идут `part.delta` (upsert по `{messageId, partId}`),
+ * а тайминги шага — снимок в `step.finished.timings`
+ * (`{chunks, firstChunkMs?, lastChunkMs?}`). По ним UI сравнивает момент
+ * последнего чанка с приходом финала (где задержка — сервер или рендер).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -49,7 +50,7 @@ function makeUserMessage(): Message {
   };
 }
 
-/** Провайдер с несколькими чанками: нужен для проверки `seq`/таймингов. */
+/** Провайдер с несколькими чанками: нужен для проверки таймингов шага. */
 class TimingProvider extends BaseProvider {
   async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
     return { content: 'ответ', model: this.model, usage: USAGE };
@@ -64,7 +65,7 @@ class TimingProvider extends BaseProvider {
   ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
     yield { content: 'От', isFinal: false };
     yield { content: 'вет', isFinal: false };
-    // Финальный чанк в UI уходит с пустым content (полный текст — в stream.done).
+    // Финальный чанк несёт полный текст шага; дельтой он не публикуется.
     yield { content: 'ответ', isFinal: true, usage: USAGE, model: this.model };
   }
 
@@ -73,7 +74,7 @@ class TimingProvider extends BaseProvider {
   }
 }
 
-describe('ChatOrchestrator — тайминги стрима (T14)', () => {
+describe('ChatOrchestrator — тайминги шага (T14 × ADR-118)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -88,7 +89,10 @@ describe('ChatOrchestrator — тайминги стрима (T14)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function run(): Promise<Array<{ type: string; data: Record<string, unknown> }>> {
+  async function run(): Promise<{
+    events: Array<{ type: string; data: Record<string, unknown> }>;
+    sessionId: string;
+  }> {
     const orchestrator = new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
@@ -117,47 +121,53 @@ describe('ChatOrchestrator — тайминги стрима (T14)', () => {
     await orchestrator.createProcessMessage()(fresh, msg, new AbortController().signal, (type, data) => {
       events.push({ type, data });
     });
-    return events;
+    return { events, sessionId: session.id };
   }
 
-  it('чанки несут монотонные seq (с 1) и t_ms', async () => {
-    const events = await run();
-    const chunks = events.filter((e) => e.type === 'stream.chunk');
-    expect(chunks).toHaveLength(3);
+  it('дельты текста идут `part.delta` с детерминированным partId; финальный чанк дельтой не публикуется', async () => {
+    const { events } = await run();
+    const stepStarted = events.find((e) => e.type === 'step.started');
+    expect(stepStarted).toBeTruthy();
 
-    let prevT = -1;
-    chunks.forEach((chunk, index) => {
-      expect(chunk.data.seq).toBe(index + 1);
-      expect(chunk.data.stream_id).toBeTruthy();
-      expect(typeof chunk.data.t_ms).toBe('number');
-      expect(chunk.data.t_ms as number).toBeGreaterThanOrEqual(0);
-      // Время от старта стрима не убывает.
-      expect(chunk.data.t_ms as number).toBeGreaterThanOrEqual(prevT);
-      prevT = chunk.data.t_ms as number;
-      // Прежние поля не изменились.
-      expect(typeof chunk.data.content).toBe('string');
-      expect(chunk.data.agent_role).toBe('fixer');
+    const deltas = events.filter((e) => e.type === 'part.delta');
+    // Два непустых нефинальных чанка — две дельты ('От' + 'вет').
+    expect(deltas).toHaveLength(2);
+    expect(deltas.map((d) => d.data.delta)).toEqual(['От', 'вет']);
+    // partId детерминирован (`msg:text:0`), сообщение — сообщение шага.
+    deltas.forEach((delta) => {
+      expect(delta.data.partId).toBe('msg:text:0');
+      expect(delta.data.field).toBe('text');
+      expect(delta.data.messageId).toBe(stepStarted!.data.messageId);
     });
-    // Финальный чанк по-прежнему с пустым content.
-    expect(chunks[2]!.data.content).toBe('');
+    // Полный текст шага дельтой не идёт (его несёт сообщение шага).
+    expect(deltas.some((d) => d.data.delta === 'ответ')).toBe(false);
   });
 
-  it('stream.done несёт chunks/first_chunk_ms/last_chunk_ms/content_chars', async () => {
-    const events = await run();
-    const done = events.find((e) => e.type === 'stream.done');
-    expect(done).toBeTruthy();
+  it('`step.finished` несёт timings: chunks/firstChunkMs/lastChunkMs', async () => {
+    const { events, sessionId } = await run();
+    const finished = events.filter((e) => e.type === 'step.finished');
+    expect(finished).toHaveLength(1);
+    const timings = finished[0]!.data.timings as
+      | { chunks: number; firstChunkMs?: number; lastChunkMs?: number }
+      | undefined;
+    expect(timings).toBeTruthy();
 
-    expect(done!.data.chunks).toBe(3);
-    expect(typeof done!.data.first_chunk_ms).toBe('number');
-    expect(typeof done!.data.last_chunk_ms).toBe('number');
-    expect(done!.data.first_chunk_ms as number).toBeGreaterThanOrEqual(0);
-    expect(done!.data.last_chunk_ms as number).toBeGreaterThanOrEqual(done!.data.first_chunk_ms as number);
-    expect(done!.data.content_chars).toBe((done!.data.content as string).length);
-    expect(done!.data.content).toBe('ответ');
+    // Чанков было три (два нефинальных + финальный).
+    expect(timings!.chunks).toBe(3);
+    expect(typeof timings!.firstChunkMs).toBe('number');
+    expect(typeof timings!.lastChunkMs).toBe('number');
+    expect(timings!.firstChunkMs!).toBeGreaterThanOrEqual(0);
+    expect(timings!.lastChunkMs!).toBeGreaterThanOrEqual(timings!.firstChunkMs!);
+    expect(finished[0]!.data.status).toBe('completed');
+    expect(finished[0]!.data.usage).toBeTruthy();
 
-    // Прежние поля события не изменились.
-    expect(done!.data.status).toBe('completed');
-    expect(typeof done!.data.duration_ms).toBe('number');
-    expect(done!.data.usage).toBeTruthy();
+    // Текст шага доступен в сообщении шага (не в событии): длина = длине ответа.
+    const stored = (await sessionManager.getSession(sessionId))!;
+    const assistant = [...stored.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.content).toBe('ответ');
+
+    // Ход закрыт `turn.finished`.
+    const turnFinished = events.find((e) => e.type === 'turn.finished');
+    expect(turnFinished?.data.status).toBe('completed');
   });
 });

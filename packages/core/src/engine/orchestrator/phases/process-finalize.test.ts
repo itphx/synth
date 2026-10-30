@@ -5,8 +5,9 @@
  *  - отмена до финального сохранения → assistant (status=cancelled) → ровно
  *    одно `stream.cancelled`, **без** `step.finished`; tool-chain уже записан
  *    пошагово в цикле (шаг 2а) — в эпилоге его нет;
- *  - фоллбек-тексты (лимит итераций / deny / пустой ответ) и статус — в
- *    сохранённом assistant-сообщении и в `step.finished`/`turn.finished`;
+ *  - фоллбек-тексты (лимит итераций / deny / пустой ответ) — в сохранённом
+ *    assistant-сообщении, статус — в `step.finished` (статус сообщения шага) и
+ *    `turn.finished` (терминальный статус хода);
  *  - quality-check/escalation (ADR-034): перевызов на fallback-модели без
  *    assistant-сообщений с toolUse, событие `message.quality_check`;
  *  - secrets из ответа — в metadata сохранённого сообщения (ADR-036),
@@ -193,6 +194,30 @@ describe('runProcessFinalize', () => {
     };
   }
 
+  /** Событие по имени (шаг и ход закрываются ровно одним событием). */
+  function eventOf(name: string): { event: string; data: Record<string, unknown> } {
+    const found = published.find((p) => p.event === name);
+    expect(found, `событие ${name} не опубликовано`).toBeDefined();
+    return found!;
+  }
+
+  /** Последнее событие по имени — второй прогон в одном тесте. */
+  function lastEventOf(name: string): { event: string; data: Record<string, unknown> } {
+    const found = [...published].reverse().find((p) => p.event === name);
+    expect(found, `событие ${name} не опубликовано`).toBeDefined();
+    return found!;
+  }
+
+  /** ADR-118 §4: шаг закрывается `step.finished`, ход — `turn.finished`. */
+  const stepFinished = () => eventOf('step.finished');
+  const turnFinished = () => eventOf('turn.finished');
+
+  /** Последнее сохранённое assistant-сообщение (текст живёт только в нём). */
+  async function storedAssistant(sessionId: string): Promise<Message> {
+    const stored = (await sessionManager.getSession(sessionId))!;
+    return stored.messages.filter((m) => m.role === MessageRole.ASSISTANT).at(-1)!;
+  }
+
   describe('ветка отмены', () => {
     it('assistant(status=cancelled) → stream.cancelled, без step.finished', async () => {
       const sessionId = await makeSession();
@@ -289,11 +314,20 @@ describe('runProcessFinalize', () => {
         i18n: { key: 'session.steps_limit', params: { limit: '10' } },
         step_limit_reached: true,
       });
-      expect(published[0]!.data).toMatchObject({
+      // ADR-118 §4: текст фоллбека — в сообщении шага (в `step.finished`
+      // контента нет); статус `limit` сводится к `completed` у шага
+      // (ошибки не было) и `stopped` у хода — вместо прежнего
+      // `status: 'limit'` в `stream.done`.
+      expect(await storedAssistant(sessionId)).toMatchObject({
         content: expected,
-        status: 'limit',
-        step_limit_reached: true,
+        metadata: { step_limit_reached: true, status: 'limit' },
       });
+      expect(stepFinished().data).toMatchObject({
+        turnId: 'turn1',
+        stepIndex: 0,
+        status: 'completed',
+      });
+      expect(turnFinished().data).toMatchObject({ turnId: 'turn1', status: 'stopped' });
     });
 
     it('непустой финальный ответ на шаге-лимите → текст сохраняется, step_limit_reached=true', async () => {
@@ -306,11 +340,12 @@ describe('runProcessFinalize', () => {
         deps,
       );
 
-      expect(published[0]!.data).toMatchObject({
+      expect(await storedAssistant(sessionId)).toMatchObject({
         content: 'готово',
-        status: 'completed',
-        step_limit_reached: true,
+        metadata: { step_limit_reached: true, status: 'completed' },
       });
+      expect(stepFinished().data).toMatchObject({ status: 'completed' });
+      expect(turnFinished().data).toMatchObject({ status: 'completed' });
     });
 
     it('непустой финальный ответ не заменяется фоллбеком лимита', async () => {
@@ -321,7 +356,11 @@ describe('runProcessFinalize', () => {
         makeArgs(sessionId), makeState({ finalContent: 'готово', toolIteration: 12, maxIterations: 10 }), deps,
       );
 
-      expect(published[0]!.data).toMatchObject({ content: 'готово', status: 'completed' });
+      expect(await storedAssistant(sessionId)).toMatchObject({
+        content: 'готово',
+        metadata: { status: 'completed' },
+      });
+      expect(stepFinished().data).toMatchObject({ status: 'completed' });
     });
 
     it('deny без финального текста → denied_blocked; поля stopped_by_deny/deny_reason не публикуются', async () => {
@@ -334,32 +373,39 @@ describe('runProcessFinalize', () => {
         deps,
       );
 
-      expect(published[0]!.data).toMatchObject({
+      expect(await storedAssistant(sessionId)).toMatchObject({
         content: sm('session.denied_blocked'),
-        status: 'stopped',
+        metadata: { status: 'stopped' },
       });
-      expect(published[0]!.data.stopped_by_deny).toBeUndefined();
-      expect(published[0]!.data.deny_reason).toBeUndefined();
+      const step = stepFinished().data;
+      expect(step).toMatchObject({ status: 'completed' });
+      expect(step.stopped_by_deny).toBeUndefined();
+      expect(step.deny_reason).toBeUndefined();
+      expect(turnFinished().data).toMatchObject({ status: 'stopped' });
     });
 
-    it('пустой ответ после deny-блокировок → denied_blocked (status stopped); без deny → empty_response (status error)', async () => {
+    it('пустой ответ после deny-блокировок → denied_blocked (ход stopped); без deny → empty_response (ход error)', async () => {
       const sessionId = await makeSession();
       const denied = makeDeps();
       await runProcessFinalize(makeArgs(sessionId), makeState({ finalContent: '', hadDeny: true }), denied);
-      expect(published[0]!.data).toMatchObject({
+      expect(await storedAssistant(sessionId)).toMatchObject({
         content: sm('session.denied_blocked'),
-        status: 'stopped',
+        metadata: { status: 'stopped' },
       });
+      expect(lastEventOf('step.finished').data).toMatchObject({ status: 'completed' });
+      expect(lastEventOf('turn.finished').data).toMatchObject({ status: 'stopped' });
 
       const plain = makeDeps();
       await runProcessFinalize(makeArgs(sessionId), makeState({ finalContent: '' }), plain);
-      expect(published[1]!.data).toMatchObject({
+      expect(await storedAssistant(sessionId)).toMatchObject({
         content: sm('session.empty_response'),
-        status: 'error',
+        metadata: { status: 'error' },
       });
+      expect(lastEventOf('step.finished').data).toMatchObject({ status: 'error' });
+      expect(lastEventOf('turn.finished').data).toMatchObject({ status: 'error' });
     });
 
-    it('ролевой deny + пустой ответ → role_tool_blocked с tool/agent (status stopped)', async () => {
+    it('ролевой deny + пустой ответ → role_tool_blocked с tool/agent (ход stopped)', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
 
@@ -387,9 +433,12 @@ describe('runProcessFinalize', () => {
           params: { tool: 'execute_shell', agent: 'assistant' },
         },
       });
-      expect(published[0]!.data).toMatchObject({ content: expected, status: 'stopped' });
+      const stored = await storedAssistant(sessionId);
+      expect(stored).toMatchObject({ content: expected, metadata: { status: 'stopped' } });
+      expect(stepFinished().data).toMatchObject({ status: 'completed' });
+      expect(turnFinished().data).toMatchObject({ status: 'stopped' });
       // Ролевой отказ не маскируется под «заблокировано политикой безопасности».
-      expect(published[0]!.data.content).not.toBe(sm('session.denied_blocked'));
+      expect(stored.content).not.toBe(sm('session.denied_blocked'));
     });
 
     it('ролевой deny не перетирает непустой ответ модели', async () => {
@@ -410,41 +459,49 @@ describe('runProcessFinalize', () => {
 
       const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(saveCall[1]).toBe('Сам не смог — предлагаю делегировать @fixer');
-      expect(published[0]!.data).toMatchObject({
+      expect(await storedAssistant(sessionId)).toMatchObject({
         content: 'Сам не смог — предлагаю делегировать @fixer',
-        status: 'completed',
+        metadata: { status: 'completed' },
       });
+      expect(stepFinished().data).toMatchObject({ status: 'completed' });
     });
   });
 
   describe('успешный путь', () => {
-    it('assistant сохраняется до stream.done, ровно одно stream.done', async () => {
+    it('assistant сохраняется до step.finished/turn.finished, по одному событию на шаг и ход', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
 
       await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
 
       expect(order).toEqual(['saveAssistantMessage', 'unregister:stream1']);
-      expect(published.map((p) => p.event)).toEqual(['stream.done']);
-      expect(published[0]!.data).toMatchObject({
-        stream_id: 'stream1',
-        content: 'ответ модели',
+      // ADR-118 §4: `stream.done` заменён парой `step.finished` + `turn.finished`.
+      expect(published.map((p) => p.event)).toEqual(['step.finished', 'turn.finished']);
+      expect(stepFinished().data).toEqual({
+        turnId: 'turn1',
+        stepIndex: 0,
+        messageId: 'msg-step-0',
         status: 'completed',
-        model: 'm',
-        provider: 'prov',
         usage: USAGE,
-        message_index: 1,
-        pending_count: 0,
+        provider: 'prov',
+        model: 'm',
+        costUsd: 0.25,
+        costCurrency: 'USD',
+        agentRole: 'fixer',
       });
+      expect(turnFinished().data).toEqual({ turnId: 'turn1', status: 'completed' });
+      // Текст ответа — в сообщении шага (в событии шага контента нет).
+      expect((await storedAssistant(sessionId)).content).toBe('ответ модели');
       expect(deps.calibrateTokenRatio).toHaveBeenCalledWith('m', 400, USAGE, undefined);
     });
 
-    it('reasoning_blocks/intermediate_text_blocks только при наличии', async () => {
+    it('reasoning-части и intermediate_text_blocks — только при наличии', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
       await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
-      expect(published[0]!.data.reasoning_blocks).toBeUndefined();
-      expect(published[0]!.data.intermediate_text_blocks).toBeUndefined();
+      const plain = await storedAssistant(sessionId);
+      expect(plain.parts.map((p) => p.type)).toEqual(['text']);
+      expect(plain.metadata!.intermediate_text_blocks).toBeUndefined();
 
       const withBlocks = makeDeps();
       await runProcessFinalize(
@@ -455,20 +512,42 @@ describe('runProcessFinalize', () => {
         }),
         withBlocks,
       );
-      expect(published[1]!.data).toMatchObject({
-        reasoning_blocks: [{ text: 'r1', iteration: 0 }],
-        intermediate_text_blocks: [{ text: 't1', iteration: 0 }],
-      });
+      const rich = await storedAssistant(sessionId);
+      expect(rich.parts.map((p) => p.type)).toEqual(['text', 'reasoning']);
+      expect(rich.metadata!.intermediate_text_blocks).toEqual([{ text: 't1', iteration: 0 }]);
     });
 
-    it('secrets из ответа уходят в metadata stream.done (ADR-036)', async () => {
+    it('secrets из ответа — в metadata сообщения, не в событии шага (ADR-036)', async () => {
       const sessionId = await makeSession();
-      const deps = makeDeps({ getAssistantSecrets: vi.fn(async () => ({ '⟦SYNTH_SECRET_1⟧': 'sk' })) as never });
+      const secretMap = { '⟦SYNTH_SECRET_1⟧': 'sk' };
+      const obfMapStore = { get: vi.fn(async () => secretMap) };
+      const save = vi.fn(async (...args: Parameters<SaveAssistantMessageFn>) => {
+        order.push('saveAssistantMessage');
+        return saveAssistantMessage(
+          {
+            sessionManager,
+            eventBus,
+            obfMapStore: obfMapStore as never,
+            modelPriceLoader: null,
+            blobRefs: blobRefs as never,
+          },
+          ...args,
+        );
+      });
+      const deps = makeDeps({ saveAssistantMessage: save as unknown as SaveAssistantMessageFn });
 
-      await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ finalContent: 'ключ ⟦SYNTH_SECRET_1⟧' }),
+        deps,
+      );
 
-      expect(deps.getAssistantSecrets).toHaveBeenCalledWith(sessionId, 'ответ модели');
-      expect(published[0]!.data.metadata).toEqual({ secrets: { '⟦SYNTH_SECRET_1⟧': 'sk' } });
+      const stored = await storedAssistant(sessionId);
+      expect(stored.metadata!.secrets).toEqual(secretMap);
+      // ADR-118 §4: `stream.done` (единственный носитель `metadata`) удалён —
+      // в `step.finished` секретов нет.
+      expect(stepFinished().data).not.toHaveProperty('metadata');
+      expect(stepFinished().data).not.toHaveProperty('secrets');
     });
 
     it('tool_results и usage попадают в сохранённое сообщение', async () => {
@@ -526,7 +605,7 @@ describe('runProcessFinalize', () => {
 
       const quality = events.find((e) => e.type === 'message.quality_check')!;
       expect(quality.data).toMatchObject({ qa_pass: false, qa_reason: 'Response is shorter than 10 characters' });
-      expect(published[0]!.data.content).toBe('ответ модели');
+      expect((await storedAssistant(sessionId)).content).toBe('ответ модели');
       const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(saveCall[15]).toBe(false);
     });
@@ -557,8 +636,9 @@ describe('runProcessFinalize', () => {
         undefined,
         undefined,
       );
-      expect(published[0]!.data).toMatchObject({ content: 'эскалированный ответ', model: 'fb-model', status: 'completed' });
-      expect(events.find((e) => e.type === 'message.quality_check')!.data).toMatchObject({
+      // ADR-118 §4: текст эскалации — в сообщении шага, модель — в `step.finished`.
+      expect(stepFinished().data).toMatchObject({ model: 'fb-model', status: 'completed' });
+      expect((await storedAssistant(sessionId)).content).toBe('эскалированный ответ');      expect(events.find((e) => e.type === 'message.quality_check')!.data).toMatchObject({
         qa_pass: true,
         qa_reason: sm('router.escalation', { provider: 'fb', model: 'fb-model', reason: 'Response is shorter than 10 characters' }),
       });
@@ -634,7 +714,7 @@ describe('runProcessFinalize', () => {
 
       expect((router.getProvider as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
       expect(events.find((e) => e.type === 'message.quality_check')!.data).toMatchObject({ qa_pass: true });
-      expect(published[0]!.data.content).toBe('ответ модели');
+      expect((await storedAssistant(sessionId)).content).toBe('ответ модели');
     });
 
     it('эскалация выключена → QC не вызывается и событие не публикуется', async () => {
@@ -658,7 +738,7 @@ describe('runProcessFinalize', () => {
 
       await runProcessFinalize(makeArgs(sessionId), makeState({ routingDecision: decision }), deps);
 
-      expect(published[0]!.data.content).toBe('ответ модели');
+      expect((await storedAssistant(sessionId)).content).toBe('ответ модели');
       expect(events.find((e) => e.type === 'message.quality_check')!.data).toMatchObject({ qa_pass: false });
     });
   });
@@ -705,7 +785,7 @@ describe('runProcessFinalize', () => {
       return makeDeps({ saveAssistantMessage: save as unknown as SaveAssistantMessageFn });
     }
 
-    it('image + pdf → stream.done.attachments с sha/mime/size/name в порядке частей', async () => {
+    it('image + pdf → step.finished.attachments с sha/mime/size/name в порядке частей', async () => {
       const sessionId = await makeSession();
       const deps = depsWithParts([
         makeTextPart('вот файлы'),
@@ -715,8 +795,8 @@ describe('runProcessFinalize', () => {
 
       await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
 
-      const done = published.find((p) => p.event === 'stream.done')!;
-      expect(done.data.attachments).toEqual([
+      const done = stepFinished().data;
+      expect(done.attachments).toEqual([
         { sha256: shaOf('a'), mime: 'image/png', size: 1024, name: 'photo.png' },
         { sha256: shaOf('b'), mime: 'application/pdf', size: 1024, name: 'report.pdf' },
       ]);
@@ -727,13 +807,13 @@ describe('runProcessFinalize', () => {
 
       await runProcessFinalize(makeArgs(sessionId), makeState(), makeDeps());
 
-      const done = published.find((p) => p.event === 'stream.done')!;
-      expect('attachments' in done.data).toBe(false);
+      const done = stepFinished().data;
+      expect('attachments' in done).toBe(false);
     });
 
     it('части без валидной формы игнорируются, вложения пользователя не попадают', async () => {
       const sessionId = await makeSession();
-      // Медиа-часть в сообщении пользователя — не ответ: в stream.done её нет.
+      // Медиа-часть в сообщении пользователя — не ответ: в шаге её нет.
       const user = (await sessionManager.getSession(sessionId))!.messages[0]!;
       await sessionManager.updateMessage(sessionId, {
         ...user,
@@ -760,13 +840,13 @@ describe('runProcessFinalize', () => {
 
       await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
 
-      const done = published.find((p) => p.event === 'stream.done')!;
-      expect(done.data.attachments).toEqual([
+      const done = stepFinished().data;
+      expect(done.attachments).toEqual([
         { sha256: shaOf('f'), mime: 'image/png', size: 1024 },
       ]);
     });
 
-    it('часть из коллектора (`outboundParts`) попадает в финальное сообщение и stream.done', async () => {
+    it('часть из коллектора (`outboundParts`) попадает в финальное сообщение и step.finished', async () => {
       const sessionId = await makeSession();
       const part = mediaPart('image', '1', 'diagram.png');
 
@@ -784,8 +864,8 @@ describe('runProcessFinalize', () => {
       expect(assistant.parts[0]!.type).toBe('text');
       expect(assistant.parts[1]).toMatchObject({ type: 'image', data: { name: 'diagram.png' } });
 
-      const done = published.find((p) => p.event === 'stream.done')!;
-      expect(done.data.attachments).toEqual([
+      const done = stepFinished().data;
+      expect(done.attachments).toEqual([
         { sha256: shaOf('1'), mime: 'image/png', size: 1024, name: 'diagram.png' },
       ]);
 
@@ -821,7 +901,8 @@ describe('runProcessFinalize', () => {
       const stored = (await sessionManager.getSession(sessionId))!;
       const assistant = stored.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
       expect(assistant.parts).toHaveLength(1);
-      expect(published.map((p) => p.event)).toEqual(['stream.cancelled']);
+      // ADR-118 §4: отмена закрывает и ход — `turn.finished` без вложений.
+      expect(published.map((p) => p.event)).toEqual(['stream.cancelled', 'turn.finished']);
       expect(published[0]!.data).not.toHaveProperty('attachments');
       expect(blobRefs.add).not.toHaveBeenCalled();
     });

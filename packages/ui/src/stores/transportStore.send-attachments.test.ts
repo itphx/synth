@@ -40,7 +40,14 @@ const mocks = vi.hoisted(() => {
 vi.mock('@/lib/api/transport', () => ({ TransportClient: mocks.MockClient }))
 vi.mock('@/lib/api/synthApi', () => ({
   synthApi: {
-    enqueueMessage: vi.fn().mockResolvedValue(undefined),
+    // ADR-118 §8: перед подключением стор спрашивает возможности инстанса.
+    getInstanceCapabilities: vi.fn().mockResolvedValue({
+      messageModel: 2, eventSeq: true, replay: true, version: 'test',
+    }),
+    // ADR-118 §3: приём — `POST /sessions/:id/prompt` → `202 {messageId, mode, position}`.
+    enqueueMessage: vi.fn().mockResolvedValue({
+      messageId: 'stream-test', mode: 'queue', position: null,
+    }),
   },
 }))
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
@@ -51,9 +58,11 @@ import { useTransportStore } from './transportStore'
 const enqueueMessage = vi.mocked(synthApi.enqueueMessage)
 
 /** Подключить WS и дождаться готовности backend (transportReady). */
-function connectWs(): InstanceType<typeof mocks.MockClient> {
+async function connectWs(): Promise<InstanceType<typeof mocks.MockClient>> {
   useTransportStore.getState().connect('ws')
   const client = mocks.instances[mocks.instances.length - 1]!
+  // ADR-118 §8: подключение идёт после сверки возможностей инстанса.
+  await vi.waitFor(() => expect(client.getTransport()).toBe('ws'))
   client.callbacks.onBackendReady?.()
   return client
 }
@@ -62,22 +71,27 @@ beforeEach(() => {
   useTransportStore.getState().disconnect()
   mocks.instances.length = 0
   vi.clearAllMocks()
+  enqueueMessage.mockResolvedValue({ messageId: 'stream-test', mode: 'queue', position: null })
 })
 
 describe('transportStore.sendMessage: вложения (ADR-115)', () => {
-  it('без вложений при живом WS сообщение уходит кадром send_message', async () => {
-    const client = connectWs()
+  it('без вложений сообщение всё равно уходит HTTP-путём (кадр send_message удалён)', async () => {
+    const client = await connectWs()
 
     await useTransportStore.getState().sendMessage('s1', 'привет')
 
-    expect(client.sendMessage).toHaveBeenCalledWith(
-      's1', 'привет', undefined, undefined, undefined, undefined, expect.stringMatching(/^stream-/),
-    )
-    expect(enqueueMessage).not.toHaveBeenCalled()
+    // ADR-118 §3: WS-кадра отправки больше нет — единственный путь приёма.
+    expect(client.sendMessage).not.toHaveBeenCalled()
+    expect(enqueueMessage).toHaveBeenCalledTimes(1)
+    const [sessionId, text, options] = enqueueMessage.mock.calls[0]!
+    expect(sessionId).toBe('s1')
+    expect(text).toBe('привет')
+    expect(options!.attachments).toBeUndefined()
+    expect(options!.streamId).toMatch(/^stream-/)
   })
 
   it('с вложениями сообщение уходит HTTP-путём и несёт attachments', async () => {
-    const client = connectWs()
+    const client = await connectWs()
 
     await useTransportStore
       .getState()

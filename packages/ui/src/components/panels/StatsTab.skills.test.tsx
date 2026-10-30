@@ -144,7 +144,7 @@ beforeEach(() => {
   useChatStore.setState({
     messagesBySession: { s1: [] },
     streamFinishTickBySession: {},
-    streamingBySession: {},
+    turnBySession: {},
     liveSubagentUsageBySession: {},
   })
   useAgentsStore.setState({ agents: [] })

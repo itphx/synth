@@ -81,24 +81,26 @@ describe('ChatOrchestrator — slash-команды (ADR-046 §7)', () => {
   it('/help → локальный ответ без LLM, command.invoked, ephemeral-сообщения', async () => {
     const { result, chunks, after, events, msg } = await run('/help');
     expect(result).toEqual({});
-    expect(chunks.some((c) => c.event === 'stream.chunk' && c.data.content === 'HELP TEXT')).toBe(true);
-    const done = chunks.find((c) => c.event === 'stream.done');
-    expect(done?.data.content).toBe('HELP TEXT');
-    expect(typeof done?.data.stream_id).toBe('string');
-    // UI создаёт оптимистичное сообщение из stream.done — команда должна быть
-    // помечена и здесь, иначе она отрисуется как ответ агента.
-    expect(done?.data.metadata).toMatchObject({ command: true, commandName: 'help', commandArgs: '' });
+    // ADR-118 §4: локальный ответ — ход из одного шага: текст идёт `part.delta`.
+    const delta = chunks.find((c) => c.event === 'part.delta');
+    expect(delta?.data.delta).toBe('HELP TEXT');
+    expect(delta?.data.partId).toBe('msg:text:0');
+    expect(chunks.some((c) => c.event === 'part.delta' && c.data.delta === 'HELP TEXT')).toBe(true);
+    // `stream.chunk`/`stream.done` удалены — ход закрывают `step.finished`/`turn.finished`.
+    expect(chunks.some((c) => c.event === 'stream.chunk' || c.event === 'stream.done')).toBe(false);
+    const stepFinished = chunks.find((c) => c.event === 'step.finished');
+    expect(stepFinished?.data.status).toBe('completed');
+    expect(chunks.find((c) => c.event === 'turn.finished')?.data.status).toBe('completed');
     expect(chunks.some((c) => c.event === 'text' || c.event === 'done')).toBe(false);
     expect(events.some((e) => e.type === 'command.invoked' && e.data.command === 'help')).toBe(true);
 
     const assistant = after.messages.find((m) => m.role === MessageRole.ASSISTANT);
-    // ADR-046 §7.1: stream.done несёт index/id сохранённого ответа — UI не
-    // вычисляет index fallback'ом и не сталкивается с user-командой.
+    // ADR-046 §7.1: id сохранённого ответа приходит в `step.finished.messageId` —
+    // UI не вычисляет index fallback'ом и не сталкивается с user-командой.
     const assistantIndex = after.messages.findIndex((m) => m.role === MessageRole.ASSISTANT);
-    expect(done?.data.message_index).toBe(assistantIndex);
-    expect(typeof done?.data.message_index).toBe('number');
-    expect(done?.data.message_id).toBe(assistant?.id);
-    expect(typeof done?.data.message_id).toBe('string');
+    expect(stepFinished?.data.messageId).toBe(assistant?.id);
+    expect(typeof stepFinished?.data.messageId).toBe('string');
+    expect(stepFinished?.data.turnId).toBeTruthy();
     // user-команда обновляется в UI повторным message.added с commandPrompt (upsert).
     const userIdx = after.messages.findIndex((m) => m.id === msg.id);
     expect(assistantIndex).toBeGreaterThan(userIdx);
@@ -184,7 +186,8 @@ describe('ChatOrchestrator — slash-команды (ADR-046 §7)', () => {
     expect(
       after.messages.some((m) => m.role === MessageRole.ASSISTANT && m.metadata?.status !== 'error'),
     ).toBe(false);
-    expect(chunks.some((c) => c.event === 'stream.done')).toBe(false);
+    // Локального шага нет (LLM-путь не дошёл до шага — провайдер не настроен).
+    expect(chunks.some((c) => c.event === 'step.finished')).toBe(false);
     expect(events.some((e) => e.type === 'command.invoked' && e.data.command === 'init')).toBe(true);
   });
 

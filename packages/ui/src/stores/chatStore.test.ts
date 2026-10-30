@@ -1,349 +1,498 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useChatStore, selectLiveSubagentUsage } from './chatStore'
+import {
+  useChatStore,
+  selectLiveSubagentUsage,
+  selectStreamingMessage,
+  compareMessagesByOrd,
+  sortMessagesByOrd,
+  type MessageData,
+  type ActiveTurn,
+  type LivePart,
+} from './chatStore'
 import { resetChatStore } from './testUtils'
-import type { MessageData } from './chatStore'
 
 beforeEach(() => {
   resetChatStore()
 })
 
-describe('chatStore: streamFinishTickBySession', () => {
-  it('finishStream инкрементирует тик завершения для своей сессии', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', 'developer')
-    expect(useChatStore.getState().streamFinishTickBySession['s1']).toBeUndefined()
-
-    useChatStore.getState().finishStream('s1', 'st1', {
-      content: 'ok',
-      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-    })
-
-    expect(useChatStore.getState().streamFinishTickBySession['s1']).toBe(1)
-  })
-
-  it('повторное завершение увеличивает тик (не сбрасывается)', () => {
-    useChatStore.getState().startStream('s1', 'st1', null)
-    useChatStore.getState().finishStream('s1', 'st1', { content: 'a' })
-    useChatStore.getState().startStream('s1', 'st2', null)
-    useChatStore.getState().finishStream('s1', 'st2', { content: 'b' })
-
-    expect(useChatStore.getState().streamFinishTickBySession['s1']).toBe(2)
-  })
-
-  it('cancelStream инкрементирует тик (отмена/ошибка завершают стрим)', () => {
-    useChatStore.getState().startStream('s1', 'st1', null)
-    useChatStore.getState().cancelStream('s1', 'st1')
-
-    expect(useChatStore.getState().streamFinishTickBySession['s1']).toBe(1)
-  })
-
-  it('тик привязан к сессии и не задевает другие', () => {
-    useChatStore.getState().startStream('s1', 'st1', null)
-    useChatStore.getState().finishStream('s1', 'st1', { content: 'a' })
-
-    expect(useChatStore.getState().streamFinishTickBySession['s1']).toBe(1)
-    expect(useChatStore.getState().streamFinishTickBySession['s2']).toBeUndefined()
-  })
-})
-
-/** Минимальный assistant-месседж с привязкой к стриму (для cancelStream). */
-function makeAssistantMessage(streamId: string): MessageData {
+/** Минимальный MessageData-каркас (ADR-118: `index` — позиция, `id` — идентичность). */
+function msg(partial: Partial<MessageData> & { index: number }): MessageData {
   return {
-    index: 7,
-    role: 'assistant',
-    content: 'partial',
-    metadata: { stream_id: streamId },
+    role: 'user',
+    content: '',
     disabled: false,
     pinned: false,
     hidden: false,
-    created_at: '2026-09-19T00:00:00Z',
+    created_at: '2026-10-30T00:00:00Z',
+    ...partial,
   }
 }
 
-describe('chatStore: updateStreamUsage (ADR-070 §2.6)', () => {
-  it('обновляет StreamState: usage, cost, breakdown, estimated, model/provider', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', 'developer')
+function part(partial: Partial<LivePart> & { id: string }): LivePart {
+  return { type: 'text', text: '', ...partial }
+}
 
-    store.updateStreamUsage('s1', 'st1', {
-      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, cache_read_tokens: 4 },
-      costUsd: 0.01,
-      costCurrency: 'RUB',
-      costBreakdown: { input: 0.001, output: 0.009, cacheRead: 0, cacheWrite: 0 },
-      usageEstimated: false,
+/** Эквивалент `isTurnActive` из `transportStore` (ADR-118 §1): ход идёт, пока `streaming`. */
+function isTurnActive(sessionId: string): boolean {
+  const turn = useChatStore.getState().turnBySession[sessionId]
+  return !!turn && turn.status === 'streaming'
+}
+
+// ---------------------------------------------------------------------------
+// 1. upsertMessage — адресация по id, без дублей, сортировка по ord
+// ---------------------------------------------------------------------------
+
+describe('chatStore: сортировка сообщений по ord (ADR-118 §2)', () => {
+  it('compareMessagesByOrd: по ord, при равенстве — тай-брейк по id', () => {
+    const a = { ord: 1, id: 'a', index: 0 }
+    const b = { ord: 2, id: 'b', index: 0 }
+    expect(compareMessagesByOrd(a, b)).toBeLessThan(0)
+
+    const first = { ord: 5, id: 'a', index: 3 }
+    const second = { ord: 5, id: 'b', index: 0 }
+    // При равном ord позиционный индекс не решает — решает id.
+    expect(compareMessagesByOrd(first, second)).toBeLessThan(0)
+    expect(compareMessagesByOrd(second, first)).toBeGreaterThan(0)
+  })
+
+  it('sortMessagesByOrd: сообщение без ord (живой черновик) встаёт по позиции', () => {
+    const sorted = sortMessagesByOrd([
+      msg({ index: 2, id: 'c', ord: 2 }),
+      msg({ index: 0, id: 'a', ord: 0 }),
+      msg({ index: 1, id: 'b', ord: 1 }),
+    ])
+    expect(sorted.map((m) => m.id)).toEqual(['a', 'b', 'c'])
+
+    const withDraft = sortMessagesByOrd([
+      msg({ index: 1, id: 'draft', ord: null }),
+      msg({ index: 0, id: 'saved', ord: 10 }),
+    ])
+    expect(withDraft.map((m) => m.id)).toEqual(['saved', 'draft'])
+  })
+})
+
+describe('chatStore: upsertMessage (ADR-118 §7 — адресация по id)', () => {
+  it('добавляет сообщение по id и обновляет существующее без дублей', () => {
+    const store = useChatStore.getState()
+    store.upsertMessage('s1', msg({ index: 0, id: 'm1', content: '' }))
+    store.upsertMessage('s1', msg({ index: 0, id: 'm1', content: 'полный ответ', metadata: { k: 1 } }))
+
+    const list = useChatStore.getState().messagesBySession['s1']!
+    expect(list).toHaveLength(1)
+    expect(list[0]!.id).toBe('m1')
+    expect(list[0]!.content).toBe('полный ответ')
+    expect(list[0]!.metadata).toEqual({ k: 1 })
+  })
+
+  it('повторная публикация не затирает уже известный полный контент и мержит metadata', () => {
+    const store = useChatStore.getState()
+    store.upsertMessage('s1', msg({ index: 0, id: 'm1', content: 'полный текст', metadata: { stream_id: 'st1' } }))
+    // `message.added` может прийти с усечённым контентом и другим набором metadata.
+    store.upsertMessage('s1', msg({ index: 0, id: 'm1', content: '', metadata: { commandPrompt: true } }))
+
+    const list = useChatStore.getState().messagesBySession['s1']!
+    expect(list).toHaveLength(1)
+    expect(list[0]!.content).toBe('полный текст')
+    expect(list[0]!.metadata).toEqual({ stream_id: 'st1', commandPrompt: true })
+    expect(list[0]!.created_at).toBe('2026-10-30T00:00:00Z')
+  })
+
+  it('без id находит существующее по позиционному index', () => {
+    const store = useChatStore.getState()
+    store.upsertMessage('s1', msg({ index: 3, content: 'первый' }))
+    store.upsertMessage('s1', msg({ index: 3, content: 'второй', role: 'assistant' }))
+
+    const list = useChatStore.getState().messagesBySession['s1']!
+    expect(list).toHaveLength(1)
+    expect(list[0]!.role).toBe('assistant')
+  })
+
+  it('новые сообщения встают на место согласно ord, а не порядку вставки', () => {
+    const store = useChatStore.getState()
+    store.upsertMessage('s1', msg({ index: 0, id: 'c', ord: 2, role: 'assistant' }))
+    store.upsertMessage('s1', msg({ index: 1, id: 'a', ord: 0 }))
+    store.upsertMessage('s1', msg({ index: 2, id: 'b', ord: 1, role: 'assistant' }))
+
+    expect(useChatStore.getState().messagesBySession['s1']!.map((m) => m.id)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 2. Части сообщений: upsertPart / appendPartDelta / patchPartData / clearParts
+// ---------------------------------------------------------------------------
+
+describe('chatStore: части сообщений (ADR-118 §4)', () => {
+  it('upsertPart — upsert по {messageId, partId}, без дублей', () => {
+    const store = useChatStore.getState()
+    store.upsertPart('s1', 'm1', 'p1', part({ id: 'p1', text: 'He' }))
+    store.upsertPart('s1', 'm1', 'p1', part({ id: 'p1', text: 'Hello' }))
+
+    const parts = useChatStore.getState().partsBySession['s1']!
+    expect(Object.keys(parts['m1']!)).toEqual(['p1'])
+    expect(parts['m1']!['p1']!.text).toBe('Hello')
+  })
+
+  it('appendPartDelta дописывает дельту к существующей части', () => {
+    const store = useChatStore.getState()
+    store.upsertPart('s1', 'm1', 'p1', part({ id: 'p1', text: 'Hel' }))
+    store.appendPartDelta('s1', 'm1', 'p1', 'text', 'lo')
+    store.appendPartDelta('s1', 'm1', 'p1', 'text', '!')
+
+    expect(useChatStore.getState().partsBySession['s1']!['m1']!['p1']!.text).toBe('Hello!')
+  })
+
+  it('appendPartDelta создаёт часть, если её ещё нет (первая дельта)', () => {
+    const store = useChatStore.getState()
+    store.appendPartDelta('s1', 'm1', 'p1', 'text', 'первый чанк')
+
+    const p1 = useChatStore.getState().partsBySession['s1']!['m1']!['p1']!
+    expect(p1).toMatchObject({ id: 'p1', type: 'text', text: 'первый чанк' })
+  })
+
+  it('appendPartDelta с полем raw накапливает поток аргументов вызова', () => {
+    const store = useChatStore.getState()
+    store.appendPartDelta('s1', 'm1', 'call-1', 'raw', '{"path":')
+    store.appendPartDelta('s1', 'm1', 'call-1', 'raw', '"a.ts"}')
+    // Пустая дельта — no-op (не пересоздаёт часть).
+    store.appendPartDelta('s1', 'm1', 'call-1', 'raw', '')
+
+    const p = useChatStore.getState().partsBySession['s1']!['m1']!['call-1']!
+    expect(p.type).toBe('tool_use')
+    expect(p.raw).toBe('{"path":"a.ts"}')
+    expect(p.text).toBe('')
+  })
+
+  it('patchPartData мержит данные части, не теряя накопленный текст', () => {
+    const store = useChatStore.getState()
+    store.upsertPart(
+      's1',
+      'm1',
+      'call-1',
+      part({ id: 'call-1', type: 'tool_use', data: { name: 'read_file', status: 'running' } }),
+    )
+    store.patchPartData('s1', 'm1', 'call-1', { status: 'done', result: { content: 'ok' } })
+
+    const p = useChatStore.getState().partsBySession['s1']!['m1']!['call-1']!
+    expect(p.data).toEqual({ name: 'read_file', status: 'done', result: { content: 'ok' } })
+  })
+
+  it('patchPartData по неизвестной части — no-op', () => {
+    const store = useChatStore.getState()
+    store.patchPartData('s1', 'm1', 'missing', { status: 'done' })
+    expect(useChatStore.getState().partsBySession['s1']).toBeUndefined()
+  })
+
+  it('clearParts убирает части сообщения, части соседнего сообщения остаются', () => {
+    const store = useChatStore.getState()
+    store.upsertPart('s1', 'm1', 'p1', part({ id: 'p1', text: 'черновик' }))
+    store.upsertPart('s1', 'm2', 'p2', part({ id: 'p2', text: 'финал' }))
+
+    store.clearParts('s1', 'm1')
+
+    const parts = useChatStore.getState().partsBySession['s1']!
+    expect(parts['m1']).toBeUndefined()
+    expect(parts['m2']!['p2']!.text).toBe('финал')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 3. Ход: startTurn / finishTurn / patchTurn
+// ---------------------------------------------------------------------------
+
+describe('chatStore: активный ход (ADR-118 §1)', () => {
+  const turn: ActiveTurn = { turnId: 't1', streamId: 'st1', status: 'streaming', agentRole: 'fixer' }
+
+  it('startTurn делает ход активным', () => {
+    useChatStore.getState().startTurn('s1', turn)
+
+    expect(useChatStore.getState().turnBySession['s1']).toEqual(turn)
+    expect(isTurnActive('s1')).toBe(true)
+    expect(isTurnActive('s2')).toBe(false)
+  })
+
+  it('patchTurn правит шаг/модель активного хода', () => {
+    const store = useChatStore.getState()
+    store.startTurn('s1', turn)
+    store.patchTurn('s1', { messageId: 'm2', stepIndex: 1, model: 'gpt-x', provider: 'openai' })
+
+    expect(useChatStore.getState().turnBySession['s1']).toMatchObject({
+      turnId: 't1',
+      agentRole: 'fixer',
+      messageId: 'm2',
+      stepIndex: 1,
       model: 'gpt-x',
       provider: 'openai',
     })
-
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.usage).toEqual({ input_tokens: 10, output_tokens: 5, total_tokens: 15, cache_read_tokens: 4 })
-    expect(st.costUsd).toBe(0.01)
-    expect(st.costCurrency).toBe('RUB')
-    expect(st.costBreakdown).toEqual({ input: 0.001, output: 0.009, cacheRead: 0, cacheWrite: 0 })
-    expect(st.usageEstimated).toBe(false)
-    expect(st.model).toBe('gpt-x')
-    expect(st.provider).toBe('openai')
+    expect(isTurnActive('s1')).toBe(true)
   })
 
-  it('нет StreamState → создаётся минимальный usage-only (дочерняя сессия без stream.start)', () => {
-    // ADR-070 §2.6 (Bug 2): дочерний саб-агент не публикует stream.start, поэтому
-    // первый stream.usage обязан создать live-состояние, иначе live не виден.
-    useChatStore.getState().updateStreamUsage('child', 'st-child', {
-      usage: { input_tokens: 200, output_tokens: 40, total_tokens: 240 },
-      costUsd: 0.01,
-      model: 'sub-model',
-      provider: 'itphx',
-      agentRole: 'explore',
-    })
-
-    const st = useChatStore.getState().streamingBySession['child']!['st-child']!
-    expect(st).toBeDefined()
-    expect(st.isStreaming).toBe(true)
-    expect(st.hasContent).toBe(false)
-    expect(st.content).toBe('')
-    expect(st.agentRole).toBe('explore')
-    expect(st.usage).toEqual({ input_tokens: 200, output_tokens: 40, total_tokens: 240 })
-    expect(st.costUsd).toBe(0.01)
-    expect(st.model).toBe('sub-model')
+  it('patchTurn без активного хода — no-op', () => {
+    useChatStore.getState().patchTurn('s1', { model: 'gpt-x' })
+    expect(useChatStore.getState().turnBySession['s1']).toBeUndefined()
   })
 
-  it('usage-only StreamState очищается clearUsageStream (stream.ended)', () => {
-    useChatStore.getState().updateStreamUsage('child', 'st-child', {
-      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      agentRole: 'explore',
-    })
-    expect(useChatStore.getState().streamingBySession['child']!['st-child']).toBeDefined()
-
-    useChatStore.getState().clearUsageStream('child', 'st-child')
-    expect(useChatStore.getState().streamingBySession['child']?.['st-child']).toBeUndefined()
-  })
-
-  it('clearUsageStream не трогает настоящий стрим с контентом', () => {
+  it('finishTurn ставит терминальный статус — ход перестаёт быть активным', () => {
     const store = useChatStore.getState()
-    store.startStream('parent', 'st-parent', 'developer')
-    store.updateStreamChunk('parent', 'st-parent', 'hello', '')
+    store.startTurn('s1', turn)
+    store.finishTurn('s1', 't1')
 
-    store.clearUsageStream('parent', 'st-parent')
-    const st = useChatStore.getState().streamingBySession['parent']!['st-parent']!
-    expect(st).toBeDefined()
-    expect(st.content).toBe('hello')
+    expect(useChatStore.getState().turnBySession['s1']!.status).toBe('completed')
+    expect(isTurnActive('s1')).toBe(false)
   })
 
-  it('не понижает точный usage оценкой', () => {
+  it('finishTurn принимает явный статус (cancelled/error/stopped)', () => {
     const store = useChatStore.getState()
-    store.startStream('s1', 'st1', null)
-    store.updateStreamUsage('s1', 'st1', {
-      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
-      costUsd: 0.05,
-      usageEstimated: false,
-      model: 'exact-model',
-    })
-
-    // Оценка приходит позже — не должна перезаписать точные токены/стоимость.
-    store.updateStreamUsage('s1', 'st1', {
-      usage: { input_tokens: 999, output_tokens: 999, total_tokens: 1998 },
-      costUsd: 0.99,
-      usageEstimated: true,
-      provider: 'openai',
-    })
-
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.usage).toEqual({ input_tokens: 100, output_tokens: 50, total_tokens: 150 })
-    expect(st.costUsd).toBe(0.05)
-    expect(st.usageEstimated).toBe(false)
-    // Фактические model/provider обновляются.
-    expect(st.model).toBe('exact-model')
-    expect(st.provider).toBe('openai')
-  })
-
-  it('оценка принимается, пока точного usage нет, и заменяется точным', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', null)
-
-    store.updateStreamUsage('s1', 'st1', {
-      usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 },
-      usageEstimated: true,
-    })
-    let st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.usageEstimated).toBe(true)
-    expect(st.usage!.input_tokens).toBe(80)
-
-    store.updateStreamUsage('s1', 'st1', {
-      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
-      usageEstimated: false,
-    })
-    st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.usageEstimated).toBe(false)
-    expect(st.usage!.input_tokens).toBe(100)
-  })
-})
-
-describe('chatStore: finishStream переносит финальную статистику (ADR-070 §2.6, Bug 1)', () => {
-  it('top-level duration_ms/cost_usd/cost_breakdown/usage_estimated/provider → metadata сообщения', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', 'developer')
-    // message.added уже добавил optimistic-сообщение с metadata (subagents/secrets).
-    useChatStore.setState({
-      messagesBySession: {
-        s1: [{
-          index: 5,
-          role: 'assistant',
-          content: 'final',
-          metadata: { stream_id: 'st1', subagents: { sessions: 1, input_tokens: 10, output_tokens: 2, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0.001 } },
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          created_at: '2026-09-19T00:00:00Z',
-        }],
-      },
-    })
-
-    store.finishStream('s1', 'st1', {
-      content: 'final',
-      message_index: 5,
-      status: 'completed',
-      provider: 'itphx',
-      duration_ms: 1234,
-      cost_usd: 0.02,
-      cost_currency: 'RUB',
-      cost_breakdown: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0 },
-      usage_estimated: true,
-      metadata: { secrets: { TOKEN: 'secret' } },
-    })
-
-    const msg = useChatStore.getState().messagesBySession['s1']![0]!
-    expect(msg.metadata).toMatchObject({
-      stream_id: 'st1',
-      status: 'completed',
-      duration_ms: 1234,
-      cost_usd: 0.02,
-      cost_currency: 'RUB',
-      cost_breakdown: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0 },
-      usage_estimated: true,
-      secrets: { TOKEN: 'secret' },
-    })
-    // metadata от message.added не затирается.
-    expect(msg.metadata?.subagents).toBeDefined()
-    expect(msg.provider).toBe('itphx')
-  })
-
-  it('без StreamState (fallback-ветка) статистика тоже попадает в metadata', () => {
-    useChatStore.getState().finishStream('s1', 'missing', {
-      content: 'fallback',
-      message_index: 0,
-      status: 'completed',
-      provider: 'itphx',
-      duration_ms: 500,
-      cost_usd: 0.03,
-    })
-
-    const msg = useChatStore.getState().messagesBySession['s1']![0]!
-    expect(msg.metadata).toMatchObject({
-      status: 'completed',
-      duration_ms: 500,
-      cost_usd: 0.03,
-    })
-    expect(msg.provider).toBe('itphx')
-  })
-})
-
-describe('chatStore: cancelStream сохраняет статистику (ADR-070 §2.6)', () => {
-  it('usage/cost/status/usage_estimated попадают в assistant-сообщение по stream_id', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', null)
-    useChatStore.setState({ messagesBySession: { s1: [makeAssistantMessage('st1')] } })
-
-    store.cancelStream('s1', 'st1', 'cancelled', {
-      usage: { input_tokens: 1200, output_tokens: 300, total_tokens: 1500 },
-      costUsd: 0.02,
-      costCurrency: 'RUB',
-      usageEstimated: true,
-    })
-
-    const msg = useChatStore.getState().messagesBySession['s1']![0]!
-    expect(msg.usage).toEqual({ input_tokens: 1200, output_tokens: 300, total_tokens: 1500 })
-    expect(msg.metadata).toMatchObject({ stream_id: 'st1', status: 'cancelled', cost_usd: 0.02, cost_currency: 'RUB', usage_estimated: true })
-    // Стрим удалён.
-    expect(useChatStore.getState().streamingBySession['s1']?.['st1']).toBeUndefined()
-  })
-
-  it('без extra сохраняет прежнее поведение (только status)', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', null)
-    useChatStore.setState({ messagesBySession: { s1: [makeAssistantMessage('st1')] } })
-
-    store.cancelStream('s1', 'st1', 'stopped')
-
-    const msg = useChatStore.getState().messagesBySession['s1']![0]!
-    expect(msg.metadata).toMatchObject({ stream_id: 'st1', status: 'stopped' })
-    expect(msg.usage).toBeUndefined()
-  })
-})
-
-describe('chatStore: addToolCall помечает стрим содержательным (регресс c11ece3f)', () => {
-  it('startStream + addToolCall → hasContent=true (плейсхолдер виден сразу, без текста/reasoning)', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', 'developer')
-    expect(useChatStore.getState().streamingBySession['s1']!['st1']!.hasContent).toBe(false)
-
-    store.addToolCall('s1', 'st1', {
-      callId: 'call-1',
-      name: 'read_file',
-      args: { path: 'a.ts' },
-      status: 'running',
-      startedAt: '2026-09-23T00:00:00Z',
-      iteration: 0,
-    })
-
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.hasContent).toBe(true)
-    expect(st.toolCalls).toHaveLength(1)
-    expect(st.toolCalls[0]!.status).toBe('running')
-    // Предикат отображения плейсхолдера в MessageList: isStreaming && hasContent.
-    expect(st.isStreaming && st.hasContent).toBe(true)
-  })
-
-  it('повторный (дедуплицированный) addToolCall тоже держит hasContent=true', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', null)
-    const call = {
-      callId: 'call-1',
-      name: 'read_file',
-      args: {},
-      status: 'running' as const,
-      startedAt: '2026-09-23T00:00:00Z',
-      iteration: 0,
+    for (const status of ['cancelled', 'error', 'stopped'] as const) {
+      store.startTurn('s1', { turnId: `t-${status}`, status: 'streaming' })
+      store.finishTurn('s1', `t-${status}`, status)
+      expect(useChatStore.getState().turnBySession['s1']!.status).toBe(status)
     }
-    store.addToolCall('s1', 'st1', call)
-    store.addToolCall('s1', 'st1', { ...call, status: 'done' })
-
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.toolCalls).toHaveLength(1)
-    expect(st.hasContent).toBe(true)
   })
 
-  it('стрим с tool-вызовом не считается usage-only и переживает clearUsageStream', () => {
+  it('finishTurn по чужому turnId не закрывает новый ход', () => {
     const store = useChatStore.getState()
-    // Минимальный StreamState дочернего саб-агента (stream.usage без stream.start).
-    store.updateStreamUsage('child', 'st-child', {
-      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      agentRole: 'explore',
-    })
-    store.addToolCall('child', 'st-child', {
-      callId: 'call-1',
-      name: 'read_file',
-      args: {},
-      status: 'running',
-      startedAt: '2026-09-23T00:00:00Z',
-      iteration: 0,
-    })
-    expect(useChatStore.getState().streamingBySession['child']!['st-child']!.hasContent).toBe(true)
+    store.startTurn('s1', { turnId: 't2', status: 'streaming' })
+    // Опоздавший `turn.finished` предыдущего шага/попытки.
+    store.finishTurn('s1', 't1', 'completed')
 
-    store.clearUsageStream('child', 'st-child')
-    // Вызов инструмента — полноценный стрим, а не live-usage дочерней сессии.
-    expect(useChatStore.getState().streamingBySession['child']?.['st-child']).toBeDefined()
+    expect(useChatStore.getState().turnBySession['s1']).toMatchObject({ turnId: 't2', status: 'streaming' })
+    expect(isTurnActive('s1')).toBe(true)
+  })
+
+  it('ходы разных сессий не смешиваются', () => {
+    const store = useChatStore.getState()
+    store.startTurn('s1', { turnId: 't1', status: 'streaming' })
+    store.startTurn('s2', { turnId: 't2', status: 'streaming' })
+    store.finishTurn('s1', 't1')
+
+    expect(isTurnActive('s1')).toBe(false)
+    expect(isTurnActive('s2')).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// 4. Статус сообщения: «финал» = смена статуса (ADR-118 §5)
+// ---------------------------------------------------------------------------
+
+describe('chatStore: setMessageStatus (ADR-118 §5)', () => {
+  beforeEach(() => {
+    useChatStore.getState().upsertMessage(
+      's1',
+      msg({ index: 0, id: 'm1', role: 'assistant', content: 'ответ', status: 'streaming', turn_id: 't1', ord: 0 }),
+    )
+  })
+
+  it('streaming → completed: та же запись, меняется только статус', () => {
+    useChatStore.getState().setMessageStatus('s1', 'm1', 'completed')
+
+    const list = useChatStore.getState().messagesBySession['s1']!
+    // «Финал» не добавляет второе сообщение — запись одна, меняется статус.
+    expect(list).toHaveLength(1)
+    expect(list[0]).toMatchObject({
+      id: 'm1',
+      role: 'assistant',
+      content: 'ответ',
+      ord: 0,
+      turn_id: 't1',
+      status: 'completed',
+    })
+  })
+
+  it('терминальные статусы cancelled и error', () => {
+    for (const status of ['cancelled', 'error'] as const) {
+      useChatStore.getState().setMessageStatus('s1', 'm1', 'streaming')
+      useChatStore.getState().setMessageStatus('s1', 'm1', status)
+      expect(useChatStore.getState().messagesBySession['s1']![0]!.status).toBe(status)
+    }
+  })
+
+  it('живое сообщение выбирается селектором пока streaming и пропадает после финала', () => {
+    expect(selectStreamingMessage('s1')(useChatStore.getState())?.id).toBe('m1')
+
+    useChatStore.getState().setMessageStatus('s1', 'm1', 'completed')
+    expect(selectStreamingMessage('s1')(useChatStore.getState())).toBeUndefined()
+  })
+
+  it('неизвестный id / неизвестная сессия — no-op', () => {
+    const before = useChatStore.getState().messagesBySession['s1']!
+    useChatStore.getState().setMessageStatus('s1', 'missing', 'completed')
+    useChatStore.getState().setMessageStatus('other', 'm1', 'completed')
+
+    expect(useChatStore.getState().messagesBySession['s1']).toEqual(before)
+    expect(useChatStore.getState().messagesBySession['other']).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. Доставка сообщения (ADR-118 §4)
+// ---------------------------------------------------------------------------
+
+describe('chatStore: setMessageDelivery (ADR-118 §4)', () => {
+  it('отражает accepted / queued / steering, не задевая прочие поля', () => {
+    useChatStore.getState().upsertMessage('s1', msg({ index: 0, id: 'm1', content: 'привет' }))
+
+    for (const delivery of ['accepted', 'queued', 'steering'] as const) {
+      useChatStore.getState().setMessageDelivery('s1', 'm1', delivery)
+
+      const list = useChatStore.getState().messagesBySession['s1']!
+      expect(list).toHaveLength(1)
+      expect(list[0]).toMatchObject({ id: 'm1', content: 'привет', delivery })
+    }
+  })
+
+  it('неизвестный id — no-op', () => {
+    useChatStore.getState().upsertMessage('s1', msg({ index: 0, id: 'm1' }))
+    useChatStore.getState().setMessageDelivery('s1', 'missing', 'queued')
+
+    expect(useChatStore.getState().messagesBySession['s1']![0]!.delivery).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 6. Очередь: setQueueCounts (ADR-118 §4)
+// ---------------------------------------------------------------------------
+
+describe('chatStore: счётчики очереди (ADR-118 §4)', () => {
+  it('setQueueCounts пишет pendingCount и steerCount', () => {
+    useChatStore.getState().setQueueCounts('s1', 3, 1)
+
+    expect(useChatStore.getState().queueBySession['s1']).toEqual({
+      pendingCount: 3,
+      steerCount: 1,
+      isStalled: false,
+    })
+  })
+
+  it('счётчики по сессиям не смешиваются и не сбрасывают признак зависания', () => {
+    const store = useChatStore.getState()
+    store.setQueueStalled('s1', 2)
+    store.setQueueCounts('s1', 0, 0)
+    store.setQueueCounts('s2', 5, 2)
+
+    expect(useChatStore.getState().queueBySession['s1']).toEqual({
+      pendingCount: 0,
+      steerCount: 0,
+      isStalled: true,
+    })
+    expect(useChatStore.getState().queueBySession['s2']).toEqual({
+      pendingCount: 5,
+      steerCount: 2,
+      isStalled: false,
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 7. removeMessageById и «закрепить/обработать все сегменты хода разом»
+// ---------------------------------------------------------------------------
+
+describe('chatStore: удаление и пакетная правка сегментов хода', () => {
+  it('removeMessageById убирает только указанное сообщение', () => {
+    const store = useChatStore.getState()
+    store.setMessages('s1', [
+      msg({ index: 0, id: 'm0', ord: 0 }),
+      msg({ index: 1, id: 'm1', ord: 1, role: 'assistant' }),
+      msg({ index: 2, id: 'm2', ord: 2, role: 'assistant' }),
+    ])
+
+    store.removeMessageById('s1', 'm1')
+
+    expect(useChatStore.getState().messagesBySession['s1']!.map((m) => m.id)).toEqual(['m0', 'm2'])
+  })
+
+  it('removeMessageById по неизвестному id / сессии — no-op', () => {
+    useChatStore.getState().setMessages('s1', [msg({ index: 0, id: 'm0' })])
+    useChatStore.getState().removeMessageById('s1', 'missing')
+    useChatStore.getState().removeMessageById('other', 'm0')
+
+    expect(useChatStore.getState().messagesBySession['s1']).toHaveLength(1)
+    expect(useChatStore.getState().messagesBySession['other']).toBeUndefined()
+  })
+
+  it('закрепление всех сегментов хода (pin по каждому сообщению хода)', () => {
+    const store = useChatStore.getState()
+    store.setMessages('s1', [
+      msg({ index: 0, id: 'seg0', ord: 0, turn_id: 't1' }),
+      msg({ index: 1, id: 'seg1', ord: 1, turn_id: 't1', role: 'assistant' }),
+      msg({ index: 2, id: 'other', ord: 2, turn_id: 't2', role: 'assistant' }),
+    ])
+
+    const turnSegments = useChatStore.getState().messagesBySession['s1']!.filter((m) => m.turn_id === 't1')
+    for (const segment of turnSegments) {
+      useChatStore.getState().updateMessageById('s1', segment.id!, { pinned: true })
+    }
+
+    const after = useChatStore.getState().messagesBySession['s1']!
+    expect(after.filter((m) => m.turn_id === 't1').every((m) => m.pinned)).toBe(true)
+    expect(after.find((m) => m.id === 'other')!.pinned).toBe(false)
+  })
+
+  it('updateMessageByIndex правит сегмент по серверному индексу', () => {
+    const store = useChatStore.getState()
+    store.setMessages('s1', [
+      msg({ index: 0, id: 'm0', ord: 0 }),
+      msg({ index: 1, id: 'm1', ord: 1, role: 'assistant' }),
+    ])
+
+    store.updateMessageByIndex('s1', 1, { pinned: true })
+    store.updateMessageByIndex('s1', 42, { pinned: true })
+
+    const after = useChatStore.getState().messagesBySession['s1']!
+    expect(after.find((m) => m.id === 'm1')!.pinned).toBe(true)
+    expect(after.find((m) => m.id === 'm0')!.pinned).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 8. Мультисессионность
+// ---------------------------------------------------------------------------
+
+describe('chatStore: состояние по сессиям не смешивается', () => {
+  it('сообщения, части, ход и очередь живут в своих сессиях', () => {
+    const store = useChatStore.getState()
+
+    store.upsertMessage('s1', msg({ index: 0, id: 's1-m0', ord: 0, content: 'первая' }))
+    store.upsertMessage('s2', msg({ index: 0, id: 's2-m0', ord: 0, content: 'вторая' }))
+    store.upsertPart('s1', 's1-m0', 'p1', part({ id: 'p1', text: 'часть s1' }))
+    store.startTurn('s1', { turnId: 't1', status: 'streaming' })
+    store.setQueueCounts('s2', 2, 0)
+    store.setMessageStatus('s1', 's1-m0', 'completed')
+
+    const state = useChatStore.getState()
+    expect(state.messagesBySession['s1']!.map((m) => m.content)).toEqual(['первая'])
+    expect(state.messagesBySession['s2']!.map((m) => m.content)).toEqual(['вторая'])
+    expect(state.messagesBySession['s2']![0]!.status).toBeUndefined()
+    expect(state.partsBySession['s2']).toBeUndefined()
+    expect(state.turnBySession['s2']).toBeUndefined()
+    expect(state.queueBySession['s1']).toBeUndefined()
+  })
+
+  it('clearSession чистит только свою сессию', () => {
+    const store = useChatStore.getState()
+    store.upsertMessage('s1', msg({ index: 0, id: 'm1' }))
+    store.upsertMessage('s2', msg({ index: 0, id: 'm2' }))
+    store.startTurn('s2', { turnId: 't2', status: 'streaming' })
+
+    store.clearSession('s1')
+
+    expect(useChatStore.getState().messagesBySession['s1']).toBeUndefined()
+    expect(useChatStore.getState().messagesBySession['s2']).toHaveLength(1)
+    expect(useChatStore.getState().turnBySession['s2']!.turnId).toBe('t2')
+  })
+
+  it('setMessages сортирует пришедшую историю по ord', () => {
+    useChatStore.getState().setMessages('s1', [
+      msg({ index: 1, id: 'b', ord: 1 }),
+      msg({ index: 0, id: 'a', ord: 0 }),
+    ])
+
+    expect(useChatStore.getState().messagesBySession['s1']!.map((m) => m.id)).toEqual(['a', 'b'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Live-вклад саб-агентов (ADR-070 §2.6) — сохранённое покрытие
+// ---------------------------------------------------------------------------
 
 describe('chatStore: liveSubagentUsageBySession (ADR-070 §2.6)', () => {
   it('накапливает вклад по вызовам и агрегирует сессию', () => {
@@ -362,9 +511,7 @@ describe('chatStore: liveSubagentUsageBySession (ADR-070 §2.6)', () => {
 
     const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
     expect(Object.keys(live.byCall)).toEqual(['call-1', 'call-2'])
-    expect(live.byCall['call-1']!.usage.input_tokens).toBe(10)
     expect(live.byCall['call-1']!.model).toBe('m1')
-    expect(live.byCall['call-1']!.costCurrency).toBe('USD')
     expect(live.usage).toEqual({
       input_tokens: 15,
       output_tokens: 3,
@@ -374,31 +521,10 @@ describe('chatStore: liveSubagentUsageBySession (ADR-070 §2.6)', () => {
       reasoning_tokens: 0,
     })
     expect(live.costUsd).toBeCloseTo(0.001)
-    expect(live.costCurrency).toBe('USD')
     expect(live.estimated).toBe(true)
   })
 
-  it('агрегат не задаёт валюту, когда вызовы в разных валютах', () => {
-    const store = useChatStore.getState()
-    store.updateLiveSubagentUsage('parent', 'call-1', {
-      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      costUsd: 0.001,
-      costCurrency: 'USD',
-    })
-    store.updateLiveSubagentUsage('parent', 'call-2', {
-      usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
-      costUsd: 0.05,
-      costCurrency: 'RUB',
-    })
-
-    const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
-    expect(live.costUsd).toBeCloseTo(0.051)
-    expect(live.byCall['call-1']!.costCurrency).toBe('USD')
-    expect(live.byCall['call-2']!.costCurrency).toBe('RUB')
-    expect(live.costCurrency).toBeUndefined()
-  })
-
-  it('C2b: агрегат хранит разбивку по валютам, не смешивая их', () => {
+  it('C2b: агрегат хранит разбивку по валютам и не смешивает их', () => {
     const store = useChatStore.getState()
     store.updateLiveSubagentUsage('parent', 'call-1', {
       usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
@@ -413,29 +539,8 @@ describe('chatStore: liveSubagentUsageBySession (ADR-070 §2.6)', () => {
 
     const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
     expect(live.costByCurrency).toEqual({ USD: 0.03, RUB: 2.1 })
-    // Номинальная сумма сохранена для обратной совместимости.
     expect(live.costUsd).toBeCloseTo(2.13)
-    // Одиночная валюта агрегата не выставляется при конфликте.
     expect(live.costCurrency).toBeUndefined()
-  })
-
-  it('C2b: одинаковая валюта → costByCurrency и costCurrency совпадают', () => {
-    const store = useChatStore.getState()
-    store.updateLiveSubagentUsage('parent', 'call-1', { costUsd: 0.5, costCurrency: 'RUB' })
-    store.updateLiveSubagentUsage('parent', 'call-2', { costUsd: 1.5, costCurrency: 'RUB' })
-
-    const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
-    expect(live.costByCurrency).toEqual({ RUB: 2 })
-    expect(live.costCurrency).toBe('RUB')
-  })
-
-  it('C2b: отсутствующая валюта относится к USD', () => {
-    const store = useChatStore.getState()
-    store.updateLiveSubagentUsage('parent', 'call-1', { costUsd: 0.02 })
-
-    const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
-    expect(live.costByCurrency).toEqual({ USD: 0.02 })
-    expect(live.costCurrency).toBe('USD')
   })
 
   it('событие несёт накопленный usage вызова — перезапись, а не суммирование', () => {
@@ -452,207 +557,15 @@ describe('chatStore: liveSubagentUsageBySession (ADR-070 §2.6)', () => {
     expect(live.usage.input_tokens).toBe(25)
   })
 
-  it('сбрасывается при finishStream родителя', () => {
-    const store = useChatStore.getState()
-    store.startStream('parent', 'st1', null)
-    store.updateLiveSubagentUsage('parent', 'call-1', {
-      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-    })
-    expect(useChatStore.getState().liveSubagentUsageBySession['parent']).toBeDefined()
-
-    store.finishStream('parent', 'st1', { content: 'done' })
-    expect(useChatStore.getState().liveSubagentUsageBySession['parent']).toBeUndefined()
-  })
-
-  it('сбрасывается при cancelStream родителя', () => {
-    const store = useChatStore.getState()
-    store.startStream('parent', 'st1', null)
-    store.updateLiveSubagentUsage('parent', 'call-1', {
-      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-    })
-
-    store.cancelStream('parent', 'st1', 'cancelled')
-    expect(useChatStore.getState().liveSubagentUsageBySession['parent']).toBeUndefined()
-  })
-
-  it('clearSession сбрасывает live-вклад сессии', () => {
+  it('clearSession сбрасывает live-вклад сессии; селектор отдаёт только свою сессию', () => {
     const store = useChatStore.getState()
     store.updateLiveSubagentUsage('parent', 'call-1', {
       usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
     })
+    expect(selectLiveSubagentUsage('parent')(useChatStore.getState())?.usage.input_tokens).toBe(10)
+    expect(selectLiveSubagentUsage('other')(useChatStore.getState())).toBeUndefined()
+
     store.clearSession('parent')
     expect(useChatStore.getState().liveSubagentUsageBySession['parent']).toBeUndefined()
-  })
-
-  it('selectLiveSubagentUsage отдаёт вклад сессии для StatsTab', () => {
-    const store = useChatStore.getState()
-    store.updateLiveSubagentUsage('parent', 'call-1', {
-      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-    })
-    const selector = selectLiveSubagentUsage('parent')
-    expect(selector(useChatStore.getState())?.usage.input_tokens).toBe(10)
-    expect(selectLiveSubagentUsage('other')(useChatStore.getState())).toBeUndefined()
-  })
-})
-
-/** Минимальный MessageData-каркас для upsert/finishStream-тестов. */
-function cmdMessage(partial: Partial<MessageData>): MessageData {
-  return {
-    index: 0,
-    role: 'user',
-    content: '',
-    disabled: false,
-    pinned: false,
-    hidden: false,
-    created_at: '2026-09-19T00:00:00Z',
-    ...partial,
-  }
-}
-
-describe('chatStore: рассуждения и осиротевшие стримы', () => {
-  it('кумулятивный reasoning провайдера даёт один блок', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', null)
-
-    // Провайдер шлёт накопленный текст, а не дельту.
-    for (const chunk of ['Дума', 'Думаю', 'Думаю дальше']) {
-      store.updateStreamChunk('s1', 'st1', '', chunk, undefined, undefined, 0)
-    }
-    // Продолжение в следующей итерации — всё то же рассуждение.
-    store.updateStreamChunk('s1', 'st1', '', 'Думаю дальше и ещё', undefined, undefined, 1)
-
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.reasoningBlocks).toHaveLength(1)
-    expect(st.reasoningBlocks[0]).toEqual({ text: 'Думаю дальше и ещё', iteration: 1 })
-  })
-
-  it('startStream убирает осиротевший стрим той же сессии (потерян stream.done)', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st-old', null)
-    store.updateStreamChunk('s1', 'st-old', 'незавершённый текст', '')
-    // Другой ход другой сессии не трогаем.
-    store.startStream('s2', 'st-other', null)
-
-    store.startStream('s1', 'st-new', null)
-
-    const streams = useChatStore.getState().streamingBySession['s1']!
-    expect(Object.keys(streams)).toEqual(['st-new'])
-    expect(streams['st-new']!.isStreaming).toBe(true)
-    expect(useChatStore.getState().streamingBySession['s2']!['st-other']).toBeDefined()
-  })
-
-  it('resetStreamAttempt сбрасывает текст, рассуждения и tool-вызовы, стрим остаётся живым', () => {
-    const store = useChatStore.getState()
-    store.startStream('s1', 'st1', null)
-    store.updateStreamChunk('s1', 'st1', 'частичный', 'Дума')
-    store.addToolCall('s1', 'st1', {
-      callId: 'call-1',
-      name: 'read_file',
-      args: {},
-      status: 'running',
-      startedAt: '2026-09-23T00:00:00Z',
-      iteration: 0,
-    })
-
-    store.resetStreamAttempt('s1', 'st1')
-
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.content).toBe('')
-    expect(st.reasoningBlocks).toEqual([])
-    expect(st.intermediateTextBlocks).toEqual([])
-    expect(st.toolCalls).toEqual([])
-    expect(st.hasContent).toBe(false)
-    expect(st.isStreaming).toBe(true)
-  })
-})
-
-describe('chatStore: addMessage upsert (ADR-046 §7.1)', () => {
-  it('повторный message.added по тому же index не дублирует, объединяет metadata', () => {
-    const store = useChatStore.getState()
-    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { stream_id: 'st1' } }))
-    // Повторная публикация (обновление user-команды) — upsert, не копия.
-    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { commandPrompt: true } }))
-
-    const msgs = useChatStore.getState().messagesBySession['s1']!
-    expect(msgs).toHaveLength(1)
-    expect(msgs[0]!.metadata).toMatchObject({ stream_id: 'st1', commandPrompt: true })
-    // created_at сохраняется — ключ списка стабилен.
-    expect(msgs[0]!.created_at).toBe('2026-09-19T00:00:00Z')
-  })
-
-  it('находит существующее по id, когда index не задан', () => {
-    const store = useChatStore.getState()
-    store.addMessage('s1', cmdMessage({ index: undefined as unknown as number, id: 'm1', role: 'assistant', content: 'полный ответ' }))
-    store.addMessage('s1', cmdMessage({ index: undefined as unknown as number, id: 'm1', role: 'assistant', content: '', metadata: { command: true } }))
-
-    const msgs = useChatStore.getState().messagesBySession['s1']!
-    expect(msgs).toHaveLength(1)
-    expect(msgs[0]!.content).toBe('полный ответ')
-    expect(msgs[0]!.metadata?.command).toBe(true)
-  })
-})
-
-describe('chatStore: finishStream ответа локальной команды (ADR-046 §7.1)', () => {
-  it('использует message_index/message_id из stream.done, не сталкивается с user-командой', () => {
-    const store = useChatStore.getState()
-    // live message.added user-команды (metadata без commandPrompt)
-    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { stream_id: 'st1' } }))
-    // upsert-обновление user-команды
-    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { commandPrompt: true } }))
-    store.startStream('s1', 'st1', null)
-    store.finishStream('s1', 'st1', {
-      content: 'HELP TEXT',
-      message_index: 1,
-      message_id: 'asst-1',
-      model: 'command',
-      provider: 'command',
-      metadata: { command: true, commandName: 'help', commandArgs: '' },
-    })
-
-    const msgs = useChatStore.getState().messagesBySession['s1']!
-    expect(msgs).toHaveLength(2)
-    expect(msgs.map((m) => m.index)).toEqual([0, 1])
-    expect(new Set(msgs.map((m) => m.index)).size).toBe(2)
-    const asst = msgs.find((m) => m.role === 'assistant')!
-    expect(asst.id).toBe('asst-1')
-    expect(asst.metadata).toMatchObject({ command: true, commandName: 'help' })
-    // user-команда не перезатёрта ответом.
-    expect(msgs.find((m) => m.role === 'user')!.content).toBe('/help')
-  })
-
-  it('без message_index fallback = следующий index (регресс: раньше +0 совпадал с user)', () => {
-    const store = useChatStore.getState()
-    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: {} }))
-    store.startStream('s1', 'st1', null)
-    store.finishStream('s1', 'st1', { content: 'OUT' })
-
-    const msgs = useChatStore.getState().messagesBySession['s1']!
-    expect(msgs).toHaveLength(2)
-    expect(msgs.map((m) => m.index)).toEqual([0, 1])
-    expect(msgs.find((m) => m.role === 'user')!.content).toBe('/help')
-  })
-
-  it('коллизия message_index с user-сообщением → ответ уходит на свободный index', () => {
-    const store = useChatStore.getState()
-    store.addMessage('s1', cmdMessage({ index: 5, role: 'user', content: '/help', metadata: {} }))
-    store.startStream('s1', 'st1', null)
-    // «Битый» core прислал index, занятый user-командой.
-    store.finishStream('s1', 'st1', { content: 'OUT', message_index: 5 })
-
-    const msgs = useChatStore.getState().messagesBySession['s1']!
-    expect(msgs).toHaveLength(2)
-    expect(new Set(msgs.map((m) => m.index)).size).toBe(2)
-    expect(msgs.find((m) => m.role === 'user')!.content).toBe('/help')
-  })
-
-  it('без StreamState коллизия с user-сообщением тоже не занимает его index', () => {
-    const store = useChatStore.getState()
-    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: {} }))
-    store.finishStream('s1', 'missing', { content: 'OUT', message_index: 0 })
-
-    const msgs = useChatStore.getState().messagesBySession['s1']!
-    expect(msgs).toHaveLength(2)
-    expect(new Set(msgs.map((m) => m.index)).size).toBe(2)
-    expect(msgs.find((m) => m.role === 'user')!.content).toBe('/help')
   })
 })

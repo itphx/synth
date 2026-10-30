@@ -6,10 +6,12 @@
  * продолжается, сообщение пользователя вплетается на ближайшей границе шага.
  *
  * Проверяем:
- * - публикуется `stream.interrupted` (а НЕ `stream.cancelled`);
+ * - прерванная генерация закрывает шаг `step.finished` со статусом `cancelled`
+ *   (ADR-118 §4 — замена удалённого `stream.interrupted`), а НЕ ход
+ *   `stream.cancelled`;
  * - ход продолжается: инъекция попадает в контекст, итоговый ответ есть;
  * - пары toolUse/toolResult не рвутся;
- * - «принципал» (ADR-106) и «потолок хода» (лимит итераций) не меняются.
+ * - «принципал» (ADR-106) и «потолок хода» (номер шага) не меняются.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -185,6 +187,17 @@ async function run(
   return processMessage(fresh, userMsg, new AbortController().signal, publishChunk);
 }
 
+/**
+ * `stream_id` хода — из метаданных реплики пользователя (оркестратор берёт
+ * его оттуда). ADR-118 §4: `stream.chunk` с `stream_id` удалён, поэтому id
+ * больше не «подсматривается» из событий стрима.
+ */
+async function streamIdOf(h: Harness): Promise<string> {
+  const fresh = (await h.sessionManager.getSession(h.sessionId))!;
+  const userMsg = fresh.messages.find((m) => m.role === MessageRole.USER)!;
+  return (userMsg.metadata as Record<string, unknown>).stream_id as string;
+}
+
 describe('ChatOrchestrator: прерывание генерации (ADR-104, этап 2)', () => {
   beforeEach(() => {
     ProviderFactory.register('mockinterrupt', MockInterruptProvider);
@@ -198,10 +211,10 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
     ProviderFactory['_providers'].delete('mockinterrupt');
   });
 
-  it('прерывание: stream.interrupted, ход продолжается, stream.cancelled не публикуется', async () => {
+  it('прерывание: step.finished со статусом cancelled, ход продолжается, stream.cancelled не публикуется', async () => {
     const h = await makeHarness();
+    const streamId = await streamIdOf(h);
 
-    let streamId = '';
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
     // Флаг `interrupted` оркестратор снимает на границе шага (`continue` в
     // цикле Tool Use) — поэтому его проверяем СРАЗУ после запроса
@@ -220,24 +233,40 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
 
     const result = await run(h, (event, data) => {
       chunks.push({ event, data });
-      if (!streamId && typeof data.stream_id === 'string') streamId = data.stream_id;
     });
     expect(result.error).toBeUndefined();
 
-    // Прерывание — отдельное событие, НЕ отмена.
-    const interrupted = chunks.find((c) => c.event === 'stream.interrupted');
+    // ADR-118 §4: `stream.interrupted` удалён — прерывание генерации
+    // закрывает шаг статусом `cancelled` (это НЕ отмена хода). Частичный
+    // текст — в сохранённом сообщении шага (в событии контента нет).
+    const interrupted = chunks.find(
+      (c) => c.event === 'step.finished' && c.data.status === 'cancelled',
+    );
     expect(interrupted).toBeDefined();
-    expect(interrupted!.data.status).toBe('interrupted');
-    expect(interrupted!.data.reason).toBe('generation');
-    expect(interrupted!.data.content).toBe('Частичный ответ');
-    expect(interrupted!.data.stream_id).toBe(streamId);
+    expect(interrupted!.data).toMatchObject({
+      turnId: expect.any(String),
+      stepIndex: 0,
+      status: 'cancelled',
+      provider: 'mockinterrupt',
+      model: 'm',
+      agentRole: 'fixer',
+    });
+    expect(interrupted!.data).not.toHaveProperty('reason');
+    expect(interrupted!.data).not.toHaveProperty('stream_id');
+
+    const interruptedSession = (await h.sessionManager.getSession(h.sessionId))!;
+    const partial = interruptedSession.messages.find((m) => m.metadata?.interrupted === true);
+    expect(partial!.content).toBe('Частичный ответ');
 
     // Отмены хода не было.
     expect(chunks.find((c) => c.event === 'stream.cancelled')).toBeUndefined();
     expect(chunks.find((c) => c.event === 'stream.error')).toBeUndefined();
 
-    // Ход продолжился и завершился штатно.
-    expect(chunks.find((c) => c.event === 'stream.done')).toBeDefined();
+    // Ход продолжился и завершился штатно: ровно один `turn.finished`
+    // со статусом `completed` (замена удалённого `stream.done`).
+    const turns = chunks.filter((c) => c.event === 'turn.finished');
+    expect(turns).toHaveLength(1);
+    expect(turns[0]!.data.status).toBe('completed');
 
     // Токен провайдера: прерывание — не отмена (`cancelled` не выставлен).
     expect(MockInterruptProvider.tokens.length).toBeGreaterThan(0);
@@ -249,8 +278,8 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
 
   it('сообщение пользователя вплетается в тот же ход после прерывания', async () => {
     const h = await makeHarness();
+    const streamId = await streamIdOf(h);
 
-    let streamId = '';
     MockInterruptProvider.onPartial = async () => {
       await enqueueSteerMessage(
         h.sessionManager, h.eventBus, h.sessionId, makeMessage('Остановись, сделай иначе'),
@@ -262,7 +291,6 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
     await run(h, (event, data) => {
       chunks.push({ event, data });
-      if (!streamId && typeof data.stream_id === 'string') streamId = data.stream_id;
     });
 
     // Три генерации: прерванная, повторная (tool call) и финальная.
@@ -301,8 +329,8 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
 
   it('пары toolUse/toolResult целы: прерванная генерация не оставляет висячих пар', async () => {
     const h = await makeHarness();
+    const streamId = await streamIdOf(h);
 
-    let streamId = '';
     MockInterruptProvider.onPartial = async () => {
       await enqueueSteerMessage(
         h.sessionManager, h.eventBus, h.sessionId, makeMessage('Остановись, сделай иначе'),
@@ -314,7 +342,6 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
     await run(h, (event, data) => {
       chunks.push({ event, data });
-      if (!streamId && typeof data.stream_id === 'string') streamId = data.stream_id;
     });
 
     const session = (await h.sessionManager.getSession(h.sessionId))!;
@@ -348,10 +375,10 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  it('принципал и потолок хода не меняются: тот же ход, та же итерация', async () => {
+  it('принципал и потолок хода не меняются: тот же ход, тот же номер шага', async () => {
     const h = await makeHarness();
+    const streamId = await streamIdOf(h);
 
-    let streamId = '';
     MockInterruptProvider.onPartial = async () => {
       await enqueueSteerMessage(
         h.sessionManager, h.eventBus, h.sessionId, makeMessage('Остановись, сделай иначе'),
@@ -363,25 +390,28 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
     await run(h, (event, data) => {
       chunks.push({ event, data });
-      if (!streamId && typeof data.stream_id === 'string') streamId = data.stream_id;
     });
 
-    // Потолок хода: прерывание НЕ съедает итерацию — повторная генерация
-    // (первый `stream.chunk` после прерывания) идёт с тем же номером
-    // итерации, что и прерванная.
-    const interruptedIdx = chunks.findIndex((c) => c.event === 'stream.interrupted');
+    // Потолок хода: прерывание НЕ съедает шаг — повторная генерация
+    // (`step.started` после прерывания) идёт с тем же `stepIndex`, что и
+    // прерванная. ADR-118 §4: отдельного `stream.interrupted` нет, прерванный
+    // шаг закрыт `step.finished` со статусом `cancelled`.
+    const interruptedIdx = chunks.findIndex(
+      (c) => c.event === 'step.finished' && c.data.status === 'cancelled',
+    );
     expect(interruptedIdx).toBeGreaterThanOrEqual(0);
-    const resumedChunk = chunks.slice(interruptedIdx + 1).find((c) => c.event === 'stream.chunk');
-    expect(resumedChunk).toBeDefined();
-    expect(resumedChunk!.data.iteration).toBe(interruptedIteration(chunks));
+    const interruptedStepIndex = chunks[interruptedIdx]!.data.stepIndex as number;
+    const resumedStep = chunks.slice(interruptedIdx + 1).find((c) => c.event === 'step.started');
+    expect(resumedStep).toBeDefined();
+    expect(resumedStep!.data.stepIndex).toBe(interruptedStepIndex);
 
-    // Номер итерации не убывает по ходу генерации.
-    const chunkIterations = chunks
-      .filter((c) => c.event === 'stream.chunk')
-      .map((c) => c.data.iteration as number);
-    expect(chunkIterations.length).toBeGreaterThan(1);
-    for (let i = 1; i < chunkIterations.length; i++) {
-      expect(chunkIterations[i]!).toBeGreaterThanOrEqual(chunkIterations[i - 1]!);
+    // Номер шага не убывает по ходу хода.
+    const stepIndexes = chunks
+      .filter((c) => c.event === 'step.started')
+      .map((c) => c.data.stepIndex as number);
+    expect(stepIndexes.length).toBeGreaterThan(1);
+    for (let i = 1; i < stepIndexes.length; i++) {
+      expect(stepIndexes[i]!).toBeGreaterThanOrEqual(stepIndexes[i - 1]!);
     }
 
     // Принципал хода (ADR-106) не меняется: все решения shadow-контура —
@@ -398,10 +428,3 @@ describe('ChatOrchestrator: прерывание генерации (ADR-104, э
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 });
-
-/** Номер итерации прерванной генерации (по событию `stream.interrupted`). */
-function interruptedIteration(
-  chunks: Array<{ event: string; data: Record<string, unknown> }>,
-): number | undefined {
-  return chunks.find((c) => c.event === 'stream.interrupted')?.data.iteration as number | undefined;
-}

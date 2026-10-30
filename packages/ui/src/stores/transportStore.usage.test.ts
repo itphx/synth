@@ -1,3 +1,12 @@
+/**
+ * ADR-118 §4/§5: диспетчер новых событий потока сообщений.
+ *
+ * Покрывает замену удалённых v1-событий:
+ * - `stream.chunk` → `part.delta`/`part.updated` (upsert по `{messageId, partId}`);
+ * - `stream.usage`/`stream.done` → `step.finished` (usage/provider/model/стоимость);
+ * - «финал» — смена статуса сообщения, границы — `turn.*`/`step.*`;
+ * - очередь — `message.accepted`/`queue.state`/`message.delivered`.
+ */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // Моки внешних зависимостей диспетчера: сетевых вызовов и toast быть не должно.
@@ -15,7 +24,6 @@ vi.mock('@/hooks/useNotification', () => ({
 import { createDispatcher } from './transportStore'
 import { useChatStore } from './chatStore'
 import { resetChatStore } from './testUtils'
-import type { MessageData } from './chatStore'
 import type { WSEvent } from '@/lib/api/transport'
 
 const dispatch = createDispatcher()
@@ -24,30 +32,83 @@ function makeEvent(type: string, sessionId: string, data: Record<string, unknown
   return { type, session_id: sessionId, data }
 }
 
-function makeAssistantMessage(streamId: string): MessageData {
-  return {
-    index: 3,
-    role: 'assistant',
-    content: 'partial',
-    metadata: { stream_id: streamId },
-    disabled: false,
-    pinned: false,
-    hidden: false,
-    created_at: '2026-09-19T00:00:00Z',
-  }
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
   resetChatStore()
 })
 
-describe('transportStore dispatcher: stream.usage (ADR-070 §2.6)', () => {
-  it('маппит usage camelCase → snake_case и прокидывает cost/model/provider/estimated', () => {
-    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1', model: 'gpt', provider: 'openai' }))
-    dispatch(makeEvent('stream.usage', 's1', {
-      stream_id: 'st1',
-      iteration: 2,
+describe('transportStore dispatcher: turn/step (ADR-118 §1)', () => {
+  it('turn.started → активный ход сессии; turn.finished → терминальный статус', () => {
+    dispatch(makeEvent('turn.started', 's1', { turnId: 't1', messageId: 'm-user' }))
+    expect(useChatStore.getState().turnBySession['s1']).toMatchObject({
+      turnId: 't1',
+      messageId: 'm-user',
+      status: 'streaming',
+    })
+
+    dispatch(makeEvent('turn.finished', 's1', { turnId: 't1', status: 'completed' }))
+    expect(useChatStore.getState().turnBySession['s1']?.status).toBe('completed')
+  })
+
+  it('step.started создаёт assistant-сообщение хода со статусом streaming', () => {
+    dispatch(makeEvent('turn.started', 't1', { turnId: 't1', messageId: 'm-user' }))
+    dispatch(makeEvent('step.started', 't1', { turnId: 't1', stepIndex: 0, messageId: 'm-step' }))
+
+    const msgs = useChatStore.getState().messagesBySession['t1']!
+    const step = msgs.find((m) => m.id === 'm-step')!
+    expect(step).toMatchObject({ role: 'assistant', status: 'streaming', turn_id: 't1', step_index: 0 })
+    expect(useChatStore.getState().turnBySession['t1']).toMatchObject({
+      turnId: 't1',
+      messageId: 'm-step',
+      stepIndex: 0,
+    })
+  })
+})
+
+describe('transportStore dispatcher: части сообщения (ADR-118 §4)', () => {
+  it('part.delta дописывает текст в ту же часть (upsert, не append частей)', () => {
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    dispatch(makeEvent('part.delta', 's1', { messageId: 'm1', partId: 'msg:text:0', field: 'text', delta: 'При' }))
+    dispatch(makeEvent('part.delta', 's1', { messageId: 'm1', partId: 'msg:text:0', field: 'text', delta: 'вет' }))
+
+    const parts = useChatStore.getState().partsBySession['s1']!['m1']!
+    expect(Object.keys(parts)).toEqual(['msg:text:0'])
+    expect(parts['msg:text:0']).toMatchObject({ type: 'text', text: 'Привет' })
+  })
+
+  it('part.updated заменяет часть целиком (кумулятивный снимок не задваивается)', () => {
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    dispatch(makeEvent('part.delta', 's1', { messageId: 'm1', partId: 'msg:text:0', field: 'text', delta: 'При' }))
+    dispatch(makeEvent('part.updated', 's1', {
+      messageId: 'm1',
+      partId: 'msg:text:0',
+      part: { id: 'msg:text:0', type: 'text', data: { text: 'Привет, мир' } },
+    }))
+
+    const part = useChatStore.getState().partsBySession['s1']!['m1']!['msg:text:0']!
+    expect(part.text).toBe('Привет, мир')
+  })
+
+  it('части разных сообщений не смешиваются (адресация по messageId)', () => {
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    dispatch(makeEvent('part.delta', 's1', { messageId: 'm1', partId: 'msg:text:0', field: 'text', delta: 'a' }))
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 1, messageId: 'm2' }))
+    dispatch(makeEvent('part.delta', 's1', { messageId: 'm2', partId: 'msg:text:0', field: 'text', delta: 'b' }))
+
+    const parts = useChatStore.getState().partsBySession['s1']!
+    expect(parts['m1']!['msg:text:0']!.text).toBe('a')
+    expect(parts['m2']!['msg:text:0']!.text).toBe('b')
+  })
+})
+
+describe('transportStore dispatcher: step.finished — учёт шага (замена stream.usage/stream.done)', () => {
+  it('маппит usage camelCase → snake_case и фиксирует статус шага', () => {
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    dispatch(makeEvent('step.finished', 's1', {
+      turnId: 't1',
+      stepIndex: 0,
+      messageId: 'm1',
+      status: 'completed',
       usage: {
         inputTokens: 1_700_000,
         outputTokens: 33_300,
@@ -56,16 +117,16 @@ describe('transportStore dispatcher: stream.usage (ADR-070 §2.6)', () => {
         cacheWriteTokens: 0,
         reasoningTokens: 120,
       },
-      cost_usd: 0.03,
-      cost_currency: 'RUB',
-      cost_breakdown: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
-      estimated: false,
+      provider: 'itphx',
       model: 'gpt-x',
-      provider: 'openai',
+      costUsd: 0.03,
+      costCurrency: 'RUB',
+      timings: { chunks: 12, firstChunkMs: 120 },
     }))
 
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.usage).toEqual({
+    const msg = useChatStore.getState().messagesBySession['s1']!.find((m) => m.id === 'm1')!
+    expect(msg.status).toBe('completed')
+    expect(msg.usage).toEqual({
       input_tokens: 1_700_000,
       output_tokens: 33_300,
       total_tokens: 1_733_300,
@@ -73,208 +134,121 @@ describe('transportStore dispatcher: stream.usage (ADR-070 §2.6)', () => {
       cache_write_tokens: 0,
       reasoning_tokens: 120,
     })
-    expect(st.costUsd).toBe(0.03)
-    expect(st.costCurrency).toBe('RUB')
-    expect(st.costBreakdown).toEqual({ input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 })
-    expect(st.usageEstimated).toBe(false)
-    expect(st.model).toBe('gpt-x')
-    expect(st.provider).toBe('openai')
-  })
-
-  it('stream_usage (snake-имя события) обрабатывается так же', () => {
-    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1' }))
-    dispatch(makeEvent('stream_usage', 's1', {
-      stream_id: 'st1',
-      usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
-      estimated: true,
-    }))
-
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.usage).toEqual({ input_tokens: 5, output_tokens: 3, total_tokens: 8 })
-    expect(st.usageEstimated).toBe(true)
-  })
-
-  it('без stream_id — no-op', () => {
-    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1' }))
-    dispatch(makeEvent('stream.usage', 's1', {
-      usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
-    }))
-    expect(useChatStore.getState().streamingBySession['s1']!['st1']!.usage).toBeUndefined()
-  })
-
-  it('дочерняя сессия: stream.usage обновляет streamingBySession[childSessionId]', () => {
-    dispatch(makeEvent('stream.start', 'child', { stream_id: 'st-child', agent_role: 'researcher' }))
-    dispatch(makeEvent('stream.usage', 'child', {
-      stream_id: 'st-child',
-      session_id: 'child',
-      iteration: 1,
-      usage: { inputTokens: 200, outputTokens: 40, totalTokens: 240 },
-      estimated: false,
-      model: 'sub-model',
-    }))
-
-    const st = useChatStore.getState().streamingBySession['child']!['st-child']!
-    expect(st.usage).toEqual({ input_tokens: 200, output_tokens: 40, total_tokens: 240 })
-    expect(st.model).toBe('sub-model')
-  })
-
-  it('дочерняя сессия: stream.usage без stream.start создаёт live-состояние', () => {
-    // Bug 2: task.ts публикует в child только stream.usage — stream.start нет.
-    dispatch(makeEvent('stream.usage', 'child', {
-      stream_id: 'st-parent',
-      session_id: 'child',
-      iteration: 0,
-      agent_role: 'explore',
-      usage: { inputTokens: 300, outputTokens: 50, totalTokens: 350 },
-      cost_usd: 0.005,
-      estimated: false,
-      model: 'sub-model',
-    }))
-
-    const st = useChatStore.getState().streamingBySession['child']!['st-parent']!
-    expect(st).toBeDefined()
-    expect(st.isStreaming).toBe(true)
-    expect(st.hasContent).toBe(false)
-    expect(st.agentRole).toBe('explore')
-    expect(st.usage).toEqual({ input_tokens: 300, output_tokens: 50, total_tokens: 350 })
-    expect(st.costUsd).toBe(0.005)
-  })
-
-  it('stream.ended снимает usage-only live и не создаёт фантомных сообщений', () => {
-    dispatch(makeEvent('stream.usage', 'child', {
-      stream_id: 'st-parent',
-      session_id: 'child',
-      agent_role: 'explore',
-      usage: { inputTokens: 300, outputTokens: 50, totalTokens: 350 },
-    }))
-    // Финальное сообщение ребёнка сохраняется отдельно (реальный вложенный payload).
-    dispatch(makeEvent('message.added', 'child', {
-      session_id: 'child',
-      message: {
-        index: 0,
-        role: 'assistant',
-        content: 'sub answer',
-        usage: { input_tokens: 300, output_tokens: 50, total_tokens: 350 },
-        metadata: { stream_id: 'st-parent' },
-      },
-      index: 0,
-    }))
-
-    dispatch(makeEvent('stream.ended', 'child', { stream_id: 'st-parent' }))
-
-    expect(useChatStore.getState().streamingBySession['child']?.['st-parent']).toBeUndefined()
-    // Ровно одно реальное сообщение ребёнка — без фантома (index: undefined) и дублей.
-    const msgs = useChatStore.getState().messagesBySession['child']!
-    expect(msgs).toHaveLength(1)
-    expect(msgs[0]!.index).toBe(0)
-    expect(msgs[0]!.content).toBe('sub answer')
-    expect(msgs[0]!.usage).toEqual({ input_tokens: 300, output_tokens: 50, total_tokens: 350 })
-  })
-
-  it('финальное message.added ребёнка (с usage) переносит usage и снимает live', () => {
-    dispatch(makeEvent('stream.usage', 'child', {
-      stream_id: 'st-parent',
-      session_id: 'child',
-      agent_role: 'explore',
-      usage: { inputTokens: 300, outputTokens: 50, totalTokens: 350 },
-    }))
-    dispatch(makeEvent('message.added', 'child', {
-      session_id: 'child',
-      message: {
-        index: 0,
-        role: 'assistant',
-        content: 'sub answer',
-        metadata: { stream_id: 'st-parent', duration_ms: 900 },
-        usage: { input_tokens: 300, output_tokens: 50, total_tokens: 350 },
-      },
-      index: 0,
-    }))
-
-    const msg = useChatStore.getState().messagesBySession['child']![0]!
-    expect(msg.usage).toEqual({ input_tokens: 300, output_tokens: 50, total_tokens: 350 })
-    expect(useChatStore.getState().streamingBySession['child']?.['st-parent']).toBeUndefined()
-  })
-})
-
-describe('transportStore dispatcher: stream.done с финальной статистикой (ADR-070 §2.6, Bug 1)', () => {
-  it('маппит top-level cost_usd/duration_ms/usage_estimated/cost_breakdown/provider в metadata', () => {
-    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1' }))
-    useChatStore.setState({
-      messagesBySession: {
-        s1: [{
-          index: 3,
-          role: 'assistant',
-          content: 'final',
-          metadata: { stream_id: 'st1' },
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          created_at: '2026-09-19T00:00:00Z',
-        }],
-      },
-    })
-
-    dispatch(makeEvent('stream.done', 's1', {
-      stream_id: 'st1',
-      content: 'final',
-      message_index: 3,
-      status: 'completed',
-      provider: 'itphx',
-      duration_ms: 1500,
-      cost_usd: 0.02,
-      cost_currency: 'RUB',
-      cost_breakdown: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0 },
-      usage_estimated: true,
-    }))
-
-    const msg = useChatStore.getState().messagesBySession['s1']![0]!
-    expect(msg.metadata).toMatchObject({
-      status: 'completed',
-      duration_ms: 1500,
-      cost_usd: 0.02,
-      cost_currency: 'RUB',
-      cost_breakdown: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0 },
-      usage_estimated: true,
-    })
     expect(msg.provider).toBe('itphx')
-  })
-})
-
-describe('transportStore dispatcher: stream.cancelled с usage/cost (ADR-070 §2.6)', () => {
-  it('передаёт usage/cost/usage_estimated в cancelStream (сохраняются в сообщении)', () => {
-    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1' }))
-    useChatStore.setState({ messagesBySession: { s1: [makeAssistantMessage('st1')] } })
-
-    dispatch(makeEvent('stream.cancelled', 's1', {
-      stream_id: 'st1',
-      status: 'cancelled',
-      content: 'partial',
-      usage: { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 },
-      cost_usd: 0.02,
+    expect(msg.model).toBe('gpt-x')
+    expect(msg.metadata).toMatchObject({
+      cost_usd: 0.03,
       cost_currency: 'RUB',
-      usage_estimated: true,
+      timings: { chunks: 12, firstChunkMs: 120 },
+    })
+  })
+
+  it('metadata шага мёржится с уже известной (части/аттачменты не теряются)', () => {
+    useChatStore.getState().upsertMessage('s1', {
+      index: 0,
+      id: 'm1',
+      role: 'assistant',
+      content: '',
+      status: 'streaming',
+      metadata: { existing: true },
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      created_at: '2026-10-30T00:00:00Z',
+    })
+
+    dispatch(makeEvent('step.finished', 's1', {
+      turnId: 't1', stepIndex: 0, messageId: 'm1', status: 'error', costUsd: 1,
     }))
 
     const msg = useChatStore.getState().messagesBySession['s1']![0]!
-    expect(msg.usage).toEqual({ input_tokens: 1200, output_tokens: 300, total_tokens: 1500 })
-    expect(msg.metadata).toMatchObject({
-      stream_id: 'st1',
-      status: 'cancelled',
-      cost_usd: 0.02,
-      cost_currency: 'RUB',
-      usage_estimated: true,
+    expect(msg.status).toBe('error')
+    expect(msg.metadata).toMatchObject({ existing: true, cost_usd: 1 })
+  })
+
+  it('step.finished со статусом cancelled — сообщение отменено', () => {
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    dispatch(makeEvent('step.finished', 's1', {
+      turnId: 't1', stepIndex: 0, messageId: 'm1', status: 'cancelled',
+    }))
+    expect(useChatStore.getState().messagesBySession['s1']![0]!.status).toBe('cancelled')
+  })
+})
+
+describe('transportStore dispatcher: очередь и приём (ADR-118 §4)', () => {
+  it('message.accepted → маркер доставки и строка очереди без потери текста', () => {
+    useChatStore.getState().upsertMessage('s1', {
+      index: 0,
+      id: 'm-user',
+      role: 'user',
+      content: 'привет',
+      delivery: 'accepted',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      created_at: '2026-10-30T00:00:00Z',
     })
-    expect(useChatStore.getState().streamingBySession['s1']?.['st1']).toBeUndefined()
+    useChatStore.getState().upsertPendingMessage('s1', { id: 'm-user', content: 'привет', sending: true })
+
+    dispatch(makeEvent('message.accepted', 's1', { messageId: 'm-user', mode: 'queue', position: 2 }))
+
+    const msg = useChatStore.getState().messagesBySession['s1']![0]!
+    expect(msg.delivery).toBe('queued')
+    const pending = useChatStore.getState().pendingBySession['s1']!
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({ id: 'm-user', content: 'привет' })
+    expect(pending[0]!.sending).toBe(false)
+  })
+
+  it('message.accepted с mode=steer → маркер вмешательства в ход', () => {
+    useChatStore.getState().upsertMessage('s1', {
+      index: 0, id: 'm1', role: 'user', content: 'в ход',
+      disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:00Z',
+    })
+    dispatch(makeEvent('message.accepted', 's1', { messageId: 'm1', mode: 'steer', position: null }))
+    expect(useChatStore.getState().messagesBySession['s1']![0]!.delivery).toBe('steering')
+  })
+
+  it('message.accepted первого в очереди → «принято» (не «в очереди»)', () => {
+    useChatStore.getState().upsertMessage('s1', {
+      index: 0, id: 'm1', role: 'user', content: 'x',
+      disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:00Z',
+    })
+    dispatch(makeEvent('message.accepted', 's1', { messageId: 'm1', mode: 'queue', position: 1 }))
+    expect(useChatStore.getState().messagesBySession['s1']![0]!.delivery).toBe('accepted')
+  })
+
+  it('queue.state обновляет только счётчики (без текста и автора)', () => {
+    dispatch(makeEvent('queue.state', 's1', { pendingCount: 2, steerCount: 1 }))
+    expect(useChatStore.getState().queueBySession['s1']).toMatchObject({
+      pendingCount: 2,
+      steerCount: 1,
+    })
+    expect(useChatStore.getState().pendingBySession['s1']).toBeUndefined()
+  })
+
+  it('message.delivered для известного сообщения патчит ord/роль/автора', () => {
+    useChatStore.getState().upsertMessage('s1', {
+      index: 0, id: 'm1', role: 'user', content: 'x',
+      disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:00Z',
+    })
+    dispatch(makeEvent('message.delivered', 's1', { messageId: 'm1', ord: 7, role: 'user', author: 'Иван' }))
+    const msg = useChatStore.getState().messagesBySession['s1']![0]!
+    expect(msg).toMatchObject({ ord: 7, author: 'Иван' })
   })
 })
 
 describe('transportStore dispatcher: subagent.progress → live-вклад (ADR-070 §2.6)', () => {
   it('накапливает usage/cost/model/estimated по parent_call_id', () => {
+    dispatch(makeEvent('step.started', 'parent', { turnId: 't1', stepIndex: 0, messageId: 'm1' }))
+    dispatch(makeEvent('tool_call.started', 'parent', {
+      call_id: 'call-1',
+      name: 'task',
+      arguments: {},
+      iteration: 0,
+    }))
     dispatch(makeEvent('subagent.progress', 'parent', {
-      stream_id: 'st-parent',
       parent_call_id: 'call-1',
-      reasoning: '',
-      content: '',
       iteration: 0,
       usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
       cost_usd: 0.004,
@@ -285,20 +259,15 @@ describe('transportStore dispatcher: subagent.progress → live-вклад (ADR-
     }))
 
     const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
-    expect(live).toBeDefined()
     expect(live.byCall['call-1']!.usage).toEqual({ input_tokens: 100, output_tokens: 20, total_tokens: 120 })
     expect(live.byCall['call-1']!.costUsd).toBe(0.004)
     expect(live.byCall['call-1']!.costCurrency).toBe('RUB')
     expect(live.byCall['call-1']!.model).toBe('sub-model')
-    expect(live.byCall['call-1']!.provider).toBe('itphx')
     expect(live.usage.input_tokens).toBe(100)
   })
 
   it('без parent_call_id live-вклад не создаётся', () => {
     dispatch(makeEvent('subagent.progress', 'parent', {
-      stream_id: 'st-parent',
-      reasoning: 'thinking',
-      content: '',
       usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
     }))
     expect(useChatStore.getState().liveSubagentUsageBySession['parent']).toBeUndefined()

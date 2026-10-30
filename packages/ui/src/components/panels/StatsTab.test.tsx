@@ -128,7 +128,7 @@ beforeEach(() => {
   useChatStore.setState({
     messagesBySession: { s1: [] },
     streamFinishTickBySession: {},
-    streamingBySession: {},
+    turnBySession: {},
     liveSubagentUsageBySession: {},
   })
   useAgentsStore.setState({ agents: [] })
@@ -479,7 +479,7 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
     expect(promptCalls).toBeGreaterThanOrEqual(1)
     expect(statsCalls).toBeGreaterThanOrEqual(1)
 
-    // Симуляция завершения стрима: finishStream/cancelStream увеличивают тик,
+    // Симуляция завершения хода: `turn.finished` увеличивает тик,
     // не меняя id assistant-сообщения.
     await act(async () => {
       useChatStore.setState((s) => ({
@@ -586,39 +586,45 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
   })
 })
 
-describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
-  function makeStream(overrides: Record<string, unknown> = {}) {
+describe('StatsTab — live-обновление (ADR-118 §1/§5)', () => {
+  /**
+   * ADR-118 §5: live-источник — активный ход (`turnBySession`) и «живое»
+   * сообщение хода (`status: 'streaming'`). usage/cost/model живут в самом
+   * сообщении (события `stream.usage`/`step.finished`), отдельного стрима нет.
+   */
+  function makeLiveMessage(overrides: Record<string, unknown> = {}) {
     return {
-      streamId: 'st1',
-      agentRole: 'coder',
+      id: 'live1',
+      role: 'assistant',
       content: 'partial',
-      reasoningBlocks: [],
-      intermediateTextBlocks: [],
-      isStreaming: true,
-      hasContent: true,
+      disabled: false,
+      hidden: false,
+      status: 'streaming' as const,
+      turn_id: 't1',
+      step_index: 0,
       model: 'live-model',
       provider: 'prov',
       usage: {
         input_tokens: 2000, output_tokens: 300, total_tokens: 2300,
         cache_read_tokens: 1000, cache_write_tokens: 20, reasoning_tokens: 10,
       },
-      costUsd: 0.05,
-      usageEstimated: false,
-      toolCalls: [],
-      toolIteration: 0,
-      _lastContentLen: 0,
+      metadata: { cost_usd: 0.05 } as Record<string, unknown> | null,
       ...overrides,
     }
   }
 
-  function setActiveStream(
+  function setLiveTurn(
     sessionId = 's1',
-    streamId = 'st1',
+    turnId = 't1',
     overrides: Record<string, unknown> = {},
   ): void {
-    useChatStore.setState({
-      streamingBySession: { [sessionId]: { [streamId]: makeStream({ streamId, ...overrides }) } },
-    } as never)
+    useChatStore.setState((s) => ({
+      messagesBySession: { ...s.messagesBySession, [sessionId]: [makeLiveMessage(overrides)] },
+      turnBySession: {
+        ...s.turnBySession,
+        [sessionId]: { turnId, status: 'streaming', agentRole: 'coder' },
+      },
+    }) as never)
   }
 
   function setLiveSubagents(sessionId = 's1'): void {
@@ -637,7 +643,7 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
     } as never)
   }
 
-  it('«Последний ответ» при активном стриме показывает live-значения и ~ при usageEstimated', async () => {
+  it('«Последний ответ» при активном ходе показывает live-значения и ~ при usage_estimated', async () => {
     useChatStore.setState({
       messagesBySession: {
         s1: [
@@ -648,8 +654,8 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
         ],
       },
     } as never)
-    setActiveStream('s1', 'st1', {
-      usageEstimated: true,
+    setLiveTurn('s1', 't1', {
+      metadata: { cost_usd: 0.05, usage_estimated: true },
       usage: { input_tokens: 2000, output_tokens: 300, total_tokens: 2300 },
     })
 
@@ -663,8 +669,7 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
   })
 
   it('«Последний ответ» без оценки не добавляет ~ к live-токенам', async () => {
-    setActiveStream('s1', 'st1', {
-      usageEstimated: false,
+    setLiveTurn('s1', 't1', {
       usage: { input_tokens: 2000, output_tokens: 300, total_tokens: 2300 },
     })
     const container = await renderStats()
@@ -673,13 +678,13 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
     expect(section.textContent).not.toContain(`~${(2000).toLocaleString('en')}`)
   })
 
-  it('секция «Сессия» = серверные значения + live активного стрима', async () => {
+  it('секция «Сессия» = серверные значения + live активного хода', async () => {
     useSessionsStore.setState({
       sessions: [
         { id: 's1', title: 'S', settings: { model: 'm' }, input_tokens: 1000, output_tokens: 100 },
       ],
     } as never)
-    setActiveStream('s1', 'st1', {
+    setLiveTurn('s1', 't1', {
       usage: { input_tokens: 200, output_tokens: 20, total_tokens: 220 },
     })
 
@@ -691,6 +696,7 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
   })
 
   it('строка «Сабагенты» в «Сессии» растёт из liveSubagentUsageBySession и входит в итог', async () => {
+    setLiveTurn('s1', 't1', { usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } })
     setLiveSubagents('s1')
 
     const container = await renderStats()
@@ -704,7 +710,7 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
     expect(text).toContain('500')
   })
 
-  it('дочерняя сессия показывает live из своего stream.usage без спец-условий', async () => {
+  it('дочерняя сессия показывает live из своего сообщения хода без спец-условий', async () => {
     useUIStore.setState({
       activeCenterTabId: 'tab-1',
       centerTabs: [{ id: 'tab-1', type: 'chat', title: 'Child', data: { sessionId: 'child' } }],
@@ -715,7 +721,7 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
       ],
     } as never)
     useChatStore.setState({ messagesBySession: { child: [] } })
-    setActiveStream('child', 'stc', {
+    setLiveTurn('child', 'tc', {
       usage: { input_tokens: 400, output_tokens: 40, total_tokens: 440 },
     })
 
@@ -724,26 +730,25 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
     expect(section.textContent).toContain('400')
   })
 
-  it('после stream.done live сбрасывается — панель снова из серверных/сообщения', async () => {
+  it('после завершения хода live сбрасывается — панель снова из серверных/сообщения', async () => {
     useSessionsStore.setState({
       sessions: [
         { id: 's1', title: 'S', settings: { model: 'm' }, input_tokens: 1000, output_tokens: 100 },
       ],
     } as never)
-    setActiveStream('s1', 'st1', {
+    setLiveTurn('s1', 't1', {
       usage: { input_tokens: 9999, output_tokens: 999, total_tokens: 10998 },
     })
     setLiveSubagents('s1')
 
     const container = await renderStats()
-    // 1000 (сервер) + 9999 (live-стрим) + 500 (live-сабагенты)
+    // 1000 (сервер) + 9999 (live-ход) + 500 (live-сабагенты)
     expect(findSection(container, 'Session')!.textContent).toContain((11499).toLocaleString('en'))
 
+    // ADR-118 §5: финал шага/хода — терминальный статус сообщения и хода.
     await act(async () => {
-      useChatStore.getState().finishStream('s1', 'st1', {
-        content: 'final',
-        usage: { input_tokens: 50, output_tokens: 5, total_tokens: 55 },
-      })
+      useChatStore.getState().setMessageStatus('s1', 'live1', 'completed')
+      useChatStore.getState().finishTurn('s1', 't1', 'completed')
     })
     await act(async () => {})
 
@@ -751,8 +756,6 @@ describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
     expect(sessionSection.textContent).not.toContain((11499).toLocaleString('en'))
     expect(sessionSection.textContent).not.toContain('Subagents')
     expect(sessionSection.textContent).toContain((1000).toLocaleString('en'))
-    const lastSection = findSection(container, 'Last answer')
-    if (lastSection) expect(lastSection.textContent).not.toContain(`~${(2000).toLocaleString('en')}`)
   })
 })
 
@@ -832,19 +835,23 @@ describe('StatsTab — мультивалютная стоимость (C2b)', (
         cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0,
       },
     })
-    useChatStore.setState({
-      streamingBySession: {
-        s1: {
-          st1: {
-            streamId: 'st1', agentRole: 'coder', content: 'x', reasoningBlocks: [],
-            intermediateTextBlocks: [], isStreaming: true, hasContent: true,
+    useChatStore.setState((s) => ({
+      messagesBySession: {
+        ...s.messagesBySession,
+        s1: [
+          {
+            id: 'live1', role: 'assistant', content: 'x', disabled: false, hidden: false,
+            status: 'streaming', turn_id: 't1', step_index: 0,
             usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
-            costUsd: 2.1, costCurrency: 'RUB', usageEstimated: false,
-            toolCalls: [], toolIteration: 0, _lastContentLen: 0,
+            metadata: { cost_usd: 2.1, cost_currency: 'RUB' },
           },
-        },
+        ],
       },
-    } as never)
+      turnBySession: {
+        ...s.turnBySession,
+        s1: { turnId: 't1', status: 'streaming', agentRole: 'coder' },
+      },
+    }) as never)
 
     const container = await renderStats()
     expect(findSection(container, 'Session')!.textContent).toContain('~ 0.03 $ · ~ 2.10 ₽')

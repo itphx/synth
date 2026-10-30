@@ -241,11 +241,18 @@ describe('ChatOrchestrator: инъекции в активный ход (ADR-104
     expect(injected!.role).toBe(MessageRole.USER);
     expect(injected!.metadata?.steer).toBe(true);
 
-    // Событие message.injected — с позицией сообщения в истории.
-    const evt = chunks.find((c) => c.event === 'message.injected');
+    // ADR-118 §4: `message.injected` заменён на `message.delivered`
+    // (материализация сообщения в истории) — без текста, только id/ord/роль/автор.
+    const evt = chunks.find((c) => c.event === 'message.delivered');
     expect(evt).toBeDefined();
-    expect(evt!.data.content).toBe('вмешательство');
-    expect(evt!.data.message_index).toBe(session.messages.indexOf(injected!));
+    expect(evt!.data.messageId).toBe(injected!.id);
+    expect(evt!.data.ord).toBe(injected!.ord);
+    expect(evt!.data.role).toBe(MessageRole.USER);
+    expect(evt!.data.author).toBe('user');
+    // Текст инъекции в канал сессии не уходит (защита от утечки, ADR-118 §4).
+    expect(evt!.data.content).toBeUndefined();
+    // Прежнего `message.injected` больше нет.
+    expect(chunks.some((c) => c.event === 'message.injected')).toBe(false);
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });
@@ -308,8 +315,8 @@ describe('ChatOrchestrator: инъекции в активный ход (ADR-104
     const session = (await h.sessionManager.getSession(h.sessionId))!;
     expect(session.messages.some((m) => m.content === 'позднее вмешательство')).toBe(false);
     expect(session.steerInbox ?? []).toHaveLength(0);
-    // `message.injected` не публиковался — инъекция не применялась.
-    expect(chunks.some((c) => c.event === 'message.injected')).toBe(false);
+    // `message.delivered` не публиковался — инъекция не применялась.
+    expect(chunks.some((c) => c.event === 'message.delivered')).toBe(false);
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });

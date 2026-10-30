@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import type { MessageData, MessageStatus } from '@/stores/chatStore'
+import type { MessageData, ResponseStatus } from '@/stores/chatStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { formatCostMap, formatDuration, formatTokens, formatTps, tokensPerSecond } from '@/lib/formatStats'
@@ -18,13 +18,14 @@ function readNumber(
 const STATUS_VALUES: readonly string[] = ['completed', 'cancelled', 'stopped', 'error', 'limit', 'interrupted']
 
 /**
- * ADR-070 §2.6: статус ответа из metadata.status. Для старых сообщений (до
- * появления поля) — fallback по metadata.i18n.key. Неизвестно → undefined
- * (трактуется как обычный ответ без префикса).
+ * ADR-070 §2.6: статус **ответа** из metadata.status (`ResponseStatus` — статус
+ * ассистентского ответа, ADR-118 §5 отличает его от `MessageStatus` сообщения-хода).
+ * Для старых сообщений (до появления поля) — fallback по metadata.i18n.key.
+ * Неизвестно → undefined (трактуется как обычный ответ без префикса).
  */
-function readStatus(metadata: Record<string, unknown> | null | undefined): MessageStatus | undefined {
+function readStatus(metadata: Record<string, unknown> | null | undefined): ResponseStatus | undefined {
   const raw = metadata?.status
-  if (typeof raw === 'string' && STATUS_VALUES.includes(raw)) return raw as MessageStatus
+  if (typeof raw === 'string' && STATUS_VALUES.includes(raw)) return raw as ResponseStatus
   const key = (metadata?.i18n as { key?: string } | undefined)?.key
   switch (key) {
     case 'session.stopped':

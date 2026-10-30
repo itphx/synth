@@ -1782,7 +1782,7 @@ describe('taskTool — live-статистика саб-агента (ADR-070)',
     };
   }
 
-  it('subagent.progress несёт usage/cost; stream.usage публикуется в дочернюю сессию', async () => {
+  it('subagent.progress несёт usage/cost; step.finished публикуется в дочернюю сессию', async () => {
     const parent = await sessionManager.createSession({ title: 'Parent' });
     const progress: Array<Record<string, unknown>> = [];
     const published: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
@@ -1830,17 +1830,17 @@ describe('taskTool — live-статистика саб-агента (ADR-070)',
     expect(progressWithUsage!.cost_usd as number).toBeCloseTo(0.000213, 12);
     expect(progressWithUsage!.cost_currency).toBe('USD');
 
-    // live-событие уходит в дочернюю сессию
+    // live-событие уходит в дочернюю сессию (ADR-118: расход шага —
+    // `step.finished`, прежний `stream.usage` удалён)
     const childUsage = published.find(
-      (e) => e.type === 'stream.usage' && e.sessionId === childId,
+      (e) => e.type === 'step.finished' && e.sessionId === childId,
     );
     expect(childUsage).toBeDefined();
-    expect(childUsage!.data.session_id).toBe(childId);
     expect((childUsage!.data.usage as TokenUsage).inputTokens).toBe(123);
-    expect(childUsage!.data.estimated).toBe(false);
-    expect(childUsage!.data.agent_role).toBe('explore');
-    expect(childUsage!.data.cost_usd as number).toBeCloseTo(0.000213, 12);
-    expect(childUsage!.data.cost_currency).toBe('USD');
+    expect(childUsage!.data.provider).toBe('test-provider');
+    expect(childUsage!.data.model).toBe('test-model');
+    expect(childUsage!.data.costUsd as number).toBeCloseTo(0.000213, 12);
+    expect(childUsage!.data.costCurrency).toBe('USD');
   });
 
   it('по завершении саб-агента в дочернюю сессию публикуется stream.ended', async () => {
@@ -1942,19 +1942,19 @@ describe('taskTool — live-статистика саб-агента (ADR-070)',
     expect(result.isError).toBeFalsy();
     const childId = result.metadata!.child_session_id as string;
     const childUsage = published.filter(
-      (e) => e.type === 'stream.usage' && e.sessionId === childId,
+      (e) => e.type === 'step.finished' && e.sessionId === childId,
     );
+    expect(childUsage.length).toBeGreaterThanOrEqual(2);
 
     // Промежуточная оценка: точный input сохранён, output оценён из контента.
-    const estimated = childUsage.find((e) => e.data.estimated === true);
-    expect(estimated).toBeDefined();
-    expect((estimated!.data.usage as TokenUsage).inputTokens).toBe(100);
-    expect((estimated!.data.usage as TokenUsage).outputTokens).toBeGreaterThan(0);
+    const estimated = childUsage[0]!;
+    expect((estimated.data.usage as TokenUsage).inputTokens).toBe(100);
+    expect((estimated.data.usage as TokenUsage).outputTokens).toBeGreaterThan(0);
+    expect((estimated.data.usage as TokenUsage).outputTokens).not.toBe(5);
 
-    // Финал: точный output, estimated снят.
-    const exact = childUsage.find((e) => e.data.estimated === false);
-    expect(exact).toBeDefined();
-    expect((exact!.data.usage as TokenUsage).outputTokens).toBe(5);
+    // Финал: точный output, оценка снята.
+    const exact = childUsage[childUsage.length - 1]!;
+    expect((exact.data.usage as TokenUsage).outputTokens).toBe(5);
   });
 
   it('без modelPriceLoader cost_usd не пишется', async () => {
@@ -2136,9 +2136,9 @@ describe('taskTool — metadata финального child-сообщения (A
     expect(assistant.metadata?.cost_currency).toBe('RUB');
 
     const childUsage = published.find(
-      (e) => e.type === 'stream.usage' && e.sessionId === childId,
+      (e) => e.type === 'step.finished' && e.sessionId === childId,
     );
-    expect(childUsage?.data.cost_currency).toBe('RUB');
+    expect(childUsage?.data.costCurrency).toBe('RUB');
   });
 
   it('без modelPriceLoader: cost_usd отсутствует, status=completed', async () => {

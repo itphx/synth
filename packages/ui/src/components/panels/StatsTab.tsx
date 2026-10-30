@@ -238,7 +238,7 @@ export const StatsTab: React.FC = () => {
   const activeTab = centerTabs.find((tab) => tab.id === activeTabId)
   const activeSessionId = activeTab?.data?.sessionId
   const messagesBySession = useChatStore((s) => s.messagesBySession)
-  // Сигнал завершения стрима (успех/отмена/ошибка): `finishStream` часто
+  // Сигнал завершения хода (успех/отмена/ошибка): `turn.finished` часто
   // обновляет существующее assistant-сообщение без смены id, поэтому
   // `lastAssistantMsg?.id` не гарантирует перезапрос статистики.
   const streamFinishTick = useChatStore((s) =>
@@ -259,17 +259,34 @@ export const StatsTab: React.FC = () => {
     return null
   }, [sessionMessages])
 
-  // ADR-070 §2.6 (live): активный стрим сессии — источник live-значений
-  // «Последнего ответа» и дельты секции «Сессия». `finishStream`/`cancelStream`
-  // удаляют StreamState и сбрасывают live-сабагентов, поэтому после завершения
-  // панель автоматически возвращается к серверным/сообщенческим значениям.
-  const activeStream = useChatStore((s) => {
-    if (!activeSessionId) return undefined
-    const streams = s.streamingBySession[activeSessionId]
-    if (!streams) return undefined
-    return Object.values(streams).find((st) => st.isStreaming)
-  })
-  const liveSubagent = useChatStore(selectLiveSubagentUsage(activeSessionId ?? ''))
+  // ADR-118 §1/§5 (live): источник live-значений «Последнего ответа» и дельты
+  // секции «Сессия» — активный ход (`turnBySession`) и «живое» сообщение хода
+  // (`status: 'streaming'`). Отдельного стрима больше нет: usage/cost/model
+  // кладутся в само сообщение (`stream.usage`/`step.finished`), поэтому после
+  // завершения хода live-значения снимаются автоматически.
+  const activeTurn = useChatStore((s) => (activeSessionId ? s.turnBySession[activeSessionId] : undefined))
+  const isTurnActive = activeTurn?.status === 'streaming'
+  const streamingMessage = useMemo(() => {
+    for (let i = sessionMessages.length - 1; i >= 0; i--) {
+      const m = sessionMessages[i]!
+      if (m.status === 'streaming') return m
+    }
+    return null
+  }, [sessionMessages])
+  const liveStreamUsage = streamingMessage?.usage ?? undefined
+  const liveStreamCostUsd = typeof streamingMessage?.metadata?.cost_usd === 'number'
+    ? streamingMessage.metadata.cost_usd
+    : undefined
+  const liveStreamCostCurrency = typeof streamingMessage?.metadata?.cost_currency === 'string'
+    ? streamingMessage.metadata.cost_currency
+    : undefined
+  const liveStreamUsageEstimated = streamingMessage?.metadata?.usage_estimated === true
+  const liveStreamModel = streamingMessage?.model ?? activeTurn?.model
+  const liveStreamAgentRole = activeTurn?.agentRole ?? streamingMessage?.agent_role ?? null
+  const liveSubagentRaw = useChatStore(selectLiveSubagentUsage(activeSessionId ?? ''))
+  // Live-дельты имеют смысл только пока ход идёт: после завершения серверная
+  // статистика уже включает эти токены (иначе — задвоение и «залипшая» строка).
+  const liveSubagent = isTurnActive ? liveSubagentRaw : undefined
 
   useEffect(() => {
     synthApi.getModels().then(setModelGroups).catch(() => {})
@@ -304,16 +321,15 @@ export const StatsTab: React.FC = () => {
   // Bug 4 (ADR-070 §2.6): usage мог быть оценён при отмене/сбое — помечаем `~`.
   const lastTokenPrefix = lastAssistantMsg?.metadata?.usage_estimated === true ? '~' : ''
 
-  // ADR-070 §2.6 (live): если активный стрим уже отдал usage — «Последний ответ»
-  // берёт значения из него, иначе из последнего assistant-сообщения. Оценка
-  // (`usageEstimated`) помечается `~`; точный usage оценкой не подменяется.
-  const liveStreamUsage = activeStream?.usage
+  // ADR-070 §2.6 (live): если живое сообщение хода уже отдало usage — «Последний
+  // ответ» берёт значения из него, иначе из последнего assistant-сообщения.
+  // Оценка (`usage_estimated`) помечается `~`; точный usage оценкой не подменяется.
   const hasLiveUsage = !!liveStreamUsage && Object.keys(liveStreamUsage).length > 0
   const displayUsage = hasLiveUsage ? liveStreamUsage : lastAssistantMsg?.usage
-  const displayCostUsd = hasLiveUsage ? activeStream?.costUsd : lastCostUsd
-  const displayCostCurrency = hasLiveUsage ? activeStream?.costCurrency : lastCostCurrency
-  const displayTokenPrefix = hasLiveUsage ? (activeStream?.usageEstimated ? '~' : '') : lastTokenPrefix
-  const displayModel = activeStream?.model ?? lastAssistantMsg?.model
+  const displayCostUsd = hasLiveUsage ? liveStreamCostUsd : lastCostUsd
+  const displayCostCurrency = hasLiveUsage ? liveStreamCostCurrency : lastCostCurrency
+  const displayTokenPrefix = hasLiveUsage ? (liveStreamUsageEstimated ? '~' : '') : lastTokenPrefix
+  const displayModel = liveStreamModel ?? lastAssistantMsg?.model
   // Пока стрим активен, длительность/скорость ответа ещё не финализированы.
   const displayDurationMs = hasLiveUsage ? undefined : lastDurationMs
   const displayTps = hasLiveUsage ? undefined : lastTps
@@ -324,15 +340,15 @@ export const StatsTab: React.FC = () => {
   const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
   const isContextNearLimit = hasRealContextWindow && windowPercent >= CONTEXT_NEAR_LIMIT_PCT
 
-  // ADR-070 §2.6 (live): компактная live-строка стрима — тот же билдер сегментов,
+  // ADR-070 §2.6 (live): компактная live-строка хода — тот же билдер сегментов,
   // что у StreamingPlaceholder/MessageStats.
-  const liveSegments = activeStream
+  const liveSegments = (isTurnActive || streamingMessage)
     ? buildUsageSegments(
         {
-          usage: activeStream.usage,
-          costUsd: activeStream.costUsd,
-          costCurrency: activeStream.costCurrency,
-          tokenPrefix: activeStream.usageEstimated ? '~' : '',
+          usage: liveStreamUsage,
+          costUsd: liveStreamCostUsd,
+          costCurrency: liveStreamCostCurrency,
+          tokenPrefix: liveStreamUsageEstimated ? '~' : '',
         },
         t,
       )
@@ -440,7 +456,7 @@ export const StatsTab: React.FC = () => {
   const liveSubUsage = liveSubagent?.usage
   const hasLiveSubagents = !!liveSubUsage
     && (liveSubUsage.input_tokens > 0 || liveSubUsage.output_tokens > 0)
-  const hasLiveStream = !!activeStream && (!!activeStream.usage || !!activeStream.agentRole)
+  const hasLiveStream = (isTurnActive || !!streamingMessage) && (!!liveStreamUsage || !!liveStreamAgentRole)
 
   // ADR-070 §2.6: суммы секции «Сессия» включают сабагентов (sessionStats.subagents)
   // и live-дельту активного стрима/сабагентов. Live-значения ещё не в хранилище,
@@ -451,7 +467,7 @@ export const StatsTab: React.FC = () => {
   const liveCacheRead = sumDefined(liveStreamUsage?.cache_read_tokens, liveSubUsage?.cache_read_tokens)
   const liveCacheWrite = sumDefined(liveStreamUsage?.cache_write_tokens, liveSubUsage?.cache_write_tokens)
   const liveReasoning = sumDefined(liveStreamUsage?.reasoning_tokens, liveSubUsage?.reasoning_tokens)
-  const hasLiveCost = (activeStream?.costUsd ?? 0) > 0 || (liveSubagent?.costUsd ?? 0) > 0
+  const hasLiveCost = (liveStreamCostUsd ?? 0) > 0 || (liveSubagent?.costUsd ?? 0) > 0
 
   const sessionInput = (activeSession?.input_tokens || 0) + (sessionSub?.input_tokens || 0) + liveInput
   const sessionOutput = (activeSession?.output_tokens || 0) + (sessionSub?.output_tokens || 0) + liveOutput
@@ -487,7 +503,7 @@ export const StatsTab: React.FC = () => {
   }, [sessionStats])
   const hasSessionCost = serverSessionCostMap !== undefined || hasLiveCost
   const sessionCostMap: Record<string, number> = { ...(serverSessionCostMap ?? {}) }
-  addCost(sessionCostMap, activeStream?.costUsd, activeStream?.costCurrency)
+  addCost(sessionCostMap, liveStreamCostUsd, liveStreamCostCurrency)
   // C2b: live-сабагенты — разбивка по валютам; при её отсутствии (старые
   // данные) — одиночный costUsd/costCurrency.
   if (liveSubagent?.costByCurrency) addCostMap(sessionCostMap, liveSubagent.costByCurrency)
@@ -497,7 +513,7 @@ export const StatsTab: React.FC = () => {
     <PanelTab>
       {hasLastMsgUsage && (
         <Section title={t('rightPanel.stats.lastAnswer')}>
-          {activeStream && (liveSegments.length > 0 || displayModel) && (
+          {(isTurnActive || !!streamingMessage) && (liveSegments.length > 0 || displayModel) && (
             <div
               data-testid="stats-live"
               className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground tabular-nums"
@@ -1121,9 +1137,9 @@ export const StatsTab: React.FC = () => {
                 <span className="size-1.5 rounded-full bg-primary animate-pulse" />
                 {t('rightPanel.stats.live')}
               </span>
-              {hasLiveStream && activeStream?.agentRole && (
+              {hasLiveStream && liveStreamAgentRole && (
                 <span className="text-foreground">
-                  {agents.find((x) => x.id === activeStream.agentRole)?.display_name || activeStream.agentRole}
+                  {agents.find((x) => x.id === liveStreamAgentRole)?.display_name || liveStreamAgentRole}
                 </span>
               )}
               {hasLiveUsage && liveStreamUsage && (

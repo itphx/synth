@@ -27,6 +27,14 @@ bindings/keys/routes), `sessions` (CRUD + prompt/messages/status), `schedules`
 `SynthApiError` (`{ status, code, message, body? }`); единый формат
 `{ error: { code, message } }`, сетевые сбои → `status: 0` / `NETWORK_ERROR`.
 
+ADR-118: `sessions.prompt` возвращает типизированный `PromptAcceptedResponse`
+(`202 {messageId, mode, position}`) — сырого `Response`/SSE на отправку больше нет
+(наблюдение за ходом — по шине событий); `meta()` — публичный (без аутентификации,
+заголовок `Authorization` не отправляется) `GET /meta` → `InstanceCapabilities`
+(`{messageModel, eventSeq, replay, version}`). DTO сообщения в `SessionMessagesResponse` —
+`SerializedMessage` (snake_case, подмножество `serializeMessage`) с полями
+`ord`/`turn_id`/`step_index`/`status`.
+
 Отклонение от «типы из shared»: публичный срез сериализованной сессии
 (`SerializedSession`, snake_case DTO `serializeSession`) и контракт LLM-прокси
 описаны локально (`src/types.ts`) — их нет в shared. Доменные типы событий/

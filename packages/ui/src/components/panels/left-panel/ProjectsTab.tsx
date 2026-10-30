@@ -50,7 +50,7 @@ export function ProjectsTab() {
   const selectionMode = useSessionsTreeStore(s => s.selectionMode)
   const selectedIds = useSessionsTreeStore(s => s.selectedIds)
   const toggleSelected = useSessionsTreeStore(s => s.toggleSelected)
-  const streamingBySession = useChatStore((s) => s.streamingBySession)
+  const turnBySession = useChatStore((s) => s.turnBySession)
   const queueBySession = useChatStore((s) => s.queueBySession)
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
@@ -143,8 +143,8 @@ export function ProjectsTab() {
   }, [centerTabs])
 
   const getSessionStatus = (sessionId: string) => {
-    const streams = streamingBySession[sessionId]
-    if (streams && Object.keys(streams).length > 0) return 'streaming' as const
+    // ADR-118 §1: активный ход сессии — единственный признак «идёт генерация».
+    if (turnBySession[sessionId]?.status === 'streaming') return 'streaming' as const
     const qi = queueBySession[sessionId]
     if (qi?.isStalled) return 'stalled' as const
     const pendingCount = qi?.pendingCount || 0

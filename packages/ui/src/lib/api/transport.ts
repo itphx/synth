@@ -59,7 +59,13 @@ export class TransportClient {
    */
   connect(mode: 'ws' | 'sse', opts?: { since?: number }): void {
     this.intentionalClose = false
-    this.since = typeof opts?.since === 'number' ? opts.since : undefined
+    // `since` — максимум из известного: точка догона не должна откатываться
+    // назад, если клиент переподключается после нескольких событий.
+    if (typeof opts?.since === 'number') {
+      this.since = typeof this.since === 'number' ? Math.max(this.since, opts.since) : opts.since
+    } else if (typeof this.since !== 'number') {
+      this.since = undefined
+    }
     if (mode === 'sse') {
       this.connectSSE()
     } else {
@@ -121,6 +127,23 @@ export class TransportClient {
       session_id: sessionId,
       approval_id: approvalId,
     }))
+  }
+
+  /**
+   * ADR-118 §6: точка догона обновляется по каждому полученному событию — при
+   * переподключении в `?since=` уходит именно она (журнал отдаётся строго
+   * после этого номера).
+   */
+  private noteEventSeq(seq: unknown): void {
+    if (typeof seq !== 'number' || !Number.isFinite(seq)) return
+    if (typeof this.since !== 'number' || seq > this.since) this.since = seq
+  }
+
+  /** Номер события из `id:` SSE-кадра (`Last-Event-ID`). */
+  private parseEventId(raw: unknown): number | undefined {
+    if (typeof raw !== 'string' || raw === '') return undefined
+    const value = Number.parseInt(raw, 10)
+    return Number.isFinite(value) ? value : undefined
   }
 
   /**
@@ -186,6 +209,9 @@ export class TransportClient {
           // диспетчер стора). Серверный отказ (`error`) — обычное событие
           // транспорта, его обработает диспетчер.
 
+          // ADR-118 §6: номер события — точка догона для переподключения.
+          this.noteEventSeq((data as WSEvent).eventSeq)
+
           this.callbacks.onEvent(data as WSEvent)
         } catch (e) {
           console.error('[TransportClient] WS message error:', e)
@@ -216,8 +242,16 @@ export class TransportClient {
 
       this.sseSource.onmessage = (e) => {
         try {
-          const data = JSON.parse(e.data)
-          this.callbacks.onEvent(data as WSEvent)
+          const data = JSON.parse(e.data) as WSEvent
+          // ADR-118 §6: SSE-кадр несёт `id:` — номер события в пределах сессии
+          // (`EventSource.lastEventId`). Он и есть точка догона: `eventSeq` из
+          // тела приоритетнее, `id:` — фоллбек (и он же отдаётся диспетчеру).
+          const idSeq = this.parseEventId(e.lastEventId)
+          const seq = typeof data.eventSeq === 'number' ? data.eventSeq : idSeq
+          this.noteEventSeq(seq)
+          this.callbacks.onEvent(
+            typeof data.eventSeq === 'number' || seq === undefined ? data : { ...data, eventSeq: seq },
+          )
         } catch (e) {
           console.error('[TransportClient] SSE message error:', e)
         }

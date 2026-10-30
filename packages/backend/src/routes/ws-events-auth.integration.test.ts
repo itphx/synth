@@ -90,7 +90,9 @@ describe('ADR-089 (P0): авторизация WebSocket /ws/events (backend)', 
   }
 
   async function connect(token: string) {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, {
+    // ADR-118 §8: без заявленной модели сообщений (`messageModel=2`) WS-апгрейд
+    // закрывается сервером — проверки прав здесь проверяются за гейтом версии.
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events?messageModel=2`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     sockets.push(ws);
@@ -117,10 +119,12 @@ describe('ADR-089 (P0): авторизация WebSocket /ws/events (backend)', 
     // Существование чужой сессии не раскрывается — тот же ответ, что для несуществующей.
     expect(err.data?.error).toBe('Session not found');
 
-    // Никакого ack `queued` и никакой постановки в очередь (message.queued на шине).
+    // Никакого ack `queued` и никакой постановки в очередь: приём сообщения
+    // подтверждается событиями `message.accepted`/`queue.state` (ADR-118 §4).
     expect(client.messages.some((m) => m.type === 'queued' && m.session_id === adminSession)).toBe(false);
     await sleep(150);
-    expect(busTypes).not.toContain('message.queued');
+    expect(busTypes).not.toContain('message.accepted');
+    expect(busTypes).not.toContain('queue.state');
 
     const session = await backend.sessionManager.getSession(adminSession);
     expect(session?.pendingMessages ?? []).toHaveLength(0);

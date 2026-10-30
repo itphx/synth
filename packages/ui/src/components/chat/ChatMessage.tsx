@@ -478,7 +478,7 @@ function ChatMessageInner({
             <MessageActions
               embedded
               showCopy={false}
-              messageIndex={message.index}
+              messageId={message.id}
               role={message.role}
               disabled={message.disabled}
               pinned={message.pinned}
@@ -582,7 +582,7 @@ function ChatMessageInner({
             <MessageActions
               embedded
               showCopy={false}
-              messageIndex={message.index}
+              messageId={message.id}
               role={message.role}
               disabled={message.disabled}
               pinned={message.pinned}
@@ -660,7 +660,7 @@ function ChatMessageInner({
             <MessageActions
               embedded
               showCopy={false}
-              messageIndex={message.index}
+              messageId={message.id}
               role={message.role}
               disabled={message.disabled}
               pinned={message.pinned}
@@ -750,6 +750,57 @@ function ChatMessageInner({
           </span>
         )}
 
+        {/*
+          ADR-118 §5: живое сообщение несёт индикатор активности хода — прежняя
+          отдельная плашка `StreamingPlaceholder` теперь здесь: live-статистика,
+          «В фон» (ADR-111 §detach) и «Стоп».
+        */}
+        {isLive && (
+          <div className="mb-1 flex flex-wrap items-center gap-1 self-start text-[11px] text-muted-foreground">
+            {liveSegments.length > 0 && (
+              <StatsPopoverButton>
+                <span className="flex flex-nowrap items-center gap-1 whitespace-nowrap" data-testid="live-stats">
+                  {liveSegments.map((segment, i) => (
+                    <Fragment key={segment}>
+                      {i > 0 && <span aria-hidden="true">·</span>}
+                      <span>{segment}</span>
+                    </Fragment>
+                  ))}
+                </span>
+              </StatsPopoverButton>
+            )}
+            {canDetach && (
+              <button
+                type="button"
+                onClick={handleBackground}
+                disabled={detaching}
+                title={t('chat.background.hint')}
+                aria-label={t('chat.background.move')}
+                className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-interactive-hover disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
+              >
+                <Icon name="download" className="size-3" />
+                {t('chat.background.move')}
+              </button>
+            )}
+            {onStop && (
+              <button
+                type="button"
+                onClick={onStop}
+                title={t('chat.input.stop')}
+                aria-label={t('chat.input.stop')}
+                className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-destructive transition-colors hover:bg-destructive/10"
+              >
+                <Icon name="stop" className="size-3" />
+                {t('chat.input.stop')}
+              </button>
+            )}
+          </div>
+        )}
+
+        {isLive && retry && (
+          <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
+        )}
+
         {partsContent}
 
         {isUser && (
@@ -803,7 +854,7 @@ function ChatMessageInner({
 
         {showActions && (
           <MessageActions
-            messageIndex={message.index}
+            messageId={message.id}
             role={message.role}
             disabled={message.disabled}
             pinned={message.pinned}

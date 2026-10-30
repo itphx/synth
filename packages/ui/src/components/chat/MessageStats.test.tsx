@@ -7,7 +7,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { MessageStats, hasMessageStats } from './MessageStats'
-import type { MessageData, MessageStatus } from '@/stores/chatStore'
+import type { MessageData, ResponseStatus } from '@/stores/chatStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -186,7 +186,7 @@ describe('MessageStats', () => {
     const usage = { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 }
     const base = { usage, metadata: { duration_ms: 2000 } }
 
-    it.each<[MessageStatus, string]>([
+    it.each<[ResponseStatus, string]>([
       ['cancelled', 'Stopped'],
       ['stopped', 'Stopped'],
       ['error', 'Error'],

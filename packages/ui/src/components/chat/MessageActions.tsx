@@ -4,7 +4,11 @@ import { StatsPopoverButton } from './StatsPopoverButton'
 import { useI18n } from '@/lib/i18n'
 
 interface MessageActionsProps {
-  messageIndex: number
+  /**
+   * ADR-118 §7: адресация действий — по устойчивому `id` сообщения
+   * (позиционный индекс нестабилен: вставка в историю его перенумеровывает).
+   */
+  messageId?: string
   role: string
   disabled: boolean
   pinned: boolean
@@ -34,7 +38,7 @@ interface MessageActionsProps {
 }
 
 export function MessageActions({
-  messageIndex: _messageIndex,
+  messageId: _messageId,
   role,
   disabled,
   pinned,

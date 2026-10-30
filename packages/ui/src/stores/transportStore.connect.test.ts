@@ -42,6 +42,10 @@ const mocks = vi.hoisted(() => {
 vi.mock('@/lib/api/transport', () => ({ TransportClient: mocks.MockClient }))
 vi.mock('@/lib/api/synthApi', () => ({
   synthApi: {
+    // ADR-118 §8: перед подключением стор спрашивает возможности инстанса.
+    getInstanceCapabilities: vi.fn().mockResolvedValue({
+      messageModel: 2, eventSeq: true, replay: true, version: 'test',
+    }),
     getSession: vi.fn().mockResolvedValue({ id: 'parent', messages: [] }),
     getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
     getStickyNotes: vi.fn().mockResolvedValue({ notes: [] }),
@@ -61,13 +65,24 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+/**
+ * ADR-118 §8: подключение стало **асинхронным** — сначала `GET /api/v2/meta`
+ * и сверка модели сообщений, и только затем `client.connect()`. Поэтому
+ * «эффективный транспорт установлен» проверяем после фактического подключения
+ * клиента, иначе guard идемпотентности видит ещё `disconnected`.
+ */
+async function waitConnected(client: InstanceType<typeof mocks.MockClient>, mode?: 'ws' | 'sse') {
+  await vi.waitFor(() => expect(client.getTransport()).not.toBe('disconnected'))
+  if (mode) expect(client.getTransport()).toBe(mode)
+}
+
 describe('transportStore.connect: идемпотентность (ADR-024, двойной старт)', () => {
-  it('connect(auto) → connect(ws): эффективный транспорт один и тот же — клиент не пересоздаётся', () => {
+  it('connect(auto) → connect(ws): эффективный транспорт один и тот же — клиент не пересоздаётся', async () => {
     const store = useTransportStore.getState()
     store.connect('auto')
     expect(mocks.instances).toHaveLength(1)
     const first = mocks.instances[0]!
-    expect(first.getTransport()).toBe('ws')
+    await waitConnected(first, 'ws')
 
     store.connect('ws')
 
@@ -76,10 +91,11 @@ describe('transportStore.connect: идемпотентность (ADR-024, дв�
     expect(first.connect).toHaveBeenCalledTimes(1)
   })
 
-  it('BackendConnection-сценарий: setTransportMode(auto) → setTransportMode(ws) не пересоздаёт клиент', () => {
+  it('BackendConnection-сценарий: setTransportMode(auto) → setTransportMode(ws) не пересоздаёт клиент', async () => {
     const store = useTransportStore.getState()
     store.setTransportMode('auto')
     expect(mocks.instances).toHaveLength(1)
+    await waitConnected(mocks.instances[0]!, 'ws')
 
     store.setTransportMode('ws')
 
@@ -88,11 +104,11 @@ describe('transportStore.connect: идемпотентность (ADR-024, дв�
     expect(useTransportStore.getState().transportMode).toBe('ws')
   })
 
-  it('повторный connect(sse) не пересоздаёт SSE-клиент', () => {
+  it('повторный connect(sse) не пересоздаёт SSE-клиент', async () => {
     const store = useTransportStore.getState()
     store.connect('sse')
     const first = mocks.instances[0]!
-    expect(first.getTransport()).toBe('sse')
+    await waitConnected(first, 'sse')
 
     store.connect('sse')
 
@@ -100,25 +116,27 @@ describe('transportStore.connect: идемпотентность (ADR-024, дв�
     expect(first.disconnect).not.toHaveBeenCalled()
   })
 
-  it('смена эффективного транспорта ws→sse пересоздаёт клиент', () => {
+  it('смена эффективного транспорта ws→sse пересоздаёт клиент', async () => {
     const store = useTransportStore.getState()
     store.connect('ws')
     const first = mocks.instances[0]!
+    await waitConnected(first, 'ws')
 
     store.connect('sse')
 
     expect(mocks.instances).toHaveLength(2)
     expect(first.disconnect).toHaveBeenCalledTimes(1)
-    expect(mocks.instances[1]!.getTransport()).toBe('sse')
+    await waitConnected(mocks.instances[1]!, 'sse')
     expect(mocks.instances[1]!.connect).toHaveBeenCalledWith('sse')
   })
 })
 
 describe('transportStore.connect: восстановление и fallback не блокируются', () => {
-  it('после onDisconnect форс-connect(ws) снова подключает (guard не мешает)', () => {
+  it('после onDisconnect форс-connect(ws) снова подключает (guard не мешает)', async () => {
     const store = useTransportStore.getState()
     store.setTransportMode('ws')
     const first = mocks.instances[0]!
+    await waitConnected(first, 'ws')
 
     first.callbacks.onDisconnect?.('WS closed: 1006')
     expect(useTransportStore.getState().connected).toBe(false)
@@ -127,19 +145,20 @@ describe('transportStore.connect: восстановление и fallback не 
     store.connect('ws')
 
     expect(mocks.instances).toHaveLength(2)
+    await waitConnected(mocks.instances[1]!, 'ws')
     expect(mocks.instances[1]!.connect).toHaveBeenCalledWith('ws')
   })
 
-  it('auto-fallback WS→SSE после обрыва проходит и переключает транспорт', () => {
+  it('auto-fallback WS→SSE после обрыва проходит и переключает транспорт', async () => {
     const store = useTransportStore.getState()
     store.setTransportMode('auto')
     const first = mocks.instances[0]!
-    expect(first.getTransport()).toBe('ws')
+    await waitConnected(first, 'ws')
 
     first.callbacks.onDisconnect?.('WS closed: 1006')
 
     expect(mocks.instances).toHaveLength(2)
-    expect(mocks.instances[1]!.getTransport()).toBe('sse')
+    await waitConnected(mocks.instances[1]!, 'sse')
     expect(mocks.instances[1]!.connect).toHaveBeenCalledWith('sse')
   })
 })

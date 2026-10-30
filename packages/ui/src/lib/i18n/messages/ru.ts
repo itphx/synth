@@ -1406,6 +1406,7 @@ export const dict = {
   'chat.error.retryMessage': 'Ошибка повтора сообщения',
   'chat.error.clearSession': 'Ошибка очистки сессии',
   'chat.error.contextLength': 'Контекстное окно модели превышено. Начните новую сессию или сократите историю',
+  'chat.error.messageModelMismatch': 'Инстанс работает на несовместимой модели сообщений (клиент {client}, сервер {server}). Обновите инстанс или интерфейс — поток событий не подключён',
 
   'chat.error.forkFailed': 'Ошибка создания ветки:',
 

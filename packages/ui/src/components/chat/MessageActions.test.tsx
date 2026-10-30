@@ -15,7 +15,7 @@ function makeActions(overrides: Partial<React.ComponentProps<typeof MessageActio
   return (
     <I18nProvider>
       <MessageActions
-        messageIndex={0}
+        messageId="msg-1"
         role="assistant"
         disabled={false}
         pinned={false}

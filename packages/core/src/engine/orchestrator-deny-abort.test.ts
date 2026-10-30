@@ -462,6 +462,27 @@ async function run(
   return processMessage(fresh, userMsg, signal, publishChunk);
 }
 
+/**
+ * ADR-118 §4: ход — последовательность шагов, поэтому в журнале может быть
+ * несколько `step.finished` (по одному на вызов LLM). Финальный статус шага и
+ * хода читаем из последних событий (замена `stream.done`).
+ */
+function stepFinished(
+  chunks: Array<{ event: string; data: Record<string, unknown> }>,
+): Record<string, unknown> {
+  const found = [...chunks].reverse().find((c) => c.event === 'step.finished');
+  expect(found, 'step.finished не опубликован').toBeDefined();
+  return found!.data;
+}
+
+function turnFinished(
+  chunks: Array<{ event: string; data: Record<string, unknown> }>,
+): Record<string, unknown> {
+  const found = [...chunks].reverse().find((c) => c.event === 'turn.finished');
+  expect(found, 'turn.finished не опубликован').toBeDefined();
+  return found!.data;
+}
+
 describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', () => {
   beforeEach(() => {
     ProviderFactory.register('mockdenyloop', MockDenyLoopProvider);
@@ -519,11 +540,12 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const starts = chunks.filter((c) => c.event === 'tool_call.started');
     expect(starts).toHaveLength(3);
 
-    // Пустой финальный ответ модели подставлен
-    const done = chunks.find((c) => c.event === 'stream.done')!;
-    expect(done.data.content).toBe('Could not proceed: the action was blocked by the security policy');
-    // ADR-070 §2.6: отказ в туле → status 'stopped'.
-    expect(done.data.status).toBe('stopped');
+    // Пустой финальный ответ модели подставлен (текст — в assistant-сообщении:
+    // ADR-118 §4 в `step.finished` контента нет). Статус отказа: ход
+    // `stopped` (ADR-070 §2.6), шаг — `completed` (ошибки не было) — вместо
+    // прежнего `status: 'stopped'` в `stream.done`.
+    expect(turnFinished(chunks).status).toBe('stopped');
+    expect(stepFinished(chunks).status).toBe('completed');
 
     // В истории нет пустого assistant-сообщения
     const session = (await h.sessionManager.getSession(h.sessionId))!;
@@ -624,14 +646,17 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const h = await makeHarness('mockabort');
     const ac = new AbortController();
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
-    let textChunks = 0;
+    let sawToolResult = false;
+    let textDeltas = 0;
 
     const promise = run(h, ac.signal, (event, data) => {
       chunks.push({ event, data });
-      // После 2-го текстового чанка незавершённой итерации — стоп
-      if (event === 'stream.chunk' && (data as Record<string, unknown>).iteration === 1) {
-        textChunks++;
-        if (textChunks >= 2) setTimeout(() => ac.abort(), 5);
+      if (event === 'tool_call.result') sawToolResult = true;
+      // ADR-118 §4: текст идёт `part.delta` (прежний `stream.chunk` удалён);
+      // вторая итерация — дельты после первого tool-результата.
+      if (event === 'part.delta' && sawToolResult) {
+        textDeltas++;
+        if (textDeltas >= 2) setTimeout(() => ac.abort(), 5);
       }
     });
 
@@ -679,20 +704,21 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const h = await makeHarness('mockabortnomodel');
     const ac = new AbortController();
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
-    let textChunks = 0;
+    let textDeltas = 0;
 
     const promise = run(h, ac.signal, (event, data) => {
       chunks.push({ event, data });
-      if (event === 'stream.chunk') {
-        textChunks++;
-        if (textChunks >= 2) setTimeout(() => ac.abort(), 5);
+      // ADR-118 §4: текст шага — `part.delta` (прежний `stream.chunk` удалён).
+      if (event === 'part.delta') {
+        textDeltas++;
+        if (textDeltas >= 2) setTimeout(() => ac.abort(), 5);
       }
     });
 
     const result = await promise;
     expect(result.error).toBeUndefined();
 
-    // Bug 3: stream.cancelled несёт статистику, как stream.done.
+    // Bug 3: stream.cancelled несёт статистику, как прежний stream.done.
     const cancelled = chunks.find((c) => c.event === 'stream.cancelled')!;
     expect(cancelled).toBeDefined();
     expect(cancelled.data.model).toBe('m');
@@ -730,11 +756,12 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const sequence: string[] = [];
     h.eventBus.subscribe(h.sessionId, (e) => sequence.push(e.type));
 
-    // Аборт по первому же событию стрима (stream.usage) — до чанков/тулов.
+    // Аборт по первому же событию шага (`step.started` — замена удалённого
+    // `stream.usage`) — до чанков/тулов.
     const promise = run(h, ac.signal, (event, data) => {
       chunks.push({ event, data });
       sequence.push(event);
-      if (event === 'stream.usage') setTimeout(() => ac.abort(), 5);
+      if (event === 'step.started') setTimeout(() => ac.abort(), 5);
     });
 
     const result = await promise;
@@ -786,7 +813,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
     const promise = run(h, new AbortController().signal, (event, data) => {
       chunks.push({ event, data });
-      if (event === 'stream.usage') {
+      if (event === 'step.started') {
         // Двойной/повторный «Стоп»: второй cancel — no-op.
         h.orchestrator.cancel(streamId);
         h.orchestrator.cancel(streamId);
@@ -809,12 +836,13 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const h = await makeHarness('mockabortnomodel');
     const ac = new AbortController();
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
-    let textChunks = 0;
+    let textDeltas = 0;
     const promise = run(h, ac.signal, (event, data) => {
       chunks.push({ event, data });
-      if (event === 'stream.chunk') {
-        textChunks++;
-        if (textChunks >= 2) setTimeout(() => ac.abort(), 5);
+      // ADR-118 §4: текст шага — `part.delta` (прежний `stream.chunk` удалён).
+      if (event === 'part.delta') {
+        textDeltas++;
+        if (textDeltas >= 2) setTimeout(() => ac.abort(), 5);
       }
     });
     await promise;
@@ -845,10 +873,15 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     // Провайдер вызван 4 раза: 3 tool-итерации + финальный текст
     expect(MockDoomProvider.calls).toBe(4);
 
-    // Нормальное завершение текстом
-    const done = chunks.find((c) => c.event === 'stream.done')!;
-    expect(done.data.content).toBe('Готово');
-    expect(done.data.status).toBe('completed');
+    // Нормальное завершение текстом (ADR-118 §4: контент — в сообщении шага,
+    // события шага/хода несут только терминальные статусы).
+    expect(stepFinished(chunks).status).toBe('completed');
+    expect(turnFinished(chunks).status).toBe('completed');
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const finalAssistant = [...session.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(finalAssistant!.content).toBe('Готово');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
@@ -858,10 +891,10 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
     expect(result.error).toBeUndefined();
 
-    const done = chunks.find((c) => c.event === 'stream.done')!;
-    expect(done.data.content).toBe('Could not complete the request: the model response was empty');
-    // ADR-070 §2.6: пустой ответ модели → status 'error'.
-    expect(done.data.status).toBe('error');
+    // ADR-118 §4: контент в сообщении шага, события шага/хода — статусы.
+    // ADR-070 §2.6: пустой ответ модели → ход и шаг `error`.
+    expect(stepFinished(chunks).status).toBe('error');
+    expect(turnFinished(chunks).status).toBe('error');
 
     const session = (await h.sessionManager.getSession(h.sessionId))!;
     const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
@@ -952,9 +985,14 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const idx = llm.findIndex((m) => m.role === 'assistant' && m.toolUse?.some((tc) => tc.id === 'call_boom'));
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(llm[idx + 1]).toMatchObject({ role: 'tool', toolCallId: 'call_boom' });
-    // Ход не упал — модель получила результат и ответила текстом.
-    const done = chunks.find((c) => c.event === 'stream.done')!;
-    expect(done.data.content).toBe('Готово');
+    // Ход не упал — модель получила результат и ответила текстом
+    // (ADR-118 §4: контент — в сообщении шага, события несут статусы).
+    expect(stepFinished(chunks).status).toBe('completed');
+    expect(turnFinished(chunks).status).toBe('completed');
+    const finalAssistant = [...session.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(finalAssistant!.content).toBe('Готово');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 

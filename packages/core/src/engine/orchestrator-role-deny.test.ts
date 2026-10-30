@@ -311,13 +311,10 @@ describe('ChatOrchestrator: deny не останавливает ход', () => 
       expect(final.metadata?.i18n).toBeUndefined();
       expect(final.metadata?.status).not.toBe('stopped');
 
-      const done = published.find((p) => p.event === 'stream.done');
-      expect(done?.data).toMatchObject({
-        content: 'shell недоступен — прочитал файл и объяснил',
-        status: 'completed',
-      });
-      expect(done?.data.stopped_by_deny).toBeUndefined();
-      expect(done?.data.deny_reason).toBeUndefined();
+      const done = published.filter((p) => p.event === 'step.finished').at(-1);
+      expect(done?.data).toMatchObject({ status: 'completed' });
+      // Ход завершён без ошибки — `turn.finished.completed`.
+      expect(published.find((p) => p.event === 'turn.finished')?.data.status).toBe('completed');
     } finally {
       await rm(h.tmpDir, { recursive: true, force: true });
     }
@@ -342,9 +339,12 @@ describe('ChatOrchestrator: deny не останавливает ход', () => 
       });
       expect(final.metadata?.status).toBe('stopped');
 
-      const done = published.find((p) => p.event === 'stream.done');
-      expect(done?.data).toMatchObject({ content: expectedText, status: 'stopped' });
-      expect(done?.data.stopped_by_deny).toBeUndefined();
+      // Шаг-фоллбек: терминальный статус хода `stopped`, шаг — `completed`
+      // (ошибки не было — остановлен без содержательного ответа, ADR-118 §4).
+      const finished = published.filter((p) => p.event === 'step.finished').at(-1);
+      expect(finished?.data.status).toBe('completed');
+      const turnFinished = published.find((p) => p.event === 'turn.finished');
+      expect(turnFinished?.data.status).toBe('stopped');
     } finally {
       await rm(h.tmpDir, { recursive: true, force: true });
     }

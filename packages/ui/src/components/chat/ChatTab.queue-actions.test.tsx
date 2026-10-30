@@ -154,12 +154,12 @@ describe('ChatTab — строка очереди без id', () => {
 
   it('«В разрыв»: API не вызывается, очередь перечитывается', async () => {
     const container = await mountWithPending()
-    // Кнопка steer видна только при активном ходе.
+    // Кнопка steer видна только при активном ходе (ADR-118 §1).
     act(() => {
       useChatStore.setState((state) => ({
-        streamingBySession: {
-          ...state.streamingBySession,
-          [SESSION]: { st1: { isStreaming: true } } as never,
+        turnBySession: {
+          ...state.turnBySession,
+          [SESSION]: { turnId: 't1', status: 'streaming' },
         },
       }))
     })
@@ -195,9 +195,9 @@ describe('ChatTab — строка очереди без id', () => {
     const container = await mountWithPending('msg-1')
     act(() => {
       useChatStore.setState((state) => ({
-        streamingBySession: {
-          ...state.streamingBySession,
-          [SESSION]: { st1: { isStreaming: true } } as never,
+        turnBySession: {
+          ...state.turnBySession,
+          [SESSION]: { turnId: 't1', status: 'streaming' },
         },
       }))
     })

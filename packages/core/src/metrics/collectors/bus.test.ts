@@ -114,7 +114,11 @@ describe('attachBusMetrics', () => {
       usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
     });
 
-    expect(text(registry)).not.toContain('synth_llm_cost_total');
+    // HELP/TYPE объявляются при регистрации метрики; проверяем, что ни одной
+    // серии (сэмпла) стоимости не появилось.
+    expect(text(registry)).not.toMatch(/^synth_llm_cost_total\{/m);
+    const costMetric = registry.snapshot().find((m) => m.name === 'synth_llm_cost_total');
+    expect(costMetric?.series ?? []).toHaveLength(0);
     stop();
   });
 });

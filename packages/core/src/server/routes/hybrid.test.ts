@@ -264,19 +264,28 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
     });
   });
 
-  describe('POST /api/v2/sessions/:id/prompt (проброс SSE)', () => {
-    it('remote-ref → возвращает upstream Response как есть', async () => {
-      const { app, remote } = createTestApp(createFakeRemoteClient(), tmpDir);
+  // ADR-118 §3: контракт приёма — всегда `202 {messageId, mode, position}`;
+  // ответ `text/event-stream` больше не возвращается (поток хода не
+  // проксируется, наблюдение — по шине событий).
+  describe('POST /api/v2/sessions/:id/prompt (контракт приёма 202)', () => {
+    it('remote-ref → проксирует подтверждение приёма 202, поток не проксируется', async () => {
+      const remote = createFakeRemoteClient({
+        promptSession: vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({ messageId: 'rm-1', mode: 'queue', position: null }),
+            { status: 202, headers: { 'Content-Type': 'application/json' } },
+          ),
+        ),
+      });
+      const { app } = createTestApp(remote, tmpDir);
       const res = await app.request('/api/v2/sessions/remote:rs-1/prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: 'привет' }),
       });
-      expect(res.status).toBe(200);
-      expect(res.headers.get('content-type')).toBe('text/event-stream');
-      expect(res.headers.get('x-upstream')).toBe('yes');
-      const text = await res.text();
-      expect(text).toContain('stream.done');
+      expect(res.status).toBe(202);
+      const body: any = await res.json();
+      expect(body).toEqual({ messageId: 'rm-1', mode: 'queue', position: null });
       expect(remote.promptSession).toHaveBeenCalledWith('rs-1', { content: 'привет' }, expect.anything());
     });
 
@@ -288,7 +297,12 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: 'привет' }),
       });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(202);
+      const body: any = await res.json();
+      expect(typeof body.messageId).toBe('string');
+      expect(body.messageId.length).toBeGreaterThan(0);
+      expect(body.mode).toBe('queue');
+      expect(typeof body.position).toBe('number');
       expect(remote.promptSession).not.toHaveBeenCalled();
     });
   });
@@ -308,10 +322,10 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       );
     });
 
-    it('удалённая сторона применила режим (202) → mode_applied: true', async () => {
+    it('удалённая сторона применила режим (202) → mode из подтверждения', async () => {
       const remote = createFakeRemoteClient({
         promptSession: vi.fn().mockResolvedValue(
-          new Response(JSON.stringify({ status: 'steered', stream_id: 'st-1', pending_count: 1 }), {
+          new Response(JSON.stringify({ messageId: 'st-1', mode: 'steer', position: null }), {
             status: 202,
             headers: { 'Content-Type': 'application/json' },
           }),
@@ -325,11 +339,12 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       });
       expect(res.status).toBe(202);
       const body: any = await res.json();
-      expect(body.status).toBe('steered');
-      expect(body.mode_applied).toBe(true);
+      expect(body.mode).toBe('steer');
+      expect(body.messageId).toBe('st-1');
+      expect(body.position).toBeNull();
     });
 
-    it('удалённая сторона НЕ применила режим (обычная очередь) → mode_applied: false', async () => {
+    it('удалённая сторона НЕ применила режим (старый ответ 200) → 202 queue, поток не проксируется', async () => {
       const { app } = createTestApp(createFakeRemoteClient(), tmpDir);
       const res = await app.request('/api/v2/sessions/remote:rs-1/prompt', {
         method: 'POST',
@@ -338,22 +353,22 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       });
       expect(res.status).toBe(202);
       const body: any = await res.json();
-      expect(body.mode_applied).toBe(false);
-      expect(body.status).toBe('queued');
-      expect(body.stream_id).toBe('st-9');
+      expect(body.mode).toBe('queue');
+      expect(body.messageId).toBe('st-9');
+      expect(body.position).toBeNull();
     });
 
-    it('режим queue — поведение прежнее: upstream Response проксируется как есть', async () => {
+    it('режим queue — подтверждение приёма без SSE', async () => {
       const { app } = createTestApp(createFakeRemoteClient(), tmpDir);
       const res = await app.request('/api/v2/sessions/remote:rs-1/prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: 'привет' }),
       });
-      expect(res.status).toBe(200);
-      expect(res.headers.get('content-type')).toBe('text/event-stream');
+      expect(res.status).toBe(202);
       const text = await res.text();
-      expect(text).toContain('stream.done');
+      expect(text).not.toContain('stream.done');
+      expect((JSON.parse(text) as any).mode).toBe('queue');
     });
   });
 

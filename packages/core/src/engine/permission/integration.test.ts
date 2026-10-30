@@ -698,12 +698,16 @@ describe('ChatOrchestrator × permissions — once:false и deny (ADR-029)', () 
     expect(denyResult.isError).toBe(true);
     expect(denyResult.content).toContain('denied by the user');
 
-    // Ход завершён ответом модели, а не признаком «остановлен отказом».
-    const done = chunks.find((c) => c.event === 'stream.done');
-    expect(done).toBeDefined();
-    expect(done!.data.stopped_by_deny).toBeUndefined();
-    expect(done!.data.deny_reason).toBeUndefined();
-    expect(done!.data.content).toBe('Отказ учтён — объясняю без записи файла');
+    // Ход завершён ответом модели, а не признаком «остановлен отказом»
+    // (ADR-118: `stream.done` удалён — финал несут `step.finished`/`turn.finished`).
+    const step = chunks.find((c) => c.event === 'step.finished');
+    expect(step).toBeDefined();
+    expect(step!.data.status).toBe('completed');
+    const turn = chunks.find((c) => c.event === 'turn.finished');
+    expect(turn).toBeDefined();
+    expect(turn!.data.status).toBe('completed');
+    expect(turn!.data).not.toHaveProperty('stopped_by_deny');
+    expect(turn!.data).not.toHaveProperty('deny_reason');
 
     // История сохранена: финальное сообщение ассистента с tool_results
     const session = (await sessionManager.getSession(sessionId))!;
@@ -725,8 +729,9 @@ describe('ChatOrchestrator × permissions — once:false и deny (ADR-029)', () 
     expect(result.error).toBeUndefined();
     // Таймаут не останавливает обработку — провайдер вызван повторно
     expect(MockDenyProvider.calls).toBe(2);
-    const done = chunks.find((c) => c.event === 'stream.done');
-    expect(done!.data.stopped_by_deny).toBeUndefined();
+    const turn = chunks.find((c) => c.event === 'turn.finished');
+    expect(turn).toBeDefined();
+    expect(turn!.data.status).toBe('completed');
     for (const unsub of unsubs) unsub();
   });
 });

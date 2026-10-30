@@ -42,6 +42,10 @@ const mocks = vi.hoisted(() => {
 vi.mock('@/lib/api/transport', () => ({ TransportClient: mocks.MockClient }))
 vi.mock('@/lib/api/synthApi', () => ({
   synthApi: {
+    // ADR-118 §8: перед подключением стор спрашивает возможности инстанса.
+    getInstanceCapabilities: vi.fn().mockResolvedValue({
+      messageModel: 2, eventSeq: true, replay: true, version: 'test',
+    }),
     enqueueMessage: vi.fn().mockResolvedValue(undefined),
     stopGeneration: vi.fn().mockResolvedValue(undefined),
   },
@@ -58,10 +62,22 @@ import { usePermissionStore } from './permissionStore'
 const permissionReply = vi.mocked(sessionsApi.permissionReply)
 
 /** Подключить SSE и дождаться готовности транспорта. */
-function connectSse(): InstanceType<typeof mocks.MockClient> {
+async function connectSse(): Promise<InstanceType<typeof mocks.MockClient>> {
   useTransportStore.getState().connect('sse')
   const client = mocks.instances[mocks.instances.length - 1]!
+  // ADR-118 §8: подключение идёт после сверки возможностей инстанса — ждём,
+  // пока клиент реально откроет транспорт (`getTransport()` станет `sse`).
+  await vi.waitFor(() => expect(client.getTransport()).toBe('sse'))
   client.callbacks.onConnect?.()
+  return client
+}
+
+/** Подключить WS и дождаться готовности backend (transportReady). */
+async function connectWs(): Promise<InstanceType<typeof mocks.MockClient>> {
+  useTransportStore.getState().connect('ws')
+  const client = mocks.instances[mocks.instances.length - 1]!
+  await vi.waitFor(() => expect(client.getTransport()).toBe('ws'))
+  client.callbacks.onBackendReady?.()
   return client
 }
 
@@ -74,7 +90,7 @@ beforeEach(() => {
 
 describe('transportStore.sendPermissionReply: HTTP-путь без WS', () => {
   it('на SSE ответ уходит POST /sessions/:id/permissions/:approvalId и возвращает true', async () => {
-    const client = connectSse()
+    const client = await connectSse()
 
     const sent = await useTransportStore
       .getState()
@@ -87,7 +103,7 @@ describe('transportStore.sendPermissionReply: HTTP-путь без WS', () => {
   })
 
   it('allow с once уходит с полем once', async () => {
-    connectSse()
+    await connectSse()
 
     const sent = await useTransportStore
       .getState()
@@ -98,7 +114,7 @@ describe('transportStore.sendPermissionReply: HTTP-путь без WS', () => {
   })
 
   it('ошибка HTTP — false (запрос остаётся открытым, полосу не убираем)', async () => {
-    connectSse()
+    await connectSse()
     permissionReply.mockRejectedValueOnce(new Error('HTTP 500'))
 
     const sent = await useTransportStore
@@ -109,7 +125,7 @@ describe('transportStore.sendPermissionReply: HTTP-путь без WS', () => {
   })
 
   it('403 already_consumed — это успех (запрос уже отвечен)', async () => {
-    connectSse()
+    await connectSse()
     permissionReply.mockRejectedValueOnce(
       Object.assign(new Error('already'), { status: 403, details: { reason: 'already_consumed' } }),
     )
@@ -122,9 +138,7 @@ describe('transportStore.sendPermissionReply: HTTP-путь без WS', () => {
   })
 
   it('на WS ответ уходит кадром, HTTP не вызывается', async () => {
-    useTransportStore.getState().connect('ws')
-    const client = mocks.instances[mocks.instances.length - 1]!
-    client.callbacks.onBackendReady?.()
+    const client = await connectWs()
 
     const sent = await useTransportStore
       .getState()
@@ -136,7 +150,7 @@ describe('transportStore.sendPermissionReply: HTTP-путь без WS', () => {
   })
 
   it('«Остановить таймер» на SSE уходит action=hold', async () => {
-    connectSse()
+    await connectSse()
 
     const sent = await useTransportStore.getState().sendPermissionHold('s1', 'approval_1')
 
@@ -144,8 +158,8 @@ describe('transportStore.sendPermissionReply: HTTP-путь без WS', () => {
     expect(permissionReply).toHaveBeenCalledWith('s1', 'approval_1', { action: 'hold' })
   })
 
-  it('«Стоп» убирает висящий запрос подтверждения из стора', () => {
-    connectSse()
+  it('«Стоп» убирает висящий запрос подтверждения из стора', async () => {
+    await connectSse()
     usePermissionStore.getState().addRequest('s1', {
       approvalId: 'approval_1',
       toolName: 'list_directory',

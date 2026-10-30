@@ -184,7 +184,13 @@ backend и standalone монтируют одну и ту же фабрику.
 фоллбек — **SSE `GET /api/v2/events`**. Формат события — `BusEvent`:
 
 ```ts
-interface BusEvent { type: EventType; sessionId: string; data: Record<string, unknown>; timestamp: string }
+interface BusEvent {
+  type: EventType; sessionId: string; data: Record<string, unknown>; timestamp: string;
+  /** ADR-118 §4: адресат (идентификатор пользователя) — адресная доставка; поля нет — broadcast в канал сессии. */
+  recipient?: string;
+  /** ADR-118: монотонный номер события в пределах сессии — основа догона (`Last-Event-ID` / `?since`). */
+  eventSeq?: number;
+}
 ```
 
 - Backend: WS-аутентификация по Bearer JWT/API key или cookie `user_session`;
@@ -199,15 +205,32 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 > Транспорт событий — только WS `/ws/events` и SSE `GET /api/v2/events`.
 > Новых каналов не заводить (ADR-008/009/024).
 
-> **Тайминги стрима хода.** Событие `stream.chunk` несёт аддитивные `seq` (номер
-> чанка в стриме, с 1; сквозной по итерациям Tool Use — в UI это один `stream_id`)
-> и `t_ms` (мс от старта стрима). Событие `stream.done` несёт аддитивные `chunks`
-> (сколько чанков опубликовано), `first_chunk_ms`/`last_chunk_ms` (время первого и
-> последнего чанка от старта стрима) и `content_chars` (длина финального текста).
-> Поля нужны для замера задержки «сервер → UI»: серверный `last_chunk_ms`
-> сравнивается с моментом прихода `stream.done`/последнего чанка в клиенте; старые
-> клиенты их игнорируют (прежние поля не меняются). Локальные ответы (`/`-команды,
-> debug, summary) отдают `chunks:1`, `first_chunk_ms:0`, `last_chunk_ms:0`.
+**Гейт модели сообщений и догон (ADR-118 §6/§8).** Подключение к WS `/ws/events` и
+SSE `GET /api/v2/events` требует query-параметр **`messageModel=2`** — иначе соединение
+**не устанавливается** (fail-closed, а не тихая деградация): WS закрывается кодом
+`1008` с причиной `messageModel=2 required`, SSE отвечает `426` `UPGRADE_REQUIRED`
+(тело — обычный формат ошибки). Возможности инстанса отдаёт `GET /api/v2/meta`
+(§5.4); клиент сверяет `messageModel` до подключения (MCP-подобных флагов нет).
+
+Догон после разрыва: `GET /api/v2/events?since=<eventSeq>` либо заголовок
+`Last-Event-ID` (для WS — `?since=`; в гибриде локальный core передаёт
+`messageModel=2` удалённой стороне сам). Журнал — кольцевой буфер по сессиям
+(200 событий на сессию, до 100 сессий): сначала воспроизводится журнал, затем живой
+поток; дубли отсекаются по `eventSeq`. SSE-кадр несёт строку `id: <eventSeq>` перед
+`data:` — подписчик возвращает её в `Last-Event-ID`.
+
+> Сессионный SSE `GET /api/v2/sessions/:id/events` (core-only) — вспомогательный
+> поток: гейта `messageModel` и нумерации `id:` у него нет. Контракт наблюдения за
+> ходом — глобальные WS/SSE + события §3.3.
+
+> **Тайминги шага.** `step.finished` несёт аддитивное `timings?: {chunks,
+> firstChunkMs?, lastChunkMs?}` — число чанков шага и моменты первого/последнего
+> чанка (мс от старта хода). Замер задержки «сервер → UI»: серверный
+> `lastChunkMs` сравнивается с моментом прихода `step.finished` в клиенте. Прежние
+> `stream.chunk` (`seq`/`t_ms`) и `stream.done` (`chunks`/`first_chunk_ms`/
+> `last_chunk_ms`/`content_chars`) удалены (ADR-118, §3.3); локальные ответы
+> (`/`-команды, debug, summary) дают `chunks: 1`. Счётчик чанков считает сервер —
+> по `part.delta` клиент его не восстанавливает.
 
 ### 3.1. Подтверждения разрешений (ADR-106 Ф3)
 
@@ -282,6 +305,69 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 при успешном запросе остановки прогона (`POST /api/v2/processes/:id/stop`,
 `reason` — причина остановки); терминальный статус прогона приходит позже —
 событием `process.exited` (у остановленного процесса `state: 'cancelled'`).
+
+### 3.3. Поток хода v2 — ход как последовательность шагов (ADR-118)
+
+Ход (`Turn`) — от реплики пользователя до терминального статуса; шаг (`Step`) — **один
+вызов LLM = одно assistant-сообщение**; часть (`Part`) — фрагмент сообщения
+(`text`/`reasoning`/`tool`, ADR-115). Новых транспортных каналов нет: события идут в
+канал сессии (и адресно — по `recipient`), наблюдение — WS/SSE (§3).
+
+| Событие | Кому | Поля `data` |
+|---|---|---|
+| `message.accepted` | **адресно** (`recipient` = `userId` отправителя) | `messageId`, `mode` (`queue`\|`steer`\|`interrupt`), `position` (позиция в очереди; `null` — вмешательство очередь не занимает) |
+| `queue.state` | канал сессии | `pendingCount`, `steerCount` — **только счётчики**: ни текста, ни автора |
+| `message.delivered` | канал сессии | `messageId`, `ord` (монотонный порядок записи), `role`, `author?`, `principal?` (ADR-106) |
+| `turn.started` | канал сессии | `turnId`, `messageId` (реплика, начавшая ход) |
+| `turn.finished` | канал сессии | `turnId`, `status` (`completed`\|`cancelled`\|`error`\|`stopped`) |
+| `step.started` | канал сессии | `turnId`, `stepIndex` (0-based), `messageId` — assistant-сообщение шага создаётся здесь |
+| `step.finished` | канал сессии | `turnId`, `stepIndex`, `messageId`, `status` (`streaming`\|`completed`\|`cancelled`\|`error`), `usage?`, `provider?`, `model?`, `costUsd?`/`costCurrency?`, `agentRole?`, `attachments?` (`{sha256, mime, size, name?}[]`, ADR-115), `debugInfo?` (ADR-070), `timings?` |
+| `part.delta` | канал сессии | `messageId`, `partId`, `field` (`text`\|`raw`), `delta` — **upsert** по `{messageId, partId}` |
+| `part.updated` | канал сессии | `messageId`, `partId`, `part` — **upsert** по `{messageId, partId}` |
+
+Правила:
+
+- **Один объект сообщения.** `step.started` создаёт assistant-сообщение шага; текст идёт
+  `part.delta`, «финал» — смена `status` на `step.finished`, а не замена объекта.
+  Черновик персистится инкрементально со статусом `streaming` — перезагрузка страницы
+  во время хода показывает текущий ход.
+- **Детерминированные `partId`:** `msg:text:<ordinal>`, `msg:reasoning:<ordinal>`,
+  `<callId>` у вызова инструмента. Части — upsert, повторная доставка не задваивает текст.
+- **Порядок.** `ord` — монотонный счётчик сессии, выдаётся при материализации записи в
+  историю и **не перенумеровывается**; `seq`/индекс остаются позиционными. Клиент
+  сортирует ленту по `ord`, а не по порядку прихода.
+- **Адресация.** `message.accepted` — единственное адресное событие
+  (`recipient = userId`). В standalone/гибрид-клиенте локальный пользователь один,
+  поэтому подтверждение видно всем локальным клиентам — известное ограничение;
+  разделение по пользователям работает на managed-backend'е.
+- `queue.state` публикуется при постановке/снятии сообщений и на границах хода —
+  текст и автор в канал сессии не уходят (устранение прежней утечки `message.queued`).
+
+**Удалённые события (ADR-118 §4, без dual-emit).** Ядро их больше не публикует:
+
+| Удалено | Замена |
+|---|---|
+| `stream.chunk` | `part.delta` (upsert по `{messageId, partId}`) |
+| `stream.usage` | `step.finished` (`usage`, `provider`, `model`, `costUsd`/`costCurrency`) |
+| `stream.done` | `step.finished` + `turn.finished`; вложения ответа — `step.finished.attachments` |
+| `stream.interrupted` | `step.finished` со статусом `cancelled` (ход продолжается) |
+| `message.injected` | `message.delivered` (материализация в истории) + `message.accepted` |
+| `message.queued` | `message.accepted` + `queue.state` |
+
+**Не меняются:** `stream.start` (начало хода: `stream_id`, `agent_role`, `provider`,
+`model`), `stream.cancelled` (отмена «Стопом», ADR-005), `stream.error`, `stream.retry`,
+`stream.ended` (дочерние сессии), `queue.stalled`, `steer.dropped`, `permission.*`,
+`question.*`/`user_question.*`, `tool_call.*`, `child.*`.
+
+> ⚠️ **`message.added` пока публикуется** — финальное assistant-сообщение (усечённый до
+> 500 символов текст), сообщения вставок вложений тулов и сообщения дочерних сессий.
+> Клиенты читают его как совместимость; удаление по ADR-118 §4 — **остаток** (см.
+> «Статус в коде» ADR-118). Новая реализация должна опираться на `message.delivered` +
+> `step.finished`/`part.updated`.
+
+> **Совместимость клиента.** UI принимает кадры прежнего протокола (`stream.chunk`,
+> `stream.usage`, `stream.done`, `stream.cancelled`, `stream.interrupted`) как
+> совместимость со старым ядром (гибрид с другой версией) — сервер их не эмитит.
 
 ---
 
@@ -365,6 +451,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/i18n/translations/ru` | backend | — | Русский словарь |
 | GET | `/api/v2/i18n/translations/en` | backend | — | Английский словарь |
 | GET | `/api/v2/openapi.json` | оба | auth | Публичная OpenAPI 3.1-спека интеграционного ядра (ADR-052, этап III; `server/openapi/public-openapi.ts`): 28 операций (events/sessions/schedules/llm), именованные `components.schemas`, единый формат ошибок `publicErrorSchema` (`{error:{code,message}}`) |
+| GET | `/api/v2/meta` | оба | — | Возможности инстанса (ADR-118 §8): `{messageModel, eventSeq, replay, version}` — **без аутентификации** (как `/health`). `messageModel` — версия модели сообщений/потока (`2`), `eventSeq` — события нумеруются в пределах сессии, `replay` — доступен догон по журналу (`Last-Event-ID`/`?since`), `version` — версия инстанса. Клиент сверяет `messageModel` перед подключением к WS/SSE (fail-closed, §3) |
 
 ### 5.5 Sessions — `/api/v2/sessions`
 
@@ -383,14 +470,14 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/sessions/:id/export` | backend | auth | Экспорт Session (внутренний формат, camelCase — формат publish/fork не изменён). Маршрут зарегистрирован **после** prefix-guard'а (`app.use('/:id')`/`app.use('/:id/*')`), поэтому **доступ к сессии решает единый guard** — проверок доступа в обработчике нет (инвариант 16). Карта обфускации Gateway (ADR-036) — **отдельная привилегия**, которую решает route-level guard `createSessionExportGuard`: **полный экспорт** (`obfuscationMap` и `messages[].metadata.secrets` включены) — **владельцу сессии** (`ownerId ?? userId`), `ADMIN` и `AUDITOR` (тот же набор привилегий, что у `GET /:id/secrets`); прочие читатели сессии (участник проекта `VIEWER`/`EDITOR`, владелец проекта, не владеющий сессией, `LEAD`) — **200 с очищенным телом** (карты нет, весь остальной разговор переносится без изменений; очистка — на копии, сохранённая сессия не меняется); нет доступа на чтение сессии → 403 `FORBIDDEN`; сессии нет → 404 `NOT_FOUND`; rate limit 10/60 c → 429 `RATE_LIMITED` |
 | POST | `/api/v2/sessions/import` | backend | auth | Импорт сессии из экспорта → 201 |
 | GET | `/api/v2/sessions/:id/status` | оба | auth | `{blocked, pending_count, processor_running}` |
-| POST | `/api/v2/sessions/:id/prompt` | оба | auth | Поставить сообщение в очередь, вернуть **SSE-стрим**; поле `mode` (`queue`\|`steer`\|`interrupt`, по умолчанию `queue`) — вмешательство в ход (ADR-104, см. ниже); аддитивное `attachments: string[]` (`blobPath`) — вложения сообщения (§5.6.1) |
+| POST | `/api/v2/sessions/:id/prompt` | оба | auth | Принять сообщение → **всегда** `202 {messageId, mode, position}` (ADR-118 §3); `text/event-stream` в ответе больше не возвращается; поле `mode` (`queue`\|`steer`\|`interrupt`, по умолчанию `queue`) — вмешательство в ход (ADR-104, см. ниже); аддитивное `attachments: string[]` (`blobPath`) — вложения сообщения (§5.6.1) |
 | GET | `/api/v2/sessions/:id/prompt` | оба | auth | Состав системного промпта (ADR-070): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (тулы с `chars`/`estTokens` и флагом оценки, ADR-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — применённые политики встроенных/MCP (ADR-071 §2.3); записи: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, не в `staticPrefixChars`). `history.excluded.disabled` включает сообщения, подавленные вместе с отключённым ходом |
 | GET | `/api/v2/sessions/:id/memory` | оба | auth | Память сессии для вкладки «Память» (ADR-107): `provider.active`, `scope.projectId`, `lastContext` — блоки `facts`/`recall` из **последнего** хода (`chars`/`estTokens`/`status`, `null` — ходов не было), `facts.active` (активные факты в скоупе), `projectMemory` (`{enabled}` — эффективная политика проекта; `null` — сессия без проекта), `indexes` (всего/project/instance/ready/building/failed + `items`: id/name/scope/state/enabled/projectId; `stale` вычисляется плагином и здесь не отдаётся; у `instance` `enabled` всегда true), `readiness` (`ready`/`degraded`/`unavailable`). Текстов фактов/чанков нет; доступ — чтение сессии (prefix-guard), без дублирующих проверок |
 | GET | `/api/v2/sessions/:id/stats` | оба | auth | Статистика usage (ADR-070): сообщения + рекурсивный usage саб-агентов (tool `task`), агрегаты по агентам/пользователям (`computeSessionStats`) |
 | GET | `/api/v2/sessions/:id/questions` | оба | auth (чтение) | Вопросы пользователю сессии (этап 1 roadmap 0.12.4 — блок 3): `{questions: QuestionRecord[]}`; `?status=pending\|answered\|cancelled` (не задан — все статусы), `?limit=` (дефолт 50, максимум 200); записи «свежие первыми». Сервис вопросов не подключён — 503 `QUESTION_UNAVAILABLE` |
 | POST | `/api/v2/sessions/:id/questions/:qid/answer` | оба | auth (**мутация**) | Ответ пользователя на вопрос: `{answers: string[][]}` (по индексу вопроса; значения — из `options[].value`) → 200 `{question}`. 400 `VALIDATION_ERROR` (тело/ответ невалидны), 404 `NOT_FOUND` (вопроса нет **или** он другой сессии), 409 `CONFLICT` (вопрос уже отвечен/отменён) |
 | POST | `/api/v2/sessions/:id/questions/:qid/cancel` | оба | auth (**мутация**) | Отмена вопроса: `{reason?}` → 200 `{question}`; те же 404/409, что и в `answer` |
-| GET | `/api/v2/sessions/:id/messages` | оба | auth | `{messages, session_id}` |
+| GET | `/api/v2/sessions/:id/messages` | оба | auth | `{messages, session_id}` — история в порядке массива (`seq`); DTO сообщения несёт `ord` (монотонный порядок записи), `turn_id`, `step_index`, `status` (`streaming`\|`completed`\|`cancelled`\|`error`, ADR-118 §1/§5) |
 | POST | `/api/v2/sessions/:id/clear` | оба | auth | Очистить историю (кроме pinned) |
 | POST | `/api/v2/sessions/:id/abort` | оба | auth | Надёжный «Стоп» (ADR-005): ставит персистентный флаг `status.cancel_requested`, при живом стриме — graceful-отмена, затем остановка процессора очереди; **снимает ожидание подтверждения** (`permission.asked` резолвится `cancelled` — инструмент не висит до ask-таймаута); останавливает и живые дочерние прогоны (фоновые саб-агенты и их процессы, ADR-111 §detach); `{status:'aborted'}`; 404 если сессии нет (см. ниже) |
 | POST | `/api/v2/sessions/:id/permissions/:approvalId` | оба | auth (**write**) | Ответ на запрос подтверждения прав (`permission.asked`) **по HTTP** — путь для SSE/не-WS клиента (WS-кадр `permission_reply` там недоступен). Тело: `{action: 'allow'\|'deny'\|'hold', once?: boolean, turn_id?: string, digest?: string}`. `allow`/`deny` — та же семантика, что у WS: публикуется `permission.replied`, а при подключённом реестре подтверждений ответ принимает только носитель покрывающего гранта (ADR-106 Ф3); `once` — «разрешить один раз» (не добавлять allow-правило в сессию); `turn_id`/`digest` — привязка к ходу (сверяются с привязкой реестра). `hold` — «остановить таймер»: публикуется `permission.hold` (авто-отклонение по таймауту снимается), реестр не трогается. Ответы: 200 `{status:'ok', action}`; 400 `VALIDATION_ERROR` (неизвестный `action` или пустой `approvalId`); 403 `APPROVAL_DENIED` с `details.reason` (`unknown_approval`\|`already_consumed`\|`turn_mismatch`\|`digest_mismatch`\|`no_grant`) — ответ не принят, действие не выполняется (`already_consumed` для клиента означает «запрос уже отвечен»); 403/404 — по общим правилам доступа к сессии (см. ниже). Доступ — граничный prefix-guard (вид `write` из метода); проверок в обработчике нет (инвариант 16) |
@@ -420,19 +507,21 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > **Надёжный «Стоп» — `POST /api/v2/sessions/:id/abort` (ADR-005).** Роут ставит **персистентный** флаг `SessionStatus.cancelRequested` (+ `cancelRequestedAt`) под локом сессии — поэтому отмена срабатывает и когда `currentStream`/cancel-token ещё не установлены (сессия в очереди, в backoff, между итерациями Tool Use), где прежний `orchestrator.cancel` был no-op. При живом стриме дополнительно вызывается graceful `orchestrator.cancel` (публикует `stream.cancelled`, сохраняет частичный ответ); затем `QueueProcessorManager.requestStop` прерывает backoff/активный LLM-вызов и завершает цикл (`_handleStopRequest`: очистка `pendingMessages`, снятие `blocked`/флага, `stream.cancelled` ровно один раз — без дубля graceful-ветки). Если обработчика нет, флаг снимается, чтобы следующий запуск не отменился ложно. Дополнительно «Стоп» останавливает **живые дочерние прогоны** — фоновых саб-агентов и их фоновые процессы (`BackgroundRunService.stopBySession`: обход дерева `parentId` до глубины 5, только `running`-записи; best-effort — сбой реестра не меняет ответ; решение 2026-10-28, ADR-111 §detach п. 10). Ответ — `{status:'aborted'}`; без сессии — 404. В сериализованной сессии (`GET /api/v2/sessions/:id`) поле `status` содержит `cancel_requested` (bool) и `cancel_requested_at` (ISO|null). Гибридная ветка (удалённая сессия) делегирует `remoteClient.abortSession`. **«Стоп» снимает и ожидание подтверждения**: `AbortSignal` хода прерывает `PermissionApprovalManager.waitForDecision` (`{approved:false, cancelled:true}`) — инструмент возвращается сразу, а не висит до ask-таймаута; ход завершается штатной отменой.
 > **Ответ на подтверждение по HTTP — `POST /api/v2/sessions/:id/permissions/:approvalId` (ADR-029/ADR-106 Ф3).** До этого ответить на `permission.asked` можно было только WS-кадром `permission_reply`: клиент на SSE (после auto-fallback WS→SSE) молча терял ответ и инструмент висел до ask-таймаута. Маршрут принимает то же тело (`action: allow|deny|hold`, `once`, `turn_id`, `digest`), проходит через тот же реестр подтверждений (`ApprovalRegistry.claim`) и публикует те же события, что WS-путь. Отличие `hold`: публикуется `permission.hold` (снимается авто-отклонение по таймауту), привязка в реестре остаётся — ответ можно дать позже. Реестр не подключён (Authority выключен/в shadow) — ответ принимается по факту доступа к сессии (прежнее поведение). «Стоп» (`POST /:id/abort`) ожидание подтверждения снимает: `waitForDecision` получает `AbortSignal` хода и резолвится `cancelled` (событие `permission.replied` при этом не публикуется, причина в результате тула — `permission.ask_cancelled`).
 > **Перевод идущего прогона в фон — `POST /api/v2/sessions/:id/background` (ADR-111 §detach).** Перевод **односторонний**: foreground-вызов `task` (саб-агент) или `execute_shell` продолжается уже как фоновый прогон — со своим `AbortController` и `streamId`, публикацией в родительский стрим отключённой, — а блокирующее ожидание тула просыпается и возвращает модели `tool_result` «переведено в фон»; ход модели продолжается с этого места. Отмена родителя (`POST /:id/abort`) переведённый прогон **не** останавливает: его останавливает только собственный «Стоп» — `POST /sessions/<child>/abort` (саб-агент) или `POST /processes/:id/stop` (шелл). Завершение — обычное уведомление родителя (сообщение в историю + автоход), ровно одно: терминальный переход идемпотентен, вставка — по `background_run_id`; доставка at-least-once (маркер «уведомление не доставлено» через порт хранения). Права — **write** на сессию (граничный guard, инвариант 16): `VIEWER` читает, но не переводит (инвариант 21). В канал сессии-владельца публикуется `process.detached` (§3.2). Ответ — `{detached: [{id, kind, title?}], sessionId}`; прогоны, которые перевести не удалось, идут в необязательном `failed: [{id, kind, code, message?}]` (`BACKGROUND_LIMIT` — исчерпан лимит фоновых прогонов сессии, `DETACH_FAILED` — прочий отказ; остальные прогоны при этом переводятся, пустой `failed` в ответ не включается). UI: «В фон» у running `task`-парта и running `execute_shell`, `ctrl+b` — все блокирующие прогоны активной сессии; дальше работа видна во вкладке «Процессы» (§5.39).
-> **Режим отправки — `mode` в `POST /api/v2/sessions/:id/prompt` (ADR-104).** Необязательное поле `mode`: `queue` (по умолчанию) — сообщение ждёт окончания текущего хода (прежнее поведение); `steer` — **вмешательство в активный ход без прерывания генерации**: сообщение встаёт в очередь инъекций (`steerInbox`) и попадает в контекст на ближайшей границе шага (перед следующим LLM-вызовом), персистится как обычная `user`-реплика с `metadata.steer=true`; `interrupt` — **прерывание текущей генерации с продолжением хода**: стрим обрывается (событие `stream.interrupted`), частичный ответ сохраняется отдельной `assistant`-репликой со статусом `interrupted` (`metadata.interrupted`), ход **не** завершается и **не** отменяется («Стоп» — отдельный механизм, ADR-005) — сообщение вплетается на ближайшей границе шага, пары `toolUse`/`toolResult` не рвутся. Неизвестное значение `mode` трактуется как `queue`. Ответ при `steer` и активном ходе — `202 {status:'steered', stream_id, pending_count, mode_applied:true}`, при `interrupt` — `202 {status:'interrupted', stream_id, pending_count, mode_applied:true}` (отдельный SSE-стрим не открывается — идёт стрим текущего хода); активного хода нет — `steer`/`interrupt` работают как `queue` (обычная очередь + SSE). Лимит — **5 инъекций на ход**; превышение → `429 STEER_LIMIT_EXCEEDED` (публикуется событие `steer.dropped`). То же поле принимает WS-сообщение `send_message` (backend и standalone).
+> **Контракт приёма — `202 {messageId, mode, position}` (ADR-118 §3).** `POST /api/v2/sessions/:id/prompt` **всегда** отвечает `202` подтверждением приёма: `messageId` — идентификатор принятого сообщения (переданный клиентом `messageId` либо выданный сервером; он же уходит в адресное событие `message.accepted` и в `message.delivered`), `mode` — применённый режим (`queue`/`steer`/`interrupt`), `position` — позиция в очереди (`pendingMessages.length` после постановки) либо `null`, если сообщение очередь не занимает (вмешательство `steer`/`interrupt`) или уже материализовано в истории. `text/event-stream` в ответе больше **не** возвращается: контракт приёма и контракт наблюдения разведены — ход наблюдается по шине событий (§3.3), обрыв HTTP-соединения клиентом ход не прерывает. Ошибки: `400 VALIDATION_ERROR` (пустой `content`), `429 QUEUE_FULL` (очередь полна), `429 STEER_LIMIT_EXCEEDED` (лимит инъекций хода). Клиент схлопывает оптимистичную строку с серверной по `messageId`.
+> **Гибрид (удалённая сессия).** Локальный core проксирует **только** подтверждение приёма: удалённая сторона ответила `202` — её тело (`messageId`/`mode`/`position`) возвращается как есть; старая версия сервера ответила иначе (свой SSE) — **мягкая деградация**: поток не проксируется, клиент получает `202 {messageId, mode:'queue', position:null}`; гибрид не настроен — `502 REMOTE_UNAVAILABLE`.
+> **Режим отправки — `mode` в `POST /api/v2/sessions/:id/prompt` (ADR-104).** Необязательное поле `mode`: `queue` (по умолчанию) — сообщение ждёт окончания текущего хода; `steer` — **вмешательство в активный ход без прерывания генерации**: сообщение встаёт в очередь инъекций (`steerInbox`) и попадает в контекст на ближайшей границе шага (перед следующим LLM-вызовом), персистится как обычная `user`-реплика с `metadata.steer=true`; `interrupt` — **прерывание текущей генерации с продолжением хода**: генерация обрывается (шаг закрывается `step.finished` со статусом `cancelled`, ADR-118), частичный ответ сохраняется отдельной `assistant`-репликой (`metadata.interrupted`), ход **не** завершается и **не** отменяется («Стоп» — отдельный механизм, ADR-005) — сообщение вплетается на ближайшей границе шага, пары `toolUse`/`toolResult` не рвутся. Неизвестное значение `mode` трактуется как `queue`. Ответ в обоих случаях — `202 {messageId, mode, position:null}` (вмешательство очередь не занимает, отдельного стрима нет — идёт стрим текущего хода); активного хода нет — `steer`/`interrupt` работают как `queue` (`position` — позиция в очереди). Лимит — **5 инъекций на ход**; превышение → `429 STEER_LIMIT_EXCEEDED` (публикуется событие `steer.dropped`). То же поле принимает WS-сообщение `send_message` (backend и standalone).
 > **Неприменённые инъекции снимаются (ADR-104, решение 2026-10-28).** Очередь вычищается только на границе шага, поэтому при «Стоп» и в конце хода границы уже не будет. `POST /api/v2/sessions/:id/abort` после остановки снимает очередь инъекций и — если она была непустой — публикует событие `steer.dropped` с `reason:'aborted'` и `dropped_count` (best-effort: сбой не меняет `200 {status:'aborted'}`). В конце хода (эпилог оркестратора, вне цикла) остаток очереди снимается с `reason:'turn_ended'`. Снятые сообщения **не** попадают в историю и **не** применяются в следующем ходе — раньше они «переезжали» в начало следующего хода и выглядели внезапным отдельным сообщением. Поле `reason` события — `limit` | `aborted` | `turn_ended`; в событии также `dropped_count` и `i18n`-ключ (`steer.limit_exceeded` / `steer.dropped_aborted` / `steer.dropped_turn_ended`).
 > **Порядок применения инъекций (ADR-104, этап 3).** Очередь инъекций — **не строгий FIFO**: применяются сначала инъекции класса `interrupt` (маркер `metadata.interrupt=true`), затем класса `steer`; **внутри класса** порядок FIFO (порядок постановки). Порядок детерминирован и не зависит от момента постановки. При переполнении лимита хода первыми отбрасываются инъекции низшего приоритета (`steer`), лишние публикуются как `steer.dropped`.
 > **Инъекция — ввод в тот же ход, а не ответ пользователя (ADR-104, этап 3).** Инъекция **не отвечает** за пользователя на `permission.asked` и **не отменяет** ожидающее подтверждение прав: ход, стоящий на `ask`, применяет инъекцию на границе шага **после** ответа. Инъекция также **не расширяет права**: в режиме `plan` мутирующий тул остаётся запрещённым (правило `plan.deny` permission-слоя), даже если текст инъекции «разрешает» его.
-> **Гибрид: единый контракт режима (ADR-104, этап 3).** `mode` доезжает до удалённой стороны: HTTP-промпт удалённой сессии (`remote:<id>`) пробрасывает тело как есть, WS-путь локального core передаёт `mode` в запрос удалённого backend'а (раньше режим терялся — удалённая сессия всегда работала как `queue`). Ответ/ack несёт **применённый** режим: локальная сторона применила режим сама — `mode_applied:true`; удалённая сторона применила — `202` c `mode_applied:true`; удалённая сторона **не** применила (нет активного хода на удалённой стороне или старая версия) — `202 {status:'queued', mode_applied:false}` (сообщение ушло обычной очередью). WS-ack `queued` содержит `mode` и `mode_applied` (backend и standalone).
-> **Ограничения steering (ADR-104).** **UI-переключателя режима нет** (с 2026-10-30): композер во время хода всегда отправляет `queue`, режимы `steer`/`interrupt` доступны только через API/шлюзы (в т.ч. `POST /queue/:sessionId/steer` для уже стоящего в очереди сообщения); в ленте сообщения-инъекции помечаются маркером «вмешательство в ход» (`metadata.steer`), в режиме `interrupt` — маркером «прерывание хода» (`metadata.interrupt`), а прерванная генерация — бейджем «Прервано» (`metadata.status === 'interrupted'`). В гибриде локальный core не вмешивается в ход, который исполняет удалённый backend: режим применяет та сторона, которой принадлежит ход (удалённый backend), а клиент получает в ack, применился ли режим (`mode_applied`).
-> **Steering дочерней сессии саб-агента (ADR-104 + ADR-111).** Режим работает и для дочерних сессий саб-агентов, включая фоновые: `POST /api/v2/sessions/<child>/prompt` с `mode:'steer'` кладёт сообщение в очередь инъекций **сессии-ребёнка**, а цикл ребёнка (`engine/tools/task/run-cycle.ts`) применяет его на границе шага — перед следующим LLM-вызовом, в том же ходу (пары `toolUse`/`toolResult` не рвутся). Инъекция персистится в истории ребёнка как обычная `user`-реплика с `metadata.steer=true` и публикуется в канал ребёнка (`message.added`, `message.injected`); превышение лимита — событие `steer.dropped` в канале ребёнка, ход не падает. `interrupt` для ребёнка **не обрывает генерацию** (на границе шага её уже нет) и применяется как обычное вмешательство. Действует общее правило раздела: сообщение попадает в очередь инъекций, только если у сессии ребёнка есть активный ход (фоновый прогон — всегда: сессия ребёнка помечена занятой; нет активного хода — `steer`/`interrupt` работают как `queue`). Очереди родителя и ребёнка изолированы: инъекция в очередь родителя не попадает в ход ребёнка и наоборот (проверка — `packages/core/src/queue/steering-subagent.test.ts`).
+> **Гибрид: единый контракт режима (ADR-104, этап 3; контракт приёма — ADR-118 §3).** `mode` доезжает до удалённой стороны: HTTP-промпт удалённой сессии (`remote:<id>`) пробрасывает тело как есть, WS-путь локального core передаёт `mode` в запрос удалённого backend'а. Ответ — всегда `202 {messageId, mode, position}` (ADR-118 §3); режим применяет та сторона, которой принадлежит ход. Удалённая сторона старой версии (ответ не-`202`) — мягкая деградация: `202 {messageId, mode:'queue', position:null}`, поток не проксируется. WS-ack отправки по-прежнему несёт `queued` и `mode_applied` (backend и standalone) — это WS-контракт, не HTTP.
+> **Ограничения steering (ADR-104).** **UI-переключателя режима нет** (с 2026-10-30): композер во время хода всегда отправляет `queue`, режимы `steer`/`interrupt` доступны только через API/шлюзы (в т.ч. `POST /queue/:sessionId/steer` для уже стоящего в очереди сообщения); в ленте сообщения-инъекции помечаются маркером «вмешательство в ход» (`metadata.steer`), в режиме `interrupt` — маркером «прерывание хода» (`metadata.interrupt`), а прерванная генерация — бейджем «Прервано» (`metadata.status === 'interrupted'`). В гибриде локальный core не вмешивается в ход, который исполняет удалённый backend: режим применяет та сторона, которой принадлежит ход (удалённый backend), а клиент получает в WS-ack, применился ли режим (`mode_applied`); HTTP-ответ приёма (`202 {messageId, mode, position}`) сообщает только применённый режим — `mode`.
+> **Steering дочерней сессии саб-агента (ADR-104 + ADR-111).** Режим работает и для дочерних сессий саб-агентов, включая фоновые: `POST /api/v2/sessions/<child>/prompt` с `mode:'steer'` кладёт сообщение в очередь инъекций **сессии-ребёнка**, а цикл ребёнка (`engine/tools/task/run-cycle.ts`) применяет его на границе шага — перед следующим LLM-вызовом, в том же ходу (пары `toolUse`/`toolResult` не рвутся). Инъекция персистится в истории ребёнка как обычная `user`-реплика с `metadata.steer=true` и публикуется в канал ребёнка событием `message.delivered` (`message.injected` удалён, ADR-118); превышение лимита — событие `steer.dropped` в канале ребёнка, ход не падает. `interrupt` для ребёнка **не обрывает генерацию** (на границе шага её уже нет) и применяется как обычное вмешательство. Действует общее правило раздела: сообщение попадает в очередь инъекций, только если у сессии ребёнка есть активный ход (фоновый прогон — всегда: сессия ребёнка помечена занятой; нет активного хода — `steer`/`interrupt` работают как `queue`). Очереди родителя и ребёнка изолированы: инъекция в очередь родителя не попадает в ход ребёнка и наоборот (проверка — `packages/core/src/queue/steering-subagent.test.ts`).
 > **Вопросы и рестарт (ADR-112).** Ожидание ответа на вопрос живёт в памяти процесса: после рестарта незавершённые вопросы помечаются `cancelled` с причиной `interrupted`, ход не возобновляется (как и прочие паузы tool-loop). Сама запись вопроса рестарт переживает (журнал в `QuestionRepository`). По умолчанию вопрос ждёт ответа **без таймаута** (`questions.timeoutMs = 0`); срок ожидания задаёт тул `question` (`timeout`, ≥ 5 минут — не рекомендуется: ожидание обрывается).
-> **Вложения ответа — `stream.done.attachments` (ADR-115, outbound).** Событие `stream.done` (SSE `POST /sessions/:id/prompt`, `GET /sessions/:id/events`) несёт аддитивное `attachments?: Array<{sha256, mime, size, name?}>` — медиа-части **финального** assistant-сообщения хода (`image`/`audio`/`video`/`file`) в порядке сообщения; без медиа-частей поля нет. Байты шлюз забирает по sha: `GET /api/v2/attachments/:sha256` (§5.6.1) — доступ к сессии ему не нужен. Форма поля, источник и коды раздачи — §5.6.1.
+> **Вложения ответа — `step.finished.attachments` (ADR-115 × ADR-118, outbound).** Медиа-части **финального** шага (`image`/`audio`/`video`/`file`) уходят в `step.finished` аддитивным `attachments?: Array<{sha256, mime, size, name?}>` — та же форма, что была у удалённого `stream.done.attachments` (ADR-118 §4); без медиа-частей поля нет. Байты шлюз забирает по sha: `GET /api/v2/attachments/:sha256` (§5.6.1) — доступ к сессии ему не нужен. Форма поля, источник и коды раздачи — §5.6.1.
 
-> **Лимит шагов основного агента — `step_limit_reached` (2026-10-30).** Если ход завершился **исполненным** шагом-лимитом (`AgentDefinition.maxSteps`, механика opencode: обычный шаг, `tool_choice: 'none'`, инструкция «только текст» — синтетическим assistant-префиллом), `stream.done` несёт аддитивное `step_limit_reached: true`, а финальное assistant-сообщение — `metadata.step_limit_reached: true` (паритет с саб-агентом `task`). Если модель не дала текстового отчёта, подставляется текст ключа `session.steps_limit` (`{limit}`, «Лимит шагов исчерпан…»), а `status` ответа становится `limit` (прежний посторонний `session.max_iterations` в этой ветке основного цикла больше не используется — он остался у шагов пайплайнов). Поля аддитивные: без шага-лимита их нет.
+> **Лимит шагов основного агента — `step_limit_reached` (2026-10-30).** Если ход завершился **исполненным** шагом-лимитом (`AgentDefinition.maxSteps`, механика opencode: обычный шаг, `tool_choice: 'none'`, инструкция «только текст» — синтетическим assistant-префиллом), финальное assistant-сообщение несёт `metadata.step_limit_reached: true` (паритет с саб-агентом `task`); отдельного поля события больше нет — прежнее `stream.done.step_limit_reached` удалено вместе с событием (ADR-118). Если модель не дала текстового отчёта, подставляется текст ключа `session.steps_limit` (`{limit}`, «Лимит шагов исчерпан…»), а `status` ответа становится `limit` (прежний посторонний `session.max_iterations` в этой ветке основного цикла больше не используется — он остался у шагов пайплайнов). Поля аддитивные: без шага-лимита их нет.
 
-> **Подтверждение приёма — `message.queued` (2026-10-30).** Событие `message.queued` (`stream_id`, `message_id`, `pending_count`, `message`, `agent_role`, `author`) — подтверждение, что сообщение **принято сервером в очередь** (не только показано клиентом). `message_id` совпадает с `stream_id` отправки: клиент передаёт `stream_id` в WS-кадре `send_message` и `message_id`/`streamId` в HTTP-теле `POST /sessions/:id/prompt`, сервер использует его как id pending-сообщения — поэтому оптимистичная строка очереди и серверное событие схлопываются в одну строку (дедуп по id). WS-ack отправки резолвится кадром `queued` **или** этим событием; нет подтверждения за 30 с — отправка считается **неподтверждённой** (`{confirmed:false}`, не ошибка): сообщение остаётся в очереди сервера, клиент сверяет её через `GET /sessions/:id`; кадр `error` — ошибка отправки.
+> **Подтверждение приёма — `202` + `message.accepted` + `queue.state` (ADR-118, замена `message.queued`).** Событие `message.queued` удалено без dual-emit (оно утекало текст и автора в канал сессии). Подтверждение приёма теперь: HTTP-ответ `202 {messageId, mode, position}` и **адресное** событие `message.accepted` (те же поля; `recipient` = `userId` отправителя); состояние очереди — `queue.state` (только счётчики `pendingCount`/`steerCount`, §3.3). `messageId` совпадает с id принятого сообщения: клиент передаёт его в HTTP-теле (`messageId`) или в WS-кадре `send_message` (`stream_id`/`messageId`), сервер использует его как id pending-сообщения — поэтому оптимистичная строка очереди и серверное событие схлопываются по id. WS-ack отправки резолвится кадром `queued` **или** `message.accepted`; нет подтверждения за 30 с — отправка считается **неподтверждённой** (`{confirmed:false}`, не ошибка): сообщение остаётся в очереди сервера, клиент сверяет её через `GET /sessions/:id`; кадр `error` — ошибка отправки.
 
 > **Прогресс саб-агента — дельты (`subagent.progress`, 2026-10-30).** Событие несёт аддитивные `content_delta`/`reasoning_delta` — приращение с прошлой публикации, а **не** накопленный текст (прежние поля `content`/`reasoning` убраны); пустые дельты не публикуются, суммарный объём дельт на прогон ограничен 200 000 символов (дальше прогресс не публикуется — итоговый отчёт приходит обычным сообщением и не страдает). Старое ядро (гибрид с другой версией) может присылать накопленный текст в `content`/`reasoning` — клиент вычитает уже известный префикс, поэтому блок прогресса не задваивается; незнакомые поля клиент игнорирует.
 
@@ -457,6 +546,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > провайдера, нужные только для реплея истории в API Anthropic. Поле `reasoning` (текст рассуждений)
 > отдаётся как раньше; строковый `content` при наличии `parts` собирается **без** reasoning-блоков
 > (legacy-сообщения без `parts` — прежнее поведение).
+
+> **Модель хода в DTO (ADR-118 §1/§2).** Сообщение в `GET /sessions/:id/messages`, `GET /sessions/:id` и событиях несёт аддитивные поля: `ord` — монотонный порядок записи в историю сессии (выдаётся при материализации, **не** перенумеровывается при вставке/удалении; по нему клиент упорядочивает ленту), `turn_id` — идентификатор хода, `step_index` — индекс шага внутри хода (0-based; у `user`-реплик не задан), `status` — `streaming`\|`completed`\|`cancelled`\|`error` («финал» = смена статуса, а не новый объект). `seq`/позиция остаются позиционными (`§«Порядок и идемпотентность»` ADR-118), `index` в DTO — позиция в массиве для существующих потребителей.
+> **Адресация мутаций — по индексу (остаток ADR-118 §7).** `PATCH /messages/:sessionId/:index/{toggle,pin}`, `DELETE /messages/:sessionId/:index`, `POST /messages/:sessionId/:index/retry`, `GET .../debug` и `POST /messages/:sessionId/batch {indices[]}` пока адресуют сообщение **позицией** в истории. Решение ADR-118 §7 (адресация только по `id`) — **не реализовано**; до него UI пересчитывает индекс из позиции сообщения в актуальном массиве (стабильный ключ React-списка — `id`).
 
 ### 5.6.1 Вложения сообщений — `/api/v2/sessions/:id/attachments*` (оба, ADR-115)
 
@@ -530,9 +622,9 @@ multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404
 | POST | `/api/v2/attachments` | оба | core — `requireAuth`; managed — `requireAuth` + service-key scope `events:ingest` | staging-загрузка файла вне сессии → **201** `{id, blobPath, sha256, mime, size, name?}` |
 | GET / HEAD | `/api/v2/attachments/:sha256` | оба | core — `requireAuth`; managed — `requireAuth` + service-key scope `events:ingest` | байты вложения **по sha256** (outbound-контур шлюзов): `200` (поток) с `Content-Type`, `Content-Length`, `Cache-Control: private, no-store`; `HEAD` — те же заголовки без тела; `404 NOT_FOUND` — объекта нет либо sha не 64 hex (существование не раскрывается) |
 
-**Outbound-вложения ответа — `stream.done.attachments` + раздача по sha (ADR-115).** Шлюзу
+**Outbound-вложения ответа — `step.finished.attachments` + раздача по sha (ADR-115 × ADR-118).** Шлюзу
 (Telegram/VK) не нужен доступ к сессии, чтобы отправить финальные вложения ответа наружу: событие
-`stream.done` (SSE-стрим `POST /sessions/:id/prompt` и `GET /sessions/:id/events`, §5.5) несёт
+`step.finished` (канал сессии, §3.3; прежнее `stream.done.attachments` удалено, ADR-118 §4) несёт
 **аддитивное** поле
 
 ```ts
@@ -580,7 +672,7 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 | POST | `/api/v2/queue/:sessionId/retry-now` | оба | auth | Немедленный повтор при backoff |
 | POST | `/api/v2/queue/:sessionId/cancel-retry` | оба | auth | Отменить повторные попытки |
 
-> **`steer` из очереди (ADR-104).** В отличие от `POST /sessions/:id/prompt` с `mode:'steer'` (создаёт новое сообщение), `POST /queue/:sessionId/steer` **переносит** уже стоящее в очереди сообщение в текущий ход. Адресация — по серверному `id` (приоритет) или `index`; порядок: сначала постановка в `steerInbox`, и только при успехе — снятие из `pendingMessages` по `id` и удаление user-копии из истории по `metadata.stream_id` (активный стрим не трогается) — при 429 очередь и история остаются нетронутыми. Сообщение текущего хода отправить «в разрыв» нельзя (`409 CONFLICT`); кнопка в UI показывается только при активном ходе, без него — `409 NO_ACTIVE_TURN` (сообщение не теряется). Событие `message.queued` несёт аддитивное `message_id` (id pending-сообщения) — UI адресует строки очереди по нему, а не по индексу. Legacy `?index=abc` (нецелый/отрицательный) → `400 VALIDATION_ERROR`, а не «вся очередь». Доступ — граничный prefix-guard (`createSessionAccessGuard`), новых проверок в обработчике нет.
+> **`steer` из очереди (ADR-104).** В отличие от `POST /sessions/:id/prompt` с `mode:'steer'` (создаёт новое сообщение), `POST /queue/:sessionId/steer` **переносит** уже стоящее в очереди сообщение в текущий ход. Адресация — по серверному `id` (приоритет) или `index`; порядок: сначала постановка в `steerInbox`, и только при успехе — снятие из `pendingMessages` по `id` и удаление user-копии из истории по `metadata.stream_id` (активный стрим не трогается) — при 429 очередь и история остаются нетронутыми. Сообщение текущего хода отправить «в разрыв» нельзя (`409 CONFLICT`); кнопка в UI показывается только при активном ходе, без него — `409 NO_ACTIVE_TURN` (сообщение не теряется). Событие `message.queued` удалено (ADR-118) — строки очереди UI адресует по `messageId`: его отдаёт `202`-подтверждение и адресное `message.accepted`, а состояние очереди приходит `queue.state` (§3.3). Legacy `?index=abc` (нецелый/отрицательный) → `400 VALIDATION_ERROR`, а не «вся очередь». Доступ — граничный prefix-guard (`createSessionAccessGuard`), новых проверок в обработчике нет.
 
 ### 5.8 Projects — `/api/v2/projects`
 
@@ -1458,7 +1550,7 @@ managed (backend) — только `ADMIN`, core (standalone) — единый `
 глобально по инстансу, регистронезависимо), `description?`, `url` (только http(s); по умолчанию —
 `https` + адресная политика `egress.webhooks` (ADR-099): `deny` приватных/loopback-адресов по `list`,
 разрешение — через `exceptions`; `mode:"off"` — только dev, снимает и требование `https`), `events: string[]` (паттерны: точный тип
-`stream.done` либо префикс `session.*`; пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), `enabled`,
+(`step.finished`, `turn.finished`, `session.*` …) либо префикс `prefix.*`; пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), `enabled`,
 `secretPrefix`, `createdBy`/`createdAt`, `lastDeliveryAt?`/`lastStatus?`, `disabledAt?`.
 **Доставка:** POST `{id, type, createdAt, data}` с заголовками `X-Synth-Event`/`X-Synth-Delivery`/
 `X-Synth-Signature`; HMAC-SHA256 (`t=<unix>,v1=<hex>`, окно timestamp 300 c); retry/backoff
@@ -1474,7 +1566,7 @@ managed (backend) — только `ADMIN`, core (standalone) — единый `
 # Создать подписку (ADMIN). Секрет придёт один раз в поле "secret" (whsec_…).
 curl -X POST http://localhost:5000/api/v2/webhooks \
   -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
-  -d '{"label":"ci-listener","url":"https://ci.example.com/synth","events":["session.*","stream.done"]}'
+  -d '{"label":"ci-listener","url":"https://ci.example.com/synth","events":["session.*","step.finished"]}'
 
 # Провести тестовую доставку и посмотреть журнал.
 curl -X POST http://localhost:5000/api/v2/webhooks/whk_<...>/test \

@@ -223,21 +223,39 @@ describe('Гибридный режим: локальный core + реальн�
     expect(ses.origin).toBe('local');
 
     fakeProvider.lastMessages = [];
-    const promptRes = await coreApi(`/api/v2/sessions/${ses.id}/prompt`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: 'привет из локального core' }),
+    // ADR-118 §3: приём сообщения — `202 {messageId, mode, position}`; поток хода
+    // в теле ответа больше не возвращается (SSE нет), наблюдение — по шине.
+    const turnEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const unsubTurn = core.eventBus.subscribe(ses.id, (e) => {
+      turnEvents.push({ type: e.type, data: (e.data ?? {}) as Record<string, unknown> });
     });
-    expect(promptRes.status).toBe(200);
-    const text = await promptRes.text();
+    try {
+      const promptRes = await coreApi(`/api/v2/sessions/${ses.id}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'привет из локального core' }),
+      });
+      expect(promptRes.status).toBe(202);
+      const accepted = (await promptRes.json()) as { messageId?: string; mode?: string };
+      expect(accepted.messageId).toBeTruthy();
+      expect(accepted.mode).toBe('queue');
 
-    const events = text.split('\n')
-      .filter((l) => l.startsWith('data: '))
-      .map((l) => JSON.parse(l.slice(6))) as Array<{ type: string; data: Record<string, unknown> }>;
-
-    const done = events.find((e) => e.type === 'stream.done');
-    expect(done).toBeDefined();
-    expect(done!.data.content).toContain('Ответ fake-провайдера');
+      // ADR-118 §4: `stream.done` удалён — финал хода несёт `turn.finished`,
+      // текст ответа — `message.added` финального assistant-сообщения.
+      await vi.waitFor(
+        () => {
+          expect(turnEvents.some((e) => e.type === 'turn.finished')).toBe(true);
+          const assistant = turnEvents.find(
+            (e) => e.type === 'message.added' && e.data.role === 'assistant',
+          );
+          expect(assistant).toBeDefined();
+          expect(String(assistant!.data.content)).toContain('Ответ fake-провайдера');
+        },
+        { timeout: 15_000, interval: 100 },
+      );
+    } finally {
+      unsubTurn();
+    }
 
     // FakeProvider реально вызван — контент прошёл через backend LLM Proxy.
     // lastMessages может быть перезаписан фоновым auto-title (второй вызов),

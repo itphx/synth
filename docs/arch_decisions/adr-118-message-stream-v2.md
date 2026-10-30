@@ -1,8 +1,8 @@
 # ADR-118: Поток сообщений v2 — ход как последовательность шагов
 
-> **Статус:** ⚠️ Частично — решение принято 2026-10-30, **реализация не начата**; остаток — этапы 1–5 плана внедрения (см. «План внедрения»).
+> **Статус:** ⚠️ Частично — решение принято 2026-10-30, **этапы 1–4 реализованы** (`feat(shared,core,storage)` + `feat(core)` от 2026-10-30: контракты и хранение, контракт приёма `202`, модель хода на backend, миграция данных, UI на одном источнике сообщений); остаток — **этап 5** (внешние потребители и релиз: SDK **major**, публичный OpenAPI, шлюзы, webhook-подписки, релизная волна) и два отложенных пункта из этапов 2/4 — адресация мутаций по `id` (§7) и удаление `message.added` (§4, пока публикуется). См. «Статус в коде».
 > **Дата:** 2026-10-30
-> **Парные документы (as-built, появятся после реализации):** [API_V2.md](../API_V2.md) §5.5 (приём и события сессии), [packages/ui/AGENTS.md](../../packages/ui/AGENTS.md) («Чат: отправка во время хода и очередь»)
+> **Парные документы (as-built):** [API_V2.md](../API_V2.md) §3 «Транспорт событий» + §3.3 «Поток хода v2» (события и их payload'ы, гейт `messageModel=2`, догон), §5.4 (`GET /api/v2/meta`), §5.5 (контракт приёма и DTO сообщения); [packages/ui/AGENTS.md](../../packages/ui/AGENTS.md) («Чат: поток сообщений v2»); [packages/core/AGENTS.md](../../packages/core/AGENTS.md); [packages/shared/AGENTS.md](../../packages/shared/AGENTS.md); [packages/storage-postgres/AGENTS.md](../../packages/storage-postgres/AGENTS.md)
 > **Связано:** [ADR-009](./adr-009-session-event-bus.md) (шина сессии), [ADR-017](./adr-017-api-v2-hono.md) (контракт HTTP), [ADR-022](./adr-022-typescript-stack-runner.md) (движки stateless), [ADR-024](./adr-024-eventhub-transport.md) (единый транспорт), [ADR-039](./adr-039-plan-in-project.md) (план и состояние), [ADR-041](./adr-041-llm-error-taxonomy.md) (строки движка), [ADR-042](./adr-042-hybrid-mode.md) (гибрид), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md) (PWA), [ADR-052](./adr-052-public-api-platform.md) (публичный API, SDK, webhooks), [ADR-087](./adr-087-gateways.md) и [ADR-103](./adr-103-gateway-core-channel-contract.md) (шлюзы), [ADR-091](./adr-091-backup-restore-transfer.md) и [ADR-092](./adr-092-instance-lifecycle-maintenance.md) (бэкап и миграции), [ADR-096](./adr-096-storage-layer.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-116](./adr-116-instance-state-and-blob-ports.md) (слой хранения, PostgreSQL), [ADR-104](./adr-104-mid-turn-steering.md) (вмешательство в ход), [ADR-115](./adr-115-multimodal-input.md) (части сообщений и вложения)
 
 ## Контекст и проблема
@@ -283,17 +283,31 @@
 
 ## Статус в коде
 
-Реализация **не начата** (решение принято 2026-10-30). Остаток — этапы 1–5 плана внедрения; каждый
-этап меняет публичный контракт, поэтому промежуточных релизов с частичным переходом не будет.
-Существующие точки, которые предстоит заменить: `packages/core/src/server/routes/sessions.ts`
-(роут `POST /:id/prompt` — SSE-ответ; `GET /:id/messages` — порядок массива),
-`packages/core/src/queue/processor.ts` (`enqueueSteerMessage`, `message.queued`),
-`packages/core/src/engine/orchestrator/persistence.ts` (`message.added` с усечённым контентом),
-`packages/core/src/engine/orchestrator/phases/process-finalize.ts` (персист финального сообщения),
-`packages/core/src/events/bus.ts` (буферизация и догон), `packages/core/src/server/routes/messages.ts`
-и `packages/core/src/remote/client.ts` (адресация мутаций по `index`),
-`packages/ui/src/stores/chatStore.ts` (`streamingBySession` / `messagesBySession`),
-`packages/core/src/engine/context/disabled-turns.ts` (граница хода по соседству в массиве).
+**Этапы 1–4 реализованы** (2026-10-30); остаток — этап 5 и два отложенных пункта.
+
+| Этап | Состояние | Где |
+|---|---|---|
+| 1 — приём, порядок, транспорт | ✅ | `shared/types/message-stream.ts` (`PromptAcceptedResponse`, `MessageStatus`, payload'ы событий, `InstanceCapabilities`, `supportsMessageModel`, `MESSAGE_MODEL_QUERY_PARAM`), `shared/types/message.ts` (`ord`/`turnId`/`stepIndex`/`status`), `shared/types/bus-events.ts` (новые типы событий, `BusEvent.recipient`/`eventSeq`); `core/events/bus.ts` (адресная доставка по `recipient`, `eventSeq`, кольцевой журнал `journalSince`, константы гейта), `core/server/routes/sessions.ts` (`POST /:id/prompt` → всегда `202`, гибрид проксирует только `202`), `core/queue/processor.ts` (`message.accepted` адресно, `queue.state`, `message.delivered`, `ord` при материализации) |
+| 2 — модель хода на backend | ✅ (кроме `message.added`, см. ниже) | `core/engine/orchestrator/turn-events.ts` (единая публикация `turn.*`/`step.*`/`part.*`, детерминированные `partId`), `core/engine/orchestrator.ts` (`turn.started`, шаг = вызов LLM, инкрементальный персист черновика, `step.finished` при прерывании), `core/engine/orchestrator/stream-persistence.ts` (черновик со статусом `streaming` → терминальный), `phases/process-finalize.ts` (финальный шаг: статус, вложения, `turn.finished`), `core/server/serialize.ts` (`ord`/`turn_id`/`step_index`/`status` в DTO), `core/server/routes/meta.ts` + монтирование в core и backend (`GET /api/v2/meta`), гейт `messageModel=2` в `core/server/app/{ws-events,sse-events}.ts` и `backend/app/{listen,sse-events}.ts` (WS — close `1008`, SSE — `426`), `core/remote/event-bridge.ts` (передаёт `messageModel=2` удалённой стороне) |
+| 3 — миграция | ✅ | `core/storage/migrations.ts` (`migrateMessageStreamV2`, маркер `message-stream-v2`, построчно через `updateMessage`; idempotent), `core/storage/instance-meta.ts` (запуск), `core/storage/message-write.ts` (`nextOrd`, выдача при append), `core/storage/file-store.ts`, `core/storage/memory/sessions.ts`, `core/storage/ports/session-repository.ts`, `storage-postgres/src/migrations/029-message-stream-v2.ts` (`ord`/`turn_id`/`step_index`/`status`, индекс `(session_id, ord)`), `storage-postgres/src/ports/sessions{,-mapping}.ts` (`ord` = `MAX(ord)+1` под транзакцией, `COALESCE` в `updateMessage`, `save()` не перенумеровывает) |
+| 4 — UI | ✅ (адресация мутаций по `id` — нет, см. ниже) | `ui/stores/chatStore.ts` (`streamingBySession` нет — один источник `messagesBySession` + `ActiveTurn`, сортировка по `ord`), `ui/stores/transportStore.ts` (обработка `message.accepted`/`queue.state`/`message.delivered`/`turn.*`/`step.*`/`part.*`, `lastEventSeqBySession` для `since`, гейт `supportsMessageModel` + текст `chat.error.messageModelMismatch`), `ui/lib/messageParts.ts` (части, upsert, `buildPartsView`), `ui/lib/api/{meta,transport}.ts` (домен `/meta`, `id:` SSE-кадра, `?since=`), `ui/components/chat/MessageList.tsx` (склейка сегментов по `turn_id`, ключ — `id`) |
+| 5 — внешние потребители и релиз | ⏳ | остаток: шлюзы (`synth-gateway-telegram`, VK, MAX) на `step.finished` вместо `stream.done`, `@itphx/synth-sdk` (**major**), публичный OpenAPI, webhook-подписки; `GET /api/v2/meta` уже есть, гейт версии клиента на сервере уже есть (сборка UI не блокируется — UI показывает ошибку несовместимости) |
+
+**Отложенные пункты (решение есть — реализации нет).**
+
+1. **Адресация мутаций сообщений — только по `id` (§7).** Роуты `/messages/:sessionId/:index/*`
+   и `POST /messages/:sessionId/batch {indices[]}` по-прежнему адресуют позицию; SDK/DTO содержат
+   `index` (позиция в массиве). UI пересчитывает индекс из актуального массива, ключ списка — `id`.
+   Зафиксировано в [API_V2.md](../API_V2.md) §5.6.
+2. **`message.added` не удалён (§4).** Событие публикуется с прежней формой (усечённый до 500
+   символов текст) для финального assistant-сообщения (`engine/orchestrator/persistence.ts`),
+   сообщений вставок вложений тулов и сообщений дочерних сессий; клиенты читают его как
+   совместимость. Удаление требует перевода этих трёх мест на `message.delivered` +
+   `step.finished`/`part.updated`.
+
+**Остаточное расхождение, важное для эксплуатации.** Сессионный SSE
+`GET /api/v2/sessions/:id/events` (core-only) не имеет ни гейта `messageModel`, ни нумерации
+`id:` — контракт наблюдения держится на WS и глобальном SSE.
 
 ## История
 
@@ -301,3 +315,12 @@
   адресные события, `Message.ord` как монотонный порядок при сохранении позиционного `seq`,
   контракт приёма `202 {messageId, mode, position}`, догон по журналу событий, адресация мутаций
   только по `id`, `GET /api/v2/meta` с fail-closed, миграция в один релиз без down-миграций.
+- 2026-10-30 — реализованы этапы 1–4: контракты `shared` (`message-stream.ts`, `ord`/`turnId`/
+  `stepIndex`/`status`, `recipient`/`eventSeq`), шина с адресной доставкой и журналом догона,
+  `POST /:id/prompt` → всегда `202`, `GET /api/v2/meta`, гейт `messageModel=2` (WS `1008`, SSE `426`),
+  `turn.*`/`step.*`/`part.*` вместо `stream.chunk|usage|done|interrupted` и `message.injected|queued`,
+  вложения ответа `stream.done.attachments` → `step.finished.attachments`, инкрементальный персист
+  черновика, миграция данных `message-stream-v2` + PostgreSQL-миграция `029`, UI на одном источнике
+  сообщений (части, склейка по `turn_id`, догон по `eventSeq`). Остаток — этап 5 и отложенные
+  пункты (`message.added`, адресация мутаций по `id`) — см. «Статус в коде».
+

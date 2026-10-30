@@ -187,8 +187,6 @@ export async function handleDebugSystemMessage(
     { turnId, stepIndex: 0, status: 'completed', messageId: stepMessageId },
   );
 
-  const updatedSession = await deps.sessionManager.getSession(session.id);
-
   const chunkStats = streamTiming.snapshot();
   // ADR-118 §4: `stream.done` удалён — шаг закрывает `step.finished`, ход —
   // `turn.finished`.

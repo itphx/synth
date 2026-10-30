@@ -157,55 +157,51 @@ describe('transportStore dispatcher: stream.error → финальная оши�
     expect(useChatStore.getState().finalErrorBySession['s1']).toBeUndefined()
   })
 
-  it('новый stream.start сбрасывает финальную ошибку', () => {
+  it('новый turn.started сбрасывает финальную ошибку', () => {
     dispatch(makeEvent('stream.error', 's1', {
       stream_id: 'st1', error: 'boom', error_type: 'server_error', can_retry: false,
     }))
     expect(useChatStore.getState().finalErrorBySession['s1']).not.toBeNull()
 
-    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st2' }))
+    dispatch(makeEvent('turn.started', 's1', { turnId: 't2', messageId: 'm-user' }))
     expect(useChatStore.getState().finalErrorBySession['s1']).toBeNull()
   })
 
-  it('stream.chunk сбрасывает финальную ошибку', () => {
+  it('part.delta сбрасывает финальную ошибку', () => {
     dispatch(makeEvent('stream.error', 's1', {
       stream_id: 'st1', error: 'boom', error_type: 'timeout', can_retry: false,
     }))
 
-    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st2' }))
-    dispatch(makeEvent('stream.chunk', 's1', { stream_id: 'st2', content: 'x' }))
-    expect(useChatStore.getState().finalErrorBySession['s1']).toBeNull()
-  })
-
-  it('stream.done сбрасывает финальную ошибку', () => {
-    dispatch(makeEvent('stream.error', 's1', {
-      stream_id: 'st1', error: 'boom', error_type: 'server_error', can_retry: false,
-    }))
-
-    dispatch(makeEvent('stream.done', 's1', { stream_id: 'st2', content: '' }))
+    dispatch(makeEvent('step.started', 's1', { turnId: 't2', stepIndex: 0, messageId: 'm2' }))
+    dispatch(makeEvent('part.delta', 's1', { messageId: 'm2', partId: 'msg:text:0', field: 'text', delta: 'x' }))
     expect(useChatStore.getState().finalErrorBySession['s1']).toBeNull()
   })
 })
 
-describe('transportStore dispatcher: tool_call.started → стрим сразу виден (регресс c11ece3f)', () => {
-  it('startStream + tool_call.started → hasContent=true и live-вызов в стриме', () => {
-    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1', agent_role: 'developer' }))
-    expect(useChatStore.getState().streamingBySession['s1']!['st1']!.hasContent).toBe(false)
-
+describe('transportStore dispatcher: tool_call.started → вызов виден в ходе (ADR-118 §1)', () => {
+  it('step.started + tool_call.started создают live-часть tool_use', () => {
+    dispatch(makeEvent('turn.started', 's1', { turnId: 't1', messageId: 'm-user' }))
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1', agentRole: 'fixer' }))
     dispatch(makeEvent('tool_call.started', 's1', {
-      stream_id: 'st1',
       call_id: 'call-1',
       name: 'read_file',
       arguments: { path: 'a.ts' },
       iteration: 0,
     }))
 
-    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
-    expect(st.hasContent).toBe(true)
-    expect(st.toolCalls).toHaveLength(1)
-    expect(st.toolCalls[0]).toMatchObject({ callId: 'call-1', name: 'read_file', status: 'running' })
-    // Плейсхолдер монтируется фильтром MessageList `isStreaming && hasContent`.
-    expect(st.isStreaming && st.hasContent).toBe(true)
+    const parts = useChatStore.getState().partsBySession['s1']!['m1']!
+    expect(parts['call-1']).toMatchObject({ id: 'call-1', type: 'tool_use' })
+    expect(parts['call-1']!.data).toMatchObject({ name: 'read_file', status: 'running' })
+
+    // Результат приходит отдельным событием и патчит ту же часть.
+    dispatch(makeEvent('tool_call.result', 's1', {
+      call_id: 'call-1',
+      result: { content: 'ok' },
+    }))
+    expect(useChatStore.getState().partsBySession['s1']!['m1']!['call-1']!.data).toMatchObject({
+      status: 'done',
+      result: { content: 'ok' },
+    })
   })
 })
 

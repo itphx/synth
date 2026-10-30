@@ -36,18 +36,26 @@ function makeClient(allSessions = false) {
 }
 
 describe('EventHub — автоподписка на дочерние сессии', () => {
-  it('подписывает клиента на child из session.created родителя и доставляет его stream.usage', async () => {
+  it('подписывает клиента на child из session.created родителя и доставляет его step.finished', async () => {
     const { eventBus, hub } = makeHub(['parent']);
     const { client, received } = makeClient();
     await hub.registerClient(client);
 
     eventBus.publish('parent', 'session.created', { id: 'child-1', parentId: 'parent' });
-    eventBus.publish('child-1', 'stream.usage', { session_id: 'child-1', outputTokens: 42 });
+    // ADR-118 §4: `stream.usage` удалён — расход токенов шага несёт `step.finished`.
+    eventBus.publish('child-1', 'step.finished', {
+      turnId: 'turn-1',
+      stepIndex: 0,
+      messageId: 'msg-child-1',
+      status: 'completed',
+      usage: { outputTokens: 42 },
+    });
 
-    const usage = received.find((e) => e.type === 'stream.usage');
-    expect(usage).toBeDefined();
-    expect(usage!.sessionId).toBe('child-1');
-    expect(usage!.data.session_id).toBe('child-1');
+    const step = received.find((e) => e.type === 'step.finished');
+    expect(step).toBeDefined();
+    expect(step!.sessionId).toBe('child-1');
+    expect(step!.data.messageId).toBe('msg-child-1');
+    expect(step!.data.usage).toEqual({ outputTokens: 42 });
   });
 
   it('подписывает клиента на child из child.session.updated родителя', async () => {
@@ -56,9 +64,15 @@ describe('EventHub — автоподписка на дочерние сесси
     await hub.registerClient(client);
 
     eventBus.publish('parent', 'child.session.updated', { session: { id: 'child-2' } });
-    eventBus.publish('child-2', 'stream.usage', { session_id: 'child-2', outputTokens: 7 });
+    eventBus.publish('child-2', 'step.finished', {
+      turnId: 'turn-2',
+      stepIndex: 0,
+      messageId: 'msg-child-2',
+      status: 'completed',
+      usage: { outputTokens: 7 },
+    });
 
-    expect(received.some((e) => e.type === 'stream.usage' && e.sessionId === 'child-2')).toBe(true);
+    expect(received.some((e) => e.type === 'step.finished' && e.sessionId === 'child-2')).toBe(true);
   });
 
   it('подписывает клиента на child из child.message.added (child_session_id)', async () => {
@@ -67,9 +81,14 @@ describe('EventHub — автоподписка на дочерние сесси
     await hub.registerClient(client);
 
     eventBus.publish('parent', 'child.message.added', { child_session_id: 'child-3' });
-    eventBus.publish('child-3', 'stream.usage', { session_id: 'child-3' });
+    eventBus.publish('child-3', 'step.finished', {
+      turnId: 'turn-3',
+      stepIndex: 0,
+      messageId: 'msg-child-3',
+      status: 'completed',
+    });
 
-    expect(received.some((e) => e.type === 'stream.usage' && e.sessionId === 'child-3')).toBe(true);
+    expect(received.some((e) => e.type === 'step.finished' && e.sessionId === 'child-3')).toBe(true);
   });
 
   it('подписывает клиента на child из subagent.resume.started', async () => {
@@ -78,9 +97,14 @@ describe('EventHub — автоподписка на дочерние сесси
     await hub.registerClient(client);
 
     eventBus.publish('parent', 'subagent.resume.started', { child_session_id: 'child-4' });
-    eventBus.publish('child-4', 'stream.usage', { session_id: 'child-4' });
+    eventBus.publish('child-4', 'step.finished', {
+      turnId: 'turn-4',
+      stepIndex: 0,
+      messageId: 'msg-child-4',
+      status: 'completed',
+    });
 
-    expect(received.some((e) => e.type === 'stream.usage' && e.sessionId === 'child-4')).toBe(true);
+    expect(received.some((e) => e.type === 'step.finished' && e.sessionId === 'child-4')).toBe(true);
   });
 
   it('не подписывает клиента на чужую/необъявленную сессию', async () => {
@@ -88,9 +112,14 @@ describe('EventHub — автоподписка на дочерние сесси
     const { client, received } = makeClient();
     await hub.registerClient(client);
 
-    eventBus.publish('foreign', 'stream.usage', { session_id: 'foreign' });
+    eventBus.publish('foreign', 'step.finished', {
+      turnId: 'turn-foreign',
+      stepIndex: 0,
+      messageId: 'msg-foreign',
+      status: 'completed',
+    });
 
-    expect(received.some((e) => e.type === 'stream.usage' && e.sessionId === 'foreign')).toBe(false);
+    expect(received.some((e) => e.type === 'step.finished' && e.sessionId === 'foreign')).toBe(false);
   });
 
   it('не подписывает на сессию, если клиент отписан (unregister)', async () => {
@@ -100,9 +129,14 @@ describe('EventHub — автоподписка на дочерние сесси
     hub.unregisterClient(client);
 
     eventBus.publish('parent', 'session.created', { id: 'child-5' });
-    eventBus.publish('child-5', 'stream.usage', { session_id: 'child-5' });
+    eventBus.publish('child-5', 'step.finished', {
+      turnId: 'turn-5',
+      stepIndex: 0,
+      messageId: 'msg-child-5',
+      status: 'completed',
+    });
 
-    expect(received.some((e) => e.type === 'stream.usage')).toBe(false);
+    expect(received.some((e) => e.type === 'step.finished')).toBe(false);
   });
 });
 
@@ -165,9 +199,15 @@ describe('EventHub — доставка сессий, созданных пос�
     );
     expect(session).not.toBeNull();
 
-    eventBus.publish(session!.id, 'stream.usage', { session_id: session!.id, outputTokens: 5 });
+    eventBus.publish(session!.id, 'step.finished', {
+      turnId: 'turn-mat-1',
+      stepIndex: 0,
+      messageId: 'msg-mat-1',
+      status: 'completed',
+      usage: { outputTokens: 5 },
+    });
 
-    expect(received.some((e) => e.type === 'stream.usage' && e.sessionId === session!.id)).toBe(true);
+    expect(received.some((e) => e.type === 'step.finished' && e.sessionId === session!.id)).toBe(true);
   });
 
   it('чужая сессия (другой владелец) не доставляется клиенту', async () => {
@@ -181,7 +221,12 @@ describe('EventHub — доставка сессий, созданных пос�
     );
     expect(session).not.toBeNull();
 
-    eventBus.publish(session!.id, 'stream.usage', { session_id: session!.id });
+    eventBus.publish(session!.id, 'step.finished', {
+      turnId: 'turn-foreign-owner',
+      stepIndex: 0,
+      messageId: 'msg-foreign-owner',
+      status: 'completed',
+    });
 
     expect(received.some((e) => e.sessionId === session!.id)).toBe(false);
   });
@@ -197,9 +242,15 @@ describe('EventHub — watch-all клиенты (ADR-052/ADR-089)', () => {
     const { client, received } = makeClient(true);
     await hub.registerClient(client);
 
-    eventBus.publish('foreign', 'stream.usage', { session_id: 'foreign', outputTokens: 1 });
+    eventBus.publish('foreign', 'step.finished', {
+      turnId: 'turn-watch',
+      stepIndex: 0,
+      messageId: 'msg-watch',
+      status: 'completed',
+      usage: { outputTokens: 1 },
+    });
 
-    expect(received.some((e) => e.type === 'stream.usage' && e.sessionId === 'foreign')).toBe(true);
+    expect(received.some((e) => e.type === 'step.finished' && e.sessionId === 'foreign')).toBe(true);
   });
 
   it('обычный клиент чужую сессию не получает (контроль)', async () => {
@@ -207,7 +258,12 @@ describe('EventHub — watch-all клиенты (ADR-052/ADR-089)', () => {
     const { client, received } = makeClient();
     await hub.registerClient(client);
 
-    eventBus.publish('foreign', 'stream.usage', { session_id: 'foreign' });
+    eventBus.publish('foreign', 'step.finished', {
+      turnId: 'turn-control',
+      stepIndex: 0,
+      messageId: 'msg-control',
+      status: 'completed',
+    });
 
     expect(received.some((e) => e.sessionId === 'foreign')).toBe(false);
   });
@@ -217,7 +273,8 @@ describe('EventHub — watch-all клиенты (ADR-052/ADR-089)', () => {
     const { client, received } = makeClient(true);
     await hub.registerClient(client);
 
-    eventBus.publish('mine', 'stream.done', { session_id: 'mine' });
+    // `stream.done` удалён (ADR-118 §4): финал хода — `turn.finished`.
+    eventBus.publish('mine', 'turn.finished', { turnId: 'turn-mine', status: 'completed' });
 
     expect(received.filter((e) => e.sessionId === 'mine').length).toBe(1);
   });
@@ -228,7 +285,12 @@ describe('EventHub — watch-all клиенты (ADR-052/ADR-089)', () => {
     await hub.registerClient(client);
     hub.unregisterClient(client);
 
-    eventBus.publish('foreign', 'stream.usage', { session_id: 'foreign' });
+    eventBus.publish('foreign', 'step.finished', {
+      turnId: 'turn-unregistered',
+      stepIndex: 0,
+      messageId: 'msg-unregistered',
+      status: 'completed',
+    });
 
     expect(received.length).toBe(0);
   });
