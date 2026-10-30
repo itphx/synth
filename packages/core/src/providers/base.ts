@@ -2,6 +2,7 @@ import type {
   AttachmentModality,
   TokenUsage,
   LLMChunk,
+  LLMReasoningBlock,
   LLMResponse,
   ReasoningLevel,
   Currency,
@@ -255,6 +256,13 @@ export interface LLMMessage {
   toolCallId?: string;
   toolUse?: Record<string, unknown>[];
   reasoning?: string;
+  /**
+   * Anthropic-протокол: блоки reasoning ответа (каждый thinking-блок со своей
+   * подписью, `redacted_thinking` — отдельными элементами). Заполнено —
+   * провайдер реплеит блоки отсюда; иначе используется прежний путь
+   * `reasoning` + `reasoningSignature`/`reasoningRedacted`.
+   */
+  reasoningBlocks?: LLMReasoningBlock[];
   /**
    * Anthropic-протокол: подпись thinking-блока и opaque-данные
    * `redacted_thinking` (см. `LLMChunk.reasoningSignature`). Незаполненные —

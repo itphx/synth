@@ -314,7 +314,10 @@ export const taskTool: ToolDefinition = {
     if ((contextMode === 'inherit' || contextMode === 'last_n') && childMessages.length > 0) {
       for (const msg of childMessages) {
         if (msg.hidden || msg.disabled) continue;
-        messages.push(messageToLLMMessage(msg));
+        // Роль ребёнка: при `inherit`/`last_n` в историю попадают реплики
+        // родителя (другой агент) — его thinking-блоки не прокидываются
+        // (ADR-117, как в `resumeInitialMessages`).
+        messages.push(messageToLLMMessage(msg, agentDef.id));
       }
     }
 

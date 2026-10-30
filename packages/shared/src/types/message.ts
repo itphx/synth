@@ -66,10 +66,25 @@ export interface MediaPartData {
   transcript?: string;
 }
 
+/**
+ * Метаданные части сообщения. Для `reasoning`-части — служебные данные
+ * Anthropic-протокола: подпись thinking-блока (`signature`) либо opaque-данные
+ * `redacted_thinking` (`redacted`). Поле аддитивное: старые сообщения его не
+ * имеют, а `data` остаётся текстом размышлений (UI/учёт токенов).
+ */
+export interface PartMetadata {
+  /** Подпись thinking-блока (своя у каждого блока). */
+  signature?: string;
+  /** Opaque-данные `redacted_thinking` (блок без текста). */
+  redacted?: string;
+}
+
 export interface Part {
   id: string;
   type: PartType;
   data: unknown;
+  /** Служебные метаданные части (Anthropic thinking: подпись/redacted). */
+  metadata?: PartMetadata;
 }
 
 // --- MessageOrigin ---

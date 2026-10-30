@@ -16,6 +16,7 @@ import { estimateTokens, DEFAULT_CHARS_PER_TOKEN } from '../context/token-ratio.
 import { estimateMediaTokens } from '../context/media-tokens.js';
 import type { InjectionPolicy } from '../security/prompt-injection.js';
 import { resolveAgentRoleAlias } from '../agents/index.js';
+import { reasoningBlocksOfMessage } from '../reasoning-blocks.js';
 
 /**
  * Роль для сравнения «своё/чужое»: алиас прежнего набора (`pm` → `leader`)
@@ -142,6 +143,10 @@ export function sessionMessagesToLlm(
       toolCallId: isPairedTool ? msg.toolCallId : undefined,
       // Reasoning чужого агента не прокидываем; у tool-сообщений его нет.
       reasoning: isOwnAssistant ? msg.reasoning : undefined,
+      // Anthropic: блоки thinking со своими подписями — восстанавливаются из
+      // частей сообщения (мульти-блочный ответ), fallback — legacy-поля
+      // `reasoning`+`reasoningSignature`. Без них tool-loop отвергается API.
+      reasoningBlocks: isOwnAssistant ? reasoningBlocksOfMessage(msg) : undefined,
       // Anthropic: подпись thinking-блока и opaque-данные `redacted_thinking`
       // персистятся вместе с сообщением — без них tool-loop отвергается API
       // («thinking не возвращён в историю»). Только «свои» assistant-сообщения.

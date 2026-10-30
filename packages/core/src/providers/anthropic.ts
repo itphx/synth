@@ -1,4 +1,4 @@
-import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import type { LLMChunk, LLMReasoningBlock, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import {
   BaseProvider,
   fetchModelsCatalog,
@@ -318,6 +318,21 @@ export class AnthropicProvider extends BaseProvider {
     let accumulatedReasoning = '';
     let accumulatedSignature: string | undefined;
     const accumulatedRedacted: string[] = [];
+    /**
+     * Anthropic может вернуть несколько thinking-блоков в одном ответе; подпись
+     * у каждого своя, поэтому блоки собираются по отдельности (порядок ответа).
+     * `redacted_thinking` — отдельные элементы без текста.
+     */
+    const accumulatedReasoningBlocks: LLMReasoningBlock[] = [];
+    let currentThinking: { text: string; signature?: string } | null = null;
+    const flushThinkingBlock = (): void => {
+      if (!currentThinking) return;
+      accumulatedReasoningBlocks.push({
+        text: currentThinking.text,
+        ...(currentThinking.signature !== undefined ? { signature: currentThinking.signature } : {}),
+      });
+      currentThinking = null;
+    };
     let accumulatedContent = '';
     let accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
@@ -414,6 +429,8 @@ export class AnthropicProvider extends BaseProvider {
                     clearTimeout(timer);
                   }
                 }
+                // Новый блок закрывает предыдущий thinking — блоки не склеиваем.
+                flushThinkingBlock();
                 if (block?.type === 'thinking') {
                   accumulatedReasoning = '';
                   // RouterAI отдаёт подпись прямо в старте блока, нередко пустой
@@ -421,10 +438,15 @@ export class AnthropicProvider extends BaseProvider {
                   accumulatedSignature = typeof block.signature === 'string'
                     ? block.signature
                     : undefined;
+                  currentThinking = {
+                    text: typeof block.thinking === 'string' ? block.thinking : '',
+                    ...(accumulatedSignature !== undefined ? { signature: accumulatedSignature } : {}),
+                  };
                 } else if (block?.type === 'redacted_thinking') {
                   // Opaque-блок: реплеится в историю verbatim (`data`).
                   if (typeof block.data === 'string' && block.data) {
                     accumulatedRedacted.push(block.data);
+                    accumulatedReasoningBlocks.push({ text: '', redactedData: block.data });
                   }
                 } else if (block?.type === 'tool_use') {
                   const blockIndex = chunkData.index as number;
@@ -454,6 +476,7 @@ export class AnthropicProvider extends BaseProvider {
                       clearTimeout(timer);
                     }
                     accumulatedReasoning += thinking;
+                    if (currentThinking) currentThinking.text += thinking;
                     yield {
                       content: '',
                       isFinal: false,
@@ -466,7 +489,10 @@ export class AnthropicProvider extends BaseProvider {
                   // правило, целиком) — она авторитетнее значения из старта
                   // блока. Пустая строка тоже валидна (RouterAI).
                   const signature = delta?.signature;
-                  if (typeof signature === 'string') accumulatedSignature = signature;
+                  if (typeof signature === 'string') {
+                    accumulatedSignature = signature;
+                    if (currentThinking) currentThinking.signature = signature;
+                  }
                 } else if (deltaType === 'text_delta') {
                   const text = String(delta?.text ?? '');
                   if (text) {
@@ -545,6 +571,7 @@ export class AnthropicProvider extends BaseProvider {
       }
 
       if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
+        flushThinkingBlock();
         debugCollector?.captureApiResponse({
           usage: accumulatedUsage,
           model: this.model,
@@ -557,6 +584,7 @@ export class AnthropicProvider extends BaseProvider {
           usage: accumulatedUsage,
           toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
           reasoning: accumulatedReasoning || undefined,
+          reasoningBlocks: accumulatedReasoningBlocks.length ? accumulatedReasoningBlocks : undefined,
           reasoningSignature: accumulatedSignature,
           reasoningRedacted: accumulatedRedacted.length ? accumulatedRedacted : undefined,
           model: this.model,
@@ -620,20 +648,41 @@ export class AnthropicProvider extends BaseProvider {
       if (msg.role === 'assistant') {
         const contentParts: Array<Record<string, unknown>> = [];
         if (thinkingEnabled) {
-          // Opaque redacted-блоки — verbatim, до видимого thinking.
-          for (const data of msg.reasoningRedacted ?? []) {
-            if (typeof data === 'string' && data) contentParts.push({ type: 'redacted_thinking', data });
-          }
-          const thinking = msg.reasoning ?? '';
-          const hasSignature = typeof msg.reasoningSignature === 'string';
-          // thinking отправляется, если есть текст или подпись; пустая подпись —
-          // валидное значение (`signature: ''`, RouterAI/qwen).
-          if (thinking || hasSignature) {
-            contentParts.push({
-              type: 'thinking',
-              thinking,
-              signature: msg.reasoningSignature ?? '',
-            });
+          const blocks = msg.reasoningBlocks;
+          if (blocks && blocks.length > 0) {
+            // Мульти-блочный ответ: каждый блок реплеится со своей подписью в
+            // исходном порядке (`redacted_thinking` — отдельными элементами).
+            for (const block of blocks) {
+              if (typeof block.redactedData === 'string' && block.redactedData) {
+                contentParts.push({ type: 'redacted_thinking', data: block.redactedData });
+                continue;
+              }
+              const text = block.text ?? '';
+              const hasSignature = typeof block.signature === 'string';
+              if (text || hasSignature) {
+                contentParts.push({
+                  type: 'thinking',
+                  thinking: text,
+                  signature: block.signature ?? '',
+                });
+              }
+            }
+          } else {
+            // Opaque redacted-блоки — verbatim, до видимого thinking.
+            for (const data of msg.reasoningRedacted ?? []) {
+              if (typeof data === 'string' && data) contentParts.push({ type: 'redacted_thinking', data });
+            }
+            const thinking = msg.reasoning ?? '';
+            const hasSignature = typeof msg.reasoningSignature === 'string';
+            // thinking отправляется, если есть текст или подпись; пустая подпись —
+            // валидное значение (`signature: ''`, RouterAI/qwen).
+            if (thinking || hasSignature) {
+              contentParts.push({
+                type: 'thinking',
+                thinking,
+                signature: msg.reasoningSignature ?? '',
+              });
+            }
           }
         }
         if (msg.content) {
@@ -923,6 +972,7 @@ export class AnthropicProvider extends BaseProvider {
     let accumulatedReasoning: string | undefined;
     let accumulatedSignature: string | undefined;
     const accumulatedRedacted: string[] = [];
+    const reasoningBlocks: LLMReasoningBlock[] = [];
 
     for (const block of contentBlocks) {
       const blockType = block.type as string | undefined;
@@ -940,9 +990,16 @@ export class AnthropicProvider extends BaseProvider {
         // Подпись thinking-блока: без возврата в историю следующий tool-loop
         // отвергается API. Пустая строка — валидна (RouterAI/qwen).
         accumulatedSignature = typeof block.signature === 'string' ? block.signature : undefined;
+        reasoningBlocks.push({
+          text: accumulatedReasoning,
+          ...(accumulatedSignature !== undefined ? { signature: accumulatedSignature } : {}),
+        });
         debugCollector?.captureReasoning(accumulatedReasoning);
       } else if (blockType === 'redacted_thinking') {
-        if (typeof block.data === 'string' && block.data) accumulatedRedacted.push(block.data);
+        if (typeof block.data === 'string' && block.data) {
+          accumulatedRedacted.push(block.data);
+          reasoningBlocks.push({ text: '', redactedData: block.data });
+        }
       }
     }
 
@@ -955,6 +1012,7 @@ export class AnthropicProvider extends BaseProvider {
       usage: parsedUsage,
       toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
       reasoning: accumulatedReasoning,
+      reasoningBlocks: reasoningBlocks.length ? reasoningBlocks : undefined,
       reasoningSignature: accumulatedSignature,
       reasoningRedacted: accumulatedRedacted.length ? accumulatedRedacted : undefined,
     };

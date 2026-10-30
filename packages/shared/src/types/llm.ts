@@ -17,12 +17,29 @@ export interface TokenUsage {
   reasoningTokens?: number;
 }
 
+/**
+ * Anthropic-протокол: один блок размышлений ответа. `signature` — подпись
+ * thinking-блока, `redactedData` — opaque-данные `redacted_thinking`
+ * (блок без видимого текста). Порядок элементов — порядок блоков в ответе.
+ */
+export interface LLMReasoningBlock {
+  text: string;
+  signature?: string;
+  redactedData?: string;
+}
+
 export interface LLMChunk {
   content: string;
   isFinal: boolean;
   usage?: TokenUsage;
   toolCalls?: Record<string, unknown>[];
   reasoning?: string;
+  /**
+   * Anthropic: все блоки размышлений ответа (по блокам, с подписями).
+   * `reasoning` — накопленный текст для UI/учёта токенов; подпись валидна
+   * только для своего блока, поэтому при нескольких блоках реплей идёт отсюда.
+   */
+  reasoningBlocks?: LLMReasoningBlock[];
   /**
    * Anthropic-протокол: подпись thinking-блока (`signature`). Без возврата этой
    * подписи в историю Anthropic отвергает следующий запрос tool-loop
@@ -45,6 +62,8 @@ export interface LLMResponse {
   usage: TokenUsage;
   toolCalls?: Record<string, unknown>[];
   reasoning?: string;
+  /** Anthropic: блоки размышлений ответа (см. `LLMChunk.reasoningBlocks`). */
+  reasoningBlocks?: LLMReasoningBlock[];
   /** Anthropic: подпись thinking-блока (см. `LLMChunk.reasoningSignature`). */
   reasoningSignature?: string;
   /** Anthropic: opaque-данные `redacted_thinking` (см. `LLMChunk.reasoningRedacted`). */

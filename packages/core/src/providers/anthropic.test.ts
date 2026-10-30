@@ -1111,3 +1111,94 @@ describe('Anthropic thinking — round-trip (ответ → следующий �
     });
   });
 });
+
+describe('Anthropic thinking — несколько блоков reasoning в одном ответе', () => {
+  it('non-stream: каждый thinking-блок со своей подписью попадает в reasoningBlocks', async () => {
+    const payload = {
+      content: [
+        { type: 'thinking', thinking: 'первый блок', signature: 'sig-1' },
+        { type: 'thinking', thinking: 'второй блок', signature: 'sig-2' },
+        { type: 'text', text: 'ответ' },
+      ],
+      usage: { input_tokens: 1, output_tokens: 2 },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await thinkingProvider().chat([makeMessage()]);
+    expect(response.reasoningBlocks).toEqual([
+      { text: 'первый блок', signature: 'sig-1' },
+      { text: 'второй блок', signature: 'sig-2' },
+    ]);
+  });
+
+  it('_formatMessages: reasoningBlocks реплеятся двумя thinking-блоками в исходном порядке', () => {
+    const provider = thinkingProvider() as unknown as AnthropicThinkingPrivate;
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        content: 'ответ',
+        reasoning: 'первый блок\n\n---\n\nвторой блок',
+        reasoningBlocks: [
+          { text: 'первый блок', signature: 'sig-1' },
+          { text: 'второй блок', signature: 'sig-2' },
+        ],
+        reasoningRedacted: ['opaque-multi'],
+      }),
+    ], true);
+
+    // redacted-элемент в reasoningBlocks идёт отдельным блоком на своей позиции;
+    // legacy reasoningRedacted при заполненном reasoningBlocks не дублируется.
+    expect(formatted[0]!.content).toEqual([
+      { type: 'thinking', thinking: 'первый блок', signature: 'sig-1' },
+      { type: 'thinking', thinking: 'второй блок', signature: 'sig-2' },
+      { type: 'text', text: 'ответ' },
+    ]);
+  });
+
+  it('_formatMessages: redacted-элемент reasoningBlocks реплеится redacted_thinking', () => {
+    const provider = thinkingProvider() as unknown as AnthropicThinkingPrivate;
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        content: 'ответ',
+        reasoningBlocks: [
+          { text: '', redactedData: 'opaque-r' },
+          { text: 'блок', signature: '' },
+        ],
+      }),
+    ], true);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'redacted_thinking', data: 'opaque-r' },
+      { type: 'thinking', thinking: 'блок', signature: '' },
+      { type: 'text', text: 'ответ' },
+    ]);
+  });
+
+  it('stream: два thinking-блока собираются в reasoningBlocks (разные подписи)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: 'sig-a' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'блок A' } },
+      { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '', signature: 'sig-b' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: 'блок B' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'signature_delta', signature: 'sig-b-final' } },
+      { type: 'content_block_start', index: 2, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'ответ' } },
+      { type: 'message_stop' },
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const chunks = await drainThinking(thinkingProvider().chatAsync([makeMessage()]));
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.reasoningBlocks).toEqual([
+      { text: 'блок A', signature: 'sig-a' },
+      { text: 'блок B', signature: 'sig-b-final' },
+    ]);
+    // Legacy-поле — подпись последнего блока (совместимость).
+    expect(final.reasoningSignature).toBe('sig-b-final');
+  });
+});

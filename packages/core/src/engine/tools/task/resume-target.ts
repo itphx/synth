@@ -116,5 +116,6 @@ export async function appendResumeMarker(
 export function resumeInitialMessages(child: Session): LLMMessage[] {
   return child.messages
     .filter((m) => !m.hidden && !m.disabled)
-    .map(messageToLLMMessage);
+    // Роль ребёнка: блоки thinking чужих агентов не прокидываются (ADR-117).
+    .map((message) => messageToLLMMessage(message, child.settings.agentRole));
 }

@@ -13,6 +13,7 @@ import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { DebugCollector } from '../../debug.js';
+import { makeReasoningParts, type ReasoningBlockLike } from '../reasoning-blocks.js';
 import { computeCacheHitRate, computeUsageCost, type UsageCost } from '../../providers/usage.js';
 import type { ObfuscationMapStore } from '../gateway/index.js';
 import { PLACEHOLDER_PATTERN } from '../gateway/index.js';
@@ -295,6 +296,13 @@ export type SaveAssistantMessageFn = (
    * `reasoning` — текст ровно одного блока (подпись не склеивается).
    */
   reasoningMeta?: { signature?: string; redacted?: string[] },
+  /**
+   * Anthropic: блоки reasoning ответа (каждый со своей подписью, redacted —
+   * отдельными элементами). Пишутся в `Message.parts` (`type: 'reasoning'`,
+   * `metadata.signature/redacted`), откуда история восстанавливает
+   * `LLMMessage.reasoningBlocks`. `reasoningMeta` остаётся legacy-fallback.
+   */
+  reasoningBlocks?: ReasoningBlockLike[],
 ) => Promise<string>;
 
 export async function saveAssistantMessage(
@@ -331,6 +339,8 @@ export async function saveAssistantMessage(
   extraParts?: Part[],
   /** Anthropic: подпись thinking-блока и opaque `redacted_thinking`. */
   reasoningMeta?: { signature?: string; redacted?: string[] },
+  /** Anthropic: все блоки reasoning ответа (пишутся в `parts`). */
+  reasoningBlocks?: ReasoningBlockLike[],
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
   const finalContent = content;
@@ -404,8 +414,9 @@ export async function saveAssistantMessage(
     role,
     seq: existing?.seq ?? 0, // filled by addMessage (или уже назначен черновиком)
     origin: 'local',
-    // ADR-115 (outbound): текст + медиа-части ответа (`send_attachment`).
-    parts: [makeTextPart(finalContent), ...(extraParts ?? [])],
+    // ADR-115 (outbound): текст + reasoning-блоки (со своими подписями
+    // Anthropic) + медиа-части ответа (`send_attachment`).
+    parts: [makeTextPart(finalContent), ...makeReasoningParts(reasoningBlocks), ...(extraParts ?? [])],
     content: finalContent,
     createdAt: nowISO(),
     disabled: false,

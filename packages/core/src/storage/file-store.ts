@@ -22,6 +22,8 @@ interface SerializedPart {
   id: string;
   type: string;
   data: unknown;
+  /** Anthropic thinking: подпись/redacted части (аддитивное поле). */
+  metadata?: Part['metadata'];
 }
 
 interface SerializedMessage {
@@ -177,6 +179,8 @@ function serializePart(part: Part): SerializedPart {
     id: part.id,
     type: part.type,
     data: part.data,
+    // Anthropic thinking: подпись блока/redacted — аддитивное поле части.
+    ...(part.metadata ? { metadata: part.metadata } : {}),
   };
 }
 
@@ -185,6 +189,7 @@ function deserializePart(data: SerializedPart): Part {
     id: data.id,
     type: data.type as Part['type'],
     data: data.data,
+    ...(data.metadata ? { metadata: data.metadata } : {}),
   };
 }
 
@@ -264,7 +269,13 @@ function deserializeMessage(data: SerializedMessage): Message {
     }
   }
 
-  const content = buildContentFromParts(parts);
+  // Reasoning-части — служебные данные протокола (подпись thinking-блока), а не
+  // текст сообщения: в `content` они не попадают, иначе после перезагрузки
+  // `<reasoning>…</reasoning>` подмешался бы к ответу модели. Legacy-ветка (без
+  // `parts`) сохраняет прежнее восстановление content из reasoning.
+  const content = hasParts
+    ? buildContentFromParts(parts.filter((part) => part.type !== 'reasoning'))
+    : buildContentFromParts(parts);
 
   return {
     id: data.id || generateId(),

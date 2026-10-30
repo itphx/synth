@@ -169,3 +169,144 @@ describe('ChatOrchestrator: reasoning_blocks без дублей (повтор �
     expect(blocks[0]!.text).toBe('Думаю');
   });
 });
+
+/**
+ * Провайдер Anthropic-подобного мульти-блочного ответа: в каждой итерации
+ * reasoning приходит несколькими блоками с разными подписями.
+ */
+class MockMultiBlockProvider extends BaseProvider {
+  static calls = 0;
+
+  static reset(): void {
+    MockMultiBlockProvider.calls = 0;
+  }
+
+  async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
+    return { content: 'Готово', model: this.model, usage: ZERO_USAGE };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _ct?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const call = MockMultiBlockProvider.calls++;
+    if (call === 0) {
+      yield {
+        content: '',
+        reasoning: 'блок A\n\n---\n\nблок B',
+        reasoningBlocks: [
+          { text: 'блок A', signature: 'sig-a' },
+          { text: 'блок B', signature: 'sig-b' },
+        ],
+        isFinal: true,
+        model: this.model,
+        usage: ZERO_USAGE,
+        toolCalls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'read_file', arguments: JSON.stringify({ path: 'missing.txt' }) },
+        }],
+      };
+      return;
+    }
+    yield {
+      content: 'Готово',
+      reasoning: 'блок C',
+      reasoningBlocks: [{ text: 'блок C', signature: 'sig-c' }],
+      isFinal: true,
+      model: this.model,
+      usage: ZERO_USAGE,
+    };
+  }
+
+  getProviderName(): string {
+    return 'mockmultiblock';
+  }
+}
+
+describe('ChatOrchestrator: мульти-блочная подпись reasoning', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    ProviderFactory.register('mockmultiblock', MockMultiBlockProvider);
+    MockMultiBlockProvider.reset();
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-multiblock-'));
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('mockmultiblock');
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('финальное сообщение сохраняет подписи всех блоков, история реплеит их', async () => {
+    const store = new FileStore({ dataDir: tmpDir });
+    const sessionManager = new SessionManager(store);
+    const eventBus = new EventBus();
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const project = projectStore.create('Reasoning', 'u1', { workspace: tmpDir });
+    await projectStore.save(project);
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => ({
+        name,
+        type: 'mockmultiblock',
+        baseUrl: '',
+        apiKey: '',
+        defaultModel: 'm',
+      }) as unknown as import('@itphx/synth-shared').ProviderConfig,
+      toolRegistry: createToolRegistry(),
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 } as PermissionConfig,
+      projectStore,
+      defaultWorkingDir: tmpDir,
+      contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
+      streamPersistIntervalMs: 2,
+    });
+    const session = await sessionManager.createSession({
+      title: 'Reasoning',
+      projectId: project.id,
+      settings: {
+        provider: 'mockmultiblock',
+        model: 'm',
+        systemPrompt: 'test',
+        agentRole: 'fixer',
+      },
+    });
+    const msg = makeUserMessage();
+    await sessionManager.addMessage(session.id, msg);
+
+    const published: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const processMessage = orchestrator.createProcessMessage();
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const userMsg = fresh.messages.find((m) => m.role === MessageRole.USER)!;
+    const result = await processMessage(
+      fresh,
+      userMsg,
+      new AbortController().signal,
+      (event, data) => published.push({ event, data }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(MockMultiBlockProvider.calls).toBe(2);
+
+    // Финальное сообщение: reasoning-части со своими подписями (все блоки хода).
+    const after = (await sessionManager.getSession(session.id))!;
+    const finalMessage = [...after.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    const reasoningParts = finalMessage.parts.filter((p) => p.type === 'reasoning');
+    expect(reasoningParts.map((p) => p.metadata?.signature)).toEqual(['sig-a', 'sig-b', 'sig-c']);
+    expect(reasoningParts.map((p) => p.data)).toEqual(['блок A', 'блок B', 'блок C']);
+
+    // История реплеит блоки через LLMMessage.reasoningBlocks.
+    const llm = ChatOrchestrator._sessionMessagesToLlm([finalMessage], 'fixer', 'user');
+    const assistant = llm.find((m) => m.role === 'assistant')!;
+    expect(assistant.reasoningBlocks).toEqual([
+      { text: 'блок A', signature: 'sig-a' },
+      { text: 'блок B', signature: 'sig-b' },
+      { text: 'блок C', signature: 'sig-c' },
+    ]);
+  });
+});

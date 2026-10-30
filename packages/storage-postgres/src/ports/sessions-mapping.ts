@@ -168,11 +168,13 @@ export function emptySessionChildren(): SessionChildren {
 
 // ── Сериализованные формы (как в JSON файловой реализации) ──────────────────
 
-/** Часть сообщения в форме хранения (`{id, type, data}`). */
+/** Часть сообщения в форме хранения (`{id, type, data}` + аддитивные `metadata`). */
 export interface SerializedPart {
   id: string;
   type: string;
   data: unknown;
+  /** Anthropic thinking: подпись/redacted части (аддитивное поле). */
+  metadata?: Part['metadata'];
 }
 
 /** Usage сообщения в форме хранения (snake_case — как в файловом backend). */
@@ -252,11 +254,22 @@ export function toNumberOrUndefined(value: unknown): number | undefined {
 }
 
 function serializePart(part: Part): SerializedPart {
-  return { id: part.id, type: part.type, data: part.data };
+  return {
+    id: part.id,
+    type: part.type,
+    data: part.data,
+    // Anthropic thinking: подпись блока/redacted — аддитивное поле части.
+    ...(part.metadata ? { metadata: part.metadata } : {}),
+  };
 }
 
 function deserializePart(data: SerializedPart): Part {
-  return { id: data.id, type: data.type as Part['type'], data: data.data };
+  return {
+    id: data.id,
+    type: data.type as Part['type'],
+    data: data.data,
+    ...(data.metadata ? { metadata: data.metadata } : {}),
+  };
 }
 
 // ── Сообщения ───────────────────────────────────────────────────────────────
@@ -376,7 +389,12 @@ export function deserializeMessage(row: MessageRow): Message {
     }
   }
 
-  const content = buildContentFromParts(parts);
+  // Reasoning-части — служебные данные протокола (подпись thinking-блока), а не
+  // текст сообщения: в `content` они не попадают (legacy-ветка без `parts`
+  // сохраняет прежнее восстановление content из reasoning).
+  const content = hasParts
+    ? buildContentFromParts(parts.filter((part) => part.type !== 'reasoning'))
+    : buildContentFromParts(parts);
   const usage = row.usage as SerializedUsage | undefined;
 
   return {

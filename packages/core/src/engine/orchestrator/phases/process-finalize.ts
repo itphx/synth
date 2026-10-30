@@ -16,6 +16,7 @@ import type {
   Message,
   Part,
   PromptMeta,
+  ReasoningBlock,
   ReasoningLevel,
   Session,
   TokenUsage,
@@ -95,7 +96,7 @@ export interface ProcessFinalizeState {
    */
   stepLimitExecuted?: boolean;
   lastIterationPromptChars: number;
-  allReasoning: Array<{ text: string; iteration: number }>;
+  allReasoning: ReasoningBlock[];
   allIntermediateTexts: Array<{ text: string; iteration: number }>;
   allToolCalls: Array<Record<string, unknown>>;
   /**
@@ -360,6 +361,8 @@ export async function runProcessFinalize(
       // сообщения состоит из одного блока (у склейки подпись принадлежала бы
       // последнему блоку).
       finalReasoningMeta,
+      // Блоки reasoning со своими подписями — в `parts` сообщения (мульти-блок).
+      allReasoning,
     );
 
     publishChunk('stream.cancelled', {
@@ -502,6 +505,8 @@ export async function runProcessFinalize(
     // Anthropic: подпись thinking-блока — иначе следующий ход tool-loop
     // отвергается API (thinking не возвращён в историю).
     finalReasoningMeta,
+    // Блоки reasoning со своими подписями — в `parts` сообщения (мульти-блок).
+    allReasoning,
   );
 
   // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)

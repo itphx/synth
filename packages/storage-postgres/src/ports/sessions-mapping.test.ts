@@ -289,3 +289,87 @@ describe('PG-маппинг сообщения: подпись thinking (Anthrop
     expect(JSON.parse(redacted as string)).toEqual(['opaque-1']);
   });
 });
+
+describe('PG-маппинг сообщения: части reasoning с metadata (Anthropic)', () => {
+  function makeMessage(overrides: Partial<Message> = {}): Message {
+    return {
+      id: 'msg-1',
+      role: 'assistant',
+      seq: 1,
+      origin: 'local',
+      parts: [],
+      content: 'answer',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...overrides,
+    } as Message;
+  }
+
+  const messageWithReasoningParts = (): Message => makeMessage({
+    parts: [
+      { id: 'p-text', type: 'text', data: 'ответ' },
+      { id: 'p-a', type: 'reasoning', data: 'блок A', metadata: { signature: 'sig-a' } },
+      { id: 'p-b', type: 'reasoning', data: 'блок B', metadata: { signature: 'sig-b' } },
+      // redacted_thinking — часть без текста, только opaque-данные.
+      { id: 'p-r', type: 'reasoning', data: '', metadata: { redacted: 'opaque-1' } },
+    ],
+    content: 'ответ',
+  });
+
+  it('serializeMessage кладёт metadata части в jsonb-форму', () => {
+    const row = serializeMessage(messageWithReasoningParts());
+    expect(row.parts).toEqual([
+      { id: 'p-text', type: 'text', data: 'ответ' },
+      { id: 'p-a', type: 'reasoning', data: 'блок A', metadata: { signature: 'sig-a' } },
+      { id: 'p-b', type: 'reasoning', data: 'блок B', metadata: { signature: 'sig-b' } },
+      { id: 'p-r', type: 'reasoning', data: '', metadata: { redacted: 'opaque-1' } },
+    ]);
+  });
+
+  it('round-trip: подписи блоков переживают запись/чтение, content без reasoning', () => {
+    const serialized = serializeMessage(messageWithReasoningParts());
+    const row = messageRow(messageWithReasoningParts(), 'sess-1');
+    const loaded = deserializeMessage({
+      ...(row as unknown as MessageRow),
+      parts: serialized.parts,
+    });
+
+    const reasoning = loaded.parts.filter((part) => part.type === 'reasoning');
+    expect(reasoning.map((part) => part.data)).toEqual(['блок A', 'блок B', '']);
+    // Подпись принадлежит своему блоку — порядок и значения сохранены.
+    expect(reasoning.map((part) => part.metadata)).toEqual([
+      { signature: 'sig-a' },
+      { signature: 'sig-b' },
+      { redacted: 'opaque-1' },
+    ]);
+
+    // `content` — только текст ответа: reasoning-части служебные и в строковую
+    // производную не подмешиваются.
+    expect(loaded.content).toBe('ответ');
+    expect(loaded.content).not.toContain('<reasoning>');
+  });
+
+  it('часть reasoning без metadata (legacy) читается как undefined', () => {
+    const legacy = makeMessage({
+      parts: [
+        { id: 'p-text', type: 'text', data: 'ответ' },
+        { id: 'p-old', type: 'reasoning', data: 'старый блок' },
+      ],
+      content: 'ответ',
+    });
+    const serialized = serializeMessage(legacy);
+    expect('metadata' in serialized.parts[1]!).toBe(false);
+
+    const row = messageRow(legacy, 'sess-1');
+    const loaded = deserializeMessage({
+      ...(row as unknown as MessageRow),
+      parts: serialized.parts,
+    });
+    const reasoning = loaded.parts.find((part) => part.type === 'reasoning')!;
+    expect(reasoning.data).toBe('старый блок');
+    expect(reasoning.metadata).toBeUndefined();
+    expect(loaded.content).toBe('ответ');
+  });
+});

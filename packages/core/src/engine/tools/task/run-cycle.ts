@@ -7,7 +7,7 @@
  * поведения.
  */
 import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock } from '@itphx/synth-shared';
-import type { Message, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
 import { buildDenyResult, executeToolDef } from '../tool-execution.js';
@@ -23,6 +23,7 @@ import { debug } from '../../../logger.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
 import { messageToLLMMessage } from './prompt.js';
 import { applySteerInjections, dropSteerInjections, isBackgroundNoticeMessage } from '../../steering/apply.js';
+import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
 import { requeueMessages } from '../../../queue/processor.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
@@ -414,7 +415,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
      */
     let subagentReasoningMeta: { signature?: string; redacted?: string[] } | undefined;
 
-    let allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
+    let allSubagentReasoning: ReasoningBlock[] = [];
     const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
     const allSubagentToolCalls: Array<{
       name: string; args: Record<string, unknown>; id?: string;
@@ -500,7 +501,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           role: MessageRole.ASSISTANT,
           seq: 0,
           origin: 'local',
-          parts: [makeTextPart(content)],
+          parts: [makeTextPart(content), ...makeReasoningParts(allSubagentReasoning)],
           content,
           createdAt: nowISO(),
           disabled: false,
@@ -711,6 +712,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // итерации — без возврата в историю провайдер отвергает следующий вызов.
       let reasoningSignature: string | undefined;
       let reasoningRedacted: string[] | undefined;
+      /** Anthropic: блоки reasoning этой итерации (каждый со своей подписью). */
+      let iterationReasoningBlocks: LLMReasoningBlock[] | undefined;
       // Опубликованные префиксы текста/размышлений **этой итерации** — по ним
       // считается приращение для `subagent.progress` (дельта, а не полный текст).
       let lastPublishedReasoning = '';
@@ -749,6 +752,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             }
             if (chunk.reasoningSignature !== undefined) reasoningSignature = chunk.reasoningSignature;
             if (chunk.reasoningRedacted?.length) reasoningRedacted = chunk.reasoningRedacted;
+            if (chunk.reasoningBlocks?.length) iterationReasoningBlocks = chunk.reasoningBlocks;
             // ADR-070 §2.6: usage и модель саб-агента для статистики родителя.
             // Провайдеры отдают в каждом чанке НАКОПИТЕЛЬНЫЙ usage (running total),
             // поэтому суммируем только финальный чанк итерации — иначе usage
@@ -964,12 +968,40 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // инструментов этого шага — иначе в UI (и в дочерней сессии) ломается
       // порядок: размышления идут на step N, а вызовы — на N+1.
       const stepIteration = iteration;
-      if (reasoning) {
-        // Тот же общий хелпер, что у основного стрима: кумулятивный reasoning
-        // не должен давать дубль при повторе в новой итерации.
-        allSubagentReasoning = appendReasoningBlock(allSubagentReasoning, reasoning, stepIteration);
+      // Блоки reasoning итерации: провайдер отдаёт их со своими подписями
+      // (мульти-блочный ответ Anthropic), иначе — legacy fallback на одно поле
+      // подписи (паритет с основным циклом).
+      const iterationBlocks: Array<{ text: string; signature?: string; redacted?: string }> =
+        iterationReasoningBlocks && iterationReasoningBlocks.length > 0
+          ? iterationReasoningBlocks.map((block) => ({
+            text: block.text,
+            ...(block.signature !== undefined ? { signature: block.signature } : {}),
+            ...(block.redactedData ? { redacted: block.redactedData } : {}),
+          }))
+          : [
+            ...(reasoningRedacted ?? []).map((data) => ({ text: '', redacted: data })),
+            ...(reasoning || reasoningSignature !== undefined
+              ? [{
+                text: reasoning,
+                ...(reasoningSignature !== undefined ? { signature: reasoningSignature } : {}),
+              }]
+              : []),
+          ];
+      if (iterationBlocks.length > 0) {
+        for (const block of iterationBlocks) {
+          // Тот же общий хелпер, что у основного стрима: кумулятивный reasoning
+          // не должен давать дубль при повторе в новой итерации.
+          allSubagentReasoning = appendReasoningBlock(allSubagentReasoning, block.text, stepIteration, {
+            ...(block.signature !== undefined ? { signature: block.signature } : {}),
+            ...(block.redacted !== undefined ? { redacted: block.redacted } : {}),
+          });
+        }
+        // Legacy-поля — только для одиночного блока (подпись принадлежит тексту).
         subagentReasoningMeta = allSubagentReasoning.length === 1
-          ? { signature: reasoningSignature, redacted: reasoningRedacted }
+          ? {
+            signature: allSubagentReasoning[0]!.signature,
+            redacted: allSubagentReasoning[0]!.redacted ? [allSubagentReasoning[0]!.redacted] : undefined,
+          }
           : undefined;
       }
 
@@ -1024,7 +1056,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             role: MessageRole.ASSISTANT,
             seq: 0,
             origin: 'local',
-            parts: [makeTextPart(accumulatedContent || '')],
+            parts: [makeTextPart(accumulatedContent || ''), ...makeReasoningParts(iterationBlocks)],
             content: accumulatedContent || '',
             createdAt: nowISO(),
             disabled: false,
@@ -1063,6 +1095,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         toolUse: toolCalls,
         // Anthropic: thinking tool-loop-сообщения обязан вернуться в историю.
         reasoning: reasoning || undefined,
+        reasoningBlocks: toLlmReasoningBlocks(iterationBlocks),
         reasoningSignature,
         reasoningRedacted,
       });

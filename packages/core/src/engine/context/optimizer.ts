@@ -7,6 +7,7 @@ import { info, warning } from '../../logger.js';
 import { GatewayProvider, ObfuscationMapStore } from '../gateway/index.js';
 import type { AuditLogger, LlmFilterRegistry, RateLimiter } from '../gateway/index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
+import { toCoreProviderConfig } from '../router/utils.js';
 
 export interface SummarizationResult {
   triggered: boolean;
@@ -44,31 +45,6 @@ export interface ContextOptimizerGatewayHooks {
    * тоже LLM-вызов, её видит фаза `pre_request` (`GatewayProvider._prepare`).
    */
   filters?: LlmFilterRegistry;
-}
-
-function toCoreProviderConfig(
-  shared: SharedProviderConfig,
-  model: string,
-): {
-  url: string;
-  apiKey: string;
-  model: string;
-  timeout?: number;
-  name?: string;
-  type?: string;
-  compatibility?: SharedProviderConfig['compatibility'];
-} {
-  return {
-    name: shared.name,
-    type: shared.type,
-    url: shared.baseUrl || '',
-    apiKey: shared.apiKey || '',
-    model,
-    timeout: shared.timeout,
-    // Провайдерский уровень совместимости; модель-уровень у суммаризации
-    // неизвестен (это aux-вызов) — недостающее доберут эвристики.
-    ...(shared.compatibility ? { compatibility: shared.compatibility } : {}),
-  };
 }
 
 export class ContextOptimizer {

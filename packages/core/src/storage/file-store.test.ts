@@ -300,6 +300,92 @@ describe('FileStore', () => {
     ]);
   });
 
+  it('Anthropic: мульти-блочная подпись (parts.metadata) переживает save → load', async () => {
+    const session = makeSession({
+      id: 'with-reasoning-parts',
+      messages: [
+        {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 1,
+          origin: 'local' as const,
+          parts: [
+            makeTextPart('ответ'),
+            { id: generateId(), type: 'reasoning' as const, data: 'блок A', metadata: { signature: 'sig-a' } },
+            { id: generateId(), type: 'reasoning' as const, data: 'блок B', metadata: { signature: 'sig-b' } },
+            // redacted_thinking — часть без текста, только opaque-данные.
+            { id: generateId(), type: 'reasoning' as const, data: '', metadata: { redacted: 'opaque-1' } },
+          ],
+          content: 'ответ',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          model: 'claude-sonnet-4',
+          provider: 'anthropic',
+        },
+      ],
+    });
+    await store.save(session);
+
+    // Подпись уезжает на диск рядом с частью (не в legacy-поля сообщения).
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'with-reasoning-parts.json'), 'utf-8'));
+    expect(raw.messages[0].parts[1].metadata).toEqual({ signature: 'sig-a' });
+    expect(raw.messages[0].parts[2].metadata).toEqual({ signature: 'sig-b' });
+    expect(raw.messages[0].parts[3].metadata).toEqual({ redacted: 'opaque-1' });
+    expect(raw.messages[0].reasoning_signature).toBe(undefined);
+
+    const loaded = await store.load('with-reasoning-parts');
+    const parts = loaded!.messages[0]!.parts.filter((part) => part.type === 'reasoning');
+    expect(parts.map((part) => part.data)).toEqual(['блок A', 'блок B', '']);
+    // Подпись принадлежит своему блоку — порядок и значения сохранены.
+    expect(parts.map((part) => part.metadata)).toEqual([
+      { signature: 'sig-a' },
+      { signature: 'sig-b' },
+      { redacted: 'opaque-1' },
+    ]);
+
+    // `content` — только текст ответа: reasoning-части служебные и в строковую
+    // производную не подмешиваются (раньше после перезагрузки появлялся
+    // `<reasoning>…</reasoning>`).
+    expect(loaded!.messages[0]!.content).toBe('ответ');
+    expect(loaded!.messages[0]!.content).not.toContain('<reasoning>');
+  });
+
+  it('Anthropic: reasoning-часть без metadata (legacy) читается как undefined', async () => {
+    const session = makeSession({
+      id: 'legacy-reasoning-part',
+      messages: [
+        {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 1,
+          origin: 'local' as const,
+          parts: [
+            makeTextPart('ответ'),
+            { id: generateId(), type: 'reasoning' as const, data: 'старый блок' },
+          ],
+          content: 'ответ',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+        },
+      ],
+    });
+    await store.save(session);
+
+    // В файле ключа `metadata` нет вовсе — это и есть legacy-формат части.
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'legacy-reasoning-part.json'), 'utf-8'));
+    expect('metadata' in raw.messages[0].parts[1]).toBe(false);
+
+    const loaded = await store.load('legacy-reasoning-part');
+    const reasoning = loaded!.messages[0]!.parts.find((part) => part.type === 'reasoning')!;
+    expect(reasoning.data).toBe('старый блок');
+    expect(reasoning.metadata).toBeUndefined();
+    expect(loaded!.messages[0]!.content).toBe('ответ');
+  });
+
   it('ADR-114: save → load сохраняет привязку к worktree (переживает рестарт)', async () => {
     const session = makeSession({
       id: 'with-worktree',

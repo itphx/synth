@@ -220,4 +220,67 @@ describe('messageToLLMMessage', () => {
     expect(llm.pinned).toBe(false);
     expect(llm.branchId).toBe('');
   });
+
+  it('Anthropic: блоки reasoning восстанавливаются из частей (resume/наследование)', () => {
+    const llm = messageToLLMMessage(msg(MessageRole.ASSISTANT, {
+      parts: [
+        { id: 'p1', type: 'text', data: 'ответ' },
+        { id: 'p2', type: 'reasoning', data: 'блок A', metadata: { signature: 'sig-a' } },
+        { id: 'p3', type: 'reasoning', data: 'блок B', metadata: { signature: 'sig-b' } },
+        { id: 'p4', type: 'reasoning', data: '', metadata: { redacted: 'opaque-1' } },
+      ],
+    }));
+
+    expect(llm.reasoningBlocks).toEqual([
+      { text: 'блок A', signature: 'sig-a' },
+      { text: 'блок B', signature: 'sig-b' },
+      { text: '', redactedData: 'opaque-1' },
+    ]);
+  });
+
+  it('Anthropic: legacy-поля сообщения — fallback, если reasoning-частей нет', () => {
+    const llm = messageToLLMMessage(msg(MessageRole.ASSISTANT, {
+      reasoning: 'старый блок',
+      reasoningSignature: 'sig-old',
+      reasoningRedacted: ['opaque-old'],
+    }));
+
+    expect(llm.reasoningBlocks).toEqual([
+      { text: '', redactedData: 'opaque-old' },
+      { text: 'старый блок', signature: 'sig-old' },
+    ]);
+  });
+
+  it('без размышлений reasoningBlocks не задаётся', () => {
+    expect(messageToLLMMessage(msg(MessageRole.ASSISTANT)).reasoningBlocks).toBeUndefined();
+  });
+
+  it('Anthropic: размышления своего агента прокидываются', () => {
+    const llm = messageToLLMMessage(msg(MessageRole.ASSISTANT, {
+      agentRole: 'fixer',
+      parts: [{ id: 'p1', type: 'reasoning', data: 'свой блок', metadata: { signature: 'sig-own' } }],
+    }), 'fixer');
+
+    expect(llm.reasoningBlocks).toEqual([{ text: 'свой блок', signature: 'sig-own' }]);
+  });
+
+  it('Anthropic: размышления чужого агента не прокидываются (inherit/last_n)', () => {
+    const llm = messageToLLMMessage(msg(MessageRole.ASSISTANT, {
+      agentRole: 'leader',
+      parts: [{ id: 'p1', type: 'reasoning', data: 'чужой блок', metadata: { signature: 'sig-foreign' } }],
+      reasoning: 'чужой блок',
+      reasoningSignature: 'sig-foreign',
+    }), 'fixer');
+
+    expect(llm.reasoningBlocks).toBeUndefined();
+  });
+
+  it('Anthropic: legacy-роль прежнего набора сравнивается по алиасу', () => {
+    const llm = messageToLLMMessage(msg(MessageRole.ASSISTANT, {
+      agentRole: 'leader',
+      parts: [{ id: 'p1', type: 'reasoning', data: 'блок', metadata: { signature: 'sig-a' } }],
+    }), 'pm');
+
+    expect(llm.reasoningBlocks).toEqual([{ text: 'блок', signature: 'sig-a' }]);
+  });
 });

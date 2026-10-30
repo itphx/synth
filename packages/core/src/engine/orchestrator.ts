@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, ReasoningBlock } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -28,6 +28,7 @@ import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from 
 import { DEFAULT_SUBAGENT_MAX_INPUT_TOKENS } from '@itphx/synth-shared/config';
 import { agentKeyOf } from './context/prompt-state.js';
 import { createStateMessage, findLastStateMessage, buildModeChangeContent, buildPlanUpdatedContent, wrapStateContent, type UnavailableTool } from './context/state-messages.js';
+import { toLlmReasoningBlocks, makeReasoningParts, type ReasoningBlockLike } from './reasoning-blocks.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { AutomationRuntime } from './tools/automation-runtime.js';
 import type { AgentRegistry } from './agents/registry.js';
@@ -3764,7 +3765,7 @@ export class ChatOrchestrator {
       const outboundParts: Part[] = [];
       const doomLoopTracker: Map<string, number> = new Map();
       let finalContent = '';
-      let allReasoning: Array<{ text: string; iteration: number }> = [];
+      let allReasoning: ReasoningBlock[] = [];
       /**
        * Anthropic: подпись thinking-блока последней итерации и opaque
        * `redacted_thinking`. Уезжает в финальное сообщение, если его `reasoning`
@@ -3935,6 +3936,8 @@ export class ChatOrchestrator {
         // вместе с `accumulatedReasoning` и персистится тем же сообщением.
         let accumulatedReasoningSignature: string | undefined;
         let accumulatedReasoningRedacted: string[] | undefined;
+        /** Anthropic: блоки reasoning этой итерации (каждый со своей подписью). */
+        let iterationReasoningBlocks: LLMReasoningBlock[] | undefined;
         let toolCalls: Record<string, unknown>[] | undefined = [];
         let chunkModel: string | undefined;
         // ADR-070: usage текущей итерации (running total от провайдера) для live.
@@ -4003,6 +4006,9 @@ export class ChatOrchestrator {
             }
             if (chunk.reasoningRedacted?.length) {
               accumulatedReasoningRedacted = chunk.reasoningRedacted;
+            }
+            if (chunk.reasoningBlocks?.length) {
+              iterationReasoningBlocks = chunk.reasoningBlocks;
             }
             if (chunk.usage) {
               finalUsage = chunk.usage;
@@ -4164,6 +4170,18 @@ export class ChatOrchestrator {
             // Anthropic: подпись thinking-блока текущей итерации — сообщение
             // отмены персистится тем же путём, что и обычный ответ.
             { signature: accumulatedReasoningSignature, redacted: accumulatedReasoningRedacted },
+            // Блоки с подписями: при мульти-блочном ответе подпись у каждого своя.
+            toLlmReasoningBlocks([
+              ...(accumulatedReasoningRedacted ?? []).map((data) => ({ text: '', redacted: data })),
+              ...(accumulatedReasoning || accumulatedReasoningSignature !== undefined
+                ? [{
+                  text: accumulatedReasoning,
+                  ...(accumulatedReasoningSignature !== undefined
+                    ? { signature: accumulatedReasoningSignature }
+                    : {}),
+                }]
+                : []),
+            ]),
           );
 
           publishChunk('stream.cancelled', {
@@ -4203,6 +4221,18 @@ export class ChatOrchestrator {
               signature: accumulatedReasoningSignature,
               redacted: accumulatedReasoningRedacted,
             },
+            reasoningBlocks: iterationReasoningBlocks
+              ?? toLlmReasoningBlocks([
+                ...(accumulatedReasoningRedacted ?? []).map((data) => ({ text: '', redacted: data })),
+                ...(accumulatedReasoning || accumulatedReasoningSignature !== undefined
+                  ? [{
+                    text: accumulatedReasoning,
+                    ...(accumulatedReasoningSignature !== undefined
+                      ? { signature: accumulatedReasoningSignature }
+                      : {}),
+                  }]
+                  : []),
+              ]),
             model: finalModel,
             providerName,
             agentRole: effectiveAgentRole,
@@ -4219,14 +4249,44 @@ export class ChatOrchestrator {
 
         finalModel = chunkModel ?? finalModel;
 
-        if (accumulatedReasoning) {
-          // Накопление через общий с UI хелпер: провайдер шлёт reasoning
-          // кумулятивно, повтор в новой итерации не должен дать дубль.
-          allReasoning = appendReasoningBlock(allReasoning, accumulatedReasoning, toolIteration);
-          // Финал соберёт `reasoning` из всех блоков через `\n\n---\n\n`:
-          // подпись осмысленна, только пока текст — ровно один блок.
+        // Блоки reasoning итерации: провайдер отдаёт их со своими подписями
+        // (мульти-блочный ответ Anthropic), иначе — legacy fallback на одно поле
+        // подписи (OpenAI-совместимые провайдеры, старые чанки).
+        const iterationBlocks: Array<{ text: string; signature?: string; redacted?: string }> =
+          iterationReasoningBlocks && iterationReasoningBlocks.length > 0
+            ? iterationReasoningBlocks.map((block) => ({
+              text: block.text,
+              ...(block.signature !== undefined ? { signature: block.signature } : {}),
+              ...(block.redactedData ? { redacted: block.redactedData } : {}),
+            }))
+            : [
+              ...(accumulatedReasoningRedacted ?? []).map((data) => ({ text: '', redacted: data })),
+              ...(accumulatedReasoning || accumulatedReasoningSignature !== undefined
+                ? [{
+                  text: accumulatedReasoning,
+                  ...(accumulatedReasoningSignature !== undefined
+                    ? { signature: accumulatedReasoningSignature }
+                    : {}),
+                }]
+                : []),
+            ];
+        if (iterationBlocks.length > 0) {
+          for (const block of iterationBlocks) {
+            // Накопление через общий с UI хелпер: провайдер шлёт reasoning
+            // кумулятивно, повтор в новой итерации не должен дать дубль.
+            allReasoning = appendReasoningBlock(allReasoning, block.text, toolIteration, {
+              ...(block.signature !== undefined ? { signature: block.signature } : {}),
+              ...(block.redacted !== undefined ? { redacted: block.redacted } : {}),
+            });
+          }
+          // Legacy-поля сообщения осмысленны, только пока блок ровно один:
+          // подпись принадлежит своему тексту. При нескольких блоках подписи
+          // живут в частях/`reasoningBlocks`.
           finalReasoningMeta = allReasoning.length === 1
-            ? { signature: accumulatedReasoningSignature, redacted: accumulatedReasoningRedacted }
+            ? {
+              signature: allReasoning[0]!.signature,
+              redacted: allReasoning[0]!.redacted ? [allReasoning[0]!.redacted] : undefined,
+            }
             : undefined;
         }
 
@@ -4259,6 +4319,7 @@ export class ChatOrchestrator {
         // (`_persistToolResult`) по мере готовности результатов.
         await draft.finalize({
           content: accumulatedContent,
+          parts: [makeTextPart(accumulatedContent), ...makeReasoningParts(iterationBlocks)],
           reasoning: accumulatedReasoning || undefined,
           toolCalls,
           model: chunkModel ?? finalModel,
@@ -4281,8 +4342,10 @@ export class ChatOrchestrator {
           branchId: '',
           toolUse: toolCalls,
           // Anthropic: в tool-loop thinking обязан вернуться в историю вместе
-          // с подписью — иначе следующий запрос отвергается API.
+          // с подписью — иначе следующий запрос отвергается API. Блоки — со
+          // своими подписями (`reasoningBlocks`), legacy-поля — fallback.
           reasoning: accumulatedReasoning || undefined,
+          reasoningBlocks: toLlmReasoningBlocks(iterationBlocks),
           reasoningSignature: accumulatedReasoningSignature,
           reasoningRedacted: accumulatedReasoningRedacted,
           agentRole: effectiveAgentRole,
@@ -5686,6 +5749,11 @@ export class ChatOrchestrator {
      * продолжается, thinking обязан вернуться в историю).
      */
     reasoningMeta?: { signature?: string; redacted?: string[] };
+    /**
+     * Anthropic: блоки reasoning прерванной генерации (каждый со своей
+     * подписью) — пишутся в `parts` сообщения.
+     */
+    reasoningBlocks?: ReasoningBlockLike[];
     model: string | undefined;
     providerName: string;
     agentRole: string | undefined;
@@ -5701,7 +5769,7 @@ export class ChatOrchestrator {
     const {
       session, streamId, draft, content, reasoning, model, providerName, agentRole,
       usage, iteration, startedAt, promptChars, debugCollector, promptMeta, publishChunk,
-      reasoningMeta,
+      reasoningMeta, reasoningBlocks,
     } = args;
 
     // Частичный текст уже лежит в черновике — дожидаемся записи и заменяем её
@@ -5742,6 +5810,7 @@ export class ChatOrchestrator {
         // Anthropic: подпись thinking-блока прерванной генерации — ход
         // продолжается, следующий запрос обязан вернуть thinking в историю.
         reasoningMeta,
+        reasoningBlocks,
       );
     }
 
@@ -5935,6 +6004,8 @@ export class ChatOrchestrator {
     extraParts?: Part[],
     /** Anthropic: подпись thinking-блока и opaque `redacted_thinking`. */
     reasoningMeta?: { signature?: string; redacted?: string[] },
+    /** Anthropic: все блоки reasoning ответа (пишутся в `parts`). */
+    reasoningBlocks?: ReasoningBlockLike[],
   ): Promise<string> {
     return saveAssistantMessage(
       this._persistenceDeps(),
@@ -5961,6 +6032,7 @@ export class ChatOrchestrator {
       existing,
       extraParts,
       reasoningMeta,
+      reasoningBlocks,
     );
   }
 

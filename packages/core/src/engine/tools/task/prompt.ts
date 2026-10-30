@@ -11,6 +11,8 @@ import type { Message, ToolForLLM } from '@itphx/synth-shared';
 import type { LLMMessage } from '../../../providers/base.js';
 import { renderUnavailableTools, type UnavailableTool } from '../../context/state-messages.js';
 import { isWorkspaceDependentTool } from '../../permission/availability.js';
+import { reasoningBlocksOfMessage, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
+import { resolveAgentRoleAlias } from '../../agents/index.js';
 import { isRuntimeDepAvailable, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from '../runtime-deps.js';
 
 /**
@@ -97,7 +99,7 @@ export function buildSubagentUnavailableToolsSection(
   return renderUnavailableTools(unavailable, language);
 }
 
-export function messageToLLMMessage(msg: Message): LLMMessage {
+export function messageToLLMMessage(msg: Message, currentAgentRole?: string): LLMMessage {
   const roleMap: Record<string, LLMMessage['role']> = {
     [MessageRole.USER]: 'user',
     [MessageRole.ASSISTANT]: 'assistant',
@@ -119,5 +121,31 @@ export function messageToLLMMessage(msg: Message): LLMMessage {
     branchId: '',
     toolCallId: msg.toolCallId,
     toolUse: msg.toolCalls,
+    // Anthropic thinking (ADR-117): блоки размышлений со своими подписями —
+    // история дочерней сессии при resume/наследовании контекста обязана
+    // вернуть их, иначе API отвергает продолжение tool-loop («thinking не
+    // возвращён в историю»). Источник — части сообщения (`metadata`), fallback —
+    // legacy-поля `reasoning`+`reasoningSignature`/`reasoningRedacted`
+    // (`reasoningBlocksOfMessage`). Остальные провайдеры поле не читают.
+    //
+    // Чужой агент — как в `_sessionMessagesToLlm`: его размышления не
+    // прокидываются (при `context_mode: inherit` история родителя попадает в
+    // дочерний прогон, а модель у ребёнка может быть другая — подпись чужого
+    // провайдера/модели API не примет).
+    reasoningBlocks: isOwnAgentMessage(msg.agentRole, currentAgentRole)
+      ? toLlmReasoningBlocks(reasoningBlocksOfMessage(msg))
+      : undefined,
   };
+}
+
+/**
+ * «Своё» ли assistant-сообщение для текущего агента: пустая метка или метка
+ * текущего агента (роли прежнего набора сравниваются по алиасу — `pm` ≡ `leader`).
+ * `undefined` в `currentAgentRole` — ограничения нет (вызывающему роль неизвестна).
+ */
+function isOwnAgentMessage(messageRole: string | undefined, currentAgentRole: string | undefined): boolean {
+  if (currentAgentRole === undefined) return true;
+  if (messageRole === undefined || messageRole === currentAgentRole) return true;
+  return (resolveAgentRoleAlias(messageRole) ?? messageRole)
+    === (resolveAgentRoleAlias(currentAgentRole) ?? currentAgentRole);
 }
