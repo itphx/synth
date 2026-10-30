@@ -1457,3 +1457,40 @@
   - При нескольких reasoning-блоках в ходе подпись сохраняется только для одного блока (финальные сообщения идут с `signature: ""`) — реплей проходит, но для строгого Anthropic это стоит перепроверить/доделать.
   - `maxTokensField` по умолчанию `max_tokens` — осознанное отличие от opencode.
 
+
+## 2026-10-30 — авто-тайтл, off-by-one лимита шагов, паритет tool-call на лимите, удаление переключателя режима, «Send timeout»
+
+- **Тип:** bug fix + parity с opencode + UI-упрощение. **Исполнитель:** @fixer, приёмка — оркестратор. **Результат:** PASS. **Коммиты:** `0159927f` (ядро: авто-тайтл, лимит шагов, паритет tool-call), `4ca9829d` (UI: переключатель режима удалён), `f39b7878` (UI+ядро: дельты прогресса, ack отправки, оптимистичная очередь).
+- **Авто-тайтл.** Новый `packages/core/src/sessions/user-messages.ts` (`isUserDialogueMessage`/`isServiceUserMessage`): служебные user-сообщения — `ephemeral`, `synthetic`, steer-инъекции (`metadata.steer`), `background_run_result`, сообщения шедулера (`metadata.scheduler`/`schedule_id`/`author === 'Scheduler'`) — больше не считаются «второй репликой». Используют `sessions/auto-title.ts` и `engine/orchestrator/phases/process-finalize.ts`. Реальный дефект: после steer-инъекции в первом ходе сессия оставалась «New session» (заголовок не генерировался).
+- **Off-by-one лимита шагов (механика opencode).** `stepLimitStep = iteration + 1 >= maxSteps` в `engine/orchestrator.ts` и `engine/tools/task/run-cycle.ts`: `maxSteps: N` → **N−1 рабочих шагов + шаг-лимит**, `maxSteps: 1` → только шаг-лимит (tool-вызовов нет). Тесты переведены на новую нумерацию (`orchestrator-step-limit.test.ts`, `task/run-cycle.test.ts`, `task*.test.ts`).
+- **Паритет «непослушного» tool call на шаге-лимите.** Вызовы при `toolChoice: 'none'` больше не отбрасываются молча: `assistant(tool_calls)` сохраняется, на каждый вызов пишется парный `tool`-результат с `isError` и ключом `tool.disabled_by_step_limit` (`{tool}`, `{limit}`; ru/en в UI-словаре), `tool_call.result` публикуется, результат персистится, ход завершается отчётом. Пары `toolUse`/`toolResult` не рвутся (иначе `400 insufficient tool messages following tool_calls`).
+- **UI: переключатель «В очередь / В ход» удалён** (решение пользователя). `components/chat/SteerModeSwitch.tsx` и состояние `selectedMode` удалены, `effectiveMode = sendMode` (`queue`), подпись кнопки в ходе — «Добавить в очередь» (`chat.input.enqueue`); ключи `chat.steer.mode.*`/`*_steer`/`*_interrupt` удалены. Режимы `steer`/`interrupt` остаются **только в API** (шлюзы, фоновые уведомления, `POST /queue/:id/steer`); маркеры в ленте и `notify.steer.dropped.*` сохранены.
+- **«Send timeout» устранён.** Причина: `subagent.progress` каждые ~300 мс слал **полный** накопленный текст/reasoning (мегабайты кадров), ack отправки шёл в том же упорядоченном WS-канале, клиентский таймаут 10 с срабатывал раньше кадра, строка очереди добавлялась только по серверному событию.
+  - **Ядро:** `subagent.progress` несёт **дельты** `content_delta`/`reasoning_delta` (полные `content`/`reasoning` убраны), пустые дельты не публикуются, cap 200 000 символов на прогон (дальше прогресс молчит, итоговый отчёт не страдает); финальное сообщение дочерней сессии на шаге-лимите несёт `step_limit_reached`/`step_limit` (и `task.steps_limit_empty` при пустом отчёте).
+  - **Транспорт:** ack резолвится кадром `queued` **или** событием `message.queued` с тем же `stream_id`; `SEND_TIMEOUT` 10 → 30 с, таймаут = `{confirmed:false}` (не ошибка), кадр `error` — ошибка.
+  - **UI:** `streamId` генерируется заранее и уходит и в WS-кадр, и в HTTP `enqueueMessage` (сервер использует его как `message_id`); при отправке во время хода сразу появляется оптимистичная строка очереди (`sending: true`, спиннер в `QueuePanel`, действия недоступны), сверка по `message.queued` без дубля; вне хода и в `steer`/`interrupt` строки нет; тост `chat.message.unconfirmed` при неподтверждённой отправке. Дельты прогресса накапливаются в блоке `task`; для гибрида (старое ядро шлёт полный текст) известный префикс вычитается — текст не задваивается.
+- **Документация.** `packages/ui/AGENTS.md` (§«Чат: отправка во время хода и очередь» переписан), `packages/core/AGENTS.md` (off-by-one, `tool.disabled_by_step_limit`, `sessions/user-messages.ts`, дельты `subagent.progress`, `step_limit_reached` ребёнка), `docs/arch_decisions/adr-104-mid-turn-steering.md` (история/статус в коде: UI-переключателя нет), `docs/API_V2.md` + `docs/en/API_V2.md` (§5.5: `message.queued` как ack, дельты прогресса, steering без UI-контрола), корневой `AGENTS.md` (ссылка на переименованный раздел).
+- **Проверки (unit).** Полный `pnpm test`: shared **896**, core **7799**, executor **24**, ui **2406**, backend **728**, storage-postgres **205**, sdk **191**, synth **78** — зелёные; `pnpm typecheck` — 0 ошибок; `pnpm lint` — 0 ошибок. Доки: `node scripts/adr-check.mjs` и `node scripts/docs-link-check.mjs` — 0 ошибок.
+- **Живые проверки (dev) — дочерний лимит, 3/3 PASS на `maxSteps: 2`.** Родительские сессии `mvuj34os-3-f3p3xrpa`, `mvuj43k8-t-womnz5m4`, `mvuj4xm7-1j-ofpgfkkc`; дочерние — `mvuj3d0p-c-n0i2c8d9`, `mvuj4965-11-juvo1x6w`, `mvuj4zij-1r-plharb9x`. Наблюдаемая картина после off-by-one: один рабочий шаг (tool call) + шаг-лимит; у ребёнка `step_limit_reached`/`step_limit`, родителю — `task`-результат с `[steps_limit]`.
+- **Живая проверка (dev) — `deepseek-anthropic` (`api.deepseek.com/anthropic`), правок не требуется.** Обычный запрос возвращает блок `thinking` с **непустой подписью** (подпись равна `id` блока); реплей с `thinking`+signature — **200**; реплей **без** thinking-блока — **200** (эндпоинт толерантен к отсутствию блока); `thinking: {type:'disabled'}` — **200**. Нюанс поведения: эндпоинт по умолчанию думает всегда — thinking отключается только через `reasoningLevel: none` (не через отсутствие поля). Непроверенным остался `tool_choice: none` с tools на этом эндпоинте (см. «Остатки/спорное»).
+
+### Живой WS-замер: отправка во время двух саб-агентов
+
+**Стенд:** dev, сессия `mvujxf5m-3-0divsd38`, провайдер `routerai` / `qwen/qwen3.7-flash`, WS-клиент как у UI; во время хода параллельно работают два саб-агента, в этот момент отправляется сообщение композером.
+
+| Метрика | Значение |
+|---|---|
+| `queued`-ack (кадр WS) | **4 мс** |
+| событие `message.queued` | **17 мс** |
+| кадров `subagent.progress` за прогон | **86** |
+| средний размер кадра прогресса | **734 Б** |
+| максимальный размер кадра | **905 Б** |
+| суммарный объём прогресса | **63 КБ** |
+| кадров с полными `content`/`reasoning` | **0** |
+
+- **Итог:** сообщение попало в очередь и в историю, ложной ошибки отправки нет; порог проверки (**ack < 1 с** и **отсутствие кадров с полным текстом**) — выполнен. Прежний дефект («Ошибка отправки: Send timeout» при тулах) не воспроизводится: ack приходит в миллисекундах, а прогресс идёт дельтами (63 КБ за прогон вместо мегабайт накопленного текста).
+
+### Остатки/спорное
+
+- **`tool_choice: none` + tools на `deepseek-anthropic`** — не проверено (проверены обычный запрос, реплей с подписью/без блока и `thinking: {type:'disabled'}`). Для шага-лимита это путь синтетического assistant-префилла — при появлении 400 на этом эндпоинте смотреть сюда.
+- **Мульти-блочная подпись thinking** (несколько reasoning-блоков в ходе) — в работе, отдельный коммит; текущий персист сохраняет подпись одного блока.

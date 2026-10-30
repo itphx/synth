@@ -118,7 +118,7 @@
 
 - API: `POST /api/v2/sessions/:id/prompt` и WS `send_message` — поле `mode` (`queue`/`steer`/`interrupt`), ответы `202 {status:'steered'|'interrupted', stream_id, pending_count, mode_applied}`, `429 STEER_LIMIT_EXCEEDED` (`docs/API_V2.md` §5.5).
 - Ядро: `queue/processor.ts` (`enqueueSteerMessage`), `sessions/manager.ts` (`steerInbox`, `takeSteerMessages` с приоритетом `interrupt` → `steer`, `clearSteerInbox`), `engine/steering/apply.ts` (**общая точка применения инъекций на границе шага** — её используют и оркестратор, и цикл саб-агента), `engine/orchestrator.ts` (вычитка на границе шага, `_handleInterruptedGeneration`, `interrupt(streamId)`), `engine/tools/task/run-cycle.ts` (граница шага цикла **дочерней/фоновой** сессии), `shared/types/steering.ts` (типы, лимит 5, порядок).
-- UI: `SteerModeSwitch` (`components/chat/SteerModeSwitch.tsx` — **переключатель режима** «В очередь» / «В ход»: `aria-pressed`, `data-testid="steer-mode"`, на узких экранах — иконки; клик по нему **никогда** не отправляет сообщение; прерывание — отдельная кнопка «Стоп»), маркеры вмешательства/прерывания, тост `steer.dropped`, `resetStreamAccumulator`/`resetStreamAttempt` — `packages/ui/AGENTS.md`.
+- UI: переключателя режима **нет** (с 2026-10-30): `SteerModeSwitch` удалён, композер всегда отправляет `queue`, `steer`/`interrupt` — только контракт API/шлюзов. Остались маркеры вмешательства/прерывания, тост `steer.dropped`, `resetStreamAccumulator`/`resetStreamAttempt` — `packages/ui/AGENTS.md` («Чат: отправка во время хода и очередь»).
 - Тесты: `queue/steering.test.ts`, `engine/orchestrator-steering.test.ts`, `engine/orchestrator-interrupt.test.ts`, `server/routes/sessions-steering.test.ts`, `queue/steering-subagent.test.ts`, `engine/tools/task/run-cycle.test.ts` (steering дочерней сессии).
 
 ## История
@@ -133,3 +133,11 @@
   (`steer.dropped` с `reason: 'aborted'` при «Стоп», `reason: 'turn_ended'` в конце хода) и не
   переезжают в следующий ход; UI-переключатель режима перестал выглядеть кнопкой отправки
   (dogfooding, баг «самолётик ничего не отправил»).
+- **2026-10-30 — UI-переключателя «В очередь / В ход» больше нет** (решение пользователя; коммит
+  `4ca9829d`): `SteerModeSwitch` удалён, композер во время хода всегда отправляет `queue`, режимы
+  `steer`/`interrupt` остаются **только в API** (шлюзы, фоновые уведомления, `POST /queue/:id/steer`).
+  Само решение ADR не меняется: режим — поле контракта, а не UI-контрол. Заодно (коммит `f39b7878`)
+  отправка во время хода перестала выглядеть «зависшей»: `streamId` генерируется заранее (он же
+  `message_id` сервера), строка очереди показывается оптимистично (`sending`), ack резолвится кадром
+  `queued`/событием `message.queued`, таймаут = «не подтверждено» (`{confirmed:false}`), а
+  `subagent.progress` шлёт дельты вместо полного текста (детали — `packages/ui/AGENTS.md`).
