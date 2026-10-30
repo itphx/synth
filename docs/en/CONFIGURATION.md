@@ -1598,15 +1598,19 @@ rather than hardcoded per provider type. The same object exists on two levels:
 | `supportsToolChoice` | The provider understands `tool_choice` | `true` (native Ollama — `false`) |
 | `cacheFormat` | Prompt-cache inline marker format (`cache_control: {type:'ephemeral'}`): `anthropic` — last tool + system + last message boundary; `alibaba` — system + last message boundary (no tools). Budget — ≤4 breakpoints; when set, `prompt_cache_key` is **not** sent | Unset (`prompt_cache_key` only) |
 | `requireFinishReason` | Require `finish_reason` in the stream: a provider that closes the stream without it returned an incomplete answer (incomplete-stream, not retried) | `true` |
+| `supportsEffortUpdates` | Anthropic 5.x effort mode: send `output_config.effort` (tier from `reasoningLevel`: `low\|medium\|high`) and **not** send `thinking` — thinking blocks in history are not replayed, `temperature` is not forced. Without the flag — the previous mode, an explicit effort is ignored | `false` (explicit `true` only) |
 
 - **Priority:** the explicit **model** value → the explicit **provider** value → the **heuristic** →
   the built-in default (`resolveModelCompatibility`). Heuristics (`detectCompatibilityHeuristics`) apply
   only to unset fields: `requireReasoning` — provider type/name `deepseek`, a URL containing
   `deepseek.com`, a model id containing `deepseek`; `requireAssistantAfterTool` — `mistral`/`devstral`/
   `codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField`,
-  `streamUsage`, `cacheFormat` and `requireFinishReason` are not heuristically detected: local
-  OpenAI-compatible servers often do not know `max_completion_tokens`, and cache inline markers plus the
-  `finish_reason` requirement are enabled explicitly only (existing catalog entries keep their behavior).
+  `streamUsage`, `cacheFormat`, `requireFinishReason` and `supportsEffortUpdates` are not heuristically
+  detected: local OpenAI-compatible servers often do not know `max_completion_tokens`, and cache inline
+  markers, the `finish_reason` requirement and effort mode are enabled explicitly only (existing catalog
+  entries keep their behavior). For `supportsEffortUpdates` the absence of auto-heuristics is
+  deliberate: the flag changes the request body (`output_config` instead of `thinking`), so guessing by
+  model name would send an unknown field to gateways without support.
 - **Where it is set:** `POST`/`PATCH /api/v2/providers` — the `compatibility` field (provider defaults);
   `POST /api/v2/models` — `compatibility` (override for a specific model). `GET` returns the field
   **only when set**.
@@ -1650,6 +1654,13 @@ model for the same agent does not drop the old signatures — the filter is by a
 provider/model pair). When `parts` are present the string `content` of the message is built **without**
 the reasoning blocks (legacy messages without `parts` keep the previous behaviour). With thinking
 disabled the blocks are not replayed. These service fields are never exposed through the API.
+
+**Anthropic: effort mode (`compatibility.supportsEffortUpdates`).** With an explicit `true` the provider
+sends `output_config.effort` (tier from `reasoningLevel`: `low|medium|high`; `none`/`default` — the field
+is not sent) and does **not** send `thinking` at all (neither `enabled` nor `disabled`), so the budget is
+not computed, `temperature` is not forced, and thinking blocks from history are not replayed. Tiers
+`xhigh`/`max` are available only when `ChatOptions.effort` is passed explicitly (they are not present in
+agent/session settings). Without the flag the behaviour is unchanged — see [PROVIDERS.md](./PROVIDERS.md) §6.1.
 
 **Ollama (`/api/chat`).** `think` is enabled for `low|medium|high` (`none` — `false`, `default` — the
 field is not sent); `tool_choice` is not sent (`compatibility.supportsToolChoice: false` by default for

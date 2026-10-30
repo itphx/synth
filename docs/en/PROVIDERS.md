@@ -177,9 +177,19 @@ defaults for all models of the provider, `ModelConfig.compatibility` — overrid
 | `supportsToolChoice` | `true` (`false` for `type: ollama`) | Whether to send `tool_choice` | openai-chat, Ollama |
 | `cacheFormat` | not set | Inline prompt-cache markers `cache_control: {type:'ephemeral'}`: `anthropic` — last tool + system + tail of the last message; `alibaba` — system + tail, **no** tools. Budget ≤ 4 breakpoints; when set, `prompt_cache_key` is **not** sent | openai-chat |
 | `requireFinishReason` | `true` | A stream without `finish_reason` is an incomplete response → error, not retried | openai-chat |
+| `supportsEffortUpdates` | `false` (explicit value only) | Anthropic 5.x effort mode: send `output_config.effort` (effort tier) and **not** send `thinking`; thinking blocks in history are not replayed, `temperature` is not forced. Without the flag — previous behaviour, an explicit effort is ignored | anthropic |
 
 `ResolvedModelCompatibility` is the fully resolved set: every field is filled except `cacheFormat`,
 where `undefined` is a meaningful state ("do not place markers").
+
+**Reasoning level and sampling sit outside `compatibility`.** `reasoningLevel` is set by the agent
+(`AgentDefinition.reasoningLevel`) and the session (`SessionSettings.reasoningLevel`). On session
+creation (`POST /api/v2/sessions`) the value **is persisted** (the `SessionManager.createSession`
+whitelist no longer drops it — previously `reasoningLevel` from the request body was discarded and the
+setting only took effect after `PATCH`), and the effective value goes into the request
+(`agentDef.reasoningLevel ?? session.settings.reasoningLevel`, the agent wins). `topP`/`topK` are
+**agent** fields, not session ones: `SessionSettings` does not have them, so values passed to
+`POST /api/v2/sessions` are dropped (sampling is configured in the «Agents» admin section).
 
 ### 4.2 Resolution order
 
@@ -206,9 +216,12 @@ Applied **only to unset** fields:
 | `requireAssistantAfterTool: true` | model id contains `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral` |
 | `supportsToolChoice: false` | `type: ollama` (the native `/api/chat` does not know the field) |
 
-`maxTokensField`, `streamUsage`, `cacheFormat`, `requireFinishReason` are **not** heuristicized:
-otherwise existing catalog records would start behaving differently (local servers do not know
-`max_completion_tokens`; inline cache markers only by explicit value).
+`maxTokensField`, `streamUsage`, `cacheFormat`, `requireFinishReason`, `supportsEffortUpdates` are
+**not** heuristicized: otherwise existing catalog records would start behaving differently (local
+servers do not know `max_completion_tokens`; inline cache markers and effort mode — explicit value only).
+For `supportsEffortUpdates` the absence of auto-heuristics is deliberate: enabling it changes the
+request body (`output_config` instead of `thinking`), so guessing by model name would send an unknown
+field to gateways without support (400).
 
 ### 4.4 Where it is resolved
 
@@ -249,7 +262,9 @@ draft — [lib/api/compatibility.ts](../../packages/ui/src/lib/api/compatibility
   heuristic/default);
 - `reasoningField` — a select of known names (`reasoning_content`/`reasoning`/`reasoning_text`) with
   a "custom value" option; an unknown stored name expands into "custom value";
-- `maxTokensField` and `cacheFormat` — selects with "Auto"; `requireFinishReason` — tri-state;
+- `maxTokensField` and `cacheFormat` — selects with "Auto"; `requireFinishReason` and
+  `supportsEffortUpdates` — tri-state (for the latter "Auto" means "No": the server enables effort mode
+  only with an explicit `true`);
 - a "changed"/"adv." badge in lists; a full clear on an entity that has saved parameters sends
   `compatibility: null` (an explicit reset), while on an entity without saved parameters the field is
   not sent at all.
@@ -357,6 +372,19 @@ response → `ProviderError` "The provider closed the stream without finish_reas
 retry it (transport errors `network`/`timeout`/`rate_limit` are retried as before). An explicit
 `false` restores the tolerant behaviour — for "old" local servers that never send `finish_reason`.
 
+### 5.9 LLM Proxy (`POST /api/v2/llm/chat/completions`)
+
+The hybrid-mode proxy (backend) follows the **same compatibility contract**, not a "raw" openai path:
+
+- the optional `reasoning_effort` field (`low|medium|high|xhigh|max`) goes into `ChatOptions.effort`;
+  an invalid value — `400 BAD_REQUEST`, the provider is not called (a request-contract check, not a
+  silent ignore);
+- the provider is created with merged `compatibility`: `provider.compatibility` → the model shorthand
+  `requiresReasoning` → `model.compatibility`. That is why the guards (`requireReasoning`,
+  `maxTokensField`, `cacheFormat`, `supportsEffortUpdates`) work through the proxy as well;
+- whether the provider actually sends effort is still decided by `compatibility.supportsEffortUpdates`
+  (guard inside the provider, §6.1).
+
 ## 6. Anthropic specifics
 
 Implementation — [providers/anthropic.ts](../../packages/core/src/providers/anthropic.ts).
@@ -383,6 +411,31 @@ Forced constraints when thinking is enabled:
   mutated — it is cached and shared between runs);
 - `tool_choice: 'required'` is coerced to `'auto'` (the API forbids a forced tool call); `'none'` is
   allowed — that is the step-limit path.
+
+**Effort mode (`output_config.effort`, ADR-117).** Enabled only by an explicit
+`compatibility.supportsEffortUpdates: true` (default `false`, no auto-heuristics) and it changes the
+request body:
+
+- `body.output_config = { effort }`. What is sent:
+  - priority — an explicit `ChatOptions.effort` (the orchestrator and the sub-agent loop compute it
+    **per LLM call** from `agentDef.reasoningLevel ?? session.settings.reasoningLevel` via
+    `effortForReasoningLevel`), otherwise the provider instance's `reasoningLevel`;
+  - `reasoningLevel` → tier mapping: `low|medium|high` — the same tiers; `none`/`default` — the field
+    is **not sent** ("turn reasoning off" cannot be expressed by an effort tier, inventing a value is
+    not allowed); `xhigh`/`max` exist only as an explicit `ChatOptions.effort` (neither agent nor
+    session settings carry them);
+- `thinking` is **not sent at all** — neither `{type:'enabled', budget_tokens}` nor
+  `{type:'disabled'}`: on effort models that is a different mode and they must not be mixed.
+  Consequences: the budget (see above) is not computed, `temperature` is not forced to `1` (the
+  agent/session value applies), `tool_choice` is not coerced;
+- thinking blocks from history are **not replayed** (as with thinking disabled, §6.2) — otherwise
+  Anthropic would receive them without thinking enabled;
+- changing the level between steps and turns is picked up (effort travels in the call options, not in
+  the provider constructor, which is cached and shared between runs), but it changes request parameters
+  and may drop the provider-side prompt cache.
+
+Without the flag the behaviour is unchanged (`thinking` from `reasoningLevel`) and an explicit
+`ChatOptions.effort` is **ignored**.
 
 ### 6.2 Thinking signature
 
@@ -556,13 +609,21 @@ the main loop (it remains for pipeline steps).
 | The model calls tools on the step-limit step (Ollama) | Native `/api/chat` does not know `tool_choice` | expected: calls are not executed and a deterministic report arrives (§7.4); raise the agent's `maxSteps` |
 | `tool_choice` is unsupported (`400` unknown field / ignored) | A non-standard server | `compatibility.supportsToolChoice: false` (already the default for native Ollama) |
 | Stream `usage` is zero | The server does not support `stream_options` | `compatibility.streamUsage: false` (the request stops carrying an unknown field; usage stays zero) |
+| `400` about `output_config` / `effort` (Anthropic) | `supportsEffortUpdates` is on but the gateway does not know the field; or the model is not an effort-tier one | remove `supportsEffortUpdates` (the previous `thinking` mode returns); send `xhigh`/`max` only via an explicit `ChatOptions.effort` and after verifying on the live provider |
 
 ## 11. Known limitations
 
-- **`supportsEffortUpdates` is not implemented.** In opencode it is the flag for mid-turn effort
-  updates (`output_config.effort` per message). Here `reasoningLevel` is set **per request**
-  (agent → session → provider) and never changes mid-turn; a field without mechanics would be dead
-  code.
+- **`supportsEffortUpdates` is partially implemented.** Anthropic effort mode (`output_config.effort`,
+  §6.1) is enabled only by an explicit flag; tiers come from `reasoningLevel` (`low|medium|high`) or
+  from an explicit `ChatOptions.effort`. Difference from opencode: there, effort markers are carried in
+  history (a system message with an `effort` part) and there is a mid-turn UI switch for the level.
+  Here effort is applied **per request**: a level change between steps is picked up, but there are no
+  history markers and the prompt cache may be invalidated when the level changes; there is no mid-turn
+  UI switch.
+  Effort is not forwarded through **hybrid mode**: the LLM Proxy (backend) does accept
+  `reasoning_effort` and passes `compatibility` through, but the hybrid `RemoteProvider` does **not
+  send** it (it passes only `toolChoice` to the proxy) — in a remote session effort is lost.
+  Official `api.anthropic.com` was not tested in effort mode (checks were mock-based).
 - **Thinking-block filter — agent role + `provider/model` pair.** Blocks are dropped only when both
   halves of the pair are known — for the message and for the current request — and they differ; legacy
   messages without a pair keep the previous behaviour (`sessionMessagesToLlm(..., currentPair)`).

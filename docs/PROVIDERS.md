@@ -175,9 +175,19 @@ JSON каталога (см. §11). CLI-эквивалент — `synth config p
 | `supportsToolChoice` | `true` (у `type: ollama` — `false`) | Отправлять ли `tool_choice` | openai-chat, Ollama |
 | `cacheFormat` | не задан | Inline-маркеры prompt-cache `cache_control: {type:'ephemeral'}`: `anthropic` — последний tool + system + хвост последнего сообщения; `alibaba` — system + хвост, **без** tools. Бюджет ≤ 4 breakpoint'а; при заданном значении `prompt_cache_key` **не** отправляется | openai-chat |
 | `requireFinishReason` | `true` | Стрим без `finish_reason` = недописанный ответ (incomplete-stream) → ошибка, не ретраится | openai-chat |
+| `supportsEffortUpdates` | `false` (только явное значение) | Effort-режим Anthropic 5.x: отправлять `output_config.effort` (тир усилия) и **не** отправлять `thinking`; thinking-блоки истории не реплеятся, `temperature` не форсируется. Без флага — прежнее поведение, явный effort игнорируется | anthropic |
 
 `ResolvedModelCompatibility` — полностью разрешённый набор: каждое поле заполнено, кроме
 `cacheFormat`, где `undefined` — осмысленное состояние («маркеры не ставить»).
+
+**Уровень размышлений и sampling — вне `compatibility`.** `reasoningLevel` задаётся агентом
+(`AgentDefinition.reasoningLevel`) и сессией (`SessionSettings.reasoningLevel`). При создании сессии
+(`POST /api/v2/sessions`) значение **сохраняется** (whitelist `SessionManager.createSession` его
+больше не теряет — раньше `reasoningLevel` из тела запроса отбрасывался, и настройка начинала
+действовать только после `PATCH`), а в запрос уходит эффективное значение
+(`agentDef.reasoningLevel ?? session.settings.reasoningLevel`, агентом приоритетнее). `topP`/`topK` —
+поля **агента**, не сессии: в `SessionSettings` их нет, и переданные в `POST /api/v2/sessions`
+отбрасываются (sampling задаётся в админке «Агенты»).
 
 ### 4.2 Порядок резолва
 
@@ -204,9 +214,12 @@ JSON каталога (см. §11). CLI-эквивалент — `synth config p
 | `requireAssistantAfterTool: true` | id модели содержит `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral` |
 | `supportsToolChoice: false` | `type: ollama` (нативный `/api/chat` поля не знает) |
 
-`maxTokensField`, `streamUsage`, `cacheFormat`, `requireFinishReason` **не** эвристицируются: иначе
-существующие записи каталога начали бы вести себя иначе (локальные серверы не знают
-`max_completion_tokens`; inline-маркеры кэша — только явным значением).
+`maxTokensField`, `streamUsage`, `cacheFormat`, `requireFinishReason`, `supportsEffortUpdates` **не**
+эвристицируются: иначе существующие записи каталога начали бы вести себя иначе (локальные серверы не
+знают `max_completion_tokens`; inline-маркеры кэша и effort-режим — только явным значением). Для
+`supportsEffortUpdates` авто-эвристики нет принципиально: включение меняет тело запроса
+(`output_config` вместо `thinking`), и угадывание по имени модели отправило бы неизвестное поле
+шлюзам без поддержки (400).
 
 ### 4.4 Где резолвится
 
@@ -245,7 +258,8 @@ JSON каталога (см. §11). CLI-эквивалент — `synth config p
   «Авто» = поле **не уходит** в тело запроса (сервер выберет эвристику/дефолт);
 - `reasoningField` — селект известных имён (`reasoning_content`/`reasoning`/`reasoning_text`) с
   вариантом «своё значение»; неизвестное сохранённое имя разворачивается в «своё значение»;
-- `maxTokensField` и `cacheFormat` — селекты с «Авто»; `requireFinishReason` — tri-state;
+- `maxTokensField` и `cacheFormat` — селекты с «Авто»; `requireFinishReason` и `supportsEffortUpdates` —
+  tri-state (у последнего «Авто» означает «Нет»: сервер включает effort-режим только явным `true`);
 - бейдж «изменено»/«расш.» в списках; полная очистка у сущности с сохранёнными параметрами
   отправляет `compatibility: null` (явный сброс), у сущности без сохранённых — поле не отправляется.
 
@@ -352,6 +366,18 @@ Mistral-семейство не принимает историю, где пос
 как раньше). Явный `false` возвращает толерантное поведение — для «старых» локальных серверов,
 которые не присылают `finish_reason` вообще.
 
+### 5.9 LLM Proxy (`POST /api/v2/llm/chat/completions`)
+
+Прокси гибридного режима (backend) — **тот же контракт совместимости**, а не «сырой» openai-путь:
+
+- необязательное поле `reasoning_effort` (`low|medium|high|xhigh|max`) уходит в `ChatOptions.effort`;
+  невалидное значение — `400 BAD_REQUEST`, провайдер не вызывается (контракт запроса, а не «тихий» игнор);
+- провайдер создаётся с merged `compatibility`: `provider.compatibility` → shorthand модели
+  `requiresReasoning` → `model.compatibility`. Поэтому guard'ы (`requireReasoning`, `maxTokensField`,
+  `cacheFormat`, `supportsEffortUpdates`) работают и на прокси;
+- отправляет ли провайдер effort, по-прежнему решает `compatibility.supportsEffortUpdates`
+  (guard в провайдере, §6.1).
+
 ## 6. Anthropic: особенности
 
 Реализация — [providers/anthropic.ts](../packages/core/src/providers/anthropic.ts).
@@ -377,6 +403,30 @@ thinking.budget_tokens»). Лимит берётся фактический: `Pr
   мутируется — он кэшируется и разделяется между прогонами);
 - `tool_choice: 'required'` коэрсится в `'auto'` (API запрещает принудительный вызов);
   `'none'` разрешён — это путь шага-лимита.
+
+**Effort-режим (`output_config.effort`, ADR-117).** Включается только явным
+`compatibility.supportsEffortUpdates: true` (дефолт — `false`, авто-эвристики нет) и меняет тело
+запроса:
+
+- `body.output_config = { effort }`. Что именно уходит:
+  - приоритет — явный `ChatOptions.effort` (оркестратор и цикл саб-агента считают его **на каждый
+    LLM-вызов** из `agentDef.reasoningLevel ?? session.settings.reasoningLevel` через
+    `effortForReasoningLevel`), иначе — `reasoningLevel` экземпляра провайдера;
+  - маппинг `reasoningLevel` → тир: `low|medium|high` — те же тиры; `none`/`default` — параметр
+    **не отправляется** («выключить размышления» effort-тиром не выразить, выдумывать значение
+    нельзя); `xhigh`/`max` существуют только как явный `ChatOptions.effort` (ни в настройках агента,
+    ни в сессии их нет);
+- `thinking` **не отправляется вообще** — ни `{type:'enabled', budget_tokens}`, ни `{type:'disabled'}`:
+  у effort-моделей это другой режим, и смешивать их нельзя. Следствия: бюджет (см. выше) не считается,
+  `temperature` не форсируется в `1` (действует значение агента/сессии), `tool_choice` не коэрсится;
+- thinking-блоки истории **не реплеятся** (как при выключенном thinking, §6.2) — иначе Anthropic
+  получил бы их без включённого thinking;
+- смена уровня между шагами и ходами подхватывается (effort едет в опциях вызова, а не в конструкторе
+  провайдера, который кэшируется и разделяется между прогонами), но меняет параметры запроса и может
+  сбросить кэш промпта на стороне провайдера.
+
+Без флага поведение прежнее (`thinking` по `reasoningLevel`), а явный `ChatOptions.effort`
+**игнорируется**.
 
 ### 6.2 Подпись thinking
 
@@ -548,12 +598,20 @@ top-level `system` — он есть только у `/api/generate`).
 | Модель вызывает инструменты на шаге-лимите (Ollama) | нативный `/api/chat` не знает `tool_choice` | ожидаемое поведение: вызовы не исполняются, приходит детерминированный отчёт (§7.4); поднять `maxSteps` агента |
 | `tool_choice` не поддерживается (`400` unknown field / игнор) | нестандартный сервер | `compatibility.supportsToolChoice: false` (для нативного Ollama — уже дефолт) |
 | `usage` в стриме нулевой | сервер не поддерживает `stream_options` | `compatibility.streamUsage: false` (запрос перестанет нести непонятное поле; usage останется нулевым) |
+| `400` про `output_config` / `effort` (Anthropic) | включён `supportsEffortUpdates`, а шлюз поля не знает; либо модель не effort-тира | убрать `supportsEffortUpdates` (вернётся прежний режим `thinking`); тиры `xhigh`/`max` отправлять только явным `ChatOptions.effort` и после проверки на живом провайдере |
 
 ## 11. Известные ограничения
 
-- **`supportsEffortUpdates` не реализован.** В opencode это флаг mid-turn обновления effort
-  (`output_config.effort` на каждое сообщение). У нас `reasoningLevel` задаётся **на запрос**
-  (агент → сессия → провайдер) и посреди хода не меняется; поле без механики было бы мёртвым.
+- **`supportsEffortUpdates` реализован частично.** Effort-режим Anthropic (`output_config.effort`,
+  §6.1) включается только явным флагом; тиры берутся из `reasoningLevel` (`low|medium|high`) либо из
+  явного `ChatOptions.effort`. Отличие от opencode: там effort-маркеры переносятся в истории
+  (system-сообщение с партом `effort`) и есть mid-turn UI-смена уровня. У нас effort применяется **на
+  запрос**: смена уровня между шагами подхватывается, но маркеров в истории нет и кэш промпта при
+  смене уровня может инвалидироваться; mid-turn-переключателя в UI нет.
+  Effort не пробрасывается через **гибрид**: LLM Proxy (backend) сам `reasoning_effort` принимает и
+  прокидывает `compatibility`, а гибридный `RemoteProvider` его **не отправляет** (передаёт в прокси
+  только `toolChoice`) — в remote-сессии effort теряется.
+  Официальный `api.anthropic.com` в effort-режиме не проверялся (проверки — на моках).
 - **Фильтр thinking-блоков — роль агента + пара `provider/model`.** Блоки отбрасываются, только
   когда обе половины пары известны — и у сообщения, и у текущего запроса — и они расходятся;
   legacy-сообщения без пары сохраняют прежнее поведение (`sessionMessagesToLlm(..., currentPair)`).

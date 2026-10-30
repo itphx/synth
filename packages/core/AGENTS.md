@@ -1877,9 +1877,22 @@
   system + хвост / только system + хвост, бюджет ≤4, `prompt_cache_key` при заданном значении не
   отправляется; без `cacheFormat` — прежний implicit prefix caching), `requireFinishReason` (дефолт
   `true` — стрим без `finish_reason` = incomplete-stream, ошибка невосстановимая: паттерн в
-  `UNRECOVERABLE_PATTERNS`). `supportsEffortUpdates` из opencode **не переносим**: это флаг mid-turn
-  обновления effort (`output_config.effort` на каждое сообщение), а `reasoningLevel` у нас задаётся на
-  запрос и посреди хода не меняется — поле без механики было бы мёртвым. Два уровня: `ProviderConfig.compatibility` — дефолты провайдера, `ModelConfig.compatibility` —
+  `UNRECOVERABLE_PATTERNS`). `supportsEffortUpdates` (дефолт `false`, **без авто-эвристики** — только
+  явное `true`: флаг меняет тело запроса, и угадывание отправило бы `output_config` шлюзам без
+  поддержки) включает effort-режим Anthropic: `body.output_config = { effort }` и **никакого**
+  `thinking` (ни `enabled`, ни `disabled`), thinking-блоки истории не реплеятся, `temperature` не
+  форсируется. Тир считается на **каждый** LLM-вызов: `ChatOptions.effort` (`providers/base.ts`,
+  сборка — `buildChatOptions`) приоритетнее `reasoningLevel`; `effortForReasoningLevel` маппит только
+  `low|medium|high` (`none`/`default` → параметр не отправляется; `xhigh`/`max` — только явный
+  `ChatOptions.effort`). Значения считают `engine/orchestrator.ts`
+  (`agentDef.reasoningLevel ?? session.settings.reasoningLevel`) и цикл саб-агента
+  (`engine/tools/task/run-cycle.ts`, `config.reasoningLevel`) — на каждый вызов, потому что провайдер
+  кэшируется. LLM Proxy (backend) `reasoning_effort` принимает и собирает `compatibility` теми же
+  слоями (провайдер → shorthand модели → модель), а гибридный `RemoteProvider` effort **не**
+  отправляет (передаёт только `toolChoice`). `SessionManager.createSession` сохраняет
+  `settings.reasoningLevel` при создании (раньше терял — effort не применялся до `PATCH`);
+  `topP`/`topK` — поля агента, в `SessionSettings` их нет.
+  Два уровня: `ProviderConfig.compatibility` — дефолты провайдера, `ModelConfig.compatibility` —
   перекрывает их по каждому полю; `ModelConfig.requiresReasoning` — **shorthand** для
   `compatibility.requireReasoning` (нормализация `compatibility.requireReasoning ?? requiresReasoning`).
   Порядок резолва — **модель → провайдер → эвристика → дефолт** (`resolveModelCompatibility`); явный

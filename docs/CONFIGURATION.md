@@ -1635,15 +1635,19 @@ OpenAI-chat / Anthropic / Ollama, лимит шагов) — [PROVIDERS.md](./PR
 | `supportsToolChoice` | Провайдер понимает `tool_choice` | `true` (у нативного Ollama — `false`) |
 | `cacheFormat` | Формат inline-маркеров prompt-cache (`cache_control: {type:'ephemeral'}`): `anthropic` — последний tool + system + граница последнего сообщения; `alibaba` — system + граница последнего сообщения (без tools). Бюджет — ≤4 breakpoint'а; при заданном значении `prompt_cache_key` **не** отправляется | Не задан (только `prompt_cache_key`) |
 | `requireFinishReason` | Требовать `finish_reason` в стриме: провайдер, закрывший стрим без него, отдал недописанный ответ (incomplete-stream, не ретраится) | `true` |
+| `supportsEffortUpdates` | Effort-режим Anthropic 5.x: отправлять `output_config.effort` (тир из `reasoningLevel`: `low\|medium\|high`) и **не** отправлять `thinking` — thinking-блоки истории не реплеятся, `temperature` не форсируется. Без флага — прежний режим, явный effort игнорируется | `false` (только явным `true`) |
 
 - **Приоритет:** явное значение **модели** → явное значение **провайдера** → **эвристика** →
   встроенный дефолт (`resolveModelCompatibility`). Эвристики (`detectCompatibilityHeuristics`)
   применяются только к незаданным полям: `requireReasoning` — тип/имя провайдера `deepseek`, URL с
   `deepseek.com`, id модели с `deepseek`; `requireAssistantAfterTool` — `mistral`/`devstral`/`codestral`/
   `pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField`, `streamUsage`,
-  `cacheFormat` и `requireFinishReason` не эвристицируются: локальные OpenAI-совместимые серверы часто
-  не знают `max_completion_tokens`, а inline-маркеры кэша и требование `finish_reason` включаются только
-  явным значением (поведение существующих записей каталога не меняется).
+  `cacheFormat`, `requireFinishReason` и `supportsEffortUpdates` не эвристицируются: локальные
+  OpenAI-совместимые серверы часто не знают `max_completion_tokens`, а inline-маркеры кэша, требование
+  `finish_reason` и effort-режим включаются только явным значением (поведение существующих записей
+  каталога не меняется). У `supportsEffortUpdates` авто-эвристики нет принципиально: флаг меняет тело
+  запроса (`output_config` вместо `thinking`), и угадывание по имени модели отправило бы неизвестное
+  поле шлюзам без поддержки.
 - **Где задаётся:** `POST`/`PATCH /api/v2/providers` — поле `compatibility` (дефолты провайдера);
   `POST /api/v2/models` — `compatibility` (перекрытие для конкретной модели). `GET` отдаёт поле
   **только если оно задано**.
@@ -1687,6 +1691,13 @@ opaque-данные `redacted_thinking` сохраняются **на каждо
 `content` сообщения собирается **без** reasoning-блоков (legacy-сообщения без `parts` — прежнее
 поведение). При выключенном thinking блоки в историю не уходят. Наружу через API эти служебные поля
 не отдаются.
+
+**Anthropic: effort-режим (`compatibility.supportsEffortUpdates`).** При явном `true` провайдер
+отправляет `output_config.effort` (тир из `reasoningLevel`: `low|medium|high`; `none`/`default` —
+поле не отправляется) и **не** отправляет `thinking` вообще (ни `enabled`, ни `disabled`), поэтому
+бюджет не считается, `temperature` не форсируется, а thinking-блоки истории не реплеятся. Тиры
+`xhigh`/`max` доступны только при явной передаче `ChatOptions.effort` (в настройках агента/сессии их
+нет). Без флага поведение прежнее — см. [PROVIDERS.md](./PROVIDERS.md) §6.1.
 
 **Ollama (`/api/chat`).** `think` включается для `low|medium|high` (`none` — `false`, `default` —
 поле не отправляется); `tool_choice` не отправляется (`compatibility.supportsToolChoice: false`
