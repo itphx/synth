@@ -288,6 +288,13 @@ export type SaveAssistantMessageFn = (
    * `stream.done.attachments`). Пусто/не задано — прежнее поведение.
    */
   extraParts?: Part[],
+  /**
+   * Anthropic: подпись thinking-блока (`signature`) и opaque-данные
+   * `redacted_thinking`. Переносятся из чанков ответа в сообщение — без них
+   * следующий запрос tool-loop отвергается API. Передаётся, только если
+   * `reasoning` — текст ровно одного блока (подпись не склеивается).
+   */
+  reasoningMeta?: { signature?: string; redacted?: string[] },
 ) => Promise<string>;
 
 export async function saveAssistantMessage(
@@ -322,6 +329,8 @@ export async function saveAssistantMessage(
   existing?: ExistingMessageRef,
   /** ADR-115 (outbound): медиа-части ответа хода (после текста). */
   extraParts?: Part[],
+  /** Anthropic: подпись thinking-блока и opaque `redacted_thinking`. */
+  reasoningMeta?: { signature?: string; redacted?: string[] },
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
   const finalContent = content;
@@ -406,6 +415,8 @@ export async function saveAssistantMessage(
     provider: provider || '',
     usage,
     reasoning,
+    ...(reasoningMeta?.signature !== undefined ? { reasoningSignature: reasoningMeta.signature } : {}),
+    ...(reasoningMeta?.redacted?.length ? { reasoningRedacted: reasoningMeta.redacted } : {}),
     agentRole,
     debugData: debugInfo ?? undefined,
     metadata,

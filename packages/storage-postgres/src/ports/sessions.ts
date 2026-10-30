@@ -140,8 +140,8 @@ export const SESSION_JSON_FIELDS: ReadonlySet<string> = new Set([
   'current_stream',
 ]);
 
-/** Колонки `messages` (порядок — как в `001_init`). */
-const MESSAGE_FIELDS = [
+/** Колонки `messages` (порядок — как в `001_init`; `028` — reasoning-подпись). */
+export const MESSAGE_FIELDS = [
   'id',
   'session_id',
   'seq',
@@ -161,6 +161,8 @@ const MESSAGE_FIELDS = [
   'provider',
   'provider_type',
   'reasoning',
+  'reasoning_signature',
+  'reasoning_redacted',
   'source',
   'author',
   'agent_role',
@@ -173,7 +175,7 @@ const MESSAGE_FIELDS = [
   'created_at',
 ] as const;
 
-const MESSAGE_JSON_FIELDS: ReadonlySet<string> = new Set([
+export const MESSAGE_JSON_FIELDS: ReadonlySet<string> = new Set([
   'parts',
   'tool_calls',
   'usage',
@@ -181,6 +183,7 @@ const MESSAGE_JSON_FIELDS: ReadonlySet<string> = new Set([
   'prompt_meta',
   'debug_data',
   'summary_of',
+  'reasoning_redacted',
 ]);
 
 /**

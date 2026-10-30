@@ -15,6 +15,7 @@ import { MIGRATION_024_BLOB_REFS } from './024-blob-refs.js';
 import { MIGRATION_025_PACKS_PIPELINES } from './025-packs-pipelines.js';
 import { MIGRATION_026_INSTANCE_SKILLS } from './026-instance-skills.js';
 import { MIGRATION_027_CONTEXT_FILES } from './027-context-files.js';
+import { MIGRATION_028_MESSAGE_REASONING_SIGNATURE } from './028-message-reasoning-signature.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -114,12 +115,11 @@ describe('миграция 026_instance_skills (ADR-116)', () => {
 });
 
 describe('миграция 027_context_files (ADR-116)', () => {
-  it('зарегистрирована в реестре под версией 27 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 27', () => {
     const migration = MIGRATIONS.find((m) => m.version === 27);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('027_context_files');
     expect(migration!.sql).toBe(MIGRATION_027_CONTEXT_FILES);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(27);
   });
 
   it('заводит таблицу файлов контекста: ключ (category, filename), content text', () => {
@@ -132,6 +132,28 @@ describe('миграция 027_context_files (ADR-116)', () => {
 
   it('идемпотентна (IF NOT EXISTS)', () => {
     expect(MIGRATION_027_CONTEXT_FILES).not.toMatch(/CREATE TABLE(?! IF NOT EXISTS)/);
+  });
+});
+
+describe('миграция 028_message_reasoning_signature (Anthropic thinking)', () => {
+  it('зарегистрирована в реестре под версией 28 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 28);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('028_message_reasoning_signature');
+    expect(migration!.sql).toBe(MIGRATION_028_MESSAGE_REASONING_SIGNATURE);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(28);
+  });
+
+  it('добавляет колонки подписи thinking и redacted-блоков идемпотентно', () => {
+    expect(MIGRATION_028_MESSAGE_REASONING_SIGNATURE).toContain(
+      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS reasoning_signature text;',
+    );
+    expect(MIGRATION_028_MESSAGE_REASONING_SIGNATURE).toContain(
+      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS reasoning_redacted jsonb;',
+    );
+    expect(MIGRATION_028_MESSAGE_REASONING_SIGNATURE).toContain(
+      'COMMENT ON COLUMN messages.reasoning_signature',
+    );
   });
 });
 

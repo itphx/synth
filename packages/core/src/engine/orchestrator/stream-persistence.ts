@@ -65,6 +65,10 @@ export class StreamMessageDraft {
 
   private _content = '';
   private _reasoning = '';
+  /** Anthropic: подпись thinking-блока текущей итерации (может быть пустой). */
+  private _reasoningSignature: string | undefined;
+  /** Anthropic: opaque-данные `redacted_thinking` текущей итерации. */
+  private _reasoningRedacted: string[] | undefined;
   private _model: string | undefined;
 
   private _appendPromise: Promise<void> | null = null;
@@ -99,10 +103,22 @@ export class StreamMessageDraft {
    * Актуализирует содержимое и (при необходимости) планирует запись.
    * Не блокирует стрим и не бросает исключений.
    */
-  push(content: string, reasoning: string, model?: string): void {
+  push(
+    content: string,
+    reasoning: string,
+    model?: string,
+    /**
+     * Anthropic: подпись thinking-блока и opaque-данные `redacted_thinking`
+     * текущей итерации. Приходят из чанков; без возврата в историю провайдер
+     * отвергает следующий запрос tool-loop.
+     */
+    reasoningMeta?: { signature?: string; redacted?: string[] },
+  ): void {
     if (this._closed) return;
     this._content = content;
     this._reasoning = reasoning;
+    this._reasoningSignature = reasoningMeta?.signature;
+    this._reasoningRedacted = reasoningMeta?.redacted;
     if (model) this._model = model;
 
     if (!this._ref) {
@@ -391,6 +407,8 @@ export class StreamMessageDraft {
       content: overrides.content,
       createdAt: nowISO(),
       ...(overrides.reasoning !== undefined ? { reasoning: overrides.reasoning } : {}),
+      ...(this._reasoningSignature !== undefined ? { reasoningSignature: this._reasoningSignature } : {}),
+      ...(this._reasoningRedacted?.length ? { reasoningRedacted: this._reasoningRedacted } : {}),
       ...(overrides.toolCalls !== undefined ? { toolCalls: overrides.toolCalls } : {}),
       ...(overrides.model !== undefined ? { model: overrides.model } : {}),
       metadata: overrides.metadata,

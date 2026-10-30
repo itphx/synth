@@ -208,6 +208,98 @@ describe('FileStore', () => {
     expect(loaded!.messages[0]!.qa_reason).toBeUndefined();
   });
 
+  it('Anthropic: reasoning + reasoningSignature + reasoningRedacted переживают save → load', async () => {
+    const session = makeSession({
+      id: 'with-thinking',
+      messages: [
+        {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 1,
+          origin: 'local' as const,
+          parts: [makeTextPart('answer')],
+          content: 'answer',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          model: 'claude-sonnet-4',
+          provider: 'anthropic',
+          reasoning: 'размышление',
+          reasoningSignature: 'sig-roundtrip',
+          reasoningRedacted: ['opaque-1', 'opaque-2'],
+        },
+        {
+          // Пустая подпись — валидное значение (RouterAI/qwen), не «нет подписи».
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 2,
+          origin: 'local' as const,
+          parts: [makeTextPart('second')],
+          content: 'second',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          reasoning: 'ещё',
+          reasoningSignature: '',
+        },
+      ],
+    });
+    await store.save(session);
+
+    // На диске — snake_case (как соседние поля сообщения).
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'with-thinking.json'), 'utf-8'));
+    expect(raw.messages[0].reasoning).toBe('размышление');
+    expect(raw.messages[0].reasoning_signature).toBe('sig-roundtrip');
+    expect(raw.messages[0].reasoning_redacted).toEqual(['opaque-1', 'opaque-2']);
+    expect(raw.messages[1].reasoning_signature).toBe('');
+
+    const loaded = await store.load('with-thinking');
+    expect(loaded!.messages[0]!.reasoning).toBe('размышление');
+    expect(loaded!.messages[0]!.reasoningSignature).toBe('sig-roundtrip');
+    expect(loaded!.messages[0]!.reasoningRedacted).toEqual(['opaque-1', 'opaque-2']);
+    expect(loaded!.messages[1]!.reasoningSignature).toBe('');
+    expect(loaded!.messages[1]!.reasoningRedacted).toBeUndefined();
+  });
+
+  it('Anthropic: legacy-сообщение без подписи читается как undefined, reasoning-часть восстанавливается', async () => {
+    // parts нет — legacy-формат: части строятся из content/reasoning.
+    const legacyMessage: Record<string, unknown> = {
+      id: generateId(),
+      role: MessageRole.ASSISTANT,
+      seq: 1,
+      origin: 'local',
+      // Пустой массив = «частей нет»: чтение строит их из content/reasoning.
+      parts: [],
+      content: 'legacy answer',
+      reasoning: 'legacy thinking',
+      createdAt: new Date().toISOString(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+
+    const session = makeSession({
+      id: 'legacy-thinking',
+      messages: [legacyMessage as unknown as Session['messages'][number]],
+    });
+    await store.save(session);
+
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'legacy-thinking.json'), 'utf-8'));
+    expect('reasoning_signature' in raw.messages[0]).toBe(false);
+    expect('reasoning_redacted' in raw.messages[0]).toBe(false);
+
+    const loaded = await store.load('legacy-thinking');
+    expect(loaded!.messages[0]!.reasoning).toBe('legacy thinking');
+    expect(loaded!.messages[0]!.reasoningSignature).toBeUndefined();
+    expect(loaded!.messages[0]!.reasoningRedacted).toBeUndefined();
+    expect(loaded!.messages[0]!.parts).toEqual([
+      expect.objectContaining({ type: 'text', data: 'legacy answer' }),
+      expect.objectContaining({ type: 'reasoning', data: 'legacy thinking' }),
+    ]);
+  });
+
   it('ADR-114: save → load сохраняет привязку к worktree (переживает рестарт)', async () => {
     const session = makeSession({
       id: 'with-worktree',

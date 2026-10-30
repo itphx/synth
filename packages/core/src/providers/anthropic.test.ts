@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { AnthropicProvider } from './anthropic.js';
+import { AnthropicProvider, resolveThinkingBudget } from './anthropic.js';
 import { ChatOrchestrator } from '../engine/orchestrator.js';
 import type { LLMMessage, SystemPromptPayload } from './base.js';
 import type { LLMChunk } from '@itphx/synth-shared';
@@ -752,5 +752,362 @@ describe('AnthropicProvider — tool_choice на шаге (лимит шагов
     const body = readBody(fetchMock);
     expect(body.tool_choice).toBeUndefined();
     expect(body.tools).toBeUndefined();
+  });
+});
+
+// ── Anthropic thinking: подпись блока, redacted-блоки, round-trip ───────────
+
+type AnthropicThinkingPrivate = {
+  _formatMessages(
+    messages: LLMMessage[],
+    thinkingEnabled?: boolean,
+  ): Array<Record<string, unknown>>;
+};
+
+/** Провайдер с включённым thinking и заданным лимитом вывода. */
+function thinkingProvider(overrides: Record<string, unknown> = {}): AnthropicProvider {
+  return new AnthropicProvider({
+    ...baseParams,
+    reasoningLevel: 'high',
+    maxTokens: 4096,
+    ...overrides,
+  } as ConstructorParameters<typeof AnthropicProvider>[0]);
+}
+
+function readBodyAt(fetchMock: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
+  const init = fetchMock.mock.calls[index]![1] as { body: string };
+  return JSON.parse(init.body) as Record<string, unknown>;
+}
+
+/** SSE-ответ из событий (event/data-пары). */
+function sseResponse(events: Array<Record<string, unknown>>): Response {
+  const body = events
+    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join('');
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+async function drainThinking(gen: AsyncGenerator<LLMChunk>): Promise<LLMChunk[]> {
+  const chunks: LLMChunk[] = [];
+  for await (const chunk of gen) chunks.push(chunk);
+  return chunks;
+}
+
+describe('Anthropic thinking — resolveThinkingBudget (паритет с opencode)', () => {
+  it('подрезает запрошенный бюджет под max_tokens и держит минимум', () => {
+    // Дефолтный лимит сессии: бюджет — половина вывода.
+    expect(resolveThinkingBudget(8192, 4096)).toBe(2048);
+    // Большой лимит: бюджет не больше запрошенного.
+    expect(resolveThinkingBudget(8192, 64_000)).toBe(8192);
+    // Тесный лимит: срабатывает минимум (1024), а не половина.
+    expect(resolveThinkingBudget(8192, 1500)).toBe(1024);
+    // Места под минимум нет — thinking не включается.
+    expect(resolveThinkingBudget(8192, 1024)).toBeNull();
+    expect(resolveThinkingBudget(8192, 512)).toBeNull();
+    // budget_tokens строго меньше max_tokens: сразу над минимумом — минимум.
+    expect(resolveThinkingBudget(8192, 1025)).toBe(1024);
+  });
+});
+
+describe('Anthropic thinking — запрос (температура, tool_choice, бюджет)', () => {
+  it('thinking включён: thinking.enabled с подрезанным бюджетом и temperature = 1', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider({
+      ...baseParams,
+      reasoningLevel: 'high',
+      maxTokens: 4096,
+      temperature: 0.2,
+    } as ConstructorParameters<typeof AnthropicProvider>[0]);
+
+    await provider.chat([makeMessage()]);
+
+    const body = readBody(fetchMock);
+    expect(body.max_tokens).toBe(4096);
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+    expect(body.temperature).toBe(1);
+    // Экземпляр не мутирован (провайдеры кэшируются и разделяются).
+    expect((provider as unknown as { temperature?: number }).temperature).toBe(0.2);
+  });
+
+  it('thinking выключен (reasoningLevel default): temperature как задано, поля thinking нет', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider({
+      ...baseParams,
+      temperature: 0.2,
+    } as ConstructorParameters<typeof AnthropicProvider>[0]);
+
+    await provider.chat([makeMessage()]);
+
+    const body = readBody(fetchMock);
+    expect(body.temperature).toBe(0.2);
+    expect(body.thinking).toBeUndefined();
+  });
+
+  it('max_tokens меньше минимума: thinking не включается, запрос не падает', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = thinkingProvider({ maxTokens: 1024 });
+    await drainThinking(provider.chatAsync([makeMessage()]));
+
+    const body = readBody(fetchMock);
+    expect(body.thinking).toBeUndefined();
+    expect(body.max_tokens).toBe(1024);
+  });
+
+  it("thinking включён: tool_choice 'required' → 'auto', 'none' остаётся", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = thinkingProvider();
+    const tools = makeTools();
+    await drainThinking(provider.chatAsync([makeMessage()], undefined, tools, undefined, undefined, {
+      toolChoice: 'required',
+    }));
+    expect(readBodyAt(fetchMock, 0).tool_choice).toEqual({ type: 'auto' });
+
+    await drainThinking(provider.chatAsync([makeMessage()], undefined, tools, undefined, undefined, {
+      toolChoice: 'none',
+    }));
+    expect(readBodyAt(fetchMock, 1).tool_choice).toEqual({ type: 'none' });
+  });
+});
+
+describe('Anthropic thinking — _formatMessages (порядок и реплей)', () => {
+  const provider = thinkingProvider() as unknown as AnthropicThinkingPrivate;
+
+  it('порядок блоков: redacted_thinking → thinking → text → tool_use', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        content: 'ответ',
+        reasoning: 'размышление',
+        reasoningSignature: 'sig-1',
+        reasoningRedacted: ['opaque-1'],
+        toolUse: [{ id: 'tu_1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+      }),
+    ], true);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'redacted_thinking', data: 'opaque-1' },
+      { type: 'thinking', thinking: 'размышление', signature: 'sig-1' },
+      { type: 'text', text: 'ответ' },
+      expect.objectContaining({ type: 'tool_use', id: 'tu_1' }),
+    ]);
+  });
+
+  it('подпись "" уходит (RouterAI/qwen): thinking-блок с пустой подписью валиден', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({ role: 'assistant', content: '', reasoning: 'только текст', reasoningSignature: '' }),
+    ], true);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'thinking', thinking: 'только текст', signature: '' },
+    ]);
+  });
+
+  it('подпись без текста тоже реплеится (thinking-блок с пустым текстом)', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({ role: 'assistant', content: 'text', reasoningSignature: 'sig-only' }),
+    ], true);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'thinking', thinking: '', signature: 'sig-only' },
+      { type: 'text', text: 'text' },
+    ]);
+  });
+
+  it('thinking выключен в этом запросе: thinking/redacted-блоки из истории не уходят', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        content: 'ответ',
+        reasoning: 'размышление',
+        reasoningSignature: 'sig-1',
+        reasoningRedacted: ['opaque-1'],
+      }),
+    ], false);
+
+    expect(formatted[0]!.content).toEqual([{ type: 'text', text: 'ответ' }]);
+  });
+
+  it('пары tool_use/tool_result не рвутся: assistant(tool_use) → user(tool_result)', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        content: '',
+        reasoning: 'думаю',
+        reasoningSignature: 'sig-2',
+        toolUse: [{ id: 'tu_2', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+      }),
+      makeMessage({ role: 'tool', content: 'файл', toolCallId: 'tu_2' }),
+    ], true);
+
+    expect(formatted[0]!.role).toBe('assistant');
+    expect(formatted[0]!.content).toEqual([
+      { type: 'thinking', thinking: 'думаю', signature: 'sig-2' },
+      expect.objectContaining({ type: 'tool_use', id: 'tu_2' }),
+    ]);
+    expect(formatted[1]!.role).toBe('user');
+    expect(formatted[1]!.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'tu_2', content: 'файл' },
+    ]);
+  });
+});
+
+describe('Anthropic thinking — non-stream ответ', () => {
+  it('thinking + signature и redacted_thinking попадают в reasoning/reasoningSignature/reasoningRedacted', async () => {
+    const payload = {
+      content: [
+        { type: 'thinking', thinking: 'план', signature: 'sig-ns' },
+        { type: 'redacted_thinking', data: 'opaque-ns' },
+        { type: 'text', text: 'ответ' },
+      ],
+      usage: { input_tokens: 5, output_tokens: 7 },
+      stop_reason: 'end_turn',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await thinkingProvider().chat([makeMessage()]);
+    expect(response.content).toBe('ответ');
+    expect(response.reasoning).toBe('план');
+    expect(response.reasoningSignature).toBe('sig-ns');
+    expect(response.reasoningRedacted).toEqual(['opaque-ns']);
+  });
+
+  it('пустая подпись thinking-блока сохраняется как "" (не undefined)', async () => {
+    const payload = {
+      content: [{ type: 'thinking', thinking: 'пусто', signature: '' }],
+      usage: {},
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await thinkingProvider().chat([makeMessage()]);
+    expect(response.reasoningSignature).toBe('');
+  });
+});
+
+describe('Anthropic thinking — stream', () => {
+  it('content_block_start thinking (подпись) + thinking_delta + signature_delta + text_delta', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: 'sig-start' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'раз' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'мышление' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-final' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'ответ' } },
+      { type: 'message_stop' },
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const chunks = await drainThinking(thinkingProvider().chatAsync([makeMessage()]));
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.content).toBe('ответ');
+    expect(final.reasoning).toBe('размышление');
+    // Дельта подписи авторитетнее значения из старта блока.
+    expect(final.reasoningSignature).toBe('sig-final');
+    expect(final.reasoningRedacted).toBeUndefined();
+    // Кумулятивный reasoning в промежуточных чанках.
+    expect(chunks.filter((c) => !c.isFinal && !c.content && c.reasoning).map((c) => c.reasoning)).toEqual([
+      'раз',
+      'размышление',
+    ]);
+  });
+
+  it('content_block_start thinking с пустой подписью: signature "" доходит до финала', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 't' } },
+      { type: 'message_stop' },
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const chunks = await drainThinking(thinkingProvider().chatAsync([makeMessage()]));
+    expect(chunks.find((c) => c.isFinal)!.reasoningSignature).toBe('');
+  });
+
+  it('redacted_thinking в стриме собирается в reasoningRedacted (verbatim data)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      { type: 'content_block_start', index: 0, content_block: { type: 'redacted_thinking', data: 'opaque-stream' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'ok' } },
+      { type: 'message_stop' },
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const chunks = await drainThinking(thinkingProvider().chatAsync([makeMessage()]));
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.reasoningRedacted).toEqual(['opaque-stream']);
+    expect(final.reasoningSignature).toBeUndefined();
+  });
+});
+
+describe('Anthropic thinking — round-trip (ответ → следующий запрос)', () => {
+  it('ответ с подписью реплеится thinking-блоком перед text/tool_use', async () => {
+    const payload = {
+      content: [
+        { type: 'thinking', thinking: 'ход мысли', signature: 'sig-rt' },
+        { type: 'redacted_thinking', data: 'opaque-rt' },
+        { type: 'text', text: 'нужно прочитать файл' },
+        {
+          type: 'tool_use',
+          id: 'tu_rt',
+          name: 'read_file',
+          input: { path: 'a.txt' },
+        },
+      ],
+      usage: { input_tokens: 3, output_tokens: 4 },
+      stop_reason: 'tool_use',
+    };
+    // Свежий Response на каждый вызов: тело одноразовое.
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(
+      JSON.stringify(payload),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = thinkingProvider();
+    const first = await provider.chat([makeMessage()]);
+    expect(first.reasoningSignature).toBe('sig-rt');
+
+    // Следующий запрос tool-loop: история с ответом модели + tool_result.
+    await provider.chat([
+      makeMessage({ role: 'user', content: 'прочитай файл' }),
+      makeMessage({
+        role: 'assistant',
+        content: first.content,
+        reasoning: first.reasoning,
+        reasoningSignature: first.reasoningSignature,
+        reasoningRedacted: first.reasoningRedacted,
+        toolUse: first.toolCalls,
+      }),
+      makeMessage({ role: 'tool', content: 'содержимое', toolCallId: 'tu_rt' }),
+    ]);
+
+    const body = readBodyAt(fetchMock, 1);
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const assistant = messages[1]!;
+    expect(assistant.role).toBe('assistant');
+    expect(assistant.content).toEqual([
+      { type: 'redacted_thinking', data: 'opaque-rt' },
+      { type: 'thinking', thinking: 'ход мысли', signature: 'sig-rt' },
+      { type: 'text', text: 'нужно прочитать файл' },
+      expect.objectContaining({ type: 'tool_use', id: 'tu_rt' }),
+    ]);
+    // Пара tool_use → tool_result сохранилась.
+    expect(messages[2]).toMatchObject({
+      role: 'user',
+      content: [expect.objectContaining({ type: 'tool_result', tool_use_id: 'tu_rt' })],
+    });
   });
 });

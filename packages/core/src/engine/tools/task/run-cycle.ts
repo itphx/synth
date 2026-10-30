@@ -396,6 +396,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     const doomTracker = new Map<string, number>();
     let subagentReasoning = '';
     let subagentDenied = false;
+    /**
+     * Anthropic: подпись thinking-блока финального сообщения ребёнка. Заполняется,
+     * только пока `reasoning` — текст одного блока (см. родительский цикл).
+     */
+    let subagentReasoningMeta: { signature?: string; redacted?: string[] } | undefined;
 
     let allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
     const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
@@ -492,6 +497,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           reasoning: allSubagentReasoning.length > 0
             ? allSubagentReasoning.map((r) => r.text).join('\n\n---\n\n')
             : undefined,
+          // Anthropic: подпись thinking-блока (только для одиночного блока —
+          // у склейки подпись принадлежала бы последнему).
+          ...(subagentReasoningMeta?.signature !== undefined
+            ? { reasoningSignature: subagentReasoningMeta.signature }
+            : {}),
+          ...(subagentReasoningMeta?.redacted?.length
+            ? { reasoningRedacted: subagentReasoningMeta.redacted }
+            : {}),
           // Как в _persistToolChain родителя: финальное сообщение несёт
           // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
           // так же аккуратно, как финал родительской.
@@ -673,6 +686,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       let accumulatedContent = '';
       let toolCalls: Record<string, unknown>[] | undefined = [];
       let reasoning = '';
+      // Anthropic: подпись thinking-блока и opaque `redacted_thinking` этой
+      // итерации — без возврата в историю провайдер отвергает следующий вызов.
+      let reasoningSignature: string | undefined;
+      let reasoningRedacted: string[] | undefined;
       let lastPublishedReasoning = '';
       let lastPublishedContentLen = 0;
 
@@ -707,6 +724,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
               toolCalls = chunk.toolCalls;
             }
+            if (chunk.reasoningSignature !== undefined) reasoningSignature = chunk.reasoningSignature;
+            if (chunk.reasoningRedacted?.length) reasoningRedacted = chunk.reasoningRedacted;
             // ADR-070 §2.6: usage и модель саб-агента для статистики родителя.
             // Провайдеры отдают в каждом чанке НАКОПИТЕЛЬНЫЙ usage (running total),
             // поэтому суммируем только финальный чанк итерации — иначе usage
@@ -907,6 +926,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         // Тот же общий хелпер, что у основного стрима: кумулятивный reasoning
         // не должен давать дубль при повторе в новой итерации.
         allSubagentReasoning = appendReasoningBlock(allSubagentReasoning, reasoning, stepIteration);
+        subagentReasoningMeta = allSubagentReasoning.length === 1
+          ? { signature: reasoningSignature, redacted: reasoningRedacted }
+          : undefined;
       }
 
       // Шаг-лимит: инструменты в запросе остались (кэш провайдера), но вызов
@@ -966,6 +988,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             hidden: false,
             agentRole: subagentType,
             reasoning: reasoning || undefined,
+            // Anthropic: подпись thinking-блока этой итерации (tool-loop
+            // отвергается API, если thinking не возвращён в историю).
+            ...(reasoningSignature !== undefined ? { reasoningSignature } : {}),
+            ...(reasoningRedacted?.length ? { reasoningRedacted } : {}),
             // OpenAI-совместимая цепочка: assistant(toolCalls) → tool.
             // tool_chain=true — UI дочерней сессии скрывает промежуточные
             // сообщения (визуализация уже в финальном с tool_results).
@@ -991,6 +1017,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         pinned: false,
         branchId: '',
         toolUse: toolCalls,
+        // Anthropic: thinking tool-loop-сообщения обязан вернуться в историю.
+        reasoning: reasoning || undefined,
+        reasoningSignature,
+        reasoningRedacted,
       });
 
       for (const tc of toolCalls) {

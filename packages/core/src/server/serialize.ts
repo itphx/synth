@@ -180,6 +180,10 @@ export function serializeMessage(msg: Message, index: number, opts?: SerializeMe
     model: msg.model || null,
     provider: msg.provider || null,
     provider_type: msg.providerType || null,
+    // Anthropic: `reasoningSignature`/`reasoningRedacted` в публичный ответ
+    // НЕ отдаются — это служебные данные протокола провайдера (подпись
+    // thinking-блока нужна только для реплея истории в API). UI они не нужны,
+    // потребители API на них не опираются; персист и реплей живут на сервере.
     reasoning: msg.reasoning || null,
     debug_data: msg.debugData || null,
     /** ADR-070 §2.4: предсказание/валидация prompt-cache для хода. */

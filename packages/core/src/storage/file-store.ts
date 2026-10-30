@@ -46,6 +46,14 @@ interface SerializedMessage {
   provider_type?: string;
   usage?: SerializedUsage;
   reasoning?: string;
+  /**
+   * Anthropic-протокол: подпись thinking-блока и opaque-данные
+   * `redacted_thinking`. Без них следующий запрос tool-loop отвергается API —
+   * поэтому они персистятся вместе с сообщением (аддитивные поля, legacy-записи
+   * читаются как `undefined`).
+   */
+  reasoning_signature?: string;
+  reasoning_redacted?: string[];
   source?: string;
   author?: string;
   agent_role?: string;
@@ -209,6 +217,8 @@ function serializeMessage(msg: Message): SerializedMessage {
     reasoning_tokens: msg.usage.reasoningTokens,
   } : undefined,
     reasoning: msg.reasoning,
+    reasoning_signature: msg.reasoningSignature,
+    reasoning_redacted: msg.reasoningRedacted,
     source: msg.source,
     author: msg.author,
     agent_role: msg.agentRole,
@@ -284,6 +294,11 @@ function deserializeMessage(data: SerializedMessage): Message {
     reasoningTokens: data.usage.reasoning_tokens,
   } : undefined,
     reasoning: data.reasoning,
+    // Anthropic: подпись thinking-блока и opaque `redacted_thinking` —
+    // аддитивные поля (legacy-записи → undefined). `reasoning`-часть выше
+    // восстанавливается из `data.reasoning` как и раньше.
+    reasoningSignature: data.reasoning_signature,
+    reasoningRedacted: data.reasoning_redacted,
     source: data.source as Message['source'],
     author: data.author,
     agentRole: data.agent_role,

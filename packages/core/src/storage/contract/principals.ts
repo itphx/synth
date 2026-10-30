@@ -123,6 +123,69 @@ export function describeSessionRepository(
       expect(without!.worktree).toBeUndefined();
     });
 
+    it('Anthropic: подпись thinking и opaque `redacted_thinking` переживают round-trip (save/append/update)', async () => {
+      const { repo } = await make();
+      const signed = {
+        ...makeMessage('signed'),
+        seq: 1,
+        role: MessageRole.ASSISTANT,
+        reasoning: 'размышление',
+        reasoningSignature: 'sig-abc',
+        reasoningRedacted: ['opaque-1', 'opaque-2'],
+      };
+      await repo.save(makeSession({ id: 'reasoning-signature', messages: [signed] }));
+
+      const loaded = await repo.load('reasoning-signature');
+      expect(loaded!.messages[0]).toMatchObject({
+        reasoning: 'размышление',
+        reasoningSignature: 'sig-abc',
+        reasoningRedacted: ['opaque-1', 'opaque-2'],
+      });
+
+      // Пустая подпись — валидное значение (RouterAI/qwen), а не «нет подписи».
+      const appended = await repo.appendMessage('reasoning-signature', {
+        ...makeMessage('empty-signature'),
+        role: MessageRole.ASSISTANT,
+        reasoning: 'r2',
+        reasoningSignature: '',
+        reasoningRedacted: ['opaque-3'],
+      });
+      expect(appended!.reasoningSignature).toBe('');
+
+      const updated = await repo.updateMessage('reasoning-signature', {
+        ...makeMessage('signed'),
+        seq: 1,
+        role: MessageRole.ASSISTANT,
+        reasoning: 'размышление',
+        reasoningSignature: 'sig-updated',
+        reasoningRedacted: ['opaque-4'],
+      });
+      expect(updated).not.toBeNull();
+
+      const after = await repo.load('reasoning-signature');
+      expect(after!.messages[0]).toMatchObject({
+        reasoningSignature: 'sig-updated',
+        reasoningRedacted: ['opaque-4'],
+      });
+      expect(after!.messages[1]).toMatchObject({
+        reasoningSignature: '',
+        reasoningRedacted: ['opaque-3'],
+      });
+    });
+
+    it('Anthropic: legacy-сообщение без подписи читается как undefined (без дефолтов)', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'reasoning-legacy',
+        messages: [{ ...makeMessage('legacy'), seq: 1, reasoning: 'old reasoning' }],
+      }));
+
+      const loaded = await repo.load('reasoning-legacy');
+      expect(loaded!.messages[0]!.reasoning).toBe('old reasoning');
+      expect(loaded!.messages[0]!.reasoningSignature).toBeUndefined();
+      expect(loaded!.messages[0]!.reasoningRedacted).toBeUndefined();
+    });
+
     it('updateMessage по seq: меняется только цель, id/seq/createdAt сохраняются, updatedAt сессии обновился', async () => {
       const { repo } = await make();
       const first = { ...makeMessage('first'), seq: 1, metadata: { keep: true } };

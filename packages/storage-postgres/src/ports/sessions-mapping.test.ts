@@ -9,15 +9,25 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Session } from '@itphx/synth-shared';
+import type { Message, Session } from '@itphx/synth-shared';
 import {
+  deserializeMessage,
   deserializeSession,
   deserializeSessionWorktree,
   emptySessionChildren,
+  messageRow,
+  serializeMessage,
   serializeSession,
+  type MessageRow,
   type SessionRow,
 } from './sessions-mapping.js';
-import { rowValues, SESSION_FIELDS, SESSION_JSON_FIELDS } from './sessions.js';
+import {
+  MESSAGE_FIELDS,
+  MESSAGE_JSON_FIELDS,
+  rowValues,
+  SESSION_FIELDS,
+  SESSION_JSON_FIELDS,
+} from './sessions.js';
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -177,5 +187,105 @@ describe('PG-маппинг сессии: привязка к worktree (ADR-114)
       directory: '/d',
       branch: '',
     });
+  });
+});
+
+describe('PG-маппинг сообщения: подпись thinking (Anthropic)', () => {
+  function makeMessage(overrides: Partial<Message> = {}): Message {
+    return {
+      id: 'msg-1',
+      role: 'assistant',
+      seq: 1,
+      origin: 'local',
+      parts: [],
+      content: 'answer',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...overrides,
+    } as Message;
+  }
+
+  it('serializeMessage кладёт подпись и redacted-блоки (snake_case)', () => {
+    const row = serializeMessage(makeMessage({
+      reasoning: 'размышление',
+      reasoningSignature: 'sig-1',
+      reasoningRedacted: ['opaque-1', 'opaque-2'],
+    }));
+
+    expect(row.reasoning).toBe('размышление');
+    expect(row.reasoning_signature).toBe('sig-1');
+    expect(row.reasoning_redacted).toEqual(['opaque-1', 'opaque-2']);
+  });
+
+  it('round-trip: подпись (в т.ч. пустая) и redacted-блоки переживают запись/чтение', () => {
+    const serialized = serializeMessage(makeMessage({
+      reasoning: 'r',
+      reasoningSignature: 'sig-1',
+      reasoningRedacted: ['opaque-1'],
+    }));
+    const row = messageRow(makeMessage({
+      reasoning: 'r',
+      reasoningSignature: 'sig-1',
+      reasoningRedacted: ['opaque-1'],
+    }), 'sess-1');
+
+    const loaded = deserializeMessage({
+      ...(row as unknown as MessageRow),
+      parts: serialized.parts,
+    });
+    expect(loaded.reasoning).toBe('r');
+    expect(loaded.reasoningSignature).toBe('sig-1');
+    expect(loaded.reasoningRedacted).toEqual(['opaque-1']);
+
+    // Пустая подпись — валидное значение, не «нет подписи».
+    const empty = deserializeMessage({
+      ...(row as unknown as MessageRow),
+      parts: serialized.parts,
+      reasoning_signature: '',
+      reasoning_redacted: null,
+    });
+    expect(empty.reasoningSignature).toBe('');
+    expect(empty.reasoningRedacted).toBeUndefined();
+  });
+
+  it('legacy-строка без колонок читается как undefined (без дефолтов)', () => {
+    const loaded = deserializeMessage({
+      id: 'msg-legacy',
+      seq: 1,
+      role: 'assistant',
+      origin: 'local',
+      content: 'старый',
+      parts: [],
+      reasoning: 'старое размышление',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    expect(loaded.reasoning).toBe('старое размышление');
+    expect(loaded.reasoningSignature).toBeUndefined();
+    expect(loaded.reasoningRedacted).toBeUndefined();
+    // reasoning-часть восстанавливается из `reasoning` (legacy-ветка без parts).
+    expect(loaded.parts).toEqual([
+      expect.objectContaining({ type: 'text', data: 'старый' }),
+      expect.objectContaining({ type: 'reasoning', data: 'старое размышление' }),
+    ]);
+  });
+
+  it('колонки есть в списке и jsonb-наборе: `reasoning_redacted` уходит в БД jsonb', () => {
+    expect(MESSAGE_FIELDS).toContain('reasoning_signature');
+    expect(MESSAGE_FIELDS).toContain('reasoning_redacted');
+    expect(MESSAGE_JSON_FIELDS.has('reasoning_redacted')).toBe(true);
+    expect(MESSAGE_JSON_FIELDS.has('reasoning_signature')).toBe(false);
+
+    const row = serializeMessage(makeMessage({ reasoningRedacted: ['opaque-1'] })) as
+      unknown as Record<string, unknown>;
+    const [signature, redacted] = rowValues(
+      row,
+      ['reasoning_signature', 'reasoning_redacted'],
+      MESSAGE_JSON_FIELDS,
+    );
+    expect(signature).toBeNull();
+    expect(typeof redacted).toBe('string');
+    expect(JSON.parse(redacted as string)).toEqual(['opaque-1']);
   });
 });

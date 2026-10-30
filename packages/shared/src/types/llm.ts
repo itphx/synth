@@ -23,6 +23,19 @@ export interface LLMChunk {
   usage?: TokenUsage;
   toolCalls?: Record<string, unknown>[];
   reasoning?: string;
+  /**
+   * Anthropic-протокол: подпись thinking-блока (`signature`). Без возврата этой
+   * подписи в историю Anthropic отвергает следующий запрос tool-loop
+   * («Expected `thinking`…»). Пустая строка — валидная подпись (RouterAI/qwen
+   * отдают `"signature": ""`). Аддитивное поле: остальные провайдеры его не
+   * заполняют.
+   */
+  reasoningSignature?: string;
+  /**
+   * Anthropic-протокол: opaque-данные блоков `redacted_thinking` (verbatim
+   * `data`) — реплеятся в историю без изменений.
+   */
+  reasoningRedacted?: string[];
   model?: string;
 }
 
@@ -32,5 +45,9 @@ export interface LLMResponse {
   usage: TokenUsage;
   toolCalls?: Record<string, unknown>[];
   reasoning?: string;
+  /** Anthropic: подпись thinking-блока (см. `LLMChunk.reasoningSignature`). */
+  reasoningSignature?: string;
+  /** Anthropic: opaque-данные `redacted_thinking` (см. `LLMChunk.reasoningRedacted`). */
+  reasoningRedacted?: string[];
   debugInfo?: Record<string, unknown>;
 }

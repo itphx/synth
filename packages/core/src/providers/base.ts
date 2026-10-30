@@ -255,6 +255,14 @@ export interface LLMMessage {
   toolCallId?: string;
   toolUse?: Record<string, unknown>[];
   reasoning?: string;
+  /**
+   * Anthropic-протокол: подпись thinking-блока и opaque-данные
+   * `redacted_thinking` (см. `LLMChunk.reasoningSignature`). Незаполненные —
+   * провайдер реплеит thinking с пустой подписью (валидно для RouterAI) либо
+   * не реплеит вовсе (thinking выключен).
+   */
+  reasoningSignature?: string;
+  reasoningRedacted?: string[];
   groupId?: string;
   agentRole?: string;
 }

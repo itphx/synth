@@ -111,6 +111,16 @@ export interface Message {
   providerType?: string;
   usage?: TokenUsage;
   reasoning?: string;
+  /**
+   * Anthropic-протокол: подпись thinking-блока и opaque-данные
+   * `redacted_thinking`. Аддитивные поля персистятся вместе с сообщением —
+   * без них следующий запрос tool-loop отвергается («thinking не возвращён в
+   * историю»). Поле `reasoning` остаётся текстом размышлений; подпись
+   * валидна только для того текста, с которым пришла (у финального сообщения
+   * с несколькими блоками подписи нет — она принадлежит последнему блоку).
+   */
+  reasoningSignature?: string;
+  reasoningRedacted?: string[];
   source?: 'web' | 'cli' | 'api';
   author?: string;
   /**

@@ -107,6 +107,10 @@ export interface MessageRow {
   provider?: string | null;
   provider_type?: string | null;
   reasoning?: string | null;
+  /** Anthropic: подпись thinking-блока (миграция `028`). */
+  reasoning_signature?: string | null;
+  /** Anthropic: opaque-данные `redacted_thinking` (jsonb, миграция `028`). */
+  reasoning_redacted?: unknown;
   source?: string | null;
   author?: string | null;
   agent_role?: string | null;
@@ -203,6 +207,10 @@ export interface SerializedMessage {
   provider_type?: string;
   usage?: SerializedUsage;
   reasoning?: string;
+  /** Anthropic: подпись thinking-блока (миграция `028`). */
+  reasoning_signature?: string;
+  /** Anthropic: opaque-данные `redacted_thinking` (jsonb, миграция `028`). */
+  reasoning_redacted?: string[];
   source?: string;
   author?: string;
   agent_role?: string;
@@ -285,6 +293,10 @@ export function serializeMessage(msg: Message): SerializedMessage {
         }
       : undefined,
     reasoning: msg.reasoning,
+    // Anthropic: подпись thinking-блока и opaque `redacted_thinking` —
+    // колонки `reasoning_signature`/`reasoning_redacted` (миграция `028`).
+    reasoning_signature: msg.reasoningSignature,
+    reasoning_redacted: msg.reasoningRedacted,
     source: msg.source,
     author: msg.author,
     agent_role: msg.agentRole,
@@ -397,6 +409,13 @@ export function deserializeMessage(row: MessageRow): Message {
         }
       : undefined,
     reasoning: row.reasoning ?? undefined,
+    // Anthropic: подпись thinking-блока и opaque `redacted_thinking` (legacy
+    // строки без колонок читаются как `undefined`). `reasoning`-часть выше
+    // восстанавливается из `row.reasoning` как и раньше.
+    reasoningSignature: row.reasoning_signature ?? undefined,
+    reasoningRedacted: Array.isArray(row.reasoning_redacted)
+      ? (row.reasoning_redacted as string[])
+      : undefined,
     source: (row.source ?? undefined) as Message['source'],
     author: row.author ?? undefined,
     agentRole: row.agent_role ?? undefined,

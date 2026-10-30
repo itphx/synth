@@ -142,6 +142,11 @@ export function sessionMessagesToLlm(
       toolCallId: isPairedTool ? msg.toolCallId : undefined,
       // Reasoning чужого агента не прокидываем; у tool-сообщений его нет.
       reasoning: isOwnAssistant ? msg.reasoning : undefined,
+      // Anthropic: подпись thinking-блока и opaque-данные `redacted_thinking`
+      // персистятся вместе с сообщением — без них tool-loop отвергается API
+      // («thinking не возвращён в историю»). Только «свои» assistant-сообщения.
+      reasoningSignature: isOwnAssistant ? msg.reasoningSignature : undefined,
+      reasoningRedacted: isOwnAssistant ? msg.reasoningRedacted : undefined,
       agentRole: msg.agentRole,
     });
   }

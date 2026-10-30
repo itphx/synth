@@ -28,6 +28,50 @@ const ANTHROPIC_API_VERSION = '2023-06-01';
 const MAX_CACHE_BREAKPOINTS = 4;
 
 /**
+ * Лимит вывода по умолчанию, если его не задали ни провайдер, ни сессия.
+ * Дефолт сессии — тот же (`SessionManager.createSession`), поэтому бюджет
+ * thinking считается от **фактического** `max_tokens` запроса.
+ */
+const DEFAULT_MAX_TOKENS = 4096;
+
+/** Запрошенный бюджет thinking (`reasoningLevel: 'high'`), как у opencode. */
+const REQUESTED_THINKING_BUDGET = 8192;
+
+/** Минимальный бюджет thinking, который принимает Anthropic. */
+const MIN_THINKING_BUDGET = 1024;
+
+/**
+ * Бюджет thinking под фактический `max_tokens` (паритет с opencode,
+ * `fitThinkingBudget`): бюджет не больше половины лимита вывода (thinking
+ * считается в тот же `max_tokens` — иначе ответу/вызову тула не остаётся
+ * места) и строго меньше `max_tokens` (Anthropic: `budget_tokens` должен быть
+ * меньше `max_tokens`). Если половина лимита ниже минимума, бюджет поднимается
+ * до `MIN_THINKING_BUDGET` (место под минимум ещё есть); если места нет вовсе
+ * (`max_tokens` ≤ минимума) — `null`: thinking не включается, запрос уходит
+ * обычным (400 «max_tokens must be greater than thinking.budget_tokens»
+ * не возникает).
+ */
+export function resolveThinkingBudget(requested: number, maxTokens: number): number | null {
+  if (!Number.isFinite(maxTokens) || maxTokens <= MIN_THINKING_BUDGET) return null;
+  const budget = Math.min(requested, Math.max(Math.floor(maxTokens / 2), MIN_THINKING_BUDGET));
+  return budget < maxTokens ? budget : null;
+}
+
+/**
+ * План thinking для запроса: включать ли блоки в истории и что отправить в
+ * `body.thinking`.
+ *  - `high` — thinking включён (бюджет подрезан под `max_tokens`);
+ *  - `none` — явный `{type:'disabled'}`;
+ *  - прочие уровни — поле не отправляется (дефолт модели), thinking **не**
+ *    включается, и thinking-блоки из истории не реплеятся (Anthropic не
+ *    примет их, если thinking в этом запросе выключен).
+ */
+interface ThinkingPlan {
+  enabled: boolean;
+  field?: { type: 'enabled'; budget_tokens: number } | { type: 'disabled' };
+}
+
+/**
  * ADR-071 §2.1: индекс инструмента для tools-брейкпоинта.
  *  - `stableToolCount` не задан → последний инструмент (обратная совместимость);
  *  - `stableToolCount <= 0` → -1 (встроенных нет, MCP не кэшируем);
@@ -111,6 +155,60 @@ export class AnthropicProvider extends BaseProvider {
     return result;
   }
 
+  /**
+   * План thinking для запроса (см. `ThinkingPlan`). Бюджет считается от
+   * фактического `max_tokens` — иначе при дефолтном лимите сессии (4096) API
+   * отвергал запрос «max_tokens must be greater than thinking.budget_tokens».
+   */
+  private _resolveThinking(maxTokens: number): ThinkingPlan {
+    if (this.reasoningLevel === 'none') return { enabled: false, field: { type: 'disabled' } };
+    if (this.reasoningLevel !== 'high') return { enabled: false };
+    const budget = resolveThinkingBudget(REQUESTED_THINKING_BUDGET, maxTokens);
+    if (budget === null) {
+      // Места под thinking нет — ход продолжается обычным запросом (без падения).
+      warning(
+        'ANTHROPIC',
+        `thinking не включён: max_tokens=${maxTokens} не вмещает бюджет ${MIN_THINKING_BUDGET} (минимум)`,
+      );
+      return { enabled: false };
+    }
+    return { enabled: true, field: { type: 'enabled', budget_tokens: budget } };
+  }
+
+  /**
+   * Anthropic требует `temperature: 1` при включённом thinking — значение
+   * сессии/агента принудительно перекрывается (иначе 400). Значение не
+   * мутируется на экземпляре (провайдеры кэшируются и разделяются).
+   */
+  private _forceThinkingTemperature(body: Record<string, unknown>): void {
+    if (this.temperature !== 1) {
+      info(
+        'ANTHROPIC',
+        `thinking включён: temperature ${this.temperature ?? 'default'} → 1 (требование API)`,
+      );
+    }
+    body.temperature = 1;
+  }
+
+  /**
+   * `tool_choice` при включённом thinking: Anthropic запрещает принудительный
+   * вызов инструмента (`any`/`tool`), поэтому `required` коэрсится в `auto`;
+   * `none` разрешён (шаг-лимит).
+   */
+  private _applyToolChoice(
+    body: Record<string, unknown>,
+    toolChoice: ChatOptions['toolChoice'],
+    thinkingEnabled: boolean,
+  ): void {
+    if (!toolChoice) return;
+    let choice = toolChoice;
+    if (thinkingEnabled && choice === 'required') {
+      warning('ANTHROPIC', "thinking включён: tool_choice 'required' → 'auto' (API запрещает принудительный вызов)");
+      choice = 'auto';
+    }
+    body.tool_choice = { type: choice };
+  }
+
   async chat(
     messages: LLMMessage[],
     systemPrompt?: SystemPromptInput,
@@ -119,15 +217,17 @@ export class AnthropicProvider extends BaseProvider {
     debugCollector?: DebugCollector,
     options?: ChatOptions,
   ): Promise<LLMResponse> {
-    const formattedMessages = this._formatMessages(messages);
+    const maxTokens = this.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const thinking = this._resolveThinking(maxTokens);
+    const formattedMessages = this._formatMessages(messages, thinking.enabled);
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
-      max_tokens: this.maxTokens ?? 4096,
+      max_tokens: maxTokens,
     };
     this._applyTemperature(body);
-    if (this.reasoningLevel === 'high') body.thinking = { type: 'enabled', budget_tokens: 8192 };
-    else if (this.reasoningLevel === 'none') body.thinking = { type: 'disabled' };
+    if (thinking.enabled) this._forceThinkingTemperature(body);
+    if (thinking.field) body.thinking = thinking.field;
     if (this.topP !== undefined) body.top_p = this.topP;
     const systemBlocks = this._buildSystemBlocks(systemPrompt);
     if (systemBlocks.length) body.system = systemBlocks;
@@ -135,7 +235,7 @@ export class AnthropicProvider extends BaseProvider {
       body.tools = this._formatTools(tools);
       // Anthropic: `tool_choice` — объект `{type}`; без инструментов поле не
       // отправляем (валидация API отвергнет запрос).
-      if (options?.toolChoice) body.tool_choice = { type: options.toolChoice };
+      this._applyToolChoice(body, options?.toolChoice, thinking.enabled);
     }
     if (stream) body.stream = true;
     this._applyCacheControl(body, systemPrompt);
@@ -185,16 +285,18 @@ export class AnthropicProvider extends BaseProvider {
     cancellationToken?: CancellationToken,
     options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
-    const formattedMessages = this._formatMessages(messages);
+    const maxTokens = this.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const thinking = this._resolveThinking(maxTokens);
+    const formattedMessages = this._formatMessages(messages, thinking.enabled);
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
-      max_tokens: this.maxTokens ?? 4096,
+      max_tokens: maxTokens,
       stream: true,
     };
     this._applyTemperature(body);
-    if (this.reasoningLevel === 'high') body.thinking = { type: 'enabled', budget_tokens: 8192 };
-    else if (this.reasoningLevel === 'none') body.thinking = { type: 'disabled' };
+    if (thinking.enabled) this._forceThinkingTemperature(body);
+    if (thinking.field) body.thinking = thinking.field;
     if (this.topP !== undefined) body.top_p = this.topP;
     const systemBlocks = this._buildSystemBlocks(systemPrompt);
     if (systemBlocks.length) body.system = systemBlocks;
@@ -202,7 +304,7 @@ export class AnthropicProvider extends BaseProvider {
       body.tools = this._formatTools(tools);
       // Anthropic: `tool_choice` — объект `{type}`; `none` поддерживается.
       // Без инструментов поле не отправляем (валидация API отвергнет запрос).
-      if (options?.toolChoice) body.tool_choice = { type: options.toolChoice };
+      this._applyToolChoice(body, options?.toolChoice, thinking.enabled);
     }
     this._applyCacheControl(body, systemPrompt);
 
@@ -214,6 +316,8 @@ export class AnthropicProvider extends BaseProvider {
     info('ANTHROPIC', `чатAsync: url=${this.url}, model=${this.model}`);
 
     let accumulatedReasoning = '';
+    let accumulatedSignature: string | undefined;
+    const accumulatedRedacted: string[] = [];
     let accumulatedContent = '';
     let accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
@@ -300,7 +404,11 @@ export class AnthropicProvider extends BaseProvider {
               if (eventType === 'content_block_start') {
                 const block = chunkData.content_block as Record<string, unknown> | undefined;
                 // Старт thinking/tool_use блока — стрим пошёл, таймер больше не нужен.
-                if (block?.type === 'thinking' || block?.type === 'tool_use') {
+                if (
+                  block?.type === 'thinking'
+                  || block?.type === 'redacted_thinking'
+                  || block?.type === 'tool_use'
+                ) {
                   if (!firstChunkReceived) {
                     firstChunkReceived = true;
                     clearTimeout(timer);
@@ -308,6 +416,16 @@ export class AnthropicProvider extends BaseProvider {
                 }
                 if (block?.type === 'thinking') {
                   accumulatedReasoning = '';
+                  // RouterAI отдаёт подпись прямо в старте блока, нередко пустой
+                  // строкой (`"signature": ""`) — пустая подпись валидна.
+                  accumulatedSignature = typeof block.signature === 'string'
+                    ? block.signature
+                    : undefined;
+                } else if (block?.type === 'redacted_thinking') {
+                  // Opaque-блок: реплеится в историю verbatim (`data`).
+                  if (typeof block.data === 'string' && block.data) {
+                    accumulatedRedacted.push(block.data);
+                  }
                 } else if (block?.type === 'tool_use') {
                   const blockIndex = chunkData.index as number;
                   const tcIdx = accumulatedToolCalls.length;
@@ -343,6 +461,12 @@ export class AnthropicProvider extends BaseProvider {
                       reasoning: accumulatedReasoning,
                     };
                   }
+                } else if (deltaType === 'signature_delta') {
+                  // Подпись thinking-блока приходит отдельной дельтой (и, как
+                  // правило, целиком) — она авторитетнее значения из старта
+                  // блока. Пустая строка тоже валидна (RouterAI).
+                  const signature = delta?.signature;
+                  if (typeof signature === 'string') accumulatedSignature = signature;
                 } else if (deltaType === 'text_delta') {
                   const text = String(delta?.text ?? '');
                   if (text) {
@@ -433,6 +557,8 @@ export class AnthropicProvider extends BaseProvider {
           usage: accumulatedUsage,
           toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
           reasoning: accumulatedReasoning || undefined,
+          reasoningSignature: accumulatedSignature,
+          reasoningRedacted: accumulatedRedacted.length ? accumulatedRedacted : undefined,
           model: this.model,
         };
       }
@@ -441,7 +567,22 @@ export class AnthropicProvider extends BaseProvider {
     }
   }
 
-  private _formatMessages(messages: LLMMessage[]): Array<Record<string, unknown>> {
+  /**
+   * История → `body.messages`.
+   *
+   * `thinkingEnabled` — thinking включён в **этом** запросе (см. `ThinkingPlan`).
+   * Если выключен, thinking-блоки из истории **не реплеятся**: Anthropic не
+   * принимает `thinking` в истории без включённого thinking (игнорирует
+   * `redacted_thinking` при выключенном — тоже лишний риск 400), а прежняя
+   * история с reasoning-сообщениями должна оставаться отправляемой.
+   *
+   * Порядок блоков assistant-сообщения — как у Anthropic (и opencode):
+   * `redacted_thinking` → `thinking` → `text` → `tool_use`.
+   */
+  private _formatMessages(
+    messages: LLMMessage[],
+    thinkingEnabled = this.reasoningLevel === 'high',
+  ): Array<Record<string, unknown>> {
     const formatted: Array<Record<string, unknown>> = [];
     // Дедуп — только для уже выданных tool_result (по tool_call_id). id'ы
     // assistant.tool_use сюда НЕ добавляются: иначе tool_result вырезается и
@@ -478,6 +619,23 @@ export class AnthropicProvider extends BaseProvider {
 
       if (msg.role === 'assistant') {
         const contentParts: Array<Record<string, unknown>> = [];
+        if (thinkingEnabled) {
+          // Opaque redacted-блоки — verbatim, до видимого thinking.
+          for (const data of msg.reasoningRedacted ?? []) {
+            if (typeof data === 'string' && data) contentParts.push({ type: 'redacted_thinking', data });
+          }
+          const thinking = msg.reasoning ?? '';
+          const hasSignature = typeof msg.reasoningSignature === 'string';
+          // thinking отправляется, если есть текст или подпись; пустая подпись —
+          // валидное значение (`signature: ''`, RouterAI/qwen).
+          if (thinking || hasSignature) {
+            contentParts.push({
+              type: 'thinking',
+              thinking,
+              signature: msg.reasoningSignature ?? '',
+            });
+          }
+        }
         if (msg.content) {
           contentParts.push({ type: 'text', text: msg.content });
         }
@@ -763,6 +921,8 @@ export class AnthropicProvider extends BaseProvider {
     let accumulatedContent = '';
     const accumulatedToolCalls: Record<string, unknown>[] = [];
     let accumulatedReasoning: string | undefined;
+    let accumulatedSignature: string | undefined;
+    const accumulatedRedacted: string[] = [];
 
     for (const block of contentBlocks) {
       const blockType = block.type as string | undefined;
@@ -777,7 +937,12 @@ export class AnthropicProvider extends BaseProvider {
         });
       } else if (blockType === 'thinking') {
         accumulatedReasoning = String(block.thinking ?? '');
+        // Подпись thinking-блока: без возврата в историю следующий tool-loop
+        // отвергается API. Пустая строка — валидна (RouterAI/qwen).
+        accumulatedSignature = typeof block.signature === 'string' ? block.signature : undefined;
         debugCollector?.captureReasoning(accumulatedReasoning);
+      } else if (blockType === 'redacted_thinking') {
+        if (typeof block.data === 'string' && block.data) accumulatedRedacted.push(block.data);
       }
     }
 
@@ -790,6 +955,8 @@ export class AnthropicProvider extends BaseProvider {
       usage: parsedUsage,
       toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
       reasoning: accumulatedReasoning,
+      reasoningSignature: accumulatedSignature,
+      reasoningRedacted: accumulatedRedacted.length ? accumulatedRedacted : undefined,
     };
   }
 

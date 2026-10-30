@@ -36,6 +36,7 @@ import { MIGRATION_024_BLOB_REFS } from './024-blob-refs.js';
 import { MIGRATION_025_PACKS_PIPELINES } from './025-packs-pipelines.js';
 import { MIGRATION_026_INSTANCE_SKILLS } from './026-instance-skills.js';
 import { MIGRATION_027_CONTEXT_FILES } from './027-context-files.js';
+import { MIGRATION_028_MESSAGE_REASONING_SIGNATURE } from './028-message-reasoning-signature.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -76,6 +77,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 25, id: '025_packs_pipelines', sql: MIGRATION_025_PACKS_PIPELINES },
   { version: 26, id: '026_instance_skills', sql: MIGRATION_026_INSTANCE_SKILLS },
   { version: 27, id: '027_context_files', sql: MIGRATION_027_CONTEXT_FILES },
+  { version: 28, id: '028_message_reasoning_signature', sql: MIGRATION_028_MESSAGE_REASONING_SIGNATURE },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

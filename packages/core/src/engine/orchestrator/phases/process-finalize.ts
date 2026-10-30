@@ -97,6 +97,13 @@ export interface ProcessFinalizeState {
   allReasoning: Array<{ text: string; iteration: number }>;
   allIntermediateTexts: Array<{ text: string; iteration: number }>;
   allToolCalls: Array<Record<string, unknown>>;
+  /**
+   * Anthropic: подпись thinking-блока финального сообщения и opaque-данные
+   * `redacted_thinking`. Заполняется, только когда `reasoning` финального
+   * сообщения — текст ровно одного блока (при склейке нескольких блоков подпись
+   * принадлежит последнему — реплеить её с общим текстом нельзя).
+   */
+  finalReasoningMeta?: { signature?: string; redacted?: string[] };
   currentMessages: LLMMessage[];
   promptMeta: PromptMeta;
   loadedTokenRatio: number | undefined;
@@ -269,6 +276,7 @@ export async function runProcessFinalize(
     hadDeny, routingDecision, effectiveReasoningLevel,
     roleBlocked, roleBlockedTool, roleBlockedAgent,
     currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft, outboundParts,
+    finalReasoningMeta,
   } = state;
   let { finalContent, finalModel, finalUsage, fallbackI18n } = state;
   /** Шаг-лимит реально исполнялся (синтетический assistant-префилл в запросе). */
@@ -345,6 +353,12 @@ export async function runProcessFinalize(
       promptMeta,
       cancelCost,
       currentDraft ?? undefined,
+      // ADR-115: медиа-частей ответа в ветке отмены до финала нет.
+      undefined,
+      // Anthropic: подпись thinking-блока — только если `reasoning` финального
+      // сообщения состоит из одного блока (у склейки подпись принадлежала бы
+      // последнему блоку).
+      finalReasoningMeta,
     );
 
     publishChunk('stream.cancelled', {
@@ -484,6 +498,9 @@ export async function runProcessFinalize(
     // ADR-115 (outbound): медиа-части ответа (`send_attachment`) — в историю
     // финального сообщения и, через него, в `stream.done.attachments`.
     outboundParts,
+    // Anthropic: подпись thinking-блока — иначе следующий ход tool-loop
+    // отвергается API (thinking не возвращён в историю).
+    finalReasoningMeta,
   );
 
   // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)

@@ -3765,6 +3765,12 @@ export class ChatOrchestrator {
       const doomLoopTracker: Map<string, number> = new Map();
       let finalContent = '';
       let allReasoning: Array<{ text: string; iteration: number }> = [];
+      /**
+       * Anthropic: подпись thinking-блока последней итерации и opaque
+       * `redacted_thinking`. Уезжает в финальное сообщение, если его `reasoning`
+       * — текст ровно одного блока (подпись принадлежит своему тексту).
+       */
+      let finalReasoningMeta: { signature?: string; redacted?: string[] } | undefined;
       const allIntermediateTexts: Array<{ text: string; iteration: number }> = [];
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
@@ -3924,6 +3930,11 @@ export class ChatOrchestrator {
 
         let accumulatedContent = '';
         let accumulatedReasoning = '';
+        // Anthropic: подпись thinking-блока и opaque `redacted_thinking` этой
+        // итерации. Подпись валидна ровно для своего текста, поэтому копится
+        // вместе с `accumulatedReasoning` и персистится тем же сообщением.
+        let accumulatedReasoningSignature: string | undefined;
+        let accumulatedReasoningRedacted: string[] | undefined;
         let toolCalls: Record<string, unknown>[] | undefined = [];
         let chunkModel: string | undefined;
         // ADR-070: usage текущей итерации (running total от провайдера) для live.
@@ -3987,6 +3998,12 @@ export class ChatOrchestrator {
               accumulatedContent += chunk.content;
             }
             if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
+            if (chunk.reasoningSignature !== undefined) {
+              accumulatedReasoningSignature = chunk.reasoningSignature;
+            }
+            if (chunk.reasoningRedacted?.length) {
+              accumulatedReasoningRedacted = chunk.reasoningRedacted;
+            }
             if (chunk.usage) {
               finalUsage = chunk.usage;
               iterationUsage = chunk.usage;
@@ -3994,7 +4011,10 @@ export class ChatOrchestrator {
             if (chunk.model) chunkModel = chunk.model;
 
             // Шаг 2б: частичный стрим в историю (не блокирует цикл чанков).
-            draft.push(accumulatedContent, accumulatedReasoning, chunkModel);
+            draft.push(accumulatedContent, accumulatedReasoning, chunkModel, {
+              signature: accumulatedReasoningSignature,
+              redacted: accumulatedReasoningRedacted,
+            });
 
             // ADR-070 §2.6: live-статистика. Anthropic отдаёт input/cache в
             // `message_start` (output ещё 0), а output — только в `message_delta`
@@ -4139,6 +4159,11 @@ export class ChatOrchestrator {
             promptMeta,
             cancelCost,
             cancelledDraft ?? undefined,
+            // ADR-115: медиа-частей ответа в ветке отмены нет.
+            undefined,
+            // Anthropic: подпись thinking-блока текущей итерации — сообщение
+            // отмены персистится тем же путём, что и обычный ответ.
+            { signature: accumulatedReasoningSignature, redacted: accumulatedReasoningRedacted },
           );
 
           publishChunk('stream.cancelled', {
@@ -4174,6 +4199,10 @@ export class ChatOrchestrator {
             draft,
             content: accumulatedContent,
             reasoning: accumulatedReasoning,
+            reasoningMeta: {
+              signature: accumulatedReasoningSignature,
+              redacted: accumulatedReasoningRedacted,
+            },
             model: finalModel,
             providerName,
             agentRole: effectiveAgentRole,
@@ -4194,6 +4223,11 @@ export class ChatOrchestrator {
           // Накопление через общий с UI хелпер: провайдер шлёт reasoning
           // кумулятивно, повтор в новой итерации не должен дать дубль.
           allReasoning = appendReasoningBlock(allReasoning, accumulatedReasoning, toolIteration);
+          // Финал соберёт `reasoning` из всех блоков через `\n\n---\n\n`:
+          // подпись осмысленна, только пока текст — ровно один блок.
+          finalReasoningMeta = allReasoning.length === 1
+            ? { signature: accumulatedReasoningSignature, redacted: accumulatedReasoningRedacted }
+            : undefined;
         }
 
         // Шаг-лимит: ответ мог прийти нестандартным — с `toolCalls`, хотя
@@ -4248,6 +4282,11 @@ export class ChatOrchestrator {
           pinned: false,
           branchId: '',
           toolUse: toolCalls,
+          // Anthropic: в tool-loop thinking обязан вернуться в историю вместе
+          // с подписью — иначе следующий запрос отвергается API.
+          reasoning: accumulatedReasoning || undefined,
+          reasoningSignature: accumulatedReasoningSignature,
+          reasoningRedacted: accumulatedReasoningRedacted,
           agentRole: effectiveAgentRole,
         });
 
@@ -5147,6 +5186,8 @@ export class ChatOrchestrator {
           currentDraft,
           // ADR-115 (outbound): медиа-части ответа (`send_attachment`).
           outboundParts,
+          // Anthropic: подпись thinking-блока финального сообщения.
+          finalReasoningMeta,
         },
         this._processFinalizeDeps(),
       );
@@ -5591,6 +5632,12 @@ export class ChatOrchestrator {
     draft: StreamMessageDraft;
     content: string;
     reasoning: string;
+    /**
+     * Anthropic: подпись thinking-блока и opaque `redacted_thinking` прерванной
+     * генерации — без них следующая итерация tool-loop отвергается API (ход
+     * продолжается, thinking обязан вернуться в историю).
+     */
+    reasoningMeta?: { signature?: string; redacted?: string[] };
     model: string | undefined;
     providerName: string;
     agentRole: string | undefined;
@@ -5606,6 +5653,7 @@ export class ChatOrchestrator {
     const {
       session, streamId, draft, content, reasoning, model, providerName, agentRole,
       usage, iteration, startedAt, promptChars, debugCollector, promptMeta, publishChunk,
+      reasoningMeta,
     } = args;
 
     // Частичный текст уже лежит в черновике — дожидаемся записи и заменяем её
@@ -5641,6 +5689,11 @@ export class ChatOrchestrator {
         promptMeta,
         cost,
         interruptedDraft ?? undefined,
+        // ADR-115: медиа-частей ответа в ветке прерывания нет.
+        undefined,
+        // Anthropic: подпись thinking-блока прерванной генерации — ход
+        // продолжается, следующий запрос обязан вернуть thinking в историю.
+        reasoningMeta,
       );
     }
 
@@ -5832,6 +5885,8 @@ export class ChatOrchestrator {
     existing?: { id: string; seq: number },
     /** ADR-115 (outbound): медиа-части ответа хода (после текста). */
     extraParts?: Part[],
+    /** Anthropic: подпись thinking-блока и opaque `redacted_thinking`. */
+    reasoningMeta?: { signature?: string; redacted?: string[] },
   ): Promise<string> {
     return saveAssistantMessage(
       this._persistenceDeps(),
@@ -5857,6 +5912,7 @@ export class ChatOrchestrator {
       precomputedCost,
       existing,
       extraParts,
+      reasoningMeta,
     );
   }
 
