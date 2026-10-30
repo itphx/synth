@@ -1273,6 +1273,56 @@ describe('run-cycle — steering дочерней сессии (ADR-104)', () =>
     const secondCall = snapshots[1]!;
     expect(secondCall.some((m) => m.content === 'вмешательство в родителя')).toBe(false);
   });
+
+  it('очередь инъекций ребёнка снимается и при ошибке провайдера, и при отмене («Стоп»)', async () => {
+    // (а) Ошибка провайдера — терминальный путь прогона: очередь инъекций
+    // ребёнка снимается, остаток не «протекает» в следующий ход ребёнка.
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const chatAsync = vi.fn(() => (async function* () {
+      // Инъекция пришла во время генерации — границы шага уже не будет.
+      await sessionManager.enqueueSteerMessage(child.id, steerMessage('инъекция при ошибке'));
+      yield { isFinal: false, content: '' } as Chunk;
+      throw new Error('401 Unauthorized: invalid api key');
+    })());
+    const provider = { model: 'm', name: 'p', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBe(true);
+    const afterError = (await sessionManager.getSession(child.id))!;
+    // Очередь инъекций пуста — в следующий ход ребёнка ничего не «протечёт».
+    expect(afterError.steerInbox ?? []).toHaveLength(0);
+    // Сообщение не потеряно: оно в обычной очереди ребёнка.
+    expect(afterError.pendingMessages.map((m) => m.content)).toEqual(['инъекция при ошибке']);
+
+    // (б) Отмена («Стоп» родителя) — тот же терминальный путь прогона.
+    const parent2 = await sessionManager.createSession({ title: 'P2' });
+    const child2 = await sessionManager.createSession({ title: 'C2', parentId: parent2.id, sessionOrigin: 'subagent' });
+    const ac = new AbortController();
+    const chatAsync2 = vi.fn(() => (async function* () {
+      await sessionManager.enqueueSteerMessage(child2.id, steerMessage('инъекция при отмене'));
+      ac.abort();
+      yield { isFinal: true, content: 'частичный ответ' };
+    })());
+    const provider2 = { model: 'm', name: 'p', chatAsync: chatAsync2 } as unknown as BaseProvider;
+
+    const result2 = await runSubagent(makeConfig({
+      extra: makeExtra({ provider: provider2, sessionManager, sessionId: parent2.id }),
+      childSessionId: child2.id,
+      parentSessionId: parent2.id,
+      ctx: makeCtx({ abortSignal: ac.signal }),
+    }));
+
+    expect(result2.metadata!.stopped_by).toBe('user');
+    const afterAbort = (await sessionManager.getSession(child2.id))!;
+    expect(afterAbort.steerInbox ?? []).toHaveLength(0);
+    expect(afterAbort.pendingMessages.map((m) => m.content)).toEqual(['инъекция при отмене']);
+  });
 });
 
 describe('run-cycle — отмена', () => {
@@ -1542,5 +1592,145 @@ describe('run-cycle — effort из reasoningLevel (ADR-117)', () => {
     }));
 
     expect(chatAsync.mock.calls[0]![5]).toEqual({ effort: 'max' });
+  });
+});
+
+describe('run-cycle — закрытие шага ребёнка и отчёт по лимиту (ADR-118 §4)', () => {
+  it('шаг-лимит: id записей ребёнка уникальны, отчёт виден и его статус — limit', async () => {
+    // (а) Шаг-лимит с «непослушным» вызовом инструмента: assistant(tool_calls)
+    // этого шага уже сохранён (с id шага) — отчёт обязан получить **свой** id,
+    // иначе в истории ребёнка были бы две записи с одинаковым id, а UI
+    // пропустил бы сообщение с уже занятым id (live-отчёт не появился бы).
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    bus.subscribe(child.id, (e) => { events.push({ type: e.type, data: e.data as Record<string, unknown> }); });
+    const { provider, calls } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{
+        isFinal: true,
+        content: 'ОТЧЁТ: сделано 1 из 3',
+        toolCalls: [{ id: 'c2', function: { name: 'noop', arguments: '{}' } }],
+      }],
+    ]);
+    const { registry, counters } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 2,
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry, eventBus: bus }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(calls()).toBe(2);
+    // Вызов на шаге-лимите не исполняется (toolChoice: none).
+    expect(counters.noop).toBe(1);
+    expect(result.metadata!.step_limit_reached).toBe(true);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    // Ключевой инвариант: id записей в истории уникальны.
+    const ids = saved.messages.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    // Отчёт по лимиту — обычное видимое сообщение (без маркера tool_chain),
+    // его статус — `limit` (прогон остановлен по лимиту шагов).
+    const report = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.status === 'limit',
+    );
+    expect(report).toBeDefined();
+    expect(report!.metadata!.tool_chain).toBeUndefined();
+    expect(report!.metadata).toMatchObject({ step_limit_reached: true, step_limit: 2 });
+
+    // Отчёт — не та запись, что закрыла шаг вызовом инструмента: у него свой id.
+    const step = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT
+        && (m.toolCalls?.length ?? 0) > 0
+        && (m.toolCalls![0] as { id?: string }).id === 'c2',
+    );
+    expect(step).toBeDefined();
+    expect(report!.id).not.toBe(step!.id);
+    // `step.finished` ребёнка адресует сообщение шага (assistant с вызовами).
+    const stepEvents = events.filter((e) => e.type === 'step.finished');
+    expect(stepEvents).toHaveLength(2);
+    expect(stepEvents.at(-1)!.data.messageId).toBe(step!.id);
+
+    // (б) Шаг-лимит БЕЗ вызовов инструментов: отчёт — сообщение самого шага,
+    // поэтому id шага сохраняется (второй записи с тем же id не создаётся).
+    const parent2 = await sessionManager.createSession({ title: 'P2' });
+    const child2 = await sessionManager.createSession({ title: 'C2', parentId: parent2.id, sessionOrigin: 'subagent' });
+    const bus2 = new EventBus();
+    const events2: Array<{ type: string; data: Record<string, unknown> }> = [];
+    bus2.subscribe(child2.id, (e) => { events2.push({ type: e.type, data: e.data as Record<string, unknown> }); });
+    const { provider: provider2 } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'ОТЧЁТ: сделано 1 из 3' }],
+    ]);
+    const { registry: registry2 } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      maxSteps: 2,
+      extra: makeExtra({ provider: provider2, sessionManager, sessionId: parent2.id, toolRegistry: registry2, eventBus: bus2 }),
+      childSessionId: child2.id,
+      parentSessionId: parent2.id,
+    }));
+
+    const saved2 = (await sessionManager.getSession(child2.id))!;
+    const ids2 = saved2.messages.map((m) => m.id);
+    expect(new Set(ids2).size).toBe(ids2.length);
+    const report2 = saved2.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.status === 'limit',
+    );
+    expect(report2).toBeDefined();
+    expect(report2!.metadata!.tool_chain).toBeUndefined();
+    // Отчёт — сообщение шага: его id совпадает с id в `step.finished`.
+    const stepEvents2 = events2.filter((e) => e.type === 'step.finished');
+    expect(stepEvents2.at(-1)!.data.messageId).toBe(report2!.id);
+  });
+
+  it('пустая дельта: step.finished ребёнка всё равно публикуется, usage не теряется', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    bus.subscribe(child.id, (e) => { events.push({ type: e.type, data: e.data as Record<string, unknown> }); });
+    const published: Array<{ type: string; data: Record<string, unknown> }> = [];
+    // Провайдер отдаёт финальный чанк БЕЗ текста: дельт прогресса нет —
+    // закрытие шага всё равно должно быть опубликовано (ADR-118 §4), иначе
+    // live-сообщение шага ребёнка навсегда оставалось `streaming`, а
+    // usage/стоимость терялись.
+    const { provider } = scriptedProvider([[{
+      isFinal: true,
+      content: '',
+      model: 'test-model',
+      usage: { inputTokens: 100, outputTokens: 5, totalTokens: 105 },
+    }]]);
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        eventBus: bus,
+        publish: (type: string, data: Record<string, unknown>) => published.push({ type, data }),
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Дельт не было — прогресс не публиковался.
+    expect(published.filter((p) => p.type === 'subagent.progress')).toHaveLength(0);
+
+    // Шаг закрыт ровно одним событием, с точным usage финального чанка.
+    const steps = events.filter((e) => e.type === 'step.finished');
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.data).toMatchObject({
+      turnId: child.id,
+      stepIndex: 0,
+      status: 'completed',
+      model: 'test-model',
+      usage: { inputTokens: 100, outputTokens: 5, totalTokens: 105 },
+    });
+    expect(steps[0]!.data.messageId).toBeTruthy();
   });
 });

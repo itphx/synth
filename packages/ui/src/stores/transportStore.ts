@@ -60,6 +60,24 @@ function isTurnActive(sid: string): boolean {
   return !!turn && turn.status === 'streaming'
 }
 
+/**
+ * ADR-118 §7: мутации сообщений адресуются по `id`. Серверные события
+ * (`context.sliding_window_applied`, `message.quality_check`) несут позиционный
+ * индекс — им он служит **только** способом найти сообщение в сторе.
+ */
+function messageIdByIndex(sid: string, index: number): string | undefined {
+  const messages = useChatStore.getState().messagesBySession[sid] ?? []
+  return messages.find((m) => m.index === index)?.id
+}
+
+/**
+ * ADR-118 §5: терминальный статус сообщения — «финал» шага. Сообщение с таким
+ * статусом не воскрешаем: поздняя дельта/обновление к нему — мусор.
+ */
+function isTerminalMessageStatus(status: MessageStatus | null | undefined): boolean {
+  return status === 'completed' || status === 'cancelled' || status === 'error'
+}
+
 /** Точка догона сбрасывается (смена пользователя/инстанса в рамках SPA). */
 export function resetEventSeqTracking(): void {
   lastEventSeqBySession.clear()
@@ -75,6 +93,12 @@ export function resetEventSeqTracking(): void {
  *   сообщение осталось бы с пустыми частями (live-части снимаются на финале
  *   шага). Клиентские поля, которых у сервера нет (маркер доставки и т.п.),
  *   сохраняются.
+ *
+ * Серверные `null`/`undefined` **не затирают** живые значения сообщения
+ * (`status`/`turn_id`/`step_index`/`parts`/`content`): иначе мерж истории
+ * снимал индикатор текущего хода и выпадал сегмент из блока хода. Для
+ * сообщения со статусом `streaming` части и контент вообще не перезаписываются
+ * — источник там живой (live).
  *
  * Ошибка сети молча игнорируется: история — уточнение, а не источник правды о
  * ходе (живой ход восстанавливается из событий). Результат — `true`, если
@@ -92,18 +116,7 @@ export function mergeHistory(sid: string): Promise<boolean> {
         byId.set(m.id, m)
         continue
       }
-      byId.set(m.id, {
-        ...known,
-        ...m,
-        // Реплика пользователя: текст остаётся пользовательским — в серверной
-        // записи он с плейсхолдерами вложений (ADR-115), а в ленте вложение
-        // рисуется отдельной галереей.
-        ...(known.role === 'user' ? { content: known.content } : {}),
-        // Метаданные — по ключам: сервер wins, клиентские добавки остаются.
-        ...(known.metadata || m.metadata
-          ? { metadata: { ...(known.metadata ?? {}), ...(m.metadata ?? {}) } }
-          : {}),
-      })
+      byId.set(m.id, mergeKnownMessage(known, m))
     }
     const merged = [...byId.values()]
     chat.setMessages(sid, merged)
@@ -112,6 +125,39 @@ export function mergeHistory(sid: string): Promise<boolean> {
     restoreLiveTurnFromHistory(sid, merged)
     return true
   }).catch(() => false)
+}
+
+/**
+ * Слияние сообщения истории с уже известным (живым) сообщением стора.
+ *
+ * - `null`/`undefined` из сервера не затирают заданные клиентские значения;
+ * - у живого сообщения (`status: 'streaming'`) части и контент — источник
+ *   live, серверные значения их не перезаписывают;
+ * - реплика пользователя: текст остаётся пользовательским — в серверной
+ *   записи он с плейсхолдерами вложений (ADR-115), а в ленте вложение
+ *   рисуется отдельной галереей;
+ * - метаданные — по ключам: сервер wins, клиентские добавки остаются.
+ */
+function mergeKnownMessage(known: MessageData, m: MessageData): MessageData {
+  const merged: MessageData = { ...known, ...m }
+  if (m.ord == null && known.ord != null) merged.ord = known.ord
+  if (m.status == null && known.status != null) merged.status = known.status
+  if (m.turn_id == null && known.turn_id != null) merged.turn_id = known.turn_id
+  if (m.step_index == null && known.step_index != null) merged.step_index = known.step_index
+  if (m.parts == null && known.parts != null) merged.parts = known.parts
+  if (m.content == null && known.content != null) merged.content = known.content
+  // Живое сообщение: части/контент — источник live (ADR-118 §5).
+  if (known.status === 'streaming') {
+    merged.parts = known.parts
+    merged.content = known.content
+  }
+  return {
+    ...merged,
+    ...(known.role === 'user' ? { content: known.content } : {}),
+    ...(known.metadata || m.metadata
+      ? { metadata: { ...(known.metadata ?? {}), ...(m.metadata ?? {}) } }
+      : {}),
+  }
 }
 
 /**
@@ -590,21 +636,39 @@ export function createDispatcher(): EventDispatcher {
     /**
      * Живое сообщение assistant'а: создаётся при первом событии хода
      * (ADR-118 §5) и живёт до терминального статуса.
+     *
+     * Возвращает `undefined`, когда сообщение трогать нельзя:
+     * - сообщения ещё нет и **активного хода нет** — это опоздавшее событие
+     *   прошлого хода (иначе в ленте появился бы фантомный пузырь);
+     * - сообщение уже **финальное** (`completed`/`cancelled`/`error`) —
+     *   поздняя дельта к финальному сообщению — мусор (ADR-118 §5);
+     * - событие относится к **другому** ходу (`opts.turnId`), а идёт ход —
+     *   сообщение старого хода не создаём (фантом в блоке текущего хода).
      */
     const ensureLiveMessage = (
       messageId: string,
       extra?: Partial<MessageData>,
+      opts?: { turnId?: string },
     ): MessageData | undefined => {
       if (!messageId) return undefined
       const chat = useChatStore.getState()
       const existing = chat.messagesBySession[sid]?.find((m) => m.id === messageId)
       if (existing) {
+        // Финальное сообщение не воскрешаем: поздняя дельта — мусор.
+        if (isTerminalMessageStatus(existing.status)) return undefined
         if (extra) chat.updateMessageById(sid, messageId, extra)
         return useChatStore.getState().messagesBySession[sid]?.find((m) => m.id === messageId)
       }
-      const msgs = chat.messagesBySession[sid] || []
-      const index = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
+      // Активного хода нет — сообщение не создаём (опоздавшее событие).
+      if (!isTurnActive(sid)) return undefined
       const turn = chat.turnBySession[sid]
+      // Событие — другого хода (опоздавшее): сообщение не создаём.
+      if (opts?.turnId && turn?.turnId && opts.turnId !== turn.turnId) return undefined
+      const msgs = chat.messagesBySession[sid] || []
+      const indexes = msgs
+        .map((m) => m.index)
+        .filter((i): i is number => typeof i === 'number' && Number.isFinite(i))
+      const index = indexes.length > 0 ? Math.max(...indexes) + 1 : 0
       const message: MessageData = {
         index,
         id: messageId,
@@ -633,18 +697,28 @@ export function createDispatcher(): EventDispatcher {
      * оставшиеся `streaming` сегменты: `step.finished` мог не дойти или не
      * примениться (разрыв транспорта), и тогда точки «работы» оставались
      * в середине склеенного блока хода.
+     *
+     * Закрываются сегменты **того же хода**, что и событие (`onlyTurnId`):
+     * опоздавшее событие старого хода (догон/реконнект/задержка) не должно
+     * гасить индикатор текущего хода. Если ход события — текущий активный,
+     * заведомо мёртвые сегменты прошлых ходов тоже закрываются. `onlyTurnId`
+     * не задан — прежнее поведение (закрыть все).
      */
     const finalizeStreamingSegments = (
       status: MessageStatus,
-      opts?: { keepMessageId?: string; skipTurnId?: string },
+      opts?: { keepMessageId?: string; onlyTurnId?: string },
     ): void => {
       const messages = useChatStore.getState().messagesBySession[sid] ?? []
+      const activeTurnId = useChatStore.getState().turnBySession[sid]?.turnId
       for (const m of messages) {
         if (m.status !== 'streaming' || !m.id) continue
         if (opts?.keepMessageId && m.id === opts.keepMessageId) continue
-        // Живой сегмент **другого** хода не трогаем: опоздавшее терминальное
-        // событие прошлого хода не должно погасить индикатор текущего.
-        if (opts?.skipTurnId && m.turn_id === opts.skipTurnId) continue
+        if (opts?.onlyTurnId) {
+          const sameTurn = m.turn_id === opts.onlyTurnId
+          // Сегмент **другого** хода не трогаем: опоздавшее событие старого
+          // хода не должно гасить индикатор текущего.
+          if (!sameTurn && opts.onlyTurnId !== activeTurnId) continue
+        }
         setMessageStatus(sid, m.id, status)
       }
     }
@@ -727,15 +801,14 @@ export function createDispatcher(): EventDispatcher {
         const turnId = (payload.turnId as string) || ''
         if (!turnId) break
         const status = (payload.status as 'completed' | 'cancelled' | 'error' | 'stopped') || 'completed'
-        // Ход, который идёт прямо сейчас (до применения терминала): опоздавшее
-        // `turn.finished` прошлого хода не должно гасить его индикатор.
-        const activeTurnId = useChatStore.getState().turnBySession[sid]?.turnId
         finishTurn(sid, turnId, status)
-        // Ход завершён — ни один сегмент не может остаться «живым»: закрываем
-        // все оставшиеся `streaming` (даже если `step.finished` потерялся).
+        // Ход завершён — ни один сегмент **этого** хода не может остаться
+        // «живым»: закрываем оставшиеся `streaming` (даже если `step.finished`
+        // потерялся). Опоздавшее `turn.finished` прошлого хода закрывает
+        // только его сегменты — индикатор текущего хода не гасим.
         finalizeStreamingSegments(
           status === 'completed' ? 'completed' : status === 'error' ? 'error' : 'cancelled',
-          activeTurnId && activeTurnId !== turnId ? { skipTurnId: activeTurnId } : undefined,
+          { onlyTurnId: turnId },
         )
         // Ход завершён — висящих запросов подтверждения по нему быть не может
         // (ask снят ответом/отменой/таймаутом): полосу убираем.
@@ -750,18 +823,45 @@ export function createDispatcher(): EventDispatcher {
         const messageId = (payload.messageId as string) || ''
         if (!messageId) break
         const stepIndex = typeof payload.stepIndex === 'number' ? payload.stepIndex : undefined
+        const active = useChatStore.getState().turnBySession[sid]
+        const activeTurnId = active?.turnId
         if (turnId) {
-          patchTurn(sid, { turnId, messageId, ...(stepIndex != null ? { stepIndex } : {}) })
+          if (!activeTurnId) {
+            // Хода в сторе нет — шаг его открывает (границы хода, ADR-118 §1).
+            startTurn(sid, {
+              turnId,
+              messageId,
+              status: 'streaming',
+              ...(stepIndex != null ? { stepIndex } : {}),
+            })
+          } else if (activeTurnId === turnId) {
+            patchTurn(sid, { messageId, ...(stepIndex != null ? { stepIndex } : {}) })
+          } else if (active?.status !== 'streaming') {
+            // Текущий ход завершён, а событие — уже другого хода: `turn.started`
+            // мог не дойти — открываем ход события.
+            startTurn(sid, {
+              turnId,
+              messageId,
+              status: 'streaming',
+              ...(stepIndex != null ? { stepIndex } : {}),
+            })
+          }
+          // Иначе ход события — **другой** (текущий идёт): событие опоздавшее,
+          // границы текущего хода не переписываем.
         }
         // Новый шаг закрывает предыдущие сегменты хода: живым остаётся только
         // он (индикатор не может «застрять» в середине склеенного блока).
         // Заодно закрываются сегменты прошлого хода, чей `step.finished` потерян.
-        finalizeStreamingSegments('completed', { keepMessageId: messageId })
-        ensureLiveMessage(messageId, {
-          ...(turnId ? { turn_id: turnId } : {}),
-          ...(stepIndex != null ? { step_index: stepIndex } : {}),
-          status: 'streaming',
-        })
+        finalizeStreamingSegments('completed', { keepMessageId: messageId, onlyTurnId: turnId || undefined })
+        ensureLiveMessage(
+          messageId,
+          {
+            ...(turnId ? { turn_id: turnId } : {}),
+            ...(stepIndex != null ? { step_index: stepIndex } : {}),
+            status: 'streaming',
+          },
+          { turnId: turnId || undefined },
+        )
         break
       }
 
@@ -769,9 +869,12 @@ export function createDispatcher(): EventDispatcher {
       case 'step.finished': {
         const messageId = (payload.messageId as string) || ''
         if (!messageId) break
+        const turnId = (payload.turnId as string) || ''
         const status = (payload.status as 'completed' | 'cancelled' | 'error') || 'completed'
-        ensureLiveMessage(messageId)
-        setMessageStatus(sid, messageId, status)
+        // Опоздавшее событие прошлого хода: сообщения нет и активного хода нет —
+        // создавать нечего (финальное сообщение не воскрешаем).
+        const live = ensureLiveMessage(messageId, undefined, { turnId: turnId || undefined })
+        if (live) setMessageStatus(sid, messageId, status)
         // Замена удалённых `stream.usage`/`stream.done`: расход, модель и
         // стоимость шага приходят здесь (ADR-118 §4) — кладём в сообщение,
         // иначе статистика/аналитика теряют live-данные.
@@ -812,7 +915,9 @@ export function createDispatcher(): EventDispatcher {
         const messageId = (payload.messageId as string) || ''
         const partId = (payload.partId as string) || ''
         if (!messageId || !partId) break
-        ensureLiveMessage(messageId)
+        // Сообщения нет (опоздавшая дельта прошлого хода) или оно финальное —
+        // дельта мусорна: игнорируем (ADR-118 §5).
+        if (!ensureLiveMessage(messageId)) break
         // Части идут — статус ретрая и плашка финальной ошибки прошлой попытки
         // больше не актуальны (как у прежнего `stream.chunk`).
         if (useChatStore.getState().retryBySession[sid]) setStreamRetry(sid, null)
@@ -833,7 +938,8 @@ export function createDispatcher(): EventDispatcher {
         const partId = (payload.partId as string) || ''
         const part = payload.part as { id?: string; type?: string; data?: unknown } | undefined
         if (!messageId || !partId) break
-        ensureLiveMessage(messageId)
+        // Как и для дельты: финальное сообщение не воскрешаем.
+        if (!ensureLiveMessage(messageId)) break
         upsertPart(sid, messageId, partId, {
           id: partId,
           type: (part?.type as never) || 'text',
@@ -970,7 +1076,7 @@ export function createDispatcher(): EventDispatcher {
         setFinalStreamError(sid, null)
         const messageId = liveMessageId()
         if (!messageId) break
-        ensureLiveMessage(messageId)
+        if (!ensureLiveMessage(messageId)) break
         const content = (payload.content as string) || ''
         const reasoning = (payload.reasoning as string) || ''
         const iteration = (payload.iteration as number) ?? 0
@@ -1016,7 +1122,7 @@ export function createDispatcher(): EventDispatcher {
           ...(payload.usage_estimated !== undefined ? { usage_estimated: payload.usage_estimated } : {}),
         }
         if (messageId) {
-          ensureLiveMessage(messageId, {
+          const live = ensureLiveMessage(messageId, {
             content: (payload.content as string) || undefined,
             usage,
             metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
@@ -1024,15 +1130,20 @@ export function createDispatcher(): EventDispatcher {
             provider: (payload.provider as string) || undefined,
             tool_calls: (payload.tool_calls as MessageData['tool_calls']) ?? undefined,
           })
-          setMessageStatus(
-            sid,
-            messageId,
-            status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'error',
-          )
+          if (live) {
+            setMessageStatus(
+              sid,
+              messageId,
+              status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'error',
+            )
+          }
           // Терминал хода: прочих «живых» сегментов остаться не должно.
+          // Закрываем сегменты **того же** хода (опоздавшее `stream.done`
+          // прошлого хода не гасит индикатор текущего).
+          const eventTurnId = (payload.turnId as string) || (payload.turn_id as string) || ''
           finalizeStreamingSegments(
             status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'error',
-            { keepMessageId: messageId },
+            { keepMessageId: messageId, onlyTurnId: eventTurnId || undefined },
           )
         }
         setStreamRetry(sid, null)
@@ -1063,8 +1174,7 @@ export function createDispatcher(): EventDispatcher {
         // Совместимость со старым ядром: финализируем живое сообщение.
         const messageId = liveMessageId()
         if (messageId) {
-          ensureLiveMessage(messageId)
-          setMessageStatus(sid, messageId, 'cancelled')
+          if (ensureLiveMessage(messageId)) setMessageStatus(sid, messageId, 'cancelled')
         }
         setStreamRetry(sid, null)
         // Отмена («Стоп»)/таймаут снимают ожидание подтверждения на бэкенде —
@@ -1111,8 +1221,7 @@ export function createDispatcher(): EventDispatcher {
         setStreamRetry(sid, null)
         const messageId = liveMessageId()
         if (messageId) {
-          ensureLiveMessage(messageId)
-          setMessageStatus(sid, messageId, 'error')
+          if (ensureLiveMessage(messageId)) setMessageStatus(sid, messageId, 'error')
         }
         setFinalStreamError(sid, { streamId, error: rawError, errorType: errorType || 'unknown' })
         notifyMessage({ text: error, type: 'error', category: 'error', sessionId: sid })
@@ -1394,7 +1503,7 @@ export function createDispatcher(): EventDispatcher {
         if (!callId) break
         const messageId = liveMessageId()
         if (!messageId) break
-        ensureLiveMessage(messageId)
+        if (!ensureLiveMessage(messageId)) break
         // ADR-118 §1: вызов инструмента — часть сообщения с id = `callId`.
         upsertPart(sid, messageId, callId, {
           id: callId,
@@ -1554,9 +1663,12 @@ export function createDispatcher(): EventDispatcher {
       case 'context.sliding_window_applied': {
         const indices = payload.disabled_indices as number[] | undefined
         if (indices && Array.isArray(indices) && indices.length > 0) {
-          const { updateMessageByIndex } = useChatStore.getState()
+          // ADR-118 §7: мутации адресуются по `id` сообщения; серверный
+          // позиционный индекс — только способ найти сообщение в сторе.
+          const chat = useChatStore.getState()
           for (const idx of indices) {
-            updateMessageByIndex(sid, idx, { disabled: true })
+            const id = messageIdByIndex(sid, idx)
+            if (id) chat.updateMessageById(sid, id, { disabled: true })
           }
         } else {
           synthApi.getSessionMessages(sid).then((r) => {
@@ -1569,10 +1681,15 @@ export function createDispatcher(): EventDispatcher {
       case 'message.quality_check': {
         const msgIndex = payload.message_index as number | undefined
         if (msgIndex != null) {
-          useChatStore.getState().updateMessageByIndex(sid, msgIndex, {
-            qa_pass: payload.qa_pass as boolean | undefined,
-            qa_reason: payload.qa_reason as string | undefined,
-          })
+          // ADR-118 §7: правка — по `id` сообщения (индекс сервера — только
+          // способ найти его в сторе).
+          const id = messageIdByIndex(sid, msgIndex)
+          if (id) {
+            useChatStore.getState().updateMessageById(sid, id, {
+              qa_pass: payload.qa_pass as boolean | undefined,
+              qa_reason: payload.qa_reason as string | undefined,
+            })
+          }
         }
         break
       }

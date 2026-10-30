@@ -125,6 +125,14 @@ function isTurnBlock(group: MessageGroup): boolean {
 }
 
 /**
+ * Ключ сообщения для адресации (ADR-118 §7) — `id`; у legacy-сообщений без
+ * `id` — позиционный индекс (иначе статус «обработка» к ним не привязать).
+ */
+function messageKeyOf(msg: MessageData): string {
+  return msg.id ?? `idx:${msg.index}`
+}
+
+/**
  * Статус «идёт обработка» у последней user-реплики, пока в ходе ещё нет живого
  * сообщения (первой дельты). Возвращает `null` — статус не показываем.
  */
@@ -224,16 +232,18 @@ export function MessageList({
    * Статус «обработка/повтор» — только у последней user-реплики и только пока
    * живого сообщения хода ещё нет (до первой дельты). Мемоизирован, чтобы
    * `React.memo(ChatMessage)` не сбрасывался на каждом рендере списка.
+   *
+   * ADR-118 §7: адресация — по `id` сообщения (индекс нестабилен).
    */
-  const pendingByIndex = useMemo(() => {
-    const map = new Map<number, PendingStreamStatus>()
+  const pendingById = useMemo(() => {
+    const map = new Map<string, PendingStreamStatus>()
     if (hasLiveMessage) return map
     const status = computePendingStatus(turn, retry, onRetryNow, onCancelRetry)
     if (!status) return map
     const lastUser = [...visibleMessages].reverse().find((m) => m.role === 'user')
     if (!lastUser) return map
     if (turn?.turnId && lastUser.turn_id && lastUser.turn_id !== turn.turnId) return map
-    map.set(lastUser.index, status)
+    map.set(messageKeyOf(lastUser), status)
     return map
   }, [visibleMessages, turn, hasLiveMessage, retry, onRetryNow, onCancelRetry])
 
@@ -339,7 +349,7 @@ export function MessageList({
         selectionMode={selectionMode}
         isSelected={msg.id ? (selectedIds?.has(msg.id) ?? false) : false}
         onToggleSelect={handleToggleSelect}
-        pending={pendingByIndex.get(msg.index) ?? null}
+        pending={pendingById.get(messageKeyOf(msg)) ?? null}
         // ADR-118 §1: заголовок агента/модели — только у первого сегмента хода.
         showHeader={first}
         compact={!first}

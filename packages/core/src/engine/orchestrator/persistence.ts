@@ -7,7 +7,7 @@
  * `_joinAccumulatedTexts`; тип `AssistantMessageStatus` реэкспортируется из
  * `orchestrator.ts` (публичный контракт).
  */
-import type { Message, MessageStatus, Part, PromptMeta, TokenUsage } from '@itphx/synth-shared';
+import type { Message, MessageStatus, Part, PromptMeta, Session, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -111,10 +111,16 @@ export function joinAccumulatedTexts(
  * `isVisibleMessage`). Во время стрима текст шага виден в live-частях, но после
  * перезагрузки страницы скрытое сообщение из истории пропадает — ответ
  * агента «исчезает». Поэтому маркер `tool_chain` ставится ТОЛЬКО сообщениям
- * без содержимого: пустой `content`, нет текстовых частей и нет reasoning-частей.
+ * без содержимого: пустой `content`, нет текстовых частей, нет reasoning-частей
+ * с текстом и нет медиа-частей.
  *
  * Текст части лежит в `data` (core `Part`), рассуждения — части `type:
- * 'reasoning'`.
+ * 'reasoning'`, вложения — `image`/`audio`/`video`/`file` (ADR-115).
+ *
+ * Reasoning-часть без текста (пустой `data` — так выглядит блок
+ * `redacted_thinking`, у которого текста нет вовсе) **не** считается
+ * видимым контентом: иначе шаг без текста получал бы `tool_chain` без
+ * маркера и всплывал в транскрипте пустым пузырём.
  */
 export function hasVisibleStepContent(
   content: string | undefined,
@@ -123,7 +129,16 @@ export function hasVisibleStepContent(
   if (typeof content === 'string' && content.trim().length > 0) return true;
   for (const part of parts ?? []) {
     if (!part || typeof part !== 'object') continue;
-    if (part.type === 'reasoning') return true;
+    if (part.type === 'reasoning') {
+      const text = typeof part.data === 'string' ? part.data : '';
+      if (text.trim().length > 0) return true;
+      continue;
+    }
+    // ADR-115: медиа-часть (вложение ответа) — видимый контент: шаг с
+    // вложением не должен прятаться как tool-chain.
+    if (part.type === 'image' || part.type === 'audio' || part.type === 'video' || part.type === 'file') {
+      return true;
+    }
     if (part.type !== 'text') continue;
     const text = typeof part.data === 'string' ? part.data : '';
     if (text.trim().length > 0) return true;
@@ -309,7 +324,14 @@ export interface AssistantMessageStep {
   messageId?: string;
 }
 
-/** Сигнатура `saveAssistantMessage` (для делегации/передачи колбэком). */
+/**
+ * Сигнатура `saveAssistantMessage` (для делегации/передачи колбэком).
+ *
+ * Возвращает **id сохранённого сообщения** (ADR-118 §1/§5): финальный шаг
+ * публикует `step.finished.messageId` именно с этим id — «финал = сообщение
+ * шага». Раньше возвращался текст ответа, который вызывающая сторона не
+ * использовала.
+ */
 export type SaveAssistantMessageFn = (
   sessionId: string,
   content: string,
@@ -367,6 +389,14 @@ export type SaveAssistantMessageFn = (
   step?: AssistantMessageStep,
 ) => Promise<string>;
 
+/**
+ * Сохранить финальное assistant-сообщение хода.
+ *
+ * Возвращает **id сохранённого сообщения** (ADR-118 §1/§5) — по нему
+ * финальный шаг публикует `step.finished.messageId` («финал = сообщение
+ * шага»): если id шага занят записью в истории, сообщение получает свой id,
+ * и событие шага адресует именно его.
+ */
 export async function saveAssistantMessage(
   deps: SaveAssistantMessageDeps,
   sessionId: string,
@@ -413,6 +443,35 @@ export async function saveAssistantMessage(
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
   const finalContent = content;
+
+  /**
+   * Сессия читается **один раз** и по ней решается, свободен ли id сообщения
+   * шага: если запись с таким id уже есть в истории (шаг закрыт tool-chain
+   * сообщением), финальное сообщение получает **свой** id — иначе в истории
+   * были бы две записи с одинаковым id. Сессию не прочитать — id не
+   * переиспользуем (дубликат id опаснее расхождения с событиями шага).
+   */
+  let sessionSnapshot: Session | null | undefined;
+  const loadSession = async (): Promise<Session | null> => {
+    if (sessionSnapshot === undefined) {
+      try {
+        sessionSnapshot = await sessionManager.getSession(sessionId);
+      } catch {
+        sessionSnapshot = null;
+      }
+    }
+    return sessionSnapshot;
+  };
+
+  let messageId = existing?.id;
+  if (!messageId && step?.messageId) {
+    const current = await loadSession();
+    const taken = current
+      ? current.messages.some((m) => m.id === step.messageId)
+      : true;
+    if (!taken) messageId = step.messageId;
+  }
+  if (!messageId) messageId = generateId();
 
   if (!isCancelled && content) {
     debugCollector.captureRawModelResponse(content);
@@ -479,7 +538,7 @@ export async function saveAssistantMessage(
   }
 
   const msg: Message = {
-    id: existing?.id ?? step?.messageId ?? generateId(),
+    id: messageId,
     role,
     seq: existing?.seq ?? 0, // filled by addMessage (или уже назначен черновиком)
     origin: 'local',
@@ -517,6 +576,9 @@ export async function saveAssistantMessage(
     ...(step?.status ? { status: step.status } : {}),
   };
 
+  // Позиция сообщения в истории — из результата сохранения (без повторного
+  // полного разбора сессии).
+  let messageIndex = -1;
   if (existing) {
     // Шаг 2б: черновик частичного стрима уже в истории — заменяем его
     // финальной версией (id/seq сохраняет порт). `recordActivity` — потому
@@ -526,10 +588,15 @@ export async function saveAssistantMessage(
       // Черновик не найден (удалён/перезаписана история) — безопасный fallback.
       msg.id = generateId();
       msg.seq = 0;
-      await sessionManager.addMessage(sessionId, msg);
+      const added = await sessionManager.addMessage(sessionId, msg);
+      messageIndex = added ? added.messages.length - 1 : -1;
+    } else {
+      const current = await loadSession();
+      messageIndex = current ? current.messages.findIndex((m) => m.id === msg.id) : -1;
     }
   } else {
-    await sessionManager.addMessage(sessionId, msg);
+    const added = await sessionManager.addMessage(sessionId, msg);
+    messageIndex = added ? added.messages.length - 1 : -1;
   }
 
   // ADR-115 (outbound): сообщение ссылается на объекты вложений — учитываем
@@ -634,27 +701,28 @@ export async function saveAssistantMessage(
   }
 
   // Publish message.added for UI
-  if (!skipEvent) {
-    const session = await sessionManager.getSession(sessionId);
-    if (session) {
-      deps.eventBus.publish(sessionId, 'message.added', {
-        // ADR-118 §4: legacy-событие обязано быть **адресуемым** — без `id`
-        // клиент не может слить его с живым сообщением шага (`step.started`/
-        // `part.*`) и рисует второй пузырь того же ответа.
-        id: msg.id,
-        message_index: session.messages.length - 1,
-        role: msg.role,
-        content: finalContent.slice(0, 500),
-        model,
-        provider: provider || '',
-        agent_role: agentRole,
-        reasoning: reasoning || null,
-        tool_calls: toolResults && toolResults.length > 0 ? toolResults : null,
-        intermediate_text_blocks: intermediateTextBlocks && intermediateTextBlocks.length > 0 ? intermediateTextBlocks : null,
-        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-      });
-    }
+  if (!skipEvent && messageIndex >= 0) {
+    deps.eventBus.publish(sessionId, 'message.added', {
+      // ADR-118 §4: legacy-событие обязано быть **адресуемым** — без `id`
+      // клиент не может слить его с живым сообщением шага (`step.started`/
+      // `part.*`) и рисует второй пузырь того же ответа.
+      id: msg.id,
+      message_index: messageIndex,
+      role: msg.role,
+      content: finalContent.slice(0, 500),
+      model,
+      provider: provider || '',
+      agent_role: agentRole,
+      reasoning: reasoning || null,
+      tool_calls: toolResults && toolResults.length > 0 ? toolResults : null,
+      intermediate_text_blocks: intermediateTextBlocks && intermediateTextBlocks.length > 0 ? intermediateTextBlocks : null,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    });
   }
 
-  return finalContent;
+  // ADR-118 §1/§5: возвращается id сохранённого сообщения — финальный шаг
+  // публикует `step.finished.messageId` именно с ним («финал = сообщение
+  // шага»): если id шага был занят, сообщение получило свой id, и событие
+  // шага должно адресовать фактическую запись.
+  return msg.id;
 }

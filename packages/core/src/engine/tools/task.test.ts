@@ -1918,6 +1918,8 @@ describe('taskTool — live-статистика саб-агента (ADR-070)',
       name: 'test-provider',
     };
 
+    const progressEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+
     const result = await taskTool.execute(
       { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
       {
@@ -1931,7 +1933,7 @@ describe('taskTool — live-статистика саб-агента (ADR-070)',
           eventBus,
           sessionId: parent.id,
           agentRegistry: makeMockAgentRegistry(),
-          publish: () => {},
+          publish: (type: string, data: Record<string, unknown>) => progressEvents.push({ type, data }),
           streamId: 'stream-live-1',
           callId: 'call-live-1',
         },
@@ -1941,20 +1943,26 @@ describe('taskTool — live-статистика саб-агента (ADR-070)',
 
     expect(result.isError).toBeFalsy();
     const childId = result.metadata!.child_session_id as string;
-    const childUsage = published.filter(
+    // ADR-118 §4: `step.finished` ребёнка публикуется **после** завершения
+    // LLM-вызова итерации (вне троттлинга дельт) — ровно одно событие на
+    // шаг, с точным usage финального чанка. Промежуточная оценка уходит в
+    // `subagent.progress` (канал родителя).
+    const childSteps = published.filter(
       (e) => e.type === 'step.finished' && e.sessionId === childId,
     );
-    expect(childUsage.length).toBeGreaterThanOrEqual(2);
+    expect(childSteps).toHaveLength(1);
+    const exact = childSteps[0]!;
+    expect((exact.data.usage as TokenUsage).inputTokens).toBe(100);
+    expect((exact.data.usage as TokenUsage).outputTokens).toBe(5);
 
-    // Промежуточная оценка: точный input сохранён, output оценён из контента.
-    const estimated = childUsage[0]!;
+    // Промежуточная оценка — в live-прогрессе родителя: точный input сохранён,
+    // output оценён из контента.
+    const progress = progressEvents.filter((e) => e.type === 'subagent.progress');
+    expect(progress.length).toBeGreaterThanOrEqual(1);
+    const estimated = progress[0]!;
     expect((estimated.data.usage as TokenUsage).inputTokens).toBe(100);
     expect((estimated.data.usage as TokenUsage).outputTokens).toBeGreaterThan(0);
     expect((estimated.data.usage as TokenUsage).outputTokens).not.toBe(5);
-
-    // Финал: точный output, оценка снята.
-    const exact = childUsage[childUsage.length - 1]!;
-    expect((exact.data.usage as TokenUsage).outputTokens).toBe(5);
   });
 
   it('без modelPriceLoader cost_usd не пишется', async () => {

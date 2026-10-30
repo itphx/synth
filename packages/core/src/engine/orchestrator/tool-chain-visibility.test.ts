@@ -29,8 +29,9 @@ import { ProviderFactory, BaseProvider } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
 import type { PermissionConfig, ToolDefinition, Message } from '@itphx/synth-shared';
-import { generateId, MessageRole, nowISO, makeTextPart, ToolCapability } from '@itphx/synth-shared';
+import { generateId, MessageRole, nowISO, makeTextPart, makeMediaPart, ToolCapability } from '@itphx/synth-shared';
 import { serializeMessage } from '../../server/serialize.js';
+import { hasVisibleStepContent } from './persistence.js';
 
 function makeCtxBuilder(): ContextBuilder {
   return {
@@ -395,5 +396,45 @@ describe('Видимость tool-chain: маркер metadata.tool_chain', () =
     );
 
     await rm(h.tmpDir, { recursive: true, force: true });
+  });
+});
+
+describe('hasVisibleStepContent: видимость шага по его частям', () => {
+  it('reasoning-часть без текста не видна, медиа-часть (ADR-115) — видна', () => {
+    // Reasoning-часть с пустым текстом (так выглядит `redacted_thinking`) —
+    // видимого контента в шаге нет: он прячется как tool_chain (иначе шаг
+    // всплывал бы в транскрипте пустым пузырём).
+    expect(hasVisibleStepContent('', [
+      { id: generateId(), type: 'reasoning', data: '' },
+    ])).toBe(false);
+    expect(hasVisibleStepContent('', [
+      { id: generateId(), type: 'reasoning', data: '   ' },
+    ])).toBe(false);
+    // С текстом — видимая.
+    expect(hasVisibleStepContent('', [
+      { id: generateId(), type: 'reasoning', data: 'думаю' },
+    ])).toBe(true);
+
+    // Медиа-часть ответа (ADR-115) — видимый контент: шаг с вложением не
+    // должен прятаться как tool-chain.
+    for (const type of ['image', 'audio', 'video', 'file'] as const) {
+      expect(hasVisibleStepContent('', [
+        makeMediaPart(type, {
+          blobPath: `attachments/aa/${'a'.repeat(64)}`,
+          sha256: 'a'.repeat(64),
+          mime: type === 'file' ? 'application/pdf' : `${type}/png`,
+          size: 1024,
+        }),
+      ])).toBe(true);
+    }
+
+    // Текстовая часть: с текстом — видимая, пустая — нет.
+    expect(hasVisibleStepContent('', [makeTextPart('текст')])).toBe(true);
+    expect(hasVisibleStepContent('', [makeTextPart('   ')])).toBe(false);
+    // Текст в `content` — тоже видимый контент.
+    expect(hasVisibleStepContent('ответ', undefined)).toBe(true);
+    // Ничего нет — шаг без видимого содержимого.
+    expect(hasVisibleStepContent(undefined, undefined)).toBe(false);
+    expect(hasVisibleStepContent('', [])).toBe(false);
   });
 });

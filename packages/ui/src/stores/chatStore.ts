@@ -262,8 +262,17 @@ export interface QueuedMessage {
  * - `index` — позиция в серверном массиве: **не** ключ порядка (смешивать с
  *   `ord` нельзя — это разные шкалы).
  */
-export type MessageOrderKey = Pick<MessageData, 'ord' | 'id' | 'index'> & {
+export type MessageOrderKey = Pick<MessageData, 'ord' | 'id' | 'index' | 'status'> & {
   created_at?: string
+}
+
+/**
+ * Позиционный индекс для тай-брейка: `index` может отсутствовать (legacy
+ * сообщения без индекса) — тогда `NaN` в компараторе сортировки ломает
+ * порядок, поэтому отсутствующий индекс считаем нулём.
+ */
+function tieBreakIndex(m: MessageOrderKey): number {
+  return typeof m.index === 'number' && Number.isFinite(m.index) ? m.index : 0
 }
 
 /** Тай-брейк по `id` (ADR-118 §7) — при полном равенстве ключей порядок по `index`. */
@@ -271,12 +280,30 @@ function tieBreakById(a: MessageOrderKey, b: MessageOrderKey): number {
   const aid = a.id ?? ''
   const bid = b.id ?? ''
   if (aid !== bid) return aid < bid ? -1 : 1
-  return a.index - b.index
+  return tieBreakIndex(a) - tieBreakIndex(b)
+}
+
+/**
+ * «Живое» сообщение — источник времени **клиентский** (`new Date()` в
+ * `ensureLiveMessage`), серверного времени у него нет:
+ *
+ * - статус `streaming` — идёт ход (ADR-118 §5);
+ * - `ord` нет и `created_at` нет — ещё не материализовано в истории.
+ *
+ * Клиентское и серверное время смешивать нельзя (часы клиента и инстанса
+ * разъезжаются) — поэтому живое сообщение всегда **последнее**.
+ */
+function isLiveOrderKey(m: MessageOrderKey, ord: number | null, createdAt: string): boolean {
+  if (m.status === 'streaming') return true
+  return ord === null && !createdAt
 }
 
 /**
  * Сортировка сообщений по `ord` (ADR-118 §2) — монотонный порядок записи.
  *
+ * - живое сообщение (статус `streaming` или ещё не материализованное) —
+ *   **последнее**: его `created_at` — клиентское время, смешивать его с
+ *   серверным нельзя;
  * - у обоих есть `ord` — по нему; при равном `ord` — tie-break по `id`
  *   (ADR-118 «Порядок и идемпотентность»);
  * - `ord` есть только у одного — сравниваем **по времени материализации**
@@ -284,8 +311,10 @@ function tieBreakById(a: MessageOrderKey, b: MessageOrderKey): number {
  *   по `id`. Позиционный `index` здесь не участвует: это позиция в серверном
  *   массиве, а не порядок записи; смешивание шкал уводило сообщение
  *   (например, уведомление о завершении фонового прогона) под ответ агента;
- * - нет ни `ord`, ни `created_at` — живое (ещё не материализованное) сообщение:
- *   оно новее всех записанных → в конец.
+ * - время сравнивается, только когда оба времени одного происхождения
+ *   (оба серверные либо оба клиентские) — смешанные часы не сравниваем;
+ * - нет ни `ord`, ни `created_at` — живое (ещё не материализованное)
+ *   сообщение: оно новее всех записанных → в конец.
  */
 export function compareMessagesByOrd(a: MessageOrderKey, b: MessageOrderKey): number {
   const ao = a.ord ?? null
@@ -293,10 +322,9 @@ export function compareMessagesByOrd(a: MessageOrderKey, b: MessageOrderKey): nu
   const ac = a.created_at ?? ''
   const bc = b.created_at ?? ''
 
-  // Живое сообщение (не материализовано в истории): нет ни `ord`, ни времени —
-  // оно новее всех записанных → в конец.
-  const aLive = ao === null && !ac
-  const bLive = bo === null && !bc
+  // Живое сообщение (клиентское время) — новее всех записанных → в конец.
+  const aLive = isLiveOrderKey(a, ao, ac)
+  const bLive = isLiveOrderKey(b, bo, bc)
   if (aLive !== bLive) return aLive ? 1 : -1
 
   // `ord` у обоих — монотонный порядок записи (ADR-118 §2).
@@ -376,12 +404,6 @@ interface ChatStore {
     messageId: string,
     partId: string,
     patch: Record<string, unknown>,
-  ) => void
-  /** Правка сообщения по **позиционному** индексу (сервер шлёт `indices`). */
-  updateMessageByIndex: (
-    sessionId: string,
-    index: number,
-    changes: Partial<MessageData>,
   ) => void
   /** Снять части сообщения (черновик больше не нужен). */
   clearParts: (sessionId: string, messageId: string) => void
@@ -652,17 +674,6 @@ export const useChatStore = create<ChatStore>((set) => ({
           },
         },
       }
-    }),
-
-  updateMessageByIndex: (sessionId, index, changes) =>
-    set((s) => {
-      const current = s.messagesBySession[sessionId]
-      if (!current) return s
-      const at = current.findIndex((m) => m.index === index)
-      if (at === -1) return s
-      const next = [...current]
-      next[at] = { ...next[at]!, ...changes }
-      return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
     }),
 
   startTurn: (sessionId, turn) =>

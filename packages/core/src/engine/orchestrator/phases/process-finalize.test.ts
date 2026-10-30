@@ -767,7 +767,8 @@ describe('runProcessFinalize', () => {
      */
     function depsWithParts(parts: Part[]): ProcessFinalizeDeps {
       const save = vi.fn(async (...args: Parameters<SaveAssistantMessageFn>) => {
-        const content = await saveAssistantMessage(
+        // ADR-118 §1/§5: `saveAssistantMessage` возвращает id сообщения.
+        const messageId = await saveAssistantMessage(
           { sessionManager, eventBus, obfMapStore: null, modelPriceLoader: null },
           ...args,
         );
@@ -780,7 +781,7 @@ describe('runProcessFinalize', () => {
           await sessionManager.updateMessage(sessionId, { ...message, parts });
           break;
         }
-        return content;
+        return messageId;
       });
       return makeDeps({ saveAssistantMessage: save as unknown as SaveAssistantMessageFn });
     }
@@ -1035,6 +1036,53 @@ describe('runProcessFinalize', () => {
       const stored = (await sessionManager.getSession(sessionId))!;
       expect(stored.steerInbox ?? []).toHaveLength(0);
       expect(stored.pendingMessages.map((m) => m.content)).toEqual(['<process>ok</process>']);
+    });
+  });
+
+  describe('ADR-118 §1/§5: step.finished адресует фактически сохранённое сообщение', () => {
+    it('messageId = id сохранённого сообщения (обычный ход и ошибка чтения сессии)', async () => {
+      // (а) Обычный ход: id шага свободен — финальное сообщение создаётся
+      // с id шага («финал = сообщение шага»).
+      const sessionId = await makeSession();
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ finalStepMessageId: 'msg-step-0' }),
+        makeDeps(),
+      );
+
+      const stored = (await sessionManager.getSession(sessionId))!;
+      const assistants = stored.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+      expect(assistants).toHaveLength(1);
+      expect(assistants[0]!.id).toBe('msg-step-0');
+      expect(stepFinished().data.messageId).toBe(assistants[0]!.id);
+
+      // (б) Чтение сессии в `saveAssistantMessage` падает → id шага НЕ
+      // переиспользуется (дубликат id опаснее расхождения с событиями шага),
+      // но `step.finished` адресует фактически сохранённое сообщение, и
+      // второго сообщения в истории не появляется.
+      const sessionId2 = await makeSession();
+      const originalGetSession = sessionManager.getSession.bind(sessionManager);
+      let getSessionCalls = 0;
+      const spy = vi.spyOn(sessionManager, 'getSession').mockImplementation(async (id: string) => {
+        getSessionCalls += 1;
+        if (getSessionCalls === 1) throw new Error('сессия недоступна');
+        return originalGetSession(id);
+      });
+      try {
+        await runProcessFinalize(
+          makeArgs(sessionId2),
+          makeState({ finalStepMessageId: 'msg-step-1' }),
+          makeDeps(),
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      const stored2 = (await sessionManager.getSession(sessionId2))!;
+      const assistants2 = stored2.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+      expect(assistants2).toHaveLength(1);
+      expect(assistants2[0]!.id).not.toBe('msg-step-1');
+      expect(lastEventOf('step.finished').data.messageId).toBe(assistants2[0]!.id);
     });
   });
 

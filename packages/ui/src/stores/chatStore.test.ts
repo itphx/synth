@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   useChatStore,
   selectLiveSubagentUsage,
@@ -6,6 +7,7 @@ import {
   compareMessagesByOrd,
   sortMessagesByOrd,
   type MessageData,
+  type MessageOrderKey,
   type ActiveTurn,
   type LivePart,
 } from './chatStore'
@@ -119,6 +121,53 @@ describe('chatStore: сортировка сообщений по ord (ADR-118 �
       { index: 0, ord: 7, created_at: '2026-10-30T10:00:00Z' } as MessageData,
     ])
     expect(noIds.map((m) => m.index)).toEqual([0, 1])
+  })
+
+  it('живое сообщение (streaming) — последнее: клиентское время с серверным не смешиваем', () => {
+    // Живой ответ агента: `created_at` — **клиентское** время (ensureLiveMessage),
+    // у серверного сообщения — серверное. Часы разъезжаются → по времени
+    // сравнивать нельзя, живое сообщение всегда последнее.
+    const live = msg({
+      index: 9,
+      id: 'live',
+      role: 'assistant',
+      status: 'streaming',
+      ord: null,
+      created_at: '2026-10-30T09:00:00Z',
+    })
+    const server = msg({
+      index: 1,
+      id: 'server',
+      ord: 12,
+      created_at: '2026-10-30T10:00:00Z',
+    })
+
+    expect(compareMessagesByOrd(server, live)).toBeLessThan(0)
+    expect(compareMessagesByOrd(live, server)).toBeGreaterThan(0)
+    expect(sortMessagesByOrd([live, server]).map((m) => m.id)).toEqual(['server', 'live'])
+  })
+
+  it('живое сообщение без ord — последнее даже при серверном времени', () => {
+    const live = msg({
+      index: 3,
+      id: 'live',
+      role: 'assistant',
+      status: 'streaming',
+      ord: null,
+      created_at: '2026-10-30T12:00:00Z',
+    })
+    const server = msg({ index: 4, id: 'server', ord: 5, created_at: '2026-10-30T10:00:00Z' })
+
+    expect(sortMessagesByOrd([live, server]).map((m) => m.id)).toEqual(['server', 'live'])
+  })
+
+  it('tie-break без index не даёт NaN (порядок остаётся определённым)', () => {
+    const a = { ord: 3, id: 'a', created_at: '2026-10-30T10:00:00Z' } as unknown as MessageOrderKey
+    const b = { ord: 3, id: 'a', created_at: '2026-10-30T10:00:00Z' } as unknown as MessageOrderKey
+
+    const cmp = compareMessagesByOrd(a, b)
+    expect(Number.isNaN(cmp)).toBe(false)
+    expect(cmp).toBe(0)
   })
 })
 
@@ -480,19 +529,13 @@ describe('chatStore: удаление и пакетная правка сегм�
     expect(after.find((m) => m.id === 'other')!.pinned).toBe(false)
   })
 
-  it('updateMessageByIndex правит сегмент по серверному индексу', () => {
-    const store = useChatStore.getState()
-    store.setMessages('s1', [
-      msg({ index: 0, id: 'm0', ord: 0 }),
-      msg({ index: 1, id: 'm1', ord: 1, role: 'assistant' }),
-    ])
-
-    store.updateMessageByIndex('s1', 1, { pinned: true })
-    store.updateMessageByIndex('s1', 42, { pinned: true })
-
-    const after = useChatStore.getState().messagesBySession['s1']!
-    expect(after.find((m) => m.id === 'm1')!.pinned).toBe(true)
-    expect(after.find((m) => m.id === 'm0')!.pinned).toBe(false)
+  it('updateMessageByIndex удалён: адресация мутаций — по id (ADR-118 §7)', () => {
+    // Метода в сторе нет — и ни один вызывающий его не использует.
+    expect('updateMessageByIndex' in useChatStore.getState()).toBe(false)
+    for (const file of ['./chatStore.ts', './transportStore.ts']) {
+      const src = readFileSync(new URL(file, import.meta.url), 'utf8')
+      expect(src).not.toContain('updateMessageByIndex')
+    }
   })
 })
 

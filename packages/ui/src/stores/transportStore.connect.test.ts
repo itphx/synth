@@ -211,6 +211,14 @@ describe('transportStore.connect: окно асинхронного старта
     store.connect('ws') // повторный вызов — второго клиента быть не должно
     expect(mocks.instances).toHaveLength(1)
 
+    // Дельта приходит по ходу (ADR-118 §5): без активного хода она
+    // опоздавшая и игнорируется — гонки тут не проверяем.
+    client.callbacks.onEvent?.({
+      type: 'turn.started',
+      session_id: 'sess-dup',
+      data: { turnId: 't-dup', messageId: 'm-user' },
+    })
+
     client.callbacks.onEvent?.({
       type: 'part.delta',
       session_id: 'sess-dup',

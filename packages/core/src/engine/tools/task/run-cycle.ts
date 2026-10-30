@@ -14,6 +14,7 @@ import { EventBus } from '../../../events/bus.js';
 import { buildDenyResult, executeToolDef } from '../tool-execution.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
 import { computeUsageCost } from '../../../providers/usage.js';
+import type { UsageCost } from '../../../providers/usage.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
 import { PermissionEvaluator } from '../../permission/evaluator.js';
 import { PermissionApprovalManager } from '../../permission/approval.js';
@@ -26,6 +27,7 @@ import { messageToLLMMessage } from './prompt.js';
 import { applySteerInjections, dropSteerInjections } from '../../steering/apply.js';
 import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
 import { hasVisibleStepContent } from '../../orchestrator/persistence.js';
+import type { AssistantMessageStatus } from '../../orchestrator/persistence.js';
 import { requeueMessages } from '../../../queue/processor.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
@@ -398,18 +400,27 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
    * Очередь вычитывается только на границе шага; после цикла границы больше
    * не будет, и сообщение, пришедшее во время последней генерации, иначе
    * применилось бы в начале следующего хода и выглядело «внезапным отдельным
-   * сообщением». Причина — `turn_ended`, событие публикуется в канал ребёнка
-   * (как `message.injected` его же хода). Best-effort: сбой очереди не роняет
-   * прогон.
+   * сообщением». Причина — `turn_ended` (ход/прогон закончился) или
+   * `aborted` («Стоп» родителя) — как у основного хода. Best-effort: сбой
+   * очереди не роняет прогон.
+   *
+   * Снимается **во всех** терминальных путях (ошибка провайдера, отмена,
+   * жёсткий сбой) — иначе остаток очереди «протекает» в следующий ход
+   * ребёнка. Повторный вызов безопасен: очередь снимается один раз.
    */
-  const dropChildSteerInjections = async (): Promise<void> => {
+  let steerQueueDropped = false;
+  const dropChildSteerInjections = async (
+    reason: 'turn_ended' | 'aborted' = 'turn_ended',
+  ): Promise<void> => {
+    if (steerQueueDropped) return;
+    steerQueueDropped = true;
     const sessionManager = extra.sessionManager;
     if (!childSessionId || !sessionManager) return;
     try {
       await dropSteerInjections({
         sessionManager,
         sessionId: childSessionId,
-        reason: 'turn_ended',
+        reason,
         streamId: extra.streamId,
         publishDropped: (event) => {
           extra.eventBus?.publish(childSessionId, 'steer.dropped', event);
@@ -518,11 +529,19 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     /**
      * Сохранить финальный ответ ассистента в дочернюю сессию — общий путь
      * для обычного финала и для финального отчёта по лимиту шагов.
+     *
+     * `messageId` — id **новой** записи: он задаётся только когда запись
+     * является сообщением шага (и тогда id шага свободен). Отчёт, который
+     * создаётся **сверх** уже сохранённого assistant(tool_calls) (шаг-лимит с
+     * «непослушным» вызовом), получает **свой** id (`generateId()`) — иначе
+     * в истории ребёнка окажутся две записи с одним id, а UI пропустит
+     * сообщение с уже занятым id (live-отчёт не появится).
      */
     const persistChildAssistantMessage = async (
       content: string,
       extraMeta: Record<string, unknown> = {},
       messageId?: string,
+      status: AssistantMessageStatus = 'completed',
     ): Promise<void> => {
       if (!childSessionId || !extra.sessionManager) return;
       try {
@@ -560,7 +579,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // Как в _persistToolChain родителя: финальное сообщение несёт
           // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
           // так же аккуратно, как финал родительской.
-          metadata: buildChildAssistantMetadata('completed', {
+          metadata: buildChildAssistantMetadata(status, {
             stream_id: extra.streamId,
             duration_ms: Date.now() - subagentStartedAt,
             ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
@@ -636,6 +655,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       });
 
       // 3. Финализация дочерней сессии
+      // ADR-104: очередь инъекций ребёнка снимается и на отмене («Стоп») —
+      // остаток не должен «протечь» в следующий ход ребёнка.
+      await dropChildSteerInjections('aborted');
       await commitChildUsage();
       await finalizeChildSession();
 
@@ -753,6 +775,18 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // считается приращение для `subagent.progress` (дельта, а не полный текст).
       let lastPublishedReasoning = '';
       let lastPublishedContent = '';
+      /**
+       * ADR-118 §4: расход шага ребёнка — в `step.finished` (usage/модель/
+       * стоимость). Значения последнего чанка итерации запоминаются здесь и
+       * публикуются **после** завершения LLM-вызова: троттлинг дельт не
+       * должен решать, публикуется ли закрытие шага (иначе live-сообщение
+       * шага ребёнка навсегда оставалось `streaming`, а usage/стоимость
+       * терялись).
+       */
+      let stepUsage: TokenUsage | undefined;
+      let stepCost: UsageCost | null = null;
+      let stepModel: string | undefined;
+      let stepProvider: string | undefined;
 
       // ─── LLM-вызов с retry (B1, аналог QueueProcessor) ──────────────
       // Recoverable-ошибки (network/timeout/rate_limit/server_error) ретраятся
@@ -808,6 +842,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             const liveCost = liveModel && extra.modelPriceLoader
               ? computeUsageCost(liveUsage.usage, extra.modelPriceLoader(liveModel))
               : null;
+            // Последние значения итерации — для `step.finished` ребёнка (публикуется
+            // после завершения LLM-вызова, вне троттлинга дельт).
+            stepUsage = liveUsage.usage;
+            stepCost = liveCost;
+            stepModel = liveModel;
+            stepProvider = liveProvider;
             const liveReasoning = reasoning || '';
             const liveContent = accumulatedContent || '';
 
@@ -863,32 +903,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                     estimated: liveUsage.estimated,
                   });
                 }
-
-                // ADR-118 §4: live-статистика в дочернюю сессию (если она
-                // есть) — открытая дочерняя сессия показывает токены/стоимость
-                // по ходу работы. Прежний `stream.usage` удалён без dual-emit:
-                // расход шага несёт `step.finished` (`usage`, провайдер/модель,
-                // стоимость). У цикла сабагента своего `turnId`/`stepIndex`
-                // нет: `turnId` = id дочерней сессии, `stepIndex` = номер
-                // итерации, `messageId` = id assistant-сообщения шага.
-                if (childSessionId && extra.eventBus) {
-                  const stepPayload: StepFinishedPayload = {
-                    turnId: childSessionId,
-                    stepIndex: iteration,
-                    messageId: stepMessageId,
-                    status: 'completed',
-                    usage: liveUsage.usage,
-                    ...(liveModel ? { model: liveModel } : {}),
-                    ...(liveProvider ? { provider: liveProvider } : {}),
-                    ...(liveCost
-                      ? {
-                        costUsd: liveCost.costUsd,
-                        costCurrency: liveCost.currency,
-                      }
-                      : {}),
-                  };
-                  extra.eventBus.publish(childSessionId, 'step.finished', stepPayload);
-                }
+                // ADR-118 §4: `step.finished` ребёнка публикуется **после**
+                // завершения LLM-вызова итерации (ниже, вне троттлинга) —
+                // троттлинг влияет только на `subagent.progress`.
               }
             }
           }
@@ -925,6 +942,33 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           lastPublishedReasoning = '';
           lastPublishedContent = '';
         }
+      }
+
+      // ADR-118 §4: шаг дочерней сессии закрыт — `step.finished` публикуется
+      // **после** завершения LLM-вызова итерации, вне ветки дельт: троттлинг
+      // прогресса не должен решать, публикуется ли закрытие шага. Раньше
+      // событие уходило только вместе с дельтой — без неё live-сообщение шага
+      // ребёнка навсегда оставалось `streaming`, а usage/стоимость терялись.
+      // У цикла сабагента своего `turnId`/`stepIndex` нет: `turnId` = id
+      // дочерней сессии, `stepIndex` = номер итерации, `messageId` = id
+      // assistant-сообщения шага.
+      if (!llmFailure && !isAborted() && childSessionId && extra.eventBus) {
+        const stepPayload: StepFinishedPayload = {
+          turnId: childSessionId,
+          stepIndex: iteration,
+          messageId: stepMessageId,
+          status: 'completed',
+          usage: stepUsage ?? subagentUsage,
+          ...(stepModel ? { model: stepModel } : {}),
+          ...(stepProvider ? { provider: stepProvider } : {}),
+          ...(stepCost
+            ? {
+              costUsd: stepCost.costUsd,
+              costCurrency: stepCost.currency,
+            }
+            : {}),
+        };
+        extra.eventBus.publish(childSessionId, 'step.finished', stepPayload);
       }
 
       if (llmFailure) {
@@ -964,6 +1008,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             i18n: i18nMeta(errKey, attempts > 1 ? { ...errParams, attempts: String(attempts) } : errParams),
           }),
         });
+        // ADR-104: ошибка провайдера — тоже терминальный путь прогона: очередь
+        // инъекций ребёнка снимается, остаток не «протекает» в следующий ход.
+        await dropChildSteerInjections('turn_ended');
         await commitChildUsage();
         await finalizeChildSession();
         // ADR-030: `agent_failed` — неблокирующий эмит терминальной ошибки
@@ -1072,13 +1119,16 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (reasoning) subagentReasoning = reasoning;
             // Отчёт — финальный ответ саб-агента: в историю дочерней сессии
             // тем же путём, что и обычный финальный ответ (+ метка лимита шагов).
-            await persistChildAssistantMessage(reportText, stepLimitMeta(), stepMessageId);
+            // Отчёт — сообщение **этого** шага (tool calls в итерации не было),
+            // поэтому id шага свободен и остаётся за ним. Статус — `limit`:
+            // прогон остановлен по лимиту шагов (как у родителя).
+            await persistChildAssistantMessage(reportText, stepLimitMeta(), stepMessageId, 'limit');
           } else {
             reportMissing = true;
             finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
             // Детерминированный текст — в историю ребёнка: пустой отчёт иначе
             // оставлял дочернюю сессию без финального ответа вовсе.
-            await persistChildAssistantMessage(finalContent, stepLimitMeta(), stepMessageId);
+            await persistChildAssistantMessage(finalContent, stepLimitMeta(), stepMessageId, 'limit');
           }
           break;
         }
@@ -1499,11 +1549,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         if (reportText) {
           finalContent = reportText;
           if (reasoning) subagentReasoning = reasoning;
-          await persistChildAssistantMessage(reportText, stepLimitMeta(), stepMessageId);
+          // Отчёт — **новая** запись: assistant(tool_calls) этого шага уже
+          // сохранён с id `stepMessageId`, поэтому отчёт получает свой id
+          // (иначе в истории ребёнка были бы две записи с одним id, а UI
+          // пропустил бы сообщение с уже занятым id — live-отчёт не появился бы).
+          await persistChildAssistantMessage(reportText, stepLimitMeta(), undefined, 'limit');
         } else {
           reportMissing = true;
           finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
-          await persistChildAssistantMessage(finalContent, stepLimitMeta(), stepMessageId);
+          await persistChildAssistantMessage(finalContent, stepLimitMeta(), undefined, 'limit');
         }
         break;
       }
@@ -1711,5 +1765,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       isError: true,
       metadata: { subagent_type: subagentType },
     };
+  } finally {
+    // ADR-104: очередь инъекций ребёнка снимается в **любом** терминальном
+    // пути прогона (нормальный выход, ошибка провайдера, отмена, жёсткий
+    // сбой) — иначе остаток «протекает» в следующий ход ребёнка. Повторный
+    // вызов безопасен (очередь снимается один раз).
+    await dropChildSteerInjections('turn_ended');
   }
 }

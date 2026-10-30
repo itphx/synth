@@ -51,7 +51,7 @@ vi.mock('@/lib/api/transport', () => ({ TransportClient: mocks.MockClient }))
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks.api }))
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 
-import { useTransportStore, createDispatcher } from './transportStore'
+import { useTransportStore, createDispatcher, mergeHistory } from './transportStore'
 import { useChatStore } from './chatStore'
 import { resetChatStore } from './testUtils'
 import type { WSEvent } from '@/lib/api/transport'
@@ -172,5 +172,48 @@ describe('transportStore: мерж истории не теряет ord (ADR-118
     const msgs = useChatStore.getState().messagesBySession['s1']!
     expect(msgs.map((m) => m.id)).toEqual(['notice', 'answer'])
     expect(msgs.find((m) => m.id === 'notice')!.ord).toBe(138)
+  })
+
+  it('мерж истории не снимает живой статус и не обнуляет turn_id (ADR-118 §5)', async () => {
+    // Живой ответ агента: `status: 'streaming'`, `turn_id`/`step_index` — ход.
+    useChatStore.getState().upsertMessage('s1', {
+      index: 138,
+      id: 'answer',
+      role: 'assistant',
+      content: '',
+      status: 'streaming',
+      turn_id: 't7',
+      step_index: 1,
+      ord: null,
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      created_at: '2026-10-30T10:00:05Z',
+    })
+
+    // Серверная запись того же сообщения: статуса/хода ещё нет (`null`).
+    mocks.api.getSessionMessages.mockResolvedValue({
+      session_id: 's1',
+      messages: [
+        historyMessage({
+          index: 138,
+          id: 'answer',
+          ord: null,
+          role: 'assistant',
+          content: '',
+          status: null,
+          turn_id: null,
+          step_index: null,
+        }),
+      ],
+    })
+
+    await mergeHistory('s1')
+
+    const answer = useChatStore.getState().messagesBySession['s1']![0]!
+    // Индикатор живого хода не снят, границы хода на месте.
+    expect(answer.status).toBe('streaming')
+    expect(answer.turn_id).toBe('t7')
+    expect(answer.step_index).toBe(1)
   })
 })

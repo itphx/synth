@@ -293,37 +293,14 @@ export function collectOutboundAttachments(
 /**
  * ADR-118 §1: свободен ли идентификатор сообщения финального шага.
  *
- * `finalStepMessageId` можно передать в `step.messageId` **только** если
- * записи с таким `id` в истории сессии ещё нет:
- *  - запись есть — финальное сообщение её обновляет (`existing`, id черновика
- *    сохраняется) либо шаг уже закрыт tool-chain сообщением (цикл прервался
- *    на вызовах инструментов). Новая запись обязана получить **свой** id,
- *    иначе в истории окажутся две записи с одинаковым id;
- *  - записи нет — финальное сообщение создаётся с id шага: контракт
- *    «финальное сообщение = сообщение шага» (`step.started`/`step.finished`
- *    адресуют то же сообщение).
- *
- * Проверка идёт по **факту наличия записи** в истории (свежая выборка
- * сессии), а не по флагу черновика: `currentDraft === null` покрывает оба
- * случая — черновика не было вовсе (пустой ответ модели) и черновик уже
- * сохранён шагом с вызовами инструментов (отмена/серия отказов).
+ * Проверка переехала в `saveAssistantMessage` (`persistence.ts`): там, где
+ * сообщение создаётся, — там же решается, можно ли переиспользовать id шага
+ * (если запись с таким id уже есть в истории — финальное сообщение получает
+ * **свой** id, иначе в истории были бы две записи с одинаковым id). Эпилог
+ * получает **фактический** id сохранённого сообщения из результата
+ * сохранения и публикует его в `step.finished` — контракт «финал = сообщение
+ * шага» не рвётся даже при ошибке чтения сессии.
  */
-async function isStepMessageIdFree(
-  deps: ProcessFinalizeDeps,
-  sessionId: string,
-  messageId: string | undefined,
-): Promise<boolean> {
-  if (!messageId) return false;
-  try {
-    const current = await deps.sessionManager.getSession(sessionId);
-    if (!current) return false;
-    return !current.messages.some((m) => m.id === messageId);
-  } catch {
-    // Сессию не прочитать — id не переиспользуем (дубликат id опаснее
-    // расхождения с событиями шага).
-    return false;
-  }
-}
 
 /** Финализация хода: завершение как отмена, quality-check, персист, `stream.done`. */
 export async function runProcessFinalize(
@@ -417,7 +394,6 @@ export async function runProcessFinalize(
     // записью в истории (см. `isStepMessageIdFree`): если запись шага уже
     // сохранена (отмена пришла во время исполнения тула), новая запись
     // отмены получает свой id — иначе в истории были бы две записи с одним id.
-    const reuseStepMessageId = await isStepMessageIdFree(deps, session.id, finalStepMessageId);
     await deps.saveAssistantMessage(
       session.id, partialContent, streamId, effectiveAgentRole,
       cancelEstimated.usage, cancelModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
@@ -447,7 +423,7 @@ export async function runProcessFinalize(
         turnId,
         stepIndex: finalStepIndex,
         status: 'cancelled',
-        ...(reuseStepMessageId ? { messageId: finalStepMessageId } : {}),
+        ...(finalStepMessageId ? { messageId: finalStepMessageId } : {}),
       },
     );
 
@@ -580,16 +556,18 @@ export async function runProcessFinalize(
   const durationMs = Date.now() - streamStartedAt;
   const messageCost = deps.computeMessageCost(finalModel, finalUsage);
   const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
-  // ADR-118 §1: id сообщения шага передаём, только если записи с таким id в
-  // истории ещё нет (`isStepMessageIdFree`):
+  // ADR-118 §1: id сообщения шага передаём всегда — решение «свой id или id
+  // шага» принимает `saveAssistantMessage` (по факту наличия записи в
+  // истории):
   //  - запись есть (шаг закрыт tool-chain сообщением — серия отказов,
   //    отмена, лимит шагов) → новая запись получает **свой** id, иначе в
   //    истории были бы две записи с одинаковым id;
   //  - записи нет (пустой ответ модели без черновика) → финальное сообщение
   //    создаётся с id шага: контракт «финальное сообщение = сообщение шага»
   //    (`step.started`/`step.finished` адресуют то же сообщение).
-  const reuseStepMessageId = await isStepMessageIdFree(deps, session.id, finalStepMessageId);
-  await deps.saveAssistantMessage(
+  // Обновление существующего черновика идёт через `existing` — его id и так
+  // сохраняется.
+  const savedMessageId = await deps.saveAssistantMessage(
     session.id, finalContent, streamId, effectiveAgentRole,
     finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
     MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
@@ -607,15 +585,13 @@ export async function runProcessFinalize(
     // Блоки reasoning со своими подписями — в `parts` сообщения (мульти-блок).
     allReasoning,
     // ADR-118 §1/§5: ход, шаг и терминальный статус сообщения.
-    // `messageId` — идентификатор сообщения шага; передаём его, только если
-    // записи с таким id в истории ещё нет (см. `isStepMessageIdFree`).
-    // Обновление существующего черновика идёт через `existing` — его id и так
-    // сохраняется.
+    // `messageId` — идентификатор сообщения шага (решение о «своём id»
+    // принимает `saveAssistantMessage`).
     {
       turnId,
       stepIndex: finalStepIndex,
       status: 'completed',
-      ...(reuseStepMessageId ? { messageId: finalStepMessageId } : {}),
+      ...(finalStepMessageId ? { messageId: finalStepMessageId } : {}),
     },
   );
 
@@ -655,7 +631,12 @@ export async function runProcessFinalize(
   publishStepFinished(publishChunk, {
     turnId,
     stepIndex: finalStepIndex,
-    messageId: finalStepMessageId ?? '',
+    // ADR-118 §1/§5: «финал = сообщение шага» — адресуем **фактический** id
+    // сохранённого сообщения (он же вернулся из `saveAssistantMessage`): если
+    // id шага был занят записью в истории, финальное сообщение получило свой
+    // id, и `step.finished` должен закрывать именно его (иначе в UI остаётся
+    // второй пузырь).
+    messageId: savedMessageId,
     status: stepStatusFromMessageStatus(messageStatus),
     usage: finalUsage,
     provider: providerName,

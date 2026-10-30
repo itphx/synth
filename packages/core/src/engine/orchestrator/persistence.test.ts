@@ -174,9 +174,11 @@ describe('saveAssistantMessage / persistToolChain', () => {
       debugCollector, false, 'prov',
     );
 
-    expect(returned).toBe('ответ');
     const updated = (await sessionManager.getSession(session.id))!;
     const saved = updated.messages[0]!;
+    // ADR-118 §1/§5: `saveAssistantMessage` возвращает id сохранённого
+    // сообщения — по нему финальный шаг публикует `step.finished.messageId`.
+    expect(returned).toBe(saved.id);
     expect(saved).toMatchObject({
       role: MessageRole.ASSISTANT,
       content: 'ответ',
@@ -334,17 +336,17 @@ describe('saveAssistantMessage / persistToolChain', () => {
       throw new Error('blob_refs недоступен');
     });
 
-    await expect(
-      saveAssistantMessage(
-        deps({ blobRefs: { add: addRef } as never }),
-        session.id, 'ответ', 'stream1', undefined, USAGE, 'm', undefined,
-        debugCollector, false, 'prov',
-        MessageRole.ASSISTANT, undefined, false,
-        undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-        undefined,
-        [makeMediaPart('file', { blobPath: 'attachments/cd/x', sha256: 'cd', mime: 'application/pdf', size: 1 })],
-      ),
-    ).resolves.toBe('ответ');
+    const savedId = await saveAssistantMessage(
+      deps({ blobRefs: { add: addRef } as never }),
+      session.id, 'ответ', 'stream1', undefined, USAGE, 'm', undefined,
+      debugCollector, false, 'prov',
+      MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined,
+      [makeMediaPart('file', { blobPath: 'attachments/cd/x', sha256: 'cd', mime: 'application/pdf', size: 1 })],
+    );
+    // ADR-118 §1/§5: возвращается id сохранённого сообщения (не текст).
+    expect(savedId).toBe((await sessionManager.getSession(session.id))!.messages[0]!.id);
     expect((await sessionManager.getSession(session.id))!.messages[0]!.parts).toHaveLength(2);
   });
 
