@@ -16,6 +16,7 @@ import { MIGRATION_025_PACKS_PIPELINES } from './025-packs-pipelines.js';
 import { MIGRATION_026_INSTANCE_SKILLS } from './026-instance-skills.js';
 import { MIGRATION_027_CONTEXT_FILES } from './027-context-files.js';
 import { MIGRATION_028_MESSAGE_REASONING_SIGNATURE } from './028-message-reasoning-signature.js';
+import { MIGRATION_029_MESSAGE_STREAM_V2 } from './029-message-stream-v2.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -136,12 +137,11 @@ describe('миграция 027_context_files (ADR-116)', () => {
 });
 
 describe('миграция 028_message_reasoning_signature (Anthropic thinking)', () => {
-  it('зарегистрирована в реестре под версией 28 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 28', () => {
     const migration = MIGRATIONS.find((m) => m.version === 28);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('028_message_reasoning_signature');
     expect(migration!.sql).toBe(MIGRATION_028_MESSAGE_REASONING_SIGNATURE);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(28);
   });
 
   it('добавляет колонки подписи thinking и redacted-блоков идемпотентно', () => {
@@ -154,6 +154,45 @@ describe('миграция 028_message_reasoning_signature (Anthropic thinking)'
     expect(MIGRATION_028_MESSAGE_REASONING_SIGNATURE).toContain(
       'COMMENT ON COLUMN messages.reasoning_signature',
     );
+  });
+});
+
+describe('миграция 029_message_stream_v2 (ADR-118)', () => {
+  it('зарегистрирована в реестре под версией 29 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 29);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('029_message_stream_v2');
+    expect(migration!.sql).toBe(MIGRATION_029_MESSAGE_STREAM_V2);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(29);
+  });
+
+  it('добавляет колонки ord/turn_id/step_index/status идемпотентно', () => {
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).toContain(
+      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS ord integer;',
+    );
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).toContain(
+      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS turn_id text;',
+    );
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).toContain(
+      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS step_index integer;',
+    );
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).toContain(
+      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS status text;',
+    );
+  });
+
+  it('заводит индекс по (session_id, ord) и не трогает seq', () => {
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).toContain(
+      'CREATE INDEX IF NOT EXISTS messages_session_ord_idx ON messages (session_id, ord);',
+    );
+    // `seq` остаётся позиционным: ни колонка, ни уникальность не меняются.
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).not.toMatch(/ALTER TABLE messages\s+ADD COLUMN[^;]*\bseq\b/i);
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).not.toMatch(/DROP\s+(INDEX|CONSTRAINT)/i);
+  });
+
+  it('идемпотентна (IF NOT EXISTS)', () => {
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).not.toMatch(/ALTER TABLE(?! messages ADD COLUMN IF NOT EXISTS)/);
+    expect(MIGRATION_029_MESSAGE_STREAM_V2).not.toMatch(/CREATE INDEX(?! IF NOT EXISTS)/);
   });
 });
 

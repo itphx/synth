@@ -443,6 +443,146 @@ describe('FileStore', () => {
     expect(loaded!.worktree).toBeUndefined();
   });
 
+  it('ADR-118: ord/turnId/stepIndex/status переживают save → load', async () => {
+    const session = makeSession({
+      id: 'with-adr118',
+      messages: [
+        {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 1,
+          origin: 'local' as const,
+          parts: [makeTextPart('step 0')],
+          content: 'step 0',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          ord: 7,
+          turnId: 'turn-1',
+          stepIndex: 0,
+          status: 'completed',
+        },
+        {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 2,
+          origin: 'local' as const,
+          parts: [makeTextPart('step 1')],
+          content: 'step 1',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          ord: 8,
+          turnId: 'turn-1',
+          stepIndex: 1,
+          status: 'streaming',
+        },
+      ],
+    });
+    await store.save(session);
+
+    // На диске — snake_case (как соседние составные поля сообщения).
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'with-adr118.json'), 'utf-8'));
+    expect(raw.messages[0].ord).toBe(7);
+    expect(raw.messages[0].turn_id).toBe('turn-1');
+    expect(raw.messages[0].step_index).toBe(0);
+    expect(raw.messages[0].status).toBe('completed');
+    expect(raw.messages[1].ord).toBe(8);
+    expect(raw.messages[1].step_index).toBe(1);
+    expect(raw.messages[1].status).toBe('streaming');
+
+    const loaded = await store.load('with-adr118');
+    expect(loaded!.messages[0]!.ord).toBe(7);
+    expect(loaded!.messages[0]!.turnId).toBe('turn-1');
+    expect(loaded!.messages[0]!.stepIndex).toBe(0);
+    expect(loaded!.messages[0]!.status).toBe('completed');
+    expect(loaded!.messages[1]!.ord).toBe(8);
+    expect(loaded!.messages[1]!.turnId).toBe('turn-1');
+    expect(loaded!.messages[1]!.stepIndex).toBe(1);
+    expect(loaded!.messages[1]!.status).toBe('streaming');
+  });
+
+  it('ADR-118: legacy-сообщение без ord/turn_id/step_index/status читается как undefined', async () => {
+    const session = makeSession({
+      id: 'legacy-adr118',
+      messages: [
+        {
+          id: generateId(),
+          role: MessageRole.USER,
+          seq: 1,
+          origin: 'local' as const,
+          parts: [makeTextPart('legacy')],
+          content: 'legacy',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+        },
+      ],
+    });
+    await store.save(session);
+
+    // В файле ключей нет вовсе — это и есть legacy-формат.
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'legacy-adr118.json'), 'utf-8'));
+    expect('ord' in raw.messages[0]).toBe(false);
+    expect('turn_id' in raw.messages[0]).toBe(false);
+    expect('step_index' in raw.messages[0]).toBe(false);
+    expect('status' in raw.messages[0]).toBe(false);
+
+    const loaded = await store.load('legacy-adr118');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.messages[0]!.content).toBe('legacy');
+    expect(loaded!.messages[0]!.ord).toBeUndefined();
+    expect(loaded!.messages[0]!.turnId).toBeUndefined();
+    expect(loaded!.messages[0]!.stepIndex).toBeUndefined();
+    expect(loaded!.messages[0]!.status).toBeUndefined();
+  });
+
+  it('ADR-118: appendMessage выдаёт монотонный ord, updateMessage его сохраняет', async () => {
+    await store.save(makeSession({ id: 'ord-flow' }));
+
+    const first = await store.appendMessage('ord-flow', {
+      id: '',
+      seq: 0,
+      role: MessageRole.USER,
+      origin: 'local',
+      parts: [makeTextPart('first')],
+      content: 'first',
+      createdAt: new Date().toISOString(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    } as never);
+    expect(first!.ord).toBe(1);
+
+    const second = await store.appendMessage('ord-flow', {
+      id: '',
+      seq: 0,
+      role: MessageRole.ASSISTANT,
+      origin: 'local',
+      parts: [makeTextPart('second')],
+      content: 'second',
+      createdAt: new Date().toISOString(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    } as never);
+    expect(second!.ord).toBe(2);
+
+    // Обновление не перебивает выданный `ord`.
+    const updated = await store.updateMessage('ord-flow', {
+      ...second!,
+      content: 'second (final)',
+      ord: 999,
+    });
+    expect(updated!.ord).toBe(2);
+
+    const loaded = await store.load('ord-flow');
+    expect(loaded!.messages.map((m) => m.ord)).toEqual([1, 2]);
+  });
+
   it('load несуществующей сессии возвращает null', async () => {
     const result = await store.load('no-such-id');
     expect(result).toBeNull();

@@ -4,6 +4,7 @@ import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBy
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { SessionRepository } from '../storage/ports/session-repository.js';
 import type { ProjectRepository } from '../storage/ports/project-repository.js';
+import { nextOrd } from '../storage/message-write.js';
 import type { HookBus } from '../engine/hooks/hook-bus.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
 import type { ActivityMeasure, AnalyticsRecorder } from '../analytics/recorder.js';
@@ -432,6 +433,12 @@ export class SessionManager {
       if (!message.id) message.id = generateId();
       if (!message.seq) message.seq = session.messages.length + 1;
       if (!message.origin) message.origin = 'local';
+      // ADR-118 §2: `ord` — монотонный счётчик сессии (выдаётся в момент
+      // материализации записи в историю). Уже проставленный `ord` не
+      // перетирается; ранее выданные значения не перенумеровываются.
+      if (!Number.isFinite(message.ord)) {
+        message.ord = nextOrd(session.messages);
+      }
       if (!message.parts || message.parts.length === 0) {
         message.parts = [makeTextPart(message.content)];
       }
@@ -457,6 +464,10 @@ export class SessionManager {
    * ADR-096: точечная дозапись сообщения (без чтения/перезаписи всей истории).
    * `id`/`seq`/`origin` назначает порт (`SessionRepository.appendMessage`),
    * здесь — NUL-санитайзинг и best-effort аналитика (та же, что в `addMessage`).
+   *
+   * ADR-118: `ord` (монотонный счётчик сессии) тоже выдаёт порт — в момент
+   * материализации записи в историю; ранее выданные значения не
+   * перенумеровываются.
    */
   async appendMessage(sessionId: string, message: Message): Promise<Message | null> {
     sanitizeMessageNullBytes(message);
@@ -483,6 +494,9 @@ export class SessionManager {
    * нет. `recordActivity` нужен финализации черновика частичного стрима
    * (шаг 2б): само сообщение уже создано `appendMessage` (там активность не
    * писалась), поэтому финальный `updateMessage` — единственная точка учёта.
+   *
+   * ADR-118: `ord` исходного сообщения сохраняется — он иммутабелен после
+   * выдачи (перебить его обновлением нельзя).
    */
   async updateMessage(
     sessionId: string,
@@ -784,6 +798,10 @@ export class SessionManager {
         id: generateId(),
         role: MessageRole.INFO,
         seq: target.messages.length + 1,
+        // ADR-118: ссылка — новая запись истории, получает свежий `ord`
+        // (монотонный счётчик сессии); `seq` ниже перенумеровывается под
+        // позицию, `ord` — нет.
+        ord: nextOrd(target.messages),
         origin: 'local',
         parts: [makePart('session_reference', {
           sessionId: ref.sessionId,
@@ -926,7 +944,13 @@ export class SessionManager {
         anchorIdx = 0;
       }
 
+      // ADR-118: копии получают собственный `ord` сессии-получателя — `ord`
+      // исходной сессии здесь не значит ничего (счётчик монотонный в рамках
+      // одной сессии). Счётчик считается ДО вставки, чтобы новые записи не
+      // повторяли `ord` уже существующих.
+      const baseOrd = nextOrd(target.messages);
       target.messages.splice(anchorIdx, 0, ...messagesToInsert);
+      messagesToInsert.forEach((m, i) => { m.ord = baseOrd + i; });
       for (let i = 0; i < target.messages.length; i++) {
         const msg = target.messages[i];
         if (msg) msg.seq = i + 1;
@@ -984,6 +1008,9 @@ export class SessionManager {
         ...structuredClone(m),
         id: generateId(),
         seq: i + 1,
+        // ADR-118: форк — новая сессия, её `ord`-счётчик начинается заново
+        // (`ord` исходной сессии — счётчик чужой сессии).
+        ord: i + 1,
         origin: 'inherited' as const,
         sourceMsgId: m.id,
       }));

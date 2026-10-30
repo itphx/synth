@@ -19,6 +19,14 @@
  *     (у старых сессий у всех сообщений `seq = 0`) и делает порядок однозначным;
  *     домен и так переставляет `seq = i+1` при ветвлении/merge — приведение к
  *     позиции смысла не меняет;
+ *   - ADR-118 §2: `ord` — **монотонный** счётчик порядка записи в историю
+ *     (выдаётся портом при материализации: `MAX(ord)+1` по сессии, под тем же
+ *     per-session advisory-локом). Ранее выданные значения **не
+ *     перенумеровываются**: `save()` сохраняет `ord` сообщения как есть, а
+ *     `updateMessage` пишет `ord = COALESCE(messages.ord, …)` (уже выданное
+ *     значение сохраняется; ещё не выданное — legacy-строка — может его
+ *     получить: так проставляет `ord` миграция данных ядра). Рядом живут
+ *     аддитивные поля хода/шага/статуса (`turn_id`/`step_index`/`status`);
  *   - `id` сообщения **не уникален** в пределах сессии (legacy-дубликаты):
  *     PK `messages` — суррогатный `message_uid`, поэтому дубликаты `id`
  *     сохраняются без потерь (upsert по `id` их молча схлопывал);
@@ -145,6 +153,8 @@ export const MESSAGE_FIELDS = [
   'id',
   'session_id',
   'seq',
+  // ADR-118 (миграция `029`): монотонный порядок записи, ход, шаг, статус.
+  'ord',
   'role',
   'origin',
   'source_msg_id',
@@ -172,6 +182,9 @@ export const MESSAGE_FIELDS = [
   'pinned',
   'hidden',
   'ephemeral',
+  'turn_id',
+  'step_index',
+  'status',
   'created_at',
 ] as const;
 
@@ -191,9 +204,16 @@ export const MESSAGE_JSON_FIELDS: ReadonlySet<string> = new Set([
  * суррогатный `message_uid` (PK), доменный `id`, `session_id`, позиционный
  * `seq` и `created_at`: они сохраняются от исходной строки (цель ищется по
  * `seq`, fallback по `id`).
+ *
+ * ADR-118: `ord` — **не** перенумеровывается обновлением (он иммутабелен
+ * после выдачи), поэтому в общий список изменяемых колонок он не входит:
+ * `updateMessage` пишет его отдельной фразой `COALESCE(messages.ord, …)` —
+ * уже выданное значение сохраняется, а ещё не выданное (legacy-строка) может
+ * получить его (так проставляет `ord` миграция данных ядра).
  */
 export const MESSAGE_MUTABLE_FIELDS = MESSAGE_FIELDS.filter(
-  (field) => field !== 'id' && field !== 'session_id' && field !== 'seq' && field !== 'created_at',
+  (field) => field !== 'id' && field !== 'session_id' && field !== 'seq'
+    && field !== 'created_at' && field !== 'ord',
 );
 
 /** Обязательные поля сообщения: безопасные дефолты (паритет с file/memory). */
@@ -207,6 +227,22 @@ function prepareMessage(message: Message): Message {
       : [makeTextPart(message.content ?? '')],
     createdAt: message.createdAt || nowISO(),
   };
+}
+
+/**
+ * ADR-118 §2: `ord` — **монотонный** счётчик порядка записи в историю
+ * сессии (выдаётся при материализации, ранее выданные значения не
+ * перенумеровываются).
+ *
+ * Правило выдачи: уже проставленный вызывателем `ord` **не перетирается**
+ * (иначе порядок записей ездил бы); иначе берётся `max(ord)+1` по сессии —
+ * значение вычислено в той же транзакции (per-session advisory-лок), поэтому
+ * два параллельных append'а не получат один `ord`.
+ *
+ * Экспортируется для unit-тестов (живая БД не нужна).
+ */
+export function resolveOrd(requested: unknown, nextOrd: number): number {
+  return Number.isFinite(requested) ? (requested as number) : nextOrd;
 }
 
 const REFERENCE_FIELDS = [
@@ -432,6 +468,12 @@ export class PostgresSessionRepository implements SessionRepository {
    * транзакция + per-session advisory-лок (как у `save`), `seq = MAX(seq)+1`
    * вычисляется в той же транзакции, `INSERT` одной строки, обновление
    * `sessions.updated_at`. Остальная история не перезаписывается.
+   *
+   * ADR-118 §2: `ord` — **монотонный** счётчик сессии (`MAX(ord)+1` по
+   * сессии), выдаётся в момент материализации записи в историю; ранее
+   * выданные значения не перенумеровываются. Если вызывающий уже проставил
+   * `ord` (например, перенос записи), его значение сохраняется — порт не
+   * перетирает выданный порядок.
    */
   async appendMessage(sessionId: string, message: Message): Promise<Message | null> {
     const prepared = prepareMessage(message);
@@ -445,11 +487,13 @@ export class PostgresSessionRepository implements SessionRepository {
       );
       if (present[0]?.present !== true) return null;
 
-      const next = await tx.query<{ seq: string | number }>(
-        'SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM messages WHERE session_id = $1',
+      const next = await tx.query<{ seq: string | number; ord: string | number }>(
+        'SELECT COALESCE(MAX(seq), 0) + 1 AS seq, COALESCE(MAX(ord), 0) + 1 AS ord '
+          + 'FROM messages WHERE session_id = $1',
         [sessionId],
       );
       const seq = Number(next[0]?.seq ?? 1);
+      prepared.ord = resolveOrd(prepared.ord, Number(next[0]?.ord ?? 1));
 
       const row = messageRow(prepared, sessionId, seq);
       const placeholders = MESSAGE_FIELDS.map((_, index) => `$${index + 1}`).join(', ');
@@ -470,14 +514,23 @@ export class PostgresSessionRepository implements SessionRepository {
    * транзакция + per-session advisory-лок; цель — по `seq` (первая по
    * `seq, created_at, id`), fallback по `id`. `message_uid`/`id`/`seq`/
    * `created_at` исходной строки не меняются, `sessions.updated_at` обновляется.
+   *
+   * ADR-118: `ord` не перенумеровывается — уже выданное значение сохраняется
+   * (`COALESCE(messages.ord, …)`), а ещё не выданное (legacy-строка без
+   * `ord`) может быть проставлено (миграция данных ядра).
    */
   async updateMessage(sessionId: string, message: Message): Promise<Message | null> {
     const prepared = prepareMessage(message);
     const row = messageRow(prepared, sessionId, prepared.seq);
-    const setSql = MESSAGE_MUTABLE_FIELDS
-      .map((field, index) => `${field} = $${index + 1}`)
-      .join(', ');
+    const setClauses = MESSAGE_MUTABLE_FIELDS.map(
+      (field, index) => `${field} = $${index + 1}`,
+    );
     const params = rowValues(row, MESSAGE_MUTABLE_FIELDS, MESSAGE_JSON_FIELDS);
+    if (prepared.ord !== undefined && prepared.ord !== null) {
+      params.push(prepared.ord);
+      setClauses.push(`ord = COALESCE(messages.ord, $${params.length})`);
+    }
+    const setSql = setClauses.join(', ');
 
     return this._connection.withTransaction(async (tx) => {
       await this._lockSession(tx, sessionId);

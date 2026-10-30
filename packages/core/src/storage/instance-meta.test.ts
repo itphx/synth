@@ -41,7 +41,10 @@ describe('instance-meta (ADR-092)', () => {
   it('SCHEMA_VERSION = max(toVersion) реестра', () => {
     expect(MIGRATIONS.length).toBeGreaterThan(0);
     expect(SCHEMA_VERSION).toBe(Math.max(...MIGRATIONS.map((m) => m.toVersion)));
-    expect(SCHEMA_VERSION).toBe(1);
+    // ADR-118: версия 2 — миграция данных к модели «ход как последовательность
+    // шагов» (`message-stream-v2`).
+    expect(SCHEMA_VERSION).toBe(2);
+    expect(MIGRATIONS.map((m) => m.id)).toContain('message-stream-v2');
   });
 
   it('свежий каталог: pending (current 0), meta отсутствует, ничего не создано', async () => {

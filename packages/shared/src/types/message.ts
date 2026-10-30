@@ -1,6 +1,7 @@
 import type { TokenUsage } from './llm.js';
 import type { PromptMeta } from './prompt.js';
 import type { AuthorityPrincipal } from './authority.js';
+import type { MessageStatus } from './message-stream.js';
 
 // --- Message role ---
 
@@ -151,4 +152,28 @@ export interface Message {
   summaryOf?: number[];
   qa_pass?: boolean;
   qa_reason?: string;
+  /**
+   * ADR-118 §«Порядок и идемпотентность»: монотонный порядок записи в
+   * истории сессии. Выдаётся в момент материализации записи и **никогда не
+   * перенумеровывается** (вставка в середину нумерацию не сдвигает).
+   * `seq` остаётся **позиционным** (порядок в массиве истории) и этим полем
+   * не заменяется.
+   */
+  ord?: number;
+  /**
+   * ADR-118 §«Модель данных»: идентификатор хода (`Turn`). Ход — от реплики
+   * пользователя до терминального статуса; сообщения хода делят `turnId`.
+   */
+  turnId?: string;
+  /**
+   * ADR-118 §«Модель данных»: индекс шага внутри хода (0-based). Шаг = один
+   * вызов LLM = одно assistant-сообщение.
+   */
+  stepIndex?: number;
+  /**
+   * ADR-118 §5: статус сообщения-хода (`streaming` → `completed` /
+   * `cancelled` / `error`). «Финал» — это смена статуса, а не замена
+   * объекта сообщения.
+   */
+  status?: MessageStatus;
 }

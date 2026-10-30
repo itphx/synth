@@ -6,9 +6,16 @@ import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Hono } from 'hono';
 import { enqueueUserMessage, enqueueSteerMessage, isSessionVisible, parsePermissionPrincipal, resolveUserPrincipal } from '@itphx/synth-core';
+import {
+  MESSAGE_MODEL_QUERY_PARAM,
+  MESSAGE_MODEL_UNSUPPORTED_CLOSE_CODE,
+  MESSAGE_MODEL_UNSUPPORTED_REASON,
+  isSupportedMessageModelParam,
+  parseSinceParam,
+} from '@itphx/synth-core';
 import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository, MetricsRegistry, ApprovalRegistry } from '@itphx/synth-core';
 import { nowISO, MessageRole, generateStreamId, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
-import type { AuthorityPrincipal } from '@itphx/synth-shared';
+import type { AuthorityPrincipal, BusEvent } from '@itphx/synth-shared';
 import type { AuthKit } from '../auth/middleware.js';
 import type { EventClient, EventHub } from '../events/hub.js';
 import { t } from '../lib/i18n.js';
@@ -150,6 +157,23 @@ export function createBackendListen(deps: BackendListenDeps) {
 
         wss.handleUpgrade(request, socket, head, (ws) => {
           const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+          // ADR-118 §8: гейт минимальной версии клиента (fail-closed) —
+          // клиент обязан заявить модель сообщений (`messageModel=2`), иначе
+          // соединение не устанавливается.
+          if (!isSupportedMessageModelParam(url.searchParams.get(MESSAGE_MODEL_QUERY_PARAM))) {
+            try {
+              ws.close(MESSAGE_MODEL_UNSUPPORTED_CLOSE_CODE, MESSAGE_MODEL_UNSUPPORTED_REASON);
+            } catch {
+              // ignore
+            }
+            return;
+          }
+
+          // ADR-118 §6: догон — клиент передаёт номер последнего виденного
+          // события (`since`).
+          const sinceSeq = parseSinceParam(url.searchParams.get('since'));
+
           // ADR-094: активное WS-соединение — в streams_active (не в гистограмме).
           const streams = deps.metrics?.gauge(
             'synth_http_streams_active',
@@ -163,18 +187,42 @@ export function createBackendListen(deps: BackendListenDeps) {
             streams?.dec();
           };
 
+          /**
+           * ADR-118 §6: порядок «сначала журнал, потом живое». Пока идёт
+           * воспроизведение журнала, живые события копятся в буфере; уже
+           * отправленные номера (`sentSeq`) отсекают дубли.
+           */
+          let replaying = sinceSeq !== null;
+          const pending: BusEvent[] = [];
+          const sentSeq = new Map<string, number>();
+
+          /** Отправить событие, если оно ещё не было отправлено (дедуп по `eventSeq`). */
+          const writeEvent = (event: BusEvent): void => {
+            const seq = event.eventSeq;
+            if (typeof seq === 'number') {
+              const last = sentSeq.get(event.sessionId) ?? 0;
+              if (seq <= last) return;
+              sentSeq.set(event.sessionId, seq);
+            }
+            try {
+              if (ws.readyState === ws.OPEN) {
+                ws.send(JSON.stringify(event));
+              }
+            } catch {
+              // ignore send errors
+            }
+          };
+
           const client: EventClient = {
             userId: user.id,
             username: user.username,
             allSessions,
             send(event) {
-              try {
-                if (ws.readyState === ws.OPEN) {
-                  ws.send(JSON.stringify(event));
-                }
-              } catch {
-                // ignore send errors
+              if (replaying) {
+                pending.push(event);
+                return;
               }
+              writeEvent(event);
             },
           };
 
@@ -184,6 +232,14 @@ export function createBackendListen(deps: BackendListenDeps) {
               type: 'connected',
               client_id: clientId,
             }));
+            // ADR-118 §6: догон — журнал строго после `since`, затем живые
+            // события (буфер), без разрыва и без дублей.
+            if (sinceSeq !== null) {
+              for (const event of eventHub.replayForClient(client, sinceSeq)) writeEvent(event);
+            }
+            replaying = false;
+            for (const event of pending) writeEvent(event);
+            pending.length = 0;
           }).catch(() => {
             ws.send(JSON.stringify({
               type: 'error',

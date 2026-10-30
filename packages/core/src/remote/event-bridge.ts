@@ -101,11 +101,18 @@ export class RemoteEventBridge {
 
     let res: Response;
     try {
-      res = await this._client.request('GET', '/api/v2/events', undefined, {
-        raw: true,
-        timeoutMs: 0,
-        signal: controller.signal,
-      });
+      // ADR-118 §8: гейт минимальной версии клиента на транспорте — мост
+      // заявляет свою модель сообщений (fail-closed на удалённой стороне).
+      res = await this._client.request(
+        'GET',
+        `/api/v2/events?${MESSAGE_MODEL_QUERY_PARAM}=${MESSAGE_MODEL_VERSION}`,
+        undefined,
+        {
+          raw: true,
+          timeoutMs: 0,
+          signal: controller.signal,
+        },
+      );
     } catch {
       // Сеть недоступна / 401 / 5xx — откат и реконнект с backoff.
       this._controller = null;
@@ -216,15 +223,28 @@ export class RemoteEventBridge {
     const rewrittenSessionId = toRemoteRef(raw.sessionId);
     const rewrittenData = this._rewriteData(data);
 
+    // ADR-118: при переносе удалённого события сохраняем `eventSeq`
+    // (нумерация событий в пределах сессии — догон) и `recipient`
+    // (адресная доставка).
     const event: BusEvent = {
       type: type as EventType,
       sessionId: rewrittenSessionId,
       data: rewrittenData,
       timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : nowISO(),
+      ...(typeof raw.eventSeq === 'number' ? { eventSeq: raw.eventSeq } : {}),
+      ...(typeof raw.recipient === 'string' ? { recipient: raw.recipient } : {}),
     };
 
     if (!this._shouldForward(event)) return;
-    this._eventBus.publish(rewrittenSessionId, event.type, event.data);
+    this._eventBus.publish(rewrittenSessionId, event.type, event.data, {
+      ...(event.eventSeq !== undefined ? { eventSeq: event.eventSeq } : {}),
+      ...(event.recipient !== undefined ? { recipient: event.recipient } : {}),
+      // ADR-118 «Гибрид и многопользовательский режим»: локальный пользователь
+      // один, поэтому удалённое адресное событие не отбрасывается из-за чужого
+      // `recipient` — это известное ограничение (разделение по пользователям
+      // работает только на управляемом backend'е с несколькими пользователями).
+      forceBroadcast: true,
+    });
   }
 
   /** Переписать вложенные ссылки на сущности backend в `remote:<...>` (best-effort, только строки). */

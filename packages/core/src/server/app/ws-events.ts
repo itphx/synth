@@ -15,7 +15,14 @@ import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import { extractChildSessionId, extractCreatedSession } from '../../events/child-session.js';
 import { parsePermissionPrincipal, type ApprovalRegistry } from '../../engine/permission/approval.js';
 import { resolveUserPrincipal } from '../../engine/authority/principal.js';
-import { INSTANCE_EVENT_CHANNEL } from '../../events/bus.js';
+import {
+  INSTANCE_EVENT_CHANNEL,
+  MESSAGE_MODEL_QUERY_PARAM,
+  MESSAGE_MODEL_UNSUPPORTED_CLOSE_CODE,
+  MESSAGE_MODEL_UNSUPPORTED_REASON,
+  isSupportedMessageModelParam,
+  parseSinceParam,
+} from '../../events/bus.js';
 import { LOCAL_USER_ID } from '../local-owner.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -198,6 +205,23 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
 
       wss.handleUpgrade(request, socket, head, async (ws: WebSocket) => {
         const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        // ADR-118 §8: гейт минимальной версии клиента (fail-closed).
+        // Клиент обязан заявить модель сообщений (`messageModel=2`) — иначе
+        // соединение не устанавливается: молча работать со старым протоколом
+        // нельзя (расхождение порядка и догона даёт тихо испорченную ленту).
+        if (!isSupportedMessageModelParam(url.searchParams.get(MESSAGE_MODEL_QUERY_PARAM))) {
+          try {
+            ws.close(MESSAGE_MODEL_UNSUPPORTED_CLOSE_CODE, MESSAGE_MODEL_UNSUPPORTED_REASON);
+          } catch { /* ignore */ }
+          return;
+        }
+
+        // ADR-118 §6: догон — клиент передаёт номер последнего виденного
+        // события (`since`); сервер сначала отдаёт журнал строго после него,
+        // затем живые события (без разрыва и без дублей).
+        const sinceSeq = parseSinceParam(url.searchParams.get('since'));
+
         // ADR-094: активное WS-соединение — в streams_active (не в гистограмме).
         const streams = deps.metrics?.gauge(
           'synth_http_streams_active',
@@ -215,12 +239,43 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
         /** Уже подписанные сессии клиента (идемпотентность точечной подписки). */
         const subscribed = new Set<string>();
 
+        /**
+         * ADR-118 §6: догон без разрыва и без дублей.
+         * - `replaying` — идёт воспроизведение журнала: живые события
+         *   складываются в `pending` (порядок «сначала журнал, потом живое»);
+         * - `sentSeq` — максимальный номер события, уже отправленный клиенту
+         *   по каждой сессии: события из журнала и живые не дублируются.
+         */
+        let replaying = sinceSeq !== null;
+        const pending: BusEvent[] = [];
+        const sentSeq = new Map<string, number>();
+
         const send = (event: BusEvent): void => {
           try {
             if (ws.readyState === ws.OPEN) {
               ws.send(JSON.stringify(event));
             }
           } catch { /* ignore */ }
+        };
+
+        /** Отправить событие, если оно ещё не было отправлено (дедуп по `eventSeq`). */
+        const sendIfNew = (event: BusEvent): void => {
+          const seq = event.eventSeq;
+          if (typeof seq === 'number') {
+            const last = sentSeq.get(event.sessionId) ?? 0;
+            if (seq <= last) return;
+            sentSeq.set(event.sessionId, seq);
+          }
+          send(event);
+        };
+
+        /** Доставка события: во время догона — в буфер, иначе — сразу. */
+        const deliver = (event: BusEvent): void => {
+          if (replaying) {
+            pending.push(event);
+            return;
+          }
+          sendIfNew(event);
         };
 
         /**
@@ -230,7 +285,7 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
          * канал родителя — клиент на них уже подписан, а на ребёнка — нет.
          */
         const handler = (event: BusEvent): void => {
-          send(event);
+          deliver(event);
           const childId = extractChildSessionId(event);
           if (childId && childId !== event.sessionId) {
             // Владелец ребёнка — владелец родителя (fork.ts наследует userId/ownerId),
@@ -244,7 +299,9 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
         const subscribe = (sessionId: string): boolean => {
           if (subscribed.has(sessionId)) return false;
           subscribed.add(sessionId);
-          unsubs.push(eventBus.subscribe(sessionId, handler));
+          // ADR-118 §4: адресная доставка — событие с `recipient` получает
+          // только подписчик с совпадающим `userId`.
+          unsubs.push(eventBus.subscribe(sessionId, handler, { userId: user.id }));
           return true;
         };
 
@@ -280,6 +337,19 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
           type: 'connected',
           client_id: clientId,
         }));
+
+        // ADR-118 §6: догон — сначала журнал сессии (строго после `since`),
+        // затем живые события. Подписка к этому моменту уже зарегистрирована
+        // (иначе был бы пропуск), а события, пришедшие за время воспроизведения,
+        // лежат в буфере и уйдут следом — дубли отсекаются по `eventSeq`.
+        if (sinceSeq !== null) {
+          for (const sessionId of subscribed) {
+            for (const event of eventBus.since(sessionId, sinceSeq)) sendIfNew(event);
+          }
+        }
+        replaying = false;
+        for (const event of pending) sendIfNew(event);
+        pending.length = 0;
 
         ws.on('message', (raw: Buffer) => {
           try {

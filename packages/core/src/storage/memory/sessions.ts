@@ -25,7 +25,13 @@ import type {
 } from '../ports/index.js';
 import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from '../message-write.js';
 
-/** Порт хранилища сессий поверх `Map` (семантика `FileStore`). */
+/**
+ * Порт хранилища сессий поверх `Map` (семантика `FileStore`).
+ *
+ * Сообщения хранятся целиком (`structuredClone`), поэтому аддитивные поля
+ * сообщения (ADR-118: `ord`/`turnId`/`stepIndex`/`status`) переживают
+ * save/load без отдельной нормализации — как и в файловой реализации.
+ */
 export class MemorySessionRepository implements SessionRepository {
   private readonly _sessions = new Map<string, Session>();
 
@@ -52,6 +58,10 @@ export class MemorySessionRepository implements SessionRepository {
   /**
    * Точечная дозапись сообщения (порт `SessionRepository.appendMessage`).
    * Операция синхронная (над `Map`) — гонок нет, лок не нужен.
+   *
+   * ADR-118: `ord` (монотонный счётчик сессии) выдаёт общий нормализатор
+   * `prepareMessageForAppend` — тот же, что у файловой реализации; ранее
+   * выданные значения не перенумеровываются.
    */
   async appendMessage(sessionId: string, message: Message): Promise<Message | null> {
     const session = this._sessions.get(sessionId);
@@ -65,7 +75,9 @@ export class MemorySessionRepository implements SessionRepository {
   /**
    * Точечное обновление сообщения (порт `SessionRepository.updateMessage`):
    * цель — по `seq`, fallback по `id`; неизменяемые поля исходной записи
-   * (`id`/`seq`/`createdAt`) сохраняются.
+   * (`id`/`seq`/`createdAt`/`ord`) сохраняются.
+   *
+   * ADR-118: `ord` иммутабелен после выдачи.
    */
   async updateMessage(sessionId: string, message: Message): Promise<Message | null> {
     const session = this._sessions.get(sessionId);

@@ -10,7 +10,12 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { atomicWrite, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SessionManager, SessionProjectStoreLike } from '../sessions/manager.js';
-import { migrateSessionScopeSnapshots, SESSION_SCOPE_SNAPSHOT_MIGRATION } from './migrations.js';
+import {
+  MESSAGE_STREAM_V2_MIGRATION,
+  migrateMessageStreamV2,
+  migrateSessionScopeSnapshots,
+  SESSION_SCOPE_SNAPSHOT_MIGRATION,
+} from './migrations.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
 
 /** Применённая версия схемы данных инстанса (`{dataDir}/meta.json`). */
@@ -104,11 +109,34 @@ export const SESSION_SCOPE_SNAPSHOTS_MIGRATION_V1: Migration = {
 };
 
 /**
+ * ADR-118 §9: разовая миграция данных к модели «ход как последовательность
+ * шагов» как элемент общего реестра (ADR-092): старым сообщениям
+ * проставляются `ord` (монотонный порядок записи), `turn_id` (ход) и
+ * `step_index` (шаг). Миграция построчная (сессия целиком не
+ * перезаписывается) и идемпотентная — маркер
+ * `migrations.message-stream-v2` в runtime-настройках.
+ */
+export const MESSAGE_STREAM_V2_MIGRATION_V1: Migration = {
+  id: MESSAGE_STREAM_V2_MIGRATION,
+  toVersion: 2,
+  description: 'Простановка ord/turn_id/step_index старым сообщениям (ADR-118)',
+  run(deps: MigrationDeps): Promise<number> {
+    // Нет менеджера сессий — мигрировать нечего (каталог сессий не сконфигурирован).
+    if (!deps.sessionManager) return Promise.resolve(0);
+    return migrateMessageStreamV2({
+      sessionManager: deps.sessionManager,
+      settingsStore: deps.settingsStore,
+    });
+  },
+};
+
+/**
  * Реестр миграций, отсортированный по `toVersion` (`SCHEMA_VERSION` =
  * max `toVersion`). Порядок применения — по возрастанию версии.
  */
 export const MIGRATIONS: Migration[] = [
   SESSION_SCOPE_SNAPSHOTS_MIGRATION_V1,
+  MESSAGE_STREAM_V2_MIGRATION_V1,
 ].sort((a, b) => a.toVersion - b.toVersion);
 
 /** Текущая (ожидаемая кодом) версия схемы данных — max `toVersion` реестра. */

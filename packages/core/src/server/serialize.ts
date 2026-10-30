@@ -161,6 +161,20 @@ export function serializeMessage(msg: Message, index: number, opts?: SerializeMe
     index,
     id: msg.id,
     seq: msg.seq,
+    /**
+     * ADR-118 §2: монотонный порядок записи в историю сессии (`ord`).
+     * В отличие от позиционного `seq` — не перенумеровывается. `null`, если
+     * поле не задано (сообщение до ADR-118 / миграции).
+     */
+    ord: msg.ord ?? null,
+    /**
+     * ADR-118 §1: идентификатор хода (`turnId`), которому принадлежит
+     * сообщение; `step_index` — индекс шага внутри хода (0-based).
+     */
+    turn_id: msg.turnId || null,
+    step_index: msg.stepIndex ?? null,
+    /** ADR-118 §5: статус сообщения-хода (`streaming`/`completed`/`cancelled`/`error`). */
+    status: msg.status || null,
     origin: msg.origin,
     source_msg_id: msg.sourceMsgId || null,
     role: msg.role,

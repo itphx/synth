@@ -24,6 +24,8 @@ import {
 import {
   MESSAGE_FIELDS,
   MESSAGE_JSON_FIELDS,
+  MESSAGE_MUTABLE_FIELDS,
+  resolveOrd,
   rowValues,
   SESSION_FIELDS,
   SESSION_JSON_FIELDS,
@@ -106,6 +108,121 @@ function makeRow(overrides: Partial<SessionRow> = {}): SessionRow {
     ...overrides,
   } as SessionRow;
 }
+
+describe('PG-маппинг сообщения: модель хода и шага (ADR-118)', () => {
+  function makeMessage(overrides: Partial<Message> = {}): Message {
+    return {
+      id: 'msg-1',
+      role: 'assistant',
+      seq: 1,
+      origin: 'local',
+      parts: [],
+      content: 'answer',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...overrides,
+    } as Message;
+  }
+
+  it('serializeMessage кладёт ord/turn_id/step_index/status (snake_case)', () => {
+    const row = serializeMessage(makeMessage({
+      ord: 7,
+      turnId: 'turn-1',
+      stepIndex: 2,
+      status: 'completed',
+    }));
+
+    expect(row.ord).toBe(7);
+    expect(row.turn_id).toBe('turn-1');
+    expect(row.step_index).toBe(2);
+    expect(row.status).toBe('completed');
+  });
+
+  it('round-trip: порядок/ход/шаг/статус переживают запись/чтение', () => {
+    const message = makeMessage({
+      ord: 7,
+      turnId: 'turn-1',
+      stepIndex: 2,
+      status: 'streaming',
+    });
+    const row = messageRow(message, 'sess-1');
+    const loaded = deserializeMessage({
+      ...(row as unknown as MessageRow),
+      parts: serializeMessage(message).parts,
+    });
+
+    expect(loaded.ord).toBe(7);
+    expect(loaded.turnId).toBe('turn-1');
+    expect(loaded.stepIndex).toBe(2);
+    expect(loaded.status).toBe('streaming');
+  });
+
+  it('legacy-строка без колонок читается как undefined (без дефолтов)', () => {
+    const loaded = deserializeMessage({
+      id: 'msg-legacy',
+      seq: 1,
+      role: 'assistant',
+      origin: 'local',
+      content: 'старый',
+      parts: [],
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    expect(loaded.ord).toBeUndefined();
+    expect(loaded.turnId).toBeUndefined();
+    expect(loaded.stepIndex).toBeUndefined();
+    expect(loaded.status).toBeUndefined();
+  });
+
+  it('неизвестный статус читается как undefined (fail-soft)', () => {
+    const loaded = deserializeMessage({
+      id: 'msg-1',
+      seq: 1,
+      role: 'assistant',
+      origin: 'local',
+      content: 'x',
+      parts: [],
+      status: 'мусор',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    expect(loaded.status).toBeUndefined();
+  });
+
+  it('колонки есть в списке и не в jsonb-наборе', () => {
+    for (const field of ['ord', 'turn_id', 'step_index', 'status']) {
+      expect(MESSAGE_FIELDS).toContain(field);
+      expect(MESSAGE_JSON_FIELDS.has(field)).toBe(false);
+    }
+  });
+
+  it('ord не перенумеровывается обновлением: в изменяемых колонках его нет', () => {
+    // `updateMessage` пишет `ord` отдельной фразой `COALESCE(messages.ord, …)` —
+    // уже выданное значение не перетирается (ADR-118 §2).
+    expect(MESSAGE_MUTABLE_FIELDS).not.toContain('ord');
+    expect(MESSAGE_MUTABLE_FIELDS).toContain('turn_id');
+    expect(MESSAGE_MUTABLE_FIELDS).toContain('step_index');
+    expect(MESSAGE_MUTABLE_FIELDS).toContain('status');
+  });
+});
+
+describe('resolveOrd: монотонный счётчик порядка записи (ADR-118 §2)', () => {
+  it('выданный вызывателем ord не перетирается', () => {
+    expect(resolveOrd(5, 9)).toBe(5);
+  });
+
+  it('ord без значения берётся из max(ord)+1 по сессии', () => {
+    expect(resolveOrd(undefined, 9)).toBe(9);
+    expect(resolveOrd(null, 9)).toBe(9);
+    expect(resolveOrd(Number.NaN, 9)).toBe(9);
+  });
+
+  it('явно заданный ord = 0 сохраняется (паритет с файловой реализацией)', () => {
+    // Файловая реализация (`prepareMessageForAppend`) тоже сохраняет явно
+    // заданное число: «не выдан» — это `undefined`, а не 0.
+    expect(resolveOrd(0, 1)).toBe(0);
+  });
+});
 
 describe('PG-маппинг сессии: привязка к worktree (ADR-114)', () => {
   it('serializeSession кладёт привязку в snake_case-объект', () => {

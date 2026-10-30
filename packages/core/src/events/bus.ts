@@ -1,5 +1,5 @@
 import type { BusEvent, EventType } from '@itphx/synth-shared';
-import { nowISO } from '@itphx/synth-shared';
+import { nowISO, supportsMessageModel } from '@itphx/synth-shared';
 
 type EventHandler = (event: BusEvent) => void;
 
@@ -16,19 +16,133 @@ type EventHandler = (event: BusEvent) => void;
 export const INSTANCE_EVENT_CHANNEL = 'instance';
 
 /**
+ * ADR-118 §6: размер кольцевого буфера журнала событий сессии (догон по
+ * `Last-Event-ID` / `?since`). Журнал — в памяти процесса: он даёт
+ * «хвост» ленты для переподключения, но не является хранилищем.
+ */
+export const EVENT_JOURNAL_SIZE = 200;
+
+/**
+ * ADR-118 §6: сколько сессий одновременно держат журнал (ограничение памяти).
+ * Журнал самой старой (по времени последней записи) сессии вытесняется.
+ */
+export const MAX_JOURNAL_SESSIONS = 100;
+
+/**
+ * ADR-118 §4: опции публикации события.
+ *
+ * - `recipient` — адресат (идентификатор пользователя): адресная доставка,
+ *   поле отсутствует → broadcast в канал сессии;
+ * - `eventSeq` — явный номер события (проброс из удалённого источника —
+ *   гибридный мост, ADR-118 «Гибрид и многопользовательский режим»);
+ * - `forceBroadcast` — доставить всем локальным подписчикам **независимо**
+ *   от `recipient`. Нужен гибриду: локальный пользователь один, поэтому
+ *   удалённое адресное событие нельзя отбрасывать из-за чужого `recipient`
+ *   (известное ограничение ADR-118).
+ */
+export interface PublishOptions {
+  recipient?: string;
+  eventSeq?: number;
+  forceBroadcast?: boolean;
+}
+
+/**
+ * ADR-118 §4: опции подписки.
+ *
+ * `userId` — идентификатор пользователя-получателя: адресное событие
+ * доставляется только подписчику с совпадающим `userId`.
+ */
+export interface SubscribeOptions {
+  userId?: string;
+}
+
+/** Подписка сессии: обработчик + идентичность получателя (ADR-118). */
+interface BusSubscriber {
+  handler: EventHandler;
+  userId?: string;
+}
+
+/**
+ * ADR-118 §8: имя параметра, которым клиент заявляет свою модель сообщений
+ * (WS — query-параметр, SSE — query-параметр).
+ */
+export const MESSAGE_MODEL_QUERY_PARAM = 'messageModel';
+
+/**
+ * ADR-118 §8: код закрытия WS при несовпадении модели сообщений
+ * (fail-closed: соединение не устанавливается).
+ */
+export const MESSAGE_MODEL_UNSUPPORTED_CLOSE_CODE = 1008;
+
+/** ADR-118 §8: причина закрытия WS / тела отказа SSE. */
+export const MESSAGE_MODEL_UNSUPPORTED_REASON = 'messageModel=2 required';
+
+/**
+ * ADR-118 §8: разобрать заявленную клиентом модель сообщений.
+ * Нечисловое/пустое значение → `null` (считается отсутствующим).
+ */
+export function parseMessageModelParam(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+/**
+ * ADR-118 §8: поддерживает ли клиент модель сообщений инстанса.
+ * Fail-closed: параметр отсутствует или не равен текущей версии → `false`.
+ */
+export function isSupportedMessageModelParam(raw: string | null | undefined): boolean {
+  const parsed = parseMessageModelParam(raw);
+  if (parsed === null) return false;
+  return supportsMessageModel({ messageModel: parsed });
+}
+
+/**
+ * ADR-118 §6: разобрать номер события для догона (`since` / `Last-Event-ID`).
+ * Нечисловое значение → `null` (догон не запрашивался).
+ */
+export function parseSinceParam(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/**
  * SessionEventBus — async pub/sub для событий сессии (ADR-009).
  * Каждый подписчик получает все события сессии через callback.
+ *
+ * ADR-118: адресная доставка (`recipient`), монотонная нумерация событий
+ * в пределах сессии (`eventSeq`) и журнал событий (кольцевой буфер) для
+ * догона по `Last-Event-ID` / `?since`.
  */
 export class EventBus {
-  private _subscribers = new Map<string, Set<EventHandler>>();
+  private _subscribers = new Map<string, Set<BusSubscriber>>();
   private _globalSubscribers = new Set<EventHandler>();
+  /** ADR-118: счётчик событий по сессиям (монотонный, стартует с 1). */
+  private _seq = new Map<string, number>();
+  /** ADR-118: журнал событий по сессиям (кольцевой буфер). */
+  private _journal = new Map<string, BusEvent[]>();
 
-  subscribe(sessionId: string, handler: EventHandler): () => void {
+  subscribe(sessionId: string, handler: EventHandler, opts: SubscribeOptions = {}): () => void {
     if (!this._subscribers.has(sessionId)) {
       this._subscribers.set(sessionId, new Set());
     }
-    this._subscribers.get(sessionId)!.add(handler);
-    console.debug(`[EventBus] subscribe session=${sessionId}, handlers=${this._subscribers.get(sessionId)!.size}`);
+    const set = this._subscribers.get(sessionId)!;
+    // Тот же обработчик — одна подписка (идемпотентность, как у Set из
+    // обработчиков в прежней реализации): повторная подписка не создаёт
+    // второй доставки.
+    const already = [...set].some((subscriber) => subscriber.handler === handler);
+    if (!already) {
+      const subscriber: BusSubscriber = opts.userId
+        ? { handler, userId: opts.userId }
+        : { handler };
+      set.add(subscriber);
+    }
+    console.debug(`[EventBus] subscribe session=${sessionId}, handlers=${set.size}`);
 
     return () => {
       this.unsubscribe(sessionId, handler);
@@ -39,6 +153,13 @@ export class EventBus {
    * Подписка на ВСЕ события (без привязки к sessionId). Используется
    * гибридным режимом: RemoteEventBridge публикует события удалённых сессий
    * под `remote:<id>`, и локальный /api/v2/events должен доставлять их UI.
+   *
+   * ADR-118 §4: глобальные подписчики получают **все** события, включая
+   * адресные (`recipient`). Для standalone/гибрида это осознанное известное
+   * ограничение: локальный пользователь один, поэтому подтверждение приёма
+   * (`message.accepted`) видно всем локальным клиентам. Разделение по
+   * пользователям работает на управляемом backend'е (там у клиента есть
+   * `userId`, и адресную доставку фильтрует `EventHub`).
    */
   subscribeAll(handler: EventHandler): () => void {
     this._globalSubscribers.add(handler);
@@ -50,14 +171,30 @@ export class EventBus {
   }
 
   unsubscribe(sessionId: string, handler: EventHandler): void {
-    this._subscribers.get(sessionId)?.delete(handler);
-    if (this._subscribers.get(sessionId)?.size === 0) {
+    const subscribers = this._subscribers.get(sessionId);
+    if (!subscribers) return;
+    for (const subscriber of subscribers) {
+      if (subscriber.handler === handler) subscribers.delete(subscriber);
+    }
+    if (subscribers.size === 0) {
       this._subscribers.delete(sessionId);
     }
   }
 
-  publish(sessionId: string, type: EventType, data: Record<string, unknown> = {}): void {
-    this._publish(sessionId, type, data, true);
+  /**
+   * Публикация события сессии.
+   *
+   * ADR-118 §4: `opts.recipient` — адресная доставка (подписчик с другим
+   * `userId` событие не получает). ADR-118 §6: событие получает монотонный
+   * `eventSeq` в пределах сессии и попадает в журнал (догон).
+   */
+  publish(
+    sessionId: string,
+    type: EventType,
+    data: Record<string, unknown> = {},
+    opts: PublishOptions = {},
+  ): void {
+    this._publish(sessionId, type, data, true, opts);
   }
 
   /**
@@ -67,6 +204,9 @@ export class EventBus {
    * Предупреждение «EVENT LOST» не печатается: у инстансных событий
    * per-session подписчиков нет по построению, отсутствие глобальных
    * подписчиков — нормальное состояние (никто не смотрит в UI).
+   *
+   * ADR-118: инстансные события **не** нумеруются и **не** попадают в
+   * журнал сессий — `eventSeq` монотонен в пределах сессии.
    */
   publishInstance(type: EventType, data: Record<string, unknown> = {}): void {
     this._publish(INSTANCE_EVENT_CHANNEL, type, data, false);
@@ -78,13 +218,31 @@ export class EventBus {
     type: EventType,
     data: Record<string, unknown>,
     warnIfNoSubscribers: boolean,
+    opts: PublishOptions = {},
   ): void {
+    const isInstanceChannel = sessionId === INSTANCE_EVENT_CHANNEL;
     const event: BusEvent = {
       type,
       sessionId,
       data,
       timestamp: nowISO(),
+      ...(opts.recipient ? { recipient: opts.recipient } : {}),
     };
+
+    // ADR-118 §6: нумерация события в пределах сессии + журнал (догон).
+    // Инстансный канал в журнал сессий не попадает и номера не получает.
+    if (!isInstanceChannel) {
+      const counter = this._seq.get(sessionId) ?? 0;
+      const explicit = typeof opts.eventSeq === 'number' && Number.isSafeInteger(opts.eventSeq) && opts.eventSeq > 0
+        ? opts.eventSeq
+        : undefined;
+      // Явный номер (проброс из удалённого источника) не должен ломать
+      // локальную монотонность — берём максимум из обоих.
+      const seq = explicit !== undefined ? Math.max(counter + 1, explicit) : counter + 1;
+      this._seq.set(sessionId, seq);
+      event.eventSeq = seq;
+      this._appendToJournal(sessionId, event);
+    }
 
     const handlers = this._subscribers.get(sessionId);
     const hasGlobal = this._globalSubscribers.size > 0;
@@ -100,12 +258,8 @@ export class EventBus {
       console.debug(`[EventBus] publish ${type} for ${sessionId.slice(0, 8)}: ${count} subscriber(s)`);
     }
 
-    for (const handler of handlers ?? []) {
-      try {
-        handler(event);
-      } catch {
-        // Упавший обработчик не должен ломать остальных
-      }
+    for (const subscriber of handlers ?? []) {
+      this._deliverToSubscriber(subscriber, event, opts.forceBroadcast === true);
     }
 
     for (const handler of this._globalSubscribers) {
@@ -115,6 +269,75 @@ export class EventBus {
         // Упавший обработчик не должен ломать остальных
       }
     }
+  }
+
+  /**
+   * ADR-118 §4: доставка подписчику сессии.
+   * Broadcast (без `recipient`) — всем; адресное — только получателю.
+   * `forceBroadcast` снимает фильтр (гибрид: локальный пользователь один).
+   */
+  private _deliverToSubscriber(subscriber: BusSubscriber, event: BusEvent, forceBroadcast: boolean): void {
+    if (event.recipient && !forceBroadcast && subscriber.userId !== event.recipient) return;
+    try {
+      subscriber.handler(event);
+    } catch {
+      // Упавший обработчик не должен ломать остальных
+    }
+  }
+
+  /** Записать событие в журнал сессии (кольцевой буфер, ADR-118 §6). */
+  private _appendToJournal(sessionId: string, event: BusEvent): void {
+    let journal = this._journal.get(sessionId);
+    if (!journal) {
+      journal = [];
+      this._journal.set(sessionId, journal);
+    } else {
+      // LRU: активная сессия переносится в конец карты.
+      this._journal.delete(sessionId);
+      this._journal.set(sessionId, journal);
+    }
+    journal.push(event);
+    if (journal.length > EVENT_JOURNAL_SIZE) {
+      journal.splice(0, journal.length - EVENT_JOURNAL_SIZE);
+    }
+    // Ограничение памяти: вытесняем журнал самой давно не пополнявшейся сессии.
+    while (this._journal.size > MAX_JOURNAL_SESSIONS) {
+      const oldest = this._journal.keys().next();
+      if (oldest.done) break;
+      this._journal.delete(oldest.value);
+    }
+  }
+
+  /**
+   * ADR-118 §6: события сессии строго после `afterSeq` (догон по журналу).
+   * Уже доставленные клиенту события (номер ≤ `afterSeq`) не возвращаются.
+   */
+  since(sessionId: string, afterSeq: number): BusEvent[] {
+    const journal = this._journal.get(sessionId);
+    if (!journal || journal.length === 0) return [];
+    return journal.filter((event) => typeof event.eventSeq === 'number' && event.eventSeq > afterSeq);
+  }
+
+  /**
+   * ADR-118 §6: события журнала **всех** сессий строго после `afterSeq`.
+   * Для глобального SSE-хаба, где клиент подписан на все сессии: номер
+   * события монотонен **в пределах сессии**, поэтому порядок между сессиями
+   * — по номеру (сортировка приблизительная для разных сессий).
+   */
+  journalSince(afterSeq: number): BusEvent[] {
+    const out: BusEvent[] = [];
+    for (const journal of this._journal.values()) {
+      for (const event of journal) {
+        if (typeof event.eventSeq === 'number' && event.eventSeq > afterSeq) out.push(event);
+      }
+    }
+    out.sort((a, b) => (a.eventSeq ?? 0) - (b.eventSeq ?? 0));
+    return out;
+  }
+
+  /** ADR-118 §6: номер последнего события сессии (0 — событий не было). */
+  latestEventSeq(sessionId: string): number {
+    return this._seq.get(sessionId) ?? 0;
   }
 
   subscriberCount(sessionId: string): number {

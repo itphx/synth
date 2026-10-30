@@ -31,6 +31,7 @@ import {
   createProcessRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
   createMemoryRoutes, MEMORY_PLUGIN_NAME,
+  createMetaRoutes,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -912,6 +913,11 @@ export function mountStandaloneRoutes(
     claimStore: identityClaimStore,
     rateLimitGuard: identityClaimRateLimitGuard,
   }));
+
+  // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`) — **без
+  // аутентификации** (как `GET /health`): публичная информация о протоколе,
+  // по ней клиент сверяет модель сообщений (fail-closed гейт транспорта).
+  app.route('/api/v2', createMetaRoutes());
 
   // ADR-069 §9.3: read-only прозрачность проектных инструкций (session/project scope).
   // Резолвер — тот же core-модуль, что у оркестратора (Фаза 1/2a); доступ —

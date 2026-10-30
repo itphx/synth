@@ -1,5 +1,16 @@
 // --- Event types ---
 import type { WorktreeUpdateAction } from './worktree.js';
+import type {
+  MessageAcceptedPayload,
+  QueueStatePayload,
+  MessageDeliveredPayload,
+  TurnStartedPayload,
+  TurnFinishedPayload,
+  StepStartedPayload,
+  StepFinishedPayload,
+  PartDeltaPayload,
+  PartUpdatedPayload,
+} from './message-stream.js';
 
 export type EventType =
   | 'session.created'
@@ -20,25 +31,34 @@ export type EventType =
   | 'fs.changed'
   | 'message.added'
   | 'message.updated'
+  // ADR-118 §4: события модели «ход как последовательность шагов».
+  // `message.accepted` — адресное (по `BusEvent.recipient`), `queue.state` —
+  // счётчики очереди без текста и автора, `message.delivered` — материализация
+  // сообщения в истории, `turn.*`/`step.*`/`part.*` — состояние работы агента
+  // (канал сессии). Удалённые без dual-emit события v1 (`stream.chunk`,
+  // `stream.usage`, `stream.done`, `stream.interrupted`, `message.injected`,
+  // `message.queued`) заменены этими — см. таблицу ADR-118 §«Удаляемые
+  // события и их замена».
+  | 'message.accepted'
+  | 'queue.state'
+  | 'message.delivered'
+  | 'turn.started'
+  | 'turn.finished'
+  | 'step.started'
+  | 'step.finished'
+  | 'part.delta'
+  | 'part.updated'
   // ADR-104: форсированная отправка сообщения во время хода (steering).
-  // `message.injected` — инъекция применена на границе шага; `steer.dropped` —
-  // сообщение отброшено (лимит инъекций на ход); `stream.interrupted` —
-  // задел режима `interrupt` (этап 2), пока не эмитится.
-  | 'message.injected'
+  // `steer.dropped` — сообщение отброшено (лимит инъекций на ход).
   | 'steer.dropped'
-  | 'stream.interrupted'
   | 'child.message.added'
   | 'child.session.updated'
   | 'stream.start'
-  | 'stream.chunk'
-  | 'stream.usage'
-  | 'stream.done'
   | 'stream.ended'
   | 'stream.cancelled'
   | 'stream.error'
   | 'stream.retry'
   | 'queue.stalled'
-  | 'message.queued'
   | 'permission.asked'
   | 'permission.replied'
   | 'permission.hold'
@@ -109,6 +129,17 @@ export interface BusEvent {
   sessionId: string;
   data: Record<string, unknown>;
   timestamp: string;
+  /**
+   * ADR-118 §4/§«Гибрид и многопользовательский режим»: идентификатор
+   * пользователя-получателя (адресная доставка). Поле отсутствует → broadcast
+   * в канал сессии; `message.accepted` — адресное событие.
+   */
+  recipient?: string;
+  /**
+   * ADR-118 §«Событийная нумерация»: монотонный номер события в пределах
+   * сессии — по нему работает догон (`Last-Event-ID` / `?since`).
+   */
+  eventSeq?: number;
 }
 
 /**
@@ -132,3 +163,37 @@ export type WorktreeUpdatedPayload = {
   /** Что произошло (ADR-114 §6). */
   action: WorktreeUpdateAction;
 };
+
+// --- ADR-118: payload'ы новых событий модели «ход как последовательность шагов ---
+//
+// Алиасы (не интерфейсы): алиас объекта получает неявную index-signature и
+// потому assignable к `Record<string, unknown>` — payload шины
+// (`EventBus.publish`) именно такой тип. Определения — в
+// `./message-stream.js` (browser-safe модуль контракта ADR-118).
+
+/** Payload события `message.accepted` (ADR-118 §4) — адресное событие. */
+export type MessageAcceptedEventData = MessageAcceptedPayload;
+
+/** Payload события `queue.state` (ADR-118 §4) — только счётчики. */
+export type QueueStateEventData = QueueStatePayload;
+
+/** Payload события `message.delivered` (ADR-118 §4) — материализация в истории. */
+export type MessageDeliveredEventData = MessageDeliveredPayload;
+
+/** Payload события `turn.started` (ADR-118 §4) — ход начался. */
+export type TurnStartedEventData = TurnStartedPayload;
+
+/** Payload события `turn.finished` (ADR-118 §4) — ход завершён. */
+export type TurnFinishedEventData = TurnFinishedPayload;
+
+/** Payload события `step.started` (ADR-118 §4) — шаг начался. */
+export type StepStartedEventData = StepStartedPayload;
+
+/** Payload события `step.finished` (ADR-118 §4/§5) — шаг завершён. */
+export type StepFinishedEventData = StepFinishedPayload;
+
+/** Payload события `part.delta` (ADR-118 §4) — дельта части (upsert). */
+export type PartDeltaEventData = PartDeltaPayload;
+
+/** Payload события `part.updated` (ADR-118 §4) — часть обновлена (upsert). */
+export type PartUpdatedEventData = PartUpdatedPayload;

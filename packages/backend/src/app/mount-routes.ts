@@ -32,6 +32,8 @@ import {
   createProcessRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
   createMemoryRoutes, MEMORY_PLUGIN_NAME, MemoryProviderUnavailableError, executeToolDef,
+  // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).
+  createMetaRoutes,
   createOAuthRoutes, bindCredentialToConnector, syncMcpManagerFromRegistry,
   resolveProjectWorkspace,
   resolvePluginServerPolicy,
@@ -1264,6 +1266,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       || project.ownerId === userId
       || project.members?.[userId] === ProjectRole.OWNER,
   }));
+
+  // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`) — **без
+  // аутентификации** (как `GET /health`): публичная информация о протоколе,
+  // по ней клиент сверяет модель сообщений (fail-closed гейт транспорта).
+  app.route('/api/v2', createMetaRoutes());
 
   // Глобальный SSE-хаб для всех сессий пользователя (ADR-052: `events:watch`).
   registerEventsSse(app, { auth, eventHub, scopeGuard });

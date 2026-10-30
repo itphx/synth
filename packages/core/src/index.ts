@@ -7,7 +7,15 @@ export { SessionManager } from './sessions/manager.js';
 export { parseTtl, startEphemeralSweeper, DEFAULT_EPHEMERAL_SWEEP_INTERVAL_MS } from './sessions/ephemeral.js';
 export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
 export type { SessionStatsDeps } from './sessions/stats.js';
-export { EventBus, INSTANCE_EVENT_CHANNEL, sseEventStream } from './events/bus.js';
+export {
+  EventBus, INSTANCE_EVENT_CHANNEL, sseEventStream,
+  // ADR-118: адресная доставка (`recipient`), нумерация событий (`eventSeq`),
+  // журнал событий для догона и общий гейт модели сообщений транспорта.
+  EVENT_JOURNAL_SIZE, MAX_JOURNAL_SESSIONS,
+  MESSAGE_MODEL_QUERY_PARAM, MESSAGE_MODEL_UNSUPPORTED_CLOSE_CODE, MESSAGE_MODEL_UNSUPPORTED_REASON,
+  parseMessageModelParam, isSupportedMessageModelParam, parseSinceParam,
+} from './events/bus.js';
+export type { PublishOptions, SubscribeOptions } from './events/bus.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).
@@ -2116,6 +2124,8 @@ export type {
 } from './metrics/index.js';
 export { createHealthRoutes } from './server/routes/health.js';
 export type { HealthRoutesOptions, ReadinessState } from './server/routes/health.js';
+// ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).
+export { createMetaRoutes, instanceCapabilities } from './server/routes/meta.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
 export { serializeSession, serializeMessage, serializeProject } from './server/serialize.js';

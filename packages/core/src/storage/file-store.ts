@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, SessionWorktree, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
+import type { Session, Message, MessageStatus, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, SessionWorktree, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, normalizeSessionParticipantRole, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
 import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
@@ -72,6 +72,18 @@ interface SerializedMessage {
   /** ADR-034: результат проверки качества ответа (QC-бейдж в UI). */
   qa_pass?: boolean;
   qa_reason?: string;
+  /**
+   * ADR-118 §2: монотонный порядок записи в историю сессии. Выдаётся портом
+   * при материализации и **не перенумеровывается** (в отличие от
+   * позиционного `seq`). Legacy-записи без поля → `undefined`.
+   */
+  ord?: number;
+  /** ADR-118 §1: идентификатор хода (`Turn`), которому принадлежит сообщение. */
+  turn_id?: string;
+  /** ADR-118 §1: индекс шага внутри хода (0-based). */
+  step_index?: number;
+  /** ADR-118 §5: статус сообщения-хода («финал» — смена статуса). */
+  status?: MessageStatus;
 }
 
 interface SerializedSessionReference {
@@ -233,6 +245,12 @@ function serializeMessage(msg: Message): SerializedMessage {
     summary_of: msg.summaryOf,
     qa_pass: msg.qa_pass,
     qa_reason: msg.qa_reason,
+    // ADR-118: порядок записи (`ord`), ход (`turn_id`/`step_index`) и статус
+    // сообщения — аддитивные поля (в записях до ADR-118 их нет вовсе).
+    ord: msg.ord,
+    turn_id: msg.turnId,
+    step_index: msg.stepIndex,
+    status: msg.status,
   };
 }
 
@@ -321,6 +339,11 @@ function deserializeMessage(data: SerializedMessage): Message {
     // Обратная совместимость: legacy-сессии без полей → undefined (без дефолтов).
     qa_pass: data.qa_pass,
     qa_reason: data.qa_reason,
+    // ADR-118: порядок/ход/статус — аддитивные поля (legacy → undefined).
+    ord: data.ord,
+    turnId: data.turn_id,
+    stepIndex: data.step_index,
+    status: data.status,
   };
 }
 
@@ -600,6 +623,10 @@ export class FileStore implements SessionRepository {
    * Точечная дозапись сообщения (порт `SessionRepository.appendMessage`):
    * один JSON-файл перезаписывается под тем же per-session локом, что `save`,
    * но без полной замены истории (append в конец массива).
+   *
+   * ADR-118: `ord` (монотонный счётчик сессии) выдаётся здесь — в момент
+   * материализации записи в историю; ранее выданные значения не
+   * перенумеровываются.
    */
   async appendMessage(sessionId: string, message: Message): Promise<Message | null> {
     const lock = this._getLock(sessionId);
@@ -619,8 +646,10 @@ export class FileStore implements SessionRepository {
 
   /**
    * Точечное обновление сообщения (порт `SessionRepository.updateMessage`):
-   * цель — по `seq`, fallback по `id`; `id`/`seq`/`createdAt` исходной записи
-   * сохраняются, остальные изменяемые поля заменяются.
+   * цель — по `seq`, fallback по `id`; `id`/`seq`/`createdAt`/`ord` исходной
+   * записи сохраняются, остальные изменяемые поля заменяются.
+   *
+   * ADR-118: `ord` иммутабелен после выдачи — обновление его не перебивает.
    */
   async updateMessage(sessionId: string, message: Message): Promise<Message | null> {
     const lock = this._getLock(sessionId);

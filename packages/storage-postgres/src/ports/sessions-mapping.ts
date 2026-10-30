@@ -91,6 +91,17 @@ export interface MessageRow {
   id: string;
   session_id?: string;
   seq: number;
+  /**
+   * ADR-118 §2: **монотонный** счётчик порядка записи в историю сессии.
+   * В записях до миграции `029` колонки нет — чтение даёт `undefined`.
+   */
+  ord?: number | null;
+  /** ADR-118 §1: идентификатор хода (`Turn`). */
+  turn_id?: string | null;
+  /** ADR-118 §1: индекс шага внутри хода (0-based). */
+  step_index?: number | null;
+  /** ADR-118 §5: статус сообщения-хода (`streaming`/`completed`/`cancelled`/`error`). */
+  status?: string | null;
   role: string;
   origin: string;
   source_msg_id?: string | null;
@@ -192,6 +203,16 @@ export interface SerializedMessage {
   id: string;
   role: string;
   seq: number;
+  /**
+   * ADR-118 §2: монотонный порядок записи (`ord`) — **не** перенумеровывается.
+   */
+  ord?: number;
+  /** ADR-118 §1: ход (`turn_id`). */
+  turn_id?: string;
+  /** ADR-118 §1: шаг внутри хода (`step_index`, 0-based). */
+  step_index?: number;
+  /** ADR-118 §5: статус сообщения. */
+  status?: string;
   origin: string;
   source_msg_id?: string;
   parts: SerializedPart[];
@@ -274,12 +295,32 @@ function deserializePart(data: SerializedPart): Part {
 
 // ── Сообщения ───────────────────────────────────────────────────────────────
 
+/**
+ * ADR-118 §5: допустимые статусы сообщения-хода. Значение приходит из
+ * колонки `status` (text) — неизвестное значение читается как «нет статуса»
+ * (fail-soft: мусор в БД не должен ломать чтение сообщения).
+ */
+const MESSAGE_STATUSES: readonly string[] = ['streaming', 'completed', 'cancelled', 'error'];
+
+/** Статус сообщения из колонки `status` (неизвестное значение → `undefined`). */
+function toMessageStatus(value: unknown): Message['status'] {
+  return typeof value === 'string' && MESSAGE_STATUSES.includes(value)
+    ? (value as Message['status'])
+    : undefined;
+}
+
 /** Сообщение → форма хранения (дословно `serializeMessage` файловой реализации). */
 export function serializeMessage(msg: Message): SerializedMessage {
   return {
     id: msg.id,
     role: msg.role,
     seq: msg.seq,
+    // ADR-118: порядок записи (`ord`) — монотонный, не перенумеровывается;
+    // ход (`turn_id`), шаг (`step_index`) и статус — аддитивные поля.
+    ord: msg.ord,
+    turn_id: msg.turnId,
+    step_index: msg.stepIndex,
+    status: msg.status,
     origin: msg.origin,
     source_msg_id: msg.sourceMsgId,
     parts: (msg.parts ?? []).map(serializePart),
@@ -401,6 +442,12 @@ export function deserializeMessage(row: MessageRow): Message {
     id: row.id || generateId(),
     role: row.role as Message['role'],
     seq: row.seq ?? 0,
+    // ADR-118: порядок записи/ход/шаг/статус — аддитивные поля (legacy-строки
+    // без колонок читаются как `undefined`).
+    ord: toNumberOrUndefined(row.ord),
+    turnId: row.turn_id ?? undefined,
+    stepIndex: toNumberOrUndefined(row.step_index),
+    status: toMessageStatus(row.status),
     origin: (row.origin || 'local') as Message['origin'],
     sourceMsgId: row.source_msg_id ?? undefined,
     parts,

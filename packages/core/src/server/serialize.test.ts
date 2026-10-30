@@ -41,3 +41,26 @@ describe('serializeMessage — qa_pass/qa_reason (ADR-034)', () => {
     expect('qa_reason' in out).toBe(false);
   });
 });
+
+describe('serializeMessage — ord/turn_id/step_index/status (ADR-118)', () => {
+  it('переносит поля хода и порядка записи', () => {
+    const out = serializeMessage(message({
+      ord: 7,
+      turnId: 'turn-1',
+      stepIndex: 2,
+      status: 'completed',
+    }), 0) as Record<string, unknown>;
+    expect(out.ord).toBe(7);
+    expect(out.turn_id).toBe('turn-1');
+    expect(out.step_index).toBe(2);
+    expect(out.status).toBe('completed');
+  });
+
+  it('незаданные поля → null (аддитивно, без падения на legacy-сообщениях)', () => {
+    const out = serializeMessage(message(), 0) as Record<string, unknown>;
+    expect(out.ord).toBeNull();
+    expect(out.turn_id).toBeNull();
+    expect(out.step_index).toBeNull();
+    expect(out.status).toBeNull();
+  });
+});

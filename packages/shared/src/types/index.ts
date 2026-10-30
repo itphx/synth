@@ -33,6 +33,9 @@ export * from './provider.js';
 export * from './llm.js';
 // EventType/BusEvent — шина событий сессии (ADR-009/024)
 export * from './bus-events.js';
+// ADR-118: контракт «Поток сообщений v2» — модель хода (Turn/Step/Part),
+// контракт приёма `202 {messageId, mode, position}` и payload'ы новых событий.
+export * from './message-stream.js';
 // ADR-104: режимы отправки сообщения во время хода (steering)
 export * from './steering.js';
 // Файловая система (FS API v2)

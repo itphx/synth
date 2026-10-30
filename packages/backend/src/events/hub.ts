@@ -115,13 +115,47 @@ export class EventHub {
     if (!subs || subs.has(ALL_SESSIONS_KEY)) return;
 
     const unsub = this.eventBus.subscribeAll((event: BusEvent) => {
-      try {
-        client.send(event);
-      } catch {
-        // ignore send errors
-      }
+      this._deliver(client, event);
     });
     subs.set(ALL_SESSIONS_KEY, unsub);
+  }
+
+  /**
+   * ADR-118 §4: адресная доставка.
+   *
+   * Событие с `recipient` получает **только** клиент с совпадающим `userId`
+   * (broadcast — без `recipient` — получают все подписчики сессии).
+   */
+  private _deliver(client: EventClient, event: BusEvent): void {
+    if (event.recipient && event.recipient !== client.userId) return;
+    try {
+      client.send(event);
+    } catch {
+      // ignore send errors
+    }
+  }
+
+  /**
+   * ADR-118 §6: догон — события журнала строго после `afterSeq` для сессий,
+   * на которые подписан клиент (`Last-Event-ID` / `?since`).
+   *
+   * Watch-all клиент (service-key / сквозной обзор) получает журнал всех
+   * сессий; обычный клиент — только своих. Номер события монотонен **в
+   * пределах сессии**, поэтому порядок между сессиями — по номеру.
+   */
+  replayForClient(client: EventClient, afterSeq: number): BusEvent[] {
+    const subs = this.clientSubs.get(client);
+    if (!subs) return [];
+    const sessionIds = [...subs.keys()].filter((id) => id !== ALL_SESSIONS_KEY);
+    if (sessionIds.length === 0) {
+      return this.eventBus.journalSince(afterSeq);
+    }
+    const out: BusEvent[] = [];
+    for (const sessionId of sessionIds) {
+      out.push(...this.eventBus.since(sessionId, afterSeq));
+    }
+    out.sort((a, b) => (a.eventSeq ?? 0) - (b.eventSeq ?? 0));
+    return out;
   }
 
   private _subscribeClientToSession(client: EventClient, sessionId: string): void {
@@ -134,11 +168,7 @@ export class EventHub {
     if (subs.has(sessionId)) return;
 
     const unsub = this.eventBus.subscribe(sessionId, (event: BusEvent) => {
-      try {
-        client.send(event);
-      } catch {
-        // ignore send errors
-      }
+      this._deliver(client, event);
 
       // Автоподписка на дочернюю сессию саб-агента. Раньше клиент получал
       // live-события (`stream.usage`/`stream.chunk`) только по сессиям из
@@ -151,7 +181,9 @@ export class EventHub {
       if (childId && childId !== sessionId) {
         this._subscribeClientToSession(client, childId);
       }
-    });
+      // ADR-118 §4: адресная доставка на уровне шины — подписчик сессии
+      // получает событие с `recipient` только при совпадении `userId`.
+    }, { userId: client.userId });
     subs.set(sessionId, unsub);
   }
 
