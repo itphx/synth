@@ -107,7 +107,7 @@ import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, aggregateSubagentStats } from './orchestrator/usage.js';
 import { publishFsChange } from './orchestrator/fs-change.js';
 import { applySteerInjections } from './steering/apply.js';
-import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus } from './orchestrator/persistence.js';
+import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus, type AssistantMessageStep } from './orchestrator/persistence.js';
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { StreamTiming } from './orchestrator/stream-stats.js';
 // ADR-118 §1/§4: единая точка публикации `turn.*`/`step.*`/`part.*` и
@@ -3759,6 +3759,10 @@ export class ChatOrchestrator {
         effectiveReasoningLevel, sessionMode, planMode, planApproved, author, attempt,
       }, this._processSetupDeps(session));
       if (setup.failed) return setup.result;
+      // ADR-118 §1/§10: реплика, с которой ход начался, получает `turnId` — по
+      // нему UI группирует сегменты хода, а `disabled-turns` гасит ход.
+      // Обновление одно на ход (до `turn.started`), уже размеченное не трогаем.
+      await this._markTurnUserMessage(session.id, message, turnId);
       // ADR-118 §4: ход начался (реплика пользователя — id её сообщения).
       publishTurnStarted(publishChunk, { turnId, messageId: message.id });
       turnStarted = true;
@@ -4109,6 +4113,9 @@ export class ChatOrchestrator {
             promptChars: iterationPromptChars,
             toolResults: allToolCalls.length > 0 ? allToolCalls : undefined,
             promptMeta,
+            // ADR-118 §1/§5: сообщение об ошибке адресует тот же шаг, что
+            // `step.finished` выше (тот же `messageId`).
+            step: { turnId, stepIndex, status: 'error', messageId: stepMessageId },
           });
         }
 
@@ -4182,6 +4189,9 @@ export class ChatOrchestrator {
                 }]
                 : []),
             ]),
+            // ADR-118 §1/§5: сообщение остаётся сообщением шага — тот же
+            // `messageId`, что у `step.started`/`step.finished`, и ход на нём.
+            { turnId, stepIndex, status: 'cancelled', messageId: stepMessageId },
           );
 
           publishChunk('stream.cancelled', {
@@ -5375,9 +5385,45 @@ export class ChatOrchestrator {
         model: session.settings.model,
         providerName: session.settings.provider,
         agentRole: effectiveAgentRole,
+        // ADR-118 §1/§5: ход известен всегда; шаг — только если сбой случился
+        // внутри цикла (там передаётся точный `stepIndex`/`messageId`).
+        step: { turnId, status: 'error' },
       });
     } finally {
       this._streamSessions.delete(streamId);
+    }
+  }
+
+  /**
+   * ADR-118 §1/§10: метка хода на реплике пользователя, с которого ход начался.
+   *
+   * UI группирует сегменты хода по `turn_id`, а подавление отключённых реплик
+   * (`engine/context/disabled-turns.ts`) гасит ход именно по `turnId` — без
+   * метки на user-сообщении работает только legacy-фоллбек «по соседству».
+   * Обновление одно на ход, под локом сессии и по `id`; реплику с уже
+   * проставленным `turnId` не перезаписываем. Best-effort: сбой записи ход не
+   * роняет (метка нужна UI и подавлению, а не самому ответу).
+   */
+  private async _markTurnUserMessage(
+    sessionId: string,
+    message: Message,
+    turnId: string,
+  ): Promise<void> {
+    if (message.role !== MessageRole.USER) return;
+    if (message.turnId) return;
+    try {
+      await this._sessionManager.withLock(sessionId, async (s) => {
+        const target = s.messages.find((m) => m.id === message.id);
+        if (!target || target.turnId) return;
+        target.turnId = turnId;
+        message.turnId = turnId;
+        await this._sessionManager.saveSession(s);
+      });
+    } catch (err) {
+      warning(
+        'ORCHESTRATOR',
+        `Не удалось проставить turnId реплике пользователя: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -5875,6 +5921,9 @@ export class ChatOrchestrator {
         // продолжается, следующий запрос обязан вернуть thinking в историю.
         reasoningMeta,
         reasoningBlocks,
+        // ADR-118 §1/§5: прерванная генерация — сообщение шага (`step.finished`
+        // публикуется со статусом `cancelled` ниже) и часть того же хода.
+        { turnId, stepIndex: iteration, status: 'cancelled', messageId: draft.messageId() },
       );
     }
 
@@ -6082,6 +6131,12 @@ export class ChatOrchestrator {
     reasoningMeta?: { signature?: string; redacted?: string[] },
     /** Anthropic: все блоки reasoning ответа (пишутся в `parts`). */
     reasoningBlocks?: ReasoningBlockLike[],
+    /**
+     * ADR-118 §1/§5: ход, шаг и статус сообщения шага. Передаётся **последним**
+     * аргументом — в той же позиции, что и у `persistence.saveAssistantMessage`;
+     * без этого поля `Message.turnId`/`stepIndex`/`status` оставались `null`.
+     */
+    step?: AssistantMessageStep,
   ): Promise<string> {
     return saveAssistantMessage(
       this._persistenceDeps(),
@@ -6109,6 +6164,7 @@ export class ChatOrchestrator {
       extraParts,
       reasoningMeta,
       reasoningBlocks,
+      step,
     );
   }
 

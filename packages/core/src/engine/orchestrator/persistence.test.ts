@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MessageRole, makeMediaPart } from '@itphx/synth-shared';
+import { MessageRole, makeMediaPart, makeTextPart } from '@itphx/synth-shared';
 import type { BusEvent, Message, TokenUsage } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
@@ -467,6 +467,53 @@ describe('saveAssistantMessage / persistToolChain', () => {
     const out = serializeMessage(saved, 0) as Record<string, unknown>;
     expect('qa_pass' in out).toBe(false);
     expect('qa_reason' in out).toBe(false);
+  });
+
+  it('ADR-118: `step` пишет turnId/stepIndex/status и выбирает messageId шага', async () => {
+    const session = await newSession();
+
+    await saveAssistantMessage(
+      deps(), session.id, 'ответ', 'stream1', 'fixer', USAGE, 'm', undefined,
+      debugCollector, false, 'prov', MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined,
+      { turnId: 'turn_1', stepIndex: 2, status: 'completed', messageId: 'msg-step-2' },
+    );
+
+    const saved = (await sessionManager.getSession(session.id))!.messages[0]!;
+    expect(saved.id).toBe('msg-step-2');
+    expect(saved.turnId).toBe('turn_1');
+    expect(saved.stepIndex).toBe(2);
+    expect(saved.status).toBe('completed');
+    // `metadata.status` (для бейджа UI) — тот же терминальный статус.
+    expect(saved.metadata!.status).toBe('completed');
+  });
+
+  it('ADR-118: существующий черновик важнее messageId шага (id не меняется)', async () => {
+    const session = await newSession();
+    const draft: Message = {
+      id: 'msg-draft', role: MessageRole.ASSISTANT, seq: 0, origin: 'local',
+      parts: [makeTextPart('част')], content: 'част', createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false, pinned: false, hidden: false,
+      metadata: { stream_id: 'stream1', streaming: true }, status: 'streaming',
+    };
+    await sessionManager.appendMessage(session.id, draft);
+
+    await saveAssistantMessage(
+      deps(), session.id, 'полный ответ', 'stream1', 'fixer', USAGE, 'm', undefined,
+      debugCollector, false, 'prov', MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { id: 'msg-draft', seq: draft.seq },
+      undefined, undefined, undefined,
+      { turnId: 'turn_1', stepIndex: 0, status: 'cancelled', messageId: 'msg-other' },
+    );
+
+    const messages = (await sessionManager.getSession(session.id))!.messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.id).toBe('msg-draft');
+    expect(messages[0]!.content).toBe('полный ответ');
+    expect(messages[0]!.status).toBe('cancelled');
+    expect(messages[0]!.turnId).toBe('turn_1');
   });
 
   it('persistToolChain: пары assistant(toolCalls)+tool совместимы с sessionMessagesToLlm', async () => {

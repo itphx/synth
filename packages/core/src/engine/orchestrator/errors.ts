@@ -15,7 +15,7 @@ import { WorktreeDirectoryMissingError } from '../worktree/errors.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { warning } from '../../logger.js';
 import { estimateUsage } from './usage.js';
-import type { SaveAssistantMessageFn } from './persistence.js';
+import type { AssistantMessageStep, SaveAssistantMessageFn } from './persistence.js';
 
 /**
  * ADR-070 §2.6: контекст для сохранения assistant-сообщения об ошибке LLM.
@@ -42,6 +42,11 @@ export interface LlmFailureContext {
    * `provider_not_found`): при переданном значении приоритетнее классификации.
    */
   errorType?: string;
+  /**
+   * ADR-118 §1/§5: шаг, к которому относится сообщение об ошибке (тот же
+   * `messageId`, что у `step.finished`, статус `error`, ход хода).
+   */
+  step?: AssistantMessageStep;
 }
 
 /**
@@ -161,6 +166,13 @@ export async function handleLlmFailure(
           ...(estimated.estimated ? { usage_estimated: true } : {}),
         },
         ctx.promptMeta,
+        // ADR-118 §1/§5: сообщение об ошибке — часть того же хода/шага.
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ctx.step,
       );
     } catch (err) {
       warning('ORCHESTRATOR', `Не удалось сохранить assistant-сообщение об ошибке: ${err instanceof Error ? err.message : String(err)}`);

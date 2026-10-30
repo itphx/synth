@@ -255,6 +255,20 @@ export interface ExistingMessageRef {
   seq: number;
 }
 
+/**
+ * ADR-118 §1/§5: привязка сообщения к ходу и шагу + статус сообщения.
+ *
+ * `messageId` — заранее выбранный идентификатор сообщения шага (тот же, что у
+ * `step.started`/`step.finished` и черновика `StreamMessageDraft`): когда
+ * черновика не было, сообщение создаётся сразу с этим id.
+ */
+export interface AssistantMessageStep {
+  turnId?: string;
+  stepIndex?: number;
+  status?: MessageStatus;
+  messageId?: string;
+}
+
 /** Сигнатура `saveAssistantMessage` (для делегации/передачи колбэком). */
 export type SaveAssistantMessageFn = (
   sessionId: string,
@@ -310,12 +324,7 @@ export type SaveAssistantMessageFn = (
    * черновик не был создан — сообщение создаётся сразу с этим id, чтобы
    * `step.started`/`step.finished` адресовали одно и то же сообщение).
    */
-  step?: {
-    turnId?: string;
-    stepIndex?: number;
-    status?: MessageStatus;
-    messageId?: string;
-  },
+  step?: AssistantMessageStep,
 ) => Promise<string>;
 
 export async function saveAssistantMessage(
@@ -360,12 +369,7 @@ export async function saveAssistantMessage(
    * `messageId` — заранее выбранный идентификатор сообщения шага (черновик не
    * был создан — сообщение создаётся сразу с этим id).
    */
-  step?: {
-    turnId?: string;
-    stepIndex?: number;
-    status?: MessageStatus;
-    messageId?: string;
-  },
+  step?: AssistantMessageStep,
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
   const finalContent = content;
