@@ -142,7 +142,7 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
     expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, undefined, undefined)
   })
 
-  it('после подстановки Enter передаёт режим отправки композера (ADR-104)', async () => {
+  it('после подстановки Enter режим из пропа уходит третьим аргументом onSend (ADR-104)', async () => {
     const container = await renderInput({ sendMode: 'steer' })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
 
@@ -192,115 +192,8 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
 })
 
 describe('ChatInput — режим отправки при активном ходе (ADR-104)', () => {
-  it('при активном ходе есть переключатель режима, по умолчанию выбрано «В очередь»', async () => {
-    const container = await renderInput({ isStreaming: true })
-
-    const switchRoot = container.querySelector('[data-testid="steer-mode"]')
-    expect(switchRoot).not.toBeNull()
-    const queue = container.querySelector('[data-testid="steer-mode-queue"]') as HTMLButtonElement
-    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
-    expect(queue.getAttribute('aria-pressed')).toBe('true')
-    expect(steer.getAttribute('aria-pressed')).toBe('false')
-  })
-
-  it('клик по переключателю режима НЕ отправляет сообщение', async () => {
-    const container = await renderInput({ isStreaming: true })
-
-    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
-    await act(async () => {
-      steer.click()
-    })
-
-    // Переключатель — не кнопка отправки: сообщение уходит только по отдельной
-    // кнопке/Enter, иначе пользователь жмёт «самолётик» и не понимает, почему не ушло.
-    expect(mocks.onSend).not.toHaveBeenCalled()
-    expect(steer.getAttribute('aria-pressed')).toBe('true')
-  })
-
-  it('выбранный «В ход» уходит в запрос как steer', async () => {
-    const container = await renderInput({ isStreaming: true })
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
-    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
-
-    await act(async () => {
-      steer.click()
-    })
-    await act(async () => {
-      setTextareaValue(textarea, 'остановись на шаге 2')
-    })
-    await act(async () => {
-      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-
-    expect(mocks.onSend).toHaveBeenCalledWith('остановись на шаге 2', undefined, 'steer', undefined)
-  })
-
-  it('возврат на «В очередь» — отправка уходит как queue', async () => {
-    const container = await renderInput({ isStreaming: true })
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
-    const queue = container.querySelector('[data-testid="steer-mode-queue"]') as HTMLButtonElement
-    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
-
-    await act(async () => {
-      steer.click()
-    })
-    await act(async () => {
-      queue.click()
-    })
-    expect(queue.getAttribute('aria-pressed')).toBe('true')
-    expect(steer.getAttribute('aria-pressed')).toBe('false')
-    await act(async () => {
-      setTextareaValue(textarea, 'дождись конца хода')
-    })
-    await act(async () => {
-      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-
-    expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue', undefined)
-  })
-
-  it('после успешной отправки «в ход» режим снова «В очередь»', async () => {
-    const container = await renderInput({ isStreaming: true })
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
-    const queue = container.querySelector('[data-testid="steer-mode-queue"]') as HTMLButtonElement
-    const steer = container.querySelector('[data-testid="steer-mode-steer"]') as HTMLButtonElement
-
-    await act(async () => {
-      steer.click()
-    })
-    await act(async () => {
-      setTextareaValue(textarea, 'врежься в ход')
-    })
-    await act(async () => {
-      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-
-    expect(mocks.onSend).toHaveBeenCalledWith('врежься в ход', undefined, 'steer', undefined)
-    // Следующее сообщение не должно уйти «вмешательством» случайно.
-    expect(queue.getAttribute('aria-pressed')).toBe('true')
-    expect(steer.getAttribute('aria-pressed')).toBe('false')
-  })
-
-  it('без активного хода переключателя нет и режим в запрос не уходит', async () => {
-    const container = await renderInput()
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
-
-    expect(container.querySelector('[data-testid="steer-mode"]')).toBeNull()
-
-    await act(async () => {
-      setTextareaValue(textarea, 'обычное сообщение')
-    })
-    await act(async () => {
-      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-
-    // Третьим аргументом `mode` не уходит — в теле запроса поля `mode` нет.
-    // Четвёртый аргумент — id загруженных вложений (ADR-115); здесь их нет.
-    expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined, undefined)
-  })
-
-  it('в режиме «В очередь» по умолчанию mode уходит как queue (в тело запроса не попадает)', async () => {
-    const container = await renderInput({ isStreaming: true })
+  it('во время активного хода сообщение уходит в очередь (режим из пропа)', async () => {
+    const container = await renderInput({ isStreaming: true, sendMode: 'queue' })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
 
     await act(async () => {
@@ -313,6 +206,22 @@ describe('ChatInput — режим отправки при активном хо
     expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue', undefined)
     // `queue` отбрасывается API-слоем — поле `mode` в тело запроса не уходит
     // (`lib/api/sessions.ts`; покрыто в `lib/api/synthApi.sessions.test.ts`).
+  })
+
+  it('без активного хода режим в запрос не уходит', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, 'обычное сообщение')
+    })
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    // Третьим аргументом `mode` не уходит — в теле запроса поля `mode` нет.
+    // Четвёртый аргумент — id загруженных вложений (ADR-115); здесь их нет.
+    expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined, undefined)
   })
 })
 
