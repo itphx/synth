@@ -23,7 +23,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useI18n, useResolveI18n } from '@/lib/i18n'
-import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
+import type { MessageData, LivePart, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { buildPartsView } from '@/lib/messageParts'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { moveSessionToBackground } from '@/lib/backgroundDetach'
@@ -32,21 +32,61 @@ import { synthApi } from '@/lib/api/synthApi'
 import { useCallback, useMemo, useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
 
+/**
+ * Вызов инструмента в форме UI (имя есть — карточку рисовать можно).
+ */
+type UiToolCall = NonNullable<MessageData['tool_calls']>[number] & { name: string }
+
+/**
+ * Вызовы инструментов из устаревшего поля `tool_calls` сообщения.
+ *
+ * Форма UI — `{name, args, result, …}`. Сырой вызов провайдера
+ * (`{type:'function', function:{name, arguments}}`) карточкой **не** является:
+ * имени и аргументов в форме UI у него нет, а карточка вызова приходит в
+ * финальном сообщении хода (с результатом) — её и рисуем. Иначе в блоке хода
+ * появлялась бы пустая карточка («#0») рядом с настоящей.
+ */
 function useToolCallData(toolCalls: MessageData['tool_calls']) {
   return useMemo(() => {
     if (!toolCalls || toolCalls.length === 0) return []
-    return toolCalls.map((tc) => ({
-      callId: tc.id || `tc_${Math.random().toString(36).slice(2, 8)}`,
-      name: tc.name,
-      args: tc.args,
-      status: 'done' as const,
-      result: tc.result,
-      startedAt: tc.started_at || '',
-      completedAt: tc.completed_at,
-      iteration: tc.iteration || 0,
-      parentCallId: undefined,
-    }))
+    return toolCalls
+      .filter((tc): tc is UiToolCall => typeof tc.name === 'string' && tc.name.length > 0)
+      .map((tc) => ({
+        callId: tc.id || `tc_${Math.random().toString(36).slice(2, 8)}`,
+        name: tc.name,
+        args: tc.args ?? {},
+        status: 'done' as const,
+        result: tc.result,
+        startedAt: tc.started_at || '',
+        completedAt: tc.completed_at,
+        iteration: tc.iteration || 0,
+        parentCallId: undefined,
+      }))
   }, [toolCalls])
+}
+
+/**
+ * Сырой вызов провайдера (`{type:'function', function:{name, arguments}}`) →
+ * форма частей UI (`{name, args}`).
+ *
+ * Иначе live-карточка тула остаётся без имени («unknown»): имя тула лежит в
+ * `function.name`, а аргументы — в `function.arguments` (JSON-строка).
+ */
+function normalizeLiveToolPart(part: LivePart): LivePart {
+  if (part.type !== 'tool_use') return part
+  const d = (part.data ?? {}) as Record<string, unknown>
+  const fn = d.function as { name?: unknown; arguments?: unknown } | undefined
+  if (!fn || typeof fn.name !== 'string' || fn.name.length === 0) return part
+  let args = (d.args as Record<string, unknown>) ?? {}
+  if (typeof fn.arguments === 'string' && fn.arguments.trim().length > 0) {
+    try {
+      const parsed: unknown = JSON.parse(fn.arguments)
+      if (parsed && typeof parsed === 'object') args = parsed as Record<string, unknown>
+    } catch {
+      // Аргументы не JSON — оставляем как есть.
+    }
+  }
+  return { ...part, data: { ...d, name: fn.name, args } }
 }
 
 function getReasoningBlocks(message: MessageData): ReasoningBlockData[] {
@@ -263,9 +303,9 @@ function ChatMessageInner({
   const toolCalls = message.tool_calls || []
   const fallbackToolCalls = useToolCallData(toolCalls)
   const fallbackReasoning = getReasoningBlocks(message)
-  const intermediateTextBlocks = getIntermediateTextBlocks(message)
   const intermediateTextMode = useUIStore((s) => s.intermediateTextDisplay)
   const isInline = intermediateTextMode !== 'bottom'
+  const isLive = message.status === 'streaming'
 
   /**
    * ADR-118 §5: единственный источник контента — **части**. Живое сообщение
@@ -277,10 +317,16 @@ function ChatMessageInner({
     if (!sessionId || !message.id) return undefined
     return s.partsBySession[sessionId]?.[message.id]
   })
-  const liveParts = useMemo(
-    () => (livePartMap ? Object.values(livePartMap) : undefined),
-    [livePartMap]
-  )
+  /**
+   * Live-части — **только во время шага**. У финального сообщения источник
+   * истины — части/контент из истории: live-части шага уже не актуальны
+   * (`buildPartsView` мержит их с частями DTO по `id`), и «застрявшие» части
+   * давали в блоке хода текст чужого шага.
+   */
+  const liveParts = useMemo(() => {
+    if (!isLive || !livePartMap) return undefined
+    return Object.values(livePartMap).map(normalizeLiveToolPart)
+  }, [isLive, livePartMap])
   const partsView = useMemo(
     () => buildPartsView(message.parts, liveParts, {
       content: message.content,
@@ -291,7 +337,26 @@ function ChatMessageInner({
   )
   const liveToolCalls = partsView.toolCalls
   const reasoningBlocks = partsView.reasoning
-  const isLive = message.status === 'streaming'
+
+  /**
+   * ADR-118 §1/§5: промежуточные тексты.
+   *
+   * - у сообщения **шага** есть свой текст (он и рисуется в этом сегменте);
+   * - у **финального** сообщения хода лежат накопленные по всему ходу
+   *   `intermediate_text_blocks` — это тексты *прошлых* шагов, они уже
+   *   нарисованы в своих сегментах склеенного блока хода. Рисовать их снова
+   *   нельзя — текст шага дублировался бы в блоке хода;
+   * - промежуточный текст, совпадающий с основным текстом сообщения, тоже
+   *   не рисуется: основной текст показывается ровно один раз.
+   */
+  const isLaterStep = typeof message.step_index === 'number' && message.step_index > 0
+  const intermediateTextBlocks = useMemo(() => {
+    if (isLaterStep) return []
+    const blocks = getIntermediateTextBlocks(message)
+    const main = partsView.text.trim()
+    if (!main) return blocks
+    return blocks.filter((block) => block.text.trim() !== main)
+  }, [isLaterStep, message, partsView.text])
 
   /**
    * ADR-111 §detach + ADR-070 §2.6: живое сообщение несёт индикатор хода,

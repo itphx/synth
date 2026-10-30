@@ -66,6 +66,55 @@ export function resetEventSeqTracking(): void {
 }
 
 /**
+ * ADR-118 §4/§5: подтянуть историю сессии и **свести** её с живым состоянием.
+ *
+ * Ключ сведения — `id` сообщения:
+ * - сообщения в сторе нет — берём запись сервера как есть;
+ * - сообщение уже в сторе (живое) — **сервер — источник истины** по
+ *   содержимому (части/контент/статус/метаданные): без этого финальное
+ *   сообщение осталось бы с пустыми частями (live-части снимаются на финале
+ *   шага). Клиентские поля, которых у сервера нет (маркер доставки и т.п.),
+ *   сохраняются.
+ *
+ * Ошибка сети молча игнорируется: история — уточнение, а не источник правды о
+ * ходе (живой ход восстанавливается из событий). Результат — `true`, если
+ * история сведена с живым состоянием.
+ */
+export function mergeHistory(sid: string): Promise<boolean> {
+  return synthApi.getSessionMessages(sid).then((r) => {
+    const chat = useChatStore.getState()
+    const current = chat.messagesBySession[sid] || []
+    const byId = new Map(current.map((m) => [m.id, m]))
+    for (const m of r.messages) {
+      if (!m.id) continue
+      const known = byId.get(m.id)
+      if (!known) {
+        byId.set(m.id, m)
+        continue
+      }
+      byId.set(m.id, {
+        ...known,
+        ...m,
+        // Реплика пользователя: текст остаётся пользовательским — в серверной
+        // записи он с плейсхолдерами вложений (ADR-115), а в ленте вложение
+        // рисуется отдельной галереей.
+        ...(known.role === 'user' ? { content: known.content } : {}),
+        // Метаданные — по ключам: сервер wins, клиентские добавки остаются.
+        ...(known.metadata || m.metadata
+          ? { metadata: { ...(known.metadata ?? {}), ...(m.metadata ?? {}) } }
+          : {}),
+      })
+    }
+    const merged = [...byId.values()]
+    chat.setMessages(sid, merged)
+    // ADR-118 §5: в истории мог появиться живой ход (другой клиент) —
+    // восстанавливаем границы, иначе он отрисуется как мёртвое сообщение.
+    restoreLiveTurnFromHistory(sid, merged)
+    return true
+  }).catch(() => false)
+}
+
+/**
  * ADR-118 §5/§6: восстановление **живого хода** из истории после перезагрузки.
  *
  * История (`GET /sessions/:id/messages`) несёт `ord`/`turn_id`/`step_index`/
@@ -506,6 +555,7 @@ export function createDispatcher(): EventDispatcher {
       setMessageStatus,
       upsertPart,
       appendPartDelta,
+      clearParts,
       startTurn,
       finishTurn,
       patchTurn,
@@ -652,30 +702,7 @@ export function createDispatcher(): EventDispatcher {
           break
         }
         // Сообщения в сторе нет — подтягиваем историю (дедуп по id).
-        synthApi.getSessionMessages(sid).then((r) => {
-          const chat = useChatStore.getState()
-          const current = chat.messagesBySession[sid] || []
-          const byId = new Map(current.map((m) => [m.id, m]))
-          for (const m of r.messages) {
-            if (!m.id) continue
-            const known = byId.get(m.id)
-            if (!known) {
-              byId.set(m.id, m)
-              continue
-            }
-            // Сообщение уже в сторе (например, живое), но сервер знает его `ord` —
-            // дополняем: без `ord` сообщение осталось бы «незаписанным» и в
-            // ленте встало бы не на своё место (ADR-118 §2).
-            if (known.ord == null && m.ord != null) {
-              byId.set(m.id, { ...known, ord: m.ord })
-            }
-          }
-          const merged = [...byId.values()]
-          chat.setMessages(sid, merged)
-          // ADR-118 §5: в истории мог появиться живой ход (другой клиент) —
-          // восстанавливаем границы, иначе он отрисуется как мёртвое сообщение.
-          restoreLiveTurnFromHistory(sid, merged)
-        }).catch(() => {})
+        void mergeHistory(sid)
         break
       }
 
@@ -765,6 +792,18 @@ export function createDispatcher(): EventDispatcher {
           patch.metadata = { ...(known ?? {}), ...extraMeta }
         }
         if (Object.keys(patch).length > 0) updateMessageById(sid, messageId, patch)
+        // ADR-118 §5: «финал» шага = смена статуса. Живые части шага больше не
+        // нужны: источник истины — части/контент из истории (buildPartsView
+        // мержит dto-части с live-частями по `id`, и «застрявшие» live-части
+        // шага давали в блоке хода текст чужого шага).
+        //
+        // Порядок: сначала история (источник истины), потом снятие live-частей
+        // — иначе текст шага на миг «мигнул» бы пустым сообщением. Снимаем
+        // части только после успешной сверки: при сетевой ошибке текст шага
+        // остался бы в live-частях и не потерялся.
+        void mergeHistory(sid).then((merged) => {
+          if (merged) clearParts(sid, messageId)
+        })
         break
       }
 

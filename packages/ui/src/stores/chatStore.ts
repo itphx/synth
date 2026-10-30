@@ -55,9 +55,19 @@ export interface MessageData {
   role: string
   content: string
   tool_calls?: Array<{
-    name: string
-    args: Record<string, unknown>
+    /**
+     * Имя тула. У **сырого** вызова провайдера
+     * (`{type:'function', function:{name, arguments}}`) его нет — такая запись
+     * карточкой не рисуется (карточка вызова приходит в финальном сообщении
+     * хода, с результатом).
+     */
+    name?: string
+    args?: Record<string, unknown>
     id?: string
+    /** Сырой вызов провайдера (`{type:'function', function:{…}}`). */
+    type?: string
+    index?: number
+    function?: { name?: string; arguments?: string }
     result?: { content: string; isError?: boolean; metadata?: Record<string, unknown> }
     started_at?: string
     completed_at?: string
