@@ -336,8 +336,12 @@
 - **Миграция данных** — `storage/migrations.ts` (`migrateMessageStreamV2`, маркер
   `message-stream-v2`, запуск из `storage/instance-meta.ts`): построчно через `updateMessage`,
   идемпотентна, старые ответы разбиваются по итерациям; PostgreSQL — миграция `029`.
-- **Адресация мутаций** пока по индексу (`server/routes/messages.ts`) — решение ADR-118 §7
-  (только по `id`) не реализовано.
+- **Адресация мутаций — только по `id` (ADR-118 §7)** (`server/routes/messages.ts`):
+  `PATCH /:sessionId/:messageId/{toggle,pin}`, `DELETE /:sessionId/:messageId`,
+  `POST /:sessionId/:messageId/retry`, `GET /:sessionId/:messageId/debug` и
+  `POST /:sessionId/batch {messageIds[]}`; сообщение ищется по `id` под per-session
+  локом, не найдено → `404 NOT_FOUND` (в `batch` — `{messageId, success:false}`),
+  фоллбека на позицию/число в истории нет.
 
 ## Гибрид (core-специфика)
 

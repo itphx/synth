@@ -25,7 +25,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('messagesApi — сообщения сессии (путь /messages/:sessionId/:index)', () => {
+describe('messagesApi — сообщения сессии (путь /messages/:sessionId/:messageId)', () => {
   it('getSessionMessages: GET /sessions/:id/messages с кодированием', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ messages: [], session_id: 'a b' }))
     await synthApi.getSessionMessages('a b')
@@ -35,46 +35,64 @@ describe('messagesApi — сообщения сессии (путь /messages/:s
     )
   })
 
-  it('toggleMessage / pinMessage: PATCH .../toggle и .../pin', async () => {
+  it('toggleMessage / pinMessage: PATCH .../toggle и .../pin по id (ADR-118 §7)', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ disabled: true, success: true }))
-    await synthApi.toggleMessage('s1', 3)
+    await synthApi.toggleMessage('s1', 'msg-3')
     expect(fetchMock).toHaveBeenLastCalledWith(
-      '/api/v2/messages/s1/3/toggle',
+      '/api/v2/messages/s1/msg-3/toggle',
       expect.objectContaining({ method: 'PATCH' }),
     )
 
-    await synthApi.pinMessage('s1', 3)
+    await synthApi.pinMessage('s1', 'msg-3')
     expect(fetchMock).toHaveBeenLastCalledWith(
-      '/api/v2/messages/s1/3/pin',
+      '/api/v2/messages/s1/msg-3/pin',
       expect.objectContaining({ method: 'PATCH' }),
     )
   })
 
-  it('deleteMessage / retryMessage: DELETE и POST на /:index[/retry]', async () => {
+  it('deleteMessage / retryMessage: DELETE и POST на /:messageId[/retry]', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true }))
-    await synthApi.deleteMessage('s1', 2)
+    await synthApi.deleteMessage('s1', 'msg-2')
     expect(fetchMock).toHaveBeenLastCalledWith(
-      '/api/v2/messages/s1/2',
+      '/api/v2/messages/s1/msg-2',
       expect.objectContaining({ method: 'DELETE' }),
     )
 
-    await synthApi.retryMessage('s1', 2)
+    await synthApi.retryMessage('s1', 'msg-2')
     expect(fetchMock).toHaveBeenLastCalledWith(
-      '/api/v2/messages/s1/2/retry',
+      '/api/v2/messages/s1/msg-2/retry',
       expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('getMessageDebug: GET .../:messageId/debug по id', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ message_id: 'msg-7', debug_data: {} }))
+    await synthApi.getMessageDebug('s1', 'msg-7')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/messages/s1/msg-7/debug',
+      expect.objectContaining({}),
+    )
+  })
+
+  it('id сообщения кодируется в пути (id с `/` и пробелом)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true }))
+    await synthApi.deleteMessage('s1', 'remote:a b/c')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/messages/s1/remote%3Aa%20b%2Fc',
+      expect.objectContaining({ method: 'DELETE' }),
     )
   })
 
   it('batchMessages: POST /batch без state, если state не задан', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ results: [] }))
 
-    await synthApi.batchMessages('s1', 'pin', [1, 2])
+    await synthApi.batchMessages('s1', 'pin', ['msg-1', 'msg-2'])
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v2/messages/s1/batch',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ action: 'pin', indices: [1, 2] }),
+        body: JSON.stringify({ action: 'pin', messageIds: ['msg-1', 'msg-2'] }),
       }),
     )
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
@@ -84,13 +102,13 @@ describe('messagesApi — сообщения сессии (путь /messages/:s
   it('batchMessages: state (в т.ч. false) попадает в тело', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ results: [] }))
 
-    await synthApi.batchMessages('s1', 'toggle', [4], false)
+    await synthApi.batchMessages('s1', 'toggle', ['msg-4'], false)
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v2/messages/s1/batch',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ action: 'toggle', indices: [4], state: false }),
+        body: JSON.stringify({ action: 'toggle', messageIds: ['msg-4'], state: false }),
       }),
     )
   })

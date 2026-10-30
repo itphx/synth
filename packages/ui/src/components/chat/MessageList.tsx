@@ -88,9 +88,10 @@ interface MessageListProps {
   /** true если сессия — дочерняя (сабагент) */
   isSubagent?: boolean
   selectionMode?: boolean
-  selectedIndices?: Set<number>
-  onToggleSelect?: (index: number, shiftKey: boolean) => void
-  onSelectRange?: (from: number, to: number) => void
+  /** ADR-118 §7: выделение адресуется по `id` сообщения (индекс нестабилен). */
+  selectedIds?: Set<string>
+  onToggleSelect?: (messageId: string, shiftKey: boolean) => void
+  onSelectRange?: (fromMessageId: string, toMessageId: string) => void
   /** Статус повторной попытки (stream.retry) — показываем вместо «крутилки» */
   retry?: StreamRetry | null
   onRetryNow?: () => void
@@ -133,7 +134,7 @@ export function MessageList({
   onStop,
   isSubagent,
   selectionMode,
-  selectedIndices,
+  selectedIds,
   onToggleSelect,
   onSelectRange,
   retry,
@@ -146,7 +147,7 @@ export function MessageList({
   const [btnLeft, setBtnLeft] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
-  const lastClickedRef = useRef<number | null>(null)
+  const lastClickedRef = useRef<string | null>(null)
 
   // Кнопка «Вниз»: чуть правее правой границы зоны чата; если места справа нет — внутрь зоны.
   useEffect(() => {
@@ -277,15 +278,14 @@ export function MessageList({
   const shouldVirtualize = visibleMessages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
 
-  const handleToggleSelect = useCallback((index: number, shiftKey: boolean) => {
+  const handleToggleSelect = useCallback((messageId: string, shiftKey: boolean) => {
     if (shiftKey && lastClickedRef.current != null) {
-      const from = Math.min(lastClickedRef.current, index)
-      const to = Math.max(lastClickedRef.current, index)
-      onSelectRange?.(from, to)
+      // Границы диапазона вычисляет стор (по позициям в отсортированной ленте).
+      onSelectRange?.(lastClickedRef.current, messageId)
     } else {
-      onToggleSelect?.(index, shiftKey)
+      onToggleSelect?.(messageId, shiftKey)
     }
-    lastClickedRef.current = index
+    lastClickedRef.current = messageId
   }, [onToggleSelect, onSelectRange])
 
   const renderSegment = (group: MessageGroup, msg: MessageData, first: boolean) => {
@@ -306,7 +306,7 @@ export function MessageList({
         readOnly={readOnly}
         isSubagent={isSubagent}
         selectionMode={selectionMode}
-        isSelected={selectedIndices?.has(msg.index) ?? false}
+        isSelected={msg.id ? (selectedIds?.has(msg.id) ?? false) : false}
         onToggleSelect={handleToggleSelect}
         pending={pendingByIndex.get(msg.index) ?? null}
         // ADR-118 §1: заголовок агента/модели — только у первого сегмента хода.

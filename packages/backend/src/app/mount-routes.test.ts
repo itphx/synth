@@ -91,7 +91,7 @@ describe('backend: контракт монтирования роутов (mount
       'POST /api/v2/sessions/:id/abort',
       // проекты/сообщения/очередь — общая семантика RBAC
       'GET /api/v2/projects',
-      'GET /api/v2/messages/:sessionId/:index/debug',
+      'GET /api/v2/messages/:sessionId/:messageId/debug',
       'POST /api/v2/queue/:sessionId/clear',
       // backend-only группы
       'GET /api/v2/events/bindings',

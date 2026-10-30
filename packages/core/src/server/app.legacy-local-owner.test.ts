@@ -126,7 +126,7 @@ describe('standalone: legacy-владелец (UUID профиля `local`) — 
 
       // 3) Под-ресурс (messages) — та же единая точка доступа: не 403.
       //    Сессии нет сообщений → handler отдаёт 404, а не 403 (доступ пройден).
-      const debug = await req(app, `/api/v2/messages/${sessionId}/0/debug`);
+      const debug = await req(app, `/api/v2/messages/${sessionId}/missing-message/debug`);
       expect(debug.status).toBe(404);
 
       // 4) WS-подписка: снимок `connect` покрывает legacy-сессию.

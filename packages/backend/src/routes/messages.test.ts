@@ -74,11 +74,12 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
   it('DELETE перенумеровывает seq удалённых сообщений (core-поведение)', async () => {
     const { app, sessionManager } = createTestApp(tmpDir, null);
     const session = await sessionManager.createSession({ title: 'M', userId: 'test-user' });
-    await sessionManager.addMessage(session.id, makeMessage('a'));
+    const first = makeMessage('a');
+    await sessionManager.addMessage(session.id, first);
     await sessionManager.addMessage(session.id, makeMessage('b'));
     await sessionManager.addMessage(session.id, makeMessage('c'));
 
-    const res = await app.request(`/api/v2/messages/${session.id}/0`, { method: 'DELETE' });
+    const res = await app.request(`/api/v2/messages/${session.id}/${first.id}`, { method: 'DELETE' });
     expect(res.status).toBe(200);
 
     const s = await sessionManager.getSession(session.id);
@@ -86,11 +87,12 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
     expect(s!.messages.map((m) => m.seq)).toEqual([1, 2]);
   });
 
-  it('404 при неверном индексе — локализованное ru-сообщение', async () => {
+  it('404 при неизвестном id — локализованное ru-сообщение', async () => {
     const { app, sessionManager } = createTestApp(tmpDir, null);
     const session = await sessionManager.createSession({ title: 'M', userId: 'test-user' });
     await sessionManager.addMessage(session.id, makeMessage('a'));
 
+    // «5» — не индекс: адресация только по id (ADR-118 §7), фоллбека нет.
     const res = await app.request(`/api/v2/messages/${session.id}/5/pin`, { method: 'PATCH' });
     expect(res.status).toBe(404);
     const body: any = await res.json();
@@ -104,12 +106,13 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
     };
     const { app, sessionManager, eventBus } = createTestApp(tmpDir, contextOptimizer);
     const session = await sessionManager.createSession({ title: 'M', userId: 'test-user' });
-    await sessionManager.addMessage(session.id, makeMessage('a'));
+    const msg = makeMessage('a');
+    await sessionManager.addMessage(session.id, msg);
 
     const events: any[] = [];
     eventBus.subscribe(session.id, (e) => events.push(e));
 
-    const res = await app.request(`/api/v2/messages/${session.id}/0/toggle`, { method: 'PATCH' });
+    const res = await app.request(`/api/v2/messages/${session.id}/${msg.id}/toggle`, { method: 'PATCH' });
     expect(res.status).toBe(200);
 
     // Хук вызван с await — к моменту ответа состояние уже сохранено (гонка устранена).
@@ -122,7 +125,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
     const { app, sessionManager } = createTestApp(tmpDir, null);
     const session = await sessionManager.createSession({ title: 'Foreign', userId: 'owner' });
 
-    const res = await app.request(`/api/v2/messages/${session.id}/0/pin`, { method: 'PATCH' });
+    const res = await app.request(`/api/v2/messages/${session.id}/any-message-id/pin`, { method: 'PATCH' });
     expect(res.status).toBe(403);
     const body: any = await res.json();
     expect(body.error.code).toBe('FORBIDDEN');
@@ -146,7 +149,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
     const res = await app.request('/api/v2/messages/remote:abc/batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'pin', indices: [0] }),
+      body: JSON.stringify({ action: 'pin', messageIds: ['m-1'] }),
     });
     expect(res.status).toBe(404);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');

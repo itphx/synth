@@ -836,28 +836,37 @@ export class SessionManager {
   async batchMessageOperation(
     sessionId: string,
     action: 'pin' | 'toggle' | 'delete',
-    indices: number[],
+    messageIds: string[],
     state?: boolean,
-  ): Promise<{ results: Array<{ index: number; success: boolean; state?: boolean }> }> {
+  ): Promise<{ results: Array<{ messageId: string; success: boolean; state?: boolean }> }> {
     return this.withLock(sessionId, async (session) => {
-      const results: Array<{ index: number; success: boolean; state?: boolean }> = [];
+      const results: Array<{ messageId: string; success: boolean; state?: boolean }> = [];
+      // ADR-118 §7: адресация — по `id` сообщения; позиция находится внутри лока.
+      // Удаление идёт от конца к началу (splice сдвигает массив), остальные
+      // действия — в порядке позиций в истории.
+      const positions = messageIds.map((messageId) => ({
+        messageId,
+        index: session.messages.findIndex((m) => m.id === messageId),
+      }));
       const sorted = action === 'delete'
-        ? [...indices].sort((a, b) => b - a)
-        : [...indices].sort((a, b) => a - b);
+        ? [...positions].sort((a, b) => b.index - a.index)
+        : [...positions].sort(
+          (a, b) => (a.index < 0 ? Number.POSITIVE_INFINITY : a.index) - (b.index < 0 ? Number.POSITIVE_INFINITY : b.index),
+        );
 
-      for (const idx of sorted) {
-        const msg = session.messages[idx];
-        if (!msg) { results.push({ index: idx, success: false }); continue; }
+      for (const { messageId, index } of sorted) {
+        const msg = index >= 0 ? session.messages[index] : undefined;
+        if (!msg) { results.push({ messageId, success: false }); continue; }
 
         if (action === 'pin') {
           msg.pinned = state !== undefined ? state : !msg.pinned;
-          results.push({ index: idx, success: true, state: msg.pinned });
+          results.push({ messageId, success: true, state: msg.pinned });
         } else if (action === 'toggle') {
           msg.disabled = state !== undefined ? state : !msg.disabled;
-          results.push({ index: idx, success: true, state: msg.disabled });
+          results.push({ messageId, success: true, state: msg.disabled });
         } else if (action === 'delete') {
-          session.messages.splice(idx, 1);
-          results.push({ index: idx, success: true });
+          session.messages.splice(index, 1);
+          results.push({ messageId, success: true });
         }
       }
 

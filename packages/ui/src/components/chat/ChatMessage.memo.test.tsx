@@ -62,7 +62,7 @@ import type { MessageData } from '@/stores/chatStore'
 
 const noop = () => {}
 const noopMsg: (msg: MessageData) => void = noop
-const stableToggleSelect = (_index: number, _shiftKey: boolean) => {}
+const stableToggleSelect = (_messageId: string, _shiftKey: boolean) => {}
 
 function baseMessage(partial: Partial<MessageData>): MessageData {
   return {

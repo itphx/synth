@@ -366,24 +366,39 @@ export class RemoteBackendClient {
     return this.request<unknown>('POST', `/api/v2/messages/${encodeURIComponent(sessionId)}/batch`, body);
   }
 
-  messageToggle(sessionId: string, index: number): Promise<unknown> {
-    return this.request<unknown>('PATCH', `/api/v2/messages/${encodeURIComponent(sessionId)}/${index}/toggle`);
+  messageToggle(sessionId: string, messageId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'PATCH',
+      `/api/v2/messages/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}/toggle`,
+    );
   }
 
-  messagePin(sessionId: string, index: number): Promise<unknown> {
-    return this.request<unknown>('PATCH', `/api/v2/messages/${encodeURIComponent(sessionId)}/${index}/pin`);
+  messagePin(sessionId: string, messageId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'PATCH',
+      `/api/v2/messages/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}/pin`,
+    );
   }
 
-  messageDelete(sessionId: string, index: number): Promise<unknown> {
-    return this.request<unknown>('DELETE', `/api/v2/messages/${encodeURIComponent(sessionId)}/${index}`);
+  messageDelete(sessionId: string, messageId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'DELETE',
+      `/api/v2/messages/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}`,
+    );
   }
 
-  messageRetry(sessionId: string, index: number): Promise<unknown> {
-    return this.request<unknown>('POST', `/api/v2/messages/${encodeURIComponent(sessionId)}/${index}/retry`);
+  messageRetry(sessionId: string, messageId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/messages/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}/retry`,
+    );
   }
 
-  messageDebug(sessionId: string, index: number): Promise<unknown> {
-    return this.request<unknown>('GET', `/api/v2/messages/${encodeURIComponent(sessionId)}/${index}/debug`);
+  messageDebug(sessionId: string, messageId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'GET',
+      `/api/v2/messages/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}/debug`,
+    );
   }
 
   // Очередь

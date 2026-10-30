@@ -166,7 +166,7 @@ backend и standalone монтируют одну и ту же фабрику.
 | `RATE_LIMITED`, `QUEUE_FULL` | лимиты и очередь |
 | `STEER_LIMIT_EXCEEDED` | режимы отправки сообщения (ADR-104) |
 | `NO_ACTIVE_TURN` | `POST /api/v2/queue/:sessionId/steer` без активного хода (ADR-104) |
-| `INVALID_ACTION`, `INVALID_INDICES` | batch-операции сообщений |
+| `INVALID_ACTION`, `INVALID_MESSAGE_IDS` | batch-операции сообщений (пустой/невалидный `messageIds`, ADR-118 §7) |
 | `MODEL_NOT_FOUND`, `MODEL_DISABLED`, `MODEL_MISMATCH`, `PROVIDER_NOT_FOUND`, `PROVIDER_DISABLED`, `PROVIDER_ERROR`, `PROVIDER_CONFIG_ERROR`, `CONTEXT_LENGTH_EXCEEDED` | LLM Proxy |
 | `MCP_CONNECT_ERROR` | probe MCP |
 | `OFFLINE`, `AUTH_ERROR`, `REMOTE_UNAVAILABLE` | гибрид/remote |
@@ -529,12 +529,12 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
-| POST | `/api/v2/messages/:sessionId/batch` | оба | auth | `{action: pin\|toggle\|delete, indices[], state?}` |
-| PATCH | `/api/v2/messages/:sessionId/:index/toggle` | оба | auth | Переключить `disabled`. Отключение **user**-реплики выключает весь её ход: assistant/tool/error до следующей user-реплики не уходят в LLM (system-state и summary остаются); отключённый assistant с `toolCalls` подавляет свои tool-результаты |
-| PATCH | `/api/v2/messages/:sessionId/:index/pin` | оба | auth | Переключить `pinned` |
-| DELETE | `/api/v2/messages/:sessionId/:index` | оба | auth | Удалить сообщение |
-| POST | `/api/v2/messages/:sessionId/:index/retry` | оба | auth | Отключить с index и вернуть текст `{content}` |
-| GET | `/api/v2/messages/:sessionId/:index/debug` | оба | auth | Отладочные данные сообщения |
+| POST | `/api/v2/messages/:sessionId/batch` | оба | auth | Пакетная операция по `id`: `{action: pin\|toggle\|delete, messageIds: string[], state?}` → `{results: [{messageId, success, state?}]}` (неизвестный id — `success: false` в своей строке); пустой/невалидный `messageIds` → `400 INVALID_MESSAGE_IDS`, неизвестное действие → `400 INVALID_ACTION` |
+| PATCH | `/api/v2/messages/:sessionId/:messageId/toggle` | оба | auth | Переключить `disabled`. Отключение **user**-реплики выключает весь её ход: assistant/tool/error до следующей user-реплики не уходят в LLM (system-state и summary остаются); отключённый assistant с `toolCalls` подавляет свои tool-результаты |
+| PATCH | `/api/v2/messages/:sessionId/:messageId/pin` | оба | auth | Переключить `pinned` |
+| DELETE | `/api/v2/messages/:sessionId/:messageId` | оба | auth | Удалить сообщение |
+| POST | `/api/v2/messages/:sessionId/:messageId/retry` | оба | auth | Отключить сообщение с найденного `id` и далее, очистить очередь и вернуть текст `{content, success: true}` |
+| GET | `/api/v2/messages/:sessionId/:messageId/debug` | оба | auth | Отладочные данные сообщения; ответ дополнительно содержит `message_id` |
 
 > **Служебные поля reasoning наружу не отдаются (ADR-117).** `reasoningSignature` (подпись
 > Anthropic thinking-блока) и `reasoningRedacted` (opaque-данные `redacted_thinking`) — **legacy-поля**
@@ -548,7 +548,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > (legacy-сообщения без `parts` — прежнее поведение).
 
 > **Модель хода в DTO (ADR-118 §1/§2).** Сообщение в `GET /sessions/:id/messages`, `GET /sessions/:id` и событиях несёт аддитивные поля: `ord` — монотонный порядок записи в историю сессии (выдаётся при материализации, **не** перенумеровывается при вставке/удалении; по нему клиент упорядочивает ленту), `turn_id` — идентификатор хода, `step_index` — индекс шага внутри хода (0-based; у `user`-реплик не задан), `status` — `streaming`\|`completed`\|`cancelled`\|`error` («финал» = смена статуса, а не новый объект). `seq`/позиция остаются позиционными (`§«Порядок и идемпотентность»` ADR-118), `index` в DTO — позиция в массиве для существующих потребителей.
-> **Адресация мутаций — по индексу (остаток ADR-118 §7).** `PATCH /messages/:sessionId/:index/{toggle,pin}`, `DELETE /messages/:sessionId/:index`, `POST /messages/:sessionId/:index/retry`, `GET .../debug` и `POST /messages/:sessionId/batch {indices[]}` пока адресуют сообщение **позицией** в истории. Решение ADR-118 §7 (адресация только по `id`) — **не реализовано**; до него UI пересчитывает индекс из позиции сообщения в актуальном массиве (стабильный ключ React-списка — `id`).
+> **Адресация мутаций — только по `id` (ADR-118 §7).** `PATCH /messages/:sessionId/:messageId/{toggle,pin}`, `DELETE /messages/:sessionId/:messageId`, `POST /messages/:sessionId/:messageId/retry`, `GET /messages/:sessionId/:messageId/debug` и `POST /messages/:sessionId/batch {messageIds[]}` адресуют сообщение его **идентификатором**. Сообщение ищется по `id` под per-session локом; не найдено → `404 NOT_FOUND` (в `batch` — строка `{messageId, success: false}`), пустой/невалидный `messageIds` → `400 INVALID_MESSAGE_IDS`. Фоллбека на позицию/число в истории **нет** — это осознанное ломающее изменение контракта (раньше путь нёс `:index`). UI адресует и отдельные мутации, и пакетные операции по `id` (`data-message-id`).
 
 ### 5.6.1 Вложения сообщений — `/api/v2/sessions/:id/attachments*` (оба, ADR-115)
 

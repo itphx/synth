@@ -128,15 +128,15 @@ export function createMessageRoutes(
   app.use('/:sessionId/*', auth.requireAuth);
   app.use('/:sessionId/*', sessionAccessGuard);
 
-  // POST /api/v2/messages/:sessionId/batch — групповая операция
+  // POST /api/v2/messages/:sessionId/batch — групповая операция (адресация по id, ADR-118 §7)
   app.post('/:sessionId/batch', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     // Пустое/невалидное тело не должно ронять запрос 500-й из-за `c.req.json()`:
     // парсим толерантно и отдаём 400 в формате проекта.
     const body = await c.req
-      .json<{ action: string; indices: number[]; state?: boolean }>()
-      .catch(() => ({} as { action: string; indices: number[]; state?: boolean }));
+      .json<{ action: string; messageIds: string[]; state?: boolean }>()
+      .catch(() => ({} as { action: string; messageIds: string[]; state?: boolean }));
 
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
@@ -150,7 +150,7 @@ export function createMessageRoutes(
       }
     }
 
-    const { action, indices, state } = body;
+    const { action, messageIds, state } = body;
 
     if (typeof action !== 'string' || !['pin', 'toggle', 'delete'].includes(action)) {
       return c.json({
@@ -160,24 +160,31 @@ export function createMessageRoutes(
         },
       }, 400);
     }
-    if (!Array.isArray(indices) || indices.length === 0) {
-      return c.json({ error: { code: 'INVALID_INDICES', message: 'indices must be a non-empty array' } }, 400);
+    if (
+      !Array.isArray(messageIds) ||
+      messageIds.length === 0 ||
+      messageIds.some((id) => typeof id !== 'string' || id === '')
+    ) {
+      return c.json(
+        { error: { code: 'INVALID_MESSAGE_IDS', message: 'messageIds must be a non-empty array of message ids' } },
+        400,
+      );
     }
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
 
     // ADR-115: id сообщений, которые будут удалены — зафиксировать ДО операции
-    // (после splice индексы съезжают). Ссылки на объекты вложений снимаются
+    // (проверяем существование до splice). Ссылки на объекты вложений снимаются
     // по id: иначе объект вложений никогда не станет сиротой и не уйдёт в GC.
     const deletedMessageIds = action === 'delete' && blobRefs
-      ? indices.map((index) => session.messages[index]?.id).filter((id): id is string => !!id)
+      ? messageIds.filter((id) => session.messages.some((m) => m.id === id))
       : [];
 
     const result = await sessionManager.batchMessageOperation(
       sessionId,
       action as 'pin' | 'toggle' | 'delete',
-      indices,
+      messageIds,
       state,
     );
 
@@ -190,16 +197,16 @@ export function createMessageRoutes(
     return c.json(result, 200);
   });
 
-  // PATCH /api/v2/messages/:sessionId/:index/toggle — переключить disabled
-  app.patch('/:sessionId/:index/toggle', auth.requireAuth, async (c) => {
+  // PATCH /api/v2/messages/:sessionId/:messageId/toggle — переключить disabled
+  app.patch('/:sessionId/:messageId/toggle', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
-    const index = parseInt(c.req.param('index'), 10);
+    const messageId = c.req.param('messageId');
 
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
-        const result = await remoteClient.messageToggle(toLocalId(sessionId), index);
+        const result = await remoteClient.messageToggle(toLocalId(sessionId), messageId);
         return c.json(result, 200);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
@@ -212,31 +219,35 @@ export function createMessageRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    if (index < 0 || index >= session.messages.length) {
+
+    // ADR-118 §7: сообщение ищется по `id` (позиция в массиве нестабильна).
+    const disabled = await sessionManager.withLock(sessionId, async (locked) => {
+      const msg = locked.messages.find((m) => m.id === messageId);
+      if (!msg) return null;
+      msg.disabled = !msg.disabled;
+      await sessionManager.updateSession(locked);
+      return msg.disabled;
+    });
+
+    if (disabled === null) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
-
-    const disabled = await sessionManager.withLock(sessionId, async (locked) => {
-      locked.messages[index]!.disabled = !locked.messages[index]!.disabled;
-      await sessionManager.updateSession(locked);
-      return locked.messages[index]!.disabled;
-    });
 
     await onMessagesChanged?.(sessionId, c);
 
     return c.json({ disabled, success: true });
   });
 
-  // PATCH /api/v2/messages/:sessionId/:index/pin — переключить pinned
-  app.patch('/:sessionId/:index/pin', auth.requireAuth, async (c) => {
+  // PATCH /api/v2/messages/:sessionId/:messageId/pin — переключить pinned
+  app.patch('/:sessionId/:messageId/pin', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
-    const index = parseInt(c.req.param('index'), 10);
+    const messageId = c.req.param('messageId');
 
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
-        const result = await remoteClient.messagePin(toLocalId(sessionId), index);
+        const result = await remoteClient.messagePin(toLocalId(sessionId), messageId);
         return c.json(result, 200);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
@@ -249,31 +260,34 @@ export function createMessageRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    if (index < 0 || index >= session.messages.length) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
-    }
 
     const pinned = await sessionManager.withLock(sessionId, async (locked) => {
-      locked.messages[index]!.pinned = !locked.messages[index]!.pinned;
+      const msg = locked.messages.find((m) => m.id === messageId);
+      if (!msg) return null;
+      msg.pinned = !msg.pinned;
       await sessionManager.updateSession(locked);
-      return locked.messages[index]!.pinned;
+      return msg.pinned;
     });
+
+    if (pinned === null) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
+    }
 
     await onMessagesChanged?.(sessionId, c);
 
     return c.json({ pinned, success: true });
   });
 
-  // DELETE /api/v2/messages/:sessionId/:index — удалить сообщение
-  app.delete('/:sessionId/:index', auth.requireAuth, async (c) => {
+  // DELETE /api/v2/messages/:sessionId/:messageId — удалить сообщение
+  app.delete('/:sessionId/:messageId', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
-    const index = parseInt(c.req.param('index'), 10);
+    const messageId = c.req.param('messageId');
 
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
-        const result = await remoteClient.messageDelete(toLocalId(sessionId), index);
+        const result = await remoteClient.messageDelete(toLocalId(sessionId), messageId);
         return c.json(result, 200);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
@@ -286,34 +300,38 @@ export function createMessageRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    if (index < 0 || index >= session.messages.length) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
-    }
 
-    await sessionManager.withLock(sessionId, async (locked) => {
+    const removed = await sessionManager.withLock(sessionId, async (locked) => {
+      const index = locked.messages.findIndex((m) => m.id === messageId);
+      if (index < 0) return false;
       // ADR-115: сообщение удаляется — снимаем его ссылки на объекты вложений.
-      const removedId = locked.messages[index]?.id;
+      const removedId = locked.messages[index]!.id;
       locked.messages.splice(index, 1);
       locked.messages.forEach((m, i) => { m.seq = i + 1; });
       await sessionManager.updateSession(locked);
       if (blobRefs && removedId) await blobRefs.removeByOwner('message', removedId).catch(() => 0);
+      return true;
     });
+
+    if (!removed) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
+    }
 
     await onMessagesChanged?.(sessionId, c);
 
     return c.json({ success: true });
   });
 
-  // POST /api/v2/messages/:sessionId/:index/retry — отключить сообщения от index и вернуть текст
-  app.post('/:sessionId/:index/retry', auth.requireAuth, async (c) => {
+  // POST /api/v2/messages/:sessionId/:messageId/retry — отключить сообщения от найденного и вернуть текст
+  app.post('/:sessionId/:messageId/retry', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
-    const index = parseInt(c.req.param('index'), 10);
+    const messageId = c.req.param('messageId');
 
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
-        const result = await remoteClient.messageRetry(toLocalId(sessionId), index);
+        const result = await remoteClient.messageRetry(toLocalId(sessionId), messageId);
         return c.json(result, 200);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
@@ -326,36 +344,40 @@ export function createMessageRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    if (index < 0 || index >= session.messages.length) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
-    }
 
-    const msg = session.messages[index]!;
-    const content = msg.content;
-
-    await sessionManager.withLock(sessionId, async (locked) => {
+    // ADR-118 §7: точка отсчёта — найденное по id сообщение (позиция берётся
+    // от него, а не из пути).
+    const content = await sessionManager.withLock(sessionId, async (locked) => {
+      const index = locked.messages.findIndex((m) => m.id === messageId);
+      if (index < 0) return null;
+      const text = locked.messages[index]!.content;
       for (let i = index; i < locked.messages.length; i++) {
         locked.messages[i]!.disabled = true;
       }
       locked.pendingMessages = [];
       await sessionManager.updateSession(locked);
+      return text;
     });
+
+    if (content === null) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
+    }
 
     await onMessagesChanged?.(sessionId, c);
 
     return c.json({ content, success: true });
   });
 
-  // GET /api/v2/messages/:sessionId/:index/debug
-  app.get('/:sessionId/:index/debug', auth.requireAuth, async (c) => {
+  // GET /api/v2/messages/:sessionId/:messageId/debug
+  app.get('/:sessionId/:messageId/debug', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
-    const index = parseInt(c.req.param('index'), 10);
+    const messageId = c.req.param('messageId');
 
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
-        const result = await remoteClient.messageDebug(toLocalId(sessionId), index);
+        const result = await remoteClient.messageDebug(toLocalId(sessionId), messageId);
         return c.json(result, 200);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
@@ -368,12 +390,14 @@ export function createMessageRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    if (index < 0 || index >= session.messages.length) {
+
+    const msg = session.messages.find((m) => m.id === messageId);
+    if (!msg) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
-    const msg = session.messages[index]!;
     return c.json({
+      message_id: msg.id,
       role: msg.role,
       content: msg.content.slice(0, 200),
       model: msg.model,

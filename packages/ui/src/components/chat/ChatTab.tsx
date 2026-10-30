@@ -34,7 +34,7 @@ interface ChatTabProps {
 const EMPTY_MESSAGES: MessageData[] = []
 const EMPTY_PENDING: QueuedMessage[] = []
 const EMPTY_STICKY: StickyNoteData[] = []
-const EMPTY_INDICES: Set<number> = new Set()
+const EMPTY_SELECTED_IDS: Set<string> = new Set()
 
 /**
  * ADR-115: восстановить вложения сообщения в композер («Повторить»).
@@ -149,7 +149,8 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const selectionState = useChatStore(s => s.selectionBySession[sessionId])
   const selectionMode = selectionState?.mode ?? false
-  const selectedIndices = selectionState?.indices ?? EMPTY_INDICES
+  // ADR-118 §7: выделение адресуется по `id` (лента сортируется по `ord`).
+  const selectedIds = selectionState?.ids ?? EMPTY_SELECTED_IDS
 
   const [sessionOrigin, setSessionOrigin] = useState<string | null>(null)
   const isSubagent = sessionOrigin === 'subagent'
@@ -335,8 +336,8 @@ export function ChatTab({ tab }: ChatTabProps) {
       return
     }
     try {
-      if (lastFailed.disabled === false) {
-        await synthApi.toggleMessage(sessionId, lastFailed.index)
+      if (lastFailed.disabled === false && lastFailed.id) {
+        await synthApi.toggleMessage(sessionId, lastFailed.id)
       }
       const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
       await synthApi.enqueueMessage(sessionId, lastFailed.content, {
@@ -391,7 +392,8 @@ export function ChatTab({ tab }: ChatTabProps) {
   const handleToggle = useCallback(
     async (msg: MessageData) => {
       try {
-        const result = await synthApi.toggleMessage(sessionId, msg.index)
+        if (!msg.id) return
+        const result = await synthApi.toggleMessage(sessionId, msg.id)
         // ADR-118 §7: локальное состояние адресуется по `id` (индекс нестабилен).
         if (msg.id) updateMessageById(sessionId, msg.id, { disabled: result.disabled })
         notify({
@@ -410,7 +412,8 @@ export function ChatTab({ tab }: ChatTabProps) {
   const handlePin = useCallback(
     async (msg: MessageData) => {
       try {
-        const result = await synthApi.pinMessage(sessionId, msg.index)
+        if (!msg.id) return
+        const result = await synthApi.pinMessage(sessionId, msg.id)
         if (msg.id) updateMessageById(sessionId, msg.id, { pinned: result.pinned })
         notify({
           text: result.pinned ? t('chat.message.pinned') : t('chat.message.unpinned'),
@@ -439,7 +442,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         await synthApi.batchMessages(
           sessionId,
           'pin',
-          targets.map((m) => m.index),
+          targets.map((m) => m.id!),
           pinned,
         )
         for (const m of targets) {
@@ -463,7 +466,8 @@ export function ChatTab({ tab }: ChatTabProps) {
       const ok = await confirm({ title: t('chat.actions.deleteConfirm'), variant: 'danger' })
       if (!ok) return
       try {
-        await synthApi.deleteMessage(sessionId, msg.index)
+        if (!msg.id) return
+        await synthApi.deleteMessage(sessionId, msg.id)
         const result = await synthApi.getSessionMessages(sessionId)
         setMessages(sessionId, result.messages)
         notify({ text: t('chat.message.deleted'), type: 'info', category: 'message', sessionId })
@@ -479,7 +483,8 @@ export function ChatTab({ tab }: ChatTabProps) {
       const ok = await confirm({ title: t('chat.actions.retryConfirm'), variant: 'warning' })
       if (!ok) return
       try {
-        const result = await synthApi.retryMessage(sessionId, msg.index)
+        if (!msg.id) return
+        const result = await synthApi.retryMessage(sessionId, msg.id)
         const reloadResult = await synthApi.getSessionMessages(sessionId)
         setMessages(sessionId, reloadResult.messages)
         // ADR-115: вложения возвращаются в композер вместе с текстом (маркеры
@@ -686,12 +691,12 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   // --- Selection mode handlers ---
 
-  const handleToggleSelect = useCallback((index: number) => {
-    useChatStore.getState().toggleMessageSelection(sessionId, index)
+  const handleToggleSelect = useCallback((messageId: string) => {
+    useChatStore.getState().toggleMessageSelection(sessionId, messageId)
   }, [sessionId])
 
-  const handleSelectRange = useCallback((from: number, to: number) => {
-    useChatStore.getState().selectMessageRange(sessionId, from, to)
+  const handleSelectRange = useCallback((fromMessageId: string, toMessageId: string) => {
+    useChatStore.getState().selectMessageRange(sessionId, fromMessageId, toMessageId)
   }, [sessionId])
 
   // --- Forward confirm ---
@@ -851,7 +856,7 @@ export function ChatTab({ tab }: ChatTabProps) {
               onStop={handleStop}
               isSubagent={isSubagent}
               selectionMode={selectionMode}
-              selectedIndices={selectedIndices}
+              selectedIds={selectedIds}
               onToggleSelect={handleToggleSelect}
               onSelectRange={handleSelectRange}
               retry={streamRetry}

@@ -314,7 +314,8 @@ interface ChatStore {
   /** ADR-118 §7: отладка адресуется по `id` сообщения (индекс нестабилен). */
   debugModalMessageId: string | null
 
-  selectionBySession: Record<string, { mode: boolean; indices: Set<number> }>
+  /** ADR-118 §7: выделение адресуется по `id` сообщения (индекс нестабилен). */
+  selectionBySession: Record<string, { mode: boolean; ids: Set<string> }>
 
   setMessages: (sessionId: string, messages: MessageData[]) => void
   /** Upsert сообщения по `id` (ADR-118 §7 — идентификатор устойчив). */
@@ -410,8 +411,9 @@ interface ChatStore {
   clearRetryInput: (sessionId: string) => void
 
   toggleSelectionMode: (sessionId: string) => void
-  toggleMessageSelection: (sessionId: string, index: number) => void
-  selectMessageRange: (sessionId: string, from: number, to: number) => void
+  /** ADR-118 §7: toggle выделения — по `id` сообщения. */
+  toggleMessageSelection: (sessionId: string, messageId: string) => void
+  selectMessageRange: (sessionId: string, fromMessageId: string, toMessageId: string) => void
   selectAllMessages: (sessionId: string) => void
   clearSelection: (sessionId: string) => void
 }
@@ -983,43 +985,50 @@ export const useChatStore = create<ChatStore>((set) => ({
       return {
         selectionBySession: {
           ...s.selectionBySession,
-          [sessionId]: { mode: true, indices: new Set<number>() },
+          [sessionId]: { mode: true, ids: new Set<string>() },
         },
       }
     }),
 
-  toggleMessageSelection: (sessionId, index) =>
+  toggleMessageSelection: (sessionId, messageId) =>
     set((s) => {
       const current = s.selectionBySession[sessionId]
       if (!current?.mode) return s
-      const next = new Set(current.indices)
-      if (next.has(index)) {
-        next.delete(index)
+      const next = new Set(current.ids)
+      if (next.has(messageId)) {
+        next.delete(messageId)
       } else {
-        next.add(index)
+        next.add(messageId)
       }
       return {
         selectionBySession: {
           ...s.selectionBySession,
-          [sessionId]: { mode: true, indices: next },
+          [sessionId]: { mode: true, ids: next },
         },
       }
     }),
 
-  selectMessageRange: (sessionId, from, to) =>
+  selectMessageRange: (sessionId, fromMessageId, toMessageId) =>
     set((s) => {
       const current = s.selectionBySession[sessionId]
       if (!current?.mode) return s
-      const next = new Set(current.indices)
+      const next = new Set(current.ids)
+      // Границы диапазона — позиции в отсортированной ленте (по `ord`), само
+      // выделение по-прежнему хранит `id`.
+      const msgs = s.messagesBySession[sessionId] || []
+      const from = msgs.findIndex((m) => m.id === fromMessageId)
+      const to = msgs.findIndex((m) => m.id === toMessageId)
+      if (from < 0 || to < 0) return s
       const start = Math.min(from, to)
       const end = Math.max(from, to)
       for (let i = start; i <= end; i++) {
-        next.add(i)
+        const id = msgs[i]?.id
+        if (id) next.add(id)
       }
       return {
         selectionBySession: {
           ...s.selectionBySession,
-          [sessionId]: { mode: true, indices: next },
+          [sessionId]: { mode: true, ids: next },
         },
       }
     }),
@@ -1029,11 +1038,12 @@ export const useChatStore = create<ChatStore>((set) => ({
       const current = s.selectionBySession[sessionId]
       if (!current?.mode) return s
       const msgs = s.messagesBySession[sessionId] || []
-      const next = new Set<number>(msgs.map((m) => m.index))
+      const next = new Set<string>()
+      for (const m of msgs) if (m.id) next.add(m.id)
       return {
         selectionBySession: {
           ...s.selectionBySession,
-          [sessionId]: { mode: true, indices: next },
+          [sessionId]: { mode: true, ids: next },
         },
       }
     }),
@@ -1045,7 +1055,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return {
         selectionBySession: {
           ...s.selectionBySession,
-          [sessionId]: { ...current, indices: new Set<number>() },
+          [sessionId]: { ...current, ids: new Set<string>() },
         },
       }
     }),

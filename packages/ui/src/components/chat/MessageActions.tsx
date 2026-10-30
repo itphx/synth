@@ -28,17 +28,18 @@ interface MessageActionsProps {
   embedded?: boolean
   /** Показывать кнопку «Копировать» (в Notice копия рисуется отдельно). */
   showCopy?: boolean
-  onCopy: () => void
-  onToggle: () => void
-  onPin: () => void
-  onDelete: () => void
-  onRetry: () => void
-  onDebug: () => void
-  onFork: () => void
+  /** Действия получают `id` сообщения (ADR-118 §7 — индекс нестабилен). */
+  onCopy: (messageId?: string) => void
+  onToggle: (messageId?: string) => void
+  onPin: (messageId?: string) => void
+  onDelete: (messageId?: string) => void
+  onRetry: (messageId?: string) => void
+  onDebug: (messageId?: string) => void
+  onFork: (messageId?: string) => void
 }
 
 export function MessageActions({
-  messageId: _messageId,
+  messageId,
   role,
   disabled,
   pinned,
@@ -69,13 +70,13 @@ export function MessageActions({
           : 'message-actions flex items-center gap-0.5 mt-2 pt-1.5 -mb-1.5 border-t border-border/30 opacity-0 group-hover:opacity-100 transition-opacity'
       }
     >
-      {showCopy && <ActionBtn onClick={onCopy} title={t('chat.actions.copy')} icon="file-copy" />}
+      {showCopy && <ActionBtn onClick={() => onCopy(messageId)} title={t('chat.actions.copy')} icon="file-copy" />}
 
-      <ActionBtn onClick={onFork} title={t('chat.actions.fork')} icon="git-branch" />
+      <ActionBtn onClick={() => onFork(messageId)} title={t('chat.actions.fork')} icon="git-branch" />
 
       {!readOnly && (
         <ActionBtn
-          onClick={onToggle}
+          onClick={() => onToggle(messageId)}
           title={disabled ? t('chat.actions.toggleOn') : t('chat.actions.toggleOff')}
           icon={disabled ? 'eye-off' : 'eye'}
           active={disabled}
@@ -84,7 +85,7 @@ export function MessageActions({
 
       {!readOnly && (
         <ActionBtn
-          onClick={onPin}
+          onClick={() => onPin(messageId)}
           title={pinned ? t('chat.actions.unpin') : t('chat.actions.pin')}
           icon="pushpin"
           active={pinned}
@@ -92,15 +93,15 @@ export function MessageActions({
       )}
 
       {!readOnly && (
-        <ActionBtn onClick={onDelete} title={t('chat.actions.delete')} icon="delete-bin" danger />
+        <ActionBtn onClick={() => onDelete(messageId)} title={t('chat.actions.delete')} icon="delete-bin" danger />
       )}
 
       {!readOnly && isUser && canRetry && (
-        <ActionBtn onClick={onRetry} title={t('chat.actions.retry')} icon="refresh" />
+        <ActionBtn onClick={() => onRetry(messageId)} title={t('chat.actions.retry')} icon="refresh" />
       )}
 
       {!isUser && hasDebug && (
-        <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" active={debugActive} />
+        <ActionBtn onClick={() => onDebug(messageId)} title={t('chat.actions.debug')} icon="bug" active={debugActive} />
       )}
 
       {/* ADR-070 §2.6: статистика ответа — кнопка в ряду, содержимое в поповере.

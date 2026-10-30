@@ -25,6 +25,9 @@ interface HeaderProps {
   onSettingsClick: () => void
 }
 
+/** Стабильный пустой набор выделения (иначе новый `Set` ломает мемоизацию). */
+const EMPTY_SELECTED_IDS: Set<string> = new Set()
+
 /**
  * Имя каталога из абсолютного пути — фолбэк для индикатора worktree'а,
  * когда записи ещё нет в инвентаре проекта (список не загружен).
@@ -202,8 +205,9 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   // ---- Selection mode & bulk operations (from ChatTab) ----
   const selectionState = useChatStore(s => sessionId ? s.selectionBySession[sessionId] : undefined)
   const selectionMode = selectionState?.mode ?? false
-  const selectedIndices = selectionState?.indices ?? new Set<number>()
-  const selectedCount = selectedIndices.size
+  // ADR-118 §7: выделение адресуется по `id` (лента сортируется по `ord`).
+  const selectedIds = selectionState?.ids ?? EMPTY_SELECTED_IDS
+  const selectedCount = selectedIds.size
   const sessionMessages = sessionId ? useChatStore.getState().messagesBySession[sessionId] || [] : []
   const totalMessageCount = sessionMessages.length
 
@@ -231,59 +235,64 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
 
   const handleBulkPin = useCallback(async () => {
     if (!sessionId) return
-    const indices = [...selectedIndices]
-    if (indices.length === 0) return
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
     // Determine target state: if ALL are pinned → unpin, else → pin
-    const selectedMsgs = indices.map(i => sessionMessages[i]).filter(Boolean)
+    const selectedMsgs = sessionMessages.filter(m => m.id && selectedIds.has(m.id))
     const allPinned = selectedMsgs.length > 0 && selectedMsgs.every(m => m.pinned)
     const targetState = !allPinned
     try {
-      await synthApi.batchMessages(sessionId, 'pin', indices, targetState)
+      await synthApi.batchMessages(sessionId, 'pin', ids, targetState)
       await afterBulkReload()
-      notify({ text: targetState ? `Закреплено: ${indices.length}` : `Откреплено: ${indices.length}`, type: 'info', category: 'message', sessionId })
+      notify({ text: targetState ? `Закреплено: ${ids.length}` : `Откреплено: ${ids.length}`, type: 'info', category: 'message', sessionId })
     } catch (e) {
       notify({ text: `Ошибка: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
     }
-  }, [sessionId, selectedIndices, sessionMessages, afterBulkReload, notify])
+  }, [sessionId, selectedIds, sessionMessages, afterBulkReload, notify])
 
   const handleBulkToggle = useCallback(async () => {
     if (!sessionId) return
-    const indices = [...selectedIndices]
-    if (indices.length === 0) return
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
     // Determine target state: if ALL are disabled → enable, else → disable
-    const selectedMsgs = indices.map(i => sessionMessages[i]).filter(Boolean)
+    const selectedMsgs = sessionMessages.filter(m => m.id && selectedIds.has(m.id))
     const allDisabled = selectedMsgs.length > 0 && selectedMsgs.every(m => m.disabled)
     const targetState = !allDisabled
     try {
-      await synthApi.batchMessages(sessionId, 'toggle', indices, targetState)
+      await synthApi.batchMessages(sessionId, 'toggle', ids, targetState)
       await afterBulkReload()
-      notify({ text: targetState ? `Отключено: ${indices.length}` : `Включено: ${indices.length}`, type: 'info', category: 'message', sessionId })
+      notify({ text: targetState ? `Отключено: ${ids.length}` : `Включено: ${ids.length}`, type: 'info', category: 'message', sessionId })
     } catch (e) {
       notify({ text: `Ошибка: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
     }
-  }, [sessionId, selectedIndices, sessionMessages, afterBulkReload, notify])
+  }, [sessionId, selectedIds, sessionMessages, afterBulkReload, notify])
 
   const handleBulkDelete = useCallback(async () => {
     if (!sessionId) return
-    const indices = [...selectedIndices]
-    if (indices.length === 0) return
-    const ok = await confirm({ title: `Удалить ${indices.length} сообщений?`, variant: 'danger' })
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    const ok = await confirm({ title: `Удалить ${ids.length} сообщений?`, variant: 'danger' })
     if (!ok) return
     try {
-      await synthApi.batchMessages(sessionId, 'delete', indices)
+      await synthApi.batchMessages(sessionId, 'delete', ids)
       await afterBulkReload()
-      notify({ text: `Удалено сообщений: ${indices.length}`, type: 'info', category: 'message', sessionId })
+      notify({ text: `Удалено сообщений: ${ids.length}`, type: 'info', category: 'message', sessionId })
     } catch (e) {
       notify({ text: `Ошибка: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
     }
-  }, [sessionId, selectedIndices, afterBulkReload, notify])
+  }, [sessionId, selectedIds, afterBulkReload, notify])
 
   const handleForward = useCallback(() => {
     if (!sessionId) return
-    const indices = [...selectedIndices]
-    if (indices.length === 0) return
-    useUIStore.getState().enterForwardMode(sessionId, indices, 'forward')
-  }, [sessionId, selectedIndices])
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    // Режим переноса адресуется позициями ленты — переводим `id` → `index`.
+    const positions = sessionMessages
+      .map((m, position) => (m.id && selectedIds.has(m.id) ? position : -1))
+      .filter((position) => position >= 0)
+    if (positions.length === 0) return
+    useUIStore.getState().enterForwardMode(sessionId, positions, 'forward')
+  }, [sessionId, selectedIds, sessionMessages])
 
   const handleMerge = useCallback(() => {
     if (!sessionId) return

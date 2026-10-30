@@ -62,7 +62,7 @@ import {
 } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { Message, Project, User } from '@itphx/synth-shared';
-import { MessageRole, ProjectRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
+import { MessageRole, ProjectRole, nowISO, makeTextPart } from '@itphx/synth-shared';
 import { createSessionRoutes as createBackendSessionRoutes } from './sessions.js';
 import { createMessageRoutes as createBackendMessageRoutes } from './messages.js';
 import { createQueueRoutes as createBackendQueueRoutes } from './queue.js';
@@ -210,11 +210,12 @@ const MATRIX: Row[] = [
 
   // --- core message routes ---
   row('messages', 'POST', '/:sessionId/batch'),
-  row('messages', 'PATCH', '/:sessionId/:index/toggle'),
-  row('messages', 'PATCH', '/:sessionId/:index/pin'),
-  row('messages', 'DELETE', '/:sessionId/:index'),
-  row('messages', 'POST', '/:sessionId/:index/retry'),
-  row('messages', 'GET', '/:sessionId/:index/debug'),
+  // ADR-118 §7: адресация мутаций — по id сообщения.
+  row('messages', 'PATCH', '/:sessionId/:messageId/toggle'),
+  row('messages', 'PATCH', '/:sessionId/:messageId/pin'),
+  row('messages', 'DELETE', '/:sessionId/:messageId'),
+  row('messages', 'POST', '/:sessionId/:messageId/retry'),
+  row('messages', 'GET', '/:sessionId/:messageId/debug'),
 
   // --- core queue routes ---
   row('queue', 'POST', '/:sessionId/clear'),
@@ -500,7 +501,7 @@ function urlFor(base: Base, path: string, sessionId: string): string {
     .replace(':qid', 'qst-none')
     .replace(':sessionId', sessionId)
     .replace(':id', sessionId)
-    .replace(':index', '0')
+    .replace(':messageId', MATRIX_MESSAGE_ID)
     .replace(':refSid', 'ref-1')
     .replace(':noteId', 'note-1');
   return `${PREFIX[base]}${replaced}`;
@@ -511,7 +512,7 @@ function bodyFor(row: Row, world: World): string | undefined {
   if (row.method === 'GET' || row.method === 'DELETE') return undefined;
   const p = row.path;
   if (row.base === 'messages' && p.endsWith('/batch')) {
-    return JSON.stringify({ action: 'pin', indices: [0] });
+    return JSON.stringify({ action: 'pin', messageIds: [MATRIX_MESSAGE_ID] });
   }
   if (p.endsWith('/references')) return JSON.stringify({ source_session_id: world.sourceSessionId });
   if (p.endsWith('/notes')) return JSON.stringify({ content: 'note' });
@@ -526,9 +527,12 @@ function bodyFor(row: Row, world: World): string | undefined {
   return JSON.stringify({});
 }
 
+/** id единственного сообщения сидированной сессии (адресация матрицы по id, ADR-118 §7). */
+const MATRIX_MESSAGE_ID = 'matrix-message-1';
+
 function makeMessage(): Message {
   return {
-    id: generateId(),
+    id: MATRIX_MESSAGE_ID,
     role: MessageRole.USER,
     seq: 1,
     origin: 'local',

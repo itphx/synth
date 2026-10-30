@@ -92,7 +92,8 @@ interface ChatMessageProps {
   isSubagent?: boolean
   selectionMode?: boolean
   isSelected?: boolean
-  onToggleSelect?: (index: number, shiftKey: boolean) => void
+  /** ADR-118 §7: выделение адресуется по `id` сообщения (индекс нестабилен). */
+  onToggleSelect?: (messageId: string, shiftKey: boolean) => void
   /**
    * Статус активного стрима, связанного с этим user-сообщением (по metadata.stream_id),
    * пока провайдер ещё не вернул ни одного чанка. null — статус не показываем.
@@ -225,8 +226,11 @@ function ChatMessageInner({
   const handleDebug = useCallback(() => onDebug(message), [onDebug, message])
   const handleFork = useCallback(() => onFork(message), [onFork, message])
   const handleToggleSelect = useCallback(
-    (shiftKey: boolean) => onToggleSelect?.(message.index, shiftKey),
-    [onToggleSelect, message.index]
+    (shiftKey: boolean) => {
+      if (!message.id) return
+      onToggleSelect?.(message.id, shiftKey)
+    },
+    [onToggleSelect, message.id]
   )
 
   const handleOriginClick = () => {
@@ -703,7 +707,7 @@ function ChatMessageInner({
   }
 
   return (
-    <div className={containerClass}>
+    <div className={containerClass} data-message-id={message.id}>
       {selectionMode && (
         <div className="flex items-center self-stretch pr-1">
           <input

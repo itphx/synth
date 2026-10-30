@@ -172,7 +172,7 @@ Actual codes (from the code):
 | `RATE_LIMITED`, `QUEUE_FULL` | rate limits and the queue |
 | `STEER_LIMIT_EXCEEDED` | message sending modes (ADR-104) |
 | `NO_ACTIVE_TURN` | `POST /api/v2/queue/:sessionId/steer` with no running turn (ADR-104) |
-| `INVALID_ACTION`, `INVALID_INDICES` | message batch operations |
+| `INVALID_ACTION`, `INVALID_MESSAGE_IDS` | message batch operations (ADR-118 §7) |
 | `MODEL_NOT_FOUND`, `MODEL_DISABLED`, `MODEL_MISMATCH`, `PROVIDER_NOT_FOUND`, `PROVIDER_DISABLED`, `PROVIDER_ERROR`, `PROVIDER_CONFIG_ERROR`, `CONTEXT_LENGTH_EXCEEDED` | LLM Proxy |
 | `MCP_CONNECT_ERROR` | MCP probe |
 | `OFFLINE`, `AUTH_ERROR`, `REMOTE_UNAVAILABLE` | hybrid/remote |
@@ -466,6 +466,10 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > **Subagent progress — deltas (`subagent.progress`, 2026-10-30).** The event carries additive `content_delta`/`reasoning_delta` — the increment since the previous publication, **not** the accumulated text (the former `content`/`reasoning` fields are gone); empty deltas are not published, and the total delta volume per run is capped at 200,000 characters (beyond that progress is silent; the final report arrives as a regular message and is unaffected). An older core (a hybrid of a different version) may send the accumulated text in `content`/`reasoning` — the client subtracts the already known prefix, so the progress block is not duplicated; unknown fields are ignored.
 
 ### 5.6 Messages — `/api/v2/messages`
+
+> ⚠️ Outdated (ADR-118 §7): mutations are addressed by message id
+> (`PATCH/DELETE/POST /:sessionId/:messageId/*`, `batch {messageIds[]}`); unknown message → `404 NOT_FOUND`,
+> empty/invalid `messageIds` → `400 INVALID_MESSAGE_IDS`. The table below still shows `:index`/`indices[]`.
 
 | Method | Path | Build | RBAC | Purpose |
 |---|---|---|---|---|
