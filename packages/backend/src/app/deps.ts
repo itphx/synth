@@ -507,12 +507,18 @@ export async function createBackendDeps(
    * ADR-111/ADR-113 × ADR-104: остаток steer-очереди в конце хода возвращается
    * в обычную очередь (`autostart` — нормальное завершение; после «Стопа» — нет).
    */
-  const requeueBackgroundNotices = async (
+  /**
+   * ADR-104 × ADR-111/ADR-113: остаток steer-очереди в конце хода не теряется —
+   * **все** сообщения возвращаются в `pendingMessages`; `autostart` поднимает
+   * ход (нормальное завершение), при «Стопе» — нет.
+   * `processMessage` объявлен ниже — вызов происходит уже в рантайме.
+   */
+  const requeueSteerMessages = async (
     sessionId: string,
     messages: Message[],
     autostart: boolean,
-  ): Promise<void> => {
-    await requeueMessages({
+  ): Promise<{ requeued: number; dropped: number }> => {
+    return requeueMessages({
       sessionManager,
       eventBus,
       sessionId,
@@ -1139,9 +1145,9 @@ export async function createBackendDeps(
     // `task` с `background: true` регистрирует фонового саб-агента и
     // возвращает управление сразу (PROP-096).
     ...(backgroundService ? { backgroundService } : {}),
-    // ADR-111/ADR-113 × ADR-104: остаток steer-очереди в конце хода — в очередь.
-    requeueBackgroundNotices: (sessionId, messages, opts) =>
-      requeueBackgroundNotices(sessionId, messages, opts.autostart),
+    // ADR-104 × ADR-111/ADR-113: остаток steer-очереди в конце хода — в очередь.
+    requeueSteerMessages: (sessionId, messages, opts) =>
+      requeueSteerMessages(sessionId, messages, opts.autostart),
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),

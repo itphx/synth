@@ -493,6 +493,10 @@ export const SYSTEM_MESSAGES = {
     'Turn stopped — {count} pending intervention(s) discarded (send them again as a new message)',
   'steer.dropped_turn_ended':
     'Turn already finished — {count} pending intervention(s) discarded (send them again as a new message)',
+  'steer.requeued_aborted':
+    'Turn stopped — {count} pending message(s) returned to the queue',
+  'steer.requeued_turn_ended':
+    'Turn finished — {count} pending message(s) returned to the queue and will be processed next',
 
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': 'Error: session manager or profiles store unavailable for {tool}',

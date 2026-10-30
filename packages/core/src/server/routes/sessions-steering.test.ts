@@ -318,7 +318,7 @@ describe('POST /api/v2/sessions/:id/abort — снятие очереди инъ
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('«Стоп» снимает неприменённые инъекции и публикует steer.dropped (reason aborted)', async () => {
+  it('«Стоп» возвращает неприменённые инъекции в очередь (без автозапуска, без steer.dropped)', async () => {
     const { app, sessionManager, eventBus } = createTestApp(tmpDir, { running: true });
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
     await sessionManager.enqueueSteerMessage(session.id, makeSteerMessage('вмешательство 1'));
@@ -333,16 +333,16 @@ describe('POST /api/v2/sessions/:id/abort — снятие очереди инъ
     expect(res.status).toBe(200);
     expect(((await res.json()) as { status: string }).status).toBe('aborted');
 
-    // Очередь снята: в следующий ход сообщения не «переедут».
+    // Очередь инъекций снята, но сообщения не потеряны — вернулись в
+    // `pendingMessages` (FIFO) и ждут решения пользователя.
     const fresh = (await sessionManager.getSession(session.id))!;
     expect(fresh.steerInbox ?? []).toHaveLength(0);
+    expect(fresh.pendingMessages.map((m) => m.content)).toEqual([
+      'вмешательство 1', 'вмешательство 2',
+    ]);
 
-    const dropped = events.find((e) => e.type === 'steer.dropped');
-    expect(dropped).toBeDefined();
-    expect(dropped!.data.reason).toBe('aborted');
-    expect(dropped!.data.dropped_count).toBe(2);
-    expect(typeof dropped!.data.error).toBe('string');
-    expect((dropped!.data.i18n as { key: string }).key).toBe('steer.dropped_aborted');
+    // Ни одно сообщение не потеряно — события дропа нет.
+    expect(events.some((e) => e.type === 'steer.dropped')).toBe(false);
   });
 
   it('пустая очередь — ответ 200 без события steer.dropped', async () => {

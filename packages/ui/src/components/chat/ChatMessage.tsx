@@ -416,7 +416,7 @@ function ChatMessageInner({
           if (item.type === 'intermediate_text') {
             return (
               <div key={`it${i}`} className="my-2 text-sm">
-                <SecretMarkdown content={item.data.text} secrets={secrets} sessionId={sessionId} />
+                <SecretMarkdown content={item.data.text} secrets={secrets} sessionId={sessionId} streaming={isLive} />
               </div>
             )
           }
@@ -825,6 +825,7 @@ function ChatMessageInner({
               content={resolveI18nText(i18nMeta, displayContent)}
               secrets={secrets}
               sessionId={sessionId}
+              streaming={isLive}
             />
           )
         )}

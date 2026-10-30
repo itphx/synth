@@ -36,7 +36,9 @@ import { autoTitleSession } from '../../../sessions/auto-title.js';
 import { isUserDialogueMessage } from '../../../sessions/user-messages.js';
 import { warning } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
-import { dropSteerInjections, isBackgroundNoticeMessage } from '../../steering/apply.js';
+import { dropSteerInjections } from '../../steering/apply.js';
+import type { SteerRequeueResult } from '../../steering/apply.js';
+import { requeueMessages } from '../../../queue/processor.js';
 import type { StreamTiming } from '../stream-stats.js';
 // ADR-118 §4: единая точка публикации `step.*`/`turn.*` (замена `stream.done`).
 import {
@@ -198,17 +200,19 @@ export interface ProcessFinalizeDeps {
   ) => BaseProvider | null;
   unregister: (streamId: string) => void;
   /**
-   * ADR-111/ADR-113 × ADR-104: вернуть в очередь уведомления фоновых прогонов,
-   * оставшиеся в steer-очереди к концу хода (потерять результат нельзя).
-   * `opts.autostart` — поднять ли ход: обычное завершение (`turn_ended`) — да,
-   * «Стоп» (`aborted`) — нет.
-   * Не задан — остаток снимается как прежде (`steer.dropped`).
+   * ADR-104 × ADR-111/ADR-113: вернуть в очередь **все** сообщения, оставшиеся
+   * в steer-очереди к концу хода (пользовательский ввод и уведомления фоновых
+   * прогонов — терять нельзя). `opts.autostart` — поднять ли ход: обычное
+   * завершение (`turn_ended`) — да, «Стоп» (`aborted`) — нет (решение
+   * пользователя, сообщение ждёт в очереди).
+   * Не задан — используется локальный возврат в `pendingMessages` без
+   * автозапуска (сообщение всё равно не теряется).
    */
-  requeueBackgroundNotices?: (
+  requeueSteerMessages?: (
     sessionId: string,
     messages: Message[],
     opts: { autostart: boolean },
-  ) => Promise<void>;
+  ) => Promise<SteerRequeueResult | void>;
 }
 
 /**
@@ -312,27 +316,33 @@ export async function runProcessFinalize(
   // инъекции из очереди. Границы шага больше не будет, поэтому сообщение,
   // пришедшее во время последней генерации/финализации, иначе применилось бы
   // в начале следующего хода и выглядело «внезапным отдельным сообщением».
-  // Причина `aborted` — ход остановлен «Стопом» (остаток после снятия в роуте),
-  // `turn_ended` — обычное завершение. Best-effort: сбой очереди не роняет ход.
+  // НО: ничего не теряем (решение 2026-10-30) — остаток возвращается в
+  // `pendingMessages`; при обычном завершении ход поднимается заново
+  // (`autostart`), при «Стопе» сообщение ждёт пользователя. Причина `aborted` —
+  // ход остановлен «Стопом» (остаток после снятия в роуте), `turn_ended` —
+  // обычное завершение. Best-effort: сбой очереди не роняет ход.
   try {
+    const steerRequeue = deps.requeueSteerMessages
+      ? (messages: Message[]): Promise<SteerRequeueResult | void> =>
+        deps.requeueSteerMessages!(session.id, messages, { autostart: !cancelledBeforeFinal })
+      // Фоллбек без проводки: сообщение всё равно возвращается в обычную
+      // очередь (терять ввод нельзя), но ход не поднимаем — процессор очереди
+      // вызывающему здесь недоступен.
+      : (messages: Message[]): Promise<SteerRequeueResult> =>
+        requeueMessages({
+          sessionManager: deps.sessionManager,
+          eventBus: deps.eventBus,
+          sessionId: session.id,
+          messages,
+        });
+
     await dropSteerInjections({
       sessionManager: deps.sessionManager,
       sessionId: session.id,
       reason: cancelledBeforeFinal ? 'aborted' : 'turn_ended',
       streamId,
       publishDropped: (event) => publishChunk('steer.dropped', event),
-      // ADR-111/ADR-113: уведомления фоновых прогонов не дропаем — они
-      // возвращаются в обычную очередь (ход закончился/остановлен, границы
-      // шага уже не будет). Результат фоновой работы терять нельзя.
-      ...(deps.requeueBackgroundNotices
-        ? {
-          isRequeuable: isBackgroundNoticeMessage,
-          requeue: (messages: Message[]) =>
-            deps.requeueBackgroundNotices!(session.id, messages, {
-              autostart: !cancelledBeforeFinal,
-            }),
-        }
-        : {}),
+      requeue: steerRequeue,
     });
   } catch (err) {
     warning(

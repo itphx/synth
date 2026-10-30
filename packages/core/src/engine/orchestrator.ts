@@ -107,6 +107,7 @@ import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, aggregateSubagentStats } from './orchestrator/usage.js';
 import { publishFsChange } from './orchestrator/fs-change.js';
 import { applySteerInjections } from './steering/apply.js';
+import type { SteerRequeueResult } from './steering/apply.js';
 import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus, type AssistantMessageStep } from './orchestrator/persistence.js';
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { StreamTiming } from './orchestrator/stream-stats.js';
@@ -555,15 +556,17 @@ export interface OrchestratorOptions {
    */
   backgroundService?: BackgroundRunService;
   /**
-   * ADR-111/ADR-113 × ADR-104: вернуть в очередь уведомления фоновых прогонов,
-   * оставшиеся в steer-очереди к концу хода (границы шага уже не будет).
-   * Не задан — остаток снимается как прежде (`steer.dropped`).
+   * ADR-104 × ADR-111/ADR-113: вернуть в очередь **все** сообщения, оставшиеся
+   * в steer-очереди к концу хода (ни пользовательский ввод, ни уведомления
+   * фоновых прогонов теряться не должны). `opts.autostart` — поднять ли ход:
+   * обычное завершение — да, «Стоп» — нет.
+   * Не задан — возврат в `pendingMessages` без автозапуска.
    */
-  requeueBackgroundNotices?: (
+  requeueSteerMessages?: (
     sessionId: string,
     messages: Message[],
     opts: { autostart: boolean },
-  ) => Promise<void>;
+  ) => Promise<SteerRequeueResult | void>;
   /**
    * Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом
    * (`background.enabled`). `false` — тул `task` с `background: true`
@@ -809,11 +812,12 @@ export class ChatOrchestrator {
    */
   private readonly _backgroundService: BackgroundRunService | null;
   /**
-   * ADR-111/ADR-113 × ADR-104: возврат остатка steer-очереди в обычную очередь
-   * (уведомления фоновых прогонов не теряются). `null` — не задан.
+   * ADR-104 × ADR-111/ADR-113: возврат остатка steer-очереди в обычную очередь
+   * (ни ввод пользователя, ни уведомления фоновых прогонов не теряются).
+   * `null` — не задан (локальный возврат без автозапуска).
    */
-  private readonly _requeueBackgroundNotices:
-    ((sessionId: string, messages: Message[], opts: { autostart: boolean }) => Promise<void>) | null;
+  private readonly _requeueSteerMessages:
+    ((sessionId: string, messages: Message[], opts: { autostart: boolean }) => Promise<SteerRequeueResult | void>) | null;
   /**
    * ADR-111 §detach: реестр активных (блокирующих) прогонов сессии —
    * `POST /api/v2/sessions/:id/background` переводит их в фон.
@@ -1170,7 +1174,7 @@ export class ChatOrchestrator {
     this._questionService = options.questionService ?? null;
     // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + тумблер инстанса.
     this._backgroundService = options.backgroundService ?? null;
-    this._requeueBackgroundNotices = options.requeueBackgroundNotices ?? null;
+    this._requeueSteerMessages = options.requeueSteerMessages ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
     this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
@@ -2857,8 +2861,8 @@ export class ChatOrchestrator {
       unregister: (streamId) => {
         this._cancellationTokens.delete(streamId);
       },
-      ...(this._requeueBackgroundNotices
-        ? { requeueBackgroundNotices: this._requeueBackgroundNotices }
+      ...(this._requeueSteerMessages
+        ? { requeueSteerMessages: this._requeueSteerMessages }
         : {}),
     };
   }

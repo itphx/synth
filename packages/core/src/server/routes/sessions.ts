@@ -24,7 +24,7 @@ import type { LocalOwnerResolver } from '../local-owner.js';
 import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { sessionAxes } from '../../analytics/recorder.js';
 import { MEMORY_NAMESPACE } from '../../engine/plugins/memory-namespace.js';
-import { dropSteerInjections, isBackgroundNoticeMessage } from '../../engine/steering/apply.js';
+import { dropSteerInjections } from '../../engine/steering/apply.js';
 import { requeueMessages } from '../../queue/processor.js';
 import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
 import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
@@ -1662,11 +1662,12 @@ export function createSessionRoutes(
         reason: 'aborted',
         streamId: session.currentStream?.streamId,
         publishDropped: (event) => deps.eventBus.publish(id, 'steer.dropped', event),
-        // ADR-111/ADR-113: уведомления фоновых прогонов не дропаем, а
-        // возвращаем в очередь. Автостарта нет — ход остановил пользователь.
-        isRequeuable: isBackgroundNoticeMessage,
+        // ADR-104 × ADR-111/ADR-113: ни ввод пользователя, ни уведомления
+        // фоновых прогонов не теряем — весь остаток возвращается в очередь.
+        // Автостарта нет: ход остановил пользователь, сообщение ждёт его
+        // решения (видно в панели очереди).
         requeue: async (messages) => {
-          await requeueMessages({ sessionManager, eventBus: deps.eventBus, sessionId: id, messages });
+          return requeueMessages({ sessionManager, eventBus: deps.eventBus, sessionId: id, messages });
         },
       });
     } catch (err) {

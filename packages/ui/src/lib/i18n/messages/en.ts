@@ -1232,6 +1232,10 @@ export const dict = {
   'chat.steer.marker': 'Intervened in turn',
   'chat.steer.interruptMarker': 'Turn interrupted',
 
+  // Markdown в ответах: заголовок блока кода и кнопка копирования.
+  'markdown.code.copy': 'Copy',
+  'markdown.code.copied': 'Copied',
+
   'chat.actions.copy': 'Copy',
   'chat.actions.toggleOff': 'Disable',
   'chat.actions.toggleOn': 'Enable',

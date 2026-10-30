@@ -92,6 +92,8 @@ interface SecretMarkdownProps {
   secrets?: Record<string, string>
   sessionId?: string
   className?: string
+  /** Идёт стриминг ответа — markdown парсится отложенно (см. `MarkdownContent`). */
+  streaming?: boolean
 }
 
 /** Базовые классы inline-маркера секрета в markdown (наследует шрифт от .markdown-content). */
@@ -131,7 +133,7 @@ export function replaceSecretsInHtml(
  * и внутри fenced/inline code (span становится настоящим элементом).
  * Клик по маркеру раскрывает значение через прямую DOM-манипуляцию (без React-состояния).
  */
-export function SecretMarkdown({ content, secrets, sessionId, className = '' }: SecretMarkdownProps) {
+export function SecretMarkdown({ content, secrets, sessionId, className = '', streaming = false }: SecretMarkdownProps) {
   const { t } = useI18n()
   // SECRET_PLACEHOLDER_REGEX — global regex c lastIndex: сбросить и до test, и до replace.
   SECRET_PLACEHOLDER_REGEX.lastIndex = 0
@@ -140,7 +142,7 @@ export function SecretMarkdown({ content, secrets, sessionId, className = '' }: 
 
   // Нет плейсхолдеров — обычный markdown без обвязки (минимальные изменения).
   if (!hasPlaceholder) {
-    return <MarkdownContent content={content} className={className} />
+    return <MarkdownContent content={content} className={className} streaming={streaming} />
   }
 
   const hiddenText = t('gateway.secret.hidden')
@@ -177,7 +179,7 @@ export function SecretMarkdown({ content, secrets, sessionId, className = '' }: 
 
   return (
     <div onClick={handleSecretClick}>
-      <MarkdownContent content={content} transformHtml={transformHtml} className={className} />
+      <MarkdownContent content={content} transformHtml={transformHtml} className={className} streaming={streaming} />
     </div>
   )
 }

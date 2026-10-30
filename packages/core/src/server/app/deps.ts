@@ -549,17 +549,18 @@ export async function createStandaloneDeps(
   };
 
   /**
-   * ADR-111/ADR-113 × ADR-104: остаток steer-очереди в конце хода не теряется.
-   * Уведомления фоновых прогонов возвращаются в `pendingMessages`; `autostart`
-   * поднимает ход (нормальное завершение), при «Стопе» — нет (ждём пользователя).
+   * ADR-104 × ADR-111/ADR-113: остаток steer-очереди в конце хода не теряется —
+   * **все** сообщения (пользовательский ввод и уведомления фоновых прогонов)
+   * возвращаются в `pendingMessages`; `autostart` поднимает ход (нормальное
+   * завершение), при «Стопе» — нет (ждём пользователя).
    * `processMessage` объявлен ниже — вызов происходит уже в рантайме.
    */
-  const requeueBackgroundNotices = async (
+  const requeueSteerMessages = async (
     sessionId: string,
     messages: Message[],
     autostart: boolean,
-  ): Promise<void> => {
-    await requeueMessages({
+  ): Promise<{ requeued: number; dropped: number }> => {
+    return requeueMessages({
       sessionManager,
       eventBus,
       sessionId,
@@ -1190,10 +1191,11 @@ export async function createStandaloneDeps(
     // `task` с `background: true` регистрирует фонового саб-агента и
     // возвращает управление сразу (PROP-096).
     ...(backgroundService ? { backgroundService } : {}),
-    // ADR-111/ADR-113 × ADR-104: ход закончился, а в steer-очереди остались
-    // уведомления фоновых прогонов — возвращаем их в очередь и поднимаем ход.
-    requeueBackgroundNotices: (sessionId, messages, opts) =>
-      requeueBackgroundNotices(sessionId, messages, opts.autostart),
+    // ADR-104 × ADR-111/ADR-113: ход закончился, а в steer-очереди остались
+    // сообщения (ввод пользователя, уведомления фоновых прогонов) — возвращаем
+    // их в очередь и поднимаем ход (при «Стопе» — без автозапуска).
+    requeueSteerMessages: (sessionId, messages, opts) =>
+      requeueSteerMessages(sessionId, messages, opts.autostart),
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),

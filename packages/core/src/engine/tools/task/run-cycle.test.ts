@@ -1138,7 +1138,7 @@ describe('run-cycle — steering дочерней сессии (ADR-104)', () =>
     expect(applied).toHaveLength(MAX_STEER_INJECTIONS_PER_TURN);
   });
 
-  it('остаток очереди в конце прогона снимается: steer.dropped(turn_ended), следующего хода нет', async () => {
+  it('остаток очереди в конце прогона возвращается в pendingMessages (без автозапуска)', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
     const bus = new EventBus();
@@ -1163,15 +1163,13 @@ describe('run-cycle — steering дочерней сессии (ADR-104)', () =>
     // Следующего хода (второго LLM-вызова) нет.
     expect(chatAsync).toHaveBeenCalledTimes(1);
 
-    const dropped = events.find((e) => e.type === 'steer.dropped');
-    expect(dropped).toBeDefined();
-    expect(dropped!.data.reason).toBe('turn_ended');
-    expect(dropped!.data.dropped_count).toBe(1);
+    // Ни потери, ни `steer.dropped`: сообщение вернулось в очередь ребёнка.
+    expect(events.some((e) => e.type === 'steer.dropped')).toBe(false);
 
-    // Очередь пуста, снятое сообщение в историю не попало.
     const saved = (await sessionManager.getSession(child.id))!;
     expect(saved.steerInbox ?? []).toHaveLength(0);
     expect(saved.messages.some((m) => m.content === 'позднее сообщение')).toBe(false);
+    expect(saved.pendingMessages.map((m) => m.content)).toEqual(['позднее сообщение']);
   });
 
   it('остаток background_run_result в конце прогона ребёнка возвращается в pendingMessages (без автостарта)', async () => {

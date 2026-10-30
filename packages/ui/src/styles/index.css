@@ -653,3 +653,187 @@ html.device-tablet .notifications-popup {
   border-radius: 9999px;
   background: var(--primary);
 }
+
+/* =============================================================
+   Markdown в ответах (чат): блок кода, таблица, инлайн-код.
+
+   Разметку дают локальные renderer'ы marked в
+   `components/chat/MarkdownContent.tsx` (`.md-code`, `.md-table-wrap`,
+   `.md-inline-code`, `data-numbered`); здесь только оформление и цвета
+   темы. Номера строк — CSS-счётчиком (`counter-reset`/`counter-increment`),
+   поэтому DOM не удваивается: одна строка — один `<span class="md-code-line">`.
+   ============================================================= */
+
+.markdown-content .md-code {
+  max-width: 100%;
+  margin: 0.6rem 0;
+  overflow: hidden;
+  border: 1px solid var(--border, currentColor);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--surface-subtle, var(--card));
+}
+
+.markdown-content .md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0.4rem 0.2rem 0.7rem;
+  border-bottom: 1px solid var(--border, currentColor);
+  color: var(--muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
+}
+
+.markdown-content .md-code-lang {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.markdown-content .md-code-copy {
+  flex: 0 0 auto;
+  padding: 0.125rem 0.45rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.markdown-content .md-code-copy:hover {
+  background: var(--interactive-hover, var(--surface-raised, var(--card)));
+  color: var(--foreground);
+}
+
+.markdown-content .md-code-copy[data-copied='true'] {
+  color: var(--status-success, var(--primary));
+}
+
+.markdown-content .md-code-pre {
+  max-width: 100%;
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  overflow-x: auto;
+  border: 0;
+  background: transparent;
+  font-size: var(--text-code, 0.8125rem);
+  line-height: 1.5;
+  /* Переносы строк держат span'ы (`white-space: pre` у `.md-code-line`),
+     а текстовые узлы "\n" между ними не создают пустых строк. */
+  white-space: normal;
+}
+
+.markdown-content .md-code-pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  counter-reset: md-code-line;
+}
+
+.markdown-content .md-code-line {
+  position: relative;
+  display: block;
+  min-height: 1.5em;
+  padding-left: 3.25em;
+  white-space: pre;
+}
+
+.markdown-content .md-code-line::before {
+  position: absolute;
+  left: 0;
+  width: 2.5em;
+  color: var(--muted-foreground);
+  text-align: right;
+  opacity: 0.7;
+  content: counter(md-code-line);
+  counter-increment: md-code-line;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Длинный блок (> MAX_NUMBERED_CODE_LINES): номера не нужны. */
+.markdown-content .md-code[data-numbered='false'] .md-code-line {
+  padding-left: 0;
+}
+
+.markdown-content .md-code[data-numbered='false'] .md-code-line::before {
+  content: none;
+  counter-increment: none;
+}
+
+.markdown-content .md-inline-code {
+  padding: 0.0625rem 0.3rem;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: var(--markdown-inline-code-bg, var(--surface-subtle));
+  color: var(--markdown-inline-code, var(--foreground));
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  white-space: break-spaces;
+}
+
+.markdown-content .md-table-wrap {
+  max-width: 100%;
+  margin: var(--markdown-table-spacing, 0.9rem) 0;
+  overflow-x: auto;
+  border: 1px solid var(--border, currentColor);
+  border-radius: var(--radius-md, 0.5rem);
+}
+
+.markdown-content .md-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.45;
+}
+
+.markdown-content .md-table-wrap th,
+.markdown-content .md-table-wrap td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border, currentColor);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  /* Выравнивание колонок из GFM (`align`) сохраняем — переопределяем только left. */
+}
+
+.markdown-content .md-table-wrap th[align='center'],
+.markdown-content .md-table-wrap td[align='center'] {
+  text-align: center;
+}
+
+.markdown-content .md-table-wrap th[align='right'],
+.markdown-content .md-table-wrap td[align='right'] {
+  text-align: right;
+}
+
+.markdown-content .md-table-wrap th {
+  background: var(--surface-raised, var(--card));
+  color: var(--foreground);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.markdown-content .md-table-wrap tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* details/summary — свёрнутые блоки в ответе (renderer пропускает raw HTML). */
+.markdown-content details {
+  margin: 0.5rem 0;
+}
+
+.markdown-content summary {
+  color: var(--markdown-link, var(--primary));
+  cursor: pointer;
+}

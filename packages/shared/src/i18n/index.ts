@@ -361,6 +361,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'steer.interrupted',
   'steer.dropped_aborted',
   'steer.dropped_turn_ended',
+  'steer.requeued_aborted',
+  'steer.requeued_turn_ended',
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable',
   'profile.session_read_error',
@@ -833,6 +835,8 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'steer.interrupted': [],
   'steer.dropped_aborted': ["count"],
   'steer.dropped_turn_ended': ["count"],
+  'steer.requeued_aborted': ["count"],
+  'steer.requeued_turn_ended': ["count"],
   // --- Профиль пользователя и онбординг ---
   'profile.deps_unavailable': ["tool"],
   'profile.session_read_error': [],

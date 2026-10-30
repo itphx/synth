@@ -288,11 +288,11 @@ describe('ChatOrchestrator: инъекции в активный ход (ADR-104
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  it('инъекция во время последней генерации снимается в конце хода (steer.dropped, turn_ended)', async () => {
+  it('инъекция во время последней генерации не теряется: возвращается в очередь (turn_ended)', async () => {
     const h = await makeHarness();
     // Отправка «в ход» пришла, когда шла ПОСЛЕДНЯЯ генерация: границы шага уже
-    // не будет — сообщение не должно переехать в следующий ход (ADR-104,
-    // решение 2026-10-28).
+    // не будет — сообщение не применяется в этом ходе, но и не теряется:
+    // возвращается в `pendingMessages` (ADR-104, решение 2026-10-30).
     MockSteerProvider.onCall = async (n) => {
       if (n === 1) {
         await enqueueSteerMessage(
@@ -304,17 +304,15 @@ describe('ChatOrchestrator: инъекции в активный ход (ADR-104
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
     await run(h, (event, data) => chunks.push({ event, data }));
 
-    const dropped = chunks.find((c) => c.event === 'steer.dropped');
-    expect(dropped).toBeDefined();
-    expect(dropped!.data.reason).toBe('turn_ended');
-    expect(dropped!.data.dropped_count).toBe(1);
-    expect(typeof dropped!.data.error).toBe('string');
-    expect((dropped!.data.i18n as { key: string }).key).toBe('steer.dropped_turn_ended');
+    // Снятия с потерей больше нет.
+    expect(chunks.some((c) => c.event === 'steer.dropped')).toBe(false);
 
-    // Сообщение не применено и не попало в историю; очередь пуста.
     const session = (await h.sessionManager.getSession(h.sessionId))!;
+    // В историю этот ход сообщение не взял.
     expect(session.messages.some((m) => m.content === 'позднее вмешательство')).toBe(false);
+    // Очередь инъекций пуста, сообщение ждёт в обычной очереди.
     expect(session.steerInbox ?? []).toHaveLength(0);
+    expect(session.pendingMessages.map((m) => m.content)).toContain('позднее вмешательство');
     // `message.delivered` не публиковался — инъекция не применялась.
     expect(chunks.some((c) => c.event === 'message.delivered')).toBe(false);
 

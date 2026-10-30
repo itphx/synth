@@ -2,17 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { replaceSecretsInHtml, SECRET_PLACEHOLDER_REGEX } from './SecretPlaceholder'
+import { MARKDOWN_ALLOWED_ATTR, MARKDOWN_ALLOWED_TAGS } from './MarkdownContent'
 
 // Те же ALLOWED_TAGS/ALLOWED_ATTR, что и в MarkdownContent — проверяем полный pipeline.
-const ALLOWED_TAGS = [
-  'p', 'br', 'strong', 'em', 'u', 's', 'del', 'code', 'pre',
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'ul', 'ol', 'li', 'blockquote',
-  'a', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
-  'span', 'div', 'hr',
-  'input', 'label',
-]
-const ALLOWED_ATTR = ['href', 'src', 'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled', 'data-ph']
+const ALLOWED_TAGS = MARKDOWN_ALLOWED_TAGS
+const ALLOWED_ATTR = MARKDOWN_ALLOWED_ATTR
 
 const HIDDEN_TEXT = 'Значение скрыто'
 

@@ -909,11 +909,12 @@ describe('runProcessFinalize', () => {
   });
 
   /**
-   * ADR-111/ADR-113 × ADR-104: остаток steer-очереди в конце хода.
-   * Уведомление фонового прогона не дропается — отдаётся в
-   * `requeueBackgroundNotices` (и при обычном завершении, и при «Стопе»).
+   * ADR-104 × ADR-111/ADR-113: остаток steer-очереди в конце хода.
+   * **Любое** сообщение (ввод пользователя и уведомление фонового прогона)
+   * не дропается — отдаётся в `requeueSteerMessages` (и при обычном
+   * завершении, и при «Стопе»).
    */
-  describe('возврат уведомлений фоновых прогонов в очередь', () => {
+  describe('возврат остатка steer-очереди в очередь', () => {
     function backgroundNotice(content = '<process>ok</process>'): Message {
       return {
         id: generateId(),
@@ -931,13 +932,30 @@ describe('runProcessFinalize', () => {
       };
     }
 
+    /** Обычная steer-реплика пользователя (без служебных меток). */
+    function userSteer(content = 'написал в разрыв'): Message {
+      return {
+        id: generateId(),
+        role: MessageRole.USER,
+        seq: 0,
+        origin: 'local',
+        parts: [makeTextPart(content)],
+        content,
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { steer: true },
+      };
+    }
+
     it('turn_ended: уведомление возвращается в очередь, steer.dropped не публикуется', async () => {
       const sessionId = await makeSession();
       await sessionManager.enqueueSteerMessage(sessionId, backgroundNotice());
       const requeue = vi.fn<
         (sessionId: string, messages: Message[], opts: { autostart: boolean }) => Promise<void>
       >(async () => {});
-      const deps = makeDeps({ requeueBackgroundNotices: requeue });
+      const deps = makeDeps({ requeueSteerMessages: requeue });
 
       await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
 
@@ -949,13 +967,30 @@ describe('runProcessFinalize', () => {
       expect((await sessionManager.getSession(sessionId))!.steerInbox ?? []).toHaveLength(0);
     });
 
+    it('turn_ended: пользовательское steer-сообщение тоже возвращается (не теряется)', async () => {
+      const sessionId = await makeSession();
+      await sessionManager.enqueueSteerMessage(sessionId, userSteer());
+      const requeue = vi.fn<
+        (sessionId: string, messages: Message[], opts: { autostart: boolean }) => Promise<void>
+      >(async () => {});
+      const deps = makeDeps({ requeueSteerMessages: requeue });
+
+      await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
+
+      expect(requeue).toHaveBeenCalledTimes(1);
+      expect(requeue.mock.calls[0]![1].map((m) => m.content)).toEqual(['написал в разрыв']);
+      // Ход поднимается заново — сообщение обработается следующим ходом.
+      expect(requeue.mock.calls[0]![2]).toEqual({ autostart: true });
+      expect(published.some((p) => p.event === 'steer.dropped')).toBe(false);
+    });
+
     it('aborted: уведомление тоже возвращается в очередь', async () => {
       const sessionId = await makeSession();
       await sessionManager.enqueueSteerMessage(sessionId, backgroundNotice());
       const requeue = vi.fn<
         (sessionId: string, messages: Message[], opts: { autostart: boolean }) => Promise<void>
       >(async () => {});
-      const deps = makeDeps({ requeueBackgroundNotices: requeue });
+      const deps = makeDeps({ requeueSteerMessages: requeue });
 
       await runProcessFinalize(
         makeArgs(sessionId),
@@ -969,19 +1004,37 @@ describe('runProcessFinalize', () => {
       expect(requeue.mock.calls[0]![2]).toEqual({ autostart: false });
     });
 
-    it('без зависимости поведение прежнее: сообщение снимается через steer.dropped', async () => {
+    it('aborted: пользовательское сообщение возвращается без автозапуска', async () => {
+      const sessionId = await makeSession();
+      await sessionManager.enqueueSteerMessage(sessionId, userSteer('пользовательское'));
+      const requeue = vi.fn<
+        (sessionId: string, messages: Message[], opts: { autostart: boolean }) => Promise<void>
+      >(async () => {});
+      const deps = makeDeps({ requeueSteerMessages: requeue });
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ cancelledBeforeFinal: true, finalContent: '' }),
+        deps,
+      );
+
+      expect(requeue).toHaveBeenCalledTimes(1);
+      expect(requeue.mock.calls[0]![1].map((m) => m.content)).toEqual(['пользовательское']);
+      expect(requeue.mock.calls[0]![2]).toEqual({ autostart: false });
+      expect(published.some((p) => p.event === 'steer.dropped')).toBe(false);
+    });
+
+    it('без зависимости сообщение всё равно возвращается в pendingMessages (без автозапуска)', async () => {
       const sessionId = await makeSession();
       await sessionManager.enqueueSteerMessage(sessionId, backgroundNotice());
 
       await runProcessFinalize(makeArgs(sessionId), makeState(), makeDeps());
 
-      const dropped = published.find((p) => p.event === 'steer.dropped');
-      expect(dropped).toBeDefined();
-      expect(dropped!.data.reason).toBe('turn_ended');
-      expect((await sessionManager.getSession(sessionId))!.steerInbox ?? []).toHaveLength(0);
-      expect(
-        (await sessionManager.getSession(sessionId))!.pendingMessages,
-      ).toHaveLength(0);
+      // Ни потери, ни `steer.dropped`: локальный фоллбек кладёт в очередь.
+      expect(published.some((p) => p.event === 'steer.dropped')).toBe(false);
+      const stored = (await sessionManager.getSession(sessionId))!;
+      expect(stored.steerInbox ?? []).toHaveLength(0);
+      expect(stored.pendingMessages.map((m) => m.content)).toEqual(['<process>ok</process>']);
     });
   });
 

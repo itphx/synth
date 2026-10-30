@@ -134,12 +134,12 @@ describe('applySteerInjections — parts в message.injected (ADR-115)', () => {
 });
 
 /**
- * ADR-111/ADR-113 × ADR-104: остаток steer-очереди в конце хода.
- * Уведомления фоновых прогонов (`metadata.type='background_run_result'`)
- * НЕ дропаются — возвращаются в обычную очередь через `requeue`; остальные
- * снимаются событием `steer.dropped` (count — только по остатку).
+ * ADR-104 × ADR-111/ADR-113: остаток steer-очереди в конце хода **не теряется**.
+ * По умолчанию в обычную очередь через `requeue` возвращаются **все** сообщения
+ * (в т.ч. пользовательский ввод, отправленный «в разрыв»); `steer.dropped`
+ * публикуется только по фактически потерянным (переполнение очереди).
  */
-describe('dropSteerInjections — возврат уведомлений фоновых прогонов', () => {
+describe('dropSteerInjections — возврат остатка steer-очереди в pendingMessages', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let sessionId: string;
@@ -163,7 +163,56 @@ describe('dropSteerInjections — возврат уведомлений фоно
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('background_run_result уходит в requeue и не попадает в steer.dropped', async () => {
+  it('пользовательское сообщение на turn_ended возвращается в очередь, steer.dropped нет', async () => {
+    await sessionManager.enqueueSteerMessage(sessionId, makeSteerMessage('в разрыв'));
+    const requeued: Message[][] = [];
+    const dropped: SteerDroppedEvent[] = [];
+
+    const returned = await dropSteerInjections({
+      sessionManager,
+      sessionId,
+      reason: 'turn_ended',
+      publishDropped: (e) => dropped.push(e),
+      requeue: async (messages) => {
+        requeued.push(messages);
+        return { requeued: messages.length, dropped: 0 };
+      },
+    });
+
+    // Ничего не потеряно: сообщение вернулось, события дропа нет.
+    expect(returned).toHaveLength(0);
+    expect(dropped).toHaveLength(0);
+    expect(requeued).toHaveLength(1);
+    expect(requeued[0]!.map((m) => m.content)).toEqual(['в разрыв']);
+    // Очередь инъекций снята (в следующий ход «сама» не переедет).
+    expect((await sessionManager.getSession(sessionId))!.steerInbox ?? []).toHaveLength(0);
+  });
+
+  it('aborted: весь остаток тоже возвращается (автозапуск решает вызывающий)', async () => {
+    await sessionManager.enqueueSteerMessage(sessionId, makeSteerMessage('вмешательство 1'));
+    await sessionManager.enqueueSteerMessage(sessionId, notice('<process>ok</process>'));
+    const requeued: Message[][] = [];
+    const dropped: SteerDroppedEvent[] = [];
+
+    await dropSteerInjections({
+      sessionManager,
+      sessionId,
+      reason: 'aborted',
+      streamId: 'st1',
+      publishDropped: (e) => dropped.push(e),
+      requeue: async (messages) => {
+        requeued.push(messages);
+        return { requeued: messages.length, dropped: 0 };
+      },
+    });
+
+    expect(dropped).toHaveLength(0);
+    expect(requeued).toHaveLength(1);
+    // Порядок (FIFO) сохранён.
+    expect(requeued[0]!.map((m) => m.content)).toEqual(['вмешательство 1', '<process>ok</process>']);
+  });
+
+  it('background_run_result тоже уходит в requeue и не попадает в steer.dropped', async () => {
     await sessionManager.enqueueSteerMessage(sessionId, notice('<process>ok</process>'));
     const requeued: Message[][] = [];
     const dropped: SteerDroppedEvent[] = [];
@@ -173,23 +222,43 @@ describe('dropSteerInjections — возврат уведомлений фоно
       sessionId,
       reason: 'turn_ended',
       publishDropped: (e) => dropped.push(e),
-      isRequeuable: isBackgroundNoticeMessage,
-      requeue: async (messages) => { requeued.push(messages); },
+      requeue: async (messages) => {
+        requeued.push(messages);
+        return { requeued: messages.length, dropped: 0 };
+      },
     });
 
-    // JSDoc-контракт: возвращаются только реально снятые (не requeued) сообщения.
+    // JSDoc-контракт: возвращаются только реально потерянные сообщения.
     expect(returned).toHaveLength(0);
-    // Ровно один вызов, в нём ровно уведомление.
     expect(requeued).toHaveLength(1);
     expect(requeued[0]).toHaveLength(1);
     expect(requeued[0]![0]!.metadata?.type).toBe('background_run_result');
     // Дропа нет: терять результат фоновой работы нельзя.
     expect(dropped).toHaveLength(0);
-    // Очередь инъекций пуста (снята целиком).
     expect((await sessionManager.getSession(sessionId))!.steerInbox ?? []).toHaveLength(0);
   });
 
-  it('остальные сообщения дропаются, dropped_count — только по остатку', async () => {
+  it('часть вернуть не удалось (переполнение очереди) — dropped_count по факту', async () => {
+    await sessionManager.enqueueSteerMessage(sessionId, makeSteerMessage('раз 1'));
+    await sessionManager.enqueueSteerMessage(sessionId, makeSteerMessage('раз 2'));
+    const dropped: SteerDroppedEvent[] = [];
+
+    const returned = await dropSteerInjections({
+      sessionManager,
+      sessionId,
+      reason: 'turn_ended',
+      publishDropped: (e) => dropped.push(e),
+      // Очередь приняла только одно сообщение.
+      requeue: async () => ({ requeued: 1, dropped: 1 }),
+    });
+
+    expect(returned).toHaveLength(1);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toMatchObject({ reason: 'turn_ended', dropped_count: 1 });
+    expect((dropped[0]!.i18n as { key: string }).key).toBe('steer.dropped_turn_ended');
+  });
+
+  it('явный предикат: не подходящие под requeue сообщения дропаются, счётчик — по остатку', async () => {
     await sessionManager.enqueueSteerMessage(sessionId, notice('<process>ok</process>'));
     await sessionManager.enqueueSteerMessage(sessionId, makeSteerMessage('пользовательское 1'));
     await sessionManager.enqueueSteerMessage(sessionId, makeSteerMessage('пользовательское 2'));
@@ -204,7 +273,10 @@ describe('dropSteerInjections — возврат уведомлений фоно
       streamId: 'st1',
       publishDropped: (e) => dropped.push(e),
       isRequeuable: isBackgroundNoticeMessage,
-      requeue: async (messages) => { requeued.push(messages); },
+      requeue: async (messages) => {
+        requeued.push(messages);
+        return { requeued: messages.length, dropped: 0 };
+      },
     });
 
     // Уведомление вернули один раз; дроп — ровно по двум остальным.
@@ -212,6 +284,33 @@ describe('dropSteerInjections — возврат уведомлений фоно
     expect(requeued[0]).toHaveLength(1);
     expect(dropped).toHaveLength(1);
     expect(dropped[0]).toMatchObject({ reason: 'aborted', dropped_count: 2, stream_id: 'st1' });
+  });
+
+  it('повторный вызов — no-op: сообщение не попадает в очередь дважды', async () => {
+    await sessionManager.enqueueSteerMessage(sessionId, makeSteerMessage('один раз'));
+    const requeue = vi.fn(async (messages: Message[]) => ({
+      requeued: messages.length,
+      dropped: 0,
+    }));
+
+    await dropSteerInjections({
+      sessionManager,
+      sessionId,
+      reason: 'turn_ended',
+      publishDropped: () => {},
+      requeue,
+    });
+    // «Стоп» и следом финализация хода: второй вызов видит пустую очередь.
+    const second = await dropSteerInjections({
+      sessionManager,
+      sessionId,
+      reason: 'aborted',
+      publishDropped: () => {},
+      requeue,
+    });
+
+    expect(second).toEqual([]);
+    expect(requeue).toHaveBeenCalledTimes(1);
   });
 
   it('пустая очередь: ни requeue, ни события', async () => {
