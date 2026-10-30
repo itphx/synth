@@ -14,7 +14,7 @@ import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import type { TransportMode } from './useUIStore'
-import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData } from './chatStore'
+import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus } from './chatStore'
 import { partText } from '@/lib/messageParts'
 import type { PromptAcceptedResponse } from '@itphx/synth-shared/types'
 import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared/types'
@@ -571,6 +571,28 @@ export function createDispatcher(): EventDispatcher {
       return message
     }
 
+    /**
+     * ADR-118 §1/§5: индикатор «идёт» может быть только у **последнего**
+     * (живого) сегмента хода. Перед новым шагом и в конце хода закрываем
+     * оставшиеся `streaming` сегменты: `step.finished` мог не дойти или не
+     * примениться (разрыв транспорта), и тогда точки «работы» оставались
+     * в середине склеенного блока хода.
+     */
+    const finalizeStreamingSegments = (
+      status: MessageStatus,
+      opts?: { keepMessageId?: string; skipTurnId?: string },
+    ): void => {
+      const messages = useChatStore.getState().messagesBySession[sid] ?? []
+      for (const m of messages) {
+        if (m.status !== 'streaming' || !m.id) continue
+        if (opts?.keepMessageId && m.id === opts.keepMessageId) continue
+        // Живой сегмент **другого** хода не трогаем: опоздавшее терминальное
+        // событие прошлого хода не должно погасить индикатор текущего.
+        if (opts?.skipTurnId && m.turn_id === opts.skipTurnId) continue
+        setMessageStatus(sid, m.id, status)
+      }
+    }
+
     switch (type) {
       // ADR-118 §4: `message.accepted` — **адресное** подтверждение приёма
       // (доходит только отправителю). Несёт `messageId`, `mode`, `position`.
@@ -660,7 +682,17 @@ export function createDispatcher(): EventDispatcher {
       case 'turn.finished': {
         const turnId = (payload.turnId as string) || ''
         if (!turnId) break
-        finishTurn(sid, turnId, (payload.status as 'completed' | 'cancelled' | 'error' | 'stopped') || 'completed')
+        const status = (payload.status as 'completed' | 'cancelled' | 'error' | 'stopped') || 'completed'
+        // Ход, который идёт прямо сейчас (до применения терминала): опоздавшее
+        // `turn.finished` прошлого хода не должно гасить его индикатор.
+        const activeTurnId = useChatStore.getState().turnBySession[sid]?.turnId
+        finishTurn(sid, turnId, status)
+        // Ход завершён — ни один сегмент не может остаться «живым»: закрываем
+        // все оставшиеся `streaming` (даже если `step.finished` потерялся).
+        finalizeStreamingSegments(
+          status === 'completed' ? 'completed' : status === 'error' ? 'error' : 'cancelled',
+          activeTurnId && activeTurnId !== turnId ? { skipTurnId: activeTurnId } : undefined,
+        )
         // Ход завершён — висящих запросов подтверждения по нему быть не может
         // (ask снят ответом/отменой/таймаутом): полосу убираем.
         usePermissionStore.getState().clearSession(sid)
@@ -677,6 +709,10 @@ export function createDispatcher(): EventDispatcher {
         if (turnId) {
           patchTurn(sid, { turnId, messageId, ...(stepIndex != null ? { stepIndex } : {}) })
         }
+        // Новый шаг закрывает предыдущие сегменты хода: живым остаётся только
+        // он (индикатор не может «застрять» в середине склеенного блока).
+        // Заодно закрываются сегменты прошлого хода, чей `step.finished` потерян.
+        finalizeStreamingSegments('completed', { keepMessageId: messageId })
         ensureLiveMessage(messageId, {
           ...(turnId ? { turn_id: turnId } : {}),
           ...(stepIndex != null ? { step_index: stepIndex } : {}),
@@ -936,6 +972,11 @@ export function createDispatcher(): EventDispatcher {
             sid,
             messageId,
             status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'error',
+          )
+          // Терминал хода: прочих «живых» сегментов остаться не должно.
+          finalizeStreamingSegments(
+            status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'error',
+            { keepMessageId: messageId },
           )
         }
         setStreamRetry(sid, null)
@@ -1705,6 +1746,10 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     // подтверждение приходит адресным событием `message.accepted`.
     const messageId = nextStreamId()
     const isQueueMode = !mode || mode === 'queue'
+    // Состояние хода читаем **до** любых вставок в ленту: от него зависит,
+    // показывать реплику сразу или только строкой очереди.
+    const activeTurn = isTurnActive(sessionId)
+    const queued = isQueueMode && activeTurn
 
     // Реальная ошибка (сеть/401/валидация) бросается — сообщение не показано.
     const accepted = await synthApi.enqueueMessage(sessionId, text, {
@@ -1716,8 +1761,25 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       attachments: attachmentIds,
     })
 
-    // Реплика показывается оптимистично сразу по `messageId` из ответа.
+    // Строка очереди: показывается сразу (своя реплика — не утечка чужих
+    // сообщений); `message.accepted` подтвердит её по тому же id.
     const chat = useChatStore.getState()
+    if (queued) {
+      // Ход идёт: реплика уходит **в очередь**, а не в ленту. Оптимистичная
+      // вставка в ленту давала дубль (лента + «в очереди») и разрывала текущий
+      // ответ (реплика вставала между сегментами хода, хотя агент ответит на
+      // неё только следующим ходом). В ленте она появится по `message.delivered`
+      // — обработчик догружает историю и дедупит по `id`/`ord`.
+      chat.upsertPendingMessage(sessionId, {
+        id: accepted.messageId,
+        content: text,
+        agentRole: agentRole ?? null,
+      })
+      return accepted
+    }
+
+    // Ход не идёт — реплика показывается оптимистично сразу по `messageId`
+    // из ответа; `message.delivered` затем «примирит» её (ord/роль/автор).
     const msgs = chat.messagesBySession[sessionId] || []
     const nextIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
     chat.upsertMessage(sessionId, {
@@ -1736,15 +1798,6 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       hidden: false,
       created_at: new Date().toISOString(),
     })
-    // Строка очереди: показывается сразу (своя реплика — не утечка чужих
-    // сообщений); `message.accepted` подтвердит её по тому же id.
-    if (isQueueMode && isTurnActive(sessionId)) {
-      useChatStore.getState().upsertPendingMessage(sessionId, {
-        id: accepted.messageId,
-        content: text,
-        agentRole: agentRole ?? null,
-      })
-    }
     return accepted
   },
 

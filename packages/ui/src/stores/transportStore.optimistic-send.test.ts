@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => {
   const api = {
     enqueueMessage: vi.fn(),
     getSession: vi.fn().mockResolvedValue({ id: 's1', messages: [] }),
+    getSessionMessages: vi.fn().mockResolvedValue({ session_id: 's1', messages: [] }),
     getInstanceCapabilities: vi.fn().mockResolvedValue({
       messageModel: 2, eventSeq: true, replay: true, version: '0.13.0',
     }),
@@ -100,18 +101,69 @@ describe('transportStore.sendMessage: контракт 202 (ADR-118 §3)', () =>
     expect(useChatStore.getState().pendingBySession['s1']).toBeUndefined()
   })
 
-  it('во время хода с позицией > 1 → строка очереди', async () => {
+  it('во время хода → реплика только строкой очереди, лента не меняется', async () => {
     startTurn()
     mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-new', mode: 'queue', position: 2 })
 
     await useTransportStore.getState().sendMessage('s1', 'следующее')
 
-    expect(useChatStore.getState().messagesBySession['s1']!.at(-1)).toMatchObject({
-      id: 'm-new',
-    })
+    // Ход идёт: в ленту реплика не встаёт (иначе дубль + разрыв ответа).
+    expect(useChatStore.getState().messagesBySession['s1']).toBeUndefined()
     const pending = useChatStore.getState().pendingBySession['s1']!
     expect(pending).toHaveLength(1)
     expect(pending[0]).toMatchObject({ id: 'm-new', content: 'следующее' })
+  })
+
+  it('во время хода реплика появляется в ленте по message.delivered', async () => {
+    startTurn()
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-queued', mode: 'queue', position: 2 })
+
+    await useTransportStore.getState().sendMessage('s1', 'следующее')
+    expect(useChatStore.getState().messagesBySession['s1']).toBeUndefined()
+
+    // Материализация в истории: событие не несёт содержания — тянем историю.
+    mocks.api.getSessionMessages.mockResolvedValue({
+      session_id: 's1',
+      messages: [{
+        index: 1,
+        id: 'm-queued',
+        ord: 4,
+        role: 'user',
+        content: 'следующее',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        created_at: '2026-10-30T00:00:01Z',
+      }],
+    })
+    dispatch(makeEvent('message.delivered', 's1', {
+      messageId: 'm-queued', ord: 4, role: 'user', author: 'user',
+    }))
+
+    await vi.waitFor(() => {
+      const msgs = useChatStore.getState().messagesBySession['s1'] ?? []
+      expect(msgs).toHaveLength(1)
+    })
+    expect(useChatStore.getState().messagesBySession['s1']![0]).toMatchObject({
+      id: 'm-queued',
+      role: 'user',
+      content: 'следующее',
+      ord: 4,
+    })
+  })
+
+  it('вне хода: message.delivered примиряет оптимистичную реплику без дубля', async () => {
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-new', mode: 'queue', position: null })
+
+    await useTransportStore.getState().sendMessage('s1', 'привет')
+
+    dispatch(makeEvent('message.delivered', 's1', {
+      messageId: 'm-new', ord: 1, role: 'user', author: 'user',
+    }))
+
+    const msgs = useChatStore.getState().messagesBySession['s1']!
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toMatchObject({ id: 'm-new', ord: 1, content: 'привет' })
   })
 
   it('режим steer → строка очереди не создаётся', async () => {
