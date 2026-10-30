@@ -15,7 +15,7 @@ const API_BASE = '/api/v2';
 
 /**
  * Ожидаемая публичная поверхность (интеграционное ядро, ADR-052 этап III, часть 1):
- * path → HTTP-методы. 28 операций: events 13, sessions 8, schedules 6, llm 1.
+ * path → HTTP-методы. 29 операций: events 13, sessions 8, schedules 6, llm 1, system 1.
  */
 const EXPECTED_PATHS: Record<string, string[]> = {
   // events
@@ -41,7 +41,12 @@ const EXPECTED_PATHS: Record<string, string[]> = {
   '/schedules/{id}/jobs': ['get'],
   // llm
   '/llm/chat/completions': ['post'],
+  // system (ADR-118 §8)
+  '/meta': ['get'],
 };
+
+/** Публичные операции, доступные **без** аутентификации (ADR-118 §8). */
+const PUBLIC_OPERATIONS = new Set(['GET /meta']);
 
 /** Именованные модели, которые обязаны попасть в `components.schemas`. */
 const EXPECTED_SCHEMAS = [
@@ -62,9 +67,12 @@ const EXPECTED_SCHEMAS = [
   'Session',
   'SessionCreate',
   'SessionPatch',
+  'SessionMessage',
   'SessionMessagesResponse',
   'SessionStatusResponse',
   'SessionPrompt',
+  'SessionPromptAccepted',
+  'InstanceMeta',
   'Schedule',
   'ScheduleInput',
   'ScheduleJob',
@@ -106,6 +114,7 @@ describe('public OpenAPI (ADR-052, этап III)', () => {
       'llm',
       'schedules',
       'sessions',
+      'system',
     ]);
     expect(doc.security).toEqual([{ bearerAuth: [] }]);
     expect(doc.components?.securitySchemes).toMatchObject({
@@ -118,9 +127,9 @@ describe('public OpenAPI (ADR-052, этап III)', () => {
       expect(methods[path], `path ${path}`).toEqual([...expected].sort());
     }
 
-    // Всего 28 операций в интеграционном ядре.
+    // Всего 29 операций в интеграционном ядре.
     const operationCount = Object.values(methods).reduce((n, ms) => n + ms.length, 0);
-    expect(operationCount).toBe(28);
+    expect(operationCount).toBe(29);
 
     // Именованные модели присутствуют (не только inline).
     const schemas = doc.components?.schemas ?? {};
@@ -129,13 +138,17 @@ describe('public OpenAPI (ADR-052, этап III)', () => {
     }
   });
 
-  it('каждая операция несёт summary, tags и security (bearer)', () => {
+  it('каждая операция несёт summary, tags и security (bearer, кроме публичного /meta)', () => {
     const doc = getPublicOpenApiDocument();
     for (const [path, item] of Object.entries(doc.paths ?? {})) {
       for (const [method, op] of Object.entries(item as Record<string, Record<string, unknown>>)) {
-        expect(op.summary, `${method.toUpperCase()} ${path}`).toBeTruthy();
-        expect(op.tags, `${method.toUpperCase()} ${path}`).toBeTruthy();
-        expect(op.security, `${method.toUpperCase()} ${path}`).toEqual([{ bearerAuth: [] }]);
+        const key = `${method.toUpperCase()} ${path}`;
+        expect(op.summary, key).toBeTruthy();
+        expect(op.tags, key).toBeTruthy();
+        // ADR-118 §8: `GET /meta` — без аутентификации (`security: []`).
+        expect(op.security, key).toEqual(
+          PUBLIC_OPERATIONS.has(key) ? [] : [{ bearerAuth: [] }],
+        );
       }
     }
   });
@@ -154,6 +167,101 @@ describe('public OpenAPI (ADR-052, этап III)', () => {
     const responses = postEvents?.responses as Record<string, unknown>;
     for (const code of ['400', '401', '403', '404', '409', '429', '500', '503']) {
       expect(responses, `response ${code}`).toHaveProperty(code);
+    }
+  });
+
+  it('POST /sessions/{id}/prompt — только 202 {messageId, mode, position}, без SSE (ADR-118 §3)', async () => {
+    const doc = getPublicOpenApiDocument();
+    const post = doc.paths?.['/sessions/{id}/prompt']?.post as Record<string, unknown> | undefined;
+    const responses = post?.responses as Record<string, Record<string, unknown>>;
+
+    expect(responses, 'ответ 202').toHaveProperty('202');
+    expect(responses, 'ответ 200 (SSE) удалён').not.toHaveProperty('200');
+    expect(JSON.stringify(responses)).not.toContain('text/event-stream');
+
+    // Тело 202 — именованная модель с тремя полями.
+    const schema = (responses['202']?.content as Record<string, { schema?: unknown }>)[
+      'application/json'
+    ]?.schema;
+    expect(schema).toEqual({ $ref: '#/components/schemas/SessionPromptAccepted' });
+    const model = (doc.components?.schemas ?? {})['SessionPromptAccepted'] as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(Object.keys(model.properties ?? {}).sort()).toEqual(['messageId', 'mode', 'position']);
+    expect([...(model.required ?? [])].sort()).toEqual(['messageId', 'mode', 'position']);
+
+    // Заглушка отвечает новым контрактом.
+    const app = createPublicOpenApiApp();
+    const res = await app.request('/sessions/ses_1/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'hi' }),
+    });
+    expect(res.status).toBe(202);
+    expect(res.headers.get('content-type') ?? '').not.toContain('text/event-stream');
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(['messageId', 'mode', 'position']);
+    expect(typeof body.messageId).toBe('string');
+    expect(['queue', 'steer', 'interrupt']).toContain(body.mode as string);
+    expect(body.position === null || typeof body.position === 'number').toBe(true);
+  });
+
+  it('GET /meta описан публично (security: []) и отдаёт возможности инстанса (ADR-118 §8)', async () => {
+    const doc = getPublicOpenApiDocument();
+    const meta = doc.paths?.['/meta']?.get as Record<string, unknown> | undefined;
+    expect(meta, 'операция /meta').toBeTruthy();
+    expect(meta?.security).toEqual([]);
+    expect(meta?.tags).toEqual(['system']);
+
+    const model = (doc.components?.schemas ?? {})['InstanceMeta'] as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(Object.keys(model.properties ?? {}).sort()).toEqual([
+      'eventSeq',
+      'messageModel',
+      'replay',
+      'version',
+    ]);
+    expect([...(model.required ?? [])].sort()).toEqual([
+      'eventSeq',
+      'messageModel',
+      'replay',
+      'version',
+    ]);
+
+    const app = createPublicOpenApiApp();
+    const res = await app.request('/meta');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      messageModel: 2,
+      eventSeq: true,
+      replay: true,
+      version: expect.any(String),
+    });
+  });
+
+  it('DTO сообщения несёт ord/turn_id/step_index/status (ADR-118 §1/§2/§5)', () => {
+    const doc = getPublicOpenApiDocument();
+    const messages = doc.components?.schemas?.SessionMessagesResponse as {
+      properties?: { messages?: { items?: unknown } };
+    };
+    expect(messages.properties?.messages?.items).toEqual({
+      $ref: '#/components/schemas/SessionMessage',
+    });
+
+    const message = (doc.components?.schemas ?? {})['SessionMessage'] as {
+      properties?: Record<string, { type?: unknown }>;
+      required?: string[];
+    };
+    const props = message.properties ?? {};
+    for (const field of ['ord', 'turn_id', 'step_index', 'status']) {
+      expect(props, `поле ${field}`).toHaveProperty(field);
+    }
+    // Все четыре — nullable.
+    for (const field of ['ord', 'turn_id', 'step_index', 'status']) {
+      expect(JSON.stringify(props[field]), `${field} nullable`).toMatch(/"null"/);
     }
   });
 

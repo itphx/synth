@@ -12,6 +12,7 @@
  * описывает контракт, а не подменяет боевые обработчики.
  *
  * Публикуется только **интеграционное ядро** (`events`/`sessions`/`schedules`/`llm`)
+ * и публичный `GET /meta` (`system`, ADR-118 §8: версия модели сообщений).
  * — см. ADR-052 (OpenAPI — только public, детали — `docs/API_V2.md` §5.30): fs/audit/admin/секреты
  * наружу не выводим.
  * Единый формат ошибок — `publicErrorSchema` (`{error:{code,message}}`).
@@ -28,6 +29,7 @@
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import {
+  MESSAGE_MODEL_VERSION,
   SYNTH_VERSION,
   sharedZod,
   eventBindingApiKeyCreateSchema,
@@ -175,7 +177,7 @@ const ScheduleJob = reopened(scheduleJobSchema).openapi('ScheduleJob', {
   description: 'Запись Job-истории срабатывания расписания (ADR-051).',
 });
 const SessionPrompt = reopened(promptRequestSchema).openapi('SessionPrompt', {
-  description: 'Тело отправки сообщения в сессию (очередь + SSE-поток хода).',
+  description: 'Тело отправки сообщения в сессию (приём сообщения; ответ — 202, без SSE).',
 });
 
 // --- Локальные схемы ответов публичного контракта ---
@@ -252,9 +254,74 @@ const Session = z
   })
   .openapi('Session', { description: 'Сериализованная сессия (публичное подмножество).' });
 
+/** ADR-118 §3: ответ приёма сообщения — `202 {messageId, mode, position}` (без SSE). */
+const SessionPromptAccepted = z
+  .object({
+    messageId: z
+      .string()
+      .min(1)
+      .openapi({ example: 'msg_00000000-0000-0000-0000-000000000000' }),
+    mode: z.enum(['queue', 'steer', 'interrupt']).openapi({
+      description:
+        'Режим приёма (ADR-118 §3): `queue` — ждёт окончания хода, `steer` — вмешательство в активный ход на границе шага, `interrupt` — прерывание генерации с продолжением хода.',
+    }),
+    position: z.number().int().nullable().openapi({
+      description: 'Позиция в очереди; `null`, если сообщение уже материализовано в истории.',
+    }),
+  })
+  .openapi('SessionPromptAccepted', {
+    description: 'Подтверждение приёма сообщения (ADR-118 §3). Наблюдение за ходом — события сессии.',
+  });
+
+/**
+ * Публичный срез DTO сообщения (`serializeMessage`).
+ *
+ * ADR-118 §2: `ord` — монотонный порядок записи (не перенумеровывается, в отличие
+ * от позиционного `seq`); §1 — `turn_id`/`step_index`; §5 — `status` (смена статуса
+ * и есть «финал» сообщения-шага). Схема неполная намеренно (`passthrough`):
+ * публичный контракт описывает ключевые поля, остальные DTO-поля не отсекаются.
+ */
+const SessionMessage = z
+  .object({
+    id: z.string().min(1),
+    seq: z.number().int().optional().openapi({ description: 'Позиционный номер в истории.' }),
+    ord: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({
+        description:
+          'ADR-118 §2: монотонный порядок записи в историю (`ord`); `null` — сообщение до миграции.',
+      }),
+    turn_id: z
+      .string()
+      .nullable()
+      .openapi({ description: 'ADR-118 §1: идентификатор хода, которому принадлежит сообщение.' }),
+    step_index: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({ description: 'ADR-118 §1: индекс шага внутри хода (0-based).' }),
+    status: z
+      .enum(['streaming', 'completed', 'cancelled', 'error'])
+      .nullable()
+      .openapi({
+        description:
+          'ADR-118 §5: статус сообщения-хода (`streaming` → терминальный); `null` — поле не задано.',
+      }),
+    role: z.string().min(1),
+    content: z.string(),
+    author: z.string().nullable().optional(),
+    timestamp: z.string().optional().openapi({ description: 'ISO-8601 время создания.' }),
+  })
+  .passthrough()
+  .openapi('SessionMessage', {
+    description: 'Сообщение сессии — публичное подмножество DTO (ADR-118).',
+  });
+
 const SessionMessagesResponse = z
   .object({
-    messages: z.array(z.unknown()),
+    messages: z.array(SessionMessage),
     session_id: z.string(),
   })
   .openapi('SessionMessagesResponse');
@@ -266,6 +333,26 @@ const SessionStatusResponse = z
     processor_running: z.boolean(),
   })
   .openapi('SessionStatusResponse');
+
+/** ADR-118 §8: возможности инстанса (`GET /meta`), ответ без аутентификации. */
+const InstanceMeta = z
+  .object({
+    messageModel: z.number().int().openapi({
+      example: MESSAGE_MODEL_VERSION,
+      description: 'Версия модели сообщений/потока, поддерживаемая инстансом (`2`).',
+    }),
+    eventSeq: z.boolean().openapi({
+      description: 'События нумеруются в пределах сессии (`BusEvent.eventSeq`).',
+    }),
+    replay: z.boolean().openapi({
+      description: 'Доступен догон по журналу событий (`Last-Event-ID` / `?since`).',
+    }),
+    version: z.string().min(1).openapi({ example: SYNTH_VERSION, description: 'Версия инстанса.' }),
+  })
+  .openapi('InstanceMeta', {
+    description:
+      'Возможности инстанса (ADR-118 §8). Клиент сверяет `messageModel` до подключения к WS/SSE (fail-closed).',
+  });
 
 const ScheduleResponse = z
   .object({ schedule: Schedule })
@@ -624,8 +711,9 @@ const promptSessionRoute = createRoute({
   method: 'post',
   path: '/sessions/{id}/prompt',
   tags: ['sessions'],
-  summary: 'Отправить сообщение в сессию (SSE)',
-  description: 'Ставит сообщение в очередь и возвращает SSE-поток событий хода.',
+  summary: 'Поставить сообщение в очередь',
+  description:
+    'Принимает сообщение сессии и возвращает подтверждение приёма (`202 {messageId, mode, position}`). Наблюдение за ходом — по событиям сессии (`turn.*`/`step.*`/`part.*`); `text/event-stream` в ответе нет (ADR-118 §3): обрыв соединения клиентом ход не прерывает.',
   security: BEARER_SECURITY,
   request: {
     params: SessionParams,
@@ -639,10 +727,7 @@ const promptSessionRoute = createRoute({
     },
   },
   responses: {
-    200: {
-      description: 'SSE-поток событий хода',
-      content: { 'text/event-stream': { schema: z.string() } },
-    },
+    202: jsonResponse('Сообщение принято (режим и позиция в очереди)', SessionPromptAccepted),
     ...publicErrorResponses,
   },
 });
@@ -657,6 +742,21 @@ const getSessionMessagesRoute = createRoute({
   responses: {
     200: jsonResponse('Сообщения сессии', SessionMessagesResponse),
     ...publicErrorResponses,
+  },
+});
+
+// --- Операции: system (ADR-118 §8) ---
+
+const getInstanceMetaRoute = createRoute({
+  method: 'get',
+  path: '/meta',
+  tags: ['system'],
+  summary: 'Возможности инстанса (messageModel, eventSeq, replay, version)',
+  description:
+    'Публичная информация о протоколе инстанса (ADR-118 §8). Без аутентификации (как `/health`): клиент сверяет `messageModel` до подключения к WS/SSE и при несовпадении не подключается (fail-closed).',
+  security: [],
+  responses: {
+    200: jsonResponse('Возможности инстанса', InstanceMeta),
   },
 });
 
@@ -866,11 +966,24 @@ export function createPublicOpenApiApp(): OpenAPIHono {
   app.openapi(getSessionStatusRoute, (c) =>
     c.json({ blocked: false, pending_count: 0, processor_running: false }, 200),
   );
-  app.openapi(promptSessionRoute, () =>
-    new Response('', { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+  app.openapi(promptSessionRoute, (c) =>
+    c.json({ messageId: 'msg_00000000-0000-0000-0000-000000000000', mode: 'queue' as const, position: 0 }, 202),
   );
   app.openapi(getSessionMessagesRoute, (c) =>
     c.json({ messages: [], session_id: SAMPLE_SESSION.id }, 200),
+  );
+
+  // --- system (ADR-118 §8) ---
+  app.openapi(getInstanceMetaRoute, (c) =>
+    c.json(
+      {
+        messageModel: MESSAGE_MODEL_VERSION,
+        eventSeq: true,
+        replay: true,
+        version: SYNTH_VERSION,
+      },
+      200,
+    ),
   );
 
   // --- schedules ---
@@ -902,9 +1015,10 @@ export function createPublicOpenApiApp(): OpenAPIHono {
 /** Теги публичного контракта. */
 const PUBLIC_TAGS = [
   { name: 'events', description: 'Внешние события, привязки, правила маршрутизации (ADR-089).' },
-  { name: 'sessions', description: 'Сессии: создание, чтение, подсказки (ADR-017/ADR-040).' },
+  { name: 'sessions', description: 'Сессии: создание, чтение, приём сообщений (ADR-017/ADR-040/ADR-118).' },
   { name: 'schedules', description: 'Расписания планировщика (ADR-051).' },
   { name: 'llm', description: 'OpenAI-совместимый LLM-прокси (ADR-036/ADR-052).' },
+  { name: 'system', description: 'Возможности инстанса и версия протокола (ADR-118 §8).' },
 ];
 
 /**
@@ -921,7 +1035,7 @@ export function getPublicOpenApiDocument(): ReturnType<OpenAPIHono['getOpenAPI31
       title: 'Synth Public API',
       version: SYNTH_VERSION,
       description:
-        'Публичный интеграционный контракт Synth (ADR-052): events/sessions/schedules/llm. Единый формат ошибок: { error: { code, message } }. Аутентификация — service-key (`Authorization: Bearer synth_svc_…`).',
+        'Публичный интеграционный контракт Synth (ADR-052): events/sessions/schedules/llm + meta (ADR-118 §8). Единый формат ошибок: { error: { code, message } }. Аутентификация — service-key (`Authorization: Bearer synth_svc_…`); `GET /meta` — без аутентификации.',
     },
     servers: [{ url: '/api/v2' }],
     tags: PUBLIC_TAGS,
