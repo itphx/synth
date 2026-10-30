@@ -138,6 +138,20 @@ export function QueuePanel({
                   </span>
                 )}
                 <div className="flex shrink-0 items-center gap-0.5">
+                  {msg.sending ? (
+                    // Оптимистичная строка: серверное подтверждение ещё не пришло.
+                    // Действия очереди (steer/возврат/удаление) требуют серверного
+                    // id — до подтверждения они недоступны.
+                    <span
+                      data-testid={`queue-sending-${i}`}
+                      title={t('chat.message.unconfirmed')}
+                      aria-label={t('chat.message.unconfirmed')}
+                      className="flex items-center text-muted-foreground"
+                    >
+                      <Icon name="loader-2" className="size-3.5 animate-spin" />
+                    </span>
+                  ) : (
+                    <>
                   {canSteer && (
                     <button
                       onClick={() => onSteerMsg(i)}
@@ -167,6 +181,8 @@ export function QueuePanel({
                   >
                     <Icon name="close" className="size-4" />
                   </button>
+                    </>
+                  )}
                 </div>
               </div>
             )

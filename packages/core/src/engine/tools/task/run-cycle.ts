@@ -19,6 +19,7 @@ import { PermissionApprovalManager } from '../../permission/approval.js';
 import { estimatePromptChars, estimateTokens } from '../../context/token-ratio.js';
 import { buildMaxStepsPrompt, maxStepsAssistantMessage } from '../../llm/max-steps.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
+import { debug } from '../../../logger.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
 import { messageToLLMMessage } from './prompt.js';
 import { applySteerInjections, dropSteerInjections, isBackgroundNoticeMessage } from '../../steering/apply.js';
@@ -158,10 +159,21 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   };
 
   // ─── ADR-070: live-статистика саб-агента (`stream.usage` + `subagent.progress`) ──
-  // Троттлинг ~300 мс; публикуем при изменении контента/размышлений или usage.
+  // Троттлинг ~300 мс; публикуем **только приращение** текста/размышлений
+  // (`content_delta`/`reasoning_delta`), а не накопленный текст целиком: при
+  // нескольких параллельных саб-агентах полный текст каждые 300 мс давал
+  // мегабайты кадров и задерживал ack отправки сообщений в том же WS-канале.
   const SUBAGENT_USAGE_THROTTLE_MS = 300;
+  /**
+   * Предел суммарного объёма дельт прогресса на один прогон (символы ≈ байты
+   * для UTF-8-текста). Выше — публикация прогресса прекращается (debug-лог):
+   * гигантские кадры не должны блокировать транспорт. Итоговый отчёт и
+   * `stream.usage` не зависят от этого предела.
+   */
+  const SUBAGENT_PROGRESS_MAX_CHARS = 200_000;
   let liveUsageLastPublishedAt = 0;
-  let liveUsageLastSignature = '';
+  let progressCharsPublished = 0;
+  let progressPublishingStopped = false;
 
   /** Сумма двух usage (running total саб-агента + точный/оценочный текущей итерации). */
   const addUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
@@ -424,6 +436,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     const stepLimitValue = Number.isFinite(effectiveMaxSteps)
       ? String(effectiveMaxSteps)
       : String(maxSteps ?? 0);
+    /**
+     * Metadata шага-лимита: флаг и сам лимит. Пишется и в `task`-результат
+     * родителя, и в финальное сообщение **дочерней** сессии — иначе в её
+     * истории факт остановки по лимиту не виден (проверено живьём).
+     */
+    const stepLimitMeta = (): Record<string, unknown> => ({
+      step_limit_reached: true,
+      step_limit: Number(stepLimitValue),
+    });
 
     /**
      * Предохранитель по объёму промпта (`agents.subagentMaxInputTokens`; `0` —
@@ -690,8 +711,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // итерации — без возврата в историю провайдер отвергает следующий вызов.
       let reasoningSignature: string | undefined;
       let reasoningRedacted: string[] | undefined;
+      // Опубликованные префиксы текста/размышлений **этой итерации** — по ним
+      // считается приращение для `subagent.progress` (дельта, а не полный текст).
       let lastPublishedReasoning = '';
-      let lastPublishedContentLen = 0;
+      let lastPublishedContent = '';
 
       // ─── LLM-вызов с retry (B1, аналог QueueProcessor) ──────────────
       // Recoverable-ошибки (network/timeout/rate_limit/server_error) ретраятся
@@ -744,56 +767,75 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               : null;
             const liveReasoning = reasoning || '';
             const liveContent = accumulatedContent || '';
-            const usageSignature = [
-              liveUsage.estimated ? 'e' : 'x',
-              liveUsage.usage.inputTokens,
-              liveUsage.usage.outputTokens,
-              liveUsage.usage.totalTokens,
-            ].join(':');
+
+            // Дельты с прошлой публикации. Провайдер отдаёт текст накопительно
+            // (в т.ч. `isFinal`-чанк с полным текстом итерации), поэтому дельта —
+            // это хвост, которого ещё не было. Префикс не совпал (рестарт/новый
+            // текст) — публикуем весь текст: потребитель допишет его к блоку.
+            const reasoningDelta = liveReasoning.startsWith(lastPublishedReasoning)
+              ? liveReasoning.slice(lastPublishedReasoning.length)
+              : liveReasoning;
+            const contentDelta = liveContent.startsWith(lastPublishedContent)
+              ? liveContent.slice(lastPublishedContent.length)
+              : liveContent;
 
             // Стримим размышления/промежуточный текст (и usage) саб-агента
             // РОДИТЕЛЮ, чтобы в блоке `task` (по parent_call_id) всё было видно
-            // во время работы. Троттлинг ~300 мс, дедуп по подписи.
-            const changed = liveReasoning !== lastPublishedReasoning
-              || liveContent.length !== lastPublishedContentLen
-              || usageSignature !== liveUsageLastSignature;
+            // во время работы. Троттлинг ~300 мс. Пустые дельты (например,
+            // финальный чанк, где текст не изменился) событие не порождают.
             const nowLive = Date.now();
-            if (changed && nowLive - liveUsageLastPublishedAt >= SUBAGENT_USAGE_THROTTLE_MS) {
+            if (
+              (reasoningDelta.length > 0 || contentDelta.length > 0)
+              && nowLive - liveUsageLastPublishedAt >= SUBAGENT_USAGE_THROTTLE_MS
+            ) {
               liveUsageLastPublishedAt = nowLive;
-              liveUsageLastSignature = usageSignature;
               lastPublishedReasoning = liveReasoning;
-              lastPublishedContentLen = liveContent.length;
+              lastPublishedContent = liveContent;
 
-              if (publish) {
-                publish('subagent.progress', {
-                  stream_id: extra.streamId,
-                  session_id: extra.sessionId,
-                  parent_call_id: extra.callId,
-                  reasoning: liveReasoning,
-                  content: liveContent,
-                  iteration,
-                  usage: liveUsage.usage,
-                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
-                  ...(liveModel ? { model: liveModel } : {}),
-                  ...(liveProvider ? { provider: liveProvider } : {}),
-                  estimated: liveUsage.estimated,
-                });
-              }
+              const deltaChars = reasoningDelta.length + contentDelta.length;
+              if (progressCharsPublished + deltaChars > SUBAGENT_PROGRESS_MAX_CHARS) {
+                if (!progressPublishingStopped) {
+                  progressPublishingStopped = true;
+                  debug(
+                    'ORCHESTRATOR',
+                    `SUBAGENT progress publishing stopped: > ${SUBAGENT_PROGRESS_MAX_CHARS} chars `
+                    + `(child_session_id=${childSessionId ?? '-'}, call_id=${extra.callId ?? '-'})`,
+                  );
+                }
+              } else {
+                progressCharsPublished += deltaChars;
 
-              // Live-статистика в дочернюю сессию (если она есть) — открытая
-              // дочерняя сессия показывает токены/стоимость по ходу работы.
-              if (childSessionId && extra.eventBus) {
-                extra.eventBus.publish(childSessionId, 'stream.usage', {
-                  session_id: childSessionId,
-                  stream_id: extra.streamId,
-                  iteration,
-                  agent_role: subagentType,
-                  ...(liveModel ? { model: liveModel } : {}),
-                  ...(liveProvider ? { provider: liveProvider } : {}),
-                  usage: liveUsage.usage,
-                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
-                  estimated: liveUsage.estimated,
-                });
+                if (publish) {
+                  publish('subagent.progress', {
+                    stream_id: extra.streamId,
+                    session_id: extra.sessionId,
+                    parent_call_id: extra.callId,
+                    reasoning_delta: reasoningDelta,
+                    content_delta: contentDelta,
+                    iteration,
+                    usage: liveUsage.usage,
+                    ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
+                    ...(liveModel ? { model: liveModel } : {}),
+                    ...(liveProvider ? { provider: liveProvider } : {}),
+                    estimated: liveUsage.estimated,
+                  });
+                }
+
+                // Live-статистика в дочернюю сессию (если она есть) — открытая
+                // дочерняя сессия показывает токены/стоимость по ходу работы.
+                if (childSessionId && extra.eventBus) {
+                  extra.eventBus.publish(childSessionId, 'stream.usage', {
+                    session_id: childSessionId,
+                    stream_id: extra.streamId,
+                    iteration,
+                    agent_role: subagentType,
+                    ...(liveModel ? { model: liveModel } : {}),
+                    ...(liveProvider ? { provider: liveProvider } : {}),
+                    usage: liveUsage.usage,
+                    ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
+                    estimated: liveUsage.estimated,
+                  });
+                }
               }
             }
           }
@@ -828,7 +870,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           reasoning = '';
           toolCalls = [];
           lastPublishedReasoning = '';
-          lastPublishedContentLen = 0;
+          lastPublishedContent = '';
         }
       }
 
@@ -948,11 +990,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             finalContent = reportText;
             if (reasoning) subagentReasoning = reasoning;
             // Отчёт — финальный ответ саб-агента: в историю дочерней сессии
-            // тем же путём, что и обычный финальный ответ.
-            await persistChildAssistantMessage(reportText);
+            // тем же путём, что и обычный финальный ответ (+ метка лимита шагов).
+            await persistChildAssistantMessage(reportText, stepLimitMeta());
           } else {
             reportMissing = true;
             finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
+            // Детерминированный текст — в историю ребёнка: пустой отчёт иначе
+            // оставлял дочернюю сессию без финального ответа вовсе.
+            await persistChildAssistantMessage(finalContent, stepLimitMeta());
           }
           break;
         }
@@ -1364,10 +1409,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         if (reportText) {
           finalContent = reportText;
           if (reasoning) subagentReasoning = reasoning;
-          await persistChildAssistantMessage(reportText);
+          await persistChildAssistantMessage(reportText, stepLimitMeta());
         } else {
           reportMissing = true;
           finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
+          await persistChildAssistantMessage(finalContent, stepLimitMeta());
         }
         break;
       }

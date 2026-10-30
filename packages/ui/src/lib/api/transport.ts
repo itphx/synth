@@ -20,7 +20,21 @@ export interface TransportClientCallbacks {
 const HEARTBEAT_INTERVAL = 25_000
 const INITIAL_RECONNECT_DELAY = 1_000
 const MAX_RECONNECT_DELAY = 60_000
-const SEND_TIMEOUT = 10_000
+/**
+ * Ожидание подтверждения отправки. 30 с: ack (`queued`/`message.queued`) идёт
+ * тем же упорядоченным WS-каналом, что и поток live-событий (прогресс
+ * саб-агентов и т.п.), поэтому при всплеске событий он может прийти заметно
+ * позже постановки в очередь. По истечении срока сообщение **не считается
+ * потерянным**: отправка возвращает `{confirmed: false}`, а UI сверяет очередь
+ * с сервером (`GET /sessions/:id`), а не показывает ошибку.
+ */
+const SEND_TIMEOUT = 30_000
+
+/** Итог отправки: подтверждена ли постановка в очередь сервером. */
+export interface SendResult {
+  confirmed: boolean
+  streamId: string
+}
 
 export class TransportClient {
   private ws: WebSocket | null = null
@@ -33,7 +47,12 @@ export class TransportClient {
   private intentionalClose = false
   private counter = 0
   private backendReady = false
-  private pending = new Map<string, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  private pending = new Map<string, {
+    sessionId: string
+    resolve: (confirmed: boolean) => void
+    reject: (e: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }>()
 
   constructor(callbacks: TransportClientCallbacks) {
     this.callbacks = callbacks
@@ -64,22 +83,47 @@ export class TransportClient {
     return this.backendReady
   }
 
-  async sendMessage(sessionId: string, text: string, agentRole?: string, provider?: string, model?: string, mode?: SteerMode): Promise<void> {
+  /**
+   * Отправка сообщения по WS-кадру `send_message`.
+   *
+   * `streamId` можно передать заранее (его генерирует вызывающий слой): по нему
+   * клиент сопоставляет оптимистичную строку очереди с серверным `message_id`
+   * (сервер использует `stream_id` кадра как id сообщения).
+   *
+   * Ack приходит кадром `queued` (сразу при приёме) либо событием
+   * `message.queued` из шины (тот же `stream_id`). Таймаут — не ошибка:
+   * возвращаем `{confirmed: false}`, сообщение остаётся в очереди сервера и
+   * сверяется с ним отдельно.
+   */
+  async sendMessage(
+    sessionId: string,
+    text: string,
+    agentRole?: string,
+    provider?: string,
+    model?: string,
+    mode?: SteerMode,
+    streamId?: string,
+  ): Promise<SendResult> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not connected')
     }
-    const streamId = `stream-${++this.counter}-${Date.now()}`
-    return new Promise<void>((resolve, reject) => {
+    const id = streamId || `stream-${++this.counter}-${Date.now()}`
+    return new Promise<SendResult>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(streamId)
-        reject(new Error('Send timeout'))
+        this.pending.delete(id)
+        resolve({ confirmed: false, streamId: id })
       }, SEND_TIMEOUT)
-      this.pending.set(streamId, { resolve, reject, timer })
+      this.pending.set(id, {
+        sessionId,
+        resolve: (confirmed) => resolve({ confirmed, streamId: id }),
+        reject,
+        timer,
+      })
       this.ws!.send(JSON.stringify({
         type: 'send_message',
         session_id: sessionId,
         content: text,
-        stream_id: streamId,
+        stream_id: id,
         agent_role: agentRole,
         provider,
         model,
@@ -173,15 +217,39 @@ export class TransportClient {
             return
           }
 
-          if (data.type === 'queued' || data.type === 'message_queued') {
-            const streamId = (data.stream_id as string) || (data.data?.stream_id as string)
+          // Ack отправки: кадр `queued` (сервер принял `send_message`) или
+          // событие `message.queued` из шины (тот же `stream_id` — сервер
+          // публикует его после фактической постановки в очередь).
+          if (
+            data.type === 'queued'
+            || data.type === 'message_queued'
+            || data.type === 'message.queued'
+          ) {
+            const streamId = (data.stream_id as string)
+              || (data.data?.stream_id as string)
+              || ''
             if (streamId) {
               const pending = this.pending.get(streamId)
               if (pending) {
                 clearTimeout(pending.timer)
-                pending.resolve()
+                pending.resolve(true)
                 this.pending.delete(streamId)
               }
+            }
+          }
+
+          // Server-side отказ (нет сессии, нет прав, лимит вмешательств) —
+          // это настоящая ошибка отправки, а не «ещё не подтверждено»:
+          // снимаем ожидание ближайшего кадра этой сессии.
+          if (data.type === 'error') {
+            const sid = (data.session_id as string) || (data.sessionId as string)
+            const message = (data.data?.error as string) || (data.error as string) || 'Send failed'
+            for (const [id, pending] of this.pending) {
+              if (sid && pending.sessionId !== sid) continue
+              clearTimeout(pending.timer)
+              this.pending.delete(id)
+              pending.reject(new Error(message))
+              break
             }
           }
 

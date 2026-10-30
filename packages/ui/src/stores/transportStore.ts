@@ -33,6 +33,73 @@ function refreshSessionFromApi(sid: string) {
     .catch(() => {})
 }
 
+/**
+ * Идентификатор отправки: уходит и в WS-кадр `send_message`, и в HTTP-тело
+ * `POST /prompt` (`messageId`), поэтому серверный `message_id` (и `stream_id`
+ * события `message.queued`) совпадает с id оптимистичной строки очереди.
+ */
+let sendSeq = 0
+function nextStreamId(): string {
+  sendSeq += 1
+  return `stream-${sendSeq}-${Date.now()}`
+}
+
+/** Сессия сейчас в ходе (есть живой стрим) — обычная отправка встанет в очередь. */
+function isTurnActive(sid: string): boolean {
+  const streams = useChatStore.getState().streamingBySession[sid]
+  return !!streams && Object.values(streams).some((st) => st.isStreaming)
+}
+
+/**
+ * Сверка очереди с сервером после неподтверждённой отправки (`confirmed:false`).
+ * Сообщение не теряется: строка очереди остаётся, а состав/счётчик уточняются
+ * по `GET /sessions/:id` (та же семантика, что у первичной загрузки: при живом
+ * ходе первый pending-элемент — сообщение текущего хода, в списке его нет).
+ */
+function reconcileQueueFromApi(sid: string) {
+  synthApi.getSession(sid)
+    .then((session) => {
+      const data = session as unknown as Record<string, unknown>
+      const pending = data.pending_messages as Array<Record<string, unknown>> | undefined
+      if (!pending) return
+      const chat = useChatStore.getState()
+      if (pending.length === 0) {
+        chat.clearQueueState(sid)
+        return
+      }
+      const active = data.current_stream != null || isTurnActive(sid)
+      const display = active ? pending.slice(1) : pending
+      chat.setPendingMessages(sid, display.map((pm) => ({
+        ...(typeof pm.id === 'string' ? { id: pm.id } : {}),
+        content: typeof pm.content === 'string' ? pm.content : '',
+        agentRole: (pm.agent_role as string | undefined) ?? null,
+      })))
+      if (display.length > 0) chat.updateQueueCount(sid, display.length)
+      else chat.clearQueueState(sid)
+    })
+    .catch(() => {})
+}
+
+/**
+ * Дельта прогресса саб-агента: актуальное ядро присылает только приращение
+ * (`content_delta`/`reasoning_delta`). Старое ядро (гибрид с другой версией)
+ * присылало накопленный текст — вычитаем известный префикс, чтобы блок не
+ * задвоился.
+ */
+function progressDelta(
+  payload: Record<string, unknown>,
+  deltaKey: 'content_delta' | 'reasoning_delta',
+  cumulativeKey: 'content' | 'reasoning',
+  lastText: string,
+): string {
+  const delta = payload[deltaKey]
+  if (typeof delta === 'string' && delta.length > 0) return delta
+  if (deltaKey in payload) return ''
+  const cumulative = payload[cumulativeKey]
+  if (typeof cumulative !== 'string' || cumulative.length === 0) return ''
+  return cumulative.startsWith(lastText) ? cumulative.slice(lastText.length) : cumulative
+}
+
 /** fs.changed: окно коалесинга refresh Git-вкладки на проект. */
 const GIT_REFRESH_DEBOUNCE_MS = 400
 const gitRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -266,6 +333,11 @@ interface TransportState {
    * ADR-104: `mode` — режим отправки. ADR-115: `attachmentIds` — id
    * загруженных вложений (`partId`); WS-кадр `send_message` их не несёт,
    * поэтому с вложениями сообщение уходит HTTP-путём.
+   *
+   * Возвращает `{confirmed}`: `false` — постановка в очередь не подтверждена
+   * за отведённое время (сообщение не потеряно: строка очереди уже показана
+   * оптимистично, очередь сверяется с сервером). Ошибка (сеть/401/валидация)
+   * по-прежнему бросается.
    */
   sendMessage: (
     sessionId: string,
@@ -275,7 +347,7 @@ interface TransportState {
     model?: string,
     mode?: SteerMode,
     attachmentIds?: string[],
-  ) => Promise<void>
+  ) => Promise<{ confirmed: boolean }>
   cancel: (sessionId: string) => void
   /**
    * Ответ на запрос подтверждения. `true` — ответ доставлен (WS-кадр или HTTP),
@@ -349,7 +421,7 @@ export function createDispatcher(): EventDispatcher {
       setQueueStalled,
       setSummarizationPending,
       updateQueueCount,
-      addPendingMessage,
+      upsertPendingMessage,
       removeFirstPending,
       addToolCall,
       updateToolCallResult,
@@ -368,7 +440,9 @@ export function createDispatcher(): EventDispatcher {
         const id = typeof payload.message_id === 'string' && payload.message_id !== ''
           ? payload.message_id
           : undefined
-        addPendingMessage(sid, { ...(id ? { id } : {}), content, agentRole: agentRole || null })
+        // Дедуп: оптимистичная строка (id = stream_id отправки) заменяется
+        // серверным подтверждением, а не дублируется.
+        upsertPendingMessage(sid, { ...(id ? { id } : {}), content, agentRole: agentRole || null })
         updateQueueCount(sid, pendingCount)
         break
       }
@@ -997,16 +1071,24 @@ export function createDispatcher(): EventDispatcher {
       case 'subagent_progress': {
         // Стриминг размышлений/промежуточного текста саб-агента родителю —
         // вкладываются в блок `task` (по parent_call_id, т.е. call_id задачи).
+        // Ядро присылает **дельты** (`content_delta`/`reasoning_delta`), которые
+        // накапливаются в live-блоке.
         const streamId = payload.stream_id as string
         if (!streamId) break
         const parentCallId = (payload.parent_call_id as string) || ''
+        const liveCall = parentCallId
+          ? useChatStore.getState().streamingBySession[sid]?.[streamId]
+            ?.toolCalls.find((tc) => tc.callId === parentCallId)
+          : undefined
+        const lastReasoning = liveCall?.subagentReasoningBlocks?.at(-1)?.text ?? ''
+        const lastContent = liveCall?.subagentIntermediateTextBlocks?.at(-1)?.text ?? ''
         updateToolCallSubagentProgress(
           sid,
           streamId,
           parentCallId,
           {
-            reasoning: (payload.reasoning as string) || '',
-            content: (payload.content as string) || '',
+            reasoningDelta: progressDelta(payload, 'reasoning_delta', 'reasoning', lastReasoning),
+            contentDelta: progressDelta(payload, 'content_delta', 'content', lastContent),
             iteration: (payload.iteration as number) || 0,
           },
         )
@@ -1299,18 +1381,50 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     // WS-кадр `send_message` такого поля не знает. С вложениями идём HTTP-путём
     // даже при живом WS, иначе файлы молча потерялись бы.
     const hasAttachments = (attachmentIds?.length ?? 0) > 0
-    if (!hasAttachments && transport && transportReady && transport.getTransport() === 'ws') {
-      console.debug('[TransportStore] sendMessage via WS:', sessionId)
-      await transport.sendMessage(sessionId, text, agentRole, provider, model, mode)
-    } else {
-      console.debug('[TransportStore] sendMessage via HTTP POST:', sessionId, `(ready=${transportReady}, transport=${transport?.getTransport()})`)
-      await synthApi.enqueueMessage(sessionId, text, {
-        agentRole,
-        model,
-        provider,
-        mode,
-        attachments: attachmentIds,
+    const streamId = nextStreamId()
+    // Сообщение во время хода попадёт в очередь: показываем строку сразу, не
+    // дожидаясь серверного `message.queued` (при backlog'е WS-кадров он
+    // приходил с задержкой и отправка выглядела «зависшей»). Режимы
+    // `steer`/`interrupt` в очередь не встают — для них строки нет.
+    const isQueueMode = !mode || mode === 'queue'
+    const optimistic = isQueueMode && isTurnActive(sessionId)
+    if (optimistic) {
+      useChatStore.getState().addPendingMessage(sessionId, {
+        id: streamId,
+        content: text,
+        agentRole: agentRole ?? null,
+        ...(attachmentIds && attachmentIds.length > 0 ? { attachmentCount: attachmentIds.length } : {}),
+        sending: true,
       })
+    }
+
+    try {
+      let confirmed = true
+      if (!hasAttachments && transport && transportReady && transport.getTransport() === 'ws') {
+        console.debug('[TransportStore] sendMessage via WS:', sessionId)
+        const ack = await transport.sendMessage(sessionId, text, agentRole, provider, model, mode, streamId)
+        confirmed = ack.confirmed
+      } else {
+        console.debug('[TransportStore] sendMessage via HTTP POST:', sessionId, `(ready=${transportReady}, transport=${transport?.getTransport()})`)
+        await synthApi.enqueueMessage(sessionId, text, {
+          agentRole,
+          model,
+          provider,
+          mode,
+          streamId,
+          attachments: attachmentIds,
+        })
+      }
+
+      // Не подтверждено за отведённое время — не ошибка: строка очереди остаётся,
+      // состав очереди уточняем у сервера.
+      if (!confirmed) reconcileQueueFromApi(sessionId)
+      return { confirmed }
+    } catch (e) {
+      // Реальная ошибка (сеть/401/валидация) — оптимистичную строку убираем,
+      // чтобы очередь не показывала неотправленное сообщение.
+      if (optimistic) useChatStore.getState().removePendingById(sessionId, streamId)
+      throw e
     }
   },
 

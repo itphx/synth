@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => {
       this.callbacks.onDisconnect?.('manual')
     })
     getTransport = vi.fn(() => this.kind)
-    sendMessage = vi.fn().mockResolvedValue(undefined)
+    sendMessage = vi.fn().mockResolvedValue({ confirmed: true })
     cancel = vi.fn()
     sendPermissionReply = vi.fn()
     sendPermissionHold = vi.fn()
@@ -70,7 +70,9 @@ describe('transportStore.sendMessage: вложения (ADR-115)', () => {
 
     await useTransportStore.getState().sendMessage('s1', 'привет')
 
-    expect(client.sendMessage).toHaveBeenCalledWith('s1', 'привет', undefined, undefined, undefined, undefined)
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      's1', 'привет', undefined, undefined, undefined, undefined, expect.stringMatching(/^stream-/),
+    )
     expect(enqueueMessage).not.toHaveBeenCalled()
   })
 

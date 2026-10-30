@@ -169,6 +169,21 @@ describe('QueuePanel — действия строки', () => {
     expect(handlers.onRemoveMsg).toHaveBeenCalledWith(1)
   })
 
+  it('неподтверждённая строка (`sending`) показывает спиннер и не даёт действий очереди', async () => {
+    const container = await renderPanel({
+      pending: [{ id: 'stream-1-1', content: 'в очереди', sending: true }],
+    })
+    await click(container.querySelector('[data-testid="queue-header-toggle"]'))
+
+    const sending = container.querySelector('[data-testid="queue-sending-0"]')
+    expect(sending).not.toBeNull()
+    expect(sending!.getAttribute('aria-label')).toBe('Message sent; confirmation is delayed — checking the queue')
+    // Действия требуют серверного id — до подтверждения их нет.
+    expect(container.querySelector('[data-testid="queue-steer-0"]')).toBeNull()
+    expect(container.querySelector('[data-testid="queue-return-0"]')).toBeNull()
+    expect(container.querySelector('[data-testid="queue-remove-0"]')).toBeNull()
+  })
+
   it('кнопки строки имеют tooltip/aria-подписи из словаря', async () => {
     const container = await renderPanel({ locale: 'ru' })
     await click(container.querySelector('[data-testid="queue-header-toggle"]'))

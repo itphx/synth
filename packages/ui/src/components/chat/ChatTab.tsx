@@ -264,8 +264,15 @@ export function ChatTab({ tab }: ChatTabProps) {
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
         useChatStore.getState().setStreamRetry(sessionId, null)
         // ADR-115: id загруженных вложений уходят в тело запроса промпта.
-        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
-        notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
+        const result = await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
+        // Неподтверждённая отправка — не ошибка: сообщение показано строкой
+        // очереди сразу, а состав очереди сверяется с сервером. Ошибкой
+        // остаются сеть/валидация/401 (ниже — catch).
+        if (result.confirmed) {
+          notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
+        } else {
+          notify({ text: t('chat.message.unconfirmed'), type: 'info', category: 'queue', sessionId })
+        }
       } catch (e) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
         // Ошибку пробрасываем композеру: он не очищает вложения при неудаче.

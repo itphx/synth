@@ -1435,6 +1435,8 @@ export const dict = {
   'chat.error.forkFailed': 'Failed to create branch:',
 
   'chat.message.sent': 'Message sent',
+  'chat.message.unconfirmed':
+    'Message sent; confirmation is delayed — checking the queue',
 
 
   'chat.debug.noData': 'No debug data',

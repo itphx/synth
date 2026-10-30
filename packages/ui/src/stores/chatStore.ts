@@ -232,6 +232,12 @@ export interface QueuedMessage {
   agentRole?: string | null
   /** ADR-115: число вложений сообщения (для строки очереди); нет данных — 0. */
   attachmentCount?: number
+  /**
+   * Оптимистичная строка: сообщение отправлено, серверное подтверждение
+   * (`message.queued`) ещё не пришло. Строка показывается сразу при отправке
+   * во время хода и «подтверждается» тем же id (`stream_id` = `message_id`).
+   */
+  sending?: boolean
 }
 
 /**
@@ -256,18 +262,24 @@ function isUsageOnlyStream(st: StreamState | undefined): boolean {
   return !!st && !st.hasContent && st.content.length === 0 && st.toolCalls.length === 0
 }
 
-/** ADR-070 §2.6: накопление промежуточного текста; в итерации текст перезаписывается. */
-function appendIntermediateBlock(
-  blocks: IntermediateTextBlockData[],
-  text: string,
+/**
+ * Накопление **дельт** прогресса саб-агента (`subagent.progress` несёт только
+ * приращение с прошлой публикации, а не накопленный текст). Блок дописывается:
+ * в текущей итерации — в конец последнего блока, в новой — новым блоком.
+ * В отличие от `appendReasoningBlock` (кумулятивный reasoning основного
+ * стрима) текст здесь не дедуплицируется — дельта значима как есть.
+ */
+function appendDeltaBlock<T extends { text: string; iteration: number }>(
+  blocks: T[],
+  delta: string,
   iteration: number,
-): IntermediateTextBlockData[] {
-  if (!text || !text.trim()) return blocks
+): T[] {
+  if (!delta) return blocks
   const last = blocks[blocks.length - 1]
   if (last && last.iteration === iteration) {
-    return [...blocks.slice(0, -1), { ...last, text }]
+    return [...blocks.slice(0, -1), { ...last, text: last.text + delta }]
   }
-  return [...blocks, { text, iteration }]
+  return [...blocks, { text: delta, iteration } as T]
 }
 
 type MessageToolCall = NonNullable<MessageData['tool_calls']>[number]
@@ -347,7 +359,7 @@ interface ChatStore {
   }) => void
   addToolCall: (sessionId: string, streamId: string, tc: LiveToolCall) => void
   updateToolCallResult: (sessionId: string, streamId: string, callId: string, result: { content: string; isError?: boolean; metadata?: Record<string, unknown> }) => void
-  updateToolCallSubagentProgress: (sessionId: string, streamId: string, callId: string, patch: { reasoning?: string; content?: string; iteration?: number }) => void
+  updateToolCallSubagentProgress: (sessionId: string, streamId: string, callId: string, patch: { reasoningDelta?: string; contentDelta?: string; iteration?: number }) => void
   /**
    * ADR-111 §detach: переведённые в фон блокирующие прогоны (`task`/`execute_shell`)
    * больше не ждут в активном ходе. `callIds` не заданы — снимаются все running
@@ -374,6 +386,13 @@ interface ChatStore {
   resetQueueStalled: (sessionId: string) => void
   updateQueueCount: (sessionId: string, pendingCount: number) => void
   addPendingMessage: (sessionId: string, msg: QueuedMessage) => void
+  /**
+   * Подтверждение строки очереди серверным событием: строка с тем же `id`
+   * заменяется (дедуп оптимистичной и серверной записи), иначе добавляется.
+   */
+  upsertPendingMessage: (sessionId: string, msg: QueuedMessage) => void
+  /** Снять оптимистичную строку по id (реальная ошибка отправки). */
+  removePendingById: (sessionId: string, id: string) => void
   removeFirstPending: (sessionId: string) => void
   clearSession: (sessionId: string) => void
   setStickyNotes: (sessionId: string, notes: StickyNoteData[]) => void
@@ -713,16 +732,16 @@ export const useChatStore = create<ChatStore>((set) => ({
       const updated = [...existing.toolCalls]
 
       const iter = patch.iteration ?? 0
-      // Размышления саб-агента: накапливаем по итерациям (как reasoningBlocks основного стрима).
-      const reasoningBlocks = appendReasoningBlock(
+      // Размышления/промежуточный текст саб-агента приходят ДЕЛЬТАМИ —
+      // дописываем их к live-блоку (не заменяем накопленный текст целиком).
+      const reasoningBlocks = appendDeltaBlock(
         tc.subagentReasoningBlocks ?? [],
-        patch.reasoning ?? '',
+        patch.reasoningDelta ?? '',
         iter,
       )
-      // Промежуточный текст саб-агента.
-      const intermediateTextBlocks = appendIntermediateBlock(
+      const intermediateTextBlocks = appendDeltaBlock(
         tc.subagentIntermediateTextBlocks ?? [],
-        patch.content ?? '',
+        patch.contentDelta ?? '',
         iter,
       )
 
@@ -1087,6 +1106,27 @@ export const useChatStore = create<ChatStore>((set) => ({
   addPendingMessage: (sessionId, msg) =>
     set((s) => {
       const pending = [...(s.pendingBySession[sessionId] || []), msg]
+      return { pendingBySession: { ...s.pendingBySession, [sessionId]: pending } }
+    }),
+
+  upsertPendingMessage: (sessionId, msg) =>
+    set((s) => {
+      const current = s.pendingBySession[sessionId] || []
+      // Дедуп: оптимистичная строка (id = streamId) и серверное `message.queued`
+      // с тем же `message_id` — одна строка, а не две.
+      const at = msg.id ? current.findIndex((item) => item.id === msg.id) : -1
+      const pending = at >= 0
+        ? current.map((item, i) => (i === at ? { ...item, ...msg, sending: false } : item))
+        : [...current, msg]
+      return { pendingBySession: { ...s.pendingBySession, [sessionId]: pending } }
+    }),
+
+  removePendingById: (sessionId, id) =>
+    set((s) => {
+      const current = s.pendingBySession[sessionId]
+      if (!current) return s
+      const pending = current.filter((item) => item.id !== id)
+      if (pending.length === current.length) return s
       return { pendingBySession: { ...s.pendingBySession, [sessionId]: pending } }
     }),
 

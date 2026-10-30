@@ -1410,6 +1410,8 @@ export const dict = {
   'chat.error.forkFailed': 'Ошибка создания ветки:',
 
   'chat.message.sent': 'Сообщение отправлено',
+  'chat.message.unconfirmed':
+    'Сообщение отправлено, подтверждение задерживается — проверяю очередь',
 
   'chat.debug.noData': 'Нет отладочных данных',
   'chat.queue.returnInDev': 'Вернуть в поле ввода — в разработке',

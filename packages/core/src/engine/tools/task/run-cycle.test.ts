@@ -1316,3 +1316,122 @@ describe('run-cycle — отмена', () => {
     expect(result.metadata!.interrupted).toBe(true);
   });
 });
+
+describe('run-cycle — прогресс саб-агента: дельты, а не полный текст', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('публикует только приращение content_delta/reasoning_delta (полного текста в событии нет)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const published: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const chatAsync = vi.fn(() => (async function* () {
+      // Провайдер: reasoning — кумулятивный, content в не-финальных чанках — приращение.
+      yield { isFinal: false, content: 'Hel', reasoning: 'дум' } as Chunk;
+      vi.setSystemTime(Date.now() + 500);
+      yield { isFinal: false, content: 'lo', reasoning: 'думаю' } as Chunk;
+      vi.setSystemTime(Date.now() + 500);
+      yield { isFinal: true, content: 'Hello', reasoning: 'думаю', model: 'm' } as Chunk;
+    })());
+    const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider,
+        publish: (type: string, data: Record<string, unknown>) => published.push({ type, data }),
+      }),
+    }));
+
+    const progress = published.filter((p) => p.type === 'subagent.progress');
+    // 2 события: финальный чанк дельт не даёт (текст не изменился).
+    expect(progress).toHaveLength(2);
+    expect(progress[0]!.data.content_delta).toBe('Hel');
+    expect(progress[0]!.data.reasoning_delta).toBe('дум');
+    expect(progress[1]!.data.content_delta).toBe('lo');
+    expect(progress[1]!.data.reasoning_delta).toBe('аю');
+    // Накопленного текста в кадре больше нет — потребитель получает дельты.
+    expect(progress.every((p) => !('content' in p.data) && !('reasoning' in p.data))).toBe(true);
+    expect(progress[0]!.data.parent_call_id).toBeUndefined();
+    expect(result.content).toContain('Hello');
+  });
+
+  it('очень длинный прогресс (> 200 КБ за прогон) перестаёт публиковаться', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const published: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const huge = 'a'.repeat(210_000);
+    const chatAsync = vi.fn(() => (async function* () {
+      yield { isFinal: false, content: huge } as Chunk;
+      vi.setSystemTime(Date.now() + 500);
+      yield { isFinal: false, content: `${huge}b` } as Chunk;
+      vi.setSystemTime(Date.now() + 500);
+      yield { isFinal: true, content: `${huge}b` } as Chunk;
+    })());
+    const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider,
+        publish: (type: string, data: Record<string, unknown>) => published.push({ type, data }),
+      }),
+    }));
+
+    expect(published.filter((p) => p.type === 'subagent.progress')).toHaveLength(0);
+    // Итоговый результат не пострадал.
+    expect(result.content).toContain(huge.slice(0, 20));
+  });
+});
+
+describe('run-cycle — метка лимита шагов в дочерней сессии', () => {
+  it('финальное сообщение ребёнка на шаге-лимите несёт step_limit_reached/step_limit', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const report = 'ОТЧЁТ: сделано 1 из 3';
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: report }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      maxSteps: 2,
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const finalAssistant = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === report,
+    );
+    expect(finalAssistant).toBeDefined();
+    expect(finalAssistant!.metadata).toMatchObject({ step_limit_reached: true, step_limit: 2 });
+  });
+
+  it('пустой отчёт: детерминированный текст task.steps_limit_empty сохраняется в ребёнка с тем же флагом', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: '   ' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 2,
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.metadata!.report_missing).toBe(true);
+    const expected = sm('task.steps_limit_empty', { limit: '2' });
+    const saved = (await sessionManager.getSession(child.id))!;
+    const finalAssistant = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === expected,
+    );
+    expect(finalAssistant).toBeDefined();
+    expect(finalAssistant!.metadata).toMatchObject({ step_limit_reached: true, step_limit: 2 });
+  });
+});
