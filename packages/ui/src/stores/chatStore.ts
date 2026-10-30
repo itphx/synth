@@ -242,29 +242,65 @@ export interface QueuedMessage {
 }
 
 /**
+ * Ключи порядка сообщения (ADR-118 §2).
+ *
+ * - `ord` — монотонный порядок записи в истории (единственный «настоящий»
+ *   ключ порядка);
+ * - `id` — устойчивая идентичность (ADR-118 §7), тай-брейк;
+ * - `created_at` — время материализации (ISO) — фолбэк, когда `ord` есть
+ *   только у одного из сообщений;
+ * - `index` — позиция в серверном массиве: **не** ключ порядка (смешивать с
+ *   `ord` нельзя — это разные шкалы).
+ */
+export type MessageOrderKey = Pick<MessageData, 'ord' | 'id' | 'index'> & {
+  created_at?: string
+}
+
+/** Тай-брейк по `id` (ADR-118 §7) — при полном равенстве ключей порядок по `index`. */
+function tieBreakById(a: MessageOrderKey, b: MessageOrderKey): number {
+  const aid = a.id ?? ''
+  const bid = b.id ?? ''
+  if (aid !== bid) return aid < bid ? -1 : 1
+  return a.index - b.index
+}
+
+/**
  * Сортировка сообщений по `ord` (ADR-118 §2) — монотонный порядок записи.
  *
- * - сообщения с `ord` идут по нему; при равном `ord` — tie-break по `id`
+ * - у обоих есть `ord` — по нему; при равном `ord` — tie-break по `id`
  *   (ADR-118 «Порядок и идемпотентность»);
- * - сообщение без `ord` (ещё не материализовано — живой черновик) встаёт по
- *   позиционному индексу: оно новее всех записанных.
+ * - `ord` есть только у одного — сравниваем **по времени материализации**
+ *   (`created_at`, ISO — лексикографически), и только при полном равенстве —
+ *   по `id`. Позиционный `index` здесь не участвует: это позиция в серверном
+ *   массиве, а не порядок записи; смешивание шкал уводило сообщение
+ *   (например, уведомление о завершении фонового прогона) под ответ агента;
+ * - нет ни `ord`, ни `created_at` — живое (ещё не материализованное) сообщение:
+ *   оно новее всех записанных → в конец.
  */
-export function compareMessagesByOrd(
-  a: Pick<MessageData, 'ord' | 'id' | 'index'>,
-  b: Pick<MessageData, 'ord' | 'id' | 'index'>,
-): number {
+export function compareMessagesByOrd(a: MessageOrderKey, b: MessageOrderKey): number {
   const ao = a.ord ?? null
   const bo = b.ord ?? null
+  const ac = a.created_at ?? ''
+  const bc = b.created_at ?? ''
+
+  // Живое сообщение (не материализовано в истории): нет ни `ord`, ни времени —
+  // оно новее всех записанных → в конец.
+  const aLive = ao === null && !ac
+  const bLive = bo === null && !bc
+  if (aLive !== bLive) return aLive ? 1 : -1
+
+  // `ord` у обоих — монотонный порядок записи (ADR-118 §2).
   if (ao !== null && bo !== null) {
     if (ao !== bo) return ao - bo
-    const aid = a.id ?? ''
-    const bid = b.id ?? ''
-    if (aid === bid) return a.index - b.index
-    return aid < bid ? -1 : 1
+    return tieBreakById(a, b)
   }
-  if (ao !== null && bo === null) return a.index - b.index
-  if (ao === null && bo !== null) return a.index - b.index
-  return a.index - b.index
+
+  // `ord` есть только у одного (или у обоих нет) — сравниваем по времени
+  // материализации; при равенстве — тай-брейк по `id`.
+  if (ac && bc) {
+    if (ac !== bc) return ac < bc ? -1 : 1
+  }
+  return tieBreakById(a, b)
 }
 
 /** Сортировка сообщений сессии по `ord` (ADR-118 §2). */
@@ -510,7 +546,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (at === -1) return s
       const next = [...current]
       next[at] = { ...next[at]!, ...changes }
-      return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
+      // `ord` приходит сюда из `message.delivered` (ADR-118 §4) — пересортировываем,
+      // чтобы порядок в сторе совпадал с порядком отрисовки (и с `index` сервера).
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: sortMessagesByOrd(next) } }
     }),
 
   removeMessageById: (sessionId, messageId) =>

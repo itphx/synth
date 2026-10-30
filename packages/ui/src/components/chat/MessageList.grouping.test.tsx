@@ -88,4 +88,25 @@ describe('groupMessagesByTurn', () => {
     expect(groups).toHaveLength(2)
     expect(groups.map((g) => g.turnId)).toEqual(['t1', 't2'])
   })
+
+  it('уведомление о фоновом процессе не уезжает под ответ агента', () => {
+    // Порядок в БД верный: ord=138 (уведомление) → ord=139 (ответ агента).
+    // На клиенте уведомление пришло без `ord` и стоит в серверном массиве
+    // дальше ответа — смешение `ord` и `index` уводило его под ответ.
+    const groups = groupMessagesByTurn([
+      msg({ id: 'answer', index: 5, ord: 139, role: 'assistant', created_at: '2026-09-19T00:00:05Z' }),
+      msg({ id: 'notice', index: 9, ord: null, role: 'user', created_at: '2026-09-19T00:00:00Z' }),
+    ])
+
+    expect(groups.map((g) => g.messages[0]!.id)).toEqual(['notice', 'answer'])
+  })
+
+  it('живое сообщение (без ord и created_at) — в конце ленты', () => {
+    const groups = groupMessagesByTurn([
+      msg({ id: 'live', index: 3, ord: null, created_at: '' }),
+      msg({ id: 'saved', index: 1, ord: 7 }),
+    ])
+
+    expect(groups.map((g) => g.messages[0]!.id)).toEqual(['saved', 'live'])
+  })
 })

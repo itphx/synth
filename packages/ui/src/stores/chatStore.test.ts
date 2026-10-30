@@ -55,7 +55,43 @@ describe('chatStore: сортировка сообщений по ord (ADR-118 �
     expect(compareMessagesByOrd(second, first)).toBeGreaterThan(0)
   })
 
-  it('sortMessagesByOrd: сообщение без ord (живой черновик) встаёт по позиции', () => {
+  it('compareMessagesByOrd: ord только у одного — по created_at, а не по index', () => {
+    // Контрпример из репорта: ответ агента (ord=139) пришёл позже уведомления
+    // о фоновом процессе, но `ord` у уведомления ещё не было. Уведомление
+    // при этом стоит в серверном массиве дальше ответа (`index` больше) —
+    // смешивание `ord` и `index` уводило его под ответ агента.
+    const answer = { ord: 139, id: 'answer', index: 5, created_at: '2026-10-30T10:00:05Z' }
+    const notice = { ord: null, id: 'notice', index: 9, created_at: '2026-10-30T10:00:00Z' }
+    expect(compareMessagesByOrd(notice, answer)).toBeLessThan(0)
+    expect(compareMessagesByOrd(answer, notice)).toBeGreaterThan(0)
+  })
+
+  it('compareMessagesByOrd: без ord у обоих — по created_at', () => {
+    const early = { ord: null, id: 'early', index: 9, created_at: '2026-10-30T10:00:00Z' }
+    const late = { ord: null, id: 'late', index: 0, created_at: '2026-10-30T10:00:01Z' }
+    expect(compareMessagesByOrd(early, late)).toBeLessThan(0)
+    expect(compareMessagesByOrd(late, early)).toBeGreaterThan(0)
+  })
+
+  it('sortMessagesByOrd: уведомление о фоновом процессе не уезжает под ответ агента', () => {
+    // В БД порядок верный: ord=138 (уведомление) → ord=139 (ответ агента).
+    // На клиенте уведомление пришло без `ord` и стоит в серверном массиве
+    // дальше ответа — по `index` оно вставало ниже.
+    const sorted = sortMessagesByOrd([
+      msg({ index: 5, id: 'answer', ord: 139, role: 'assistant', created_at: '2026-10-30T10:00:05Z' }),
+      msg({
+        index: 9,
+        id: 'notice',
+        ord: null,
+        role: 'user',
+        metadata: { type: 'background_run_result' },
+        created_at: '2026-10-30T10:00:00Z',
+      }),
+    ])
+    expect(sorted.map((m) => m.id)).toEqual(['notice', 'answer'])
+  })
+
+  it('sortMessagesByOrd: живое сообщение (без ord и created_at) — последнее', () => {
     const sorted = sortMessagesByOrd([
       msg({ index: 2, id: 'c', ord: 2 }),
       msg({ index: 0, id: 'a', ord: 0 }),
@@ -63,11 +99,26 @@ describe('chatStore: сортировка сообщений по ord (ADR-118 �
     ])
     expect(sorted.map((m) => m.id)).toEqual(['a', 'b', 'c'])
 
+    // Живое сообщение (ещё не материализовано в истории): ни `ord`, ни времени.
     const withDraft = sortMessagesByOrd([
-      msg({ index: 1, id: 'draft', ord: null }),
+      msg({ index: 1, id: 'draft', ord: null, created_at: '' }),
       msg({ index: 0, id: 'saved', ord: 10 }),
     ])
     expect(withDraft.map((m) => m.id)).toEqual(['saved', 'draft'])
+  })
+
+  it('стабильность: при равных ключах — тай-брейк по id, порядок не зависит от вставки', () => {
+    const a = msg({ index: 0, id: 'b', ord: 5, created_at: '2026-10-30T10:00:00Z' })
+    const b = msg({ index: 1, id: 'a', ord: 5, created_at: '2026-10-30T10:00:00Z' })
+    expect(sortMessagesByOrd([a, b]).map((m) => m.id)).toEqual(['a', 'b'])
+    expect(sortMessagesByOrd([b, a]).map((m) => m.id)).toEqual(['a', 'b'])
+
+    // Одинаковые `ord` и `created_at` у сообщений без id — порядок по `index`.
+    const noIds = sortMessagesByOrd([
+      { index: 1, ord: 7, created_at: '2026-10-30T10:00:00Z' } as MessageData,
+      { index: 0, ord: 7, created_at: '2026-10-30T10:00:00Z' } as MessageData,
+    ])
+    expect(noIds.map((m) => m.index)).toEqual([0, 1])
   })
 })
 
@@ -114,6 +165,33 @@ describe('chatStore: upsertMessage (ADR-118 §7 — адресация по id)'
     store.upsertMessage('s1', msg({ index: 2, id: 'b', ord: 1, role: 'assistant' }))
 
     expect(useChatStore.getState().messagesBySession['s1']!.map((m) => m.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('уведомление о фоновом процессе остаётся выше живого ответа агента', () => {
+    const store = useChatStore.getState()
+    // Живой ответ агента: `ord` ещё нет (материализуется позже).
+    store.upsertMessage(
+      's1',
+      msg({ index: 138, id: 'answer', role: 'assistant', created_at: '2026-10-30T10:00:05Z' }),
+    )
+    // Уведомление о завершении фонового прогона (ord=138) пришло раньше ответа,
+    // но в массиве встало позже — порядок определяется временем материализации.
+    store.upsertMessage(
+      's1',
+      msg({
+        index: 138,
+        id: 'notice',
+        ord: 138,
+        role: 'user',
+        metadata: { type: 'background_run_result' },
+        created_at: '2026-10-30T10:00:00Z',
+      }),
+    )
+
+    expect(useChatStore.getState().messagesBySession['s1']!.map((m) => m.id)).toEqual([
+      'notice',
+      'answer',
+    ])
   })
 })
 

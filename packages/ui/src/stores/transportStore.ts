@@ -657,13 +657,24 @@ export function createDispatcher(): EventDispatcher {
           const current = chat.messagesBySession[sid] || []
           const byId = new Map(current.map((m) => [m.id, m]))
           for (const m of r.messages) {
-            if (!m.id || byId.has(m.id)) continue
-            byId.set(m.id, m)
+            if (!m.id) continue
+            const known = byId.get(m.id)
+            if (!known) {
+              byId.set(m.id, m)
+              continue
+            }
+            // Сообщение уже в сторе (например, живое), но сервер знает его `ord` —
+            // дополняем: без `ord` сообщение осталось бы «незаписанным» и в
+            // ленте встало бы не на своё место (ADR-118 §2).
+            if (known.ord == null && m.ord != null) {
+              byId.set(m.id, { ...known, ord: m.ord })
+            }
           }
-          chat.setMessages(sid, [...byId.values()])
+          const merged = [...byId.values()]
+          chat.setMessages(sid, merged)
           // ADR-118 §5: в истории мог появиться живой ход (другой клиент) —
           // восстанавливаем границы, иначе он отрисуется как мёртвое сообщение.
-          restoreLiveTurnFromHistory(sid, [...byId.values()])
+          restoreLiveTurnFromHistory(sid, merged)
         }).catch(() => {})
         break
       }
