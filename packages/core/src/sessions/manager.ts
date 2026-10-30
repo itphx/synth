@@ -143,6 +143,10 @@ export class SessionManager {
       settings: {
         // undefined = дефолт модели (см. SessionSettings.temperature).
         temperature: data.settings?.temperature,
+        // ADR-117: тир размышлений модели (`reasoning_effort`/`thinking`/`think`)
+        // не теряется при создании — иначе `POST /sessions` с `reasoningLevel`
+        // не применял effort до `PATCH`.
+        reasoningLevel: data.settings?.reasoningLevel,
         maxTokens: data.settings?.maxTokens ?? 4096,
         debugEnabled: data.settings?.debugEnabled ?? true,
         streamEnabled: data.settings?.streamEnabled ?? true,

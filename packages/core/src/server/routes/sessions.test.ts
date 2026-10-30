@@ -514,6 +514,21 @@ describe('Session API Routes (PATCH mode)', () => {
     });
   });
 
+  describe('POST /api/v2/sessions — settings размышлений (reasoning/effort)', () => {
+    it('сохраняет settings.reasoningLevel (без PATCH настройка уже действует)', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'S', settings: { reasoningLevel: 'high' } }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      const stored = await sessionManager.getSession(body.id);
+      expect(stored?.settings.reasoningLevel).toBe('high');
+    });
+  });
+
   describe('GET /api/v2/sessions/:id/stats (ADR-070 §2.6)', () => {
     it('возвращает агрегацию по агентам и пользователям', async () => {
       const profilesStore = new FileProfileStore({ dataDir: tmpDir });

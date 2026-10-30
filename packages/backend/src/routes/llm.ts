@@ -12,9 +12,11 @@ import type {
   ProviderConfig as SharedProviderConfig,
   TokenUsage,
 } from '@itphx/synth-shared';
+import { EFFORT_LEVELS, mergeModelCompatibility } from '@itphx/synth-shared';
 import {
   AuditLogger,
   BaseProvider,
+  buildChatOptions,
   ContextLengthExceededError,
   deobfuscateSecrets,
   GatewayProvider,
@@ -62,6 +64,13 @@ const chatCompletionsSchema = z.object({
   temperature: z.number().optional(),
   max_tokens: z.number().int().positive().optional(),
   top_p: z.number().optional(),
+  /**
+   * ADR-117: тир усилия модели в OpenAI-совместимом поле (`EffortLevel`).
+   * Прокидывается провайдеру как `ChatOptions.effort`; отправляется он только
+   * при `compatibility.supportsEffortUpdates` (guard остаётся в провайдере).
+   * Невалидное значение — 400 (контракт запроса, а не «тихий» игнор).
+   */
+  reasoning_effort: z.enum(EFFORT_LEVELS).optional(),
   stream: z.boolean().optional(),
   // ADR-070: remote-зеркала (RemoteProvider) просят usage в стриме. Внутренний
   // OpenAIProvider всегда шлёт stream_options.include_usage, но поле принимаем
@@ -231,6 +240,10 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
     }
 
     // 2. Создаём провайдер (модель из ModelConfig.name — реальное имя для LLM API).
+    // ADR-117: совместимость протокола собирается теми же слоями, что и в
+    // сессионном вызове — провайдер → shorthand модели (`requiresReasoning`) →
+    // модель. Без этого у прокси не работали `requireReasoning`,
+    // `maxTokensField`, `cacheFormat`, `supportsEffortUpdates`.
     let inner: BaseProvider;
     try {
       inner = ProviderFactory.create(providerName, {
@@ -242,6 +255,13 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
         timeout: providerConfig.timeout ?? 120,
         maxTokens: body.max_tokens,
         numCtx: providerConfig.numCtx,
+        compatibility: mergeModelCompatibility(
+          providerConfig.compatibility,
+          modelConfig.requiresReasoning !== undefined
+            ? { requireReasoning: modelConfig.requiresReasoning }
+            : undefined,
+          modelConfig.compatibility,
+        ),
       }, body.temperature, body.top_p);
     } catch (e) {
       return c.json({
@@ -278,8 +298,9 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
     const messages = toLlmMessages(body.messages);
     const tools = body.tools && body.tools.length > 0 ? body.tools : undefined;
     // `tool_choice` уходит провайдеру только когда задан в теле (иначе поведение
-    // прежнее — решение за моделью).
-    const chatOptions = body.tool_choice ? { toolChoice: body.tool_choice } : undefined;
+    // прежнее — решение за моделью); `reasoning_effort` — тем же объектом опций
+    // (`buildChatOptions` не создаёт пустой `{}`).
+    const chatOptions = buildChatOptions(body.reasoning_effort, body.tool_choice);
 
     if (body.stream) {
       return streamCompletions(c, provider, messages, tools, body.model, transientMap, chatOptions);

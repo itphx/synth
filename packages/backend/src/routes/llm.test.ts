@@ -231,12 +231,12 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       gatewayPayloadLogPath: '',
       patternStore: opts.patternStore ?? null,
     };
-    vi.spyOn(ProviderFactory, 'create').mockReturnValue(fake as never);
+    const createSpy = vi.spyOn(ProviderFactory, 'create').mockReturnValue(fake as never);
 
     const app = new Hono();
     const kit = createMockKit(user);
     app.route('/api/v2/llm', createLlmRoutes(kit as any, deps));
-    return { app, fake, auditPath };
+    return { app, fake, auditPath, createSpy };
   }
 
   describe('валидация тела', () => {
@@ -706,6 +706,135 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
 
       expect(res.status).toBe(200);
       expect(fake.lastChatOptions).toEqual({ toolChoice: 'required' });
+    });
+  });
+
+  describe('совместимость провайдера и effort (ADR-117)', () => {
+    it('провайдер создаётся с merged compatibility: провайдер + shorthand модели + модель', async () => {
+      const { app, createSpy } = createTestContext(userUser, {
+        providerLoader: () => ({
+          ...providerConfig,
+          compatibility: { maxTokensField: 'max_completion_tokens', supportsEffortUpdates: true },
+        }),
+        modelLoader: () => ({
+          ...modelConfig,
+          requiresReasoning: true,
+          compatibility: { requireFinishReason: false },
+        }),
+      });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      expect(res.status).toBe(200);
+
+      const config = createSpy.mock.calls[0]![1];
+      expect(config.compatibility).toEqual({
+        maxTokensField: 'max_completion_tokens',
+        supportsEffortUpdates: true,
+        requireReasoning: true,
+        requireFinishReason: false,
+      });
+    });
+
+    it('shorthand requiresReasoning: false модели доходит как requireReasoning: false', async () => {
+      const { app, createSpy } = createTestContext(userUser, {
+        modelLoader: () => ({ ...modelConfig, requiresReasoning: false }),
+      });
+
+      await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+
+      const config = createSpy.mock.calls[0]![1];
+      expect(config.compatibility).toEqual({ requireReasoning: false });
+    });
+
+    it('без compatibility в конфиге — пустой объект (поведение провайдера не меняется)', async () => {
+      const { app, createSpy } = createTestContext(userUser);
+      await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      const config = createSpy.mock.calls[0]![1];
+      expect(config.compatibility).toEqual({});
+    });
+
+    it('non-stream: reasoning_effort доходит до ChatOptions.effort', async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'подумай' }],
+        reasoning_effort: 'max',
+      }));
+
+      expect(res.status).toBe(200);
+      expect(fake.lastChatOptions).toEqual({ effort: 'max' });
+    });
+
+    it('stream: reasoning_effort доходит до ChatOptions.effort', async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'подумай' }],
+        reasoning_effort: 'xhigh',
+        stream: true,
+      }));
+
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(fake.lastAsyncOptions).toEqual({ effort: 'xhigh' });
+    });
+
+    it('effort и tool_choice едут вместе одним ChatOptions', async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'отчитайся' }],
+        tools: [{ type: 'function', function: { name: 'read_file', description: 'read', parameters: {} } }],
+        tool_choice: 'none',
+        reasoning_effort: 'low',
+      }));
+
+      expect(res.status).toBe(200);
+      expect(fake.lastChatOptions).toEqual({ effort: 'low', toolChoice: 'none' });
+    });
+
+    it('без reasoning_effort опции не появляются (поведение прежнее)', async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+
+      expect(fake.lastChatOptions).toBeUndefined();
+    });
+
+    it('невалидный reasoning_effort → 400 BAD_REQUEST (провайдер не вызывается)', async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+        reasoning_effort: 'default',
+      }));
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('BAD_REQUEST');
+      expect(body.error.message).toContain('reasoning_effort');
+      expect(fake.lastMessages).toEqual([]);
     });
   });
 

@@ -118,6 +118,22 @@ describe('SessionManager', () => {
     });
   });
 
+  it('createSession сохраняет reasoningLevel (effort-настройка не теряется до PATCH)', async () => {
+    const session = await manager.createSession({
+      settings: { reasoningLevel: 'high' },
+    });
+    expect(session.settings.reasoningLevel).toBe('high');
+
+    // Переживает перезагрузку из хранилища.
+    const reloaded = await manager.getSession(session.id);
+    expect(reloaded!.settings.reasoningLevel).toBe('high');
+
+    // Не задано — поле остаётся undefined (дефолт модели), как у temperature:
+    // подмены на 'default'/'high' нет.
+    const bare = await manager.createSession({});
+    expect(bare.settings.reasoningLevel).toBeUndefined();
+  });
+
   it('createSession без провайдера и без сессионных mcpToolSettings не задаёт их', async () => {
     const session = await manager.createSession({});
     expect(session.settings.mcpToolSettings).toBeUndefined();
