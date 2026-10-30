@@ -108,6 +108,14 @@ interface ChatMessageProps {
    * ADR-118 §1: сегмент хода, склеенный с предыдущим (без визуального зазора).
    */
   compact?: boolean
+  /**
+   * ADR-118 §1: сегмент внутри **общего** блока хода (группа из >1 сегмента):
+   * «пузырь» (фон/рамка/скругление/отступы) рисует контейнер группы
+   * (`MessageList`, `data-testid="turn-block"`), сегмент даёт только типографику.
+   */
+  bare?: boolean
+  /** Показывать ряд действий сообщения (в блоке хода — только у последнего). */
+  showActions?: boolean
   /** Статус повторной попытки — показывается в живом сообщении. */
   retry?: StreamRetry | null
   onRetryNow?: () => void
@@ -139,6 +147,8 @@ function ChatMessageInner({
   pending,
   showHeader = true,
   compact = false,
+  bare = false,
+  showActions = true,
   retry,
   onRetryNow,
   onCancelRetry,
@@ -187,22 +197,30 @@ function ChatMessageInner({
     !!sessionId && debugModalSessionId === sessionId && !!message.id && debugModalMessageId === message.id
 
   const containerClass = cn(
-    'flex px-4 group',
-    compact ? 'py-0' : 'py-3',
+    'flex group',
+    bare ? 'w-full min-w-0 px-0' : 'px-4',
+    bare || compact ? 'py-0' : 'py-3',
     selectionMode ? 'flex-row items-start' : 'flex-col',
     isUser && 'items-end',
     isAssistant && 'items-start'
   )
 
+  // ADR-118 §1: `bare` — сегмент внутри общего блока хода: пузырь рисует
+  // контейнер группы, здесь только типографика (и состояния disabled/pinned).
   const bubbleClass = cn(
-    'max-w-[85%] rounded-lg px-4 py-3',
-    isUser && 'bg-primary/10 text-foreground rounded-br-sm',
-    isAssistant && 'bg-card border border-border/50 text-foreground rounded-bl-sm',
+    bare
+      ? 'w-full min-w-0 text-foreground'
+      : cn(
+          'max-w-[85%] rounded-lg px-4 py-3',
+          isUser && 'bg-primary/10 text-foreground rounded-br-sm',
+          isAssistant && 'bg-card border border-border/50 text-foreground rounded-bl-sm',
+        ),
     message.disabled && 'opacity-50 line-through',
     message.pinned && 'ring-1 ring-primary/30',
   )
 
-  const showActions = isUser || isAssistant || isSummary || isDebug
+  const actionsSupported = isUser || isAssistant || isSummary || isDebug
+  const actionsVisible = showActions && actionsSupported
 
   // ADR-070 §2.6: строка статистики — только для ответов ассистента с данными.
   // Скрытые/выключенные и служебные tool-chain сообщения исключаем.
@@ -463,7 +481,7 @@ function ChatMessageInner({
         ariaLabel={label}
         meta={withMeta ? <MessageHeader message={message} metaOnly /> : undefined}
         actions={
-          withMeta && showActions ? (
+          withMeta && actionsVisible ? (
             <MessageActions
               embedded
               showCopy={false}
@@ -567,7 +585,7 @@ function ChatMessageInner({
         ariaLabel={label}
         meta={<MessageHeader message={message} metaOnly />}
         actions={
-          showActions ? (
+          actionsVisible ? (
             <MessageActions
               embedded
               showCopy={false}
@@ -645,7 +663,7 @@ function ChatMessageInner({
         ariaLabel={label}
         meta={<MessageHeader message={message} metaOnly />}
         actions={
-          showActions ? (
+          actionsVisible ? (
             <MessageActions
               embedded
               showCopy={false}
@@ -819,7 +837,7 @@ function ChatMessageInner({
           />
         )}
 
-        {showActions && (
+        {actionsVisible && (
           <MessageActions
             messageId={message.id}
             role={message.role}

@@ -101,6 +101,28 @@ const VIRTUALIZE_THRESHOLD = 30
 const OVERSCAN = 30
 
 /**
+ * ADR-118 §1: «пузырьными» классами рисует группа-ход из нескольких сегментов —
+ * её сегменты идут с `bare` (только типографика, без собственной карточки).
+ * Значения совпадают с assistant-пузырём `ChatMessage`.
+ */
+const TURN_BLOCK_CLASS =
+  'group flex w-full max-w-[85%] flex-col items-start rounded-lg px-4 py-3 bg-card border border-border/50 text-foreground rounded-bl-sm'
+
+/** Сегмент, который обычно рисует собственный пузырь (assistant без системной команды). */
+function isBubbleSegment(msg: MessageData): boolean {
+  return msg.role === 'assistant' && msg.metadata?.command !== true
+}
+
+/**
+ * Группа рендерится **одним** блоком-пузырём, если в ней больше одного сегмента
+ * и все они — assistant-шаги (user-реплики в группы не склеиваются по построению,
+ * а служебные `Notice`-сообщения блок не образуют).
+ */
+function isTurnBlock(group: MessageGroup): boolean {
+  return group.messages.length > 1 && group.messages.every(isBubbleSegment)
+}
+
+/**
  * Статус «идёт обработка» у последней user-реплики, пока в ходе ещё нет живого
  * сообщения (первой дельты). Возвращает `null` — статус не показываем.
  */
@@ -286,9 +308,18 @@ export function MessageList({
     lastClickedRef.current = messageId
   }, [onToggleSelect, onSelectRange])
 
-  const renderSegment = (group: MessageGroup, msg: MessageData, first: boolean) => {
-    // ADR-118 §10: у первого сегмента группы pin пинит весь ход.
-    const pinHandler = (first ? pinTurnHandlers?.get(group.key) : undefined) ?? onPin
+  const renderSegment = (
+    group: MessageGroup,
+    msg: MessageData,
+    first: boolean,
+    opts?: { bare?: boolean; last?: boolean },
+  ) => {
+    const bare = opts?.bare === true
+    const last = opts?.last === true
+    // ADR-118 §10: у контейнера хода pin пинит весь ход — у первого сегмента
+    // (прежнее поведение) и у последнего в едином блоке (там ряд действий).
+    const pinTurn = pinTurnHandlers?.get(group.key)
+    const pinHandler = (first || (bare && last)) && pinTurn ? pinTurn : onPin
     return (
       <ChatMessage
         key={msg.id ?? `${msg.role}-${msg.index}-${msg.created_at}`}
@@ -310,10 +341,41 @@ export function MessageList({
         // ADR-118 §1: заголовок агента/модели — только у первого сегмента хода.
         showHeader={first}
         compact={!first}
+        // ADR-118 §1: в общем блоке хода пузырь рисует контейнер группы.
+        bare={bare}
+        // …и ряд действий — только у последнего сегмента (внизу блока).
+        showActions={!bare || last}
         retry={retry}
         onRetryNow={onRetryNow}
         onCancelRetry={onCancelRetry}
       />
+    )
+  }
+
+  /** Одна группа-ход: либо контейнер-пузырь с `bare`-сегментами, либо как раньше. */
+  const renderGroup = (group: MessageGroup) => {
+    const turnBlock = isTurnBlock(group)
+    const segments = group.messages.map((msg, i) => {
+      const segment = renderSegment(group, msg, i === 0, {
+        bare: turnBlock,
+        last: i === group.messages.length - 1,
+      })
+      if (!turnBlock || i === 0) return segment
+      // Между шагами — тонкий разделитель, без отдельных карточек.
+      return (
+        <div
+          key={`divider:${msg.id ?? msg.index}`}
+          className="mt-3 w-full border-t border-border/30 pt-3"
+        >
+          {segment}
+        </div>
+      )
+    })
+    if (!turnBlock) return segments
+    return (
+      <div key={group.key} data-testid="turn-block" className={TURN_BLOCK_CLASS}>
+        {segments}
+      </div>
     )
   }
 
@@ -344,17 +406,13 @@ export function MessageList({
                   if (!group) return null
                   return (
                     <div key={group.key} data-index={vi.index} ref={virtualizer.measureElement}>
-                      {group.messages.map((msg, i) => renderSegment(group, msg, i === 0))}
+                      {renderGroup(group)}
                     </div>
                   )
                 })}
               </div>
             ) : (
-              groups.map((group) => (
-                <div key={group.key}>
-                  {group.messages.map((msg, i) => renderSegment(group, msg, i === 0))}
-                </div>
-              ))
+              groups.map((group) => <div key={group.key}>{renderGroup(group)}</div>)
             )}
           </div>
         </div>

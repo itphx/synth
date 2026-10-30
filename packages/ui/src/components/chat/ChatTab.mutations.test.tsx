@@ -211,8 +211,10 @@ describe('Пакетные мутации — по id', () => {
     vi.mocked(synthApi.batchMessages).mockResolvedValue({ results: [] } as never)
 
     const container = await mount()
+    // Ряд действий блока хода — у последнего сегмента (ADR-118 §1), pin всё равно
+    // пинит весь ход целиком.
     await act(async () => {
-      buttonIn(container, 'msg-x', 'Pin').click()
+      buttonIn(container, 'msg-y', 'Pin').click()
     })
     await flush(2)
 
