@@ -6,9 +6,10 @@
  * (`task-resume.ts`). ADR-095 (шаг 5): вынесено из `task.ts` без изменения
  * поведения.
  */
-import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock } from '@itphx/synth-shared';
-import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock, ReasoningLevel } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
+import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
 import { buildDenyResult, executeToolDef } from '../tool-execution.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
@@ -77,6 +78,12 @@ export interface SubagentRunConfig {
    */
   topP?: number;
   topK?: number;
+  /**
+   * ADR-117: актуальный уровень размышлений прогона (`agent.reasoningLevel` →
+   * настройки дочерней сессии). Считается на **каждый** LLM-вызов цикла:
+   * effort едет в `ChatOptions`, провайдер не кэшируется с «зашитым» значением.
+   */
+  reasoningLevel?: ReasoningLevel;
   tools?: ToolForLLM[];
   /** Дочерняя сессия (если есть) — в неё пишется история саб-агента. */
   childSessionId?: string;
@@ -730,13 +737,16 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       for (let attempt = 1; attempt <= retryMaxAttempts; attempt++) {
         if (isAborted()) break;
         try {
+          // ADR-117: effort — из `reasoningLevel` прогона на каждый вызов
+          // (смена настройки между вызовами подхватывается, провайдер кэширован).
+          const effort = effortForReasoningLevel(config.reasoningLevel);
           for await (const chunk of effectiveProvider.chatAsync(
             requestMessages,
             llmSystemPrompt || undefined,
             tools as Record<string, unknown>[] | undefined,
             undefined,
             cancelToken,
-            stepLimitStep ? { toolChoice: 'none' } : undefined,
+            buildChatOptions(effort, stepLimitStep ? 'none' : undefined),
           )) {
             if (isAborted()) break;
             if (chunk.isFinal) {

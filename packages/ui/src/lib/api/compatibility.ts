@@ -49,6 +49,8 @@ export interface CompatibilityDraft {
   cacheFormat: CompatibilityCacheFormat
   /** `''` — авто (сервер: да). */
   requireFinishReason: CompatibilityTristate
+  /** ADR-117: `''` — авто (сервер: нет, только явное включение effort-режима). */
+  supportsEffortUpdates: CompatibilityTristate
 }
 
 export function emptyCompatibilityDraft(): CompatibilityDraft {
@@ -62,6 +64,7 @@ export function emptyCompatibilityDraft(): CompatibilityDraft {
     supportsToolChoice: '',
     cacheFormat: '',
     requireFinishReason: '',
+    supportsEffortUpdates: '',
   }
 }
 
@@ -102,6 +105,7 @@ export function draftFromCompatibility(value?: ModelCompatibility | null): Compa
   draft.cacheFormat =
     value.cacheFormat === 'anthropic' || value.cacheFormat === 'alibaba' ? value.cacheFormat : ''
   draft.requireFinishReason = tristateToDraft(value.requireFinishReason)
+  draft.supportsEffortUpdates = tristateToDraft(value.supportsEffortUpdates)
   return draft
 }
 
@@ -129,6 +133,8 @@ export function compatibilityFromDraft(draft: CompatibilityDraft): ModelCompatib
   if (draft.cacheFormat) out.cacheFormat = draft.cacheFormat
   const requireFinishReason = tristateToBool(draft.requireFinishReason)
   if (requireFinishReason !== undefined) out.requireFinishReason = requireFinishReason
+  const supportsEffortUpdates = tristateToBool(draft.supportsEffortUpdates)
+  if (supportsEffortUpdates !== undefined) out.supportsEffortUpdates = supportsEffortUpdates
   return Object.keys(out).length > 0 ? out : null
 }
 

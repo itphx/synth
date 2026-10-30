@@ -10,6 +10,7 @@ import type {
   DecisionResponse,
   ModelCompatibility,
   ResolvedModelCompatibility,
+  EffortLevel,
 } from '@itphx/synth-shared';
 import { detectCompatibilityHeuristics, resolveModelCompatibility } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
@@ -499,6 +500,32 @@ export type SystemPromptInput = string | SystemPromptPayload;
 export interface ChatOptions {
   /** Управление вызовом инструментов на шаге. */
   toolChoice?: 'auto' | 'none' | 'required';
+  /**
+   * ADR-117: явный тир усилия модели (Anthropic `output_config.effort`).
+   * Приоритетнее значения, выведенного из `reasoningLevel`; применяется
+   * **на запрос** (каждый LLM-вызов цикла), поэтому смена настройки между
+   * шагами/ходами подхватывается. Провайдер отправляет поле только при
+   * `compatibility.supportsEffortUpdates: true` — иначе параметр игнорируется.
+   */
+  effort?: EffortLevel;
+}
+
+/**
+ * ADR-117: собрать опции вызова, не создавая пустой объект.
+ *
+ * Форма `undefined` сохраняется для прогонов без effort и без ограничения
+ * вызова — наблюдаемый контракт `chatAsync` не меняется (тесты и внешние
+ * реализации ожидают `undefined`, а не `{}`).
+ */
+export function buildChatOptions(
+  effort: EffortLevel | undefined,
+  toolChoice?: ChatOptions['toolChoice'],
+): ChatOptions | undefined {
+  if (!effort && !toolChoice) return undefined;
+  return {
+    ...(effort ? { effort } : {}),
+    ...(toolChoice ? { toolChoice } : {}),
+  };
 }
 
 /**

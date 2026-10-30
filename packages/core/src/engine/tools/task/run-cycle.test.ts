@@ -1435,3 +1435,46 @@ describe('run-cycle — метка лимита шагов в дочерней �
     expect(finalAssistant!.metadata).toMatchObject({ step_limit_reached: true, step_limit: 2 });
   });
 });
+
+describe('run-cycle — effort из reasoningLevel (ADR-117)', () => {
+  it('reasoningLevel прогона доходит до ChatOptions.effort на каждом вызове', async () => {
+    const { provider, chatAsync } = scriptedProvider([
+      [{ isFinal: true, content: 'ok', model: 'test-model' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider }),
+      reasoningLevel: 'medium',
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(chatAsync.mock.calls[0]![5]).toEqual({ effort: 'medium' });
+  });
+
+  it('шаг-лимит: effort и toolChoice собираются в одни опции', async () => {
+    const { provider, chatAsync } = scriptedProvider([
+      [{ isFinal: true, content: 'только текст', model: 'test-model' }],
+    ]);
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({ provider }),
+      maxSteps: 1,
+      reasoningLevel: 'high',
+    }));
+
+    expect(chatAsync.mock.calls[0]![5]).toEqual({ effort: 'high', toolChoice: 'none' });
+  });
+
+  it('без reasoningLevel (или none) опции не создаются — прежняя форма undefined', async () => {
+    for (const level of [undefined, 'none'] as const) {
+      const { provider, chatAsync } = scriptedProvider([
+        [{ isFinal: true, content: 'ok', model: 'test-model' }],
+      ]);
+      await runSubagent(makeConfig({
+        extra: makeExtra({ provider }),
+        ...(level ? { reasoningLevel: level } : {}),
+      }));
+      expect(chatAsync.mock.calls[0]![5]).toBeUndefined();
+    }
+  });
+});

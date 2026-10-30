@@ -17,6 +17,7 @@ describe('resolveModelCompatibility — порядок «модель → про
       streamUsage: true,
       supportsToolChoice: true,
       requireFinishReason: true,
+      supportsEffortUpdates: false,
     });
   });
 
@@ -88,6 +89,25 @@ describe('resolveModelCompatibility — порядок «модель → про
     // Эвристики cacheFormat не задают — поведение существующих записей не меняется.
     const heuristics = detectCompatibilityHeuristics({ providerType: 'openai', modelId: 'claude-sonnet-4' });
     expect(resolveModelCompatibility(undefined, undefined, heuristics).cacheFormat).toBeUndefined();
+  });
+
+  it('supportsEffortUpdates: дефолт false, только явное значение, модель перекрывает провайдера', () => {
+    expect(resolveModelCompatibility().supportsEffortUpdates).toBe(false);
+    expect(resolveModelCompatibility({ supportsEffortUpdates: true }).supportsEffortUpdates).toBe(true);
+    expect(
+      resolveModelCompatibility(
+        { supportsEffortUpdates: true },
+        { supportsEffortUpdates: false },
+      ).supportsEffortUpdates,
+    ).toBe(false);
+    // Авто-эвристики нет: даже «effort-модель» из каталога остаётся false.
+    const heuristics = detectCompatibilityHeuristics({
+      providerType: 'anthropic',
+      providerName: 'anthropic',
+      baseUrl: 'https://api.anthropic.com/v1/messages',
+      modelId: 'claude-sonnet-5',
+    });
+    expect(resolveModelCompatibility(undefined, undefined, heuristics).supportsEffortUpdates).toBe(false);
   });
 });
 
@@ -193,6 +213,18 @@ describe('parseModelCompatibilityInput — API-контракт', () => {
       value: { requireFinishReason: true },
     });
     expect(parseModelCompatibilityInput({ requireFinishReason: 'no' }).ok).toBe(false);
+  });
+
+  it('supportsEffortUpdates: boolean, false сохраняется явно', () => {
+    expect(parseModelCompatibilityInput({ supportsEffortUpdates: true })).toEqual({
+      ok: true,
+      value: { supportsEffortUpdates: true },
+    });
+    expect(parseModelCompatibilityInput({ supportsEffortUpdates: false })).toEqual({
+      ok: true,
+      value: { supportsEffortUpdates: false },
+    });
+    expect(parseModelCompatibilityInput({ supportsEffortUpdates: 'yes' }).ok).toBe(false);
   });
 
   it('пустой объект — нет совместимости', () => {

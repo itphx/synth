@@ -1936,6 +1936,8 @@ export const dict = {
   'admin.compatibility.streamUsageHint': 'Request token usage in a streamed response. “Auto” — enabled.',
   'admin.compatibility.supportsToolChoice': 'tool_choice support',
   'admin.compatibility.supportsToolChoiceHint': 'Whether the provider supports tool_choice. Native Ollama does not — “No” stops sending the parameter.',
+  'admin.compatibility.supportsEffortUpdates': 'Effort mode (output_config)',
+  'admin.compatibility.supportsEffortUpdatesHint': 'Anthropic 5.x: send the effort tier in output_config.effort and do not send thinking. “Auto” — no (explicit opt-in only): otherwise gateways without support for the field receive a 400. The low/medium/high tiers come from the reasoning level; effort cannot disable reasoning — in that case the parameter is not sent.',
 
   // Models
   'admin.models.title': 'Models',

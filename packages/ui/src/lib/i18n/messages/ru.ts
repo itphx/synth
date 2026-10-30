@@ -1914,6 +1914,8 @@ export const dict = {
   'admin.compatibility.streamUsageHint': 'Запрашивать статистику токенов в потоковом ответе. «Авто» — включено.',
   'admin.compatibility.supportsToolChoice': 'Поддержка tool_choice',
   'admin.compatibility.supportsToolChoiceHint': 'Умеет ли провайдер tool_choice. У нативного Ollama нет — «Нет» отключает передачу параметра.',
+  'admin.compatibility.supportsEffortUpdates': 'Режим effort (output_config)',
+  'admin.compatibility.supportsEffortUpdatesHint': 'Anthropic 5.x: отправлять тир усилия в output_config.effort и не отправлять thinking. «Авто» — нет (только явное включение): иначе шлюзы без поддержки поля получат 400. Тиры low/medium/high берутся из уровня размышлений; выключить размышления effort-тиром нельзя — параметр не отправляется.',
 
   // Models
   'admin.models.title': 'Модели',

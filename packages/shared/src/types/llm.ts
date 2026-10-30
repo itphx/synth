@@ -1,3 +1,5 @@
+import type { ReasoningLevel } from './session.js';
+
 /**
  * ADR-036/ADR-072: дефолт rate limit LLM Gateway. Единый источник для Zod-схемы
  * конфига и runtime-дефолтов (settings-роуты, fallback'и backend/core).
@@ -8,6 +10,35 @@ export const DEFAULT_LLM_GATEWAY_RATE_LIMIT = {
 } as const;
 
 // --- LLM ---
+
+/**
+ * ADR-117: тир усилия модели (effort) — масштаб opencode
+ * (`packages/ai/src/schema/options.ts`). Anthropic 5.x принимает его в
+ * `output_config.effort`; передаётся из `ChatOptions.effort` (явно) либо
+ * выводится из `reasoningLevel` (`effortForReasoningLevel`).
+ */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/** Проверка, что значение — допустимый тир effort. */
+export function isEffortLevel(value: unknown): value is EffortLevel {
+  return typeof value === 'string' && (EFFORT_LEVELS as readonly string[]).includes(value);
+}
+
+/**
+ * Маппинг `reasoningLevel` → `effort`.
+ *
+ * Только прямые соответствия `low|medium|high`; `default`/`none` — `undefined`
+ * (параметр не отправляется), потому что «выключить размышления» через
+ * effort-тир не выразить: у effort-моделей это другой режим, и выдумывать
+ * значение нельзя. `xhigh`/`max` существуют только как явный `ChatOptions.effort`.
+ */
+export function effortForReasoningLevel(level?: ReasoningLevel): EffortLevel | undefined {
+  if (level === 'low') return 'low';
+  if (level === 'medium') return 'medium';
+  if (level === 'high') return 'high';
+  return undefined;
+}
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;

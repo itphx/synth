@@ -1,9 +1,11 @@
-import type { LLMChunk, LLMReasoningBlock, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import type { EffortLevel, LLMChunk, LLMReasoningBlock, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import { effortForReasoningLevel } from '@itphx/synth-shared';
 import {
   BaseProvider,
   fetchModelsCatalog,
   parseArchitectureModalities,
   redactAttachmentPayloadForDebug,
+  resolveProviderCompatibility,
   resolveSystemPromptText,
   parseTokenPricing,
   supportsNativeAudio,
@@ -176,6 +178,46 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   /**
+   * ADR-117: поддержан ли effort-режим у этой пары провайдер/модель.
+   * Только явное `compatibility.supportsEffortUpdates: true` — без эвристик
+   * (поле меняет тело запроса, угадывание ломало бы шлюзы без поддержки).
+   */
+  private _supportsEffortUpdates(): boolean {
+    return resolveProviderCompatibility({
+      type: this.type,
+      name: this.name,
+      url: this.url,
+      model: this.model,
+      compatibility: this.compatibility,
+      requiresReasoning: this.requiresReasoning,
+    }).supportsEffortUpdates;
+  }
+
+  /**
+   * ADR-117: `output_config.effort` запроса.
+   *
+   * Приоритет: явный `options.effort` → `reasoningLevel` (`low|medium|high`);
+   * `none`/`default` → `undefined` (поле не отправляется — «выключить
+   * размышления» effort-тиром не выразить). Считается **на каждый вызов**:
+   * провайдеры кэшируются, поэтому effort живёт в опциях, а не в экземпляре.
+   */
+  private _resolveEffort(options: ChatOptions | undefined, supported = this._supportsEffortUpdates()): EffortLevel | undefined {
+    if (!supported) return undefined;
+    return options?.effort ?? effortForReasoningLevel(this.reasoningLevel);
+  }
+
+  /**
+   * План thinking: в effort-режиме `thinking` **не отправляется вообще**
+   * (ни `enabled`, ни `disabled`) — у effort-моделей это другой режим, и
+   * смешивать их нельзя. Блоки thinking из истории в effort-режиме тоже не
+   * реплеятся (`thinkingEnabled = false`).
+   */
+  private _thinkingPlan(maxTokens: number, effortMode: boolean): ThinkingPlan {
+    if (effortMode) return { enabled: false };
+    return this._resolveThinking(maxTokens);
+  }
+
+  /**
    * Anthropic требует `temperature: 1` при включённом thinking — значение
    * сессии/агента принудительно перекрывается (иначе 400). Значение не
    * мутируется на экземпляре (провайдеры кэшируются и разделяются).
@@ -218,7 +260,9 @@ export class AnthropicProvider extends BaseProvider {
     options?: ChatOptions,
   ): Promise<LLMResponse> {
     const maxTokens = this.maxTokens ?? DEFAULT_MAX_TOKENS;
-    const thinking = this._resolveThinking(maxTokens);
+    const effortMode = this._supportsEffortUpdates();
+    const effort = this._resolveEffort(options, effortMode);
+    const thinking = this._thinkingPlan(maxTokens, effortMode);
     const formattedMessages = this._formatMessages(messages, thinking.enabled);
     const body: Record<string, unknown> = {
       model: this.model,
@@ -228,6 +272,7 @@ export class AnthropicProvider extends BaseProvider {
     this._applyTemperature(body);
     if (thinking.enabled) this._forceThinkingTemperature(body);
     if (thinking.field) body.thinking = thinking.field;
+    if (effort) body.output_config = { effort };
     if (this.topP !== undefined) body.top_p = this.topP;
     const systemBlocks = this._buildSystemBlocks(systemPrompt);
     if (systemBlocks.length) body.system = systemBlocks;
@@ -286,7 +331,9 @@ export class AnthropicProvider extends BaseProvider {
     options?: ChatOptions,
   ): AsyncGenerator<LLMChunk> {
     const maxTokens = this.maxTokens ?? DEFAULT_MAX_TOKENS;
-    const thinking = this._resolveThinking(maxTokens);
+    const effortMode = this._supportsEffortUpdates();
+    const effort = this._resolveEffort(options, effortMode);
+    const thinking = this._thinkingPlan(maxTokens, effortMode);
     const formattedMessages = this._formatMessages(messages, thinking.enabled);
     const body: Record<string, unknown> = {
       model: this.model,
@@ -297,6 +344,7 @@ export class AnthropicProvider extends BaseProvider {
     this._applyTemperature(body);
     if (thinking.enabled) this._forceThinkingTemperature(body);
     if (thinking.field) body.thinking = thinking.field;
+    if (effort) body.output_config = { effort };
     if (this.topP !== undefined) body.top_p = this.topP;
     const systemBlocks = this._buildSystemBlocks(systemPrompt);
     if (systemBlocks.length) body.system = systemBlocks;

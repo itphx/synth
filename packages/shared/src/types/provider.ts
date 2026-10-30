@@ -131,6 +131,16 @@ export interface ModelCompatibility {
    * считается завершённым).
    */
   requireFinishReason?: boolean;
+  /**
+   * Anthropic 5.x: модель принимает `output_config.effort` (тир усилия,
+   * `EffortLevel`). Включение — **только явным значением** (дефолт `false`,
+   * авто-эвристики нет): иначе существующие записи каталога начали бы слать
+   * поле шлюзам, которые его не знают. При `true` провайдер отправляет
+   * `output_config.effort` (из `ChatOptions.effort` либо из `reasoningLevel`)
+   * и **не** отправляет `thinking` — у effort-моделей это другой режим
+   * (ADR-117).
+   */
+  supportsEffortUpdates?: boolean;
 }
 
 /**
@@ -151,6 +161,11 @@ export interface ResolvedModelCompatibility {
   streamUsage: boolean;
   supportsToolChoice: boolean;
   requireFinishReason: boolean;
+  /**
+   * Anthropic: слать `output_config.effort` вместо `thinking`. Дефолт `false`
+   * (только явное включение — ADR-117).
+   */
+  supportsEffortUpdates: boolean;
   /**
    * Формат inline-маркеров кэша; `undefined` — маркеры не ставятся (в отличие
    * от прочих полей, «не задано» здесь — осмысленное состояние, а не дефолт).
@@ -183,6 +198,7 @@ export const MODEL_COMPATIBILITY_KEYS = [
   'supportsToolChoice',
   'cacheFormat',
   'requireFinishReason',
+  'supportsEffortUpdates',
 ] as const;
 
 /**
@@ -281,6 +297,13 @@ export function resolveModelCompatibility(
       ?? providerCompat?.requireFinishReason
       ?? heuristics.requireFinishReason
       ?? true,
+    // Effort-режим Anthropic — только явным значением (без авто-эвристики):
+    // включение меняет тело запроса (output_config вместо thinking), и
+    // угадывание по модели сломало бы шлюзы без поддержки поля.
+    supportsEffortUpdates: modelCompat?.supportsEffortUpdates
+      ?? providerCompat?.supportsEffortUpdates
+      ?? heuristics.supportsEffortUpdates
+      ?? false,
     // Inline-маркеры кэша — только явным значением: эвристики по типу
     // провайдера не ставятся, иначе менялось бы поведение существующих записей.
     cacheFormat: modelCompat?.cacheFormat ?? providerCompat?.cacheFormat ?? heuristics.cacheFormat,
@@ -349,6 +372,7 @@ export function parseModelCompatibilityInput(
     'streamUsage',
     'supportsToolChoice',
     'requireFinishReason',
+    'supportsEffortUpdates',
   ] as const) {
     if (!(key in input)) continue;
     const value = input[key];

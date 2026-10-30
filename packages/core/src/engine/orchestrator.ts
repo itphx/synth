@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, ReasoningBlock } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
@@ -10,7 +10,7 @@ import { DebugCollector } from '../debug.js';
 import { computeUsageCost } from '../providers/usage.js';
 
 import type { LLMMessage, LLMAttachment, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
-import { ProviderFactory, supportsNativeAudio, supportsNativeVideo } from '../providers/base.js';
+import { ProviderFactory, supportsNativeAudio, supportsNativeVideo, buildChatOptions } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import type { ContextOptimizerGatewayHooks } from './context/optimizer.js';
@@ -3977,6 +3977,13 @@ export class ChatOrchestrator {
           intervalMs: this._streamPersistIntervalMs,
         });
 
+        // ADR-117: effort считается на каждый LLM-вызов из **актуального**
+        // `reasoningLevel` (агент → сессия): смена настройки между шагами/ходами
+        // подхватывается без пересоздания провайдера (effort едет в опциях).
+        const llmEffort = effortForReasoningLevel(
+          agentDef?.reasoningLevel ?? session.settings.reasoningLevel,
+        );
+
         try {
           for await (const chunk of provider.chatAsync(
             stepMessages,
@@ -3984,7 +3991,7 @@ export class ChatOrchestrator {
             tools as Record<string, unknown>[] | undefined,
             debugCollector,
             cancelToken,
-            stepLimitStep ? { toolChoice: 'none' } : undefined,
+            buildChatOptions(llmEffort, stepLimitStep ? 'none' : undefined),
           )) {
             if (cancelToken.cancelled) break;
             // ADR-104 (этап 2): прерывание генерации (`interrupt`) — стрим

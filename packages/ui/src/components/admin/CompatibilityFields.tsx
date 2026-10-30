@@ -262,6 +262,33 @@ export function CompatibilityFields({ draft, onChange, saved = false }: Compatib
                 ))}
             </SelectContent>
           </SelectField>
+          <SelectField
+            label={t('admin.compatibility.supportsEffortUpdates')}
+            tooltip={t('admin.compatibility.supportsEffortUpdatesHint')}
+            value={draft.supportsEffortUpdates}
+            onValueChange={(value) =>
+              update({ supportsEffortUpdates: value as CompatibilityTristate })
+            }
+            ariaLabel={t('admin.compatibility.supportsEffortUpdates')}
+            triggerTestId="compatibility-supports-effort-updates"
+            items={tristateItems.map((item) => ({
+              ...item,
+              label: item.value === ''
+                ? t('admin.compatibility.autoWith', { value: t('admin.compatibility.no') })
+                : item.label,
+            }))}
+          >
+            <SelectContent>
+              <SelectItem value="">
+                {t('admin.compatibility.autoWith', { value: t('admin.compatibility.no') })}
+              </SelectItem>
+              {tristateItems
+                .filter((item) => item.value !== '')
+                .map((item) => (
+                  <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                ))}
+            </SelectContent>
+          </SelectField>
         </div>
       )}
 

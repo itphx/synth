@@ -84,3 +84,27 @@ describe('CompatibilityFields: новые поля (cacheFormat, requireFinishRe
     ).toContain('Auto (Yes)')
   })
 })
+
+describe('CompatibilityFields: effort-режим (supportsEffortUpdates)', () => {
+  it('контрол есть в развёрнутом блоке, по умолчанию «Авто (Нет)»', async () => {
+    const container = await renderFields(emptyCompatibilityDraft())
+    const effort = container.querySelector('[data-testid="compatibility-supports-effort-updates"]')
+    expect(effort).toBeTruthy()
+    expect(effort!.textContent).toContain('Auto (No)')
+  })
+
+  it('сохранённые true/false показываются в триггере', async () => {
+    const enabled = await renderFields(draftFromCompatibility({ supportsEffortUpdates: true }))
+    expect(
+      enabled.querySelector('[data-testid="compatibility-supports-effort-updates"]')!.textContent,
+    ).toContain('Yes')
+
+    const disabled = await renderFields(draftFromCompatibility({ supportsEffortUpdates: false }))
+    expect(
+      disabled.querySelector('[data-testid="compatibility-supports-effort-updates"]')!.textContent,
+    ).toContain('No')
+    expect(
+      disabled.querySelector('[data-testid="compatibility-supports-effort-updates"]')!.textContent,
+    ).not.toContain('Auto')
+  })
+})

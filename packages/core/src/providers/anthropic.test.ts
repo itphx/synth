@@ -877,6 +877,109 @@ describe('Anthropic thinking — запрос (температура, tool_choi
   });
 });
 
+describe('Anthropic effort — output_config.effort (ADR-117)', () => {
+  function effortProvider(overrides: Record<string, unknown> = {}): AnthropicProvider {
+    return new AnthropicProvider({
+      ...baseParams,
+      compatibility: { supportsEffortUpdates: true },
+      ...overrides,
+    } as ConstructorParameters<typeof AnthropicProvider>[0]);
+  }
+
+  it('флаг + reasoningLevel high: output_config.effort=high, thinking нет, temperature не форсится', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = effortProvider({ reasoningLevel: 'high', temperature: 0.2 });
+    await provider.chat([makeMessage()]);
+
+    const body = readBody(fetchMock);
+    expect(body.output_config).toEqual({ effort: 'high' });
+    expect(body.thinking).toBeUndefined();
+    expect(body.temperature).toBe(0.2);
+  });
+
+  it('стрим: тот же effort (high) и отсутствие thinking', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = effortProvider({ reasoningLevel: 'high', maxTokens: 4096 });
+    await drainThinking(provider.chatAsync([makeMessage()]));
+
+    const body = readBody(fetchMock);
+    expect(body.output_config).toEqual({ effort: 'high' });
+    expect(body.thinking).toBeUndefined();
+  });
+
+  it('без флага: output_config нет, thinking как раньше (high → enabled)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider({
+      ...baseParams,
+      reasoningLevel: 'high',
+      maxTokens: 4096,
+    } as ConstructorParameters<typeof AnthropicProvider>[0]);
+    await provider.chat([makeMessage()]);
+
+    const body = readBody(fetchMock);
+    expect(body.output_config).toBeUndefined();
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+  });
+
+  it('флаг + reasoningLevel none/default: ни output_config, ни thinking (в т.ч. disabled)', async () => {
+    for (const level of ['none', 'default'] as const) {
+      const fetchMock = vi.fn().mockResolvedValue(okResponse());
+      vi.stubGlobal('fetch', fetchMock);
+
+      const provider = effortProvider({ reasoningLevel: level });
+      await provider.chat([makeMessage()]);
+
+      const body = readBody(fetchMock);
+      expect(body.output_config).toBeUndefined();
+      expect(body.thinking).toBeUndefined();
+    }
+  });
+
+  it('явный options.effort приоритетнее reasoningLevel (non-stream)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = effortProvider({ reasoningLevel: 'low' });
+    await provider.chat([makeMessage()], undefined, undefined, false, undefined, { effort: 'max' });
+
+    expect(readBody(fetchMock).output_config).toEqual({ effort: 'max' });
+  });
+
+  it('явный options.effort приоритетнее reasoningLevel (stream)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = effortProvider({ reasoningLevel: 'high' });
+    await drainThinking(provider.chatAsync(
+      [makeMessage()], undefined, undefined, undefined, undefined, { effort: 'xhigh' },
+    ));
+
+    expect(readBody(fetchMock).output_config).toEqual({ effort: 'xhigh' });
+  });
+
+  it('без флага явный options.effort игнорируется (прежнее поведение)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider({
+      ...baseParams,
+      reasoningLevel: 'high',
+      maxTokens: 4096,
+    } as ConstructorParameters<typeof AnthropicProvider>[0]);
+    await provider.chat([makeMessage()], undefined, undefined, false, undefined, { effort: 'max' });
+
+    const body = readBody(fetchMock);
+    expect(body.output_config).toBeUndefined();
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+  });
+});
+
 describe('Anthropic thinking — _formatMessages (порядок и реплей)', () => {
   const provider = thinkingProvider() as unknown as AnthropicThinkingPrivate;
 

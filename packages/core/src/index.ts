@@ -192,6 +192,7 @@ export type { ProcessMessageFn, SteerEnqueueResult, RequeueMessagesOptions } fro
 export {
   ProviderFactory,
   BaseProvider,
+  buildChatOptions,
   OpenAIProvider,
   AnthropicProvider,
   OllamaProvider,

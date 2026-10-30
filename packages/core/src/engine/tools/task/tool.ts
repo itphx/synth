@@ -382,6 +382,8 @@ export const taskTool: ToolDefinition = {
       // Sampling агента — для QA-эскалации (у fallback-модели остаётся sampling агента).
       topP: agentTopP,
       topK: agentTopK,
+      // ADR-117: effort прогона — из `reasoningLevel` (агент → настройки родителя).
+      reasoningLevel: agentDef.reasoningLevel ?? extra.parentSessionSettings?.reasoningLevel,
       tools,
       childSessionId,
       parentSessionId: extra.sessionId!,
@@ -803,6 +805,8 @@ async function continueChildSession(opts: {
     // Sampling агента — для QA-эскалации (fallback-модель из пула).
     topP: agentTopP,
     topK: agentTopK,
+    // ADR-117: effort продолжения — из `reasoningLevel` (агент → настройки ребёнка).
+    reasoningLevel: agentDef.reasoningLevel ?? child.settings.reasoningLevel,
     tools: extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers),
     childSessionId: child.id,
     parentSessionId: ctx.sessionId,

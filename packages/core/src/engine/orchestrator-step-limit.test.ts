@@ -341,4 +341,41 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
     expect(finalMessage.metadata?.status).toBe('limit');
     expect(finalMessage.metadata?.step_limit_reached).toBe(true);
   });
+
+  it('ADR-117: effort из reasoningLevel попадает в ChatOptions, смена между ходами подхватывается', async () => {
+    StepLimitScriptProvider.configure([{ content: 'ok' }]);
+    const session = await sessionManager.createSession({
+      title: 'Effort',
+      userId: 'u1',
+      settings: { provider: 'steplimit', model: 'm', agentRole: 'fixer' },
+    });
+    // `createSession` собирает settings по whitelist — reasoningLevel задаём
+    // через updateSession (как это делает PATCH /sessions/:id).
+    await sessionManager.withLock(session.id, async (s) => {
+      s.settings = { ...s.settings, reasoningLevel: 'high' };
+      await sessionManager.updateSession(s);
+    });
+
+    await runTurn(session.id);
+    expect(StepLimitScriptProvider.calls).toHaveLength(1);
+    expect(StepLimitScriptProvider.calls[0]!.options).toEqual({ effort: 'high' });
+
+    // Смена настройки между ходами: следующий LLM-вызов несёт новый effort.
+    await sessionManager.withLock(session.id, async (s) => {
+      s.settings = { ...s.settings, reasoningLevel: 'low' };
+      await sessionManager.updateSession(s);
+    });
+    StepLimitScriptProvider.configure([{ content: 'ok-2' }]);
+    await runTurn(session.id);
+    expect(StepLimitScriptProvider.calls[0]!.options).toEqual({ effort: 'low' });
+
+    // `none` — effort не вычисляется и опции не создаются (форма undefined сохранена).
+    await sessionManager.withLock(session.id, async (s) => {
+      s.settings = { ...s.settings, reasoningLevel: 'none' };
+      await sessionManager.updateSession(s);
+    });
+    StepLimitScriptProvider.configure([{ content: 'ok-3' }]);
+    await runTurn(session.id);
+    expect(StepLimitScriptProvider.calls[0]!.options).toBeUndefined();
+  });
 });

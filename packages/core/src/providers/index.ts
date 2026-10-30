@@ -16,7 +16,13 @@ ProviderFactory.register('synth-server', RemoteProvider);
 ProviderFactory.register('decision', DecisionProvider);
 ProviderFactory.register('systemone', DecisionProvider);
 
-export { ProviderFactory, BaseProvider, detectRequiresReasoning, resolveProviderCompatibility } from './base.js';
+export {
+  ProviderFactory,
+  BaseProvider,
+  buildChatOptions,
+  detectRequiresReasoning,
+  resolveProviderCompatibility,
+} from './base.js';
 export type { LLMMessage, CancellationToken, ChatOptions, ProviderConfig } from './base.js';
 export { OpenAIProvider } from './openai.js';
 export { AnthropicProvider } from './anthropic.js';

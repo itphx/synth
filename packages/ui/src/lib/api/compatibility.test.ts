@@ -138,4 +138,23 @@ describe('compatibility: payload запроса', () => {
     }
     expect(buildCompatibilityPayload(cleared, true)).toBeNull()
   })
+
+  it('supportsEffortUpdates: true/false уходят, «Авто» — нет, round-trip не теряет поле', () => {
+    // Явные значения переживают сохранение → черновик → payload.
+    for (const value of [true, false] as const) {
+      const draft = draftFromCompatibility({ supportsEffortUpdates: value })
+      expect(draft.supportsEffortUpdates).toBe(value ? 'true' : 'false')
+      expect(compatibilityFromDraft(draft)).toEqual({ supportsEffortUpdates: value })
+      expect(buildCompatibilityPayload(draft, false)).toEqual({ supportsEffortUpdates: value })
+    }
+    // «Авто» — поле не отправляется, но у сохранённой сущности это явный сброс.
+    const auto = draftFromCompatibility({})
+    expect(auto.supportsEffortUpdates).toBe('')
+    expect(buildCompatibilityPayload(auto, false)).toBeUndefined()
+    expect(buildCompatibilityPayload(auto, true)).toBeNull()
+
+    // Сброс-effort у сохранённой сущности → compatibility: null (replace-семантика).
+    const saved = draftFromCompatibility({ supportsEffortUpdates: true })
+    expect(buildCompatibilityPayload({ ...saved, supportsEffortUpdates: '' }, true)).toBeNull()
+  })
 })
