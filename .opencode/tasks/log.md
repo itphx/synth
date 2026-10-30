@@ -1434,4 +1434,26 @@
 - **Документация.** Новый [ADR-117](../../docs/arch_decisions/adr-117-provider-compatibility.md) (контекст/решение/альтернативы/последствия/статус в коде) + индекс `adr:write`; `packages/core/AGENTS.md` (слой `compatibility`, Anthropic thinking, Ollama; `requiresReasoning` — shorthand), `packages/ui/AGENTS.md` (блок и payload), `docs/CONFIGURATION.md`/EN (секция «Каталог моделей» переписана под `compatibility`), `docs/API_V2.md`/EN (§5.9/§5.10, PATCH-строка, §5.6 — reasoning-подписи наружу не отдаются). Попутно в корневом и core AGENTS уточнено: `session.max_iterations` в основном цикле не используется (остался у шагов пайплайнов).
 - **Проверки (unit).** shared 896, core 7789, backend 728, storage-postgres 78, ui 2397 — зелёные; `pnpm typecheck` 0, `pnpm lint` 0 ошибок; `node scripts/adr-check.mjs` и `node scripts/docs-link-check.mjs` — 0 ошибок.
 - **Закрывает остаток предыдущей записи:** «`compatibility`-полей каталога провайдера у нас нет» — больше не актуально (слой реализован, `requiresReasoning` остался только как shorthand).
-- **Остаток/спорное:** авто-определения для `maxTokensField`/`streamUsage` нет; существующие записи каталога не мигрируются (совместимость через эвристики/дефолты); живой прогон Anthropic-thinking с реальной подписью после рестарта (round-trip между ходами) не проводился — покрыто unit-тестами и контрактным suite.
+- **Остаток/спорное:** авто-определения для `maxTokensField`/`streamUsage` нет; существующие записи каталога не мигрируются (совместимость через эвристики/дефолты); живой прогон Anthropic-thinking с реальной подписью после рестарта (round-trip между ходами) проведён — см. подраздел «Живые прогоны (dev)» ниже (ограничения — там же, в «Остатках живых прогонов»).
+
+### Живые прогоны (dev) — слой совместимости на реальных провайдерах
+
+- **Стенд:** dev-инстанс, проект «Synth», агенты `test-steplimit` (`maxSteps: 1`), `test-thinking` (`reasoningLevel: high`), `test-thinking-limit` (`high` + `maxSteps: 1`); каждый кейс — `POST /api/v2/sessions/:id/prompt`, tool call на шаге 1 и шаг-лимит на шаге 2.
+
+| Кейс | Провайдер / модель | Результат |
+|---|---|---|
+| лимит шагов (openai-тип) | `routerai` / `qwen/qwen3.7-flash` | **PASS:** `status=completed`, `step_limit_reached=true`, 32 c |
+| лимит шагов (anthropic-тип) | `routerai-anthropic` / `qwen/qwen3.7-flash` | **PASS:** `completed`, `step_limit_reached=true`, 23 c |
+| лимит шагов | `deepseek` / `deepseek-flash` | **PASS:** `completed`, `step_limit_reached=true`, 10 c |
+| thinking-loop | `routerai-anthropic` / `qwen/qwen3.7-flash`, `reasoningLevel: high` | **PASS:** `completed`, reasoning есть, 21 c; повторный ход в той же сессии — тоже `completed` (подпись реплеится) |
+| thinking + лимит шагов (prefill) | `routerai-anthropic` / `qwen/qwen3.7-flash` | **PASS:** `completed`, `step_limit_reached=true`, 22 c — assistant-префилл при включённом thinking принимается (RouterAI/qwen), обходной путь не понадобился |
+| лимит шагов (нативный ollama) | `omn` / `qwen3.8:27b-256k` | **PASS:** `status=limit`, `step_limit_reached=true`, 162 c; текста модель не дала (Ollama игнорирует `tool_choice`) → детерминированный `session.steps_limit` |
+
+- **API `compatibility` (живой CRUD).** Провайдер, созданный с тремя полями `compatibility`, после `PATCH {requireReasoning:false}` оставляет **только** это поле (полная замена), `null` — сбрасывает; модель — то же (`{streamUsage:false}` заменяет прежние поля, `null` сбрасывает). Совпадает с §«API» выше и с unit-тестами.
+- **Персист подписи thinking.** В БД у assistant-сообщений tool-chain `reasoning_signature` заполнен (`sig=true`); финальное сообщение с пустой подписью реплеится как `signature: ""`, второй ход в thinking-сессии прошёл без 400 — round-trip подписи между ходами подтверждён на живом провайдере.
+- **Артефакты прогона (оставлены в dev для просмотра).** Сессии `mvui06r3-3-cafe2c36`, `mvui0v54-o-usthn6y7`, `mvui1cwq-19-p03naypq`, `mvui1kqv-1u-po5wgekp`, `mvui21ax-2a-2e2soly1`, `mvui2i1b-2w-0mkmybfk` (ollama); агенты `test-steplimit`/`test-thinking`/`test-thinking-limit`; провайдер `compat-test` + модель `m1` (проверка API); модель `omn/qwen3.8:27b-256k` с `contextWindow: 32768`. Таймаут провайдера `omn` на время прогона поднимался до 300 c, после — возвращён 120.
+- **Остатки живых прогонов (зафиксировано явно):**
+  - Пустая подпись проверена **только** на RouterAI-эндпоинте с qwen; на официальном Anthropic (`api.anthropic.com`) не проверялось.
+  - При нескольких reasoning-блоках в ходе подпись сохраняется только для одного блока (финальные сообщения идут с `signature: ""`) — реплей проходит, но для строгого Anthropic это стоит перепроверить/доделать.
+  - `maxTokensField` по умолчанию `max_tokens` — осознанное отличие от opencode.
+
