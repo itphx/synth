@@ -591,6 +591,10 @@ export async function saveAssistantMessage(
     const session = await sessionManager.getSession(sessionId);
     if (session) {
       deps.eventBus.publish(sessionId, 'message.added', {
+        // ADR-118 §4: legacy-событие обязано быть **адресуемым** — без `id`
+        // клиент не может слить его с живым сообщением шага (`step.started`/
+        // `part.*`) и рисует второй пузырь того же ответа.
+        id: msg.id,
         message_index: session.messages.length - 1,
         role: msg.role,
         content: finalContent.slice(0, 500),

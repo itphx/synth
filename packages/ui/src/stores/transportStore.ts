@@ -771,10 +771,24 @@ export function createDispatcher(): EventDispatcher {
           : undefined
         const src = nested ?? payload
         const usage = (src.usage as MessageData['usage']) ?? undefined
+        // ADR-118 §4/§5: `message.added` — legacy-событие совместимости
+        // (усечённый контент). Сообщение шага уже пришло `step.started` /
+        // `part.*` и живёт в ленте; событие обязано адресоваться **тем же**
+        // `id` (ядро кладёт его в payload, старое ядро — нет, тогда берём id
+        // живого сообщения хода). Без адреса создавался второй пузырь того же
+        // ответа («правильный» + задвоенный).
+        const addedRole = (src.role as string) || 'assistant'
+        const addedId = (src.id as string) || (src.message_id as string)
+          || (addedRole === 'assistant' ? useChatStore.getState().turnBySession[sid]?.messageId : undefined)
+          || undefined
+        if (addedId && useChatStore.getState().messagesBySession[sid]?.some((m) => m.id === addedId)) {
+          // Сообщение уже в ленте (живое) — дополнять нечем: пропускаем.
+          break
+        }
         const msg: MessageData = {
           index: (src.index as number) ?? (src.message_index as number) ?? (payload.index as number),
-          id: (src.id as string) || (src.message_id as string) || undefined,
-          role: (src.role as string) || 'assistant',
+          id: addedId,
+          role: addedRole,
           content: (src.content as string) || '',
           // ADR-118: порядок и принадлежность ходу — из DTO.
           ord: (src.ord as number | null) ?? null,
@@ -1511,6 +1525,19 @@ let transportReady = false
 // или соединение живо; null — клиент сброшен (disconnect/разрыв). Вместе с
 // transport.getTransport() даёт идемпотентность connect() к тому же транспорту.
 let activeKind: 'ws' | 'sse' | null = null
+/**
+ * Синхронный резерв режима на время асинхронного старта (ADR-118 §8).
+ *
+ * `connect()` сначала спрашивает `GET /api/v2/meta` и только потом зовёт
+ * `client.connect()`, поэтому до этого момента `client.getTransport()` ещё
+ * `disconnected` и guard идемпотентности его не видел. Двойной вызов в этом
+ * окне (dev: StrictMode / профиль-настройка транспорта приходит после первого
+ * маунта) создавал **второй** клиент, а первый оставался жить и доставлял те же
+ * события второй раз (чанки применялись дважды). Резерв закрывает окно: пока
+ * `connectingKind === actualMode`, повторный connect к тому же транспорту
+ * пропускается.
+ */
+let connectingKind: 'ws' | 'sse' | null = null
 
 export function isTransportConnected(): boolean {
   return transportReady
@@ -1523,6 +1550,7 @@ if (import.meta.hot) {
     transport = null;
     transportReady = false;
     activeKind = null;
+    connectingKind = null;
   });
 }
 
@@ -1539,7 +1567,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     // Идемпотентность: к тому же эффективному транспорту уже подключаемся или
     // подключены. Раньше это пересоздавало клиент и закрывало CONNECTING-сокет
     // (auto→ws + сохранённый prefs ws = один и тот же транспорт — см. ADR-024).
-    if (transport && transport.getTransport() === actualMode && activeKind === actualMode) {
+    // `connectingKind` закрывает окно асинхронного старта (проверка `/meta`):
+    // клиент уже создан и зарезервирован, но `getTransport()` ещё `disconnected`.
+    if (
+      transport
+      && activeKind === actualMode
+      && (connectingKind === actualMode || transport.getTransport() === actualMode)
+    ) {
       console.debug('[TransportStore] connect skipped (already', actualMode, ')')
       return
     }
@@ -1548,13 +1582,21 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     transport = null
     transportReady = false
     activeKind = null
+    connectingKind = null
 
     console.debug('[TransportStore] Connecting:', actualMode, '(mode=', mode, ')')
     const dispatcher = createDispatcher()
 
     const client = new TransportClient({
-      onEvent: dispatcher,
+      // События покинутого клиента (обрыв/пересоздание/асинхронный старт в
+      // пользу нового) не применяем: иначе одно событие доезжает дважды —
+      // дельты складываются в задвоенный текст.
+      onEvent: (event) => {
+        if (transport !== client) return
+        dispatcher(event)
+      },
       onConnect: () => {
+        if (transport !== client) return
         activeKind = actualMode
         if (actualMode === 'sse') {
           transportReady = true
@@ -1567,16 +1609,19 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
         }
       },
       onBackendReady: () => {
+        if (transport !== client) return
         activeKind = actualMode
         transportReady = true
         set({ connected: true, activeTransport: 'ws' })
         console.debug('[TransportStore] Backend ready:', client.getTransport())
       },
       onDisconnect: (reason) => {
+        if (transport !== client) return
         // Обрыв/ручное закрытие: клиент больше не считается «активным» —
         // иначе форс-реконнект (ConnectionGuard) и auto-fallback WS→SSE
         // блокировались бы guard'ом идемпотентности.
         activeKind = null
+        connectingKind = null
         transportReady = false
         set({ connected: false })
         console.debug('[TransportStore] Disconnected:', reason)
@@ -1601,10 +1646,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     })
 
     activeKind = actualMode
+    connectingKind = actualMode
+    transport = client
     // ADR-118 §8: **fail-closed** сверка версий модели сообщений. Сначала
     // возможности инстанса (`GET /api/v2/meta`); при несовпадении — отказ
     // подключения с понятным сообщением (тихая деградация запрещена).
     const startTransport = (since: number | undefined) => {
+      connectingKind = null
       // Без точки догона второй аргумент не передаём (чистый контракт connect).
       if (since === undefined) client.connect(actualMode)
       else client.connect(actualMode, { since })
@@ -1612,7 +1660,11 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     void Promise.resolve()
       .then(() => synthApi.getInstanceCapabilities())
       .then((caps) => {
+        // Пока шла проверка, клиент мог быть заменён/сброшен — стартовать
+        // покинутый клиент нельзя (иначе он жил бы параллельно с новым).
+        if (transport !== client) return
         if (!supportsMessageModel(caps)) {
+          connectingKind = null
           activeKind = null
           transportReady = false
           set({ connected: false, activeTransport: 'disconnected', versionMismatch: true })
@@ -1631,12 +1683,12 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
         startTransport(maxEventSeq())
       })
       .catch(() => {
+        if (transport !== client) return
         // Мета недоступна — подключаемся: гейт `messageModel=2` на сервере
         // всё равно откажет несовместимый клиент.
         set({ versionMismatch: false })
         startTransport(maxEventSeq())
       })
-    transport = client
   },
 
   disconnect: () => {
@@ -1644,6 +1696,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     transport = null
     transportReady = false
     activeKind = null
+    connectingKind = null
     set({ connected: false, activeTransport: 'disconnected' })
   },
 

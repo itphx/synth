@@ -1438,6 +1438,10 @@ export const dict = {
   'chat.message.sent': 'Message sent',
   'chat.message.unconfirmed':
     'Message sent; confirmation is delayed — checking the queue',
+  // ADR-118 §4: delivery marker of the user's message in the feed (`message.accepted`).
+  'chat.message.delivery.accepted': 'Accepted',
+  'chat.message.delivery.queued': 'Queued',
+  'chat.message.delivery.steering': 'Steering',
 
 
   'chat.debug.noData': 'No debug data',

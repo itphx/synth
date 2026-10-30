@@ -56,6 +56,7 @@ vi.mock('@/lib/api/synthApi', () => ({
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 
 import { useTransportStore } from './transportStore'
+import { useChatStore } from './chatStore'
 
 beforeEach(() => {
   // Сброс модульного состояния стора (transport/activeKind) между тестами.
@@ -160,5 +161,63 @@ describe('transportStore.connect: восстановление и fallback не 
     expect(mocks.instances).toHaveLength(2)
     await waitConnected(mocks.instances[1]!, 'sse')
     expect(mocks.instances[1]!.connect).toHaveBeenCalledWith('sse')
+  })
+})
+
+/**
+ * Регрессия (2026-10-30, dev): двойное подключение транспорта.
+ *
+ * ADR-118 §8 сделал старт асинхронным (`GET /api/v2/meta` → `client.connect`).
+ * До фикса повторный `connect()` **в этом окне** создавал второй клиент, а
+ * первый оставался жить: каждое событие доставлялось дважды, и дельты текста
+ * применялись по два раза («okok, Б Босссосс…»). Отдельно защищаем применение
+ * `part.delta`: одно событие — одна дельта (иначе дубль возникает и без второго
+ * соединения).
+ */
+describe('transportStore.connect: окно асинхронного старта (двойная доставка)', () => {
+  it('connect(auto) → connect(ws) до ответа /meta: второй клиент не создаётся', async () => {
+    const store = useTransportStore.getState()
+    store.connect('auto')
+    expect(mocks.instances).toHaveLength(1)
+
+    // Повторный вызов до того, как проверка возможностей инстанса завершилась.
+    store.connect('ws')
+
+    expect(mocks.instances).toHaveLength(1)
+    const first = mocks.instances[0]!
+    await waitConnected(first, 'ws')
+    expect(first.connect).toHaveBeenCalledTimes(1)
+    expect(first.disconnect).not.toHaveBeenCalled()
+  })
+
+  it('setTransportMode(auto) → setTransportMode(ws) до ответа /meta: одно соединение', async () => {
+    const store = useTransportStore.getState()
+    store.setTransportMode('auto')
+    store.setTransportMode('ws')
+
+    expect(mocks.instances).toHaveLength(1)
+    const first = mocks.instances[0]!
+    await waitConnected(first, 'ws')
+    expect(first.connect).toHaveBeenCalledTimes(1)
+    expect(useTransportStore.getState().transportMode).toBe('ws')
+  })
+
+  it('одно событие `part.delta` применяется ровно один раз', async () => {
+    const store = useTransportStore.getState()
+    store.setTransportMode('ws')
+    const client = mocks.instances[0]!
+    await waitConnected(client, 'ws')
+
+    store.connect('ws') // повторный вызов — второго клиента быть не должно
+    expect(mocks.instances).toHaveLength(1)
+
+    client.callbacks.onEvent?.({
+      type: 'part.delta',
+      session_id: 'sess-dup',
+      data: { messageId: 'msg-dup', partId: 'msg:text:0', delta: 'ok' },
+    })
+
+    const parts = useChatStore.getState().partsBySession['sess-dup']?.['msg-dup']
+    expect(parts?.['msg:text:0']?.text).toBe('ok')
   })
 })

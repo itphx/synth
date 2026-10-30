@@ -1413,6 +1413,10 @@ export const dict = {
   'chat.message.sent': 'Сообщение отправлено',
   'chat.message.unconfirmed':
     'Сообщение отправлено, подтверждение задерживается — проверяю очередь',
+  // ADR-118 §4: маркер доставки реплики в ленте (`message.accepted`).
+  'chat.message.delivery.accepted': 'Принято',
+  'chat.message.delivery.queued': 'В очереди',
+  'chat.message.delivery.steering': 'Вмешательство',
 
   'chat.debug.noData': 'Нет отладочных данных',
   'chat.queue.returnInDev': 'Вернуть в поле ввода — в разработке',
