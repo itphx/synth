@@ -1,9 +1,8 @@
 /**
- * Строка активности хода в конце ленты («как часы»).
- *
- * Контент хода уже был, но живого assistant-сегмента нет — лента выглядела
- * пустой: во время инструментов, после reload и в паузах между шагами.
- * Строка — компактная, не пузырь и без действий; при завершении хода исчезает.
+ * Новая UX-модель индикатора: отдельной строки активности хода
+ * (`turn-activity`, «Выполняется…»/«Выполняется инструмент…») больше нет —
+ * «идёт» показывают точки в шапке последнего сегмента хода, а автоповтор
+ * (`RetryStatus`) живёт **внизу ответа** у последнего сегмента (не у реплики).
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { act } from 'react'
@@ -59,9 +58,9 @@ function msg(partial: Partial<MessageData>): MessageData {
   }
 }
 
-const USER_REPLY = msg({ id: 'u-1', index: 0, ord: 1, role: 'user', content: 'сделай' })
+const USER_REPLY = msg({ id: 'u-1', index: 0, ord: 1, role: 'user', turn_id: 't1', content: 'сделай' })
 
-/** Завершённый ответ хода — контент есть, живой части нет. */
+/** Завершённый ответ хода — контент есть, живого сегмента нет. */
 const ANSWER = msg({
   id: 'a-1',
   index: 1,
@@ -71,6 +70,8 @@ const ANSWER = msg({
   step_index: 0,
   status: 'completed',
   content: 'Готово',
+  agent_role: 'fixer',
+  model: 'model-x',
 })
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
@@ -120,53 +121,24 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('MessageList: строка активности хода', () => {
-  it('контент хода был, живого сегмента нет — строка в конце ленты', async () => {
+describe('MessageList: строки активности хода больше нет', () => {
+  it('контент хода был, живого сегмента нет — turn-activity отсутствует, точки в шапке', async () => {
     const container = await renderList([USER_REPLY, ANSWER], {
       turnId: 't1',
       status: 'streaming',
       contentStarted: true,
     })
 
-    const row = container.querySelector('[data-testid="turn-activity"]')
-    expect(row).not.toBeNull()
-    expect(row!.querySelector('[data-testid="live-indicator"]')).not.toBeNull()
-    expect(container.textContent).toContain('Working')
-  })
-
-  it('контента хода ещё нет — строка не показывается', async () => {
-    const container = await renderList([USER_REPLY], {
-      turnId: 't1',
-      status: 'streaming',
-      contentStarted: false,
-    })
-
     expect(container.querySelector('[data-testid="turn-activity"]')).toBeNull()
+    // Прежние тексты строки активности не рендерятся.
+    expect(container.textContent).not.toContain('Working')
+    expect(container.textContent).not.toContain('Running a tool')
+
+    const segment = container.querySelector('[data-message-id="a-1"]') as HTMLElement
+    expect(segment.querySelector('[data-testid="processing-indicator"]')).not.toBeNull()
   })
 
-  it('живой assistant-сегмент есть — строка не дублирует его индикатор', async () => {
-    const live = msg({
-      id: 'a-live',
-      index: 1,
-      ord: 2,
-      role: 'assistant',
-      turn_id: 't1',
-      step_index: 1,
-      status: 'streaming',
-      content: 'Продолжение',
-    })
-    const container = await renderList([USER_REPLY, ANSWER, live], {
-      turnId: 't1',
-      messageId: 'a-live',
-      status: 'streaming',
-      contentStarted: true,
-    })
-
-    expect(container.querySelector('[data-testid="turn-activity"]')).toBeNull()
-    expect(container.querySelector('[data-testid="live-indicator"]')).not.toBeNull()
-  })
-
-  it('ход завершён — строка скрыта', async () => {
+  it('ход завершён — точек в шапке нет', async () => {
     const container = await renderList([USER_REPLY, ANSWER], {
       turnId: 't1',
       status: 'completed',
@@ -174,9 +146,10 @@ describe('MessageList: строка активности хода', () => {
     })
 
     expect(container.querySelector('[data-testid="turn-activity"]')).toBeNull()
+    expect(container.querySelector('[data-testid="processing-indicator"]')).toBeNull()
   })
 
-  it('пустой streaming-сегмент не рендерится и не скрывает строку', async () => {
+  it('пустой live-сегмент не первым — не рендерится, точки в шапке блока', async () => {
     const emptyLive = msg({
       id: 'a-empty',
       index: 2,
@@ -193,37 +166,61 @@ describe('MessageList: строка активности хода', () => {
       messageId: 'a-empty',
       status: 'streaming',
       contentStarted: true,
+      toolsRunning: true,
     })
 
-    // Пустой сегмент в ленте отсутствует (нет точек в середине блока)…
+    // Пустой не-первый сегмент не рисуется вовсе (шапку блока не дублирует).
     expect(container.querySelector('[data-message-id="a-empty"]')).toBeNull()
-    // …а индикатор хода виден строкой внизу.
-    expect(container.querySelector('[data-testid="turn-activity"]')).not.toBeNull()
+    const block = container.querySelector('[data-testid="turn-block"]') as HTMLElement
+    expect(block.querySelectorAll('[data-testid="processing-indicator"]')).toHaveLength(1)
   })
+})
 
-  it('retry активного хода виден в строке активности (пауза между шагами)', async () => {
+describe('MessageList: автоповтор внизу последнего сегмента', () => {
+  it('retry активного хода — плашка внизу ответа, не у реплики', async () => {
     const container = await renderList(
       [USER_REPLY, ANSWER],
       { turnId: 't1', streamId: 's-1', status: 'streaming', contentStarted: true },
       { streamId: 's-1', attempt: 2, maxRetries: 3, retryInMs: 5000 },
     )
 
-    const row = container.querySelector('[data-testid="turn-activity"]')
-    expect(row).not.toBeNull()
-    expect(row!.getAttribute('data-retrying')).toBe('true')
-    expect(row!.textContent).toContain('Retry 2/3 in')
+    const segment = container.querySelector('[data-message-id="a-1"]') as HTMLElement
+    expect(segment.textContent).toContain('Retry 2/3 in')
+    expect(segment.querySelector('button[title="Retry now"]')).not.toBeNull()
+    expect(segment.querySelector('button[title="Cancel"]')).not.toBeNull()
+
+    // У реплики пользователя плашки нет.
+    const reply = container.querySelector('[data-message-id="u-1"]') as HTMLElement
+    expect(reply.textContent).not.toContain('Retry 2/3 in')
+    expect(reply.querySelector('button[title="Retry now"]')).toBeNull()
   })
 
-  it('retry другого стрима в строке активности не показывается', async () => {
+  it('retry другого стрима не показывается', async () => {
     const container = await renderList(
       [USER_REPLY, ANSWER],
       { turnId: 't1', streamId: 's-1', status: 'streaming', contentStarted: true },
       { streamId: 's-2', attempt: 1, maxRetries: 3, retryInMs: 5000 },
     )
 
-    const row = container.querySelector('[data-testid="turn-activity"]')
-    expect(row).not.toBeNull()
-    expect(row!.getAttribute('data-retrying')).toBeNull()
-    expect(row!.textContent).toContain('Working')
+    expect(container.textContent).not.toContain('Retry 1/3 in')
+  })
+
+  it('плашка повтора стоит после контента ответа', async () => {
+    const container = await renderList(
+      [USER_REPLY, ANSWER],
+      { turnId: 't1', streamId: 's-1', status: 'streaming', contentStarted: true },
+      { streamId: 's-1', attempt: 1, maxRetries: 3, retryInMs: 5000 },
+    )
+
+    const segment = container.querySelector('[data-message-id="a-1"]') as HTMLElement
+    const text = segment.querySelector('.markdown-content') as HTMLElement
+    const plate = Array.from(segment.querySelectorAll('span')).find((el) =>
+      el.textContent?.includes('Retry 1/3 in'),
+    ) as HTMLElement | undefined
+    expect(text).not.toBeNull()
+    expect(plate).toBeDefined()
+    expect(
+      (text.compareDocumentPosition(plate!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true)
   })
 })

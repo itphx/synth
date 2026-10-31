@@ -125,14 +125,19 @@ interface ChatMessageProps {
    */
   pending?: PendingStreamStatus | null
   /**
-   * ADR-118 §1: заголовок агента/модели — только у **первого** сегмента хода.
-   * Последующие сегменты того же хода рисуются без заголовка.
+   * Новая UX-модель индикатора: заголовок агента/модели есть у **каждой**
+   * assistant-группы хода; `compact` лишь убирает зазор между сегментами.
    */
   showHeader?: boolean
   /**
    * ADR-118 §1: сегмент хода, склеенный с предыдущим (без визуального зазора).
    */
   compact?: boolean
+  /**
+   * Ход идёт и это **последний** assistant-сегмент хода: в шапке вместо
+   * времени — три точки (`MessageHeader processing`).
+   */
+  headerProcessing?: boolean
   /**
    * ADR-118 §1: сегмент внутри **общего** блока хода (группа из >1 сегмента):
    * «пузырь» (фон/рамка/скругление/отступы) рисует контейнер группы
@@ -141,23 +146,22 @@ interface ChatMessageProps {
   bare?: boolean
   /** Показывать ряд действий сообщения (в блоке хода — только у последнего). */
   showActions?: boolean
-  /** Статус повторной попытки — показывается в живом сообщении. */
+  /** Активный автоповтор хода — плашка внизу ответа последнего сегмента. */
   retry?: StreamRetry | null
+  /** Рисовать ли плашку автоповтора (только у последнего сегмента хода). */
+  showRetry?: boolean
   onRetryNow?: () => void
   onCancelRetry?: () => void
   /**
-   * ADR-118 §5: пустой живой сегмент (шаг без контента) всё равно рисуется —
-   * в нём видны точки «идёт» и статус автоповтора. До первой части ответа
-   * индикатор живёт у реплики пользователя, а пустой сегмент скрыт.
+   * ADR-118 §5: пустой живой сегмент (новый шаг до первого токена) рисуется
+   * **только заголовком с точками** — без тела. Если сегмент не первый в
+   * группе (`showHeader === false`), не рендерится: шапка блока уже несёт точки.
    */
   showLivePlaceholder?: boolean
 }
 
 export interface PendingStreamStatus {
-  status: 'processing' | 'retrying'
-  retry?: StreamRetry | null
-  onRetryNow?: () => void
-  onCancelRetry?: () => void
+  status: 'processing'
 }
 
 function ChatMessageInner({
@@ -180,9 +184,12 @@ function ChatMessageInner({
   compact = false,
   bare = false,
   showActions = true,
+  headerProcessing = false,
   retry,
+  showRetry = false,
   onRetryNow,
   onCancelRetry,
+  showLivePlaceholder = false,
   debugTarget,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
@@ -502,10 +509,8 @@ function ChatMessageInner({
   // ADR-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
   // ADR-115: сообщение только из вложений (картинка от ассистента без текста) — тоже рендерим.
-  // ADR-118 §5: пустой живой сегмент шага **не** рисуется — индикатор «идёт»
-  // живёт строкой активности хода в конце ленты (`MessageList`,
-  // `turn-activity`). Пустой сегмент между шагами давал точки в **середине**
-  // склеенного блока хода (после текста шага, перед следующим шагом).
+  // Новая UX-модель индикатора: пустой живой сегмент (новый шаг до первого
+  // токена) рисуется **только заголовком с точками** — без тела.
   if (
     !displayContent &&
     !message.reasoning &&
@@ -514,7 +519,21 @@ function ChatMessageInner({
     intermediateTextBlocks.length === 0 &&
     !hasAttachments &&
     !showStats
-  ) return null
+  ) {
+    if (!isAssistant || !showLivePlaceholder || !showHeader) return null
+    return (
+      <div className={containerClass} data-message-id={message.id}>
+        <div className={bubbleClass}>
+          <MessageHeader
+            message={message}
+            isSubagent={isSubagent}
+            onOriginClick={handleOriginClick}
+            processing={headerProcessing}
+          />
+        </div>
+      </div>
+    )
+  }
 
   // ADR-046 §7.1: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.
   const noticeVariant: NoticeVariant | null = isSummary
@@ -816,11 +835,12 @@ function ChatMessageInner({
         )}
 
         {isAssistant && showHeader && (
-          <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
-        )}
-
-        {isLive && retry && (
-          <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
+          <MessageHeader
+            message={message}
+            isSubagent={isSubagent}
+            onOriginClick={handleOriginClick}
+            processing={headerProcessing}
+          />
         )}
 
         {partsContent}
@@ -857,37 +877,16 @@ function ChatMessageInner({
           )
         )}
 
-        {isUser && pending && pending.status === 'retrying' && pending.retry && (
-          <RetryStatus
-            retry={pending.retry}
-            onRetryNow={pending.onRetryNow}
-            onCancelRetry={pending.onCancelRetry}
-          />
+        {/* Автоповтор хода — внизу ответа у последнего сегмента (не у реплики). */}
+        {showRetry && retry && (
+          <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
         )}
 
         {/*
-          ADR-118 §1/§5: индикатор активности хода, live-статистика и «В фон»
-          (ADR-111 §detach) — в **конце** содержимого сегмента.
-
-          Живой сегмент в склеенном блоке хода всегда последний, поэтому
-          индикатор должен стоять в конце блока, а не над содержимым
-          сегмента (иначе он визуально попадает в середину ответа —
-          между предыдущим сегментом и текущим). Отдельной плашки стрима
-          больше нет: индикатор — это этот блок в конце сегмента (а для хода
-          без живого сегмента — строка активности в конце ленты).
+          ADR-118 §1/§5: live-статистика и «В фон» (ADR-111 §detach) — в
+          **конце** содержимого сегмента. Точек-индикатора в теле больше нет:
+          «идёт» показывают точки в шапке последнего сегмента хода.
         */}
-        {isLive && (
-          <span
-            className="mt-1 inline-flex gap-0.5 self-start"
-            aria-hidden="true"
-            data-testid="live-indicator"
-          >
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
-          </span>
-        )}
-
         {isLive && (
           <div className="mt-1 flex flex-wrap items-center gap-1 self-start text-[11px] text-muted-foreground">
             {liveSegments.length > 0 && (

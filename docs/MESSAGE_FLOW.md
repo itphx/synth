@@ -141,7 +141,7 @@ sequenceDiagram
 | `202` | оптимистичная реплика (ход не идёт) либо строка очереди | нет |
 | `turn.started`/`stream.start` | реплика уже есть; пустого пузыря ещё нет | плашка «обработка» у реплики |
 | `step.started` | создан пустой сегмент шага (не рисуется, пока нет контента) | плашка у реплики |
-| первая `part.delta`/`part.updated` | текст/рассуждения появляются | точки `live-indicator` в сегменте |
+| первая `part.delta`/`part.updated` | текст/рассуждения появляются | точки в шапке последнего блока активного хода (`processing-indicator`) |
 | `step.finished` | текст шага зафиксирован, статистика шага | между шагами — строка «Выполняется…» |
 | `step.tools.started` | карточки вызовов | строка «Выполняется инструмент…» |
 | `step.tools.finished` | карточки с результатами | строка «Выполняется…» или следующий шаг |
@@ -390,8 +390,8 @@ stateDiagram-v2
 | Диспетчер | `packages/ui/src/stores/transportStore.ts` | Разбор кадров в сторы; `restoreLiveTurnFromSession`/`restoreLiveTurnFromHistory`; точечная догрузка |
 | Сторы | `packages/ui/src/stores/chatStore.ts` | `messagesBySession`, `partsBySession`, `turnBySession`, `retryBySession`, `pendingBySession`, `queueBySession` |
 | Сведение частей | `packages/ui/src/lib/messageParts.ts` | `buildPartsView`, `resolveLiveParts`, `turnHasContent` |
-| Список | `packages/ui/src/components/chat/MessageList.tsx` | Группировка по `turn_id`, `turn-block`, строка активности, плашка у реплики |
-| Сообщение | `packages/ui/src/components/chat/ChatMessage.tsx` | Сегмент: части, `live-indicator`, live-статистика, «В фон» |
+| Список | `packages/ui/src/components/chat/MessageList.tsx` | Группировка по `turn_id`, `turn-block`, последний сегмент хода (точки в шапке, retry), точки у реплики |
+| Сообщение | `packages/ui/src/components/chat/ChatMessage.tsx` | Сегмент: шапка с точками, части, live-статистика, «В фон», `RetryStatus` |
 | Очередь | `packages/ui/src/components/chat/QueuePanel.tsx` | Строки очереди, статусы `queued|starting`, steer, DnD |
 | Экран сессии | `packages/ui/src/components/chat/ChatTab.tsx` | Загрузка истории, восстановление хода, рефреш очереди, мутации по `id` |
 
@@ -415,7 +415,7 @@ sequenceDiagram
   D->>CS: step.tools.started → toolsRunning true
   D->>CS: queue.state → счётчики и items
   CS-->>ML: messagesBySession, turnBySession, retryBySession
-  ML->>ML: группировка по turn_id, turnHasContent, строка активности
+  ML->>ML: группировка по turn_id, turnHasContent, последний сегмент хода
   ML->>CM: сегмент с частями и статусом
   CM-->>E: текст, карточки, индикатор
   CS-->>QP: pendingBySession и queueBySession
@@ -428,37 +428,29 @@ sequenceDiagram
 stateDiagram-v2
   [*] --> Idle
   Idle --> ReplyBadge: turn.started или stream.start
-  ReplyBadge --> ReplyRetry: stream.retry
-  ReplyRetry --> ReplyBadge: новая попытка или первый контент
-  ReplyBadge --> LiveDots: первая part.delta или part.updated
-  LiveDots --> ToolsRow: step.tools.started
-  ToolsRow --> ActivityRow: step.tools.finished, следующего step.started ещё нет
-  LiveDots --> ActivityRow: step.finished, следующего step.started ещё нет
-  ActivityRow --> LiveDots: step.started следующего шага
-  ActivityRow --> ToolsRow: step.tools.started
+  ReplyBadge --> HeaderDots: первая part.delta или part.updated
+  HeaderDots --> HeaderDots: step.tools.started / step.tools.finished / step.started
+  HeaderDots --> HeaderRetry: stream.retry
+  HeaderRetry --> HeaderDots: новая попытка или контент
   ReplyBadge --> Idle: turn.finished
-  ReplyRetry --> Idle: turn.finished
-  LiveDots --> Idle: turn.finished
-  ToolsRow --> Idle: turn.finished
-  ActivityRow --> Idle: turn.finished
-  LiveDots --> Idle: stream.error или stream.cancelled
+  HeaderRetry --> Idle: turn.finished
+  HeaderDots --> Idle: turn.finished
+  HeaderDots --> Idle: stream.error или stream.cancelled
 ```
 
 Условия показа (по коду):
 
 | Состояние | Что рисуется | Условие |
 |---|---|---|
-| `ReplyBadge` | `processing-indicator` в шапке последней **человеческой** user-реплики | `turn.status === 'streaming'` и `!turnHasContent(...)`; последняя реплика хода — по `turn_id` |
-| `ReplyRetry` | тот же бейдж + `RetryStatus` («Повтор N/M») | `retry.streamId === turn.streamId` |
-| `LiveDots` | `live-indicator` в конце живого сегмента | `message.status === 'streaming'` (`ChatMessage`) |
-| `ActivityRow` | строка `turn-activity` + `live-indicator`, текст «Выполняется…» | `turn.status === 'streaming'` и `(turnContentStarted || toolsRunning)` и нет живого сегмента |
-| `ToolsRow` | та же строка, текст «Выполняется инструмент…» (`chat.turn.runningTool`), `data-tools-running="true"` | `turn.toolsRunning === true` (строка показывается и при живом сегменте — `\|\| toolsRunning`) |
+| `ReplyBadge` | `processing-indicator` в шапке последней **человеческой** user-реплики | `turn.status === 'streaming'` и `!turnHasContent(...)`; последняя реплика хода — по `turn_id`. Плашки автоповтора у реплики нет |
+| `HeaderDots` | `processing-indicator` в шапке **последнего визуального блока активного хода** (у первого сегмента группы, вместо времени) | `turn.status === 'streaming'`, `group.turnId === turn.turnId`, группа — последняя assistant-группа этого `turn_id` (шаг может быть уже `completed` — идут инструменты/пауза) |
+| `HeaderRetry` | `RetryStatus` («Повтор N/M», таймер, «Повторить сейчас»/«Отменить») **внизу ответа** последнего сегмента хода | `retry.streamId === turn.streamId` и сегмент — последний |
 | `Idle` | ничего | ход не `streaming` |
 
 **Единый предикат «контент хода был»** — `turnHasContent(messages, turn, fallback?)`: флаг
 `turn.contentStarted` **или** непустой контент assistant-сообщения этого хода. Его используют
-восстановление хода, плашка у реплики и строка активности; собственных предикатов в этих местах
-не заводить. Флаг поднимает и вызов инструмента (`tool_call.started`).
+восстановление хода и плашка у реплики; собственных предикатов в этих местах не заводить. Флаг
+поднимает и вызов инструмента (`tool_call.started`).
 
 ### 6.3 Группировка, сегменты и части
 
@@ -470,19 +462,22 @@ stateDiagram-v2
   assistant-сегментов рисуется одним блоком (`data-testid="turn-block"`, `bare`-сегменты,
   разделители между шагами).
 - Ход, разорванный user-репликой (в т.ч. уведомлением `metadata.type === 'background_run_result'`),
-  даёт **вторую** группу с тем же `turn_id`; её первый сегмент не повторяет шапку
-  (`isTurnContinuation` → `showHeader={false}`).
+  даёт **вторую** группу с тем же `turn_id` — отдельный визуальный блок со своей шапкой. Внутри
+  блока шапка «агент · модель · время» одна — у первого сегмента (`showHeader={first}`).
 - Части: `buildPartsView(dto, live, fallback)` мержит DTO и live по `id` (live приоритетнее).
   `resolveLiveParts` при `isLive` отдаёт live-части, а на терминальном статусе — **текст и reasoning
   только из DTO**, tool-части мержатся с DTO по `callId` (иначе «застрявший» текст прошлого шага
   попал бы в блок хода, а карточка инструмента потеряла бы результат).
 - Дедуп — по `id` сообщения и по `{messageId, partId}` части: `part.delta`/`part.updated` — upsert,
   повторная доставка не задваивает текст.
-- `step.finished` ставит терминальный статус **синхронно** (индикатор гаснет сразу), затем
-  выполняется `mergeHistory` (сверка содержимого с историей). Live-части при этом не снимаются.
-- Пустой живой сегмент **не рендерится**: пауза между шагами и во время инструментов показывается
-  строкой активности хода в конце ленты (`turn-activity`, при активном retry — `RetryStatus`), а не
-  точками между сегментами. До первой части ответа индикатор живёт у реплики.
+- `step.finished` ставит терминальный статус **синхронно** (шаг закрыт), затем
+  выполняется `mergeHistory` (сверка содержимого с историей). Live-части при этом не снимаются;
+  ход продолжается — точки остаются в шапке последнего сегмента.
+- Пустой живой сегмент (новый шаг до первого токена) рендерится **только заголовком** — без тела —
+  если он **первый** в группе (точки в его шапке); не-первый не рендерится вовсе (шапка блока уже
+  несёт точки). Условие: `message.status === 'streaming'` и (`turn.contentStarted === true` или
+  `turn.toolsRunning === true`); на самом первом шаге индикатор живёт у реплики и сегмент скрыт
+  (двух индикаторов одновременно нет).
 
 ### 6.4 Восстановление после reload / открытия сессии
 
@@ -512,8 +507,8 @@ stateDiagram-v2
    (композер скрыт, внизу `SubagentResumeBar`). Признак активного прогона снимается только **своим**
    `streamId` — чужой маркер (новый прогон) не перетирается.
 
-`turn.toolsRunning` **не персистится**: после reload во время длинного инструмента строка
-активности покажет обычное «Выполняется…» до следующего `step.tools.started`.
+`turn.toolsRunning` **не персистится**: после reload во время длинного инструмента точки в шапке
+последнего сегмента появятся со следующего `step.tools.started` (флаг поднимает и `step.started`).
 Live-части после reload начинают накапливаться заново, а live приоритетнее DTO по совпадающему
 `partId` — поэтому до `step.finished` (и `mergeHistory`) в сегменте может быть виден только прирост
 после перезагрузки; полный текст шага восстанавливается на финале шага.
@@ -539,8 +534,8 @@ Live-части после reload начинают накапливаться з
 
 ### 6.7 Инварианты UI
 
-1. **Один индикатор одновременно.** Либо плашка у реплики, либо `live-indicator` в живом сегменте,
-   либо строка активности (`turn-activity`) — но не два сразу.
+1. **Один индикатор одновременно.** Либо точки-«обработка» у реплики, либо точки в шапке
+   шапки последнего блока активного хода — но не два сразу. Строки активности (`turn-activity`) в ленте нет.
 2. **Не смешивать `ord` и `index`** при сортировке; `ord` — единственный «настоящий» порядок ленты.
 3. **Не воскрешать финальные сообщения**: `part.delta`/`part.updated` к сообщению с терминальным
    статусом игнорируются (исключение — `allowTerminal` для вызова инструмента, который приходит уже
@@ -663,7 +658,7 @@ sequenceDiagram
   S-->>U: карточка с результатом, текст шага
 ```
 
-Пользователь: не пустая лента, а блок хода с уже полученным текстом и строка активности.
+Пользователь: не пустая лента, а блок хода с уже полученным текстом и точками в шапке последнего сегмента.
 `toolsRunning` после reload неизвестен → текст строки «Выполняется…» (не «Выполняется инструмент…»).
 
 ### 8.5 Автоповтор провайдера (recoverable ошибка)
@@ -1211,11 +1206,11 @@ sequenceDiagram
 
 ### 9.5 Изменение индикатора
 
-1. Логика — `MessageList` (`turnHasContent`, `hasLiveAssistantSegment`, `showTurnActivity`) и
-   `ChatMessage` (`isLive`).
+1. Логика — `MessageList` (`turnHasContent`, `lastTurnSegmentId`, `headerProcessing`/`showRetry`) и
+   `ChatMessage` (`isLive`, `showLivePlaceholder`).
 2. Предикат «контент хода был» — только `turnHasContent`; новых предикатов не заводить.
-3. Обязательные тесты: `MessageList.pending.test.tsx`, `MessageList.turn-activity.test.tsx`,
-   `MessageList.turn-tools-running.test.tsx`, `ChatMessage.live-indicator.test.tsx`,
+3. Обязательные тесты: `MessageList.pending.test.tsx`, `MessageList.turn-header.test.tsx`,
+   `MessageList.turn-indicator.test.tsx`, `ChatMessage.live-indicator.test.tsx`,
    `ChatTab.live-turn.test.tsx`.
 4. Обновить §6.2 этого документа.
 
@@ -1239,7 +1234,7 @@ sequenceDiagram
 | Core: шина/догон | `events/bus.test.ts`, `events/part-snapshot.test.ts` |
 | Core: HTTP | `server/routes/sessions-message-get.test.ts`, `server/serialize.test.ts`, `server/routes/queue-reorder.test.ts`, `server/routes/queue-steer.test.ts` |
 | UI: сторы | `stores/transportStore.message-parts.test.ts`, `step-finished.test.ts`, `live-turn-restore.test.ts`, `turn-content.test.ts`, `turn-terminal.test.ts`, `ord-merge.test.ts`, `chatStore.test.ts` |
-| UI: компоненты | `MessageList.grouping.test.tsx`, `turn-header.test.tsx`, `turn-block.test.tsx`, `turn-activity.test.tsx`, `turn-tools-running.test.tsx`, `ChatMessage.live-indicator.test.tsx`, `QueuePanel.test.tsx` |
+| UI: компоненты | `MessageList.grouping.test.tsx`, `turn-header.test.tsx`, `turn-block.test.tsx`, `turn-indicator.test.tsx`, `ChatMessage.live-indicator.test.tsx`, `QueuePanel.test.tsx` |
 | Контракт | `packages/shared` (payload'ы/`supportsMessageModel`), `packages/storage-postgres` contract-suite, `lib/api/transport.test.ts` |
 
 ## 10. Карта файлов
@@ -1269,8 +1264,8 @@ sequenceDiagram
 | `Message`/`Part`/`PartType` | `packages/shared/src/types/message.ts` |
 | UI: диспетчер событий и восстановление | `packages/ui/src/stores/transportStore.ts` |
 | UI: сторы сообщений/частей/хода/ретрая/очереди | `packages/ui/src/stores/chatStore.ts` |
-| UI: группировка, `turn-block`, строка активности, плашка | `packages/ui/src/components/chat/MessageList.tsx` |
-| UI: сегмент, `live-indicator`, части, live-статистика | `packages/ui/src/components/chat/ChatMessage.tsx` |
+| UI: группировка, `turn-block`, последний сегмент хода, плашка | `packages/ui/src/components/chat/MessageList.tsx` |
+| UI: сегмент, шапка с точками, части, live-статистика | `packages/ui/src/components/chat/ChatMessage.tsx` |
 | UI: шапка сегмента (`processing-indicator`) | `packages/ui/src/components/chat/MessageHeader.tsx` |
 | UI: сведение live/DTO частей, `turnHasContent` | `packages/ui/src/lib/messageParts.ts` |
 | UI: очередь, статусы, DnD, steer | `packages/ui/src/components/chat/QueuePanel.tsx` |

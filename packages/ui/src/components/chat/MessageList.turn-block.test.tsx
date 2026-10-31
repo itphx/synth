@@ -143,7 +143,7 @@ describe('MessageList: ход как один блок (ADR-118 §1)', () => {
     expect(block.querySelectorAll('.border-t').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('заголовок агента — только у первого сегмента', async () => {
+  it('заголовок агента — один на блок (у первого сегмента)', async () => {
     const container = await renderList(twoStepsSameTurn())
     const block = container.querySelector('[data-testid="turn-block"]') as HTMLElement
 

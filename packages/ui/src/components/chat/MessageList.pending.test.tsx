@@ -1,14 +1,15 @@
 /**
- * ADR-118 §5: индикатор «идёт» живёт **у реплики пользователя**, пока ход не
- * дал контента; после первой части ответа — в живом сегменте ответа.
+ * ADR-118 §5 + новая UX-модель индикатора: пока ход не дал контента, «идёт»
+ * живёт **у реплики пользователя** (точки «обработка»); после первой части
+ * ответа — точки в шапке последнего сегмента хода. Пустой живой сегмент
+ * рисуется только заголовком с точками. Плашка автоповтора у реплики убрана —
+ * `RetryStatus` живёт внизу последнего сегмента ответа.
  *
  * Регрессии, которые закрывает набор:
  * - `turn.started` не должен создавать живое сообщение: плашка «обработка»
  *   у реплики видна от отправки до первого чанка (а не исчезает);
- * - пустой живой сегмент (шаг без контента) не рендерится вовсе: индикатор
- *   «идёт» живёт строкой активности хода в конце ленты (`turn-activity`), а не
- *   точками в середине склеенного блока;
- * - статус автоповтора (`stream.retry`) виден у реплики, пока нет контента.
+ * - пустой живой сегмент (шаг без контента) до начала контента хода скрыт,
+ *   иначе точки дублировались бы (у реплики и в сегменте).
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { act } from 'react'
@@ -157,7 +158,7 @@ describe('MessageList: индикатор «идёт» у реплики пол�
     expect(container.querySelector('[data-testid="processing-indicator"]')).toBeNull()
   })
 
-  it('пустой живой сегмент при contentStarted=true не рисуется — точки идут строкой активности', async () => {
+  it('пустой живой сегмент при contentStarted=true рисуется только шапкой с точками', async () => {
     const container = await renderList([USER_REPLY, LIVE_STEP], {
       turnId: 't1',
       messageId: 'a-1',
@@ -165,11 +166,12 @@ describe('MessageList: индикатор «идёт» у реплики пол�
       contentStarted: true,
     })
 
-    // Пустого сегмента в ленте нет (точки не попадают в середину блока хода).
-    expect(container.querySelector('[data-message-id="a-1"]')).toBeNull()
-    const row = container.querySelector('[data-testid="turn-activity"]')
-    expect(row).not.toBeNull()
-    expect(row!.querySelector('[data-testid="live-indicator"]')).not.toBeNull()
+    const segment = container.querySelector('[data-message-id="a-1"]') as HTMLElement
+    expect(segment).not.toBeNull()
+    expect(segment.querySelector('[data-testid="processing-indicator"]')).not.toBeNull()
+    expect(segment.querySelector('.markdown-content')).toBeNull()
+    // Строки активности хода больше нет.
+    expect(container.querySelector('[data-testid="turn-activity"]')).toBeNull()
   })
 
   it('пустой живой сегмент при contentStarted=false не рисуется (плашка у реплики)', async () => {
@@ -184,7 +186,7 @@ describe('MessageList: индикатор «идёт» у реплики пол�
     expect(container.querySelector('[data-testid="processing-indicator"]')).not.toBeNull()
   })
 
-  it('статус автоповтора — у реплики, пока контент хода не начался', async () => {
+  it('автоповтор не рисуется у реплики — там только точки «обработка»', async () => {
     const container = await renderList(
       [USER_REPLY],
       {
@@ -196,7 +198,9 @@ describe('MessageList: индикатор «идёт» у реплики пол�
       { streamId: 'stream-1', attempt: 1, maxRetries: 3, retryInMs: 5000 },
     )
 
-    expect(container.textContent).toContain('Retry 1/3 in')
+    const reply = container.querySelector('[data-message-id="u-1"]') as HTMLElement
+    expect(reply.querySelector('[data-testid="processing-indicator"]')).not.toBeNull()
+    expect(container.textContent).not.toContain('Retry 1/3 in')
   })
 
   it('плашка «обработка» — у человеческой реплики, а не у уведомления о фоне', async () => {

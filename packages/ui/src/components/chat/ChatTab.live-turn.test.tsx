@@ -145,18 +145,14 @@ describe('ChatTab — восстановление живого хода из и
     })
   })
 
-  it('живой шаг отрисован как живой (индикатор в конце содержимого)', async () => {
+  it('живой шаг отрисован как живой (точки в шапке сегмента)', async () => {
     const container = await mount()
 
     const segment = container.querySelector('[data-message-id="msg-step"]') as HTMLElement
     expect(segment).not.toBeNull()
-    const indicator = segment.querySelector('[data-testid="live-indicator"]')
-    expect(indicator).not.toBeNull()
-    const text = segment.querySelector('.markdown-content') as HTMLElement
-    expect(text).not.toBeNull()
-    expect(
-      (text.compareDocumentPosition(indicator!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-    ).toBe(true)
+    expect(segment.querySelector('[data-testid="processing-indicator"]')).not.toBeNull()
+    expect(segment.querySelector('[data-testid="live-indicator"]')).toBeNull()
+    expect(segment.querySelector('.markdown-content')).not.toBeNull()
   })
 
   it('идущий ход не перетирается повторной загрузкой истории', async () => {

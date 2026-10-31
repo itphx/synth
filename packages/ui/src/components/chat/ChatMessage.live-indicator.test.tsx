@@ -1,10 +1,8 @@
 /**
- * ADR-118 §1/§5: индикатор идущего хода (три точки), live-статистика и
- * «В фон» живут **в конце** содержимого сегмента.
- *
- * Ход склеен в один блок (`turn-block`), живой сегмент — последний. Если
- * индикатор стоит над содержимым сегмента, он визуально попадает в
- * середину ответа (между предыдущим сегментом и текущим) — это и был дефект.
+ * Новая UX-модель индикатора: точек-индикатора в **теле** ответа больше нет —
+ * «идёт» показывают три точки в шапке последнего сегмента хода
+ * (`MessageHeader processing`, `data-testid="processing-indicator"`).
+ * Live-статистика и «В фон» остаются в конце содержимого сегмента.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { act } from 'react'
@@ -50,7 +48,6 @@ vi.hoisted(() => {
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ChatMessage } from './ChatMessage'
-import { MessageList } from './MessageList'
 import type { MessageData } from '@/stores/chatStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -71,7 +68,10 @@ function msg(partial: Partial<MessageData>): MessageData {
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
-async function renderChat(message: MessageData): Promise<HTMLElement> {
+async function renderChat(
+  message: MessageData,
+  props: { headerProcessing?: boolean; showLivePlaceholder?: boolean } = {},
+): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -81,6 +81,8 @@ async function renderChat(message: MessageData): Promise<HTMLElement> {
       <I18nProvider>
         <ChatMessage
           message={message}
+          headerProcessing={props.headerProcessing}
+          showLivePlaceholder={props.showLivePlaceholder}
           onCopy={() => {}}
           onToggle={() => {}}
           onPin={() => {}}
@@ -95,31 +97,6 @@ async function renderChat(message: MessageData): Promise<HTMLElement> {
   return container
 }
 
-async function renderList(messages: MessageData[]): Promise<HTMLElement> {
-  const container = document.createElement('div')
-  document.body.appendChild(container)
-  const root = createRoot(container)
-  roots.push({ root, container })
-  await act(async () => {
-    root.render(
-      <I18nProvider>
-        <MessageList
-          messages={messages}
-          onCopy={() => {}}
-          onToggle={() => {}}
-          onPin={() => {}}
-          onDelete={() => {}}
-          onRetry={() => {}}
-          onDebug={() => {}}
-          onFork={() => {}}
-        />
-      </I18nProvider>,
-    )
-  })
-  return container
-}
-
-/** true — `after` идёт в DOM после `before`. */
 function follows(before: Element, after: Element): boolean {
   return (before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
 }
@@ -139,60 +116,64 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('ChatMessage: индикатор идущего хода — в конце содержимого', () => {
-  it('одиночное живое сообщение: точки и live-статистика идут после текста', async () => {
-    const container = await renderChat(msg({
-      id: 'live-1',
-      content: 'Часть ответа',
-      status: 'streaming',
-      usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
-    }))
-
-    const indicator = container.querySelector('[data-testid="live-indicator"]')
-    expect(indicator).not.toBeNull()
-    const text = container.querySelector('.markdown-content')
-    expect(text).not.toBeNull()
-    expect(follows(text!, indicator!)).toBe(true)
-
-    // Live-строка (статистика) — тоже после содержимого: это соседняя
-    // строка индикатора (поповер со статистикой открывается по кнопке).
-    const liveRow = indicator!.nextElementSibling as HTMLElement
-    expect(liveRow).not.toBeNull()
-    expect(liveRow.querySelector('button[title="Response stats"]')).not.toBeNull()
-    expect(follows(text!, liveRow)).toBe(true)
-  })
-
-  it('склеенный блок хода: точки — в конце блока, а не между сегментами', async () => {
-    const container = await renderList([
-      msg({ id: 'a1', index: 0, ord: 10, turn_id: 't1', step_index: 0, content: 'Первый шаг' }),
+describe('ChatMessage: индикатор «идёт» — только в шапке', () => {
+  it('живое сообщение с headerProcessing: точки в шапке, в теле точек нет', async () => {
+    const container = await renderChat(
       msg({
-        id: 'a2', index: 1, ord: 11, turn_id: 't1', step_index: 1,
-        content: 'Второй шаг', status: 'streaming',
+        id: 'live-1',
+        content: 'Часть ответа',
+        status: 'streaming',
+        agent_role: 'fixer',
+        model: 'model-x',
+        usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
       }),
-    ])
+      { headerProcessing: true },
+    )
 
-    const block = container.querySelector('[data-testid="turn-block"]') as HTMLElement
-    expect(block).not.toBeNull()
+    const dots = container.querySelector('[data-testid="processing-indicator"]')
+    expect(dots).not.toBeNull()
+    // Шапка показывает агента/модель и при точках.
+    expect(container.textContent).toContain('fixer')
+    expect(container.textContent).toContain('model-x')
+    // Старого индикатора в теле больше нет.
+    expect(container.querySelector('[data-testid="live-indicator"]')).toBeNull()
 
-    const indicator = block.querySelector('[data-testid="live-indicator"]')
-    expect(indicator).not.toBeNull()
-    // Индикатор принадлежит последнему (живому) сегменту.
-    const liveSegment = block.querySelector('[data-message-id="a2"]') as HTMLElement
-    expect(liveSegment.contains(indicator!)).toBe(true)
-
-    const firstText = block.querySelector('[data-message-id="a1"] .markdown-content') as HTMLElement
-    const lastText = liveSegment.querySelector('.markdown-content') as HTMLElement
-    expect(firstText).not.toBeNull()
-    expect(lastText).not.toBeNull()
-
-    // Точки стоят после текста обоих сегментов — то есть в конце блока.
-    expect(follows(firstText, indicator!)).toBe(true)
-    expect(follows(lastText, indicator!)).toBe(true)
+    // Live-статистика (кнопка-поповер) остаётся после текста.
+    const text = container.querySelector('.markdown-content') as HTMLElement
+    const statsButton = container.querySelector('button[title="Response stats"]') as HTMLElement
+    expect(text).not.toBeNull()
+    expect(statsButton).not.toBeNull()
+    expect(follows(text, statsButton)).toBe(true)
   })
 
-  it('мёртвое сообщение: индикатора нет', async () => {
-    const container = await renderChat(msg({ id: 'dead-1', content: 'Готово', status: 'completed' }))
+  it('без headerProcessing у завершённого сообщения — время, точек нет', async () => {
+    const container = await renderChat(
+      msg({ id: 'done-1', content: 'Готово', status: 'completed', agent_role: 'fixer', model: 'model-x' }),
+    )
+
+    expect(container.querySelector('[data-testid="processing-indicator"]')).toBeNull()
     expect(container.querySelector('[data-testid="live-indicator"]')).toBeNull()
-    expect(container.querySelector('[data-testid="live-stats"]')).toBeNull()
+    expect(container.textContent).toContain('fixer')
+  })
+
+  it('пустой живой сегмент с showLivePlaceholder — шапка с точками, без тела', async () => {
+    const container = await renderChat(
+      msg({ id: 'empty-1', content: '', parts: [], status: 'streaming', agent_role: 'fixer', model: 'model-x' }),
+      { headerProcessing: true, showLivePlaceholder: true },
+    )
+
+    expect(container.querySelector('[data-testid="processing-indicator"]')).not.toBeNull()
+    expect(container.querySelector('.markdown-content')).toBeNull()
+    expect(container.querySelector('button[title="Response stats"]')).toBeNull()
+    expect(container.textContent).toContain('fixer')
+  })
+
+  it('пустой живой сегмент без showLivePlaceholder не рендерится', async () => {
+    const container = await renderChat(
+      msg({ id: 'empty-2', content: '', parts: [], status: 'streaming' }),
+      { headerProcessing: true },
+    )
+
+    expect(container.querySelector('[data-message-id="empty-2"]')).toBeNull()
   })
 })

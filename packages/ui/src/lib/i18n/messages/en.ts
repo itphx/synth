@@ -1232,10 +1232,6 @@ export const dict = {
   'chat.steer.marker': 'Intervened in turn',
   'chat.steer.interruptMarker': 'Turn interrupted',
 
-  // Строка активности хода в конце ленты (контент уже был, живого сегмента нет).
-  'chat.turn.working': 'Working…',
-  'chat.turn.runningTool': 'Running a tool…',
-
   // Markdown в ответах: заголовок блока кода и кнопка копирования.
   'markdown.code.copy': 'Copy',
   'markdown.code.copied': 'Copied',
