@@ -823,7 +823,11 @@ sequenceDiagram
    `SubagentResumeBar` («Продолжить» после ошибки/отмены).
 5. `subagent.progress` (дельты, троттлинг ~300 мс, лимит `SUBAGENT_PROGRESS_MAX_CHARS`) идёт
    **родителю** — в парт `task` по `parent_call_id`; в канал ребёнка он не дублируется.
-6. **Карточка саб-агента в основной сессии.** Синхронный (`background: false`) и фоновый прогоны
+6. **Снимок живого шага ребёнка.** `run-cycle` пишет `current_stream.live` и для дочерней
+   сессии (`setLiveStreamSnapshot(childSessionId, …)`, `streamId` = стрим прогона, `stepIndex` =
+   итерация): открытая вкладка саб-агента видит текущий шаг целиком, не дожидаясь дельт.
+   Снимается на `step.finished` ребёнка (общий `publishStepFinished`).
+7. **Карточка саб-агента в основной сессии.** Синхронный (`background: false`) и фоновый прогоны
    выглядят одинаково: Prompt, reasoning/промежуточный текст (из `subagent.progress`), шаги ребёнка
    (`tool_call.*` с `parent_call_id`) и Response. Пока прогон идёт, источник — **живые данные** части
    `task` (результата ещё нет), после завершения — `result.metadata` (`reasoning_blocks`/

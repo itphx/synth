@@ -32,8 +32,10 @@ import {
   reasoningPartId,
   textPartId,
   toolCallPart,
+  liveStepParts,
   type PublishEvent,
 } from '../../orchestrator/turn-events.js';
+import { setLiveStreamSnapshot } from '../../live-stream-snapshot.js';
 import { messageToLLMMessage } from './prompt.js';
 import { applySteerInjections, dropSteerInjections } from '../../steering/apply.js';
 import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
@@ -985,6 +987,18 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                   },
                 );
               }
+              // ADR-118 §5: снимок живого шага ребёнка — открытая вкладка
+              // саб-агента видит текущий шаг целиком, не дожидаясь дельт.
+              setLiveStreamSnapshot(childSessionId, {
+                streamId: runStreamId(),
+                turnId: childSessionId,
+                messageId: stepMessageId,
+                stepIndex: iteration,
+                content: liveContent,
+                ...(liveReasoning ? { reasoning: liveReasoning } : {}),
+                parts: liveStepParts(liveContent, liveReasoning, toolCalls),
+                updatedAt: nowISO(),
+              });
             }
 
             // Стримим размышления/промежуточный текст (и usage) саб-агента
