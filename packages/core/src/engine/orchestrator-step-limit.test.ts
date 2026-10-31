@@ -31,6 +31,8 @@ import { generateId, MessageRole, nowISO, makeTextPart, type Message } from '@it
 interface ScriptStep {
   toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
   content?: string;
+  /** Рассуждения шага (reasoning-блок в истории сообщения). */
+  reasoning?: string;
 }
 
 /** Записанный LLM-вызов шага: сообщения, инструменты и опции (6-й аргумент `chatAsync`). */
@@ -83,6 +85,7 @@ class StepLimitScriptProvider extends BaseProvider {
     StepLimitScriptProvider._step++;
     yield {
       content: step.content ?? '',
+      reasoning: step.reasoning,
       isFinal: true,
       model: this.model,
       usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
@@ -164,12 +167,15 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function runTurn(sessionId: string): Promise<void> {
+  async function runTurn(
+    sessionId: string,
+    publish?: (event: string, data: Record<string, unknown>) => void,
+  ): Promise<void> {
     const msg = makeUserMessage();
     await sessionManager.addMessage(sessionId, msg);
     const fresh = (await sessionManager.getSession(sessionId))!;
     const result = await orchestrator.createProcessMessage()(
-      fresh, msg, new AbortController().signal, () => {},
+      fresh, msg, new AbortController().signal, publish ?? (() => {}),
     );
     expect(result.error).toBeUndefined();
   }
@@ -340,6 +346,59 @@ describe('ChatOrchestrator — финальный шаг по лимиту ша�
     expect(finalMessage.content).toBe(sm('session.steps_limit', { limit: '1' }));
     expect(finalMessage.metadata?.status).toBe('limit');
     expect(finalMessage.metadata?.step_limit_reached).toBe(true);
+  });
+
+  it('ADR-118 §1: шаг-лимит с вызовом инструмента — в истории ОДНО сообщение с текстом шага (без дубля «шаг + финал»)', async () => {
+    // Провайдер на шаге-лимите вернул текст отчёта **и** вызов инструмента
+    // (паритет с opencode: вызов не исполняется, но assistant(tool_calls)
+    // остаётся в истории). Раньше финализация создавала второе сообщение с
+    // тем же текстом и теми же reasoning-блоками — в ленте был дубль.
+    StepLimitScriptProvider.configure([
+      { toolCalls: [{ name: 'todo_add', args: { todos: [{ content: 'step-1' }] } }], reasoning: 'размышление шага 1' },
+      {
+        content: 'ОТЧЁТ: лимит шагов исчерпан',
+        reasoning: 'размышление шага-лимита',
+        toolCalls: [{ name: 'todo_add', args: { todos: [{ content: 'limit-step' }] } }],
+      },
+    ]);
+    const session = await sessionManager.createSession({
+      title: 'StepLimitNoDup',
+      userId: 'u1',
+      settings: { provider: 'steplimit', model: 'm', agentRole: 'fixer' },
+    });
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    await runTurn(session.id, (event, data) => events.push({ event, data }));
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const assistants = after.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+
+    // Тексты сообщений хода не повторяются: шаг и финал — одно сообщение.
+    const texts = assistants.map((m) => m.content);
+    expect(new Set(texts).size).toBe(texts.length);
+    // Ровно два сообщения хода: рабочий шаг и шаг-лимит (финала-дубля нет).
+    expect(assistants).toHaveLength(2);
+    // Рассуждения шага не дублируются в отдельном сообщении.
+    const reasoningSets = assistants
+      .map((m) => (m.parts ?? []).filter((p) => p.type === 'reasoning').map((p) => p.data))
+      .filter((blocks) => blocks.length > 0)
+      .map((blocks) => JSON.stringify(blocks));
+    expect(reasoningSets.length).toBeGreaterThan(0);
+    expect(new Set(reasoningSets).size).toBe(reasoningSets.length);
+
+    // Шаг с вызовами виден и несёт статус `limit`.
+    const step = assistants.find((m) => m.content.includes('ОТЧЁТ'))!;
+    expect(step).toBeDefined();
+    expect(step.toolCalls).toHaveLength(1);
+    expect(step.metadata?.status).toBe('limit');
+    expect(step.metadata?.step_limit_reached).toBe(true);
+    // Статус шага (ADR-118) — терминальный «completed»: ошибки не было.
+    expect(step.status).toBe('completed');
+
+    // `step.finished` адресует сохранённое сообщение шага.
+    const finished = events.filter((e) => e.event === 'step.finished');
+    expect(finished.length).toBeGreaterThan(0);
+    expect(finished[finished.length - 1]!.data.messageId).toBe(step.id);
   });
 
   it('ADR-117: effort из reasoningLevel попадает в ChatOptions, смена между ходами подхватывается', async () => {

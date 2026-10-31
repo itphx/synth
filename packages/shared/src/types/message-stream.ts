@@ -239,8 +239,8 @@ export const MESSAGE_MODEL_QUERY_PARAM = 'messageModel';
  * ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).
  *
  * `messageModel` — версия модели сообщений; `eventSeq` — события нумеруются
- * в пределах сессии (догон по `Last-Event-ID`/`?since`); `replay` — доступен
- * догон по журналу событий; `version` — версия инстанса.
+ * глобально в пределах инстанса (догон по `Last-Event-ID`/`?since`); `replay` —
+ * доступен догон по журналу событий; `version` — версия инстанса.
  */
 export type InstanceCapabilities = {
   messageModel: number;

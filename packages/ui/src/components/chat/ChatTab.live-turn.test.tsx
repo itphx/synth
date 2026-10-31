@@ -236,4 +236,41 @@ describe('ChatTab — восстановление живого хода из и
       status: 'streaming',
     })
   })
+
+  it('current_stream без turn_id — id хода берётся из истории (сообщения уже в сторе)', async () => {
+    // Старое ядро: `current_stream` без `turn_id`. Ход должен совпасть с id хода
+    // в истории — иначе live-сообщения получат `turn_id = stream-…`, а история
+    // `turn_…`: блок хода рвётся на два, индикатор застревает в середине.
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValue({
+      session_id: SESSION,
+      messages: [
+        {
+          id: 'msg-user', index: 0, ord: 1, role: 'user', content: 'запусти',
+          disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:00.000Z',
+          turn_id: 'turn-9',
+        },
+        {
+          id: 'msg-step', index: 1, ord: 2, role: 'assistant', content: 'Запускаю команду.',
+          status: 'completed', turn_id: 'turn-9', step_index: 0,
+          disabled: false, pinned: false, hidden: false, created_at: '2026-10-30T00:00:01.000Z',
+        },
+      ],
+    } as never)
+    vi.mocked(synthApi.getSession).mockResolvedValue({
+      id: SESSION,
+      settings: {},
+      session_origin: null,
+      pending_messages: [],
+      sticky_notes: [],
+      status: {},
+      current_stream: { stream_id: 'stream-7' },
+    } as never)
+
+    await mount()
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-9',
+      status: 'streaming',
+    })
+  })
 })

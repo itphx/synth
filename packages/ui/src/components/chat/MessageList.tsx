@@ -4,6 +4,8 @@ import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
 import { isVisibleMessage } from './messageVisibility'
+import { turnHasContent } from '@/lib/messageParts'
+import { useI18n } from '@/lib/i18n'
 import {
   sortMessagesByOrd,
   useChatStore,
@@ -65,6 +67,36 @@ export function groupMessagesByTurn(messages: MessageData[]): MessageGroup[] {
   }
 
   return groups
+}
+
+/**
+ * Продолжение хода (ADR-118 §1): группа, чей `turn_id` совпадает с `turn_id`
+ * предыдущей группы того же хода.
+ *
+ * Ход может быть разорван вставленной user-репликой (в т.ч. уведомлением о
+ * фоновом прогоне — `metadata.type === 'background_run_result'`): тогда
+ * получаются две группы одного хода. Шапка хода («агент · модель · время»)
+ * рисуется только у **первого** сегмента хода — у продолжения она была бы
+ * повтором.
+ *
+ * Продолжением считается только assistant-группа: user-реплика рисует свою
+ * шапку и разрывает блок. Группы без `turn_id` (сообщения вне хода)
+ * продолжениями не бывают.
+ */
+export function isTurnContinuation(groups: MessageGroup[], index: number): boolean {
+  const group = groups[index]
+  if (!group || group.turnId == null) return false
+  if (!group.messages.every((msg) => msg.role === 'assistant')) return false
+  // Предыдущая группа того же хода (группы без `turn_id` — не в счёт).
+  let prevTurnId: string | null = null
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const turnId = groups[i]?.turnId
+    if (turnId != null) {
+      prevTurnId = turnId
+      break
+    }
+  }
+  return prevTurnId != null && prevTurnId === group.turnId
 }
 
 interface MessageListProps {
@@ -133,6 +165,27 @@ function messageKeyOf(msg: MessageData): string {
 }
 
 /**
+ * Реплика **человека** (не служебная).
+ *
+ * Плашка «обработка»/«повтор» должна быть у реплики пользователя. Но
+ * служебные сообщения тоже приходят с `role: 'user'` и рисуются как
+ * `Notice` (без плашки): уведомление о фоне
+ * (`metadata.type === 'background_run_result'`), сообщения шедулера и
+ * системные команды. Если такая реплика оказывалась последней, плашка
+ * уезжала на неё, а индикатор работы хода пропадал.
+ */
+function isHumanReply(msg: MessageData): boolean {
+  const meta = msg.metadata
+  if (!meta) return true
+  if (meta.type === 'background_run_result') return false
+  if (meta.state === true) return false
+  if (meta.commandPrompt === true) return false
+  if (meta.scheduler) return false
+  if (msg.author === 'Scheduler') return false
+  return true
+}
+
+/**
  * Статус «идёт обработка» у последней user-реплики, пока в ходе ещё нет живого
  * сообщения (первой дельты). Возвращает `null` — статус не показываем.
  */
@@ -171,6 +224,7 @@ export function MessageList({
   onRetryNow,
   onCancelRetry,
 }: MessageListProps) {
+  const { t } = useI18n()
   const scrollRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const chatZoneRef = useRef<HTMLDivElement>(null)
@@ -216,36 +270,84 @@ export function MessageList({
   })
 
   // Служебные сообщения tool-chain (metadata.tool_chain === true) не рендерятся
-  // отдельными пузырями — их визуальное представление уже в финальном сообщении
-  // (tool_calls / reasoning_blocks / intermediate_text_blocks). Durable
+  // отдельными пузырями — их визуальное представление уже в сообщениях шагов
+  // хода (части, вызовы инструментов, рассуждения — ADR-118 §1). Durable
   // state-сообщения режима/плана/todo (ADR-070 §2.8) тоже скрыты в UI.
   const visibleMessages = useMemo(() => messages.filter(isVisibleMessage), [messages])
   /** Группы-ходы (ADR-118 §1) — единица рендера и виртуализации. */
   const groups = useMemo(() => groupMessagesByTurn(visibleMessages), [visibleMessages])
 
-  const hasLiveMessage = useMemo(
-    () => (turn?.messageId ? visibleMessages.some((m) => m.id === turn.messageId) : false),
-    [visibleMessages, turn?.messageId],
+  /**
+   * Продолжения хода (ADR-118 §1) — группы, которые не должны повторять
+   * шапку хода: ход разорван вставленной user-репликой (уведомлением о фоне).
+   */
+  const continuedTurnKeys = useMemo(() => {
+    const keys = new Set<string>()
+    groups.forEach((group, index) => {
+      if (isTurnContinuation(groups, index)) keys.add(group.key)
+    })
+    return keys
+  }, [groups])
+
+  /**
+   * ADR-118 §5: контент хода уже начался? — **единый предикат**
+   * (`turnHasContent`): флаг `contentStarted` хода либо непустой контент
+   * assistant-сообщения хода (для восстановленного после перезагрузки хода).
+   *
+   * Пока контента нет, индикатор «идёт» живёт **у реплики пользователя**
+   * (плашка «обработка»/«повтор»); после первой части ответа — в живом
+   * сегменте (или в строке активности хода).
+   */
+  const turnContentStarted = useMemo(
+    () => turnHasContent(visibleMessages, turn),
+    [visibleMessages, turn],
   )
 
   /**
-   * Статус «обработка/повтор» — только у последней user-реплики и только пока
-   * живого сообщения хода ещё нет (до первой дельты). Мемоизирован, чтобы
-   * `React.memo(ChatMessage)` не сбрасывался на каждом рендере списка.
+   * Статус «обработка/повтор» — только у последней **человеческой**
+   * user-реплики и только пока контент хода ещё не начался (до первой части
+   * ответа). Мемоизирован, чтобы `React.memo(ChatMessage)` не сбрасывался на
+   * каждом рендере списка.
    *
    * ADR-118 §7: адресация — по `id` сообщения (индекс нестабилен).
    */
   const pendingById = useMemo(() => {
     const map = new Map<string, PendingStreamStatus>()
-    if (hasLiveMessage) return map
+    if (turnContentStarted) return map
     const status = computePendingStatus(turn, retry, onRetryNow, onCancelRetry)
     if (!status) return map
-    const lastUser = [...visibleMessages].reverse().find((m) => m.role === 'user')
+    const humanReplies = visibleMessages.filter((m) => m.role === 'user' && isHumanReply(m))
+    // Реплика текущего хода (`turn_id` хода) — приоритетная: реплики без
+    // `turn_id` (уведомления о фоне, служебные) этому ходу не принадлежат.
+    const turnId = turn?.turnId
+    const hasOwnReply = !!turnId && humanReplies.some((m) => m.turn_id === turnId)
+    const candidates = hasOwnReply
+      ? humanReplies.filter((m) => m.turn_id != null)
+      : humanReplies
+    const lastUser = candidates[candidates.length - 1]
     if (!lastUser) return map
     if (turn?.turnId && lastUser.turn_id && lastUser.turn_id !== turn.turnId) return map
     map.set(messageKeyOf(lastUser), status)
     return map
-  }, [visibleMessages, turn, hasLiveMessage, retry, onRetryNow, onCancelRetry])
+  }, [visibleMessages, turn, turnContentStarted, retry, onRetryNow, onCancelRetry])
+
+  /**
+   * Есть ли живой assistant-сегмент? В нём индикатор «идёт» уже показан —
+   * строка активности в конце ленты тогда не нужна.
+   */
+  const hasLiveAssistantSegment = useMemo(
+    () => visibleMessages.some((m) => m.role === 'assistant' && m.status === 'streaming'),
+    [visibleMessages],
+  )
+
+  /**
+   * Строка активности хода («как часы»): контент хода уже был, но живого
+   * сегмента нет — во время инструментов, после reload и в паузах лента
+   * выглядела пустой. Строка — не пузырь и без действий; при завершении хода
+   * (`turn.finished`) исчезает.
+   */
+  const showTurnActivity =
+    turn?.status === 'streaming' && turnContentStarted && !hasLiveAssistantSegment
 
   /**
    * ADR-118 §10: pin на контейнере хода — у группы из нескольких сегментов
@@ -328,6 +430,9 @@ export function MessageList({
   ) => {
     const bare = opts?.bare === true
     const last = opts?.last === true
+    // ADR-118 §1: продолжение хода (ход разорван user-репликой) не повторяет
+    // шапку хода — она уже была у первого сегмента.
+    const continued = continuedTurnKeys.has(group.key)
     // ADR-118 §10: у контейнера хода pin пинит весь ход — у первого сегмента
     // (прежнее поведение) и у последнего в едином блоке (там ряд действий).
     const pinTurn = pinTurnHandlers?.get(group.key)
@@ -351,8 +456,8 @@ export function MessageList({
         onToggleSelect={handleToggleSelect}
         pending={pendingById.get(messageKeyOf(msg)) ?? null}
         // ADR-118 §1: заголовок агента/модели — только у первого сегмента хода.
-        showHeader={first}
-        compact={!first}
+        showHeader={first && !continued}
+        compact={!first || continued}
         // ADR-118 §1: в общем блоке хода пузырь рисует контейнер группы.
         bare={bare}
         // …и ряд действий — только у последнего сегмента (внизу блока).
@@ -360,6 +465,17 @@ export function MessageList({
         retry={retry}
         onRetryNow={onRetryNow}
         onCancelRetry={onCancelRetry}
+        /**
+         * ADR-118 §5: пустой живой сегмент (шаг без контента) рисуется, если
+         * контент хода уже был (второй и последующие шаги) — в нём видны точки
+         * «идёт» и статус автоповтора. До первой части ответа индикатор живёт
+         * у реплики пользователя, а пустой сегмент не рисуется вовсе.
+         *
+         * Признак — **результат предиката** `turnContentStarted` (флаг хода
+         * либо контент assistant-сообщений хода): восстановленный после
+         * перезагрузки ход с контентом тоже показывает индикатор в сегменте.
+         */
+        showLivePlaceholder={msg.status === 'streaming' && turnContentStarted}
       />
     )
   }
@@ -427,6 +543,23 @@ export function MessageList({
               groups.map((group) => <div key={group.key}>{renderGroup(group)}</div>)
             )}
           </div>
+          {showTurnActivity && (
+            <div
+              className="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground"
+              data-testid="turn-activity"
+            >
+              <span
+                className="inline-flex gap-0.5"
+                aria-hidden="true"
+                data-testid="live-indicator"
+              >
+                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+              </span>
+              <span>{t('chat.turn.working')}</span>
+            </div>
+          )}
         </div>
       </ScrollableOverlay>
 

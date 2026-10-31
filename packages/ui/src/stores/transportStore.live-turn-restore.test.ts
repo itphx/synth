@@ -78,6 +78,59 @@ describe('transportStore: живой ход по признакам из GET /se
     })
   })
 
+  it('без turn_id в current_stream берётся turn_id последнего сообщения — не stream_id', () => {
+    // Смена ядра: `current_stream` без `turn_id`. Ход должен совпадать с id
+    // хода в истории, иначе live-сообщения получают `turn_id = stream-…`,
+    // а история — `turn_…`: блок хода рвётся на два, а закрытие сегментов
+    // по `onlyTurnId` не срабатывает (индикатор застревает).
+    useChatStore.getState().setMessages(SESSION, [
+      message({ id: 'm-user', role: 'user', content: 'запусти', ord: 1, status: 'completed' }),
+      message({
+        id: 'm-step', ord: 2, turn_id: 'turn-42', step_index: 0, status: 'completed',
+        content: 'Запускаю команду.',
+      }),
+    ])
+
+    restoreLiveTurnFromSession(SESSION, {
+      current_stream: { stream_id: 'stream-7' },
+    })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-42',
+      status: 'streaming',
+    })
+  })
+
+  it('уведомление о фоне (turn_id = null) не влияет — берётся id хода', () => {
+    useChatStore.getState().setMessages(SESSION, [
+      message({ id: 'm-step', ord: 2, turn_id: 'turn-43', status: 'completed' }),
+      message({
+        id: 'm-notice', ord: 3, role: 'user', turn_id: null, status: 'completed',
+        metadata: { type: 'background_run_result' },
+      }),
+    ])
+
+    restoreLiveTurnFromSession(SESSION, {
+      current_stream: { stream_id: 'stream-8' },
+    })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-43',
+      status: 'streaming',
+    })
+  })
+
+  it('ни turn_id в current_stream, ни turn_id в сообщениях — берётся stream_id (legacy)', () => {
+    restoreLiveTurnFromSession(SESSION, {
+      current_stream: { stream_id: 'stream-9' },
+    })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'stream-9',
+      status: 'streaming',
+    })
+  })
+
   it('status.blocked (ожидание подтверждения) тоже восстанавливает ход — по истории', () => {
     useChatStore.getState().setMessages(SESSION, [
       message({

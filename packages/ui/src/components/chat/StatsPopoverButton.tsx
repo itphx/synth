@@ -11,8 +11,8 @@ interface StatsPopoverButtonProps {
 
 /**
  * ADR-070 §2.6: кнопка «Статистика ответа» с поповером. Общая для готовых
- * сообщений (`MessageActions`) и live-стрима (`StreamingPlaceholder`), чтобы
- * разметка кнопки и поповера не дублировалась.
+ * сообщений (`MessageActions`) и живого сегмента ответа, чтобы разметка
+ * кнопки и поповера не дублировалась.
  */
 export function StatsPopoverButton({ children }: StatsPopoverButtonProps) {
   const { t } = useI18n()

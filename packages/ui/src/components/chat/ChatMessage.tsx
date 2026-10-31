@@ -23,7 +23,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useI18n, useResolveI18n } from '@/lib/i18n'
-import type { MessageData, LivePart, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
+import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { buildPartsView, resolveLiveParts } from '@/lib/messageParts'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { moveSessionToBackground } from '@/lib/backgroundDetach'
@@ -63,30 +63,6 @@ function useToolCallData(toolCalls: MessageData['tool_calls']) {
         parentCallId: undefined,
       }))
   }, [toolCalls])
-}
-
-/**
- * Сырой вызов провайдера (`{type:'function', function:{name, arguments}}`) →
- * форма частей UI (`{name, args}`).
- *
- * Иначе live-карточка тула остаётся без имени («unknown»): имя тула лежит в
- * `function.name`, а аргументы — в `function.arguments` (JSON-строка).
- */
-function normalizeLiveToolPart(part: LivePart): LivePart {
-  if (part.type !== 'tool_use') return part
-  const d = (part.data ?? {}) as Record<string, unknown>
-  const fn = d.function as { name?: unknown; arguments?: unknown } | undefined
-  if (!fn || typeof fn.name !== 'string' || fn.name.length === 0) return part
-  let args = (d.args as Record<string, unknown>) ?? {}
-  if (typeof fn.arguments === 'string' && fn.arguments.trim().length > 0) {
-    try {
-      const parsed: unknown = JSON.parse(fn.arguments)
-      if (parsed && typeof parsed === 'object') args = parsed as Record<string, unknown>
-    } catch {
-      // Аргументы не JSON — оставляем как есть.
-    }
-  }
-  return { ...part, data: { ...d, name: fn.name, args } }
 }
 
 function getReasoningBlocks(message: MessageData): ReasoningBlockData[] {
@@ -160,6 +136,12 @@ interface ChatMessageProps {
   retry?: StreamRetry | null
   onRetryNow?: () => void
   onCancelRetry?: () => void
+  /**
+   * ADR-118 §5: пустой живой сегмент (шаг без контента) всё равно рисуется —
+   * в нём видны точки «идёт» и статус автоповтора. До первой части ответа
+   * индикатор живёт у реплики пользователя, а пустой сегмент скрыт.
+   */
+  showLivePlaceholder?: boolean
 }
 
 export interface PendingStreamStatus {
@@ -192,6 +174,7 @@ function ChatMessageInner({
   retry,
   onRetryNow,
   onCancelRetry,
+  showLivePlaceholder = false,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -326,7 +309,8 @@ function ChatMessageInner({
    * миг (ADR-118 §5).
    */
   const liveParts = useMemo(() => {
-    const parts = livePartMap ? Object.values(livePartMap).map(normalizeLiveToolPart) : undefined
+    // Нормализация вызова тула (`{name, args}`) — внутри `buildPartsView`.
+    const parts = livePartMap ? Object.values(livePartMap) : undefined
     return resolveLiveParts(parts, { isLive, dtoParts: message.parts })
   }, [isLive, livePartMap, message.parts])
   const partsView = useMemo(
@@ -343,13 +327,13 @@ function ChatMessageInner({
   /**
    * ADR-118 §1/§5: промежуточные тексты.
    *
-   * - у сообщения **шага** есть свой текст (он и рисуется в этом сегменте);
-   * - у **финального** сообщения хода лежат накопленные по всему ходу
-   *   `intermediate_text_blocks` — это тексты *прошлых* шагов, они уже
-   *   нарисованы в своих сегментах склеенного блока хода. Рисовать их снова
-   *   нельзя — текст шага дублировался бы в блоке хода;
-   * - промежуточный текст, совпадающий с основным текстом сообщения, тоже
-   *   не рисуется: основной текст показывается ровно один раз.
+   * Текст каждого шага лежит в **своём** сообщении шага (сегмент хода) —
+   * он и рисуется в этом сегменте. У сообщения финального шага
+   * `intermediate_text_blocks` — это тексты *прошлых* шагов: они уже
+   * нарисованы в своих сегментах склеенного блока хода, рисовать их снова
+   * нельзя (текст шага дублировался бы в блоке хода); промежуточный текст,
+   * совпадающий с основным текстом сообщения, тоже не рисуется — основной
+   * текст показывается ровно один раз.
    */
   const isLaterStep = typeof message.step_index === 'number' && message.step_index > 0
   const intermediateTextBlocks = useMemo(() => {
@@ -362,8 +346,8 @@ function ChatMessageInner({
 
   /**
    * ADR-111 §detach + ADR-070 §2.6: живое сообщение несёт индикатор хода,
-   * live-статистику, «В фон» и «Стоп» (прежде — отдельная плашка
-   * `StreamingPlaceholder`; теперь — тот же компонент, что и финальное).
+   * live-статистику, «В фон» и «Стоп» (отдельной плашки стрима больше нет —
+   * индикатор живёт в самом сегменте шага/в строке активности хода).
    */
   const [detaching, setDetaching] = useState(false)
   const detachTargets = liveToolCalls.filter(
@@ -503,6 +487,8 @@ function ChatMessageInner({
   // ADR-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
   // ADR-115: сообщение только из вложений (картинка от ассистента без текста) — тоже рендерим.
+  // ADR-118 §5: пустой живой сегмент рисуется, когда контент хода уже был
+  // (`showLivePlaceholder`) — в нём индикатор «идёт» и статус автоповтора.
   if (
     !displayContent &&
     !message.reasoning &&
@@ -510,7 +496,8 @@ function ChatMessageInner({
     reasoningBlocks.length === 0 &&
     intermediateTextBlocks.length === 0 &&
     !hasAttachments &&
-    !showStats
+    !showStats &&
+    !showLivePlaceholder
   ) return null
 
   // ADR-046 §7.1: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.
@@ -869,8 +856,9 @@ function ChatMessageInner({
           Живой сегмент в склеенном блоке хода всегда последний, поэтому
           индикатор должен стоять в конце блока, а не над содержимым
           сегмента (иначе он визуально попадает в середину ответа —
-          между предыдущим сегментом и текущим). Прежняя отдельная плашка
-          `StreamingPlaceholder` заменена этим блоком.
+          между предыдущим сегментом и текущим). Отдельной плашки стрима
+          больше нет: индикатор — это этот блок в конце сегмента (а для хода
+          без живого сегмента — строка активности в конце ленты).
         */}
         {isLive && (
           <span

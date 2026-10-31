@@ -444,6 +444,11 @@ function serializeSession(session: Session): SerializedSession {
           agent_role: session.currentStream.agentRole,
           started_at: session.currentStream.startedAt,
           cancelled: session.currentStream.cancelled,
+          // ADR-118 §10: метка хода живого стрима — без неё теряется при
+          // перечитывании сессии с диска (`current_stream.turn_id` в DTO).
+          // «Хода нет» — `null` (единое представление с PostgreSQL-драйвером
+          // и DTO сессии; чтение терпит и отсутствие поля).
+          turn_id: session.currentStream.turnId ?? null,
         }
       : undefined,
     summarization_pending: session.summarizationPending,
@@ -534,6 +539,10 @@ function deserializeSession(data: SerializedSession): Session {
           agentRole: data.current_stream.agent_role as string | undefined,
           startedAt: data.current_stream.started_at as string,
           cancelled: data.current_stream.cancelled as boolean,
+          // ADR-118 §10: метка хода живого стрима (legacy-сессии — нет).
+          // Формы хранения: `null` (новые записи) или отсутствие поля
+          // (legacy) — обе читаются как «хода нет».
+          turnId: (data.current_stream.turn_id as string | null | undefined) ?? undefined,
         }
       : undefined,
     summarizationPending: data.summarization_pending ?? false,

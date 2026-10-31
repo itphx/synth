@@ -540,6 +540,9 @@ export function serializeSession(session: Session): Record<string, unknown> {
           agent_role: session.currentStream.agentRole,
           started_at: session.currentStream.startedAt,
           cancelled: session.currentStream.cancelled,
+          // ADR-118 §10: метка хода живого стрима — без неё теряется при
+          // перечитывании сессии из БД (`current_stream.turn_id` в DTO).
+          turn_id: session.currentStream.turnId ?? null,
         }
       : null,
     summarization_pending: session.summarizationPending ?? false,
@@ -719,6 +722,8 @@ export function deserializeSession(
           agentRole: currentStream.agent_role as string | undefined,
           startedAt: currentStream.started_at as string,
           cancelled: currentStream.cancelled as boolean,
+          // ADR-118 §10: метка хода живого стрима (legacy-сессии — нет).
+          turnId: (currentStream.turn_id as string | undefined) ?? undefined,
         }
       : undefined,
     summarizationPending: row.summarization_pending ?? false,

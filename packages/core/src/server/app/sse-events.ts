@@ -17,7 +17,7 @@ import {
  * включая сессии, созданные позже (ADR-089 events-funnel). `events:watch` —
  * scope service-key (для интерактивных кред — no-op).
  *
- * ADR-118 §6/§8: кадр несёт `id:` (номер события в пределах сессии) — по нему
+ * ADR-118 §6/§8: кадр несёт `id:` (глобальный номер события) — по нему
  * работает догон (`Last-Event-ID` / `?since`); клиент обязан заявить модель
  * сообщений (`messageModel=2`) — иначе поток не устанавливается (fail-closed).
  */
@@ -63,7 +63,7 @@ export function registerEventsSse(app: Hono, eventBus: EventBus): void {
               sentSeq.set(event.sessionId, seq);
             }
             try {
-              // `id:` — номер события в пределах сессии (ADR-118 §6): по нему
+              // `id:` — глобальный номер события (ADR-118 §6): по нему
               // клиент продолжает ленту после переподключения (`Last-Event-ID`).
               const id = typeof event.eventSeq === 'number' ? `id: ${event.eventSeq}\n` : '';
               const line = `${id}data: ${JSON.stringify(event)}\n\n`;
@@ -90,7 +90,8 @@ export function registerEventsSse(app: Hono, eventBus: EventBus): void {
           unsubs.push(eventBus.subscribeAll(handler));
 
           // ADR-118 §6: журнал событий — строго после `since` (глобальный хаб
-          // подписан на все сессии; номер события монотонен в пределах сессии).
+          // подписан на все сессии; номер события глобальный, монотонный в
+          // пределах инстанса).
           if (sinceSeq !== null) {
             for (const event of eventBus.journalSince(sinceSeq)) write(event);
           }

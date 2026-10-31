@@ -709,12 +709,26 @@ describe('ChatOrchestrator × permissions — once:false и deny (ADR-029)', () 
     expect(turn!.data).not.toHaveProperty('stopped_by_deny');
     expect(turn!.data).not.toHaveProperty('deny_reason');
 
-    // История сохранена: финальное сообщение ассистента с tool_results
+    // История сохранена: финальное сообщение ассистента и сообщение ШАГА с
+    // вызовом инструмента. ADR-118 §1: сводка вызовов живёт в сообщении
+    // своего шага — в финальном её нет (иначе карточки дублировались бы).
     const session = (await sessionManager.getSession(sessionId))!;
     const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
     expect(assistant).toBeDefined();
-    expect((assistant!.metadata as Record<string, unknown>).tool_results).toBeDefined();
     expect(assistant!.content).toBe('Отказ учтён — объясняю без записи файла');
+    expect((assistant!.metadata as Record<string, unknown>).tool_results).toBeUndefined();
+
+    const stepAssistant = session.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
+    );
+    expect(stepAssistant).toBeDefined();
+    const stepToolResults = (stepAssistant!.metadata as Record<string, unknown>).tool_results as
+      Array<{ name: string; result?: { content: string; isError?: boolean } }> | undefined;
+    expect(stepToolResults).toBeDefined();
+    expect(stepToolResults).toHaveLength(1);
+    expect(stepToolResults![0]!.name).toBe('write_file');
+    expect(stepToolResults![0]!.result?.isError).toBe(true);
+    expect(stepToolResults![0]!.result?.content).toContain('denied by the user');
     for (const unsub of unsubs) unsub();
   });
 

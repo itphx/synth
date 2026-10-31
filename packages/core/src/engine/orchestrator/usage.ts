@@ -87,6 +87,39 @@ export function estimateUsage(
 }
 
 /**
+ * ADR-102: сумма двух расходов (`usage`).
+ *
+ * Расход **хода** = сумма расходов его шагов: с ADR-118 шаг — отдельный
+ * вызов LLM, поэтому расход промежуточных шагов иначе терялся бы в
+ * статистике сессии/аналитике (в финальное сообщение попадал только
+ * последний вызов). Складываются токены и кеш-поля; `totalTokens` — сумма
+ * сумм, а при нуле — `input + output` (как в `estimateUsage`).
+ */
+export function addTokenUsage(base: TokenUsage, add: TokenUsage | undefined): TokenUsage {
+  if (!add) return base;
+  const inputTokens = (base.inputTokens || 0) + (add.inputTokens || 0);
+  const outputTokens = (base.outputTokens || 0) + (add.outputTokens || 0);
+  const totalTokens = (base.totalTokens || 0) + (add.totalTokens || 0);
+  const cacheReadTokens = (base.cacheReadTokens ?? 0) + (add.cacheReadTokens ?? 0);
+  const cacheWriteTokens = (base.cacheWriteTokens ?? 0) + (add.cacheWriteTokens ?? 0);
+  const reasoningTokens = (base.reasoningTokens ?? 0) + (add.reasoningTokens ?? 0);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: totalTokens > 0 ? totalTokens : inputTokens + outputTokens,
+    ...(base.cacheReadTokens !== undefined || add.cacheReadTokens !== undefined
+      ? { cacheReadTokens }
+      : {}),
+    ...(base.cacheWriteTokens !== undefined || add.cacheWriteTokens !== undefined
+      ? { cacheWriteTokens }
+      : {}),
+    ...(base.reasoningTokens !== undefined || add.reasoningTokens !== undefined
+      ? { reasoningTokens }
+      : {}),
+  };
+}
+
+/**
  * Оценка размера промпта (символы) для best-effort input-токенов: сообщения
  * (content + toolUse + reasoning) + system prompt + JSON тулов. Зеркалит
  * отправку в провайдер, не мутирует данные.

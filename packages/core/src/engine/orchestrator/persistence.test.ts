@@ -8,7 +8,7 @@
  *    статистика сабагентов, `message.added` (кроме `skipEvent`), promptMeta;
  *  - `persistToolChain` — реальные пары «assistant(toolCalls) + tool-результаты»,
  *    совместимые с `sessionMessagesToLlm` (нет осиротевших tool);
- *  - `joinAccumulatedTexts`, `getAssistantSecrets`.
+ *  - `getAssistantSecrets`.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -25,7 +25,6 @@ import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
 import {
   resolveAssistantStatus,
   isAssistantMessageStatus,
-  joinAccumulatedTexts,
   getAssistantSecrets,
   saveAssistantMessage,
   persistToolChain,
@@ -79,26 +78,6 @@ describe('resolveAssistantStatus / isAssistantMessageStatus', () => {
     expect(isAssistantMessageStatus('bogus')).toBe(false);
     expect(isAssistantMessageStatus(undefined)).toBe(false);
     expect(isAssistantMessageStatus(42)).toBe(false);
-  });
-});
-
-describe('joinAccumulatedTexts', () => {
-  it('склеивает завершённые итерации с текущей, пропуская пустые/пробельные', () => {
-    expect(
-      joinAccumulatedTexts(
-        [
-          { text: 'первая', iteration: 0 },
-          { text: '   ', iteration: 1 },
-          { text: '', iteration: 2 },
-          { text: 'третья', iteration: 3 },
-        ],
-        'текущая',
-      ),
-    ).toBe('первая\n\nтретья\n\nтекущая');
-  });
-
-  it('без накопленных текстов и без текущего — пустая строка', () => {
-    expect(joinAccumulatedTexts([], '')).toBe('');
   });
 });
 

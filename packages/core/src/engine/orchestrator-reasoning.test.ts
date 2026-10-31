@@ -110,7 +110,7 @@ describe('ChatOrchestrator: reasoning_blocks без дублей (повтор �
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('финальное сообщение шага несёт один блок рассуждений (без дубля)', async () => {
+  it('шаг несёт блок рассуждений, финал — только свой: повтор в новой итерации не даёт дубля', async () => {
     const store = new FileStore({ dataDir: tmpDir });
     const sessionManager = new SessionManager(store);
     const eventBus = new EventBus();
@@ -164,15 +164,34 @@ describe('ChatOrchestrator: reasoning_blocks без дублей (повтор �
     expect(MockRepeatReasoningProvider.calls).toBe(2);
 
     // ADR-118 §4/§5: `stream.done` удалён — блоки рассуждений хода живут
-    // в `parts` финального assistant-сообщения. Повтор рассуждения в новой
-    // итерации не даёт дубль.
+    // в `parts` сообщений шагов. Повтор рассуждения в новой итерации не даёт
+    // дубль: блок принадлежит своей итерации, а финальное сообщение несёт
+    // рассуждения ТОЛЬКО своей (финальной) итерации.
     const stored = (await sessionManager.getSession(session.id))!;
-    const finalMessage = [...stored.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
-    const blocks = finalMessage.parts
+    const assistants = stored.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistants.length).toBe(2);
+    const stepMessage = assistants.find((m) => (m.toolCalls?.length ?? 0) > 0)!;
+    const finalMessage = assistants[assistants.length - 1]!;
+
+    // Блок рассуждений первой итерации живёт в сообщении её шага.
+    const stepBlocks = stepMessage.parts
       .filter((p) => p.type === 'reasoning')
       .map((p) => ({ text: p.data as string }));
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]!.text).toBe('Думаю');
+    expect(stepBlocks).toHaveLength(1);
+    expect(stepBlocks[0]!.text).toBe('Думаю');
+    expect(stepMessage.reasoning).toBe('Думаю');
+
+    // Финал — рассуждения своей итерации. Повтор того же текста в новой
+    // итерации — не второй блок (текст уже показан шагом).
+    const finalBlocks = finalMessage.parts
+      .filter((p) => p.type === 'reasoning')
+      .map((p) => ({ text: p.data as string }));
+    expect(finalBlocks).toHaveLength(0);
+    expect(finalMessage.reasoning).toBe('');
+
+    // Суммарно по ходу — ровно один блок рассуждений (дубля нет).
+    const totalBlocks = assistants.flatMap((m) => m.parts.filter((p) => p.type === 'reasoning'));
+    expect(totalBlocks).toHaveLength(1);
   });
 });
 
@@ -247,7 +266,7 @@ describe('ChatOrchestrator: мульти-блочная подпись reasoning
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('финальное сообщение сохраняет подписи всех блоков, история реплеит их', async () => {
+  it('финальное сообщение сохраняет подпись своего блока, история реплеит блоки по шагам', async () => {
     const store = new FileStore({ dataDir: tmpDir });
     const sessionManager = new SessionManager(store);
     const eventBus = new EventBus();
@@ -299,19 +318,37 @@ describe('ChatOrchestrator: мульти-блочная подпись reasoning
     expect(result.error).toBeUndefined();
     expect(MockMultiBlockProvider.calls).toBe(2);
 
-    // Финальное сообщение: reasoning-части со своими подписями (все блоки хода).
+    // ADR-118 §1: «финал хода = последний шаг» — финальное сообщение несёт
+    // блоки ТОЛЬКО своей (финальной) итерации; блоки прошлых шагов — в их
+    // собственных сообщениях (иначе размышления дублировались бы в ленте).
     const after = (await sessionManager.getSession(session.id))!;
-    const finalMessage = [...after.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
-    const reasoningParts = finalMessage.parts.filter((p) => p.type === 'reasoning');
-    expect(reasoningParts.map((p) => p.metadata?.signature)).toEqual(['sig-a', 'sig-b', 'sig-c']);
-    expect(reasoningParts.map((p) => p.data)).toEqual(['блок A', 'блок B', 'блок C']);
+    const assistants = after.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistants.length).toBe(2);
+    const stepMessage = assistants.find((m) => (m.toolCalls?.length ?? 0) > 0)!;
+    const finalMessage = assistants[assistants.length - 1]!;
 
-    // История реплеит блоки через LLMMessage.reasoningBlocks.
-    const llm = ChatOrchestrator._sessionMessagesToLlm([finalMessage], 'fixer', 'user');
-    const assistant = llm.find((m) => m.role === 'assistant')!;
-    expect(assistant.reasoningBlocks).toEqual([
+    // Шаг 1: два блока со своими подписями.
+    const stepParts = stepMessage.parts.filter((p) => p.type === 'reasoning');
+    expect(stepParts.map((p) => p.metadata?.signature)).toEqual(['sig-a', 'sig-b']);
+    expect(stepParts.map((p) => p.data)).toEqual(['блок A', 'блок B']);
+
+    // Финал: блок финальной итерации со своей подписью.
+    const reasoningParts = finalMessage.parts.filter((p) => p.type === 'reasoning');
+    expect(reasoningParts.map((p) => p.metadata?.signature)).toEqual(['sig-c']);
+    expect(reasoningParts.map((p) => p.data)).toEqual(['блок C']);
+    // Подпись блока финала — в legacy-поле сообщения (блок ровно один).
+    expect(finalMessage.reasoningSignature).toBe('sig-c');
+
+    // История реплеит блоки через LLMMessage.reasoningBlocks — по шагам.
+    const stepLlm = ChatOrchestrator._sessionMessagesToLlm([stepMessage], 'fixer', 'user');
+    const stepAssistant = stepLlm.find((m) => m.role === 'assistant')!;
+    expect(stepAssistant.reasoningBlocks).toEqual([
       { text: 'блок A', signature: 'sig-a' },
       { text: 'блок B', signature: 'sig-b' },
+    ]);
+    const finalLlm = ChatOrchestrator._sessionMessagesToLlm([finalMessage], 'fixer', 'user');
+    const finalAssistant = finalLlm.find((m) => m.role === 'assistant')!;
+    expect(finalAssistant.reasoningBlocks).toEqual([
       { text: 'блок C', signature: 'sig-c' },
     ]);
   });

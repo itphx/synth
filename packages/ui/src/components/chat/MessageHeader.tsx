@@ -149,7 +149,7 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, me
             </button>
           )}
           {processing ? (
-            <span className="ml-auto inline-flex gap-0.5">
+            <span className="ml-auto inline-flex gap-0.5" data-testid="processing-indicator">
               <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
               <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
               <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />

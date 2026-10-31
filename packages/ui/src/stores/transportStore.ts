@@ -14,8 +14,8 @@ import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import type { TransportMode } from './useUIStore'
-import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus } from './chatStore'
-import { partText } from '@/lib/messageParts'
+import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn } from './chatStore'
+import { partText, turnHasContent } from '@/lib/messageParts'
 import type { PromptAcceptedResponse } from '@itphx/synth-shared/types'
 import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared/types'
 import { synthApi } from '@/lib/api/synthApi'
@@ -238,19 +238,6 @@ function mergeKnownMessage(known: MessageData, m: MessageData): MessageData {
 }
 
 /**
- * Есть ли у сообщения в сторе содержимое из истории (части DTO или текст).
- *
- * Нужен на финале шага: `mergeHistory` может вернуть `true`, но записи шага
- * в ответе ещё нет (сервер сохраняет асинхронно) — тогда live-части остаются
- * единственным источником текста и снимать их нельзя (ADR-118 §5).
- */
-function hasHistoryContent(sid: string, messageId: string): boolean {
-  const message = useChatStore.getState().messagesBySession[sid]?.find((m) => m.id === messageId)
-  if (!message) return false
-  return (message.parts?.length ?? 0) > 0 || (message.content ?? '').length > 0
-}
-
-/**
  * ADR-118 §5/§6: восстановление **живого хода** из истории после перезагрузки.
  *
  * История (`GET /sessions/:id/messages`) несёт `ord`/`turn_id`/`step_index`/
@@ -279,12 +266,45 @@ export function restoreLiveTurnFromHistory(sessionId: string, messages: MessageD
     ...(last.agent_role ? { agentRole: last.agent_role } : {}),
     ...(last.model ? { model: last.model } : {}),
     ...(last.provider ? { provider: last.provider } : {}),
+    // Контент хода уже был? (иначе индикатор «идёт» — у реплики пользователя).
+    contentStarted: turnHasContent(messages, { turnId }, last),
   })
+}
+
+/**
+ * Контент хода начался (ADR-118 §5): пришла первая часть ответа.
+ *
+ * Индикатор «идёт» до этого живёт у реплики пользователя (плашка
+ * «обработка»/«повтор»), после — в живом сегменте ответа. Флаг ставится
+ * один раз на ход и не сбрасывается между шагами.
+ */
+function markTurnContentStarted(sessionId: string): void {
+  const turn = useChatStore.getState().turnBySession[sessionId]
+  if (!turn || turn.contentStarted) return
+  useChatStore.getState().patchTurn(sessionId, { contentStarted: true })
 }
 
 /** Непустая строка из произвольного значения (DTO API без типизации). */
 function asNonEmptyString(value: unknown): string {
   return typeof value === 'string' && value !== '' ? value : ''
+}
+
+/**
+ * Последний известный `turn_id` хода сессии — по сообщениям в сторе (с конца).
+ *
+ * Нужен при восстановлении хода после перезагрузки: `current_stream` старого
+ * ядра не несёт `turn_id`, и `stream_id` (`stream-…`) — **не** id хода: с ним
+ * live-сообщения получали `turn_id = stream-…`, а история — `turn_…`. Ход из
+ * двух разных id не склеивался (блок рвался на два), а закрытие сегментов
+ * по `onlyTurnId` не срабатывало — индикатор «идёт» застревал в середине
+ * блока. Сообщения-уведомления о фоне `turn_id` не несут — их пропускаем.
+ */
+function lastKnownTurnId(messages: MessageData[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const turnId = asNonEmptyString(messages[i]?.turn_id)
+    if (turnId) return turnId
+  }
+  return ''
 }
 
 /**
@@ -299,8 +319,13 @@ function asNonEmptyString(value: unknown): string {
  *
  * API отдаёт признак активного хода: `current_stream` (идёт стрим) и
  * `status.blocked` (ход ждёт подтверждения). По ним границы хода
- * восстанавливаются; id хода — `current_stream.turn_id`/`stream_id`, иначе
- * берутся из истории.
+ * восстанавливаются.
+ *
+ * **id хода** (порядок источников):
+ * 1. `current_stream.turn_id` — точный id хода (ядро публикует его);
+ * 2. `turn_id` последнего сообщения сессии — восстановленный ход должен
+ *    совпадать с id хода в истории, иначе блок хода рвётся на два;
+ * 3. `current_stream.stream_id` — legacy (ядро без `turn_id`).
  *
  * Идемпотентно: уже восстановленный (или идущий) ход не перетирается.
  */
@@ -308,27 +333,78 @@ export function restoreLiveTurnFromSession(sessionId: string, session: unknown):
   if (!session || typeof session !== 'object') return
   const data = session as Record<string, unknown>
   const current = useChatStore.getState().turnBySession[sessionId]
-  if (current && current.status === 'streaming') return
   const stream = (data.current_stream ?? null) as Record<string, unknown> | null
   const status = (data.status ?? null) as Record<string, unknown> | null
   const blocked = status?.blocked
   const hasStream = stream != null
-  if (!hasStream && !blocked) return
-  const turnId = asNonEmptyString(stream?.turn_id) || asNonEmptyString(stream?.stream_id)
-  if (!turnId) {
-    // Границы хода из истории (сообщение со статусом `streaming`).
-    restoreLiveTurnFromHistory(
-      sessionId,
-      useChatStore.getState().messagesBySession[sessionId] ?? [],
-    )
+  const messages = useChatStore.getState().messagesBySession[sessionId] ?? []
+  const streamId = asNonEmptyString(stream?.stream_id)
+  const agentRole = asNonEmptyString(stream?.agent_role)
+
+  if (current && current.status === 'streaming') {
+    // Ход уже восстановлен (по истории) — **дополняем** его: `stream_id` нужен
+    // для сопоставления `stream.retry` (плашка автоповтора), агент/модель —
+    // для шапки хода. Границы хода (`turnId`) не трогаем.
+    patchTurnFromSession(sessionId, current, { streamId, agentRole, messages })
     return
   }
-  const agentRole = asNonEmptyString(stream?.agent_role)
+  if (!hasStream && !blocked) return
+  const turnId =
+    asNonEmptyString(stream?.turn_id)
+    // Id хода из истории — только когда идёт стрим: при `status.blocked`
+    // границы хода восстанавливаются из истории целиком (см. ниже).
+    || (hasStream ? lastKnownTurnId(messages) : '')
+    || asNonEmptyString(stream?.stream_id)
+  if (!turnId) {
+    // Границы хода из истории (сообщение со статусом `streaming`).
+    restoreLiveTurnFromHistory(sessionId, messages)
+    return
+  }
+  // Сообщение шага хода (из истории) — его id/шаг нужны границам хода.
+  const step = messages.find((m) => m.status === 'streaming' && m.turn_id === turnId)
   useChatStore.getState().startTurn(sessionId, {
     turnId,
     status: 'streaming',
+    ...(streamId ? { streamId } : {}),
+    ...(step?.id ? { messageId: step.id } : {}),
+    ...(step?.step_index != null ? { stepIndex: step.step_index } : {}),
     ...(agentRole ? { agentRole } : {}),
+    contentStarted: turnHasContent(messages, { turnId }, step),
   })
+}
+
+/**
+ * Дополнить уже восстановленный ход данными сессии (ADR-118 §5).
+ *
+ * Ход, восстановленный по истории, не знает `stream_id` (по нему
+ * сопоставляется статус автоповтора `stream.retry`), агента и модель: без
+ * них после перезагрузки не появлялись ни плашка «повтор», ни шапка хода.
+ *
+ * Заполняются **только пустые** поля: непустое значение в сторе (свежее
+ * истории) не перетирается значением из сессии, а `contentStarted` не
+ * сбрасывается в `false` — уже начатый контент хода остаётся начатым.
+ */
+function patchTurnFromSession(
+  sessionId: string,
+  turn: ActiveTurn,
+  source: { streamId?: string; agentRole?: string; messages: MessageData[] },
+): void {
+  const patch: Partial<ActiveTurn> = {}
+  // Сообщение шага хода (из истории) — его id/шаг нужны границам хода.
+  const step = source.messages.find((m) => m.status === 'streaming' && m.turn_id === turn.turnId)
+  if (!turn.streamId && source.streamId) patch.streamId = source.streamId
+  if (!turn.agentRole && source.agentRole) patch.agentRole = source.agentRole
+  const model = turn.model || asNonEmptyString(step?.model)
+  if (!turn.model && model) patch.model = model
+  const provider = turn.provider || asNonEmptyString(step?.provider)
+  if (!turn.provider && provider) patch.provider = provider
+  if (!turn.messageId && step?.id) patch.messageId = step.id
+  if (turn.stepIndex == null && step?.step_index != null) patch.stepIndex = step.step_index
+  if (!turn.contentStarted && turnHasContent(source.messages, turn, step)) {
+    patch.contentStarted = true
+  }
+  if (Object.keys(patch).length === 0) return
+  useChatStore.getState().patchTurn(sessionId, patch)
 }
 
 /**
@@ -740,7 +816,6 @@ export function createDispatcher(): EventDispatcher {
       setMessageStatus,
       upsertPart,
       appendPartDelta,
-      clearParts,
       startTurn,
       finishTurn,
       patchTurn,
@@ -761,14 +836,17 @@ export function createDispatcher(): EventDispatcher {
     /**
      * ADR-118 §5: сообщение-хода живёт от первой дельты до терминального
      * статуса. Идентификатор сообщения — из `step.started`/`message.delivered`;
-     * если его ещё нет (старое ядро), берём id хода (`turnId`/`stream_id`).
+     * если его ещё нет (старое ядро), берём id сообщения хода из стора.
+     *
+     * Id **хода** (`turnId`) фоллбэком не подставляется: в окне
+     * `turn.started → step.started` это создало бы фантомное сообщение с id
+     * хода (в ленте появился бы пузырь без содержимого).
      */
     const liveMessageId = (): string => {
       const turn = useChatStore.getState().turnBySession[sid]
       return (payload.messageId as string)
         || (payload.message_id as string)
         || turn?.messageId
-        || turn?.turnId
         || ''
     }
 
@@ -780,21 +858,24 @@ export function createDispatcher(): EventDispatcher {
      * - сообщения ещё нет и **активного хода нет** — это опоздавшее событие
      *   прошлого хода (иначе в ленте появился бы фантомный пузырь);
      * - сообщение уже **финальное** (`completed`/`cancelled`/`error`) —
-     *   поздняя дельта к финальному сообщению — мусор (ADR-118 §5);
+     *   поздняя дельта к финальному сообщению — мусор (ADR-118 §5); исключение
+     *   — `opts.allowTerminal` (вызов инструмента относится к шагу и приходит
+     *   уже после `step.finished`: ядро публикует финал шага **до** запуска
+     *   тулов, и карточка тула обязана появиться в сообщении шага);
      * - событие относится к **другому** ходу (`opts.turnId`), а идёт ход —
      *   сообщение старого хода не создаём (фантом в блоке текущего хода).
      */
     const ensureLiveMessage = (
       messageId: string,
       extra?: Partial<MessageData>,
-      opts?: { turnId?: string },
+      opts?: { turnId?: string; allowTerminal?: boolean },
     ): MessageData | undefined => {
       if (!messageId) return undefined
       const chat = useChatStore.getState()
       const existing = chat.messagesBySession[sid]?.find((m) => m.id === messageId)
       if (existing) {
         // Финальное сообщение не воскрешаем: поздняя дельта — мусор.
-        if (isTerminalMessageStatus(existing.status)) return undefined
+        if (isTerminalMessageStatus(existing.status) && !opts?.allowTerminal) return undefined
         if (extra) chat.updateMessageById(sid, messageId, extra)
         return useChatStore.getState().messagesBySession[sid]?.find((m) => m.id === messageId)
       }
@@ -862,6 +943,29 @@ export function createDispatcher(): EventDispatcher {
       }
     }
 
+    /**
+     * Терминальное событие хода (`stream.error`/`stream.cancelled`) закрывает
+     * ход.
+     *
+     * `turn.finished` может не дойти (ошибка/отмена пришли раньше или
+     * потерялись при разрыве транспорта) — без закрытия
+     * `turnBySession.status` остаётся `streaming`: композер навсегда в
+     * режиме «в очередь + Стоп», а следующие сообщения не стартуют напрямую.
+     *
+     * Чужой/опоздавший ход не трогаем: закрывается только **активный** ход и
+     * только если `stream_id` события совпадает с `streamId` хода (или
+     * `stream_id` события не задан — тогда берём текущий ход).
+     */
+    const closeTurnOnTerminal = (
+      streamId: string | undefined,
+      status: 'error' | 'cancelled',
+    ): void => {
+      const turn = useChatStore.getState().turnBySession[sid]
+      if (!turn || turn.status !== 'streaming') return
+      if (streamId && turn.streamId && turn.streamId !== streamId) return
+      finishTurn(sid, turn.turnId, status)
+    }
+
     switch (type) {
       // ADR-118 §4: `message.accepted` — **адресное** подтверждение приёма
       // (доходит только отправителю). Несёт `messageId`, `mode`, `position`.
@@ -870,6 +974,14 @@ export function createDispatcher(): EventDispatcher {
       case 'message.accepted': {
         const messageId = (payload.messageId as string) || ''
         if (!messageId) break
+        const mode = (payload.mode as string) || ''
+        // `steer`/`interrupt`: реплика ушла **в ход** и уже показана в ленте
+        // (оптимистичная вставка `sendMessage`) — строка очереди была бы
+        // дублем в панели очереди. Состав очереди уточняем у сервера.
+        if (mode && mode !== 'queue') {
+          reconcileQueueFromApi(sid)
+          break
+        }
         // Строка очереди: id известен; текст берём из уже показанной
         // оптимистичной строки (сервер его в событии не присылает — утечка снята).
         // Неизвестной строки нет — заполнится из истории при доставке.
@@ -923,11 +1035,21 @@ export function createDispatcher(): EventDispatcher {
       case 'turn.started': {
         const turnId = (payload.turnId as string) || ''
         if (!turnId) break
-        startTurn(sid, {
-          turnId,
-          messageId: (payload.messageId as string) || undefined,
-          status: 'streaming',
-        })
+        const active = useChatStore.getState().turnBySession[sid]
+        if (active && active.status === 'streaming') {
+          // Ход уже открыт (`stream.start` приходит раньше): **не заменяем** его —
+          // `startTurn` стёр бы `streamId`/агента/модель, а по `streamId`
+          // сопоставляется статус автоповтора (`stream.retry`).
+          // `messageId` из payload — id **реплики пользователя**, а не живого
+          // сообщения шага (оно придёт в `step.started`).
+          patchTurn(sid, { turnId, status: 'streaming' })
+        } else {
+          startTurn(sid, {
+            turnId,
+            status: 'streaming',
+            contentStarted: false,
+          })
+        }
         // Новый ход — снимаем следы прошлого: статус ретрая и плашку финальной
         // ошибки (иначе они «висели» бы над новым ответом).
         setStreamRetry(sid, null)
@@ -1033,30 +1155,23 @@ export function createDispatcher(): EventDispatcher {
           patch.metadata = { ...(known ?? {}), ...extraMeta }
         }
         if (Object.keys(patch).length > 0) updateMessageById(sid, messageId, patch)
-        // ADR-118 §5: «финал» шага = смена статуса. Живые части шага больше не
-        // нужны: источник истины — части/контент из истории (buildPartsView
-        // мержит dto-части с live-частями по `id`, и «застрявшие» live-части
-        // шага давали в блоке хода текст чужого шага).
+        // ADR-118 §5: «финал» шага = **смена статуса**, и она происходит
+        // **сразу**, синхронно: индикатор работы гаснет в момент финала шага,
+        // а не после ответа `GET /messages` (до этого точки «работы» висели в
+        // середине склеенного блока хода — у уже завершённого шага).
         //
-        // Порядок: **сначала история** (источник истины) — и только потом
-        // смена статуса и снятие live-частей. Иначе в окне RTT между
-        // `step.finished` и ответом `GET /messages` сообщение было бы
-        // «финальным» с пустыми частями (`ensureLiveMessage` создаёт
-        // `parts: []`, `content: ''`), и текст, который пользователь уже видел,
-        // исчезал бы.
-        //
-        // Мерж не удался — статус не меняем и live-части не снимаем: текст шага
-        // остаётся видимым, а финальный статус поставит `turn.finished`.
+        // Live-части при этом НЕ снимаем: карточка инструмента шага должна
+        // остаться видимой (ядро публикует `step.finished` **до** запуска
+        // тулов, результат приходит позже через `tool_call.result` — с
+        // очисткой карточка мигала бы на всё время исполнения тула).
+        // «Застрявший» текст прошлого шага в рендер не попадает: текст и
+        // рассуждения берутся только из dto-частей (`resolveLiveParts`).
         if (!live) break
-        void mergeHistory(sid).then((merged) => {
-          if (!merged) return
-          setMessageStatus(sid, messageId, status)
-          // История могла ещё не содержать шаг (персист асинхронный): тогда
-          // единственный источник текста — live-части, и снимать их нельзя
-          // (текст пропал бы насовсем). Снимаем только когда содержимое шага
-          // действительно пришло из истории.
-          if (hasHistoryContent(sid, messageId)) clearParts(sid, messageId)
-        })
+        setMessageStatus(sid, messageId, status)
+        // Сверка с историей — источник истины по **содержимению** шага (части/
+        // контент). Ошибка сети молча игнорируется: live-части остаются
+        // единственным источником текста шага.
+        void mergeHistory(sid)
         break
       }
 
@@ -1072,6 +1187,9 @@ export function createDispatcher(): EventDispatcher {
         // больше не актуальны (как у прежнего `stream.chunk`).
         if (useChatStore.getState().retryBySession[sid]) setStreamRetry(sid, null)
         setFinalStreamError(sid, null)
+        // Первая часть ответа — контент хода начался: индикатор «идёт»
+        // переезжает с реплики пользователя в живой сегмент ответа.
+        markTurnContentStarted(sid)
         appendPartDelta(
           sid,
           messageId,
@@ -1090,6 +1208,8 @@ export function createDispatcher(): EventDispatcher {
         if (!messageId || !partId) break
         // Как и для дельты: финальное сообщение не воскрешаем.
         if (!ensureLiveMessage(messageId)) break
+        // Часть обновлена — контент хода начался (как и для дельты).
+        markTurnContentStarted(sid)
         upsertPart(sid, messageId, partId, {
           id: partId,
           type: (part?.type as never) || 'text',
@@ -1171,14 +1291,30 @@ export function createDispatcher(): EventDispatcher {
         // ADR-118 §1: ход начинается; его границы — `turnId`/`streamId`.
         const turnId = (payload.turnId as string) || streamId
         if (turnId) {
-          startTurn(sid, {
-            turnId,
-            streamId: streamId || undefined,
-            status: 'streaming',
-            agentRole,
-            model: payload.model as string | undefined,
-            provider: payload.provider as string | undefined,
-          })
+          const active = useChatStore.getState().turnBySession[sid]
+          if (active && active.status === 'streaming') {
+            // Живой ход уже открыт (`turn.started` или восстановление после
+            // перезагрузки) — **не заменяем** его: `startTurn` сбросил бы
+            // `contentStarted` и потерял поля хода. Дополняем ход данными
+            // стрима; `contentStarted` не трогаем (контент хода уже был).
+            patchTurn(sid, {
+              ...(streamId ? { streamId } : {}),
+              ...(agentRole ? { agentRole } : {}),
+              ...(payload.model ? { model: payload.model as string } : {}),
+              ...(payload.provider ? { provider: payload.provider as string } : {}),
+            })
+          } else {
+            startTurn(sid, {
+              turnId,
+              streamId: streamId || undefined,
+              status: 'streaming',
+              agentRole,
+              model: payload.model as string | undefined,
+              provider: payload.provider as string | undefined,
+              // Контента хода ещё нет — индикатор «идёт» живёт у реплики.
+              contentStarted: false,
+            })
+          }
         }
         // Новая попытка — сбрасываем статус ретрая предыдущей
         setStreamRetry(sid, null)
@@ -1326,6 +1462,9 @@ export function createDispatcher(): EventDispatcher {
         if (messageId) {
           if (ensureLiveMessage(messageId)) setMessageStatus(sid, messageId, 'cancelled')
         }
+        // Терминал хода — закрываем ход (иначе композер остаётся в режиме
+        // «в очередь + Стоп», а следующие сообщения не стартуют напрямую).
+        closeTurnOnTerminal(asNonEmptyString(payload.stream_id), 'cancelled')
         setStreamRetry(sid, null)
         // Отмена («Стоп»)/таймаут снимают ожидание подтверждения на бэкенде —
         // полоса не должна оставаться после отмены.
@@ -1373,6 +1512,9 @@ export function createDispatcher(): EventDispatcher {
         if (messageId) {
           if (ensureLiveMessage(messageId)) setMessageStatus(sid, messageId, 'error')
         }
+        // Терминал хода — закрываем ход (иначе композер остаётся в режиме
+        // «в очередь + Стоп», а следующие сообщения не стартуют напрямую).
+        closeTurnOnTerminal(asNonEmptyString(payload.stream_id), 'error')
         setFinalStreamError(sid, { streamId, error: rawError, errorType: errorType || 'unknown' })
         notifyMessage({ text: error, type: 'error', category: 'error', sessionId: sid })
         break
@@ -1653,7 +1795,11 @@ export function createDispatcher(): EventDispatcher {
         if (!callId) break
         const messageId = liveMessageId()
         if (!messageId) break
-        if (!ensureLiveMessage(messageId)) break
+        // Вызов относится к шагу, даже если шаг уже закрыт: ядро публикует
+        // `step.finished` **до** запуска тулов, а результат приходит позже
+        // (`tool_call.result`). Поэтому финальный статус сообщения не мешает
+        // — карточка тула вешается в сообщение шага (ADR-118 §1).
+        if (!ensureLiveMessage(messageId, undefined, { allowTerminal: true })) break
         // ADR-118 §1: вызов инструмента — часть сообщения с id = `callId`.
         upsertPart(sid, messageId, callId, {
           id: callId,
@@ -1668,6 +1814,10 @@ export function createDispatcher(): EventDispatcher {
             parentCallId: (payload.parent_call_id as string) || undefined,
           },
         })
+        // ADR-118 §5: вызов инструмента — тоже контент хода. Шаг «только вызовы
+        // инструментов» иначе не поднял бы флаг — строка активности хода и
+        // индикатор в живом сегменте не включились бы.
+        markTurnContentStarted(sid)
         break
       }
 
@@ -1694,6 +1844,9 @@ export function createDispatcher(): EventDispatcher {
             metadata: result?.metadata as Record<string, unknown> | undefined,
           },
         })
+        // Контент хода начался (как и для вызова тула) — «только вызовы
+        // инструментов» тоже считаются содержимым хода.
+        markTurnContentStarted(sid)
         break
       }
 

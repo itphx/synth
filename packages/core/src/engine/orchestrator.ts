@@ -104,11 +104,11 @@ import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 // ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
-import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, aggregateSubagentStats } from './orchestrator/usage.js';
+import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, aggregateSubagentStats, addTokenUsage } from './orchestrator/usage.js';
 import { publishFsChange } from './orchestrator/fs-change.js';
 import { applySteerInjections } from './steering/apply.js';
 import type { SteerRequeueResult } from './steering/apply.js';
-import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, hasVisibleStepContent, type SaveAssistantMessageDeps, type AssistantMessageStatus, type AssistantMessageStep } from './orchestrator/persistence.js';
+import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, hasVisibleStepContent, type SaveAssistantMessageDeps, type AssistantMessageStatus, type AssistantMessageStep, type ExistingMessageRef } from './orchestrator/persistence.js';
 import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { StreamTiming } from './orchestrator/stream-stats.js';
 // ADR-118 §1/§4: единая точка публикации `turn.*`/`step.*`/`part.*` и
@@ -2845,8 +2845,6 @@ export class ChatOrchestrator {
       optimizer: this._optimizer,
       resolveMessageModel: (chunkModel, finalModel, provider, session) =>
         this._resolveMessageModel(chunkModel, finalModel, provider, session),
-      joinAccumulatedTexts: (intermediateTexts, current) =>
-        this._joinAccumulatedTexts(intermediateTexts, current),
       estimateUsage: (usage, promptChars, outputChars) =>
         this._estimateUsage(usage, promptChars, outputChars),
       computeMessageCost: (model, usage) => this._computeMessageCost(model, usage),
@@ -3790,13 +3788,26 @@ export class ChatOrchestrator {
       let finalContent = '';
       let allReasoning: ReasoningBlock[] = [];
       /**
-       * Anthropic: подпись thinking-блока последней итерации и opaque
-       * `redacted_thinking`. Уезжает в финальное сообщение, если его `reasoning`
-       * — текст ровно одного блока (подпись принадлежит своему тексту).
+       * Legacy: сводка текстов промежуточных шагов. Для сообщений **хода**
+       * (`step.turnId` задан) она не пишется — тексты шагов живут в сообщениях
+       * своих шагов (ADR-118 §1). Основной ход её не собирает (мёртвый
+       * сбор); осталась для legacy-путей (сообщения без хода).
        */
-      let finalReasoningMeta: { signature?: string; redacted?: string[] } | undefined;
       const allIntermediateTexts: Array<{ text: string; iteration: number }> = [];
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      /**
+       * ADR-102: расход **хода** — сумма расходов всех шагов (итераций) хода.
+       *
+       * С ADR-118 шаг = отдельный вызов LLM, поэтому `finalUsage` (последний
+       * usage от провайдера) — это расход только последней итерации: в
+       * финальное сообщение, счётчики сессии и аналитику попадала лишь его
+       * часть, а расход промежуточных шагов терялся.
+       *
+       * Накопление — ровно один раз за итерацию (`iterationUsage` — последний
+       * usage, присланный провайдером в этой итерации): провайдеры шлют usage
+       * в разных чанках, суммировать по чанкам нельзя (двойной счёт).
+       */
+      let turnUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
       // Модель последнего завершённого стрима итерации: нужна ветке отмены
       // во время тула, где `chunkModel` уже вне области видимости, а
@@ -3838,6 +3849,12 @@ export class ChatOrchestrator {
        * чанков не было (`ref() === null`) — финал добавляется как раньше.
        */
       let currentDraft: StreamMessageRef | null = null;
+      /**
+       * ADR-118 §1: запись сообщения **шага-лимита** (шаг с вызовами
+       * инструментов) — уже сохранена; финализация хода её дополняет
+       * (статус/usage/metadata), а не создаёт вторую запись с тем же текстом.
+       */
+      let stepLimitStepRecord: StreamMessageRef | null = null;
       // ADR-118 §4: тайминги последнего шага хода — в `step.finished` финального
       // шага (эпилог `process-finalize`).
       let lastStepTiming: StreamTiming | undefined;
@@ -4135,23 +4152,35 @@ export class ChatOrchestrator {
           // Завершённые итерации и их tool-результаты уже записаны пошагово
           // (шаг 2а) — повторная персистенция tool-chain не нужна.
 
-          // Баг: накопленный текст ВСЕХ итераций (завершённые + текущая
-          // незавершённая), а не только последней. Иначе при стопе в истории
-          // остаётся обрывок на случайном месте, хотя пользователь видел весь
-          // текст в UI до стопа (тексты завершённых итераций лежат в
-          // allIntermediateTexts и раньше не попадали в content).
-          const partialContent = this._joinAccumulatedTexts(allIntermediateTexts, accumulatedContent);
+          // ADR-118 §1: в сообщении отмены — только текст **текущей**
+          // итерации. Тексты завершённых шагов уже сохранены их сообщениями
+          // (шаг = сообщение), поэтому склейка всех итераций дублировала бы
+          // их в ленте (текст шага + текст финала).
+          const partialContent = accumulatedContent;
 
           // Bug 3/4: usage/duration/cost в событии отмены; при пустом usage —
           // best-effort оценка (metadata.usage_estimated) из размера промпта и
           // накопленного текста.
+          //
+          // ADR-102: два расхода — расход **шага** (`step.finished`: метрики
+          // Prometheus считают по шагам, их сумма = расход хода) и расход
+          // **хода** (сообщение отмены: история, счётчики сессии, аналитика).
+          // Расход текущей итерации в `turnUsage` ещё не накоплен (накопление
+          // — после стрима), поэтому в расход хода он добавляется явно: так
+          // расход отмены не теряется и не удваивается.
           const cancelDurationMs = Date.now() - streamStartedAt;
-          const cancelEstimated = this._estimateUsage(
-            finalUsage,
+          const cancelStepUsage = this._estimateUsage(
+            iterationUsage ?? finalUsage,
             iterationPromptChars,
             partialContent.length,
           );
-          const cancelCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
+          const cancelEstimated = this._estimateUsage(
+            addTokenUsage(turnUsage, iterationUsage),
+            iterationPromptChars,
+            partialContent.length,
+          );
+          const cancelCost = this._computeMessageCost(cancelModel, cancelStepUsage.usage);
+          const cancelTurnCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
 
           // Шаг 2б: останавливаем таймер/дожидаемся записи; черновик этой
           // итерации станет финальным сообщением отмены (без дубля). Если
@@ -4174,7 +4203,7 @@ export class ChatOrchestrator {
               ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
             },
             promptMeta,
-            cancelCost,
+            cancelTurnCost,
             cancelledDraft ?? undefined,
             // ADR-115: медиа-частей ответа в ветке отмены нет.
             undefined,
@@ -4206,7 +4235,7 @@ export class ChatOrchestrator {
             provider: providerName,
             usage: cancelEstimated.usage,
             duration_ms: cancelDurationMs,
-            ...(cancelCost ? { cost_usd: cancelCost.costUsd, cost_currency: cancelCost.currency } : {}),
+            ...(cancelTurnCost ? { cost_usd: cancelTurnCost.costUsd, cost_currency: cancelTurnCost.currency } : {}),
             ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
           });
 
@@ -4216,7 +4245,10 @@ export class ChatOrchestrator {
             stepIndex,
             messageId: stepMessageId,
             status: 'cancelled',
-            usage: cancelEstimated.usage,
+            // ADR-118 §4/ADR-102: `step.finished` несёт расход **своего
+            // шага** (не хода) — сумма по шагам = расход хода (метрики
+            // Prometheus не меняются).
+            usage: cancelStepUsage.usage,
             provider: providerName,
             model: cancelModel,
             ...(cancelCost ? { costUsd: cancelCost.costUsd, costCurrency: cancelCost.currency } : {}),
@@ -4277,6 +4309,18 @@ export class ChatOrchestrator {
           continue;
         }
 
+        // ADR-102: расход текущей итерации (шага) — в расход хода. Ровно один
+        // раз за итерацию: `iterationUsage` — последний usage, присланный
+        // провайдером в этой итерации (суммировать по чанкам нельзя —
+        // провайдеры шлют usage в разных чанках).
+        //
+        // Прерванная генерация (`cancelToken.interrupted` выше) сюда не
+        // доходит: её расход уже записан в сообщение прерванного шага —
+        // иначе двойной счёт (и в счётчиках сессии, и в аналитике).
+        if (iterationUsage) {
+          turnUsage = addTokenUsage(turnUsage, iterationUsage);
+        }
+
         finalModel = chunkModel ?? finalModel;
 
         // Блоки reasoning итерации: провайдер отдаёт их со своими подписями
@@ -4309,15 +4353,6 @@ export class ChatOrchestrator {
               ...(block.redacted !== undefined ? { redacted: block.redacted } : {}),
             });
           }
-          // Legacy-поля сообщения осмысленны, только пока блок ровно один:
-          // подпись принадлежит своему тексту. При нескольких блоках подписи
-          // живут в частях/`reasoningBlocks`.
-          finalReasoningMeta = allReasoning.length === 1
-            ? {
-              signature: allReasoning[0]!.signature,
-              redacted: allReasoning[0]!.redacted ? [allReasoning[0]!.redacted] : undefined,
-            }
-            : undefined;
         }
 
         // Шаг-лимит: ответ мог прийти нестандартным — с `toolCalls`, хотя
@@ -4329,6 +4364,8 @@ export class ChatOrchestrator {
         // No tool calls — final response
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
+          // ADR-102: расход финальной итерации уже в `turnUsage` (накопление
+          // выше) — в финальное сообщение уйдёт сумма расходов всех шагов.
           // Шаг 2б: дожидаемся последней записи, запоминаем черновик — финальное
           // сообщение обновит его (не добавит второй assistant в историю).
           await draft.flush();
@@ -4340,9 +4377,9 @@ export class ChatOrchestrator {
           break;
         }
 
-        if (accumulatedContent) {
-          allIntermediateTexts.push({ text: accumulatedContent, iteration: toolIteration });
-        }
+        // ADR-118 §1: текст шага с вызовами уже сохранён его сообщением
+        // (черновик → `draft.finalize` ниже) — сводка промежуточных текстов для
+        // сообщений хода не нужна (и не собирается).
 
         // Шаг 2а/2б: сразу фиксируем assistant-сообщение итерации с toolCalls (до
         // исполнения тулов) — падение/отмена в середине хода не должны терять
@@ -4355,9 +4392,13 @@ export class ChatOrchestrator {
         // Ставим его ТОЛЬКО когда у шага нет видимого текста: шаг с текстом —
         // реальный ответ агента, и после перезагрузки страницы он обязан
         // остаться в истории (иначе ответ «исчезает»).
+        // ADR-118 §1: шаг с вызовами инструментов **виден** (даже без текста):
+        // на нём рисуются карточки инструментов (`metadata.tool_results`),
+        // которые иначе дублировались бы в финале хода.
         const stepParts = [makeTextPart(accumulatedContent), ...makeReasoningParts(iterationBlocks)];
-        const stepVisible = hasVisibleStepContent(accumulatedContent, stepParts);
-        await draft.finalize({
+        const stepVisible = hasVisibleStepContent(accumulatedContent, stepParts)
+          || toolCalls.length > 0;
+        const finalizedStepRef = await draft.finalize({
           content: accumulatedContent,
           parts: stepParts,
           reasoning: accumulatedReasoning || undefined,
@@ -4370,6 +4411,14 @@ export class ChatOrchestrator {
           // ADR-118 §5: шаг завершён — статус сообщения терминальный.
           status: 'completed',
         });
+        /**
+         * ADR-118 §1: **шаг-лимит** — запись шага с вызовами уже сохранена и
+         * несёт текст ответа. Финализация хода её **дополняет** (статус/usage/
+         * metadata), а не создаёт вторую запись с тем же текстом (в ленте был
+         * дубль «шаг + финал»). Для обычных шагов запись не переиспользуется:
+         * ход продолжается следующим шагом.
+         */
+        if (stepLimitStep) stepLimitStepRecord = finalizedStepRef;
 
         // ADR-118 §1/§4: вызовы инструментов — части сообщения шага
         // (`part.updated`, `partId` = `callId` провайдера).
@@ -5277,6 +5326,17 @@ export class ChatOrchestrator {
           });
         }
 
+        // ADR-118 §1: результаты вызовов шага — в сообщении шага
+        // (`metadata.tool_results`), вызовы **этой** итерации: карточки
+        // инструментов рисуются на своём шаге и не дублируются в финале
+        // хода. Запись — после исполнения всех вызовов итерации (в т.ч. при
+        // шаг-лимите/отмене/deny) и до следующего LLM-вызова.
+        await this._persistStepToolResults(
+          session.id,
+          stepMessageId,
+          allToolCalls.filter((tc) => tc.iteration === toolIteration),
+        );
+
         // Шаг-лимит: вызовы не исполнялись — ход завершается сразу после
         // парных tool-результатов. Текст ответа модели (если был) становится
         // отчётом; пустой — `session.steps_limit` (см. process-finalize).
@@ -5364,6 +5424,10 @@ export class ChatOrchestrator {
         { session, streamId, publishChunk, debugCollector, streamStartedAt, streamTiming: lastStepTiming },
         {
           cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
+          // ADR-102: расход хода (сумма шагов) — в финальное сообщение,
+          // счётчики сессии и аналитику; `finalUsage` — расход последнего
+          // вызова (оценка/калибровка/событие шага).
+          turnUsage,
           hadDeny, toolIteration, maxIterations, stepLimitExecuted,
           roleBlocked, roleBlockedTool, roleBlockedAgent,
           lastIterationPromptChars, allReasoning, allIntermediateTexts, allToolCalls,
@@ -5374,10 +5438,11 @@ export class ChatOrchestrator {
           turnId,
           finalStepIndex: toolIteration,
           finalStepMessageId: lastStepMessageId,
+          // ADR-118 §1: запись шага-лимита (если шаг закрыт вызовами) —
+          // финализация дополняет её, а не создаёт дубль с тем же текстом.
+          stepLimitStepRecord,
           // ADR-115 (outbound): медиа-части ответа (`send_attachment`).
           outboundParts,
-          // Anthropic: подпись thinking-блока финального сообщения.
-          finalReasoningMeta,
         },
         this._processFinalizeDeps(),
       );
@@ -5424,14 +5489,26 @@ export class ChatOrchestrator {
     turnId: string,
   ): Promise<void> {
     if (message.role !== MessageRole.USER) return;
-    if (message.turnId) return;
     try {
       await this._sessionManager.withLock(sessionId, async (s) => {
-        const target = s.messages.find((m) => m.id === message.id);
-        if (!target || target.turnId) return;
-        target.turnId = turnId;
-        message.turnId = turnId;
-        await this._sessionManager.saveSession(s);
+        let changed = false;
+        // ADR-118 §10: метка хода в `currentStream` — UI восстанавливает ход
+        // после перезагрузки страницы (`current_stream.turn_id` в DTO).
+        if (s.currentStream && s.currentStream.turnId !== turnId) {
+          s.currentStream.turnId = turnId;
+          changed = true;
+        }
+        // Реплику с уже проставленным turnId не перезаписываем (повторный
+        // вход в тот же ход) — метка `currentStream` при этом обновляется.
+        if (!message.turnId) {
+          const target = s.messages.find((m) => m.id === message.id);
+          if (target && !target.turnId) {
+            target.turnId = turnId;
+            message.turnId = turnId;
+            changed = true;
+          }
+        }
+        if (changed) await this._sessionManager.saveSession(s);
       });
     } catch (err) {
       warning(
@@ -6087,16 +6164,61 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Склейка накопленного текста: все завершённые итерации (allIntermediateTexts)
-   * + текст текущей (незавершённой) итерации. Пустые фрагменты пропускаются.
-   * Используется при отмене (abort), чтобы в истории сохранялся полный
-   * частичный ответ, а не только обрывок последней итерации.
+   * ADR-118 §1: `metadata.tool_results` сообщения **шага** — вызовы этой
+   * итерации (`name`/`args`/`id`/`result`/`started_at`/`completed_at`/
+   * `iteration`, как в `allToolCalls`). Карточки инструментов рисуются на
+   * своём шаге; в финале хода их нет (финал = последний шаг).
+   *
+   * Запись — **точечная** и **под локом сессии** (`withLock`, как
+   * `_markTurnUserMessage`): история целиком не переписывается, поэтому
+   * параллельные append/update других сообщений не теряются. Меняется
+   * только `metadata.tool_results` сообщения с нужным `id`; если ничего не
+   * изменилось — записи нет. Best-effort: ошибка хранилища ход не роняет.
+   * Идемпотентно — повторная запись пишет тот же массив.
+   *
+   * Полная перезапись сессии (`saveSession`) здесь не годится: она писала бы
+   * всю историю на каждом шаге (лишняя загрузка/запись) и затирала бы
+   * параллельные точечные записи других сообщений.
+   *
+   * ⚠️ Окно между `step.finished` шага и этой записью: `step.finished` для
+   * шага с вызовами публикуется **до** запуска тулов (контракт UI: карточка
+   * инструмента остаётся видимой, результат приходит позже через
+   * `tool_call.result` — `packages/ui/AGENTS.md`, «Чат: рендер хода»).
+   * Поэтому после перезагрузки страницы в этом окне карточка тула ещё не
+   * подтянута из истории — live-часть (`tool_call.result`) её показывает.
    */
-  private _joinAccumulatedTexts(
-    intermediateTexts: Array<{ text: string; iteration: number }>,
-    current: string,
-  ): string {
-    return joinAccumulatedTexts(intermediateTexts, current);
+  private async _persistStepToolResults(
+    sessionId: string,
+    messageId: string,
+    toolResults: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    if (toolResults.length === 0) return;
+    try {
+      await this._sessionManager.withLock(sessionId, async (s) => {
+        const target = s.messages.find((m) => m.id === messageId);
+        if (!target) return;
+        const current = target.metadata?.tool_results;
+        // Идемпотентно: тот же набор — перезаписи нет.
+        if (
+          Array.isArray(current)
+          && current.length === toolResults.length
+          && current.every((item, index) => item === toolResults[index])
+        ) {
+          return;
+        }
+        // Точечная запись одного сообщения (порт): историю целиком не
+        // переписываем — параллельные append/update не теряются.
+        await this._sessionManager.updateMessage(sessionId, {
+          ...target,
+          metadata: { ...(target.metadata ?? {}), tool_results: toolResults },
+        });
+      });
+    } catch (err) {
+      warning(
+        'ORCHESTRATOR',
+        `Не удалось записать результаты вызовов в сообщение шага ${messageId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -6137,8 +6259,12 @@ export class ChatOrchestrator {
      * считала её для события) — избегаем повторного `_computeMessageCost`.
      */
     precomputedCost?: ReturnType<typeof computeUsageCost>,
-    /** Шаг 2б: обновить существующий черновик частичного стрима вместо append. */
-    existing?: { id: string; seq: number },
+    /**
+     * Шаг 2б: обновить существующий черновик частичного стрима вместо append.
+     * ADR-118 §1: `keepContent` — «дополнить существующее сообщение» (шаг-лимит:
+     * содержимое записи шага не перезаписывается).
+     */
+    existing?: ExistingMessageRef,
     /** ADR-115 (outbound): медиа-части ответа хода (после текста). */
     extraParts?: Part[],
     /** Anthropic: подпись thinking-блока и opaque `redacted_thinking`. */

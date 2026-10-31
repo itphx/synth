@@ -7,7 +7,7 @@ export interface WSEvent {
   session_id?: string
   sessionId?: string
   data?: Record<string, unknown>
-  /** ADR-118 §6: номер события в пределах сессии — основа догона (`since`). */
+  /** ADR-118 §6: глобальный номер события (в пределах инстанса) — основа догона (`since`). */
   eventSeq?: number
 }
 
@@ -243,7 +243,7 @@ export class TransportClient {
       this.sseSource.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data) as WSEvent
-          // ADR-118 §6: SSE-кадр несёт `id:` — номер события в пределах сессии
+          // ADR-118 §6: SSE-кадр несёт `id:` — глобальный номер события
           // (`EventSource.lastEventId`). Он и есть точка догона: `eventSeq` из
           // тела приоритетнее, `id:` — фоллбек (и он же отдаётся диспетчеру).
           const idSeq = this.parseEventId(e.lastEventId)

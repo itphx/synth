@@ -303,7 +303,7 @@ describe('Видимость tool-chain: маркер metadata.tool_chain', () =
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  it('шаг без текста (только вызовы инструментов): маркер tool_chain = true', async () => {
+  it('шаг только с вызовами инструментов: шаг ВИДЕН (маркера tool_chain нет)', async () => {
     TwoStepProvider.withText = '';
     const toolRegistry = createToolRegistry();
     toolRegistry.register(makeNoopTool());
@@ -316,11 +316,30 @@ describe('Видимость tool-chain: маркер metadata.tool_chain', () =
       (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
     );
     expect(step).toBeDefined();
-    // Шаг без видимого текста — служебный: его прячем из транскрипта.
-    expect(step!.metadata?.tool_chain).toBe(true);
+    // ADR-118 §1: шаг с вызовами инструментов **виден** — на нём рисуются
+    // карточки инструментов (`metadata.tool_results`), которые иначе
+    // дублировались бы в финале хода. Маркера `tool_chain` у него нет.
+    expect(step!.metadata?.tool_chain).toBeUndefined();
     expect(step!.content).toBe('');
+    // Вызовы шага — в его собственном сообщении.
+    const stepToolResults = step!.metadata?.tool_results as Array<Record<string, unknown>> | undefined;
+    expect(stepToolResults).toBeDefined();
+    expect(stepToolResults).toHaveLength(1);
+    expect(stepToolResults![0]!.id).toBe('call_1');
 
     await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('шаг без контента и без вызовов: скрыт (видимости нет)', async () => {
+    // Проверка уровня правила видимости: шаг без видимого контента и без
+    // вызовов инструментов прячется (маркер `tool_chain`), шаг с вызовами —
+    // виден (см. кейс выше).
+    expect(hasVisibleStepContent('', [])).toBe(false);
+    expect(hasVisibleStepContent(undefined, undefined)).toBe(false);
+    // Reasoning без текста — тоже не видимый контент.
+    expect(hasVisibleStepContent('', [
+      { id: generateId(), type: 'reasoning', data: 'думаю' },
+    ], { includeReasoning: false })).toBe(false);
   });
 
   it('tool-результат: маркер tool_chain = true (всегда)', async () => {

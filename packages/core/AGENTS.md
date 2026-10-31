@@ -321,12 +321,25 @@
   `status: 'streaming'`, персистится инкрементально (`engine/orchestrator/stream-persistence.ts`),
   терминальный статус ставится на `step.finished`. Вложения ответа (ADR-115) — в
   `step.finished.attachments` (`stream.done.attachments` больше нет).
+- **Финал хода = последний шаг (ADR-118 §1).** Финальное assistant-сообщение несёт текст и
+  reasoning **только последнего шага** (тексты прошлых шагов — в их сообщениях, дублей нет);
+  tool-вызовы и результаты — в сообщении **своего** шага (`metadata.tool_results` → DTO
+  `tool_calls`), в финале их нет; `metadata.intermediate_text_blocks` для сообщений хода
+  (`step.turnId` задан) **не пишется** (legacy — только старые сообщения). DTO сессии несёт
+  `current_stream.turn_id` (`turn_…` — id активного хода, `null` — хода нет): по нему клиент
+  восстанавливает ход после reload (`stream_id` — не id хода); поле персистится в file-store
+  (`current_stream.turn_id`) и PostgreSQL (тот же JSONB-документ).
 - **`ord` — монотонный порядок.** Выдаётся при материализации записи в историю
   (`storage/message-write.ts`, `nextOrd`), **не перенумеровывается**; `seq` остаётся позиционным.
   DTO (`server/serialize.ts`) несёт `ord`/`turn_id`/`step_index`/`status`.
 - **Шина** (`events/bus.ts`): адресная доставка по `BusEvent.recipient` (подписчик с чужим
-  `recipient` событие не получает; широковещание — только для гибридного моста), монотонный
-  `eventSeq` и кольцевой журнал для догона (`journalSince`; 200 событий на сессию, до 100 сессий).
+  `recipient` событие не получает; широковещание — только для гибридного моста), **глобальный**
+  монотонный `eventSeq` (сквозной по всем сессионным каналам инстанса — точка догона одна на
+  инстанс, иначе события «хвостовой» сессии терялись) и кольцевой журнал для догона
+  (`journalSince`; 200 событий на сессию, до 100 сессий). Инстансный канал (`pipeline.run.*`)
+  номера не получает и в журнал не попадает; `latestEventSeq(sessionId)` — номер последнего
+  события **этой** сессии; явный `opts.eventSeq` (удалённый источник) не ломает монотонность —
+  `seq = max(глобальный счётчик + 1, явный)`.
 - **`GET /api/v2/meta`** (`server/routes/meta.ts`, **без аутентификации**; монтируется и в core, и
   в backend): `{messageModel: 2, eventSeq: true, replay: true, version}`.
 - **Гейт версии клиента:** WS `/ws/events` без `messageModel=2` закрывается кодом `1008`
@@ -495,6 +508,14 @@
   (CSV RFC 4180 + BOM + `TOTAL`), `rebuild.ts`/`rebuild-command.ts` — идемпотентный бэкфилл
   `synth analytics rebuild` (`--from`/`--dry-run`/`--yes`; `decision` не пересобирается, `prompt` —
   проекция на чтении). HTTP-фабрика — `server/routes/analytics.ts` (`createAnalyticsRoutes`).
+  **Расход хода = сумма расходов шагов** (ADR-118 сделал шаг отдельным вызовом LLM): в оркестраторе
+  копится `turnUsage` (`engine/orchestrator/usage.ts: addTokenUsage` — по одному разу на итерацию,
+  `iterationUsage`, а не по чанкам), и именно он пишется в финальное/отменённое сообщение, в
+  счётчики сессии (`Session.inputTokens`/…) и в роллап `usage` (одна запись на ход:
+  `requests=1`/`messages=1`). `finalUsage` (расход последнего вызова) остаётся для оценки
+  (`estimateUsage`), калибровки chars-per-token и события `step.finished` — там расход **своего
+  шага** (сумма по шагам = расход хода, метрики Prometheus не меняются). Бакеты сабагентов
+  (`metadata.subagents`) считаются отдельно и не меняются.
 - `server/restart.ts` — ADR-092 п. 7: graceful restart инстанса. `configureRestart` (вызов на старте
   процесса — `main.ts`/backend `main.ts`), `resolveRestartMode` (`--restart-mode` > `SYNTH_RESTART_MODE`;
   неизвестное → `disabled` + warn), `getRestartStatus` (`supported`/`mode`/`reason`/`startedAt`/`version`),

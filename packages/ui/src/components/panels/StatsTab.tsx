@@ -341,7 +341,7 @@ export const StatsTab: React.FC = () => {
   const isContextNearLimit = hasRealContextWindow && windowPercent >= CONTEXT_NEAR_LIMIT_PCT
 
   // ADR-070 §2.6 (live): компактная live-строка хода — тот же билдер сегментов,
-  // что у StreamingPlaceholder/MessageStats.
+  // что у live-строки ответа и у `MessageStats`.
   const liveSegments = (isTurnActive || streamingMessage)
     ? buildUsageSegments(
         {

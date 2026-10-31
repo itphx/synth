@@ -343,9 +343,15 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
         // (иначе был бы пропуск), а события, пришедшие за время воспроизведения,
         // лежат в буфере и уйдут следом — дубли отсекаются по `eventSeq`.
         if (sinceSeq !== null) {
+          // Номер события глобальный (ADR-118 §6) — журналы разных сессий
+          // сливаются в один порядок по номеру (иначе порядок между сессиями
+          // был бы произвольным).
+          const replay: BusEvent[] = [];
           for (const sessionId of subscribed) {
-            for (const event of eventBus.since(sessionId, sinceSeq)) sendIfNew(event);
+            replay.push(...eventBus.since(sessionId, sinceSeq));
           }
+          replay.sort((a, b) => (a.eventSeq ?? 0) - (b.eventSeq ?? 0));
+          for (const event of replay) sendIfNew(event);
         }
         replaying = false;
         for (const event of pending) sendIfNew(event);

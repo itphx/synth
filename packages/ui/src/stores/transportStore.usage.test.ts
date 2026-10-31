@@ -39,12 +39,16 @@ beforeEach(() => {
 
 describe('transportStore dispatcher: turn/step (ADR-118 §1)', () => {
   it('turn.started → активный ход сессии; turn.finished → терминальный статус', () => {
+    // ADR-118 §5: `messageId` в `turn.started` — id **реплики пользователя**,
+    // а не живого сообщения шага: в `ActiveTurn.messageId` живёт сообщение
+    // текущего шага (единственный «живой» источник контента). Поэтому ход
+    // открывается без `messageId`, а он приходит в `step.started`.
     dispatch(makeEvent('turn.started', 's1', { turnId: 't1', messageId: 'm-user' }))
     expect(useChatStore.getState().turnBySession['s1']).toMatchObject({
       turnId: 't1',
-      messageId: 'm-user',
       status: 'streaming',
     })
+    expect(useChatStore.getState().turnBySession['s1']?.messageId).toBeUndefined()
 
     dispatch(makeEvent('turn.finished', 's1', { turnId: 't1', status: 'completed' }))
     expect(useChatStore.getState().turnBySession['s1']?.status).toBe('completed')

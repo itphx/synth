@@ -342,7 +342,7 @@ const InstanceMeta = z
       description: 'Версия модели сообщений/потока, поддерживаемая инстансом (`2`).',
     }),
     eventSeq: z.boolean().openapi({
-      description: 'События нумеруются в пределах сессии (`BusEvent.eventSeq`).',
+      description: 'События нумеруются глобально в пределах инстанса (`BusEvent.eventSeq`).',
     }),
     replay: z.boolean().openapi({
       description: 'Доступен догон по журналу событий (`Last-Event-ID` / `?since`).',

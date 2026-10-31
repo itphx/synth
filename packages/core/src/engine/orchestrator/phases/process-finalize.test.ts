@@ -35,7 +35,6 @@ import { t as sm } from '../../system-messages.js';
 import {
   saveAssistantMessage,
   resolveAssistantStatus,
-  joinAccumulatedTexts,
   type SaveAssistantMessageFn,
 } from '../persistence.js';
 import { resolveMessageModel, estimateUsage } from '../usage.js';
@@ -133,6 +132,9 @@ describe('runProcessFinalize', () => {
       lastChunkModel: undefined,
       finalModel: 'm',
       finalUsage: { ...USAGE },
+      // ADR-102: расход хода (сумма шагов) — по умолчанию равен расходу
+      // последнего вызова (одношаговый ход).
+      turnUsage: { ...USAGE },
       finalContent: 'ответ модели',
       fallbackI18n: undefined,
       hadDeny: false,
@@ -176,7 +178,6 @@ describe('runProcessFinalize', () => {
       agentRegistry: null,
       optimizer: null,
       resolveMessageModel,
-      joinAccumulatedTexts,
       estimateUsage,
       computeMessageCost: (model, usage) => {
         if (!model || !usage) return null;
@@ -253,26 +254,33 @@ describe('runProcessFinalize', () => {
       expect(assistant.metadata!.status).toBe('cancelled');
     });
 
-    it('частичный ответ из завершённых итераций + best-effort оценка usage', async () => {
+    it('тексты шагов не дублируются в сообщении отмены + best-effort оценка usage', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
       const state = makeState({
         cancelledBeforeFinal: true,
         finalContent: 'обрывок',
         finalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        // ADR-102: расход хода тоже пуст (провайдер не отдал usage) — оценка.
+        turnUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         allIntermediateTexts: [{ text: 'первая', iteration: 0 }, { text: 'вторая', iteration: 1 }],
-        allReasoning: [{ text: 'думал', iteration: 0 }],
+        allReasoning: [{ text: 'думал', iteration: 0 }, { text: 'думал финально', iteration: 1 }],
+        finalStepIndex: 1,
       });
 
       await runProcessFinalize(makeArgs(sessionId), state, deps);
 
       const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
-      expect(saveCall[1]).toBe('первая\n\nвторая');
-      expect(saveCall[6]).toBe('думал');
+      // ADR-118 §1: тексты шагов уже сохранены их сообщениями — в сообщении
+      // отмены текста нет (иначе лента показала бы дубль: текст шага + финал).
+      expect(saveCall[1]).toBe('');
+      // Reasoning — только финальной итерации (размышления прошлых шагов
+      // лежат в их сообщениях).
+      expect(saveCall[6]).toBe('думал финально');
       // отсутствующие токены дозаполняются оценкой → usage_estimated
       expect(saveCall[17]).toMatchObject({ usage_estimated: true });
       expect(published[0]!.data.usage_estimated).toBe(true);
-      expect(published[0]!.data.content).toBe('первая\n\nвторая');
+      expect(published[0]!.data.content).toBe('');
     });
 
     it('последняя итерация без финального чанка: модель берётся из provider/settings', async () => {
@@ -330,7 +338,7 @@ describe('runProcessFinalize', () => {
       expect(turnFinished().data).toMatchObject({ turnId: 'turn1', status: 'stopped' });
     });
 
-    it('непустой финальный ответ на шаге-лимите → текст сохраняется, step_limit_reached=true', async () => {
+    it('непустой финальный ответ на шаге-лимите → текст сохраняется, step_limit_reached=true, статус limit', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
 
@@ -340,12 +348,17 @@ describe('runProcessFinalize', () => {
         deps,
       );
 
+      // ADR-118 §1: ход, закрытый лимитом шагов, — статус `limit` независимо от
+      // того, успела ли модель дать свой текст (иначе один и тот же сценарий с
+      // пустым ответом давал бы `limit`, а с текстом — `completed`).
       expect(await storedAssistant(sessionId)).toMatchObject({
         content: 'готово',
-        metadata: { step_limit_reached: true, status: 'completed' },
+        metadata: { step_limit_reached: true, status: 'limit' },
       });
+      // Статус `limit` сводится к `completed` у шага (ошибки не было) и
+      // `stopped` у хода (ход остановлен лимитом шагов).
       expect(stepFinished().data).toMatchObject({ status: 'completed' });
-      expect(turnFinished().data).toMatchObject({ status: 'completed' });
+      expect(turnFinished().data).toMatchObject({ status: 'stopped' });
     });
 
     it('непустой финальный ответ не заменяется фоллбеком лимита', async () => {
@@ -495,26 +508,32 @@ describe('runProcessFinalize', () => {
       expect(deps.calibrateTokenRatio).toHaveBeenCalledWith('m', 400, USAGE, undefined);
     });
 
-    it('reasoning-части и intermediate_text_blocks — только при наличии', async () => {
+    it('reasoning-части финальной итерации — в parts; сводка хода не пишется', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
       await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
       const plain = await storedAssistant(sessionId);
       expect(plain.parts.map((p) => p.type)).toEqual(['text']);
+      // ADR-118 §1: сводка текстов всего хода в сообщении хода не пишется —
+      // тексты шагов лежат в их сообщениях.
       expect(plain.metadata!.intermediate_text_blocks).toBeUndefined();
 
       const withBlocks = makeDeps();
       await runProcessFinalize(
         makeArgs(sessionId),
         makeState({
-          allReasoning: [{ text: 'r1', iteration: 0 }],
+          allReasoning: [{ text: 'r1', iteration: 0 }, { text: 'r-final', iteration: 1 }],
           allIntermediateTexts: [{ text: 't1', iteration: 0 }],
+          finalStepIndex: 1,
         }),
         withBlocks,
       );
       const rich = await storedAssistant(sessionId);
+      // Reasoning — только финальной итерации (шага 0 в финале нет).
       expect(rich.parts.map((p) => p.type)).toEqual(['text', 'reasoning']);
-      expect(rich.metadata!.intermediate_text_blocks).toEqual([{ text: 't1', iteration: 0 }]);
+      expect(rich.parts.find((p) => p.type === 'reasoning')!.data).toBe('r-final');
+      expect(rich.reasoning).toBe('r-final');
+      expect(rich.metadata!.intermediate_text_blocks).toBeUndefined();
     });
 
     it('secrets из ответа — в metadata сообщения, не в событии шага (ADR-036)', async () => {
@@ -550,7 +569,7 @@ describe('runProcessFinalize', () => {
       expect(stepFinished().data).not.toHaveProperty('secrets');
     });
 
-    it('tool_results и usage попадают в сохранённое сообщение', async () => {
+    it('вызовы хода не дублируются в финальном сообщении (они — в шагах)', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
 
@@ -562,7 +581,9 @@ describe('runProcessFinalize', () => {
 
       const stored = (await sessionManager.getSession(sessionId))!;
       const assistant = stored.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
-      expect(assistant.metadata!.tool_results).toHaveLength(1);
+      // ADR-118 §1: финал хода = последний шаг; сводка вызовов всего хода в
+      // нём была бы дублем карточек инструментов шагов.
+      expect(assistant.metadata!.tool_results).toBeUndefined();
       expect(stored.inputTokens).toBe(10);
     });
   });

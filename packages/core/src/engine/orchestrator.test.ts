@@ -564,7 +564,10 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
 
     const finalAssistant = chain[3]!;
     expect(finalAssistant.content).toContain('Готово');
-    expect(finalAssistant.metadata?.tool_results).toBeDefined();
+    // ADR-118 §1: финал хода = последний шаг — сводки вызовов хода в нём нет
+    // (вызовы лежат в сообщении своего шага).
+    expect(finalAssistant.metadata?.tool_results).toBeUndefined();
+    expect(intermediateAssistant.metadata?.tool_results).toHaveLength(1);
     expect(finalAssistant.toolCalls).toBeUndefined();
   });
 
@@ -621,8 +624,10 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
       await processMessage(fresh, msg, new AbortController().signal, () => {});
 
       const updated = (await sessionManager.getSession(session.id))!;
+      // ADR-118 §1: статистика сабагентов — по всем вызовам хода, поэтому
+      // она остаётся в финальном сообщении (сводка вызовов — нет).
       const finalAssistant = [...updated.messages].reverse()
-        .find((m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_results)!;
+        .find((m) => m.role === MessageRole.ASSISTANT && m.metadata?.subagents)!;
       const subagents = finalAssistant.metadata?.subagents as Record<string, number>;
       expect(subagents).toBeDefined();
       expect(subagents.sessions).toBe(1);
@@ -986,8 +991,9 @@ describe('ChatOrchestrator — отмена сохраняет tool-вызовы
     expect(toolMsg.metadata?.tool_chain).toBe(true);
 
     const finalMsg = chain[3]!;
-    expect(finalMsg.metadata?.tool_results).toBeDefined();
-    const toolResults = finalMsg.metadata!.tool_results as Array<{ id: string }>;
+    // ADR-118 §1: вызовы шага — в его сообщении; в финале хода их нет.
+    expect(finalMsg.metadata?.tool_results).toBeUndefined();
+    const toolResults = intermediate.metadata!.tool_results as Array<{ id: string }>;
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]!.id).toBe('call_abort');
 
@@ -1132,9 +1138,14 @@ describe('ChatOrchestrator — tool_call.result публикуется посл�
     expect(toolMsg).toBeDefined();
     expect(toolMsg.content).toBe(eventResult.content);
 
-    // 3. История: metadata.tool_results финального assistant — тот же контент
-    const finalAssistant = updated.messages[updated.messages.length - 1]!;
-    const toolResults = finalAssistant.metadata?.tool_results as Array<Record<string, unknown>>;
+    // 3. История: metadata.tool_results сообщения ШАГА — тот же контент
+    // ADR-118 §1: «финал хода = последний шаг» — сводка вызовов живёт в
+    // сообщении своего шага (в финальном её нет), поэтому ищем именно шаг.
+    const stepAssistant = updated.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
+    );
+    expect(stepAssistant).toBeDefined();
+    const toolResults = stepAssistant!.metadata?.tool_results as Array<Record<string, unknown>>;
     expect(toolResults).toBeDefined();
     const entry = toolResults.find((e) => e.id === 'call_web')!;
     expect(entry).toBeDefined();

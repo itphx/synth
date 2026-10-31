@@ -637,14 +637,29 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(session.messages.indexOf(toolMsg)).toBe(session.messages.indexOf(chainAssistant) + 1);
     expect(session.messages.indexOf(finalAssistant)).toBe(session.messages.indexOf(toolMsg) + 1);
 
-    // Финальное сообщение — без tool_chain, прежние metadata сохранены.
+    // Финальное сообщение — без tool_chain.
     expect(finalAssistant.metadata?.tool_chain).toBeUndefined();
     // Промежуточный шаг с текстом — тоже без tool_chain (текст видим).
     expect(chainAssistant.metadata?.tool_chain).toBeUndefined();
-    expect((finalAssistant.metadata?.tool_results as unknown[])).toHaveLength(1);
-    expect(finalAssistant.metadata?.intermediate_text_blocks).toEqual([
-      { text: 'Шаг 1: проверяю команду', iteration: 0 },
-    ]);
+    // ADR-118 §1: «финал хода = последний шаг» — сводка вызовов и текстов
+    // **хода** живёт в сообщении СВОЕГО шага. В финальном сообщении её нет:
+    // иначе карточки инструментов и тексты прошлых шагов дублировались бы.
+    expect(finalAssistant.metadata?.tool_results).toBeUndefined();
+    expect(finalAssistant.metadata?.intermediate_text_blocks).toBeUndefined();
+    // Вызовы шага — в его собственном сообщении (только эта итерация).
+    const stepToolResults = chainAssistant.metadata?.tool_results as Array<{
+      id: string;
+      name: string;
+      iteration: number;
+      result?: { content: string; isError?: boolean };
+    }> | undefined;
+    expect(stepToolResults).toBeDefined();
+    expect(stepToolResults).toHaveLength(1);
+    expect(stepToolResults![0]!.id).toBe('call_o0');
+    expect(stepToolResults![0]!.name).toBe('execute_shell');
+    expect(stepToolResults![0]!.iteration).toBe(0);
+    expect(stepToolResults![0]!.result?.isError).toBe(true);
+    expect(stepToolResults![0]!.result?.content).toContain('Permission denied');
 
     const llm = sessionMessagesToLlm(session.messages, 'fixer');
     expect(llm.filter((m) => m.role === 'tool')).toHaveLength(1);
@@ -652,7 +667,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  it('abort во время генерации после deny: в истории полный текст всех итераций + tool_results с deny', async () => {
+  it('abort во время генерации после deny: текст текущей итерации в сообщении отмены, deny — в tool_results шага', async () => {
     const h = await makeHarness('mockabort');
     const ac = new AbortController();
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
@@ -673,37 +688,48 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const result = await promise;
     expect(result.error).toBeUndefined();
 
-    // stream.cancelled несёт полный накопленный текст (завершённая + текущая итерация)
+    // ADR-118 §1: в сообщении отмены — только текст **текущей** итерации.
+    // Текст завершённого шага уже сохранён его сообщением (шаг = сообщение),
+    // склейка была бы дублем в ленте.
     const cancelled = chunks.find((c) => c.event === 'stream.cancelled')!;
     const cancelledContent = cancelled.data.content as string;
-    expect(cancelledContent).toContain('Шаг 1: анализ команды');
     expect(cancelledContent).toContain('Полный');
+    expect(cancelledContent).not.toContain('Шаг 1: анализ команды');
     // ADR-070 §2.6: отмена → status 'cancelled'.
     expect(cancelled.data.status).toBe('cancelled');
 
-    // Финальное assistant-сообщение содержит полный текст (не обрывок последней итерации)
     const session = (await h.sessionManager.getSession(h.sessionId))!;
     const assistant = [...session.messages].reverse().find(
       (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
     );
     expect(assistant).toBeDefined();
-    expect(assistant!.content).toContain('Шаг 1: анализ команды');
     expect(assistant!.content).toContain('Полный');
+    expect(assistant!.content).not.toContain('Шаг 1: анализ команды');
     expect(assistant!.content).not.toContain('Конец');
     expect(assistant!.metadata?.status).toBe('cancelled');
 
-    // deny сохранился в tool_results финального сообщения
+    // ADR-118 §1: сводка вызовов хода — в сообщении СВОЕГО шага; в сообщении
+    // отмены её нет.
     const meta = assistant!.metadata as Record<string, unknown>;
-    const toolResults = meta.tool_results as Array<{ name: string; result?: { content: string; isError?: boolean } }> | undefined;
-    expect(toolResults).toBeDefined();
-    expect(toolResults!.length).toBeGreaterThan(0);
-    expect(toolResults![0]!.name).toBe('execute_shell');
-    expect(toolResults![0]!.result?.isError).toBe(true);
-    expect(toolResults![0]!.result?.content).toContain('Permission denied');
-
+    expect(meta.tool_results).toBeUndefined();
     // При отмене blocks НЕ дублируются: они уже вошли в content (иначе UI
     // режима 'bottom' склеил бы их с content повторно)
     expect(meta.intermediate_text_blocks).toBeUndefined();
+
+    // deny сохранился в tool_results сообщения шага, где вызов и был.
+    const stepAssistant = session.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
+    );
+    expect(stepAssistant).toBeDefined();
+    const stepToolResults = stepAssistant!.metadata?.tool_results as Array<{
+      name: string;
+      result?: { content: string; isError?: boolean };
+    }> | undefined;
+    expect(stepToolResults).toBeDefined();
+    expect(stepToolResults!.length).toBeGreaterThan(0);
+    expect(stepToolResults![0]!.name).toBe('execute_shell');
+    expect(stepToolResults![0]!.result?.isError).toBe(true);
+    expect(stepToolResults![0]!.result?.content).toContain('Permission denied');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
@@ -1202,8 +1228,19 @@ describe('ChatOrchestrator: отмена во время исполнения т
       (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) === 0,
     );
     expect(cancelledAssistant).toBeDefined();
-    expect(cancelledAssistant!.metadata?.tool_results).toBeDefined();
     expect(cancelledAssistant!.metadata?.status).toBe('cancelled');
+    // ADR-118 §1: сводка вызовов хода — в сообщении СВОЕГО шага; в сообщении
+    // отмены её нет (иначе карточки инструментов дублировались бы в ленте).
+    expect(cancelledAssistant!.metadata?.tool_results).toBeUndefined();
+    // Результат прерванного тула — в сообщении шага, где вызов и был.
+    const stepToolResults = chainAssistant!.metadata?.tool_results as Array<{
+      name: string;
+      result?: { content: string };
+    }> | undefined;
+    expect(stepToolResults).toBeDefined();
+    expect(stepToolResults).toHaveLength(1);
+    expect(stepToolResults![0]!.name).toBe('slow_tool');
+    expect(stepToolResults![0]!.result?.content).toContain('прерван отменой');
     // Отмена не должна плодить записи с одинаковым id: id сообщения шага уже
     // занят tool-chain записью — новая запись отмены получает свой.
     const ids = updated.messages.map((m) => m.id);

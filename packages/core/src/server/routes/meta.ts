@@ -13,7 +13,8 @@ import { SYNTH_VERSION } from '@itphx/synth-shared/version';
  * ADR-118 §8: возможности инстанса.
  *
  * - `messageModel` — версия модели сообщений/потока;
- * - `eventSeq` — события нумеруются в пределах сессии (`BusEvent.eventSeq`);
+ * - `eventSeq` — события нумеруются глобально в пределах инстанса
+ *   (`BusEvent.eventSeq`);
  * - `replay` — доступен догон по журналу событий (`Last-Event-ID` / `?since`);
  * - `version` — версия инстанса.
  */

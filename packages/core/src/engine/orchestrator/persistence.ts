@@ -3,9 +3,13 @@
  *
  * Вынесено из `engine/orchestrator.ts` без изменения поведения. Класс
  * `ChatOrchestrator` сохраняет делегации `_saveAssistantMessage`,
- * `_persistToolChain`, `_getAssistantSecrets`, `_resolveAssistantStatus`,
- * `_joinAccumulatedTexts`; тип `AssistantMessageStatus` реэкспортируется из
- * `orchestrator.ts` (публичный контракт).
+ * `_getAssistantSecrets`, `_resolveAssistantStatus`; тип
+ * `AssistantMessageStatus` реэкспортируется из `orchestrator.ts`
+ * (публичный контракт).
+ *
+ * Шаги хода персистятся **пошагово** в цикле (`StreamMessageDraft`,
+ * `engine/orchestrator/stream-persistence.ts`); этот модуль пишет финальное
+ * сообщение хода (и сообщения отмены).
  */
 import type { Message, MessageStatus, Part, PromptMeta, Session, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
@@ -68,6 +72,10 @@ export function resolveAssistantStatus(
   // ADR-104 (этап 2): прерванная генерация (`interrupt`) — не «остановлено»
   // («Стоп») и не ошибка: ход продолжается, ответ частичный.
   if (metadataExtra?.interrupted === true) return 'interrupted';
+  // ADR-118 §1: ход остановлен лимитом шагов (`AgentDefinition.maxSteps`) —
+  // статус `limit` независимо от того, успела ли модель дать свой текст
+  // (иначе ход, закрытый лимитом, выглядел бы обычным завершением).
+  if (metadataExtra?.step_limit_reached === true) return 'limit';
   const key = (metadataExtra?.i18n as { key?: string } | undefined)?.key;
   switch (key) {
     case 'session.stopped':
@@ -90,18 +98,16 @@ export function resolveAssistantStatus(
 }
 
 /**
- * Склейка накопленного текста: все завершённые итерации (allIntermediateTexts)
- * + текст текущей (незавершённой) итерации. Пустые фрагменты пропускаются.
- * Используется при отмене (abort), чтобы в истории сохранялся полный
- * частичный ответ, а не только обрывок последней итерации.
+ * Опции проверки видимости содержимого шага.
+ *
+ * `includeReasoning` (по умолчанию `true`) — считать ли reasoning-часть
+ * видимым контентом. Для дочерней сессии (сабагент) reasoning **не** считается:
+ * отчёт ребёнка «монолитный» (несёт все размышления прогона), а шаги ребёнка
+ * с одним лишь reasoning прячутся — иначе размышления дублировались бы в
+ * ленте (шаг + отчёт).
  */
-export function joinAccumulatedTexts(
-  intermediateTexts: Array<{ text: string; iteration: number }>,
-  current: string,
-): string {
-  const parts = [...intermediateTexts.map((t) => t.text), current]
-    .filter((t) => t && t.trim().length > 0);
-  return parts.join('\n\n');
+export interface VisibleStepContentOptions {
+  includeReasoning?: boolean;
 }
 
 /**
@@ -121,15 +127,22 @@ export function joinAccumulatedTexts(
  * `redacted_thinking`, у которого текста нет вовсе) **не** считается
  * видимым контентом: иначе шаг без текста получал бы `tool_chain` без
  * маркера и всплывал в транскрипте пустым пузырём.
+ *
+ * Наличие вызовов инструментов (`toolCalls`) видимость **не** определяет:
+ * правило вызова живёт у вызывающей стороны (основной ход — шаг с вызовами
+ * виден, у ребёнка — прячется), см. `orchestrator.ts` и `run-cycle.ts`.
  */
 export function hasVisibleStepContent(
   content: string | undefined,
   parts: readonly Part[] | undefined,
+  opts?: VisibleStepContentOptions,
 ): boolean {
+  const includeReasoning = opts?.includeReasoning !== false;
   if (typeof content === 'string' && content.trim().length > 0) return true;
   for (const part of parts ?? []) {
     if (!part || typeof part !== 'object') continue;
     if (part.type === 'reasoning') {
+      if (!includeReasoning) continue;
       const text = typeof part.data === 'string' ? part.data : '';
       if (text.trim().length > 0) return true;
       continue;
@@ -308,6 +321,17 @@ export interface SaveAssistantMessageDeps {
 export interface ExistingMessageRef {
   id: string;
   seq: number;
+  /**
+   * ADR-118 §1: «дополнить существующее сообщение» — не перезаписывать
+   * содержимое записи (текст/части/reasoning/вызовы инструментов), обновить
+   * только терминальные поля (статус/usage/metadata).
+   *
+   * Нужно финализации шага-лимита: запись шага уже несёт текст ответа и
+   * вызовы инструментов, а вторая запись с тем же текстом давала дубль в
+   * ленте (шаг + финал с одинаковым содержимым). Пустой текст записи при
+   * этом заполняется финальным (фоллбек-отчёт «Достигнут лимит шагов»).
+   */
+  keepContent?: boolean;
 }
 
 /**
@@ -442,7 +466,6 @@ export async function saveAssistantMessage(
   step?: AssistantMessageStep,
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
-  const finalContent = content;
 
   /**
    * Сессия читается **один раз** и по ней решается, свободен ли id сообщения
@@ -462,6 +485,32 @@ export async function saveAssistantMessage(
     }
     return sessionSnapshot;
   };
+
+  /**
+   * ADR-118 §1: режим «дополнить существующее сообщение»
+   * (`existing.keepContent`): запись шага уже несёт текст/части/reasoning/
+   * вызовы инструментов — обновляем только терминальные поля (статус/usage/
+   * metadata). Иначе финализация либо затирала бы содержимое шага, либо
+   * создавала бы вторую запись с тем же текстом (дубль в ленте).
+   *
+   * Запись не найдена — режим не включаем (обычное поведение: сообщение
+   * создаётся заново).
+   */
+  const existingMessage = existing
+    ? (await loadSession())?.messages.find((m) => m.id === existing.id)
+    : undefined;
+  const keepContent = Boolean(existing?.keepContent && existingMessage);
+  /** Текст записи сохраняется; пустой — заполняется финальным (фоллбек). */
+  const keepText = keepContent && Boolean(existingMessage!.content);
+  const finalContent = keepText ? existingMessage!.content : content;
+  const finalReasoning = keepText ? existingMessage!.reasoning : reasoning;
+  const finalToolCalls = keepContent ? existingMessage!.toolCalls : undefined;
+  const finalSignature = keepContent ? existingMessage!.reasoningSignature : reasoningMeta?.signature;
+  const finalRedacted = keepContent ? existingMessage!.reasoningRedacted : reasoningMeta?.redacted;
+  /** Части записи сохраняются; медиа-части ответа дописываются в конец. */
+  const finalParts = keepText
+    ? [...(existingMessage!.parts ?? []), ...(extraParts ?? [])]
+    : undefined;
 
   let messageId = existing?.id;
   if (!messageId && step?.messageId) {
@@ -493,7 +542,13 @@ export async function saveAssistantMessage(
       }
     : undefined;
 
-  const metadata: Record<string, unknown> = { stream_id: streamId, ...metadataExtra };
+  // ADR-118 §1: режим «дополнить существующее сообщение» — метаданные записи
+  // сохраняются (например `tool_results` шага), поверх них — новые поля.
+  const metadata: Record<string, unknown> = {
+    ...(keepContent ? (existingMessage!.metadata ?? {}) : {}),
+    stream_id: streamId,
+    ...metadataExtra,
+  };
   // ADR-070 §2.6: единая точка простановки статуса ответа — ни один путь
   // сохранения (обычный, cancel, tool-chain, summary, debug, micro) не
   // пропускает его. UI показывает префикс по этому полю.
@@ -503,8 +558,19 @@ export async function saveAssistantMessage(
   metadata.status = isAssistantMessageStatus(metadataExtra?.status)
     ? metadataExtra.status
     : resolveAssistantStatus(isCancelled, metadataExtra);
+  /**
+   * ADR-118 §1: «финал хода = последний шаг». Сводка вызовов и текстов
+   * **всего** хода в финальном сообщении дублировала бы содержимое шагов
+   * (карточки инструментов и тексты предыдущих шагов) — поэтому для сообщений
+   * хода (`step.turnId` задан) `tool_results`/`intermediate_text_blocks` не
+   * пишутся: вызовы лежат в сообщениях своих шагов.
+   *
+   * Статистика сабагентов (`metadata.subagents`) считается по всем вызовам
+   * хода — она нужна попапу статистики (ADR-070 §2.6).
+   */
+  const isTurnMessage = Boolean(step?.turnId);
   if (toolResults && toolResults.length > 0) {
-    metadata.tool_results = toolResults;
+    if (!isTurnMessage) metadata.tool_results = toolResults;
     // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения и
     // «Последний ответ») — агрегируется из task-результатов этого хода.
     const subagents = aggregateSubagentStats(
@@ -513,7 +579,7 @@ export async function saveAssistantMessage(
     );
     if (subagents) metadata.subagents = subagents;
   }
-  if (intermediateTextBlocks && intermediateTextBlocks.length > 0) {
+  if (!isTurnMessage && intermediateTextBlocks && intermediateTextBlocks.length > 0) {
     metadata.intermediate_text_blocks = intermediateTextBlocks;
   }
 
@@ -547,11 +613,15 @@ export async function saveAssistantMessage(
     // ADR-118 §1: id частей — те же детерминированные, что и в стриме
     // (`msg:text:N` / `msg:reasoning:N` / `callId`), иначе клиент, мержущий
     // части по id, нарисует текст ответа дважды (dto-часть + live-часть).
-    parts: withDeterministicPartIds([
-      makeTextPart(finalContent),
-      ...makeReasoningParts(reasoningBlocks),
-      ...(extraParts ?? []),
-    ]),
+    // Режим «дополнить существующее сообщение» — части записи сохраняются
+    // (иначе вызовы инструментов шага потеряли бы карточки).
+    parts: finalParts
+      ? withDeterministicPartIds(finalParts)
+      : withDeterministicPartIds([
+          makeTextPart(finalContent),
+          ...makeReasoningParts(reasoningBlocks),
+          ...(extraParts ?? []),
+        ]),
     content: finalContent,
     createdAt: nowISO(),
     disabled: false,
@@ -560,9 +630,12 @@ export async function saveAssistantMessage(
     model,
     provider: provider || '',
     usage,
-    reasoning,
-    ...(reasoningMeta?.signature !== undefined ? { reasoningSignature: reasoningMeta.signature } : {}),
-    ...(reasoningMeta?.redacted?.length ? { reasoningRedacted: reasoningMeta.redacted } : {}),
+    reasoning: finalReasoning,
+    ...(finalSignature !== undefined ? { reasoningSignature: finalSignature } : {}),
+    ...(finalRedacted?.length ? { reasoningRedacted: finalRedacted } : {}),
+    // ADR-118 §1: вызовы инструментов записи шага сохраняются — «дополнение»
+    // существующего сообщения не должно их затирать.
+    ...(finalToolCalls && finalToolCalls.length > 0 ? { toolCalls: finalToolCalls } : {}),
     agentRole,
     debugData: debugInfo ?? undefined,
     metadata,

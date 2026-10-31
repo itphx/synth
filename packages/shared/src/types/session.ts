@@ -197,6 +197,13 @@ export interface StreamInfo {
   agentRole?: string;
   startedAt: string;
   cancelled: boolean;
+  /**
+   * ADR-118 §10: идентификатор хода (`turn_...`), которому принадлежит
+   * живой стрим. UI восстанавливает ход после перезагрузки страницы по этой
+   * метке (в DTO — `current_stream.turn_id`); без неё группировка сегментов
+   * хода и индикаторы «ход идёт» после reload ломаются.
+   */
+  turnId?: string;
 }
 
 export interface Branch {

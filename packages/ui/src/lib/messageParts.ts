@@ -9,7 +9,7 @@
 // сообщения — по порядковому номеру текстовой части, остальные — по id.
 
 import type { Part, PartType } from '@itphx/synth-shared/types'
-import type { LivePart, LiveToolCall, ReasoningBlockData } from '@/stores/chatStore'
+import type { LivePart, LiveToolCall, MessageData, ReasoningBlockData } from '@/stores/chatStore'
 
 /** Идентификатор текстовой части (`msg:text:<ordinal>`). */
 export const TEXT_PART_PREFIX = 'msg:text:'
@@ -32,6 +32,74 @@ export function partText(data: unknown): string {
     if (typeof text === 'string') return text
   }
   return ''
+}
+
+/**
+ * Есть ли у сообщения контент (ADR-118 §5).
+ *
+ * Пустое живое сообщение шага (`content: ''`, `parts: []`) контентом **не**
+ * считается: по нему индикатор «идёт» должен жить у реплики пользователя, а
+ * не в пустом сегменте ответа.
+ */
+export function messageHasContent(message: MessageData): boolean {
+  if (typeof message.content === 'string' && message.content.trim() !== '') return true
+  for (const part of message.parts ?? []) {
+    if (!part) continue
+    if (partText(part.data).trim() !== '') return true
+    // Нетекстовая часть (вызов тула, медиа) — тоже контент.
+    if (part.type !== 'text' && part.type !== 'reasoning') return true
+  }
+  return false
+}
+
+/**
+ * Признаки хода, нужные предикату «контент хода уже был» (ADR-118 §5).
+ *
+ * Структурный тип (не `ActiveTurn`): хелпер не должен тянуть стор в
+ * `lib/` — наоборот, `lib/messageParts` уже знает только типы сообщений.
+ */
+export interface TurnContentProbe {
+  /** Id хода (`turn_id` сообщений хода). */
+  turnId?: string | null
+  /** Id сообщения текущего шага (живое сообщение хода). */
+  messageId?: string | null
+  /** Флаг «контент хода начался» (живой ход, ADR-118 §5). */
+  contentStarted?: boolean
+}
+
+/**
+ * Контент хода уже был? (ADR-118 §5) — **единый предикат**.
+ *
+ * До первой части ответа индикатор «идёт» живёт у реплики пользователя,
+ * после — в живом сегменте ответа (или в строке активности хода). Признак:
+ *
+ * - ход помечен флагом `contentStarted` (живой ход: пришла первая часть);
+ * - либо у хода есть assistant-сообщение с непустыми частями/текстом/вызовом
+ *   инструмента — после перезагрузки флага в сторе нет, контент считается по
+ *   истории (сообщения хода адресуются по `turn_id`, живое сообщение шага —
+ *   по `messageId`).
+ *
+ * `fallback` — сообщение шага, если оно не адресуется по `turn_id` (например,
+ * при восстановлении хода по `current_stream`).
+ */
+export function turnHasContent(
+  messages: MessageData[],
+  turn: TurnContentProbe | null | undefined,
+  fallback?: MessageData | null,
+): boolean {
+  if (!turn) return false
+  if (turn.contentStarted === true) return true
+  const turnId = turn.turnId
+  const messageId = turn.messageId
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    const belongsToTurn =
+      (!!turnId && message.turn_id === turnId) || (!!messageId && message.id === messageId)
+    if (!belongsToTurn) continue
+    if (messageHasContent(message)) return true
+  }
+  if (fallback && messageHasContent(fallback)) return true
+  return false
 }
 
 /** Часть → «живая» форма (накопленный текст + структурные данные). */
@@ -58,6 +126,33 @@ export function sortLiveParts(parts: LivePart[]): LivePart[] {
     if (bo !== null) return 1
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
   })
+}
+
+/**
+ * Сырой вызов провайдера (`{type:'function', function:{name, arguments}}`) →
+ * форма частей UI (`{name, args}`).
+ *
+ * Иначе live-карточка тула остаётся без имени («unknown»): имя тула лежит в
+ * `function.name`, а аргументы — в `function.arguments` (JSON-строка).
+ *
+ * Нормализация выполняется **внутри** `buildPartsView` — любой вызов сборки
+ * даёт карточку с именем тула (вызывать её вручную не нужно).
+ */
+export function normalizeLiveToolPart(part: LivePart): LivePart {
+  if (part.type !== 'tool_use') return part
+  const d = (part.data ?? {}) as Record<string, unknown>
+  const fn = d.function as { name?: unknown; arguments?: unknown } | undefined
+  if (!fn || typeof fn.name !== 'string' || fn.name.length === 0) return part
+  let args = (d.args as Record<string, unknown>) ?? {}
+  if (typeof fn.arguments === 'string' && fn.arguments.trim().length > 0) {
+    try {
+      const parsed: unknown = JSON.parse(fn.arguments)
+      if (parsed && typeof parsed === 'object') args = parsed as Record<string, unknown>
+    } catch {
+      // Аргументы не JSON — оставляем как есть.
+    }
+  }
+  return { ...part, data: { ...d, name: fn.name, args } }
 }
 
 /** Часть `tool_use` → инструментальный вызов (для рендера `ToolCallPart`). */
@@ -107,14 +202,18 @@ export function partToToolResult(
  * Live-части для рендера сообщения.
  *
  * - **во время шага** (`status: 'streaming'`) — источник истины;
- * - у **финального** сообщения — фоллбек, пока части из истории не пришли
- *   (окно между `step.finished` и ответом `GET /messages`): части DTO ещё
- *   пусты, и без фоллбэка текст, который пользователь уже видел, исчезал бы
- *   на миг (ADR-118 §5).
- *
- * Как только у сообщения есть части из истории, live-части не используются:
- * id частей `msg:text:<ordinal>` совпадают у разных шагов, и «застрявшие»
- * live-части давали бы в блоке хода текст чужого шага.
+ * - у **финального** сообщения:
+ *   - пока части из истории не пришли (окно между `step.finished` и ответом
+ *     `GET /messages`) — live-части остаются фоллбеком, иначе текст, который
+ *     пользователь уже видел, исчезал бы на миг (ADR-118 §5);
+ *   - когда части из истории пришли — текст и рассуждения берутся **только**
+ *     из dto: id частей `msg:text:<ordinal>` совпадают у разных шагов, и
+ *     «застрявшие» live-части давали бы в блоке хода текст чужого шага;
+ *     а **tool-части** (id = `callId`, коллизий с `msg:text:*`/`msg:reasoning:*`
+ *     нет) мержутся с dto-частими по `id` — карточки инструментов шага не
+ *     должны пропадать между `step.finished` и приходом истории (ядро
+ *     публикует `step.finished` до запуска тулов, результат приходит позже
+ *     через `tool_call.result`).
  */
 export function resolveLiveParts(
   liveParts: LivePart[] | undefined,
@@ -122,7 +221,16 @@ export function resolveLiveParts(
 ): LivePart[] | undefined {
   if (!liveParts || liveParts.length === 0) return undefined
   if (opts.isLive) return liveParts
-  return (opts.dtoParts?.length ?? 0) > 0 ? undefined : liveParts
+  const dtoParts = opts.dtoParts ?? []
+  if (dtoParts.length === 0) return liveParts
+  // Финальное сообщение: текст/reasoning — только из dto, tool-части — мерж.
+  // Live-часть вызова **важнее** dto-снимка того же вызова: dto сохраняется
+  // на финале шага (до запуска тула), а результат приходит позже
+  // (`tool_call.result`) и живёт только в live-части.
+  const toolParts = liveParts.filter(
+    (part) => part.type === 'tool_use' || part.type === 'tool_result',
+  )
+  return toolParts.length > 0 ? toolParts : undefined
 }
 
 /** Представление сообщения по частям (ADR-118 §1). */
@@ -164,7 +272,10 @@ export function buildPartsView(
   for (const part of dto ?? []) merged.set(part.id, toLivePart(part))
   for (const part of live ?? []) merged.set(part.id, { ...merged.get(part.id), ...part })
 
-  const ordered = sortLiveParts([...merged.values()])
+  // Нормализация вызова провайдера → `{name, args}` — **внутри** сборки:
+  // карточка инструмента всегда с именем, независимо от источника части
+  // (dto или live).
+  const ordered = sortLiveParts([...merged.values()].map(normalizeLiveToolPart))
 
   const textParts: LivePart[] = []
   const reasoning: ReasoningBlockData[] = []

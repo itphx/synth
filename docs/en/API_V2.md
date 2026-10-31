@@ -5,7 +5,11 @@
 > ⚠️ RU-версия обновлена 2026-10-31 (ADR-118: поток сообщений v2 — контракт приёма `202`,
 > события `message.accepted`/`queue.state`/`message.delivered`/`turn.*`/`step.*`/`part.*`,
 > `GET /api/v2/meta`, удаление `stream.chunk|usage|done|interrupted`, `message.queued|injected`);
-> перевод отстаёт — канонический текст: RU §3.3, §5.4, §5.5, §5.6.
+> перевод отстаёт — канонический текст: RU §3.3, §5.4, §5.5, §5.6. **Переведено 2026-10-31:**
+> §5.5 — DTO сессии `current_stream.turn_id` (метка живого хода; восстановление хода после
+> reload), §5.6 — «финал хода = последний шаг» (текст/reasoning только последнего шага,
+> tool-результаты в сообщении своего шага, `metadata.intermediate_text_blocks` не пишется,
+> `usage` финального сообщения — суммарный расход хода, `step.finished.usage` — своего шага).
 > ⚠️ RU-версия обновлена 2026-10-30 (**§5.5** — `stream.done.step_limit_reached` / `metadata.step_limit_reached` и статус `limit` (`session.steps_limit`); **§5.5** — `message.queued` как подтверждение приёма (`message_id` = `stream_id`) и дельты `subagent.progress` (`content_delta`/`reasoning_delta`), уточнение «UI-переключателя режима больше нет» (ADR-104); **§5.6** — подпись thinking хранится по блокам (`Part.metadata`/`reasoningBlocks`, `91be3f89`), `content` без reasoning при наличии `parts`; **§5.10** — `compatibility` модели (ADR-117) и `requires_reasoning` как shorthand; **§5.9** — `compatibility` провайдера — **переведено**); RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
@@ -303,7 +307,8 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 | `step.started` / `step.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `usage`, `timings`, `attachments` |
 | `part.delta` / `part.updated` | session channel | upsert by `{messageId, partId}` |
 
-Event journal and resume: every event gets a monotonic `eventSeq` per session; a client resumes
+Event journal and resume: every event gets a monotonic `eventSeq` that is global for the
+instance (across all session channels); a client resumes
 with `Last-Event-ID` / `?since=` (SSE frames carry `id: <eventSeq>`).
 
 **`GET /api/v2/meta`** (no authentication, like `/health`) returns the instance capabilities:
@@ -463,6 +468,8 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 
 > **Subagent progress — deltas (`subagent.progress`, 2026-10-30).** The event carries additive `content_delta`/`reasoning_delta` — the increment since the previous publication, **not** the accumulated text (the former `content`/`reasoning` fields are gone); empty deltas are not published, and the total delta volume per run is capped at 200,000 characters (beyond that progress is silent; the final report arrives as a regular message and is unaffected). An older core (a hybrid of a different version) may send the accumulated text in `content`/`reasoning` — the client subtracts the already known prefix, so the progress block is not duplicated; unknown fields are ignored.
 
+> **Session DTO — `current_stream` (ADR-118 §10).** In a serialized session (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) the live turn object is `current_stream`: `{stream_id, message, agent_role, cancelled, turn_id}`. The **`turn_id`** field (`turn_…` — the identifier of the active turn) is **additive**: `null` when there is no turn. The client needs it to **restore the turn after a page reload**: the turn id is taken from `current_stream.turn_id` (fallback — the `turn_id` of the last session message, then the legacy `current_stream.stream_id`); `stream_id` (`stream-…`) is **not** the turn id (with it the live messages got `turn_id = stream-…` while the history used `turn_…`, and the turn block split in two). The value is persisted together with the turn (file store — the `turn_id` field in `current_stream`; PostgreSQL — the same JSONB document), so a live turn is recognized by the same id even after a server restart.
+
 ### 5.6 Messages — `/api/v2/messages`
 
 > ⚠️ Outdated (ADR-118 §7): mutations are addressed by message id
@@ -488,6 +495,13 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > provider-protocol data needed only to replay the history to the Anthropic API. The `reasoning` field
 > (the reasoning text) is returned as before; the string `content` is built **without** reasoning blocks
 > when `parts` are present (legacy messages without `parts` keep the previous behaviour).
+
+> **The end of a turn = the last step (ADR-118 §1).** The content of the turn messages is structured as follows:
+> - The **final** assistant message of the turn carries the text and the reasoning of the **last step only** — not a summary of the whole turn: the texts and the reasonings of the earlier steps live in the messages of **their** steps, and repeating them in the final message produced duplicates in the feed.
+> - **Tool calls and their results** live in the message of **their** step: `metadata.tool_results` (in the DTO — the `tool_calls` field). The final message does not contain them — the tool cards are rendered in their own steps, not duplicated at the end of the turn.
+> - `metadata.intermediate_text_blocks` (the texts of the intermediate iterations) is **no longer written** for the messages of a turn (those with `turn_id`/`step_index` set) — the field survives only in the old (legacy) messages created before ADR-118.
+> - The **`usage` of the final message is the total cost of the whole turn** (all LLM calls of the turn, ADR-102), while `step.finished.usage` is the cost of **its** step; the sum of the step costs = the turn cost (the Prometheus metrics are unchanged). The subagent cost (`metadata.subagents`) is counted separately.
+> - The **step limit** (`AgentDefinition.maxSteps`) does not create a separate message: it is **one more ordinary step** of the cycle (the tools stay in the request, `tool_choice: 'none'`, the “text only” instruction arrives as a synthetic assistant prefill), so no extra second message appears in the turn history (see §5.5 “Main-agent step limit”).
 
 ### 5.7 Queue — `/api/v2/queue`
 

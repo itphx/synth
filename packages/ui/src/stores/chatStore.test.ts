@@ -245,7 +245,7 @@ describe('chatStore: upsertMessage (ADR-118 §7 — адресация по id)'
 })
 
 // ---------------------------------------------------------------------------
-// 2. Части сообщений: upsertPart / appendPartDelta / patchPartData / clearParts
+// 2. Части сообщений: upsertPart / appendPartDelta / patchPartData
 // ---------------------------------------------------------------------------
 
 describe('chatStore: части сообщений (ADR-118 §4)', () => {
@@ -307,18 +307,6 @@ describe('chatStore: части сообщений (ADR-118 §4)', () => {
     const store = useChatStore.getState()
     store.patchPartData('s1', 'm1', 'missing', { status: 'done' })
     expect(useChatStore.getState().partsBySession['s1']).toBeUndefined()
-  })
-
-  it('clearParts убирает части сообщения, части соседнего сообщения остаются', () => {
-    const store = useChatStore.getState()
-    store.upsertPart('s1', 'm1', 'p1', part({ id: 'p1', text: 'черновик' }))
-    store.upsertPart('s1', 'm2', 'p2', part({ id: 'p2', text: 'финал' }))
-
-    store.clearParts('s1', 'm1')
-
-    const parts = useChatStore.getState().partsBySession['s1']!
-    expect(parts['m1']).toBeUndefined()
-    expect(parts['m2']!['p2']!.text).toBe('финал')
   })
 })
 

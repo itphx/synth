@@ -113,6 +113,12 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
           message: session.currentStream.message,
           agent_role: session.currentStream.agentRole || null,
           cancelled: session.currentStream.cancelled,
+          /**
+           * ADR-118 §10: метка хода живого стрима (`turn_...`) — UI по ней
+           * восстанавливает ход после перезагрузки страницы (группировка
+           * сегментов, индикатор активного хода). Нет хода — `null`.
+           */
+          turn_id: session.currentStream.turnId ?? null,
         }
       : null,
     status: {
@@ -171,7 +177,7 @@ export function serializeMessage(msg: Message, index: number, opts?: SerializeMe
      * ADR-118 §1: идентификатор хода (`turnId`), которому принадлежит
      * сообщение; `step_index` — индекс шага внутри хода (0-based).
      */
-    turn_id: msg.turnId || null,
+    turn_id: msg.turnId ?? null,
     step_index: msg.stepIndex ?? null,
     /** ADR-118 §5: статус сообщения-хода (`streaming`/`completed`/`cancelled`/`error`). */
     status: msg.status || null,

@@ -25,7 +25,7 @@ export interface EventsSseDeps {
  * Зарегистрировать SSE-хаб (`GET /api/v2/events`): подписка на события сессий
  * пользователя (watch-all — для service-key и ADMIN/LEAD, ADR-052 этап IV).
  *
- * ADR-118 §6/§8: кадр несёт `id:` (номер события в пределах сессии) — по нему
+ * ADR-118 §6/§8: кадр несёт `id:` (глобальный номер события) — по нему
  * работает догон (`Last-Event-ID` / `?since`); клиент обязан заявить модель
  * сообщений (`messageModel=2`) — иначе поток не устанавливается (fail-closed).
  */
@@ -79,7 +79,7 @@ export function registerEventsSse(app: Hono, deps: EventsSseDeps): void {
               sentSeq.set(event.sessionId, seq);
             }
             try {
-              // `id:` — номер события в пределах сессии (ADR-118 §6): по нему
+              // `id:` — глобальный номер события (ADR-118 §6): по нему
               // клиент продолжает ленту после переподключения (`Last-Event-ID`).
               const id = typeof event.eventSeq === 'number' ? `id: ${event.eventSeq}\n` : '';
               const line = `${id}data: ${JSON.stringify(event)}\n\n`;

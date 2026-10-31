@@ -116,14 +116,24 @@ export function parseSinceParam(raw: string | null | undefined): number | null {
  * Каждый подписчик получает все события сессии через callback.
  *
  * ADR-118: адресная доставка (`recipient`), монотонная нумерация событий
- * в пределах сессии (`eventSeq`) и журнал событий (кольцевой буфер) для
+ * в пределах инстанса (`eventSeq`) и журнал событий (кольцевой буфер) для
  * догона по `Last-Event-ID` / `?since`.
  */
 export class EventBus {
   private _subscribers = new Map<string, Set<BusSubscriber>>();
   private _globalSubscribers = new Set<EventHandler>();
-  /** ADR-118: счётчик событий по сессиям (монотонный, стартует с 1). */
+  /** ADR-118: номер последнего события **сессии** (`latestEventSeq`). */
   private _seq = new Map<string, number>();
+  /**
+   * ADR-118 §6: глобальный счётчик событий инстанса — `eventSeq` монотонен
+   * **в пределах инстанса** (по всем сессионным каналам), а не по сессии.
+   *
+   * Клиент на реконнекте передаёт в `since` максимум по всем сессиям, а
+   * сервер отдаёт журнал по всем журналам: при per-session нумерации события
+   * «хвостовой» сессии (номер ≤ глобального максимума) терялись — догон
+   * молча пропускал `step.*`/`part.*`/`turn.*` другой сессии.
+   */
+  private _globalSeq = 0;
   /** ADR-118: журнал событий по сессиям (кольцевой буфер). */
   private _journal = new Map<string, BusEvent[]>();
 
@@ -186,7 +196,7 @@ export class EventBus {
    *
    * ADR-118 §4: `opts.recipient` — адресная доставка (подписчик с другим
    * `userId` событие не получает). ADR-118 §6: событие получает монотонный
-   * `eventSeq` в пределах сессии и попадает в журнал (догон).
+   * `eventSeq` в пределах инстанса и попадает в журнал (догон).
    */
   publish(
     sessionId: string,
@@ -206,7 +216,8 @@ export class EventBus {
    * подписчиков — нормальное состояние (никто не смотрит в UI).
    *
    * ADR-118: инстансные события **не** нумеруются и **не** попадают в
-   * журнал сессий — `eventSeq` монотонен в пределах сессии.
+   * журнал сессий — `eventSeq` монотонен в пределах инстанса (только по
+   * сессионным каналам).
    */
   publishInstance(type: EventType, data: Record<string, unknown> = {}): void {
     this._publish(INSTANCE_EVENT_CHANNEL, type, data, false);
@@ -229,16 +240,19 @@ export class EventBus {
       ...(opts.recipient ? { recipient: opts.recipient } : {}),
     };
 
-    // ADR-118 §6: нумерация события в пределах сессии + журнал (догон).
+    // ADR-118 §6: нумерация события + журнал (догон). Номер **глобальный** для
+    // инстанса (монотонен по всем сессионным каналам) — иначе клиентский
+    // `since` (максимум по всем сессиям) отсекал события «хвостовой» сессии.
     // Инстансный канал в журнал сессий не попадает и номера не получает.
     if (!isInstanceChannel) {
-      const counter = this._seq.get(sessionId) ?? 0;
       const explicit = typeof opts.eventSeq === 'number' && Number.isSafeInteger(opts.eventSeq) && opts.eventSeq > 0
         ? opts.eventSeq
         : undefined;
       // Явный номер (проброс из удалённого источника) не должен ломать
-      // локальную монотонность — берём максимум из обоих.
-      const seq = explicit !== undefined ? Math.max(counter + 1, explicit) : counter + 1;
+      // локальную монотонность — берём максимум из обоих; глобальный счётчик
+      // двигается до выданного номера.
+      const seq = explicit !== undefined ? Math.max(this._globalSeq + 1, explicit) : this._globalSeq + 1;
+      this._globalSeq = seq;
       this._seq.set(sessionId, seq);
       event.eventSeq = seq;
       this._appendToJournal(sessionId, event);
@@ -321,8 +335,8 @@ export class EventBus {
   /**
    * ADR-118 §6: события журнала **всех** сессий строго после `afterSeq`.
    * Для глобального SSE-хаба, где клиент подписан на все сессии: номер
-   * события монотонен **в пределах сессии**, поэтому порядок между сессиями
-   * — по номеру (сортировка приблизительная для разных сессий).
+   * события глобальный и монотонный в пределах инстанса, поэтому сортировка
+   * по номеру даёт **точный** порядок между сессиями (а не приблизительный).
    */
   journalSince(afterSeq: number): BusEvent[] {
     const out: BusEvent[] = [];
@@ -335,7 +349,11 @@ export class EventBus {
     return out;
   }
 
-  /** ADR-118 §6: номер последнего события сессии (0 — событий не было). */
+  /**
+   * ADR-118 §6: номер последнего события **этой сессии** (0 — событий не
+   * было). Номер глобальный (сквозной по инстансу), но хранится по сессии:
+   * это последний номер, выданный событию данной сессии.
+   */
   latestEventSeq(sessionId: string): number {
     return this._seq.get(sessionId) ?? 0;
   }

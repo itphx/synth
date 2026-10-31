@@ -217,7 +217,7 @@ describe('EventBus — eventSeq и журнал событий (ADR-118 §6)', (
     bus = new EventBus();
   });
 
-  it('eventSeq монотонен в пределах сессии и начинается с 1', () => {
+  it('eventSeq монотонен в пределах инстанса и начинается с 1', () => {
     const handler = vi.fn();
     bus.subscribe('s1', handler);
 
@@ -230,20 +230,23 @@ describe('EventBus — eventSeq и журнал событий (ADR-118 §6)', (
     expect(bus.latestEventSeq('s1')).toBe(3);
   });
 
-  it('нумерация различается у разных сессий', () => {
+  it('нумерация сквозная по сессиям: счётчик не сбрасывается на другой сессии', () => {
     const a = vi.fn();
     const b = vi.fn();
     bus.subscribe('s1', a);
     bus.subscribe('s2', b);
 
     bus.publish('s1', 'part.delta', {});
-    bus.publish('s1', 'part.delta', {});
     bus.publish('s2', 'part.delta', {});
+    bus.publish('s1', 'part.delta', {});
 
+    // Номера глобальные: A=1, B=2, A=3 (не 1/1/2 как при per-session).
     expect((a.mock.calls[0]?.[0] as BusEvent).eventSeq).toBe(1);
-    expect((a.mock.calls[1]?.[0] as BusEvent).eventSeq).toBe(2);
-    expect((b.mock.calls[0]?.[0] as BusEvent).eventSeq).toBe(1);
-    expect(bus.latestEventSeq('s2')).toBe(1);
+    expect((b.mock.calls[0]?.[0] as BusEvent).eventSeq).toBe(2);
+    expect((a.mock.calls[1]?.[0] as BusEvent).eventSeq).toBe(3);
+    // latestEventSeq — номер последнего события **этой** сессии.
+    expect(bus.latestEventSeq('s1')).toBe(3);
+    expect(bus.latestEventSeq('s2')).toBe(2);
   });
 
   it('инстансные события не нумеруются и не попадают в журнал сессий', () => {
@@ -256,6 +259,32 @@ describe('EventBus — eventSeq и журнал событий (ADR-118 §6)', (
     expect(event.eventSeq).toBeUndefined();
     expect(bus.latestEventSeq(INSTANCE_EVENT_CHANNEL)).toBe(0);
     expect(bus.journalSince(0)).toHaveLength(0);
+  });
+
+  it('инстансный канал не двигает глобальный счётчик', () => {
+    bus.publish('s1', 'part.delta', {});
+    bus.publishInstance('pipeline.run.started', { runId: 'r1' });
+    bus.publish('s1', 'part.delta', {});
+
+    // Номера сессионных событий идут подряд: инстансное событие номера не
+    // получает и счётчик не занимает.
+    expect(bus.latestEventSeq('s1')).toBe(2);
+  });
+
+  it('явный eventSeq из удалённого источника не уменьшает глобальный счётчик', () => {
+    const handler = vi.fn();
+    bus.subscribe('s1', handler);
+
+    bus.publish('s1', 'part.delta', {});
+    // Явный номер меньше локального — берётся локальный счётчик (+1).
+    bus.publish('s1', 'part.delta', {}, { eventSeq: 1 });
+    // Явный номер больше локального — счётчик прыгает вперёд.
+    bus.publish('s1', 'part.delta', {}, { eventSeq: 50 });
+    bus.publish('s1', 'part.delta', {});
+
+    const seqs = handler.mock.calls.map((call) => (call[0] as BusEvent).eventSeq);
+    expect(seqs).toEqual([1, 2, 50, 51]);
+    expect(bus.latestEventSeq('s1')).toBe(51);
   });
 
   it('since возвращает события строго после указанного номера', () => {
@@ -284,12 +313,26 @@ describe('EventBus — eventSeq и журнал событий (ADR-118 §6)', (
     bus.publish('s2', 'part.delta', { n: 2 });
     bus.publish('s1', 'part.delta', { n: 3 });
 
-    // Номер события монотонен **в пределах сессии**: у s2 своя нумерация,
-    // поэтому в глобальном журнале после номера 1 остаётся только событие s1.
+    // Номер события глобальный: s1=1, s2=2, s1=3 — догон по `since`
+    // возвращает события **всех** сессий после номера, без разрыва.
     expect(bus.journalSince(0)).toHaveLength(3);
     const all = bus.journalSince(1);
-    expect(all).toHaveLength(1);
+    expect(all).toHaveLength(2);
     expect(all.every((e) => (e.eventSeq ?? 0) > 1)).toBe(true);
+    // Порядок между сессиями — точный (по глобальному номеру).
+    expect(all.map((e) => e.data.n)).toEqual([2, 3]);
+  });
+
+  it('journalSince после номера сессии не теряет события других сессий', () => {
+    // Регрессия: при per-session нумерации клиентский `since` (максимум по
+    // всем сессиям) отсекал события «хвостовой» сессии.
+    bus.publish('s1', 'part.delta', { n: 1 });
+    bus.publish('s1', 'part.delta', { n: 2 });
+    bus.publish('s2', 'part.delta', { n: 3 });
+
+    const after = bus.journalSince(2);
+    expect(after).toHaveLength(1);
+    expect((after[0] as BusEvent).data.n).toBe(3);
   });
 
   it('журнал ограничен размером кольцевого буфера', () => {

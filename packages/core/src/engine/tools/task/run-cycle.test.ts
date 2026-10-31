@@ -1734,3 +1734,68 @@ describe('run-cycle — закрытие шага ребёнка и отчёт �
     expect(steps[0]!.data.messageId).toBeTruthy();
   });
 });
+
+/**
+ * ADR-118 §1: отчёт ребёнка «монолитный» — он несёт ВСЕ размышления прогона
+ * и сводку вызовов. Поэтому шаг ребёнка, у которого нет видимого текста
+ * (только reasoning), прячется маркером `tool_chain` — иначе размышления
+ * дублировались бы (скрытый шаг + отчёт).
+ */
+describe('run-cycle — видимость шага ребёнка и монолитный отчёт (ADR-118 §1)', () => {
+  it('шаг только с reasoning скрыт (tool_chain), отчёт несёт все reasoning и tool_results', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [{
+        isFinal: true,
+        content: '',
+        reasoning: 'размышление шага',
+        toolCalls: [{ id: 'c1', function: { name: 'noop', arguments: '{}' } }],
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        model: 'test-model',
+      }],
+      [{
+        isFinal: true,
+        content: 'Отчёт ребёнка',
+        reasoning: 'размышление финала',
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        model: 'test-model',
+      }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('Отчёт ребёнка');
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const assistants = saved.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistants.length).toBe(2);
+
+    // Шаг с вызовом, но без текста (только reasoning) — служебный: прячем.
+    const step = assistants.find((m) => (m.toolCalls?.length ?? 0) > 0)!;
+    expect(step).toBeDefined();
+    expect(step.content).toBe('');
+    expect(step.metadata?.tool_chain).toBe(true);
+
+    // Отчёт ребёнка — «монолитный»: все размышления прогона + сводка вызовов.
+    const report = assistants.find((m) => (m.toolCalls?.length ?? 0) === 0)!;
+    expect(report.content).toBe('Отчёт ребёнка');
+    expect(report.reasoning).toContain('размышление шага');
+    expect(report.reasoning).toContain('размышление финала');
+    const toolResults = report.metadata?.tool_results as Array<{
+      name?: string;
+      result?: { content?: string };
+    }> | undefined;
+    expect(toolResults).toBeDefined();
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults![0]!.name).toBe('noop');
+    expect(toolResults![0]!.result?.content).toContain('noop ok');
+  });
+});

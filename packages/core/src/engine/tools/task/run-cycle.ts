@@ -1154,7 +1154,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // Маркер `tool_chain` — только для сообщений БЕЗ видимого текста:
           // шаг с текстом — реальный ответ агента, и его нельзя скрывать от
           // транскрипта (после перезагрузки страницы ответ пропадает).
-          const stepVisible = hasVisibleStepContent(accumulatedContent || '', stepParts);
+          // ADR-118 §1: отчёт ребёнка «монолитный» (несёт все размышления
+          // прогона в финальном сообщении) — поэтому reasoning **не** считается
+          // видимым контентом шага: шаг с одним лишь reasoning прячется, иначе
+          // размышления дублировались бы (шаг + отчёт).
+          const stepVisible = hasVisibleStepContent(accumulatedContent || '', stepParts, {
+            includeReasoning: false,
+          });
           const assistantMsg: Message = {
             id: stepMessageId,
             role: MessageRole.ASSISTANT,

@@ -30,7 +30,8 @@ import type { UsageCost } from '../../../providers/usage.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
 import type { ModelRouter, RoutingDecision } from '../../router/router.js';
-import type { SaveAssistantMessageFn, AssistantMessageStatus } from '../persistence.js';
+import type { SaveAssistantMessageFn, AssistantMessageStatus, ExistingMessageRef } from '../persistence.js';
+import { addTokenUsage } from '../usage.js';
 import type { ProviderOverrides } from '../routing.js';
 import { autoTitleSession } from '../../../sessions/auto-title.js';
 import { isUserDialogueMessage } from '../../../sessions/user-messages.js';
@@ -81,6 +82,15 @@ export interface ProcessFinalizeState {
   lastChunkModel: string | undefined;
   finalModel: string | undefined;
   finalUsage: TokenUsage;
+  /**
+   * ADR-102: расход **хода** — сумма расходов всех шагов (итераций) хода.
+   *
+   * `finalUsage` — расход только последнего вызова LLM (последней итерации):
+   * с ADR-118 шаг = отдельный вызов LLM, поэтому в историю/счётчики сессии/
+   * аналитику шёл только он, а расход промежуточных шагов терялся. В
+   * финальное (или отменённое) сообщение пишется именно `turnUsage`.
+   */
+  turnUsage: TokenUsage;
   finalContent: string;
   /** metadata.i18n подставленного финального фоллбека (лимит/deny/пустой ответ). */
   fallbackI18n: ReturnType<typeof i18nMeta> | undefined;
@@ -106,15 +116,13 @@ export interface ProcessFinalizeState {
   stepLimitExecuted?: boolean;
   lastIterationPromptChars: number;
   allReasoning: ReasoningBlock[];
-  allIntermediateTexts: Array<{ text: string; iteration: number }>;
-  allToolCalls: Array<Record<string, unknown>>;
   /**
-   * Anthropic: подпись thinking-блока финального сообщения и opaque-данные
-   * `redacted_thinking`. Заполняется, только когда `reasoning` финального
-   * сообщения — текст ровно одного блока (при склейке нескольких блоков подпись
-   * принадлежит последнему — реплеить её с общим текстом нельзя).
+   * Legacy: сводка текстов промежуточных шагов. Для сообщений **хода**
+   * (`step.turnId` задан) не пишется — тексты шагов живут в сообщениях своих
+   * шагов (ADR-118 §1). Осталось для legacy-путей (сообщения без хода).
    */
-  finalReasoningMeta?: { signature?: string; redacted?: string[] };
+  allIntermediateTexts?: Array<{ text: string; iteration: number }>;
+  allToolCalls: Array<Record<string, unknown>>;
   currentMessages: LLMMessage[];
   promptMeta: PromptMeta;
   loadedTokenRatio: number | undefined;
@@ -154,6 +162,13 @@ export interface ProcessFinalizeState {
    * `step.started`/`step.finished` и `part.*`).
    */
   finalStepMessageId?: string;
+  /**
+   * ADR-118 §1: запись сообщения шага-лимита уже сохранена (шаг с вызовами
+   * инструментов) — финализация **дополняет** её (статус/usage/metadata),
+   * а не создаёт вторую запись с тем же текстом (в ленте был дубль «шаг +
+   * финал»). Не задано — обычное поведение (создание/обновление записи).
+   */
+  stepLimitStepRecord?: { id: string; seq: number } | null;
 }
 
 /** Зависимости эпилога `_processMessage`. */
@@ -169,10 +184,6 @@ export interface ProcessFinalizeDeps {
     provider: BaseProvider | undefined,
     session: Session,
   ) => string | undefined;
-  joinAccumulatedTexts: (
-    intermediateTexts: Array<{ text: string; iteration: number }>,
-    current: string,
-  ) => string;
   estimateUsage: (
     usage: TokenUsage | undefined,
     promptChars: number,
@@ -316,13 +327,31 @@ export async function runProcessFinalize(
     hadDeny, routingDecision, effectiveReasoningLevel,
     roleBlocked, roleBlockedTool, roleBlockedAgent,
     currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft, outboundParts,
-    finalReasoningMeta,
     // ADR-118 §1: ход и финальный шаг.
-    turnId, finalStepIndex, finalStepMessageId,
+    turnId, finalStepIndex, finalStepMessageId, stepLimitStepRecord,
   } = state;
-  let { finalContent, finalModel, finalUsage, fallbackI18n } = state;
+  let { finalContent, finalModel, finalUsage, turnUsage, fallbackI18n } = state;
   /** Шаг-лимит реально исполнялся (синтетический assistant-префилл в запросе). */
   const stepLimitReached = state.stepLimitExecuted === true;
+
+  /**
+   * ADR-118 §1: «финал хода = последний шаг» — финальное сообщение несёт
+   * размышления **только финальной итерации**. Размышления прошлых шагов
+   * лежат в их сообщениях — в финале они были бы дублем (в ленте UI
+   * повторялись одни и те же блоки reasoning).
+   */
+  const finalReasoningBlocks = allReasoning.filter((r) => r.iteration === finalStepIndex);
+  /**
+   * Anthropic: подпись thinking-блока (и opaque `redacted_thinking`) — валидна
+   * только для своего текста, поэтому берётся у блока **финальной** итерации.
+   * Осмысленна при ровно одном блоке (склейка нескольких — подпись в частях).
+   */
+  const finalReasoningMeta = finalReasoningBlocks.length === 1
+    ? {
+      signature: finalReasoningBlocks[0]!.signature,
+      redacted: finalReasoningBlocks[0]!.redacted ? [finalReasoningBlocks[0]!.redacted] : undefined,
+    }
+    : undefined;
 
   // ADR-104 (решение 2026-10-28): ход заканчивается — снимаем неприменённые
   // инъекции из очереди. Границы шага больше не будет, поэтому сообщение,
@@ -373,20 +402,36 @@ export async function runProcessFinalize(
     // fallback на provider.model/session.settings.model для cost.
     const cancelModel = deps.resolveMessageModel(lastChunkModel, finalModel, provider, session);
 
-    const partialContent = deps.joinAccumulatedTexts(allIntermediateTexts, '');
+    /**
+     * ADR-118 §1: тексты шагов уже сохранены их сообщениями (шаг = сообщение),
+     * а `currentDraft` в этой ветке `null` (черновик закрыт финализацией
+     * шага) — поэтому в сообщении отмены текста нет: иначе UI показал бы
+     * дубль (текст шага + текст финала).
+     *
+     * Единое правило отмены: текст не теряется ни в одной ветке —
+     *  - отмена **внутри** шага (цикл) — текст текущей итерации остаётся в
+     *    сообщении отмены (черновик обновляется на месте);
+     *  - отмена **между** шагами (эта ветка) — тексты завершённых шагов
+     *    лежат в их сообщениях, сообщение отмены несёт только статус и
+     *    статистику.
+     */
+    const partialContent = '';
 
     // Bug 3/4: usage/duration/cost в событии отмены + best-effort оценка
     // usage (metadata.usage_estimated) при пустом usage.
+    //
+    // ADR-102: расход хода (сумма шагов) — не только последний вызов.
     const cancelDurationMs = Date.now() - streamStartedAt;
     const cancelEstimated = deps.estimateUsage(
-      finalUsage,
+      turnUsage,
       lastIterationPromptChars,
       partialContent.length,
     );
     const cancelCost = deps.computeMessageCost(cancelModel, cancelEstimated.usage);
 
-    // Промежуточные тексты уже вошли в partialContent — как в ветке отмены
-    // выше, НЕ дублируем их в metadata.intermediate_text_blocks.
+    // Промежуточные тексты в сообщении отмены не дублируем: они живут в
+    // сообщениях своих шагов (ADR-118 §1), а `metadata.intermediate_text_blocks`
+    // для сообщений хода не пишется вовсе.
     // Сообщение сохраняем всегда (в т.ч. при пустом контенте) — статус и
     // статистика отмены не должны теряться.
     //
@@ -396,7 +441,7 @@ export async function runProcessFinalize(
     // отмены получает свой id — иначе в истории были бы две записи с одним id.
     await deps.saveAssistantMessage(
       session.id, partialContent, streamId, effectiveAgentRole,
-      cancelEstimated.usage, cancelModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
+      cancelEstimated.usage, cancelModel, finalReasoningBlocks.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
       MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
       undefined, undefined,
       {
@@ -413,7 +458,8 @@ export async function runProcessFinalize(
       // последнему блоку).
       finalReasoningMeta,
       // Блоки reasoning со своими подписями — в `parts` сообщения (мульти-блок).
-      allReasoning,
+      // ADR-118 §1: только финальная итерация (как у обычного финала).
+      finalReasoningBlocks,
       // ADR-118 §1/§5: ход, шаг и терминальный статус сообщения.
       // `messageId` — идентификатор сообщения шага; передаём его, только
       // если записи с таким id в истории ещё нет (`isStepMessageIdFree`):
@@ -518,7 +564,12 @@ export async function runProcessFinalize(
               finalContent = fbResponse.content;
               qaPass = true;
               qaReason = sm('router.escalation', { provider: fallbackProvider, model: fallbackModel, reason: qaResult.reason });
-              if (fbResponse.usage) finalUsage = fbResponse.usage;
+              if (fbResponse.usage) {
+                // ADR-102: эскалация — отдельный вызов LLM, его расход — часть
+                // расхода хода (в сумму шагов он не входит).
+                finalUsage = fbResponse.usage;
+                turnUsage = addTokenUsage(turnUsage, fbResponse.usage);
+              }
               if (fbResponse.model) finalModel = fbResponse.model;
             }
           } catch (fbErr) {
@@ -554,8 +605,12 @@ export async function runProcessFinalize(
   // ADR-070 §2.6: полная длительность прогона (включая tool-chain) и
   // стоимость по цене модели — в metadata финального сообщения и stream.done.
   const durationMs = Date.now() - streamStartedAt;
-  const messageCost = deps.computeMessageCost(finalModel, finalUsage);
-  const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
+  // ADR-102: стоимость и usage финального сообщения — по расходу **хода**
+  // (сумма шагов), а не только последнего вызова LLM.
+  const messageCost = deps.computeMessageCost(finalModel, turnUsage);
+  // ADR-118 §1: reasoning финального сообщения — только финальная итерация
+  // (размышления прошлых шагов лежат в их сообщениях).
+  const reasoningJoined = finalReasoningBlocks.map((r) => r.text).join('\n\n---\n\n');
   // ADR-118 §1: id сообщения шага передаём всегда — решение «свой id или id
   // шага» принимает `saveAssistantMessage` (по факту наличия записи в
   // истории):
@@ -567,15 +622,24 @@ export async function runProcessFinalize(
   //    (`step.started`/`step.finished` адресуют то же сообщение).
   // Обновление существующего черновика идёт через `existing` — его id и так
   // сохраняется.
+  //
+  // ADR-118 §1: **шаг-лимит** — запись шага (шаг с вызовами инструментов) уже
+  // сохранена и несёт текст ответа и вызовы. Финализация её **дополняет**
+  // (`keepContent`): статус/usage/metadata обновляются, содержимое — нет.
+  // Иначе в ленте было бы два сообщения с одинаковым текстом/reasoning
+  // (запись шага + новая финальная запись).
+  const finalExisting: ExistingMessageRef | undefined = stepLimitReached && stepLimitStepRecord
+    ? { ...stepLimitStepRecord, keepContent: true }
+    : currentDraft ?? undefined;
   const savedMessageId = await deps.saveAssistantMessage(
     session.id, finalContent, streamId, effectiveAgentRole,
-    finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
+    turnUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
     MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
     qaPass, qaReason,
     { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), ...(stepLimitReached ? { step_limit_reached: true } : {}), duration_ms: durationMs },
     promptMeta,
     messageCost,
-    currentDraft ?? undefined,
+    finalExisting,
     // ADR-115 (outbound): медиа-части ответа (`send_attachment`) — в историю
     // финального сообщения и, через него, в `stream.done.attachments`.
     outboundParts,
@@ -583,7 +647,8 @@ export async function runProcessFinalize(
     // отвергается API (thinking не возвращён в историю).
     finalReasoningMeta,
     // Блоки reasoning со своими подписями — в `parts` сообщения (мульти-блок).
-    allReasoning,
+    // ADR-118 §1: только финальная итерация.
+    finalReasoningBlocks,
     // ADR-118 §1/§5: ход, шаг и терминальный статус сообщения.
     // `messageId` — идентификатор сообщения шага (решение о «своём id»
     // принимает `saveAssistantMessage`).
@@ -598,6 +663,8 @@ export async function runProcessFinalize(
   // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
   // после успешного хода. promptChars — тот же расчёт, что уходил в провайдер
   // (последняя итерация), ratio — уже загруженный в этом ходе.
+  // Ratio считается по **последней** итерации (`finalUsage`): сумма расходов
+  // хода (`turnUsage`) не сопоставима с размером промпта одной итерации.
   await deps.calibrateTokenRatio(
     finalModel,
     lastIterationPromptChars,
@@ -615,10 +682,12 @@ export async function runProcessFinalize(
   // ADR-118 §4: `stream.done` удалён без dual-emit — финальный шаг закрывает
   // `step.finished` (статус, расход, вложения ответа, отладочные данные,
   // тайминги), ход — `turn.finished`.
-  const messageStatus = deps.resolveAssistantStatus(
-    false,
-    fallbackI18n ? { i18n: fallbackI18n } : undefined,
-  );
+  // ADR-118 §1: шаг-лимит — статус хода `limit` (ход остановлен лимитом
+  // шагов), даже если модель успела дать свой текст.
+  const messageStatus = deps.resolveAssistantStatus(false, {
+    ...(fallbackI18n ? { i18n: fallbackI18n } : {}),
+    ...(stepLimitReached ? { step_limit_reached: true } : {}),
+  });
 
   // ADR-115 (outbound): вложения финального ответа — метаданные без байтов.
   // Байты шлюз забирает по sha (`GET /api/v2/attachments/:sha256`), доступ к
@@ -638,6 +707,8 @@ export async function runProcessFinalize(
     // второй пузырь).
     messageId: savedMessageId,
     status: stepStatusFromMessageStatus(messageStatus),
+    // ADR-118 §4: `step.finished` несёт расход **своего шага** (не хода):
+    // сумма по шагам = расход хода (метрики Prometheus не меняются).
     usage: finalUsage,
     provider: providerName,
     ...(finalModel ? { model: finalModel } : {}),

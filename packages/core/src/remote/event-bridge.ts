@@ -229,7 +229,7 @@ export class RemoteEventBridge {
     const rewrittenData = this._rewriteData(data);
 
     // ADR-118: при переносе удалённого события сохраняем `eventSeq`
-    // (нумерация событий в пределах сессии — догон) и `recipient`
+    // (глобальная нумерация событий — догон) и `recipient`
     // (адресная доставка).
     const event: BusEvent = {
       type: type as EventType,

@@ -21,7 +21,7 @@ export function useRetryCountdown(retryInMs: number): number {
 
 /**
  * Статус повторной попытки + кнопки-иконки «Повторить сейчас» / «Отменить».
- * Используется в «крутилке» (StreamingPlaceholder) и в user-сообщении,
+ * Используется в живом сегменте ответа (индикатор «идёт») и в user-сообщении,
  * когда активный стрим ещё не получил ни одного чанка.
  */
 export function RetryStatus({

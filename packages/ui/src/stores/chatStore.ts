@@ -132,6 +132,14 @@ export interface ActiveTurn {
   agentRole?: string | null
   model?: string
   provider?: string
+  /**
+   * Контент хода начался (ADR-118 §5): пришла первая часть ответа.
+   *
+   * Пока флаг не выставлен, индикатор «идёт» живёт **у реплики пользователя**
+   * (плашка «обработка»/«повтор»); после первой части — в живом сегменте
+   * ответа. Флаг не сбрасывается между шагами хода: контент хода уже был.
+   */
+  contentStarted?: boolean
 }
 
 export interface LiveToolCall {
@@ -405,9 +413,6 @@ interface ChatStore {
     partId: string,
     patch: Record<string, unknown>,
   ) => void
-  /** Снять части сообщения (черновик больше не нужен). */
-  clearParts: (sessionId: string, messageId: string) => void
-
   /** ADR-118 §1: начало хода. */
   startTurn: (sessionId: string, turn: ActiveTurn) => void
   /** ADR-118 §1: терминальный статус хода. */
@@ -644,15 +649,6 @@ export const useChatStore = create<ChatStore>((set) => ({
           },
         },
       }
-    }),
-
-  clearParts: (sessionId, messageId) =>
-    set((s) => {
-      const sessionParts = s.partsBySession[sessionId]
-      if (!sessionParts || !sessionParts[messageId]) return s
-      const nextSession = { ...sessionParts }
-      delete nextSession[messageId]
-      return { partsBySession: { ...s.partsBySession, [sessionId]: nextSession } }
     }),
 
   patchPartData: (sessionId, messageId, partId, patch) =>
