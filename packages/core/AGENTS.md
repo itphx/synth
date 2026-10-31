@@ -293,6 +293,8 @@
 
 ## Поток сообщений v2 (ADR-118)
 
+Полная спецификация цикла обработки сообщений (приём → очередь → ход/шаги → финал, события, индикаторы, сценарии, карта файлов) — [../../docs/MESSAGE_FLOW.md](../../docs/MESSAGE_FLOW.md).
+
 Модель хода: `Turn` (ход) → `Step` (один вызов LLM = **одно assistant-сообщение**) → `Part`.
 Контракты — `shared/types/message-stream.ts` (`PromptAcceptedResponse`, `MessageStatus`,
 `TurnStatus`, payload'ы событий, `InstanceCapabilities`, `supportsMessageModel`,
@@ -655,10 +657,11 @@
   подпути `/agents` — локальны). `server/serialize.ts` отдаёт в `status` сессии
   `cancel_requested`/`cancel_requested_at` (ADR-005); `server/routes/sessions.ts` —
   `POST /:id/abort` (надёжный «Стоп»: персистентный флаг + graceful `orchestrator.cancel`
-  + `QueueProcessorManager.requestStop`; без процессора флаг снимается; плюс
-  `BackgroundRunService.stopBySession` — останавливает и живые прогоны дочерних сессий,
-  фоновых саб-агентов и их процессы, дерево `parentId` до глубины 5, best-effort —
-  решение 2026-10-28).
+  + `QueueProcessorManager.requestStop`; без процессора флаг снимается; **только активный ход** —
+  фоновые процессы/фоновые (detached/background) саб-агенты продолжают работу и останавливаются
+  отдельно (`POST /processes/:id/stop`, «Стоп» дочерней сессии); решение 2026-10-31, взамен
+  2026-10-28; `BackgroundRunService.stopBySession` из роута не вызывается — метод оставлен
+  публичным API сервиса).
   Там же `POST /:id/permissions/:approvalId` — **HTTP-ответ на подтверждение**
   (`permission.asked`) для SSE/не-WS клиентов: то же решение, что у WS-кадра
   `permission_reply` (при подключённом реестре — `ApprovalRegistry.claim`,
@@ -1712,7 +1715,9 @@
   `timeout`).
 - `engine/background/*` — ADR-111 (этап 1 roadmap 0.13 — блок 1.2): единый реестр фоновой
   работы. `service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/
-  `stopBySession`/`recoverOnStart`/`prune`/`buildSubagentNotification`; лимиты сессии — `background.*`
+  `stopBySession`/`recoverOnStart`/`prune`/`buildSubagentNotification`; `stopBySession` (обход дерева
+  `parentId`, глубина ≤ 5, только `running`) — публичный API сервиса, но «Стоп» сессии его больше
+  **не** вызывает (решение 2026-10-31: прерывается только активный ход); лимиты сессии — `background.*`
   (считаются только по **живым** `running`-прогонам: терминальные записи — история реестра, её
   чистит retention, и лимит она не занимает; `maxRunsPerSession` — общий потолок одновременно идущих
   прогонов обоих видов);

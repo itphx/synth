@@ -149,6 +149,9 @@ const MATRIX: Row[] = [
   row('sessions', 'GET', '/:id/stats'),
   row('sessions', 'POST', '/:id/prompt', { status: 400 }), // пустое тело → VALIDATION_ERROR
   row('sessions', 'GET', '/:id/messages'),
+  // ADR-118: одно сообщение истории (точечная догрузка) — правило чтения сессии;
+  // неизвестный id → 404 (объект не раскрывается).
+  row('sessions', 'GET', '/:id/messages/:messageId', { status: 404 }),
   row('sessions', 'POST', '/:id/clear'),
   row('sessions', 'POST', '/:id/abort'),
   // ADR-111 §detach: перевод идущих блокирующих прогонов в фон — мутация
@@ -224,6 +227,8 @@ const MATRIX: Row[] = [
   row('queue', 'POST', '/:sessionId/resume'),
   row('queue', 'POST', '/:sessionId/retry-now'),
   row('queue', 'POST', '/:sessionId/cancel-retry'),
+  // ADR-118: reorder — мутация (право изменения содержимого); пустое/невалидное тело → 400.
+  row('queue', 'POST', '/:sessionId/reorder', { status: 400 }),
 ];
 
 const PREFIX: Record<Base, string> = {

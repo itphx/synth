@@ -5,11 +5,12 @@
  * ADR-095 (шаг 5): вынесено из `task.ts` без изменения поведения.
  */
 import { nowISO } from '@itphx/synth-shared';
-import type { Message, Session, TokenUsage } from '@itphx/synth-shared';
+import type { EventType, Message, Session, TokenUsage, TurnStatus } from '@itphx/synth-shared';
 import type { EventBus } from '../../../events/bus.js';
 import { serializeMessage, serializeSession } from '../../../server/serialize.js';
 import { computeCacheHitRate, computeUsageCost } from '../../../providers/usage.js';
 import type { AssistantMessageStatus } from '../../orchestrator.js';
+import { publishTurnFinished } from '../../orchestrator/turn-events.js';
 import type { TaskExtra } from './types.js';
 
 export async function publishMessageAdded(
@@ -54,8 +55,15 @@ export interface ChildSessionLifecycleOptions {
 }
 
 export interface ChildSessionLifecycle {
-  /** Финализация дочерней сессии: `updatedAt` + терминальные события для UI. */
-  finalize(): Promise<void>;
+  /**
+   * Финализация дочерней сессии: `updatedAt`, снятие маркера активного
+   * прогона (`currentStream`) и терминальные события хода для UI.
+   *
+   * `status` — терминальный статус хода ребёнка (`turn.finished`, ADR-118):
+   * обычное завершение — `completed`, ошибка провайдера — `error`, «Стоп» —
+   * `cancelled`. По умолчанию — `completed`.
+   */
+  finalize(status?: TurnStatus): Promise<void>;
   /** Добавить сообщение в дочернюю сессию + опубликовать события. */
   addMessage(msg: Message): Promise<void>;
   /** Session-счётчики usage дочерней сессии — ровно один раз на прогон. */
@@ -72,20 +80,39 @@ export interface ChildSessionLifecycle {
 export function createChildSessionLifecycle(opts: ChildSessionLifecycleOptions): ChildSessionLifecycle {
   const { childSessionId, parentSessionId, extra, usage, getModel } = opts;
 
+  /**
+   * `streamId` прогона: у blocking-прогона — родительский ход, у
+   * переведённого в фон — собственный (поле `extra` мутируется при detach,
+   * ADR-111 §detach). Маркер `currentStream` снимается только **свой**.
+   */
+  const ownStreamId = (): string => extra.streamId ?? '';
+
   // Финализация дочерней сессии: обновление updatedAt + события для UI.
   // Отдельного статусного поля «завершена/прервана» у сессии нет
   // (SessionStatus — только процессная блокировка blocked/blockedAt),
   // поэтому факт прерывания/ошибки фиксируется metadata-маркерами
   // в сообщениях истории дочерней сессии.
-  const finalize = async (): Promise<void> => {
+  const finalize = async (status: TurnStatus = 'completed'): Promise<void> => {
     if (!childSessionId || !extra.sessionManager) return;
     try {
       const childSession = await extra.sessionManager.getSession(childSessionId);
       if (childSession) {
+        // ADR-118 §10: маркер активного прогона ребёнка снимается только
+        // свой — чужой (новый прогон с другим `streamId`) не трогаем.
+        if (childSession.currentStream && childSession.currentStream.streamId === ownStreamId()) {
+          childSession.currentStream = undefined;
+        }
         childSession.updatedAt = nowISO();
         await extra.sessionManager.updateSession(childSession);
 
         if (extra.eventBus) {
+          // ADR-118 §1/§4: терминальный статус хода ребёнка — открытая
+          // дочерняя сессия гасит живой сегмент и индикатор «идёт»
+          // (`turn.finished` закрывает все `streaming`-сегменты своего хода).
+          publishTurnFinished(
+            (type, data) => extra.eventBus!.publish(childSessionId, type as EventType, data),
+            { turnId: childSessionId, status },
+          );
           // ADR-070 §2.6: терминальное live-событие дочерней сессии. Дочерний
           // саб-агент не публикует stream.start/stream.done, а его live-статистика
           // идёт только stream.usage. Это событие гарантирует, что открытая

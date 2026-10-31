@@ -1010,33 +1010,47 @@ describe('POST /api/v2/sessions/:id/abort — персистентный фла�
     expect(s!.status.cancelRequestedAt).toBeUndefined();
   });
 
-  it('останавливает живые фоновые прогоны сессии, терминальный не трогает', async () => {
+  it('«Стоп» прерывает только активный ход: фоновые прогоны продолжают работу', async () => {
     const background = new BackgroundRunService({
       repository: new MemoryBackgroundRunRepository(),
       eventBus: new EventBus(),
       limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
     });
+    const stopBySession = vi.spyOn(background, 'stopBySession');
     const { app, sessionManager } = makeApp(background);
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
 
-    // Один running, один completed; хэндл отмены регистрируем у обоих —
-    // сервис обязан отбирать по статусу, а не по наличию хэндла.
-    const running = await background.startSubagent({ sessionId: session.id, childSessionId: 'child-1' });
-    const completed = await background.startSubagent({ sessionId: session.id, childSessionId: 'child-2' });
-    await background.finish(completed.id, { status: 'completed', summary: 'ok' });
-    const abortRunning = vi.fn();
-    const abortCompleted = vi.fn();
-    background.registerAbort(running.id, abortRunning);
-    background.registerAbort(completed.id, abortCompleted);
+    const subagent = await background.startSubagent({ sessionId: session.id, childSessionId: 'child-1' });
+    const finished = await background.startSubagent({ sessionId: session.id, childSessionId: 'child-2' });
+    const process = await background.startProcess({ sessionId: session.id, command: 'sleep 60', cwd: '/tmp' });
+    await background.finish(finished.id, { status: 'completed', summary: 'ok' });
+
+    const abortSubagent = vi.fn();
+    const abortFinished = vi.fn();
+    const abortProcess = vi.fn();
+    background.registerAbort(subagent.id, abortSubagent);
+    background.registerAbort(finished.id, abortFinished);
+    background.registerAbort(process.id, abortProcess);
 
     const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'aborted' });
-    expect(abortRunning).toHaveBeenCalledWith('parent_aborted');
-    expect(abortCompleted).not.toHaveBeenCalled();
+
+    // Решение 2026-10-31 (модель opencode): «Стоп» = прерывание активного хода.
+    // Фоновые прогоны (детached-саб-агенты и процессы) не гасятся — их
+    // останавливают явно (`POST /processes/:id/stop`, «Стоп» дочерней сессии).
+    expect(stopBySession).not.toHaveBeenCalled();
+    expect(abortSubagent).not.toHaveBeenCalled();
+    expect(abortFinished).not.toHaveBeenCalled();
+    expect(abortProcess).not.toHaveBeenCalled();
+    expect((await background.get(subagent.id))!.status).toBe('running');
+    expect((await background.get(process.id))!.status).toBe('running');
+    expect((await background.get(finished.id))!.status).toBe('completed');
+
+    stopBySession.mockRestore();
   });
 
-  it('сбой фонового сервиса не ломает ответ (best-effort)', async () => {
+  it('сбой реестра фоновых прогонов не влияет на ответ — abort его не вызывает', async () => {
     const background = new BackgroundRunService({
       repository: new MemoryBackgroundRunRepository(),
       eventBus: new EventBus(),
@@ -1045,17 +1059,15 @@ describe('POST /api/v2/sessions/:id/abort — персистентный фла�
     const stopBySession = vi
       .spyOn(background, 'stopBySession')
       .mockRejectedValue(new Error('реестр недоступен'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { app, sessionManager } = makeApp(background);
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
 
     const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'aborted' });
-    expect(stopBySession).toHaveBeenCalledWith(session.id, 'parent_aborted');
+    expect(stopBySession).not.toHaveBeenCalled();
 
     stopBySession.mockRestore();
-    warn.mockRestore();
   });
 });
 

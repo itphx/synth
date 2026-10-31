@@ -5632,6 +5632,8 @@ export class ChatOrchestrator {
     await this._sessionManager.withLock(childSessionId, async (s) => {
       s.currentStream = {
         streamId,
+        // ADR-118 §10: id хода в UI ребёнка (совпадает с `turn.started` цикла).
+        turnId: childSessionId,
         message: sm('task.resume_marker'),
         agentRole: s.settings.agentRole,
         startedAt: nowISO(),
@@ -5683,6 +5685,9 @@ export class ChatOrchestrator {
         this.unregisterCancelToken(streamId);
         try {
           await this._sessionManager.withLock(childSessionId, async (s) => {
+            // Снимаем только свой маркер (ADR-118 §10): в сессии мог уже
+            // начаться новый ход с другим `streamId`.
+            if (s.currentStream && s.currentStream.streamId !== streamId) return;
             s.currentStream = undefined;
             // Прогон завершён — состояние ретрая (если было) неактуально.
             s.retry = undefined;

@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { MessageRole, generateId, nowISO, makeTextPart, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
-import type { ToolContext, ToolDefinition, ToolResult, ToolForLLM, TokenUsage, Message } from '@itphx/synth-shared';
+import type { ToolContext, ToolDefinition, ToolResult, ToolForLLM, TokenUsage, Message, Session } from '@itphx/synth-shared';
 import type { BaseProvider, CancellationToken, ChatOptions, LLMMessage, SystemPromptInput } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ModelRouter } from '../../router/router.js';
@@ -1797,5 +1797,208 @@ describe('run-cycle — видимость шага ребёнка и монол
     expect(toolResults).toHaveLength(1);
     expect(toolResults![0]!.name).toBe('noop');
     expect(toolResults![0]!.result?.content).toContain('noop ok');
+  });
+});
+
+/**
+ * ADR-118 §10: открытая дочерняя сессия показывает **живой ход** саб-агента —
+ * `turn.started` → `step.started` → `part.delta`/`part.updated` →
+ * `step.finished` → `turn.finished` в канале **ребёнка**, плюс маркер
+ * `currentStream` на время прогона.
+ */
+describe('run-cycle — живой ход дочерней сессии (ADR-118 §10)', () => {
+  /** Захват событий шины с указанием канала (сессии). */
+  function captureBus(bus: EventBus) {
+    const events: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
+    bus.subscribeAll((e) => {
+      events.push({ type: e.type, sessionId: e.sessionId, data: e.data as Record<string, unknown> });
+    });
+    return events;
+  }
+
+  it('события ребёнку в порядке хода; currentStream выставлен и снят; ход закрыт completed', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // Реплика, которой начат ход ребёнка.
+    await sessionManager.addMessage(child.id, {
+      id: 'child-user-1',
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('сделай работу')],
+      content: 'сделай работу',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    } as Message);
+
+    const bus = new EventBus();
+    const events = captureBus(bus);
+    let markerSeen: Session['currentStream'];
+    const chatAsync = vi.fn(() => (async function* () {
+      // Маркер активности ребёнка стоит, пока идёт прогон.
+      markerSeen = (await sessionManager.getSession(child.id))!.currentStream;
+      yield { isFinal: false, content: 'При', reasoning: 'думаю' } as Chunk;
+      yield { isFinal: true, content: 'Привет' } as Chunk;
+    })());
+    const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, eventBus: bus, sessionManager, sessionId: parent.id, streamId: 'stream-parent' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    // Маркер: streamId прогона + turnId хода = id ребёнка.
+    expect(markerSeen).toMatchObject({ streamId: 'stream-parent', turnId: child.id, agentRole: 'explore' });
+    // После прогона маркер снят — сессия не выглядит «занятой».
+    expect((await sessionManager.getSession(child.id))!.currentStream).toBeUndefined();
+
+    const childEvents = events.filter((e) => e.sessionId === child.id && !e.type.startsWith('permission.'));
+    const types = childEvents.map((e) => e.type);
+    // Порядок ключевых событий хода.
+    expect(types.indexOf('turn.started')).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf('step.started')).toBeGreaterThan(types.indexOf('turn.started'));
+    expect(types.indexOf('part.delta')).toBeGreaterThan(types.indexOf('step.started'));
+    expect(types.indexOf('step.finished')).toBeGreaterThan(types.indexOf('part.delta'));
+    expect(types.indexOf('turn.finished')).toBeGreaterThan(types.indexOf('step.finished'));
+
+    const started = childEvents.find((e) => e.type === 'turn.started')!;
+    expect(started.data).toEqual({ turnId: child.id, messageId: 'child-user-1' });
+    const step = childEvents.find((e) => e.type === 'step.started')!;
+    expect(step.data).toEqual({ turnId: child.id, stepIndex: 0, messageId: expect.any(String) });
+    // Дельта текста — адресована сообщению шага и части `msg:text:0`.
+    const delta = childEvents.find((e) => e.type === 'part.delta')!;
+    expect(delta.data).toMatchObject({
+      messageId: step.data.messageId,
+      partId: 'msg:text:0',
+      field: 'text',
+    });
+    // Reasoning — снапшот части (кумулятивные данные провайдера).
+    const reasoningUpdated = childEvents.find(
+      (e) => e.type === 'part.updated' && (e.data.part as { type?: string } | undefined)?.type === 'reasoning',
+    )!;
+    expect(reasoningUpdated.data).toMatchObject({ messageId: step.data.messageId, partId: 'msg:reasoning:0' });
+    expect((reasoningUpdated.data.part as { data?: string }).data).toBe('думаю');
+    const finished = childEvents.find((e) => e.type === 'turn.finished')!;
+    expect(finished.data).toEqual({ turnId: child.id, status: 'completed' });
+  });
+
+  it('tool calls шага → карточки tool_use в канале ребёнка (до step.finished)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events = captureBus(bus);
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', { a: 1 }, 'call-1')],
+      [{ isFinal: true, content: 'готово' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      maxSteps: 3,
+      tools: llmTools(),
+      extra: makeExtra({ provider, eventBus: bus, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const childEvents = events.filter((e) => e.sessionId === child.id);
+    const firstStep = childEvents.find((e) => e.type === 'step.started')!;
+    const toolPart = childEvents.find((e) => e.type === 'part.updated' && e.data.partId === 'call-1')!;
+    expect(toolPart).toBeDefined();
+    expect(toolPart.data.messageId).toBe(firstStep.data.messageId);
+    expect((toolPart.data.part as { type?: string }).type).toBe('tool_use');
+    expect((toolPart.data.part as { data?: Record<string, unknown> }).data).toMatchObject({ id: 'call-1' });
+    // Карточка вызова — до закрытия первого шага.
+    const firstStepFinished = childEvents.findIndex((e) => e.type === 'step.finished');
+    expect(childEvents.indexOf(toolPart)).toBeLessThan(firstStepFinished);
+  });
+
+  it('ошибка LLM: turn.finished status=error, currentStream снят', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events = captureBus(bus);
+    const { provider } = scriptedProvider([[{ isFinal: false, content: '' }]]);
+    const throwing = {
+      model: 'm', name: 'p',
+      chatAsync: vi.fn(() => (async function* () {
+        yield { isFinal: false, content: '' } as Chunk;
+        throw new Error('401 Unauthorized: invalid api key');
+      })()),
+    } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      retry: { maxRetries: 1, delaysMs: [0] },
+      extra: makeExtra({ provider: throwing, eventBus: bus, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBe(true);
+    const finished = events.filter((e) => e.sessionId === child.id && e.type === 'turn.finished').at(-1)!;
+    expect(finished.data).toEqual({ turnId: child.id, status: 'error' });
+    expect((await sessionManager.getSession(child.id))!.currentStream).toBeUndefined();
+    // Провайдер-заглушка не используется — сценарий проверяет только ветку ошибки.
+    expect(provider).toBeDefined();
+  });
+
+  it('отмена: turn.finished status=cancelled, currentStream снят', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events = captureBus(bus);
+    const ac = new AbortController();
+    const chatAsync = vi.fn(() => (async function* () {
+      ac.abort();
+      yield { isFinal: true, content: 'частичный' } as Chunk;
+    })());
+    const provider = { model: 'm', name: 'p', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, eventBus: bus, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      ctx: makeCtx({ abortSignal: ac.signal }),
+    }));
+
+    expect(result.metadata!.stopped_by).toBe('user');
+    const finished = events.filter((e) => e.sessionId === child.id && e.type === 'turn.finished').at(-1)!;
+    expect(finished.data).toEqual({ turnId: child.id, status: 'cancelled' });
+    expect((await sessionManager.getSession(child.id))!.currentStream).toBeUndefined();
+  });
+
+  it('фоновый (detached) прогон: чужой currentStream с другим streamId не перетирается и не снимается', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // Маркер уже занят прогоном в фоне (у него свой streamId).
+    await sessionManager.withLock(child.id, async (s) => {
+      s.currentStream = {
+        streamId: 'stream-foreign',
+        turnId: 'turn-foreign',
+        message: 'фоновый прогон',
+        agentRole: 'explore',
+        startedAt: nowISO(),
+        cancelled: false,
+      };
+      await sessionManager.saveSession(s);
+    });
+    const bus = new EventBus();
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'готово' }]]);
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({ provider, eventBus: bus, sessionManager, sessionId: parent.id, streamId: 'stream-parent' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Чужой маркер не тронут ни на старте, ни при финализации.
+    expect((await sessionManager.getSession(child.id))!.currentStream).toMatchObject({
+      streamId: 'stream-foreign',
+      turnId: 'turn-foreign',
+    });
   });
 });

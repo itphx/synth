@@ -154,12 +154,17 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
   const cleanupChild = (): Promise<void> => {
     if (cleanupPromise) return cleanupPromise;
     cleanupPromise = (async () => {
-      if (childStreamId) extra.unregisterCancelToken?.(childStreamId);
+      // `streamId` фоновой части фиксируется здесь: маркер `currentStream`
+      // снимается только **свой** — прогон, уже начавший новый ход в этой
+      // сессии, не должен потерять живой индикатор (ADR-118 §10).
+      const streamId = childStreamId;
+      if (streamId) extra.unregisterCancelToken?.(streamId);
       childStreamId = undefined;
       const sessionManager = extra.sessionManager;
       if (!sessionManager) return;
       try {
         await sessionManager.withLock(childSessionId, async (s) => {
+          if (streamId && s.currentStream && s.currentStream.streamId !== streamId) return;
           s.currentStream = undefined;
           await sessionManager.saveSession(s);
         });
@@ -224,6 +229,10 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
           await sessionManager.withLock(childSessionId, async (s) => {
             s.currentStream = {
               streamId,
+              // Ход ребёнка виден в его UI по `turnId` (тот же id, что у
+              // `turn.started` цикла) — иначе после reload живой ход
+              // восстанавливался бы по `stream_id` и рвал границы хода.
+              turnId: childSessionId,
               message: params.description,
               agentRole: params.subagent_type,
               startedAt: nowISO(),

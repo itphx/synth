@@ -110,9 +110,10 @@ export interface SessionRoutesDeps {
   /**
    * Единый реестр фоновых прогонов (ADR-111/ADR-113).
    *
-   * Нужен «Стопу» (`POST /:id/abort`): он останавливает и живые прогоны
-   * сессии/её детей (решение 2026-10-28, ADR-111 §detach). Не задан —
-   * прежнее поведение (отменяется только собственный стрим/очередь).
+   * «Стоп» (`POST /:id/abort`) его **не** использует: прерывается только
+   * активный ход (решение 2026-10-31), фоновые прогоны живут и останавливаются
+   * отдельно (`POST /api/v2/processes/:id/stop`, «Стоп» дочерней сессии).
+   * Опция остаётся в контракте фабрики — проводка сборки (`deps.ts`) общая.
    */
   backgroundService?: BackgroundRunService;
   /**
@@ -1702,19 +1703,12 @@ export function createSessionRoutes(
       );
     }
 
-    // «Стоп» останавливает и живые дочерние прогоны — фоновых саб-агентов и их
-    // фоновые процессы (решение 2026-10-28, ADR-111 §detach; прежде отмена
-    // родителя переведённый прогон не трогала). Best-effort: сбой реестра не
-    // должен превращать «сессия уже отменена» в ошибку ответа.
-    if (deps.backgroundService) {
-      try {
-        await deps.backgroundService.stopBySession(id, 'parent_aborted');
-      } catch (err) {
-        console.warn(
-          `[sessions] остановка фоновых прогонов сессии ${id} не удалась: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
+    // Фоновые прогоны (фоновые саб-агенты и фоновые процессы) «Стоп» **не**
+    // останавливает: как в opencode, «Стоп» прерывает только активный ход
+    // (решение 2026-10-31, взамен 2026-10-28). Блокирующий саб-агент
+    // останавливается сам — abort сигнала тула `task` → `run-cycle` видит
+    // `isAborted` → `finishAborted`. Фоновые прогоны останавливаются явно:
+    // `POST /api/v2/processes/:id/stop` либо «Стоп» их собственной сессии.
     // ADR-102: мера `activity.aborts` — на осях `user`/`project` сессии.
     void analytics?.recordActivity('aborts', sessionAxes(session));
     return c.json({ status: 'aborted' });

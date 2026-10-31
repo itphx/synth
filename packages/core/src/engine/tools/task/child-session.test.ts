@@ -148,14 +148,73 @@ describe('createChildSessionLifecycle', () => {
     await lifecycle.finalize();
 
     expect(manager.calls.updateSession).toBe(1);
+    // ADR-118 §10: `turn.finished` — терминальный статус хода ребёнка
+    // (открытая дочерняя сессия гасит живой сегмент и индикатор).
     expect(events.map((e) => e.type).sort()).toEqual(
-      ['child.session.updated', 'session.updated', 'stream.ended'].sort(),
+      ['child.session.updated', 'session.updated', 'stream.ended', 'turn.finished'].sort(),
     );
+    const finished = events.find((e) => e.type === 'turn.finished')!;
+    expect(finished.sessionId).toBe('child-1');
+    expect(finished.data).toEqual({ turnId: 'child-1', status: 'completed' });
     const ended = events.find((e) => e.type === 'stream.ended')!;
     expect(ended.sessionId).toBe('child-1');
     expect(ended.data.stream_id).toBe('stream-1');
     const parentEvt = events.find((e) => e.type === 'child.session.updated')!;
     expect(parentEvt.sessionId).toBe('parent-1');
+  });
+
+  it('finalize снимает currentStream только своего streamId (чужой маркер не трогает)', async () => {
+    const own = makeSession('child-own');
+    own.currentStream = {
+      streamId: 'stream-own', turnId: 'child-own', message: 'x', startedAt: nowISO(), cancelled: false,
+    };
+    const ownManager = makeSessionManager(own);
+    const ownLifecycle = createChildSessionLifecycle({
+      childSessionId: 'child-own',
+      parentSessionId: 'parent-1',
+      extra: { sessionManager: ownManager as unknown as SessionManager, eventBus: new EventBus(), streamId: 'stream-own' } as TaskExtra,
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      getModel: () => undefined,
+    });
+
+    await ownLifecycle.finalize('completed');
+    expect(ownManager.session.currentStream).toBeUndefined();
+
+    // Сессия уже занята другим прогоном (например, переведённым в фон) —
+    // маркер чужой, финализация его не снимает.
+    const foreign = makeSession('child-foreign');
+    foreign.currentStream = {
+      streamId: 'stream-foreign', turnId: 'child-foreign', message: 'фон', startedAt: nowISO(), cancelled: false,
+    };
+    const foreignManager = makeSessionManager(foreign);
+    const foreignLifecycle = createChildSessionLifecycle({
+      childSessionId: 'child-foreign',
+      parentSessionId: 'parent-1',
+      extra: { sessionManager: foreignManager as unknown as SessionManager, eventBus: new EventBus(), streamId: 'stream-own' } as TaskExtra,
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      getModel: () => undefined,
+    });
+
+    await foreignLifecycle.finalize('error');
+    expect(foreignManager.session.currentStream).toMatchObject({ streamId: 'stream-foreign' });
+  });
+
+  it('finalize(status) публикует turn.finished с переданным терминальным статусом', async () => {
+    const bus = new EventBus();
+    const manager = makeSessionManager(makeSession('child-1'));
+    const { events } = capture(bus);
+    const lifecycle = createChildSessionLifecycle({
+      childSessionId: 'child-1',
+      parentSessionId: 'parent-1',
+      extra: { sessionManager: manager as unknown as SessionManager, eventBus: bus, streamId: 'stream-1' } as TaskExtra,
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      getModel: () => undefined,
+    });
+
+    await lifecycle.finalize('cancelled');
+    const finished = events.find((e) => e.type === 'turn.finished')!;
+    expect(finished.sessionId).toBe('child-1');
+    expect(finished.data).toEqual({ turnId: 'child-1', status: 'cancelled' });
   });
 
   it('finalize без childSessionId — no-op без обращения к SessionManager', async () => {

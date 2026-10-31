@@ -7,7 +7,7 @@
  * поведения.
  */
 import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
-import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
@@ -23,6 +23,17 @@ import { buildMaxStepsPrompt, maxStepsAssistantMessage } from '../../llm/max-ste
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { debug } from '../../../logger.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
+import {
+  publishPartDelta,
+  publishPartUpdated,
+  publishStepFinished,
+  publishStepStarted,
+  publishTurnStarted,
+  reasoningPartId,
+  textPartId,
+  toolCallPart,
+  type PublishEvent,
+} from '../../orchestrator/turn-events.js';
 import { messageToLLMMessage } from './prompt.js';
 import { applySteerInjections, dropSteerInjections } from '../../steering/apply.js';
 import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
@@ -283,6 +294,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   let childPlanApproved = false;
   let childPlanMode: PlanMode = 'auto';
   let childMcpToolSettings: Record<string, import('@itphx/synth-shared').McpServerToolSettings> | undefined;
+  /**
+   * id первого user-сообщения ребёнка — `messageId` в `turn.started` (это
+   * реплика, которой ход ребёнка начат; fallback — id самой сессии).
+   */
+  let childUserMessageId: string | undefined;
   if (childSessionId && extra.sessionManager) {
     try {
       const child = await extra.sessionManager.getSession(childSessionId);
@@ -291,6 +307,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         childPlanApproved = Boolean(child.planApproved);
         childPlanMode = child.settings.planMode ?? 'auto';
         childMcpToolSettings = child.settings.mcpToolSettings;
+        childUserMessageId = child.messages.find((m) => m.role === MessageRole.USER)?.id;
       }
     } catch {
       // не фатально — остаёмся в act/auto
@@ -314,6 +331,32 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   const addChildMessage = childLifecycle.addMessage;
   const commitChildUsage = childLifecycle.commitUsage;
   const buildChildAssistantMetadata = childLifecycle.buildAssistantMetadata;
+
+  /**
+   * ADR-118 §1/§10: живой ход **дочерней** сессии.
+   *
+   * События хода ребёнка публикуются в канал **ребёнка** (не родителя): у
+   * пользователя может быть открыта дочерняя сессия, и до этих правок её UI
+   * «молчал» до готовых `step.finished`/`message.added` — не было ни
+   * `turn.started`, ни шага, ни дельт, ни карточек тулов.
+   *
+   * Best-effort: ошибка публикации не должна ронять прогон.
+   */
+  const publishChildEvent: PublishEvent = (type, data) => {
+    if (!childSessionId || !extra.eventBus) return;
+    try {
+      extra.eventBus.publish(childSessionId, type as EventType, data);
+    } catch {
+      // живой ход ребёнка не фатальнее прогона
+    }
+  };
+  /**
+   * `streamId` прогона: у blocking-прогона — родительский ход, у
+   * переведённого в фон — собственный (поле `extra` мутируется при detach).
+   * По нему сверяется маркер `currentStream`: чужой не перетираем и не снимаем.
+   */
+  const runStreamId = (): string => extra.streamId ?? '';
+
 
   /**
    * ADR-104: steering дочерней сессии — применение очереди инъекций на
@@ -442,6 +485,40 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // Конец прогона не должен падать из-за очереди инъекций.
     }
   };
+
+  // ─── ADR-118 §10: живой ход дочерней сессии — маркер и начало хода ──────
+  // Пока прогон идёт, у ребёнка стоит `currentStream`: открытая дочерняя
+  // сессия показывает индикатор «идёт» (и восстанавливает ход после reload).
+  // Best-effort: маркер не записался — прогон всё равно идёт.
+  if (childSessionId && extra.sessionManager) {
+    try {
+      await extra.sessionManager.withLock(childSessionId, async (s) => {
+        // Чужой маркер (например, прогон уже переведён в фон с другим
+        // `streamId`, ADR-111 §detach) не перетираем — иначе UI ребёнка
+        // потеряет живую часть прогона.
+        if (s.currentStream && s.currentStream.streamId !== runStreamId()) return;
+        s.currentStream = {
+          streamId: runStreamId(),
+          turnId: childSessionId,
+          message: description,
+          agentRole: subagentType,
+          startedAt: nowISO(),
+          cancelled: false,
+        };
+        await extra.sessionManager!.saveSession(s);
+      });
+    } catch {
+      // не фатально: прогон важнее маркера активности
+    }
+  }
+  // Начало хода ребёнка: UI открывает живой ход (границы — `turnId`), а его
+  // `messageId` — реплика, которой ход начат (fallback — id сессии).
+  if (childSessionId) {
+    publishTurnStarted(
+      publishChildEvent,
+      { turnId: childSessionId, messageId: childUserMessageId ?? childSessionId },
+    );
+  }
 
   try {
     let finalContent = '';
@@ -659,7 +736,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // остаток не должен «протечь» в следующий ход ребёнка.
       await dropChildSteerInjections('aborted');
       await commitChildUsage();
-      await finalizeChildSession();
+      // Ход ребёнка прерван «Стопом» — терминальный статус `cancelled`.
+      await finalizeChildSession('cancelled');
 
       // 4. tool_result родителю: маркер отмены + частичный текст + шаги + id сессии
       const stepsCompleted = allSubagentToolCalls.length > 0
@@ -708,6 +786,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // id выдаётся ЗДЕСЬ, до LLM-вызова, и переиспользуется при записи
       // сообщения в историю ребёнка.
       const stepMessageId = generateId();
+      // ADR-118 §1/§4: шаг ребёнка начался — его UI создаёт assistant-сообщение
+      // шага (`status: 'streaming'`) и держит индикатор до `step.finished`.
+      publishStepStarted(
+        publishChildEvent,
+        { turnId: childSessionId ?? '', stepIndex: iteration, messageId: stepMessageId },
+      );
       // Инструкция «только текст» — assistant-сообщением в запрос, не в историю.
       const requestMessages = stepLimitStep
         ? [
@@ -775,6 +859,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // считается приращение для `subagent.progress` (дельта, а не полный текст).
       let lastPublishedReasoning = '';
       let lastPublishedContent = '';
+      /**
+       * Префиксы, уже опубликованные **ребёнку** (`part.delta`/`part.updated`).
+       * Считаются независимо от троттлинга `subagent.progress`: у ребёнка
+       * дельты не троттлятся (это его собственный UI — объём ограничен), и
+       * общий «опубликованный» префикс дал бы дыры в тексте шага.
+       */
+      let lastChildContent = '';
+      let lastChildReasoning = '';
       /**
        * ADR-118 §4: расход шага ребёнка — в `step.finished` (usage/модель/
        * стоимость). Значения последнего чанка итерации запоминаются здесь и
@@ -862,6 +954,39 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               ? liveContent.slice(lastPublishedContent.length)
               : liveContent;
 
+            // ADR-118 §4: живой ход **дочерней** сессии — дельта текста шага и
+            // снапшот reasoning (провайдер отдаёт его кумулятивно). Без
+            // троттлинга: это UI самого ребёнка, объём ограничен одним шагом.
+            if (childSessionId) {
+              const childContentDelta = liveContent.startsWith(lastChildContent)
+                ? liveContent.slice(lastChildContent.length)
+                : liveContent;
+              if (childContentDelta) {
+                lastChildContent = liveContent;
+                publishPartDelta(
+                  publishChildEvent,
+                  {
+                    messageId: stepMessageId,
+                    partId: textPartId(0),
+                    field: 'text',
+                    delta: childContentDelta,
+                  },
+                );
+              }
+              if (liveReasoning && liveReasoning !== lastChildReasoning) {
+                lastChildReasoning = liveReasoning;
+                const partId = reasoningPartId(0);
+                publishPartUpdated(
+                  publishChildEvent,
+                  {
+                    messageId: stepMessageId,
+                    partId,
+                    part: { id: partId, type: 'reasoning', data: liveReasoning },
+                  },
+                );
+              }
+            }
+
             // Стримим размышления/промежуточный текст (и usage) саб-агента
             // РОДИТЕЛЮ, чтобы в блоке `task` (по parent_call_id) всё было видно
             // во время работы. Троттлинг ~300 мс. Пустые дельты (например,
@@ -941,6 +1066,26 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           toolCalls = [];
           lastPublishedReasoning = '';
           lastPublishedContent = '';
+          lastChildContent = '';
+          lastChildReasoning = '';
+        }
+      }
+
+      // ADR-118 §4: вызовы шага — карточки `tool_use` в UI дочерней сессии.
+      // Публикуются **до** `step.finished` (это «контент шага», а не финал):
+      // иначе карточки появлялись бы только вместе с историей.
+      if (!llmFailure && !isAborted() && toolCalls && toolCalls.length > 0) {
+        for (const tc of toolCalls) {
+          const callId = typeof tc.id === 'string' ? tc.id : '';
+          if (!callId) continue;
+          publishPartUpdated(
+            publishChildEvent,
+            {
+              messageId: stepMessageId,
+              partId: callId,
+              part: toolCallPart(callId, tc),
+            },
+          );
         }
       }
 
@@ -959,6 +1104,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           messageId: stepMessageId,
           status: 'completed',
           usage: stepUsage ?? subagentUsage,
+          agentRole: subagentType,
           ...(stepModel ? { model: stepModel } : {}),
           ...(stepProvider ? { provider: stepProvider } : {}),
           ...(stepCost
@@ -968,7 +1114,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             }
             : {}),
         };
-        extra.eventBus.publish(childSessionId, 'step.finished', stepPayload);
+        publishStepFinished(publishChildEvent, stepPayload);
       }
 
       if (llmFailure) {
@@ -1012,7 +1158,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         // инъекций ребёнка снимается, остаток не «протекает» в следующий ход.
         await dropChildSteerInjections('turn_ended');
         await commitChildUsage();
-        await finalizeChildSession();
+        // Ошибка провайдера — терминальный статус хода ребёнка `error`.
+        await finalizeChildSession('error');
         // ADR-030: `agent_failed` — неблокирующий эмит терминальной ошибки
         // саб-агента после исчерпания ретраев.
         if (extra.hooks && childSessionId) {
@@ -1690,7 +1837,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
     // Финализировать дочернюю сессию
     await commitChildUsage();
-    await finalizeChildSession();
+    await finalizeChildSession('completed');
 
     // ─── Формирование результата tool_result ──────────────────────
     const qualityBlock = qaPass !== undefined
@@ -1752,7 +1899,20 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     };
   } catch (err: unknown) {
     // Жёсткий сбой вне штатных веток: дочерняя сессия не финализировалась, но
-    // live-плейсхолдер в UI нужно сбросить тем же терминальным событием.
+    // live-ход в UI нужно закрыть и маркер активности снять — иначе открытая
+    // дочерняя сессия навсегда осталась бы «идёт» (ADR-118 §10).
+    publishChildEvent('turn.finished', { turnId: childSessionId ?? '', status: 'error' });
+    if (childSessionId && extra.sessionManager) {
+      try {
+        await extra.sessionManager.withLock(childSessionId, async (s) => {
+          if (s.currentStream?.streamId !== runStreamId()) return;
+          s.currentStream = undefined;
+          await extra.sessionManager!.saveSession(s);
+        });
+      } catch {
+        // маркер не снялся — терминальное событие уже опубликовано
+      }
+    }
     if (childSessionId && extra.eventBus) {
       extra.eventBus.publish(childSessionId, 'stream.ended', {
         session_id: childSessionId,

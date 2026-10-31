@@ -919,6 +919,8 @@ async function startBackgroundSubagent(opts: {
     await sessionManager.withLock(childSessionId, async (s) => {
       s.currentStream = {
         streamId,
+        // ADR-118 §10: id хода в UI ребёнка (совпадает с `turn.started` цикла).
+        turnId: childSessionId,
         message: params.description,
         agentRole: params.subagent_type,
         startedAt: nowISO(),
@@ -970,6 +972,9 @@ async function startBackgroundSubagent(opts: {
       extra.unregisterCancelToken?.(streamId);
       try {
         await sessionManager.withLock(childSessionId, async (s) => {
+          // Снимаем только свой маркер (ADR-118 §10): прогон в этой сессии
+          // мог уже начать новый ход с другим `streamId`.
+          if (s.currentStream && s.currentStream.streamId !== streamId) return;
           s.currentStream = undefined;
           await sessionManager.saveSession(s);
         });
