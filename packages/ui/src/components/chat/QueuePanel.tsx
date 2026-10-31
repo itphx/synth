@@ -126,6 +126,21 @@ export function QueuePanel({
                 <span className="min-w-0 flex-1 truncate text-foreground/80" title={preview}>
                   {preview}
                 </span>
+                {msg.status && (
+                  <span
+                    data-testid={`queue-status-${i}`}
+                    className={cn(
+                      'shrink-0 rounded px-1 py-0.5 text-[0.625rem] leading-none',
+                      msg.status === 'starting'
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-muted-foreground',
+                    )}
+                  >
+                    {msg.status === 'starting'
+                      ? t('chat.queue.itemStarting')
+                      : t('chat.queue.itemQueued')}
+                  </span>
+                )}
                 {attachmentCount > 0 && (
                   <span
                     data-testid={`queue-attachments-${i}`}

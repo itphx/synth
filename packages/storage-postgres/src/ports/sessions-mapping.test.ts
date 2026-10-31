@@ -13,6 +13,7 @@ import type { Message, Session } from '@itphx/synth-shared';
 import {
   deserializeMessage,
   deserializeSession,
+  deserializeSessionRetry,
   deserializeSessionWorktree,
   emptySessionChildren,
   messageRow,
@@ -304,6 +305,95 @@ describe('PG-маппинг сессии: привязка к worktree (ADR-114)
       directory: '/d',
       branch: '',
     });
+  });
+});
+
+describe('PG-маппинг сессии: живой ход и состояние ретрая (ADR-118)', () => {
+  it('current_stream без хода пишется как turn_id: null, читается как turnId === undefined', () => {
+    const row = serializeSession(makeSession({
+      currentStream: {
+        streamId: 'stream-1',
+        message: 'в работе',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        cancelled: false,
+      },
+    }));
+
+    const currentStream = row.current_stream as Record<string, unknown>;
+    expect(currentStream.turn_id).toBeNull();
+
+    const loaded = deserializeSession(
+      makeRow({ current_stream: currentStream }),
+      emptySessionChildren(),
+    );
+    expect(loaded.currentStream!.streamId).toBe('stream-1');
+    expect(loaded.currentStream!.turnId).toBeUndefined();
+  });
+
+  it('serializeSession кладёт состояние ретрая в snake_case-объект', () => {
+    const row = serializeSession(makeSession({
+      retry: {
+        streamId: 'stream-9',
+        attempt: 2,
+        maxRetries: 3,
+        retryAt: '2026-01-01T00:00:05.000Z',
+        error: 'timeout',
+      },
+    }));
+
+    expect(row.retry).toEqual({
+      stream_id: 'stream-9',
+      attempt: 2,
+      max_retries: 3,
+      retry_at: '2026-01-01T00:00:05.000Z',
+      error: 'timeout',
+    });
+  });
+
+  it('round-trip: состояние ретрая переживает запись/чтение', () => {
+    const retry = {
+      streamId: 'stream-9',
+      attempt: 1,
+      maxRetries: 3,
+      retryAt: '2026-01-01T00:00:05.000Z',
+    };
+    const row = serializeSession(makeSession({ retry }));
+    const loaded = deserializeSession(makeRow({ retry: row.retry }), emptySessionChildren());
+    expect(loaded.retry).toEqual(retry);
+  });
+
+  it('колонка `retry` есть в списке колонок и она jsonb', () => {
+    expect(SESSION_FIELDS).toContain('retry');
+    expect(SESSION_JSON_FIELDS.has('retry')).toBe(true);
+
+    const row = serializeSession(makeSession({
+      retry: {
+        streamId: 'stream-9',
+        attempt: 1,
+        maxRetries: 3,
+        retryAt: '2026-01-01T00:00:05.000Z',
+      },
+    }));
+    const [value] = rowValues(row, ['retry'], SESSION_JSON_FIELDS);
+    expect(typeof value).toBe('string');
+    expect(JSON.parse(value as string).stream_id).toBe('stream-9');
+  });
+
+  it('запись без ретрая → NULL, чтение → undefined (прежнее поведение)', () => {
+    const row = serializeSession(makeSession());
+    expect(row.retry).toBeNull();
+
+    const [value] = rowValues(row, ['retry'], SESSION_JSON_FIELDS);
+    expect(value).toBeNull();
+
+    const loaded = deserializeSession(makeRow({ retry: null }), emptySessionChildren());
+    expect(loaded.retry).toBeUndefined();
+  });
+
+  it('битое значение ретрая игнорируется (fail-soft)', () => {
+    expect(deserializeSessionRetry({ attempt: 1 })).toBeUndefined();
+    expect(deserializeSessionRetry(null)).toBeUndefined();
+    expect(deserializeSessionRetry('строка')).toBeUndefined();
   });
 });
 

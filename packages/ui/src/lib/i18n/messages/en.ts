@@ -1370,6 +1370,8 @@ export const dict = {
   'chat.queue.steer': 'Send now',
   'chat.queue.remove': 'Remove',
   'chat.queue.steered': 'Sent into the running turn',
+  'chat.queue.itemQueued': 'Queued',
+  'chat.queue.itemStarting': 'Starting',
 
   'permission.bar.request': 'Tool "{tool}" requests permission',
   'permission.bar.waiting': '{count} more',

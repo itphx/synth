@@ -542,6 +542,8 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
       session.createdAt = typeof createdAt === 'string' ? createdAt : session.createdAt;
       session.status = {};
       session.currentStream = undefined;
+      // Состояние ретрая не переносим (повтор в новой сессии неактуален).
+      session.retry = undefined;
       session.summarizationPending = false;
       session.canSummarize = false;
 

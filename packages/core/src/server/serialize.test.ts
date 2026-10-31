@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { serializeMessage } from './serialize.js';
-import { generateId, nowISO, makeTextPart, MessageRole, type Message } from '@itphx/synth-shared';
+import { serializeMessage, serializeSession } from './serialize.js';
+import { generateId, nowISO, makeTextPart, MessageRole, type Message, type Session } from '@itphx/synth-shared';
 
 function message(over: Partial<Message> = {}): Message {
   return {
@@ -62,5 +62,107 @@ describe('serializeMessage — ord/turn_id/step_index/status (ADR-118)', () => {
     expect(out.turn_id).toBeNull();
     expect(out.step_index).toBeNull();
     expect(out.status).toBeNull();
+  });
+});
+
+/** Сессия для проверки `activity` (DTO сессии). */
+function session(overrides: Partial<Session> = {}): Session {
+  return {
+    id: 'sess-1',
+    sessionOrigin: 'user',
+    messages: [],
+    pendingMessages: [],
+    status: {},
+    settings: {} as Session['settings'],
+    checkpoints: [],
+    stickyNotes: [],
+    references: [],
+    summarizationPending: false,
+    canSummarize: false,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    createdAt: nowISO(),
+    updatedAt: nowISO(),
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    ...overrides,
+  } as Session;
+}
+
+describe('serializeSession — activity (idle | busy | retry)', () => {
+  it('сессия без хода → idle', () => {
+    const out = serializeSession(session()) as Record<string, unknown>;
+    expect(out.activity).toEqual({ type: 'idle' });
+  });
+
+  it('живой ход → busy с идентификаторами хода и потока', () => {
+    const out = serializeSession(session({
+      currentStream: {
+        streamId: 'stream-1',
+        message: 'в работе',
+        startedAt: nowISO(),
+        cancelled: false,
+        turnId: 'turn-1',
+      },
+    })) as Record<string, unknown>;
+    expect(out.activity).toEqual({
+      type: 'busy',
+      turnId: 'turn-1',
+      streamId: 'stream-1',
+    });
+  });
+
+  it('заблокированная сессия без стрима → busy (идентификаторы — null)', () => {
+    const out = serializeSession(session({
+      status: { blocked: 'sess-1', blockedAt: nowISO() },
+    })) as Record<string, unknown>;
+    expect(out.activity).toEqual({ type: 'busy', turnId: null, streamId: null });
+  });
+
+  it('состояние ретрая → retry (попытка, предел, время следующей попытки)', () => {
+    const out = serializeSession(session({
+      retry: {
+        streamId: 'stream-9',
+        attempt: 2,
+        maxRetries: 3,
+        retryAt: '2026-01-01T00:00:05.000Z',
+        error: 'timeout',
+      },
+    })) as Record<string, unknown>;
+    expect(out.activity).toEqual({
+      type: 'retry',
+      attempt: 2,
+      maxRetries: 3,
+      retryAt: '2026-01-01T00:00:05.000Z',
+      error: 'timeout',
+      streamId: 'stream-9',
+    });
+  });
+
+  it('приоритет: retry важнее busy (ретрай при живом стриме)', () => {
+    const out = serializeSession(session({
+      currentStream: {
+        streamId: 'stream-1',
+        message: 'в работе',
+        startedAt: nowISO(),
+        cancelled: false,
+        turnId: 'turn-1',
+      },
+      retry: {
+        streamId: 'stream-1',
+        attempt: 1,
+        maxRetries: 3,
+        retryAt: '2026-01-01T00:00:05.000Z',
+      },
+    })) as Record<string, unknown>;
+    const activity = out.activity as Record<string, unknown>;
+    expect(activity.type).toBe('retry');
+    expect(activity.turnId).toBeUndefined();
   });
 });

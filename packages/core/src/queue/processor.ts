@@ -1,4 +1,4 @@
-import type { AuthorityPrincipal, Message, PromptMode, QueueStatePayload, Session } from '@itphx/synth-shared';
+import type { AuthorityPrincipal, Message, PromptMode, QueueItemState, QueueStatePayload, Session } from '@itphx/synth-shared';
 import { nowISO, generateStreamId, generateId, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, STEER_METADATA_KEY, STEER_INTERRUPT_METADATA_KEY, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
@@ -15,7 +15,8 @@ const MAX_PENDING = 5;
 
 /**
  * ADR-118 §4: `queue.state` — состояние очереди сессии: **только счётчики**
- * (`pendingCount`, `steerCount`), без текста и без автора (устранение утечки
+ * (`pendingCount`, `steerCount`) и **состояния элементов** (`items`: id +
+ * `queued`/`starting`), без текста и без автора (устранение утечки
  * `message.queued`).
  *
  * Публикуется в канал сессии при каждом изменении очереди: приём сообщения,
@@ -29,14 +30,35 @@ export function publishQueueState(
   eventBus.publish(sessionId, 'queue.state', {
     pendingCount: Math.max(0, state.pendingCount),
     steerCount: Math.max(0, state.steerCount),
+    // Элементы очереди — аддитивное поле (клиент без него работает как прежде).
+    ...(state.items ? { items: state.items } : {}),
   });
 }
 
-/** Счётчики очереди сессии: обычная очередь + очередь вмешательств. */
+/**
+ * Счётчики очереди сессии: обычная очередь + очередь вмешательств.
+ *
+ * `items` — элементы очереди с состоянием: обрабатываемое сообщение —
+ * `starting` (его id совпадает с `currentStream.streamId`), остальные —
+ * `queued`. Идентификатор элемента — id потока сообщения (`metadata.stream_id`):
+ * по нему клиент связывает элемент очереди с живым ходом.
+ */
 function queueCounts(session: Session | null | undefined): QueueStatePayload {
+  const pending = session?.pendingMessages ?? [];
+  const startingId = session?.currentStream?.streamId;
+  const items: QueueItemState[] = pending.map((m) => {
+    const id = (m.metadata?.stream_id as string | undefined) || m.id;
+    return { id, status: startingId && id === startingId ? 'starting' : 'queued' };
+  });
+  // Живой стрим без сообщения в очереди (например, после перезагрузки) —
+  // элемент всё равно в очереди, но уже «в работе».
+  if (startingId && !items.some((item) => item.id === startingId)) {
+    items.unshift({ id: startingId, status: 'starting' });
+  }
   return {
-    pendingCount: session?.pendingMessages.length ?? 0,
+    pendingCount: pending.length,
     steerCount: session?.steerInbox?.length ?? 0,
+    items,
   };
 }
 
@@ -193,6 +215,9 @@ export class QueueProcessor {
       s.status.cancelRequested = undefined;
       s.status.cancelRequestedAt = undefined;
       s.currentStream = undefined;
+      // Персистентное состояние ретрая снимается вместе с текущим стримом:
+      // после «Стопа» повторной попытки не будет.
+      s.retry = undefined;
       s.updatedAt = nowISO();
       await this.sessionManager.saveSession(s);
       return { id, counts: queueCounts(s) };
@@ -235,6 +260,9 @@ export class QueueProcessor {
       s.status.blocked = undefined;
       s.status.blockedAt = undefined;
       s.currentStream = undefined;
+      // Ретраи отменены — состояние ретрая снимается (иначе DTO сессии
+      // продолжал бы показывать «повтор» при отменённых ретраях).
+      s.retry = undefined;
       await this.sessionManager.saveSession(s);
       // ADR-118 §4: очередь изменилась (отмена ретрая) — состояние очереди.
       publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
@@ -374,6 +402,9 @@ export class QueueProcessor {
             startedAt: nowISO(),
             cancelled: false,
           };
+          // Сообщение взято в работу — состояние ретрая (его не было: это первая
+          // попытка) снимается: сессия теперь «busy», а не «retry».
+          s.retry = undefined;
           // Системные сообщения НЕ пушить в историю (не user-сообщения)
           if (!isSystemMessage) {
             // Дедупликация: если сообщение с тем же stream_id уже в истории
@@ -428,12 +459,21 @@ export class QueueProcessor {
             ? { metadata: { type: message.metadata.type } }
             : {}),
         });
+
+        // ADR-118 §4: элемент очереди взят в работу — состояние очереди уходит
+        // с новым `starting` (иначе клиент до следующего `queue.state` видел бы
+        // элемент как `queued`, хотя ход уже идёт).
+        publishQueueState(this.eventBus, this.sessionId, queueCounts(session));
       } else {
         // Повторная попытка: обновляем startedAt у currentStream
         session = await this.sessionManager.withLock(this.sessionId, async (s) => {
           if (s.currentStream) {
             s.currentStream.startedAt = nowISO();
           }
+          // Новая попытка взяла сообщение в работу — состояние ретрая снимается
+          // (пока идёт попытка, сессия «busy»; при следующей ошибке состояние
+          // ретрая запишется заново).
+          s.retry = undefined;
           await this.sessionManager.saveSession(s);
           return s;
         });
@@ -507,6 +547,8 @@ export class QueueProcessor {
               s.status.blocked = undefined;
               s.status.blockedAt = undefined;
               s.currentStream = undefined;
+              // Терминальная ошибка — повторов не будет: состояние ретрая снимается.
+              s.retry = undefined;
               await this.sessionManager.saveSession(s);
               // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
               publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
@@ -527,6 +569,19 @@ export class QueueProcessor {
             // stream.retry, чтобы UI показал «Повторная попытка N/MAX через X сек»
             // вместо вечной крутилки (раньше ретраи были полностью скрыты).
             const delay = this._calcBackoff(retryCount);
+            // Персистентное состояние ретрая: после reload/restart клиент видит
+            // «повтор», а не «пусто» (значение переживает перезагрузку).
+            await this.sessionManager.withLock(this.sessionId, async (s) => {
+              s.retry = {
+                streamId,
+                attempt: retryCount,
+                maxRetries: LLM_MAX_ATTEMPTS,
+                retryAt: new Date(Date.now() + delay).toISOString(),
+                ...(result.error ? { error: result.error } : {}),
+              };
+              s.updatedAt = nowISO();
+              await this.sessionManager.saveSession(s);
+            });
             this.eventBus.publish(this.sessionId, 'stream.retry', {
               stream_id: streamId,
               attempt: retryCount,
@@ -551,6 +606,8 @@ export class QueueProcessor {
           s.status.blocked = undefined;
           s.status.blockedAt = undefined;
           s.currentStream = undefined;
+          // Ход завершился успехом — состояние ретрая неактуально.
+          s.retry = undefined;
           s.updatedAt = nowISO();
           await this.sessionManager.saveSession(s);
           // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
@@ -575,6 +632,8 @@ export class QueueProcessor {
             s.status.blocked = undefined;
             s.status.blockedAt = undefined;
             s.currentStream = undefined;
+            // Полная очистка — состояние ретрая тоже.
+            s.retry = undefined;
             await this.sessionManager.saveSession(s);
             // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
             publishQueueState(this.eventBus, this.sessionId, queueCounts(s));

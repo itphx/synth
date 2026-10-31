@@ -244,6 +244,9 @@ export interface QueueState {
   isStalled: boolean
 }
 
+/** Статус элемента очереди из `queue.state` (ADR-118 §4). */
+export type QueueItemStatus = 'queued' | 'starting'
+
 export interface QueuedMessage {
   /** Серверный id pending-сообщения (`pending_messages[].id`) — адресация по id. */
   id?: string
@@ -251,6 +254,8 @@ export interface QueuedMessage {
   agentRole?: string | null
   /** ADR-115: число вложений сообщения (для строки очереди); нет данных — 0. */
   attachmentCount?: number
+  /** Статус в очереди (`queue.state.items`): `queued` — ждёт, `starting` — уже запускается. */
+  status?: QueueItemStatus
   /**
    * Оптимистичная строка: сообщение отправлено, серверное подтверждение
    * (`message.accepted`) ещё не пришло. Строка показывается сразу при отправке
@@ -446,6 +451,12 @@ interface ChatStore {
   updateQueueCount: (sessionId: string, pendingCount: number) => void
   /** ADR-118 §4: счётчики очереди из события `queue.state`. */
   setQueueCounts: (sessionId: string, pendingCount: number, steerCount: number) => void
+  /**
+   * ADR-118 §4: статусы элементов очереди из `queue.state.items` (по id).
+   * Строки, которых нет в списке, считаются `queued` (тексты и авторы —
+   * только из API, событие их не несёт).
+   */
+  setQueueItems: (sessionId: string, items: Array<{ id: string; status?: QueueItemStatus }>) => void
   addPendingMessage: (sessionId: string, msg: QueuedMessage) => void
   /**
    * Подтверждение строки очереди серверным событием: строка с тем же `id`
@@ -877,6 +888,27 @@ export const useChatStore = create<ChatStore>((set) => ({
           },
         },
       }
+    }),
+
+  setQueueItems: (sessionId, items) =>
+    set((s) => {
+      const current = s.pendingBySession[sessionId]
+      if (!current || current.length === 0) return s
+      const statusById = new Map<string, QueueItemStatus>()
+      for (const item of items) {
+        const id = typeof item?.id === 'string' ? item.id : ''
+        if (!id) continue
+        statusById.set(id, item.status === 'starting' ? 'starting' : 'queued')
+      }
+      let changed = false
+      const pending = current.map((msg) => {
+        const status: QueueItemStatus = (msg.id ? statusById.get(msg.id) : undefined) ?? 'queued'
+        if (msg.status === status) return msg
+        changed = true
+        return { ...msg, status }
+      })
+      if (!changed) return s
+      return { pendingBySession: { ...s.pendingBySession, [sessionId]: pending } }
     }),
 
   addPendingMessage: (sessionId, msg) =>

@@ -113,6 +113,8 @@ export const SESSION_FIELDS = [
   'pending_messages',
   'steer_inbox',
   'current_stream',
+  // Персистентное состояние ретрая (jsonb, миграция 030).
+  'retry',
   'summarization_pending',
   'can_summarize',
   'created_at',
@@ -146,6 +148,8 @@ export const SESSION_JSON_FIELDS: ReadonlySet<string> = new Set([
   'pending_messages',
   'steer_inbox',
   'current_stream',
+  // Персистентное состояние ретрая (jsonb, миграция 030).
+  'retry',
 ]);
 
 /** Колонки `messages` (порядок — как в `001_init`; `028` — reasoning-подпись). */

@@ -320,7 +320,7 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 | Событие | Кому | Поля `data` |
 |---|---|---|
 | `message.accepted` | **адресно** (`recipient` = `userId` отправителя) | `messageId`, `mode` (`queue`\|`steer`\|`interrupt`), `position` (позиция в очереди; `null` — вмешательство очередь не занимает) |
-| `queue.state` | канал сессии | `pendingCount`, `steerCount` — **только счётчики**: ни текста, ни автора |
+| `queue.state` | канал сессии | `pendingCount`, `steerCount` — **только счётчики**: ни текста, ни автора; `items?` — элементы очереди с состоянием (`{id, status: 'queued'\|'starting'}`), **без текста и автора** (id элемента — идентификатор потока сообщения, `metadata.stream_id`; у обрабатываемого сообщения он совпадает с `current_stream.stream_id`) |
 | `message.delivered` | канал сессии | `messageId`, `ord` (монотонный порядок записи), `role`, `author?`, `principal?` (ADR-106) |
 | `turn.started` | канал сессии | `turnId`, `messageId` (реплика, начавшая ход) |
 | `turn.finished` | канал сессии | `turnId`, `status` (`completed`\|`cancelled`\|`error`\|`stopped`) |
@@ -346,6 +346,8 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   разделение по пользователям работает на managed-backend'е.
 - `queue.state` публикуется при постановке/снятии сообщений и на границах хода —
   текст и автор в канал сессии не уходят (устранение прежней утечки `message.queued`).
+  Состояния элементов (`items`: `queued`/`starting`) — тоже без текста и автора:
+  элемент взят в работу (`starting`) — это переход очереди при старте хода.
 
 **Удалённые события (ADR-118 §4, без dual-emit).** Ядро их больше не публикует:
 
@@ -529,6 +531,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > **Прогресс саб-агента — дельты (`subagent.progress`, 2026-10-30).** Событие несёт аддитивные `content_delta`/`reasoning_delta` — приращение с прошлой публикации, а **не** накопленный текст (прежние поля `content`/`reasoning` убраны); пустые дельты не публикуются, суммарный объём дельт на прогон ограничен 200 000 символов (дальше прогресс не публикуется — итоговый отчёт приходит обычным сообщением и не страдает). Старое ядро (гибрид с другой версией) может присылать накопленный текст в `content`/`reasoning` — клиент вычитает уже известный префикс, поэтому блок прогресса не задваивается; незнакомые поля клиент игнорирует.
 
 > **DTO сессии — `current_stream` (ADR-118 §10).** В сериализованной сессии (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) объект живого хода — `current_stream`: `{stream_id, message, agent_role, cancelled, turn_id}`. Поле **`turn_id`** (`turn_…` — идентификатор активного хода) — **аддитивное**: `null`, когда хода нет. Оно нужно клиенту, чтобы **восстановить ход после перезагрузки страницы**: id хода берётся из `current_stream.turn_id` (fallback — `turn_id` последнего сообщения сессии, затем legacy `current_stream.stream_id`); `stream_id` (`stream-…`) — **не** id хода (с ним live-сообщения получали `turn_id = stream-…`, а история — `turn_…`, и блок хода рвался на два). Значение персистится вместе с ходом (файловое хранилище — поле `turn_id` в `current_stream`; PostgreSQL — тот же JSONB-документ), поэтому живой ход опознаётся тем же id и после рестарта сервера.
+
+> **DTO сессии — `activity` (idle | busy | retry).** Аддитивное поле сериализованной сессии (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) — **серверный статус активности**: `{type: 'idle'}` | `{type: 'busy', turnId: string\|null, streamId: string\|null}` | `{type: 'retry', attempt: number, maxRetries: number, retryAt: string, error?: string, streamId: string}`. Приоритет: **retry > busy > idle**. `busy` — идёт ход (`current_stream`) либо сессия заблокирована (`status.blocked`); `retry` — LLM-вызов упал с восстанавливаемой ошибкой, процессор ждёт backoff (`attempt`/`maxRetries` — номер попытки и предел, `retryAt` — ISO-время следующей попытки, `error` — текст последней ошибки). Состояние ретрая **персистентно** (файловое хранилище — поле `retry`; PostgreSQL — jsonb-колонка `sessions.retry`, миграция `030`), поэтому после reload/restart клиент видит «повтор», а не «пусто»; снимается при новом `stream.start`, успехе, терминальной ошибке и отмене/сбросе очереди.
 
 ### 5.6 Messages — `/api/v2/messages`
 

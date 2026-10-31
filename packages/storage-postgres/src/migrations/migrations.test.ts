@@ -17,6 +17,7 @@ import { MIGRATION_026_INSTANCE_SKILLS } from './026-instance-skills.js';
 import { MIGRATION_027_CONTEXT_FILES } from './027-context-files.js';
 import { MIGRATION_028_MESSAGE_REASONING_SIGNATURE } from './028-message-reasoning-signature.js';
 import { MIGRATION_029_MESSAGE_STREAM_V2 } from './029-message-stream-v2.js';
+import { MIGRATION_030_SESSION_RETRY } from './030-session-retry.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -158,12 +159,11 @@ describe('миграция 028_message_reasoning_signature (Anthropic thinking)'
 });
 
 describe('миграция 029_message_stream_v2 (ADR-118)', () => {
-  it('зарегистрирована в реестре под версией 29 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 29', () => {
     const migration = MIGRATIONS.find((m) => m.version === 29);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('029_message_stream_v2');
     expect(migration!.sql).toBe(MIGRATION_029_MESSAGE_STREAM_V2);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(29);
   });
 
   it('добавляет колонки ord/turn_id/step_index/status идемпотентно', () => {
@@ -193,6 +193,24 @@ describe('миграция 029_message_stream_v2 (ADR-118)', () => {
   it('идемпотентна (IF NOT EXISTS)', () => {
     expect(MIGRATION_029_MESSAGE_STREAM_V2).not.toMatch(/ALTER TABLE(?! messages ADD COLUMN IF NOT EXISTS)/);
     expect(MIGRATION_029_MESSAGE_STREAM_V2).not.toMatch(/CREATE INDEX(?! IF NOT EXISTS)/);
+  });
+});
+
+describe('миграция 030_session_retry (ADR-118 — активность сессии)', () => {
+  it('зарегистрирована в реестре под версией 30 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 30);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('030_session_retry');
+    expect(migration!.sql).toBe(MIGRATION_030_SESSION_RETRY);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(30);
+  });
+
+  it('добавляет колонку retry идемпотентно', () => {
+    expect(MIGRATION_030_SESSION_RETRY).toContain(
+      'ALTER TABLE sessions ADD COLUMN IF NOT EXISTS retry jsonb;',
+    );
+    expect(MIGRATION_030_SESSION_RETRY).toContain('COMMENT ON COLUMN sessions.retry');
+    expect(MIGRATION_030_SESSION_RETRY).not.toMatch(/ALTER TABLE(?! sessions ADD COLUMN IF NOT EXISTS)/);
   });
 });
 

@@ -261,6 +261,8 @@ export function createQueueRoutes(
         s.status.blocked = undefined;
         s.status.blockedAt = undefined;
         s.currentStream = undefined;
+        // Очередь сброшена — состояние ретрая (повтор) тоже неактуально.
+        s.retry = undefined;
       }
       counts = {
         pendingCount: s.pendingMessages.length,

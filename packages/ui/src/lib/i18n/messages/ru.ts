@@ -1344,6 +1344,8 @@ export const dict = {
   'chat.queue.steer': 'В разрыв',
   'chat.queue.remove': 'Удалить',
   'chat.queue.steered': 'Отправлено в текущий ход',
+  'chat.queue.itemQueued': 'В очереди',
+  'chat.queue.itemStarting': 'Запускается',
 
   'permission.bar.request': 'Инструмент «{tool}» запрашивает разрешение',
   'permission.bar.waiting': 'ещё {count}',

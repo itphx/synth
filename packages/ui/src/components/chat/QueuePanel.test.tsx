@@ -137,6 +137,24 @@ describe('QueuePanel — строки очереди', () => {
     expect(container.querySelector('[data-testid="queue-item-0"]')!.textContent).toContain('#1')
     expect(container.querySelector('[data-testid="queue-item-1"]')!.textContent).toContain('@fixer')
   })
+
+  it('статус строки: starting и queued подписаны, без статуса — плашки нет', async () => {
+    const container = await renderPanel({
+      locale: 'ru',
+      pending: [
+        { id: 'm1', content: 'запускается', status: 'starting' },
+        { id: 'm2', content: 'ждёт', status: 'queued' },
+        { id: 'm3', content: 'без статуса' },
+      ],
+    })
+    await click(container.querySelector('[data-testid="queue-header-toggle"]'))
+
+    expect(container.querySelector('[data-testid="queue-status-0"]')!.textContent).toBe('Запускается')
+    expect(container.querySelector('[data-testid="queue-status-1"]')!.textContent).toBe('В очереди')
+    expect(container.querySelector('[data-testid="queue-status-2"]')).toBeNull()
+    // Действия строки не ломаются статусом.
+    expect(container.querySelector('[data-testid="queue-remove-0"]')).not.toBeNull()
+  })
 })
 
 describe('QueuePanel — действия строки', () => {

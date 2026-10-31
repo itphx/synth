@@ -67,6 +67,13 @@ export type MessageAcceptedPayload = {
 };
 
 /**
+ * ADR-118 §4: элемент очереди сессии — **только идентификатор и состояние**
+ * (`queued` — ждёт; `starting` — взят в работу). Ни текста, ни автора (утечки
+ * нет — как и у счётчиков).
+ */
+export type QueueItemState = { id: string; status: 'queued' | 'starting' };
+
+/**
  * ADR-118 §4: payload события `queue.state` (канал сессии).
  * Несёт **только счётчики** — ни текста, ни автора (устранение утечки
  * `message.queued`).
@@ -76,6 +83,15 @@ export type QueueStatePayload = {
   pendingCount: number;
   /** Сообщений-вмешательств (`steer`/`interrupt`), ждущих применения. */
   steerCount: number;
+  /**
+   * Элементы очереди с их состоянием (`queued`/`starting`) — аддитивно.
+   *
+   * `id` — идентификатор элемента: идентификатор потока сообщения
+   * (`metadata.stream_id`), по которому клиент связывает элемент с живым
+   * ходом (`current_stream.stream_id`); для обрабатываемого сообщения он
+   * совпадает с `current_stream.stream_id`.
+   */
+  items?: QueueItemState[];
 };
 
 /**

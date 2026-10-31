@@ -178,6 +178,36 @@ describe('transportStore.sendMessage: контракт 202 (ADR-118 §3)', () =>
     expect(useChatStore.getState().pendingBySession['s1']).toBeUndefined()
   })
 
+  it('режим steer → оптимистичная реплика сразу с бейджем «вмешательство»', async () => {
+    startTurn()
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-steer', mode: 'steer', position: null })
+
+    await useTransportStore.getState().sendMessage('s1', 'в ход', undefined, undefined, undefined, 'steer')
+
+    const last = useChatStore.getState().messagesBySession['s1']!.at(-1)!
+    expect(last.metadata).toMatchObject({ steer: true })
+    expect(last.metadata?.interrupt).toBeUndefined()
+  })
+
+  it('режим interrupt → бейджи «вмешательство» и «прерывание» сразу', async () => {
+    startTurn()
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-int', mode: 'interrupt', position: null })
+
+    await useTransportStore.getState().sendMessage('s1', 'стоп и делай', undefined, undefined, undefined, 'interrupt')
+
+    const last = useChatStore.getState().messagesBySession['s1']!.at(-1)!
+    expect(last.metadata).toMatchObject({ steer: true, interrupt: true })
+  })
+
+  it('режим queue (вне хода) не ставит бейдж вмешательства', async () => {
+    mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm-q', mode: 'queue', position: null })
+
+    await useTransportStore.getState().sendMessage('s1', 'привет')
+
+    const last = useChatStore.getState().messagesBySession['s1']!.at(-1)!
+    expect(last.metadata?.steer).toBeUndefined()
+  })
+
   it('режим queue в тело запроса не уходит (дефолт сервера)', async () => {
     mocks.api.enqueueMessage.mockResolvedValue({ messageId: 'm1', mode: 'queue', position: null })
 

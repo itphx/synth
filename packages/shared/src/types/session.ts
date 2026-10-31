@@ -206,6 +206,28 @@ export interface StreamInfo {
   turnId?: string;
 }
 
+/**
+ * Персистентное состояние ретрая сессии (LLM-вызов упал с восстанавливаемой
+ * ошибкой, процессор ждёт backoff перед следующей попыткой).
+ *
+ * Хранится вместе с сессией (файловое хранилище — поле `retry`; PostgreSQL —
+ * jsonb-колонка `sessions.retry`), поэтому после перезагрузки страницы или
+ * рестарта сервера клиент видит «повтор», а не «пусто». Снимается при новом
+ * `stream.start`, успехе, терминальной ошибке и отмене/сбросе очереди.
+ */
+export interface SessionRetryState {
+  /** Идентификатор стрима, чья попытка повторяется. */
+  streamId: string;
+  /** Номер попытки (1-based) — уже совершённых неудачных попыток. */
+  attempt: number;
+  /** Предел попыток (`LLM_MAX_ATTEMPTS`). */
+  maxRetries: number;
+  /** ISO — когда будет следующая попытка. */
+  retryAt: string;
+  /** Текст последней ошибки (может содержать детали провайдера). */
+  error?: string;
+}
+
 export interface Branch {
   id: string;
   parentId?: string;
@@ -328,6 +350,11 @@ export interface Session {
   stickyNotes: StickyNote[];
   references: SessionReference[];
   currentStream?: StreamInfo;
+  /**
+   * Состояние ретрая сессии (персистентное) — см. `SessionRetryState`.
+   * Поле аддитивное: его отсутствие = «ретрая нет».
+   */
+  retry?: SessionRetryState;
   summarizationPending: boolean;
   canSummarize: boolean;
   createdAt: string;

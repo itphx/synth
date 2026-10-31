@@ -192,6 +192,177 @@ describe('QueueProcessor — очистка состояния при ошибк
   });
 });
 
+/**
+ * Персистентное состояние ретрая (`Session.retry`): после reload/restart клиент
+ * должен видеть «повтор», а не «пусто».
+ */
+describe('QueueProcessor — персистентное состояние ретрая', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qretry-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function enqueue(): Promise<{ sessionId: string; streamId: string }> {
+    const session = await sessionManager.createSession({ title: 'Retry' });
+    const msg = makeMessage();
+    await sessionManager.addPendingMessage(session.id, msg);
+    return { sessionId: session.id, streamId: msg.metadata!.stream_id as string };
+  }
+
+  it('recoverable-ошибка: состояние ретрая записывается в сессию', async () => {
+    const { sessionId, streamId } = await enqueue();
+    const events = collectEvents(eventBus, sessionId);
+
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => ({
+      error: 'timeout',
+      errorType: 'timeout',
+      canRetry: true,
+    }));
+
+    const startPromise = processor.start();
+    await waitForEvent(events, 'stream.retry');
+
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.retry).toBeDefined();
+    expect(s!.retry!.streamId).toBe(streamId);
+    expect(s!.retry!.attempt).toBe(1);
+    expect(s!.retry!.maxRetries).toBe(3);
+    expect(s!.retry!.error).toBe('timeout');
+    expect(Date.parse(s!.retry!.retryAt)).toBeGreaterThan(Date.now() - 1000);
+
+    processor.requestStop();
+    await startPromise;
+  });
+
+  it('успех снимает состояние ретрая', async () => {
+    const { sessionId } = await enqueue();
+    const events = collectEvents(eventBus, sessionId);
+    let calls = 0;
+
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => {
+      calls += 1;
+      return calls === 1 ? { error: 'timeout', errorType: 'timeout', canRetry: true } : {};
+    });
+
+    const startPromise = processor.start();
+    await waitForEvent(events, 'stream.retry');
+    processor.retryNow();
+    await startPromise;
+
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.retry).toBeUndefined();
+    expect(s!.currentStream).toBeUndefined();
+  });
+
+  it('терминальная ошибка снимает состояние ретрая', async () => {
+    const { sessionId } = await enqueue();
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => ({
+      error: 'invalid model',
+      errorType: 'model_not_found',
+      canRetry: false,
+    }));
+    await processor.start();
+
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.retry).toBeUndefined();
+  });
+
+  it('«Стоп» во время backoff снимает состояние ретрая', async () => {
+    const { sessionId } = await enqueue();
+    const events = collectEvents(eventBus, sessionId);
+
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => ({
+      error: 'timeout',
+      errorType: 'timeout',
+      canRetry: true,
+    }));
+
+    const startPromise = processor.start();
+    await waitForEvent(events, 'stream.retry');
+    processor.requestStop();
+    await startPromise;
+
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.retry).toBeUndefined();
+  });
+});
+
+/**
+ * ADR-118 §4: `queue.state` несёт состояния элементов очереди
+ * (`queued`/`starting`) — без текста и автора.
+ */
+describe('QueueProcessor — queue.state: состояния элементов очереди', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qitems-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('элементы очереди: взят в работу → starting, остальные → queued (без текста/автора)', async () => {
+    const session = await sessionManager.createSession({ title: 'Items' });
+    const first = makeMessage();
+    const second = makeMessage();
+    await sessionManager.addPendingMessage(session.id, first);
+    await sessionManager.addPendingMessage(session.id, second);
+
+    const events = collectEvents(eventBus, session.id);
+    // Врата: первый ход держится, пока тест не отпустит.
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => {
+      await gate;
+      return {};
+    });
+
+    const startPromise = processor.start();
+
+    // Ждём `queue.state` с элементом `starting` (ход взят в работу).
+    const started = Date.now();
+    let items: Array<{ id: string; status: string }> | null = null;
+    while (Date.now() - started < 2000 && !items) {
+      const state = events.filter((e) => e.type === 'queue.state').pop();
+      const candidate = state?.data.items as Array<{ id: string; status: string }> | undefined;
+      if (candidate?.some((item) => item.status === 'starting')) items = candidate;
+      else await new Promise((r) => setTimeout(r, 5));
+    }
+
+    expect(items).toEqual([
+      { id: first.metadata!.stream_id as string, status: 'starting' },
+      { id: second.metadata!.stream_id as string, status: 'queued' },
+    ]);
+    // Ни текста, ни автора в элементах очереди нет (устранение утечки).
+    expect(JSON.stringify(items)).not.toContain('Привет');
+    const state = events.filter((e) => e.type === 'queue.state').pop()!;
+    expect(state.data.content).toBeUndefined();
+    expect(state.data.author).toBeUndefined();
+
+    release();
+    await startPromise;
+
+    // После извлечения из очереди элементов не остаётся.
+    const finalState = events.filter((e) => e.type === 'queue.state').pop()!;
+    expect(finalState.data.items).toEqual([]);
+    expect(finalState.data.pendingCount).toBe(0);
+  });
+});
+
 describe('QueueProcessor — дедупликация в Phase 1', () => {
   let sessionManager: SessionManager;
   let eventBus: EventBus;

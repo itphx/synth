@@ -5653,6 +5653,8 @@ export class ChatOrchestrator {
         try {
           await this._sessionManager.withLock(childSessionId, async (s) => {
             s.currentStream = undefined;
+            // Прогон завершён — состояние ретрая (если было) неактуально.
+            s.retry = undefined;
             await this._sessionManager.saveSession(s);
           });
         } catch { /* сессия могла быть удалена */ }

@@ -25,6 +25,7 @@ import {
   type Part,
   type Session,
   type SessionReference,
+  type SessionRetryState,
   type SessionWorktree,
   type StickyNote,
   buildContentFromParts,
@@ -67,6 +68,11 @@ export interface SessionRow {
   /** ADR-104: очередь инъекций (steering) — отдельно от `pending_messages`. */
   steer_inbox: unknown;
   current_stream: unknown;
+  /**
+   * Персистентное состояние ретрая сессии (jsonb, миграция `030`). В записях,
+   * созданных до миграции, поля нет — чтение даёт `undefined`.
+   */
+  retry?: unknown;
   summarization_pending: boolean;
   can_summarize: boolean;
   created_at: string | Date;
@@ -545,6 +551,17 @@ export function serializeSession(session: Session): Record<string, unknown> {
           turn_id: session.currentStream.turnId ?? null,
         }
       : null,
+    // Персистентное состояние ретрая (переживает reload/restart): snake_case —
+    // как в JSON-файловом backend.
+    retry: session.retry
+      ? {
+          stream_id: session.retry.streamId,
+          attempt: session.retry.attempt,
+          max_retries: session.retry.maxRetries,
+          retry_at: session.retry.retryAt,
+          ...(session.retry.error ? { error: session.retry.error } : {}),
+        }
+      : null,
     summarization_pending: session.summarizationPending ?? false,
     can_summarize: session.canSummarize ?? false,
     created_at: session.createdAt,
@@ -671,6 +688,34 @@ export function deserializeSessionWorktree(data: unknown): SessionWorktree | und
 }
 
 /**
+ * Значение `sessions.retry` → доменное состояние ретрая.
+ *
+ * Форма хранения — snake_case (`stream_id`/`attempt`/`max_retries`/`retry_at`/
+ * `error`), как в JSON-файловом backend. Legacy-записи (без поля) и битые
+ * значения читаются как «ретрая нет» (`undefined`).
+ */
+export function deserializeSessionRetry(data: unknown): SessionRetryState | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const raw = data as {
+    stream_id?: unknown;
+    attempt?: unknown;
+    max_retries?: unknown;
+    retry_at?: unknown;
+    error?: unknown;
+  };
+  const streamId = typeof raw.stream_id === 'string' ? raw.stream_id : '';
+  const retryAt = typeof raw.retry_at === 'string' ? raw.retry_at : '';
+  if (!streamId || !retryAt) return undefined;
+  return {
+    streamId,
+    attempt: typeof raw.attempt === 'number' ? raw.attempt : 0,
+    maxRetries: typeof raw.max_retries === 'number' ? raw.max_retries : 0,
+    retryAt,
+    ...(typeof raw.error === 'string' && raw.error ? { error: raw.error } : {}),
+  };
+}
+
+/**
  * Строка `sessions` + child-данные → доменная сессия: дословный
  * `deserializeSession` файловой реализации (нормализация иконки/цвета,
  * `sessionOrigin || 'user'`, числовые/булевы дефолты, сборка
@@ -726,6 +771,8 @@ export function deserializeSession(
           turnId: (currentStream.turn_id as string | undefined) ?? undefined,
         }
       : undefined,
+    // Персистентное состояние ретрая (legacy-записи без поля → undefined).
+    retry: deserializeSessionRetry(row.retry),
     summarizationPending: row.summarization_pending ?? false,
     canSummarize: row.can_summarize ?? false,
     createdAt: toIso(row.created_at),

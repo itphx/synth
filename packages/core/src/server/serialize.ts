@@ -121,6 +121,34 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
           turn_id: session.currentStream.turnId ?? null,
         }
       : null,
+    /**
+     * Статус активности сессии (публичный контракт): `retry` > `busy` > `idle`.
+     *
+     * - `idle` — хода нет, очередь не обрабатывается;
+     * - `busy` — идёт ход (`current_stream`) либо сессия заблокирована
+     *   (`status.blocked`) — идентификаторы хода/потока (`turn_id`/`stream_id`)
+     *   заполнены, если ход есть;
+     * - `retry` — LLM-вызов упал с восстанавливаемой ошибкой, процессор ждёт
+     *   backoff: `attempt`/`maxRetries`/`retryAt` (ISO) и текст ошибки.
+     *
+     * Поле аддитивное: клиент без него работает как прежде.
+     */
+    activity: session.retry
+      ? {
+          type: 'retry',
+          attempt: session.retry.attempt,
+          maxRetries: session.retry.maxRetries,
+          retryAt: session.retry.retryAt,
+          ...(session.retry.error ? { error: session.retry.error } : {}),
+          streamId: session.retry.streamId,
+        }
+      : (session.currentStream || session.status.blocked)
+        ? {
+            type: 'busy',
+            turnId: session.currentStream?.turnId ?? null,
+            streamId: session.currentStream?.streamId ?? null,
+          }
+        : { type: 'idle' },
     status: {
       blocked: session.status.blocked || null,
       cancel_requested: session.status.cancelRequested || false,

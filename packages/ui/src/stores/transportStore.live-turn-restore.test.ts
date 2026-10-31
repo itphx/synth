@@ -176,4 +176,93 @@ describe('transportStore: живой ход по признакам из GET /se
       status: 'streaming',
     })
   })
+
+  it('activity.busy с turnId восстанавливает ход без current_stream', () => {
+    useChatStore.getState().setMessages(SESSION, [
+      message({ id: 'm-user', role: 'user', content: 'запусти', ord: 1, status: 'completed' }),
+    ])
+
+    restoreLiveTurnFromSession(SESSION, {
+      status: {},
+      current_stream: null,
+      activity: { type: 'busy', turnId: 'turn-7', streamId: 'stream-7' },
+    })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-7',
+      streamId: 'stream-7',
+      status: 'streaming',
+    })
+  })
+
+  it('activity.retry включает плашку «Повтор N/M» и восстанавливает ход', () => {
+    const retryAt = new Date(Date.now() + 3000).toISOString()
+
+    restoreLiveTurnFromSession(SESSION, {
+      status: {},
+      current_stream: null,
+      activity: {
+        type: 'retry',
+        turnId: 'turn-8',
+        streamId: 'stream-8',
+        attempt: 2,
+        maxRetries: 5,
+        retryAt,
+        error: 'rate limit',
+      },
+    })
+
+    expect(useChatStore.getState().retryBySession[SESSION]).toMatchObject({
+      streamId: 'stream-8',
+      attempt: 2,
+      maxRetries: 5,
+      error: 'rate limit',
+    })
+    expect(useChatStore.getState().retryBySession[SESSION]!.retryInMs).toBeGreaterThanOrEqual(0)
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-8',
+      status: 'streaming',
+    })
+  })
+
+  it('activity.retry с прошедшим retryAt не даёт отрицательной задержки', () => {
+    restoreLiveTurnFromSession(SESSION, {
+      status: {},
+      current_stream: null,
+      activity: {
+        type: 'retry',
+        streamId: 'stream-9',
+        attempt: 1,
+        maxRetries: 3,
+        retryAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+    })
+
+    expect(useChatStore.getState().retryBySession[SESSION]).toMatchObject({
+      streamId: 'stream-9',
+      attempt: 1,
+      maxRetries: 3,
+      retryInMs: 0,
+    })
+  })
+
+  it('уже восстановленный streaming-ход не перетирается activity.turnId', () => {
+    useChatStore.getState().startTurn(SESSION, {
+      turnId: 'turn-live',
+      messageId: 'm-live',
+      status: 'streaming',
+    })
+
+    restoreLiveTurnFromSession(SESSION, {
+      status: {},
+      current_stream: null,
+      activity: { type: 'busy', turnId: 'turn-other', streamId: 'stream-other' },
+    })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-live',
+      messageId: 'm-live',
+      status: 'streaming',
+    })
+  })
 })

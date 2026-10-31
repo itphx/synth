@@ -150,6 +150,11 @@ interface SerializedSession {
   checkpoints: SerializedCheckpoint[];
   sticky_notes: StickyNoteData[];
   current_stream?: Record<string, unknown>;
+  /**
+   * Персистентное состояние ретрая сессии (`SessionRetryState`, snake_case).
+   * В записях, созданных до появления поля, его нет — чтение даёт `undefined`.
+   */
+  retry?: Record<string, unknown>;
   summarization_pending: boolean;
   can_summarize: boolean;
   input_cost: number;
@@ -451,6 +456,17 @@ function serializeSession(session: Session): SerializedSession {
           turn_id: session.currentStream.turnId ?? null,
         }
       : undefined,
+    // Персистентное состояние ретрая (переживает reload/restart): без него
+    // после перезагрузки страницы клиент не видел бы, что ход повторяется.
+    retry: session.retry
+      ? {
+          stream_id: session.retry.streamId,
+          attempt: session.retry.attempt,
+          max_retries: session.retry.maxRetries,
+          retry_at: session.retry.retryAt,
+          ...(session.retry.error ? { error: session.retry.error } : {}),
+        }
+      : undefined,
     summarization_pending: session.summarizationPending,
     can_summarize: session.canSummarize,
     input_cost: session.inputCost,
@@ -543,6 +559,16 @@ function deserializeSession(data: SerializedSession): Session {
           // Формы хранения: `null` (новые записи) или отсутствие поля
           // (legacy) — обе читаются как «хода нет».
           turnId: (data.current_stream.turn_id as string | null | undefined) ?? undefined,
+        }
+      : undefined,
+    // Персистентное состояние ретрая (legacy-записи без поля → undefined).
+    retry: data.retry
+      ? {
+          streamId: data.retry.stream_id as string,
+          attempt: data.retry.attempt as number,
+          maxRetries: data.retry.max_retries as number,
+          retryAt: data.retry.retry_at as string,
+          ...(data.retry.error ? { error: data.retry.error as string } : {}),
         }
       : undefined,
     summarizationPending: data.summarization_pending ?? false,

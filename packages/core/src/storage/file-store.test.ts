@@ -540,6 +540,67 @@ describe('FileStore', () => {
     expect(loaded!.messages[0]!.status).toBeUndefined();
   });
 
+  it('ADR-118: current_stream без хода пишется как turn_id: null, читается как turnId === undefined', async () => {
+    await store.save(makeSession({
+      id: 'stream-no-turn',
+      currentStream: {
+        streamId: 'stream-1',
+        message: 'в работе',
+        startedAt: new Date().toISOString(),
+        cancelled: false,
+      },
+    }));
+
+    // На диске — единое представление «хода нет» (`null`, а не отсутствие ключа).
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'stream-no-turn.json'), 'utf-8'));
+    expect(raw.current_stream.turn_id).toBeNull();
+
+    const loaded = await store.load('stream-no-turn');
+    expect(loaded!.currentStream).toBeDefined();
+    expect(loaded!.currentStream!.streamId).toBe('stream-1');
+    expect(loaded!.currentStream!.turnId).toBeUndefined();
+  });
+
+  it('ADR-118: состояние ретрая (retry) переживает save → load', async () => {
+    await store.save(makeSession({
+      id: 'with-retry',
+      retry: {
+        streamId: 'stream-9',
+        attempt: 2,
+        maxRetries: 3,
+        retryAt: '2026-01-01T00:00:05.000Z',
+        error: 'timeout',
+      },
+    }));
+
+    // На диске — snake_case (как соседние составные поля сессии).
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'with-retry.json'), 'utf-8'));
+    expect(raw.retry).toEqual({
+      stream_id: 'stream-9',
+      attempt: 2,
+      max_retries: 3,
+      retry_at: '2026-01-01T00:00:05.000Z',
+      error: 'timeout',
+    });
+
+    const loaded = await store.load('with-retry');
+    expect(loaded!.retry).toEqual({
+      streamId: 'stream-9',
+      attempt: 2,
+      maxRetries: 3,
+      retryAt: '2026-01-01T00:00:05.000Z',
+      error: 'timeout',
+    });
+  });
+
+  it('сессия без ретрая: поля retry нет (legacy-формат читается как undefined)', async () => {
+    await store.save(makeSession({ id: 'no-retry' }));
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'no-retry.json'), 'utf-8'));
+    expect('retry' in raw).toBe(false);
+    const loaded = await store.load('no-retry');
+    expect(loaded!.retry).toBeUndefined();
+  });
+
   it('ADR-118: appendMessage выдаёт монотонный ord, updateMessage его сохраняет', async () => {
     await store.save(makeSession({ id: 'ord-flow' }));
 

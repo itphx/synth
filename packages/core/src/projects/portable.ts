@@ -916,6 +916,8 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
     // Безопасное состояние: не переносим блокировки/активный стрим/отмену/архив.
     session.status = {};
     session.currentStream = undefined;
+    // Состояние ретрая тоже не переносим (повтор в новой сессии неактуален).
+    session.retry = undefined;
     session.summarizationPending = false;
     session.canSummarize = false;
     session.expiresAt = undefined;

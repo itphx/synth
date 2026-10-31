@@ -84,4 +84,44 @@ describe('transportStore: queue.state → счётчики очереди (ADR-1
       steerCount: 1,
     })
   })
+
+  it('items задаёт статус строки: starting применяется по id', () => {
+    useChatStore.getState().setPendingMessages('s1', [
+      { id: 'm1', content: 'первое' },
+      { id: 'm2', content: 'второе' },
+    ])
+
+    dispatch(makeEvent('queue.state', 's1', {
+      pendingCount: 2,
+      steerCount: 0,
+      items: [{ id: 'm1', status: 'starting' }, { id: 'm2', status: 'queued' }],
+    }))
+
+    const pending = useChatStore.getState().pendingBySession['s1'] ?? []
+    expect(pending[0]).toMatchObject({ id: 'm1', status: 'starting' })
+    expect(pending[1]).toMatchObject({ id: 'm2', status: 'queued' })
+  })
+
+  it('без items все строки считаются queued; мусор в items отбрасывается', () => {
+    useChatStore.getState().setPendingMessages('s1', [
+      { id: 'm1', content: 'первое', status: 'starting' },
+      { id: 'm2', content: 'второе' },
+    ])
+
+    dispatch(makeEvent('queue.state', 's1', { pendingCount: 2, steerCount: 0, items: [{}, null, 'm9'] }))
+
+    const pending = useChatStore.getState().pendingBySession['s1'] ?? []
+    expect(pending[0]?.status).toBe('queued')
+    expect(pending[1]?.status).toBe('queued')
+  })
+
+  it('неизвестный id не заводит строку (тексты — только из API)', () => {
+    useChatStore.getState().setPendingMessages('s1', [{ id: 'm1', content: 'первое' }])
+
+    dispatch(makeEvent('queue.state', 's1', { items: [{ id: 'm-unknown', status: 'starting' }] }))
+
+    const pending = useChatStore.getState().pendingBySession['s1'] ?? []
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({ id: 'm1', status: 'queued' })
+  })
 })

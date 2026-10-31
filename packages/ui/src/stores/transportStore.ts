@@ -14,7 +14,7 @@ import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import type { TransportMode } from './useUIStore'
-import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn } from './chatStore'
+import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
 import { partText, turnHasContent } from '@/lib/messageParts'
 import type { PromptAcceptedResponse } from '@itphx/synth-shared/types'
 import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared/types'
@@ -290,6 +290,25 @@ function asNonEmptyString(value: unknown): string {
 }
 
 /**
+ * ADR-118 §4: `queue.state.items` — статусы элементов очереди без текста/автора.
+ * Валидируем defensive: только объекты с непустым `id`, статус — из набора
+ * (`queued`|`starting`), остальные элементы отбрасываются.
+ */
+function extractQueueItems(raw: unknown): Array<{ id: string; status?: QueueItemStatus }> {
+  if (!Array.isArray(raw)) return []
+  const items: Array<{ id: string; status?: QueueItemStatus }> = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const item = entry as Record<string, unknown>
+    const id = asNonEmptyString(item.id)
+    if (!id) continue
+    const status = item.status === 'starting' ? 'starting' : item.status === 'queued' ? 'queued' : undefined
+    items.push(status ? { id, status } : { id })
+  }
+  return items
+}
+
+/**
  * Последний известный `turn_id` хода сессии — по сообщениям в сторе (с конца).
  *
  * Нужен при восстановлении хода после перезагрузки: `current_stream` старого
@@ -323,9 +342,14 @@ function lastKnownTurnId(messages: MessageData[]): string {
  *
  * **id хода** (порядок источников):
  * 1. `current_stream.turn_id` — точный id хода (ядро публикует его);
- * 2. `turn_id` последнего сообщения сессии — восстановленный ход должен
+ * 2. `activity.turnId` — признак активного хода из `activity` (`busy`/`retry`):
+ *    ядро отдаёт его и без `current_stream`;
+ * 3. `turn_id` последнего сообщения сессии — восстановленный ход должен
  *    совпадать с id хода в истории, иначе блок хода рвётся на два;
- * 3. `current_stream.stream_id` — legacy (ядро без `turn_id`).
+ * 4. `current_stream.stream_id` — legacy (ядро без `turn_id`).
+ *
+ * `activity.type === 'retry'` даёт плашку «Повтор N/M» сразу после reload
+ * (без неё она появлялась только со следующим `stream.retry`).
  *
  * Идемпотентно: уже восстановленный (или идущий) ход не перетирается.
  */
@@ -335,11 +359,33 @@ export function restoreLiveTurnFromSession(sessionId: string, session: unknown):
   const current = useChatStore.getState().turnBySession[sessionId]
   const stream = (data.current_stream ?? null) as Record<string, unknown> | null
   const status = (data.status ?? null) as Record<string, unknown> | null
+  const activity = (data.activity ?? null) as Record<string, unknown> | null
+  const activityType = asNonEmptyString(activity?.type)
+  const activityTurnId = asNonEmptyString(activity?.turnId)
+  const activityStreamId = asNonEmptyString(activity?.streamId)
   const blocked = status?.blocked
   const hasStream = stream != null
+  // `busy`/`retry` — активный ход и без `current_stream` (ядро отдаёт activity).
+  const hasActivity = activityType === 'busy' || activityType === 'retry'
   const messages = useChatStore.getState().messagesBySession[sessionId] ?? []
-  const streamId = asNonEmptyString(stream?.stream_id)
+  const streamId = asNonEmptyString(stream?.stream_id) || activityStreamId
   const agentRole = asNonEmptyString(stream?.agent_role)
+
+  // Плашка автоповтора — из `activity.retry`: после перезагрузки событие
+  // `stream.retry` уже не придёт, и без этого «Повтор N/M» не показывалась.
+  if (activityType === 'retry') {
+    const retryAtMs = Date.parse(asNonEmptyString(activity?.retryAt))
+    const attempt = typeof activity?.attempt === 'number' ? activity.attempt : 1
+    const maxRetries = typeof activity?.maxRetries === 'number' ? activity.maxRetries : 3
+    const error = asNonEmptyString(activity?.error)
+    useChatStore.getState().setStreamRetry(sessionId, {
+      streamId: activityStreamId || streamId,
+      attempt,
+      maxRetries,
+      retryInMs: Number.isFinite(retryAtMs) ? Math.max(0, retryAtMs - Date.now()) : 0,
+      ...(error ? { error } : {}),
+    })
+  }
 
   if (current && current.status === 'streaming') {
     // Ход уже восстановлен (по истории) — **дополняем** его: `stream_id` нужен
@@ -348,13 +394,16 @@ export function restoreLiveTurnFromSession(sessionId: string, session: unknown):
     patchTurnFromSession(sessionId, current, { streamId, agentRole, messages })
     return
   }
-  if (!hasStream && !blocked) return
+  if (!hasStream && !blocked && !hasActivity) return
   const turnId =
     asNonEmptyString(stream?.turn_id)
-    // Id хода из истории — только когда идёт стрим: при `status.blocked`
-    // границы хода восстанавливаются из истории целиком (см. ниже).
-    || (hasStream ? lastKnownTurnId(messages) : '')
+    || activityTurnId
+    // Id хода из истории — только когда идёт стрим (или ход активен по
+    // `activity`): при `status.blocked` границы хода восстанавливаются из
+    // истории целиком (см. ниже).
+    || (hasStream || hasActivity ? lastKnownTurnId(messages) : '')
     || asNonEmptyString(stream?.stream_id)
+    || activityStreamId
   if (!turnId) {
     // Границы хода из истории (сообщение со статусом `streaming`).
     restoreLiveTurnFromHistory(sessionId, messages)
@@ -825,6 +874,7 @@ export function createDispatcher(): EventDispatcher {
       setSummarizationPending,
       updateQueueCount,
       setQueueCounts,
+      setQueueItems,
       patchPartData,
       upsertPendingMessage,
       removeFirstPending,
@@ -997,14 +1047,15 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // ADR-118 §4: `queue.state` — состояние очереди: **только счётчики**
-      // (без текста и автора).
+      // ADR-118 §4: `queue.state` — состояние очереди: счётчики и, аддитивно,
+      // статусы элементов (`items: [{id, status}]`; без текста и автора).
       case 'queue.state': {
         setQueueCounts(
           sid,
           (payload.pendingCount as number) || 0,
           (payload.steerCount as number) || 0,
         )
+        setQueueItems(sid, extractQueueItems(payload.items))
         break
       }
 
@@ -2256,6 +2307,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
 
     // Ход не идёт — реплика показывается оптимистично сразу по `messageId`
     // из ответа; `message.delivered` затем «примирит» её (ord/роль/автор).
+    // Режимы `steer`/`interrupt` (ADR-104) — бейдж «Вмешательство в ход»
+    // виден сразу, не дожидаясь `message.delivered`.
+    const steerMeta = mode === 'steer'
+      ? { steer: true }
+      : mode === 'interrupt'
+        ? { steer: true, interrupt: true }
+        : null
     const msgs = chat.messagesBySession[sessionId] || []
     const nextIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
     chat.upsertMessage(sessionId, {
@@ -2272,6 +2330,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       disabled: false,
       pinned: false,
       hidden: false,
+      ...(steerMeta ? { metadata: steerMeta } : {}),
       created_at: new Date().toISOString(),
     })
     return accepted
