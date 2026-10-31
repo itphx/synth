@@ -1,6 +1,6 @@
 {
   "name": "@itphx/synth",
-  "version": "0.12.5",
+  "version": "0.13.0",
   "description": "AI-платформа для командной работы",
   "license": "MIT",
   "type": "module",
