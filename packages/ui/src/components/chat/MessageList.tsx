@@ -1,10 +1,11 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
+import { RetryStatus } from './RetryStatus'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
 import { isVisibleMessage } from './messageVisibility'
-import { turnHasContent } from '@/lib/messageParts'
+import { messageHasContent, turnHasContent } from '@/lib/messageParts'
 import { useI18n } from '@/lib/i18n'
 import {
   sortMessagesByOrd,
@@ -81,20 +82,24 @@ export function groupMessagesByTurn(messages: MessageData[]): MessageGroup[] {
  *
  * Продолжением считается только assistant-группа: user-реплика рисует свою
  * шапку и разрывает блок. Группы без `turn_id` (сообщения вне хода)
- * продолжениями не бывают.
+ * продолжениями не бывают. Группы с user-сообщениями (в т.ч. `Notice`)
+ * при поиске предыдущей группы **пропускаются**: у реплики пользователя тот же
+ * `turn_id`, что у хода (ADR-118 §1), поэтому иначе первый же ответ хода
+ * считался бы продолжением и оставался без шапки.
  */
 export function isTurnContinuation(groups: MessageGroup[], index: number): boolean {
   const group = groups[index]
   if (!group || group.turnId == null) return false
   if (!group.messages.every((msg) => msg.role === 'assistant')) return false
-  // Предыдущая группа того же хода (группы без `turn_id` — не в счёт).
+  // Предыдущая **assistant**-группа того же хода (группы без `turn_id` и группы
+  // с user-сообщениями — не в счёт: они не «предыдущий сегмент хода»).
   let prevTurnId: string | null = null
   for (let i = index - 1; i >= 0; i -= 1) {
-    const turnId = groups[i]?.turnId
-    if (turnId != null) {
-      prevTurnId = turnId
-      break
-    }
+    const prev = groups[i]
+    if (!prev || prev.turnId == null) continue
+    if (!prev.messages.every((msg) => msg.role === 'assistant')) continue
+    prevTurnId = prev.turnId
+    break
   }
   return prevTurnId != null && prevTurnId === group.turnId
 }
@@ -332,19 +337,35 @@ export function MessageList({
   }, [visibleMessages, turn, turnContentStarted, retry, onRetryNow, onCancelRetry])
 
   /**
-   * Есть ли живой assistant-сегмент? В нём индикатор «идёт» уже показан —
-   * строка активности в конце ленты тогда не нужна.
+   * Есть ли живой assistant-сегмент **с содержимым**? В нём индикатор «идёт»
+   * уже показан — строка активности в конце ленты тогда не нужна.
+   *
+   * Контент — непустые `content`/`parts`/tool-части (в т.ч. накопленные live
+   * в `partsBySession`). **Пустой** streaming-сегмент (шаг без первой дельты)
+   * не рендерится вовсе и строку активности не скрывает.
    */
-  const hasLiveAssistantSegment = useMemo(
-    () => visibleMessages.some((m) => m.role === 'assistant' && m.status === 'streaming'),
-    [visibleMessages],
+  const livePartsByMessage = useChatStore((s) =>
+    sessionId ? s.partsBySession[sessionId] : undefined,
+  )
+  const hasLiveContentSegment = useMemo(
+    () =>
+      visibleMessages.some((m) => {
+        if (m.role !== 'assistant' || m.status !== 'streaming') return false
+        if (messageHasContent(m)) return true
+        const liveParts = m.id ? livePartsByMessage?.[m.id] : undefined
+        if (!liveParts) return false
+        return Object.values(liveParts).some(
+          (part) => part.text.trim() !== '' || (part.type !== 'text' && part.type !== 'reasoning'),
+        )
+      }),
+    [visibleMessages, livePartsByMessage],
   )
 
   /**
    * Строка активности хода («как часы»): контент хода уже был, но живого
-   * сегмента нет — во время инструментов, после reload и в паузах лента
-   * выглядела пустой. Строка — не пузырь и без действий; при завершении хода
-   * (`turn.finished`) исчезает.
+   * сегмента **с содержимым** нет — во время инструментов, после reload и в
+   * паузах между шагами лента выглядела пустой. Строка — не пузырь и без
+   * действий; при завершении хода (`turn.finished`) исчезает.
    *
    * `toolsRunning` — идёт вызов инструмента шага: текста ответа нет, и это не
    * «просто думает» — строка говорит «Выполняется инструмент…».
@@ -353,7 +374,34 @@ export function MessageList({
   const showTurnActivity =
     turn?.status === 'streaming'
     && (turnContentStarted || toolsRunning)
-    && (!hasLiveAssistantSegment || toolsRunning)
+    && (!hasLiveContentSegment || toolsRunning)
+
+  /**
+   * Активный автоповтор хода (`retry.streamId === turn.streamId`) — показываем
+   * его прямо в строке активности, чтобы повтор был виден и в паузе между
+   * шагами (живого сегмента там нет).
+   */
+  const activityRetry =
+    retry && turn?.streamId && retry.streamId === turn.streamId ? retry : null
+
+  /**
+   * Дебаг-цель каждого хода: последнее assistant-сообщение этого `turn_id` с
+   * непустым `debug_data` (пишется только в **финальное** сообщение хода).
+   * Кнопка «Отладка» видна у любого сегмента хода — включая первую группу,
+   * если ход разорван уведомлением (вторая группа с тем же `turn_id`).
+   */
+  const debugTargetByTurn = useMemo(() => {
+    const map = new Map<string, MessageData>()
+    for (const group of groups) {
+      if (!group.turnId) continue
+      for (const msg of group.messages) {
+        if (msg.role !== 'assistant') continue
+        if (!msg.debug_data || Object.keys(msg.debug_data).length === 0) continue
+        map.set(group.turnId, msg)
+      }
+    }
+    return map
+  }, [groups])
 
   /**
    * ADR-118 §10: pin на контейнере хода — у группы из нескольких сегментов
@@ -472,16 +520,10 @@ export function MessageList({
         onRetryNow={onRetryNow}
         onCancelRetry={onCancelRetry}
         /**
-         * ADR-118 §5: пустой живой сегмент (шаг без контента) рисуется, если
-         * контент хода уже был (второй и последующие шаги) — в нём видны точки
-         * «идёт» и статус автоповтора. До первой части ответа индикатор живёт
-         * у реплики пользователя, а пустой сегмент не рисуется вовсе.
-         *
-         * Признак — **результат предиката** `turnContentStarted` (флаг хода
-         * либо контент assistant-сообщений хода): восстановленный после
-         * перезагрузки ход с контентом тоже показывает индикатор в сегменте.
+         * ADR-118 §1: дебаг-цель хода (финальное сообщение с `debug_data`).
+         * `undefined` — цель совпадает с самим сообщением (одиночные сообщения).
          */
-        showLivePlaceholder={msg.status === 'streaming' && turnContentStarted}
+        debugTarget={group.turnId ? debugTargetByTurn.get(group.turnId) : undefined}
       />
     )
   }
@@ -554,17 +596,29 @@ export function MessageList({
               className="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground"
               data-testid="turn-activity"
               data-tools-running={toolsRunning ? 'true' : undefined}
+              data-retrying={activityRetry ? 'true' : undefined}
             >
-              <span
-                className="inline-flex gap-0.5"
-                aria-hidden="true"
-                data-testid="live-indicator"
-              >
-                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
-              </span>
-              <span>{t(toolsRunning ? 'chat.turn.runningTool' : 'chat.turn.working')}</span>
+              {activityRetry ? (
+                <RetryStatus
+                  retry={activityRetry}
+                  onRetryNow={onRetryNow}
+                  onCancelRetry={onCancelRetry}
+                  className="mt-0 border-t-0 pt-0"
+                />
+              ) : (
+                <>
+                  <span
+                    className="inline-flex gap-0.5"
+                    aria-hidden="true"
+                    data-testid="live-indicator"
+                  >
+                    <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </span>
+                  <span>{t(toolsRunning ? 'chat.turn.runningTool' : 'chat.turn.working')}</span>
+                </>
+              )}
             </div>
           )}
         </div>

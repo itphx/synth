@@ -5,8 +5,9 @@
  * Регрессии, которые закрывает набор:
  * - `turn.started` не должен создавать живое сообщение: плашка «обработка»
  *   у реплики видна от отправки до первого чанка (а не исчезает);
- * - пустой живой сегмент (шаг без контента) рисуется только если контент
- *   хода уже был — иначе в нём нет ничего, что показывать;
+ * - пустой живой сегмент (шаг без контента) не рендерится вовсе: индикатор
+ *   «идёт» живёт строкой активности хода в конце ленты (`turn-activity`), а не
+ *   точками в середине склеенного блока;
  * - статус автоповтора (`stream.retry`) виден у реплики, пока нет контента.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
@@ -156,7 +157,7 @@ describe('MessageList: индикатор «идёт» у реплики пол�
     expect(container.querySelector('[data-testid="processing-indicator"]')).toBeNull()
   })
 
-  it('пустой живой сегмент при contentStarted=true показывает точки в конце блока', async () => {
+  it('пустой живой сегмент при contentStarted=true не рисуется — точки идут строкой активности', async () => {
     const container = await renderList([USER_REPLY, LIVE_STEP], {
       turnId: 't1',
       messageId: 'a-1',
@@ -164,11 +165,11 @@ describe('MessageList: индикатор «идёт» у реплики пол�
       contentStarted: true,
     })
 
-    const indicator = container.querySelector('[data-testid="live-indicator"]')
-    expect(indicator).not.toBeNull()
-    const liveSegment = container.querySelector('[data-message-id="a-1"]') as HTMLElement
-    expect(liveSegment).not.toBeNull()
-    expect(liveSegment.contains(indicator!)).toBe(true)
+    // Пустого сегмента в ленте нет (точки не попадают в середину блока хода).
+    expect(container.querySelector('[data-message-id="a-1"]')).toBeNull()
+    const row = container.querySelector('[data-testid="turn-activity"]')
+    expect(row).not.toBeNull()
+    expect(row!.querySelector('[data-testid="live-indicator"]')).not.toBeNull()
   })
 
   it('пустой живой сегмент при contentStarted=false не рисуется (плашка у реплики)', async () => {

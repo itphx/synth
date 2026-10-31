@@ -103,6 +103,15 @@ interface ChatMessageProps {
   onRetry: (msg: MessageData) => void
   onDebug: (msg: MessageData) => void
   onFork: (msg: MessageData) => void
+  /**
+   * ADR-118 §1: сообщение, дебаг которого открывает кнопка «Отладка».
+   *
+   * `debug_data` пишется только в **финальное** сообщение хода, а действия
+   * рисуются у последнего сегмента каждой группы — в ходе, разорванном
+   * уведомлением, у первой группы кнопки не было. `MessageList` передаёт сюда
+   * дебаг-цель хода; `undefined` — цель — само сообщение (одиночные сообщения).
+   */
+  debugTarget?: MessageData
   readOnly?: boolean
   /** true если сессия — дочерняя (сабагент) */
   isSubagent?: boolean
@@ -174,7 +183,7 @@ function ChatMessageInner({
   retry,
   onRetryNow,
   onCancelRetry,
-  showLivePlaceholder = false,
+  debugTarget,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -198,7 +207,10 @@ function ChatMessageInner({
   // ответ частичный, ход продолжился с новым сообщением.
   const isInterrupted = isAssistant && message.metadata?.status === 'interrupted'
   const canRetry = isUser
-  const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
+  /** Дебаг-цель хода (финальное сообщение с `debug_data`) — фоллбек на само сообщение. */
+  const debugMessage = debugTarget ?? message
+  const hasDebug =
+    !!debugMessage.debug_data && Object.keys(debugMessage.debug_data).length > 0
 
   // LLM Gateway (ADR-036): реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧.
   const secrets = (message.metadata?.secrets as Record<string, string> | undefined) ?? undefined
@@ -261,7 +273,10 @@ function ChatMessageInner({
   const handlePin = useCallback(() => onPin(message), [onPin, message])
   const handleDelete = useCallback(() => onDelete(message), [onDelete, message])
   const handleRetry = useCallback(() => onRetry(message), [onRetry, message])
-  const handleDebug = useCallback(() => onDebug(message), [onDebug, message])
+  const handleDebug = useCallback(
+    () => onDebug(debugTarget ?? message),
+    [onDebug, message, debugTarget],
+  )
   const handleFork = useCallback(() => onFork(message), [onFork, message])
   const handleToggleSelect = useCallback(
     (shiftKey: boolean) => {
@@ -487,8 +502,10 @@ function ChatMessageInner({
   // ADR-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
   // ADR-115: сообщение только из вложений (картинка от ассистента без текста) — тоже рендерим.
-  // ADR-118 §5: пустой живой сегмент рисуется, когда контент хода уже был
-  // (`showLivePlaceholder`) — в нём индикатор «идёт» и статус автоповтора.
+  // ADR-118 §5: пустой живой сегмент шага **не** рисуется — индикатор «идёт»
+  // живёт строкой активности хода в конце ленты (`MessageList`,
+  // `turn-activity`). Пустой сегмент между шагами давал точки в **середине**
+  // склеенного блока хода (после текста шага, перед следующим шагом).
   if (
     !displayContent &&
     !message.reasoning &&
@@ -496,8 +513,7 @@ function ChatMessageInner({
     reasoningBlocks.length === 0 &&
     intermediateTextBlocks.length === 0 &&
     !hasAttachments &&
-    !showStats &&
-    !showLivePlaceholder
+    !showStats
   ) return null
 
   // ADR-046 §7.1: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.

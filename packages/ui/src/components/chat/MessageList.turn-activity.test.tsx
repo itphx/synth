@@ -41,7 +41,7 @@ vi.hoisted(() => {
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { MessageList } from './MessageList'
-import type { ActiveTurn, MessageData } from '@/stores/chatStore'
+import type { ActiveTurn, MessageData, StreamRetry } from '@/stores/chatStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -78,6 +78,7 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 async function renderList(
   messages: MessageData[],
   turn?: ActiveTurn | null,
+  retry?: StreamRetry | null,
 ): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -89,6 +90,7 @@ async function renderList(
         <MessageList
           messages={messages}
           turn={turn ?? null}
+          retry={retry ?? null}
           onCopy={() => {}}
           onToggle={() => {}}
           onPin={() => {}}
@@ -172,5 +174,56 @@ describe('MessageList: строка активности хода', () => {
     })
 
     expect(container.querySelector('[data-testid="turn-activity"]')).toBeNull()
+  })
+
+  it('пустой streaming-сегмент не рендерится и не скрывает строку', async () => {
+    const emptyLive = msg({
+      id: 'a-empty',
+      index: 2,
+      ord: 3,
+      role: 'assistant',
+      turn_id: 't1',
+      step_index: 1,
+      status: 'streaming',
+      content: '',
+      parts: [],
+    })
+    const container = await renderList([USER_REPLY, ANSWER, emptyLive], {
+      turnId: 't1',
+      messageId: 'a-empty',
+      status: 'streaming',
+      contentStarted: true,
+    })
+
+    // Пустой сегмент в ленте отсутствует (нет точек в середине блока)…
+    expect(container.querySelector('[data-message-id="a-empty"]')).toBeNull()
+    // …а индикатор хода виден строкой внизу.
+    expect(container.querySelector('[data-testid="turn-activity"]')).not.toBeNull()
+  })
+
+  it('retry активного хода виден в строке активности (пауза между шагами)', async () => {
+    const container = await renderList(
+      [USER_REPLY, ANSWER],
+      { turnId: 't1', streamId: 's-1', status: 'streaming', contentStarted: true },
+      { streamId: 's-1', attempt: 2, maxRetries: 3, retryInMs: 5000 },
+    )
+
+    const row = container.querySelector('[data-testid="turn-activity"]')
+    expect(row).not.toBeNull()
+    expect(row!.getAttribute('data-retrying')).toBe('true')
+    expect(row!.textContent).toContain('Retry 2/3 in')
+  })
+
+  it('retry другого стрима в строке активности не показывается', async () => {
+    const container = await renderList(
+      [USER_REPLY, ANSWER],
+      { turnId: 't1', streamId: 's-1', status: 'streaming', contentStarted: true },
+      { streamId: 's-2', attempt: 1, maxRetries: 3, retryInMs: 5000 },
+    )
+
+    const row = container.querySelector('[data-testid="turn-activity"]')
+    expect(row).not.toBeNull()
+    expect(row!.getAttribute('data-retrying')).toBeNull()
+    expect(row!.textContent).toContain('Working')
   })
 })

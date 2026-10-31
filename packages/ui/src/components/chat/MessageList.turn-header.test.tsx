@@ -110,6 +110,21 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
+/**
+ * Обычный ход: реплика пользователя несёт **тот же** `turn_id`, что и ответ
+ * (ADR-118 §1). Первая assistant-группа хода идёт сразу после user-группы —
+ * шапка («агент · модель · время») должна быть у неё, а не считаться повтором.
+ */
+function turnWithUserReply(): MessageData[] {
+  return [
+    msg({ id: 'u1', index: 1, ord: 1, role: 'user', turn_id: 't1', content: 'Вопрос' }),
+    msg({
+      id: 'a1', index: 2, ord: 2, turn_id: 't1', step_index: 0,
+      content: 'Ответ', agent_role: 'fixer', model: 'model-x',
+    }),
+  ]
+}
+
 /** Ход, разорванный уведомлением о фоновом прогоне. */
 function turnSplitByNotice(): MessageData[] {
   return [
@@ -141,6 +156,33 @@ describe('MessageList: шапка хода — только у первого с
     expect(isTurnContinuation(groups, 1)).toBe(false)
   })
 
+  it('первая assistant-группа после user-реплики — не продолжение', () => {
+    const groups = groupMessagesByTurn(turnWithUserReply())
+    // user-группа (свой `turn_id` хода) не делает ответ продолжением.
+    expect(isTurnContinuation(groups, 1)).toBe(false)
+  })
+
+  it('шапка есть у ответа после user-реплики (агент и модель видны)', async () => {
+    const container = await renderList(turnWithUserReply())
+
+    // Шапка ответа: агент + модель.
+    expect(container.textContent).toContain('fixer')
+    expect(container.textContent).toContain('model-x')
+  })
+
+  it('шапки нет у ответа, если предыдущая assistant-группа — другой ход', async () => {
+    const container = await renderList([
+      msg({ id: 'a1', index: 1, ord: 1, turn_id: 't1', content: 'Первый', agent_role: 'fixer', model: 'model-x' }),
+      msg({ id: 'a2', index: 2, ord: 2, turn_id: 't2', content: 'Второй', agent_role: 'tester', model: 'model-y' }),
+    ])
+
+    // Оба хода — со своей шапкой.
+    expect(container.textContent).toContain('fixer')
+    expect(container.textContent).toContain('tester')
+    expect(container.textContent).toContain('model-x')
+    expect(container.textContent).toContain('model-y')
+  })
+
   it('шапка агента рисуется один раз — у первого сегмента хода', async () => {
     const container = await renderList(turnSplitByNotice())
 
@@ -148,6 +190,30 @@ describe('MessageList: шапка хода — только у первого с
     const occurrences = (container.textContent?.match(/fixer/g) ?? []).length
     expect(occurrences).toBe(1)
     // Текст обоих сегментов на месте.
+    expect(container.textContent).toContain('Первый сегмент')
+    expect(container.textContent).toContain('Второй сегмент')
+  })
+
+  it('ход «реплика → ответ → notice → продолжение»: шапка ровно у первого ответа', async () => {
+    const messages: MessageData[] = [
+      msg({ id: 'u1', index: 1, ord: 1, role: 'user', turn_id: 't1', content: 'Вопрос' }),
+      msg({ id: 'a1', index: 2, ord: 2, turn_id: 't1', step_index: 0, agent_role: 'fixer', model: 'model-x', content: 'Первый сегмент' }),
+      msg({
+        id: 'notice', index: 3, ord: 3, role: 'user', turn_id: 't1',
+        content: 'Фоновый процесс завершён',
+        metadata: { type: 'background_run_result' },
+      }),
+      msg({ id: 'a2', index: 4, ord: 4, turn_id: 't1', step_index: 1, agent_role: 'fixer', model: 'model-x', content: 'Второй сегмент' }),
+    ]
+
+    const groups = groupMessagesByTurn(messages)
+    // Первый ответ (после реплики пользователя) — с шапкой, второй — продолжение.
+    expect(isTurnContinuation(groups, 1)).toBe(false)
+    expect(isTurnContinuation(groups, 3)).toBe(true)
+
+    const container = await renderList(messages)
+    expect((container.textContent?.match(/fixer/g) ?? []).length).toBe(1)
+    expect((container.textContent?.match(/model-x/g) ?? []).length).toBe(1)
     expect(container.textContent).toContain('Первый сегмент')
     expect(container.textContent).toContain('Второй сегмент')
   })
