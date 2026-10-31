@@ -510,6 +510,7 @@ export function MessageList({
       return (
         <div
           key={`divider:${msg.id ?? msg.index}`}
+          data-step-divider
           className="mt-2 w-full border-t border-border/30"
         >
           {segment}

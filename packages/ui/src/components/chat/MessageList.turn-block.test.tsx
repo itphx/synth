@@ -139,7 +139,11 @@ describe('MessageList: ход как один блок (ADR-118 §1)', () => {
       expect(bubble.className).not.toContain('px-4')
     }
 
-    // Между шагами — разделитель, а не отдельная карточка.
+    // Между шагами — разделитель, а не отдельная карточка. Маркер
+    // `data-step-divider` — шов для CSS-правила (`styles/index.css`): отступ
+    // между шагами даёт только разделитель, нижний отступ последнего блока
+    // предыдущего сегмента снят (иначе зазор 16px против 8px внутри шага).
+    expect(block.querySelectorAll('[data-step-divider]').length).toBeGreaterThanOrEqual(1)
     expect(block.querySelectorAll('.border-t').length).toBeGreaterThanOrEqual(1)
   })
 
