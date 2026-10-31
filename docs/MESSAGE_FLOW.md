@@ -497,13 +497,18 @@ stateDiagram-v2
    `stream.retry`; агент/модель/провайдер — для шапки хода.
 5. `contentStarted` = `turnHasContent(...)` по истории (иначе индикатор «идёт» стоял бы у реплики,
    хотя ответ уже виден).
-6. `activity.type === 'retry'` → `setStreamRetry` из `attempt`/`maxRetries`/`retryAt`/`error`
+6. **Снимок живого шага** (`current_stream.live`, ADR-118 §5) применяется **до** расчёта границ:
+   сообщение шага создаётся/дополняется (`content`, `reasoning`, `parts`) и части кладутся в
+   live-состояние (`upsertPart`) — открытая посреди хода сессия показывает всё до момента запроса,
+   не дожидаясь следующей дельты. Снимок серверный (in-memory), привязан к `streamId` и снимается на
+   `step.finished`; завершённое сообщение снимком не «воскрешается».
+7. `activity.type === 'retry'` → `setStreamRetry` из `attempt`/`maxRetries`/`retryAt`/`error`
    (событие `stream.retry` после reload уже не придёт).
-7. Признаки активного хода: `current_stream`, `status.blocked`, `activity.type: 'busy'|'retry'`;
+8. Признаки активного хода: `current_stream`, `status.blocked`, `activity.type: 'busy'|'retry'`;
    `idle`/отсутствие `activity` активным ходом не считается.
-8. Очередь: `pending_messages` → строки очереди; если есть активный стрим, **первый** элемент
+9. Очередь: `pending_messages` → строки очереди; если есть активный стрим, **первый** элемент
    (он же `starting`) не показывается — он уже в ленте.
-9. **Дочерняя сессия** (`session_origin: 'subagent'`): сохранённый `currentStream` ребёнка несёт
+10. **Дочерняя сессия** (`session_origin: 'subagent'`): сохранённый `currentStream` ребёнка несёт
    `turnId = <childSessionId>` (так его пишет `run-cycle`, а при detach — `detachable.ts`), и
    `activity` ребёнка = `busy`; `contentStarted` считается по истории, как у основной. Восстановление
    идёт тем же путём (`restoreLiveTurnFromSession`), а UI дополнительно включает read-only-режим

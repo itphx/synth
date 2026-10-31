@@ -1,5 +1,6 @@
 import type { Session, Message, Project, StatusMessage } from '@itphx/synth-shared';
 import { isModeApplicable } from '../engine/agents/mode.js';
+import { getLiveStreamSnapshot } from '../engine/live-stream-snapshot.js';
 
 /** Минимальный тип реестра агентов для вычисления modeApplicable. */
 export interface SerializeAgentRegistry {
@@ -113,6 +114,26 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
           message: session.currentStream.message,
           agent_role: session.currentStream.agentRole || null,
           cancelled: session.currentStream.cancelled,
+          /**
+           * ADR-118 §5: снимок **живого шага** (текст, рассуждения, части) на
+           * момент ответа. Клиент открывает сессию посреди хода и рисует всё
+           * до текущего момента, не дожидаясь следующей дельты. `null` — шага
+           * нет (шаг закрыт/ещё не начался) или стрим уже не тот.
+           */
+          live: (() => {
+            const live = getLiveStreamSnapshot(session.id, session.currentStream.streamId);
+            return live
+              ? {
+                  message_id: live.messageId,
+                  step_index: live.stepIndex ?? null,
+                  turn_id: live.turnId ?? null,
+                  content: live.content,
+                  reasoning: live.reasoning ?? null,
+                  parts: live.parts,
+                  updated_at: live.updatedAt,
+                }
+              : null;
+          })(),
           /**
            * ADR-118 §10: метка хода живого стрима (`turn_...`) — UI по ней
            * восстанавливает ход после перезагрузки страницы (группировка

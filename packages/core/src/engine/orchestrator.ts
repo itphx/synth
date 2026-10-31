@@ -126,7 +126,9 @@ import {
   textPartId,
   toolCallPart,
   toolCallPartId,
+  liveStepParts,
 } from './orchestrator/turn-events.js';
+import { setLiveStreamSnapshot } from './live-stream-snapshot.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type ProviderOverrides, type RouteProviderDeps } from './orchestrator/routing.js';
 import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn, type CurrentModelPair } from './orchestrator/prompt-info.js';
@@ -4011,6 +4013,18 @@ export class ChatOrchestrator {
           intervalMs: this._streamPersistIntervalMs,
         });
         publishStepStarted(publishChunk, { turnId, stepIndex, messageId: stepMessageId });
+        // ADR-118 §5: серверный снимок живого шага. По нему открытая посреди
+        // хода сессия рисует содержимое до текущего момента, не дожидаясь
+        // следующего чанка (`current_stream.live` в DTO).
+        setLiveStreamSnapshot(session.id, {
+          streamId,
+          turnId,
+          messageId: stepMessageId,
+          stepIndex,
+          content: '',
+          parts: [],
+          updatedAt: nowISO(),
+        });
 
         // ADR-117: effort считается на каждый LLM-вызов из **актуальных**
         // настроек: `agent.effort` → `session.settings.effort` → тир уровня
@@ -4101,6 +4115,20 @@ export class ChatOrchestrator {
                 part: { id: reasoningPartId(0), type: 'reasoning', data: chunk.reasoning },
               });
             }
+
+            // ADR-118 §5: обновляем серверный снимок шага (in-memory). Снимок
+            // читает `GET /sessions/:id` — открытие сессии не зависит от того,
+            // успел ли клиент получить дельты.
+            setLiveStreamSnapshot(session.id, {
+              streamId,
+              turnId,
+              messageId: stepMessageId,
+              stepIndex,
+              content: accumulatedContent,
+              ...(accumulatedReasoning ? { reasoning: accumulatedReasoning } : {}),
+              parts: liveStepParts(accumulatedContent, accumulatedReasoning, toolCalls),
+              updatedAt: nowISO(),
+            });
           }
         } catch (e) {
           const errMsg = String(e);

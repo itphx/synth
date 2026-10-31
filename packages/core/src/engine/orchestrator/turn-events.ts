@@ -23,6 +23,7 @@ import type {
   TurnFinishedPayload,
   TurnStartedPayload,
 } from '@itphx/synth-shared';
+import { clearLiveStreamSnapshotByMessage } from '../live-stream-snapshot.js';
 
 /** Публикация события в шину сессии (тот же шов, что `publishChunk`). */
 export type PublishEvent = (event: string, data: Record<string, unknown>) => void;
@@ -103,6 +104,9 @@ export function publishStepStarted(publish: PublishEvent, payload: StepStartedPa
 
 /** `step.finished` — шаг завершён: статус сообщения + расход шага. */
 export function publishStepFinished(publish: PublishEvent, payload: StepFinishedPayload): void {
+  // ADR-118 §5: шаг закрыт — живой снимок снимается (источник дальше —
+  // история: запись сообщения шага уже зафиксирована).
+  clearLiveStreamSnapshotByMessage(payload.messageId);
   publish('step.finished', { ...payload });
 }
 
@@ -142,6 +146,28 @@ export function publishPartDelta(publish: PublishEvent, payload: PartDeltaPayloa
 /** `part.updated` — часть сообщения обновлена целиком. */
 export function publishPartUpdated(publish: PublishEvent, payload: PartUpdatedPayload): void {
   publish('part.updated', { ...payload });
+}
+
+/**
+ * Части **живого** шага для серверного снимка (`current_stream.live`,
+ * ADR-118 §5).
+ *
+ * Идентификаторы те же, что у `part.delta`/`part.updated`: клиент мержит
+ * снимок с уже накопленными live-частями по `partId` — без дублей текста.
+ */
+export function liveStepParts(
+  content: string,
+  reasoning: string | undefined,
+  toolCalls: readonly Record<string, unknown>[] | undefined,
+): Part[] {
+  const parts: Part[] = [];
+  if (content) parts.push({ id: textPartId(0), type: 'text', data: content });
+  if (reasoning) parts.push({ id: reasoningPartId(0), type: 'reasoning', data: reasoning });
+  for (const call of toolCalls ?? []) {
+    const callId = typeof call?.id === 'string' ? call.id : '';
+    if (callId) parts.push(toolCallPart(callId, call));
+  }
+  return parts;
 }
 
 /**

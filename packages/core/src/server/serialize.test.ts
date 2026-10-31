@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { serializeMessage, serializeSession } from './serialize.js';
+import { resetLiveStreamSnapshots, setLiveStreamSnapshot } from '../engine/live-stream-snapshot.js';
 import { generateId, nowISO, makeTextPart, MessageRole, type Message, type Session } from '@itphx/synth-shared';
 
 function message(over: Partial<Message> = {}): Message {
@@ -164,5 +165,63 @@ describe('serializeSession — activity (idle | busy | retry)', () => {
     const activity = out.activity as Record<string, unknown>;
     expect(activity.type).toBe('retry');
     expect(activity.turnId).toBeUndefined();
+  });
+});
+
+
+describe('serializeSession — current_stream.live (ADR-118 §5)', () => {
+  afterEach(() => resetLiveStreamSnapshots());
+
+  const stream = {
+    streamId: 'stream-1',
+    message: 'в работе',
+    startedAt: nowISO(),
+    cancelled: false,
+    turnId: 'turn-1',
+  };
+
+  it('отдаёт снимок живого шага (текст, reasoning, части) для текущего стрима', () => {
+    setLiveStreamSnapshot('sess-1', {
+      streamId: 'stream-1',
+      turnId: 'turn-1',
+      messageId: 'msg-step-1',
+      stepIndex: 0,
+      content: 'привет',
+      reasoning: 'думаю',
+      parts: [
+        { id: 'msg:text:0', type: 'text', data: 'привет' },
+        { id: 'msg:reasoning:0', type: 'reasoning', data: 'думаю' },
+      ],
+      updatedAt: nowISO(),
+    });
+
+    const out = serializeSession(session({ currentStream: stream })) as Record<string, unknown>;
+    const dto = out.current_stream as Record<string, unknown>;
+    expect(dto.live).toMatchObject({
+      message_id: 'msg-step-1',
+      step_index: 0,
+      turn_id: 'turn-1',
+      content: 'привет',
+      reasoning: 'думаю',
+    });
+    expect((dto.live as { parts: unknown[] }).parts).toHaveLength(2);
+  });
+
+  it('снимок другого стрима не отдаётся (новый ход — новый стрим)', () => {
+    setLiveStreamSnapshot('sess-1', {
+      streamId: 'stream-old',
+      messageId: 'msg-step-old',
+      content: 'старое',
+      parts: [],
+      updatedAt: nowISO(),
+    });
+
+    const out = serializeSession(session({ currentStream: stream })) as Record<string, unknown>;
+    expect((out.current_stream as Record<string, unknown>).live).toBeNull();
+  });
+
+  it('нет снимка → live: null (поле аддитивное)', () => {
+    const out = serializeSession(session({ currentStream: stream })) as Record<string, unknown>;
+    expect((out.current_stream as Record<string, unknown>).live).toBeNull();
   });
 });

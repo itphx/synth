@@ -15,8 +15,8 @@ import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
-import { partText, turnHasContent } from '@/lib/messageParts'
-import type { PromptAcceptedResponse } from '@itphx/synth-shared/types'
+import { partText, toLivePart, turnHasContent } from '@/lib/messageParts'
+import type { Part, PromptAcceptedResponse } from '@itphx/synth-shared/types'
 import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared/types'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
@@ -367,6 +367,73 @@ function lastKnownTurnId(messages: MessageData[]): string {
 }
 
 /**
+ * ADR-118 §5: применить **серверный снимок живого шага**
+ * (`current_stream.live`) из `GET /sessions/:id`.
+ *
+ * Зачем: содержимое стримящегося шага у клиента складывается из дельт, а
+ * персистентная запись отстаёт (троттлинг). Открытие сессии посреди хода
+ * (вкладка, перезагрузка страницы, второй клиент) показывало только
+ * зафиксированную часть, остальное дорисовывалось по чанкам. Снимок даёт всё
+ * до момента запроса: текст, рассуждения и части шага.
+ *
+ * Идемпотентно: снимок — тот же шаг (`messageId`), части мержатся по `partId`;
+ * сообщение не пересоздаётся. Финальное сообщение (терминальный статус) не
+ * «воскрешается» — история по нему уже источник истины.
+ */
+function applyLiveStreamSnapshot(
+  sessionId: string,
+  stream: Record<string, unknown> | null,
+): void {
+  const live = (stream?.live ?? null) as Record<string, unknown> | null
+  if (!live || typeof live !== 'object') return
+  const messageId = asNonEmptyString(live.message_id)
+  if (!messageId) return
+  const content = typeof live.content === 'string' ? live.content : ''
+  const reasoning = typeof live.reasoning === 'string' ? live.reasoning : ''
+  const parts = Array.isArray(live.parts) ? (live.parts as Part[]) : []
+  if (!content && !reasoning && parts.length === 0) return
+  const stepIndex = typeof live.step_index === 'number' ? live.step_index : undefined
+  const turnId = asNonEmptyString(live.turn_id) || undefined
+  const chat = useChatStore.getState()
+  const existing = (chat.messagesBySession[sessionId] || []).find((m) => m.id === messageId)
+  // Шаг уже закрыт (терминальный статус) — снимок устарел, историю не трогаем.
+  if (existing?.status && existing.status !== 'streaming') return
+
+  if (!existing) {
+    chat.upsertMessage(sessionId, {
+      index: 0,
+      id: messageId,
+      role: 'assistant',
+      content,
+      status: 'streaming',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+      ...(turnId ? { turn_id: turnId } : {}),
+      ...(stepIndex != null ? { step_index: stepIndex } : {}),
+      ...(reasoning ? { reasoning } : {}),
+      ...(parts.length > 0 ? { parts } : {}),
+    })
+  } else {
+    const patch: Partial<MessageData> = {}
+    if ((existing.content?.length ?? 0) < content.length) patch.content = content
+    if ((existing.parts?.length ?? 0) === 0 && parts.length > 0) patch.parts = parts
+    if (existing.status !== 'streaming') patch.status = 'streaming'
+    if (!existing.turn_id && turnId) patch.turn_id = turnId
+    if (existing.step_index == null && stepIndex != null) patch.step_index = stepIndex
+    if (Object.keys(patch).length > 0) chat.updateMessageById(sessionId, messageId, patch)
+  }
+
+  // Live-части: `buildPartsView` собирает по ним текст/reasoning/вызовы, а
+  // совпадающие `partId` мержатся с уже накопленными дельтами.
+  for (const part of parts) {
+    if (!part?.id) continue
+    chat.upsertPart(sessionId, messageId, part.id, toLivePart(part))
+  }
+}
+
+/**
  * ADR-118 §5: восстановление **живого хода** по признакам активного хода из
  * `GET /sessions/:id` (`current_stream`, `status.blocked`).
  *
@@ -407,6 +474,10 @@ export function restoreLiveTurnFromSession(sessionId: string, session: unknown):
   const hasStream = stream != null
   // `busy`/`retry` — активный ход и без `current_stream` (ядро отдаёт activity).
   const hasActivity = activityType === 'busy' || activityType === 'retry'
+  // ADR-118 §5: сначала применяем серверный снимок живого шага — тогда
+  // `contentStarted` и границы хода считаются по нему, а не по отстающей
+  // персистентной записи.
+  applyLiveStreamSnapshot(sessionId, stream)
   const messages = useChatStore.getState().messagesBySession[sessionId] ?? []
   const streamId = asNonEmptyString(stream?.stream_id) || activityStreamId
   const agentRole = asNonEmptyString(stream?.agent_role)

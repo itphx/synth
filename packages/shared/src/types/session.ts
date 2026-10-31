@@ -1,5 +1,5 @@
 import type { PermissionConfig, McpServerToolSettings } from './permission.js';
-import type { Message } from './message.js';
+import type { Message, Part } from './message.js';
 import type { PromptState } from './prompt.js';
 import type { SessionWorktree } from './worktree.js';
 // ADR-117: тир усилия (effort) — значение, общее для агента и сессии.
@@ -204,6 +204,32 @@ export interface StreamInfo {
    * хода и индикаторы «ход идёт» после reload ломаются.
    */
   turnId?: string;
+}
+
+/**
+ * ADR-118 §5: снимок **живого шага** (in-memory, отдаётся в
+ * `GET /api/v2/sessions/:id` → `current_stream.live`).
+ *
+ * Пока шаг стримится, его содержимое у клиента складывается из дельт. Снимок
+ * позволяет открыть сессию посреди хода и увидеть всё до текущего момента, не
+ * ожидая следующей дельты. `parts` — те же части, что в `part.delta`/
+ * `part.updated` (детерминированные id), поэтому клиент мержит их без дублей.
+ */
+export interface StreamLiveSnapshot {
+  /** Id сообщения шага (assistant). */
+  messageId: string;
+  /** Индекс шага в ходе. */
+  stepIndex?: number;
+  /** Id хода (`turn_...`), если известен. */
+  turnId?: string;
+  /** Накопленный текст шага. */
+  content: string;
+  /** Накопленные рассуждения шага. */
+  reasoning?: string;
+  /** Части шага (текст/reasoning/вызовы инструментов). */
+  parts: Part[];
+  /** Момент последнего обновления (ISO). */
+  updatedAt: string;
 }
 
 /**

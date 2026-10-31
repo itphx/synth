@@ -266,3 +266,126 @@ describe('transportStore: живой ход по признакам из GET /se
     })
   })
 })
+
+describe('transportStore: серверный снимок живого шага (ADR-118 §5)', () => {
+  it('снимок создаёт сегмент шага целиком — без ожидания чанков', () => {
+    useChatStore.getState().setMessages(SESSION, [
+      message({ id: 'm-user', role: 'user', content: 'привет', ord: 1 }),
+    ])
+
+    restoreLiveTurnFromSession(SESSION, {
+      id: SESSION,
+      status: {},
+      activity: { type: 'busy', turnId: 'turn-1', streamId: 'stream-1' },
+      current_stream: {
+        stream_id: 'stream-1',
+        turn_id: 'turn-1',
+        agent_role: 'leader',
+        live: {
+          message_id: 'm-step',
+          step_index: 0,
+          turn_id: 'turn-1',
+          content: 'уже видно',
+          reasoning: 'думаю',
+          parts: [
+            { id: 'msg:text:0', type: 'text', data: 'уже видно' },
+            { id: 'msg:reasoning:0', type: 'reasoning', data: 'думаю' },
+          ],
+          updated_at: '2026-10-30T00:00:01Z',
+        },
+      },
+    })
+
+    const chat = useChatStore.getState()
+    const step = chat.messagesBySession[SESSION]!.find((m) => m.id === 'm-step')
+    expect(step).toBeDefined()
+    expect(step!.content).toBe('уже видно')
+    expect(step!.status).toBe('streaming')
+    expect(step!.turn_id).toBe('turn-1')
+    expect(step!.step_index).toBe(0)
+
+    // Части легли в live-состояние — `buildPartsView` соберёт по ним текст.
+    const parts = chat.partsBySession[SESSION]?.['m-step'] ?? {}
+    expect(Object.keys(parts)).toEqual(expect.arrayContaining(['msg:text:0', 'msg:reasoning:0']))
+    expect(parts['msg:text:0']!.text).toBe('уже видно')
+
+    // Контент хода уже есть → индикатор в шапке, а не у реплики.
+    expect(chat.turnBySession[SESSION]?.status).toBe('streaming')
+    expect(chat.turnBySession[SESSION]?.contentStarted).toBe(true)
+  })
+
+  it('снимок дополняет уже известный сегмент и не дублирует части', () => {
+    useChatStore.getState().setMessages(SESSION, [
+      message({
+        id: 'm-step',
+        turn_id: 'turn-1',
+        step_index: 0,
+        status: 'streaming',
+        content: 'коротко',
+        parts: [{ id: 'msg:text:0', type: 'text', data: 'коротко' }],
+      }),
+    ])
+    useChatStore.getState().upsertPart(SESSION, 'm-step', 'msg:text:0', {
+      id: 'msg:text:0',
+      type: 'text',
+      text: 'коротко',
+      data: 'коротко',
+    })
+
+    restoreLiveTurnFromSession(SESSION, {
+      id: SESSION,
+      status: {},
+      current_stream: {
+        stream_id: 'stream-1',
+        turn_id: 'turn-1',
+        live: {
+          message_id: 'm-step',
+          step_index: 0,
+          turn_id: 'turn-1',
+          content: 'коротко, но уже длиннее',
+          parts: [{ id: 'msg:text:0', type: 'text', data: 'коротко, но уже длиннее' }],
+          updated_at: '2026-10-30T00:00:01Z',
+        },
+      },
+    })
+
+    const chat = useChatStore.getState()
+    const step = chat.messagesBySession[SESSION]!.find((m) => m.id === 'm-step')!
+    expect(step.content).toBe('коротко, но уже длиннее')
+    const parts = chat.partsBySession[SESSION]!['m-step']!
+    expect(Object.keys(parts)).toEqual(['msg:text:0'])
+    expect(parts['msg:text:0']!.text).toBe('коротко, но уже длиннее')
+  })
+
+  it('снимок не воскрешает завершённый шаг', () => {
+    useChatStore.getState().setMessages(SESSION, [
+      message({
+        id: 'm-step',
+        turn_id: 'turn-1',
+        step_index: 0,
+        status: 'completed',
+        content: 'финал',
+      }),
+    ])
+
+    restoreLiveTurnFromSession(SESSION, {
+      id: SESSION,
+      status: {},
+      current_stream: {
+        stream_id: 'stream-1',
+        turn_id: 'turn-1',
+        live: {
+          message_id: 'm-step',
+          step_index: 0,
+          content: 'устаревшее',
+          parts: [{ id: 'msg:text:0', type: 'text', data: 'устаревшее' }],
+          updated_at: '2026-10-30T00:00:01Z',
+        },
+      },
+    })
+
+    const step = useChatStore.getState().messagesBySession[SESSION]!.find((m) => m.id === 'm-step')!
+    expect(step.content).toBe('финал')
+    expect(step.status).toBe('completed')
+  })
+})
