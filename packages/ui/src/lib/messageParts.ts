@@ -9,7 +9,13 @@
 // сообщения — по порядковому номеру текстовой части, остальные — по id.
 
 import type { Part, PartType } from '@itphx/synth-shared/types'
-import type { LivePart, LiveToolCall, MessageData, ReasoningBlockData } from '@/stores/chatStore'
+import type {
+  IntermediateTextBlockData,
+  LivePart,
+  LiveToolCall,
+  MessageData,
+  ReasoningBlockData,
+} from '@/stores/chatStore'
 
 /** Идентификатор текстовой части (`msg:text:<ordinal>`). */
 export const TEXT_PART_PREFIX = 'msg:text:'
@@ -175,6 +181,12 @@ export function partToToolCall(part: LivePart): LiveToolCall | null {
     completedAt: typeof d.completedAt === 'string' ? d.completedAt : undefined,
     iteration: typeof d.iteration === 'number' ? d.iteration : 0,
     parentCallId: typeof d.parentCallId === 'string' ? d.parentCallId : undefined,
+    // Живой прогресс саб-агента (ADR-111/ADR-070): размышления и промежуточный
+    // текст приходят дельтами в данные части `task` и должны попасть в
+    // карточку. Без этого синхронный саб-агент в основной сессии показывал
+    // только PROMPT: `getSubagentData` читал результат, а результата ещё нет.
+    subagentReasoningBlocks: d.subagentReasoningBlocks as ReasoningBlockData[] | undefined,
+    subagentIntermediateTextBlocks: d.subagentIntermediateTextBlocks as IntermediateTextBlockData[] | undefined,
   }
 }
 

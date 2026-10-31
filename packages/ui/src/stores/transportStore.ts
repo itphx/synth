@@ -178,9 +178,37 @@ async function runHistoryMergeLoop(sid: string, state: HistoryMergeState): Promi
 
 /** Свести загруженную историю с живым состоянием стора. */
 function applyHistory(sid: string, messages: MessageData[]): void {
+  mergeServerMessages(sid, messages)
+}
+
+/**
+ * Свести **снимок истории** с живым состоянием сессии (ADR-118 §5).
+ *
+ * Используется загрузкой сессии (`ChatTab`): снимок сервера — уточнение, а не
+ * источник правды о ходе. Прямой `setMessages` затирал живое состояние более
+ * старым снимком (переключение сессий во время хода: контент «мелькал» и
+ * пропадал до следующего чанка). Здесь:
+ *
+ * - сообщения с известными id сливаются (`mergeKnownMessage`) — серверные
+ *   `null`/`undefined` и **более бедный** снимок не затирают живой текст/части;
+ * - новые сообщения добавляются;
+ * - границы идущего хода восстанавливаются (идемпотентно).
+ */
+export function mergeServerMessages(sid: string, messages: MessageData[]): void {
   const chat = useChatStore.getState()
   const current = chat.messagesBySession[sid] || []
-  const byId = new Map(current.map((m) => [m.id, m]))
+  const byId = new Map<string, MessageData>()
+  // Локальные сообщения без серверного id (ещё не подтверждены) не мержатся:
+  // у них нет ключа, но терять их нельзя — сохраняем как есть.
+  const turnActive = chat.turnBySession[sid]?.status === 'streaming'
+  const localOnly = current.filter((m) => !m.id)
+  const localIndexes = new Set(localOnly.map((m) => m.index))
+  // Сообщения сервера без id (локальные ответы системных команд) тоже
+  // сохраняем: мержить их не по чему, но терять нельзя.
+  const serverLocal = messages.filter((m) => !m.id && !localIndexes.has(m.index))
+  for (const m of current) {
+    if (m.id) byId.set(m.id, m)
+  }
   for (const m of messages) {
     if (!m.id) continue
     const known = byId.get(m.id)
@@ -188,9 +216,9 @@ function applyHistory(sid: string, messages: MessageData[]): void {
       byId.set(m.id, m)
       continue
     }
-    byId.set(m.id, mergeKnownMessage(known, m))
+    byId.set(m.id, mergeKnownMessage(known, m, turnActive))
   }
-  const merged = [...byId.values()]
+  const merged = [...byId.values(), ...localOnly, ...serverLocal]
   chat.setMessages(sid, merged)
   // ADR-118 §5: в истории мог появиться живой ход (другой клиент) —
   // восстанавливаем границы, иначе он отрисуется как мёртвое сообщение.
@@ -211,7 +239,11 @@ function applyHistory(sid: string, messages: MessageData[]): void {
  *   рисуется отдельной галереей;
  * - метаданные — по ключам: сервер wins, клиентские добавки остаются.
  */
-function mergeKnownMessage(known: MessageData, m: MessageData): MessageData {
+function mergeKnownMessage(
+  known: MessageData,
+  m: MessageData,
+  turnActive = false,
+): MessageData {
   const merged: MessageData = { ...known, ...m }
   if (m.ord == null && known.ord != null) merged.ord = known.ord
   if (m.status == null && known.status != null) merged.status = known.status
@@ -227,6 +259,14 @@ function mergeKnownMessage(known: MessageData, m: MessageData): MessageData {
   if (known.status === 'streaming' && !serverFinal) {
     merged.parts = known.parts
     merged.content = known.content
+  }
+  // Снимок сервера отстаёт от живого состояния (персистентность с
+  // троттлингом). Пока идёт ход, более богатый известный текст/части не
+  // затираются — иначе при переключении сессий во время хода контент
+  // «мелькал» и пропадал до следующего чанка.
+  if (turnActive && known.role === 'assistant') {
+    if ((known.content?.length ?? 0) > (merged.content?.length ?? 0)) merged.content = known.content
+    if ((merged.parts?.length ?? 0) === 0 && (known.parts?.length ?? 0) > 0) merged.parts = known.parts
   }
   return {
     ...merged,

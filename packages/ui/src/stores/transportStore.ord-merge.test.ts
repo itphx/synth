@@ -51,7 +51,7 @@ vi.mock('@/lib/api/transport', () => ({ TransportClient: mocks.MockClient }))
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks.api }))
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 
-import { useTransportStore, createDispatcher, mergeHistory } from './transportStore'
+import { useTransportStore, createDispatcher, mergeHistory, mergeServerMessages } from './transportStore'
 import { useChatStore } from './chatStore'
 import { resetChatStore } from './testUtils'
 import type { WSEvent } from '@/lib/api/transport'
@@ -215,5 +215,87 @@ describe('transportStore: мерж истории не теряет ord (ADR-118
     expect(answer.status).toBe('streaming')
     expect(answer.turn_id).toBe('t7')
     expect(answer.step_index).toBe(1)
+  })
+})
+
+describe('transportStore: снимок истории не затирает живой ход (ADR-118 §5)', () => {
+  it('более короткий снимок сервера не откатывает уже показанный текст', () => {
+    useChatStore.getState().upsertMessage('s1', {
+      index: 0,
+      id: 'live-answer',
+      role: 'assistant',
+      content: 'длинный уже показанный текст ответа',
+      status: 'completed',
+      turn_id: 'turn_1',
+      step_index: 0,
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      created_at: '2026-10-30T10:00:00Z',
+    })
+
+    useChatStore.getState().startTurn('s1', {
+      turnId: 'turn_1',
+      status: 'streaming',
+      contentStarted: true,
+    })
+
+    mergeServerMessages('s1', [
+      {
+        index: 0,
+        id: 'live-answer',
+        role: 'assistant',
+        content: 'длинный',
+        status: 'completed',
+        turn_id: 'turn_1',
+        step_index: 0,
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        created_at: '2026-10-30T10:00:00Z',
+      } as never,
+    ])
+
+    const merged = useChatStore.getState().messagesBySession['s1']![0]!
+    expect(merged.content).toBe('длинный уже показанный текст ответа')
+  })
+
+  it('пустые части из отстающего снимка не снимают известные части', () => {
+    useChatStore.getState().upsertMessage('s1', {
+      index: 0,
+      id: 'live-answer',
+      role: 'assistant',
+      content: '',
+      status: 'completed',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      created_at: '2026-10-30T10:00:00Z',
+      parts: [{ id: 'msg:text:0', type: 'text', data: 'частильный текст' }],
+    })
+
+    useChatStore.getState().startTurn('s1', {
+      turnId: 'turn_1',
+      status: 'streaming',
+      contentStarted: true,
+    })
+
+    mergeServerMessages('s1', [
+      {
+        index: 0,
+        id: 'live-answer',
+        role: 'assistant',
+        content: '',
+        status: 'completed',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        created_at: '2026-10-30T10:00:00Z',
+        parts: [],
+      } as never,
+    ])
+
+    const merged = useChatStore.getState().messagesBySession['s1']![0]!
+    expect(merged.parts).toHaveLength(1)
   })
 })

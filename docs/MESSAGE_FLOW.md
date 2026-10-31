@@ -483,8 +483,11 @@ stateDiagram-v2
 
 Порядок (по коду `restoreLiveTurnFromSession`):
 
-1. `GET /sessions/:id/messages` → `setMessages` (сообщения уже в сторе) →
-   `restoreLiveTurnFromHistory` — по сообщению со `status: 'streaming'`.
+1. `GET /sessions/:id/messages` → **мерж** с живым состоянием (`mergeServerMessages`, тот же
+   свод, что у `mergeHistory`) → `restoreLiveTurnFromHistory` — по сообщению со
+   `status: 'streaming'`. Снимок сервера не заменяет стор: иначе при переключении вкладок посреди хода
+   показанный контент затирался более старым снимком (ход «мелькал» и пропадал до следующего чанка).
+   Пока ход активен, более богатые известные `content`/`parts` сохраняются.
 2. `GET /sessions/:id` → `activity` и `current_stream`.
 3. `turnId` = `current_stream.turn_id` → `activity.turnId` → (при живом стриме/активном ходе)
    `turn_id` последнего сообщения истории → legacy `current_stream.stream_id` / `activity.streamId`.
@@ -509,9 +512,10 @@ stateDiagram-v2
 
 `turn.toolsRunning` **не персистится**: после reload во время длинного инструмента точки в шапке
 последнего сегмента появятся со следующего `step.tools.started` (флаг поднимает и `step.started`).
-Live-части после reload начинают накапливаться заново, а live приоритетнее DTO по совпадающему
-`partId` — поэтому до `step.finished` (и `mergeHistory`) в сегменте может быть виден только прирост
-после перезагрузки; полный текст шага восстанавливается на финале шага.
+После **перезагрузки страницы** live-части начинают накапливаться заново, а live приоритетнее DTO по
+совпадающему `partId` — до `step.finished` (и мержа истории) в сегменте виден прирост после reload;
+полный текст шага даёт `step.finished`/история. При **переключении вкладок** живое состояние стора не
+сбрасывается и сводится со снимком, поэтому отображение не зависит от прихода очередного чанка.
 
 ### 6.5 Очередь
 
@@ -814,6 +818,12 @@ sequenceDiagram
    `SubagentResumeBar` («Продолжить» после ошибки/отмены).
 5. `subagent.progress` (дельты, троттлинг ~300 мс, лимит `SUBAGENT_PROGRESS_MAX_CHARS`) идёт
    **родителю** — в парт `task` по `parent_call_id`; в канал ребёнка он не дублируется.
+6. **Карточка саб-агента в основной сессии.** Синхронный (`background: false`) и фоновый прогоны
+   выглядят одинаково: Prompt, reasoning/промежуточный текст (из `subagent.progress`), шаги ребёнка
+   (`tool_call.*` с `parent_call_id`) и Response. Пока прогон идёт, источник — **живые данные** части
+   `task` (результата ещё нет), после завершения — `result.metadata` (`reasoning_blocks`/
+   `intermediate_text_blocks`/`tool_calls`/`final_content`). Иначе у синхронного до завершения был
+   виден только Prompt.
 
 Код: `packages/core/src/engine/tools/task/run-cycle.ts`, `task/child-session.ts`,
 `task/detachable.ts`.

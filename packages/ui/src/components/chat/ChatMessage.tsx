@@ -398,34 +398,73 @@ function ChatMessageInner({
     return <CommandMessage message={message} onCopy={handleCopy} sessionId={sessionId} />
   }
 
-  const getSubagentData = (tc: LiveToolCall) => {
+  const getSubagentData = (tc: LiveToolCall): SubagentPartData | null => {
+    if (tc.name !== 'task') return null
     const meta = tc.result?.metadata as Record<string, unknown> | undefined
-    if (!meta) return null
-    const sessionId = meta.child_session_id as string | undefined
+    const args = (tc.args ?? {}) as Record<string, unknown>
+    const prompt = typeof args.prompt === 'string' ? args.prompt : undefined
+    const liveReasoning = tc.subagentReasoningBlocks ?? []
+    const liveTexts = tc.subagentIntermediateTextBlocks ?? []
+    /**
+     * Живой саб-агент (в т.ч. **синхронный**, блокирующий ход).
+     *
+     * Пока прогон идёт, `result.metadata` ещё нет: шаги ребёнка приходят
+     * событиями `subagent.progress` (размышления/промежуточный текст) и
+     * `tool_call.*` с `parent_call_id` (вызовы внутри ребёнка). Строим
+     * карточку из этих данных — иначе в основной сессии был виден только
+     * PROMPT, а шаги и ответ появлялись лишь после завершения.
+     */
+    if (!meta && prompt == null && liveReasoning.length === 0 && liveTexts.length === 0) {
+      return null
+    }
+    const running = tc.status === 'running'
+    const metaToolCalls = meta?.tool_calls as SubagentPartData['tool_calls']
     return {
-      name: (meta.subagent_type as string) || 'task',
-      prompt: tc.args?.prompt as string | undefined,
-      response: (meta.final_content as string) || (meta.description as string) || '',
-      sessionId,
+      name: (meta?.subagent_type as string) || (args.subagent_type as string) || 'task',
+      prompt,
+      response: (meta?.final_content as string) || (meta?.description as string) || '',
+      sessionId: meta?.child_session_id as string | undefined,
       callId: tc.callId,
+      live: running,
+      running,
       errorInfo: {
-        isError: tc.result?.isError === true || meta.error === true,
-        attempts: meta.attempts as number | undefined,
-        maxRetries: meta.max_retries as number | undefined,
-        errorType: meta.error_type as string | undefined,
-        error: meta.error as string | undefined,
+        isError: tc.result?.isError === true || meta?.error === true,
+        attempts: meta?.attempts as number | undefined,
+        maxRetries: meta?.max_retries as number | undefined,
+        errorType: meta?.error_type as string | undefined,
+        error: meta?.error as string | undefined,
       },
-      reasoning_blocks: meta.reasoning_blocks as Array<{ text: string; iteration: number }> | undefined,
-      intermediate_text_blocks: meta.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
-      tool_calls: meta.tool_calls as Array<{
-        name: string; args: Record<string, unknown>; id?: string;
-        result?: { content: string; isError?: boolean };
-        started_at?: string; completed_at?: string; iteration: number;
-      }> | undefined,
-      steps: meta.steps as number | undefined,
-      description: meta.description as string | undefined,
+      reasoning_blocks:
+        (meta?.reasoning_blocks as SubagentPartData['reasoning_blocks'])
+        ?? (liveReasoning.length > 0 ? liveReasoning : undefined),
+      intermediate_text_blocks:
+        (meta?.intermediate_text_blocks as SubagentPartData['intermediate_text_blocks'])
+        ?? (liveTexts.length > 0 ? liveTexts : undefined),
+      tool_calls: metaToolCalls,
+      steps: meta?.steps as number | undefined,
+      description: (args.description as string | undefined) || (meta?.description as string | undefined),
     }
   }
+
+  /**
+   * Вызовы инструментов **внутри** саб-агента (`parent_call_id` = callId
+   * карточки). В основной ленте они не рисуются отдельными карточками —
+   * они шаги саб-агента внутри его блока.
+   */
+  const childToolCalls = (callId: string): NonNullable<SubagentPartData['tool_calls']> =>
+    liveToolCalls
+      .filter((c) => c.parentCallId === callId)
+      .map((c) => ({
+        name: c.name,
+        args: c.args,
+        id: c.callId,
+        result: c.result
+          ? { content: c.result.content, isError: c.result.isError }
+          : undefined,
+        started_at: c.startedAt,
+        completed_at: c.completedAt,
+        iteration: c.iteration,
+      }))
 
   const bottomContent = !isInline && intermediateTextBlocks.length > 0
     ? [...intermediateTextBlocks.map((it) => it.text), partsView.text].filter(Boolean).join('\n\n')
@@ -470,6 +509,15 @@ function ChatMessageInner({
             if (tc.name === 'task') {
               const sa = getSubagentData(tc)
               if (sa) {
+                // Живые шаги ребёнка — из событий с `parent_call_id`
+                // (у завершённого прогона они уже в `result.metadata`).
+                if (!sa.tool_calls || sa.tool_calls.length === 0) {
+                  const child = childToolCalls(tc.callId)
+                  if (child.length > 0) sa.tool_calls = child
+                }
+                if (sa.steps == null && sa.tool_calls && sa.tool_calls.length > 0) {
+                  sa.steps = Math.max(...sa.tool_calls.map((c) => c.iteration || 0)) + 1
+                }
                 items.push({ type: 'subagent', data: sa })
                 continue
               }
