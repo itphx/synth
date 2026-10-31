@@ -9,7 +9,7 @@ import {
   STEERING_ERROR_CODES,
 } from '@itphx/synth-shared';
 import type { Message, QueueStatePayload, Session } from '@itphx/synth-shared';
-import { enqueueSteerMessage, publishQueueState } from '../../queue/processor.js';
+import { enqueueSteerMessage, publishQueueState, reorderPendingMessages } from '../../queue/processor.js';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
@@ -35,6 +35,10 @@ export interface QueueRouteMessages {
   messageAlreadyRunning: (c: Context) => string;
   /** `POST /:sessionId/steer` — превышен лимит инъекций (429). */
   steerLimitExceeded: (c: Context, limit: number) => string;
+  /** `POST /:sessionId/reorder` — тело не массив уникальных непустых id (400). */
+  invalidReorderIds: (c: Context) => string;
+  /** `POST /:sessionId/reorder` — очередь изменилась, клиент должен перечитать (409). */
+  queueChanged: (c: Context) => string;
 }
 
 export interface QueueRoutesOptions {
@@ -75,6 +79,10 @@ const DEFAULT_MESSAGES: QueueRouteMessages = {
   messageAlreadyRunning: () => 'Сообщение уже выполняется',
   steerLimitExceeded: (_c, limit) =>
     `Достигнут лимит вмешательств в ход (макс. ${limit})`,
+  invalidReorderIds: () =>
+    'Поле ids должно быть массивом уникальных непустых идентификаторов сообщений',
+  queueChanged: () =>
+    'Очередь изменилась — перечитайте её состояние и повторите перестановку',
 };
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
@@ -284,6 +292,46 @@ export function createQueueRoutes(
     publishQueueState(eventBus, sessionId, counts);
 
     return c.json({ texts });
+  });
+
+  // POST /:sessionId/reorder — переупорядочить обычную очередь (DnD в UI).
+  // Тело `{ ids: string[] }` — желаемый порядок; состав должен точно совпадать
+  // с текущей очередью, иначе 409 QUEUE_CHANGED (клиент перечитывает очередь).
+  // `steerInbox` не трогается (ADR-104: у инъекций своя очередь).
+  app.post('/:sessionId/reorder', auth.requireAuth, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const body = await c.req.json().catch(() => null) as { ids?: unknown } | null;
+    const rawIds = body?.ids;
+    if (
+      !Array.isArray(rawIds)
+      || rawIds.some((id) => typeof id !== 'string' || id.trim() === '')
+      || new Set(rawIds as string[]).size !== rawIds.length
+    ) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: messages.invalidReorderIds(c) } },
+        400,
+      );
+    }
+
+    const result = await reorderPendingMessages(
+      sessionManager,
+      eventBus,
+      sessionId,
+      rawIds as string[],
+    );
+    if (!result.ok) {
+      if (result.reason === 'not_found') {
+        return c.json(
+          { error: { code: 'SESSION_NOT_FOUND', message: messages.sessionNotFound(c) } },
+          404,
+        );
+      }
+      return c.json(
+        { error: { code: 'QUEUE_CHANGED', message: messages.queueChanged(c) } },
+        409,
+      );
+    }
+    return c.json({ status: 'ok', order: result.order });
   });
 
   // POST /:sessionId/steer — отправить сообщение из очереди «в разрыв»

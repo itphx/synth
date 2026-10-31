@@ -32,6 +32,21 @@ export const queueApi = {
     })
   },
 
+  /**
+   * Переупорядочивание очереди (DnD): `POST /queue/:sessionId/reorder {ids}`.
+   *
+   * `ids` — полный желаемый порядок серверных id (неизвестные элементы
+   * остаются в конце). `409 QUEUE_CHANGED` — очередь на сервере уже другая
+   * (элемент увели/добавили): вызывающий перечитывает очередь; `400` —
+   * некорректный запрос. Код ошибки — `error.code` (см. `isQueueChangedError`).
+   */
+  async reorderQueue(sessionId: string, ids: string[]): Promise<void> {
+    await fetchJSON<void>(`${BASE_URL}/queue/${encodeURIComponent(sessionId)}/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    })
+  },
+
   async returnQueue(sessionId: string, target?: QueueTarget): Promise<{ texts: string[] }> {
     const base = `${BASE_URL}/queue/${encodeURIComponent(sessionId)}/return`
     return fetchJSON(`${base}${targetQuery(target)}`, {
@@ -73,4 +88,21 @@ export const queueApi = {
       method: 'POST',
     })
   },
+}
+
+/** Код ошибки «очередь изменилась» (`409 QUEUE_CHANGED` на `reorder`). */
+export const QUEUE_CHANGED_CODE = 'QUEUE_CHANGED'
+
+/**
+ * Ошибка «очередь изменилась»: сервер уже переставил/изменил очередь, запрос
+ * `reorder` применять не к чему — вызывающий перечитывает состав очереди
+ * (`GET /sessions/:id`) вместо локального переупорядочивания.
+ */
+export function isQueueChangedError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const status = (err as { status?: number }).status
+  const code = (err as { code?: string }).code
+  if (code) return code === QUEUE_CHANGED_CODE
+  // Старое ядро может не отдавать `code` — 409 на `reorder` и есть «изменилась».
+  return status === 409
 }

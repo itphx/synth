@@ -345,9 +345,15 @@ export function MessageList({
    * сегмента нет — во время инструментов, после reload и в паузах лента
    * выглядела пустой. Строка — не пузырь и без действий; при завершении хода
    * (`turn.finished`) исчезает.
+   *
+   * `toolsRunning` — идёт вызов инструмента шага: текста ответа нет, и это не
+   * «просто думает» — строка говорит «Выполняется инструмент…».
    */
+  const toolsRunning = turn?.toolsRunning === true
   const showTurnActivity =
-    turn?.status === 'streaming' && turnContentStarted && !hasLiveAssistantSegment
+    turn?.status === 'streaming'
+    && (turnContentStarted || toolsRunning)
+    && (!hasLiveAssistantSegment || toolsRunning)
 
   /**
    * ADR-118 §10: pin на контейнере хода — у группы из нескольких сегментов
@@ -547,6 +553,7 @@ export function MessageList({
             <div
               className="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground"
               data-testid="turn-activity"
+              data-tools-running={toolsRunning ? 'true' : undefined}
             >
               <span
                 className="inline-flex gap-0.5"
@@ -557,7 +564,7 @@ export function MessageList({
                 <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
                 <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
               </span>
-              <span>{t('chat.turn.working')}</span>
+              <span>{t(toolsRunning ? 'chat.turn.runningTool' : 'chat.turn.working')}</span>
             </div>
           )}
         </div>

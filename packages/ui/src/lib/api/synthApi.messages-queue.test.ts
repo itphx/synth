@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { synthApi } from './synthApi'
+import { isQueueChangedError } from './queue'
 
 /**
  * Домены `messages` (`lib/api/messages.ts`) и `queue` (`lib/api/queue.ts`, API v2).
@@ -81,6 +82,17 @@ describe('messagesApi — сообщения сессии (путь /messages/:s
       '/api/v2/messages/s1/remote%3Aa%20b%2Fc',
       expect.objectContaining({ method: 'DELETE' }),
     )
+  })
+
+  it('getSessionMessage: точечная загрузка одного сообщения по id', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ message: { id: 'm1', role: 'user', content: 'привет' } }))
+    const resp = await synthApi.getSessionMessage('a b', 'remote:1/2')
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/sessions/a%20b/messages/remote%3A1%2F2',
+      expect.objectContaining({}),
+    )
+    expect(resp.message.id).toBe('m1')
   })
 
   it('batchMessages: POST /batch без state, если state не задан', async () => {
@@ -220,5 +232,45 @@ describe('queueApi — очередь сессии (путь /queue/:sessionId)'
         body: JSON.stringify({ index: 3 }),
       }),
     )
+  })
+
+  it('reorderQueue: POST /queue/:id/reorder с полным списком id', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }))
+
+    await synthApi.reorderQueue('s1', ['m3', 'm1', 'm2'])
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/queue/s1/reorder',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ ids: ['m3', 'm1', 'm2'] }),
+      }),
+    )
+  })
+
+  it('reorderQueue 409 QUEUE_CHANGED → ошибка с кодом (перечитать очередь)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(
+      { error: { code: 'QUEUE_CHANGED', message: 'queue changed' } },
+      409,
+    ))
+
+    const err = await synthApi.reorderQueue('s1', ['m1']).catch((e: unknown) => e)
+
+    expect(isQueueChangedError(err)).toBe(true)
+    expect((err as { status?: number }).status).toBe(409)
+    expect((err as { code?: string }).code).toBe('QUEUE_CHANGED')
+  })
+
+  it('reorderQueue 400 → ошибка без признака «очередь изменилась»', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(
+      { error: { code: 'VALIDATION_ERROR', message: 'ids required' } },
+      400,
+    ))
+
+    const err = await synthApi.reorderQueue('s1', []).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(Error)
+    expect(isQueueChangedError(err)).toBe(false)
+    expect(isQueueChangedError(undefined)).toBe(false)
   })
 })

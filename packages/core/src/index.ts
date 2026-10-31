@@ -194,8 +194,8 @@ export type {
   PluginIntegrityFile,
   PluginLayout,
 } from './engine/plugins/layout.js';
-export { QueueProcessor, QueueProcessorManager, enqueueUserMessage, enqueueSteerMessage, requeueMessages } from './queue/processor.js';
-export type { ProcessMessageFn, SteerEnqueueResult, RequeueMessagesOptions } from './queue/processor.js';
+export { QueueProcessor, QueueProcessorManager, enqueueUserMessage, enqueueSteerMessage, requeueMessages, reorderPendingMessages } from './queue/processor.js';
+export type { ProcessMessageFn, SteerEnqueueResult, EnqueueOptions, ReorderPendingResult, RequeueMessagesOptions } from './queue/processor.js';
 
 export {
   ProviderFactory,

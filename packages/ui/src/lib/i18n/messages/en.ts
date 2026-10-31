@@ -1234,6 +1234,7 @@ export const dict = {
 
   // Строка активности хода в конце ленты (контент уже был, живого сегмента нет).
   'chat.turn.working': 'Working…',
+  'chat.turn.runningTool': 'Running a tool…',
 
   // Markdown в ответах: заголовок блока кода и кнопка копирования.
   'markdown.code.copy': 'Copy',
@@ -1372,6 +1373,7 @@ export const dict = {
   'chat.queue.steered': 'Sent into the running turn',
   'chat.queue.itemQueued': 'Queued',
   'chat.queue.itemStarting': 'Starting',
+  'chat.queue.changed': 'The queue changed — refreshed',
 
   'permission.bar.request': 'Tool "{tool}" requests permission',
   'permission.bar.waiting': '{count} more',
@@ -1434,6 +1436,7 @@ export const dict = {
   'chat.error.sendFailed': 'Send failed:',
   'chat.error.returnQueue': 'Failed to return queue',
   'chat.error.steerQueue': 'Could not send into the running turn',
+  'chat.error.reorderQueue': 'Failed to reorder the queue',
   'chat.error.toggleMessage': 'Failed to toggle message',
   'chat.error.pinMessage': 'Failed to pin message',
   'chat.error.deleteMessage': 'Failed to delete message',

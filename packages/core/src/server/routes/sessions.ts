@@ -151,6 +151,8 @@ export interface SessionRoutesDeps {
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
 export interface SessionRouteMessages {
   sessionNotFound: (c: Context) => string;
+  /** `GET /:id/messages/:messageId` — сообщения с таким id в сессии нет (404). */
+  messageNotFound: (c: Context) => string;
   forbidden: (c: Context) => string;
   contentRequired: (c: Context) => string;
   queueFull: (c: Context, max: number) => string;
@@ -283,6 +285,7 @@ export interface SessionRoutesOptions {
 
 const DEFAULT_MESSAGES: SessionRouteMessages = {
   sessionNotFound: () => 'Сессия не найдена',
+  messageNotFound: () => 'Сообщение не найдено',
   forbidden: () => 'Доступ к сессии запрещён',
   contentRequired: () => 'Контент обязателен',
   queueFull: (_c: Context, max: number) => `Очередь сообщений заполнена (макс. ${max})`,
@@ -1576,6 +1579,29 @@ export function createSessionRoutes(
       messages: session.messages.map((m, i) => serializeMessage(m, i, { redactSecrets: !canReveal })),
       session_id: session.id,
     });
+  });
+
+  // GET /:id/messages/:messageId — одно сообщение истории (целевая загрузка).
+  app.get('/:id/messages/:messageId', auth.requireAuth, scoped('sessions:read'), async (c) => {
+    const id = c.req.param('id');
+    const messageId = c.req.param('messageId');
+    const session = await sessionManager.getSession(id);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    const messagesDenied = serviceProjectProjection(c, session.projectId);
+    if (messagesDenied) return messagesDenied;
+    const index = session.messages.findIndex((m) => m.id === messageId);
+    if (index < 0) {
+      return c.json(
+        { error: { code: 'MESSAGE_NOT_FOUND', message: messages.messageNotFound(c) } },
+        404,
+      );
+    }
+    // ADR-036: то же право раскрытия секретов, что у списка (одна точка —
+    // `resolveCanRevealSecrets`), DTO — как у элемента `GET /:id/messages`.
+    const canReveal = await resolveCanRevealSecrets(c, session);
+    return c.json(serializeMessage(session.messages[index]!, index, { redactSecrets: !canReveal }));
   });
 
   app.post('/:id/clear', auth.requireAuth, async (c) => {

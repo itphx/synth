@@ -1210,6 +1210,7 @@ export const dict = {
 
   // Строка активности хода в конце ленты (контент уже был, живого сегмента нет).
   'chat.turn.working': 'Выполняется…',
+  'chat.turn.runningTool': 'Выполняется инструмент…',
 
   // Markdown в ответах: заголовок блока кода и кнопка копирования.
   'markdown.code.copy': 'Копировать',
@@ -1346,6 +1347,7 @@ export const dict = {
   'chat.queue.steered': 'Отправлено в текущий ход',
   'chat.queue.itemQueued': 'В очереди',
   'chat.queue.itemStarting': 'Запускается',
+  'chat.queue.changed': 'Очередь изменилась — обновлено',
 
   'permission.bar.request': 'Инструмент «{tool}» запрашивает разрешение',
   'permission.bar.waiting': 'ещё {count}',
@@ -1409,6 +1411,7 @@ export const dict = {
   'chat.error.sendFailed': 'Ошибка отправки:',
   'chat.error.returnQueue': 'Ошибка возврата очереди',
   'chat.error.steerQueue': 'Не удалось отправить в текущий ход',
+  'chat.error.reorderQueue': 'Не удалось переупорядочить очередь',
   'chat.error.toggleMessage': 'Ошибка переключения сообщения',
   'chat.error.pinMessage': 'Ошибка закрепления сообщения',
   'chat.error.deleteMessage': 'Ошибка удаления сообщения',

@@ -76,6 +76,7 @@
    | `message.delivered` | канал сессии | `messageId`, `ord`, `author` |
    | `turn.started` / `turn.finished` | канал сессии | `turnId`, терминальный статус |
    | `step.started` / `step.finished` | канал сессии | `turnId`, `stepIndex`, `messageId`, `usage`, ссылка на `promptMeta` |
+   | `step.tools.started` / `step.tools.finished` | канал сессии | `turnId`, `stepIndex`, `messageId`, `callIds` (`string[]`) — **аддитивно**: `step.finished` = «вызов LLM завершён», а эта пара явно говорит UI, что идёт **исполнение инструментов** шага (один раз на шаг с вызовами: до исполнения и после записи `metadata.tool_results`; на шаге без вызовов событий нет; `turn.finished` — после `step.tools.finished`) |
    | `part.delta` / `part.updated` | канал сессии | upsert по `{messageId, partId}` |
 
    В том же релизе **удаляются** (без dual-emit): `stream.chunk`, `stream.usage`, `stream.done`,
@@ -211,6 +212,20 @@
 - **PostgreSQL** — отдельная SQL-миграция: колонки `ord`, `turn_id`, `step_index` + построчный
   `UPDATE`. Перезаписи сессии целиком (как это делает `save()`) не делается — переписывается
   построчно.
+- **Починка уже записанных ходов (§1, «финал = последний шаг»).** Ходы, созданные до исправления
+  «финал = последний шаг», несут в финальном сообщении reasoning всех шагов и
+  `metadata.tool_results` всех вызовов, а шаговые сообщения скрыты `metadata.tool_chain`. Их
+  чинит отдельная разовая миграция `migrations.message-stream-v2-step-parts`
+  (`schemaVersion` 3, `core/storage/migrations.ts` → `planMessageStepPartsCleanup` +
+  `migrateMessageStreamV2StepParts`): `tool_results` группируются по `iteration` и переносятся
+  в assistant-шаг того же хода с `stepIndex === iteration` (слияние по `id` вызова, дубли не
+  плодятся; записи без своего шага остаются на месте), из финала удаляются reasoning-части,
+  точно совпадающие с reasoning более ранних шагов (каждое совпадение гасится один раз; поле
+  `reasoning` пересчитывается через `\n\n---\n\n`), удаляется
+  `metadata.intermediate_text_blocks`, а у шагов с видимым содержимым или вызовами инструментов
+  снимается `tool_chain` (иначе после обрезки финала их карточки и размышления пропали бы).
+  Только основные сессии (`parentId == null`): отчёт дочерней сессии монолитен по устройству.
+  Миграция построчная (`updateMessage`), идемпотентная и только forward — как и основная.
 - **Down-миграций нет.** Миграция необратима: откат — только через `synth backup` / `synth restore`
   ([ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md)).
 - **Атомарность `ord`.** Выдача `ord` сериализуется per-session локом
@@ -296,9 +311,9 @@
 | Этап | Состояние | Где |
 |---|---|---|
 | 1 — приём, порядок, транспорт | ✅ | `shared/types/message-stream.ts` (`PromptAcceptedResponse`, `MessageStatus`, payload'ы событий, `InstanceCapabilities`, `supportsMessageModel`, `MESSAGE_MODEL_QUERY_PARAM`), `shared/types/message.ts` (`ord`/`turnId`/`stepIndex`/`status`), `shared/types/bus-events.ts` (новые типы событий, `BusEvent.recipient`/`eventSeq`); `core/events/bus.ts` (адресная доставка по `recipient`, `eventSeq`, кольцевой журнал `journalSince`, константы гейта), `core/server/routes/sessions.ts` (`POST /:id/prompt` → всегда `202`, гибрид проксирует только `202`), `core/queue/processor.ts` (`message.accepted` адресно, `queue.state`, `message.delivered`, `ord` при материализации) |
-| 2 — модель хода на backend | ✅ (кроме `message.added`, см. ниже) | `core/engine/orchestrator/turn-events.ts` (единая публикация `turn.*`/`step.*`/`part.*`, детерминированные `partId`), `core/engine/orchestrator.ts` (`turn.started`, шаг = вызов LLM, инкрементальный персист черновика, `step.finished` при прерывании), `core/engine/orchestrator/stream-persistence.ts` (черновик со статусом `streaming` → терминальный), `phases/process-finalize.ts` (финальный шаг: статус, вложения, `turn.finished`), `core/server/serialize.ts` (`ord`/`turn_id`/`step_index`/`status` в DTO), `core/server/routes/meta.ts` + монтирование в core и backend (`GET /api/v2/meta`), гейт `messageModel=2` в `core/server/app/{ws-events,sse-events}.ts` и `backend/app/{listen,sse-events}.ts` (WS — close `1008`, SSE — `426`), `core/remote/event-bridge.ts` (передаёт `messageModel=2` удалённой стороне) |
-| 3 — миграция | ✅ | `core/storage/migrations.ts` (`migrateMessageStreamV2`, маркер `message-stream-v2`, построчно через `updateMessage`; idempotent), `core/storage/instance-meta.ts` (запуск), `core/storage/message-write.ts` (`nextOrd`, выдача при append), `core/storage/file-store.ts`, `core/storage/memory/sessions.ts`, `core/storage/ports/session-repository.ts`, `storage-postgres/src/migrations/029-message-stream-v2.ts` (`ord`/`turn_id`/`step_index`/`status`, индекс `(session_id, ord)`), `storage-postgres/src/ports/sessions{,-mapping}.ts` (`ord` = `MAX(ord)+1` под транзакцией, `COALESCE` в `updateMessage`, `save()` не перенумеровывает) |
-| 4 — UI | ✅ (адресация мутаций по `id` — нет, см. ниже) | `ui/stores/chatStore.ts` (`streamingBySession` нет — один источник `messagesBySession` + `ActiveTurn`, сортировка по `ord`), `ui/stores/transportStore.ts` (обработка `message.accepted`/`queue.state`/`message.delivered`/`turn.*`/`step.*`/`part.*`, `lastEventSeqBySession` для `since`, гейт `supportsMessageModel` + текст `chat.error.messageModelMismatch`), `ui/lib/messageParts.ts` (части, upsert, `buildPartsView`), `ui/lib/api/{meta,transport}.ts` (домен `/meta`, `id:` SSE-кадра, `?since=`), `ui/components/chat/MessageList.tsx` (склейка сегментов по `turn_id`, ключ — `id`) |
+| 2 — модель хода на backend | ✅ (кроме `message.added`, см. ниже) | `core/engine/orchestrator/turn-events.ts` (единая публикация `turn.*`/`step.*`/`step.tools.*`/`part.*`, детерминированные `partId`), `core/engine/orchestrator.ts` (`turn.started`, шаг = вызов LLM, инкрементальный персист черновика, `step.finished` при прерывании), `core/engine/orchestrator/stream-persistence.ts` (черновик со статусом `streaming` → терминальный), `phases/process-finalize.ts` (финальный шаг: статус, вложения, `turn.finished`), `core/server/serialize.ts` (`ord`/`turn_id`/`step_index`/`status` в DTO), `core/server/routes/meta.ts` + монтирование в core и backend (`GET /api/v2/meta`), гейт `messageModel=2` в `core/server/app/{ws-events,sse-events}.ts` и `backend/app/{listen,sse-events}.ts` (WS — close `1008`, SSE — `426`), `core/remote/event-bridge.ts` (передаёт `messageModel=2` удалённой стороне) |
+| 3 — миграция | ✅ | `core/storage/migrations.ts` (`migrateMessageStreamV2`, маркер `message-stream-v2`, построчно через `updateMessage`; idempotent; `migrateMessageStreamV2StepParts`/`planMessageStepPartsCleanup` — `schemaVersion` 3, починка содержимого уже записанных ходов), `core/storage/instance-meta.ts` (запуск), `core/storage/message-write.ts` (`nextOrd`, выдача при append), `core/storage/file-store.ts`, `core/storage/memory/sessions.ts`, `core/storage/ports/session-repository.ts`, `storage-postgres/src/migrations/029-message-stream-v2.ts` (`ord`/`turn_id`/`step_index`/`status`, индекс `(session_id, ord)`), `storage-postgres/src/ports/sessions{,-mapping}.ts` (`ord` = `MAX(ord)+1` под транзакцией, `COALESCE` в `updateMessage`, `save()` не перенумеровывает) |
+| 4 — UI | ✅ (адресация мутаций по `id` — нет, см. ниже) | `ui/stores/chatStore.ts` (`streamingBySession` нет — один источник `messagesBySession` + `ActiveTurn`, сортировка по `ord`, `reorderPending`), `ui/stores/transportStore.ts` (обработка `message.accepted`/`queue.state`/`message.delivered`/`turn.*`/`step.*`/`step.tools.*`/`part.*`, точечная догрузка сообщения, `lastEventSeqBySession` для `since`, гейт `supportsMessageModel` + текст `chat.error.messageModelMismatch`), `ui/lib/messageParts.ts` (части, upsert, `buildPartsView`), `ui/lib/api/{meta,transport,messages,queue}.ts` (домен `/meta`, `id:` SSE-кадра, `?since=`, `GET /messages/:messageId`, `reorder`), `ui/components/chat/QueuePanel.tsx` (DnD очереди, `409 QUEUE_CHANGED` → перечитывание), `ui/components/chat/MessageList.tsx` (склейка сегментов по `turn_id`, ключ — `id`, строка «Выполняется инструмент…») |
 | 5 — внешние потребители и релиз | ⏳ | остаток: шлюзы (`synth-gateway-telegram`, VK, MAX) на `step.finished` вместо `stream.done`, `@itphx/synth-sdk` (**major**), публичный OpenAPI, webhook-подписки; `GET /api/v2/meta` уже есть, гейт версии клиента на сервере уже есть (сборка UI не блокируется — UI показывает ошибку несовместимости) |
 
 **Отложенные пункты (решение есть — реализации нет).**
@@ -378,4 +393,17 @@ assistant-сообщение хода — это сообщение **после
   истории хода не появляется). UI: плашка «обработка» у реплики до первого контента хода,
   placeholder между шагами, строка активности хода, восстановление `streamId`/`contentStarted`
   после reload, закрытие хода по `stream.error`/`stream.cancelled`.
+- 2026-10-31 — миграция содержимого **уже записанных** ходов (`schemaVersion` 3,
+  `migrations.message-stream-v2-step-parts`): reasoning/tool_results финала старого вида
+  переносятся в сообщения своих шагов, `intermediate_text_blocks` удаляется, у видимых шагов
+  снимается `tool_chain`; только основные сессии, идемпотентно, построчно через `updateMessage`.
+- 2026-10-31 — доводка контракта и UI: аддитивные `step.tools.started`/`step.tools.finished`
+  (`step.finished` = «вызов LLM завершён», пара — «инструменты шага исполняются»; UI держит
+  `ActiveTurn.toolsRunning` и пишет «Выполняется инструмент…»), переупорядочивание очереди
+  `POST /api/v2/queue/:sessionId/reorder {ids}` (состав обязан совпадать, иначе `409
+  QUEUE_CHANGED` → клиент перечитывает; `steerInbox` не трогается) и точечная догрузка
+  `message.delivered` через `GET /api/v2/sessions/:id/messages/:messageId` вместо полной
+  истории; `queue.state.items` (`queued`/`starting`) — без текста и автора. Восстановление
+  после reload учитывает `activity` (`busy`/`retry`/`idle`) — ход и плашка «Повтор N/M» живы
+  и без `current_stream`. Миграция содержимого записанных ходов — `schemaVersion` 3 (см. выше).
 

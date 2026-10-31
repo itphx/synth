@@ -311,7 +311,10 @@
   `queue.state` (`{pendingCount, steerCount}` — **без текста и автора**),
   `message.delivered` (`{messageId, ord, role, author?, principal?}`),
   `turn.started`/`turn.finished`, `step.started`/`step.finished` (usage, стоимость, `attachments`,
-  `debugInfo`, `timings`), `part.delta`/`part.updated` (upsert по `{messageId, partId}`).
+  `debugInfo`, `timings`), аддитивные `step.tools.started`/`step.tools.finished` (исполнение
+  инструментов шага: `callIds`, один раз на шаг с вызовами — до исполнения и после записи
+  `metadata.tool_results`; `turn.finished` — после), `part.delta`/`part.updated` (upsert по
+  `{messageId, partId}`).
 - **Удалены без dual-emit:** `stream.chunk`, `stream.usage`, `stream.done`, `stream.interrupted`,
   `message.injected`, `message.queued`. Остаются `stream.start`, `stream.cancelled`, `stream.error`,
   `stream.retry`, `stream.ended`, `queue.stalled`, `steer.dropped`, `permission.*`, `tool_call.*`,
@@ -349,12 +352,26 @@
 - **Миграция данных** — `storage/migrations.ts` (`migrateMessageStreamV2`, маркер
   `message-stream-v2`, запуск из `storage/instance-meta.ts`): построчно через `updateMessage`,
   идемпотентна, старые ответы разбиваются по итерациям; PostgreSQL — миграция `029`.
+- **Миграция содержимого старых ходов** (`schemaVersion` 3) — `storage/migrations.ts`
+  (`planMessageStepPartsCleanup` — чистая функция плана, `migrateMessageStreamV2StepParts`,
+  маркер `migrations.message-stream-v2-step-parts`): reasoning/tool_results финала старого
+  вида переносятся в сообщения своих шагов (слияние по `id` вызова), удаляется
+  `intermediate_text_blocks`, у видимых шагов снимается `tool_chain`; только основные сессии
+  (`parentId == null` — отчёт дочерней сессии монолитен), построчно и идемпотентно.
 - **Адресация мутаций — только по `id` (ADR-118 §7)** (`server/routes/messages.ts`):
   `PATCH /:sessionId/:messageId/{toggle,pin}`, `DELETE /:sessionId/:messageId`,
   `POST /:sessionId/:messageId/retry`, `GET /:sessionId/:messageId/debug` и
   `POST /:sessionId/batch {messageIds[]}`; сообщение ищется по `id` под per-session
   локом, не найдено → `404 NOT_FOUND` (в `batch` — `{messageId, success:false}`),
   фоллбека на позицию/число в истории нет.
+- **Перестановка очереди и точечная выдача сообщения (ADR-118 §4).**
+  `POST /api/v2/queue/:sessionId/reorder {ids}` (`server/routes/queue.ts` →
+  `queue/processor.ts` `reorderPendingMessages`): состав `ids` должен **точно** совпадать с
+  `pendingMessages` под per-session локом, иначе `409 QUEUE_CHANGED` (клиент перечитывает),
+  невалидный список — `400 VALIDATION_ERROR`; `steerInbox` не трогается (ADR-104),
+  публикуется `queue.state`. `GET /api/v2/sessions/:id/messages/:messageId`
+  (`server/routes/sessions.ts`) отдаёт одно сообщение тем же `serializeMessage`/
+  `redactSecrets`; нет сообщения → `404 MESSAGE_NOT_FOUND`.
 
 ## Гибрид (core-специфика)
 

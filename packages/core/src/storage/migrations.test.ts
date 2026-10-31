@@ -2,15 +2,18 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MessageRole, type Message } from '@itphx/synth-shared';
+import { MessageRole, type Message, type Session } from '@itphx/synth-shared';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from './file-store.js';
 import { ProjectStore } from './project-store.js';
 import { RuntimeSettingsStore } from './runtime-settings.js';
 import {
   MESSAGE_STREAM_V2_MIGRATION,
+  MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION,
   migrateMessageStreamV2,
+  migrateMessageStreamV2StepParts,
   migrateSessionScopeSnapshots,
+  planMessageStepPartsCleanup,
   planMessageStreamMigration,
   SESSION_SCOPE_SNAPSHOT_MIGRATION,
 } from './migrations.js';
@@ -287,5 +290,257 @@ describe('planMessageStreamMigration (ADR-118 §9: план по истории)
       }),
     ]);
     expect(plan[1]!.stepIndex).toBe(3);
+  });
+});
+
+describe('migrateMessageStreamV2StepParts (ADR-118 §1: содержимое старых ходов)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let settingsStore: RuntimeSettingsStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-migrate-step-parts-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  const REASONING_SEPARATOR = '\n\n---\n\n';
+
+  function reasoningPart(id: string, text: string): { id: string; type: 'reasoning'; data: string } {
+    return { id, type: 'reasoning', data: text };
+  }
+
+  function msg(role: MessageRole, seq: number, overrides: Partial<Message> = {}): Message {
+    return {
+      id: `msg-${seq}`,
+      role,
+      seq,
+      origin: 'local',
+      parts: [{ id: `part-${seq}`, type: 'text', data: '' }],
+      content: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...overrides,
+    } as Message;
+  }
+
+  /**
+   * Старый ход из 3 шагов в форме «до исправления»: финал несёт reasoning всех
+   * шагов и `tool_results` всех вызовов, шаги с одним reasoning скрыты
+   * `tool_chain`; у финала — `intermediate_text_blocks`.
+   */
+  function oldTurnMessages(turnId: string): Message[] {
+    return [
+      msg(MessageRole.USER, 1, { turnId }),
+      msg(MessageRole.ASSISTANT, 2, {
+        turnId,
+        stepIndex: 0,
+        parts: [reasoningPart('r-0', 'размышление 0')],
+        reasoning: 'размышление 0',
+        toolCalls: [{ id: 'call-1', iteration: 0 }],
+        metadata: { tool_chain: true, stream_id: 'st' },
+      }),
+      msg(MessageRole.TOOL, 3, { turnId, toolCallId: 'call-1', metadata: { tool_chain: true } }),
+      msg(MessageRole.ASSISTANT, 4, {
+        turnId,
+        stepIndex: 1,
+        parts: [reasoningPart('r-1', 'размышление 1')],
+        reasoning: 'размышление 1',
+        toolCalls: [{ id: 'call-2', iteration: 1 }],
+        metadata: { tool_chain: true },
+      }),
+      msg(MessageRole.ASSISTANT, 5, {
+        turnId,
+        stepIndex: 2,
+        parts: [
+          reasoningPart('f-0', 'размышление 0'),
+          reasoningPart('f-1', 'размышление 1'),
+          reasoningPart('f-2', 'размышление 2'),
+          { id: 'f-text', type: 'text', data: 'ответ' },
+        ],
+        reasoning: ['размышление 0', 'размышление 1', 'размышление 2'].join(REASONING_SEPARATOR),
+        content: 'ответ',
+        metadata: {
+          stream_id: 'st',
+          intermediate_text_blocks: [{ text: 'промежуточный', iteration: 0 }],
+          tool_results: [
+            { id: 'call-1', name: 'read_file', result: 'r1', iteration: 0 },
+            { id: 'call-2', name: 'read_file', result: 'r2', iteration: 1 },
+            { id: 'call-3', name: 'read_file', result: 'r3', iteration: 2 },
+          ],
+        },
+      }),
+    ];
+  }
+
+  async function seedSession(messages: Message[], opts: { parentId?: string } = {}): Promise<string> {
+    const session = await sessionManager.createSession(opts.parentId ? { parentId: opts.parentId } : {});
+    await sessionManager.saveSession({ ...session, messages });
+    return session.id;
+  }
+
+  it('переносит tool_results в шаги, чистит reasoning финала и открывает шаги', async () => {
+    const sessionId = await seedSession(oldTurnMessages('turn-1'));
+
+    const updated = await migrateMessageStreamV2StepParts({ sessionManager, settingsStore });
+    expect(updated).toBe(3); // два шага + финал
+
+    const messages = (await sessionManager.getSession(sessionId))!.messages;
+    const step0 = messages[1]!;
+    const step1 = messages[3]!;
+    const final = messages[4]!;
+
+    // tool_results — у сообщений своих шагов; у финала остаются только свои (шаг 2).
+    expect((step0.metadata!.tool_results as Array<{ id: string }>).map((r) => r.id)).toEqual(['call-1']);
+    expect((step1.metadata!.tool_results as Array<{ id: string }>).map((r) => r.id)).toEqual(['call-2']);
+    expect((final.metadata!.tool_results as Array<{ id: string }>).map((r) => r.id)).toEqual(['call-3']);
+
+    // В финале осталась только reasoning-часть последнего шага; поле пересчитано.
+    expect(final.parts.filter((p) => p.type === 'reasoning').map((p) => p.data)).toEqual(['размышление 2']);
+    expect(final.reasoning).toBe('размышление 2');
+
+    // intermediate_text_blocks хода удалён.
+    expect(final.metadata!.intermediate_text_blocks).toBeUndefined();
+
+    // Шаги с содержимым больше не скрыты tool_chain (иначе размышления пропали бы).
+    expect(step0.metadata!.tool_chain).toBeUndefined();
+    expect(step1.metadata!.tool_chain).toBeUndefined();
+    // Прочие метаданные шага не потеряны.
+    expect(step0.metadata!.stream_id).toBe('st');
+  });
+
+  it('идемпотентна: повторный прогон — 0 изменений', async () => {
+    const sessionId = await seedSession(oldTurnMessages('turn-1'));
+    await migrateMessageStreamV2StepParts({ sessionManager, settingsStore });
+    const before = (await sessionManager.getSession(sessionId))!.messages;
+    expect(await settingsStore.getMigrationMarker(MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION)).toBe(true);
+
+    // Маркер снят вручную — данные уже починены, план пуст.
+    await rm(join(tmpDir, 'settings.json'), { force: true });
+    const second = await migrateMessageStreamV2StepParts({ sessionManager, settingsStore });
+    const after = (await sessionManager.getSession(sessionId))!.messages;
+
+    expect(second).toBe(0);
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+  });
+
+  it('legacy-сообщения без turn_id не меняются', async () => {
+    const legacy: Message[] = [
+      msg(MessageRole.USER, 1),
+      msg(MessageRole.ASSISTANT, 2, {
+        parts: [reasoningPart('l-0', 'старое размышление')],
+        reasoning: 'старое размышление',
+        metadata: {
+          tool_chain: true,
+          intermediate_text_blocks: [{ text: 'блок', iteration: 0 }],
+          tool_results: [{ id: 'call-old', result: 'r', iteration: 0 }],
+        },
+      }),
+    ];
+    const sessionId = await seedSession(legacy);
+    const before = (await sessionManager.getSession(sessionId))!.messages;
+
+    expect(await migrateMessageStreamV2StepParts({ sessionManager, settingsStore })).toBe(0);
+    const after = (await sessionManager.getSession(sessionId))!.messages;
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    expect(after[1]!.metadata!.tool_chain).toBe(true);
+    expect(after[1]!.metadata!.tool_results).toEqual([{ id: 'call-old', result: 'r', iteration: 0 }]);
+  });
+
+  it('дочерняя сессия (parentId) не меняется — отчёт саб-агента монолитный', async () => {
+    const parentId = await seedSession([msg(MessageRole.USER, 1)]);
+    const childId = await seedSession(oldTurnMessages('turn-child'), { parentId });
+    const before = (await sessionManager.getSession(childId))!.messages;
+
+    expect(await migrateMessageStreamV2StepParts({ sessionManager, settingsStore })).toBe(0);
+    const after = (await sessionManager.getSession(childId))!.messages;
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    // Отчёт ребёнка остаётся монолитным: финал по-прежнему несёт все reasoning.
+    expect(after[4]!.metadata!.tool_results).toHaveLength(3);
+    expect(after[1]!.metadata!.tool_chain).toBe(true);
+  });
+});
+
+describe('planMessageStepPartsCleanup (ADR-118 §1: чистая функция плана)', () => {
+  const reasoning = (text: string, id: string) => ({ id, type: 'reasoning' as const, data: text });
+
+  function message(role: MessageRole, seq: number, overrides: Partial<Message> = {}): Message {
+    return {
+      id: `msg-${seq}`,
+      role,
+      seq,
+      origin: 'local',
+      parts: [],
+      content: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...overrides,
+    } as Message;
+  }
+
+  it('гасит каждое совпадение reasoning не более одного раза', () => {
+    const session = {
+      id: 'sess-1',
+      messages: [
+        message(MessageRole.USER, 1, { turnId: 'turn-1' }),
+        message(MessageRole.ASSISTANT, 2, {
+          turnId: 'turn-1',
+          stepIndex: 0,
+          parts: [reasoning('А', 'r0')],
+          content: 'шаг',
+        }),
+        message(MessageRole.ASSISTANT, 3, {
+          turnId: 'turn-1',
+          stepIndex: 1,
+          parts: [reasoning('А', 'f0'), reasoning('А', 'f1'), reasoning('С', 'f2')],
+          reasoning: ['А', 'А', 'С'].join('\n\n---\n\n'),
+        }),
+      ],
+    } as unknown as Session;
+
+    const plan = planMessageStepPartsCleanup(session);
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.index).toBe(2);
+    const parts = plan[0]!.patch.parts!;
+    expect(parts.map((p) => p.data)).toEqual(['А', 'С']);
+    expect(plan[0]!.patch.reasoning).toBe(['А', 'С'].join('\n\n---\n\n'));
+  });
+
+  it('финал только из дублей reasoning: части опустошаются, поле сбрасывается', () => {
+    const session = {
+      id: 'sess-1',
+      messages: [
+        message(MessageRole.ASSISTANT, 1, { turnId: 'turn-1', stepIndex: 0, parts: [reasoning('А', 'r0')] }),
+        message(MessageRole.ASSISTANT, 2, {
+          turnId: 'turn-1',
+          stepIndex: 1,
+          parts: [reasoning('А', 'f0')],
+          reasoning: 'А',
+        }),
+      ],
+    } as unknown as Session;
+
+    const plan = planMessageStepPartsCleanup(session);
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.patch.parts).toEqual([]);
+    expect(plan[0]!.patch.reasoning).toBeUndefined();
+  });
+
+  it('не трогает дочернюю сессию и пустую историю', () => {
+    const child = {
+      id: 'child',
+      parentId: 'parent',
+      messages: [message(MessageRole.ASSISTANT, 1, { turnId: 't', stepIndex: 0, reasoning: 'x' })],
+    } as unknown as Session;
+    expect(planMessageStepPartsCleanup(child)).toEqual([]);
+    expect(planMessageStepPartsCleanup({ id: 's', messages: [] } as unknown as Session)).toEqual([]);
   });
 });

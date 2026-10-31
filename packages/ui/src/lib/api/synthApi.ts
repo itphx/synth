@@ -71,6 +71,7 @@ export type {
   BackgroundSessionResponse,
 } from './sessions'
 export type { MessageListResponse } from './messages'
+export type { MessageDetailResponse } from './messages'
 export type {
   WorkspaceRootResponse,
   WorkspaceBrowseResponse,

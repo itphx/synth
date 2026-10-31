@@ -928,6 +928,73 @@ export async function enqueueSteerMessage(
 }
 
 /**
+ * Результат переупорядочивания очереди (`POST /queue/:sessionId/reorder`).
+ *
+ * `not_found` — сессии нет; `mismatch` — состав `ids` не совпал с текущей
+ * очередью (клиент оперирует устаревшим состоянием и должен перечитать её).
+ */
+export type ReorderPendingResult =
+  | { ok: true; order: string[] }
+  | { ok: false; reason: 'not_found' | 'mismatch' };
+
+/**
+ * Переупорядочить обычную очередь (`pendingMessages`) по списку id сообщений.
+ *
+ * Порядок `ids` — желаемый; состав должен **точно** совпадать с текущей
+ * очередью (иначе `mismatch` — очередь изменилась между чтением клиента и
+ * запросом). Пустая очередь/один элемент — no-op `ok`. `steerInbox` не
+ * трогается (у инъекций своя очередь, ADR-104).
+ */
+export async function reorderPendingMessages(
+  sessionManager: SessionManager,
+  eventBus: EventBus,
+  sessionId: string,
+  ids: string[],
+): Promise<ReorderPendingResult> {
+  if (
+    !Array.isArray(ids)
+    || ids.some((id) => typeof id !== 'string' || id.trim() === '')
+    || new Set(ids).size !== ids.length
+  ) {
+    return { ok: false, reason: 'mismatch' };
+  }
+
+  try {
+    return await sessionManager.withLock(
+      sessionId,
+      async (s): Promise<ReorderPendingResult> => {
+        const pending = s.pendingMessages ?? [];
+        const currentIds = pending.map((m) => m.id);
+        const wanted = new Set(ids);
+        if (
+          currentIds.length !== ids.length
+          || !currentIds.every((id) => wanted.has(id))
+        ) {
+          return { ok: false, reason: 'mismatch' };
+        }
+        // Пустая очередь/один элемент — переставлять нечего.
+        if (pending.length <= 1) {
+          return { ok: true, order: currentIds };
+        }
+
+        const byId = new Map(pending.map((m) => [m.id, m] as const));
+        s.pendingMessages = ids.map((id) => byId.get(id)!);
+        s.updatedAt = nowISO();
+        await sessionManager.saveSession(s);
+        publishQueueState(eventBus, sessionId, queueCounts(s));
+        return { ok: true, order: ids.slice() };
+      },
+    );
+  } catch (err) {
+    // `withLock` бросает, если сессия исчезла между запросом и локом.
+    if (err instanceof Error && err.message === `Session ${sessionId} not found`) {
+      return { ok: false, reason: 'not_found' };
+    }
+    throw err;
+  }
+}
+
+/**
  * Опции постановки сообщения в очередь (ADR-106 Ф4).
  */
 export interface EnqueueOptions {

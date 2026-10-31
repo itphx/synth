@@ -12,7 +12,9 @@ import { atomicWrite, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SessionManager, SessionProjectStoreLike } from '../sessions/manager.js';
 import {
   MESSAGE_STREAM_V2_MIGRATION,
+  MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION,
   migrateMessageStreamV2,
+  migrateMessageStreamV2StepParts,
   migrateSessionScopeSnapshots,
   SESSION_SCOPE_SNAPSHOT_MIGRATION,
 } from './migrations.js';
@@ -131,12 +133,36 @@ export const MESSAGE_STREAM_V2_MIGRATION_V1: Migration = {
 };
 
 /**
+ * ADR-118 §1: разовая миграция содержимого уже записанных ходов как элемент
+ * общего реестра (ADR-092) — до исправления «финал = последний шаг»
+ * финальное assistant-сообщение несло reasoning всех шагов и
+ * `metadata.tool_results` всех вызовов, а шаги были скрыты `tool_chain`.
+ * Миграция построчная (`updateMessage`) и идемпотентная — маркер
+ * `migrations.message-stream-v2-step-parts` в runtime-настройках; дочерние
+ * сессии (монолитный отчёт саб-агента) не трогаются.
+ */
+export const MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION_V1: Migration = {
+  id: MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION,
+  toVersion: 3,
+  description: 'Перенос reasoning/tool_results финала в сообщения шагов старых ходов (ADR-118)',
+  run(deps: MigrationDeps): Promise<number> {
+    // Нет менеджера сессий — мигрировать нечего (каталог сессий не сконфигурирован).
+    if (!deps.sessionManager) return Promise.resolve(0);
+    return migrateMessageStreamV2StepParts({
+      sessionManager: deps.sessionManager,
+      settingsStore: deps.settingsStore,
+    });
+  },
+};
+
+/**
  * Реестр миграций, отсортированный по `toVersion` (`SCHEMA_VERSION` =
  * max `toVersion`). Порядок применения — по возрастанию версии.
  */
 export const MIGRATIONS: Migration[] = [
   SESSION_SCOPE_SNAPSHOTS_MIGRATION_V1,
   MESSAGE_STREAM_V2_MIGRATION_V1,
+  MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION_V1,
 ].sort((a, b) => a.toVersion - b.toVersion);
 
 /** Текущая (ожидаемая кодом) версия схемы данных — max `toVersion` реестра. */

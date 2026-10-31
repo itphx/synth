@@ -144,6 +144,25 @@ export type StepStartedPayload = {
 };
 
 /**
+ * ADR-118 §4: payload аддитивных событий `step.tools.started` /
+ * `step.tools.finished` (канал сессии) — **исполнение инструментов шага**.
+ *
+ * Уточняет смысл `step.finished`: он остаётся «вызов LLM завершён» (ответ
+ * получен и закрыт), а `step.tools.*` явно говорят UI, что шаг ещё работает —
+ * инструменты его вызовов исполняются. Публикуются только для шагов с
+ * непустым набором вызовов: ровно один `started` и один `finished`.
+ */
+export type StepToolsPayload = {
+  turnId: string;
+  /** Индекс шага внутри хода (0-based). */
+  stepIndex: number;
+  /** Сообщение шага (то же, что у `step.started`/`step.finished`). */
+  messageId: string;
+  /** `callId` исполняемых вызовов (порядок — как у модели). */
+  callIds: string[];
+};
+
+/**
  * ADR-118 §4: вложение ответа шага (ADR-115, outbound) — **метаданные**
  * объекта, без байтов. Шлюз (Telegram/VK) забирает байты по sha256
  * (`GET /api/v2/attachments/:sha256`) и не обращается к сессии.

@@ -8,6 +8,7 @@ import type {
   TurnFinishedPayload,
   StepStartedPayload,
   StepFinishedPayload,
+  StepToolsPayload,
   PartDeltaPayload,
   PartUpdatedPayload,
 } from './message-stream.js';
@@ -46,6 +47,10 @@ export type EventType =
   | 'turn.finished'
   | 'step.started'
   | 'step.finished'
+  // ADR-118 §4 (аддитивно): исполнение инструментов шага. `step.finished` —
+  // «вызов LLM завершён», `step.tools.*` — «выполняются вызовы этого шага».
+  | 'step.tools.started'
+  | 'step.tools.finished'
   | 'part.delta'
   | 'part.updated'
   // ADR-104: форсированная отправка сообщения во время хода (steering).
@@ -193,6 +198,9 @@ export type StepStartedEventData = StepStartedPayload;
 
 /** Payload события `step.finished` (ADR-118 §4/§5) — шаг завершён. */
 export type StepFinishedEventData = StepFinishedPayload;
+
+/** Payload событий `step.tools.started`/`step.tools.finished` (ADR-118 §4). */
+export type StepToolsEventData = StepToolsPayload;
 
 /** Payload события `part.delta` (ADR-118 §4) — дельта части (upsert). */
 export type PartDeltaEventData = PartDeltaPayload;

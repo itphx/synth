@@ -505,6 +505,49 @@ function reconcileQueueFromApi(sid: string) {
 }
 
 /**
+ * ADR-118 §4: точечная догрузка сообщения по `message.delivered`.
+ *
+ * Событие несёт только `messageId`/`ord`/роль/автора — **без содержания**.
+ * Если сообщения ещё нет в сторе, тянем **одно** сообщение
+ * (`GET /sessions/:id/messages/:messageId`), а не всю историю: `message.delivered`
+ * приходит на каждое материализованное сообщение, и полный `GET /messages` на
+ * каждое событие — лишний трафик. Ошибка/404 → прежний фоллбек на полную
+ * историю (`mergeHistory`; дедуп по `id`/`ord` там же).
+ */
+async function loadDeliveredMessage(
+  sid: string,
+  messageId: string,
+  patch: Partial<MessageData>,
+): Promise<void> {
+  try {
+    const resp = await synthApi.getSessionMessage(sid, messageId)
+    const dto = extractMessageDto(resp)
+    if (!dto) {
+      // Ответ без сообщения (старое ядро/иная обёртка) — сверяемся с историей.
+      void mergeHistory(sid)
+      return
+    }
+    useChatStore.getState().upsertMessage(sid, { ...dto, ...patch })
+  } catch {
+    void mergeHistory(sid)
+  }
+}
+
+/**
+ * Сообщение из ответа точечной загрузки: `{message}` (контракт) либо само
+ * сообщение (плоский ответ старого ядра).
+ */
+function extractMessageDto(resp: unknown): MessageData | undefined {
+  if (typeof resp !== 'object' || resp === null) return undefined
+  const nested = (resp as { message?: unknown }).message
+  const raw = nested && typeof nested === 'object' ? nested : resp
+  const dto = raw as Partial<MessageData>
+  return typeof dto.id === 'string' && typeof dto.role === 'string'
+    ? (dto as MessageData)
+    : undefined
+}
+
+/**
  * ADR-118 §6: последний применённый номер события по сессиям — точка догона.
  * При реконнекте клиент передаёт максимум в `since`, и сервер отдаёт журнал
  * строго после него (без разрыва и без дублей).
@@ -1077,8 +1120,13 @@ export function createDispatcher(): EventDispatcher {
           })
           break
         }
-        // Сообщения в сторе нет — подтягиваем историю (дедуп по id).
-        void mergeHistory(sid)
+        // Сообщения в сторе нет — тянем **одно** сообщение по id (точечно),
+        // а не всю историю; ошибка/404 → фоллбек на `mergeHistory`.
+        void loadDeliveredMessage(sid, messageId, {
+          ...(ord != null ? { ord } : {}),
+          ...(role ? { role } : {}),
+          ...(author ? { author } : {}),
+        })
         break
       }
 
@@ -1174,6 +1222,34 @@ export function createDispatcher(): EventDispatcher {
           },
           { turnId: turnId || undefined },
         )
+        break
+      }
+
+      // ADR-118 §3: инструменты шага запущены — между `step.finished` и
+      // результатом инструмента живого сегмента в ленте нет. Флаг хода даёт
+      // строке активности честный текст («Выполняется инструмент…»).
+      // Учитываем только активный ход и только его собственный `turnId`:
+      // опоздавшее событие прошлого хода индикатор текущего не переключает.
+      case 'step_tools_started':
+      case 'step.tools.started': {
+        const turnId = (payload.turnId as string) || ''
+        const turn = useChatStore.getState().turnBySession[sid]
+        if (!turn || turn.status !== 'streaming') break
+        if (turnId && turn.turnId && turnId !== turn.turnId) break
+        const messageId = (payload.messageId as string) || ''
+        const stepIndex = typeof payload.stepIndex === 'number' ? payload.stepIndex : undefined
+        patchTurn(sid, {
+          toolsRunning: true,
+          ...(messageId ? { messageId } : {}),
+          ...(stepIndex != null ? { stepIndex } : {}),
+        })
+        break
+      }
+
+      // ADR-118 §3: инструменты шага завершены — возвращаем обычный индикатор.
+      case 'step_tools_finished':
+      case 'step.tools.finished': {
+        patchTurn(sid, { toolsRunning: false })
         break
       }
 

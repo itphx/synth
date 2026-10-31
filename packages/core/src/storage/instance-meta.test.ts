@@ -42,9 +42,11 @@ describe('instance-meta (ADR-092)', () => {
     expect(MIGRATIONS.length).toBeGreaterThan(0);
     expect(SCHEMA_VERSION).toBe(Math.max(...MIGRATIONS.map((m) => m.toVersion)));
     // ADR-118: версия 2 — миграция данных к модели «ход как последовательность
-    // шагов» (`message-stream-v2`).
-    expect(SCHEMA_VERSION).toBe(2);
+    // шагов» (`message-stream-v2`); версия 3 — починка содержимого уже
+    // записанных ходов (`migrations.message-stream-v2-step-parts`).
+    expect(SCHEMA_VERSION).toBe(3);
     expect(MIGRATIONS.map((m) => m.id)).toContain('message-stream-v2');
+    expect(MIGRATIONS.map((m) => m.id)).toContain('migrations.message-stream-v2-step-parts');
   });
 
   it('свежий каталог: pending (current 0), meta отсутствует, ничего не создано', async () => {

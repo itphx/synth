@@ -19,6 +19,7 @@ import type {
   PartUpdatedPayload,
   StepFinishedPayload,
   StepStartedPayload,
+  StepToolsPayload,
   TurnFinishedPayload,
   TurnStartedPayload,
 } from '@itphx/synth-shared';
@@ -103,6 +104,29 @@ export function publishStepStarted(publish: PublishEvent, payload: StepStartedPa
 /** `step.finished` — шаг завершён: статус сообщения + расход шага. */
 export function publishStepFinished(publish: PublishEvent, payload: StepFinishedPayload): void {
   publish('step.finished', { ...payload });
+}
+
+/**
+ * `step.tools.started` — вызовы шага начали исполняться (ADR-118 §4).
+ *
+ * Аддитивное уточнение к `step.finished`: тот означает «вызов LLM завершён»,
+ * а это событие — «идут инструменты шага». Публикуется только для шага с
+ * непустым набором вызовов и ровно один раз.
+ */
+export function publishStepToolsStarted(publish: PublishEvent, payload: StepToolsPayload): void {
+  publish('step.tools.started', { ...payload });
+}
+
+/**
+ * `step.tools.finished` — исполнение инструментов шага завершено и их
+ * результаты записаны в `metadata.tool_results` (ADR-118 §4).
+ *
+ * Гарантия «ровно один раз на шаг с вызовами»: публикуется после
+ * идемпотентной записи результатов на всех терминальных путях шага —
+ * обычное завершение, отмена, `deny`-цикл, шаг-лимит.
+ */
+export function publishStepToolsFinished(publish: PublishEvent, payload: StepToolsPayload): void {
+  publish('step.tools.finished', { ...payload });
 }
 
 /**

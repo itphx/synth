@@ -140,6 +140,15 @@ export interface ActiveTurn {
    * ответа. Флаг не сбрасывается между шагами хода: контент хода уже был.
    */
   contentStarted?: boolean
+  /**
+   * Идёт вызов инструментов шага (`step.tools.started` → `step.tools.finished`).
+   *
+   * Между `step.finished` шага и результатом инструмента живого сегмента в
+   * ленте нет — без флага строка активности хода писала бы «Выполняется…»
+   * вместо «Выполняется инструмент…». Сбрасывается на финише инструментов и
+   * на любом терминальном событии хода.
+   */
+  toolsRunning?: boolean
 }
 
 export interface LiveToolCall {
@@ -466,6 +475,12 @@ interface ChatStore {
   /** Снять оптимистичную строку по id (реальная ошибка отправки). */
   removePendingById: (sessionId: string, id: string) => void
   removeFirstPending: (sessionId: string) => void
+  /**
+   * Переупорядочивание очереди по списку серверных `id` (DnD-перетаскивание):
+   * элементы идут в порядке `ids`, отсутствующие (в т.ч. без `id`) — в конце
+   * с сохранением прежнего относительного порядка.
+   */
+  reorderPending: (sessionId: string, ids: string[]) => void
   clearSession: (sessionId: string) => void
   setStickyNotes: (sessionId: string, notes: StickyNoteData[]) => void
   addStickyNote: (sessionId: string, note: StickyNoteData) => void
@@ -693,7 +708,13 @@ export const useChatStore = create<ChatStore>((set) => ({
       return {
         turnBySession: {
           ...s.turnBySession,
-          [sessionId]: { ...current, status: status ?? 'completed' },
+          [sessionId]: {
+            ...current,
+            status: status ?? 'completed',
+            // Терминальный ход не может «выполнять инструмент»: иначе флаг
+            // пережил бы ход и строка активности соврала бы в следующем.
+            toolsRunning: false,
+          },
         },
       }
     }),
@@ -943,6 +964,33 @@ export const useChatStore = create<ChatStore>((set) => ({
       const pending = [...(s.pendingBySession[sessionId] || [])]
       pending.shift()
       return { pendingBySession: { ...s.pendingBySession, [sessionId]: pending } }
+    }),
+
+  reorderPending: (sessionId, ids) =>
+    set((s) => {
+      const current = s.pendingBySession[sessionId]
+      if (!current || current.length === 0) return s
+      if (ids.length === 0) return s
+      // Новый порядок: сначала id из списка (в его порядке), затем всё, чего в
+      // списке нет (оптимистичные строки без серверного id) — в прежнем порядке.
+      const byId = new Map<string, QueuedMessage>()
+      for (const item of current) {
+        if (item.id) byId.set(item.id, item)
+      }
+      const ordered: QueuedMessage[] = []
+      const placed = new Set<QueuedMessage>()
+      for (const id of ids) {
+        const item = byId.get(id)
+        if (!item || placed.has(item)) continue
+        ordered.push(item)
+        placed.add(item)
+      }
+      for (const item of current) {
+        if (!placed.has(item)) ordered.push(item)
+      }
+      if (ordered.length !== current.length) return s
+      if (ordered.every((item, index) => item === current[index])) return s
+      return { pendingBySession: { ...s.pendingBySession, [sessionId]: ordered } }
     }),
 
   clearSession: (sessionId) =>

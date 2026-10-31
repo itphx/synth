@@ -118,6 +118,8 @@ import {
   publishPartUpdated,
   publishStepFinished,
   publishStepStarted,
+  publishStepToolsFinished,
+  publishStepToolsStarted,
   publishTurnFinished,
   publishTurnStarted,
   reasoningPartId,
@@ -4484,6 +4486,20 @@ export class ChatOrchestrator {
         // plan_exit) вставляется **после всего батча** tool-вызовов итерации —
         // иначе оно встало бы между tool-результатами батча и разорвало
         // цепочку assistant(tool_calls) → tool.
+        //
+        // ADR-118 §4 (аддитивно): `step.finished` выше — «вызов LLM завершён»,
+        // а здесь начинается исполнение инструментов шага. `step.tools.started`
+        // снимает смысловой разрыв «шаг completed, а тулы ещё работают»;
+        // `callIds` — в порядке модели.
+        const stepToolCallIds = toolCalls
+          .map((tc) => (typeof tc.id === 'string' ? tc.id : ''))
+          .filter((id) => id !== '');
+        publishStepToolsStarted(publishChunk, {
+          turnId,
+          stepIndex,
+          messageId: stepMessageId,
+          callIds: stepToolCallIds,
+        });
         let modeChangePending = false;
         for (const tc of toolCalls) {
           const tcId = (tc.id as string) || `call_${Date.now()}`;
@@ -5331,11 +5347,26 @@ export class ChatOrchestrator {
         // инструментов рисуются на своём шаге и не дублируются в финале
         // хода. Запись — после исполнения всех вызовов итерации (в т.ч. при
         // шаг-лимите/отмене/deny) и до следующего LLM-вызова.
-        await this._persistStepToolResults(
-          session.id,
-          stepMessageId,
-          allToolCalls.filter((tc) => tc.iteration === toolIteration),
-        );
+        //
+        // ADR-118 §4: `step.tools.finished` — исполнение инструментов шага
+        // завершено (результаты записаны). Все терминальные ветки шага
+        // (обычное завершение, отмена, deny-цикл, шаг-лимит) сходятся здесь,
+        // поэтому событие публикуется ровно один раз; `finally` — гарантия и
+        // при сбое записи результатов.
+        try {
+          await this._persistStepToolResults(
+            session.id,
+            stepMessageId,
+            allToolCalls.filter((tc) => tc.iteration === toolIteration),
+          );
+        } finally {
+          publishStepToolsFinished(publishChunk, {
+            turnId,
+            stepIndex,
+            messageId: stepMessageId,
+            callIds: stepToolCallIds,
+          });
+        }
 
         // Шаг-лимит: вызовы не исполнялись — ход завершается сразу после
         // парных tool-результатов. Текст ответа модели (если был) становится

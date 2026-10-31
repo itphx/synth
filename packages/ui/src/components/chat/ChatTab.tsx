@@ -6,6 +6,7 @@ import { useChatStore, type MessageData, type QueuedMessage } from '@/stores/cha
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore, restoreLiveTurnFromHistory, restoreLiveTurnFromSession } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
+import { isQueueChangedError } from '@/lib/api/queue'
 import { attachmentContentUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
@@ -107,6 +108,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   const resetQueueStalled = useChatStore(s => s.resetQueueStalled)
   const updateQueueCount = useChatStore(s => s.updateQueueCount)
   const setPendingMessages = useChatStore(s => s.setPendingMessages)
+  const reorderPending = useChatStore(s => s.reorderPending)
   const setStickyNotes = useChatStore(s => s.setStickyNotes)
   const setSummarizationPending = useChatStore(s => s.setSummarizationPending)
   const openDebugModal = useChatStore(s => s.openDebugModal)
@@ -687,6 +689,29 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
   }, [sessionId, dropPendingAt, refreshQueueFromApi, notify, t, pending])
 
+  /**
+   * DnD-переупорядочивание очереди: локально применяем порядок сразу
+   * (перетаскивание не должно «отскакивать»), затем фиксируем на сервере.
+   *
+   * `409 QUEUE_CHANGED` — очередь на сервере уже другая (элемент увели/добавили):
+   * локальный порядок недостоверен, перечитываем состав у сервера и
+   * предупреждаем пользователя. Прочие ошибки — перечитываем с тостом ошибки.
+   */
+  const handleReorderQueue = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return
+    reorderPending(sessionId, ids)
+    try {
+      await synthApi.reorderQueue(sessionId, ids)
+    } catch (err) {
+      if (isQueueChangedError(err)) {
+        notify({ text: t('chat.queue.changed'), type: 'info', category: 'queue', sessionId })
+      } else {
+        notify({ text: t('chat.error.reorderQueue'), type: 'error', category: 'queue', sessionId })
+      }
+      void refreshQueueFromApi()
+    }
+  }, [sessionId, reorderPending, refreshQueueFromApi, notify, t])
+
   /** «Удалить»: сообщение снимается с сервера, возвращённый текст выбрасывается. */
   const handleRemoveMsg = useCallback(async (uiIndex: number) => {
     const queued = pending[uiIndex]
@@ -903,6 +928,7 @@ export function ChatTab({ tab }: ChatTabProps) {
               onReturnMsg={handleReturnMsg}
               onSteerMsg={handleSteerMsg}
               onRemoveMsg={handleRemoveMsg}
+              onReorder={handleReorderQueue}
             />
           )}
 

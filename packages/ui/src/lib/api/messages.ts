@@ -8,6 +8,15 @@ export interface MessageListResponse {
   session_id: string
 }
 
+/**
+ * Ответ точечной загрузки сообщения (ADR-118 §4): `message.delivered` несёт
+ * только id/ord/роль — содержание берётся одним запросом, а не полной историей.
+ */
+export interface MessageDetailResponse {
+  message: MessageData
+  session_id?: string
+}
+
 export type BatchMessageAction = 'pin' | 'toggle' | 'delete'
 
 export interface BatchMessageResult {
@@ -24,6 +33,18 @@ export const messagesApi = {
   // Сообщения (API v2 — путь /messages/:sessionId/:messageId)
   async getSessionMessages(sessionId: string): Promise<MessageListResponse> {
     return fetchJSON<MessageListResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages`)
+  },
+
+  /**
+   * Одно сообщение сессии — `GET /sessions/:id/messages/:messageId`.
+   *
+   * Точечная догрузка вместо полной истории (`message.delivered` приходит на
+   * каждое материализованное сообщение). `404` — сообщения нет (удалено/чужое).
+   */
+  async getSessionMessage(sessionId: string, messageId: string): Promise<MessageDetailResponse> {
+    return fetchJSON<MessageDetailResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}`,
+    )
   },
 
   async toggleMessage(sessionId: string, messageId: string): Promise<{ disabled: boolean; success: boolean }> {

@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, type DragEvent } from 'react'
 import type { QueuedMessage } from '../../stores/chatStore'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
+import { useDevice } from '@/hooks/useDevice'
 import { cn } from '@/lib/utils'
 
 interface QueuePanelProps {
@@ -16,6 +17,11 @@ interface QueuePanelProps {
   onReturnMsg: (uiIndex: number) => void
   onSteerMsg: (uiIndex: number) => void
   onRemoveMsg: (uiIndex: number) => void
+  /**
+   * Новый порядок очереди (DnD): список серверных `id` в желаемом порядке.
+   * Не задан — перетаскивание выключено.
+   */
+  onReorder?: (ids: string[]) => void
 }
 
 /** Компактная иконка-действие строки очереди; на тач-указателе — таргет ≥40px (ADR-044). */
@@ -40,11 +46,63 @@ export function QueuePanel({
   onReturnMsg,
   onSteerMsg,
   onRemoveMsg,
+  onReorder,
 }: QueuePanelProps) {
   const { t } = useI18n()
+  const { isTouch } = useDevice()
   const [collapsed, setCollapsed] = useState(!isStalled)
+  // DnD-переупорядочивание: индекс перетаскиваемой строки и строка-цель
+  // (для лёгкого индикатора места вставки).
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [overIndex, setOverIndex] = useState<number | null>(null)
 
   if (pending.length === 0 && !isStalled) return null
+
+  /**
+   * Перетаскивание доступно только на точном указателе (на тач — как в
+   * деревьях, DnD выключен, ADR-044) и когда у **всех** строк есть серверный
+   * id: адресация перестановки — по id, строка без него непереставляема.
+   * Неподтверждённая (`sending`) строка тоже блокирует перестановку.
+   */
+  const canReorder =
+    !!onReorder && !isTouch && pending.length > 1
+    && pending.every((msg) => !!msg.id && !msg.sending)
+
+  const finishDrag = () => {
+    setDragIndex(null)
+    setOverIndex(null)
+  }
+
+  const handleDragStart = (event: DragEvent<HTMLDivElement>, index: number) => {
+    if (!canReorder) {
+      event.preventDefault()
+      return
+    }
+    event.dataTransfer.effectAllowed = 'move'
+    // Safari требует непустой payload, иначе drag не стартует.
+    event.dataTransfer.setData('text/plain', String(index))
+    setDragIndex(index)
+  }
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>, index: number) => {
+    if (!canReorder || dragIndex === null) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    if (index !== overIndex) setOverIndex(index)
+  }
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>, index: number) => {
+    if (!canReorder || dragIndex === null) return
+    event.preventDefault()
+    const from = dragIndex
+    finishDrag()
+    if (from === index) return
+    const next = pending.map((msg) => msg.id!)
+    const [moved] = next.splice(from, 1)
+    if (moved === undefined) return
+    next.splice(index, 0, moved)
+    onReorder?.(next)
+  }
 
   const borderClass = isStalled
     ? 'border-status-warning/20'
@@ -111,13 +169,23 @@ export function QueuePanel({
             const preview = firstLineOf(msg.content)
             return (
               <div
-                key={i}
+                key={msg.id ?? `q-${i}`}
                 data-testid={`queue-item-${i}`}
+                data-drop-target={overIndex === i && dragIndex !== null ? 'true' : undefined}
+                draggable={canReorder}
+                onDragStart={(event) => handleDragStart(event, i)}
+                onDragOver={(event) => handleDragOver(event, i)}
+                onDrop={(event) => handleDrop(event, i)}
+                onDragEnd={finishDrag}
                 className={cn(
                   'flex items-center gap-2 px-2 py-1 rounded text-xs border',
                   isStalled
                     ? 'bg-status-warning/10 border-status-warning/10'
                     : 'bg-surface-card border-border/20',
+                  // Лёгкий индикатор места вставки: подсветка строки-цели.
+                  overIndex === i && dragIndex !== null && dragIndex !== i
+                    && 'ring-1 ring-inset ring-primary/50',
+                  canReorder && 'cursor-grab active:cursor-grabbing',
                 )}
               >
                 <span className="text-muted-foreground shrink-0">
