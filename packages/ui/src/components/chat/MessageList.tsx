@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
+import { Fragment, useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
@@ -506,21 +506,29 @@ export function MessageList({
         last: i === group.messages.length - 1,
       })
       if (!turnBlock || i === 0) return segment
-      // Между шагами — тонкий разделитель, без отдельных карточек.
+      // Между шагами — тонкий разделитель, без отдельных карточек. Это
+      // **отдельный пустой элемент** (сиблиг сегмента), а не обёртка сегмента:
+      // так DOM хода однороден и структурное CSS-правило
+      // (`styles/index.css`) снимает нижний отступ последнего блока
+      // предыдущего сегмента одинаково на **каждой** границе (иначе у хода
+      // из 3+ сегментов зазоры внутри различались: 8px против 16px).
       return (
-        <div
-          key={`divider:${msg.id ?? msg.index}`}
-          data-step-divider
-          className="mt-2 w-full border-t border-border/30"
-        >
+        <Fragment key={`divider:${msg.id ?? msg.index}`}>
+          <div data-step-divider className="mt-2 w-full border-t border-border/30" />
           {segment}
-        </div>
+        </Fragment>
       )
     })
     if (!turnBlock) return segments
     return (
-      <div key={group.key} data-testid="turn-block" className={TURN_BLOCK_CLASS}>
-        {segments}
+      // Внешний прозрачный отступ блока хода (12px сверху и снизу) — вертикальный
+      // ритм ленты: между разными сообщениями 24px. Именно **padding**, а не
+      // margin/gap: при виртуализации измеряется высота элемента, и отступ
+      // обязан входить в неё, иначе скролл прыгает.
+      <div key={group.key} className="py-3">
+        <div data-testid="turn-block" className={TURN_BLOCK_CLASS}>
+          {segments}
+        </div>
       </div>
     )
   }

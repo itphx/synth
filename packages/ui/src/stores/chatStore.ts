@@ -48,6 +48,20 @@ export interface MessageData {
   step_index?: number | null
   /** ADR-118 §5: статус сообщения-хода (`streaming` → терминальный). */
   status?: MessageStatus | null
+  /**
+   * Сообщение **вклинивается в текущий ход** (`delivery: 'steer'` в
+   * `message.enqueued`), но ещё не материализовано в истории (`ord` не выдан) —
+   * ADR-118 §4.
+   *
+   * Поле нужно для сортировки (такая запись идёт в хвост ленты, перед живым
+   * сегментом хода) и для уборки: сообщение, вернувшееся в обычную очередь
+   * или оставшееся неразрешённым после закрытия хода, из ленты убирается.
+   * В разметку это поле не попадает — реплика рисуется обычным пузырём.
+   *
+   * Не путать с `delivery` из `message.accepted` — там режим приёма
+   * (`queue`/`steer`/`interrupt`), здесь — состояние «ждёт применения».
+   */
+  steerPending?: boolean
   origin?: string
   source_msg_id?: string | null
   /** ADR-115: части сообщения; медиа — `image`/`audio`/`video`/`file` с `MediaPartData`. */
@@ -284,7 +298,7 @@ export interface QueuedMessage {
  * - `index` — позиция в серверном массиве: **не** ключ порядка (смешивать с
  *   `ord` нельзя — это разные шкалы).
  */
-export type MessageOrderKey = Pick<MessageData, 'ord' | 'id' | 'index' | 'status'> & {
+export type MessageOrderKey = Pick<MessageData, 'ord' | 'id' | 'index' | 'status' | 'steerPending'> & {
   created_at?: string
 }
 
@@ -321,11 +335,26 @@ function isLiveOrderKey(m: MessageOrderKey, ord: number | null, createdAt: strin
 }
 
 /**
+ * Вклинивающееся сообщение (ADR-118 §4, `message.enqueued` с
+ * `delivery: 'steer'`): принято в ход, но в истории ещё не записано — `ord` не
+ * выдан.
+ *
+ * Такое сообщение идёт в **хвост** ленты (после всех записанных), но перед
+ * живым сегментом хода (тот остаётся последним).
+ */
+function isSteerPendingOrderKey(m: MessageOrderKey, ord: number | null): boolean {
+  return ord === null && m.steerPending === true
+}
+
+/**
  * Сортировка сообщений по `ord` (ADR-118 §2) — монотонный порядок записи.
  *
  * - живое сообщение (статус `streaming` или ещё не материализованное) —
  *   **последнее**: его `created_at` — клиентское время, смешивать его с
  *   серверным нельзя;
+ * - ожидающее сообщение (`message.enqueued`: `ord` не выдан, маркер
+ *   `steerPending`) — в хвосте ленты, после всех записанных; между собой — по
+ *   `created_at`, как остальные;
  * - у обоих есть `ord` — по нему; при равном `ord` — tie-break по `id`
  *   (ADR-118 «Порядок и идемпотентность»);
  * - `ord` есть только у одного — сравниваем **по времени материализации**
@@ -348,6 +377,21 @@ export function compareMessagesByOrd(a: MessageOrderKey, b: MessageOrderKey): nu
   const aLive = isLiveOrderKey(a, ao, ac)
   const bLive = isLiveOrderKey(b, bo, bc)
   if (aLive !== bLive) return aLive ? 1 : -1
+
+  // ADR-118 §4: вклинивающееся сообщение (`message.enqueued`) — после всех
+  // записанных (`ord` выдан), но до живого (живое — последнее).
+  const aSteer = isSteerPendingOrderKey(a, ao)
+  const bSteer = isSteerPendingOrderKey(b, bo)
+  if (aSteer !== bSteer) {
+    const aOrd = ao !== null
+    const bOrd = bo !== null
+    // Записанное сообщение — раньше вклинивающегося.
+    if (aOrd !== bOrd) return aOrd ? -1 : 1
+    // Оба без `ord` (вклинивающееся и оптимистичная реплика) — по времени
+    // постановки: вклинивающееся принято раньше.
+    if (ac && bc && ac !== bc) return ac < bc ? -1 : 1
+    return tieBreakById(a, b)
+  }
 
   // `ord` у обоих — монотонный порядок записи (ADR-118 §2).
   if (ao !== null && bo !== null) {
@@ -595,6 +639,9 @@ export const useChatStore = create<ChatStore>((set) => ({
         // уже известный полный контент.
         content: prev.content || message.content,
         metadata: { ...(prev.metadata ?? {}), ...(message.metadata ?? {}) },
+        // Материализованное сообщение (`ord` выдан) вклинивающимся быть не
+        // может: маркер ожидания снимается (ADR-118 §4, `message.enqueued`).
+        ...(message.ord != null ? { steerPending: false } : {}),
       }
       const next = [...current]
       next[at] = merged

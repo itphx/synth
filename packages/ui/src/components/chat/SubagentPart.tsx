@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
+import { useProcessesStore } from '@/stores/processesStore'
+import { useSubagentRunsStore } from '@/stores/subagentRunsStore'
 import { notifyMessage } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
 import { moveSessionToBackground } from '@/lib/backgroundDetach'
@@ -52,6 +54,14 @@ export interface SubagentPartData {
   tool_calls?: SubagentToolCall[]
   steps?: number
   description?: string
+  /**
+   * ADR-111: карточка **фонового** прогона (`task` с `background: true` или
+   * переведённого в фон). У него в `result.metadata` нет ни шагов, ни
+   * `tool_calls` — публикация в родительский стрим отключена, а `tool_result`
+   * возвращается сразу. Шаги лежат в **истории дочерней сессии** — UI
+   * догружает их лениво (`stores/subagentRunsStore`).
+   */
+  background?: boolean
 }
 
 export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
@@ -66,6 +76,40 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
   const sid = (activeTab?.data?.sessionId as string) || ''
   const subagentRetry = useChatStore((s) => s.subagentRetryBySession[sid] || null)
   const resuming = useChatStore((s) => s.subagentResumingBySession[sid] || null)
+
+  /**
+   * ADR-111: фоновая карточка. Шагов в `result.metadata` нет (публикация в
+   * родительский стрим отключена) — они лежат в истории дочерней сессии.
+   * Загрузка ленивая: по раскрытию карточки + по терминальному статусу
+   * прогона (`processesStore`).
+   */
+  const childSessionId = subagent.background ? subagent.sessionId : undefined
+  const runEntry = useSubagentRunsStore((s) => (childSessionId ? s.byChild[childSessionId] : undefined))
+  const runStatus = useProcessesStore((s) => {
+    if (!childSessionId) return undefined
+    const run = s.order
+      .map((id) => s.byId[id])
+      .find((r) => r?.kind === 'subagent' && r.childSessionId === childSessionId)
+    return run?.status
+  })
+
+  // Загрузка по раскрытию карточки (основной путь).
+  useEffect(() => {
+    if (!expanded || !childSessionId) return
+    void useSubagentRunsStore.getState().ensure(childSessionId)
+  }, [expanded, childSessionId])
+
+  // Прогон стал терминальным → история дочерней сессии полна: перечитываем её.
+  const wasTerminal = useRef(false)
+  useEffect(() => {
+    if (!runStatus) return
+    const terminal = runStatus !== 'running'
+    if (terminal && !wasTerminal.current && childSessionId) {
+      void useSubagentRunsStore.getState().invalidate(childSessionId)
+      void useSubagentRunsStore.getState().ensure(childSessionId)
+    }
+    wasTerminal.current = terminal
+  }, [runStatus, childSessionId])
 
   const retryVisible = subagent.live === true
     && subagentRetry != null
@@ -92,9 +136,31 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
     synthApi.stopGeneration(subagent.sessionId).catch(() => {})
   }
 
-  const reasoningBlocks: ReasoningBlockData[] = subagent.reasoning_blocks || []
-  const intermediateTextBlocks: IntermediateTextBlockData[] = subagent.intermediate_text_blocks || []
-  const toolCalls = subagent.tool_calls || []
+  const handleRetrySteps = () => {
+    if (!childSessionId) return
+    void useSubagentRunsStore.getState().invalidate(childSessionId)
+    void useSubagentRunsStore.getState().ensure(childSessionId)
+  }
+
+  /**
+   * Шаги карточки: у фоновой — из догруженной истории ребёнка, у обычной —
+   * из `result.metadata`/live-данных. Приоритет живых данных: если они есть,
+   * стор их не перекрывает.
+   */
+  const liveToolCalls = subagent.tool_calls || []
+  const storeData = runEntry?.status === 'ready' ? runEntry.data : undefined
+  const toolCalls: SubagentToolCall[] = liveToolCalls.length > 0
+    ? liveToolCalls
+    : (storeData?.toolCalls ?? [])
+  const reasoningBlocks: ReasoningBlockData[] = (subagent.reasoning_blocks?.length ?? 0) > 0
+    ? subagent.reasoning_blocks!
+    : (storeData?.reasoningBlocks ?? [])
+  const intermediateTextBlocks: IntermediateTextBlockData[] = (subagent.intermediate_text_blocks?.length ?? 0) > 0
+    ? subagent.intermediate_text_blocks!
+    : (storeData?.intermediateTextBlocks ?? [])
+  const steps = subagent.steps ?? storeData?.steps
+  const stepsLoading = childSessionId != null && runEntry?.status === 'loading'
+  const stepsError = childSessionId != null && runEntry?.status === 'error' ? runEntry.error : undefined
 
   const maxIter = Math.max(
     0,
@@ -222,9 +288,9 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
             )}
           </span>
         )}
-        {subagent.steps != null && (
+        {steps != null && (
           <span className="text-[0.625rem] text-muted-foreground/60">
-            {subagent.steps} {t('chat.subagent.steps')}
+            {steps} {t('chat.subagent.steps')}
           </span>
         )}
       </div>
@@ -234,6 +300,27 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
             <div>
               <div className="text-[0.625rem] text-muted-foreground/60 mb-1 uppercase tracking-wide">Prompt</div>
               <MarkdownContent content={subagent.prompt} className="text-xs" />
+            </div>
+          )}
+
+          {stepsLoading && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Icon name="loader-2" className="size-3 animate-spin" />
+              {t('chat.subagent.stepsLoading')}
+            </div>
+          )}
+
+          {stepsError && (
+            <div className="flex items-center gap-1.5 text-xs text-destructive">
+              <Icon name="error-warning" className="size-3 shrink-0" />
+              <span className="flex-1 min-w-0">{t('chat.subagent.stepsFailed')}</span>
+              <button
+                type="button"
+                onClick={handleRetrySteps}
+                className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+              >
+                {t('chat.subagent.stepsRetry')}
+              </button>
             </div>
           )}
 

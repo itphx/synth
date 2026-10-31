@@ -394,9 +394,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - ADR-118 (поток сообщений v2): `src/types/message-stream.ts` — контрактная часть модели
   хода (`Turn` → `Step` → `Part`): `MessageStatus` (`streaming`/`completed`/`cancelled`/`error`),
   `TurnStatus` (`completed`/`cancelled`/`error`/`stopped`), `PromptMode`, `PromptAcceptedResponse`
-  (`202 {messageId, mode, position}`), payload'ы событий `message.accepted`/`queue.state`/
-  `message.delivered`/`turn.*`/`step.*` (`StepFinishedPayload` включая `attachments` ADR-115,
-  `provider`/`model`/`costUsd`/`timings`) и `part.delta`/`part.updated`, `StepAttachmentRef`,
+  (`202 {messageId, mode, position}`), payload'ы событий `message.accepted`/`message.enqueued`/
+  `queue.state`/`message.delivered`/`turn.*`/`step.*` (`StepFinishedPayload` включая `attachments`
+  ADR-115, `provider`/`model`/`costUsd`/`timings`) и `part.delta`/`part.updated`, `StepAttachmentRef`,
   `InstanceCapabilities`, `MESSAGE_MODEL_VERSION = 2`, `MESSAGE_MODEL_QUERY_PARAM` и
   `supportsMessageModel` (fail-closed сверка). Модуль **browser-safe** (только типы и чистые
   функции) — его импортирует UI. `Message` дополнен `ord` (монотонный порядок записи),
@@ -404,6 +404,11 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (нумерация для догона). Типы событий шины — в `types/bus-events.ts` (алиасы payload'ов из
   `message-stream.ts`), удалённые v1-события (`stream.chunk`/`stream.usage`/`stream.done`/
   `stream.interrupted`/`message.injected`/`message.queued`) в `EventType` отсутствуют.
+  ADR-118 §4: `MessageEnqueuedPayload`/`EnqueuedMessageSnapshot` — снимок сообщения для адресного
+  события `message.enqueued` (снимок **без `ord`**, уже обфусцирован — реальных секретов нет);
+  `MessageDeliveredPayload.turnId?` — аддитивный ход сообщения (есть там, где сервер знает ход
+  в момент материализации: вмешательство на границе шага; у цикла сабагента ход ребёнка = id
+  дочерней сессии).
 - ADR-115: **вложения** — медиа-части (`MediaPartType` = `image`/`audio`/`video`/`file`,
   `MediaPartData`: `blobPath`/`sha256`/`mime`/`size`/`name?`/`width?`/`height?`/`durationMs?`/
   `transcript?`; медиа-часть даёт плейсхолдер в `content`, `makeMediaPart`) и ссылки на объекты

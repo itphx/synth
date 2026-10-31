@@ -1228,8 +1228,9 @@ export const dict = {
   'chat.input.mentionHint': 'Mention an agent with @',
   'chat.input.enqueue': 'Enqueue',
 
-  // --- Steering: intervention in the running turn (ADR-104) ---
-  'chat.steer.marker': 'Intervened in turn',
+  // --- Steering: interrupting the running turn (ADR-104) ---
+  // No "intervened in turn" marker anymore: a joined reply is rendered as a
+  // plain bubble (ADR-118 §4).
   'chat.steer.interruptMarker': 'Turn interrupted',
 
   // Markdown в ответах: заголовок блока кода и кнопка копирования.
@@ -1347,6 +1348,9 @@ export const dict = {
   'chat.subagent.resuming': 'Resuming…',
   'chat.subagent.stop': 'Stop',
   'chat.subagent.resumeFailed': 'Failed to resume subagent',
+  'chat.subagent.stepsLoading': 'Loading steps…',
+  'chat.subagent.stepsFailed': 'Failed to load steps',
+  'chat.subagent.stepsRetry': 'Retry',
 
   'chat.streamError.generic': 'Processing stopped: provider error',
   'chat.streamError.contextLength': 'Model context window exceeded. Start a new session or shorten the history',

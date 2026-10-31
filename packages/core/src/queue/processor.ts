@@ -7,6 +7,10 @@ import type { ContextOptimizer } from '../engine/context/optimizer.js';
 import { isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../engine/llm-error.js';
 import type { AnalyticsRecorder } from '../analytics/recorder.js';
 import { sessionAxes } from '../analytics/recorder.js';
+// ADR-118 §4: снимок сообщения для события `message.enqueued` — та же
+// сериализация, что у списка сообщений, но без `ord` (записи в истории ещё
+// нет) и без реальных значений секретов (ADR-036).
+import { serializeEnqueuedMessage } from '../server/serialize.js';
 // ADR-118 §2: `ord` — монотонный счётчик сессии (выдаётся при материализации
 // записи в истории). Тот же помощник, что и в `SessionManager.addMessage`.
 import { nextOrd } from '../storage/message-write.js';
@@ -100,6 +104,67 @@ function publishMessageAccepted(
 
 interface RetryDelays {
   [streamId: string]: number;
+}
+
+/**
+ * ADR-118 §4: событие «сообщение поставлено в очередь» — `message.enqueued`.
+ *
+ * **Всегда адресное**: получатель — отправитель (`options.recipient`), иначе
+ * владелец сессии (`ownerId ?? userId`; в standalone это `local`). Снимок
+ * содержит текст сообщения, поэтому в общий канал сессии он попадать не
+ * должен: владельца определить не удалось — событие **не публикуется**
+ * (fail-closed), сообщение всё равно появится по `message.delivered` при
+ * материализации.
+ *
+ * В отличие от `message.accepted` событие несёт **снимок сообщения**: реплика,
+ * отправленная посреди идущего хода, должна появиться в ленте сразу, не
+ * дожидаясь материализации в истории (`message.delivered`). Снимок уже
+ * обфусцирован (ADR-036) — реальных секретов в нём нет.
+ *
+ * Публикуется ровно один раз на сообщение: при отказе постановки (очередь
+ * полна) события нет — сообщение не принято.
+ */
+function publishMessageEnqueued(
+  eventBus: EventBus,
+  sessionId: string,
+  params: {
+    messageId: string;
+    delivery: 'queue' | 'steer';
+    position: number | null;
+    message: Message;
+    recipient: string;
+  },
+): void {
+  // Только пользовательский ввод: служебные сообщения (например, запрос
+  // суммаризации) в ленте не рисуются.
+  if (params.message.role !== MessageRole.USER) return;
+  // Fail-closed: без адресата событие не публикуется — снимок с текстом в
+  // общем канале сессии утекать не должен.
+  if (!params.recipient) return;
+  eventBus.publish(
+    sessionId,
+    'message.enqueued',
+    {
+      messageId: params.messageId,
+      delivery: params.delivery,
+      position: params.position,
+      message: serializeEnqueuedMessage(params.message),
+    },
+    { recipient: params.recipient },
+  );
+}
+
+/**
+ * Владелец сессии — адресат `message.enqueued`, если отправитель не задан
+ * (например, уведомление о завершении фоновой работы: отправителя-пользователя
+ * у него нет).
+ *
+ * Тот же резолв, что в роутах сессий (`ownerId ?? userId`); пусто — владельца
+ * нет, событие не публикуется (fail-closed, см. `publishMessageEnqueued`).
+ */
+function sessionOwnerId(session: Session | null | undefined): string {
+  if (!session) return '';
+  return session.ownerId ?? session.userId ?? '';
 }
 
 export type ProcessMessageFn = (
@@ -443,6 +508,10 @@ export class QueueProcessor {
             role: delivered.role,
             ...(delivered.author ? { author: delivered.author } : {}),
             ...(delivered.principal ? { principal: delivered.principal } : {}),
+            // ADR-118 §4 (аддитивно): ход сообщения — если он уже известен.
+            // Для реплики, с которой ход только начинается, `turnId` выдаёт
+            // оркестратор позже (клиент берёт его из `turn.started`).
+            ...(delivered.turnId ? { turnId: delivered.turnId } : {}),
           });
           // ADR-102: точка персиста пользовательского сообщения (ось `user`).
           void this.analytics?.recordActivity('messages_user', sessionAxes(session));
@@ -922,6 +991,21 @@ export async function enqueueSteerMessage(
   });
   // ADR-118 §4: состояние очереди — только счётчики (без текста и автора).
   const session = await sessionManager.getSession(sessionId);
+  // Сообщение принято в очередь вмешательств и ждёт применения на границе
+  // шага — адресное событие `message.enqueued` со снимком (лента показывает
+  // реплику сразу). Адресат — отправитель, иначе владелец сессии; владельца
+  // нет — событие не публикуется (fail-closed).
+  // Повторная постановка того же id — второй раз не публикуем.
+  const sameIdInInbox = (session?.steerInbox ?? []).filter((m) => m.id === message.id).length;
+  if (sameIdInInbox <= 1) {
+    publishMessageEnqueued(eventBus, sessionId, {
+      messageId: options?.messageId ?? message.id,
+      delivery: 'steer',
+      position: null,
+      message,
+      recipient: options?.recipient ?? sessionOwnerId(session),
+    });
+  }
   publishQueueState(eventBus, sessionId, queueCounts(session));
 
   return { accepted: true, pending: result.pending };
@@ -1075,6 +1159,24 @@ export async function enqueueUserMessage(
     role: message.role,
     ...(options?.recipient ? { recipient: options.recipient } : {}),
   });
+
+  // ADR-118 §4: сообщение принято в очередь и ждёт материализации — адресное
+  // событие `message.enqueued` со снимком сообщения (лента показывает реплику
+  // сразу, не дожидаясь `message.delivered`).
+  // Адресат — отправитель, иначе владелец сессии; владельца нет — событие не
+  // публикуется (fail-closed, см. `publishMessageEnqueued`).
+  // Повторная постановка того же id (ретрай клиента) — второй раз не
+  // публикуем: в ленте сообщение одно (дедуп по `id`).
+  const sameIdInQueue = session.pendingMessages.filter((m) => m.id === message.id).length;
+  if (sameIdInQueue <= 1) {
+    publishMessageEnqueued(eventBus, sessionId, {
+      messageId: options?.messageId ?? message.id,
+      delivery: 'queue',
+      position: session.pendingMessages.length,
+      message,
+      recipient: options?.recipient ?? sessionOwnerId(session),
+    });
+  }
   // ADR-118 §4: состояние очереди — только счётчики (без текста и автора).
   publishQueueState(eventBus, sessionId, queueCounts(session));
 

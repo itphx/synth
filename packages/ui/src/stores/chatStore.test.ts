@@ -171,6 +171,63 @@ describe('chatStore: сортировка сообщений по ord (ADR-118 �
   })
 })
 
+// ---------------------------------------------------------------------------
+// 1b. Вклинивание в ход (ADR-118 §4, `message.enqueued` со `delivery:'steer'`)
+// ---------------------------------------------------------------------------
+
+describe('chatStore: сортировка вклиниваний (ADR-118 §4)', () => {
+  it('вклинивание (ord не выдан) — после всех записанных', () => {
+    const steer = { ord: null, id: 'steer', index: 9, steerPending: true, created_at: '2026-10-30T10:00:00Z' }
+    const saved = { ord: 12, id: 'saved', index: 1, created_at: '2026-10-30T09:00:00Z' }
+
+    expect(compareMessagesByOrd(steer, saved)).toBeGreaterThan(0)
+    expect(compareMessagesByOrd(saved, steer)).toBeLessThan(0)
+  })
+
+  it('вклинивание — перед живым (живое остаётся последним)', () => {
+    const steer = { ord: null, id: 'steer', index: 3, steerPending: true, created_at: '2026-10-30T10:00:00Z' }
+    const live = { ord: null, id: 'live', index: 4, status: 'streaming' as const, created_at: '2026-10-30T12:00:00Z' }
+
+    expect(compareMessagesByOrd(steer, live)).toBeLessThan(0)
+    expect(compareMessagesByOrd(live, steer)).toBeGreaterThan(0)
+  })
+
+  it('вклинивания между собой — по времени постановки (created_at)', () => {
+    const early = { ord: null, id: 'early', index: 5, steerPending: true, created_at: '2026-10-30T10:00:00Z' }
+    const late = { ord: null, id: 'late', index: 0, steerPending: true, created_at: '2026-10-30T10:00:01Z' }
+
+    expect(compareMessagesByOrd(early, late)).toBeLessThan(0)
+    expect(compareMessagesByOrd(late, early)).toBeGreaterThan(0)
+  })
+
+  it('sortMessagesByOrd: лента — записанные, затем вклинивания, затем живой', () => {
+    const sorted = sortMessagesByOrd([
+      msg({ index: 2, id: 'live', role: 'assistant', status: 'streaming', ord: null, created_at: '2026-10-30T12:00:00Z' }),
+      msg({ index: 3, id: 'steer', ord: null, steerPending: true, created_at: '2026-10-30T10:00:00Z' }),
+      msg({ index: 0, id: 'saved', ord: 12, created_at: '2026-10-30T09:00:00Z' }),
+    ])
+    expect(sorted.map((m) => m.id)).toEqual(['saved', 'steer', 'live'])
+  })
+
+  it('вклинивание и оптимистичная реплика (обе без ord) — по времени постановки', () => {
+    const steer = { ord: null, id: 'steer', index: 4, steerPending: true, created_at: '2026-10-30T10:00:00Z' }
+    const optimistic = { ord: null, id: 'optimistic', index: 5, created_at: '2026-10-30T10:00:05Z' }
+
+    // Вклинивание было раньше оптимистичной реплики — порядок сохраняется.
+    expect(compareMessagesByOrd(steer, optimistic)).toBeLessThan(0)
+  })
+
+  it('маркер снимается, когда сообщение материализовано (ord выдан)', () => {
+    const store = useChatStore.getState()
+    store.upsertMessage('s1', msg({ index: 0, id: 'm1', ord: null, steerPending: true, content: 'вклинилось' }))
+    expect(useChatStore.getState().messagesBySession['s1']![0]!.steerPending).toBe(true)
+
+    // Серверный снимок с `ord` — сообщение записано в историю.
+    store.upsertMessage('s1', msg({ index: 0, id: 'm1', ord: 4, content: 'вклинилось' }))
+    expect(useChatStore.getState().messagesBySession['s1']![0]!.steerPending).toBe(false)
+  })
+})
+
 describe('chatStore: upsertMessage (ADR-118 §7 — адресация по id)', () => {
   it('добавляет сообщение по id и обновляет существующее без дублей', () => {
     const store = useChatStore.getState()

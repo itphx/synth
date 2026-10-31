@@ -598,6 +598,10 @@ function reconcileQueueFromApi(sid: string) {
       const pending = data.pending_messages as Array<Record<string, unknown>> | undefined
       if (!pending) return
       const chat = useChatStore.getState()
+      // ADR-118 §4: обычная очередь в ленте не показывается, но вклинивание
+      // (`delivery: 'steer'`), вернувшееся в очередь, из ленты убирается —
+      // теперь это сообщение живёт только в панели очереди.
+      removeSteerPendingInQueue(sid, pending)
       if (pending.length === 0) {
         chat.clearQueueState(sid)
         return
@@ -613,6 +617,107 @@ function reconcileQueueFromApi(sid: string) {
       else chat.clearQueueState(sid)
     })
     .catch(() => {})
+}
+
+/**
+ * ADR-118 §4: снимок сообщения (`message.enqueued`) → запись ленты.
+ *
+ * `ord` не выдан (сообщение ещё не материализовано в истории) — состояние
+ * «вклинивается в ход» показывает поле `steerPending` (в разметку оно не
+ * попадает: реплика рисуется обычным пузырём). Поля — те же, что у DTO
+ * сообщения (id/role/author/content/parts/metadata/время).
+ */
+function steerPendingMessageFromSnapshot(
+  messageId: string,
+  snapshot: Record<string, unknown>,
+  index: number,
+): MessageData {
+  const content = typeof snapshot.content === 'string' ? snapshot.content : ''
+  const parts = Array.isArray(snapshot.parts) ? (snapshot.parts as Part[]) : undefined
+  const role = typeof snapshot.role === 'string' ? snapshot.role : 'user'
+  const author = typeof snapshot.author === 'string' ? snapshot.author : null
+  const metadata = (
+    snapshot.metadata && typeof snapshot.metadata === 'object'
+      ? snapshot.metadata
+      : null
+  ) as Record<string, unknown> | null
+  // DTO сообщения отдаёт время в `timestamp`, снимок события — в `created_at`.
+  const createdAt = typeof snapshot.created_at === 'string'
+    ? snapshot.created_at
+    : typeof snapshot.timestamp === 'string'
+      ? snapshot.timestamp
+      : new Date().toISOString()
+  return {
+    index,
+    id: messageId,
+    role,
+    content,
+    ...(parts ? { parts } : {}),
+    author,
+    metadata,
+    ord: null,
+    turn_id: null,
+    status: null,
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    created_at: createdAt,
+    steerPending: true,
+  }
+}
+
+/**
+ * ADR-118 §4: убрать из ленты вклинивания (`delivery: 'steer'`), которые
+ * вернулись в **обычную очередь** (ход закончился до границы шага — ядро
+ * вернул сообщение в `pendingMessages`).
+ *
+ * Такое сообщение теперь живёт только в панели очереди — в ленте ему не
+ * место (в ленте остаются записи, ждущие применения в текущем ходе).
+ */
+function removeSteerPendingInQueue(sessionId: string, pending: unknown): void {
+  if (!Array.isArray(pending)) return
+  const pendingIds = new Set<string>()
+  for (const raw of pending) {
+    if (!raw || typeof raw !== 'object') continue
+    const id = (raw as Record<string, unknown>).id
+    if (typeof id === 'string' && id) pendingIds.add(id)
+  }
+  if (pendingIds.size === 0) return
+  const chat = useChatStore.getState()
+  for (const message of chat.messagesBySession[sessionId] || []) {
+    if (message.steerPending !== true) continue
+    if (!message.id || !pendingIds.has(message.id)) continue
+    chat.removeMessageById(sessionId, message.id)
+  }
+}
+
+/**
+ * ADR-118 §4: есть ли в ленте неразрешённые вклинивания сессии
+ * (`delivery: 'steer'`, ещё не материализованные).
+ *
+ * Нужно, чтобы не дёргать сверку с сервером (`GET /sessions/:id`) на каждый
+ * `queue.state`: вклинивания в ленте — редкий случай.
+ */
+function hasSteerPending(sessionId: string): boolean {
+  const messages = useChatStore.getState().messagesBySession[sessionId] || []
+  return messages.some((m) => m.steerPending === true)
+}
+
+/**
+ * ADR-118 §4: снять из ленты неразрешённые вклинивания сессии (ход закрыт).
+ *
+ * На терминальном событии хода очередь вмешательств либо применена (тогда
+ * пришло `message.delivered` и маркер уже снят), либо возвращена в обычную
+ * очередь (сообщение уберут из ленты при сверке очереди). Оставшиеся
+ * неразрешённые записи в ленте не нужны: их ждёт либо материализация
+ * (позже, отдельным `message.delivered`), либо возврат в очередь.
+ */
+function clearSteerPendingMessages(sessionId: string): void {
+  const chat = useChatStore.getState()
+  for (const message of chat.messagesBySession[sessionId] || []) {
+    if (message.steerPending !== true) continue
+    if (message.id) chat.removeMessageById(sessionId, message.id)
+  }
 }
 
 /**
@@ -1168,6 +1273,10 @@ export function createDispatcher(): EventDispatcher {
       if (!turn || turn.status !== 'streaming') return
       if (streamId && turn.streamId && turn.streamId !== streamId) return
       finishTurn(sid, turn.turnId, status)
+      // Ход закрыт — неразрешённые вклинивания из ленты убираем (ADR-118 §4):
+      // их либо применят позже (отдельным `message.delivered`), либо вернут в
+      // очередь (тогда снимок очереди их уберёт).
+      clearSteerPendingMessages(sid)
     }
 
     switch (type) {
@@ -1201,15 +1310,47 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // ADR-118 §4: `message.enqueued` — **адресное** событие «сообщение принято
+      // и ждёт материализации». В отличие от `message.accepted` оно несёт
+      // **снимок сообщения`.
+      //
+      // Показываем в ленте только `delivery: 'steer'` — сообщение **вклинивается
+      // в текущий ход**, поэтому оно должно быть видно сразу, до материализации.
+      // `delivery: 'queue'` — обычная очередь: она живёт только в панели очереди
+      // (`QueuePanel`), в ленте её нет.
+      case 'message.enqueued': {
+        const messageId = (payload.messageId as string) || ''
+        if (!messageId) break
+        const delivery = (payload.delivery as string) === 'steer' ? 'steer' : 'queue'
+        if (delivery !== 'steer') break
+        const raw = payload.message
+        const snapshot = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+        const existing = useChatStore.getState().messagesBySession[sid]?.find((m) => m.id === messageId)
+        const msgs = useChatStore.getState().messagesBySession[sid] || []
+        const indexes = msgs
+          .map((m) => m.index)
+          .filter((i): i is number => typeof i === 'number' && Number.isFinite(i))
+        const index = indexes.length > 0 ? Math.max(...indexes) + 1 : 0
+        const message = steerPendingMessageFromSnapshot(messageId, snapshot, index)
+        // Материализованное сообщение (у него `ord`) вклинивающимся быть не
+        // может: позднее событие маркер ожидания не возвращает.
+        if (existing?.ord != null) message.steerPending = false
+        // Дедуп по `id`: повторное событие (догон/реконнект) — патч, не дубль.
+        upsertMessage(sid, message)
+        break
+      }
+
       // ADR-118 §4: `queue.state` — состояние очереди: счётчики и, аддитивно,
       // статусы элементов (`items: [{id, status}]`; без текста и автора).
       case 'queue.state': {
-        setQueueCounts(
-          sid,
-          (payload.pendingCount as number) || 0,
-          (payload.steerCount as number) || 0,
-        )
+        const pendingCount = (payload.pendingCount as number) || 0
+        const steerCount = (payload.steerCount as number) || 0
+        setQueueCounts(sid, pendingCount, steerCount)
         setQueueItems(sid, extractQueueItems(payload.items))
+        // Вклинивание, вернувшееся в обычную очередь, из ленты убирается —
+        // теперь это сообщение живёт только в панели очереди. Сверяемся с
+        // сервером, но только если в ленте есть неразрешённые вклинивания.
+        if (hasSteerPending(sid)) reconcileQueueFromApi(sid)
         break
       }
 
@@ -1222,22 +1363,23 @@ export function createDispatcher(): EventDispatcher {
         const ord = typeof payload.ord === 'number' ? payload.ord : null
         const role = (payload.role as string) || undefined
         const author = (payload.author as string) || undefined
+        // ADR-118 §4 (аддитивно): ход сообщения — по нему UI привязывает
+        // сообщение к ходу (группировка по `turn_id`).
+        const turnId = (payload.turnId as string) || undefined
         const known = useChatStore.getState().messagesBySession[sid]?.find((m) => m.id === messageId)
+        // Маркер ожидания снимается: сообщение записано в историю.
+        const patch: Partial<MessageData> = { steerPending: false }
+        if (ord != null) patch.ord = ord
+        if (role) patch.role = role
+        if (author) patch.author = author
+        if (turnId) patch.turn_id = turnId
         if (known) {
-          updateMessageById(sid, messageId, {
-            ...(ord != null ? { ord } : {}),
-            ...(role ? { role } : {}),
-            ...(author ? { author } : {}),
-          })
+          updateMessageById(sid, messageId, patch)
           break
         }
         // Сообщения в сторе нет — тянем **одно** сообщение по id (точечно),
         // а не всю историю; ошибка/404 → фоллбек на `mergeHistory`.
-        void loadDeliveredMessage(sid, messageId, {
-          ...(ord != null ? { ord } : {}),
-          ...(role ? { role } : {}),
-          ...(author ? { author } : {}),
-        })
+        void loadDeliveredMessage(sid, messageId, patch)
         break
       }
 
@@ -1284,6 +1426,10 @@ export function createDispatcher(): EventDispatcher {
         // Ход завершён — висящих запросов подтверждения по нему быть не может
         // (ask снят ответом/отменой/таймаутом): полосу убираем.
         usePermissionStore.getState().clearSession(sid)
+        // Ход завершён — неразрешённые вклинивания из ленты убираем
+        // (ADR-118 §4): применённые уже пришли с `message.delivered` (маркер
+        // снят), неприменённые вернутся в очередь (её снимок их уберёт).
+        clearSteerPendingMessages(sid)
         break
       }
 

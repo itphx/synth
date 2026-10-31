@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { QueueProcessor, enqueueUserMessage, requeueMessages } from './processor.js';
+import { QueueProcessor, enqueueUserMessage, enqueueSteerMessage, requeueMessages } from './processor.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
@@ -941,5 +941,204 @@ describe('enqueueUserMessage — message.accepted в событии приёма
     const state = events.find((e) => e.type === 'queue.state');
     expect(state).toBeDefined();
     expect(state!.data).toMatchObject({ pendingCount: 1, steerCount: 0 });
+  });
+});
+
+/**
+ * ADR-118 §4: `message.enqueued` — **адресное** событие «сообщение принято в
+ * очередь» со **снимком** сообщения: реплика, отправленная посреди идущего
+ * хода, появляется в ленте сразу, не дожидаясь материализации в истории.
+ *
+ * Адресат — отправитель, иначе владелец сессии (`ownerId ?? userId`). Снимок
+ * содержит текст, поэтому в общий канал сессии он не попадает: подписчик без
+ * совпадающего `userId` событие не получает.
+ */
+describe('enqueueUserMessage / enqueueSteerMessage — message.enqueued', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qenqueued-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('постановка в обычную очередь публикует снимок (id/содержимое/delivery=queue)', async () => {
+    const session = await sessionManager.createSession({ title: 'Q', userId: 'local' });
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e), { userId: 'local' });
+    const message = makeMessage();
+
+    await enqueueUserMessage(
+      sessionManager,
+      eventBus,
+      session.id,
+      message,
+      { createProcessor: vi.fn() } as never,
+      (async () => ({})) as never,
+    );
+
+    const enqueued = events.find((e) => e.type === 'message.enqueued');
+    expect(enqueued).toBeDefined();
+    expect(enqueued!.data.messageId).toBe(message.id);
+    expect(enqueued!.data.delivery).toBe('queue');
+    expect(enqueued!.data.position).toBe(1);
+    const snapshot = enqueued!.data.message as Record<string, unknown>;
+    expect(snapshot.id).toBe(message.id);
+    expect(snapshot.role).toBe(MessageRole.USER);
+    expect(snapshot.content).toBe('Привет');
+    expect(snapshot.created_at).toBe(message.createdAt);
+    // `ord` не выдан — сообщение ещё не записано в историю.
+    expect(snapshot.ord).toBeUndefined();
+  });
+
+  it('событие адресное: recipient — владелец сессии, в общий канал не уходит', async () => {
+    const session = await sessionManager.createSession({ title: 'Q', userId: 'local' });
+    const forOwner: BusEvent[] = [];
+    const forOther: BusEvent[] = [];
+    const forChannel: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => forOwner.push(e), { userId: 'local' });
+    eventBus.subscribe(session.id, (e) => forOther.push(e), { userId: 'user-2' });
+    // Подписчик без `userId` — «общий канал» сессии.
+    eventBus.subscribe(session.id, (e) => forChannel.push(e));
+
+    await enqueueUserMessage(
+      sessionManager,
+      eventBus,
+      session.id,
+      makeMessage(),
+      { createProcessor: vi.fn() } as never,
+      (async () => ({})) as never,
+    );
+
+    const enqueued = forOwner.find((e) => e.type === 'message.enqueued');
+    expect(enqueued).toBeDefined();
+    // Адресат — владелец сессии (`ownerId ?? userId`).
+    expect(enqueued!.recipient).toBe('local');
+    // Чужой подписчик и общий канал содержимое снимка не получают.
+    expect(forOther.some((e) => e.type === 'message.enqueued')).toBe(false);
+    expect(forChannel.some((e) => e.type === 'message.enqueued')).toBe(false);
+  });
+
+  it('отправитель важнее владельца: recipient = options.recipient', async () => {
+    const session = await sessionManager.createSession({ title: 'Q', userId: 'local' });
+    const forSender: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => forSender.push(e), { userId: 'user-2' });
+
+    await enqueueUserMessage(
+      sessionManager,
+      eventBus,
+      session.id,
+      makeMessage(),
+      { createProcessor: vi.fn() } as never,
+      (async () => ({})) as never,
+      undefined,
+      { recipient: 'user-2' },
+    );
+
+    const enqueued = forSender.find((e) => e.type === 'message.enqueued');
+    expect(enqueued).toBeDefined();
+    expect(enqueued!.recipient).toBe('user-2');
+  });
+
+  it('вмешательство публикуется с delivery=steer и без позиции в очереди', async () => {
+    const session = await sessionManager.createSession({ title: 'Q', userId: 'local' });
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e), { userId: 'local' });
+
+    const result = await enqueueSteerMessage(
+      sessionManager,
+      eventBus,
+      session.id,
+      makeMessage(),
+    );
+    expect(result.accepted).toBe(true);
+
+    const enqueued = events.find((e) => e.type === 'message.enqueued');
+    expect(enqueued).toBeDefined();
+    expect(enqueued!.data.delivery).toBe('steer');
+    expect(enqueued!.data.position).toBeNull();
+    expect(enqueued!.recipient).toBe('local');
+  });
+
+  it('владельца нет — событие не публикуется (fail-closed, без утечки текста)', async () => {
+    // Сессия без владельца (`ownerId`/`userId` пусты) — адресата нет.
+    const session = await sessionManager.createSession({ title: 'Q' });
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e));
+
+    const result = await enqueueUserMessage(
+      sessionManager,
+      eventBus,
+      session.id,
+      makeMessage(),
+      { createProcessor: vi.fn() } as never,
+      (async () => ({})) as never,
+    );
+
+    // Сообщение принято, но снимок в канал сессии не уходит: текст не утекает.
+    expect(result).not.toBeNull();
+    expect(events.some((e) => e.type === 'message.enqueued')).toBe(false);
+  });
+
+  it('отказ постановки (очередь полна) — события нет', async () => {
+    const session = await sessionManager.createSession({ title: 'Q', userId: 'local' });
+    // MAX_PENDING = 5 — заполняем очередь до предела.
+    for (let i = 0; i < 5; i++) {
+      await sessionManager.addPendingMessage(session.id, makeMessage());
+    }
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e), { userId: 'local' });
+
+    const result = await enqueueUserMessage(
+      sessionManager,
+      eventBus,
+      session.id,
+      makeMessage(),
+      { createProcessor: vi.fn() } as never,
+      (async () => ({})) as never,
+    );
+
+    // Сообщение не принято — публиковать нечего.
+    expect(result).toBeNull();
+    expect(events.some((e) => e.type === 'message.enqueued')).toBe(false);
+    expect(events.some((e) => e.type === 'message.accepted')).toBe(false);
+  });
+
+  it('снимок обфусцирован — реального секрета в событии нет (ADR-036)', async () => {
+    const session = await sessionManager.createSession({ title: 'Q', userId: 'local' });
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e), { userId: 'local' });
+    const message = makeMessage();
+    message.content = 'ключ sk-secret-value';
+    message.parts = [makeTextPart('ключ sk-secret-value')];
+    const obfuscate = async (_sid: string, msg: Message): Promise<Message> => ({
+      ...msg,
+      content: 'ключ ⟦SYNTH_SECRET_1⟧',
+      parts: [makeTextPart('ключ ⟦SYNTH_SECRET_1⟧')],
+      metadata: { ...(msg.metadata ?? {}), secrets: { '⟦SYNTH_SECRET_1⟧': 'sk-secret-value' } },
+    });
+
+    await enqueueUserMessage(
+      sessionManager,
+      eventBus,
+      session.id,
+      message,
+      { createProcessor: vi.fn() } as never,
+      (async () => ({})) as never,
+      obfuscate,
+    );
+
+    const enqueued = events.find((e) => e.type === 'message.enqueued');
+    expect(enqueued).toBeDefined();
+    const snapshot = enqueued!.data.message as Record<string, unknown>;
+    expect(snapshot.content).toBe('ключ ⟦SYNTH_SECRET_1⟧');
+    // Реального значения секрета в событии нет (значения из `metadata.secrets` вырезаны).
+    expect(JSON.stringify(snapshot)).not.toContain('sk-secret-value');
   });
 });

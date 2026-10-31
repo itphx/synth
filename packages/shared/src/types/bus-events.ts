@@ -4,6 +4,7 @@ import type {
   MessageAcceptedPayload,
   QueueStatePayload,
   MessageDeliveredPayload,
+  MessageEnqueuedPayload,
   TurnStartedPayload,
   TurnFinishedPayload,
   StepStartedPayload,
@@ -43,6 +44,12 @@ export type EventType =
   | 'message.accepted'
   | 'queue.state'
   | 'message.delivered'
+  // ADR-118 §4 (аддитивно): сообщение поставлено в очередь/очередь
+  // вмешательств и ждёт материализации. Адресное событие со **снимком**
+  // сообщения — чтобы лента показала реплику сразу, не дожидаясь
+  // `message.delivered` (материализации в истории). `ord` у снимка нет:
+  // он выдаётся только при записи в историю.
+  | 'message.enqueued'
   | 'turn.started'
   | 'turn.finished'
   | 'step.started'
@@ -186,6 +193,9 @@ export type QueueStateEventData = QueueStatePayload;
 
 /** Payload события `message.delivered` (ADR-118 §4) — материализация в истории. */
 export type MessageDeliveredEventData = MessageDeliveredPayload;
+
+/** Payload события `message.enqueued` (ADR-118 §4) — адресное, со снимком сообщения. */
+export type MessageEnqueuedEventData = MessageEnqueuedPayload;
 
 /** Payload события `turn.started` (ADR-118 §4) — ход начался. */
 export type TurnStartedEventData = TurnStartedPayload;

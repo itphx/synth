@@ -61,7 +61,9 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-bg-notify-'));
     sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
-    baseSession = await sessionManager.createSession({ title: 'parent' });
+    // Владелец сессии — адресат `message.enqueued` (у уведомления о фоне
+    // отправителя-пользователя нет).
+    baseSession = await sessionManager.createSession({ title: 'parent', userId: 'local' });
   });
 
   afterEach(async () => {
@@ -130,6 +132,57 @@ describe('createBackgroundParentNotifier — один путь (очередь)'
 
     expect(events.map((e) => e.type)).toContain('message.accepted');
     expect(events.map((e) => e.type)).not.toContain('message.added');
+  });
+
+  it('уведомление публикует `message.enqueued` сразу — в ленте видно до материализации', async () => {
+    const { manager } = mockSessionManager();
+    const eventBus = new EventBus();
+    const events: Array<{ type: string; data: Record<string, unknown>; recipient?: string }> = [];
+    // Подписка владельца сессии — адресное событие получает только он.
+    eventBus.subscribe('session-1', (e) => events.push({ type: e.type, data: e.data, recipient: e.recipient }), { userId: 'local' });
+    const notify = createBackgroundParentNotifier({
+      sessionManager: manager as unknown as SessionManager,
+      eventBus,
+      processorManager: { createProcessor: vi.fn() } as unknown as QueueProcessorManager,
+      processMessage: (async () => ({})) as unknown as ProcessMessageFn,
+    });
+
+    await notify('session-1', buildNotification());
+
+    const enqueued = events.find((e) => e.type === 'message.enqueued');
+    expect(enqueued).toBeDefined();
+    expect(enqueued!.data.delivery).toBe('queue');
+    // Адресное: получатель — владелец сессии (у уведомления отправителя нет).
+    expect(enqueued!.recipient).toBe('local');
+    const snapshot = enqueued!.data.message as Record<string, unknown>;
+    expect(snapshot.id).toBe('msg_1');
+    expect(snapshot.content).toContain('<process');
+    // Материализации в истории ещё не было — уведомление видно в ленте заранее.
+    expect(events.some((e) => e.type === 'message.delivered')).toBe(false);
+  });
+
+  it('активный ход: уведомление публикует `message.enqueued` с delivery=steer', async () => {
+    const { manager } = mockSessionManager();
+    const eventBus = new EventBus();
+    const events: Array<{ type: string; data: Record<string, unknown>; recipient?: string }> = [];
+    // Подписка владельца сессии — адресное событие получает только он.
+    eventBus.subscribe('session-1', (e) => events.push({ type: e.type, data: e.data, recipient: e.recipient }), { userId: 'local' });
+    const notify = createBackgroundParentNotifier({
+      sessionManager: manager as unknown as SessionManager,
+      eventBus,
+      processorManager: { createProcessor: vi.fn() } as unknown as QueueProcessorManager,
+      processMessage: (async () => ({})) as unknown as ProcessMessageFn,
+      isTurnActive: async () => true,
+    });
+
+    await notify('session-1', buildNotification());
+
+    const enqueued = events.find((e) => e.type === 'message.enqueued');
+    expect(enqueued).toBeDefined();
+    expect(enqueued!.data.delivery).toBe('steer');
+    expect(enqueued!.data.position).toBeNull();
+    // Адресное: получатель — владелец сессии.
+    expect(enqueued!.recipient).toBe('local');
   });
 
   it('отказ постановки (лимит pending) → fallback: addMessage + message.added/session.updated', async () => {

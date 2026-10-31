@@ -116,6 +116,15 @@ function twoStepsSameTurn(): MessageData[] {
   ]
 }
 
+/** Три assistant-шага одного хода — две границы внутри блока. */
+function threeStepsSameTurn(): MessageData[] {
+  return [
+    msg({ id: 'a1', index: 1, ord: 10, turn_id: 't1', step_index: 0, content: 'Шаг первый', agent_role: 'fixer' }),
+    msg({ id: 'a2', index: 2, ord: 11, turn_id: 't1', step_index: 1, content: 'Шаг второй', agent_role: 'fixer' }),
+    msg({ id: 'a3', index: 3, ord: 12, turn_id: 't1', step_index: 2, content: 'Шаг третий', agent_role: 'fixer' }),
+  ]
+}
+
 describe('MessageList: ход как один блок (ADR-118 §1)', () => {
   it('группа из двух шагов — один контейнер-пузырь, сегменты без своих пузырей', async () => {
     const container = await renderList(twoStepsSameTurn())
@@ -145,6 +154,72 @@ describe('MessageList: ход как один блок (ADR-118 §1)', () => {
     // предыдущего сегмента снят (иначе зазор 16px против 8px внутри шага).
     expect(block.querySelectorAll('[data-step-divider]').length).toBeGreaterThanOrEqual(1)
     expect(block.querySelectorAll('.border-t').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('внешний отступ блока хода — прозрачный контейнер py-3 (ритм ленты 24px)', async () => {
+    const container = await renderList(twoStepsSameTurn())
+    const block = container.querySelector('[data-testid="turn-block"]') as HTMLElement
+    expect(block).not.toBeNull()
+
+    // Карточка хода лежит в прозрачном контейнере с вертикальным отступом
+    // 12px сверху и снизу (итого 24px между разными сообщениями).
+    const wrapper = block.parentElement as HTMLElement
+    expect(wrapper).not.toBeNull()
+    expect(wrapper.className.split(' ')).toContain('py-3')
+    // Отступ — **padding** измеряемого элемента (виртуализация), не margin:
+    // margin мог бы не попасть в измеренную высоту и расшатал бы скролл.
+    expect(wrapper.className).not.toMatch(/(^|\s)m[bt]-/)
+    // Внутренний `py-3` карточки (padding внутри пузыря) — на месте.
+    expect(block.className.split(' ')).toContain('py-3')
+  })
+
+  it('разделитель — отдельный сиблиг сегмента, а не его обёртка', async () => {
+    const container = await renderList(threeStepsSameTurn())
+    const block = container.querySelector('[data-testid="turn-block"]') as HTMLElement
+    expect(block).not.toBeNull()
+
+    // Разделителей ровно «сегменты − 1».
+    const dividers = Array.from(block.querySelectorAll(':scope > [data-step-divider]'))
+    expect(dividers).toHaveLength(2)
+
+    // Разделитель — пустой элемент: сегмент не вложен в него.
+    for (const divider of dividers) {
+      expect(divider.children).toHaveLength(0)
+      expect(divider.textContent?.trim() ?? '').toBe('')
+    }
+
+    // Каждый не последний сегмент стоит непосредственно перед разделителем —
+    // на этом матчится структурное CSS-правило (`styles/index.css`):
+    // «прямой потомок блока хода, который не разделитель и не последний».
+    const children = Array.from(block.children)
+    const expectedSegments = ['a1', 'a2', 'a3']
+    dividers.forEach((divider, i) => {
+      const idx = children.indexOf(divider)
+      expect(idx).toBeGreaterThan(0)
+      const before = children[idx - 1] as HTMLElement
+      expect(before.getAttribute('data-message-id')).toBe(expectedSegments[i])
+    })
+    // Последний сегмент — последний потомок блока (его нижний отступ
+    // правило не трогает).
+    const last = children[children.length - 1] as HTMLElement
+    expect(last.getAttribute('data-message-id')).toBe('a3')
+
+    // Селектор правила матчится на каждом не последнем сегменте.
+    const segmentSelector =
+      "[data-testid='turn-block'] > div:not([data-step-divider]):not(:last-child)"
+    const ruleSelector = `${segmentSelector} > div:last-child > *:last-child`
+    for (const id of ['a1', 'a2']) {
+      const segment = block.querySelector(`[data-message-id="${id}"]`) as HTMLElement
+      expect(segment.matches(segmentSelector)).toBe(true)
+      // …и сам блок, чей нижний отступ правило снимает, — тоже.
+      const bubble = segment.querySelector(':scope > div:last-child') as HTMLElement
+      const lastElement = bubble.lastElementChild as HTMLElement
+      expect(lastElement).not.toBeNull()
+      expect(lastElement.matches(ruleSelector)).toBe(true)
+    }
+    // …а на последнем сегменте правило не матчится.
+    const lastSegment = block.querySelector('[data-message-id="a3"]') as HTMLElement
+    expect(lastSegment.matches(segmentSelector)).toBe(false)
   })
 
   it('заголовок агента — один на блок (у первого сегмента)', async () => {

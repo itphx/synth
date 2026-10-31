@@ -1,4 +1,5 @@
 import type { Session, Message, Project, StatusMessage } from '@itphx/synth-shared';
+import type { EnqueuedMessageSnapshot } from '@itphx/synth-shared/types';
 import { isModeApplicable } from '../engine/agents/mode.js';
 import { getLiveStreamSnapshot } from '../engine/live-stream-snapshot.js';
 
@@ -278,6 +279,30 @@ export function serializeMessage(msg: Message, index: number, opts?: SerializeMe
     source: msg.source || null,
     tool_calls: (msg.metadata?.tool_results as Array<Record<string, unknown>>) || msg.toolCalls || null,
     tool_call_id: msg.toolCallId || null,
+  };
+}
+
+/**
+ * ADR-118 §4: снимок сообщения для события `message.enqueued` — сообщение
+ * поставлено в очередь и ждёт материализации.
+ *
+ * Поля — те же, что у сообщения в списке, но **без `ord`**: записи в истории
+ * ещё нет, `ord` выдаётся только при материализации.
+ *
+ * Реальные значения секретов из `metadata.secrets` вырезаются (ADR-036):
+ * событие уходит в канал сессии, а обфускация текста уже выполнена при
+ * постановке (`enqueueUserMessage`) — реального секрета в снимке быть не
+ * должно.
+ */
+export function serializeEnqueuedMessage(msg: Message): EnqueuedMessageSnapshot {
+  return {
+    id: msg.id,
+    role: msg.role,
+    ...(msg.author ? { author: msg.author } : {}),
+    content: msg.content,
+    parts: msg.parts.map((p) => ({ id: p.id, type: p.type, data: p.data })),
+    metadata: redactSecretValues(msg.metadata) ?? null,
+    created_at: msg.createdAt,
   };
 }
 

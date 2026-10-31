@@ -205,10 +205,10 @@ function ChatMessageInner({
   // role:'user' с metadata.type === 'background_run_result' — тоже системный
   // блок (автор прогона — не текущий пользователь, конверт модели в UI лишний).
   const isBackgroundResult = isUser && message.metadata?.type === 'background_run_result'
-  // ADR-104: инъекция во время активного хода (metadata.steer === true) —
-  // помечаем маркером «вмешательство в ход»; режим `interrupt`
-  // (metadata.interrupt === true) — маркером «прерывание хода».
-  const isSteered = isUser && message.metadata?.steer === true
+  // ADR-104: инъекция во время активного хода (`metadata.steer`) — **без
+  // маркера**: реплика, вклинившаяся в ход, рисуется обычным пузырём.
+  // Режим `interrupt` (`metadata.interrupt === true`) — маркером «прерывание
+  // хода» (маркер остаётся).
   const isInterruptSteer = isUser && message.metadata?.interrupt === true
   // ADR-104 (этап 2): прерванная генерация (metadata.status === 'interrupted') —
   // ответ частичный, ход продолжился с новым сообщением.
@@ -419,6 +419,16 @@ function ChatMessageInner({
     }
     const running = tc.status === 'running'
     const metaToolCalls = meta?.tool_calls as SubagentPartData['tool_calls']
+    /**
+     * ADR-111: **фоновый** прогон. У него `result.metadata` — только
+     * `child_session_id`/`status`/`background_run_id`: тул вернул управление
+     * сразу, публикация в родительский стрим отключена, поэтому ни шагов, ни
+     * `tool_calls` в метаданных нет. Шаги лежат в истории дочерней сессии —
+     * карточка догружает их лениво (`stores/subagentRunsStore`).
+     */
+    const background = meta?.child_session_id != null
+      && metaToolCalls == null
+      && meta?.steps == null
     return {
       name: (meta?.subagent_type as string) || (args.subagent_type as string) || 'task',
       prompt,
@@ -427,6 +437,7 @@ function ChatMessageInner({
       callId: tc.callId,
       live: running,
       running,
+      background,
       errorInfo: {
         isError: tc.result?.isError === true || meta?.error === true,
         attempts: meta?.attempts as number | undefined,
@@ -862,13 +873,18 @@ function ChatMessageInner({
         </div>
       )}
       <div className={bubbleClass}>
-        {isSteered && (
+        {/*
+          ADR-104: маркер **прерывания** хода (`metadata.interrupt`) — оставлен.
+          Маркера «вмешательство в ход» (`metadata.steer`) больше нет: реплика,
+          вклинившаяся в ход, рисуется обычным пузырём ( ADR-118 §4).
+        */}
+        {isInterruptSteer && (
           <span
             className="mb-1 inline-flex items-center gap-1 self-end rounded-sm bg-primary/10 px-1.5 py-0.5 text-[11px] leading-4 text-primary"
-            title={isInterruptSteer ? t('chat.steer.interruptMarker') : t('chat.steer.marker')}
+            title={t('chat.steer.interruptMarker')}
           >
-            <Icon name={isInterruptSteer ? 'stop' : 'send-plane'} className="size-3" />
-            {isInterruptSteer ? t('chat.steer.interruptMarker') : t('chat.steer.marker')}
+            <Icon name="stop" className="size-3" />
+            {t('chat.steer.interruptMarker')}
           </span>
         )}
 

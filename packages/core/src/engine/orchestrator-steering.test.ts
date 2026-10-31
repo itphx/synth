@@ -249,6 +249,10 @@ describe('ChatOrchestrator: инъекции в активный ход (ADR-104
     expect(evt!.data.ord).toBe(injected!.ord);
     expect(evt!.data.role).toBe(MessageRole.USER);
     expect(evt!.data.author).toBe('user');
+    // ADR-118 §4 (аддитивно): ход, в который вмешались, — клиент привязывает
+    // сообщение к нему (группировка по `turn_id`).
+    expect(typeof evt!.data.turnId).toBe('string');
+    expect(String(evt!.data.turnId)).toMatch(/^turn_/);
     // Текст инъекции в канал сессии не уходит (защита от утечки, ADR-118 §4).
     expect(evt!.data.content).toBeUndefined();
     // Прежнего `message.injected` больше нет.

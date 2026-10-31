@@ -310,8 +310,17 @@
   `turn.*`/`step.*`/`part.*` и детерминированных `partId`: `msg:text:N`, `msg:reasoning:N`,
   `callId`), очередь — `queue/processor.ts`:
   `message.accepted` (адресное, `BusEvent.recipient = userId` отправителя),
+  `message.enqueued` (адресное, **только владельцу/отправителю**: адресат — отправитель сообщения,
+  иначе владелец сессии `ownerId ?? userId`; владельца нет — событие **не публикуется**
+  (fail-closed, снимок с текстом в общий канал утекать не должен); со **снимком** сообщения:
+  `messageId`, `delivery` `queue`/`steer`, `position`, `message` — id/role/author/content/parts/
+  metadata/created_at, **без `ord`**, уже обфусцирован (ADR-036); публикуется один раз на сообщение —
+  при отказе постановки события нет; `enqueueUserMessage` — `delivery:'queue'`,
+  `enqueueSteerMessage` — `delivery:'steer'`; только для `role: user`),
   `queue.state` (`{pendingCount, steerCount}` — **без текста и автора**),
-  `message.delivered` (`{messageId, ord, role, author?, principal?}`),
+  `message.delivered` (`{messageId, ord, role, author?, principal?, turnId?}` — `turnId`
+  аддитивный: ход сообщения, где сервер его знает: вмешательство на границе шага; у цикла
+  сабагента ход ребёнка = id дочерней сессии),
   `turn.started`/`turn.finished`, `step.started`/`step.finished` (usage, стоимость, `attachments`,
   `debugInfo`, `timings`), аддитивные `step.tools.started`/`step.tools.finished` (исполнение
   инструментов шага: `callIds`, один раз на шаг с вызовами — до исполнения и после записи
@@ -1967,7 +1976,7 @@
   новые служебные виды user-сообщений добавлять сюда, а не локальными проверками.
 - `sessions/stats.ts` — `computeSessionStats` (ADR-070): usage сообщений + рекурсивный usage
   саб-агентов (tool `task`), агрегаты по агентам/пользователям — для `GET /api/v2/sessions/:id/stats`.
-- `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла, очистка `pendingMessages`, снятие `blocked`/флага и `stream.cancelled` ровно один раз).
+- `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла, очистка `pendingMessages`, снятие `blocked`/флага и `stream.cancelled` ровно один раз). Публикация приёма: `message.accepted` (адресное, без текста) и `message.enqueued` (**адресное — только отправителю/владельцу сессии; владельца нет — не публикуется**, со снимком сообщения — снимок уже обфусцирован, `ord` нет; `enqueueUserMessage` → `delivery:'queue'`, `enqueueSteerMessage` → `delivery:'steer'`; при отказе постановки события нет).
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote, `DecisionProvider` (ADR-084: типы `decision` (RouterAI, `POST {base}/decisions`) и `systemone` (Ollama, `POST {base}/v1/systemone`) — endpoint выбирается по типу провайдера). Prompt-cache (ADR-070, `CachePolicy = 'auto' | 'none'` в `base.ts`): `SystemPromptPayload` (`text`/`stablePrefix`/`cacheKey`/`cachePolicy`) — Anthropic отдаёт `system` массивом блоков с `cache_control` (≤4 breakpoint'а, два system), OpenAI/Remote — `prompt_cache_key` (= id сессии) + `stream_options.include_usage`; `usage.ts` — нормализация usage и `computeCacheHitRate` (`cacheReadTokens / inputTokens`, 0 при нуле). Нормализация по провайдерам: Anthropic — `input = input_tokens + cacheRead + cacheWrite`; OpenAI — `prompt_tokens_details.cached_tokens` → `cacheRead`; Remote — usage из ответа прокси в тот же контракт; Ollama — cache-полей нет (`cacheRead = cacheWrite = 0`).
   **Слой совместимости провайдеров и моделей (ADR-117, parity с opencode, 2026-10-30).**

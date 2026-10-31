@@ -425,6 +425,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             role: persisted.role,
             ...(persisted.author ? { author: persisted.author } : {}),
             ...(persisted.principal ? { principal: persisted.principal } : {}),
+            // ADR-118 §4 (аддитивно): ход ребёнка. У цикла сабагента своего
+            // `turnId` нет — он равен id дочерней сессии (так же, как в
+            // `turn.started`/`step.started`/`step.finished` ребёнка), поэтому
+            // клиент привязывает инъекцию к тому же ходу.
+            turnId: childSessionId,
           };
           extra.eventBus?.publish(childSessionId, 'message.delivered', payload);
         },

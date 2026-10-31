@@ -1204,8 +1204,9 @@ export const dict = {
   'chat.input.mentionHint': 'Упомяните агента через @',
   'chat.input.enqueue': 'Добавить в очередь',
 
-  // --- Steering: вмешательство в активный ход (ADR-104) ---
-  'chat.steer.marker': 'Вмешательство в ход',
+  // --- Steering: прерывание активного хода (ADR-104) ---
+  // Маркера «вмешательство в ход» больше нет: вклинившаяся реплика рисуется
+  // обычным пузырём (ADR-118 §4).
   'chat.steer.interruptMarker': 'Прерывание хода',
 
   // Markdown в ответах: заголовок блока кода и кнопка копирования.
@@ -1321,6 +1322,9 @@ export const dict = {
   'chat.subagent.resuming': 'Возобновление…',
   'chat.subagent.stop': 'Остановить',
   'chat.subagent.resumeFailed': 'Не удалось возобновить сабагента',
+  'chat.subagent.stepsLoading': 'Загружаю шаги…',
+  'chat.subagent.stepsFailed': 'Не удалось загрузить шаги',
+  'chat.subagent.stepsRetry': 'Повторить',
 
   'chat.streamError.generic': 'Обработка остановлена: ошибка провайдера',
   'chat.streamError.contextLength': 'Контекстное окно модели превышено. Начните новую сессию или сократите историю',

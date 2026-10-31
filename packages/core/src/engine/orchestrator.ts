@@ -3930,7 +3930,7 @@ export class ChatOrchestrator {
         // результаты инструментов предыдущей итерации уже в `currentMessages`,
         // поэтому пары toolUse/toolResult не рвутся.
         await this._applySteerInjections(
-          session, currentMessages, publishChunk, effectiveAgentRole, author, streamId,
+          session, currentMessages, publishChunk, effectiveAgentRole, author, streamId, turnId,
         );
 
         // Лимит шагов агента исчерпан — этот шаг финальный (механика opencode):
@@ -6140,6 +6140,7 @@ export class ChatOrchestrator {
     agentRole: string | undefined,
     author: string,
     streamId: string,
+    turnId?: string,
   ): Promise<void> {
     // Общая точка применения инъекций (ADR-104) — её же использует цикл
     // саб-агента (`engine/tools/task/run-cycle.ts`): семантика инъекции
@@ -6169,6 +6170,9 @@ export class ChatOrchestrator {
           ord: deliveredOrd ?? 0,
           role: MessageRole.USER,
           ...(event.author ? { author: event.author } : {}),
+          // ADR-118 §4 (аддитивно): ход, в который вмешались, — клиент
+          // привязывает инъекцию к нему (группировка по `turn_id`).
+          ...(turnId ? { turnId } : {}),
         });
       },
       publishDropped: (event) => publishChunk('steer.dropped', event),
