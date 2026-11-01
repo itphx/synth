@@ -86,12 +86,16 @@ import {
   type ExecErrorBody,
   type ExecRequestBody,
   type ExecSuccessBody,
+  type ExecutorLimits,
   type SpawnExecRequest,
   type SpawnExecResponse,
 } from './protocol.js';
 
 /** Тип функции-транспорта (совместим с `egressFetch` и обычным `fetch`). */
 export type ExecutorFetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** Лимиты исполнителя (`limits` в `/capabilities`) — аддитивное поле. */
+export type { ExecutorLimits } from './protocol.js';
 
 /** Поведение при недоступности всех исполнителей. */
 export type RemoteFailMode = 'fail' | 'inline-fallback';
@@ -172,6 +176,11 @@ interface PoolEntry {
   background: boolean;
   /** Умеет ли исполнитель принимать секреты вызова (`features.secrets`, протокол v4). */
   secrets: boolean;
+  /**
+   * Эффективные лимиты исполнителя (`limits` в `/capabilities`) — **не
+   * обязательны**: у старого исполнителя поля нет (тогда `undefined`).
+   */
+  limits?: ExecutorLimits;
 }
 
 /**
@@ -348,6 +357,28 @@ export class RemoteExecutionPort implements ExecutionPort {
       missing,
       total: entries.length,
       unreachable: entries.length - reachable.length,
+    };
+  }
+
+  /**
+   * Эффективные лимиты пула (`limits` в `/capabilities`).
+   *
+   * Берётся **минимум по ответившим адресам**: команда может уйти на любой
+   * из них, поэтому потолок пула — наименьший из объявленных. Адрес, который
+   * не ответил, в расчёт не входит (его состав и лимиты неизвестны).
+   *
+   * Поле аддитивное: у старого исполнителя его нет — тогда лимиты пула
+   * неизвестны (`undefined`), а поведение клиента прежнее.
+   */
+  async poolLimits(): Promise<ExecutorLimits | undefined> {
+    const inventory = await this._ensureInventory();
+    const reported = [...inventory.values()]
+      .filter((entry) => entry.reachable && entry.limits !== undefined)
+      .map((entry) => entry.limits as ExecutorLimits);
+    if (reported.length === 0) return undefined;
+    return {
+      timeoutMs: Math.min(...reported.map((limits) => limits.timeoutMs)),
+      maxOutputBytes: Math.min(...reported.map((limits) => limits.maxOutputBytes)),
     };
   }
 
@@ -767,6 +798,7 @@ export class RemoteExecutionPort implements ExecutionPort {
         toolchain?: Record<string, unknown>;
         protocol?: number;
         features?: { background?: boolean; secrets?: boolean };
+        limits?: { timeoutMs?: unknown; maxOutputBytes?: unknown };
       } | null;
       const toolchain = body?.toolchain;
       const binaries = new Set<string>();
@@ -780,7 +812,10 @@ export class RemoteExecutionPort implements ExecutionPort {
       const background = body?.features?.background === true || protocol >= EXECUTOR_PROTOCOL_BACKGROUND;
       // Секреты вызова — протокол v4 (`secrets[]` в `POST /exec`).
       const secrets = body?.features?.secrets === true || protocol >= EXECUTOR_PROTOCOL_SECRETS;
-      return { reachable: true, binaries, protocol, background, secrets };
+      // Лимиты исполнителя (`limits`) — аддитивное поле: у старого
+      // исполнителя его нет, тогда разбор терпимый (значение `undefined`).
+      const limits = parseExecutorLimits(body?.limits);
+      return { reachable: true, binaries, protocol, background, secrets, ...(limits ? { limits } : {}) };
     } catch {
       // Адрес не ответил — состав неизвестен (в маршрутизации не участвует).
       return unreachableEntry();
@@ -954,6 +989,30 @@ function describeCause(cause: unknown): string {
 /** Запись инвентаря для адреса, не ответившего на `/capabilities`. */
 function unreachableEntry(): PoolEntry {
   return { reachable: false, binaries: new Set(), protocol: 0, background: false, secrets: false };
+}
+
+/**
+ * Разбор лимитов исполнителя (`limits` в `/capabilities`).
+ *
+ * Поле **аддитивное**: у старого исполнителя его нет — тогда разбор
+ * терпимый (результат `undefined`), и клиент работает как прежде. Нечисловое
+ * или неположительное значение тоже игнорируется: «тихий» неверный лимит
+ * хуже отсутствия лимита.
+ */
+function parseExecutorLimits(raw: unknown): ExecutorLimits | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const record = raw as { timeoutMs?: unknown; maxOutputBytes?: unknown };
+  const timeoutMs = record.timeoutMs;
+  const maxOutputBytes = record.maxOutputBytes;
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return undefined;
+  if (
+    typeof maxOutputBytes !== 'number' ||
+    !Number.isFinite(maxOutputBytes) ||
+    maxOutputBytes <= 0
+  ) {
+    return undefined;
+  }
+  return { timeoutMs, maxOutputBytes };
 }
 
 /** Терминальный статус фонового процесса (процесс завершился). */

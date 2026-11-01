@@ -13,7 +13,7 @@
  * | `SYNTH_EXECUTOR_HOST` | нет | `0.0.0.0` | адрес прослушивания |
  * | `SYNTH_EXECUTOR_PORT` | нет | `5100` | порт прослушивания |
  * | `SYNTH_EXECUTOR_MAX_CONCURRENCY` | нет | `4` | лимит одновременных команд |
- * | `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` | нет | `120000` | потолок таймаута команды |
+ * | `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` | нет | `600000` | потолок таймаута команды |
  * | `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES` | нет | `10485760` | потолок буфера вывода |
  * | `SYNTH_EXECUTOR_MCP_SERVERS` | нет | `[]` | MCP-серверы, которые исполнитель хостит у себя (JSON-массив) |
  * | `SYNTH_EXECUTOR_BACKGROUND_MAX` | нет | `8` | лимит живых фоновых процессов (ADR-077, шаг 7c) |
@@ -70,7 +70,7 @@ export const EXECUTOR_DEFAULTS = {
   host: '0.0.0.0',
   port: 5100,
   maxConcurrency: 4,
-  maxTimeoutMs: 120_000,
+  maxTimeoutMs: 600_000,
   maxOutputBytes: 10 * 1024 * 1024,
   backgroundMax: 8,
   backgroundLogMaxBytes: 10 * 1024 * 1024,

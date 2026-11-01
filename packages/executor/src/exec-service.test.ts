@@ -126,3 +126,56 @@ describe('исполнитель: окружение вызова', () => {
     expect(JSON.stringify(outcome.error)).not.toContain('privateKey');
   });
 });
+
+/**
+ * ADR-077: потолок исполнителя **final** — запрос клиента может быть
+ * больше, но потолок исполнителя решает.
+ *
+ * Проверяется, что clamp **не изменился** после поднятия дефолта потолка
+ * таймаута: команда, попросившая таймаут выше потолка, убивается по
+ * потолку (а не живёт запрошенное время).
+ */
+describe('исполнитель: потолок таймаута final', () => {
+  let workspace: string;
+
+  beforeEach(async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'synth-exec-clamp-'));
+  });
+
+  afterEach(async () => {
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it('запрошенный таймаут выше потолка — команда убивается по потолку', async () => {
+    const service = new ExecService({
+      workspaceRoot: workspace,
+      maxConcurrency: 1,
+      maxTimeoutMs: 300,
+      maxOutputBytes: 1024 * 1024,
+    });
+    const startedAt = Date.now();
+    const outcome = await service.execute({
+      command: { kind: 'shell', command: 'sleep 10' },
+      // Запрос заметно выше потолка — исполнитель всё равно режет по потолку.
+      timeoutMs: 60_000,
+    });
+    const elapsed = Date.now() - startedAt;
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error.reason).toBe('timeout');
+    expect(outcome.error.killed).toBe(true);
+    // Убито по потолку (300 мс), а не по запрошенным 60 c.
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
+  it('эффективные потолки исполнителя — как задано', () => {
+    const service = new ExecService({
+      workspaceRoot: workspace,
+      maxConcurrency: 1,
+      maxTimeoutMs: 600_000,
+      maxOutputBytes: 32 * 1024 * 1024,
+    });
+    expect(service.timeoutLimitMs).toBe(600_000);
+    expect(service.outputLimitBytes).toBe(32 * 1024 * 1024);
+  });
+});

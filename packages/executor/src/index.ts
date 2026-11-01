@@ -44,6 +44,7 @@ export type {
   ExecErrorResponse,
   ExecutorCapabilities,
   ExecutorFeatures,
+  ExecutorLimits,
   ExecutorHealth,
   ExecutorErrorReason,
   PortFailureReason,

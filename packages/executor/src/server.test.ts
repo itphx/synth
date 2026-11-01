@@ -284,6 +284,7 @@ describe('исполнитель: лимиты и служебные эндпо�
       arch: string;
       node: string;
       features?: { background?: boolean; secrets?: boolean; mcpAttachments?: boolean };
+      limits?: { timeoutMs: number; maxOutputBytes: number };
     };
     expect(body.protocol).toBe(5);
     expect(body.toolchain.git).toBe('git version 2.39.2');
@@ -293,6 +294,40 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
+  });
+
+  it('capabilities — эффективные лимиты исполнителя (потолок таймаута и вывода)', async () => {
+    // Дефолт исполнителя: потолок таймаута 600 c (10 мин), буфер вывода 10 МиБ.
+    const app = makeApp();
+    const res = await app.request('/capabilities', {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      protocol: number;
+      features?: { background?: boolean; secrets?: boolean; mcpAttachments?: boolean };
+      limits?: { timeoutMs: number; maxOutputBytes: number };
+    };
+    expect(body.limits?.timeoutMs).toBe(600_000);
+    expect(body.limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
+    // Поле аддитивное: версия протокола и признаки не меняются.
+    expect(body.protocol).toBe(5);
+    expect(body.features?.background).toBe(true);
+    expect(body.features?.secrets).toBe(true);
+    expect(body.features?.mcpAttachments).toBe(true);
+  });
+
+  it('capabilities — лимиты соответствуют заданным оператором', async () => {
+    const app = makeApp({ maxTimeoutMs: 1_800_000, maxOutputBytes: 32 * 1024 * 1024 });
+    const res = await app.request('/capabilities', {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      limits?: { timeoutMs: number; maxOutputBytes: number };
+    };
+    expect(body.limits?.timeoutMs).toBe(1_800_000);
+    expect(body.limits?.maxOutputBytes).toBe(32 * 1024 * 1024);
   });
 
   it('capabilities без токена — 401', async () => {

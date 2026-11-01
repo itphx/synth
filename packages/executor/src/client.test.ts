@@ -10,7 +10,7 @@ import type {
   ExecutionMetricsSink,
   ExecutionPort,
 } from '@itphx/synth-core';
-import { createRemoteExecutionPort, type ExecutorFetch } from './client.js';
+import { createRemoteExecutionPort, RemoteExecutionPort, type ExecutorFetch } from './client.js';
 import { startExecutorServer, type ExecutorHandle } from './server.js';
 
 const TOKEN = 'executor-client-token-test-1234567890';
@@ -433,6 +433,123 @@ describe('клиент удалённого порта: инвентарь пу�
     expect(summary?.missing).toBe(1);
     expect(summary?.total).toBe(2);
     expect(summary?.unreachable).toBe(0);
+  });
+});
+
+/**
+ * ADR-077: лимиты исполнителя (`limits` в `/capabilities`) — **аддитивное**
+ * поле: снимает «тихий» потолок (control plane видит потолок заранее, а не
+ * узнаёт об усечении по факту).
+ *
+ * Разбор в клиенте — **терпимый**: у старого исполнителя поля нет, и тогда
+ * лимиты пула неизвестны (`undefined`), а поведение прежнее.
+ */
+describe('клиент удалённого порта: лимиты исполнителя', () => {
+  it('исполнитель объявляет лимиты — клиент их читает', async () => {
+    const handle = await startExecutorServer({
+      token: TOKEN,
+      workspaceRoot: workspace,
+      host: '127.0.0.1',
+      port: 0,
+      toolchain: {},
+      maxTimeoutMs: 600_000,
+      maxOutputBytes: 10 * 1024 * 1024,
+    });
+    handles.push(handle);
+    const port = new RemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+
+    const limits = await port.poolLimits();
+    expect(limits?.timeoutMs).toBe(600_000);
+    expect(limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
+  });
+
+  it('старый исполнитель без поля limits — разбор терпимый (undefined)', async () => {
+    const server = createServer((req, res) => {
+      if (req.url === '/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            protocol: 5,
+            toolchain: { sh: 'sh 5.2' },
+            os: process.platform,
+            arch: process.arch,
+            node: process.version,
+            features: { background: true, secrets: true, mcpAttachments: true },
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port: serverPort } = server.address() as AddressInfo;
+    legacyServers.push(server);
+
+    const port = new RemoteExecutionPort({
+      urls: [`http://127.0.0.1:${serverPort}`],
+      token: TOKEN,
+    });
+    // Поля нет → лимиты неизвестны, но клиент работает как прежде.
+    expect(await port.poolLimits()).toBeUndefined();
+  });
+
+  it('нечисловые лимиты игнорируются (нет поля — нет и лимитов)', async () => {
+    const server = createServer((req, res) => {
+      if (req.url === '/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            protocol: 5,
+            toolchain: { sh: 'sh 5.2' },
+            os: process.platform,
+            arch: process.arch,
+            node: process.version,
+            limits: { timeoutMs: 'много', maxOutputBytes: -1 },
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port: serverPort } = server.address() as AddressInfo;
+    legacyServers.push(server);
+
+    const port = new RemoteExecutionPort({
+      urls: [`http://127.0.0.1:${serverPort}`],
+      token: TOKEN,
+    });
+    expect(await port.poolLimits()).toBeUndefined();
+  });
+
+  it('пул — минимум по ответившим адресам (команда может уйти на любой)', async () => {
+    const withBigLimit = await startExecutorServer({
+      token: TOKEN,
+      workspaceRoot: workspace,
+      host: '127.0.0.1',
+      port: 0,
+      toolchain: {},
+      maxTimeoutMs: 1_800_000,
+    });
+    handles.push(withBigLimit);
+    const withSmallLimit = await startExecutorServer({
+      token: TOKEN,
+      workspaceRoot: workspace,
+      host: '127.0.0.1',
+      port: 0,
+      toolchain: {},
+      maxTimeoutMs: 600_000,
+    });
+    handles.push(withSmallLimit);
+
+    const port = new RemoteExecutionPort({
+      urls: [withBigLimit.url, withSmallLimit.url],
+      token: TOKEN,
+    });
+    const limits = await port.poolLimits();
+    expect(limits?.timeoutMs).toBe(600_000);
   });
 });
 

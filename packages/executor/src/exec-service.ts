@@ -126,6 +126,16 @@ export class ExecService {
     return this._maxConcurrency;
   }
 
+  /** Эффективный потолок таймаута команды, мс (потолок исполнителя final). */
+  get timeoutLimitMs(): number {
+    return this._maxTimeoutMs;
+  }
+
+  /** Эффективный потолок буфера вывода, байт (потолок исполнителя final). */
+  get outputLimitBytes(): number {
+    return this._maxOutputBytes;
+  }
+
   /**
    * Выполнить команду.
    *

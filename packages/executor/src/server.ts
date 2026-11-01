@@ -11,7 +11,7 @@
  * | `GET` | `/exec/:processId` | состояние фонового процесса | bearer-токен |
  * | `GET` | `/exec/:processId/logs` | отрезок журнала фонового процесса | bearer-токен |
  * | `POST` | `/exec/:processId/stop` | остановить фоновой процесс | bearer-токен |
- * | `GET` | `/capabilities` | версия протокола и состав toolchain'а | bearer-токен |
+ * | `GET` | `/capabilities` | версия протокола, состав toolchain'а и лимиты | bearer-токен |
  * | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя | bearer-токен |
  * | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов | bearer-токен |
  * | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
@@ -83,7 +83,7 @@ export interface ExecutorAppOptions {
   workspaceRoot: string;
   /** Лимит одновременных команд (по умолчанию — 4). */
   maxConcurrency?: number;
-  /** Потолок таймаута команды, мс (по умолчанию — 120 c). */
+  /** Потолок таймаута команды, мс (по умолчанию — 600 c). */
   maxTimeoutMs?: number;
   /** Потолок буфера вывода, байт (по умолчанию — 10 МБ). */
   maxOutputBytes?: number;
@@ -120,7 +120,7 @@ export interface ExecutorAppOptions {
 
 /** Дефолты лимитов исполнителя (совпадают с `EXECUTOR_DEFAULTS`). */
 const DEFAULT_MAX_CONCURRENCY = 4;
-const DEFAULT_MAX_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_TIMEOUT_MS = 600_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
 /**
@@ -408,6 +408,13 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       node: process.version,
       // Аддитивно: старый control plane поле не читает.
       features: { background: true, secrets: true, mcpAttachments: true },
+      // Аддитивно: эффективные потолки исполнителя (таймаут и буфер вывода).
+      // Снимают «тихий» потолок — control plane видит лимит до вызова,
+      // а не узнаёт об усечении по факту.
+      limits: {
+        timeoutMs: service.timeoutLimitMs,
+        maxOutputBytes: service.outputLimitBytes,
+      },
     };
     return c.json(body, 200);
   });

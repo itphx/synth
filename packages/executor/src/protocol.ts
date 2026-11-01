@@ -126,6 +126,11 @@ import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
  *
  * **2** — добавлены MCP-эндпоинты (`/mcp/servers`, `/mcp/tools`,
  * `/mcp/call`).
+ *
+ * **Поле `limits` в `/capabilities` — аддитивное, версию не повышает**
+ * (как `features` и `attachments`): исполнитель объявляет эффективные
+ * потолки таймаута и буфера вывода, чтобы control plane видел «тихий» потолок
+ * заранее. Старый исполнитель поля не отдаёт — разбор терпимый.
  */
 export const EXECUTOR_PROTOCOL_VERSION = 5;
 
@@ -203,6 +208,14 @@ export interface ExecErrorResponse {
   error: ExecErrorBody;
 }
 
+/** Эффективные лимиты исполнителя (`limits` в `GET /capabilities`). */
+export interface ExecutorLimits {
+  /** Потолок таймаута команды, мс (запрос выше — урезается до потолка). */
+  timeoutMs: number;
+  /** Потолок буфера вывода, байт (запрос выше — урезается до потолка). */
+  maxOutputBytes: number;
+}
+
 /** Ответ `GET /capabilities`. */
 export interface ExecutorCapabilities {
   /** Версия wire-протокола. */
@@ -229,6 +242,15 @@ export interface ExecutorCapabilities {
    * MCP-результата (`attachments[]` в `POST /mcp/call`, протокол 5, ADR-115).
    */
   features?: ExecutorFeatures;
+  /**
+   * Эффективные лимиты исполнителя (аддитивно: старый control plane поле
+   * просто не читает; у старого исполнителя поля нет — это норма).
+   *
+   * Поле снимает «тихий» потолок: control plane видит, чем исполнитель
+   * ограничивает таймаут и буфер вывода, и может сообщить об этом заранее,
+   * а не обнаружить усечение по факту.
+   */
+  limits?: ExecutorLimits;
 }
 
 /** Необязательные возможности исполнителя. */
