@@ -12,6 +12,11 @@ export const UI_SCALE_MIN = 0.5;
 /** Максимальный допустимый масштаб интерфейса. */
 export const UI_SCALE_MAX = 1.2;
 
+/** Минимальный допустимый масштаб области чата (паритет UI `CHAT_SCALE_MIN`). */
+export const CHAT_SCALE_MIN = 0.75;
+/** Максимальный допустимый масштаб области чата (паритет UI `CHAT_SCALE_MAX`). */
+export const CHAT_SCALE_MAX = 1.5;
+
 /**
  * Валидирует масштаб интерфейса: число в диапазоне 0.5..1.2.
  * Некорректное значение → undefined (поле отбрасывается).
@@ -29,9 +34,28 @@ function sanitizeScale(value: unknown): number | undefined {
 }
 
 /**
+ * Валидирует масштаб области чата: число в диапазоне 0.75..1.5.
+ * Нижний мобильный предел (`0.85`) — забота клиента: админ задаёт общий
+ * диапазон, а устройство поднимает значение при применении.
+ */
+function sanitizeChatScale(value: unknown): number | undefined {
+  if (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= CHAT_SCALE_MIN &&
+    value <= CHAT_SCALE_MAX
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+/**
  * Оставляет только валидные поля умолчаний оформления: locale ru/en,
  * themeMode system/light/dark, theme — непустая строка, uiScaleMobile и
- * uiScaleDesktop — каждое независимо число в диапазоне 0.5..1.2.
+ * uiScaleDesktop — каждое независимо число в диапазоне 0.5..1.2,
+ * chatViewMode/chatDensity — только известные значения, chatScaleMobile и
+ * chatScaleDesktop — независимо числа в диапазоне 0.75..1.5.
  * Некорректные поля отбрасываются (без исключений).
  */
 function sanitize(raw: unknown): AppearanceDefaults {
@@ -56,13 +80,28 @@ function sanitize(raw: unknown): AppearanceDefaults {
   if (desktop !== undefined) {
     out.uiScaleDesktop = desktop;
   }
+  if (src.chatViewMode === 'detailed' || src.chatViewMode === 'feed') {
+    out.chatViewMode = src.chatViewMode;
+  }
+  if (src.chatDensity === 'normal' || src.chatDensity === 'compact') {
+    out.chatDensity = src.chatDensity;
+  }
+  const chatMobile = sanitizeChatScale(src.chatScaleMobile);
+  if (chatMobile !== undefined) {
+    out.chatScaleMobile = chatMobile;
+  }
+  const chatDesktop = sanitizeChatScale(src.chatScaleDesktop);
+  if (chatDesktop !== undefined) {
+    out.chatScaleDesktop = chatDesktop;
+  }
 
   return out;
 }
 
 /**
  * Файловая реализация порта умолчаний оформления
- * (locale/themeMode/theme/uiScaleMobile/uiScaleDesktop) для всех пользователей.
+ * (locale/themeMode/theme, масштабы UI и области чата, вид и плотность ленты)
+ * для всех пользователей.
  *
  * Хранятся одним JSON-файлом `{dataDir}/defaults.json`. Запись атомарная:
  * временный файл `.tmp.{uuid}` → `rename()`. Значения переживают рестарт.

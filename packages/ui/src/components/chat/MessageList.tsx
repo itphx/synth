@@ -224,12 +224,10 @@ export function MessageList({
    *
    * Панель одна: разворот другой группы заменяет текущую, повторный клик по
    * той же (кнопка в панели) — закрывает. Пока панель открыта, **лента не
-   * рендерится** — панель её заменяет (DOM не дублируется). Состояние
-   * **runtime** (не персистится).
+   * рендерится** — панель её заменяет (DOM не дублируется). Состояние живёт
+   * в `useUIStore` и персистится (`expandedChatGroup`).
    */
-  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null)
-  /** Зеркало состояния для стабильного колбэка (`useCallback([])` не видит state). */
-  const expandedKeyRef = useRef<string | null>(null)
+  const expandedGroupKey = useUIStore((s) => s.expandedChatGroup)
   /** Позиция прокрутки ленты до разворота — восстанавливается после закрытия. */
   const savedScrollTopRef = useRef<number | null>(null)
   /** Сегмент, из которого открыли панель, — для возврата фокуса после закрытия. */
@@ -237,10 +235,11 @@ export function MessageList({
 
   /**
    * Закрыть панель. Стабильная ссылка: используется и тумблером, и `Esc`.
+   * Закрытие — тумблер того же ключа в сторе (отдельного set-экшена нет).
    */
   const closeExpanded = useCallback(() => {
-    expandedKeyRef.current = null
-    setExpandedGroupKey(null)
+    const current = useUIStore.getState().expandedChatGroup
+    if (current !== null) useUIStore.getState().toggleChatExpanded(current)
   }, [])
 
   /**
@@ -251,34 +250,32 @@ export function MessageList({
    */
   const toggleGroupExpanded = useCallback(
     (key: string) => {
-      if (expandedKeyRef.current === key) {
+      // Предыдущее значение берём из стора: колбэк стабилен и не видит state.
+      const current = useUIStore.getState().expandedChatGroup
+      if (current === key) {
         closeExpanded()
         return
       }
       // Первый разворот — запомнить прокрутку ленты, пока она ещё в DOM.
-      if (expandedKeyRef.current === null) {
+      if (current === null) {
         savedScrollTopRef.current = scrollRef.current?.scrollTop ?? null
       }
-      expandedKeyRef.current = key
-      setExpandedGroupKey(key)
+      useUIStore.getState().toggleChatExpanded(key)
     },
     [closeExpanded],
   )
 
   /**
    * Раскрытые человеком сводки скрытых шагов прошлых ходов (компактная
-   * плотность). Состояние **runtime** (не персистится), ключ — `MessageGroup.key`.
-   * Стабильная ссылка (`useCallback`) — иначе слетит `React.memo(ChatMessage)`.
+   * плотность). Состояние персистится (`revealedServiceGroups`, массив — `Set`
+   * в JSON не сериализуется), ключ — `MessageGroup.key`. Стабильная ссылка
+   * (`useCallback`) — иначе слетит `React.memo(ChatMessage)`.
    */
-  const [revealedServiceGroups, setRevealedServiceGroups] = useState<Set<string>>(() => new Set())
+  const revealedServiceGroups = useUIStore((s) => s.revealedServiceGroups)
+  const revealedServiceSet = useMemo(() => new Set(revealedServiceGroups), [revealedServiceGroups])
 
   const toggleServiceExpanded = useCallback((key: string) => {
-    setRevealedServiceGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+    useUIStore.getState().toggleServiceRevealed(key)
   }, [])
 
   const chatDensity = useUIStore((s) => s.chatDensity)
@@ -337,13 +334,13 @@ export function MessageList({
     [groups, expandedGroupKey],
   )
 
-  // Группа исчезла из ленты — сбрасываем разворот (иначе панель «залипла» бы
-  // на несуществующем ходе и лента не вернулась бы).
+  // Группа исчезла из ленты — `pruneChatViewState` снимает разворот и лишние
+  // раскрытые сводки (иначе панель «залипла» бы на несуществующем ходе).
+  // Пустую ленту не пруним: при загрузке `groups` пуст, а сохранённое состояние
+  // должно дождаться настоящего состава.
   useEffect(() => {
-    if (expandedKeyRef.current === null) return
-    if (groups.some((group) => group.key === expandedKeyRef.current)) return
-    expandedKeyRef.current = null
-    setExpandedGroupKey(null)
+    if (groups.length === 0) return
+    useUIStore.getState().pruneChatViewState(groups.map((group) => group.key))
   }, [groups])
 
   // Сегмент текущей панели — чтобы вернуть фокус на его кнопку разворота.
@@ -661,7 +658,7 @@ export function MessageList({
     const groupHasAssistant = group.messages.some((m) => m.role === 'assistant')
     const serviceActive =
       chatDensity === 'compact' && isPastTurn && !groupHasError && groupHasAssistant
-    const serviceRevealed = revealedServiceGroups.has(group.key)
+    const serviceRevealed = revealedServiceSet.has(group.key)
     const serviceCollapsed = serviceActive && !serviceRevealed
     const serviceCounts = group.turnId ? serviceCountsByTurn.get(group.turnId) : undefined
     let summaryOwnerKey: string | undefined
@@ -742,13 +739,31 @@ export function MessageList({
   const renderGroup = (group: MessageGroup, opts?: { pane?: boolean }) => {
     const pane = opts?.pane === true
     const turnBlock = isTurnBlock(group)
+    /**
+     * Групповое состояние компакта: прошлый завершённый ход с ответом агента
+     * свёрнут в строку-сводку (живой ход и ход с ошибкой всегда раскрыты).
+     * В этом состоянии содержимое сегментов скрыто — разделители шагов между
+     * ними рисовать не нужно, иначе от хода остаются «полоски» пустых границ.
+     */
+    const groupHasError = group.messages.some((m) => m.status === 'error')
+    const groupHasAssistant = group.messages.some((m) => m.role === 'assistant')
+    const isPastTurn = group.turnId != null && group.turnId !== turn?.turnId
+    const compactCollapsed =
+      chatDensity === 'compact' &&
+      isPastTurn &&
+      !groupHasError &&
+      groupHasAssistant &&
+      !revealedServiceSet.has(group.key)
     const segments = group.messages.map((msg, i) => {
       const segment = renderSegment(group, msg, i === 0, {
         bare: turnBlock,
         last: i === group.messages.length - 1,
         expanded: pane,
       })
-      if (!turnBlock || i === 0) return segment
+      // Первый сегмент разделителя не имеет; при свёрнутой сводке компакта
+      // разделители скрыты вместе с содержимым шагов (возвращаются после
+      // раскрытия — `revealedServiceGroups`).
+      if (!turnBlock || i === 0 || compactCollapsed) return segment
       // Между шагами — тонкий разделитель, без отдельных карточек. Это
       // **отдельный пустой элемент** (сиблиг сегмента), а не обёртка сегмента:
       // так DOM хода однороден и структурное CSS-правило

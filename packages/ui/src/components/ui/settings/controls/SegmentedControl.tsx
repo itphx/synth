@@ -33,10 +33,12 @@ export const SegmentedControl = <T extends string>({
     role="radiogroup"
     aria-label={ariaLabel}
     className={cn(
-      // Дорожка без рамки/внутреннего отступа: сегменты сами задают высоту
-      // (канон контрола — 30px), иначе группа была бы выше сегментов.
-      // Контур — inset-тень (не влияет на размеры), а не border.
-      'inline-flex items-stretch gap-0.5 rounded-lg bg-muted p-0 shadow-[inset_0_0_0_1px_var(--border)]',
+      // Дорожка с внутренним отступом 2px: активная «таблетка» не касается
+      // контура и читается как элемент **внутри** рамки. Общая высота контрола
+      // остаётся канонической (`--control-height`): сегмент ниже дорожки ровно
+      // на два отступа (30 − 4 = 26px). Контур — inset-тень (не влияет на
+      // размеры), а не border.
+      'inline-flex items-stretch gap-0.5 rounded-lg bg-muted p-0.5 shadow-[inset_0_0_0_1px_var(--border)]',
       disabled && 'opacity-60',
       className
     )}
@@ -54,7 +56,7 @@ export const SegmentedControl = <T extends string>({
           aria-label={option.icon ? option.label : undefined}
           title={option.icon ? option.label : undefined}
           className={cn(
-            'flex-1 h-[var(--control-height)] whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'flex-1 h-[calc(var(--control-height)-0.25rem)] whitespace-nowrap rounded-md px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             active
               ? 'bg-surface-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'

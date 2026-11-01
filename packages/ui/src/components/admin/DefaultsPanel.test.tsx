@@ -7,6 +7,27 @@ const profileMock = vi.hoisted(() => ({ getDefaults: vi.fn() }))
 const apiMock = vi.hoisted(() => ({ updateDefaults: vi.fn() }))
 const confirmMock = vi.hoisted(() => vi.fn(async () => true))
 
+// persist (zustand) в useUIStore пишет в localStorage — в Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 vi.mock('@/lib/api/profileService', () => ({ profileService: profileMock }))
 vi.mock('@/lib/api/client', () => ({ api: apiMock }))
 vi.mock('@/lib/confirm', () => ({ confirm: confirmMock }))
@@ -24,6 +45,10 @@ const DEFAULTS = {
   theme: 'flexoki',
   uiScaleMobile: null,
   uiScaleDesktop: null,
+  chatViewMode: null,
+  chatDensity: null,
+  chatScaleMobile: null,
+  chatScaleDesktop: null,
 }
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
@@ -49,6 +74,22 @@ async function renderPanel(): Promise<HTMLElement> {
 
 const byTestId = (container: HTMLElement, id: string) =>
   container.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null
+
+const radioByText = (container: HTMLElement, text: string) =>
+  Array.from(container.querySelectorAll('[role="radio"]')).find(
+    (r) => r.textContent?.trim() === text,
+  ) as HTMLButtonElement | undefined
+
+/** Значение range-слайдера панели умолчаний (0/1 — uiScale, 2/3 — чат-скейл). */
+async function setSliderValue(container: HTMLElement, index: number, value: number) {
+  const slider = container.querySelectorAll<HTMLInputElement>('input[type="range"]')[index]
+  expect(slider).toBeTruthy()
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    setter?.call(slider, String(value))
+    slider!.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
 
 beforeEach(() => {
   profileMock.getDefaults.mockResolvedValue({ ...DEFAULTS })
@@ -139,5 +180,93 @@ describe('DefaultsPanel — ADR-072: без фиксированного фут�
 
     expect(confirmMock).toHaveBeenCalledTimes(1)
     expect(profileMock.getDefaults).toHaveBeenCalledTimes(2)
+  })
+})
+
+/**
+ * Умолчания отображения чата: вид/плотность (SegmentedControl) и два слайдера
+ * масштаба области чата (диапазон 0.75…1.5, не 0.5…1.2).
+ */
+describe('DefaultsPanel — умолчания отображения чата', () => {
+  it('секции вида/плотности и масштаба чата рендерятся', async () => {
+    const container = await renderPanel()
+
+    expect(container.querySelector('[data-settings-section="defaults-chat-display"]')).not.toBeNull()
+    expect(container.querySelector('[data-settings-section="defaults-chat-scale"]')).not.toBeNull()
+    expect(radioByText(container, 'Feed')).toBeDefined()
+    expect(radioByText(container, 'Compact')).toBeDefined()
+
+    // Два слайдера uiScale + два слайдера чат-скейла.
+    const sliders = container.querySelectorAll<HTMLInputElement>('input[type="range"]')
+    expect(sliders).toHaveLength(4)
+    expect(sliders[2]!.min).toBe('0.75')
+    expect(sliders[2]!.max).toBe('1.5')
+    expect(sliders[3]!.min).toBe('0.75')
+  })
+
+  it('Save отправляет вид, плотность и оба масштаба чата', async () => {
+    const container = await renderPanel()
+
+    await act(async () => {
+      radioByText(container, 'Feed')!.click()
+    })
+    await act(async () => {
+      radioByText(container, 'Compact')!.click()
+    })
+    await setSliderValue(container, 2, 0.9)
+    await setSliderValue(container, 3, 1.3)
+
+    const save = byTestId(container, 'defaults-save')!
+    expect(save.disabled).toBe(false)
+    await act(async () => {
+      save.click()
+    })
+
+    expect(apiMock.updateDefaults).toHaveBeenCalledTimes(1)
+    expect(apiMock.updateDefaults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatViewMode: 'feed',
+        chatDensity: 'compact',
+        chatScaleMobile: 0.9,
+        chatScaleDesktop: 1.3,
+      }),
+    )
+  })
+
+  it('сохранённые значения подхватываются в черновик (в т.ч. масштаб чата)', async () => {
+    profileMock.getDefaults.mockResolvedValue({
+      ...DEFAULTS,
+      chatViewMode: 'feed',
+      chatDensity: 'compact',
+      chatScaleMobile: 0.9,
+      chatScaleDesktop: 1.25,
+    })
+
+    const container = await renderPanel()
+
+    expect(radioByText(container, 'Feed')!.getAttribute('aria-checked')).toBe('true')
+    expect(radioByText(container, 'Compact')!.getAttribute('aria-checked')).toBe('true')
+
+    const sliders = container.querySelectorAll<HTMLInputElement>('input[type="range"]')
+    expect(sliders[2]!.value).toBe('0.9')
+    expect(sliders[3]!.value).toBe('1.25')
+  })
+
+  it('Reset перечитывает серверные умолчания и сбрасывает черновик', async () => {
+    const container = await renderPanel()
+
+    await act(async () => {
+      radioByText(container, 'Feed')!.click()
+    })
+    await act(async () => {
+      byTestId(container, 'defaults-reset')!.click()
+    })
+    await act(async () => {})
+
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(profileMock.getDefaults).toHaveBeenCalledTimes(2)
+    expect(radioByText(container, 'Detailed')!.getAttribute('aria-checked')).toBe('true')
+    // Сброс не сохраняет: PUT не вызывался.
+    expect(apiMock.updateDefaults).not.toHaveBeenCalled()
   })
 })

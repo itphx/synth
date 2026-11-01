@@ -165,10 +165,10 @@ export const ChatScaleControl = ({ value, onChange, stacked, fluid }: ChatScaleC
     <ChatScaleSlider
       value={chatScale}
       onChange={handleChange}
-      label={t('settings.appearance.chatScale.label')}
+      label={t('chatSettings.chatScale.label')}
       onReset={() => handleChange(CHAT_SCALE_DEFAULT)}
       resetDisabled={isDefault}
-      resetTitle={t('settings.appearance.chatScale.reset')}
+      resetTitle={t('chatSettings.chatScale.reset')}
       stacked={stacked}
       fluid={fluid}
       min={getChatScaleMin()}

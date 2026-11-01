@@ -101,16 +101,18 @@ describe('settings-catalog — searchSettings', () => {
     expect(entryIds).not.toContain('mcpAdmin.masterEnabled')
   })
 
-  it('«масштаб чата» находит секцию масштаба области чата', () => {
+  it('«масштаб чата» находит секцию масштаба области чата в разделе «Чат»', () => {
     const result = searchSettings(tRu, 'масштаб чата')
-    const entry = result.entries.find((e) => e.id === 'appearance.chatScale')
+    const entry = result.entries.find((e) => e.id === 'chat.chatScale')
 
     expect(entry).toBeDefined()
-    expect(entry?.categoryId).toBe('appearance')
-    expect(entry?.sectionId).toBe('appearance-chat-scale')
+    expect(entry?.categoryId).toBe('chat')
+    expect(entry?.sectionId).toBe('chat-scale')
 
     const byEnglish = searchSettings(t, 'chat scale')
-    expect(byEnglish.entries.map((e) => e.id)).toContain('appearance.chatScale')
+    expect(byEnglish.entries.map((e) => e.id)).toContain('chat.chatScale')
+    // В «Внешнем виде» масштаба чата больше нет.
+    expect(result.entries.map((e) => e.id)).not.toContain('appearance.chatScale')
   })
 
   it('«отлад» находит «Отладка» по префиксу слова', () => {

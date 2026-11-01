@@ -29,6 +29,13 @@ let chatPersistTimer: ReturnType<typeof setTimeout> | null = null
 
 let serverScaleMobile: number | null = null
 let serverScaleDesktop: number | null = null
+// Серверные умолчания масштаба чата (паритет с uiScale: mobile/desktop).
+let serverChatScaleMobile: number | null = null
+let serverChatScaleDesktop: number | null = null
+// Личный масштаб чата уже применён (профиль или явный выбор пользователя):
+// серверное умолчание не должно его перекрывать, даже если в localStorage
+// значения ещё нет (запись дебаунсится).
+let personalChatScale = false
 
 export function isMobileScaleDevice(): boolean {
   if (typeof window === 'undefined') {
@@ -151,12 +158,23 @@ export function getChatScaleMin(): number {
   return isMobileScaleDevice() ? CHAT_SCALE_MIN_TOUCH : CHAT_SCALE_MIN
 }
 
-export function normalizeChatScale(value: unknown): number {
+/**
+ * Кламп масштаба чата к общему диапазону `0.75…1.5` **без** мобильного минимума.
+ *
+ * Нужен там, где значение задаётся для всех устройств сразу (админ-панель
+ * умолчаний): мобильный предел `0.85` применяется уже на клиенте при показе.
+ */
+export function clampChatScale(value: unknown): number {
   const parsed = typeof value === 'number' ? value : parseFloat(String(value))
   if (!Number.isFinite(parsed)) {
     return CHAT_SCALE_DEFAULT
   }
-  return Math.min(CHAT_SCALE_MAX, Math.max(getChatScaleMin(), parsed))
+  return Math.min(CHAT_SCALE_MAX, Math.max(CHAT_SCALE_MIN, parsed))
+}
+
+export function normalizeChatScale(value: unknown): number {
+  const clamped = clampChatScale(value)
+  return Math.max(getChatScaleMin(), clamped)
 }
 
 export function readChatScale(): number {
@@ -185,6 +203,76 @@ export function hasLocalChatScale(): boolean {
   }
 }
 
+/**
+ * Есть ли у пользователя личный масштаб чата: сохранённый локально или уже
+ * применённый из профиля/настроек в этой сессии (запись в localStorage идёт
+ * с дебаунсом, поэтому одного ключа недостаточно).
+ */
+export function hasPersonalChatScale(): boolean {
+  return personalChatScale || hasLocalChatScale()
+}
+
+function toServerChatScale(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) {
+    return null
+  }
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value))
+  if (!Number.isFinite(parsed)) {
+    return null
+  }
+  // Серверное значение храним в общем диапазоне: мобильный предел
+  // применяется при выдаче (`getServerDefaultChatScale`).
+  return clampChatScale(parsed)
+}
+
+/** Серверные умолчания масштаба чата инстанса (mobile/desktop). */
+export function setServerChatScaleDefaults(next: {
+  mobile?: number | null
+  desktop?: number | null
+}): void {
+  serverChatScaleMobile = toServerChatScale(next.mobile)
+  serverChatScaleDesktop = toServerChatScale(next.desktop)
+}
+
+/**
+ * Серверное умолчание масштаба чата для текущего устройства (с мобильным
+ * минимумом). `null` — умолчание не задано.
+ */
+export function getServerDefaultChatScale(): number | null {
+  const server = isMobileScaleDevice() ? serverChatScaleMobile : serverChatScaleDesktop
+  return server === null ? null : normalizeChatScale(server)
+}
+
+export function getDefaultChatScale(): number {
+  return getServerDefaultChatScale() ?? CHAT_SCALE_DEFAULT
+}
+
+/**
+ * Применить личный масштаб чата (из профиля) — только если у пользователя
+ * ещё нет своего значения (localStorage или явный выбор в этой сессии).
+ * Возвращает `true`, если значение применено.
+ */
+export function applyPersonalChatScale(scale: number): boolean {
+  if (hasPersonalChatScale()) {
+    return false
+  }
+  personalChatScale = true
+  applyChatScale(scale)
+  return true
+}
+
+/**
+ * Применить серверное умолчание масштаба чата, только если личного значения
+ * нет. Возвращает `true`, если значение применено.
+ */
+export function applyServerDefaultChatScale(): boolean {
+  if (hasPersonalChatScale()) {
+    return false
+  }
+  applyChatScale(getDefaultChatScale())
+  return true
+}
+
 /** Ставит `--chat-scale` инлайном на `<html>`; общий `--ui-scale` не трогает. */
 export function applyChatScale(scale: number): void {
   if (typeof document === 'undefined') {
@@ -198,6 +286,8 @@ export function persistChatScale(scale: number): void {
     return
   }
   const normalized = normalizeChatScale(scale)
+  // Запись личного значения (Save в настройках): умолчания его не перекрывают.
+  personalChatScale = true
   if (chatPersistTimer !== null) {
     clearTimeout(chatPersistTimer)
   }
@@ -213,6 +303,8 @@ export function persistChatScale(scale: number): void {
 
 export function setChatScale(scale: number): void {
   const normalized = normalizeChatScale(scale)
+  // Явный выбор пользователя: серверное/профильное умолчание его не перекрывает.
+  personalChatScale = true
   applyChatScale(normalized)
   persistChatScale(normalized)
 }

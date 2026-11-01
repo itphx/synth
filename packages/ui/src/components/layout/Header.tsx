@@ -20,6 +20,7 @@ import { NotificationPopup } from './NotificationPopup'
 import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 import { HybridStatusIndicator } from './HybridStatusIndicator'
 import { PwaInstallButton } from './PwaInstallButton'
+import { ChatViewControls } from './ChatViewControls'
 import { useDevice } from '@/hooks/useDevice'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { useWorktreesStore, findWorktree } from '@/stores/worktreesStore'
@@ -371,6 +372,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           <NotificationPopup />
           <AnalyticsButton />
           <PwaInstallButton />
+          {isChatTab && <ChatViewControls variant="mobile" />}
           <QuickSettingsPopup
             onSettingsClick={onSettingsClick}
             onAnalyticsClick={() => setAnalyticsDialogOpen(true)}
@@ -483,6 +485,9 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                   <Icon name="checkbox-multiple" className="size-3.5" />
                 </button>
               )}
+
+              {/* Быстрый доступ к виду и плотности ленты */}
+              <ChatViewControls />
             </div>
 
             {/* Selection toolbar */}

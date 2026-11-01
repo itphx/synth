@@ -21,6 +21,16 @@ export interface UserPreferences {
   intermediateTextDisplay?: 'inline' | 'bottom'
   uiScaleMobile?: number | null
   uiScaleDesktop?: number | null
+  /** Вид ленты чата (личный выбор в профиле / серверное умолчание). */
+  chatViewMode?: 'detailed' | 'feed' | null
+  /** Плотность ленты чата (личный выбор в профиле / серверное умолчание). */
+  chatDensity?: 'normal' | 'compact' | null
+  /** Личный масштаб области чата (одно значение; клампится по устройству). */
+  chatScale?: number | null
+  /** Серверное умолчание масштаба области чата для мобильных. */
+  chatScaleMobile?: number | null
+  /** Серверное умолчание масштаба области чата для десктопа. */
+  chatScaleDesktop?: number | null
   [key: string]: unknown
 }
 

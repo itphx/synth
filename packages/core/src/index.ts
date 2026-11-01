@@ -942,7 +942,7 @@ export {
 // ADR-096 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
 // ADR-096 (W2.3): умолчания оформления (перенесено из backend) — файловая реализация.
-export { DefaultsStore, UI_SCALE_MIN, UI_SCALE_MAX } from './storage/defaults-store.js';
+export { DefaultsStore, UI_SCALE_MIN, UI_SCALE_MAX, CHAT_SCALE_MIN, CHAT_SCALE_MAX } from './storage/defaults-store.js';
 // ADR-096 (W2.3): единый контекст слоя хранения + фабрики `file`/`memory`.
 export {
   createFileStorage,

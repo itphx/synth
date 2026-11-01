@@ -78,7 +78,10 @@ export function Tabs({
       aria-label={ariaLabel}
       className={cn(
         'tab-scroll-container flex w-full min-w-0 items-stretch gap-1 overflow-x-auto',
-        isUnderline ? 'border-b border-border' : 'rounded-lg bg-muted p-0',
+        // Сегментированный вариант — дорожка с внутренним отступом 2px (та же
+        // схема, что у `SegmentedControl`): активная вкладка не касается
+        // контура, общая высота остаётся `--control-height` (30px).
+        isUnderline ? 'border-b border-border' : 'rounded-lg bg-muted p-0.5',
         className,
       )}
     >
@@ -93,8 +96,10 @@ export function Tabs({
             title={item.title}
             onClick={() => onChange(item.value)}
             className={cn(
-              'flex-1 min-w-0 h-[var(--control-height)] px-2 py-1.5 text-xs font-medium text-center leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              isUnderline ? 'rounded-none' : 'rounded-md',
+              'flex-1 min-w-0 px-2 text-xs font-medium text-center leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              isUnderline
+                ? 'h-[var(--control-height)] rounded-none py-1.5'
+                : 'h-[calc(var(--control-height)-0.25rem)] rounded-md',
               item.title ? 'truncate' : 'break-words',
               isUnderline
                 ? active

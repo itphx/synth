@@ -531,3 +531,123 @@ describe('setChatScale', () => {
     expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.3')
   })
 })
+
+/**
+ * Серверные умолчания масштаба области чата (админ-раздел «По умолчанию»).
+ * Модуль импортируется заново на каждый тест: внутри модуля живёт флаг
+ * «личный масштаб уже применён», который иначе перетекал бы между тестами.
+ */
+describe('серверные умолчания масштаба чата', () => {
+  async function freshModule() {
+    vi.resetModules()
+    return import('./uiScale')
+  }
+
+  beforeEach(() => {
+    storage.clear()
+    document.documentElement.style.removeProperty('--chat-scale')
+  })
+
+  afterEach(() => {
+    restoreMatchMedia()
+    document.documentElement.style.removeProperty('--chat-scale')
+  })
+
+  it('применяет серверный дефолт без личного значения и НЕ пишет в localStorage', async () => {
+    const ui = await freshModule()
+    stubMatchMedia(() => false)
+    ui.setServerChatScaleDefaults({ mobile: 0.9, desktop: 1.15 })
+
+    expect(ui.getServerDefaultChatScale()).toBe(1.15)
+    expect(ui.getDefaultChatScale()).toBe(1.15)
+    expect(ui.applyServerDefaultChatScale()).toBe(true)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.15')
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+  })
+
+  it('mobile и desktop независимы', async () => {
+    const ui = await freshModule()
+    ui.setServerChatScaleDefaults({ mobile: 0.9, desktop: 1.15 })
+
+    stubMatchMedia(() => false)
+    expect(ui.getServerDefaultChatScale()).toBe(1.15)
+
+    stubMatchMedia((q) => q.includes('max-width: 1199px'))
+    expect(ui.getServerDefaultChatScale()).toBe(0.9)
+  })
+
+  it('на мобильном действует минимум 0.85, даже если умолчание ниже', async () => {
+    const ui = await freshModule()
+    stubMatchMedia((q) => q.includes('max-width: 1199px'))
+    ui.setServerChatScaleDefaults({ mobile: 0.75 })
+
+    expect(ui.getServerDefaultChatScale()).toBe(CHAT_SCALE_MIN_TOUCH)
+    ui.applyServerDefaultChatScale()
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('0.85')
+  })
+
+  it('значения клампятся к 0.75…1.5, мусор сбрасывает умолчание', async () => {
+    const ui = await freshModule()
+    stubMatchMedia(() => false)
+
+    ui.setServerChatScaleDefaults({ desktop: 5 })
+    expect(ui.getServerDefaultChatScale()).toBe(CHAT_SCALE_MAX)
+
+    ui.setServerChatScaleDefaults({ desktop: 0.1 })
+    expect(ui.getServerDefaultChatScale()).toBe(CHAT_SCALE_MIN)
+
+    ui.setServerChatScaleDefaults({ desktop: NaN })
+    expect(ui.getServerDefaultChatScale()).toBeNull()
+
+    ui.setServerChatScaleDefaults({ desktop: 'oops' as unknown as number })
+    expect(ui.getServerDefaultChatScale()).toBeNull()
+  })
+
+  it('если умолчание не задано — встроенный дефолт, личный ключ не пишется', async () => {
+    const ui = await freshModule()
+    stubMatchMedia(() => false)
+    ui.setServerChatScaleDefaults({ mobile: 1.1 })
+
+    expect(ui.getServerDefaultChatScale()).toBeNull()
+    expect(ui.applyServerDefaultChatScale()).toBe(true)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1')
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+  })
+
+  it('при личном значении серверный дефолт не применяется и не перезаписывается', async () => {
+    const ui = await freshModule()
+    stubMatchMedia(() => false)
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, '1.2')
+    ui.setServerChatScaleDefaults({ desktop: 0.9 })
+
+    expect(ui.hasPersonalChatScale()).toBe(true)
+    expect(ui.applyServerDefaultChatScale()).toBe(false)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('')
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.2')
+  })
+
+  it('личный масштаб из профиля применяется один раз и блокирует серверный', async () => {
+    const ui = await freshModule()
+    stubMatchMedia(() => false)
+    ui.setServerChatScaleDefaults({ desktop: 0.9 })
+
+    expect(ui.applyPersonalChatScale(1.2)).toBe(true)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.2')
+    // Значение из профиля не пишется в localStorage (личное — оно там уже не нужно).
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+
+    expect(ui.applyServerDefaultChatScale()).toBe(false)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.2')
+    expect(ui.applyPersonalChatScale(1.1)).toBe(false)
+  })
+
+  it('setChatScale помечает масштаб личным: серверный дефолт не перекрывает', async () => {
+    const ui = await freshModule()
+    stubMatchMedia(() => false)
+    ui.setChatScale(1.2)
+    ui.setServerChatScaleDefaults({ desktop: 0.9 })
+
+    expect(ui.applyServerDefaultChatScale()).toBe(false)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.2')
+  })
+})

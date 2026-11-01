@@ -462,3 +462,187 @@ describe('useUIStore.chatScale', () => {
     expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.3')
   })
 })
+
+/**
+ * Серверные умолчания вида/плотности ленты: применяются только при отсутствии
+ * личного выбора (localStorage persist, явный выбор, значение профиля).
+ */
+describe('useUIStore — серверные умолчания отображения ленты', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ chatViewMode: 'detailed', chatDensity: 'normal' })
+  })
+
+  it('без личного выбора применяет оба серверных значения', () => {
+    useUIStore.getState().setServerChatDisplayDefaults({ viewMode: 'feed', density: 'compact' })
+
+    expect(useUIStore.getState().chatViewMode).toBe('feed')
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+  })
+
+  it('null и неизвестные значения не меняют стор', () => {
+    useUIStore.getState().setServerChatDisplayDefaults({ viewMode: null, density: null })
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+
+    useUIStore.getState().setServerChatDisplayDefaults({
+      viewMode: 'bubbles' as never,
+      density: 'ultra' as never,
+    })
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+
+  it('явный выбор пользователя важнее серверных умолчаний', () => {
+    useUIStore.getState().setChatViewMode('detailed')
+    useUIStore.getState().setServerChatDisplayDefaults({ viewMode: 'feed' })
+
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+
+  it('значение из профиля применяется и блокирует серверное умолчание', () => {
+    useUIStore.getState().applyPersonalChatDisplay({ density: 'compact' })
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+
+    useUIStore.getState().setServerChatDisplayDefaults({ density: 'normal' })
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+  })
+
+  it('сохранённый в persist личный выбор важнее серверного (свежий стор)', async () => {
+    storage.setItem(
+      'synth-ui-settings',
+      JSON.stringify({ state: { chatViewMode: 'detailed' }, version: 0 }),
+    )
+    vi.resetModules()
+    const fresh = await import('./useUIStore')
+
+    fresh.useUIStore.getState().setServerChatDisplayDefaults({ viewMode: 'feed' })
+
+    expect(fresh.useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+})
+
+/**
+ * Персист раскрытых сводок и развёрнутой панели: состояние ленты переживает
+ * перезагрузку, но не разрастается (`pruneChatViewState` + предел 200 ключей).
+ */
+describe('useUIStore — персист раскрытых сводок и развёрнутой панели', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ expandedChatGroup: null, revealedServiceGroups: [] })
+  })
+
+  it('toggleChatExpanded: null → ключ, тот же ключ → null, другой → новый', () => {
+    const store = useUIStore.getState()
+    store.toggleChatExpanded('turn:t1')
+    expect(useUIStore.getState().expandedChatGroup).toBe('turn:t1')
+
+    store.toggleChatExpanded('turn:t1')
+    expect(useUIStore.getState().expandedChatGroup).toBeNull()
+
+    store.toggleChatExpanded('turn:t1')
+    store.toggleChatExpanded('turn:t2')
+    expect(useUIStore.getState().expandedChatGroup).toBe('turn:t2')
+  })
+
+  it('toggleServiceRevealed: добавляет и снимает ключ', () => {
+    useUIStore.getState().toggleServiceRevealed('turn:t1')
+    expect(useUIStore.getState().revealedServiceGroups).toEqual(['turn:t1'])
+
+    useUIStore.getState().toggleServiceRevealed('turn:t1')
+    expect(useUIStore.getState().revealedServiceGroups).toEqual([])
+  })
+
+  it('pruneChatViewState убирает ключи, которых больше нет в ленте', () => {
+    useUIStore.setState({
+      expandedChatGroup: 'turn:old',
+      revealedServiceGroups: ['turn:old', 'turn:keep'],
+    })
+
+    useUIStore.getState().pruneChatViewState(['turn:keep', 'turn:new'])
+
+    const s = useUIStore.getState()
+    expect(s.expandedChatGroup).toBeNull()
+    expect(s.revealedServiceGroups).toEqual(['turn:keep'])
+  })
+
+  it('pruneChatViewState сохраняет существующий разворот и не будит подписчиков зря', () => {
+    useUIStore.setState({ expandedChatGroup: 'turn:keep', revealedServiceGroups: [] })
+    const before = useUIStore.getState()
+
+    useUIStore.getState().pruneChatViewState(['turn:keep'])
+
+    const after = useUIStore.getState()
+    expect(after.expandedChatGroup).toBe('turn:keep')
+    expect(after.revealedServiceGroups).toBe(before.revealedServiceGroups)
+  })
+
+  it('раскрытые сводки ограничены 200 последними ключами', () => {
+    for (let i = 0; i < 205; i += 1) {
+      useUIStore.getState().toggleServiceRevealed(`turn:${i}`)
+    }
+
+    const revealed = useUIStore.getState().revealedServiceGroups
+    expect(revealed).toHaveLength(200)
+    expect(revealed[0]).toBe('turn:5')
+    expect(revealed[revealed.length - 1]).toBe('turn:204')
+  })
+
+  it('оба поля входят в partialize', () => {
+    useUIStore.setState({
+      expandedChatGroup: 'turn:t1',
+      revealedServiceGroups: ['turn:t2'],
+    })
+    const partialize = useUIStore.persist.getOptions().partialize
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+
+    expect(persisted.expandedChatGroup).toBe('turn:t1')
+    expect(persisted.revealedServiceGroups).toEqual(['turn:t2'])
+  })
+
+  it('persist: значения переживают rehydrate', async () => {
+    useUIStore.setState({
+      expandedChatGroup: 'turn:t1',
+      revealedServiceGroups: ['turn:t2', 'turn:t3'],
+    })
+
+    await useUIStore.persist.rehydrate()
+
+    const s = useUIStore.getState()
+    expect(s.expandedChatGroup).toBe('turn:t1')
+    expect(s.revealedServiceGroups).toEqual(['turn:t2', 'turn:t3'])
+  })
+
+  it('merge: мусор при восстановлении отбрасывается', async () => {
+    storage.setItem(
+      'synth-ui-settings',
+      JSON.stringify({
+        state: {
+          expandedChatGroup: 42,
+          revealedServiceGroups: ['turn:ok', 7, null, '', { key: 'x' }],
+        },
+        version: 0,
+      }),
+    )
+
+    await useUIStore.persist.rehydrate()
+
+    const s = useUIStore.getState()
+    expect(s.expandedChatGroup).toBeNull()
+    expect(s.revealedServiceGroups).toEqual(['turn:ok'])
+  })
+
+  it('merge: сохранённый массив обрезается до 200 ключей', async () => {
+    const saved = Array.from({ length: 250 }, (_, i) => `turn:${i}`)
+    storage.setItem(
+      'synth-ui-settings',
+      JSON.stringify({ state: { revealedServiceGroups: saved }, version: 0 }),
+    )
+
+    await useUIStore.persist.rehydrate()
+
+    const revealed = useUIStore.getState().revealedServiceGroups
+    expect(revealed).toHaveLength(200)
+    expect(revealed[0]).toBe('turn:50')
+  })
+})

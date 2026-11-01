@@ -11,6 +11,17 @@ export interface AppearanceDefaults {
   theme?: string;
   uiScaleMobile?: number;
   uiScaleDesktop?: number;
+  /** Вид ленты чата по умолчанию (`detailed` — пузырь ответа, `feed` — плоская проза). */
+  chatViewMode?: 'detailed' | 'feed';
+  /** Плотность ленты чата по умолчанию (`compact` — прошлые ходы свёрнуты). */
+  chatDensity?: 'normal' | 'compact';
+  /**
+   * Масштаб области чата по умолчанию (множитель поверх общего масштаба UI).
+   * Диапазон — `0.75…1.5`; мобильный минимум `0.85` применяется на клиенте.
+   */
+  chatScaleMobile?: number;
+  /** Масштаб области чата по умолчанию на десктопе. */
+  chatScaleDesktop?: number;
 }
 
 /**

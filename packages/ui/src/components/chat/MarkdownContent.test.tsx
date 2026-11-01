@@ -646,8 +646,8 @@ describe('MarkdownContent: правый зазор блока кода (CSS)', (
   // jsdom не считает геометрию, поэтому проверяем само правило: `pre` —
   // скролл-контейнер, и его внутренний `padding-right` прокручивается
   // вместе с кодом. Зазор до правой рамки карточки должен быть снаружи
-  // прокручиваемой области (`margin-right` у `pre`), иначе при
-  // `scrollLeft = 0` обрезанный текст прилипает к границе.
+  // прокручиваемой области (`margin-inline-end` у `pre`, в LTR — справа),
+  // иначе при `scrollLeft = 0` обрезанный текст прилипает к границе.
   const css = readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'),
     'utf8',
@@ -666,7 +666,7 @@ describe('MarkdownContent: правый зазор блока кода (CSS)', (
     return bodies
   }
 
-  /** Правый внешний отступ по каскаду объявлений правила (longhand важнее shorthand). */
+  /** Правый (LTR) внешний отступ по каскаду объявлений правила. */
   function rightMargin(body: string): string | null {
     let right: string | null = null
     for (const declaration of body.split(';')) {
@@ -674,8 +674,15 @@ describe('MarkdownContent: правый зазор блока кода (CSS)', (
       if (colon < 0) continue
       const prop = declaration.slice(0, colon).trim()
       const value = declaration.slice(colon + 1).trim()
-      if (prop === 'margin-right') {
+      // Логическое свойство `margin-inline-end` — тоже «правый» отступ в LTR
+      // (RTL-безопасная замена `margin-right`).
+      if (prop === 'margin-inline-end' || prop === 'margin-right') {
         right = value
+        continue
+      }
+      if (prop === 'margin-inline') {
+        const parts = value.split(/\s+/)
+        right = parts[1] ?? parts[0]!
         continue
       }
       if (prop !== 'margin') continue
@@ -694,8 +701,7 @@ describe('MarkdownContent: правый зазор блока кода (CSS)', (
     return match[2] === 'px' ? amount : amount * 16
   }
 
-  it('у `.md-code-pre` есть правый margin 6–10px (зазор вне прокрутки)', () => {
-    const bodies = exactRuleBodies('.markdown-content .md-code-pre')
+  it('у `.md-code-pre` есть правый margin 6–10px (зазор вне прокрутки)', () => {    const bodies = exactRuleBodies('.markdown-content .md-code-pre')
     expect(bodies.length).toBeGreaterThan(0)
 
     const right = rightMargin(bodies.join('\n'))

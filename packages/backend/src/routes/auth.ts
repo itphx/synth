@@ -17,12 +17,33 @@ const OIDC_STATE_COOKIE = 'oidc_state';
 
 // Встроенные умолчания оформления (совпадают с тем, что использует UI
 // по умолчанию: packages/ui/src/lib/defaults.ts + uiScale.ts).
+// `null` — «умолчание не задано»: UI берёт встроенный дефолт.
 const BUILT_IN_DEFAULTS = {
   themeMode: 'system' as const,
   theme: 'synthesis',
   uiScaleMobile: null as number | null,
   uiScaleDesktop: null as number | null,
+  chatViewMode: null as 'detailed' | 'feed' | null,
+  chatDensity: null as 'normal' | 'compact' | null,
+  chatScaleMobile: null as number | null,
+  chatScaleDesktop: null as number | null,
 };
+
+/**
+ * Поля умолчаний оформления, которые принимает `PUT /defaults`.
+ * Whitelist на границе: тело запроса не должно попадать в стор целиком
+ * (запись валидирует store, но лишние ключи там не нужны).
+ */
+const DEFAULT_FIELDS = [
+  'themeMode',
+  'theme',
+  'uiScaleMobile',
+  'uiScaleDesktop',
+  'chatViewMode',
+  'chatDensity',
+  'chatScaleMobile',
+  'chatScaleDesktop',
+] as const satisfies readonly (keyof AppearanceDefaults)[];
 
 export function createAuthRoutes(
   kit: AuthKit,
@@ -444,7 +465,15 @@ export function createAuthRoutes(
     }
 
     if (defaultsStore) {
-      const patch: AppearanceDefaults = { ...body };
+      // Whitelist полей: остальное тело запроса игнорируется, а валидация
+      // значений (enum/диапазоны) — в `DefaultsStore.sanitize`.
+      const patch: AppearanceDefaults = {};
+      const rest = body as Record<string, unknown>;
+      for (const field of DEFAULT_FIELDS) {
+        if (field in rest) {
+          (patch as Record<string, unknown>)[field] = rest[field];
+        }
+      }
       if (patch.locale === undefined && (locale === 'en' || locale === 'ru')) {
         patch.locale = locale;
       }

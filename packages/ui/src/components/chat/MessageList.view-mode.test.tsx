@@ -136,7 +136,12 @@ function assistantWithNoise(id = 'a1', ord = 10): MessageData {
 
 beforeEach(() => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
-  useUIStore.setState({ chatViewMode: 'detailed', chatDensity: 'normal' })
+  useUIStore.setState({
+    chatViewMode: 'detailed',
+    chatDensity: 'normal',
+    expandedChatGroup: null,
+    revealedServiceGroups: [],
+  })
 })
 
 afterEach(async () => {
@@ -148,7 +153,12 @@ afterEach(async () => {
     container.remove()
   }
   document.body.innerHTML = ''
-  useUIStore.setState({ chatViewMode: 'detailed', chatDensity: 'normal' })
+  useUIStore.setState({
+    chatViewMode: 'detailed',
+    chatDensity: 'normal',
+    expandedChatGroup: null,
+    revealedServiceGroups: [],
+  })
 })
 
 const chatColumn = (container: HTMLElement): HTMLElement | null =>
