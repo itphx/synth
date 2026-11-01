@@ -1,6 +1,6 @@
-import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 import { resolveStreamErrorAction } from '@/lib/streamErrors'
+import { ComposerBanner } from './ComposerBanner'
 
 interface StreamErrorPanelProps {
   /** Сырой текст ошибки от провайдера. */
@@ -13,7 +13,8 @@ interface StreamErrorPanelProps {
 
 /**
  * Плашка финальной ошибки провайдера над полем ввода (B6).
- * Стиль консистентен с QueuePanel (mx-auto w-4/5, палитра destructive вместо yellow).
+ * Стиль/поведение — общий `ComposerBanner` (вариант `error`): `mx-auto w-4/5`,
+ * палитра destructive, опциональная кнопка «Повторить».
  */
 export function StreamErrorPanel({ error, errorType, onRetry }: StreamErrorPanelProps) {
   const { t } = useI18n()
@@ -28,26 +29,25 @@ export function StreamErrorPanel({ error, errorType, onRetry }: StreamErrorPanel
   const showRetry = resolveStreamErrorAction(errorType) === 'retry' && !!onRetry
 
   return (
-    <div className="shrink-0 mx-auto w-4/5 rounded-lg border border-destructive/20 bg-destructive/5">
-      <div className="flex items-center gap-2 px-3 py-1.5">
-        <Icon name="error-warning" className="size-3.5 text-destructive shrink-0" />
-        <span className="text-xs text-destructive flex-1 min-w-0">
-          {text}
-          {errorType !== 'context_length' && errorType !== 'auth' && error && (
-            <span className="block truncate text-[0.625rem] text-muted-foreground" title={error}>
-              {error}
-            </span>
-          )}
+    <ComposerBanner
+      variant="error"
+      icon="error-warning"
+      testId="stream-error-panel"
+      title={text}
+      action={showRetry ? (
+        <button
+          onClick={onRetry}
+          className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+        >
+          {t('chat.streamError.retry')}
+        </button>
+      ) : undefined}
+    >
+      {errorType !== 'context_length' && errorType !== 'auth' && error && (
+        <span className="block truncate text-[0.625rem] text-muted-foreground" title={error}>
+          {error}
         </span>
-        {showRetry && (
-          <button
-            onClick={onRetry}
-            className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
-          >
-            {t('chat.streamError.retry')}
-          </button>
-        )}
-      </div>
-    </div>
+      )}
+    </ComposerBanner>
   )
 }

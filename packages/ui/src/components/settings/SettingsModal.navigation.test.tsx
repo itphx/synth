@@ -46,6 +46,15 @@ vi.mock('./MaintenanceSettings', () => ({ MaintenanceSettings: () => <div>mainte
 vi.mock('./ObservabilitySettings', () => ({ ObservabilitySettings: () => <div>metrics-page</div> }))
 vi.mock('./MultimodalSettings', () => ({ MultimodalSettings: () => <div>attachments-page</div> }))
 vi.mock('./MemorySettings', () => ({ MemorySettings: () => <div>memory-page</div> }))
+vi.mock('../admin/ContextDefaultsSettings', () => ({
+  ContextDefaultsSettings: () => <div>context-defaults-page</div>,
+}))
+vi.mock('../admin/ContextWindowSettings', () => ({
+  ContextWindowSettings: () => <div>context-window-page</div>,
+}))
+vi.mock('../admin/StickyNotesLimitsSettings', () => ({
+  StickyNotesLimitsSettings: () => <div>context-sticky-notes-page</div>,
+}))
 vi.mock('../admin/DashboardPanel', () => ({ DashboardPanel: () => <div>dashboard-page</div> }))
 vi.mock('../admin/SessionsPanel', () => ({ SessionsPanel: () => <div>sessions-page</div> }))
 vi.mock('../admin/ProjectsPanel', () => ({ ProjectsPanel: () => <div>projects-page</div> }))
@@ -204,6 +213,24 @@ describe('SettingsModal — режим «Расширенные»', () => {
 
     const activeAfterToggle = document.querySelector('button[aria-current="page"]')
     expect(activeAfterToggle?.textContent).toContain('Metrics')
+  })
+
+  it('«Управление контекстом» — advanced-раздел ADMIN, открывается кликом', async () => {
+    useUIStore.setState({ settingsShowAdvanced: true })
+    await renderModal()
+
+    const button = [...document.querySelectorAll('nav button')].find((item) =>
+      item.textContent?.includes('Context management'),
+    ) as HTMLButtonElement | undefined
+    expect(button).toBeTruthy()
+
+    await act(async () => {
+      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(useUIStore.getState().settingsPage).toBe('contextManagement')
+    expect(document.body.textContent).toContain('context-defaults-page')
+    expect(document.body.textContent).toContain('context-window-page')
   })
 })
 

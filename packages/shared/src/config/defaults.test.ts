@@ -43,6 +43,25 @@ describe('defaultConfig', () => {
     });
   });
 
+  it('context.defaults по умолчанию: прежние значения SessionManager', () => {
+    expect(defaultConfig.context.defaults).toEqual({
+      contextOptimization: 'none',
+      summarizationEnabled: false,
+      summarizationTriggerMode: 'messages',
+      summarizeAfterN: 10,
+      summarizeTokenThreshold: 50,
+      summarizationHeadMessages: 2,
+      summarizationTailMessages: 3,
+      slidingWindowMode: 'messages',
+      slidingWindowMessageLimit: 10,
+      slidingWindowTokenThreshold: 80,
+    });
+  });
+
+  it('context.stickyNotes по умолчанию: 50 заметок, 2000 символов', () => {
+    expect(defaultConfig.context.stickyNotes).toEqual({ maxCount: 50, maxChars: 2000 });
+  });
+
   it('questions по умолчанию: без таймаута ответа, retention 14 дней (этап 1 roadmap 0.13)', () => {
     expect(defaultConfig.questions).toEqual({ timeoutMs: 0, retentionDays: 14 });
   });
@@ -154,6 +173,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.context.enabledFiles).toContain('SOUL.md');
     expect(defaultConfig.context.enabledFiles).toContain('COMPANY.md');
     expect(defaultConfig.context.enabledFiles).toContain('ABOUT.md');
+  });
+
+  it('context.windowPolicy по умолчанию warn (ограничение окна — opt-in)', () => {
+    expect(defaultConfig.context.windowPolicy).toBe('warn');
   });
 
   it('tsm.maxIterations == 50', () => {

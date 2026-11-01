@@ -43,6 +43,14 @@ export interface LlmFailureContext {
    */
   errorType?: string;
   /**
+   * Политика контекстного окна (`enforce`) заблокировала LLM-вызов: в
+   * metadata сообщения об ошибке пишутся `context_window_exceeded: true` и
+   * оценка промпта `context_window_tokens`.
+   */
+  contextWindowExceeded?: boolean;
+  /** Оценка промпта в токенах на момент блокировки (диагностика). */
+  contextWindowTokens?: number;
+  /**
    * ADR-118 §1/§5: шаг, к которому относится сообщение об ошибке (тот же
    * `messageId`, что у `step.finished`, статус `error`, ход хода).
    */
@@ -164,6 +172,11 @@ export async function handleLlmFailure(
           status: 'error',
           ...(i18n ? { i18n } : {}),
           ...(estimated.estimated ? { usage_estimated: true } : {}),
+          // Политика контекстного окна (`enforce`) — диагностика блокировки.
+          ...(ctx.contextWindowExceeded ? { context_window_exceeded: true } : {}),
+          ...(ctx.contextWindowTokens !== undefined
+            ? { context_window_tokens: ctx.contextWindowTokens }
+            : {}),
         },
         ctx.promptMeta,
         // ADR-118 §1/§5: сообщение об ошибке — часть того же хода/шага.

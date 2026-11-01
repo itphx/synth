@@ -29,6 +29,9 @@ import type {
   ToolsPolicy,
   WorkspaceOutsideRootPolicy,
   ProxyConfig,
+  ContextWindowPolicy,
+  ContextDefaults,
+  StickyNotesLimits,
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
@@ -344,6 +347,49 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearAttachments(): Promise<void> {
     this._clear('attachments');
+  }
+
+  /** Политика ограничения контекстного окна (runtime, админка). */
+  async getContextWindowPolicy(): Promise<ContextWindowPolicy | undefined> {
+    return this._settings.contextWindowPolicy;
+  }
+
+  async setContextWindowPolicy(policy: ContextWindowPolicy): Promise<void> {
+    this._patch({ contextWindowPolicy: policy });
+  }
+
+  async clearContextWindowPolicy(): Promise<void> {
+    this._clear('contextWindowPolicy');
+  }
+
+  /** Дефолты оптимизации контекста новых сессий (runtime, админка). */
+  async getContextDefaults(): Promise<Partial<ContextDefaults> | undefined> {
+    return this._settings.contextDefaults
+      ? structuredClone(this._settings.contextDefaults)
+      : undefined;
+  }
+
+  async setContextDefaults(defaults: Partial<ContextDefaults>): Promise<void> {
+    this._patch({ contextDefaults: structuredClone(defaults) });
+  }
+
+  async clearContextDefaults(): Promise<void> {
+    this._clear('contextDefaults');
+  }
+
+  /** Instance-wide лимиты заметок сессии (`context.stickyNotes`). */
+  async getStickyNotesLimits(): Promise<Partial<StickyNotesLimits> | undefined> {
+    return this._settings.stickyNotesLimits
+      ? structuredClone(this._settings.stickyNotesLimits)
+      : undefined;
+  }
+
+  async setStickyNotesLimits(limits: Partial<StickyNotesLimits>): Promise<void> {
+    this._patch({ stickyNotesLimits: structuredClone(limits) });
+  }
+
+  async clearStickyNotesLimits(): Promise<void> {
+    this._clear('stickyNotesLimits');
   }
 }
 

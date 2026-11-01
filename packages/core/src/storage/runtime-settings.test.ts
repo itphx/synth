@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS } from './runtime-settings.js';
 
 describe('RuntimeSettingsStore.clear* (ADR-072 Ф2)', () => {
   let tmpDir: string;
@@ -879,5 +879,183 @@ describe('createLiveAttachmentsSettings (ADR-115)', () => {
     live.setRuntime({ enabled: true });
     expect(live.getConfig().enabled).toBe(false);
     expect(live.resolve().envLocked).toEqual(['enabled']);
+  });
+});
+
+describe('resolveContextWindowPolicy (context.windowPolicy)', () => {
+  it('приоритет: env > runtime > config > default (warn)', () => {
+    expect(resolveContextWindowPolicy(undefined, undefined, {}).value).toBe('warn');
+    expect(resolveContextWindowPolicy(undefined, undefined, {}).source).toBe('default');
+
+    expect(resolveContextWindowPolicy('off', undefined, {}).value).toBe('off');
+    expect(resolveContextWindowPolicy('off', undefined, {}).source).toBe('config');
+
+    expect(resolveContextWindowPolicy('off', 'enforce', {}).value).toBe('enforce');
+    expect(resolveContextWindowPolicy('off', 'enforce', {}).source).toBe('runtime');
+
+    const env = resolveContextWindowPolicy('off', 'enforce', {
+      SYNTH_CONTEXT_WINDOW_POLICY: 'warn',
+    });
+    expect(env.value).toBe('warn');
+    expect(env.source).toBe('env');
+    expect(env.envLocked).toBe(true);
+  });
+
+  it('невалидное env-значение игнорируется (fail-soft) и не фиксирует политику', () => {
+    const resolved = resolveContextWindowPolicy(undefined, undefined, {
+      SYNTH_CONTEXT_WINDOW_POLICY: 'strict',
+    });
+    expect(resolved.value).toBe('warn');
+    expect(resolved.source).toBe('default');
+    expect(resolved.envLocked).toBe(false);
+  });
+
+  it('живое состояние: setRuntime применяется сразу, env приоритетнее', () => {
+    const live = createLiveContextWindowPolicy({ config: 'warn', env: {} });
+    expect(live.getPolicy()).toBe('warn');
+    live.setRuntime('enforce');
+    expect(live.getPolicy()).toBe('enforce');
+    expect(live.resolve().source).toBe('runtime');
+    live.setRuntime(undefined);
+    expect(live.getPolicy()).toBe('warn');
+
+    const locked = createLiveContextWindowPolicy({
+      env: { SYNTH_CONTEXT_WINDOW_POLICY: 'off' },
+    });
+    locked.setRuntime('enforce');
+    expect(locked.getPolicy()).toBe('off');
+    expect(locked.resolve().envLocked).toBe(true);
+  });
+});
+
+describe('resolveContextDefaults (context.defaults)', () => {
+  it('ранее отсутствовало → дефолты схемы совпадают с прежними литералами', () => {
+    const resolved = resolveContextDefaults(undefined, undefined);
+    expect(resolved.source).toBe('default');
+    expect(resolved.defaultsSource).toBe('default');
+    expect(resolved.value).toEqual({
+      contextOptimization: 'none',
+      summarizationEnabled: false,
+      summarizationTriggerMode: 'messages',
+      summarizeAfterN: 10,
+      summarizeTokenThreshold: 50,
+      summarizationHeadMessages: 2,
+      summarizationTailMessages: 3,
+      slidingWindowMode: 'messages',
+      slidingWindowMessageLimit: 10,
+      slidingWindowTokenThreshold: 80,
+    });
+    expect(DEFAULT_CONTEXT_DEFAULTS).toEqual(resolved.value);
+  });
+
+  it('приоритет: runtime > config > default, патч runtime мёржится поверх config', () => {
+    const config = { contextOptimization: 'sliding_window' as const, slidingWindowMessageLimit: 20 };
+    const runtime = { contextOptimization: 'summarization' as const };
+
+    const fromConfig = resolveContextDefaults(config, undefined);
+    expect(fromConfig.source).toBe('config');
+    expect(fromConfig.defaultsSource).toBe('config');
+    expect(fromConfig.value.contextOptimization).toBe('sliding_window');
+    expect(fromConfig.value.slidingWindowMessageLimit).toBe(20);
+
+    const fromRuntime = resolveContextDefaults(config, runtime);
+    expect(fromRuntime.source).toBe('runtime');
+    expect(fromRuntime.defaultsSource).toBe('config');
+    // runtime перекрыл только своё поле, config остальное сохранил.
+    expect(fromRuntime.value.contextOptimization).toBe('summarization');
+    expect(fromRuntime.value.slidingWindowMessageLimit).toBe(20);
+    expect(fromRuntime.value.summarizeAfterN).toBe(10);
+  });
+
+  it('живое состояние: setRuntime применяется сразу, сброс возвращает config/default', () => {
+    const live = createLiveContextDefaults({
+      config: { slidingWindowMessageLimit: 25 },
+    });
+    expect(live.getDefaults().slidingWindowMessageLimit).toBe(25);
+    expect(live.resolve().source).toBe('config');
+
+    live.setRuntime({ slidingWindowMode: 'tokens' });
+    expect(live.getDefaults().slidingWindowMode).toBe('tokens');
+    expect(live.getDefaults().slidingWindowMessageLimit).toBe(25);
+    expect(live.resolve().source).toBe('runtime');
+    expect(live.getRuntime()).toEqual({ slidingWindowMode: 'tokens' });
+
+    live.setRuntime(undefined);
+    expect(live.getDefaults().slidingWindowMode).toBe('messages');
+    expect(live.resolve().source).toBe('config');
+  });
+
+  it('runtime-хранилище: get/set/clear contextDefaults', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-context-defaults-store-'));
+    try {
+      const store = new RuntimeSettingsStore({ dataDir: dir });
+      expect(await store.getContextDefaults()).toBeUndefined();
+      await store.setContextDefaults({ summarizeAfterN: 3 });
+      expect(await store.getContextDefaults()).toEqual({ summarizeAfterN: 3 });
+      await store.clearContextDefaults();
+      expect(await store.getContextDefaults()).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('resolveStickyNotesLimits (context.stickyNotes)', () => {
+  it('ранее отсутствовало → дефолты схемы 50/2000', () => {
+    const resolved = resolveStickyNotesLimits(undefined, undefined);
+    expect(resolved.source).toBe('default');
+    expect(resolved.defaultsSource).toBe('default');
+    expect(resolved.value).toEqual({ maxCount: 50, maxChars: 2000 });
+    expect(DEFAULT_STICKY_NOTES_LIMITS).toEqual(resolved.value);
+  });
+
+  it('приоритет: runtime > config > default, runtime-патч мёржится поверх config', () => {
+    const config = { maxCount: 10, maxChars: 500 };
+
+    const fromConfig = resolveStickyNotesLimits(config, undefined);
+    expect(fromConfig.source).toBe('config');
+    expect(fromConfig.defaultsSource).toBe('config');
+    expect(fromConfig.value).toEqual({ maxCount: 10, maxChars: 500 });
+
+    const fromRuntime = resolveStickyNotesLimits(config, { maxCount: 3 });
+    expect(fromRuntime.source).toBe('runtime');
+    expect(fromRuntime.defaultsSource).toBe('config');
+    // runtime перекрыл только своё поле, config остальное сохранил.
+    expect(fromRuntime.value).toEqual({ maxCount: 3, maxChars: 500 });
+  });
+
+  it('пустые объекты трактуются как «не задано»', () => {
+    const resolved = resolveStickyNotesLimits({}, {});
+    expect(resolved.source).toBe('default');
+    expect(resolved.value).toEqual({ maxCount: 50, maxChars: 2000 });
+  });
+
+  it('живое состояние: setRuntime применяется сразу, сброс возвращает config/default', () => {
+    const live = createLiveStickyNotesLimits({ config: { maxChars: 300 } });
+    expect(live.getLimits()).toEqual({ maxCount: 50, maxChars: 300 });
+    expect(live.resolve().source).toBe('config');
+
+    live.setRuntime({ maxCount: 5 });
+    expect(live.getLimits()).toEqual({ maxCount: 5, maxChars: 300 });
+    expect(live.resolve().source).toBe('runtime');
+    expect(live.getRuntime()).toEqual({ maxCount: 5 });
+
+    live.setRuntime(undefined);
+    expect(live.getLimits()).toEqual({ maxCount: 50, maxChars: 300 });
+    expect(live.resolve().source).toBe('config');
+  });
+
+  it('runtime-хранилище: get/set/clear stickyNotesLimits', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-sticky-notes-store-'));
+    try {
+      const store = new RuntimeSettingsStore({ dataDir: dir });
+      expect(await store.getStickyNotesLimits()).toBeUndefined();
+      await store.setStickyNotesLimits({ maxChars: 100 });
+      expect(await store.getStickyNotesLimits()).toEqual({ maxChars: 100 });
+      await store.clearStickyNotesLimits();
+      expect(await store.getStickyNotesLimits()).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

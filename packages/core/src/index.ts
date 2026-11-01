@@ -1629,8 +1629,8 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels } from './storage/runtime-settings.js';
-export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair, AttachmentsSettings, AttachmentsRuntimeSettings, ModalityModelsRuntimePatch, AttachmentsSource, ResolvedAttachmentsSettings, LiveAttachmentsSettings } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS } from './storage/runtime-settings.js';
+export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair, AttachmentsSettings, AttachmentsRuntimeSettings, ModalityModelsRuntimePatch, AttachmentsSource, ResolvedAttachmentsSettings, LiveAttachmentsSettings, ContextWindowSource, ResolvedContextWindowPolicy, LiveContextWindowPolicy, ContextDefaultsSource, ResolvedContextDefaults, LiveContextDefaults, StickyNotesLimitsSource, ResolvedStickyNotesLimits, LiveStickyNotesLimits } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
@@ -1896,6 +1896,38 @@ export type {
   AttachmentsSettingsMessages,
   AttachmentsSettingsView,
 } from './server/routes/settings-attachments.js';
+// Политика ограничения контекстного окна — `/api/v2/settings/context-window`.
+export { createContextWindowSettingsRoutes } from './server/routes/settings-context-window.js';
+export type {
+  ContextWindowSettingsDeps,
+  ContextWindowSettingsOptions,
+  ContextWindowSettingsMessages,
+  ContextWindowSettingsView,
+} from './server/routes/settings-context-window.js';
+// Дефолты оптимизации контекста для новых сессий — `/api/v2/settings/context-defaults`.
+export { createContextDefaultsSettingsRoutes } from './server/routes/settings-context-defaults.js';
+export type {
+  ContextDefaultsSettingsDeps,
+  ContextDefaultsSettingsOptions,
+  ContextDefaultsSettingsMessages,
+  ContextDefaultsSettingsView,
+} from './server/routes/settings-context-defaults.js';
+// Instance-wide лимиты заметок сессии — `/api/v2/settings/sticky-notes`.
+export { createStickyNotesSettingsRoutes } from './server/routes/settings-sticky-notes.js';
+export type {
+  StickyNotesSettingsDeps,
+  StickyNotesSettingsOptions,
+  StickyNotesSettingsMessages,
+  StickyNotesSettingsView,
+} from './server/routes/settings-sticky-notes.js';
+// Проверка «влезает ли промпт в окно модели» — оркестратор перед LLM-вызовом.
+export { checkContextWindowWindow } from './engine/context/window-guard.js';
+export type {
+  ContextWindowCheckInput,
+  ContextWindowCheckResult,
+  ContextWindowGuardAction,
+  ContextWindowGuardReason,
+} from './engine/context/window-guard.js';
 export type {
   ProcessRoutesAuth,
   ProcessRoutesDeps,

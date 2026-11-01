@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import { z } from 'zod';
 import {
   gitRepoConfigSchema,
@@ -27,8 +27,81 @@ import {
   scheduleSchema,
   scheduleJobSchema,
   eventRouteTargetSchema,
+  contextDefaultsSchema,
+  stickyNotesLimitsSchema,
 } from './index.js';
 import { PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS } from '../types/index.js';
+import type { ContextDefaults, StickyNotesLimits } from '../types/index.js';
+
+describe('contextDefaultsSchema (дефолты оптимизации контекста)', () => {
+  it('схема и контракт типа ContextDefaults совпадают', () => {
+    expectTypeOf(contextDefaultsSchema.parse({})).toEqualTypeOf<ContextDefaults>();
+  });
+  it('parse({}) даёт прежние дефолты SessionManager', () => {
+    expect(contextDefaultsSchema.parse({})).toEqual({
+      contextOptimization: 'none',
+      summarizationEnabled: false,
+      summarizationTriggerMode: 'messages',
+      summarizeAfterN: 10,
+      summarizeTokenThreshold: 50,
+      summarizationHeadMessages: 2,
+      summarizationTailMessages: 3,
+      slidingWindowMode: 'messages',
+      slidingWindowMessageLimit: 10,
+      slidingWindowTokenThreshold: 80,
+    });
+  });
+
+  it('частичный патч через patchObjectSchema не подставляет дефолты', () => {
+    const patch = patchObjectSchema(contextDefaultsSchema);
+    expect(patch.parse({})).toEqual({});
+    expect(patch.parse({ summarizeAfterN: 5 })).toEqual({ summarizeAfterN: 5 });
+  });
+
+  it('границы: сообщения ≥ 1, проценты 1..100', () => {
+    expect(contextDefaultsSchema.safeParse({ summarizeAfterN: 0 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ slidingWindowMessageLimit: 0 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ summarizationHeadMessages: 0 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ summarizeTokenThreshold: 0 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ summarizeTokenThreshold: 101 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ slidingWindowTokenThreshold: 101 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ summarizeTokenThreshold: 1 }).success).toBe(true);
+    expect(contextDefaultsSchema.safeParse({ summarizeTokenThreshold: 100 }).success).toBe(true);
+  });
+
+  it('неизвестное значение режима — ошибка', () => {
+    expect(contextDefaultsSchema.safeParse({ contextOptimization: 'unknown' }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ slidingWindowMode: 'tokens' }).success).toBe(true);
+  });
+});
+
+describe('stickyNotesLimitsSchema (лимиты заметок инстанса)', () => {
+  it('схема и контракт типа StickyNotesLimits совпадают', () => {
+    expectTypeOf(stickyNotesLimitsSchema.parse({})).toEqualTypeOf<StickyNotesLimits>();
+  });
+
+  it('parse({}) даёт 50 заметок и 2000 символов', () => {
+    expect(stickyNotesLimitsSchema.parse({})).toEqual({ maxCount: 50, maxChars: 2000 });
+  });
+
+  it('границы: maxCount 1..1000, maxChars 1..100000', () => {
+    expect(stickyNotesLimitsSchema.safeParse({ maxCount: 1 }).success).toBe(true);
+    expect(stickyNotesLimitsSchema.safeParse({ maxCount: 1000 }).success).toBe(true);
+    expect(stickyNotesLimitsSchema.safeParse({ maxCount: 0 }).success).toBe(false);
+    expect(stickyNotesLimitsSchema.safeParse({ maxCount: 1001 }).success).toBe(false);
+    expect(stickyNotesLimitsSchema.safeParse({ maxChars: 1 }).success).toBe(true);
+    expect(stickyNotesLimitsSchema.safeParse({ maxChars: 100000 }).success).toBe(true);
+    expect(stickyNotesLimitsSchema.safeParse({ maxChars: 0 }).success).toBe(false);
+    expect(stickyNotesLimitsSchema.safeParse({ maxChars: 100001 }).success).toBe(false);
+    expect(stickyNotesLimitsSchema.safeParse({ maxCount: 1.5 }).success).toBe(false);
+  });
+
+  it('частичный патч через patchObjectSchema не подставляет дефолты', () => {
+    const patch = patchObjectSchema(stickyNotesLimitsSchema);
+    expect(patch.parse({})).toEqual({});
+    expect(patch.parse({ maxChars: 500 })).toEqual({ maxChars: 500 });
+  });
+});
 
 describe('normalizeGitRepoConfig (ADR-076)', () => {
   it('строка → { path }', () => {

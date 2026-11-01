@@ -118,6 +118,12 @@ export interface StandaloneConfig {
    */
   toolsConfig?: SynthConfig['tools'];
   /**
+   * Секция `context` — политика ограничения контекстного окна
+   * (`context.windowPolicy`: off | warn | enforce). Не задана — дефолт `warn`;
+   * runtime-override — `settings/context-window`.
+   */
+  contextConfig?: SynthConfig['context'];
+  /**
    * ADR-075: политика для абсолютного workspace вне `workspacesRoot` из
    * config.yaml/env (`confirm` | `deny`). Runtime-override — settings/workspace-policy.
    */

@@ -917,4 +917,57 @@ describe('ADR-089: ephemeral-сессии (TTL, архивация)', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.archivedAt).toBeDefined();
   });
+
+  it('contextDefaults: дефолты инстанса применяются к новой сессии', async () => {
+    const withDefaults = new SessionManager(store, {
+      contextDefaults: () => ({
+        contextOptimization: 'summarization',
+        summarizationEnabled: true,
+        summarizationTriggerMode: 'tokens',
+        summarizeAfterN: 7,
+        summarizeTokenThreshold: 60,
+        summarizationHeadMessages: 3,
+        summarizationTailMessages: 4,
+        slidingWindowMode: 'tokens',
+        slidingWindowMessageLimit: 12,
+        slidingWindowTokenThreshold: 70,
+      }),
+    });
+    const session = await withDefaults.createSession({});
+    expect(session.settings.contextOptimization).toBe('summarization');
+    expect(session.settings.summarizationEnabled).toBe(true);
+    expect(session.settings.summarizationTriggerMode).toBe('tokens');
+    expect(session.settings.summarizeAfterN).toBe(7);
+    expect(session.settings.summarizeTokenThreshold).toBe(60);
+    expect(session.settings.summarizationHeadMessages).toBe(3);
+    expect(session.settings.summarizationTailMessages).toBe(4);
+    expect(session.settings.slidingWindowMode).toBe('tokens');
+    expect(session.settings.slidingWindowMessageLimit).toBe(12);
+    expect(session.settings.slidingWindowTokenThreshold).toBe(70);
+  });
+
+  it('contextDefaults: явные настройки сессии приоритетнее дефолтов', async () => {
+    const withDefaults = new SessionManager(store, {
+      contextDefaults: () => ({ contextOptimization: 'summarization', summarizeAfterN: 7 }),
+    });
+    const session = await withDefaults.createSession({
+      settings: { contextOptimization: 'sliding_window', summarizeAfterN: 2 },
+    });
+    expect(session.settings.contextOptimization).toBe('sliding_window');
+    expect(session.settings.summarizeAfterN).toBe(2);
+  });
+
+  it('contextDefaults: без опции поведение прежнее (литералы)', async () => {
+    const session = await manager.createSession({});
+    expect(session.settings.contextOptimization).toBe('none');
+    expect(session.settings.summarizationEnabled).toBe(false);
+    expect(session.settings.summarizationTriggerMode).toBe('messages');
+    expect(session.settings.summarizeAfterN).toBe(10);
+    expect(session.settings.summarizeTokenThreshold).toBe(50);
+    expect(session.settings.summarizationHeadMessages).toBe(2);
+    expect(session.settings.summarizationTailMessages).toBe(3);
+    expect(session.settings.slidingWindowMode).toBe('messages');
+    expect(session.settings.slidingWindowMessageLimit).toBe(10);
+    expect(session.settings.slidingWindowTokenThreshold).toBe(80);
+  });
 });

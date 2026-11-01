@@ -85,7 +85,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 ### Env-оверрайды вложенных секций (ADR-023)
 
 Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
-`questions`, `background`, `agents`, `tools`, `authority` можно задавать
+`questions`, `background`, `context`, `agents`, `tools`, `authority` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
 собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -158,6 +158,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (предохранитель по объёму промпта саб-агента; `0` — без ограничения) |
 | `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (лимит глубины вложенности саб-агентов; `0` — без ограничения) |
 | `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (лимит вывода по умолчанию; `0` — авто-дефолт ядра) |
+| `SYNTH_CONTEXT_WINDOW_POLICY` | string (`off`/`warn`/`enforce`) | `context.windowPolicy` (политика ограничения контекстного окна; дефолт `warn`) |
 | `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (общий предел вывода инструментов, строк; ≥ 1) |
 | `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (общий предел вывода инструментов, байт; ≥ 1) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
@@ -1655,6 +1656,104 @@ background:
 agents:
   subagentMaxInputTokens: 150000
   subagentDepth: 1
+```
+
+### Контекстное окно модели (`context.*`)
+
+`context.windowPolicy` — что делать, когда оценка промпта не влезает в контекстное окно модели:
+
+- `off` — проверок нет: ни предупреждений, ни блокировки (UI скрывает баннеры);
+- `warn` (по умолчанию) — сервер **не блокирует**, предупреждения о заполнении рисует UI;
+- `enforce` — LLM-вызов **не отправляется**, если оценка промпта больше `окно − резерв`, и ход
+  завершается ошибкой `router.context_length_exceeded` (`error_type: 'context_length'`, статус
+  `error`, metadata `context_window_exceeded`/`context_window_tokens`).
+
+Окно берётся из каталога модели (`ModelConfig.contextWindow`; если не задано — из встроенного
+справочника известных моделей). Резерв под вывод — эффективный лимит `max_tokens`
+(`resolveMaxOutputTokens`: значение сессии → `ModelConfig.maxOutputTokens` → `llm.maxTokens` → 8192).
+Оценка промпта — `estimatePromptChars` + калиброванный chars-per-token. **Неизвестное окно (`0`)
+не блокирует никогда**: оценка без окна бессмысленна, а тихая блокировка всех ходов была бы
+регрессией — это предохранитель, а не бюджетирование.
+
+Политика резолвится **live**, перед каждым LLM-вызовом, поэтому изменение применяется без рестарта.
+Приоритет: env `SYNTH_CONTEXT_WINDOW_POLICY` > runtime (`GET/PUT/DELETE
+/api/v2/settings/context-window`, `settings.json`/PG) > `config.yaml` > дефолт `warn`; если политика
+задана через env, попытка выставить другое значение получает 409 `CONFLICT`.
+
+```yaml
+context:
+  windowPolicy: warn
+```
+
+#### Дефолты оптимизации контекста для новых сессий (`context.defaults`)
+
+`context.defaults` — instance-wide значения оптимизации контекста, которые получает **новая**
+сессия без явных настроек. Существующие сессии не меняются; явные `settings` запроса всегда
+приоритетнее. Резолвится при создании сессии, поэтому runtime-изменение действует **сразу**, без
+рестарта.
+
+| Поле | Дефолт | Значение |
+|---|---|---|
+| `contextOptimization` | `none` | `none` \| `sliding_window` \| `summarization` |
+| `summarizationEnabled` | `false` | авто-суммаризация включена |
+| `summarizationTriggerMode` | `messages` | `messages` \| `tokens` |
+| `summarizeAfterN` | `10` | сообщений до запуска суммаризации (≥1) |
+| `summarizeTokenThreshold` | `50` | порог суммаризации, % окна модели (1..100) |
+| `summarizationHeadMessages` | `2` | сообщений в «голове» сводки (≥1) |
+| `summarizationTailMessages` | `3` | сообщений в «хвосте» сводки (≥1) |
+| `slidingWindowMode` | `messages` | `messages` \| `tokens` |
+| `slidingWindowMessageLimit` | `10` | сообщений в скользящем окне (≥1) |
+| `slidingWindowTokenThreshold` | `80` | порог скользящего окна, % окна модели (1..100) |
+
+Заметки сессии (`context.stickyNotes`) — не стратегия оптимизации: они работают независимо от
+выбранной стратегии (добавляются в системный промпт всегда). `sticky_notes` остаётся только
+legacy-значением сохранённых сессий и в дефолтах/UI не предлагается.
+
+Приоритет: runtime (`GET/PUT/DELETE /api/v2/settings/context-defaults`, `settings.json`/PG; PUT —
+частичный патч, мёржится поверх config) > `config.yaml` `context.defaults` > дефолты схемы.
+Env-переменных у этих значений нет. В managed-режиме раздел админки доступен только `ADMIN`.
+
+```yaml
+context:
+  windowPolicy: warn
+  defaults:
+    contextOptimization: summarization
+    summarizationEnabled: true
+    summarizationTriggerMode: messages
+    summarizeAfterN: 12
+    summarizeTokenThreshold: 60
+    summarizationHeadMessages: 2
+    summarizationTailMessages: 4
+    slidingWindowMode: messages
+    slidingWindowMessageLimit: 10
+    slidingWindowTokenThreshold: 80
+```
+
+#### Лимиты заметок сессии (`context.stickyNotes`)
+
+`context.stickyNotes` задаёт **ограничения инстанса** для заметок сессии
+(`/api/v2/sessions/:id/notes`) — не дефолты сессии: они применяются ко **всем**
+сессиям при создании/изменении заметки.
+
+| Поле | Дефолт | Значение |
+|---|---|---|
+| `maxCount` | `50` | максимум заметок на сессию (1..1000); при достижении создание → 409 `LIMIT_EXCEEDED` |
+| `maxChars` | `2000` | максимум символов в заметке (1..100000); длиннее → 400 `VALIDATION_ERROR` |
+
+Ограничения — предохранитель от «бездонного» канала контекста: заметки попадают в системный
+промпт. **Существующие заметки не удаляются и не обрезаются** при понижении лимита — он
+действует только на новые записи (и на изменение текста). Резолвер читается при каждой операции
+с заметкой, поэтому runtime-изменение действует **сразу**, без рестарта.
+
+Приоритет: runtime (`GET/PUT/DELETE /api/v2/settings/sticky-notes`, `settings.json`/PG; PUT —
+частичный патч, мёржится поверх config) > `config.yaml` `context.stickyNotes` > дефолты схемы.
+Env-переменных у этих значений нет. В managed-режиме раздел админки доступен только `ADMIN`.
+
+```yaml
+context:
+  stickyNotes:
+    maxCount: 50
+    maxChars: 2000
 ```
 
 ### Каталог моделей (`{dataDir}/models/`, `ModelConfig`)

@@ -1,8 +1,8 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef } from '@itphx/synth-shared';
-import { ATTACHMENT_FAMILIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits } from '@itphx/synth-shared';
+import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '@itphx/synth-shared';
 import { defaultConfig, parseAttachmentsModalities } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
@@ -189,6 +189,254 @@ export interface ResolvedAttachmentsSettings {
   envLocked: string[];
 }
 
+/** Источник эффективного значения политики контекстного окна. */
+export type ContextWindowSource = 'env' | 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга `context.windowPolicy` (env > runtime > config > default). */
+export interface ResolvedContextWindowPolicy {
+  value: ContextWindowPolicy;
+  source: ContextWindowSource;
+  /** Политика задана через env: runtime её не перекрывает. */
+  envLocked: boolean;
+}
+
+/** Env-имя политики контекстного окна (ADR-023). */
+export const CONTEXT_WINDOW_POLICY_ENV = 'SYNTH_CONTEXT_WINDOW_POLICY';
+
+/** Канонические значения политики (для валидации env/API). */
+export const CONTEXT_WINDOW_POLICY_VALUES = CONTEXT_WINDOW_POLICIES;
+
+/** Значение политики по умолчанию (совпадает с дефолтом схемы). */
+export const DEFAULT_CONTEXT_WINDOW_POLICY: ContextWindowPolicy = 'warn';
+
+/** Прочитать политику из env (невалидное — warn + игнор, fail-soft). */
+function readContextWindowPolicyEnv(env: NodeJS.ProcessEnv): ContextWindowPolicy | undefined {
+  const raw = env[CONTEXT_WINDOW_POLICY_ENV];
+  if (raw === undefined || raw === '') return undefined;
+  if ((CONTEXT_WINDOW_POLICY_VALUES as readonly string[]).includes(raw)) {
+    return raw as ContextWindowPolicy;
+  }
+  console.warn(
+    `[config] невалидное значение ${CONTEXT_WINDOW_POLICY_ENV}="${raw}" (ожидается ${CONTEXT_WINDOW_POLICY_VALUES.join('|')}) — игнорируется`,
+  );
+  return undefined;
+}
+
+/**
+ * Эффективная политика контекстного окна — приоритет
+ * **env > runtime > config.yaml > default**.
+ *
+ * Функция чистая (без I/O): оркестратор читает её перед **каждым** LLM-вызовом,
+ * поэтому runtime-изменение из админки применяется без рестарта.
+ */
+export function resolveContextWindowPolicy(
+  configValue?: ContextWindowPolicy,
+  runtimeValue?: ContextWindowPolicy,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedContextWindowPolicy {
+  const envValue = readContextWindowPolicyEnv(env);
+  if (envValue) return { value: envValue, source: 'env', envLocked: true };
+  if (runtimeValue) return { value: runtimeValue, source: 'runtime', envLocked: false };
+  if (configValue) return { value: configValue, source: 'config', envLocked: false };
+  return { value: DEFAULT_CONTEXT_WINDOW_POLICY, source: 'default', envLocked: false };
+}
+
+/**
+ * Живое состояние политики контекстного окна процесса (ADR-023).
+ *
+ * Хранит runtime-значение в памяти (инициализируется из `settings.json`/PG при
+ * старте, обновляется роутом `/api/v2/settings/context-window`). Резолвер
+ * синхронный — его читает оркестратор перед каждым LLM-вызовом.
+ */
+export interface LiveContextWindowPolicy {
+  getRuntime(): ContextWindowPolicy | undefined;
+  setRuntime(next: ContextWindowPolicy | undefined): void;
+  resolve(): ResolvedContextWindowPolicy;
+  getPolicy(): ContextWindowPolicy;
+}
+
+/** Собрать живое состояние политики контекстного окна. */
+export function createLiveContextWindowPolicy(params: {
+  config?: ContextWindowPolicy;
+  runtime?: ContextWindowPolicy;
+  env?: NodeJS.ProcessEnv;
+}): LiveContextWindowPolicy {
+  let runtime = params.runtime;
+  const env = params.env ?? process.env;
+  const resolve = (): ResolvedContextWindowPolicy =>
+    resolveContextWindowPolicy(params.config, runtime, env);
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next ?? undefined;
+    },
+    resolve,
+    getPolicy: () => resolve().value,
+  };
+}
+
+/**
+ * Источник эффективных дефолтов оптимизации контекста.
+ *
+ * env-оверрайда у этих значений нет (это дефолты новых сессий, а не политика
+ * безопасности) — приоритет **runtime > config.yaml > default схемы**.
+ */
+export type ContextDefaultsSource = 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга `context.defaults` (runtime > config > default). */
+export interface ResolvedContextDefaults {
+  /** Эффективные значения — их получает `SessionManager.createSession`. */
+  value: ContextDefaults;
+  /** Источник эффективного значения. */
+  source: ContextDefaultsSource;
+  /** База без runtime (к чему вернёт `DELETE`). */
+  defaultsSource: Exclude<ContextDefaultsSource, 'runtime'>;
+}
+
+/** Дефолты схемы — совпадают с прежними литералами `createSession`. */
+export const DEFAULT_CONTEXT_DEFAULTS: ContextDefaults = defaultConfig.context.defaults;
+
+/** Мёржит заданные поля (undefined не перекрывает базу). */
+function mergeContextDefaults(
+  base: ContextDefaults,
+  ...patches: Array<Partial<ContextDefaults> | undefined>
+): ContextDefaults {
+  const merged: Record<string, unknown> = { ...base };
+  for (const patch of patches) {
+    if (!patch) continue;
+    for (const [key, value] of Object.entries(patch)) {
+      if (value !== undefined) merged[key] = value;
+    }
+  }
+  return merged as unknown as ContextDefaults;
+}
+
+/**
+ * Эффективные дефолты оптимизации контекста: runtime-патч мёржится поверх
+ * config.yaml, отсутствие — дефолты схемы.
+ *
+ * Функция чистая (без I/O): менеджер сессий читает её при **создании** сессии,
+ * поэтому runtime-изменение из админки действует на новые сессии без рестарта.
+ */
+export function resolveContextDefaults(
+  configValue?: Partial<ContextDefaults>,
+  runtimeValue?: Partial<ContextDefaults>,
+): ResolvedContextDefaults {
+  const hasConfig = !!configValue && Object.keys(configValue).length > 0;
+  const hasRuntime = !!runtimeValue && Object.keys(runtimeValue).length > 0;
+  return {
+    value: mergeContextDefaults(DEFAULT_CONTEXT_DEFAULTS, configValue, runtimeValue),
+    source: hasRuntime ? 'runtime' : hasConfig ? 'config' : 'default',
+    defaultsSource: hasConfig ? 'config' : 'default',
+  };
+}
+
+/**
+ * Живое состояние дефолтов оптимизации контекста процесса (ADR-023).
+ *
+ * Хранит runtime-патч в памяти (инициализируется из `settings.json`/PG при
+ * старте, обновляется роутом `/api/v2/settings/context-defaults`). Резолвер
+ * синхронный — его читает `SessionManager` при создании сессии.
+ */
+export interface LiveContextDefaults {
+  getRuntime(): Partial<ContextDefaults> | undefined;
+  setRuntime(next: Partial<ContextDefaults> | undefined): void;
+  resolve(): ResolvedContextDefaults;
+  getDefaults(): ContextDefaults;
+}
+
+/** Собрать живое состояние дефолтов оптимизации контекста. */
+export function createLiveContextDefaults(params: {
+  config?: Partial<ContextDefaults>;
+  runtime?: Partial<ContextDefaults>;
+}): LiveContextDefaults {
+  let runtime = params.runtime;
+  const resolve = (): ResolvedContextDefaults => resolveContextDefaults(params.config, runtime);
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next;
+    },
+    resolve,
+    getDefaults: () => resolve().value,
+  };
+}
+
+/**
+ * Источник эффективных лимитов заметок сессии (`context.stickyNotes`).
+ *
+ * env-оверрайда у этих значений нет (это ограничения инстанса, а не секрет):
+ * приоритет **runtime > config.yaml > default схемы**.
+ */
+export type StickyNotesLimitsSource = 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга `context.stickyNotes` (runtime > config > default). */
+export interface ResolvedStickyNotesLimits {
+  /** Эффективные лимиты — их читает core-фабрика сессий на каждый запрос. */
+  value: StickyNotesLimits;
+  /** Источник эффективного значения. */
+  source: StickyNotesLimitsSource;
+  /** База без runtime (к чему вернёт `DELETE`). */
+  defaultsSource: Exclude<StickyNotesLimitsSource, 'runtime'>;
+}
+
+/** Лимиты схемы — совпадают с дефолтами `contextConfigSchema`/`defaultConfig`. */
+export const DEFAULT_STICKY_NOTES_LIMITS: StickyNotesLimits = defaultConfig.context.stickyNotes;
+
+/**
+ * Эффективные лимиты заметок: runtime-патч мёржится поверх config.yaml,
+ * отсутствие — дефолты схемы.
+ *
+ * Функция чистая (без I/O): core-фабрика сессий читает резолвер на каждый
+ * запрос, поэтому runtime-изменение из админки применяется без рестарта.
+ */
+export function resolveStickyNotesLimits(
+  configValue?: Partial<StickyNotesLimits>,
+  runtimeValue?: Partial<StickyNotesLimits>,
+): ResolvedStickyNotesLimits {
+  const hasConfig = !!configValue && Object.keys(configValue).length > 0;
+  const hasRuntime = !!runtimeValue && Object.keys(runtimeValue).length > 0;
+  return {
+    value: {
+      maxCount: runtimeValue?.maxCount ?? configValue?.maxCount ?? DEFAULT_STICKY_NOTES_LIMITS.maxCount,
+      maxChars: runtimeValue?.maxChars ?? configValue?.maxChars ?? DEFAULT_STICKY_NOTES_LIMITS.maxChars,
+    },
+    source: hasRuntime ? 'runtime' : hasConfig ? 'config' : 'default',
+    defaultsSource: hasConfig ? 'config' : 'default',
+  };
+}
+
+/**
+ * Живое состояние лимитов заметок процесса (ADR-023).
+ *
+ * Хранит runtime-патч в памяти (инициализируется из `settings.json`/PG при
+ * старте, обновляется роутом `/api/v2/settings/sticky-notes`). Резолвер
+ * синхронный — его читает core-фабрика сессий при каждой операции с заметкой.
+ */
+export interface LiveStickyNotesLimits {
+  getRuntime(): Partial<StickyNotesLimits> | undefined;
+  setRuntime(next: Partial<StickyNotesLimits> | undefined): void;
+  resolve(): ResolvedStickyNotesLimits;
+  getLimits(): StickyNotesLimits;
+}
+
+/** Собрать живое состояние лимитов заметок сессии. */
+export function createLiveStickyNotesLimits(params: {
+  config?: Partial<StickyNotesLimits>;
+  runtime?: Partial<StickyNotesLimits>;
+}): LiveStickyNotesLimits {
+  let runtime = params.runtime;
+  const resolve = (): ResolvedStickyNotesLimits => resolveStickyNotesLimits(params.config, runtime);
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next;
+    },
+    resolve,
+    getLimits: () => resolve().value,
+  };
+}
+
 /**
  * Модель по умолчанию инстанса — явная пара `provider` + `model`.
  *
@@ -268,6 +516,25 @@ export interface RuntimeSettings {
    * допускается `null` — снятие записи семейства (ADR-115).
    */
   attachments?: AttachmentsRuntimeSettings;
+  /**
+   * Политика ограничения контекстного окна (`context.windowPolicy`):
+   * `off` | `warn` | `enforce`. Применяется **сразу** — оркестратор читает
+   * резолвер перед каждым LLM-вызовом (без рестарта).
+   */
+  contextWindowPolicy?: ContextWindowPolicy;
+  /**
+   * Дефолты оптимизации контекста для **новых** сессий (`context.defaults`).
+   * Частичный патч: применяется сразу — менеджер сессий читает резолвер при
+   * создании (без рестарта); существующие сессии не меняются.
+   */
+  contextDefaults?: Partial<ContextDefaults>;
+  /**
+   * Instance-wide лимиты заметок сессии (`context.stickyNotes`): максимум
+   * заметок и символов. Применяются **сразу** — core-фабрика сессий читает
+   * резолвер при каждой операции с заметкой (без рестарта); существующие
+   * заметки не удаляются и не обрезаются.
+   */
+  stickyNotesLimits?: Partial<StickyNotesLimits>;
 }
 
 /**
@@ -1152,6 +1419,60 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.attachments;
+      return next;
+    });
+  }
+
+  /** Политика контекстного окна (`context.windowPolicy`), undefined — не задана. */
+  async getContextWindowPolicy(): Promise<ContextWindowPolicy | undefined> {
+    const settings = await this.load();
+    return settings.contextWindowPolicy;
+  }
+
+  async setContextWindowPolicy(policy: ContextWindowPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, contextWindowPolicy: policy }));
+  }
+
+  async clearContextWindowPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.contextWindowPolicy;
+      return next;
+    });
+  }
+
+  /** Дефолты оптимизации контекста новых сессий (`context.defaults`). */
+  async getContextDefaults(): Promise<Partial<ContextDefaults> | undefined> {
+    const settings = await this.load();
+    return settings.contextDefaults;
+  }
+
+  async setContextDefaults(defaults: Partial<ContextDefaults>): Promise<void> {
+    await this._update((current) => ({ ...current, contextDefaults: defaults }));
+  }
+
+  async clearContextDefaults(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.contextDefaults;
+      return next;
+    });
+  }
+
+  /** Instance-wide лимиты заметок сессии (`context.stickyNotes`). */
+  async getStickyNotesLimits(): Promise<Partial<StickyNotesLimits> | undefined> {
+    const settings = await this.load();
+    return settings.stickyNotesLimits;
+  }
+
+  async setStickyNotesLimits(limits: Partial<StickyNotesLimits>): Promise<void> {
+    await this._update((current) => ({ ...current, stickyNotesLimits: limits }));
+  }
+
+  async clearStickyNotesLimits(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.stickyNotesLimits;
       return next;
     });
   }

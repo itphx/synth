@@ -36,7 +36,7 @@ import type { EventHub } from '../events/hub.js';
 import type { ProjectRepository } from '@itphx/synth-core';
 import type { MemoryFactRepository, MemoryIndexRepository } from '@itphx/synth-core';
 import type { BlobRefRepository, BlobStore } from '@itphx/synth-core';
-import type { AttachmentsConfig } from '@itphx/synth-shared';
+import type { AttachmentsConfig, StickyNotesLimits } from '@itphx/synth-shared';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
 import type { QuestionService } from '@itphx/synth-core';
 // ADR-114: сервис worktree'ов — привязка сессии к worktree.
@@ -51,9 +51,9 @@ import { createProjectAccess } from './projects.js';
 /**
  * Backend-обёртка над core-фабрикой сессий (ТД-1, фаза B2). Здесь остаются только
  * backend-специфичные роуты (MCP-скоуп сессии, секреты, export/import, отладка,
- * оптимизация контекста, sticky notes). Общая логика (список/создание/чтение/
- * изменение/удаление, status/prompt/stats, очередь+SSE, children/tree/fork,
- * references, merge) — в `createSessionRoutes` из `@itphx/synth-core`.
+ * оптимизация контекста). Общая логика (список/создание/чтение/изменение/
+ * удаление, status/prompt/stats, заметки (`notes`), очередь+SSE, children/tree/
+ * fork, references, merge) — в `createSessionRoutes` из `@itphx/synth-core`.
  *
  * RBAC: core-фабрика параметризуется `resolveUserId`/`resolveOwner`/`resolveAuthor`,
  * `canAccess` (владелец|ADMIN) и EventHub-хуками; remote/hybrid-ветки отключены
@@ -132,6 +132,11 @@ export function createSessionRoutes(
    * WS-кадр `permission_reply`. Не задан — слой Authority выключен/в shadow.
    */
   approvalRegistry?: ApprovalRegistry,
+  /**
+   * Instance-wide лимиты заметок сессии (`context.stickyNotes`, live-резолвер)
+   * — прокидывается в core-фабрику: роуты заметок живут там (единая реализация).
+   */
+  getStickyNoteLimits?: () => StickyNotesLimits,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -626,101 +631,6 @@ export function createSessionRoutes(
     return c.json({ success: true });
   });
 
-  // ===== Sticky Notes =====
-
-  // GET /api/v2/sessions/:id/notes — список заметок
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.get('/:id/notes', kit.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
-
-    return c.json({ notes: session.stickyNotes });
-  });
-
-  // POST /api/v2/sessions/:id/notes — создать заметку
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.post('/:id/notes', kit.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
-
-    const body = await c.req.json().catch(() => ({}));
-    if (!body.content?.trim()) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Content is required' } }, 400);
-    }
-
-    const now = nowISO();
-    const note = {
-      id: generateStreamId(),
-      content: body.content.trim(),
-      createdAt: now,
-      updatedAt: now,
-      disabled: false,
-    };
-
-    await sessionManager.withLock(c.req.param('id'), async (s) => {
-      s.stickyNotes.push(note);
-      await sessionManager.saveSession(s);
-    });
-
-    const updated = await sessionManager.getSession(c.req.param('id'));
-    eventBus.publish(c.req.param('id'), 'context.sticky_note_added', { note_id: note.id });
-    return c.json({ note, notes: updated!.stickyNotes }, 201);
-  });
-
-  // PATCH /api/v2/sessions/:id/notes/:noteId — обновить заметку
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.patch('/:id/notes/:noteId', kit.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
-
-    const body = await c.req.json().catch(() => ({}));
-    const noteId = c.req.param('noteId');
-
-    await sessionManager.withLock(c.req.param('id'), async (s) => {
-      const note = s.stickyNotes.find((n) => n.id === noteId);
-      if (!note) throw new Error('Note not found');
-
-      if (body.content !== undefined) note.content = body.content;
-      if (body.disabled !== undefined) note.disabled = body.disabled;
-      note.updatedAt = nowISO();
-      await sessionManager.saveSession(s);
-    });
-
-    const updated = await sessionManager.getSession(c.req.param('id'));
-    eventBus.publish(c.req.param('id'), 'context.sticky_note_updated', { note_id: noteId });
-    return c.json({ notes: updated!.stickyNotes });
-  });
-
-  // DELETE /api/v2/sessions/:id/notes/:noteId — удалить заметку
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.delete('/:id/notes/:noteId', kit.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
-
-    const noteId = c.req.param('noteId');
-
-    await sessionManager.withLock(c.req.param('id'), async (s) => {
-      s.stickyNotes = s.stickyNotes.filter((n) => n.id !== noteId);
-      await sessionManager.saveSession(s);
-    });
-
-    const updated = await sessionManager.getSession(c.req.param('id'));
-    eventBus.publish(c.req.param('id'), 'context.sticky_note_deleted', { note_id: noteId });
-    return c.json({ notes: updated!.stickyNotes });
-  });
-
   // Общая логика — в core-фабрике (backend-специфика выше). Регистрируем её
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
@@ -758,6 +668,9 @@ export function createSessionRoutes(
       promptMessageId: 'stream',
       publishRenamed: false,
       publishDeletedBefore: false,
+      // Instance-wide лимиты заметок сессии (`context.stickyNotes`): роуты
+      // заметок — в core-фабрике, лимиты читаются резолвером (live).
+      ...(getStickyNoteLimits ? { getStickyNoteLimits } : {}),
       onSessionCreated: (userId, sessionId) => { void eventHub.subscribeToSession(userId, sessionId).catch((e: unknown) => console.warn('subscribeToSession failed:', e)); },
       onSessionDeleted: (userId, sessionId) => { eventHub.unsubscribeFromSession(userId, sessionId); },
       onSessionForked:  (userId, sessionId) => { void eventHub.subscribeToSession(userId, sessionId).catch((e: unknown) => console.warn('subscribeToSession failed:', e)); },
@@ -789,6 +702,10 @@ export function createSessionRoutes(
         contentRequired: (c) => t('errors.validation.contentRequired', undefined, c),
         queueFull: (c, max) => t('errors.chat.queueFull', { max }, c),
         steerLimitExceeded: (c, max) => t('errors.chat.steerLimitExceeded', { max }, c),
+        // Лимиты заметок сессии (`context.stickyNotes`) — instance-wide.
+        noteNotFound: (c) => t('errors.notFound.note', undefined, c),
+        noteLimitReached: (c, max) => t('errors.conflict.noteLimitReached', { max }, c),
+        noteTooLong: (c, max) => t('errors.validation.noteTooLong', { max }, c),
       },
     },
   ));

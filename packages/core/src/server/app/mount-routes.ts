@@ -25,6 +25,9 @@ import {
   createStorageContextAsync,
   createMetricsSettingsRoutes,
   createAttachmentsSettingsRoutes, createModalityModelLookup,
+  createContextWindowSettingsRoutes,
+  createContextDefaultsSettingsRoutes,
+  createStickyNotesSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -188,6 +191,9 @@ export function mountStandaloneRoutes(
     },
     {
       resolveDefaultAgent: getDefaultAgentId,
+      // Instance-wide лимиты заметок сессии (`context.stickyNotes`) — live-резолвер:
+      // runtime-настройка админки применяется без рестарта.
+      getStickyNoteLimits: () => deps.stickyNotesLimitsSettings.getLimits(),
       // ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
       // при чтении — список сессий и доступ по id.
       localOwnerResolver: deps.localOwnerResolver,
@@ -562,6 +568,46 @@ export function mountStandaloneRoutes(
       // ADR-115: проверка `modalityModels` по каталогу (провайдер + модель +
       // модальности модели) — до записи runtime-патча.
       lookupModel: createModalityModelLookup({ providers: providerStore, models: modelStore }),
+    },
+  ));
+
+  // Политика ограничения контекстного окна (`context.windowPolicy`):
+  // `off` | `warn` | `enforce`; применяется сразу (оркестратор читает резолвер
+  // перед каждым LLM-вызовом). Core — `requireAuth` (single-user).
+  app.route('/api/v2/settings', createContextWindowSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.contextConfig?.windowPolicy,
+      live: deps.contextWindowSettings,
+      securityAudit,
+      env: process.env,
+    },
+  ));
+
+  // Дефолты оптимизации контекста для новых сессий (`context.defaults`):
+  // runtime-патч поверх config.yaml, применяется сразу (менеджер сессий читает
+  // резолвер при создании). Существующие сессии не меняются. Core — `requireAuth`.
+  app.route('/api/v2/settings', createContextDefaultsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.contextConfig?.defaults,
+      live: deps.contextDefaultsSettings,
+      securityAudit,
+    },
+  ));
+
+  // Instance-wide лимиты заметок сессии (`context.stickyNotes`): максимум
+  // заметок и символов. Runtime-патч поверх config.yaml, применяется сразу
+  // (core-фабрика сессий читает резолвер на операцию). Core — `requireAuth`.
+  app.route('/api/v2/settings', createStickyNotesSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.contextConfig?.stickyNotes,
+      live: deps.stickyNotesLimitsSettings,
+      securityAudit,
     },
   ));
 

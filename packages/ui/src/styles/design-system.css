@@ -67,6 +67,11 @@
     --status-warning: oklch(0.65 0.2 55);
     --status-error: oklch(0.55 0.25 25);
     --status-info: oklch(0.58 0.15 230);
+    /* Заполнение контекстного окна: «заметно» (жёлтый) и «близко» (оранжевый).
+       Отдельные токены, потому что `status-warning` в тёмной теме — жёлтый,
+       а шкале нужны четыре различимых уровня. */
+    --status-notice: oklch(0.72 0.15 90);
+    --status-caution: oklch(0.68 0.19 50);
   }
 
   /* Scrollbar — единый глобальный: 6px, pill-форма, без видимой колеи */
@@ -145,6 +150,8 @@
     --status-warning: oklch(0.7 0.13 95);
     --status-error: oklch(0.65 0.15 30);
     --status-info: oklch(0.68 0.12 230);
+    --status-notice: oklch(0.79 0.14 90);
+    --status-caution: oklch(0.75 0.16 55);
 
     /* Scrollbar dark theme */
     --synth-scrollbar-thumb: oklch(0.6 0.02 80 / 0.3);
@@ -323,6 +330,8 @@
   --color-status-warning: var(--status-warning);
   --color-status-error: var(--status-error);
   --color-status-info: var(--status-info);
+  --color-status-notice: var(--status-notice);
+  --color-status-caution: var(--status-caution);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);

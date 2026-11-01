@@ -1,6 +1,42 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, llmConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, llmConfigSchema, contextConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
+
+describe('contextConfigSchema (context.defaults)', () => {
+  it('defaults отсутствует → прежние дефолты SessionManager', () => {
+    expect(contextConfigSchema.parse({}).defaults).toEqual({
+      contextOptimization: 'none',
+      summarizationEnabled: false,
+      summarizationTriggerMode: 'messages',
+      summarizeAfterN: 10,
+      summarizeTokenThreshold: 50,
+      summarizationHeadMessages: 2,
+      summarizationTailMessages: 3,
+      slidingWindowMode: 'messages',
+      slidingWindowMessageLimit: 10,
+      slidingWindowTokenThreshold: 80,
+    });
+  });
+
+  it('явные значения перекрывают дефолты, остальные добираются схемой', () => {
+    const parsed = contextConfigSchema.parse({
+      defaults: { contextOptimization: 'summarization', summarizeAfterN: 4 },
+    });
+    expect(parsed.defaults.contextOptimization).toBe('summarization');
+    expect(parsed.defaults.summarizeAfterN).toBe(4);
+    expect(parsed.defaults.slidingWindowMessageLimit).toBe(10);
+  });
+
+  it('stickyNotes: дефолты 50/2000 и границы 1..1000 / 1..100000', () => {
+    expect(contextConfigSchema.parse({}).stickyNotes).toEqual({ maxCount: 50, maxChars: 2000 });
+    expect(contextConfigSchema.parse({ stickyNotes: { maxCount: 1, maxChars: 1 } }).stickyNotes)
+      .toEqual({ maxCount: 1, maxChars: 1 });
+    expect(contextConfigSchema.safeParse({ stickyNotes: { maxCount: 0 } }).success).toBe(false);
+    expect(contextConfigSchema.safeParse({ stickyNotes: { maxCount: 1001 } }).success).toBe(false);
+    expect(contextConfigSchema.safeParse({ stickyNotes: { maxChars: 0 } }).success).toBe(false);
+    expect(contextConfigSchema.safeParse({ stickyNotes: { maxChars: 100001 } }).success).toBe(false);
+  });
+});
 
 describe('llmConfigSchema — лимит вывода по умолчанию', () => {
   it('дефолт 8192 (модели без maxOutputTokens и сессии с авто-лимитом)', () => {

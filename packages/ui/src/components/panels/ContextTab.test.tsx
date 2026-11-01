@@ -109,7 +109,7 @@ describe('ContextTab — базовая отрисовка', () => {
     expect(container.querySelector('[data-testid="context-mcp-list"]')).toBeNull()
     // Отдельной кнопки Save нет — сохранение идёт по контролам (см. ниже).
     expect(container.querySelector('[data-testid="panel-tab-footer"]')).toBeNull()
-    expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sticky_notes'])
+    expect(container.textContent).toContain(enDict['rightPanel.context.stickyNotes'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sliding_window'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.summarization'])
   })

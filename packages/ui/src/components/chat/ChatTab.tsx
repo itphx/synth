@@ -6,6 +6,7 @@ import { useChatStore, type MessageData, type QueuedMessage } from '@/stores/cha
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore, mergeServerMessages, restoreLiveTurnFromSession } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
+import { stickyNoteErrorKey, useStickyNotesLimits } from '@/lib/api/stickyNotesLimits'
 import { isQueueChangedError } from '@/lib/api/queue'
 import { attachmentContentUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
@@ -21,6 +22,11 @@ import { PermissionRequestBar } from './PermissionRequestBar'
 import { QuestionDock } from './QuestionDock'
 import { StickyNotesPanel } from './StickyNotesPanel'
 import { StreamErrorPanel } from './StreamErrorPanel'
+import { ContextWarningPanel } from './ContextWarningPanel'
+import {
+  useContextWindowUsage,
+  useContextWindowWarning,
+} from '@/hooks/useContextWindowUsage'
 import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBar'
 import { useBackgroundHotkey } from './useBackgroundHotkey'
 import type { CenterTab } from '@/stores/useUIStore'
@@ -111,6 +117,8 @@ export function ChatTab({ tab }: ChatTabProps) {
   const setPendingMessages = useChatStore(s => s.setPendingMessages)
   const reorderPending = useChatStore(s => s.reorderPending)
   const setStickyNotes = useChatStore(s => s.setStickyNotes)
+  // Лимиты заметок нужны для понятного текста отказа (409/400) вместо общего.
+  const stickyNotesLimits = useStickyNotesLimits()
   const setSummarizationPending = useChatStore(s => s.setSummarizationPending)
   const openDebugModal = useChatStore(s => s.openDebugModal)
   const closeDebugModal = useChatStore(s => s.closeDebugModal)
@@ -118,6 +126,10 @@ export function ChatTab({ tab }: ChatTabProps) {
   const setStreamRetry = useChatStore(s => s.setStreamRetry)
 
   const sessionId = tab.data.sessionId || tab.id
+  // Заполнение контекстного окна: тост на 80% (один раз на сессию/порог) и
+  // жёлтый блок над композером на 90% (оба выключаются политикой `off`).
+  const contextUsage = useContextWindowUsage(sessionId)
+  useContextWindowWarning(sessionId, contextUsage.percent)
   const messages = messagesBySession[sessionId] || EMPTY_MESSAGES
   const queue = queueBySession[sessionId]
   const pending = pendingBySession[sessionId] || EMPTY_PENDING
@@ -808,10 +820,23 @@ export function ChatTab({ tab }: ChatTabProps) {
       const result = await synthApi.addStickyNote(sessionId, text)
       setStickyNotes(sessionId, result.notes)
       notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
-    } catch {
-      notify({ text: t('common.saveError'), type: 'error', category: 'error', sessionId })
+    } catch (err) {
+      // Сервер отклонил заметку по лимитам (409 LIMIT_EXCEEDED / 400
+      // VALIDATION_ERROR) — показываем причину, а не общий «ошибка сохранения».
+      const key = stickyNoteErrorKey(err)
+      notify({
+        text: key
+          ? t(key, {
+              maxCount: stickyNotesLimits.maxCount,
+              maxChars: stickyNotesLimits.maxChars,
+            })
+          : t('common.saveError'),
+        type: 'error',
+        category: 'error',
+        sessionId,
+      })
     }
-  }, [sessionId, setStickyNotes, notify, t])
+  }, [sessionId, setStickyNotes, notify, t, stickyNotesLimits.maxCount, stickyNotesLimits.maxChars])
 
   const handleUpdateNote = useCallback(async (noteId: string, content: string) => {
     try {
@@ -919,6 +944,10 @@ export function ChatTab({ tab }: ChatTabProps) {
               errorType={finalError.errorType}
               onRetry={handleRetryLastFailed}
             />
+          )}
+
+          {!inputExpanded && !isSubagent && (
+            <ContextWarningPanel sessionId={sessionId} />
           )}
 
           {!inputExpanded && !isSubagent && (

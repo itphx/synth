@@ -239,6 +239,9 @@ program
       // Общий предел вывода инструментов (`tools.outputMaxLines`/
       // `tools.outputMaxBytes`).
       toolsConfig: synth.tools,
+      // Политика ограничения контекстного окна (`context.windowPolicy`):
+      // runtime-override в админке, env `SYNTH_CONTEXT_WINDOW_POLICY` приоритетнее.
+      contextConfig: synth.context,
       // ADR-075: политика для абсолютного workspace вне root (env > config > 'confirm').
       workspaceOutsideRootPolicy: resolveWorkspaceOutsideRootPolicy(synth) || 'confirm',
       mcpServers: synth.mcp?.servers ?? {},

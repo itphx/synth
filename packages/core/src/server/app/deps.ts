@@ -125,6 +125,9 @@ import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
   createLiveAttachmentsSettings,
+  createLiveContextWindowPolicy,
+  createLiveContextDefaults,
+  createLiveStickyNotesLimits,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
 import { AuthorityGuard } from '../../engine/authority/guard.js';
@@ -311,6 +314,30 @@ export async function createStandaloneDeps(
     runtime: await settingsStore.getAttachments(),
   });
 
+  // Политика ограничения контекстного окна (`context.windowPolicy`):
+  // приоритет env > runtime > config.yaml > default; применяется сразу —
+  // оркестратор читает резолвер перед каждым LLM-вызовом.
+  const contextWindowSettings = createLiveContextWindowPolicy({
+    config: config.contextConfig?.windowPolicy,
+    runtime: await settingsStore.getContextWindowPolicy(),
+  });
+
+  // Дефолты оптимизации контекста для **новых** сессий (`context.defaults`):
+  // runtime-патч поверх config.yaml; менеджер сессий читает резолвер при
+  // создании (`contextDefaults` ниже) — применяется без рестарта.
+  const contextDefaultsSettings = createLiveContextDefaults({
+    config: config.contextConfig?.defaults,
+    runtime: await settingsStore.getContextDefaults(),
+  });
+
+  // Instance-wide лимиты заметок сессии (`context.stickyNotes`): runtime-патч
+  // поверх config.yaml; core-фабрика сессий читает резолвер при каждой
+  // операции с заметкой — применяется без рестарта (существующие не обрезаются).
+  const stickyNotesLimitsSettings = createLiveStickyNotesLimits({
+    config: config.contextConfig?.stickyNotes,
+    runtime: await settingsStore.getStickyNotesLimits(),
+  });
+
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (чтоб не писать домен в файловый фоллбек).
   const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
@@ -380,6 +407,8 @@ export async function createStandaloneDeps(
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
     projectStore,
     hooks,
+    // Дефолты оптимизации контекста новых сессий (`context.defaults` + runtime).
+    contextDefaults: () => contextDefaultsSettings.getDefaults(),
     // ADR-102: точка персиста сообщения инкрементирует `activity`
     // (`messages_assistant`/`messages_tool`); пользовательские — в процессоре.
     analytics,
@@ -1164,6 +1193,8 @@ export async function createStandaloneDeps(
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).
     attachmentsConfig: () => attachmentsSettings.getConfig(),
+    // Политика контекстного окна — live-геттер (перед каждым LLM-вызовом).
+    contextWindowPolicy: () => contextWindowSettings.getPolicy(),
     // ADR-115: каталог моделей инстанса для агента (тул `list_models`):
     // источники — каталог провайдеров и ручные override (тот же `modelStore`,
     // что у `GET /api/v2/models`), поэтому модальности совпадают с UI.
@@ -1837,6 +1868,12 @@ export async function createStandaloneDeps(
     stopAttachmentPruner,
     // ADR-115: живое состояние настроек вложений (сервис/промпт/GC + админ-API).
     attachmentsSettings,
+    // Политика ограничения контекстного окна (live, админ-API).
+    contextWindowSettings,
+    // Дефолты оптимизации контекста новых сессий (live, админ-API).
+    contextDefaultsSettings,
+    // Instance-wide лимиты заметок сессии (live, админ-API).
+    stickyNotesLimitsSettings,
     // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhooksConfig,

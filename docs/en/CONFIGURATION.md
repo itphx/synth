@@ -86,7 +86,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 ### Env overrides of nested sections (ADR-023)
 
 Scalar keys of the `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
-`questions`, `background`, `agents`, `tools`, `authority` sections can be set
+`questions`, `background`, `context`, `agents`, `tools`, `authority` sections can be set
 with environment variables — handy for k8s (ConfigMap → pod env). The variable name is
 built by the rule **`SYNTH_<SECTION>_<KEY>`**, where the camelCase key is converted to
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -158,6 +158,7 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (safeguard on the subagent prompt size; `0` — no limit) |
 | `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (subagent nesting depth limit; `0` — no limit) |
 | `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (default output limit; `0` — core default) |
+| `SYNTH_CONTEXT_WINDOW_POLICY` | string (`off`/`warn`/`enforce`) | `context.windowPolicy` (context window limit policy; default `warn`) |
 | `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (common tool output limit, lines; ≥ 1) |
 | `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (common tool output limit, bytes; ≥ 1) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
@@ -1617,6 +1618,105 @@ limits), not a "keep working" hint.
 agents:
   subagentMaxInputTokens: 150000
   subagentDepth: 1
+```
+
+### Model context window (`context.*`)
+
+`context.windowPolicy` controls what happens when the prompt estimate does not fit the model context
+window:
+
+- `off` — no checks at all: neither warnings nor blocking (the UI hides the banners);
+- `warn` (default) — the server does **not** block; the UI draws the fill warnings;
+- `enforce` — the LLM call is **not sent** when the prompt estimate exceeds `window − reserve`, and the
+  turn finishes with the `router.context_length_exceeded` error (`error_type: 'context_length'`, status
+  `error`, metadata `context_window_exceeded`/`context_window_tokens`).
+
+The window comes from the model catalog (`ModelConfig.contextWindow`; when unset — from the built-in
+table of known models). The output reserve is the effective `max_tokens` limit
+(`resolveMaxOutputTokens`: session value → `ModelConfig.maxOutputTokens` → `llm.maxTokens` → 8192).
+The prompt estimate is `estimatePromptChars` + the calibrated chars-per-token. **An unknown window
+(`0`) never blocks**: an estimate without a window is meaningless, and silently blocking every turn
+would be a regression — this is a safeguard, not budgeting.
+
+The policy is resolved **live**, before every LLM call, so a change applies without a restart.
+Priority: env `SYNTH_CONTEXT_WINDOW_POLICY` > runtime (`GET/PUT/DELETE
+/api/v2/settings/context-window`, `settings.json`/PG) > `config.yaml` > the `warn` default; when the
+policy comes from env, an attempt to set a different value gets 409 `CONFLICT`.
+
+```yaml
+context:
+  windowPolicy: warn
+```
+
+#### Context optimization defaults for new sessions (`context.defaults`)
+
+`context.defaults` holds instance-wide context-optimization values that a **new** session receives
+when it has no explicit settings. Existing sessions are never changed; explicit request `settings`
+always win. The values are resolved when a session is created, so a runtime change takes effect
+**immediately**, without a restart.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `contextOptimization` | `none` | `none` \| `sliding_window` \| `summarization` |
+| `summarizationEnabled` | `false` | auto-summarization enabled |
+| `summarizationTriggerMode` | `messages` | `messages` \| `tokens` |
+| `summarizeAfterN` | `10` | messages before summarization starts (≥1) |
+| `summarizeTokenThreshold` | `50` | summarization threshold, % of the model window (1..100) |
+| `summarizationHeadMessages` | `2` | messages kept in the summary head (≥1) |
+| `summarizationTailMessages` | `3` | messages kept in the summary tail (≥1) |
+| `slidingWindowMode` | `messages` | `messages` \| `tokens` |
+| `slidingWindowMessageLimit` | `10` | messages in the sliding window (≥1) |
+| `slidingWindowTokenThreshold` | `80` | sliding-window threshold, % of the model window (1..100) |
+
+Session notes (`context.stickyNotes`) are not an optimization strategy: they work independently of
+the selected strategy (they are always added to the system prompt). `sticky_notes` is only a legacy
+value of saved sessions and is no longer offered in defaults/UI.
+
+Priority: runtime (`GET/PUT/DELETE /api/v2/settings/context-defaults`, `settings.json`/PG; PUT is a
+partial patch merged over config) > `config.yaml` `context.defaults` > schema defaults. There are no
+env overrides for these values. In managed mode the admin section is restricted to `ADMIN`.
+
+```yaml
+context:
+  windowPolicy: warn
+  defaults:
+    contextOptimization: summarization
+    summarizationEnabled: true
+    summarizationTriggerMode: messages
+    summarizeAfterN: 12
+    summarizeTokenThreshold: 60
+    summarizationHeadMessages: 2
+    summarizationTailMessages: 4
+    slidingWindowMode: messages
+    slidingWindowMessageLimit: 10
+    slidingWindowTokenThreshold: 80
+```
+
+#### Session note limits (`context.stickyNotes`)
+
+`context.stickyNotes` sets **instance constraints** for session notes
+(`/api/v2/sessions/:id/notes`) — not session defaults: they apply to **all** sessions when a note is
+created or updated.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `maxCount` | `50` | maximum notes per session (1..1000); when reached, creation → 409 `LIMIT_EXCEEDED` |
+| `maxChars` | `2000` | maximum characters per note (1..100000); longer → 400 `VALIDATION_ERROR` |
+
+The limits are a safeguard against notes becoming an unbounded context channel: notes are injected
+into the system prompt. **Existing notes are never deleted or truncated** when a limit is lowered — it
+applies only to new writes (and to editing the text). The resolver is read on every note operation, so a
+runtime change takes effect **immediately**, without a restart.
+
+Priority: runtime (`GET/PUT/DELETE /api/v2/settings/sticky-notes`, `settings.json`/PG; PUT is a partial
+patch merged over config) > `config.yaml` `context.stickyNotes` > schema defaults. There are no env
+overrides for these values. In managed mode the admin section is restricted to `ADMIN`.
+
+```yaml
+context:
+  stickyNotes:
+    maxCount: 50
+    maxChars: 2000
 ```
 
 ### Model catalog (`{dataDir}/models/`, `ModelConfig`)

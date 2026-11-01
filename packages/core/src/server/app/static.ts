@@ -53,7 +53,7 @@ const MIME_TYPES: Record<string, string> = {
  */
 export const UI_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'sha256-MMhFazxtuMIPPkuMwnmXCKpXQEcfdAFwPeO4AMhxusM=' 'sha256-bCDmoN59JH37oVd/UoltmCDavDiBTQeK7E+RZBHsLjc='",
+  "script-src 'self' 'sha256-ihlAbIVVXQenFKhi5JbPJNmJSrJmROl9hjkhbra1QEs=' 'sha256-bCDmoN59JH37oVd/UoltmCDavDiBTQeK7E+RZBHsLjc='",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: http: https:",
   "connect-src 'self'",

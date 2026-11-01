@@ -47,6 +47,14 @@ describe('SettingsModal — активная категория недоступ
     expect(visibleFor(['LEAD']).some((cat) => cat.id === 'memory')).toBe(false)
   })
 
+  it('«Управление контекстом» видно ADMIN (группа AI) и скрыто USER/LEAD', () => {
+    const category = CATEGORIES.find((cat) => cat.id === 'contextManagement')
+    expect(category?.group).toBe('adminAi')
+    expect(visibleFor(['ADMIN']).some((cat) => cat.id === 'contextManagement')).toBe(true)
+    expect(visibleFor(['USER']).some((cat) => cat.id === 'contextManagement')).toBe(false)
+    expect(visibleFor(['LEAD']).some((cat) => cat.id === 'contextManagement')).toBe(false)
+  })
+
   it('«Память» идёт сразу после «Метрик» в админ-блоке', () => {
     const ids = CATEGORIES.map((cat) => cat.id)
     expect(ids.indexOf('memory')).toBe(ids.indexOf('metrics') + 1)

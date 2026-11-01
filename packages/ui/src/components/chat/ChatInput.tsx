@@ -21,7 +21,8 @@ import { AttachedFilesList } from './attachments/AttachedFilesList'
 import { AttachmentGallery } from './attachments/AttachmentGallery'
 import { useAttachmentDrop } from './attachments/useAttachmentDrop'
 import { useAttachmentPaste } from './attachments/useAttachmentPaste'
-import type { AgentInfo } from '@/lib/api/synthApi'
+import type { AgentInfo, StickyNoteData } from '@/lib/api/synthApi'
+import { useStickyNotesLimitsState } from '@/lib/api/stickyNotesLimits'
 import type { CommandSummary } from '@itphx/synth-shared'
 import type { SteerMode } from '@itphx/synth-shared/types'
 import { mediaPartPlaceholder, mediaTypeOfMime } from '@itphx/synth-shared/utils'
@@ -67,6 +68,8 @@ const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 /** ADR-115: все типы маркеров вложения — точный тип мог быть нормализован сервером. */
 const MEDIA_PLACEHOLDER_TYPES = ['image', 'audio', 'video', 'file'] as const
+/** Стабильная пустая ссылка для селектора заметок (zustand сравнивает по идентичности). */
+const EMPTY_STICKY_NOTES: StickyNoteData[] = []
 
 /**
  * ADR-115: убрать из текста первое вхождение маркера вложения с этим именем.
@@ -233,6 +236,12 @@ export function ChatInput({
   const { isTouch } = useDevice()
   const [value, setValue] = useState('')
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
+  // Instance-wide лимиты заметок: заранее отсекаем заведомо отклоняемый запрос
+  // (сервер всё равно проверит — 409/400), кнопка гаснет у предела.
+  const stickyNotesLimits = useStickyNotesLimitsState()
+  const sessionNotes = useChatStore((s) => s.stickyNotesBySession[sessionId])
+  const notes = sessionNotes ?? EMPTY_STICKY_NOTES
+  const notesAtLimit = notes.length >= stickyNotesLimits.limits.maxCount
   const [mentionState, setMentionState] = useState<{
     query: string
     start: number
@@ -655,6 +664,16 @@ export function ChatInput({
   const handleCreateNote = () => {
     const text = value.trim()
     if (!text) return
+    // Слишком длинная заметка не создаётся локально: сервер ответит 400.
+    if (text.length > stickyNotesLimits.limits.maxChars) {
+      notifyMessage({
+        text: t('chat.notes.tooLong', { maxChars: stickyNotesLimits.limits.maxChars }),
+        type: 'warning',
+        category: 'system',
+        sessionId,
+      })
+      return
+    }
     onCreateNote(text)
     setValue('')
     setCommandState(null)
@@ -831,9 +850,15 @@ export function ChatInput({
               <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   onClick={handleCreateNote}
-                  disabled={!value.trim()}
+                  disabled={!value.trim() || notesAtLimit}
                   className="inline-flex items-center justify-center rounded-lg p-1.5 text-status-warning/70 hover:text-status-warning hover:bg-status-warning/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={t('chat.input.createNote')}
+                  title={
+                    notesAtLimit
+                      ? t('chat.input.createNoteLimit', {
+                          maxCount: stickyNotesLimits.limits.maxCount,
+                        })
+                      : t('chat.input.createNote')
+                  }
                 >
                   <Icon name="pushpin" className="size-5" />
                 </button>

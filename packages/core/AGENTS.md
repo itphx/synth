@@ -732,6 +732,29 @@
   M на размышления`, ADR-041) и статус `error`, а нормализованная причина всегда пишется в
   `metadata.finish_reason` финального сообщения — иначе «модель промолчала» и «бюджет ушёл в
   размышления» неразличимы.
+  **Политика контекстного окна (`context.windowPolicy`).** `off` | `warn` (дефолт) | `enforce`;
+  резолвер `resolveContextWindowPolicy` (env `SYNTH_CONTEXT_WINDOW_POLICY` > runtime
+  `settings.json`/PG > `config.yaml` > default) читается оркестратором перед **каждым** LLM-вызовом,
+  поэтому `/api/v2/settings/context-window` применяется без рестарта. Проверка —
+  `checkContextWindowWindow` (`engine/context/window-guard.ts`): оценка промпта
+  (`estimatePromptChars` + калиброванный chars-per-token) сравнивается с окном
+  `ModelConfig.contextWindow` за вычетом резерва на вывод (`resolveMaxOutputTokens`); при `enforce`
+  и `оценка > окно − резерв` провайдер **не вызывается**, ход завершается ошибкой
+  `router.context_length_exceeded` (`error_type: 'context_length'`, metadata
+  `context_window_exceeded`/`context_window_tokens`). Неизвестное окно (`0`) не блокирует никогда —
+  это предохранитель, а не бюджетирование.
+  **Дефолты оптимизации контекста новых сессий (`context.defaults`).** Instance-wide значения
+  (оптимизация, суммаризация, скользящее окно) резолвит `resolveContextDefaults`
+  (runtime `settings.json`/PG > `config.yaml` > дефолты схемы; env нет) — `SessionManager` читает
+  live-геттер `contextDefaults` **при создании** сессии, поэтому `/api/v2/settings/context-defaults`
+  применяется без рестарта. Явные `settings` запроса приоритетнее, существующие сессии не меняются;
+  без опции `SessionManagerOptions.contextDefaults` поведение прежнее (литералы).
+  **Лимиты заметок сессии (`context.stickyNotes`).** Instance-wide ограничения `maxCount`/`maxChars`
+  (дефолты 50/2000) резолвит `resolveStickyNotesLimits` (runtime `settings.json`/PG > `config.yaml` >
+  схема; env нет), опция `getStickyNoteLimits` core-фабрики сессий читается на каждую операцию —
+  `/api/v2/settings/sticky-notes` применяется без рестарта; 409 `LIMIT_EXCEEDED`/400
+  `VALIDATION_ERROR`, существующие заметки не обрезаются. Роуты заметок (`/sessions/:id/notes*`)
+  живут **в core-фабрике** (единая реализация для standalone и backend).
   **Предохранитель бюджета контекста саб-агента (`agents.subagentMaxInputTokens`).**
   В цикле саб-агента (`engine/tools/task/run-cycle.ts`) перед **каждым** LLM-вызовом
   считается оценка промпта: `estimatePromptChars(messages, systemPrompt, tools)` →

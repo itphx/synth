@@ -26,6 +26,9 @@ import {
   createMetricsSettingsRoutes,
   // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального ввода.
   createAttachmentsSettingsRoutes, createModalityModelLookup,
+  createContextWindowSettingsRoutes,
+  createContextDefaultsSettingsRoutes,
+  createStickyNotesSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -221,6 +224,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // ADR-106 Ф3: HTTP-ответ на подтверждение проходит через тот же реестр,
     // что и WS-кадр `permission_reply`.
     deps.approvalRegistry,
+    // Instance-wide лимиты заметок сессии (`context.stickyNotes`) — live-резолвер
+    // для core-фабрики (роуты заметок живут там).
+    () => deps.stickyNotesLimitsSettings.getLimits(),
   ));
 
   // Messages routes
@@ -604,6 +610,58 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       // ADR-115: проверка `modalityModels` по каталогу (провайдер + модель +
       // модальности модели) — до записи runtime-патча.
       lookupModel: createModalityModelLookup({ providers: providerStore, models: modelStore }),
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // Политика ограничения контекстного окна (`context.windowPolicy`):
+  // instance-wide (`off` | `warn` | `enforce`), применяется сразу. Managed
+  // RBAC — ADMIN (чтение и запись): это политика инстанса.
+  app.route('/api/v2/settings', createContextWindowSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.context?.windowPolicy,
+      live: deps.contextWindowSettings,
+      securityAudit,
+      env: process.env,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // Дефолты оптимизации контекста для новых сессий (`context.defaults`):
+  // instance-wide, применяются при создании сессии. Managed RBAC — ADMIN
+  // (чтение и запись): это настройка инстанса.
+  app.route('/api/v2/settings', createContextDefaultsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.context?.defaults,
+      live: deps.contextDefaultsSettings,
+      securityAudit,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // Instance-wide лимиты заметок сессии (`context.stickyNotes`): instance-wide
+  // ограничения, применяются сразу (резолвер читается на операцию). Managed
+  // RBAC — ADMIN (чтение и запись): это настройка инстанса.
+  app.route('/api/v2/settings', createStickyNotesSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.context?.stickyNotes,
+      live: deps.stickyNotesLimitsSettings,
+      securityAudit,
     },
     {
       readGuard: auth.requirePermission('ADMIN'),

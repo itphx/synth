@@ -4,7 +4,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer, RequestSessionService } from '../../index.js';
 import type { SessionTree } from '../../sessions/manager.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
-import type { Message, Session, QuestionStatus, SessionWorktree, AttachmentsConfig } from '@itphx/synth-shared';
+import type { Message, Session, QuestionStatus, SessionWorktree, AttachmentsConfig, StickyNotesLimits } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, enqueueSteerMessage, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
@@ -56,6 +56,9 @@ import type { ApprovalRegistry } from '../../engine/permission/approval.js';
 import type { AuthorityPrincipal } from '@itphx/synth-shared';
 
 const LOCAL_USER_ID = 'local';
+
+/** Дефолтные лимиты заметок сессии (совпадают со схемой `stickyNotesLimitsSchema`). */
+const DEFAULT_STICKY_NOTE_LIMITS: StickyNotesLimits = { maxCount: 50, maxChars: 2000 };
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -181,6 +184,12 @@ export interface SessionRouteMessages {
   permissionInvalid: (c: Context) => string;
   /** Отказ реестра подтверждений (403 `APPROVAL_DENIED`): ответ не принят. */
   permissionDenied: (c: Context, reason: string) => string;
+  /** Заметки с таким id в сессии нет (404 `NOT_FOUND`). */
+  noteNotFound: (c: Context) => string;
+  /** Лимит заметок сессии исчерпан (409 `LIMIT_EXCEEDED`), `max` — предел инстанса. */
+  noteLimitReached: (c: Context, max: number) => string;
+  /** Текст заметки длиннее `maxChars` (400 `VALIDATION_ERROR`), `max` — предел инстанса. */
+  noteTooLong: (c: Context, max: number) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -211,6 +220,13 @@ export interface SessionRoutesOptions {
   /** Доп. middleware на POST /:id/messages/merge (rate limiter; backend). */
   mergeMiddleware?: Middleware[];
   messages?: Partial<SessionRouteMessages>;
+  /**
+   * Instance-wide лимиты заметок сессии (`context.stickyNotes`): максимум
+   * заметок и символов в заметке. Резолвер читается при каждой операции с
+   * заметкой — runtime-настройка админки применяется без рестарта.
+   * Не задан — константы схемы 50/2000.
+   */
+  getStickyNoteLimits?: () => StickyNotesLimits;
   /**
    * Агент по умолчанию для новой сессии без `settings.agentRole` (runtime-настройка
    * «Агенты»). По умолчанию — `DEFAULT_AGENT_ID` ('assistant' при первом развёртывании).
@@ -306,6 +322,9 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   detachUnsupported: () => 'Перевод идущего прогона в фон в этой сборке не поддерживается',
   permissionInvalid: () => 'Невалидный ответ на подтверждение: ожидается action = allow | deny | hold',
   permissionDenied: (_c: Context, reason: string) => `Подтверждение не принято: ${reason}`,
+  noteNotFound: () => 'Заметка не найдена',
+  noteLimitReached: (_c: Context, max: number) => `Достигнут лимит заметок сессии (макс. ${max})`,
+  noteTooLong: (_c: Context, max: number) => `Текст заметки слишком длинный (макс. ${max} символов)`,
 };
 
 /**
@@ -458,6 +477,8 @@ export function createSessionRoutes(
   const forkMiddleware = opts.forkMiddleware ?? [];
   const mergeMiddleware = opts.mergeMiddleware ?? [];
   const messages: SessionRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
+  /** Лимиты заметок инстанса (`context.stickyNotes`); по умолчанию — 50/2000. */
+  const getStickyNoteLimits = opts.getStickyNoteLimits ?? (() => DEFAULT_STICKY_NOTE_LIMITS);
   const resolveAuthorName = createResolveAuthorName(deps.profilesStore);
   /**
    * Принципал ответа на подтверждение по умолчанию (standalone): единственный
@@ -1259,6 +1280,123 @@ export function createSessionRoutes(
       indexes,
       readiness: indexes.failed > 0 ? 'degraded' : 'ready',
     });
+  });
+
+  // ===== Sticky Notes (заметки сессии) =====
+  //
+  // Лимиты — instance-wide (`context.stickyNotes`): `maxCount` — максимум
+  // заметок на сессию (409 `LIMIT_EXCEEDED` при создании), `maxChars` —
+  // максимум символов в заметке (400 `VALIDATION_ERROR`). Резолвер читается
+  // при каждой операции (runtime-настройка применяется без рестарта);
+  // существующие заметки не удаляются и не обрезаются.
+  // Доступ — у prefix-guard ресурса (инвариант 16): в обработчиках проверок нет.
+
+  // GET /api/v2/sessions/:id/notes — список заметок
+  app.get('/:id/notes', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    return c.json({ notes: session.stickyNotes });
+  });
+
+  // POST /api/v2/sessions/:id/notes — создать заметку
+  app.post('/:id/notes', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+
+    const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+    const content = typeof body.content === 'string' ? body.content.trim() : '';
+    if (!content) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.contentRequired(c) } }, 400);
+    }
+
+    const limits = getStickyNoteLimits();
+    if (content.length > limits.maxChars) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.noteTooLong(c, limits.maxChars) } }, 400);
+    }
+    // Проверка лимита — под локом сессии (иначе две параллельные заметки
+    // прошли бы проверку до записи и превысили `maxCount`).
+    let limitReached = false;
+    const now = nowISO();
+    const note = {
+      id: generateStreamId(),
+      content,
+      createdAt: now,
+      updatedAt: now,
+      disabled: false,
+    };
+
+    await sessionManager.withLock(c.req.param('id'), async (s) => {
+      if (s.stickyNotes.length >= limits.maxCount) {
+        limitReached = true;
+        return;
+      }
+      s.stickyNotes.push(note);
+      await sessionManager.saveSession(s);
+    });
+
+    if (limitReached) {
+      return c.json({ error: { code: 'LIMIT_EXCEEDED', message: messages.noteLimitReached(c, limits.maxCount) } }, 409);
+    }
+
+    const updated = await sessionManager.getSession(c.req.param('id'));
+    eventBus.publish(c.req.param('id'), 'context.sticky_note_added', { note_id: note.id });
+    return c.json({ note, notes: updated!.stickyNotes }, 201);
+  });
+
+  // PATCH /api/v2/sessions/:id/notes/:noteId — обновить заметку
+  app.patch('/:id/notes/:noteId', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+
+    const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+    const noteId = c.req.param('noteId');
+    const limits = getStickyNoteLimits();
+    if (typeof body.content === 'string' && body.content.length > limits.maxChars) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.noteTooLong(c, limits.maxChars) } }, 400);
+    }
+
+    const found = session.stickyNotes.some((n) => n.id === noteId);
+    if (!found) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.noteNotFound(c) } }, 404);
+    }
+
+    await sessionManager.withLock(c.req.param('id'), async (s) => {
+      const note = s.stickyNotes.find((n) => n.id === noteId);
+      if (!note) return;
+
+      if (body.content !== undefined) note.content = body.content;
+      if (body.disabled !== undefined) note.disabled = body.disabled;
+      note.updatedAt = nowISO();
+      await sessionManager.saveSession(s);
+    });
+
+    const updated = await sessionManager.getSession(c.req.param('id'));
+    eventBus.publish(c.req.param('id'), 'context.sticky_note_updated', { note_id: noteId });
+    return c.json({ notes: updated!.stickyNotes });
+  });
+
+  // DELETE /api/v2/sessions/:id/notes/:noteId — удалить заметку
+  app.delete('/:id/notes/:noteId', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+
+    const noteId = c.req.param('noteId');
+    await sessionManager.withLock(c.req.param('id'), async (s) => {
+      s.stickyNotes = s.stickyNotes.filter((n) => n.id !== noteId);
+      await sessionManager.saveSession(s);
+    });
+
+    const updated = await sessionManager.getSession(c.req.param('id'));
+    eventBus.publish(c.req.param('id'), 'context.sticky_note_deleted', { note_id: noteId });
+    return c.json({ notes: updated!.stickyNotes });
   });
 
   // GET /api/v2/sessions/:id/stats — статистика по агентам/пользователям

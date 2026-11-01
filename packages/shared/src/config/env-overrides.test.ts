@@ -62,6 +62,10 @@ describe('toSnakeCase / envOverrideName (ADR-023)', () => {
     expect(envOverrideName({ section: 'tools', key: 'outputMaxBytes', type: 'number' })).toBe(
       'SYNTH_TOOLS_OUTPUT_MAX_BYTES',
     );
+    // context: политика ограничения контекстного окна.
+    expect(envOverrideName({ section: 'context', key: 'windowPolicy', type: 'string' })).toBe(
+      'SYNTH_CONTEXT_WINDOW_POLICY',
+    );
   });
 
   it('реестр содержит уникальные env-имена', () => {
@@ -168,6 +172,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_METRICS_ENABLED: 'true',
       SYNTH_TOOLS_OUTPUT_MAX_LINES: '500',
       SYNTH_TOOLS_OUTPUT_MAX_BYTES: '4096',
+      SYNTH_CONTEXT_WINDOW_POLICY: 'enforce',
     });
 
     expect(cfg.events).toEqual({
@@ -178,6 +183,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
     });
     // llm.maxTokens: лимит вывода по умолчанию.
     expect((cfg.llm as Record<string, unknown>).maxTokens).toBe(16_384);
+    // context.windowPolicy: политика ограничения контекстного окна.
+    expect((cfg.context as Record<string, unknown>).windowPolicy).toBe('enforce');
     expect(cfg.scheduler).toEqual({ tickSec: 120, catchUp: 'once' });
     expect(cfg.webhooks).toEqual({ enabled: true });
     expect(cfg.decision).toEqual({
@@ -228,8 +235,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('неизвестные env игнорируются молча', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('неизвестные env игнорируются молча', () => {    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const cfg = applyEnvOverrides(makeConfig(), {
       SYNTH_EVENTS_ALLOWED_SOURCES: 'telegram',
       SYNTH_UNKNOWN_KEY: 'x',

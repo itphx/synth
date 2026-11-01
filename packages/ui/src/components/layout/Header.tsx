@@ -6,11 +6,14 @@ import { useUIStore } from '../../stores/useUIStore'
 import { useProjectsStore } from '../../stores/projectsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useProvidersStore } from '@/stores/providersStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { useAuthStore } from '@/stores/authStore'
 import { confirm } from '@/lib/confirm'
+import {
+  CONTEXT_LEVEL_CLASSES,
+  useContextWindowUsage,
+} from '@/hooks/useContextWindowUsage'
 import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { AnalyticsButton } from './AnalyticsButton'
 import { NotificationPopup } from './NotificationPopup'
@@ -76,16 +79,21 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const isFileEditor = activeTab?.type === 'file-editor'
   const isCommitDetail = activeTab?.type === 'commit-detail'
 
-  // Chat tab context window calculation
-  const messagesBySession = useChatStore((s) => s.messagesBySession)
-  const sessions = useSessionsStore((s) => s.sessions)
-  const selectedModelName = useProvidersStore((s) => s.selectedModelName)
-  const providersModels = useProvidersStore((s) => s.models)
+  // Процент контекстного окна — из общего хука (тот же, что в правой панели).
   const sessionId = activeTab?.data?.sessionId
-
+  const sessions = useSessionsStore((s) => s.sessions)
   const activeSession = sessionId ? sessions.find((s) => s.id === sessionId) : undefined
-  const sessionModelId = (activeSession?.settings as Record<string, unknown>)?.model as string | undefined
-  const effectiveModel = sessionModelId || selectedModelName
+
+  const {
+    inputTokens: contextInputTokens,
+    windowTokens: contextWindowTokens,
+    percent: windowPercent,
+    isEstimated: contextEstimated,
+    level: contextLevel,
+  } = useContextWindowUsage(sessionId)
+  const contextLevelClasses = CONTEXT_LEVEL_CLASSES[contextLevel]
+  // `≈` — окно модели не задано, используется оценка (фоллбэк 200k).
+  const contextTitle = `${contextInputTokens.toLocaleString()} / ${contextEstimated ? '≈' : ''}${contextWindowTokens.toLocaleString()} (${windowPercent}%)`
 
   // ADR-114 §9: индикатор привязки сессии к worktree'у. Имя — из инвентаря
   // проекта (по `worktree_id`), фолбэк — имя каталога на диске.
@@ -102,27 +110,6 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     if (isMobile) setMobileRightOpen(true)
   }, [setRightPanelTab, setMobileRightOpen, isMobile])
 
-  const contextWindowModel = useMemo(() => {
-    return providersModels.find((m) => m.id === effectiveModel || m.name === effectiveModel)
-  }, [providersModels, effectiveModel])
-
-  const contextWindow = contextWindowModel?.context_window ?? 200_000
-
-  const lastInputTokens = useMemo(() => {
-    const msgs = sessionId ? messagesBySession[sessionId] || [] : []
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i]!
-      if (m.role === 'assistant' && !m.disabled && !m.hidden) {
-        return m.usage?.input_tokens ?? 0
-      }
-    }
-    return 0
-  }, [messagesBySession, sessionId])
-
-  const windowPercent = contextWindow > 0 ? Math.round((lastInputTokens / contextWindow) * 100) : 0
-  // Предупреждение только при реальном окне модели (не фолбэк 200_000)
-  const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
-  const nearContextLimit = hasRealContextWindow && windowPercent >= 90
   const [summarizing, setSummarizing] = useState(false)
   const canSummarize = activeSession?.can_summarize ?? false
   const isSubagentSession = activeSession?.session_origin === 'subagent'
@@ -447,15 +434,17 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             <div className="flex items-center gap-1 ml-1">
               <div
                 className="flex items-center gap-1"
-                title={`${lastInputTokens.toLocaleString()} / ${contextWindow.toLocaleString()}`}
+                title={contextTitle}
+                data-testid="header-context"
+                data-level={contextLevel}
               >
                 <div className="h-1.5 w-12 rounded-full bg-foreground/10 overflow-hidden">
                   <div
-                    className={cn('h-1.5 rounded-full transition-all', nearContextLimit ? 'bg-destructive' : 'bg-primary')}
-                    style={{ width: `${Math.min(windowPercent, 100)}%` }}
+                    className={cn('h-1.5 rounded-full transition-all', contextLevelClasses.bar)}
+                    style={{ width: `${windowPercent}%` }}
                   />
                 </div>
-                <span className={cn('text-[0.625rem] tabular-nums device-hide-label', nearContextLimit ? 'text-destructive' : 'text-muted-foreground')}>
+                <span className={cn('text-[0.625rem] tabular-nums device-hide-label', contextLevelClasses.text)}>
                   {windowPercent}%
                 </span>
               </div>

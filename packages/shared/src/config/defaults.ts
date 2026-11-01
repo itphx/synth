@@ -109,6 +109,28 @@ export const defaultConfig: SynthConfig = {
   },
   context: {
     enabledFiles: ['SOUL.md', 'COMPANY.md', 'ABOUT.md'],
+    // Политика контекстного окна: по умолчанию только предупреждать (блокировка — opt-in).
+    windowPolicy: 'warn',
+    // Дефолты оптимизации контекста для новых сессий (совпадают с прежними
+    // литералами `SessionManager.createSession`).
+    defaults: {
+      contextOptimization: 'none',
+      summarizationEnabled: false,
+      summarizationTriggerMode: 'messages',
+      summarizeAfterN: 10,
+      summarizeTokenThreshold: 50,
+      summarizationHeadMessages: 2,
+      summarizationTailMessages: 3,
+      slidingWindowMode: 'messages',
+      slidingWindowMessageLimit: 10,
+      slidingWindowTokenThreshold: 80,
+    },
+    // Instance-wide лимиты заметок сессии (`context.stickyNotes`): ограничения
+    // инстанса, не дефолты сессии. Существующие заметки не обрезаются.
+    stickyNotes: {
+      maxCount: 50,
+      maxChars: 2000,
+    },
   },
   summarization: {
     provider: '',

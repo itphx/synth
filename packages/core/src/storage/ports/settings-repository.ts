@@ -9,6 +9,9 @@ import type {
   ToolsPolicy,
   WorkspaceOutsideRootPolicy,
   ProxyConfig,
+  ContextWindowPolicy,
+  ContextDefaults,
+  StickyNotesLimits,
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
@@ -137,4 +140,31 @@ export interface SettingsRepository {
   getAttachments(): Promise<AttachmentsRuntimeSettings>;
   setAttachments(config: AttachmentsRuntimeSettings): Promise<void>;
   clearAttachments(): Promise<void>;
+
+  /**
+   * Политика ограничения контекстного окна (`context.windowPolicy`).
+   * Применяется сразу (резолвер читается перед каждым LLM-вызовом) —
+   * `restartRequired: false` в API.
+   */
+  getContextWindowPolicy(): Promise<ContextWindowPolicy | undefined>;
+  setContextWindowPolicy(policy: ContextWindowPolicy): Promise<void>;
+  clearContextWindowPolicy(): Promise<void>;
+
+  /**
+   * Дефолты оптимизации контекста для **новых** сессий (`context.defaults`).
+   * Применяются при создании сессии (резолвер читается менеджером) —
+   * `restartRequired: false` в API; существующие сессии не меняются.
+   */
+  getContextDefaults(): Promise<Partial<ContextDefaults> | undefined>;
+  setContextDefaults(defaults: Partial<ContextDefaults>): Promise<void>;
+  clearContextDefaults(): Promise<void>;
+
+  /**
+   * Instance-wide лимиты заметок сессии (`context.stickyNotes`).
+   * Применяются при каждой операции с заметкой (резолвер читается роутом) —
+   * `restartRequired: false` в API; существующие заметки не обрезаются.
+   */
+  getStickyNotesLimits(): Promise<Partial<StickyNotesLimits> | undefined>;
+  setStickyNotesLimits(limits: Partial<StickyNotesLimits>): Promise<void>;
+  clearStickyNotesLimits(): Promise<void>;
 }

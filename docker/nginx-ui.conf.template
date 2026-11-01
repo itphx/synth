@@ -97,7 +97,7 @@ server {
   # применяет CSP документа, а не подресурса.
   location / {
     add_header Cache-Control "no-cache";
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-MMhFazxtuMIPPkuMwnmXCKpXQEcfdAFwPeO4AMhxusM=' 'sha256-bCDmoN59JH37oVd/UoltmCDavDiBTQeK7E+RZBHsLjc='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-ihlAbIVVXQenFKhi5JbPJNmJSrJmROl9hjkhbra1QEs=' 'sha256-bCDmoN59JH37oVd/UoltmCDavDiBTQeK7E+RZBHsLjc='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'" always;
     try_files $uri $uri/ /index.html;
   }
 }

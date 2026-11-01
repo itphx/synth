@@ -351,5 +351,35 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     async clearAttachments(): Promise<void> {
       await deleteSetting(conn, 'attachments');
     },
+
+    async getContextWindowPolicy(): Promise<RuntimeSettingsValue<'contextWindowPolicy'> | undefined> {
+      return readSetting<RuntimeSettingsValue<'contextWindowPolicy'>>(conn, 'contextWindowPolicy');
+    },
+    async setContextWindowPolicy(policy: RuntimeSettingsValue<'contextWindowPolicy'>): Promise<void> {
+      await writeSetting(conn, 'contextWindowPolicy', policy);
+    },
+    async clearContextWindowPolicy(): Promise<void> {
+      await deleteSetting(conn, 'contextWindowPolicy');
+    },
+
+    async getContextDefaults(): Promise<RuntimeSettingsValue<'contextDefaults'> | undefined> {
+      return readSetting<RuntimeSettingsValue<'contextDefaults'>>(conn, 'contextDefaults');
+    },
+    async setContextDefaults(defaults: RuntimeSettingsValue<'contextDefaults'>): Promise<void> {
+      await writeSetting(conn, 'contextDefaults', defaults);
+    },
+    async clearContextDefaults(): Promise<void> {
+      await deleteSetting(conn, 'contextDefaults');
+    },
+
+    async getStickyNotesLimits(): Promise<RuntimeSettingsValue<'stickyNotesLimits'> | undefined> {
+      return readSetting<RuntimeSettingsValue<'stickyNotesLimits'>>(conn, 'stickyNotesLimits');
+    },
+    async setStickyNotesLimits(limits: RuntimeSettingsValue<'stickyNotesLimits'>): Promise<void> {
+      await writeSetting(conn, 'stickyNotesLimits', limits);
+    },
+    async clearStickyNotesLimits(): Promise<void> {
+      await deleteSetting(conn, 'stickyNotesLimits');
+    },
   };
 }

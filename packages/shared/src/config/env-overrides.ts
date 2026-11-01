@@ -34,6 +34,8 @@ export interface EnvOverrideDefinition {
 export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   // llm: лимит вывода по умолчанию (0 — авто-дефолт ядра).
   { section: 'llm', key: 'maxTokens', type: 'number' },
+  // context: политика ограничения контекстного окна (`off`|`warn`|`enforce`).
+  { section: 'context', key: 'windowPolicy', type: 'string' },
   // events (ADR-089)
   { section: 'events', key: 'enabled', type: 'boolean' },
   { section: 'events', key: 'defaultMode', type: 'string' },

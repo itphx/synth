@@ -28,6 +28,12 @@ import {
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
   // ADR-115: живое состояние runtime-настроек вложений (`/settings/attachments`).
   createLiveAttachmentsSettings,
+  // Политика контекстного окна (`/settings/context-window`).
+  createLiveContextWindowPolicy,
+  // Дефолты оптимизации контекста новых сессий (`/settings/context-defaults`).
+  createLiveContextDefaults,
+  // Instance-wide лимиты заметок сессии (`/settings/sticky-notes`).
+  createLiveStickyNotesLimits,
   createEgressPolicyResolver, createEgressLogSink,
   configureEgressRuntime, startEgressLogPruner,
   // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
@@ -291,12 +297,26 @@ export async function createBackendDeps(
 
   // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
   const hooks = new HookBus();
+  // Дефолты оптимизации контекста для новых сессий (`context.defaults`):
+  // runtime-патч поверх config.yaml; применяются без рестарта.
+  const contextDefaultsSettings = createLiveContextDefaults({
+    config: config.synth.context?.defaults,
+    runtime: await settingsStore.getContextDefaults(),
+  });
+  // Instance-wide лимиты заметок сессии (`context.stickyNotes`): runtime-патч
+  // поверх config.yaml; применятся без рестарта (резолвер читается на операцию).
+  const stickyNotesLimitsSettings = createLiveStickyNotesLimits({
+    config: config.synth.context?.stickyNotes,
+    runtime: await settingsStore.getStickyNotesLimits(),
+  });
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (не пишем домен в файловый фоллбек).
   const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
   const sessionManager = new SessionManager(fileStore, {
     projectStore,
     hooks,
+    // Дефолты оптимизации контекста новых сессий (`context.defaults` + runtime).
+    contextDefaults: () => contextDefaultsSettings.getDefaults(),
     // ADR-102: точка персиста сообщений (`messages_assistant`/`messages_tool`).
     analytics,
     // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
@@ -370,6 +390,13 @@ export async function createBackendDeps(
   const attachmentsSettings = createLiveAttachmentsSettings({
     config: config.synth.attachments,
     runtime: await settingsStore.getAttachments(),
+  });
+
+  // Политика ограничения контекстного окна (`context.windowPolicy`):
+  // приоритет env > runtime > config.yaml > default; применяется сразу.
+  const contextWindowSettings = createLiveContextWindowPolicy({
+    config: config.synth.context?.windowPolicy,
+    runtime: await settingsStore.getContextWindowPolicy(),
   });
   const stopEgressLogPruner = storageDegraded || !egressLogConfig.enabled
     ? () => {}
@@ -1107,6 +1134,8 @@ export async function createBackendDeps(
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).
     attachmentsConfig: () => attachmentsSettings.getConfig(),
+    // Политика контекстного окна — live-геттер (перед каждым LLM-вызовом).
+    contextWindowPolicy: () => contextWindowSettings.getPolicy(),
     // ADR-115: каталог моделей инстанса для агента (тул `list_models`):
     // тот же `modelStore`, что у `GET /api/v2/models` (каталог провайдеров +
     // ручные override), поэтому модальности совпадают с UI.
@@ -1817,6 +1846,12 @@ export async function createBackendDeps(
     stopAttachmentPruner,
     // ADR-115: живое состояние настроек вложений (сервис/промпт/GC + админ-API).
     attachmentsSettings,
+    // Политика ограничения контекстного окна (live, админ-API).
+    contextWindowSettings,
+    // Дефолты оптимизации контекста новых сессий (live, админ-API).
+    contextDefaultsSettings,
+    // Instance-wide лимиты заметок сессии (live, админ-API).
+    stickyNotesLimitsSettings,
     // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhookStore,

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { permissionConfigSchema } from '../types/permission.js';
-import { createToolsDisabledSchema, globalRoleSchema, serviceScopeSchema } from '../schemas/index.js';
+import { contextDefaultsSchema, createToolsDisabledSchema, globalRoleSchema, serviceScopeSchema, stickyNotesLimitsSchema } from '../schemas/index.js';
 import {
   TOOLS_POLICIES,
   MCP_NETWORK_POLICY_MODES,
@@ -270,8 +270,38 @@ export const sessionConfigSchema = z.object({
   planMode: z.enum(['auto', 'strict', 'off']).default('auto'),
 });
 
+/**
+ * Политика ограничения контекстного окна модели (instance-wide, ADR-023):
+ * - `off` — ни предупреждений, ни блокировки (UI скрывает баннеры);
+ * - `warn` (default) — сервер не блокирует, предупреждения рисует UI;
+ * - `enforce` — сервер **не отправляет** LLM-запрос, если оценка промпта
+ *   не влезает в окно модели, и завершает ход ошибкой `context_length`.
+ */
+export const CONTEXT_WINDOW_POLICIES = ['off', 'warn', 'enforce'] as const;
+export type ContextWindowPolicy = (typeof CONTEXT_WINDOW_POLICIES)[number];
+
 export const contextConfigSchema = z.object({
   enabledFiles: z.array(z.string()).default(['SOUL.md', 'COMPANY.md', 'ABOUT.md']),
+  /**
+   * Если `ModelConfig.contextWindow` неизвестен (`0`), оценка не блокирует:
+   * `enforce` применяется только к известному окну. Значение читается live
+   * (резолвер перед каждым LLM-вызовом), runtime-override — `/api/v2/settings/context-window`.
+   */
+  windowPolicy: z.enum(CONTEXT_WINDOW_POLICIES).default('warn'),
+  /**
+   * Instance-wide дефолты оптимизации контекста для **новых** сессий
+   * (`context.defaults`). Явные `settings` запроса приоритетнее; существующие
+   * сессии не меняются. Runtime-override — `/api/v2/settings/context-defaults`.
+   */
+  defaults: contextDefaultsSchema.prefault({}),
+  /**
+   * Instance-wide лимиты заметок сессии (`context.stickyNotes`):
+   * `maxCount` — максимум заметок на сессию, `maxChars` — максимум символов
+   * в заметке. Это **ограничения инстанса**, а не дефолты сессии: применяются
+   * ко всем сессиям; существующие заметки не удаляются и не обрезаются.
+   * Runtime-override — `/api/v2/settings/sticky-notes`.
+   */
+  stickyNotes: stickyNotesLimitsSchema.prefault({}),
 });
 
 export const summarizationConfigSchema = z.object({

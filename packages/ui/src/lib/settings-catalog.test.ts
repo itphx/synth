@@ -2,16 +2,60 @@ import { describe, expect, it } from 'vitest'
 
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
-import { SETTINGS_CATEGORIES, normalizeSettingsQuery, searchSettings } from './settings-catalog'
+import {
+  SETTINGS_CATALOG,
+  SETTINGS_CATEGORIES,
+  normalizeSettingsQuery,
+  searchSettings,
+} from './settings-catalog'
 
 const t = (key: string) => (enDict as Record<string, string>)[key] ?? key
 const tRu = (key: string) => (ruDict as Record<string, string>)[key] ?? key
 
 describe('settings-catalog — группы категорий', () => {
-  it('«Память» и «Мультимодальный ввод» — в AI, не в эксплуатации', () => {
+  it('«Память», «Мультимодальный ввод» и «Управление контекстом» — в AI, не в эксплуатации', () => {
     const byId = new Map(SETTINGS_CATEGORIES.map((category) => [category.id, category]))
     expect(byId.get('memory')?.group).toBe('adminAi')
     expect(byId.get('attachments')?.group).toBe('adminAi')
+    expect(byId.get('contextManagement')?.group).toBe('adminAi')
+  })
+})
+
+describe('settings-catalog — «Управление контекстом»', () => {
+  it('админская категория в группе AI, скрыта за «Расширенными»', () => {
+    const category = SETTINGS_CATEGORIES.find((cat) => cat.id === 'contextManagement')
+    expect(category).toBeDefined()
+    expect(category?.group).toBe('adminAi')
+    expect(category?.roles).toEqual(['ADMIN'])
+    expect(category?.advanced).toBe(true)
+    expect(category?.labelKey).toBe('settings.category.contextManagement')
+  })
+
+  it('находится по названию и синонимам (ru/en)', () => {
+    expect(searchSettings(t, 'context management').categories.map((cat) => cat.id)).toContain(
+      'contextManagement',
+    )
+    expect(searchSettings(t, 'summarization').categories.map((cat) => cat.id)).toContain(
+      'contextManagement',
+    )
+    expect(searchSettings(tRu, 'управление контекстом').categories.map((cat) => cat.id)).toContain(
+      'contextManagement',
+    )
+    expect(searchSettings(tRu, 'скользящее окно').categories.map((cat) => cat.id)).toContain(
+      'contextManagement',
+    )
+    expect(searchSettings(tRu, 'политика').categories.map((cat) => cat.id)).toContain(
+      'contextManagement',
+    )
+  })
+
+  it('секции привязаны к якорям панели (дефолты, политика и подсказки)', () => {
+    const entries = SETTINGS_CATALOG.filter((entry) => entry.categoryId === 'contextManagement')
+    expect(entries.length).toBeGreaterThan(0)
+    const sectionIds = entries.map((entry) => entry.sectionId)
+    expect(sectionIds).toContain('context-defaults')
+    expect(sectionIds).toContain('context-window-policy')
+    expect(sectionIds).toContain('context-window-hints')
   })
 })
 

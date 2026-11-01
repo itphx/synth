@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { StickyNoteData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { useI18n } from '@/lib/i18n'
+import { useStickyNotesLimitsState } from '@/lib/api/stickyNotesLimits'
 
 interface StickyNotesPanelProps {
   notes: StickyNoteData[]
@@ -10,8 +12,12 @@ interface StickyNotesPanelProps {
 }
 
 export function StickyNotesPanel({ notes, onUpdate, onToggle, onDelete }: StickyNotesPanelProps) {
+  const { t } = useI18n()
   const [collapsed, setCollapsed] = useState(true)
   const activeNotes = notes.filter((n) => !n.disabled)
+  // instance-wide лимиты заметок: счётчик в заголовке и пометка у предела.
+  const { limits, loaded } = useStickyNotesLimitsState()
+  const atLimit = notes.length >= limits.maxCount
 
   if (notes.length === 0) return null
 
@@ -27,7 +33,23 @@ export function StickyNotesPanel({ notes, onUpdate, onToggle, onDelete }: Sticky
             className="size-3"
           />
           <Icon name="pushpin" className="size-3.5 text-status-warning/70" />
-          <span>Заметки: {activeNotes.length}</span>
+          <span data-testid="sticky-notes-counter">
+            {loaded
+              ? t('chat.notes.panelTitle', {
+                  active: activeNotes.length,
+                  maxCount: limits.maxCount,
+                })
+              : t('chat.notes.panelTitlePlain', { active: activeNotes.length })}
+          </span>
+          {loaded && atLimit && (
+            <span
+              data-testid="sticky-notes-limit-badge"
+              title={t('chat.notes.limitHint', { maxCount: limits.maxCount })}
+              className="rounded px-1 py-0.5 text-[0.625rem] font-medium bg-status-warning/15 text-status-warning"
+            >
+              {t('chat.notes.limitBadge')}
+            </span>
+          )}
         </button>
       </div>
 

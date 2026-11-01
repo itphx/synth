@@ -182,6 +182,10 @@ const en: Dictionary = {
     'Steering limit reached (max {max} injected messages per turn)',
   // ADR-106 Ф3: подтверждение не принято (нет гранта / повторный ответ / чужой ход).
   'errors.chat.approvalDenied': 'Approval was not accepted: {reason}',
+  // Лимиты заметок сессии (`context.stickyNotes`).
+  'errors.notFound.note': 'Note not found',
+  'errors.validation.noteTooLong': 'Note text is too long (max {max} characters)',
+  'errors.conflict.noteLimitReached': 'Session note limit reached (max {max})',
 
   // Stub
   'stub.llmNotConnected': '[Stub] You said: "{content}". LLM engine is not connected yet.',
@@ -367,6 +371,10 @@ const ru: Dictionary = {
     'Достигнут лимит вмешательств в ход (максимум {max} сообщений на ход)',
   // ADR-106 Ф3: подтверждение не принято (нет гранта / повторный ответ / чужой ход).
   'errors.chat.approvalDenied': 'Подтверждение не принято: {reason}',
+  // Лимиты заметок сессии (`context.stickyNotes`).
+  'errors.notFound.note': 'Заметка не найдена',
+  'errors.validation.noteTooLong': 'Текст заметки слишком длинный (максимум {max} символов)',
+  'errors.conflict.noteLimitReached': 'Достигнут лимит заметок сессии (максимум {max})',
 
   // Stub
   'stub.llmNotConnected': '[Заглушка] Вы сказали: "{content}". LLM-движок ещё не подключён.',

@@ -40,6 +40,7 @@ import { StatsTab } from './StatsTab'
 import { useChatStore } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
+import { useProvidersStore } from '@/stores/providersStore'
 import { useUIStore } from '@/stores/useUIStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -855,5 +856,72 @@ describe('StatsTab — мультивалютная стоимость (C2b)', (
 
     const container = await renderStats()
     expect(findSection(container, 'Session')!.textContent).toContain('~ 0.03 $ · ~ 2.10 ₽')
+  })
+})
+
+describe('StatsTab — «Контекстное окно» из общего хука (как в шапке)', () => {
+  function assistant(inputTokens?: number) {
+    return {
+      index: 0,
+      id: inputTokens === undefined ? 'no-usage' : 'm1',
+      role: 'assistant',
+      content: 'x',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      created_at: '2026-11-01T17:00:00.000Z',
+      ...(inputTokens === undefined
+        ? {}
+        : { usage: { input_tokens: inputTokens, output_tokens: 10, total_tokens: inputTokens + 10 } }),
+    }
+  }
+
+  it('98% и те же числа, даже если последнее сообщение без usage', async () => {
+    useProvidersStore.setState({
+      models: [{ id: 'm', name: 'm', context_window: 200_000 }],
+      selectedModelName: null,
+    } as never)
+    useChatStore.setState({
+      messagesBySession: { s1: [assistant(195_593), assistant(undefined)] },
+    } as never)
+
+    const container = await renderStats()
+    const section = findSection(container, 'Last answer')!
+    expect(section).not.toBeNull()
+    const context = section.querySelector('[data-testid="stats-context"]') as HTMLElement
+    expect(context).not.toBeNull()
+    expect(context.textContent).toContain('195,593')
+    expect(context.textContent).toContain('200,000')
+    expect(context.textContent).toContain('(98%)')
+    expect(context.dataset.level).toBe('critical')
+    // Предупреждение согласовано с новой шкалой (порог 90%).
+    expect(section.textContent).toContain('Context limit is near')
+  })
+
+  it('окно модели не задано — оценка 200 000 и пометка ≈', async () => {
+    useProvidersStore.setState({
+      models: [{ id: 'm', name: 'm' }],
+      selectedModelName: null,
+    } as never)
+    useChatStore.setState({ messagesBySession: { s1: [assistant(50_000)] } } as never)
+
+    const container = await renderStats()
+    const context = findSection(container, 'Last answer')!.querySelector('[data-testid="stats-context"]') as HTMLElement
+    expect(context.textContent).toContain('≈200,000')
+    expect(context.textContent).toContain('(25%)')
+    expect(context.dataset.level).toBe('ok')
+  })
+
+  it('ниже 90% предупреждения нет', async () => {
+    useProvidersStore.setState({
+      models: [{ id: 'm', name: 'm', context_window: 200_000 }],
+      selectedModelName: null,
+    } as never)
+    useChatStore.setState({ messagesBySession: { s1: [assistant(100_000)] } } as never)
+
+    const container = await renderStats()
+    const section = findSection(container, 'Last answer')!
+    expect(section.textContent).not.toContain('Context limit is near')
+    expect((section.querySelector('[data-testid="stats-context"]') as HTMLElement).textContent).toContain('(50%)')
   })
 })

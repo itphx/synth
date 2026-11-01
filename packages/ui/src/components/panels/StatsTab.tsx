@@ -12,14 +12,14 @@ import { Icon } from '@/components/icon/Icon'
 import { cacheHitPct, cacheHitRate, formatCost, formatCostMap, formatDuration, formatTokens, formatTps, DEFAULT_CHARS_PER_TOKEN } from '@/lib/formatStats'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
-import type { ProjectStats, ModelGroup, PromptInfoResponse, SessionMcpEffectiveResponse, SessionSkillsResponse, EffectiveSkillEntry } from '@/lib/api/synthApi'
+import {
+  CONTEXT_BLOCK_PERCENT,
+  CONTEXT_LEVEL_CLASSES,
+  useContextWindowUsage,
+} from '@/hooks/useContextWindowUsage'
+import type { ProjectStats, PromptInfoResponse, SessionMcpEffectiveResponse, SessionSkillsResponse, EffectiveSkillEntry } from '@/lib/api/synthApi'
 import type { PromptToolDetail, McpServerEffective } from '@itphx/synth-shared'
 import { PanelTab } from './PanelTab'
-
-/** Фолбэк контекстного окна, если у модели не задано своё. */
-const DEFAULT_CONTEXT_WINDOW = 200_000
-/** Порог предупреждения «контекст близко к лимиту», %. */
-const CONTEXT_NEAR_LIMIT_PCT = 90
 
 /**
  * Легенда цветов метрик статистики: фиксированный слот палитры темы
@@ -211,7 +211,6 @@ export const StatsTab: React.FC = () => {
   const { t, locale } = useI18n()
   const fmt = (v: number): string => v.toLocaleString(locale)
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null)
-  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([])
   const [promptInfo, setPromptInfo] = useState<PromptInfoResponse | null>(null)
   const [mcpEffective, setMcpEffective] = useState<SessionMcpEffectiveResponse | null>(null)
   const [skillsEffective, setSkillsEffective] = useState<SessionSkillsResponse | null>(null)
@@ -259,6 +258,21 @@ export const StatsTab: React.FC = () => {
     return null
   }, [sessionMessages])
 
+  /**
+   * Последнее assistant-сообщение **с usage**: финальное сообщение хода может
+   * не нести `usage` (фоллбек ошибки) — тогда разбивка «Последнего ответа»
+   * берётся из предыдущего ответа, а не пропадает целиком. Тем же правилом
+   * живёт индикатор в шапке (`useContextWindowUsage`).
+   */
+  const lastUsageMsg = useMemo(() => {
+    for (let i = sessionMessages.length - 1; i >= 0; i--) {
+      const m = sessionMessages[i]!
+      if (m.role !== 'assistant' || m.disabled || m.hidden) continue
+      if ((m.usage?.input_tokens ?? 0) > 0) return m
+    }
+    return null
+  }, [sessionMessages])
+
   // ADR-118 §1/§5 (live): источник live-значений «Последнего ответа» и дельты
   // секции «Сессия» — активный ход (`turnBySession`) и «живое» сообщение хода
   // (`status: 'streaming'`). Отдельного стрима больше нет: usage/cost/model
@@ -288,18 +302,10 @@ export const StatsTab: React.FC = () => {
   // статистика уже включает эти токены (иначе — задвоение и «залипшая» строка).
   const liveSubagent = isTurnActive ? liveSubagentRaw : undefined
 
-  useEffect(() => {
-    synthApi.getModels().then(setModelGroups).catch(() => {})
-  }, [])
-
-  const sessionModelId = (activeSession?.settings as Record<string, unknown>)?.model as string | undefined
-
-  const contextWindowModel = useMemo(() => {
-    const all = modelGroups.flatMap((g) => g.models)
-    return all.find((m) => m.id === sessionModelId)
-  }, [modelGroups, sessionModelId])
-
-  const contextWindowMax = contextWindowModel?.context_window ?? DEFAULT_CONTEXT_WINDOW
+  // Контекстное окно — из общего хука: те же числа, что в шапке (включая live
+  // usage стримящегося сообщения и фолбэк-окно модели).
+  const contextUsage = useContextWindowUsage(activeSessionId)
+  const contextLevelClasses = CONTEXT_LEVEL_CLASSES[contextUsage.level]
 
   const sessionProjectId = activeSession?.project_id
 
@@ -319,26 +325,30 @@ export const StatsTab: React.FC = () => {
     ? lastOutputTokens / (lastDurationMs / 1000)
     : undefined
   // Bug 4 (ADR-070 §2.6): usage мог быть оценён при отмене/сбое — помечаем `~`.
-  const lastTokenPrefix = lastAssistantMsg?.metadata?.usage_estimated === true ? '~' : ''
+  // Префикс берётся у того сообщения, из которого реально взята разбивка
+  // (`fallbackUsageMsg`), — финальное сообщение без usage не должно терять `~`.
 
   // ADR-070 §2.6 (live): если живое сообщение хода уже отдало usage — «Последний
   // ответ» берёт значения из него, иначе из последнего assistant-сообщения.
   // Оценка (`usage_estimated`) помечается `~`; точный usage оценкой не подменяется.
   const hasLiveUsage = !!liveStreamUsage && Object.keys(liveStreamUsage).length > 0
-  const displayUsage = hasLiveUsage ? liveStreamUsage : lastAssistantMsg?.usage
+  // Финальное сообщение без usage (фоллбек ошибки) не должен обнулять разбивку:
+  // берём предыдущий ответ с usage.
+  const fallbackUsageMsg = lastAssistantMsg?.usage ? lastAssistantMsg : lastUsageMsg
+  const displayUsage = hasLiveUsage ? liveStreamUsage : fallbackUsageMsg?.usage
   const displayCostUsd = hasLiveUsage ? liveStreamCostUsd : lastCostUsd
   const displayCostCurrency = hasLiveUsage ? liveStreamCostCurrency : lastCostCurrency
-  const displayTokenPrefix = hasLiveUsage ? (liveStreamUsageEstimated ? '~' : '') : lastTokenPrefix
+  const displayTokenPrefix = hasLiveUsage
+    ? (liveStreamUsageEstimated ? '~' : '')
+    : (fallbackUsageMsg?.metadata?.usage_estimated === true ? '~' : '')
   const displayModel = liveStreamModel ?? lastAssistantMsg?.model
   // Пока стрим активен, длительность/скорость ответа ещё не финализированы.
   const displayDurationMs = hasLiveUsage ? undefined : lastDurationMs
   const displayTps = hasLiveUsage ? undefined : lastTps
 
   const displayInputTokens = displayUsage?.input_tokens ?? 0
-  const windowPercent = contextWindowMax > 0 ? (displayInputTokens / contextWindowMax) * 100 : 0
-  // Предупреждение только при реальном окне модели (не фолбэк 200_000)
-  const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
-  const isContextNearLimit = hasRealContextWindow && windowPercent >= CONTEXT_NEAR_LIMIT_PCT
+  // Предупреждение согласовано с блоком над композером: порог 90%.
+  const isContextNearLimit = contextUsage.percent >= CONTEXT_BLOCK_PERCENT
 
   // ADR-070 §2.6 (live): компактная live-строка хода — тот же билдер сегментов,
   // что у live-строки ответа и у `MessageStats`.
@@ -531,17 +541,22 @@ export const StatsTab: React.FC = () => {
               ))}
             </div>
           )}
-          <div className="space-y-1">
+          <div className="space-y-1" data-testid="stats-context" data-level={contextUsage.level}>
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>{t('rightPanel.stats.contextWindow')}</span>
-              <span className="tabular-nums">
-                {fmt(displayInputTokens)} / {fmt(contextWindowMax)} ({Math.round(windowPercent)}%)
+              <span
+                className={cn('tabular-nums', contextUsage.level !== 'ok' && contextLevelClasses.text)}
+                title={contextUsage.isEstimated
+                  ? t('chat.context.estimated', { max: fmt(contextUsage.windowTokens) })
+                  : undefined}
+              >
+                {fmt(contextUsage.inputTokens)} / {contextUsage.isEstimated ? '≈' : ''}{fmt(contextUsage.windowTokens)} ({contextUsage.percent}%)
               </span>
             </div>
             <div className="h-2 w-full rounded-full bg-foreground/10">
               <div
-                className={cn('h-2 rounded-full transition-[width,background-color] duration-150 ease-out', isContextNearLimit ? 'bg-destructive' : 'bg-primary')}
-                style={{ width: `${Math.min(windowPercent, 100)}%` }}
+                className={cn('h-2 rounded-full transition-[width,background-color] duration-150 ease-out', contextLevelClasses.bar)}
+                style={{ width: `${contextUsage.percent}%` }}
               />
             </div>
             {isContextNearLimit && (

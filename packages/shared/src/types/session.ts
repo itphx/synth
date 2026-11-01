@@ -30,6 +30,34 @@ export const SESSION_MODES = ['plan', 'act', 'yolo'] as const;
 export type SessionMode = (typeof SESSION_MODES)[number];
 
 /**
+ * Instance-wide дефолты оптимизации контекста для **новых** сессий.
+ *
+ * Источник — `context.defaults` (config.yaml) с runtime-override
+ * (`/api/v2/settings/context-defaults`). Применяются только при создании
+ * сессии: явные `settings` запроса приоритетнее, существующие сессии не
+ * меняются.
+ */
+export interface ContextDefaults {
+  /**
+   * `sticky_notes` — legacy-значение сессий, в дефолтах и UI не предлагается:
+   * заметки работают независимо от стратегии.
+   */
+  contextOptimization: 'none' | 'sliding_window' | 'summarization';
+  summarizationEnabled: boolean;
+  summarizationTriggerMode: 'messages' | 'tokens';
+  /** Число сообщений до запуска суммаризации. */
+  summarizeAfterN: number;
+  /** Порог суммаризации в процентах окна модели (1..100). */
+  summarizeTokenThreshold: number;
+  summarizationHeadMessages: number;
+  summarizationTailMessages: number;
+  slidingWindowMode: 'messages' | 'tokens';
+  slidingWindowMessageLimit: number;
+  /** Порог скользящего окна в процентах окна модели (1..100). */
+  slidingWindowTokenThreshold: number;
+}
+
+/**
  * ADR-071 §2.3: политика включения инструментов в запрос.
  * - `consistency` — в запрос идут все определения, недоступность кодируется
  *   permission-слоем (`unavailable(mode|role)`); приоритет — валидность кэша;
@@ -96,6 +124,11 @@ export interface SessionSettings {
    * Изменение дефолта проекта/системы не влияет на существующие сессии.
    */
   mcpDefaultOn?: string[];
+  /**
+   * `sticky_notes` — legacy-значение сессий (сохранённые сессии продолжают
+   * валидироваться), в дефолтах и UI не предлагается: заметки работают
+   * независимо от стратегии.
+   */
   contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
   slidingWindowMessageLimit: number;
@@ -275,6 +308,20 @@ export interface StickyNote {
   createdAt: string;
   updatedAt: string;
   disabled: boolean;
+}
+
+/**
+ * Instance-wide лимиты заметок сессии (`context.stickyNotes`).
+ *
+ * Это **ограничения инстанса**, а не дефолты сессии: применяются ко всем
+ * сессиям при создании/изменении заметки. Уже существующие заметки не
+ * удаляются и не обрезаются — лимит действует только на новые записи.
+ */
+export interface StickyNotesLimits {
+  /** Максимум заметок на сессию (1..1000, дефолт 50). */
+  maxCount: number;
+  /** Максимум символов в одной заметке (1..100000, дефолт 2000). */
+  maxChars: number;
 }
 
 export interface SessionReference {

@@ -161,7 +161,7 @@ export function ContextTab() {
   return (
     <PanelTab>
       {/* Заметки — alwaysOpen */}
-      <Block title={t('rightPanel.context.optimization.sticky_notes')}>
+      <Block title={t('rightPanel.context.stickyNotes')}>
         {stickyNotes.length === 0 ? (
           <p className="text-xs text-muted-foreground">{t('rightPanel.context.noStickyNotes')}</p>
         ) : (

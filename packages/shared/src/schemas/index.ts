@@ -114,6 +114,43 @@ export function patchObjectSchema<S extends z.ZodRawShape>(
   return z.object(patchShape) as unknown as z.ZodObject<{ [K in keyof S]: z.ZodOptional<S[K]> }>;
 }
 
+/**
+ * Instance-wide дефолты оптимизации контекста для новых сессий
+ * (`context.defaults`, runtime-override — `/api/v2/settings/context-defaults`).
+ *
+ * Значения по умолчанию совпадают с прежними литералами
+ * `SessionManager.createSession`: новая сессия без явных `settings` получает
+ * ровно те же настройки, что и до появления настройки инстанса.
+ */
+export const contextDefaultsSchema = z.object({
+  // `sticky_notes` — legacy-значение сессий, в дефолтах и UI не предлагается:
+  // заметки работают независимо от стратегии оптимизации.
+  contextOptimization: z.enum(['none', 'sliding_window', 'summarization']).default('none'),
+  summarizationEnabled: z.boolean().default(false),
+  summarizationTriggerMode: z.enum(['messages', 'tokens']).default('messages'),
+  summarizeAfterN: z.number().int().min(1).default(10),
+  summarizeTokenThreshold: z.number().int().min(1).max(100).default(50),
+  summarizationHeadMessages: z.number().int().min(1).default(2),
+  summarizationTailMessages: z.number().int().min(1).default(3),
+  slidingWindowMode: z.enum(['messages', 'tokens']).default('messages'),
+  slidingWindowMessageLimit: z.number().int().min(1).default(10),
+  slidingWindowTokenThreshold: z.number().int().min(1).max(100).default(80),
+});
+
+/**
+ * Instance-wide лимиты заметок сессии (`context.stickyNotes`).
+ *
+ * Не дефолты сессии, а **ограничения инстанса**: применяются ко всем сессиям
+ * при создании/изменении заметки. Runtime-override —
+ * `/api/v2/settings/sticky-notes`. Значения по умолчанию совпадают с прежним
+ * поведением (заметки не ограничивались) и задают разумный верхний предел,
+ * чтобы заметки не превращались в бездонный канал контекста.
+ */
+export const stickyNotesLimitsSchema = z.object({
+  maxCount: z.number().int().min(1).max(1000).default(50),
+  maxChars: z.number().int().min(1).max(100000).default(2000),
+});
+
 export const sessionSettingsSchema = z.object({
   provider: z.string().optional(),
   model: z.string().optional(),

@@ -1,4 +1,4 @@
-import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project } from '@itphx/synth-shared';
+import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project, ContextDefaults } from '@itphx/synth-shared';
 import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, orderSteerInjections } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
@@ -34,6 +34,12 @@ export interface SessionManagerOptions {
    * запись не выполняется (поведение прежнее).
    */
   analytics?: AnalyticsRecorder;
+  /**
+   * Instance-wide дефолты оптимизации контекста для **новых** сессий
+   * (`context.defaults`, runtime-патч поверх config). Геттер читается при
+   * создании; явные `settings` запроса всегда приоритетнее.
+   */
+  contextDefaults?: () => Partial<ContextDefaults>;
 }
 
 export interface SessionTree {
@@ -126,6 +132,9 @@ export class SessionManager {
 
   async createSession(data: { title?: string; icon?: string; color?: string; projectId?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string; expiresAt?: string } = {}): Promise<Session> {
     const mcpToolSettings = await this._resolveMcpToolSettings(data.settings?.mcpToolSettings);
+    // Дефолты инстанса для новых сессий (`context.defaults` + runtime). Явные
+    // настройки запроса (`data.settings.*`) всегда приоритетнее.
+    const contextDefaults = this._options.contextDefaults?.() ?? {};
     const session: Session = {
       id: generateId(),
       title: data.title || sm('session.default_title'),
@@ -155,16 +164,16 @@ export class SessionManager {
         maxTokens: data.settings?.maxTokens ?? 0,
         debugEnabled: data.settings?.debugEnabled ?? true,
         streamEnabled: data.settings?.streamEnabled ?? true,
-        contextOptimization: data.settings?.contextOptimization ?? 'none',
-        slidingWindowMode: data.settings?.slidingWindowMode ?? 'messages',
-        slidingWindowMessageLimit: data.settings?.slidingWindowMessageLimit ?? 10,
-        slidingWindowTokenThreshold: data.settings?.slidingWindowTokenThreshold ?? 80,
-        summarizationEnabled: data.settings?.summarizationEnabled ?? false,
-        summarizationTriggerMode: data.settings?.summarizationTriggerMode ?? 'messages',
-        summarizeAfterN: data.settings?.summarizeAfterN ?? 10,
-        summarizeTokenThreshold: data.settings?.summarizeTokenThreshold ?? 50,
-        summarizationHeadMessages: data.settings?.summarizationHeadMessages ?? 2,
-        summarizationTailMessages: data.settings?.summarizationTailMessages ?? 3,
+        contextOptimization: data.settings?.contextOptimization ?? contextDefaults.contextOptimization ?? 'none',
+        slidingWindowMode: data.settings?.slidingWindowMode ?? contextDefaults.slidingWindowMode ?? 'messages',
+        slidingWindowMessageLimit: data.settings?.slidingWindowMessageLimit ?? contextDefaults.slidingWindowMessageLimit ?? 10,
+        slidingWindowTokenThreshold: data.settings?.slidingWindowTokenThreshold ?? contextDefaults.slidingWindowTokenThreshold ?? 80,
+        summarizationEnabled: data.settings?.summarizationEnabled ?? contextDefaults.summarizationEnabled ?? false,
+        summarizationTriggerMode: data.settings?.summarizationTriggerMode ?? contextDefaults.summarizationTriggerMode ?? 'messages',
+        summarizeAfterN: data.settings?.summarizeAfterN ?? contextDefaults.summarizeAfterN ?? 10,
+        summarizeTokenThreshold: data.settings?.summarizeTokenThreshold ?? contextDefaults.summarizeTokenThreshold ?? 50,
+        summarizationHeadMessages: data.settings?.summarizationHeadMessages ?? contextDefaults.summarizationHeadMessages ?? 2,
+        summarizationTailMessages: data.settings?.summarizationTailMessages ?? contextDefaults.summarizationTailMessages ?? 3,
         showInterview: data.settings?.showInterview ?? true,
         websocketEnabled: data.settings?.websocketEnabled ?? true,
         // ADR-071 §2.1: активные MCP-серверы сессии. Раньше терялись при создании

@@ -220,6 +220,8 @@ export {
   type LoggingConfig,
   type TsmConfig,
   type ContextConfigSchema,
+  CONTEXT_WINDOW_POLICIES,
+  type ContextWindowPolicy,
   type SummarizationConfig,
   type McpServerConfig,
   type McpServerAuth,
