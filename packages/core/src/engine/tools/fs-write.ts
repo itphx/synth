@@ -78,7 +78,8 @@ type FsToolErrorKey =
   | 'fs.mixed_line_endings'
   | 'fs.edit_binary'
   | 'fs.write_binary'
-  | 'fs.file_too_large';
+  | 'fs.file_too_large'
+  | 'fs.file_not_found';
 
 function fsErrorResult(
   key: FsToolErrorKey,
@@ -186,9 +187,17 @@ export const editFileTool: ToolDefinition = {
     const oldString = await deobfuscateText(ctx, params.old_string);
     const newString = await deobfuscateText(ctx, params.new_string);
 
+    // LF-вид обеих строк: фактическая замена всегда идёт в LF-виде (CRLF-файл
+    // правится как LF и возвращается в CRLF), поэтому и сравнение «есть ли
+    // вообще изменение» — по LF-виду. Иначе пара «old с \r\n, new с \n»
+    // проходила бы гейт, а после нормализации стала бы no-op, и тул рапортовал
+    // бы об успешной правке, ничего не изменив.
+    const oldView = toLfView(oldString);
+    const newView = toLfView(newString);
+
     // Отказы до чтения файла: правка «сама в себя» и пустой old_string
     // (при replace_all он вставляет текст между каждым символом — порча файла).
-    if (oldString === newString) {
+    if (oldView === newView) {
       return fsErrorResult('fs.no_changes', {}, { path: resolvedPath });
     }
     if (oldString === '') {
@@ -196,7 +205,11 @@ export const editFileTool: ToolDefinition = {
     }
 
     const info = await stat(resolvedPath).catch(() => null);
-    if (info && info.size > MAX_TOOL_FILE_BYTES) {
+    // Файла нет — graceful-отказ вместо исключения из `sniffBinary` (ENOENT).
+    if (!info) {
+      return fsErrorResult('fs.file_not_found', { path: params.file_path }, { path: resolvedPath });
+    }
+    if (info.size > MAX_TOOL_FILE_BYTES) {
       return fsErrorResult(
         'fs.file_too_large',
         { limit: String(MAX_TOOL_FILE_BYTES) },
@@ -217,8 +230,6 @@ export const editFileTool: ToolDefinition = {
     // возвращаем CRLF — файл не теряет ни одного `\r\n`.
     const crlf = style === 'crlf';
     const content = crlf ? toLfView(raw) : raw;
-    const oldView = crlf ? toLfView(oldString) : oldString;
-    const newView = crlf ? toLfView(newString) : newString;
 
     const occurrences = content.split(oldView).length - 1;
     if (occurrences === 0) {
@@ -237,7 +248,7 @@ export const editFileTool: ToolDefinition = {
       ? content.replaceAll(oldView, newView)
       : content.replace(oldView, newView);
     const written = crlf ? fromLfView(newContent) : newContent;
-    const mode = info ? info.mode & 0o777 : undefined;
+    const mode = info.mode & 0o777;
     await writeFileAtomic(resolvedPath, written, mode);
 
     const diff = generateUnifiedDiff(content, newContent, params.file_path);

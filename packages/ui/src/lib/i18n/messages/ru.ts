@@ -2815,6 +2815,7 @@ export const dict = {
   'fs.edit_binary': 'Нельзя править бинарный файл: {path}',
   'fs.write_binary': 'Нельзя перезаписать бинарный файл: {path}',
   'fs.file_too_large': 'Ошибка: файл слишком велик (предел {limit} байт)',
+  'fs.file_not_found': 'Ошибка: файл не найден: {path}',
   'fs.dir_created': 'Каталог создан: {path}',
   'fs.file_deleted': 'Файл удалён: {path}',
   'fs.patch_applied': 'Патч применён: файлов — {files}, замен — {replacements}',
@@ -3133,7 +3134,8 @@ export const dict = {
     'Ошибка: {tool} прерван по таймауту в {timeout} мс. '
     + 'Повторите с большим параметром `timeout`, увеличьте таймаут локальных/сетевых операций git в конфиге '
     + 'или запустите команду в фоне (execute_shell с background: true). '
-    + 'Перед повтором проверьте, не остался ли файл `.git/index.lock`.',
+    + 'Если репозиторий остался в несогласованном состоянии (например, идёт merge), '
+    + 'завершите или отмените его перед повтором.',
 
   // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
   'worktree.directory_missing':

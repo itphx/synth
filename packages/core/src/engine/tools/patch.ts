@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolResult } from '@itphx/synth-shared';
@@ -10,6 +9,8 @@ import { isAborted, abortedResult } from './abort.js';
 import { sniffBinary } from './fs-read.js';
 import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import { generateUnifiedDiff } from './fs-write.js';
+import { detectLineEndings, fromLfView, toLfView } from './line-endings.js';
+import { writeFileAtomic } from './atomic-file-write.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 
@@ -30,19 +31,38 @@ const patchEditSchema = z.object({
   replace_all: z.boolean().optional().default(false).describe('Replace all occurrences (default: false)'),
 });
 
-/** Состояние одного файла в памяти: оригинал (для отката) и текущее содержимое. */
+/**
+ * Состояние одного файла в памяти: оригинал (для отката) и текущее содержимое.
+ *
+ * Правки всегда идут по LF-виду содержимого (`read_file` отдаёт текст с LF),
+ * а в файл попадают в стиле самого файла: CRLF-файл сохраняет `\r\n`.
+ */
 interface PatchFileState {
   /** Путь для текстов сообщений — из первой правки этого файла (как ввёл агент). */
   displayPath: string;
   resolvedPath: string;
+  /** Исходное содержимое в сыром виде — для отката при сбое записи. */
+  rawOriginal: string;
+  /** Исходное содержимое в LF-виде — основа diff'а. */
   original: string;
+  /** Текущее содержимое в LF-виде — рабочая копия правок. */
   content: string;
+  /** Стиль переводов строк файла (`mixed` отсекается при загрузке). */
+  style: 'lf' | 'crlf';
   mode: number;
   replacements: number;
 }
 
 function patchError(
-  key: 'fs.patch_not_found' | 'fs.patch_multiple' | 'fs.patch_file_missing' | 'fs.patch_not_regular' | 'fs.patch_too_large' | 'fs.patch_binary',
+  key:
+    | 'fs.patch_not_found'
+    | 'fs.patch_multiple'
+    | 'fs.patch_file_missing'
+    | 'fs.patch_not_regular'
+    | 'fs.patch_too_large'
+    | 'fs.patch_binary'
+    | 'fs.no_changes'
+    | 'fs.mixed_line_endings',
   params: Record<string, string>,
   metadata: Record<string, unknown>,
 ): ToolResult {
@@ -60,6 +80,8 @@ export const patchTool: ToolDefinition = {
     + 'Provide a JSON list of edits: each edit has file_path, old_string, new_string and optional replace_all. '
     + 'Nothing is written unless all edits can be applied: 0 matches or an ambiguous match without replace_all fails the whole call. '
     + 'read_file prefixes every line with its number ("N: "); that prefix is for reading only — never include it in old_string or new_string. '
+    + 'Line endings of the file are preserved: an LF file is edited as is, a CRLF file is matched in LF view and written back as CRLF, '
+    + 'a file with mixed line endings is refused. '
     + 'Paths are resolved against the project working directory; prefer relative paths. Absolute paths outside the session perimeter are rejected, and paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     edits: z.array(patchEditSchema).min(1).max(MAX_PATCH_EDITS).describe('1..50 exact replacements applied in order'),
@@ -105,7 +127,17 @@ export const patchTool: ToolDefinition = {
       const oldString = await deobfuscateText(ctx, edit.old_string);
       const newString = await deobfuscateText(ctx, edit.new_string);
 
-      const occurrences = state.content.split(oldString).length - 1;
+      // Сопоставление и замена — по LF-виду (в этом виде текст приходит из
+      // `read_file`). Поэтому и сравнение «есть ли изменение» — по LF-виду:
+      // иначе пара «old с \r\n, new с \n» прошла бы гейт, а после нормализации
+      // стала бы no-op — и тул рапортовал бы об успешной правке впустую.
+      const oldView = toLfView(oldString);
+      const newView = toLfView(newString);
+      if (oldView === newView) {
+        return patchError('fs.no_changes', {}, { path: resolvedPath, index });
+      }
+
+      const occurrences = state.content.split(oldView).length - 1;
       if (occurrences === 0) {
         return patchError(
           'fs.patch_not_found',
@@ -124,8 +156,8 @@ export const patchTool: ToolDefinition = {
 
       // Правки применяются последовательно в памяти: следующая видит результат предыдущей.
       state.content = replaceAll
-        ? state.content.replaceAll(oldString, newString)
-        : state.content.replace(oldString, newString);
+        ? state.content.replaceAll(oldView, newView)
+        : state.content.replace(oldView, newView);
       state.replacements += replaceAll ? occurrences : 1;
     }
 
@@ -133,27 +165,21 @@ export const patchTool: ToolDefinition = {
     // Фаза 2: запись. Атомарно по файлу (tmp в том же каталоге → rename);
     // при сбое посередине — best-effort откат уже перезаписанных файлов.
     // ---------------------------------------------------------------------
-    const tmpFiles: string[] = [];
     const written: PatchFileState[] = [];
     let currentPath = '';
     try {
       for (const key of order) {
         const file = files.get(key)!;
         currentPath = file.resolvedPath;
-        const tmp = join(dirname(file.resolvedPath), `${basename(file.resolvedPath)}.synth-tmp-${randomUUID()}`);
-        tmpFiles.push(tmp);
-        await writeFile(tmp, file.content, { encoding: 'utf-8', mode: file.mode });
-        await rename(tmp, file.resolvedPath);
+        // CRLF-файл возвращаем в CRLF — ни один `\r\n` не теряется.
+        const content = file.style === 'crlf' ? fromLfView(file.content) : file.content;
+        await writeFileAtomic(file.resolvedPath, content, file.mode);
         written.push(file);
       }
     } catch (err) {
-      // Временные файлы (включая уже переименованный — его rename удалил сам) убираем best-effort.
-      for (const tmp of tmpFiles) {
-        await rm(tmp, { force: true }).catch(() => undefined);
-      }
-      // Уже перезаписанные файлы возвращаем к оригиналам.
+      // Уже перезаписанные файлы возвращаем к оригиналам (в исходном стиле).
       for (const file of written) {
-        await writeFile(file.resolvedPath, file.original, { encoding: 'utf-8', mode: file.mode }).catch(() => undefined);
+        await writeFile(file.resolvedPath, file.rawOriginal, { encoding: 'utf-8', mode: file.mode }).catch(() => undefined);
       }
       const message = err instanceof Error ? err.message : String(err);
       return {
@@ -221,13 +247,24 @@ async function loadPatchTarget(
       error: patchError('fs.patch_binary', { path: displayPath }, { path: resolvedPath }),
     };
   }
-  const content = await readFile(resolvedPath, 'utf-8');
+  const raw = await readFile(resolvedPath, 'utf-8');
+  const style = detectLineEndings(raw);
+  // Смешанные переводы строк — отказ: патч всё-или-ничего, стиль файла
+  // менять нельзя (иначе часть строк потеряла бы `\r`).
+  if (style === 'mixed') {
+    return {
+      error: patchError('fs.mixed_line_endings', {}, { path: resolvedPath }),
+    };
+  }
+  const view = toLfView(raw);
   return {
     state: {
       displayPath,
       resolvedPath,
-      original: content,
-      content,
+      rawOriginal: raw,
+      original: view,
+      content: view,
+      style,
       mode: info.mode & 0o777,
       replacements: 0,
     },

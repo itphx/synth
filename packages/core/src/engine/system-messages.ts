@@ -131,6 +131,7 @@ export const SYSTEM_MESSAGES = {
   'fs.edit_binary': 'Cannot edit binary file: {path}',
   'fs.write_binary': 'Cannot overwrite binary file: {path}',
   'fs.file_too_large': 'Error: file is too large (limit {limit} bytes)',
+  'fs.file_not_found': 'Error: file not found: {path}',
   'fs.dir_created': 'Directory created: {path}',
   'fs.file_deleted': 'File deleted: {path}',
   // Мультифайловая атомарная правка (`patch`, JSON-edits): всё-или-ничего.
@@ -464,7 +465,8 @@ export const SYSTEM_MESSAGES = {
     'Error: {tool} was interrupted after the {timeout} ms timeout. '
     + 'Retry with a larger `timeout` argument, raise the git local/network timeout in config, '
     + 'or run the command in the background (execute_shell with background: true). '
-    + 'Check for a leftover .git/index.lock before retrying.',
+    + 'If the repository is left in an inconsistent state (for example a merge in progress), '
+    + 'finish or abort it before retrying.',
 
   // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
   'worktree.directory_missing':

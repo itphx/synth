@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, access, stat, chmod, lstat, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, access, stat, chmod, lstat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileTool, createDirectoryTool, deleteFileTool, editFileTool } from './fs-write.js';
@@ -151,6 +151,78 @@ describe('fs-write tools — надёжность правок', () => {
     const after = await readFile(file, 'utf-8');
     expect(after).toBe('X\r\nY\r\n');
     expect(after.split('\r\n').length - 1).toBe(2);
+  });
+
+  it('edit_file: CRLF-файл — old с \\r\\n и new с \\n — отказ (правка без изменений), файл не изменён', async () => {
+    const file = join(tmpDir, 'crlf-noop.txt');
+    await writeFile(file, 'line1\r\nline2\r\n', 'utf-8');
+
+    // После нормализации CRLF пара превращается в «old == new» — замена
+    // ничего не меняет, но гейт по сырым строкам её пропускал.
+    const result = await editFileTool.execute(
+      { file_path: 'crlf-noop.txt', old_string: 'line1\r\nline2', new_string: 'line1\nline2' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('No changes to apply');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.no_changes');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('line1\r\nline2\r\n');
+  });
+
+  it('edit_file: CRLF-файл — replace_all с парой «old \\r\\n / new \\n» — отказ, файл не изменён', async () => {
+    const file = join(tmpDir, 'crlf-noop-all.txt');
+    await writeFile(file, 'a\r\nb\r\na\r\nb\r\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'crlf-noop-all.txt', old_string: 'a\r\nb', new_string: 'a\nb', replace_all: true },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.no_changes');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('a\r\nb\r\na\r\nb\r\n');
+  });
+
+  it('edit_file: файл не существует — понятный отказ, без исключения', async () => {
+    const result = await editFileTool.execute(
+      { file_path: 'missing.txt', old_string: 'a', new_string: 'b' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('file not found');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.file_not_found');
+  });
+
+  it('write_file/edit_file: каталог без прав (0555) и доступный на запись файл — запись успешна', async () => {
+    const roDir = join(tmpDir, 'ro');
+    await mkdir(roDir, { recursive: true });
+    const file = join(roDir, 'keep.txt');
+    await writeFile(file, 'old\n', 'utf-8');
+    await chmod(file, 0o666);
+    await chmod(roDir, 0o555);
+    try {
+      // Каталог не даёт создать tmp для атомарной записи — тул обязан
+      // откатиться на прямую запись в доступный файл (прежнее поведение).
+      const written = await writeFileTool.execute(
+        { file_path: file, content: 'new\n' },
+        makeCtx(),
+      );
+      expect(written.isError).toBeFalsy();
+      await expect(readFile(file, 'utf-8')).resolves.toBe('new\n');
+      expect((await stat(file)).mode & 0o777).toBe(0o666);
+
+      const edited = await editFileTool.execute(
+        { file_path: file, old_string: 'new', new_string: 'edited' },
+        makeCtx(),
+      );
+      expect(edited.isError).toBeFalsy();
+      await expect(readFile(file, 'utf-8')).resolves.toBe('edited\n');
+      expect((await stat(file)).mode & 0o777).toBe(0o666);
+    } finally {
+      await chmod(roDir, 0o755);
+    }
   });
 
   it('edit_file: CRLF-файл — replace_all сохраняет все \r\n', async () => {

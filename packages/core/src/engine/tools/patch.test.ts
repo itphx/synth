@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, stat, chmod, lstat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolCapability } from '@itphx/synth-shared';
@@ -177,6 +177,114 @@ describe('patch — атомарная мультифайловая правка
     expect(result.isError).toBe(true);
     expect(result.content.toLowerCase()).toContain('binary');
     await expect(readFile(path)).resolves.toEqual(bytes);
+  });
+
+  it('CRLF-файл — old_string в LF-виде (как из read_file) — правка применяется, \\r\\n сохранены', async () => {
+    await writeFile(join(tmpDir, 'crlf.txt'), 'line1\r\nline2\r\n', 'utf-8');
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'crlf.txt', old_string: 'line1\nline2', new_string: 'X\nY' }],
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    await expect(readFile(join(tmpDir, 'crlf.txt'), 'utf-8')).resolves.toBe('X\r\nY\r\n');
+  });
+
+  it('CRLF-файл — replace_all сохраняет все \\r\\n', async () => {
+    await writeFile(join(tmpDir, 'crlf-all.txt'), 'a\r\nb\r\na\r\nb\r\n', 'utf-8');
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'crlf-all.txt', old_string: 'a\nb', new_string: 'c\nd', replace_all: true }],
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    const after = await readFile(join(tmpDir, 'crlf-all.txt'), 'utf-8');
+    expect(after).toBe('c\r\nd\r\nc\r\nd\r\n');
+    expect(after.split('\r\n').length - 1).toBe(4);
+  });
+
+  it('old_string == new_string — отказ, файл не изменён', async () => {
+    await writeFile(join(tmpDir, 'same.txt'), 'alpha\n', 'utf-8');
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'same.txt', old_string: 'alpha', new_string: 'alpha' }],
+    }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('No changes to apply');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.no_changes');
+    await expect(readFile(join(tmpDir, 'same.txt'), 'utf-8')).resolves.toBe('alpha\n');
+  });
+
+  it('CRLF-файл — old с \\r\\n и new с \\n — отказ (правка без изменений), файл не изменён', async () => {
+    await writeFile(join(tmpDir, 'crlf-noop.txt'), 'line1\r\nline2\r\n', 'utf-8');
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'crlf-noop.txt', old_string: 'line1\r\nline2', new_string: 'line1\nline2' }],
+    }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.no_changes');
+    await expect(readFile(join(tmpDir, 'crlf-noop.txt'), 'utf-8')).resolves.toBe('line1\r\nline2\r\n');
+  });
+
+  it('смешанные переводы строк — отказ, файл не изменён', async () => {
+    await writeFile(join(tmpDir, 'mixed.txt'), 'a\r\nb\nc\r\n', 'utf-8');
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'mixed.txt', old_string: 'b', new_string: 'B' }],
+    }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('mixed line endings');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.mixed_line_endings');
+    await expect(readFile(join(tmpDir, 'mixed.txt'), 'utf-8')).resolves.toBe('a\r\nb\nc\r\n');
+  });
+
+  it('смешанные переводы строк во втором файле — отказ всего патча, первый файл не изменён', async () => {
+    await writeFile(join(tmpDir, 'a.txt'), 'alpha\n', 'utf-8');
+    await writeFile(join(tmpDir, 'mixed.txt'), 'a\r\nb\nc\r\n', 'utf-8');
+
+    const result = await patchTool.execute({
+      edits: [
+        { file_path: 'a.txt', old_string: 'alpha', new_string: 'ALPHA' },
+        { file_path: 'mixed.txt', old_string: 'b', new_string: 'B' },
+      ],
+    }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.mixed_line_endings');
+    await expect(readFile(join(tmpDir, 'a.txt'), 'utf-8')).resolves.toBe('alpha\n');
+    await expect(readFile(join(tmpDir, 'mixed.txt'), 'utf-8')).resolves.toBe('a\r\nb\nc\r\n');
+  });
+
+  it('права файла сохраняются после патча', async () => {
+    const file = join(tmpDir, 'keep.sh');
+    await writeFile(file, 'echo hi\n', 'utf-8');
+    await chmod(file, 0o640);
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'keep.sh', old_string: 'echo hi', new_string: 'echo hello' }],
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect((await stat(file)).mode & 0o777).toBe(0o640);
+    await expect(readFile(file, 'utf-8')).resolves.toBe('echo hello\n');
+  });
+
+  it('симлинк не превращается в обычный файл (пишем в цель)', async () => {
+    const target = join(tmpDir, 'target.txt');
+    const link = join(tmpDir, 'link.txt');
+    await writeFile(target, 'hello\n', 'utf-8');
+    await symlink(target, link);
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'link.txt', old_string: 'hello', new_string: 'bye' }],
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    await expect(readFile(target, 'utf-8')).resolves.toBe('bye\n');
   });
 
   it('несуществующий файл и каталог — отказ до записи', async () => {

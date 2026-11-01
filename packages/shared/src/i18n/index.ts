@@ -86,6 +86,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'fs.edit_binary',
   'fs.write_binary',
   'fs.file_too_large',
+  'fs.file_not_found',
   'fs.dir_created',
   'fs.file_deleted',
   // Мультифайловая атомарная правка (`patch`, JSON-edits).
@@ -568,6 +569,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'fs.edit_binary': ["path"],
   'fs.write_binary': ["path"],
   'fs.file_too_large': ["limit"],
+  'fs.file_not_found': ["path"],
   'fs.dir_created': ["path"],
   'fs.file_deleted': ["path"],
   'fs.patch_applied': ["files","replacements"],
