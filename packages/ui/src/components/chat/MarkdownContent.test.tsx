@@ -377,3 +377,158 @@ describe('MarkdownContent: подсветка кода (shiki)', () => {
     expect(container.querySelector('pre.md-code-pre')?.classList.contains('shiki')).toBe(false)
   })
 })
+
+describe('MarkdownContent: скачивание кода', () => {
+  /** Blob'ы, ушедшие в `URL.createObjectURL`. */
+  let blobs: Blob[] = []
+  /** Ссылки, по которым реально «кликнули» (перехват `a.click()`). */
+  let clickedLinks: HTMLAnchorElement[] = []
+
+  beforeEach(() => {
+    blobs = []
+    clickedLinks = []
+    // jsdom не реализует object URL — подменяем, чтобы прочитать содержимое файла.
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: vi.fn((blob: Blob) => {
+        blobs.push(blob)
+        return `blob:mock-${blobs.length}`
+      }),
+      configurable: true,
+      writable: true,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      value: vi.fn(),
+      configurable: true,
+      writable: true,
+    })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clickedLinks.push(this)
+    })
+  })
+
+  async function clickDownload(container: HTMLElement): Promise<HTMLButtonElement> {
+    const button = container.querySelector<HTMLButtonElement>('[data-download-code]')
+    expect(button).not.toBeNull()
+    await act(async () => {
+      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    return button!
+  }
+
+  it('кнопка скачивания есть в шапке и не срезана санитайзером', async () => {
+    const container = await renderMarkdown('```ts\nconst a = 1\n```')
+
+    const button = container.querySelector('[data-download-code]')
+    expect(button).not.toBeNull()
+    expect(button?.textContent).toBe(i18nText('markdown.code.download'))
+    // Обе кнопки — в общей группе действий справа от языка.
+    const actions = container.querySelector('.md-code-actions')
+    expect(actions?.querySelector('[data-copy-code]')).not.toBeNull()
+    expect(actions?.contains(button!)).toBe(true)
+  })
+
+  it('клик скачивает исходный код файлом с расширением языка', async () => {
+    const container = await renderMarkdown('```ts\nconst a = 1\nconsole.log(a)\n```')
+
+    await clickDownload(container)
+
+    expect(blobs).toHaveLength(1)
+    expect(blobs[0]!.type).toBe('text/plain;charset=utf-8')
+    expect(await blobs[0]!.text()).toBe('const a = 1\nconsole.log(a)')
+    expect(clickedLinks).toHaveLength(1)
+    expect(clickedLinks[0]!.download).toBe('code.ts')
+    expect(clickedLinks[0]!.href).toBe('blob:mock-1')
+    // Отзыв URL — в следующей макротаске (браузер должен успеть начать загрузку).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-1')
+  })
+
+  it('хвостовые пустые строки в файл не попадают', async () => {
+    const container = await renderMarkdown('```ts\nconst a = 1\n\n\n```')
+
+    await clickDownload(container)
+
+    expect(await blobs[0]!.text()).toBe('const a = 1')
+  })
+
+  it('неизвестный язык → code.txt', async () => {
+    const container = await renderMarkdown('```mermaid\ngraph TD\n```')
+
+    await clickDownload(container)
+
+    expect(clickedLinks[0]!.download).toBe('code.txt')
+    expect(await blobs[0]!.text()).toBe('graph TD')
+  })
+
+  it('пустой блок кода ничего не скачивает', async () => {
+    const container = await renderMarkdown('```ts\n```')
+
+    const button = await clickDownload(container)
+
+    expect(blobs).toHaveLength(0)
+    expect(clickedLinks).toHaveLength(0)
+    expect(button.textContent).toBe(i18nText('markdown.code.download'))
+  })
+
+  it('подпись меняется на «Скачано» и возвращается по таймеру', async () => {
+    const container = await renderMarkdown('```ts\nconst a = 1\n```')
+    const button = container.querySelector<HTMLButtonElement>('[data-download-code]')!
+    // Таймеры — фейковые только на время проверки обратной связи.
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+
+      expect(button.textContent).toBe(i18nText('markdown.code.downloaded'))
+      expect(button.getAttribute('data-downloaded')).toBe('true')
+
+      await act(async () => {
+        vi.advanceTimersByTime(1500)
+      })
+
+      expect(button.textContent).toBe(i18nText('markdown.code.download'))
+      expect(button.getAttribute('data-downloaded')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('блок после подсветки отдаёт тот же исходный текст (без номеров строк)', async () => {
+    // Как настоящий shiki: строки — span'ы, текст (и `\n` между ними) сохраняется,
+    // номера строк рисует CSS-счётчик, в `textContent` их нет.
+    vi.mocked(highlightCode).mockImplementation(async (code) => `<span class="line">${code}</span>`)
+    const container = await renderMarkdown('```ts\nconst a = 1\nconsole.log(a)\n```')
+    await flushEffects()
+
+    expect(container.querySelector('pre.md-code-pre')?.classList.contains('shiki')).toBe(true)
+    const code = container.querySelector('pre code')!
+    expect(code.textContent).toBe('const a = 1\nconsole.log(a)')
+
+    await clickDownload(container)
+
+    expect(await blobs[0]!.text()).toBe('const a = 1\nconsole.log(a)')
+    expect(clickedLinks[0]!.download).toBe('code.ts')
+  })
+
+  it('ошибка URL.createObjectURL не ломает рендер и обработчик', async () => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: vi.fn(() => {
+        throw new Error('not supported')
+      }),
+      configurable: true,
+      writable: true,
+    })
+    const container = await renderMarkdown('```ts\nconst a = 1\n```')
+    const button = container.querySelector<HTMLButtonElement>('[data-download-code]')!
+
+    await clickDownload(container)
+
+    expect(container.querySelector('.md-code')).not.toBeNull()
+    expect(clickedLinks).toHaveLength(0)
+    expect(button.textContent).toBe(i18nText('markdown.code.download'))
+    expect(button.getAttribute('data-downloaded')).toBeNull()
+  })
+})

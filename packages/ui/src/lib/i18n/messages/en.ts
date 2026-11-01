@@ -1233,9 +1233,11 @@ export const dict = {
   // plain bubble (ADR-118 §4).
   'chat.steer.interruptMarker': 'Turn interrupted',
 
-  // Markdown в ответах: заголовок блока кода и кнопка копирования.
+  // Markdown в ответах: заголовок блока кода, кнопки копирования и скачивания.
   'markdown.code.copy': 'Copy',
   'markdown.code.copied': 'Copied',
+  'markdown.code.download': 'Download',
+  'markdown.code.downloaded': 'Downloaded',
 
   'chat.actions.copy': 'Copy',
   'chat.actions.copyHint': 'Copy · Shift for plain text',

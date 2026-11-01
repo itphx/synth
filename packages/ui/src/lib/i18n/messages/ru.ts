@@ -1209,9 +1209,11 @@ export const dict = {
   // обычным пузырём (ADR-118 §4).
   'chat.steer.interruptMarker': 'Прерывание хода',
 
-  // Markdown в ответах: заголовок блока кода и кнопка копирования.
+  // Markdown в ответах: заголовок блока кода, кнопки копирования и скачивания.
   'markdown.code.copy': 'Копировать',
   'markdown.code.copied': 'Скопировано',
+  'markdown.code.download': 'Скачать',
+  'markdown.code.downloaded': 'Скачано',
 
   'chat.actions.copy': 'Копировать',
   'chat.actions.copyHint': 'Копировать · Shift — без разметки',

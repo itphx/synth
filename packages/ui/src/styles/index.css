@@ -703,7 +703,16 @@ html.device-tablet .notifications-popup {
   user-select: none;
 }
 
-.markdown-content .md-code-copy {
+.markdown-content .md-code-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Обе кнопки шапки выглядят одинаково (копирование и скачивание). */
+.markdown-content .md-code-copy,
+.markdown-content .md-code-download {
   flex: 0 0 auto;
   padding: 0.125rem 0.45rem;
   border: 1px solid transparent;
@@ -717,12 +726,14 @@ html.device-tablet .notifications-popup {
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.markdown-content .md-code-copy:hover {
+.markdown-content .md-code-copy:hover,
+.markdown-content .md-code-download:hover {
   background: var(--interactive-hover, var(--surface-raised, var(--card)));
   color: var(--foreground);
 }
 
-.markdown-content .md-code-copy[data-copied='true'] {
+.markdown-content .md-code-copy[data-copied='true'],
+.markdown-content .md-code-download[data-downloaded='true'] {
   color: var(--status-success, var(--primary));
 }
 
