@@ -49,6 +49,7 @@ if (typeof globalThis.requestAnimationFrame !== 'function') {
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { MessageList } from './MessageList'
+import { useUIStore } from '@/stores/useUIStore'
 import type { MessageData } from '@/stores/chatStore'
 
 const noopMsg = (_msg: MessageData) => {}
@@ -132,6 +133,8 @@ async function pressEscape(target: EventTarget): Promise<void> {
 
 beforeEach(() => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  // Развёрнутая панель теперь персистится в сторе — сбрасываем между тестами.
+  useUIStore.setState({ expandedChatGroup: null, revealedServiceGroups: [] })
 })
 
 afterEach(async () => {
@@ -488,3 +491,31 @@ describe('MessageList: развёрнутая панель — ряд дейст
   })
 })
 
+
+describe('MessageList: персист развёрнутой панели', () => {
+  it('панель открыта сразу, если ключ уже в сторе (имитация перезагрузки)', async () => {
+    // Ключ группы двух шагов одного хода (`groupMessagesByTurn`).
+    useUIStore.setState({ expandedChatGroup: 'turn:t1:a1' })
+
+    const container = await renderList(twoStepsSameTurn())
+
+    const pane = expandedPane(container)
+    expect(pane).not.toBeNull()
+    expect(pane!.textContent).toContain('Шаг первый')
+    expect(pane!.textContent).toContain('Шаг второй')
+    // Ленты нет — панель её заменяет, как при обычном развороте.
+    expect(ribbon(container)).toBeNull()
+    expect(useUIStore.getState().expandedChatGroup).toBe('turn:t1:a1')
+  })
+
+  it('prune закрывает панель, когда ход исчез из ленты', async () => {
+    // Сохранённый ключ несуществующей группы — эффект prune снимает разворот.
+    useUIStore.setState({ expandedChatGroup: 'turn:gone:a1' })
+
+    const container = await renderList(twoStepsSameTurn())
+
+    expect(expandedPane(container)).toBeNull()
+    expect(ribbon(container)).not.toBeNull()
+    expect(useUIStore.getState().expandedChatGroup).toBeNull()
+  })
+})

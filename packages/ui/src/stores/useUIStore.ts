@@ -42,6 +42,13 @@ const LEFT_PANEL_MAX_WIDTH = 500
 const RIGHT_PANEL_MIN_WIDTH = 320
 const RIGHT_PANEL_MAX_WIDTH = 860
 
+/**
+ * Предел числа сохранённых ключей раскрытых сводок компакта: `persist` пишет их
+ * в `localStorage`, а лента со временем растёт. Старые ключи вытесняются
+ * (хранятся последние `MAX_REVEALED_SERVICE_GROUPS`).
+ */
+const MAX_REVEALED_SERVICE_GROUPS = 200
+
 interface LeftPanelState {
   isOpen: boolean
   width: number
@@ -272,6 +279,28 @@ interface UIStore {
   /** Вид ленты чата (персистится; см. `ChatViewMode`). */
   chatViewMode: ChatViewMode
   setChatViewMode: (mode: ChatViewMode) => void
+
+  /**
+   * Ключ развёрнутой панели ответа (`MessageGroup.key`, `null` — свёрнуто).
+   * Персистится: панель переживает перезагрузку и остаётся открытой, пока
+   * группа есть в ленте (`pruneChatViewState`).
+   */
+  expandedChatGroup: string | null
+  /** Тумблер разворота: тот же ключ → `null`, другой → новый. */
+  toggleChatExpanded: (key: string) => void
+
+  /**
+   * Ключи раскрытых сводок скрытых шагов (компактная плотность). Массив, а не
+   * `Set`: `persist` сериализует состояние в JSON.
+   */
+  revealedServiceGroups: string[]
+  toggleServiceRevealed: (key: string) => void
+
+  /**
+   * Убрать из сохранённого состояния ключи, которых больше нет в ленте
+   * (и ограничить размер). Вызывается лентой, когда состав групп изменился.
+   */
+  pruneChatViewState: (validKeys: string[]) => void
 
   /**
    * Серверные умолчания вида/плотности ленты инстанса: применяются только если
@@ -615,6 +644,41 @@ export const useUIStore = create<UIStore>()(
         set({ chatViewMode: mode })
       },
 
+      expandedChatGroup: null,
+      toggleChatExpanded: (key) =>
+        set((state) => ({
+          expandedChatGroup: state.expandedChatGroup === key ? null : key,
+        })),
+
+      revealedServiceGroups: [],
+      toggleServiceRevealed: (key) =>
+        set((state) => {
+          if (state.revealedServiceGroups.includes(key)) {
+            return { revealedServiceGroups: state.revealedServiceGroups.filter((k) => k !== key) }
+          }
+          // Храним последние ключи: `localStorage` не растёт вместе с лентой.
+          return {
+            revealedServiceGroups: [...state.revealedServiceGroups, key].slice(-MAX_REVEALED_SERVICE_GROUPS),
+          }
+        }),
+
+      pruneChatViewState: (validKeys) => {
+        const state = get()
+        const valid = new Set(validKeys)
+        const revealed = state.revealedServiceGroups.filter((key) => valid.has(key))
+        const expanded = state.expandedChatGroup && valid.has(state.expandedChatGroup)
+          ? state.expandedChatGroup
+          : null
+        // Ничего не изменилось — не пишем в стор (и не дёргаем persist/localStorage).
+        if (
+          expanded === state.expandedChatGroup &&
+          revealed.length === state.revealedServiceGroups.length
+        ) {
+          return
+        }
+        set({ expandedChatGroup: expanded, revealedServiceGroups: revealed })
+      },
+
       setServerChatDisplayDefaults: ({ viewMode, density }) =>
         set(() => {
           const next: Partial<UIStore> = {}
@@ -667,6 +731,8 @@ export const useUIStore = create<UIStore>()(
         settingsShowAdvanced: state.settingsShowAdvanced,
         chatDensity: state.chatDensity,
         chatViewMode: state.chatViewMode,
+        expandedChatGroup: state.expandedChatGroup,
+        revealedServiceGroups: state.revealedServiceGroups,
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
@@ -694,6 +760,17 @@ export const useUIStore = create<UIStore>()(
           chatDensity: p?.chatDensity === 'compact' ? 'compact' : 'normal',
           // `feed` — только явное сохранённое значение, иначе подробный вид.
           chatViewMode: p?.chatViewMode === 'feed' ? 'feed' : 'detailed',
+          // Сохранённая развёрнутая панель: только непустая строка.
+          expandedChatGroup:
+            typeof p?.expandedChatGroup === 'string' && p.expandedChatGroup !== ''
+              ? p.expandedChatGroup
+              : null,
+          // Мусор в массиве отбрасываем; порядок сохраняем, хвост ограничиваем.
+          revealedServiceGroups: Array.isArray(p?.revealedServiceGroups)
+            ? (p.revealedServiceGroups as unknown[])
+                .filter((key): key is string => typeof key === 'string' && key !== '')
+                .slice(-MAX_REVEALED_SERVICE_GROUPS)
+            : [],
         }
       },
     }

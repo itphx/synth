@@ -115,7 +115,7 @@ async function renderList(
 
 beforeEach(() => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
-  useUIStore.setState({ chatDensity: 'compact' })
+  useUIStore.setState({ chatDensity: 'compact', expandedChatGroup: null, revealedServiceGroups: [] })
 })
 
 afterEach(async () => {
@@ -127,7 +127,7 @@ afterEach(async () => {
     container.remove()
   }
   document.body.innerHTML = ''
-  useUIStore.setState({ chatDensity: 'normal' })
+  useUIStore.setState({ chatDensity: 'normal', expandedChatGroup: null, revealedServiceGroups: [] })
 })
 
 /**
@@ -444,5 +444,21 @@ describe('MessageList: компактная плотность ленты', () =
     expect(container.querySelectorAll('[data-tool-call-toggle]')).toHaveLength(0)
     // Строка-сводка на месте: инструментов и размышлений в ходе хватает.
     expect(summaryOf(container)).not.toBeNull()
+  })
+})
+
+describe('MessageList: персист раскрытой сводки', () => {
+  it('сводка раскрыта, если её ключ уже в сторе (имитация перезагрузки)', async () => {
+    // Ключ группы прошлого хода (`groupMessagesByTurn`): `turn:t1:a1`.
+    useUIStore.setState({ revealedServiceGroups: ['turn:t1:a1'] })
+
+    const container = await renderList([pastTurnWithNoise()])
+
+    const summary = summaryOf(container)!
+    expect(summary).not.toBeNull()
+    expect(summary.getAttribute('aria-expanded')).toBe('true')
+    // Содержимое шагов раскрыто вместе со сводкой.
+    expect(container.querySelectorAll('[data-tool-call-toggle]').length).toBeGreaterThan(0)
+    expect(container.textContent).toContain('Reasoning')
   })
 })

@@ -95,6 +95,7 @@ export const dict = {
   'header.hideRightPanel': 'Hide right panel',
   'header.settings': 'Settings',
   'header.logs': 'Logs & Audit',
+  'header.chatView.title': 'Chat view & density',
 
   // Settings modal
   'settings.title': 'Settings',

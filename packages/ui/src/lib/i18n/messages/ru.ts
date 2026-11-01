@@ -90,6 +90,7 @@ export const dict = {
   'header.hideRightPanel': 'Скрыть правую панель',
   'header.settings': 'Настройки',
   'header.logs': 'Логи и аудит',
+  'header.chatView.title': 'Вид и плотность чата',
 
   // Settings modal
   'settings.title': 'Настройки',
