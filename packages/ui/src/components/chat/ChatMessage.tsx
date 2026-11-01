@@ -96,7 +96,7 @@ interface ChatMessageProps {
   // Колбэки принимают сообщение/индекс: MessageList передаёт стабильные ссылки,
   // а ChatMessage связывает их с конкретным сообщением внутри (см. useCallback ниже).
   // Это нужно, чтобы React.memo(ChatMessage) сравнивал пропсы по ссылке.
-  onCopy: (msg: MessageData) => void
+  onCopy: (msg: MessageData, plain?: boolean) => void
   onToggle: (msg: MessageData) => void
   onPin: (msg: MessageData) => void
   onDelete: (msg: MessageData) => void
@@ -275,7 +275,12 @@ function ChatMessageInner({
 
   // Локальные стабильные обработчики: зависят только от ссылки на колбэк и
   // самого сообщения, поэтому пропсы дочерних компонентов не «дрожат» зря.
-  const handleCopy = useCallback(() => onCopy(message), [onCopy, message])
+  // `MessageActions` передаёт вторым аргументом режим копирования (Shift+клик —
+  // без разметки); другие места (`Notice`, `CommandMessage`) его не передают.
+  const handleCopy = useCallback(
+    (_messageId?: string, plain?: boolean) => onCopy(message, plain),
+    [onCopy, message],
+  )
   const handleToggle = useCallback(() => onToggle(message), [onToggle, message])
   const handlePin = useCallback(() => onPin(message), [onPin, message])
   const handleDelete = useCallback(() => onDelete(message), [onDelete, message])

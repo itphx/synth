@@ -10,6 +10,8 @@ import { isQueueChangedError } from '@/lib/api/queue'
 import { attachmentContentUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
+import { copyMessageText } from '@/lib/messageCopy'
+import { resolveLiveParts } from '@/lib/messageParts'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { DebugModal } from './DebugModal'
@@ -393,10 +395,20 @@ export function ChatTab({ tab }: ChatTabProps) {
   }, [sessionId, clearQueueState])
 
   const handleCopy = useCallback(
-    (msg: MessageData) => {
-      navigator.clipboard.writeText(msg.content).then(() => {
-        notify({ text: t('chat.message.copied'), type: 'info', category: 'message', sessionId })
+    // Копируем видимый текст, а не legacy-`content`: там reasoning и вызовы
+    // инструментов (`buildContentFromParts`) — на экране их блоки отдельные.
+    async (msg: MessageData, plain?: boolean) => {
+      const liveMap = useChatStore.getState().partsBySession[sessionId]?.[msg.id ?? '']
+      // Как в рендере (`ChatMessage`): у финального сообщения «застрявшие»
+      // live-тексты шага не используются, сливаются только tool-части.
+      const liveParts = resolveLiveParts(liveMap ? Object.values(liveMap) : undefined, {
+        isLive: msg.status === 'streaming',
+        dtoParts: msg.parts,
       })
+      const copied = await copyMessageText(msg, plain ? 'plain' : 'markdown', liveParts)
+      if (copied) {
+        notify({ text: t('chat.message.copied'), type: 'info', category: 'message', sessionId })
+      }
     },
     [notify, t, sessionId]
   )

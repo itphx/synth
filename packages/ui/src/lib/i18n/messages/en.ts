@@ -1238,6 +1238,7 @@ export const dict = {
   'markdown.code.copied': 'Copied',
 
   'chat.actions.copy': 'Copy',
+  'chat.actions.copyHint': 'Copy · Shift for plain text',
   'chat.actions.toggleOff': 'Disable',
   'chat.actions.toggleOn': 'Enable',
   'chat.actions.pin': 'Pin',
