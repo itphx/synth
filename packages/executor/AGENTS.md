@@ -49,7 +49,7 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
 | `GET` | `/exec/:processId` | состояние фонового процесса | bearer-токен |
 | `GET` | `/exec/:processId/logs` | отрезок журнала фонового процесса | bearer-токен |
 | `POST` | `/exec/:processId/stop` | остановить фоновой процесс | bearer-токен |
-| `GET` | `/capabilities` | версия протокола и состав toolchain'а (базовый словарь core + допсведения) | bearer-токен |
+| `GET` | `/capabilities` | версия протокола, состав toolchain'а (базовый словарь core + допсведения) и эффективные лимиты | bearer-токен |
 | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя (`idle`/`up`/`down` + причина) | bearer-токен |
 | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов (ленивый старт) | bearer-токен |
 | `POST` | `/mcp/call` | вызов инструмента MCP-сервера (`{server, tool, arguments}` → `{content, isError, attachments?}`; `attachments` — протокол 5) | bearer-токен |
@@ -77,7 +77,12 @@ In-tree **исполнитель** (worker) Synth: отдельный проце
   есть, протокольную — в `reason: 'spawn_failed'` с различающим `code`
   (`EWORKSPACE`/`EAUTH`/`ELIMIT`/`EINVAL`).
 - `GET /capabilities` — **аддитивно** отдаёт `features: { background: true, secrets: true, mcpAttachments: true }`
-  (признаки фоновых процессов, секретов вызова и вложений MCP-результата); старое поле `protocol` не меняет смысла.
+  (признаки фоновых процессов, секретов вызова и вложений MCP-результата) и
+  `limits: { timeoutMs, maxOutputBytes }` — эффективные потолки исполнителя (те, что
+  применяет clamp `Math.min`); старое поле `protocol` не меняет смысла. **Версия
+  протокола остаётся 5** — `limits` аддитивное поле, как `features` и `attachments`:
+  старый клиент его просто игнорирует, у старого исполнителя поля нет — разбор
+  терпимый (`limits` → `undefined`), версию для этого проверять не нужно.
 
 **Версия протокола — контракт совместимости.** `EXECUTOR_PROTOCOL_VERSION = 5`
 (в 4 не было `attachments` в ответе `/mcp/call`, в 3 не было `/exec/spawn` и фоновых
@@ -88,7 +93,9 @@ plane получил бы `404`; исполнитель протокола < 4 �
 plane отказывает такому вызову с `ESECRETS` (см. «Секреты вызова»); исполнитель
 протокола ≤ 4 не отдаёт `attachments` — результат MCP-вызова остаётся текстовым,
 версию для этого **проверять не нужно** (поле аддитивное, см. «Вложения
-MCP-результата»).
+MCP-результата»); исполнитель без `limits` в `/capabilities` — control plane
+работает как раньше (потолок по умолчанию), версию проверять не нужно (поле
+аддитивное).
 
 ### Секреты вызова (ADR-077, протокол 4)
 
@@ -370,7 +377,8 @@ MCP-вызова на текст и нетекстовые блоки и отд�
 - **Конфигурация:** состав определяется на старте; в тестах/особых сборках
   передаётся явно — `toolchain` в опциях сервера (`startExecutorServer({ toolchain })`),
   иначе определяется пробой. Состав отдаётся в `GET /capabilities`
-  (`{ protocol, toolchain, os, arch, node }`).
+  (`{ protocol, toolchain, os, arch, node, limits }`; `limits` — эффективные
+  потолки таймаута и буфера вывода, см. «Лимиты исполнителя — final»).
 
 ### Образы: что появилось в flavor'ах (PROP-082)
 
@@ -409,10 +417,13 @@ MCP-вызова на текст и нетекстовые блоки и отд�
   `resolveRepoCwd`/`isInsideReal` из `packages/core/src/engine/tools/git.ts`):
   абсолютный путь вне корня, выход через `..` и симлинк наружу → отказ
   (`400`, `cwd_outside_workspace`).
-- **Лимиты исполнителя — final**: потолок таймаута (`SYNTH_EXECUTOR_MAX_TIMEOUT_MS`),
-  потолок буфера вывода (`SYNTH_EXECUTOR_MAX_OUTPUT_BYTES`), лимит одновременных
-  команд (`SYNTH_EXECUTOR_MAX_CONCURRENCY`). Запрос клиента может быть
-  **меньше**, но не больше.
+- **Лимиты исполнителя — final**: потолок таймаута (`SYNTH_EXECUTOR_MAX_TIMEOUT_MS`,
+  дефолт **600 с** — выровнен с пределом сетевых git-операций), потолок буфера
+  вывода (`SYNTH_EXECUTOR_MAX_OUTPUT_BYTES`), лимит одновременных команд
+  (`SYNTH_EXECUTOR_MAX_CONCURRENCY`). Запрос клиента может быть **меньше**, но не
+  больше; фактические потолки исполнитель публикует в `GET /capabilities`
+  (`limits: { timeoutMs, maxOutputBytes }`), control plane берёт минимум по
+  ответившим адресам пула (`poolLimits()`).
 - **Семантика исполнения** — команды выполняет `InlineExecutionPort` из core:
   тот же бинарь, та же оболочка из запроса (`bash -c` для встроенных шелл-вызовов),
   те же поля ошибки. Свою реализацию `execFile`
@@ -456,7 +467,7 @@ MCP-вызова на текст и нетекстовые блоки и отд�
 | `SYNTH_EXECUTOR_HOST` | нет | `0.0.0.0` | адрес прослушивания |
 | `SYNTH_EXECUTOR_PORT` | нет | `5100` | порт прослушивания |
 | `SYNTH_EXECUTOR_MAX_CONCURRENCY` | нет | `4` | лимит одновременных команд |
-| `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` | нет | `120000` | потолок таймаута команды |
+| `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` | нет | `600000` | потолок таймаута команды |
 | `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES` | нет | `10485760` | потолок буфера вывода |
 | `SYNTH_EXECUTOR_MCP_SERVERS` | нет | `[]` | MCP-серверы, которые хостит исполнитель: JSON-массив `{name,command,args,env}`; fail-closed на невалидном, `''` = серверов нет (отключает дефолт образа; у flavor'ов с браузером дефолт — Playwright MCP) |
 | `SYNTH_EXECUTOR_BACKGROUND_MAX` | нет | `8` | лимит живых фоновых процессов (ADR-077, шаг 7c) |
@@ -491,7 +502,7 @@ MCP-вызова на текст и нетекстовые блоки и отд�
     stderr раздельно, offset/limit, `truncated`), `stop` (200 `stopping` →
     `killed`, идемпотентность), 401 без токена, 404 неизвестного процесса,
     400 невалидного тела и `cwd` вне workspace, 429 лимита процессов,
-    `capabilities` (`protocol: 5`, `features.background`), прежний `POST /exec`;
+    `capabilities` (`protocol: 5`, `features.background`, `limits`), прежний `POST /exec`;
   - `client.test.ts` — round-robin, failover на следующий адрес, `failMode`
     (`fail`/`inline-fallback`), отмена по `AbortSignal`, очередь по
     `concurrency`, реконструкция ошибок сервера; **инвентарь пула и маршрутизация
@@ -504,6 +515,9 @@ MCP-вызова на текст и нетекстовые блоки и отд�
     непустым `signal`, недоступный адрес → ошибка запуска, исчезновение
     исполнителя → `exited` резолвится (`exitCode: -1`), исполнитель протокола
     v2 → `EBACKGROUND`, маршрутизация фонового запуска по `requires`;
+    **лимиты исполнителя**: терпимый разбор `limits` в `/capabilities` (старый
+    исполнитель без поля → `undefined`) и минимум по ответившим адресам
+    (`poolLimits()`), clamp `Math.min` не меняется;
   - `toolchain.test.ts` — состав toolchain'а: базовый словарь core + допсведения,
     различение `ENOENT` и «есть, но не поддержал `--version`»;
   - `mcp.test.ts` — MCP-хостинг: ленивый старт (реальный stdio-сервер на SDK —

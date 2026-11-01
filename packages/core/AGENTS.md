@@ -996,7 +996,24 @@
   откат оригиналов; бинарный файл, не-обычный файл, превышение размера и
   абсолютный путь вне периметра — отказ. Вложенные пути `edits[].file_path`
   собирает `extractPaths` permission-слоя (file-паттерны, `external_directory`,
-  `protected_paths`). Реестр держит **три слоя** по
+  `protected_paths`). **Запись файлов — общие модули `engine/tools/`:** `line-endings.ts`
+  (`detectLineEndings`/`toLfView`/`fromLfView` — стиль файла `lf`/`crlf`/`mixed`;
+  сопоставление правки идёт в LF-виде, `\r\n` сохраняются, mixed → отказ
+  `fs.mixed_line_endings` без изменения файла), `atomic-file-write.ts`
+  (`writeFileAtomic` — tmp в том же каталоге → `rename`: права существующего файла
+  сохраняются, симлинк разыменовывается (пишем в цель, а не заменяем ссылку), tmp
+  убирается при сбое; при `EACCES`/`EPERM`/`EROFS` на создании tmp — фолбэк на
+  прямую запись цели, атомарность в этом краевом случае не гарантируется),
+  `file-limits.ts` (`MAX_TOOL_FILE_BYTES` — 5 МиБ; общий предел для
+  `write_file`/`edit_file`/`patch`, у `patch` — свой ключ `fs.patch_too_large`).
+  Гейты `write_file`/`edit_file`: бинарный файл (`fs.write_binary`/`fs.edit_binary`),
+  превышение размера (`fs.file_too_large`), отсутствующий файл у `edit_file`
+  (`fs.file_not_found` — graceful-отказ вместо ENOENT); `edit_file` отказывает **до
+  чтения** на `old_string === new_string` (`fs.no_changes`, сравнение по LF-виду) и
+  пустом `old_string` (`fs.empty_old_string` — при `replace_all` он вставлял текст
+  между каждым символом и портил файл). `patch` — те же CRLF-гейты
+  (`fs.mixed_line_endings`) и `fs.no_changes`, запись атомарная через общий
+  `writeFileAtomic` (откат оригиналов при сбое посередине). Реестр держит **три слоя** по
   `ToolDefinition.source` (`builtin` | `mcp` | `plugin`, ADR-071 §2.1 + ADR-090):
   `registerPlugin(tool, pluginName)` — единственный путь регистрации плагинного тула, **атомарная**
   валидация с отказом `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`;
@@ -1010,7 +1027,17 @@
   `deregister`/`deregisterByCapability` работают с плагинными как с обычными.
   git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
-  (ADR-076; ошибки — `sshkey.env_failed`). **Файловые и поисковые тулы — паритет с
+  (ADR-076; ошибки — `sshkey.env_failed`). **Таймауты git-тулов — по классу операции:**
+  read-only (`status`/`diff`/`log`/`show`/`blame`/`branch_list`) — 30 с
+  (`GIT_READ_TIMEOUT_MS`), локальные изменяющие (`commit`/`checkout`/`stash`) —
+  `git.localTimeoutMs` (дефолт 120 с), сетевые (`push`/`pull`) —
+  `git.networkTimeoutMs` (дефолт 300 с); у всех git-тулов параметр `timeout`
+  (0..600000, `0` — без лимита) перекрывает класс операции; истечение — отказ
+  `git.timeout` с `metadata.reason='timeout'` (а не «Command failed»). Пределы из
+  конфига инстанца приезжают в `ctx.extra` (`gitLocalTimeoutMs`/`gitNetworkTimeoutMs`),
+  env — `SYNTH_GIT_LOCAL_TIMEOUT_MS`/`SYNTH_GIT_NETWORK_TIMEOUT_MS`
+  (подробности — `docs/CONFIGURATION.md` §`git`).
+  **Файловые и поисковые тулы — паритет с
   opencode** (`fs-read.ts`, `search.ts`): `read_file` читает **потоком**
   (`createReadStream`+`readline`, память постоянна) страницу `offset`/`limit`
   (`offset` 0-based, дефолт и максимум — **2000** строк, жёсткий cap **50 КБ**
@@ -1025,9 +1052,13 @@
   сортировка по имени, `.git` и скрытые без `hidden` отсекает общий фильтр
   `isIgnoredSearchPath` в `path-utils.ts`); `grep_files` — `literal`,
   `caseSensitive` (default true), `hidden`, `limit` 100/макс 1000 (лимит общий по
-  строкам совпадений). Оба тула объявлены зависимыми от `rg`
+  строкам совпадений); оба тула — предел 30 с (`SEARCH_TIMEOUT_MS`), истечение —
+  `tool.search_timeout` с советом сузить путь/шаблон. Оба тула объявлены зависимыми от `rg`
   (`TOOL_RUNTIME_DEP`). `execute_shell` принимает `cwd` (относительно рабочего
-  каталога), оболочка — bash, большой вывод усекается маркером. Тул `task` (ADR-095 шаг 5) разбит на
+  каталога), оболочка — bash, большой вывод усекается маркером; предел по умолчанию —
+  120 с, параметр `timeout` (0..600000, `0` — без лимита) его перекрывает; истечение —
+  `tool.shell_timeout` с подсказкой (тот же контракт у detach-пути,
+  `shell-detachable.ts`); фоновый запуск — по умолчанию без лимита. Тул `task` (ADR-095 шаг 5) разбит на
   `engine/tools/task/*`: `tool.ts` (`taskTool`), `fork.ts` (fork/контекст-режимы ADR-026 +
   permissions), `child-session.ts` (создание/сообщения/события), `run-cycle.ts` (общий
   tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
@@ -1775,7 +1806,7 @@
   (ADR-096); привязка сессии — `Session.worktree` (в форме хранения — snake_case, PostgreSQL —
   миграция `023_session_worktree`); резолв cwd — `engine/orchestrator.ts` (fail-closed при
   исчезнувшем каталоге). Спецификация — `docs/WORKTREES.md`.
-- `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
+- `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); **мультифайловая правка `patch`** — пути из `metadata.files[]` (`resolvePatchChange`): все пути внутри workspace → `scope:'file'` + `op:'write'`, любой путь вне workspace или неизвестный состав → `{scope:'all'}` (дерево Files, открытые редакторы и Git-вкладка обновляются после правки); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log; публичный API не меняется,
   исполнение — через `ExecutionPort`; **клон атомарный**: git получает соседний временный
   каталог `<path>.tmp-<uuid>`, целевой путь появляется только после успеха (`rename`), а любая
