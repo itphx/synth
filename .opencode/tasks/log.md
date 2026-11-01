@@ -1624,3 +1624,11 @@
   - Результат: старт подов ~30 с вместо 10–20 мин; `progressDeadlineSeconds` 1200 оставлен как запас.
 - **Побочные находки:** сборка образа `synth-gateway-telegram` падает на `ERR_PNPM_OUTDATED_LOCKFILE` в репозитории аддона (`pnpm-lock` без `@itphx/synth-gateway-core@^0.2.0`) — образ не пересобирался, используется ранее опубликованный `0.5.0`; устранить в репозитории аддона.
 - **Остаток:** `master` не запушен в `origin` (как и прежние 22 коммита — публикация релизным workflow); продуктовое решение для NFS (маппинг uid/gid на сервере NFS либо отказ от `fsGroup` для RWX-томов) — отдельная задача.
+
+## 2026-11-01 — провайдер minimax на test: разбор (не работает)
+
+- **Задача:** на dev minimax работает, на test — нет; проверить, не дело ли в ключе. **Тип:** диагностика (read-only).
+- **Найдено:** на test провайдер `minimax` есть (документ `providers/minimax` в PG, `type: anthropic`, `baseUrl https://api.minimax.io/anthropic`, `defaultModel MiniMax-M3.1-Flash`), ключ **другой**, не dev: `sk-api…` (len 126, sha8 `4fc3327a`) против dev `sk-cp-…` (len 125, sha8 `1b265f82`).
+- **Симптом в логах:** `[ANTHROPIC] HTTP 402 {"type":"insufficient_balance_error","message":"insufficient balance (1008)"}` на каждый ход.
+- **Прямая проверка API:** ключ test валиден (список моделей 200, `/providers/minimax/test` 200 — эндпоинт только `listModels`), но `messages` → 402 (нулевой баланс аккаунта); `MiniMax-M2.5` на test-ключе → 404 `no longer available (2069)`, на dev-ключе (coding plan) → 200. Dev-ключ с `MiniMax-M3.1-Flash` → 200.
+- **Вывод:** ключ не «неверный», а от другого аккаунта без баланса. Лечение: либо положить dev-ключ в провайдер test (через UI/API — документ в PG, env `SYNTH_PROVIDER_MINIMAX_*` в чарте нет), либо пополнить баланс test-аккаунта. Изменений не вносил.
