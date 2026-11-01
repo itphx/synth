@@ -133,6 +133,48 @@ describe('resolveFsChange', () => {
       .toEqual({ scope: 'all', workspaceChanged: true });
   });
 
+  describe('patch → мультифайловая правка', () => {
+    it('два файла внутри workspace → file + оба пути + op write', () => {
+      expect(resolveFsChange('patch', {
+        files: [
+          { path: 'src/a.ts', replacements: 1, diff: '' },
+          { path: '/tmp/project-ws/src/b.ts', replacements: 2, diff: '' },
+        ],
+      }, WS)).toEqual({
+        scope: 'file',
+        paths: ['src/a.ts', 'src/b.ts'],
+        op: 'write',
+      });
+    });
+
+    it('повторяющиеся пути схлопываются', () => {
+      expect(resolveFsChange('patch', {
+        files: [
+          { path: 'src/a.ts', replacements: 1, diff: '' },
+          { path: 'src/a.ts', replacements: 1, diff: '' },
+        ],
+      }, WS)).toEqual({ scope: 'file', paths: ['src/a.ts'], op: 'write' });
+    });
+
+    it('путь вне workspace → all', () => {
+      expect(resolveFsChange('patch', {
+        files: [
+          { path: 'src/a.ts', replacements: 1, diff: '' },
+          { path: '../outside/a.ts', replacements: 1, diff: '' },
+        ],
+      }, WS)).toEqual({ scope: 'all' });
+      expect(resolveFsChange('patch', {
+        files: [{ path: '/etc/passwd', replacements: 1, diff: '' }],
+      }, WS)).toEqual({ scope: 'all' });
+    });
+
+    it('без metadata.files → all', () => {
+      expect(resolveFsChange('patch', {}, WS)).toEqual({ scope: 'all' });
+      expect(resolveFsChange('patch', undefined, WS)).toEqual({ scope: 'all' });
+      expect(resolveFsChange('patch', { files: [] }, WS)).toEqual({ scope: 'all' });
+    });
+  });
+
   it('read-only тулы → null', () => {
     expect(resolveFsChange('read_file', { path: `${WS}/a.ts` }, WS)).toBeNull();
     expect(resolveFsChange('git_status', undefined, WS)).toBeNull();

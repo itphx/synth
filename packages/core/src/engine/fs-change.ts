@@ -169,6 +169,31 @@ function resolveShellMove(
 }
 
 /**
+ * `patch` — атомарная мультифайловая правка: в metadata лежит `files[]`
+ * (`path` — как путь передал вызывающий, `replacements`, `diff`). Пути внутри
+ * workspace → точечное обновление; неизвестный состав или любой путь вне
+ * workspace → обновляем всё дерево.
+ */
+function resolvePatchChange(
+  metadata: Record<string, unknown> | undefined,
+  workingDir: string,
+): FsChange {
+  const files = metadata?.files;
+  if (!Array.isArray(files) || files.length === 0) return { scope: 'all' };
+
+  const paths: string[] = [];
+  for (const entry of files) {
+    const rawPath = (entry as { path?: unknown } | null | undefined)?.path;
+    if (typeof rawPath !== 'string' || rawPath.length === 0) return { scope: 'all' };
+    const rel = toWorkspaceRel(workingDir, rawPath);
+    if (!rel) return { scope: 'all' };
+    paths.push(rel);
+  }
+
+  return { scope: 'file', paths: [...new Set(paths)], op: 'write' };
+}
+
+/**
  * Определяет, какое `fs.changed` нужно опубликовать после тула.
  * Возвращает `null` для read-only тулов (или неизвестных — консервативно не шумим).
  */
@@ -186,6 +211,10 @@ export function resolveFsChange(
   if (toolName === 'execute_shell') {
     return resolveShellMove(args, workingDir) ?? { scope: 'all' };
   }
+  // patch — мультифайловая правка: пути берём из metadata.files.
+  if (toolName === 'patch') {
+    return resolvePatchChange(metadata, workingDir);
+  }
   if (BROAD_MUTATING_TOOLS.has(toolName)) {
     return { scope: 'all' };
   }
@@ -201,13 +230,11 @@ export function resolveFsChange(
   // Путь резолвится **от рабочего каталога**: `write_file`/`edit_file` кладут в
   // metadata абсолютный путь, `save_attachment` — относительный
   // (`attachments/<name>`); `resolve` абсолютный путь оставляет как есть.
-  const rel = relative(resolve(workingDir), resolve(workingDir, rawPath));
   // Путь вне workspace (`..`, абсолютный) или совпадает с корнем — обновляем всё.
-  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+  const posixRel = toWorkspaceRel(workingDir, rawPath);
+  if (!posixRel) {
     return { scope: 'all' };
   }
 
-  // Приводим разделители к POSIX (контракт события).
-  const posixRel = rel.split(sep).join('/');
   return { scope: 'file', paths: [posixRel], op: FILE_TOOL_OPS[toolName] };
 }

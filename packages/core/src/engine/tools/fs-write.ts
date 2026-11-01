@@ -1,13 +1,17 @@
-import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { sniffBinary } from './fs-read.js';
+import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
+import { detectLineEndings, fromLfView, toLfView } from './line-endings.js';
+import { writeFileAtomic } from './atomic-file-write.js';
 
 export function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split('\n');
@@ -64,10 +68,36 @@ function longestCommonSubsequence(a: string[], b: string[]): [number, number][] 
   return result;
 }
 
+/**
+ * Коды отказов файловых тулов — единый контракт `content` + `metadata.i18n`
+ * (ADR-041): текст для модели (en) и шаблон с параметрами для UI.
+ */
+type FsToolErrorKey =
+  | 'fs.no_changes'
+  | 'fs.empty_old_string'
+  | 'fs.mixed_line_endings'
+  | 'fs.edit_binary'
+  | 'fs.write_binary'
+  | 'fs.file_too_large';
+
+function fsErrorResult(
+  key: FsToolErrorKey,
+  params: Record<string, string>,
+  metadata: Record<string, unknown> = {},
+): ToolResult {
+  return {
+    content: sm(key, params),
+    isError: true,
+    metadata: { ...metadata, i18n: i18nMeta(key, params) },
+  };
+}
+
 export const writeFileTool: ToolDefinition = {
   name: 'write_file',
   description:
-    'Write content to a file. Creates the file if it does not exist, overwrites if it does. Parent directories are created automatically. Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
+    'Write content to a file. Creates the file if it does not exist, overwrites if it does. Parent directories are created automatically. '
+    + 'Overwriting an existing binary file is refused — use another tool for binary data. '
+    + 'Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     file_path: z.string().describe('Path to the file to write (absolute or relative to the working directory)'),
     content: z.string().describe('Content to write to the file'),
@@ -88,9 +118,28 @@ export const writeFileTool: ToolDefinition = {
     // ADR-036: деобфускация в точке потребления — контент может содержать ⟦SYNTH_SECRET_N⟧
     const content = await deobfuscateText(ctx, params.content);
 
+    // Предел объёма: содержимое держится в памяти целиком.
+    if (Buffer.byteLength(content, 'utf-8') > MAX_TOOL_FILE_BYTES) {
+      return fsErrorResult(
+        'fs.file_too_large',
+        { limit: String(MAX_TOOL_FILE_BYTES) },
+        { path: resolvedPath, limit: MAX_TOOL_FILE_BYTES },
+      );
+    }
+
+    // Перезапись бинарного файла текстом — отказ (файл не читается как текст,
+    // а «текст» в бинаре всё равно ломает его структуру).
+    const existing = await stat(resolvedPath).catch(() => null);
+    if (existing?.isFile() && (await sniffBinary(resolvedPath))) {
+      return fsErrorResult('fs.write_binary', { path: params.file_path }, { path: resolvedPath });
+    }
+
     const dir = dirname(resolvedPath);
     await mkdir(dir, { recursive: true });
-    await writeFile(resolvedPath, content, 'utf-8');
+    // Права существующего файла сохраняются (tmp → rename иначе создал бы
+    // файл с правами по умолчанию).
+    const mode = existing?.isFile() ? existing.mode & 0o777 : undefined;
+    await writeFileAtomic(resolvedPath, content, mode);
 
     const lines = content.split('\n');
     return {
@@ -110,7 +159,9 @@ export const editFileTool: ToolDefinition = {
   description:
     'Make exact string replacements in a file. The edit will FAIL if old_string is not unique in the file. '
     + 'read_file prefixes every line with its number ("N: "); that prefix is for reading only — never include it in old_string or new_string. '
-    + 'If the match is ambiguous, provide more surrounding context (or use replace_all). CRLF line endings are preserved when they are present in old_string. '
+    + 'If the match is ambiguous, provide more surrounding context (or use replace_all). '
+    + 'Line endings of the file are preserved: an LF file is edited as is, a CRLF file is matched in LF view and written back as CRLF, '
+    + 'a file with mixed line endings is refused. '
     + 'Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     file_path: z.string().describe('Path to the file to modify (absolute or relative to the working directory)'),
@@ -135,34 +186,46 @@ export const editFileTool: ToolDefinition = {
     const oldString = await deobfuscateText(ctx, params.old_string);
     const newString = await deobfuscateText(ctx, params.new_string);
 
-    const { readFile } = await import('node:fs/promises');
-    const content = await readFile(resolvedPath, 'utf-8');
-
-    if (params.replace_all) {
-      const count = content.split(oldString).length - 1;
-      if (count === 0) {
-        return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
-      }
-      const newContent = content.replaceAll(oldString, newString);
-      await writeFile(resolvedPath, newContent, 'utf-8');
-
-      const diff = generateUnifiedDiff(content, newContent, params.file_path);
-      return {
-        content: sm('fs.file_edited', { path: params.file_path, count: String(count) }),
-        metadata: {
-          path: resolvedPath,
-          replacements: count,
-          diff,
-          i18n: i18nMeta('fs.file_edited', { path: params.file_path, count: String(count) }),
-        },
-      };
+    // Отказы до чтения файла: правка «сама в себя» и пустой old_string
+    // (при replace_all он вставляет текст между каждым символом — порча файла).
+    if (oldString === newString) {
+      return fsErrorResult('fs.no_changes', {}, { path: resolvedPath });
+    }
+    if (oldString === '') {
+      return fsErrorResult('fs.empty_old_string', {}, { path: resolvedPath });
     }
 
-    const occurrences = content.split(oldString).length - 1;
+    const info = await stat(resolvedPath).catch(() => null);
+    if (info && info.size > MAX_TOOL_FILE_BYTES) {
+      return fsErrorResult(
+        'fs.file_too_large',
+        { limit: String(MAX_TOOL_FILE_BYTES) },
+        { path: resolvedPath, bytes: info.size, limit: MAX_TOOL_FILE_BYTES },
+      );
+    }
+    if (await sniffBinary(resolvedPath)) {
+      return fsErrorResult('fs.edit_binary', { path: params.file_path }, { path: resolvedPath });
+    }
+
+    const raw = await readFile(resolvedPath, 'utf-8');
+    const style = detectLineEndings(raw);
+    if (style === 'mixed') {
+      return fsErrorResult('fs.mixed_line_endings', {}, { path: resolvedPath });
+    }
+
+    // CRLF-файл правим в LF-виде (текст из `read_file` приходит с LF) и
+    // возвращаем CRLF — файл не теряет ни одного `\r\n`.
+    const crlf = style === 'crlf';
+    const content = crlf ? toLfView(raw) : raw;
+    const oldView = crlf ? toLfView(oldString) : oldString;
+    const newView = crlf ? toLfView(newString) : newString;
+
+    const occurrences = content.split(oldView).length - 1;
     if (occurrences === 0) {
       return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
     }
-    if (occurrences > 1) {
+    const replaceAll = params.replace_all === true;
+    if (occurrences > 1 && !replaceAll) {
       return {
         content: sm('fs.replace_multiple', { count: String(occurrences) }),
         isError: true,
@@ -170,17 +233,22 @@ export const editFileTool: ToolDefinition = {
       };
     }
 
-    const newContent = content.replace(oldString, newString);
-    await writeFile(resolvedPath, newContent, 'utf-8');
+    const newContent = replaceAll
+      ? content.replaceAll(oldView, newView)
+      : content.replace(oldView, newView);
+    const written = crlf ? fromLfView(newContent) : newContent;
+    const mode = info ? info.mode & 0o777 : undefined;
+    await writeFileAtomic(resolvedPath, written, mode);
 
     const diff = generateUnifiedDiff(content, newContent, params.file_path);
+    const count = replaceAll ? occurrences : 1;
     return {
-      content: sm('fs.file_edited', { path: params.file_path, count: '1' }),
+      content: sm('fs.file_edited', { path: params.file_path, count: String(count) }),
       metadata: {
         path: resolvedPath,
-        replacements: 1,
+        replacements: count,
         diff,
-        i18n: i18nMeta('fs.file_edited', { path: params.file_path, count: '1' }),
+        i18n: i18nMeta('fs.file_edited', { path: params.file_path, count: String(count) }),
       },
     };
   },

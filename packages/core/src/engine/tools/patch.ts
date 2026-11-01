@@ -8,6 +8,7 @@ import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, isInsideAnyRoot
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { sniffBinary } from './fs-read.js';
+import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import { generateUnifiedDiff } from './fs-write.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
@@ -16,9 +17,10 @@ import { argErrorResult } from './arg-error.js';
 export const MAX_PATCH_EDITS = 50;
 /**
  * Предел размера файла для атомарной мультифайловой правки: оригиналы держим
- * в памяти для отката, поэтому «разумный» объём обязателен.
+ * в памяти для отката, поэтому «разумный» объём обязателен. Общий предел
+ * файловых тулов — `MAX_TOOL_FILE_BYTES` (`tools/file-limits.ts`).
  */
-export const MAX_PATCH_FILE_BYTES = 5 * 1024 * 1024;
+export const MAX_PATCH_FILE_BYTES = MAX_TOOL_FILE_BYTES;
 
 /** Одна правка: точный текст → замена (без unified diff). */
 const patchEditSchema = z.object({

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, access, stat, chmod, lstat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFileTool, createDirectoryTool, deleteFileTool } from './fs-write.js';
+import { writeFileTool, createDirectoryTool, deleteFileTool, editFileTool } from './fs-write.js';
+import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import type { ToolContext } from '@itphx/synth-shared';
 
 describe('fs-write tools — path resolution', () => {
@@ -63,5 +64,240 @@ describe('fs-write tools — path resolution', () => {
     const result = await createDirectoryTool.execute({ path: join(tmpDir, 'abs') }, makeCtx());
     expect(result.isError).toBeFalsy();
     await expect(access(join(tmpDir, 'abs'))).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Надёжность файловых правок: отказы до записи, согласованность переводов
+ * строк, бинарь/размер, атомарная запись и сохранение прав файла.
+ */
+describe('fs-write tools — надёжность правок', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fswrite-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      ...overrides,
+    };
+  }
+
+  /** Бинарный файл: NUL-байты — верный признак для `sniffBinary`. */
+  const BINARY_BYTES = Buffer.from([0x00, 0x01, 0x02, 0x03, 0x00, 0x04, 0x05]);
+
+  it('edit_file: одинаковые old_string и new_string — отказ, файл не меняется', async () => {
+    const file = join(tmpDir, 'same.txt');
+    await writeFile(file, 'hello\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'same.txt', old_string: 'hello', new_string: 'hello' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('No changes to apply');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.no_changes');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('hello\n');
+  });
+
+  it('edit_file: пустой old_string при replace_all — отказ, файл не портится', async () => {
+    const file = join(tmpDir, 'empty.txt');
+    await writeFile(file, 'abc', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'empty.txt', old_string: '', new_string: 'X', replace_all: true },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('old_string must not be empty');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.empty_old_string');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('abc');
+  });
+
+  it('edit_file: пустой old_string без replace_all — тоже отказ', async () => {
+    const file = join(tmpDir, 'empty2.txt');
+    await writeFile(file, 'abc', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'empty2.txt', old_string: '', new_string: 'X' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    await expect(readFile(file, 'utf-8')).resolves.toBe('abc');
+  });
+
+  it('edit_file: CRLF-файл — правка находится (LF-вид) и \r\n сохраняются', async () => {
+    const file = join(tmpDir, 'crlf.txt');
+    await writeFile(file, 'line1\r\nline2\r\n', 'utf-8');
+
+    // Текст из read_file приходит с LF — ищем именно его.
+    const result = await editFileTool.execute(
+      { file_path: 'crlf.txt', old_string: 'line1\nline2', new_string: 'X\nY' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const after = await readFile(file, 'utf-8');
+    expect(after).toBe('X\r\nY\r\n');
+    expect(after.split('\r\n').length - 1).toBe(2);
+  });
+
+  it('edit_file: CRLF-файл — replace_all сохраняет все \r\n', async () => {
+    const file = join(tmpDir, 'crlf-all.txt');
+    await writeFile(file, 'a\r\nb\r\na\r\nb\r\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'crlf-all.txt', old_string: 'a\nb', new_string: 'c\nd', replace_all: true },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const after = await readFile(file, 'utf-8');
+    expect(after).toBe('c\r\nd\r\nc\r\nd\r\n');
+    expect(after.includes('\n\n')).toBe(false);
+    expect(after.split('\r\n').length - 1).toBe(4);
+  });
+
+  it('edit_file: смешанные переводы строк — отказ, файл не изменён', async () => {
+    const file = join(tmpDir, 'mixed.txt');
+    await writeFile(file, 'a\r\nb\nc\r\n', 'utf-8');
+    const before = await readFile(file, 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'mixed.txt', old_string: 'b', new_string: 'B' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('mixed line endings');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.mixed_line_endings');
+    await expect(readFile(file, 'utf-8')).resolves.toBe(before);
+  });
+
+  it('edit_file: бинарный файл — отказ (файл не читается как текст)', async () => {
+    const file = join(tmpDir, 'bin.dat');
+    await writeFile(file, BINARY_BYTES);
+
+    const result = await editFileTool.execute(
+      { file_path: 'bin.dat', old_string: 'a', new_string: 'b' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot edit binary file');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.edit_binary');
+    await expect(readFile(file)).resolves.toEqual(BINARY_BYTES);
+  });
+
+  it('write_file: перезапись бинарного файла — отказ', async () => {
+    const file = join(tmpDir, 'bin.dat');
+    await writeFile(file, BINARY_BYTES);
+
+    const result = await writeFileTool.execute(
+      { file_path: 'bin.dat', content: 'text' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot overwrite binary file');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.write_binary');
+    await expect(readFile(file)).resolves.toEqual(BINARY_BYTES);
+  });
+
+  it('edit_file: файл больше предела — отказ, файл не изменён', async () => {
+    const file = join(tmpDir, 'big.txt');
+    const content = 'a'.repeat(MAX_TOOL_FILE_BYTES + 1);
+    await writeFile(file, content, 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'big.txt', old_string: 'aaa', new_string: 'b' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('too large');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.file_too_large');
+    const after = await readFile(file, 'utf-8');
+    expect(after.length).toBe(content.length);
+  });
+
+  it('write_file: контент больше предела — отказ, файл не создан', async () => {
+    const result = await writeFileTool.execute(
+      { file_path: 'huge.txt', content: 'a'.repeat(MAX_TOOL_FILE_BYTES + 1) },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('too large');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.file_too_large');
+    await expect(access(join(tmpDir, 'huge.txt'))).rejects.toThrow();
+  });
+
+  it('edit_file: права файла сохраняются после правки', async () => {
+    const file = join(tmpDir, 'script.sh');
+    await writeFile(file, 'echo hi\n', 'utf-8');
+    await chmod(file, 0o755);
+
+    const result = await editFileTool.execute(
+      { file_path: 'script.sh', old_string: 'echo hi', new_string: 'echo hello' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect((await stat(file)).mode & 0o777).toBe(0o755);
+    await expect(readFile(file, 'utf-8')).resolves.toBe('echo hello\n');
+  });
+
+  it('write_file: права существующего файла сохраняются при перезаписи', async () => {
+    const file = join(tmpDir, 'keep.sh');
+    await writeFile(file, 'old\n', 'utf-8');
+    await chmod(file, 0o640);
+
+    const result = await writeFileTool.execute(
+      { file_path: 'keep.sh', content: 'new\n' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect((await stat(file)).mode & 0o777).toBe(0o640);
+    await expect(readFile(file, 'utf-8')).resolves.toBe('new\n');
+  });
+
+  it('write_file: временный файл не остаётся в каталоге', async () => {
+    const result = await writeFileTool.execute(
+      { file_path: 'clean.txt', content: 'data\n' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const { readdir } = await import('node:fs/promises');
+    await expect(readdir(tmpDir)).resolves.toEqual(['clean.txt']);
+  });
+
+  it('edit_file: симлинк не превращается в обычный файл (пишем в цель)', async () => {
+    const target = join(tmpDir, 'target.txt');
+    const link = join(tmpDir, 'link.txt');
+    await writeFile(target, 'hello\n', 'utf-8');
+    await symlink(target, link);
+
+    const result = await editFileTool.execute(
+      { file_path: 'link.txt', old_string: 'hello', new_string: 'bye' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    await expect(readFile(target, 'utf-8')).resolves.toBe('bye\n');
   });
 });
