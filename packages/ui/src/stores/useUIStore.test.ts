@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // persist (zustand) захватывает localStorage при импорте стора, а Node/vitest без
 // --localstorage-file его не даёт — ставим заглушку до импорта useUIStore.
@@ -25,6 +25,7 @@ const storage = vi.hoisted(() => {
 
 import { useUIStore, OTHER_PROJECTS_COLLAPSE_KEY, type CenterTab } from './useUIStore'
 import { useFilesStore } from './filesStore'
+import { CHAT_SCALE_DEFAULT, CHAT_SCALE_STORAGE_KEY, readChatScale } from '@/lib/uiScale'
 
 const tab = (id: string, title = id): CenterTab => ({
   id,
@@ -404,5 +405,60 @@ describe('useUIStore.chatViewMode', () => {
   it('detailed восстанавливается как есть', async () => {
     await rehydrateWith('detailed')
     expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+})
+
+describe('useUIStore.chatScale', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ chatScale: CHAT_SCALE_DEFAULT })
+    document.documentElement.style.removeProperty('--chat-scale')
+    document.documentElement.style.removeProperty('--ui-scale')
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    document.documentElement.style.removeProperty('--chat-scale')
+    document.documentElement.style.removeProperty('--ui-scale')
+  })
+
+  it('инициализируется сохранённым значением при создании стора', async () => {
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, '1.25')
+    expect(readChatScale()).toBe(1.25)
+
+    vi.resetModules()
+    const fresh = await import('./useUIStore')
+
+    expect(fresh.useUIStore.getState().chatScale).toBe(1.25)
+  })
+
+  it('сеттер применяет и персистит значение (debounce)', () => {
+    vi.useFakeTimers()
+
+    useUIStore.getState().setChatScale(1.2)
+
+    expect(useUIStore.getState().chatScale).toBe(1.2)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.2')
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+
+    vi.advanceTimersByTime(300)
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.2')
+  })
+
+  it('не входит в partialize (живёт в localStorage, как uiScale)', () => {
+    const partialize = useUIStore.persist.getOptions().partialize
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.chatScale).toBeUndefined()
+    expect(persisted.uiScale).toBeUndefined()
+  })
+
+  it('независим от общего масштаба UI', () => {
+    useUIStore.getState().setChatScale(1.3)
+    expect(useUIStore.getState().uiScale).not.toBe(1.3)
+    expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('')
+
+    useUIStore.getState().setUiScale(0.9)
+    expect(useUIStore.getState().chatScale).toBe(1.3)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.3')
   })
 })

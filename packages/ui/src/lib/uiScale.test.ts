@@ -24,22 +24,34 @@ const storage = vi.hoisted(() => {
 })
 
 import {
+  CHAT_SCALE_DEFAULT,
+  CHAT_SCALE_MAX,
+  CHAT_SCALE_MIN,
+  CHAT_SCALE_MIN_TOUCH,
+  CHAT_SCALE_STORAGE_KEY,
   UI_SCALE_DEFAULT,
   UI_SCALE_DESKTOP_DEFAULT,
   UI_SCALE_MAX,
   UI_SCALE_MIN,
   UI_SCALE_MOBILE_DEFAULT,
   UI_SCALE_STORAGE_KEY,
+  applyChatScale,
   applyServerDefaultUiScale,
   applyUiScale,
   getBuiltInDefaultUiScale,
+  getChatScaleMin,
   getDefaultUiScale,
   getServerDefaultUiScale,
+  hasLocalChatScale,
   hasLocalUiScale,
   isMobileScaleDevice,
+  normalizeChatScale,
   normalizeUiScale,
+  persistChatScale,
   persistUiScale,
+  readChatScale,
   readUiScale,
+  setChatScale,
   setServerScaleDefaults,
 } from './uiScale'
 
@@ -320,5 +332,202 @@ describe('hasLocalUiScale / applyServerDefaultUiScale', () => {
     expect(applyServerDefaultUiScale()).toBe(false)
     expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('')
     expect(storage.getItem(UI_SCALE_STORAGE_KEY)).toBe('0.7')
+  })
+})
+
+describe('normalizeChatScale', () => {
+  afterEach(() => {
+    restoreMatchMedia()
+  })
+
+  it('значения в диапазоне возвращает как есть', () => {
+    expect(normalizeChatScale(0.75)).toBe(CHAT_SCALE_MIN)
+    expect(normalizeChatScale(1)).toBe(1)
+    expect(normalizeChatScale(1.5)).toBe(CHAT_SCALE_MAX)
+  })
+
+  it('клампит к 0.75…1.5 на десктопе', () => {
+    expect(normalizeChatScale(0.2)).toBe(CHAT_SCALE_MIN)
+    expect(normalizeChatScale(3)).toBe(CHAT_SCALE_MAX)
+  })
+
+  it('числовые строки парсит', () => {
+    expect(normalizeChatScale('1.2')).toBe(1.2)
+  })
+
+  it('мусор/NaN/Infinity → дефолт 1', () => {
+    expect(normalizeChatScale(NaN)).toBe(CHAT_SCALE_DEFAULT)
+    expect(normalizeChatScale(Infinity)).toBe(CHAT_SCALE_DEFAULT)
+    expect(normalizeChatScale(undefined)).toBe(CHAT_SCALE_DEFAULT)
+    expect(normalizeChatScale('abc')).toBe(CHAT_SCALE_DEFAULT)
+    expect(normalizeChatScale({})).toBe(CHAT_SCALE_DEFAULT)
+  })
+
+  it('на мобильном вьюпорте нижний порог — 0.85', () => {
+    stubMatchMedia((q) => q.includes('max-width: 1199px'))
+    expect(getChatScaleMin()).toBe(CHAT_SCALE_MIN_TOUCH)
+    expect(normalizeChatScale(0.75)).toBe(CHAT_SCALE_MIN_TOUCH)
+    expect(normalizeChatScale(0.5)).toBe(CHAT_SCALE_MIN_TOUCH)
+    // верхняя граница и дефолт не меняются
+    expect(normalizeChatScale(2)).toBe(CHAT_SCALE_MAX)
+    expect(normalizeChatScale('oops')).toBe(CHAT_SCALE_DEFAULT)
+  })
+
+  it('на десктопе нижний порог — 0.75', () => {
+    stubMatchMedia(() => false)
+    expect(getChatScaleMin()).toBe(CHAT_SCALE_MIN)
+  })
+})
+
+describe('applyChatScale', () => {
+  afterEach(() => {
+    document.documentElement.style.removeProperty('--chat-scale')
+    restoreMatchMedia()
+  })
+
+  it('выставляет --chat-scale на documentElement', () => {
+    applyChatScale(1.2)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.2')
+  })
+
+  it('нормализует значение перед записью', () => {
+    applyChatScale(9)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.5')
+  })
+
+  it('не трогает --ui-scale', () => {
+    applyUiScale(1.1)
+    applyChatScale(1.3)
+
+    expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('1.1')
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.3')
+
+    document.documentElement.style.removeProperty('--ui-scale')
+  })
+})
+
+describe('applyUiScale не трогает --chat-scale', () => {
+  afterEach(() => {
+    document.documentElement.style.removeProperty('--ui-scale')
+    document.documentElement.style.removeProperty('--chat-scale')
+  })
+
+  it('общий масштаб и масштаб чата независимы', () => {
+    applyChatScale(1.15)
+    applyUiScale(0.9)
+
+    expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('0.9')
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.15')
+  })
+})
+
+describe('readChatScale / hasLocalChatScale', () => {
+  beforeEach(() => {
+    storage.clear()
+  })
+
+  afterEach(() => {
+    restoreMatchMedia()
+  })
+
+  it('без сохранённого значения → 1 (на любой платформе)', () => {
+    expect(readChatScale()).toBe(CHAT_SCALE_DEFAULT)
+
+    stubMatchMedia((q) => q.includes('max-width: 1199px'))
+    expect(readChatScale()).toBe(CHAT_SCALE_DEFAULT)
+  })
+
+  it('читает значение из отдельного ключа и клампит его', () => {
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, '1.25')
+    expect(readChatScale()).toBe(1.25)
+
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, '9')
+    expect(readChatScale()).toBe(CHAT_SCALE_MAX)
+
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, '0.1')
+    expect(readChatScale()).toBe(CHAT_SCALE_MIN)
+  })
+
+  it('на мобильном клампит к 0.85', () => {
+    stubMatchMedia((q) => q.includes('max-width: 1199px'))
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, '0.8')
+    expect(readChatScale()).toBe(CHAT_SCALE_MIN_TOUCH)
+  })
+
+  it('мусор в хранилище → дефолт', () => {
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, 'oops')
+    expect(readChatScale()).toBe(CHAT_SCALE_DEFAULT)
+  })
+
+  it('hasLocalChatScale отражает наличие личного значения', () => {
+    expect(hasLocalChatScale()).toBe(false)
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, '1.1')
+    expect(hasLocalChatScale()).toBe(true)
+  })
+})
+
+describe('persistChatScale (дебаунс, отдельный ключ)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    storage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    restoreMatchMedia()
+  })
+
+  it('пишет в localStorage только после задержки ~300мс', () => {
+    persistChatScale(1.2)
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+
+    vi.advanceTimersByTime(300)
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.2')
+  })
+
+  it('серия вызовов схлопывается в одну запись с последним значением', () => {
+    persistChatScale(1.05)
+    vi.advanceTimersByTime(100)
+    persistChatScale(1.35)
+    vi.advanceTimersByTime(300)
+
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.35')
+  })
+
+  it('не пишет ключ масштаба UI (и наоборот)', () => {
+    persistChatScale(1.2)
+    vi.advanceTimersByTime(300)
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.2')
+    expect(storage.getItem(UI_SCALE_STORAGE_KEY)).toBeNull()
+
+    persistUiScale(0.9)
+    vi.advanceTimersByTime(300)
+    expect(storage.getItem(UI_SCALE_STORAGE_KEY)).toBe('0.9')
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.2')
+    // Запись чата не перезаписалась значением UI
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).not.toBe('0.9')
+  })
+})
+
+describe('setChatScale', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    storage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    document.documentElement.style.removeProperty('--chat-scale')
+    restoreMatchMedia()
+  })
+
+  it('применяет и персистит (после дебаунса)', () => {
+    setChatScale(1.3)
+
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.3')
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+
+    vi.advanceTimersByTime(300)
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.3')
   })
 })

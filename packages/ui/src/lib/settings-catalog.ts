@@ -550,6 +550,13 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     keywords: ['scale', 'zoom', 'масштаб', 'увеличение'],
   },
   {
+    id: 'appearance.chatScale',
+    categoryId: 'appearance',
+    sectionId: 'appearance-chat-scale',
+    labelKey: 'settings.appearance.chatScale.label',
+    keywords: ['чат', 'масштаб чата', 'chat scale', 'zoom'],
+  },
+  {
     id: 'appearance.language',
     categoryId: 'appearance',
     sectionId: 'appearance-language',

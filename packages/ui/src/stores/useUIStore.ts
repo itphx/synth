@@ -3,7 +3,16 @@ import { persist } from 'zustand/middleware'
 import type { ThemeMode } from '../lib/theme/themes'
 import { profileService } from '@/lib/api/profileService'
 import { useFilesStore } from './filesStore'
-import { applyUiScale, normalizeUiScale, persistUiScale, readUiScale } from '@/lib/uiScale'
+import {
+  applyChatScale,
+  applyUiScale,
+  normalizeChatScale,
+  normalizeUiScale,
+  persistChatScale,
+  persistUiScale,
+  readChatScale,
+  readUiScale,
+} from '@/lib/uiScale'
 
 export type TransportMode = 'auto' | 'ws' | 'sse'
 
@@ -176,8 +185,16 @@ interface UIStore {
 
   uiScale: number
   setUiScale: (scale: number) => void
+  /** Масштаб области чата (множитель поверх `uiScale`); живёт в localStorage. */
+  chatScale: number
+  setChatScale: (scale: number) => void
   /** Live-preview настроек внешнего вида из панели «Внешний вид» (без записи в профиль). */
-  setAppearancePreview: (patch: { theme?: string; themeMode?: ThemeMode; uiScale?: number }) => void
+  setAppearancePreview: (patch: {
+    theme?: string
+    themeMode?: ThemeMode
+    uiScale?: number
+    chatScale?: number
+  }) => void
 
   centerTabs: CenterTab[]
   activeCenterTabId: string | null
@@ -367,6 +384,12 @@ export const useUIStore = create<UIStore>()(
         applyUiScale(scale)
         persistUiScale(scale)
         set({ uiScale: normalizeUiScale(scale) })
+      },
+      chatScale: readChatScale(),
+      setChatScale: (scale) => {
+        applyChatScale(scale)
+        persistChatScale(scale)
+        set({ chatScale: normalizeChatScale(scale) })
       },
       setAppearancePreview: (patch) => {
         set(patch)

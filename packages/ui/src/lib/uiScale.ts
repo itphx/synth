@@ -8,9 +8,24 @@ export const UI_SCALE_DESKTOP_DEFAULT = 1
 export const UI_SCALE_DEFAULT = UI_SCALE_DESKTOP_DEFAULT
 export const UI_SCALE_STORAGE_KEY = 'synth-ui-scale'
 
+/**
+ * Масштаб области чата — независимый множитель **поверх** общего `--ui-scale`:
+ * итог = `ui-scale × chat-scale`. Меняет только ленту сообщений
+ * (`.chat-column`), панели/дерево/настройки/композер не затрагивает.
+ */
+export const CHAT_SCALE_DEFAULT = 1
+export const CHAT_SCALE_MIN = 0.75
+export const CHAT_SCALE_MAX = 1.5
+export const CHAT_SCALE_STEP = 0.05
+/** Нижняя граница в мобильной/тач-зоне: мельче текст в ленте уже не читается. */
+export const CHAT_SCALE_MIN_TOUCH = 0.85
+export const CHAT_SCALE_STORAGE_KEY = 'synth-chat-scale'
+
 const PERSIST_DEBOUNCE_MS = 300
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
+// Отдельный таймер: масштаб UI и масштаб чата не должны схлопывать записи друг друга.
+let chatPersistTimer: ReturnType<typeof setTimeout> | null = null
 
 let serverScaleMobile: number | null = null
 let serverScaleDesktop: number | null = null
@@ -126,4 +141,78 @@ export function setUiScale(scale: number): void {
   const normalized = normalizeUiScale(scale)
   applyUiScale(normalized)
   persistUiScale(normalized)
+}
+
+/**
+ * Нижняя граница масштаба чата для текущего устройства: на телефоне/планшете
+ * (и в PWA) — `CHAT_SCALE_MIN_TOUCH` (тач-эргономика), на десктопе — `CHAT_SCALE_MIN`.
+ */
+export function getChatScaleMin(): number {
+  return isMobileScaleDevice() ? CHAT_SCALE_MIN_TOUCH : CHAT_SCALE_MIN
+}
+
+export function normalizeChatScale(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value))
+  if (!Number.isFinite(parsed)) {
+    return CHAT_SCALE_DEFAULT
+  }
+  return Math.min(CHAT_SCALE_MAX, Math.max(getChatScaleMin(), parsed))
+}
+
+export function readChatScale(): number {
+  if (typeof window === 'undefined') {
+    return CHAT_SCALE_DEFAULT
+  }
+  try {
+    const raw = window.localStorage.getItem(CHAT_SCALE_STORAGE_KEY)
+    if (raw === null) {
+      return CHAT_SCALE_DEFAULT
+    }
+    return normalizeChatScale(raw)
+  } catch {
+    return CHAT_SCALE_DEFAULT
+  }
+}
+
+export function hasLocalChatScale(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+  try {
+    return window.localStorage.getItem(CHAT_SCALE_STORAGE_KEY) !== null
+  } catch {
+    return false
+  }
+}
+
+/** Ставит `--chat-scale` инлайном на `<html>`; общий `--ui-scale` не трогает. */
+export function applyChatScale(scale: number): void {
+  if (typeof document === 'undefined') {
+    return
+  }
+  document.documentElement.style.setProperty('--chat-scale', String(normalizeChatScale(scale)))
+}
+
+export function persistChatScale(scale: number): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  const normalized = normalizeChatScale(scale)
+  if (chatPersistTimer !== null) {
+    clearTimeout(chatPersistTimer)
+  }
+  chatPersistTimer = setTimeout(() => {
+    chatPersistTimer = null
+    try {
+      window.localStorage.setItem(CHAT_SCALE_STORAGE_KEY, String(normalized))
+    } catch {
+      // localStorage может быть недоступен (приватный режим) — молча пропускаем
+    }
+  }, PERSIST_DEBOUNCE_MS)
+}
+
+export function setChatScale(scale: number): void {
+  const normalized = normalizeChatScale(scale)
+  applyChatScale(normalized)
+  persistChatScale(normalized)
 }

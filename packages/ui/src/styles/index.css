@@ -86,6 +86,7 @@ html.huawei.dark {
   --chat-pad-left: 0px;
   --chat-pad-right: 0px;
   --ui-scale: 1;
+  --chat-scale: 1;
 }
 
 html {
@@ -144,13 +145,29 @@ html.device-tablet {
   padding-right: var(--synth-safe-area-right);
 }
 
-/* Колонка сообщений чата: десктоп — прежние max-w-[50vw]; мобильные зоны — шире */
+/* Колонка сообщений чата: десктоп — прежние max-w-[50vw]; мобильные зоны — шире.
+   Здесь же — масштаб области чата: множитель поверх глобального --ui-scale.
+   Текст — через --text-*, отступы — через --padding-scale (утилиты Tailwind
+   компилируются в calc(Xrem * var(--padding-scale,1))). Композер, панели,
+   дерево и настройки живут вне .chat-column — их масштаб не меняется. */
 .chat-column {
   width: 100%;
   max-width: var(--chat-column-width, 50vw);
   margin-inline: auto;
   padding-left: var(--chat-pad-left, 0px);
   padding-right: var(--chat-pad-right, 0px);
+  --padding-scale: var(--chat-scale, 1);
+  --text-xs: calc(0.75rem * var(--chat-scale, 1));
+  --text-sm: calc(0.875rem * var(--chat-scale, 1));
+  --text-base: calc(1rem * var(--chat-scale, 1));
+  --text-lg: calc(1.125rem * var(--chat-scale, 1));
+  --text-2xl: calc(1.5rem * var(--chat-scale, 1));
+  --text-markdown: calc(0.9375rem * var(--chat-scale, 1));
+  --text-code: calc(0.8125rem * var(--chat-scale, 1));
+  --text-ui-header: calc(0.9375rem * var(--chat-scale, 1));
+  --text-ui-label: calc(0.875rem * var(--chat-scale, 1));
+  --text-meta: calc(0.875rem * var(--chat-scale, 1));
+  --text-micro: calc(0.875rem * var(--chat-scale, 1));
 }
 
 html.device-phone {

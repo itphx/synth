@@ -57,6 +57,18 @@ describe('settings-catalog — searchSettings', () => {
     expect(entryIds).not.toContain('mcpAdmin.masterEnabled')
   })
 
+  it('«масштаб чата» находит секцию масштаба области чата', () => {
+    const result = searchSettings(tRu, 'масштаб чата')
+    const entry = result.entries.find((e) => e.id === 'appearance.chatScale')
+
+    expect(entry).toBeDefined()
+    expect(entry?.categoryId).toBe('appearance')
+    expect(entry?.sectionId).toBe('appearance-chat-scale')
+
+    const byEnglish = searchSettings(t, 'chat scale')
+    expect(byEnglish.entries.map((e) => e.id)).toContain('appearance.chatScale')
+  })
+
   it('«отлад» находит «Отладка» по префиксу слова', () => {
     const result = searchSettings(tRu, 'отлад')
     expect(result.categories.map((category) => category.id)).toContain('debug')
