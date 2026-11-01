@@ -641,3 +641,79 @@ describe('MarkdownContent: иконки кнопок шапки (CSS-маска)
     expect(css).toContain('html.pointer-coarse .markdown-content .md-code-download')
   })
 })
+
+describe('MarkdownContent: правый зазор блока кода (CSS)', () => {
+  // jsdom не считает геометрию, поэтому проверяем само правило: `pre` —
+  // скролл-контейнер, и его внутренний `padding-right` прокручивается
+  // вместе с кодом. Зазор до правой рамки карточки должен быть снаружи
+  // прокручиваемой области (`margin-right` у `pre`), иначе при
+  // `scrollLeft = 0` обрезанный текст прилипает к границе.
+  const css = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'),
+    'utf8',
+  )
+  const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, '')
+
+  /** Тела правил с ровно таким селектором (без `:hover`, потомков и т.п.). */
+  function exactRuleBodies(selector: string): string[] {
+    const bodies: string[] = []
+    for (const chunk of cssRules.split('}')) {
+      const open = chunk.lastIndexOf('{')
+      if (open < 0) continue
+      const selectors = chunk.slice(0, open).split(',').map((s) => s.trim())
+      if (selectors.includes(selector)) bodies.push(chunk.slice(open + 1))
+    }
+    return bodies
+  }
+
+  /** Правый внешний отступ по каскаду объявлений правила (longhand важнее shorthand). */
+  function rightMargin(body: string): string | null {
+    let right: string | null = null
+    for (const declaration of body.split(';')) {
+      const colon = declaration.indexOf(':')
+      if (colon < 0) continue
+      const prop = declaration.slice(0, colon).trim()
+      const value = declaration.slice(colon + 1).trim()
+      if (prop === 'margin-right') {
+        right = value
+        continue
+      }
+      if (prop !== 'margin') continue
+      const parts = value.split(/\s+/)
+      if (parts.length === 1) right = parts[0]!
+      else if (parts.length >= 2) right = parts[1]!
+    }
+    return right
+  }
+
+  /** CSS-длина в px (rem/em считаем от 16px — этого хватает для диапазона 6–10px). */
+  function toPx(value: string): number | null {
+    const match = /^(-?\d*\.?\d+)(px|rem|em)$/.exec(value.trim())
+    if (!match) return null
+    const amount = Number(match[1])
+    return match[2] === 'px' ? amount : amount * 16
+  }
+
+  it('у `.md-code-pre` есть правый margin 6–10px (зазор вне прокрутки)', () => {
+    const bodies = exactRuleBodies('.markdown-content .md-code-pre')
+    expect(bodies.length).toBeGreaterThan(0)
+
+    const right = rightMargin(bodies.join('\n'))
+    expect(right, 'у .md-code-pre не задан правый отступ').not.toBeNull()
+    const px = toPx(right!)
+    expect(px, `правый отступ "${right}" не в px/rem/em`).not.toBeNull()
+    expect(px!).toBeGreaterThanOrEqual(6)
+    expect(px!).toBeLessThanOrEqual(10)
+  })
+
+  it('ни одно другое правило не сбрасывает зазор у `.md-code-pre`', () => {
+    // Зазор должен действовать и без подсветки, и после shiki: общий `pre`
+    // один, а правила подсветки трогают только строки (`.line`).
+    for (const body of exactRuleBodies('.markdown-content .md-code-pre')) {
+      const right = rightMargin(body)
+      if (right === null) continue
+      const px = toPx(right)
+      expect(px, `правый отступ "${right}" должен оставаться ненулевым`).not.toBe(0)
+    }
+  })
+})

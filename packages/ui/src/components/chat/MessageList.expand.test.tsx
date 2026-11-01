@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
@@ -384,3 +387,32 @@ describe('MessageList: разворот ответа агента', () => {
     expect(expandButtons(container)).toHaveLength(0)
   })
 })
+
+describe('MessageList: развёрнутая панель — ряд действий у нижнего края (CSS)', () => {
+  // jsdom не считает flex-раскладку, поэтому прижатие кнопок проверяем по CSS:
+  // пузырь в панели — `display:flex; flex-direction:column`, и `margin-top:auto`
+  // у ряда действий отправляет его вниз (см. `styles/index.css`).
+  const css = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'),
+    'utf8',
+  ).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  /** Тела правил, в списке селекторов которых есть ровно `selector`. */
+  function ruleBodies(selector: string): string[] {
+    const bodies: string[] = []
+    for (const chunk of css.split('}')) {
+      const open = chunk.lastIndexOf('{')
+      if (open < 0) continue
+      const selectors = chunk.slice(0, open).split(',').map((s) => s.trim())
+      if (selectors.includes(selector)) bodies.push(chunk.slice(open + 1))
+    }
+    return bodies
+  }
+
+  it('в блоке `.message-expanded-pane` есть `.message-actions { margin-top: auto }`', () => {
+    const bodies = ruleBodies('.message-expanded-pane .message-actions')
+    expect(bodies.length).toBeGreaterThan(0)
+    expect(bodies.join('\n')).toMatch(/margin-top:\s*auto/)
+  })
+})
+
