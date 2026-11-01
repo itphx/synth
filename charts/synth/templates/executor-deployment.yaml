@@ -17,6 +17,9 @@ metadata:
 spec:
   replicas: {{ .Values.executor.replicaCount }}
   revisionHistoryLimit: 2
+  {{- /* Медленный первый старт (chown корня NFS-тома workspace после смены
+         fsGroupChangePolicy, pull образа) не должен ронять релиз. */}}
+  progressDeadlineSeconds: {{ .Values.executor.progressDeadlineSeconds | default 1200 }}
   selector:
     matchLabels:
       {{- include "synth.executor.selectorLabels" . | nindent 6 }}

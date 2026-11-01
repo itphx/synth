@@ -136,8 +136,20 @@ backend:
       initialDelaySeconds: 5
       periodSeconds: 10
 
+  # Дедлайн прогресса rollout (Deployment.spec.progressDeadlineSeconds; дефолт
+  # K8s — 600 с). Поднят: первый старт после смены `fsGroupChangePolicy`
+  # (разовый chown корня тома) и медленный pull образа не должны ронять релиз —
+  # иначе Deployment уходит в Failed, Helm-релиз — в `failed`, и Fleet ретраит
+  # по кругу.
+  progressDeadlineSeconds: 1200
+
   podSecurityContext:
     fsGroup: 1000
+    # Менять владельца тома только если корень уже не той группы: NFS-том
+    # workspace содержит десятки тысяч файлов (node_modules, рабочие каталоги),
+    # рекурсивный chown на каждом старте держал под в ContainerCreating
+    # 10–20 минут и ронял rollout по progressDeadlineSeconds.
+    fsGroupChangePolicy: OnRootMismatch
   containerSecurityContext:
     runAsUser: 1000
     runAsNonRoot: true
@@ -383,8 +395,20 @@ executor:
       initialDelaySeconds: 5
       periodSeconds: 10
 
+  # Дедлайн прогресса rollout (Deployment.spec.progressDeadlineSeconds; дефолт
+  # K8s — 600 с). Поднят: первый старт после смены `fsGroupChangePolicy`
+  # (разовый chown корня NFS-тома workspace — десятки тысяч файлов) и медленный
+  # pull образа не должны ронять релиз — иначе Deployment уходит в Failed,
+  # Helm-релиз — в `failed`, и Fleet ретраит по кругу.
+  progressDeadlineSeconds: 1200
+
   podSecurityContext:
     fsGroup: 1000
+    # Менять владельца тома только если корень уже не той группы: NFS-том
+    # workspace содержит десятки тысяч файлов (node_modules, рабочие каталоги),
+    # рекурсивный chown на каждом старте держал под в ContainerCreating
+    # 10–20 минут и ронял rollout по progressDeadlineSeconds.
+    fsGroupChangePolicy: OnRootMismatch
   containerSecurityContext:
     runAsUser: 1000
     runAsNonRoot: true

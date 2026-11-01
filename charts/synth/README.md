@@ -126,6 +126,8 @@ ingress:
 | `backend.blobs.existingClaim` | `""` | Готовый claim блобов (чарт PVC не создаёт, `accessMode` не проверяет) |
 | `backend.blobs.keepOnUninstall` | `false` | Не удалять PVC блобов при `helm uninstall` (аннотация `helm.sh/resource-policy: keep`) |
 | `backend.extraEnv` | `{}` | Доп. env для backend |
+| `backend.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов томов и политика смены владельца: рекурсивный `chown` только при несовпадении корня (см. «NFS-том и смена владельца») |
+| `backend.progressDeadlineSeconds` | `1200` | Дедлайн прогресса rollout (`Deployment.spec.progressDeadlineSeconds`): медленный первый старт (chown тома, pull) не роняет релиз |
 | `backend.restartMode` | `process` | Restart из UI: `process` \| `supervisor` \| `disabled` (env `SYNTH_RESTART_MODE`, см. «Перезапуск инстанса из UI») |
 | `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`); сюда же домерживается секция `storage` из значений ниже |
 | `backend.service.sessionAffinity` | `None` | Sticky-сессии Service backend'а: `None` \| `ClientIP`. Нужно при `backend.replicaCount > 1` — шина событий in-process (см. «Sticky-сессии при нескольких репликах backend») |
@@ -148,6 +150,8 @@ ingress:
 | `execution.remote.failMode` | `fail` | `fail` (fail-closed) \| `inline-fallback` (backend исполняет сам — обход изоляции) |
 | `executor.enabled` | `false` | Включить split-режим: Deployment + Service + PVC пула исполнителей |
 | `executor.replicaCount` | `1` | Размер пула исполнителей |
+| `executor.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов общего тома и политика смены владельца: NFS-том workspace — десятки тысяч файлов, рекурсивный `chown` на каждом старте недопустим (см. «NFS-том и смена владельца») |
+| `executor.progressDeadlineSeconds` | `1200` | Дедлайн прогресса rollout (`Deployment.spec.progressDeadlineSeconds`): медленный первый старт не роняет релиз |
 | `executor.image.repository` | `git.itphx.ru/itphx/synth-executor` | Образ исполнителя |
 | `executor.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `executor.imagePullSecrets` | `[]` | Секреты для приватного реестра (нужны для `git.itphx.ru`) |
@@ -879,6 +883,10 @@ toolchain'ом (`git`, `ripgrep`, `python3`, `openssh-client`). Переключ
   быть `ReadWriteMany` (RWX) — это NFS/CephFS-подобные классы, а не
   `local-path`/ReadWriteOnce. В тестовом окружении (K3s) такой класс —
   **`nfs-rwx`** (provisioner `nfs.csi.k8s.io`).
+  Для NFS-томов с десятками тысяч файлов обязательна политика
+  `fsGroupChangePolicy: OnRootMismatch` (дефолт чарта) — иначе kubelet на
+  каждом старте пода рекурсивно меняет владельца тома и под висит в
+  `ContainerCreating`; подробности — «NFS-том и смена владельца».
   Дефолт в чарте — пусто (класс по умолчанию кластера): чарт публикуемый, и
   класс конкретного окружения подставлять нельзя — у клиента без такого
   класса установка сломается. Задайте класс явно:
@@ -1004,6 +1012,51 @@ executor:
 executor:
   workspace:
     existingClaim: synth-shared-workspaces   # чарт PVC не создаёт
+```
+
+### NFS-том и смена владельца (`fsGroupChangePolicy`)
+
+`backend.podSecurityContext` и `executor.podSecurityContext` задают
+`fsGroup: 1000` — файлы тома должны принадлежать группе uid'а контейнера
+(контракт образов, не меняйте). Политика смены владельца —
+**`fsGroupChangePolicy: OnRootMismatch`**: kubelet меняет группу только если
+корень тома уже не `1000`, а не рекурсивно на каждом старте пода.
+
+Почему это важно: NFS-том workspace — это десятки тысяч файлов
+(`node_modules`, рабочие каталоги проектов). С дефолтной политикой `Always`
+kubelet при **каждом** старте пода рекурсивно обходит том и переписывает
+владельца (`VolumePermissionChangeInProgress … processed N files`, ~7 тыс.
+файлов/мин). На томе в 1.6 ГБ под висит в `ContainerCreating` 10–20 минут,
+`progressDeadlineSeconds` (дефолт K8s — 600 с) истекает, Deployment уходит в
+`Failed`, Helm-релиз — в `failed`, и Fleet ретраит развёртывание по кругу.
+
+- **Первый старт после смены политики** всё равно сделает один проход (корень
+  тома ещё не `1000`), но только один раз — дальше условие «корень уже нужной
+  группы» выполняется, и обход не повторяется. Именно поэтому дефолт чарта —
+  `progressDeadlineSeconds: 1200` (можно поднять ещё, если том большой или
+  образ тянется медленно): медленный первый старт не должен ронять релиз.
+- **Драйвер NFS** (`nfs.csi.k8s.io`, CSIDriver `fsGroupPolicy: File`) политику
+  поддерживает — kubelet сам применяет её к монтированию; со стороны сервера
+  NFS `chgrp` работает, если у клиента есть права на смену группы (root на
+  клиенте, `no_root_squash` либо совпадение uid/gid).
+- **`local-path`/RWO-тома** ничего не теряют: `OnRootMismatch` — та же
+  семантика, только с проверкой корня; если корень тома уже `1000:1000` (так
+  делают провижнеры, создающие каталог от `fsGroup`), рекурсивного обхода не
+  было и раньше.
+
+Переопределить политику/дедлайн можно значениями:
+
+```yaml
+backend:
+  progressDeadlineSeconds: 1800
+  podSecurityContext:
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch   # либо Always (не рекомендуется на NFS)
+executor:
+  progressDeadlineSeconds: 1800
+  podSecurityContext:
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
 ```
 
 ### Ресурсы и лимиты исполнителя (рабочее место агента)
