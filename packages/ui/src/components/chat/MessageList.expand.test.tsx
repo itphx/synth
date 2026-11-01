@@ -153,6 +153,15 @@ function twoStepsSameTurn(): MessageData[] {
   ]
 }
 
+/** Три assistant-шага одного хода: блок хода, ряд действий — у последнего сегмента. */
+function threeStepsSameTurn(): MessageData[] {
+  return [
+    msg({ id: 'a1', index: 1, ord: 10, turn_id: 't1', step_index: 0, content: 'Шаг первый', agent_role: 'fixer' }),
+    msg({ id: 'a2', index: 2, ord: 11, turn_id: 't1', step_index: 1, content: 'Шаг второй', agent_role: 'fixer' }),
+    msg({ id: 'a3', index: 3, ord: 12, turn_id: 't1', step_index: 2, content: 'Шаг третий', agent_role: 'fixer' }),
+  ]
+}
+
 /** Два разных хода — по одной assistant-реплике. */
 function twoTurns(): MessageData[] {
   return [
@@ -230,6 +239,48 @@ describe('MessageList: разворот ответа агента', () => {
     await click(expandButtons(container)[0]!)
     expect(expandedPane(container)).toBeNull()
     expect(bubbleOf(container, 'a1').className).toContain('max-w-[85%]')
+  })
+
+  it('панель одиночного ответа: контейнер сообщения — прямой ребёнок `.chat-column`', async () => {
+    const container = await renderList([
+      msg({ id: 'a1', index: 1, ord: 10, turn_id: 't1', content: 'Один ответ', agent_role: 'fixer' }),
+    ])
+    await click(expandButtons(container)[0]!)
+
+    const pane = expandedPane(container)!
+    const column = pane.querySelector('.chat-column') as HTMLElement
+    const segment = pane.querySelector('[data-message-id="a1"]') as HTMLElement
+    // Цепочка растяжения — `styles/index.css`: `.chat-column > *` → `[data-bubble]`.
+    // Значит контейнер сообщения обязан быть **прямым** ребёнком колонки, а пузырь —
+    // прямым ребёнком контейнера.
+    expect(segment.parentElement).toBe(column)
+    const bubble = segment.querySelector(':scope > [data-bubble]') as HTMLElement
+    expect(bubble).not.toBeNull()
+  })
+
+  it('панель блока хода: последний сегмент — прямой ребёнок `turn-block` и владелец ряда действий', async () => {
+    const container = await renderList(threeStepsSameTurn())
+    await click(expandButtons(container)[0]!)
+
+    const pane = expandedPane(container)!
+    const block = pane.querySelector('[data-testid="turn-block"]') as HTMLElement
+    expect(block).not.toBeNull()
+    const segments = Array.from(
+      block.querySelectorAll(':scope > [data-message-id]'),
+    ) as HTMLElement[]
+    expect(segments.map((el) => el.getAttribute('data-message-id'))).toEqual(['a1', 'a2', 'a3'])
+    // Цепочка растяжения блока хода — `turn-block > [data-message-id]:last-child`
+    // (CSS `styles/index.css`): растягивается ровно последний сегмент — у него ряд
+    // действий, и свободное место панели доходит до его пузыря.
+    expect(block.lastElementChild).toBe(segments[2])
+    for (const segment of segments) {
+      expect(segment.querySelector(':scope > [data-bubble]')).not.toBeNull()
+    }
+    // Ряд действий один — у последнего сегмента; у первых его нет.
+    const actions = pane.querySelectorAll('.message-actions')
+    expect(actions).toHaveLength(1)
+    expect(segments[2]!.contains(actions[0]!)).toBe(true)
+    expect(segments[0]!.contains(actions[0]!)).toBe(false)
   })
 
   it('кнопка помечает состояние (aria-pressed) и меняет подпись', async () => {
@@ -413,6 +464,27 @@ describe('MessageList: развёрнутая панель — ряд дейст
     const bodies = ruleBodies('.message-expanded-pane .message-actions')
     expect(bodies.length).toBeGreaterThan(0)
     expect(bodies.join('\n')).toMatch(/margin-top:\s*auto/)
+  })
+
+  it('цепочка растяжения покрывает одиночное сообщение: `.chat-column > *` и `[data-bubble]`', () => {
+    const columnChild = ruleBodies('.message-expanded-pane .chat-column > *').join('\n')
+    expect(columnChild).toMatch(/flex:\s*1 0 auto/)
+
+    const bubble = ruleBodies('.message-expanded-pane .chat-column [data-bubble]').join('\n')
+    expect(bubble).toMatch(/display:\s*flex/)
+    expect(bubble).toMatch(/flex-direction:\s*column/)
+    expect(bubble).toMatch(/flex:\s*1 0 auto/)
+    expect(bubble).toMatch(/align-self:\s*stretch/)
+  })
+
+  it('цепочка растяжения покрывает блок хода: последний сегмент `turn-block` растёт', () => {
+    // У многошагового хода `[data-message-id]` — не прямой ребёнок `.chat-column`,
+    // правило `> *` его не достаёт; растягивается последний сегмент блока.
+    const bodies = ruleBodies(
+      ".message-expanded-pane .chat-column [data-testid='turn-block'] > [data-message-id]:last-child",
+    )
+    expect(bodies.length).toBeGreaterThan(0)
+    expect(bodies.join('\n')).toMatch(/flex:\s*1 0 auto/)
   })
 })
 
