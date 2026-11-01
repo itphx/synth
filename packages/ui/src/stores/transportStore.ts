@@ -589,30 +589,42 @@ function appendDeltaBlock<T extends { text: string; iteration: number }>(
  * Сверка очереди с сервером после неподтверждённой отправки (`confirmed:false`).
  * Сообщение не теряется: строка очереди остаётся, а состав/счётчик уточняются
  * по `GET /sessions/:id` (та же семантика, что у первичной загрузки: при живом
- * ходе первый pending-элемент — сообщение текущего хода, в списке его нет).
+ * ходе первый pending-элемент — сообщение текущего хода, в списке его нет;
+ * хода нет — показывается вся очередь, в т.ч. вклинивание, вернувшееся в неё
+ * после «Стопа»).
+ *
+ * Возвращает промис: терминал хода ждёт его, чтобы снять из ленты вклинивания
+ * уже **после** обновления состава очереди (см. `finishTurnAndRefreshQueue`).
  */
-function reconcileQueueFromApi(sid: string) {
-  synthApi.getSession(sid)
+function reconcileQueueFromApi(sid: string): Promise<void> {
+  return synthApi.getSession(sid)
     .then((session) => {
       const data = session as unknown as Record<string, unknown>
       const pending = data.pending_messages as Array<Record<string, unknown>> | undefined
       if (!pending) return
       const chat = useChatStore.getState()
-      // ADR-118 §4: обычная очередь в ленте не показывается, но вклинивание
-      // (`delivery: 'steer'`), вернувшееся в очередь, из ленты убирается —
-      // теперь это сообщение живёт только в панели очереди.
-      removeSteerPendingInQueue(sid, pending)
       if (pending.length === 0) {
         chat.clearQueueState(sid)
         return
       }
       const active = data.current_stream != null || isTurnActive(sid)
       const display = active ? pending.slice(1) : pending
-      chat.setPendingMessages(sid, display.map((pm) => ({
-        ...(typeof pm.id === 'string' ? { id: pm.id } : {}),
-        content: typeof pm.content === 'string' ? pm.content : '',
-        agentRole: (pm.agent_role as string | undefined) ?? null,
-      })))
+      // Статусы строк (`queue.state.items`) переживают сверку: `queue.state`
+      // мог прийти раньше ответа API.
+      const statusById = new Map<string, QueueItemStatus>()
+      for (const row of chat.pendingBySession[sid] || []) {
+        if (row.id && row.status) statusById.set(row.id, row.status)
+      }
+      chat.setPendingMessages(sid, display.map((pm) => {
+        const id = typeof pm.id === 'string' ? pm.id : ''
+        const status = id ? statusById.get(id) : undefined
+        return {
+          ...(id ? { id } : {}),
+          content: typeof pm.content === 'string' ? pm.content : '',
+          agentRole: (pm.agent_role as string | undefined) ?? null,
+          ...(status ? { status } : {}),
+        }
+      }))
       if (display.length > 0) chat.updateQueueCount(sid, display.length)
       else chat.clearQueueState(sid)
     })
@@ -667,57 +679,94 @@ function steerPendingMessageFromSnapshot(
 }
 
 /**
- * ADR-118 §4: убрать из ленты вклинивания (`delivery: 'steer'`), которые
- * вернулись в **обычную очередь** (ход закончился до границы шага — ядро
- * вернул сообщение в `pendingMessages`).
- *
- * Такое сообщение теперь живёт только в панели очереди — в ленте ему не
- * место (в ленте остаются записи, ждущие применения в текущем ходе).
+ * ADR-118 §4: id неразрешённых вклиниваний сессии (`delivery: 'steer'`,
+ * ещё не материализованные в истории).
  */
-function removeSteerPendingInQueue(sessionId: string, pending: unknown): void {
-  if (!Array.isArray(pending)) return
-  const pendingIds = new Set<string>()
-  for (const raw of pending) {
-    if (!raw || typeof raw !== 'object') continue
-    const id = (raw as Record<string, unknown>).id
-    if (typeof id === 'string' && id) pendingIds.add(id)
+function steerPendingIds(sessionId: string): string[] {
+  const messages = useChatStore.getState().messagesBySession[sessionId] || []
+  const ids: string[] = []
+  for (const message of messages) {
+    if (message.steerPending !== true) continue
+    if (message.id) ids.push(message.id)
   }
-  if (pendingIds.size === 0) return
+  return ids
+}
+
+/**
+ * ADR-118 §4: снять из ленты неразрешённые вклинивания сессии.
+ *
+ * Снимаются только записи с маркером `steerPending` — доставленное сообщение
+ * (`message.delivered`) маркер уже сняло, его не трогаем. `ids` — сузить до
+ * конкретных сообщений (терминал хода снимает только те, что висели на момент
+ * терминала).
+ *
+ * Вклинивание снимается **только по явным сигналам**: доставка
+ * (`message.delivered`), сброс (`steer.dropped`) или терминал хода. Сам факт
+ * наличия id в `pending_messages` — не сигнал: ядро публикует
+ * `message.enqueued` до того, как снимет сообщение из очереди, поэтому такая
+ * эвристика снимала бы вклинивание сразу после его показа.
+ */
+function removeSteerPendingMessages(sessionId: string, ids?: string[]): void {
+  const wanted = ids && ids.length > 0 ? new Set(ids) : null
   const chat = useChatStore.getState()
   for (const message of chat.messagesBySession[sessionId] || []) {
     if (message.steerPending !== true) continue
-    if (!message.id || !pendingIds.has(message.id)) continue
+    if (!message.id) continue
+    if (wanted && !wanted.has(message.id)) continue
     chat.removeMessageById(sessionId, message.id)
   }
 }
 
 /**
- * ADR-118 §4: есть ли в ленте неразрешённые вклинивания сессии
- * (`delivery: 'steer'`, ещё не материализованные).
+ * ADR-118 §4: терминал хода — снять неразрешённые вклинивания из ленты **и**
+ * перечитать состав очереди.
  *
- * Нужно, чтобы не дёргать сверку с сервером (`GET /sessions/:id`) на каждый
- * `queue.state`: вклинивания в ленте — редкий случай.
+ * Порядок — **сначала сверка, потом снятие**: пока ответ API не пришёл,
+ * вклинивание остаётся в ленте (пользователь его видит) — сообщение не
+ * пропадает из UI совсем. Снятие — по завершении сверки: к этому моменту панель
+ * очереди уже показывает состав, вернувшийся в очередь (после «Стопа» —
+ * без автозапуска, возобновляет пользователь).
  */
-function hasSteerPending(sessionId: string): boolean {
-  const messages = useChatStore.getState().messagesBySession[sessionId] || []
-  return messages.some((m) => m.steerPending === true)
+function finishTurnAndRefreshQueue(sid: string): void {
+  const ids = steerPendingIds(sid)
+  const refreshed = reconcileQueueFromApi(sid)
+  if (ids.length === 0) return
+  void refreshed.then(() => removeSteerPendingMessages(sid, ids))
 }
 
 /**
- * ADR-118 §4: снять из ленты неразрешённые вклинивания сессии (ход закрыт).
+ * id сообщений, снятых событием `steer.dropped` (если событие их несёт).
  *
- * На терминальном событии хода очередь вмешательств либо применена (тогда
- * пришло `message.delivered` и маркер уже снят), либо возвращена в обычную
- * очередь (сообщение уберут из ленты при сверке очереди). Оставшиеся
- * неразрешённые записи в ленте не нужны: их ждёт либо материализация
- * (позже, отдельным `message.delivered`), либо возврат в очередь.
+ * Контракт события ids не содержит (`reason`/`dropped_count`/`stream_id`), но
+ * ядро может их добавить — тогда снимаем точечно, а не все вклинивания сессии.
  */
-function clearSteerPendingMessages(sessionId: string): void {
-  const chat = useChatStore.getState()
-  for (const message of chat.messagesBySession[sessionId] || []) {
-    if (message.steerPending !== true) continue
-    if (message.id) chat.removeMessageById(sessionId, message.id)
+function extractDroppedMessageIds(payload: Record<string, unknown>): string[] {
+  const ids: string[] = []
+  const push = (value: unknown): void => {
+    if (typeof value === 'string' && value) ids.push(value)
   }
+  push(payload.message_id)
+  push(payload.messageId)
+  for (const key of ['message_ids', 'messageIds']) {
+    const raw = payload[key]
+    if (!Array.isArray(raw)) continue
+    for (const item of raw) push(item)
+  }
+  return ids
+}
+
+/**
+ * Изменились ли серверные счётчики очереди сессии (с последнего `queue.state`).
+ *
+ * Счётчики сервера включают сообщение текущего хода, а счётчик в сторе
+ * (`pendingCount`) считает только показанные строки панели — сравнивать их
+ * между собой нельзя, поэтому серверные значения лежат отдельно
+ * (`QueueState.serverCounts`).
+ */
+function queueCountsChanged(sid: string, pendingCount: number, steerCount: number): boolean {
+  const prev = useChatStore.getState().queueBySession[sid]?.serverCounts
+  if (!prev) return true
+  return prev.pendingCount !== pendingCount || prev.steerCount !== steerCount
 }
 
 /**
@@ -1273,10 +1322,10 @@ export function createDispatcher(): EventDispatcher {
       if (!turn || turn.status !== 'streaming') return
       if (streamId && turn.streamId && turn.streamId !== streamId) return
       finishTurn(sid, turn.turnId, status)
-      // Ход закрыт — неразрешённые вклинивания из ленты убираем (ADR-118 §4):
-      // их либо применят позже (отдельным `message.delivered`), либо вернут в
-      // очередь (тогда снимок очереди их уберёт).
-      clearSteerPendingMessages(sid)
+      // Ход закрыт — неразрешённые вклинивания из ленты убираем и состав
+      // очереди перечитываем (ADR-118 §4): вклинивание либо применят позже
+      // (отдельным `message.delivered`), либо оно вернулось в очередь.
+      finishTurnAndRefreshQueue(sid)
     }
 
     switch (type) {
@@ -1345,12 +1394,16 @@ export function createDispatcher(): EventDispatcher {
       case 'queue.state': {
         const pendingCount = (payload.pendingCount as number) || 0
         const steerCount = (payload.steerCount as number) || 0
+        // Сравнение счётчиков — **до** записи новых: `setQueueCounts` обновляет
+        // и серверные значения (`serverCounts`), с которыми сравниваем.
+        const changed = queueCountsChanged(sid, pendingCount, steerCount)
         setQueueCounts(sid, pendingCount, steerCount)
         setQueueItems(sid, extractQueueItems(payload.items))
-        // Вклинивание, вернувшееся в обычную очередь, из ленты убирается —
-        // теперь это сообщение живёт только в панели очереди. Сверяемся с
-        // сервером, но только если в ленте есть неразрешённые вклинивания.
-        if (hasSteerPending(sid)) reconcileQueueFromApi(sid)
+        // Состав панели очереди берётся только из API (тексты и авторы там).
+        // Изменились счётчики — изменился и состав: перечитываем очередь.
+        if (changed) {
+          reconcileQueueFromApi(sid)
+        }
         break
       }
 
@@ -1426,10 +1479,10 @@ export function createDispatcher(): EventDispatcher {
         // Ход завершён — висящих запросов подтверждения по нему быть не может
         // (ask снят ответом/отменой/таймаутом): полосу убираем.
         usePermissionStore.getState().clearSession(sid)
-        // Ход завершён — неразрешённые вклинивания из ленты убираем
-        // (ADR-118 §4): применённые уже пришли с `message.delivered` (маркер
-        // снят), неприменённые вернутся в очередь (её снимок их уберёт).
-        clearSteerPendingMessages(sid)
+        // Ход завершён — неразрешённые вклинивания из ленты убираем и состав
+        // очереди перечитываем (ADR-118 §4): применённые уже пришли с
+        // `message.delivered` (маркер снят), неприменённые вернулись в очередь.
+        finishTurnAndRefreshQueue(sid)
         break
       }
 
@@ -1664,6 +1717,11 @@ export function createDispatcher(): EventDispatcher {
       // отправленное «в ход» сообщение просто исчезало бы из виду.
       case 'steer.dropped': {
         notifySteerDropped(sid, payload)
+        // Сообщение не применено — в ленте его больше нет: по id, если событие
+        // их несёт, иначе — все неразрешённые вклинивания сессии
+        // (`delivery: 'steer'`).
+        const droppedIds = extractDroppedMessageIds(payload)
+        removeSteerPendingMessages(sid, droppedIds.length > 0 ? droppedIds : undefined)
         break
       }
 

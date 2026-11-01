@@ -27,7 +27,7 @@ import {
   nowISO,
   STEERING_ERROR_CODES,
 } from '@itphx/synth-shared';
-import type { Message } from '@itphx/synth-shared';
+import type { Message, Session, BusEvent } from '@itphx/synth-shared';
 
 function createMockAuth(): AuthKit {
   return {
@@ -72,10 +72,24 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
   let queueManager: ReturnType<typeof createMockQueueManager>;
   let app: Hono;
   let sessionId: string;
+  /**
+   * Снимки сессии на каждой записи в хранилище: последний снимок — состояние
+   * «сейчас». По нему проверяем, что **в момент публикации** `message.enqueued`
+   * сообщения уже нет ни в очереди, ни в истории (иначе клиент считал бы
+   * реплику «вернувшейся в очередь» и удалял её из ленты).
+   */
+  let saves: Session[];
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-queue-steer-'));
-    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    saves = [];
+    const store = new FileStore({ dataDir: tmpDir });
+    const originalSave = store.save.bind(store);
+    store.save = async (session: Session) => {
+      saves.push(JSON.parse(JSON.stringify(session)) as Session);
+      return originalSave(session);
+    };
+    sessionManager = new SessionManager(store);
     eventBus = new EventBus();
     queueManager = createMockQueueManager({ running: true });
     app = new Hono();
@@ -86,7 +100,7 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
       eventBus,
       (async () => ({})) as unknown as ReturnType<ChatOrchestrator['createProcessMessage']>,
     ));
-    const session = await sessionManager.createSession({ title: 'Q' });
+    const session = await sessionManager.createSession({ title: 'Q', userId: 'local' });
     sessionId = session.id;
   });
 
@@ -147,6 +161,49 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
     expect(session.messages.some(
       (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
     )).toBe(false);
+  });
+
+  it('202 — в момент публикации message.enqueued сообщения нет ни в очереди, ни в истории', async () => {
+    const message = await seedPending();
+    const streamId = message.metadata!.stream_id as string;
+    // Снимок состояния на момент публикации события (последняя запись в
+    // хранилище — атомарный перенос из очереди в очередь инъекций).
+    let snapshot: Session | undefined;
+    const unsubscribe = eventBus.subscribe(sessionId, (event) => {
+      if (event.type !== 'message.enqueued') return;
+      snapshot = saves[saves.length - 1];
+    }, { userId: 'local' });
+
+    const res = await steer();
+    unsubscribe();
+
+    expect(res.status).toBe(202);
+    expect(snapshot).toBeDefined();
+    // Сообщения нет в обычной очереди...
+    expect(snapshot!.pendingMessages.map((m) => m.id)).not.toContain(message.id);
+    // ...и нет его user-копии в истории (иначе UI счёл бы реплику «вернувшейся
+    // в очередь» и удалил её из ленты).
+    expect(snapshot!.messages.some(
+      (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+    )).toBe(false);
+    // При этом сообщение уже в очереди инъекций.
+    expect(snapshot!.steerInbox ?? []).toHaveLength(1);
+  });
+
+  it('404 — повторный steer того же id (сообщение уже отправлено «в разрыв»)', async () => {
+    const message = await seedPending();
+
+    const first = await steer({ id: message.id });
+    expect(first.status).toBe(202);
+
+    const second = await steer({ id: message.id });
+    expect(second.status).toBe(404);
+    expect((await second.json() as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+
+    // Дубля в очереди инъекций нет.
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.steerInbox ?? []).toHaveLength(1);
+    expect(session.pendingMessages).toHaveLength(0);
   });
 
   it('202 — адресация по id: снимается именно это сообщение, pending_count — длина очереди', async () => {
@@ -283,15 +340,18 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
     expect(session.steerInbox ?? []).toHaveLength(0);
   });
 
-  it('429 — превышен лимит инъекций; очередь и история не тронуты', async () => {
+  it('429 — превышен лимит инъекций; очередь и история не тронуты, событий приёма нет', async () => {
     const message = await seedPending();
     const streamId = message.metadata!.stream_id as string;
     // Заполняем очередь инъекций до лимита хода.
     for (let i = 0; i < MAX_STEER_INJECTIONS_PER_TURN; i++) {
       await sessionManager.enqueueSteerMessage(sessionId, makeUserMessage(`инъекция ${i}`), 10);
     }
+    const events: BusEvent[] = [];
+    const unsubscribe = eventBus.subscribe(sessionId, (e) => events.push(e), { userId: 'local' });
 
     const res = await steer();
+    unsubscribe();
 
     expect(res.status).toBe(429);
     expect((await res.json() as { error: { code: string } }).error.code)
@@ -302,5 +362,8 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
     expect(session.messages.some(
       (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
     )).toBe(true);
+    // Приёма не было — ни подтверждения, ни снимка в ленте.
+    expect(events.some((e) => e.type === 'message.accepted')).toBe(false);
+    expect(events.some((e) => e.type === 'message.enqueued')).toBe(false);
   });
 });

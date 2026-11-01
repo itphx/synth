@@ -11,6 +11,11 @@ interface QueuePanelProps {
   pendingCount: number
   /** Ход активен — можно отправить сообщение из очереди в разрыв (steer). */
   canSteer: boolean
+  /**
+   * Возобновление обработки очереди доступно: очередь не пуста, активного хода
+   * нет (после «Стопа» автозапуска нет — возобновляет пользователь).
+   */
+  canResume?: boolean
   onResume: () => void
   onClear: () => void
   onReturnAll: () => void
@@ -40,6 +45,7 @@ export function QueuePanel({
   isStalled,
   pendingCount,
   canSteer,
+  canResume = false,
   onResume,
   onClear,
   onReturnAll,
@@ -139,10 +145,20 @@ export function QueuePanel({
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-1">
-          {isStalled && (
+          {/*
+            «Продолжить» — обработка очереди остановлена (`queue.stalled`) или
+            ждёт ручного возобновления (после «Стопа» автозапуска нет).
+          */}
+          {(isStalled || canResume) && (
             <button
               onClick={onResume}
-              className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-status-warning/20 text-status-warning hover:bg-status-warning/30 transition-colors pointer-coarse:min-h-10"
+              data-testid="queue-resume"
+              className={cn(
+                'rounded px-2 py-0.5 text-[0.6875rem] font-medium transition-colors pointer-coarse:min-h-10',
+                isStalled
+                  ? 'bg-status-warning/20 text-status-warning hover:bg-status-warning/30'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover',
+              )}
             >
               {t('chat.queue.resume')}
             </button>

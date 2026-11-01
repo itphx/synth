@@ -915,6 +915,9 @@ export function ChatTab({ tab }: ChatTabProps) {
               isStalled={queue?.isStalled ?? false}
               pendingCount={queue?.pendingCount ?? 0}
               canSteer={isStreaming}
+              // «Стоп» оставляет очередь в покое (автозапуска нет) — продолжить
+              // обработку можно кнопкой в панели очереди.
+              canResume={pending.length > 0 && !isStreaming}
               onResume={handleResumeQueue}
               onClear={handleClearQueue}
               onReturnAll={handleReturnQueue}

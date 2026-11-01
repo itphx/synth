@@ -1666,10 +1666,12 @@ export function createSessionRoutes(
     }
 
     // Прерываем backoff/активный LLM-вызов и цикл процессора немедленно.
-    // Очистку pendingMessages/blocked/currentStream/флага выполняет сам
-    // QueueProcessor. НЕ вызываем queueManager.stop() — иначе сессия остаётся
-    // «зависшей» (stalled). Если процессора нет — снимаем флаг, иначе следующий
-    // запуск ложно отменится.
+    // Снятие blocked/currentStream/флага выполняет сам QueueProcessor; **очередь
+    // сохраняется целиком** («Стоп» останавливает только активный ход —
+    // решение владельца 2026-11-01), её продолжит `/queue/:sessionId/resume`
+    // или новая постановка сообщения. НЕ вызываем queueManager.stop() —
+    // иначе сессия остаётся «зависшей» (stalled). Если процессора нет — снимаем
+    // флаг, иначе следующий запуск ложно отменится.
     if (!queueManager.requestStop(id)) {
       await sessionManager.withLock(id, async (s) => {
         s.status.cancelRequested = undefined;

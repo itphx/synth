@@ -38,6 +38,7 @@ interface RenderOptions {
   isStalled?: boolean
   pendingCount?: number
   canSteer?: boolean
+  canResume?: boolean
   locale?: 'en' | 'ru'
   handlers?: Handlers
 }
@@ -51,6 +52,7 @@ async function renderPanel(options: RenderOptions = {}): Promise<HTMLElement> {
     isStalled = false,
     pendingCount = pending.length,
     canSteer = true,
+    canResume = false,
     locale = 'en',
     handlers = makeHandlers(),
   } = options
@@ -74,6 +76,7 @@ async function renderPanel(options: RenderOptions = {}): Promise<HTMLElement> {
           isStalled={isStalled}
           pendingCount={pendingCount}
           canSteer={canSteer}
+          canResume={canResume}
           onResume={handlers.onResume}
           onClear={handlers.onClear}
           onReturnAll={handlers.onReturnAll}
@@ -264,5 +267,27 @@ describe('QueuePanel — заголовок и сворачивание', () => 
   it('пустая очередь вне остановки ничего не рендерит', async () => {
     const container = await renderPanel({ pending: [], pendingCount: 0 })
     expect(container.textContent).toBe('')
+  })
+})
+
+describe('QueuePanel — возобновление очереди', () => {
+  it('после «Стопа» (очередь непуста, хода нет) кнопка «Продолжить» доступна', async () => {
+    const handlers = makeHandlers()
+    const container = await renderPanel({ canResume: true, handlers })
+
+    const resume = container.querySelector('[data-testid="queue-resume"]')
+    expect(resume).not.toBeNull()
+    await click(resume)
+    expect(handlers.onResume).toHaveBeenCalledTimes(1)
+  })
+
+  it('без canResume (ход идёт) кнопки «Продолжить» нет', async () => {
+    const container = await renderPanel({ canResume: false })
+    expect(container.querySelector('[data-testid="queue-resume"]')).toBeNull()
+  })
+
+  it('при остановленной очереди кнопка «Продолжить» есть независимо от canResume', async () => {
+    const container = await renderPanel({ isStalled: true, canResume: false })
+    expect(container.querySelector('[data-testid="queue-resume"]')).not.toBeNull()
   })
 })

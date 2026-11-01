@@ -507,6 +507,8 @@ describe('chatStore: счётчики очереди (ADR-118 §4)', () => {
       pendingCount: 3,
       steerCount: 1,
       isStalled: false,
+      // Серверные счётчики — основа для решения «изменился ли состав очереди».
+      serverCounts: { pendingCount: 3, steerCount: 1 },
     })
   })
 
@@ -520,11 +522,27 @@ describe('chatStore: счётчики очереди (ADR-118 §4)', () => {
       pendingCount: 0,
       steerCount: 0,
       isStalled: true,
+      serverCounts: { pendingCount: 0, steerCount: 0 },
     })
     expect(useChatStore.getState().queueBySession['s2']).toEqual({
       pendingCount: 5,
       steerCount: 2,
       isStalled: false,
+      serverCounts: { pendingCount: 5, steerCount: 2 },
+    })
+  })
+
+  it('updateQueueCount (сверка очереди) не затирает серверные счётчики', () => {
+    const store = useChatStore.getState()
+    store.setQueueCounts('s1', 3, 1)
+    // Сверка очереди считает показанные строки (без сообщения текущего хода).
+    store.updateQueueCount('s1', 2)
+
+    expect(useChatStore.getState().queueBySession['s1']).toEqual({
+      pendingCount: 2,
+      steerCount: 1,
+      isStalled: false,
+      serverCounts: { pendingCount: 3, steerCount: 1 },
     })
   })
 })

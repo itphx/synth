@@ -265,6 +265,14 @@ export interface QueueState {
   /** ADR-118 §4: сообщений-вмешательств (`steer`/`interrupt`), ждущих применения. */
   steerCount: number
   isStalled: boolean
+  /**
+   * Счётчики сервера (`queue.state`): обычная очередь + очередь вмешательств.
+   *
+   * `pendingCount` выше — счётчик **показанных строк** панели (без сообщения
+   * текущего хода), а серверный счётчик включает и его. По `serverCounts` видно,
+   * изменился ли состав очереди (и нужно ли перечитывать его у API).
+   */
+  serverCounts?: { pendingCount: number; steerCount: number }
 }
 
 /** Статус элемента очереди из `queue.state` (ADR-118 §4). */
@@ -938,6 +946,9 @@ export const useChatStore = create<ChatStore>((set) => ({
             pendingCount,
             steerCount: prev?.steerCount ?? 0,
             isStalled: prev?.isStalled ?? false,
+            // Серверные счётчики не трогаем: они — основа для решения
+            // «изменился ли состав очереди» (см. `serverCounts`).
+            ...(prev?.serverCounts ? { serverCounts: prev.serverCounts } : {}),
           },
         },
       }
@@ -953,6 +964,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             pendingCount,
             steerCount,
             isStalled: prev?.isStalled ?? false,
+            serverCounts: { pendingCount, steerCount },
           },
         },
       }

@@ -621,18 +621,53 @@ export class SessionManager {
    * `pendingMessages`: её вычитывает оркестратор на границе шага.
    *
    * `accepted: false` — превышен лимит инъекций на ход (`maxInjections`).
+   *
+   * `options.fromPending` — **атомарный перенос** из обычной очереди
+   * (`pendingMessages`) в очередь инъекций: проверка лимита, снятие из очереди,
+   * снятие user-копии из истории и постановка в `steerInbox` выполняются под
+   * **одним** локом сессии. Так сообщение не остаётся «в двух местах»
+   * (обработчик очереди мог бы подхватить его как обычное сообщение) и не
+   * пропадает: при отказе по лимиту очередь не меняется вовсе.
    */
   async enqueueSteerMessage(
     sessionId: string,
     message: Message,
     maxInjections = MAX_STEER_INJECTIONS_PER_TURN,
-  ): Promise<{ accepted: boolean; pending: number }> {
+    options?: {
+      /** Перенос из `pendingMessages` (снять из очереди и из истории). */
+      fromPending?: boolean;
+      /** id активного стрима — его user-копию в истории не снимаем. */
+      activeStreamId?: string;
+    },
+  ): Promise<{ accepted: boolean; pending: number; reason?: 'limit' | 'not_found' }> {
     return this.withLock(sessionId, async (session) => {
       const inbox = session.steerInbox ?? [];
       if (inbox.length >= maxInjections) {
-        return { accepted: false, pending: inbox.length };
+        return { accepted: false, pending: inbox.length, reason: 'limit' };
       }
       if (!message.id) message.id = generateId();
+      if (options?.fromPending) {
+        // Сообщения нет в обычной очереди (уже отправлено «в разрыв» или
+        // исчезло) — принимать нечего: очередь не трогаем.
+        const idx = session.pendingMessages.findIndex(
+          (m) => (message.id ? m.id === message.id : m === message),
+        );
+        if (idx < 0) {
+          return { accepted: false, pending: inbox.length, reason: 'not_found' };
+        }
+        session.pendingMessages.splice(idx, 1);
+        // User-копия из истории (по `stream_id`) — активный стрим не трогаем
+        // (как в `/return`): иначе после инъекции был бы дубль реплики.
+        const sid = message.metadata?.stream_id as string | undefined;
+        if (sid && sid !== options.activeStreamId) {
+          session.messages = session.messages.filter((m) => {
+            if (m.role !== MessageRole.USER) return true;
+            const copySid = m.metadata?.stream_id as string | undefined;
+            if (!copySid) return true;
+            return copySid !== sid;
+          });
+        }
+      }
       if (!message.origin) message.origin = 'local';
       if (!message.parts || message.parts.length === 0) {
         message.parts = [makeTextPart(message.content)];

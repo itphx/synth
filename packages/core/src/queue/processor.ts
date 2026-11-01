@@ -235,9 +235,11 @@ export class QueueProcessor {
   /**
    * «Стоп» (abort-роут, `/stop`): останавливаем процессор целиком — цикл
    * прерывается на ближайшей границе, backoff будится, активный LLM-вызов
-   * абортится. Очистку pending/blocked/currentStream/флага выполняет `_run`
+   * абортится. Снятие blocked/currentStream/флага выполняет `_run`
    * (`_handleStopRequest`) — так гарантируется, что состояние сессии снимается
-   * под локом и только один раз.
+   * под локом и только один раз. **Очередь сохраняется** («Стоп» останавливает
+   * только активный ход) — её продолжит `/queue/:sessionId/resume` или новая
+   * постановка сообщения.
    *
    * Запрос не теряется: если «Стоп» пришёл в окне между границей цикла и
    * стартом LLM-вызова (Phase 1 пишет сессию — окно реальное), `_run`
@@ -259,22 +261,26 @@ export class QueueProcessor {
   }
 
   /**
-   * Обработка остановки: под локом чистим очередь (Стоп = очередь не
-   * продолжаем), снимаем blocked/cancelRequested и — если стрим ещё «висит»
-   * (graceful-отмена оркестратора его не сняла, напр. backoff/очередь) —
-   * публикуем `stream.cancelled` ровно один раз.
+   * Обработка остановки: под локом снимаем `blocked`/`cancelRequested` и
+   * `currentStream` — а **очередь сохраняется целиком** («Стоп» останавливает
+   * только активный ход; решение владельца 2026-11-01). Ни обычные сообщения,
+   * ни уведомления о завершении фоновых прогонов (ADR-111/ADR-113), ни
+   * возвращённые из `steerInbox` реплики не теряются: они ждут в панели
+   * очереди.
+   *
+   * Автозапуска обработки нет: цикл прерывается (`_cancelled`), возобновление —
+   * только `POST /queue/:sessionId/resume` (или новая постановка сообщения,
+   * которая поднимает процессор и подхватывает сохранённую очередь).
+   *
+   * Если стрим ещё «висит» (graceful-отмена оркестратора его не сняла, напр.
+   * backoff/очередь) — публикуем `stream.cancelled` ровно один раз.
    */
   private async _handleStopRequest(): Promise<void> {
     this._cancelled = true;
 
     const { id: streamId, counts } = await this.sessionManager.withLock(this.sessionId, async (s) => {
       const id = s.currentStream?.streamId;
-      // «Стоп» очищает очередь, но уведомления о завершении фоновых прогонов
-      // (ADR-111/ADR-113) не теряются: результат фоновой работы остаётся ждать
-      // следующего хода (автостарта нет — ход остановил пользователь).
-      s.pendingMessages = s.pendingMessages.filter(
-        (m) => m.metadata?.type === 'background_run_result',
-      );
+      // Очередь НЕ чистится: «Стоп» останавливает только активный ход.
       s.status.blocked = undefined;
       s.status.blockedAt = undefined;
       s.status.cancelRequested = undefined;
@@ -288,7 +294,7 @@ export class QueueProcessor {
       return { id, counts: queueCounts(s) };
     });
 
-    // ADR-118 §4: очередь изменилась (сброс) — состояние очереди в канале сессии.
+    // ADR-118 §4: состояние очереди (счётчики — по фактической очереди).
     publishQueueState(this.eventBus, this.sessionId, counts);
 
     // Дублирующей публикации нет: если отмену уже отработал оркестратор
@@ -385,7 +391,8 @@ export class QueueProcessor {
 
       // «Стоп» на любой границе цикла (в т.ч. после processMessage/_sleepBackoff —
       // все ветки возвращаются сюда): персистентный флаг сессии либо in-memory
-      // запрос. Останавливаемся общей веткой — очередь не продолжаем.
+      // запрос. Останавливаемся общей веткой — очередь не продолжаем (сама
+      // очередь при этом сохраняется — см. `_handleStopRequest`).
       if (this._shouldStop(session)) {
         await this._handleStopRequest();
         break;
@@ -890,8 +897,12 @@ export class QueueProcessorManager {
 export interface SteerEnqueueResult {
   /** Сообщение принято в очередь инъекций. */
   accepted: boolean;
-  /** Причина отказа: превышен лимит инъекций на ход. */
-  reason?: 'limit';
+  /**
+   * Причина отказа: `limit` — превышен лимит инъекций на ход; `not_found` —
+   * сообщения нет в обычной очереди (перенос `fromPending`: оно уже отправлено
+   * «в разрыв» или исчезло) — вызывающий отвечает 404.
+   */
+  reason?: 'limit' | 'not_found';
   /** Сколько сообщений ждёт в очереди инъекций. */
   pending: number;
 }
@@ -923,6 +934,20 @@ export interface SteerEnqueueOptions {
    * (адресная доставка). Не задан — событие уходит в канал сессии.
    */
   recipient?: string;
+  /**
+   * ADR-104 × ADR-118: **атомарный перенос** сообщения из обычной очереди
+   * (`pendingMessages`) в очередь инъекций. Снятие из очереди и снятие
+   * user-копии из истории выполняются под тем же локом, что и постановка, —
+   * поэтому к моменту публикации `message.enqueued` сообщения уже нет ни в
+   * `pendingMessages`, ни в истории (иначе клиент считал бы реплику
+   * «вернувшейся в очередь» и удалял её из ленты).
+   *
+   * `activeStreamId` — id активного стрима: его user-копию в истории не
+   * снимаем (как в `/return`).
+   */
+  fromPending?: {
+    activeStreamId?: string;
+  };
 }
 
 /**
@@ -965,8 +990,16 @@ export async function enqueueSteerMessage(
     ...(options?.interrupt ? { [STEER_INTERRUPT_METADATA_KEY]: true } : {}),
   };
 
-  const result = await sessionManager.enqueueSteerMessage(sessionId, message, maxInjections);
+  const result = await sessionManager.enqueueSteerMessage(sessionId, message, maxInjections, {
+    fromPending: options?.fromPending !== undefined,
+    activeStreamId: options?.fromPending?.activeStreamId,
+  });
   if (!result.accepted) {
+    // Сообщения нет в обычной очереди (перенос `fromPending`) — это не отказ по
+    // лимиту: событие `steer.dropped` не публикуем, вызывающий отвечает 404.
+    if (result.reason === 'not_found') {
+      return { accepted: false, reason: 'not_found', pending: result.pending };
+    }
     eventBus.publish(sessionId, 'steer.dropped', {
       reason: 'limit',
       // Машинный код — тот же, что отдаёт API (429 STEER_LIMIT_EXCEEDED).

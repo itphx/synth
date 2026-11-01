@@ -7,6 +7,7 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import { sessionMessagesToLlm } from '../engine/orchestrator/prompt-info.js';
+import { dropSteerInjections } from '../engine/steering/apply.js';
 import { generateId, MessageRole, nowISO, makeTextPart, makeMediaPart } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
@@ -531,9 +532,10 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     expect(cancelled).toHaveLength(1);
     expect(cancelled[0]!.data).toMatchObject({ status: 'cancelled' });
 
-    // Сессия полностью разблокирована, очередь очищена.
+    // Сессия полностью разблокирована; очередь **сохранена** («Стоп» останавливает
+    // только активный ход) — сообщение ждёт `/queue/:sessionId/resume`.
     const s = await sessionManager.getSession(sessionId);
-    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.pendingMessages).toHaveLength(1);
     expect(s!.status.blocked).toBeUndefined();
     expect(s!.currentStream).toBeUndefined();
     expect(s!.status.cancelRequested).toBeUndefined();
@@ -543,7 +545,7 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     expect(events.some((e) => e.type === 'queue.stalled')).toBe(false);
   });
 
-  it('backoff: requestStop будит паузу, очередь чистится, stream.cancelled один раз', async () => {
+  it('backoff: requestStop будит паузу, очередь сохраняется, stream.cancelled один раз', async () => {
     const { sessionId } = await enqueue();
     const events = collectEvents(eventBus, sessionId);
 
@@ -569,7 +571,7 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
 
     const s = await sessionManager.getSession(sessionId);
-    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.pendingMessages).toHaveLength(1);
     expect(s!.status.blocked).toBeUndefined();
     expect(s!.currentStream).toBeUndefined();
     expect(s!.status.cancelRequested).toBeUndefined();
@@ -592,7 +594,7 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     await processor.start();
 
     const s = await sessionManager.getSession(sessionId);
-    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.pendingMessages).toHaveLength(1);
     expect(s!.currentStream).toBeUndefined();
     expect(s!.status.cancelRequested).toBeUndefined();
     expect(s!.status.cancelRequestedAt).toBeUndefined();
@@ -624,7 +626,7 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
 
     expect(events.filter((e) => e.type === 'stream.cancelled')).toHaveLength(1);
     const s = await sessionManager.getSession(sessionId);
-    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.pendingMessages).toHaveLength(1);
     expect(s!.status.cancelRequested).toBeUndefined();
     expect(s!.currentStream).toBeUndefined();
   });
@@ -860,10 +862,12 @@ describe('requeueMessages — маркеры и переполнение оче�
 });
 
 /**
- * «Стоп» очищает очередь, но уведомления о завершении фоновых прогонов
- * (ADR-111/ADR-113) не теряются — иначе результат фоновой работы исчез бы.
+ * «Стоп» останавливает **только активный ход** — очередь сохраняется целиком
+ * (решение владельца 2026-11-01): обычные сообщения, уведомления о завершении
+ * фоновых прогонов (ADR-111/ADR-113) и возвращённые из `steerInbox` реплики не
+ * теряются — они ждут в панели очереди.
  */
-describe('QueueProcessor — «Стоп» сохраняет background_run_result', () => {
+describe('QueueProcessor — «Стоп» сохраняет очередь целиком', () => {
   let sessionManager: SessionManager;
   let eventBus: EventBus;
   let tmpDir: string;
@@ -878,7 +882,7 @@ describe('QueueProcessor — «Стоп» сохраняет background_run_resu
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('после стопа уведомление остаётся в pending, остальное снято', async () => {
+  it('после стопа обычные сообщения и уведомление фона остаются в pending', async () => {
     const session = await sessionManager.createSession({ title: 'Q' });
     await sessionManager.addPendingMessage(session.id, makeMessage());
     const notice: Message = {
@@ -894,10 +898,111 @@ describe('QueueProcessor — «Стоп» сохраняет background_run_resu
     await run;
 
     const saved = (await sessionManager.getSession(session.id))!;
-    expect(saved.pendingMessages.map((m) => m.metadata?.type)).toEqual(['background_run_result']);
-    expect(saved.pendingMessages[0]!.author).toBe('Process');
+    expect(saved.pendingMessages).toHaveLength(2);
+    expect(saved.pendingMessages.map((m) => m.metadata?.type)).toEqual([undefined, 'background_run_result']);
+    expect(saved.pendingMessages[1]!.author).toBe('Process');
     expect(saved.status.blocked).toBeUndefined();
     expect(saved.currentStream).toBeUndefined();
+  });
+
+  it('после «Стопа» процессор не продолжает очередь сам', async () => {
+    const session = await sessionManager.createSession({ title: 'Q' });
+    await sessionManager.addPendingMessage(session.id, makeMessage());
+    await sessionManager.addPendingMessage(session.id, makeMessage());
+
+    let calls = 0;
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => {
+      calls++;
+      return {};
+    });
+    const run = processor.start();
+    processor.requestStop();
+    await run;
+
+    // Процессор остановился и сам очередь не продолжает.
+    expect(calls).toBeLessThanOrEqual(1);
+    expect(processor.isRunning).toBe(false);
+    const saved = (await sessionManager.getSession(session.id))!;
+    expect(saved.pendingMessages).toHaveLength(2);
+    expect(saved.status.blocked).toBeUndefined();
+  });
+
+  it('очередь инъекций (steerInbox) «Стоп» не трогает — реплика ждёт возврата в очередь', async () => {
+    const session = await sessionManager.createSession({ title: 'Q' });
+    await sessionManager.addPendingMessage(session.id, makeMessage());
+    const steerMessage = makeMessage();
+    await sessionManager.enqueueSteerMessage(session.id, steerMessage);
+
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
+    const run = processor.start();
+    processor.requestStop();
+    await run;
+
+    const saved = (await sessionManager.getSession(session.id))!;
+    // Инъекция на месте — её вернёт в обычную очередь финализация хода/роут
+    // abort (`dropSteerInjections` с `requeue`), «Стоп» её не затирает.
+    expect(saved.steerInbox ?? []).toHaveLength(1);
+    expect(saved.steerInbox![0]!.id).toBe(steerMessage.id);
+    expect(saved.pendingMessages).toHaveLength(1);
+  });
+
+  it('возвращённая из steerInbox реплика переживает «Стоп» (порядок abort → finalize → stop)', async () => {
+    const session = await sessionManager.createSession({ title: 'Q' });
+    const steerMessage = makeMessage();
+    await sessionManager.enqueueSteerMessage(session.id, steerMessage);
+
+    // Финализация хода / роут abort: остаток очереди инъекций возвращается в
+    // обычную очередь (без автозапуска — ход остановил пользователь).
+    const lost = await dropSteerInjections({
+      sessionManager,
+      sessionId: session.id,
+      reason: 'aborted',
+      publishDropped: () => {},
+      requeue: async (messages) => requeueMessages({
+        sessionManager,
+        eventBus,
+        sessionId: session.id,
+        messages,
+      }),
+    });
+    expect(lost).toHaveLength(0);
+
+    // «Стоп» процессора — очередь (включая возвращённую реплику) не затирается.
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
+    const run = processor.start();
+    processor.requestStop();
+    await run;
+
+    const saved = (await sessionManager.getSession(session.id))!;
+    expect(saved.pendingMessages.map((m) => m.id)).toEqual([steerMessage.id]);
+    // Маркеры инъекции сняты — в очереди это обычная реплика.
+    expect(saved.pendingMessages[0]!.metadata?.steer).toBeUndefined();
+    expect(saved.pendingMessages[0]!.metadata?.interrupt).toBeUndefined();
+    expect(saved.steerInbox ?? []).toHaveLength(0);
+  });
+
+  it('возобновление (/resume — новый процессор) подхватывает сохранённую очередь', async () => {
+    const session = await sessionManager.createSession({ title: 'Q' });
+    await sessionManager.addPendingMessage(session.id, makeMessage());
+
+    const stopped = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
+    const stopRun = stopped.start();
+    stopped.requestStop();
+    await stopRun;
+
+    // «Возобновление» — новый процессор той же сессии (его поднимает
+    // `POST /queue/:sessionId/resume` или новая постановка сообщения).
+    const processed: string[] = [];
+    const resumed = new QueueProcessor(session.id, sessionManager, eventBus, async (_s, m) => {
+      processed.push(m.id);
+      return {};
+    });
+    await resumed.start();
+
+    expect(processed).toHaveLength(1);
+    const saved = (await sessionManager.getSession(session.id))!;
+    expect(saved.pendingMessages).toHaveLength(0);
+    expect(saved.status.blocked).toBeUndefined();
   });
 });
 

@@ -43,9 +43,12 @@
   Очередь вычитывается только на границе шага, поэтому при «Стоп» и в конце хода границы уже не
   будет. Раньше сообщение, отправленное «в ход», оставалось в `steerInbox` и применялось в начале
   **следующего** хода — выглядело «внезапным отдельным сообщением». Теперь:
-  - **«Стоп»** (`POST /api/v2/sessions/:id/abort`) — после `requestStop` очередь снимается
-    (`SessionManager.clearSteerInbox`), о снятии сообщает `steer.dropped` с `reason: 'aborted'`
-    (best-effort: сбой хранилища/шины не ломает `200 {status:'aborted'}`);
+  - **«Стоп»** (`POST /api/v2/sessions/:id/abort`) — после `requestStop` очередь инъекций снимается
+    (`SessionManager.clearSteerInbox`), а снятые сообщения **возвращаются в обычную очередь**
+    (`requeueMessages`: маркеры `steer`/`interrupt` снимаются, назначается `stream_id`) — автостарта
+    нет, сообщение ждёт пользователя (`POST /api/v2/queue/:sessionId/resume`); `steer.dropped` с
+    `reason: 'aborted'` публикуется только по фактически потерянным (переполнение очереди;
+    best-effort: сбой хранилища/шины не ломает `200 {status:'aborted'}`);
   - **конец хода** (эпилог `orchestrator/phases/process-finalize.ts`, вне цикла Tool Use) — если
     после цикла в `steerInbox` что-то осталось (инъекция пришла во время последней генерации),
     очередь снимается с `reason: 'turn_ended'`;
@@ -59,8 +62,10 @@
   (`turn_ended`; `OrchestratorOptions.requeueBackgroundNotices`) — с автостартом;
   «Стоп» (`aborted`, abort-роут) — без автостарта (ждём пользователя); конец прогона
   дочерней сессии (`engine/tools/task/run-cycle.ts`) — без автостарта. `steer.dropped`
-  публикуется только для остальных сообщений; «Стоп» процессора сохраняет такие
-  уведомления в очереди (`_handleStopRequest`).
+  публикуется только для остальных сообщений; «Стоп» процессора сохраняет **всю** очередь
+  целиком (`_handleStopRequest`: «Стоп» останавливает только активный ход — решение владельца
+  2026-11-01), уведомления в ней не теряются; автозапуска обработки нет, возобновление —
+  `/queue/:sessionId/resume`.
 - **События:** `message.injected` (инъекция применена), `steer.dropped` (`reason`:
   `limit` | `aborted` | `turn_ended`; поля `dropped_count`, `i18n`-ключ), `stream.interrupted`
   (генерация прервана) — через общий транспорт событий (ADR-024), без новых каналов.

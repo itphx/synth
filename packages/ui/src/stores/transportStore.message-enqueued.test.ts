@@ -159,38 +159,60 @@ describe('message.enqueued: вклинивание (steer) появляется 
   })
 })
 
-describe('message.enqueued: уборка неразрешённых вклиниваний', () => {
-  it('вернувшееся в обычную очередь — исчезает из ленты', async () => {
+describe('message.enqueued: вклинивание живёт в ленте до явного сигнала', () => {
+  it('вклинивание НЕ удаляется, если его id ещё в pending_messages при сверке', async () => {
     dispatch(makeEvent('message.enqueued', 's1', {
       messageId: 'm-steer', delivery: 'steer', position: null, message: snapshot(),
     }))
     expect(useChatStore.getState().messagesBySession['s1']).toHaveLength(1)
 
-    // Ход закончился до границы шага — ядро вернуло сообщение в очередь.
+    // Ядро публикует `message.enqueued` ДО того, как снимет сообщение из
+    // очереди, — наличие id в `pending_messages` не сигнал к снятию пузыря.
     getSession.mockResolvedValue({
       id: 's1',
       messages: [],
       pending_messages: [{ id: 'm-steer', role: 'user', content: 'вмешательство' }],
     } as never)
+    dispatch(makeEvent('queue.state', 's1', { pendingCount: 1, steerCount: 1 }))
+
+    await vi.waitFor(() => {
+      expect(getSession.mock.calls.length).toBeGreaterThan(0)
+    })
+    expect(useChatStore.getState().messagesBySession['s1'] ?? []).toHaveLength(1)
+  })
+
+  it('счётчики queue.state обновили состав панели очереди', async () => {
+    getSession.mockResolvedValue({
+      id: 's1',
+      messages: [],
+      pending_messages: [{ id: 'm-q', role: 'user', content: 'в очереди' }],
+    } as never)
+
     dispatch(makeEvent('queue.state', 's1', { pendingCount: 1, steerCount: 0 }))
 
     await vi.waitFor(() => {
-      expect(useChatStore.getState().messagesBySession['s1'] ?? []).toHaveLength(0)
+      const pending = useChatStore.getState().pendingBySession['s1'] ?? []
+      expect(pending.map((m) => m.id)).toEqual(['m-q'])
     })
   })
 
-  it('терминал хода снимает неразрешённые вклинивания', () => {
+  it('терминал хода: пузырь снят и очередь перечитана у сервера', async () => {
     dispatch(makeEvent('message.enqueued', 's1', {
       messageId: 'm-steer', delivery: 'steer', position: null, message: snapshot(),
     }))
     expect(useChatStore.getState().messagesBySession['s1']).toHaveLength(1)
 
+    const callsBefore = getSession.mock.calls.length
     dispatch(makeEvent('turn.finished', 's1', { turnId: 't1', status: 'completed' }))
 
-    expect(useChatStore.getState().messagesBySession['s1'] ?? []).toHaveLength(0)
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().messagesBySession['s1'] ?? []).toHaveLength(0)
+    })
+    // Сверка очереди инициирована тем же терминалом хода.
+    expect(getSession.mock.calls.length).toBeGreaterThan(callsBefore)
   })
 
-  it('отмена хода (stream.cancelled) тоже снимает неразрешённые вклинивания', () => {
+  it('отмена хода (stream.cancelled) тоже снимает неразрешённые вклинивания', async () => {
     dispatch(makeEvent('turn.started', 's1', { turnId: 't1', messageId: 'm-user' }))
     dispatch(makeEvent('message.enqueued', 's1', {
       messageId: 'm-steer', delivery: 'steer', position: null, message: snapshot(),
@@ -199,7 +221,36 @@ describe('message.enqueued: уборка неразрешённых вклини
 
     dispatch(makeEvent('stream.cancelled', 's1', { stream_id: 'st-1', content: '', status: 'cancelled' }))
 
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().messagesBySession['s1'] ?? []).toHaveLength(0)
+    })
+  })
+
+  it('steer.dropped снимает вклинивание из ленты', () => {
+    dispatch(makeEvent('message.enqueued', 's1', {
+      messageId: 'm-steer', delivery: 'steer', position: null, message: snapshot(),
+    }))
+    expect(useChatStore.getState().messagesBySession['s1']).toHaveLength(1)
+
+    dispatch(makeEvent('steer.dropped', 's1', { reason: 'aborted', dropped_count: 1 }))
+
     expect(useChatStore.getState().messagesBySession['s1'] ?? []).toHaveLength(0)
+  })
+
+  it('steer.dropped с id снимает только указанное вклинивание', () => {
+    dispatch(makeEvent('message.enqueued', 's1', {
+      messageId: 'm-steer-1', delivery: 'steer', position: null, message: snapshot('первое', 'm-steer-1'),
+    }))
+    dispatch(makeEvent('message.enqueued', 's1', {
+      messageId: 'm-steer-2', delivery: 'steer', position: null, message: snapshot('второе', 'm-steer-2'),
+    }))
+
+    dispatch(makeEvent('steer.dropped', 's1', {
+      reason: 'limit', dropped_count: 1, message_ids: ['m-steer-1'],
+    }))
+
+    const messages = useChatStore.getState().messagesBySession['s1'] ?? []
+    expect(messages.map((m) => m.id)).toEqual(['m-steer-2'])
   })
 })
 

@@ -417,7 +417,12 @@ export function createQueueRoutes(
     const senderUserId = (await resolveUserId(c)) || '';
 
     // Сначала ставим в очередь инъекций — при отказе (лимит) очередь и история
-    // остаются нетронутыми (сообщение не теряется).
+    // остаются нетронутыми (сообщение не теряется). Перенос из обычной очереди
+    // **атомарный** (`fromPending`): снятие из `pendingMessages` и снятие
+    // user-копии из истории выполняются под тем же локом, что и постановка, —
+    // поэтому к моменту публикации `message.enqueued` сообщения уже нет ни в
+    // очереди, ни в истории (иначе клиент считал бы реплику «вернувшейся в
+    // очередь» и удалял её из ленты).
     const steered = await enqueueSteerMessage(
       sessionManager,
       eventBus,
@@ -429,9 +434,17 @@ export function createQueueRoutes(
         // ADR-118 §3/§4: подтверждение приёма — адресное `message.accepted`.
         messageId: message.id,
         ...(senderUserId ? { recipient: senderUserId } : {}),
+        fromPending: { ...(activeStreamId ? { activeStreamId } : {}) },
       },
     );
     if (!steered.accepted) {
+      // Сообщения нет в очереди (уже отправлено «в разрыв» или исчезло) —
+      // честный 404, а не «успех».
+      if (steered.reason === 'not_found') {
+        return c.json({
+          error: { code: 'NOT_FOUND', message: messages.messageNotFoundIndex(c) },
+        }, 404);
+      }
       return c.json({
         error: {
           code: STEERING_ERROR_CODES.limitExceeded,
@@ -440,30 +453,11 @@ export function createQueueRoutes(
       }, 429);
     }
 
-    // Принято инъекцией — снимаем из pending именно это сообщение (по id, а не
-    // по индексу: параллельное изменение очереди индекс сдвигает) и удаляем
-    // его user-копию из истории по `stream_id`.
-    await sessionManager.safeUpdate(sessionId, async (s) => {
-      s.pendingMessages = s.pendingMessages.filter((m) => (message.id ? m.id !== message.id : m !== message));
-      if (!messageStreamId) return;
-      s.messages = s.messages.filter((m) => {
-        if (m.role !== MessageRole.USER) return true;
-        const sid = m.metadata?.stream_id as string | undefined;
-        if (!sid) return true;
-        if (sid === activeStreamId) return true;
-        return sid !== messageStreamId;
-      });
-    });
-
     // `pending_count` в семействе queue-роутов — длина `pendingMessages`
     // (как у `/clear`/`/resume`), а не размер steer-очереди.
     const updated = await sessionManager.getSession(sessionId);
-    // ADR-118 §4: сообщение перешло из очереди в очередь вмешательств —
-    // состояние очереди (счётчики, без текста и автора).
-    publishQueueState(eventBus, sessionId, {
-      pendingCount: updated?.pendingMessages.length ?? 0,
-      steerCount: updated?.steerInbox?.length ?? 0,
-    });
+    // ADR-118 §4: состояние очереди (счётчики, без текста и автора) уже
+    // опубликовано `enqueueSteerMessage` — после атомарного переноса.
     return c.json({ steered: true, pending_count: updated?.pendingMessages.length ?? 0 }, 202);
   });
 
