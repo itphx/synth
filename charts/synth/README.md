@@ -963,7 +963,7 @@ helm upgrade --install synth ./charts/synth -f my-values.yaml \
 ### Токен доверия (Secret)
 
 Один Secret обслуживает обе стороны: backend получает токен **файлом**
-(`/etc/synth/executor/token`, режим 0400 → в env идёт путь), исполнитель —
+(`/etc/synth/executor/token`, режим 0444 → в env идёт путь), исполнитель —
 **значением** в env (`secretKeyRef`). Токен на обеих сторонах совпадает, потому
 что Secret и ключ общие.
 
@@ -1043,6 +1043,15 @@ kubelet при **каждом** старте пода рекурсивно об�
   семантика, только с проверкой корня; если корень тома уже `1000:1000` (так
   делают провижнеры, создающие каталог от `fsGroup`), рекурсивного обхода не
   было и раньше.
+
+**Если `fsGroup` отключён (`fsGroup: null`).** Отключение убирает рекурсивный
+`chown`, но вместе с ним и групповой доступ к secret-томам: файлы остаются
+`root:root`, а процесс в контейнере работает под uid 1000. Поэтому secret-тома
+`tls` (`security.tls.existingSecret`) и `executor-token`
+(`SYNTH_EXECUTION_TOKEN`) монтируются с `defaultMode: 0444` — иначе процесс
+uid 1000 не прочитает токен исполнителя и CA (backend падает:
+`executor token could not be read`). `0444` валиден и при заданном `fsGroup`
+(тома read-only, запись не нужна).
 
 Переопределить политику/дедлайн можно значениями:
 
@@ -1603,7 +1612,7 @@ git-over-https) и для TLS к PostgreSQL (`verify-full`). Пусто (деф�
 
 Секретов в ConfigMap нет (инвариант 13): в `config.yaml` попадают **только пути**
 внутри контейнера, сами файлы — в Secret, который монтируется в backend как
-`/etc/synth/tls` (readOnly, `0400`).
+`/etc/synth/tls` (readOnly, `0444`).
 
 ```yaml
 # my-values.yaml

@@ -234,7 +234,7 @@ spec:
               subPath: itphx-ca.crt
             {{- end }}
             {{- /* ADR-099: Secret с CA/клиентскими сертификатами (только чтение,
-                   0400). В config.yaml уходят ТОЛЬКО пути внутри контейнера. */}}
+                   0444). В config.yaml уходят ТОЛЬКО пути внутри контейнера. */}}
             {{- if include "synth.tls.mounted" . }}
             - name: tls
               mountPath: {{ include "synth.backend.tlsMountDir" . }}
@@ -246,7 +246,7 @@ spec:
             - name: executor-workspace
               mountPath: {{ .Values.executor.workspace.mountPath }}
             {{- end }}
-            {{- /* ADR-077: токен исполнителя — файлом (0400); в env backend'а
+            {{- /* ADR-077: токен исполнителя — файлом (0444); в env backend'а
                    идёт путь, а не значение (инвариант 13). */}}
             {{- if $executionRemote }}
             - name: executor-token
@@ -310,12 +310,17 @@ spec:
           configMap:
             name: {{ include "synth.name" . }}-itphx-ca
         {{- end }}
-        {{- /* ADR-099: CA/клиентские сертификаты — из Secret, права 0400. */}}
+        {{- /* ADR-099: CA/клиентские сертификаты — из Secret, права 0444.
+                Том монтируется в контейнер, где процесс работает под uid 1000.
+                При заданном fsGroup доступ давала группа, но при отключённом
+                fsGroup (NFS-workspace, см. README §«NFS-том и смена владельца»)
+                файлы остаются root:root и должны быть читаемы владельцем-процессом.
+                0444 — чтение для uid процесса; запись не нужна (том readOnly). */}}
         {{- if include "synth.tls.mounted" . }}
         - name: tls
           secret:
             secretName: {{ .Values.security.tls.existingSecret }}
-            defaultMode: 0400
+            defaultMode: 0444
         {{- end }}
         {{- /* ADR-077: общий том workspace (control plane ↔ исполнители). */}}
         {{- if $sharedWorkspace }}
@@ -324,12 +329,15 @@ spec:
             claimName: {{ include "synth.executor.workspaceClaim" . }}
         {{- end }}
         {{- /* ADR-077: Secret с токеном исполнителя — ключ спроецирован в файл
-               `token` (0400); backend читает токен по этому пути. */}}
+               `token` (0444); backend читает токен по этому пути. Процесс в
+               контейнере — uid 1000: без fsGroup файл принадлежит root:root,
+               поэтому права должны давать чтение владельцу-процессу (0444 —
+               чтение для uid процесса; запись не нужна (том readOnly)). */}}
         {{- if $executionRemote }}
         - name: executor-token
           secret:
             secretName: {{ include "synth.execution.tokenSecretName" . }}
-            defaultMode: 0400
+            defaultMode: 0444
             items:
               - key: {{ include "synth.execution.tokenKey" . }}
                 path: token
