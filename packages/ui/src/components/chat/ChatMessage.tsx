@@ -158,6 +158,16 @@ interface ChatMessageProps {
    * группе (`showHeader === false`), не рендерится: шапка блока уже несёт точки.
    */
   showLivePlaceholder?: boolean
+  /**
+   * Ключ группы-ответа для кнопки «Развернуть» в шапке. У многошагового хода
+   * пузырь рисует контейнер группы (`MessageList`), у одношагового — сам
+   * `ChatMessage`; ключ общий — `MessageGroup.key`.
+   */
+  expandKey?: string
+  /** Развёрнут ли ответ агента на всю ширину области чата. */
+  expanded?: boolean
+  /** Тумблер разворота (стабильная ссылка из `MessageList`). */
+  onToggleExpand?: (key: string) => void
 }
 
 export interface PendingStreamStatus {
@@ -191,6 +201,9 @@ function ChatMessageInner({
   onCancelRetry,
   showLivePlaceholder = false,
   debugTarget,
+  expandKey,
+  expanded = false,
+  onToggleExpand,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -249,11 +262,17 @@ function ChatMessageInner({
 
   // ADR-118 §1: `bare` — сегмент внутри общего блока хода: пузырь рисует
   // контейнер группы, здесь только типографика (и состояния disabled/pinned).
+  //
+  // Развёрнутый ответ агента занимает всю ширину области чата: у пузыря —
+  // `max-w-full` вместо `max-w-[85%]`. Именно выбор одного класса, а не
+  // наложение двух: порядок в сгенерированном CSS не гарантирует победу
+  // `max-w-full`. `bare`-сегменты не трогаем — их ширину задаёт контейнер группы.
   const bubbleClass = cn(
     bare
       ? 'w-full min-w-0 text-foreground'
       : cn(
-          'max-w-[85%] rounded-lg px-4 py-3',
+          isAssistant && expanded ? 'max-w-full' : 'max-w-[85%]',
+          'rounded-lg px-4 py-3',
           isUser && 'bg-primary/10 text-foreground rounded-br-sm',
           isAssistant && 'bg-card border border-border/50 text-foreground rounded-bl-sm',
         ),
@@ -297,6 +316,15 @@ function ChatMessageInner({
     },
     [onToggleSelect, message.id]
   )
+
+  /**
+   * Тумблер разворота ответа на всю ширину. Пропс прокидывается в шапку
+   * **только для ответа агента**; ссылка стабильна при неизменных
+   * `expandKey`/`onToggleExpand` — `React.memo(ChatMessage)` не слетает.
+   */
+  const handleToggleExpand = useCallback(() => {
+    if (expandKey && onToggleExpand) onToggleExpand(expandKey)
+  }, [expandKey, onToggleExpand])
 
   const handleOriginClick = () => {
     const parentSessionId = (message.metadata as Record<string, unknown>)?.source_session_id as string | undefined
@@ -909,6 +937,11 @@ function ChatMessageInner({
             isSubagent={isSubagent}
             onOriginClick={handleOriginClick}
             processing={headerProcessing}
+            expanded={expanded}
+            // Кнопка «Развернуть» — только у ответа агента; в user-шапку,
+            // metaOnly-шапки (Notice/фон/планировщик) и пустой live-сегмент
+            // пропс не передаётся.
+            onToggleExpand={onToggleExpand ? handleToggleExpand : undefined}
           />
         )}
 

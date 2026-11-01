@@ -1276,6 +1276,9 @@ export const dict = {
   'chat.message.retrying': 'Возвращено в поле ввода',
   'chat.message.forked': 'Создана ветка',
   'chat.message.empty': 'Пустое сообщение',
+  // Разворот ответа агента на всю ширину области чата
+  'chat.message.expand': 'Развернуть на всю ширину',
+  'chat.message.collapse': 'Свернуть',
 
   // ADR-070 §2.6: статистика под ответом ассистента
   'chat.messageStats.stopped': 'Остановлено',

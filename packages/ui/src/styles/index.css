@@ -457,6 +457,16 @@ html.device-tablet .message-actions {
   margin-bottom: -0.5rem;
 }
 
+/* 2.2 Кнопка «Развернуть» в шапке ответа агента: визуально компактная
+   (иконка 14px + p-1 = ~22px), зона клика на coarse-pointer расширена
+   псевдоэлементом до ~42px по обеим осям. Соседи справа (время/точки)
+   не интерактивны — перекрытия кликабельных элементов нет. */
+html.pointer-coarse .message-expand-btn::after {
+  content: '';
+  position: absolute;
+  inset: -0.625rem; /* ~40px по обеим осям при иконке 14px + p-1 */
+}
+
 /* 2.2 Строки дерева — тапобласть ≥40px, кнопки действий ≥36px */
 html.pointer-coarse [data-tree-node] {
   min-height: 1.75rem;

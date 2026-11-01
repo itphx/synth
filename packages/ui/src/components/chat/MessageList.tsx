@@ -111,6 +111,15 @@ const OVERSCAN = 30
 const TURN_BLOCK_CLASS =
   'group flex w-full max-w-[85%] flex-col items-start rounded-lg px-4 py-3 bg-card border border-border/50 text-foreground rounded-bl-sm'
 
+/**
+ * Тот же блок хода, но **развёрнутый** на всю ширину области чата.
+ *
+ * Отдельная готовая строка классов, а не наложение `max-w-[85%]` + `max-w-full`:
+ * порядок правил в сгенерированном CSS не гарантирует победу `max-w-full`.
+ */
+const TURN_BLOCK_CLASS_EXPANDED =
+  'group flex w-full max-w-full flex-col items-start rounded-lg px-4 py-3 bg-card border border-border/50 text-foreground rounded-bl-sm'
+
 /** Сегмент, который обычно рисует собственный пузырь (assistant без системной команды). */
 function isBubbleSegment(msg: MessageData): boolean {
   return msg.role === 'assistant' && msg.metadata?.command !== true
@@ -197,6 +206,28 @@ export function MessageList({
   const [autoScroll, setAutoScroll] = useState(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const lastClickedRef = useRef<string | null>(null)
+
+  /**
+   * Развёрнутые на всю ширину ответы агента. Состояние **runtime** (не
+   * персистится), ключ — `MessageGroup.key`: у многошагового хода пузырь рисует
+   * контейнер группы, у одношагового ответа — сам `ChatMessage`.
+   */
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set())
+
+  /**
+   * Тумблер разворота группы. Стабильная ссылка (`useCallback`): пропсы
+   * `onToggleExpand`/`expandKey` в `ChatMessage` не должны быть новыми на каждом
+   * рендере списка, иначе слетает `React.memo(ChatMessage)`
+   * (`ChatMessage.memo.test.tsx`).
+   */
+  const toggleGroupExpanded = useCallback((key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
 
   // Кнопка «Вниз»: чуть правее правой границы зоны чата; если места справа нет — внутрь зоны.
   useEffect(() => {
@@ -493,6 +524,11 @@ export function MessageList({
          * `undefined` — цель совпадает с самим сообщением (одиночные сообщения).
          */
         debugTarget={group.turnId ? debugTargetByTurn.get(group.turnId) : undefined}
+        // Разворот ответа агента на всю ширину: ключ — группа (ход), ссылки
+        // стабильны между рендерами (см. `toggleGroupExpanded`).
+        expandKey={group.key}
+        expanded={expandedGroups.has(group.key)}
+        onToggleExpand={toggleGroupExpanded}
       />
     )
   }
@@ -526,7 +562,10 @@ export function MessageList({
       // margin/gap: при виртуализации измеряется высота элемента, и отступ
       // обязан входить в неё, иначе скролл прыгает.
       <div key={group.key} className="py-3">
-        <div data-testid="turn-block" className={TURN_BLOCK_CLASS}>
+        <div
+          data-testid="turn-block"
+          className={expandedGroups.has(group.key) ? TURN_BLOCK_CLASS_EXPANDED : TURN_BLOCK_CLASS}
+        >
           {segments}
         </div>
       </div>

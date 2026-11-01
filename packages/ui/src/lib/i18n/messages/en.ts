@@ -1300,6 +1300,9 @@ export const dict = {
   'chat.message.retrying': 'Returned to input',
   'chat.message.forked': 'Branch created',
   'chat.message.empty': 'Empty message',
+  // Agent answer expanded to the full chat column width
+  'chat.message.expand': 'Expand to full width',
+  'chat.message.collapse': 'Collapse',
 
   // ADR-070 §2.6: per-message answer stats
   'chat.messageStats.stopped': 'Stopped',
