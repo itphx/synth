@@ -12,9 +12,69 @@ import type { SystemMessageKey } from '../system-messages.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import { runtimeRequires } from './runtime-deps.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError, type ExecutionPort, type ExecSecret } from '../../execution/ports/index.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError, type ExecutionPort, type ExecSecret } from '../../execution/ports/index.js';
 
 const MAX_GIT_OUTPUT = 20_000;
+
+/**
+ * Предел read-only git-операций (status/diff/log/show/blame/branch_list), мс.
+ *
+ * Чтение репозитория в норме укладывается в секунды; 30 с — предохранитель от
+ * «зависшего» вызова (огромный репозиторий, сетевой файловый том), а не
+ * нормальный лимит работы. Локальные изменяющие и сетевые операции имеют свои
+ * пределы (`git.localTimeoutMs`/`git.networkTimeoutMs` из конфига).
+ */
+export const GIT_READ_TIMEOUT_MS = 30_000;
+
+/**
+ * Предел локальных изменяющих git-операций (commit/checkout/stash), мс —
+ * дефолт, если инстанс не задал `git.localTimeoutMs`.
+ */
+const GIT_LOCAL_TIMEOUT_DEFAULT_MS = 120_000;
+
+/**
+ * Предел сетевых git-операций (push/pull), мс — дефолт, если инстанс не
+ * задал `git.networkTimeoutMs`.
+ */
+const GIT_NETWORK_TIMEOUT_DEFAULT_MS = 300_000;
+
+/**
+ * Описание параметра `timeout` у git-тулов — одинаковое для всех (класс
+ * операции задаёт дефолт, per-call — переопределяет).
+ */
+const GIT_TIMEOUT_DESCRIPTION =
+  'Timeout in milliseconds (0 = no limit). Defaults: 30 s for read-only commands, 120 s for local changes, 300 s for push/pull. '
+  + 'Raise it for large repositories.';
+
+/**
+ * Схема параметра `timeout` git-тулов (одинаковая для всех): целое, `0` — без
+ * лимита, верхняя граница — 10 минут (дальше — «фоновый запуск», а не ожидание).
+ */
+const gitTimeoutSchema = z.number().int().min(0).max(600_000).optional()
+  .describe(GIT_TIMEOUT_DESCRIPTION);
+
+/**
+ * Таймауты git-тулов из `ToolContext.extra` (конфиг инстанца).
+ *
+ * `gitLocalTimeoutMs` — локальные изменяющие операции; `gitNetworkTimeoutMs` —
+ * сетевые (push/pull). Не заданы — дефолты класса (2 и 5 минут).
+ */
+interface GitTimeoutExtra {
+  gitLocalTimeoutMs?: number;
+  gitNetworkTimeoutMs?: number;
+}
+
+/** Предел локальных изменяющих операций — конфиг инстанса, иначе дефолт. */
+function localTimeoutMs(ctx: { extra?: Record<string, unknown> }): number {
+  const extra = ctx.extra as GitTimeoutExtra | undefined;
+  return extra?.gitLocalTimeoutMs ?? GIT_LOCAL_TIMEOUT_DEFAULT_MS;
+}
+
+/** Предел сетевых операций (push/pull) — конфиг инстанса, иначе дефолт. */
+function networkTimeoutMs(ctx: { extra?: Record<string, unknown> }): number {
+  const extra = ctx.extra as GitTimeoutExtra | undefined;
+  return extra?.gitNetworkTimeoutMs ?? GIT_NETWORK_TIMEOUT_DEFAULT_MS;
+}
 
 /**
  * Обёртка git-команд: signal (если передан) убивает процесс SIGTERM по «Стоп».
@@ -24,6 +84,9 @@ const MAX_GIT_OUTPUT = 20_000;
  * ADR-077: исполнение — через порт (`execution`). По умолчанию — inline:
  * те же argv без shell, `cwd`, таймаут 30 с, `maxBuffer` 10 МБ и окружение
  * `{...process.env, ...env}`.
+ *
+ * `timeoutMs` — последний необязательный аргумент (позиционные параметры
+ * сохранены, чтобы не ломать существующие вызовы). `0` — без таймаута.
  *
  * `secrets` (ADR-077, протокол 4) — SSH-ключ как **секрет вызова**: он
  * доставляется точке исполнения на время вызова (в inline-режиме
@@ -38,6 +101,7 @@ export async function runGit(
   env?: Record<string, string>,
   execution?: ExecutionPort,
   secrets?: ExecSecret[],
+  timeoutMs: number = GIT_READ_TIMEOUT_MS,
 ): Promise<{ stdout: string; stderr: string }> {
   const { stdout, stderr } = await (execution ?? new InlineExecutionPort()).execute({
     command: { kind: 'argv', file: 'git', args },
@@ -45,7 +109,7 @@ export async function runGit(
     // адрес пула, где git есть. Все git-тулы в карте `TOOL_RUNTIME_DEP` → `git`.
     requires: runtimeRequires('git'),
     cwd,
-    timeoutMs: 30_000,
+    timeoutMs,
     signal,
     env,
     ...(secrets && secrets.length > 0 ? { secrets } : {}),
@@ -143,6 +207,31 @@ function gitBinaryMissingResult(name: string, cwd: string): ToolResult {
     content: sm('tool.binary_missing', { tool: name, binary: 'git' }),
     isError: true,
     metadata: { cwd, i18n: i18nMeta('tool.binary_missing', { tool: name, binary: 'git' }) },
+  };
+}
+
+/**
+ * Результат таймаута git-тула — actionable-текст (величина лимита + что делать
+ * дальше), а не «Command failed»: модель должна понять причину и следующий шаг.
+ * Частичный вывод команды (если есть) сохраняется.
+ */
+function gitTimeoutResult(
+  name: string,
+  cwd: string,
+  timeoutMs: number,
+  err: ExecutionError,
+): ToolResult {
+  const partial = [err.stdout, err.stderr].filter(Boolean).join('\n');
+  const message = sm('git.timeout', { tool: name, timeout: String(timeoutMs) });
+  return {
+    content: partial ? `${partial}\n${message}` : message,
+    isError: true,
+    metadata: {
+      cwd,
+      reason: 'timeout',
+      timeoutMs,
+      i18n: i18nMeta('git.timeout', { tool: name, timeout: String(timeoutMs) }),
+    },
   };
 }
 
@@ -284,6 +373,7 @@ export const gitStatusTool: ToolDefinition = {
   parameters: z.object({
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
@@ -293,14 +383,15 @@ export const gitStatusTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string };
+    const params = parsed.data as { path?: string; repo_path?: string; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
 
     try {
-      const { stdout } = await runGit(['status', '--porcelain', '--branch'], cwd, ctx.abortSignal, undefined, execution);
+      const { stdout } = await runGit(['status', '--porcelain', '--branch'], cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       return {
         content: stdout || '(чистая рабочая директория)',
         metadata: { cwd, hasChanges: stdout.length > 0 },
@@ -309,6 +400,10 @@ export const gitStatusTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git status: ${(err as Error).message}`,
         isError: true,
@@ -326,6 +421,7 @@ export const gitDiffTool: ToolDefinition = {
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     staged: z.boolean().optional().describe('Show staged changes (default: false)'),
     commit: z.string().optional().describe('Compare with specific commit hash (a commit/branch name — not a git option)'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
@@ -335,11 +431,12 @@ export const gitDiffTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; staged?: boolean; commit?: string };
+    const params = parsed.data as { path?: string; repo_path?: string; staged?: boolean; commit?: string; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
     // Пустая строка — как и раньше, просто не попадает в argv.
@@ -357,7 +454,7 @@ export const gitDiffTool: ToolDefinition = {
       if (params.staged) diffArgs.push('--staged');
       if (params.commit) diffArgs.push(params.commit);
 
-      const { stdout } = await runGit(diffArgs, cwd, ctx.abortSignal, undefined, execution);
+      const { stdout } = await runGit(diffArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       const output = stdout || '(нет изменений)';
 
       return {
@@ -368,6 +465,10 @@ export const gitDiffTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git diff: ${(err as Error).message}`,
         isError: true,
@@ -385,6 +486,7 @@ export const gitLogTool: ToolDefinition = {
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     max_count: z.number().int().min(1).max(100).optional().default(10)
       .describe('Maximum number of commits to show (default: 10)'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
@@ -394,11 +496,12 @@ export const gitLogTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; max_count?: number };
+    const params = parsed.data as { path?: string; repo_path?: string; max_count?: number; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
 
     try {
       const { stdout } = await runGit(
@@ -407,6 +510,8 @@ export const gitLogTool: ToolDefinition = {
         ctx.abortSignal,
         undefined,
         execution,
+        undefined,
+        timeoutMs,
       );
       return {
         content: stdout || '(нет коммитов)',
@@ -416,6 +521,10 @@ export const gitLogTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git log: ${(err as Error).message}`,
         isError: true,
@@ -433,6 +542,7 @@ export const gitCommitTool: ToolDefinition = {
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     message: z.string().describe('Commit message'),
     allow_empty: z.boolean().optional().default(false).describe('Allow empty commit (default: false)'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
@@ -442,20 +552,23 @@ export const gitCommitTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; message: string; allow_empty?: boolean };
+    const params = parsed.data as { path?: string; repo_path?: string; message: string; allow_empty?: boolean; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    // Локальная изменяющая операция — предел из конфига инстанца
+    // (`git.localTimeoutMs`), иначе дефолт класса.
+    const timeoutMs = params.timeout ?? localTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
-    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; message: string; allow_empty?: boolean };
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; message: string; allow_empty?: boolean; timeout?: number };
 
     try {
       const commitArgs = ['commit', '-m', restored.message];
       if (restored.allow_empty) commitArgs.push('--allow-empty');
 
-      const { stdout, stderr } = await runGit(commitArgs, cwd, ctx.abortSignal, undefined, execution);
+      const { stdout, stderr } = await runGit(commitArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       return {
         content: stdout || stderr || 'Коммит создан',
         metadata: { cwd, message: params.message },
@@ -464,6 +577,10 @@ export const gitCommitTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git commit: ${(err as Error).message}`,
         isError: true,
@@ -482,6 +599,7 @@ export const gitPushTool: ToolDefinition = {
     remote: z.string().optional().default('origin')
       .describe('Remote name (default: origin). Must be a remote configured in the repository and registered in the project (ADR-076) — a URL is not allowed'),
     branch: z.string().optional().describe('Branch name to push (default: current branch). A plain branch name — a refspec is not allowed'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
@@ -491,14 +609,17 @@ export const gitPushTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; remote?: string; branch?: string };
+    const params = parsed.data as { path?: string; repo_path?: string; remote?: string; branch?: string; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    // Сетевая операция — предел из конфига инстанса (`git.networkTimeoutMs`),
+    // иначе дефолт класса.
+    const timeoutMs = params.timeout ?? networkTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
-    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string; timeout?: number };
 
     const remote = restored.remote ?? 'origin';
     const branch = restored.branch;
@@ -533,7 +654,7 @@ export const gitPushTool: ToolDefinition = {
       const pushArgs = ['push', '--', remote];
       if (branch) pushArgs.push(branch);
 
-      const { stdout, stderr } = await runGit(pushArgs, cwd, ctx.abortSignal, undefined, execution, ssh.secrets);
+      const { stdout, stderr } = await runGit(pushArgs, cwd, ctx.abortSignal, undefined, execution, ssh.secrets, timeoutMs);
       return {
         content: stdout || stderr || 'git push выполнен',
         metadata: { cwd, remote: params.remote, branch: params.branch },
@@ -542,6 +663,10 @@ export const gitPushTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git push: ${(err as Error).message}`,
         isError: true,
@@ -562,6 +687,7 @@ export const gitPullTool: ToolDefinition = {
     remote: z.string().optional().default('origin')
       .describe('Remote name (default: origin). Must be a remote configured in the repository and registered in the project (ADR-076) — a URL is not allowed'),
     branch: z.string().optional().describe('Branch name to pull (default: current tracking branch). A plain branch name — a refspec is not allowed'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
@@ -571,14 +697,17 @@ export const gitPullTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; remote?: string; branch?: string };
+    const params = parsed.data as { path?: string; repo_path?: string; remote?: string; branch?: string; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    // Сетевая операция — предел из конфига инстанса (`git.networkTimeoutMs`),
+    // иначе дефолт класса.
+    const timeoutMs = params.timeout ?? networkTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
-    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string; timeout?: number };
 
     const remote = restored.remote ?? 'origin';
     const branch = restored.branch;
@@ -611,7 +740,7 @@ export const gitPullTool: ToolDefinition = {
       const pullArgs = ['pull', '--', remote];
       if (branch) pullArgs.push(branch);
 
-      const { stdout, stderr } = await runGit(pullArgs, cwd, ctx.abortSignal, undefined, execution, ssh.secrets);
+      const { stdout, stderr } = await runGit(pullArgs, cwd, ctx.abortSignal, undefined, execution, ssh.secrets, timeoutMs);
       return {
         content: stdout || stderr || 'git pull выполнен',
         metadata: { cwd, remote: params.remote, branch: params.branch },
@@ -620,6 +749,10 @@ export const gitPullTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git pull: ${(err as Error).message}`,
         isError: true,
@@ -639,6 +772,7 @@ export const gitCheckoutTool: ToolDefinition = {
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     target: z.string().describe('Branch name or commit hash to checkout (not a git option)'),
     create_branch: z.boolean().optional().default(false).describe('Create a new branch before checkout (-b flag)'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
@@ -648,14 +782,17 @@ export const gitCheckoutTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; target: string; create_branch?: boolean };
+    const params = parsed.data as { path?: string; repo_path?: string; target: string; create_branch?: boolean; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    // Локальная изменяющая операция — предел из конфига инстанца
+    // (`git.localTimeoutMs`), иначе дефолт класса.
+    const timeoutMs = params.timeout ?? localTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — target может содержать ⟦SYNTH_SECRET_N⟧
-    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; target: string; create_branch?: boolean };
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; target: string; create_branch?: boolean; timeout?: number };
 
     // Значение от модели не должно стать флагом git (`-f`, `-B`, `--orphan`).
     const targetError = validateGitValue(restored.target, 'ref');
@@ -668,7 +805,7 @@ export const gitCheckoutTool: ToolDefinition = {
       if (restored.create_branch) checkoutArgs.push('-b');
       checkoutArgs.push(restored.target);
 
-      const { stdout, stderr } = await runGit(checkoutArgs, cwd, ctx.abortSignal, undefined, execution);
+      const { stdout, stderr } = await runGit(checkoutArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       return {
         content: stdout || stderr || `Переключён на ${params.target}`,
         metadata: { cwd, target: params.target, createdBranch: params.create_branch },
@@ -677,6 +814,10 @@ export const gitCheckoutTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git checkout: ${(err as Error).message}`,
         isError: true,
@@ -694,6 +835,7 @@ export const gitBranchListTool: ToolDefinition = {
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     all: z.boolean().optional().default(false).describe('Include remote branches (default: false)'),
     verbose: z.boolean().optional().default(false).describe('Show last commit and tracking info (default: false)'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
@@ -703,11 +845,12 @@ export const gitBranchListTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; all?: boolean; verbose?: boolean };
+    const params = parsed.data as { path?: string; repo_path?: string; all?: boolean; verbose?: boolean; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
 
     try {
       const branchArgs = ['branch'];
@@ -719,7 +862,7 @@ export const gitBranchListTool: ToolDefinition = {
         branchArgs.push('--format=%(refname:short)');
       }
 
-      const { stdout, stderr } = await runGit(branchArgs, cwd, ctx.abortSignal, undefined, execution);
+      const { stdout, stderr } = await runGit(branchArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       if (stderr) {
         return { content: `Ошибка git branch: ${stderr.trim()}`, isError: true, metadata: { cwd } };
       }
@@ -730,7 +873,7 @@ export const gitBranchListTool: ToolDefinition = {
 
       let output = stdout.trimEnd();
       if (!params.verbose && !params.all) {
-        const current = (await runGit(['branch', '--show-current'], cwd, ctx.abortSignal, undefined, execution)).stdout.trim();
+        const current = (await runGit(['branch', '--show-current'], cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs)).stdout.trim();
         if (current) {
           output = stdout
             .split('\n')
@@ -745,6 +888,10 @@ export const gitBranchListTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git branch: ${(err as Error).message}`,
         isError: true,
@@ -762,6 +909,7 @@ export const gitShowTool: ToolDefinition = {
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     object: z.string().optional().default('HEAD').describe('Object name — commit hash, tag or branch (default: HEAD). Not a git option'),
     stat: z.boolean().optional().default(true).describe('Show diffstat summary (default: true)'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
@@ -771,11 +919,12 @@ export const gitShowTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; object?: string; stat?: boolean };
+    const params = parsed.data as { path?: string; repo_path?: string; object?: string; stat?: boolean; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
     const object = params.object ?? 'HEAD';
@@ -790,7 +939,7 @@ export const gitShowTool: ToolDefinition = {
       if (params.stat) showArgs.push('--stat');
       showArgs.push(object);
 
-      const { stdout, stderr } = await runGit(showArgs, cwd, ctx.abortSignal, undefined, execution);
+      const { stdout, stderr } = await runGit(showArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       if (stderr) {
         return { content: `Ошибка git show: ${stderr.trim()}`, isError: true, metadata: { cwd } };
       }
@@ -803,6 +952,10 @@ export const gitShowTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git show: ${(err as Error).message}`,
         isError: true,
@@ -821,6 +974,7 @@ export const gitBlameTool: ToolDefinition = {
     file: z.string().describe('Path to the file to blame (relative to the repository root)'),
     max_count: z.number().int().min(1).optional().describe('Limit the number of lines to show'),
     line_range: z.string().optional().describe('Line range to blame, e.g. "1,10"'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
@@ -830,11 +984,12 @@ export const gitBlameTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path?: string; repo_path?: string; file: string; max_count?: number; line_range?: string };
+    const params = parsed.data as { path?: string; repo_path?: string; file: string; max_count?: number; line_range?: string; timeout?: number };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
+    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
 
     try {
       const blameArgs = ['blame'];
@@ -842,7 +997,7 @@ export const gitBlameTool: ToolDefinition = {
       if (params.line_range) blameArgs.push('-L', params.line_range);
       blameArgs.push('--', params.file);
 
-      const { stdout, stderr } = await runGit(blameArgs, cwd, ctx.abortSignal, undefined, execution);
+      const { stdout, stderr } = await runGit(blameArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       if (stderr) {
         return { content: `Ошибка git blame: ${stderr.trim()}`, isError: true, metadata: { cwd, file: params.file } };
       }
@@ -855,6 +1010,10 @@ export const gitBlameTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git blame: ${(err as Error).message}`,
         isError: true,
@@ -875,6 +1034,7 @@ export const gitStashTool: ToolDefinition = {
     message: z.string().optional().describe('Stash message (for push)'),
     stash_index: z.number().int().min(0).optional().describe('Stash index (for pop, show, drop, apply)'),
     include_untracked: z.boolean().optional().default(false).describe('Include untracked files in stash (default: false)'),
+    timeout: gitTimeoutSchema,
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
@@ -891,12 +1051,16 @@ export const gitStashTool: ToolDefinition = {
       message?: string;
       stash_index?: number;
       include_untracked?: boolean;
+      timeout?: number;
     };
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
     const action = params.action ?? 'push';
+    // Локальная изменяющая операция (apply/pop меняют рабочее дерево) —
+    // предел из конфига инстанца (`git.localTimeoutMs`), иначе дефолт класса.
+    const timeoutMs = params.timeout ?? localTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as typeof params;
@@ -907,7 +1071,7 @@ export const gitStashTool: ToolDefinition = {
 
       if (action === 'list') {
         stashArgs.push('list');
-        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -917,7 +1081,7 @@ export const gitStashTool: ToolDefinition = {
       if (action === 'show') {
         stashArgs.push('show');
         if (restored.stash_index !== undefined) stashArgs.push(`stash@{${restored.stash_index}}`);
-        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -927,7 +1091,7 @@ export const gitStashTool: ToolDefinition = {
       if (action === 'drop' || action === 'pop' || action === 'apply') {
         stashArgs.push(action);
         if (restored.stash_index !== undefined) stashArgs.push(`stash@{${restored.stash_index}}`);
-        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -940,7 +1104,7 @@ export const gitStashTool: ToolDefinition = {
       } else {
         stashArgs.push('push');
       }
-      result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution);
+      result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       if (result.stderr) {
         return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
       }
@@ -949,6 +1113,10 @@ export const gitStashTool: ToolDefinition = {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+      }
       return {
         content: `Ошибка git stash: ${(err as Error).message}`,
         isError: true,

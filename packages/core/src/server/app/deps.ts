@@ -1110,6 +1110,13 @@ export async function createStandaloneDeps(
     ...(config.gitConfig?.fetchTimeoutMs !== undefined
       ? { gitFetchTimeoutMs: config.gitConfig.fetchTimeoutMs }
       : {}),
+    // Таймауты git-тулов по классу операции: локальные изменяющие и сетевые.
+    ...(config.gitConfig?.localTimeoutMs !== undefined
+      ? { gitLocalTimeoutMs: config.gitConfig.localTimeoutMs }
+      : {}),
+    ...(config.gitConfig?.networkTimeoutMs !== undefined
+      ? { gitNetworkTimeoutMs: config.gitConfig.networkTimeoutMs }
+      : {}),
     // ADR-096 (W2.4): словари классификации — порт из контекста хранения.
     dictionaryStore,
     // ADR-115/ADR-116: blob-порт гидратации вложений — из контекста хранения,

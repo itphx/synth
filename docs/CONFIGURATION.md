@@ -145,6 +145,8 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | number | `analytics.retentionDays` |
 | `SYNTH_GIT_CLONE_TIMEOUT_MS` | number | `git.cloneTimeoutMs` (ADR-076: предел `git clone`, мс; `0` — без таймаута) |
 | `SYNTH_GIT_FETCH_TIMEOUT_MS` | number | `git.fetchTimeoutMs` (ADR-076: предел `git fetch`, мс; `0` — без таймаута) |
+| `SYNTH_GIT_LOCAL_TIMEOUT_MS` | number | `git.localTimeoutMs` (ADR-076: предел локальных изменяющих git-тулов агента, мс; `0` — без таймаута) |
+| `SYNTH_GIT_NETWORK_TIMEOUT_MS` | number | `git.networkTimeoutMs` (ADR-076: предел сетевых git-тулов агента, мс; `0` — без таймаута) |
 | `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (этап 1 roadmap 0.12.4 — блок 3) |
 | `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (этап 1 roadmap 0.12.4 — блок 3) |
 | `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (этап 1 roadmap 0.12.4 — блок 4) |
@@ -1717,6 +1719,8 @@ opaque-данные `redacted_thinking` сохраняются **на каждо
 |------|-----------|--------------|
 | `git.cloneTimeoutMs` | Предел `git clone`, мс; `0` — без таймаута. Истечение → `git.clone_timeout` (HTTP **504**). Env — `SYNTH_GIT_CLONE_TIMEOUT_MS` | `300000` (5 минут) |
 | `git.fetchTimeoutMs` | Предел `git fetch`, мс; `0` — без таймаута. Истечение → `git.fetch_timeout` (HTTP **504**). Env — `SYNTH_GIT_FETCH_TIMEOUT_MS` | `300000` (5 минут) |
+| `git.localTimeoutMs` | Предел **локальных изменяющих** git-тулов агента (`git_commit`/`git_checkout`/`git_stash`), мс; `0` — без таймаута. Env — `SYNTH_GIT_LOCAL_TIMEOUT_MS` | `120000` (2 минуты) |
+| `git.networkTimeoutMs` | Предел **сетевых** git-тулов агента (`git_push`/`git_pull`), мс; `0` — без таймаута. Env — `SYNTH_GIT_NETWORK_TIMEOUT_MS` | `300000` (5 минут) |
 
 - Прочие сбои (нет remote, нет прав, обрыв соединения) **не** подменяются таймаутом —
   наружу уходит исходная ошибка git.
@@ -1729,7 +1733,31 @@ opaque-данные `redacted_thinking` сохраняются **на каждо
 git:
   cloneTimeoutMs: 300000   # SYNTH_GIT_CLONE_TIMEOUT_MS
   fetchTimeoutMs: 300000   # SYNTH_GIT_FETCH_TIMEOUT_MS
+  localTimeoutMs: 120000   # SYNTH_GIT_LOCAL_TIMEOUT_MS — commit/checkout/stash
+  networkTimeoutMs: 300000 # SYNTH_GIT_NETWORK_TIMEOUT_MS — push/pull
 ```
+
+### Таймауты встроенных тулов
+
+Пределы времени работы инструментов агента. Класс операции задаёт дефолт, параметр
+`timeout` конкретного вызова — переопределяет его; `0` — без лимита.
+
+| Тул | Класс операции | Предел по умолчанию |
+|-----|----------------|---------------------|
+| `git_status`, `git_diff`, `git_log`, `git_show`, `git_blame`, `git_branch_list` | Чтение репозитория | 30 с (фиксированно) |
+| `git_commit`, `git_checkout`, `git_stash` | Локальные изменения | `git.localTimeoutMs` (120 с) |
+| `git_push`, `git_pull` | Сетевые операции | `git.networkTimeoutMs` (300 с) |
+| `execute_shell` | Блокирующая shell-команда | 120 с; `timeout` — до 600 000 мс, `0` — без лимита |
+| `grep_files`, `glob` | Поиск по файлам | 30 с (фиксированно) |
+
+- Per-call `timeout` есть у **всех** git-тулов: целое `0…600000` мс, `0` — без лимита.
+  У `execute_shell` — тот же диапазон (`0` — без лимита, максимум 600 000 мс).
+- `execute_shell` в фоне (`background: true`) таймаута по умолчанию **не имеет**: процесс
+  живёт, пока его не остановят; явный `timeout` переносится как есть.
+- Пределы `execute_shell` и поиска — **свойства тула**, а не ключи конфига: меняются
+  per-call параметром `timeout`.
+- Истечение лимита — **не** «Command failed»: модель получает величину предела и подсказку
+  (увеличить `timeout`, поднять лимит в конфиге или уйти в фон).
 
 ### Вложения сообщений (`attachments.*`, ADR-115)
 

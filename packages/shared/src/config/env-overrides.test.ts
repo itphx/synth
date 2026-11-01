@@ -291,6 +291,25 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.git).toEqual({ cloneTimeoutMs: 60_000, fetchTimeoutMs: 0 });
   });
 
+  // Таймауты git-тулов по классу операции (локальные изменяющие / сетевые).
+  it('применяет env-оверрайды git.localTimeoutMs/git.networkTimeoutMs', () => {
+    const cfg = applyEnvOverrides(makeConfig(), {
+      SYNTH_GIT_LOCAL_TIMEOUT_MS: '90000',
+      SYNTH_GIT_NETWORK_TIMEOUT_MS: '0',
+    });
+
+    expect(cfg.git).toEqual({ localTimeoutMs: 90_000, networkTimeoutMs: 0 });
+  });
+
+  it('git.localTimeoutMs: невалидное число → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_GIT_LOCAL_TIMEOUT_MS: 'soon' });
+
+    expect(cfg.git).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('SYNTH_GIT_LOCAL_TIMEOUT_MS');
+  });
+
   it('git.*: невалидное число → warn + игнор (секция не появляется)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const cfg = applyEnvOverrides(makeConfig(), { SYNTH_GIT_CLONE_TIMEOUT_MS: 'soon' });

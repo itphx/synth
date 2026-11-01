@@ -202,6 +202,11 @@ export const defaultConfig: SynthConfig = {
     // должен держать ход агента бесконечно; 0 — без таймаута.
     cloneTimeoutMs: 300_000,
     fetchTimeoutMs: 300_000,
+    // Таймауты git-тулов агента по классам операции: локальные изменяющие
+    // (commit/checkout/stash) — 2 минуты, сетевые (push/pull) — 5 минут.
+    // Read-only операции имеют фиксированный предел 30 с. 0 — без таймаута.
+    localTimeoutMs: 120_000,
+    networkTimeoutMs: 300_000,
   },
   questions: {
     // Этап 1 roadmap 0.13 (блок 3): срок ожидания ответа пользователя на вопрос —

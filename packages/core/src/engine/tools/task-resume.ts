@@ -110,6 +110,12 @@ export interface SubagentResumeDeps {
   workspacesRoot?: string;
   sshKeyStore?: SSHKeyRepository;
   gitService?: GitService;
+  /**
+   * ADR-076: пределы git-тулов по классу операции (локальные изменяющие /
+   * сетевые) — из конфига инстанца. Не заданы — дефолт тула.
+   */
+  gitLocalTimeoutMs?: number;
+  gitNetworkTimeoutMs?: number;
   workspaceManaged?: boolean;
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
   /**
@@ -334,6 +340,8 @@ export async function runSubagentResume(
       workspacesRoot: deps.workspacesRoot,
       sshKeyStore: deps.sshKeyStore,
       gitService: deps.gitService,
+      gitLocalTimeoutMs: deps.gitLocalTimeoutMs,
+      gitNetworkTimeoutMs: deps.gitNetworkTimeoutMs,
       workspaceManaged: deps.workspaceManaged,
       getWorkspaceOutsideRootPolicy: deps.getWorkspaceOutsideRootPolicy,
       retry,

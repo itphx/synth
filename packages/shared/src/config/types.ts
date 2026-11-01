@@ -613,10 +613,29 @@ export const analyticsConfigSchema = z.object({
  * - `fetchTimeoutMs` — предел `git fetch`, мс (по умолчанию 300 000).
  *
  * `0` — без таймаута (оператор осознанно разрешает бесконечное ожидание).
+ *
+ * ## Таймауты git-тулов агента
+ *
+ * Тул `git_*` работает с уже скачанным репозиторием, поэтому лимиты у него
+ * свои — по классам операции (а не единый «30 с на всё»):
+ *
+ * - `localTimeoutMs` — предел **локальных изменяющих** операций
+ *   (`git_commit`/`git_checkout`/`git_stash` с `apply`/`pop`), мс (по умолчанию
+ *   120 000 = 2 минуты): хук коммита, большой checkout или stash в большом
+ *   репозитории идут дольше, чем чтение;
+ * - `networkTimeoutMs` — предел **сетевых** операций (`git_push`/`git_pull`),
+ *   мс (по умолчанию 300 000 = 5 минут): push/pull ждут сеть и удалённый
+ *   репозиторий.
+ *
+ * Read-only операции (`status`/`diff`/`log`/`show`/`blame`/`branch_list`) имеют
+ * собственный фиксированный предел 30 с. Любой предел можно переопределить
+ * per-call параметром `timeout` у тула (0 — без лимита).
  */
 export const gitConfigSchema = z.object({
   cloneTimeoutMs: z.number().int().min(0).default(300_000),
   fetchTimeoutMs: z.number().int().min(0).default(300_000),
+  localTimeoutMs: z.number().int().min(0).default(120_000),
+  networkTimeoutMs: z.number().int().min(0).default(300_000),
 });
 
 // --- Вопросы пользователю (этап 1 roadmap 0.13 — блок 3) ---

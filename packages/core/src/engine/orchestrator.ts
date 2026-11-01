@@ -350,6 +350,16 @@ export interface OrchestratorOptions {
   gitCloneTimeoutMs?: number;
   gitFetchTimeoutMs?: number;
   /**
+   * Предел локальных изменяющих git-операций тулов (`git_commit`/`git_checkout`/
+   * `git_stash`), мс. Не задан — дефолт тула (2 минуты); `0` — без таймаута.
+   */
+  gitLocalTimeoutMs?: number;
+  /**
+   * Предел сетевых git-операций тулов (`git_push`/`git_pull`), мс. Не задан —
+   * дефолт тула (5 минут); `0` — без таймаута.
+   */
+  gitNetworkTimeoutMs?: number;
+  /**
    * ADR-075: managed-режим проекта (backend): включает строгую проверку явного
    * workspace (deny вне root) в тулах проекта.
    */
@@ -696,6 +706,9 @@ export class ChatOrchestrator {
   /** ADR-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
   private readonly _sshKeyStore: SSHKeyRepository | null;
   private readonly _gitService: GitService;
+  /** Таймауты git-тулов по классу операции (ADR-076; `undefined` — дефолт тула). */
+  private readonly _gitLocalTimeoutMs: number | undefined;
+  private readonly _gitNetworkTimeoutMs: number | undefined;
   private readonly _workspaceManaged: boolean;
   private readonly _getWorkspaceOutsideRootPolicy:
     | (() => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>)
@@ -1125,6 +1138,10 @@ export class ChatOrchestrator {
         ...(options.gitCloneTimeoutMs !== undefined ? { cloneTimeoutMs: options.gitCloneTimeoutMs } : {}),
         ...(options.gitFetchTimeoutMs !== undefined ? { fetchTimeoutMs: options.gitFetchTimeoutMs } : {}),
       });
+    // ADR-076: таймауты git-тулов по классу операции (локальные/сетевые) —
+    // в `extra` тулов; не заданы — дефолт тула.
+    this._gitLocalTimeoutMs = options.gitLocalTimeoutMs;
+    this._gitNetworkTimeoutMs = options.gitNetworkTimeoutMs;
     this._workspaceManaged = options.workspaceManaged === true;
     this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
@@ -4950,6 +4967,14 @@ export class ChatOrchestrator {
                   workspacesRoot: this._workspacesRoot,
                   // ADR-075/ADR-076: тулы управления проектом (workspace, репозитории).
                   gitService: this._gitService,
+                  // ADR-076: таймауты git-тулов по классу операции (локальные
+                  // изменяющие / сетевые). Не заданы — дефолт тула.
+                  ...(this._gitLocalTimeoutMs !== undefined
+                    ? { gitLocalTimeoutMs: this._gitLocalTimeoutMs }
+                    : {}),
+                  ...(this._gitNetworkTimeoutMs !== undefined
+                    ? { gitNetworkTimeoutMs: this._gitNetworkTimeoutMs }
+                    : {}),
                   workspaceManaged: this._workspaceManaged,
                   getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
                   // ADR-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
@@ -5766,6 +5791,13 @@ export class ChatOrchestrator {
       workspacesRoot: this._workspacesRoot,
       sshKeyStore: this._sshKeyStore ?? undefined,
       gitService: this._gitService,
+      // ADR-076: таймауты git-тулов по классу операции (локальные/сетевые).
+      ...(this._gitLocalTimeoutMs !== undefined
+        ? { gitLocalTimeoutMs: this._gitLocalTimeoutMs }
+        : {}),
+      ...(this._gitNetworkTimeoutMs !== undefined
+        ? { gitNetworkTimeoutMs: this._gitNetworkTimeoutMs }
+        : {}),
       workspaceManaged: this._workspaceManaged,
       getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
       // ADR-069 §7: резолвим проектные инструкции для ребёнка в оркестраторе

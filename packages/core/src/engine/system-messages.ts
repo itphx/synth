@@ -107,7 +107,10 @@ export const SYSTEM_MESSAGES = {
   'tool.empty_output': '(empty output)',
   'tool.output_truncated': '\n... (output truncated)',
   'tool.shell_error': 'Error: {message}',
-  'tool.shell_timeout': 'Command timed out after {timeout} ms',
+  'tool.shell_timeout':
+    'Command timed out after {timeout} ms. Retry with a larger timeout if the command is expected to take longer.',
+  'tool.search_timeout':
+    'Search timed out after {seconds} seconds. Consider using a more specific path or pattern.',
   'tool.command_failed_default': 'Command failed',
   'tool.aborted': 'Execution interrupted by the user.',
   'tool.binary_missing':
@@ -118,6 +121,16 @@ export const SYSTEM_MESSAGES = {
   'fs.file_edited': 'File edited: {path} ({count} replacements)',
   'fs.replace_not_found': 'Error: replacement string not found in file "{path}"',
   'fs.replace_multiple': 'Error: found {count} matches of the replacement string. Provide more context for a unique match.',
+  // Отказы до записи: правка «сама в себя», пустой old_string (при replace_all
+  // он вставляет текст между каждым символом) и смешанные переводы строк.
+  'fs.no_changes': 'No changes to apply: old_string and new_string are identical.',
+  'fs.empty_old_string': 'old_string must not be empty. Use write_file to create or overwrite a file.',
+  'fs.mixed_line_endings':
+    'The file has mixed line endings (CRLF and LF). Normalize it to a single style before editing.',
+  // Защита от бинаря и гигантских файлов (паритет с `patch`).
+  'fs.edit_binary': 'Cannot edit binary file: {path}',
+  'fs.write_binary': 'Cannot overwrite binary file: {path}',
+  'fs.file_too_large': 'Error: file is too large (limit {limit} bytes)',
   'fs.dir_created': 'Directory created: {path}',
   'fs.file_deleted': 'File deleted: {path}',
   // Мультифайловая атомарная правка (`patch`, JSON-edits): всё-или-ничего.
@@ -447,6 +460,11 @@ export const SYSTEM_MESSAGES = {
   'git.fetch_timeout':
     'Error: git fetch did not finish within {timeout} ms and was interrupted. '
     + 'Retry, or raise `git.fetchTimeoutMs` for a slow network.',
+  'git.timeout':
+    'Error: {tool} was interrupted after the {timeout} ms timeout. '
+    + 'Retry with a larger `timeout` argument, raise the git local/network timeout in config, '
+    + 'or run the command in the background (execute_shell with background: true). '
+    + 'Check for a leftover .git/index.lock before retrying.',
 
   // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
   'worktree.directory_missing':

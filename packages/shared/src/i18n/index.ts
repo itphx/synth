@@ -69,6 +69,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'tool.shell_error',
   // ADR-113 §detach: сообщение о таймауте detach-готового foreground-пути.
   'tool.shell_timeout',
+  // Таймаут поиска (`grep_files`/`glob`) — actionable-текст с подсказкой.
+  'tool.search_timeout',
   'tool.command_failed_default',
   'tool.aborted',
   'tool.binary_missing',
@@ -76,6 +78,14 @@ export const ENGINE_MESSAGE_KEYS = [
   'fs.file_edited',
   'fs.replace_not_found',
   'fs.replace_multiple',
+  // Отказы до записи: идентичные строки, пустой old_string, смешанные переводы строк.
+  'fs.no_changes',
+  'fs.empty_old_string',
+  'fs.mixed_line_endings',
+  // Защита от бинаря и гигантских файлов.
+  'fs.edit_binary',
+  'fs.write_binary',
+  'fs.file_too_large',
   'fs.dir_created',
   'fs.file_deleted',
   // Мультифайловая атомарная правка (`patch`, JSON-edits).
@@ -332,6 +342,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'git.repo_path_unreadable',
   'git.clone_timeout',
   'git.fetch_timeout',
+  // Таймаут git-тула агента: величина лимита + что делать дальше.
+  'git.timeout',
   // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
   'worktree.directory_missing',
   'worktree.tool.deps_unavailable',
@@ -542,6 +554,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'tool.output_truncated': [],
   'tool.shell_error': ["message"],
   'tool.shell_timeout': ["timeout"],
+  'tool.search_timeout': ["seconds"],
   'tool.command_failed_default': [],
   'tool.aborted': [],
   'tool.binary_missing': ["tool","binary"],
@@ -549,6 +562,12 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'fs.file_edited': ["path","count"],
   'fs.replace_not_found': ["path"],
   'fs.replace_multiple': ["count"],
+  'fs.no_changes': [],
+  'fs.empty_old_string': [],
+  'fs.mixed_line_endings': [],
+  'fs.edit_binary': ["path"],
+  'fs.write_binary': ["path"],
+  'fs.file_too_large': ["limit"],
   'fs.dir_created': ["path"],
   'fs.file_deleted': ["path"],
   'fs.patch_applied': ["files","replacements"],
@@ -806,6 +825,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'git.repo_path_unreadable': ["path"],
   'git.clone_timeout': ["timeout"],
   'git.fetch_timeout': ["timeout"],
+  'git.timeout': ["tool","timeout"],
   // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
   'worktree.directory_missing': ["path"],
   'worktree.tool.deps_unavailable': [],

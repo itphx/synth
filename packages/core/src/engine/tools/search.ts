@@ -9,11 +9,21 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError } from '../../execution/ports/index.js';
 
 /** `grep_files`: сколько строк совпадений отдавать по умолчанию и максимум. */
 export const DEFAULT_SEARCH_LIMIT = 100;
 export const MAX_SEARCH_LIMIT = 1_000;
+
+/**
+ * Предел времени поиска (`grep_files`/`glob`), мс.
+ *
+ * Предел фиксированный: поиск — быстрая операция, а увеличение лимита
+ * усложнило бы конфиг без практической пользы. При истечении модель получает
+ * actionable-текст (`tool.search_timeout`) с подсказкой сузить поиск, а не
+ * «ошибку поиска».
+ */
+export const SEARCH_TIMEOUT_MS = 30_000;
 
 /**
  * Путь из строки результата `rg` (`path:line:text`) — относительно каталога
@@ -91,7 +101,7 @@ export const grepFilesTool: ToolDefinition = {
         // ADR-077: бинарное требование тула (`rg`) — в remote-режиме команда
         // уходит в адрес пула, где ripgrep есть.
         requires: toolRuntimeRequires('grep_files'),
-        timeoutMs: 30_000,
+        timeoutMs: SEARCH_TIMEOUT_MS,
         // «Стоп» (toolAbortController.abort) убивает процесс SIGTERM
         signal: ctx.abortSignal,
         maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
@@ -125,6 +135,19 @@ export const grepFilesTool: ToolDefinition = {
       const execError = err as ExecutionError;
       if (execError.code === 1) {
         return { content: sm('search.no_matches'), metadata: { pattern: params.pattern, matches: 0 } };
+      }
+      // Таймаут — actionable-текст (подсказка сузить поиск), не «ошибка поиска».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return {
+          content: sm('tool.search_timeout', { seconds: String(SEARCH_TIMEOUT_MS / 1000) }),
+          isError: true,
+          metadata: {
+            pattern: params.pattern,
+            reason: 'timeout',
+            timeoutMs: SEARCH_TIMEOUT_MS,
+            i18n: i18nMeta('tool.search_timeout', { seconds: String(SEARCH_TIMEOUT_MS / 1000) }),
+          },
+        };
       }
       if (execError.code === 127 || (execError.stderr && execError.stderr.includes('not found'))) {
         return { content: sm('search.rg_not_installed'), isError: true, metadata: { i18n: i18nMeta('search.rg_not_installed') } };

@@ -2794,7 +2794,10 @@ export const dict = {
   'tool.empty_output': '(пустой вывод)',
   'tool.output_truncated': '\n... (вывод усечён)',
   'tool.shell_error': 'Ошибка: {message}',
-  'tool.shell_timeout': 'Команда прервана по таймауту через {timeout} мс',
+  'tool.shell_timeout':
+    'Команда прервана по таймауту через {timeout} мс. Повторите с большим таймаутом, если команда должна выполняться дольше.',
+  'tool.search_timeout':
+    'Поиск прерван по таймауту через {seconds} с. Попробуйте сузить поиск: укажите более конкретный путь или шаблон.',
   'tool.command_failed_default': 'Команда завершилась с ошибкой',
   'tool.aborted': 'Выполнение прервано пользователем.',
   'tool.binary_missing': 'Инструмент «{tool}» недоступен: в окружении не установлена программа «{binary}»',
@@ -2805,6 +2808,13 @@ export const dict = {
   'fs.file_edited': 'Файл изменён: {path} ({count} замен)',
   'fs.replace_not_found': 'Ошибка: заменяемая строка не найдена в файле «{path}»',
   'fs.replace_multiple': 'Ошибка: найдено {count} совпадений заменяемой строки. Уточните контекст для уникального совпадения.',
+  'fs.no_changes': 'Изменений нет: old_string и new_string совпадают.',
+  'fs.empty_old_string': 'old_string не может быть пустым. Чтобы создать или перезаписать файл, используйте write_file.',
+  'fs.mixed_line_endings':
+    'В файле смешанные переводы строк (CRLF и LF). Приведите файл к одному стилю перед правкой.',
+  'fs.edit_binary': 'Нельзя править бинарный файл: {path}',
+  'fs.write_binary': 'Нельзя перезаписать бинарный файл: {path}',
+  'fs.file_too_large': 'Ошибка: файл слишком велик (предел {limit} байт)',
   'fs.dir_created': 'Каталог создан: {path}',
   'fs.file_deleted': 'Файл удалён: {path}',
   'fs.patch_applied': 'Патч применён: файлов — {files}, замен — {replacements}',
@@ -3119,6 +3129,11 @@ export const dict = {
   'git.fetch_timeout':
     'Ошибка: git fetch не завершился за {timeout} мс и был прерван. '
     + 'Повторите попытку или увеличьте `git.fetchTimeoutMs` для медленной сети.',
+  'git.timeout':
+    'Ошибка: {tool} прерван по таймауту в {timeout} мс. '
+    + 'Повторите с большим параметром `timeout`, увеличьте таймаут локальных/сетевых операций git в конфиге '
+    + 'или запустите команду в фоне (execute_shell с background: true). '
+    + 'Перед повтором проверьте, не остался ли файл `.git/index.lock`.',
 
   // --- Git worktrees: per-session рабочий каталог (ADR-114) ---
   'worktree.directory_missing':

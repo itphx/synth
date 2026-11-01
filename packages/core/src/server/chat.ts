@@ -237,6 +237,13 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     ...(options.config.git?.fetchTimeoutMs !== undefined
       ? { gitFetchTimeoutMs: options.config.git.fetchTimeoutMs }
       : {}),
+    // Таймауты git-тулов по классу операции: локальные изменяющие и сетевые.
+    ...(options.config.git?.localTimeoutMs !== undefined
+      ? { gitLocalTimeoutMs: options.config.git.localTimeoutMs }
+      : {}),
+    ...(options.config.git?.networkTimeoutMs !== undefined
+      ? { gitNetworkTimeoutMs: options.config.git.networkTimeoutMs }
+      : {}),
     permissionConfig: options.config.permission,
     defaultPlanMode: options.config.session?.planMode,
     securityConfig: effectiveSecurityConfig,

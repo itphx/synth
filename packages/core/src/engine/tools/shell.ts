@@ -8,14 +8,22 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError } from '../../execution/ports/index.js';
 import { BackgroundLimitExceededError } from '../background/types.js';
 import type { ActiveRunRegistry } from '../background/active-runs.js';
 import { BackgroundUnsupportedError } from '../processes/types.js';
 import type { ProcessService } from '../processes/service.js';
 import { MAX_OUTPUT_LENGTH, isDetachableShellEnabled, runDetachableShell } from './shell-detachable.js';
 
-const DEFAULT_TIMEOUT = 30_000;
+/**
+ * Предел времени блокирующей shell-команты по умолчанию, мс.
+ *
+ * 30 с оказывалось мало для обычной работы (сборка, тесты, `npm ci`), поэтому
+ * дефолт — 2 минуты. Per-call параметр `timeout` переопределяет его
+ * (`0` — без лимита); верхняя граница параметра — 10 минут (дальше — фоновый
+ * запуск, а не ожидание).
+ */
+const DEFAULT_TIMEOUT = 120_000;
 
 /**
  * Зависимости тула из `ToolContext.extra` (упаковка — оркестратор).
@@ -43,15 +51,15 @@ export const executeShellTool: ToolDefinition = {
   description:
     'Execute a shell command (bash) and return its output (stdout and stderr). Use only for legitimate development tasks. '
     + 'Commands run in the project working directory, or in `cwd` when given (absolute or relative to the working directory). '
-    + 'Timeout: 30 seconds by default (set timeout to change it, max 120000 ms). '
+    + 'Timeout: 120 seconds by default (set timeout to change it, max 600000 ms, 0 = no limit). '
     + 'The interpreter is bash ([[ … ]], arrays, pipefail, ${var,,} work). If bash is not installed in the environment, the tool is unavailable. '
     + 'Prefer dedicated tools over shell commands when possible (read_file/list_directory/glob/grep_files and the git_* tools): they are safer and their output is structured. '
     + 'Large output is truncated (a truncation marker is appended) — filter the output in the command instead of dumping everything. '
     + 'Set background=true to run the command in the background: it returns immediately, the full output is written to a log file, and a notification with the result arrives automatically — do not poll for the status.',
   parameters: z.object({
     command: z.string().describe('The command to execute (e.g., "npm test", "ls -la")'),
-    timeout: z.number().int().min(1000).max(120000).optional()
-      .describe('Timeout in milliseconds (default: 30000; in background mode there is no timeout by default)'),
+    timeout: z.number().int().min(0).max(600_000).optional()
+      .describe('Timeout in milliseconds (default: 120000; 0 = no limit; max 600000; in background mode there is no timeout by default)'),
     cwd: z.string().optional()
       .describe('Working directory for the command (absolute or relative to the working directory; defaults to working directory)'),
     background: z.boolean().optional()
@@ -146,6 +154,25 @@ export const executeShellTool: ToolDefinition = {
           metadata: {
             command: params.command,
             i18n: i18nMeta('tool.binary_missing', { tool: this.name, binary: 'bash' }),
+          },
+        };
+      }
+
+      // Таймаут — actionable-текст (величина лимита + следующий шаг), а не
+      // generic «Command failed»: модель должна понять причину и что делать.
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        let partial = '';
+        if (execError.stdout) partial += execError.stdout;
+        if (execError.stderr) partial += (partial ? '\n--- stderr ---\n' : '') + execError.stderr;
+        const message = sm('tool.shell_timeout', { timeout: String(timeout) });
+        return {
+          content: (partial ? `${partial}\n` : '') + message,
+          isError: true,
+          metadata: {
+            command: params.command,
+            reason: 'timeout',
+            timeoutMs: timeout,
+            i18n: i18nMeta('tool.shell_timeout', { timeout: String(timeout) }),
           },
         };
       }

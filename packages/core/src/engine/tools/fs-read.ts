@@ -11,7 +11,8 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError } from '../../execution/ports/index.js';
+import { SEARCH_TIMEOUT_MS } from './search.js';
 
 /**
  * Пределы `read_file` — паритет с opencode
@@ -329,7 +330,7 @@ export const globTool: ToolDefinition = {
         // уходит в адрес пула, где ripgrep есть.
         requires: toolRuntimeRequires('glob'),
         cwd: searchDir,
-        timeoutMs: 30_000,
+        timeoutMs: SEARCH_TIMEOUT_MS,
         // «Стоп» (toolAbortController.abort) убивает процесс SIGTERM
         signal: ctx.abortSignal,
         maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
@@ -363,6 +364,19 @@ export const globTool: ToolDefinition = {
       // rg: код 1 — «файлов не найдено», это не ошибка
       if (execError.code === 1) {
         return { content: sm('fsread.no_files'), metadata: { pattern: params.pattern, count: 0, total: 0 } };
+      }
+      // Таймаут — actionable-текст (подсказка сузить поиск), не «ошибка поиска».
+      if (isExecutionError(err) && err.reason === 'timeout') {
+        return {
+          content: sm('tool.search_timeout', { seconds: String(SEARCH_TIMEOUT_MS / 1000) }),
+          isError: true,
+          metadata: {
+            pattern: params.pattern,
+            reason: 'timeout',
+            timeoutMs: SEARCH_TIMEOUT_MS,
+            i18n: i18nMeta('tool.search_timeout', { seconds: String(SEARCH_TIMEOUT_MS / 1000) }),
+          },
+        };
       }
       return {
         content: sm('fsread.glob_error'),

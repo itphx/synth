@@ -76,6 +76,9 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   // git (ADR-076): таймауты сетевых git-операций (0 — без таймаута).
   { section: 'git', key: 'cloneTimeoutMs', type: 'number' },
   { section: 'git', key: 'fetchTimeoutMs', type: 'number' },
+  // git-тулы агента: локальные изменяющие операции и сетевые (0 — без таймаута).
+  { section: 'git', key: 'localTimeoutMs', type: 'number' },
+  { section: 'git', key: 'networkTimeoutMs', type: 'number' },
   // questions (этап 1 roadmap 0.13 — блок 3): таймаут ответа + retention.
   { section: 'questions', key: 'timeoutMs', type: 'number' },
   { section: 'questions', key: 'retentionDays', type: 'number' },

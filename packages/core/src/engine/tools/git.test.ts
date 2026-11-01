@@ -9,6 +9,7 @@ import {
   gitDiffTool,
   gitPushTool,
   gitPullTool,
+  gitCommitTool,
   gitCheckoutTool,
   gitShowTool,
   runGit,
@@ -18,6 +19,7 @@ import type { ToolContext } from '@itphx/synth-shared';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
+import { ExecutionError } from '../../execution/ports/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -735,5 +737,210 @@ describe('git tools — repo_path в сессии с привязкой к workt
     expect(result.isError).toBe(true);
     expect((result.metadata?.i18n as { key?: string })?.key).toBe('git.repo_path_invalid');
     expect(calls).toHaveLength(0);
+  });
+});
+
+/**
+ * Таймауты git-тулов: класс-дефолты по классу операции (read-only 30 с,
+ * локальные изменяющие 120 с, сетевые 300 с), per-call переопределение
+ * параметром `timeout` и actionable-ответ при истечении лимита.
+ */
+describe('git tools — таймауты', () => {
+  let root: string;
+  let workspace: string;
+  let bare: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'synth-git-timeout-'));
+    workspace = join(root, 'work');
+    bare = join(root, 'origin.git');
+    await mkdir(workspace, { recursive: true });
+    await execFileAsync('git', ['init', '-q', '--bare', bare], { cwd: root });
+    await execFileAsync('git', ['init', '-q'], { cwd: workspace });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: workspace });
+    await writeFile(join(workspace, 'README.md'), '# Test\n');
+    await execFileAsync('git', ['add', '.'], { cwd: workspace });
+    await execFileAsync('git', ['commit', '-q', '-m', 'initial'], { cwd: workspace });
+    await execFileAsync('git', ['branch', '-M', 'main'], { cwd: workspace });
+    await execFileAsync('git', ['remote', 'add', 'origin', bare], { cwd: workspace });
+    sessionManager = new SessionManager(new FileStore({ dataDir: join(root, 'data') }));
+    projectStore = new ProjectStore({ dataDir: join(root, 'data') });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** Вызов, дошедший до порта исполнения (ADR-077). */
+  interface ExecCall {
+    cwd?: string;
+    args?: string[];
+    timeoutMs?: number;
+  }
+
+  /**
+   * Порт-заглушка: пишет запросы (виден таймаут) и ничего не запускает.
+   * `remote get-url` отдаёт URL зарегистрированного репозитория — иначе
+   * сетевой тул откажется до самой операции.
+   */
+  function makePort(calls: ExecCall[], timeout = false) {
+    return {
+      async execute(req: { command: { kind: string; args?: string[] }; cwd?: string; timeoutMs?: number }) {
+        const args = req.command.kind === 'argv' ? (req.command.args ?? []) : [];
+        calls.push({
+          cwd: req.cwd,
+          args: req.command.kind === 'argv' ? req.command.args : undefined,
+          timeoutMs: req.timeoutMs,
+        });
+        if (args[0] === 'remote') {
+          return { stdout: `${bare}\n`, stderr: '', exitCode: 0, truncated: false, durationMs: 1 };
+        }
+        if (timeout) {
+          throw new ExecutionError({
+            message: 'Command failed: git',
+            code: null,
+            killed: true,
+            signal: 'SIGTERM',
+            reason: 'timeout',
+            stdout: 'partial-output',
+          });
+        }
+        return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 1 };
+      },
+    };
+  }
+
+  /** Проект с реестром репозиториев (`project.repos`) и сессией в нём. */
+  async function seedProject(): Promise<string> {
+    const project = projectStore.create('P', 'u1', {
+      workspace,
+      repos: [{ path: '.', url: bare }],
+    });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+    return session.id;
+  }
+
+  function makeCtx(
+    port: unknown,
+    overrides: Partial<ToolContext> = {},
+    extra: Record<string, unknown> = {},
+  ): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: workspace,
+      ...overrides,
+      extra: { executionPort: port, ...extra, ...(overrides.extra ?? {}) },
+    };
+  }
+
+  it('read-only (status) — класс-дефолт 30 с доходит до порта', async () => {
+    const calls: ExecCall[] = [];
+    await gitStatusTool.execute({}, makeCtx(makePort(calls)));
+
+    expect(calls[0]!.timeoutMs).toBe(30_000);
+  });
+
+  it('локальная изменяющая операция (commit) — класс-дефолт 120 с', async () => {
+    const calls: ExecCall[] = [];
+    await gitCommitTool.execute({ message: 'msg' }, makeCtx(makePort(calls)));
+
+    expect(calls[0]!.timeoutMs).toBe(120_000);
+  });
+
+  it('сетевая операция (pull) — класс-дефолт 300 с', async () => {
+    const sessionId = await seedProject();
+    const calls: ExecCall[] = [];
+    const result = await gitPullTool.execute(
+      { branch: 'main' },
+      makeCtx(
+        makePort(calls),
+        { sessionId },
+        { sessionManager, projectStore, sessionId },
+      ),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const pull = calls.find((c) => c.args?.[0] === 'pull');
+    expect(pull?.timeoutMs).toBe(300_000);
+  });
+
+  it('config инстанца перекрывает класс-дефолт (local/network)', async () => {
+    const sessionId = await seedProject();
+    const calls: ExecCall[] = [];
+    const extra = { gitLocalTimeoutMs: 7_000, gitNetworkTimeoutMs: 9_000 };
+
+    await gitCommitTool.execute({ message: 'msg' }, makeCtx(makePort(calls), {}, extra));
+    expect(calls[0]!.timeoutMs).toBe(7_000);
+
+    await gitPullTool.execute(
+      { branch: 'main' },
+      makeCtx(
+        makePort(calls),
+        { sessionId },
+        { ...extra, sessionManager, projectStore, sessionId },
+      ),
+    );
+
+    const pull = calls.find((c) => c.args?.[0] === 'pull');
+    expect(pull?.timeoutMs).toBe(9_000);
+  });
+
+  it('per-call `timeout` перекрывает класс-дефолт', async () => {
+    const sessionId = await seedProject();
+    const calls: ExecCall[] = [];
+
+    await gitStatusTool.execute({ timeout: 45_000 }, makeCtx(makePort(calls)));
+    expect(calls[0]!.timeoutMs).toBe(45_000);
+
+    await gitPullTool.execute(
+      { branch: 'main', timeout: 90_000 },
+      makeCtx(
+        makePort(calls),
+        { sessionId },
+        { sessionManager, projectStore, sessionId },
+      ),
+    );
+
+    const pull = calls.find((c) => c.args?.[0] === 'pull');
+    expect(pull?.timeoutMs).toBe(90_000);
+  });
+
+  it('таймаут: результат содержит величину лимита и подсказку, metadata.reason=timeout', async () => {
+    const calls: ExecCall[] = [];
+    const result = await gitStatusTool.execute({}, makeCtx(makePort(calls, true)));
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.reason).toBe('timeout');
+    expect(result.metadata?.timeoutMs).toBe(30_000);
+    expect((result.metadata?.i18n as { key?: string })?.key).toBe('git.timeout');
+    // Величина лимита + подсказка (не «Ошибка git status»).
+    expect(result.content).toContain('30000');
+    expect(result.content).toContain('timeout');
+    expect(result.content).not.toContain('Ошибка git status');
+  });
+
+  it('таймаут сетевой операции: в тексте — величина сетевого лимита', async () => {
+    const sessionId = await seedProject();
+    const calls: ExecCall[] = [];
+    const port = makePort(calls, true);
+
+    const result = await gitPullTool.execute(
+      { branch: 'main' },
+      makeCtx(
+        port,
+        { sessionId },
+        { sessionManager, projectStore, sessionId },
+      ),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.reason).toBe('timeout');
+    expect(result.metadata?.timeoutMs).toBe(300_000);
+    expect(result.content).toContain('300000');
   });
 });

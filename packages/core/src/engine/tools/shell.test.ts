@@ -120,16 +120,81 @@ describe('execute_shell — прерывание по «Стоп» (abortSignal)
     expect(result.metadata?.interrupted).toBeUndefined();
   });
 
-  it('таймаут (без «Стопа») — обычная ошибка, а не маркер прерывания', async () => {
+  it('таймаут (без «Стопа») — ошибка с actionable-текстом, а не маркер прерывания', async () => {
     const result = await executeShellTool.execute(
       { command: 'sleep 5', timeout: 1000 },
       makeCtx(),
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('Error');
+    // Таймаут не должен выглядеть как «Command failed»: модель получает
+    // величину лимита и подсказку.
+    expect(result.content).toContain('timed out');
+    expect(result.content).toContain('1000');
+    expect(result.metadata?.reason).toBe('timeout');
     expect(result.metadata?.interrupted).toBeUndefined();
     expect(result.metadata?.stopped_by).toBeUndefined();
+  });
+});
+
+describe('execute_shell — таймаут', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-shell-timeout-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Порт-заглушка: пишет запросы (виден таймаут) и ничего не запускает. */
+  function makePort() {
+    const requests: Array<{ timeoutMs?: number }> = [];
+    return {
+      requests,
+      async execute(req: { timeoutMs?: number }) {
+        requests.push({ timeoutMs: req.timeoutMs });
+        return { stdout: 'ok', stderr: '', exitCode: 0, truncated: false, durationMs: 1 };
+      },
+    };
+  }
+
+  function makeCtx(extra: Record<string, unknown>): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      extra,
+    };
+  }
+
+  it('дефолт таймаута — 120 с (в порт уходит 120000)', async () => {
+    const port = makePort();
+    const result = await executeShellTool.execute({ command: 'echo ok' }, makeCtx({ executionPort: port }));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.requests[0]!.timeoutMs).toBe(120_000);
+  });
+
+  it('timeout: 0 — без лимита (допустимо, в порт уходит 0)', async () => {
+    const port = makePort();
+    const result = await executeShellTool.execute({ command: 'echo ok', timeout: 0 }, makeCtx({ executionPort: port }));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.requests[0]!.timeoutMs).toBe(0);
+  });
+
+  it('timeout больше 600000 — отказ аргументов (команда не запускается)', async () => {
+    const port = makePort();
+    const result = await executeShellTool.execute(
+      { command: 'echo ok', timeout: 600_001 },
+      makeCtx({ executionPort: port }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata?.i18n as { key?: string })?.key).toBe('tool.args_error');
+    expect(port.requests).toHaveLength(0);
   });
 });
 

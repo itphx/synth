@@ -145,6 +145,8 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_GIT_CLONE_TIMEOUT_MS` | number | `git.cloneTimeoutMs` (ADR-076: the `git clone` limit, ms; `0` — no timeout) |
 | `SYNTH_GIT_FETCH_TIMEOUT_MS` | number | `git.fetchTimeoutMs` (ADR-076: the `git fetch` limit, ms; `0` — no timeout) |
+| `SYNTH_GIT_LOCAL_TIMEOUT_MS` | number | `git.localTimeoutMs` (ADR-076: the limit of the agent's local mutating git tools, ms; `0` — no timeout) |
+| `SYNTH_GIT_NETWORK_TIMEOUT_MS` | number | `git.networkTimeoutMs` (ADR-076: the limit of the agent's network git tools, ms; `0` — no timeout) |
 | `SYNTH_QUESTIONS_TIMEOUT_MS` | number | `questions.timeoutMs` (stage 1 of roadmap 0.12.4 — block 3) |
 | `SYNTH_QUESTIONS_RETENTION_DAYS` | number | `questions.retentionDays` (stage 1 of roadmap 0.12.4 — block 3) |
 | `SYNTH_BACKGROUND_ENABLED` | boolean | `background.enabled` (stage 1 of roadmap 0.12.4 — block 4) |
@@ -1681,6 +1683,8 @@ one is left on disk.
 |------|-----------|--------------|
 | `git.cloneTimeoutMs` | The limit of `git clone`, ms; `0` — no timeout. Exceeding it → `git.clone_timeout` (HTTP **504**). Env — `SYNTH_GIT_CLONE_TIMEOUT_MS` | `300000` (5 minutes) |
 | `git.fetchTimeoutMs` | The limit of `git fetch`, ms; `0` — no timeout. Exceeding it → `git.fetch_timeout` (HTTP **504**). Env — `SYNTH_GIT_FETCH_TIMEOUT_MS` | `300000` (5 minutes) |
+| `git.localTimeoutMs` | The limit of the agent's **local mutating** git tools (`git_commit`/`git_checkout`/`git_stash`), ms; `0` — no timeout. Env — `SYNTH_GIT_LOCAL_TIMEOUT_MS` | `120000` (2 minutes) |
+| `git.networkTimeoutMs` | The limit of the agent's **network** git tools (`git_push`/`git_pull`), ms; `0` — no timeout. Env — `SYNTH_GIT_NETWORK_TIMEOUT_MS` | `300000` (5 minutes) |
 
 - Other failures (no remote, no permissions, a dropped connection) are **not** replaced by a
   timeout — the original git error is returned.
@@ -1693,7 +1697,31 @@ one is left on disk.
 git:
   cloneTimeoutMs: 300000   # SYNTH_GIT_CLONE_TIMEOUT_MS
   fetchTimeoutMs: 300000   # SYNTH_GIT_FETCH_TIMEOUT_MS
+  localTimeoutMs: 120000   # SYNTH_GIT_LOCAL_TIMEOUT_MS — commit/checkout/stash
+  networkTimeoutMs: 300000 # SYNTH_GIT_NETWORK_TIMEOUT_MS — push/pull
 ```
+
+### Timeouts of the built-in tools
+
+The time limits of the agent's tools. The operation class sets the default, the `timeout`
+parameter of a single call overrides it; `0` — no limit.
+
+| Tool | Operation class | Default limit |
+|------|-----------------|---------------|
+| `git_status`, `git_diff`, `git_log`, `git_show`, `git_blame`, `git_branch_list` | Reading the repository | 30 s (fixed) |
+| `git_commit`, `git_checkout`, `git_stash` | Local changes | `git.localTimeoutMs` (120 s) |
+| `git_push`, `git_pull` | Network operations | `git.networkTimeoutMs` (300 s) |
+| `execute_shell` | Blocking shell command | 120 s; `timeout` — up to 600 000 ms, `0` — no limit |
+| `grep_files`, `glob` | Searching the files | 30 s (fixed) |
+
+- The per-call `timeout` is available in **all** git tools: an integer `0…600000` ms, `0` — no
+  limit. `execute_shell` has the same range (`0` — no limit, maximum 600 000 ms).
+- `execute_shell` in the background (`background: true`) has **no** timeout by default: the
+  process lives until it is stopped; an explicit `timeout` is passed as is.
+- The limits of `execute_shell` and of the search tools are **properties of the tool**, not
+  configuration keys: change them per call with the `timeout` parameter.
+- Exceeding a limit is **not** a "Command failed": the model gets the limit value and a hint
+  (raise `timeout`, raise the limit in the config, or move the work to the background).
 
 ### Observability (`metrics.*`, ADR-094)
 

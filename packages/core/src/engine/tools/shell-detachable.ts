@@ -26,7 +26,8 @@
  *    теряется и попадает в лог первым).
  * 3. **До detach — прежнее поведение.** «Стоп» родительского хода убивает
  *    процесс (`SIGTERM`) и даёт `abortedResult` с частичным выводом; таймаут
- *    убивает процесс портом и даёт `tool.shell_error`.
+ *    убивает процесс портом и даёт `tool.shell_timeout` (величина лимита +
+ *    подсказка — как в синхронном пути).
  * 4. **После detach ход ни при чём:** подписка на `ctx.abortSignal` снята,
  *    `unregister` реестра активных прогонов вызван — процесс живёт по правилам
  *    фонового прогона.
@@ -549,11 +550,28 @@ function completionResult(
   const timedOut = exit.signal !== null
     && input.timeoutMs > 0
     && Date.now() - startedAt >= input.timeoutMs;
-  const message = timedOut
-    ? sm('tool.shell_timeout', { timeout: String(input.timeoutMs) })
-    : exit.signal
-      ? `${sm('tool.command_failed_default')} (${exit.signal})`
-      : `${sm('tool.command_failed_default')} (exit code ${exit.exitCode ?? -1})`;
+  if (timedOut) {
+    // Таймаут — actionable-текст (величина лимита + следующий шаг), а не
+    // generic «Command failed»: так же, как в синхронном пути (`shell.ts`).
+    const message = sm('tool.shell_timeout', { timeout: String(input.timeoutMs) });
+    return {
+      content: (body ? `${body}\n` : '') + message,
+      isError: true,
+      metadata: {
+        command: input.displayCommand,
+        exitCode: exit.exitCode ?? -1,
+        killed: exit.signal !== null,
+        reason: 'timeout',
+        timeoutMs: input.timeoutMs,
+        timedOut: true,
+        truncated,
+        i18n: i18nMeta('tool.shell_timeout', { timeout: String(input.timeoutMs) }),
+      },
+    };
+  }
+  const message = exit.signal
+    ? `${sm('tool.command_failed_default')} (${exit.signal})`
+    : `${sm('tool.command_failed_default')} (exit code ${exit.exitCode ?? -1})`;
   const content = (body ? `${body}\n` : '') + sm('tool.shell_error', { message });
 
   return {
@@ -563,7 +581,6 @@ function completionResult(
       command: input.displayCommand,
       exitCode: exit.exitCode ?? -1,
       killed: exit.signal !== null,
-      ...(timedOut ? { timedOut: true } : {}),
       truncated,
     },
   };

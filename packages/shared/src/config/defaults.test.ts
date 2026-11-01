@@ -240,6 +240,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.git).toEqual({
       cloneTimeoutMs: 300_000,
       fetchTimeoutMs: 300_000,
+      // Таймауты git-тулов по классу операции: локальные — 2 минуты,
+      // сетевые (push/pull) — 5 минут.
+      localTimeoutMs: 120_000,
+      networkTimeoutMs: 300_000,
     });
   });
 

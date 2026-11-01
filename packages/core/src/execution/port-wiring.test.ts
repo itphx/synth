@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import type { InstructionsConfig, ToolContext } from '@itphx/synth-shared';
 import { executeShellTool } from '../engine/tools/shell.js';
 import { grepFilesTool } from '../engine/tools/search.js';
-import { gitShowTool, gitStatusTool } from '../engine/tools/git.js';
+import { gitShowTool, gitStatusTool, gitCommitTool } from '../engine/tools/git.js';
 import { getProjectInfoTool, listReposTool } from '../engine/tools/project-context.js';
 import { runInlineShell } from '../engine/commands/inline-shell.js';
 import { probeBinary } from '../engine/tools/runtime-deps.js';
@@ -93,7 +93,7 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     };
   }
 
-  it('execute_shell: shell-форма, cwd, таймаут 30 с, лимит 10 МБ, HOME', async () => {
+  it('execute_shell: shell-форма, cwd, таймаут 120 с, лимит 10 МБ, HOME', async () => {
     const port = new RecordingPort({ result: { stdout: 'ok' } });
     const result = await executeShellTool.execute({ command: 'echo ok' }, makeCtx(port));
 
@@ -102,7 +102,7 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     const req = port.requests[0]!;
     expect(req.command).toEqual({ kind: 'shell', command: 'echo ok', shell: 'bash' });
     expect(req.cwd).toBe(tmpDir);
-    expect(req.timeoutMs).toBe(30_000);
+    expect(req.timeoutMs).toBe(120_000);
     expect(req.maxOutputBytes).toBe(DEFAULT_MAX_OUTPUT_BYTES);
     expect(req.env).toEqual({ HOME: process.env.HOME || '/root' });
     expect(req.signal).toBeUndefined();
@@ -114,15 +114,19 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(port.requests[0]!.requires).toEqual(['bash']);
   });
 
-  it('execute_shell: явный таймаут уходит в порт; лимит 120 с не менялся', async () => {
+  it('execute_shell: явный таймаут уходит в порт; лимит 600 с не менялся', async () => {
     const port = new RecordingPort();
     await executeShellTool.execute({ command: 'echo ok', timeout: 5_000 }, makeCtx(port));
     expect(port.requests[0]!.timeoutMs).toBe(5_000);
 
-    const tooBig = await executeShellTool.execute({ command: 'echo ok', timeout: 120_001 }, makeCtx(port));
+    // 0 — без лимита (значение разрешено и доходит до порта как есть)
+    await executeShellTool.execute({ command: 'echo ok', timeout: 0 }, makeCtx(port));
+    expect(port.requests[1]!.timeoutMs).toBe(0);
+
+    const tooBig = await executeShellTool.execute({ command: 'echo ok', timeout: 600_001 }, makeCtx(port));
     expect(tooBig.isError).toBe(true);
     expect((tooBig.metadata?.i18n as { key?: string })?.key).toBe('tool.args_error');
-    expect(port.requests).toHaveLength(1);
+    expect(port.requests).toHaveLength(2);
   });
 
   it('execute_shell: сигнал отмены передаётся в порт', async () => {
@@ -154,7 +158,7 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(req.requires).toEqual(['rg']);
   });
 
-  it('git: argv без shell, cwd, таймаут 30 с, лимит 10 МБ', async () => {
+  it('git: argv без shell, cwd, таймаут 30 с (read-only), лимит 10 МБ', async () => {
     const port = new RecordingPort({ result: { stdout: '## main' } });
     const result = await gitStatusTool.execute({}, makeCtx(port));
 
@@ -166,6 +170,14 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(req.maxOutputBytes).toBe(DEFAULT_MAX_OUTPUT_BYTES);
     // ADR-077: бинарное требование тула — git.
     expect(req.requires).toEqual(['git']);
+  });
+
+  it('git: локальная изменяющая операция (commit) — таймаут 120 с', async () => {
+    const port = new RecordingPort({ result: { stdout: '[main abc123] msg' } });
+    const result = await gitCommitTool.execute({ message: 'msg' }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.requests[0]!.timeoutMs).toBe(120_000);
   });
 
   it('inline-shell: shell-форма, cwd, таймаут 30 с, лимит 10 МБ, HOME', async () => {
@@ -217,7 +229,7 @@ describe('ADR-077: тексты ошибок тулов не изменилис�
     expect((result.metadata?.i18n as { key?: string })?.key).toBe('tool.binary_missing');
   });
 
-  it('execute_shell: таймаут — обычная ошибка (не маркер отмены), exitCode -1', async () => {
+  it('execute_shell: таймаут — actionable-текст (не маркер отмены), не «Command failed»', async () => {
     const port = new RecordingPort({
       error: new ExecutionError({
         message: 'Command failed: sh -c sleep 5\n',
@@ -232,9 +244,11 @@ describe('ADR-077: тексты ошибок тулов не изменилис�
     expect(result.isError).toBe(true);
     expect(result.metadata?.interrupted).toBeUndefined();
     expect(result.metadata?.stopped_by).toBeUndefined();
-    expect(result.metadata?.exitCode).toBe(-1);
-    expect(result.metadata?.killed).toBe(true);
-    expect(result.content).toContain('Command failed: sh -c sleep 5');
+    expect(result.metadata?.reason).toBe('timeout');
+    expect(result.metadata?.timeoutMs).toBe(120_000);
+    // Текст с величиной лимита и подсказкой — не generic «Command failed».
+    expect(result.content).toContain('120000');
+    expect(result.content).not.toContain('Command failed: sh -c sleep 5');
   });
 
   it('git: ENOENT → tool.binary_missing (бинарь git)', async () => {
@@ -248,7 +262,7 @@ describe('ADR-077: тексты ошибок тулов не изменилис�
     expect((result.metadata?.i18n as { key?: string })?.key).toBe('tool.binary_missing');
   });
 
-  it('git: таймаут — обычная ошибка git (не маркер отмены)', async () => {
+  it('git: таймаут — actionable-текст (величина лимита + подсказка), не маркер отмены', async () => {
     const port = new RecordingPort({
       error: new ExecutionError({
         message: 'Command failed: git status\n',
@@ -262,7 +276,11 @@ describe('ADR-077: тексты ошибок тулов не изменилис�
 
     expect(result.isError).toBe(true);
     expect(result.metadata?.interrupted).toBeUndefined();
-    expect(result.content).toContain('Ошибка git status');
+    expect(result.metadata?.reason).toBe('timeout');
+    expect(result.metadata?.timeoutMs).toBe(30_000);
+    expect(result.content).toContain('30000');
+    // Не «Ошибка git status» — actionable-текст с подсказкой.
+    expect(result.content).not.toContain('Ошибка git status');
   });
 
   it('git: вывод обрезается на уровне тула (20 КБ)', async () => {

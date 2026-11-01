@@ -278,10 +278,12 @@ describe('pluginsHybridConfigSchema (ADR-090 Ф7)', () => {
  * ADR-076: секция `git` — таймауты сетевых git-операций (clone/fetch).
  */
 describe('gitConfigSchema (ADR-076)', () => {
-  it('дефолт: таймауты clone/fetch — 5 минут', () => {
+  it('дефолт: таймауты clone/fetch — 5 минут, локальные — 2 минуты, сетевые — 5 минут', () => {
     expect(gitConfigSchema.parse({})).toEqual({
       cloneTimeoutMs: 300_000,
       fetchTimeoutMs: 300_000,
+      localTimeoutMs: 120_000,
+      networkTimeoutMs: 300_000,
     });
   });
 
@@ -289,11 +291,21 @@ describe('gitConfigSchema (ADR-076)', () => {
     expect(gitConfigSchema.parse({ cloneTimeoutMs: 0, fetchTimeoutMs: 0 })).toEqual({
       cloneTimeoutMs: 0,
       fetchTimeoutMs: 0,
+      localTimeoutMs: 120_000,
+      networkTimeoutMs: 300_000,
+    });
+    expect(gitConfigSchema.parse({ localTimeoutMs: 0, networkTimeoutMs: 0 })).toEqual({
+      cloneTimeoutMs: 300_000,
+      fetchTimeoutMs: 300_000,
+      localTimeoutMs: 0,
+      networkTimeoutMs: 0,
     });
   });
 
   it('отрицательный таймаут отклоняется', () => {
     expect(gitConfigSchema.safeParse({ fetchTimeoutMs: -1 }).success).toBe(false);
+    expect(gitConfigSchema.safeParse({ localTimeoutMs: -1 }).success).toBe(false);
+    expect(gitConfigSchema.safeParse({ networkTimeoutMs: -1 }).success).toBe(false);
   });
 });
 
