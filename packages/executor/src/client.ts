@@ -367,14 +367,22 @@ export class RemoteExecutionPort implements ExecutionPort {
    * из них, поэтому потолок пула — наименьший из объявленных. Адрес, который
    * не ответил, в расчёт не входит (его состав и лимиты неизвестны).
    *
+   * **Смешанный пул — лимиты неизвестны.** Если среди ответивших есть адрес
+   * без `limits` (старый исполнитель, у которого аддитивного поля нет), его
+   * потолок неизвестен, а команда может уйти именно туда ⇒ объявлять потолок
+   * пула по известным нельзя (иначе control plane поверит в 600 c, а команда
+   * будет убита по 120 c). Тогда — `undefined`: лимиты пула неизвестны.
+   *
    * Поле аддитивное: у старого исполнителя его нет — тогда лимиты пула
    * неизвестны (`undefined`), а поведение клиента прежнее.
    */
   async poolLimits(): Promise<ExecutorLimits | undefined> {
     const inventory = await this._ensureInventory();
-    const reported = [...inventory.values()]
-      .filter((entry) => entry.reachable && entry.limits !== undefined)
-      .map((entry) => entry.limits as ExecutorLimits);
+    const reachable = [...inventory.values()].filter((entry) => entry.reachable);
+    // Хотя бы один ответивший адрес не объявил `limits` — потолок пула
+    // неизвестен (fail-closed: лучше не объявить лимит, чем объявить неверный).
+    if (reachable.some((entry) => entry.limits === undefined)) return undefined;
+    const reported = reachable.map((entry) => entry.limits as ExecutorLimits);
     if (reported.length === 0) return undefined;
     return {
       timeoutMs: Math.min(...reported.map((limits) => limits.timeoutMs)),

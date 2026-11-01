@@ -63,6 +63,28 @@ async function deadPort(): Promise<number> {
   return port;
 }
 
+/**
+ * «Старый» исполнитель: отвечает на `/capabilities` заданным телом.
+ *
+ * Нужен для аддитивных полей: у старого исполнителя поля `limits` нет —
+ * это норма, а не ошибка.
+ */
+async function startLegacyExecutor(body: Record<string, unknown>): Promise<string> {
+  const server = createServer((req, res) => {
+    if (req.url === '/capabilities') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  legacyServers.push(server);
+  return `http://127.0.0.1:${port}`;
+}
+
 describe('клиент удалённого порта', () => {
   it('успешный вызов — stdout/exitCode/durationMs', async () => {
     const handle = await startExecutor();
@@ -532,6 +554,7 @@ describe('клиент удалённого порта: лимиты испол�
       port: 0,
       toolchain: {},
       maxTimeoutMs: 1_800_000,
+      maxOutputBytes: 32 * 1024 * 1024,
     });
     handles.push(withBigLimit);
     const withSmallLimit = await startExecutorServer({
@@ -541,6 +564,7 @@ describe('клиент удалённого порта: лимиты испол�
       port: 0,
       toolchain: {},
       maxTimeoutMs: 600_000,
+      maxOutputBytes: 10 * 1024 * 1024,
     });
     handles.push(withSmallLimit);
 
@@ -550,6 +574,43 @@ describe('клиент удалённого порта: лимиты испол�
     });
     const limits = await port.poolLimits();
     expect(limits?.timeoutMs).toBe(600_000);
+    expect(limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
+  });
+
+  it('смешанный пул — лимиты неизвестны (адрес без limits не считается)', async () => {
+    const withLimits = await startExecutorServer({
+      token: TOKEN,
+      workspaceRoot: workspace,
+      host: '127.0.0.1',
+      port: 0,
+      toolchain: {},
+      maxTimeoutMs: 600_000,
+    });
+    handles.push(withLimits);
+    // Старый исполнитель: адрес отвечает, но поля `limits` у него нет.
+    const legacyUrl = await startLegacyExecutor({
+      protocol: 5,
+      toolchain: { sh: 'sh 5.2' },
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+    });
+
+    const port = new RemoteExecutionPort({
+      urls: [withLimits.url, legacyUrl],
+      token: TOKEN,
+    });
+    // Команда может уйти на старый адрес (потолок 120 c) — потолок пула
+    // неизвестен, поэтому лимиты пула не объявляем вовсе.
+    expect(await port.poolLimits()).toBeUndefined();
+  });
+
+  it('пул целиком недоступен — лимиты неизвестны (undefined)', async () => {
+    const port = new RemoteExecutionPort({
+      urls: [`http://127.0.0.1:${await deadPort()}`],
+      token: TOKEN,
+    });
+    expect(await port.poolLimits()).toBeUndefined();
   });
 });
 

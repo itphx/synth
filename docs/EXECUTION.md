@@ -338,12 +338,40 @@ interface ExecutionPort {
 | `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
 | `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
 | `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса; тело `{ signal }` — `SIGTERM`\|`SIGKILL` (пустое тело — `SIGTERM` по умолчанию, иной сигнал — `400`); через 5 с после `SIGTERM` — `SIGKILL`; сигнал уходит **группе процессов** (потомки shell-формы гаснут вместе с ней), идемпотентно; `404` — процесс не найден |
-| `GET` | `/capabilities` | `{ protocol: 5, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments } }` — рукопожатие версии протокола и состава toolchain'а |
+| `GET` | `/capabilities` | `{ protocol: 5, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments }, limits?: { timeoutMs, maxOutputBytes } }` — рукопожатие версии протокола и состава toolchain'а; `limits` — **аддитивное** поле (эффективные потолки исполнителя: таймаут команды и буфер вывода): старый control plane его просто не читает, а у старого исполнителя поля нет — это норма |
 | `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
 | `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
 | `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError, attachments? }`; `attachments[]` — аддитивное поле протокола **5** (ADR-115): нетекстовые блоки результата (`image`/`audio`/`resource.blob`) в base64 без `data:`-префикса, `{mime, base64, name?}`, до 25 МиБ на файл и 20 МиБ на вызов, при `isError` не собираются; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
 | `GET` | `/health` | живость исполнителя |
 
+Пример ответа `GET /capabilities` (исполнитель с потолком 30 мин и буфером 32 МиБ):
+
+```json
+{
+  "protocol": 5,
+  "toolchain": {
+    "git": "git version 2.39.2",
+    "rg": "ripgrep 14.1.0",
+    "sh": "sh 5.2",
+    "bash": "GNU bash, version 5.2.15(1)-release",
+    "python3": "Python 3.12.3"
+  },
+  "os": "linux",
+  "arch": "x64",
+  "node": "v22.11.0",
+  "features": { "background": true, "secrets": true, "mcpAttachments": true },
+  "limits": { "timeoutMs": 1800000, "maxOutputBytes": 33554432 }
+}
+```
+
+- **Поле `limits` — аддитивное** (протокол остаётся **5**): эффективные потолки
+  исполнителя — таймаут команды (`timeoutMs`) и буфер вывода (`maxOutputBytes`).
+  Значения берутся из env исполнителя (`SYNTH_EXECUTOR_MAX_TIMEOUT_MS`,
+  `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES`). Старый control plane поле просто не читает
+  (лишнее поле в ответе), а **у старого исполнителя поля нет — это норма**, не
+  ошибка: тогда лимиты пула неизвестны (`undefined`), и клиент работает как прежде.
+  Разбор на клиенте **терпимый**: нечисловое или неположительное значение
+  игнорируется (тихий неверный лимит хуже отсутствия лимита).
 - Тело `/exec` — проекция `ExecRequest`
   (`packages/core/src/execution/ports/execution-port.ts`) **без** поля `signal`:
   отмена передаётся разрывом HTTP-запроса, а не полем запроса.
@@ -480,6 +508,15 @@ MCP-серверы исполнитель — у него и toolchain, и Chrom
 - **Лимит одновременных вызовов** — `execution.remote.concurrency`: превышение →
   очередь с ожиданием; время ожидания измеряется метрикой
   `synth_executor_wait_seconds` (см. §9).
+- **Потолок пула (`limits`) — минимум по ответившим адресам, но только если он
+  известен целиком.** Команда может уйти на любой адрес пула, поэтому потолок пула —
+  наименьший из объявленных (`RemoteExecutionPort.poolLimits()`,
+  `packages/executor/src/client.ts`). Адрес, который **не ответил** на
+  `/capabilities`, в расчёт не входит (его состав и лимиты неизвестны). Но если
+  среди **ответивших** есть адрес **без** `limits` (старый исполнитель), потолок
+  пула **неизвестен** ⇒ лимиты пула не объявляются (`undefined`), а не считаются
+  «по известным»: иначе control plane поверит в 600 c, а команда уйдёт на старый
+  адрес и будет убита по его потолку (120 c).
 
 ### 4.4. Способы размещения в Kubernetes
 
@@ -566,6 +603,10 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   `/exec/spawn` (фоновые процессы, ADR-077 шаг 7c), `secrets: true` — что принимает
   `secrets[]` в `POST /exec` (протокол 4, см. §4.2.2), `mcpAttachments: true` — что отдаёт
   вложения MCP-результата в `POST /mcp/call` (протокол 5, ADR-115).
+- **Поле `limits` — тоже аддитивное** (§4.2): эффективные потолки исполнителя
+  (таймаут команды и буфер вывода). Старый control plane его не читает; **у старого
+  исполнителя поля нет — это норма**, тогда лимиты пула неизвестны. В смешанном пуле
+  (есть адрес без `limits`) потолок пула **не объявляется вовсе** — см. §4.3.
 - **Требование `features.secrets` (секреты вызова).** Control plane
   **требует** этот признак (и версию протокола ≥ 4), чтобы доставлять SSH-ключ:
   адрес без `features.secrets` в кандидаты на вызов с секретами **не попадает**
