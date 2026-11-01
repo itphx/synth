@@ -5,9 +5,16 @@ import type { ThemeMode } from "@/types/theme"
 import { useThemeSystem } from "@/contexts/useThemeSystem"
 import { useI18n } from "@/lib/i18n"
 import { profileService } from '@/lib/api/profileService'
-import { applyUiScale, getDefaultUiScale, persistUiScale } from '@/lib/uiScale'
+import {
+  applyChatScale,
+  applyUiScale,
+  CHAT_SCALE_DEFAULT,
+  getDefaultUiScale,
+  persistChatScale,
+  persistUiScale,
+} from '@/lib/uiScale'
 import { SettingsActions, SettingsItem, SettingsPanel, SettingsSection, useSettingsDraft } from '../ui/settings'
-import { UiScaleControl } from './UiScaleControl'
+import { ChatScaleControl, UiScaleControl } from './UiScaleControl'
 import { ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
 
 interface AppearanceDraft {
@@ -15,6 +22,8 @@ interface AppearanceDraft {
   themePresetName: string
   locale: 'ru' | 'en'
   uiScale: number
+  /** Масштаб области чата — множитель поверх общего масштаба UI. */
+  chatScale: number
 }
 
 const presetNameFromTheme = (themeId: string): string => {
@@ -34,12 +43,14 @@ export const AppearanceSettings = () => {
     setThemePreference,
   } = useThemeSystem()
   const uiScale = useUIStore((s) => s.uiScale)
+  const chatScale = useUIStore((s) => s.chatScale)
 
   const defaultAppearance = useMemo<AppearanceDraft>(() => ({
     themeMode: 'system',
     themePresetName: DEFAULT_THEME_PRESET_NAME,
     locale: 'ru',
     uiScale: getDefaultUiScale(),
+    chatScale: CHAT_SCALE_DEFAULT,
   }), [])
 
   // Снапшот на момент открытия панели — к нему откатывают Cancel и закрытие.
@@ -48,6 +59,7 @@ export const AppearanceSettings = () => {
     themePresetName: presetNameFromTheme(theme),
     locale: i18nLocale === 'en' ? 'en' : 'ru',
     uiScale,
+    chatScale,
   }))
 
   // ADR-072 (фидбек): live-preview без персиста. Все визуальные настройки
@@ -63,9 +75,14 @@ export const AppearanceSettings = () => {
     }
     setThemeMode(next.themeMode)
     // Язык применяется через `useI18nStore` (единственный источник истины).
-    useUIStore.getState().setAppearancePreview({ themeMode: next.themeMode, uiScale: next.uiScale })
+    useUIStore.getState().setAppearancePreview({
+      themeMode: next.themeMode,
+      uiScale: next.uiScale,
+      chatScale: next.chatScale,
+    })
     setI18nLocale(next.locale)
     applyUiScale(next.uiScale)
+    applyChatScale(next.chatScale)
   }
 
   const applyRef = useRef(applyAppearance)
@@ -84,7 +101,11 @@ export const AppearanceSettings = () => {
       }
       await profileService.syncLocaleToProfile(next.locale)
       persistUiScale(next.uiScale)
-      useUIStore.getState().setAppearancePreview({ uiScale: next.uiScale })
+      persistChatScale(next.chatScale)
+      useUIStore.getState().setAppearancePreview({
+        uiScale: next.uiScale,
+        chatScale: next.chatScale,
+      })
       savedRef.current = next
       return next
     },
@@ -142,11 +163,25 @@ export const AppearanceSettings = () => {
       <SettingsSection
         id="appearance-ui-scale"
         title={t('settings.appearance.uiScale.label')}
+        tooltip={t('settings.help.appearance.section.ui-scale')}
       >
         <SettingsItem>
           <UiScaleControl
             value={current.uiScale}
             onChange={(value) => update({ uiScale: value })}
+          />
+        </SettingsItem>
+      </SettingsSection>
+
+      <SettingsSection
+        id="appearance-chat-scale"
+        title={t('settings.appearance.chatScale.label')}
+        tooltip={t('settings.help.appearance.section.chat-scale')}
+      >
+        <SettingsItem>
+          <ChatScaleControl
+            value={current.chatScale}
+            onChange={(value) => update({ chatScale: value })}
           />
         </SettingsItem>
       </SettingsSection>

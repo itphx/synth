@@ -497,6 +497,8 @@ export const dict = {
   'settings.appearance.uiScale.mobile': 'Мобильный',
   'settings.appearance.uiScale.desktop': 'Десктопный',
   'settings.appearance.uiScale.reset': 'Сбросить',
+  'settings.appearance.chatScale.label': 'Масштаб области чата',
+  'settings.appearance.chatScale.reset': 'Сбросить масштаб чата',
   'settings.microFirst.enabled': 'Быстрые ответы',
   'settings.microFirst.confidence': 'Порог уверенности',
   'settings.microFirst.embedding': 'Embedding',
@@ -1209,11 +1211,14 @@ export const dict = {
   // обычным пузырём (ADR-118 §4).
   'chat.steer.interruptMarker': 'Прерывание хода',
 
-  // Markdown в ответах: заголовок блока кода и кнопка копирования.
+  // Markdown в ответах: заголовок блока кода, кнопки копирования и скачивания.
   'markdown.code.copy': 'Копировать',
   'markdown.code.copied': 'Скопировано',
+  'markdown.code.download': 'Скачать',
+  'markdown.code.downloaded': 'Скачано',
 
   'chat.actions.copy': 'Копировать',
+  'chat.actions.copyHint': 'Копировать · Shift — без разметки',
   'chat.actions.toggleOff': 'Выключить',
   'chat.actions.toggleOn': 'Включить',
   'chat.actions.pin': 'Закрепить',
@@ -1275,6 +1280,9 @@ export const dict = {
   'chat.message.retrying': 'Возвращено в поле ввода',
   'chat.message.forked': 'Создана ветка',
   'chat.message.empty': 'Пустое сообщение',
+  // Разворот ответа агента на всю ширину области чата
+  'chat.message.expand': 'Развернуть',
+  'chat.message.collapse': 'Свернуть',
 
   // ADR-070 §2.6: статистика под ответом ассистента
   'chat.messageStats.stopped': 'Остановлено',
@@ -1734,10 +1742,27 @@ export const dict = {
   'chat.commandAutocomplete.unavailable': 'недоступна',
 
   // Chat settings
+  'chatSettings.description': 'Как показывать сообщения и служебные шаги в ленте чата.',
+  'chatSettings.viewMode': 'Вид сообщений',
+  'chatSettings.viewModeDetailed': 'Подробный',
+  'chatSettings.viewModeFeed': 'Лента',
+  'chatSettings.viewModeDescription':
+    'Лента показывает ответы агента плоским текстом без пузырей; реплики пользователя остаются выделенными.',
   'chatSettings.intermediateTextDisplay': 'Промежуточные ответы',
   'chatSettings.intermediateTextInline': 'Между блоками',
   'chatSettings.intermediateTextBottom': 'Снизу',
   'chatSettings.intermediateTextDescription': 'Как показывать ответы модели между вызовами инструментов.',
+  'chatSettings.density': 'Плотность ленты',
+  'chatSettings.densityDescription':
+    'Компактная плотность скрывает размышления и вызовы инструментов у завершённых ходов; текущий ход всегда раскрыт.',
+  'chatSettings.densityNormal': 'Обычная',
+  'chatSettings.densityCompact': 'Компактная',
+  'chat.compact.tools': '{count, plural, one {# инструмент} few {# инструмента} many {# инструментов}}',
+  'chat.compact.reasoning':
+    '{count, plural, one {# размышление} few {# размышления} many {# размышлений}}',
+  'chat.compact.hide': 'Скрыть',
+  'chat.compact.expand': 'Показать скрытые шаги хода',
+  'chat.compact.collapse': 'Скрыть шаги хода',
 
   // Model controls
   'chat.modelControls.searchModels': 'Поиск моделей...',
@@ -4308,7 +4333,8 @@ export const dict = {
   'settings.help.profile.interviewCompleted': 'Включите, если интервью завершено: ассистент больше не будет его предлагать.',
   'settings.help.profile.identityClaimCode': 'Одноразовый код из чата (например, от Telegram-бота) для привязки внешнего аккаунта.',
   'settings.help.appearance.section.theme-mode': 'Режим темы (системная, светлая, тёмная) и палитра оформления; применяется сразу.',
-  'settings.help.appearance.section.ui-scale': 'Масштаб интерфейса от 50% до 120%; влияет на размер текста и элементов.',
+  'settings.help.appearance.section.ui-scale': 'Масштаб интерфейса от 50% до 120%; влияет на размер текста и элементов, но не влияет на область чата — у неё свой масштаб.',
+  'settings.help.appearance.section.chat-scale': 'Влияет только на текст ответов, блоки кода и отступы в ленте сообщений; панели, дерево, настройки и композер не меняются. Итоговый размер = общий масштаб × масштаб чата.',
   'settings.help.appearance.section.language': 'Язык интерфейса (русский или английский); применяется сразу ко всем экранам.',
   'settings.help.appearance.theme': 'Палитра оформления из списка пресетов; выбор сохраняется по кнопке «Сохранить».',
   'settings.help.notifications.section.categories': 'Категории всплывающих уведомлений; история всегда остаётся в статусной панели.',

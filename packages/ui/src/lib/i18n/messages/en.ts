@@ -502,6 +502,8 @@ export const dict = {
   'settings.appearance.uiScale.mobile': 'Mobile',
   'settings.appearance.uiScale.desktop': 'Desktop',
   'settings.appearance.uiScale.reset': 'Reset',
+  'settings.appearance.chatScale.label': 'Chat area scale',
+  'settings.appearance.chatScale.reset': 'Reset chat scale',
   'settings.microFirst.enabled': 'Quick answers',
   'settings.microFirst.confidence': 'Confidence threshold',
   'settings.microFirst.embedding': 'Embedding',
@@ -1233,11 +1235,14 @@ export const dict = {
   // plain bubble (ADR-118 §4).
   'chat.steer.interruptMarker': 'Turn interrupted',
 
-  // Markdown в ответах: заголовок блока кода и кнопка копирования.
+  // Markdown в ответах: заголовок блока кода, кнопки копирования и скачивания.
   'markdown.code.copy': 'Copy',
   'markdown.code.copied': 'Copied',
+  'markdown.code.download': 'Download',
+  'markdown.code.downloaded': 'Downloaded',
 
   'chat.actions.copy': 'Copy',
+  'chat.actions.copyHint': 'Copy · Shift for plain text',
   'chat.actions.toggleOff': 'Disable',
   'chat.actions.toggleOn': 'Enable',
   'chat.actions.pin': 'Pin',
@@ -1299,6 +1304,9 @@ export const dict = {
   'chat.message.retrying': 'Returned to input',
   'chat.message.forked': 'Branch created',
   'chat.message.empty': 'Empty message',
+  // Agent answer expanded to the full chat column width
+  'chat.message.expand': 'Expand',
+  'chat.message.collapse': 'Collapse',
 
   // ADR-070 §2.6: per-message answer stats
   'chat.messageStats.stopped': 'Stopped',
@@ -1755,10 +1763,26 @@ export const dict = {
   'chat.commandAutocomplete.unavailable': 'unavailable',
 
   // Chat settings
+  'chatSettings.description': 'How messages and service steps are shown in the chat feed.',
+  'chatSettings.viewMode': 'Message view',
+  'chatSettings.viewModeDetailed': 'Detailed',
+  'chatSettings.viewModeFeed': 'Feed',
+  'chatSettings.viewModeDescription':
+    'Feed shows agent answers as flat text without bubbles; user messages stay highlighted.',
   'chatSettings.intermediateTextDisplay': 'Intermediate responses',
   'chatSettings.intermediateTextInline': 'Between blocks',
   'chatSettings.intermediateTextBottom': 'At bottom',
   'chatSettings.intermediateTextDescription': 'How to display model answers between tool calls.',
+  'chatSettings.density': 'Feed density',
+  'chatSettings.densityDescription':
+    'Compact density hides reasoning and tool calls for completed turns; the current turn always stays expanded.',
+  'chatSettings.densityNormal': 'Normal',
+  'chatSettings.densityCompact': 'Compact',
+  'chat.compact.tools': '{count, plural, one {# tool} other {# tools}}',
+  'chat.compact.reasoning': '{count, plural, one {# reasoning step} other {# reasoning steps}}',
+  'chat.compact.hide': 'Hide',
+  'chat.compact.expand': 'Show hidden turn activity',
+  'chat.compact.collapse': 'Hide turn activity',
 
   // Model controls
   'chat.modelControls.searchModels': 'Search models...',
@@ -3803,7 +3827,8 @@ export const dict = {
   'settings.help.profile.interviewCompleted': 'Turn on when the interview is finished: the assistant will not offer it again.',
   'settings.help.profile.identityClaimCode': 'One-time code from chat (e.g. from the Telegram bot) used to link an external account.',
   'settings.help.appearance.section.theme-mode': 'Theme mode (system, light, dark) and color preset; applied immediately.',
-  'settings.help.appearance.section.ui-scale': 'Interface scale from 50% to 120%; affects text and control sizes.',
+  'settings.help.appearance.section.ui-scale': 'Interface scale from 50% to 120%; affects text and control sizes, but not the chat area — it has its own scale.',
+  'settings.help.appearance.section.chat-scale': 'Affects only answer text, code blocks and spacing in the message feed; panels, the tree, settings and the composer are unchanged. Final size = global scale × chat scale.',
   'settings.help.appearance.section.language': 'Interface language (Russian or English); applied immediately across all screens.',
   'settings.help.appearance.theme': 'Color palette from the preset list; the choice is saved with the Save button.',
   'settings.help.notifications.section.categories': 'Popup notification categories; history is always kept in the status panel.',

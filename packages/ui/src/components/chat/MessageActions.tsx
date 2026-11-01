@@ -1,4 +1,4 @@
-import { forwardRef, type ReactNode } from 'react'
+import { forwardRef, type MouseEvent, type ReactNode } from 'react'
 import { Icon } from '../icon/Icon'
 import { StatsPopoverButton } from './StatsPopoverButton'
 import { useI18n } from '@/lib/i18n'
@@ -29,7 +29,7 @@ interface MessageActionsProps {
   /** Показывать кнопку «Копировать» (в Notice копия рисуется отдельно). */
   showCopy?: boolean
   /** Действия получают `id` сообщения (ADR-118 §7 — индекс нестабилен). */
-  onCopy: (messageId?: string) => void
+  onCopy: (messageId?: string, plain?: boolean) => void
   onToggle: (messageId?: string) => void
   onPin: (messageId?: string) => void
   onDelete: (messageId?: string) => void
@@ -70,7 +70,14 @@ export function MessageActions({
           : 'message-actions flex items-center gap-0.5 mt-2 pt-1.5 -mb-1.5 border-t border-border/30 opacity-0 group-hover:opacity-100 transition-opacity'
       }
     >
-      {showCopy && <ActionBtn onClick={() => onCopy(messageId)} title={t('chat.actions.copy')} icon="file-copy" />}
+      {showCopy && (
+        <ActionBtn
+          // Shift+клик — копия без markdown-разметки (обычный клик — с ней).
+          onClick={(event) => onCopy(messageId, event.shiftKey)}
+          title={t('chat.actions.copyHint')}
+          icon="file-copy"
+        />
+      )}
 
       <ActionBtn onClick={() => onFork(messageId)} title={t('chat.actions.fork')} icon="git-branch" />
 
@@ -114,7 +121,7 @@ export function MessageActions({
 const ActionBtn = forwardRef<
   HTMLButtonElement,
   {
-    onClick?: () => void
+    onClick?: (event: MouseEvent<HTMLButtonElement>) => void
     title: string
     icon: string
     active?: boolean

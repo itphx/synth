@@ -7,6 +7,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { QualityBadge } from './QualityBadge'
 import { resolveColor } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 
 interface MessageHeaderProps {
   message: MessageData
@@ -21,6 +22,14 @@ interface MessageHeaderProps {
    * шапки `Notice` (сводка/отладка), без бейджей автора/агента/Summary.
    */
   metaOnly?: boolean
+  /**
+   * Ответ агента развёрнут на всю ширину области чата. Кнопка разворота
+   * рендерится **только** при заданном `onToggleExpand` — то есть у ответа
+   * агента, а не у user-реплик и служебных блоков.
+   */
+  expanded?: boolean
+  /** Тумблер разворота ответа (стабильная ссылка из `ChatMessage`). */
+  onToggleExpand?: () => void
 }
 
 function resolveAuthor(): string {
@@ -28,7 +37,8 @@ function resolveAuthor(): string {
   return profile?.display_name || user?.username || ''
 }
 
-function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, metaOnly }: MessageHeaderProps) {
+function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, metaOnly, expanded, onToggleExpand }: MessageHeaderProps) {
+  const { t } = useI18n()
   const time = message.timestamp || message.created_at
   const formatted = time
     ? new Date(time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -130,8 +140,24 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, me
 
       {qaBadge}
 
-      {formatted || processing || message.origin === 'merged' || message.origin === 'crosspost' ? (
+      {formatted || processing || onToggleExpand || message.origin === 'merged' || message.origin === 'crosspost' ? (
         <span className="ml-auto inline-flex items-center gap-1">
+          {onToggleExpand && (
+            // Кнопка-иконка разворота ответа. Визуально компактная (14px иконка
+            // + p-1); на coarse-pointer зону клика расширяет псевдоэлемент
+            // `.message-expand-btn::after` (`styles/index.css`, ADR-044).
+            <button
+              type="button"
+              data-testid="message-expand"
+              onClick={onToggleExpand}
+              title={expanded ? t('chat.message.collapse') : t('chat.message.expand')}
+              aria-label={expanded ? t('chat.message.collapse') : t('chat.message.expand')}
+              aria-pressed={expanded === true}
+              className="message-expand-btn relative inline-flex cursor-pointer items-center rounded p-1 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+            >
+              <Icon name={expanded ? 'fullscreen-exit' : 'fullscreen'} className="size-3.5" />
+            </button>
+          )}
           {(message.origin === 'merged' || message.origin === 'crosspost') && (
             <button
               title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}

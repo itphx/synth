@@ -3,9 +3,39 @@ import { persist } from 'zustand/middleware'
 import type { ThemeMode } from '../lib/theme/themes'
 import { profileService } from '@/lib/api/profileService'
 import { useFilesStore } from './filesStore'
-import { applyUiScale, normalizeUiScale, persistUiScale, readUiScale } from '@/lib/uiScale'
+import {
+  applyChatScale,
+  applyUiScale,
+  normalizeChatScale,
+  normalizeUiScale,
+  persistChatScale,
+  persistUiScale,
+  readChatScale,
+  readUiScale,
+} from '@/lib/uiScale'
 
 export type TransportMode = 'auto' | 'ws' | 'sse'
+
+/**
+ * Плотность ленты чата (первая ось режимов отображения).
+ *
+ * `compact` — у **прошлых** ходов скрыты размышления, карточки инструментов и
+ * промежуточные тексты: вместо них одна строка-сводка, раскрываемая по клику.
+ * Текущий (живой) ход и ход с ошибкой всегда раскрыты. Режим чисто визуальный:
+ * контекст LLM и серверные флаги `hidden`/`disabled` он не трогает.
+ */
+export type ChatDensity = 'normal' | 'compact'
+
+/**
+ * Вид ленты чата (вторая ось режимов отображения, ортогональна `ChatDensity`).
+ *
+ * `detailed` — текущий вид: у ответа агента пузырь (фон/рамка/скругление/
+ * отступы), служебные карточки — карточками. `feed` — ответ агента плоской
+ * прозой на фоне чата, без пузыря; служебные строки (размышления, карточки
+ * инструментов и саб-агентов) — плоские. Пузырь пользователя остаётся в обоих
+ * видах. Режим чисто визуальный и задаётся CSS (классы компонентов не меняются).
+ */
+export type ChatViewMode = 'detailed' | 'feed'
 
 const LEFT_PANEL_MIN_WIDTH = 280
 const LEFT_PANEL_MAX_WIDTH = 500
@@ -155,8 +185,16 @@ interface UIStore {
 
   uiScale: number
   setUiScale: (scale: number) => void
+  /** Масштаб области чата (множитель поверх `uiScale`); живёт в localStorage. */
+  chatScale: number
+  setChatScale: (scale: number) => void
   /** Live-preview настроек внешнего вида из панели «Внешний вид» (без записи в профиль). */
-  setAppearancePreview: (patch: { theme?: string; themeMode?: ThemeMode; uiScale?: number }) => void
+  setAppearancePreview: (patch: {
+    theme?: string
+    themeMode?: ThemeMode
+    uiScale?: number
+    chatScale?: number
+  }) => void
 
   centerTabs: CenterTab[]
   activeCenterTabId: string | null
@@ -179,6 +217,14 @@ interface UIStore {
 
   intermediateTextDisplay: 'inline' | 'bottom'
   setIntermediateTextDisplay: (mode: 'inline' | 'bottom') => void
+
+  /** Плотность ленты чата (персистится; см. `ChatDensity`). */
+  chatDensity: ChatDensity
+  setChatDensity: (density: ChatDensity) => void
+
+  /** Вид ленты чата (персистится; см. `ChatViewMode`). */
+  chatViewMode: ChatViewMode
+  setChatViewMode: (mode: ChatViewMode) => void
 
   /** ADR-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
    *  и таблицы MCP перезапрашиваются без рестарта. Runtime, не персистится. */
@@ -339,6 +385,12 @@ export const useUIStore = create<UIStore>()(
         persistUiScale(scale)
         set({ uiScale: normalizeUiScale(scale) })
       },
+      chatScale: readChatScale(),
+      setChatScale: (scale) => {
+        applyChatScale(scale)
+        persistChatScale(scale)
+        set({ chatScale: normalizeChatScale(scale) })
+      },
       setAppearancePreview: (patch) => {
         set(patch)
       },
@@ -489,6 +541,12 @@ export const useUIStore = create<UIStore>()(
         profileService.syncIntermediateTextDisplayToProfile(mode)
       },
 
+      chatDensity: 'normal',
+      setChatDensity: (density) => set({ chatDensity: density }),
+
+      chatViewMode: 'detailed',
+      setChatViewMode: (mode) => set({ chatViewMode: mode }),
+
       toolsDisabledTick: 0,
       bumpToolsDisabledTick: () => set((state) => ({ toolsDisabledTick: state.toolsDisabledTick + 1 })),
     }),
@@ -506,6 +564,8 @@ export const useUIStore = create<UIStore>()(
         collapsedProjects: [...state.collapsedProjects],
         onlyActiveProject: state.onlyActiveProject,
         settingsShowAdvanced: state.settingsShowAdvanced,
+        chatDensity: state.chatDensity,
+        chatViewMode: state.chatViewMode,
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
@@ -529,6 +589,10 @@ export const useUIStore = create<UIStore>()(
           onlyActiveProject: (p?.onlyActiveProject as boolean) ?? current.onlyActiveProject,
           settingsShowAdvanced:
             (p?.settingsShowAdvanced as boolean) ?? current.settingsShowAdvanced,
+          // Неизвестное/отсутствующее значение — `normal` (валидация восстановления).
+          chatDensity: p?.chatDensity === 'compact' ? 'compact' : 'normal',
+          // `feed` — только явное сохранённое значение, иначе подробный вид.
+          chatViewMode: p?.chatViewMode === 'feed' ? 'feed' : 'detailed',
         }
       },
     }

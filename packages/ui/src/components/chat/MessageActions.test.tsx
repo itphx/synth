@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
@@ -120,5 +120,33 @@ describe('MessageActions: активное состояние кнопок', () 
     })
     expect(container.querySelector('button[title="Response stats"]')).toBeNull()
     expect(container.querySelector('[data-testid="stats-body"]')).toBeNull()
+  })
+})
+
+describe('MessageActions: два режима копирования', () => {
+  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+
+  const copyTitle = enDict['chat.actions.copyHint']
+
+  it('обычный клик — режим с разметкой', async () => {
+    const onCopy = vi.fn()
+    const container = await renderActions({ onCopy })
+    const btn = getButton(container, copyTitle)
+    await act(async () => {
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(onCopy).toHaveBeenCalledTimes(1)
+    expect(onCopy).toHaveBeenCalledWith('msg-1', false)
+  })
+
+  it('Shift+клик — режим без разметки', async () => {
+    const onCopy = vi.fn()
+    const container = await renderActions({ onCopy })
+    const btn = getButton(container, copyTitle)
+    await act(async () => {
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+    })
+    expect(onCopy).toHaveBeenCalledTimes(1)
+    expect(onCopy).toHaveBeenCalledWith('msg-1', true)
   })
 })

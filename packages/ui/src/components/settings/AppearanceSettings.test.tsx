@@ -49,6 +49,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useUIStore } from '@/stores/useUIStore'
+import { CHAT_SCALE_DEFAULT, CHAT_SCALE_STORAGE_KEY, UI_SCALE_STORAGE_KEY } from '@/lib/uiScale'
 import { AppearanceSettings } from './AppearanceSettings'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -226,5 +227,109 @@ describe('AppearanceSettings — миграция на Settings UI Kit (ADR-072)
     // Значения стали дефолтными — Reset серая и disabled.
     expect(reset().disabled).toBe(true)
     expect(reset().className).toContain('border-muted-foreground')
+  })
+})
+
+describe('AppearanceSettings — масштаб области чата', () => {
+  const setSliderValue = async (container: HTMLElement, index: number, value: number) => {
+    const slider = container.querySelectorAll<HTMLInputElement>('input[type="range"]')[index]
+    expect(slider).toBeTruthy()
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(slider, String(value))
+      slider!.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+
+  beforeEach(() => {
+    useUIStore.setState({ chatScale: CHAT_SCALE_DEFAULT })
+    document.documentElement.style.removeProperty('--chat-scale')
+    document.documentElement.style.removeProperty('--ui-scale')
+    localStorage.removeItem(CHAT_SCALE_STORAGE_KEY)
+  })
+
+  afterEach(() => {
+    document.documentElement.style.removeProperty('--chat-scale')
+    document.documentElement.style.removeProperty('--ui-scale')
+  })
+
+  it('рендерит отдельную секцию с масштабом чата (второй слайдер)', async () => {
+    const container = await renderSettings()
+
+    const section = container.querySelector('[data-settings-section="appearance-chat-scale"]')
+    expect(section).not.toBeNull()
+
+    const sliders = container.querySelectorAll('input[type="range"]')
+    expect(sliders).toHaveLength(2)
+    expect(sliders[1]!.getAttribute('aria-label')).toBe('Chat area scale')
+    expect(section!.contains(sliders[1]!)).toBe(true)
+  })
+
+  it('live-preview: слайдер меняет --chat-scale и стор, но не пишет в localStorage', async () => {
+    const container = await renderSettings()
+
+    await setSliderValue(container, 1, 1.2)
+
+    expect(useUIStore.getState().chatScale).toBe(1.2)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.2')
+    expect(localStorage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+  })
+
+  it('Save персистит оба масштаба', async () => {
+    const container = await renderSettings()
+
+    await setSliderValue(container, 0, 1.1)
+    await setSliderValue(container, 1, 1.2)
+
+    await act(async () => {
+      byTestId(container, 'appearance-save')!.click()
+    })
+
+    // Оба масштаба пишутся debounce'ом (~300 мс).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350))
+    })
+
+    expect(localStorage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.2')
+    expect(localStorage.getItem(UI_SCALE_STORAGE_KEY)).toBe('1.1')
+    expect(useUIStore.getState().chatScale).toBe(1.2)
+  })
+
+  it('Cancel откатывает масштаб чата к снапшоту', async () => {
+    const container = await renderSettings()
+
+    await setSliderValue(container, 1, 1.35)
+    expect(useUIStore.getState().chatScale).toBe(1.35)
+
+    await act(async () => {
+      byTestId(container, 'appearance-cancel')!.click()
+    })
+
+    expect(useUIStore.getState().chatScale).toBe(CHAT_SCALE_DEFAULT)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1')
+    expect(localStorage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+  })
+
+  it('закрытие (unmount) без Save откатывает масштаб чата', async () => {
+    const container = await renderSettings()
+
+    await setSliderValue(container, 1, 1.3)
+    expect(useUIStore.getState().chatScale).toBe(1.3)
+
+    await unmountOne(container)
+
+    expect(useUIStore.getState().chatScale).toBe(CHAT_SCALE_DEFAULT)
+  })
+
+  it('Reset возвращает дефолтные масштабы', async () => {
+    useUIStore.setState({ chatScale: 1.3 })
+    const container = await renderSettings()
+
+    await act(async () => {
+      byTestId(container, 'appearance-reset')!.click()
+    })
+
+    expect(useUIStore.getState().chatScale).toBe(CHAT_SCALE_DEFAULT)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1')
   })
 })

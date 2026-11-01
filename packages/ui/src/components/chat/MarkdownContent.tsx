@@ -1,7 +1,9 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
+import { downloadBlob } from '@/lib/download'
 import { i18nText, useI18nStore } from '@/lib/i18n'
+import { codeFileName } from '@/lib/markdown/codeFile'
 import { getThemeEpoch, highlightCode, subscribeThemeChange } from '@/lib/markdown/highlight'
 
 interface MarkdownContentProps {
@@ -30,10 +32,11 @@ export const MARKDOWN_ALLOWED_TAGS = [
   'button', 'details', 'summary',
 ]
 
-/** Разрешённые атрибуты (включая маркеры раскрытия кода и target/rel внешних ссылок). */
+/** Разрешённые атрибуты (маркеры раскрытия/копирования/скачивания кода, target/rel ссылок). */
 export const MARKDOWN_ALLOWED_ATTR = [
   'href', 'src', 'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled',
   'data-ph', 'data-lang', 'data-copy-code', 'data-numbered', 'data-copied',
+  'data-download-code', 'data-downloaded',
   'target', 'rel', 'open', 'align',
 ]
 
@@ -68,9 +71,10 @@ function isExternalHref(href?: string): boolean {
 }
 
 /**
- * Локальные renderer'ы marked: заголовок с языком и копирование у блоков кода,
- * горизонтальный скролл у таблиц, `target` у внешних ссылок, чип у инлайн-кода.
- * Глобальный `marked.use` не трогаем — инстанс рендерера живёт только здесь.
+ * Локальные renderer'ы marked: заголовок с языком, копирование и скачивание
+ * у блоков кода, горизонтальный скролл у таблиц, `target` у внешних ссылок,
+ * чип у инлайн-кода. Глобальный `marked.use` не трогаем — инстанс рендерера
+ * живёт только здесь.
  */
 function createMarkdownRenderer(): Renderer {
   const renderer = new Renderer()
@@ -82,6 +86,7 @@ function createMarkdownRenderer(): Renderer {
     const lines = text.replace(/\n$/, '').split('\n')
     const numbered = lines.length <= MAX_NUMBERED_CODE_LINES
     const copyLabel = escapeHtml(i18nText('markdown.code.copy'))
+    const downloadLabel = escapeHtml(i18nText('markdown.code.download'))
     // Строки — отдельными span'ами (номера рисует CSS-счётчик), между ними "\n",
     // чтобы `textContent` блока копировался с переносами.
     const body = lines.map((line) => `<span class="md-code-line">${escapeHtml(line)}</span>`).join('\n')
@@ -89,7 +94,12 @@ function createMarkdownRenderer(): Renderer {
       `<div class="md-code" data-lang="${escapeHtml(language)}" data-numbered="${numbered ? 'true' : 'false'}">`,
       '<div class="md-code-head">',
       `<span class="md-code-lang">${escapeHtml(language)}</span>`,
-      `<button type="button" class="md-code-copy" data-copy-code>${copyLabel}</button>`,
+      '<span class="md-code-actions">',
+      // Кнопки — только иконки (CSS-маска, см. «Markdown в ответах» в index.css):
+      // подпись остаётся в `aria-label`/`title`, текстового содержимого нет.
+      `<button type="button" class="md-code-copy" data-copy-code aria-label="${copyLabel}" title="${copyLabel}"></button>`,
+      `<button type="button" class="md-code-download" data-download-code aria-label="${downloadLabel}" title="${downloadLabel}"></button>`,
+      '</span>',
       '</div>',
       `<pre class="md-code-pre"><code class="language-${escapeHtml(languageClass(language))}">${body}</code></pre>`,
       '</div>',
@@ -119,6 +129,16 @@ const markdownRenderer = createMarkdownRenderer()
  * Ключ — сам блок: пересозданный блок (новый `html`) получает свою подсветку.
  */
 const pendingHighlights = new WeakMap<HTMLElement, Promise<string | null>>()
+
+/**
+ * Подпись кнопки-иконки: текстового содержимого у неё нет (иконка рисуется
+ * CSS-маской), поэтому доступное имя и тултип — только в атрибутах.
+ */
+function setButtonLabel(button: HTMLButtonElement, key: string): void {
+  const label = i18nText(key)
+  button.setAttribute('aria-label', label)
+  button.setAttribute('title', label)
+}
 
 /** Копирование в буфер: ошибки глушим — рендер не должен ломаться (нет API, отказ прав). */
 async function writeClipboard(value: string): Promise<boolean> {
@@ -257,27 +277,56 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
     }
   }, [html, streaming, themeEpoch])
 
-  // Делегирование клика: кнопка копирования живёт в HTML из marked, не в React-дереве.
+  // Делегирование клика: кнопки копирования и скачивания живут в HTML из marked,
+  // не в React-дереве.
   const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target
     if (!(target instanceof Element)) return
-    const button = target.closest<HTMLButtonElement>('[data-copy-code]')
-    if (!button) return
-    const code = button.closest('.md-code')?.querySelector('pre code')
+
+    const copyButton = target.closest<HTMLButtonElement>('[data-copy-code]')
+    if (copyButton) {
+      const code = copyButton.closest('.md-code')?.querySelector('pre code')
+      const text = code?.textContent?.replace(/\n+$/, '') ?? ''
+      if (!text) return
+      void writeClipboard(text).then((ok) => {
+        if (!ok) return
+        copyButton.dataset.copied = 'true'
+        // `textContent` не трогаем — иначе пропадёт иконка (CSS-маска на ::before).
+        setButtonLabel(copyButton, 'markdown.code.copied')
+        const timer = setTimeout(() => {
+          timersRef.current.delete(timer)
+          if (!copyButton.isConnected) return
+          delete copyButton.dataset.copied
+          setButtonLabel(copyButton, 'markdown.code.copy')
+        }, 1500)
+        timersRef.current.add(timer)
+      })
+      return
+    }
+
+    const downloadButton = target.closest<HTMLButtonElement>('[data-download-code]')
+    if (!downloadButton) return
+    const block = downloadButton.closest('.md-code')
+    const code = block?.querySelector('pre code')
+    // Хвостовые переносы срезаем (как у копирования): файл не должен
+    // заканчиваться лишней пустой строкой.
     const text = code?.textContent?.replace(/\n+$/, '') ?? ''
     if (!text) return
-    void writeClipboard(text).then((ok) => {
-      if (!ok) return
-      button.dataset.copied = 'true'
-      button.textContent = i18nText('markdown.code.copied')
-      const timer = setTimeout(() => {
-        timersRef.current.delete(timer)
-        if (!button.isConnected) return
-        delete button.dataset.copied
-        button.textContent = i18nText('markdown.code.copy')
-      }, 1500)
-      timersRef.current.add(timer)
-    })
+    const downloaded = downloadBlob(
+      new Blob([text], { type: 'text/plain;charset=utf-8' }),
+      codeFileName(block?.getAttribute('data-lang') ?? undefined),
+    )
+    if (!downloaded) return
+    downloadButton.dataset.downloaded = 'true'
+    // `textContent` не трогаем — иначе пропадёт иконка (CSS-маска на ::before).
+    setButtonLabel(downloadButton, 'markdown.code.downloaded')
+    const timer = setTimeout(() => {
+      timersRef.current.delete(timer)
+      if (!downloadButton.isConnected) return
+      delete downloadButton.dataset.downloaded
+      setButtonLabel(downloadButton, 'markdown.code.download')
+    }, 1500)
+    timersRef.current.add(timer)
   }, [])
 
   if (!html) {

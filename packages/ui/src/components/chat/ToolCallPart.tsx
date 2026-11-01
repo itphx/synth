@@ -193,6 +193,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
   return (
     <div className={nested ? 'mb-1 ml-3' : plain ? 'mb-0' : 'mb-2'}>
       <div
+        data-card="service"
         className={cn(
           'rounded-md border overflow-hidden',
           plain ? 'border-transparent' : 'border-border bg-muted'

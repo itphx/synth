@@ -72,7 +72,11 @@ const radioByText = (container: HTMLElement, text: string) =>
   ) as HTMLButtonElement
 
 beforeEach(() => {
-  useUIStore.setState({ intermediateTextDisplay: 'inline' })
+  useUIStore.setState({
+    intermediateTextDisplay: 'inline',
+    chatDensity: 'normal',
+    chatViewMode: 'detailed',
+  })
 })
 
 afterEach(async () => {
@@ -174,5 +178,101 @@ describe('ChatSettings — миграция на Settings UI Kit (ADR-072)', () 
 
     expect(byTestId(container, 'chat-reset')!.disabled).toBe(false)
     expect(byTestId(container, 'chat-reset')!.className).toContain('border-primary')
+  })
+
+  it('плотность ленты: выбор меняет черновик, Save пишет в стор', async () => {
+    const container = await renderSettings()
+
+    expect(container.textContent).toContain('Feed density')
+    await act(async () => {
+      radioByText(container, 'Compact').click()
+    })
+
+    expect(radioByText(container, 'Compact').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+
+    await act(async () => {
+      byTestId(container, 'chat-save')!.click()
+    })
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+  })
+
+  it('плотность ленты: Reset возвращает normal и пишется по Save', async () => {
+    useUIStore.setState({ chatDensity: 'compact' })
+    const container = await renderSettings()
+
+    await act(async () => {
+      byTestId(container, 'chat-reset')!.click()
+    })
+
+    expect(radioByText(container, 'Normal').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+
+    await act(async () => {
+      byTestId(container, 'chat-save')!.click()
+    })
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+
+  it('плотность ленты: Cancel не пишет в стор', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Compact').click()
+    })
+    await act(async () => {
+      byTestId(container, 'chat-cancel')!.click()
+    })
+
+    expect(radioByText(container, 'Normal').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+
+  it('вид сообщений: выбор меняет черновик, Save пишет в стор', async () => {
+    const container = await renderSettings()
+
+    expect(container.textContent).toContain('Message view')
+    await act(async () => {
+      radioByText(container, 'Feed').click()
+    })
+
+    expect(radioByText(container, 'Feed').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+
+    await act(async () => {
+      byTestId(container, 'chat-save')!.click()
+    })
+    expect(useUIStore.getState().chatViewMode).toBe('feed')
+  })
+
+  it('вид сообщений: Reset возвращает detailed и пишется по Save', async () => {
+    useUIStore.setState({ chatViewMode: 'feed' })
+    const container = await renderSettings()
+
+    await act(async () => {
+      byTestId(container, 'chat-reset')!.click()
+    })
+
+    expect(radioByText(container, 'Detailed').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().chatViewMode).toBe('feed')
+
+    await act(async () => {
+      byTestId(container, 'chat-save')!.click()
+    })
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+
+  it('вид сообщений: Cancel не пишет в стор', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Feed').click()
+    })
+    await act(async () => {
+      byTestId(container, 'chat-cancel')!.click()
+    })
+
+    expect(radioByText(container, 'Detailed').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
   })
 })

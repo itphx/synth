@@ -1,8 +1,9 @@
-import { Fragment, useRef, useCallback, useState, useEffect, useMemo } from 'react'
+import { Fragment, useRef, useCallback, useState, useEffect, useLayoutEffect, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
+import { cn } from '@/lib/utils'
 import { isVisibleMessage } from './messageVisibility'
 import { turnHasContent } from '@/lib/messageParts'
 import {
@@ -12,6 +13,7 @@ import {
   type MessageData,
   type StreamRetry,
 } from '@/stores/chatStore'
+import { useUIStore } from '@/stores/useUIStore'
 
 /**
  * Группа сообщений ленты (ADR-118 §1): **сегменты одного хода** склеиваются в
@@ -24,6 +26,12 @@ export interface MessageGroup {
   /** Ход группы; `null` — сообщение вне хода (user/системное). */
   turnId: string | null
   messages: MessageData[]
+}
+
+/** Счётчики «скрытых» шагов хода для сводки компактной плотности. */
+export interface ServiceCounts {
+  tools: number
+  reasoning: number
 }
 
 /**
@@ -110,6 +118,19 @@ const OVERSCAN = 30
  */
 const TURN_BLOCK_CLASS =
   'group flex w-full max-w-[85%] flex-col items-start rounded-lg px-4 py-3 bg-card border border-border/50 text-foreground rounded-bl-sm'
+
+/**
+ * Тот же блок хода, но **развёрнутый** на всю ширину области чата (рендерится
+ * только в развёрнутой панели — `message-expanded-pane`).
+ *
+ * Отдельная готовая строка классов, а не наложение `max-w-[85%]` + `max-w-full`:
+ * порядок правил в сгенерированном CSS не гарантирует победу `max-w-full`.
+ */
+const TURN_BLOCK_CLASS_EXPANDED =
+  'group flex w-full max-w-full flex-col items-start rounded-lg px-4 py-3 bg-card border border-border/50 text-foreground rounded-bl-sm'
+
+/** Поля ввода со своим поведением `Esc` — панель ответа их не перехватывает. */
+const EDITABLE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
 
 /** Сегмент, который обычно рисует собственный пузырь (assistant без системной команды). */
 function isBubbleSegment(msg: MessageData): boolean {
@@ -198,6 +219,71 @@ export function MessageList({
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const lastClickedRef = useRef<string | null>(null)
 
+  /**
+   * Развёрнутый ответ агента (ключ `MessageGroup.key`, `null` — свёрнуто).
+   *
+   * Панель одна: разворот другой группы заменяет текущую, повторный клик по
+   * той же (кнопка в панели) — закрывает. Пока панель открыта, **лента не
+   * рендерится** — панель её заменяет (DOM не дублируется). Состояние
+   * **runtime** (не персистится).
+   */
+  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null)
+  /** Зеркало состояния для стабильного колбэка (`useCallback([])` не видит state). */
+  const expandedKeyRef = useRef<string | null>(null)
+  /** Позиция прокрутки ленты до разворота — восстанавливается после закрытия. */
+  const savedScrollTopRef = useRef<number | null>(null)
+  /** Сегмент, из которого открыли панель, — для возврата фокуса после закрытия. */
+  const focusReturnIdRef = useRef<string | null>(null)
+
+  /**
+   * Закрыть панель. Стабильная ссылка: используется и тумблером, и `Esc`.
+   */
+  const closeExpanded = useCallback(() => {
+    expandedKeyRef.current = null
+    setExpandedGroupKey(null)
+  }, [])
+
+  /**
+   * Тумблер разворота группы. Стабильная ссылка (`useCallback`): пропсы
+   * `onToggleExpand`/`expandKey` в `ChatMessage` не должны быть новыми на каждом
+   * рендере списка, иначе слетает `React.memo(ChatMessage)`
+   * (`ChatMessage.memo.test.tsx`).
+   */
+  const toggleGroupExpanded = useCallback(
+    (key: string) => {
+      if (expandedKeyRef.current === key) {
+        closeExpanded()
+        return
+      }
+      // Первый разворот — запомнить прокрутку ленты, пока она ещё в DOM.
+      if (expandedKeyRef.current === null) {
+        savedScrollTopRef.current = scrollRef.current?.scrollTop ?? null
+      }
+      expandedKeyRef.current = key
+      setExpandedGroupKey(key)
+    },
+    [closeExpanded],
+  )
+
+  /**
+   * Раскрытые человеком сводки скрытых шагов прошлых ходов (компактная
+   * плотность). Состояние **runtime** (не персистится), ключ — `MessageGroup.key`.
+   * Стабильная ссылка (`useCallback`) — иначе слетит `React.memo(ChatMessage)`.
+   */
+  const [revealedServiceGroups, setRevealedServiceGroups] = useState<Set<string>>(() => new Set())
+
+  const toggleServiceExpanded = useCallback((key: string) => {
+    setRevealedServiceGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const chatDensity = useUIStore((s) => s.chatDensity)
+  const chatViewMode = useUIStore((s) => s.chatViewMode)
+
   // Кнопка «Вниз»: чуть правее правой границы зоны чата; если места справа нет — внутрь зоны.
   useEffect(() => {
     const container = containerRef.current
@@ -241,6 +327,105 @@ export function MessageList({
   const visibleMessages = useMemo(() => messages.filter(isVisibleMessage), [messages])
   /** Группы-ходы (ADR-118 §1) — единица рендера и виртуализации. */
   const groups = useMemo(() => groupMessagesByTurn(visibleMessages), [visibleMessages])
+
+  /**
+   * Развёрнутая группа. Если её больше нет в ленте (новый ход, очистка) —
+   * `null`: рендерится обычная лента, а состояние сбрасывает эффект ниже.
+   */
+  const expandedGroup = useMemo(
+    () => (expandedGroupKey ? (groups.find((group) => group.key === expandedGroupKey) ?? null) : null),
+    [groups, expandedGroupKey],
+  )
+
+  // Группа исчезла из ленты — сбрасываем разворот (иначе панель «залипла» бы
+  // на несуществующем ходе и лента не вернулась бы).
+  useEffect(() => {
+    if (expandedKeyRef.current === null) return
+    if (groups.some((group) => group.key === expandedKeyRef.current)) return
+    expandedKeyRef.current = null
+    setExpandedGroupKey(null)
+  }, [groups])
+
+  // Сегмент текущей панели — чтобы вернуть фокус на его кнопку разворота.
+  useEffect(() => {
+    if (expandedGroup) focusReturnIdRef.current = expandedGroup.messages[0]?.id ?? null
+  }, [expandedGroup])
+
+  /**
+   * Возврат из панели: лента отрисована заново (новый DOM) — восстанавливаем
+   * прокрутку и фокус на кнопке разворота того же ответа.
+   */
+  const prevExpandedKeyRef = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    const wasOpen = prevExpandedKeyRef.current !== null
+    prevExpandedKeyRef.current = expandedGroupKey
+    if (!wasOpen || expandedGroupKey !== null) return
+
+    const top = savedScrollTopRef.current
+    savedScrollTopRef.current = null
+    if (top != null) {
+      if (scrollRef.current) scrollRef.current.scrollTop = top
+      // Виртуализатор мог ещё не перемерить элементы — доводим позицию кадром позже.
+      requestAnimationFrame(() => {
+        if (scrollRef.current && Math.abs(scrollRef.current.scrollTop - top) > 1) {
+          scrollRef.current.scrollTop = top
+        }
+      })
+    }
+
+    const messageId = focusReturnIdRef.current
+    focusReturnIdRef.current = null
+    if (!messageId) return
+    const button = containerRef.current?.querySelector<HTMLElement>(
+      `[data-message-id="${messageId}"] [data-testid="message-expand"]`,
+    )
+    button?.focus()
+  }, [expandedGroupKey])
+
+  // `Esc` закрывает панель — только пока она открыта и только если фокус не в
+  // поле ввода (там `Esc` свой: снять ввод/автодополнение).
+  useEffect(() => {
+    if (!expandedGroup) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      const target = event.target as HTMLElement | null
+      if (target && (target.isContentEditable || EDITABLE_TAGS.has(target.tagName))) return
+      event.preventDefault()
+      closeExpanded()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [expandedGroup, closeExpanded])
+
+  /**
+   * Счётчики «скрытых» шагов по `turn_id` (не по группе: фоновое уведомление
+   * делит ход на две группы). Источник — части сообщения (`tool_use`,
+   * `reasoning`); фоллбек — DTO-поля `tool_calls`/`reasoning_blocks` (старые
+   * сообщения без частей).
+   */
+  const serviceCountsByTurn = useMemo(() => {
+    const map = new Map<string, ServiceCounts>()
+    for (const msg of visibleMessages) {
+      if (!msg.turn_id) continue
+      const parts = Array.isArray(msg.parts) ? msg.parts : []
+      let tools = 0
+      let reasoning = 0
+      for (const part of parts) {
+        if (part?.type === 'tool_use') tools += 1
+        else if (part?.type === 'reasoning') reasoning += 1
+      }
+      if (tools === 0) tools = msg.tool_calls?.length ?? 0
+      if (reasoning === 0) {
+        reasoning = msg.reasoning_blocks?.length ?? (msg.reasoning ? 1 : 0)
+      }
+      if (tools === 0 && reasoning === 0) continue
+      const acc = map.get(msg.turn_id) ?? { tools: 0, reasoning: 0 }
+      acc.tools += tools
+      acc.reasoning += reasoning
+      map.set(msg.turn_id, acc)
+    }
+    return map
+  }, [visibleMessages])
 
   /**
    * Последний assistant-сегмент каждого хода: `turnId → id` последнего
@@ -365,6 +550,17 @@ export function MessageList({
     overscan: OVERSCAN,
   })
 
+  /**
+   * Смена плотности или вида меняет высоту каждой группы (свёрнутые ходы
+   * заметно ниже, «лента» снимает пузырь и отступы): без сброса кэша
+   * `estimateSize` виртуализатор считал бы позиции по старым оценкам и лента
+   * «прыгала». Авто-скролл вниз — в эффекте ниже (зависимости `chatDensity` и
+   * `chatViewMode`).
+   */
+  useEffect(() => {
+    virtualizer.measure()
+  }, [chatDensity, chatViewMode, virtualizer])
+
   const scrollToBottom = useCallback((smooth = true) => {
     if (!scrollRef.current) return
     scrollRef.current.scrollTo({
@@ -402,7 +598,7 @@ export function MessageList({
         scrollToBottom(false)
       })
     }
-  }, [messages, livePartsSize, turn?.status, autoScroll, scrollToBottom])
+  }, [messages, livePartsSize, turn?.status, autoScroll, scrollToBottom, chatDensity, chatViewMode])
 
   const shouldVirtualize = visibleMessages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
@@ -421,10 +617,12 @@ export function MessageList({
     group: MessageGroup,
     msg: MessageData,
     first: boolean,
-    opts?: { bare?: boolean; last?: boolean },
+    opts?: { bare?: boolean; last?: boolean; expanded?: boolean },
   ) => {
     const bare = opts?.bare === true
     const last = opts?.last === true
+    // Развёрнутый ответ (панель `message-expanded-pane`): пузырь на всю ширину.
+    const expanded = opts?.expanded === true
     // Одна шапка на визуальный блок: у первого сегмента группы. Точки «идёт» —
     // в шапке **последнего блока активного хода**, независимо от того, какой
     // сегмент сейчас стримится (шаг может быть уже `completed` — идут инструменты).
@@ -451,6 +649,29 @@ export function MessageList({
     // (прежнее поведение) и у последнего в едином блоке (там ряд действий).
     const pinTurn = pinTurnHandlers?.get(group.key)
     const pinHandler = (first || (bare && last)) && pinTurn ? pinTurn : onPin
+    /**
+     * Компактная плотность: прошлый (завершённый) ход сворачивается в одну
+     * тихую строку-сводку. Текущий ход и ход с ошибкой всегда раскрыты.
+     * Содержимое скрывается у **каждого** сегмента группы, сводка — у её
+     * последнего assistant-сегмента (там же ряд действий) — строка стоит ровно
+     * перед `MessageActions`.
+     */
+    const isPastTurn = group.turnId != null && group.turnId !== turn?.turnId
+    const groupHasError = group.messages.some((m) => m.status === 'error')
+    const groupHasAssistant = group.messages.some((m) => m.role === 'assistant')
+    const serviceActive =
+      chatDensity === 'compact' && isPastTurn && !groupHasError && groupHasAssistant
+    const serviceRevealed = revealedServiceGroups.has(group.key)
+    const serviceCollapsed = serviceActive && !serviceRevealed
+    const serviceCounts = group.turnId ? serviceCountsByTurn.get(group.turnId) : undefined
+    let summaryOwnerKey: string | undefined
+    for (const m of group.messages) {
+      if (m.role === 'assistant') summaryOwnerKey = messageKeyOf(m)
+    }
+    // Сводка — у последнего assistant-сегмента **своего** блока; счётчики при
+    // этом общие на ход (`turn_id`), поэтому у хода, разорванного уведомлением,
+    // обе группы показывают суммарные числа.
+    const ownsSummary = serviceActive && summaryOwnerKey === messageKeyOf(msg)
     return (
       <ChatMessage
         key={msg.id ?? `${msg.role}-${msg.index}-${msg.created_at}`}
@@ -493,17 +714,39 @@ export function MessageList({
          * `undefined` — цель совпадает с самим сообщением (одиночные сообщения).
          */
         debugTarget={group.turnId ? debugTargetByTurn.get(group.turnId) : undefined}
+        // Разворот ответа агента: ключ — группа (ход), ссылки стабильны между
+        // рендерами (см. `toggleGroupExpanded`). `expanded` — только в панели.
+        expandKey={group.key}
+        expanded={expanded}
+        onToggleExpand={toggleGroupExpanded}
+        // Компактная плотность ленты: у прошлых ходов скрываем размышления и
+        // карточки инструментов, оставляя тихую строку-сводку (раскрывается
+        // кликом). Все значения — примитивы, колбэк стабилен (memo).
+        serviceCollapsed={serviceCollapsed}
+        serviceToolCount={ownsSummary ? (serviceCounts?.tools ?? 0) : 0}
+        serviceReasoningCount={ownsSummary ? (serviceCounts?.reasoning ?? 0) : 0}
+        serviceKey={ownsSummary ? group.key : undefined}
+        serviceExpanded={serviceRevealed}
+        onToggleService={serviceActive ? toggleServiceExpanded : undefined}
       />
     )
   }
 
-  /** Одна группа-ход: либо контейнер-пузырь с `bare`-сегментами, либо как раньше. */
-  const renderGroup = (group: MessageGroup) => {
+  /**
+   * Одна группа-ход: либо контейнер-пузырь с `bare`-сегментами, либо как раньше.
+   *
+   * `pane` — рендер внутри развёрнутой панели: та же разметка сегментов, но без
+   * обёртки виртуализатора (`data-index`/`measureElement`), ответ развёрнут, а
+   * контейнеры растянуты по высоте (цепочка flex, CSS `message-expanded-pane`).
+   */
+  const renderGroup = (group: MessageGroup, opts?: { pane?: boolean }) => {
+    const pane = opts?.pane === true
     const turnBlock = isTurnBlock(group)
     const segments = group.messages.map((msg, i) => {
       const segment = renderSegment(group, msg, i === 0, {
         bare: turnBlock,
         last: i === group.messages.length - 1,
+        expanded: pane,
       })
       if (!turnBlock || i === 0) return segment
       // Между шагами — тонкий разделитель, без отдельных карточек. Это
@@ -520,59 +763,102 @@ export function MessageList({
       )
     })
     if (!turnBlock) return segments
-    return (
-      // Внешний прозрачный отступ блока хода (12px сверху и снизу) — вертикальный
-      // ритм ленты: между разными сообщениями 24px. Именно **padding**, а не
-      // margin/gap: при виртуализации измеряется высота элемента, и отступ
-      // обязан входить в неё, иначе скролл прыгает.
-      <div key={group.key} className="py-3">
-        <div data-testid="turn-block" className={TURN_BLOCK_CLASS}>
-          {segments}
+    const block = (
+      <div
+        data-testid="turn-block"
+        className={cn(
+          pane ? TURN_BLOCK_CLASS_EXPANDED : TURN_BLOCK_CLASS,
+          // В панели блок хода растёт по контенту и не сжимается (скролл — у панели).
+          pane && 'min-h-0 grow shrink-0',
+        )}
+      >
+        {segments}
+      </div>
+    )
+    if (pane) {
+      // Обёртка группы в панели — звено цепочки растяжения по высоте:
+      // панель → `.chat-column` → обёртка → блок хода (см. `styles/index.css`).
+      return (
+        <div key={group.key} className="flex min-h-0 grow shrink-0 flex-col">
+          {block}
         </div>
+      )
+    }
+    // Внешний прозрачный отступ блока хода (12px сверху и снизу) — вертикальный
+    // ритм ленты: между разными сообщениями 24px. Именно **padding**, а не
+    // margin/gap: при виртуализации измеряется высота элемента, и отступ
+    // обязан входить в неё, иначе скролл прыгает.
+    return (
+      <div key={group.key} className="py-3">
+        {block}
       </div>
     )
   }
 
   return (
     <div ref={containerRef} className="relative flex-1 overflow-hidden">
-      <ScrollableOverlay
-        ref={scrollRef as unknown as React.Ref<HTMLElement>}
-        outerClassName="h-full"
-        className="overflow-y-auto overflow-x-hidden chat-scroll-container"
-        onScroll={handleScroll}
-      >
-        <div ref={chatZoneRef} className="chat-column mx-auto w-full">
+      {expandedGroup ? (
+        // Развёрнутый ответ: лента на это время **не рендерится** — панель её
+        // заменяет (одна копия сообщений в DOM), прокрутка своя внутри панели.
+        <div
+          className="message-expanded-pane absolute inset-0 z-20 flex flex-col bg-background"
+          data-testid="message-expanded"
+        >
           <div
-            className="relative w-full"
-            style={{
-              height: shouldVirtualize ? `${virtualizer.getTotalSize()}px` : 'auto',
-            }}
+            className="chat-column mx-auto flex min-h-full w-full flex-1 flex-col overflow-y-auto py-3"
+            data-view-mode={chatViewMode}
+            data-density={chatDensity}
           >
-            {shouldVirtualize ? (
-              <div
-                className="absolute top-0 left-0 w-full"
-                style={{
-                  transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
-                }}
-              >
-                {virtualItems.map((vi) => {
-                  const group = groups[vi.index]
-                  if (!group) return null
-                  return (
-                    <div key={group.key} data-index={vi.index} ref={virtualizer.measureElement}>
-                      {renderGroup(group)}
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              groups.map((group) => <div key={group.key}>{renderGroup(group)}</div>)
-            )}
+            {renderGroup(expandedGroup, { pane: true })}
           </div>
         </div>
-      </ScrollableOverlay>
+      ) : (
+        <ScrollableOverlay
+          ref={scrollRef as unknown as React.Ref<HTMLElement>}
+          outerClassName="h-full"
+          className="overflow-y-auto overflow-x-hidden chat-scroll-container"
+          onScroll={handleScroll}
+        >
+          <div
+            ref={chatZoneRef}
+            className="chat-column mx-auto w-full"
+            data-view-mode={chatViewMode}
+            data-density={chatDensity}
+          >
+            <div
+              className="relative w-full"
+              style={{
+                height: shouldVirtualize ? `${virtualizer.getTotalSize()}px` : 'auto',
+              }}
+            >
+              {shouldVirtualize ? (
+                <div
+                  className="absolute top-0 left-0 w-full"
+                  style={{
+                    transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
+                  }}
+                >
+                  {virtualItems.map((vi) => {
+                    const group = groups[vi.index]
+                    if (!group) return null
+                    return (
+                      <div key={group.key} data-index={vi.index} ref={virtualizer.measureElement}>
+                        {renderGroup(group)}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                groups.map((group) => <div key={group.key}>{renderGroup(group)}</div>)
+              )}
+            </div>
+          </div>
+        </ScrollableOverlay>
+      )}
 
-      <ScrollToBottomButton visible={showScrollBtn} onClick={() => scrollToBottom()} left={btnLeft ?? undefined} />
+      {!expandedGroup && (
+        <ScrollToBottomButton visible={showScrollBtn} onClick={() => scrollToBottom()} left={btnLeft ?? undefined} />
+      )}
     </div>
   )
 }

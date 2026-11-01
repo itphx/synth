@@ -186,4 +186,36 @@ describe('ChatMessage: React.memo через MessageList', () => {
     expect(second.reads()).toBeGreaterThan(0)
     expect(first.reads()).toBe(firstReads)
   })
+
+  /**
+   * Разворот ответа (`expandKey`/`expanded`/`onToggleExpand`) не должен
+   * «ломать» memo: клик по кнопке одного сообщения меняет состояние группы
+   * в `MessageList`, но соседнее сообщение перерисовываться не обязано.
+   */
+  it('разворот одного сообщения не перерисовывает соседнее', async () => {
+    const first = withContentProbe(
+      baseMessage({ id: 'a1', index: 1, ord: 1, role: 'assistant', turn_id: 't1', content: 'Первый ответ' }),
+    )
+    const second = withContentProbe(
+      baseMessage({ id: 'a2', index: 2, ord: 2, role: 'assistant', turn_id: 't2', content: 'Второй ответ' }),
+    )
+    const container = await renderHarness([first.message, second.message])
+
+    const buttons = Array.from(
+      container.querySelectorAll('[data-testid="message-expand"]'),
+    ) as HTMLButtonElement[]
+    expect(buttons).toHaveLength(2)
+
+    const firstReads = first.reads()
+    const secondReads = second.reads()
+
+    await act(async () => {
+      buttons[1]!.click()
+    })
+
+    // Второе сообщение действительно перерисовалось (его `expanded` изменился)…
+    expect(second.reads()).toBeGreaterThan(secondReads)
+    // …а первое — нет: `expandKey`/`onToggleExpand` остались теми же ссылками.
+    expect(first.reads()).toBe(firstReads)
+  })
 })

@@ -86,6 +86,7 @@ html.huawei.dark {
   --chat-pad-left: 0px;
   --chat-pad-right: 0px;
   --ui-scale: 1;
+  --chat-scale: 1;
 }
 
 html {
@@ -144,13 +145,29 @@ html.device-tablet {
   padding-right: var(--synth-safe-area-right);
 }
 
-/* Колонка сообщений чата: десктоп — прежние max-w-[50vw]; мобильные зоны — шире */
+/* Колонка сообщений чата: десктоп — прежние max-w-[50vw]; мобильные зоны — шире.
+   Здесь же — масштаб области чата: множитель поверх глобального --ui-scale.
+   Текст — через --text-*, отступы — через --padding-scale (утилиты Tailwind
+   компилируются в calc(Xrem * var(--padding-scale,1))). Композер, панели,
+   дерево и настройки живут вне .chat-column — их масштаб не меняется. */
 .chat-column {
   width: 100%;
   max-width: var(--chat-column-width, 50vw);
   margin-inline: auto;
   padding-left: var(--chat-pad-left, 0px);
   padding-right: var(--chat-pad-right, 0px);
+  --padding-scale: var(--chat-scale, 1);
+  --text-xs: calc(0.75rem * var(--chat-scale, 1));
+  --text-sm: calc(0.875rem * var(--chat-scale, 1));
+  --text-base: calc(1rem * var(--chat-scale, 1));
+  --text-lg: calc(1.125rem * var(--chat-scale, 1));
+  --text-2xl: calc(1.5rem * var(--chat-scale, 1));
+  --text-markdown: calc(0.9375rem * var(--chat-scale, 1));
+  --text-code: calc(0.8125rem * var(--chat-scale, 1));
+  --text-ui-header: calc(0.9375rem * var(--chat-scale, 1));
+  --text-ui-label: calc(0.875rem * var(--chat-scale, 1));
+  --text-meta: calc(0.875rem * var(--chat-scale, 1));
+  --text-micro: calc(0.875rem * var(--chat-scale, 1));
 }
 
 html.device-phone {
@@ -163,6 +180,100 @@ html.device-tablet {
   --chat-column-width: min(100%, 48rem);
   --chat-pad-left: 1rem;
   --chat-pad-right: 1rem;
+}
+
+/* «Лента»: ответ агента — плоская проза, пузырь остаётся только у пользователя.
+   Вид задаётся атрибутом `data-view-mode` на колонке чата, а не классами
+   компонентов: обычные правила **вне** `@layer` приоритетнее любых утилит
+   Tailwind, а `bg-card`/`rounded-lg`/`px-4` в разметке остаются как есть — их
+   проверяют тесты структуры хода. `border-width` не убираем (только цвет):
+   исчезнувшая рамка сдвигала бы раскладку на 1px. */
+.chat-column[data-view-mode='feed'] [data-role='assistant'] [data-bubble] {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  padding: 0;
+  max-width: 100%;
+}
+
+.chat-column[data-view-mode='feed'] [data-testid='turn-block'] {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  padding: 0;
+  max-width: 100%;
+}
+
+/* Плоские служебные строки: без фона/рамки/радиуса, без боковых отступов. */
+.chat-column[data-view-mode='feed'] [data-card='service'] {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  margin-bottom: 0.25rem;
+}
+
+.chat-column[data-view-mode='feed'] [data-card='service'] > :first-child {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Развёрнутая панель ответа (`MessageList`, `data-testid="message-expanded"`).
+   Панель заменяет ленту и занимает всю область чата; внутри неё `.chat-column`
+   растянут по высоте, а цепочка flex доводит растяжение до пузыря/блока хода:
+   панель → `.chat-column` → сегмент группы → `[data-bubble]`. Правила здесь, а
+   не утилитами в JSX, потому что последние звенья — разметка `ChatMessage`,
+   которую панель не переписывает (один рендер на ленту и на панель).
+   Вид `feed`/`compact` работает как обычно: у панели те же `data-view-mode`/
+   `data-density` на `.chat-column`, правила выше применяются и внутри. */
+.message-expanded-pane .chat-column > * {
+  /* Растёт по остатку, но **не сжимается**: длинный ответ растит содержимое,
+     а не обрезается высотой панели (скроллится `.chat-column`). */
+  flex: 1 0 auto;
+  min-height: 0;
+}
+
+.message-expanded-pane .chat-column [data-bubble] {
+  display: flex;
+  flex-direction: column;
+  /* Пузырь — остаток высоты панели после шапки/ряда действий и на всю ширину. */
+  flex: 1 0 auto;
+  align-self: stretch;
+  min-height: 0;
+}
+
+/* У многошагового хода контейнер сегмента (`[data-message-id]`) — **не** прямой
+   ребёнок `.chat-column` (он внутри `turn-block`), поэтому правило `> *` выше
+   его не достаёт: контейнер оставался по контенту (`flex: 0 1 auto`), у пузыря
+   не появлялось свободного места, и `margin-top: auto` у ряда действий не мог
+   прижать кнопки вниз. Растягиваем только **последний** сегмент блока (у него
+   же ряд действий): остальные остаются по контенту, иначе свободное место
+   распределялось бы между шагами и кнопки «плавали» посередине. */
+.message-expanded-pane .chat-column [data-testid='turn-block'] > [data-message-id]:last-child {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+  min-height: 0;
+}
+
+/* Нижний отступ колонки панели убираем: у последнего звена свой отступ
+   (пузырь `py-3` + `-mb-1.5` у ряда действий), а лишние 12px отодвигали
+   кнопки от нижнего края. Верхний отступ (`py-3`) остаётся. */
+.message-expanded-pane .chat-column {
+  padding-bottom: 0;
+}
+
+/* Содержимое пузыря не сжимается под высоту панели: длинный ответ растит
+   пузырь, а прокручивается панель (`.chat-column`), а не страница. */
+.message-expanded-pane .chat-column [data-bubble] > * {
+  flex-shrink: 0;
+}
+
+/* Ряд действий — к нижнему краю панели: пузырь растянут по высоте,
+   поэтому `margin-top: auto` прижимает кнопки вниз (в обычной ленте
+   остаётся `mt-2` из утилит; правило вне `@layer` приоритетнее утилиты).
+   У блока хода ряд действий один — у последнего assistant-сегмента. */
+.message-expanded-pane .message-actions {
+  margin-top: auto;
 }
 
 /* Композер чата: десктоп — прежние w-4/5; мобильные зоны — почти вся ширина */
@@ -457,6 +568,42 @@ html.device-tablet .message-actions {
   margin-bottom: -0.5rem;
 }
 
+/* 2.2 Кнопка «Развернуть» в шапке ответа агента: визуально компактная
+   (иконка 14px + p-1 = ~22px), зона клика на coarse-pointer расширена
+   псевдоэлементом до ~42px по обеим осям. Соседи справа (время/точки)
+   не интерактивны — перекрытия кликабельных элементов нет. */
+html.pointer-coarse .message-expand-btn::after {
+  content: '';
+  position: absolute;
+  inset: -0.625rem; /* ~40px по обеим осям при иконке 14px + p-1 */
+}
+
+/* 2.2 Строка-сводка скрытых шагов прошлого хода (компактная плотность ленты):
+   визуально тихая, на coarse-pointer — тач-таргет ≥40px. Цвета — только
+   переменные темы. */
+.service-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.service-summary:hover {
+  color: var(--foreground);
+  background: var(--interactive-hover);
+}
+
+html.pointer-coarse .service-summary {
+  min-height: 2.5rem;
+}
+
 /* 2.2 Строки дерева — тапобласть ≥40px, кнопки действий ≥36px */
 html.pointer-coarse [data-tree-node] {
   min-height: 1.75rem;
@@ -693,34 +840,98 @@ html.device-tablet .notifications-popup {
   user-select: none;
 }
 
-.markdown-content .md-code-copy {
+.markdown-content .md-code-actions {
+  display: inline-flex;
   flex: 0 0 auto;
-  padding: 0.125rem 0.45rem;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Обе кнопки шапки — иконки (копирование и скачивание).
+   Шапка блока кода приходит готовой HTML-строкой из marked и вставляется через
+   `dangerouslySetInnerHTML`, поэтому React-компонент `<Icon>` сюда не поставить,
+   а inline-SVG потребовал бы расширения allowlist DOM-санитайзера. Осознанное
+   исключение из правила «иконки только через `<Icon>`»: иконка — CSS-маска с
+   data-URI SVG, цвет берётся из `currentColor` (`background-color` + `mask-image`),
+   поэтому тема и состояния работают без правок разметки. */
+.markdown-content .md-code-copy,
+.markdown-content .md-code-download {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm, 0.25rem);
   background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: var(--text-xs, 0.75rem);
-  line-height: 1.4;
+  color: var(--muted-foreground, inherit);
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.markdown-content .md-code-copy:hover {
+.markdown-content .md-code-copy::before,
+.markdown-content .md-code-download::before {
+  content: '';
+  width: 0.875rem;
+  height: 0.875rem;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+/* Копирование — «две страницы». */
+.markdown-content .md-code-copy::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Crect%20x='9'%20y='9'%20width='11'%20height='11'%20rx='2'/%3E%3Cpath%20d='M5%2015V5a2%202%200%200%201%202-2h10'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Crect%20x='9'%20y='9'%20width='11'%20height='11'%20rx='2'/%3E%3Cpath%20d='M5%2015V5a2%202%200%200%201%202-2h10'/%3E%3C/svg%3E");
+}
+
+/* Скачивание — «стрелка вниз в лоток». */
+.markdown-content .md-code-download::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M12%203v12'/%3E%3Cpath%20d='m8%2011%204%204%204-4'/%3E%3Cpath%20d='M4%2017v2a2%202%200%200%200%202%202h12a2%202%200%200%200%202-2v-2'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M12%203v12'/%3E%3Cpath%20d='m8%2011%204%204%204-4'/%3E%3Cpath%20d='M4%2017v2a2%202%200%200%200%202%202h12a2%202%200%200%200%202-2v-2'/%3E%3C/svg%3E");
+}
+
+.markdown-content .md-code-copy:hover,
+.markdown-content .md-code-download:hover {
   background: var(--interactive-hover, var(--surface-raised, var(--card)));
   color: var(--foreground);
 }
 
-.markdown-content .md-code-copy[data-copied='true'] {
+.markdown-content .md-code-copy[data-copied='true'],
+.markdown-content .md-code-download[data-downloaded='true'] {
   color: var(--status-success, var(--primary));
+}
+
+/* Состояние «готово» — галочка вместо иконки действия. */
+.markdown-content .md-code-copy[data-copied='true']::before,
+.markdown-content .md-code-download[data-downloaded='true']::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='m5%2013%204%204L19%207'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='m5%2013%204%204L19%207'/%3E%3C/svg%3E");
+}
+
+/* Тач-таргет: на десктопе кнопки компактные (24px), на coarse-указателе — 28px. */
+html.pointer-coarse .markdown-content .md-code-copy,
+html.pointer-coarse .markdown-content .md-code-download {
+  width: 1.75rem;
+  height: 1.75rem;
 }
 
 .markdown-content .md-code-pre {
   max-width: 100%;
-  margin: 0;
-  /* Поля симметричные: справа не меньше слева, чтобы при горизонтальном
-     скролле текст не прилипал к рамке блока. */
+  /* `pre` — скролл-контейнер: его внутренний `padding-right` прокручивается
+     вместе с кодом, поэтому при `scrollLeft = 0` обрезанный текст упирался
+     в правую рамку карточки. Внешний отступ справа оставляет видимый зазор
+     между обрезкой и границей (внутри прокрутки он не участвует, поэтому
+     виден всегда, а не только при прокрутке до конца). */
+  margin: 0 0.5rem 0 0;
+  /* Поля симметричные: справа не меньше слева — при прокрутке до конца
+     текст не прилипает к правому краю области прокрутки. */
   padding: 0.5rem 0.9rem 0.5rem 0.75rem;
   overflow-x: auto;
   border: 0;

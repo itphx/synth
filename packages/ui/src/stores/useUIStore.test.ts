@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // persist (zustand) захватывает localStorage при импорте стора, а Node/vitest без
 // --localstorage-file его не даёт — ставим заглушку до импорта useUIStore.
@@ -25,6 +25,7 @@ const storage = vi.hoisted(() => {
 
 import { useUIStore, OTHER_PROJECTS_COLLAPSE_KEY, type CenterTab } from './useUIStore'
 import { useFilesStore } from './filesStore'
+import { CHAT_SCALE_DEFAULT, CHAT_SCALE_STORAGE_KEY, readChatScale } from '@/lib/uiScale'
 
 const tab = (id: string, title = id): CenterTab => ({
   id,
@@ -315,5 +316,149 @@ describe('useUIStore.scheduleDraft — deep-link в «Шедулер»', () => {
   it('черновик не пишется в localStorage', () => {
     useUIStore.getState().setScheduleDraft(draft)
     expect(storage.getItem('synth-ui-settings') ?? '').not.toContain('scheduleDraft')
+  })
+})
+
+/**
+ * Плотность ленты чата (первая ось режимов отображения): пользовательская
+ * настройка, персистится; неизвестное значение при восстановлении — `normal`.
+ */
+describe('useUIStore.chatDensity', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ chatDensity: 'normal' })
+  })
+
+  async function rehydrateWith(chatDensity: unknown): Promise<void> {
+    storage.setItem('synth-ui-settings', JSON.stringify({ state: { chatDensity }, version: 0 }))
+    await useUIStore.persist.rehydrate()
+  }
+
+  it('попадает в partialize (персистится)', () => {
+    useUIStore.setState({ chatDensity: 'compact' })
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.chatDensity).toBe('compact')
+  })
+
+  it('восстанавливает сохранённое значение compact', async () => {
+    await rehydrateWith('compact')
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+  })
+
+  it('неизвестное значение сбрасывается в normal', async () => {
+    await rehydrateWith('ultra')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+
+  it('отсутствующее значение — normal', async () => {
+    await rehydrateWith(undefined)
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+
+  it('normal восстанавливается как есть', async () => {
+    await rehydrateWith('normal')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+})
+
+/**
+ * Вид ленты чата (вторая ось режимов отображения): пользовательская настройка,
+ * персистится; `feed` восстанавливается только по явному значению, иначе
+ * подробный вид.
+ */
+describe('useUIStore.chatViewMode', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ chatViewMode: 'detailed' })
+  })
+
+  async function rehydrateWith(chatViewMode: unknown): Promise<void> {
+    storage.setItem('synth-ui-settings', JSON.stringify({ state: { chatViewMode }, version: 0 }))
+    await useUIStore.persist.rehydrate()
+  }
+
+  it('попадает в partialize (персистится)', () => {
+    useUIStore.setState({ chatViewMode: 'feed' })
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.chatViewMode).toBe('feed')
+  })
+
+  it('восстанавливает сохранённое значение feed', async () => {
+    await rehydrateWith('feed')
+    expect(useUIStore.getState().chatViewMode).toBe('feed')
+  })
+
+  it('неизвестное значение сбрасывается в detailed', async () => {
+    await rehydrateWith('bubbles')
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+
+  it('отсутствующее значение — detailed', async () => {
+    await rehydrateWith(undefined)
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+
+  it('detailed восстанавливается как есть', async () => {
+    await rehydrateWith('detailed')
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+})
+
+describe('useUIStore.chatScale', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ chatScale: CHAT_SCALE_DEFAULT })
+    document.documentElement.style.removeProperty('--chat-scale')
+    document.documentElement.style.removeProperty('--ui-scale')
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    document.documentElement.style.removeProperty('--chat-scale')
+    document.documentElement.style.removeProperty('--ui-scale')
+  })
+
+  it('инициализируется сохранённым значением при создании стора', async () => {
+    storage.setItem(CHAT_SCALE_STORAGE_KEY, '1.25')
+    expect(readChatScale()).toBe(1.25)
+
+    vi.resetModules()
+    const fresh = await import('./useUIStore')
+
+    expect(fresh.useUIStore.getState().chatScale).toBe(1.25)
+  })
+
+  it('сеттер применяет и персистит значение (debounce)', () => {
+    vi.useFakeTimers()
+
+    useUIStore.getState().setChatScale(1.2)
+
+    expect(useUIStore.getState().chatScale).toBe(1.2)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.2')
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBeNull()
+
+    vi.advanceTimersByTime(300)
+    expect(storage.getItem(CHAT_SCALE_STORAGE_KEY)).toBe('1.2')
+  })
+
+  it('не входит в partialize (живёт в localStorage, как uiScale)', () => {
+    const partialize = useUIStore.persist.getOptions().partialize
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.chatScale).toBeUndefined()
+    expect(persisted.uiScale).toBeUndefined()
+  })
+
+  it('независим от общего масштаба UI', () => {
+    useUIStore.getState().setChatScale(1.3)
+    expect(useUIStore.getState().uiScale).not.toBe(1.3)
+    expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('')
+
+    useUIStore.getState().setUiScale(0.9)
+    expect(useUIStore.getState().chatScale).toBe(1.3)
+    expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.3')
   })
 })

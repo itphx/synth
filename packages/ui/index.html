@@ -65,6 +65,13 @@
             storedScale = (mqMobile || isPwa) ? 0.85 : 1;
           }
           root.style.setProperty('--ui-scale', String(Math.min(1.2, Math.max(0.5, storedScale))));
+          // Масштаб области чата — независимый множитель поверх --ui-scale.
+          // Здесь достаточно общего диапазона: мобильный минимум (0.85) применит JS.
+          var storedChatScale = parseFloat(localStorage.getItem('synth-chat-scale'));
+          if (!isFinite(storedChatScale)) {
+            storedChatScale = 1;
+          }
+          root.style.setProperty('--chat-scale', String(Math.min(1.5, Math.max(0.75, storedChatScale))));
           // Huawei Browser: собственный ночной режим затемняет светлую тему и
           // игнорирует color-scheme. Помечаем страницу и объявляем её dark,
           // чтобы браузер считал её уже тёмной и не применял затемнение.

@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import { Fragment, memo } from 'react'
+import { Fragment, memo, useId } from 'react'
 import { MarkdownContent } from './MarkdownContent'
 import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
@@ -96,7 +96,7 @@ interface ChatMessageProps {
   // Колбэки принимают сообщение/индекс: MessageList передаёт стабильные ссылки,
   // а ChatMessage связывает их с конкретным сообщением внутри (см. useCallback ниже).
   // Это нужно, чтобы React.memo(ChatMessage) сравнивал пропсы по ссылке.
-  onCopy: (msg: MessageData) => void
+  onCopy: (msg: MessageData, plain?: boolean) => void
   onToggle: (msg: MessageData) => void
   onPin: (msg: MessageData) => void
   onDelete: (msg: MessageData) => void
@@ -158,6 +158,32 @@ interface ChatMessageProps {
    * группе (`showHeader === false`), не рендерится: шапка блока уже несёт точки.
    */
   showLivePlaceholder?: boolean
+  /**
+   * Ключ группы-ответа для кнопки «Развернуть» в шапке. У многошагового хода
+   * пузырь рисует контейнер группы (`MessageList`), у одношагового — сам
+   * `ChatMessage`; ключ общий — `MessageGroup.key`.
+   */
+  expandKey?: string
+  /** Развёрнут ли ответ агента на всю ширину области чата. */
+  expanded?: boolean
+  /** Тумблер разворота (стабильная ссылка из `MessageList`). */
+  onToggleExpand?: (key: string) => void
+  /**
+   * Компактная плотность ленты (прошлый ход): не рисовать размышления,
+   * промежуточные тексты и карточки инструментов. Карточки саб-агентов
+   * (`item.type === 'subagent'`) остаются — это результат прогона.
+   */
+  serviceCollapsed?: boolean
+  /** Вызовов инструментов в ходе — для строки-сводки скрытых шагов. */
+  serviceToolCount?: number
+  /** Блоков размышлений в ходе — для строки-сводки скрытых шагов. */
+  serviceReasoningCount?: number
+  /** Ключ группы-хода (сводка рендерится один раз на группу). */
+  serviceKey?: string
+  /** Сводка скрытых шагов раскрыта. */
+  serviceExpanded?: boolean
+  /** Тумблер сводки (стабильная ссылка из `MessageList`). */
+  onToggleService?: (key: string) => void
 }
 
 export interface PendingStreamStatus {
@@ -191,6 +217,15 @@ function ChatMessageInner({
   onCancelRetry,
   showLivePlaceholder = false,
   debugTarget,
+  expandKey,
+  expanded = false,
+  onToggleExpand,
+  serviceCollapsed = false,
+  serviceToolCount = 0,
+  serviceReasoningCount = 0,
+  serviceKey,
+  serviceExpanded = false,
+  onToggleService,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -249,11 +284,17 @@ function ChatMessageInner({
 
   // ADR-118 §1: `bare` — сегмент внутри общего блока хода: пузырь рисует
   // контейнер группы, здесь только типографика (и состояния disabled/pinned).
+  //
+  // Развёрнутый ответ агента занимает всю ширину области чата: у пузыря —
+  // `max-w-full` вместо `max-w-[85%]`. Именно выбор одного класса, а не
+  // наложение двух: порядок в сгенерированном CSS не гарантирует победу
+  // `max-w-full`. `bare`-сегменты не трогаем — их ширину задаёт контейнер группы.
   const bubbleClass = cn(
     bare
       ? 'w-full min-w-0 text-foreground'
       : cn(
-          'max-w-[85%] rounded-lg px-4 py-3',
+          isAssistant && expanded ? 'max-w-full' : 'max-w-[85%]',
+          'rounded-lg px-4 py-3',
           isUser && 'bg-primary/10 text-foreground rounded-br-sm',
           isAssistant && 'bg-card border border-border/50 text-foreground rounded-bl-sm',
         ),
@@ -275,7 +316,12 @@ function ChatMessageInner({
 
   // Локальные стабильные обработчики: зависят только от ссылки на колбэк и
   // самого сообщения, поэтому пропсы дочерних компонентов не «дрожат» зря.
-  const handleCopy = useCallback(() => onCopy(message), [onCopy, message])
+  // `MessageActions` передаёт вторым аргументом режим копирования (Shift+клик —
+  // без разметки); другие места (`Notice`, `CommandMessage`) его не передают.
+  const handleCopy = useCallback(
+    (_messageId?: string, plain?: boolean) => onCopy(message, plain),
+    [onCopy, message],
+  )
   const handleToggle = useCallback(() => onToggle(message), [onToggle, message])
   const handlePin = useCallback(() => onPin(message), [onPin, message])
   const handleDelete = useCallback(() => onDelete(message), [onDelete, message])
@@ -292,6 +338,36 @@ function ChatMessageInner({
     },
     [onToggleSelect, message.id]
   )
+
+  /**
+   * Тумблер разворота ответа на всю ширину. Пропс прокидывается в шапку
+   * **только для ответа агента**; ссылка стабильна при неизменных
+   * `expandKey`/`onToggleExpand` — `React.memo(ChatMessage)` не слетает.
+   */
+  const handleToggleExpand = useCallback(() => {
+    if (expandKey && onToggleExpand) onToggleExpand(expandKey)
+  }, [expandKey, onToggleExpand])
+
+  /**
+   * Компактная плотность ленты: сводка скрытых шагов хода. Показываем её, когда
+   * есть что скрывать (`serviceKey` передаёт только владелец сводки группы).
+   * Колбэк/идентификатор стабильны — `React.memo(ChatMessage)` не слетает.
+   */
+  const serviceStepCount = serviceToolCount + serviceReasoningCount
+  const hasServiceSummary =
+    !!onToggleService && !!serviceKey && serviceStepCount > 0
+  const serviceContentId = useId()
+  const handleToggleService = useCallback(() => {
+    if (serviceKey) onToggleService?.(serviceKey)
+  }, [serviceKey, onToggleService])
+  const serviceSummaryLabel = useMemo(() => {
+    const chunks: string[] = []
+    if (serviceToolCount > 0) chunks.push(t('chat.compact.tools', { count: serviceToolCount }))
+    if (serviceReasoningCount > 0) {
+      chunks.push(t('chat.compact.reasoning', { count: serviceReasoningCount }))
+    }
+    return chunks.join(' · ')
+  }, [serviceToolCount, serviceReasoningCount, t])
 
   const handleOriginClick = () => {
     const parentSessionId = (message.metadata as Record<string, unknown>)?.source_session_id as string | undefined
@@ -542,6 +618,10 @@ function ChatMessageInner({
         }
 
         return items.map((item, i) => {
+          // Компактная плотность прошлого хода: карточки саб-агентов — это
+          // результат прогона, их оставляем; размышления, промежуточные тексты
+          // и карточки инструментов скрыты строкой-сводкой.
+          if (serviceCollapsed && item.type !== 'subagent') return null
           if (item.type === 'reasoning') {
             return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
           }
@@ -565,11 +645,46 @@ function ChatMessageInner({
       })()
     : null
 
+  /**
+   * Контент частей при наличии сводки оборачиваем в невидимый контейнер
+   * (`display: contents` — раскладка не меняется) ради `aria-controls`.
+   */
+  const partsContentEl =
+    hasServiceSummary && partsContent
+      ? (
+          <div id={serviceContentId} data-service-content="" className="contents">
+            {partsContent}
+          </div>
+        )
+      : partsContent
+
+  /**
+   * Тихая строка-сводка скрытых шагов (компактная плотность): «N инструментов ·
+   * M размышлений». Клик раскрывает/скрывает содержимое хода.
+   */
+  const serviceSummaryEl = hasServiceSummary ? (
+    <button
+      type="button"
+      data-testid="service-summary"
+      aria-expanded={serviceExpanded}
+      aria-controls={serviceContentId}
+      aria-label={serviceExpanded ? t('chat.compact.collapse') : t('chat.compact.expand')}
+      title={serviceExpanded ? t('chat.compact.collapse') : t('chat.compact.expand')}
+      onClick={handleToggleService}
+      className="service-summary"
+    >
+      <Icon name={serviceReasoningCount > 0 ? 'brain' : 'tools'} className="size-3.5" />
+      {serviceExpanded ? t('chat.compact.hide') : serviceSummaryLabel}
+    </button>
+  ) : null
+
   // ADR-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
   // ADR-115: сообщение только из вложений (картинка от ассистента без текста) — тоже рендерим.
   // Новая UX-модель индикатора: пустой живой сегмент (новый шаг до первого
   // токена) рисуется **только заголовком с точками** — без тела.
+  // Компакт: сегмент со сводкой не должен исчезать, даже если весь его контент
+  // скрыт (иначе пропала бы строка-сводка с тумблером).
   if (
     !displayContent &&
     !message.reasoning &&
@@ -577,12 +692,13 @@ function ChatMessageInner({
     reasoningBlocks.length === 0 &&
     intermediateTextBlocks.length === 0 &&
     !hasAttachments &&
-    !showStats
+    !showStats &&
+    !hasServiceSummary
   ) {
     if (!isAssistant || !showLivePlaceholder || !showHeader) return null
     return (
-      <div className={containerClass} data-message-id={message.id}>
-        <div className={bubbleClass}>
+      <div className={containerClass} data-message-id={message.id} data-role={message.role}>
+        <div className={bubbleClass} data-bubble="">
           <MessageHeader
             message={message}
             isSubagent={isSubagent}
@@ -858,7 +974,7 @@ function ChatMessageInner({
   }
 
   return (
-    <div className={containerClass} data-message-id={message.id}>
+    <div className={containerClass} data-message-id={message.id} data-role={message.role}>
       {selectionMode && (
         <div className="flex items-center self-stretch pr-1">
           <input
@@ -872,7 +988,7 @@ function ChatMessageInner({
           />
         </div>
       )}
-      <div className={bubbleClass}>
+      <div className={bubbleClass} data-bubble="">
         {/*
           ADR-104: маркер **прерывания** хода (`metadata.interrupt`) — оставлен.
           Маркера «вмешательство в ход» (`metadata.steer`) больше нет: реплика,
@@ -904,10 +1020,15 @@ function ChatMessageInner({
             isSubagent={isSubagent}
             onOriginClick={handleOriginClick}
             processing={headerProcessing}
+            expanded={expanded}
+            // Кнопка «Развернуть» — только у ответа агента; в user-шапку,
+            // metaOnly-шапки (Notice/фон/планировщик) и пустой live-сегмент
+            // пропс не передаётся.
+            onToggleExpand={onToggleExpand ? handleToggleExpand : undefined}
           />
         )}
 
-        {partsContent}
+        {partsContentEl}
 
         {isUser && (
           <MessageHeader
@@ -942,6 +1063,8 @@ function ChatMessageInner({
         )}
 
         {/* Автоповтор хода — внизу ответа у последнего сегмента (не у реплики). */}
+        {serviceSummaryEl}
+
         {showRetry && retry && (
           <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
         )}
