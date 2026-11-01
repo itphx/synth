@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, ReasoningBlock } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -132,6 +132,7 @@ import {
 import { setLiveStreamSnapshot } from './live-stream-snapshot.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type ProviderOverrides, type RouteProviderDeps } from './orchestrator/routing.js';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from './orchestrator/max-output.js';
 import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn, type CurrentModelPair } from './orchestrator/prompt-info.js';
 import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
 import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
@@ -304,6 +305,16 @@ export interface OrchestratorOptions {
    * (deepseek/mistral/Ollama). Резолвер задаёт точка сборки по кешам.
    */
   resolveModelCompatibility?: (providerName: string, modelId: string) => ModelCompatibility | undefined;
+  /**
+   * Лимит вывода модели из каталога (`ModelConfig.maxOutputTokens`).
+   * `undefined`/`0` — неизвестен: резолв идёт по сессии/конфигу/дефолту.
+   */
+  resolveModelMaxOutputTokens?: (providerName: string, modelId: string) => number | undefined;
+  /**
+   * `llm.maxTokens` — лимит вывода по умолчанию для новых сессий и моделей
+   * без `maxOutputTokens`. Не задан — `DEFAULT_MAX_OUTPUT_TOKENS`.
+   */
+  defaultMaxOutputTokens?: number;
   /**
    * ADR-115: live-конфиг вложений (`attachments.*`, runtime-настройки поверх
    * config). Читается **на каждый ход** — изменение `workspaceFallback`
@@ -778,6 +789,10 @@ export class ChatOrchestrator {
    * автоопределение в провайдере эвристиками.
    */
   private readonly _resolveModelCompatibility: ((providerName: string, modelId: string) => ModelCompatibility | undefined) | null;
+  /** Лимит вывода модели из каталога (`ModelConfig.maxOutputTokens`). */
+  private readonly _resolveModelMaxOutputTokens: ((providerName: string, modelId: string) => number | undefined) | null;
+  /** `llm.maxTokens` — дефолт лимита вывода (`0`/не задан — константа ядра). */
+  private readonly _defaultMaxOutputTokens: number;
   /**
    * ADR-115: live-конфиг вложений (runtime-настройки поверх config).
    * `undefined` — резолвер не задан: `workspaceFallback` считается включённым
@@ -1216,6 +1231,9 @@ export class ChatOrchestrator {
     this._resolveModalities = options.resolveModelModalities ?? null;
     // Совместимость протокола (provider+model) из каталога.
     this._resolveModelCompatibility = options.resolveModelCompatibility ?? null;
+    // Лимит вывода: каталог модели (он же кап) и конфиг `llm.maxTokens`.
+    this._resolveModelMaxOutputTokens = options.resolveModelMaxOutputTokens ?? null;
+    this._defaultMaxOutputTokens = options.defaultMaxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     // ADR-115: live-конфиг вложений — проверяется на каждый ход в
     // `_processSetupDeps().hydrateAttachments` (без рестарта).
     if (options.attachmentsConfig) this._attachmentsConfig = options.attachmentsConfig;
@@ -3888,6 +3906,14 @@ export class ChatOrchestrator {
        */
       let turnUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
+      /**
+       * Причина завершения финального ответа (нормализованный словарь
+       * `LlmFinishReason`). Нужна эпилогу, чтобы отличить «модель ничего не
+       * ответила» от «ответ срезан лимитом вывода» (`max_tokens`): у
+       * reasoning-моделей весь бюджет `max_tokens` может уйти в thinking, и
+       * `content` приходит пустым.
+       */
+      let finalFinishReason: LlmFinishReason | undefined;
       // Модель последнего завершённого стрима итерации: нужна ветке отмены
       // во время тула, где `chunkModel` уже вне области видимости, а
       // `finalModel` ещё не обновлён (ADR-070 §2.6, Bug 2).
@@ -4153,6 +4179,9 @@ export class ChatOrchestrator {
               iterationUsage = chunk.usage;
             }
             if (chunk.model) chunkModel = chunk.model;
+            // Причина завершения (финальный чанк): `max_tokens` — ответ срезан
+            // лимитом вывода, даже если текст пуст.
+            if (chunk.finishReason) finalFinishReason = chunk.finishReason;
 
             // Шаг 2б: частичный стрим в историю (не блокирует цикл чанков).
             draft.push(accumulatedContent, accumulatedReasoning, chunkModel, {
@@ -5579,6 +5608,9 @@ export class ChatOrchestrator {
         { session, streamId, publishChunk, debugCollector, streamStartedAt, streamTiming: lastStepTiming },
         {
           cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
+          // Причина завершения финального ответа: `max_tokens` при пустом
+          // `content` — исчерпанный лимит вывода, а не пустой ответ модели.
+          finishReason: finalFinishReason,
           // ADR-102: расход хода (сумма шагов) — в финальное сообщение,
           // счётчики сессии и аналитику; `finalUsage` — расход последнего
           // вызова (оценка/калибровка/событие шага).
@@ -5980,6 +6012,10 @@ export class ChatOrchestrator {
       ...(this._resolveModelCompatibility
         ? { resolveModelCompatibility: this._resolveModelCompatibility }
         : {}),
+      ...(this._resolveModelMaxOutputTokens
+        ? { resolveModelMaxOutputTokens: this._resolveModelMaxOutputTokens }
+        : {}),
+      defaultMaxOutputTokens: this._defaultMaxOutputTokens,
       gateway: {
         gatewayConfig: this._gatewayConfig,
         gatewayPatternStore: this._gatewayPatternStore,

@@ -89,3 +89,61 @@ describe('executeToolDef — ошибка аргументов (tool.args_error)
     expect(result.content).toContain(params.params?.issues ?? '<нет issues>');
   });
 });
+
+/**
+ * `normalizeArgs` (аддитивное поле контракта тула): нормализация аргументов
+ * **до** zod-валидации — терпимость к типовым обёрткам слабых моделей.
+ * На JSON Schema не влияет, вызывается ровно один раз.
+ */
+describe('executeToolDef — normalizeArgs до валидации', () => {
+  it('результат нормализации уходит и в валидацию, и в execute', async () => {
+    const received: unknown[] = [];
+    let calls = 0;
+    const tool: ToolDefinition = {
+      name: 'todo_add',
+      description: 'принимает массив',
+      parameters: z.object({ todos: z.array(z.object({ content: z.string() })) }),
+      capabilities: [ToolCapability.RUNTIME],
+      normalizeArgs: (args) => {
+        calls += 1;
+        const todos = args.todos as { items?: unknown } | undefined;
+        if (todos && typeof todos === 'object' && 'items' in todos) {
+          return { ...args, todos: todos.items };
+        }
+        return args;
+      },
+      execute: async (params) => {
+        received.push(params);
+        return { content: 'ok' };
+      },
+    };
+
+    const result = await executeToolDef(
+      tool,
+      { todos: { items: [{ content: 'A' }] } },
+      context,
+      'todo_add',
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toBe('ok');
+    expect(calls).toBe(1);
+    expect(received[0]).toEqual({ todos: [{ content: 'A' }] });
+  });
+
+  it('без normalizeArgs поведение прежнее', async () => {
+    const tool: ToolDefinition = {
+      name: 'todo_add',
+      description: 'принимает массив',
+      parameters: z.object({ todos: z.array(z.object({ content: z.string() })) }),
+      capabilities: [ToolCapability.RUNTIME],
+      execute: async () => ({ content: 'ok' }),
+    };
+
+    const result = await executeToolDef(tool, { todos: { items: [] } }, context, 'todo_add');
+
+    expect(result.isError).toBe(true);
+    const params = result.metadata?.i18n as { key: string };
+    expect(params.key).toBe('tool.args_error');
+  });
+});

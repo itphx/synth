@@ -1305,3 +1305,126 @@ describe('Anthropic thinking — несколько блоков reasoning в о
     expect(final.reasoningSignature).toBe('sig-b-final');
   });
 });
+
+/**
+ * Причина завершения (`stop_reason`) и reasoning-токены adaptive thinking.
+ *
+ * Диагноз (test-инстанс): ответ заканчивался «The model response was empty»,
+ * хотя провайдер возвращал `stop_reason: max_tokens` и весь `max_tokens` уходил
+ * в thinking. Без `stop_reason`/`output_tokens_details.thinking_tokens` такой
+ * ход неотличим от «модель ничего не ответила».
+ */
+describe('AnthropicProvider — stop_reason и reasoning-токены', () => {
+  it('stream: message_delta.stop_reason → finishReason финального чанка', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 1 } } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'думал' } },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'max_tokens' },
+        usage: { output_tokens: 4096, output_tokens_details: { thinking_tokens: 4096 } },
+      },
+      { type: 'message_stop' },
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const chunks = await drainThinking(thinkingProvider().chatAsync([makeMessage()]));
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.content).toBe('');
+    expect(final.finishReason).toBe('max_tokens');
+    // Весь вывод ушёл в размышления — это видно и в usage.
+    expect(final.usage).toMatchObject({ outputTokens: 4096, reasoningTokens: 4096 });
+  });
+
+  it.each([
+    ['end_turn', 'end_turn'],
+    ['tool_use', 'tool_use'],
+    ['max_tokens', 'max_tokens'],
+    ['stop_sequence', 'stop_sequence'],
+    ['some_new_reason', 'unknown'],
+  ])('stream: stop_reason %s → finishReason %s', async (raw, expected) => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      { type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 1 } } },
+      { type: 'message_delta', delta: { stop_reason: raw }, usage: { output_tokens: 2 } },
+      { type: 'message_stop' },
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const chunks = await drainThinking(new AnthropicProvider(baseParams).chatAsync([makeMessage()]));
+    expect(chunks.find((c) => c.isFinal)!.finishReason).toBe(expected);
+  });
+
+  it('stream без stop_reason: finishReason не заполняется', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      { type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 1 } } },
+      { type: 'message_delta', usage: { output_tokens: 2 } },
+      { type: 'message_stop' },
+    ])));
+
+    const chunks = await drainThinking(new AnthropicProvider(baseParams).chatAsync([makeMessage()]));
+    expect(chunks.find((c) => c.isFinal)!.finishReason).toBeUndefined();
+  });
+
+  it('non-stream: stop_reason и thinking_tokens → finishReason и reasoningTokens', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      content: [],
+      stop_reason: 'max_tokens',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 4096,
+        output_tokens_details: { thinking_tokens: 4000 },
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    const resp = await new AnthropicProvider(baseParams).chat([makeMessage()]);
+    expect(resp.finishReason).toBe('max_tokens');
+    expect(resp.usage).toMatchObject({ outputTokens: 4096, reasoningTokens: 4000 });
+  });
+
+  it('non-stream без output_tokens_details: reasoningTokens не выставляется (а не 0)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 5, output_tokens: 7 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    const resp = await new AnthropicProvider(baseParams).chat([makeMessage()]);
+    expect(resp.finishReason).toBe('end_turn');
+    expect(resp.usage.reasoningTokens).toBeUndefined();
+  });
+});
+
+/**
+ * `reasoningLevel: 'none'` у модели с **обязательным** reasoning: поле
+ * `thinking:{type:'disabled'}` API отвергает (400, code 2013) — модель всё
+ * равно думает. Поле не отправляем вовсе; у обычной модели поведение прежнее.
+ */
+describe('AnthropicProvider — reasoningLevel none × requireReasoning', () => {
+  it('requireReasoning: thinking не отправляется', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider({
+      ...baseParams,
+      reasoningLevel: 'none',
+      requiresReasoning: true,
+    } as ConstructorParameters<typeof AnthropicProvider>[0]);
+    await provider.chat([makeMessage()]);
+
+    const body = readBody(fetchMock);
+    expect(body.thinking).toBeUndefined();
+  });
+
+  it('без requireReasoning: {type:"disabled"} как раньше', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider({
+      ...baseParams,
+      reasoningLevel: 'none',
+    } as ConstructorParameters<typeof AnthropicProvider>[0]);
+    await provider.chat([makeMessage()]);
+
+    expect(readBody(fetchMock).thinking).toEqual({ type: 'disabled' });
+  });
+});

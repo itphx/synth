@@ -1071,6 +1071,30 @@ export async function createStandaloneDeps(
     return mergeModelCompatibility(providerCompat, shorthand, model?.compatibility);
   };
 
+  /**
+   * Лимит вывода модели из каталога (`ModelConfig.maxOutputTokens`): кап для
+   * резолва `max_tokens` и источник значения при авто-лимите сессии.
+   * `undefined` — у модели лимит неизвестен (или не положителен).
+   */
+  const resolveModelMaxOutputTokens = (
+    providerName: string,
+    modelId: string,
+  ): number | undefined => {
+    let model = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
+    if (!model) {
+      for (const candidate of modelCache.values()) {
+        if (candidate.provider !== providerName) continue;
+        if (candidate.name === modelId) {
+          model = candidate;
+          break;
+        }
+      }
+    }
+    return typeof model?.maxOutputTokens === 'number' && model.maxOutputTokens > 0
+      ? model.maxOutputTokens
+      : undefined;
+  };
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -1134,6 +1158,9 @@ export async function createStandaloneDeps(
     resolveModelModalities,
     // Совместимость протокола (provider+model) из каталога.
     resolveModelCompatibility,
+    // Лимит вывода модели из каталога (кап `max_tokens`) + дефолт `llm.maxTokens`.
+    resolveModelMaxOutputTokens,
+    ...(config.llmMaxTokens !== undefined ? { defaultMaxOutputTokens: config.llmMaxTokens } : {}),
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).
     attachmentsConfig: () => attachmentsSettings.getConfig(),

@@ -31,6 +31,11 @@ export const SYSTEM_MESSAGES = {
   'session.denied_blocked': 'Could not proceed: the action was blocked by the security policy',
   'session.role_tool_blocked': 'Could not proceed: tool "{tool}" is unavailable to agent "{agent}" — delegate the task via @ (e.g. @fixer or @general) or explain it to the user.',
   'session.empty_response': 'Could not complete the request: the model response was empty',
+  // Ответ срезан лимитом вывода (`max_tokens`): у reasoning-моделей весь
+  // бюджет может уйти в размышления — видимого текста не остаётся вовсе.
+  // `limit` — фактический расход вывода, `reasoning` — его часть на thinking.
+  'session.output_limit':
+    'The response was cut off by the output token limit: max_tokens={limit}, of which {reasoning} were spent on reasoning. Increase the response limit for this session and retry.',
   'session.dialog_title': 'Dialog — {id}',
   'session.default_title': 'New session',
   'session.reference_label': 'Session',

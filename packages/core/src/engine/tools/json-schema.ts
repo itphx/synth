@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { foldSingleOrArray } from './schema-sanitize.js';
 
 type JsonSchema =
   | { type?: 'string' | 'null'; description?: string; enum?: string[]; format?: string }
@@ -184,8 +185,22 @@ function _convert(schema: z.ZodType): JsonSchema {
 
   if (processed instanceof z.ZodUnion) {
     const options = processed.options as z.ZodType[];
+    const branches = options.map((opt) => _convert(opt));
+    // «Одно-или-много» (`T | T[]`) сводится к `array`: в JSON Schema `anyOf`
+    // из объекта и массива модель читает как противоречие и повторяет тот же
+    // аргумент. Массив — надмножество, одиночное значение zod по-прежнему
+    // принимает (схема только для модели, валидацию делает сам zod).
+    const folded = foldSingleOrArray(branches, description);
+    if (folded) {
+      const result: { type: 'array'; description?: string; items: JsonSchema } = {
+        type: 'array',
+        items: folded.items as JsonSchema,
+      };
+      if (folded.description) result.description = folded.description;
+      return result;
+    }
     return {
-      anyOf: options.map((opt) => _convert(opt)),
+      anyOf: branches,
       description,
     };
   }

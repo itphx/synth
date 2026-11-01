@@ -1,6 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, llmConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
+
+describe('llmConfigSchema — лимит вывода по умолчанию', () => {
+  it('дефолт 8192 (модели без maxOutputTokens и сессии с авто-лимитом)', () => {
+    expect(llmConfigSchema.parse({}).maxTokens).toBe(8192);
+  });
+
+  it('0 = авто (дефолт ядра), верхняя граница 200000', () => {
+    expect(llmConfigSchema.parse({ maxTokens: 0 }).maxTokens).toBe(0);
+    expect(llmConfigSchema.parse({ maxTokens: 200_000 }).maxTokens).toBe(200_000);
+    expect(llmConfigSchema.safeParse({ maxTokens: 200_001 }).success).toBe(false);
+    expect(llmConfigSchema.safeParse({ maxTokens: 1.5 }).success).toBe(false);
+  });
+});
 
 describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
   it('принимает optional description', () => {

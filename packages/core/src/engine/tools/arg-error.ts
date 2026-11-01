@@ -10,9 +10,69 @@ import type { ZodIssue } from 'zod';
 import type { ToolResult } from '@itphx/synth-shared';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
 
-/** `path: message; path2: message2` — единый формат `issues` для `tool.args_error`. */
+/** Сколько issues одной ветви union печатать (остальное — только счётчик). */
+const MAX_UNION_VARIANT_ISSUES = 3;
+
+/** Предел текста одной ветви union: у вложенных схем issue бывает очень длинным. */
+const MAX_UNION_VARIANT_CHARS = 300;
+
+/** Путь issue для текста: `a.b.0`; пустой путь — `root`. */
+function issuePath(path: readonly PropertyKey[]): string {
+  return path.map((segment) => String(segment)).join('.') || 'root';
+}
+
+/**
+ * `path: message; path2: message2` — единый формат `issues` для `tool.args_error`.
+ *
+ * Для `invalid_union` (в zod 4 issue несёт `errors: ZodIssue[][]` по вариантам)
+ * голое `Invalid input` бесполезно: модель не понимает, что именно не так, и
+ * повторяет тот же аргумент. Поэтому варианты печатаются по отдельности:
+ * `todos: does not match any variant — variant 1: content: …; variant 2: value: …`.
+ */
 export function formatIssues(issues: readonly ZodIssue[]): string {
-  return issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ');
+  return issues.map(formatIssue).join('; ');
+}
+
+function formatIssue(issue: ZodIssue): string {
+  const variants = unionVariants(issue);
+  if (variants) return formatUnionIssue(issue, variants);
+  return `${issuePath(issue.path)}: ${issue.message}`;
+}
+
+/** Варианты `invalid_union`-issue (в zod 4 — `errors: ZodIssue[][]`). */
+function unionVariants(issue: ZodIssue): ZodIssue[][] | null {
+  if (issue.code !== 'invalid_union') return null;
+  const errors = (issue as unknown as { errors?: unknown }).errors;
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  return errors as ZodIssue[][];
+}
+
+function formatUnionIssue(issue: ZodIssue, variants: readonly ZodIssue[][]): string {
+  const parts = variants.map(
+    (branchIssues, index) => `variant ${index + 1}: ${formatUnionVariant(branchIssues)}`,
+  );
+  return `${issuePath(issue.path)}: does not match any variant — ${parts.join('; ')}`;
+}
+
+/**
+ * Компактный текст одной ветви: путь **относительно ветви** (`value` — корень),
+ * первые issues, обрезка до разумной длины.
+ */
+function formatUnionVariant(branchIssues: readonly ZodIssue[]): string {
+  if (branchIssues.length === 0) return 'value: invalid';
+  const text = branchIssues
+    .slice(0, MAX_UNION_VARIANT_ISSUES)
+    .map((branchIssue) => {
+      const path = branchIssue.path.join('.') || 'value';
+      return `${path}: ${branchIssue.message}`;
+    })
+    .join('; ');
+  return truncate(text, MAX_UNION_VARIANT_CHARS);
+}
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1).trimEnd()}…`;
 }
 
 /**

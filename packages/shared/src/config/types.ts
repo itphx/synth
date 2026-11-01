@@ -215,6 +215,12 @@ export const llmConfigSchema = z.object({
   defaultModel: z.string().default(''),
   maxRetries: z.number().int().min(0).default(3),
   timeout: z.number().int().min(1).default(60),
+  /**
+   * Лимит вывода по умолчанию для новых сессий/моделей без `maxOutputTokens`
+   * (`0` — авто-дефолт ядра, `DEFAULT_MAX_OUTPUT_TOKENS`). Приоритет ниже
+   * каталога модели: `ModelConfig.maxOutputTokens` — ещё и кап.
+   */
+  maxTokens: z.number().int().min(0).max(200000).default(8192),
   /** ADR-070 §2.2: политика prompt-cache — auto (ставить маркеры) | none (отключить). */
   cache: z.enum(['auto', 'none']).default('auto'),
 });

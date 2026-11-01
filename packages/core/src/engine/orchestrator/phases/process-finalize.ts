@@ -12,6 +12,7 @@
  * возвращает `{}` — как и прежний код в этой точке.
  */
 import type {
+  LlmFinishReason,
   MediaPartData,
   Message,
   Part,
@@ -94,6 +95,15 @@ export interface ProcessFinalizeState {
   finalContent: string;
   /** metadata.i18n подставленного финального фоллбека (лимит/deny/пустой ответ). */
   fallbackI18n: ReturnType<typeof i18nMeta> | undefined;
+  /**
+   * Причина завершения ответа модели (нормализованный `LlmFinishReason`).
+   *
+   * Отличает «модель ничего не сказала» от «ответ срезан лимитом вывода»: при
+   * `max_tokens` пустой `content` — не пустой ответ, а исчерпанный бюджет
+   * (adaptive thinking расходует тот же `max_tokens`). Значение попадает в
+   * `metadata.finish_reason` финального сообщения.
+   */
+  finishReason?: LlmFinishReason;
   /** Были ли deny-отказы за цикл (для осмысленного fallback пустого ответа). */
   hadDeny: boolean;
   /**
@@ -327,6 +337,7 @@ export async function runProcessFinalize(
     hadDeny, routingDecision, effectiveReasoningLevel,
     roleBlocked, roleBlockedTool, roleBlockedAgent,
     currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft, outboundParts,
+    finishReason,
     // ADR-118 §1: ход и финальный шаг.
     turnId, finalStepIndex, finalStepMessageId, stepLimitStepRecord,
   } = state;
@@ -508,7 +519,21 @@ export async function runProcessFinalize(
   // контент) с пустым finalContent — подставляем осмысленное сообщение,
   // чтобы в истории не оставалось пустого assistant-сообщения.
   if (!finalContent) {
-    if (roleBlocked) {
+    if (finishReason === 'max_tokens') {
+      // Ответ срезан лимитом вывода, а не «модель промолчала»: у
+      // reasoning-моделей adaptive thinking расходует тот же `max_tokens`, и
+      // при исчерпанном бюджете видимого текста не остаётся вовсе. Говорим об
+      // этом прямо и подсказываем, что делать (раньше такой ход выглядел
+      // «пустым ответом» и диагностировался как сбой модели).
+      // `limit` — фактический расход вывода (эффективный лимит по факту),
+      // `reasoning` — сколько из него ушло на размышления.
+      const params = {
+        limit: String(finalUsage.outputTokens),
+        reasoning: String(finalUsage.reasoningTokens ?? 0),
+      };
+      finalContent = sm('session.output_limit', params);
+      fallbackI18n = i18nMeta('session.output_limit', params);
+    } else if (roleBlocked) {
       // Ролевой отказ: тул не для этого агента — говорим об этом прямо, без
       // «заблокировано политикой безопасности» (это не инцидент ИБ).
       const params = { tool: roleBlockedTool ?? '', agent: roleBlockedAgent ?? '' };
@@ -636,7 +661,7 @@ export async function runProcessFinalize(
     turnUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
     MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
     qaPass, qaReason,
-    { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), ...(stepLimitReached ? { step_limit_reached: true } : {}), duration_ms: durationMs },
+    { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), ...(stepLimitReached ? { step_limit_reached: true } : {}), ...(finishReason ? { finish_reason: finishReason } : {}), duration_ms: durationMs },
     promptMeta,
     messageCost,
     finalExisting,

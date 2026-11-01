@@ -32,6 +32,8 @@ export interface EnvOverrideDefinition {
  * плоского строкового представления — они остаются в config.yaml.
  */
 export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
+  // llm: лимит вывода по умолчанию (0 — авто-дефолт ядра).
+  { section: 'llm', key: 'maxTokens', type: 'number' },
   // events (ADR-089)
   { section: 'events', key: 'enabled', type: 'boolean' },
   { section: 'events', key: 'defaultMode', type: 'string' },

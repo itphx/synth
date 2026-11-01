@@ -1272,3 +1272,82 @@ describe('OpenAIProvider — requireFinishReason (ADR-117)', () => {
     expect(chunks).toEqual([]);
   });
 });
+
+/**
+ * Причина завершения ответа (`finish_reason`) и reasoning-токены.
+ *
+ * `length` — ответ срезан лимитом вывода: при пустом `content` это не «модель
+ * промолчала», а исчерпанный бюджет (reasoning-модели тратят его на thinking).
+ */
+describe('OpenAIProvider — finish_reason и reasoning_tokens', () => {
+  function sseResponse(events: string[]): Response {
+    return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  async function drain(gen: AsyncIterable<LLMChunk>): Promise<LLMChunk[]> {
+    const out: LLMChunk[] = [];
+    for await (const chunk of gen) out.push(chunk);
+    return out;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['stop', 'end_turn'],
+    ['length', 'max_tokens'],
+    ['tool_calls', 'tool_use'],
+    ['function_call', 'tool_use'],
+    ['content_filter', 'content_filter'],
+    ['some_new_reason', 'unknown'],
+  ])('stream: finish_reason %s → finishReason %s', async (raw, expected) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: raw }] }),
+      '[DONE]',
+    ])));
+
+    const chunks = await drain(new OpenAIProvider(plainParams).chatAsync([makeMessage()]));
+    expect(chunks.find((c) => c.isFinal)!.finishReason).toBe(expected);
+  });
+
+  it('stream: length + пустой контент + reasoning_tokens → срез лимитом виден в usage', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({
+        choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
+        usage: {
+          prompt_tokens: 20,
+          completion_tokens: 4096,
+          total_tokens: 4116,
+          completion_tokens_details: { reasoning_tokens: 4000 },
+        },
+      }),
+      '[DONE]',
+    ])));
+
+    const final = (await drain(new OpenAIProvider(plainParams).chatAsync([makeMessage()])))
+      .find((c) => c.isFinal)!;
+    expect(final.content).toBe('');
+    expect(final.finishReason).toBe('max_tokens');
+    expect(final.usage).toMatchObject({ outputTokens: 4096, reasoningTokens: 4000 });
+  });
+
+  it('non-stream: finish_reason → finishReason, reasoning_tokens → reasoningTokens', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ index: 0, message: { content: '' }, finish_reason: 'length' }],
+      usage: {
+        prompt_tokens: 20,
+        completion_tokens: 100,
+        total_tokens: 120,
+        completion_tokens_details: { reasoning_tokens: 90 },
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    const resp = await new OpenAIProvider(plainParams).chat([makeMessage()]);
+    expect(resp.finishReason).toBe('max_tokens');
+    expect(resp.usage).toMatchObject({ outputTokens: 100, reasoningTokens: 90 });
+  });
+});

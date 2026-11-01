@@ -209,6 +209,15 @@ export interface ToolDefinition {
   capabilities: ToolCapability[];
   execute: ToolExecutor;
   jsonSchema?: Record<string, unknown>;
+  /**
+   * Нормализация аргументов **до** zod-валидации — терпимость к типовым обёрткам
+   * слабых моделей (`{todos: {item: …}}` вместо `{todos: …}`).
+   *
+   * На JSON Schema не влияет (схема для модели остаётся прежней); вызывается
+   * один раз в `executeToolDef` перед `safeParse`, возвращает аргументы для
+   * проверки. Аддитивное поле: тул без него работает как прежде.
+   */
+  normalizeArgs?: (args: Record<string, unknown>) => Record<string, unknown>;
   /** ADR-071 §2.1: источник инструмента (builtin/mcp/plugin). */
   source?: ToolSource;
   /** ADR-071 §2.1: имя MCP-сервера для `source: 'mcp'`. */

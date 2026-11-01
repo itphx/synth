@@ -1559,6 +1559,9 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Таймаут подтверждения (сек)',
   'sessionSettings.askTimeoutEnabled': 'Включено',
   'sessionSettings.askTimeoutDisabled': 'Выключено',
+  // Лимит ответа (`max_tokens`, 0 = авто)
+  'sessionSettings.maxTokens': 'Лимит ответа',
+  'sessionSettings.maxTokensHint': '0 — авто: лимит модели из каталога или инстанса (по умолчанию 8192). Для моделей с обязательным reasoning действует минимум 8192, потому что размышления расходуют тот же бюджет.',
   // ADR-029: сессионные одобрения
   'sessionSettings.allow.title': 'Сессионные одобрения',
   'sessionSettings.allow.empty': 'Нет одобренных инструментов',
@@ -2753,6 +2756,10 @@ export const dict = {
   'session.role_tool_blocked':
     'Не удалось продолжить: инструмент «{tool}» недоступен агенту «{agent}» — делегируйте задачу через @ (например, @fixer или @general) или объясните пользователю.',
   'session.empty_response': 'Не удалось выполнить запрос: ответ модели пуст',
+  // Ответ срезан лимитом вывода (`max_tokens`): у reasoning-моделей весь
+  // бюджет может уйти в размышления — видимого текста не остаётся вовсе.
+  'session.output_limit':
+    'Ответ обрезан лимитом вывода: max_tokens={limit}, из них {reasoning} ушло на размышления. Увеличьте лимит ответа для сессии и повторите.',
   'session.dialog_title': 'Диалог — {id}',
   'session.default_title': 'Новая сессия',
   'session.reference_label': 'Сессия',

@@ -16,6 +16,7 @@ import {
   pluginToolLocalName,
 } from '@itphx/synth-shared';
 import { zodToJsonSchema } from './json-schema.js';
+import { sanitizeToolSchema } from './schema-sanitize.js';
 
 /** Известные capabilities (валидация вкладов плагина, ADR-090). */
 const KNOWN_CAPABILITIES: ReadonlySet<string> = new Set(Object.values(ToolCapabilityValues));
@@ -301,7 +302,9 @@ export class ToolRegistry {
   }
 
   private _toolToLLM(tool: ToolDefinition): ToolForLLM {
-    const jsonSchema = tool.jsonSchema ?? zodToJsonSchema(tool.parameters);
+    // Граница LLM: `$schema` и вырожденный `anyOf` (одно-или-много) в схему
+    // модели не уходят — одинаково для встроенных, MCP и плагинных тулов.
+    const jsonSchema = sanitizeToolSchema(tool.jsonSchema ?? zodToJsonSchema(tool.parameters));
     return {
       type: 'function' as const,
       function: {

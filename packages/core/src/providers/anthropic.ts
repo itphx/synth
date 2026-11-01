@@ -1,4 +1,4 @@
-import type { EffortLevel, LLMChunk, LLMReasoningBlock, LLMResponse, TokenUsage } from '@itphx/synth-shared';
+import type { EffortLevel, LLMChunk, LLMReasoningBlock, LLMResponse, LlmFinishReason, TokenUsage } from '@itphx/synth-shared';
 import { effortForReasoningLevel } from '@itphx/synth-shared';
 import {
   BaseProvider,
@@ -71,6 +71,28 @@ export function resolveThinkingBudget(requested: number, maxTokens: number): num
 interface ThinkingPlan {
   enabled: boolean;
   field?: { type: 'enabled'; budget_tokens: number } | { type: 'disabled' };
+}
+
+/**
+ * Причина завершения ответа Anthropic (`stop_reason`) → общий словарь.
+ * Незнакомое значение → `unknown` (причина есть, но не распознана);
+ * отсутствие значения → `undefined` (провайдер не сообщил).
+ */
+const ANTHROPIC_FINISH_REASONS: Record<string, LlmFinishReason> = {
+  end_turn: 'end_turn',
+  tool_use: 'tool_use',
+  max_tokens: 'max_tokens',
+  stop_sequence: 'stop_sequence',
+};
+
+export function normalizeAnthropicFinishReason(raw: unknown): LlmFinishReason | undefined {
+  if (typeof raw !== 'string' || !raw) return undefined;
+  return ANTHROPIC_FINISH_REASONS[raw] ?? 'unknown';
+}
+
+/** Число из поля usage (`0` для отсутствующего/невалидного значения). */
+function usageNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 /**
@@ -163,7 +185,20 @@ export class AnthropicProvider extends BaseProvider {
    * отвергал запрос «max_tokens must be greater than thinking.budget_tokens».
    */
   private _resolveThinking(maxTokens: number): ThinkingPlan {
-    if (this.reasoningLevel === 'none') return { enabled: false, field: { type: 'disabled' } };
+    if (this.reasoningLevel === 'none') {
+      // ADR-117: модель с **обязательным** reasoning всё равно думает, а явный
+      // `thinking:{type:'disabled'}` она отвергает (400, code 2013). Поэтому
+      // поле не отправляем вовсе — «выключить» размышления у такой модели
+      // нельзя, и притворяться, что мы это сделали, нельзя тем более.
+      if (this._requiresReasoning()) {
+        warning(
+          'ANTHROPIC',
+          'reasoningLevel=none: модель требует reasoning — поле thinking не отправляется (API отвергает disabled)',
+        );
+        return { enabled: false };
+      }
+      return { enabled: false, field: { type: 'disabled' } };
+    }
     if (this.reasoningLevel !== 'high') return { enabled: false };
     const budget = resolveThinkingBudget(REQUESTED_THINKING_BUDGET, maxTokens);
     if (budget === null) {
@@ -175,6 +210,18 @@ export class AnthropicProvider extends BaseProvider {
       return { enabled: false };
     }
     return { enabled: true, field: { type: 'enabled', budget_tokens: budget } };
+  }
+
+  /** ADR-117: модель требует reasoning (`compatibility.requireReasoning`/shorthand). */
+  private _requiresReasoning(): boolean {
+    return resolveProviderCompatibility({
+      type: this.type,
+      name: this.name,
+      url: this.url,
+      model: this.model,
+      compatibility: this.compatibility,
+      requiresReasoning: this.requiresReasoning,
+    }).requireReasoning;
   }
 
   /**
@@ -383,6 +430,13 @@ export class AnthropicProvider extends BaseProvider {
     };
     let accumulatedContent = '';
     let accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    /**
+     * Причина завершения ответа: Anthropic отдаёт её в `message_delta`
+     * (`delta.stop_reason`), а не в `message_stop`. Без этого «срезано
+     * лимитом» (пустой `content` при `max_tokens`) неотличимо от пустого
+     * ответа модели.
+     */
+    let accumulatedFinishReason: LlmFinishReason | undefined;
     const accumulatedToolCalls: Record<string, unknown>[] = [];
     const toolCallByBlockIndex = new Map<number, number>();
 
@@ -573,12 +627,18 @@ export class AnthropicProvider extends BaseProvider {
                 // Anthropic отдаёт input/cache-токены в message_start, а не в
                 // message_delta — без этого в стриме inputTokens остаётся 0.
                 const message = chunkData.message as Record<string, unknown> | undefined;
-                const usage = message?.usage as Record<string, number> | undefined;
+                const usage = message?.usage as Record<string, unknown> | undefined;
                 if (usage) accumulatedUsage = this._normalizeUsage(usage);
               }
 
               if (eventType === 'message_delta') {
-                const usage = chunkData.usage as Record<string, number> | undefined;
+                // Причина завершения: `delta.stop_reason` (`end_turn`,
+                // `max_tokens`, `tool_use`, `stop_sequence`).
+                const delta = chunkData.delta as Record<string, unknown> | undefined;
+                const stopReason = normalizeAnthropicFinishReason(delta?.stop_reason);
+                if (stopReason) accumulatedFinishReason = stopReason;
+
+                const usage = chunkData.usage as Record<string, unknown> | undefined;
                 if (usage) {
                   // message_delta обычно несёт только cumulative output_tokens:
                   // сохраняем input/cache из message_start.
@@ -595,6 +655,8 @@ export class AnthropicProvider extends BaseProvider {
                       usage.cache_read_input_tokens ?? accumulatedUsage.cacheReadTokens ?? 0,
                     cache_creation_input_tokens:
                       usage.cache_creation_input_tokens ?? accumulatedUsage.cacheWriteTokens ?? 0,
+                    // thinking-токены приходят кумулятивно именно здесь.
+                    output_tokens_details: usage.output_tokens_details,
                   });
                 }
               }
@@ -623,6 +685,7 @@ export class AnthropicProvider extends BaseProvider {
         debugCollector?.captureApiResponse({
           usage: accumulatedUsage,
           model: this.model,
+          stop_reason: accumulatedFinishReason,
           tool_calls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
         });
 
@@ -636,6 +699,7 @@ export class AnthropicProvider extends BaseProvider {
           reasoningSignature: accumulatedSignature,
           reasoningRedacted: accumulatedRedacted.length ? accumulatedRedacted : undefined,
           model: this.model,
+          finishReason: accumulatedFinishReason,
         };
       }
     } finally {
@@ -1051,7 +1115,7 @@ export class AnthropicProvider extends BaseProvider {
       }
     }
 
-    const usage = data.usage as Record<string, number> | undefined;
+    const usage = data.usage as Record<string, unknown> | undefined;
     const parsedUsage = this._normalizeUsage(usage);
 
     return {
@@ -1063,6 +1127,8 @@ export class AnthropicProvider extends BaseProvider {
       reasoningBlocks: reasoningBlocks.length ? reasoningBlocks : undefined,
       reasoningSignature: accumulatedSignature,
       reasoningRedacted: accumulatedRedacted.length ? accumulatedRedacted : undefined,
+      // Причина завершения (`stop_reason`) — нестримовый ответ.
+      finishReason: normalizeAnthropicFinishReason(data.stop_reason),
     };
   }
 
@@ -1070,19 +1136,26 @@ export class AnthropicProvider extends BaseProvider {
    * ADR-070 §2.3: у Anthropic `input_tokens` — только некэшированная часть,
    * поэтому нормализованный `inputTokens = input_tokens + cacheRead + cacheWrite`.
    * `totalTokens` считается от нормализованного входа.
+   *
+   * Reasoning-токены adaptive thinking приходят отдельно —
+   * `output_tokens_details.thinking_tokens`, — но **входят** в `output_tokens`
+   * (общий бюджет `max_tokens`). Пишем их только когда они есть (`> 0`).
    */
-  private _normalizeUsage(usage: Record<string, number> | undefined): TokenUsage {
-    const cacheReadTokens = usage?.cache_read_input_tokens || 0;
-    const cacheWriteTokens = usage?.cache_creation_input_tokens || 0;
-    const nonCached = usage?.input_tokens || 0;
+  private _normalizeUsage(usage: Record<string, unknown> | undefined): TokenUsage {
+    const cacheReadTokens = usageNumber(usage?.cache_read_input_tokens);
+    const cacheWriteTokens = usageNumber(usage?.cache_creation_input_tokens);
+    const nonCached = usageNumber(usage?.input_tokens);
     const inputTokens = nonCached + cacheReadTokens + cacheWriteTokens;
-    const outputTokens = usage?.output_tokens || 0;
+    const outputTokens = usageNumber(usage?.output_tokens);
+    const details = usage?.output_tokens_details as Record<string, unknown> | undefined;
+    const reasoningTokens = usageNumber(details?.thinking_tokens);
     return {
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
       cacheReadTokens,
       cacheWriteTokens,
+      ...(reasoningTokens > 0 ? { reasoningTokens } : {}),
     };
   }
 

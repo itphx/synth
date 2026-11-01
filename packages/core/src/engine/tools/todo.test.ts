@@ -12,6 +12,7 @@ import {
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
+import { executeToolDef } from './tool-execution.js';
 import type { ToolContext } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
 
@@ -311,5 +312,133 @@ describe('todo tools', () => {
       expect(result.isError).toBeUndefined();
       expect(result.content).toContain('Todo list is empty');
     });
+  });
+});
+
+/**
+ * Терпимость к типовым обёрткам слабых моделей (проверено на test: модель
+ * присылала `{"todos":{"item":[{…}]}}`, получала `todos: Invalid input` и
+ * повторяла тот же вызов 10 раз подряд). Нормализация идёт **до** валидации —
+ * в `executeToolDef`, поэтому тесты идут через него, а не напрямую в `execute`.
+ */
+describe('todo tools — обёртки аргументов', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let tmpDir: string;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-todo-wrapper-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    const session = await sessionManager.createSession({ title: 'Todo wrapper test' });
+    sessionId = session.id;
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function ctx(): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, sessionId },
+    };
+  }
+
+  it('todo_add: {"todos":{"item":[{…},{…}]}} → добавляется 2 пункта', async () => {
+    const result = await executeToolDef(
+      todoAddTool,
+      { todos: { item: [{ content: 'Первый' }, { content: 'Второй' }] } },
+      ctx(),
+      'todo_add',
+    );
+
+    expect(result.isError).toBeUndefined();
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.todos!.map((t) => t.content)).toEqual(['Первый', 'Второй']);
+  });
+
+  it('todo_add: {"todos":{"items":{…}}} → добавляется 1 пункт', async () => {
+    const result = await executeToolDef(
+      todoAddTool,
+      { todos: { items: { content: 'Один' } } },
+      ctx(),
+      'todo_add',
+    );
+
+    expect(result.isError).toBeUndefined();
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.todos).toHaveLength(1);
+    expect(session.todos![0]!.content).toBe('Один');
+  });
+
+  it('todo_add: валидные формы не меняются (одиночный объект и массив)', async () => {
+    const single = await executeToolDef(
+      todoAddTool,
+      { todos: { content: 'Одиночный', status: 'in_progress' } },
+      ctx(),
+      'todo_add',
+    );
+    expect(single.isError).toBeUndefined();
+
+    const many = await executeToolDef(
+      todoAddTool,
+      { todos: [{ content: 'A' }, { content: 'B' }] },
+      ctx(),
+      'todo_add',
+    );
+    expect(many.isError).toBeUndefined();
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.todos!.map((t) => t.content)).toEqual(['Одиночный', 'A', 'B']);
+    expect(session.todos![0]!.status).toBe('in_progress');
+  });
+
+  it('todo_delete: {"ids":{"item":"id"}} и {"ids":{"ids":["a","b"]}} работают', async () => {
+    await executeToolDef(
+      todoAddTool,
+      { todos: [{ content: 'A' }, { content: 'B' }, { content: 'C' }] },
+      ctx(),
+      'todo_add',
+    );
+    let session = (await sessionManager.getSession(sessionId))!;
+    const [first, second, third] = session.todos!.map((t) => t.id);
+
+    const one = await executeToolDef(
+      todoDeleteTool,
+      { ids: { item: first } },
+      ctx(),
+      'todo_delete',
+    );
+    expect(one.isError).toBeUndefined();
+
+    const rest = await executeToolDef(
+      todoDeleteTool,
+      { ids: { ids: [second, third] } },
+      ctx(),
+      'todo_delete',
+    );
+    expect(rest.isError).toBeUndefined();
+
+    session = (await sessionManager.getSession(sessionId))!;
+    expect(session.todos).toHaveLength(0);
+  });
+
+  it('мусорная обёртка не разворачивается — ошибка объясняет варианты', async () => {
+    const result = await executeToolDef(
+      todoAddTool,
+      { todos: { item: 'не пункт', extra: 1 } },
+      ctx(),
+      'todo_add',
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('does not match any variant');
+    expect(result.content).toContain('variant 1:');
+    expect(result.content).toContain('variant 2:');
   });
 });

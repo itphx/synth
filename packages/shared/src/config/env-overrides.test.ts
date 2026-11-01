@@ -51,6 +51,10 @@ describe('toSnakeCase / envOverrideName (ADR-023)', () => {
     expect(envOverrideName({ section: 'agents', key: 'subagentDepth', type: 'number' })).toBe(
       'SYNTH_AGENTS_SUBAGENT_DEPTH',
     );
+    // llm: лимит вывода по умолчанию.
+    expect(envOverrideName({ section: 'llm', key: 'maxTokens', type: 'number' })).toBe(
+      'SYNTH_LLM_MAX_TOKENS',
+    );
     // tools: общий предел вывода инструментов.
     expect(envOverrideName({ section: 'tools', key: 'outputMaxLines', type: 'number' })).toBe(
       'SYNTH_TOOLS_OUTPUT_MAX_LINES',
@@ -111,6 +115,7 @@ describe('parseEnvValue (ADR-023)', () => {
 describe('applyEnvOverrides (ADR-023)', () => {
   function makeConfig(): Record<string, unknown> {
     return {
+      llm: { defaultProvider: '', defaultModel: '', maxRetries: 3, timeout: 60, maxTokens: 8192, cache: 'auto' },
       events: { enabled: true, autoBind: false, ephemeralTtl: '24h', journalRetentionDays: 30 },
       scheduler: { tickSec: 60, catchUp: 'skip' },
       webhooks: { enabled: false },
@@ -136,6 +141,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
 
   it('применяет скалярные оверрайды нужных типов', () => {
     const cfg = applyEnvOverrides(makeConfig(), {
+      SYNTH_LLM_MAX_TOKENS: '16384',
       SYNTH_EVENTS_AUTO_BIND: 'true',
       SYNTH_EVENTS_ENABLED: '0',
       SYNTH_EVENTS_EPHEMERAL_TTL: '15m',
@@ -170,6 +176,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
       ephemeralTtl: '15m',
       journalRetentionDays: 7,
     });
+    // llm.maxTokens: лимит вывода по умолчанию.
+    expect((cfg.llm as Record<string, unknown>).maxTokens).toBe(16_384);
     expect(cfg.scheduler).toEqual({ tickSec: 120, catchUp: 'once' });
     expect(cfg.webhooks).toEqual({ enabled: true });
     expect(cfg.decision).toEqual({

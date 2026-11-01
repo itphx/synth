@@ -718,6 +718,20 @@
   ставит сам цикл (`orchestrator.ts`) — отчёт подставляется только когда шаг-лимит реально исполнялся;
   прежняя ветка `toolIteration >= maxIterations → session.max_iterations` в основном цикле не
   используется (ключ остался для шагов пайплайнов, `engine/pipelines/executors/agent-step.ts`).
+  **Лимит вывода (`max_tokens`) — одна политика** (`engine/orchestrator/max-output.ts`; применяется в
+  `engine/orchestrator/routing.ts` — `getProvider` и ветка роутера, значения приходят из
+  `server/app/deps.ts` и `backend/app/deps.ts`). `SessionSettings.maxTokens = 0` — «авто»; приоритет
+  источников: явное значение сессии → `ModelConfig.maxOutputTokens` (каталог; он же **кап** — больше
+  заявленного моделью не отправляем) → `llm.maxTokens` конфига (дефолт 8192, env
+  `SYNTH_LLM_MAX_TOKENS`) → 8192. У моделей с `compatibility.requireReasoning` (`ModelConfig.requiresReasoning`)
+  действует **пол** `REASONING_MIN_OUTPUT_TOKENS = 8192` — adaptive thinking расходует тот же
+  `max_tokens`, — но не выше каталога. Причина завершения нормализуется адаптерами в
+  `LlmFinishReason` (`LLMChunk`/`LLMResponse.finishReason`: Anthropic `stop_reason`, OpenAI
+  `finish_reason`, Ollama `done_reason`), thinking-токены — в `TokenUsage.reasoningTokens`. Пустой
+  ответ с `finishReason: 'max_tokens'` получает текст `session.output_limit` (`max_tokens=N, из них
+  M на размышления`, ADR-041) и статус `error`, а нормализованная причина всегда пишется в
+  `metadata.finish_reason` финального сообщения — иначе «модель промолчала» и «бюджет ушёл в
+  размышления» неразличимы.
   **Предохранитель бюджета контекста саб-агента (`agents.subagentMaxInputTokens`).**
   В цикле саб-агента (`engine/tools/task/run-cycle.ts`) перед **каждым** LLM-вызовом
   считается оценка промпта: `estimatePromptChars(messages, systemPrompt, tools)` →
@@ -1271,6 +1285,18 @@
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
   MCP-тулы получают контекст без изменений; правило действует и в шагах пайплайна, и в саб-агенте `task`
   (обе точки идут через `executeToolDef`).
+  **Схемы на границе LLM (`json-schema.ts`, `schema-sanitize.ts`).** `zodToJsonSchema` сворачивает
+  вырожденный union «одно-или-много» (`T | T[]`, T — один конкретный тип) в `{type:'array', items:T}`
+  — модель видит одну форму вместо `anyOf` (массив — надмножество, одиночное значение по-прежнему
+  принимает zod); `sanitizeToolSchema` применяется в `ToolRegistry._toolToLLM` ко **всем** тулам
+  (встроенные, MCP, плагины): убирает вложенный `$schema`, повторяет сворачивание на чужих схемах, а
+  `nullable` (`anyOf:[X,null]`), union скаляров (`pipeline_save.when.value` — `eq`/`ne` сравнивают
+  строго) и вложенные `anyOf` не переписывает. `ToolDefinition.normalizeArgs` (аддитивное поле
+  контракта) вызывается в `executeToolDef` **до** `safeParse` — терпимость к обёрткам слабых моделей
+  (`todo_add`/`todo_delete`: `{item:…}`/`{items:…}`/`{ids:…}`), на схему не влияет. Текст
+  `invalid_union` в `arg-error.ts` печатается по вариантам (`variant 1: …; variant 2: …`, до 3 issues
+  и 300 символов на ветвь) вместо голого `Invalid input` — иначе модель не понимает, что не так, и
+  повторяет тот же вызов.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `engine/hooks/*` — `HookBus` (ADR-030): ядровая in-process шина хуков
   (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от
@@ -2088,6 +2114,11 @@
   подпись (`signature: ""`) допустима — так отвечает RouterAI для qwen. При выключенном thinking
   блоки в историю не уходят. Наружу через API не отдаются (`server/serialize.ts`) — служебные данные
   протокола.
+  **`requireReasoning` запрещает `thinking:{type:'disabled'}`.** У модели с обязательным reasoning
+  (например MiniMax) явный `disabled` — ответ `400` (`code 2013`): при `reasoningLevel: 'none'` адаптер
+  у такой модели поле `thinking` **не отправляет вовсе** (`_resolveThinking` → `_requiresReasoning`,
+  рядом `warn` в лог), а не изображает выключение. У остальных моделей поведение прежнее —
+  `{type:'disabled'}` (ADR-117).
   **Шов «части ↔ блоки» — `engine/reasoning-blocks.ts`** (`toLlmReasoningBlocks`,
   `makeReasoningParts`, `reasoningBlocksFromParts`, `reasoningBlocksOfMessage`): оркестратор и цикл
   саб-агента собирают блоки по итерациям, персистят их в `parts` финального assistant-сообщения

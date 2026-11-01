@@ -179,7 +179,11 @@ export async function executeToolDef(
   context: ToolContext,
   toolName: string,
 ): Promise<ToolResult> {
-  const parsed = toolDef.parameters.safeParse(toolArgs);
+  // Терпимость к типовым обёрткам слабых моделей (`{todos: {item: …}}`):
+  // нормализация идёт до валидации, иначе модель получает бесполезное
+  // `Invalid input` и повторяет тот же вызов.
+  const args = toolDef.normalizeArgs ? toolDef.normalizeArgs(toolArgs) : toolArgs;
+  const parsed = toolDef.parameters.safeParse(args);
   if (!parsed.success) {
     // Один контракт content+metadata: текст и `metadata.i18n` строит хелпер,
     // иначе UI подставлял бы в шаблон пустое место вместо `{issues}` (ADR-041).

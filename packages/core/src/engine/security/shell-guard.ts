@@ -409,6 +409,14 @@ export function tokenTouchesProtectedMarker(token: string, policy: DeniedPathsSo
   return false;
 }
 
+/** URL (`scheme://…`) — не файловый путь: внешние адреса не подтверждаем. */
+function isUrlToken(token: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(token);
+}
+
+/** Glob-метасимволы (`(`/`)` сюда НЕ входят: это подстановка/текст, не шаблон файлов). */
+const GLOB_CHARS_RE = /[*?[\]{}]/;
+
 /**
  * Похож ли токен на файловый путь (для fail-closed `ask`, когда динамику
  * разрешить не удалось). Glob без разделителей (`*.ts`) и URL — не считаем,
@@ -419,10 +427,50 @@ export function tokenTouchesProtectedMarker(token: string, policy: DeniedPathsSo
 export function looksLikePathToken(token: string): boolean {
   if (token === '' || token === '-') return false;
   if (isWindowsPathToken(token)) return true;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token)) return false; // URL
+  if (isUrlToken(token)) return false;
   if (/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(token)) return true; // $VAR / ${VAR}
   if (token.startsWith('~')) return true;
   return token.includes('/') || hasPathLikeFragment(token);
+}
+
+/**
+ * Является ли токен с неразрешимой динамикой **целью-путём** (для fail-closed
+ * `ask`, шаг 6 `checkShellSegment`). В отличие от `looksLikePathToken` (любой
+ * `/` в токене) критерий строже: токен обязан **начинаться** как путь или
+ * динамический путь, либо быть glob'ом с разделителем.
+ *
+ * Причина: `tokenizeCommand` снимает кавычки, но сохраняет пробелы внутри
+ * токена, поэтому «путём» становилась целая строка текста —
+ * `echo "=== diff vs origin/master ==="` и `node -e "console.log(require(...))"`
+ * уходили на подтверждение пользователя (10+ ложных блокировок за сессию).
+ *
+ * Путь — если токен:
+ * - начинается с `/` (абсолютный, в т.ч. динамический `/proc/$p/comm`),
+ *   `~`, `./`, `../`;
+ * - начинается с переменной: `$VAR`, `${VAR}`, `$VAR/...`;
+ * - Windows-путь (`C:\x`, `C:/x`, `\\server\share`);
+ * - содержит `../` (подъём вверх) в любом месте;
+ * - содержит `/` **и** glob-метасимвол (`packages/<glob>/package.json`) — такой
+ *   шаблон может раскрыться в защищённый путь, разрешить его нельзя (осознанно `ask`).
+ *
+ * Не путь — если токен содержит пробелы/табы (это текст в кавычках), является
+ * URL (`scheme://`) или просто текстом с `/` в середине (`a/b`, `origin/master`).
+ */
+export function isPathLikeTarget(token: string): boolean {
+  if (token === '' || token === '-') return false;
+  // Пробелы/табы внутри токена — содержимое кавычек, а не имя файла.
+  if (/\s/.test(token)) return false;
+  if (isWindowsPathToken(token)) return true;
+  if (isUrlToken(token)) return false;
+  // `$VAR`, `${VAR}`, `$VAR/...` (но не `$p:` и не `${X}.json` — это текст/имя).
+  if (/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?:\/|$)/.test(token)) return true;
+  if (token.startsWith('~')) return true;
+  if (token.startsWith('/')) return true;
+  if (token.startsWith('./') || token.startsWith('../')) return true;
+  if (token.includes('../')) return true;
+  // Glob с разделителем: шаблон может раскрыться в защищённый путь.
+  if (token.includes('/') && GLOB_CHARS_RE.test(token)) return true;
+  return false;
 }
 
 /** Простые мутирующие команды (изменяют состояние файловой системы/системы). */
@@ -836,11 +884,13 @@ function checkShellSegment(
   }
 
   // 6. Неразрешимая динамика-путь без защищённых маркеров: подтверждение
-  // пользователя (не пропускаем молча). Glob без разделителей (`*.ts`) и URL —
-  // рутина, не спрашиваем.
+  // пользователя (не пропускаем молча). Критерий «путь» — строгий
+  // (`isPathLikeTarget`): текст в кавычках (`echo "a/b (c)"`), JS-однострочники
+  // и `origin/master` путями не считаются; glob с разделителем (`packages/<glob>/x`)
+  // и динамические пути (`$X`, `$X/f`, `~/x*`, `/proc/$p/comm`) — по-прежнему `ask`.
   for (const { token, resolved } of extracted) {
     if (resolved.source === 'literal') continue;
-    if (!looksLikePathToken(token)) continue;
+    if (!isPathLikeTarget(token)) continue;
     return {
       action: 'ask',
       reason: sm('shellguard.ask_path', { path: token }),

@@ -49,6 +49,38 @@ export interface TokenUsage {
 }
 
 /**
+ * Нормализованная причина завершения ответа модели (единый словарь для всех
+ * протоколов).
+ *
+ * Зачем: провайдеры сообщают причину по-разному (`stop_reason` у Anthropic,
+ * `finish_reason` у OpenAI-совместимых, `done_reason` у Ollama), а потребителю
+ * (оркестратору) нужно отличать «модель ничего не сказала» от «ответ срезан
+ * лимитом вывода»: при `max_tokens` пустой `content` — это не пустой ответ, а
+ * исчерпанный бюджет (например, adaptive thinking съел весь `max_tokens`).
+ *
+ *  - `end_turn` — естественное завершение;
+ *  - `tool_use` — модель просит вызвать инструмент;
+ *  - `max_tokens` — ответ срезан лимитом вывода (в т.ч. весь ушёл в reasoning);
+ *  - `stop_sequence` — сработала стоп-последовательность;
+ *  - `length` — то же, что `max_tokens` (сырое значение Ollama/части API);
+ *  - `content_filter` — завершение фильтром провайдера;
+ *  - `error` — завершение по ошибке провайдера;
+ *  - `unknown` — причина есть, но не распознана.
+ */
+export const LLM_FINISH_REASONS = [
+  'end_turn',
+  'tool_use',
+  'max_tokens',
+  'stop_sequence',
+  'length',
+  'content_filter',
+  'error',
+  'unknown',
+] as const;
+
+export type LlmFinishReason = (typeof LLM_FINISH_REASONS)[number];
+
+/**
  * Anthropic-протокол: один блок размышлений ответа. `signature` — подпись
  * thinking-блока, `redactedData` — opaque-данные `redacted_thinking`
  * (блок без видимого текста). Порядок элементов — порядок блоков в ответе.
@@ -85,6 +117,13 @@ export interface LLMChunk {
    */
   reasoningRedacted?: string[];
   model?: string;
+  /**
+   * Причина завершения ответа (нормализованный словарь `LlmFinishReason`).
+   * Аддитивное поле: заполняется адаптерами протоколов (Anthropic —
+   * `stop_reason`, OpenAI — `finish_reason`, Ollama — `done_reason`), иначе
+   * `undefined`. Значимо в финальном чанке (`isFinal: true`).
+   */
+  finishReason?: LlmFinishReason;
 }
 
 export interface LLMResponse {
@@ -99,5 +138,7 @@ export interface LLMResponse {
   reasoningSignature?: string;
   /** Anthropic: opaque-данные `redacted_thinking` (см. `LLMChunk.reasoningRedacted`). */
   reasoningRedacted?: string[];
+  /** Причина завершения ответа (см. `LLMChunk.finishReason`). */
+  finishReason?: LlmFinishReason;
   debugInfo?: Record<string, unknown>;
 }

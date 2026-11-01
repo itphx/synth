@@ -86,6 +86,7 @@ export function resolveAssistantStatus(
     case 'session.steps_limit':
       return 'limit';
     case 'session.empty_response':
+    case 'session.output_limit':
     case 'router.timeout':
     case 'router.network_error':
     case 'router.rate_limit_exceeded':

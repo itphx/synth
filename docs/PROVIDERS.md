@@ -114,7 +114,7 @@ SYNTH_PROVIDER_<NAME>_(API_KEY|URL|MODEL|TYPE|NUM_CTX)
 Имя приводится к lowercase с `_` → `-`; при старте запись каталога **дополняется/перезаписывается**
 по этим полям, а `MODEL` создаёт модель `<name>/<model>` с `isDefault: true`, если её ещё нет.
 Через env **не переносятся** `compatibility`, `timeout`, `currency`, `icon` — их задают API или
-JSON каталога (см. §11). CLI-эквивалент — `synth config provider add` (флаги `--type`, `--url`,
+JSON каталога (см. §12). CLI-эквивалент — `synth config provider add` (флаги `--type`, `--url`,
 `--model`, `--api-key`, `--num-ctx`), подробности — [LLM_PROVIDERS.md](./LLM_PROVIDERS.md).
 
 ### 3.4 `num_ctx` (размер контекста)
@@ -221,7 +221,7 @@ true` у модели/провайдера (§6.1); иначе поле игно
 
 | Поле | Условие |
 |---|---|
-| `requireReasoning: true` | тип/имя провайдера `deepseek`, URL содержит `deepseek.com`, id модели содержит `deepseek` |
+| `requireReasoning: true` | тип/имя провайдера `deepseek`, URL содержит `deepseek.com`, id модели содержит `deepseek`; имя провайдера `minimax` или URL с `minimax` (adaptive thinking MiniMax расходует тот же `max_tokens` — у таких моделей действует пол вывода 8192) |
 | `requireAssistantAfterTool: true` | id модели содержит `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral` |
 | `supportsToolChoice: false` | `type: ollama` (нативный `/api/chat` поля не знает) |
 
@@ -323,20 +323,21 @@ Thinking-модели DeepSeek требуют возврата reasoning в по
 `400` «The `reasoning_content` in the thinking mode must be passed back to the API». Поэтому при
 `requireReasoning` поле пишется в **каждое** assistant-сообщение — пустой строкой, если reasoning
 нет (`reasoning ?? (requireReasoning ? '' : undefined)`). Без этого ломался синтетический
-assistant-префилл шага-лимита (§8).
+assistant-префилл шага-лимита (§9).
 
 ### 5.3 Поле лимита вывода
 
 `maxTokensField`: наш дефолт — `max_tokens` (осознанное отличие от opencode, где дефолт
 `max_completion_tokens`). `max_completion_tokens` отправляется только при **явном** значении:
 локальные и кастомные OpenAI-совместимые серверы это поле часто не знают, и молчаливая смена
-дефолта ломала бы существующие инсталляции. Лимит уходит в тело, только если он задан и `> 0`.
+дефолта ломала бы существующие инсталляции. Лимит уходит в тело, только если он задан и `> 0`
+(фактическую величину — целое `> 0` — резолвит политика вывода, §8).
 
 ### 5.4 `tool_choice`
 
 `tool_choice` передаётся **только вместе с `tools`** (часть API отвечает ошибкой на поле без
 инструментов) и только если он задан вызывающим слоем: `auto` | `none` | `required`. На
-шаге-лимите — `none` (§8). У нативного Ollama поле не отправляется (§7).
+шаге-лимите — `none` (§9). У нативного Ollama поле не отправляется (§7).
 
 ### 5.5 `requireAssistantAfterTool` (assistant-«мост»)
 
@@ -402,7 +403,7 @@ Mistral-семейство не принимает историю, где пос
 | `reasoningLevel` | Что в `body.thinking` | Thinking-блоки в истории |
 |---|---|---|
 | `high` | `{type:'enabled', budget_tokens: …}` | реплеятся |
-| `none` | `{type:'disabled'}` | не реплеятся |
+| `none` | `{type:'disabled'}` (у модели с `requireReasoning` поле **не отправляется** — §8) | не реплеятся |
 | `default`, `low`, `medium` | поле не отправляется (дефолт модели) | не реплеятся |
 
 Бюджет — `resolveThinkingBudget(requested, maxTokens)` (`requested` = 8192):
@@ -410,7 +411,8 @@ Mistral-семейство не принимает историю, где пос
 Практически это «не больше половины лимита, но не ниже 1024»; если половина лимита ниже минимума,
 бюджет поднимается до 1024 (место под минимум ещё есть); если места нет вовсе (`max_tokens` ≤ 1024) —
 thinking **не включается**, запрос уходит обычным (вместо `400` «max_tokens must be greater than
-thinking.budget_tokens»). Лимит берётся фактический: `ProviderConfig.maxTokens` → дефолт 4096.
+thinking.budget_tokens»). Лимит берётся фактический: `ProviderConfig.maxTokens` → дефолт 4096 (у вызовов
+из сессии значение всегда резолвит политика вывода — §8).
 
 Принудительные ограничения при включённом thinking:
 
@@ -439,7 +441,7 @@ thinking.budget_tokens»). Лимит берётся фактический: `Pr
 - смена уровня между **ходами** подхватывается (effort едет в опциях вызова, а не в конструкторе
   провайдера, который кэшируется и разделяется между прогонами), но меняет параметры запроса и может
   сбросить кэш промпта на стороне провайдера. Внутри хода изменение настроек (`PATCH` во время
-  прогона) до следующего шага **не** подхватывается — настройки читаются на старте хода (§11).
+  прогона) до следующего шага **не** подхватывается — настройки читаются на старте хода (§12).
 
 Без флага поведение прежнее (`thinking` по `reasoningLevel`), а явный `ChatOptions.effort`
 **игнорируется**.
@@ -470,9 +472,9 @@ thinking.budget_tokens»). Лимит берётся фактический: `Pr
 ### 6.3 Prefill шага-лимита при thinking
 
 На шаге-лимите в конец истории дописывается синтетическое assistant-сообщение с требованием «только
-текст» (§8). При включённом thinking в этом префилле **нет** thinking-блока. Проверено живьём на
+текст» (§9). При включённом thinking в этом префилле **нет** thinking-блока. Проверено живьём на
 RouterAI/qwen: запрос принимается, ход завершается `completed` с `step_limit_reached`.
-Официальный `api.anthropic.com` в этом сценарии не прогонялся (§11).
+Официальный `api.anthropic.com` в этом сценарии не прогонялся (§12).
 
 ### 6.4 Prompt-cache breakpoints
 
@@ -494,7 +496,7 @@ Anthropic-совместимый эндпоинт DeepSeek (`type: anthropic`, U
 - эндпоинт **толерантен** к отсутствию thinking-блока в истории (реплей без блока — `200`), то есть
   строгий round-trip, обязательный для официального Anthropic, здесь не требуется.
 
-Непроверенным остаётся `tool_choice: 'none'` вместе с `tools` на этом эндпоинте (§11) — это путь
+Непроверенным остаётся `tool_choice: 'none'` вместе с `tools` на этом эндпоинте (§12) — это путь
 шага-лимита.
 
 ## 7. Ollama
@@ -534,13 +536,62 @@ top-level `system` — он есть только у `/api/generate`).
 `session.steps_limit` (статус `limit`). Проверено живьём: `qwen3.8:27b-256k` через нативный Ollama
 даёт `status=limit`, `step_limit_reached=true`, текста модель не даёт.
 
-## 8. Лимит шагов
+## 8. Причина завершения и лимит вывода
+
+Адаптеры нормализуют причину завершения ответа в один словарь `LlmFinishReason`
+(`LLM_FINISH_REASONS`, [shared/types/llm.ts](../packages/shared/src/types/llm.ts)) и кладут её в
+`LLMChunk.finishReason`/`LLMResponse.finishReason` (значимо у финального чанка):
+
+| Протокол | Поле протокола | Маппинг |
+|---|---|---|
+| OpenAI-chat | `choices[0].finish_reason` | `stop` → `end_turn`, `length` → `max_tokens`, `tool_calls`/`function_call` → `tool_use`, `content_filter` → `content_filter` |
+| Anthropic | `stop_reason` (стрим — в `message_delta`, нестрим — корень ответа) | `end_turn`/`tool_use`/`max_tokens`/`stop_sequence` — как есть |
+| Ollama | `done_reason` финального чанка | `stop` → `end_turn`, `length` → `max_tokens` |
+
+Отсутствующее поле → `undefined` («причина не сообщена», поведение прежних версий), а незнакомое
+значение OpenAI/Anthropic → `unknown` («причина есть, но не распознана»); у Ollama незнакомый
+`done_reason` не маппится вовсе.
+
+**Reasoning-токены.** `TokenUsage.reasoningTokens` пишется отдельно от `outputTokens`: Anthropic —
+`usage.output_tokens_details.thinking_tokens`, OpenAI — `completion_tokens_details.reasoning_tokens`
+(у Ollama такого поля нет). Значение **входит** в бюджет `max_tokens` — thinking расходует тот же
+лимит, поэтому без него неотличимы «модель промолчала» и «бюджет ушёл в размышления».
+
+**Лимит вывода — одна политика резолва** ([engine/orchestrator/max-output.ts](../packages/core/src/engine/orchestrator/max-output.ts),
+применяется в [engine/orchestrator/routing.ts](../packages/core/src/engine/orchestrator/routing.ts)
+для обоих путей — явной пары и ветки роутера):
+
+| Приоритет | Источник |
+|---|---|
+| 1 | явное `SessionSettings.maxTokens` (`0` — «авто») |
+| 2 | `ModelConfig.maxOutputTokens` (каталог модели; он же **кап** — больше заявленного моделью не отправляем) |
+| 3 | `llm.maxTokens` конфига инстанса (env `SYNTH_LLM_MAX_TOKENS`, дефолт 8192) |
+| 4 | встроенный дефолт 8192 |
+
+**Пол у reasoning-моделей.** У моделей с `compatibility.requireReasoning` (и shorthand
+`ModelConfig.requiresReasoning`) лимит поднимается до `REASONING_MIN_OUTPUT_TOKENS = 8192`, но не выше
+каталога: adaptive thinking съедает тот же `max_tokens`, и маленький лимит целиком уходит в
+размышления — ответ приходит пустым.
+
+**Пустой ответ при `max_tokens`** — не «модель промолчала»: финализация хода подставляет текст
+`session.output_limit` (`max_tokens=N, из них M на размышления`) и ставит статус ответа `error`
+([engine/orchestrator/phases/process-finalize.ts](../packages/core/src/engine/orchestrator/phases/process-finalize.ts),
+[persistence.ts](../packages/core/src/engine/orchestrator/persistence.ts)). Нормализованная причина
+всегда пишется в `metadata.finish_reason` финального assistant-сообщения — по ней видно, что ответ
+срезан лимитом, а не пуст.
+
+**`requireReasoning` и Anthropic thinking.** Модель с обязательным reasoning (например MiniMax)
+отвечает `400` (`code 2013`) на явный `thinking: {type:'disabled'}`. Поэтому при
+`reasoningLevel: 'none'` адаптер у такой модели поле `thinking` **не отправляет вовсе** (§6.1):
+«выключить» размышления нельзя — и изображать выключение тоже.
+
+## 9. Лимит шагов
 
 Механика — паритет с opencode; общий модуль —
 [engine/llm/max-steps.ts](../packages/core/src/engine/llm/max-steps.ts) (им пользуются основной
 цикл `engine/orchestrator.ts` и цикл саб-агента `engine/tools/task/run-cycle.ts`).
 
-### 8.1 Нумерация: `maxSteps: N` → N−1 рабочих шагов + шаг-лимит
+### 9.1 Нумерация: `maxSteps: N` → N−1 рабочих шагов + шаг-лимит
 
 `stepLimitStep = iteration + 1 >= maxSteps` (`iteration` с нуля). Следствия:
 
@@ -548,7 +599,7 @@ top-level `system` — он есть только у `/api/generate`).
 - `maxSteps: 1` — сразу только шаг-лимит (tool-вызовов в ходе нет);
 - `maxSteps` не задан (или `<= 0`) — лимита нет (`DEFAULT_MAX_ITERATIONS = Infinity`).
 
-### 8.2 Что происходит на шаге-лимите
+### 9.2 Что происходит на шаге-лимите
 
 - **`tools` остаются в запросе** — иначе у провайдера слетает кэшированный префикс, и модель
   начинает печатать разметку вызова текстом;
@@ -563,7 +614,7 @@ top-level `system` — он есть только у `/api/generate`).
   публикуется `tool_call.result`; пары `toolUse`/`toolResult` не рвутся (иначе следующий вызов
   получил бы `400` «insufficient tool messages following tool_calls»).
 
-### 8.3 Отчёты и метки
+### 9.3 Отчёты и метки
 
 | Где | Что |
 |---|---|
@@ -579,7 +630,7 @@ top-level `system` — он есть только у `/api/generate`).
 синтетический префилл реально уходил в запрос. Ключ `session.max_iterations` для основного цикла
 больше не используется (остался у шагов пайплайнов).
 
-## 9. Безопасность и наблюдаемость
+## 10. Безопасность и наблюдаемость
 
 - **Единственный путь вызова** — `GatewayProvider` (ADR-036): guard, обфускация, rate limit,
   аудит, output guard, `embed` и `decide` — через ту же обёртку. Прямой вызов адаптера — нарушение
@@ -599,7 +650,7 @@ top-level `system` — он есть только у `/api/generate`).
 - **Вложения** — ADR-115: модальности — данные каталога; guard/обфускация работают только с
   текстом, метаданные срезаются `stripMetadata` на границе отправки.
 
-## 10. Диагностика: симптом → причина → настройка
+## 11. Диагностика: симптом → причина → настройка
 
 | Симптом | Причина | Что настроить |
 |---|---|---|
@@ -609,6 +660,7 @@ top-level `system` — он есть только у `/api/generate`).
 | `temperature` не действует при thinking (Anthropic) | API требует `temperature: 1` при включённом thinking | так и задумано; для управления вариативностью — `reasoningLevel` ниже или thinking выключить |
 | `tool_choice: required` не срабатывает при thinking | Anthropic запрещает принудительный вызов при thinking — коэрсится в `auto` | убрать `required` или выключить thinking |
 | Стрим обрывается ошибкой «Провайдер закрыл стрим без finish_reason» | `requireFinishReason: true` (дефолт), а сервер не присылает `finish_reason` | `compatibility.requireFinishReason: false` для этого провайдера/модели (ошибка невосстановимая, ретраи не помогут) |
+| Пустой ответ модели, статус `error`, текст `session.output_limit` | Ответ срезан лимитом вывода (`finish_reason: max_tokens`), у reasoning-модели весь бюджет ушёл в thinking | поднять `SessionSettings.maxTokens`/`ModelConfig.maxOutputTokens`/`llm.maxTokens` (§8); у моделей с `requireReasoning` действует пол 8192 |
 | Кэш промпта не работает | провайдер кеширует только по inline-маркерам, а `cacheFormat` не задан (работает `prompt_cache_key`), либо наоборот | выставить `compatibility.cacheFormat: anthropic`/`alibaba` (тогда `prompt_cache_key` не отправляется) либо убрать его и пользоваться implicit caching |
 | Задвоение/лишние маркеры кэша | `cacheFormat` задан, но прокси/шлюз сам ставит `cache_control`; либо маркеры уже пришли в теле | бюджет ≤ 4 считается с учётом уже стоящих маркеров; при собственном кэше шлюза `cacheFormat` не задавать; `cachePolicy: 'none'` отключает маркеры для отладки |
 | Модель вызывает инструменты на шаге-лимите (Ollama) | нативный `/api/chat` не знает `tool_choice` | ожидаемое поведение: вызовы не исполняются, приходит детерминированный отчёт (§7.4); поднять `maxSteps` агента |
@@ -616,7 +668,7 @@ top-level `system` — он есть только у `/api/generate`).
 | `usage` в стриме нулевой | сервер не поддерживает `stream_options` | `compatibility.streamUsage: false` (запрос перестанет нести непонятное поле; usage останется нулевым) |
 | `400` про `output_config` / `effort` (Anthropic) | включён `supportsEffortUpdates`, а шлюз поля не знает; либо модель не effort-тира | убрать `supportsEffortUpdates` (вернётся прежний режим `thinking`); тиры `xhigh`/`max` отправлять только после проверки на живом провайдере (задаются в настройках агента/сессии — селект «Усилие рассуждений») |
 
-## 11. Известные ограничения
+## 12. Известные ограничения
 
 - **`supportsEffortUpdates` реализован частично.** Effort-режим Anthropic (`output_config.effort`,
   §6.1) включается только явным флагом; тир берётся из `effort` агента/сессии (админка «Агенты»,

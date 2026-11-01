@@ -157,6 +157,7 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (stage 1 of roadmap 0.12.4 — block 4) |
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (safeguard on the subagent prompt size; `0` — no limit) |
 | `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (subagent nesting depth limit; `0` — no limit) |
+| `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (default output limit; `0` — core default) |
 | `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (common tool output limit, lines; ≥ 1) |
 | `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (common tool output limit, bytes; ≥ 1) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
@@ -309,6 +310,9 @@ llm:
   defaultModel: ""                # is set in the «Models» UI (`/api/v2/settings/default-model`) and takes precedence over config
   maxRetries: 3
   timeout: 60
+  maxTokens: 8192                 # SYNTH_LLM_MAX_TOKENS: default output limit for new sessions and models
+                                  # without `maxOutputTokens` (0 — core default); the model catalog is a cap, and
+                                  # reasoning models (deepseek, minimax) get a floor of 8192
   cache: "auto"                   # ADR-070: prompt-cache policy — auto (markers/key) | none (disable);
                                   # applied in the providers (Anthropic cache_control, OpenAI prompt_cache_key)
 
@@ -1647,7 +1651,8 @@ rather than hardcoded per provider type. The same object exists on two levels:
 - **Priority:** the explicit **model** value → the explicit **provider** value → the **heuristic** →
   the built-in default (`resolveModelCompatibility`). Heuristics (`detectCompatibilityHeuristics`) apply
   only to unset fields: `requireReasoning` — provider type/name `deepseek`, a URL containing
-  `deepseek.com`, a model id containing `deepseek`; `requireAssistantAfterTool` — `mistral`/`devstral`/
+  `deepseek.com`, a model id containing `deepseek`, provider name `minimax` or a `minimax` URL;
+  `requireAssistantAfterTool` — `mistral`/`devstral`/
   `codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField`,
   `streamUsage`, `cacheFormat`, `requireFinishReason` and `supportsEffortUpdates` are not heuristically
   detected: local OpenAI-compatible servers often do not know `max_completion_tokens`, and cache inline

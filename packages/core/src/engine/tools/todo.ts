@@ -17,6 +17,53 @@ export interface TodoToolExtra {
 const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
 const TODO_PRIORITIES = ['high', 'medium', 'low'] as const;
 
+/**
+ * Ключи-обёртки, которыми слабые модели заворачивают аргумент: присылают
+ * `{"todos": {"item": [{…}]}}` вместо `{"todos": […]}` и получают бесполезное
+ * `todos: Invalid input`, после чего повторяют тот же вызов.
+ */
+const TODO_ITEM_WRAPPER_KEYS = ['item', 'items', 'todos'] as const;
+const TODO_IDS_WRAPPER_KEYS = ['item', 'items', 'ids'] as const;
+
+/** Глубина разворачивания обёрток (`{items:{item:…}}`) — защита от зацикливания. */
+const TODO_WRAPPER_MAX_DEPTH = 3;
+
+/**
+ * Разворачивает одиночную обёртку `{item: …}`/`{items: …}`/`{todos: …}`.
+ *
+ * Разворачивается только объект с **единственным** ключом из списка — сам пункт
+ * todo (`{content, status?}`), массив и любой другой объект остаются как есть.
+ */
+function unwrapTodoArg(value: unknown, wrapperKeys: readonly string[]): unknown {
+  let current = value;
+  for (let depth = 0; depth < TODO_WRAPPER_MAX_DEPTH; depth += 1) {
+    if (typeof current !== 'object' || current === null || Array.isArray(current)) return current;
+    const keys = Object.keys(current);
+    if (keys.length !== 1) return current;
+    const key = keys[0]!;
+    if (!wrapperKeys.includes(key)) return current;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+/**
+ * Нормализация аргументов todo-тула до zod-валидации: `{todos:{item:[…]}}` →
+ * `{todos:[…]}`. Валидные формы не меняются; сам union в схеме остаётся
+ * (схема для модели не переписывается — нормализация только на приёме).
+ */
+function normalizeTodoArgs(
+  args: Record<string, unknown>,
+  field: 'todos' | 'ids',
+  wrapperKeys: readonly string[],
+): Record<string, unknown> {
+  if (!(field in args)) return args;
+  const value = args[field];
+  const unwrapped = unwrapTodoArg(value, wrapperKeys);
+  if (unwrapped === value) return args;
+  return { ...args, [field]: unwrapped };
+}
+
 /** Приоритет по умолчанию (todo_add) — в компактном выводе не печатается. */
 const DEFAULT_TODO_PRIORITY: TodoPriority = 'medium';
 
@@ -296,6 +343,8 @@ export const todoAddTool: ToolDefinition = {
     todos: z.union([todoAddItemSchema, z.array(todoAddItemSchema)])
       .describe('Todo item or array of todo items to add'),
   }),
+  // Терпимость к `{todos:{item:[…]}}`/`{todos:{items:…}}` от слабых моделей.
+  normalizeArgs: (args) => normalizeTodoArgs(args, 'todos', TODO_ITEM_WRAPPER_KEYS),
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
@@ -446,6 +495,8 @@ export const todoDeleteTool: ToolDefinition = {
     ids: z.union([z.string(), z.array(z.string())])
       .describe('Todo item id or array of ids to delete'),
   }),
+  // Терпимость к `{ids:{item:'…'}}`/`{ids:{ids:[…]}}` от слабых моделей.
+  normalizeArgs: (args) => normalizeTodoArgs(args, 'ids', TODO_IDS_WRAPPER_KEYS),
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)

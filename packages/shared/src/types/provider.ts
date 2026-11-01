@@ -206,7 +206,8 @@ export const MODEL_COMPATIBILITY_KEYS = [
  * (`packages/ai/src/protocols/openai-chat.ts`):
  *
  *  - `requireReasoning`: тип/имя провайдера `deepseek`, URL ~ `deepseek.com`,
- *    модель ~ `deepseek`;
+ *    модель ~ `deepseek`; провайдер `minimax` или URL ~ `minimax`
+ *    (adaptive thinking у MiniMax идёт в тот же бюджет вывода);
  *  - `requireAssistantAfterTool`: Mistral-семейство (`mistral`, `devstral`,
  *    `codestral`, `pixtral`, `mixtral`);
  *  - `supportsToolChoice`: `false` для нативного Ollama (`type: 'ollama'`).
@@ -225,7 +226,12 @@ export function detectCompatibilityHeuristics(
   const requireReasoning = type === 'deepseek'
     || name === 'deepseek'
     || url.includes('deepseek.com')
-    || model.includes('deepseek');
+    || model.includes('deepseek')
+    // MiniMax: adaptive thinking включён на стороне модели и расходует тот же
+    // `max_tokens` — без запаса вывода ответ приходит пустым. Определяем по
+    // провайдеру/URL, а не по модели: имя `minimax` носят сторонние видео-модели.
+    || name === 'minimax'
+    || url.includes('minimax');
 
   const mistral = ['mistral', 'devstral', 'codestral', 'pixtral', 'mixtral']
     .some((family) => model.includes(family));

@@ -42,6 +42,7 @@ import {
   type GatewayWrapDeps,
   type GetProviderDeps,
 } from './routing.js';
+import { DEFAULT_MAX_OUTPUT_TOKENS, REASONING_MIN_OUTPUT_TOKENS } from './max-output.js';
 
 class MockProvider extends BaseProvider {
   async chat(): Promise<LLMResponse> {
@@ -215,6 +216,52 @@ describe('getProvider', () => {
     )!;
     expect(provider.maxTokens).toBe(777);
     expect(provider.temperature).toBe(0.1);
+  });
+
+  it('maxTokens=0 (авто) → конфиг llm.maxTokens, затем дефолт ядра', () => {
+    const fromConfig = getProvider(
+      'mock', makeSession({ model: 'm', maxTokens: 0 }), undefined, deps({ defaultMaxOutputTokens: 12_000 }),
+    )!;
+    expect(fromConfig.maxTokens).toBe(12_000);
+
+    const fallback = getProvider('mock', makeSession({ model: 'm', maxTokens: 0 }), undefined, deps())!;
+    expect(fallback.maxTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+  });
+
+  it('каталог модели: лимит вывода берётся при авто и капит явное значение', () => {
+    const resolve = () => 32_000;
+    const auto = getProvider(
+      'mock', makeSession({ model: 'm', maxTokens: 0 }), undefined,
+      deps({ resolveModelMaxOutputTokens: resolve }),
+    )!;
+    expect(auto.maxTokens).toBe(32_000);
+
+    const capped = getProvider(
+      'mock', makeSession({ model: 'm', maxTokens: 64_000 }), undefined,
+      deps({ resolveModelMaxOutputTokens: () => 8192 }),
+    )!;
+    expect(capped.maxTokens).toBe(8192);
+  });
+
+  it('reasoning-модель (MiniMax): пол вывода 8192 даже при сохранённых 4096', () => {
+    const loader = providerLoader({
+      minimax: {
+        name: 'minimax', type: 'orchmock', baseUrl: 'https://api.minimax.io/v1',
+        apiKey: '', defaultModel: 'MiniMax-M3.1',
+      } as unknown as SharedProviderConfig,
+    });
+    const provider = getProvider(
+      'minimax', makeSession({ model: 'MiniMax-M3.1', maxTokens: 4096 }), undefined,
+      deps({ providerLoader: loader }),
+    )!;
+    expect(provider.maxTokens).toBe(REASONING_MIN_OUTPUT_TOKENS);
+
+    // Кап каталога важнее пола: модель умеет меньше — не выходим за него.
+    const capped = getProvider(
+      'minimax', makeSession({ model: 'MiniMax-M3.1', maxTokens: 4096 }), undefined,
+      deps({ providerLoader: loader, resolveModelMaxOutputTokens: () => 4096 }),
+    )!;
+    expect(capped.maxTokens).toBe(4096);
   });
 
   it('явная температура (агента) приоритетнее настройки сессии', () => {
@@ -484,5 +531,40 @@ describe('routeProvider (ADR-034)', () => {
     const call = getProviderSpy.mock.calls[0]!;
     expect(call[5]).toBe(0.5);
     expect(call[6]).toBe(10);
+  });
+
+  it('лимит вывода decision-модели резолвится (сессия → каталог → конфиг)', async () => {
+    const mkSpy = () => vi.fn((..._args: unknown[]) => new MockProvider({
+      url: '', apiKey: '', model: 'decision-model', type: 'orchmock',
+    }));
+
+    // Сессия в авто → лимит каталога decision-модели (позиция 3 — maxTokens).
+    const withCatalog = mkSpy();
+    await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model', maxTokens: 0 }), makeMessage(), undefined, undefined,
+      depsWithRouter(
+        { route: vi.fn(async () => decision), getProvider: withCatalog },
+        { resolveModelMaxOutputTokens: () => 24_000 },
+      ),
+    );
+    expect(withCatalog.mock.calls[0]![3]).toBe(24_000);
+
+    // Каталога нет → конфиг llm.maxTokens; явное значение сессии приоритетнее.
+    const fromConfig = mkSpy();
+    await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model', maxTokens: 0 }), makeMessage(), undefined, undefined,
+      depsWithRouter(
+        { route: vi.fn(async () => decision), getProvider: fromConfig },
+        { defaultMaxOutputTokens: 12_000 },
+      ),
+    );
+    expect(fromConfig.mock.calls[0]![3]).toBe(12_000);
+
+    const explicit = mkSpy();
+    await routeProvider(
+      makeSession({ provider: 'mock', model: 's-model', maxTokens: 3000 }), makeMessage(), undefined, undefined,
+      depsWithRouter({ route: vi.fn(async () => decision), getProvider: explicit }),
+    );
+    expect(explicit.mock.calls[0]![3]).toBe(3000);
   });
 });

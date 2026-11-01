@@ -57,6 +57,8 @@ interface SessionFormValues {
   decisionFirst: boolean
   askTimeoutEnabled: boolean
   askTimeoutSec: string
+  /** Лимит ответа (`maxTokens`): строка — значение инпута, `''` трактуется как 0 (авто). */
+  maxTokens: string
 }
 
 /** Поля, сохраняемые немедленно: тумблеры и селекты. Инпуты/слайдеры — с debounce. */
@@ -102,6 +104,35 @@ function normalizeAskTimeout(values: SessionFormValues): SessionFormValues {
     askTimeoutEnabled: active,
     askTimeoutSec: active ? String(Number(values.askTimeoutSec)) : '',
   }
+}
+
+/** Предел лимита ответа — тот же, что у схемы настроек сессии (`SessionSettings.maxTokens`). */
+const MAX_TOKENS_LIMIT = 200_000
+
+/**
+ * Разбор инпута «Лимит ответа»: пустая строка — 0 (авто), невалидное значение
+ * (не число, не целое, отрицательное, больше `MAX_TOKENS_LIMIT`) — `null`.
+ * `null` означает «не сохранять»: ни NaN, ни значение вне диапазона в тело не уходят.
+ */
+function parseMaxTokens(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (trimmed === '') return 0
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > MAX_TOKENS_LIMIT) {
+    return null
+  }
+  return value
+}
+
+/**
+ * Нормализация «Лимита ответа» для сравнения «есть ли изменения»: пустая строка
+ * приравнивается к 0 (авто), невалидный ввод — к серверному значению (он не
+ * сохраняется, поэтому и изменением не считается — иначе автосейв зацикливался бы).
+ */
+function normalizeMaxTokens(values: SessionFormValues, serverValues: SessionFormValues): SessionFormValues {
+  const parsed = parseMaxTokens(values.maxTokens)
+  const serverValue = parseMaxTokens(serverValues.maxTokens) ?? 0
+  return { ...values, maxTokens: String(parsed ?? serverValue) }
 }
 
 /**
@@ -154,6 +185,8 @@ function formValuesFromSettings(
     decisionFirst: (s.decisionFirst as boolean | undefined) ?? true,
     askTimeoutEnabled: permCfg?.askTimeoutMs !== 0,
     askTimeoutSec: String(Math.round(effMs / 1000)),
+    // 0 = авто (резолв: каталог модели → `llm.maxTokens`); отсутствие ключа — тоже авто.
+    maxTokens: String(typeof s.maxTokens === 'number' ? s.maxTokens : 0),
   }
 }
 
@@ -204,10 +237,16 @@ function buildSettingsBody(
   // decision-уровень для всех сессий).
   delete restSettings.decisionFirst
 
+  // Лимит ответа: невалидный ввод не сохраняется (тело не должно уносить NaN/выход
+  // за диапазон) — оставляем серверное значение, чтобы автосейв другого поля не сбросил его.
+  const sessionMaxTokens = typeof session.settings.maxTokens === 'number' ? session.settings.maxTokens : 0
+  const parsedMaxTokens = parseMaxTokens(values.maxTokens)
+
   return {
     ...restSettings,
     provider,
     model,
+    maxTokens: parsedMaxTokens ?? sessionMaxTokens,
     debugEnabled: values.debugEnabled,
     routingEnabled: values.routingEnabled,
     routingStrategy: values.routingStrategy,
@@ -319,6 +358,8 @@ export function SessionSettingsTab() {
   const [askTimeoutSec, setAskTimeoutSec] = useState<string>('')
   // Вкл/Выкл таймаута подтверждения (0 = выключен → запросы ждут ответа бесконечно)
   const [askTimeoutEnabled, setAskTimeoutEnabled] = useState(true)
+  // Лимит ответа (`maxTokens`; строка инпута, '' = 0 = авто)
+  const [maxTokens, setMaxTokens] = useState<string>('0')
   // Глобальный дефолт таймаута подтверждения из «Безопасность»
   const [defaultAskTimeoutMs, setDefaultAskTimeoutMs] = useState(30_000)
 
@@ -465,6 +506,7 @@ export function SessionSettingsTab() {
     decisionFirst,
     askTimeoutEnabled,
     askTimeoutSec,
+    maxTokens,
   }), [
     debugEnabled, toolsPolicy, mcpPolicy, routingEnabled, routingStrategy,
     routingContentCodingProvider, routingContentCodingModel,
@@ -474,7 +516,7 @@ export function SessionSettingsTab() {
     routingEscalationMinLength, routingCostEnabled, routingCostCheapProvider, routingCostCheapModel,
     routingCostMaxTokens, routingSubagentEnabled, routingSubagentModel, routingSubagentProvider,
     microFirst, microConfidenceThreshold, embeddingEnabled, embedProvider, embedModel, decisionFirst,
-    askTimeoutEnabled, askTimeoutSec,
+    askTimeoutEnabled, askTimeoutSec, maxTokens,
   ])
 
   const sessionValues = useMemo(
@@ -484,8 +526,8 @@ export function SessionSettingsTab() {
 
   const dirtyKeys = useMemo(() => {
     if (!session) return []
-    const formForCompare = normalizeAskTimeout(form)
-    const sessionForCompare = normalizeAskTimeout(sessionValues)
+    const formForCompare = normalizeMaxTokens(normalizeAskTimeout(form), sessionValues)
+    const sessionForCompare = normalizeMaxTokens(normalizeAskTimeout(sessionValues), sessionValues)
     return (Object.keys(formForCompare) as Array<keyof SessionFormValues>)
       .filter((key) => formForCompare[key] !== sessionForCompare[key])
   }, [form, sessionValues, session])
@@ -531,6 +573,7 @@ export function SessionSettingsTab() {
     setDecisionFirst(values.decisionFirst)
     setAskTimeoutEnabled(values.askTimeoutEnabled)
     setAskTimeoutSec(values.askTimeoutSec)
+    setMaxTokens(values.maxTokens)
   }, [])
 
   const runSave = useCallback(async (
@@ -729,6 +772,9 @@ export function SessionSettingsTab() {
       ? t(`${prefix}.inherit`, { policy: t(`policy.short.${value}`) })
       : t(`${prefix}.inheritUnknown`)
 
+  // Невалидный ввод лимита ответа не сохраняется и помечается для доступности.
+  const maxTokensInvalid = parseMaxTokens(maxTokens) === null
+
   if (!session) {
     return (
       <PanelTab>
@@ -822,6 +868,28 @@ export function SessionSettingsTab() {
               />
             </div>
           )}
+        </Section>
+
+        {/* Лимит ответа (`max_tokens`): 0 = авто (каталог модели → llm.maxTokens) */}
+        <Section title={t('sessionSettings.maxTokens')}>
+          <div className="flex items-center justify-between gap-3">
+            <input
+              data-testid="session-max-tokens"
+              type="number"
+              min={0}
+              max={MAX_TOKENS_LIMIT}
+              step={1}
+              placeholder="0"
+              value={maxTokens}
+              onChange={(e) => setMaxTokens(e.target.value)}
+              aria-label={t('sessionSettings.maxTokens')}
+              aria-invalid={maxTokensInvalid || undefined}
+              className={`w-24 shrink-0 rounded-md bg-input border px-2 py-1 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring ${
+                maxTokensInvalid ? 'border-destructive' : 'border-border'
+              }`}
+            />
+          </div>
+          <p className="text-[0.625rem] text-muted-foreground/60">{t('sessionSettings.maxTokensHint')}</p>
         </Section>
 
         {/* Сессионные одобрения (ADR-029) */}

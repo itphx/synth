@@ -1,4 +1,4 @@
-import type { LLMChunk, LLMResponse, TokenUsage, ResolvedModelCompatibility } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, LlmFinishReason, TokenUsage, ResolvedModelCompatibility } from '@itphx/synth-shared';
 import {
   BaseProvider,
   resolveProviderCompatibility,
@@ -36,6 +36,25 @@ function ephemeralCacheControl(): Record<string, unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Причина завершения ответа OpenAI-совместимых API (`finish_reason`) → общий
+ * словарь. `stop` — естественное завершение, `length` — срез лимитом вывода,
+ * `tool_calls`/`function_call` — запрос инструмента, `content_filter` — фильтр
+ * провайдера. Незнакомое значение → `unknown`; отсутствие → `undefined`.
+ */
+const OPENAI_FINISH_REASONS: Record<string, LlmFinishReason> = {
+  stop: 'end_turn',
+  length: 'max_tokens',
+  tool_calls: 'tool_use',
+  function_call: 'tool_use',
+  content_filter: 'content_filter',
+};
+
+export function normalizeOpenAiFinishReason(raw: unknown): LlmFinishReason | undefined {
+  if (typeof raw !== 'string' || !raw) return undefined;
+  return OPENAI_FINISH_REASONS[raw] ?? 'unknown';
 }
 
 /**
@@ -285,6 +304,11 @@ export class OpenAIProvider extends BaseProvider {
     // ловим это после чтения (дефолт — ошибка, `requireFinishReason: false` —
     // прежнее толерантное поведение).
     let finishReasonSeen = false;
+    /**
+     * Нормализованная причина завершения. Нужна, чтобы отличить «модель ничего
+     * не ответила» от «ответ срезан лимитом вывода» (`length` → `max_tokens`).
+     */
+    let finishReasonValue: LlmFinishReason | undefined;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
@@ -368,7 +392,12 @@ export class OpenAIProvider extends BaseProvider {
               const choices = chunkData.choices as Array<Record<string, unknown>> | undefined;
               const delta = choices?.[0]?.delta as Record<string, unknown> | undefined;
               // Пустая строка/`null` завершением не считаются.
-              if (choices?.[0]?.finish_reason) finishReasonSeen = true;
+              const rawFinishReason = choices?.[0]?.finish_reason;
+              if (rawFinishReason) {
+                finishReasonSeen = true;
+                const normalized = normalizeOpenAiFinishReason(rawFinishReason);
+                if (normalized) finishReasonValue = normalized;
+              }
 
               if (delta) {
                 // Reasoning приходит в разных форматах: DeepSeek — `reasoning_content`,
@@ -487,6 +516,7 @@ export class OpenAIProvider extends BaseProvider {
         debugCollector?.captureApiResponse({
           usage: accumulatedUsage,
           model: this.model,
+          finish_reason: finishReasonValue ?? null,
           tool_calls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
         });
 
@@ -498,6 +528,7 @@ export class OpenAIProvider extends BaseProvider {
           toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
           reasoning: accumulatedReasoning || undefined,
           model: this.model,
+          finishReason: finishReasonValue,
         };
       }
     } finally {
@@ -819,6 +850,8 @@ export class OpenAIProvider extends BaseProvider {
       usage: this._parseUsage(data.usage as Record<string, unknown> | undefined),
       toolCalls,
       reasoning: reasoning || undefined,
+      // Причина завершения (`finish_reason`) — нестримовый ответ.
+      finishReason: normalizeOpenAiFinishReason(choices?.[0]?.finish_reason),
     };
   }
 
