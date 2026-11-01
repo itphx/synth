@@ -788,20 +788,54 @@ html.device-tablet .notifications-popup {
   gap: 0.25rem;
 }
 
-/* Обе кнопки шапки выглядят одинаково (копирование и скачивание). */
+/* Обе кнопки шапки — иконки (копирование и скачивание).
+   Шапка блока кода приходит готовой HTML-строкой из marked и вставляется через
+   `dangerouslySetInnerHTML`, поэтому React-компонент `<Icon>` сюда не поставить,
+   а inline-SVG потребовал бы расширения allowlist DOM-санитайзера. Осознанное
+   исключение из правила «иконки только через `<Icon>`»: иконка — CSS-маска с
+   data-URI SVG, цвет берётся из `currentColor` (`background-color` + `mask-image`),
+   поэтому тема и состояния работают без правок разметки. */
 .markdown-content .md-code-copy,
 .markdown-content .md-code-download {
+  display: inline-flex;
   flex: 0 0 auto;
-  padding: 0.125rem 0.45rem;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm, 0.25rem);
   background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: var(--text-xs, 0.75rem);
-  line-height: 1.4;
+  color: var(--muted-foreground, inherit);
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.markdown-content .md-code-copy::before,
+.markdown-content .md-code-download::before {
+  content: '';
+  width: 0.875rem;
+  height: 0.875rem;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+/* Копирование — «две страницы». */
+.markdown-content .md-code-copy::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Crect%20x='9'%20y='9'%20width='11'%20height='11'%20rx='2'/%3E%3Cpath%20d='M5%2015V5a2%202%200%200%201%202-2h10'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Crect%20x='9'%20y='9'%20width='11'%20height='11'%20rx='2'/%3E%3Cpath%20d='M5%2015V5a2%202%200%200%201%202-2h10'/%3E%3C/svg%3E");
+}
+
+/* Скачивание — «стрелка вниз в лоток». */
+.markdown-content .md-code-download::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M12%203v12'/%3E%3Cpath%20d='m8%2011%204%204%204-4'/%3E%3Cpath%20d='M4%2017v2a2%202%200%200%200%202%202h12a2%202%200%200%200%202-2v-2'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M12%203v12'/%3E%3Cpath%20d='m8%2011%204%204%204-4'/%3E%3Cpath%20d='M4%2017v2a2%202%200%200%200%202%202h12a2%202%200%200%200%202-2v-2'/%3E%3C/svg%3E");
 }
 
 .markdown-content .md-code-copy:hover,
@@ -813,6 +847,20 @@ html.device-tablet .notifications-popup {
 .markdown-content .md-code-copy[data-copied='true'],
 .markdown-content .md-code-download[data-downloaded='true'] {
   color: var(--status-success, var(--primary));
+}
+
+/* Состояние «готово» — галочка вместо иконки действия. */
+.markdown-content .md-code-copy[data-copied='true']::before,
+.markdown-content .md-code-download[data-downloaded='true']::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='m5%2013%204%204L19%207'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='m5%2013%204%204L19%207'/%3E%3C/svg%3E");
+}
+
+/* Тач-таргет: на десктопе кнопки компактные (24px), на coarse-указателе — 28px. */
+html.pointer-coarse .markdown-content .md-code-copy,
+html.pointer-coarse .markdown-content .md-code-download {
+  width: 1.75rem;
+  height: 1.75rem;
 }
 
 .markdown-content .md-code-pre {

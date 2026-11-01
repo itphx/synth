@@ -95,8 +95,10 @@ function createMarkdownRenderer(): Renderer {
       '<div class="md-code-head">',
       `<span class="md-code-lang">${escapeHtml(language)}</span>`,
       '<span class="md-code-actions">',
-      `<button type="button" class="md-code-copy" data-copy-code>${copyLabel}</button>`,
-      `<button type="button" class="md-code-download" data-download-code>${downloadLabel}</button>`,
+      // Кнопки — только иконки (CSS-маска, см. «Markdown в ответах» в index.css):
+      // подпись остаётся в `aria-label`/`title`, текстового содержимого нет.
+      `<button type="button" class="md-code-copy" data-copy-code aria-label="${copyLabel}" title="${copyLabel}"></button>`,
+      `<button type="button" class="md-code-download" data-download-code aria-label="${downloadLabel}" title="${downloadLabel}"></button>`,
       '</span>',
       '</div>',
       `<pre class="md-code-pre"><code class="language-${escapeHtml(languageClass(language))}">${body}</code></pre>`,
@@ -127,6 +129,16 @@ const markdownRenderer = createMarkdownRenderer()
  * Ключ — сам блок: пересозданный блок (новый `html`) получает свою подсветку.
  */
 const pendingHighlights = new WeakMap<HTMLElement, Promise<string | null>>()
+
+/**
+ * Подпись кнопки-иконки: текстового содержимого у неё нет (иконка рисуется
+ * CSS-маской), поэтому доступное имя и тултип — только в атрибутах.
+ */
+function setButtonLabel(button: HTMLButtonElement, key: string): void {
+  const label = i18nText(key)
+  button.setAttribute('aria-label', label)
+  button.setAttribute('title', label)
+}
 
 /** Копирование в буфер: ошибки глушим — рендер не должен ломаться (нет API, отказ прав). */
 async function writeClipboard(value: string): Promise<boolean> {
@@ -279,12 +291,13 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
       void writeClipboard(text).then((ok) => {
         if (!ok) return
         copyButton.dataset.copied = 'true'
-        copyButton.textContent = i18nText('markdown.code.copied')
+        // `textContent` не трогаем — иначе пропадёт иконка (CSS-маска на ::before).
+        setButtonLabel(copyButton, 'markdown.code.copied')
         const timer = setTimeout(() => {
           timersRef.current.delete(timer)
           if (!copyButton.isConnected) return
           delete copyButton.dataset.copied
-          copyButton.textContent = i18nText('markdown.code.copy')
+          setButtonLabel(copyButton, 'markdown.code.copy')
         }, 1500)
         timersRef.current.add(timer)
       })
@@ -305,12 +318,13 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
     )
     if (!downloaded) return
     downloadButton.dataset.downloaded = 'true'
-    downloadButton.textContent = i18nText('markdown.code.downloaded')
+    // `textContent` не трогаем — иначе пропадёт иконка (CSS-маска на ::before).
+    setButtonLabel(downloadButton, 'markdown.code.downloaded')
     const timer = setTimeout(() => {
       timersRef.current.delete(timer)
       if (!downloadButton.isConnected) return
       delete downloadButton.dataset.downloaded
-      downloadButton.textContent = i18nText('markdown.code.download')
+      setButtonLabel(downloadButton, 'markdown.code.download')
     }, 1500)
     timersRef.current.add(timer)
   }, [])

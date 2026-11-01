@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
@@ -182,12 +185,23 @@ describe('MarkdownContent: ссылки', () => {
 })
 
 describe('MarkdownContent: копирование', () => {
-  it('клик по кнопке кладёт текст блока в буфер и меняет подпись', async () => {
+  it('кнопка — иконка: подпись в aria-label/title, текстового содержимого нет', async () => {
+    const container = await renderMarkdown('```ts\nconst a = 1\n```')
+
+    const button = container.querySelector<HTMLButtonElement>('[data-copy-code]')
+    expect(button).not.toBeNull()
+    expect(button?.classList.contains('md-code-copy')).toBe(true)
+    expect(button?.getAttribute('aria-label')).toBe(i18nText('markdown.code.copy'))
+    expect(button?.getAttribute('title')).toBe(i18nText('markdown.code.copy'))
+    // Текста в кнопке нет: иконку рисует CSS-маска на ::before.
+    expect(button?.textContent).toBe('')
+  })
+
+  it('клик по кнопке кладёт текст блока в буфер и включает состояние «готово»', async () => {
     const container = await renderMarkdown('```ts\nconst a = 1\nconsole.log(a)\n```')
 
     const button = container.querySelector<HTMLButtonElement>('[data-copy-code]')
     expect(button).not.toBeNull()
-    expect(button?.textContent).toBe(i18nText('markdown.code.copy'))
 
     await act(async () => {
       button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -195,8 +209,35 @@ describe('MarkdownContent: копирование', () => {
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1)
     expect(vi.mocked(navigator.clipboard.writeText).mock.calls[0][0]).toBe('const a = 1\nconsole.log(a)')
-    expect(button?.textContent).toBe(i18nText('markdown.code.copied'))
     expect(button?.getAttribute('data-copied')).toBe('true')
+    expect(button?.getAttribute('aria-label')).toBe(i18nText('markdown.code.copied'))
+    expect(button?.getAttribute('title')).toBe(i18nText('markdown.code.copied'))
+    // Состояние меняется атрибутами — текст кнопки не появляется.
+    expect(button?.textContent).toBe('')
+  })
+
+  it('состояние «готово» снимается по таймеру (атрибут и подпись возвращаются)', async () => {
+    const container = await renderMarkdown('```ts\nconst a = 1\n```')
+    const button = container.querySelector<HTMLButtonElement>('[data-copy-code]')!
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+
+      expect(button.getAttribute('data-copied')).toBe('true')
+      expect(button.getAttribute('aria-label')).toBe(i18nText('markdown.code.copied'))
+
+      await act(async () => {
+        vi.advanceTimersByTime(1500)
+      })
+
+      expect(button.getAttribute('data-copied')).toBeNull()
+      expect(button.getAttribute('aria-label')).toBe(i18nText('markdown.code.copy'))
+      expect(button.getAttribute('title')).toBe(i18nText('markdown.code.copy'))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('ошибка буфера обмена не ломает рендер', async () => {
@@ -209,7 +250,8 @@ describe('MarkdownContent: копирование', () => {
     })
 
     expect(container.querySelector('.md-code')).not.toBeNull()
-    expect(button?.textContent).toBe(i18nText('markdown.code.copy'))
+    expect(button?.getAttribute('data-copied')).toBeNull()
+    expect(button?.getAttribute('aria-label')).toBe(i18nText('markdown.code.copy'))
   })
 })
 
@@ -418,9 +460,13 @@ describe('MarkdownContent: скачивание кода', () => {
   it('кнопка скачивания есть в шапке и не срезана санитайзером', async () => {
     const container = await renderMarkdown('```ts\nconst a = 1\n```')
 
-    const button = container.querySelector('[data-download-code]')
+    const button = container.querySelector<HTMLButtonElement>('[data-download-code]')
     expect(button).not.toBeNull()
-    expect(button?.textContent).toBe(i18nText('markdown.code.download'))
+    expect(button?.classList.contains('md-code-download')).toBe(true)
+    // Подпись — только в атрибутах: текста в кнопке нет (иконка — CSS-маска).
+    expect(button?.getAttribute('aria-label')).toBe(i18nText('markdown.code.download'))
+    expect(button?.getAttribute('title')).toBe(i18nText('markdown.code.download'))
+    expect(button?.textContent).toBe('')
     // Обе кнопки — в общей группе действий справа от языка.
     const actions = container.querySelector('.md-code-actions')
     expect(actions?.querySelector('[data-copy-code]')).not.toBeNull()
@@ -469,10 +515,11 @@ describe('MarkdownContent: скачивание кода', () => {
 
     expect(blobs).toHaveLength(0)
     expect(clickedLinks).toHaveLength(0)
-    expect(button.textContent).toBe(i18nText('markdown.code.download'))
+    expect(button.getAttribute('aria-label')).toBe(i18nText('markdown.code.download'))
+    expect(button.getAttribute('data-downloaded')).toBeNull()
   })
 
-  it('подпись меняется на «Скачано» и возвращается по таймеру', async () => {
+  it('состояние «Скачано» ставится атрибутом и снимается по таймеру', async () => {
     const container = await renderMarkdown('```ts\nconst a = 1\n```')
     const button = container.querySelector<HTMLButtonElement>('[data-download-code]')!
     // Таймеры — фейковые только на время проверки обратной связи.
@@ -482,15 +529,18 @@ describe('MarkdownContent: скачивание кода', () => {
         button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       })
 
-      expect(button.textContent).toBe(i18nText('markdown.code.downloaded'))
       expect(button.getAttribute('data-downloaded')).toBe('true')
+      expect(button.getAttribute('aria-label')).toBe(i18nText('markdown.code.downloaded'))
+      expect(button.getAttribute('title')).toBe(i18nText('markdown.code.downloaded'))
+      expect(button.textContent).toBe('')
 
       await act(async () => {
         vi.advanceTimersByTime(1500)
       })
 
-      expect(button.textContent).toBe(i18nText('markdown.code.download'))
       expect(button.getAttribute('data-downloaded')).toBeNull()
+      expect(button.getAttribute('aria-label')).toBe(i18nText('markdown.code.download'))
+      expect(button.getAttribute('title')).toBe(i18nText('markdown.code.download'))
     } finally {
       vi.useRealTimers()
     }
@@ -528,7 +578,66 @@ describe('MarkdownContent: скачивание кода', () => {
 
     expect(container.querySelector('.md-code')).not.toBeNull()
     expect(clickedLinks).toHaveLength(0)
-    expect(button.textContent).toBe(i18nText('markdown.code.download'))
+    expect(button.getAttribute('aria-label')).toBe(i18nText('markdown.code.download'))
     expect(button.getAttribute('data-downloaded')).toBeNull()
+  })
+})
+
+describe('MarkdownContent: иконки кнопок шапки (CSS-маска)', () => {
+  // jsdom не вычисляет стили псевдоэлементов, поэтому саму иконку проверяем
+  // по CSS-правилам: у обоих состояний (действие и «готово») есть mask-image.
+  const css = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'),
+    'utf8',
+  )
+  /** CSS без комментариев: они могут стоять между правилами и мешать разбору. */
+  const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, '')
+
+  /** Все тела правил, в списке селекторов которых есть `selector`. */
+  function ruleBodies(selector: string): string[] {
+    const bodies: string[] = []
+    for (const chunk of cssRules.split('}')) {
+      const open = chunk.lastIndexOf('{')
+      if (open < 0) continue
+      const selectors = chunk.slice(0, open).split(',').map((s) => s.trim())
+      if (selectors.includes(selector)) bodies.push(chunk.slice(open + 1))
+    }
+    return bodies
+  }
+
+  it('кнопки-иконки: mask-image задан для копирования и скачивания', async () => {
+    const container = await renderMarkdown('```ts\nconst a = 1\n```')
+    const copy = container.querySelector<HTMLButtonElement>('.md-code-copy')
+    const download = container.querySelector<HTMLButtonElement>('.md-code-download')
+    expect(copy).not.toBeNull()
+    expect(download).not.toBeNull()
+    expect(copy!.hasAttribute('data-copy-code')).toBe(true)
+    expect(download!.hasAttribute('data-download-code')).toBe(true)
+
+    for (const selector of [
+      '.markdown-content .md-code-copy::before',
+      '.markdown-content .md-code-download::before',
+    ]) {
+      // Правил может быть несколько (общая база + своя иконка) — берём все.
+      const body = ruleBodies(selector).join('\n')
+      expect(body, `нет правил для ${selector}`).not.toBe('')
+      expect(body).toContain('mask-image: url("data:image/svg+xml,')
+      expect(body).toContain('-webkit-mask-image: url("data:image/svg+xml,')
+    }
+  })
+
+  it('состояния «готово» переключают маску на галочку', () => {
+    for (const selector of [
+      ".markdown-content .md-code-copy[data-copied='true']::before",
+      ".markdown-content .md-code-download[data-downloaded='true']::before",
+    ]) {
+      const body = ruleBodies(selector).join('\n')
+      expect(body).toContain('mask-image: url("data:image/svg+xml,')
+    }
+  })
+
+  it('на coarse-указателе кнопки увеличиваются до тач-таргета', () => {
+    expect(css).toContain('html.pointer-coarse .markdown-content .md-code-copy')
+    expect(css).toContain('html.pointer-coarse .markdown-content .md-code-download')
   })
 })
