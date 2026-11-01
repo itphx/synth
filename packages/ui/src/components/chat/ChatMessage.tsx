@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import { Fragment, memo } from 'react'
+import { Fragment, memo, useId } from 'react'
 import { MarkdownContent } from './MarkdownContent'
 import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
@@ -168,6 +168,22 @@ interface ChatMessageProps {
   expanded?: boolean
   /** Тумблер разворота (стабильная ссылка из `MessageList`). */
   onToggleExpand?: (key: string) => void
+  /**
+   * Компактная плотность ленты (прошлый ход): не рисовать размышления,
+   * промежуточные тексты и карточки инструментов. Карточки саб-агентов
+   * (`item.type === 'subagent'`) остаются — это результат прогона.
+   */
+  serviceCollapsed?: boolean
+  /** Вызовов инструментов в ходе — для строки-сводки скрытых шагов. */
+  serviceToolCount?: number
+  /** Блоков размышлений в ходе — для строки-сводки скрытых шагов. */
+  serviceReasoningCount?: number
+  /** Ключ группы-хода (сводка рендерится один раз на группу). */
+  serviceKey?: string
+  /** Сводка скрытых шагов раскрыта. */
+  serviceExpanded?: boolean
+  /** Тумблер сводки (стабильная ссылка из `MessageList`). */
+  onToggleService?: (key: string) => void
 }
 
 export interface PendingStreamStatus {
@@ -204,6 +220,12 @@ function ChatMessageInner({
   expandKey,
   expanded = false,
   onToggleExpand,
+  serviceCollapsed = false,
+  serviceToolCount = 0,
+  serviceReasoningCount = 0,
+  serviceKey,
+  serviceExpanded = false,
+  onToggleService,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -325,6 +347,27 @@ function ChatMessageInner({
   const handleToggleExpand = useCallback(() => {
     if (expandKey && onToggleExpand) onToggleExpand(expandKey)
   }, [expandKey, onToggleExpand])
+
+  /**
+   * Компактная плотность ленты: сводка скрытых шагов хода. Показываем её, когда
+   * есть что скрывать (`serviceKey` передаёт только владелец сводки группы).
+   * Колбэк/идентификатор стабильны — `React.memo(ChatMessage)` не слетает.
+   */
+  const serviceStepCount = serviceToolCount + serviceReasoningCount
+  const hasServiceSummary =
+    !!onToggleService && !!serviceKey && serviceStepCount > 0
+  const serviceContentId = useId()
+  const handleToggleService = useCallback(() => {
+    if (serviceKey) onToggleService?.(serviceKey)
+  }, [serviceKey, onToggleService])
+  const serviceSummaryLabel = useMemo(() => {
+    const chunks: string[] = []
+    if (serviceToolCount > 0) chunks.push(t('chat.compact.tools', { count: serviceToolCount }))
+    if (serviceReasoningCount > 0) {
+      chunks.push(t('chat.compact.reasoning', { count: serviceReasoningCount }))
+    }
+    return chunks.join(' · ')
+  }, [serviceToolCount, serviceReasoningCount, t])
 
   const handleOriginClick = () => {
     const parentSessionId = (message.metadata as Record<string, unknown>)?.source_session_id as string | undefined
@@ -575,6 +618,10 @@ function ChatMessageInner({
         }
 
         return items.map((item, i) => {
+          // Компактная плотность прошлого хода: карточки саб-агентов — это
+          // результат прогона, их оставляем; размышления, промежуточные тексты
+          // и карточки инструментов скрыты строкой-сводкой.
+          if (serviceCollapsed && item.type !== 'subagent') return null
           if (item.type === 'reasoning') {
             return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
           }
@@ -598,11 +645,46 @@ function ChatMessageInner({
       })()
     : null
 
+  /**
+   * Контент частей при наличии сводки оборачиваем в невидимый контейнер
+   * (`display: contents` — раскладка не меняется) ради `aria-controls`.
+   */
+  const partsContentEl =
+    hasServiceSummary && partsContent
+      ? (
+          <div id={serviceContentId} data-service-content="" className="contents">
+            {partsContent}
+          </div>
+        )
+      : partsContent
+
+  /**
+   * Тихая строка-сводка скрытых шагов (компактная плотность): «N инструментов ·
+   * M размышлений». Клик раскрывает/скрывает содержимое хода.
+   */
+  const serviceSummaryEl = hasServiceSummary ? (
+    <button
+      type="button"
+      data-testid="service-summary"
+      aria-expanded={serviceExpanded}
+      aria-controls={serviceContentId}
+      aria-label={serviceExpanded ? t('chat.compact.collapse') : t('chat.compact.expand')}
+      title={serviceExpanded ? t('chat.compact.collapse') : t('chat.compact.expand')}
+      onClick={handleToggleService}
+      className="service-summary"
+    >
+      <Icon name={serviceReasoningCount > 0 ? 'brain' : 'tools'} className="size-3.5" />
+      {serviceExpanded ? t('chat.compact.hide') : serviceSummaryLabel}
+    </button>
+  ) : null
+
   // ADR-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
   // ADR-115: сообщение только из вложений (картинка от ассистента без текста) — тоже рендерим.
   // Новая UX-модель индикатора: пустой живой сегмент (новый шаг до первого
   // токена) рисуется **только заголовком с точками** — без тела.
+  // Компакт: сегмент со сводкой не должен исчезать, даже если весь его контент
+  // скрыт (иначе пропала бы строка-сводка с тумблером).
   if (
     !displayContent &&
     !message.reasoning &&
@@ -610,7 +692,8 @@ function ChatMessageInner({
     reasoningBlocks.length === 0 &&
     intermediateTextBlocks.length === 0 &&
     !hasAttachments &&
-    !showStats
+    !showStats &&
+    !hasServiceSummary
   ) {
     if (!isAssistant || !showLivePlaceholder || !showHeader) return null
     return (
@@ -945,7 +1028,7 @@ function ChatMessageInner({
           />
         )}
 
-        {partsContent}
+        {partsContentEl}
 
         {isUser && (
           <MessageHeader
@@ -980,6 +1063,8 @@ function ChatMessageInner({
         )}
 
         {/* Автоповтор хода — внизу ответа у последнего сегмента (не у реплики). */}
+        {serviceSummaryEl}
+
         {showRetry && retry && (
           <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
         )}

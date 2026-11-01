@@ -12,6 +12,7 @@ import {
   type MessageData,
   type StreamRetry,
 } from '@/stores/chatStore'
+import { useUIStore } from '@/stores/useUIStore'
 
 /**
  * Группа сообщений ленты (ADR-118 §1): **сегменты одного хода** склеиваются в
@@ -24,6 +25,12 @@ export interface MessageGroup {
   /** Ход группы; `null` — сообщение вне хода (user/системное). */
   turnId: string | null
   messages: MessageData[]
+}
+
+/** Счётчики «скрытых» шагов хода для сводки компактной плотности. */
+export interface ServiceCounts {
+  tools: number
+  reasoning: number
 }
 
 /**
@@ -229,6 +236,24 @@ export function MessageList({
     })
   }, [])
 
+  /**
+   * Раскрытые человеком сводки скрытых шагов прошлых ходов (компактная
+   * плотность). Состояние **runtime** (не персистится), ключ — `MessageGroup.key`.
+   * Стабильная ссылка (`useCallback`) — иначе слетит `React.memo(ChatMessage)`.
+   */
+  const [revealedServiceGroups, setRevealedServiceGroups] = useState<Set<string>>(() => new Set())
+
+  const toggleServiceExpanded = useCallback((key: string) => {
+    setRevealedServiceGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const chatDensity = useUIStore((s) => s.chatDensity)
+
   // Кнопка «Вниз»: чуть правее правой границы зоны чата; если места справа нет — внутрь зоны.
   useEffect(() => {
     const container = containerRef.current
@@ -272,6 +297,36 @@ export function MessageList({
   const visibleMessages = useMemo(() => messages.filter(isVisibleMessage), [messages])
   /** Группы-ходы (ADR-118 §1) — единица рендера и виртуализации. */
   const groups = useMemo(() => groupMessagesByTurn(visibleMessages), [visibleMessages])
+
+  /**
+   * Счётчики «скрытых» шагов по `turn_id` (не по группе: фоновое уведомление
+   * делит ход на две группы). Источник — части сообщения (`tool_use`,
+   * `reasoning`); фоллбек — DTO-поля `tool_calls`/`reasoning_blocks` (старые
+   * сообщения без частей).
+   */
+  const serviceCountsByTurn = useMemo(() => {
+    const map = new Map<string, ServiceCounts>()
+    for (const msg of visibleMessages) {
+      if (!msg.turn_id) continue
+      const parts = Array.isArray(msg.parts) ? msg.parts : []
+      let tools = 0
+      let reasoning = 0
+      for (const part of parts) {
+        if (part?.type === 'tool_use') tools += 1
+        else if (part?.type === 'reasoning') reasoning += 1
+      }
+      if (tools === 0) tools = msg.tool_calls?.length ?? 0
+      if (reasoning === 0) {
+        reasoning = msg.reasoning_blocks?.length ?? (msg.reasoning ? 1 : 0)
+      }
+      if (tools === 0 && reasoning === 0) continue
+      const acc = map.get(msg.turn_id) ?? { tools: 0, reasoning: 0 }
+      acc.tools += tools
+      acc.reasoning += reasoning
+      map.set(msg.turn_id, acc)
+    }
+    return map
+  }, [visibleMessages])
 
   /**
    * Последний assistant-сегмент каждого хода: `turnId → id` последнего
@@ -396,6 +451,16 @@ export function MessageList({
     overscan: OVERSCAN,
   })
 
+  /**
+   * Смена плотности меняет высоту каждой группы (свёрнутые ходы заметно ниже):
+   * без сброса кэша `estimateSize` виртуализатор считал бы позиции по старым
+   * оценкам и лента «прыгала». Авто-скролл вниз — в эффекте ниже (зависимость
+   * `chatDensity`).
+   */
+  useEffect(() => {
+    virtualizer.measure()
+  }, [chatDensity, virtualizer])
+
   const scrollToBottom = useCallback((smooth = true) => {
     if (!scrollRef.current) return
     scrollRef.current.scrollTo({
@@ -433,7 +498,7 @@ export function MessageList({
         scrollToBottom(false)
       })
     }
-  }, [messages, livePartsSize, turn?.status, autoScroll, scrollToBottom])
+  }, [messages, livePartsSize, turn?.status, autoScroll, scrollToBottom, chatDensity])
 
   const shouldVirtualize = visibleMessages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
@@ -482,6 +547,29 @@ export function MessageList({
     // (прежнее поведение) и у последнего в едином блоке (там ряд действий).
     const pinTurn = pinTurnHandlers?.get(group.key)
     const pinHandler = (first || (bare && last)) && pinTurn ? pinTurn : onPin
+    /**
+     * Компактная плотность: прошлый (завершённый) ход сворачивается в одну
+     * тихую строку-сводку. Текущий ход и ход с ошибкой всегда раскрыты.
+     * Содержимое скрывается у **каждого** сегмента группы, сводка — у её
+     * последнего assistant-сегмента (там же ряд действий) — строка стоит ровно
+     * перед `MessageActions`.
+     */
+    const isPastTurn = group.turnId != null && group.turnId !== turn?.turnId
+    const groupHasError = group.messages.some((m) => m.status === 'error')
+    const groupHasAssistant = group.messages.some((m) => m.role === 'assistant')
+    const serviceActive =
+      chatDensity === 'compact' && isPastTurn && !groupHasError && groupHasAssistant
+    const serviceRevealed = revealedServiceGroups.has(group.key)
+    const serviceCollapsed = serviceActive && !serviceRevealed
+    const serviceCounts = group.turnId ? serviceCountsByTurn.get(group.turnId) : undefined
+    let summaryOwnerKey: string | undefined
+    for (const m of group.messages) {
+      if (m.role === 'assistant') summaryOwnerKey = messageKeyOf(m)
+    }
+    // Сводка — у последнего assistant-сегмента **своего** блока; счётчики при
+    // этом общие на ход (`turn_id`), поэтому у хода, разорванного уведомлением,
+    // обе группы показывают суммарные числа.
+    const ownsSummary = serviceActive && summaryOwnerKey === messageKeyOf(msg)
     return (
       <ChatMessage
         key={msg.id ?? `${msg.role}-${msg.index}-${msg.created_at}`}
@@ -529,6 +617,15 @@ export function MessageList({
         expandKey={group.key}
         expanded={expandedGroups.has(group.key)}
         onToggleExpand={toggleGroupExpanded}
+        // Компактная плотность ленты: у прошлых ходов скрываем размышления и
+        // карточки инструментов, оставляя тихую строку-сводку (раскрывается
+        // кликом). Все значения — примитивы, колбэк стабилен (memo).
+        serviceCollapsed={serviceCollapsed}
+        serviceToolCount={ownsSummary ? (serviceCounts?.tools ?? 0) : 0}
+        serviceReasoningCount={ownsSummary ? (serviceCounts?.reasoning ?? 0) : 0}
+        serviceKey={ownsSummary ? group.key : undefined}
+        serviceExpanded={serviceRevealed}
+        onToggleService={serviceActive ? toggleServiceExpanded : undefined}
       />
     )
   }

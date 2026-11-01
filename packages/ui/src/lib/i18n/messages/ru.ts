@@ -1744,6 +1744,17 @@ export const dict = {
   'chatSettings.intermediateTextInline': 'Между блоками',
   'chatSettings.intermediateTextBottom': 'Снизу',
   'chatSettings.intermediateTextDescription': 'Как показывать ответы модели между вызовами инструментов.',
+  'chatSettings.density': 'Плотность ленты',
+  'chatSettings.densityDescription':
+    'Компактная плотность скрывает размышления и вызовы инструментов у завершённых ходов; текущий ход всегда раскрыт.',
+  'chatSettings.densityNormal': 'Обычная',
+  'chatSettings.densityCompact': 'Компактная',
+  'chat.compact.tools': '{count, plural, one {# инструмент} few {# инструмента} many {# инструментов}}',
+  'chat.compact.reasoning':
+    '{count, plural, one {# размышление} few {# размышления} many {# размышлений}}',
+  'chat.compact.hide': 'Скрыть',
+  'chat.compact.expand': 'Показать скрытые шаги хода',
+  'chat.compact.collapse': 'Скрыть шаги хода',
 
   // Model controls
   'chat.modelControls.searchModels': 'Поиск моделей...',

@@ -7,6 +7,16 @@ import { applyUiScale, normalizeUiScale, persistUiScale, readUiScale } from '@/l
 
 export type TransportMode = 'auto' | 'ws' | 'sse'
 
+/**
+ * Плотность ленты чата (первая ось режимов отображения).
+ *
+ * `compact` — у **прошлых** ходов скрыты размышления, карточки инструментов и
+ * промежуточные тексты: вместо них одна строка-сводка, раскрываемая по клику.
+ * Текущий (живой) ход и ход с ошибкой всегда раскрыты. Режим чисто визуальный:
+ * контекст LLM и серверные флаги `hidden`/`disabled` он не трогает.
+ */
+export type ChatDensity = 'normal' | 'compact'
+
 const LEFT_PANEL_MIN_WIDTH = 280
 const LEFT_PANEL_MAX_WIDTH = 500
 const RIGHT_PANEL_MIN_WIDTH = 320
@@ -179,6 +189,10 @@ interface UIStore {
 
   intermediateTextDisplay: 'inline' | 'bottom'
   setIntermediateTextDisplay: (mode: 'inline' | 'bottom') => void
+
+  /** Плотность ленты чата (персистится; см. `ChatDensity`). */
+  chatDensity: ChatDensity
+  setChatDensity: (density: ChatDensity) => void
 
   /** ADR-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
    *  и таблицы MCP перезапрашиваются без рестарта. Runtime, не персистится. */
@@ -489,6 +503,9 @@ export const useUIStore = create<UIStore>()(
         profileService.syncIntermediateTextDisplayToProfile(mode)
       },
 
+      chatDensity: 'normal',
+      setChatDensity: (density) => set({ chatDensity: density }),
+
       toolsDisabledTick: 0,
       bumpToolsDisabledTick: () => set((state) => ({ toolsDisabledTick: state.toolsDisabledTick + 1 })),
     }),
@@ -506,6 +523,7 @@ export const useUIStore = create<UIStore>()(
         collapsedProjects: [...state.collapsedProjects],
         onlyActiveProject: state.onlyActiveProject,
         settingsShowAdvanced: state.settingsShowAdvanced,
+        chatDensity: state.chatDensity,
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
@@ -529,6 +547,8 @@ export const useUIStore = create<UIStore>()(
           onlyActiveProject: (p?.onlyActiveProject as boolean) ?? current.onlyActiveProject,
           settingsShowAdvanced:
             (p?.settingsShowAdvanced as boolean) ?? current.settingsShowAdvanced,
+          // Неизвестное/отсутствующее значение — `normal` (валидация восстановления).
+          chatDensity: p?.chatDensity === 'compact' ? 'compact' : 'normal',
         }
       },
     }

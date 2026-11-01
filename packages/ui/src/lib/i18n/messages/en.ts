@@ -1765,6 +1765,16 @@ export const dict = {
   'chatSettings.intermediateTextInline': 'Between blocks',
   'chatSettings.intermediateTextBottom': 'At bottom',
   'chatSettings.intermediateTextDescription': 'How to display model answers between tool calls.',
+  'chatSettings.density': 'Feed density',
+  'chatSettings.densityDescription':
+    'Compact density hides reasoning and tool calls for completed turns; the current turn always stays expanded.',
+  'chatSettings.densityNormal': 'Normal',
+  'chatSettings.densityCompact': 'Compact',
+  'chat.compact.tools': '{count, plural, one {# tool} other {# tools}}',
+  'chat.compact.reasoning': '{count, plural, one {# reasoning step} other {# reasoning steps}}',
+  'chat.compact.hide': 'Hide',
+  'chat.compact.expand': 'Show hidden turn activity',
+  'chat.compact.collapse': 'Hide turn activity',
 
   // Model controls
   'chat.modelControls.searchModels': 'Search models...',

@@ -317,3 +317,47 @@ describe('useUIStore.scheduleDraft — deep-link в «Шедулер»', () => {
     expect(storage.getItem('synth-ui-settings') ?? '').not.toContain('scheduleDraft')
   })
 })
+
+/**
+ * Плотность ленты чата (первая ось режимов отображения): пользовательская
+ * настройка, персистится; неизвестное значение при восстановлении — `normal`.
+ */
+describe('useUIStore.chatDensity', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ chatDensity: 'normal' })
+  })
+
+  async function rehydrateWith(chatDensity: unknown): Promise<void> {
+    storage.setItem('synth-ui-settings', JSON.stringify({ state: { chatDensity }, version: 0 }))
+    await useUIStore.persist.rehydrate()
+  }
+
+  it('попадает в partialize (персистится)', () => {
+    useUIStore.setState({ chatDensity: 'compact' })
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.chatDensity).toBe('compact')
+  })
+
+  it('восстанавливает сохранённое значение compact', async () => {
+    await rehydrateWith('compact')
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+  })
+
+  it('неизвестное значение сбрасывается в normal', async () => {
+    await rehydrateWith('ultra')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+
+  it('отсутствующее значение — normal', async () => {
+    await rehydrateWith(undefined)
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+
+  it('normal восстанавливается как есть', async () => {
+    await rehydrateWith('normal')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+})

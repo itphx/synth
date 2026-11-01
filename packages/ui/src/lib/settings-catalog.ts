@@ -615,6 +615,13 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     keywords: ['intermediate', 'streaming', 'промежуточные', 'стриминг'],
   },
   {
+    id: 'chat.density',
+    categoryId: 'chat',
+    sectionId: 'chat-density',
+    labelKey: 'chatSettings.density',
+    keywords: ['компактный', 'плотность', 'compact', 'density'],
+  },
+  {
     id: 'mcp.user',
     categoryId: 'mcp',
     sectionId: 'mcp-user-main',
