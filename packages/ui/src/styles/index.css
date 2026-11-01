@@ -217,16 +217,6 @@ html.device-tablet {
   padding-right: 0;
 }
 
-/* Блок кода и таблица в «ленте»: пузыря у ответа нет, и без своего фона они
-   сливались с фоном чата. Даём тот же фон, что был бы у пузыря ответа в
-   подробном виде (`--card`, контракт `bg-card`), — рамка при этом не нужна.
-   В подробном виде правило не действует: `.md-code` оставляет
-   `var(--surface-subtle, var(--card))`, у таблицы фон наследуется от пузыря. */
-.chat-column[data-view-mode='feed'] .md-code,
-.chat-column[data-view-mode='feed'] .md-table-wrap {
-  background: var(--card);
-}
-
 /* Развёрнутая панель ответа (`MessageList`, `data-testid="message-expanded"`).
    Панель заменяет ленту и занимает всю область чата; внутри неё `.chat-column`
    растянут по высоте, а цепочка flex доводит растяжение до пузыря/блока хода:
@@ -1062,6 +1052,10 @@ html.pointer-coarse .markdown-content .md-code-download {
   overflow-x: auto;
   border: 1px solid var(--border, currentColor);
   border-radius: var(--radius-md, 0.5rem);
+  /* Тот же фон, что у блока кода (`.md-code` выше), — единый во всех видах
+     чата: в «ленте» пузыря ответа нет, а в «подробном» фон таблицы не должен
+     зависеть от пузыря. */
+  background: var(--surface-subtle, var(--card));
 }
 
 .markdown-content .md-table-wrap table {

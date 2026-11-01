@@ -723,3 +723,75 @@ describe('MarkdownContent: правый зазор блока кода (CSS)', (
     }
   })
 })
+
+describe('MarkdownContent: фон блока кода и таблицы (CSS)', () => {
+  // Требование продукта: фон у блоков кода и таблиц одинаковый в любом виде
+  // чата (`detailed`/`feed`) и равен фону блока кода. jsdom не считает каскад,
+  // поэтому проверяем сами объявления в `styles/index.css`: оба правила
+  // задают один токен, а оверрайда для «ленты» с `--card` больше нет.
+  const css = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'),
+    'utf8',
+  )
+  const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, '')
+
+  interface CssRule {
+    selectors: string[]
+    body: string
+  }
+
+  function allRules(): CssRule[] {
+    const list: CssRule[] = []
+    for (const chunk of cssRules.split('}')) {
+      const open = chunk.lastIndexOf('{')
+      if (open < 0) continue
+      const selectors = chunk
+        .slice(0, open)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      list.push({ selectors, body: chunk.slice(open + 1) })
+    }
+    return list
+  }
+
+  /** Последнее (по каскаду) значение `background` у правила с ровно таким селектором. */
+  function backgroundOf(selector: string): string | null {
+    let value: string | null = null
+    for (const rule of allRules()) {
+      if (!rule.selectors.includes(selector)) continue
+      for (const declaration of rule.body.split(';')) {
+        const colon = declaration.indexOf(':')
+        if (colon < 0) continue
+        const prop = declaration.slice(0, colon).trim()
+        if (prop !== 'background' && prop !== 'background-color') continue
+        value = declaration.slice(colon + 1).trim()
+      }
+    }
+    return value
+  }
+
+  it('`.md-code` и `.md-table-wrap` задают одинаковый фон `var(--surface-subtle, var(--card))`', () => {
+    const expected = 'var(--surface-subtle, var(--card))'
+    expect(backgroundOf('.markdown-content .md-code')).toBe(expected)
+    expect(backgroundOf('.markdown-content .md-table-wrap')).toBe(expected)
+  })
+
+  it('правил вида «лента» с фоном `var(--card)` больше нет', () => {
+    const offenders: string[] = []
+    for (const rule of allRules()) {
+      const feed = rule.selectors.some((s) => /data-view-mode\s*=\s*['"]?feed['"]?/.test(s))
+      if (!feed) continue
+      for (const declaration of rule.body.split(';')) {
+        const colon = declaration.indexOf(':')
+        if (colon < 0) continue
+        const prop = declaration.slice(0, colon).trim()
+        if (prop !== 'background' && prop !== 'background-color') continue
+        if (declaration.slice(colon + 1).includes('var(--card')) {
+          offenders.push(`${rule.selectors.join(', ')} { ${declaration.trim()} }`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+})
