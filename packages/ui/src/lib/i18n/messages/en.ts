@@ -1761,6 +1761,12 @@ export const dict = {
   'chat.commandAutocomplete.unavailable': 'unavailable',
 
   // Chat settings
+  'chatSettings.description': 'How messages and service steps are shown in the chat feed.',
+  'chatSettings.viewMode': 'Message view',
+  'chatSettings.viewModeDetailed': 'Detailed',
+  'chatSettings.viewModeFeed': 'Feed',
+  'chatSettings.viewModeDescription':
+    'Feed shows agent answers as flat text without bubbles; user messages stay highlighted.',
   'chatSettings.intermediateTextDisplay': 'Intermediate responses',
   'chatSettings.intermediateTextInline': 'Between blocks',
   'chatSettings.intermediateTextBottom': 'At bottom',

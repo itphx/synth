@@ -253,6 +253,7 @@ export function MessageList({
   }, [])
 
   const chatDensity = useUIStore((s) => s.chatDensity)
+  const chatViewMode = useUIStore((s) => s.chatViewMode)
 
   // Кнопка «Вниз»: чуть правее правой границы зоны чата; если места справа нет — внутрь зоны.
   useEffect(() => {
@@ -452,14 +453,15 @@ export function MessageList({
   })
 
   /**
-   * Смена плотности меняет высоту каждой группы (свёрнутые ходы заметно ниже):
-   * без сброса кэша `estimateSize` виртуализатор считал бы позиции по старым
-   * оценкам и лента «прыгала». Авто-скролл вниз — в эффекте ниже (зависимость
-   * `chatDensity`).
+   * Смена плотности или вида меняет высоту каждой группы (свёрнутые ходы
+   * заметно ниже, «лента» снимает пузырь и отступы): без сброса кэша
+   * `estimateSize` виртуализатор считал бы позиции по старым оценкам и лента
+   * «прыгала». Авто-скролл вниз — в эффекте ниже (зависимости `chatDensity` и
+   * `chatViewMode`).
    */
   useEffect(() => {
     virtualizer.measure()
-  }, [chatDensity, virtualizer])
+  }, [chatDensity, chatViewMode, virtualizer])
 
   const scrollToBottom = useCallback((smooth = true) => {
     if (!scrollRef.current) return
@@ -498,7 +500,7 @@ export function MessageList({
         scrollToBottom(false)
       })
     }
-  }, [messages, livePartsSize, turn?.status, autoScroll, scrollToBottom, chatDensity])
+  }, [messages, livePartsSize, turn?.status, autoScroll, scrollToBottom, chatDensity, chatViewMode])
 
   const shouldVirtualize = visibleMessages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
@@ -677,7 +679,12 @@ export function MessageList({
         className="overflow-y-auto overflow-x-hidden chat-scroll-container"
         onScroll={handleScroll}
       >
-        <div ref={chatZoneRef} className="chat-column mx-auto w-full">
+        <div
+          ref={chatZoneRef}
+          className="chat-column mx-auto w-full"
+          data-view-mode={chatViewMode}
+          data-density={chatDensity}
+        >
           <div
             className="relative w-full"
             style={{

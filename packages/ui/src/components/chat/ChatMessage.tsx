@@ -697,8 +697,8 @@ function ChatMessageInner({
   ) {
     if (!isAssistant || !showLivePlaceholder || !showHeader) return null
     return (
-      <div className={containerClass} data-message-id={message.id}>
-        <div className={bubbleClass}>
+      <div className={containerClass} data-message-id={message.id} data-role={message.role}>
+        <div className={bubbleClass} data-bubble="">
           <MessageHeader
             message={message}
             isSubagent={isSubagent}
@@ -974,7 +974,7 @@ function ChatMessageInner({
   }
 
   return (
-    <div className={containerClass} data-message-id={message.id}>
+    <div className={containerClass} data-message-id={message.id} data-role={message.role}>
       {selectionMode && (
         <div className="flex items-center self-stretch pr-1">
           <input
@@ -988,7 +988,7 @@ function ChatMessageInner({
           />
         </div>
       )}
-      <div className={bubbleClass}>
+      <div className={bubbleClass} data-bubble="">
         {/*
           ADR-104: маркер **прерывания** хода (`metadata.interrupt`) — оставлен.
           Маркера «вмешательство в ход» (`metadata.steer`) больше нет: реплика,

@@ -608,6 +608,13 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     keywords: ['system', 'status', 'системные', 'состояние'],
   },
   {
+    id: 'chat.viewMode',
+    categoryId: 'chat',
+    sectionId: 'chat-view-mode',
+    labelKey: 'chatSettings.viewMode',
+    keywords: ['лента', 'вид', 'feed', 'view', 'сообщения'],
+  },
+  {
     id: 'chat.intermediateTextDisplay',
     categoryId: 'chat',
     sectionId: 'chat-intermediate-text',

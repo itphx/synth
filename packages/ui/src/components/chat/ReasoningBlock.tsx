@@ -14,7 +14,7 @@ export function ReasoningBlock({ reasoning }: ReasoningBlockProps) {
   if (!reasoning) return null
 
   return (
-    <div className="mb-2 rounded-md border border-border bg-muted overflow-hidden">
+    <div data-card="service" className="mb-2 rounded-md border border-border bg-muted overflow-hidden">
       <button
         className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
         onClick={() => setExpanded(!expanded)}

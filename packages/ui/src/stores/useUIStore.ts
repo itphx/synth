@@ -17,6 +17,17 @@ export type TransportMode = 'auto' | 'ws' | 'sse'
  */
 export type ChatDensity = 'normal' | 'compact'
 
+/**
+ * Вид ленты чата (вторая ось режимов отображения, ортогональна `ChatDensity`).
+ *
+ * `detailed` — текущий вид: у ответа агента пузырь (фон/рамка/скругление/
+ * отступы), служебные карточки — карточками. `feed` — ответ агента плоской
+ * прозой на фоне чата, без пузыря; служебные строки (размышления, карточки
+ * инструментов и саб-агентов) — плоские. Пузырь пользователя остаётся в обоих
+ * видах. Режим чисто визуальный и задаётся CSS (классы компонентов не меняются).
+ */
+export type ChatViewMode = 'detailed' | 'feed'
+
 const LEFT_PANEL_MIN_WIDTH = 280
 const LEFT_PANEL_MAX_WIDTH = 500
 const RIGHT_PANEL_MIN_WIDTH = 320
@@ -193,6 +204,10 @@ interface UIStore {
   /** Плотность ленты чата (персистится; см. `ChatDensity`). */
   chatDensity: ChatDensity
   setChatDensity: (density: ChatDensity) => void
+
+  /** Вид ленты чата (персистится; см. `ChatViewMode`). */
+  chatViewMode: ChatViewMode
+  setChatViewMode: (mode: ChatViewMode) => void
 
   /** ADR-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
    *  и таблицы MCP перезапрашиваются без рестарта. Runtime, не персистится. */
@@ -506,6 +521,9 @@ export const useUIStore = create<UIStore>()(
       chatDensity: 'normal',
       setChatDensity: (density) => set({ chatDensity: density }),
 
+      chatViewMode: 'detailed',
+      setChatViewMode: (mode) => set({ chatViewMode: mode }),
+
       toolsDisabledTick: 0,
       bumpToolsDisabledTick: () => set((state) => ({ toolsDisabledTick: state.toolsDisabledTick + 1 })),
     }),
@@ -524,6 +542,7 @@ export const useUIStore = create<UIStore>()(
         onlyActiveProject: state.onlyActiveProject,
         settingsShowAdvanced: state.settingsShowAdvanced,
         chatDensity: state.chatDensity,
+        chatViewMode: state.chatViewMode,
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
@@ -549,6 +568,8 @@ export const useUIStore = create<UIStore>()(
             (p?.settingsShowAdvanced as boolean) ?? current.settingsShowAdvanced,
           // Неизвестное/отсутствующее значение — `normal` (валидация восстановления).
           chatDensity: p?.chatDensity === 'compact' ? 'compact' : 'normal',
+          // `feed` — только явное сохранённое значение, иначе подробный вид.
+          chatViewMode: p?.chatViewMode === 'feed' ? 'feed' : 'detailed',
         }
       },
     }

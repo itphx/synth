@@ -361,3 +361,48 @@ describe('useUIStore.chatDensity', () => {
     expect(useUIStore.getState().chatDensity).toBe('normal')
   })
 })
+
+/**
+ * Вид ленты чата (вторая ось режимов отображения): пользовательская настройка,
+ * персистится; `feed` восстанавливается только по явному значению, иначе
+ * подробный вид.
+ */
+describe('useUIStore.chatViewMode', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ chatViewMode: 'detailed' })
+  })
+
+  async function rehydrateWith(chatViewMode: unknown): Promise<void> {
+    storage.setItem('synth-ui-settings', JSON.stringify({ state: { chatViewMode }, version: 0 }))
+    await useUIStore.persist.rehydrate()
+  }
+
+  it('попадает в partialize (персистится)', () => {
+    useUIStore.setState({ chatViewMode: 'feed' })
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.chatViewMode).toBe('feed')
+  })
+
+  it('восстанавливает сохранённое значение feed', async () => {
+    await rehydrateWith('feed')
+    expect(useUIStore.getState().chatViewMode).toBe('feed')
+  })
+
+  it('неизвестное значение сбрасывается в detailed', async () => {
+    await rehydrateWith('bubbles')
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+
+  it('отсутствующее значение — detailed', async () => {
+    await rehydrateWith(undefined)
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+
+  it('detailed восстанавливается как есть', async () => {
+    await rehydrateWith('detailed')
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+})

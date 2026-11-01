@@ -240,7 +240,7 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
     : null
 
   return (
-    <div className="mb-2 rounded-md border border-border bg-muted overflow-hidden">
+    <div data-card="service" className="mb-2 rounded-md border border-border bg-muted overflow-hidden">
       <div
         role="button"
         tabIndex={0}

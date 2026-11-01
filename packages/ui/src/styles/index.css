@@ -165,6 +165,41 @@ html.device-tablet {
   --chat-pad-right: 1rem;
 }
 
+/* «Лента»: ответ агента — плоская проза, пузырь остаётся только у пользователя.
+   Вид задаётся атрибутом `data-view-mode` на колонке чата, а не классами
+   компонентов: обычные правила **вне** `@layer` приоритетнее любых утилит
+   Tailwind, а `bg-card`/`rounded-lg`/`px-4` в разметке остаются как есть — их
+   проверяют тесты структуры хода. `border-width` не убираем (только цвет):
+   исчезнувшая рамка сдвигала бы раскладку на 1px. */
+.chat-column[data-view-mode='feed'] [data-role='assistant'] [data-bubble] {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  padding: 0;
+  max-width: 100%;
+}
+
+.chat-column[data-view-mode='feed'] [data-testid='turn-block'] {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  padding: 0;
+  max-width: 100%;
+}
+
+/* Плоские служебные строки: без фона/рамки/радиуса, без боковых отступов. */
+.chat-column[data-view-mode='feed'] [data-card='service'] {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  margin-bottom: 0.25rem;
+}
+
+.chat-column[data-view-mode='feed'] [data-card='service'] > :first-child {
+  padding-left: 0;
+  padding-right: 0;
+}
+
 /* Композер чата: десктоп — прежние w-4/5; мобильные зоны — почти вся ширина */
 html.device-phone {
   --composer-ml: max(0.75rem, var(--synth-safe-area-left));

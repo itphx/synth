@@ -1740,6 +1740,12 @@ export const dict = {
   'chat.commandAutocomplete.unavailable': 'недоступна',
 
   // Chat settings
+  'chatSettings.description': 'Как показывать сообщения и служебные шаги в ленте чата.',
+  'chatSettings.viewMode': 'Вид сообщений',
+  'chatSettings.viewModeDetailed': 'Подробный',
+  'chatSettings.viewModeFeed': 'Лента',
+  'chatSettings.viewModeDescription':
+    'Лента показывает ответы агента плоским текстом без пузырей; реплики пользователя остаются выделенными.',
   'chatSettings.intermediateTextDisplay': 'Промежуточные ответы',
   'chatSettings.intermediateTextInline': 'Между блоками',
   'chatSettings.intermediateTextBottom': 'Снизу',
