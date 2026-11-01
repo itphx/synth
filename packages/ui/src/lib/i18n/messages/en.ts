@@ -1305,7 +1305,7 @@ export const dict = {
   'chat.message.forked': 'Branch created',
   'chat.message.empty': 'Empty message',
   // Agent answer expanded to the full chat column width
-  'chat.message.expand': 'Expand to full width',
+  'chat.message.expand': 'Expand',
   'chat.message.collapse': 'Collapse',
 
   // ADR-070 §2.6: per-message answer stats

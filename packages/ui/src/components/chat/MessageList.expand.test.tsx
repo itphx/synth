@@ -38,6 +38,10 @@ if (typeof (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserve
 if (typeof Element !== 'undefined' && typeof Element.prototype.scrollTo !== 'function') {
   Element.prototype.scrollTo = () => {}
 }
+if (typeof globalThis.requestAnimationFrame !== 'function') {
+  globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) =>
+    setTimeout(() => cb(0), 0) as unknown as number) as typeof requestAnimationFrame
+}
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
@@ -94,9 +98,19 @@ function expandButtons(container: HTMLElement): HTMLButtonElement[] {
   ) as HTMLButtonElement[]
 }
 
+/** Развёрнутая панель ответа (заменяет ленту). */
+function expandedPane(container: HTMLElement): HTMLElement | null {
+  return container.querySelector('[data-testid="message-expanded"]') as HTMLElement | null
+}
+
+/** Скролл-контейнер ленты: пока панель открыта — его нет. */
+function ribbon(container: HTMLElement): HTMLElement | null {
+  return container.querySelector('.chat-scroll-container') as HTMLElement | null
+}
+
 /** Классы пузыря сообщения (первый `div` внутри контейнера сообщения). */
-function bubbleOf(container: HTMLElement, messageId: string): HTMLElement {
-  const segment = container.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement
+function bubbleOf(root: HTMLElement, messageId: string): HTMLElement {
+  const segment = root.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement
   expect(segment).not.toBeNull()
   return segment.querySelector(':scope > div') as HTMLElement
 }
@@ -104,6 +118,12 @@ function bubbleOf(container: HTMLElement, messageId: string): HTMLElement {
 async function click(el: HTMLElement): Promise<void> {
   await act(async () => {
     el.click()
+  })
+}
+
+async function pressEscape(target: EventTarget): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   })
 }
 
@@ -130,73 +150,137 @@ function twoStepsSameTurn(): MessageData[] {
   ]
 }
 
-describe('MessageList: разворот ответа агента на всю ширину', () => {
-  it('многошаговый ход: кнопка в шапке разворачивает блок хода и возвращает обратно', async () => {
+/** Два разных хода — по одной assistant-реплике. */
+function twoTurns(): MessageData[] {
+  return [
+    msg({ id: 'a1', index: 1, ord: 10, turn_id: 't1', content: 'Ход 1', agent_role: 'fixer' }),
+    msg({ id: 'b1', index: 2, ord: 11, turn_id: 't2', content: 'Ход 2', agent_role: 'fixer' }),
+  ]
+}
+
+describe('MessageList: разворот ответа агента', () => {
+  it('клик по кнопке в шапке открывает панель: она заменяет ленту', async () => {
     const container = await renderList(twoStepsSameTurn())
 
+    // По умолчанию — лента, панели нет, блок хода обычной ширины.
+    expect(ribbon(container)).not.toBeNull()
+    expect(expandedPane(container)).toBeNull()
     const block = container.querySelector('[data-testid="turn-block"]') as HTMLElement
     expect(block).not.toBeNull()
-    // По умолчанию — 85 % ширины области чата (регресс-охрана).
     expect(block.className).toContain('max-w-[85%]')
-    expect(block.className).not.toContain('max-w-full')
 
     // Одна шапка на блок — одна кнопка разворота.
     const buttons = expandButtons(container)
     expect(buttons).toHaveLength(1)
-
     await click(buttons[0]!)
 
-    const expandedBlock = container.querySelector('[data-testid="turn-block"]') as HTMLElement
-    expect(expandedBlock).toBe(block)
-    // Ровно один класс ширины: `max-w-full` без остатка `max-w-[85%]`.
-    expect(expandedBlock.className).toContain('max-w-full')
-    expect(expandedBlock.className).not.toContain('max-w-[85%]')
-
-    // Повторный клик возвращает прежнюю ширину.
-    await click(expandButtons(container)[0]!)
-    const collapsedBlock = container.querySelector('[data-testid="turn-block"]') as HTMLElement
-    expect(collapsedBlock.className).toContain('max-w-[85%]')
-    expect(collapsedBlock.className).not.toContain('max-w-full')
+    const pane = expandedPane(container)
+    expect(pane).not.toBeNull()
+    expect(pane!.textContent).toContain('Шаг первый')
+    expect(pane!.textContent).toContain('Шаг второй')
+    // Ленты больше нет: панель её заменяет, а не накрывает копией.
+    expect(ribbon(container)).toBeNull()
+    expect(container.querySelectorAll('.chat-scroll-container')).toHaveLength(0)
+    // Внутри панели — развёрнутый блок хода (на всю ширину).
+    const paneBlock = pane!.querySelector('[data-testid="turn-block"]') as HTMLElement
+    expect(paneBlock).not.toBeNull()
+    expect(paneBlock.className).toContain('max-w-full')
+    expect(paneBlock.className).not.toContain('max-w-[85%]')
   })
 
-  it('многошаговый ход: кнопка помечает состояние (aria-pressed) и меняет подпись', async () => {
+  it('повторный клик по кнопке внутри панели закрывает её и возвращает ленту', async () => {
+    const container = await renderList(twoStepsSameTurn())
+
+    await click(expandButtons(container)[0]!)
+    const pane = expandedPane(container)!
+    // В панели ровно одна кнопка разворота — та же, что в шапке ответа.
+    const paneButtons = Array.from(
+      pane.querySelectorAll('[data-testid="message-expand"]'),
+    ) as HTMLButtonElement[]
+    expect(paneButtons).toHaveLength(1)
+
+    await click(paneButtons[0]!)
+
+    expect(expandedPane(container)).toBeNull()
+    expect(ribbon(container)).not.toBeNull()
+    const block = container.querySelector('[data-testid="turn-block"]') as HTMLElement
+    expect(block).not.toBeNull()
+    expect(block.className).toContain('max-w-[85%]')
+    expect(block.className).not.toContain('max-w-full')
+  })
+
+  it('одиночный ответ агента: панель открывается, пузырь развёрнут', async () => {
+    const container = await renderList([
+      msg({ id: 'a1', index: 1, ord: 10, turn_id: 't1', content: 'Один ответ', agent_role: 'fixer' }),
+    ])
+
+    expect(container.querySelectorAll('[data-testid="turn-block"]')).toHaveLength(0)
+    expect(bubbleOf(container, 'a1').className).toContain('max-w-[85%]')
+
+    await click(expandButtons(container)[0]!)
+
+    const pane = expandedPane(container)
+    expect(pane).not.toBeNull()
+    expect(pane!.textContent).toContain('Один ответ')
+    expect(bubbleOf(pane!, 'a1').className).toContain('max-w-full')
+
+    await click(expandButtons(container)[0]!)
+    expect(expandedPane(container)).toBeNull()
+    expect(bubbleOf(container, 'a1').className).toContain('max-w-[85%]')
+  })
+
+  it('кнопка помечает состояние (aria-pressed) и меняет подпись', async () => {
     const container = await renderList(twoStepsSameTurn())
 
     const button = expandButtons(container)[0]!
     expect(button.getAttribute('aria-pressed')).toBe('false')
-    expect(button.getAttribute('aria-label')).toBe('Expand to full width')
+    expect(button.getAttribute('aria-label')).toBe('Expand')
 
     await click(button)
 
     const expandedButton = expandButtons(container)[0]!
     expect(expandedButton.getAttribute('aria-pressed')).toBe('true')
     expect(expandedButton.getAttribute('aria-label')).toBe('Collapse')
+
+    await click(expandedButton)
+    expect(expandButtons(container)[0]!.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('одиночный ответ агента: меняется ширина пузыря самого сообщения', async () => {
-    const container = await renderList([
-      msg({ id: 'a1', index: 1, ord: 10, turn_id: 't1', content: 'Один ответ', agent_role: 'fixer' }),
-    ])
-
-    // Блок хода не нужен — пузырь рисует само сообщение.
-    expect(container.querySelectorAll('[data-testid="turn-block"]')).toHaveLength(0)
-    expect(bubbleOf(container, 'a1').className).toContain('max-w-[85%]')
-
-    const buttons = expandButtons(container)
-    expect(buttons).toHaveLength(1)
-
-    await click(buttons[0]!)
-    const expandedBubble = bubbleOf(container, 'a1')
-    expect(expandedBubble.className).toContain('max-w-full')
-    expect(expandedBubble.className).not.toContain('max-w-[85%]')
+  it('Esc закрывает панель', async () => {
+    const container = await renderList(twoStepsSameTurn())
 
     await click(expandButtons(container)[0]!)
-    const collapsedBubble = bubbleOf(container, 'a1')
-    expect(collapsedBubble.className).toContain('max-w-[85%]')
-    expect(collapsedBubble.className).not.toContain('max-w-full')
+    expect(expandedPane(container)).not.toBeNull()
+
+    await pressEscape(document)
+
+    expect(expandedPane(container)).toBeNull()
+    expect(ribbon(container)).not.toBeNull()
   })
 
-  it('user-сообщение: кнопки разворота нет, ширина не меняется', async () => {
+  it('Esc не закрывает панель, когда фокус в поле ввода внутри неё', async () => {
+    const container = await renderList(twoStepsSameTurn())
+
+    await click(expandButtons(container)[0]!)
+    const pane = expandedPane(container)!
+
+    // Внутри ответа полей ввода нет — добавляем элемент искусственно: важно
+    // ровно то, что `Esc` из `textarea` панель не перехватывает.
+    const textarea = document.createElement('textarea')
+    pane.appendChild(textarea)
+    textarea.focus()
+    expect(document.activeElement).toBe(textarea)
+
+    await pressEscape(textarea)
+    expect(expandedPane(container)).not.toBeNull()
+
+    // Убираем поле — тот же `Esc` из документа панель закрывает (контроль).
+    textarea.remove()
+    await pressEscape(document)
+    expect(expandedPane(container)).toBeNull()
+  })
+
+  it('user-сообщение: кнопки разворота нет, панель не открывается', async () => {
     const container = await renderList([
       msg({ id: 'u1', index: 1, ord: 9, role: 'user', turn_id: 't1', content: 'Вопрос' }),
       msg({ id: 'a1', index: 2, ord: 10, turn_id: 't1', content: 'Ответ', agent_role: 'fixer' }),
@@ -208,25 +292,61 @@ describe('MessageList: разворот ответа агента на всю ш
     const userSegment = container.querySelector('[data-message-id="u1"]') as HTMLElement
     expect(userSegment.contains(buttons[0]!)).toBe(false)
 
+    // Разворот ответа не открывает панель для user-реплики.
     await click(buttons[0]!)
-    // Разворот ответа не трогает user-пузырь.
-    expect(bubbleOf(container, 'u1').className).toContain('max-w-[85%]')
-    expect(bubbleOf(container, 'a1').className).toContain('max-w-full')
+    const pane = expandedPane(container)!
+    expect(pane.querySelector('[data-message-id="u1"]')).toBeNull()
+    expect(pane.textContent).toContain('Ответ')
   })
 
-  it('состояние не течёт между ходами: развёрнут только первый', async () => {
-    const container = await renderList([
-      msg({ id: 'a1', index: 1, ord: 10, turn_id: 't1', content: 'Ход 1', agent_role: 'fixer' }),
-      msg({ id: 'b1', index: 2, ord: 11, turn_id: 't2', content: 'Ход 2', agent_role: 'fixer' }),
-    ])
+  it('панель показывает только выбранный ход (второй ход в DOM панели отсутствует)', async () => {
+    const container = await renderList(twoTurns())
 
     const buttons = expandButtons(container)
     expect(buttons).toHaveLength(2)
 
     await click(buttons[0]!)
-    expect(bubbleOf(container, 'a1').className).toContain('max-w-full')
-    expect(bubbleOf(container, 'b1').className).toContain('max-w-[85%]')
-    expect(bubbleOf(container, 'b1').className).not.toContain('max-w-full')
+
+    const pane = expandedPane(container)!
+    expect(pane.textContent).toContain('Ход 1')
+    expect(pane.textContent).not.toContain('Ход 2')
+    expect(pane.querySelector('[data-message-id="b1"]')).toBeNull()
+    expect(pane.querySelector('[data-message-id="a1"]')).not.toBeNull()
+    // Снаружи панели ленты тоже нет — второй ход не остаётся «второй копией».
+    expect(container.querySelector('[data-message-id="b1"]')).toBeNull()
+  })
+
+  it('состояние не течёт: после закрытия первого открывается второй', async () => {
+    const container = await renderList(twoTurns())
+
+    await click(expandButtons(container)[0]!)
+    expect(expandedPane(container)!.textContent).toContain('Ход 1')
+    await click(expandButtons(container)[0]!)
+    expect(expandedPane(container)).toBeNull()
+
+    await click(expandButtons(container)[1]!)
+
+    const pane = expandedPane(container)!
+    expect(pane.textContent).toContain('Ход 2')
+    expect(pane.textContent).not.toContain('Ход 1')
+    expect(pane.querySelector('[data-message-id="a1"]')).toBeNull()
+  })
+
+  it('разворот другой группы заменяет текущую панель', async () => {
+    const container = await renderList(twoTurns())
+
+    await click(expandButtons(container)[0]!)
+    // Внутри панели кнопок столько же, сколько ответов в панели (один).
+    const paneButton = expandedPane(container)!.querySelector(
+      '[data-testid="message-expand"]',
+    ) as HTMLButtonElement
+    await click(paneButton)
+    expect(expandedPane(container)).toBeNull()
+
+    await click(expandButtons(container)[1]!)
+    expect(expandedPane(container)!.textContent).toContain('Ход 2')
+    // Панель одна: второй панели в DOM нет.
+    expect(container.querySelectorAll('[data-testid="message-expanded"]')).toHaveLength(1)
   })
 
   it('служебные блоки (Notice/фон/планировщик) кнопки разворота не получают', async () => {

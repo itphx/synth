@@ -217,6 +217,36 @@ html.device-tablet {
   padding-right: 0;
 }
 
+/* Развёрнутая панель ответа (`MessageList`, `data-testid="message-expanded"`).
+   Панель заменяет ленту и занимает всю область чата; внутри неё `.chat-column`
+   растянут по высоте, а цепочка flex доводит растяжение до пузыря/блока хода:
+   панель → `.chat-column` → сегмент группы → `[data-bubble]`. Правила здесь, а
+   не утилитами в JSX, потому что последние звенья — разметка `ChatMessage`,
+   которую панель не переписывает (один рендер на ленту и на панель).
+   Вид `feed`/`compact` работает как обычно: у панели те же `data-view-mode`/
+   `data-density` на `.chat-column`, правила выше применяются и внутри. */
+.message-expanded-pane .chat-column > * {
+  /* Растёт по остатку, но **не сжимается**: длинный ответ растит содержимое,
+     а не обрезается высотой панели (скроллится `.chat-column`). */
+  flex: 1 0 auto;
+  min-height: 0;
+}
+
+.message-expanded-pane .chat-column [data-bubble] {
+  display: flex;
+  flex-direction: column;
+  /* Пузырь — остаток высоты панели после шапки/ряда действий и на всю ширину. */
+  flex: 1 0 auto;
+  align-self: stretch;
+  min-height: 0;
+}
+
+/* Содержимое пузыря не сжимается под высоту панели: длинный ответ растит
+   пузырь, а прокручивается панель (`.chat-column`), а не страница. */
+.message-expanded-pane .chat-column [data-bubble] > * {
+  flex-shrink: 0;
+}
+
 /* Композер чата: десктоп — прежние w-4/5; мобильные зоны — почти вся ширина */
 html.device-phone {
   --composer-ml: max(0.75rem, var(--synth-safe-area-left));
