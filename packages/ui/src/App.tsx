@@ -23,9 +23,13 @@ import { ConfirmDialog } from './components/ui/confirm-dialog'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import {
+  applyServerDefaultChatScale,
   applyServerDefaultUiScale,
+  getDefaultChatScale,
   getDefaultUiScale,
+  normalizeChatScale,
   normalizeUiScale,
+  setServerChatScaleDefaults,
   setServerScaleDefaults,
 } from '@/lib/uiScale'
 import { useAuthStore } from '@/stores/authStore'
@@ -126,6 +130,20 @@ function DefaultsSync() {
       if (applyServerDefaultUiScale()) {
         useUIStore.setState({ uiScale: normalizeUiScale(getDefaultUiScale()) })
       }
+
+      // Отображение ленты чата: серверные умолчания применяются только тем,
+      // у кого нет личного выбора (локальный persist или профиль).
+      setServerChatScaleDefaults({
+        mobile: defaults.chatScaleMobile ?? null,
+        desktop: defaults.chatScaleDesktop ?? null,
+      })
+      if (applyServerDefaultChatScale()) {
+        useUIStore.setState({ chatScale: normalizeChatScale(getDefaultChatScale()) })
+      }
+      useUIStore.getState().setServerChatDisplayDefaults({
+        viewMode: defaults.chatViewMode ?? null,
+        density: defaults.chatDensity ?? null,
+      })
     }
     apply()
   }, [isAuthenticated, isInitialized])

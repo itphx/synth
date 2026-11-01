@@ -3,6 +3,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useI18nStore } from '@/lib/i18n/store'
 import { useAuthStore } from '@/stores/authStore'
 import { useProvidersStore } from '@/stores/providersStore'
+import { applyPersonalChatScale, normalizeChatScale } from '@/lib/uiScale'
 import type { ThemeMode } from '@/lib/theme/themes'
 import type { Locale } from '@/lib/i18n'
 
@@ -34,12 +35,18 @@ export const profileService = {
       return await api.getDefaults()
     } catch (err) {
       console.error('Failed to load defaults:', err)
+      // Standalone/старый сервер может не отдавать `/auth/defaults`:
+      // null — «умолчание не задано», UI берёт встроенные дефолты.
       return {
         locale: 'ru',
         themeMode: 'system',
         theme: 'synthesis',
         uiScaleMobile: null,
         uiScaleDesktop: null,
+        chatViewMode: null,
+        chatDensity: null,
+        chatScaleMobile: null,
+        chatScaleDesktop: null,
       }
     }
   },
@@ -60,6 +67,19 @@ export const profileService = {
     }
     if (prefs.intermediateTextDisplay) {
       useUIStore.setState({ intermediateTextDisplay: prefs.intermediateTextDisplay })
+    }
+    // Режим отображения ленты: профиль приоритетнее серверных умолчаний, но не
+    // перекрывает локальный выбор пользователя (проверка — в экшене стора).
+    if (prefs.chatViewMode === 'feed' || prefs.chatViewMode === 'detailed') {
+      useUIStore.getState().applyPersonalChatDisplay({ viewMode: prefs.chatViewMode })
+    }
+    if (prefs.chatDensity === 'normal' || prefs.chatDensity === 'compact') {
+      useUIStore.getState().applyPersonalChatDisplay({ density: prefs.chatDensity })
+    }
+    if (typeof prefs.chatScale === 'number' && Number.isFinite(prefs.chatScale)) {
+      if (applyPersonalChatScale(prefs.chatScale)) {
+        useUIStore.setState({ chatScale: normalizeChatScale(prefs.chatScale) })
+      }
     }
 
     useProvidersStore.getState().loadFavoritesFromProfile(prefs)
@@ -100,6 +120,21 @@ export const profileService = {
 
   async syncIntermediateTextDisplayToProfile(mode: 'inline' | 'bottom'): Promise<void> {
     await this.syncToProfile('intermediateTextDisplay', mode)
+  },
+
+  /** Личный вид ленты чата (managed; в standalone профиля нет — ошибка глушится). */
+  async syncChatViewModeToProfile(mode: 'detailed' | 'feed'): Promise<void> {
+    await this.syncToProfile('chatViewMode', mode)
+  },
+
+  /** Личная плотность ленты чата (managed, best-effort). */
+  async syncChatDensityToProfile(density: 'normal' | 'compact'): Promise<void> {
+    await this.syncToProfile('chatDensity', density)
+  },
+
+  /** Личный масштаб области чата (managed, best-effort). */
+  async syncChatScaleToProfile(scale: number): Promise<void> {
+    await this.syncToProfile('chatScale', scale)
   },
 
   async syncAvatarToProfile(avatar: string | null): Promise<void> {

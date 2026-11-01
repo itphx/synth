@@ -101,8 +101,55 @@ export interface SettingsFocusRequest {
   sectionId?: string
 }
 
+/** Ключ persist-хранилища настроек UI (zustand `persist`). */
+export const UI_SETTINGS_STORAGE_KEY = 'synth-ui-settings'
+
+/** Поля режима отображения ленты, у которых бывает личный выбор пользователя. */
+export type ChatDisplayKey = 'chatViewMode' | 'chatDensity'
+
 /**
- * Черновик расписания для deep-link в вкладку «Шедулер» (ADR-051/ADR-101):
+ * Личный выбор режима отображения ленты, **зафиксированный до гидратации**
+ * стора: `persist` перезаписывает хранилище на каждый `set`, поэтому позже
+ * отличить «выбор пользователя» от автоматически записанного дефолта нельзя.
+ */
+const persistedChatDisplay: Record<ChatDisplayKey, boolean> = readPersistedChatDisplay()
+/** Явный выбор в текущей сессии (Save в настройках или значение из профиля). */
+const explicitChatDisplay: Record<ChatDisplayKey, boolean> = {
+  chatViewMode: false,
+  chatDensity: false,
+}
+
+function readPersistedChatDisplay(): Record<ChatDisplayKey, boolean> {
+  const empty: Record<ChatDisplayKey, boolean> = { chatViewMode: false, chatDensity: false }
+  if (typeof window === 'undefined') {
+    return empty
+  }
+  try {
+    const raw = window.localStorage.getItem(UI_SETTINGS_STORAGE_KEY)
+    if (!raw) {
+      return empty
+    }
+    const parsed = JSON.parse(raw) as { state?: Record<string, unknown> }
+    const state = parsed?.state ?? {}
+    return {
+      chatViewMode: state.chatViewMode !== undefined && state.chatViewMode !== null,
+      chatDensity: state.chatDensity !== undefined && state.chatDensity !== null,
+    }
+  } catch {
+    return empty
+  }
+}
+
+/**
+ * Есть ли у пользователя личный выбор режима отображения ленты
+ * (сохранённый в `persist` или сделанный/пришедший из профиля в этой сессии).
+ * Серверные умолчания применяются только при `false`.
+ */
+export function hasPersonalChatDisplay(key: ChatDisplayKey): boolean {
+  return persistedChatDisplay[key] || explicitChatDisplay[key]
+}
+
+/** Черновик расписания для deep-link в вкладку «Шедулер» (ADR-051/ADR-101):
  * предзаполняет форму создания, но ничего не сохраняет. Runtime-only.
  */
 export interface ScheduleDraft {
@@ -225,6 +272,21 @@ interface UIStore {
   /** Вид ленты чата (персистится; см. `ChatViewMode`). */
   chatViewMode: ChatViewMode
   setChatViewMode: (mode: ChatViewMode) => void
+
+  /**
+   * Серверные умолчания вида/плотности ленты инстанса: применяются только если
+   * у пользователя нет личного выбора (`hasPersonalChatDisplay`).
+   */
+  setServerChatDisplayDefaults: (patch: {
+    viewMode?: ChatViewMode | null
+    density?: ChatDensity | null
+  }) => void
+
+  /**
+   * Личные значения из профиля (managed): приоритетнее серверных умолчаний,
+   * но не перекрывают локальный выбор пользователя.
+   */
+  applyPersonalChatDisplay: (patch: { viewMode?: ChatViewMode; density?: ChatDensity }) => void
 
   /** ADR-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
    *  и таблицы MCP перезапрашиваются без рестарта. Runtime, не персистится. */
@@ -542,16 +604,55 @@ export const useUIStore = create<UIStore>()(
       },
 
       chatDensity: 'normal',
-      setChatDensity: (density) => set({ chatDensity: density }),
+      setChatDensity: (density) => {
+        explicitChatDisplay.chatDensity = true
+        set({ chatDensity: density })
+      },
 
       chatViewMode: 'detailed',
-      setChatViewMode: (mode) => set({ chatViewMode: mode }),
+      setChatViewMode: (mode) => {
+        explicitChatDisplay.chatViewMode = true
+        set({ chatViewMode: mode })
+      },
+
+      setServerChatDisplayDefaults: ({ viewMode, density }) =>
+        set(() => {
+          const next: Partial<UIStore> = {}
+          if (
+            (viewMode === 'feed' || viewMode === 'detailed') &&
+            !hasPersonalChatDisplay('chatViewMode')
+          ) {
+            next.chatViewMode = viewMode
+          }
+          if (
+            (density === 'normal' || density === 'compact') &&
+            !hasPersonalChatDisplay('chatDensity')
+          ) {
+            next.chatDensity = density
+          }
+          return next
+        }),
+
+      applyPersonalChatDisplay: ({ viewMode, density }) =>
+        set(() => {
+          const next: Partial<UIStore> = {}
+          if (viewMode && !hasPersonalChatDisplay('chatViewMode')) {
+            next.chatViewMode = viewMode
+            // Значение из профиля — тоже личный выбор: умолчания его не перекрывают.
+            explicitChatDisplay.chatViewMode = true
+          }
+          if (density && !hasPersonalChatDisplay('chatDensity')) {
+            next.chatDensity = density
+            explicitChatDisplay.chatDensity = true
+          }
+          return next
+        }),
 
       toolsDisabledTick: 0,
       bumpToolsDisabledTick: () => set((state) => ({ toolsDisabledTick: state.toolsDisabledTick + 1 })),
     }),
     {
-      name: 'synth-ui-settings',
+      name: UI_SETTINGS_STORAGE_KEY,
       partialize: (state) => ({
         leftPanelWidth: state.leftPanel.width,
         rightPanelWidth: state.rightPanel.width,

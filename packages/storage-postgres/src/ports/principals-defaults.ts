@@ -26,9 +26,21 @@ export const DEFAULTS_SETTINGS_KEY = 'defaults';
 const UI_SCALE_MIN = 0.5;
 const UI_SCALE_MAX = 1.2;
 
+/** Диапазон масштаба области чата (паритет `DefaultsStore`/UI `CHAT_SCALE_*`). */
+const CHAT_SCALE_MIN = 0.75;
+const CHAT_SCALE_MAX = 1.5;
+
 /** Масштаб интерфейса: число в диапазоне 0.5..1.2, иначе `undefined`. */
 function sanitizeScale(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value) && value >= UI_SCALE_MIN && value <= UI_SCALE_MAX) {
+    return value;
+  }
+  return undefined;
+}
+
+/** Масштаб области чата: число в диапазоне 0.75..1.5, иначе `undefined`. */
+function sanitizeChatScale(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= CHAT_SCALE_MIN && value <= CHAT_SCALE_MAX) {
     return value;
   }
   return undefined;
@@ -49,6 +61,12 @@ function sanitize(raw: unknown): AppearanceDefaults {
   if (mobile !== undefined) out.uiScaleMobile = mobile;
   const desktop = sanitizeScale(src.uiScaleDesktop);
   if (desktop !== undefined) out.uiScaleDesktop = desktop;
+  if (src.chatViewMode === 'detailed' || src.chatViewMode === 'feed') out.chatViewMode = src.chatViewMode;
+  if (src.chatDensity === 'normal' || src.chatDensity === 'compact') out.chatDensity = src.chatDensity;
+  const chatMobile = sanitizeChatScale(src.chatScaleMobile);
+  if (chatMobile !== undefined) out.chatScaleMobile = chatMobile;
+  const chatDesktop = sanitizeChatScale(src.chatScaleDesktop);
+  if (chatDesktop !== undefined) out.chatScaleDesktop = chatDesktop;
 
   return out;
 }

@@ -5,20 +5,29 @@ import { profileService } from '@/lib/api/profileService'
 import { confirm } from '@/lib/confirm'
 import { THEME_PRESETS } from '@/lib/theme/themes'
 import type { ThemeMode } from '@/types/theme'
+import { useUIStore, type ChatDensity, type ChatViewMode } from '@/stores/useUIStore'
 import {
+  CHAT_SCALE_DEFAULT,
+  CHAT_SCALE_MIN,
   UI_SCALE_MOBILE_DEFAULT,
   UI_SCALE_DESKTOP_DEFAULT,
+  applyServerDefaultChatScale,
   applyUiScale,
+  clampChatScale,
   isMobileScaleDevice,
   normalizeUiScale,
+  setServerChatScaleDefaults,
   setServerScaleDefaults,
 } from '@/lib/uiScale'
-import { UiScaleSlider } from '@/components/settings/UiScaleControl'
+import { ChatScaleSlider, UiScaleSlider } from '@/components/settings/UiScaleControl'
 import {
+  SegmentedControl,
   SettingsActions,
   SettingsPanel,
+  SettingsRow,
   SettingsSection,
   useSettingsDraft,
+  type SegmentedControlOption,
 } from '@/components/ui/settings'
 import {
   ThemeModeControl,
@@ -32,6 +41,10 @@ interface DefaultsDraft {
   theme: string
   uiScaleMobile: number
   uiScaleDesktop: number
+  chatViewMode: ChatViewMode
+  chatDensity: ChatDensity
+  chatScaleMobile: number
+  chatScaleDesktop: number
 }
 
 const themeToPresetName = (theme: string): string =>
@@ -43,6 +56,11 @@ const toDraft = (defaults: UserPreferences): DefaultsDraft => ({
   theme: defaults.theme ?? 'synthesis',
   uiScaleMobile: normalizeUiScale(defaults.uiScaleMobile ?? UI_SCALE_MOBILE_DEFAULT),
   uiScaleDesktop: normalizeUiScale(defaults.uiScaleDesktop ?? UI_SCALE_DESKTOP_DEFAULT),
+  chatViewMode: defaults.chatViewMode === 'feed' ? 'feed' : 'detailed',
+  chatDensity: defaults.chatDensity === 'compact' ? 'compact' : 'normal',
+  // У чат-скейла свой диапазон 0.75…1.5 (мобильный минимум 0.85 — на клиенте).
+  chatScaleMobile: clampChatScale(defaults.chatScaleMobile ?? CHAT_SCALE_DEFAULT),
+  chatScaleDesktop: clampChatScale(defaults.chatScaleDesktop ?? CHAT_SCALE_DEFAULT),
 })
 
 export const DefaultsPanel = () => {
@@ -58,10 +76,25 @@ export const DefaultsPanel = () => {
         theme: next.theme,
         uiScaleMobile: next.uiScaleMobile,
         uiScaleDesktop: next.uiScaleDesktop,
+        chatViewMode: next.chatViewMode,
+        chatDensity: next.chatDensity,
+        chatScaleMobile: next.chatScaleMobile,
+        chatScaleDesktop: next.chatScaleDesktop,
       })
       setServerScaleDefaults({
         mobile: next.uiScaleMobile,
         desktop: next.uiScaleDesktop,
+      })
+      // Новые умолчания сразу учитываются текущей сессией: масштаб чата и режим
+      // отображения применяются только тем, у кого нет личного выбора.
+      setServerChatScaleDefaults({
+        mobile: next.chatScaleMobile,
+        desktop: next.chatScaleDesktop,
+      })
+      applyServerDefaultChatScale()
+      useUIStore.getState().setServerChatDisplayDefaults({
+        viewMode: next.chatViewMode,
+        density: next.chatDensity,
       })
       setServerDefaults(next)
       return next
@@ -99,12 +132,38 @@ export const DefaultsPanel = () => {
     }
   }
 
+  const handleChatScaleMobileChange = (value: number) => {
+    update({ chatScaleMobile: clampChatScale(value) })
+  }
+
+  const handleChatScaleDesktopChange = (value: number) => {
+    update({ chatScaleDesktop: clampChatScale(value) })
+  }
+
+  const chatViewModeOptions: SegmentedControlOption<ChatViewMode>[] = [
+    { value: 'detailed', label: t('chatSettings.viewModeDetailed') },
+    { value: 'feed', label: t('chatSettings.viewModeFeed') },
+  ]
+  const chatDensityOptions: SegmentedControlOption<ChatDensity>[] = [
+    { value: 'normal', label: t('chatSettings.densityNormal') },
+    { value: 'compact', label: t('chatSettings.densityCompact') },
+  ]
+
   const handleReset = async () => {
     if (!(await confirm({ title: t('admin.defaults.confirmReset'), variant: 'danger' }))) return
     const defaults = toDraft(await profileService.getDefaults())
     setServerDefaults(defaults)
     draft.setDraft(defaults)
     applyUiScale(isMobileScaleDevice() ? defaults.uiScaleMobile : defaults.uiScaleDesktop)
+    setServerChatScaleDefaults({
+      mobile: defaults.chatScaleMobile,
+      desktop: defaults.chatScaleDesktop,
+    })
+    applyServerDefaultChatScale()
+    useUIStore.getState().setServerChatDisplayDefaults({
+      viewMode: defaults.chatViewMode,
+      density: defaults.chatDensity,
+    })
   }
 
   return (
@@ -154,6 +213,55 @@ export const DefaultsPanel = () => {
                 label={t('settings.appearance.uiScale.desktop')}
                 value={current.uiScaleDesktop}
                 onChange={handleDesktopScaleChange}
+              />
+            </SettingsSection>
+
+            <SettingsSection
+              id="defaults-chat-display"
+              title={t('chatSettings.display.label')}
+              tooltip={t('settings.help.defaults.section.defaults-chat-display')}
+            >
+              <SettingsRow
+                label={t('chatSettings.viewMode')}
+                control={
+                  <SegmentedControl<ChatViewMode>
+                    value={current.chatViewMode}
+                    options={chatViewModeOptions}
+                    onChange={(value) => update({ chatViewMode: value })}
+                    ariaLabel={t('chatSettings.viewMode')}
+                  />
+                }
+              />
+              <SettingsRow
+                label={t('chatSettings.density')}
+                control={
+                  <SegmentedControl<ChatDensity>
+                    value={current.chatDensity}
+                    options={chatDensityOptions}
+                    onChange={(value) => update({ chatDensity: value })}
+                    ariaLabel={t('chatSettings.density')}
+                  />
+                }
+              />
+            </SettingsSection>
+
+            <SettingsSection
+              id="defaults-chat-scale"
+              title={t('chatSettings.chatScale.label')}
+              tooltip={t('settings.help.defaults.section.defaults-chat-scale')}
+            >
+              {/* Диапазон чат-скейла — 0.75…1.5 (не путать с 0.5…1.2 у uiScale). */}
+              <ChatScaleSlider
+                label={t('chatSettings.chatScale.mobile')}
+                value={current.chatScaleMobile}
+                min={CHAT_SCALE_MIN}
+                onChange={handleChatScaleMobileChange}
+              />
+              <ChatScaleSlider
+                label={t('chatSettings.chatScale.desktop')}
+                value={current.chatScaleDesktop}
+                min={CHAT_SCALE_MIN}
+                onChange={handleChatScaleDesktopChange}
               />
             </SettingsSection>
 

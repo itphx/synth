@@ -462,3 +462,62 @@ describe('useUIStore.chatScale', () => {
     expect(document.documentElement.style.getPropertyValue('--chat-scale')).toBe('1.3')
   })
 })
+
+/**
+ * Серверные умолчания вида/плотности ленты: применяются только при отсутствии
+ * личного выбора (localStorage persist, явный выбор, значение профиля).
+ */
+describe('useUIStore — серверные умолчания отображения ленты', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ chatViewMode: 'detailed', chatDensity: 'normal' })
+  })
+
+  it('без личного выбора применяет оба серверных значения', () => {
+    useUIStore.getState().setServerChatDisplayDefaults({ viewMode: 'feed', density: 'compact' })
+
+    expect(useUIStore.getState().chatViewMode).toBe('feed')
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+  })
+
+  it('null и неизвестные значения не меняют стор', () => {
+    useUIStore.getState().setServerChatDisplayDefaults({ viewMode: null, density: null })
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+
+    useUIStore.getState().setServerChatDisplayDefaults({
+      viewMode: 'bubbles' as never,
+      density: 'ultra' as never,
+    })
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+    expect(useUIStore.getState().chatDensity).toBe('normal')
+  })
+
+  it('явный выбор пользователя важнее серверных умолчаний', () => {
+    useUIStore.getState().setChatViewMode('detailed')
+    useUIStore.getState().setServerChatDisplayDefaults({ viewMode: 'feed' })
+
+    expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+
+  it('значение из профиля применяется и блокирует серверное умолчание', () => {
+    useUIStore.getState().applyPersonalChatDisplay({ density: 'compact' })
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+
+    useUIStore.getState().setServerChatDisplayDefaults({ density: 'normal' })
+    expect(useUIStore.getState().chatDensity).toBe('compact')
+  })
+
+  it('сохранённый в persist личный выбор важнее серверного (свежий стор)', async () => {
+    storage.setItem(
+      'synth-ui-settings',
+      JSON.stringify({ state: { chatViewMode: 'detailed' }, version: 0 }),
+    )
+    vi.resetModules()
+    const fresh = await import('./useUIStore')
+
+    fresh.useUIStore.getState().setServerChatDisplayDefaults({ viewMode: 'feed' })
+
+    expect(fresh.useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+})
