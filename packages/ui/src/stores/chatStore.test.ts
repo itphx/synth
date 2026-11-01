@@ -184,12 +184,14 @@ describe('chatStore: сортировка вклиниваний (ADR-118 §4)',
     expect(compareMessagesByOrd(saved, steer)).toBeLessThan(0)
   })
 
-  it('вклинивание — перед живым (живое остаётся последним)', () => {
+  it('вклинивание — последнее: ниже живого сегмента хода', () => {
     const steer = { ord: null, id: 'steer', index: 3, steerPending: true, created_at: '2026-10-30T10:00:00Z' }
     const live = { ord: null, id: 'live', index: 4, status: 'streaming' as const, created_at: '2026-10-30T12:00:00Z' }
 
-    expect(compareMessagesByOrd(steer, live)).toBeLessThan(0)
-    expect(compareMessagesByOrd(live, steer)).toBeGreaterThan(0)
+    // Вклинивание — самая свежая реплика пользователя: она не может стоять
+    // выше ответа, который уже печатается.
+    expect(compareMessagesByOrd(steer, live)).toBeGreaterThan(0)
+    expect(compareMessagesByOrd(live, steer)).toBeLessThan(0)
   })
 
   it('вклинивания между собой — по времени постановки (created_at)', () => {
@@ -200,21 +202,50 @@ describe('chatStore: сортировка вклиниваний (ADR-118 §4)',
     expect(compareMessagesByOrd(late, early)).toBeGreaterThan(0)
   })
 
-  it('sortMessagesByOrd: лента — записанные, затем вклинивания, затем живой', () => {
+  it('вклинивания с одинаковым created_at — порядок детерминирован (tie-break по id)', () => {
+    const a = { ord: null, id: 'a', index: 1, steerPending: true, created_at: '2026-10-30T10:00:00Z' }
+    const b = { ord: null, id: 'b', index: 0, steerPending: true, created_at: '2026-10-30T10:00:00Z' }
+
+    expect(compareMessagesByOrd(a, b)).toBeLessThan(0)
+    expect(compareMessagesByOrd(b, a)).toBeGreaterThan(0)
+  })
+
+  it('sortMessagesByOrd: лента — записанные, затем живой сегмент, затем вклинивание', () => {
     const sorted = sortMessagesByOrd([
       msg({ index: 2, id: 'live', role: 'assistant', status: 'streaming', ord: null, created_at: '2026-10-30T12:00:00Z' }),
       msg({ index: 3, id: 'steer', ord: null, steerPending: true, created_at: '2026-10-30T10:00:00Z' }),
       msg({ index: 0, id: 'saved', ord: 12, created_at: '2026-10-30T09:00:00Z' }),
     ])
-    expect(sorted.map((m) => m.id)).toEqual(['saved', 'steer', 'live'])
+    expect(sorted.map((m) => m.id)).toEqual(['saved', 'live', 'steer'])
   })
 
-  it('вклинивание и оптимистичная реплика (обе без ord) — по времени постановки', () => {
+  it('вклинивание и оптимистичная реплика (обе без ord) — вклинивание тоже последнее', () => {
     const steer = { ord: null, id: 'steer', index: 4, steerPending: true, created_at: '2026-10-30T10:00:00Z' }
     const optimistic = { ord: null, id: 'optimistic', index: 5, created_at: '2026-10-30T10:00:05Z' }
 
-    // Вклинивание было раньше оптимистичной реплики — порядок сохраняется.
-    expect(compareMessagesByOrd(steer, optimistic)).toBeLessThan(0)
+    // Незаписанное вклинивание не сравнивается по времени: оно — самая свежая
+    // реплика пользователя и всегда замыкает ленту.
+    expect(compareMessagesByOrd(steer, optimistic)).toBeGreaterThan(0)
+    expect(compareMessagesByOrd(optimistic, steer)).toBeLessThan(0)
+  })
+
+  it('после выдачи ord вклинивание встаёт на своё хронологическое место', () => {
+    const store = useChatStore.getState()
+    store.setMessages('s1', [
+      msg({ index: 0, id: 'prev', ord: 1, created_at: '2026-10-30T10:00:00Z' }),
+      msg({ index: 1, id: 'step1', role: 'assistant', ord: 2, created_at: '2026-10-30T10:00:01Z' }),
+      msg({ index: 3, id: 'steer', ord: null, steerPending: true, content: 'уточнение', created_at: '2026-10-30T10:00:03Z' }),
+      msg({ index: 4, id: 'step2', role: 'assistant', status: 'streaming', ord: null, created_at: '2026-10-30T10:00:02Z' }),
+    ])
+    const ids = () => (useChatStore.getState().messagesBySession['s1'] ?? []).map((m) => m.id)
+
+    // До материализации вклинивание замыкает ленту (ниже живого сегмента).
+    expect(ids()).toEqual(['prev', 'step1', 'step2', 'steer'])
+
+    // `message.delivered` → выдан `ord`, маркер ожидания снят: сообщение встаёт
+    // между предыдущим шагом и следующим (хронологический порядок истории).
+    store.updateMessageById('s1', 'steer', { ord: 3, steerPending: false })
+    expect(ids()).toEqual(['prev', 'step1', 'steer', 'step2'])
   })
 
   it('маркер снимается, когда сообщение материализовано (ord выдан)', () => {

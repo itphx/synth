@@ -1570,3 +1570,22 @@
 - **Исправлено:** атомарный перенос `pendingMessages → steerInbox` под одним локом (снятие до публикации; повторный steer → 404, лимит не обходится); «Стоп» останавливает только активный ход — очередь сохраняется целиком, автозапуска нет, возобновление `/queue/:id/resume` (кнопка «Продолжить» в панели); UI снимает вклинивание только по `message.delivered`/`steer.dropped`/терминалу хода, на терминале — сначала сверка очереди, потом снятие; `queue.state` обновляет панель по изменению счётчиков.
 - **Проверки:** typecheck core/ui — 0; целевые тесты ядра 50, UI 83; полные прогоны: core 8046 (1 предсуществующий сбой `git-proxy-env` из-за `no_proxy`), UI 2707; `adr-check`/`docs-link-check` — OK.
 - **Остаток:** `steer.dropped` без `message_id(s)` снимает все неразрешённые вклинивания сессии (вернутся по `message.delivered`); гибрид — поведение удалённого сервера до обновления обеих сторон; legacy-сессии standalone с владельцем-UUID не получают мгновенный показ.
+
+## 2026-11-01 — шлюзы: адаптация к потоку сообщений v2 (ADR-118)
+
+- **Задача:** адаптировать шлюзы (`addons/synth-gateway-*`) к API v2 после ADR-118. **Тип:** migration/refactor.
+- **Диагноз (P0):** SSE `GET /api/v2/events` требует `messageModel=2` (иначе 426) — watcher'ы подключались без параметра; `stream.chunk`/`stream.done`/`stream.usage`/`stream.interrupted` удалены; `message.added` остался с усечением до 500 символов — прежний фоллбек молча отдавал обрезанный ответ; вложения ответа переехали в `step.finished.attachments`.
+- **Решения (согласованы с владельцем):** финал = текст последнего (иначе последнего непустого) шага; только v2, fail-closed по `messageModel`; Telegram-шлюз переведён с локального watcher'а на ядро; объём — core + telegram + bump остальных.
+- **`synth-gateway-core` (0.1.0 → 0.2.0, breaking):** `ResponseWatcher` v2 (проба `/meta`, `?messageModel=2&since=`, `id:`/`eventSeq`-догон, `turn.*`/`step.*`/`part.delta`, вложения из `step.finished`, дедуп `turn:<sid>:<turnId>`), `SynthApi.getMeta/downloadAttachment`, приписка ретрая per-session (переживает смену `turnId`). Проверки: build/typecheck/lint/test — 250 тестов.
+- **`synth-gateway-telegram` (0.4.3 → 0.5.0):** удалён `watcher.ts` (1507 стр.) и дубли auth/health/store; добавлен `ChannelAdapter` (`channel.ts`, 1034 стр.) с Telegram-спецификой; зависимость `@itphx/synth-gateway-core ^0.2.0`; миграция `state/session-routes.json → state/routes.json`; reply фиксируется на начало хода. Тесты: 530 (baseline 570; удалены тесты ядра/фоллбека `message.added`, добавлены channel/delivery).
+- **`synth-gateway-email`:** production-код совместим; исправлены протухшие тесты (фиксированная дата письма старше 7-дневного окна) + регрессионный тест. 116 тестов.
+- **`synth-gateway-max` / `synth-gateway-vk`:** код совместим, typecheck + 246 тестов против нового ядра; bump `^0.2.0` — после публикации core.
+- **Живой smoke:** backend 0.13.0 — `/meta` `messageModel=2`; SSE без параметра 426; `ResponseWatcher` подключается и `health.watcher=up`.
+- **Не сделано:** коммиты (нет явной просьбы), публикация core 0.2.0, обновление lockfile/CI телеграма и bump max/vk (блокировано публикацией). Риски: разрыв SSE не сбрасывает live-сообщение (watchdog 60 с), сброс дедупа `seen-updates` при смене формата.
+
+## 2026-11-01 — вклинивание встало над ответом
+
+- **Задача:** вклинившаяся реплика отображалась **над** печатающимся ответом, нарушая хронологию. **Тип:** bugfix (UI).
+- **Причина:** в `compareMessagesByOrd` ветка «живого» сообщения (`status: 'streaming'`) проверялась раньше `steerPending`, поэтому порядок был `ord` → вклинивание → живой сегмент.
+- **Исправлено:** проверка `steerPending` вынесена выше — вклинивание всегда последнее; живое — предпоследним среди незаписанных. После `message.delivered` (`ord` выдан, маркер снят) реплика встаёт на хронологическое место между шагами.
+- **Проверки:** typecheck UI — 0; целевые тесты 84/67; полный UI — 2710 passed; lint — 0 errors (27 предсуществующих warning).

@@ -157,6 +157,19 @@ describe('message.enqueued: вклинивание (steer) появляется 
     expect(messages).toHaveLength(1)
     expect(messages[0]!.steerPending).toBe(false)
   })
+
+  it('вклинивание встаёт ПОСЛЕ живого сегмента хода', () => {
+    dispatch(makeEvent('turn.started', 's1', { turnId: 't1', messageId: 'm-user' }))
+    dispatch(makeEvent('step.started', 's1', { turnId: 't1', messageId: 'm-step', stepIndex: 0 }))
+    dispatch(makeEvent('message.enqueued', 's1', {
+      messageId: 'm-steer', delivery: 'steer', position: null, message: snapshot(),
+    }))
+
+    const messages = useChatStore.getState().messagesBySession['s1'] ?? []
+    // Живой ответ шага остаётся выше: вклинивание — самая свежая реплика.
+    expect(messages.map((m) => m.id)).toEqual(['m-step', 'm-steer'])
+    expect(messages[1]).toMatchObject({ steerPending: true, ord: null })
+  })
 })
 
 describe('message.enqueued: вклинивание живёт в ленте до явного сигнала', () => {
