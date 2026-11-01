@@ -81,11 +81,27 @@ describe('Tabs', () => {
     expect(tabs[1]!.classList.contains('text-muted-foreground')).toBe(true)
   })
 
+  it('segmented: дорожка с внутренним отступом, вкладки ниже --control-height', async () => {
+    const host = await renderTabs({ items: ITEMS, value: 'a', onChange: vi.fn() })
+    const list = host.querySelector('[role="tablist"]') as HTMLElement
+    // Активная «таблетка» не касается контура дорожки: 2px отступа по краям,
+    // высота сегмента = 30 − 4 = 26px (`--control-height` 30px).
+    expect(list.classList.contains('p-0.5')).toBe(true)
+    host.querySelectorAll('[role="tab"]').forEach((tab) => {
+      expect(tab.classList.contains('h-[calc(var(--control-height)-0.25rem)]')).toBe(true)
+      expect(tab.classList.contains('h-[var(--control-height)]')).toBe(false)
+    })
+  })
+
   it('variant underline: подчёркивание активной, без фона', async () => {
     const host = await renderTabs({ items: ITEMS, value: 'a', onChange: vi.fn(), variant: 'underline' })
     const tabs = host.querySelectorAll('[role="tab"]')
     expect(tabs[0]!.classList.contains('border-b-2')).toBe(true)
     expect(tabs[0]!.classList.contains('bg-background')).toBe(false)
+    // Подчёркнутый вариант сохраняет полную высоту контрола и не получает
+    // внутреннего отступа дорожки (это не «таблетки в рамке»).
+    expect(tabs[0]!.classList.contains('h-[var(--control-height)]')).toBe(true)
+    expect(host.querySelector('[role="tablist"]')!.classList.contains('p-0.5')).toBe(false)
     expect(host.querySelector('[role="tablist"]')!.classList.contains('tab-scroll-container')).toBe(true)
   })
 

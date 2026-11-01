@@ -742,13 +742,31 @@ export function MessageList({
   const renderGroup = (group: MessageGroup, opts?: { pane?: boolean }) => {
     const pane = opts?.pane === true
     const turnBlock = isTurnBlock(group)
+    /**
+     * Групповое состояние компакта: прошлый завершённый ход с ответом агента
+     * свёрнут в строку-сводку (живой ход и ход с ошибкой всегда раскрыты).
+     * В этом состоянии содержимое сегментов скрыто — разделители шагов между
+     * ними рисовать не нужно, иначе от хода остаются «полоски» пустых границ.
+     */
+    const groupHasError = group.messages.some((m) => m.status === 'error')
+    const groupHasAssistant = group.messages.some((m) => m.role === 'assistant')
+    const isPastTurn = group.turnId != null && group.turnId !== turn?.turnId
+    const compactCollapsed =
+      chatDensity === 'compact' &&
+      isPastTurn &&
+      !groupHasError &&
+      groupHasAssistant &&
+      !revealedServiceGroups.has(group.key)
     const segments = group.messages.map((msg, i) => {
       const segment = renderSegment(group, msg, i === 0, {
         bare: turnBlock,
         last: i === group.messages.length - 1,
         expanded: pane,
       })
-      if (!turnBlock || i === 0) return segment
+      // Первый сегмент разделителя не имеет; при свёрнутой сводке компакта
+      // разделители скрыты вместе с содержимым шагов (возвращаются после
+      // раскрытия — `revealedServiceGroups`).
+      if (!turnBlock || i === 0 || compactCollapsed) return segment
       // Между шагами — тонкий разделитель, без отдельных карточек. Это
       // **отдельный пустой элемент** (сиблиг сегмента), а не обёртка сегмента:
       // так DOM хода однороден и структурное CSS-правило

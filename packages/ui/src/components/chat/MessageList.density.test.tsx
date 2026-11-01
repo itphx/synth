@@ -336,6 +336,80 @@ describe('MessageList: компактная плотность ленты', () =
     expect(container.querySelectorAll('[data-tool-call-toggle]')).toHaveLength(2)
   })
 
+  it('свёрнутый прошлый ход не оставляет разделителей шагов, после раскрытия они возвращаются', async () => {
+    const container = await renderList([
+      msg({
+        id: 'a1',
+        index: 1,
+        ord: 10,
+        turn_id: 't1',
+        step_index: 0,
+        role: 'assistant',
+        agent_role: 'fixer',
+        content: 'Шаг первый',
+        parts: [textPart('msg:text:0-a1', 'Шаг первый'), toolPart('c1', 'read_file')],
+      }),
+      msg({
+        id: 'a2',
+        index: 2,
+        ord: 11,
+        turn_id: 't1',
+        step_index: 1,
+        role: 'assistant',
+        agent_role: 'fixer',
+        content: 'Шаг второй',
+        parts: [textPart('msg:text:0-a2', 'Шаг второй'), toolPart('c2', 'write_file')],
+      }),
+    ])
+
+    // Группа — один блок хода, но содержимое шагов свёрнуто: пустых
+    // разделителей между сегментами остаться не должно.
+    expect(container.querySelectorAll('[data-testid="turn-block"]')).toHaveLength(1)
+    expect(summaryOf(container)!.getAttribute('aria-expanded')).toBe('false')
+    expect(container.querySelectorAll('[data-step-divider]')).toHaveLength(0)
+
+    await act(async () => {
+      summaryOf(container)!.click()
+    })
+    // Раскрытие сводки возвращает разделители (и содержимое шагов).
+    expect(summaryOf(container)!.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelectorAll('[data-step-divider]').length).toBeGreaterThan(0)
+  })
+
+  it('живой ход в компакте не сворачивается — разделители шагов на месте', async () => {
+    const turn: ActiveTurn = { turnId: 't1', status: 'streaming' }
+    const container = await renderList(
+      [
+        msg({
+          id: 'a1',
+          index: 1,
+          ord: 10,
+          turn_id: 't1',
+          step_index: 0,
+          role: 'assistant',
+          agent_role: 'fixer',
+          content: 'Шаг первый',
+          parts: [textPart('msg:text:0-a1', 'Шаг первый'), toolPart('c1', 'read_file')],
+        }),
+        msg({
+          id: 'a2',
+          index: 2,
+          ord: 11,
+          turn_id: 't1',
+          step_index: 1,
+          role: 'assistant',
+          agent_role: 'fixer',
+          content: 'Шаг второй',
+          parts: [textPart('msg:text:0-a2', 'Шаг второй'), toolPart('c2', 'write_file')],
+        }),
+      ],
+      turn,
+    )
+
+    expect(summaryOf(container)).toBeNull()
+    expect(container.querySelectorAll('[data-step-divider]').length).toBeGreaterThan(0)
+  })
+
   it('карточка саб-агента (task) остаётся видимой в компактном режиме', async () => {    const container = await renderList([
       msg({
         id: 'a1',
