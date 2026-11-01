@@ -1613,3 +1613,14 @@
 - **Починка раннера (одобрено владельцем, `@admin`):** `docker buildx prune -af` + `image prune -af` (освобождено 26.6 ГБ), root расширен 30 → 60 ГБ онлайн (`virsh blockresize --extend` + `growpart` + `resize2fs`, без перезагрузки и простоя), в `daemon.json` добавлен `builder.gc {enabled, defaultKeepStorage: 20GB}`. Рестарт docker перезапустил `act_runner` — сам задекларировался (`ci-runner-01`, 6.0.2).
 - **Повторный прогон:** пустой коммит `c1dee3fd` (смена SHA — единственный способ перезапустить `ci.yaml`; `workflow_dispatch` в нём не объявлен) → прогон `1980126` **success**, включая «Образы» (все flavor'ы + smoke). Диск раннера в ходе сборки — 18 ГБ из 59.
 - **Остаток:** `pnpm audit (high+)` в джобе аудита по-прежнему report-only (не блокирует, дельта к baseline); kaniko-шаги «Образов» skipped, пока доступен docker-демон — так и задумано. На раннере остались бэкапы в `/root/*.bak` и остановленный контейнер `synth-ci-postgres` (ручной `docker rm`, не критично).
+
+## 2026-11-01 — merge в master, сборка и деплой на test
+
+- **Задача:** слить ветку, собрать образы, задеплоить test. **Тип:** release/deploy.
+- **Сделано:** `feature/message-stream-v2` → `master` (ff, HEAD `291d88c1` + чарт-фиксы `f7ea0e35`, `ee881ee7`); образы `synth-backend:0.13.0`, `synth-ui:0.13.0`, `synth-executor:0.13.0-full` опубликованы в Gitea; чарт `synth 0.13.0-5`; пиннинги в `synth-deploy` (`8e96a2b`, `20f2d90`, `3fc15fc`). Бандлы `synth-test`, `synth-gateway-telegram`, `synth-media`, `synth-test-allinone` — **1/1**, helm `deployed`, `/health` 200, `meta` = 2/0.13.0.
+- **NFS-chown (разобрано):** kubelet при старте подов рекурсивно менял владельца NFS-workspace (54 840 файлов, 10–20 мин); `progressDeadlineSeconds` 600 истекал → rollout `Failed` → Helm `failed` → Fleet ретраил по кругу (ревизии до 133).
+  - `fsGroupChangePolicy: OnRootMismatch` добавлен в чарт (`f7ea0e35`), но на этом сторадже **не помогает**: нода видит владельца тома иначе, чем контейнер (idmap NFS), обход повторяется.
+  - Рабочее решение для test: `backend/executor.podSecurityContext.fsGroup: null` (контейнеры и так под uid 1000), разовый `chgrp/chmod` на `synth-backend-data` (local-path, `2777 0:1000`), secret-тома `tls`/`executor-token` → `defaultMode: 0444` (без fsGroup файлы `root:root 0400` процессу недоступны; тома readOnly).
+  - Результат: старт подов ~30 с вместо 10–20 мин; `progressDeadlineSeconds` 1200 оставлен как запас.
+- **Побочные находки:** сборка образа `synth-gateway-telegram` падает на `ERR_PNPM_OUTDATED_LOCKFILE` в репозитории аддона (`pnpm-lock` без `@itphx/synth-gateway-core@^0.2.0`) — образ не пересобирался, используется ранее опубликованный `0.5.0`; устранить в репозитории аддона.
+- **Остаток:** `master` не запушен в `origin` (как и прежние 22 коммита — публикация релизным workflow); продуктовое решение для NFS (маппинг uid/gid на сервере NFS либо отказ от `fsGroup` для RWX-томов) — отдельная задача.
