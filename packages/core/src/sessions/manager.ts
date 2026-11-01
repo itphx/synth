@@ -152,7 +152,7 @@ export class SessionManager {
         // `reasoningLevel`; без проброса в whitelist они терялись бы при
         // создании (`POST /sessions`, дочерняя сессия саб-агента).
         effort: data.settings?.effort,
-        maxTokens: data.settings?.maxTokens ?? 4096,
+        maxTokens: data.settings?.maxTokens ?? 0,
         debugEnabled: data.settings?.debugEnabled ?? true,
         streamEnabled: data.settings?.streamEnabled ?? true,
         contextOptimization: data.settings?.contextOptimization ?? 'none',

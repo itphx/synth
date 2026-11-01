@@ -95,6 +95,11 @@ export interface StandaloneConfig {
   /** ADR-070 §2.2: политика prompt-cache из config.yaml llm.cache (auto | none). */
   llmCachePolicy?: 'auto' | 'none';
   /**
+   * `llm.maxTokens` — лимит вывода по умолчанию для новых сессий и моделей без
+   * `maxOutputTokens` (0 — авто-дефолт ядра).
+   */
+  llmMaxTokens?: number;
+  /**
    * ADR-089: дефолтные `provider`/`model` инстанса (`llm.defaultProvider`/
    * `llm.defaultModel`) — применяются к сессиям, материализуемым funnel'ом
    * (`RequestSessionService`: `ephemeral`/`bind`), когда явная модель не задана.

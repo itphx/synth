@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { OllamaProvider } from './ollama.js';
 import { ProviderFactory, type LLMMessage, type SystemPromptPayload } from './base.js';
 import './index.js';
-import type { TokenUsage, LLMChunk } from '@itphx/synth-shared';
+import type { TokenUsage, LLMChunk, LlmFinishReason } from '@itphx/synth-shared';
 
 const baseParams = {
   url: 'http://omn.example.test/api/chat',
@@ -14,7 +14,11 @@ const baseParams = {
 // Доступ к приватным методам для юнит-проверки.
 type OllamaPrivate = {
   _formatMessages(messages: LLMMessage[]): Array<Record<string, unknown>>;
-  _parseResponse(data: Record<string, unknown>): { toolCalls?: Record<string, unknown>[]; usage: TokenUsage };
+  _parseResponse(data: Record<string, unknown>): {
+    toolCalls?: Record<string, unknown>[];
+    usage: TokenUsage;
+    finishReason?: LlmFinishReason;
+  };
 };
 
 function makeMessage(overrides: Partial<LLMMessage> = {}): LLMMessage {
@@ -711,5 +715,53 @@ describe('OllamaProvider — compatibility (think / tool_choice)', () => {
     vi.unstubAllGlobals();
     const body = await bodyOf('default', { compatibility: { supportsToolChoice: false } });
     expect(body).not.toHaveProperty('tool_choice');
+  });
+});
+
+/**
+ * Причина завершения (`done_reason`) — по возможности: Ollama отдаёт её в
+ * финальном чанке (`stop`/`length`). Поля нет — поведение прежнее.
+ */
+describe('OllamaProvider — done_reason', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('_parseResponse: done_reason length → max_tokens, stop → end_turn', () => {
+    const provider = new OllamaProvider(baseParams) as unknown as OllamaPrivate;
+    expect(provider._parseResponse({ message: { content: '' }, done_reason: 'length' }).finishReason)
+      .toBe('max_tokens');
+    expect(provider._parseResponse({ message: { content: 'ok' }, done_reason: 'stop' }).finishReason)
+      .toBe('end_turn');
+  });
+
+  it('_parseResponse без done_reason: finishReason не заполняется', () => {
+    const provider = new OllamaProvider(baseParams) as unknown as OllamaPrivate;
+    expect(provider._parseResponse({ message: { content: 'ok' } }).finishReason).toBeUndefined();
+  });
+
+  it('chatAsync: done_reason финального чанка → finishReason, стрим не ломается', async () => {
+    const lines = [
+      JSON.stringify({ message: { content: 'ok' }, done: false }),
+      JSON.stringify({
+        message: { content: '' },
+        done: true,
+        done_reason: 'length',
+        prompt_eval_count: 12,
+        eval_count: 3,
+      }),
+    ].join('\n') + '\n';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(lines, {
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson' },
+    })));
+
+    const chunks: LLMChunk[] = [];
+    for await (const c of new OllamaProvider(baseParams).chatAsync([makeMessage()])) chunks.push(c);
+
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.content).toBe('ok');
+    expect(final.finishReason).toBe('max_tokens');
+    expect(final.usage).toMatchObject({ inputTokens: 12, outputTokens: 3, totalTokens: 15 });
   });
 });

@@ -157,6 +157,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (предохранитель по объёму промпта саб-агента; `0` — без ограничения) |
 | `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (лимит глубины вложенности саб-агентов; `0` — без ограничения) |
+| `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (лимит вывода по умолчанию; `0` — авто-дефолт ядра) |
 | `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (общий предел вывода инструментов, строк; ≥ 1) |
 | `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (общий предел вывода инструментов, байт; ≥ 1) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
@@ -307,6 +308,9 @@ llm:
   defaultModel: ""                # задаётся в UI «Модели» (`/api/v2/settings/default-model`) и приоритетнее config
   maxRetries: 3
   timeout: 60
+  maxTokens: 8192                 # SYNTH_LLM_MAX_TOKENS: лимит вывода по умолчанию для новых сессий и
+                                  # моделей без `maxOutputTokens` (0 — авто-дефолт ядра); каталог модели — кап,
+                                  # у reasoning-моделей (deepseek, minimax) действует пол 8192
   cache: "auto"                   # ADR-070: политика prompt-cache — auto (маркеры/ключ) | none (отключить);
                                   # применяется в провайдерах (Anthropic cache_control, OpenAI prompt_cache_key)
 
@@ -1685,7 +1689,8 @@ OpenAI-chat / Anthropic / Ollama, лимит шагов) — [PROVIDERS.md](./PR
 - **Приоритет:** явное значение **модели** → явное значение **провайдера** → **эвристика** →
   встроенный дефолт (`resolveModelCompatibility`). Эвристики (`detectCompatibilityHeuristics`)
   применяются только к незаданным полям: `requireReasoning` — тип/имя провайдера `deepseek`, URL с
-  `deepseek.com`, id модели с `deepseek`; `requireAssistantAfterTool` — `mistral`/`devstral`/`codestral`/
+  `deepseek.com`, id модели с `deepseek`, имя провайдера `minimax` или URL с `minimax`;
+  `requireAssistantAfterTool` — `mistral`/`devstral`/`codestral`/
   `pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField`, `streamUsage`,
   `cacheFormat`, `requireFinishReason` и `supportsEffortUpdates` не эвристицируются: локальные
   OpenAI-совместимые серверы часто не знают `max_completion_tokens`, а inline-маркеры кэша, требование

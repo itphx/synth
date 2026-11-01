@@ -8,6 +8,7 @@ import {
   isMutatingCommand,
   checkShellCommand,
   looksLikePathToken,
+  isPathLikeTarget,
   loadShellPolicy,
   clearShellPolicyCache,
   matchShellCommandPattern,
@@ -164,6 +165,49 @@ describe('looksLikePathToken', () => {
     expect(looksLikePathToken('https://example.com/x')).toBe(false);
     expect(looksLikePathToken('-')).toBe(false);
     expect(looksLikePathToken('')).toBe(false);
+  });
+});
+
+describe('isPathLikeTarget — строгий критерий «путь» для fail-closed ask', () => {
+  it('начинается как путь → цель-путь', () => {
+    expect(isPathLikeTarget('/etc/passwd')).toBe(true);
+    expect(isPathLikeTarget('/proc/$p/comm')).toBe(true);
+    expect(isPathLikeTarget('~/.ssh')).toBe(true);
+    expect(isPathLikeTarget('./x')).toBe(true);
+    expect(isPathLikeTarget('../x')).toBe(true);
+    expect(isPathLikeTarget('a/../b')).toBe(true);
+    expect(isPathLikeTarget('C:\\Windows\\x')).toBe(true);
+    expect(isPathLikeTarget('c:/Windows/x')).toBe(true);
+    expect(isPathLikeTarget('\\\\srv\\share')).toBe(true);
+  });
+
+  it('переменная в начале → цель-путь ($VAR, ${VAR}, $VAR/...)', () => {
+    expect(isPathLikeTarget('$X')).toBe(true);
+    expect(isPathLikeTarget('${X}')).toBe(true);
+    expect(isPathLikeTarget('$X/file')).toBe(true);
+    expect(isPathLikeTarget('${X}/file')).toBe(true);
+    // не путь: переменная с хвостом-текстом (`$p:` — echo-текст, `${X}.json` — имя)
+    expect(isPathLikeTarget('$p:')).toBe(false);
+    expect(isPathLikeTarget('${X}.json')).toBe(false);
+  });
+
+  it('glob с разделителем — цель-путь (может раскрыться в защищённый)', () => {
+    expect(isPathLikeTarget('packages/*/package.json')).toBe(true);
+    expect(isPathLikeTarget('*/x')).toBe(true);
+    expect(isPathLikeTarget('src/**/*.ts')).toBe(true);
+    // glob без разделителей — рутина
+    expect(isPathLikeTarget('*.ts')).toBe(false);
+  });
+
+  it('текст в кавычках и URL — не путь', () => {
+    expect(isPathLikeTarget('=== diff vs origin/master (stat tail) ===')).toBe(false);
+    expect(isPathLikeTarget("console.log(require('zod/package.json').version)")).toBe(false);
+    expect(isPathLikeTarget('a/b')).toBe(false);
+    expect(isPathLikeTarget('origin/master')).toBe(false);
+    expect(isPathLikeTarget('https://example.com/x')).toBe(false);
+    expect(isPathLikeTarget('my file.txt')).toBe(false);
+    expect(isPathLikeTarget('')).toBe(false);
+    expect(isPathLikeTarget('-')).toBe(false);
   });
 });
 
@@ -340,6 +384,54 @@ describe('checkShellCommand', () => {
   it('пустая политика — всё allow', () => {
     const empty: ShellPolicy = { deniedPaths: [], deniedPrefixes: [], approvalPaths: [], deniedCommandPrefixes: [] };
     expect(check('cat ~/.ssh/id_rsa', CWD, empty).action).toBe('allow');
+  });
+});
+
+describe('checkShellCommand — строгий критерий «путь» для непроверяемой динамики (шаг 6)', () => {
+  const check = (cmd: string, cwd = CWD, policy: ShellPolicy = TEST_POLICY) => checkShellCommand(cmd, cwd, policy);
+
+  it('текст с `/` в кавычках не уходит на подтверждение (регресс: ложные ask)', () => {
+    // раньше «путём» считалась вся строка внутри кавычек → ask на безобидный echo
+    expect(check('echo "=== diff vs origin/master (stat tail) ==="').action).toBe('allow');
+    // JS-однострочник: `/` в середине текста — не путь
+    expect(check(`node -e "console.log(require('zod/package.json').version)"`).action).toBe('allow');
+  });
+
+  it('shell-цикл: `ask` даёт только реальный динамический путь /proc/$p/comm', () => {
+    // `/proc/$p/comm` начинается с `/` — абсолютный неразрешимый путь, fail-closed
+    // оставляем (иначе `cat /etc/$X/shadow` проходил бы молча). Причина ask —
+    // именно этот токен, а текст цикла (`for …; do echo …; done`) его не даёт.
+    // Токен несёт и закрывающую скобку подстановки (`$(cat …)`) — она в пути.
+    const r = check('for p in $(pgrep -f synth); do echo pid $p: $(cat /proc/$p/comm); done');
+    expect(r.action).toBe('ask');
+    expect(r.messageId).toBe('ask-protected-path');
+    expect(r.deniedPath?.startsWith('/proc/$p/comm')).toBe(true);
+    // без абсолютного динамического пути цикл проходит
+    expect(check('for f in $(ls); do echo done $f:; done').action).toBe('allow');
+  });
+
+  it('обычные команды остаются allow', () => {
+    expect(check('echo hello').action).toBe('allow');
+    expect(check('git status').action).toBe('allow');
+    expect(check('cd synth && pnpm test').action).toBe('allow');
+  });
+
+  it('реальные динамические пути по-прежнему ask', () => {
+    expect(check('cat $X').action).toBe('ask');
+    expect(check('cat ${X}').action).toBe('ask');
+    expect(check('cat $X/file').action).toBe('ask');
+    // `~` + неразрешимая динамика (`~/x` — литерал, резолвится через HOME)
+    expect(check('cat ~/x*').action).toBe('ask');
+    expect(check('cat ./x*').action).toBe('ask');
+    expect(check('cat ../x*').action).toBe('ask');
+    // глоб с разделителем — осознанно ask (может раскрыться в защищённый путь)
+    expect(check('ls packages/*/package.json').action).toBe('ask');
+  });
+
+  it('deny защищённых путей из динамики не ослаблен (шаг 2 приоритетнее)', () => {
+    expect(check('cat $HOME/.ssh/id_rsa').action).toBe('deny');
+    expect(check('cat $X/.ssh/id_rsa').action).toBe('deny');
+    expect(check('cat $X/etc/passwd').action).toBe('deny');
   });
 });
 

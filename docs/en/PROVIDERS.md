@@ -115,7 +115,7 @@ SYNTH_PROVIDER_<NAME>_(API_KEY|URL|MODEL|TYPE|NUM_CTX)
 The name is lowercased with `_` → `-`; at startup the catalog record is **supplemented/overwritten**
 for these fields, and `MODEL` creates the model `<name>/<model>` with `isDefault: true` if it does not
 exist yet. Env does **not** carry `compatibility`, `timeout`, `currency`, `icon` — use the API or the
-catalog JSON (see §11). The CLI equivalent is `synth config provider add` (flags `--type`, `--url`,
+catalog JSON (see §12). The CLI equivalent is `synth config provider add` (flags `--type`, `--url`,
 `--model`, `--api-key`, `--num-ctx`); details in [LLM_PROVIDERS.md](./LLM_PROVIDERS.md).
 
 ### 3.4 `num_ctx` (context size)
@@ -224,7 +224,7 @@ Applied **only to unset** fields:
 
 | Field | Condition |
 |---|---|
-| `requireReasoning: true` | provider type/name `deepseek`, URL contains `deepseek.com`, model id contains `deepseek` |
+| `requireReasoning: true` | provider type/name `deepseek`, URL contains `deepseek.com`, model id contains `deepseek`; provider name `minimax` or a `minimax` URL (MiniMax adaptive thinking spends the same `max_tokens`, so these models get an output floor of 8192) |
 | `requireAssistantAfterTool: true` | model id contains `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral` |
 | `supportsToolChoice: false` | `type: ollama` (the native `/api/chat` does not know the field) |
 
@@ -330,19 +330,20 @@ DeepSeek thinking models require the reasoning to be passed back in repeated his
 `400` "The `reasoning_content` in the thinking mode must be passed back to the API". Therefore, with
 `requireReasoning`, the field is written into **every** assistant message — as an empty string when
 there is no reasoning (`reasoning ?? (requireReasoning ? '' : undefined)`). Without this, the
-synthetic assistant prefill of the step-limit step broke (§8).
+synthetic assistant prefill of the step-limit step broke (§9).
 
 ### 5.3 Output-limit field
 
 `maxTokensField`: our default is `max_tokens` (a deliberate difference from opencode, where the
 default is `max_completion_tokens`). `max_completion_tokens` is sent only when set **explicitly**:
 local and custom OpenAI-compatible servers often do not know it, and a silent default change would
-break existing installations. The limit goes into the body only when set and `> 0`.
+break existing installations. The limit goes into the body only when set and `> 0` (the actual
+value — an integer `> 0` — is resolved by the output-limit policy, §8).
 
 ### 5.4 `tool_choice`
 
 `tool_choice` is passed **only together with `tools`** (some APIs reject the field without tools) and
-only when set by the caller: `auto` | `none` | `required`. On the step-limit step — `none` (§8). The
+only when set by the caller: `auto` | `none` | `required`. On the step-limit step — `none` (§9). The
 native Ollama does not send the field at all (§7).
 
 ### 5.5 `requireAssistantAfterTool` (assistant bridge)
@@ -410,7 +411,7 @@ Implementation — [providers/anthropic.ts](../../packages/core/src/providers/an
 | `reasoningLevel` | `body.thinking` | Thinking blocks in history |
 |---|---|---|
 | `high` | `{type:'enabled', budget_tokens: …}` | replayed |
-| `none` | `{type:'disabled'}` | not replayed |
+| `none` | `{type:'disabled'}` (for a model with `requireReasoning` the field is **not sent** — §8) | not replayed |
 | `default`, `low`, `medium` | field not sent (model default) | not replayed |
 
 Budget — `resolveThinkingBudget(requested, maxTokens)` (`requested` = 8192):
@@ -419,7 +420,8 @@ In practice: "no more than half the limit, but not below 1024"; if half the limi
 minimum, the budget is raised to 1024 (there is still room for the minimum); if there is no room at
 all (`max_tokens` ≤ 1024) — thinking is **not enabled** and the request goes as a regular one
 (instead of `400` "max_tokens must be greater than thinking.budget_tokens"). The limit used is the
-actual one: `ProviderConfig.maxTokens` → default 4096.
+actual one: `ProviderConfig.maxTokens` → default 4096 (for session calls the value is always resolved
+by the output-limit policy — §8).
 
 Forced constraints when thinking is enabled:
 
@@ -450,7 +452,7 @@ request body:
 - changing the level between **turns** is picked up (effort travels in the call options, not in
   the provider constructor, which is cached and shared between runs), but it changes request parameters
   and may drop the provider-side prompt cache. Within a turn a settings change (`PATCH` while the run is
-  in progress) is **not** picked up before the next step — settings are read at turn start (§11).
+  in progress) is **not** picked up before the next step — settings are read at turn start (§12).
 
 Without the flag the behaviour is unchanged (`thinking` from `reasoningLevel`) and an explicit
 `ChatOptions.effort` is **ignored**.
@@ -481,9 +483,9 @@ Without the flag the behaviour is unchanged (`thinking` from `reasoningLevel`) a
 ### 6.3 Step-limit prefill with thinking
 
 On the step-limit step a synthetic assistant message with the "text only" requirement is appended to
-the end of history (§8). With thinking enabled there is **no** thinking block in that prefill. This was
+the end of history (§9). With thinking enabled there is **no** thinking block in that prefill. This was
 verified live on RouterAI/qwen: the request is accepted and the turn finishes `completed` with
-`step_limit_reached`. Official `api.anthropic.com` was not exercised in this scenario (§11).
+`step_limit_reached`. Official `api.anthropic.com` was not exercised in this scenario (§12).
 
 ### 6.4 Prompt-cache breakpoints
 
@@ -506,7 +508,7 @@ was verified live (dev). Behaviour that matters operationally:
 - the endpoint is **tolerant** of a missing thinking block in history (replay without the block —
   `200`), so the strict round-trip required by official Anthropic is not needed here.
 
-`tool_choice: 'none'` together with `tools` remains unverified on this endpoint (§11) — that is the
+`tool_choice: 'none'` together with `tools` remains unverified on this endpoint (§12) — that is the
 step-limit path.
 
 ## 7. Ollama
@@ -547,13 +549,64 @@ The calls are **not executed**, but they are not silently discarded either: each
 a deterministic `session.steps_limit` report (status `limit`). Verified live: `qwen3.8:27b-256k` via
 native Ollama yields `status=limit`, `step_limit_reached=true`, with no textual answer from the model.
 
-## 8. Step limit
+## 8. Finish reason and output limit
+
+Adapters normalize the response finish reason into one dictionary, `LlmFinishReason`
+(`LLM_FINISH_REASONS`, [shared/types/llm.ts](../../packages/shared/src/types/llm.ts)), and put it into
+`LLMChunk.finishReason`/`LLMResponse.finishReason` (meaningful on the final chunk):
+
+| Protocol | Protocol field | Mapping |
+|---|---|---|
+| OpenAI-chat | `choices[0].finish_reason` | `stop` → `end_turn`, `length` → `max_tokens`, `tool_calls`/`function_call` → `tool_use`, `content_filter` → `content_filter` |
+| Anthropic | `stop_reason` (stream — in `message_delta`, non-stream — the response root) | `end_turn`/`tool_use`/`max_tokens`/`stop_sequence` — as is |
+| Ollama | `done_reason` of the final chunk | `stop` → `end_turn`, `length` → `max_tokens` |
+
+An absent field → `undefined` ("reason not reported", the behaviour of earlier versions), while an
+unknown OpenAI/Anthropic value → `unknown` ("there was a reason, but it is not recognized"); for Ollama
+an unknown `done_reason` is not mapped at all.
+
+**Reasoning tokens.** `TokenUsage.reasoningTokens` is written separately from `outputTokens`: Anthropic —
+`usage.output_tokens_details.thinking_tokens`, OpenAI — `completion_tokens_details.reasoning_tokens`
+(Ollama has no such field). The value **counts against** the `max_tokens` budget — thinking spends the
+same limit, so without it "the model said nothing" and "the budget went into reasoning" are
+indistinguishable.
+
+**The output limit is one resolution policy** ([engine/orchestrator/max-output.ts](../../packages/core/src/engine/orchestrator/max-output.ts),
+applied in [engine/orchestrator/routing.ts](../../packages/core/src/engine/orchestrator/routing.ts)
+on both paths — an explicit pair and the router branch):
+
+| Priority | Source |
+|---|---|
+| 1 | explicit `SessionSettings.maxTokens` (`0` — "auto") |
+| 2 | `ModelConfig.maxOutputTokens` (model catalog entry; it is also a **cap** — never send more than the model declares) |
+| 3 | the instance `llm.maxTokens` config (env `SYNTH_LLM_MAX_TOKENS`, default 8192) |
+| 4 | the built-in default of 8192 |
+
+**Floor for reasoning models.** For models with `compatibility.requireReasoning` (and the
+`ModelConfig.requiresReasoning` shorthand) the limit is raised to `REASONING_MIN_OUTPUT_TOKENS = 8192`,
+but never above the catalog value: adaptive thinking spends the same `max_tokens`, and a small limit is
+consumed entirely by reasoning — the answer comes back empty.
+
+**An empty answer with `max_tokens`** is not "the model said nothing": turn finalization substitutes the
+`session.output_limit` text (`max_tokens=N, of which M went to reasoning`) and sets the response status
+to `error`
+([engine/orchestrator/phases/process-finalize.ts](../../packages/core/src/engine/orchestrator/phases/process-finalize.ts),
+[persistence.ts](../../packages/core/src/engine/orchestrator/persistence.ts)). The normalized reason is
+always written to `metadata.finish_reason` of the final assistant message — that is how you tell a
+limit-truncated answer from an empty one.
+
+**`requireReasoning` and Anthropic thinking.** A model with mandatory reasoning (MiniMax, for instance)
+answers `400` (`code 2013`) to an explicit `thinking: {type:'disabled'}`. Therefore with
+`reasoningLevel: 'none'` the adapter **does not send** the `thinking` field at all for such a model
+(§6.1): reasoning cannot be switched off — and pretending it was is no better.
+
+## 9. Step limit
 
 The mechanics match opencode; the shared module is
 [engine/llm/max-steps.ts](../../packages/core/src/engine/llm/max-steps.ts) (used by the main loop
 `engine/orchestrator.ts` and the subagent loop `engine/tools/task/run-cycle.ts`).
 
-### 8.1 Numbering: `maxSteps: N` → N−1 working steps + the limit step
+### 9.1 Numbering: `maxSteps: N` → N−1 working steps + the limit step
 
 `stepLimitStep = iteration + 1 >= maxSteps` (`iteration` starts at zero). Consequences:
 
@@ -561,7 +614,7 @@ The mechanics match opencode; the shared module is
 - `maxSteps: 1` — only the limit step (no tool calls in the turn);
 - `maxSteps` not set (or `<= 0`) — no limit (`DEFAULT_MAX_ITERATIONS = Infinity`).
 
-### 8.2 What happens on the limit step
+### 9.2 What happens on the limit step
 
 - **`tools` stay in the request** — otherwise the provider's cached prefix is lost and the model
   starts printing call markup as text;
@@ -576,7 +629,7 @@ The mechanics match opencode; the shared module is
   `tool_call.result`; the `toolUse`/`toolResult` pairs are never broken (otherwise the next call would
   get `400` "insufficient tool messages following tool_calls").
 
-### 8.3 Reports and markers
+### 9.3 Reports and markers
 
 | Where | What |
 |---|---|
@@ -592,7 +645,7 @@ The "limit step really ran" flag is set by the loop itself: the report is substi
 synthetic prefill actually went into a request. The `session.max_iterations` key is no longer used by
 the main loop (it remains for pipeline steps).
 
-## 9. Security and observability
+## 10. Security and observability
 
 - **The only call path** — `GatewayProvider` (ADR-036): guard, obfuscation, rate limit, audit, output
   guard; `embed` and `decide` go through the same wrapper. Calling an adapter directly violates the
@@ -612,7 +665,7 @@ the main loop (it remains for pipeline steps).
 - **Attachments** — ADR-115: modalities are catalog data; the guard/obfuscation work only with text,
   and metadata is stripped by `stripMetadata` at the send boundary.
 
-## 10. Diagnostics: symptom → cause → setting
+## 11. Diagnostics: symptom → cause → setting
 
 | Symptom | Cause | What to configure |
 |---|---|---|
@@ -622,6 +675,7 @@ the main loop (it remains for pipeline steps).
 | `temperature` has no effect with thinking (Anthropic) | The API requires `temperature: 1` when thinking is enabled | by design; to control variability lower `reasoningLevel` or disable thinking |
 | `tool_choice: required` does not work with thinking | Anthropic forbids a forced tool call with thinking — it is coerced to `auto` | drop `required` or disable thinking |
 | The stream fails with "The provider closed the stream without finish_reason" | `requireFinishReason: true` (default) while the server does not send `finish_reason` | `compatibility.requireFinishReason: false` for that provider/model (the error is unrecoverable, retries will not help) |
+| An empty model answer, status `error`, the `session.output_limit` text | The answer was truncated by the output limit (`finish_reason: max_tokens`); for a reasoning model the whole budget went into thinking | raise `SessionSettings.maxTokens`/`ModelConfig.maxOutputTokens`/`llm.maxTokens` (§8); models with `requireReasoning` have a floor of 8192 |
 | The prompt cache does not work | The provider caches only via inline markers while `cacheFormat` is not set (so `prompt_cache_key` is used), or the opposite | set `compatibility.cacheFormat: anthropic`/`alibaba` (then `prompt_cache_key` is not sent), or remove it and rely on implicit caching |
 | Duplicated/extra cache markers | `cacheFormat` is set but the proxy/gateway adds its own `cache_control`; or markers were already present in the body | the budget of ≤ 4 counts markers already present; do not set `cacheFormat` when the gateway has its own cache; `cachePolicy: 'none'` disables markers for debugging |
 | The model calls tools on the step-limit step (Ollama) | Native `/api/chat` does not know `tool_choice` | expected: calls are not executed and a deterministic report arrives (§7.4); raise the agent's `maxSteps` |
@@ -629,7 +683,7 @@ the main loop (it remains for pipeline steps).
 | Stream `usage` is zero | The server does not support `stream_options` | `compatibility.streamUsage: false` (the request stops carrying an unknown field; usage stays zero) |
 | `400` about `output_config` / `effort` (Anthropic) | `supportsEffortUpdates` is on but the gateway does not know the field; or the model is not an effort-tier one | remove `supportsEffortUpdates` (the previous `thinking` mode returns); send `xhigh`/`max` only after verifying on the live provider (they are set in agent/session settings — the «Reasoning effort» select) |
 
-## 11. Known limitations
+## 12. Known limitations
 
 - **`supportsEffortUpdates` is partially implemented.** Anthropic effort mode (`output_config.effort`,
   §6.1) is enabled only by an explicit flag; the tier comes from the agent/session `effort` (the

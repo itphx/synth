@@ -43,6 +43,8 @@ describe('SessionManager', () => {
     expect(session.title).toBe('Test');
     expect(session.status).toEqual({});
     expect(session.settings.temperature).toBeUndefined();
+    // Лимит вывода по умолчанию — авто: резолв на вызове (каталог/llm.maxTokens).
+    expect(session.settings.maxTokens).toBe(0);
   });
 
   it('createSession сохраняет ownerId (fallback userId, иначе пусто)', async () => {

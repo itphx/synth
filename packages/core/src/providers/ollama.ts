@@ -1,4 +1,4 @@
-import type { LLMChunk, LLMResponse, TokenUsage, ResolvedModelCompatibility } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, LlmFinishReason, TokenUsage, ResolvedModelCompatibility } from '@itphx/synth-shared';
 import {
   BaseProvider,
   resolveProviderCompatibility,
@@ -24,6 +24,22 @@ const CONTEXT_PROBE_BATCH_SIZE = 6;
 
 /** Общий дедлайн fallback-проб контекста, мс — ограничивает серию батчей. */
 const CONTEXT_PROBE_DEADLINE_MS = 20_000;
+
+/**
+ * Причина завершения Ollama (`done_reason`) → общий словарь.
+ * Ollama знает `stop` (естественное завершение) и `length` (срез лимитом
+ * вывода); прочие/неизвестные значения не маппим — поле считается «не
+ * сообщено» (поведение прежних версий, где `done_reason` не читался вовсе).
+ */
+const OLLAMA_FINISH_REASONS: Record<string, LlmFinishReason> = {
+  stop: 'end_turn',
+  length: 'max_tokens',
+};
+
+export function normalizeOllamaFinishReason(raw: unknown): LlmFinishReason | undefined {
+  if (typeof raw !== 'string' || !raw) return undefined;
+  return OLLAMA_FINISH_REASONS[raw];
+}
 
 export class OllamaProvider extends BaseProvider {
   getProviderName(): string {
@@ -162,6 +178,11 @@ export class OllamaProvider extends BaseProvider {
       cacheWriteTokens: 0,
     };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
+    /**
+     * Причина завершения: Ollama отдаёт `done_reason` (`stop`/`length`) в
+     * финальном чанке. Нет поля — `undefined`, прежнее поведение.
+     */
+    let accumulatedFinishReason: LlmFinishReason | undefined;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
@@ -253,6 +274,10 @@ export class OllamaProvider extends BaseProvider {
               accumulatedUsage.totalTokens =
                 accumulatedUsage.inputTokens + accumulatedUsage.outputTokens;
 
+              // Финальный чанк стрима несёт `done_reason` (`stop`/`length`).
+              const doneReason = normalizeOllamaFinishReason(chunkData.done_reason);
+              if (doneReason) accumulatedFinishReason = doneReason;
+
               if (msg?.content && typeof msg.content === 'string') {
                 if (!firstChunkReceived) {
                   firstChunkReceived = true;
@@ -337,6 +362,7 @@ export class OllamaProvider extends BaseProvider {
           toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
           reasoning: accumulatedReasoning || undefined,
           model: this.model,
+          finishReason: accumulatedFinishReason,
         };
       }
     } finally {
@@ -661,7 +687,16 @@ export class OllamaProvider extends BaseProvider {
       cacheWriteTokens: 0,
     };
 
-    return { content, model: this.model, usage: parsedUsage, toolCalls, reasoning };
+    return {
+      content,
+      model: this.model,
+      usage: parsedUsage,
+      toolCalls,
+      reasoning,
+      // Причина завершения (`done_reason`) — нестримовый ответ; нет поля —
+      // ничего не заполняем (поведение прежних версий).
+      finishReason: normalizeOllamaFinishReason(data.done_reason),
+    };
   }
 
   private _formatTools(tools: Record<string, unknown>[]): Record<string, unknown>[] {

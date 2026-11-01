@@ -1574,6 +1574,9 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Approval timeout (sec)',
   'sessionSettings.askTimeoutEnabled': 'Enabled',
   'sessionSettings.askTimeoutDisabled': 'Disabled',
+  // Response limit (`max_tokens`, 0 = auto)
+  'sessionSettings.maxTokens': 'Response limit',
+  'sessionSettings.maxTokensHint': '0 — auto: the model limit from the catalog or the instance (8192 by default). Models with mandatory reasoning have a minimum of 8192, because thinking consumes the same budget.',
   // ADR-029: session approvals
   'sessionSettings.allow.title': 'Session approvals',
   'sessionSettings.allow.empty': 'No approved tools',

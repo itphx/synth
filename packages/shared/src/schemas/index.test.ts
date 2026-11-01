@@ -171,7 +171,8 @@ describe('patchObjectSchema — патч не заполняет отсутст�
     const parsed = sessionCreateSchema.parse({ settings: {} });
     // Temperature дефолта не имеет: undefined = дефолт модели.
     expect(parsed.settings?.temperature).toBeUndefined();
-    expect(parsed.settings?.maxTokens).toBe(4096);
+    // maxTokens: 0 = авто (резолв по каталогу модели / llm.maxTokens на вызове).
+    expect(parsed.settings?.maxTokens).toBe(0);
   });
 });
 

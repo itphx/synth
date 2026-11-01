@@ -478,6 +478,77 @@ describe('runProcessFinalize', () => {
       });
       expect(stepFinished().data).toMatchObject({ status: 'completed' });
     });
+
+    /**
+     * `finish_reason: max_tokens` при пустом `content` — это не «модель ничего
+     * не ответила», а исчерпанный лимит вывода: у reasoning-моделей adaptive
+     * thinking расходует тот же `max_tokens` (диагноз test-инстанса:
+     * `output_tokens = 4096`, `thinking_tokens ≈ 4096`, `content` пуст).
+     */
+    it('finishReason=max_tokens + пустой ответ → session.output_limit (лимит и reasoning), статус error', async () => {
+      const sessionId = await makeSession();
+      const deps = makeDeps();
+      const usage: TokenUsage = {
+        inputTokens: 120,
+        outputTokens: 4096,
+        totalTokens: 4216,
+        reasoningTokens: 4000,
+      };
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ finalContent: '', finishReason: 'max_tokens', finalUsage: usage, turnUsage: usage }),
+        deps,
+      );
+
+      const expected = sm('session.output_limit', { limit: '4096', reasoning: '4000' });
+      const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(saveCall[1]).toBe(expected);
+      expect(saveCall[17]).toMatchObject({
+        i18n: { key: 'session.output_limit', params: { limit: '4096', reasoning: '4000' } },
+        finish_reason: 'max_tokens',
+      });
+      // Не пустой ответ: статус `error`, а не `stopped` и не фоллбек deny.
+      expect(await storedAssistant(sessionId)).toMatchObject({
+        content: expected,
+        metadata: { status: 'error', finish_reason: 'max_tokens' },
+      });
+      expect(stepFinished().data).toMatchObject({ status: 'error' });
+      expect(turnFinished().data).toMatchObject({ status: 'error' });
+      // Текст ошибки содержит фактический лимит и расход на размышления.
+      expect(expected).toContain('4096');
+      expect(expected).toContain('4000');
+    });
+
+    it('finishReason=max_tokens + непустой ответ → текст сохраняется, finish_reason в metadata', async () => {
+      const sessionId = await makeSession();
+      const deps = makeDeps();
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ finalContent: 'частичный ответ', finishReason: 'max_tokens' }),
+        deps,
+      );
+
+      expect(await storedAssistant(sessionId)).toMatchObject({
+        content: 'частичный ответ',
+        metadata: { status: 'completed', finish_reason: 'max_tokens' },
+      });
+    });
+
+    it('finishReason=end_turn: metadata.finish_reason заполняется, фоллбек не подставляется', async () => {
+      const sessionId = await makeSession();
+      const deps = makeDeps();
+
+      await runProcessFinalize(
+        makeArgs(sessionId), makeState({ finalContent: 'ответ', finishReason: 'end_turn' }), deps,
+      );
+
+      expect(await storedAssistant(sessionId)).toMatchObject({
+        content: 'ответ',
+        metadata: { status: 'completed', finish_reason: 'end_turn' },
+      });
+    });
   });
 
   describe('успешный путь', () => {

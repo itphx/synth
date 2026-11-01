@@ -120,6 +120,14 @@ describe('detectCompatibilityHeuristics — эвристики opencode', () => 
     expect(detectCompatibilityHeuristics({ modelId: 'gpt-4o' }).requireReasoning).toBe(false);
   });
 
+  it('minimax: провайдер/URL, но не имя модели', () => {
+    expect(detectCompatibilityHeuristics({ providerName: 'MiniMax' }).requireReasoning).toBe(true);
+    expect(detectCompatibilityHeuristics({ baseUrl: 'https://api.minimax.io/v1' }).requireReasoning).toBe(true);
+    // Сторонние видео-модели с именем `minimax` не делают провайдера reasoning.
+    expect(detectCompatibilityHeuristics({ modelId: 'minimax-video-01' }).requireReasoning).toBe(false);
+    expect(detectCompatibilityHeuristics({ providerType: 'openai', modelId: 'gpt-4o' }).requireReasoning).toBe(false);
+  });
+
   it('Mistral-семейство требует assistant-турн после tool-результатов', () => {
     for (const model of ['mistral-large', 'devstral-small', 'codestral-2501', 'pixtral-12b', 'mixtral-8x7b']) {
       expect(detectCompatibilityHeuristics({ modelId: model }).requireAssistantAfterTool).toBe(true);

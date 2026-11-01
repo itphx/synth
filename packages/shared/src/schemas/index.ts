@@ -125,7 +125,7 @@ export const sessionSettingsSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
   // Без дефолта: `undefined` = дефолт модели (поле не отправляется провайдеру).
   temperature: z.number().min(0).max(2).optional(),
-  maxTokens: z.number().int().min(1).max(200000).default(4096),
+  maxTokens: z.number().int().min(0).max(200000).default(0),
   systemPrompt: z.string().optional(),
   debugEnabled: z.boolean().default(true),
   streamEnabled: z.boolean().default(true),

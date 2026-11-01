@@ -7,7 +7,7 @@
  */
 import type { Message, ProviderConfig as SharedProviderConfig, Session, ReasoningLevel, LLMGatewayConfig, ModelCompatibility } from '@itphx/synth-shared';
 import { lookupContextWindow, mergeModelCompatibility } from '@itphx/synth-shared';
-import { ProviderFactory } from '../../providers/base.js';
+import { ProviderFactory, resolveProviderCompatibility } from '../../providers/base.js';
 import type { ProviderConfig as CoreProviderConfig, BaseProvider } from '../../providers/base.js';
 import { GatewayProvider, DISABLED_GATEWAY_CONFIG } from '../gateway/index.js';
 import type { ObfuscationMapStore, AuditLogger, RateLimiter, LlmFilterRegistry } from '../gateway/index.js';
@@ -16,6 +16,7 @@ import type { MetricsRegistry } from '../../metrics/registry.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ModelRouter, RoutingDecision } from '../router/router.js';
 import { warning } from '../../logger.js';
+import { resolveMaxOutputTokens } from './max-output.js';
 
 /**
  * Конфиг инстанса → конфиг ядра (ADR-084).
@@ -131,6 +132,42 @@ export interface GetProviderDeps {
    * эвристики провайдера.
    */
   resolveModelCompatibility?: (providerName: string, modelName: string) => ModelCompatibility | undefined;
+  /**
+   * Лимит вывода модели из каталога (`ModelConfig.maxOutputTokens`).
+   * `undefined`/`0` — лимит неизвестен: резолв идёт по сессии/конфигу.
+   */
+  resolveModelMaxOutputTokens?: (providerName: string, modelName: string) => number | undefined;
+  /** `llm.maxTokens` — лимит вывода по умолчанию (`0`/`undefined` — дефолт ядра). */
+  defaultMaxOutputTokens?: number;
+}
+
+/**
+ * Лимит вывода вызова: сессия → каталог (он же кап) → конфиг → дефолт, плюс
+ * пол для моделей с обязательным reasoning (adaptive thinking в том же
+ * `max_tokens` иначе съедает ответ).
+ */
+function callMaxOutputTokens(
+  session: Session,
+  providerName: string,
+  modelName: string,
+  deps: GetProviderDeps,
+  sharedConfig?: SharedProviderConfig | null,
+  resolvedCompatibility?: ModelCompatibility,
+): number {
+  const compatibility = resolvedCompatibility
+    ?? deps.resolveModelCompatibility?.(providerName, modelName);
+  return resolveMaxOutputTokens({
+    sessionMax: session.settings.maxTokens,
+    modelMax: deps.resolveModelMaxOutputTokens?.(providerName, modelName),
+    configMax: deps.defaultMaxOutputTokens,
+    requireReasoning: resolveProviderCompatibility({
+      type: sharedConfig?.type,
+      name: providerName,
+      url: sharedConfig?.baseUrl,
+      model: modelName,
+      compatibility,
+    }).requireReasoning,
+  });
 }
 
 /** Создаёт провайдера для сессии (без роутера) или `null` при ошибке/отсутствии. */
@@ -149,6 +186,7 @@ export function getProvider(
   try {
     const effectiveModel = modelName || sharedConfig.defaultModel || '';
     const contextWindow = resolveModelContextWindow(effectiveModel, deps.optimizer);
+    const compatibility = deps.resolveModelCompatibility?.(providerName, effectiveModel);
     const provider = ProviderFactory.create(
       providerName,
       {
@@ -156,9 +194,9 @@ export function getProvider(
           sharedConfig,
           effectiveModel,
           reasoningLevel ?? session.settings.reasoningLevel,
-          deps.resolveModelCompatibility?.(providerName, effectiveModel),
+          compatibility,
         ),
-        maxTokens: session.settings.maxTokens,
+        maxTokens: callMaxOutputTokens(session, providerName, effectiveModel, deps, sharedConfig, compatibility),
         // Приоритет: явный provider.numCtx > ModelConfig.contextWindow.
         numCtx: sharedConfig.numCtx ?? (contextWindow > 0 ? contextWindow : undefined),
       },
@@ -244,7 +282,10 @@ export async function routeProvider(
       decision,
       effectiveTemperature,
       reasoningLevel ?? session.settings.reasoningLevel,
-      session.settings.maxTokens,
+      callMaxOutputTokens(
+        session, decision.providerName, decision.modelName, deps,
+        deps.providerLoader(decision.providerName),
+      ),
       routedWindow > 0 ? routedWindow : undefined,
       // top-p/top-k агента: модель выбрал роутер, сэмплинг — агента.
       overrides.topP,

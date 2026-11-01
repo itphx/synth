@@ -228,6 +228,8 @@ program
       secretKey: resolveSecretKey(synth, process.env),
       gatewayConfig: synth.llmGateway,
       llmCachePolicy: synth.llm.cache,
+      // Лимит вывода по умолчанию (`llm.maxTokens`) — резолв `max_tokens` вызова.
+      llmMaxTokens: synth.llm.maxTokens,
       // ADR-089: дефолтные provider/model инстанса — для сессий из внешних событий
       // (materialize ephemeral/bind), когда явная модель не задана.
       llmDefaults: { provider: synth.llm.defaultProvider, model: synth.llm.defaultModel },
