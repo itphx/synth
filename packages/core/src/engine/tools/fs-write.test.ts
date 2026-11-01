@@ -373,3 +373,243 @@ describe('fs-write tools — надёжность правок', () => {
     await expect(readFile(target, 'utf-8')).resolves.toBe('bye\n');
   });
 });
+
+/**
+ * «Умное» сопоставление `old_string` (образец opencode): стратегии
+ * exact → normalized → loose, применение только при однозначном совпадении.
+ */
+describe('fs-write tools — «умное» сопоставление old_string', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fswrite-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      ...overrides,
+    };
+  }
+
+  function strategyOf(result: { metadata?: Record<string, unknown> }): unknown {
+    return result.metadata?.matchStrategy;
+  }
+
+  it('edit_file: типографские кавычки в файле и прямые в old_string — правка найдена (normalized)', async () => {
+    const file = join(tmpDir, 'smart-quotes.txt');
+    // В файле — типографские кавычки, модель прислала прямые.
+    await writeFile(file, 'const greeting = “Привет”;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'smart-quotes.txt', old_string: 'const greeting = "Привет";', new_string: 'const greeting = "Пока";' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(strategyOf(result)).toBe('normalized');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('const greeting = "Пока";\n');
+  });
+
+  it('edit_file: «ёлочки» в файле и прямые кавычки в old_string — правка найдена (normalized)', async () => {
+    const file = join(tmpDir, 'guillemets.txt');
+    await writeFile(file, 'say = «Привет»;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'guillemets.txt', old_string: 'say = "Привет";', new_string: 'say = "Пока";' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(strategyOf(result)).toBe('normalized');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('say = "Пока";\n');
+  });
+
+  it('edit_file: типографское тире и NBSP — правка найдена (normalized)', async () => {
+    const file = join(tmpDir, 'dash-nbsp.txt');
+    await writeFile(file, 'const a = 1; — const b = 2;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'dash-nbsp.txt', old_string: 'const a = 1; - const b = 2;', new_string: 'const a = 1; - const b = 3;' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(strategyOf(result)).toBe('normalized');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('const a = 1; - const b = 3;\n');
+  });
+
+  it('edit_file: замена применяется к оригинальному фрагменту — остальной файл не меняется', async () => {
+    const file = join(tmpDir, 'keep-rest.txt');
+    // Типографские кавычки в других местах файла должны остаться как есть.
+    await writeFile(file, 'a = “one”;\nb = “two”;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'keep-rest.txt', old_string: 'a = "one";', new_string: 'a = 1;' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(strategyOf(result)).toBe('normalized');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('a = 1;\nb = “two”;\n');
+  });
+
+  it('edit_file: trailing whitespace в строках old_string — правка найдена (loose)', async () => {
+    const file = join(tmpDir, 'trailing.txt');
+    await writeFile(file, 'function f() {\n  return 1;   \n}\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      {
+        file_path: 'trailing.txt',
+        old_string: 'function f() {\n  return 1;\n}',
+        new_string: 'function f() {\n  return 2;\n}',
+      },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(strategyOf(result)).toBe('loose');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('function f() {\n  return 2;\n}\n');
+  });
+
+  it('edit_file: loose — ведущие отступы значимы (другая indentation не подходит)', async () => {
+    const file = join(tmpDir, 'indent.txt');
+    await writeFile(file, 'if (x) {\n    body();   \n}\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'indent.txt', old_string: 'if (x) {\n  body();\n}', new_string: 'if (x) {\n  body();\n} // done' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.replace_not_found');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('if (x) {\n    body();   \n}\n');
+  });
+
+  it('edit_file: неоднозначность по нормализации — прежний отказ replace_multiple', async () => {
+    const file = join(tmpDir, 'ambiguous.txt');
+    await writeFile(file, 'a = “x”;\nb = “x”;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'ambiguous.txt', old_string: '"x";', new_string: '1;' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('found 2 matches');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.replace_multiple');
+    expect(strategyOf(result)).toBe('normalized');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('a = “x”;\nb = “x”;\n');
+  });
+
+  it('edit_file: неоднозначность по loose — прежний отказ replace_multiple', async () => {
+    const file = join(tmpDir, 'ambiguous-loose.txt');
+    await writeFile(file, 'foo();   \nbar();\nfoo();   \nbar();\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'ambiguous-loose.txt', old_string: 'foo();\nbar();', new_string: 'baz();\nbar();' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('found 2 matches');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.replace_multiple');
+    expect(strategyOf(result)).toBe('loose');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('foo();   \nbar();\nfoo();   \nbar();\n');
+  });
+
+  it('edit_file: совпадений нет ни в одной стратегии — прежний отказ replace_not_found', async () => {
+    const file = join(tmpDir, 'not-found.txt');
+    await writeFile(file, 'const a = 1;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'not-found.txt', old_string: 'const b = 2;', new_string: 'const b = 3;' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('replacement string not found');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.replace_not_found');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('const a = 1;\n');
+  });
+
+  it('edit_file: exact имеет приоритет над normalized/loose', async () => {
+    const file = join(tmpDir, 'priority.txt');
+    // Первая строка совпадает точно, вторая — только после нормализации.
+    await writeFile(file, 'a = "x";\nb = “x”;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'priority.txt', old_string: 'a = "x";', new_string: 'a = 1;' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(strategyOf(result)).toBe('exact');
+    // Правлена именно точная строка — вторая осталась как была.
+    await expect(readFile(file, 'utf-8')).resolves.toBe('a = 1;\nb = “x”;\n');
+  });
+
+  it('edit_file: replace_all — прежнее поведение (только exact, все вхождения)', async () => {
+    const file = join(tmpDir, 'replace-all.txt');
+    await writeFile(file, 'x = 1;\nx = 1;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'replace-all.txt', old_string: 'x = 1;', new_string: 'x = 2;', replace_all: true },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(strategyOf(result)).toBe('exact');
+    expect((result.metadata as { replacements?: number }).replacements).toBe(2);
+    await expect(readFile(file, 'utf-8')).resolves.toBe('x = 2;\nx = 2;\n');
+  });
+
+  it('edit_file: replace_all не расширяется «умными» стратегиями — нет совпадения', async () => {
+    const file = join(tmpDir, 'replace-all-smart.txt');
+    await writeFile(file, 'a = “x”;\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'replace-all-smart.txt', old_string: 'a = "x";', new_string: 'a = 1;', replace_all: true },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.replace_not_found');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('a = “x”;\n');
+  });
+
+  it('edit_file: CRLF-файл — нормализованное совпадение, \\r\\n сохраняются', async () => {
+    const file = join(tmpDir, 'crlf-smart.txt');
+    await writeFile(file, 'a = “x”;\r\nb = 2;\r\n', 'utf-8');
+
+    const result = await editFileTool.execute(
+      { file_path: 'crlf-smart.txt', old_string: 'a = "x";', new_string: 'a = 1;' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(strategyOf(result)).toBe('normalized');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('a = 1;\r\nb = 2;\r\n');
+  });
+
+  it('edit_file: loose-правка, не меняющая файл, — отказ no_changes', async () => {
+    const file = join(tmpDir, 'noop-loose.txt');
+    await writeFile(file, 'value;\n', 'utf-8');
+
+    // Текст в файле совпадает с new_string — правка ничего не меняет.
+    const result = await editFileTool.execute(
+      { file_path: 'noop-loose.txt', old_string: 'value;  ', new_string: 'value;' },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.no_changes');
+    await expect(readFile(file, 'utf-8')).resolves.toBe('value;\n');
+  });
+});

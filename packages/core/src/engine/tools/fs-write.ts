@@ -12,6 +12,7 @@ import { sniffBinary } from './fs-read.js';
 import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import { detectLineEndings, fromLfView, toLfView } from './line-endings.js';
 import { writeFileAtomic } from './atomic-file-write.js';
+import { matchEdit, type EditMatchStrategy } from './edit-match.js';
 
 export function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split('\n');
@@ -161,6 +162,8 @@ export const editFileTool: ToolDefinition = {
     'Make exact string replacements in a file. The edit will FAIL if old_string is not unique in the file. '
     + 'read_file prefixes every line with its number ("N: "); that prefix is for reading only — never include it in old_string or new_string. '
     + 'If the match is ambiguous, provide more surrounding context (or use replace_all). '
+    + 'If there is no exact match, the edit retries ignoring typographic quote/dash/space variants, then trailing whitespace at the end of each line; '
+    + 'the replacement is applied to the original text, so the rest of the file stays unchanged. '
     + 'Line endings of the file are preserved: an LF file is edited as is, a CRLF file is matched in LF view and written back as CRLF, '
     + 'a file with mixed line endings is refused. '
     + 'Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
@@ -231,34 +234,67 @@ export const editFileTool: ToolDefinition = {
     const crlf = style === 'crlf';
     const content = crlf ? toLfView(raw) : raw;
 
-    const occurrences = content.split(oldView).length - 1;
-    if (occurrences === 0) {
-      return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
-    }
     const replaceAll = params.replace_all === true;
-    if (occurrences > 1 && !replaceAll) {
-      return {
-        content: sm('fs.replace_multiple', { count: String(occurrences) }),
-        isError: true,
-        metadata: { i18n: i18nMeta('fs.replace_multiple', { count: String(occurrences) }) },
-      };
+    let newContent: string;
+    let count: number;
+    // Стратегия сопоставления — аддитивное поле метаданных (диагностика).
+    let strategy: EditMatchStrategy = 'exact';
+
+    if (replaceAll) {
+      // replace_all — прежнее поведение: только ТОЧНОЕ совпадение, все
+      // вхождения. «Умные» стратегии здесь не применяются (иначе «заменить
+      // все» непредсказуемо расширяло бы область правки).
+      const occurrences = content.split(oldView).length - 1;
+      if (occurrences === 0) {
+        return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
+      }
+      newContent = content.replaceAll(oldView, newView);
+      count = occurrences;
+    } else {
+      // «Умное» сопоставление: exact → normalized → loose (см. edit-match.ts).
+      // Применяется только при ОДНОЗНАЧНОМ совпадении: несколько совпадений —
+      // прежний отказ `fs.replace_multiple` с подсказкой добавить контекст.
+      const match = matchEdit(content, oldView);
+      if (!match) {
+        return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
+      }
+      if (match.matches.length > 1) {
+        return {
+          content: sm('fs.replace_multiple', { count: String(match.matches.length) }),
+          isError: true,
+          metadata: {
+            matchStrategy: match.strategy,
+            i18n: i18nMeta('fs.replace_multiple', { count: String(match.matches.length) }),
+          },
+        };
+      }
+      const found = match.matches[0]!;
+      // Замена применяется к ОРИГИНАЛЬНОМУ фрагменту (по найденным границам):
+      // остальной файл не меняется — в т.ч. типографские кавычки в других
+      // местах остаются как есть (нормализация нужна только для сравнения).
+      newContent = content.slice(0, found.start) + newView + content.slice(found.end);
+      count = 1;
+      strategy = match.strategy;
     }
 
-    const newContent = replaceAll
-      ? content.replaceAll(oldView, newView)
-      : content.replace(oldView, newView);
+    // Правка, не меняющая файл (возможно при loose: текст в файле отличается
+    // от old_string только trailing-пробелами, а new_string совпадает с ним).
+    if (newContent === content) {
+      return fsErrorResult('fs.no_changes', {}, { path: resolvedPath });
+    }
+
     const written = crlf ? fromLfView(newContent) : newContent;
     const mode = info.mode & 0o777;
     await writeFileAtomic(resolvedPath, written, mode);
 
     const diff = generateUnifiedDiff(content, newContent, params.file_path);
-    const count = replaceAll ? occurrences : 1;
     return {
       content: sm('fs.file_edited', { path: params.file_path, count: String(count) }),
       metadata: {
         path: resolvedPath,
         replacements: count,
         diff,
+        matchStrategy: strategy,
         i18n: i18nMeta('fs.file_edited', { path: params.file_path, count: String(count) }),
       },
     };

@@ -53,6 +53,8 @@ export const SYSTEM_MESSAGES = {
   'task.model_not_in_catalog':
     'Error: the model "{provider}/{model}" requested for the subagent is not in the instance model catalog (or is disabled). Available: {available}. Use the list_models tool to pick a provider/model pair.',
   'task.subagent_exec_error_after_retries': 'Subagent execution error "{type}" after {attempts} attempt(s): {error}',
+  'task.depth_limit':
+    'Subagent depth limit reached ({limit}). Finish the work in the current session instead of delegating further.',
 
   // --- Возобновление дочерней сессии саб-агента (resume) ---
   'task.resume_marker': 'Resume the interrupted task. Continue from where you stopped.',
@@ -150,8 +152,8 @@ export const SYSTEM_MESSAGES = {
   'fsread.empty_file': '(empty file)',
   'fsread.no_files': '(no files found)',
   'fsread.glob_error': '(file search error)',
-  'fsread.truncated': '... (showing the first {count} lines; the file is larger)',
-  'fsread.directory_truncated': '... (showing the first {count} entries; the directory has more)',
+  'fsread.truncated': '... (showing the first {count} lines; continue with offset {next})',
+  'fsread.directory_truncated': '... (showing the first {count} entries; continue with offset {next})',
   'fsread.line_truncated': '... (line truncated)',
   'fsread.offset_out_of_range': '(offset {offset} is out of range: the file has {total} lines)',
   'fsread.binary':
@@ -171,6 +173,10 @@ export const SYSTEM_MESSAGES = {
   'web.fetch_all_failed': 'Failed to load any of the URLs',
   'web.no_results': 'No results found for "{query}".',
   'web.search_error': 'Web search error: {error}',
+  'web.search_rate_limited':
+    'Web search rate limited by the provider (HTTP 429). Wait and retry, or try a different query.',
+  'web.search_auth_failed':
+    'Web search authentication failed (HTTP 401). The search provider rejected the credentials.',
   'web.ssrf_blocked': '🚫 Blocked by the network policy: {reason}',
   'web.too_many_redirects': '❌ Too many redirects',
 
@@ -179,6 +185,12 @@ export const SYSTEM_MESSAGES = {
   'search.matches_truncated': '... (showing {shown} of {total} matches)',
   'search.rg_not_installed': '(rg (ripgrep) is not installed. Search is unavailable)',
   'search.error': 'Search error: {error}',
+  // Различимые причины отказа поиска: модель должна понимать, что именно
+  // исправлять (путь, тип пути или сам шаблон поиска).
+  'search.path_not_found': 'Search path not found: {path}',
+  'search.path_not_directory': 'Search path is not a directory: {path}',
+  'search.invalid_regex':
+    'Invalid regular expression: {error}. Fix the pattern and search again (escape special characters or use literal=true).',
 
   // --- План ---
   'plan.enter_success':

@@ -12,7 +12,7 @@ import { argErrorResult } from './arg-error.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError } from '../../execution/ports/index.js';
-import { SEARCH_TIMEOUT_MS } from './search.js';
+import { SEARCH_TIMEOUT_MS, classifySearchPath, searchPathErrorResult } from './search.js';
 
 /**
  * Пределы `read_file` — паритет с opencode
@@ -179,7 +179,8 @@ export const readFileTool: ToolDefinition = {
     + 'the prefix is for reference only and is not part of the file content. '
     + 'Binary files are not decoded (use attach_workspace_file for images/PDFs, execute_shell with file/xxd for other bytes). '
     + `Defaults to and is capped at ${MAX_READ_LINES} lines and ${MAX_READ_BYTES / 1024} KB of output; long lines are truncated. `
-    + 'Use offset and limit to read large files or directories in sections; use grep_files to find specific content. '
+    + 'Use offset and limit to read large files or directories in sections. '
+    + 'Prefer one larger read over many small slices, and use grep_files to find specific content in large files. '
     + 'Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     file_path: z.string().optional().describe('Path to the file or directory to read (absolute or relative to the working directory; defaults to working directory)'),
@@ -207,7 +208,11 @@ export const readFileTool: ToolDefinition = {
     if (info.isDirectory()) {
       const page = await listDirectoryPage(resolvedPath, offset, limit);
       const lines = [...page.lines];
-      if (page.truncated) lines.push(sm('fsread.directory_truncated', { count: String(page.lines.length) }));
+      // Следующий offset — продолжение чтения без повторного обхода файла.
+      const nextOffset = offset + lines.length;
+      if (page.truncated) {
+        lines.push(sm('fsread.directory_truncated', { count: String(page.lines.length), next: String(nextOffset) }));
+      }
       return {
         content: lines.join('\n') || sm('fsread.empty_directory'),
         metadata: {
@@ -217,6 +222,7 @@ export const readFileTool: ToolDefinition = {
           offset,
           limit,
           truncated: page.truncated,
+          nextOffset,
           bytes: Buffer.byteLength(lines.join('\n'), 'utf-8'),
         },
       };
@@ -234,7 +240,11 @@ export const readFileTool: ToolDefinition = {
 
     const page = await readTextPage(resolvedPath, offset, limit);
     const lines = [...page.lines];
-    if (page.truncated) lines.push(sm('fsread.truncated', { count: String(page.lines.length) }));
+    // Следующий offset — продолжение чтения без повторного обхода файла.
+    const nextOffset = offset + lines.length;
+    if (page.truncated) {
+      lines.push(sm('fsread.truncated', { count: String(page.lines.length), next: String(nextOffset) }));
+    }
 
     // Пустой файл и `offset` за концом — разные случаи: пустой говорит сам за
     // себя, для второго подсказываем фактическое число строк.
@@ -252,6 +262,7 @@ export const readFileTool: ToolDefinition = {
         offset,
         limit,
         truncated: page.truncated,
+        nextOffset,
         bytes: page.bytes,
       },
     };
@@ -261,9 +272,14 @@ export const readFileTool: ToolDefinition = {
 export const listDirectoryTool: ToolDefinition = {
   name: 'list_directory',
   description:
-    'List files and directories in a given path. Use this to explore the project structure. Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
+    'List files and directories in a given path. Use this to explore the project structure. '
+    + `Returns at most ${MAX_READ_LINES} entries by default (limit up to ${MAX_READ_LINES}); use offset and limit to page through large directories. `
+    + 'Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.',
   parameters: z.object({
     path: z.string().optional().describe('Path to the directory to list (absolute or relative to the working directory; defaults to working directory)'),
+    offset: z.number().int().min(0).optional().describe('Directory entry to start listing from (0-based)'),
+    limit: z.number().int().min(1).optional()
+      .describe(`Maximum number of directory entries to list (defaults to and capped at ${MAX_READ_LINES})`),
   }),
   capabilities: [ToolCapability.FILE_READ],
   async execute(args, ctx) {
@@ -273,18 +289,31 @@ export const listDirectoryTool: ToolDefinition = {
     if (!parsed.success) {
       return argErrorResult(this.name, parsed.error.issues);
     }
-    const params = parsed.data as { path?: string };
+    const params = parsed.data as { path?: string; offset?: number; limit?: number };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
     if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
-    const page = await listDirectoryPage(resolvedPath, 0, MAX_READ_LINES);
+    const offset = params.offset ?? 0;
+    const limit = Math.min(params.limit ?? MAX_READ_LINES, MAX_READ_LINES);
+    const page = await listDirectoryPage(resolvedPath, offset, limit);
     const lines = [...page.lines];
-    if (page.truncated) lines.push(sm('fsread.directory_truncated', { count: String(page.lines.length) }));
+    // Следующий offset — продолжение листинга без повторного обхода каталога.
+    const nextOffset = offset + lines.length;
+    if (page.truncated) {
+      lines.push(sm('fsread.directory_truncated', { count: String(page.lines.length), next: String(nextOffset) }));
+    }
 
     return {
       content: lines.join('\n') || sm('fsread.empty_directory'),
-      metadata: { path: resolvedPath, count: page.totalEntries, truncated: page.truncated },
+      metadata: {
+        path: resolvedPath,
+        count: page.totalEntries,
+        offset,
+        limit,
+        truncated: page.truncated,
+        nextOffset,
+      },
     };
   },
 };
@@ -315,11 +344,23 @@ export const globTool: ToolDefinition = {
     const searchDir = resolvePath(params.path, ctx.workingDir);
     if (isSymlinkEscapeInRoots(toolRoots(ctx), searchDir)) return pathEscapesWorkspaceResult(searchDir);
 
+    // Путь проверяем до запуска `rg`: каталог поиска — это `cwd` процесса,
+    // поэтому «путь не найден» и «путь не каталог» — разные причины с
+    // разными подсказками (общий «(file search error)» модели ничего не
+    // объяснял).
+    const pathState = await classifySearchPath(searchDir);
+    if (pathState === 'missing') return searchPathErrorResult('search.path_not_found', params.path ?? searchDir);
+    if (pathState !== 'directory') {
+      return searchPathErrorResult('search.path_not_directory', params.path ?? searchDir);
+    }
+
     const limit = Math.min(params.limit ?? DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
 
     // Поиск — через `rg --files` (как opencode): учитывает .gitignore, отдаёт
     // пути относительно `cwd`. Скрытые — только по запросу; `.git` не сыплем.
-    const rgArgs = ['--files', '--color', 'never'];
+    // `--no-config` — пользовательский `RIPGREP_CONFIG_PATH` не должен менять
+    // поведение тула (иначе чужие флаги/маски ломают выдачу).
+    const rgArgs = ['--files', '--color', 'never', '--no-config'];
     if (params.hidden) rgArgs.push('--hidden');
     rgArgs.push('--glob', params.pattern, '--glob', '!.git/**');
 
@@ -377,6 +418,20 @@ export const globTool: ToolDefinition = {
             i18n: i18nMeta('tool.search_timeout', { seconds: String(SEARCH_TIMEOUT_MS / 1000) }),
           },
         };
+      }
+      // ripgrep не установлен в окружении исполнения — общий ключ тулов
+      // (`tool.binary_missing`), а не «(file search error)».
+      if (execError.code === 'ENOENT' || execError.code === 127) {
+        const missingParams = { tool: this.name, binary: 'rg' };
+        return {
+          content: sm('tool.binary_missing', missingParams),
+          isError: true,
+          metadata: { pattern: params.pattern, i18n: i18nMeta('tool.binary_missing', missingParams) },
+        };
+      }
+      // Каталог поиска перестал быть каталогом между проверкой и запуском.
+      if (execError.code === 'ENOTDIR') {
+        return searchPathErrorResult('search.path_not_directory', params.path ?? searchDir);
       }
       return {
         content: sm('fsread.glob_error'),

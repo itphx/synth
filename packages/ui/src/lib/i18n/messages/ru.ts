@@ -2750,6 +2750,8 @@ export const dict = {
   'task.model_not_in_catalog':
     'Ошибка: модели «{provider}/{model}» нет в каталоге моделей инстанса (или она отключена). Доступные пары: {available}. Выбери пару provider/model через инструмент list_models.',
   'task.subagent_exec_error_after_retries': 'Ошибка выполнения сабагента «{type}» после {attempts} попыток: {error}',
+  'task.depth_limit':
+    'Достигнут предел глубины вложенности сабагентов ({limit}). Завершите работу в текущей сессии, не делегируя дальше.',
 
   // --- Возобновление дочерней сессии саб-агента (resume) ---
   'task.resume_marker': 'Возобнови прерванную задачу. Продолжи с того места, где остановился.',
@@ -2833,8 +2835,8 @@ export const dict = {
   'fsread.empty_file': '(пустой файл)',
   'fsread.no_files': '(файлы не найдены)',
   'fsread.glob_error': '(ошибка поиска файлов)',
-  'fsread.truncated': '... (показаны первые {count} строк; файл больше)',
-  'fsread.directory_truncated': '... (показаны первые {count} записей; в каталоге есть ещё)',
+  'fsread.truncated': '... (показаны первые {count} строк; продолжить с offset {next})',
+  'fsread.directory_truncated': '... (показаны первые {count} записей; продолжить с offset {next})',
   'fsread.line_truncated': '... (строка обрезана)',
   'fsread.offset_out_of_range': '(смещение {offset} вне диапазона: в файле {total} строк)',
   'fsread.binary': 'Нельзя прочитать бинарный файл: {path}. Чтобы показать модели изображение или PDF, используйте attach_workspace_file; для остальных байтов — execute_shell (file, xxd, head -c).',
@@ -2853,6 +2855,10 @@ export const dict = {
   'web.fetch_all_failed': 'Не удалось загрузить ни один из URL',
   'web.no_results': 'По запросу «{query}» ничего не найдено.',
   'web.search_error': 'Ошибка веб-поиска: {error}',
+  'web.search_rate_limited':
+    'Веб-поиск ограничен провайдером по частоте запросов (HTTP 429). Подождите и повторите попытку или измените запрос.',
+  'web.search_auth_failed':
+    'Ошибка аутентификации в веб-поиске (HTTP 401). Провайдер поиска отклонил учётные данные.',
   'web.ssrf_blocked': '🚫 Заблокировано сетевой политикой: {reason}',
   'web.too_many_redirects': '❌ Слишком много перенаправлений',
 
@@ -2861,6 +2867,10 @@ export const dict = {
   'search.matches_truncated': '... (показаны {shown} из {total} совпадений)',
   'search.rg_not_installed': '(rg (ripgrep) не установлен. Поиск недоступен)',
   'search.error': 'Ошибка поиска: {error}',
+  'search.path_not_found': 'Путь поиска не найден: {path}',
+  'search.path_not_directory': 'Путь поиска — не каталог: {path}',
+  'search.invalid_regex':
+    'Некорректное регулярное выражение: {error}. Исправьте шаблон и повторите поиск (экранируйте спецсимволы или используйте literal=true).',
 
   // --- План ---
   'plan.enter_success':

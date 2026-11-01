@@ -168,6 +168,22 @@ describe('read_file — пагинация и усечение (паритет �
     expect(result.metadata).toMatchObject({ type: 'file', totalLines: 10, offset: 2, limit: 3, truncated: true });
   });
 
+  it('маркер усечения называет следующий offset (продолжение чтения)', async () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line-${i + 1}`);
+    await writeFile(join(tmpDir, 'ten2.txt'), lines.join('\n'));
+
+    const result = await readFileTool.execute({ file_path: 'ten2.txt', offset: 2, limit: 3 }, makeCtx());
+    const outLines = String(result.content).split('\n');
+
+    expect(outLines[3]).toContain('continue with offset 5');
+    // nextOffset = offset + показанных строк — с него можно продолжить
+    expect(result.metadata?.nextOffset).toBe(5);
+
+    // Продолжение с найденного offset действительно отдаёт следующие строки
+    const next = await readFileTool.execute({ file_path: 'ten2.txt', offset: result.metadata?.nextOffset as number, limit: 2 }, makeCtx());
+    expect(String(next.content).split('\n').slice(0, 2)).toEqual(['6: line-6', '7: line-7']);
+  });
+
   it('offset без limit: читаем до конца файла', async () => {
     await writeFile(join(tmpDir, 'five.txt'), 'a\nb\nc\nd\ne\n');
     const result = await readFileTool.execute({ file_path: 'five.txt', offset: 3 }, makeCtx());
@@ -276,6 +292,43 @@ describe('read_file — пагинация и усечение (паритет �
     expect(lines).toHaveLength(3);
     expect(lines[2]).toContain('showing the first 2 entries');
     expect(out.metadata).toMatchObject({ truncated: true, totalEntries: 5 });
+  });
+
+  it('каталог: маркер усечения называет следующий offset, nextOffset в metadata', async () => {
+    for (let i = 0; i < 5; i++) await writeFile(join(tmpDir, `f${i}.txt`), 'x');
+
+    const out = await readFileTool.execute({ file_path: '.', offset: 1, limit: 2 }, makeCtx());
+    const lines = String(out.content).split('\n');
+
+    expect(lines[2]).toContain('continue with offset 3');
+    expect(out.metadata).toMatchObject({ offset: 1, limit: 2, nextOffset: 3, truncated: true });
+  });
+
+  it('list_directory: offset/limit листают записи каталога постранично', async () => {
+    for (let i = 0; i < 5; i++) await writeFile(join(tmpDir, `f${i}.txt`), 'x');
+
+    const first = await listDirectoryTool.execute({ path: '.', offset: 0, limit: 2 }, makeCtx());
+    const firstLines = String(first.content).split('\n');
+
+    expect(firstLines.slice(0, 2)).toEqual(['f0.txt (1 bytes)', 'f1.txt (1 bytes)']);
+    expect(firstLines[2]).toContain('continue with offset 2');
+    expect(first.metadata).toMatchObject({ offset: 0, limit: 2, nextOffset: 2, truncated: true, count: 5 });
+
+    // Продолжение с найденного offset отдаёт следующие записи
+    const second = await listDirectoryTool.execute(
+      { path: '.', offset: first.metadata?.nextOffset as number, limit: 2 },
+      makeCtx(),
+    );
+    expect(String(second.content).split('\n').slice(0, 2)).toEqual(['f2.txt (1 bytes)', 'f3.txt (1 bytes)']);
+  });
+
+  it('list_directory: без offset/limit — весь каталог, nextOffset на конце', async () => {
+    await writeFile(join(tmpDir, 'only.txt'), 'x');
+
+    const out = await listDirectoryTool.execute({}, makeCtx());
+
+    expect(out.content).toContain('only.txt');
+    expect(out.metadata).toMatchObject({ offset: 0, limit: 2000, truncated: false, nextOffset: 1 });
   });
 });
 
