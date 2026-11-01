@@ -372,6 +372,36 @@ MCP-вызова на текст и нетекстовые блоки и отд�
   иначе определяется пробой. Состав отдаётся в `GET /capabilities`
   (`{ protocol, toolchain, os, arch, node }`).
 
+### Образы: что появилось в flavor'ах (PROP-082)
+
+Состав toolchain'а различается по flavor'ам — отсюда «что агент может в
+поде». Образы исполнителей: `synth-executor:<v>-<flavor>`.
+
+| Flavor | `pnpm install`/`build`/`typecheck` | `helm lint` | `ffmpeg` |
+|---|---|---|---|
+| `core` | нет (лёгкий образ) | нет | нет |
+| `dev` | **да** | **да** | **да** |
+| `devops` | **да** | **да** | **да** |
+| `browser` | нет (браузерные сценарии) | нет | **да** |
+| `full` | **да** | **да** | **да** |
+
+- **Сборка монорепо** — `pnpm` (12.14.0, совпадает с `packageManager` корня) +
+  `corepack`; окружение образа: `COREPACK_HOME` и `PNPM_HOME` — в `HOME`
+  пользователя (uid 1000), `npm_config_store_dir` — путь store пакетов внутри
+  контейнера. `pnpm install` в поде идёт **в сеть** — нужен egress к
+  npm-реестру; отдельного тома под store в чарте нет.
+- **Проверка репозитория (tier 5)** — `helm` (v3.22.1), `hadolint` (2.15.1),
+  `shellcheck`, `yamllint`: в `dev` (→ `devops`) и `full`; из tier 2 они
+  **убраны** (остались `kubectl`/`kustomize`/`tofu`/`ansible`).
+- **Media-тир** — `ffmpeg`: в `dev`, `browser` и `full`; в `core` его нет.
+- **Git в образе** — системная конфигурация: `safe.directory` для
+  `/var/synth/data/workspaces/*` (иначе git откажется работать в общем томе
+  workspace) и идентификация автора коммитов (`user.name`/`user.email`).
+- **Где это настраивается** — состав образа — в `docker/Dockerfile.*` и
+  `docker/install-*.sh`; ресурсы и лимиты исполнителя — в чарте:
+  `executor.resources`, `executor.limits.*`
+  (`charts/synth/README.md` §«Исполнитель (split-режим)»).
+
 ## Исполнитель: правила и границы
 
 - **Containment `cwd`** — `cwd` обязан лежать внутри корня workspace

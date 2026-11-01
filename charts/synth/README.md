@@ -153,8 +153,8 @@ ingress:
 | `executor.imagePullSecrets` | `[]` | Секреты для приватного реестра (нужны для `git.itphx.ru`) |
 | `executor.service.port` / `.targetPort` | `5100` / `5100` | Service исполнителя (его адрес — `SYNTH_EXECUTION_REMOTE_URL`) |
 | `executor.service.sessionAffinity` | `None` | Привязка клиента к поду пула: `None` \| `ClientIP`. Нужна при `executor.replicaCount > 1` — браузерные MCP-сессии живут внутри под'а (см. «Привязка клиента к поду пула исполнителей») |
-| `executor.resources` | `1000m/1Gi`, `200m/256Mi` | limits/requests исполнителя |
-| `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | `4` / `120000` / `10485760` | Лимиты исполнителя (env `SYNTH_EXECUTOR_MAX_*`) |
+| `executor.resources` | limits `4`/8Gi, requests `1`/2Gi | Ресурсы исполнителя — **рабочее место агента**: сборка монорепо (`pnpm install`/`build`/`typecheck`) идёт минутами и требует CPU и памяти; прежние дефолты (200m/256Mi) для неё малы. Переопределяется своими значениями (`executor.resources.*`) |
+| `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | `4` / `1800000` / `33554432` | Лимиты исполнителя (env `SYNTH_EXECUTOR_MAX_*`): таймаут 30 мин (полная сборка Synth идёт минутами), буфер вывода 32 МиБ (лог vite/tsc большой) |
 | `executor.metrics.enabled` | `false` | Метрики исполнителя (ADR-077 шаг 7d; ADR-094): env `SYNTH_EXECUTOR_METRICS_ENABLED=true` → свой `GET /metrics`; выключено по умолчанию (404). См. «Метрики исполнителя» |
 | `executor.mcp.enabled` | `true` | MCP-хостинг в исполнителе; `false` → env `SYNTH_EXECUTOR_MCP_SERVERS=""` (серверов нет, дефолт образа отключён) |
 | `executor.mcp.servers` | `[]` | MCP-серверы, которые хостит исполнитель (stdio, ADR-077 шаг B1): `[{name, command, args, env}]` → env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто → env не выставляется, действует дефолт образа (у flavor'ов с браузером — Playwright MCP) |
@@ -1005,6 +1005,55 @@ executor:
   workspace:
     existingClaim: synth-shared-workspaces   # чарт PVC не создаёт
 ```
+
+### Ресурсы и лимиты исполнителя (рабочее место агента)
+
+Исполнитель — это **рабочее место агента**, а не «прокси команд»: здесь агент
+собирает монорепо (`pnpm install` → `pnpm build` → `pnpm typecheck`), крутит
+тесты и пишет код. Отсюда дефолты:
+
+| Параметр | Значение | Почему |
+|---|---|---|
+| `executor.resources.requests` | `cpu: 1`, `memory: 2Gi` | постоянная нагрузка сборки (tsc/vite — многопоточные) |
+| `executor.resources.limits` | `cpu: 4`, `memory: 8Gi` | пик: сборка всех пакетов монорепо + node_modules в памяти |
+| `executor.limits.maxTimeoutMs` | `1800000` (30 мин) | полная сборка Synth идёт минутами — прежних 120 с ей не хватало |
+| `executor.limits.maxOutputBytes` | `33554432` (32 МиБ) | лог `vite`/`tsc` большой — прежних 10 МиБ обрезали вывод |
+
+Переопределяются своими values (например, для лёгких сценариев «только чтение
+и поиск»):
+
+```yaml
+executor:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+```
+
+### Какой flavor умеет собирать Synth
+
+Flavor'ы образа исполнителя (`synth-executor:<v>-<flavor>`) различаются
+составом toolchain'а ([PROP-082](../../docs/arch_decisions/prop-082-full-images-deployment.md)):
+
+| Flavor | `pnpm install`/`build`/`typecheck` | `helm lint` | `ffmpeg` |
+|---|---|---|---|
+| `core` | нет (лёгкий образ: без pnpm) | нет | нет |
+| `dev` | **да** (pnpm 12.14.0 + corepack) | **да** | **да** |
+| `devops` | **да** | **да** | **да** |
+| `browser` | нет (браузерные сценарии) | нет | **да** |
+| `full` | **да** | **да** | **да** |
+
+Итог: **собирать монорепо умеют `dev`, `devops` и `full`** — это те flavor'ы,
+где есть pnpm с corepack. `core` — лёгкий образ (быстрый старт, без сборки),
+`browser` — браузерные сценарии (Playwright/Chromium).
+
+**Отдельного тома под кэш pnpm в чарте нет.** `pnpm install` в поде идёт
+**в сеть** — нужен egress к npm-реестру; пакеты складываются в store внутри
+контейнера (путь задаёт образ через `npm_config_store_dir`). Тома у
+исполнителя два: общий workspace (`executor.workspace.*`) и данные инстанса.
 
 ### Вложенное монтирование (путь внутри пути)
 

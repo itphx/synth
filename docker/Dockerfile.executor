@@ -11,12 +11,28 @@
 # Стадии:
 #   build   — сборка монорепо (платформа билдера, `$BUILDPLATFORM`);
 #   core    — flavor `core`: hard deps + tier 0 + рантайм исполнителя;
-#   dev     — flavor `dev`: core + tier 1 + tier 4 + БД-клиенты + buildah;
+#   dev     — flavor `dev`: core + tier 1 + tier 4 + tier 5 + БД-клиенты +
+#             buildah + ffmpeg + pnpm;
 #   devops  — flavor `devops`: dev + tier 2 + диаг + docker CLI;
 #   browser — flavor `browser` (debian-ветка): hard deps + tier 0 + tier 1 +
-#             tier 3 (Playwright + Chromium) + диаг;
-#   full    — flavor `full` (debian-ветка): browser + tier 2 + tier 4 + БД +
-#             docker CLI + buildah.
+#             tier 3 (Playwright + Chromium) + диаг + ffmpeg (без pnpm);
+#   full    — flavor `full` (debian-ветка): browser + tier 2 + tier 4 + tier 5 +
+#             БД + docker CLI + buildah + pnpm.
+#
+# pnpm в образе (flavor'ы `dev`/`devops`/`full`): версия зафиксирована
+# (pnpm@12.14.0 — как `packageManager` в package.json репозитория) и
+# разворачивается через corepack в HOME пользователя uid 1000. Это позволяет
+# внутри контейнера выполнить `pnpm install --frozen-lockfile && pnpm build &&
+# pnpm typecheck && pnpm lint`, а также `helm lint`/`helm template` чарта
+# (tier 5 — проверка чарта/скриптов/Dockerfile'ов репозитория Synth).
+#
+# Store пакетов НЕ запечён: `pnpm install` в контейнере идёт в сеть (нужен
+# egress к npm-реестру) и кладёт пакеты в дефолтный store в HOME. Собственный
+# store в образе не даёт офлайна (кэш метаданных реестра всё равно нужен), а
+# весит сотни мегабайт.
+#
+# ffmpeg (ADR-115) — в flavor'ах `dev`/`browser`/`full`: без него обработка
+# вложений деградирует (`no_ffmpeg`, ADR-078).
 #
 # Flavor'ы `core`/`dev`/`devops` — alpine-ветка; `browser`/`full` — debian
 # (`node:22-bookworm-slim`): Playwright/Chromium не имеют сборок под musl.
@@ -36,7 +52,11 @@ FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
 # следующем слое, где сеть может отвалиться (сборка падает на таймауте
 # загрузки). Поэтому materialize бинаря здесь, в кэшируемом слое: сбой сети
 # тогда не роняет сборку целиком, а повторная попытка переиспользует слой.
-RUN corepack enable && corepack prepare pnpm@latest --activate && pnpm --version
+#
+# Версия pnpm зафиксирована и совпадает с `packageManager` в package.json
+# репозитория (pnpm@12.14.0) — иначе `pnpm install --frozen-lockfile` в
+# flavor-стадиях и в контейнере работал бы на ДРУГОЙ версии pnpm, чем CI.
+RUN corepack enable && corepack prepare pnpm@12.14.0 --activate && pnpm --version
 
 WORKDIR /repo
 
@@ -133,19 +153,60 @@ EXPOSE 5100
 CMD ["node", "dist/main.js"]
 
 # ------------------------------------------------------------------------------
-# flavor `dev` — core + tier 1 + tier 4 + БД-клиенты + buildah
+# flavor `dev` — core + tier 1 + tier 4 + tier 5 + БД-клиенты + buildah + ffmpeg
 # ------------------------------------------------------------------------------
 FROM core AS dev
 
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="Synth Executor (dev)"
-LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-1, tier 4 MCP servers, DB clients, buildah)."
+LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-1, tier 4 MCP servers, tier 5 repo lint, DB clients, buildah, ffmpeg)."
 
-COPY docker/install-lib.sh docker/install-tier-1.sh docker/install-db-clients.sh \
+# pnpm в образе: flavor `dev` умеет собирать монорепо внутри контейнера
+# (`pnpm install --frozen-lockfile && pnpm build && pnpm typecheck &&
+# pnpm lint`) и проверять чарт/скрипты/Dockerfile'ы репозитория (tier 5).
+#
+# Окружение corepack/pnpm — в HOME пользователя uid 1000 (процесс исполнителя
+# идёт под runAsUser: 1000, HOME=/root недоступен для записи):
+#   * COREPACK_HOME — кэш corepack (сюда материализуется бинарь pnpm);
+#   * PNPM_HOME     — каталог глобальных бинарей pnpm (в PATH).
+ENV COREPACK_HOME=/home/synth/.cache/node/corepack
+ENV PNPM_HOME=/home/synth/.local/share/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+
+# Версия pnpm зафиксирована и совпадает с `packageManager` в package.json
+# репозитория (pnpm@12.14.0).
+#
+# `pnpm --version` здесь — не проверка, а MATERIALIZATION нативного бинаря:
+# corepack кладёт в образ пакет-обёртку pnpm, а нативный бинарь
+# (`@pnpm/exe.<platform>-<arch>`) обёртка скачивает при ПЕРВОМ запуске. Без
+# этого шага первый вызов `pnpm` в контейнере требовал бы сети (и печатал
+# «Downloading the pnpm … binary» перед версией).
+RUN set -eux; \
+    corepack enable && corepack prepare pnpm@12.14.0 --activate; \
+    pnpm --version; \
+    mkdir -p /home/synth/.cache/node/corepack /home/synth/.local/share/pnpm; \
+    chown -R 1000:1000 /home/synth/.cache/node/corepack \
+             /home/synth/.local/share/pnpm
+
+# Git в контейнере работает с workspace'ами монтируемыми в образ (том
+# `synth-workspace`), а рабочий каталог сессии указывает внутрь тома — git
+# отказывается работать в чужом репозитории («dubious ownership»). Поэтому
+# каталоги workspace'ов помечаются безопасными, а пользователь коммитов задаётся
+# системно (иначе `git commit` в контейнере падал бы с «Please tell me who you
+# are»).
+RUN set -eux; \
+    git config --system --add safe.directory '/var/synth/data/workspaces/*'; \
+    git config --system user.name "Synth Agent"; \
+    git config --system user.email "agent@synth.local"
+
+COPY docker/install-lib.sh docker/install-tier-1.sh docker/install-tier-5.sh \
+     docker/install-media.sh docker/install-db-clients.sh \
      docker/install-buildah.sh docker/install-tier-4.sh /tmp/synth-install/
 RUN set -eux; \
     sh /tmp/synth-install/install-tier-1.sh; \
+    sh /tmp/synth-install/install-tier-5.sh; \
+    sh /tmp/synth-install/install-media.sh; \
     sh /tmp/synth-install/install-db-clients.sh; \
     sh /tmp/synth-install/install-buildah.sh
 # npm-слой (tier 4) отдельным RUN: смена состава MCP-серверов не должна
@@ -207,14 +268,26 @@ ENV PIP_CACHE_DIR=/home/synth/.cache/pip
 # Каталог браузеров Playwright: общий для всех пользователей образа.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
-# tier 1 (сборка) + tier 3 (playwright + Chromium) + диагностика.
+# tier 1 (сборка) + tier 3 (playwright + Chromium) + диагностика + ffmpeg
+# (ADR-115: обработка вложений). pnpm в этой стадии НЕ ставится — `browser`
+# не умеет собирать монорепо, pnpm появляется в `full`.
 COPY docker/install-lib.sh docker/install-tier-1.sh docker/install-tier-3.sh \
-     docker/install-diag.sh /tmp/synth-install/
+     docker/install-media.sh docker/install-diag.sh /tmp/synth-install/
 RUN set -eux; \
     sh /tmp/synth-install/install-tier-1.sh; \
     sh /tmp/synth-install/install-tier-3.sh; \
+    sh /tmp/synth-install/install-media.sh; \
     sh /tmp/synth-install/install-diag.sh; \
     rm -rf /tmp/synth-install
+
+# Git в контейнере работает с workspace'ами монтируемыми в образ (том
+# `synth-workspace`) — помечаем их безопасными и задаём пользователя коммитов
+# системно (иначе `git commit` в контейнере падал бы с «Please tell me who you
+# are»).
+RUN set -eux; \
+    git config --system --add safe.directory '/var/synth/data/workspaces/*'; \
+    git config --system user.name "Synth Agent"; \
+    git config --system user.email "agent@synth.local"
 
 # MCP-серверы по умолчанию — только во flavor'ах с браузером (`browser`/`full`,
 # стадия `full` наследует ENV). В `core`/`dev`/`devops` переменная не задаётся:
@@ -247,20 +320,55 @@ EXPOSE 5100
 CMD ["node", "dist/main.js"]
 
 # ------------------------------------------------------------------------------
-# flavor `full` — browser + tier 2 + tier 4 + БД + docker CLI + buildah
+# flavor `full` — browser + tier 2 + tier 4 + tier 5 + БД + docker CLI + buildah
 # ------------------------------------------------------------------------------
 FROM browser AS full
 
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="Synth Executor (full)"
-LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-4, Playwright/Chromium, MCP servers, DB clients, buildah, diag tools, docker CLI)."
+LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-4, tier 5 repo lint, Playwright/Chromium, MCP servers, DB clients, buildah, diag tools, docker CLI, ffmpeg)."
 
-COPY docker/install-lib.sh docker/install-tier-2.sh docker/install-tier-4.sh \
+# pnpm в образе: `full` умеет собирать монорепо внутри контейнера
+# (`pnpm install --frozen-lockfile && pnpm build && pnpm typecheck &&
+# pnpm lint`) и проверять чарт/скрипты/Dockerfile'ы репозитория (tier 5).
+#
+# Окружение corepack/pnpm — в HOME пользователя uid 1000 (процесс исполнителя
+# идёт под runAsUser: 1000, HOME=/root недоступен для записи).
+ENV COREPACK_HOME=/home/synth/.cache/node/corepack
+ENV PNPM_HOME=/home/synth/.local/share/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+
+# Версия pnpm зафиксирована и совпадает с `packageManager` в package.json
+# репозитория (pnpm@12.14.0).
+#
+# `pnpm --version` здесь — не проверка, а MATERIALIZATION нативного бинаря:
+# corepack кладёт в образ пакет-обёртку pnpm, а нативный бинарь
+# (`@pnpm/exe.<platform>-<arch>`) обёртка скачивает при ПЕРВОМ запуске. Без
+# этого шага первый вызов `pnpm` в контейнере требовал бы сети (и печатал
+# «Downloading the pnpm … binary» перед версией).
+RUN set -eux; \
+    corepack enable && corepack prepare pnpm@12.14.0 --activate; \
+    pnpm --version; \
+    mkdir -p /home/synth/.cache/node/corepack /home/synth/.local/share/pnpm; \
+    chown -R 1000:1000 /home/synth/.cache/node/corepack \
+             /home/synth/.local/share/pnpm
+
+# Git в контейнере работает с workspace'ами монтируемыми в образ (том
+# `synth-workspace`) — помечаем их безопасными и задаём пользователя коммитов
+# системно.
+RUN set -eux; \
+    git config --system --add safe.directory '/var/synth/data/workspaces/*'; \
+    git config --system user.name "Synth Agent"; \
+    git config --system user.email "agent@synth.local"
+
+COPY docker/install-lib.sh docker/install-tier-2.sh docker/install-tier-5.sh \
+     docker/install-tier-4.sh \
      docker/install-db-clients.sh docker/install-docker-cli.sh \
      docker/install-buildah.sh /tmp/synth-install/
 RUN set -eux; \
     sh /tmp/synth-install/install-tier-2.sh; \
+    sh /tmp/synth-install/install-tier-5.sh; \
     sh /tmp/synth-install/install-db-clients.sh; \
     sh /tmp/synth-install/install-docker-cli.sh; \
     sh /tmp/synth-install/install-buildah.sh

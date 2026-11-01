@@ -775,8 +775,8 @@ control plane (тот же namespace) на порт исполнителя, egre
 | `executor.imagePullSecrets` | Секреты приватного реестра (для `git.itphx.ru`) |
 | `executor.replicaCount` | Размер пула |
 | `executor.service.port` / `.targetPort` | Service пула (`5100`) — его адрес и есть `SYNTH_EXECUTION_REMOTE_URL` |
-| `executor.resources` | limits/requests worker'а |
-| `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | Лимиты worker'а → env `SYNTH_EXECUTOR_MAX_*` |
+| `executor.resources` | limits/requests worker'а (дефолт: requests `1` CPU/`2Gi`, limits `4` CPU/`8Gi` — рабочее место агента: сборка монорепо идёт минутами) |
+| `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | Лимиты worker'а → env `SYNTH_EXECUTOR_MAX_*` (дефолт: `4` / `1800000` мс / `33554432` байт) |
 | `executor.podSecurityContext` / `executor.containerSecurityContext` | Изоляция (как у backend'а) + `capabilities.drop: [ALL]` |
 | `executor.workspace.enabled` / `.existingClaim` / `.claimName` / `.size` / `.storageClass` / `.accessMode` | Общий том с workspace (PVC, RWX по умолчанию); свой claim — если в кластере нет RWX-класса |
 | `executor.workspace.mountPath` | Точка монтирования общего тома — **одинаковая** в backend и в worker'е (по умолчанию `/var/synth/data/workspaces` — совпадает с дефолтом `storage.workspacesRoot` = `{dataDir}/workspaces`) |
@@ -803,6 +803,34 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
   `ca-certificates`).
 - **Один код — два режима:** образ исполнителя содержит тот же рантайм, что и inline-исполнитель в
   backend'е; различается только точка входа (слушает exec-API против вызова in-process).
+
+#### Что умеет каждый flavor (PROP-082)
+
+Состав toolchain'а различается по flavor'ам — отсюда «что может агент в поде».
+Образы исполнителей: `synth-executor:<v>-<flavor>` (all-in-one: `synth-backend:<v>-<flavor>`).
+
+| Flavor | `pnpm install`/`build`/`typecheck` | `helm lint` | `ffmpeg` | Прочее |
+|---|---|---|---|---|
+| `slim` | нет | нет | нет | control plane **без** toolchain'а |
+| `core` | **нет** (лёгкий образ: без pnpm/corepack) | нет | нет | hard deps + tier 0 |
+| `dev` | **да** (pnpm 12.14.0 + corepack) | **да** (tier 5) | **да** (media-тир) | tier 1 + tier 4 + БД + buildah |
+| `devops` | **да** | **да** | **да** | dev + tier 2 (`kubectl`/`kustomize`/`tofu`/`ansible`) + диаг + docker CLI |
+| `browser` | нет | нет | **да** | tier 3 (Playwright + Chromium) — браузерные сценарии |
+| `full` | **да** | **да** | **да** | всё вышеперечисленное |
+
+- **Собирать монорепо умеют `dev`, `devops` и `full`** — в них есть pnpm (12.14.0,
+  совпадает с `packageManager` корня) и corepack. `pnpm install` в поде идёт
+  **в сеть** — нужен egress к npm-реестру; отдельного тома под store в чарте
+  нет (store живёт внутри контейнера, путь задаёт образ через
+  `npm_config_store_dir`).
+- **`core` — лёгкий образ**: быстрый старт, без pnpm/corepack, без ffmpeg и без
+  tier 5; собирать монорепо в нём нельзя.
+- **`browser` — без pnpm**: он про браузерные сценарии (Playwright/Chromium),
+  а не про сборку.
+- **Ресурсы и лимиты исполнителя** — из чарта (`executor.resources`,
+  `executor.limits`): дефолты рассчитаны на сборку монорепо (requests
+  `1` CPU / `2Gi`, limits `4` CPU / `8Gi`, таймаут команды 30 мин, буфер вывода
+  32 МиБ — лог `vite`/`tsc` большой).
 
 ### 10.3. CI
 

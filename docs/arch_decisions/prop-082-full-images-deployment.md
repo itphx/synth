@@ -83,15 +83,33 @@ Env-имена: `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL`, `SYNTH_EXE
 |---|---|---|
 | **0. Ядро** | `bash`, `curl`, `jq`, `yq`, `unzip`/`zip`, `xz`, `zstd`, GNU `coreutils`/`findutils`/`grep`/`sed`/`gawk`, `less`, `tree`, `openssl` | предсказуемый shell (busybox неполон: `grep -P`, GNU-флаги) |
 | **1. Сборка** | `make`, `gcc`/`g++`, `musl-dev` (alpine) / `build-essential` (debian), `python3-dev`, `pkgconf`, `patch`, `diffutils`, `git-lfs`, `rsync` | нативные npm/pip-модули, сборка проектов |
-| **2. Инфра/девопс** | `kubectl`, `helm`, `kustomize`, `ansible` (+`ansible-lint`), `terraform`/`opentofu`, `yamllint`, `shellcheck`, `hadolint` | инфраструктурные задачи |
+| **2. Инфра/девопс** | `kubectl`, `kustomize`, `ansible` (+`ansible-lint`), `terraform`/`opentofu` | инфраструктурные задачи |
 | **3. Веб/браузер** | `playwright` + Chromium (+deps), `@playwright/mcp`, `libxml2-utils` | UI-верификация, webapp-тестирование |
 | **4. MCP-хостинги** | MCP-серверы github, gitea, gitverse, gitlab | работа с SCM-хостингами |
+| **5. Проверка репозитория** | `helm` (v3.22.1), `hadolint` (2.15.1), `shellcheck`, `yamllint` | проверка чартов, Dockerfile'ов, shell- и YAML-файлов |
+| **Сборка монорепо** | `pnpm` (12.14.0 — совпадает с `packageManager` корня) + `corepack` | `pnpm install`/`build`/`typecheck` внутри пода |
+| **Media** | `ffmpeg` | транскод/извлечение кадров (ADR-115), обработка видео |
 | **БД** | `sqlite3`, `psql` (postgresql-client), `redis-cli`, `mysql-client` | клиенты БД |
 | **Diag** | `bind-tools` (dig), `netcat`, `traceroute`, `lsof`, `iproute2`/`ss` | диагностика сети |
 | **Docker** | docker **CLI** (без socket/демона) | работа с удалённым builder'ом |
 | **Buildah** | `buildah` (rootless) | сборка образов из сессии |
 
 `kaniko` **не** используется как инструмент внутри flavor'ов (это не утилита для вызова из шелла): в образ идёт `buildah`, CI-билдер переводится с `kaniko` на `buildah` (в репозитории CI пока kaniko — `.gitverse/workflows/release.yaml:372`, `.gitverse/workflows/release.yaml:570`).
+
+**Tier 2 и tier 5 — разные тиры.** `helm`/`shellcheck`/`hadolint`/`yamllint`
+относятся к **проверке репозитория** (tier 5), а не к инфраструктуре: они
+нужны агенту, который правит чарт/Dockerfile/shell-скрипты, а не тому, кто
+деплоит кластер. Поэтому tier 5 входит в `dev` (и наследующий его `devops`) и
+в `full`, а `kubectl`/`kustomize`/`tofu`/`ansible` остаются в tier 2
+(`devops`/`full`). Скрипт установки tier 5 — `docker/install-tier-5.sh`.
+
+**Сборка монорепо (pnpm/corepack)** — в `dev` (→ `devops`) и `full`; в `core` и
+`browser` pnpm нет. Окружение образа: `COREPACK_HOME` и `PNPM_HOME` — в `HOME`
+пользователя (uid 1000), `npm_config_store_dir` — путь store пакетов внутри
+контейнера. Отдельного тома под store в чарте нет: `pnpm install` в поде идёт
+**в сеть** (нужен egress к npm-реестру).
+
+**Media-тир (ffmpeg)** — в `dev`, `browser` и `full`; в `core` ffmpeg нет.
 
 ## Flavor-матрица (all-in-one и образы worker'ов)
 
@@ -107,14 +125,42 @@ Env-имена: `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL`, `SYNTH_EXE
 
 | Flavor | База | Состав | Размер | Тег |
 |---|---|---|---|---|
-| **slim** | alpine | как сейчас (без инструментов) | **64,0 МБ** (измерен) | `synth-backend:<v>` |
-| **core** | alpine | hard deps + tier 0 | **101,6 МБ** (измерен) | `synth-backend:<v>-core` |
-| **dev** | alpine | core + tier 1 + tier 4 + БД + buildah | **320,1 МБ** (измерен) | `synth-backend:<v>-dev` |
-| **devops** | alpine | dev + tier 2 + diag + docker CLI + buildah (`devops ⊃ dev`) | **508,5 МБ** (измерен) | `synth-backend:<v>-devops` |
-| **browser** | debian | hard deps + tier 0 + tier 1 + tier 3 + playwright-MCP + diag | **674,9 МБ** (измерен) | `synth-backend:<v>-browser` |
-| **full** | debian | всё перечисленное (tier 2–4 + БД + diag + docker + buildah) | **925,5 МБ** (измерен) | `synth-backend:<v>-full` |
+| **slim** | alpine | как сейчас (без инструментов) | **64,0 МБ** (измерен, прежний состав) | `synth-backend:<v>` |
+| **core** | alpine | hard deps + tier 0; **без** pnpm/corepack, без ffmpeg, без tier 5 | **101,6 МБ** (измерен, прежний состав) | `synth-backend:<v>-core` |
+| **dev** | alpine | core + tier 1 + tier 4 + БД + buildah + **tier 5** + **media (ffmpeg)** + **pnpm/corepack** | **320,1 МБ** (измерен, прежний состав) | `synth-backend:<v>-dev` |
+| **devops** | alpine | dev + tier 2 (остаток) + diag + docker CLI + buildah (`devops ⊃ dev`) | **508,5 МБ** (измерен, прежний состав) | `synth-backend:<v>-devops` |
+| **browser** | debian | hard deps + tier 0 + tier 1 + tier 3 + playwright-MCP + diag + **media (ffmpeg)**; **без** pnpm | **674,9 МБ** (измерен, прежний состав) | `synth-backend:<v>-browser` |
+| **full** | debian | всё перечисленное (tier 2–5 + media + pnpm/corepack + БД + diag + docker + buildah) | **925,5 МБ** (измерен, прежний состав) | `synth-backend:<v>-full` |
 
-Размеры — **измерения** (content, `docker image inspect .Size`, amd64, node 22.23.3; alpine 3.24.2 / bookworm). Шаги 2 и 4 дали `slim`/`core`/`dev`/`devops`; шаг 5 добавил debian-ветку `browser`/`full` и worker-образы `synth-executor` (`core` — **107,0 МБ**, `full` — **930,8 МБ**). Прежние **оценки** для `browser`/`full` (1,8 ГБ / 2,5–3 ГБ) оказались завышены — см. «Замеры размеров» в разделе шага 5. Регрессии по `slim` нет: состав образа не изменился (манифест из 9224 записей совпадает с эталоном — расходятся только `.modules.yaml` с меткой времени pnpm и `/etc/hostname`/`/etc/hosts`, которые выдаёт рантайм контейнера).
+**Размеры в таблице — измерения ПРЕЖНЕГО состава** (content,
+`docker image inspect .Size`, amd64, node 22.23.3; alpine 3.24.2 / bookworm),
+то есть **до** tier 5, pnpm/corepack и media-тира. После
+изменения состава образы стали больше (`ffmpeg` и прочее — десятки
+мегабайт), и **актуальные значения не измерены**: приведённые числа — нижняя
+оценка, а не характеристика текущих образов. Шаги 2 и 4 дали `slim`/`core`/`dev`/`devops`;
+шаг 5 добавил debian-ветку `browser`/`full` и worker-образы `synth-executor`
+(`core` — **107,0 МБ**, `full` — **930,8 МБ**, прежний состав). Прежние **оценки**
+для `browser`/`full` (1,8 ГБ / 2,5–3 ГБ) оказались завышены — см. «Замеры размеров»
+в разделе шага 5. Регрессии по `slim` нет: состав образа не изменился (манифест
+из 9224 записей совпадает с эталоном — расходятся только `.modules.yaml` с меткой
+времени pnpm и `/etc/hostname`/`/etc/hosts`, которые выдаёт рантайм контейнера).
+
+### Что умеет каждый flavor
+
+| Flavor | `pnpm install`/`build`/`typecheck` | `helm lint` | `ffmpeg` |
+|---|---|---|---|
+| `slim` | нет | нет | нет |
+| `core` | нет (лёгкий образ) | нет | нет |
+| `dev` | **да** | **да** | **да** |
+| `devops` | **да** | **да** | **да** |
+| `browser` | нет (браузерные сценарии) | нет | **да** |
+| `full` | **да** | **да** | **да** |
+
+Собирать монорепо умеют `dev`, `devops` и `full`: в них есть pnpm (12.14.0 —
+совпадает с `packageManager` корня) с corepack. `pnpm install` в поде идёт
+**в сеть** (нужен egress к npm-реестру); отдельного тома под store в чарте нет.
+`core` — лёгкий образ (быстрый старт, без pnpm), `browser` — про браузерные
+сценарии.
 
 ### Flavor `core`: точный состав (реализовано, шаг 2)
 
@@ -145,9 +191,9 @@ Python-окружение в flavor-стадии: `HOME=/home/synth`, `PYTHONUSE
 
 | Стадия | База | Что добавляет | Где |
 |---|---|---|---|
-| `dev` | `FROM core` | tier 1 (сборка) + БД-клиенты + buildah + tier 4 (MCP-серверы npm) | `docker/Dockerfile.backend:149-168` |
-| `devops` | `FROM dev` | tier 2 (инфра) + диагностика + docker CLI | `docker/Dockerfile.backend:180-193` |
-| `slim` | `node:22-alpine` | ничего — цель по умолчанию | `docker/Dockerfile.backend:203-224` |
+| `dev` | `FROM core` | tier 1 (сборка) + БД-клиенты + buildah + tier 4 (MCP-серверы npm) + tier 5 (проверка репозитория) + media (`ffmpeg`) + pnpm/corepack | `docker/Dockerfile.backend` (стадия `dev`) |
+| `devops` | `FROM dev` | tier 2 (инфра, остаток) + диагностика + docker CLI | `docker/Dockerfile.backend` (стадия `devops`) |
+| `slim` | `node:22-alpine` | ничего — цель по умолчанию | `docker/Dockerfile.backend` (стадия `slim`) |
 
 В стадии `dev` слои разделены на два `RUN`: сначала системные пакеты (tier 1 → БД → buildah), затем отдельный npm-слой (tier 4) — смена состава MCP-серверов не должна инвалидировать слои с системными пакетами (`docker/Dockerfile.backend:160-168`). В стадии `devops` все скрипты идут одним `RUN` (`docker/Dockerfile.backend:189-193`).
 
@@ -160,7 +206,9 @@ Python-окружение в flavor-стадии: `HOME=/home/synth`, `PYTHONUSE
 | `docker/install-db-clients.sh` | клиенты БД (sqlite3/psql/redis-cli/mysql) | `docker/install-db-clients.sh:47-54` |
 | `docker/install-buildah.sh` | buildah + зависимости + диапазоны subuid/subgid | `docker/install-buildah.sh:88-113` |
 | `docker/install-tier-4.sh` | MCP-серверы SCM-хостингов (npm, пин + integrity) | `docker/install-tier-4.sh:53-73` |
-| `docker/install-tier-2.sh` | tier 2: дистрибутивные пакеты + upstream-релизы + симлинк `terraform` | `docker/install-tier-2.sh:50-94` |
+| `docker/install-tier-2.sh` | tier 2: дистрибутивные пакеты + upstream-релизы + симлинк `terraform` | `docker/install-tier-2.sh` |
+| `docker/install-tier-5.sh` | tier 5 — проверка репозитория: `helm`, `hadolint`, `shellcheck`, `yamllint` (дистрибутивные + upstream-релизы с пином и sha256) | `docker/install-tier-5.sh` |
+| `docker/install-media.sh` | media-тир: `ffmpeg` | `docker/install-media.sh` |
 | `docker/install-diag.sh` | диагностические утилиты (dig/nc/traceroute/lsof/ss) | `docker/install-diag.sh:39-47` |
 | `docker/install-docker-cli.sh` | docker CLI (alpine — пакет; debian — fail-closed) | `docker/install-docker-cli.sh:24-40` |
 
@@ -208,26 +256,41 @@ Python-окружение в flavor-стадии: `HOME=/home/synth`, `PYTHONUSE
 
 В alpine `netavark`/`aardvark-dns` кладутся в `/usr/libexec/podman/`, а не в `PATH` — buildah находит их сам (проверено сборкой образа). Дополнительно скрипт добавляет диапазон `node:100000:65536` в `/etc/subuid` и `/etc/subgid` — без него buildah не может маппить uid/gid непривилегированного пользователя («no subuid ranges found for user "node"»); правка идемпотентна (`docker/install-buildah.sh:100-113`).
 
-**Tier 2 — дистрибутивная часть** (`docker/install-tier-2.sh:50-55`): имена в alpine и debian **совпадают** (в отличие от hard-deps/tier 0/tier 1):
+**Tier 2 — дистрибутивная часть** (`docker/install-tier-2.sh`): имена в alpine и debian **совпадают** (в отличие от hard-deps/tier 0/tier 1):
 
 | logical | apk | apt |
 |---|---|---|
 | `ansible` | `ansible` | `ansible` |
 | `ansible-lint` | `ansible-lint` | `ansible-lint` |
-| `yamllint` | `yamllint` | `yamllint` |
-| `shellcheck` | `shellcheck` | `shellcheck` |
 
-**Tier 2 — upstream-релизы** (`docker/install-tier-2.sh:79-85`): состав **не зависит от дистрибутива** — одна таблица на обе ветки (alpine `devops` и debian-ветка шага 5):
+`helm`/`shellcheck`/`hadolint`/`yamllint` из tier 2 **ушли** в tier 5
+(«проверка репозитория», `docker/install-tier-5.sh`) — они нужны агенту, который
+правит чарт/Dockerfile/shell, а не тому, кто деплоит кластер.
+
+**Tier 2 — upstream-релизы** (`docker/install-tier-2.sh`): состав **не зависит от дистрибутива** — одна таблица на обе ветки (alpine `devops` и debian-ветка шага 5):
 
 | logical | версия | источник | sha256 amd64 | sha256 arm64 |
 |---|---|---|---|---|
 | `kubectl` | 1.37.1 | `dl.k8s.io/release/v1.37.1/bin/linux/<arch>/kubectl` | `65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8` | `ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7` |
-| `helm` | 3.22.1 | `get.helm.sh/helm-v3.22.1-linux-<arch>.tar.gz` | `896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea` | `4c29e286b279d170fa048ddfc3e4e83dcd069ca9c52102766ba672d7149e694d` |
 | `kustomize` | 5.8.3 | релиз `kubernetes-sigs/kustomize` | `cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61` | `9867b76482cfc6d25b546abc1d2b5a32bd137505aba640649b4b378f64f6d68f` |
 | `tofu` (OpenTofu) | 1.13.1 | релиз `opentofu/opentofu` | `378ada19d4bc70c43732004e8159be771b23b9a5afdf059e5f8a2b3fa2c70a69` | `9c1ef375aa1852db0b2888aa921b640c71f8140d4682aa4fec99378a64fa7dc3` |
+
+**Tier 5 — проверка репозитория** (`docker/install-tier-5.sh`): `helm`, `hadolint`,
+`shellcheck`, `yamllint`. Дистрибутивные (`shellcheck`, `yamllint` — имена в
+alpine и debian совпадают) и upstream-релизы (пин + sha256 — те же версии, что
+были в tier 2):
+
+| logical | версия | источник | sha256 amd64 | sha256 arm64 |
+|---|---|---|---|---|
+| `helm` | 3.22.1 | `get.helm.sh/helm-v3.22.1-linux-<arch>.tar.gz` | `896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea` | `4c29e286b279d170fa048ddfc3e4e83dcd069ca9c52102766ba672d7149e694d` |
 | `hadolint` | 2.15.1 | релиз `hadolint/hadolint` | `c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507` | `f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d` |
 
-Контрольные суммы взяты из официальных файлов релизов и зафиксированы вместе с источниками, чтобы ревизор мог их перепроверить: `kubectl.sha256`, `helm-*.tar.gz.sha256sum`, `checksums.txt` (kustomize), `tofu_1.13.1_SHA256SUMS` (OpenTofu), `checksums.sha256` (hadolint) (`docker/install-tier-2.sh:71-77`).
+| logical | apk | apt |
+|---|---|---|
+| `shellcheck` | `shellcheck` | `shellcheck` |
+| `yamllint` | `yamllint` | `yamllint` |
+
+Контрольные суммы взяты из официальных файлов релизов и зафиксированы вместе с источниками, чтобы ревизор мог их перепроверить: `kubectl.sha256`, `checksums.txt` (kustomize), `tofu_1.13.1_SHA256SUMS` (OpenTofu) — в `docker/install-tier-2.sh`; `helm-*.tar.gz.sha256sum`, `checksums.sha256` (hadolint) — в `docker/install-tier-5.sh`.
 
 **Диагностика** (`docker/install-diag.sh:39-45`):
 
@@ -271,7 +334,7 @@ MCP-серверы публикуются в npm, поэтому ставятс�
 | Воспроизводимость сборочного окружения | «сегодня alpine 3.24 → завтра 3.25» — состав может поехать | один и тот же бинарь при любой базе |
 | Supply-chain (PROP-068) | доверие к дистрибутиву | доверие к конкретному артефакту с зафиксированной суммой |
 
-Поэтому `kubectl`/`helm`/`kustomize`/`tofu`/`hadolint` берутся из upstream-релизов с пином версии и sha256, а `ansible`/`ansible-lint`/`yamllint`/`shellcheck` — из репозитория дистрибутива: их версии не привязаны к целевому кластеру, а состав и так совпадает в обеих ветках. SHA256 проверяется **до** распаковки, несовпадение — fail-closed (`docker/install-lib.sh:162-171`); загрузка идёт с `curl --retry 5 --retry-delay 3 --retry-all-errors` (`--retry-all-errors` — чтобы повторялись и сетевые сбои вроде отказа DNS, а не только таймауты/5xx; контрольная сумма проверяется после скачивания, поэтому повторы на безопасность не влияют) (`docker/install-lib.sh:155-163`).
+Поэтому `kubectl`/`kustomize`/`tofu` (tier 2) и `helm`/`hadolint` (tier 5) берутся из upstream-релизов с пином версии и sha256, а `ansible`/`ansible-lint` (tier 2) и `shellcheck`/`yamllint` (tier 5) — из репозитория дистрибутива: их версии не привязаны к целевому кластеру, а состав и так совпадает в обеих ветках. SHA256 проверяется **до** распаковки, несовпадение — fail-closed (`docker/install-lib.sh:162-171`); загрузка идёт с `curl --retry 5 --retry-delay 3 --retry-all-errors` (`--retry-all-errors` — чтобы повторялись и сетевые сбои вроде отказа DNS, а не только таймауты/5xx; контрольная сумма проверяется после скачивания, поэтому повторы на безопасность не влияют) (`docker/install-lib.sh:155-163`).
 
 #### OpenTofu вместо Terraform
 
@@ -318,7 +381,8 @@ buildah --root "$HOME/.local/share/containers/storage" \
 | `dev`: MCP-серверы | все четыре в `/usr/local/bin` и **все четыре отвечают на `initialize` по stdio** (`mcp-server-github` — `serverInfo.version` 0.6.2, внутренняя версия пакета `@modelcontextprotocol/server-github@2025.4.8`; `gitea-mcp` — `serverInfo.name` = `gitea-proxy-agent`, через launcher на реальный файл пакета, без него stdio не поднимается) |
 | `dev`: python | `python3 -m venv` работает; запуск от `--user 1000:1000` → `HOME`/`~/.local`/`~/.cache/pip` writable |
 | `dev`/`devops`: control plane | `node dist/main.js` → `GET /health` = 200 |
-| `devops`: tier 2 | `kubectl` v1.37.1, `helm` v3.22.1, `kustomize` v5.8.3, `tofu` v1.13.1 (+ симлинк `terraform`), `ansible`, `ansible-lint`, `yamllint`, `shellcheck`, `hadolint` 2.15.1 — работают |
+| `devops`: tier 2 | `kubectl` v1.37.1, `kustomize` v5.8.3, `tofu` v1.13.1 (+ симлинк `terraform`), `ansible`, `ansible-lint` — работают |
+| `dev`/`devops`: tier 5 | `helm` v3.22.1, `hadolint` 2.15.1, `shellcheck`, `yamllint` — работают (тир переехал из tier 2; в `devops` он наследуется от `dev`) |
 | `devops`: диаг/БД | `dig`, `nc`, `traceroute`, `lsof`, `ss`, `sqlite3`, `psql`, `redis-cli`, `mysql` — работают |
 | `devops`: docker | `docker --version` = 29.8.2; `docker info` падает («no such file or directory») — демона нет, ожидаемо; `dockerd`, `containerd`, `docker.sock` в образе отсутствуют |
 | `devops`: buildah | end-to-end сборка образа проходит с `--cap-add=SYS_ADMIN --cap-add=SYS_RESOURCE --device /dev/fuse -e TMPDIR=/dev/shm buildah bud --isolation=chroot`; rootless от uid 1000 — с `--root`/`--runroot`; без этих условий — падение (см. выше) |
@@ -415,16 +479,16 @@ build (--platform=$BUILDPLATFORM) — сборка монорепо (shared → 
 | `git-lfs` | `git-lfs` | `git-lfs` |
 | `rsync` | `rsync` | `rsync` |
 
-**Tier 2 — дистрибутивная часть** (`docker/install-tier-2.sh:50-55`) — имена в alpine и debian совпадают:
+**Tier 2 — дистрибутивная часть** (`docker/install-tier-2.sh`) — имена в alpine и debian совпадают:
 
 | logical | apk | apt |
 |---|---|---|
 | `ansible` | `ansible` | `ansible` |
 | `ansible-lint` | `ansible-lint` | `ansible-lint` |
-| `yamllint` | `yamllint` | `yamllint` |
-| `shellcheck` | `shellcheck` | `shellcheck` |
 
-**Tier 2 — upstream-релизы** (`docker/install-tier-2.sh:79-85`) — состав **не зависит от дистрибутива**: одна таблица на alpine- и debian-ветку (`kubectl` 1.37.1, `helm` 3.22.1, `kustomize` 5.8.3, OpenTofu 1.13.1 + симлинк `terraform`, `hadolint` 2.15.1; пин + sha256 — см. таблицу в разделе шага 4).
+**Tier 2 — upstream-релизы** (`docker/install-tier-2.sh`) — состав **не зависит от дистрибутива**: одна таблица на alpine- и debian-ветку (`kubectl` 1.37.1, `kustomize` 5.8.3, OpenTofu 1.13.1 + симлинк `terraform`; пин + sha256 — см. таблицу в разделе шага 4).
+
+**Tier 5 — проверка репозитория** (`docker/install-tier-5.sh`) — `helm` 3.22.1, `hadolint` 2.15.1 (upstream-релизы, пин + sha256 — см. раздел шага 4) и дистрибутивные `shellcheck`/`yamllint` (имена в alpine и debian совпадают). Тир уехал из tier 2; в debian-ветке он входит в `full` (в `browser` — нет).
 
 **Tier 3 — веб/браузер** (`docker/install-tier-3.sh:81-103`) — **только debian**:
 
@@ -532,7 +596,8 @@ Content (`docker image inspect <tag> --format '{{.Size}}'`), amd64, node 22.23.3
 | `browser`: tier 3 | `xmllint --version` → `libxml version 20914` |
 | `browser`: hard deps / tier 0 | `git` 2.39.5, `ripgrep` 13.0.0, `python3` 3.11.2, `ssh` OpenSSH 9.2p1, `yq` v4.54.1 (Go), `jq` 1.6, `bash` 5.2.15 |
 | `browser`: control plane | `node dist/main.js` → `GET /health` = 200 (`{"status":"healthy","version":"0.11.4",…}`) |
-| `full`: tier 2 | `kubectl` v1.37.1, `helm` v3.22.1, `kustomize` v5.8.3, `tofu` OpenTofu v1.13.1 (+ симлинк `terraform` → «OpenTofu v1.13.1»), `ansible` 2.14.18, `ansible-lint` 6.13.1, `yamllint` 1.29.0, `shellcheck`, `hadolint` 2.15.1 |
+| `full`: tier 2 | `kubectl` v1.37.1, `kustomize` v5.8.3, `tofu` OpenTofu v1.13.1 (+ симлинк `terraform` → «OpenTofu v1.13.1»), `ansible` 2.14.18, `ansible-lint` 6.13.1 |
+| `full`: tier 5 | `helm` v3.22.1, `hadolint` 2.15.1, `yamllint` 1.29.0, `shellcheck` — работают |
 | `full`: docker CLI | `docker --version` → 29.9.2; бинарь **статический** («not a dynamic executable»); `docker info` падает («failed to connect to the docker API at unix:///var/run/docker.sock») — демона нет, ожидаемо; `dockerd`/`containerd`/`docker.sock` в образе отсутствуют |
 | `full`: buildah | `buildah --version` → 1.28.2 (image-spec 1.1.0-rc2) |
 | `full`: клиенты БД | `sqlite3` 3.40.1, `psql` 15.19, `redis-cli` 7.0.15, `mysql`/`mariadb` 10.11.19 — работают |
@@ -552,11 +617,13 @@ Worker'у **не нужны** control plane (OIDC/RBAC, LLM-конфигурац
 
 | Flavor | База | Что берём из all-in-one | Что убираем | Размер |
 |---|---|---|---|---|
-| **core** | alpine | hard deps + tier 0 | control plane, UI, OIDC/LLM-конфигурация | **107,0 МБ** (измерен) |
-| **dev** | alpine | core + tier 1 + tier 4 + БД + buildah | то же | ~315 МБ (оценка) |
-| **devops** | alpine | dev + tier 2 + diag + docker CLI + buildah | то же | ~503 МБ (оценка) |
-| **browser** | debian | hard deps + tier 0 + tier 1 + tier 3 + playwright-MCP + diag | то же | ~680 МБ (оценка) |
-| **full** | debian | полный состав | то же | **930,8 МБ** (измерен) |
+| **core** | alpine | hard deps + tier 0 | control plane, UI, OIDC/LLM-конфигурация | **107,0 МБ** (измерен, прежний состав) |
+| **dev** | alpine | core + tier 1 + tier 4 + БД + buildah + tier 5 + media + pnpm/corepack | то же | ~315 МБ (оценка, прежний состав) |
+| **devops** | alpine | dev + tier 2 (остаток) + diag + docker CLI + buildah | то же | ~503 МБ (оценка, прежний состав) |
+| **browser** | debian | hard deps + tier 0 + tier 1 + tier 3 + playwright-MCP + diag + media | то же | ~680 МБ (оценка, прежний состав) |
+| **full** | debian | полный состав (tier 2–5 + media + pnpm/corepack) | то же | **930,8 МБ** (измерен, прежний состав) |
+
+Размеры worker'ов — по составу **до** tier 5/pnpm/media; после изменения состава они выросли, актуальные значения не измерены (приведённые — нижняя оценка).
 
 Образы `synth-executor:core` и `synth-executor:full` **собраны** (шаг 5) — см. замеры и smoke-тесты в разделе «Реализация шага 5». Оценки для `dev`/`devops`/`browser` получены по разнице `executor:core` (107,0 МБ) − `backend:core` (101,6 МБ) ≈ 5,4 МБ — worker-образ примерно на 5 МБ больше соответствующего all-in-one за счёт рантайма исполнителя и `dist` core.
 
@@ -572,13 +639,15 @@ Flavor'ы строятся **кумулятивно** (`FROM ... AS`), т.к. `C
 
 ```
 реализовано (alpine, docker/Dockerfile.backend):
-  build ─► core(hard deps + tier 0) ─► dev(core + tier 1 + БД + buildah + tier 4)
+  build ─► core(hard deps + tier 0) ─► dev(core + tier 1 + БД + buildah + tier 4
+                                        + tier 5 + media + pnpm/corepack)
                                         └─► devops(dev + tier 2 + diag + docker CLI)
   slim (node:22-alpine, без toolchain'а) — ПОСЛЕДНЯЯ стадия, цель по умолчанию
 
 реализовано (debian-ветка, шаг 5, docker/Dockerfile.backend):
-  build ─► browser(hard deps + tier 0 + tier 1 + tier 3 + playwright-MCP + diag)
-            └─► full(browser + tier 2 + tier 4 + БД + diag + docker + buildah)
+  build ─► browser(hard deps + tier 0 + tier 1 + tier 3 + playwright-MCP + diag + media)
+            └─► full(browser + tier 2 + tier 4 + tier 5 + pnpm/corepack + БД +
+                    diag + docker + buildah)
 
 реализовано (worker, шаг 5, docker/Dockerfile.executor):
   build ─► core ─► dev ─► devops            (alpine)
@@ -600,12 +669,13 @@ Flavor'ы строятся **кумулятивно** (`FROM ... AS`), т.к. `C
 ```text
 build  (--platform=$BUILDPLATFORM)  — сборка монорепо, pnpm deploy, chmod
 core   (целевая платформа, с RUN)  — all-in-one: control plane + toolchain
-dev    (целевая платформа, с RUN)  — core + tier 1 + БД + buildah + tier 4   (шаг 4)
+dev    (целевая платформа, с RUN)  — core + tier 1 + БД + buildah + tier 4 +
+                                      tier 5 + media + pnpm/corepack          (шаг 4)
 devops (целевая платформа, с RUN)  — dev + tier 2 + diag + docker CLI        (шаг 4)
 browser (целевая платформа, с RUN) — hard deps + tier 0 + tier 1 + tier 3 +
-                                      playwright-MCP + diag                   (шаг 5)
-full   (целевая платформа, с RUN)  — browser + tier 2 + tier 4 + БД +
-                                      docker CLI + buildah                    (шаг 5)
+                                      playwright-MCP + diag + media            (шаг 5)
+full   (целевая платформа, с RUN)  — browser + tier 2 + tier 4 + tier 5 +
+                                      pnpm/corepack + БД + docker CLI + buildah (шаг 5)
 slim   (целевая платформа, без RUN) — control plane без toolchain'а; ПОСЛЕДНЯЯ
                                        стадия ⇒ сборка без --target даёт ровно
                                        прежний slim-образ
@@ -754,7 +824,7 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 6. **Реестры и публикация**: **все** flavor-образы обоих образов — в **приватный Gitea** `git.itphx.ru/itphx/…` (версионные теги, без `latest`); базовые образы — как раньше, в `gitverse.ru`/`ghcr.io`; секрет `GV_GITEA_TOKEN` (fail-closed без токена); последовательный push с ретраями; `imagePullSecrets` для backend'а и worker'а. *Реализовано (шаг 6): `scripts/publish-images.sh` (сборка всех flavor'ов + push + сводка), `scripts/docker-auth-gitea.sh` (авторизация), джоба `publish-images-gitea` в `.gitverse/workflows/release.yaml` (по тегу релиза, отдельный kaniko-шаг на flavor с registry-кэшем), smoke-тесты `scripts/smoke-image.sh` + `scripts/ci-images.sh` и джоба `images` в `.gitverse/workflows/ci.yaml` (публикации нет).* Осталось: расширить `scripts/docker-cleanup.mjs` на репозитории Gitea.
 7. **CI**: registry-cache (`--cache=true`), **smoke-тесты на каждый flavor** (`git --version`, `rg --version`, `python3 --version`, `kubectl version --client`, `playwright --version`) — ловят проблемы базы (glibc/musl); перевод билдера с `kaniko` на `buildah`; per-arch сборка flavor'ев.
 8. **Helm**: `execution.mode`, `execution.remote.url`, `execution.remote.existingSecret`/`execution.remote.tokenKey`, `execution.remote.timeoutMs`, `execution.remote.concurrency`, `execution.remote.failMode`, `executor.enabled`, `executor.image.repository`/`.tag`/`.pullPolicy`, `executor.replicaCount`, `executor.resources`, `executor.workspace.claimName`/`.mountPath`, `executor.podSecurityContext`/`executor.containerSecurityContext`, `executor.networkPolicy`; RWX-claim для workspace в split-режиме.
-9. **Кэши на volume**: `HOME`/`PYTHONUSERBASE`/`PIP_CACHE_DIR` + npm/pnpm/ansible-galaxy/helm-repos — в all-in-one на PVC инстанса, в worker'е — отдельный том.
+9. **Кэши на volume**: `HOME`/`PYTHONUSERBASE`/`PIP_CACHE_DIR` + npm/pnpm/ansible-galaxy/helm-repos — в all-in-one на PVC инстанса. *Отдельного тома под store pnpm у worker'а нет: `pnpm install` идёт в сеть (egress к npm-реестру), store живёт внутри контейнера.*
 10. **Наблюдаемость**: коллектор исполнителя в `packages/core/src/metrics/collectors/` с метриками `synth_executor_queue_depth`, `synth_executor_workers_busy`, `synth_executor_wait_seconds`, `synth_executor_commands_total{outcome}`.
 11. **docker-compose**: профили all-in-one и split в одном файле (ключ API обязателен из `.env`, как сейчас).
 12. **Документация**: состав flavor'ов, размеры, матрица «all-in-one vs split», требования к workspace-томам, диагностика отсутствующих бинарей.
@@ -770,7 +840,10 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 - **Инструмент сборки образов** — `buildah` (rootless) вместо `kaniko`; CI-билдер переводится на `buildah`.
 - **Судьба `slim`** — не сворачивается: это базовый образ control plane без toolchain'а (`synth-backend:<v>`).
 - **Per-arch vs «no RUN»** — **вариант A**: per-arch сборка flavor'ов (целевая стадия с `RUN`), arm64 требует QEMU/binfmt на раннере; `slim` остаётся multi-arch без эмуляции. Реализовано в `docker/Dockerfile.backend` (шаг 2); фактически в шаге 6 flavor'ы публикуются **amd64-only** (kaniko без эмуляции, `--platform` не задаётся) — multi-arch для flavor'ов остаётся отдельной задачей.
-- **`terraform` → OpenTofu** — в образ кладётся **OpenTofu** (бинарь `tofu`) + симлинк `terraform` → `tofu`; HashiCorp Terraform (лицензия BUSL) не используется. Реализовано в обеих ветках: таблица upstream-релизов tier 2 общая для alpine и debian (`docker/install-tier-2.sh:79-94`).
+- **`terraform` → OpenTofu** — в образ кладётся **OpenTofu** (бинарь `tofu`) + симлинк `terraform` → `tofu`; HashiCorp Terraform (лицензия BUSL) не используется. Реализовано в обеих ветках: таблица upstream-релизов tier 2 общая для alpine и debian (`docker/install-tier-2.sh`).
+- **Состав тиров после разделения tier 2 / tier 5** — `helm`/`shellcheck`/`hadolint`/`yamllint` перенесены в tier 5 («проверка репозитория», `docker/install-tier-5.sh`): они нужны агенту, который правит чарт/Dockerfile/shell, а не деплоящему кластер. Tier 5 входит в `dev` (→ `devops`) и `full`; в tier 2 остались `kubectl`/`kustomize`/`tofu`/`ansible`/`ansible-lint`.
+- **Сборка монорепо в образе** — pnpm (12.14.0, как `packageManager` корня) + corepack — в `dev` (→ `devops`) и `full`; в `core`/`browser` pnpm нет. `pnpm install` в поде идёт **в сеть** (egress к npm-реестру); отдельного тома под store в чарте нет.
+- **Media-тир** — `ffmpeg` в `dev`, `browser` и `full` (в `core` нет): скрипт `docker/install-media.sh`.
 - **docker CLI в debian-ветке** — **вариант (а)**: статический бандл `download.docker.com` (пин 29.9.2 + sha256), из архива берётся только CLI; демона в образе нет. Вариант (б) (apt-репозиторий docker со сторонним GPG-ключом) и вариант (в) (не включать docker CLI) отклонены. Оговорка: docker не публикует checksum'ов для статического бандла — суммы зафиксированы в репозитории по артефакту, fail-closed сохранён. Реализовано в шаге 5 (`docker/install-docker-cli.sh:24-60`).
 - **Playwright-браузеры** — **печатаются в образ** (`playwright install --with-deps chromium`, каталог `/opt/ms-playwright`, общий для всех пользователей); в рантайме ничего не скачивается. Реализовано в шаге 5 (`docker/install-tier-3.sh:120-138`).
 
@@ -862,6 +935,8 @@ Split-топология технически возможна и при одн�
 
 ## История
 
+- 2026-11-01 — состав flavor'ов уточнён: **tier 5** «проверка репозитория» (`helm`/`hadolint`/`shellcheck`/`yamllint` — `docker/install-tier-5.sh`) вместо части tier 2, **media-тир** (`ffmpeg` — `docker/install-media.sh`) и **сборка монорепо** (pnpm 12.14.0 + corepack) в `dev`/`devops`/`full`; в `core`/`browser` pnpm нет. Размеры в матрице — измерения прежнего состава, актуальные не измерены.
+- 2026-11-01 — прогрев store пакетов в образе **отменён** (store 347 МБ + метаданные 213 МБ; offline-режим всё равно требует обоих, а `emptyDir` на `/home/synth/.cache` ломает corepack — он ищет материализованный бинарь pnpm в `COREPACK_HOME`): секция кэша из чарта убрана, `pnpm install` в поде идёт в сеть.
 - 2026-10-28 — переведён в [ADR-077](./adr-077-runtime-toolchain.md): all-in-one образ, worker-образы `synth-executor`, flavor-матрица и переключатель `execution.mode` реализованы; шаги 7–12 продолжаются в ADR-077. Файл оставлен как история.
 - 2026-10-21 — переработано: all-in-one образ (control plane + toolchain + исполнитель), образы worker'ов, flavor-матрица и единый переключатель топологии `execution.mode` (ADR-077).
 - 2026-10-21 — шаг 2: multistage `docker/Dockerfile.backend` (стадии `build`/`core`/`slim`), distro-aware скрипты тиров, flavor `core` (hard deps + tier 0) — решение по arm64: **вариант A** (per-arch, QEMU/binfmt для flavor'ов; `slim` без `RUN` — multi-arch без эмуляции).

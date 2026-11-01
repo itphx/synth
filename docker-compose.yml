@@ -279,12 +279,17 @@ services:
 
   # Исполнитель (worker) — отдельный процесс с toolchain'ом (ADR-077).
   # В образе НЕТ control plane: ни OIDC/RBAC, ни LLM-ключей.
+  #
+  # Flavor `dev`, а не `core`: в `core` нет pnpm, поэтому собирать монорепо
+  # (`pnpm install --frozen-lockfile && pnpm build && pnpm typecheck &&
+  # pnpm lint`) и проверять чарт/скрипты/Dockerfile'ы репозитория (tier 5) в
+  # контейнере нельзя — образ `core` такой сборки просто не переживёт.
   synth-executor:
     build:
       context: .
       dockerfile: docker/Dockerfile.executor
-      target: core
-    image: ${SYNTH_IMAGE_EXECUTOR:-synth-executor}:${SYNTH_IMAGE_EXECUTOR_TAG:-local-core}
+      target: dev
+    image: ${SYNTH_IMAGE_EXECUTOR:-synth-executor}:${SYNTH_IMAGE_EXECUTOR_TAG:-local-dev}
     container_name: synth-executor
     environment:
       # Токен доступа к API исполнителя (обязателен — fail-closed) и корень
@@ -297,7 +302,7 @@ services:
       - SYNTH_EXECUTOR_PORT=5100
       # MCP-хостинг (ADR-077 шаг B1): env SYNTH_EXECUTOR_MCP_SERVERS задаётся
       # только у flavor'ов с браузером. Здесь профиль `split` собирает
-      # `target: core` (alpine, без Chromium), поэтому переменная НЕ задаётся —
+      # `target: dev` (alpine, без Chromium), поэтому переменная НЕ задаётся —
       # серверов нет. Для браузерных инструментов переключите сборку на
       # `target: full` (debian + Playwright) — образ уже несёт дефолт
       # `[{"name":"playwright-mcp",...,"--executable-path","/opt/synth/browser/chrome"}]`;

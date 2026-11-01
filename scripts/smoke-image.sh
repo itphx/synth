@@ -10,11 +10,14 @@
 #
 # Flavor'ы:
 #
-#   core    — hard deps + tier 0 (control plane + toolchain)
-#   dev     — core + tier 1 + tier 4 (MCP) + БД-клиенты + buildah
-#   devops  — dev + tier 2 + диаг + docker CLI
-#   browser — hard deps + tier 0/1 + tier 3 (Playwright + Chromium) + диаг
-#   full    — всё вышеперечисленное
+#   core    — hard deps + tier 0 (control plane + toolchain); **без** pnpm/corepack,
+#             без ffmpeg, без helm/shellcheck/hadolint
+#   dev     — core + tier 1 + tier 4 (MCP) + БД-клиенты + buildah + tier 5
+#             (helm/shellcheck/hadolint/yamllint) + media (ffmpeg) + pnpm/corepack
+#   devops  — dev + tier 2 (kubectl/kustomize/tofu/ansible) + диаг + docker CLI
+#   browser — hard deps + tier 0/1 + tier 3 (Playwright + Chromium) + диаг + media
+#             (ffmpeg); **без** pnpm
+#   full    — всё вышеперечисленное (+ pnpm/corepack, tier 5, media)
 #   slim    — control plane БЕЗ toolchain'а: **негативная** проверка (бинарников
 #             toolchain'а в нём быть не должно)
 #
@@ -132,6 +135,42 @@ run_cmd() {
   fi
 }
 
+# run_cmd_eq <имя> <ожидаемое значение> <команда...> — команда должна завершиться
+# кодом 0 И в её выводе должна быть **строка** с ожидаемым значением (сравнение
+# точное; лишние строки вокруг — допустимы).
+run_cmd_eq() {
+  name="$1"; expected="$2"; shift 2
+  out=$($TIMEOUT_BIN "$@" 2>&1)
+  rc=$?
+  actual=$(printf '%s' "$out" | tr -d '\015' | grep -Fx "$expected" | head -n 1)
+  if [ "$rc" -eq 0 ] && [ -n "$actual" ]; then
+    printf 'CHECK|%s|ok|%s\n' "$name" "$actual"
+  else
+    printf 'CHECK|%s|fail|ожидалось %s, получено %s (rc=%s)\n' "$name" "$expected" "$(detail "$(printf '%s' "$out" | head -n 1)")" "$rc"
+  fi
+}
+
+# run_cmd_min_major <имя> <мин. мажор> <команда...> — мажорная версия в выводе
+# команды (vNN.NN.NN) не меньше указанной.
+run_cmd_min_major() {
+  name="$1"; min="$2"; shift 2
+  out=$($TIMEOUT_BIN "$@" 2>&1)
+  rc=$?
+  actual=$(printf '%s' "$out" | head -n 1 | tr -d '\015')
+  major=$(printf '%s' "$actual" | sed 's/^[^0-9]*//' | cut -d. -f1)
+  case "$major" in
+    ''|*[!0-9]*)
+      printf 'CHECK|%s|fail|не разобрана версия: %s (rc=%s)\n' "$name" "$(detail "$actual")" "$rc"
+      return
+      ;;
+  esac
+  if [ "$rc" -eq 0 ] && [ "$major" -ge "$min" ]; then
+    printf 'CHECK|%s|ok|%s\n' "$name" "$actual"
+  else
+    printf 'CHECK|%s|fail|ожидалась версия >= %s, получено %s (rc=%s)\n' "$name" "$min" "$(detail "$actual")" "$rc"
+  fi
+}
+
 # run_sh <имя> <shell-скрипт> — скрипт должен завершиться кодом 0.
 run_sh() {
   name="$1"; script="$2"
@@ -162,6 +201,23 @@ no_bin() {
   else
     printf 'CHECK|%s|ok|отсутствует, как и задумано\n' "$name"
   fi
+}
+
+# no_corepack_pnpm <имя> — corepack-шим pnpm работать НЕ должен: ни `pnpm` в PATH,
+# ни `corepack pnpm` (шим corepack подставляет бинарь pnpm сам). Сеть у corepack
+# отключена (`COREPACK_ENABLE_NETWORK=0`): проверка не тянет pnpm из интернета —
+# уже скачанный бинарь corepack отдаёт, нескачанный — нет.
+no_corepack_pnpm() {
+  name="$1"
+  if command -v pnpm >/dev/null 2>&1; then
+    printf 'CHECK|%s|fail|бинарник pnpm найден (%s), а его быть не должно\n' "$name" "$(command -v pnpm)"
+    return
+  fi
+  if command -v corepack >/dev/null 2>&1 && COREPACK_ENABLE_NETWORK=0 corepack pnpm --version >/dev/null 2>&1; then
+    printf 'CHECK|%s|fail|corepack-шим pnpm отвечает, а его быть не должно\n' "$name"
+    return
+  fi
+  printf 'CHECK|%s|ok|отсутствует, как и задумано\n' "$name"
 }
 
 # has_file <имя> <путь>
@@ -231,6 +287,16 @@ has_bin tier0/tree tree
 CHECK_EOF
 fi
 
+# --- рантайм node/npm (все flavor'ы, кроме slim) ------------------------------
+if [[ "$FLAVOR" != "slim" ]]; then
+  cat >> "$CHECK_FILE" <<'CHECK_EOF'
+
+# --- рантайм node/npm ---
+run_cmd_min_major runtime/node-version 22 node --version
+run_cmd runtime/npm-version npm --version
+CHECK_EOF
+fi
+
 # tier 1 + tier 4 + БД + buildah — flavor'ы dev/devops/full.
 case "$FLAVOR" in
   dev|devops|full)
@@ -279,16 +345,12 @@ case "$FLAVOR" in
   devops|full)
     cat >> "$CHECK_FILE" <<'CHECK_EOF'
 
-# --- tier 2 (инфраструктура) ---
+# --- tier 2 (инфраструктура): helm/shellcheck/hadolint/yamllint уехали в tier 5 ---
 run_cmd tier2/kubectl kubectl version --client
-run_cmd tier2/helm helm version --short
 run_cmd tier2/kustomize kustomize version
 run_cmd tier2/tofu tofu version
 has_bin tier2/terraform terraform
 run_cmd tier2/ansible ansible --version
-run_cmd tier2/shellcheck shellcheck --version
-run_cmd tier2/yamllint yamllint --version
-run_cmd tier2/hadolint hadolint --version
 
 # --- диагностические утилиты ---
 run_cmd diag/dig dig -v
@@ -300,6 +362,51 @@ has_bin diag/traceroute traceroute
 # --- docker CLI (только клиент: демона в образе нет) ---
 run_cmd docker/version docker --version
 run_sh docker/no-daemon '! docker info >/dev/null 2>&1'
+CHECK_EOF
+    ;;
+esac
+
+# tier 5 (проверка репозитория) + pnpm/corepack — flavor'ы dev/devops/full.
+# devops наследует dev, поэтому состав tier 5 и pnpm у него тот же.
+case "$FLAVOR" in
+  dev|devops|full)
+    cat >> "$CHECK_FILE" <<'CHECK_EOF'
+
+# --- tier 5 (проверка репозитория) ---
+run_cmd tier5/helm helm version --short
+run_cmd tier5/shellcheck shellcheck --version
+run_cmd tier5/hadolint hadolint --version
+run_cmd tier5/yamllint yamllint --version
+
+# --- pnpm/corepack (сборка монорепо) ---
+run_cmd_eq pnpm/version 12.14.0 pnpm --version
+run_cmd pnpm/corepack-version corepack --version
+run_cmd pnpm/store-path pnpm store path
+CHECK_EOF
+    ;;
+esac
+
+# git: безопасные каталоги и идентификация агента — стадии `dev` и `browser`
+# и их наследники (`dev`, `devops`, `browser`, `full`).
+case "$FLAVOR" in
+  dev|devops|browser|full)
+    cat >> "$CHECK_FILE" <<'CHECK_EOF'
+
+# --- git: безопасные каталоги и идентификация агента ---
+run_sh git/safe-directory-workspace 'git config --system --get-all safe.directory | grep -F "/var/synth/data/workspaces/*" >/dev/null'
+run_sh git/user-email 'test -n "$(git config --system user.email)"'
+CHECK_EOF
+    ;;
+esac
+
+# media-тир (ffmpeg) — flavor'ы dev/devops/browser/full (devops наследует dev);
+# в core ffmpeg нет.
+case "$FLAVOR" in
+  dev|devops|browser|full)
+    cat >> "$CHECK_FILE" <<'CHECK_EOF'
+
+# --- media (ffmpeg) ---
+run_sh media/ffmpeg-version 'ffmpeg -version | head -n 1'
 CHECK_EOF
     ;;
 esac
@@ -329,6 +436,20 @@ const { chromium } = require(\"playwright\");
 CHECK_EOF
     ;;
 esac
+
+# --- core: негативные проверки (лёгкий образ — без pnpm и без проверки репозитория)
+if [[ "$FLAVOR" == "core" ]]; then
+  cat >> "$CHECK_FILE" <<'CHECK_EOF'
+
+# --- core: лёгкий образ — pnpm, ffmpeg и tier 5 в нём быть НЕ должно ---
+no_bin core/no-pnpm pnpm
+no_corepack_pnpm core/no-corepack-pnpm
+no_bin core/no-ffmpeg ffmpeg
+no_bin core/no-helm helm
+no_bin core/no-shellcheck shellcheck
+no_bin core/no-hadolint hadolint
+CHECK_EOF
+fi
 
 # --- slim: негативная проверка (toolchain'а быть не должно) ------------------
 if [[ "$FLAVOR" == "slim" ]]; then
