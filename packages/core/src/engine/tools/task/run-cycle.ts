@@ -18,6 +18,8 @@ import type { UsageCost } from '../../../providers/usage.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
 import { PermissionEvaluator } from '../../permission/evaluator.js';
 import { PermissionApprovalManager } from '../../permission/approval.js';
+import { buildPermissionPreview } from '../../permission/preview.js';
+import { ObfuscationMapStore } from '../../gateway/obfuscation-map-store.js';
 import { estimatePromptChars, estimateTokens } from '../../context/token-ratio.js';
 import { buildMaxStepsPrompt, maxStepsAssistantMessage } from '../../llm/max-steps.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
@@ -129,6 +131,20 @@ async function sleepAbortable(ms: number, isAborted: () => boolean): Promise<boo
     waited += SLICE_MS;
   }
   return isAborted();
+}
+
+/**
+ * Карта обфускации **родительской** сессии (ADR-036) — ею маскируются реальные
+ * значения секретов в диффе превью. Карта может отсутствовать (gateway выключен)
+ * или не читаться — тогда маскировать нечего.
+ */
+async function loadSubagentSecretsMap(extra: TaskExtra): Promise<Record<string, string>> {
+  try {
+    if (!extra.sessionManager || !extra.sessionId) return {};
+    return await new ObfuscationMapStore(extra.sessionManager).get(extra.sessionId);
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -1577,6 +1593,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, 'en', permissionDecision.params)
               ?? permissionDecision.reason)
             : permissionDecision.reason;
+          // ADR-029 (аддитивно): превью изменений — как в основном ходе:
+          // пользователь видит, ЧТО именно саб-агент собирается изменить.
+          const preview = await buildPermissionPreview({
+            toolName,
+            args: toolArgs,
+            workingDir: ctx.workingDir,
+            secretsMap: await loadSubagentSecretsMap(extra),
+          });
           const approval = await childApprovalManager.waitForDecision(
             extra.sessionId!,
             {
@@ -1585,6 +1609,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               toolName,
               arguments: toolArgs,
               reason: approvalAskReason,
+              ...(preview ? { preview } : {}),
             },
             derivedPermission.askTimeoutMs,
           );

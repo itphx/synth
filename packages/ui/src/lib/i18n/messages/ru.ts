@@ -2795,6 +2795,8 @@ export const dict = {
   'tool.disabled_by_step_limit': 'Ошибка: инструмент «{tool}» не выполнен — после достижения лимита шагов ({limit}) инструменты отключены',
   'tool.empty_output': '(пустой вывод)',
   'tool.output_truncated': '\n... (вывод усечён)',
+  'tool.output_bounded':
+    'Вывод усечён: показано {shown} из {total} строк. Сузьте команду или шаблон либо прочитайте меньший диапазон (offset/limit).',
   'tool.shell_error': 'Ошибка: {message}',
   'tool.shell_timeout':
     'Команда прервана по таймауту через {timeout} мс. Повторите с большим таймаутом, если команда должна выполняться дольше.',
@@ -2829,6 +2831,15 @@ export const dict = {
   'fs.patch_not_regular': 'Ошибка: цель патча — не обычный файл: {path}',
   'fs.patch_too_large': 'Ошибка: файл «{path}» слишком велик для атомарного патча ({bytes} байт, предел {limit})',
   'fs.patch_binary': 'Нельзя править бинарный файл: {path}',
+  'fs.patch_summary': 'Операции: создано — {added}, обновлено — {updated}, удалено — {deleted}, переименовано — {renamed}',
+  'fs.patch_file_added': '{path}: создан',
+  'fs.patch_file_deleted': '{path}: удалён',
+  'fs.patch_file_renamed': '{from}: переименован в {to}',
+  'fs.patch_add_exists': 'Ошибка: файл для создания патчем уже существует: {path}',
+  'fs.patch_delete_missing': 'Ошибка: файл для удаления патчем не найден: {path}',
+  'fs.patch_rename_missing': 'Ошибка: файл-источник переименования не найден: {from}',
+  'fs.patch_rename_exists': 'Ошибка: цель переименования уже существует: {to}',
+  'fs.patch_path_escapes': 'Ошибка: путь патча вне периметра сессии: {path}',
 
   // --- Чтение файлов (fs-read) ---
   'fsread.empty_directory': '(пустой каталог)',
@@ -2843,17 +2854,20 @@ export const dict = {
   'fsread.glob_truncated': '... (показаны первые {count} из {total} файлов; уточните шаблон или увеличьте лимит)',
 
   // --- Веб (web_fetch / web_search) ---
-  'web.duckduckgo_blocked': 'DuckDuckGo временно блокирует запросы (anti-bot защита)',
+  'web.duckduckgo_blocked':
+    'DuckDuckGo временно блокирует запросы (anti-bot защита). Подождите немного и повторите или переформулируйте запрос.',
   'web.search_failed': 'Не удалось получить результаты от DuckDuckGo',
   'web.search_results': 'Результаты поиска по запросу «{query}» ({count}):\n\n{items}',
   'web.fetch_args_url_required': 'укажите url или urls',
   'web.js_framework_warning': '\n\n⚠️ Сайт использует JavaScript-фреймворк — часть содержимого может быть недоступна без выполнения JS.',
   'web.low_content_warning': '\n\n⚠️ На странице очень мало текстового содержимого (возможно, JavaScript-рендеринг).',
   'web.content_truncated': '\n... (содержимое усечено)',
+  'web.body_truncated': '\n... (тело ответа усечено на пределе {limit} байт)',
   'web.block_timeout': '❌ Превышен таймаут',
   'web.block_error': '❌ Ошибка загрузки: {error}',
   'web.fetch_all_failed': 'Не удалось загрузить ни один из URL',
-  'web.no_results': 'По запросу «{query}» ничего не найдено.',
+  'web.no_results':
+    'По запросу «{query}» ничего не найдено. Попробуйте переформулировать запрос с другими или более точными ключевыми словами.',
   'web.search_error': 'Ошибка веб-поиска: {error}',
   'web.search_rate_limited':
     'Веб-поиск ограничен провайдером по частоте запросов (HTTP 429). Подождите и повторите попытку или измените запрос.',
@@ -2908,6 +2922,14 @@ export const dict = {
   'todo.priority_high': 'высокий',
   'todo.priority_medium': 'средний',
   'todo.priority_low': 'низкий',
+  'todo.summary': 'Список todo: выполнено {completed}/{total}, в работе {inProgress}.',
+  'todo.line': '- [{mark}] {title} ({status})',
+  'todo.more': '... и ещё {count}',
+  'todo.added': 'Добавлено пунктов todo: {ids}',
+  'todo.updated': 'Пункт todo «{id}» обновлён.',
+  'todo.deleted': 'Удалено пунктов todo: {count}.',
+  'todo.hint_priority': 'приоритет: {priority}',
+  'todo.hint_plan': 'план: {plan}',
 
   // --- Проект ---
   'project.deps_unavailable': 'Ошибка: менеджер сессий или хранилище проектов недоступны для {tool}',

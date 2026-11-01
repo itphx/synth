@@ -85,7 +85,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 ### Env-оверрайды вложенных секций (ADR-023)
 
 Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
-`questions`, `background`, `agents`, `authority` можно задавать
+`questions`, `background`, `agents`, `tools`, `authority` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
 собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -156,6 +156,9 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (предохранитель по объёму промпта саб-агента; `0` — без ограничения) |
+| `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (лимит глубины вложенности саб-агентов; `0` — без ограничения) |
+| `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (общий предел вывода инструментов, строк; ≥ 1) |
+| `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (общий предел вывода инструментов, байт; ≥ 1) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
@@ -359,6 +362,8 @@ tools:
     capabilities: []              # группы ToolCapability (git, web, file_read, file_write, shell, mcp, ...)
     tools: []                     # отдельные тулы по имени (execute_shell, git_push, ...)
                                   # runtime (plan/todo/project/reference/classify) неотключаем
+  outputMaxLines: 2000            # общий предел вывода тула, строк (≥ 1)
+  outputMaxBytes: 51200           # общий предел вывода тула, байт (≥ 1)
 
 router:
   enabled: true
@@ -1122,6 +1127,38 @@ Instance-wide настройка (ADR-071 §2.6; UI-раздел — ADMIN-ка�
 телом `{toolsDisabled:{capabilities,tools}}` (живое применение, persist в
 `settings.json`).
 
+### Предел вывода инструментов (`tools.outputMaxLines` / `tools.outputMaxBytes`)
+
+Общий предел размера результата **любого** тула: применяется в единой точке вызова
+(`executeToolDef`), поэтому ограничены и встроенные, и MCP-, и плагинные тулы.
+Срабатывает более жёсткий из двух пределов.
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `tools.outputMaxLines` | Предел числа строк в результате тула (≥ 1) | `2000` |
+| `tools.outputMaxBytes` | Предел размера результата тула в байтах UTF-8 (≥ 1) | `51200` |
+
+- Env — `SYNTH_TOOLS_OUTPUT_MAX_LINES` / `SYNTH_TOOLS_OUTPUT_MAX_BYTES`.
+- **Тул, усекший вывод сам**, не трогается: если результат помечен
+  `metadata.truncated === true`, общий предел не применяется (у тула уже свой маркер
+  усечения). Результаты с ошибкой (`isError`) тоже не режутся — текст ошибки несёт
+  диагностику, а не вывод.
+- При усечении в конец текста добавляется пояснение `tool.output_bounded`: сколько
+  строк показано из скольких и как сузить запрос; в metadata — `truncated: true` и
+  `outputBounded: {shownLines, totalLines}`.
+- **Полный текст не сохраняется**: усечённая часть вывода нигде не остаётся
+  (в отличие от артефактов тулов) — при необходимости модель повторяет запрос
+  с более узким условием.
+- Это **не** замена собственным пределам тулов (`read_file` — 2000 строк/50 КБ,
+  `execute_shell` — свой кап вывода): общий предел стоит выше них и срабатывает
+  последним.
+
+```yaml
+tools:
+  outputMaxLines: 2000
+  outputMaxBytes: 51200
+```
+
 ### Скиллы (`skills.*`, ADR-046)
 
 Секция `skills` управляет discovery скиллов, доверием проектным каталогам,
@@ -1589,6 +1626,7 @@ background:
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
 | `agents.subagentMaxInputTokens` | Предохранитель по объёму промпта саб-агента, входные токены (оценка); `0` — без ограничения. При превышении прогон завершается отчётом, а не ошибкой провайдера. Env — `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | `150000` |
+| `agents.subagentDepth` | Лимит глубины вложенности саб-агентов; `0` — без ограничения. Глубина считается по цепочке `parentId` сессий (текущая — 0, родитель — 1, …): при лимите 1 саб-агент может запустить саб-агента, но не саб-агента внутри саб-агента. При превышении тул `task` отказывает **до** создания дочерней сессии (`task.depth_limit`). Env — `SYNTH_AGENTS_SUBAGENT_DEPTH` | `1` |
 
 - **Приоритет шаг-лимита.** Финальный шаг-отчёт по `maxSteps` (механика opencode) превышением
   бюджета не считается: иначе отчёт по лимиту шагов не был бы получен вовсе.
@@ -1604,10 +1642,15 @@ background:
 - **Оценка недоступна** (нет данных/пустой промпт) — не блокируем (fail-open).
 - Оценка — по эвристике chars-per-token (дефолт 4); это предохранитель, а не точный
   подсчёт токенов модели.
+- **Лимит глубины (`subagentDepth`) — не бюджет, а структура.** Он считается по цепочке
+  `parentId` сессий, а не по расходу токенов: при достижении лимита тул `task`
+  отказывает с `task.depth_limit` **до** создания дочерней сессии (лишняя сессия и её
+  история не появляются). `0` — вложенность не ограничена.
 
 ```yaml
 agents:
   subagentMaxInputTokens: 150000
+  subagentDepth: 1
 ```
 
 ### Каталог моделей (`{dataDir}/models/`, `ModelConfig`)

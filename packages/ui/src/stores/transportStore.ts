@@ -6,7 +6,7 @@ import { useProjectsStore } from './projectsStore'
 import { useGitStore } from './gitStore'
 import { useFilesStore } from './filesStore'
 import { useUIStore } from './useUIStore'
-import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
+import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS, parsePermissionPreview } from './permissionStore'
 import { useQuestionStore } from './questionStore'
 import { useSkillsStore } from './skillsStore'
 import { useInstructionsStore } from './instructionsStore'
@@ -2007,6 +2007,8 @@ export function createDispatcher(): EventDispatcher {
           || {}
         const reason = (payload.reason as string) || ''
         const timeoutMs = (payload.ask_timeout_ms as number | undefined) ?? PERMISSION_ASK_TIMEOUT_MS
+        // Превью изменений (аддитивно): diff по файлам, которые тул изменит.
+        const preview = parsePermissionPreview(payload.preview)
 
         usePermissionStore.getState().addRequest(sid, {
           approvalId,
@@ -2015,6 +2017,7 @@ export function createDispatcher(): EventDispatcher {
           reason,
           askedAt: new Date().toISOString(),
           timeoutMs,
+          ...(preview ? { preview } : {}),
         })
         break
       }

@@ -243,4 +243,42 @@ describe('PermissionApprovalManager — ask flow', () => {
     expect(decision.cancelled).toBe(true);
     expect(asked).not.toContain('permission.asked');
   });
+
+  it('превью изменений публикуется в permission.asked (аддитивное поле)', async () => {
+    const preview = {
+      files: [{
+        path: 'a.txt',
+        diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-x\n+y',
+        additions: 1,
+        deletions: 1,
+      }],
+    };
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe('s1', (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const pending = manager.waitForDecision('s1', { ...request, preview }, 50);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(asked.at(-1)?.preview).toEqual(preview);
+
+    bus.publish('s1', 'permission.replied', { approval_id: 'approval_1', session_id: 's1', approved: false });
+    await pending;
+  });
+
+  it('без превью поле preview в событии отсутствует', async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe('s1', (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const pending = manager.waitForDecision('s1', request, 50);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect('preview' in (asked.at(-1) ?? {})).toBe(false);
+
+    bus.publish('s1', 'permission.replied', { approval_id: 'approval_1', session_id: 's1', approved: false });
+    await pending;
+  });
 });

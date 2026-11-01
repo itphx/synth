@@ -2326,3 +2326,167 @@ describe('buildSubagentUnavailableToolsSection — workspace-гейт (ADR-075)'
     })).toBe('');
   });
 });
+
+/**
+ * Лимит глубины вложенности саб-агентов (`agents.subagentDepth`).
+ *
+ * Глубина сессии — число предков по цепочке `parentId`: корневая сессия — 0,
+ * её дочерняя — 1, следующая — 2. При лимите 1 сессия на глубине 1 не может
+ * завести ещё одного саб-агента — отказ приходит **до** создания дочерней
+ * сессии.
+ */
+describe('taskTool — лимит глубины вложенности (agents.subagentDepth)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-task-depth-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  const baseCtx = {
+    sessionId: 'test-session',
+    messageId: 'test-message',
+    abortSignal: new AbortController().signal,
+    workingDir: '/tmp',
+  };
+
+  /** Корневая сессия (без родителя) — глубина 0. */
+  async function createRoot(): Promise<Session> {
+    return (await sessionManager.createSession({ title: 'Root' }))!;
+  }
+
+  /** Дочерняя сессия указанной глубины (parentId → цепочка родителей). */
+  async function createChild(parent: Session): Promise<Session> {
+    return (await sessionManager.createSession({
+      title: 'Child',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+    }))!;
+  }
+
+  /** Вызов `task` из указанной сессии с лимитом глубины. */
+  async function runTask(
+    session: Session,
+    subagentDepth: number,
+  ): Promise<{ isError?: boolean; content: string; metadata?: Record<string, unknown> }> {
+    return taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        ...baseCtx,
+        sessionId: session.id,
+        extra: {
+          provider: makeMockProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: session.id,
+          agentRegistry: makeMockAgentRegistry(),
+          subagentDepth,
+        },
+      },
+    );
+  }
+
+  it('лимит 1 на глубине 1: отказ и дочерняя сессия НЕ создаётся', async () => {
+    const root = await createRoot();
+    const child = await createChild(root);
+
+    const result = await runTask(child, 1);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Subagent depth limit reached (1)');
+    expect(result.metadata?.i18n).toEqual({ key: 'task.depth_limit', params: { limit: '1' } });
+    // Дочерняя сессия не создана — у сессии-родителя нет детей.
+    const children = await sessionManager.getChildren(child.id);
+    expect(children).toHaveLength(0);
+  });
+
+  it('лимит 1 на глубине 0 (корневая сессия): саб-агент запускается', async () => {
+    const root = await createRoot();
+
+    const result = await runTask(root, 1);
+
+    expect(result.isError).toBeFalsy();
+    const childSessionId = result.metadata!.child_session_id as string;
+    expect(childSessionId).toBeDefined();
+    const child = await sessionManager.getSession(childSessionId);
+    expect(child!.parentId).toBe(root.id);
+  });
+
+  it('лимит 0 (без ограничения): саб-агент запускается на любой глубине', async () => {
+    const root = await createRoot();
+    const child = await createChild(root);
+    const grandchild = await createChild(child);
+
+    const result = await runTask(grandchild, 0);
+
+    expect(result.isError).toBeFalsy();
+    const childSessionId = result.metadata!.child_session_id as string;
+    const created = await sessionManager.getSession(childSessionId);
+    expect(created!.parentId).toBe(grandchild.id);
+  });
+
+  it('цепочка родитель→ребёнок→внук: глубина считается по всей цепочке parentId', async () => {
+    const root = await createRoot();
+    const child = await createChild(root);
+    const grandchild = await createChild(child);
+
+    // Глубина 2 (внук) при лимите 2 — отказ (2 >= 2).
+    const refused = await runTask(grandchild, 2);
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain('Subagent depth limit reached (2)');
+    expect(await sessionManager.getChildren(grandchild.id)).toHaveLength(0);
+
+    // Тот же внук при лимите 3 — запуск проходит.
+    const allowed = await runTask(grandchild, 3);
+    expect(allowed.isError).toBeFalsy();
+    expect(allowed.metadata!.child_session_id).toBeDefined();
+  });
+
+  it('лимит не задан → дефолт секции agents (1): корневая запускает, ребёнок — нет', async () => {
+    const root = await createRoot();
+    const child = await createChild(root);
+
+    // Без `subagentDepth` в extra — дефолт 1 (как в конфиге `agents`).
+    const fromChild = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        ...baseCtx,
+        sessionId: child.id,
+        extra: {
+          provider: makeMockProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: child.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+    expect(fromChild.isError).toBe(true);
+    expect(fromChild.content).toContain('Subagent depth limit reached (1)');
+
+    const fromRoot = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        ...baseCtx,
+        sessionId: root.id,
+        extra: {
+          provider: makeMockProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: root.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+    expect(fromRoot.isError).toBeFalsy();
+  });
+});

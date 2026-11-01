@@ -13,6 +13,8 @@ import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError } from '../../execution/ports/index.js';
 import { SEARCH_TIMEOUT_MS, classifySearchPath, searchPathErrorResult } from './search.js';
+import { sniffMime } from '../attachments/sniff-mime.js';
+import { ingestMediaFile, isIngestibleMediaMime } from './fs-read-media.js';
 
 /**
  * Пределы `read_file` — паритет с opencode
@@ -101,11 +103,25 @@ function looksBinary(buf: Buffer): boolean {
 
 /** Первые `BINARY_SNIFF_BYTES` байт файла → признак «это бинарь». */
 export async function sniffBinary(filePath: string): Promise<boolean> {
+  return (await sniffFileHead(filePath)).binary;
+}
+
+/**
+ * Первые `BINARY_SNIFF_BYTES` байт файла: признак «бинарь» **и** MIME по
+ * сигнатуре (ADR-115).
+ *
+ * Один проход вместо двух: `read_file` по тем же байтам решает, читать файл
+ * как текст, отказать («бинарь») или принять как медиа-вложение (картинка/PDF).
+ * MIME — тем же детектором, что у сервиса вложений (`attachments/sniff-mime.ts`),
+ * второго определения MIME в ядре нет.
+ */
+async function sniffFileHead(filePath: string): Promise<{ binary: boolean; mime?: string }> {
   const handle = await open(filePath, 'r');
   try {
     const buf = Buffer.alloc(BINARY_SNIFF_BYTES);
     const { bytesRead } = await handle.read(buf, 0, BINARY_SNIFF_BYTES, 0);
-    return looksBinary(buf.subarray(0, bytesRead));
+    const head = buf.subarray(0, bytesRead);
+    return { binary: looksBinary(head), mime: sniffMime(head) };
   } finally {
     await handle.close();
   }
@@ -177,7 +193,8 @@ export const readFileTool: ToolDefinition = {
   description:
     'Read the contents of a file or directory. Each text line is prefixed by its 1-based line number as "N: <content>"; '
     + 'the prefix is for reference only and is not part of the file content. '
-    + 'Binary files are not decoded (use attach_workspace_file for images/PDFs, execute_shell with file/xxd for other bytes). '
+    + 'Binary files are not decoded: images and PDFs are attached to the current turn (the model sees them), '
+    + 'for other binary files use execute_shell with file/xxd to inspect the bytes. '
     + `Defaults to and is capped at ${MAX_READ_LINES} lines and ${MAX_READ_BYTES / 1024} KB of output; long lines are truncated. `
     + 'Use offset and limit to read large files or directories in sections. '
     + 'Prefer one larger read over many small slices, and use grep_files to find specific content in large files. '
@@ -228,13 +245,75 @@ export const readFileTool: ToolDefinition = {
       };
     }
 
-    if (await sniffBinary(resolvedPath)) {
+    // ADR-115: картинка/PDF — не текст: отдаём файл модели как вложение текущего
+    // хода (ссылка в `ToolResult.attachments` → `_injectToolAttachments`).
+    // MIME — по сигнатуре (тот же детектор, что у сервиса вложений).
+    const head = await sniffFileHead(resolvedPath);
+    const displayPath = params.file_path ?? resolvedPath;
+    if (head.mime && isIngestibleMediaMime(head.mime)) {
+      const outcome = await ingestMediaFile({ ctx, resolvedPath, size: info.size });
+      if (outcome.kind === 'attached') {
+        return {
+          content: `${sm('attach.tool.attached', { path: displayPath })} (${outcome.mime}, ${outcome.size} bytes)`,
+          metadata: {
+            i18n: i18nMeta('attach.tool.attached', { path: displayPath }),
+            path: resolvedPath,
+            type: 'media',
+            mime: outcome.mime,
+            size: outcome.size,
+            blob_path: outcome.ref.blobPath,
+            ...(outcome.name ? { name: outcome.name } : {}),
+          },
+          attachments: [outcome.ref],
+        };
+      }
+      // Отказ — не падение. Вложения выключены (или сервиса нет) и файл не
+      // прочитался → прежняя ошибка с подсказкой; лимит и запрещённый MIME →
+      // понятная причина.
+      if (outcome.reason === 'too_large') {
+        const limit = String(outcome.limit);
+        return {
+          content: sm('attach.tool.too_large', { path: displayPath, size: String(info.size), limit }),
+          isError: true,
+          metadata: {
+            i18n: i18nMeta('attach.tool.too_large', { path: displayPath, size: String(info.size), limit }),
+            path: resolvedPath,
+            type: 'media',
+            reason: 'too_large',
+            size: info.size,
+            limit: outcome.limit,
+          },
+        };
+      }
+      if (outcome.reason === 'unsupported_mime') {
+        return {
+          content: sm('attach.tool.unsupported_mime', { path: displayPath, detail: outcome.detail }),
+          isError: true,
+          metadata: {
+            i18n: i18nMeta('attach.tool.unsupported_mime', { path: displayPath, detail: outcome.detail }),
+            path: resolvedPath,
+            type: 'media',
+            reason: 'unsupported_mime',
+            mime: head.mime,
+          },
+        };
+      }
+      // Вложения выключены / файл не прочитался — прежнее поведение
+      // `read_file` (подсказка в тексте).
+      return {
+        content: sm('fsread.binary', { path: displayPath }),
+        isError: true,
+        metadata: { path: resolvedPath, type: 'binary', i18n: i18nMeta('fsread.binary', { path: displayPath }) },
+      };
+    }
+
+    if (head.binary) {
       // Бинарный файл модели как текст не отдаём: «кракозябры» бесполезны и
       // занимают бюджет контекста. Подсказываем правильный инструмент.
       return {
-        content: sm('fsread.binary', { path: params.file_path ?? resolvedPath }),
+        content: sm('fsread.binary', { path: displayPath }),
         isError: true,
-        metadata: { path: resolvedPath, type: 'binary', i18n: i18nMeta('fsread.binary', { path: params.file_path ?? resolvedPath }) },
+        metadata: { path: resolvedPath, type: 'binary', i18n: i18nMeta('fsread.binary', { path: displayPath }) },
       };
     }
 

@@ -75,6 +75,14 @@ export interface TaskExtra {
    */
   subagentMaxInputTokens?: number;
   /**
+   * Лимит глубины вложенности саб-агентов (`agents.subagentDepth`):
+   * глубина считается по цепочке `parentId` сессий (текущая — 0, родитель — 1, …).
+   * При превышении тул `task` отказывает **до** создания дочерней сессии.
+   * `0` — без ограничения; не задано — дефолт секции `agents`
+   * (`DEFAULT_SUBAGENT_DEPTH`).
+   */
+  subagentDepth?: number;
+  /**
    * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) родителя.
    * Передаётся в permission-слой саб-агента (enforce `dependency`) и в секцию
    * `[НЕДОСТУПНЫЕ ТУЛЫ]` его системного промпта. Не задана — fail-open.

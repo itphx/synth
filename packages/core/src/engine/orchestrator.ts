@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, ReasoningBlock } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -25,7 +25,7 @@ import type { ComposerSkillsCatalog } from './skills/catalog.js';
 import type { SkillRuntime, SkillScopeOptions } from './skills/types.js';
 import type { CommandRuntime } from '@itphx/synth-shared';
 import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
-import { DEFAULT_SUBAGENT_MAX_INPUT_TOKENS } from '@itphx/synth-shared/config';
+import { DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SUBAGENT_DEPTH } from '@itphx/synth-shared/config';
 import { agentKeyOf } from './context/prompt-state.js';
 import { createStateMessage, findLastStateMessage, buildModeChangeContent, buildPlanUpdatedContent, wrapStateContent, type UnavailableTool } from './context/state-messages.js';
 import { toLlmReasoningBlocks, makeReasoningParts, type ReasoningBlockLike } from './reasoning-blocks.js';
@@ -52,6 +52,7 @@ import type { RoutingDecision } from './router/router.js';
 import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager, type ApprovalRegistry } from './permission/approval.js';
+import { buildPermissionPreview } from './permission/preview.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { createFileStorage } from '../storage/storage-context.js';
 import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
@@ -360,6 +361,13 @@ export interface OrchestratorOptions {
    */
   gitNetworkTimeoutMs?: number;
   /**
+   * Общий предел вывода инструментов (`tools.outputMaxLines`/
+   * `tools.outputMaxBytes`): результат тула длиннее лимита усекается с
+   * пояснением «показано N из M строк». Не задан — дефолт секции `tools`
+   * (2000 строк / 51200 байт).
+   */
+  toolOutputLimits?: { maxLines: number; maxBytes: number };
+  /**
    * ADR-075: managed-режим проекта (backend): включает строгую проверку явного
    * workspace (deny вне root) в тулах проекта.
    */
@@ -595,6 +603,14 @@ export interface OrchestratorOptions {
    */
   subagentMaxInputTokens?: number;
   /**
+   * Лимит глубины вложенности саб-агентов (`agents.subagentDepth`): глубина
+   * считается по цепочке `parentId` сессий (текущая — 0, родитель — 1, …).
+   * При превышении тул `task` отказывает до создания дочерней сессии.
+   * `0` — без ограничения; не задано — дефолт секции `agents`
+   * (`DEFAULT_SUBAGENT_DEPTH`).
+   */
+  subagentDepth?: number;
+  /**
    * PROP-097 (блок 5b): сервис фоновых шелл-процессов.
    *
    * Не задан — тул `execute_shell` с `background: true` отказывает
@@ -709,6 +725,8 @@ export class ChatOrchestrator {
   /** Таймауты git-тулов по классу операции (ADR-076; `undefined` — дефолт тула). */
   private readonly _gitLocalTimeoutMs: number | undefined;
   private readonly _gitNetworkTimeoutMs: number | undefined;
+  /** Общий предел вывода тулов (`tools.outputMaxLines`/`tools.outputMaxBytes`). */
+  private readonly _toolOutputLimits: { maxLines: number; maxBytes: number } | undefined;
   private readonly _workspaceManaged: boolean;
   private readonly _getWorkspaceOutsideRootPolicy:
     | (() => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>)
@@ -848,6 +866,8 @@ export class ChatOrchestrator {
   private readonly _backgroundEnabled: boolean;
   /** Предохранитель по объёму промпта саб-агента (0 — без ограничения). */
   private readonly _subagentMaxInputTokens: number;
+  /** Лимит глубины вложенности саб-агентов (0 — без ограничения). */
+  private readonly _subagentDepth: number;
   /**
    * PROP-097 (блок 5b): сервис фоновых шелл-процессов (null — не задан:
    * режим `background: true` у `execute_shell` недоступен).
@@ -1089,6 +1109,40 @@ export class ChatOrchestrator {
     return this._contextConfig?.getSecurityMessage(decision.messageId, lang, decision.params) ?? undefined;
   }
 
+  /**
+   * ADR-029 (аддитивно): превью изменений для запроса подтверждения —
+   * unified diff по файлам, которые тул собирается изменить
+   * (`write_file`/`edit_file`/`patch`).
+   *
+   * Считается «по возможности»: бинарный/огромный файл, неоднозначная правка
+   * или сбой расчёта → превью просто отсутствует, запрос подтверждения от
+   * этого не ломается. Секреты в диффе маскируются плейсхолдерами карты
+   * обфускации сессии (ADR-036).
+   */
+  private async _buildPermissionPreview(
+    toolName: string,
+    args: Record<string, unknown>,
+    workingDir: string,
+    sessionId: string,
+  ): Promise<PermissionPreview | undefined> {
+    try {
+      const secretsMap = await this._getObfuscationMap(sessionId);
+      return await buildPermissionPreview({ toolName, args, workingDir, secretsMap });
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Карта обфускации сессии (ADR-036): плейсхолдер → реальное значение. */
+  private async _getObfuscationMap(sessionId: string): Promise<Record<string, string>> {
+    try {
+      const store = this._obfMapStore ?? new ObfuscationMapStore(this._sessionManager);
+      return await store.get(sessionId);
+    } catch {
+      return {};
+    }
+  }
+
   constructor(options: OrchestratorOptions) {
     this._sessionManager = options.sessionManager;
     this._eventBus = options.eventBus;
@@ -1142,6 +1196,9 @@ export class ChatOrchestrator {
     // в `extra` тулов; не заданы — дефолт тула.
     this._gitLocalTimeoutMs = options.gitLocalTimeoutMs;
     this._gitNetworkTimeoutMs = options.gitNetworkTimeoutMs;
+    // Общий предел вывода тулов (`tools.outputMaxLines`/`tools.outputMaxBytes`) —
+    // в `extra` тулов; не задан — дефолт секции `tools`.
+    this._toolOutputLimits = options.toolOutputLimits;
     this._workspaceManaged = options.workspaceManaged === true;
     this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
@@ -1198,6 +1255,7 @@ export class ChatOrchestrator {
     this._requeueSteerMessages = options.requeueSteerMessages ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
     this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
+    this._subagentDepth = options.subagentDepth ?? DEFAULT_SUBAGENT_DEPTH;
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
     this._processService = options.processService ?? null;
     // ADR-114: сервис worktree'ов (тулы `git_worktree_*`).
@@ -4796,6 +4854,10 @@ export class ChatOrchestrator {
               ...(toolDef?.source ? { toolSource: toolDef.source } : {}),
             }).target;
             const bindingAction = authorityActionForTool(toolName, toolDef?.capabilities);
+            // ADR-029 (аддитивно): превью изменений — пользователь подтверждает
+            // запись и должен видеть, ЧТО именно изменится. Не посчиталось →
+            // превью нет, запрос подтверждения работает как прежде.
+            const preview = await this._buildPermissionPreview(toolName, toolArgs, workingDir, session.id);
             const approval = await this._approvalManager.waitForDecision(
               session.id,
               {
@@ -4814,6 +4876,8 @@ export class ChatOrchestrator {
                 // ADR-106 Ф3: привязка к действию и цели.
                 ...(bindingAction ? { action: bindingAction } : {}),
                 ...(bindingTarget ? { target: bindingTarget } : {}),
+                // ADR-029: превью изменений (дифф по файлам).
+                ...(preview ? { preview } : {}),
               },
               effectivePermissionConfig.askTimeoutMs,
               // «Стоп» снимает ожидание подтверждения (иначе инструмент висел
@@ -4975,6 +5039,11 @@ export class ChatOrchestrator {
                   ...(this._gitNetworkTimeoutMs !== undefined
                     ? { gitNetworkTimeoutMs: this._gitNetworkTimeoutMs }
                     : {}),
+                  // Общий предел вывода тулов (`tools.outputMaxLines`/
+                  // `tools.outputMaxBytes`) — применяется в `executeToolDef`.
+                  ...(this._toolOutputLimits !== undefined
+                    ? { toolOutputLimits: this._toolOutputLimits }
+                    : {}),
                   workspaceManaged: this._workspaceManaged,
                   getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
                   // ADR-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
@@ -4997,6 +5066,8 @@ export class ChatOrchestrator {
                   backgroundEnabled: this._backgroundEnabled,
                   // Предохранитель по объёму промпта саб-агента (не окно модели).
                   subagentMaxInputTokens: this._subagentMaxInputTokens,
+                  // Лимит глубины вложенности саб-агентов (`agents.subagentDepth`).
+                  subagentDepth: this._subagentDepth,
                   // ADR-111 §detach: реестр активных (блокирующих) прогонов —
                   // `task` регистрирует в нём хэндл, `POST /sessions/:id/background`
                   // переводит прогон в фон.
@@ -5797,6 +5868,10 @@ export class ChatOrchestrator {
         : {}),
       ...(this._gitNetworkTimeoutMs !== undefined
         ? { gitNetworkTimeoutMs: this._gitNetworkTimeoutMs }
+        : {}),
+      // Общий предел вывода тулов (`tools.outputMaxLines`/`tools.outputMaxBytes`).
+      ...(this._toolOutputLimits !== undefined
+        ? { toolOutputLimits: this._toolOutputLimits }
         : {}),
       workspaceManaged: this._workspaceManaged,
       getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,

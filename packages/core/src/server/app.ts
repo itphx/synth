@@ -107,6 +107,12 @@ export interface StandaloneConfig {
   /** ADR-071 §2.6: instance-wide отключение инструментов из config.yaml tools.disabled. */
   toolsDisabled?: ToolsDisabledConfig;
   /**
+   * Секция `tools` — общий предел вывода инструментов
+   * (`tools.outputMaxLines`/`tools.outputMaxBytes`). Не задана — дефолты
+   * секции `tools`.
+   */
+  toolsConfig?: SynthConfig['tools'];
+  /**
    * ADR-075: политика для абсолютного workspace вне `workspacesRoot` из
    * config.yaml/env (`confirm` | `deny`). Runtime-override — settings/workspace-policy.
    */

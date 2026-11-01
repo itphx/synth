@@ -170,7 +170,8 @@ function resolveShellMove(
 
 /**
  * `patch` — атомарная мультифайловая правка: в metadata лежит `files[]`
- * (`path` — как путь передал вызывающий, `replacements`, `diff`). Пути внутри
+ * (`path` — как путь передал вызывающий, `replacements`, `diff`; у операций
+ * add/delete/rename — `op`, у rename ещё `from`/`to`). Пути внутри
  * workspace → точечное обновление; неизвестный состав или любой путь вне
  * workspace → обновляем всё дерево.
  */
@@ -183,11 +184,18 @@ function resolvePatchChange(
 
   const paths: string[] = [];
   for (const entry of files) {
-    const rawPath = (entry as { path?: unknown } | null | undefined)?.path;
+    const record = entry as { path?: unknown; op?: unknown; from?: unknown } | null | undefined;
+    const rawPath = record?.path;
     if (typeof rawPath !== 'string' || rawPath.length === 0) return { scope: 'all' };
     const rel = toWorkspaceRel(workingDir, rawPath);
     if (!rel) return { scope: 'all' };
     paths.push(rel);
+    // Переименование затрагивает оба пути — источник и цель.
+    if (record?.op === 'rename' && typeof record.from === 'string' && record.from.length > 0) {
+      const fromRel = toWorkspaceRel(workingDir, record.from);
+      if (!fromRel) return { scope: 'all' };
+      paths.push(fromRel);
+    }
   }
 
   return { scope: 'file', paths: [...new Set(paths)], op: 'write' };

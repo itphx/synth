@@ -10,6 +10,7 @@ import type {
   PluginServerPolicy,
 } from '@itphx/synth-shared';
 import { ensureDataDir, mergeModelCompatibility, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION } from '@itphx/synth-shared';
+import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -1117,6 +1118,12 @@ export async function createStandaloneDeps(
     ...(config.gitConfig?.networkTimeoutMs !== undefined
       ? { gitNetworkTimeoutMs: config.gitConfig.networkTimeoutMs }
       : {}),
+    // Общий предел вывода инструментов (`tools.outputMaxLines`/
+    // `tools.outputMaxBytes`) — усечение результата тула с пояснением.
+    toolOutputLimits: {
+      maxLines: config.toolsConfig?.outputMaxLines ?? DEFAULT_TOOL_OUTPUT_MAX_LINES,
+      maxBytes: config.toolsConfig?.outputMaxBytes ?? DEFAULT_TOOL_OUTPUT_MAX_BYTES,
+    },
     // ADR-096 (W2.4): словари классификации — порт из контекста хранения.
     dictionaryStore,
     // ADR-115/ADR-116: blob-порт гидратации вложений — из контекста хранения,
@@ -1213,6 +1220,9 @@ export async function createStandaloneDeps(
     // Предохранитель по объёму промпта саб-агента (не окно модели): при
     // превышении прогон завершается отчётом (`agents.subagentMaxInputTokens`).
     subagentMaxInputTokens: config.agentsConfig?.subagentMaxInputTokens,
+    // Лимит глубины вложенности саб-агентов (`agents.subagentDepth`): при
+    // превышении тул `task` отказывает до создания дочерней сессии.
+    subagentDepth: config.agentsConfig?.subagentDepth,
     // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
     // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
     // поэтому геттер отдаёт актуальный снимок в момент хода.

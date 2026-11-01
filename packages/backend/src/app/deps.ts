@@ -16,6 +16,7 @@ import {
   SYNTH_VERSION,
 } from '@itphx/synth-shared';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
+import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -1164,6 +1165,15 @@ export async function createBackendDeps(
     backgroundEnabled: config.synth.background.enabled,
     // Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`).
     subagentMaxInputTokens: config.synth.agents.subagentMaxInputTokens,
+    // Лимит глубины вложенности саб-агентов (`agents.subagentDepth`): при
+    // превышении тул `task` отказывает до создания дочерней сессии.
+    subagentDepth: config.synth.agents.subagentDepth,
+    // Общий предел вывода инструментов (`tools.outputMaxLines`/
+    // `tools.outputMaxBytes`) — усечение результата тула с пояснением.
+    toolOutputLimits: {
+      maxLines: config.synth.tools.outputMaxLines ?? DEFAULT_TOOL_OUTPUT_MAX_LINES,
+      maxBytes: config.synth.tools.outputMaxBytes ?? DEFAULT_TOOL_OUTPUT_MAX_BYTES,
+    },
   });
 
   // ADR-090 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх

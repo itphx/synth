@@ -234,6 +234,9 @@ program
       toolsPolicy: synth.tools.policy,
       mcpPolicy: synth.mcp?.policy,
       toolsDisabled: synth.tools.disabled,
+      // Общий предел вывода инструментов (`tools.outputMaxLines`/
+      // `tools.outputMaxBytes`).
+      toolsConfig: synth.tools,
       // ADR-075: политика для абсолютного workspace вне root (env > config > 'confirm').
       workspaceOutsideRootPolicy: resolveWorkspaceOutsideRootPolicy(synth) || 'confirm',
       mcpServers: synth.mcp?.servers ?? {},

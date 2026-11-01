@@ -989,14 +989,22 @@
   plan, todo, project, task, skill, profile_update, вложения `attach_workspace_file`/
   `save_attachment`/`send_attachment`, каталог `list_models`, метаданные SSH-ключей
   `ssh_keys_list`). Атомарная мультифайловая правка — `patch` (`patch.ts`):
-  JSON-массив `edits[]` (`file_path`/`old_string`/`new_string`/`replace_all`), 1..50
-  правок за вызов, **всё-или-ничего** — все правки проверяются и применяются в
-  памяти до записи, при любой ошибке ни один файл не меняется; запись атомарна
-  по файлу (tmp в том же каталоге → rename), при сбое посередине — best-effort
-  откат оригиналов; бинарный файл, не-обычный файл, превышение размера и
-  абсолютный путь вне периметра — отказ. Вложенные пути `edits[].file_path`
-  собирает `extractPaths` permission-слоя (file-паттерны, `external_directory`,
-  `protected_paths`). **Запись файлов — общие модули `engine/tools/`:** `line-endings.ts`
+  JSON-массив `edits[]`, 1..50 правок за вызов, **всё-или-ничего** — все правки
+  проверяются и применяются в памяти до записи, при любой ошибке ни один файл
+  не меняется; запись атомарна по файлу (tmp в том же каталоге → rename), при сбое
+  посередине — best-effort откат оригиналов; бинарный файл, не-обычный файл,
+  превышение размера и абсолютный путь вне периметра — отказ. **`op` в правке**
+  (`update` | `add` | `delete` | `rename`): `update` — `file_path`/`old_string`/
+  `new_string`/`replace_all` (прежний вызов без `op` — валидный `update`,
+  обратная совместимость), `add` — `file_path`/`content`, `delete` — `file_path`,
+  `rename` — `from`/`to` (цель в новом каталоге создаётся). Фазы чтения/расчёта/
+  записи и отката идут **под per-path локами** (`file-lock.ts`) — две параллельные
+  правки одного файла не теряют друг друга. Пути правки собирает `extractPaths`
+  permission-слоя (`file_path`, а у `rename` — `from` **и** `to`: file-паттерны,
+  `external_directory`, `protected_paths`); в `fs.changed` переименование отдаёт
+  оба пути. Итог — `fs.patch_summary` (`added`/`updated`/`deleted`/`renamed`) и
+  строки по файлу (`fs.patch_file_line`/`_added`/`_deleted`/`_renamed`).
+  **Запись файлов — общие модули `engine/tools/`:** `line-endings.ts`
   (`detectLineEndings`/`toLfView`/`fromLfView` — стиль файла `lf`/`crlf`/`mixed`;
   сопоставление правки идёт в LF-виде, `\r\n` сохраняются, mixed → отказ
   `fs.mixed_line_endings` без изменения файла), `atomic-file-write.ts`

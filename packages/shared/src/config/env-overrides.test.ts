@@ -47,6 +47,17 @@ describe('toSnakeCase / envOverrideName (ADR-023)', () => {
     expect(envOverrideName({ section: 'agents', key: 'subagentMaxInputTokens', type: 'number' })).toBe(
       'SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS',
     );
+    // agents: лимит глубины вложенности саб-агентов.
+    expect(envOverrideName({ section: 'agents', key: 'subagentDepth', type: 'number' })).toBe(
+      'SYNTH_AGENTS_SUBAGENT_DEPTH',
+    );
+    // tools: общий предел вывода инструментов.
+    expect(envOverrideName({ section: 'tools', key: 'outputMaxLines', type: 'number' })).toBe(
+      'SYNTH_TOOLS_OUTPUT_MAX_LINES',
+    );
+    expect(envOverrideName({ section: 'tools', key: 'outputMaxBytes', type: 'number' })).toBe(
+      'SYNTH_TOOLS_OUTPUT_MAX_BYTES',
+    );
   });
 
   it('реестр содержит уникальные env-имена', () => {
@@ -107,7 +118,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       analytics: { retentionDays: 400 },
       questions: { timeoutMs: 600_000, retentionDays: 14 },
       background: { enabled: true, maxSubagentsPerSession: 2, maxProcessesPerSession: 5, maxRunsPerSession: 10, logMaxBytes: 10_485_760 },
-      agents: { subagentMaxInputTokens: 150_000 },
+      agents: { subagentMaxInputTokens: 150_000, subagentDepth: 1 },
       attachments: {
         enabled: true,
         modalities: { image: true, pdf: true, audio: true, video: true },
@@ -119,6 +130,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
         gcDays: 30,
       },
       metrics: { enabled: false },
+      tools: { outputMaxLines: 2000, outputMaxBytes: 51_200 },
     };
   }
 
@@ -140,6 +152,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION: '3',
       SYNTH_BACKGROUND_LOG_MAX_BYTES: '2048',
       SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS: '90000',
+      SYNTH_AGENTS_SUBAGENT_DEPTH: '2',
       SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE: '10485760',
       SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE: '4',
       SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION: '104857600',
@@ -147,6 +160,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_ATTACHMENTS_ENABLED: '0',
       SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK: 'false',
       SYNTH_METRICS_ENABLED: 'true',
+      SYNTH_TOOLS_OUTPUT_MAX_LINES: '500',
+      SYNTH_TOOLS_OUTPUT_MAX_BYTES: '4096',
     });
 
     expect(cfg.events).toEqual({
@@ -169,8 +184,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.questions).toEqual({ timeoutMs: 0, retentionDays: 7 });
     // PROP-097: лимит фоновых процессов и предел размера лога.
     expect(cfg.background).toMatchObject({ maxProcessesPerSession: 3, logMaxBytes: 2048 });
-    // agents: предохранитель бюджета промпта саб-агента.
-    expect(cfg.agents).toEqual({ subagentMaxInputTokens: 90_000 });
+    // agents: предохранитель бюджета промпта саб-агента + лимит глубины вложенности.
+    expect(cfg.agents).toEqual({ subagentMaxInputTokens: 90_000, subagentDepth: 2 });
     // ADR-115: лимиты и мастер-выключатель вложений сообщений.
     expect(cfg.attachments).toEqual({
       enabled: false,
@@ -184,6 +199,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
     });
     // ADR-094: Helm ставит SYNTH_METRICS_ENABLED — имя env должно совпадать.
     expect(cfg.metrics).toEqual({ enabled: true });
+    // Общий предел вывода инструментов.
+    expect(cfg.tools).toEqual({ outputMaxLines: 500, outputMaxBytes: 4096 });
   });
 
   it('невалидное значение → warn + игнор, значение не меняется', () => {

@@ -13,23 +13,51 @@ import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import { detectLineEndings, fromLfView, toLfView } from './line-endings.js';
 import { writeFileAtomic } from './atomic-file-write.js';
 import { matchEdit, type EditMatchStrategy } from './edit-match.js';
+import { withFileLocks } from './file-lock.js';
 
-export function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
-  const oldLines = oldText.split('\n');
+/**
+ * Оформление unified diff'а.
+ *
+ * По умолчанию — как у обычного `git diff`: `--- a/<путь>` / `+++ b/<путь>`.
+ * Для нового файла старая сторона пуста — она помечается как `/dev/null`
+ * (образец opencode), а удалённых строк в hunке нет.
+ */
+export interface UnifiedDiffOptions {
+  /** Метка старой стороны (по умолчанию `a/<путь>`). */
+  oldLabel?: string;
+  /** Метка новой стороны (по умолчанию `b/<путь>`). */
+  newLabel?: string;
+  /**
+   * true — старая сторона пуста (новый файл): удалённых строк нет, а hunк
+   * начинается с `-0,0`.
+   */
+  emptyOld?: boolean;
+}
+
+export function generateUnifiedDiff(
+  oldText: string,
+  newText: string,
+  filePath: string,
+  options?: UnifiedDiffOptions,
+): string {
+  const oldLines = options?.emptyOld ? [] : oldText.split('\n');
   const newLines = newText.split('\n');
   const result: string[] = [];
 
-  result.push(`--- a/${filePath}`);
-  result.push(`+++ b/${filePath}`);
+  result.push(`--- ${options?.oldLabel ?? `a/${filePath}`}`);
+  result.push(`+++ ${options?.newLabel ?? `b/${filePath}`}`);
 
   const eq = longestCommonSubsequence(oldLines, newLines);
   let oi = 0; let ni = 0;
+  // Начало hunka по старой стороне: для пустой старой стороны это `0`
+  // (как в git), иначе — 1-based номер первой строки hunka.
+  const oldStart = (): number => (options?.emptyOld ? oi : oi + 1);
   for (let i = 0; i < eq.length; i++) {
     const entry = eq[i]!;
     const targetOld = entry[0];
     const targetNew = entry[1];
     if (oi < targetOld || ni < targetNew) {
-      result.push(`@@ -${oi + 1},${targetOld - oi} +${ni + 1},${targetNew - ni} @@`);
+      result.push(`@@ -${oldStart()},${targetOld - oi} +${ni + 1},${targetNew - ni} @@`);
       for (let j = oi; j < targetOld; j++) result.push(`-${oldLines[j]}`);
       for (let j = ni; j < targetNew; j++) result.push(`+${newLines[j]}`);
     }
@@ -38,7 +66,7 @@ export function generateUnifiedDiff(oldText: string, newText: string, filePath: 
     ni = targetNew + 1;
   }
   if (oi < oldLines.length || ni < newLines.length) {
-    result.push(`@@ -${oi + 1},${oldLines.length - oi} +${ni + 1},${newLines.length - ni} @@`);
+    result.push(`@@ -${oldStart()},${oldLines.length - oi} +${ni + 1},${newLines.length - ni} @@`);
     for (let j = oi; j < oldLines.length; j++) result.push(`-${oldLines[j]}`);
     for (let j = ni; j < newLines.length; j++) result.push(`+${newLines[j]}`);
   }
@@ -131,28 +159,34 @@ export const writeFileTool: ToolDefinition = {
 
     // Перезапись бинарного файла текстом — отказ (файл не читается как текст,
     // а «текст» в бинаре всё равно ломает его структуру).
-    const existing = await stat(resolvedPath).catch(() => null);
-    if (existing?.isFile() && (await sniffBinary(resolvedPath))) {
-      return fsErrorResult('fs.write_binary', { path: params.file_path }, { path: resolvedPath });
-    }
+    //
+    // Проверка бинаря и запись — одна критическая секция под локом пути:
+    // параллельная запись того же файла не должна пройти между проверкой и
+    // собственно записью (иначе один вызов перетирает другой).
+    return withFileLocks([resolvedPath], async (): Promise<ToolResult> => {
+      const existing = await stat(resolvedPath).catch(() => null);
+      if (existing?.isFile() && (await sniffBinary(resolvedPath))) {
+        return fsErrorResult('fs.write_binary', { path: params.file_path }, { path: resolvedPath });
+      }
 
-    const dir = dirname(resolvedPath);
-    await mkdir(dir, { recursive: true });
-    // Права существующего файла сохраняются (tmp → rename иначе создал бы
-    // файл с правами по умолчанию).
-    const mode = existing?.isFile() ? existing.mode & 0o777 : undefined;
-    await writeFileAtomic(resolvedPath, content, mode);
+      const dir = dirname(resolvedPath);
+      await mkdir(dir, { recursive: true });
+      // Права существующего файла сохраняются (tmp → rename иначе создал бы
+      // файл с правами по умолчанию).
+      const mode = existing?.isFile() ? existing.mode & 0o777 : undefined;
+      await writeFileAtomic(resolvedPath, content, mode);
 
-    const lines = content.split('\n');
-    return {
-      content: sm('fs.file_written', { path: params.file_path, lines: String(lines.length), bytes: String(content.length) }),
-      metadata: {
-        path: resolvedPath,
-        lines: lines.length,
-        bytes: content.length,
-        i18n: i18nMeta('fs.file_written', { path: params.file_path, lines: String(lines.length), bytes: String(content.length) }),
-      },
-    };
+      const lines = content.split('\n');
+      return {
+        content: sm('fs.file_written', { path: params.file_path, lines: String(lines.length), bytes: String(content.length) }),
+        metadata: {
+          path: resolvedPath,
+          lines: lines.length,
+          bytes: content.length,
+          i18n: i18nMeta('fs.file_written', { path: params.file_path, lines: String(lines.length), bytes: String(content.length) }),
+        },
+      };
+    });
   },
 };
 
@@ -207,97 +241,102 @@ export const editFileTool: ToolDefinition = {
       return fsErrorResult('fs.empty_old_string', {}, { path: resolvedPath });
     }
 
-    const info = await stat(resolvedPath).catch(() => null);
-    // Файла нет — graceful-отказ вместо исключения из `sniffBinary` (ENOENT).
-    if (!info) {
-      return fsErrorResult('fs.file_not_found', { path: params.file_path }, { path: resolvedPath });
-    }
-    if (info.size > MAX_TOOL_FILE_BYTES) {
-      return fsErrorResult(
-        'fs.file_too_large',
-        { limit: String(MAX_TOOL_FILE_BYTES) },
-        { path: resolvedPath, bytes: info.size, limit: MAX_TOOL_FILE_BYTES },
-      );
-    }
-    if (await sniffBinary(resolvedPath)) {
-      return fsErrorResult('fs.edit_binary', { path: params.file_path }, { path: resolvedPath });
-    }
-
-    const raw = await readFile(resolvedPath, 'utf-8');
-    const style = detectLineEndings(raw);
-    if (style === 'mixed') {
-      return fsErrorResult('fs.mixed_line_endings', {}, { path: resolvedPath });
-    }
-
-    // CRLF-файл правим в LF-виде (текст из `read_file` приходит с LF) и
-    // возвращаем CRLF — файл не теряет ни одного `\r\n`.
-    const crlf = style === 'crlf';
-    const content = crlf ? toLfView(raw) : raw;
-
-    const replaceAll = params.replace_all === true;
-    let newContent: string;
-    let count: number;
-    // Стратегия сопоставления — аддитивное поле метаданных (диагностика).
-    let strategy: EditMatchStrategy = 'exact';
-
-    if (replaceAll) {
-      // replace_all — прежнее поведение: только ТОЧНОЕ совпадение, все
-      // вхождения. «Умные» стратегии здесь не применяются (иначе «заменить
-      // все» непредсказуемо расширяло бы область правки).
-      const occurrences = content.split(oldView).length - 1;
-      if (occurrences === 0) {
-        return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
+    // Вся работа с файлом — под локом пути: `edit_file` это read-modify-write,
+    // и без сериализации два параллельных вызова одного файла перетирали бы
+    // друг друга (оба читали одну версию, оба писали свою).
+    return withFileLocks([resolvedPath], async (): Promise<ToolResult> => {
+      const info = await stat(resolvedPath).catch(() => null);
+      // Файла нет — graceful-отказ вместо исключения из `sniffBinary` (ENOENT).
+      if (!info) {
+        return fsErrorResult('fs.file_not_found', { path: params.file_path }, { path: resolvedPath });
       }
-      newContent = content.replaceAll(oldView, newView);
-      count = occurrences;
-    } else {
-      // «Умное» сопоставление: exact → normalized → loose (см. edit-match.ts).
-      // Применяется только при ОДНОЗНАЧНОМ совпадении: несколько совпадений —
-      // прежний отказ `fs.replace_multiple` с подсказкой добавить контекст.
-      const match = matchEdit(content, oldView);
-      if (!match) {
-        return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
+      if (info.size > MAX_TOOL_FILE_BYTES) {
+        return fsErrorResult(
+          'fs.file_too_large',
+          { limit: String(MAX_TOOL_FILE_BYTES) },
+          { path: resolvedPath, bytes: info.size, limit: MAX_TOOL_FILE_BYTES },
+        );
       }
-      if (match.matches.length > 1) {
-        return {
-          content: sm('fs.replace_multiple', { count: String(match.matches.length) }),
-          isError: true,
-          metadata: {
-            matchStrategy: match.strategy,
-            i18n: i18nMeta('fs.replace_multiple', { count: String(match.matches.length) }),
-          },
-        };
+      if (await sniffBinary(resolvedPath)) {
+        return fsErrorResult('fs.edit_binary', { path: params.file_path }, { path: resolvedPath });
       }
-      const found = match.matches[0]!;
-      // Замена применяется к ОРИГИНАЛЬНОМУ фрагменту (по найденным границам):
-      // остальной файл не меняется — в т.ч. типографские кавычки в других
-      // местах остаются как есть (нормализация нужна только для сравнения).
-      newContent = content.slice(0, found.start) + newView + content.slice(found.end);
-      count = 1;
-      strategy = match.strategy;
-    }
 
-    // Правка, не меняющая файл (возможно при loose: текст в файле отличается
-    // от old_string только trailing-пробелами, а new_string совпадает с ним).
-    if (newContent === content) {
-      return fsErrorResult('fs.no_changes', {}, { path: resolvedPath });
-    }
+      const raw = await readFile(resolvedPath, 'utf-8');
+      const style = detectLineEndings(raw);
+      if (style === 'mixed') {
+        return fsErrorResult('fs.mixed_line_endings', {}, { path: resolvedPath });
+      }
 
-    const written = crlf ? fromLfView(newContent) : newContent;
-    const mode = info.mode & 0o777;
-    await writeFileAtomic(resolvedPath, written, mode);
+      // CRLF-файл правим в LF-виде (текст из `read_file` приходит с LF) и
+      // возвращаем CRLF — файл не теряет ни одного `\r\n`.
+      const crlf = style === 'crlf';
+      const content = crlf ? toLfView(raw) : raw;
 
-    const diff = generateUnifiedDiff(content, newContent, params.file_path);
-    return {
-      content: sm('fs.file_edited', { path: params.file_path, count: String(count) }),
-      metadata: {
-        path: resolvedPath,
-        replacements: count,
-        diff,
-        matchStrategy: strategy,
-        i18n: i18nMeta('fs.file_edited', { path: params.file_path, count: String(count) }),
-      },
-    };
+      const replaceAll = params.replace_all === true;
+      let newContent: string;
+      let count: number;
+      // Стратегия сопоставления — аддитивное поле метаданных (диагностика).
+      let strategy: EditMatchStrategy = 'exact';
+
+      if (replaceAll) {
+        // replace_all — прежнее поведение: только ТОЧНОЕ совпадение, все
+        // вхождения. «Умные» стратегии здесь не применяются (иначе «заменить
+        // все» непредсказуемо расширяло бы область правки).
+        const occurrences = content.split(oldView).length - 1;
+        if (occurrences === 0) {
+          return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
+        }
+        newContent = content.replaceAll(oldView, newView);
+        count = occurrences;
+      } else {
+        // «Умное» сопоставление: exact → normalized → loose (см. edit-match.ts).
+        // Применяется только при ОДНОЗНАЧНОМ совпадении: несколько совпадений —
+        // прежний отказ `fs.replace_multiple` с подсказкой добавить контекст.
+        const match = matchEdit(content, oldView);
+        if (!match) {
+          return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
+        }
+        if (match.matches.length > 1) {
+          return {
+            content: sm('fs.replace_multiple', { count: String(match.matches.length) }),
+            isError: true,
+            metadata: {
+              matchStrategy: match.strategy,
+              i18n: i18nMeta('fs.replace_multiple', { count: String(match.matches.length) }),
+            },
+          };
+        }
+        const found = match.matches[0]!;
+        // Замена применяется к ОРИГИНАЛЬНОМУ фрагменту (по найденным границам):
+        // остальной файл не меняется — в т.ч. типографские кавычки в других
+        // местах остаются как есть (нормализация нужна только для сравнения).
+        newContent = content.slice(0, found.start) + newView + content.slice(found.end);
+        count = 1;
+        strategy = match.strategy;
+      }
+
+      // Правка, не меняющая файл (возможно при loose: текст в файле отличается
+      // от old_string только trailing-пробелами, а new_string совпадает с ним).
+      if (newContent === content) {
+        return fsErrorResult('fs.no_changes', {}, { path: resolvedPath });
+      }
+
+      const written = crlf ? fromLfView(newContent) : newContent;
+      const mode = info.mode & 0o777;
+      await writeFileAtomic(resolvedPath, written, mode);
+
+      const diff = generateUnifiedDiff(content, newContent, params.file_path);
+      return {
+        content: sm('fs.file_edited', { path: params.file_path, count: String(count) }),
+        metadata: {
+          path: resolvedPath,
+          replacements: count,
+          diff,
+          matchStrategy: strategy,
+          i18n: i18nMeta('fs.file_edited', { path: params.file_path, count: String(count) }),
+        },
+      };
+    });
   },
 };
 

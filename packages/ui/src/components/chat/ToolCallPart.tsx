@@ -4,6 +4,7 @@ import { Icon } from '../icon/Icon'
 import { getToolIcon, getToolDisplayName } from '@/lib/toolIcons'
 import { useI18n, useResolveI18n } from '@/lib/i18n'
 import { splitBySecretPlaceholders, SecretPlaceholder } from './SecretPlaceholder'
+import { DiffView } from './DiffView'
 
 interface ToolCallData {
   name: string
@@ -78,47 +79,6 @@ function formatDuration(started?: string, completed?: string): string {
 function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str
   return str.slice(0, maxLen) + '…'
-}
-
-interface DiffLine {
-  type: 'add' | 'remove' | 'context' | 'header'
-  text: string
-}
-
-function parseDiff(diffText: string): DiffLine[] {
-  const lines = diffText.split('\n')
-  return lines.map((line) => {
-    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
-      return { type: 'header' as const, text: line }
-    }
-    if (line.startsWith('+')) return { type: 'add' as const, text: line }
-    if (line.startsWith('-')) return { type: 'remove' as const, text: line }
-    return { type: 'context' as const, text: line }
-  })
-}
-
-function DiffView({ diff }: { diff: string }) {
-  const parsed = parseDiff(diff)
-  return (
-    <pre className="text-[0.6875rem] leading-relaxed overflow-x-auto font-mono m-0 p-0 bg-transparent">
-      {parsed.map((line, i) => (
-        <span
-          key={i}
-          className={
-            line.type === 'add'
-              ? 'diff-added block'
-              : line.type === 'remove'
-                ? 'diff-removed block'
-                : line.type === 'header'
-                  ? 'diff-header block'
-                  : 'block opacity-70'
-          }
-        >
-          {line.text || ' '}
-        </span>
-      ))}
-    </pre>
-  )
 }
 
 function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData['result']; toolCall: ToolCallData }) {

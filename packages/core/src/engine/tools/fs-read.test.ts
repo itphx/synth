@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { readFileTool, listDirectoryTool, globTool } from './fs-read.js';
-import type { ToolContext } from '@itphx/synth-shared';
+import {
+  attachmentsConfigSchema,
+  type AttachmentsConfig,
+  type ToolContext,
+} from '@itphx/synth-shared';
+import { AttachmentError, type AttachmentService } from '../attachments/service.js';
+import { sniffMime } from '../attachments/sniff-mime.js';
 
 describe('fs-read tools — path resolution', () => {
   let tmpDir: string;
@@ -393,5 +400,235 @@ describe('glob — hidden/limit/сортировка (через rg --files)', (
   it('описание не обещает сортировку по mtime', async () => {
     expect(globTool.description ?? '').not.toContain('modification time');
     expect(globTool.description ?? '').toContain('sorted by name');
+  });
+});
+
+/**
+ * ADR-115: `read_file` для изображений/PDF — приём файла как вложения
+ * текущего хода (по образцу opencode: бинарный файл-картинка отдаётся модели,
+ * а не отказом с подсказкой).
+ *
+ * Сервис вложений — объектный мок: проверяется поведение тула, а не
+ * `AttachmentService` (у него свой suite). MIME в моке считается тем же
+ * детектором по сигнатуре, что и в сервисе (`attachments/sniff-mime.ts`).
+ */
+describe('read_file — изображение/PDF как вложение текущего хода (ADR-115)', () => {
+  let tmpDir: string;
+  let uploads: Array<{ bytes: Buffer; name?: string }>;
+
+  /** PNG-сигнатура + хвост (файл бинарный — как текст не читается). */
+  const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02, 0x03]);
+  /** PDF с бинарным хвостом. */
+  const PDF_BYTES = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from([0x00, 0x01, 0x02])]);
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fsread-media-'));
+    uploads = [];
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Мок сервиса вложений: content-addressed путь и MIME по сигнатуре. */
+  function makeService(overrides: Record<string, unknown> = {}): AttachmentService {
+    return {
+      upload: vi.fn(async ({ bytes, name }: { bytes: Buffer; name?: string }) => {
+        uploads.push({ bytes, ...(name ? { name } : {}) });
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
+        const blobPath = `attachments/${sha256.slice(0, 2)}/${sha256}`;
+        return {
+          id: blobPath,
+          blobPath,
+          sha256,
+          mime: sniffMime(bytes) ?? 'application/octet-stream',
+          size: bytes.length,
+          ...(name ? { name } : {}),
+        };
+      }),
+      ...overrides,
+    } as unknown as AttachmentService;
+  }
+
+  /** Live-конфиг вложений (по умолчанию — дефолты схемы). */
+  function config(overrides: Partial<AttachmentsConfig> = {}): () => AttachmentsConfig {
+    return () => ({ ...attachmentsConfigSchema.parse({}), ...overrides });
+  }
+
+  function makeCtx(extra: Record<string, unknown> = {}): ToolContext {
+    return { sessionId: 's1', messageId: 'm1', workingDir: tmpDir, extra };
+  }
+
+  /** Ключ i18n отказа (машинный код проверки — без текста). */
+  function errorKey(result: { metadata?: Record<string, unknown> }): string | undefined {
+    return (result.metadata?.i18n as { key?: string } | undefined)?.key;
+  }
+
+  it('image/png (по сигнатуре) → вложение текущего хода + текстовый результат', async () => {
+    await writeFile(join(tmpDir, 'shot.png'), PNG_BYTES);
+    const service = makeService();
+
+    const out = await readFileTool.execute(
+      { file_path: 'shot.png' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config() }),
+    );
+
+    expect(out.isError).toBeFalsy();
+    expect(out.attachments).toHaveLength(1);
+    expect(out.attachments?.[0]).toMatchObject({ mime: 'image/png', size: PNG_BYTES.length });
+    expect(out.attachments?.[0]?.blobPath).toMatch(/^attachments\/[0-9a-f]{2}\/[0-9a-f]{64}$/);
+    expect(out.attachments?.[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    // Текст результата — краткая сводка (путь, mime, размер).
+    expect(out.content).toContain('shot.png');
+    expect(out.content).toContain('image/png');
+    expect(out.content).toContain(String(PNG_BYTES.length));
+    expect(out.metadata).toMatchObject({ type: 'media', mime: 'image/png', size: PNG_BYTES.length });
+    // Байты ушли в сервис вложений (единственная точка записи) — с именем файла.
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]?.name).toBe('shot.png');
+  });
+
+  it('application/pdf → вложение текущего хода', async () => {
+    await writeFile(join(tmpDir, 'doc.pdf'), PDF_BYTES);
+    const service = makeService();
+
+    const out = await readFileTool.execute(
+      { file_path: 'doc.pdf' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config() }),
+    );
+
+    expect(out.isError).toBeFalsy();
+    expect(out.attachments).toHaveLength(1);
+    expect(out.attachments?.[0]).toMatchObject({ mime: 'application/pdf', size: PDF_BYTES.length });
+    expect(out.content).toContain('application/pdf');
+    expect(out.metadata).toMatchObject({ type: 'media', mime: 'application/pdf' });
+  });
+
+  it('текстовый PDF (без бинарных байт) тоже принимается — важна сигнатура', async () => {
+    await writeFile(join(tmpDir, 'text.pdf'), '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n');
+    const service = makeService();
+
+    const out = await readFileTool.execute(
+      { file_path: 'text.pdf' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config() }),
+    );
+
+    expect(out.isError).toBeFalsy();
+    expect(out.attachments?.[0]).toMatchObject({ mime: 'application/pdf' });
+    expect(uploads).toHaveLength(1);
+  });
+
+  it('вложения выключены → прежняя ошибка с подсказкой (файл не загружен)', async () => {
+    await writeFile(join(tmpDir, 'shot.png'), PNG_BYTES);
+    const service = makeService();
+
+    const out = await readFileTool.execute(
+      { file_path: 'shot.png' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config({ enabled: false }) }),
+    );
+
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('binary file');
+    expect(out.content).toContain('attach_workspace_file');
+    expect(out.metadata?.type).toBe('binary');
+    expect(out.attachments).toBeUndefined();
+    expect(uploads).toHaveLength(0);
+  });
+
+  it('сервис вложений недоступен → прежняя ошибка (без падения)', async () => {
+    await writeFile(join(tmpDir, 'shot.png'), PNG_BYTES);
+
+    const out = await readFileTool.execute(
+      { file_path: 'shot.png' },
+      makeCtx({ attachmentsConfig: config() }),
+    );
+
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('binary file');
+    expect(out.attachments).toBeUndefined();
+    expect(uploads).toHaveLength(0);
+  });
+
+  it('неизвестный бинарь → прежнее поведение (ошибка, без вложения)', async () => {
+    await writeFile(join(tmpDir, 'blob.bin'), Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff, 0x00]));
+    const service = makeService();
+
+    const out = await readFileTool.execute(
+      { file_path: 'blob.bin' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config() }),
+    );
+
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('binary file');
+    expect(out.metadata?.type).toBe('binary');
+    expect(out.attachments).toBeUndefined();
+    expect(uploads).toHaveLength(0);
+  });
+
+  it('превышение лимита размера → понятная ошибка (файл не читается)', async () => {
+    await writeFile(join(tmpDir, 'shot.png'), PNG_BYTES);
+    const service = makeService();
+
+    const out = await readFileTool.execute(
+      { file_path: 'shot.png' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config({ maxBytesPerFile: 4 }) }),
+    );
+
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain(String(PNG_BYTES.length));
+    expect(out.content).toContain('4');
+    expect(errorKey(out)).toBe('attach.tool.too_large');
+    expect(out.attachments).toBeUndefined();
+    expect(uploads).toHaveLength(0);
+  });
+
+  it('запрещённый MIME сервисом → понятная ошибка (без падения)', async () => {
+    await writeFile(join(tmpDir, 'shot.png'), PNG_BYTES);
+    const service = makeService({
+      upload: vi.fn(async () => {
+        throw new AttachmentError('unsupported_mime', 'Type image/png is not allowed');
+      }),
+    });
+
+    const out = await readFileTool.execute(
+      { file_path: 'shot.png' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config() }),
+    );
+
+    expect(out.isError).toBe(true);
+    expect(errorKey(out)).toBe('attach.tool.unsupported_mime');
+    expect(out.content).toContain('not allowed');
+    expect(out.attachments).toBeUndefined();
+  });
+
+  it('SVG остаётся текстом (его запрещает сервис вложений)', async () => {
+    await writeFile(join(tmpDir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>');
+    const service = makeService();
+
+    const out = await readFileTool.execute(
+      { file_path: 'icon.svg' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config() }),
+    );
+
+    expect(out.isError).toBeFalsy();
+    expect(out.content).toContain('<svg');
+    expect(out.attachments).toBeUndefined();
+    expect(uploads).toHaveLength(0);
+  });
+
+  it('текстовый файл — прежнее поведение (текст, без вложения)', async () => {
+    await writeFile(join(tmpDir, 'a.txt'), 'hello\n');
+    const service = makeService();
+
+    const out = await readFileTool.execute(
+      { file_path: 'a.txt' },
+      makeCtx({ attachmentService: service, attachmentsConfig: config() }),
+    );
+
+    expect(out.isError).toBeFalsy();
+    expect(out.content).toContain('hello');
+    expect(out.metadata?.type).toBe('file');
+    expect(out.attachments).toBeUndefined();
+    expect(uploads).toHaveLength(0);
   });
 });

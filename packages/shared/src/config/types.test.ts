@@ -104,6 +104,27 @@ describe('toolsConfigSchema (ADR-071 §2.3)', () => {
   it('отклоняет неизвестную политику', () => {
     expect(toolsConfigSchema.safeParse({ policy: 'all' }).success).toBe(false);
   });
+
+  it('дефолты общего предела вывода: 2000 строк / 51200 байт', () => {
+    const parsed = toolsConfigSchema.parse({});
+    expect(parsed.outputMaxLines).toBe(2000);
+    expect(parsed.outputMaxBytes).toBe(51_200);
+  });
+
+  it('принимает заданные пределы вывода', () => {
+    const parsed = toolsConfigSchema.parse({ outputMaxLines: 10, outputMaxBytes: 100 });
+    expect(parsed.outputMaxLines).toBe(10);
+    expect(parsed.outputMaxBytes).toBe(100);
+  });
+
+  it('отклоняет неположительные и нецелые пределы вывода', () => {
+    expect(toolsConfigSchema.safeParse({ outputMaxLines: 0 }).success).toBe(false);
+    expect(toolsConfigSchema.safeParse({ outputMaxLines: -1 }).success).toBe(false);
+    expect(toolsConfigSchema.safeParse({ outputMaxLines: 1.5 }).success).toBe(false);
+    expect(toolsConfigSchema.safeParse({ outputMaxBytes: 0 }).success).toBe(false);
+    expect(toolsConfigSchema.safeParse({ outputMaxBytes: -1 }).success).toBe(false);
+    expect(toolsConfigSchema.safeParse({ outputMaxBytes: 1.5 }).success).toBe(false);
+  });
 });
 
 describe('skillsConfigSchema (ADR-046)', () => {
@@ -355,20 +376,32 @@ describe('backgroundConfigSchema (PROP-096/PROP-097)', () => {
 });
 
 /**
- * Секция `agents` — предохранитель по объёму промпта саб-агента.
+ * Секция `agents` — предохранитель по объёму промпта саб-агента и лимит
+ * глубины вложенности.
  */
 describe('agentsConfigSchema', () => {
-  it('дефолт: 150k входных токенов', () => {
-    expect(agentsConfigSchema.parse({})).toEqual({ subagentMaxInputTokens: 150_000 });
+  it('дефолт: 150k входных токенов, глубина вложенности 1', () => {
+    expect(agentsConfigSchema.parse({})).toEqual({
+      subagentMaxInputTokens: 150_000,
+      subagentDepth: 1,
+    });
   });
 
   it('0 — ограничение выключено (валидное значение)', () => {
     expect(agentsConfigSchema.parse({ subagentMaxInputTokens: 0 }).subagentMaxInputTokens).toBe(0);
+    expect(agentsConfigSchema.parse({ subagentDepth: 0 }).subagentDepth).toBe(0);
   });
 
   it('дробное/отрицательное значение отклоняется', () => {
     expect(agentsConfigSchema.safeParse({ subagentMaxInputTokens: -1 }).success).toBe(false);
     expect(agentsConfigSchema.safeParse({ subagentMaxInputTokens: 1.5 }).success).toBe(false);
+    expect(agentsConfigSchema.safeParse({ subagentDepth: -1 }).success).toBe(false);
+    expect(agentsConfigSchema.safeParse({ subagentDepth: 1.5 }).success).toBe(false);
+  });
+
+  it('лимит глубины: целые значения принимаются (2 — вложенность на два уровня)', () => {
+    expect(agentsConfigSchema.parse({ subagentDepth: 2 }).subagentDepth).toBe(2);
+    expect(agentsConfigSchema.parse({ subagentDepth: 5 }).subagentDepth).toBe(5);
   });
 });
 

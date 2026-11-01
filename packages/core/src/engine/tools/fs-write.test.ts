@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile, access, stat, chmod, lstat, sy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileTool, createDirectoryTool, deleteFileTool, editFileTool } from './fs-write.js';
+import { fileLockRegistrySize } from './file-lock.js';
 import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import type { ToolContext } from '@itphx/synth-shared';
 
@@ -611,5 +612,88 @@ describe('fs-write tools — «умное» сопоставление old_strin
     expect(result.isError).toBe(true);
     expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.no_changes');
     await expect(readFile(file, 'utf-8')).resolves.toBe('value;\n');
+  });
+});
+
+/**
+ * Сериализация правок одного файла: параллельные вызовы не перетирают друг
+ * друга (read-modify-write под локом пути).
+ */
+describe('fs-write tools — сериализация правок по пути', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fslock-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      ...overrides,
+    };
+  }
+
+  it('два параллельных edit_file одного файла — обе правки применены', async () => {
+    const file = join(tmpDir, 'concurrent.txt');
+    await writeFile(file, 'alpha\nbeta\ngamma\n', 'utf-8');
+
+    const [first, second] = await Promise.all([
+      editFileTool.execute(
+        { file_path: 'concurrent.txt', old_string: 'alpha', new_string: 'ALPHA' },
+        makeCtx({ messageId: 'm1' }),
+      ),
+      editFileTool.execute(
+        { file_path: 'concurrent.txt', old_string: 'gamma', new_string: 'GAMMA' },
+        makeCtx({ messageId: 'm2' }),
+      ),
+    ]);
+
+    expect(first.isError).toBeFalsy();
+    expect(second.isError).toBeFalsy();
+    // Второй вызов ждал первый и читал уже обновлённый файл: итог содержит
+    // обе правки (без лока одна из них терялась — «последний выигравший»).
+    await expect(readFile(file, 'utf-8')).resolves.toBe('ALPHA\nbeta\nGAMMA\n');
+    // Реестр локов не остался с записями.
+    expect(fileLockRegistrySize()).toBe(0);
+  });
+
+  it('параллельные write_file и edit_file одного файла — итог целый, без смеси', async () => {
+    const file = join(tmpDir, 'mixed.txt');
+    await writeFile(file, 'keep\n', 'utf-8');
+
+    const [written, edited] = await Promise.all([
+      writeFileTool.execute({ file_path: 'mixed.txt', content: 'written\n' }, makeCtx({ messageId: 'm1' })),
+      editFileTool.execute({ file_path: 'mixed.txt', old_string: 'keep', new_string: 'edited' }, makeCtx({ messageId: 'm2' })),
+    ]);
+
+    expect(written.isError).toBeFalsy();
+    // Правка может не найти свой фрагмент (файл уже перезаписан) — это
+    // штатный отказ, а не порча.
+    const final = await readFile(file, 'utf-8');
+    expect(['written\n', 'edited\n']).toContain(final);
+    if (edited.isError) {
+      expect((edited.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.replace_not_found');
+    }
+    expect(fileLockRegistrySize()).toBe(0);
+  });
+
+  it('write_file: два параллельных вызова одного файла — файл целый', async () => {
+    const file = join(tmpDir, 'two-writes.txt');
+    await writeFile(file, 'start\n', 'utf-8');
+
+    await Promise.all([
+      writeFileTool.execute({ file_path: 'two-writes.txt', content: 'first\n' }, makeCtx({ messageId: 'm1' })),
+      writeFileTool.execute({ file_path: 'two-writes.txt', content: 'second\n' }, makeCtx({ messageId: 'm2' })),
+    ]);
+
+    const final = await readFile(file, 'utf-8');
+    expect(['first\n', 'second\n']).toContain(final);
+    expect(fileLockRegistrySize()).toBe(0);
   });
 });

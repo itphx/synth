@@ -65,16 +65,36 @@ describe('todo tools', () => {
   ];
 
   describe('todo_write', () => {
-    it('сохраняет список, генерирует id и возвращает JSON', async () => {
+    it('сохраняет список, генерирует id и возвращает компактный вывод', async () => {
       const result = await todoWriteTool.execute({ todos }, makeCtx());
       expect(result.isError).toBeUndefined();
-      const parsed = JSON.parse(result.content) as Array<{ id?: string }>;
-      expect(parsed.map(stripId)).toEqual(todos.map(stripId));
-      expect(parsed.every((t) => typeof t.id === 'string' && t.id.length > 0)).toBe(true);
 
       const session = (await sessionManager.getSession(sessionId))!;
       expect(session.todos!.map(stripId)).toEqual(todos.map(stripId));
       expect(session.todos!.every((t) => t.id.length > 0)).toBe(true);
+
+      // Компактный вывод: сводка + строка на пункт (без JSON)
+      expect(result.content).toContain('Todo list: 0/2 completed, 1 in progress.');
+      expect(result.content).toContain('- [ ] ');
+      expect(result.content).toContain('Найти первопричину');
+      expect(result.content).toContain('in progress');
+      // id пункта обязателен — по нему модель зовёт todo_update
+      for (const t of session.todos!) {
+        expect(result.content).toContain(t.id);
+      }
+      expect(result.content).not.toContain('{');
+      expect(result.content).not.toContain('}');
+      expect(result.content).not.toContain('"');
+    });
+
+    it('помечает выполненный пункт как [x]', async () => {
+      await todoWriteTool.execute(
+        { todos: [{ content: 'Готово', status: 'completed', priority: 'medium' }] },
+        makeCtx(),
+      );
+      const result = await todoListTool.execute({}, makeCtx());
+      expect(result.content).toContain('- [x] ');
+      expect(result.content).toContain('Todo list: 1/1 completed, 0 in progress.');
     });
 
     it('сохраняет переданные id как есть', async () => {
@@ -138,12 +158,18 @@ describe('todo tools', () => {
     it('добавляет один пункт с дефолтными status/priority', async () => {
       const result = await todoAddTool.execute({ todos: { content: 'Новая задача' } }, makeCtx());
       expect(result.isError).toBeUndefined();
-      const parsed = JSON.parse(result.content) as TodoInput[];
-      expect(parsed).toHaveLength(1);
-      expect(parsed[0]!.content).toBe('Новая задача');
-      expect(parsed[0]!.status).toBe('pending');
-      expect(parsed[0]!.priority).toBe('medium');
-      expect(parsed[0]!.id).toBeTruthy();
+      const session = (await sessionManager.getSession(sessionId))!;
+      expect(session.todos).toHaveLength(1);
+      expect(session.todos![0]!.content).toBe('Новая задача');
+      expect(session.todos![0]!.status).toBe('pending');
+      expect(session.todos![0]!.priority).toBe('medium');
+      expect(session.todos![0]!.id).toBeTruthy();
+
+      // Компактный вывод: id добавленного пункта + сводка (без JSON)
+      expect(result.content).toContain('Todo items added:');
+      expect(result.content).toContain(session.todos![0]!.id);
+      expect(result.content).toContain('Todo list: 0/1 completed, 0 in progress.');
+      expect(result.content).not.toContain('"');
     });
 
     it('добавляет несколько пунктов к существующим', async () => {
@@ -184,6 +210,10 @@ describe('todo tools', () => {
       expect(result.content).toContain('Найти первопричину');
       expect(result.content).toContain('in progress');
       expect(result.content).toContain('high');
+      // Компактный вывод: без JSON-скобок и кавычек
+      expect(result.content).not.toContain('{');
+      expect(result.content).not.toContain('}');
+      expect(result.content).not.toContain('"');
     });
 
     it('пустой список', async () => {
@@ -209,6 +239,11 @@ describe('todo tools', () => {
       expect(after.todos![0]!.id).toBe(targetId);
       expect(after.todos![0]!.status).toBe('completed');
       expect(after.todos![0]!.content).toBe('Обновлено');
+
+      // Короткая строка о результате + сводка (полного списка/JSON нет)
+      expect(result.content).toContain(`Todo item ${targetId} updated.`);
+      expect(result.content).toContain('Todo list: 1/2 completed, 0 in progress.');
+      expect(result.content).not.toContain('"');
     });
 
     it('несуществующий id — ошибка', async () => {
@@ -230,6 +265,11 @@ describe('todo tools', () => {
       const after = (await sessionManager.getSession(sessionId))!;
       expect(after.todos).toHaveLength(1);
       expect(after.todos![0]!.content).toBe('Написать тест');
+
+      // Короткая строка о результате + сводка (полного списка/JSON нет)
+      expect(result.content).toContain('Todo items deleted: 1.');
+      expect(result.content).toContain('Todo list: 0/1 completed, 0 in progress.');
+      expect(result.content).not.toContain('"');
     });
 
     it('удаляет по массиву ids', async () => {
@@ -246,6 +286,30 @@ describe('todo tools', () => {
     it('несуществующий id — ошибка', async () => {
       const result = await todoDeleteTool.execute({ ids: 'missing' }, makeCtx());
       expect(result.isError).toBe(true);
+    });
+  });
+
+  describe('компактный вывод', () => {
+    it('усекает список длиннее 30 пунктов', async () => {
+      const many: TodoInput[] = Array.from({ length: 35 }, (_, i) => ({
+        content: `Задача ${i + 1}`,
+        status: 'pending',
+        priority: 'medium',
+      }));
+
+      const result = await todoWriteTool.execute({ todos: many }, makeCtx());
+      expect(result.isError).toBeUndefined();
+      // Сводка считает по всему списку, строки — только первые 30
+      expect(result.content).toContain('Todo list: 0/35 completed, 0 in progress.');
+      expect(result.content).toContain('Задача 30');
+      expect(result.content).not.toContain('Задача 31');
+      expect(result.content).toContain('... and 5 more');
+    });
+
+    it('в пустой список пишет существующий текст «список пуст»', async () => {
+      const result = await todoWriteTool.execute({ todos: [] }, makeCtx());
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toContain('Todo list is empty');
     });
   });
 });

@@ -349,6 +349,16 @@ export const mcpConfigSchema = z.object({
 export const toolsDisabledConfigSchema = createToolsDisabledSchema(false);
 
 /**
+ * Дефолт общего предела вывода инструментов (строк) — `tools.outputMaxLines`.
+ */
+export const DEFAULT_TOOL_OUTPUT_MAX_LINES = 2000;
+
+/**
+ * Дефолт общего предела вывода инструментов (байт) — `tools.outputMaxBytes`.
+ */
+export const DEFAULT_TOOL_OUTPUT_MAX_BYTES = 51_200;
+
+/**
  * ADR-071 §2.3: глобальная админская политика включения **встроенных**
  * инструментов (MCP — отдельная `mcp.policy`). Per-session override —
  * `SessionSettings.toolsPolicy`.
@@ -357,6 +367,16 @@ export const toolsConfigSchema = z.object({
   policy: z.enum(TOOLS_POLICIES).default('auto'),
   /** ADR-071 §2.6: instance-wide отключение инструментов (admin). */
   disabled: toolsDisabledConfigSchema.prefault({}),
+  /**
+   * Общий предел вывода инструментов (строк): результат длиннее лимита
+   * усекается с пометкой, сколько строк показано из скольких.
+   */
+  outputMaxLines: z.number().int().min(1).default(DEFAULT_TOOL_OUTPUT_MAX_LINES),
+  /**
+   * Общий предел вывода инструментов (байт): применяется вместе с лимитом
+   * строк, срабатывает более жёсткий из двух.
+   */
+  outputMaxBytes: z.number().int().min(1).default(DEFAULT_TOOL_OUTPUT_MAX_BYTES),
 });
 
 // --- Скиллы (ADR-046) ---
@@ -693,15 +713,29 @@ export const backgroundConfigSchema = z.object({
 export const DEFAULT_SUBAGENT_MAX_INPUT_TOKENS = 150_000;
 
 /**
+ * Дефолт лимита глубины вложенности саб-агентов (`agents.subagentDepth`): 1.
+ *
+ * Глубина считается по цепочке `parentId` сессий: корневая сессия — 0,
+ * её дочерняя — 1, следующая — 2. При лимите 1 саб-агент может запустить
+ * саб-агента, но не может запустить саб-агента внутри саб-агента.
+ */
+export const DEFAULT_SUBAGENT_DEPTH = 1;
+
+/**
  * Секция `agents` — ограничения прогонов агентов.
  *
  * - `subagentMaxInputTokens` — предохранитель по объёму промпта саб-агента
  *   (**не** окно модели): оценка промпта проверяется перед каждым LLM-вызовом,
  *   и при превышении прогон завершается детерминированным отчётом (работа
  *   частично сделана), а не уходит в ошибку провайдера. `0` — без ограничения.
+ * - `subagentDepth` — лимит глубины вложенности саб-агентов: глубина
+ *   считается по цепочке `parentId` сессий (текущая — 0, родитель — 1, …).
+ *   При превышении тул `task` отказывает **до** создания дочерней сессии.
+ *   `0` — без ограничения.
  */
 export const agentsConfigSchema = z.object({
   subagentMaxInputTokens: z.number().int().min(0).default(DEFAULT_SUBAGENT_MAX_INPUT_TOKENS),
+  subagentDepth: z.number().int().min(0).default(DEFAULT_SUBAGENT_DEPTH),
 });
 
 // --- Authority-слой (ADR-106) ---

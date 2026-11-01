@@ -8,9 +8,11 @@
 
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
 import { stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
+import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { errorText } from './error-text.js';
+import { boundToolOutput, type ToolOutputLimits } from './output-bound.js';
 
 /** Структурный источник локализованных security-сообщений (ContextConfig). */
 export interface SecurityMessageSource {
@@ -113,6 +115,57 @@ export function narrowToolContext(
 }
 
 /**
+ * Пределы вывода тула из контекста вызова (`ctx.extra.toolOutputLimits` —
+ * конфиг инстанса `tools.outputMaxLines`/`tools.outputMaxBytes`).
+ *
+ * Не заданы/некорректны — дефолты секции `tools` (2000 строк / 51200 байт).
+ */
+function resolveOutputLimits(context: ToolContext): ToolOutputLimits {
+  const extra = context.extra?.toolOutputLimits as Partial<ToolOutputLimits> | undefined;
+  const maxLines = extra?.maxLines;
+  const maxBytes = extra?.maxBytes;
+  return {
+    maxLines:
+      typeof maxLines === 'number' && Number.isFinite(maxLines) && maxLines > 0
+        ? Math.floor(maxLines)
+        : DEFAULT_TOOL_OUTPUT_MAX_LINES,
+    maxBytes:
+      typeof maxBytes === 'number' && Number.isFinite(maxBytes) && maxBytes > 0
+        ? Math.floor(maxBytes)
+        : DEFAULT_TOOL_OUTPUT_MAX_BYTES,
+  };
+}
+
+/**
+ * Общий предел вывода тула: результат длиннее лимита усекается, в конец
+ * добавляется пояснение (`tool.output_bounded`), а в metadata — признак
+ * усечения и счётчики (`truncated`/`outputBounded`).
+ *
+ * Не трогаем:
+ * - результаты с ошибкой (`isError`) — текст ошибки несёт диагностику, а не вывод;
+ * - результаты, у которых тул **сам** усек вывод (`metadata.truncated === true`) —
+ *   там уже стоит собственный маркер усечения.
+ */
+function applyOutputLimit(result: ToolResult, context: ToolContext): ToolResult {
+  if (result.isError) return result;
+  if (result.metadata?.truncated === true) return result;
+  if (typeof result.content !== 'string') return result;
+
+  const bounded = boundToolOutput(result.content, resolveOutputLimits(context));
+  if (!bounded.truncated) return result;
+
+  return {
+    ...result,
+    content: bounded.content,
+    metadata: {
+      ...(result.metadata ?? {}),
+      truncated: true,
+      outputBounded: { shownLines: bounded.shownLines, totalLines: bounded.totalLines },
+    },
+  };
+}
+
+/**
  * Единое исполнение тула: `safeParse` → `execute` → `catch`.
  * Ошибки валидации/исполнения оформляются как `isError`-результаты с i18n-ключом
  * (как в оркестраторе). Не бросает.
@@ -137,11 +190,13 @@ export async function executeToolDef(
     const result = await toolDef.execute(parsed.data, narrowToolContext(toolDef, context));
     // Единая точка санитизации вывода тулов (web_fetch/shell/read_file/…):
     // U+0000 из внешнего мира не должен попадать в историю/`jsonb`.
-    return {
+    const sanitized: ToolResult = {
       ...result,
       content: typeof result.content === 'string' ? stripNullBytes(result.content) : result.content,
       ...(result.metadata ? { metadata: stripNullBytesDeep(result.metadata) } : {}),
     };
+    // Общий предел вывода (`tools.outputMaxLines`/`tools.outputMaxBytes`).
+    return applyOutputLimit(sanitized, context);
   } catch (execError) {
     // git-слой и MCP бросают plain-объекты `{ error, code }`: `String()` дал бы
     // `[object Object]` (см. `error-text.ts`).

@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SynthConfig, InstructionsConfig } from '@itphx/synth-shared';
 import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveExecutionConfig, readTlsRuntimeSettings } from '@itphx/synth-shared';
+import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 import {
   SessionManager, EventBus,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -244,6 +245,12 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     ...(options.config.git?.networkTimeoutMs !== undefined
       ? { gitNetworkTimeoutMs: options.config.git.networkTimeoutMs }
       : {}),
+    // Общий предел вывода инструментов (`tools.outputMaxLines`/
+    // `tools.outputMaxBytes`) — усечение результата тула с пояснением.
+    toolOutputLimits: {
+      maxLines: options.config.tools?.outputMaxLines ?? DEFAULT_TOOL_OUTPUT_MAX_LINES,
+      maxBytes: options.config.tools?.outputMaxBytes ?? DEFAULT_TOOL_OUTPUT_MAX_BYTES,
+    },
     permissionConfig: options.config.permission,
     defaultPlanMode: options.config.session?.planMode,
     securityConfig: effectiveSecurityConfig,

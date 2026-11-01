@@ -220,6 +220,36 @@ describe('ChatOrchestrator × permissions (ADR-029) — smoke', () => {
     for (const unsub of unsubs) unsub();
   });
 
+  it('ask — в permission.asked есть превью изменений (дифф по файлу)', async () => {
+    let asked: Record<string, unknown> | undefined;
+    const unsubs: Array<() => void> = [];
+    await runSession({ rules: { write_file: 'ask' }, askTimeoutMs: 2000 }, {
+      onSession: (id) => {
+        unsubs.push(eventBus.subscribe(id, (e) => {
+          if (e.type === 'permission.asked') {
+            asked = e.data as Record<string, unknown>;
+            eventBus.publish(id, 'permission.replied', {
+              approval_id: (e.data as Record<string, unknown>).approval_id as string,
+              approved: true,
+            });
+          }
+        }));
+      },
+    });
+
+    expect(asked).toBeDefined();
+    const preview = asked!.preview as
+      | { files: Array<{ path: string; diff: string; additions: number; deletions: number }> }
+      | undefined;
+    expect(preview).toBeDefined();
+    expect(preview!.files).toHaveLength(1);
+    expect(preview!.files[0]!.path).toBe('smoke.txt');
+    expect(preview!.files[0]!.diff).toContain('+++ b/smoke.txt');
+    expect(preview!.files[0]!.additions).toBeGreaterThan(0);
+    expect(preview!.files[0]!.deletions).toBe(0);
+    for (const unsub of unsubs) unsub();
+  });
+
   it('ask — подписчик отклоняет, тул блокируется', async () => {
     const unsubs: Array<() => void> = [];
     const r = await runSession({ rules: { write_file: 'ask' }, askTimeoutMs: 2000 }, {

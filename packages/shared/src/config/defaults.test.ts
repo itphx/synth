@@ -62,8 +62,8 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('agents по умолчанию: предохранитель бюджета саб-агента 150k токенов', () => {
-    expect(defaultConfig.agents).toEqual({ subagentMaxInputTokens: 150_000 });
+  it('agents по умолчанию: предохранитель бюджета саб-агента 150k токенов, глубина вложенности 1', () => {
+    expect(defaultConfig.agents).toEqual({ subagentMaxInputTokens: 150_000, subagentDepth: 1 });
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {
@@ -85,6 +85,11 @@ describe('defaultConfig', () => {
 
   it('tools.disabled по умолчанию пусто (ADR-071 §2.6)', () => {
     expect(defaultConfig.tools.disabled).toEqual({ capabilities: [], tools: [] });
+  });
+
+  it('tools: общий предел вывода по умолчанию 2000 строк / 51200 байт', () => {
+    expect(defaultConfig.tools.outputMaxLines).toBe(2000);
+    expect(defaultConfig.tools.outputMaxBytes).toBe(51_200);
   });
 
   it('skills по умолчанию пусты (paths/urls), inlineShell выключен (ADR-046)', () => {

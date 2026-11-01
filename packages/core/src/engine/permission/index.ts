@@ -7,5 +7,7 @@ export { setStorageDegradedState, isStorageDegraded, getStorageDegradedState } f
 export type { StorageAvailabilityState } from './storage-state.js';
 export { PermissionApprovalManager, computePermissionDigest, parsePermissionPrincipal } from './approval.js';
 export type { ApprovalRequest, ApprovalDecision } from './approval.js';
+export { buildPermissionPreview } from './preview.js';
+export type { PermissionPreviewInput } from './preview.js';
 export { deriveSubagentPermission, emptyPermissionConfig, DEFAULT_ASK_TIMEOUT_MS } from './derive.js';
 export { PERMISSION_GROUPS, PERMISSION_GROUP_ORDER, TOOL_PATH_PARAMS, getToolGroups, isFileTool, extractPathParams } from './groups.js';

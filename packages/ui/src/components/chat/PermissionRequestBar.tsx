@@ -5,10 +5,18 @@ import { getToolIcon, getToolDisplayName } from '@/lib/toolIcons'
 import { usePermissionStore } from '@/stores/permissionStore'
 import { useTransportStore } from '@/stores/transportStore'
 import { useNotification } from '@/hooks/useNotification'
+import { DiffView } from './DiffView'
 
 interface PermissionRequestBarProps {
   sessionId: string
 }
+
+/**
+ * Предел строк диффа на файл в превью: остаток показывается счётчиком
+ * («ещё N»), а не полным диффом — иначе полоса подтверждения разрасталась
+ * на сотни строк.
+ */
+const MAX_PREVIEW_LINES = 40
 
 /**
  * Ask-полоса подтверждений над полем ввода (ADR-029).
@@ -21,6 +29,8 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   const requests = usePermissionStore((s) => s.requestsBySession[sessionId])
   const [expanded, setExpanded] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  // Свернутые файлы превью (по ключу `индекс:путь`).
+  const [collapsedPreview, setCollapsedPreview] = useState<Record<string, boolean>>({})
   const currentApprovalId = requests?.[0]?.approvalId
 
   // При переходе к следующему запросу (ответ/таймаут) — снова сворачиваем
@@ -28,6 +38,7 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   useEffect(() => {
     setExpanded(false)
     setNow(Date.now())
+    setCollapsedPreview({})
   }, [currentApprovalId])
 
   // Тик обратного отсчёта каждую секунду. После «Остановить таймер» (held) или
@@ -46,6 +57,8 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   const waitingCount = requests.length - 1
   const toolDisplayName = getToolDisplayName(current.toolName)
   const hasDetails = !!current.reason || Object.keys(current.params).length > 0
+  // Превью изменений: дифф по файлам, которые тул собирается изменить.
+  const previewFiles = current.preview?.files ?? []
 
   const handleAction = async (approved: boolean, once?: boolean) => {
     const sent = await useTransportStore
@@ -175,6 +188,47 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           </button>
         </div>
       </div>
+
+      {previewFiles.length > 0 && (
+        <div className="px-3 pb-2 pt-1 space-y-1 border-t border-primary/15" data-testid="permission-preview">
+          {previewFiles.map((file, index) => {
+            const key = `${index}:${file.path}`
+            const collapsed = collapsedPreview[key] === true
+            const lines = file.diff.split('\n')
+            const shown = lines.length > MAX_PREVIEW_LINES ? lines.slice(0, MAX_PREVIEW_LINES) : lines
+            const hidden = lines.length - shown.length
+            return (
+              <div key={key}>
+                <button
+                  onClick={() => setCollapsedPreview((prev) => ({ ...prev, [key]: !collapsed }))}
+                  aria-expanded={!collapsed}
+                  className="flex items-center gap-1.5 w-full min-w-0 text-[0.6875rem] text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Icon
+                    name={collapsed ? 'arrow-right-s' : 'arrow-down-s'}
+                    className="size-3 shrink-0"
+                  />
+                  <span className="font-mono truncate">{file.path}</span>
+                  <span className="ml-auto flex shrink-0 items-center gap-1 tabular-nums text-[0.625rem]">
+                    <span className="diff-added px-1 rounded-sm">+{file.additions}</span>
+                    <span className="diff-removed px-1 rounded-sm">−{file.deletions}</span>
+                  </span>
+                </button>
+                {!collapsed && (
+                  <div className="pl-4 mt-0.5">
+                    <DiffView diff={shown.join('\n')} />
+                    {hidden > 0 && (
+                      <div className="text-[0.625rem] text-muted-foreground mt-0.5">
+                        … {t('common.showMore', { count: String(hidden) })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {expanded && hasDetails && (
         <div className="px-3 pb-2 space-y-1.5 border-t border-primary/15">

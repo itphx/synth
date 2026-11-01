@@ -17,6 +17,15 @@ export interface TodoToolExtra {
 const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
 const TODO_PRIORITIES = ['high', 'medium', 'low'] as const;
 
+/** Приоритет по умолчанию (todo_add) — в компактном выводе не печатается. */
+const DEFAULT_TODO_PRIORITY: TodoPriority = 'medium';
+
+/**
+ * Предел числа пунктов в компактном выводе списка: дальше — только хвост
+ * «... and N more» (защита от разрастания ответа на длинных списках).
+ */
+const TODO_MAX_OUTPUT_ITEMS = 30;
+
 const STATUS_LABELS: Record<TodoStatus, string> = {
   pending: sm('todo.status_pending'),
   in_progress: sm('todo.status_in_progress'),
@@ -56,7 +65,7 @@ const todoAddItemSchema = z.object({
   id: z.string().optional().describe('Item id (generated if not provided)'),
   content: z.string().describe('Todo item text'),
   status: z.enum(TODO_STATUSES).optional().default('pending').describe('Status of the item'),
-  priority: z.enum(TODO_PRIORITIES).optional().default('medium').describe('Priority of the item'),
+  priority: z.enum(TODO_PRIORITIES).optional().default(DEFAULT_TODO_PRIORITY).describe('Priority of the item'),
   planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
 });
 
@@ -98,6 +107,80 @@ export function renderTodosMarkdown(todos: TodoItem[]): string | null {
 }
 
 /**
+ * Компактный человекочитаемый вывод списка todo (по образцу opencode):
+ * строка сводки + строка на пункт. JSON в ответе не отдаётся — он шумный и
+ * съедает контекст модели; модель зовёт `todo_update`/`todo_delete` по id,
+ * поэтому id в выводе обязателен.
+ */
+
+/** Сводка списка: сколько пунктов выполнено, сколько всего и сколько в работе. */
+function renderTodoSummary(todos: TodoItem[]): string {
+  const completed = todos.filter((t) => t.status === 'completed').length;
+  const inProgress = todos.filter((t) => t.status === 'in_progress').length;
+  return sm('todo.summary', {
+    completed: String(completed),
+    total: String(todos.length),
+    inProgress: String(inProgress),
+  });
+}
+
+/** Отметка выполнения: `[x]` — выполнен, `[ ]` — иначе. */
+function todoMark(todo: TodoItem): string {
+  return todo.status === 'completed' ? 'x' : ' ';
+}
+
+/**
+ * Заголовок пункта: id (обязателен — по нему модель зовёт `todo_update`)
+ * и текст задачи.
+ */
+function todoTitle(todo: TodoItem): string {
+  return `${todo.id}: ${todo.content}`;
+}
+
+/**
+ * Статус пункта и необязательные признаки одной скобкой. Приоритет печатается,
+ * только если он отличается от дефолтного (иначе строка шумит); связь с
+ * пунктом плана — когда она задана.
+ */
+function todoStatus(todo: TodoItem): string {
+  const details = [STATUS_LABELS[todo.status]];
+  if (todo.priority && todo.priority !== DEFAULT_TODO_PRIORITY) {
+    details.push(sm('todo.hint_priority', { priority: PRIORITY_LABELS[todo.priority] }));
+  }
+  if (todo.planItemId) {
+    details.push(sm('todo.hint_plan', { plan: todo.planItemId }));
+  }
+  return details.join(', ');
+}
+
+/** Строка пункта: `- [x] {id}: {title} ({status})`. */
+function renderTodoLine(todo: TodoItem): string {
+  return sm('todo.line', {
+    mark: todoMark(todo),
+    title: todoTitle(todo),
+    status: todoStatus(todo),
+  });
+}
+
+/**
+ * Полный компактный список: сводка + строки пунктов. Список длиннее
+ * `TODO_MAX_OUTPUT_ITEMS` усекается хвостом «... and N more».
+ */
+function renderTodoList(todos: TodoItem[]): string {
+  if (todos.length === 0) return sm('todo.list_empty');
+  const shown = todos.slice(0, TODO_MAX_OUTPUT_ITEMS).map(renderTodoLine);
+  if (todos.length > TODO_MAX_OUTPUT_ITEMS) {
+    shown.push(sm('todo.more', { count: String(todos.length - TODO_MAX_OUTPUT_ITEMS) }));
+  }
+  return [renderTodoSummary(todos), ...shown].join('\n');
+}
+
+/** Короткий результат одиночного действия + сводка списка. */
+function renderTodoResult(result: string, todos: TodoItem[]): string {
+  return [result, renderTodoSummary(todos)].join('\n');
+}
+
+/**
  * todo_write — полная замена списка задач сессии (обратная совместимость).
  * Пункты без id получают сгенерированный id.
  */
@@ -109,7 +192,7 @@ export const todoWriteTool: ToolDefinition = {
     + 'stored in project.plan); use planItemId to link an item to a plan item. '
     + 'The list is stored in the session state (not a file) and can be read by the UI. '
     + 'Item ids are generated automatically if not provided. '
-    + 'Returns the resulting todo list as JSON.',
+    + 'Returns a compact summary and one line per item (with the item id, needed by todo_update).',
   parameters: z.object({
     todos: z.array(todoWriteItemSchema).describe('Full list of todo items to store'),
   }),
@@ -147,7 +230,7 @@ export const todoWriteTool: ToolDefinition = {
     });
 
     return {
-      content: JSON.stringify(todos),
+      content: renderTodoList(todos),
       metadata: { todos },
     };
   },
@@ -189,11 +272,8 @@ export const todoListTool: ToolDefinition = {
       return { content: sm('todo.list_empty'), metadata: { todos, i18n: i18nMeta('todo.list_empty') } };
     }
 
-    const lines = todos.map(
-      (t) => `- ${t.content} [${STATUS_LABELS[t.status]}, ${PRIORITY_LABELS[t.priority]}]`,
-    );
     return {
-      content: sm('todo.list', { count: String(todos.length), items: lines.join('\n') }),
+      content: renderTodoList(todos),
       metadata: { todos },
     };
   },
@@ -210,7 +290,8 @@ export const todoAddTool: ToolDefinition = {
     + 'stored in project.plan); use planItemId to link an item to a plan item. '
     + 'Accepts a single item or an array of items '
     + '{ content, status?, priority?, planItemId? }. status defaults to "pending", priority to "medium". '
-    + 'Item ids are generated automatically. Returns the resulting todo list as JSON.',
+    + 'Item ids are generated automatically. '
+    + 'Returns the ids of the added items and a short summary of the list.',
   parameters: z.object({
     todos: z.union([todoAddItemSchema, z.array(todoAddItemSchema)])
       .describe('Todo item or array of todo items to add'),
@@ -252,8 +333,13 @@ export const todoAddTool: ToolDefinition = {
       todos,
     });
 
+    // Одиночное действие: короткая строка о результате + сводка (полный список
+    // не нужен — модель знает, что добавила).
     return {
-      content: JSON.stringify(todos),
+      content: renderTodoResult(
+        sm('todo.added', { ids: newItems.map((t) => t.id).join(', ') }),
+        todos,
+      ),
       metadata: { todos },
     };
   },
@@ -269,7 +355,7 @@ export const todoUpdateTool: ToolDefinition = {
     + 'The todo list is the operational task list of this session (distinct from the project plan '
     + 'stored in project.plan); use planItemId to link an item to a plan item. '
     + 'Parameters: { id, content?, status?, priority?, planItemId? }. '
-    + 'Returns the resulting todo list as JSON. Errors if the item is not found.',
+    + 'Returns a short confirmation and a summary of the list. Errors if the item is not found.',
   parameters: z.object({
     id: z.string().describe('Id of the todo item to update'),
     content: z.string().optional().describe('New item text'),
@@ -337,8 +423,9 @@ export const todoUpdateTool: ToolDefinition = {
       todos,
     });
 
+    // Одиночное действие: строка о результате + сводка (без полного списка).
     return {
-      content: JSON.stringify(todos),
+      content: renderTodoResult(sm('todo.updated', { id: params.id }), todos),
       metadata: { todos },
     };
   },
@@ -354,7 +441,7 @@ export const todoDeleteTool: ToolDefinition = {
     + 'The todo list is the operational task list of this session (distinct from the project plan '
     + 'stored in project.plan); items are removed from the session state, not from the project plan. '
     + 'Accepts a single id or an array of ids. '
-    + 'Returns the resulting todo list as JSON. Errors if none of the ids are found.',
+    + 'Returns a short confirmation and a summary of the list. Errors if none of the ids are found.',
   parameters: z.object({
     ids: z.union([z.string(), z.array(z.string())])
       .describe('Todo item id or array of ids to delete'),
@@ -407,8 +494,9 @@ export const todoDeleteTool: ToolDefinition = {
       todos,
     });
 
+    // Одиночное действие: строка о результате + сводка (без полного списка).
     return {
-      content: JSON.stringify(todos),
+      content: renderTodoResult(sm('todo.deleted', { count: String(removed) }), todos),
       metadata: { todos },
     };
   },

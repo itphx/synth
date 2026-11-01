@@ -15,6 +15,12 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 
 const MAX_RESPONSE_SIZE = 50_000;
+/**
+ * Кап чтения тела ответа (5 МиБ). Тело читается **потоком** с этим капом:
+ * гигабайтный ответ в память не тянется, а модель получает начало страницы
+ * и маркер усечения (`web.body_truncated`).
+ */
+export const MAX_FETCH_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_FETCH_URLS = 5;
 /** Лимит редиректов web_fetch: каждый хоп отдельно проверяется SSRF-политикой. */
 const MAX_REDIRECTS = 5;
@@ -146,6 +152,39 @@ interface SearchEgressOptions {
   actor?: string;
 }
 
+/**
+ * Причина отказа поискового провайдера (ADR-041: модель должна понимать, что
+ * именно делать — `429` — подождать, `401` — проверить доступ, прочее — иначе).
+ */
+export type WebSearchFailure = 'rate_limited' | 'auth_failed' | 'blocked' | 'http';
+
+/** Ошибка поиска с машиночитаемой причиной. */
+export class WebSearchError extends Error {
+  constructor(message: string, readonly failure: WebSearchFailure) {
+    super(message);
+    this.name = 'WebSearchError';
+  }
+}
+
+/** Текст ошибки провайдера поиска по HTTP-коду ответа. */
+function searchHttpError(status: number, statusText: string): WebSearchError {
+  if (status === 429) return new WebSearchError(sm('web.search_rate_limited'), 'rate_limited');
+  if (status === 401) return new WebSearchError(sm('web.search_auth_failed'), 'auth_failed');
+  return new WebSearchError(`HTTP ${status} ${statusText}`, 'http');
+}
+
+/**
+ * Какую ошибку показать, если оба провайдера не ответили: приоритет у
+ * actionable-причин (`429`/`401` — модель знает, что делать), иначе — первая
+ * (обычно anti-bot DuckDuckGo).
+ */
+function pickSearchError(errors: Error[]): Error {
+  const actionable = errors.find(
+    (e) => e instanceof WebSearchError && (e.failure === 'rate_limited' || e.failure === 'auth_failed'),
+  );
+  return actionable ?? errors[0]!;
+}
+
 async function duckDuckGoSearch(
   query: string,
   limit: number,
@@ -154,12 +193,15 @@ async function duckDuckGoSearch(
   attempts = SEARCH_ATTEMPTS,
 ): Promise<SearchResult[]> {
   let lastError = '';
+  let lastFailure: WebSearchFailure = 'http';
   for (let attempt = 0; attempt < attempts; attempt++) {
     // «Стоп» пришёл между попытками — ретраи не выполняем
     if (signalAborted(abortSignal)) throw new DOMException('Aborted', 'AbortError');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
     const unlink = linkSignal(controller, abortSignal);
+    // 429/401 ретраить бессмысленно — лимит/доступ провайдер не вернёт.
+    let terminal = false;
 
     try {
       const response = await fetchWithEgressGuard(
@@ -185,29 +227,36 @@ async function duckDuckGoSearch(
         },
       );
 
-      const html = await response.text();
+      const body = await readFetchBody(response, _fetchBodyCap, controller.signal);
+      const html = body.text;
 
-      if (isDdgChallenge(html, response.status)) {
+      if (response.status === 429 || response.status === 401) {
+        const error = searchHttpError(response.status, response.statusText);
+        lastError = error.message;
+        lastFailure = error.failure;
+        terminal = true;
+      } else if (isDdgChallenge(html, response.status)) {
         lastError = sm('web.duckduckgo_blocked');
-        continue;
-      }
-
-      if (!response.ok) {
+        lastFailure = 'blocked';
+      } else if (!response.ok) {
         lastError = `HTTP ${response.status} ${response.statusText}`;
-        continue;
+        lastFailure = 'http';
+      } else {
+        return parseDuckDuckGoResults(html, limit);
       }
-
-      return parseDuckDuckGoResults(html, limit);
     } catch (err: unknown) {
       lastError = (err as Error).message || String(err);
+      lastFailure = 'http';
     } finally {
       clearTimeout(timer);
       unlink();
     }
 
+    // 429/401 — ретрай не поможет: провайдер не вернёт результат.
+    if (terminal) break;
     await sleep(SEARCH_RETRY_DELAY_MS);
   }
-  throw new Error(lastError || sm('web.search_failed'));
+  throw new WebSearchError(lastError || sm('web.search_failed'), lastFailure);
 }
 
 // ─── Парсинг Bing HTML (fallback для web_search) ────────────────────────────
@@ -282,11 +331,11 @@ async function bingSearch(
     );
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      throw searchHttpError(response.status, response.statusText);
     }
 
-    const html = await response.text();
-    return parseBingResults(html, limit);
+    const body = await readFetchBody(response, _fetchBodyCap, controller.signal);
+    return parseBingResults(body.text, limit);
   } finally {
     clearTimeout(timer);
     unlink();
@@ -333,6 +382,161 @@ function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return trimmed;
   return 'https://' + trimmed;
+}
+
+// ─── HTML → Markdown (базовая конвертация, без новых зависимостей) ──────────
+//
+// `format: "markdown"` обещает разметку — значит разметка и должна быть:
+// заголовки, списки, ссылки, код, цитаты, разделители. Таблицы и прочие
+// конструкции уходят «как текст» (строки ячеек через ` | `). Разбор — тем же
+// parse5, что и у DuckDuckGo/Bing.
+
+/** Теги, содержимое которых в результат не попадает (технический шум). */
+const MD_SKIP_TAGS = new Set([
+  'script', 'style', 'noscript', 'template', 'head', 'svg', 'canvas', 'iframe',
+  'object', 'embed', 'audio', 'video', 'input', 'textarea', 'select', 'option',
+  'button', 'nav', 'footer',
+]);
+
+/** Инлайновый markdown содержимого узла (без блочной структуры). */
+function mdInline(node: P5Node): string {
+  if (node.nodeName === '#text') return node.value ?? '';
+  const tag = node.tagName;
+  if (!tag) return (node.childNodes ?? []).map(mdInline).join('');
+  if (MD_SKIP_TAGS.has(tag)) return '';
+  const children = (node.childNodes ?? []).map(mdInline).join('');
+  switch (tag) {
+    case 'strong':
+    case 'b': {
+      const text = children.trim();
+      return text ? `**${text}**` : '';
+    }
+    case 'em':
+    case 'i': {
+      const text = children.trim();
+      return text ? `*${text}*` : '';
+    }
+    case 'code': {
+      const text = children.trim();
+      return text ? `\`${text}\`` : '';
+    }
+    case 'a': {
+      const text = children.trim();
+      if (!text) return '';
+      const href = getAttr(node, 'href') ?? '';
+      return href ? `[${text}](${href})` : text;
+    }
+    case 'br':
+      return '\n';
+    case 'img': {
+      const alt = getAttr(node, 'alt') ?? '';
+      const src = getAttr(node, 'src') ?? '';
+      return src ? `![${alt}](${src})` : alt;
+    }
+    default:
+      return children;
+  }
+}
+
+/** Блочный markdown: список блоков (строк) по содержимому узла. */
+function mdBlocks(node: P5Node): string[] {
+  const blocks: string[] = [];
+  for (const child of node.childNodes ?? []) {
+    const tag = child.tagName;
+    if (!tag) {
+      const text = (child.value ?? '').replace(/\s+/g, ' ').trim();
+      if (text) blocks.push(text);
+      continue;
+    }
+    if (MD_SKIP_TAGS.has(tag)) continue;
+    switch (tag) {
+      case 'h1':
+      case 'h2':
+      case 'h3':
+      case 'h4':
+      case 'h5':
+      case 'h6': {
+        const text = mdInline(child).replace(/\s+/g, ' ').trim();
+        if (text) blocks.push(`${'#'.repeat(Number(tag[1]))} ${text}`);
+        break;
+      }
+      case 'p': {
+        const text = mdInline(child).replace(/[ \t]+/g, ' ').trim();
+        if (text) blocks.push(text);
+        break;
+      }
+      case 'hr':
+        blocks.push('---');
+        break;
+      case 'ul':
+      case 'ol': {
+        const ordered = tag === 'ol';
+        let index = 1;
+        for (const item of child.childNodes ?? []) {
+          if (item.tagName !== 'li') continue;
+          const text = mdInline(item).replace(/\s+/g, ' ').trim();
+          if (text) blocks.push(`${ordered ? `${index}.` : '-'} ${text}`);
+          index += 1;
+        }
+        break;
+      }
+      case 'pre': {
+        const code = textContent(child).replace(/\n+$/, '');
+        if (code.trim()) blocks.push('```\n' + code + '\n```');
+        break;
+      }
+      case 'blockquote': {
+        const inner = mdBlocks(child).join('\n\n');
+        if (inner) blocks.push(inner.split('\n').map((line) => `> ${line}`).join('\n'));
+        break;
+      }
+      case 'table': {
+        // Таблицы — «как текст»: строки ячеек через ` | `.
+        const rows: string[] = [];
+        const collect = (n: P5Node): void => {
+          for (const cell of n.childNodes ?? []) {
+            if (cell.tagName === 'tr') {
+              const cells = (cell.childNodes ?? [])
+                .filter((x) => x.tagName === 'td' || x.tagName === 'th')
+                .map((x) => mdInline(x).replace(/\s+/g, ' ').trim());
+              if (cells.length) rows.push(cells.join(' | '));
+            } else if (cell.childNodes) {
+              collect(cell);
+            }
+          }
+        };
+        collect(child);
+        if (rows.length) blocks.push(rows.join('\n'));
+        break;
+      }
+      default: {
+        // Контейнер (div/section/body/…) — разбираем содержимое блоками.
+        const nested = mdBlocks(child);
+        if (nested.length) blocks.push(...nested);
+      }
+    }
+  }
+  return blocks;
+}
+
+/** Первый узел с указанным тегом (глубина-first). */
+function findTag(node: P5Node, tag: string): P5Node | undefined {
+  if (node.tagName === tag) return node;
+  for (const child of node.childNodes ?? []) {
+    const found = findTag(child, tag);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * HTML → markdown (базовая конвертация: h1–h6, p, br, ul/ol/li, a,
+ * strong/em, code/pre, blockquote, hr; таблицы — текстом).
+ */
+export function htmlToMarkdown(html: string): string {
+  const doc = parse(html) as unknown as P5Node;
+  const body = findTag(doc, 'body') ?? doc;
+  return mdBlocks(body).join('\n\n').trim();
 }
 
 // ─── SSRF-политика web_fetch (ADR-071 §2.3.1, PROP-100) ─────────────────────
@@ -466,35 +670,113 @@ export function attachmentNameFromResponse(response: Response, url: string): str
 }
 
 type CappedBodyRead =
-  | { ok: true; bytes: Buffer }
-  | { ok: false; reason: 'too_large' | 'empty' };
+  | { ok: true; bytes: Buffer; truncated: boolean }
+  | { ok: false; reason: 'empty' };
 
 /**
  * Прочитать тело потоком с капом. Никакого `arrayBuffer()`/`text()`: при
  * превышении лимита чтение прекращается, соединение закрывается —
- * гигабайтный ответ в память не тянется.
+ * гигабайтный ответ в память не тянется. Прочитанное (до капа) сохраняется,
+ * а факт усечения помечается флагом `truncated` — вызывающий решает, что с
+ * этим делать (медиа — отказ, текст — маркер усечения).
+ *
+ * `signal` — сигнал отмены/таймаута: аборт прерывает чтение (поток
+ * отменяется), и вызывающий получает `AbortError`.
  */
 async function readBodyCapped(
   body: ReadableStream<Uint8Array> | null,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<CappedBodyRead> {
   if (!body) return { ok: false, reason: 'empty' };
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   const reader = body.getReader();
   const chunks: Buffer[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      return { ok: false, reason: 'too_large' };
+  let truncated = false;
+  const onAbort = (): void => {
+    void reader.cancel().catch(() => undefined);
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      const room = maxBytes - total;
+      if (value.byteLength > room) {
+        // Чанк не влезает — забираем только то, что в кап, и обрываем чтение.
+        if (room > 0) chunks.push(Buffer.from(value.subarray(0, room)));
+        total = maxBytes;
+        truncated = true;
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
+      total += value.byteLength;
+      chunks.push(Buffer.from(value));
     }
-    chunks.push(Buffer.from(value));
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    try {
+      reader.releaseLock();
+    } catch {
+      // поток уже освобождён отменой — ничего делать не нужно
+    }
   }
+  // Аборт во время чтения — не «пустой ответ», а прерывание.
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   if (total === 0) return { ok: false, reason: 'empty' };
-  return { ok: true, bytes: Buffer.concat(chunks) };
+  return { ok: true, bytes: Buffer.concat(chunks), truncated };
+}
+
+/**
+ * Кап чтения тела ответа. Тестовая точка подмены (маленький кап в тестах
+ * капа/усечения) — по образу `_setWebFetchHostResolver`. `undefined` — вернуть
+ * дефолт.
+ */
+let _fetchBodyCap = MAX_FETCH_BODY_BYTES;
+
+/** Тестовый seam: кап чтения тела ответа web_fetch/web_search (в байтах). */
+export function _setWebFetchBodyCap(limit: number | undefined): void {
+  _fetchBodyCap = limit ?? MAX_FETCH_BODY_BYTES;
+}
+
+/**
+ * Декод UTF-8 без «мусорного» символа на границе капа: обрезанная
+ * многобайтовая последовательность отбрасывается, а не заменяется на U+FFFD.
+ */
+function decodeUtf8(bytes: Buffer): string {
+  let end = bytes.length;
+  for (let i = bytes.length - 1, steps = 0; i >= 0 && steps < 4; i--, steps++) {
+    const byte = bytes[i]!;
+    if ((byte & 0xc0) === 0x80) continue; // байт продолжения — ищем ведущий
+    const need = byte < 0x80 ? 1 : byte < 0xe0 ? 2 : byte < 0xf0 ? 3 : 4;
+    if (bytes.length - i < need) end = i; // последовательность неполная
+    break;
+  }
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+/** Тело ответа: потоковое чтение с байтовым капом + сверка с `content-length`. */
+type FetchedBody = { text: string; truncated: boolean };
+
+/**
+ * Прочитать тело ответа. `content-length` — предварительная проверка: сервер
+ * сам объявил больше капа → содержимое заведомо усечено (маркер всё равно
+ * ставится), но тело до капа всё равно читается — модель получает начало
+ * страницы.
+ */
+async function readFetchBody(
+  response: Response,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<FetchedBody> {
+  const declared = Number(response.headers.get('content-length'));
+  const declaredBytes = Number.isFinite(declared) && declared > 0 ? declared : null;
+  const read = await readBodyCapped(response.body, maxBytes, signal);
+  if (!read.ok) return { text: '', truncated: declaredBytes !== null };
+  const truncated = read.truncated || (declaredBytes !== null && declaredBytes > read.bytes.length);
+  return { text: decodeUtf8(read.bytes), truncated };
 }
 
 /**
@@ -530,6 +812,7 @@ async function fetchMediaAttachment(
   mime: string,
   ctxExtra: WebFetchExtra | undefined,
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<FetchedMedia> {
   const service = ctxExtra?.attachmentService;
   if (!service) {
@@ -549,11 +832,11 @@ async function fetchMediaAttachment(
     };
   }
 
-  const read = await readBodyCapped(response.body, limit);
-  if (!read.ok) {
+  const read = await readBodyCapped(response.body, limit, signal);
+  if (!read.ok || read.truncated) {
     return {
       ok: false,
-      message: read.reason === 'too_large'
+      message: read.ok
         ? `include_media: file is too large (limit ${limit} bytes)`
         : 'include_media: empty response body',
     };
@@ -592,16 +875,22 @@ export const webFetchTool: ToolDefinition = {
   name: 'web_fetch',
   description:
     'Fetch content from URLs and convert it to readable text (read-only: it does not change anything on disk). '
-    + `Supports up to ${MAX_FETCH_URLS} URLs at once (format defaults to markdown; text/html are also available). `
-    + 'Use this to retrieve and analyze web content. Long pages are truncated to a preview (a truncation marker is appended). '
+    + `Supports up to ${MAX_FETCH_URLS} URLs at once. `
+    + 'format: "markdown" (default) converts HTML to Markdown (headings, paragraphs, lists, links, bold/italic, code, quotes); '
+    + '"text" returns plain text with HTML tags stripped; "html" returns the raw HTML as received. '
+    + 'The response body is read with a byte cap; long pages are truncated to a preview (a truncation marker is appended). '
     + 'By default binary responses (image/pdf/audio/video) are described, not decoded; set include_media=true to download them and attach them to the dialog so the model sees them on the next step.',
   parameters: z.object({
     url: z.string().optional().describe('The URL to fetch content from'),
     urls: z.array(z.string()).max(MAX_FETCH_URLS).optional()
       .describe(`Multiple URLs to fetch (up to ${MAX_FETCH_URLS}). Takes priority over "url".`),
     format: z.enum(['text', 'markdown', 'html']).optional().default('markdown')
-      .describe('The format to return the content in (default: markdown)'),
-    timeout: z.number().int().min(1).max(120).optional().describe('Timeout per URL in seconds (max 120)'),
+      .describe(
+        'The format to return the content in: "markdown" (default, HTML is converted to Markdown), '
+        + '"text" (plain text, HTML tags stripped) or "html" (raw HTML as received).',
+      ),
+    timeout: z.number().int().min(1).max(120).optional()
+      .describe('Timeout per URL in seconds (max 120); covers reading the response body as well'),
     include_media: z.boolean().optional().default(false)
       .describe(
         'Download image/pdf/audio/video responses and attach them to the dialog '
@@ -657,8 +946,6 @@ export const webFetchTool: ToolDefinition = {
 
       try {
         const response = await fetchWithSsrfGuard(url, controller.signal, policy, egress);
-        clearTimeout(timer);
-        unlink();
 
         if (!response.ok) {
           blocks.push(`### ${url}\n\n❌ HTTP ${response.status} ${response.statusText}`);
@@ -682,6 +969,7 @@ export const webFetchTool: ToolDefinition = {
           }
           const fetched = await fetchMediaAttachment(
             response, url, mime, ctx.extra as WebFetchExtra | undefined, ctx.sessionId,
+            controller.signal,
           );
           if (fetched.ok) {
             attachments.push(fetched.ref);
@@ -698,18 +986,26 @@ export const webFetchTool: ToolDefinition = {
           continue;
         }
 
-        const rawText = await response.text();
+        // Тело читается **потоком** с байтовым капом — `response.text()` тянул бы
+        // весь ответ в память. Таймер таймаута живёт до конца чтения (см. finally
+        // ниже), поэтому медленное тело тоже укладывается в timeout.
+        const body = await readFetchBody(response, _fetchBodyCap, controller.signal);
+        const rawText = body.text;
+        const format = params.format ?? 'markdown';
         let content: string;
 
-        if (contentType.includes('application/json')) {
+        if (format === 'html') {
+          // Сырой ответ как есть — без конвертации и без предупреждений.
+          content = rawText;
+        } else if (contentType.includes('application/json')) {
           content = rawText;
           try {
             content = JSON.stringify(JSON.parse(rawText), null, 2);
           } catch {
             content = rawText;
           }
-        } else if (contentType.includes('text/html') && params.format !== 'html') {
-          content = cleanHtml(rawText);
+        } else if (contentType.includes('text/html')) {
+          content = format === 'text' ? cleanHtml(rawText) : htmlToMarkdown(rawText);
           const isSpa = detectSpa(rawText);
           const textRatio = content.length / Math.max(rawText.length, 1);
           if (isSpa) {
@@ -724,11 +1020,12 @@ export const webFetchTool: ToolDefinition = {
         if (content.length > MAX_RESPONSE_SIZE) {
           content = content.slice(0, MAX_RESPONSE_SIZE) + sm('web.content_truncated');
         }
+        if (body.truncated) {
+          content += sm('web.body_truncated', { limit: String(_fetchBodyCap) });
+        }
 
         blocks.push(`### ${url}\n\n${content}`);
       } catch (err: unknown) {
-        clearTimeout(timer);
-        unlink();
         const error = err as Error;
         if (isAbortError(err) && isAborted(ctx)) {
           // «Стоп» — единый маркер прерывания + частичные блоки
@@ -741,6 +1038,11 @@ export const webFetchTool: ToolDefinition = {
         } else {
           blocks.push(`### ${url}\n\n${sm('web.block_error', { error: error.message || String(err) })}`);
         }
+      } finally {
+        // Таймер и подписка на «Стоп» живут до конца чтения тела:
+        // timeout покрывает не только заголовки, но и тело ответа.
+        clearTimeout(timer);
+        unlink();
       }
     }
 
@@ -759,8 +1061,9 @@ export const webFetchTool: ToolDefinition = {
 export const webSearchTool: ToolDefinition = {
   name: 'web_search',
   description:
-    'Search the web for information using DuckDuckGo (no API key required). '
-    + 'Returns up to 10 results with title, snippet and URL.',
+    'Search the web for information using DuckDuckGo (no API key required), with Bing as a fallback. '
+    + 'Returns up to 10 results with title, snippet and URL. '
+    + 'Rate limiting (HTTP 429) and rejected credentials (HTTP 401) are reported explicitly.',
   parameters: z.object({
     query: z.string().describe('Search query'),
     max_results: z.number().int().min(1).max(20).optional().default(10)
@@ -790,6 +1093,9 @@ export const webSearchTool: ToolDefinition = {
       actor: typeof ctx.extra?.userId === 'string' ? ctx.extra.userId : undefined,
     };
 
+    // Ошибки обоих провайдеров: показываем actionable-причину (429/401),
+    // иначе — первую (обычно anti-bot DuckDuckGo).
+    const failures: Error[] = [];
     try {
       try {
         const results = await duckDuckGoSearch(query, limit, ctx.abortSignal, egress);
@@ -800,15 +1106,19 @@ export const webSearchTool: ToolDefinition = {
         // «Стоп» — фолбэк на Bing не выполняем
         if (signalAborted(ctx.abortSignal)) return abortedResult(this.name);
         // DDG заблокирован или недоступен — пробуем Bing
-        try {
-          const results = await bingSearch(query, limit, ctx.abortSignal, egress);
-          if (results.length > 0) {
-            return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'bing' } };
-          }
-        } catch {
-          throw err;
-        }
+        failures.push(err as Error);
       }
+      // DDG не ответил (пусто или ошибка) — Bing как второй провайдер.
+      try {
+        const results = await bingSearch(query, limit, ctx.abortSignal, egress);
+        if (results.length > 0) {
+          return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'bing' } };
+        }
+      } catch (err: unknown) {
+        if (signalAborted(ctx.abortSignal)) return abortedResult(this.name);
+        failures.push(err as Error);
+      }
+      if (failures.length > 0) throw pickSearchError(failures);
       return { content: sm('web.no_results', { query }), metadata: { query: params.query, max_results: limit, i18n: i18nMeta('web.no_results', { query }) } };
     } catch (err: unknown) {
       // «Стоп» — единый маркер прерывания, а не «ошибка веб-поиска»

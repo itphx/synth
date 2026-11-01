@@ -233,13 +233,34 @@ export const TOOL_PATH_PARAMS: Record<string, string[]> = {
 };
 
 /**
+ * Пути одной правки `patch`.
+ *
+ * У `update`/`add`/`delete` путь лежит в `file_path`, у `rename` — в `from`
+ * и `to` (оба участвуют в правилах: внешний доступ, `protected_paths`,
+ * периметр цели). Правка без `op` — это `update` (обратная совместимость).
+ */
+function patchEditPaths(edit: unknown): string[] {
+  if (!edit || typeof edit !== 'object') return [];
+  const record = edit as { op?: unknown; file_path?: unknown; from?: unknown; to?: unknown };
+  const op = typeof record.op === 'string' ? record.op : 'update';
+  const names = op === 'rename' ? ['from', 'to'] : ['file_path'];
+  const result: string[] = [];
+  for (const name of names) {
+    const value = record[name as 'file_path' | 'from' | 'to'];
+    if (typeof value === 'string' && value.trim() !== '') result.push(value);
+  }
+  return result;
+}
+
+/**
  * Сырые файловые параметры тула (до `resolvePath`).
  *
  * Обычный случай — плоская карта `TOOL_PATH_PARAMS`. Особый случай — тул
- * `patch`: пути лежат во вложенном массиве `edits[].file_path`, поэтому
- * плоская карта их не описывает. Ветка нужна, чтобы файловые паттерны правил,
- * `external_directory`, `protected_paths`, Authority-слой и матрица доверия
- * работали для `patch` так же, как для `write_file`/`edit_file`.
+ * `patch`: пути лежат во вложенном массиве `edits[]` (`file_path` либо
+ * `from`/`to` у переименования), поэтому плоская карта их не описывает.
+ * Ветка нужна, чтобы файловые паттерны правил, `external_directory`,
+ * `protected_paths`, Authority-слой и матрица доверия работали для `patch`
+ * так же, как для `write_file`/`edit_file`.
  *
  * Функция живёт здесь, а не в `evaluator.ts`: её используют и permission-слой,
  * и Authority-слой (`authority/target.ts`), и trust (`security/trust.ts`), а
@@ -254,8 +275,7 @@ export function extractPathParams(
     if (!Array.isArray(edits)) return [];
     const result: string[] = [];
     for (const edit of edits) {
-      const value = (edit as { file_path?: unknown } | null | undefined)?.file_path;
-      if (typeof value === 'string' && value.trim() !== '') result.push(value);
+      result.push(...patchEditPaths(edit));
     }
     return result;
   }

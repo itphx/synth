@@ -130,6 +130,10 @@ export const defaultConfig: SynthConfig = {
       capabilities: [],
       tools: [],
     },
+    // Общий предел вывода инструментов (строк/байт) — усечение результата
+    // с пометкой «показано N из M».
+    outputMaxLines: 2000,
+    outputMaxBytes: 51_200,
   },
   skills: {
     paths: [],
@@ -239,6 +243,9 @@ export const defaultConfig: SynthConfig = {
     // превышении оценка бюджета завершает прогон детерминированным отчётом.
     // 0 — без ограничения.
     subagentMaxInputTokens: 150_000,
+    // Лимит глубины вложенности саб-агентов (по цепочке `parentId` сессий:
+    // текущая — 0, родитель — 1, …). 0 — без ограничения.
+    subagentDepth: 1,
   },
   attachments: {
     // ADR-115: вложения сообщений. Мастер-выключатель, семейства MIME,

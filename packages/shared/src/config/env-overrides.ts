@@ -91,6 +91,8 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'background', key: 'retentionDays', type: 'number' },
   // agents: предохранитель по объёму промпта саб-агента (не окно модели).
   { section: 'agents', key: 'subagentMaxInputTokens', type: 'number' },
+  // agents: лимит глубины вложенности саб-агентов (0 — без ограничения).
+  { section: 'agents', key: 'subagentDepth', type: 'number' },
   // attachments (ADR-115): вложения сообщений. Семейства MIME
   // (`SYNTH_ATTACHMENTS_MODALITIES`, csv) — объектный ключ, обрабатывается
   // отдельно (`applyAttachmentsModalitiesEnvOverride`); список префиксов
@@ -103,6 +105,9 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'attachments', key: 'gcDays', type: 'number' },
   // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
   { section: 'metrics', key: 'enabled', type: 'boolean' },
+  // tools: общий предел вывода инструментов (строк/байт).
+  { section: 'tools', key: 'outputMaxLines', type: 'number' },
+  { section: 'tools', key: 'outputMaxBytes', type: 'number' },
   // authority (ADR-106 Ф1): мастер-выключатель слоя и режим наблюдения.
   { section: 'authority', key: 'enabled', type: 'boolean' },
   { section: 'authority', key: 'shadow', type: 'boolean' },

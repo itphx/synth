@@ -9,9 +9,49 @@ import type { EventType, Message, Session, TokenUsage, TurnStatus } from '@itphx
 import type { EventBus } from '../../../events/bus.js';
 import { serializeMessage, serializeSession } from '../../../server/serialize.js';
 import { computeCacheHitRate, computeUsageCost } from '../../../providers/usage.js';
+import type { SessionManager } from '../../../sessions/manager.js';
 import type { AssistantMessageStatus } from '../../orchestrator.js';
 import { publishTurnFinished } from '../../orchestrator/turn-events.js';
 import type { TaskExtra } from './types.js';
+
+/**
+ * Предел обхода цепочки `parentId` (защита от длинных/циклических цепочек).
+ */
+const MAX_SESSION_DEPTH_WALK = 64;
+
+/**
+ * Глубина сессии в дереве саб-агентов (`agents.subagentDepth`).
+ *
+ * Считается по цепочке `parentId`: текущая сессия — глубина 0, её родитель —
+ * 1, дедушка — 2 и т. д. Цепочка обходится вверх до сессии без `parentId`;
+ * циклы (`parentId` на самого себя) и повторы отсекаются множеством
+ * посещённых id, а предел обхода ограничен `MAX_SESSION_DEPTH_WALK`.
+ *
+ * Нет `sessionManager`/сессии/родителя — глубина 0 (отказ не блокирует).
+ */
+export async function resolveSessionDepth(
+  sessionManager: SessionManager | undefined,
+  sessionId: string | undefined,
+): Promise<number> {
+  if (!sessionManager || !sessionId) return 0;
+  let depth = 0;
+  let currentId: string | undefined = sessionId;
+  const visited = new Set<string>();
+  while (currentId && depth < MAX_SESSION_DEPTH_WALK && !visited.has(currentId)) {
+    visited.add(currentId);
+    let parentId: string | undefined;
+    try {
+      parentId = (await sessionManager.getSession(currentId))?.parentId;
+    } catch {
+      // Сессия недоступна — глубина неизвестна (считаем корневой).
+      break;
+    }
+    if (!parentId) break;
+    depth += 1;
+    currentId = parentId;
+  }
+  return depth;
+}
 
 export async function publishMessageAdded(
   eventBus: EventBus,

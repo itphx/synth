@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { parseDuckDuckGoResults, parseBingResults, webSearchTool, webFetchTool, _setWebFetchHostResolver } from './web.js';
+import {
+  parseDuckDuckGoResults,
+  parseBingResults,
+  webSearchTool,
+  webFetchTool,
+  _setWebFetchHostResolver,
+  _setWebFetchBodyCap,
+} from './web.js';
+import { t } from '../system-messages.js';
 import { configureEgressRuntime, resetEgressRuntime } from '../net/egress-runtime.js';
 import { attachmentsConfigSchema } from '@itphx/synth-shared';
 import type { AttachmentsConfig, ToolContext } from '@itphx/synth-shared';
@@ -96,6 +104,7 @@ const BING_HTML_FIXTURE = `<!DOCTYPE html>
 afterEach(() => {
   vi.unstubAllGlobals();
   _setWebFetchHostResolver(undefined);
+  _setWebFetchBodyCap(undefined);
   resetEgressRuntime();
 });
 
@@ -822,5 +831,180 @@ describe('webFetchTool — include_media (ADR-115)', () => {
     expect(result.attachments).toBeUndefined();
     expect(result.content).toMatch(/Blocked by the network policy|заблокирован/i);
     expect(env.upload).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Тело ответа: кап, таймаут, честный format ──────────────────────────────
+
+/** Страница-эталон для проверки форматов (разметка должна отличаться от текста). */
+const FORMAT_PAGE_HTML = `<!DOCTYPE html>
+<html><head><title>Page</title></head><body>
+<h1>Заголовок</h1>
+<p>Текст с <strong>жирным</strong> и <a href="https://example.com/doc">ссылкой</a>.</p>
+<ul><li>Первый</li><li>Второй</li></ul>
+<pre><code>const x = 1;</code></pre>
+<blockquote>Цитата</blockquote>
+<hr>
+</body></html>`;
+
+describe('webFetchTool — тело ответа (кап и таймаут)', () => {
+  it('кап по content-length: тело читается целиком, но в тексте — маркер усечения', async () => {
+    _setWebFetchBodyCap(64);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('short body', {
+      status: 200,
+      headers: { 'content-type': 'text/plain', 'content-length': '1000000' },
+    })));
+
+    const result = await webFetchTool.execute({ url: 'https://page.example' }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    // Сервер объявил больше капа — содержимое заведомо усечено.
+    expect(result.content).toContain(t('web.body_truncated', { limit: '64' }));
+    // Тело (меньше капа) прочитано целиком.
+    expect(result.content).toContain('short body');
+  });
+
+  it('кап по потоку: читается только кап, дальше — маркер усечения', async () => {
+    _setWebFetchBodyCap(64);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('a'.repeat(100)));
+        controller.enqueue(new TextEncoder().encode('b'.repeat(100)));
+        controller.close();
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    })));
+
+    const result = await webFetchTool.execute({ url: 'https://page.example' }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain(t('web.body_truncated', { limit: '64' }));
+    expect(result.content).toContain('a'.repeat(64));
+    // Второй чанк не читается — в выводе его нет.
+    expect(result.content).not.toContain('b'.repeat(10));
+  });
+
+  it('таймаут покрывает чтение тела: медленный ответ даёт блок таймаута', async () => {
+    // Тело ответа так и не приходит — заголовки уже получены.
+    const body = new ReadableStream<Uint8Array>({ start() { /* без данных */ } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    })));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://slow.example', timeout: 1 },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain(t('web.block_timeout'));
+  });
+
+  it('обрезанный на границе капа многобайтовый символ не даёт «мусор»', async () => {
+    _setWebFetchBodyCap(4);
+    // 'a' + 'é' (2 байта) + 'bc' — на границе капа символ режется пополам.
+    const bytes = new Uint8Array([0x61, 0xc3, 0xa9, 0x62, 0x63]);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(bytes, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    })));
+
+    const result = await webFetchTool.execute({ url: 'https://page.example' }, makeCtx());
+
+    expect(result.content).toContain('aé');
+    expect(result.content).not.toContain('\uFFFD');
+  });
+});
+
+describe('webFetchTool — формат вывода', () => {
+  it('markdown отличается от text: заголовок, список, ссылка, жирный', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(FORMAT_PAGE_HTML, {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    })));
+
+    const markdown = await webFetchTool.execute(
+      { url: 'https://page.example', format: 'markdown' },
+      makeCtx(),
+    );
+    const text = await webFetchTool.execute(
+      { url: 'https://page.example', format: 'text' },
+      makeCtx(),
+    );
+
+    expect(markdown.content).toContain('# Заголовок');
+    expect(markdown.content).toContain('- Первый');
+    expect(markdown.content).toContain('**жирным**');
+    expect(markdown.content).toContain('[ссылкой](https://example.com/doc)');
+    expect(markdown.content).toContain('> Цитата');
+
+    // В «text» разметки нет — только очищенный текст.
+    expect(text.content).not.toContain('# Заголовок');
+    expect(text.content).not.toContain('**жирным**');
+    expect(text.content).not.toContain('[ссылкой]');
+    expect(text.content).toContain('Заголовок');
+    expect(markdown.content).not.toBe(text.content);
+  });
+
+  it('html — сырой ответ с тегами', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(FORMAT_PAGE_HTML, {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    })));
+
+    const result = await webFetchTool.execute(
+      { url: 'https://page.example', format: 'html' },
+      makeCtx(),
+    );
+
+    expect(result.content).toContain('<h1>Заголовок</h1>');
+    expect(result.content).toContain('<strong>жирным</strong>');
+    expect(result.content).toContain('<a href="https://example.com/doc">ссылкой</a>');
+  });
+});
+
+describe('webSearchTool — причины отказа провайдера', () => {
+  it('HTTP 429 → ключ web.search_rate_limited', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Too Many Requests', { status: 429 })));
+
+    const result = await webSearchTool.execute({ query: 'test' }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain(t('web.search_rate_limited'));
+  });
+
+  it('HTTP 401 → ключ web.search_auth_failed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Unauthorized', { status: 401 })));
+
+    const result = await webSearchTool.execute({ query: 'test' }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain(t('web.search_auth_failed'));
+  });
+
+  it('прочие HTTP-ошибки — код ответа в тексте', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Boom', { status: 503 })));
+
+    const result = await webSearchTool.execute({ query: 'test' }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('HTTP 503');
+  });
+
+  it('пустой результат — подсказка переформулировать запрос', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html><body><p>no results</p></body></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    })));
+
+    const result = await webSearchTool.execute({ query: 'nothing here' }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('nothing here');
+    expect(result.content).toMatch(/rephras/i);
   });
 });

@@ -108,6 +108,11 @@ export const SYSTEM_MESSAGES = {
     'Error: tool "{tool}" was not executed — tools are disabled after the maximum agent steps ({limit})',
   'tool.empty_output': '(empty output)',
   'tool.output_truncated': '\n... (output truncated)',
+  // Общий предел вывода инструментов (`tools.outputMaxLines`/
+  // `tools.outputMaxBytes`): результат усечён по строкам/байтам — показываем,
+  // сколько строк показано из скольких, и подсказываем, как получить остальное.
+  'tool.output_bounded':
+    'Output truncated: showing {shown} of {total} lines. Narrow the command or pattern, or read a smaller range (offset/limit).',
   'tool.shell_error': 'Error: {message}',
   'tool.shell_timeout':
     'Command timed out after {timeout} ms. Retry with a larger timeout if the command is expected to take longer.',
@@ -146,6 +151,16 @@ export const SYSTEM_MESSAGES = {
   'fs.patch_not_regular': 'Error: patch target is not a regular file: {path}',
   'fs.patch_too_large': 'Error: file "{path}" is too large for atomic patching ({bytes} bytes, limit {limit})',
   'fs.patch_binary': 'Cannot patch binary file: {path}',
+  // Операции патча add/delete/rename: сводка по операциям + строки по файлам.
+  'fs.patch_summary': 'Operations: {added} added, {updated} updated, {deleted} deleted, {renamed} renamed',
+  'fs.patch_file_added': '{path}: created',
+  'fs.patch_file_deleted': '{path}: deleted',
+  'fs.patch_file_renamed': '{from}: renamed to {to}',
+  'fs.patch_add_exists': 'Error: patch add target file already exists: {path}',
+  'fs.patch_delete_missing': 'Error: patch delete target file not found: {path}',
+  'fs.patch_rename_missing': 'Error: patch rename source file not found: {from}',
+  'fs.patch_rename_exists': 'Error: patch rename target already exists: {to}',
+  'fs.patch_path_escapes': 'Error: patch path is outside the session perimeter: {path}',
 
   // --- Чтение файлов (fs-read) ---
   'fsread.empty_directory': '(empty directory)',
@@ -161,17 +176,20 @@ export const SYSTEM_MESSAGES = {
   'fsread.glob_truncated': '... (showing the first {count} of {total} files; refine the pattern or raise the limit)',
 
   // --- Веб (web_fetch / web_search) ---
-  'web.duckduckgo_blocked': 'DuckDuckGo is temporarily blocking requests (anti-bot challenge)',
+  'web.duckduckgo_blocked':
+    'DuckDuckGo is temporarily blocking requests (anti-bot challenge). Wait a moment and retry, or rephrase the query with different keywords.',
   'web.search_failed': 'Failed to get results from DuckDuckGo',
   'web.search_results': 'Search results for "{query}" ({count}):\n\n{items}',
   'web.fetch_args_url_required': 'specify url or urls',
   'web.js_framework_warning': '\n\n⚠️ The site uses a JavaScript framework — some content may be unavailable without executing JS.',
   'web.low_content_warning': '\n\n⚠️ The page has very little text content (possibly JavaScript rendering).',
   'web.content_truncated': '\n... (content truncated)',
+  'web.body_truncated': '\n... (response body truncated at the {limit} byte limit)',
   'web.block_timeout': '❌ Timeout',
   'web.block_error': '❌ Load error: {error}',
   'web.fetch_all_failed': 'Failed to load any of the URLs',
-  'web.no_results': 'No results found for "{query}".',
+  'web.no_results':
+    'No results found for "{query}". Try rephrasing the query with different or more specific keywords.',
   'web.search_error': 'Web search error: {error}',
   'web.search_rate_limited':
     'Web search rate limited by the provider (HTTP 429). Wait and retry, or try a different query.',
@@ -228,6 +246,16 @@ export const SYSTEM_MESSAGES = {
   'todo.priority_high': 'high',
   'todo.priority_medium': 'medium',
   'todo.priority_low': 'low',
+  // Компактный вывод тулов todo: сводка + строка на пункт (JSON не отдаётся —
+  // он шумит и съедает контекст модели).
+  'todo.summary': 'Todo list: {completed}/{total} completed, {inProgress} in progress.',
+  'todo.line': '- [{mark}] {title} ({status})',
+  'todo.more': '... and {count} more',
+  'todo.added': 'Todo items added: {ids}',
+  'todo.updated': 'Todo item {id} updated.',
+  'todo.deleted': 'Todo items deleted: {count}.',
+  'todo.hint_priority': 'priority: {priority}',
+  'todo.hint_plan': 'plan: {plan}',
 
   // --- Проект ---
   'project.deps_unavailable': 'Error: session manager or project store unavailable for {tool}',

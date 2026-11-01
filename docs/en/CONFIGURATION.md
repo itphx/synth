@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -86,7 +86,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 ### Env overrides of nested sections (ADR-023)
 
 Scalar keys of the `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
-`questions`, `background`, `agents`, `authority` sections can be set
+`questions`, `background`, `agents`, `tools`, `authority` sections can be set
 with environment variables — handy for k8s (ConfigMap → pod env). The variable name is
 built by the rule **`SYNTH_<SECTION>_<KEY>`**, where the camelCase key is converted to
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -156,6 +156,9 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (stage 1 of roadmap 0.12.4 — block 4) |
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (stage 1 of roadmap 0.12.4 — block 4) |
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (safeguard on the subagent prompt size; `0` — no limit) |
+| `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (subagent nesting depth limit; `0` — no limit) |
+| `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (common tool output limit, lines; ≥ 1) |
+| `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (common tool output limit, bytes; ≥ 1) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; master switch of the authority layer) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — observation, `false` — enforcement) |
@@ -357,6 +360,8 @@ tools:
     capabilities: []              # ToolCapability groups (git, web, file_read, file_write, shell, mcp, ...)
     tools: []                     # individual tools by name (execute_shell, git_push, ...)
                                   # runtime (plan/todo/project/reference/classify) cannot be disabled
+  outputMaxLines: 2000            # common tool output limit, lines (≥ 1)
+  outputMaxBytes: 51200           # common tool output limit, bytes (≥ 1)
 
 router:
   enabled: true
@@ -1116,6 +1121,37 @@ enabled/disabled). Runtime editing: `GET/PUT /api/v2/settings/tools-disabled`
 with the body `{toolsDisabled:{capabilities,tools}}` (live application, persisted in
 `settings.json`).
 
+### Tool output limit (`tools.outputMaxLines` / `tools.outputMaxBytes`)
+
+The common size limit for the result of **any** tool: it is applied in the single call point
+(`executeToolDef`), so built-in, MCP and plugin tools are all limited. The stricter of the two
+limits wins.
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `tools.outputMaxLines` | Limit on the number of lines in a tool result (≥ 1) | `2000` |
+| `tools.outputMaxBytes` | Limit on the size of a tool result in UTF-8 bytes (≥ 1) | `51200` |
+
+- Env — `SYNTH_TOOLS_OUTPUT_MAX_LINES` / `SYNTH_TOOLS_OUTPUT_MAX_BYTES`.
+- A tool that **truncated the output itself** is left alone: if the result is marked
+  `metadata.truncated === true`, the common limit is not applied (the tool already has its own
+  truncation marker). Error results (`isError`) are not cut either — the error text carries
+  diagnostics, not output.
+- When the output is cut, an explanation `tool.output_bounded` is appended: how many lines are
+  shown out of how many and how to narrow the request; the metadata carries `truncated: true`
+  and `outputBounded: {shownLines, totalLines}`.
+- **The full text is not stored**: the cut part of the output does not survive anywhere (unlike
+  tool artifacts) — the model has to repeat the request with a narrower condition if it needs
+  the rest.
+- This does **not** replace the per-tool limits (`read_file` — 2000 lines/50 KB,
+  `execute_shell` — its own output cap): the common limit sits above them and fires last.
+
+```yaml
+tools:
+  outputMaxLines: 2000
+  outputMaxBytes: 51200
+```
+
 ### Skills (`skills.*`, ADR-046)
 
 The `skills` section manages skill discovery, trust of project directories,
@@ -1552,6 +1588,7 @@ limits), not a "keep working" hint.
 | Field | Purpose | Default |
 |-------|---------|---------|
 | `agents.subagentMaxInputTokens` | Safeguard on the subagent prompt size, input tokens (estimate); `0` — no limit. When exceeded, the run finishes with a report instead of a provider error. Env — `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | `150000` |
+| `agents.subagentDepth` | Subagent nesting depth limit; `0` — no limit. The depth is counted along the `parentId` chain of the sessions (the current one is 0, its parent is 1, …): with a limit of 1 a subagent may spawn a subagent, but not a subagent inside a subagent. When the limit is reached, the `task` tool refuses **before** the child session is created (`task.depth_limit`). Env — `SYNTH_AGENTS_SUBAGENT_DEPTH` | `1` |
 
 - **The step limit has priority.** The final report step of `maxSteps` (the opencode mechanics)
   is not treated as a budget overrun; otherwise the step-limit report would never be produced.
@@ -1567,10 +1604,15 @@ limits), not a "keep working" hint.
 - **The estimate is unavailable** (no data/empty prompt) — do not block (fail-open).
 - The estimate uses the chars-per-token heuristic (default 4): it is a safeguard, not an exact
   token count of the model.
+- **The depth limit (`subagentDepth`) is structure, not budget.** It is counted along the
+  `parentId` chain of the sessions, not by token spend: when the limit is reached the `task`
+  tool refuses with `task.depth_limit` **before** the child session is created (no extra
+  session and no extra history). `0` — the nesting is not limited.
 
 ```yaml
 agents:
   subagentMaxInputTokens: 150000
+  subagentDepth: 1
 ```
 
 ### Model catalog (`{dataDir}/models/`, `ModelConfig`)

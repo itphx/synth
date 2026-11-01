@@ -4,6 +4,7 @@ import {
   authorityPrincipalSchema,
   type AuthorityPrincipal,
   type AuthorityTarget,
+  type PermissionPreview,
 } from '@itphx/synth-shared';
 
 import type { EventBus } from '../../events/bus.js';
@@ -40,6 +41,15 @@ export interface ApprovalRequest {
    * `action` образует привязку подтверждения.
    */
   target?: AuthorityTarget;
+  /**
+   * ADR-029 (аддитивно): превью изменений, которые тул собирается внести
+   * (unified diff по файлам). Пользователь подтверждает запись — он должен
+   * видеть, ЧТО изменится, а не только сырые аргументы.
+   *
+   * Поле необязательное: превью считается «по возможности» — посчитать не
+   * удалось → поля нет, поведение прежнее.
+   */
+  preview?: PermissionPreview;
 }
 
 export interface ApprovalDecision {
@@ -257,6 +267,8 @@ export class PermissionApprovalManager {
         ...(request.principal ? { principal: request.principal } : {}),
         ...(request.turnId ? { turn_id: request.turnId } : {}),
         digest,
+        // ADR-029: аддитивное превью изменений (дифф по файлам).
+        ...(request.preview ? { preview: request.preview } : {}),
       });
     });
   }

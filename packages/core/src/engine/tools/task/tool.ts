@@ -6,6 +6,7 @@
  */
 import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig } from '@itphx/synth-shared';
+import { DEFAULT_SUBAGENT_DEPTH } from '@itphx/synth-shared/config';
 import { normalizeAgentModes } from '../../agents/normalize.js';
 import type { CancellationToken, LLMMessage, BaseProvider } from '../../../providers/base.js';
 import type { ModelRouter } from '../../router/router.js';
@@ -13,7 +14,7 @@ import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { argErrorResult } from '../arg-error.js';
 import { BackgroundLimitExceededError } from '../../background/types.js';
-import { publishMessageAdded } from './child-session.js';
+import { publishMessageAdded, resolveSessionDepth } from './child-session.js';
 import { prepareChildSession, type PreparedChildSession } from './fork.js';
 import { buildSubagentUnavailableToolsSection, messageToLLMMessage, resolveSubagentPrompt } from './prompt.js';
 import { runSubagent, type SubagentRunConfig } from './run-cycle.js';
@@ -66,6 +67,30 @@ export const taskTool: ToolDefinition = {
         content: sm('task.subagent_not_allowed', { type: params.subagent_type, modes: String(agentDef.agentMode) }),
         isError: true,
       };
+    }
+
+    // ─── Лимит глубины вложенности (`agents.subagentDepth`) ──────────
+    // Глубина считается по цепочке `parentId` сессий: текущая сессия — 0,
+    // её родитель — 1, дедушка — 2. При превышении лимита отказ **до**
+    // создания дочерней сессии (иначе остался бы «пустой» ребёнок).
+    // `0` — без ограничения; не задано — дефолт секции `agents` (1).
+    //
+    // Глубина берётся у сессии-родителя будущего ребёнка (`extra.sessionId` —
+    // именно он записывается в `parentId` дочерней сессии, см. `fork.ts`).
+    const depthLimit = extra.subagentDepth ?? DEFAULT_SUBAGENT_DEPTH;
+    if (depthLimit > 0) {
+      const currentDepth = await resolveSessionDepth(
+        extra.sessionManager,
+        extra.sessionId || ctx.sessionId,
+      );
+      if (currentDepth >= depthLimit) {
+        const params = { limit: String(depthLimit) };
+        return {
+          content: sm('task.depth_limit', params),
+          isError: true,
+          metadata: { i18n: i18nMeta('task.depth_limit', params) },
+        };
+      }
     }
 
     // ─── Продолжение существующей дочерней сессии (`task_id`) ───────

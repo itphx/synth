@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { PermissionPreview, PermissionPreviewFile } from '@itphx/synth-shared/types'
 
 export const PERMISSION_ASK_TIMEOUT_MS = 30_000
 
@@ -11,6 +12,41 @@ export interface PermissionRequest {
   timeoutMs: number
   /** true — пользователь нажал «Остановить таймер»: UI-таймер снят, запрос живёт до ответа. */
   held?: boolean
+  /**
+   * Превью изменений (аддитивно): unified diff по файлам, которые тул
+   * собирается изменить — пользователь подтверждает запись, видя, ЧТО
+   * изменится. Поля нет, если превью не посчиталось или сервер его не прислал.
+   */
+  preview?: PermissionPreview
+}
+
+/**
+ * Разбор превью из payload'а события `permission.asked`.
+ *
+ * Данные приходят по проводу — разбираем их строго: неправильная форма →
+ * превью просто не показывается (поведение прежнее).
+ */
+export function parsePermissionPreview(value: unknown): PermissionPreview | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const rawFiles = (value as { files?: unknown }).files
+  if (!Array.isArray(rawFiles) || rawFiles.length === 0) return undefined
+
+  const files: PermissionPreviewFile[] = []
+  for (const item of rawFiles) {
+    if (!item || typeof item !== 'object') return undefined
+    const record = item as Record<string, unknown>
+    const path = typeof record.path === 'string' ? record.path : ''
+    const diff = typeof record.diff === 'string' ? record.diff : ''
+    if (!path || !diff) return undefined
+    const additions = typeof record.additions === 'number' && Number.isFinite(record.additions)
+      ? record.additions
+      : 0
+    const deletions = typeof record.deletions === 'number' && Number.isFinite(record.deletions)
+      ? record.deletions
+      : 0
+    files.push({ path, diff, additions, deletions })
+  }
+  return { files }
 }
 
 interface PermissionStore {
