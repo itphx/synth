@@ -245,6 +245,21 @@ describe('SessionManager', () => {
     expect(overflow).toBeNull();
   });
 
+  it('addPendingMessage снимает queueStopped у нового пользовательского ввода', async () => {
+    const session = await manager.createSession({});
+    await manager.withLock(session.id, async (s) => {
+      s.status.queueStopped = true;
+      s.status.queueStoppedAt = nowISO();
+      await manager.saveSession(s);
+    });
+
+    await manager.addPendingMessage(session.id, makeMsg('продолжить'));
+
+    const loaded = await manager.getSession(session.id);
+    expect(loaded!.status.queueStopped).toBeUndefined();
+    expect(loaded!.status.queueStoppedAt).toBeUndefined();
+  });
+
   it('addMessage удаляет U+0000 из content/parts/reasoning/toolCalls/metadata (file backend)', async () => {
     const session = await manager.createSession({});
     const message = {

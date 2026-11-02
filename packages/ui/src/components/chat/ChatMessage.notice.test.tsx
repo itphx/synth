@@ -151,6 +151,27 @@ describe('ChatMessage: единый Notice служебных сообщений
     expect(container.textContent).toContain('Открыть сессию')
   })
 
+  it('restart_resumed → подпись «Work resumed after restart» и локализованный текст', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'info',
+        content: 'raw fallback',
+        metadata: {
+          type: 'restart_resumed',
+          i18n: { key: 'chat.notice.restartResumedText' },
+        },
+      }),
+    )
+    // Заголовок системного блока — своя подпись, а не общее «Info».
+    expect(container.textContent).toContain('Work resumed after restart')
+    expect(container.textContent).not.toContain('Info')
+    // Текст блока резолвится из i18n-ключа `metadata.i18n`.
+    expect(container.textContent).toContain(
+      'The turn was interrupted by an instance restart and continued automatically',
+    )
+    expect(container.textContent).not.toContain('raw fallback')
+  })
+
   it('summary с reasoning-блоками → блоки сохраняются внутри Notice', async () => {
     const container = await renderChat(
       makeMessage({

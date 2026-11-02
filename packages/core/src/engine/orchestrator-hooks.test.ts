@@ -340,8 +340,22 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  it('message_received не эмитится без подписчиков', async () => {
+  it('message_received: resumed-сообщение (автопродолжение после рестарта) не эмитится', async () => {
     const hooks = new HookBus();
+    const received: Array<Record<string, unknown>> = [];
+    hooks.on('message_received', (ctx) => { received.push(ctx as unknown as Record<string, unknown>); }, { mode: 'async' });
+
+    const h = await makeHarness(hooks, {
+      message: { metadata: { stream_id: 'resume-1', resumed: true } },
+    });
+    await run(h);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(received).toHaveLength(0);
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('message_received не эмитится без подписчиков', async () => {    const hooks = new HookBus();
     const spy = vi.spyOn(hooks, 'emitAsync');
 
     const h = await makeHarness(hooks);

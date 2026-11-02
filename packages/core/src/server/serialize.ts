@@ -175,6 +175,10 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
       blocked: session.status.blocked || null,
       cancel_requested: session.status.cancelRequested || false,
       cancel_requested_at: session.status.cancelRequestedAt || null,
+      // Обработка очереди осознанно остановлена (Stop/stall): UI показывает
+      // баннер «Обработка остановлена» и не ждёт автозапуска после рестарта.
+      queue_stopped: session.status.queueStopped || false,
+      queue_stopped_at: session.status.queueStoppedAt || null,
     },
     settings: session.settings,
     /** ADR-070 §2.4: состояние промпта per-agent (generation/hash/prefix). */

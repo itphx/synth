@@ -1846,11 +1846,21 @@ export function createSessionRoutes(
     // иначе сессия остаётся «зависшей» (stalled). Если процессора нет — снимаем
     // флаг, иначе следующий запуск ложно отменится.
     if (!queueManager.requestStop(id)) {
-      await sessionManager.withLock(id, async (s) => {
+      const pendingCount = await sessionManager.withLock(id, async (s) => {
         s.status.cancelRequested = undefined;
         s.status.cancelRequestedAt = undefined;
+        // Осознанный «Стоп» при непустой очереди: после рестарта такую сессию
+        // не автозапускаем, UI показывает баннер «Обработка остановлена».
+        if (s.pendingMessages.length > 0) {
+          s.status.queueStopped = true;
+          s.status.queueStoppedAt = nowISO();
+        }
         await sessionManager.saveSession(s);
+        return s.pendingMessages.length;
       });
+      if (pendingCount > 0) {
+        deps.eventBus.publish(id, 'queue.stalled', { pending_count: pendingCount });
+      }
     }
 
     // ADR-104 (решение 2026-10-28): «Стоп» снимает неприменённые инъекции —

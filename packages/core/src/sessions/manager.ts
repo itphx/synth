@@ -469,9 +469,21 @@ export class SessionManager {
    *
    * Живой ход своего процесса (owner === instanceId) не трогается.
    */
-  async recoverInterruptedSessions(): Promise<Array<{ sessionId: string; turnId?: string; streamId?: string }>> {
+  async recoverInterruptedSessions(): Promise<Array<{
+    sessionId: string;
+    turnId?: string;
+    streamId?: string;
+    resumeMessage?: Message;
+    pendingLeft: number;
+  }>> {
     const sessions = await this.listSessions(undefined, { includeArchived: true, light: true });
-    const recovered: Array<{ sessionId: string; turnId?: string; streamId?: string }> = [];
+    const recovered: Array<{
+      sessionId: string;
+      turnId?: string;
+      streamId?: string;
+      resumeMessage?: Message;
+      pendingLeft: number;
+    }> = [];
 
     for (const listed of sessions) {
       const streamStale = !!listed.currentStream && listed.currentStream.owner !== this.instanceId;
@@ -480,6 +492,8 @@ export class SessionManager {
 
       let turnId: string | undefined;
       let streamId: string | undefined;
+      let resumeMessage: Message | undefined;
+      let pendingLeft = 0;
       let changed = false;
       let ownLiveStream = false;
 
@@ -491,6 +505,7 @@ export class SessionManager {
           const staleBlocked = !!session.status.blocked && session.status.blockedOwner !== this.instanceId;
           if (!staleStream && !staleBlocked) {
             ownLiveStream = !!session.currentStream;
+            pendingLeft = session.pendingMessages.length;
             return;
           }
           changed = true;
@@ -512,6 +527,30 @@ export class SessionManager {
           session.status.cancelRequested = undefined;
           session.status.cancelRequestedAt = undefined;
           session.retry = undefined;
+
+          // In-flight сообщение прерванного хода: забираем из очереди (оно уже
+          // взято в работу — в очереди ему не место) либо, если очередь его не
+          // содержит, берём user-копию из истории. Процессор получит копию как
+          // `resumeMessage`; в историю повторно она не пишется (Phase 1 дедуп
+          // по `stream_id`). Флаг `resumed` — чтобы не эмитить `message_received`.
+          if (staleStream && streamId) {
+            const pendingIdx = session.pendingMessages.findIndex(
+              (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+            );
+            const source = pendingIdx >= 0
+              ? session.pendingMessages.splice(pendingIdx, 1)[0]
+              : [...session.messages].reverse().find(
+                (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+              );
+            if (source) {
+              resumeMessage = {
+                ...source,
+                metadata: { ...(source.metadata ?? {}), resumed: true },
+              };
+            }
+          }
+
+          pendingLeft = session.pendingMessages.length;
           session.updatedAt = nowISO();
           await this.store.save(session);
         });
@@ -530,10 +569,49 @@ export class SessionManager {
         sessionId: listed.id,
         ...(turnId ? { turnId } : {}),
         ...(streamId ? { streamId } : {}),
+        ...(resumeMessage ? { resumeMessage } : {}),
+        pendingLeft,
       });
     }
 
     return recovered;
+  }
+
+  /**
+   * Забрать из очереди первое сообщение, если оно **уже материализовано в
+   * истории** — это in-flight ход, переживший рестарт.
+   *
+   * Сценарий: прошлый recovery уже снял `currentStream`/`blocked`, но исходное
+   * сообщение осталось одновременно в истории и в `pendingMessages`. Обычный
+   * автозапуск очереди обработал бы его как новую работу — без info-блока и без
+   * `resumed`-метки (повторная материализация в историю/`message_received`).
+   * Поэтому сообщение снимается из очереди и возвращается **копией** с
+   * `metadata.resumed: true` — процессор обработает его как resume.
+   *
+   * Признак in-flight: первое pending-сообщение (роль `user`) совпадает с
+   * user-сообщением истории по `id` либо по непустому `stream_id`. Нет
+   * совпадения — это обычная очередь: `undefined`, `pendingMessages` не трогаем.
+   * История и `queueStopped` не меняются; повторный вызов идемпотентен.
+   */
+  async takePendingInFlight(sessionId: string): Promise<Message | undefined> {
+    return this.withLock(sessionId, async (session) => {
+      const first = session.pendingMessages[0];
+      if (!first) return undefined;
+      const streamId = first.metadata?.stream_id as string | undefined;
+      const alreadyInHistory = session.messages.some((m) => {
+        if (m.role !== MessageRole.USER) return false;
+        if (first.id && m.id === first.id) return true;
+        return !!streamId && m.metadata?.stream_id === streamId;
+      });
+      if (!alreadyInHistory) return undefined;
+      session.pendingMessages.splice(0, 1);
+      session.updatedAt = nowISO();
+      await this.store.save(session);
+      return {
+        ...first,
+        metadata: { ...(first.metadata ?? {}), resumed: true },
+      };
+    });
   }
 
   async addMessage(sessionId: string, message: Message): Promise<Session | null> {
@@ -707,7 +785,19 @@ export class SessionManager {
     }
   }
 
-  async addPendingMessage(sessionId: string, message: Message, maxPending = 5): Promise<Session | null> {
+  async addPendingMessage(
+    sessionId: string,
+    message: Message,
+    maxPending = 5,
+    options?: {
+      /**
+       * Снимать `queueStopped` при постановке (по умолчанию — да для нового
+       * пользовательского ввода). Возврат сообщений в очередь
+       * (`requeueMessages`) флаг не снимает: остановка была осознанной.
+       */
+      clearQueueStopped?: boolean;
+    },
+  ): Promise<Session | null> {
     return this.withLock(sessionId, async (session) => {
       if (session.pendingMessages.length >= maxPending) return null;
       if (!message.id) message.id = generateId();
@@ -717,6 +807,12 @@ export class SessionManager {
       }
       sanitizeMessageNullBytes(message);
       session.pendingMessages.push(message);
+      // Новый пользовательский ввод возобновляет осознанно остановленную
+      // обработку (Stop/stall): очередь снова живёт.
+      if (options?.clearQueueStopped !== false && message.role === MessageRole.USER) {
+        session.status.queueStopped = undefined;
+        session.status.queueStoppedAt = undefined;
+      }
       session.updatedAt = nowISO();
       await this.store.save(session);
       return session;
@@ -783,6 +879,10 @@ export class SessionManager {
       sanitizeMessageNullBytes(message);
       inbox.push(message);
       session.steerInbox = inbox;
+      // Вмешательство пользователя — новая работа: осознанная остановка
+      // обработки снимается.
+      session.status.queueStopped = undefined;
+      session.status.queueStoppedAt = undefined;
       session.updatedAt = nowISO();
       await this.store.save(session);
       return { accepted: true, pending: inbox.length };

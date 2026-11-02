@@ -9,8 +9,15 @@ import type {
   WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session, Message,
   PluginServerPolicy,
 } from '@itphx/synth-shared';
-import { ensureDataDir, mergeModelCompatibility, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION } from '@itphx/synth-shared';
+import { ensureDataDir, mergeModelCompatibility, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION, generateId, makeTextPart, nowISO, MessageRole } from '@itphx/synth-shared';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
+import { serializeMessage } from '../serialize.js';
+
+/**
+ * Fallback-текст info-блока автопродолжения после рестарта: content — en-текст
+ * по контракту ADR-041 (LLM-контекст), UI локализует по `metadata.i18n`.
+ */
+const RESTART_RESUMED_TEXT = 'The turn was interrupted by an instance restart and continued automatically';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -641,16 +648,60 @@ export async function createStandaloneDeps(
       );
     }
   }
+  /**
+   * Info-блок «ход продолжен после рестарта»: пишется в историю (роль INFO — в
+   * LLM-контекст не попадает) и публикуется `message.added`. Дубль для того же
+   * `stream_id` не пишется: recovery и автоскан очередей могут указывать на одно
+   * и то же сообщение.
+   */
+  const addRestartResumedNotice = async (
+    sessionId: string,
+    streamId: string | undefined,
+  ): Promise<void> => {
+    const session = await sessionManager.getSession(sessionId);
+    const alreadyNotified = session?.messages.some(
+      (m) => m.metadata?.type === 'restart_resumed'
+        && (m.metadata?.stream_id as string | undefined) === streamId,
+    );
+    if (alreadyNotified) return;
+    const info: Message = {
+      id: generateId(),
+      role: MessageRole.INFO,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(RESTART_RESUMED_TEXT)],
+      content: RESTART_RESUMED_TEXT,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      metadata: {
+        type: 'restart_resumed',
+        ...(streamId ? { stream_id: streamId } : {}),
+        i18n: { key: 'chat.notice.restartResumedText' },
+      },
+    };
+    let index = 0;
+    try {
+      const updated = await sessionManager.addMessage(sessionId, info);
+      if (updated) index = Math.max(0, updated.messages.length - 1);
+    } catch (err) {
+      console.warn(
+        `[sessions] info-блок восстановления не записан: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    eventBus.publish(sessionId, 'message.added', serializeMessage(info, index));
+  };
   // Session-маркеры хода/блокировки переживают рестарт: процесс, убитый при
   // rolling update, не успевает снять `currentStream`/`status.blocked`, а
   // процессор очереди такую сессию считает занятой и не стартует — UI вечно
   // показывает активность. Восстановление отложено на 60 с, чтобы старый под
   // успел умереть, а живые маркеры работающего процесса не были сняты.
-  // В деградации хранилище read-only — ничего не пишем.
+  // В деградации хранилище read-only — ничего не пишем и не запускаем.
   if (!storageDegraded) {
     const bootRecovery = setTimeout(() => {
       void sessionManager.recoverInterruptedSessions()
-        .then((recovered) => {
+        .then(async (recovered) => {
           for (const r of recovered) {
             eventBus.publish(r.sessionId, 'turn.finished', {
               turn_id: r.turnId,
@@ -659,9 +710,54 @@ export async function createStandaloneDeps(
               status: 'stopped',
             });
             eventBus.publish(r.sessionId, 'session.updated', { session_id: r.sessionId });
+            if (!r.resumeMessage) continue;
+            // Автопродолжение: info-блок в истории (в LLM-контекст не попадает —
+            // роль INFO исключена из промпта) и resume-сообщение процессору.
+            await addRestartResumedNotice(r.sessionId, r.streamId);
+            queueManager.createProcessor(r.sessionId, sessionManager, eventBus, processMessage, {
+              resumeMessage: r.resumeMessage,
+            });
           }
           if (recovered.length) {
             console.log(`[sessions] сняты маркеры прерванных ходов: ${recovered.length}`);
+          }
+          // Автозапуск очередей, переживших рестарт: pending без активного хода
+          // и без осознанной остановки (`queueStopped`). Сессии саб-агентов не
+          // продолжаем — решение за родителем. `light`-список не подходит:
+          // он очищает `pendingMessages`.
+          try {
+            const sessions = await sessionManager.listSessions(undefined, { includeArchived: false });
+            for (const s of sessions) {
+              if (s.archivedAt || s.sessionOrigin === 'subagent') continue;
+              if (s.currentStream || s.status.blocked) continue;
+              if (s.pendingMessages.length === 0) continue;
+              if (s.status.queueStopped) {
+                eventBus.publish(s.id, 'queue.stalled', {
+                  pending_count: s.pendingMessages.length,
+                });
+                continue;
+              }
+              // Маркеры мог снять прошлый recovery, а сообщение осталось и в
+              // истории, и в очереди. Это прерванный in-flight ход: продолжаем
+              // его как resume (info-блок + метка `resumed`), а не как новую
+              // очередь — иначе сообщение материализуется в историю повторно.
+              const resume = await sessionManager.takePendingInFlight(s.id);
+              if (resume) {
+                await addRestartResumedNotice(
+                  s.id,
+                  resume.metadata?.stream_id as string | undefined,
+                );
+                queueManager.createProcessor(s.id, sessionManager, eventBus, processMessage, {
+                  resumeMessage: resume,
+                });
+                continue;
+              }
+              queueManager.createProcessor(s.id, sessionManager, eventBus, processMessage);
+            }
+          } catch (err) {
+            console.warn(
+              `[sessions] автозапуск очередей после рестарта: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         })
         .catch((err) => {

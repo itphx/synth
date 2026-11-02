@@ -29,6 +29,15 @@ export interface SessionStatus {
   cancelRequested?: boolean;
   /** Время запроса отмены (ISO) — для диагностики/аудита. */
   cancelRequestedAt?: string;
+  /**
+   * Обработка очереди осознанно остановлена: «Стоп» при непустой очереди или
+   * `queue.stalled` (потеря процессора). После рестарта такие сессии **не**
+   * автозапускаются — пользователь возобновляет вручную
+   * (`POST /queue/:id/resume` или новое сообщение).
+   */
+  queueStopped?: boolean;
+  /** Время остановки обработки очереди (ISO) — для диагностики/аудита. */
+  queueStoppedAt?: string;
 }
 
 export const PLAN_MODES = ['auto', 'strict', 'off'] as const;

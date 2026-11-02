@@ -224,8 +224,8 @@ export function ChatTab({ tab }: ChatTabProps) {
           const sessData = session as unknown as Record<string, unknown>
           setSessionOrigin((sessData.session_origin as string) || null)
           const pendingMsgs = sessData.pending_messages as MessageData[] | undefined
+          const hasActiveStream = sessData.current_stream != null || isStreaming
           if (pendingMsgs && pendingMsgs.length > 0) {
-            const hasActiveStream = sessData.current_stream != null || isStreaming
             const displayMsgs = hasActiveStream ? pendingMsgs.slice(1) : pendingMsgs
             if (displayMsgs.length > 0) {
               setPendingMessages(sessionId, displayMsgs.map(toQueuedMessage))
@@ -235,7 +235,15 @@ export function ChatTab({ tab }: ChatTabProps) {
           if (session.sticky_notes) {
             setStickyNotes(sessionId, session.sticky_notes)
           }
-          resetQueueStalled(sessionId)
+          // Осознанная остановка обработки (Stop/stall) пережила рестарт:
+          // без этого баннер «Обработка остановлена» не появился бы у свежего
+          // клиента (событие `queue.stalled` уже опубликовано до подключения).
+          const status = sessData.status as Record<string, unknown> | undefined
+          if (status?.queue_stopped === true && pendingMsgs && pendingMsgs.length > 0 && !hasActiveStream) {
+            useChatStore.getState().setQueueStalled(sessionId, pendingMsgs.length)
+          } else {
+            resetQueueStalled(sessionId)
+          }
         }
       } catch {
         if (!cancelled) {

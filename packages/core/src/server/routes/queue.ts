@@ -491,22 +491,29 @@ export function createQueueRoutes(
     }
 
     if (session.pendingMessages.length === 0) {
+      // Явное «Продолжить» снимает осознанную остановку даже при пустой
+      // очереди (маркер не должен переживать действие пользователя).
+      await sessionManager.safeUpdate(sessionId, async (s) => {
+        s.status.queueStopped = undefined;
+        s.status.queueStoppedAt = undefined;
+      });
       return c.json({ resumed: true, pending_count: 0 });
     }
 
-    await sessionManager.forceReleaseLock(sessionId);
+    await sessionManager.safeUpdate(sessionId, async (s) => {
+      // Пользователь возобновил обработку — снимаем маркер остановки.
+      s.status.queueStopped = undefined;
+      s.status.queueStoppedAt = undefined;
+      // Используем существующий stream_id первого pending-сообщения, НЕ
+      // генерируем новый — иначе Phase 1 нового процессора повторно запушит
+      // сообщение в историю. Если stream_id отсутствует — генерируем один раз.
+      const p = s.pendingMessages[0];
+      if (!p) return;
+      if (!p.metadata) p.metadata = {};
+      if (!p.metadata.stream_id) p.metadata.stream_id = generateStreamId();
+    });
 
-    // Используем существующий stream_id первого pending-сообщения, НЕ генерируем
-    // новый — иначе Phase 1 нового процессора повторно запушит сообщение в историю.
-    // Если stream_id отсутствует — генерируем один раз и сохраняем.
-    if (session.pendingMessages[0]) {
-      await sessionManager.safeUpdate(sessionId, async (s) => {
-        const p = s.pendingMessages[0];
-        if (!p) return;
-        if (!p.metadata) p.metadata = {};
-        if (!p.metadata.stream_id) p.metadata.stream_id = generateStreamId();
-      });
-    }
+    await sessionManager.forceReleaseLock(sessionId);
 
     // ADR-118 §4: очередь снова обрабатывается — состояние очереди (счётчики,
     // без текста и автора). Прежний `message.queued` удалён без dual-emit:

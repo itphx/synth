@@ -545,9 +545,11 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     expect(s!.currentStream).toBeUndefined();
     expect(s!.status.cancelRequested).toBeUndefined();
     expect(s!.status.cancelRequestedAt).toBeUndefined();
-    // Гонка: после отмены не должен публиковаться queue.stalled (иначе UI
-    // мигает панелью «Обработка остановлена»).
-    expect(events.some((e) => e.type === 'queue.stalled')).toBe(false);
+    // Осознанная остановка при непустой очереди: флаг + явный сигнал UI
+    // (`queue.stalled` → баннер «Обработка остановлена» и «Продолжить»).
+    expect(s!.status.queueStopped).toBe(true);
+    expect(s!.status.queueStoppedAt).toBeTruthy();
+    expect(events.some((e) => e.type === 'queue.stalled')).toBe(true);
   });
 
   it('backoff: requestStop будит паузу, очередь сохраняется, stream.cancelled один раз', async () => {
@@ -581,6 +583,9 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     expect(s!.currentStream).toBeUndefined();
     expect(s!.status.cancelRequested).toBeUndefined();
     expect(s!.status.cancelRequestedAt).toBeUndefined();
+    // Очередь сохранена и помечена как осознанно остановленная.
+    expect(s!.status.queueStopped).toBe(true);
+    expect(events.some((e) => e.type === 'queue.stalled')).toBe(true);
   });
 
   it('персистентный флаг cancelRequested (abort без стрима) останавливает процессор', async () => {
@@ -605,7 +610,10 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     expect(s!.status.cancelRequestedAt).toBeUndefined();
     expect(events.some((e) => e.type === 'stream.error')).toBe(false);
     expect(events.some((e) => e.type === 'stream.start')).toBe(false);
-    expect(events.some((e) => e.type === 'queue.stalled')).toBe(false);
+    // Очередь непуста → осознанная остановка помечается и сигнализируется UI.
+    expect(s!.status.queueStopped).toBe(true);
+    expect(s!.status.queueStoppedAt).toBeTruthy();
+    expect(events.some((e) => e.type === 'queue.stalled')).toBe(true);
   });
 
   it('персистентный флаг перечитывается на границе цикла (backoff без requestStop)', async () => {
@@ -1250,5 +1258,156 @@ describe('enqueueUserMessage / enqueueSteerMessage — message.enqueued', () => 
     expect(snapshot.content).toBe('ключ ⟦SYNTH_SECRET_1⟧');
     // Реального значения секрета в событии нет (значения из `metadata.secrets` вырезаны).
     expect(JSON.stringify(snapshot)).not.toContain('sk-secret-value');
+  });
+});
+
+/**
+ * Автопродолжение после рестарта: resume-сообщение уже в истории, но не в
+ * `pendingMessages` — процессор обрабатывает его первым, не дублирует историю и
+ * не снимает следующее сообщение очереди.
+ */
+describe('QueueProcessor — resume-сообщение после рестарта', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qresume-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function seed(): Promise<{
+    sessionId: string;
+    resume: Message;
+    next: Message;
+  }> {
+    const session = await sessionManager.createSession({ title: 'Resume' });
+    const inFlight = makeMessage();
+    inFlight.metadata = { stream_id: 'resume-1' };
+    // In-flight уже материализовано в историю старым процессом.
+    await sessionManager.addMessage(session.id, inFlight);
+    const resume: Message = {
+      ...inFlight,
+      metadata: { ...(inFlight.metadata ?? {}), resumed: true },
+    };
+    const next = makeMessage();
+    next.metadata = { stream_id: 'next-1' };
+    await sessionManager.addPendingMessage(session.id, next);
+    return { sessionId: session.id, resume, next };
+  }
+
+  it('resume обрабатывается первым, история не дублируется, следующее не теряется', async () => {
+    const { sessionId, resume, next } = await seed();
+    const calls: string[] = [];
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+
+    const processor = new QueueProcessor(
+      sessionId,
+      sessionManager,
+      eventBus,
+      async (_session, message) => {
+        calls.push(message.id);
+        if (message.id === resume.id) await gate;
+        return {};
+      },
+      undefined,
+      undefined,
+      resume,
+    );
+
+    const started = processor.start();
+
+    // Resume взят в работу, следующее сообщение ещё в очереди.
+    await vi.waitFor(() => {
+      expect(calls).toEqual([resume.id]);
+    });
+    const during = (await sessionManager.getSession(sessionId))!;
+    expect(during.pendingMessages.map((m) => m.id)).toEqual([next.id]);
+    expect(during.messages.filter((m) => m.role === MessageRole.USER)).toHaveLength(1);
+
+    release();
+    await started;
+
+    expect(calls).toEqual([resume.id, next.id]);
+    const after = (await sessionManager.getSession(sessionId))!;
+    expect(after.pendingMessages).toHaveLength(0);
+    // История содержит ровно одну user-реплику каждого хода — без дубля resume.
+    expect(after.messages.filter((m) => m.role === MessageRole.USER)).toHaveLength(2);
+  });
+
+  it('recoverable-ошибка: retry берёт то же resume-сообщение', async () => {
+    const session = await sessionManager.createSession({ title: 'Resume retry' });
+    const inFlight = makeMessage();
+    inFlight.metadata = { stream_id: 'resume-1' };
+    await sessionManager.addMessage(session.id, inFlight);
+    const resume: Message = {
+      ...inFlight,
+      metadata: { ...(inFlight.metadata ?? {}), resumed: true },
+    };
+    const sessionId = session.id;
+    const calls: string[] = [];
+    let attempt = 0;
+
+    const processor = new QueueProcessor(
+      sessionId,
+      sessionManager,
+      eventBus,
+      async (_session, message) => {
+        calls.push(message.id);
+        attempt++;
+        if (attempt === 1) return { error: 'timeout', errorType: 'timeout', canRetry: true };
+        return {};
+      },
+      undefined,
+      undefined,
+      resume,
+    );
+
+    const events = collectEvents(eventBus, sessionId);
+    const started = processor.start();
+    await waitForEvent(events, 'stream.retry');
+    processor.retryNow();
+    await started;
+
+    expect(calls[0]).toBe(resume.id);
+    expect(calls[1]).toBe(resume.id);
+    const after = (await sessionManager.getSession(sessionId))!;
+    expect(after.messages.filter((m) => m.role === MessageRole.USER)).toHaveLength(1);
+  });
+
+  it('Stop на resume: очередь сохранена, queueStopped=true, queue.stalled опубликован', async () => {
+    const { sessionId, resume, next } = await seed();
+    const events = collectEvents(eventBus, sessionId);
+    const processMessage = vi.fn().mockResolvedValue({});
+    const processor = new QueueProcessor(
+      sessionId,
+      sessionManager,
+      eventBus,
+      processMessage as never,
+      undefined,
+      undefined,
+      resume,
+    );
+
+    // Детерминированный «Стоп» в окне Phase 1 (как в тесте гонки): запрос
+    // приходит на `stream.start`, до старта LLM-вызова.
+    const unsubscribe = eventBus.subscribe(sessionId, (event) => {
+      if (event.type === 'stream.start') processor.requestStop();
+    });
+    await processor.start();
+    unsubscribe();
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const stored = (await sessionManager.getSession(sessionId))!;
+    expect(stored.pendingMessages.map((m) => m.id)).toEqual([next.id]);
+    expect(stored.status.queueStopped).toBe(true);
+    expect(stored.status.queueStoppedAt).toBeTruthy();
+    expect(events.some((e) => e.type === 'queue.stalled')).toBe(true);
   });
 });

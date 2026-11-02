@@ -722,7 +722,13 @@ function ChatMessageInner({
           : null
 
   if (noticeVariant) {
-    const label = t(`chat.notice.${noticeVariant}`)
+    // Автопродолжение после рестарта: отдельная подпись вместо общего «Инфо»;
+    // текст блока локализуется штатно — из `metadata.i18n`.
+    const isRestartResumed = isInfo
+      && (message.metadata as Record<string, unknown> | undefined)?.type === 'restart_resumed'
+    const label = isRestartResumed
+      ? t('chat.notice.restartResumed')
+      : t(`chat.notice.${noticeVariant}`)
     const withMeta = noticeVariant === 'summary' || noticeVariant === 'debug'
     const selectionCheckboxEl = selectionMode ? (
       <div className="flex items-center self-stretch pr-1">

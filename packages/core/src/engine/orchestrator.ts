@@ -3917,6 +3917,9 @@ export class ChatOrchestrator {
     if (
       (!attempt || attempt <= 1)
       && message.role === MessageRole.USER
+      // Восстановленное после рестарта сообщение — не новое входящее: хук не
+      // эмитим (иначе плагины/интеграции сработали бы повторно).
+      && message.metadata?.resumed !== true
       && this._hooks?.count('message_received')
     ) {
       const messageSource = typeof message.metadata?.source === 'string'

@@ -160,7 +160,7 @@ describe('SessionManager.recoverInterruptedSessions (маркеры прошлы
     const id = await withMarkers(other, { ownerInStream: 'owner-dead', ownerInBlock: 'owner-dead' });
 
     const recovered = await manager.recoverInterruptedSessions();
-    expect(recovered).toEqual([{ sessionId: id, turnId: 'turn-1', streamId: 'stream-1' }]);
+    expect(recovered).toEqual([{ sessionId: id, turnId: 'turn-1', streamId: 'stream-1', pendingLeft: 0 }]);
 
     const stored = (await manager.getSession(id))!;
     expect(stored.currentStream).toBeUndefined();
@@ -183,7 +183,7 @@ describe('SessionManager.recoverInterruptedSessions (маркеры прошлы
     await store.save(session);
 
     const recovered = await manager.recoverInterruptedSessions();
-    expect(recovered).toEqual([{ sessionId: created.id, streamId: 'stream-legacy' }]);
+    expect(recovered).toEqual([{ sessionId: created.id, streamId: 'stream-legacy', pendingLeft: 0 }]);
 
     const stored = (await manager.getSession(created.id))!;
     expect(stored.currentStream).toBeUndefined();
@@ -197,7 +197,7 @@ describe('SessionManager.recoverInterruptedSessions (маркеры прошлы
     await store.save(session);
 
     const recovered = await manager.recoverInterruptedSessions();
-    expect(recovered).toEqual([{ sessionId: created.id }]);
+    expect(recovered).toEqual([{ sessionId: created.id, pendingLeft: 0 }]);
 
     const stored = (await manager.getSession(created.id))!;
     expect(stored.status.blocked).toBeUndefined();
@@ -231,8 +231,95 @@ describe('SessionManager.recoverInterruptedSessions (маркеры прошлы
     expect(afterUpdate.status.blockedOwner).toBeUndefined();
 
     const recovered = await manager.recoverInterruptedSessions();
-    expect(recovered).toEqual([{ sessionId: created.id, streamId: 'stream-legacy' }]);
+    expect(recovered).toEqual([{ sessionId: created.id, streamId: 'stream-legacy', pendingLeft: 0 }]);
     expect((await manager.getSession(created.id))!.currentStream).toBeUndefined();
+  });
+
+  it('in-flight из pending: снято из очереди и возвращено как resumeMessage', async () => {
+    const created = await manager.createSession({ title: 'Resume pending' });
+    const userMsg = message({
+      role: MessageRole.USER,
+      content: 'сделай',
+      metadata: { stream_id: 'stream-1' },
+    });
+    const laterMsg = message({
+      role: MessageRole.USER,
+      content: 'потом',
+      metadata: { stream_id: 'stream-2' },
+    });
+    await manager.addPendingMessage(created.id, userMsg);
+    await manager.addPendingMessage(created.id, laterMsg);
+
+    const session = (await manager.getSession(created.id))!;
+    session.currentStream = {
+      streamId: 'stream-1',
+      message: 'сделай',
+      startedAt: nowISO(),
+      cancelled: false,
+      turnId: 'turn-1',
+      owner: 'owner-dead',
+    };
+    session.status.blocked = 'process-dead';
+    session.status.blockedAt = nowISO();
+    session.status.blockedOwner = 'owner-dead';
+    await manager.saveSession(session);
+
+    const recovered = await manager.recoverInterruptedSessions();
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({
+      sessionId: created.id,
+      turnId: 'turn-1',
+      streamId: 'stream-1',
+      pendingLeft: 1,
+      resumeMessage: {
+        id: userMsg.id,
+        content: 'сделай',
+        metadata: { stream_id: 'stream-1', resumed: true },
+      },
+    });
+
+    const stored = (await manager.getSession(created.id))!;
+    expect(stored.pendingMessages.map((m) => m.id)).toEqual([laterMsg.id]);
+    expect(stored.currentStream).toBeUndefined();
+  });
+
+  it('in-flight нет в pending — resumeMessage берётся из истории', async () => {
+    const created = await manager.createSession({ title: 'Resume history' });
+    const userMsg = message({
+      role: MessageRole.USER,
+      content: 'сделай',
+      metadata: { stream_id: 'stream-1' },
+    });
+    await manager.appendMessage(created.id, userMsg);
+
+    const session = (await manager.getSession(created.id))!;
+    session.currentStream = {
+      streamId: 'stream-1',
+      message: 'сделай',
+      startedAt: nowISO(),
+      cancelled: false,
+      turnId: 'turn-1',
+      owner: 'owner-dead',
+    };
+    await manager.saveSession(session);
+
+    const recovered = await manager.recoverInterruptedSessions();
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({
+      sessionId: created.id,
+      streamId: 'stream-1',
+      pendingLeft: 0,
+      resumeMessage: {
+        id: userMsg.id,
+        content: 'сделай',
+        metadata: { stream_id: 'stream-1', resumed: true },
+      },
+    });
+
+    // История не тронута: resume-копия только для процессора.
+    const stored = (await manager.getSession(created.id))!;
+    expect(stored.messages.map((m) => m.id)).toEqual([userMsg.id]);
+    expect(stored.messages[0]!.metadata?.resumed).toBeUndefined();
   });
 
   it('свой owner: живой ход не тронут', async () => {
@@ -254,5 +341,128 @@ describe('SessionManager.recoverInterruptedSessions (маркеры прошлы
 
     expect((await manager.recoverInterruptedSessions()).length).toBe(1);
     expect(await manager.recoverInterruptedSessions()).toEqual([]);
+  });
+});
+
+describe('SessionManager.takePendingInFlight (pending уже в истории)', () => {
+  let manager: SessionManager;
+  let store: FileStore;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-pending-inflight-'));
+    store = new FileStore({ dataDir: tmpDir });
+    manager = new SessionManager(store, { instanceId: 'owner-current' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('снимает из pending, возвращает копию с resumed, историю не меняет', async () => {
+    const created = await manager.createSession({ title: 'Pending in-flight' });
+    const userMsg = message({
+      role: MessageRole.USER,
+      content: 'сделай',
+      metadata: { stream_id: 'stream-1' },
+    });
+    const laterMsg = message({
+      role: MessageRole.USER,
+      content: 'потом',
+      metadata: { stream_id: 'stream-2' },
+    });
+    // Сообщение уже материализовано прошлым процессом и одновременно лежит в очереди.
+    const pendingCopy = message({
+      id: userMsg.id,
+      role: MessageRole.USER,
+      content: 'сделай',
+      metadata: { stream_id: 'stream-1' },
+    });
+    await manager.appendMessage(created.id, userMsg);
+    await manager.addPendingMessage(created.id, pendingCopy, 5, { clearQueueStopped: false });
+    await manager.addPendingMessage(created.id, laterMsg);
+    await manager.safeUpdate(created.id, (s) => {
+      s.status.queueStopped = true;
+      s.status.queueStoppedAt = nowISO();
+    });
+
+    const resume = await manager.takePendingInFlight(created.id);
+
+    expect(resume).toMatchObject({
+      id: userMsg.id,
+      content: 'сделай',
+      metadata: { stream_id: 'stream-1', resumed: true },
+    });
+
+    const stored = (await manager.getSession(created.id))!;
+    expect(stored.pendingMessages.map((m) => m.id)).toEqual([laterMsg.id]);
+    // История не тронута: та же одна user-реплика, без `resumed`.
+    expect(stored.messages.map((m) => m.id)).toEqual([userMsg.id]);
+    expect(stored.messages[0]!.metadata?.resumed).toBeUndefined();
+    // Осознанная остановка не снимается (её снимает только новый ввод/resume).
+    expect(stored.status.queueStopped).toBe(true);
+    expect(stored.status.queueStoppedAt).toBeTruthy();
+  });
+
+  it('pending, которого нет в истории, не трогается', async () => {
+    const created = await manager.createSession({ title: 'Plain queue' });
+    const queued = message({
+      role: MessageRole.USER,
+      content: 'обычная очередь',
+      metadata: { stream_id: 'stream-9' },
+    });
+    await manager.addPendingMessage(created.id, queued);
+
+    expect(await manager.takePendingInFlight(created.id)).toBeUndefined();
+
+    const stored = (await manager.getSession(created.id))!;
+    expect(stored.pendingMessages.map((m) => m.id)).toEqual([queued.id]);
+    expect(stored.messages).toHaveLength(0);
+  });
+
+  it('повторный вызов идемпотентен (pending уже снят)', async () => {
+    const created = await manager.createSession({ title: 'Idempotent' });
+    const userMsg = message({
+      role: MessageRole.USER,
+      content: 'сделай',
+      metadata: { stream_id: 'stream-1' },
+    });
+    await manager.appendMessage(created.id, userMsg);
+    await manager.addPendingMessage(
+      created.id,
+      message({
+        id: userMsg.id,
+        role: MessageRole.USER,
+        content: 'сделай',
+        metadata: { stream_id: 'stream-1' },
+      }),
+      5,
+      { clearQueueStopped: false },
+    );
+
+    expect(await manager.takePendingInFlight(created.id)).toBeDefined();
+    expect(await manager.takePendingInFlight(created.id)).toBeUndefined();
+  });
+
+  it('пустой stream_id, но тот же id в истории — снимается по id', async () => {
+    const created = await manager.createSession({ title: 'By id' });
+    const userMsg = message({
+      role: MessageRole.USER,
+      content: 'без стрима',
+      metadata: {},
+    });
+    await manager.appendMessage(created.id, userMsg);
+    await manager.addPendingMessage(
+      created.id,
+      message({ id: userMsg.id, role: MessageRole.USER, content: 'без стрима', metadata: {} }),
+      5,
+      { clearQueueStopped: false },
+    );
+
+    const resume = await manager.takePendingInFlight(created.id);
+
+    expect(resume).toMatchObject({ id: userMsg.id, content: 'без стрима' });
+    expect(resume!.metadata).toMatchObject({ resumed: true });
+    expect((await manager.getSession(created.id))!.pendingMessages).toHaveLength(0);
   });
 });

@@ -1273,6 +1273,9 @@ export const dict = {
   'chat.notice.debug': 'Отладка',
   'chat.notice.error': 'Ошибка',
   'chat.notice.info': 'Инфо',
+  // ADR-118/восстановление: автопродолжение хода после рестарта инстанса.
+  'chat.notice.restartResumed': 'Работа восстановлена после рестарта',
+  'chat.notice.restartResumedText': 'Ход был прерван рестартом инстанса и продолжен автоматически',
   'chat.notice.scheduler': 'Планировщик',
   'chat.notice.schedulerNamed': 'Планировщик · {name}',
   // ADR-111/ADR-113: уведомление о завершении фонового прогона.

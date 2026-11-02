@@ -199,6 +199,12 @@ export class QueueProcessor {
     private contextOptimizer?: ContextOptimizer,
     /** ADR-102: сборщик аналитики — точка персиста пользовательского сообщения. */
     private analytics?: AnalyticsRecorder,
+    /**
+     * Восстановленное после рестарта in-flight сообщение: обрабатывается первым,
+     * хотя его нет в `pendingMessages`. Сбрасывается после успеха/терминальной
+     * ошибки/«Стопа»; при recoverable-ретрае сохраняется.
+     */
+    private _resumeMessage?: Message,
   ) {}
 
   get isRunning(): boolean {
@@ -277,6 +283,9 @@ export class QueueProcessor {
    */
   private async _handleStopRequest(): Promise<void> {
     this._cancelled = true;
+    // Восстановленное in-flight сообщение снимается вместе с ходом: после
+    // «Стопа» продолжения не будет.
+    this._resumeMessage = undefined;
 
     const { id: streamId, counts } = await this.sessionManager.withLock(this.sessionId, async (s) => {
       const id = s.currentStream?.streamId;
@@ -289,6 +298,12 @@ export class QueueProcessor {
       // Персистентное состояние ретрая снимается вместе с текущим стримом:
       // после «Стопа» повторной попытки не будет.
       s.retry = undefined;
+      // Осознанная остановка при непустой очереди: после рестарта такую сессию
+      // не автозапускаем (пользователь возобновляет сам).
+      if (s.pendingMessages.length > 0) {
+        s.status.queueStopped = true;
+        s.status.queueStoppedAt = nowISO();
+      }
       s.updatedAt = nowISO();
       await this.sessionManager.saveSession(s);
       return { id, counts: queueCounts(s) };
@@ -296,6 +311,13 @@ export class QueueProcessor {
 
     // ADR-118 §4: состояние очереди (счётчики — по фактической очереди).
     publishQueueState(this.eventBus, this.sessionId, counts);
+
+    // Очередь осталась — явный сигнал UI: «Обработка остановлена» + «Продолжить».
+    if (counts.pendingCount > 0) {
+      this.eventBus.publish(this.sessionId, 'queue.stalled', {
+        pending_count: counts.pendingCount,
+      });
+    }
 
     // Дублирующей публикации нет: если отмену уже отработал оркестратор
     // (graceful → `stream.cancelled` + успешная ветка сняла currentStream),
@@ -327,7 +349,8 @@ export class QueueProcessor {
     // _run(), проснувшись, доходил до финальной проверки pending раньше, чем
     // withLock успевал удалить сообщение, и публиковал ложный queue.stalled.
     await this.sessionManager.withLock(this.sessionId, async (s) => {
-      s.pendingMessages = s.pendingMessages.filter((_, i) => i !== 0);
+      const active = this._resumeMessage ?? s.pendingMessages[0];
+      if (active) this._removeProcessed(s, active);
       s.status.blocked = undefined;
       s.status.blockedAt = undefined;
       s.currentStream = undefined;
@@ -339,6 +362,7 @@ export class QueueProcessor {
       publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
     });
 
+    this._resumeMessage = undefined;
     this.wakeBackoff();
     this._activeController?.abort();
 
@@ -377,6 +401,21 @@ export class QueueProcessor {
     });
   }
 
+  /**
+   * Удалить обработанное сообщение из `pendingMessages` по id/`stream_id`.
+   *
+   * Нельзя удалять «первый элемент»: resume-сообщение после рестарта в очереди
+   * отсутствует, и `splice(0, 1)` снял бы **следующее** (ещё не обработанное).
+   */
+  private _removeProcessed(session: Session, message: Message): void {
+    const streamId = message.metadata?.stream_id as string | undefined;
+    const idx = session.pendingMessages.findIndex(
+      (m) => (message.id ? m.id === message.id : false)
+        || (streamId ? m.metadata?.stream_id === streamId : false),
+    );
+    if (idx >= 0) session.pendingMessages.splice(idx, 1);
+  }
+
   private async _run(): Promise<void> {
     while (!this._cancelled) {
       let session: Session | null;
@@ -398,7 +437,7 @@ export class QueueProcessor {
         break;
       }
 
-      if (session.pendingMessages.length === 0) break;
+      if (!this._resumeMessage && session.pendingMessages.length === 0) break;
 
       // Шаг 2б: после падения/рестарта (или doom-loop прежнего хода) в истории
       // могли остаться черновики частичного стрима (`metadata.streaming`) и
@@ -454,7 +493,7 @@ export class QueueProcessor {
         }
       }
 
-      const message = session.pendingMessages[0]!;
+      const message = this._resumeMessage ?? session.pendingMessages[0]!;
       const streamId = message.metadata?.stream_id as string || generateStreamId();
 
       // Проверяем, не повторная ли это попытка
@@ -617,7 +656,7 @@ export class QueueProcessor {
           if (!isRecoverable || retryCount > LLM_MAX_ATTEMPTS) {
             // Unrecoverable или исчерпаны попытки — удалить из очереди
             await this.sessionManager.withLock(this.sessionId, async (s) => {
-              s.pendingMessages = s.pendingMessages.filter((_, i) => i !== 0);
+              this._removeProcessed(s, message);
               const msg = s.messages.find(
                 (m) => m.metadata?.stream_id === streamId && m.role === 'user',
               );
@@ -642,6 +681,7 @@ export class QueueProcessor {
               can_retry: false,
             });
 
+            this._resumeMessage = undefined;
             delete this._retryDelays[streamId];
             continue;
           } else {
@@ -676,7 +716,7 @@ export class QueueProcessor {
 
         // Успех — удалить сообщение из очереди и очистить устаревший last_error
         await this.sessionManager.withLock(this.sessionId, async (s) => {
-          s.pendingMessages = s.pendingMessages.filter((_, i) => i !== 0);
+          this._removeProcessed(s, message);
           const userMsg = s.messages.find(
             (m) => m.metadata?.stream_id === streamId && m.role === MessageRole.USER,
           );
@@ -694,6 +734,7 @@ export class QueueProcessor {
           publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
         });
 
+        this._resumeMessage = undefined;
         delete this._retryDelays[streamId];
       } catch (err) {
         // Непредвиденная ошибка — полная очистка состояния сессии, иначе
@@ -702,7 +743,7 @@ export class QueueProcessor {
         // и фиксируем ошибку в last_error.
         try {
           await this.sessionManager.withLock(this.sessionId, async (s) => {
-            s.pendingMessages = s.pendingMessages.filter((_, i) => i !== 0);
+            this._removeProcessed(s, message);
             const msg = s.messages.find(
               (m) => m.metadata?.stream_id === streamId && m.role === 'user',
             );
@@ -727,6 +768,7 @@ export class QueueProcessor {
           error_type: 'internal',
           can_retry: false,
         });
+        this._resumeMessage = undefined;
         delete this._retryDelays[streamId];
         break;
       }
@@ -747,6 +789,19 @@ export class QueueProcessor {
         return;
       }
       if (session && session.pendingMessages.length > 0) {
+        // Очередь осиротела (процессор завершился, работа осталась) — это
+        // осознанная остановка: после рестарта не автозапускаем.
+        try {
+          await this.sessionManager.withLock(this.sessionId, async (s) => {
+            if (s.pendingMessages.length === 0) return;
+            s.status.queueStopped = true;
+            s.status.queueStoppedAt = nowISO();
+            s.updatedAt = nowISO();
+            await this.sessionManager.saveSession(s);
+          });
+        } catch {
+          // состояние не записалось — баннер всё равно опубликуем
+        }
         this.eventBus.publish(this.sessionId, 'queue.stalled', {
           pending_count: session.pendingMessages.length,
         });
@@ -819,6 +874,7 @@ export class QueueProcessorManager {
     sessionManager: SessionManager,
     eventBus: EventBus,
     processMessage: ProcessMessageFn,
+    opts?: { resumeMessage?: Message },
   ): QueueProcessor {
     const existing = this._processors.get(sessionId);
     if (existing && existing.isRunning) return existing;
@@ -830,6 +886,7 @@ export class QueueProcessorManager {
       processMessage,
       this._contextOptimizer,
       this._analytics,
+      opts?.resumeMessage,
     );
     this._processors.set(sessionId, processor);
 
@@ -1271,7 +1328,7 @@ export async function requeueMessages(
     const streamId = (message.metadata.stream_id as string | undefined) || generateStreamId();
     message.metadata.stream_id = streamId;
     const session = await opts.sessionManager.addPendingMessage(
-      opts.sessionId, message, MAX_PENDING,
+      opts.sessionId, message, MAX_PENDING, { clearQueueStopped: false },
     );
     if (!session) {
       dropped++;

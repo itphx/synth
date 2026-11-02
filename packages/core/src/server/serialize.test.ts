@@ -166,6 +166,19 @@ describe('serializeSession — activity (idle | busy | retry)', () => {
     expect(activity.type).toBe('retry');
     expect(activity.turnId).toBeUndefined();
   });
+
+  it('status.queue_stopped/queue_stopped_at — в DTO (осознанная остановка)', () => {
+    const stopped = serializeSession(session({
+      status: { queueStopped: true, queueStoppedAt: '2026-01-01T00:00:05.000Z' },
+    })) as Record<string, unknown>;
+    expect(stopped.status).toMatchObject({
+      queue_stopped: true,
+      queue_stopped_at: '2026-01-01T00:00:05.000Z',
+    });
+
+    const fresh = serializeSession(session()) as Record<string, unknown>;
+    expect(fresh.status).toMatchObject({ queue_stopped: false, queue_stopped_at: null });
+  });
 });
 
 

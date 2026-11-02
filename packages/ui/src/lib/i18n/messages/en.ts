@@ -1297,6 +1297,9 @@ export const dict = {
   'chat.notice.debug': 'Debug',
   'chat.notice.error': 'Error',
   'chat.notice.info': 'Info',
+  // ADR-118/restart recovery: a turn continued automatically after restart.
+  'chat.notice.restartResumed': 'Work resumed after restart',
+  'chat.notice.restartResumedText': 'The turn was interrupted by an instance restart and continued automatically',
   'chat.notice.scheduler': 'Scheduler',
   'chat.notice.schedulerNamed': 'Scheduler · {name}',
   // ADR-111/ADR-113: уведомление о завершении фонового прогона.
