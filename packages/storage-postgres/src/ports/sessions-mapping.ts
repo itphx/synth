@@ -799,14 +799,15 @@ export function deserializeSession(
 
 /**
  * Строка `sessions` → доменная сессия **без истории** (`SessionRepository.listLight`,
- * ADR-097): `messages`/`pendingMessages`/`checkpoints` пусты, child-таблицы не
- * читаются. Метаданные (id/статус/settings/projectId/expiresAt/…) идентичны
- * `deserializeSession` — механика переиспользуется.
+ * ADR-097): `messages`/`checkpoints` пусты, child-таблицы не читаются. **Очередь
+ * сохраняется** (`pendingMessages`/`steerInbox` — jsonb-колонки самой `sessions`,
+ * истории не тянут, нужны recovery/автозапуску). Метаданные
+ * (id/статус/settings/projectId/expiresAt/…) идентичны `deserializeSession` —
+ * механика переиспользуется.
  */
 export function deserializeSessionLight(row: SessionRow): Session {
   const session = deserializeSession(row, emptySessionChildren());
   session.messages = [];
-  session.pendingMessages = [];
   session.checkpoints = [];
   return session;
 }

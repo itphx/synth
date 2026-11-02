@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -664,6 +664,55 @@ describe('FileStore', () => {
     const filtered = await store.list({ projectId: 'p1' });
     expect(filtered).toHaveLength(1);
     expect(filtered[0]!.id).toBe('a');
+  });
+
+  it('listLight читает последовательно (без list) и сохраняет очередь', async () => {
+    const pending = {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local' as const,
+      parts: [makeTextPart('в очереди')],
+      content: 'в очереди',
+      createdAt: new Date().toISOString(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+    await store.save(makeSession({
+      id: 'a',
+      messages: [{ ...pending, id: generateId(), content: 'история', parts: [makeTextPart('история')] }],
+      pendingMessages: [pending],
+    }));
+    await store.save(makeSession({ id: 'b' }));
+
+    const listSpy = vi.spyOn(store, 'list');
+    try {
+      const light = await store.listLight();
+      // Регресс OOM: `list` держит истории всех сессий через `Promise.all`.
+      expect(listSpy).not.toHaveBeenCalled();
+      expect(light).toHaveLength(2);
+      const a = light.find((s) => s.id === 'a')!;
+      expect(a.messages).toEqual([]);
+      expect(a.pendingMessages.map((m) => m.content)).toEqual(['в очереди']);
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
+
+  it('listLight фильтрует по projectId/parentId и сортирует по updatedAt desc', async () => {
+    // Корневые сессии — без `parentId`; `filter.parentId: null` их и выбирает.
+    await store.save(makeSession({ id: 'root-old', projectId: 'p1', updatedAt: '2024-01-01T00:00:00.000Z' }));
+    await store.save(makeSession({ id: 'root-new', projectId: 'p1', updatedAt: '2024-03-01T00:00:00.000Z' }));
+    await store.save(makeSession({ id: 'child', projectId: 'p1', parentId: 'root-old', updatedAt: '2024-02-01T00:00:00.000Z' }));
+    await store.save(makeSession({ id: 'other', projectId: 'p2', updatedAt: '2024-04-01T00:00:00.000Z' }));
+
+    expect((await store.listLight({ projectId: 'p1' })).map((s) => s.id))
+      .toEqual(['root-new', 'child', 'root-old']);
+    expect((await store.listLight({ parentId: null })).map((s) => s.id))
+      .toEqual(['other', 'root-new', 'root-old']);
+    expect((await store.listLight({ parentId: 'root-old' })).map((s) => s.id))
+      .toEqual(['child']);
   });
 
   it('exists проверяет наличие файла сессии', async () => {

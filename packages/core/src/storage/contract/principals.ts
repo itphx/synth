@@ -305,7 +305,7 @@ export function describeSessionRepository(
       expect(list.map((s) => s.id)).toEqual(['b', 'c', 'a']);
     });
 
-    it('listLight: тот же набор id и порядок, что list; messages/pendingMessages/checkpoints пусты', async () => {
+    it('listLight: тот же набор id и порядок, что list; сообщения вырезаны, очередь сохранена', async () => {
       const { repo } = await make();
       await repo.save(makeSession({
         id: 'a',
@@ -313,6 +313,7 @@ export function describeSessionRepository(
         updatedAt: '2024-01-01T00:00:00.000Z',
         messages: [makeMessage('history-a')],
         pendingMessages: [makeMessage('pending-a')],
+        steerInbox: [makeMessage('steer-a')],
         checkpoints: [{ id: 'cp-a', sessionId: 'a', messages: [makeMessage('cp-msg')], createdAt: '2024-01-01T00:00:00.000Z' }],
       }));
       await repo.save(makeSession({
@@ -329,13 +330,21 @@ export function describeSessionRepository(
       // Тот же набор id в том же порядке (updatedAt DESC), что у `list`.
       expect(light.map((s) => s.id)).toEqual(full.map((s) => s.id));
       expect(light.map((s) => s.id)).toEqual(['b', 'c', 'a']);
-      // Метаданные сохранены, история вырезана.
-      expect(light.find((s) => s.id === 'a')?.title).toBe('alpha');
+      // Метаданные сохранены, история вырезана…
+      const lightA = light.find((s) => s.id === 'a')!;
+      expect(lightA.title).toBe('alpha');
+      expect(lightA.messages).toEqual([]);
+      expect(lightA.checkpoints).toEqual([]);
+      // …а очередь — нет: recovery/автозапуску нужны in-flight и steer.
+      expect(lightA.pendingMessages.map((m) => m.content)).toEqual(['pending-a']);
+      expect(lightA.steerInbox?.map((m) => m.content)).toEqual(['steer-a']);
       for (const session of light) {
         expect(session.messages).toEqual([]);
-        expect(session.pendingMessages).toEqual([]);
         expect(session.checkpoints).toEqual([]);
       }
+      // `list` по-прежнему отдаёт полную историю.
+      expect(full.find((s) => s.id === 'a')!.messages.map((m) => m.content)).toEqual(['history-a']);
+      expect(full.find((s) => s.id === 'b')!.messages.map((m) => m.content)).toEqual(['history-b']);
     });
 
     it('search находит по содержимому сообщения', async () => {

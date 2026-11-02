@@ -13,6 +13,7 @@ import type { Message, Session } from '@itphx/synth-shared';
 import {
   deserializeMessage,
   deserializeSession,
+  deserializeSessionLight,
   deserializeSessionRetry,
   deserializeSessionWorktree,
   emptySessionChildren,
@@ -578,5 +579,45 @@ describe('PG-маппинг сообщения: части reasoning с metadata
     expect(reasoning.data).toBe('старый блок');
     expect(reasoning.metadata).toBeUndefined();
     expect(loaded.content).toBe('ответ');
+  });
+});
+
+describe('PG-маппинг сессии: лёгкое чтение сохраняет очередь (ADR-096/ADR-097)', () => {
+  function messageFor(content: string): Message {
+    return {
+      id: `msg-${content}`,
+      role: 'user',
+      seq: 1,
+      origin: 'local',
+      parts: [],
+      content,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    } as Message;
+  }
+
+  it('deserializeSessionLight очищает историю, но не pendingMessages/steerInbox', () => {
+    // Очередь — jsonb-колонки самой sessions: истории не тянут, recovery и
+    // автозапуску нужны (иначе in-flight сообщение теряется).
+    const row = makeRow({
+      pending_messages: [serializeMessage(messageFor('в очереди'))],
+      steer_inbox: [serializeMessage(messageFor('вклинивание'))],
+    });
+
+    const light = deserializeSessionLight(row);
+
+    expect(light.messages).toEqual([]);
+    expect(light.checkpoints).toEqual([]);
+    expect(light.pendingMessages.map((m) => m.content)).toEqual(['в очереди']);
+    expect(light.steerInbox?.map((m) => m.content)).toEqual(['вклинивание']);
+  });
+
+  it('пустая очередь читается как пустые массивы', () => {
+    const light = deserializeSessionLight(makeRow());
+    expect(light.pendingMessages).toEqual([]);
+    expect(light.steerInbox).toEqual([]);
+    expect(light.messages).toEqual([]);
   });
 });

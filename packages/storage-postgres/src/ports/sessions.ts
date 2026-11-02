@@ -36,10 +36,11 @@
  *     **полную** `Session`; сообщения/child-строки подгружаются **батчем**
  *     (`WHERE session_id = ANY($1)`, без N+1); порядок сообщений — по `seq` с
  *     тайбрейкером `created_at`, затем `id` (детерминированное чтение);
- *   - `listLight` — метаданные без истории (`messages`/`pendingMessages`/
- *     `checkpoints` пусты, child-таблицы не читаются): одна выборка из `sessions`
+ *   - `listLight` — метаданные без истории (`messages`/`checkpoints` пусты,
+ *     child-таблицы не читаются; очередь `pendingMessages`/`steerInbox` —
+ *     jsonb-колонки самой `sessions` — сохраняется): одна выборка из `sessions`
  *     тем же `WHERE`/порядком, что у `list`; `loadLight` — та же проекция по
- *     одному id (одна выборка по PK);
+ *     одному id (одна выборка по PK), но без очереди;
  *   - `list`/`listForUser*` сортируют `updated_at DESC`; архивированные сессии
  *     **не** отфильтровываются — это ответственность менеджера
  *     (`SessionManager.listSessions`, как и у файловой/memory реализаций);

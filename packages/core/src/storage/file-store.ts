@@ -733,6 +733,28 @@ export class FileStore implements SessionRepository {
     }
   }
 
+  /**
+   * Общая проверка фильтра списка для `list`/`listLight` — семантика одна,
+   * чтобы реализации не расходились. `search` смотрит title и содержимое
+   * сообщений (у `listLight` сессия ещё загружена целиком — до срезания истории).
+   */
+  private _matchesFilter(session: Session, filter?: SessionFilter): boolean {
+    if (filter?.projectId && session.projectId !== filter.projectId) return false;
+    if (filter?.parentId !== undefined) {
+      if (filter.parentId === null && session.parentId) return false;
+      if (filter.parentId !== null && session.parentId !== filter.parentId) return false;
+    }
+    if (filter?.search) {
+      const search = filter.search.toLowerCase();
+      const matchTitle = session.title?.toLowerCase().includes(search);
+      const matchMsg = session.messages.some(
+        (m) => m.content.toLowerCase().includes(search),
+      );
+      if (!matchTitle && !matchMsg) return false;
+    }
+    return true;
+  }
+
   async list(filter?: SessionFilter): Promise<Session[]> {
     const dir = this._sessionsDir();
     let files: string[];
@@ -749,19 +771,7 @@ export class FileStore implements SessionRepository {
 
     for (const session of loaded) {
       if (!session) continue;
-      if (filter?.projectId && session.projectId !== filter.projectId) continue;
-      if (filter?.parentId !== undefined) {
-        if (filter.parentId === null && session.parentId) continue;
-        if (filter.parentId !== null && session.parentId !== filter.parentId) continue;
-      }
-      if (filter?.search) {
-        const search = filter.search.toLowerCase();
-        const matchTitle = session.title?.toLowerCase().includes(search);
-        const matchMsg = session.messages.some(
-          (m) => m.content.toLowerCase().includes(search),
-        );
-        if (!matchTitle && !matchMsg) continue;
-      }
+      if (!this._matchesFilter(session, filter)) continue;
       sessions.push(session);
     }
     return sessions.sort(
@@ -771,14 +781,35 @@ export class FileStore implements SessionRepository {
 
   /**
    * Лёгкий список (порт `SessionRepository.listLight`): тот же набор id и порядок,
-   * что у `list`, но `messages`/`pendingMessages`/`checkpoints` очищены. Сессия
-   * хранится одним JSON-файлом, поэтому `JSON.parse` неизбежно читает историю —
-   * экономится только десериализация сообщений; для БД-бэкенда (ADR-097) это
-   * полноценная выборка без join.
+   * что у `list`, но **без истории** (`messages`/`checkpoints` очищены) и **с
+   * очередью** (`pendingMessages`/`steerInbox` сохранены — она мала, нужна
+   * recovery/автозапуску и лежит в самой записи сессии).
+   *
+   * Чтение **последовательное**: сессия — один JSON-файл, `JSON.parse` неизбежно
+   * читает историю, но одновременно в памяти только одна запись. `Promise.all`
+   * (как в `list`) держал бы полные истории **всех** сессий сразу — на инстансах
+   * с сотнями сессий это давало пик heap и OOM при автоскане/recovery.
    */
   async listLight(filter?: SessionFilter): Promise<Session[]> {
-    const sessions = await this.list(filter);
-    return sessions.map((s) => ({ ...s, messages: [], pendingMessages: [], steerInbox: [], checkpoints: [] }));
+    const dir = this._sessionsDir();
+    let files: string[];
+    try {
+      files = await readdir(dir);
+    } catch {
+      return [];
+    }
+
+    const sessions: Session[] = [];
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const session = await this.load(file.replace('.json', ''));
+      if (!session) continue;
+      if (!this._matchesFilter(session, filter)) continue;
+      sessions.push({ ...session, messages: [], checkpoints: [] });
+    }
+    return sessions.sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
   }
 
   async exists(sessionId: string): Promise<boolean> {

@@ -726,11 +726,20 @@ export async function createStandaloneDeps(
           // продолжаем — решение за родителем. `light`-список не подходит:
           // он очищает `pendingMessages`.
           try {
-            const sessions = await sessionManager.listSessions(undefined, { includeArchived: false });
+            // `light`: без истории (`messages`/`checkpoints`) — полный список
+            // сессий с историями давал пик heap и OOM на инстансах с сотнями
+            // сессий. Очередь (`pendingMessages`) в light сохраняется.
+            const sessions = await sessionManager.listSessions(undefined, {
+              includeArchived: false,
+              light: true,
+            });
+            let queueCandidates = 0;
+            let inFlightResumed = 0;
             for (const s of sessions) {
               if (s.archivedAt || s.sessionOrigin === 'subagent') continue;
               if (s.currentStream || s.status.blocked) continue;
               if (s.pendingMessages.length === 0) continue;
+              queueCandidates += 1;
               if (s.status.queueStopped) {
                 eventBus.publish(s.id, 'queue.stalled', {
                   pending_count: s.pendingMessages.length,
@@ -743,6 +752,7 @@ export async function createStandaloneDeps(
               // очередь — иначе сообщение материализуется в историю повторно.
               const resume = await sessionManager.takePendingInFlight(s.id);
               if (resume) {
+                inFlightResumed += 1;
                 await addRestartResumedNotice(
                   s.id,
                   resume.metadata?.stream_id as string | undefined,
@@ -753,6 +763,12 @@ export async function createStandaloneDeps(
                 continue;
               }
               queueManager.createProcessor(s.id, sessionManager, eventBus, processMessage);
+            }
+            if (queueCandidates > 0) {
+              // Только счётчики: ни id, ни содержимого сессий/сообщений.
+              console.log(
+                `[sessions] автозапуск очередей: кандидатов ${queueCandidates}, in-flight продолжено ${inFlightResumed}`,
+              );
             }
           } catch (err) {
             console.warn(
