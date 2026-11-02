@@ -35,8 +35,6 @@ import type { SaveAssistantMessageFn, AssistantMessageStatus, ExistingMessageRef
 import { addTokenUsage } from '../usage.js';
 import type { AuxUsageRecorder } from '../../usage-accounting.js';
 import type { ProviderOverrides } from '../routing.js';
-import { autoTitleSession } from '../../../sessions/auto-title.js';
-import { isUserDialogueMessage } from '../../../sessions/user-messages.js';
 import { warning } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { dropSteerInjections } from '../../steering/apply.js';
@@ -831,49 +829,6 @@ export async function runProcessFinalize(
     turnId,
     status: turnStatusFromMessageStatus(messageStatus),
   });
-
-  // 8.5. Auto-rename session on first exchange
-  if (updatedSession) {
-    // Только реплики пользователя диалога: steer-инъекции, уведомления
-    // фоновых прогонов и сообщения шедулера не делают ход «вторым сообщением»
-    // (см. `sessions/user-messages.ts`).
-    const userMsgCount = updatedSession.messages.filter(isUserDialogueMessage).length;
-    if (userMsgCount === 1) {
-      const titleAgentDef = deps.agentRegistry?.get('title');
-      let titleProvider = provider;
-      // Температура title-агента применяется и без собственного reasoningLevel.
-      if (
-        titleAgentDef
-        && (titleAgentDef.reasoningLevel || titleAgentDef.temperature !== undefined)
-        && providerName
-      ) {
-        const tp = deps.getProvider(
-          providerName, updatedSession, titleAgentDef.reasoningLevel,
-          { temperature: titleAgentDef.temperature },
-        );
-        if (tp) titleProvider = tp;
-      }
-      autoTitleSession(updatedSession, deps.sessionManager, titleProvider, (usage, meta) => {
-        void deps.recordAuxUsage?.({
-          sessionId: updatedSession.id,
-          usage,
-          ...(meta?.provider ? { provider: meta.provider } : {}),
-          ...(meta?.model ? { model: meta.model } : {}),
-          agent: 'title',
-          source: 'title',
-        });
-      })
-        .then((title) => {
-          if (title) {
-            deps.eventBus.publish(updatedSession.id, 'session.updated', {
-              session_id: updatedSession.id,
-              name: title,
-            });
-          }
-        })
-        .catch(() => {});
-    }
-  }
 
   // 9. Check context optimization triggers
   if (deps.optimizer && updatedSession) {

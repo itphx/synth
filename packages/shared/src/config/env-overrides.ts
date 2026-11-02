@@ -34,6 +34,12 @@ export interface EnvOverrideDefinition {
 export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   // llm: лимит вывода по умолчанию (0 — авто-дефолт ядра).
   { section: 'llm', key: 'maxTokens', type: 'number' },
+  // session.autoTitle: авто-именование сессии (мастер-флаг, отсрочка на
+  // приветствии, число реплик, порог «сигнала задачи»).
+  { section: 'session', key: 'autoTitle.enabled', type: 'boolean' },
+  { section: 'session', key: 'autoTitle.deferOnChatter', type: 'boolean' },
+  { section: 'session', key: 'autoTitle.maxAttempts', type: 'number' },
+  { section: 'session', key: 'autoTitle.minSignalChars', type: 'number' },
   // context: политика ограничения контекстного окна (`off`|`warn`|`enforce`).
   { section: 'context', key: 'windowPolicy', type: 'string' },
   // events (ADR-089)

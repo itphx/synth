@@ -258,6 +258,48 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.events).not.toBe(originalEvents);
   });
 
+  // session.autoTitle: авто-именование сессии (вложенные ключи секции).
+  it('применяет env-оверрайды session.autoTitle.*', () => {
+    const cfg = applyEnvOverrides(makeConfig(), {
+      SYNTH_SESSION_AUTO_TITLE_ENABLED: 'false',
+      SYNTH_SESSION_AUTO_TITLE_DEFER_ON_CHATTER: 'false',
+      SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS: '3',
+      SYNTH_SESSION_AUTO_TITLE_MIN_SIGNAL_CHARS: '40',
+    });
+
+    expect(cfg.session).toEqual({
+      autoTitle: {
+        enabled: false,
+        deferOnChatter: false,
+        maxAttempts: 3,
+        minSignalChars: 40,
+      },
+    });
+  });
+
+  it('session.autoTitle.*: невалидное значение → warn + игнор (значение не меняется)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(
+      {
+        ...makeConfig(),
+        session: {
+          autoTitle: { enabled: true, deferOnChatter: true, maxAttempts: 2, minSignalChars: 30 },
+        },
+      },
+      {
+        SYNTH_SESSION_AUTO_TITLE_ENABLED: 'perhaps',
+        SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS: 'много',
+      },
+    );
+
+    expect(cfg.session).toEqual({
+      autoTitle: { enabled: true, deferOnChatter: true, maxAttempts: 2, minSignalChars: 30 },
+    });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0]?.[0]).toContain('SYNTH_SESSION_AUTO_TITLE_ENABLED');
+    expect(warn.mock.calls[1]?.[0]).toContain('SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS');
+  });
+
   // ADR-090: env-переопределения секции `plugins` (создаётся, если секции нет).
   it('применяет env-оверрайды plugins.* (включая promptBlockMaxChars)', () => {
     const cfg = applyEnvOverrides(makeConfig(), {

@@ -639,6 +639,7 @@ export const dict = {
 'leftPanel.confirmDeleteSession': 'Удалить сессию?',
   'leftPanel.confirmBulkDelete': 'Удалить {count} выбранных сессий?',
   'leftPanel.rename': 'Переименовать',
+  'leftPanel.regenerateTitle': 'Обновить название',
   'leftPanel.forkSession': 'Создать ответвление',
   'leftPanel.copyToSession': 'Копировать в сессию...',
   'leftPanel.addReference': 'Прикрепить ссылку...',
@@ -2806,7 +2807,6 @@ export const dict = {
   // бюджет может уйти в размышления — видимого текста не остаётся вовсе.
   'session.output_limit':
     'Ответ обрезан лимитом вывода: max_tokens={limit}, из них {reasoning} ушло на размышления. Увеличьте лимит ответа для сессии и повторите.',
-  'session.dialog_title': 'Диалог — {id}',
   'session.default_title': 'Новая сессия',
   'session.reference_label': 'Сессия',
   'session.reference_link': 'Ссылка на сессию: {label} ({id}, сообщения {from}-{to})',

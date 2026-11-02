@@ -19,7 +19,6 @@ import type { DecisionConfig, Message, Session } from '@itphx/synth-shared';
 import { FileStore } from '../../../storage/file-store.js';
 import { SessionManager } from '../../../sessions/manager.js';
 import { DebugCollector } from '../../../debug.js';
-import { t as sm } from '../../system-messages.js';
 import type { PermissionEvaluator } from '../../permission/evaluator.js';
 import type { MicroPipeline } from '../../router/micro/index.js';
 import { runProcessEarly, type ProcessEarlyArgs, type ProcessEarlyDeps } from './process-early.js';
@@ -260,8 +259,10 @@ describe('runProcessEarly', () => {
       },
     });
 
-    // 3. Авто-тайтл первого сообщения
-    expect(stored.title).toBe(sm('session.dialog_title', { id: session.id.slice(0, 8) }));
+    // 3. Заголовок сессии микро-путь не трогает: плашка «Диалог — <id>» убрана
+    //    (имя сессии задаёт авто-тайтл по диалогу). У этой сессии заголовок
+    //    задан явно ('E') — он и остаётся.
+    expect(stored.title).toBe('E');
 
     // 4. debug-контекст хода доступен через карточку сообщения
     expect(assistant.debugData).not.toBeNull();

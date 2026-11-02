@@ -209,6 +209,12 @@ export const sessionsApi = {
   // move/rename объединены в PATCH (API v2)
   async updateSession(sessionId: string, data: {
     name?: string
+    /**
+     * Запрос на перегенерацию авто-названия сессии: пустая строка — сервер
+     * синхронно генерирует новый заголовок по диалогу и возвращает DTO сессии
+     * (непустое значение трактуется как обычное переименование).
+     */
+    title?: string
     icon?: string | null
     color?: string | null
     project_id?: string | null

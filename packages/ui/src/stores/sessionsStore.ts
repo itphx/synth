@@ -24,6 +24,12 @@ interface SessionsStore {
   forkSession: (sessionId: string, options?: { message_id?: string; message_index?: number; title?: string }) => Promise<SessionData | null>
   moveSession: (sessionId: string, projectId: string | null) => Promise<SessionData | null>
   renameSession: (sessionId: string, newName: string) => Promise<SessionData | null>
+  /**
+   * Перегенерировать авто-название сессии: PATCH /sessions/:id { title: '' } —
+   * сервер синхронно генерирует новый заголовок по диалогу и возвращает DTO
+   * сессии. Обновляет запись сессии в сторе и заголовок открытого таба.
+   */
+  regenerateSessionTitle: (sessionId: string) => Promise<SessionData | null>
   /** Обновить иконку/цвет сессии (PATCH /sessions/:id); `null` — сброс. */
   updateSessionMeta: (
     sessionId: string,
@@ -33,6 +39,29 @@ interface SessionsStore {
   setSessionMode: (sessionId: string, mode: SessionMode) => Promise<SessionData>
   upsertSession: (session: SessionData) => void
   getSessionsByProject: (projectId: string | null) => SessionData[]
+}
+
+/** Тело PATCH /sessions/:id, которое использует этот стор. */
+type SessionPatch = { name?: string; title?: string }
+
+/**
+ * PATCH сессии + единая обработка ошибки (общая часть для renameSession и
+ * regenerateSessionTitle): при ошибке — `error` в сторе и `null`.
+ */
+async function patchSession(sessionId: string, patch: SessionPatch): Promise<SessionData | null> {
+  try {
+    return await synthApi.updateSession(sessionId, patch)
+  } catch (e) {
+    useSessionsStore.setState({ error: (e as Error).message })
+    return null
+  }
+}
+
+/** Обновить запись сессии в сторе по ответу сервера. */
+function applySession(sessionId: string, updated: SessionData): void {
+  useSessionsStore.setState((s) => ({
+    sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
+  }))
 }
 
 export const useSessionsStore = create<SessionsStore>((set, get) => ({
@@ -103,18 +132,26 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   },
 
   renameSession: async (sessionId, newName) => {
-    try {
-      const updated = await synthApi.updateSession(sessionId, { name: newName })
-      if (!isTransportConnected()) {
-        set((s) => ({
-          sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
-        }))
-      }
-      return updated
-    } catch (e) {
-      set({ error: (e as Error).message })
-      return null
+    const updated = await patchSession(sessionId, { name: newName })
+    if (!updated) return null
+    if (!isTransportConnected()) {
+      applySession(sessionId, updated)
     }
+    return updated
+  },
+
+  // Перегенерация авто-названия: PATCH { title: '' } — сервер сам генерирует
+  // заголовок по диалогу. Ответ — источник истины: обновляем запись сессии в
+  // сторе и заголовок открытого таба (событие session.updated придёт позже).
+  regenerateSessionTitle: async (sessionId) => {
+    const updated = await patchSession(sessionId, { title: '' })
+    if (!updated) return null
+    applySession(sessionId, updated)
+    const newTitle = updated.name
+    if (newTitle) {
+      useUIStore.getState().updateTabTitle(`chat-${sessionId}`, newTitle)
+    }
+    return updated
   },
 
   // Иконка/цвет сессии (PATCH): локально применяем сразу — дерево/табы

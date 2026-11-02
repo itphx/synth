@@ -1,5 +1,5 @@
 import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project, ContextDefaults } from '@itphx/synth-shared';
-import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, orderSteerInjections } from '@itphx/synth-shared';
+import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, orderSteerInjections, isDefaultTitle } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { SessionRepository } from '../storage/ports/session-repository.js';
@@ -771,6 +771,23 @@ export class SessionManager {
 
   async renameSession(sessionId: string, title: string): Promise<Session | null> {
     return this.withLock(sessionId, async (s) => {
+      s.title = title;
+      s.updatedAt = nowISO();
+      await this.store.save(s);
+      return s;
+    });
+  }
+
+  /**
+   * Переименовать сессию **только если** заголовок ещё дефолтный
+   * (`isDefaultTitle`) — авто-заголовок не перетирает заголовок, заданный
+   * пользователем. Проверка и запись — под одним локом (гонка двух ходов не
+   * должна затереть чужое имя). Возвращает обновлённую сессию; `null` — имя
+   * уже задано (или сессии нет).
+   */
+  async renameSessionIfDefault(sessionId: string, title: string): Promise<Session | null> {
+    return this.withLock(sessionId, async (s) => {
+      if (!isDefaultTitle(s.title)) return null;
       s.title = title;
       s.updatedAt = nowISO();
       await this.store.save(s);

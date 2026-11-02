@@ -705,7 +705,7 @@
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
 - `engine/attachments/*` — ADR-115: вложения сообщений (сервис, MIME, приватность, GC,
   материализация, обработка aux-моделью). Устройство и правила — §«Вложения (ADR-115)» ниже.
-- `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист шага/`turn.finished`/авто-тайтл, ADR-118); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
+- `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first; микро-слой больше **не ставит** плашку `Dialog — <id8>` (прежний i18n-ключ `session.dialog_title` удалён) — она блокировала нормальное имя; имя сессии теперь даёт авто-тайтл), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы; после неё — ранний триггер авто-имени `_maybeAutoTitle`), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист шага/`turn.finished`, ADR-118 — авто-тайтла здесь больше нет); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
   **Финальный шаг по лимиту шагов (`AgentDefinition.maxSteps`) — механика opencode**
   (`engine/llm/max-steps.ts`, общий модуль с циклом саб-агента): лимит не обрывает ход
   отдельным вызовом «без инструментов», а добавляет ещё один обычный шаг того же цикла —
@@ -2070,23 +2070,48 @@
 - `sessions/ephemeral.ts` — ephemeral TTL (ADR-089): `parseTtl`
   (`30s`/`15m`/`24h`/`7d`), `startEphemeralSweeper` (sweep 60 c, unref); поля
   `Session.expiresAt`/`archivedAt`, списки сессий по умолчанию без архива.
-- `sessions/auto-title.ts` — авто-заголовок сессии: LLM-ответ (снятие `<think>`,
-  первая непустая строка, предел 100 символов); при ошибке/пустом/слишком длинном
-  ответе — `warning('AUTO-TITLE', причина)` **без содержимого сообщений** и фоллбек:
-  первая непустая строка первого сообщения пользователя без markdown-разметки,
-  схлопнутые пробелы, обрезка до 60 символов. Фоллбек сохраняется через
-  `manager.renameSession` тем же путём, что LLM-заголовок (`session.updated`
-  публикует вызывающий — `orchestrator/phases/process-finalize.ts`); пользовательский
-  заголовок не перетирается (`isDefaultTitle`).
+- `sessions/auto-title.ts` — авто-заголовок сессии. **Триггер — начало хода, не конец:**
+  имя генерируется **сразу после первого сообщения пользователя**, до ответа
+  ассистента (оркестратор: `_maybeAutoTitle` после `runProcessSetup` — провайдер уже
+  выбран роутером, — и на раннем пути микро-слоя `runProcessEarly`, где провайдер
+  хода ещё не выбран и резолвится из сессии). Вызов **fire-and-forget** — ход не
+  ждёт LLM; `session.updated` публикует оркестратор.
+  **План (`shouldAutoTitle`)** — по числу диалоговых реплик пользователя (N;
+  служебные реплики не считаются): N=1 и реплика — «chatter»
+  (`isLowSignalMessage`: приветствие/смолток, без вложений и короче
+  `minSignalChars`) → `null`: генерация **откладывается**, LLM не зовётся, заголовок
+  остаётся `New session`; N=1 и есть сигнал задачи → `{mode:'message'}` (заголовок по
+  первому сообщению); N=2..`maxAttempts` → `{mode:'conversation'}` (заголовок по
+  диалогу: `Original request` + `Recent conversation`, бюджет 8000 символов, обрезка с
+  хвоста); N > `maxAttempts` → `null` (только ручная регенерация). Счётчик **не
+  персистится** — выводится из истории (`isUserDialogueMessage`), поэтому правило
+  идемпотентно и переживает рестарт. Сессии с `parentId` (саб-агенты) не
+  авто-именуются; `/`-команда первой репликой — тоже.
+  **LLM-ответ** (снятие `<think>`, первая непустая строка, предел 100 символов);
+  при ошибке/пустом/слишком длинном ответе — `warning('AUTO-TITLE', причина)` **без
+  содержимого сообщений** и фоллбек: **первая реплика с сигналом задачи**, её первая
+  непустая строка без markdown-разметки, схлопнутые пробелы, обрезка до 60 символов
+  (для chatter-реплик фоллбек не строится — заголовок не меняется). Заголовок по
+  умолчанию не перетирается (`manager.renameSessionIfDefault`), при `force` —
+  перетирается (`renameSession`).
+  **Ручная регенерация** — `orchestrator.regenerateTitle(sessionId)` (force: план
+  всегда `{mode:'conversation'}`, заголовок перетирается, включая пользовательский):
+  роут `PATCH /api/v2/sessions/:id` с телом `{"title": ""}` (в гибриде тело
+  проксируется удалённому серверу), ответ — DTO сессии; собрать имя не удалось —
+  заголовок прежний, ответ 200. Непустой `title` — обычное переименование. В UI —
+  пункт контекстного меню сессии «Обновить название».
+  **Конфиг `session.autoTitle`** (`@itphx/synth-shared/config`: `enabled`/
+  `deferOnChatter`/`maxAttempts`/`minSignalChars`; env `SYNTH_SESSION_AUTO_TITLE_*`) —
+  оркестратору через `OrchestratorOptions.autoTitle`.
   **Служебные user-сообщения (`sessions/user-messages.ts`).** «Вторая реплика пользователя» —
   только диалог: `isUserDialogueMessage` (`role: 'user'` **и** не служебное),
   `isServiceUserMessage` — `ephemeral` (локальный ответ `/`-команды), `metadata.synthetic`
   (state-сообщения), steer-инъекция (`metadata.steer`), уведомление фонового прогона
   (`metadata.type === 'background_run_result'`), шедулер (`metadata.scheduler` /
-  `metadata.schedule_id` / `author === 'Scheduler'`). Предикат используют **авто-тайтл**
+  `metadata.schedule_id` / `author === 'Scheduler'`). Предикат использует **авто-тайтл**
   (`auto-title.ts` — иначе steer-инъекция в первом ходе блокировала заголовок и сессия
-  оставалась «New session») и **финализация хода** (`process-finalize.ts`, подсчёт реплик);
-  новые служебные виды user-сообщений добавлять сюда, а не локальными проверками.
+  оставалась «New session»); новые служебные виды user-сообщений добавлять сюда, а не
+  локальными проверками.
 - `sessions/stats.ts` — `computeSessionStats` (ADR-070): usage сообщений + рекурсивный usage
   саб-агентов (tool `task`), агрегаты по агентам/пользователям — для `GET /api/v2/sessions/:id/stats`.
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла; **«Стоп» останавливает только активный ход — очередь (`pendingMessages`) сохраняется целиком**, решение владельца 2026-11-01: снимаются `blocked`/`cancelRequested`/`currentStream`/`retry`, публикуется `queue.state` (счётчики по фактической очереди) и `stream.cancelled` ровно один раз; автозапуска обработки нет — продолжение через `POST /queue/:sessionId/resume` или новую постановку сообщения). Публикация приёма: `message.accepted` (адресное, без текста) и `message.enqueued` (**адресное — только отправителю/владельцу сессии; владельца нет — не публикуется**, со снимком сообщения — снимок уже обфусцирован, `ord` нет; `enqueueUserMessage` → `delivery:'queue'`, `enqueueSteerMessage` → `delivery:'steer'`; при отказе постановки события нет). **Перенос из очереди в очередь инъекций (`fromPending`) — атомарный**: под одним локом сессии проверяется лимит, сообщение снимается из `pendingMessages` и его user-копия из истории (по `metadata.stream_id`, кроме активного стрима) — и только потом публикуется `message.enqueued` (иначе клиент увидел бы реплику в `pending_messages` и удалил её из ленты как «вернувшуюся в очередь»); отказ по лимиту → `reason:'limit'` (429, очередь не тронута), сообщения нет в очереди → `reason:'not_found'` (404, повторный steer того же id).

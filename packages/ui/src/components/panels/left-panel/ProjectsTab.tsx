@@ -241,6 +241,12 @@ export function ProjectsTab() {
       title: isOfflineRemote ? t('hybrid.unavailableNode') : undefined,
       contextItems: [
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
+        // Перегенерация авто-названия: сервер генерирует заголовок по диалогу
+        // и возвращает DTO сессии — заголовок обновляем из ответа.
+        { label: t('leftPanel.regenerateTitle'), icon: 'refresh', onClick: async () => {
+          await useSessionsStore.getState().regenerateSessionTitle(session.id)
+          await loadSessions()
+        }},
         { label: t('leftPanel.editSession'), icon: 'settings-3', onClick: () => useEntityEditStore.getState().openEntityEdit({
           kind: 'session',
           id: session.id,

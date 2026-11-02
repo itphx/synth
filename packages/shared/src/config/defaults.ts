@@ -106,6 +106,14 @@ export const defaultConfig: SynthConfig = {
   },
   session: {
     planMode: 'auto',
+    // Авто-заголовок сессии: включён, приветствие откладывает именование,
+    // ждём до 2 реплик, «сигналом задачи» считаем сообщение от 30 символов.
+    autoTitle: {
+      enabled: true,
+      deferOnChatter: true,
+      maxAttempts: 2,
+      minSignalChars: 30,
+    },
   },
   context: {
     enabledFiles: ['SOUL.md', 'COMPANY.md', 'ABOUT.md'],

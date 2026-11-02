@@ -1165,6 +1165,8 @@ export async function createBackendDeps(
     decisionConfig: effectiveDecisionSettings,
     permissionConfig: config.synth.permission,
     defaultPlanMode: config.synth.session.planMode,
+    // Секция `session.autoTitle` — авто-именование сессии (ранний триггер).
+    ...(config.synth.session?.autoTitle ? { autoTitle: config.synth.session.autoTitle } : {}),
     securityConfig,
     gatewayConfig,
     gatewayAuditLogger,

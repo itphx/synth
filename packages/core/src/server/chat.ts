@@ -253,6 +253,8 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     },
     permissionConfig: options.config.permission,
     defaultPlanMode: options.config.session?.planMode,
+    // Секция `session.autoTitle` — авто-именование сессии (ранний триггер).
+    ...(options.config.session?.autoTitle ? { autoTitle: options.config.session.autoTitle } : {}),
     securityConfig: effectiveSecurityConfig,
     gatewayConfig: options.config.llmGateway,
     gatewayPatternStore: patternStore,

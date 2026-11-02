@@ -1,6 +1,9 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
+import type { AutoTitleConfig } from '@itphx/synth-shared/config';
+import { autoTitleConfigSchema } from '@itphx/synth-shared/config';
+import { autoTitleSession } from '../sessions/auto-title.js';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -405,6 +408,12 @@ export interface OrchestratorOptions {
   permissionConfig?: PermissionConfig;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (ADR-028). */
   defaultPlanMode?: PlanMode;
+  /**
+   * Секция `session.autoTitle` из config.yaml — авто-именование сессии
+   * (генерация заголовка по первому сообщению/диалогу). Не задана — дефолты
+   * схемы (включено, отсрочка на приветствии, 2 попытки).
+   */
+  autoTitle?: AutoTitleConfig;
   /** Секция безопасности (защита от Indirect Prompt Injection). */
   securityConfig?: SecurityConfig;
   /** LLM Gateway (ADR-036): глобальный тумблер и конфиг. Выключен по умолчанию. */
@@ -767,6 +776,11 @@ export class ChatOrchestrator {
   private _permissionConfig: PermissionConfig;
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
+  /**
+   * Секция `session.autoTitle` — авто-именование сессии (ранний триггер:
+   * сразу после подготовки запроса, до `turn.started`).
+   */
+  private readonly _autoTitle: AutoTitleConfig;
   private _securityConfig: SecurityConfig;
   private readonly _dictionaryStore: DictionaryRepository;
   private _gatewayConfig: LLMGatewayConfig | null;
@@ -1246,6 +1260,8 @@ export class ChatOrchestrator {
       ...(options.approvalRegistry ? { registry: options.approvalRegistry } : {}),
     });
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
+    // Авто-именование сессии: конфиг секции `session.autoTitle` (дефолты схемы).
+    this._autoTitle = options.autoTitle ?? autoTitleConfigSchema.parse({});
     this._securityConfig = options.securityConfig
       ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
     this._dataDir = options.dataDir || '/var/synth/data';
@@ -3007,6 +3023,87 @@ export class ChatOrchestrator {
   }
 
   /**
+   * Авто-именование сессии (ранний триггер): вызывается сразу после
+   * подготовки запроса (провайдер уже выбран роутером) — до `turn.started`.
+   *
+   * Fire-and-forget: LLM-вызов заголовка не блокирует ход. План (первое
+   * сообщение / диалог / пропуск) считает `shouldAutoTitle`; приветствие
+   * первого сообщения LLM не зовёт вовсе.
+   */
+  private _maybeAutoTitle(session: Session, provider: BaseProvider, providerName: string): void {
+    const cfg = this._autoTitle;
+    if (!cfg.enabled) return;
+    const titleAgentDef = this._agentRegistry?.get('title');
+    let titleProvider = provider;
+    // Температура/размышления title-агента применяются и без своего
+    // reasoningLevel. Gateway-обёртка уже есть в обоих случаях (инвариант 3).
+    if (
+      titleAgentDef
+      && (titleAgentDef.reasoningLevel || titleAgentDef.temperature !== undefined)
+      && providerName
+    ) {
+      const tp = this._getProvider(
+        providerName, session, titleAgentDef.reasoningLevel,
+        { temperature: titleAgentDef.temperature },
+      );
+      if (tp) titleProvider = tp;
+    }
+    void autoTitleSession(session, this._sessionManager, titleProvider, {
+      config: cfg,
+      onUsage: (usage, meta) => this._recordAuxUsage({
+        sessionId: session.id,
+        usage,
+        ...(meta?.provider ? { provider: meta.provider } : {}),
+        ...(meta?.model ? { model: meta.model } : {}),
+        agent: 'title',
+        source: 'title',
+      }),
+    })
+      .then((title) => {
+        if (title) {
+          this._eventBus.publish(session.id, 'session.updated', {
+            session_id: session.id,
+            name: title,
+          });
+        }
+      })
+      .catch(() => {});
+  }
+
+  /**
+   * Ручная регенерация заголовка сессии (`PATCH /api/v2/sessions/:id {title:""}`).
+   *
+   * Заголовок строится по диалогу (force) и **перетирает** текущий — в том
+   * числе заданный пользователем. Возвращает обновлённую сессию; `null` —
+   * сессии нет либо заголовок сформировать не удалось.
+   */
+  async regenerateTitle(sessionId: string): Promise<Session | null> {
+    const session = await this._sessionManager.getSession(sessionId);
+    if (!session) return null;
+    const providerName = session.settings.provider ?? '';
+    const titleAgentDef = this._agentRegistry?.get('title');
+    const provider = this._getProvider(
+      providerName, session, titleAgentDef?.reasoningLevel,
+      { temperature: titleAgentDef?.temperature },
+    );
+    if (!provider) return null;
+    const title = await autoTitleSession(session, this._sessionManager, provider, {
+      config: this._autoTitle,
+      force: true,
+      onUsage: (usage, meta) => this._recordAuxUsage({
+        sessionId: session.id,
+        usage,
+        ...(meta?.provider ? { provider: meta.provider } : {}),
+        ...(meta?.model ? { model: meta.model } : {}),
+        agent: 'title',
+        source: 'title',
+      }),
+    });
+    if (!title) return null;
+    return this._sessionManager.getSession(sessionId);
+  }
+
+  /**
    * Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`.
    *
    * `command` (ADR-046 §7.1) — имя/аргументы системной (builtin) команды: уходят в
@@ -3879,7 +3976,19 @@ export class ChatOrchestrator {
       permissionEvaluator, sessionMode, planMode, planApproved, streamStartedAt,
       authorityTurn,
     }, this._processEarlyDeps());
-    if (earlyResult) return earlyResult;
+    if (earlyResult) {
+      // Ранний ответ (микро-слой/локальная команда): провайдера хода ещё нет —
+      // резолвим его из сессии для авто-имени. Гарды `shouldAutoTitle`
+      // отсекают приветствие, служебные сообщения и `/`-команды.
+      const earlyTitleAgentDef = this._agentRegistry?.get('title');
+      const earlyProviderName = session.settings.provider ?? '';
+      const earlyProvider = this._getProvider(
+        earlyProviderName, session, earlyTitleAgentDef?.reasoningLevel,
+        { temperature: earlyTitleAgentDef?.temperature },
+      );
+      if (earlyProvider) this._maybeAutoTitle(session, earlyProvider, earlyProviderName);
+      return earlyResult;
+    }
 
     // ADR-118 §1: ход = последовательность шагов. Идентификатор хода стабилен
     // для всех шагов хода; `turn.started`/`turn.finished` открывают и закрывают
@@ -3902,6 +4011,9 @@ export class ChatOrchestrator {
         effectiveReasoningLevel, sessionMode, planMode, planApproved, author, attempt,
       }, this._processSetupDeps(session));
       if (setup.failed) return setup.result;
+      // Авто-именование сессии — сразу после подготовки запроса (провайдер уже
+      // выбран роутером), до `turn.started`. Fire-and-forget: ход не ждёт LLM.
+      this._maybeAutoTitle(session, setup.state.provider, setup.state.providerName);
       // ADR-118 §1/§10: реплика, с которой ход начался, получает `turnId` — по
       // нему UI группирует сегменты хода, а `disabled-turns` гасит ход.
       // Обновление одно на ход (до `turn.started`), уже размеченное не трогаем.

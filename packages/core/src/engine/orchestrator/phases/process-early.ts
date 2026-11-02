@@ -26,7 +26,7 @@ import type { MicroPipeline } from '../../router/micro/index.js';
 import type { AuxUsageRecorder } from '../../usage-accounting.js';
 import type { UsageCost } from '../../../providers/usage.js';
 import { info } from '../../../logger.js';
-import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
+import { i18n as i18nMeta } from '../../system-messages.js';
 
 /** Результат фаз `_processMessage` (структурно = `ProcessMessageResult`). */
 export interface ProcessEarlyResult {
@@ -304,23 +304,6 @@ export async function runProcessEarly(
           s.reasoningTokens += finalUsage.reasoningTokens ?? 0;
           await deps.sessionManager.saveSession(s);
         });
-      }
-
-      // Авто-тайтл если это первое сообщение. Запись — по актуальному
-      // состоянию хранилища (`withLock`), чтобы не затереть ответ ассистента.
-      const autoTitle = session.messages.filter((m) => m.role === MessageRole.USER && !m.ephemeral).length <= 1
-        ? sm('session.dialog_title', { id: session.id.slice(0, 8) })
-        : null;
-      if (autoTitle) session.title = autoTitle;
-      if (autoTitle) {
-        try {
-          await deps.sessionManager.withLock(session.id, async (s) => {
-            s.title = autoTitle;
-            await deps.sessionManager.saveSession(s);
-          });
-        } catch {
-          // ok
-        }
       }
 
       info('MICRO', `Ответ через микро-слой: ${microResult.microResult.taskClass} (${microResult.microResult.latencyMs}ms, confidence=${microResult.microResult.confidence.toFixed(2)})`);

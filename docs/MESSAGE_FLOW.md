@@ -275,6 +275,10 @@ sequenceDiagram
   Q->>B: queue.state items starting
   Q->>O: processMessage session, message, signal, publishChunk
   O->>O: runProcessEarly ранние выходы без хода
+  opt авто-заголовок сессии
+    O->>G: aux-вызов заголовка fire-and-forget
+    O->>B: session.updated новое имя
+  end
   O->>S: _markTurnUserMessage turnId реплике
   O->>B: turn.started
   loop шаг за шагом до пустых toolCalls
@@ -341,6 +345,14 @@ stateDiagram-v2
   `tool_choice: 'none'` и синтетической инструкцией «только текст»; запись шага затем
   **дополняется** финализацией (`keepContent: true`), `metadata.step_limit_reached = true`,
   `turn.finished` `stopped`.
+- **Авто-заголовок сессии.** Имя генерируется **в начале хода** — сразу после первого
+  сообщения пользователя, до ответа ассистента: в обычном пути — после `runProcessSetup`
+  (провайдер уже выбран роутером), на раннем пути микро-слоя — после `runProcessEarly`
+  (провайдер хода резолвится из сессии). LLM-вызов заголовка — **fire-and-forget**: ход не
+  ждёт его, расход учитывается как aux-вызов (`agent: 'title'`). Плашка `Dialog — <id8>`,
+  которую раньше ставил микро-слой, удалена — она блокировала нормальное имя. Правила
+  попыток, фоллбек и ручная регенерация — `docs/CONFIGURATION.md`
+  §«Авто-заголовок сессии (`session.autoTitle`)» и `docs/API_V2.md` §5.5.
 
 ### 5.4 Инварианты backend
 
@@ -1341,6 +1353,7 @@ sequenceDiagram
 | Применение/снятие steer-инъекций (общая точка хода и ребёнка) | `packages/core/src/engine/steering/apply.ts` |
 | Персист сообщений: `saveAssistantMessage`, `keepContent`, `tool_results` | `packages/core/src/engine/orchestrator/persistence.ts` |
 | Ранние выходы (без хода) | `packages/core/src/engine/orchestrator/phases/process-early.ts` |
+| Авто-заголовок сессии (начало хода, план/фоллбек) | `packages/core/src/sessions/auto-title.ts` |
 | Шина: `recipient`, `eventSeq`, журнал, догон | `packages/core/src/events/bus.ts` |
 | DTO: `activity`, `current_stream.turn_id`, `tool_calls` | `packages/core/src/server/serialize.ts` |
 | Персист (файлы) | `packages/core/src/storage/file-store.ts` |

@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig, PostgresStorageConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
+import type { SessionConfig } from '@itphx/synth-shared/config';
 import {
   applyBootstrapServiceKeys,
   KeyRateLimiter,
@@ -80,6 +81,11 @@ export interface StandaloneConfig {
   permissionConfig?: PermissionConfig;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml (ADR-028). */
   defaultPlanMode?: PlanMode;
+  /**
+   * Секция `session` из config.yaml (ADR-023): `planMode` + `autoTitle`
+   * (параметры авто-именования сессии).
+   */
+  sessionConfig?: SessionConfig;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
   /** ADR-099 (D1): секция `proxy` из config.yaml (HTTP/HTTPS-прокси egress). */

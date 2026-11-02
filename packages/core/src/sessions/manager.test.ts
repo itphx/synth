@@ -366,6 +366,36 @@ describe('SessionManager', () => {
     expect(loaded!.title).toBe('After');
   });
 
+  it('renameSessionIfDefault меняет дефолтный заголовок и обновляет updatedAt', async () => {
+    const session = await manager.createSession({});
+    expect(session.title).toBe('New session');
+    const before = session.updatedAt;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const renamed = await manager.renameSessionIfDefault(session.id, 'Заголовок по диалогу');
+
+    expect(renamed).not.toBeNull();
+    expect(renamed!.title).toBe('Заголовок по диалогу');
+    const stored = (await manager.getSession(session.id))!;
+    expect(stored.title).toBe('Заголовок по диалогу');
+    expect(stored.updatedAt > before).toBe(true);
+  });
+
+  it('renameSessionIfDefault не перетирает заданный пользователем заголовок', async () => {
+    const session = await manager.createSession({ title: 'Мой заголовок' });
+
+    const renamed = await manager.renameSessionIfDefault(session.id, 'Другой заголовок');
+
+    expect(renamed).toBeNull();
+    expect((await manager.getSession(session.id))!.title).toBe('Мой заголовок');
+  });
+
+  it('renameSessionIfDefault для несуществующей сессии → ошибка (сессии нет)', async () => {
+    await expect(
+      manager.renameSessionIfDefault('missing-session', 'Заголовок'),
+    ).rejects.toThrow(/not found/);
+  });
+
   it('cleanupStaleLocks снимает истёкшие блокировки', async () => {
     const session = await manager.createSession({});
     await manager.acquireLock(session.id, 'old');

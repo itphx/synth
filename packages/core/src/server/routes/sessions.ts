@@ -815,6 +815,10 @@ export function createSessionRoutes(
     if (patchDenied) return patchDenied;
     const body = await c.req.json().catch(() => ({}));
 
+    // Регенерация заголовка: `title: ""` (пустая строка) — пересобрать имя
+    // сессии по диалогу (force). Непустой `title` — обычное переименование.
+    const titleRegeneration = typeof body.title === 'string' && body.title.trim() === '';
+
     // Валидация тела PATCH (sessionUpdateSchema): невалидные settings/name → 400.
     // title/mode/project_id не входят в схему и обрабатываются отдельно ниже из body.
     const parsed = sessionUpdateSchema.safeParse(body);
@@ -1014,7 +1018,11 @@ export function createSessionRoutes(
       }
       if (body.name !== undefined) s.title = body.name;
       let prevTitle: string | undefined;
-      if (body.title !== undefined) {
+      if (titleRegeneration) {
+        // Регенерация заголовка: имя здесь НЕ меняем — его пересоберёт
+        // оркестратор после лока (LLM-вызов под локом сессии запрещён).
+        prevTitle = s.title;
+      } else if (body.title !== undefined) {
         prevTitle = s.title;
         s.title = body.title;
       }
@@ -1050,11 +1058,34 @@ export function createSessionRoutes(
       );
     }
 
+    // Регенерация заголовка (`title: ""`) — ПОСЛЕ блока локов: LLM-вызов под
+    // локом сессии запрещён. Не удалось пересобрать имя — оставляем текущий
+    // заголовок (остальные поля PATCH уже применены).
+    let resultSession = updatedSession;
+    if (titleRegeneration) {
+      let regenerated: Session | null = null;
+      try {
+        regenerated = await deps.orchestrator.regenerateTitle(id);
+      } catch {
+        regenerated = null;
+      }
+      if (regenerated) {
+        resultSession = regenerated;
+        if (publishRenamed && prevTitle !== undefined && regenerated.title !== prevTitle) {
+          eventBus.publish(id, 'session.renamed', {
+            session_id: id,
+            title: regenerated.title,
+            prev_title: prevTitle,
+          });
+        }
+      }
+    }
+
     // Порядок публикации сохранён: renamed → updated → moved.
-    if (publishRenamed && prevTitle !== undefined && prevTitle !== body.title) {
+    if (!titleRegeneration && publishRenamed && prevTitle !== undefined && prevTitle !== body.title) {
       eventBus.publish(updatedSession.id, 'session.renamed', { session_id: updatedSession.id, title: body.title, prev_title: prevTitle });
     }
-    eventBus.publish(updatedSession.id, 'session.updated', serializeSession(updatedSession, { agentRegistry }));
+    eventBus.publish(resultSession.id, 'session.updated', serializeSession(resultSession, { agentRegistry }));
     if (projectChanged) {
       eventBus.publish(updatedSession.id, 'session.moved', {
         session_id: updatedSession.id,
@@ -1070,7 +1101,7 @@ export function createSessionRoutes(
     for (const event of worktreeEvents) {
       await publishWorktreeUpdated({ eventBus, sessionStore: sessionManager }, event);
     }
-    return c.json(serializeSession(updatedSession, { agentRegistry }));
+    return c.json(serializeSession(resultSession, { agentRegistry }));
   });
 
   app.delete('/:id', auth.requireAuth, scoped('sessions:prompt'), async (c) => {

@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-11-02 (**секция `session.autoTitle`** «Авто-заголовок сессии» — триггер в начале хода (сразу после первого сообщения пользователя), отсрочка для приветствия/смолтка, `N=2..maxAttempts` — заголовок по диалогу, фоллбек только из реплики с сигналом, ручная регенерация `PATCH /api/v2/sessions/:id {"title": ""}`, env `SYNTH_SESSION_AUTO_TITLE_*` — **переведено**); RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -86,7 +86,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 ### Env overrides of nested sections (ADR-023)
 
 Scalar keys of the `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
-`questions`, `background`, `context`, `agents`, `tools`, `authority` sections can be set
+`questions`, `background`, `context`, `session`, `agents`, `tools`, `authority` sections can be set
 with environment variables — handy for k8s (ConfigMap → pod env). The variable name is
 built by the rule **`SYNTH_<SECTION>_<KEY>`**, where the camelCase key is converted to
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -159,6 +159,10 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (subagent nesting depth limit; `0` — no limit) |
 | `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (default output limit; `0` — core default) |
 | `SYNTH_CONTEXT_WINDOW_POLICY` | string (`off`/`warn`/`enforce`) | `context.windowPolicy` (context window limit policy; default `warn`) |
+| `SYNTH_SESSION_AUTO_TITLE_ENABLED` | boolean | `session.autoTitle.enabled` (master switch of the session auto-naming) |
+| `SYNTH_SESSION_AUTO_TITLE_DEFER_ON_CHATTER` | boolean | `session.autoTitle.deferOnChatter` (defer the name when the first reply is a greeting/small talk) |
+| `SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS` | number | `session.autoTitle.maxAttempts` (maximum attempts by the number of dialogue replies; 1..5) |
+| `SYNTH_SESSION_AUTO_TITLE_MIN_SIGNAL_CHARS` | number | `session.autoTitle.minSignalChars` (text length from which a reply counts as meaningful) |
 | `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (common tool output limit, lines; ≥ 1) |
 | `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (common tool output limit, bytes; ≥ 1) |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
@@ -340,6 +344,14 @@ i18n:
 
 session:
   planMode: "auto"                # Plan→Build cycle strictness: auto | strict | off
+  autoTitle:                      # session auto-naming (see "Session auto-title (session.autoTitle)")
+    enabled: true                 # master switch; SYNTH_SESSION_AUTO_TITLE_ENABLED
+    deferOnChatter: true          # defer the name when the first reply is a greeting/small talk;
+                                  # SYNTH_SESSION_AUTO_TITLE_DEFER_ON_CHATTER
+    maxAttempts: 2                # maximum attempts (by the number of dialogue replies), 1..5;
+                                  # SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS
+    minSignalChars: 30            # text length from which a reply counts as meaningful;
+                                  # SYNTH_SESSION_AUTO_TITLE_MIN_SIGNAL_CHARS
 
 mcp:
   policy: "auto"                  # ADR-071 §2.3: policy for enabling MCP tools
@@ -1626,6 +1638,63 @@ or `config.yaml`), or keep `0` deliberately.
 agents:
   subagentMaxInputTokens: 0   # 0 — no limit (default)
   subagentDepth: 1
+```
+
+### Session auto-title (`session.autoTitle`)
+
+The name of a new session is generated automatically — **right after the first user message**
+(the start of the turn, before the assistant answer), not after the answer. The title LLM
+call is **fire-and-forget**: the turn does not wait for it, and its spend is recorded as an
+aux call (`agent: 'title'`).
+
+Auto-naming fires while the session title is still the default one (`New session`) — a
+**user-set title is never overwritten**; after `maxAttempts` dialogue replies auto-naming
+stops trying (the title can be updated manually). Child sessions (subagents) are not
+auto-named.
+
+The attempt rule (N — the number of dialogue replies of the user; service replies — steer
+injections, background-run notifications, scheduler messages — are not counted):
+
+| N | Condition | What happens |
+|---|-----------|--------------|
+| 1 | the reply is “chatter” (a greeting/small talk: “hello”, “how are you”, “ok”, etc.; no attachments and shorter than `minSignalChars`) | generation is **deferred** — the LLM is not called at all, the title stays `New session` |
+| 1 | there is a task signal | the title is built from the first message |
+| 2..`maxAttempts` | the title is still the default one | the title is built from the conversation: `Original request` + `Recent conversation` (a budget of 8000 characters, trimmed from the tail) |
+| > `maxAttempts` | — | auto-naming stops trying; manual regeneration is available |
+
+The attempt counter is **not persisted** — it is derived from the session history, so the
+rule behaves identically before and after a restart (idempotent).
+
+The fallback on an LLM error/empty/too-long answer is a title from the **first reply with
+a task signal** (its first non-empty line, ≤ 60 characters, markdown stripped). For a
+greeting/small talk there is no fallback — the title does not change.
+
+**Manual regeneration.** `PATCH /api/v2/sessions/:id` with the body `{"title": ""}` — the
+server generates the title from the conversation synchronously and returns the session DTO
+(as an ordinary PATCH); a user-set title is overwritten too. If the name cannot be built,
+the title does not change and the response is `200` with the previous name. A non-empty
+`title` is an ordinary rename. In the UI it is the session context-menu item “Regenerate
+title”. In the hybrid mode the PATCH body is proxied to the remote server (it performs the
+regeneration).
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `session.autoTitle.enabled` | Master switch of auto-naming (`false` — sessions stay “New session” until renamed manually) | `true` |
+| `session.autoTitle.deferOnChatter` | Defer the name when the first reply is a greeting/small talk (do not call the LLM in vain) | `true` |
+| `session.autoTitle.maxAttempts` | Maximum attempts by the number of dialogue replies (1..5) | `2` |
+| `session.autoTitle.minSignalChars` | Text length from which a reply counts as meaningful (a “task signal”); shorter — only a greeting/small talk | `30` |
+
+Priority env > `config.yaml` > defaults (ADR-023): `SYNTH_SESSION_AUTO_TITLE_ENABLED`,
+`SYNTH_SESSION_AUTO_TITLE_DEFER_ON_CHATTER`, `SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS`,
+`SYNTH_SESSION_AUTO_TITLE_MIN_SIGNAL_CHARS`.
+
+```yaml
+session:
+  autoTitle:
+    enabled: true
+    deferOnChatter: true
+    maxAttempts: 2
+    minSignalChars: 30
 ```
 
 ### Model context window (`context.*`)

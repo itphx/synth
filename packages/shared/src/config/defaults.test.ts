@@ -26,6 +26,16 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('questions');
     expect(defaultConfig).toHaveProperty('agents');
     expect(defaultConfig).toHaveProperty('attachments');
+    expect(defaultConfig).toHaveProperty('session');
+  });
+
+  it('session.autoTitle по умолчанию: включён, приветствие откладывает имя, 2 попытки, порог 30 символов', () => {
+    expect(defaultConfig.session.autoTitle).toEqual({
+      enabled: true,
+      deferOnChatter: true,
+      maxAttempts: 2,
+      minSignalChars: 30,
+    });
   });
 
   it('attachments по умолчанию: включены, все семейства, 25 МиБ на файл, 10 файлов, 1 ГиБ на сессию, GC 30 дней (ADR-115)', () => {

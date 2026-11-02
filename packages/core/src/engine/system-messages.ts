@@ -36,7 +36,6 @@ export const SYSTEM_MESSAGES = {
   // `limit` — фактический расход вывода, `reasoning` — его часть на thinking.
   'session.output_limit':
     'The response was cut off by the output token limit: max_tokens={limit}, of which {reasoning} were spent on reasoning. Increase the response limit for this session and retry.',
-  'session.dialog_title': 'Dialog — {id}',
   'session.default_title': 'New session',
   'session.reference_label': 'Session',
   'session.reference_link': 'Session link: {label} ({id}, messages {from}-{to})',

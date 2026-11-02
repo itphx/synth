@@ -669,6 +669,7 @@ export const dict = {
   'leftPanel.confirmDeleteSession': 'Delete session?',
   'leftPanel.confirmBulkDelete': 'Delete {count} selected sessions?',
   'leftPanel.rename': 'Rename',
+  'leftPanel.regenerateTitle': 'Regenerate title',
   'leftPanel.forkSession': 'Fork',
   'leftPanel.copyToSession': 'Copy to session...',
   'leftPanel.addReference': 'Add reference...',

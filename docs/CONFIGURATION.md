@@ -85,7 +85,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 ### Env-оверрайды вложенных секций (ADR-023)
 
 Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
-`questions`, `background`, `context`, `agents`, `tools`, `authority` можно задавать
+`questions`, `background`, `context`, `session`, `agents`, `tools`, `authority` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
 собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -159,6 +159,10 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (лимит глубины вложенности саб-агентов; `0` — без ограничения) |
 | `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (лимит вывода по умолчанию; `0` — авто-дефолт ядра) |
 | `SYNTH_CONTEXT_WINDOW_POLICY` | string (`off`/`warn`/`enforce`) | `context.windowPolicy` (политика ограничения контекстного окна; дефолт `warn`) |
+| `SYNTH_SESSION_AUTO_TITLE_ENABLED` | boolean | `session.autoTitle.enabled` (мастер-выключатель авто-именования сессии) |
+| `SYNTH_SESSION_AUTO_TITLE_DEFER_ON_CHATTER` | boolean | `session.autoTitle.deferOnChatter` (откладывать имя, если первая реплика — приветствие/смолток) |
+| `SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS` | number | `session.autoTitle.maxAttempts` (максимум попыток по числу диалоговых реплик; 1..5) |
+| `SYNTH_SESSION_AUTO_TITLE_MIN_SIGNAL_CHARS` | number | `session.autoTitle.minSignalChars` (длина текста, при которой реплика считается содержательной) |
 | `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (общий предел вывода инструментов, строк; ≥ 1) |
 | `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (общий предел вывода инструментов, байт; ≥ 1) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
@@ -338,6 +342,14 @@ i18n:
 
 session:
   planMode: "auto"                # строгость цикла Plan→Build: auto | strict | off
+  autoTitle:                      # авто-именование сессии (см. «Авто-заголовок сессии (session.autoTitle)»)
+    enabled: true                 # мастер-выключатель; SYNTH_SESSION_AUTO_TITLE_ENABLED
+    deferOnChatter: true          # откладывать имя, если первая реплика — приветствие/смолток;
+                                  # SYNTH_SESSION_AUTO_TITLE_DEFER_ON_CHATTER
+    maxAttempts: 2                # максимум попыток (по числу диалоговых реплик), 1..5;
+                                  # SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS
+    minSignalChars: 30            # длина текста, при которой реплика считается содержательной;
+                                  # SYNTH_SESSION_AUTO_TITLE_MIN_SIGNAL_CHARS
 
 mcp:
   policy: "auto"                  # ADR-071 §2.3: политика включения MCP-инструментов
@@ -1665,6 +1677,62 @@ opencode: отдельного token-бюджета сабагентов там 
 agents:
   subagentMaxInputTokens: 0   # 0 — без лимита (дефолт)
   subagentDepth: 1
+```
+
+### Авто-заголовок сессии (`session.autoTitle`)
+
+Имя новой сессии генерируется автоматически — **сразу после первого сообщения
+пользователя** (начало хода, до ответа ассистента), а не после ответа. LLM-вызов
+заголовка — **fire-and-forget**: ход не ждёт его, расход учитывается как
+aux-вызов (`agent: 'title'`).
+
+Авто-именование срабатывает, пока заголовок сессии ещё дефолтный (`New session`) —
+**пользовательский заголовок не перетирается**; после `maxAttempts` диалоговых реплик
+авто-имя больше не пытается (заголовок можно обновить вручную). Дочерние сессии
+(саб-агенты) не авто-именуются.
+
+Правило попыток (N — число диалоговых реплик пользователя; служебные реплики —
+steer-инъекции, уведомления фоновых прогонов, сообщения шедулера — не считаются):
+
+| N | Условие | Что делает |
+|---|---------|-----------|
+| 1 | реплика — «chatter» (приветствие/смолток: «привет», «как дела», «ok» и т.п.; без вложений и короче `minSignalChars`) | генерация **откладывается** — LLM не вызывается вовсе, заголовок остаётся `New session` |
+| 1 | есть сигнал задачи | заголовок по первому сообщению |
+| 2..`maxAttempts` | заголовок всё ещё дефолтный | заголовок по диалогу: `Original request` + `Recent conversation` (бюджет 8000 символов, обрезка с хвоста) |
+| > `maxAttempts` | — | авто-имя больше не пытается; доступна ручная регенерация |
+
+Счётчик попыток **не персистится** — он выводится из истории сессии, поэтому правило
+работает одинаково до и после рестарта (идемпотентно).
+
+Фоллбек при ошибке/пустом/слишком длинном ответе LLM — заголовок из **первой
+реплики с сигналом задачи** (первая непустая строка, ≤ 60 символов, markdown-разметка
+снята). Для приветствия/смолтка фоллбек не строится — заголовок не меняется.
+
+**Ручная регенерация.** `PATCH /api/v2/sessions/:id` с телом `{"title": ""}` — сервер
+синхронно генерирует заголовок по диалогу и возвращает DTO сессии (как у обычного
+PATCH); перетирается и пользовательский заголовок. Не удалось собрать имя — заголовок
+не меняется, ответ `200` с прежним именем. Непустой `title` — обычное переименование.
+В UI — пункт контекстного меню сессии «Обновить название». В гибриде тело PATCH
+проксируется удалённому серверу (регенерацию выполняет он).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `session.autoTitle.enabled` | Мастер-выключатель авто-именования (`false` — сессии остаются «New session» до ручного переименования) | `true` |
+| `session.autoTitle.deferOnChatter` | Откладывать имя, если первая реплика — приветствие/смолток (не звать LLM впустую) | `true` |
+| `session.autoTitle.maxAttempts` | Максимум попыток по числу диалоговых реплик (1..5) | `2` |
+| `session.autoTitle.minSignalChars` | Длина текста, при которой реплика считается содержательной («сигналом задачи»); короче — только если это приветствие/смолток | `30` |
+
+Приоритет env > `config.yaml` > дефолты (ADR-023): `SYNTH_SESSION_AUTO_TITLE_ENABLED`,
+`SYNTH_SESSION_AUTO_TITLE_DEFER_ON_CHATTER`, `SYNTH_SESSION_AUTO_TITLE_MAX_ATTEMPTS`,
+`SYNTH_SESSION_AUTO_TITLE_MIN_SIGNAL_CHARS`.
+
+```yaml
+session:
+  autoTitle:
+    enabled: true
+    deferOnChatter: true
+    maxAttempts: 2
+    minSignalChars: 30
 ```
 
 ### Контекстное окно модели (`context.*`)

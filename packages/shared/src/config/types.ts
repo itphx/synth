@@ -265,9 +265,29 @@ export const tsmConfigSchema = z.object({
 
 // --- Session (ADR-025 / ADR-028): настройки по умолчанию для сессий ---
 
+/**
+ * Авто-заголовок сессии (`session.autoTitle`).
+ *
+ * - `enabled` — мастер-выключатель авто-именования;
+ * - `deferOnChatter` — первое сообщение-приветствие («привет», «ok») **не**
+ *   запускает генерацию заголовка: ждём второй реплики с сигналом задачи;
+ * - `maxAttempts` — сколько диалоговых реплик пользователя максимум ждут
+ *   заголовка (счётчик выводится из истории, состояние не персистится);
+ * - `minSignalChars` — минимальная длина сообщения, за которой оно считается
+ *   «сигналом задачи» (короче — только приветствие/смолток).
+ */
+export const autoTitleConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  deferOnChatter: z.boolean().default(true),
+  maxAttempts: z.number().int().min(1).max(5).default(2),
+  minSignalChars: z.number().int().min(7).max(1000).default(30),
+});
+
 export const sessionConfigSchema = z.object({
   /** Строгость цикла Plan→Build по умолчанию для новых сессий: auto | strict | off. */
   planMode: z.enum(['auto', 'strict', 'off']).default('auto'),
+  /** Авто-заголовок сессии (генерация имени по первому сообщению/диалогу). */
+  autoTitle: autoTitleConfigSchema.prefault({}),
 });
 
 /**
@@ -1534,6 +1554,8 @@ export type I18nConfig = z.infer<typeof i18nConfigSchema>;
 export type LoggingConfig = z.infer<typeof loggingConfigSchema>;
 export type TsmConfig = z.infer<typeof tsmConfigSchema>;
 export type SessionConfig = z.infer<typeof sessionConfigSchema>;
+/** Секция `session.autoTitle` — параметры авто-именования сессии. */
+export type AutoTitleConfig = z.infer<typeof autoTitleConfigSchema>;
 export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
 export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;

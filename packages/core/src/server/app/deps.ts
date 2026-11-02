@@ -1219,6 +1219,8 @@ export async function createStandaloneDeps(
       (await settingsStore.getWorkspacePolicy()) ?? config.workspaceOutsideRootPolicy ?? 'confirm',
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
+    // Секция `session.autoTitle` — авто-именование сессии (ранний триггер).
+    ...(config.sessionConfig?.autoTitle ? { autoTitle: config.sessionConfig.autoTitle } : {}),
     securityConfig: effectiveSecurityConfig,
     gatewayConfig,
     gatewayPatternStore: patternStore,

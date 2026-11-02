@@ -82,6 +82,17 @@ describe('sessionsApi — список и карточка сессии', () => 
     )
   })
 
+  it('updateSession: title — запрос перегенерации авто-названия', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's1', name: 'Новое название' }))
+
+    await synthApi.updateSession('s1', { title: '' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/sessions/s1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ title: '' }) }),
+    )
+  })
+
   it('patchSessionMode: PATCH {mode} (ADR-025)', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ id: 's1' }))
     await synthApi.patchSessionMode('s1', 'plan')

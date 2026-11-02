@@ -221,6 +221,8 @@ program
       uiDistPath: uiPath,
       permissionConfig: synth.permission,
       defaultPlanMode: synth.session?.planMode,
+      // Секция `session` целиком: planMode + autoTitle (авто-именование).
+      sessionConfig: synth.session,
       securityConfig: synth.security,
       // ADR-099 (D1): HTTP/HTTPS-прокси единого egress-слоя.
       proxyConfig: synth.proxy,
