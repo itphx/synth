@@ -93,7 +93,11 @@ export const SessionsPanel = () => {
                           </span>
                         </div>
                         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground mt-1">
-                          <span>{t('admin.sessions.messageCount', { count: s.messages?.length || 0 })}</span>
+                          <span>
+                            {s.messages?.length
+                              ? t('admin.sessions.messageCount', { count: s.messages.length })
+                              : '—'}
+                          </span>
                           <span>IN: {s.input_tokens || 0}</span>
                           <span>OUT: {s.output_tokens || 0}</span>
                         </div>

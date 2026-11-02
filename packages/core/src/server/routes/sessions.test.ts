@@ -887,6 +887,54 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
     expect(body).toHaveLength(2);
   });
 
+  it('elevated: listSessions вызывается с { light: true }, ответ без истории', async () => {
+    const { app, sessionManager } = makeApp({ userId: 'lead', elevated: true });
+    const created = await sessionManager.createSession({ title: 'a', userId: 'u1' });
+    await sessionManager.addMessage(created.id, {
+      id: generateId(), role: MessageRole.ASSISTANT, seq: 0, origin: 'local',
+      parts: [makeTextPart('history')], content: 'history', createdAt: nowISO(),
+      disabled: false, pinned: false, hidden: false,
+    });
+    await sessionManager.addPendingMessage(created.id, {
+      id: generateId(), role: MessageRole.USER, seq: 1, origin: 'local',
+      parts: [makeTextPart('queued')], content: 'queued', createdAt: nowISO(),
+      disabled: false, pinned: false, hidden: false,
+    });
+
+    const spy = vi.spyOn(sessionManager, 'listSessions');
+    const res = await app.request('/api/v2/sessions');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any[];
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({}, { light: true });
+    expect(body).toHaveLength(1);
+    expect(body[0].messages).toEqual([]);
+    expect('prompt_states' in body[0]).toBe(false);
+    // Очередь и счётчики списка сохранены (listLight их не срезает).
+    expect(body[0].pending_count).toBe(1);
+    expect(body[0].pending_messages).toHaveLength(1);
+    expect(body[0].pending_messages[0].content).toBe('queued');
+
+    // Детальная выдача историю по-прежнему отдаёт.
+    const detail = await app.request(`/api/v2/sessions/${created.id}`);
+    expect(detail.status).toBe(200);
+    const detailBody = (await detail.json()) as any;
+    expect(detailBody.messages).toHaveLength(1);
+    expect(detailBody.messages[0].content).toBe('history');
+  });
+
+  it('обычная ветка: listSessions вызывается с { light: true }', async () => {
+    const { app, sessionManager } = makeApp({ userId: 'member' });
+    const spy = vi.spyOn(sessionManager, 'listSessions');
+    const res = await app.request('/api/v2/sessions');
+    expect(res.status).toBe(200);
+    expect(spy).toHaveBeenCalledWith(
+      { userId: 'member', ownerIds: undefined },
+      { light: true },
+    );
+  });
+
   it('elevated повышает приоритет над projectIds (все сессии)', async () => {
     const { app, sessionManager, projectStore } = makeApp({ userId: 'lead', elevated: true });
     const project = projectStore.create('P', 'lead');

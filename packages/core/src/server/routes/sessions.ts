@@ -8,6 +8,7 @@ import type { Message, Session, QuestionStatus, SessionWorktree, AttachmentsConf
 import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, enqueueSteerMessage, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
+import type { SerializeSessionOptions } from '../serialize.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
@@ -627,10 +628,27 @@ export function createSessionRoutes(
    *
    * Очистка — на КОПИИ ответа: сохранённая сессия не мутируется.
    */
-  const serializeForReader = async (c: Context, session: Session, userId?: string) => {
+  const serializeForReader = async (
+    c: Context,
+    session: Session,
+    userId?: string,
+    serializeOpts?: Pick<SerializeSessionOptions, 'includeMessages' | 'includePromptStates'>,
+  ) => {
     const canReveal = await resolveCanRevealSecrets(c, session, userId);
-    return serializeSession(session, { agentRegistry, redactSecrets: !canReveal });
+    return serializeSession(session, {
+      agentRegistry,
+      redactSecrets: !canReveal,
+      ...serializeOpts,
+    });
   };
+
+  /**
+   * Ответ списка `GET /`: история сообщений и состояние промпта не отдаются.
+   * `listSessions(..., { light: true })` грузит метаданные без истории, а этот
+   * DTO не добавляет её обратно. Очередь (`pending_messages`/`pending_count`),
+   * статус, `current_stream`, настройки и счётчики сохраняются.
+   */
+  const LIST_SERIALIZE_OPTS = { includeMessages: false, includePromptStates: false } as const;
 
   /**
    * Локальная фильтрация списка по project_id. remote-ref (`remote:<uuid>`)
@@ -650,7 +668,9 @@ export function createSessionRoutes(
       : (await opts.resolveMemberProjectIds?.(c, userId)) ?? [];
     let sessions: Session[];
     if (elevated) {
-      sessions = await sessionManager.listSessions({});
+      // `light: true` — метаданные без истории: список не должен загружать
+      // `messages` всех сессий (ADR-089; на больших инстансах это OOM).
+      sessions = await sessionManager.listSessions({}, { light: true });
     } else {
       // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) трактуется
       // как локальный — иначе такие сессии выпадают из списка `local`.
@@ -658,12 +678,12 @@ export function createSessionRoutes(
         ? [...(await opts.localOwnerResolver.resolveLocalOwnerIds())]
         : undefined;
       sessions = memberProjectIds.length > 0
-        ? await sessionManager.listSessions({ userId, projectIds: memberProjectIds, ownerIds })
-        : await sessionManager.listSessions({ userId, ownerIds });
+        ? await sessionManager.listSessions({ userId, projectIds: memberProjectIds, ownerIds }, { light: true })
+        : await sessionManager.listSessions({ userId, ownerIds }, { light: true });
     }
 
     if (!hasRemoteGetter) {
-      return c.json(await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId))));
+      return c.json(await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS))));
     }
 
     const remoteClient = resolveClient();
@@ -674,7 +694,7 @@ export function createSessionRoutes(
     }
 
     if (!remoteClient) {
-      return c.json(await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId))));
+      return c.json(await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS))));
     }
 
     try {
@@ -685,7 +705,7 @@ export function createSessionRoutes(
       // Локальные сериализуем в DTO ДО объединения — иначе в merged-список
       // попадут сырые Session (camelCase) рядом с remote-DTO (snake_case).
       const localDto = await Promise.all(
-        filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId)),
+        filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
       );
       const remote = (await remoteClient.listSessions(projectId)) as Array<Record<string, unknown>>;
       return c.json(mergeItems(localDto, remote));
@@ -695,7 +715,7 @@ export function createSessionRoutes(
         console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
         if (projectId && isRemoteRef(projectId)) return c.json([]);
         return c.json(
-          await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId))),
+          await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS))),
         );
       }
       throw err;

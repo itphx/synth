@@ -19,6 +19,22 @@ export interface SerializeSessionOptions {
    * читателя, её решает вызывающий (см. `canRevealSecrets` в роутах сессий).
    */
   redactSecrets?: boolean;
+  /**
+   * Включать историю сообщений (`messages`). Список сессий (`GET /sessions`)
+   * историю не отправляет — иначе ответ растёт линейно с числом сообщений
+   * всех сессий (на больших инстансах это переполняет heap). `false` →
+   * `messages: []`; `pending_messages` (очередь) остаются.
+   *
+   * @default true
+   */
+  includeMessages?: boolean;
+  /**
+   * Включать состояние промпта per-agent (`prompt_states`). Для списка не
+   * нужно: это служебные данные шага и заметный объём на каждую сессию.
+   *
+   * @default true
+   */
+  includePromptStates?: boolean;
 }
 
 /**
@@ -106,7 +122,9 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
           branch: session.worktree.branch,
         }
       : null,
-    messages: session.messages.map((m, i) => serializeMessage(m, i, messageOpts)),
+    messages: opts?.includeMessages === false
+      ? []
+      : session.messages.map((m, i) => serializeMessage(m, i, messageOpts)),
     pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i, messageOpts)),
     pending_count: session.pendingMessages.length,
     current_stream: session.currentStream
@@ -182,7 +200,9 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     },
     settings: session.settings,
     /** ADR-070 §2.4: состояние промпта per-agent (generation/hash/prefix). */
-    prompt_states: session.promptStates ?? null,
+    ...(opts?.includePromptStates === false
+      ? {}
+      : { prompt_states: session.promptStates ?? null }),
     sticky_notes: session.stickyNotes.map((n) => ({
       id: n.id,
       content: n.content,

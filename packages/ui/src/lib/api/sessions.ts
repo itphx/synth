@@ -41,7 +41,11 @@ export interface SessionData {
   icon?: string | null
   /** Канонический ключ цвета сессии (PROJECT_COLOR_KEYS) или null. */
   color?: string | null
-  messages: Array<{
+  /**
+   * История сообщений. `GET /sessions` (список) историю **не отдаёт** —
+   * массив пуст/поля может не быть; полная история приходит в `GET /sessions/:id`.
+   */
+  messages?: Array<{
     index: number
     id?: string
     seq?: number

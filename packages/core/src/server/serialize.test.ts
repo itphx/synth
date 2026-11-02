@@ -96,6 +96,35 @@ function session(overrides: Partial<Session> = {}): Session {
   } as Session;
 }
 
+describe('serializeSession — includeMessages/includePromptStates (список сессий)', () => {
+  function fullSession(): Session {
+    return session({
+      messages: [message({ content: 'history' })],
+      pendingMessages: [message({ role: MessageRole.USER, content: 'queued' })],
+      promptStates: { assistant: { generation: 1 } } as unknown as Session['promptStates'],
+    });
+  }
+
+  it('по умолчанию история и prompt_states отдаются (деталь не меняется)', () => {
+    const out = serializeSession(fullSession()) as Record<string, unknown>;
+    expect((out.messages as unknown[]).length).toBe(1);
+    expect(out.pending_count).toBe(1);
+    expect(out.prompt_states).not.toBeNull();
+  });
+
+  it('includeMessages:false → messages:[], очередь и счётчик сохранены', () => {
+    const out = serializeSession(fullSession(), { includeMessages: false }) as Record<string, unknown>;
+    expect(out.messages).toEqual([]);
+    expect(out.pending_count).toBe(1);
+    expect((out.pending_messages as unknown[]).length).toBe(1);
+  });
+
+  it('includePromptStates:false → ключа prompt_states нет', () => {
+    const out = serializeSession(fullSession(), { includePromptStates: false }) as Record<string, unknown>;
+    expect('prompt_states' in out).toBe(false);
+  });
+});
+
 describe('serializeSession — activity (idle | busy | retry)', () => {
   it('сессия без хода → idle', () => {
     const out = serializeSession(session()) as Record<string, unknown>;
