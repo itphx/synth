@@ -125,10 +125,18 @@ export class DecisionModel implements MicroModel {
         confidence: outcome.confidence ?? 0,
         latencyMs: outcome.latencyMs,
         signals,
+        ...(outcome.usage ? { usage: outcome.usage } : {}),
+        ...(outcome.rejectedUsage ? { auxUsage: outcome.rejectedUsage } : {}),
       };
     }
 
-    return this._unsure(taskClass, startTime, [this._failSignal(outcome)], outcome.latencyMs);
+    return this._unsure(
+      taskClass,
+      startTime,
+      [this._failSignal(outcome)],
+      outcome.latencyMs,
+      outcome.rejectedUsage,
+    );
   }
 
   // ── private ──
@@ -199,6 +207,7 @@ export class DecisionModel implements MicroModel {
     startTime: number,
     signals: string[],
     latencyMs?: number,
+    auxUsage?: import('@itphx/synth-shared').TokenUsage,
   ): MicroResult {
     return {
       status: 'UNSURE',
@@ -206,6 +215,7 @@ export class DecisionModel implements MicroModel {
       confidence: 0.3,
       latencyMs: latencyMs ?? Math.round(performance.now() - startTime),
       signals,
+      ...(auxUsage ? { auxUsage } : {}),
     };
   }
 }

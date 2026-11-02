@@ -313,6 +313,33 @@ describe('run-cycle — предохранитель бюджета контек
     expect(assistant!.metadata!.context_budget_exceeded).toBe(true);
   });
 
+  it('оценка бюджета учитывает калиброванный chars-per-token модели (ratio 8 vs дефолт 4)', async () => {
+    const longPrompt = 'x'.repeat(300);
+
+    // Без калибровки — дефолт 4: 300/4 = 75 > 50 → бюджет срабатывает.
+    const noRatio = scriptedProvider([[{ isFinal: true, content: 'done' }]]);
+    const over = await runSubagent(makeConfig({
+      initialMessages: [userMessage(longPrompt)],
+      extra: makeExtra({ provider: noRatio.provider, subagentMaxInputTokens: 50 }),
+    }));
+    expect(noRatio.calls()).toBe(0);
+    expect(over.metadata!.context_budget_exceeded).toBe(true);
+
+    // Калибровка 8: 300/8 = 37.5 ≤ 50 → вызов проходит.
+    const withRatio = scriptedProvider([[{ isFinal: true, content: 'done' }]]);
+    const ok = await runSubagent(makeConfig({
+      initialMessages: [userMessage(longPrompt)],
+      extra: makeExtra({
+        provider: withRatio.provider,
+        subagentMaxInputTokens: 50,
+        loadTokenRatio: () => 8,
+      }),
+    }));
+    expect(withRatio.calls()).toBe(1);
+    expect(ok.metadata!.context_budget_exceeded).toBeUndefined();
+    expect(ok.content).toContain('done');
+  });
+
   it('бюджет 0 — ограничение выключено (поведение прежнее)', async () => {
     const { provider, calls } = scriptedProvider([
       [toolCallChunk('noop', {}, 'c1')],
@@ -2000,5 +2027,176 @@ describe('run-cycle — живой ход дочерней сессии (ADR-118
       streamId: 'stream-foreign',
       turnId: 'turn-foreign',
     });
+  });
+});
+
+describe('run-cycle — usage шагов ребёнка (ADR-102/ADR-118)', () => {
+  const U1: TokenUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
+  const U2: TokenUsage = { inputTokens: 20, outputTokens: 8, totalTokens: 28 };
+
+  function sumAssistantUsage(child: Session): TokenUsage {
+    const total: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    for (const m of child.messages) {
+      if (m.role !== MessageRole.ASSISTANT || !m.usage) continue;
+      total.inputTokens += m.usage.inputTokens || 0;
+      total.outputTokens += m.usage.outputTokens || 0;
+      total.totalTokens += m.usage.totalTokens || 0;
+    }
+    return total;
+  }
+
+  it('step.finished — расход своего шага; сумма usage сообщений = счётчики ребёнка', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const published: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const bus = new EventBus();
+    bus.subscribe(child.id, (e) => published.push({ type: e.type, data: e.data as Record<string, unknown> }));
+    const { provider } = scriptedProvider([
+      [{ ...toolCallChunk('noop', {}, 'c1'), usage: U1 }],
+      [{ isFinal: true, content: 'готово', model: 'test-model', usage: U2 }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({
+        provider, sessionManager, sessionId: parent.id, toolRegistry: registry, eventBus: bus,
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const steps = published.filter((e) => e.type === 'step.finished');
+    expect(steps).toHaveLength(2);
+    expect(steps[0]!.data.usage).toEqual(U1);
+    expect(steps[1]!.data.usage).toEqual(U2);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(sumAssistantUsage(saved)).toEqual({
+      inputTokens: 30,
+      outputTokens: 13,
+      totalTokens: 43,
+    });
+    expect(saved.inputTokens).toBe(30);
+    expect(saved.outputTokens).toBe(13);
+    expect(saved.totalTokens).toBe(43);
+  });
+
+  it('ошибка провайдера: сообщение ошибки не дублирует накопленный расход', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    let calls = 0;
+    const provider = {
+      model: 'test-model',
+      name: 'test-provider',
+      chatAsync: vi.fn(() => (async function* () {
+        if (calls++ === 0) {
+          yield { ...toolCallChunk('noop', {}, 'c1'), usage: U1 };
+          return;
+        }
+        throw new Error('model not found');
+      })()),
+    } as unknown as BaseProvider;
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    // Шаг с вызовами несёт свой usage; сообщение об ошибке — без накопленного.
+    expect(sumAssistantUsage(saved)).toEqual(U1);
+    expect(saved.inputTokens).toBe(U1.inputTokens);
+    expect(saved.outputTokens).toBe(U1.outputTokens);
+  });
+
+  it('отмена до финального чанка: partial несёт usage своего шага, сумма = счётчики', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const ac = new AbortController();
+    const provider = {
+      model: 'test-model',
+      name: 'test-provider',
+      chatAsync: vi.fn(() => (async function* () {
+        yield { isFinal: false, content: 'часть', usage: U1 };
+        ac.abort();
+      })()),
+    } as unknown as BaseProvider;
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      ctx: makeCtx({ abortSignal: ac.signal }),
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const partial = saved.messages.find((m) => m.metadata?.partial === true);
+    expect(partial?.usage).toEqual(U1);
+    expect(sumAssistantUsage(saved)).toEqual(U1);
+    expect(saved.inputTokens).toBe(U1.inputTokens);
+    expect(saved.outputTokens).toBe(U1.outputTokens);
+  });
+
+  it('отмена после финального чанка: usage шага не теряется и не удваивается', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const ac = new AbortController();
+    const provider = {
+      model: 'test-model',
+      name: 'test-provider',
+      chatAsync: vi.fn(() => (async function* () {
+        yield { isFinal: true, content: 'шаг', usage: U1 };
+        // Отмена приходит после того, как финальный чанк итерации обработан.
+        ac.abort();
+      })()),
+    } as unknown as BaseProvider;
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      ctx: makeCtx({ abortSignal: ac.signal }),
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const partial = saved.messages.find((m) => m.metadata?.partial === true);
+    expect(partial?.usage).toEqual(U1);
+    // Один и тот же расход ровно один раз: partial-сообщение + счётчики.
+    expect(sumAssistantUsage(saved)).toEqual(U1);
+    expect(saved.inputTokens).toBe(U1.inputTokens);
+    expect(saved.outputTokens).toBe(U1.outputTokens);
+  });
+
+  it('смешанные валюты: стоимость саб-агента не частичная', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [{
+        ...toolCallChunk('noop', {}, 'c1'),
+        usage: { ...U1, cost: { amount: 0.1, currency: 'USD' as const } },
+      }],
+      [{
+        isFinal: true,
+        content: 'готово',
+        model: 'test-model',
+        usage: { ...U2, cost: { amount: 5, currency: 'RUB' as const } },
+      }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const usage = result.metadata!.subagent_usage as TokenUsage;
+    // Валюты разные — стоимость не суммируем, чтобы не получить частичную.
+    expect(usage.cost).toBeUndefined();
   });
 });

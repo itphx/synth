@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeCacheHitRate, computeUsageCost } from './usage.js';
+import { computeCacheHitRate, computeUsageCost, parseUsageCost } from './usage.js';
 import type { TokenUsage } from '@itphx/synth-shared';
 
 const USAGE: TokenUsage = {
@@ -85,5 +85,57 @@ describe('computeUsageCost (ADR-070 §2.6)', () => {
   it('валюта pricing прокидывается в UsageCost', () => {
     const cost = computeUsageCost(USAGE, { inputPrice: 1, currency: 'RUB' });
     expect(cost!.currency).toBe('RUB');
+  });
+
+  it('стоимость провайдера приоритетнее каталога', () => {
+    const cost = computeUsageCost(
+      { ...USAGE, cost: { amount: 0.42, currency: 'CNY' } },
+      { inputPrice: 1, outputPrice: 2, currency: 'USD' },
+    );
+    expect(cost).not.toBeNull();
+    expect(cost!.costUsd).toBe(0.42);
+    expect(cost!.currency).toBe('CNY');
+    expect(cost!.breakdown).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('provider cost=0 достоверен (не проваливается в каталог)', () => {
+    const cost = computeUsageCost(
+      { ...USAGE, cost: { amount: 0, currency: 'USD' } },
+      { inputPrice: 1 },
+    );
+    expect(cost!.costUsd).toBe(0);
+  });
+
+  it('provider cost работает и без pricing', () => {
+    const cost = computeUsageCost(
+      { ...USAGE, cost: { amount: 0.1, currency: 'RUB' } },
+      null,
+    );
+    expect(cost!.costUsd).toBe(0.1);
+    expect(cost!.currency).toBe('RUB');
+  });
+});
+
+describe('parseUsageCost (provider usage)', () => {
+  it('разбирает числовые поля cost/total_cost/cost_usd', () => {
+    expect(parseUsageCost({ cost: 0.5 })).toEqual({ amount: 0.5, currency: 'USD' });
+    expect(parseUsageCost({ total_cost: 1.5, currency: 'RUB' })).toEqual({ amount: 1.5, currency: 'RUB' });
+    expect(parseUsageCost({ cost_usd: 2, currency: 'CNY' })).toEqual({ amount: 2, currency: 'CNY' });
+  });
+
+  it('разбирает объект cost {amount, currency}', () => {
+    expect(parseUsageCost({ cost: { amount: 0.2, currency: 'RUB' } }))
+      .toEqual({ amount: 0.2, currency: 'RUB' });
+  });
+
+  it('0 — достоверное значение; неизвестная валюта → USD', () => {
+    expect(parseUsageCost({ cost: 0 })).toEqual({ amount: 0, currency: 'USD' });
+    expect(parseUsageCost({ cost: 1, currency: 'EUR' })).toEqual({ amount: 1, currency: 'USD' });
+  });
+
+  it('нет поля/невалидное значение → undefined', () => {
+    expect(parseUsageCost(undefined)).toBeUndefined();
+    expect(parseUsageCost({ prompt_tokens: 1 })).toBeUndefined();
+    expect(parseUsageCost({ cost: 'nope' })).toBeUndefined();
   });
 });

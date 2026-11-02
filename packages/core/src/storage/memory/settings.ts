@@ -362,6 +362,18 @@ export class MemorySettingsRepository implements SettingsRepository {
     this._clear('contextWindowPolicy');
   }
 
+  async getSubagentMaxInputTokens(): Promise<number | undefined> {
+    return this._settings.subagentMaxInputTokens;
+  }
+
+  async setSubagentMaxInputTokens(value: number): Promise<void> {
+    this._patch({ subagentMaxInputTokens: value });
+  }
+
+  async clearSubagentMaxInputTokens(): Promise<void> {
+    this._clear('subagentMaxInputTokens');
+  }
+
   /** Дефолты оптимизации контекста новых сессий (runtime, админка). */
   async getContextDefaults(): Promise<Partial<ContextDefaults> | undefined> {
     return this._settings.contextDefaults

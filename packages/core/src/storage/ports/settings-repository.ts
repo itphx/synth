@@ -149,6 +149,10 @@ export interface SettingsRepository {
   getContextWindowPolicy(): Promise<ContextWindowPolicy | undefined>;
   setContextWindowPolicy(policy: ContextWindowPolicy): Promise<void>;
   clearContextWindowPolicy(): Promise<void>;
+  /** Бюджет промпта саб-агента (`agents.subagentMaxInputTokens`; 0 — без лимита). */
+  getSubagentMaxInputTokens(): Promise<number | undefined>;
+  setSubagentMaxInputTokens(value: number): Promise<void>;
+  clearSubagentMaxInputTokens(): Promise<void>;
 
   /**
    * Дефолты оптимизации контекста для **новых** сессий (`context.defaults`).

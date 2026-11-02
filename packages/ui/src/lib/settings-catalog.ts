@@ -404,6 +404,28 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     ],
   },
   {
+    // Предохранитель бюджета промпта саб-агентов (`agents.subagentMaxInputTokens`).
+    // AI-подсистема (лимиты прогонов агентов), не эксплуатация.
+    id: 'agentsLimits',
+    group: 'adminAi',
+    labelKey: 'settings.category.agentsLimits',
+    icon: 'robot-2',
+    roles: ['ADMIN'],
+    keywords: [
+      'agents',
+      'subagent',
+      'subagent budget',
+      'max input tokens',
+      'token budget',
+      'агенты',
+      'сабагенты',
+      'саб-агенты',
+      'бюджет',
+      'токены',
+      'лимит',
+    ],
+  },
+  {
     // ADR-115: runtime-настройки вложений (мультимодальный ввод) —
     // это AI-слой (модальности/aux-модели), не эксплуатация.
     id: 'attachments',
@@ -2620,6 +2642,14 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     labelKey: 'settings.contextWindow.hints.title',
     keywords: ['tokens', 'estimate', 'window', 'токены', 'оценка', 'окно'],
     advanced: true,
+  },
+  // Предохранитель бюджета промпта саб-агентов (`agents.subagentMaxInputTokens`).
+  {
+    id: 'agentsLimits.budget',
+    categoryId: 'agentsLimits',
+    sectionId: 'agents-limits',
+    labelKey: 'settings.agentsLimits.field.label',
+    keywords: ['subagent', 'budget', 'tokens', 'сабагенты', 'бюджет', 'токены'],
   },
   // ADR-115: мультимодальный ввод — настройки вложений сообщений.
   {

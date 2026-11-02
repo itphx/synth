@@ -429,9 +429,9 @@ describe('backgroundConfigSchema (PROP-096/PROP-097)', () => {
  * глубины вложенности.
  */
 describe('agentsConfigSchema', () => {
-  it('дефолт: 150k входных токенов, глубина вложенности 1', () => {
+  it('дефолт: 0 (без лимита), глубина вложенности 1', () => {
     expect(agentsConfigSchema.parse({})).toEqual({
-      subagentMaxInputTokens: 150_000,
+      subagentMaxInputTokens: 0,
       subagentDepth: 1,
     });
   });

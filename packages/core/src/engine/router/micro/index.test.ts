@@ -87,4 +87,80 @@ describe('MicroPipeline (интеграция)', () => {
       expect(result.microResult!.confidence).toBeGreaterThanOrEqual(0.99);
     }
   });
+
+  it('ADR-102: usage ответившего вызова и auxUsage отклонённых', async () => {
+    const rejected = {
+      inputTokens: 5, outputTokens: 1, totalTokens: 6,
+      cost: { amount: 1, currency: 'RUB' as const },
+    };
+    const answered = {
+      inputTokens: 10, outputTokens: 2, totalTokens: 12,
+      cost: { amount: 2, currency: 'USD' as const },
+    };
+    const innerRejected = {
+      inputTokens: 3, outputTokens: 1, totalTokens: 4,
+      cost: { amount: 3, currency: 'USD' as const },
+    };
+    const unsure = {
+      kind: 'rules' as const,
+      name: 'unsure',
+      canHandle: () => true,
+      handle: async () => ({
+        status: 'UNSURE' as const,
+        taskClass: 'small_talk' as const,
+        confidence: 0.1,
+        latencyMs: 1,
+        signals: ['unsure'],
+        usage: rejected,
+      }),
+    };
+    const ok = {
+      kind: 'rules' as const,
+      name: 'ok',
+      canHandle: () => true,
+      handle: async () => ({
+        status: 'OK' as const,
+        taskClass: 'small_talk' as const,
+        confidence: 0.95,
+        latencyMs: 1,
+        signals: ['ok'],
+        usage: answered,
+        auxUsage: innerRejected,
+      }),
+    };
+    const local = new MicroPipeline(classifier, [unsure, ok]);
+
+    const result = await local.handle(makeInput('привет'));
+    expect(result.handled).toBe(true);
+    expect(result.microResult!.usage).toEqual(answered);
+    // Отклонённый вызов + отклонённый тир внутри ответившего (разные валюты —
+    // стоимость не суммируется).
+    expect(result.auxUsage).toEqual({
+      inputTokens: 8,
+      outputTokens: 2,
+      totalTokens: 10,
+    });
+    expect(result.auxUsage?.cost).toBeUndefined();
+  });
+
+  it('ADR-102: fallback — весь usage опрошенных вызовов в auxUsage', async () => {
+    const usage = { inputTokens: 7, outputTokens: 1, totalTokens: 8 };
+    const unsure = {
+      kind: 'rules' as const,
+      name: 'unsure',
+      canHandle: () => true,
+      handle: async () => ({
+        status: 'UNSURE' as const,
+        taskClass: 'small_talk' as const,
+        confidence: 0.1,
+        latencyMs: 1,
+        signals: ['unsure'],
+        usage,
+      }),
+    };
+    const local = new MicroPipeline(classifier, [unsure]);
+    const result = await local.handle(makeInput('привет'));
+    expect(result.handled).toBe(false);
+    expect(result.auxUsage).toEqual(usage);
+  });
 });

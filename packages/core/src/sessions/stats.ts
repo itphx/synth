@@ -77,19 +77,19 @@ interface MessageCost {
 }
 
 /**
- * Стоимость сообщения: по цене модели (в её валюте), иначе — из
- * `metadata.cost_usd` (`metadata.cost_currency`, по умолчанию USD —
- * обратная совместимость со старыми данными) (ADR-070 §2.6).
+ * Стоимость сообщения: `metadata.cost_usd` (в нём — цена провайдера, если он
+ * её вернул, иначе каталожная на момент записи; ADR-102/ADR-070 §2.6) —
+ * приоритет; fallback — расчёт по текущим ценам модели.
  */
 function messageCost(msg: Message, getModelPricing?: SessionStatsDeps['getModelPricing']): MessageCost {
-  if (getModelPricing && msg.usage && msg.model) {
-    const cost = computeUsageCost(msg.usage, getModelPricing(msg.model));
-    if (cost) return { cost: cost.costUsd, currency: cost.currency };
-  }
   const metaCost = msg.metadata?.cost_usd;
   if (typeof metaCost === 'number') {
     const metaCurrency = msg.metadata?.cost_currency;
     return { cost: metaCost, currency: typeof metaCurrency === 'string' ? metaCurrency : 'USD' };
+  }
+  if (getModelPricing && msg.usage && msg.model) {
+    const cost = computeUsageCost(msg.usage, getModelPricing(msg.model));
+    if (cost) return { cost: cost.costUsd, currency: cost.currency };
   }
   return { cost: 0, currency: 'USD' };
 }

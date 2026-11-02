@@ -20,6 +20,7 @@ import {
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, ProviderError, RateLimitError } from './exceptions.js';
+import { parseUsageCost } from './usage.js';
 // ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
 
@@ -867,6 +868,7 @@ export class OpenAIProvider extends BaseProvider {
     }
     const completionDetails = usage.completion_tokens_details as Record<string, number> | undefined;
     const promptDetails = usage.prompt_tokens_details as Record<string, number> | undefined;
+    const cost = parseUsageCost(usage);
     return {
       inputTokens: (usage.prompt_tokens as number) || 0,
       outputTokens: (usage.completion_tokens as number) || 0,
@@ -874,6 +876,7 @@ export class OpenAIProvider extends BaseProvider {
       cacheReadTokens: promptDetails?.cached_tokens || 0,
       cacheWriteTokens: 0,
       reasoningTokens: completionDetails?.reasoning_tokens || 0,
+      ...(cost ? { cost } : {}),
     };
   }
 

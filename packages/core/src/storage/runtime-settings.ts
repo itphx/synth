@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
 import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits } from '@itphx/synth-shared';
 import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '@itphx/synth-shared';
-import { defaultConfig, parseAttachmentsModalities } from '@itphx/synth-shared/config';
+import { defaultConfig, parseAttachmentsModalities, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
 
@@ -276,6 +276,81 @@ export function createLiveContextWindowPolicy(params: {
 }
 
 /**
+ * Источник эффективного значения `agents.subagentMaxInputTokens`.
+ */
+export type SubagentMaxInputTokensSource = 'env' | 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга `agents.subagentMaxInputTokens` (env > runtime > config > default). */
+export interface ResolvedSubagentMaxInputTokens {
+  value: number;
+  source: SubagentMaxInputTokensSource;
+  /** Значение задано через env: runtime его не перекрывает. */
+  envLocked: boolean;
+}
+
+/** Env-имя предохранителя объёма промпта саб-агента (ADR-023). */
+export const SUBAGENT_MAX_INPUT_TOKENS_ENV = 'SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS';
+
+/** Прочитать значение из env (целое ≥ 0; невалидное — warn + игнор, fail-soft). */
+function readSubagentMaxInputTokensEnv(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env[SUBAGENT_MAX_INPUT_TOKENS_ENV];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 0) return value;
+  console.warn(
+    `[config] невалидное значение ${SUBAGENT_MAX_INPUT_TOKENS_ENV}="${raw}" (ожидается целое ≥ 0) — игнорируется`,
+  );
+  return undefined;
+}
+
+/**
+ * Эффективный предохранитель объёма промпта саб-агента — приоритет
+ * **env > runtime > config.yaml > default (0)**.
+ *
+ * Функция чистая: оркестратор читает резолвер при сборке `task` extra, поэтому
+ * runtime-изменение из админки применяется к следующим прогонам без рестарта.
+ */
+export function resolveSubagentMaxInputTokens(
+  configValue?: number,
+  runtimeValue?: number,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedSubagentMaxInputTokens {
+  const envValue = readSubagentMaxInputTokensEnv(env);
+  if (envValue !== undefined) return { value: envValue, source: 'env', envLocked: true };
+  if (runtimeValue !== undefined) return { value: runtimeValue, source: 'runtime', envLocked: false };
+  if (configValue !== undefined) return { value: configValue, source: 'config', envLocked: false };
+  return { value: DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, source: 'default', envLocked: false };
+}
+
+/** Живое состояние предохранителя (runtime-значение + резолвер). */
+export interface LiveSubagentMaxInputTokens {
+  getRuntime(): number | undefined;
+  setRuntime(next: number | undefined): void;
+  resolve(): ResolvedSubagentMaxInputTokens;
+  getValue(): number;
+}
+
+/** Собрать живое состояние предохранителя бюджета промпта саб-агента. */
+export function createLiveSubagentMaxInputTokens(params: {
+  config?: number;
+  runtime?: number;
+  env?: NodeJS.ProcessEnv;
+}): LiveSubagentMaxInputTokens {
+  let runtime = params.runtime;
+  const env = params.env ?? process.env;
+  const resolve = (): ResolvedSubagentMaxInputTokens =>
+    resolveSubagentMaxInputTokens(params.config, runtime, env);
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next ?? undefined;
+    },
+    resolve,
+    getValue: () => resolve().value,
+  };
+}
+
+/**
  * Источник эффективных дефолтов оптимизации контекста.
  *
  * env-оверрайда у этих значений нет (это дефолты новых сессий, а не политика
@@ -522,6 +597,12 @@ export interface RuntimeSettings {
    * резолвер перед каждым LLM-вызовом (без рестарта).
    */
   contextWindowPolicy?: ContextWindowPolicy;
+  /**
+   * Предохранитель объёма промпта саб-агента (`agents.subagentMaxInputTokens`):
+   * `0` — без ограничения. Применяется **сразу** — оркестратор читает
+   * резолвер при сборке `task` extra (без рестарта).
+   */
+  subagentMaxInputTokens?: number;
   /**
    * Дефолты оптимизации контекста для **новых** сессий (`context.defaults`).
    * Частичный патч: применяется сразу — менеджер сессий читает резолвер при
@@ -1437,6 +1518,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.contextWindowPolicy;
+      return next;
+    });
+  }
+
+  /** Бюджет промпта саб-агента (`agents.subagentMaxInputTokens`). */
+  async getSubagentMaxInputTokens(): Promise<number | undefined> {
+    const settings = await this.load();
+    return settings.subagentMaxInputTokens;
+  }
+
+  async setSubagentMaxInputTokens(value: number): Promise<void> {
+    await this._update((current) => ({ ...current, subagentMaxInputTokens: value }));
+  }
+
+  async clearSubagentMaxInputTokens(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.subagentMaxInputTokens;
       return next;
     });
   }

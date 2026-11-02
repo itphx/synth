@@ -890,7 +890,7 @@ describe('StatsTab — «Контекстное окно» из общего х�
     expect(section).not.toBeNull()
     const context = section.querySelector('[data-testid="stats-context"]') as HTMLElement
     expect(context).not.toBeNull()
-    expect(context.textContent).toContain('195,593')
+    expect(context.textContent).toContain('195,603')
     expect(context.textContent).toContain('200,000')
     expect(context.textContent).toContain('(98%)')
     expect(context.dataset.level).toBe('critical')

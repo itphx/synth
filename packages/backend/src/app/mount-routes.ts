@@ -27,6 +27,7 @@ import {
   // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального ввода.
   createAttachmentsSettingsRoutes, createModalityModelLookup,
   createContextWindowSettingsRoutes,
+  createAgentsLimitsSettingsRoutes,
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
@@ -626,6 +627,23 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       settingsStore,
       config: config.synth.context?.windowPolicy,
       live: deps.contextWindowSettings,
+      securityAudit,
+      env: process.env,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // Бюджет промпта саб-агента (`agents.subagentMaxInputTokens`): instance-wide,
+  // 0 — без лимита; применяется к следующим прогонам без рестарта. Managed — ADMIN.
+  app.route('/api/v2/settings', createAgentsLimitsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.agents.subagentMaxInputTokens,
+      live: deps.subagentMaxInputTokensSettings,
       securityAudit,
       env: process.env,
     },

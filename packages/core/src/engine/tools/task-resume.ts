@@ -81,7 +81,7 @@ export interface SubagentResumeDeps {
    * Предохранитель по объёму промпта resumed-саб-агента
    * (`agents.subagentMaxInputTokens`; `0`/не задан — без ограничения).
    */
-  subagentMaxInputTokens?: number;
+  subagentMaxInputTokens?: number | (() => number);
   /**
    * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
    * dependency-гейт в permission-слое resumed-саб-агента и `[НЕДОСТУПНЫЕ ТУЛЫ]`.
@@ -94,6 +94,10 @@ export interface SubagentResumeDeps {
   protectedPathsEnabled?: boolean;
   /** ADR-070: цены моделей для live-стоимости resumed-саб-агента (как в `task`). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
+  /** ADR-102: роллап аналитики для aux-вызовов resumed-саб-агента. */
+  analytics?: import('../../analytics/recorder.js').AnalyticsRecorder;
+  /** ADR-071: калиброванный chars-per-token модели resumed-саб-агента. */
+  loadTokenRatio?: (model: string | undefined) => Promise<number | undefined> | number | undefined;
   /** ADR-046 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
   skillRuntime?: import('../skills/types.js').SkillRuntime;
   /** ADR-046 §4.5: scope-гейты скиллов родительского контекста. */
@@ -329,6 +333,10 @@ export async function runSubagentResume(
       mcpServers: deps.mcpServers,
       // ADR-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
       modelPriceLoader: deps.modelPriceLoader,
+      // ADR-102: aux-расход resumed-саб-агента — в аналитику дочерней сессии.
+      analytics: deps.analytics,
+      // ADR-071: тот же калиброванный chars-per-token, что у родителя.
+      loadTokenRatio: deps.loadTokenRatio,
       // ADR-046 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
       skillRuntime: deps.skillRuntime,
       skillScope: deps.skillScope,

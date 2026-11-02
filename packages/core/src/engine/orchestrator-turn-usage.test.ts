@@ -2,17 +2,14 @@
  * ADR-102 + ADR-118: расход **хода** в статистике (история, счётчики
  * сессии, аналитика).
  *
- * С ADR-118 шаг (итерация) = отдельный вызов LLM. Раньше в финальное
- * сообщение и в счётчики сессии/аналитику попадал только расход последней
- * итерации (`finalUsage`), а расход промежуточных шагов терялся (в живой
- * сессии `Session.inputTokens` совпадал с суммой финальных сообщений, а не
- * с расходом хода).
- *
- * Теперь в финальное/отменённое сообщение идёт `turnUsage` — сумма расходов
- * всех шагов хода, при этом:
- *  - `step.finished` по-прежнему несёт расход **своего** шага (метрики
- *    Prometheus не меняются: сумма по шагам = расход хода);
- *  - запись usage на ход одна (`requests=1`, `messages=1`).
+ * С ADR-118 шаг (итерация) = отдельный вызов LLM = отдельное
+ * assistant-сообщение. `usage` каждого сообщения — расход **ровно своего**
+ * вызова; сумма usage сообщений хода = расход хода (`turnUsage`), который
+ * пишется в счётчики сессии (`Session.inputTokens`/…) и в аналитику (одна
+ * запись на ход: `requests=1`, `messages=1`).
+ *  - `step.finished` несёт расход **своего** шага (метрики Prometheus не
+ *    меняются: сумма по шагам = расход хода);
+ *  - `metadata.cost_*` сообщения — стоимость его собственного usage.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -44,10 +41,15 @@ const USAGE_TURN: TokenUsage = {
 
 interface ScriptStep {
   content?: string;
+  model?: string;
   toolCalls?: Array<{ id: string; name: string; args?: Record<string, unknown> }>;
   usage?: TokenUsage;
   /** Отменить ход сразу после выдачи чанка (имитация «Стоп» в стриме). */
   cancelAfterYield?: boolean;
+  /** Прервать генерацию (interrupt, ADR-104) после выдачи чанка. */
+  interruptAfterYield?: boolean;
+  /** Провайдер бросает ошибку на этом шаге (имитация сбоя LLM). */
+  error?: string;
 }
 
 /** Провайдер-сценарий: каждый вызов LLM отдаёт свой шаг сценария. */
@@ -78,10 +80,11 @@ class TurnUsageProvider extends BaseProvider {
     const idx = Math.min(TurnUsageProvider._call, Math.max(0, TurnUsageProvider._script.length - 1));
     const step = TurnUsageProvider._script[idx] ?? {};
     TurnUsageProvider._call++;
+    if (step.error) throw new Error(step.error);
     yield {
       content: step.content ?? '',
       isFinal: true,
-      model: this.model,
+      model: step.model ?? this.model,
       ...(step.usage ? { usage: step.usage } : {}),
       ...(step.toolCalls
         ? {
@@ -95,6 +98,8 @@ class TurnUsageProvider extends BaseProvider {
     };
     // Отмена приходит по факту выдачи чанка — без гонки с таймером.
     if (step.cancelAfterYield) cancellationToken?.cancel();
+    // ADR-104: прерывание генерации без отмены хода.
+    if (step.interruptAfterYield) cancellationToken?.interrupt?.();
   }
 
   getProviderName(): string {
@@ -173,7 +178,7 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function run(script: ScriptStep[]): Promise<{
+  async function run(script: ScriptStep[], priceLoader?: (model: string) => { inputPrice?: number; outputPrice?: number } | null): Promise<{
     sessionId: string;
     events: Published[];
   }> {
@@ -192,6 +197,7 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
       }) as unknown as import('@itphx/synth-shared').ProviderConfig,
       analytics: new AnalyticsRecorder({ repo: rollups as never }),
       defaultWorkingDir: tmpDir,
+      ...(priceLoader ? { modelPriceLoader: priceLoader } : {}),
     });
 
     const session = await sessionManager.createSession({
@@ -220,6 +226,24 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
     return stored.messages.filter((m) => m.role === MessageRole.ASSISTANT).at(-1)!;
   }
 
+  /** Все assistant-сообщения сессии (включая скрытые tool-chain шаги). */
+  async function assistantMessages(sessionId: string): Promise<Message[]> {
+    const stored = (await sessionManager.getSession(sessionId))!;
+    return stored.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+  }
+
+  /** Сумма usage всех assistant-сообщений сессии — инвариант «= счётчики». */
+  function sumUsage(messages: Message[]): TokenUsage {
+    const total: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    for (const message of messages) {
+      if (!message.usage) continue;
+      total.inputTokens += message.usage.inputTokens || 0;
+      total.outputTokens += message.usage.outputTokens || 0;
+      total.totalTokens += message.usage.totalTokens || 0;
+    }
+    return total;
+  }
+
   /** События закрытия шагов — расход каждого шага. */
   function stepEvents(events: Published[]): Published[] {
     return events.filter((e) => e.event === 'step.finished');
@@ -233,7 +257,7 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
     return rollups.buckets;
   }
 
-  it('ход из двух вызовов LLM: usage финального сообщения = сумма шагов', async () => {
+  it('ход из двух вызовов LLM: usage финального сообщения = расход последнего шага', async () => {
     const { sessionId } = await run([
       { content: 'шаг 1', toolCalls: [{ id: 'call_1', name: 'read_file' }], usage: USAGE_STEP_1 },
       { content: 'готово', usage: USAGE_STEP_2 },
@@ -241,7 +265,24 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
 
     expect(TurnUsageProvider.calls).toBe(2);
     const assistant = await finalAssistant(sessionId);
-    expect(assistant.usage).toEqual(USAGE_TURN);
+    // Финальное сообщение — расход **своего** (последнего) вызова.
+    expect(assistant.usage).toEqual(USAGE_STEP_2);
+  });
+
+  it('каждый assistant-шаг несёт свой usage; сумма по сообщениям = расход хода', async () => {
+    const { sessionId } = await run([
+      { content: 'шаг 1', toolCalls: [{ id: 'call_1', name: 'read_file' }], usage: USAGE_STEP_1 },
+      { content: 'готово', usage: USAGE_STEP_2 },
+    ]);
+
+    const messages = await assistantMessages(sessionId);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]!.usage).toEqual(USAGE_STEP_1);
+    expect(messages[1]!.usage).toEqual(USAGE_STEP_2);
+    expect(sumUsage(messages)).toEqual(USAGE_TURN);
+    // ADR-102: у каждого сообщения — длительность своего вызова.
+    expect(typeof messages[0]!.metadata?.step_duration_ms).toBe('number');
+    expect(typeof messages[1]!.metadata?.step_duration_ms).toBe('number');
   });
 
   it('ход из двух вызовов LLM: счётчики сессии = сумма шагов', async () => {
@@ -254,6 +295,8 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
     expect(session.inputTokens).toBe(30);
     expect(session.outputTokens).toBe(13);
     expect(session.totalTokens).toBe(43);
+    // Инвариант: сумма usage assistant-сообщений = счётчики сессии.
+    expect(sumUsage(await assistantMessages(sessionId))).toEqual(USAGE_TURN);
   });
 
   it('ход из двух вызовов LLM: аналитика — одна запись usage с суммой (requests=1)', async () => {
@@ -271,7 +314,6 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
       requests: 1,
       messages: 1,
     });
-    // Стоимость финального сообщения — по расходу хода (не только финала).
     void sessionId;
   });
 
@@ -321,14 +363,16 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
       { content: 'обрыв', usage: USAGE_STEP_2, cancelAfterYield: true },
     ]);
 
-    // Сообщение отмены несёт расход хода (шаг 1 + шаг 2).
+    // Сообщение отмены несёт расход **своего** шага (второго вызова).
     const assistant = await finalAssistant(sessionId);
-    expect(assistant.usage).toEqual(USAGE_TURN);
+    expect(assistant.usage).toEqual(USAGE_STEP_2);
 
     const session = (await sessionManager.getSession(sessionId))!;
     expect(session.inputTokens).toBe(30);
     expect(session.outputTokens).toBe(13);
     expect(session.totalTokens).toBe(43);
+    // Инвариант: сумма usage сообщений = счётчики сессии.
+    expect(sumUsage(await assistantMessages(sessionId))).toEqual(USAGE_TURN);
 
     // Отмена опубликована, ход закрыт.
     expect(events.some((e) => e.event === 'stream.cancelled')).toBe(true);
@@ -357,5 +401,72 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
       requests: 1,
       messages: 1,
     });
+  });
+
+  it('два шага на разных моделях: стоимость хода = сумма по шагам (аналитика/счётчики)', async () => {
+    const prices: Record<string, { inputPrice?: number; outputPrice?: number }> = {
+      a: { inputPrice: 1000 },
+      b: { outputPrice: 2000 },
+    };
+    const { sessionId } = await run([
+      {
+        content: 'шаг 1',
+        model: 'a',
+        toolCalls: [{ id: 'call_1', name: 'read_file' }],
+        usage: { inputTokens: 10, outputTokens: 0, totalTokens: 10 },
+      },
+      {
+        content: 'готово',
+        model: 'b',
+        usage: { inputTokens: 0, outputTokens: 10, totalTokens: 10 },
+      },
+    ], (model) => prices[model] ?? null);
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    // Шаг 1: 10 * 1000 / 1M = 0.01; шаг 2: 10 * 2000 / 1M = 0.02.
+    expect(session.inputCost).toBeCloseTo(0.01, 12);
+    expect(session.outputCost).toBeCloseTo(0.02, 12);
+
+    const buckets = await waitForRollups();
+    const usageBuckets = buckets.filter((b) => b.family === 'usage');
+    expect(usageBuckets).toHaveLength(1);
+    expect(usageBuckets[0]!.costByCurrency!.USD).toBeCloseTo(0.03, 12);
+  });
+
+  it('прерывание генерации (interrupt): сообщение шага и счётчики без двойного счёта', async () => {
+    const { sessionId } = await run([
+      { content: 'часть', usage: USAGE_STEP_1, interruptAfterYield: true },
+      { content: 'готово', usage: USAGE_STEP_2 },
+    ]);
+
+    // Первое сообщение — прерванный шаг (свой usage), второе — финал (свой).
+    const messages = await assistantMessages(sessionId);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]!.usage).toEqual(USAGE_STEP_1);
+    expect(messages[1]!.usage).toEqual(USAGE_STEP_2);
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.inputTokens).toBe(30);
+    expect(session.outputTokens).toBe(13);
+    expect(sumUsage(messages)).toEqual(USAGE_TURN);
+  });
+
+  it('ошибка LLM: сообщение об ошибке — свой шаг, счётчики = сумма сообщений', async () => {
+    const { sessionId } = await run([
+      { content: 'шаг 1', toolCalls: [{ id: 'call_1', name: 'read_file' }], usage: USAGE_STEP_1 },
+      { error: 'provider down' },
+    ]);
+
+    const messages = await assistantMessages(sessionId);
+    // Шаг 1 — точный usage; сообщение об ошибке — оценка своего шага.
+    expect(messages[0]!.usage).toEqual(USAGE_STEP_1);
+    const errorMessage = messages.at(-1)!;
+    expect(errorMessage.metadata?.status).toBe('error');
+    expect(errorMessage.usage?.inputTokens ?? 0).toBeGreaterThan(0);
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.inputTokens).toBe(sumUsage(messages).inputTokens);
+    expect(session.outputTokens).toBe(sumUsage(messages).outputTokens);
+    expect(session.totalTokens).toBe(sumUsage(messages).totalTokens);
   });
 });

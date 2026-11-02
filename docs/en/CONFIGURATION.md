@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -1584,15 +1584,22 @@ Safeguards for agent runs. `subagentMaxInputTokens` limits the **prompt size** o
 and when the estimate exceeds the limit the provider is **not called** — the run finishes
 correctly with a deterministic report (no LLM): the token estimate, the number of completed
 steps and the unfinished tasks (from the child session todo list or from the task
-description). The report is persisted as a regular assistant message of the child session
+description). The estimate uses the **calibrated chars-per-token of the run's model**
+(`token_ratios`, the same loader as the main orchestrator); without calibration/a loader
+error the default `4` is used (fail-open). The report is persisted as a regular assistant message of the child session
 with the `completed` status, its metadata carries `context_budget_exceeded`/
 `context_budget_tokens`/`steps`, and the event `subagent.context_budget` is published to the
 parent. It is a safeguard against a growing history (cost, model degradation, provider
-limits), not a "keep working" hint.
+limits), not a "keep working" hint. **The default is `0` (no limit)** (parity with opencode:
+there is no separate subagent token budget — an agent has `steps`,
+`experimental.subagent_depth` and auto-compaction `compaction.auto/keep/buffer`). With `0`
+and no context compaction a long subagent run may hit the model window or a provider error —
+for tool-heavy agents set a limit (UI “Subagent limits” / `/api/v2/settings/agents-limits`
+or `config.yaml`), or keep `0` deliberately.
 
 | Field | Purpose | Default |
 |-------|---------|---------|
-| `agents.subagentMaxInputTokens` | Safeguard on the subagent prompt size, input tokens (estimate); `0` — no limit. When exceeded, the run finishes with a report instead of a provider error. Env — `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | `150000` |
+| `agents.subagentMaxInputTokens` | Safeguard on the subagent prompt size, input tokens (estimate); `0` — no limit (default). When exceeded, the run finishes with a report instead of a provider error. Configurable in the UI (Settings → “Subagent limits”) / `GET/PUT/DELETE /api/v2/settings/agents-limits`; priority env > runtime > config. Env — `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | `0` |
 | `agents.subagentDepth` | Subagent nesting depth limit; `0` — no limit. The depth is counted along the `parentId` chain of the sessions (the current one is 0, its parent is 1, …): with a limit of 1 a subagent may spawn a subagent, but not a subagent inside a subagent. When the limit is reached, the `task` tool refuses **before** the child session is created (`task.depth_limit`). Env — `SYNTH_AGENTS_SUBAGENT_DEPTH` | `1` |
 
 - **The step limit has priority.** The final report step of `maxSteps` (the opencode mechanics)
@@ -1607,8 +1614,9 @@ limits), not a "keep working" hint.
   Earlier this branch of the main loop substituted the unrelated `session.max_iterations` (it now remains
   only for pipeline steps).
 - **The estimate is unavailable** (no data/empty prompt) — do not block (fail-open).
-- The estimate uses the chars-per-token heuristic (default 4): it is a safeguard, not an exact
-  token count of the model.
+- The estimate uses the **calibrated** chars-per-token of the run's model (`token_ratios`; the
+  same loader as the main orchestrator); the heuristic `4` applies only when calibration is
+  missing/loading fails (fail-open). It is a safeguard, not an exact token count of the model.
 - **The depth limit (`subagentDepth`) is structure, not budget.** It is counted along the
   `parentId` chain of the sessions, not by token spend: when the limit is reached the `task`
   tool refuses with `task.depth_limit` **before** the child session is created (no extra
@@ -1616,7 +1624,7 @@ limits), not a "keep working" hint.
 
 ```yaml
 agents:
-  subagentMaxInputTokens: 150000
+  subagentMaxInputTokens: 0   # 0 — no limit (default)
   subagentDepth: 1
 ```
 

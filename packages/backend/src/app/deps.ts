@@ -30,6 +30,8 @@ import {
   createLiveAttachmentsSettings,
   // Политика контекстного окна (`/settings/context-window`).
   createLiveContextWindowPolicy,
+  // Бюджет промпта саб-агента (`/settings/agents-limits`).
+  createLiveSubagentMaxInputTokens,
   // Дефолты оптимизации контекста новых сессий (`/settings/context-defaults`).
   createLiveContextDefaults,
   // Instance-wide лимиты заметок сессии (`/settings/sticky-notes`).
@@ -397,6 +399,13 @@ export async function createBackendDeps(
   const contextWindowSettings = createLiveContextWindowPolicy({
     config: config.synth.context?.windowPolicy,
     runtime: await settingsStore.getContextWindowPolicy(),
+  });
+
+  // Предохранитель объёма промпта саб-агента (`agents.subagentMaxInputTokens`):
+  // приоритет env > runtime > config.yaml > 0; читается при сборке `task` extra.
+  const subagentMaxInputTokensSettings = createLiveSubagentMaxInputTokens({
+    config: config.synth.agents.subagentMaxInputTokens,
+    runtime: await settingsStore.getSubagentMaxInputTokens(),
   });
   const stopEgressLogPruner = storageDegraded || !egressLogConfig.enabled
     ? () => {}
@@ -1136,6 +1145,8 @@ export async function createBackendDeps(
     attachmentsConfig: () => attachmentsSettings.getConfig(),
     // Политика контекстного окна — live-геттер (перед каждым LLM-вызовом).
     contextWindowPolicy: () => contextWindowSettings.getPolicy(),
+    // Бюджет промпта саб-агента — live-геттер (runtime-настройка из UI).
+    getSubagentMaxInputTokens: () => subagentMaxInputTokensSettings.getValue(),
     // ADR-115: каталог моделей инстанса для агента (тул `list_models`):
     // тот же `modelStore`, что у `GET /api/v2/models` (каталог провайдеров +
     // ручные override), поэтому модальности совпадают с UI.
@@ -1848,6 +1859,7 @@ export async function createBackendDeps(
     attachmentsSettings,
     // Политика ограничения контекстного окна (live, админ-API).
     contextWindowSettings,
+    subagentMaxInputTokensSettings,
     // Дефолты оптимизации контекста новых сессий (live, админ-API).
     contextDefaultsSettings,
     // Instance-wide лимиты заметок сессии (live, админ-API).

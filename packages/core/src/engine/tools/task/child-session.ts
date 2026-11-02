@@ -109,7 +109,16 @@ export interface ChildSessionLifecycle {
   /** Session-счётчики usage дочерней сессии — ровно один раз на прогон. */
   commitUsage(): Promise<void>;
   /** Metadata финального assistant-сообщения (status/cost_usd/cost_breakdown). */
-  buildAssistantMetadata(status: AssistantMessageStatus, extraMeta?: Record<string, unknown>): Record<string, unknown>;
+  buildAssistantMetadata(
+    status: AssistantMessageStatus,
+    extraMeta?: Record<string, unknown>,
+    /**
+     * ADR-102: расход **своего** сообщения/шага. Стоимость (`metadata.cost_*`)
+     * считается от него, а не от накопленного `usage` прогона: у прогона из N
+     * вызовов N сообщений, у каждого своя стоимость.
+     */
+    ownUsage?: TokenUsage,
+  ): Record<string, unknown>;
 }
 
 /**
@@ -193,18 +202,20 @@ export function createChildSessionLifecycle(opts: ChildSessionLifecycleOptions):
    * ADR-070 §2.6: metadata финального assistant-сообщения дочерней сессии.
    * Единая точка простановки `status`/`cost_usd`/`cost_breakdown` — как
    * `_saveAssistantMessage` оркестратора: стоимость считается по ценам модели
-   * (`extra.modelPriceLoader` + модель саб-агента), только если они заданы.
-   * `usage_estimated` здесь НЕ пишется: `usage` собран из финальных
-   * чанков провайдера и потому точен (оценка в live-событиях не персистится).
+   * (`extra.modelPriceLoader` + модель саб-агента) **от собственного usage
+   * сообщения** (`ownUsage`), не от накопленного расхода прогона.
+   * `usage_estimated` здесь НЕ пишется: usage собран из финальных чанков
+   * провайдера и потому точен (оценка в live-событиях не персистится).
    */
   const buildAssistantMetadata = (
     status: AssistantMessageStatus,
     extraMeta: Record<string, unknown> = {},
+    ownUsage?: TokenUsage,
   ): Record<string, unknown> => {
     const metadata: Record<string, unknown> = { ...extraMeta, status };
     const model = getModel();
-    const cost = model && extra.modelPriceLoader
-      ? computeUsageCost(usage, extra.modelPriceLoader(model))
+    const cost = model && ownUsage && extra.modelPriceLoader
+      ? computeUsageCost(ownUsage, extra.modelPriceLoader(model))
       : null;
     if (cost) {
       metadata.cost_usd = cost.costUsd;

@@ -1,4 +1,5 @@
 import type { ReasoningLevel } from './session.js';
+import type { Currency } from './provider.js';
 
 /**
  * ADR-036/ADR-072: дефолт rate limit LLM Gateway. Единый источник для Zod-схемы
@@ -46,6 +47,15 @@ export interface TokenUsage {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   reasoningTokens?: number;
+  /**
+   * ADR-102/ADR-118 (паритет с opencode `Usage.cost`): стоимость вызова,
+   * если провайдер вернул её сам. Приоритетнее каталожной цены модели.
+   * `amount` в `currency`; `0` — достоверная нулевая стоимость.
+   */
+  cost?: {
+    amount: number;
+    currency: Currency;
+  };
 }
 
 /**

@@ -48,12 +48,23 @@ function userMessage(content: string, metadata?: Record<string, unknown>): Messa
   };
 }
 
-function titleProvider(response: { content?: string; throws?: Error }) {
+function titleProvider(response: {
+  content?: string;
+  throws?: Error;
+  usage?: import('@itphx/synth-shared').TokenUsage;
+}) {
   const chat = vi.fn(async (): Promise<LLMResponse> => {
     if (response.throws) throw response.throws;
-    return { content: response.content ?? '' } as LLMResponse;
+    return {
+      content: response.content ?? '',
+      model: 'title-model',
+      ...(response.usage ? { usage: response.usage } : {}),
+    } as LLMResponse;
   });
-  return { provider: { chat } as unknown as BaseProvider, chat };
+  return {
+    provider: { chat, name: 'title-provider', model: 'title-model' } as unknown as BaseProvider,
+    chat,
+  };
 }
 
 describe('autoTitleSession — LLM-заголовок', () => {
@@ -71,6 +82,23 @@ describe('autoTitleSession — LLM-заголовок', () => {
     expect(title).toBe('Настройка сборки проекта');
     expect(chat).toHaveBeenCalledTimes(1);
     expect((await sessionManager.getSession(session.id))!.title).toBe('Настройка сборки проекта');
+  });
+
+  it('отдаёт usage LLM-заголовка в onUsage (aux-учёт)', async () => {
+    const session = await sessionManager.createSession();
+    await sessionManager.addMessage(session.id, userMessage('Как настроить сборку проекта?'));
+    const usage = { inputTokens: 12, outputTokens: 3, totalTokens: 15 };
+    const { provider } = titleProvider({ content: 'Заголовок', usage });
+    const onUsage = vi.fn();
+
+    await autoTitleSession(
+      (await sessionManager.getSession(session.id))!,
+      sessionManager,
+      provider,
+      onUsage,
+    );
+
+    expect(onUsage).toHaveBeenCalledWith(usage, { provider: 'title-provider', model: 'title-model' });
   });
 
   it('не перетирает пользовательский заголовок', async () => {

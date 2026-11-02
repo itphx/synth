@@ -27,12 +27,13 @@ import type { DebugCollector } from '../../../debug.js';
 import type { SessionManager } from '../../../sessions/manager.js';
 import type { EventBus } from '../../../events/bus.js';
 import type { BaseProvider, LLMMessage, SystemPromptPayload } from '../../../providers/base.js';
-import type { UsageCost } from '../../../providers/usage.js';
+import type { UsageCost, UsageCostBreakdown } from '../../../providers/usage.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
 import type { ModelRouter, RoutingDecision } from '../../router/router.js';
 import type { SaveAssistantMessageFn, AssistantMessageStatus, ExistingMessageRef } from '../persistence.js';
 import { addTokenUsage } from '../usage.js';
+import type { AuxUsageRecorder } from '../../usage-accounting.js';
 import type { ProviderOverrides } from '../routing.js';
 import { autoTitleSession } from '../../../sessions/auto-title.js';
 import { isUserDialogueMessage } from '../../../sessions/user-messages.js';
@@ -92,6 +93,12 @@ export interface ProcessFinalizeState {
    * финальное (или отменённое) сообщение пишется именно `turnUsage`.
    */
   turnUsage: TokenUsage;
+  /**
+   * ADR-102: стоимость хода по шагам (валюта → сумма) и компонентная
+   * разбивка для счётчиков — цены считаются моделью каждого шага.
+   */
+  turnCostByCurrency?: Record<string, number>;
+  turnCostBreakdown?: UsageCostBreakdown;
   finalContent: string;
   /** metadata.i18n подставленного финального фоллбека (лимит/deny/пустой ответ). */
   fallbackI18n: ReturnType<typeof i18nMeta> | undefined;
@@ -173,6 +180,13 @@ export interface ProcessFinalizeState {
    */
   finalStepMessageId?: string;
   /**
+   * ADR-102: момент начала последнего вызова LLM — для `metadata.step_duration_ms`
+   * (длительность своего шага; `duration_ms` остаётся длительностью хода).
+   */
+  finalStepStartedAt?: number;
+  /** ADR-102: длительность последнего вызова LLM (для `step_duration_ms`). */
+  finalStepDurationMs?: number;
+  /**
    * ADR-118 §1: запись сообщения шага-лимита уже сохранена (шаг с вызовами
    * инструментов) — финализация **дополняет** её (статус/usage/metadata),
    * а не создаёт вторую запись с тем же текстом (в ленте был дубль «шаг +
@@ -234,6 +248,8 @@ export interface ProcessFinalizeDeps {
     messages: Message[],
     opts: { autostart: boolean },
   ) => Promise<SteerRequeueResult | void>;
+  /** ADR-102: aux-учёт (title/QA self-check) — счётчики сессии + роллап usage. */
+  recordAuxUsage?: AuxUsageRecorder;
 }
 
 /**
@@ -340,8 +356,13 @@ export async function runProcessFinalize(
     finishReason,
     // ADR-118 §1: ход и финальный шаг.
     turnId, finalStepIndex, finalStepMessageId, stepLimitStepRecord,
+    finalStepStartedAt, finalStepDurationMs,
   } = state;
   let { finalContent, finalModel, finalUsage, turnUsage, fallbackI18n } = state;
+  const turnCostByCurrency = state.turnCostByCurrency ?? {};
+  const turnCostBreakdown: UsageCostBreakdown = state.turnCostBreakdown ?? {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+  };
   /** Шаг-лимит реально исполнялся (синтетический assistant-префилл в запросе). */
   const stepLimitReached = state.stepLimitExecuted === true;
 
@@ -431,14 +452,20 @@ export async function runProcessFinalize(
     // Bug 3/4: usage/duration/cost в событии отмены + best-effort оценка
     // usage (metadata.usage_estimated) при пустом usage.
     //
-    // ADR-102: расход хода (сумма шагов) — не только последний вызов.
+    // ADR-102/ADR-118: отмена **между шагами** — текущего вызова нет, поэтому
+    // сообщение отмены не несёт собственного расхода (usage = 0): расходы
+    // завершённых шагов уже лежат в их сообщениях. Счётчики сессии и
+    // аналитика получают расход хода (`turnUsage`) — сумма usage сообщений
+    // хода остаётся равна счётчикам.
     const cancelDurationMs = Date.now() - streamStartedAt;
-    const cancelEstimated = deps.estimateUsage(
-      turnUsage,
-      lastIterationPromptChars,
-      partialContent.length,
+    const cancelStepUsage = deps.estimateUsage(
+      { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      0,
+      0,
     );
-    const cancelCost = deps.computeMessageCost(cancelModel, cancelEstimated.usage);
+    const cancelTurnUsage = turnUsage;
+    const cancelCost = deps.computeMessageCost(cancelModel, cancelStepUsage.usage);
+    const cancelTurnCost = deps.computeMessageCost(cancelModel, cancelTurnUsage);
 
     // Промежуточные тексты в сообщении отмены не дублируем: они живут в
     // сообщениях своих шагов (ADR-118 §1), а `metadata.intermediate_text_blocks`
@@ -452,12 +479,11 @@ export async function runProcessFinalize(
     // отмены получает свой id — иначе в истории были бы две записи с одним id.
     await deps.saveAssistantMessage(
       session.id, partialContent, streamId, effectiveAgentRole,
-      cancelEstimated.usage, cancelModel, finalReasoningBlocks.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
+      cancelStepUsage.usage, cancelModel, finalReasoningBlocks.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
       MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
       undefined, undefined,
       {
         duration_ms: cancelDurationMs,
-        ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
       },
       promptMeta,
       cancelCost,
@@ -482,6 +508,11 @@ export async function runProcessFinalize(
         status: 'cancelled',
         ...(finalStepMessageId ? { messageId: finalStepMessageId } : {}),
       },
+      // ADR-102: счётчики/аналитика — расход хода; сообщение — своего шага.
+      cancelTurnUsage,
+      cancelTurnCost,
+      turnCostByCurrency,
+      turnCostBreakdown,
     );
 
     publishChunk('stream.cancelled', {
@@ -490,10 +521,9 @@ export async function runProcessFinalize(
       status: 'cancelled',
       model: cancelModel,
       provider: providerName,
-      usage: cancelEstimated.usage,
+      usage: cancelTurnUsage,
       duration_ms: cancelDurationMs,
-      ...(cancelCost ? { cost_usd: cancelCost.costUsd, cost_currency: cancelCost.currency } : {}),
-      ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
+      ...(cancelTurnCost ? { cost_usd: cancelTurnCost.costUsd, cost_currency: cancelTurnCost.currency } : {}),
     });
 
     // ADR-118 §4: ход закрыт отменой. Шаг, который шёл, закрыт в цикле
@@ -550,9 +580,22 @@ export async function runProcessFinalize(
   // 7.5. Quality check + escalation (ADR-034)
   let qaPass: boolean | undefined;
   let qaReason: string | undefined;
+  /** ADR-102: длительность fallback-вызова (если была эскалация). */
+  let escalatedStepDurationMs: number | undefined;
   const escalation = deps.router?.getEscalationConfig();
   if (deps.router && escalation?.enabled && routingDecision && finalContent) {
     const qaResult = await deps.router.checkQuality(finalContent, routingDecision, session.settings);
+    // ADR-102: self-check — отдельный aux-вызов (не сообщение).
+    if (qaResult.usage) {
+      void deps.recordAuxUsage?.({
+        sessionId: session.id,
+        usage: qaResult.usage,
+        provider: routingDecision.providerName,
+        model: routingDecision.modelName,
+        agent: effectiveAgentRole,
+        source: 'qa-self-check',
+      });
+    }
     if (!qaResult.pass) {
       qaPass = false;
       qaReason = qaResult.reason;
@@ -584,7 +627,9 @@ export async function runProcessFinalize(
                 (m) => m.role !== 'assistant' || m.toolUse === undefined || m.toolUse.length === 0,
               ),
             ];
+            const fbStartedAt = Date.now();
             const fbResponse = await fbProvider.chat(fbMessages, finalSystemPrompt, undefined, false);
+            escalatedStepDurationMs = Math.max(0, Date.now() - fbStartedAt);
             if (fbResponse.content) {
               finalContent = fbResponse.content;
               qaPass = true;
@@ -594,6 +639,15 @@ export async function runProcessFinalize(
                 // расхода хода (в сумму шагов он не входит).
                 finalUsage = fbResponse.usage;
                 turnUsage = addTokenUsage(turnUsage, fbResponse.usage);
+                const fbCost = deps.computeMessageCost(fbResponse.model ?? finalModel, fbResponse.usage);
+                if (fbCost) {
+                  turnCostByCurrency[fbCost.currency] =
+                    (turnCostByCurrency[fbCost.currency] ?? 0) + fbCost.costUsd;
+                  turnCostBreakdown.input += fbCost.breakdown.input;
+                  turnCostBreakdown.output += fbCost.breakdown.output;
+                  turnCostBreakdown.cacheRead += fbCost.breakdown.cacheRead;
+                  turnCostBreakdown.cacheWrite += fbCost.breakdown.cacheWrite;
+                }
               }
               if (fbResponse.model) finalModel = fbResponse.model;
             }
@@ -630,9 +684,12 @@ export async function runProcessFinalize(
   // ADR-070 §2.6: полная длительность прогона (включая tool-chain) и
   // стоимость по цене модели — в metadata финального сообщения и stream.done.
   const durationMs = Date.now() - streamStartedAt;
-  // ADR-102: стоимость и usage финального сообщения — по расходу **хода**
-  // (сумма шагов), а не только последнего вызова LLM.
-  const messageCost = deps.computeMessageCost(finalModel, turnUsage);
+  // ADR-102/ADR-118: стоимость **сообщения** (его собственного usage — расход
+  // последнего вызова) и стоимость **хода** (сумма шагов) — разными
+  // величинами: первая идёт в `metadata.cost_*` и `step.finished`, вторая —
+  // в счётчики сессии и аналитику (`saveAssistantMessage`).
+  const messageCost = deps.computeMessageCost(finalModel, finalUsage);
+  const turnCost = deps.computeMessageCost(finalModel, turnUsage);
   // ADR-118 §1: reasoning финального сообщения — только финальная итерация
   // (размышления прошлых шагов лежат в их сообщениях).
   const reasoningJoined = finalReasoningBlocks.map((r) => r.text).join('\n\n---\n\n');
@@ -658,10 +715,22 @@ export async function runProcessFinalize(
     : currentDraft ?? undefined;
   const savedMessageId = await deps.saveAssistantMessage(
     session.id, finalContent, streamId, effectiveAgentRole,
-    turnUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
+    finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
     MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
     qaPass, qaReason,
-    { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), ...(stepLimitReached ? { step_limit_reached: true } : {}), ...(finishReason ? { finish_reason: finishReason } : {}), duration_ms: durationMs },
+    {
+      ...(fallbackI18n ? { i18n: fallbackI18n } : {}),
+      ...(stepLimitReached ? { step_limit_reached: true } : {}),
+      ...(finishReason ? { finish_reason: finishReason } : {}),
+      duration_ms: durationMs,
+      ...(finalStepDurationMs !== undefined || finalStepStartedAt !== undefined || escalatedStepDurationMs !== undefined
+        ? {
+            step_duration_ms: escalatedStepDurationMs
+              ?? finalStepDurationMs
+              ?? Math.max(0, Date.now() - finalStepStartedAt!),
+          }
+        : {}),
+    },
     promptMeta,
     messageCost,
     finalExisting,
@@ -683,6 +752,12 @@ export async function runProcessFinalize(
       status: 'completed',
       ...(finalStepMessageId ? { messageId: finalStepMessageId } : {}),
     },
+    // ADR-102: счётчики/аналитика — расход хода (`turnUsage`), сообщение —
+    // расход своего (последнего) вызова. Стоимость — по моделям шагов.
+    turnUsage,
+    turnCost,
+    turnCostByCurrency,
+    turnCostBreakdown,
   );
 
   // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
@@ -778,7 +853,16 @@ export async function runProcessFinalize(
         );
         if (tp) titleProvider = tp;
       }
-      autoTitleSession(updatedSession, deps.sessionManager, titleProvider)
+      autoTitleSession(updatedSession, deps.sessionManager, titleProvider, (usage, meta) => {
+        void deps.recordAuxUsage?.({
+          sessionId: updatedSession.id,
+          usage,
+          ...(meta?.provider ? { provider: meta.provider } : {}),
+          ...(meta?.model ? { model: meta.model } : {}),
+          agent: 'title',
+          source: 'title',
+        });
+      })
         .then((title) => {
           if (title) {
             deps.eventBus.publish(updatedSession.id, 'session.updated', {

@@ -744,9 +744,12 @@ export const backgroundConfigSchema = z.object({
 
 /**
  * Дефолт предохранителя по объёму промпта саб-агента
- * (`agents.subagentMaxInputTokens`): 150k входных токенов.
+ * (`agents.subagentMaxInputTokens`): `0` — **без ограничения** (паритет с
+ * opencode, где отдельного token-бюджета сабагентов нет). Предохранитель
+ * опционален: при `0` длинный tool-heavy прогон может упереться в окно модели
+ * или ошибку провайдера — лимит задаётся осознанно (config/UI/API/env).
  */
-export const DEFAULT_SUBAGENT_MAX_INPUT_TOKENS = 150_000;
+export const DEFAULT_SUBAGENT_MAX_INPUT_TOKENS = 0;
 
 /**
  * Дефолт лимита глубины вложенности саб-агентов (`agents.subagentDepth`): 1.

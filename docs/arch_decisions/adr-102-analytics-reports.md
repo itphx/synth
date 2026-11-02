@@ -81,6 +81,15 @@
 - **Сбор и сервис:** `packages/core/src/analytics/` — `recorder.ts` (`AnalyticsRecorder` — сборщик всех четырёх
   семейств, best-effort), `hooks.ts` (швы записи `activity`), `service.ts` (дериваты на чтении), `derive.ts`,
   `export.ts` (CSV/JSON), `prune.ts` (retention), `rebuild.ts`/`rebuild-command.ts` (backfill).
+- **Учёт aux-вызовов и стоимость провайдера (2026-11).** В счётчики сессии и роллап `usage` входят **все**
+  LLM-вызовы: сообщения (одна запись на ход, `messages=1`) и aux-вызовы (title/QA self-check/fork-summary/
+  derive/отклонённые micro-decision) через `engine/usage-accounting.ts` (`requests=1`, **без** `messages`;
+  микро-ответ — запись сообщения `messages=1`, `model=micro:<taskClass>`);
+  инвариант — сумма usage сообщений + aux = счётчики сессии. `TokenUsage.cost` (стоимость от провайдера)
+  приоритетнее каталога; `0` достоверен, breakdown — нули, разные валюты не складываются (при смешении
+  стоимость отбрасывается → каталог). Бэкфилл группирует
+  usage по ходу (`turn_id` → `metadata.stream_id` → id), `interrupted`-сообщение — отдельная запись,
+  `tool_chain`-шаги включаются. Старая история не мигрируется.
 - **API и UI:** `packages/core/src/server/routes/analytics.ts` (`createAnalyticsRoutes` — `summary`/`usage`/`activity`/
   `decision`/`prompt`/`export`, только чтение; монтирование в core и backend с RBAC); UI — ленивый
   `packages/ui/src/components/analytics/AnalyticsModal.tsx` (вкладки «Расход и стоимость»/«Активность»/«Decision»/

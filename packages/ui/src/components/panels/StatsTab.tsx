@@ -309,10 +309,14 @@ export const StatsTab: React.FC = () => {
 
   const sessionProjectId = activeSession?.project_id
 
-  // ADR-070 §2.6: скорость/длительность/стоимость последнего ответа из metadata.
-  const lastDurationMs = typeof lastAssistantMsg?.metadata?.duration_ms === 'number'
-    ? lastAssistantMsg.metadata.duration_ms
+  // ADR-070 §2.6 / ADR-102: скорость/длительность последнего ответа. Для TPS
+  // берём длительность **своего** вызова (`step_duration_ms`), иначе — хода.
+  const lastStepDurationMs = typeof lastAssistantMsg?.metadata?.step_duration_ms === 'number'
+    ? lastAssistantMsg.metadata.step_duration_ms
     : undefined
+  const lastDurationMs = lastStepDurationMs ?? (typeof lastAssistantMsg?.metadata?.duration_ms === 'number'
+    ? lastAssistantMsg.metadata.duration_ms
+    : undefined)
   const lastCostUsd = typeof lastAssistantMsg?.metadata?.cost_usd === 'number'
     ? lastAssistantMsg.metadata.cost_usd
     : undefined

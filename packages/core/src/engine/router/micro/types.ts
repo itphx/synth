@@ -2,7 +2,7 @@
  * Типы микро-слоя (ADR-035).
  * Реэкспортирует базовые типы из @itphx/synth-shared, добавляет внутренние.
  */
-import type { SessionSettings } from '@itphx/synth-shared';
+import type { SessionSettings, TokenUsage } from '@itphx/synth-shared';
 
 /**
  * Вид микро-модели: правила, embedding, decision-модель (ADR-084),
@@ -40,10 +40,10 @@ export interface MicroResult {
   answer?: string; // готовый ответ (если OK)
   /** Ключ SystemMessages для локализации ответа на UI (metadata.i18n). */
   i18nKey?: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-  };
+  /** ADR-102: usage **ответившего** вызова (при `OK`). */
+  usage?: TokenUsage;
+  /** ADR-102: usage прочих опрошенных вызовов (отклонённые/UNSURE). */
+  auxUsage?: TokenUsage;
   latencyMs: number;
   signals: string[]; // что сработало
 }
@@ -53,4 +53,6 @@ export interface PipelineResult {
   microResult: MicroResult | null;
   handled: boolean; // true если OK и НЕ надо звать LLM
   fallbackSignals?: string[];
+  /** ADR-102: суммарный aux-usage всех опрошенных, но не ответивших вызовов. */
+  auxUsage?: TokenUsage;
 }

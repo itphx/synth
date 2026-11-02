@@ -342,6 +342,8 @@ describe('prepareChildSession — режимы с контекстом', () => {
   it('summary c contextOptimizer: сжатие уходит в состояние форка, SUMMARY в историю не пишется', async () => {
     const parent = await makeParent(3);
     const summaryMsg = makeMsg('compressed history', MessageRole.SUMMARY);
+    summaryMsg.usage = { inputTokens: 40, outputTokens: 4, totalTokens: 44 };
+    summaryMsg.model = 'sum-model';
     const summarize = vi.fn(async () => summaryMsg);
     const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
 
@@ -352,6 +354,10 @@ describe('prepareChildSession — режимы с контекстом', () => {
 
     expect(summarize).toHaveBeenCalledTimes(1);
     const child = (await sessionManager.getSession(state.childSessionId!))!;
+    // ADR-102: usage суммаризации — aux под дочерней (fork) сессией.
+    expect(child.inputTokens).toBe(40);
+    expect(child.outputTokens).toBe(4);
+    expect(child.totalTokens).toBe(44);
     // Видимой суммаризации в истории ребёнка нет (как в opencode).
     expect(child.messages.filter((m) => m.role === MessageRole.SUMMARY)).toHaveLength(0);
     // Сжатие — в состоянии форка: из него собирается `[PARENT SUMMARY]` системного промпта.

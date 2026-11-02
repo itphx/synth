@@ -73,6 +73,18 @@ export class MicroLlmModel implements MicroModel {
         usage: response.usage ? {
           inputTokens: response.usage.inputTokens,
           outputTokens: response.usage.outputTokens,
+          totalTokens: response.usage.totalTokens
+            || (response.usage.inputTokens || 0) + (response.usage.outputTokens || 0),
+          ...(response.usage.cacheReadTokens !== undefined
+            ? { cacheReadTokens: response.usage.cacheReadTokens }
+            : {}),
+          ...(response.usage.cacheWriteTokens !== undefined
+            ? { cacheWriteTokens: response.usage.cacheWriteTokens }
+            : {}),
+          ...(response.usage.reasoningTokens !== undefined
+            ? { reasoningTokens: response.usage.reasoningTokens }
+            : {}),
+          ...(response.usage.cost ? { cost: response.usage.cost } : {}),
         } : undefined,
         latencyMs: Math.round(performance.now() - startTime),
         signals: label ? [`micro_llm:${label}`] : ['micro_llm:unparsable'],

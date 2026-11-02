@@ -19,7 +19,7 @@ import type { EventBus } from '../../events/bus.js';
 import type { DebugCollector } from '../../debug.js';
 import { makeReasoningParts, type ReasoningBlockLike } from '../reasoning-blocks.js';
 import { withDeterministicPartIds } from './turn-events.js';
-import { computeCacheHitRate, computeUsageCost, type UsageCost } from '../../providers/usage.js';
+import { computeCacheHitRate, computeUsageCost, type UsageCost, type UsageCostBreakdown } from '../../providers/usage.js';
 import type { ObfuscationMapStore } from '../gateway/index.js';
 import { PLACEHOLDER_PATTERN } from '../gateway/index.js';
 import { validateExpected } from '../context/prompt-state.js';
@@ -412,6 +412,22 @@ export type SaveAssistantMessageFn = (
    * `step.started`/`step.finished` адресовали одно и то же сообщение).
    */
   step?: AssistantMessageStep,
+  /**
+   * ADR-102: расход **хода** (сумма всех вызовов LLM хода) — для счётчиков
+   * сессии и аналитики. `usage` (выше) остаётся расходом **своего** сообщения
+   * (одного вызова провайдера) и пишется в историю/`metadata.cost_*`.
+   * Не задан — ход = одно сообщение (`turnUsage = usage`).
+   */
+  turnUsage?: TokenUsage,
+  /** Стоимость расхода хода (если вызывающая сторона уже посчитала). */
+  precomputedTurnCost?: UsageCost | null,
+  /**
+   * ADR-102: стоимость хода по шагам (валюта → сумма) — приоритетнее
+   * `precomputedTurnCost` для аналитики (цены разных моделей шагов).
+   */
+  turnCostByCurrency?: Record<string, number>,
+  /** Компонентная разбивка стоимости хода для счётчиков сессии. */
+  turnCostBreakdown?: UsageCostBreakdown,
 ) => Promise<string>;
 
 /**
@@ -465,6 +481,18 @@ export async function saveAssistantMessage(
    * был создан — сообщение создаётся сразу с этим id).
    */
   step?: AssistantMessageStep,
+  /**
+   * ADR-102: расход **хода** (сумма всех вызовов LLM хода) — для счётчиков
+   * сессии и аналитики. `usage` — расход **своего** сообщения (одного вызова
+   * провайдера): в историю и `metadata.cost_*` идёт он.
+   */
+  turnUsage?: TokenUsage,
+  /** Стоимость расхода хода (если вызывающая сторона уже посчитала). */
+  precomputedTurnCost?: UsageCost | null,
+  /** ADR-102: стоимость хода по шагам (валюта → сумма) — приоритет аналитики. */
+  turnCostByCurrency?: Record<string, number>,
+  /** Компонентная разбивка стоимости хода для счётчиков сессии. */
+  turnCostBreakdown?: UsageCostBreakdown,
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
 
@@ -584,7 +612,8 @@ export async function saveAssistantMessage(
     metadata.intermediate_text_blocks = intermediateTextBlocks;
   }
 
-  // ADR-070 §2.6: стоимость хода по цене модели (только если цены известны).
+  // ADR-070 §2.6: стоимость **сообщения** по цене модели (только если цены
+  // известны). Это расход собственного `usage` — не сумма хода.
   const messageCost = precomputedCost !== undefined
     ? precomputedCost
     : computeMessageCost(model, usage, deps.modelPriceLoader);
@@ -593,6 +622,19 @@ export async function saveAssistantMessage(
     metadata.cost_currency = messageCost.currency;
     metadata.cost_breakdown = messageCost.breakdown;
   }
+
+  /**
+   * ADR-102: расход/стоимость **хода** для счётчиков сессии и аналитики.
+   * `usage` сообщения — один вызов провайдера (ADR-118: шаг = вызов); ход из
+   * N вызовов даёт N сообщений, каждое со своим usage, а счётчики сессии —
+   * их сумму (`turnUsage`). Не задан `turnUsage` — ход = одно сообщение.
+   */
+  const countersUsage = turnUsage ?? usage;
+  const turnCost = precomputedTurnCost !== undefined
+    ? precomputedTurnCost
+    : (turnUsage !== undefined
+      ? computeMessageCost(model, countersUsage, deps.modelPriceLoader)
+      : messageCost);
 
   // ADR-036: раскрытие секретов в UI. Реальные значения плейсхолдеров из
   // карты обфускации сессии встраиваются в metadata.secrets (клик раскрывает
@@ -706,7 +748,11 @@ export async function saveAssistantMessage(
           ? metadataExtra.duration_ms
           : undefined;
       const ownCosts: Record<string, number> = {};
-      if (messageCost) ownCosts[messageCost.currency] = messageCost.costUsd;
+      if (turnCostByCurrency && Object.keys(turnCostByCurrency).length > 0) {
+        Object.assign(ownCosts, turnCostByCurrency);
+      } else if (turnCost) {
+        ownCosts[turnCost.currency] = turnCost.costUsd;
+      }
       const subagentGroups = toolResults && toolResults.length > 0
         ? collectSubagentUsageByModel(
             toolResults,
@@ -715,13 +761,14 @@ export async function saveAssistantMessage(
         : [];
       // Собственный ответ — 1 запрос; запросы сабагентов идут в их собственных
       // бакетах ниже (иначе `requests` удвоился бы при группировке по `user`).
-      const ownRequests = hasUsageTokens(usage) ? 1 : 0;
+      // Токены — расход **хода** (`turnUsage`), не одного сообщения.
+      const ownRequests = hasUsageTokens(countersUsage) ? 1 : 0;
 
       void deps.analytics.recordUsage({
         ...axes,
         ...(model ? { model } : {}),
         ...(agentRole ? { agent: agentRole } : {}),
-        usage,
+        usage: countersUsage,
         ...(ownRequests > 0 ? { requests: ownRequests } : {}),
         ...(role === MessageRole.ASSISTANT ? { messages: 1 } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
@@ -746,23 +793,25 @@ export async function saveAssistantMessage(
       // best-effort: аналитика не должна ломать сохранение сообщения
     }
   }
-  // Accumulate session token counters and costs
-  if (usage) {
+  // Accumulate session token counters and costs (расход **хода**).
+  if (countersUsage) {
     await sessionManager.withLock(sessionId, async (s) => {
-      s.inputTokens += usage.inputTokens || 0;
-      s.outputTokens += usage.outputTokens || 0;
-      s.totalTokens += usage.totalTokens || 0;
-      s.cacheReadTokens += usage.cacheReadTokens || 0;
-      s.cacheWriteTokens += usage.cacheWriteTokens || 0;
-      s.reasoningTokens += usage.reasoningTokens || 0;
+      s.inputTokens += countersUsage.inputTokens || 0;
+      s.outputTokens += countersUsage.outputTokens || 0;
+      s.totalTokens += countersUsage.totalTokens || 0;
+      s.cacheReadTokens += countersUsage.cacheReadTokens || 0;
+      s.cacheWriteTokens += countersUsage.cacheWriteTokens || 0;
+      s.reasoningTokens += countersUsage.reasoningTokens || 0;
       // ADR-070 §2.3: hit rate по накопленным токенам сессии.
       s.cacheHitRate = computeCacheHitRate(s.cacheReadTokens, s.inputTokens);
 
       // ADR-070 §2.6: единый helper стоимости — тот же, что для per-message.
       const effectiveModel = model || msg.model;
-      const cost = effectiveModel
-        ? computeUsageCost(usage, deps.modelPriceLoader?.(effectiveModel) ?? null)
-        : null;
+      const cost = turnCostBreakdown
+        ? { breakdown: turnCostBreakdown }
+        : (effectiveModel
+          ? computeUsageCost(countersUsage, deps.modelPriceLoader?.(effectiveModel) ?? null)
+          : null);
       if (cost) {
         s.inputCost += cost.breakdown.input;
         s.outputCost += cost.breakdown.output;

@@ -82,7 +82,7 @@ describe('defaultConfig', () => {
   });
 
   it('agents по умолчанию: предохранитель бюджета саб-агента 150k токенов, глубина вложенности 1', () => {
-    expect(defaultConfig.agents).toEqual({ subagentMaxInputTokens: 150_000, subagentDepth: 1 });
+    expect(defaultConfig.agents).toEqual({ subagentMaxInputTokens: 0, subagentDepth: 1 });
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {

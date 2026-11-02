@@ -26,6 +26,7 @@ import {
   createMetricsSettingsRoutes,
   createAttachmentsSettingsRoutes, createModalityModelLookup,
   createContextWindowSettingsRoutes,
+  createAgentsLimitsSettingsRoutes,
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
@@ -580,6 +581,19 @@ export function mountStandaloneRoutes(
       settingsStore,
       config: config.contextConfig?.windowPolicy,
       live: deps.contextWindowSettings,
+      securityAudit,
+      env: process.env,
+    },
+  ));
+
+  // Бюджет промпта саб-агента (`agents.subagentMaxInputTokens`): instance-wide,
+  // 0 — без лимита; применяется к следующим прогонам без рестарта. Core — `requireAuth`.
+  app.route('/api/v2/settings', createAgentsLimitsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.agentsConfig?.subagentMaxInputTokens,
+      live: deps.subagentMaxInputTokensSettings,
       securityAudit,
       env: process.env,
     },

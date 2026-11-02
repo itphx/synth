@@ -41,6 +41,7 @@ import { proxyApi } from './proxy'
 import { tlsApi } from './tls'
 import { observabilityApi } from './observability'
 import { attachmentsApi } from './settings-attachments'
+import { agentsLimitsApi } from './agentsLimits'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
 import { packsApi } from './packs'
@@ -245,6 +246,7 @@ export type {
   RestartStatus,
   RestartResponse,
 } from './maintenance'
+export type { AgentsLimitsSettings, AgentsLimitsSource } from './agentsLimits'
 export type {
   InstructionFileStatus,
   InstructionSourceKind,
@@ -449,6 +451,7 @@ export const synthApi = {
   ...webhooksApi,
   ...oauthApi,
   ...maintenanceApi,
+  ...agentsLimitsApi,
   ...analyticsApi,
   ...logsApi,
   ...egressApi,

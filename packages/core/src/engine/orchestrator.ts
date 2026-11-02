@@ -8,6 +8,7 @@ import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
 
 import { computeUsageCost } from '../providers/usage.js';
+import type { UsageCostBreakdown } from '../providers/usage.js';
 
 import type { LLMMessage, LLMAttachment, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
 import { ProviderFactory, supportsNativeAudio, supportsNativeVideo, buildChatOptions } from '../providers/base.js';
@@ -107,6 +108,7 @@ import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 // ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
 import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, aggregateSubagentStats, addTokenUsage } from './orchestrator/usage.js';
+import { recordAuxUsage, type AuxUsageInput } from './usage-accounting.js';
 import { publishFsChange } from './orchestrator/fs-change.js';
 import { applySteerInjections } from './steering/apply.js';
 import type { SteerRequeueResult } from './steering/apply.js';
@@ -143,7 +145,6 @@ import { runProcessEarly, type ProcessEarlyDeps } from './orchestrator/phases/pr
 import { runProcessFinalize, type ProcessFinalizeDeps } from './orchestrator/phases/process-finalize.js';
 import { runProcessSetup, withoutMemoryPluginTools, type ProcessSetupDeps, type MemoryContextEntry } from './orchestrator/phases/process-setup.js';
 import type { AnalyticsRecorder } from '../analytics/recorder.js';
-import { sessionAxes } from '../analytics/recorder.js';
 import { toCoreProviderConfig } from './router/index.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -626,6 +627,12 @@ export interface OrchestratorOptions {
    */
   subagentMaxInputTokens?: number;
   /**
+   * Live-геттер предохранителя `agents.subagentMaxInputTokens` (runtime-настройка
+   * инстанса). Приоритетнее `subagentMaxInputTokens`; читается при сборке
+   * `task` extra — изменения из UI применяются к следующим прогонам без рестарта.
+   */
+  getSubagentMaxInputTokens?: () => number;
+  /**
    * Лимит глубины вложенности саб-агентов (`agents.subagentDepth`): глубина
    * считается по цепочке `parentId` сессий (текущая — 0, родитель — 1, …).
    * При превышении тул `task` отказывает до создания дочерней сессии.
@@ -898,6 +905,7 @@ export class ChatOrchestrator {
   private readonly _backgroundEnabled: boolean;
   /** Предохранитель по объёму промпта саб-агента (0 — без ограничения). */
   private readonly _subagentMaxInputTokens: number;
+  private readonly _getSubagentMaxInputTokens?: () => number;
   /** Лимит глубины вложенности саб-агентов (0 — без ограничения). */
   private readonly _subagentDepth: number;
   /**
@@ -1292,6 +1300,7 @@ export class ChatOrchestrator {
     this._requeueSteerMessages = options.requeueSteerMessages ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
     this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
+    this._getSubagentMaxInputTokens = options.getSubagentMaxInputTokens;
     this._subagentDepth = options.subagentDepth ?? DEFAULT_SUBAGENT_DEPTH;
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
     this._processService = options.processService ?? null;
@@ -2392,6 +2401,8 @@ export class ChatOrchestrator {
       publishLocalCompletion: (publishChunk, streamId, content, opts) =>
         this._publishLocalCompletion(publishChunk, streamId, content, opts),
       sessionManager: this._sessionManager,
+      recordAuxUsage: (input) => this._recordAuxUsage(input),
+      computeMessageCost: (model, usage) => this._computeMessageCost(model, usage),
     };
   }
 
@@ -2817,32 +2828,45 @@ export class ChatOrchestrator {
     };
   }
 
+  /** Единая запись aux-расхода (счётчики сессии + роллап `usage`). */
+  private _recordAuxUsage(input: AuxUsageInput): Promise<void> {
+    return recordAuxUsage(
+      {
+        sessionManager: this._sessionManager,
+        analytics: this._analytics,
+        modelPriceLoader: this._modelPriceLoader,
+      },
+      input,
+    );
+  }
+
   /**
    * ADR-102: расход aux-вызова обработки вложения (best-effort).
    *
-   * Отдельная запись `usage` с осями aux-модели (`provider`/`model`) —
-   * стоимость видна в аналитике и не приписывается модели сессии. Счётчики
-   * сессии (`Session.inputTokens`/… ) не трогаем: это не токены её сообщения.
+   * Учитывается общим швом `recordAuxUsage`: счётчики сессии **и** роллап
+   * `usage` (оси aux-модели, `requests=1`, без `messages`) — один раз.
+   * Стоимость — провайдерская (`usage.cost`) либо каталожная.
    */
   private _recordDeriveUsage(
     session: Session | undefined,
     ref: { provider: string; model: string },
     usage: TokenUsage | undefined,
   ): void {
-    if (!this._analytics?.enabled || !usage) return;
-    try {
-      const cost = this._computeMessageCost(ref.model, usage);
-      void this._analytics.recordUsage({
-        ...sessionAxes(session ?? null),
+    if (!session || !usage) return;
+    void recordAuxUsage(
+      {
+        sessionManager: this._sessionManager,
+        analytics: this._analytics,
+        modelPriceLoader: this._modelPriceLoader,
+      },
+      {
+        sessionId: session.id,
         provider: ref.provider,
         model: ref.model,
         usage,
-        requests: 1,
-        ...(cost ? { costByCurrency: { [cost.currency]: cost.costUsd } } : {}),
-      });
-    } catch {
-      // best-effort: аналитика не должна ломать обработку вложения
-    }
+        source: 'attachment-derive',
+      },
+    );
   }
 
   /** ADR-095 (шаг 6b-1): зависимости вынесенной подготовки запроса `_processMessage`. */
@@ -2975,6 +2999,7 @@ export class ChatOrchestrator {
       unregister: (streamId) => {
         this._cancellationTokens.delete(streamId);
       },
+      recordAuxUsage: (input) => this._recordAuxUsage(input),
       ...(this._requeueSteerMessages
         ? { requeueSteerMessages: this._requeueSteerMessages }
         : {}),
@@ -3924,6 +3949,13 @@ export class ChatOrchestrator {
        * в разных чанках, суммировать по чанкам нельзя (двойной счёт).
        */
       let turnUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      /**
+       * ADR-102: стоимость хода по **каждому шагу его моделью** (валюта → сумма)
+       * и компонентная разбивка для счётчиков сессии. `turnUsage` считает
+       * токены; цена шага зависит от модели этого шага (смена модели/эскалация).
+       */
+      const turnCostByCurrency: Record<string, number> = {};
+      const turnCostBreakdown: UsageCostBreakdown = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       let finalModel: string | undefined;
       /**
        * Причина завершения финального ответа (нормализованный словарь
@@ -3984,6 +4016,10 @@ export class ChatOrchestrator {
       let lastStepTiming: StreamTiming | undefined;
       // ADR-118 §1: идентификатор сообщения последнего шага хода.
       let lastStepMessageId: string | undefined;
+      /** ADR-102: начало последнего вызова LLM (для ветки отмены). */
+      let lastStepStartedAt: number | undefined;
+      /** ADR-102: длительность последнего вызова LLM (для `step_duration_ms`). */
+      let lastStepDurationMs: number | undefined;
 
       // ADR-118 §4: live-статистика расхода удалена вместе с `stream.usage` —
       // расход шага публикуется в `step.finished` (usage/модель/стоимость).
@@ -4106,6 +4142,10 @@ export class ChatOrchestrator {
         const stepTiming = new StreamTiming(streamStartedAt);
         lastStepTiming = stepTiming;
         lastStepMessageId = stepMessageId;
+        // ADR-102: начало вызова LLM — для `metadata.step_duration_ms`
+        // (длительность **своего** шага; `duration_ms` остаётся длительностью хода).
+        const stepStartedAt = Date.now();
+        lastStepStartedAt = stepStartedAt;
         // Шаг 2б: черновик частичного стрима этой итерации. Запись создаётся
         // при первом непустом контенте/рассуждении и далее обновляется с
         // троттлингом — стрим не блокируется.
@@ -4319,7 +4359,10 @@ export class ChatOrchestrator {
           return this._handleLlmFailure(session.id, streamId, e, attempt, {
             debugCollector,
             durationMs: Date.now() - streamStartedAt,
-            usage: finalUsage,
+            // ADR-102: сообщение об ошибке несёт расход своего шага; счётчики —
+            // предыдущие шаги (`turnUsage`) + этот (оценка в обработчике).
+            usage: iterationUsage,
+            turnUsage,
             model: this._resolveMessageModel(chunkModel, finalModel, provider, session),
             providerName,
             agentRole: effectiveAgentRole,
@@ -4344,6 +4387,12 @@ export class ChatOrchestrator {
         // Стрим итерации завершён — фиксируем модель до возможной отмены
         // (в т.ч. во время исполнения тулов ниже).
         lastChunkModel = chunkModel;
+        // ADR-102: длительность **своего** вызова (без инструментов/QA/эскалации).
+        lastStepDurationMs = Math.max(0, Date.now() - stepStartedAt);
+        // ADR-102: `finalUsage` — расход **текущей** итерации. Если провайдер
+        // не прислал usage, не оставляем значение прошлого шага (иначе
+        // сообщение шага получило бы чужой расход).
+        finalUsage = iterationUsage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
         if (cancelToken.cancelled) {
           // Bug 2: модель для cost — провайдеры отдают `model` только в финале,
@@ -4363,25 +4412,31 @@ export class ChatOrchestrator {
           // best-effort оценка (metadata.usage_estimated) из размера промпта и
           // накопленного текста.
           //
-          // ADR-102: два расхода — расход **шага** (`step.finished`: метрики
-          // Prometheus считают по шагам, их сумма = расход хода) и расход
-          // **хода** (сообщение отмены: история, счётчики сессии, аналитика).
-          // Расход текущей итерации в `turnUsage` ещё не накоплен (накопление
-          // — после стрима), поэтому в расход хода он добавляется явно: так
-          // расход отмены не теряется и не удваивается.
+          // ADR-102/ADR-118: два расхода — расход **шага** (`step.finished` и
+          // сообщение отмены: метрики Prometheus считают по шагам, сумма их
+          // равна расходу хода) и расход **хода** (счётчики сессии и
+          // аналитика: сумма завершённых шагов + этот шаг). Расход текущей
+          // итерации в `turnUsage` ещё не накоплен (накопление — после
+          // стрима), поэтому шаг оценивается отдельно, а ход — как
+          // `turnUsage + cancelStepUsage` (без потерь и без двойного счёта).
           const cancelDurationMs = Date.now() - streamStartedAt;
           const cancelStepUsage = this._estimateUsage(
-            iterationUsage ?? finalUsage,
+            iterationUsage,
             iterationPromptChars,
             partialContent.length,
           );
-          const cancelEstimated = this._estimateUsage(
-            addTokenUsage(turnUsage, iterationUsage),
-            iterationPromptChars,
-            partialContent.length,
-          );
+          const cancelTurnUsage = addTokenUsage(turnUsage, cancelStepUsage.usage);
           const cancelCost = this._computeMessageCost(cancelModel, cancelStepUsage.usage);
-          const cancelTurnCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
+          const cancelTurnCost = this._computeMessageCost(cancelModel, cancelTurnUsage);
+          // ADR-102: стоимость отменённого шага — в общую стоимость хода.
+          if (cancelCost) {
+            turnCostByCurrency[cancelCost.currency] =
+              (turnCostByCurrency[cancelCost.currency] ?? 0) + cancelCost.costUsd;
+            turnCostBreakdown.input += cancelCost.breakdown.input;
+            turnCostBreakdown.output += cancelCost.breakdown.output;
+            turnCostBreakdown.cacheRead += cancelCost.breakdown.cacheRead;
+            turnCostBreakdown.cacheWrite += cancelCost.breakdown.cacheWrite;
+          }
 
           // Шаг 2б: останавливаем таймер/дожидаемся записи; черновик этой
           // итерации станет финальным сообщением отмены (без дубля). Если
@@ -4396,15 +4451,18 @@ export class ChatOrchestrator {
           // статус «Остановлено», usage/duration/cost и сам ход в истории.
           await this._saveAssistantMessage(
             session.id, partialContent, streamId, effectiveAgentRole,
-            cancelEstimated.usage, cancelModel, accumulatedReasoning, debugCollector, true, providerName,
+            cancelStepUsage.usage, cancelModel, accumulatedReasoning, debugCollector, true, providerName,
             MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
             undefined, undefined,
             {
               duration_ms: cancelDurationMs,
-              ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
+              step_duration_ms: lastStepDurationMs ?? Math.max(0, Date.now() - stepStartedAt),
+              ...(cancelStepUsage.estimated ? { usage_estimated: true } : {}),
             },
             promptMeta,
-            cancelTurnCost,
+            // Стоимость **сообщения** (своего шага) — не хода: usage сообщения
+            // теперь расход своего вызова (`cancelStepUsage`).
+            cancelCost,
             cancelledDraft ?? undefined,
             // ADR-115: медиа-частей ответа в ветке отмены нет.
             undefined,
@@ -4426,6 +4484,11 @@ export class ChatOrchestrator {
             // ADR-118 §1/§5: сообщение остаётся сообщением шага — тот же
             // `messageId`, что у `step.started`/`step.finished`, и ход на нём.
             { turnId, stepIndex, status: 'cancelled', messageId: stepMessageId },
+            // ADR-102: счётчики/аналитика — расход хода.
+            cancelTurnUsage,
+            cancelTurnCost,
+            turnCostByCurrency,
+            turnCostBreakdown,
           );
 
           publishChunk('stream.cancelled', {
@@ -4434,10 +4497,10 @@ export class ChatOrchestrator {
             status: 'cancelled',
             model: cancelModel,
             provider: providerName,
-            usage: cancelEstimated.usage,
+            usage: cancelTurnUsage,
             duration_ms: cancelDurationMs,
             ...(cancelTurnCost ? { cost_usd: cancelTurnCost.costUsd, cost_currency: cancelTurnCost.currency } : {}),
-            ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
+            ...(cancelStepUsage.estimated ? { usage_estimated: true } : {}),
           });
 
           // ADR-118 §4: шаг закрыт отменой, ход — тоже.
@@ -4499,7 +4562,7 @@ export class ChatOrchestrator {
             model: finalModel,
             providerName,
             agentRole: effectiveAgentRole,
-            usage: finalUsage,
+            usage: iterationUsage,
             iteration: toolIteration,
             startedAt: streamStartedAt,
             promptChars: iterationPromptChars,
@@ -4520,6 +4583,16 @@ export class ChatOrchestrator {
         // иначе двойной счёт (и в счётчиках сессии, и в аналитике).
         if (iterationUsage) {
           turnUsage = addTokenUsage(turnUsage, iterationUsage);
+          // ADR-102: стоимость шага — по модели **этого** вызова (не финальной).
+          const stepCost = this._computeMessageCost(chunkModel ?? finalModel, iterationUsage);
+          if (stepCost) {
+            turnCostByCurrency[stepCost.currency] =
+              (turnCostByCurrency[stepCost.currency] ?? 0) + stepCost.costUsd;
+            turnCostBreakdown.input += stepCost.breakdown.input;
+            turnCostBreakdown.output += stepCost.breakdown.output;
+            turnCostBreakdown.cacheRead += stepCost.breakdown.cacheRead;
+            turnCostBreakdown.cacheWrite += stepCost.breakdown.cacheWrite;
+          }
         }
 
         finalModel = chunkModel ?? finalModel;
@@ -4599,15 +4672,30 @@ export class ChatOrchestrator {
         const stepParts = [makeTextPart(accumulatedContent), ...makeReasoningParts(iterationBlocks)];
         const stepVisible = hasVisibleStepContent(accumulatedContent, stepParts)
           || toolCalls.length > 0;
+        // ADR-102/ADR-118: расход **своего** шага — в сообщение шага и
+        // `step.finished`; стоимость сообщения — от этого же usage.
+        const toolStepModel = chunkModel ?? finalModel;
+        const toolStepUsage = iterationUsage ?? finalUsage;
+        const toolStepCost = this._computeMessageCost(toolStepModel, toolStepUsage);
         const finalizedStepRef = await draft.finalize({
           content: accumulatedContent,
           parts: stepParts,
           reasoning: accumulatedReasoning || undefined,
           toolCalls,
-          model: chunkModel ?? finalModel,
+          model: toolStepModel,
+          usage: toolStepUsage,
           metadata: {
             stream_id: streamId,
             ...(stepVisible ? {} : { tool_chain: true }),
+            // ADR-102: длительность **своего** вызова (TPS последнего шага).
+            step_duration_ms: Date.now() - stepStartedAt,
+            ...(toolStepCost
+              ? {
+                  cost_usd: toolStepCost.costUsd,
+                  cost_currency: toolStepCost.currency,
+                  cost_breakdown: toolStepCost.breakdown,
+                }
+              : {}),
           },
           // ADR-118 §5: шаг завершён — статус сообщения терминальный.
           status: 'completed',
@@ -4633,9 +4721,6 @@ export class ChatOrchestrator {
           });
         }
         // ADR-118 §4: шаг закрыт (ответ с вызовами инструментов).
-        const toolStepModel = chunkModel ?? finalModel;
-        const toolStepUsage = iterationUsage ?? finalUsage;
-        const toolStepCost = this._computeMessageCost(toolStepModel, toolStepUsage);
         publishStepFinished(publishChunk, {
           turnId,
           stepIndex,
@@ -5161,7 +5246,7 @@ export class ChatOrchestrator {
                   backgroundService: this._backgroundService ?? undefined,
                   backgroundEnabled: this._backgroundEnabled,
                   // Предохранитель по объёму промпта саб-агента (не окно модели).
-                  subagentMaxInputTokens: this._subagentMaxInputTokens,
+                  subagentMaxInputTokens: this._getSubagentMaxInputTokens?.() ?? this._subagentMaxInputTokens,
                   // Лимит глубины вложенности саб-агентов (`agents.subagentDepth`).
                   subagentDepth: this._subagentDepth,
                   // ADR-111 §detach: реестр активных (блокирующих) прогонов —
@@ -5249,6 +5334,11 @@ export class ChatOrchestrator {
                   protectedPathsEnabled: this._getProtectedPathsEnabled(),
                   // ADR-070: live-стоимость саб-агента тем же загрузчиком цен.
                   modelPriceLoader: this._modelPriceLoader ?? undefined,
+                  // ADR-071: калиброванный chars-per-token модели — бюджет
+                  // промпта саб-агента оценивается тем же ratio, что у родителя.
+                  loadTokenRatio: (model: string | undefined) => this._loadTokenRatio(model),
+                  // ADR-102: aux-расход fork-summary — в аналитику дочерней сессии.
+                  analytics: this._analytics ?? undefined,
                 },
               }, toolName));
             } else {
@@ -5678,10 +5768,11 @@ export class ChatOrchestrator {
           // Причина завершения финального ответа: `max_tokens` при пустом
           // `content` — исчерпанный лимит вывода, а не пустой ответ модели.
           finishReason: finalFinishReason,
-          // ADR-102: расход хода (сумма шагов) — в финальное сообщение,
-          // счётчики сессии и аналитику; `finalUsage` — расход последнего
-          // вызова (оценка/калибровка/событие шага).
+          // ADR-102: расход хода (сумма шагов) — в счётчики сессии и аналитику;
+          // `finalUsage` — расход последнего вызова.
           turnUsage,
+          turnCostByCurrency,
+          turnCostBreakdown,
           hadDeny, toolIteration, maxIterations, stepLimitExecuted,
           roleBlocked, roleBlockedTool, roleBlockedAgent,
           lastIterationPromptChars, allReasoning, allIntermediateTexts, allToolCalls,
@@ -5692,6 +5783,8 @@ export class ChatOrchestrator {
           turnId,
           finalStepIndex: toolIteration,
           finalStepMessageId: lastStepMessageId,
+          finalStepStartedAt: lastStepStartedAt,
+          finalStepDurationMs: lastStepDurationMs,
           // ADR-118 §1: запись шага-лимита (если шаг закрыт вызовами) —
           // финализация дополняет её, а не создаёт дубль с тем же текстом.
           stepLimitStepRecord,
@@ -5943,7 +6036,7 @@ export class ChatOrchestrator {
       securityConfig: this._securityConfig,
       permissionConfig: this._permissionConfig,
       // Предохранитель по объёму промпта resumed-саб-агента (как у `task`).
-      subagentMaxInputTokens: this._subagentMaxInputTokens,
+      subagentMaxInputTokens: this._getSubagentMaxInputTokens?.() ?? this._subagentMaxInputTokens,
       // ADR-070 §2.9.1: dependency-гейт и `[НЕДОСТУПНЫЕ ТУЛЫ]` resumed-саб-агента.
       runtimeDeps: this._runtimeDeps,
       shellPolicy: this._getProtectedPaths() ?? undefined,
@@ -5951,6 +6044,10 @@ export class ChatOrchestrator {
       protectedPathsEnabled: this._getProtectedPathsEnabled(),
       // ADR-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
       modelPriceLoader: this._modelPriceLoader ?? undefined,
+      // ADR-102: aux-расход (fork summary) — в аналитику дочерней сессии.
+      analytics: this._analytics ?? undefined,
+      // ADR-071: калиброванный chars-per-token resumed-саб-агента.
+      loadTokenRatio: (model) => this._loadTokenRatio(model),
       // ADR-046 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
       skillRuntime: this._skillRuntime ?? undefined,
       // ADR-075/ADR-076: проектные зависимости resumed-саб-агента — те же, что у
@@ -6234,7 +6331,8 @@ export class ChatOrchestrator {
     model: string | undefined;
     providerName: string;
     agentRole: string | undefined;
-    usage: TokenUsage;
+    /** Расход текущей итерации (если провайдер успел прислать) — шага. */
+    usage: TokenUsage | undefined;
     iteration: number;
     startedAt: number;
     /** Размер промпта итерации (символы) — для оценки usage. */
@@ -6557,6 +6655,14 @@ export class ChatOrchestrator {
      * без этого поля `Message.turnId`/`stepIndex`/`status` оставались `null`.
      */
     step?: AssistantMessageStep,
+    /** ADR-102: расход хода (счётчики/аналитика) — отдельно от usage сообщения. */
+    turnUsage?: TokenUsage,
+    /** ADR-102: стоимость расхода хода (если уже посчитана). */
+    precomputedTurnCost?: ReturnType<typeof computeUsageCost> | null,
+    /** ADR-102: стоимость хода по шагам (валюта → сумма). */
+    turnCostByCurrency?: Record<string, number>,
+    /** ADR-102: компонентная разбивка стоимости хода для счётчиков. */
+    turnCostBreakdown?: UsageCostBreakdown,
   ): Promise<string> {
     return saveAssistantMessage(
       this._persistenceDeps(),
@@ -6585,6 +6691,10 @@ export class ChatOrchestrator {
       reasoningMeta,
       reasoningBlocks,
       step,
+      turnUsage,
+      precomputedTurnCost,
+      turnCostByCurrency,
+      turnCostBreakdown,
     );
   }
 

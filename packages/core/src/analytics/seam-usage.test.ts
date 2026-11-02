@@ -87,4 +87,50 @@ describe('saveAssistantMessage → usage-роллап', () => {
     expect(total.measures.input_tokens).toBe(150);
     expect(total.measures.requests).toBe(2);
   });
+
+  it('стоимость провайдера (usage.cost) приоритетнее каталога в metadata/аналитике/сессии', async () => {
+    const storage = createMemoryStorage();
+    const analytics = new AnalyticsRecorder({ repo: storage.analyticsRollups, now: () => NOW });
+    const sessionManager = new SessionManager(storage.sessions);
+    const session = await sessionManager.createSession({ userId: 'u1', projectId: 'p1' });
+    const usage: TokenUsage = {
+      inputTokens: 100,
+      outputTokens: 10,
+      totalTokens: 110,
+      cost: { amount: 0.42, currency: 'RUB' },
+    };
+
+    const id = await saveAssistantMessage(
+      {
+        sessionManager,
+        eventBus: new EventBus(),
+        obfMapStore: null,
+        // Каталожная цена дала бы другую сумму/валюту.
+        modelPriceLoader: () => ({ inputPrice: 1000, outputPrice: 1000, currency: 'USD' }),
+        analytics,
+      },
+      session.id,
+      'ответ',
+      'stream-cost',
+      'assistant',
+      usage,
+      'm',
+      undefined,
+      new DebugCollector(false),
+      false,
+      'provider',
+      MessageRole.ASSISTANT,
+      undefined,
+      true,
+    );
+
+    const saved = (await sessionManager.getSession(session.id))!;
+    const message = saved.messages.find((m) => m.id === id)!;
+    expect(message.metadata?.cost_usd).toBe(0.42);
+    expect(message.metadata?.cost_currency).toBe('RUB');
+    expect(saved.inputCost + saved.outputCost).toBe(0);
+
+    const rows = await storage.analyticsRollups.query({ family: 'usage' });
+    expect(rows[0]!.costByCurrency).toEqual({ RUB: 0.42 });
+  });
 });

@@ -127,7 +127,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       analytics: { retentionDays: 400 },
       questions: { timeoutMs: 600_000, retentionDays: 14 },
       background: { enabled: true, maxSubagentsPerSession: 2, maxProcessesPerSession: 5, maxRunsPerSession: 10, logMaxBytes: 10_485_760 },
-      agents: { subagentMaxInputTokens: 150_000, subagentDepth: 1 },
+      agents: { subagentMaxInputTokens: 0, subagentDepth: 1 },
       attachments: {
         enabled: true,
         modalities: { image: true, pdf: true, audio: true, video: true },

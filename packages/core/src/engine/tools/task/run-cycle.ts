@@ -190,6 +190,16 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   // по всем итерациям LLM-стрима и пишется в финальное assistant-сообщение
   // дочерней сессии (промежуточные tool-chain — без usage, чтобы не удваивать).
   const subagentUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  /**
+   * ADR-102: был ли usage текущей итерации уже включён в `subagentUsage`
+   * (финальный чанк). Нужно ветке отмены: частичный ответ несёт usage своего
+   * шага, но накапливается он ровно один раз.
+   */
+  let iterationUsageCommitted = false;
+  /** ADR-102: встретились разные валюты стоимости — стоимость по каталогу. */
+  let subagentCostMixed = false;
+  /** ADR-102: длительность последнего вызова LLM (для `step_duration_ms`). */
+  let lastIterationDurationMs: number | undefined;
   let subagentModel: string | undefined;
   const subagentStartedAt = Date.now();
 
@@ -202,6 +212,19 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     if (usage.cacheReadTokens) subagentUsage.cacheReadTokens = (subagentUsage.cacheReadTokens || 0) + usage.cacheReadTokens;
     if (usage.cacheWriteTokens) subagentUsage.cacheWriteTokens = (subagentUsage.cacheWriteTokens || 0) + usage.cacheWriteTokens;
     if (usage.reasoningTokens) subagentUsage.reasoningTokens = (subagentUsage.reasoningTokens || 0) + usage.reasoningTokens;
+    // ADR-102: провайдерская стоимость — суммируем в одной валюте; разные
+    // валюты не складываем (тогда стоимость — по каталогу).
+    if (usage.cost) {
+      if (subagentCostMixed) {
+        // уже смешали валюты — стоимость не частичная
+      } else if (!subagentUsage.cost) subagentUsage.cost = { ...usage.cost };
+      else if (subagentUsage.cost.currency === usage.cost.currency) {
+        subagentUsage.cost.amount += usage.cost.amount;
+      } else {
+        subagentUsage.cost = undefined;
+        subagentCostMixed = true;
+      }
+    }
   };
 
   // ─── ADR-070: live-статистика саб-агента (`stream.usage` + `subagent.progress`) ──
@@ -586,6 +609,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       step_limit_reached: true,
       step_limit: Number(stepLimitValue),
     });
+    /** ADR-102: `metadata.step_duration_ms` (длительность своего вызова). */
+    const stepDurationMeta = (): Record<string, unknown> =>
+      lastIterationDurationMs !== undefined ? { step_duration_ms: lastIterationDurationMs } : {};
 
     /**
      * Предохранитель по объёму промпта (`agents.subagentMaxInputTokens`; `0` —
@@ -593,16 +619,41 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
      * LLM-вызовом, и при превышении прогон завершается детерминированным
      * отчётом (без LLM), а не уходит в ошибку провайдера.
      */
-    const subagentMaxInputTokens = extra.subagentMaxInputTokens ?? 0;
+    const subagentMaxInputTokens = typeof extra.subagentMaxInputTokens === 'function'
+      ? extra.subagentMaxInputTokens()
+      : extra.subagentMaxInputTokens ?? 0;
     /** Прогон остановлен предохранителем бюджета контекста. */
     let contextBudgetExceeded = false;
     /** Оценка промпта в токенах на момент срабатывания предохранителя. */
     let contextBudgetTokens = 0;
 
     /** Best-effort оценка промпта саб-агента в токенах (`0` — данных нет). */
-    const estimatePromptTokens = (): number => {
+    const estimatePromptTokens = async (): Promise<number> => {
       const chars = estimatePromptChars(messages, llmSystemPrompt || undefined, tools);
-      return chars > 0 ? estimateTokens(chars) : 0;
+      return chars > 0 ? estimateTokens(chars, await resolvePromptTokenRatio()) : 0;
+    };
+
+    /**
+     * ADR-071: калиброванный chars-per-token модели прогона — один раз на
+     * прогон. Нет калибровки/ошибка загрузчика → `undefined` (дефолт 4,
+     * fail-open).
+     */
+    let promptTokenRatio: number | undefined;
+    let promptTokenRatioResolved = false;
+    const resolvePromptTokenRatio = async (): Promise<number | undefined> => {
+      if (promptTokenRatioResolved) return promptTokenRatio;
+      promptTokenRatioResolved = true;
+      try {
+        const loaded = await extra.loadTokenRatio?.(
+          effectiveProvider.model ?? routingDecisionInfo?.modelName,
+        );
+        if (typeof loaded === 'number' && Number.isFinite(loaded) && loaded > 0) {
+          promptTokenRatio = loaded;
+        }
+      } catch {
+        // fail-open: оценка по дефолту 4
+      }
+      return promptTokenRatio;
     };
 
     /**
@@ -642,6 +693,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       extraMeta: Record<string, unknown> = {},
       messageId?: string,
       status: AssistantMessageStatus = 'completed',
+      /**
+       * ADR-102/ADR-118: расход **своего** шага (одного вызова провайдера).
+       * Финальный отчёт шага — его расход; отчёт «сверх» уже сохранённого
+       * assistant(tool_calls) — без расхода (он уже в сообщении шага), иначе
+       * сумма usage сообщений ребёнка превысит счётчики сессии.
+       */
+      usage?: TokenUsage,
     ): Promise<void> => {
       if (!childSessionId || !extra.sessionManager) return;
       try {
@@ -658,9 +716,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           hidden: false,
           agentRole: subagentType,
           model: subagentModel,
-          // ADR-070 §2.6: суммарный usage саб-агента — основа rollup в
-          // статистике родителя (subagent_tokens) и сессионной статистики.
-          usage: subagentUsage,
+          // ADR-102: сообщение шага несёт расход своего вызова; сумма по
+          // сообщениям прогона = счётчики дочерней сессии (`subagentUsage`).
+          ...(usage ? { usage } : {}),
           // Все размышления сабагента (по итерациям), склеенные в поле
           // reasoning — UI дочерней сессии показывает их блоками
           // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
@@ -685,7 +743,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
             ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
             ...extraMeta,
-          }),
+          }, usage),
         };
         const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
         if (updated && extra.eventBus) {
@@ -704,9 +762,21 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     const finishAborted = async (
       partialContent: string,
       partialReasoning: string,
+      /**
+       * ADR-102: usage текущей (оборванной) итерации — если её финальный чанк
+       * успел прийти. Частичный ответ несёт расход своего шага; в счётчики он
+       * попадает ровно один раз (если ещё не был накоплен по финальному чанку).
+       */
+      partialUsage?: TokenUsage,
+      /** Начало вызова LLM оборванной итерации (для `step_duration_ms`). */
+      iterationStartedAt?: number,
     ): Promise<ToolResult> => {
       // 1. Частичный стрим оборванной итерации — в историю дочерней сессии
-      if (partialContent) {
+      if (partialContent || partialUsage) {
+        if (partialUsage && !iterationUsageCommitted) {
+          accumulateUsage(partialUsage);
+          iterationUsageCommitted = true;
+        }
         await addChildMessage({
           id: generateId(),
           role: MessageRole.ASSISTANT,
@@ -720,15 +790,19 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           hidden: false,
           agentRole: subagentType,
           model: subagentModel,
-          // ADR-070 §2.6: usage, накопленный до отмены, — чтобы rollup не терял токены.
-          usage: subagentUsage,
+          // ADR-102: расход своего шага; сумма по сообщениям прогона =
+          // счётчики ребёнка (`commitChildUsage`).
+          ...(partialUsage ? { usage: partialUsage } : {}),
           ...(partialReasoning ? { reasoning: partialReasoning } : {}),
           metadata: buildChildAssistantMetadata('cancelled', {
             stream_id: extra.streamId,
             duration_ms: Date.now() - subagentStartedAt,
+            ...(iterationStartedAt !== undefined
+              ? { step_duration_ms: Math.max(0, Date.now() - iterationStartedAt) }
+              : {}),
             partial: true,
             interrupted: true,
-          }),
+          }, partialUsage),
         });
       }
 
@@ -839,7 +913,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // Шаг-лимит имеет приоритет: финальный шаг-отчёт механики opencode не
       // считается превышением бюджета (иначе отчёт вообще не был бы получен).
       if (!stepLimitStep && subagentMaxInputTokens > 0) {
-        const estimatedTokens = estimatePromptTokens();
+        const estimatedTokens = await estimatePromptTokens();
         // Оценка недоступна/пуста — не блокируем (fail-open).
         if (estimatedTokens > 0 && estimatedTokens > subagentMaxInputTokens) {
           contextBudgetExceeded = true;
@@ -899,6 +973,17 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
        * терялись).
        */
       let stepUsage: TokenUsage | undefined;
+      /**
+       * ADR-102/ADR-118: расход **этого** вызова провайдера (последний
+       * `chunk.usage` итерации; провайдеры отдают накопительный usage за
+       * итерацию — суммировать по чанкам нельзя). В отличие от `subagentUsage`
+       * (сумма по всем итерациям) это расход ровно своего шага — он идёт в
+       * сообщение шага/`step.finished`, а сумма по шагам = расход прогона.
+       */
+      let iterationUsage: TokenUsage | undefined;
+      iterationUsageCommitted = false;
+      // ADR-102: начало вызова LLM итерации — `metadata.step_duration_ms`.
+      const iterationStartedAt = Date.now();
       let stepCost: UsageCost | null = null;
       let stepModel: string | undefined;
       let stepProvider: string | undefined;
@@ -946,7 +1031,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             // поэтому суммируем только финальный чанк итерации — иначе usage
             // многократно раздувается. Каждый вызов chatAsync в финальном чанке
             // несёт итог своей итерации.
-            if (chunk.isFinal) accumulateUsage(chunk.usage);
+            if (chunk.isFinal) {
+              accumulateUsage(chunk.usage);
+              if (chunk.usage) iterationUsageCommitted = true;
+            }
+            // ADR-102: расход своего вызова — для сообщения шага/`step.finished`.
+            if (chunk.usage) iterationUsage = chunk.usage;
             if (chunk.model) subagentModel = chunk.model;
 
             // ADR-070: live-usage = накопленное + точный/оценка текущей итерации;
@@ -958,9 +1048,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               ? computeUsageCost(liveUsage.usage, extra.modelPriceLoader(liveModel))
               : null;
             // Последние значения итерации — для `step.finished` ребёнка (публикуется
-            // после завершения LLM-вызова, вне троттлинга дельт).
-            stepUsage = liveUsage.usage;
-            stepCost = liveCost;
+            // после завершения LLM-вызова, вне троттлинга дельт). `stepUsage` —
+            // расход **своего** шага (`iterationUsage`), не накопленный.
+            stepUsage = iterationUsage;
+            stepCost = iterationUsage && liveModel && extra.modelPriceLoader
+              ? computeUsageCost(iterationUsage, extra.modelPriceLoader(liveModel))
+              : null;
             stepModel = liveModel;
             stepProvider = liveProvider;
             const liveReasoning = reasoning || '';
@@ -1099,12 +1192,20 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           accumulatedContent = '';
           reasoning = '';
           toolCalls = [];
+          iterationUsage = undefined;
+          iterationUsageCommitted = false;
+          stepUsage = undefined;
+          stepCost = null;
           lastPublishedReasoning = '';
           lastPublishedContent = '';
           lastChildContent = '';
           lastChildReasoning = '';
         }
       }
+
+      // ADR-102: длительность своего вызова LLM (без исполнения инструментов).
+      const iterationDurationMs = Math.max(0, Date.now() - iterationStartedAt);
+      lastIterationDurationMs = iterationDurationMs;
 
       // ADR-118 §4: вызовы шага — карточки `tool_use` в UI дочерней сессии.
       // Публикуются **до** `step.finished` (это «контент шага», а не финал):
@@ -1138,7 +1239,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           stepIndex: iteration,
           messageId: stepMessageId,
           status: 'completed',
-          usage: stepUsage ?? subagentUsage,
+          ...(stepUsage ? { usage: stepUsage } : {}),
           agentRole: subagentType,
           ...(stepModel ? { model: stepModel } : {}),
           ...(stepProvider ? { provider: stepProvider } : {}),
@@ -1177,11 +1278,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           hidden: false,
           agentRole: subagentType,
           model: subagentModel,
-          // ADR-070 §2.6: usage, потраченный до ошибки, — чтобы rollup его учёл.
-          usage: subagentUsage,
+          // ADR-102: сообщение об ошибке не несёт накопленный расход —
+          // предыдущие шаги уже в своих сообщениях, а неудавшийся вызов
+          // провайдером не тарифицирован (`commitChildUsage` = сумма шагов).
           metadata: buildChildAssistantMetadata('error', {
             stream_id: extra.streamId,
             duration_ms: Date.now() - subagentStartedAt,
+            ...(lastIterationDurationMs !== undefined
+              ? { step_duration_ms: lastIterationDurationMs }
+              : {}),
             error: true,
             attempts,
             max_retries: retryMaxAttempts,
@@ -1239,7 +1344,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // родителю tool_result с маркером остановки, частичным ответом и
       // списком выполненных шагов.
       if (isAborted()) {
-        return await finishAborted(accumulatedContent, reasoning);
+        return await finishAborted(accumulatedContent, reasoning, iterationUsage, iterationStartedAt);
       }
 
       // Единая итерация для размышлений, промежуточного текста и вызовов
@@ -1304,13 +1409,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             // Отчёт — сообщение **этого** шага (tool calls в итерации не было),
             // поэтому id шага свободен и остаётся за ним. Статус — `limit`:
             // прогон остановлен по лимиту шагов (как у родителя).
-            await persistChildAssistantMessage(reportText, stepLimitMeta(), stepMessageId, 'limit');
+            await persistChildAssistantMessage(reportText, { ...stepLimitMeta(), ...stepDurationMeta() }, stepMessageId, 'limit', stepUsage);
           } else {
             reportMissing = true;
             finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
             // Детерминированный текст — в историю ребёнка: пустой отчёт иначе
             // оставлял дочернюю сессию без финального ответа вовсе.
-            await persistChildAssistantMessage(finalContent, stepLimitMeta(), stepMessageId, 'limit');
+            await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, stepMessageId, 'limit', stepUsage);
           }
           break;
         }
@@ -1319,7 +1424,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         if (reasoning) subagentReasoning = reasoning;
 
         // Сохранить финальный ответ ассистента в дочернюю сессию
-        await persistChildAssistantMessage(accumulatedContent, {}, stepMessageId);
+        await persistChildAssistantMessage(accumulatedContent, stepDurationMeta(), stepMessageId, 'completed', stepUsage);
         break;
       }
 
@@ -1355,6 +1460,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             pinned: false,
             hidden: false,
             agentRole: subagentType,
+            // ADR-102/ADR-118: расход **своего** шага — в сообщение шага;
+            // сумма по сообщениям прогона = счётчики дочерней сессии.
+            ...(stepUsage ? { usage: stepUsage } : {}),
             reasoning: reasoning || undefined,
             // Anthropic: подпись thinking-блока этой итерации (tool-loop
             // отвергается API, если thinking не возвращён в историю).
@@ -1367,6 +1475,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             metadata: {
               stream_id: extra.streamId,
               ...(stepVisible ? {} : { tool_chain: true }),
+              step_duration_ms: iterationDurationMs,
+              ...(stepCost
+                ? {
+                    cost_usd: stepCost.costUsd,
+                    cost_currency: stepCost.currency,
+                    cost_breakdown: stepCost.breakdown,
+                  }
+                : {}),
             },
           };
           const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
@@ -1750,11 +1866,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // сохранён с id `stepMessageId`, поэтому отчёт получает свой id
           // (иначе в истории ребёнка были бы две записи с одним id, а UI
           // пропустил бы сообщение с уже занятым id — live-отчёт не появился бы).
-          await persistChildAssistantMessage(reportText, stepLimitMeta(), undefined, 'limit');
+          await persistChildAssistantMessage(reportText, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit');
         } else {
           reportMissing = true;
           finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
-          await persistChildAssistantMessage(finalContent, stepLimitMeta(), undefined, 'limit');
+          await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit');
         }
         break;
       }
@@ -1803,6 +1919,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         }, extra.parentSessionSettings);
         qaPass = qaResult.pass;
         qaReason = qaResult.reason;
+        // ADR-102: self-check — aux-вызов саб-агента; включаем в его суммарный
+        // usage (счётчики ребёнка и `subagent_usage` родителя), без отдельной
+        // записи аналитики — иначе двойной счёт через `subagent_usage`.
+        if (qaResult.usage) accumulateUsage(qaResult.usage);
 
         // Пометить QA-информацию в дочерней сессии
         if (childSessionId && extra.sessionManager) {
@@ -1857,6 +1977,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                   qualityOutput = fbResponse.content;
                   qaPass = true;
                   qaReason = sm('router.escalation', { provider: fallbackProvider, model: fallbackModel, reason: qaResult.reason });
+                  // ADR-102: эскалация — ещё один aux-вызов саб-агента в его
+                  // суммарный usage (раньше терялся).
+                  if (fbResponse.usage) accumulateUsage(fbResponse.usage);
                   routingDecisionInfo = {
                     providerName: fallbackProvider,
                     modelName: fallbackModel,

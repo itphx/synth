@@ -48,6 +48,7 @@ function readStatus(metadata: Record<string, unknown> | null | undefined): Respo
  */
 export function hasMessageStats(message: Pick<MessageData, 'usage' | 'metadata'>): boolean {
   if (message.usage) return true
+  if (readNumber(message.metadata, 'step_duration_ms') !== undefined) return true
   if (readNumber(message.metadata, 'duration_ms') !== undefined) return true
   if (readNumber(message.metadata, 'cost_usd') !== undefined) return true
   // Содержательный статус (остановлено/ошибка/лимит) — сам по себе сегмент.
@@ -76,13 +77,16 @@ interface MessageStatsProps {
  * (ADR-104 `interrupt`); completed — без префикса.
  * Сегменты показываются только при наличии данных; если данных нет — null.
  * Кэш: `cache_read_tokens / input_tokens` (0 при input = 0).
- * Скорость: `output_tokens / (duration_ms / 1000)`.
+ * Скорость: `output_tokens / (step_duration_ms ?? duration_ms / 1000)` —
+ * длительность **своего** вызова, иначе хода (ADR-102).
  */
 export function MessageStats({ message, className }: MessageStatsProps) {
   const { t } = useI18n()
 
   const usage = message.usage
-  const durationMs = readNumber(message.metadata, 'duration_ms')
+  // ADR-102: TPS — по длительности своего вызова, не хода.
+  const stepDurationMs = readNumber(message.metadata, 'step_duration_ms')
+  const durationMs = stepDurationMs ?? readNumber(message.metadata, 'duration_ms')
   const costUsd = readNumber(message.metadata, 'cost_usd')
   // C2b: валюта `cost_usd` хода (ядро пишет `metadata.cost_currency`; C2a).
   const costCurrency = typeof message.metadata?.cost_currency === 'string'

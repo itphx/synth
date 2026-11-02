@@ -39,22 +39,62 @@ export interface UsageCost {
   /** Номинальная сумма (в валюте `currency`). Имя сохранено для совместимости. */
   costUsd: number;
   breakdown: UsageCostBreakdown;
-  /** Валюта стоимости: `pricing.currency ?? 'USD'`. */
+  /** Валюта стоимости: провайдерская (`usage.cost`), иначе `pricing.currency ?? 'USD'`. */
   currency: Currency;
+}
+
+/** Допустимая валюта провайдерской стоимости (неизвестная → USD). */
+function normalizeCostCurrency(value: unknown): Currency {
+  return value === 'RUB' || value === 'CNY' || value === 'USD' ? value : 'USD';
+}
+
+/**
+ * ADR-102/ADR-118 (паритет с opencode `Usage.cost`): best-effort разбор
+ * стоимости из provider-usage. Поля: `usage.cost` (число или объект),
+ * `usage.total_cost`, `usage.cost_usd`; валюта — `usage.currency` или
+ * `cost.currency` (неизвестная → USD). `0` — достоверная стоимость.
+ */
+export function parseUsageCost(
+  usage: Record<string, unknown> | undefined,
+): TokenUsage['cost'] | undefined {
+  if (!usage) return undefined;
+  const candidates: unknown[] = [usage.cost, usage.total_cost, usage.cost_usd];
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) continue;
+    let amount: unknown = candidate;
+    let currency: unknown = usage.currency;
+    if (typeof candidate === 'object') {
+      const obj = candidate as Record<string, unknown>;
+      amount = obj.amount ?? obj.total ?? obj.value ?? obj.cost;
+      currency = obj.currency ?? usage.currency;
+    }
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) continue;
+    return { amount, currency: normalizeCostCurrency(currency) };
+  }
+  return undefined;
 }
 
 /**
  * ADR-070 §2.6: стоимость usage по ценам модели (`price / 1_000_000`).
- * Возвращает `null`, если usage или цены не заданы — вызывающий решает,
- * писать ли `metadata.cost_usd`. Единый расчёт для сессии, сообщения и
- * агрегированной статистики. Стоимость считается в валюте `pricing.currency`
- * (по умолчанию USD).
+ * Приоритет — **стоимость от провайдера** (`usage.cost`), затем каталожная
+ * цена модели. Возвращает `null`, если нет ни провайдерской стоимости, ни
+ * цен — вызывающий решает, писать ли `metadata.cost_usd`. Стоимость считается
+ * в валюте провайдера/`pricing.currency` (по умолчанию USD).
  */
 export function computeUsageCost(
   usage: TokenUsage | undefined,
   pricing: UsagePricing | null | undefined,
 ): UsageCost | null {
-  if (!usage || !pricing) return null;
+  if (!usage) return null;
+  // Провайдер вернул стоимость — приоритетнее каталога (opencode `Usage.cost`).
+  if (usage.cost && Number.isFinite(usage.cost.amount)) {
+    return {
+      costUsd: usage.cost.amount,
+      breakdown: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      currency: usage.cost.currency,
+    };
+  }
+  if (!pricing) return null;
   const { inputPrice, outputPrice, cacheReadPrice, cacheWritePrice } = pricing;
   // ADR-070 §2.6 (LOW): если ни одна цена не задана — стоимость неизвестна,
   // а не «бесплатно». Возвращаем null, чтобы `metadata.cost_usd`/

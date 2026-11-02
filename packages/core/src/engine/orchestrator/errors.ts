@@ -14,7 +14,7 @@ import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from '../ll
 import { WorktreeDirectoryMissingError } from '../worktree/errors.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { warning } from '../../logger.js';
-import { estimateUsage } from './usage.js';
+import { estimateUsage, addTokenUsage } from './usage.js';
 import type { AssistantMessageStep, SaveAssistantMessageFn } from './persistence.js';
 
 /**
@@ -55,6 +55,12 @@ export interface LlmFailureContext {
    * `messageId`, что у `step.finished`, статус `error`, ход хода).
    */
   step?: AssistantMessageStep;
+  /**
+   * ADR-102: расход **предыдущих** шагов хода (без текущего вызова). Ошибка
+   * сохраняет сообщение с расходом своего шага (оценка), а счётчики сессии
+   * получают `turnUsage + этот расход` — без потерь и без двойного счёта.
+   */
+  turnUsage?: TokenUsage;
 }
 
 /**
@@ -161,6 +167,11 @@ export async function handleLlmFailure(
         ctx.promptChars ?? 0,
         (ctx.content ?? '').length,
       );
+      // ADR-102: счётчики/аналитика — расход хода: предыдущие шаги + этот
+      // (оценённый) вызов. Сообщение же несёт только расход своего шага.
+      const turnUsage = ctx.turnUsage !== undefined
+        ? addTokenUsage(ctx.turnUsage, estimated.usage)
+        : estimated.usage;
       const i18n = formatted.i18n ?? errorTypeI18n(errorType, { providerName: ctx.providerName });
       await deps.saveAssistantMessage(
         sessionId, humanError, streamId, ctx.agentRole,
@@ -186,6 +197,7 @@ export async function handleLlmFailure(
         undefined,
         undefined,
         ctx.step,
+        turnUsage,
       );
     } catch (err) {
       warning('ORCHESTRATOR', `Не удалось сохранить assistant-сообщение об ошибке: ${err instanceof Error ? err.message : String(err)}`);

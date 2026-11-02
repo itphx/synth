@@ -5,6 +5,11 @@
 // и при пустом `usage` падала в 0%). Здесь одни и те же правила для обоих мест,
 // плюс live-значение стримящегося сообщения, чтобы во время хода числа совпадали.
 //
+// ADR-102/ADR-118, паритет с opencode (`contextUsage`): заполнение контекста —
+// **total последнего ответа провайдера** (одного вызова), а не сумма шагов хода
+// и не накопительный расход сессии. `usage.input_tokens` в Synth уже включает
+// cache read/write, reasoning входит в output — отдельно их не прибавляем.
+//
 // Реактивность: селекторы сторов возвращают **примитивы** (число токенов,
 // размер окна, флаг оценки). Мемоизация по объекту `messagesBySession`
 // приводила к залипанию: объект менялся по ссылке только вместе с сессией,
@@ -53,7 +58,12 @@ export const CONTEXT_LEVEL_CLASSES: Record<ContextLevel, { bar: string; text: st
 }
 
 export interface ContextWindowUsage {
-  /** Входные токены последнего хода (последний usage или live-значение). */
+  /**
+   * Заполнение контекста: **total** последнего ответа провайдера
+   * (`usage.total_tokens`, иначе `input + output`) — как в opencode
+   * (`contextUsage`). `input_tokens` в Synth уже включает cache read/write,
+   * а reasoning входит в output, поэтому отдельно их НЕ прибавляем.
+   */
   inputTokens: number
   /** Окно модели сессии (или фолбэк-оценка). */
   windowTokens: number
@@ -78,29 +88,45 @@ function findModelId(
 }
 
 /**
- * `usage.input_tokens` последнего assistant-сообщения **с usage**.
+ * Total токенов usage сообщения: `total_tokens`, иначе `input + output`.
+ *
+ * ADR-102/ADR-118 + opencode `contextUsage`: контекст показывает **total
+ * последнего ответа провайдера** (одного вызова), а не сумму хода. В Synth
+ * `input_tokens` уже нормализован и включает cache read/write
+ * (`providers/anthropic.ts`/`providers/openai.ts`), reasoning входит в
+ * output — поэтому cache/reasoning отдельно НЕ прибавляются (двойной счёт).
+ */
+function usageTotalTokens(usage: MessageData['usage']): number {
+  if (!usage) return 0
+  const total = usage.total_tokens
+  if (typeof total === 'number' && total > 0) return total
+  return (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+}
+
+/**
+ * Total токенов последнего assistant-сообщения **с usage**.
  * Сообщения без `usage` (фоллбек ошибки, служебные) и отключённые/скрытые
  * пропускаются — иначе индикатор обнулялся в конце такого хода.
  */
-export function lastAssistantInputTokens(messages: MessageData[] | undefined): number {
+export function lastAssistantContextTokens(messages: MessageData[] | undefined): number {
   if (!messages) return 0
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!
     if (message.role !== 'assistant' || message.disabled || message.hidden) continue
-    const tokens = message.usage?.input_tokens
-    if (typeof tokens === 'number' && tokens > 0) return tokens
+    const tokens = usageTotalTokens(message.usage)
+    if (tokens > 0) return tokens
   }
   return 0
 }
 
-/** usage стримящегося сообщения (live-значение текущего хода). */
-export function streamingInputTokens(messages: MessageData[] | undefined): number {
+/** Total токенов usage стримящегося сообщения (live-значение текущего хода). */
+export function streamingContextTokens(messages: MessageData[] | undefined): number {
   if (!messages) return 0
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!
     if (message.status !== 'streaming') continue
-    const tokens = message.usage?.input_tokens
-    return typeof tokens === 'number' && tokens > 0 ? tokens : 0
+    const tokens = usageTotalTokens(message.usage)
+    return tokens > 0 ? tokens : 0
   }
   return 0
 }
@@ -124,10 +150,10 @@ export function useContextWindowUsage(sessionId?: string): ContextWindowUsage {
   // Два примитивных селектора: изменение числа перерисовывает компонент,
   // изменение не относящихся к делу сообщений — нет.
   const lastTokens = useChatStore((s) =>
-    lastAssistantInputTokens(sessionId ? s.messagesBySession[sessionId] : undefined),
+    lastAssistantContextTokens(sessionId ? s.messagesBySession[sessionId] : undefined),
   )
   const liveTokens = useChatStore((s) =>
-    streamingInputTokens(sessionId ? s.messagesBySession[sessionId] : undefined),
+    streamingContextTokens(sessionId ? s.messagesBySession[sessionId] : undefined),
   )
 
   const inputTokens = Math.max(lastTokens, liveTokens)

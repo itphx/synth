@@ -145,7 +145,7 @@ describe('useContextWindowUsage — токены и окно', () => {
   it('берёт usage последнего assistant-сообщения', async () => {
     setMessages([withUsage('m1', 195_593)])
     await render(<Probe sessionId="s1" />)
-    expect(usage.inputTokens).toBe(195_593)
+    expect(usage.inputTokens).toBe(195_603)
     expect(usage.percent).toBe(98)
     expect(usage.windowTokens).toBe(200_000)
     expect(usage.isEstimated).toBe(false)
@@ -157,7 +157,7 @@ describe('useContextWindowUsage — токены и окно', () => {
       message({ id: 'm2', content: '' }),
     ])
     await render(<Probe sessionId="s1" />)
-    expect(usage.inputTokens).toBe(195_593)
+    expect(usage.inputTokens).toBe(195_603)
     expect(usage.percent).toBe(98)
   })
 
@@ -168,7 +168,7 @@ describe('useContextWindowUsage — токены и окно', () => {
       withUsage('m3', 195_593, { hidden: true }),
     ])
     await render(<Probe sessionId="s1" />)
-    expect(usage.inputTokens).toBe(100_000)
+    expect(usage.inputTokens).toBe(100_010)
     expect(usage.percent).toBe(50)
   })
 
@@ -189,7 +189,7 @@ describe('useContextWindowUsage — токены и окно', () => {
       message({ id: 'live', status: 'streaming' }),
     ])
     await render(<Probe sessionId="s1" />)
-    expect(usage.inputTokens).toBe(120_000)
+    expect(usage.inputTokens).toBe(120_010)
   })
 
   it('окно берётся из модели сессии (поиск по id или name)', async () => {

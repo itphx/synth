@@ -101,8 +101,10 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION`/`SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION`/
   `SYNTH_BACKGROUND_LOG_MAX_BYTES`/`SYNTH_BACKGROUND_RETENTION_DAYS`.
 - Секция `agents` (`agentsConfigSchema` + `AgentsConfig`): `subagentMaxInputTokens` — предохранитель
-  по объёму промпта саб-агента (**не** окно модели), default `150_000` (`DEFAULT_SUBAGENT_MAX_INPUT_TOKENS`),
-  `0` — без ограничения; при превышении прогон завершается отчётом (ядро). Env —
+  по объёму промпта саб-агента (**не** окно модели), default `0` (`DEFAULT_SUBAGENT_MAX_INPUT_TOKENS`),
+  `0` — без ограничения; при превышении прогон завершается отчётом (ядро). Настраивается в UI
+  (Настройки → «Пределы саб-агентов») и через runtime-настройку `/api/v2/settings/agents-limits`
+  (`settings.json`/PG), приоритет env > runtime > config; env —
   `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS`; тесты — `defaults.test.ts`/`types.test.ts`/`env-overrides.test.ts`.
 - ADR-094: секция `metrics` (`enabled`, default `false`; `metricsConfigSchema` + `MetricsConfig`) —
   мастер-выключатель `GET /metrics`; скалярный env-оверрайд `SYNTH_METRICS_ENABLED` (имя намеренно

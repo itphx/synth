@@ -103,6 +103,13 @@ export function addTokenUsage(base: TokenUsage, add: TokenUsage | undefined): To
   const cacheReadTokens = (base.cacheReadTokens ?? 0) + (add.cacheReadTokens ?? 0);
   const cacheWriteTokens = (base.cacheWriteTokens ?? 0) + (add.cacheWriteTokens ?? 0);
   const reasoningTokens = (base.reasoningTokens ?? 0) + (add.reasoningTokens ?? 0);
+  // ADR-102: провайдерская стоимость суммируется в той же валюте; разные
+  // валюты не складываем (тогда стоимость хода — по каталогу).
+  const cost = base.cost && add.cost
+    ? (base.cost.currency === add.cost.currency
+      ? { amount: base.cost.amount + add.cost.amount, currency: base.cost.currency }
+      : undefined)
+    : (base.cost ?? add.cost);
   return {
     inputTokens,
     outputTokens,
@@ -116,6 +123,7 @@ export function addTokenUsage(base: TokenUsage, add: TokenUsage | undefined): To
     ...(base.reasoningTokens !== undefined || add.reasoningTokens !== undefined
       ? { reasoningTokens }
       : {}),
+    ...(cost ? { cost } : {}),
   };
 }
 

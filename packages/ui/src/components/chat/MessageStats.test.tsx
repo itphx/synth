@@ -85,6 +85,19 @@ describe('MessageStats', () => {
     expect(container.querySelectorAll('[aria-hidden="true"]').length).toBe(5)
   })
 
+  it('step_duration_ms приоритетнее duration_ms для TPS (ADR-102)', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: { input_tokens: 100, output_tokens: 100, total_tokens: 200 },
+        // Длительность хода 60с, своего вызова — 2с: TPS = 100 / 2 = 50.
+        metadata: { duration_ms: 60_000, step_duration_ms: 2000, status: 'completed' },
+      }),
+    )
+    const text = container.textContent ?? ''
+    expect(text).toContain('2s')
+    expect(text).toContain('50 tok/s')
+  });
+
   it('без duration нет сегмента tok/s', async () => {
     const container = await renderStats(
       makeMessage({

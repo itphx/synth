@@ -53,7 +53,7 @@ function handledMicro(overrides: Record<string, unknown> = {}) {
       confidence: 0.95,
       answer: 'Привет! Как я могу помочь?',
       i18nKey: 'micro.greeting',
-      usage: { inputTokens: 3, outputTokens: 4 },
+      usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
       latencyMs: 7,
       signals: ['rules'],
       ...overrides,
@@ -281,6 +281,81 @@ describe('runProcessEarly', () => {
       output: stored.outputTokens,
       total: stored.totalTokens,
     }).toEqual({ input: 3, output: 4, total: 7 });
+  });
+
+  it('micro-first: auxUsage уходит в recordAuxUsage, usage — в сообщение', async () => {
+    const { session } = await sessionWithUserMessage({ microFirst: true });
+    const auxUsage = { inputTokens: 5, outputTokens: 1, totalTokens: 6 };
+    const recordAuxUsage = vi.fn();
+    const d = deps({
+      microPipeline: {
+        handle: vi.fn(async () => ({ ...handledMicro(), auxUsage })),
+      } as unknown as MicroPipeline,
+      recordAuxUsage: recordAuxUsage as never,
+    });
+
+    await runProcessEarly(args(session, makeMessage({ role: MessageRole.USER })), d);
+
+    expect(recordAuxUsage).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: session.id,
+      usage: auxUsage,
+      source: 'micro',
+    }));
+    const stored = (await sessionManager.getSession(session.id))!;
+    const assistant = stored.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
+    // Сообщение несёт usage ответившего вызова, не aux.
+    expect(assistant.usage).toMatchObject({ inputTokens: 3, outputTokens: 4, totalTokens: 7 });
+  });
+
+  it('micro-first: сообщение микро-ответа пишется как usage-запись (messages=1) и получает cost', async () => {
+    const { session } = await sessionWithUserMessage({ microFirst: true });
+    const recordAuxUsage = vi.fn();
+    const cost = {
+      costUsd: 0.01,
+      currency: 'USD' as const,
+      breakdown: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+    const d = deps({
+      microPipeline: { handle: vi.fn(async () => handledMicro()) } as unknown as MicroPipeline,
+      recordAuxUsage: recordAuxUsage as never,
+      computeMessageCost: () => cost,
+    });
+
+    await runProcessEarly(args(session, makeMessage({ role: MessageRole.USER })), d);
+
+    expect(recordAuxUsage).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: session.id,
+      usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      model: 'micro:small_talk',
+      messages: 1,
+      cost,
+    }));
+    const stored = (await sessionManager.getSession(session.id))!;
+    const assistant = stored.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.metadata?.cost_usd).toBe(0.01);
+    expect(assistant.metadata?.cost_currency).toBe('USD');
+    expect(assistant.metadata?.cost_breakdown).toEqual(cost.breakdown);
+  });
+
+  it('micro fallback: весь usage уходит в recordAuxUsage', async () => {
+    const { session } = await sessionWithUserMessage({ microFirst: true });
+    const auxUsage = { inputTokens: 9, outputTokens: 2, totalTokens: 11 };
+    const recordAuxUsage = vi.fn();
+    const d = deps({
+      microPipeline: {
+        handle: vi.fn(async () => ({ handled: false, microResult: null, fallbackSignals: ['x'], auxUsage })),
+      } as unknown as MicroPipeline,
+      recordAuxUsage: recordAuxUsage as never,
+    });
+
+    const result = await runProcessEarly(args(session, makeMessage({ role: MessageRole.USER })), d);
+
+    expect(result).toBeNull();
+    expect(recordAuxUsage).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: session.id,
+      usage: auxUsage,
+      source: 'micro',
+    }));
   });
 
   it('micro-first: decision-сигнал попадает в debug-контекст (ADR-084)', async () => {

@@ -15,6 +15,7 @@ import type { ContextOptimizer } from '../../context/optimizer.js';
 import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
 import type { ModelRouter } from '../../router/router.js';
 import type { UsagePricing } from '../../../providers/usage.js';
+import type { AnalyticsRecorder } from '../../../analytics/recorder.js';
 import type { ShellPolicy } from '../../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../../security/protected-paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
@@ -73,7 +74,7 @@ export interface TaskExtra {
    * при превышении оценка бюджета завершает прогон детерминированным отчётом.
    * `0`/не задан — без ограничения.
    */
-  subagentMaxInputTokens?: number;
+  subagentMaxInputTokens?: number | (() => number);
   /**
    * Лимит глубины вложенности саб-агентов (`agents.subagentDepth`):
    * глубина считается по цепочке `parentId` сессий (текущая — 0, родитель — 1, …).
@@ -108,6 +109,10 @@ export interface TaskExtra {
   retry?: SubagentRetryConfig;
   /** ADR-070: цены моделей для live-стоимости саб-агента (как в оркестраторе). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
+  /** ADR-102: роллап аналитики для aux-вызовов под дочерней сессией (fork summary). */
+  analytics?: AnalyticsRecorder;
+  /** ADR-071: калиброванный chars-per-token модели (fallback — дефолт 4). */
+  loadTokenRatio?: (model: string | undefined) => Promise<number | undefined> | number | undefined;
   /**
    * ADR-069 §7: уже резолвленные оркестратором проектные инструкции
    * (`[PROJECT INSTRUCTIONS] …`) — добавляются в конец базового промпта

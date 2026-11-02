@@ -1629,7 +1629,8 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS } from './storage/runtime-settings.js';
+export type { LiveSubagentMaxInputTokens, ResolvedSubagentMaxInputTokens } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair, AttachmentsSettings, AttachmentsRuntimeSettings, ModalityModelsRuntimePatch, AttachmentsSource, ResolvedAttachmentsSettings, LiveAttachmentsSettings, ContextWindowSource, ResolvedContextWindowPolicy, LiveContextWindowPolicy, ContextDefaultsSource, ResolvedContextDefaults, LiveContextDefaults, StickyNotesLimitsSource, ResolvedStickyNotesLimits, LiveStickyNotesLimits } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
@@ -1904,6 +1905,14 @@ export type {
   ContextWindowSettingsMessages,
   ContextWindowSettingsView,
 } from './server/routes/settings-context-window.js';
+// Пределы саб-агентов — `/api/v2/settings/agents-limits`.
+export { createAgentsLimitsSettingsRoutes } from './server/routes/settings-agents-limits.js';
+export type {
+  AgentsLimitsSettingsDeps,
+  AgentsLimitsSettingsOptions,
+  AgentsLimitsSettingsMessages,
+  AgentsLimitsSettingsView,
+} from './server/routes/settings-agents-limits.js';
 // Дефолты оптимизации контекста для новых сессий — `/api/v2/settings/context-defaults`.
 export { createContextDefaultsSettingsRoutes } from './server/routes/settings-context-defaults.js';
 export type {

@@ -118,7 +118,7 @@ describe('ContextWarningPanel — блок предупреждения о ко�
     expect(panel).not.toBeNull()
     expect(panel.dataset.variant).toBe('warning')
     expect(panel.textContent).toContain('Context is 90% full')
-    expect(panel.textContent).toContain('180,000')
+    expect(panel.textContent).toContain('180,010')
     expect(panel.textContent).toContain('200,000')
     expect(panel.textContent).toContain('The model may lose quality')
 

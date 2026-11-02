@@ -23,6 +23,8 @@ import type { SessionManager } from '../../../sessions/manager.js';
 import type { PermissionEvaluator } from '../../permission/evaluator.js';
 import type { AuthorityTurnContext } from '../../authority/turn.js';
 import type { MicroPipeline } from '../../router/micro/index.js';
+import type { AuxUsageRecorder } from '../../usage-accounting.js';
+import type { UsageCost } from '../../../providers/usage.js';
 import { info } from '../../../logger.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 
@@ -100,6 +102,10 @@ export interface ProcessEarlyDeps {
     },
   ) => void;
   sessionManager: SessionManager;
+  /** ADR-102: aux-учёт (micro/decision) — счётчики сессии + роллап usage. */
+  recordAuxUsage?: AuxUsageRecorder;
+  /** ADR-102: стоимость сообщения (провайдер/каталог) для metadata.cost_*. */
+  computeMessageCost?: (model: string | undefined, usage: TokenUsage | undefined) => UsageCost | null;
 }
 
 /** Аргументы `runProcessEarly` (пролог `_processMessage` до LLM). */
@@ -200,11 +206,14 @@ export async function runProcessEarly(
           taskClass: microResult.microResult.taskClass,
         });
       }
-      const finalUsage = {
-        inputTokens: microResult.microResult.usage?.inputTokens ?? 0,
-        outputTokens: microResult.microResult.usage?.outputTokens ?? 0,
-        totalTokens: (microResult.microResult.usage?.inputTokens ?? 0) + (microResult.microResult.usage?.outputTokens ?? 0),
-      };
+      const answeredUsage = microResult.microResult.usage;
+      const finalUsage: TokenUsage = answeredUsage
+        ? {
+            ...answeredUsage,
+            totalTokens: answeredUsage.totalTokens
+              || (answeredUsage.inputTokens || 0) + (answeredUsage.outputTokens || 0),
+          }
+        : { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
       deps.publishLocalCompletion(publishChunk, streamId, finalContent, {
         model: finalModel,
@@ -251,40 +260,83 @@ export async function runProcessEarly(
         // напрямую, минуя `_saveAssistantMessage`, поэтому ставим здесь.
         debugData: debugCollector.getDebugInfo() ?? undefined,
       };
+      const finalCost = deps.computeMessageCost?.(finalModel, finalUsage) ?? null;
+      if (finalCost) {
+        assistantMsg.metadata = {
+          ...microMetadata,
+          cost_usd: finalCost.costUsd,
+          cost_currency: finalCost.currency,
+          cost_breakdown: finalCost.breakdown,
+        };
+      }
 
       await deps.sessionManager.addMessage(session.id, assistantMsg);
 
-      // Обновляем токены сессии
-      session.inputTokens += finalUsage.inputTokens;
-      session.outputTokens += finalUsage.outputTokens;
-      session.totalTokens += finalUsage.totalTokens;
-
-      // Авто-тайтл если это первое сообщение.
-      // Персист счётчиков/тайтла идёт по актуальному состоянию хранилища
-      // (`withLock` перечитывает сессию): `session` — снапшот вызывающего, и
-      // его сохранение затирало бы только что добавленный ответ ассистента
-      // (ответ пропадал из истории при перезагрузке сессии).
-      const autoTitle = session.messages.filter((m) => m.role === MessageRole.USER && !m.ephemeral).length <= 1
-        ? sm('session.dialog_title', { id: session.id.slice(0, 8) })
-        : null;
-      if (autoTitle) session.title = autoTitle;
-      try {
+      // ADR-102: сообщение микро-ответа — запись usage (`messages=1`), а
+      // отклонённые/UNSURE вызовы каскада — aux (`requests=1`, без `messages`).
+      if (deps.recordAuxUsage) {
+        await deps.recordAuxUsage({
+          sessionId: session.id,
+          usage: finalUsage,
+          provider: 'micro',
+          model: finalModel,
+          agent: effectiveAgentRole,
+          source: 'micro-message',
+          messages: 1,
+          cost: finalCost,
+        });
+        if (microResult.auxUsage) {
+          void deps.recordAuxUsage({
+            sessionId: session.id,
+            usage: microResult.auxUsage,
+            agent: effectiveAgentRole,
+            source: 'micro',
+          });
+        }
+      } else {
+        // Фоллбек без шва (тесты/старые вызовы) — только счётчики.
         await deps.sessionManager.withLock(session.id, async (s) => {
           s.inputTokens += finalUsage.inputTokens;
           s.outputTokens += finalUsage.outputTokens;
           s.totalTokens += finalUsage.totalTokens;
-          if (autoTitle) s.title = autoTitle;
+          s.cacheReadTokens += finalUsage.cacheReadTokens ?? 0;
+          s.cacheWriteTokens += finalUsage.cacheWriteTokens ?? 0;
+          s.reasoningTokens += finalUsage.reasoningTokens ?? 0;
           await deps.sessionManager.saveSession(s);
         });
-      } catch {
-        // ok
+      }
+
+      // Авто-тайтл если это первое сообщение. Запись — по актуальному
+      // состоянию хранилища (`withLock`), чтобы не затереть ответ ассистента.
+      const autoTitle = session.messages.filter((m) => m.role === MessageRole.USER && !m.ephemeral).length <= 1
+        ? sm('session.dialog_title', { id: session.id.slice(0, 8) })
+        : null;
+      if (autoTitle) session.title = autoTitle;
+      if (autoTitle) {
+        try {
+          await deps.sessionManager.withLock(session.id, async (s) => {
+            s.title = autoTitle;
+            await deps.sessionManager.saveSession(s);
+          });
+        } catch {
+          // ok
+        }
       }
 
       info('MICRO', `Ответ через микро-слой: ${microResult.microResult.taskClass} (${microResult.microResult.latencyMs}ms, confidence=${microResult.microResult.confidence.toFixed(2)})`);
       return {};
     }
 
-    // Если handled=false — продолжаем обычный путь (router → LLM)
+    // Если handled=false — продолжаем обычный путь (router → LLM).
+    // ADR-102: все опрошенные вызовы микро-слоя (включая отклонённые) — aux.
+    if (microResult.auxUsage) {
+      void deps.recordAuxUsage?.({
+        sessionId: session.id,
+        usage: microResult.auxUsage,
+        agent: effectiveAgentRole,
+        source: 'micro',
+      });
+    }
     if (microResult.fallbackSignals?.length) {
       debugCollector.addContext('micro_first', {
         status: 'fallback',

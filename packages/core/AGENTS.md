@@ -541,14 +541,30 @@
   (CSV RFC 4180 + BOM + `TOTAL`), `rebuild.ts`/`rebuild-command.ts` — идемпотентный бэкфилл
   `synth analytics rebuild` (`--from`/`--dry-run`/`--yes`; `decision` не пересобирается, `prompt` —
   проекция на чтении). HTTP-фабрика — `server/routes/analytics.ts` (`createAnalyticsRoutes`).
-  **Расход хода = сумма расходов шагов** (ADR-118 сделал шаг отдельным вызовом LLM): в оркестраторе
-  копится `turnUsage` (`engine/orchestrator/usage.ts: addTokenUsage` — по одному разу на итерацию,
-  `iterationUsage`, а не по чанкам), и именно он пишется в финальное/отменённое сообщение, в
-  счётчики сессии (`Session.inputTokens`/…) и в роллап `usage` (одна запись на ход:
-  `requests=1`/`messages=1`). `finalUsage` (расход последнего вызова) остаётся для оценки
-  (`estimateUsage`), калибровки chars-per-token и события `step.finished` — там расход **своего
-  шага** (сумма по шагам = расход хода, метрики Prometheus не меняются). Бакеты сабагентов
-  (`metadata.subagents`) считаются отдельно и не меняются.
+  **Расход: сообщение = свой вызов, сумма по сообщениям = ход** (ADR-118 сделал шаг отдельным
+  вызовом LLM, паритет с opencode). `usage` каждого assistant-сообщения — расход **ровно своего**
+  вызова провайдера (у финального — последнего, не сумма); сумма usage сообщений хода = расход
+  хода. В оркестраторе копится `turnUsage` (`engine/orchestrator/usage.ts: addTokenUsage` — по
+  одному разу на итерацию, `iterationUsage`, а не по чанкам); он пишется в счётчики сессии
+  (`Session.inputTokens`/…) и в роллап `usage` (одна запись на ход: `requests=1`/`messages=1`),
+  а `usage` сообщения — в историю и `metadata.cost_*` (стоимость **своего** usage). **Инвариант:
+  сумма usage assistant-сообщений + aux-вызовы = счётчики сессии.** Aux-вызовы (title, QA
+  self-check, fork-summary, derive вложений, отклонённые вызовы micro/decision) идут через
+  `engine/usage-accounting.ts` (`recordAuxUsage`: счётчики сессии + роллап `requests=1` **без**
+  `messages`; best-effort; `messages:1` — для микро-ответа, `model=micro:<taskClass>`). `TokenUsage.cost` (стоимость от провайдера) приоритетнее каталога
+  (`providers/usage.ts: parseUsageCost`/`computeUsageCost`; `0` достоверен, breakdown — нули,
+  разные валюты не складываются); стоимость хода копится **по шагам их моделями**
+  (`turnCostByCurrency`/`turnCostBreakdown`), поэтому смена модели между шагами не искажает
+  аналитику. `metadata.step_duration_ms` — длительность своего вызова (TPS), `metadata.duration_ms`
+  — хода (аналитика/`computeSessionStats`). `finalUsage` (расход последнего вызова) — оценка
+  (`estimateUsage`), калибровка chars-per-token и событие `step.finished` (там расход **своего**
+  шага; сумма по шагам = расход хода, метрики Prometheus не меняются). Бакеты сабагентов
+  (`metadata.subagents`) считаются отдельно; при смене модели внутри прогона parent-аналитика
+  группирует по `subagent_model` (известное ограничение). `analytics/rebuild.ts` агрегирует usage
+  **по ходу** (`turn_id` → `metadata.stream_id` → id сообщения), `interrupted`-сообщение — отдельная
+  запись (parity с live), включает usage скрытых `tool_chain`-шагов (иначе недосчёт); activity по
+  `tool_chain` по-прежнему не считается. Старая история **не мигрируется** (у старых ходов usage
+  финала = сумма, шаги без usage).
 - `server/restart.ts` — ADR-092 п. 7: graceful restart инстанса. `configureRestart` (вызов на старте
   процесса — `main.ts`/backend `main.ts`), `resolveRestartMode` (`--restart-mode` > `SYNTH_RESTART_MODE`;
   неизвестное → `disabled` + warn), `getRestartStatus` (`supported`/`mode`/`reason`/`startedAt`/`version`),
@@ -758,16 +774,25 @@
   **Предохранитель бюджета контекста саб-агента (`agents.subagentMaxInputTokens`).**
   В цикле саб-агента (`engine/tools/task/run-cycle.ts`) перед **каждым** LLM-вызовом
   считается оценка промпта: `estimatePromptChars(messages, systemPrompt, tools)` →
-  `estimateTokens(chars, tokenRatio)` (`engine/context/token-ratio.ts`; ratio — дефолт 4,
-  калибровка не запрашивается). Оценка выше лимита (и лимит `> 0`) — провайдер **не
+  `estimateTokens(chars, tokenRatio)` (`engine/context/token-ratio.ts`). Ratio — **калиброванный
+  chars-per-token модели прогона** (`loadTokenRatio` из `TaskExtra`/`SubagentResumeDeps` → тот же
+  `_loadTokenRatio` оркестратора), резолвится один раз на прогон; нет калибровки/ошибка загрузчика —
+  дефолт 4 (fail-open). Оценка выше лимита (и лимит `> 0`) — провайдер **не
   вызывается**: прогон завершается детерминированным отчётом без LLM
   (`task.context_budget`: токены, выполненные шаги, незавершённые задачи из `session.todos`
   либо из описания задачи — результаты инструментов не пересказываются), отчёт пишется
   обычным assistant-сообщением дочерней сессии со статусом `completed`, в metadata —
   `context_budget_exceeded`/`context_budget_tokens`/`steps`, родителю публикуется
   `subagent.context_budget`. **Шаг-лимит имеет приоритет:** финальный шаг-отчёт opencode
-  (см. выше) превышением бюджета не считается. `0` — ограничение выключено; оценка
-  недоступна/пуста — не блокируем. Это предохранитель объёма промпта, а не окно модели.
+  (см. выше) превышением бюджета не считается. **Дефолт — `0` (без лимита)**, `0` —
+  ограничение выключено; оценка недоступна/пуста — не блокируем. Это предохранитель объёма
+  промпта, а не окно модели. Значение — instance-wide runtime-настройка
+  `agents.subagentMaxInputTokens`: резолвер `resolveSubagentMaxInputTokens` (env
+  `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` > runtime `settings.json`/PG > `config.yaml` > `0`)
+  читается оркестратором при сборке `task` extra (`getSubagentMaxInputTokens`; в
+  `TaskExtra`/`SubagentResumeDeps` — число или геттер), поэтому
+  `/api/v2/settings/agents-limits` (UI «Пределы саб-агентов») применяется к **следующим**
+  прогонам без рестарта.
   **Вложения из тулов (`_injectToolAttachments`, ADR-115).** Вызывается на границе
   итерации Tool Use — **после** того как все результаты итерации попали в `currentMessages`
   (`allToolCalls` с полем `iteration`) и **до** следующего LLM-вызова; порядок строго

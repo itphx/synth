@@ -421,4 +421,41 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
     expect(calls.filter((a) => a === 'bob')).toHaveLength(1);
     expect(stats.users).toHaveLength(2);
   });
+
+  it('ADR-102: сумма usage assistant-сообщений (включая tool-chain) = итоги агента', async () => {
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
+    await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'hi', author: 'local' }));
+    // Шаг с вызовами инструментов (скрытый tool_chain) — свой usage.
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT,
+      content: '',
+      agentRole: 'fixer',
+      model: 'm',
+      usage: usage(30, 3),
+      metadata: { tool_chain: true, tool_results: [] },
+      toolCalls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+    }));
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.TOOL,
+      content: 'ok',
+      toolCallId: 'c1',
+    }));
+    // Финальный ответ хода — свой usage (последний вызов).
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT,
+      content: 'done',
+      agentRole: 'fixer',
+      model: 'm',
+      usage: usage(20, 2),
+    }));
+
+    const stats = await computeSessionStats(await load(session), deps());
+    const agent = stats.agents.find((a) => a.agent_role === 'fixer')!;
+    // 30+3 и 20+2 — оба шага хода, tool_chain не теряется.
+    expect(agent.input_tokens).toBe(50);
+    expect(agent.output_tokens).toBe(5);
+    expect(agent.messages).toBe(1); // скрытый шаг не считается ответом агента
+    // Стоимость — сумма usage обоих шагов по цене модели (1/1M + 2/1M).
+    expect(agent.cost_usd).toBeCloseTo((30 * 1 + 3 * 2 + 20 * 1 + 2 * 2) / 1_000_000, 12);
+  });
 });

@@ -19,12 +19,16 @@ export interface QualityCheckResult {
   pass: boolean;
   reason: string;
   checkResults: { check: string; pass: boolean; detail: string }[];
+  /** ADR-102: usage self-check-вызова (aux; не становится сообщением). */
+  usage?: import('@itphx/synth-shared').TokenUsage;
 }
 
 export class QualityChecker {
   async check(input: QualityCheckInput): Promise<QualityCheckResult> {
     const { content, checks, minLength, provider } = input;
     const results: QualityCheckResult['checkResults'] = [];
+    /** ADR-102: usage self-check-вызова (aux). */
+    let usage: import('@itphx/synth-shared').TokenUsage | undefined;
 
     for (const check of checks) {
       switch (check) {
@@ -97,6 +101,7 @@ export class QualityChecker {
             ];
 
             const response = await provider.chat(messages, undefined, undefined, false);
+            usage = response.usage;
             const scoreStr = response.content.trim();
             const score = parseInt(scoreStr, 10);
 
@@ -116,6 +121,7 @@ export class QualityChecker {
                 pass: false,
                 reason: sm('qc.self_check_low_reason', { score: String(score) }),
                 checkResults: results,
+                ...(usage ? { usage } : {}),
               };
             } else {
               results.push({
@@ -137,6 +143,6 @@ export class QualityChecker {
       }
     }
 
-    return { pass: true, reason: sm('qc.all_passed'), checkResults: results };
+    return { pass: true, reason: sm('qc.all_passed'), checkResults: results, ...(usage ? { usage } : {}) };
   }
 }

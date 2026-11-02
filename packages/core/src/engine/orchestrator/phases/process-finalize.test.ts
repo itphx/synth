@@ -254,15 +254,15 @@ describe('runProcessFinalize', () => {
       expect(assistant.metadata!.status).toBe('cancelled');
     });
 
-    it('тексты шагов не дублируются в сообщении отмены + best-effort оценка usage', async () => {
+    it('тексты шагов не дублируются в сообщении отмены (отмена между шагами — без расхода шага)', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
       const state = makeState({
         cancelledBeforeFinal: true,
         finalContent: 'обрывок',
         finalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        // ADR-102: расход хода тоже пуст (провайдер не отдал usage) — оценка.
-        turnUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        // ADR-102: расход хода (сумма завершённых шагов) — в счётчики/аналитику.
+        turnUsage: USAGE,
         allIntermediateTexts: [{ text: 'первая', iteration: 0 }, { text: 'вторая', iteration: 1 }],
         allReasoning: [{ text: 'думал', iteration: 0 }, { text: 'думал финально', iteration: 1 }],
         finalStepIndex: 1,
@@ -277,9 +277,14 @@ describe('runProcessFinalize', () => {
       // Reasoning — только финальной итерации (размышления прошлых шагов
       // лежат в их сообщениях).
       expect(saveCall[6]).toBe('думал финально');
-      // отсутствующие токены дозаполняются оценкой → usage_estimated
-      expect(saveCall[17]).toMatchObject({ usage_estimated: true });
-      expect(published[0]!.data.usage_estimated).toBe(true);
+      // ADR-102: отмена между шагами — текущего вызова нет, собственного
+      // расхода у сообщения отмены нет (usage = 0), оценка не подставляется.
+      expect(saveCall[4]).toMatchObject({ inputTokens: 0, outputTokens: 0 });
+      expect(saveCall[17]).not.toHaveProperty('usage_estimated');
+      // Счётчики/аналитика получают расход хода.
+      expect(saveCall[25]).toEqual(USAGE);
+      expect(published[0]!.data.usage).toEqual(USAGE);
+      expect(published[0]!.data.usage_estimated).toBeUndefined();
       expect(published[0]!.data.content).toBe('');
     });
 

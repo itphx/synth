@@ -13,6 +13,7 @@ import type { LLMChunk, LLMResponse, ReasoningLevel, TokenUsage } from '@itphx/s
 import { effortForReasoningLevel } from '@itphx/synth-shared';
 import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken, type ChatOptions } from './base.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
+import { parseUsageCost } from './usage.js';
 import { info } from '../logger.js';
 // ADR-099: запросы к backend-прокси — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
@@ -523,6 +524,7 @@ export class RemoteProvider extends BaseProvider {
       promptDetails?.cached_tokens
       ?? (usage.cache_read_input_tokens as number)
       ?? 0;
+    const cost = parseUsageCost(usage);
     return {
       inputTokens: (usage.prompt_tokens as number) || 0,
       outputTokens: (usage.completion_tokens as number) || 0,
@@ -530,6 +532,7 @@ export class RemoteProvider extends BaseProvider {
       cacheReadTokens,
       cacheWriteTokens: (usage.cache_creation_input_tokens as number) || 0,
       reasoningTokens: completionDetails?.reasoning_tokens || 0,
+      ...(cost ? { cost } : {}),
     };
   }
 }

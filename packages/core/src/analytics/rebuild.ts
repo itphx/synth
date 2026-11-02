@@ -45,7 +45,7 @@
  * (`analyticsRetentionCutoff`).
  */
 
-import type { AnalyticsFamily, AnalyticsRollupBucket, Message, Session } from '@itphx/synth-shared';
+import type { AnalyticsFamily, AnalyticsRollupBucket, Message, Session, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
 import { readAuditLog } from '../engine/gateway/audit-logger.js';
 import { computeSessionStats } from '../sessions/stats.js';
@@ -135,6 +135,41 @@ interface SessionTokenTotals {
   cacheRead: number;
   cacheWrite: number;
   reasoning: number;
+}
+
+/**
+ * ADR-102/ADR-118: накопитель usage одного хода. У хода из N вызовов LLM —
+ * N assistant-сообщений; живая запись `usage` — одна на ход, поэтому бэкфилл
+ * суммирует их usage и стоимость, а модель/агента/длительность берёт у
+ * финального (последнего) сообщения хода.
+ */
+interface TurnUsageGroup {
+  day: string;
+  usage: TokenUsage;
+  costs: Record<string, number>;
+  hasAssistant?: boolean;
+  model?: string;
+  agent?: string;
+  durationMs?: number;
+}
+
+/** Прибавить usage сообщения к накопителю хода (токены + cache/reasoning). */
+function addUsageTokens(target: TokenUsage, usage: TokenUsage | undefined): void {
+  if (!usage) return;
+  target.inputTokens += usage.inputTokens || 0;
+  target.outputTokens += usage.outputTokens || 0;
+  target.totalTokens += usage.totalTokens || 0;
+  if (usage.cacheReadTokens) target.cacheReadTokens = (target.cacheReadTokens ?? 0) + usage.cacheReadTokens;
+  if (usage.cacheWriteTokens) target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + usage.cacheWriteTokens;
+  if (usage.reasoningTokens) target.reasoningTokens = (target.reasoningTokens ?? 0) + usage.reasoningTokens;
+}
+
+/** Смержить разбивку стоимости сообщения в накопитель хода. */
+function mergeCosts(target: Record<string, number>, costs: Record<string, number>): void {
+  for (const [currency, value] of Object.entries(costs)) {
+    if (!isFiniteNumber(value) || value === 0) continue;
+    target[currency] = (target[currency] ?? 0) + value;
+  }
 }
 
 function emptyTotals(): SessionTokenTotals {
@@ -290,6 +325,15 @@ export async function rebuildAnalyticsRollups(
     }
 
     const ownTotals = emptyTotals();
+    /**
+     * ADR-102/ADR-118: `usage` — **одна запись на ход**. Шаг = вызов LLM =
+     * assistant-сообщение со своим `usage`; сумма usage сообщений хода =
+     * расход хода. Группируем сообщения по ходу (`turn_id`, fallback
+     * `metadata.stream_id`, затем id сообщения — старые ходы без `turn_id`
+     * дают запись на сообщение, как и раньше) и агрегируем usage/стоимость
+     * всех шагов, включая скрытые `tool_chain` (у нового хода они несут usage).
+     */
+    const turnGroups = new Map<string, TurnUsageGroup>();
 
     for (const msg of session.messages) {
       const day = dayOf(msg.createdAt) ?? createdDay;
@@ -297,8 +341,9 @@ export async function rebuildAnalyticsRollups(
 
       // Сверка со stats — по всей сессии, независимо от окна `--from`
       // (computeSessionStats считает историю целиком). User/tool статистика
-      // агентов не учитывает.
-      if (!toolChain && msg.role !== MessageRole.USER && msg.role !== MessageRole.TOOL) {
+      // агентов не учитывает. Tool-chain-сообщения **включаются**: у новых
+      // ходов именно они несут usage своих шагов.
+      if (msg.role !== MessageRole.USER && msg.role !== MessageRole.TOOL) {
         ownTotals.input += msg.usage?.inputTokens ?? 0;
         ownTotals.output += msg.usage?.outputTokens ?? 0;
         ownTotals.cacheRead += msg.usage?.cacheReadTokens ?? 0;
@@ -325,30 +370,63 @@ export async function rebuildAnalyticsRollups(
         accumulator.add('activity', day, axes, { aborts: 1 });
       }
 
-      // Скрытые tool-chain сообщения точка записи usage не пишет — не пишем и здесь.
-      if (toolChain) continue;
+      // ── usage: накопление по ходу ───────────────────────────────────────
+      const msgCosts = messageCosts(msg.metadata);
+      const hasMsgTokens = Object.keys(usageMeasures(msg.usage)).length > 0;
 
-      // ── usage ───────────────────────────────────────────────────────────
-      const measures = usageMeasures(msg.usage);
-      const hasTokens = Object.keys(measures).length > 0;
-      if (hasTokens) measures.requests = 1;
-      if (msg.role === MessageRole.ASSISTANT) measures.messages = 1;
-      const durationMs = messageDurationMs(msg);
-      if (durationMs !== undefined) measures.duration_ms = durationMs;
-      const costs = messageCosts(msg.metadata);
-      const model = msg.model || undefined;
-      const agent = msg.agentRole || undefined;
-      accumulator.add('usage', day, { ...axes, model, agent }, measures, costs);
-
-      // Покрытие для аудита — все токены сообщения (независимо от роли).
-      if (hasTokens || Object.keys(costs).length > 0) {
-        const key = coverageKey(day, session.userId, model);
+      // Покрытие для аудита — все токены сообщения (независимо от роли и
+      // `tool_chain`: usage шага — реальный расход).
+      if (hasMsgTokens || Object.keys(msgCosts).length > 0) {
+        const key = coverageKey(day, session.userId, msg.model || undefined);
         const cover = coverage.get(key) ?? { input: 0, output: 0, usd: 0 };
         cover.input += msg.usage?.inputTokens ?? 0;
         cover.output += msg.usage?.outputTokens ?? 0;
-        cover.usd += costs.USD ?? 0;
+        cover.usd += msgCosts.USD ?? 0;
         coverage.set(key, cover);
       }
+
+      const interrupted = msg.metadata?.interrupted === true
+        || msg.metadata?.status === 'interrupted';
+      const turnKey = interrupted
+        ? `interrupted:${msg.id}`
+        : (msg.turnId
+          ?? (typeof msg.metadata?.stream_id === 'string' ? msg.metadata.stream_id : undefined)
+          ?? msg.id);
+      let group = turnGroups.get(turnKey);
+      if (!group) {
+        group = { day, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, costs: {} };
+        turnGroups.set(turnKey, group);
+      }
+      addUsageTokens(group.usage, msg.usage);
+      mergeCosts(group.costs, msgCosts);
+      // Представитель хода — финальное (последнее) assistant-сообщение: его
+      // модель/агент/длительность — то, что живая запись берёт у final-сообщения.
+      if (msg.role === MessageRole.ASSISTANT) {
+        group.hasAssistant = true;
+        group.day = day;
+        group.model = msg.model || undefined;
+        group.agent = msg.agentRole || undefined;
+        const duration = messageDurationMs(msg);
+        if (duration !== undefined) group.durationMs = duration;
+      }
+    }
+
+    for (const group of turnGroups.values()) {
+      if (!group.hasAssistant) continue;
+      if (from !== undefined && group.day < from) continue;
+      const measures = usageMeasures(group.usage);
+      const hasTokens = Object.keys(measures).length > 0;
+      if (hasTokens) measures.requests = 1;
+      // Живая запись — одна на ход: `messages=1` (assistant-сообщение хода).
+      measures.messages = 1;
+      if (group.durationMs !== undefined) measures.duration_ms = group.durationMs;
+      accumulator.add(
+        'usage',
+        group.day,
+        { ...axes, model: group.model, agent: group.agent },
+        measures,
+        group.costs,
+      );
     }
 
     // Диагностика: сообщения vs `computeSessionStats` (истина — сообщения).

@@ -40,6 +40,7 @@ import { ObservabilitySettings } from "./ObservabilitySettings"
 import { MultimodalSettings } from "./MultimodalSettings"
 import { MemorySettings } from "./MemorySettings"
 import { ContextManagementSettings } from "../admin/ContextManagementSettings"
+import { AgentsLimitsSettings } from "../admin/AgentsLimitsSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
 import { ProjectsPanel } from "../admin/ProjectsPanel"
@@ -337,6 +338,7 @@ export const SettingsModal = () => {
             {activePage === "maintenance" && <MaintenanceSettings />}
             {activePage === "metrics" && <ObservabilitySettings />}
             {activePage === "contextManagement" && <ContextManagementSettings />}
+            {activePage === "agentsLimits" && <AgentsLimitsSettings />}
             {activePage === "attachments" && <MultimodalSettings />}
             {activePage === "memory" && <MemorySettings />}
             {activePage === "security" && <SecuritySettings />}

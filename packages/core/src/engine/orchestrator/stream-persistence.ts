@@ -15,7 +15,7 @@
  * Модуль не зависит от оркестратора — юнит-тестируется с моком
  * `Pick<SessionManager,'appendMessage'|'updateMessage'>` и фейковыми таймерами.
  */
-import type { Message, MessageStatus, Part } from '@itphx/synth-shared';
+import type { Message, MessageStatus, Part, TokenUsage } from '@itphx/synth-shared';
 import { generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import { withDeterministicPartIds } from './turn-events.js';
@@ -28,7 +28,7 @@ export interface StreamMessageRef {
 
 /** Поля сообщения, которые можно заменить в `finalize`. */
 export type StreamMessagePatch = Partial<
-  Pick<Message, 'content' | 'reasoning' | 'toolCalls' | 'metadata' | 'model' | 'parts' | 'status'>
+  Pick<Message, 'content' | 'reasoning' | 'toolCalls' | 'metadata' | 'model' | 'parts' | 'status' | 'usage'>
 >;
 
 export interface StreamMessageDraftOptions {
@@ -219,6 +219,9 @@ export class StreamMessageDraft {
       reasoning: patch.reasoning ?? this._reasoning,
       toolCalls: patch.toolCalls,
       model: patch.model ?? this._model,
+      // ADR-102/ADR-118: usage сообщения шага — расход **своего** вызова
+      // провайдера (сумма usage сообщений хода = расход хода).
+      usage: patch.usage,
       metadata,
       // ADR-118 §5: «финал» = смена статуса сообщения. Черновик жил со
       // статусом `streaming`, финал — терминальный (`completed` по умолчанию).
@@ -313,6 +316,7 @@ export class StreamMessageDraft {
       reasoning: patch.reasoning ?? this._reasoning,
       toolCalls: patch.toolCalls,
       model: patch.model ?? this._model,
+      usage: patch.usage,
       metadata: patch.metadata ?? { ...(this._base.metadata ?? {}) },
       status: patch.status ?? 'completed',
     });
@@ -430,6 +434,8 @@ export class StreamMessageDraft {
     reasoning?: string;
     toolCalls?: Record<string, unknown>[];
     model?: string;
+    /** ADR-102: расход своего шага (передаётся только при финализации). */
+    usage?: TokenUsage;
     metadata: Record<string, unknown>;
     /** ADR-118 §5: статус сообщения (`streaming` → терминальный). */
     status?: MessageStatus;
@@ -450,6 +456,7 @@ export class StreamMessageDraft {
       ...(this._reasoningRedacted?.length ? { reasoningRedacted: this._reasoningRedacted } : {}),
       ...(overrides.toolCalls !== undefined ? { toolCalls: overrides.toolCalls } : {}),
       ...(overrides.model !== undefined ? { model: overrides.model } : {}),
+      ...(overrides.usage !== undefined ? { usage: overrides.usage } : {}),
       ...(overrides.status !== undefined ? { status: overrides.status } : {}),
       metadata: overrides.metadata,
     };

@@ -126,6 +126,7 @@ import {
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
   createLiveAttachmentsSettings,
   createLiveContextWindowPolicy,
+  createLiveSubagentMaxInputTokens,
   createLiveContextDefaults,
   createLiveStickyNotesLimits,
 } from '../../storage/runtime-settings.js';
@@ -320,6 +321,13 @@ export async function createStandaloneDeps(
   const contextWindowSettings = createLiveContextWindowPolicy({
     config: config.contextConfig?.windowPolicy,
     runtime: await settingsStore.getContextWindowPolicy(),
+  });
+
+  // Предохранитель объёма промпта саб-агента (`agents.subagentMaxInputTokens`):
+  // приоритет env > runtime > config.yaml > 0; читается при сборке `task` extra.
+  const subagentMaxInputTokensSettings = createLiveSubagentMaxInputTokens({
+    config: config.agentsConfig?.subagentMaxInputTokens,
+    runtime: await settingsStore.getSubagentMaxInputTokens(),
   });
 
   // Дефолты оптимизации контекста для **новых** сессий (`context.defaults`):
@@ -1195,6 +1203,8 @@ export async function createStandaloneDeps(
     attachmentsConfig: () => attachmentsSettings.getConfig(),
     // Политика контекстного окна — live-геттер (перед каждым LLM-вызовом).
     contextWindowPolicy: () => contextWindowSettings.getPolicy(),
+    // Бюджет промпта саб-агента — live-геттер (runtime-настройка из UI).
+    getSubagentMaxInputTokens: () => subagentMaxInputTokensSettings.getValue(),
     // ADR-115: каталог моделей инстанса для агента (тул `list_models`):
     // источники — каталог провайдеров и ручные override (тот же `modelStore`,
     // что у `GET /api/v2/models`), поэтому модальности совпадают с UI.
@@ -1870,6 +1880,7 @@ export async function createStandaloneDeps(
     attachmentsSettings,
     // Политика ограничения контекстного окна (live, админ-API).
     contextWindowSettings,
+    subagentMaxInputTokensSettings,
     // Дефолты оптимизации контекста новых сессий (live, админ-API).
     contextDefaultsSettings,
     // Instance-wide лимиты заметок сессии (live, админ-API).

@@ -181,6 +181,161 @@ describe('rebuildAnalyticsRollups — usage/activity', () => {
     expect(activityRows[2]!.measures).toEqual({ sessions_archived: 1 });
   });
 
+  it('usage по ходу: tool-step и финал суммируются в одну запись (requests=1, messages=1)', async () => {
+    const env = makeEnv();
+    const session = await createSession(env, {
+      userId: 'u1',
+      projectId: 'p1',
+      createdAt: '2026-10-10T09:00:00.000Z',
+    });
+    await addMessage(env, session.id, msg({
+      role: MessageRole.USER,
+      content: 'вопрос',
+      author: 'local',
+      createdAt: '2026-10-10T10:00:00.000Z',
+    }));
+    // Шаг 1 — вызов с инструментами (скрытый tool_chain), свой usage/стоимость.
+    await addMessage(env, session.id, msg({
+      role: MessageRole.ASSISTANT,
+      content: '',
+      agentRole: 'fixer',
+      model: 'm',
+      turnId: 'turn-1',
+      stepIndex: 0,
+      usage: usage(30, 3),
+      toolCalls: [{ id: 'c1', name: 'read_file' }],
+      metadata: {
+        tool_chain: true,
+        cost_usd: 0.00003,
+        cost_currency: 'USD',
+        status: 'completed',
+      },
+      createdAt: '2026-10-10T10:01:00.000Z',
+    }));
+    await addMessage(env, session.id, msg({
+      role: MessageRole.TOOL,
+      content: 'файл',
+      toolCallId: 'c1',
+      createdAt: '2026-10-10T10:02:00.000Z',
+    }));
+    // Шаг 2 — финал хода, свой usage/стоимость.
+    await addMessage(env, session.id, msg({
+      role: MessageRole.ASSISTANT,
+      content: 'готово',
+      agentRole: 'fixer',
+      model: 'm',
+      turnId: 'turn-1',
+      stepIndex: 1,
+      usage: usage(20, 2),
+      metadata: {
+        duration_ms: 1000,
+        cost_usd: 0.00002,
+        cost_currency: 'USD',
+        status: 'completed',
+      },
+      createdAt: '2026-10-10T10:03:00.000Z',
+    }));
+
+    const result = await rebuildAnalyticsRollups({
+      repo: env.storage.analyticsRollups,
+      sessions: env.storage.sessions,
+      now: () => NOW,
+    });
+
+    // Сверка со stats больше не расходится: tool-chain-шаг тоже несёт usage.
+    expect(result.statsMismatched).toBe(0);
+
+    const rows = await env.storage.analyticsRollups.query({
+      family: 'usage',
+      groupBy: ['day', 'model', 'agent'],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.dimensions).toEqual({
+      day: '2026-10-10',
+      model: 'm',
+      agent: 'fixer',
+    });
+    // Живая запись — одна на ход: токены/стоимость = сумма шагов.
+    expect(rows[0]!.measures).toEqual({
+      input_tokens: 50,
+      output_tokens: 5,
+      requests: 1,
+      messages: 1,
+      duration_ms: 1000,
+    });
+    expect(rows[0]!.costByCurrency!.USD).toBeCloseTo(0.00005, 12);
+  });
+
+  it('interrupt: сообщение прерванного шага — отдельная запись (parity с live)', async () => {
+    const env = makeEnv();
+    const session = await createSession(env, {
+      userId: 'u1',
+      projectId: 'p1',
+      createdAt: '2026-10-10T09:00:00.000Z',
+    });
+    await addMessage(env, session.id, msg({
+      role: MessageRole.USER,
+      content: 'вопрос',
+      author: 'local',
+      createdAt: '2026-10-10T10:00:00.000Z',
+    }));
+    // Прерванный вызов: live пишет отдельную запись usage для этого сообщения.
+    await addMessage(env, session.id, msg({
+      role: MessageRole.ASSISTANT,
+      content: 'частичный ответ',
+      agentRole: 'fixer',
+      model: 'm',
+      turnId: 'turn-int',
+      stepIndex: 0,
+      usage: usage(5, 1),
+      metadata: {
+        interrupted: true,
+        status: 'interrupted',
+        cost_usd: 0.000005,
+        cost_currency: 'USD',
+        step_duration_ms: 100,
+        duration_ms: 100,
+      },
+      createdAt: '2026-10-10T10:01:00.000Z',
+    }));
+    // Финальный save хода — вторая запись live.
+    await addMessage(env, session.id, msg({
+      role: MessageRole.ASSISTANT,
+      content: 'готово',
+      agentRole: 'fixer',
+      model: 'm',
+      turnId: 'turn-int',
+      stepIndex: 1,
+      usage: usage(20, 2),
+      metadata: {
+        status: 'completed',
+        cost_usd: 0.00002,
+        cost_currency: 'USD',
+        step_duration_ms: 200,
+        duration_ms: 1000,
+      },
+      createdAt: '2026-10-10T10:02:00.000Z',
+    }));
+
+    await rebuildAnalyticsRollups({
+      repo: env.storage.analyticsRollups,
+      sessions: env.storage.sessions,
+      now: () => NOW,
+    });
+
+    const rows = await env.storage.analyticsRollups.query({ family: 'usage', groupBy: ['day'] });
+    // Две записи live ложатся в один бакет `usage` (одинаковые оси) —
+    // requests/messages = 2, токены/стоимость — сумма двух записей.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.measures).toMatchObject({
+      input_tokens: 25,
+      output_tokens: 3,
+      requests: 2,
+      messages: 2,
+    });
+    expect(rows[0]!.costByCurrency!.USD).toBeCloseTo(0.000025, 12);
+  });
+
   it('идемпотентен: повторный прогон не удваивает счётчики', async () => {
     const env = makeEnv();
     await seedHistory(env);

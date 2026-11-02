@@ -342,7 +342,11 @@ describe('createChildSessionLifecycle', () => {
       getModel: () => 'test-model',
     });
 
-    const meta = lifecycle.buildAssistantMetadata('completed', { foo: 'bar' });
+    const meta = lifecycle.buildAssistantMetadata('completed', { foo: 'bar' }, {
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    });
     expect(meta.status).toBe('completed');
     expect(meta.foo).toBe('bar');
     // 10*1 + 5*2 = 20
@@ -360,7 +364,11 @@ describe('createChildSessionLifecycle', () => {
       getModel: () => 'test-model',
     });
 
-    const meta = lifecycle.buildAssistantMetadata('error');
+    const meta = lifecycle.buildAssistantMetadata('error', undefined, {
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    });
     expect(meta.status).toBe('error');
     expect(meta.cost_usd).toBeUndefined();
     expect(meta.cost_currency).toBeUndefined();
@@ -377,7 +385,11 @@ describe('createChildSessionLifecycle', () => {
       getModel: () => undefined,
     });
 
-    const meta = lifecycle.buildAssistantMetadata('cancelled');
+    const meta = lifecycle.buildAssistantMetadata('cancelled', undefined, {
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    });
     expect(meta.cost_usd).toBeUndefined();
     expect(loader).not.toHaveBeenCalled();
   });

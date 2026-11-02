@@ -1692,8 +1692,13 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
 
     const childSessionId = result.metadata!.child_session_id as string;
     const child = (await sessionManager.getSession(childSessionId))!;
-    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
-    expect(assistant.usage?.inputTokens).toBe(80);
+    const assistants = child.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    const lastAssistant = [...assistants].reverse().find((m) => m.usage)!;
+    // Сообщение финала несёт расход **своего** (последнего) вызова.
+    expect(lastAssistant.usage?.inputTokens).toBe(50);
+    // Сумма usage assistant-сообщений = накопленный расход (80).
+    const totalInput = assistants.reduce((sum, m) => sum + (m.usage?.inputTokens ?? 0), 0);
+    expect(totalInput).toBe(80);
   });
 
   it('дочерняя сессия наследует projectId и её session-счётчики попадают в project stats', async () => {
@@ -2174,7 +2179,7 @@ describe('taskTool — metadata финального child-сообщения (A
     expect(published.some((e) => e.type === 'child.message.added' && e.data.child_session_id === childId && isFinalAssistant(e))).toBe(true);
   });
 
-  it('abort: partial-сообщение child несёт status=cancelled и cost', async () => {
+  it('abort: partial-сообщение child без накопленного usage; cost — у сообщения своего шага', async () => {
     const parent = await sessionManager.createSession({ title: 'Parent' });
     const state = { calls: 0 };
     const ac = new AbortController();
@@ -2208,9 +2213,17 @@ describe('taskTool — metadata финального child-сообщения (A
     const partialMsg = child.messages.find((m) => m.metadata?.partial === true);
     expect(partialMsg).toBeDefined();
     expect(partialMsg!.metadata?.status).toBe('cancelled');
+    // ADR-102: частичный ответ не дублирует накопленный расход — он уже в
+    // сообщении завершённого шага.
+    expect(partialMsg!.usage).toBeUndefined();
+    expect(partialMsg!.metadata?.cost_usd).toBeUndefined();
+    const stepMsg = child.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.usage?.inputTokens === 100,
+    );
+    expect(stepMsg).toBeDefined();
     // 100*1/1e6 + 10*2/1e6 = 0.00012 (usage первой итерации)
-    expect(partialMsg!.metadata?.cost_usd as number).toBeCloseTo(0.00012, 12);
-    expect(partialMsg!.metadata?.usage_estimated).toBeUndefined();
+    expect(stepMsg!.metadata?.cost_usd as number).toBeCloseTo(0.00012, 12);
+    expect(stepMsg!.metadata?.usage_estimated).toBeUndefined();
   });
 
   it('error: сообщение child несёт status=error', async () => {

@@ -11,7 +11,7 @@
  * фиксируется как attempt `error`, каскад идёт к следующему тиру. Хелпер не
  * создаёт сессий и не эмитит хуки.
  */
-import type { DecisionQuestion, DecisionResponse } from '@itphx/synth-shared';
+import type { DecisionQuestion, DecisionResponse, TokenUsage } from '@itphx/synth-shared';
 import type {
   DecisionConfigLike,
   DecisionProviderResolver,
@@ -50,6 +50,8 @@ export interface DecisionAttempt {
   latencyMs: number;
   label?: string;
   error?: string;
+  /** ADR-102: usage этого вызова (input/output), если провайдер вернул. */
+  usage?: TokenUsage;
 }
 
 /** Итог каскада: принятое решение либо причина отказа (последний тир). */
@@ -67,6 +69,10 @@ export interface DecisionCascadeOutcome {
   lastStatus: DecisionAttemptStatus;
   lastLabel?: string;
   lastError?: string;
+  /** ADR-102: usage принятого тира (при `accepted: true`). */
+  usage?: TokenUsage;
+  /** ADR-102: сумма usage отклонённых попыток. */
+  rejectedUsage?: TokenUsage;
 }
 
 /** Опции `decideChoiceCascade`. */
@@ -150,9 +156,10 @@ export async function decideChoiceCascade(
     }
 
     const latencyMs = Math.round(performance.now() - startedAt);
+    const attemptUsage = toTokenUsage(response.usage);
     const answer = response.answers[opts.questionId];
     if (!answer || answer.type !== 'choice') {
-      attempts.push({ tier, providerName, modelName, status: 'no_answer', latencyMs });
+      attempts.push({ tier, providerName, modelName, status: 'no_answer', latencyMs, ...(attemptUsage ? { usage: attemptUsage } : {}) });
       warning('DECISION', `каскад${log}: нет choice-ответа (${tier} ${providerName}/${modelName})`);
       continue;
     }
@@ -161,13 +168,13 @@ export async function decideChoiceCascade(
     const confidence = answer.confidence;
 
     if (!opts.validate(label)) {
-      attempts.push({ tier, providerName, modelName, status: 'invalid', latencyMs, label, confidence });
+      attempts.push({ tier, providerName, modelName, status: 'invalid', latencyMs, label, confidence, ...(attemptUsage ? { usage: attemptUsage } : {}) });
       warning('DECISION', `каскад${log}: невалидная метка "${label}" (${tier})`);
       continue;
     }
 
     if (!(confidence >= threshold)) {
-      attempts.push({ tier, providerName, modelName, status: 'low_confidence', latencyMs, label, confidence });
+      attempts.push({ tier, providerName, modelName, status: 'low_confidence', latencyMs, label, confidence, ...(attemptUsage ? { usage: attemptUsage } : {}) });
       warning(
         'DECISION',
         `каскад${log}: низкая уверенность ${confidence.toFixed(2)} < ${threshold} (${tier} ${providerName}/${modelName})`,
@@ -176,7 +183,7 @@ export async function decideChoiceCascade(
     }
 
     // Успех: принимаем ответ и завершаем каскад.
-    attempts.push({ tier, providerName, modelName, status: 'ok', latencyMs, label, confidence });
+    attempts.push({ tier, providerName, modelName, status: 'ok', latencyMs, label, confidence, ...(attemptUsage ? { usage: attemptUsage } : {}) });
     info(
       'DECISION',
       `каскад${log}: OK tier=${tier} label=${label} confidence=${confidence.toFixed(2)} (порог ${threshold}) model=${providerName}/${modelName} latency=${latencyMs}ms`,
@@ -193,6 +200,8 @@ export async function decideChoiceCascade(
       attempts,
       lastStatus: 'ok',
       lastLabel: label,
+      ...(attemptUsage ? { usage: attemptUsage } : {}),
+      ...(sumAttemptUsage(attempts.slice(0, -1)) ? { rejectedUsage: sumAttemptUsage(attempts.slice(0, -1))! } : {}),
     };
     metrics.recordOutcome(outcome);
     void opts.analytics?.recordDecision(outcome);
@@ -207,6 +216,7 @@ export async function decideChoiceCascade(
     lastStatus: last?.status ?? 'no_provider',
     ...(last?.label !== undefined ? { lastLabel: last.label } : {}),
     ...(last?.error !== undefined ? { lastError: last.error } : {}),
+    ...(sumAttemptUsage(attempts) ? { rejectedUsage: sumAttemptUsage(attempts)! } : {}),
   };
   metrics.recordOutcome(outcome);
   void opts.analytics?.recordDecision(outcome);
@@ -233,4 +243,26 @@ function buildTiers(config: DecisionConfigLike): CascadeTier[] {
 /** Суммарная задержка по всем попыткам. */
 function totalLatency(attempts: DecisionAttempt[]): number {
   return attempts.reduce((sum, attempt) => sum + attempt.latencyMs, 0);
+}
+
+/** Decision-usage → `TokenUsage` (input/output; total — сумма). */
+function toTokenUsage(usage: { input_tokens: number; output_tokens: number } | undefined): TokenUsage | undefined {
+  if (!usage) return undefined;
+  const inputTokens = usage.input_tokens || 0;
+  const outputTokens = usage.output_tokens || 0;
+  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+}
+
+/** Сумма usage попыток (undefined, если ни у одной его нет). */
+function sumAttemptUsage(attempts: DecisionAttempt[]): TokenUsage | undefined {
+  let found = false;
+  const total: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  for (const attempt of attempts) {
+    if (!attempt.usage) continue;
+    found = true;
+    total.inputTokens += attempt.usage.inputTokens || 0;
+    total.outputTokens += attempt.usage.outputTokens || 0;
+    total.totalTokens += attempt.usage.totalTokens || 0;
+  }
+  return found ? total : undefined;
 }

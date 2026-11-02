@@ -11,6 +11,7 @@ import type { Message, SessionSettings } from '@itphx/synth-shared';
 import { serializeSession } from '../../../server/serialize.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
 import { t as sm } from '../../system-messages.js';
+import { recordAuxUsage } from '../../usage-accounting.js';
 import type { ContextMode, TaskExtra } from './types.js';
 
 /** Мутабельное состояние дочерней сессии, собираемое `prepareChildSession`. */
@@ -144,6 +145,22 @@ export async function prepareChildSession(
             // SUMMARY-сообщение в историю ребёнка не пишем: сжатие — разовый
             // контекст первого запуска и уходит в системный промпт (`[PARENT SUMMARY]`).
             if (summaryMsg.content) state.parentSummaryText = summaryMsg.content;
+            // ADR-102: usage суммаризации — aux под дочерней (fork) сессией.
+            if (summaryMsg.usage) {
+              await recordAuxUsage(
+                {
+                  sessionManager: extra.sessionManager,
+                  analytics: extra.analytics,
+                  modelPriceLoader: extra.modelPriceLoader,
+                },
+                {
+                  sessionId: fork.id,
+                  usage: summaryMsg.usage,
+                  ...(summaryMsg.model ? { model: summaryMsg.model } : {}),
+                  source: 'fork-summary',
+                },
+              );
+            }
           } catch {
             // fallback: без саммари, только prompt с полной историей
           }

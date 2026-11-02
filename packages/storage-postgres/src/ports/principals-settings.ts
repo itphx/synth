@@ -362,6 +362,16 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
       await deleteSetting(conn, 'contextWindowPolicy');
     },
 
+    async getSubagentMaxInputTokens(): Promise<RuntimeSettingsValue<'subagentMaxInputTokens'> | undefined> {
+      return readSetting<RuntimeSettingsValue<'subagentMaxInputTokens'>>(conn, 'subagentMaxInputTokens');
+    },
+    async setSubagentMaxInputTokens(value: RuntimeSettingsValue<'subagentMaxInputTokens'>): Promise<void> {
+      await writeSetting(conn, 'subagentMaxInputTokens', value);
+    },
+    async clearSubagentMaxInputTokens(): Promise<void> {
+      await deleteSetting(conn, 'subagentMaxInputTokens');
+    },
+
     async getContextDefaults(): Promise<RuntimeSettingsValue<'contextDefaults'> | undefined> {
       return readSetting<RuntimeSettingsValue<'contextDefaults'>>(conn, 'contextDefaults');
     },

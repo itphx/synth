@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDefaultTitle } from '@itphx/synth-shared';
-import type { Session } from '@itphx/synth-shared';
+import type { Session, TokenUsage } from '@itphx/synth-shared';
 import type { SessionManager } from './manager.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../providers/base.js';
 import { isUserDialogueMessage } from './user-messages.js';
@@ -75,6 +75,8 @@ export async function autoTitleSession(
   session: Session,
   manager: SessionManager,
   provider: BaseProvider,
+  /** ADR-102: колбэк usage LLM-заголовка (aux-вызов) — для счётчиков/аналитики. */
+  onUsage?: (usage: TokenUsage, meta: { provider?: string; model?: string }) => void | Promise<void>,
 ): Promise<string | null> {
   try {
     if (session.parentId) return null;
@@ -129,6 +131,18 @@ export async function autoTitleSession(
         false,
         undefined,
       );
+
+      // ADR-102: usage заголовка — aux (сообщением не становится).
+      if (response.usage) {
+        try {
+          await onUsage?.(response.usage, {
+            ...(provider.name ? { provider: provider.name } : {}),
+            ...(response.model ?? provider.model ? { model: response.model ?? provider.model } : {}),
+          });
+        } catch {
+          // aux-учёт best-effort: заголовок важнее
+        }
+      }
 
       let text = (response.content || '').trim();
       text = text
