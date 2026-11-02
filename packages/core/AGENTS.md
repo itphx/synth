@@ -714,7 +714,11 @@
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
 - `engine/attachments/*` — ADR-115: вложения сообщений (сервис, MIME, приватность, GC,
-  материализация, обработка aux-моделью). Устройство и правила — §«Вложения (ADR-115)» ниже.
+  материализация, обработка aux-моделью, потоковая/chunked-загрузка `uploads.ts`,
+  миниатюры `thumbnails.ts`, сжатие `compress.ts`). Устройство и правила — §«Вложения (ADR-115)» ниже.
+- `engine/media/runner.ts` — единственный путь запуска `ffmpeg` (inline `spawn` / remote через
+  `ExecutionPort.execute` с `requires: ['ffmpeg']`); типизированные исходы, каталог
+  `{workspacesRoot}/.synth-media` в `finally`.
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first; микро-слой больше **не ставит** плашку `Dialog — <id8>` (прежний i18n-ключ `session.dialog_title` удалён) — она блокировала нормальное имя; имя сессии теперь даёт авто-тайтл), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы; после неё — ранний триггер авто-имени `_maybeAutoTitle`), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист шага/`turn.finished`, ADR-118 — авто-тайтла здесь больше нет); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
   **Финальный шаг по лимиту шагов (`AgentDefinition.maxSteps`) — механика opencode**
   (`engine/llm/max-steps.ts`, общий модуль с циклом саб-агента): лимит не обрывает ход
@@ -2353,6 +2357,36 @@ blob-порты и `blob_refs` — ADR-116.
   + sidecar с именем; `resolve`/`read` отдают только объекты из `attachments/`
   (`isAttachmentPath` — логи и артефакты через этот контур не читаются). `stat`/`readStream`
   в blob-порте дают раздачу потоком (`Range`/`ETag`/`HEAD`).
+- **Загрузка потоком и chunked (`service.ts`, `uploads.ts`, `server/routes/attachments*.ts`).**
+  `AttachmentService.ingestStream` пишет байты в `attachments/.uploads/<uuid>` через
+  `BlobStore.writeStream`, считает sha256 инкрементально, копит первые `MIME_HEAD_BYTES` (4 КиБ)
+  для `sniffMime`/`looksLikeSvg` и рвёт поток при превышении `maxBytesPerFile`; финал —
+  `move` в content-addressed путь и общий `upload`-путь (дедуп, sidecar, миниатюра, метрики).
+  `ingestPath` — тот же финал для готового объекта (chunked). `UploadSessionStore` (in-memory,
+  TTL `UPLOAD_SESSION_TTL_MS` = 1 ч, ленивая уборка) обслуживает протокол
+  `POST …/uploads` → `PUT /:uploadId?offset=N` → `POST …/complete` → `DELETE`; часть ограничена
+  `attachments.maxChunkBytes`, итог — `maxBytesPerFile` (`413`), смещение — `400`. Роуты общие для
+  сессии и staging (`registerUploadSessionRoutes`); raw-body — `openAttachmentRawUpload` (имя
+  `?name=`/`x-file-name`, `declaredMime` из `Content-Type`, MIME всё равно по сигнатуре).
+  Контракт `UploadSessionStore` — **один процесс** (multi-replica — остаток).
+- **Миниатюры (`thumbnails.ts`, `?variant=thumb`).** Производный JPEG
+  `attachments/.thumbs/<sha256>-<width>.jpg` (legacy без ширины — только при 512), ленивая
+  генерация через `MediaRunner` (видео — кадр на 1 с или 10 % длительности), `THUMBNAIL_MAX_WIDTH`
+  512/quality 4/кап 4 МиБ; `image`/`video` — кадр, `audio`/`file`/`pdf` — `none`. Метаданные
+  `thumb {status,width,height}` — аддитивное поле sidecar (best-effort); при выключенном
+  `attachments.thumbnail.enabled` существующие файлы отдаются, новые не создаются.
+- **Сжатие (`compress.ts`, проводка в `hydrate.ts`).** Только на границе отправки (оригинал в blob
+  не меняется): `resolveCompressTarget` по MIME и `attachments.compression`, кэш
+  `attachments/.derived/compress/<sha256>_<profile>.<ext>`, `MAX_COMPRESSED_BYTES` 32 МиБ;
+  форматы — PNG→PNG, прочее→JPEG, video→MP4 H.264/AAC (только `supportsNativeVideo`),
+  audio→mp3/wav (`resolveNativeAudioFormat`/`supportsNativeAudio`, `null` — не сжимать);
+  сжатая копия не меньше оригинала/ошибка/`no_ffmpeg` → `null` (отправляется оригинал).
+- **Медиа-раннер (`engine/media/runner.ts`).** Единственный путь запуска `ffmpeg` (derive, кадры
+  видео, транскод аудио, миниатюры, сжатие): inline — `spawn` в `tmpdir()`, remote — через
+  `ExecutionPort.execute` с `requires: ['ffmpeg']` в `{workspacesRoot}/.synth-media/<uuid>`;
+  `MediaRunResult` типизирован (`no_ffmpeg`/`dependency_missing`/`timeout`/`aborted`/`max_output`/
+  `failed`), исключений не бросает, каталог удаляется в `finally`. Капы:
+  `MEDIA_FFMPEG_TIMEOUT_MS` 60 c, stdout 32 МиБ / output 64 МиБ.
 - **Гидратация (`hydrate.ts`) — граница отправки.** Ссылки → `LLMAttachment[]` только из
   реплик **user** (медиа в assistant — исходящее, провайдеру не идёт и в лимит не попадает);
   порядок исходов: **native** (модальность модели известна и принимается, формат аудио
@@ -2374,6 +2408,8 @@ blob-порты и `blob_refs` — ADR-116.
   без транскрипта. Аудио-в-видео (MP4 с чёрным кадром) **не делается**: обход не работал и жёг
   токены на кадры.
   Суммарный base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES` 20 МиБ, отбрасываются самые старые);
+  гидратация трёхфазная: A — метаданные и решения (модальность/derive/compress) без чтения байтов,
+  B — base64-бюджет от новых к старым, C — чтение/кодирование только выбранных;
   здесь же `stripMetadata` (JPEG/PNG — EXIF/IPTC/XMP/PNG-текст): в blob лежит **оригинал**,
   очистка — только при отправке провайдеру (и в aux-вызове).
   Отброшенное видно модели блоком `[ATTACHMENTS NOT DELIVERED]`
@@ -2392,11 +2428,13 @@ blob-порты и `blob_refs` — ADR-116.
   ошибка/пустой ответ → обычный отброс/прежнее поведение (исключений не бросает). `ffmpeg` —
   внешняя зависимость (`isFfmpegAvailable` через порт исполнения, ADR-078), нет — `no_ffmpeg`.
   Модель сессии не меняется; расход aux-вызова — отдельная запись аналитики по её осям.
-- **HTTP.** Загрузка в сессию — `POST /sessions/:id/attachments` (multipart, поле `file`),
-  раздача — `GET /sessions/:id/attachments/:partId` (доступ решает prefix-guard); **staging без
-  сессии** — `POST /api/v2/attachments` и раздача по `GET /api/v2/attachments/:sha256`
-  (шлюзы/пайплайны; объект без ссылок живёт `attachments.gcDays`); `attachments: string[]` в
-  `POST /prompt` добавляет медиа-части. Лимиты — `attachments.*`, нарушение → `413`/`415`.
+- **HTTP.** Загрузка в сессию — `POST /sessions/:id/attachments` (multipart `file`; при
+  не-multipart `Content-Type` — raw-body; крупное — chunked `…/attachments/uploads`), раздача —
+  `GET /sessions/:id/attachments/:partId` (доступ решает prefix-guard; `?variant=thumb` —
+  миниатюра, `404` если её нет); **staging без сессии** — `POST /api/v2/attachments` (те же режимы
+  загрузки) и раздача по `GET /api/v2/attachments/:sha256` (шлюзы/пайплайны; объект без ссылок
+  живёт `attachments.gcDays`); `attachments: string[]` в `POST /prompt` добавляет медиа-части.
+  Лимиты — `attachments.*` (`maxChunkBytes` — только chunked), нарушение → `413`/`415`.
 - **События и прогоны.** Вложения внешнего события проверяются `EventIngress` (dedupKey
   обязателен); вложения прогона пайплайна — `engine/pipelines/attachments.ts` (вход, маппинг,
   `prev.artifacts`). Подробности — в «Карте модулей».

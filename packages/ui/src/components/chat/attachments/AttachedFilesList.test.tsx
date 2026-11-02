@@ -11,6 +11,12 @@ vi.mock('@/lib/api/attachments', () => ({
   uploadSessionAttachment: mocks.uploadSessionAttachment,
   attachmentContentUrl: (sessionId: string, partId: string) =>
     `/api/v2/sessions/${sessionId}/attachments/${partId}`,
+  attachmentThumbnailUrl: (sessionId: string, partId: string) =>
+    `/api/v2/sessions/${sessionId}/attachments/${partId}?variant=thumb`,
+  attachmentContentUrlFromThumb: (thumbUrl: string) => {
+    const suffix = '?variant=thumb'
+    return thumbUrl.endsWith(suffix) ? thumbUrl.slice(0, -suffix.length) : undefined
+  },
 }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
@@ -113,6 +119,56 @@ describe('AttachedFilesList', () => {
     expect(file?.textContent).toContain('2.0 KB')
   })
 
+  it('превью восстановленного изображения — миниатюра, при ошибке — оригинал', async () => {
+    useAttachmentsStore.setState({
+      bySession: {
+        [SESSION]: [
+          draft({
+            name: 'photo.png',
+            mimeType: 'image/png',
+            previewUrl: '/api/v2/sessions/s1/attachments/part-1?variant=thumb',
+          }),
+        ],
+      },
+    })
+
+    const container = await renderList()
+    const image = container.querySelector('[data-testid="attachment-image"] img') as HTMLImageElement
+    expect(image.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/part-1?variant=thumb')
+
+    await act(async () => {
+      image.dispatchEvent(new Event('error'))
+    })
+
+    const fallback = container.querySelector('[data-testid="attachment-image"] img') as HTMLImageElement
+    expect(fallback.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/part-1')
+
+    // Ошибка оригинала уже не обрабатывается — цикла подмен нет.
+    await act(async () => {
+      fallback.dispatchEvent(new Event('error'))
+    })
+    const after = container.querySelector('[data-testid="attachment-image"] img') as HTMLImageElement
+    expect(after.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/part-1')
+  })
+
+  it('локальный object URL не подменяется (у свежего черновика миниатюры нет)', async () => {
+    useAttachmentsStore.setState({
+      bySession: {
+        [SESSION]: [draft({ name: 'photo.png', mimeType: 'image/png', previewUrl: 'blob:photo' })],
+      },
+    })
+
+    const container = await renderList()
+    const image = container.querySelector('[data-testid="attachment-image"] img') as HTMLImageElement
+    await act(async () => {
+      image.dispatchEvent(new Event('error'))
+    })
+
+    expect(
+      container.querySelector('[data-testid="attachment-image"] img')?.getAttribute('src'),
+    ).toBe('blob:photo')
+  })
+
   it('освобождает пустое состояние — ничего не рендерит', async () => {
     const container = await renderList()
     expect(container.innerHTML).toBe('')
@@ -207,6 +263,46 @@ describe('AttachedFilesList', () => {
     const file = container.querySelector('[data-testid="attachment-file"]')
     expect(file?.getAttribute('data-state')).toBe('uploading')
     expect(file?.getAttribute('class')).toContain('opacity-60')
+  })
+
+  it('показывает процент загрузки в чипе, если прогресс известен', async () => {
+    useAttachmentsStore.setState({
+      bySession: {
+        [SESSION]: [draft({ name: 'big.mp4', mimeType: 'video/mp4', upload: 'uploading', progress: 0.42 })],
+      },
+    })
+
+    const container = await renderList()
+
+    const percent = container.querySelector('[data-testid="attachment-uploading-percent"]')
+    expect(percent?.textContent).toBe('42%')
+    // i18n-ключ `chat.attachments.uploadingPercent` (en) — в aria-label.
+    expect(percent?.getAttribute('aria-label')).toBe('Uploading: 42%')
+  })
+
+  it('показывает процент на превью изображения и сохраняет спиннер без прогресса', async () => {
+    useAttachmentsStore.setState({
+      bySession: {
+        [SESSION]: [
+          draft({
+            name: 'photo.png',
+            mimeType: 'image/png',
+            previewUrl: 'blob:photo',
+            upload: 'uploading',
+            progress: 0.5,
+          }),
+          draft({ name: 'unknown.txt', upload: 'uploading' }),
+        ],
+      },
+    })
+
+    const container = await renderList()
+
+    const overlay = container.querySelector('[data-testid="attachment-uploading"]')
+    expect(overlay?.textContent).toBe('50%')
+    expect(overlay?.querySelector('[aria-label="Uploading: 50%"]')).toBeTruthy()
+    // Без прогресса — прежний спиннер (без процента в чипе).
+    expect(container.querySelector('[data-testid="attachment-uploading-percent"]')).toBeNull()
   })
 
   it('показывает ошибку и повторяет загрузку', async () => {

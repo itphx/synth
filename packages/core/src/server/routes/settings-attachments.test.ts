@@ -14,10 +14,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SecurityAuditEntry } from '@itphx/synth-shared';
 import type { Context as HonoContext } from 'hono';
-import type { AttachmentsConfig } from '@itphx/synth-shared';
 import { RuntimeSettingsStore } from '../../storage/runtime-settings.js';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
-import { createLiveAttachmentsSettings } from '../../storage/runtime-settings.js';
+import {
+  createLiveAttachmentsSettings,
+  type AttachmentsConfigInput,
+} from '../../storage/runtime-settings.js';
 import {
   createAttachmentsSettingsRoutes,
   type ModalityModelLookup,
@@ -45,7 +47,7 @@ function createAudit(): SecurityAuditRepository & { entries: SecurityAuditEntry[
 
 interface AppOptions {
   dataDir: string;
-  config?: Partial<AttachmentsConfig>;
+  config?: AttachmentsConfigInput;
   env?: NodeJS.ProcessEnv;
   audit?: SecurityAuditRepository;
   /** Каталог моделей для проверки `modalityModels` (ADR-115). */
@@ -127,6 +129,26 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
       workspaceFallback: true,
       modalityModels: {},
       gcDays: 30,
+      compression: {
+        enabled: true,
+        image: { enabled: true, maxSidePx: 2048, quality: 85, minBytes: 1024 * 1024 },
+        video: {
+          enabled: true,
+          maxHeightPx: 720,
+          bitrateKbps: 2000,
+          audioBitrateKbps: 96,
+          minBytes: 8 * 1024 * 1024,
+        },
+        audio: {
+          enabled: true,
+          bitrateKbps: 64,
+          channels: 1,
+          sampleRateHz: 16000,
+          minBytes: 4 * 1024 * 1024,
+        },
+      },
+      thumbnail: { enabled: true, maxWidthPx: 512 },
+      maxChunkBytes: 8 * 1024 * 1024,
     });
     expect(body.defaults).toEqual(body.attachments);
     // ADR-115: сохранённого runtime-патча нет.
@@ -504,5 +526,167 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
     };
     expect(entry.after.modalityModels).toEqual({ image: { provider: 'openai', model: 'gpt-4o' } });
     expect(entry.before.modalityModels).toEqual({});
+  });
+
+  // --- ADR-115: сжатие / миниатюры / chunked-загрузка ---
+
+  it('GET: дефолты compression/thumbnail/maxChunkBytes', async () => {
+    const { app } = createApp({ dataDir, env: {} });
+    const body = await json(await app.request('/api/v2/settings/attachments'));
+    expect(body.attachments.compression).toEqual({
+      enabled: true,
+      image: { enabled: true, maxSidePx: 2048, quality: 85, minBytes: 1024 * 1024 },
+      video: {
+        enabled: true,
+        maxHeightPx: 720,
+        bitrateKbps: 2000,
+        audioBitrateKbps: 96,
+        minBytes: 8 * 1024 * 1024,
+      },
+      audio: {
+        enabled: true,
+        bitrateKbps: 64,
+        channels: 1,
+        sampleRateHz: 16000,
+        minBytes: 4 * 1024 * 1024,
+      },
+    });
+    expect(body.attachments.thumbnail).toEqual({ enabled: true, maxWidthPx: 512 });
+    expect(body.attachments.maxChunkBytes).toBe(8 * 1024 * 1024);
+  });
+
+  it('PUT: частичный compression (только image.maxSidePx) сохраняет остальные поля', async () => {
+    const { app, live } = createApp({
+      dataDir,
+      config: { compression: { image: { quality: 60 }, video: { enabled: false } } },
+      env: {},
+    });
+
+    const body = await json(await put(app, {
+      attachments: { compression: { image: { maxSidePx: 1024 } } },
+    }));
+    // Патч применён по полю: остальное — из config.yaml/дефолтов.
+    expect(body.attachments.compression.image).toEqual({
+      enabled: true,
+      maxSidePx: 1024,
+      quality: 60,
+      minBytes: 1024 * 1024,
+    });
+    expect(body.attachments.compression.video).toMatchObject({ enabled: false, maxHeightPx: 720 });
+    expect(body.attachments.compression.audio.bitrateKbps).toBe(64);
+    // Сохранённый runtime-патч — как есть (частичный).
+    expect(body.saved.compression).toEqual({ image: { maxSidePx: 1024 } });
+    expect(body.source).toBe('runtime');
+    expect(live.getConfig().compression.image).toMatchObject({ maxSidePx: 1024, quality: 60 });
+    expect(live.getConfig().compression.video.enabled).toBe(false);
+
+    // Второй частичный патч другого семейства — первый не сбрасывается.
+    const second = await json(await put(app, {
+      attachments: { compression: { audio: { channels: 2 } } },
+    }));
+    expect(second.attachments.compression.audio.channels).toBe(2);
+    // PUT заменяет runtime-патч целиком (как остальные `/settings/*`): image
+    // возвращается к config.yaml (maxSidePx — дефолт схемы).
+    expect(second.attachments.compression.image.maxSidePx).toBe(2048);
+  });
+
+  it('PUT: thumbnail и maxChunkBytes сохраняются и видны в живом резолвере', async () => {
+    const { app, live } = createApp({ dataDir, env: {} });
+    const body = await json(await put(app, {
+      attachments: { thumbnail: { enabled: false, maxWidthPx: 256 }, maxChunkBytes: 2 * 1024 * 1024 },
+    }));
+    expect(body.attachments.thumbnail).toEqual({ enabled: false, maxWidthPx: 256 });
+    expect(body.attachments.maxChunkBytes).toBe(2 * 1024 * 1024);
+    expect(live.getConfig().thumbnail).toEqual({ enabled: false, maxWidthPx: 256 });
+    expect(live.getConfig().maxChunkBytes).toBe(2 * 1024 * 1024);
+  });
+
+  it('PUT: невалидные compression/thumbnail/maxChunkBytes → 400 с путём поля', async () => {
+    const { app, live } = createApp({ dataDir, env: {} });
+    const cases: Array<{ body: unknown; path: string }> = [
+      { body: { attachments: { compression: true } }, path: 'compression' },
+      { body: { attachments: { compression: { enabled: 'no' } } }, path: 'compression.enabled' },
+      { body: { attachments: { compression: { image: { maxSidePx: 16 } } } }, path: 'compression.image.maxSidePx' },
+      { body: { attachments: { compression: { video: { bitrateKbps: 10 } } } }, path: 'compression.video.bitrateKbps' },
+      { body: { attachments: { compression: { audio: { sampleRateHz: 1000 } } } }, path: 'compression.audio.sampleRateHz' },
+      { body: { attachments: { compression: { image: 'x' } } }, path: 'compression.image' },
+      { body: { attachments: { thumbnail: true } }, path: 'thumbnail' },
+      { body: { attachments: { thumbnail: { maxWidthPx: 2048 } } }, path: 'thumbnail.maxWidthPx' },
+      { body: { attachments: { thumbnail: { enabled: 1 } } }, path: 'thumbnail.enabled' },
+      { body: { attachments: { maxChunkBytes: 512 } }, path: 'maxChunkBytes' },
+      { body: { attachments: { maxChunkBytes: 1.5 } }, path: 'maxChunkBytes' },
+    ];
+    for (const { body, path } of cases) {
+      const res = await put(app, body);
+      expect(res.status).toBe(400);
+      const payload = await json(res);
+      expect(payload.error.code).toBe('VALIDATION_ERROR');
+      expect(payload.error.message).toContain(path);
+    }
+    // Ничего не записали: живой резолвер — дефолты.
+    expect(live.getConfig().compression.image.maxSidePx).toBe(2048);
+    expect(live.getConfig().maxChunkBytes).toBe(8 * 1024 * 1024);
+    expect(live.resolve().source).toBe('default');
+  });
+
+  it('PUT: неизвестные ключи compression/thumbnail игнорируются', async () => {
+    const { app } = createApp({ dataDir, env: {} });
+    const body = await json(await put(app, {
+      attachments: {
+        compression: { film: { enabled: false }, image: { unknownField: 1 } },
+        thumbnail: { unknown: true },
+      },
+    }));
+    expect(body.attachments.compression.image.maxSidePx).toBe(2048);
+    expect(body.attachments.compression).not.toHaveProperty('film');
+    expect(body.saved.compression).toEqual({ image: {} });
+    expect(body.saved.thumbnail).toEqual({});
+    expect(body.attachments.thumbnail).toEqual({ enabled: true, maxWidthPx: 512 });
+  });
+
+  it('DELETE: сбрасывает compression/thumbnail/maxChunkBytes к config/default', async () => {
+    const { app, live } = createApp({
+      dataDir,
+      config: { compression: { image: { quality: 70 } }, thumbnail: { maxWidthPx: 128 } },
+      env: {},
+    });
+    await put(app, {
+      attachments: {
+        compression: { image: { maxSidePx: 512 } },
+        thumbnail: { enabled: false },
+        maxChunkBytes: 1024 * 1024,
+      },
+    });
+    const restored = await json(await app.request('/api/v2/settings/attachments', { method: 'DELETE' }));
+    expect(restored.attachments.compression.image).toMatchObject({ maxSidePx: 2048, quality: 70 });
+    expect(restored.attachments.thumbnail).toEqual({ enabled: true, maxWidthPx: 128 });
+    expect(restored.attachments.maxChunkBytes).toBe(8 * 1024 * 1024);
+    expect(restored.saved).toEqual({});
+    expect(live.getConfig().compression.image.quality).toBe(70);
+  });
+
+  it('env-lock maxChunkBytes: GET source=env, PUT другим значением → 409', async () => {
+    const env = { SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES: '1048576' };
+    const { app, live } = createApp({ dataDir, env });
+
+    const view = await json(await app.request('/api/v2/settings/attachments'));
+    expect(view.source).toBe('env');
+    expect(view.envLocked).toEqual(['maxChunkBytes']);
+    expect(view.attachments.maxChunkBytes).toBe(1024 * 1024);
+    // `defaults` — без env: показывает, что зафиксировано окружением.
+    expect(view.defaults.maxChunkBytes).toBe(8 * 1024 * 1024);
+
+    const conflict = await put(app, { attachments: { maxChunkBytes: 2 * 1024 * 1024 } });
+    expect(conflict.status).toBe(409);
+    expect((await json(conflict)).error.code).toBe('CONFLICT');
+
+    // То же значение (идемпотентно) и другие поля — не конфликт.
+    const same = await put(app, {
+      attachments: { maxChunkBytes: 1024 * 1024, thumbnail: { maxWidthPx: 128 } },
+    });
+    expect(same.status).toBe(200);
+    expect((await json(same)).attachments.thumbnail.maxWidthPx).toBe(128);
+    // env-значение осталось эффективным.
+    expect(live.getConfig().maxChunkBytes).toBe(1024 * 1024);
   });
 });

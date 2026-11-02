@@ -386,6 +386,37 @@ export class MemoryBlobStore implements BlobStore {
     this._mtimes.set(path, Date.now());
   }
 
+  /**
+   * ADR-115: потоковая запись — в памяти объект всё равно собирается целиком,
+   * но семантика та же: ошибка источника не меняет прежнее содержимое пути.
+   */
+  async writeStream(path: string, source: Readable, opts?: { mode?: number }): Promise<void> {
+    void opts;
+    this._validate(path);
+    const chunks: Buffer[] = [];
+    for await (const chunk of source) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : (chunk as Buffer));
+    }
+    this._blobs.set(path, Buffer.concat(chunks));
+    this._mtimes.set(path, Date.now());
+  }
+
+  /** ADR-115: перенос записи; отсутствующий источник — ошибка (`ENOENT`). */
+  async move(from: string, to: string): Promise<void> {
+    this._validate(from);
+    this._validate(to);
+    const buf = this._blobs.get(from);
+    if (!buf) {
+      const err = new Error(`blob не найден: ${from}`) as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    }
+    this._blobs.set(to, buf);
+    this._mtimes.set(to, this._mtimes.get(from) ?? Date.now());
+    this._blobs.delete(from);
+    this._mtimes.delete(from);
+  }
+
   async append(path: string, data: Buffer | string): Promise<void> {
     this._validate(path);
     const chunk = typeof data === 'string' ? Buffer.from(data, 'utf-8') : Buffer.from(data);

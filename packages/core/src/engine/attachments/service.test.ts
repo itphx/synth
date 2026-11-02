@@ -6,16 +6,25 @@
  * Байты синтетические: PNG/JPEG собираются вручную (с текстовым чанком/EXIF-
  * сегментом), поэтому тест проверяет именно сохранение оригинала.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
+import { defaultConfig } from '@itphx/synth-shared';
 import type { AttachmentsConfig } from '@itphx/synth-shared';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
 import { MetricsRegistry } from '../../metrics/registry.js';
 import { createAttachmentMetrics } from '../../metrics/collectors/attachments.js';
-import { AttachmentError, AttachmentService, isAttachmentPath, partTypeOf } from './service.js';
+import {
+  ATTACHMENT_DIR,
+  ATTACHMENT_UPLOAD_DIR,
+  AttachmentError,
+  AttachmentService,
+  isAttachmentPath,
+  partTypeOf,
+} from './service.js';
 import { sniffMime } from './sniff-mime.js';
 import { stripMetadata } from './strip-metadata.js';
 
@@ -30,6 +39,10 @@ function testConfig(overrides: Partial<AttachmentsConfig> = {}): AttachmentsConf
     allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
     workspaceFallback: true,
     gcDays: 30,
+    // ADR-115: сжатие/миниатюры/chunked-загрузка — дефолты схемы.
+    compression: defaultConfig.attachments.compression,
+    thumbnail: defaultConfig.attachments.thumbnail,
+    maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
     ...overrides,
   };
 }
@@ -76,6 +89,15 @@ function jpegWithExif(): Buffer {
 /** Минимальный PDF (сигнатура `%PDF-`). */
 function pdfBytes(): Buffer {
   return Buffer.from('%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n', 'latin1');
+}
+
+/** Нарезать буфер на чанки — для потоковой загрузки. */
+function chunked(bytes: Buffer, size: number): Buffer[] {
+  const chunks: Buffer[] = [];
+  for (let offset = 0; offset < bytes.length; offset += size) {
+    chunks.push(bytes.subarray(offset, offset + size));
+  }
+  return chunks;
 }
 
 describe('AttachmentService (ADR-115)', () => {
@@ -237,6 +259,134 @@ describe('AttachmentService (ADR-115)', () => {
       const meta = await service.upload({ sessionId: 's1', bytes });
       expect(await blobs.read(meta.blobPath)).toEqual(bytes);
       expect(meta.mime).toBe('application/pdf');
+    });
+  });
+
+  describe('ingestStream', () => {
+    /** Поток из байтов, нарезанных на чанки (проверка инкрементальности). */
+    const streamOf = (bytes: Buffer, chunkSize = 8): Readable =>
+      Readable.from(chunked(bytes, chunkSize));
+
+    it('поток → объект: sha256, sidecar, MIME по сигнатуре, оригинал сохраняется', async () => {
+      const bytes = pngWithText();
+      const meta = await service.ingestStream({
+        stream: streamOf(bytes),
+        name: 'видео.png',
+        // Заявленный тип неверен — MIME всё равно по сигнатуре.
+        declaredMime: 'application/octet-stream',
+      });
+
+      expect(meta.mime).toBe('image/png');
+      expect(meta.size).toBe(bytes.length);
+      expect(meta.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+      expect(meta.blobPath).toBe(
+        `${ATTACHMENT_DIR}/${meta.sha256.slice(0, 2)}/${meta.sha256}`,
+      );
+      expect(await blobs.read(meta.blobPath)).toEqual(bytes);
+
+      const sidecar = JSON.parse((await blobs.read(`${meta.blobPath}.json`))!.toString('utf-8'));
+      expect(sidecar).toMatchObject({
+        mime: 'image/png',
+        size: bytes.length,
+        sha256: meta.sha256,
+        name: 'видео.png',
+      });
+      // Временных объектов не осталось.
+      expect(await blobs.list(ATTACHMENT_UPLOAD_DIR)).toEqual([]);
+    });
+
+    it('MIME берётся из первых ~4 КиБ, остальные байты идут в объект', async () => {
+      const magic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const bytes = Buffer.concat([magic, Buffer.alloc(10_000, 7)]);
+      const meta = await service.ingestStream({ stream: streamOf(bytes, 1024) });
+
+      expect(meta.mime).toBe('image/png');
+      expect(meta.size).toBe(bytes.length);
+      expect(await blobs.read(meta.blobPath)).toEqual(bytes);
+    });
+
+    it('дедуп: объект уже есть — временный удаляется, sidecar восстанавливается', async () => {
+      const bytes = pngWithText();
+      const first = await service.upload({ bytes, name: 'orig.png' });
+      await blobs.delete(`${first.blobPath}.json`);
+
+      const second = await service.ingestStream({ stream: streamOf(bytes), name: 'копия.png' });
+
+      expect(second.blobPath).toBe(first.blobPath);
+      expect(await blobs.list(ATTACHMENT_UPLOAD_DIR)).toEqual([]);
+      const sidecar = JSON.parse((await blobs.read(`${first.blobPath}.json`))!.toString('utf-8'));
+      expect(sidecar).toMatchObject({ sha256: first.sha256, name: 'копия.png' });
+      // Один объект + sidecar, дублей нет.
+      expect((await blobs.list(ATTACHMENT_DIR)).filter((e) => !e.path.endsWith('.json'))).toHaveLength(1);
+    });
+
+    it('лимит: превышение по ходу обрывает поток и удаляет временный объект', async () => {
+      const local = new AttachmentService({ blobs, config: testConfig({ maxBytesPerFile: 64 }) });
+      const bytes = Buffer.concat([Buffer.from('GIF89a', 'latin1'), Buffer.alloc(256, 1)]);
+      const source = streamOf(bytes, 16);
+
+      await expect(local.ingestStream({ stream: source })).rejects.toMatchObject({
+        code: 'too_large',
+      });
+      expect(source.destroyed).toBe(true);
+      expect(await blobs.list(ATTACHMENT_DIR)).toEqual([]);
+    });
+
+    it('sizeHint больше предела → too_large без чтения потока', async () => {
+      const local = new AttachmentService({ blobs, config: testConfig({ maxBytesPerFile: 64 }) });
+      const source = streamOf(pngWithText());
+      await expect(
+        local.ingestStream({ stream: source, sizeHint: 1024 }),
+      ).rejects.toMatchObject({ code: 'too_large' });
+      expect(source.destroyed).toBe(true);
+      expect(await blobs.list(ATTACHMENT_DIR)).toEqual([]);
+    });
+
+    it('пустой поток → empty (HTTP: 400 «файл не передан»), объект не создан', async () => {
+      await expect(
+        service.ingestStream({ stream: Readable.from([]), declaredMime: 'image/png' }),
+      ).rejects.toMatchObject({ code: 'empty' });
+      expect(await blobs.list(ATTACHMENT_DIR)).toEqual([]);
+    });
+
+    it('SVG отклоняется по сигнатуре, временный объект не остаётся', async () => {
+      const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>');
+      await expect(
+        service.ingestStream({ stream: streamOf(svg, 4), name: 'x.svg', declaredMime: 'image/png' }),
+      ).rejects.toMatchObject({ code: 'unsupported_mime' });
+      expect(await blobs.list(ATTACHMENT_DIR)).toEqual([]);
+    });
+
+    it('обрыв потока → ошибка источника, объект и temp не остаются', async () => {
+      const source = Readable.from(
+        (async function* () {
+          yield pngWithText().subarray(0, 16);
+          throw new Error('client aborted');
+        })(),
+      );
+      await expect(service.ingestStream({ stream: source })).rejects.toThrow('client aborted');
+      expect(await blobs.list(ATTACHMENT_DIR)).toEqual([]);
+    });
+
+    it('вызывает миниатюру асинхронно (blobPath + mime), ответ не ждёт', async () => {
+      const ensure = vi.fn().mockResolvedValue({ status: 'none' });
+      const local = new AttachmentService({
+        blobs,
+        config: testConfig(),
+        thumbnails: { ensure, get: vi.fn().mockResolvedValue(null) },
+      });
+
+      const meta = await local.ingestStream({ stream: streamOf(pngWithText()) });
+      await vi.waitFor(() =>
+        expect(ensure).toHaveBeenCalledWith({ blobPath: meta.blobPath, mime: 'image/png' }),
+      );
+    });
+
+    it('мастер-выключатель enabled=false → attachments_disabled', async () => {
+      const local = new AttachmentService({ blobs, config: testConfig({ enabled: false }) });
+      await expect(
+        local.ingestStream({ stream: streamOf(pngWithText()) }),
+      ).rejects.toMatchObject({ code: 'attachments_disabled' });
     });
   });
 
@@ -415,5 +565,30 @@ describe('AttachmentService: метрики загрузки (ADR-094)', () => {
     const service = new AttachmentService({ blobs, config: testConfig() });
     const meta = await service.upload({ sessionId: 's1', bytes: pngWithText() });
     expect(meta.mime).toBe('image/png');
+  });
+
+  it('ingestStream: исходы ok / too_large / unsupported', async () => {
+    const service = new AttachmentService({
+      blobs,
+      config: testConfig({ maxBytesPerFile: 64 }),
+      metrics: createAttachmentMetrics(registry),
+    });
+
+    await expect(
+      service.ingestStream({ stream: Readable.from([pngWithText()]), declaredMime: 'image/png' }),
+    ).rejects.toMatchObject({ code: 'too_large' });
+
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    await expect(
+      service.ingestStream({ stream: Readable.from([svg]), declaredMime: 'image/png' }),
+    ).rejects.toMatchObject({ code: 'unsupported_mime' });
+
+    const small = Buffer.from('GIF89a', 'latin1');
+    await service.ingestStream({ stream: Readable.from([small]) });
+
+    const text = registry.render().text;
+    expect(text).toContain('synth_attachment_uploads_total{outcome="too_large",kind="image"} 1');
+    expect(text).toContain('synth_attachment_uploads_total{outcome="unsupported",kind="image"} 1');
+    expect(text).toContain('synth_attachment_uploads_total{outcome="ok",kind="image"} 1');
   });
 });

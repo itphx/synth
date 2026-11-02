@@ -78,7 +78,10 @@ function llmMessage(overrides: Partial<LLMMessage> = {}): LLMMessage {
   };
 }
 
-function makeDeps(blobs: Record<string, Buffer>): HydrateDeps & { reads: string[] } {
+function makeDeps(
+  blobs: Record<string, Buffer>,
+  extras: Record<string, { width?: number; height?: number; durationMs?: number }> = {},
+): HydrateDeps & { reads: string[] } {
   const reads: string[] = [];
   return {
     reads,
@@ -96,7 +99,13 @@ function makeDeps(blobs: Record<string, Buffer>): HydrateDeps & { reads: string[
               : blobPath.endsWith('.wav')
                 ? 'audio/wav'
                 : 'image/png';
-      return { mime, size: bytes.length, sha256: 'a'.repeat(64), name: blobPath.split('/').pop() };
+      return {
+        mime,
+        size: bytes.length,
+        sha256: 'a'.repeat(64),
+        name: blobPath.split('/').pop(),
+        ...(extras[blobPath] ?? {}),
+      };
     },
     read: async (blobPath) => {
       reads.push(blobPath);
@@ -1120,5 +1129,312 @@ describe('hydrateMessageAttachments: только реплики пользов�
     expect(result[1]!.content).toBe('вопрос');
     expect(result[2]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
     expect(result[2]!.debug?.attachmentsDropped).toBeUndefined();
+  });
+});
+
+describe('hydrateMessageAttachments: сжатие на отправке (ADR-115)', () => {
+  const COMPRESSED = Buffer.from('compressed-jpeg-bytes');
+
+  function imageSource(): Message[] {
+    return [
+      sourceMessage({
+        parts: [mediaPart('image', { blobPath: 'attachments/aa/image', name: 'plan.png' })],
+      }),
+    ];
+  }
+
+  it('сжатый объект подставляется вместо оригинала (mime/name/size от него)', async () => {
+    const deps = makeDeps({
+      'attachments/aa/image': PNG_BYTES,
+      'attachments/.derived/compress/key.jpg': COMPRESSED,
+    }, { 'attachments/aa/image': { width: 3000, height: 2000 } });
+    const compress = vi.fn(async () => ({
+      blobPath: 'attachments/.derived/compress/key.jpg',
+      mime: 'image/jpeg',
+      size: COMPRESSED.length,
+      name: 'plan.jpg',
+    }));
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: ['image'],
+      compress,
+    });
+
+    expect(compress).toHaveBeenCalledWith({
+      blobPath: 'attachments/aa/image',
+      mime: 'image/png',
+      family: 'image',
+      size: PNG_BYTES.length,
+      width: 3000,
+      height: 2000,
+    });
+    expect(deps.reads).toEqual(['attachments/.derived/compress/key.jpg']);
+    expect(result[0]!.attachments).toEqual([
+      { mime: 'image/jpeg', name: 'plan.jpg', base64: COMPRESSED.toString('base64') },
+    ]);
+  });
+
+  it('compress вернул null → отправляем оригинал', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const compress = vi.fn(async () => null);
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: ['image'],
+      compress,
+    });
+
+    expect(compress).toHaveBeenCalledTimes(1);
+    expect(deps.reads).toEqual(['attachments/aa/image']);
+    expect(result[0]!.attachments?.[0]).toEqual({
+      mime: 'image/png',
+      name: 'image',
+      base64: PNG_BYTES.toString('base64'),
+    });
+  });
+
+  it('ошибка compress → оригинал, предупреждение в лог', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const logs: string[] = [];
+
+    const result = await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: ['image'],
+      compress: async () => {
+        throw new Error('ffmpeg down');
+      },
+      log: (message) => logs.push(message),
+    });
+
+    expect(deps.reads).toEqual(['attachments/aa/image']);
+    expect(result[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(logs.some((line) => line.includes('ffmpeg down'))).toBe(true);
+  });
+
+  it('pdf сжатию не предлагается', async () => {
+    const deps = makeDeps({ 'attachments/aa/doc.pdf': PDF_BYTES });
+    const compress = vi.fn(async () => null);
+    const source = [
+      sourceMessage({
+        parts: [mediaPart('file', { blobPath: 'attachments/aa/doc.pdf', mime: 'application/pdf' })],
+      }),
+    ];
+
+    await hydrateMessageAttachments([llmMessage()], source, deps, {
+      modalities: ['pdf'],
+      compress,
+    });
+
+    expect(compress).not.toHaveBeenCalled();
+  });
+
+  it('assistant-сообщения не гидрируются и не сжимаются', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const compress = vi.fn(async () => null);
+    const source = [
+      sourceMessage({
+        id: 'a1',
+        role: MessageRole.ASSISTANT,
+        parts: [mediaPart('image', { blobPath: 'attachments/aa/image' })],
+      }),
+    ];
+
+    await hydrateMessageAttachments([llmMessage({ role: 'assistant' })], source, deps, {
+      modalities: ['image'],
+      compress,
+    });
+
+    expect(compress).not.toHaveBeenCalled();
+    expect(deps.reads).toEqual([]);
+  });
+
+  it('aux-derive (модальность не принята) сжатие не вызывает', async () => {
+    const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
+    const compress = vi.fn(async () => null);
+    const derive = vi.fn(async () => 'описание');
+
+    await hydrateMessageAttachments([llmMessage()], imageSource(), deps, {
+      modalities: ['text'],
+      derive,
+      compress,
+    });
+
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(compress).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ADR-115: бюджет base64 считается по метаданным (фаза B) до чтения байтов
+ * (фаза C). Читаются только выбранные вложения; порядок выдачи —
+ * хронологический, а отбор идёт от самых новых к старым.
+ */
+describe('hydrateMessageAttachments: бюджет base64 без чтения всей истории', () => {
+  /** Оценка base64 по размеру: `ceil(size/3)*4` (как в гидратации). */
+  function estimate(size: number): number {
+    return Math.ceil(size / 3) * 4;
+  }
+
+  it('бюджет вмещает только самое новое — старые limit, read один раз', async () => {
+    const deps = makeDeps({
+      'attachments/aa/old1': PNG_BYTES,
+      'attachments/aa/old2': PNG_BYTES,
+      'attachments/aa/new': PNG_BYTES,
+    });
+    const source = [
+      sourceMessage({ id: 'old1', parts: [mediaPart('image', { blobPath: 'attachments/aa/old1' })] }),
+      sourceMessage({ id: 'old2', parts: [mediaPart('image', { blobPath: 'attachments/aa/old2' })] }),
+      sourceMessage({ id: 'new', parts: [mediaPart('image', { blobPath: 'attachments/aa/new' })] }),
+    ];
+
+    const result = await hydrateMessageAttachments(
+      [llmMessage({ id: 'm-old1' }), llmMessage({ id: 'm-old2' }), llmMessage({ id: 'm-new' })],
+      source,
+      deps,
+      { modalities: ['image'], maxTotalBase64Bytes: estimate(PNG_BYTES.length) },
+    );
+
+    // Читается только выбранное вложение — остальные отсечены по метаданным.
+    expect(deps.reads).toEqual(['attachments/aa/new']);
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[1]!.attachments).toBeUndefined();
+    expect(result[2]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(result[0]!.debug?.attachmentsDropped).toEqual([
+      { mime: 'image/png', name: 'old1', sizeBytes: PNG_BYTES.length, reason: 'limit' },
+    ]);
+    expect(result[1]!.debug?.attachmentsDropped).toEqual([
+      { mime: 'image/png', name: 'old2', sizeBytes: PNG_BYTES.length, reason: 'limit' },
+    ]);
+    expect(result[2]!.debug?.attachmentsDropped).toBeUndefined();
+  });
+
+  it('огромное старое + маленькое новое: новое доставлено, старое limit', async () => {
+    const huge = Buffer.alloc(3000, 1);
+    const tiny = Buffer.from('tiny');
+    const deps = makeDeps({
+      'attachments/aa/huge': huge,
+      'attachments/aa/tiny': tiny,
+    });
+    const source = [
+      sourceMessage({ id: 'huge', parts: [mediaPart('image', { blobPath: 'attachments/aa/huge' })] }),
+      sourceMessage({ id: 'tiny', parts: [mediaPart('image', { blobPath: 'attachments/aa/tiny' })] }),
+    ];
+
+    const result = await hydrateMessageAttachments(
+      [llmMessage({ id: 'm-huge' }), llmMessage({ id: 'm-tiny' })],
+      source,
+      deps,
+      { modalities: ['image'], maxTotalBase64Bytes: 100 },
+    );
+
+    expect(deps.reads).toEqual(['attachments/aa/tiny']);
+    expect(result[0]!.attachments).toBeUndefined();
+    expect(result[0]!.debug?.attachmentsDropped).toEqual([
+      { mime: 'image/png', name: 'huge', sizeBytes: huge.length, reason: 'limit' },
+    ]);
+    expect(result[1]!.attachments?.[0]?.base64).toBe(tiny.toString('base64'));
+  });
+
+  it('сжатая копия меньше оригинала: в бюджет идёт её размер, а не исходный', async () => {
+    const original = Buffer.alloc(5000, 2); // оценка base64 ≈ 6668 — в бюджет не влезла бы
+    const compressed = Buffer.from('small');
+    const compressedPath = 'attachments/.derived/compress/key.mp4';
+    const deps = makeDeps({
+      'attachments/aa/clip.mp4': original,
+      [compressedPath]: compressed,
+    });
+    const source = [
+      sourceMessage({
+        parts: [
+          mediaPart('video', { blobPath: 'attachments/aa/clip.mp4', mime: 'video/mp4', name: 'clip.mp4' }),
+        ],
+      }),
+    ];
+    const compress = vi.fn(async () => ({
+      blobPath: compressedPath,
+      mime: 'video/mp4',
+      size: compressed.length,
+      name: 'clip.mp4',
+    }));
+
+    const result = await hydrateMessageAttachments([llmMessage()], source, deps, {
+      modalities: ['video'],
+      compress,
+      maxTotalBase64Bytes: estimate(compressed.length),
+    });
+
+    expect(compress).toHaveBeenCalledTimes(1);
+    expect(deps.reads).toEqual([compressedPath]);
+    expect(result[0]!.debug?.attachmentsDropped).toBeUndefined();
+    expect(result[0]!.attachments?.[0]).toEqual({
+      mime: 'video/mp4',
+      name: 'clip.mp4',
+      base64: compressed.toString('base64'),
+    });
+  });
+
+  it('граница ровно в бюджет: вложение проходит (<=), на байт меньше — limit', async () => {
+    const deps = makeDeps({
+      'attachments/aa/old': PNG_BYTES,
+      'attachments/aa/new': PNG_BYTES,
+    });
+    const source = [
+      sourceMessage({ id: 'old', parts: [mediaPart('image', { blobPath: 'attachments/aa/old' })] }),
+      sourceMessage({ id: 'new', parts: [mediaPart('image', { blobPath: 'attachments/aa/new' })] }),
+    ];
+    const one = estimate(PNG_BYTES.length);
+
+    const exact = await hydrateMessageAttachments(
+      [llmMessage({ id: 'm-old' }), llmMessage({ id: 'm-new' })],
+      source,
+      deps,
+      { modalities: ['image'], maxTotalBase64Bytes: one * 2 },
+    );
+    expect(exact[0]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(exact[1]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(exact[0]!.debug?.attachmentsDropped).toBeUndefined();
+
+    const depsTight = makeDeps({
+      'attachments/aa/old': PNG_BYTES,
+      'attachments/aa/new': PNG_BYTES,
+    });
+    const tight = await hydrateMessageAttachments(
+      [llmMessage({ id: 'm-old' }), llmMessage({ id: 'm-new' })],
+      source,
+      depsTight,
+      { modalities: ['image'], maxTotalBase64Bytes: one * 2 - 1 },
+    );
+    expect(tight[0]!.attachments).toBeUndefined();
+    expect(tight[0]!.debug?.attachmentsDropped).toMatchObject([{ reason: 'limit' }]);
+    expect(tight[1]!.attachments?.[0]?.base64).toBe(PNG_BYTES.toString('base64'));
+    expect(depsTight.reads).toEqual(['attachments/aa/new']);
+  });
+
+  it('порядок частей сохраняется при отборе от новых к старым', async () => {
+    const first = Buffer.from('first-bytes');
+    const second = Buffer.from('second-bytes!!');
+    const third = Buffer.from('third');
+    const deps = makeDeps({
+      'attachments/aa/first': first,
+      'attachments/aa/second': second,
+      'attachments/aa/third': third,
+    });
+    // Два вложения в одном сообщении: сохраняется порядок частей, а не порядок отбора.
+    const source = [
+      sourceMessage({
+        parts: [
+          mediaPart('image', { blobPath: 'attachments/aa/first', name: 'first.png' }),
+          mediaPart('image', { blobPath: 'attachments/aa/second', name: 'second.png' }),
+        ],
+      }),
+      sourceMessage({ parts: [mediaPart('image', { blobPath: 'attachments/aa/third', name: 'third.png' })] }),
+    ];
+
+    const result = await hydrateMessageAttachments([llmMessage(), llmMessage()], source, deps, {
+      modalities: ['image'],
+      maxTotalBase64Bytes: estimate(first.length) + estimate(second.length) + estimate(third.length),
+    });
+
+    expect(result[0]!.attachments?.map((a) => a.name)).toEqual(['first', 'second']);
+    expect(result[1]!.attachments?.map((a) => a.name)).toEqual(['third']);
+    expect(deps.reads).toEqual(['attachments/aa/first', 'attachments/aa/second', 'attachments/aa/third']);
   });
 });

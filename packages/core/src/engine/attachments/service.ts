@@ -17,9 +17,9 @@
  * Байты — только через порт `BlobStore` (ADR-096/ADR-116): прямой ФС нет.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import type { AttachmentsConfig, MediaPartData, MediaPartType } from '@itphx/synth-shared';
 import {
   getAttachmentMetricsHook,
@@ -33,9 +33,33 @@ import { looksLikeSvg, normalizeMime, sniffMime } from './sniff-mime.js';
 export const ATTACHMENT_DIR = 'attachments';
 /** Суффикс sidecar-файла с метаданными объекта. */
 export const ATTACHMENT_SIDECAR_SUFFIX = '.json';
+/**
+ * Временные объекты потоковой загрузки: пока считаются sha256 и MIME, байты
+ * лежат здесь, затем переносятся в content-addressed путь (`ATTACHMENT_DIR`).
+ *
+ * Имена — случайные (`uuid`), в сообщениях такие пути не встречаются: контур
+ * раздачи адресует только `attachments/<sha2>/<sha256>`. Забытый временный
+ * объект (`обрыв клиента`) не имеет ссылок и уходит в GC как сирота.
+ */
+export const ATTACHMENT_UPLOAD_DIR = `${ATTACHMENT_DIR}/.uploads`;
 
-/** Код ошибки загрузки — маппится в HTTP на границе (`413`/`415`). */
-export type AttachmentErrorCode = 'too_large' | 'unsupported_mime' | 'attachments_disabled';
+/**
+ * Сколько байт начала потока достаточно для определения MIME
+ * (`sniffMime`/`looksLikeSvg` смотрят только префикс, SVG — первые 4 КиБ).
+ */
+const MIME_HEAD_BYTES = 4096;
+
+/** Код ошибки загрузки — маппится в HTTP на границе (`413`/`415`/`400`). */
+export type AttachmentErrorCode =
+  | 'too_large'
+  | 'unsupported_mime'
+  | 'attachments_disabled'
+  /**
+   * Пустое тело/поток (`ingestStream`): файла нет — HTTP-ответ `400
+   * VALIDATION_ERROR` (как «файл не передан» в multipart-ветке). У `upload`
+   * пустой буфер остаётся `unsupported_mime` (поведение не меняем).
+   */
+  | 'empty';
 
 /** Отказ загрузки вложения (лимит размера / недопустимый тип). */
 export class AttachmentError extends Error {
@@ -66,6 +90,11 @@ export interface ResolvedAttachment {
   size: number;
   sha256: string;
   name?: string;
+  /** Ширина/высота кадра — из sidecar (ADR-115, нужно сжатию на отправке). */
+  width?: number;
+  height?: number;
+  /** Длительность медиа (мс) — из sidecar. */
+  durationMs?: number;
   stat: { size: number; mtimeMs: number };
 }
 
@@ -84,6 +113,42 @@ interface AttachmentSidecar {
   width?: number;
   height?: number;
   durationMs?: number;
+  /** ADR-115: метаданные серверной миниатюры (пишет `ThumbnailService`). */
+  thumb?: AttachmentThumbnailMeta;
+}
+
+/** Метаданные серверной миниатюры вложения (ADR-115). */
+export interface AttachmentThumbnailMeta {
+  /** `ready` — файл миниатюры есть, `none` — превью не делается. */
+  status: 'ready' | 'none';
+  width?: number;
+  height?: number;
+}
+
+/** Готовая миниатюра для HTTP-раздачи. */
+export interface AttachmentThumbnailView {
+  stream: Readable;
+  mime: string;
+  size: number;
+  /**
+   * Ширина кадра, px (из настроек `attachments.thumbnail.maxWidthPx`, с которой
+   * найдена миниатюра). Нужна для ETag: при смене ширины отдаётся другой кадр,
+   * и клиентский кэш должен это увидеть (`"thumb-<sha256>-<width>"`).
+   */
+  width: number;
+}
+
+/**
+ * Провайдер миниатюр (реализация — `ThumbnailService`). Сервис только
+ * делегирует: генерация идёт вне загрузки, ошибки провайдера не ломают ответ.
+ */
+export interface AttachmentThumbnailProvider {
+  ensure(input: {
+    blobPath: string;
+    mime: string;
+    durationMs?: number;
+  }): Promise<AttachmentThumbnailMeta>;
+  get(blobPath: string): Promise<AttachmentThumbnailView | null>;
 }
 
 export interface AttachmentServiceDeps {
@@ -99,6 +164,12 @@ export interface AttachmentServiceDeps {
   /** Лог предупреждений (по умолчанию `console.warn`). */
   log?: (message: string) => void;
   /**
+   * ADR-115: провайдер серверных миниатюр. Задан — после записи объекта
+   * миниатюра генерируется **асинхронно** (`void …catch(log)`), ответ 201 не
+   * задерживается; ошибка/нет `ffmpeg` → `none`, загрузка не падает.
+   */
+  thumbnails?: AttachmentThumbnailProvider;
+  /**
    * ADR-094: метрики вложений (`synth_attachment_*`). Не задан — берётся
    * модульный sink (`getAttachmentMetricsHook`), который ставит контейнер
    * зависимостей при `metrics.enabled=true`; выключенные метрики — no-op.
@@ -111,12 +182,14 @@ export class AttachmentService {
   private readonly _configSource: AttachmentsConfig | (() => AttachmentsConfig);
   private readonly _log: (message: string) => void;
   private readonly _metrics?: AttachmentMetricsHooks;
+  private readonly _thumbnails?: AttachmentThumbnailProvider;
 
   constructor(deps: AttachmentServiceDeps) {
     this._blobs = deps.blobs;
     this._configSource = deps.config;
     this._log = deps.log ?? ((message) => console.warn(message));
     this._metrics = deps.metrics;
+    this._thumbnails = deps.thumbnails;
   }
 
   /**
@@ -136,6 +209,17 @@ export class AttachmentService {
    */
   get config(): AttachmentsConfig {
     return this._config;
+  }
+
+  /**
+   * Blob-порт, с которым работает сервис.
+   *
+   * Нужен chunked-загрузке (`engine/attachments/uploads.ts`): временный объект
+   * собирается дописыванием частей, а сам сервис остаётся единственной точкой
+   * публикации (MIME по сигнатуре, лимиты, дедуп, sidecar).
+   */
+  get blobs(): BlobStore {
+    return this._blobs;
   }
 
   /** Метрики вложений: явные из опций приоритетнее модульного sink'а. */
@@ -196,29 +280,307 @@ export class AttachmentService {
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const blobPath = `${ATTACHMENT_DIR}/${sha256.slice(0, 2)}/${sha256}`;
     const name = sanitizeFileName(input.name);
-    const sidecar: AttachmentSidecar = {
+
+    return this._finalize({
+      blobPath,
+      sha256,
       mime,
       size: bytes.length,
+      ...(name ? { name } : {}),
+      publish: () => this._blobs.write(blobPath, bytes),
+    });
+  }
+
+  /**
+   * ADR-115: загрузка вложения **потоком** (`POST …/attachments` raw-body).
+   *
+   * Крупное тело (видео) не буферизуется: байты идут во временный объект
+   * (`attachments/.uploads/<uuid>`), инкрементально считаются sha256 и лимит,
+   * первые ~4 КиБ дают MIME по сигнатуре. Затем объект переносится в
+   * content-addressed путь (`blobs.move`) и получает sidecar — дальше всё как у
+   * `upload` (дедуп, миниатюра, метрики).
+   *
+   * Отказ по лимиту обрывает поток (`AttachmentError('too_large')`) и удаляет
+   * временный объект; ошибка/обрыв клиента — тоже (наружу уходит исходная
+   * ошибка, ход не падает).
+   */
+  async ingestStream(input: {
+    stream: Readable;
+    name?: string;
+    declaredMime?: string;
+    /** Заявленный размер (`content-length`): ранний отказ без чтения потока. */
+    sizeHint?: number;
+  }): Promise<UploadedAttachmentMeta> {
+    // ADR-115: конфигурация читается на каждый вызов (runtime без рестарта).
+    const config = this._config;
+    const metrics = this._metricsHooks;
+    if (!config.enabled) {
+      metrics?.onUpload({ outcome: 'unsupported', kind: 'file' });
+      throw new AttachmentError('attachments_disabled', 'Вложения отключены администратором');
+    }
+    if (typeof input.sizeHint === 'number' && input.sizeHint > config.maxBytesPerFile) {
+      input.stream.destroy();
+      metrics?.onUpload({ outcome: 'too_large', kind: declaredKindHint(input.declaredMime) });
+      throw new AttachmentError(
+        'too_large',
+        `Размер вложения ${input.sizeHint} Б превышает предел ${config.maxBytesPerFile} Б`,
+      );
+    }
+
+    const tempPath = `${ATTACHMENT_UPLOAD_DIR}/${randomUUID()}`;
+    const hash = createHash('sha256');
+    let size = 0;
+    let head = Buffer.alloc(0);
+    let mime: string | undefined;
+
+    /** MIME по первым байтам + проверка модальности/allowlist (один раз). */
+    const resolveMime = (): string => {
+      const resolved = this._resolveMime(head, input.declaredMime);
+      this._assertAllowed(resolved, config);
+      return resolved;
+    };
+
+    // Байты считаются по ходу: превышение лимита рвёт поток (генератор
+    // закрывает источник), sha256 копится инкрементально, голова — для MIME
+    // (её хватает первых ~4 КиБ: `sniffMime`/`looksLikeSvg` смотрят префикс).
+    const guard = async function* (source: Readable): AsyncGenerator<Buffer> {
+      for await (const chunk of source) {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : (chunk as Buffer);
+        size += buf.length;
+        if (size > config.maxBytesPerFile) {
+          throw new AttachmentError(
+            'too_large',
+            `Размер вложения ${size} Б превышает предел ${config.maxBytesPerFile} Б`,
+          );
+        }
+        hash.update(buf);
+        if (mime === undefined && head.length < MIME_HEAD_BYTES) {
+          head = Buffer.concat([head, buf.subarray(0, MIME_HEAD_BYTES - head.length)]);
+          if (head.length >= MIME_HEAD_BYTES) mime = resolveMime();
+        }
+        yield buf;
+      }
+      // Пустой файл — как в `upload`: MIME по содержимому не определяется.
+      // Для HTTP это «файл не передан» (`400 VALIDATION_ERROR`).
+      if (size === 0) {
+        throw new AttachmentError('empty', 'Пустой файл: MIME по содержимому не определяется');
+      }
+      if (mime === undefined) mime = resolveMime();
+    };
+
+    try {
+      await this._blobs.writeStream(tempPath, Readable.from(guard(input.stream)));
+    } catch (err) {
+      await this._blobs.delete(tempPath);
+      if (err instanceof AttachmentError) {
+        metrics?.onUpload({
+          outcome: err.code === 'too_large' ? 'too_large' : 'unsupported',
+          kind: mime ? partTypeOf(mime) : uploadKindHint(head, input.declaredMime),
+        });
+      }
+      throw err;
+    }
+
+    const sha256 = hash.digest('hex');
+    const blobPath = `${ATTACHMENT_DIR}/${sha256.slice(0, 2)}/${sha256}`;
+    const name = sanitizeFileName(input.name);
+    const finalMime = mime;
+    if (!finalMime) {
+      // Защита от «тихого» принятия без MIME: поток завершён, но тип не определён.
+      await this._blobs.delete(tempPath);
+      metrics?.onUpload({ outcome: 'unsupported', kind: 'file' });
+      throw new AttachmentError('unsupported_mime', 'MIME вложения не определён');
+    }
+
+    try {
+      return await this._finalize({
+        blobPath,
+        sha256,
+        mime: finalMime,
+        size,
+        ...(name ? { name } : {}),
+        publish: () => this._blobs.move(tempPath, blobPath),
+        discard: () => this._blobs.delete(tempPath),
+      });
+    } catch (err) {
+      // Перенос не состоялся (или дедуп не потребовал его) — временный объект убираем.
+      await this._blobs.delete(tempPath);
+      throw err;
+    }
+  }
+
+  /**
+   * ADR-115 (B2a): финализация **chunked**-загрузки — временный объект уже
+   * собран частями (`UploadSessionStore`), здесь он проверяется и публикуется
+   * как обычное вложение.
+   *
+   * Отличие от `ingestStream`: источник — готовый объект blob-порта, поэтому
+   * MIME и sha256 считаются повторным потоковым проходом (память постоянна), а
+   * публикация — `blobs.move` (или удаление временного при дедупе). Временный
+   * объект удаляется при **любой** ошибке; наружу — `AttachmentError`
+   * (`empty`/`too_large`/`unsupported_mime`/`attachments_disabled`).
+   */
+  async ingestPath(
+    path: string,
+    input: { name?: string; declaredMime?: string } = {},
+  ): Promise<UploadedAttachmentMeta> {
+    const config = this._config;
+    const metrics = this._metricsHooks;
+    if (!config.enabled) {
+      metrics?.onUpload({ outcome: 'unsupported', kind: declaredKindHint(input.declaredMime) });
+      throw new AttachmentError('attachments_disabled', 'Вложения отключены администратором');
+    }
+
+    const discardTemp = async (): Promise<void> => {
+      await this._blobs.delete(path).catch(() => undefined);
+    };
+
+    const stat = await this._blobs.stat(path);
+    if (!stat || stat.size === 0) {
+      await discardTemp();
+      metrics?.onUpload({ outcome: 'unsupported', kind: declaredKindHint(input.declaredMime) });
+      throw new AttachmentError('empty', 'Пустой файл: MIME по содержимому не определяется');
+    }
+    if (stat.size > config.maxBytesPerFile) {
+      await discardTemp();
+      metrics?.onUpload({ outcome: 'too_large', kind: declaredKindHint(input.declaredMime) });
+      throw new AttachmentError(
+        'too_large',
+        `Размер вложения ${stat.size} Б превышает предел ${config.maxBytesPerFile} Б`,
+      );
+    }
+
+    const stream = await this._blobs.readStream(path);
+    if (!stream) {
+      await discardTemp();
+      metrics?.onUpload({ outcome: 'unsupported', kind: declaredKindHint(input.declaredMime) });
+      throw new AttachmentError('empty', 'Пустой файл: MIME по содержимому не определяется');
+    }
+
+    const hash = createHash('sha256');
+    let size = 0;
+    let head = Buffer.alloc(0);
+    let mime: string | undefined;
+    try {
+      for await (const chunk of stream) {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : (chunk as Buffer);
+        size += buf.length;
+        // Лимит проверяется и по `stat` (выше), и по факту: временный объект
+        // мог дорасти между вызовами.
+        if (size > config.maxBytesPerFile) {
+          throw new AttachmentError(
+            'too_large',
+            `Размер вложения ${size} Б превышает предел ${config.maxBytesPerFile} Б`,
+          );
+        }
+        hash.update(buf);
+        if (head.length < MIME_HEAD_BYTES) {
+          head = Buffer.concat([head, buf.subarray(0, MIME_HEAD_BYTES - head.length)]);
+        }
+      }
+      if (size === 0) {
+        throw new AttachmentError('empty', 'Пустой файл: MIME по содержимому не определяется');
+      }
+      mime = this._resolveMime(head, input.declaredMime);
+      this._assertAllowed(mime, config);
+    } catch (err) {
+      stream.destroy();
+      await discardTemp();
+      if (err instanceof AttachmentError) {
+        metrics?.onUpload({
+          outcome: err.code === 'too_large' ? 'too_large' : 'unsupported',
+          kind: mime ? partTypeOf(mime) : uploadKindHint(head, input.declaredMime),
+        });
+      }
+      throw err;
+    }
+
+    const sha256 = hash.digest('hex');
+    const blobPath = `${ATTACHMENT_DIR}/${sha256.slice(0, 2)}/${sha256}`;
+    const name = sanitizeFileName(input.name);
+    if (!mime) {
+      // Защита от «тихого» принятия без MIME (поток завершён, тип не определён).
+      await discardTemp();
+      metrics?.onUpload({ outcome: 'unsupported', kind: 'file' });
+      throw new AttachmentError('unsupported_mime', 'MIME вложения не определён');
+    }
+    try {
+      return await this._finalize({
+        blobPath,
+        sha256,
+        mime,
+        size,
+        ...(name ? { name } : {}),
+        publish: () => this._blobs.move(path, blobPath),
+        discard: () => this._blobs.delete(path),
+      });
+    } catch (err) {
+      // Перенос не состоялся (или дедуп не потребовал его) — временный объект убираем.
+      await discardTemp();
+      throw err;
+    }
+  }
+
+  /**
+   * Общий финал загрузки (`upload` и `ingestStream`): дедуп по content-addressed
+   * пути, sidecar, асинхронная миниатюра, метрики и метаданные ответа.
+   *
+   * `publish` вызывается **только** когда объекта ещё нет (буфер — запись,
+   * поток — перенос временного файла); `discard` — уборка временного объекта,
+   * если публикация не нужна (дедуп).
+   */
+  private async _finalize(input: {
+    blobPath: string;
+    sha256: string;
+    mime: string;
+    size: number;
+    name?: string;
+    publish: () => Promise<void>;
+    discard?: () => Promise<void>;
+  }): Promise<UploadedAttachmentMeta> {
+    const { blobPath, sha256, mime, size, name } = input;
+    const sidecar: AttachmentSidecar = {
+      mime,
+      size,
       sha256,
       ...(name ? { name } : {}),
     };
 
     const exists = await this._blobs.exists(blobPath);
     if (!exists) {
-      await this._blobs.write(blobPath, bytes);
+      await input.publish();
       await this._writeSidecar(blobPath, sidecar);
-    } else if (!(await this._blobs.exists(this._sidecarPath(blobPath)))) {
-      // Объект уже есть (дедуп), sidecar потерян/не создан — дописываем метаданные.
-      await this._writeSidecar(blobPath, sidecar);
+    } else {
+      // Объект уже есть (дедуп) — временный не нужен; sidecar дописываем, если
+      // он потерян/не создан.
+      if (input.discard) await input.discard();
+      if (!(await this._blobs.exists(this._sidecarPath(blobPath)))) {
+        await this._writeSidecar(blobPath, sidecar);
+      }
     }
 
-    metrics?.onUpload({ outcome: 'ok', kind: partTypeOf(mime), bytes: bytes.length });
+    // ADR-115: миниатюра не задерживает ответ 201. Ошибка (нет ffmpeg,
+    // сбой процесса) — `none`, загрузка уже успешна; повторный `ensure` для
+    // того же sha переиспользует готовый файл.
+    if (this._thumbnails) {
+      void this._thumbnails
+        .ensure({ blobPath, mime })
+        .catch((err: unknown) =>
+          this._log(
+            `[attachments] миниатюра не создана (${blobPath}): ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          ),
+        );
+    }
+
+    this._metricsHooks?.onUpload({ outcome: 'ok', kind: partTypeOf(mime), bytes: size });
     return {
       id: blobPath,
       blobPath,
       sha256,
       mime,
-      size: bytes.length,
+      size,
       ...(name ? { name } : {}),
     };
   }
@@ -252,6 +614,11 @@ export class AttachmentService {
       size,
       sha256,
       ...(typeof sidecar?.name === 'string' && sidecar.name ? { name: sidecar.name } : {}),
+      ...(typeof sidecar?.width === 'number' && sidecar.width > 0 ? { width: sidecar.width } : {}),
+      ...(typeof sidecar?.height === 'number' && sidecar.height > 0 ? { height: sidecar.height } : {}),
+      ...(typeof sidecar?.durationMs === 'number' && sidecar.durationMs > 0
+        ? { durationMs: sidecar.durationMs }
+        : {}),
       stat,
     };
   }
@@ -260,6 +627,42 @@ export class AttachmentService {
   async read(blobPath: string, range?: BlobReadRange): Promise<Readable | null> {
     if (!isAttachmentPath(blobPath)) return null;
     return this._blobs.readStream(blobPath, range);
+  }
+
+  /**
+   * ADR-115: готовая серверная миниатюра вложения (`?variant=thumb`).
+   * `null` — провайдер не подключён, путь не из `attachments/` или файла нет.
+   */
+  async thumbnail(blobPath: string): Promise<AttachmentThumbnailView | null> {
+    if (!this._thumbnails || !isAttachmentPath(blobPath)) return null;
+    return this._thumbnails.get(blobPath);
+  }
+
+  /**
+   * ADR-115: лениво сгенерировать миниатюру (для старых вложений, загруженных
+   * до появления миниатюр). Ошибка/отсутствие провайдера — `null` (запрос не
+   * ломается, роут отдаёт 404).
+   */
+  async ensureThumbnail(
+    blobPath: string,
+    mime: string,
+    durationMs?: number,
+  ): Promise<AttachmentThumbnailMeta | null> {
+    if (!this._thumbnails || !isAttachmentPath(blobPath)) return null;
+    try {
+      return await this._thumbnails.ensure({
+        blobPath,
+        mime,
+        ...(typeof durationMs === 'number' ? { durationMs } : {}),
+      });
+    } catch (err) {
+      this._log(
+        `[attachments] ленивая миниатюра не создана (${blobPath}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -386,6 +789,15 @@ function uploadKindHint(bytes: Buffer, declaredMime?: string): AttachmentMetricK
   if (sniffed) return partTypeOf(sniffed);
   // SVG сигнатуры не имеет, но запрещён всегда — вид всё равно `image`.
   if (looksLikeSvg(bytes)) return 'image';
+  const normalized = normalizeMime(declaredMime);
+  return normalized ? partTypeOf(normalized) : 'file';
+}
+
+/**
+ * Вид вложения по заявленному MIME — для метрик до чтения байтов (ранний отказ
+ * по `content-length`/`sizeHint`). Неизвестно → `file`.
+ */
+function declaredKindHint(declaredMime?: string): AttachmentMetricKind {
   const normalized = normalizeMime(declaredMime);
   return normalized ? partTypeOf(normalized) : 'file';
 }

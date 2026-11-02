@@ -4,6 +4,8 @@
 > HTTP-контур, провайдеры, gateway, UI, экспорт/импорт проекта); остаток — перенос вложений в гибриде,
 > персист черновиков вложений между сессиями, предобработка (ASR/OCR/видео), см. «Статус в коде».
 > **Дата:** 2026-10-27
+> **Обновлено:** 2026-11-02 — потоковая (raw-body) и chunked-загрузка, серверные миниатюры,
+> сжатие на границе отправки, медиа-раннер для split-режима; см. §«Расширение 2026-11-02».
 > **Принято из:** [PROP-085](./prop-085-multimodal-input.md) (исходная гипотеза; файл остаётся как история).
 > **Связано:** [ADR-096](./adr-096-storage-layer.md) (доменные порты и файловые реализации),
 > [ADR-116](./adr-116-instance-state-and-blob-ports.md) (blob-порты на томе, `blob_refs`, том),
@@ -614,6 +616,110 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   путём отброса.
 - Смена физического backend'а blob-хранилища — не входит (см. ADR-116: байты на томе).
 
+## Расширение 2026-11-02 — потоковая загрузка, миниатюры, сжатие, медиа в split
+
+Расширение аддитивное: контракт `Part`/`blobPath`, `blob_refs`, staging и outbound не меняются.
+Новое — транспорт загрузки, превью, подготовка байтов к отправке и запуск `ffmpeg` в split-топологии.
+
+### Загрузка потоком и chunked
+
+- **Raw-body режим** (`POST /sessions/:id/attachments`, `POST /api/v2/attachments`): multipart
+  сохранён (Telegram-шлюз, старые клиенты), но если `Content-Type` **не** `multipart/form-data`,
+  тело запроса — сам файл. Имя — `?name=` (URL-декодирован) либо `x-file-name` (percent-encoding,
+  битая последовательность — как есть), `declaredMime` — `Content-Type` без параметров (MIME всё
+  равно проверяется по сигнатуре). `413` по `content-length` **до** чтения тела, нет тела/`0` →
+  `400 VALIDATION_ERROR`, ответ — тот же **201** `{id, blobPath, sha256, mime, size, name?}`.
+- **Потоковая запись** — `AttachmentService.ingestStream`: байты идут во временный объект
+  `attachments/.uploads/<uuid>` потоком (`writeStream`), sha256 считается **инкрементально**, первые
+  4 КиБ (`MIME_HEAD_BYTES`) копятся для `sniffMime`/`looksLikeSvg`; превышение
+  `maxBytesPerFile` рвёт поток (в память целиком файл не поднимается), в финале — `move` в
+  content-addressed `attachments/<sha2>/<sha256>` и обычный путь `upload` (дедуп, sidecar, миниатюра,
+  метрики). `ingestPath` — тот же финал для готового объекта (используется chunked-протоколом).
+- **Chunked-протокол** (`…/attachments/uploads` в контуре сессии и `/api/v2/attachments/uploads` в
+  staging): `POST` инициализация `{name?, mime?, size?}` → **201** `{uploadId, maxChunkBytes}`;
+  `PUT /:uploadId?offset=N` — часть сырых байтов → **200** `{received, nextOffset}`;
+  `POST /:uploadId/complete` → **201** метаданные вложения (публикация через `ingestPath`);
+  `DELETE /:uploadId` — отмена, **204** идемпотентно. Смещение обязано совпадать с принятым объёмом
+  (`400 VALIDATION_ERROR`), часть больше `attachments.maxChunkBytes` и итог больше
+  `maxBytesPerFile` → `413 PAYLOAD_TOO_LARGE` (с `details.maxChunkBytes`/`maxBytesPerFile`),
+  `415 attachments_disabled` при выключенных вложениях, неизвестная/протухшая сессия → `404`.
+  Лимиты читаются из live-резолвера на каждый вызов.
+- **Состояние — в памяти процесса**, байты — во временном объекте blob-порта; TTL сессии — 1 час,
+  уборка **ленивая** (на `create`/`append`/`complete`), глобального таймера нет. UI переключается на
+  chunked с 16 МиБ (ниже — raw XHR с процентом), при `404`/`405` на инициализации прозрачно
+  откатывается на raw-загрузку.
+
+### Миниатюры
+
+- Производный маленький **JPEG** рядом с оригиналом: `attachments/.thumbs/<sha256>-<width>.jpg`;
+  ширина в имени — чтобы смена `attachments.thumbnail.maxWidthPx` не отдавала кадр другого размера.
+  Историческое имя `<sha256>.jpg` (без ширины) читается только при ширине по умолчанию (512).
+- Генерация — **ленивая** при `GET …?variant=thumb` (в т.ч. для вложений, загруженных до появления
+  миниатюр): нет файла — `ensure` создаёт его, `ffmpeg` берёт кадр (видео — на 1 с или 10 %
+  длительности, с повтором с начала для коротких роликов). `image`/`video` — кадр, `audio`/`file`/`pdf`
+  — `none` (без запуска `ffmpeg`). Ошибка/нет `ffmpeg`/выключено — миниатюры нет (`404`), загрузка и
+  ход не падают; уже созданные файлы при выключении продолжают отдаваться.
+- Раздача: `Content-Type: image/jpeg`, `ETag: "thumb-<sha256>-<width>"`, `Cache-Control: private,
+  max-age=86400`; в контуре сессии — `304` по `If-None-Match`; нет миниатюры/пути → `404`.
+  Метаданные (`status`/`width`/`height`) — аддитивное поле `thumb` в sidecar вложения (best-effort).
+- UI: сетка изображений, превью восстановленного черновика и `poster` видео ходят за миниатюрой
+  (`attachmentThumbnailUrl`), при `404` — **однократный** фоллбек на оригинал; видео —
+  `preload="none"`, галерея по клику показывает оригинал. Прогресс загрузки — в чипе вложения
+  (raw — XHR с процентом, chunked — агрегированный по принятым частям).
+
+### Сжатие перед отправкой
+
+- Сжатие — **только на границе отправки** (гидратация и aux-вызов): оригинал в blob не меняется,
+  `GET /attachments/:sha256`, раздача частей и `save_attachment` отдают оригинал.
+- Конфиг `attachments.compression`: мастер-выключатель + семейства `image`/`video`/`audio`
+  (`pdf` не сжимается). Дефолты: image — `maxSidePx 2048`, `quality 85`, `minBytes 1 МиБ`;
+  video — `maxHeightPx 720`, `bitrateKbps 2000`, `audioBitrateKbps 96`, `minBytes 8 МиБ`;
+  audio — `bitrateKbps 64`, `channels 1`, `sampleRateHz 16000`, `minBytes 4 МиБ`.
+- Форматы: PNG остаётся PNG (lossless scale), прочие изображения → JPEG; видео → MP4 H.264/AAC;
+  аудио → **mp3 или wav** по предикату `supportsNativeAudio` транспорта (`null` — не сжимаем).
+  Видео сжимается только на нативном пути (`supportsNativeVideo`), иначе работает aux-путь (кадры).
+- Кэш — `attachments/.derived/compress/<sha256>_<profile>.<ext>` (профиль включает все параметры
+  перекодирования); сжатая копия не меньше оригинала → отправляется оригинал; ошибка/нет `ffmpeg` →
+  `null` + лог (сжатие — оптимизация, ход не падает); предел сжатой копии — 32 МиБ.
+
+### Медиа-раннер (split-режим)
+
+- `ffmpeg` запускается **только** через `engine/media/runner.ts`: inline — локальный `spawn` во
+  временном каталоге `tmpdir()`, remote (`execution.mode=remote`) — `ExecutionPort.execute` с
+  `requires: ['ffmpeg']` во временном каталоге `{workspacesRoot}/.synth-media/<uuid>` (общий том
+  control plane и исполнителя). Раннер не бросает: сбой — типизированный результат
+  (`no_ffmpeg`/`dependency_missing`/`timeout`/`aborted`/`max_output`/`failed`), каталог удаляется в
+  `finally`.
+- Инвентарь toolchain'а исполнителя (`EXTRA_TOOLCHAIN_BINARIES`) — `python3`, `ffmpeg`; проба
+  доступности идёт через порт (`isFfmpegAvailable`), поэтому slim-образ backend без `ffmpeg`
+  деградирует штатно (миниатюры/сжатие/derive — без программы), а не падает локальным `spawn`.
+
+### Гидратация: три фазы
+
+- **A — метаданные:** решения по модальности, транспорту, `derive` и `compress` **без чтения байтов**;
+  бюджет считается по метаданным (для сжатой копии — по её размеру).
+- **B — бюджет base64:** от самых новых вложений к старым, оценка `ceil(size/3)*4`; как только
+  очередное не влезает, отбрасываются оно и все более старые с `reason: 'limit'`.
+- **C — чтение/кодирование только выбранных** (плюс `stripMetadata` на границе отправки). Так на
+  длинной медиа-истории в памяти не оказываются все вложения сразу; предел — 20 МиБ base64 на запрос.
+
+### Ограничения расширения
+
+- **Chunked — один процесс:** состояние сессий загрузки in-memory, временный объект — на томе пода;
+  multi-replica control plane протокол не обслуживает (нужен sticky/один инстанс либо перенос
+  состояния в общий стор — отдельная задача, если понадобится).
+- **Длинные видео и бюджет:** вложение целиком уходит в base64-бюджет запроса (20 МиБ); файл,
+  который не влезает, отбрасывается с `reason: 'limit'` и материализуется в workspace — модель
+  получает пометку, а не молчаливую потерю. Сжатие видео уменьшает шанс упереться в бюджет, но не
+  гарантирует доставку любого ролика.
+- **Транспорт аудио:** сжатие целится в mp3/wav по предикату провайдера; контейнер, который
+  транспорт не принимает, не сжимается (уходит в aux/отброс по общим правилам) — «любой формат в
+  любой провайдер» не обещается.
+- **Кэш и ретеншен:** `attachments/.thumbs` и `attachments/.derived` (включая `compress`) исключены
+  из GC осиротевших вложений (это производные, у них нет `blob_refs`) — автоматической уборки кэша
+  нет, он живёт до ручной очистки/удаления тома; `attachments/.uploads` подчиняется TTL сессии (1 ч),
+  а не `gcDays`.
+
 ## Статус в коде
 
 **Реализовано (2026-10-27), волна 1.1:**
@@ -732,9 +838,23 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   `_buildVideoAudioDerive` (aux-модель аудио) и `deriveVideoAudioText` — видео уходит нативно, а
   рядом в `content` появляется блок `[video-audio: <name>]`; `DerivedEntry.label` задаёт заголовок
   блока, общий шов aux-вызова вынесен в `_buildAuxDeriveDeps`.
+- **волна 2 (2026-11-02, §«Расширение 2026-11-02»):** raw-body и chunked-загрузка
+  (`openAttachmentRawUpload`, `AttachmentService.ingestStream`/`ingestPath`, `engine/attachments/uploads.ts`,
+  `registerUploadSessionRoutes` — общая фабрика для сессии и staging); серверные миниатюры
+  (`engine/attachments/thumbnails.ts`, `?variant=thumb` в `attachments.ts` и `attachments-staging.ts`,
+  sidecar-поле `thumb`); сжатие на отправке (`engine/attachments/compress.ts`, кэш
+  `attachments/.derived/compress`, проводка в `hydrate.ts`); медиа-раннер
+  (`engine/media/runner.ts`, `requires:['ffmpeg']`; инвентарь исполнителя — `python3`+`ffmpeg`);
+  гидратация тремя фазами (метаданные → бюджет base64 от новых к старым → чтение выбранных);
+  конфиг `attachments.compression`/`thumbnail`/`maxChunkBytes` (схема, резолвер, env
+  `SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES`, `GET/PUT/DELETE /settings/attachments`, UI-секции
+  «Сжатие перед отправкой»/«Миниатюры»/«Размер чанка»).
 
 **Остаток:**
 
+- chunked-загрузка — один процесс (in-memory сессии + том пода); multi-replica не обслуживается;
+- кэш миниатюр и производных (`attachments/.thumbs`, `attachments/.derived`) не чистится автоматически;
+- длинные видео могут не влезть в base64-бюджет запроса (20 МиБ) — отбрасываются с `reason:'limit'`;
 - гибрид (`remote/transfer.ts`, publish/fork) байты вложений не переносит — медиа-части на удалённой
   стороне остаются с неразрешённым `blobPath`;
 - черновики вложений живут в браузере (localStorage/IndexedDB по origin) и не переносятся между устройствами/профилями;
@@ -821,3 +941,7 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   `[ATTACHMENTS NOT DELIVERED]` получил `{model}`/`{modalities}` и подсказку про `list_models`/
   `attach_workspace_file`; расход aux-вызова — отдельная запись аналитики по осям aux-модели.
   Остаток: `transcript`, стоимость в счётчиках сессии, гибрид, кадры при неизвестной длительности.
+- 2026-11-02 — потоковая raw-body и chunked-загрузка (`maxChunkBytes`, TTL 1 ч, in-memory),
+  серверные миниатюры (`?variant=thumb`), сжатие на границе отправки (`compression`, кэш
+  `.derived/compress`), медиа-раннер для split (`engine/media/runner.ts`), гидратация тремя фазами;
+  ограничения — multi-replica chunked, длинные видео > бюджета, ретеншен кэша.

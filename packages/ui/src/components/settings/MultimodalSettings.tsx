@@ -53,6 +53,9 @@ const ATTACHMENTS_FIELDS = [
   'workspaceFallback',
   'allowedMimePrefixes',
   'modalityModels',
+  'compression',
+  'thumbnail',
+  'maxChunkBytes',
 ] as const
 
 /** Значение select строки «модель по модальности», когда назначения нет. */
@@ -141,6 +144,39 @@ export interface AttachmentsForm {
   mimePrefixes: string
   /** ADR-115: aux-модели по семействам вложений (`null` — не задана). */
   modalityModels: ModalityModelForm
+  /** ADR-115: мастер-выключатель сжатия перед отправкой модели. */
+  compressionEnabled: boolean
+  imageCompressionEnabled: boolean
+  /** Предел длинной стороны изображения, px. */
+  imageMaxSide: string
+  /** Качество JPEG/WebP, 1..100. */
+  imageQuality: string
+  /** Порог сжатия изображения, MiB. */
+  imageMinMiB: string
+  videoCompressionEnabled: boolean
+  /** Предел высоты кадра видео, px. */
+  videoMaxHeight: string
+  /** Битрейт видео, кбит/с. */
+  videoBitrateKbps: string
+  /** Битрейт звуковой дорожки видео, кбит/с. */
+  videoAudioBitrateKbps: string
+  /** Порог перекодирования видео, MiB. */
+  videoMinMiB: string
+  audioCompressionEnabled: boolean
+  /** Битрейт аудио, кбит/с. */
+  audioBitrateKbps: string
+  /** Каналы аудио, 1..2. */
+  audioChannels: string
+  /** Частота дискретизации аудио, Гц. */
+  audioSampleRate: string
+  /** Порог сжатия аудио, MiB. */
+  audioMinMiB: string
+  /** ADR-115: генерация серверных миниатюр. */
+  thumbnailEnabled: boolean
+  /** Предел ширины миниатюры, px. */
+  thumbnailMaxWidth: string
+  /** ADR-115: размер части chunked-загрузки, MiB. */
+  maxChunkMiB: string
 }
 
 /** Байты → MiB для поля ввода: до 2 знаков, без лишних нулей. */
@@ -165,6 +201,21 @@ function parseIntField(value: string): number | null {
   const parsed = Number(trimmed)
   if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) return null
   return parsed
+}
+
+/**
+ * Число из черновика: неизменённое поле берётся из сохранённых настроек
+ * (без потери точности округления MiB/строкового представления).
+ */
+function intFromDraft(draft: string, saved: string, savedValue: number): number {
+  if (draft === saved) return savedValue
+  return parseIntField(draft) ?? savedValue
+}
+
+/** Байты из MiB-черновика: неизменённое поле — точное сохранённое значение. */
+function mibFromDraft(draft: string, saved: string, savedValue: number): number {
+  if (draft === saved) return savedValue
+  return mibToBytes(draft) ?? savedValue
 }
 
 /** MIME-список из строки: пустые элементы отбрасываются. */
@@ -202,6 +253,24 @@ export function formFromAttachments(settings: AttachmentsSettings): AttachmentsF
     workspaceFallback: settings.workspaceFallback,
     mimePrefixes: formatMimePrefixes(settings.allowedMimePrefixes),
     modalityModels: modalityModelsForm(settings),
+    compressionEnabled: settings.compression.enabled,
+    imageCompressionEnabled: settings.compression.image.enabled,
+    imageMaxSide: String(settings.compression.image.maxSidePx),
+    imageQuality: String(settings.compression.image.quality),
+    imageMinMiB: bytesToMiB(settings.compression.image.minBytes),
+    videoCompressionEnabled: settings.compression.video.enabled,
+    videoMaxHeight: String(settings.compression.video.maxHeightPx),
+    videoBitrateKbps: String(settings.compression.video.bitrateKbps),
+    videoAudioBitrateKbps: String(settings.compression.video.audioBitrateKbps),
+    videoMinMiB: bytesToMiB(settings.compression.video.minBytes),
+    audioCompressionEnabled: settings.compression.audio.enabled,
+    audioBitrateKbps: String(settings.compression.audio.bitrateKbps),
+    audioChannels: String(settings.compression.audio.channels),
+    audioSampleRate: String(settings.compression.audio.sampleRateHz),
+    audioMinMiB: bytesToMiB(settings.compression.audio.minBytes),
+    thumbnailEnabled: settings.thumbnail.enabled,
+    thumbnailMaxWidth: String(settings.thumbnail.maxWidthPx),
+    maxChunkMiB: bytesToMiB(settings.maxChunkBytes),
   }
 }
 
@@ -263,6 +332,91 @@ export function buildAttachmentsBody(
     modalityModels: modalityModelsBody(draft.modalityModels),
   }
 
+  // ADR-115: сжатие и миниатюры отправляются **полными** объектами (сервер
+  // мержит вложенные патчи по полям, но полный объект не теряет значения
+  // config.yaml при первом сохранении). Неизменённые поля берутся из сохранённых
+  // настроек — иначе MiB→байты терял бы точность округления.
+  body.compression = {
+    enabled: draft.compressionEnabled,
+    image: {
+      enabled: draft.imageCompressionEnabled,
+      maxSidePx: intFromDraft(
+        draft.imageMaxSide,
+        saved.imageMaxSide,
+        savedSettings.compression.image.maxSidePx,
+      ),
+      quality: intFromDraft(
+        draft.imageQuality,
+        saved.imageQuality,
+        savedSettings.compression.image.quality,
+      ),
+      minBytes: mibFromDraft(
+        draft.imageMinMiB,
+        saved.imageMinMiB,
+        savedSettings.compression.image.minBytes,
+      ),
+    },
+    video: {
+      enabled: draft.videoCompressionEnabled,
+      maxHeightPx: intFromDraft(
+        draft.videoMaxHeight,
+        saved.videoMaxHeight,
+        savedSettings.compression.video.maxHeightPx,
+      ),
+      bitrateKbps: intFromDraft(
+        draft.videoBitrateKbps,
+        saved.videoBitrateKbps,
+        savedSettings.compression.video.bitrateKbps,
+      ),
+      audioBitrateKbps: intFromDraft(
+        draft.videoAudioBitrateKbps,
+        saved.videoAudioBitrateKbps,
+        savedSettings.compression.video.audioBitrateKbps,
+      ),
+      minBytes: mibFromDraft(
+        draft.videoMinMiB,
+        saved.videoMinMiB,
+        savedSettings.compression.video.minBytes,
+      ),
+    },
+    audio: {
+      enabled: draft.audioCompressionEnabled,
+      bitrateKbps: intFromDraft(
+        draft.audioBitrateKbps,
+        saved.audioBitrateKbps,
+        savedSettings.compression.audio.bitrateKbps,
+      ),
+      channels: intFromDraft(
+        draft.audioChannels,
+        saved.audioChannels,
+        savedSettings.compression.audio.channels,
+      ),
+      sampleRateHz: intFromDraft(
+        draft.audioSampleRate,
+        saved.audioSampleRate,
+        savedSettings.compression.audio.sampleRateHz,
+      ),
+      minBytes: mibFromDraft(
+        draft.audioMinMiB,
+        saved.audioMinMiB,
+        savedSettings.compression.audio.minBytes,
+      ),
+    },
+  }
+  body.thumbnail = {
+    enabled: draft.thumbnailEnabled,
+    maxWidthPx: intFromDraft(
+      draft.thumbnailMaxWidth,
+      saved.thumbnailMaxWidth,
+      savedSettings.thumbnail.maxWidthPx,
+    ),
+  }
+  body.maxChunkBytes = mibFromDraft(
+    draft.maxChunkMiB,
+    saved.maxChunkMiB,
+    savedSettings.maxChunkBytes,
+  )
+
   for (const field of ATTACHMENTS_FIELDS) {
     if (isEnvLockedField(envLocked, field)) delete body[field]
   }
@@ -276,9 +430,33 @@ export interface AttachmentsFormErrors {
   maxSessionMiB?: string
   gcDays?: string
   mime?: string
+  maxChunkMiB?: string
+  imageMaxSide?: string
+  imageQuality?: string
+  imageMinMiB?: string
+  videoMaxHeight?: string
+  videoBitrateKbps?: string
+  videoAudioBitrateKbps?: string
+  videoMinMiB?: string
+  audioBitrateKbps?: string
+  audioChannels?: string
+  audioSampleRate?: string
+  audioMinMiB?: string
+  thumbnailMaxWidth?: string
 }
 
-/** Валидация черновика: непустые/целые числа и отсутствие пустых MIME-элементов. */
+/** Целое в диапазоне [min, max] (диапазоны — как в схеме `attachments`). */
+function isIntInRange(value: string, min: number, max: number): boolean {
+  const parsed = parseIntField(value)
+  return parsed !== null && parsed >= min && parsed <= max
+}
+
+/** Неотрицательное число MiB (порог сжатия: `0` — сжимать всё). */
+function isMiBAtLeastZero(value: string): boolean {
+  return mibToBytes(value) !== null
+}
+
+/** Валидация черновика: непустые/целые числа, диапазоны схемы и MIME-список. */
 export function validateAttachmentsForm(form: AttachmentsForm): AttachmentsFormErrors {
   const errors: AttachmentsFormErrors = {}
   // Сервер принимает лимиты только целыми байтами ≥ 1 (MiB → байты с округлением).
@@ -299,6 +477,48 @@ export function validateAttachmentsForm(form: AttachmentsForm): AttachmentsFormE
   }
   if (parseMimePrefixes(form.mimePrefixes).hasEmpty) {
     errors.mime = 'settings.attachments.mime.empty'
+  }
+  // ADR-115: chunked-загрузка — не меньше 1 КиБ.
+  const chunkBytes = mibToBytes(form.maxChunkMiB)
+  if (chunkBytes === null || chunkBytes < 1024) {
+    errors.maxChunkMiB = 'settings.attachments.limits.chunkInvalid'
+  }
+  // ADR-115: диапазоны сжатия/миниатюр — те же, что в Zod-схеме.
+  if (!isIntInRange(form.imageMaxSide, 64, 8192)) {
+    errors.imageMaxSide = 'settings.attachments.compression.imageSideInvalid'
+  }
+  if (!isIntInRange(form.imageQuality, 1, 100)) {
+    errors.imageQuality = 'settings.attachments.compression.imageQualityInvalid'
+  }
+  if (!isMiBAtLeastZero(form.imageMinMiB)) {
+    errors.imageMinMiB = 'settings.attachments.compression.minSizeInvalid'
+  }
+  if (!isIntInRange(form.videoMaxHeight, 144, 4320)) {
+    errors.videoMaxHeight = 'settings.attachments.compression.videoHeightInvalid'
+  }
+  if (!isIntInRange(form.videoBitrateKbps, 100, 50000)) {
+    errors.videoBitrateKbps = 'settings.attachments.compression.videoBitrateInvalid'
+  }
+  if (!isIntInRange(form.videoAudioBitrateKbps, 16, 512)) {
+    errors.videoAudioBitrateKbps = 'settings.attachments.compression.videoAudioBitrateInvalid'
+  }
+  if (!isMiBAtLeastZero(form.videoMinMiB)) {
+    errors.videoMinMiB = 'settings.attachments.compression.minSizeInvalid'
+  }
+  if (!isIntInRange(form.audioBitrateKbps, 8, 512)) {
+    errors.audioBitrateKbps = 'settings.attachments.compression.audioBitrateInvalid'
+  }
+  if (!isIntInRange(form.audioChannels, 1, 2)) {
+    errors.audioChannels = 'settings.attachments.compression.audioChannelsInvalid'
+  }
+  if (!isIntInRange(form.audioSampleRate, 8000, 48000)) {
+    errors.audioSampleRate = 'settings.attachments.compression.audioSampleRateInvalid'
+  }
+  if (!isMiBAtLeastZero(form.audioMinMiB)) {
+    errors.audioMinMiB = 'settings.attachments.compression.minSizeInvalid'
+  }
+  if (!isIntInRange(form.thumbnailMaxWidth, 64, 1024)) {
+    errors.thumbnailMaxWidth = 'settings.attachments.thumbnail.widthInvalid'
   }
   return errors
 }
@@ -698,7 +918,278 @@ export function MultimodalSettings() {
         )}
       </SettingsSection>
 
-      {/* 5. Лимиты: размер файла/сессии в MiB (в API — байты), файлов в сообщении */}
+      {/* 5. Сжатие перед отправкой провайдеру (ADR-115) */}
+      <SettingsSection
+        id="attachments-compression"
+        title={t('settings.attachments.compression.title')}
+        description={t('settings.attachments.compression.description')}
+        tooltip={t('settings.help.attachments.section.attachments-compression')}
+      >
+        {current && (
+          <>
+            <ToggleField
+              label={t('settings.attachments.compression.enabled')}
+              description={t('settings.attachments.compression.enabledHint')}
+              tooltip={t('settings.help.attachments.compression.enabled')}
+              enabled={current.compressionEnabled}
+              disabled={locked('compression')}
+              onToggle={() => draft.update({ compressionEnabled: !current.compressionEnabled })}
+              ariaLabel={t('settings.attachments.compression.enabled')}
+            />
+
+            {locked('compression') && (
+              <p
+                data-testid="attachments-compression-env-locked"
+                className="text-xs text-status-warning break-words"
+              >
+                {t('settings.attachments.envLocked')}
+              </p>
+            )}
+
+            {/* Картинки */}
+            <div className="space-y-1.5 min-w-0 border-t border-border pt-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                {t('settings.attachments.compression.image.title')}
+              </p>
+              <ToggleField
+                label={t('settings.attachments.compression.image.enabled')}
+                enabled={current.imageCompressionEnabled}
+                disabled={!current.compressionEnabled || locked('compression.image')}
+                onToggle={() =>
+                  draft.update({ imageCompressionEnabled: !current.imageCompressionEnabled })
+                }
+                ariaLabel={t('settings.attachments.compression.image.enabled')}
+              />
+              <NumberField
+                label={t('settings.attachments.compression.image.maxSide')}
+                tooltip={t('settings.help.attachments.compression.image.maxSide')}
+                min={64}
+                max={8192}
+                step={1}
+                suffix={t('settings.attachments.unitPx')}
+                value={current.imageMaxSide}
+                onChange={(e) => draft.update({ imageMaxSide: e.target.value })}
+                error={errors.imageMaxSide ? t(errors.imageMaxSide) : undefined}
+                disabled={!current.compressionEnabled || !current.imageCompressionEnabled || locked('compression.image')}
+                id="attachments-image-max-side"
+                data-testid="attachments-image-max-side"
+              />
+              <NumberField
+                label={t('settings.attachments.compression.image.quality')}
+                tooltip={t('settings.help.attachments.compression.image.quality')}
+                min={1}
+                max={100}
+                step={1}
+                value={current.imageQuality}
+                onChange={(e) => draft.update({ imageQuality: e.target.value })}
+                error={errors.imageQuality ? t(errors.imageQuality) : undefined}
+                disabled={!current.compressionEnabled || !current.imageCompressionEnabled || locked('compression.image')}
+                id="attachments-image-quality"
+                data-testid="attachments-image-quality"
+              />
+              <NumberField
+                label={t('settings.attachments.compression.image.minSize')}
+                tooltip={t('settings.help.attachments.compression.image.minSize')}
+                min={0}
+                step={0.01}
+                suffix={t('settings.attachments.unitMiB')}
+                value={current.imageMinMiB}
+                onChange={(e) => draft.update({ imageMinMiB: e.target.value })}
+                error={errors.imageMinMiB ? t(errors.imageMinMiB) : undefined}
+                disabled={!current.compressionEnabled || !current.imageCompressionEnabled || locked('compression.image')}
+                id="attachments-image-min"
+                data-testid="attachments-image-min"
+              />
+            </div>
+
+            {/* Видео */}
+            <div className="space-y-1.5 min-w-0 border-t border-border pt-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                {t('settings.attachments.compression.video.title')}
+              </p>
+              <ToggleField
+                label={t('settings.attachments.compression.video.enabled')}
+                enabled={current.videoCompressionEnabled}
+                disabled={!current.compressionEnabled || locked('compression.video')}
+                onToggle={() =>
+                  draft.update({ videoCompressionEnabled: !current.videoCompressionEnabled })
+                }
+                ariaLabel={t('settings.attachments.compression.video.enabled')}
+              />
+              <NumberField
+                label={t('settings.attachments.compression.video.maxHeight')}
+                tooltip={t('settings.help.attachments.compression.video.maxHeight')}
+                min={144}
+                max={4320}
+                step={1}
+                suffix={t('settings.attachments.unitPx')}
+                value={current.videoMaxHeight}
+                onChange={(e) => draft.update({ videoMaxHeight: e.target.value })}
+                error={errors.videoMaxHeight ? t(errors.videoMaxHeight) : undefined}
+                disabled={!current.compressionEnabled || !current.videoCompressionEnabled || locked('compression.video')}
+                id="attachments-video-max-height"
+                data-testid="attachments-video-max-height"
+              />
+              <NumberField
+                label={t('settings.attachments.compression.video.bitrate')}
+                tooltip={t('settings.help.attachments.compression.video.bitrate')}
+                min={100}
+                max={50000}
+                step={1}
+                suffix={t('settings.attachments.unitKbps')}
+                value={current.videoBitrateKbps}
+                onChange={(e) => draft.update({ videoBitrateKbps: e.target.value })}
+                error={errors.videoBitrateKbps ? t(errors.videoBitrateKbps) : undefined}
+                disabled={!current.compressionEnabled || !current.videoCompressionEnabled || locked('compression.video')}
+                id="attachments-video-bitrate"
+                data-testid="attachments-video-bitrate"
+              />
+              <NumberField
+                label={t('settings.attachments.compression.video.audioBitrate')}
+                tooltip={t('settings.help.attachments.compression.video.audioBitrate')}
+                min={16}
+                max={512}
+                step={1}
+                suffix={t('settings.attachments.unitKbps')}
+                value={current.videoAudioBitrateKbps}
+                onChange={(e) => draft.update({ videoAudioBitrateKbps: e.target.value })}
+                error={errors.videoAudioBitrateKbps ? t(errors.videoAudioBitrateKbps) : undefined}
+                disabled={!current.compressionEnabled || !current.videoCompressionEnabled || locked('compression.video')}
+                id="attachments-video-audio-bitrate"
+                data-testid="attachments-video-audio-bitrate"
+              />
+              <NumberField
+                label={t('settings.attachments.compression.video.minSize')}
+                tooltip={t('settings.help.attachments.compression.video.minSize')}
+                min={0}
+                step={0.01}
+                suffix={t('settings.attachments.unitMiB')}
+                value={current.videoMinMiB}
+                onChange={(e) => draft.update({ videoMinMiB: e.target.value })}
+                error={errors.videoMinMiB ? t(errors.videoMinMiB) : undefined}
+                disabled={!current.compressionEnabled || !current.videoCompressionEnabled || locked('compression.video')}
+                id="attachments-video-min"
+                data-testid="attachments-video-min"
+              />
+            </div>
+
+            {/* Аудио */}
+            <div className="space-y-1.5 min-w-0 border-t border-border pt-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                {t('settings.attachments.compression.audio.title')}
+              </p>
+              <ToggleField
+                label={t('settings.attachments.compression.audio.enabled')}
+                enabled={current.audioCompressionEnabled}
+                disabled={!current.compressionEnabled || locked('compression.audio')}
+                onToggle={() =>
+                  draft.update({ audioCompressionEnabled: !current.audioCompressionEnabled })
+                }
+                ariaLabel={t('settings.attachments.compression.audio.enabled')}
+              />
+              <NumberField
+                label={t('settings.attachments.compression.audio.bitrate')}
+                tooltip={t('settings.help.attachments.compression.audio.bitrate')}
+                min={8}
+                max={512}
+                step={1}
+                suffix={t('settings.attachments.unitKbps')}
+                value={current.audioBitrateKbps}
+                onChange={(e) => draft.update({ audioBitrateKbps: e.target.value })}
+                error={errors.audioBitrateKbps ? t(errors.audioBitrateKbps) : undefined}
+                disabled={!current.compressionEnabled || !current.audioCompressionEnabled || locked('compression.audio')}
+                id="attachments-audio-bitrate"
+                data-testid="attachments-audio-bitrate"
+              />
+              <NumberField
+                label={t('settings.attachments.compression.audio.channels')}
+                tooltip={t('settings.help.attachments.compression.audio.channels')}
+                min={1}
+                max={2}
+                step={1}
+                value={current.audioChannels}
+                onChange={(e) => draft.update({ audioChannels: e.target.value })}
+                error={errors.audioChannels ? t(errors.audioChannels) : undefined}
+                disabled={!current.compressionEnabled || !current.audioCompressionEnabled || locked('compression.audio')}
+                id="attachments-audio-channels"
+                data-testid="attachments-audio-channels"
+              />
+              <NumberField
+                label={t('settings.attachments.compression.audio.sampleRate')}
+                tooltip={t('settings.help.attachments.compression.audio.sampleRate')}
+                min={8000}
+                max={48000}
+                step={1}
+                suffix={t('settings.attachments.unitHz')}
+                value={current.audioSampleRate}
+                onChange={(e) => draft.update({ audioSampleRate: e.target.value })}
+                error={errors.audioSampleRate ? t(errors.audioSampleRate) : undefined}
+                disabled={!current.compressionEnabled || !current.audioCompressionEnabled || locked('compression.audio')}
+                id="attachments-audio-sample-rate"
+                data-testid="attachments-audio-sample-rate"
+              />
+              <NumberField
+                label={t('settings.attachments.compression.audio.minSize')}
+                tooltip={t('settings.help.attachments.compression.audio.minSize')}
+                min={0}
+                step={0.01}
+                suffix={t('settings.attachments.unitMiB')}
+                value={current.audioMinMiB}
+                onChange={(e) => draft.update({ audioMinMiB: e.target.value })}
+                error={errors.audioMinMiB ? t(errors.audioMinMiB) : undefined}
+                disabled={!current.compressionEnabled || !current.audioCompressionEnabled || locked('compression.audio')}
+                id="attachments-audio-min"
+                data-testid="attachments-audio-min"
+              />
+            </div>
+          </>
+        )}
+      </SettingsSection>
+
+      {/* 6. Серверные миниатюры для UI (ADR-115) */}
+      <SettingsSection
+        id="attachments-thumbnail"
+        title={t('settings.attachments.thumbnail.title')}
+        description={t('settings.attachments.thumbnail.description')}
+        tooltip={t('settings.help.attachments.section.attachments-thumbnail')}
+      >
+        {current && (
+          <>
+            <ToggleField
+              label={t('settings.attachments.thumbnail.enabled')}
+              description={t('settings.attachments.thumbnail.enabledHint')}
+              enabled={current.thumbnailEnabled}
+              disabled={locked('thumbnail')}
+              onToggle={() => draft.update({ thumbnailEnabled: !current.thumbnailEnabled })}
+              ariaLabel={t('settings.attachments.thumbnail.enabled')}
+            />
+            <NumberField
+              label={t('settings.attachments.thumbnail.maxWidth')}
+              tooltip={t('settings.help.attachments.thumbnail.maxWidth')}
+              min={64}
+              max={1024}
+              step={1}
+              suffix={t('settings.attachments.unitPx')}
+              value={current.thumbnailMaxWidth}
+              onChange={(e) => draft.update({ thumbnailMaxWidth: e.target.value })}
+              error={errors.thumbnailMaxWidth ? t(errors.thumbnailMaxWidth) : undefined}
+              disabled={!current.thumbnailEnabled || locked('thumbnail')}
+              id="attachments-thumbnail-max-width"
+              data-testid="attachments-thumbnail-max-width"
+            />
+            {locked('thumbnail') && (
+              <p
+                data-testid="attachments-thumbnail-env-locked"
+                className="text-xs text-status-warning break-words"
+              >
+                {t('settings.attachments.envLocked')}
+              </p>
+            )}
+          </>
+        )}
+      </SettingsSection>
+
+      {/* 7. Лимиты: размер файла/сессии в MiB (в API — байты), файлов в сообщении */}
       <SettingsSection
         id="attachments-limits"
         title={t('settings.attachments.limits.title')}
@@ -746,11 +1237,25 @@ export function MultimodalSettings() {
               id="attachments-max-session"
               data-testid="attachments-max-session"
             />
+            <NumberField
+              label={t('settings.attachments.limits.chunk')}
+              description={t('settings.attachments.limits.chunkHint')}
+              tooltip={t('settings.help.attachments.maxChunk')}
+              min={0}
+              step={0.01}
+              suffix={t('settings.attachments.unitMiB')}
+              value={current.maxChunkMiB}
+              onChange={(e) => draft.update({ maxChunkMiB: e.target.value })}
+              error={errors.maxChunkMiB ? t(errors.maxChunkMiB) : undefined}
+              disabled={locked('maxChunkBytes')}
+              id="attachments-max-chunk"
+              data-testid="attachments-max-chunk"
+            />
           </>
         )}
       </SettingsSection>
 
-      {/* 6. Хранение: срок жизни осиротевших вложений */}
+      {/* 8. Хранение: срок жизни осиротевших вложений */}
       <SettingsSection
         id="attachments-storage"
         title={t('settings.attachments.storage.title')}
@@ -775,7 +1280,7 @@ export function MultimodalSettings() {
         )}
       </SettingsSection>
 
-      {/* 7. Поведение: несовместимые вложения → рабочий каталог */}
+      {/* 9. Поведение: несовместимые вложения → рабочий каталог */}
       <SettingsSection
         id="attachments-behavior"
         title={t('settings.attachments.behavior.title')}
@@ -795,7 +1300,7 @@ export function MultimodalSettings() {
         )}
       </SettingsSection>
 
-      {/* 8. Белый список MIME + действия черновика */}
+      {/* 10. Белый список MIME + действия черновика */}
       <SettingsSection
         id="attachments-mime"
         title={t('settings.attachments.mime.title')}

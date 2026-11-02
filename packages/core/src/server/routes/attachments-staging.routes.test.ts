@@ -12,6 +12,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AttachmentsConfig } from '@itphx/synth-shared';
+import { defaultConfig } from '@itphx/synth-shared';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
 import { AttachmentService } from '../../engine/attachments/service.js';
 import {
@@ -38,6 +39,10 @@ function attachmentsConfig(overrides: Partial<AttachmentsConfig> = {}): Attachme
     allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
     workspaceFallback: true,
     gcDays: 30,
+    // ADR-115: сжатие/миниатюры/chunked-загрузка — дефолты схемы.
+    compression: defaultConfig.attachments.compression,
+    thumbnail: defaultConfig.attachments.thumbnail,
+    maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
     ...overrides,
   };
 }
@@ -195,7 +200,7 @@ describe('HTTP: staging-загрузка вложений (ADR-115)', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR');
   });
 
-  it('400 VALIDATION_ERROR: тело не multipart', async () => {
+  it('raw-body: тело не multipart — файл (ADR-115 этап B1)', async () => {
     const { app } = createHarness();
     const res = await app.request('/api/v2/attachments', {
       method: 'POST',
@@ -203,9 +208,11 @@ describe('HTTP: staging-загрузка вложений (ADR-115)', () => {
       body: 'нет файла',
     });
 
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe('VALIDATION_ERROR');
+    // Multipart больше не обязателен: тело запроса трактуется как сам файл.
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { mime: string; size: number };
+    expect(body.mime).toBe('text/plain');
+    expect(body.size).toBe(Buffer.byteLength('нет файла'));
   });
 
   it('401 UNAUTHORIZED: requireAuth навешан на staging-роут', async () => {
@@ -242,6 +249,129 @@ describe('HTTP: staging-загрузка вложений (ADR-115)', () => {
     const res = await upload(app, pngBytes());
 
     expect(res.status).toBe(201);
+  });
+
+  describe('POST /api/v2/attachments — raw-body (ADR-115 этап B1)', () => {
+    /** Прямая raw-загрузка: тело запроса — сам файл (не multipart). */
+    async function uploadRaw(
+      app: Hono,
+      bytes: Buffer,
+      opts: { name?: string; mime?: string | null; headers?: Record<string, string> } = {},
+    ): Promise<Response> {
+      const headers: Record<string, string> = { ...(opts.headers ?? {}) };
+      if (opts.mime !== null) headers['content-type'] = opts.mime ?? 'application/octet-stream';
+      const query = opts.name ? `?name=${encodeURIComponent(opts.name)}` : '';
+      return app.request(`/api/v2/attachments${query}`, {
+        method: 'POST',
+        headers,
+        body: new Uint8Array(bytes),
+      });
+    }
+
+    it('201: метаданные без сессии, MIME по сигнатуре', async () => {
+      const { app, blobs } = createHarness();
+      const res = await uploadRaw(app, pngBytes(), {
+        name: 'фото.png',
+        mime: 'application/octet-stream',
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as {
+        id: string; blobPath: string; sha256: string; mime: string; size: number; name?: string;
+      };
+      expect(body.id).toBe(body.blobPath);
+      expect(body.mime).toBe('image/png');
+      expect(body.name).toBe('фото.png');
+      expect(body.blobPath.startsWith('attachments/')).toBe(true);
+      expect(await blobs.exists(body.blobPath)).toBe(true);
+    });
+
+    it('201: имя из x-file-name (percent-encoding), без content-type', async () => {
+      const { app } = createHarness();
+      const res = await uploadRaw(app, pngBytes(2), {
+        mime: null,
+        headers: { 'x-file-name': encodeURIComponent('снимок.png') },
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { name?: string; mime: string };
+      expect(body.name).toBe('снимок.png');
+      expect(body.mime).toBe('image/png');
+    });
+
+    it('дедуп с multipart: одни байты — один объект', async () => {
+      const { app, blobs } = createHarness();
+      const first = (await (await upload(app, pngBytes())).json()) as { blobPath: string };
+      const second = (await (
+        await uploadRaw(app, pngBytes(), { name: 'copy.png' })
+      ).json()) as { blobPath: string };
+
+      expect(second.blobPath).toBe(first.blobPath);
+      const entries = await blobs.list('attachments');
+      expect(entries.filter((entry) => !entry.path.endsWith('.json'))).toHaveLength(1);
+    });
+
+    it('400 VALIDATION_ERROR: тело отсутствует', async () => {
+      const { app } = createHarness();
+      const res = await app.request('/api/v2/attachments', {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('400 VALIDATION_ERROR: пустой поток', async () => {
+      const { app } = createHarness();
+      const res = await uploadRaw(app, Buffer.alloc(0));
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('413: content-length больше предела (до чтения тела)', async () => {
+      const { app } = createHarness({ config: { maxBytesPerFile: 32 } });
+      const res = await uploadRaw(app, pngBytes(), { headers: { 'content-length': '1000' } });
+
+      expect(res.status).toBe(413);
+      const body = (await res.json()) as {
+        error: { code: string; details?: { maxBytesPerFile?: number } };
+      };
+      expect(body.error.code).toBe('PAYLOAD_TOO_LARGE');
+      expect(body.error.details?.maxBytesPerFile).toBe(32);
+    });
+
+    it('413: поток больше предела обрывается по ходу', async () => {
+      const { app, blobs } = createHarness({ config: { maxBytesPerFile: 32 } });
+      const res = await uploadRaw(app, Buffer.concat([pngBytes(), Buffer.alloc(64, 1)]));
+
+      expect(res.status).toBe(413);
+      expect(await blobs.list('attachments')).toEqual([]);
+    });
+
+    it('415 UNSUPPORTED_MEDIA_TYPE: SVG отклоняется по сигнатуре', async () => {
+      const { app, blobs } = createHarness();
+      const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+      const res = await uploadRaw(app, svg, { name: 'pic.svg', mime: 'image/png' });
+
+      expect(res.status).toBe(415);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+      expect(await blobs.list('attachments')).toEqual([]);
+    });
+
+    it('аудит вызывается и для raw-загрузки', async () => {
+      const seen: StagingAttachmentAuditInfo[] = [];
+      const { app } = createHarness({ audit: (info) => { seen.push(info); } });
+      const res = await uploadRaw(app, pngBytes());
+
+      expect(res.status).toBe(201);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.meta.mime).toBe('image/png');
+    });
   });
 
   describe('GET /api/v2/attachments/:sha256 — раздача по sha (outbound шлюзов)', () => {

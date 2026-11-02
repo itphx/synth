@@ -870,6 +870,87 @@ export const modalityModelsSchema = z.object({
 });
 
 /**
+ * ADR-115: сжатие изображений **на границе отправки** провайдеру.
+ *
+ * Оригинал в blob не меняется (content-addressed байты, ADR-115/ADR-116):
+ * сжатая копия готовится только для LLM-вызова (и для aux-вызова), поэтому
+ * повторная отправка того же файла не теряет качество оригинала.
+ *
+ * - `enabled` — выключатель сжатия семейства (мастер — `compression.enabled`);
+ * - `maxSidePx` — предел **длинной** стороны, px (меньше — не увеличиваем);
+ * - `quality` — качество JPEG/WebP (1..100, больше — лучше и тяжелее);
+ * - `minBytes` — файл меньше порога не сжимается (овчинка выделки не стоит).
+ */
+export const attachmentCompressionImageSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxSidePx: z.number().int().min(64).max(8192).default(2048),
+  quality: z.number().int().min(1).max(100).default(85),
+  minBytes: z.number().int().min(0).default(1024 * 1024),
+});
+
+/**
+ * ADR-115: сжатие видео на границе отправки провайдеру.
+ *
+ * - `maxHeightPx` — предел высоты кадра (ширина — пропорционально);
+ * - `bitrateKbps` — целевой битрейт видео, кбит/с;
+ * - `audioBitrateKbps` — битрейт звуковой дорожки, кбит/с;
+ * - `minBytes` — файл меньше порога не перекодируется (короткие ролики
+ *   дешевле отправить как есть).
+ */
+export const attachmentCompressionVideoSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxHeightPx: z.number().int().min(144).max(4320).default(720),
+  bitrateKbps: z.number().int().min(100).max(50000).default(2000),
+  audioBitrateKbps: z.number().int().min(16).max(512).default(96),
+  minBytes: z.number().int().min(0).default(8 * 1024 * 1024),
+});
+
+/**
+ * ADR-115: сжатие аудио на границе отправки провайдеру.
+ *
+ * `bitrateKbps`/`channels`/`sampleRateHz` — параметры перекодирования в
+ * компактный формат; `minBytes` — порог, ниже которого файл отправляется
+ * как есть.
+ */
+export const attachmentCompressionAudioSchema = z.object({
+  enabled: z.boolean().default(true),
+  bitrateKbps: z.number().int().min(8).max(512).default(64),
+  channels: z.number().int().min(1).max(2).default(1),
+  sampleRateHz: z.number().int().min(8000).max(48000).default(16000),
+  minBytes: z.number().int().min(0).default(4 * 1024 * 1024),
+});
+
+/**
+ * ADR-115: сжатие вложений по семействам (`attachments.compression`).
+ *
+ * Мастер-выключатель `enabled` + настройки семейств. Сжатие применяется
+ * **только при отправке** провайдеру; в blob и при раздаче через API —
+ * оригинал (ADR-115 §«Приватность»). `pdf` не сжимается (текстовый слой
+ * провайдеру нужен как есть).
+ */
+export const attachmentsCompressionSchema = z.object({
+  enabled: z.boolean().default(true),
+  image: attachmentCompressionImageSchema.prefault({}),
+  video: attachmentCompressionVideoSchema.prefault({}),
+  audio: attachmentCompressionAudioSchema.prefault({}),
+});
+
+/**
+ * ADR-115: серверные миниатюры вложений (`attachments.thumbnail`).
+ *
+ * Миниатюра — производный маленький кадр (JPEG) для UI: показывается до
+ * загрузки оригинала, хранится отдельно в blob (`attachments/.thumbs/`) и
+ * на оригинальные байты не влияет.
+ *
+ * - `enabled` — выключатель генерации превью;
+ * - `maxWidthPx` — предел ширины миниатюры, px (высота — пропорционально).
+ */
+export const attachmentsThumbnailSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxWidthPx: z.number().int().min(64).max(1024).default(512),
+});
+
+/**
  * ADR-115 §7: конфигурация вложений сообщений (multipart-загрузка + раздача).
  *
  * - `enabled` — мастер-выключатель вложений: `false` — загрузка и приём
@@ -891,7 +972,14 @@ export const modalityModelsSchema = z.object({
  *   указанная модель, а в диалог попадает текстовый результат. Нет записи —
  *   обработка не настроена (вложение отбрасывается с путём в workspace);
  * - `gcDays` — срок хранения осиротевших объектов (дней; `<= 0` — без
- *   ограничения).
+ *   ограничения);
+ * - `compression` — сжатие вложений **на границе отправки** провайдеру
+ *   (оригинал в blob не меняется): мастер-выключатель и параметры по
+ *   семействам `image`/`video`/`audio`;
+ * - `thumbnail` — генерация серверных миниатюр для UI (производный JPEG рядом
+ *   с оригиналом в blob);
+ * - `maxChunkBytes` — размер части при chunked-загрузке (мультичастевой
+ *   приём файла без чтения целиком в память), байт.
  */
 export const attachmentsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -909,6 +997,14 @@ export const attachmentsConfigSchema = z.object({
   workspaceFallback: z.boolean().default(true),
   modalityModels: modalityModelsSchema.optional(),
   gcDays: z.number().int().min(0).default(30),
+  compression: attachmentsCompressionSchema.prefault({}),
+  thumbnail: attachmentsThumbnailSchema.prefault({}),
+  /**
+   * Предел одной части chunked-загрузки, байт (минимум 1 КиБ). Части
+   * декодируются и складываются потоком, поэтому целый файл в память не
+   * поднимается; значение задаёт транспортный «шаг» приёма вложений.
+   */
+  maxChunkBytes: z.number().int().min(1024).default(8 * 1024 * 1024),
 });
 
 // --- Наблюдаемость: Prometheus-метрики (ADR-094) ---
@@ -1585,6 +1681,16 @@ export type AgentsConfig = z.infer<typeof agentsConfigSchema>;
 /** ADR-115: секция `attachments` (лимиты и политика вложений сообщений). */
 export type AttachmentModalitiesConfig = z.infer<typeof attachmentModalitiesSchema>;
 export type AttachmentsConfig = z.infer<typeof attachmentsConfigSchema>;
+/** ADR-115: сжатие изображений (только на границе отправки провайдеру). */
+export type AttachmentCompressionImageSettings = z.infer<typeof attachmentCompressionImageSchema>;
+/** ADR-115: сжатие видео (только на границе отправки провайдеру). */
+export type AttachmentCompressionVideoSettings = z.infer<typeof attachmentCompressionVideoSchema>;
+/** ADR-115: сжатие аудио (только на границе отправки провайдеру). */
+export type AttachmentCompressionAudioSettings = z.infer<typeof attachmentCompressionAudioSchema>;
+/** ADR-115: сжатие вложений по семействам (`attachments.compression`). */
+export type AttachmentsCompressionSettings = z.infer<typeof attachmentsCompressionSchema>;
+/** ADR-115: серверные миниатюры вложений (`attachments.thumbnail`). */
+export type AttachmentsThumbnailSettings = z.infer<typeof attachmentsThumbnailSchema>;
 /** ADR-115: ключ семейства вложений (`image`/`pdf`/`audio`/`video`). */
 export type AttachmentModality = keyof AttachmentModalitiesConfig;
 /**

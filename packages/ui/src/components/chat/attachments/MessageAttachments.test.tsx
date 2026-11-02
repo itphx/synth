@@ -57,19 +57,43 @@ afterEach(async () => {
 })
 
 describe('MessageAttachments: вложения отправленного сообщения', () => {
-  it('изображение — миниатюра с URL байтов и alt с именем', async () => {
+  it('изображение — серверная миниатюра и alt с именем', async () => {
     const container = await renderAttachments([
       mediaPart('p1', 'image', { mime: 'image/png', name: 'shot.png', width: 800, height: 600 }),
     ])
 
     const img = container.querySelector('[data-testid="message-attachment-image"] img') as HTMLImageElement
     expect(img).not.toBeNull()
-    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1')
+    // ADR-115: в сетке — миниатюра (`?variant=thumb`), а не 92-МБ оригинал.
+    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1?variant=thumb')
     expect(img.getAttribute('alt')).toContain('shot.png')
     expect(img.getAttribute('loading')).toBe('lazy')
     // Сетка миниатюр — не больше 4 в ряд.
     const grid = container.querySelector('[data-testid="message-attachments-images"]') as HTMLElement
     expect(grid.className).toContain('grid-cols-4')
+  })
+
+  it('нет миниатюры (404) — однократный фоллбек на оригинал без цикла', async () => {
+    const container = await renderAttachments([
+      mediaPart('p1', 'image', { mime: 'image/png', name: 'shot.png' }),
+    ])
+
+    const img = container.querySelector('[data-testid="message-attachment-image"] img') as HTMLImageElement
+    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1?variant=thumb')
+
+    await act(async () => {
+      img.dispatchEvent(new Event('error'))
+    })
+
+    const fallback = container.querySelector('[data-testid="message-attachment-image"] img') as HTMLImageElement
+    expect(fallback.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1')
+
+    // Повторная ошибка уже не обрабатывается: src остаётся оригиналом (нет зацикливания).
+    await act(async () => {
+      fallback.dispatchEvent(new Event('error'))
+    })
+    const after = container.querySelector('[data-testid="message-attachment-image"] img') as HTMLImageElement
+    expect(after.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1')
   })
 
   it('аудио — плеер с именем файла', async () => {
@@ -87,7 +111,7 @@ describe('MessageAttachments: вложения отправленного соо
     expect(container.textContent).toContain('voice.mp3')
   })
 
-  it('видео — плеер без автоплея, ограничен по размеру', async () => {
+  it('видео — плеер без автоплея, poster-миниатюра и preload="none"', async () => {
     const container = await renderAttachments([
       mediaPart('p3', 'video', { mime: 'video/mp4', name: 'clip.mp4' }),
     ])
@@ -95,9 +119,14 @@ describe('MessageAttachments: вложения отправленного соо
     const video = container.querySelector('[data-testid="message-attachment-video-player"]') as HTMLVideoElement
     expect(video).not.toBeNull()
     expect(video.tagName).toBe('VIDEO')
+    // Полный файл не грузится до нажатия Play; `src` — оригинал.
     expect(video.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p3')
+    expect(video.getAttribute('preload')).toBe('none')
+    expect(video.getAttribute('poster')).toBe('/api/v2/sessions/s1/attachments/p3?variant=thumb')
     expect(video.hasAttribute('controls')).toBe(true)
     expect(video.hasAttribute('autoplay')).toBe(false)
+    expect(video.getAttribute('aria-label')).toBe('clip.mp4')
+    expect(container.textContent).toContain('clip.mp4')
     expect(video.className).toContain('max-w-[320px]')
     expect(video.className).toContain('max-h-[240px]')
   })

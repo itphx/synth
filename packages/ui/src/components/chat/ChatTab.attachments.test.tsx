@@ -174,10 +174,15 @@ describe('ChatTab — «Повторить» с вложениями (ADR-115)',
     expect(restored[0]!.blobPath).toBe(BLOB_PATH)
     expect(restored[0]!.partId).toBe(BLOB_PATH)
     expect(restored[0]!.upload).toBe('ready')
+    // ADR-115: превью восстановленного изображения — миниатюра, не оригинал.
+    expect(restored[0]!.previewUrl).toBe('/api/v2/sessions/s1/attachments/part-1?variant=thumb')
 
     // Чип виден (изображение — превью), текст с маркером приехал в композер.
     const chip = container.querySelector('[data-testid="attachment-image"]')
     expect(chip?.querySelector('img')?.getAttribute('alt')).toBe('photo.png')
+    expect(chip?.querySelector('img')?.getAttribute('src')).toBe(
+      '/api/v2/sessions/s1/attachments/part-1?variant=thumb',
+    )
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
     expect(textarea.value).toBe('смотри [image: photo.png]')
 

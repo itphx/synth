@@ -11,6 +11,12 @@ vi.mock('@/lib/api/attachments', () => ({
   uploadSessionAttachment: mocks.uploadSessionAttachment,
   attachmentContentUrl: (sessionId: string, partId: string) =>
     `/api/v2/sessions/${sessionId}/attachments/${partId}`,
+  attachmentThumbnailUrl: (sessionId: string, partId: string) =>
+    `/api/v2/sessions/${sessionId}/attachments/${partId}?variant=thumb`,
+  attachmentContentUrlFromThumb: (thumbUrl: string) => {
+    const suffix = '?variant=thumb'
+    return thumbUrl.endsWith(suffix) ? thumbUrl.slice(0, -suffix.length) : undefined
+  },
 }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'

@@ -12,6 +12,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AttachmentsConfig, Message, Part, Session } from '@itphx/synth-shared';
+import { defaultConfig } from '@itphx/synth-shared';
 import { createSessionRoutes } from './sessions.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { EventBus } from '../../events/bus.js';
@@ -68,6 +69,10 @@ function attachmentsConfig(overrides: Partial<AttachmentsConfig> = {}): Attachme
     allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
     workspaceFallback: true,
     gcDays: 30,
+    // ADR-115: сжатие/миниатюры/chunked-загрузка — дефолты схемы.
+    compression: defaultConfig.attachments.compression,
+    thumbnail: defaultConfig.attachments.thumbnail,
+    maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
     ...overrides,
   };
 }
@@ -160,6 +165,23 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
     return app.request(`/api/v2/sessions/${sessionId}/attachments`, { method: 'POST', body: form });
   }
 
+  /** Загрузить файл raw-body: тело запроса — сам файл (не multipart). */
+  async function uploadRaw(
+    app: Hono,
+    sessionId: string,
+    bytes: Buffer,
+    opts: { name?: string; mime?: string | null; headers?: Record<string, string> } = {},
+  ): Promise<Response> {
+    const headers: Record<string, string> = { ...(opts.headers ?? {}) };
+    if (opts.mime !== null) headers['content-type'] = opts.mime ?? 'application/octet-stream';
+    const query = opts.name ? `?name=${encodeURIComponent(opts.name)}` : '';
+    return app.request(`/api/v2/sessions/${sessionId}/attachments${query}`, {
+      method: 'POST',
+      headers,
+      body: new Uint8Array(bytes),
+    });
+  }
+
   describe('POST /:id/attachments', () => {
     it('201: возвращает метаданные вложения (id === blobPath)', async () => {
       const { app, sessionManager, blobs } = createHarness();
@@ -238,6 +260,126 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
       expect(res.status).toBe(415);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+    });
+  });
+
+  describe('POST /:id/attachments — raw-body (ADR-115 этап B1)', () => {
+    it('201: метаданные вложения, MIME по сигнатуре, имя из ?name=', async () => {
+      const { app, sessionManager, blobs } = createHarness();
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      const res = await uploadRaw(app, session.id, pngBytes(), {
+        name: 'фото с пробелом.png',
+        mime: 'application/octet-stream',
+      });
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as {
+        id: string; blobPath: string; sha256: string; mime: string; size: number; name?: string;
+      };
+      expect(body.id).toBe(body.blobPath);
+      expect(body.mime).toBe('image/png');
+      expect(body.name).toBe('фото с пробелом.png');
+      expect(await blobs.exists(body.blobPath)).toBe(true);
+    });
+
+    it('201: имя из x-file-name (percent-encoding), без content-type — MIME по сигнатуре', async () => {
+      const { app, sessionManager } = createHarness();
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      const res = await uploadRaw(app, session.id, pngBytes(2), {
+        mime: null,
+        headers: { 'x-file-name': encodeURIComponent('отчёт.png') },
+      });
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { name?: string; mime: string };
+      expect(body.name).toBe('отчёт.png');
+      expect(body.mime).toBe('image/png');
+    });
+
+    it('400 VALIDATION_ERROR: тело отсутствует', async () => {
+      const { app, sessionManager } = createHarness();
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/attachments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('400 VALIDATION_ERROR: content-length: 0', async () => {
+      const { app, sessionManager } = createHarness();
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      const res = await uploadRaw(app, session.id, Buffer.alloc(0), {
+        headers: { 'content-length': '0' },
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('400 VALIDATION_ERROR: пустой поток без content-length', async () => {
+      const { app, sessionManager } = createHarness();
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      const res = await uploadRaw(app, session.id, Buffer.alloc(0));
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('413: content-length больше предела — отказ до чтения тела', async () => {
+      const { app, sessionManager } = createHarness({ config: { maxBytesPerFile: 32 } });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      const res = await uploadRaw(app, session.id, pngBytes(), {
+        headers: { 'content-length': '1000' },
+      });
+      expect(res.status).toBe(413);
+      const body = (await res.json()) as {
+        error: { code: string; details?: { maxBytesPerFile?: number } };
+      };
+      expect(body.error.code).toBe('PAYLOAD_TOO_LARGE');
+      expect(body.error.details?.maxBytesPerFile).toBe(32);
+    });
+
+    it('413: поток больше предела обрывается по ходу', async () => {
+      const { app, sessionManager, blobs } = createHarness({ config: { maxBytesPerFile: 32 } });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      const res = await uploadRaw(app, session.id, Buffer.concat([pngBytes(), Buffer.alloc(64, 1)]));
+      expect(res.status).toBe(413);
+      expect(await blobs.list('attachments')).toEqual([]);
+    });
+
+    it('обрыв клиента: объект не создан, временный не остался', async () => {
+      const { app, sessionManager, blobs } = createHarness();
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      let sent = false;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!sent) {
+            sent = true;
+            controller.enqueue(new Uint8Array(pngBytes()));
+            return;
+          }
+          controller.error(new Error('client aborted'));
+        },
+      });
+      const res = await app.request(`/api/v2/sessions/${session.id}/attachments`, {
+        method: 'POST',
+        headers: { 'content-type': 'image/png' },
+        body: stream,
+        duplex: 'half',
+      } as RequestInit);
+      // Ход/сессия не падают: ответ — обычная ошибка, объект не записан.
+      expect(res.status).toBe(500);
+
+      expect(await blobs.list('attachments')).toEqual([]);
     });
   });
 
@@ -579,6 +721,31 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
       expect((await upload(unsupported.app, s2.id, svg, 'pic.svg', 'image/svg+xml')).status).toBe(415);
       expect(unsupported.registry.render().text).toContain(
         'synth_attachment_uploads_total{outcome="unsupported",kind="image"} 1',
+      );
+    });
+
+    it('raw ok → synth_attachment_uploads_total{outcome="ok",kind="image"}', async () => {
+      const { app, sessionManager, registry } = createHarness({ metrics: true });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await uploadRaw(app, session.id, pngBytes());
+      expect(res.status).toBe(201);
+
+      const text = registry.render().text;
+      expect(text).toContain('synth_attachment_uploads_total{outcome="ok",kind="image"} 1');
+    });
+
+    it('raw 413 по content-length → outcome="too_large" до чтения тела', async () => {
+      const { app, sessionManager, registry } = createHarness({
+        metrics: true,
+        config: { maxBytesPerFile: 32 },
+      });
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await uploadRaw(app, session.id, pngBytes(), {
+        headers: { 'content-length': '1000' },
+      });
+      expect(res.status).toBe(413);
+      expect(registry.render().text).toContain(
+        'synth_attachment_uploads_total{outcome="too_large",kind="file"} 1',
       );
     });
 

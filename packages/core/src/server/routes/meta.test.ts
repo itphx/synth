@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { AttachmentsConfig } from '@itphx/synth-shared';
-import { MESSAGE_MODEL_VERSION } from '@itphx/synth-shared';
+import { defaultConfig, MESSAGE_MODEL_VERSION } from '@itphx/synth-shared';
 import { createMetaRoutes, instanceCapabilities } from './meta.js';
 
 function attachmentsConfig(overrides: Partial<AttachmentsConfig> = {}): AttachmentsConfig {
@@ -19,6 +19,10 @@ function attachmentsConfig(overrides: Partial<AttachmentsConfig> = {}): Attachme
     allowedMimePrefixes: ['image/'],
     workspaceFallback: true,
     gcDays: 30,
+    // ADR-115: сжатие/миниатюры/chunked-загрузка — дефолты схемы.
+    compression: defaultConfig.attachments.compression,
+    thumbnail: defaultConfig.attachments.thumbnail,
+    maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
     ...overrides,
   };
 }

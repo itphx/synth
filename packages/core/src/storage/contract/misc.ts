@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import type { BlobStore, DefaultsRepository } from '../ports/index.js';
 
 /**
@@ -110,7 +110,75 @@ export function describeBlobStore(
       const { repo } = await make();
       expect(await repo.readStream('missing.bin')).toBeNull();
     });
+
+    // ADR-115: потоковая запись загрузки — крупный объект не буферизуется.
+    it('writeStream: поток → объект (чанки склеиваются), перезапись целиком', async () => {
+      const { repo } = await make();
+      await repo.writeStream(
+        'stream/a.bin',
+        Readable.from([Buffer.from('hello '), Buffer.from('stream')]),
+      );
+      expect((await repo.read('stream/a.bin'))?.toString('utf-8')).toBe('hello stream');
+      expect(await repo.stat('stream/a.bin')).toMatchObject({ size: 12 });
+
+      await repo.writeStream('stream/a.bin', Readable.from([Buffer.from('new')]));
+      expect((await repo.read('stream/a.bin'))?.toString('utf-8')).toBe('new');
+    });
+
+    it('writeStream: ошибка источника — прежний объект цел, временных не остаётся', async () => {
+      const { repo } = await make();
+      await repo.write('keep.bin', 'v1');
+
+      await expect(repo.writeStream('keep.bin', failingStream())).rejects.toThrow('broken');
+      expect((await repo.read('keep.bin'))?.toString('utf-8')).toBe('v1');
+      expect((await repo.list()).map((e) => e.path)).toEqual(['keep.bin']);
+    });
+
+    it('writeStream: пустой поток — пустой объект (решение о «пустом файле» — у домена)', async () => {
+      const { repo } = await make();
+      await repo.writeStream('empty.bin', Readable.from([]));
+      expect(await repo.stat('empty.bin')).toMatchObject({ size: 0 });
+    });
+
+    // ADR-115: перенос временного объекта в content-addressed путь.
+    it('move: объект переносится, источник исчезает, цель перезаписывается', async () => {
+      const { repo } = await make();
+      await repo.write('tmp/upload.bin', 'payload');
+      await repo.write('dst/target.bin', 'old');
+
+      await repo.move('tmp/upload.bin', 'dst/target.bin');
+      expect((await repo.read('dst/target.bin'))?.toString('utf-8')).toBe('payload');
+      expect(await repo.exists('tmp/upload.bin')).toBe(false);
+
+      // Перенос в новый подкаталог — каталоги создаются портом.
+      await repo.move('dst/target.bin', 'deep/dir/moved.bin');
+      expect((await repo.read('deep/dir/moved.bin'))?.toString('utf-8')).toBe('payload');
+      expect(await repo.exists('dst/target.bin')).toBe(false);
+    });
+
+    it('move: отсутствующий источник — ошибка', async () => {
+      const { repo } = await make();
+      await expect(repo.move('missing.bin', 'dst.bin')).rejects.toThrow();
+      expect(await repo.exists('dst.bin')).toBe(false);
+    });
+
+    it('move: containment ( `..` / абсолютный путь ) — отказ', async () => {
+      const { repo } = await make();
+      await repo.write('a.bin', 'x');
+      await expect(repo.move('../a.bin', 'b.bin')).rejects.toThrow();
+      await expect(repo.move('a.bin', '/abs/b.bin')).rejects.toThrow();
+    });
   });
+}
+
+/** Поток, отдавший часть данных и затем падающий (обрыв загрузки). */
+function failingStream(message = 'broken'): Readable {
+  return Readable.from(
+    (async function* () {
+      yield Buffer.from('partial');
+      throw new Error(message);
+    })(),
+  );
 }
 
 /** Собрать содержимое потока в буфер (чанки склеиваются). */

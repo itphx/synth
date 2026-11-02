@@ -660,6 +660,27 @@ describe('resolveAttachmentsSettings (ADR-115)', () => {
       // ADR-115: назначений aux-моделей нет — обработка не настроена.
       modalityModels: {},
       gcDays: 30,
+      // ADR-115: сжатие/миниатюры/chunked-загрузка — дефолты схемы.
+      compression: {
+        enabled: true,
+        image: { enabled: true, maxSidePx: 2048, quality: 85, minBytes: 1024 * 1024 },
+        video: {
+          enabled: true,
+          maxHeightPx: 720,
+          bitrateKbps: 2000,
+          audioBitrateKbps: 96,
+          minBytes: 8 * 1024 * 1024,
+        },
+        audio: {
+          enabled: true,
+          bitrateKbps: 64,
+          channels: 1,
+          sampleRateHz: 16000,
+          minBytes: 4 * 1024 * 1024,
+        },
+      },
+      thumbnail: { enabled: true, maxWidthPx: 512 },
+      maxChunkBytes: 8 * 1024 * 1024,
     });
   });
 
@@ -847,6 +868,118 @@ describe('resolveAttachmentsSettings: modalityModels (ADR-115)', () => {
       undefined,
     );
     expect(Object.keys(merged)).toEqual(['image', 'video']);
+  });
+});
+
+describe('resolveAttachmentsSettings: compression/thumbnail/maxChunkBytes (ADR-115)', () => {
+  it('config: частичное сжатие мёржится с дефолтами по семействам', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: {
+        compression: { image: { maxSidePx: 1600 }, video: { enabled: false } },
+        thumbnail: { maxWidthPx: 256 },
+        maxChunkBytes: 4 * 1024 * 1024,
+      },
+      env: {},
+    });
+    expect(resolved.source).toBe('config');
+    expect(resolved.effective.compression.enabled).toBe(true);
+    expect(resolved.effective.compression.image).toEqual({
+      enabled: true,
+      maxSidePx: 1600,
+      quality: 85,
+      minBytes: 1024 * 1024,
+    });
+    expect(resolved.effective.compression.video).toEqual({
+      enabled: false,
+      maxHeightPx: 720,
+      bitrateKbps: 2000,
+      audioBitrateKbps: 96,
+      minBytes: 8 * 1024 * 1024,
+    });
+    expect(resolved.effective.compression.audio.bitrateKbps).toBe(64);
+    expect(resolved.effective.thumbnail).toEqual({ enabled: true, maxWidthPx: 256 });
+    expect(resolved.effective.maxChunkBytes).toBe(4 * 1024 * 1024);
+  });
+
+  it('частичный runtime-патч (только image.maxSidePx) сохраняет остальное из базы', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: {
+        compression: { image: { quality: 60 } },
+        thumbnail: { maxWidthPx: 128 },
+      },
+      runtime: { compression: { image: { maxSidePx: 1024 } } },
+      env: {},
+    });
+    expect(resolved.source).toBe('runtime');
+    expect(resolved.effective.compression.image).toEqual({
+      enabled: true,
+      // из runtime
+      maxSidePx: 1024,
+      // из config.yaml
+      quality: 60,
+      // из дефолта схемы
+      minBytes: 1024 * 1024,
+    });
+    // Семейства и миниатюры патч не трогал — база сохранилась.
+    expect(resolved.effective.compression.video.maxHeightPx).toBe(720);
+    expect(resolved.effective.compression.audio.sampleRateHz).toBe(16000);
+    expect(resolved.effective.thumbnail).toEqual({ enabled: true, maxWidthPx: 128 });
+  });
+
+  it('runtime перекрывает мастер-флаг и семейство, не трогая прочие поля', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: { compression: { enabled: true, audio: { channels: 2 } } },
+      runtime: {
+        compression: { enabled: false, video: { bitrateKbps: 8000 } },
+        thumbnail: { enabled: false },
+      },
+      env: {},
+    });
+    expect(resolved.effective.compression.enabled).toBe(false);
+    expect(resolved.effective.compression.video.bitrateKbps).toBe(8000);
+    expect(resolved.effective.compression.video.maxHeightPx).toBe(720);
+    expect(resolved.effective.compression.audio.channels).toBe(2);
+    expect(resolved.effective.thumbnail).toEqual({ enabled: false, maxWidthPx: 512 });
+  });
+
+  it('maxChunkBytes: env приоритетнее runtime и config, попадает в envLocked', () => {
+    const resolved = resolveAttachmentsSettings({
+      config: { maxChunkBytes: 4 * 1024 * 1024 },
+      runtime: { maxChunkBytes: 2 * 1024 * 1024 },
+      env: { SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES: '1048576' },
+    });
+    expect(resolved.source).toBe('env');
+    expect(resolved.effective.maxChunkBytes).toBe(1024 * 1024);
+    expect(resolved.envLocked).toEqual(['maxChunkBytes']);
+  });
+
+  it('maxChunkBytes: env ниже 1024 игнорируется (fail-soft), runtime сохраняется', () => {
+    const resolved = resolveAttachmentsSettings({
+      runtime: { maxChunkBytes: 2 * 1024 * 1024 },
+      env: { SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES: '512' },
+    });
+    expect(resolved.source).toBe('runtime');
+    expect(resolved.effective.maxChunkBytes).toBe(2 * 1024 * 1024);
+    expect(resolved.envLocked).toEqual([]);
+  });
+
+  it('envLocked-поле maxChunkBytes не перекрывается runtime', () => {
+    const resolved = resolveAttachmentsSettings({
+      runtime: { maxChunkBytes: 2 * 1024 * 1024 },
+      env: { SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES: '1048576' },
+    });
+    expect(resolved.effective.maxChunkBytes).toBe(1024 * 1024);
+  });
+
+  it('сжатие/миниатюры env не имеют: runtime применяется свободно', () => {
+    const resolved = resolveAttachmentsSettings({
+      runtime: { compression: { image: { quality: 50 } }, thumbnail: { maxWidthPx: 320 } },
+      env: {},
+    });
+    expect(resolved.source).toBe('runtime');
+    expect(resolved.effective.compression.image.quality).toBe(50);
+    expect(resolved.effective.thumbnail.maxWidthPx).toBe(320);
+    expect(resolved.envLocked).toEqual([]);
   });
 });
 

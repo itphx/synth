@@ -36,6 +36,7 @@ import type { EventHub } from '../events/hub.js';
 import type { ProjectRepository } from '@itphx/synth-core';
 import type { MemoryFactRepository, MemoryIndexRepository } from '@itphx/synth-core';
 import type { BlobRefRepository, BlobStore } from '@itphx/synth-core';
+import type { AttachmentThumbnailProvider } from '@itphx/synth-core';
 import type { AttachmentsConfig, StickyNotesLimits } from '@itphx/synth-shared';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
 import type { QuestionService } from '@itphx/synth-core';
@@ -119,6 +120,8 @@ export function createSessionRoutes(
      * из админки (`/api/v2/settings/attachments`) применяются на каждый вызов.
      */
     config: AttachmentsConfig | (() => AttachmentsConfig);
+    /** ADR-115: провайдер серверных миниатюр (`?variant=thumb`). */
+    thumbnails?: AttachmentThumbnailProvider;
   },
   /**
    * ADR-111/ADR-113: единый реестр фоновых прогонов — «Стоп» сессии

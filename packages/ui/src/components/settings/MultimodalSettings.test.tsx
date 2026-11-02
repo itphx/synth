@@ -64,6 +64,27 @@ import type {
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
+const COMPRESSION = {
+  enabled: true,
+  image: { enabled: true, maxSidePx: 2048, quality: 85, minBytes: MIB_BYTES },
+  video: {
+    enabled: true,
+    maxHeightPx: 720,
+    bitrateKbps: 2000,
+    audioBitrateKbps: 96,
+    minBytes: 8 * MIB_BYTES,
+  },
+  audio: {
+    enabled: false,
+    bitrateKbps: 64,
+    channels: 1,
+    sampleRateHz: 16000,
+    minBytes: 4 * MIB_BYTES,
+  },
+}
+
+const THUMBNAIL = { enabled: true, maxWidthPx: 512 }
+
 const ATTACHMENTS: AttachmentsSettings = {
   enabled: true,
   modalities: { image: true, pdf: true, audio: false, video: false },
@@ -73,6 +94,9 @@ const ATTACHMENTS: AttachmentsSettings = {
   gcDays: 7,
   workspaceFallback: false,
   allowedMimePrefixes: ['image/', 'application/pdf'],
+  compression: COMPRESSION,
+  thumbnail: THUMBNAIL,
+  maxChunkBytes: 8 * MIB_BYTES,
 }
 
 const DEFAULTS: AttachmentsSettings = {
@@ -281,6 +305,31 @@ describe('MultimodalSettings — состояние и значения', () => 
       'image/, application/pdf',
     )
 
+    // ADR-115: сжатие (числа строками, пороги — MiB), миниатюры и чанк загрузки.
+    expect(switchByLabel(container, 'Compress attachments before sending')?.getAttribute('aria-checked')).toBe('true')
+    expect(switchByLabel(container, 'Compress images')?.getAttribute('aria-checked')).toBe('true')
+    expect(switchByLabel(container, 'Compress video')?.getAttribute('aria-checked')).toBe('true')
+    expect(switchByLabel(container, 'Compress audio')?.getAttribute('aria-checked')).toBe('false')
+    expect((byTestId(container, 'attachments-image-max-side') as HTMLInputElement).value).toBe('2048')
+    expect((byTestId(container, 'attachments-image-quality') as HTMLInputElement).value).toBe('85')
+    expect((byTestId(container, 'attachments-image-min') as HTMLInputElement).value).toBe('1')
+    expect((byTestId(container, 'attachments-video-max-height') as HTMLInputElement).value).toBe('720')
+    expect((byTestId(container, 'attachments-video-bitrate') as HTMLInputElement).value).toBe('2000')
+    expect((byTestId(container, 'attachments-video-audio-bitrate') as HTMLInputElement).value).toBe(
+      '96',
+    )
+    expect((byTestId(container, 'attachments-video-min') as HTMLInputElement).value).toBe('8')
+    expect((byTestId(container, 'attachments-audio-bitrate') as HTMLInputElement).value).toBe('64')
+    expect((byTestId(container, 'attachments-audio-channels') as HTMLInputElement).value).toBe('1')
+    expect((byTestId(container, 'attachments-audio-sample-rate') as HTMLInputElement).value).toBe(
+      '16000',
+    )
+    expect((byTestId(container, 'attachments-audio-min') as HTMLInputElement).value).toBe('4')
+    expect((byTestId(container, 'attachments-thumbnail-max-width') as HTMLInputElement).value).toBe(
+      '512',
+    )
+    expect((byTestId(container, 'attachments-max-chunk') as HTMLInputElement).value).toBe('8')
+
     // Без правок сохранение недоступно.
     expect((byTestId(container, 'attachments-save') as HTMLButtonElement).disabled).toBe(true)
     expect((byTestId(container, 'attachments-cancel') as HTMLButtonElement).disabled).toBe(true)
@@ -309,6 +358,10 @@ describe('MultimodalSettings — состояние и значения', () => 
       allowedMimePrefixes: ['image/', 'application/pdf'],
       // ADR-115: назначения уходят целиком, не заданные — `null`.
       modalityModels: { image: null, pdf: null, audio: null, video: null },
+      // ADR-115: сжатие/миниатюры/чанк уходят полными объектами (не изменялись).
+      compression: COMPRESSION,
+      thumbnail: THUMBNAIL,
+      maxChunkBytes: 8 * MIB_BYTES,
     })
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', text: 'Attachment settings saved' }),
@@ -379,7 +432,7 @@ describe('MultimodalSettings — envLocked и источник env', () => {
     ...INFO,
     source: 'env',
     isOverridden: false,
-    envLocked: ['maxBytesPerSession', 'modalities.image', 'enabled'],
+    envLocked: ['maxBytesPerSession', 'modalities.image', 'enabled', 'maxChunkBytes'],
   }
 
   beforeEach(() => {
@@ -425,6 +478,23 @@ describe('MultimodalSettings — envLocked и источник env', () => {
     })
     // env-зафиксированные поля в тело не попадают (иначе сервер ответит 409).
     expect(body).not.toHaveProperty('maxBytesPerSession')
+  })
+
+  it('env-зафиксированный maxChunkBytes блокирует поле и не уходит в тело', async () => {
+    const container = await renderSettings()
+
+    const chunk = byTestId(container, 'attachments-max-chunk') as HTMLInputElement
+    expect(chunk.value).toBe('8')
+    expect(chunk.disabled).toBe(true)
+
+    await click(switchByLabel(container, 'PDF'))
+    await click(byTestId(container, 'attachments-save'))
+
+    const body = mocks.updateAttachmentsSettings.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(body).not.toHaveProperty('maxChunkBytes')
+    // Остальные новые поля уходят как обычно.
+    expect(body.compression).toEqual(COMPRESSION)
+    expect(body.thumbnail).toEqual(THUMBNAIL)
   })
 })
 
@@ -582,6 +652,110 @@ describe('MultimodalSettings — модели по модальностям (ADR
   })
 })
 
+describe('MultimodalSettings — сжатие и миниатюры (ADR-115)', () => {
+  it('изменённые поля сжатия уходят полным объектом, MiB → байты', async () => {
+    const container = await renderSettings()
+
+    await setInputValue(byTestId(container, 'attachments-image-max-side') as HTMLInputElement, '1600')
+    await setInputValue(byTestId(container, 'attachments-image-quality') as HTMLInputElement, '70')
+    await setInputValue(byTestId(container, 'attachments-image-min') as HTMLInputElement, '0.5')
+    await setInputValue(byTestId(container, 'attachments-audio-bitrate') as HTMLInputElement, '32')
+    await setInputValue(byTestId(container, 'attachments-thumbnail-max-width') as HTMLInputElement, '256')
+    await setInputValue(byTestId(container, 'attachments-max-chunk') as HTMLInputElement, '4')
+
+    await click(byTestId(container, 'attachments-save'))
+
+    expect(mocks.updateAttachmentsSettings).toHaveBeenCalledTimes(1)
+    const body = mocks.updateAttachmentsSettings.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(body.compression).toEqual({
+      enabled: true,
+      image: { enabled: true, maxSidePx: 1600, quality: 70, minBytes: Math.round(0.5 * MIB_BYTES) },
+      video: COMPRESSION.video,
+      audio: { ...COMPRESSION.audio, bitrateKbps: 32 },
+    })
+    expect(body.thumbnail).toEqual({ enabled: true, maxWidthPx: 256 })
+    expect(body.maxChunkBytes).toBe(4 * MIB_BYTES)
+  })
+
+  it('мастер-выключатель блокирует поля семейств; семейство — свои поля', async () => {
+    const container = await renderSettings()
+
+    // audio выключен в фикстуре — его поля недоступны.
+    expect((byTestId(container, 'attachments-audio-bitrate') as HTMLInputElement).disabled).toBe(true)
+    expect((byTestId(container, 'attachments-image-quality') as HTMLInputElement).disabled).toBe(
+      false,
+    )
+
+    await click(switchByLabel(container, 'Compress images'))
+    expect((byTestId(container, 'attachments-image-quality') as HTMLInputElement).disabled).toBe(true)
+
+    await click(switchByLabel(container, 'Compress attachments before sending'))
+    expect(
+      (byTestId(container, 'attachments-video-max-height') as HTMLInputElement).disabled,
+    ).toBe(true)
+    expect((byTestId(container, 'attachments-thumbnail-max-width') as HTMLInputElement).disabled).toBe(
+      false,
+    )
+  })
+
+  it('значения вне диапазона схемы блокируют сохранение', async () => {
+    const container = await renderSettings()
+
+    await setInputValue(byTestId(container, 'attachments-image-max-side') as HTMLInputElement, '9000')
+    expect(container.textContent).toContain('Enter an integer from 64 to 8192')
+    expect((byTestId(container, 'attachments-save') as HTMLButtonElement).disabled).toBe(true)
+
+    await setInputValue(byTestId(container, 'attachments-image-max-side') as HTMLInputElement, '2048')
+
+    await setInputValue(byTestId(container, 'attachments-audio-sample-rate') as HTMLInputElement, '44100.5')
+    expect(container.textContent).toContain('Enter an integer from 8000 to 48000')
+    expect((byTestId(container, 'attachments-save') as HTMLButtonElement).disabled).toBe(true)
+
+    await setInputValue(byTestId(container, 'attachments-audio-sample-rate') as HTMLInputElement, '8000')
+
+    // Чанк меньше 1 КиБ (0.0005 MiB ≈ 524 байта) — ошибка.
+    await setInputValue(byTestId(container, 'attachments-max-chunk') as HTMLInputElement, '0.0005')
+    expect(container.textContent).toContain('Enter a size of at least 1 KiB')
+    expect((byTestId(container, 'attachments-save') as HTMLButtonElement).disabled).toBe(true)
+
+    await click(byTestId(container, 'attachments-save'))
+    expect(mocks.updateAttachmentsSettings).not.toHaveBeenCalled()
+  })
+
+  it('форма ↔ настройки: сжатие, миниатюры и чанк конвертируются в MiB и обратно', () => {
+    const form = formFromAttachments(ATTACHMENTS)
+    expect(form.imageMaxSide).toBe('2048')
+    expect(form.imageQuality).toBe('85')
+    expect(form.imageMinMiB).toBe('1')
+    expect(form.videoMinMiB).toBe('8')
+    expect(form.audioMinMiB).toBe('4')
+    expect(form.thumbnailMaxWidth).toBe('512')
+    expect(form.maxChunkMiB).toBe('8')
+
+    const body = buildAttachmentsBody(form, form, ATTACHMENTS)
+    expect(body.compression).toEqual(COMPRESSION)
+    expect(body.thumbnail).toEqual(THUMBNAIL)
+    expect(body.maxChunkBytes).toBe(8 * MIB_BYTES)
+  })
+
+  it('неизменённые пороги не пересчитываются через MiB (нет потери точности)', () => {
+    const odd: AttachmentsSettings = {
+      ...ATTACHMENTS,
+      compression: {
+        ...COMPRESSION,
+        image: { ...COMPRESSION.image, minBytes: 1_048_577 },
+      },
+      maxChunkBytes: 8_388_609,
+    }
+    const saved = formFromAttachments(odd)
+    const draft = { ...saved, pdf: false }
+
+    const body = buildAttachmentsBody(draft, saved, odd)
+    expect(body.compression?.image?.minBytes).toBe(1_048_577)
+    expect(body.maxChunkBytes).toBe(8_388_609)
+  })
+})
+
 describe('MultimodalSettings — чистые хелперы', () => {
   it('форма ↔ настройки: байты конвертируются в MiB и обратно', () => {
     const form = formFromAttachments(ATTACHMENTS)
@@ -606,6 +780,9 @@ describe('MultimodalSettings — чистые хелперы', () => {
       workspaceFallback: false,
       allowedMimePrefixes: ['image/', 'application/pdf'],
       modalityModels: { image: null, pdf: null, audio: null, video: null },
+      compression: COMPRESSION,
+      thumbnail: THUMBNAIL,
+      maxChunkBytes: 8 * MIB_BYTES,
     })
   })
 
@@ -627,6 +804,9 @@ describe('MultimodalSettings — чистые хелперы', () => {
       workspaceFallback: true,
       allowedMimePrefixes: ['image/'],
       modalityModels: { image: null, pdf: null, audio: null, video: null },
+      compression: COMPRESSION,
+      thumbnail: THUMBNAIL,
+      maxChunkBytes: 8 * MIB_BYTES,
     })
   })
 

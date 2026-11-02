@@ -1995,6 +1995,15 @@ git:
 поэтому скачивание через API отдаёт оригинал. Staging-загрузка без сессии
 (`POST /api/v2/attachments`) использует те же лимиты; объект без ссылок живёт `attachments.gcDays`.
 
+**Сжатие — только на отправке, оригинал сохраняется.** `attachments.compression` готовит уменьшенную
+копию для LLM-вызова (и aux-вызова) и кладёт её в кэш `attachments/.derived/compress`; в blob,
+при раздаче через API и в `save_attachment` остаётся **оригинал**. Если перекодирование не удалось
+или результат не меньше оригинала — отправляется оригинал (сжатие — оптимизация, ход из-за него не
+падает); `pdf` не сжимается, видео — только на нативном пути доставки, аудио — только в контейнер,
+который принимает транспорт (mp3/wav). Миниатюры (`attachments.thumbnail`) — тоже производные
+(`attachments/.thumbs/`), оригинал не меняют. Кэш миниатюр и сжатых копий **не чистится**
+автоматически (pruner вложений их не трогает); уборка — ручная/вместе с томом.
+
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
 | `attachments.enabled` | Мастер-выключатель вложений: `false` — загрузка запрещена (`415 attachments_disabled`), ссылки `attachments` в промпте отклоняются. Env — `SYNTH_ATTACHMENTS_ENABLED` | `true` |
@@ -2007,6 +2016,9 @@ git:
 | `attachments.workspaceFallback` | Резервное хранение вложений в workspace проекта, когда blob-хранилище недоступно. Env — `SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK`. **Пока только настройка**: применение в оркестраторе — отдельная задача | `true` |
 | `attachments.modalityModels` | Модели **обработки** по семействам вложений (aux-модели, ADR-115): `image`/`pdf`/`audio`/`video` → `{provider, model}`. Если модель сессии модальность не принимает, вложение обрабатывает указанная модель, а в диалог попадает текстовый результат. **Только `config.yaml`** (env нет) | `{}` (не настроено) |
 | `attachments.gcDays` | Срок хранения **осиротевших** объектов (нет ссылок в `blob_refs`), дни; `0` — без ограничения (объекты не чистятся по сроку). Env — `SYNTH_ATTACHMENTS_GC_DAYS` | `30` |
+| `attachments.compression` | **Сжатие вложений только на границе отправки** провайдеру (ADR-115): в blob и при раздаче через API остаётся оригинал. Мастер-выключатель `enabled` + параметры семейств: `image` (`maxSidePx` 64..8192, `quality` 1..100, `minBytes` — порог, ниже которого не сжимаем (если не превышены размеры кадра), `video` (`maxHeightPx` 144..4320, `bitrateKbps` 100..50000, `audioBitrateKbps` 16..512, `minBytes`), `audio` (`bitrateKbps` 8..512, `channels` 1..2, `sampleRateHz` 8000..48000, `minBytes`). `pdf` не сжимается. Env нет — `config.yaml`/runtime | `enabled: true`; image `2048`/`85`/1 МиБ; video `720`/`2000`/`96`/8 МиБ; audio `64`/`1`/`16000`/4 МиБ |
+| `attachments.thumbnail` | Серверные **миниатюры** вложений для UI: производный маленький JPEG рядом с оригиналом в blob (`attachments/.thumbs/`), оригинальные байты не меняются. `enabled` — генерация, `maxWidthPx` 64..1024 — предел ширины (высота пропорционально). Env нет — `config.yaml`/runtime | `{ enabled: true, maxWidthPx: 512 }` |
+| `attachments.maxChunkBytes` | Размер одной части **chunked-загрузки**, байт (минимум `1024`): части декодируются и складываются потоком, поэтому целый файл в память не поднимается. Env — `SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES` | `8388608` (8 МиБ) |
 
 ```yaml
 attachments:
@@ -2026,15 +2038,28 @@ attachments:
     image: { provider: openai, model: gpt-4o }
     audio: { provider: local, model: whisper }
   gcDays: 30
+  # Сжатие на границе отправки (оригинал в blob не меняется).
+  compression:
+    enabled: true
+    image: { enabled: true, maxSidePx: 2048, quality: 85, minBytes: 1048576 }
+    video: { enabled: true, maxHeightPx: 720, bitrateKbps: 2000, audioBitrateKbps: 96, minBytes: 8388608 }
+    audio: { enabled: true, bitrateKbps: 64, channels: 1, sampleRateHz: 16000, minBytes: 4194304 }
+  # Серверные миниатюры для UI (производный JPEG, оригинал не меняется).
+  thumbnail: { enabled: true, maxWidthPx: 512 }
+  # Размер одной части chunked-загрузки (части складываются потоком).
+  maxChunkBytes: 8388608
 ```
 
 - **Приоритет источников.** `SYNTH_ATTACHMENTS_*` (env) > runtime (UI, `settings.json`/PG) >
   `config.yaml` `attachments` > defaults схемы. Поля, заданные env, фиксируются (`envLocked`) и
   runtime их не перекрывает: попытка задать другое значение через UI → `409 CONFLICT`.
-- **Runtime-настройки (ADR-115).** Админ-раздел «Вложения» (API —
+- **Runtime-настройки (ADR-115).** Админ-раздел «Мультимодальный ввод» (API —
   `GET/PUT/DELETE /api/v2/settings/attachments`, [API_V2.md](./API_V2.md) §5.21) меняет
-  `enabled`/`modalities`/лимиты/`workspaceFallback`/`modalityModels`/`gcDays` **без рестарта**: сервис вложений,
-  постановка промпта и GC читают резолвер на каждый вызов (`restartRequired: false`).
+  `enabled`/`modalities`/лимиты/`workspaceFallback`/`modalityModels`/`gcDays`, а также
+  `compression`/`thumbnail`/`maxChunkBytes` **без рестарта**: сервис вложений, постановка промпта,
+  миниатюры, сжатие и GC читают резолвер на каждый вызов (`restartRequired: false`).
+  `compression`/`thumbnail` — частичный merge по путям; среди этих полей env-ключ есть только у
+  `maxChunkBytes` (`SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES`), у `compression`/`thumbnail` env нет.
   Изменения пишутся в аудит политик (`scope: "attachments"`).
 - **Модели обработки по модальностям (`attachments.modalityModels`, ADR-115).** Модель сессии
   **не меняется**: aux-модель получает только вложение (описание/извлечённый текст), а диалог

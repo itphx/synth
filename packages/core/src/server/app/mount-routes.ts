@@ -183,6 +183,8 @@ export function mountStandaloneRoutes(
               // ADR-115: резолвер, а не снимок — runtime-настройки из админки
               // (`/api/v2/settings/attachments`) применяются без рестарта.
               config: () => deps.attachmentsSettings.getConfig(),
+              // ADR-115: серверные миниатюры (`?variant=thumb`).
+              thumbnails: deps.attachmentThumbnails,
             },
           }
         : {}),
@@ -668,6 +670,7 @@ export function mountStandaloneRoutes(
         service: new AttachmentService({
           blobs: deps.storageContext.blobs,
           config: stagingAttachmentConfig,
+          thumbnails: deps.attachmentThumbnails,
         }),
         config: stagingAttachmentConfig,
       },

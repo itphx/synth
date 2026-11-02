@@ -117,7 +117,8 @@ describe('ChatMessage: вложения сообщения (ADR-115)', () => {
 
     expect(container.querySelector('[data-testid="message-attachments"]')).not.toBeNull()
     const img = container.querySelector('[data-testid="message-attachment-image"] img') as HTMLImageElement
-    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1')
+    // Превью — серверная миниатюра (`?variant=thumb`), оригинал не тянем.
+    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1?variant=thumb')
     // Текст не подменён вложениями.
     expect(container.textContent).toContain('Посмотри на скриншот')
   })
@@ -134,7 +135,7 @@ describe('ChatMessage: вложения сообщения (ADR-115)', () => {
 
     const img = container.querySelector('[data-testid="message-attachment-image"] img') as HTMLImageElement
     expect(img).not.toBeNull()
-    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p2')
+    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p2?variant=thumb')
   })
 
   it('файл-вложение показывается чипом в assistant-сообщении', async () => {
@@ -182,6 +183,6 @@ describe('ChatMessage: вложения сообщения (ADR-115)', () => {
     )
 
     const img = container.querySelector('[data-testid="message-attachment-image"] img') as HTMLImageElement
-    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p4')
+    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p4?variant=thumb')
   })
 })

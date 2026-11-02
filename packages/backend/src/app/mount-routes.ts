@@ -218,6 +218,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       blobs: deps.storageContext.blobs,
       blobRefs: deps.storageContext.blobRefs,
       config: () => deps.attachmentsSettings.getConfig(),
+      // ADR-115: серверные миниатюры (`?variant=thumb`).
+      thumbnails: deps.attachmentThumbnails,
     },
     // ADR-111 §detach: «Стоп» останавливает и живые дочерние прогоны
     // (фоновые саб-агенты и их процессы) — решение 2026-10-28.
@@ -714,6 +716,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       service: new AttachmentService({
         blobs: deps.storageContext.blobs,
         config: () => deps.attachmentsSettings.getConfig(),
+        thumbnails: deps.attachmentThumbnails,
       }),
       config: () => deps.attachmentsSettings.getConfig(),
     },

@@ -44,6 +44,67 @@ export type ModalityModels = Partial<Record<ModalityFamily, ModalityModelRef>>
  */
 export type ModalityModelsPatch = Partial<Record<ModalityFamily, ModalityModelRef | null>>
 
+/**
+ * ADR-115: сжатие изображений **на границе отправки** провайдеру (оригинал в
+ * blob не меняется). `maxSidePx` — предел длинной стороны, `quality` — качество
+ * JPEG/WebP (1..100), `minBytes` — порог, ниже которого файл не сжимается.
+ */
+export interface AttachmentCompressionImageSettings {
+  enabled: boolean
+  maxSidePx: number
+  quality: number
+  minBytes: number
+}
+
+/** ADR-115: сжатие видео (размер кадра, битрейт видео и звука, порог размера). */
+export interface AttachmentCompressionVideoSettings {
+  enabled: boolean
+  maxHeightPx: number
+  bitrateKbps: number
+  audioBitrateKbps: number
+  minBytes: number
+}
+
+/** ADR-115: сжатие аудио (битрейт, каналы, частота дискретизации, порог размера). */
+export interface AttachmentCompressionAudioSettings {
+  enabled: boolean
+  bitrateKbps: number
+  channels: number
+  sampleRateHz: number
+  minBytes: number
+}
+
+/** ADR-115: сжатие вложений по семействам (`attachments.compression`). */
+export interface AttachmentsCompressionSettings {
+  enabled: boolean
+  image: AttachmentCompressionImageSettings
+  video: AttachmentCompressionVideoSettings
+  audio: AttachmentCompressionAudioSettings
+}
+
+/** ADR-115: серверные миниатюры вложений для UI (`attachments.thumbnail`). */
+export interface AttachmentsThumbnailSettings {
+  enabled: boolean
+  maxWidthPx: number
+}
+
+/**
+ * ADR-115: runtime-патч сжатия — вложенные семейства **частичные** (сервер
+ * мержит по полям и семействам).
+ */
+export interface CompressionRuntimePatch {
+  enabled?: boolean
+  image?: Partial<AttachmentCompressionImageSettings>
+  video?: Partial<AttachmentCompressionVideoSettings>
+  audio?: Partial<AttachmentCompressionAudioSettings>
+}
+
+/** ADR-115: runtime-патч миниатюр. */
+export interface ThumbnailRuntimePatch {
+  enabled?: boolean
+  maxWidthPx?: number
+}
+
 /** ADR-115: настройки мультимодального ввода (вложения сообщений). */
 export interface AttachmentsSettings {
   /** Вложения включены (мастер-выключатель приёма файлов). */
@@ -68,15 +129,27 @@ export interface AttachmentsSettings {
    * отбрасывается с путём в workspace).
    */
   modalityModels?: ModalityModels
+  /** ADR-115: сжатие вложений на границе отправки провайдеру. */
+  compression: AttachmentsCompressionSettings
+  /** ADR-115: генерация серверных миниатюр для UI. */
+  thumbnail: AttachmentsThumbnailSettings
+  /** ADR-115: размер части chunked-загрузки, байт (минимум 1024). */
+  maxChunkBytes: number
 }
 
 /**
  * ADR-115: runtime-патч секции `attachments` (тело `PUT`). Отличается от
- * `Partial<AttachmentsSettings>` только `modalityModels`: `null` снимает
- * назначение семейства.
+ * `Partial<AttachmentsSettings>` только вложенными полями: `modalityModels`
+ * допускает `null` (снятие назначения семейства), `compression`/`thumbnail` —
+ * частичные патчи (сервер мержит по полям и семействам).
  */
-export type AttachmentsRuntimeSettings = Omit<Partial<AttachmentsSettings>, 'modalityModels'> & {
+export type AttachmentsRuntimeSettings = Omit<
+  Partial<AttachmentsSettings>,
+  'modalityModels' | 'compression' | 'thumbnail'
+> & {
   modalityModels?: ModalityModelsPatch
+  compression?: CompressionRuntimePatch
+  thumbnail?: ThumbnailRuntimePatch
 }
 
 /**

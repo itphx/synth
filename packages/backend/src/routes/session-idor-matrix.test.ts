@@ -62,7 +62,7 @@ import {
 } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { Message, Project, User } from '@itphx/synth-shared';
-import { MessageRole, ProjectRole, nowISO, makeTextPart } from '@itphx/synth-shared';
+import { MessageRole, ProjectRole, nowISO, makeTextPart, defaultConfig } from '@itphx/synth-shared';
 import { createSessionRoutes as createBackendSessionRoutes } from './sessions.js';
 import { createMessageRoutes as createBackendMessageRoutes } from './messages.js';
 import { createQueueRoutes as createBackendQueueRoutes } from './queue.js';
@@ -175,6 +175,14 @@ const MATRIX: Row[] = [
   // раскрывается). Загрузка — мутация; тело не multipart → 400 валидации.
   row('sessions', 'GET', '/:id/attachments/:partId', { status: 404 }),
   row('sessions', 'POST', '/:id/attachments', { status: 400 }),
+  // B2a (ADR-115): chunked-загрузка — мутация сессии (право изменения
+  // содержимого проекта). Сессия загрузки в матрице не создаётся: init с пустым
+  // телом валиден (201), остальные шаги упираются в неизвестный `:uploadId`
+  // (404) либо отсутствие `offset` (400), отмена идемпотентна (204).
+  row('sessions', 'POST', '/:id/attachments/uploads', { status: 201 }),
+  row('sessions', 'PUT', '/:id/attachments/uploads/:uploadId', { status: 400 }),
+  row('sessions', 'POST', '/:id/attachments/uploads/:uploadId/complete', { status: 404 }),
+  row('sessions', 'DELETE', '/:id/attachments/uploads/:uploadId', { status: 204 }),
 
   // --- backend-only session routes ---
   // MCP-скоуп сессии: владелец|ADMIN (ADR-071 §2.4) — участники/LEAD НЕ имеют доступа.
@@ -453,6 +461,10 @@ async function buildWorld(tmpDir: string): Promise<World> {
         allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
         workspaceFallback: true,
         gcDays: 30,
+        // ADR-115: сжатие/миниатюры/chunked-загрузка — дефолты схемы.
+        compression: defaultConfig.attachments.compression,
+        thumbnail: defaultConfig.attachments.thumbnail,
+        maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
       },
     },
   ));
@@ -516,6 +528,10 @@ function urlFor(base: Base, path: string, sessionId: string): string {
 function bodyFor(row: Row, world: World): string | undefined {
   if (row.method === 'GET' || row.method === 'DELETE') return undefined;
   const p = row.path;
+  // ADR-115: загрузка вложения — raw-body (тело = файл). JSON-тело к файлу
+  // отношения не имеет, поэтому в матрице тело не отправляется: авторизованный
+  // запрос доходит до обработчика и получает 400 «файл не передан».
+  if (p === '/:id/attachments') return undefined;
   if (row.base === 'messages' && p.endsWith('/batch')) {
     return JSON.stringify({ action: 'pin', messageIds: [MATRIX_MESSAGE_ID] });
   }

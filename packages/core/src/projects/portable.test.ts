@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MessageRole } from '@itphx/synth-shared';
+import { defaultConfig } from '@itphx/synth-shared';
 import type { AttachmentsConfig, Message, Part } from '@itphx/synth-shared';
 import { SessionManager } from '../sessions/manager.js';
 import { AttachmentService } from '../engine/attachments/service.js';
@@ -833,6 +834,10 @@ describe('portable: вложения сообщений (ADR-115)', () => {
       allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
       workspaceFallback: true,
       gcDays: 30,
+      // ADR-115: сжатие/миниатюры/chunked-загрузка — дефолты схемы.
+      compression: defaultConfig.attachments.compression,
+      thumbnail: defaultConfig.attachments.thumbnail,
+      maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
     };
   }
 

@@ -189,7 +189,7 @@ describe('ChatMessage: вложение тула — служебный блок
     expect(attachments).not.toBeNull()
     const img = container.querySelector('[data-testid="message-attachment-image"] img') as HTMLImageElement
     expect(img).not.toBeNull()
-    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1')
+    expect(img.getAttribute('src')).toBe('/api/v2/sessions/s1/attachments/p1?variant=thumb')
   })
 
   it('полный набор действий как у фонового результата (Copy/Retry/… )', async () => {

@@ -19,6 +19,14 @@
  * `modalityModels` (ADR-115) — модели обработки по семействам вложений: до
  * записи проверяются по каталогу (провайдер + модель + известные модальности
  * модели), иначе `400 VALIDATION_ERROR`; частичных сохранений нет.
+ *
+ * `compression`/`thumbnail`/`maxChunkBytes` (ADR-115) — сжатие и миниатюры
+ * (только на границе отправки, оригинал в blob не меняется) и размер части
+ * chunked-загрузки. Патч `compression`/`thumbnail` — **частичный**: PUT с
+ * `{compression:{image:{maxSidePx}}}` меняет одно поле, остальные берутся из
+ * базы; неизвестные ключи игнорируются, значения вне диапазона схемы → 400 с
+ * путём поля (`compression.video.bitrateKbps: ...`). Env есть только у
+ * `maxChunkBytes` (`SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES`).
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -28,7 +36,6 @@ import {
   generateId,
   nowISO,
   type AttachmentFamily,
-  type AttachmentsConfig,
   type ModelConfig,
   type ProviderConfig,
 } from '@itphx/synth-shared';
@@ -37,11 +44,14 @@ import type { SecurityAuditRepository } from '../../storage/ports/security-audit
 import type { DocumentRepository } from '../../storage/ports/document-repository.js';
 import {
   resolveAttachmentsSettings,
+  type AttachmentsConfigInput,
   type AttachmentsRuntimeSettings,
   type AttachmentsSettings,
+  type CompressionRuntimePatch,
   type LiveAttachmentsSettings,
   type ModalityModelsRuntimePatch,
   type ResolvedAttachmentsSettings,
+  type ThumbnailRuntimePatch,
 } from '../../storage/runtime-settings.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
@@ -58,9 +68,137 @@ const SETTINGS_KEYS = new Set<keyof AttachmentsSettings>([
   'workspaceFallback',
   'modalityModels',
   'gcDays',
+  'compression',
+  'thumbnail',
+  'maxChunkBytes',
 ]);
 
 const MODALITY_KEYS = ATTACHMENT_FAMILIES;
+
+/**
+ * ADR-115: числовые поля семейств сжатия и их допустимые диапазоны.
+ *
+ * Таблица — **зеркало** Zod-схемы (`attachmentCompression*Schema`): HTTP-роут
+ * даёт 400 с путём поля (`compression.video.bitrateKbps`), а не общее
+ * «невалидные настройки», поэтому валидация ручная, но диапазоны совпадают.
+ * Неизвестные ключи семейства игнорируются (как и неизвестные ключи секции).
+ */
+const COMPRESSION_FAMILY_FIELDS: Record<
+  'image' | 'video' | 'audio',
+  Record<string, { min: number; max?: number }>
+> = {
+  image: { maxSidePx: { min: 64, max: 8192 }, quality: { min: 1, max: 100 }, minBytes: { min: 0 } },
+  video: {
+    maxHeightPx: { min: 144, max: 4320 },
+    bitrateKbps: { min: 100, max: 50000 },
+    audioBitrateKbps: { min: 16, max: 512 },
+    minBytes: { min: 0 },
+  },
+  audio: {
+    bitrateKbps: { min: 8, max: 512 },
+    channels: { min: 1, max: 2 },
+    sampleRateHz: { min: 8000, max: 48000 },
+    minBytes: { min: 0 },
+  },
+};
+
+const COMPRESSION_FAMILIES = ['image', 'video', 'audio'] as const;
+
+/** Верхняя граница ширины миниатюры, px (зеркало `attachmentsThumbnailSchema`). */
+const THUMBNAIL_MAX_WIDTH_MIN = 64;
+const THUMBNAIL_MAX_WIDTH_MAX = 1024;
+
+/** Минимальный размер части chunked-загрузки, байт (зеркало схемы). */
+const MAX_CHUNK_BYTES_MIN = 1024;
+
+/** Разбор `attachments.compression`: мастер-флаг + частичные семейства. */
+function parseCompression(
+  value: unknown,
+): { ok: true; value: CompressionRuntimePatch } | { ok: false; detail: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, detail: 'compression: ожидается объект {enabled,image,video,audio}' };
+  }
+  const source = value as Record<string, unknown>;
+  const result: CompressionRuntimePatch = {};
+
+  for (const [family, rawFamily] of Object.entries(source)) {
+    if (family === 'enabled') {
+      if (typeof rawFamily !== 'boolean') {
+        return { ok: false, detail: 'compression.enabled: ожидается boolean' };
+      }
+      result.enabled = rawFamily;
+      continue;
+    }
+    if (!(COMPRESSION_FAMILIES as readonly string[]).includes(family)) continue; // неизвестное семейство — игнор
+    if (!rawFamily || typeof rawFamily !== 'object' || Array.isArray(rawFamily)) {
+      return { ok: false, detail: `compression.${family}: ожидается объект настроек` };
+    }
+    const familyKey = family as 'image' | 'video' | 'audio';
+    const fields = COMPRESSION_FAMILY_FIELDS[familyKey];
+    const parsed: Record<string, number | boolean> = {};
+    for (const [field, rawField] of Object.entries(rawFamily as Record<string, unknown>)) {
+      if (field === 'enabled') {
+        if (typeof rawField !== 'boolean') {
+          return { ok: false, detail: `compression.${family}.enabled: ожидается boolean` };
+        }
+        parsed.enabled = rawField;
+        continue;
+      }
+      const range = fields[field];
+      if (!range) continue; // неизвестное поле семейства — игнор (аддитивность)
+      if (
+        typeof rawField !== 'number' ||
+        !Number.isInteger(rawField) ||
+        rawField < range.min ||
+        (range.max !== undefined && rawField > range.max)
+      ) {
+        const expected =
+          range.max !== undefined ? `целое ${range.min}..${range.max}` : `целое ≥ ${range.min}`;
+        return { ok: false, detail: `compression.${family}.${field}: ожидается ${expected}` };
+      }
+      parsed[field] = rawField;
+    }
+    result[familyKey] = parsed as CompressionRuntimePatch[typeof familyKey];
+  }
+
+  return { ok: true, value: result };
+}
+
+/** Разбор `attachments.thumbnail`: флаг генерации + предел ширины. */
+function parseThumbnail(
+  value: unknown,
+): { ok: true; value: ThumbnailRuntimePatch } | { ok: false; detail: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, detail: 'thumbnail: ожидается объект {enabled,maxWidthPx}' };
+  }
+  const result: ThumbnailRuntimePatch = {};
+  for (const [field, rawField] of Object.entries(value as Record<string, unknown>)) {
+    if (field === 'enabled') {
+      if (typeof rawField !== 'boolean') {
+        return { ok: false, detail: 'thumbnail.enabled: ожидается boolean' };
+      }
+      result.enabled = rawField;
+      continue;
+    }
+    if (field === 'maxWidthPx') {
+      if (
+        typeof rawField !== 'number' ||
+        !Number.isInteger(rawField) ||
+        rawField < THUMBNAIL_MAX_WIDTH_MIN ||
+        rawField > THUMBNAIL_MAX_WIDTH_MAX
+      ) {
+        return {
+          ok: false,
+          detail: `thumbnail.maxWidthPx: ожидается целое ${THUMBNAIL_MAX_WIDTH_MIN}..${THUMBNAIL_MAX_WIDTH_MAX}`,
+        };
+      }
+      result.maxWidthPx = rawField;
+      continue;
+    }
+    // Неизвестные ключи игнорируются (аддитивность контракта).
+  }
+  return { ok: true, value: result };
+}
 
 /**
  * Результат проверки модели в каталоге (ADR-115).
@@ -107,7 +245,7 @@ export interface AttachmentsSettingsDeps {
   /** Порт runtime-настроек (`{dataDir}/settings.json` / PG). */
   settingsStore: SettingsRepository;
   /** Секция `attachments` из config.yaml (без runtime). */
-  config?: Partial<AttachmentsConfig>;
+  config?: AttachmentsConfigInput;
   /**
    * Живое состояние настроек процесса (тот же экземпляр, что у сервиса
    * вложений и pruner'а): после PUT/DELETE обновляется без рестарта.
@@ -279,6 +417,28 @@ function validateAttachmentsSettings(
         result.modalityModels = assignments;
         break;
       }
+      case 'compression': {
+        const parsed = parseCompression(rawValue);
+        if (!parsed.ok) return parsed;
+        result.compression = parsed.value;
+        break;
+      }
+      case 'thumbnail': {
+        const parsed = parseThumbnail(rawValue);
+        if (!parsed.ok) return parsed;
+        result.thumbnail = parsed.value;
+        break;
+      }
+      case 'maxChunkBytes':
+        if (
+          typeof rawValue !== 'number' ||
+          !Number.isInteger(rawValue) ||
+          rawValue < MAX_CHUNK_BYTES_MIN
+        ) {
+          return { ok: false, detail: `maxChunkBytes: ожидается целое ≥ ${MAX_CHUNK_BYTES_MIN}` };
+        }
+        result.maxChunkBytes = rawValue;
+        break;
     }
   }
 

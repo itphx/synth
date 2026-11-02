@@ -4,6 +4,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import { attachmentContentUrlFromThumb } from '@/lib/api/attachments'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
 import { isImageAttachment } from './AttachedFilesList'
 
@@ -44,12 +45,17 @@ export function AttachmentGallery({
 }: AttachmentGalleryProps) {
   const { t } = useI18n()
   const draftItems = useAttachmentsStore((state) => state.bySession[sessionId ?? ''])
-  // Готовый список (сообщение) важнее стора черновиков композера.
+  // Готовый список (сообщение) важнее стора черновиков композера. У черновика
+  // `previewUrl` может быть миниатюрой (`?variant=thumb`) — в галерее показываем
+  // полный контент (локальный object URL остаётся как есть).
   const images: AttachmentGalleryImage[] =
     imagesProp ??
     (draftItems ?? [])
       .filter(isImageAttachment)
-      .map((item) => ({ url: item.previewUrl, name: item.name }))
+      .map((item) => ({
+        url: attachmentContentUrlFromThumb(item.previewUrl) ?? item.previewUrl,
+        name: item.name,
+      }))
 
   if (images.length === 0) return null
 

@@ -39,7 +39,11 @@ import {
 import type { WorktreeService } from '../../engine/worktree/service.js';
 import { publishWorktreeUpdated, type WorktreeUpdatedInput } from '../../engine/worktree/events.js';
 // ADR-115: вложения сообщений — сервис (blob-хранилище + лимиты) и роуты загрузки/раздачи.
-import { AttachmentService, attachmentModalityOf } from '../../engine/attachments/service.js';
+import {
+  AttachmentService,
+  attachmentModalityOf,
+  type AttachmentThumbnailProvider,
+} from '../../engine/attachments/service.js';
 import { createAttachmentRoutes } from './attachments.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
@@ -142,6 +146,11 @@ export interface SessionRoutesDeps {
      * из админки применяются на каждый вызов, ADR-115).
      */
     config: AttachmentsConfig | (() => AttachmentsConfig);
+    /**
+     * ADR-115: провайдер серверных миниатюр (`?variant=thumb`). Задан —
+     * `AttachmentService.upload` генерирует миниатюру асинхронно.
+     */
+    thumbnails?: AttachmentThumbnailProvider;
   };
   /**
    * ADR-106 Ф3: реестр подтверждений — ответ на запрос подтверждения
@@ -544,7 +553,11 @@ export function createSessionRoutes(
     return typeof source === 'function' ? source() : source;
   };
   const attachmentService = deps.attachments
-    ? new AttachmentService({ blobs: deps.attachments.blobs, config: resolveAttachmentConfig })
+    ? new AttachmentService({
+        blobs: deps.attachments.blobs,
+        config: resolveAttachmentConfig,
+        ...(deps.attachments.thumbnails ? { thumbnails: deps.attachments.thumbnails } : {}),
+      })
     : undefined;
   if (attachmentService) {
     app.route(

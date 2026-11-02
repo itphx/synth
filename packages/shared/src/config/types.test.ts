@@ -468,7 +468,56 @@ describe('attachmentsConfigSchema (ADR-115)', () => {
       allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
       workspaceFallback: true,
       gcDays: 30,
+      // ADR-115: сжатие только на границе отправки (оригинал в blob).
+      compression: {
+        enabled: true,
+        image: { enabled: true, maxSidePx: 2048, quality: 85, minBytes: 1_048_576 },
+        video: {
+          enabled: true,
+          maxHeightPx: 720,
+          bitrateKbps: 2000,
+          audioBitrateKbps: 96,
+          minBytes: 8_388_608,
+        },
+        audio: {
+          enabled: true,
+          bitrateKbps: 64,
+          channels: 1,
+          sampleRateHz: 16_000,
+          minBytes: 4_194_304,
+        },
+      },
+      // ADR-115: серверные миниатюры (производный JPEG в blob).
+      thumbnail: { enabled: true, maxWidthPx: 512 },
+      // ADR-115: размер части chunked-загрузки — 8 МиБ.
+      maxChunkBytes: 8_388_608,
     });
+  });
+
+  it('частичный compression дополняется дефолтами по семействам (prefault)', () => {
+    const parsed = attachmentsConfigSchema.parse({
+      compression: { image: { maxSidePx: 1600 }, video: { enabled: false } },
+    });
+    expect(parsed.compression.enabled).toBe(true);
+    expect(parsed.compression.image).toEqual({
+      enabled: true,
+      maxSidePx: 1600,
+      quality: 85,
+      minBytes: 1_048_576,
+    });
+    expect(parsed.compression.video).toMatchObject({ enabled: false, maxHeightPx: 720 });
+    expect(parsed.compression.audio.bitrateKbps).toBe(64);
+  });
+
+  it('compression/thumbnail/maxChunkBytes: значения вне диапазонов схемы → ошибка', () => {
+    expect(attachmentsConfigSchema.safeParse({ compression: { image: { maxSidePx: 16 } } }).success).toBe(false);
+    expect(attachmentsConfigSchema.safeParse({ compression: { image: { quality: 0 } } }).success).toBe(false);
+    expect(attachmentsConfigSchema.safeParse({ compression: { video: { bitrateKbps: 10 } } }).success).toBe(false);
+    expect(attachmentsConfigSchema.safeParse({ compression: { audio: { channels: 3 } } }).success).toBe(false);
+    expect(attachmentsConfigSchema.safeParse({ thumbnail: { maxWidthPx: 2048 } }).success).toBe(false);
+    expect(attachmentsConfigSchema.safeParse({ maxChunkBytes: 512 }).success).toBe(false);
+    // Границы допустимы.
+    expect(attachmentsConfigSchema.safeParse({ maxChunkBytes: 1024 }).success).toBe(true);
   });
 
   it('частичный modalities дополняется дефолтами (prefault)', () => {

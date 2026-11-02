@@ -40,7 +40,12 @@
  *    видео уходит нативно. Не задано/не удалось — прежнее поведение;
  *  - суммарный объём base64 ограничен (`MAX_ATTACHMENT_BASE64_BYTES`): при
  *    превышении отбрасываются **самые старые** вложения (с начала истории), а
- *    на сообщении остаётся пометка `reason: 'limit'` — промпт не ломается;
+ *    на сообщении остаётся пометка `reason: 'limit'` — промпт не ломается.
+ *    Гидратация идёт тремя фазами: A — решения по метаданным (модальность,
+ *    транспорт, `derive`, `compress`), без чтения байтов; B — бюджет base64 от
+ *    самых новых к старым по оценке `ceil(size/3)*4`; C — чтение и кодирование
+ *    только выбранных. Так на длинной медиа-истории в памяти не оказываются
+ *    все вложения сразу;
  *  - ошибка чтения объекта → вложение помечается `reason: 'unavailable'` и
  *    пропускается (в `content` уже есть плейсхолдер `[image: …]`), ход не падает;
  *  - ADR-115 §«Приватность»: в blob лежит **оригинал**, а провайдеру уходят
@@ -85,6 +90,11 @@ export interface HydrateAttachmentMeta {
   size: number;
   sha256: string;
   name?: string;
+  /** Ширина/высота кадра из sidecar (ADR-115: порог сжатия по размерам). */
+  width?: number;
+  height?: number;
+  /** Длительность медиа (мс) из sidecar. */
+  durationMs?: number;
 }
 
 /** Порты чтения вложений (в продакшне — поверх `AttachmentService`). */
@@ -170,6 +180,20 @@ export interface HydrateOptions {
     mime: string;
     name?: string;
   }) => Promise<string | null>;
+  /**
+   * ADR-115: сжатие вложения **перед отправкой** (оригинал в blob не меняется).
+   * Вызывается только на нативном пути — после проверок модальности/транспорта
+   * и до чтения байтов; aux-derive и assistant-сообщения сжатия не касаются.
+   * `null`/ошибка — отправляем оригинал (оптимизация не должна ломать ход).
+   */
+  compress?: (input: {
+    blobPath: string;
+    mime: string;
+    family: 'image' | 'video' | 'audio';
+    size: number;
+    width?: number;
+    height?: number;
+  }) => Promise<{ blobPath: string; mime: string; size: number; name?: string } | null>;
   /**
    * ADR-115: материализация отброшенного вложения в рабочий каталог проекта —
    * возвращает путь относительно workspace (или `null`). Ошибка/отсутствие
@@ -321,6 +345,37 @@ function byteModality(mime: string): AttachmentFamily | null {
   return modality !== null && modality !== 'text' ? modality : null;
 }
 
+/**
+ * Кандидат на отправку (фаза A): всё уже решено по метаданным, байтов нет.
+ * `readPath` — что читать в фазе C (сжатая копия или оригинал).
+ */
+interface HydrationCandidate {
+  messageIndex: number;
+  /** Исходный путь вложения (для пометок и материализации). */
+  blobPath: string;
+  /** Что читать: сжатая копия (`compress`) либо оригинал. */
+  readPath: string;
+  /** MIME и имя отправляемого объекта (сжатого либо оригинала). */
+  mime: string;
+  name?: string;
+  /** MIME/имя исходной части — для отказа чтения (паритет прежнего поведения). */
+  partMime: string;
+  partName?: string;
+  /** Размер отправляемого объекта, байт (`0` — неизвестен). */
+  sizeBytes: number;
+  /** Оценка base64-объёма (`Math.ceil(size/3)*4`) — без чтения байтов. */
+  estimate: number;
+}
+
+/**
+ * Оценка длины base64 по размеру байтов (без чтения самого объекта):
+ * каждый блок из 3 байт даёт 4 символа. Оценка сверху — `stripMetadata`
+ * может только уменьшить объект.
+ */
+function base64Estimate(size: number): number {
+  return size > 0 ? Math.ceil(size / 3) * 4 : 0;
+}
+
 /** Поток в буфер (порт `readStream` отдаёт `Readable`). */
 async function readStreamToBuffer(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -352,13 +407,10 @@ export async function hydrateMessageAttachments(
     ? new Set<AttachmentModality>(options.modalities)
     : null;
 
-  // 1. Читаем все допустимые вложения в хронологическом порядке.
-  const candidates: Array<{
-    messageIndex: number;
-    attachment: LLMAttachment;
-    sizeBytes: number;
-    blobPath: string;
-  }> = [];
+  // 1. Фаза A (без чтения байтов): модальность/транспорт/derive, метаданные
+  // (`resolve`) и сжатие. Байты здесь не читаются — на длинной медиа-истории
+  // это был пик памяти (все вложения сразу в Buffer + base64).
+  const candidates: HydrationCandidate[] = [];
   const droppedByMessage = new Map<number, DroppedEntry[]>();
   const derivedByMessage = new Map<number, DerivedEntry[]>();
   let modalityDropped = 0;
@@ -551,27 +603,54 @@ export async function hydrateMessageAttachments(
           });
           continue;
         }
-        const bytes = await deps.read(ref.blobPath);
-        if (!bytes) {
-          addDrop(index, ref.blobPath, {
-            mime: meta.mime,
-            ...(meta.name ?? ref.name ? { name: meta.name ?? ref.name } : {}),
-            sizeBytes: meta.size,
-            reason: 'unavailable',
-          });
-          continue;
+        // ADR-115: на нативном пути вложение можно сжать перед отправкой
+        // (оригинал в blob не меняется). Сжатие — только image/video/audio;
+        // pdf уходит как есть. `null`/ошибка → оригинал.
+        let readPath = ref.blobPath;
+        let sentMime = meta.mime;
+        let sentName = meta.name ?? ref.name;
+        let sentSize = meta.size;
+        if (
+          options.compress
+          && (metaModality === 'image' || metaModality === 'video' || metaModality === 'audio')
+        ) {
+          try {
+            const compressed = await options.compress({
+              blobPath: ref.blobPath,
+              mime: meta.mime,
+              family: metaModality,
+              size: meta.size,
+              ...(meta.width !== undefined ? { width: meta.width } : {}),
+              ...(meta.height !== undefined ? { height: meta.height } : {}),
+            });
+            if (compressed) {
+              readPath = compressed.blobPath;
+              sentMime = compressed.mime;
+              sentName = compressed.name ?? sentName;
+              sentSize = compressed.size;
+              options.log?.(
+                `[attachments] вложение ${ref.blobPath} сжато: ${meta.size} → ${compressed.size} байт (${compressed.mime})`,
+              );
+            }
+          } catch (err) {
+            options.log?.(
+              `[attachments] сжатие ${ref.blobPath} не удалось: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         }
+        // Байты на этой фазе не читаются: бюджет base64 считается по
+        // метаданным (для сжатой копии — по её размеру), а чтение идёт только
+        // для вложений, выбранных бюджетом (фаза C).
         candidates.push({
           messageIndex: index,
-          attachment: {
-            mime: meta.mime,
-            ...(meta.name ?? ref.name ? { name: meta.name ?? ref.name } : {}),
-            // ADR-115 §«Приватность»: провайдеру — байты без EXIF/метаданных,
-            // blob не меняется (там оригинал).
-            base64: stripMetadata(bytes, meta.mime).toString('base64'),
-          },
-          sizeBytes: meta.size > 0 ? meta.size : bytes.length,
           blobPath: ref.blobPath,
+          readPath,
+          mime: sentMime,
+          ...(sentName ? { name: sentName } : {}),
+          partMime: ref.mime,
+          ...(ref.name ? { partName: ref.name } : {}),
+          sizeBytes: sentSize > 0 ? sentSize : 0,
+          estimate: base64Estimate(sentSize),
         });
       } catch (err) {
         // Битый объект не должен ломать ход: плейсхолдер в `content` уже есть,
@@ -611,34 +690,71 @@ export async function hydrateMessageAttachments(
     return messages;
   }
 
-  // 2. Лимит объёма: отбрасываем самые старые вложения (с начала истории).
-  const totalBase64 = candidates.reduce((sum, item) => sum + item.attachment.base64.length, 0);
-  let droppedCount = 0;
-  if (totalBase64 > maxTotal) {
-    let remaining = totalBase64;
-    while (droppedCount < candidates.length && remaining > maxTotal) {
-      remaining -= candidates[droppedCount]!.attachment.base64.length;
-      droppedCount += 1;
-    }
+  // 2. Фаза B — бюджет base64: идём от **самых новых** вложений к старым и
+  // набираем, пока оценка влезает (`estimate = ceil(size/3)*4`, по метаданным,
+  // без чтения байтов). Как только очередное (более старое) вложение не
+  // влезает, дальше не идём: отбрасываются оно и все более старые —
+  // `reason:'limit'`. Порядок итоговой выдачи остаётся хронологическим.
+  let keptFrom = candidates.length;
+  let totalEstimate = 0;
+  for (let position = candidates.length - 1; position >= 0; position--) {
+    const estimate = candidates[position]!.estimate;
+    if (totalEstimate + estimate > maxTotal) break;
+    totalEstimate += estimate;
+    keptFrom = position;
   }
 
-  // 3. Сборка результата без мутации входа.
+  // 3. Фаза C — читаем и кодируем ТОЛЬКО выбранные (в хронологическом
+  // порядке частей). `stripMetadata` — как раньше, на границе отправки.
   const attachmentsByMessage = new Map<number, LLMAttachment[]>();
 
-  candidates.forEach((candidate, position) => {
-    if (position < droppedCount) {
+  for (let position = 0; position < candidates.length; position++) {
+    const candidate = candidates[position]!;
+    if (position < keptFrom) {
       addDrop(candidate.messageIndex, candidate.blobPath, {
-        mime: candidate.attachment.mime,
-        ...(candidate.attachment.name ? { name: candidate.attachment.name } : {}),
+        mime: candidate.mime,
+        ...(candidate.name ? { name: candidate.name } : {}),
         sizeBytes: candidate.sizeBytes,
         reason: 'limit',
       });
-      return;
+      continue;
+    }
+    let bytes: Buffer | null;
+    try {
+      bytes = await deps.read(candidate.readPath);
+    } catch (err) {
+      // Битый объект не должен ломать ход: плейсхолдер в `content` уже есть,
+      // а модели уходит пометка, что вложение не доставлено.
+      options.log?.(
+        `[attachments] не удалось прочитать вложение ${candidate.blobPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      addDrop(candidate.messageIndex, candidate.blobPath, {
+        mime: candidate.partMime,
+        ...(candidate.partName ? { name: candidate.partName } : {}),
+        sizeBytes: 0,
+        reason: 'unavailable',
+      });
+      continue;
+    }
+    if (!bytes) {
+      addDrop(candidate.messageIndex, candidate.blobPath, {
+        mime: candidate.mime,
+        ...(candidate.name ? { name: candidate.name } : {}),
+        sizeBytes: candidate.sizeBytes,
+        reason: 'unavailable',
+      });
+      continue;
     }
     const list = attachmentsByMessage.get(candidate.messageIndex) ?? [];
-    list.push(candidate.attachment);
+    list.push({
+      mime: candidate.mime,
+      ...(candidate.name ? { name: candidate.name } : {}),
+      // ADR-115 §«Приватность»: провайдеру — байты без EXIF/метаданных,
+      // blob не меняется (там оригинал).
+      base64: stripMetadata(bytes, candidate.mime).toString('base64'),
+    });
     attachmentsByMessage.set(candidate.messageIndex, list);
-  });
+  }
 
   // 4. Материализация отброшенного в рабочем каталоге (ADR-115): файл не
   // отправлен модели, но пользователь его приложил — путь даёт доступ тулами.
@@ -732,6 +848,9 @@ export function createHydrateDeps(blobs: BlobStore): HydrateDeps {
           size: resolved.size,
           sha256: resolved.sha256,
           ...(resolved.name ? { name: resolved.name } : {}),
+          ...(resolved.width !== undefined ? { width: resolved.width } : {}),
+          ...(resolved.height !== undefined ? { height: resolved.height } : {}),
+          ...(resolved.durationMs !== undefined ? { durationMs: resolved.durationMs } : {}),
         };
       } catch {
         return null;

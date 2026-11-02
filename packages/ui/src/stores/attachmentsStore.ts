@@ -37,6 +37,10 @@ export interface DraftAttachment {
   groupSize?: number
   upload: AttachmentUploadState
   error?: AttachmentErrorReason
+  /** Отправлено байт (runtime-only; для подписи прогресса). */
+  uploadedBytes?: number
+  /** Доля загрузки 0..1 (runtime-only; `undefined` — прогресс неизвестен). */
+  progress?: number
   /**
    * Фактический предел файла из `413 details.maxBytesPerFile` (может быть
    * меньше UX-фоллбека). Runtime-only: в IndexedDB не персистится.
@@ -96,6 +100,13 @@ interface AttachmentsState {
 
 /** Активные загрузки: ключ `${sessionId}::${id}`. Модульный скоуп — вне React. */
 const controllers = new Map<string, AbortController>()
+
+/**
+ * Минимальный интервал обновления прогресса в сторе (~10 раз/с): событие
+ * `xhr.upload.onprogress` приходит очень часто, и каждый `set` — ререндер
+ * всего списка вложений. Последнее значение (файл отправлен) эмитится всегда.
+ */
+const PROGRESS_EMIT_INTERVAL_MS = 100
 
 /** Сессии, черновики которых уже подняты из хранилища байтов (защита от повторов). */
 const hydrated = new Set<string>()
@@ -197,13 +208,37 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
 
     const controller = new AbortController()
     controllers.set(controllerKey(sessionId, id), controller)
-    patch(sessionId, id, { upload: 'uploading', error: undefined, maxBytes: undefined })
+    patch(sessionId, id, {
+      upload: 'uploading',
+      error: undefined,
+      maxBytes: undefined,
+      uploadedBytes: 0,
+      progress: 0,
+    })
+
+    // Троттлинг прогресса: первый кадр показываем сразу, дальше — не чаще
+    // `PROGRESS_EMIT_INTERVAL_MS`, финальный (100%) — всегда.
+    let lastProgressAt = 0
 
     try {
       const uploaded = await uploadSessionAttachment(sessionId, file, {
         signal: controller.signal,
+        onProgress: (loaded, total) => {
+          const now = Date.now()
+          const complete = total > 0 && loaded >= total
+          if (!complete && now - lastProgressAt < PROGRESS_EMIT_INTERVAL_MS) return
+          lastProgressAt = now
+          patch(sessionId, id, {
+            uploadedBytes: loaded,
+            progress: total > 0 ? Math.min(1, Math.max(0, loaded / total)) : 0,
+          })
+        },
       })
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted) {
+        // Отмена (clear/remove) — элемент уже уходит из состояния.
+        patch(sessionId, id, { uploadedBytes: undefined, progress: undefined })
+        return
+      }
       const mimeType = uploaded.mime || item.mimeType
       const size = uploaded.size || item.size
       const name = uploaded.name || item.name
@@ -211,6 +246,9 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
         upload: 'ready',
         error: undefined,
         maxBytes: undefined,
+        // Прогресс — runtime-подпись `uploading`: у готового элемента её нет.
+        uploadedBytes: undefined,
+        progress: undefined,
         partId: uploaded.id,
         blobPath: uploaded.blobPath,
         mimeType,
@@ -231,7 +269,10 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
         .catch(() => {})
     } catch (err) {
       // Отмена (clear/remove) — не ошибка: элемент уже уходит из состояния.
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted) {
+        patch(sessionId, id, { uploadedBytes: undefined, progress: undefined })
+        return
+      }
       // 413 — серверный лимит файла (может быть меньше локального UX-предела).
       // `details.maxBytesPerFile` — фактический предел инстанса: по нему
       // показываем текст ошибки, а не по фоллбеку.
@@ -242,6 +283,8 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       patch(sessionId, id, {
         upload: 'error',
         error: reason,
+        uploadedBytes: undefined,
+        progress: undefined,
         maxBytes:
           status === 413 && typeof serverMax === 'number' && serverMax > 0 ? serverMax : undefined,
       })

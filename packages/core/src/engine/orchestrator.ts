@@ -70,8 +70,10 @@ import { buildMaxStepsPrompt, maxStepsAssistantMessage } from './llm/max-steps.j
 import { WorktreeDirectoryMissingError } from './worktree/errors.js';
 import type { WorktreeService } from './worktree/service.js';
 // ADR-115: гидратация вложений сообщений (blob → base64) перед LLM-вызовом.
-import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef, type HydrateDeps } from './attachments/hydrate.js';
+import { createHydrateDeps, hydrateMessageAttachments, type DroppedAttachmentRef, type HydrateDeps, type HydrateOptions } from './attachments/hydrate.js';
 import { deriveModalityText, deriveVideoAudioText, type DeriveDeps } from './attachments/derive.js';
+import { AttachmentCompressor, resolveCompressTarget, type AttachmentCompressTarget } from './attachments/compress.js';
+import { createMediaRunner } from './media/runner.js';
 import { materializeAttachment } from './attachments/materialize.js';
 import { AttachmentService, isAttachmentPath } from './attachments/service.js';
 import { serializeMessage, serializeSession } from '../server/serialize.js';
@@ -2728,6 +2730,51 @@ export class ChatOrchestrator {
   }
 
   /**
+   * ADR-115: сжатие вложения **перед отправкой** провайдеру.
+   *
+   * Оригинал в blob не меняется (content-addressed байты), сжатая копия живёт
+   * в `attachments/.derived/compress/`; `save_attachment` и раздача через API
+   * по-прежнему отдают оригинал. Применяется только на нативном пути:
+   * `image` — всегда, `video` — если транспорт принимает видеофайл
+   * (`supportsNativeVideo`), `audio` — если транспорт принимает целевой
+   * контейнер (`audioFormat`). Иначе работают существующие derive/отброс.
+   *
+   * Мастер-выключатель `attachments.compression.enabled` (live-резолвер) —
+   * `undefined` (сжатие не создаётся вовсе).
+   */
+  private _buildAttachmentCompress(
+    _session: Session | undefined,
+    target: AttachmentCompressTarget,
+  ): HydrateOptions['compress'] | undefined {
+    if (!this._attachmentsConfig?.().compression?.enabled) return undefined;
+    const blobs = this._resolveAttachmentBlobs();
+    const compressor = new AttachmentCompressor({
+      blobs,
+      // ADR-115 × ADR-077: ffmpeg — только через медиа-раннер; в split-режиме
+      // команда уходит исполнителю (общий workspace, requires: ['ffmpeg']).
+      runner: createMediaRunner({
+        blobs,
+        executionPort: this._executionPort,
+        workspacesRoot: this._workspacesRoot,
+      }),
+      config: () => this._attachmentsConfig?.().compression
+        ?? attachmentsConfigSchema.parse({}).compression,
+      log: (message) => warning('ATTACHMENTS', message),
+    });
+    return (input) => compressor.compress(
+      {
+        blobPath: input.blobPath,
+        mime: input.mime,
+        family: input.family,
+        size: input.size,
+        ...(input.width !== undefined ? { width: input.width } : {}),
+        ...(input.height !== undefined ? { height: input.height } : {}),
+      },
+      target,
+    );
+  }
+
+  /**
    * ADR-115: транскрипт аудиодорожки видео для гидратации.
    *
    * `video`-модальность доставляет **только кадры**, поэтому для модели с
@@ -2813,6 +2860,10 @@ export class ChatOrchestrator {
     return {
       blobs,
       hasFfmpeg: () => hasFfmpeg,
+      // ADR-115 × ADR-077: запуск ffmpeg — через медиа-раннер; в split-режиме
+      // команда уходит исполнителю, у которого есть ffmpeg (общий workspace).
+      executionPort: this._executionPort,
+      workspacesRoot: this._workspacesRoot,
       promptTemplate: (lang) => this._contextConfig?.getMediaDeriveTemplate(lang) ?? '',
       log: (message) => warning('ATTACHMENTS', message),
       chat: async (parts, prompt) => {
@@ -2968,6 +3019,16 @@ export class ChatOrchestrator {
         // `video`, но без `audio`, дорожка уходит aux-модели аудио, текст
         // дописывается рядом с видео. Нет aux — прежнее поведение.
         const deriveVideoAudio = this._buildVideoAudioDerive(session, target.language);
+        // ADR-115: сжатие вложения перед отправкой — только нативный путь
+        // (image всегда; video — если транспорт принимает видеофайл; audio —
+        // если принимает целевой контейнер). Выключено — не создаём.
+        const compress = this._buildAttachmentCompress(
+          session,
+          resolveCompressTarget(
+            providerConfig?.type ?? '',
+            providerConfig?.baseUrl ?? '',
+          ),
+        );
         return hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {
           modalities,
           ...(canDeliverNative ? { canDeliverNative } : {}),
@@ -2978,6 +3039,7 @@ export class ChatOrchestrator {
           ...(modalities && modalities.length > 0 ? { modelModalities: modalities } : {}),
           ...(derive ? { derive } : {}),
           ...(deriveVideoAudio ? { deriveVideoAudio } : {}),
+          ...(compress ? { compress } : {}),
           // Пустой `workingDir` (workspace не готов) — материализация вернёт null:
           // путь модели не сообщается.
           ...(workspaceFallback

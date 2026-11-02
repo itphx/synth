@@ -167,13 +167,58 @@ export type AttachmentsSettings = AttachmentsConfig;
 export type ModalityModelsRuntimePatch = Partial<Record<AttachmentFamily, ModalityModelRef | null>>;
 
 /**
+ * ADR-115: runtime-патч сжатия вложений (`attachments.compression`).
+ *
+ * Вложенные семейства — **частичные**: `PUT` присылает только изменённые
+ * поля (например `{image: {maxSidePx: 1600}}`), остальное берётся из базы
+ * (config.yaml → дефолт схемы). Замена семейства целиком не предполагается —
+ * иначе UI пришлось бы присылать все поля, а конфиг терял бы значения.
+ */
+export interface CompressionRuntimePatch {
+  enabled?: boolean;
+  image?: Partial<AttachmentsSettings['compression']['image']>;
+  video?: Partial<AttachmentsSettings['compression']['video']>;
+  audio?: Partial<AttachmentsSettings['compression']['audio']>;
+}
+
+/** ADR-115: runtime-патч миниатюр вложений (`attachments.thumbnail`). */
+export interface ThumbnailRuntimePatch {
+  enabled?: boolean;
+  maxWidthPx?: number;
+}
+
+/**
  * ADR-115: runtime-патч секции `attachments`.
  *
- * Отличается от `Partial<AttachmentsSettings>` ровно одним полем —
- * `modalityModels`, где допускается `null` (удаление записи семейства).
+ * Отличается от `Partial<AttachmentsSettings>` двумя полями:
+ * - `modalityModels` — допускает `null` (удаление записи семейства);
+ * - `compression`/`thumbnail` — **частичные** вложенные патчи (мержатся по
+ *   полям и семействам, а не заменяют объект целиком).
  */
-export type AttachmentsRuntimeSettings = Omit<Partial<AttachmentsSettings>, 'modalityModels'> & {
+export type AttachmentsRuntimeSettings = Omit<
+  Partial<AttachmentsSettings>,
+  'modalityModels' | 'compression' | 'thumbnail'
+> & {
   modalityModels?: ModalityModelsRuntimePatch;
+  compression?: CompressionRuntimePatch;
+  thumbnail?: ThumbnailRuntimePatch;
+};
+
+/**
+ * ADR-115: вход секции `attachments` из `config.yaml`.
+ *
+ * В отличие от `Partial<AttachmentsConfig>` вложенные объекты тоже частичные
+ * (`compression.image` можно задать одним полем): Zod-схема принимает частичный
+ * YAML и сама дозаполняет дефолты, поэтому тип не должен требовать полного
+ * семейства. Полный `AttachmentsConfig` этому типу присваивается.
+ */
+export type AttachmentsConfigInput = Omit<
+  Partial<AttachmentsSettings>,
+  'modalities' | 'compression' | 'thumbnail'
+> & {
+  modalities?: Partial<AttachmentsSettings['modalities']>;
+  compression?: CompressionRuntimePatch;
+  thumbnail?: ThumbnailRuntimePatch;
 };
 
 /** Источник эффективного значения настроек вложений (приоритет убывает). */
@@ -871,10 +916,10 @@ export function mergeModalityModels(
 
 /**
  * ADR-115: нормализовать секцию `attachments` до полного вида (вложенные
- * `modalities`, назначения `modalityModels` и список префиксов мёржатся с
- * дефолтами схемы).
+ * `modalities`, назначения `modalityModels`, сжатие по семействам, миниатюры
+ * и список префиксов мёржатся с дефолтами схемы).
  */
-function normalizeAttachments(config?: Partial<AttachmentsConfig>): AttachmentsSettings {
+function normalizeAttachments(config?: AttachmentsConfigInput): AttachmentsSettings {
   const defaults = defaultConfig.attachments;
   return {
     ...defaults,
@@ -882,7 +927,33 @@ function normalizeAttachments(config?: Partial<AttachmentsConfig>): AttachmentsS
     modalities: { ...defaults.modalities, ...(config?.modalities ?? {}) },
     allowedMimePrefixes: [...(config?.allowedMimePrefixes ?? defaults.allowedMimePrefixes)],
     modalityModels: normalizeModalityModels(config?.modalityModels),
+    compression: normalizeCompression(config?.compression),
+    thumbnail: mergeDefined(defaults.thumbnail, config?.thumbnail),
+    maxChunkBytes: config?.maxChunkBytes ?? defaults.maxChunkBytes,
   };
+}
+
+/**
+ * ADR-115: нормализовать сжатие — дефолты схемы ← config.yaml, поле в поле и
+ * по семействам (частичный конфиг не должен терять дефолты соседних полей).
+ */
+function normalizeCompression(config?: CompressionRuntimePatch): AttachmentsSettings['compression'] {
+  const defaults = defaultConfig.attachments.compression;
+  return {
+    enabled: config?.enabled ?? defaults.enabled,
+    image: mergeDefined(defaults.image, config?.image),
+    video: mergeDefined(defaults.video, config?.video),
+    audio: mergeDefined(defaults.audio, config?.audio),
+  };
+}
+
+/** Наложить заданные поля патча на базу (`undefined` не перекрывает базу). */
+function mergeDefined<T extends object>(base: T, patch?: Partial<T>): T {
+  const merged = { ...base } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch ?? {})) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged as unknown as T;
 }
 
 /** Скалярные env-ключи секции `attachments` (ADR-115). */
@@ -892,6 +963,8 @@ const ATTACHMENTS_ENV_SCALARS: ReadonlyArray<{
   type: 'boolean' | 'number';
   /** `gcDays` допускает 0; у лимитов — строго положительные. */
   allowZero?: boolean;
+  /** Нижняя граница для числовых ключей (перекрывает `allowZero`). */
+  min?: number;
 }> = [
   { key: 'enabled', env: 'SYNTH_ATTACHMENTS_ENABLED', type: 'boolean' },
   { key: 'workspaceFallback', env: 'SYNTH_ATTACHMENTS_WORKSPACE_FALLBACK', type: 'boolean' },
@@ -899,6 +972,8 @@ const ATTACHMENTS_ENV_SCALARS: ReadonlyArray<{
   { key: 'maxFilesPerMessage', env: 'SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE', type: 'number' },
   { key: 'maxBytesPerSession', env: 'SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION', type: 'number' },
   { key: 'gcDays', env: 'SYNTH_ATTACHMENTS_GC_DAYS', type: 'number', allowZero: true },
+  // ADR-115: размер части chunked-загрузки — не меньше 1 КиБ (как в схеме).
+  { key: 'maxChunkBytes', env: 'SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES', type: 'number', min: 1024 },
 ];
 
 /**
@@ -934,8 +1009,10 @@ function readAttachmentsEnv(env: NodeJS.ProcessEnv): {
     }
 
     const n = Number(raw);
-    if (!Number.isFinite(n) || !Number.isInteger(n) || n < (def.allowZero ? 0 : 1)) {
-      console.warn(`[config] невалидное значение ${def.env}="${raw}" (ожидается целое ${def.allowZero ? '≥ 0' : '> 0'}) — игнорируется`);
+    const min = def.min ?? (def.allowZero ? 0 : 1);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < min) {
+      const expected = def.min !== undefined ? `≥ ${def.min}` : def.allowZero ? '≥ 0' : '> 0';
+      console.warn(`[config] невалидное значение ${def.env}="${raw}" (ожидается целое ${expected}) — игнорируется`);
       continue;
     }
     (values as Record<string, unknown>)[def.key] = n;
@@ -969,7 +1046,7 @@ function sameAttachments(a: AttachmentsSettings, b: AttachmentsSettings): boolea
  * в `envLocked` и не перезаписываются runtime.
  */
 export function resolveAttachmentsSettings(params: {
-  config?: Partial<AttachmentsConfig>;
+  config?: AttachmentsConfigInput;
   runtime?: AttachmentsRuntimeSettings;
   env?: NodeJS.ProcessEnv;
 }): ResolvedAttachmentsSettings {
@@ -994,6 +1071,20 @@ export function resolveAttachmentsSettings(params: {
     base.modalityModels,
     patch.modalityModels as ModalityModelsRuntimePatch | undefined,
   );
+  // ADR-115: сжатие и миниатюры — частичный runtime-патч мёржится поверх базы
+  // **по полям и семействам** (патч `{image:{maxSidePx}}` не должен сбрасывать
+  // остальные настройки сжатия).
+  const compression: AttachmentsSettings['compression'] = patch.compression
+    ? {
+        enabled: patch.compression.enabled ?? base.compression.enabled,
+        image: mergeDefined(base.compression.image, patch.compression.image),
+        video: mergeDefined(base.compression.video, patch.compression.video),
+        audio: mergeDefined(base.compression.audio, patch.compression.audio),
+      }
+    : base.compression;
+  const thumbnail = patch.thumbnail
+    ? mergeDefined(base.thumbnail, patch.thumbnail)
+    : base.thumbnail;
 
   const effective: AttachmentsSettings = {
     enabled: envValues.enabled ?? patch.enabled ?? base.enabled,
@@ -1007,6 +1098,10 @@ export function resolveAttachmentsSettings(params: {
     workspaceFallback: envValues.workspaceFallback ?? patch.workspaceFallback ?? base.workspaceFallback,
     modalityModels,
     gcDays: envValues.gcDays ?? patch.gcDays ?? base.gcDays,
+    compression,
+    thumbnail,
+    // env-скаляр приоритетнее runtime-патча (envLocked не даёт его перекрыть).
+    maxChunkBytes: envValues.maxChunkBytes ?? patch.maxChunkBytes ?? base.maxChunkBytes,
   };
 
   let source: AttachmentsSource;
@@ -1039,7 +1134,7 @@ export interface LiveAttachmentsSettings {
 
 /** Собрать живое состояние настроек вложений (ADR-115). */
 export function createLiveAttachmentsSettings(params: {
-  config?: Partial<AttachmentsConfig>;
+  config?: AttachmentsConfigInput;
   runtime?: AttachmentsRuntimeSettings;
   env?: NodeJS.ProcessEnv;
 }): LiveAttachmentsSettings {

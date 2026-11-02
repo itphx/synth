@@ -555,3 +555,77 @@ describe('attachmentsStore: серверные лимиты инстанса', (
     expect(retried.maxBytes).toBeUndefined()
   })
 })
+
+describe('attachmentsStore: прогресс загрузки', () => {
+  it('обновляет progress/uploadedBytes во время загрузки и сбрасывает после ready', async () => {
+    let midProgress: number | undefined
+    let midUploaded: number | undefined
+    mocks.uploadSessionAttachment.mockImplementationOnce(
+      async (
+        _sessionId: string,
+        file: File,
+        opts?: { onProgress?: (loaded: number, total: number) => void },
+      ) => {
+        opts?.onProgress?.(50, 100)
+        midProgress = items()[0]!.progress
+        midUploaded = items()[0]!.uploadedBytes
+        return uploaded(`srv_${file.name}`)
+      },
+    )
+
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
+
+    expect(midProgress).toBe(0.5)
+    expect(midUploaded).toBe(50)
+    const draft = items()[0]!
+    expect(draft.upload).toBe('ready')
+    // Прогресс — runtime-подпись `uploading`, у готового элемента её нет.
+    expect(draft.progress).toBeUndefined()
+    expect(draft.uploadedBytes).toBeUndefined()
+  })
+
+  it('финальный прогресс эмитится всегда, промежуточный — с троттлингом', async () => {
+    const seen: Array<number | undefined> = []
+    mocks.uploadSessionAttachment.mockImplementationOnce(
+      async (
+        _sessionId: string,
+        file: File,
+        opts?: { onProgress?: (loaded: number, total: number) => void },
+      ) => {
+        // Первый кадр — сразу; второй (в пределах 100 мс) — только потому, что файл отправлен.
+        opts?.onProgress?.(10, 100)
+        seen.push(items()[0]!.progress)
+        opts?.onProgress?.(20, 100)
+        seen.push(items()[0]!.progress)
+        opts?.onProgress?.(100, 100)
+        seen.push(items()[0]!.progress)
+        return uploaded(`srv_${file.name}`)
+      },
+    )
+
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
+
+    expect(seen).toEqual([0.1, 0.1, 1])
+  })
+
+  it('при ошибке прогресс сбрасывается', async () => {
+    mocks.uploadSessionAttachment.mockImplementationOnce(
+      async (
+        _sessionId: string,
+        _file: File,
+        opts?: { onProgress?: (loaded: number, total: number) => void },
+      ) => {
+        opts?.onProgress?.(25, 100)
+        throw Object.assign(new Error('network'), { status: 500 })
+      },
+    )
+
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
+
+    const draft = items()[0]!
+    expect(draft.upload).toBe('error')
+    expect(draft.error).toBe('upload_failed')
+    expect(draft.progress).toBeUndefined()
+    expect(draft.uploadedBytes).toBeUndefined()
+  })
+})

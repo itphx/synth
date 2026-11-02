@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { defaultConfig } from '@itphx/synth-shared';
 import type { AttachmentsConfig, EventAttachmentRef, RouteDecision, Session, SynthEvent } from '@itphx/synth-shared';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
 import { AttachmentService } from '../attachments/service.js';
@@ -148,6 +149,10 @@ describe('EventIngress: вложения события (ADR-115 × ADR-089)', (
     allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],
     workspaceFallback: true,
     gcDays: 30,
+    // ADR-115: сжатие/миниатюры/chunked-загрузка — дефолты схемы.
+    compression: defaultConfig.attachments.compression,
+    thumbnail: defaultConfig.attachments.thumbnail,
+    maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
     ...overrides,
   });
 

@@ -71,6 +71,9 @@ import {
   startProcessLogPruner,
   // ADR-115: GC осиротевших вложений сообщений.
   startAttachmentPruner,
+  // ADR-115 × ADR-077: медиа-раннер (ffmpeg inline/remote) и серверные миниатюры.
+  createMediaRunner,
+  ThumbnailService,
   // ADR-114: сервис worktree'ов (per-session рабочий каталог) + публикация
   // `worktree.updated` в каналы сессий проекта.
   WorktreeService,
@@ -1684,9 +1687,27 @@ export async function createBackendDeps(
   // ADR-115 × ADR-089: сервис вложений проверяет ссылки `attachments[]` события
   // (объект есть, метаданные совпадают со sidecar) и даёт лимиты
   // `attachments.maxFilesPerMessage`/`maxBytesPerFile` (runtime-настройки — живые).
+  // ADR-115 × ADR-077: медиа-раннер — единая точка запуска ffmpeg. Inline —
+  // локально, remote — на исполнителе в общем workspace (`requires: ['ffmpeg']`).
+  const mediaRunner = createMediaRunner({
+    blobs: storageContext.blobs,
+    executionPort,
+    workspacesRoot: config.workspacesRoot,
+    log: (message) => console.warn(message),
+  });
+  // ADR-115: серверные миниатюры вложений (content-addressed `.thumbs`).
+  // Настройки (`attachments.thumbnail`: enabled/maxWidthPx) — тот же live-резолвер,
+  // что у `AttachmentService` (runtime-патч применяется без рестарта).
+  const attachmentThumbnails = new ThumbnailService({
+    blobs: storageContext.blobs,
+    runner: mediaRunner,
+    config: () => attachmentsSettings.getConfig().thumbnail,
+    log: (message) => console.warn(message),
+  });
   const eventAttachmentService = new AttachmentService({
     blobs: storageContext.blobs,
     config: () => attachmentsSettings.getConfig(),
+    thumbnails: attachmentThumbnails,
   });
   const eventIngress = new EventIngress({
     requestSessionService,
@@ -1799,6 +1820,8 @@ export async function createBackendDeps(
         }
       },
       hasFfmpeg: () => isFfmpegAvailable(executionPort).catch(() => false),
+      executionPort,
+      workspacesRoot: config.workspacesRoot,
       promptTemplate: (language) => contextConfig.getMediaDeriveTemplate(language),
       language: 'ru',
       log: (message) => console.warn(message),
@@ -1983,6 +2006,8 @@ export async function createBackendDeps(
     // ADR-115 × ADR-101: сервис вложений — проверка `attachments[]` в теле
     // запуска прогона (тот же экземпляр, что у приёма событий).
     pipelineAttachments: eventAttachmentService,
+    // ADR-115: провайдер серверных миниатюр (`?variant=thumb` в роутах вложений).
+    attachmentThumbnails,
     // ADR-101: реестр активных прогонов — общий для HTTP-роута пайплайнов и
     // встроенных тулов агента (soft-lock + отмена идущего прогона).
     pipelineRunControl,

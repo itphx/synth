@@ -5,7 +5,7 @@ import type { MediaPartData, Part } from '@itphx/synth-shared/types'
 import { Icon } from '@/components/icon/Icon'
 import { useI18n } from '@/lib/i18n'
 import { formatFileSize } from '@/lib/attachments/file-size'
-import { attachmentContentUrl } from '@/lib/api/attachments'
+import { attachmentContentUrl, attachmentThumbnailUrl } from '@/lib/api/attachments'
 import { attachmentFileIcon } from './AttachedFilesList'
 import { AttachmentGallery, type AttachmentGalleryImage } from './AttachmentGallery'
 
@@ -54,9 +54,46 @@ export function hasMediaParts(parts: Part[] | null | undefined): boolean {
 }
 
 /**
+ * Превью изображения в сетке (ADR-115): серверная миниатюра (`?variant=thumb`).
+ *
+ * Миниатюры нет (не применима/ещё не сгенерирована) — сервер отвечает `404`;
+ * тогда **однократно** подставляем оригинал, чтобы превью не осталось битым.
+ * Повторной подмены нет: ошибка оригинала уже не обрабатывается (нет цикла).
+ */
+function AttachmentThumbImage({
+  sessionId,
+  partId,
+  alt,
+}: {
+  sessionId: string
+  partId: string
+  alt: string
+}) {
+  const [original, setOriginal] = useState(false)
+  return (
+    <img
+      src={
+        original
+          ? attachmentContentUrl(sessionId, partId)
+          : attachmentThumbnailUrl(sessionId, partId)
+      }
+      alt={alt}
+      loading="lazy"
+      onError={original ? undefined : () => setOriginal(true)}
+      className="size-full object-cover"
+    />
+  )
+}
+
+/**
  * Вложения в теле сообщения: изображения сеткой миниатюр (клик — галерея),
  * аудио и видео — компактные плееры, прочие файлы — чипы с именем, размером
  * и ссылкой «открыть». Байты отдаёт `GET /sessions/:id/attachments/:partId`.
+ *
+ * Превью в ленте — **серверная миниатюра** (`?variant=thumb`, ADR-115): оригинал
+ * 92-МБ видео не скачивается ради квадратика. Нет миниатюры (`404`) — однократный
+ * фоллбек на оригинал (картинки); у видео `poster` при отсутствии миниатюры просто
+ * не показывается, а сам файл не грузится до Play (`preload="none"`).
  *
  * Пустой список частей не оставляет в разметке ничего (`null`).
  */
@@ -98,12 +135,7 @@ export function MessageAttachments({ sessionId, parts }: MessageAttachmentsProps
               data-testid="message-attachment-image"
               className="aspect-square overflow-hidden rounded-lg border border-border bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <img
-                src={urlOf(part)}
-                alt={imageAltOf(part)}
-                loading="lazy"
-                className="size-full object-cover"
-              />
+              <AttachmentThumbImage sessionId={sessionId} partId={part.id} alt={imageAltOf(part)} />
             </button>
           ))}
         </div>
@@ -146,7 +178,8 @@ export function MessageAttachments({ sessionId, parts }: MessageAttachmentsProps
               </span>
               <video
                 controls
-                preload="metadata"
+                preload="none"
+                poster={attachmentThumbnailUrl(sessionId, part.id)}
                 src={urlOf(part)}
                 aria-label={nameOf(part)}
                 data-testid="message-attachment-video-player"

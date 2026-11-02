@@ -295,6 +295,31 @@ export const defaultConfig: SynthConfig = {
     // с путём в workspace (текущее поведение).
     modalityModels: {},
     gcDays: 30,
+    // ADR-115: сжатие — только на границе отправки провайдеру (в blob лежит
+    // оригинал). Пределы сторон/битрейты — разумные дефолты для чата; пороги
+    // `minBytes` не дают перекодировать мелкие файлы.
+    compression: {
+      enabled: true,
+      image: { enabled: true, maxSidePx: 2048, quality: 85, minBytes: 1024 * 1024 },
+      video: {
+        enabled: true,
+        maxHeightPx: 720,
+        bitrateKbps: 2000,
+        audioBitrateKbps: 96,
+        minBytes: 8 * 1024 * 1024,
+      },
+      audio: {
+        enabled: true,
+        bitrateKbps: 64,
+        channels: 1,
+        sampleRateHz: 16000,
+        minBytes: 4 * 1024 * 1024,
+      },
+    },
+    // ADR-115: серверные миниатюры для UI (производный JPEG в blob).
+    thumbnail: { enabled: true, maxWidthPx: 512 },
+    // Предел одной части chunked-загрузки, байт (8 МиБ).
+    maxChunkBytes: 8 * 1024 * 1024,
   },
   metrics: {
     // ADR-094: экспорт Prometheus-метрик выключен по умолчанию (`GET /metrics` → 404).

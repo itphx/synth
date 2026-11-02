@@ -360,15 +360,61 @@ export {
   looksLikeSvg,
   normalizeMime,
   stripMetadata,
+  ThumbnailService,
+  THUMBNAIL_DIR,
+  THUMBNAIL_SUFFIX,
+  THUMBNAIL_MAX_WIDTH,
+  THUMBNAIL_JPEG_QUALITY,
+  THUMBNAIL_MAX_BYTES,
+  jpegSize,
+  UploadSessionStore,
+  UploadSessionError,
+  UPLOAD_SESSION_TTL_MS,
 } from './engine/attachments/index.js';
 export type {
   AttachmentServiceDeps,
   AttachmentErrorCode,
   AttachmentPrunerOptions,
+  AttachmentThumbnailMeta,
+  AttachmentThumbnailProvider,
+  AttachmentThumbnailView,
   BuiltMediaPart,
   ResolvedAttachment,
+  ThumbnailInput,
+  ThumbnailMeta,
+  ThumbnailServiceDeps,
+  ThumbnailView,
   UploadedAttachmentMeta,
+  AppendedUploadChunk,
+  CreatedUploadSession,
+  CreateUploadSessionInput,
+  UploadSessionErrorCode,
+  UploadSessionRecord,
+  UploadSessionStoreDeps,
 } from './engine/attachments/index.js';
+// ADR-115 × ADR-077: медиа-раннер — единая точка запуска `ffmpeg` (inline —
+// локально, remote — на исполнителе в общем workspace).
+export {
+  createMediaRunner,
+  MediaRunner,
+  MEDIA_FFMPEG_TIMEOUT_MS,
+  MEDIA_TMP_DIR_NAME,
+  MEDIA_INPUT_NAME,
+  MEDIA_MAX_STDOUT_BYTES,
+  MEDIA_MAX_OUTPUT_BYTES,
+  resolveArgs as resolveMediaArgs,
+} from './engine/media/runner.js';
+export type {
+  MediaRunFailure,
+  MediaRunRequest,
+  MediaRunResult,
+  MediaRunnerDeps,
+  MediaRunnerFs,
+  MediaRunnerLike,
+  MediaSpawnInput,
+  MediaSpawnResult,
+  MediaSpawner,
+} from './engine/media/runner.js';
 // ADR-115: обработка вложения моделью-обработчиком (aux) — текст вместо байтов.
 export {
   deriveModalityText,
@@ -1631,7 +1677,7 @@ export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSki
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
 export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS } from './storage/runtime-settings.js';
 export type { LiveSubagentMaxInputTokens, ResolvedSubagentMaxInputTokens } from './storage/runtime-settings.js';
-export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair, AttachmentsSettings, AttachmentsRuntimeSettings, ModalityModelsRuntimePatch, AttachmentsSource, ResolvedAttachmentsSettings, LiveAttachmentsSettings, ContextWindowSource, ResolvedContextWindowPolicy, LiveContextWindowPolicy, ContextDefaultsSource, ResolvedContextDefaults, LiveContextDefaults, StickyNotesLimitsSource, ResolvedStickyNotesLimits, LiveStickyNotesLimits } from './storage/runtime-settings.js';
+export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair, AttachmentsSettings, AttachmentsConfigInput, AttachmentsRuntimeSettings, CompressionRuntimePatch, ThumbnailRuntimePatch, ModalityModelsRuntimePatch, AttachmentsSource, ResolvedAttachmentsSettings, LiveAttachmentsSettings, ContextWindowSource, ResolvedContextWindowPolicy, LiveContextWindowPolicy, ContextDefaultsSource, ResolvedContextDefaults, LiveContextDefaults, StickyNotesLimitsSource, ResolvedStickyNotesLimits, LiveStickyNotesLimits } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';

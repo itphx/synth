@@ -113,6 +113,9 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'attachments', key: 'maxFilesPerMessage', type: 'number' },
   { section: 'attachments', key: 'maxBytesPerSession', type: 'number' },
   { section: 'attachments', key: 'gcDays', type: 'number' },
+  // attachments: размер части chunked-загрузки, байт (схема: ≥ 1024;
+  // невалидное значение ниже порога отбрасывает резолвер core).
+  { section: 'attachments', key: 'maxChunkBytes', type: 'number' },
   // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
   { section: 'metrics', key: 'enabled', type: 'boolean' },
   // tools: общий предел вывода инструментов (строк/байт).

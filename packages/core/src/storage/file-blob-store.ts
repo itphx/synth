@@ -1,5 +1,6 @@
-import { createReadStream } from 'node:fs';
-import { appendFile, chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { appendFile, chmod, copyFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { BlobReadRange, BlobStat, BlobStore } from './ports/blob-store.js';
@@ -55,11 +56,60 @@ export class FileBlobStore implements BlobStore {
     await mkdir(dirname(target), { recursive: true });
 
     const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
-    const tmp = `${target}.tmp.${process.pid}.${Date.now()}`;
+    const tmp = this._tmpPath(target);
     await writeFile(tmp, buf, opts?.mode !== undefined ? { mode: opts.mode } : undefined);
     await rename(tmp, target);
     // `rename` сохраняет права tmp-файла; при явном `mode` фиксируем его поверх umask.
     if (opts?.mode !== undefined) await chmod(target, opts.mode);
+  }
+
+  /**
+   * ADR-115: потоковая запись (tmp→rename, без буферизации всего объекта).
+   * Прежнее содержимое цели при ошибке сохраняется: `rename` выполняется только
+   * после успешного дренажа потока, временный файл при сбое удаляется.
+   */
+  async writeStream(path: string, source: Readable, opts?: { mode?: number }): Promise<void> {
+    this._validate(path);
+    const target = this._resolve(path);
+    await mkdir(dirname(target), { recursive: true });
+
+    const tmp = this._tmpPath(target);
+    try {
+      await pipeline(
+        source,
+        createWriteStream(tmp, opts?.mode !== undefined ? { mode: opts.mode } : undefined),
+      );
+      await rename(tmp, target);
+      if (opts?.mode !== undefined) await chmod(target, opts.mode);
+    } catch (err) {
+      await unlink(tmp).catch(() => {});
+      throw err;
+    }
+  }
+
+  /**
+   * ADR-115: атомарный перенос объекта. `EXDEV` — источник и цель на разных
+   * файловых системах (том данных и каталог blob'ов могут быть смонтированы
+   * раздельно): копирование с удалением источника.
+   */
+  async move(from: string, to: string): Promise<void> {
+    this._validate(from);
+    this._validate(to);
+    const source = this._resolve(from);
+    const target = this._resolve(to);
+    await mkdir(dirname(target), { recursive: true });
+    try {
+      await rename(source, target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+      await copyFile(source, target);
+      await unlink(source);
+    }
+  }
+
+  /** Имя временного файла атомарной записи (рядом с целью — `rename` в том же FS). */
+  private _tmpPath(target: string): string {
+    return `${target}.tmp.${process.pid}.${Date.now()}`;
   }
 
   async append(path: string, data: Buffer | string): Promise<void> {

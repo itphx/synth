@@ -8,7 +8,7 @@ import { useTransportStore, mergeServerMessages, restoreLiveTurnFromSession } fr
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
 import { stickyNoteErrorKey, useStickyNotesLimits } from '@/lib/api/stickyNotesLimits'
 import { isQueueChangedError } from '@/lib/api/queue'
-import { attachmentContentUrl } from '@/lib/api/attachments'
+import { attachmentThumbnailUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { copyMessageText } from '@/lib/messageCopy'
@@ -50,7 +50,10 @@ const EMPTY_SELECTED_IDS: Set<string> = new Set()
  *
  * У медиа-части есть `blobPath` (серверный id вложения) и метаданные; исходного
  * `File` в истории нет, поэтому элементы сразу `ready`. Для изображений
- * `previewUrl` — URL контента (локального object URL уже не существует).
+ * `previewUrl` — **миниатюра** (`?variant=thumb`, ADR-115): превью 64×64 в
+ * композере не должно тянуть полноразмерный оригинал (локального object URL
+ * уже не существует). Нет миниатюры — `AttachedFilesList` один раз подставит
+ * оригинал.
  */
 function restoreAttachmentsFromMessage(
   sessionId: string,
@@ -77,7 +80,7 @@ function restoreAttachmentsFromMessage(
       name: data.name,
       partId: part.id,
       previewUrl: mimeType.toLowerCase().startsWith('image/')
-        ? attachmentContentUrl(sessionId, part.id)
+        ? attachmentThumbnailUrl(sessionId, part.id)
         : undefined,
     })
   }

@@ -50,6 +50,29 @@ describe('defaultConfig', () => {
       // ADR-115: модели обработки по модальностям не назначены (обработка не настроена).
       modalityModels: {},
       gcDays: 30,
+      // ADR-115: сжатие — только на границе отправки провайдеру (оригинал в blob).
+      compression: {
+        enabled: true,
+        image: { enabled: true, maxSidePx: 2048, quality: 85, minBytes: 1024 * 1024 },
+        video: {
+          enabled: true,
+          maxHeightPx: 720,
+          bitrateKbps: 2000,
+          audioBitrateKbps: 96,
+          minBytes: 8 * 1024 * 1024,
+        },
+        audio: {
+          enabled: true,
+          bitrateKbps: 64,
+          channels: 1,
+          sampleRateHz: 16000,
+          minBytes: 4 * 1024 * 1024,
+        },
+      },
+      // ADR-115: серверные миниатюры для UI.
+      thumbnail: { enabled: true, maxWidthPx: 512 },
+      // ADR-115: размер части chunked-загрузки.
+      maxChunkBytes: 8 * 1024 * 1024,
     });
   });
 

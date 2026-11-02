@@ -19,6 +19,11 @@ import {
   type AttachmentMetricsHooks,
 } from '../../metrics/collectors/attachments.js';
 import { ATTACHMENT_DIR, ATTACHMENT_SIDECAR_SUFFIX } from './service.js';
+import { DERIVE_CACHE_DIR } from './derive.js';
+import { THUMBNAIL_DIR } from './thumbnails.js';
+
+/** Служебные подкаталоги вложений: производные объекты и миниатюры — не сироты. */
+const SERVICE_SUBDIRS = [`${DERIVE_CACHE_DIR}/`, `${THUMBNAIL_DIR}/`] as const;
 
 export interface AttachmentPrunerOptions {
   blobs: BlobStore;
@@ -62,6 +67,10 @@ export function startAttachmentPruner(opts: AttachmentPrunerOptions): () => void
       for (const entry of entries) {
         // Sidecar — не объект: удаляется вместе со своим объектом.
         if (entry.path.endsWith(ATTACHMENT_SIDECAR_SUFFIX)) continue;
+        // Производные объекты (`attachments/.derived`) и миниатюры
+        // (`attachments/.thumbs`) — не самостоятельные вложения: у них нет
+        // `blob_refs`, но удалять их как сирот нельзя (кэш обработки/превью).
+        if (SERVICE_SUBDIRS.some((prefix) => entry.path.startsWith(prefix))) continue;
         const refs = await opts.blobRefs.countRefs(entry.path);
         if (refs > 0) continue;
         const stat = await opts.blobs.stat(entry.path);

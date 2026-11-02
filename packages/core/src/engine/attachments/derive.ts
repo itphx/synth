@@ -54,15 +54,15 @@
  * обычный путь «вложение отброшено и материализовано».
  */
 
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { pipeline } from 'node:stream/promises';
 import { makeMediaPart, type MediaPartData, type Part } from '@itphx/synth-shared';
+import type { ExecutionPort } from '../../execution/ports/index.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
+import {
+  createMediaRunner,
+  MEDIA_FFMPEG_TIMEOUT_MS,
+  type MediaRunnerLike,
+} from '../media/runner.js';
 
 /** Каталог производных объектов и кэша результатов (внутри blob-хранилища). */
 export const DERIVE_CACHE_DIR = 'attachments/.derived';
@@ -76,8 +76,11 @@ export const MAX_VIDEO_FRAMES = 5;
 /** Предел объёма производного объекта (транскод/кадры), байт. */
 export const MAX_DERIVED_BYTES = 32 * 1024 * 1024;
 
-/** Таймаут одного вызова `ffmpeg`, мс (зависший процесс не держит ход). */
-const FFMPEG_TIMEOUT_MS = 60_000;
+/**
+ * Таймаут одного вызова `ffmpeg` реэкспортируется из медиа-раннера (единый
+ * источник): зависший процесс не держит ход.
+ */
+export { MEDIA_FFMPEG_TIMEOUT_MS as FFMPEG_TIMEOUT_MS };
 
 /** Семейство вложения, для которого ищется модель обработки. */
 export type DeriveFamily = 'image' | 'pdf' | 'audio' | 'video';
@@ -137,10 +140,17 @@ export interface DeriveDeps {
   hasFfmpeg: () => boolean;
   /**
    * Запуск `ffmpeg` с байтами входа; stdout — кусками (инъекция тестов и
-   * встраивания). Не задан — реальный `spawn('ffmpeg', …)`, вход — временный
-   * файл, в который blob пишется потоком (`blobs.readStream`).
+   * встраивания). Не задан — медиа-раннер (`../media/runner.ts`): inline —
+   * локальный `spawn` во временном каталоге, remote (split-режим) — команда
+   * уходит исполнителю в общий workspace (`requires: ['ffmpeg']`).
    */
   runFfmpeg?: (args: string[], input: Buffer) => Promise<Buffer[]>;
+  /** Готовый медиа-раннер (инъекция; иначе собирается из `blobs`/порта/root). */
+  mediaRunner?: MediaRunnerLike;
+  /** Порт исполнения: в remote ffmpeg живёт на исполнителе (ADR-077). */
+  executionPort?: ExecutionPort;
+  /** Корень workspace (общий том с исполнителем; нужен только в remote). */
+  workspacesRoot?: string;
   /**
    * Шаблон промпта для языка (`ContextConfig.getMediaDeriveTemplate`).
    * Плейсхолдеры `{modality}` и `{name}` подставляет этот модуль. Пусто/не
@@ -283,71 +293,30 @@ function describeError(err: unknown): string {
 }
 
 /**
- * Реальный запуск `ffmpeg`: вход — временный файл, stdout — кусками.
+ * Медиа-раннер для зависимостей derive.
  *
- * MP4/WebM с `moov` в конце не читаются из неразмеченного stdin (`partial
- * file` → `Could not open encoder before EOF`), поэтому `pipe:0` заменяется на
- * путь к файлу. Файл удаляется в `finally`; таймаут и предел вывода — чтобы
- * зависший/раздувшийся транскод не держал ход сессии. Только `spawn` с argv
- * (без shell).
+ * Инъекция (`mediaRunner`) приоритетнее; иначе собирается из blob-порта и
+ * порта исполнения: inline — локальный запуск, remote — команда уходит
+ * исполнителю в общий workspace (ADR-077). Раннер stateless, поэтому создание
+ * на вызов дешево.
  */
-function spawnFfmpegOnPath(args: string[], inputPath: string): Promise<Buffer[]> {
-  return spawnFfmpeg(args.map((arg) => (arg === 'pipe:0' ? inputPath : arg)));
+function resolveMediaRunner(deps: DeriveDeps): MediaRunnerLike {
+  if (deps.mediaRunner) return deps.mediaRunner;
+  return createMediaRunner({
+    blobs: deps.blobs,
+    ...(deps.executionPort ? { executionPort: deps.executionPort } : {}),
+    ...(deps.workspacesRoot ? { workspacesRoot: deps.workspacesRoot } : {}),
+    ...(deps.log ? { log: deps.log } : {}),
+  });
 }
 
 /**
- * Совместимый буферный путь: объект уже прочитан целиком (`blobsRead`/инъекция
- * `runFfmpeg`) — байты кладутся во временный файл и `ffmpeg` получает путь.
- */
-async function runFfmpegSpawn(args: string[], input: Buffer): Promise<Buffer[]> {
-  const dir = await mkdtemp(join(tmpdir(), 'synth-ffmpeg-'));
-  const inputPath = join(dir, 'input.bin');
-  try {
-    await writeFile(inputPath, input);
-    return await spawnFfmpegOnPath(args, inputPath);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-/**
- * Потоковый путь (по умолчанию): blob пишется во временный файл через
- * `BlobStore.readStream`, `ffmpeg` получает **путь** — объект целиком в памяти
- * не держится (видео бывает крупным). `null` — объект не прочитан/пуст (та же
- * причина отказа, что и у буферного пути). Временный каталог удаляется в
- * `finally` при любом исходе: успех, ошибка чтения, сбой `ffmpeg`, таймаут.
- */
-async function runFfmpegStream(
-  deps: DeriveDeps,
-  blobPath: string,
-  args: string[],
-): Promise<Buffer[] | null> {
-  const dir = await mkdtemp(join(tmpdir(), 'synth-ffmpeg-'));
-  const inputPath = join(dir, 'input.bin');
-  try {
-    // Ошибка чтения — та же причина отказа, что и «объект не прочитан».
-    const stream = await deps.blobs.readStream(blobPath).catch(() => null);
-    if (!stream) return null;
-    try {
-      await pipeline(stream, createWriteStream(inputPath));
-    } catch (err) {
-      deps.log?.(
-        `[MediaDerive] объект не записан во временный файл (${blobPath}): ${describeError(err)}`,
-      );
-      return null;
-    }
-    const info = await stat(inputPath).catch(() => null);
-    if (!info || info.size === 0) return null;
-    return await spawnFfmpegOnPath(args, inputPath);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-/**
- * Запуск `ffmpeg` для blob-объекта. По умолчанию — поток во временный файл;
- * при инъекциях (`runFfmpeg`/`blobsRead`) — прежний буферный контракт.
- * `null` — объект не прочитан/пуст.
+ * Запуск `ffmpeg` для blob-объекта.
+ *
+ * Инъекция `runFfmpeg` (тесты/встраивание) сохраняет прежний буферный контракт;
+ * иначе работает медиа-раннер: blob читается **потоком** во временный файл
+ * (`BlobStore.readStream`), поэтому крупное видео целиком в память не попадает.
+ * `null` — объект не прочитан/пуст (ffmpeg не запускается).
  */
 async function runFfmpegForBlob(
   deps: DeriveDeps,
@@ -355,54 +324,37 @@ async function runFfmpegForBlob(
   args: string[],
 ): Promise<Buffer[] | null> {
   const run = deps.runFfmpeg;
-  if (!run && !deps.blobsRead) return runFfmpegStream(deps, blobPath, args);
-  const bytes = await readBlob(deps, blobPath);
-  if (!bytes || bytes.length === 0) return null;
-  return run ? run(args, bytes) : runFfmpegSpawn(args, bytes);
-}
+  if (run) {
+    const bytes = await readBlob(deps, blobPath);
+    if (!bytes || bytes.length === 0) return null;
+    return run(args, bytes);
+  }
 
-function spawnFfmpeg(args: string[]): Promise<Buffer[]> {
-  return new Promise<Buffer[]>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    const chunks: Buffer[] = [];
-    const errors: Buffer[] = [];
-    let size = 0;
-    let settled = false;
+  // `blobsRead` — старая инъекция сырого чтения: отдаём байты раннеру, чтобы
+  // derive не запускал процесс сам (единая точка запуска — runner).
+  let inputBytes: Buffer | undefined;
+  if (deps.blobsRead) {
+    const bytes = await readBlob(deps, blobPath);
+    if (!bytes || bytes.length === 0) return null;
+    inputBytes = bytes;
+  }
 
-    const finish = (err: Error | null, value?: Buffer[]): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (err) reject(err);
-      else resolve(value ?? []);
-    };
-
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      finish(new Error(`ffmpeg не завершился за ${FFMPEG_TIMEOUT_MS} мс`));
-    }, FFMPEG_TIMEOUT_MS);
-    timer.unref?.();
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_DERIVED_BYTES) {
-        child.kill('SIGKILL');
-        finish(new Error(`вывод ffmpeg превысил ${MAX_DERIVED_BYTES} байт`));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    child.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
-    child.on('error', (err) => finish(err));
-    child.on('close', (code) => {
-      if (code === 0) {
-        finish(null, chunks.length > 0 ? [Buffer.concat(chunks)] : []);
-        return;
-      }
-      const tail = Buffer.concat(errors).toString('utf-8').trim().slice(-400);
-      finish(new Error(`ffmpeg вышел с кодом ${code}${tail ? `: ${tail}` : ''}`));
-    });
+  const result = await resolveMediaRunner(deps).run({
+    args,
+    ...(inputBytes ? { inputBytes } : { inputBlobPath: blobPath }),
+    timeoutMs: MEDIA_FFMPEG_TIMEOUT_MS,
+    maxOutputBytes: MAX_DERIVED_BYTES,
   });
+  if (!result.ok) {
+    if (result.reason === 'no_ffmpeg' || result.reason === 'dependency_missing') {
+      // Отдельная причина деградации: вызывающий отбрасывает вложение штатно.
+      const error = new Error(result.error ?? 'ffmpeg недоступен');
+      (error as Error & { reason?: string }).reason = 'no_ffmpeg';
+      throw error;
+    }
+    throw new Error(result.error ?? result.reason ?? 'ffmpeg не справился');
+  }
+  return result.outputs;
 }
 
 /**
@@ -558,7 +510,10 @@ async function buildParts(
     output = await runFfmpegForBlob(deps, data.blobPath, args);
   } catch (err) {
     log(`[MediaDerive] ffmpeg не справился (${input.family}, ${input.mime}): ${describeError(err)}`);
-    return { ok: false, reason: 'failed' };
+    return {
+      ok: false,
+      reason: (err as { reason?: unknown } | null)?.reason === 'no_ffmpeg' ? 'no_ffmpeg' : 'failed',
+    };
   }
   if (!output) {
     log(`[MediaDerive] объект вложения не прочитан (${data.blobPath})`);
@@ -653,7 +608,10 @@ export async function deriveVideoAudioText(
     output = await runFfmpegForBlob(deps, input.blobPath, audioTranscodeArgs(true));
   } catch (err) {
     log(`[MediaDerive] video-audio: ffmpeg не извлёк дорожку (${input.mime}): ${describeError(err)}`);
-    return { ok: false, reason: 'failed' };
+    return {
+      ok: false,
+      reason: (err as { reason?: unknown } | null)?.reason === 'no_ffmpeg' ? 'no_ffmpeg' : 'failed',
+    };
   }
   if (!output) {
     log(`[MediaDerive] video-audio: объект не прочитан (${input.blobPath})`);

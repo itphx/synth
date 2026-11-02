@@ -40,10 +40,14 @@ import type { AttachmentsConfig } from '@itphx/synth-shared';
 import { getAttachmentMetricsHook } from '../../metrics/collectors/attachments.js';
 import { ATTACHMENT_DIR, AttachmentError } from '../../engine/attachments/service.js';
 import type { AttachmentService, UploadedAttachmentMeta } from '../../engine/attachments/service.js';
+import { UploadSessionStore } from '../../engine/attachments/uploads.js';
 import {
   attachmentErrorResponse,
   DEFAULT_MESSAGES,
+  isMultipartUpload,
+  openAttachmentRawUpload,
   readAttachmentUploadForm,
+  registerUploadSessionRoutes,
   type AttachmentRouteMessages,
 } from './attachments.js';
 
@@ -106,6 +110,8 @@ export function createStagingAttachmentRoutes(
   /** Эффективные настройки на текущий запрос (ADR-115: runtime без рестарта). */
   const resolveConfig = (): AttachmentsConfig =>
     typeof deps.config === 'function' ? deps.config() : deps.config;
+  // B2a: chunked-загрузка (in-memory реестр сессий; см. `uploads.ts`).
+  const uploads = new UploadSessionStore({ service: deps.service, config: deps.config });
 
   // Гейт навешивается на `/*`: покрывает и `POST /` (загрузка), и
   // `GET /:sha256` (раздача) — `use('/')` матчил бы только корень.
@@ -122,34 +128,42 @@ export function createStagingAttachmentRoutes(
       );
     }
 
-    const form = await readAttachmentUploadForm(c, config, messages);
-    if (!form.ok) return form.response;
-
+    let meta: UploadedAttachmentMeta;
     try {
-      // Сессии нет: объект живёт до появления ссылки либо до GC (`gcDays`).
-      const meta = await deps.service.upload({
-        bytes: form.bytes,
-        ...(form.name ? { name: form.name } : {}),
-        ...(form.declaredMime ? { declaredMime: form.declaredMime } : {}),
-      });
-      if (deps.audit) {
-        const user = (await auth.getCurrentUser?.(c)) ?? null;
-        try {
-          await deps.audit({ meta, ...(user?.id ? { userId: user.id } : {}) });
-        } catch (err) {
-          // Аудит не должен отменять уже записанный объект.
-          log(
-            `[attachments] аудит staging-загрузки не записан: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
+      if (isMultipartUpload(c)) {
+        const form = await readAttachmentUploadForm(c, config, messages);
+        if (!form.ok) return form.response;
+        // Сессии нет: объект живёт до появления ссылки либо до GC (`gcDays`).
+        meta = await deps.service.upload({
+          bytes: form.bytes,
+          ...(form.name ? { name: form.name } : {}),
+          ...(form.declaredMime ? { declaredMime: form.declaredMime } : {}),
+        });
+      } else {
+        // Raw-body (ADR-115 этап B1): тело запроса — файл, байты идут потоком.
+        const raw = openAttachmentRawUpload(c, config, messages);
+        if (!raw.ok) return raw.response;
+        meta = await deps.service.ingestStream(raw.upload);
       }
-      return c.json(meta, 201);
     } catch (err) {
       if (err instanceof AttachmentError) {
         return attachmentErrorResponse(c, err, messages, config.maxBytesPerFile);
       }
       throw err;
     }
+
+    if (deps.audit) {
+      const user = (await auth.getCurrentUser?.(c)) ?? null;
+      try {
+        await deps.audit({ meta, ...(user?.id ? { userId: user.id } : {}) });
+      } catch (err) {
+        // Аудит не должен отменять уже записанный объект.
+        log(
+          `[attachments] аудит staging-загрузки не записан: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return c.json(meta, 201);
   });
 
   // GET /:sha256 — байты вложения по sha256 (outbound-контур шлюзов).
@@ -172,6 +186,34 @@ export function createStagingAttachmentRoutes(
     const blobPath = `${ATTACHMENT_DIR}/${sha256.slice(0, 2)}/${sha256}`;
     const resolved = await deps.service.resolve(blobPath);
     if (!resolved) return notFound();
+
+    // ADR-115: `?variant=thumb` — серверная миниатюра JPEG (тот же контур
+    // доступа и content-addressed адресация). Нет миниатюры — 404.
+    if (c.req.query('variant') === 'thumb') {
+      let thumb = await deps.service.thumbnail(blobPath);
+      if (!thumb) {
+        // Ленивая генерация (объект загружен до появления миниатюр).
+        await deps.service.ensureThumbnail(blobPath, resolved.mime);
+        thumb = await deps.service.thumbnail(blobPath);
+      }
+      if (!thumb) return notFound();
+      const etag = `"thumb-${resolved.sha256}-${thumb.width}"`;
+      const thumbHeaders: Record<string, string> = {
+        'Content-Type': thumb.mime,
+        'Content-Length': String(thumb.size),
+        ETag: etag,
+        'Cache-Control': 'private, max-age=86400',
+      };
+      if (c.req.method === 'HEAD') {
+        metrics?.onDownload({ outcome: 'ok' });
+        return c.body(null, 200, thumbHeaders);
+      }
+      metrics?.onDownload({ outcome: 'ok' });
+      return new Response(Readable.toWeb(thumb.stream) as unknown as ReadableStream, {
+        status: 200,
+        headers: thumbHeaders,
+      });
+    }
 
     // `Cache-Control: private, no-store` — staging-объект не кэшируется
     // посредниками; `Range` не поддерживаем (шлюзу нужен весь файл).
@@ -196,6 +238,27 @@ export function createStagingAttachmentRoutes(
       status: 200,
       headers,
     });
+  });
+
+  // B2a: chunked-загрузка под тем же контуром (`/api/v2/attachments/uploads…`).
+  // Аудит — как у `POST /` (best-effort после публикации вложения).
+  registerUploadSessionRoutes(app, {
+    uploads,
+    resolveConfig,
+    messages,
+    basePath: '/uploads',
+    onComplete: async (meta, c) => {
+      if (!deps.audit) return;
+      const user = (await auth.getCurrentUser?.(c)) ?? null;
+      try {
+        await deps.audit({ meta, ...(user?.id ? { userId: user.id } : {}) });
+      } catch (err) {
+        // Аудит не должен отменять уже записанный объект.
+        log(
+          `[attachments] аудит staging-загрузки не записан: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
   });
 
   return app;

@@ -629,8 +629,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 | Метод | Путь | Сборка | RBAC | Назначение / req-resp |
 |---|---|---|---|---|
-| POST | `/api/v2/sessions/:id/attachments` | оба | auth + **запись** сессии (prefix-guard) | multipart, поле `file` — **один файл за запрос** (необязательное поле `name` — имя для метаданных) → **201** `{id, blobPath, sha256, mime, size, name?}` |
-| GET / HEAD | `/api/v2/sessions/:id/attachments/:partId` | оба | auth + **чтение** сессии (prefix-guard) | Байты вложения: `200` (поток), `206` при `Range`, `304` при совпадении `ETag`, `416` при некорректном диапазоне; `HEAD` — те же заголовки без тела |
+| POST | `/api/v2/sessions/:id/attachments` | оба | auth + **запись** сессии (prefix-guard) | **multipart** (`multipart/form-data`, поле `file`) **или raw-body** (любой другой `Content-Type` — тело запроса и есть файл; имя — `?name=` или `x-file-name`) — **один файл за запрос** → **201** `{id, blobPath, sha256, mime, size, name?}` |
+| GET / HEAD | `/api/v2/sessions/:id/attachments/:partId` | оба | auth + **чтение** сессии (prefix-guard) | Байты вложения: `200` (поток), `206` при `Range`, `304` при совпадении `ETag`, `416` при некорректном диапазоне; `HEAD` — те же заголовки без тела. `?variant=thumb` — серверная миниатюра JPEG (см. ниже) |
 
 **Ответ загрузки.** `id` равен `blobPath` — путь объекта `attachments/<sha2>/<sha256>`; адресация
 content-addressed, поэтому повторная загрузка тех же байтов возвращает тот же путь (дедуп).
@@ -650,11 +650,12 @@ content-addressed, поэтому повторная загрузка тех ж�
 | Лимит | Где проверяется | По умолчанию | Нарушение |
 |---|---|---|---|
 | `attachments.enabled` | загрузка и staging | `true` | `415 attachments_disabled` — вложения выключены администратором: клиенту показывать, что отправка вложений недоступна (повтор запроса не поможет; код общий для загрузки в сессию и staging) |
-| `attachments.maxBytesPerFile` | загрузка | 100 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` — до чтения тела, с запасом 64 КиБ на multipart-обвязку; затем по фактическому размеру). Тело отказа несёт `error.details.maxBytesPerFile` — **фактический** предел инстанса (клиент показывает его в тексте ошибки) |
+| `attachments.maxBytesPerFile` | загрузка | 100 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` — до чтения тела, с запасом 64 КиБ на multipart-обвязку **только в multipart**; затем по фактическому размеру). Тело отказа несёт `error.details.maxBytesPerFile` — **фактический** предел инстанса (клиент показывает его в тексте ошибки) |
 | `attachments.allowedMimePrefixes`, запрет SVG | загрузка | см. выше | `415 UNSUPPORTED_MEDIA_TYPE` |
 | `attachments.maxFilesPerMessage` | `POST …/prompt` | 10 | `400 VALIDATION_ERROR` |
 | контракт OpenAPI/SDK (`promptRequestSchema`) | публикуемая схема §5.30 | не более **50** путей в `attachments` | `400 VALIDATION_ERROR` при валидации схемой; HTTP-обработчик проверяет `maxFilesPerMessage` (см. выше) |
 | `attachments.maxBytesPerSession` | `POST …/prompt` | 1 ГиБ | `413 PAYLOAD_TOO_LARGE` |
+| `attachments.maxChunkBytes` | chunked-загрузка (`PUT …/uploads/:id`) | 8 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` и по фактическому телу; `error.details.maxChunkBytes`) |
 | `attachments.gcDays` | GC (фон) | 30 дней | — (объект без ссылок старше срока удаляется) |
 
 Квота сессии считается по **сумме `size` медиа-частей в истории сессии**, а не по ссылкам, и
@@ -664,6 +665,34 @@ multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404
 `415 UNSUPPORTED_MEDIA_TYPE` (тип вне белого списка, SVG; сюда же попадает пустой файл — MIME по
 содержимому не определяется), `415 attachments_disabled` (вложения выключены администратором —
 `attachments.enabled=false`; клиенту код говорит, что дело в настройке инстанса, а не в файле).
+
+**Raw-body загрузка (ADR-115, `POST …/attachments`).** Если `Content-Type` **не** `multipart/form-data`,
+тело запроса — сам файл (потоковая загрузка без буферизации): сервер пишет его в blob потоком,
+считает `sha256` инкрементально и определяет MIME по первым ~4 КиБ. Имя — `?name=` (URL-декодирован,
+приоритет) либо заголовок `x-file-name` (percent-encoding; битая последовательность — как есть);
+`Content-Type` без параметров считается заявленным MIME (фактический всё равно по сигнатуре).
+`Content-Length` больше `maxBytesPerFile` → `413` **до** чтения тела; пустое тело/`Content-Length: 0`
+→ `400 VALIDATION_ERROR`; ответ — тот же **201** `{id, blobPath, sha256, mime, size, name?}`.
+Multipart сохранён для совместимости (Telegram-шлюз, старые клиенты).
+
+**Chunked-загрузка (ADR-115).** Для крупных файлов (видео) — четырёхшаговый протокол: часть
+принимается потоком и дописывается во временный объект, целый файл в память не поднимается. База —
+`/api/v2/sessions/:id/attachments/uploads` (контур сессии) и `/api/v2/attachments/uploads` (staging);
+RBAC — как у `POST`-загрузки соответствующего контура (в контуре сессии — **запись**, prefix-guard).
+
+| Метод | Путь | Назначение / req-resp |
+|---|---|---|
+| POST | `<base>` | инициализация; тело `{name?, mime?, size?}` (все поля необязательны; пустое тело допустимо); `size` больше `maxBytesPerFile` → `413`; **201** `{uploadId, maxChunkBytes}` |
+| PUT | `<base>/:uploadId?offset=N` | часть сырых байтов; `offset` обязан совпадать с уже принятым объёмом, иначе `400 VALIDATION_ERROR`; тело больше `maxChunkBytes` (по `Content-Length` или фактически) → `413` с `details.maxChunkBytes`; итог больше `maxBytesPerFile` → `413` с `details.maxBytesPerFile`; **200** `{received, nextOffset}` |
+| POST | `<base>/:uploadId/complete` | публикация вложения (тот же результат, что у обычной загрузки); **201** `{id, blobPath, sha256, mime, size, name?}`; повторное завершение → `404` |
+| DELETE | `<base>/:uploadId` | отмена; **204** идемпотентно (неизвестный/уже отменённый id — тоже 204) |
+
+Коды: неизвестная/протухшая сессия загрузки → `404 NOT_FOUND`; `415 attachments_disabled` при
+выключенных вложениях; `415 UNSUPPORTED_MEDIA_TYPE` — MIME вне allowlist (на `complete`).
+Состояние сессий — **в памяти процесса**, временный объект — `attachments/.uploads/<uuid>` на томе
+пода; TTL — 1 час без активности, уборка ленивая (на `create`/`append`/`complete`). Ограничение:
+multi-replica control plane протокол не обслуживает (нужен sticky/один инстанс). Лимиты
+(`maxChunkBytes`/`maxBytesPerFile`/`enabled`) читаются из live-резолвера на каждый вызов.
 
 **Раздача (`GET`/`HEAD`).** `:partId` — id **медиа-части сообщения** (`image`/`audio`/`video`/`file`),
 а не `id` из ответа загрузки; путь объекта (`blobPath`) передаётся только в теле промпта. Доступ
@@ -676,20 +705,33 @@ multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404
 `Content-Range`; множественные/нечисловые заголовки → объект целиком (`200`); числовой диапазон вне
 объекта (или `end < start`) → `416` с `Content-Range: bytes */<size>`.
 
+**Миниатюры (`?variant=thumb`).** Тот же путь раздачи с query-параметром отдаёт **производный
+JPEG** (`attachments/.thumbs/<sha256>-<width>.jpg`) — превью для UI, а не оригинал. Генерация
+ленивая: нет файла — сервер создаёт его (для старых вложений тоже) и повторно ищет; `image`/`video`
+дают кадр (видео — на 1 с или 10 % длительности), `audio`/`file`/`pdf` — миниатюры нет. Заголовки:
+`Content-Type: image/jpeg`, `ETag: "thumb-<sha256>-<width>"`, `Cache-Control: private, max-age=86400`,
+`Content-Length`; в контуре сессии поддержан `If-None-Match` → `304`. Нет миниатюры (не применима,
+выключена, генерация не удалась, нет `ffmpeg`) или части/пути нет → `404 NOT_FOUND`; клиент в этом
+случае один раз откатывается на оригинал. Оригинал и его `ETag`/`Range`-поведение не меняются;
+выключение `attachments.thumbnail.enabled` прекращает генерацию, уже созданные файлы отдаются.
+
 **Staging-загрузка (без сессии) — `POST /api/v2/attachments` (оба, ADR-115).** Для контуров, у
 которых нет пользовательской сессии: шлюзы (Telegram/VK) принимают файл из внешнего канала,
-пайплайны — из шага. Контракт запроса/ответа тот же, что у загрузки в сессию (`multipart/form-data`,
-поле `file`; необязательное `name`) → **201** `{id, blobPath, sha256, mime, size, name?}`, ошибки —
+пайплайны — из шага. Контракт запроса/ответа тот же, что у загрузки в сессию: **multipart**
+(`multipart/form-data`, поле `file`; необязательное `name`) **или raw-body** (тело — файл; имя —
+`?name=`/`x-file-name`) → **201** `{id, blobPath, sha256, mime, size, name?}`, ошибки —
 те же (`400`, `413` — с `error.details.maxBytesPerFile`, `415`, включая `415 attachments_disabled`
-при выключенных вложениях).
+при выключенных вложениях). Крупные файлы — тем же chunked-протоколом на
+`/api/v2/attachments/uploads` (init/part/complete/cancel; база, коды и ограничения — §«Chunked-загрузка»).
 Полученный `blobPath` дальше передаётся в `POST /sessions/:id/prompt`
 (`attachments: string[]`), в `POST /api/v2/events` (§5.26 — `attachments[]` со ссылками и
 метаданными) или используется как артефакт прогона.
 
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
-| POST | `/api/v2/attachments` | оба | core — `requireAuth`; managed — `requireAuth` + service-key scope `events:ingest` | staging-загрузка файла вне сессии → **201** `{id, blobPath, sha256, mime, size, name?}` |
-| GET / HEAD | `/api/v2/attachments/:sha256` | оба | core — `requireAuth`; managed — `requireAuth` + service-key scope `events:ingest` | байты вложения **по sha256** (outbound-контур шлюзов): `200` (поток) с `Content-Type`, `Content-Length`, `Cache-Control: private, no-store`; `HEAD` — те же заголовки без тела; `404 NOT_FOUND` — объекта нет либо sha не 64 hex (существование не раскрывается) |
+| POST | `/api/v2/attachments` | оба | core — `requireAuth`; managed — `requireAuth` + service-key scope `events:ingest` | staging-загрузка файла вне сессии (multipart **или** raw-body) → **201** `{id, blobPath, sha256, mime, size, name?}` |
+| GET / HEAD | `/api/v2/attachments/:sha256` | оба | core — `requireAuth`; managed — `requireAuth` + service-key scope `events:ingest` | байты вложения **по sha256** (outbound-контур шлюзов): `200` (поток) с `Content-Type`, `Content-Length`, `Cache-Control: private, no-store`; `HEAD` — те же заголовки без тела; `404 NOT_FOUND` — объекта нет либо sha не 64 hex (существование не раскрывается). `?variant=thumb` — производный JPEG (`Content-Type: image/jpeg`, `ETag: "thumb-<sha256>-<width>"`), `HEAD` поддержан; нет миниатюры → `404` |
+| POST / PUT / DELETE | `/api/v2/attachments/uploads[/:uploadId[/complete]]` | оба | как у `POST /api/v2/attachments` | chunked-загрузка (init → части по `offset` → `complete` → отмена); коды и тела — §«Chunked-загрузка» |
 
 **Outbound-вложения ответа — `step.finished.attachments` + раздача по sha (ADR-115 × ADR-118).** Шлюзу
 (Telegram/VK) не нужен доступ к сессии, чтобы отправить финальные вложения ответа наружу: событие
@@ -715,7 +757,10 @@ service-key scope `events:ingest`); объект должен существов
 `blobPath` попадёт в сообщение (или артефакт). Пока ссылок нет, действует общий критерий GC —
 `countRefs(blobPath) === 0` **и** возраст > `attachments.gcDays`; отдельного TTL у staging нет
 (pruner — сразу при старте и далее каждые 6 часов). Оригиналы сохраняются так же, как у загрузки в
-сессию (очистка метаданных — на границе отправки провайдеру).
+сессию (очистка метаданных — на границе отправки провайдеру). Производные объекты и кэш сжатия
+(`attachments/.derived/**`, включая `compress`) и миниатюры (`attachments/.thumbs/**`) — **не**
+сироты: pruner их не удаляет (автоматической уборки кэша нет); временные объекты chunked-сессий
+(`attachments/.uploads/**`) подчиняются TTL сессии (1 ч), а не `gcDays`.
 
 **Вложения в промпте.** Тело `POST /api/v2/sessions/:id/prompt` принимает аддитивное
 `attachments?: string[]` — массив **`blobPath`**, полученных из загрузки (не `partId`); дубли
@@ -1291,8 +1336,8 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/settings/metrics/status` | ADMIN (managed) / auth (core) | Live-снимок: `{enabled, running, source, restartRequired, ready, storage:"ok"\|"degraded", storageBackend, version, uptimeSec, exposition:{series,bytes,droppedSeries}, token, endpoints}` |
 | PUT | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Bearer-токен `/metrics` (write-only): `{token}` (после trim ≥16 символов) → `{dataDir}/secrets/metrics-token` (`0600`, атомарно), применяется **сразу**; короткий/пустой → 400 `VALIDATION_ERROR`; токен из env → 409 `CONFLICT`; значение не возвращается |
 | DELETE | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Удалить файл токена (идемпотентно) → `{token:{configured,source}}`; токен из env → 409 `CONFLICT` |
-| GET | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Runtime-настройки вложений (ADR-115): `{attachments:{enabled, modalities:{image,pdf,audio,video}, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession, allowedMimePrefixes, workspaceFallback, modalityModels:{image?,pdf?,audio?,video?}, gcDays}, defaults, saved, isOverridden, source:"env"\|"runtime"\|"config"\|"default", envLocked:string[], restartRequired:false, running}`; `attachments` — эффективные значения (в `modalityModels` записи нет — обработка модальности не настроена), `defaults` — база без runtime/env, `saved` — сохранённый runtime-патч как есть (`{}` — runtime-значения нет); приоритет `SYNTH_ATTACHMENTS_*` > runtime > `config.yaml` `attachments` > defaults |
-| PUT | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Патч `{attachments:{…}}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: сервис вложений, промпт и GC читают резолвер на каждый вызов); `modalities` мёржится вложенно; неизвестные ключи игнорируются; невалидное значение → 400 `VALIDATION_ERROR`; поле из env с другим значением → 409 `CONFLICT`; ответ как у `GET`. **`modalityModels` (ADR-115):** объект «семейство → `{provider, model}`»; `null` (или `{}`) снимает настройку семейства, отсутствие ключа — база (config.yaml) сохраняется; мёржится **по семействам** (runtime дополняет config, перекрывает одну модальность, не трогая остальные). До записи проверяется каталог: провайдер существует, модель `<provider>/<model>` существует, модальности модели **известны** и содержат нужное семейство; иначе 400 с причиной (`modalityModels.<семейство>: …`: какая модель, какие модальности у неё заявлены; для неизвестных модальностей — просьба выполнить `POST /api/v2/models/fetch`). Частичных сохранений нет. Патч заменяет runtime-значение секции **целиком** (как остальные `/settings/*`): незаданные поля возвращаются к config/default — UI-форма при сохранении присылает `modalityModels` вместе с остальными полями, иначе runtime-назначения aux-моделей снимаются |
+| GET | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Runtime-настройки вложений (ADR-115): `{attachments:{enabled, modalities:{image,pdf,audio,video}, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession, allowedMimePrefixes, workspaceFallback, modalityModels:{image?,pdf?,audio?,video?}, gcDays, compression:{enabled,image:{enabled,maxSidePx,quality,minBytes},video:{enabled,maxHeightPx,bitrateKbps,audioBitrateKbps,minBytes},audio:{enabled,bitrateKbps,channels,sampleRateHz,minBytes}}, thumbnail:{enabled,maxWidthPx}, maxChunkBytes}, defaults, saved, isOverridden, source:"env"\|"runtime"\|"config"\|"default", envLocked:string[], restartRequired:false, running}`; `attachments` — эффективные значения (в `modalityModels` записи нет — обработка модальности не настроена), `defaults` — база без runtime/env, `saved` — сохранённый runtime-патч как есть (`{}` — runtime-значения нет); приоритет `SYNTH_ATTACHMENTS_*` > runtime > `config.yaml` `attachments` > defaults. `compression`/`thumbnail` — не секреты и не секретные поля; `envLocked` — поля, зафиксированные env; среди новых полей env-ключ есть только у `maxChunkBytes` (`SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES`) |
+| PUT | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Патч `{attachments:{…}}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: сервис вложений, промпт и GC читают резолвер на каждый вызов); `modalities` мёржится вложенно; **`compression`/`thumbnail` мёржатся частично** (глубокий merge по путям: `{compression:{image:{maxSidePx}}}` меняет одно поле, остальные берутся из базы; невалидное значение → 400 с путём поля, напр. `compression.video.bitrateKbps`; неизвестные поля игнорируются) — но UI присылает объекты целиком; неизвестные ключи секции игнорируются; невалидное значение → 400 `VALIDATION_ERROR`; поле из env с другим значением → 409 `CONFLICT`; ответ как у `GET`. **`modalityModels` (ADR-115):** объект «семейство → `{provider, model}`»; `null` (или `{}`) снимает настройку семейства, отсутствие ключа — база (config.yaml) сохраняется; мёржится **по семействам** (runtime дополняет config, перекрывает одну модальность, не трогая остальные). До записи проверяется каталог: провайдер существует, модель `<provider>/<model>` существует, модальности модели **известны** и содержат нужное семейство; иначе 400 с причиной (`modalityModels.<семейство>: …`: какая модель, какие модальности у неё заявлены; для неизвестных модальностей — просьба выполнить `POST /api/v2/models/fetch`). Частичных сохранений нет. Патч заменяет runtime-значение секции **целиком** (как остальные `/settings/*`): незаданные поля возвращаются к config/default — UI-форма при сохранении присылает `modalityModels` вместе с остальными полями, иначе runtime-назначения aux-моделей снимаются. **`maxChunkBytes`** — целое ≥ 1024 (иначе 400) |
 | DELETE | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Сброс runtime-значения к env/config/default (ответ как у `GET`); поле из env остаётся зафиксированным (`envLocked`) |
 | GET | `/api/v2/settings/context-window` | ADMIN (managed) / auth (core) | Политика ограничения контекстного окна: `{policy:"off"\|"warn"\|"enforce", saved:"off"\|"warn"\|"enforce"\|null, defaults, source:"env"\|"runtime"\|"config"\|"default", envLocked:boolean, restartRequired:false}`; приоритет `SYNTH_CONTEXT_WINDOW_POLICY` > runtime (`settings.json`/PG) > `config.yaml` `context.windowPolicy` > `warn` |
 | PUT | `/api/v2/settings/context-window` | ADMIN (managed) / auth (core) | `{policy}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: оркестратор читает резолвер перед каждым LLM-вызовом); невалидное значение → 400 `VALIDATION_ERROR`; политика зафиксирована env и запрошено другое значение → 409 `CONFLICT`; ответ как у `GET`; аудит `scope:"context-window"` |

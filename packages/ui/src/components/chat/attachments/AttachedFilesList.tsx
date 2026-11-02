@@ -1,10 +1,12 @@
 // Список черновиков вложений в композере (ADR-115): изображения + чипы файлов.
 
+import { useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n, type I18nParams } from '@/lib/i18n'
 import { formatFileSize } from '@/lib/attachments/file-size'
 import { MAX_FILES_PER_MESSAGE, MAX_FILE_BYTES } from '@/lib/attachments/limits'
+import { attachmentContentUrlFromThumb } from '@/lib/api/attachments'
 import {
   useAttachmentsStore,
   type DraftAttachment,
@@ -37,6 +39,36 @@ export function attachmentFileIcon(item: Pick<DraftAttachment, 'mimeType'>): str
 
 export function isImageAttachment(item: Pick<DraftAttachment, 'mimeType'>): boolean {
   return item.mimeType.toLowerCase().startsWith('image/')
+}
+
+/**
+ * Превью изображения черновика: локальный object URL (только что добавленный
+ * файл) либо серверная миниатюра (вложение, восстановленное из истории).
+ * Миниатюры нет (`404`) — **однократно** подставляем полный контент; повторной
+ * подмены нет, цикла ошибок не возникает.
+ */
+function DraftImagePreview({ src, alt }: { src: string; alt: string }) {
+  const fallback = attachmentContentUrlFromThumb(src)
+  const [original, setOriginal] = useState(false)
+  return (
+    <img
+      src={original && fallback ? fallback : src}
+      alt={alt}
+      className="size-full object-cover"
+      onError={fallback && !original ? () => setOriginal(true) : undefined}
+    />
+  )
+}
+
+/**
+ * Процент загрузки для подписи (0..100); `undefined` — прогресс неизвестен
+ * (raw-загрузка до первого кадра или мок без `onProgress`).
+ */
+export function attachmentUploadPercent(
+  item: Pick<DraftAttachment, 'progress'>,
+): number | undefined {
+  if (typeof item.progress !== 'number' || !Number.isFinite(item.progress)) return undefined
+  return Math.min(100, Math.max(0, Math.round(item.progress * 100)))
 }
 
 const REASON_KEYS: Record<AttachmentErrorReason, string> = {
@@ -100,7 +132,9 @@ export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: Attached
     <div className="flex flex-col gap-2" data-testid="attached-files-list">
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {images.map((item, index) => (
+          {images.map((item, index) => {
+            const percent = item.upload === 'uploading' ? attachmentUploadPercent(item) : undefined
+            return (
             <div key={item.id} className="relative" data-testid="attachment-image" data-state={item.upload}>
               <button
                 type="button"
@@ -115,7 +149,7 @@ export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: Attached
                 )}
               >
                 {item.previewUrl ? (
-                  <img src={item.previewUrl} alt={item.name} className="size-full object-cover" />
+                  <DraftImagePreview src={item.previewUrl} alt={item.name} />
                 ) : (
                   <span className="flex size-full items-center justify-center text-muted-foreground">
                     <Icon name="image" className="size-5" />
@@ -123,11 +157,22 @@ export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: Attached
                 )}
                 {item.upload === 'uploading' && (
                   <span
-                    className="absolute inset-0 flex items-center justify-center bg-background/60"
+                    className="absolute inset-0 flex items-center justify-center gap-1 bg-background/60"
                     data-testid="attachment-uploading"
                   >
-                    <Icon name="loader-2" className="size-4 animate-spin text-foreground" />
-                    <span className="sr-only">{t('chat.attachments.uploading')}</span>
+                    {percent === undefined ? (
+                      <>
+                        <Icon name="loader-2" className="size-4 animate-spin text-foreground" />
+                        <span className="sr-only">{t('chat.attachments.uploading')}</span>
+                      </>
+                    ) : (
+                      <span
+                        className="text-[10px] font-medium tabular-nums text-foreground"
+                        aria-label={t('chat.attachments.uploadingPercent', { percent })}
+                      >
+                        {percent}%
+                      </span>
+                    )}
                   </span>
                 )}
               </button>
@@ -165,13 +210,16 @@ export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: Attached
                 </div>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
       {files.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {files.map((item) => (
+          {files.map((item) => {
+            const percent = item.upload === 'uploading' ? attachmentUploadPercent(item) : undefined
+            return (
             <div
               key={item.id}
               data-testid="attachment-file"
@@ -188,12 +236,21 @@ export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: Attached
               {item.size > 0 && (
                 <span className="shrink-0 text-muted-foreground">{formatFileSize(item.size)}</span>
               )}
-              {item.upload === 'uploading' && (
+              {item.upload === 'uploading' && percent === undefined && (
                 <Icon
                   name="loader-2"
                   className="size-3.5 shrink-0 animate-spin text-muted-foreground"
                   aria-label={t('chat.attachments.uploading')}
                 />
+              )}
+              {item.upload === 'uploading' && percent !== undefined && (
+                <span
+                  className="shrink-0 tabular-nums text-muted-foreground"
+                  data-testid="attachment-uploading-percent"
+                  aria-label={t('chat.attachments.uploadingPercent', { percent })}
+                >
+                  {percent}%
+                </span>
               )}
               {item.upload === 'error' && (
                 <button
@@ -216,7 +273,8 @@ export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: Attached
                 <Icon name="close" className="size-3.5" />
               </button>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

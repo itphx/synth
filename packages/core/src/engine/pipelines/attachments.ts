@@ -63,6 +63,7 @@ import {
 
 import type { LLMAttachment, BaseProvider, LLMMessage } from '../../providers/base.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
+import type { ExecutionPort } from '../../execution/ports/index.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import { deriveModalityText } from '../attachments/derive.js';
 import {
@@ -541,6 +542,10 @@ export interface PipelineAttachmentDeriveDeps {
   resolveProvider: (provider: string, model: string) => Promise<BaseProvider | null> | BaseProvider | null;
   /** Доступен ли `ffmpeg` (видео/нестандартное аудио, ADR-078). */
   hasFfmpeg: () => boolean | Promise<boolean>;
+  /** Порт исполнения: в remote ffmpeg живёт на исполнителе (ADR-077). */
+  executionPort?: ExecutionPort;
+  /** Корень workspace (общий том с исполнителем; нужен только в remote). */
+  workspacesRoot?: string;
   /** Шаблон промпта обработки (`ContextConfig.getMediaDeriveTemplate`). */
   promptTemplate?: (language: 'ru' | 'en') => string;
   /** Язык промпта по умолчанию (если шаг его не задал). */
@@ -608,6 +613,8 @@ export function createPipelineAttachmentDerive(
         {
           blobs: deps.blobs,
           hasFfmpeg: () => hasFfmpeg,
+          ...(deps.executionPort ? { executionPort: deps.executionPort } : {}),
+          ...(deps.workspacesRoot ? { workspacesRoot: deps.workspacesRoot } : {}),
           ...(deps.promptTemplate ? { promptTemplate: deps.promptTemplate } : {}),
           log,
           chat: async (parts, prompt) => {
