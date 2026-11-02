@@ -13,10 +13,13 @@
  *  - файл не меньше `minBytes`, **либо** размеры превышают предел семейства
  *    (картинка/видео: даже маленький по весу файл с огромным кадром имеет
  *    смысл уменьшить);
- *  - `video` — только при нативной доставке (`supportsNativeVideo`), иначе
- *    работает существующий aux-derived путь (кадры) и сжатие не участвует;
+ *  - `video` — только при нативной доставке (`capability.supportsNativeVideo`),
+ *    иначе работает существующий aux-derived путь (кадры) и сжатие не участвует;
  *  - `audio` — только если транспорт принимает целевой контейнер
  *    (`target.audioFormat`; `null` — не сжимаем).
+ *
+ * Возможности транспорта приходят **данными** (`compatibility` слоя
+ * совместимости, ADR-117), а не host-проверкой.
  *
  * ## Форматы
  *
@@ -38,9 +41,8 @@
 
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
-import type { AttachmentsConfig } from '@itphx/synth-shared';
+import type { AttachmentsConfig, NativeAudioFormat } from '@itphx/synth-shared';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
-import { supportsNativeAudio, supportsNativeVideo } from '../../providers/base.js';
 import type { MediaRunnerLike } from '../media/runner.js';
 
 /** Каталог сжатых копий и кэша (внутри blob-хранилища, рядом с `derive`). */
@@ -63,6 +65,20 @@ export interface AttachmentCompressInput {
   /** Ширина/высота кадра, если известны (из sidecar). */
   width?: number;
   height?: number;
+}
+
+/**
+ * Возможности нативной доставки медиа транспортом (ADR-115 × ADR-117).
+ *
+ * Источник — **данные** слоя совместимости (`compatibility.supportsNativeVideo`
+ * / `compatibility.nativeAudioFormats`), а не host-проверка. Структурно
+ * совместимо с `ResolvedModelCompatibility` — отдельный тип не нужен.
+ */
+export interface NativeMediaCapability {
+  /** Аудио-контейнеры нативного пути (`input_audio`/`audio`). */
+  nativeAudioFormats: readonly NativeAudioFormat[];
+  /** Транспорт принимает видеофайл нативно (`video_url`). */
+  supportsNativeVideo: boolean;
 }
 
 /** Куда транспорт провайдера реально умеет доставлять вложение. */
@@ -137,22 +153,20 @@ function cacheName(blobPath: string, profile: string, ext: string): string {
  * `null` (аудио не сжимаем, работает derive/отброс).
  */
 export function resolveNativeAudioFormat(
-  providerType: string,
-  baseUrl: string,
+  capability: NativeMediaCapability,
 ): 'mp3' | 'wav' | null {
-  if (supportsNativeAudio(providerType, baseUrl, 'audio/mpeg')) return 'mp3';
-  if (supportsNativeAudio(providerType, baseUrl, 'audio/wav')) return 'wav';
+  if (capability.nativeAudioFormats.includes('mp3')) return 'mp3';
+  if (capability.nativeAudioFormats.includes('wav')) return 'wav';
   return null;
 }
 
 /** Возможности нативной доставки провайдера для сжатия (выбор форматов). */
 export function resolveCompressTarget(
-  providerType: string,
-  baseUrl: string,
+  capability: NativeMediaCapability,
 ): AttachmentCompressTarget {
   return {
-    audioFormat: resolveNativeAudioFormat(providerType, baseUrl),
-    nativeVideo: supportsNativeVideo(providerType, baseUrl),
+    audioFormat: resolveNativeAudioFormat(capability),
+    nativeVideo: capability.supportsNativeVideo,
   };
 }
 

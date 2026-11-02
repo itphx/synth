@@ -18,7 +18,7 @@ Anthropic thinking round-trip), [ADR-036](./arch_decisions/adr-036-llm-gateway.m
 | **Пара `provider/model`** | Адресация модели в роутинге, агенте, саб-агенте и `list_models` (модель без провайдера неоднозначна) | `id` модели = `<provider>/<name>` |
 | **Протокол** | Формат запроса/ответа, который реализует адаптер (`openai`/`anthropic`/`ollama`/`decision`/`remote`) | `packages/core/src/providers/` |
 | **Каталог** | Записи провайдеров и моделей инстанса (JSON или БД), а не ключи `config.yaml` | `{dataDir}/providers/`, `{dataDir}/models/` |
-| **`compatibility`** | Данные о различиях протокола у совместимых шлюзов: имя reasoning-поля, поле лимита вывода, `tool_choice`, формат кэша, требование `finish_reason` | `ModelCompatibility` — [shared/types/provider.ts](../packages/shared/src/types/provider.ts) |
+| **`compatibility`** | Данные о различиях протокола у совместимых шлюзов: имя reasoning-поля, поле лимита вывода, `tool_choice`, формат кэша, требование `finish_reason`, нативные видео/аудио | `ModelCompatibility` — [shared/types/provider.ts](../packages/shared/src/types/provider.ts) |
 
 Провайдер и модель — **данные инстанса** (ADR-023/ADR-096), поэтому новый шлюз или прокси
 заводится записью каталога, а не релизом ядра. Отдельных ключей `config.yaml` у них нет: правка —
@@ -147,9 +147,11 @@ JSON каталога (см. §12). CLI-эквивалент — `synth config p
 
 Модальности — вход гидратации: модель принимает — вложение уходит нативно; не принимает — aux-модель
 семейства (`attachments.modalityModels`) или отброс с материализацией в workspace (ADR-115).
-Адаптеры кодируют только то, что физически умеют: `video_url`/`input_audio{ogg}` — RouterAI,
-`audio{base64}` — Anthropic-совместимый RouterAI (только wav), официальный Anthropic/OpenAI этих
-блоков не знают.
+Адаптеры кодируют только то, что физически умеют, а «умеет» — это **данные слоя совместимости**
+(§4.1): `compatibility.supportsNativeVideo` (блок `video_url`) и `compatibility.nativeAudioFormats`
+(блоки `input_audio`/`audio`; контейнеры `wav`/`mp3`/`ogg`). По умолчанию — эвристика по типу
+протокола и хосту (§4.3): у RouterAI-совместимых шлюзов видео нативно, у официального
+Anthropic/OpenAI — нет.
 
 ### 3.7 Где смотреть каталог
 
@@ -176,9 +178,12 @@ JSON каталога (см. §12). CLI-эквивалент — `synth config p
 | `cacheFormat` | не задан | Inline-маркеры prompt-cache `cache_control: {type:'ephemeral'}`: `anthropic` — последний tool + system + хвост последнего сообщения; `alibaba` — system + хвост, **без** tools. Бюджет ≤ 4 breakpoint'а; при заданном значении `prompt_cache_key` **не** отправляется | openai-chat |
 | `requireFinishReason` | `true` | Стрим без `finish_reason` = недописанный ответ (incomplete-stream) → ошибка, не ретраится | openai-chat |
 | `supportsEffortUpdates` | `false` (только явное значение) | Effort-режим Anthropic 5.x: отправлять `output_config.effort` (тир усилия — из `effort` агента/сессии либо из `reasoningLevel`) и **не** отправлять `thinking`; thinking-блоки истории не реплеятся, `temperature` не форсируется. Без флага — прежнее поведение, явный effort игнорируется | anthropic |
+| `supportsNativeVideo` | `false` (эвристика: RouterAI-совместимый хост) | Транспорт принимает **видеофайл** нативно (блок `video_url`), без разбивки на кадры через aux-модель | openai-chat |
+| `nativeAudioFormats` | эвристика по типу/хосту: `wav`, `mp3` (`+ogg` у RouterAI-совместимого хоста; `wav` у `anthropic`; пустой список — у прочих типов) | Аудио-контейнеры нативного пути (блоки `input_audio`/`audio`): `wav` \| `mp3` \| `ogg`. Явный **пустой список** — осмысленное значение «ни одного формата» | openai-chat, anthropic |
 
 `ResolvedModelCompatibility` — полностью разрешённый набор: каждое поле заполнено, кроме
-`cacheFormat`, где `undefined` — осмысленное состояние («маркеры не ставить»).
+`cacheFormat`, где `undefined` — осмысленное состояние («маркеры не ставить»). `supportsNativeVideo`
+всегда boolean, `nativeAudioFormats` — всегда массив (пустой = ни одного нативного формата).
 
 **Уровень размышлений и sampling — вне `compatibility`.** `reasoningLevel` задаётся агентом
 (`AgentDefinition.reasoningLevel`) и сессией (`SessionSettings.reasoningLevel`). При создании сессии
@@ -215,6 +220,9 @@ true` у модели/провайдера (§6.1); иначе поле игно
 `compatibility`, продолжают работать). Явный `reasoningField` на любом уровне сам означает
 `requireReasoning: true`, если `requireReasoning` не задан явно (в т.ч. `false`).
 
+Явный **пустой массив** `nativeAudioFormats` — осмысленное значение «ни одного формата»: `??` его не
+схлопывает, поэтому пустой список перекрывает эвристику (аудио уходит только через aux-модель).
+
 ### 4.3 Эвристики
 
 Применяются **только к незаданным** полям:
@@ -224,6 +232,8 @@ true` у модели/провайдера (§6.1); иначе поле игно
 | `requireReasoning: true` | тип/имя провайдера `deepseek`, URL содержит `deepseek.com`, id модели содержит `deepseek`; имя провайдера `minimax` или URL с `minimax` (adaptive thinking MiniMax расходует тот же `max_tokens` — у таких моделей действует пол вывода 8192) |
 | `requireAssistantAfterTool: true` | id модели содержит `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral` |
 | `supportsToolChoice: false` | `type: ollama` (нативный `/api/chat` поля не знает) |
+| `nativeAudioFormats` | тип `openai`/`generic` — `wav`, `mp3` (`+ogg`, если хост RouterAI-совместимый); тип `anthropic` — `wav` (только на RouterAI-совместимом хосте), иначе пустой список; прочие типы — пустой список |
+| `supportsNativeVideo: true` | тип `openai`/`generic` **и** RouterAI-совместимый хост |
 
 `maxTokensField`, `streamUsage`, `cacheFormat`, `requireFinishReason`, `supportsEffortUpdates` **не**
 эвристицируются: иначе существующие записи каталога начали бы вести себя иначе (локальные серверы не
@@ -231,6 +241,14 @@ true` у модели/провайдера (§6.1); иначе поле игно
 `supportsEffortUpdates` авто-эвристики нет принципиально: включение меняет тело запроса
 (`output_config` вместо `thinking`), и угадывание по имени модели отправило бы неизвестное поле
 шлюзам без поддержки (400).
+
+**Хост-эвристика — только дефолт.** Единственное оставшееся знание о домене в слое совместимости —
+`isRouterAiUrl` (shared, `detectCompatibilityHeuristics`); решение же принимают **данные**
+(`compatibility`), которыми провайдер/модель перекрывают эвристику явно. Основание переноса — живой
+тест 2026-11-03: не-routerai прокси `itphx` (`https://ai.itphx.ru/api/`) нативное видео **умеет**
+(блок `video_url` принят, HTTP 200, модель описала ролик так же, как прямой `routerai.ru`), а прежний
+host-предикат давал ложноотрицательный ответ. Поэтому «умеет ли шлюз видео» — вопрос данных, а не
+домена (ADR-117 п. 10).
 
 ### 4.4 Где резолвится
 
@@ -271,6 +289,10 @@ true` у модели/провайдера (§6.1); иначе поле игно
   вариантом «своё значение»; неизвестное сохранённое имя разворачивается в «своё значение»;
 - `maxTokensField` и `cacheFormat` — селекты с «Авто»; `requireFinishReason` и `supportsEffortUpdates` —
   tri-state (у последнего «Авто» означает «Нет»: сервер включает effort-режим только явным `true`);
+- `supportsNativeVideo` — tri-state, как прочие boolean-поля; `nativeAudioFormats` — режим с
+  мульти-селектом чипов `wav`/`mp3`/`ogg`: «Авто» (эвристика сервера), «задать список» или «не
+  принимает нативно» (явный пустой список). Явные значения уходят в payload как есть — «Авто» и
+  «не принимает» — разные вещи;
 - бейдж «изменено»/«расш.» в списках; полная очистка у сущности с сохранёнными параметрами
   отправляет `compatibility: null` (явный сброс), у сущности без сохранённых — поле не отправляется.
 
@@ -394,9 +416,26 @@ Mistral-семейство не принимает историю, где пос
 - отправляет ли провайдер effort, по-прежнему решает `compatibility.supportsEffortUpdates`
   (guard в провайдере, §6.1).
 
+### 5.10 Нативные медиа: `video_url` и `input_audio`
+
+- Видеофайл уходит нативно блоком `{type:'video_url', video_url:{url:'data:video/mp4;base64,…'}}` —
+  только если `compatibility.supportsNativeVideo` = `true` (по умолчанию — RouterAI-совместимый хост).
+  Иначе гидратация считает транспорт `video` неподдерживаемым: aux-модель (кадры через `ffmpeg`) либо
+  вложение помечается недоставленным — тихой потери нет.
+- Аудио уходит блоком `input_audio` только если контейнер входит в
+  `compatibility.nativeAudioFormats` (`wav`/`mp3`/`ogg`); формат вне списка не теряется молча — уходит
+  в aux-модель или в блок «не доставлено».
+- Решение принимают **данные** слоя совместимости (§4.1), а не host-проверка: не-routerai прокси может
+  уметь нативное видео (живой тест 2026-11-03, `itphx`) — тогда `compatibility.supportsNativeVideo`
+  задаётся явно.
+
 ## 6. Anthropic: особенности
 
 Реализация — [providers/anthropic.ts](../packages/core/src/providers/anthropic.ts).
+
+Аудио уходит блоком `audio` только когда контейнер входит в `compatibility.nativeAudioFormats`: для
+Anthropic-протокола по умолчанию это `wav` на RouterAI-совместимом хосте, иначе список пуст (аудио
+уходит aux-моделью). Поля — данные слоя совместимости (§4.1), не host-проверка.
 
 ### 6.1 Extended thinking
 
@@ -667,6 +706,8 @@ top-level `system` — он есть только у `/api/generate`).
 | `tool_choice` не поддерживается (`400` unknown field / игнор) | нестандартный сервер | `compatibility.supportsToolChoice: false` (для нативного Ollama — уже дефолт) |
 | `usage` в стриме нулевой | сервер не поддерживает `stream_options` | `compatibility.streamUsage: false` (запрос перестанет нести непонятное поле; usage останется нулевым) |
 | `400` про `output_config` / `effort` (Anthropic) | включён `supportsEffortUpdates`, а шлюз поля не знает; либо модель не effort-тира | убрать `supportsEffortUpdates` (вернётся прежний режим `thinking`); тиры `xhigh`/`max` отправлять только после проверки на живом провайдере (задаются в настройках агента/сессии — селект «Усилие рассуждений») |
+| Видео уходит кадрами вместо нативного блока `video_url` | у провайдера/модели не задан `compatibility.supportsNativeVideo` (или задан `false`), хотя шлюз нативное видео принимает | `compatibility.supportsNativeVideo: true` на провайдере или модели; по умолчанию `true` — только у RouterAI-совместимых хостов |
+| Аудио уходит aux-моделью/транскодом, хотя провайдер его принимает | формат файла не входит в `compatibility.nativeAudioFormats` (по умолчанию — `wav`/`mp3`, `+ogg` у RouterAI-совместимых хостов) | перечислить свои форматы: `compatibility.nativeAudioFormats: ["wav","mp3","ogg"]`; пустой список означает «ни одного» (только aux-модель) |
 
 ## 12. Известные ограничения
 
@@ -704,3 +745,8 @@ top-level `system` — он есть только у `/api/generate`).
 - **Модальности без справочника.** Если каталог провайдера модальностей не сообщает, ограничения не
   применяются: несовместимый тип отклоняет сам провайдер (ошибка вместо тихой потери — но и без
   предварительной проверки).
+- **Хост-эвристика нативных медиа — только дефолт.** `nativeAudioFormats`/`supportsNativeVideo` по
+  умолчанию выводятся из типа протокола и RouterAI-совместимого хоста (`isRouterAiUrl`, shared).
+  Прокси, который умеет нативное видео или нестандартные аудио-контейнеры, но не называется
+  RouterAI, обязан задать поля явно — иначе получит кадры вместо видео и aux-модель вместо аудио.
+  Живой тест 2026-11-03: не-routerai прокси `itphx` нативное видео умеет (ADR-117 п. 10).

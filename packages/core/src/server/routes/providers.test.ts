@@ -457,4 +457,49 @@ describe('routes/providers (core): compatibility (слой opencode)', () => {
     const body = await res.json() as { error: { code: string } };
     expect(body.error.code).toBe('VALIDATION_ERROR');
   });
+
+  it('ADR-117: нативные медиа (supportsNativeVideo/nativeAudioFormats) проходят и сохраняются', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'itphx',
+      type: 'openai',
+      base_url: 'https://ai.itphx.ru/api/',
+      compatibility: { supportsNativeVideo: true, nativeAudioFormats: ['ogg'] },
+    }));
+    expect(res.status).toBe(201);
+
+    expect(stores.providerCache.get('itphx')?.compatibility).toEqual({
+      supportsNativeVideo: true,
+      nativeAudioFormats: ['ogg'],
+    });
+
+    const detail = await (await stores.app.request('/itphx')).json() as { compatibility?: unknown };
+    expect(detail.compatibility).toEqual({
+      supportsNativeVideo: true,
+      nativeAudioFormats: ['ogg'],
+    });
+  });
+
+  it('ADR-117: явный пустой список nativeAudioFormats сохраняется (не «не задано»)', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'no-audio',
+      type: 'openai',
+      base_url: 'https://api.example.com/v1',
+      compatibility: { nativeAudioFormats: [] },
+    }));
+    expect(res.status).toBe(201);
+    expect(stores.providerCache.get('no-audio')?.compatibility).toEqual({ nativeAudioFormats: [] });
+  });
+
+  it('ADR-117: неизвестный аудио-формат → 400 VALIDATION_ERROR, провайдер не сохранён', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'bad-audio',
+      type: 'openai',
+      base_url: 'https://api.example.com/v1',
+      compatibility: { nativeAudioFormats: ['flac'] },
+    }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(await stores.providerStore.load('bad-audio')).toBeNull();
+  });
 });

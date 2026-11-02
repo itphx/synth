@@ -1,4 +1,5 @@
-import type { LLMChunk, LLMResponse, LlmFinishReason, TokenUsage, ResolvedModelCompatibility } from '@itphx/synth-shared';
+import type { LLMChunk, LLMResponse, LlmFinishReason, TokenUsage, ResolvedModelCompatibility, NativeAudioFormat } from '@itphx/synth-shared';
+import { nativeAudioFormatForMime } from '@itphx/synth-shared';
 import {
   BaseProvider,
   resolveProviderCompatibility,
@@ -7,8 +8,6 @@ import {
   redactAttachmentPayloadForDebug,
   resolveSystemPromptText,
   parseTokenPricing,
-  supportsNativeAudio,
-  supportsNativeVideo,
   toNonNegativeNumber,
   type DetailedModelInfo,
   type LLMAttachment,
@@ -643,7 +642,7 @@ export class OpenAIProvider extends BaseProvider {
       // ADR-115: вложения — content становится массивом частей. Если
       // кодируемых у OpenAI частей нет (модальности отфильтрованы выше или тип
       // не маппится), остаётся прежняя строка — текстовый путь не меняется.
-      const mediaParts = this._mediaContentParts(msg.attachments);
+      const mediaParts = this._mediaContentParts(msg.attachments, compatibility);
       if (mediaParts.length > 0) {
         entry.content = [
           ...(msg.content ? [{ type: 'text', text: msg.content }] : []),
@@ -698,16 +697,15 @@ export class OpenAIProvider extends BaseProvider {
    * ADR-115: части контента OpenAI для вложений.
    *
    *  - `image/*` → `{type:'image_url', image_url:{url:'data:<mime>;base64,…'}}`;
-   *  - `video/*` (RouterAI) → `{type:'video_url', video_url:{url:'data:<mime>;base64,…'}}`
-   *    (проверено: модель видит и слышит ролик);
+   *  - `video/*` → `{type:'video_url', video_url:{url:'data:<mime>;base64,…'}}`
+   *    — только если транспорт умеет нативное видео
+   *    (`compatibility.supportsNativeVideo`; дефолт — RouterAI-совместимые шлюзы,
+   *    см. ADR-117);
    *  - `application/pdf` → `{type:'file', file:{filename, file_data:'data:application/pdf;base64,…'}}`
    *    (формат OpenAI-совместимых API; RouterAI принимает так PDF и читает документ);
-   *  - `audio/wav` (в т.ч. `audio/x-wav`) → `input_audio` c `format:'wav'`;
-   *  - `audio/mpeg`/`audio/mp3` → `input_audio` c `format:'mp3'`;
-   *  - `audio/ogg`/`audio/opus`/`audio/oga` → `input_audio` c `format:'ogg'`
-   *    (расширение RouterAI; официальный OpenAI знает только wav/mp3,
-   *    поэтому формат отправляется только для RouterAI);
-   *  - прочие типы не отправляются — плейсхолдер уже в тексте.
+   *  - `audio/*` → `input_audio` с форматом из `compatibility.nativeAudioFormats`
+   *    (`wav`/`mp3`/`ogg`); формат вне списка — вложение не отправляется
+   *    (оно ушло бы в aux-модель или было помечено недоставленным).
    *
    * Фильтра по справочнику модальностей здесь **нет** (ADR-115): провайдер
    * кодирует всё, что ему передали, и пропускает только типы, которые
@@ -716,8 +714,12 @@ export class OpenAIProvider extends BaseProvider {
    * второй фильтр по неполному справочнику отбрасывал валидные вложения
    * (например, vision-модель каталога, которой в справочнике нет).
    */
-  private _mediaContentParts(attachments: LLMAttachment[] | undefined): Array<Record<string, unknown>> {
+  private _mediaContentParts(
+    attachments: LLMAttachment[] | undefined,
+    compatibility: ResolvedModelCompatibility = this._resolveCompatibility(),
+  ): Array<Record<string, unknown>> {
     const parts: Array<Record<string, unknown>> = [];
+    const nativeAudio = new Set<NativeAudioFormat>(compatibility.nativeAudioFormats);
     for (const attachment of attachments ?? []) {
       const mime = attachment.mime.toLowerCase();
       if (mime.startsWith('image/')) {
@@ -739,8 +741,8 @@ export class OpenAIProvider extends BaseProvider {
         });
         continue;
       }
-      if (mime.startsWith('video/') && supportsNativeVideo('openai', this.url)) {
-        // RouterAI принимает видео как `video_url` (data-URL); официальный
+      if (mime.startsWith('video/') && compatibility.supportsNativeVideo) {
+        // Нативное видео — блок `video_url` (data-URL). Официальный
         // OpenAI/Anthropic такого блока не знают — там видео идёт кадрами.
         parts.push({
           type: 'video_url',
@@ -748,26 +750,12 @@ export class OpenAIProvider extends BaseProvider {
         });
         continue;
       }
-      if (mime === 'audio/wav' || mime === 'audio/x-wav' || mime === 'audio/wave') {
+      // Аудио — контейнер из списка нативных (`compatibility.nativeAudioFormats`).
+      const format = nativeAudioFormatForMime(mime);
+      if (format && nativeAudio.has(format)) {
         parts.push({
           type: 'input_audio',
-          input_audio: { data: attachment.base64, format: 'wav' },
-        });
-        continue;
-      }
-      if (mime === 'audio/mpeg' || mime === 'audio/mp3') {
-        parts.push({
-          type: 'input_audio',
-          input_audio: { data: attachment.base64, format: 'mp3' },
-        });
-        continue;
-      }
-      if (supportsNativeAudio('openai', this.url, mime)) {
-        // Голосовые Telegram — ogg/opus; RouterAI принимает их как
-        // `input_audio` с форматом `ogg` (проверено), официальный OpenAI — нет.
-        parts.push({
-          type: 'input_audio',
-          input_audio: { data: attachment.base64, format: 'ogg' },
+          input_audio: { data: attachment.base64, format },
         });
       }
     }

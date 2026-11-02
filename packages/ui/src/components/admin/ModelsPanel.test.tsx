@@ -791,4 +791,86 @@ describe('ModelsPanel: расширенные параметры (совмест
     const container = await renderPanel()
     expect(container.querySelector('[data-testid="model-compatibility-badge"]')).toBeTruthy()
   })
+
+  it('контролы нативных видео/аудио есть в блоке расширенных параметров', async () => {
+    const container = await renderPanel()
+    await openEditForm(container)
+    await toggleCompatibility(container)
+
+    expect(container.querySelector('[data-testid="compatibility-supports-native-video"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="compatibility-native-audio-formats"]')).toBeTruthy()
+    // Мульти-селект форматов — только в режиме «Set list».
+    expect(container.querySelector('[data-testid="compatibility-native-audio-format-wav"]')).toBeNull()
+  })
+
+  it('явный «No» по нативному видео уходит false, а не схлопывается в «Auto»', async () => {
+    const container = await renderPanel()
+    await openEditForm(container)
+    await toggleCompatibility(container)
+
+    await pickOption(container, 'compatibility-supports-native-video', 'No')
+    await save(container)
+
+    expect(lastSavedBody().compatibility).toEqual({ supportsNativeVideo: false })
+  })
+
+  it('явный список нативных форматов аудио уходит массивом', async () => {
+    const container = await renderPanel()
+    await openEditForm(container)
+    await toggleCompatibility(container)
+
+    await pickOption(container, 'compatibility-native-audio-formats', 'Set list')
+    const chip = container.querySelector('[data-testid="compatibility-native-audio-format-wav"]') as HTMLElement
+    expect(chip).toBeTruthy()
+    await act(async () => {
+      chip.click()
+    })
+    await save(container)
+
+    expect(lastSavedBody().compatibility).toEqual({ nativeAudioFormats: ['wav'] })
+  })
+
+  it('«Not accepted natively» уходит пустым списком, а не «Auto»', async () => {
+    const container = await renderPanel()
+    await openEditForm(container)
+    await toggleCompatibility(container)
+
+    await pickOption(container, 'compatibility-native-audio-formats', 'Not accepted natively')
+    await save(container)
+
+    expect(lastSavedBody().compatibility).toEqual({ nativeAudioFormats: [] })
+  })
+
+  it('сохранённые нативные параметры раскрываются в контролах', async () => {
+    apiMock.getModels.mockResolvedValue([
+      {
+        provider: { name: 'itphx', type: 'openai', icon: '', defaultModel: '', currency: 'USD' },
+        models: [
+          {
+            id: 'itphx/m1',
+            name: 'm1',
+            provider: 'itphx',
+            enabled: true,
+            isDefault: false,
+            compatibility: { supportsNativeVideo: false, nativeAudioFormats: ['wav'] },
+          },
+        ],
+      },
+    ])
+    const container = await renderPanel()
+    await openEditForm(container)
+
+    expect(
+      container.querySelector('[data-testid="compatibility-supports-native-video"]')!.textContent,
+    ).toContain('No')
+    const chip = container.querySelector('[data-testid="compatibility-native-audio-format-wav"]') as HTMLElement
+    expect(chip).toBeTruthy()
+    expect(chip.getAttribute('aria-pressed')).toBe('true')
+
+    await save(container)
+    expect(lastSavedBody().compatibility).toEqual({
+      supportsNativeVideo: false,
+      nativeAudioFormats: ['wav'],
+    })
+  })
 })

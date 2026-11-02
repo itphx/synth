@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   detectCompatibilityHeuristics,
+  isRouterAiUrl,
   mergeModelCompatibility,
+  nativeAudioFormatForMime,
   parseModelCompatibilityInput,
   resolveModelCompatibility,
   type ModelCompatibility,
@@ -18,6 +20,10 @@ describe('resolveModelCompatibility — порядок «модель → про
       supportsToolChoice: true,
       requireFinishReason: true,
       supportsEffortUpdates: false,
+      // ADR-115: без эвристики (её считает `detectCompatibilityHeuristics`)
+      // нативных медиа нет.
+      supportsNativeVideo: false,
+      nativeAudioFormats: [],
     });
   });
 
@@ -235,7 +241,164 @@ describe('parseModelCompatibilityInput — API-контракт', () => {
     expect(parseModelCompatibilityInput({ supportsEffortUpdates: 'yes' }).ok).toBe(false);
   });
 
+  it('supportsNativeVideo: только boolean', () => {
+    expect(parseModelCompatibilityInput({ supportsNativeVideo: true })).toEqual({
+      ok: true,
+      value: { supportsNativeVideo: true },
+    });
+    expect(parseModelCompatibilityInput({ supportsNativeVideo: false })).toEqual({
+      ok: true,
+      value: { supportsNativeVideo: false },
+    });
+    for (const bad of ['true', 1, null, {}]) {
+      expect(parseModelCompatibilityInput({ supportsNativeVideo: bad }).ok).toBe(false);
+    }
+  });
+
+  it('nativeAudioFormats: массив из wav|mp3|ogg, неизвестное значение → ошибка', () => {
+    expect(parseModelCompatibilityInput({ nativeAudioFormats: ['wav', 'mp3'] })).toEqual({
+      ok: true,
+      value: { nativeAudioFormats: ['wav', 'mp3'] },
+    });
+    expect(parseModelCompatibilityInput({ nativeAudioFormats: ['ogg'] })).toEqual({
+      ok: true,
+      value: { nativeAudioFormats: ['ogg'] },
+    });
+    // Пустой массив — валидное явное значение («ни одного формата»).
+    expect(parseModelCompatibilityInput({ nativeAudioFormats: [] })).toEqual({
+      ok: true,
+      value: { nativeAudioFormats: [] },
+    });
+    // Не массив / неизвестный формат / неверный тип элемента → ошибка.
+    for (const bad of ['wav', { wav: true }, [1], ['flac'], ['wav', 'flac'], [null]]) {
+      const result = parseModelCompatibilityInput({ nativeAudioFormats: bad });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain('nativeAudioFormats');
+    }
+  });
+
   it('пустой объект — нет совместимости', () => {
     expect(parseModelCompatibilityInput({})).toEqual({ ok: true, value: undefined });
+  });
+});
+
+describe('detectCompatibilityHeuristics — нативные медиа (ADR-115 × ADR-117)', () => {
+  const routerAi = { baseUrl: 'https://routerai.ru/api/v1/chat/completions' };
+  const plainOpenAi = { baseUrl: 'https://api.openai.com/v1' };
+
+  it('openai/generic + RouterAI: wav/mp3/ogg и нативное видео', () => {
+    for (const providerType of ['openai', 'generic']) {
+      const h = detectCompatibilityHeuristics({ providerType, ...routerAi });
+      expect(h.nativeAudioFormats).toEqual(['wav', 'mp3', 'ogg']);
+      expect(h.supportsNativeVideo).toBe(true);
+    }
+  });
+
+  it('openai/generic без RouterAI: wav/mp3, видео нет', () => {
+    for (const providerType of ['openai', 'generic']) {
+      const h = detectCompatibilityHeuristics({ providerType, ...plainOpenAi });
+      expect(h.nativeAudioFormats).toEqual(['wav', 'mp3']);
+      expect(h.supportsNativeVideo).toBe(false);
+    }
+  });
+
+  it('anthropic: только wav у RouterAI, иначе — ни одного формата; видео нет', () => {
+    const withRouterAi = detectCompatibilityHeuristics({ providerType: 'anthropic', ...routerAi });
+    expect(withRouterAi.nativeAudioFormats).toEqual(['wav']);
+    expect(withRouterAi.supportsNativeVideo).toBe(false);
+
+    const withoutRouterAi = detectCompatibilityHeuristics({
+      providerType: 'anthropic',
+      baseUrl: 'https://api.anthropic.com/v1',
+    });
+    expect(withoutRouterAi.nativeAudioFormats).toEqual([]);
+    expect(withoutRouterAi.supportsNativeVideo).toBe(false);
+  });
+
+  it('прочие типы провайдера: ни аудио, ни видео — независимо от хоста', () => {
+    for (const providerType of ['ollama', 'decision', 'systemone', 'remote', '']) {
+      const h = detectCompatibilityHeuristics({ providerType, ...routerAi });
+      expect(h.nativeAudioFormats).toEqual([]);
+      expect(h.supportsNativeVideo).toBe(false);
+    }
+  });
+
+  it('не-routerai прокси (itphx) по умолчанию — без нативного видео', () => {
+    // Живой тест 2026-11-03 показал, что `itphx` видео умеет: это решается
+    // данными (`compatibility.supportsNativeVideo: true`), а не host-проверкой.
+    const h = detectCompatibilityHeuristics({
+      providerType: 'openai',
+      baseUrl: 'https://ai.itphx.ru/api/',
+    });
+    expect(h.supportsNativeVideo).toBe(false);
+    expect(h.nativeAudioFormats).toEqual(['wav', 'mp3']);
+  });
+});
+
+describe('resolveModelCompatibility — нативные медиа (ADR-117)', () => {
+  it('явное значение модели перекрывает провайдера и эвристику', () => {
+    const resolved = resolveModelCompatibility(
+      { nativeAudioFormats: ['wav'], supportsNativeVideo: true },
+      { nativeAudioFormats: ['mp3'], supportsNativeVideo: false },
+      { nativeAudioFormats: ['wav', 'mp3', 'ogg'], supportsNativeVideo: true },
+    );
+    expect(resolved.nativeAudioFormats).toEqual(['mp3']);
+    expect(resolved.supportsNativeVideo).toBe(false);
+  });
+
+  it('явное значение провайдера перекрывает эвристику', () => {
+    const resolved = resolveModelCompatibility(
+      { nativeAudioFormats: [], supportsNativeVideo: false },
+      undefined,
+      { nativeAudioFormats: ['wav', 'mp3', 'ogg'], supportsNativeVideo: true },
+    );
+    expect(resolved.nativeAudioFormats).toEqual([]);
+    expect(resolved.supportsNativeVideo).toBe(false);
+  });
+
+  it('явный пустой массив перекрывает эвристику (не «не задано»)', () => {
+    // `??` не схлопывает `[]` — пустой перечень форматов остаётся пустым.
+    const resolved = resolveModelCompatibility(
+      { nativeAudioFormats: [] },
+      undefined,
+      { nativeAudioFormats: ['wav', 'mp3', 'ogg'], supportsNativeVideo: true },
+    );
+    expect(resolved.nativeAudioFormats).toEqual([]);
+  });
+
+  it('без явных значений берётся эвристика, затем дефолт', () => {
+    const withHeuristic = resolveModelCompatibility(undefined, undefined, {
+      nativeAudioFormats: ['wav'],
+      supportsNativeVideo: true,
+    });
+    expect(withHeuristic.nativeAudioFormats).toEqual(['wav']);
+    expect(withHeuristic.supportsNativeVideo).toBe(true);
+
+    const withoutHeuristic = resolveModelCompatibility();
+    expect(withoutHeuristic.nativeAudioFormats).toEqual([]);
+    expect(withoutHeuristic.supportsNativeVideo).toBe(false);
+  });
+});
+
+describe('isRouterAiUrl / nativeAudioFormatForMime — единственный источник истины', () => {
+  it('RouterAI-хост определяется по домену (поддомены — тоже)', () => {
+    expect(isRouterAiUrl('https://routerai.ru/api/v1/chat/completions')).toBe(true);
+    expect(isRouterAiUrl('https://sub.routerai.ru/v1')).toBe(true);
+    expect(isRouterAiUrl('https://ai.itphx.ru/api/')).toBe(false);
+    expect(isRouterAiUrl('https://routerai.ru.evil.example/v1')).toBe(false);
+    expect(isRouterAiUrl('не-url')).toBe(false);
+  });
+
+  it('MIME → нативный аудио-контейнер', () => {
+    expect(nativeAudioFormatForMime('audio/wav')).toBe('wav');
+    expect(nativeAudioFormatForMime('audio/x-wav')).toBe('wav');
+    expect(nativeAudioFormatForMime('audio/wave')).toBe('wav');
+    expect(nativeAudioFormatForMime('audio/mpeg')).toBe('mp3');
+    expect(nativeAudioFormatForMime('audio/mp3')).toBe('mp3');
+    expect(nativeAudioFormatForMime('audio/ogg')).toBe('ogg');
+    expect(nativeAudioFormatForMime('audio/opus')).toBe('ogg');
+    expect(nativeAudioFormatForMime('audio/oga')).toBe('ogg');
+    expect(nativeAudioFormatForMime('video/mp4')).toBeNull();
+    expect(nativeAudioFormatForMime('audio/flac')).toBeNull();
   });
 });

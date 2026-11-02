@@ -81,6 +81,19 @@ export function isCacheFormat(value: unknown): value is CacheFormat {
 }
 
 /**
+ * Аудио-контейнеры, которые транспорт провайдера принимает **нативно**
+ * (блок `input_audio`/`audio` в теле запроса — без aux-модели и конвертации).
+ *
+ * ADR-115 × ADR-117: перечень приходит **данными** (`compatibility`), а не из
+ * URL провайдера. Значение по умолчанию — эвристика по типу/хосту, но любая
+ * запись каталога может перекрыть его явно.
+ */
+export type NativeAudioFormat = 'wav' | 'mp3' | 'ogg';
+
+/** Канонический набор нативных аудио-форматов (для валидации и UI). */
+export const NATIVE_AUDIO_FORMATS = ['wav', 'mp3', 'ogg'] as const;
+
+/**
  * Явные особенности протокола провайдера/модели (аналог `Compatibility` в
  * opencode, `packages/schema/src/model-compatibility.ts`).
  *
@@ -141,6 +154,23 @@ export interface ModelCompatibility {
    * (ADR-117).
    */
   supportsEffortUpdates?: boolean;
+  /**
+   * ADR-115 × ADR-117: транспорт принимает **видеофайл** нативно (блок
+   * `video_url` в OpenAI-протоколе), без разбивки на кадры через aux-модель.
+   *
+   * Дефолт — эвристика по типу/хосту провайдера (RouterAI-совместимые шлюзы);
+   * явное `true`/`false` перекрывает её (в т.ч. для не-routerai прокси, который
+   * видео тоже понимает — например `itphx`, проверено живым тестом 2026-11-03).
+   */
+  supportsNativeVideo?: boolean;
+  /**
+   * ADR-115 × ADR-117: аудио-контейнеры, которые транспорт принимает нативно
+   * (блок `input_audio`/`audio`).
+   *
+   * Явный **пустой массив** — осмысленное значение «ни одного формата» (не
+   * «не задано»): перекрывает эвристику, аудио уходит только через aux-модель.
+   */
+  nativeAudioFormats?: NativeAudioFormat[];
 }
 
 /**
@@ -171,6 +201,16 @@ export interface ResolvedModelCompatibility {
    * от прочих полей, «не задано» здесь — осмысленное состояние, а не дефолт).
    */
   cacheFormat?: CacheFormat;
+  /**
+   * ADR-115: транспорт принимает видеофайл нативно (`video_url`).
+   * Дефолт — эвристика (RouterAI-совместимые шлюзы), иначе `false`.
+   */
+  supportsNativeVideo: boolean;
+  /**
+   * ADR-115: аудио-контейнеры нативного пути (`input_audio`/`audio`).
+   * Дефолт — эвристика; пустой массив — «ни одного формата».
+   */
+  nativeAudioFormats: NativeAudioFormat[];
 }
 
 /** Контекст, по которому считаются эвристики совместимости. */
@@ -199,7 +239,40 @@ export const MODEL_COMPATIBILITY_KEYS = [
   'cacheFormat',
   'requireFinishReason',
   'supportsEffortUpdates',
+  'supportsNativeVideo',
+  'nativeAudioFormats',
 ] as const;
+
+/**
+ * RouterAI — прокси с расширениями протоколов (нативное аудио/видео).
+ *
+ * Единственный носитель host-знания в слое совместимости: **эвристика**
+ * умолчания для `supportsNativeVideo`/`nativeAudioFormats`. Сами значения
+ * приходят данными (`compatibility`) — этот предикат лишь задаёт дефолт,
+ * который любая запись каталога перекрывает явно (ADR-117).
+ *
+ * Функция чистая (только строка) — `node:*` в shared не тащим.
+ */
+export function isRouterAiUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'routerai.ru' || host.endsWith('.routerai.ru');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Нативный аудио-контейнер по MIME (ADR-115): `wav`/`mp3`/`ogg`.
+ * Прочие MIME (в т.ч. не-аудио) → `null`.
+ */
+export function nativeAudioFormatForMime(mime: string): NativeAudioFormat | null {
+  const normalized = (mime ?? '').toLowerCase().split(';')[0]!.trim();
+  if (normalized === 'audio/wav' || normalized === 'audio/x-wav' || normalized === 'audio/wave') return 'wav';
+  if (normalized === 'audio/mpeg' || normalized === 'audio/mp3') return 'mp3';
+  if (normalized === 'audio/ogg' || normalized === 'audio/opus' || normalized === 'audio/oga') return 'ogg';
+  return null;
+}
 
 /**
  * Эвристики совместимости — те же, что в opencode
@@ -214,6 +287,30 @@ export const MODEL_COMPATIBILITY_KEYS = [
  *
  * `maxTokensField` намеренно **не** эвристируется: наш дефолт — `max_tokens`,
  * `max_completion_tokens` только при явном значении (локальные серверы).
+ *
+ * **Нативные медиа (ADR-115 × ADR-117).** Матрица «тип провайдера ×
+ * RouterAI-совместимый хост» — дефолт для `nativeAudioFormats`/
+ * `supportsNativeVideo`:
+ *
+ * | тип          | RouterAI | nativeAudioFormats | supportsNativeVideo |
+ * |--------------|----------|--------------------|---------------------|
+ * | openai/generic| да      | wav, mp3, ogg      | `true`              |
+ * | openai/generic| нет     | wav, mp3           | `false`             |
+ * | anthropic    | да       | wav                | `false`             |
+ * | anthropic    | нет      | —                  | `false`             |
+ * | прочие       | любой    | —                  | `false`             |
+ *
+ * Основание — прежнее поведение по хосту: `anthropic` принимает аудио только в
+ * `wav` и только у RouterAI (Anthropic-совместимый шлюз на ogg/mp3 отвечает 200,
+ * но модель аудио не слышит — такие форматы идут через aux-модель); OpenAI-протокол
+ * принимает wav/mp3 всегда, ogg — расширение RouterAI; блок `video_url` знает
+ * только RouterAI-совместимый OpenAI-протокол.
+ *
+ * Живой тест 2026-11-03: не-routerai прокси `itphx`
+ * (`https://ai.itphx.ru/api/`) нативное видео **умеет** — старый предикат по
+ * хосту давал ложноотрицательный ответ. Отсюда правило: дефолт по хосту —
+ * лишь эвристика, а решение принимают **данные** (`compatibility`), которыми
+ * провайдер/модель перекрывают эвристику явно.
  */
 export function detectCompatibilityHeuristics(
   context: CompatibilityContext,
@@ -236,10 +333,23 @@ export function detectCompatibilityHeuristics(
   const mistral = ['mistral', 'devstral', 'codestral', 'pixtral', 'mixtral']
     .some((family) => model.includes(family));
 
+  // ADR-115: нативные медиа — дефолт по типу протокола и RouterAI-совместимому
+  // хосту (см. матрицу в докстринге). Явные значения `compatibility` перекрывают.
+  const routerAi = isRouterAiUrl(context.baseUrl ?? '');
+  const openAiLike = type === 'openai' || type === 'generic';
+  const nativeAudioFormats: NativeAudioFormat[] = openAiLike
+    ? (routerAi ? ['wav', 'mp3', 'ogg'] : ['wav', 'mp3'])
+    : type === 'anthropic'
+      ? (routerAi ? ['wav'] : [])
+      : [];
+  const supportsNativeVideo = openAiLike && routerAi;
+
   return {
     requireReasoning,
     requireAssistantAfterTool: mistral,
     supportsToolChoice: type !== 'ollama',
+    nativeAudioFormats,
+    supportsNativeVideo,
   };
 }
 
@@ -313,6 +423,17 @@ export function resolveModelCompatibility(
     // Inline-маркеры кэша — только явным значением: эвристики по типу
     // провайдера не ставятся, иначе менялось бы поведение существующих записей.
     cacheFormat: modelCompat?.cacheFormat ?? providerCompat?.cacheFormat ?? heuristics.cacheFormat,
+    // ADR-115: нативные медиа — тот же порядок «модель → провайдер → эвристика».
+    // Важно: `??` не схлопывает пустой массив (`[]` — не null/undefined), поэтому
+    // явный пустой перечень форматов перекрывает эвристику («ни одного»).
+    nativeAudioFormats: modelCompat?.nativeAudioFormats
+      ?? providerCompat?.nativeAudioFormats
+      ?? heuristics.nativeAudioFormats
+      ?? [],
+    supportsNativeVideo: modelCompat?.supportsNativeVideo
+      ?? providerCompat?.supportsNativeVideo
+      ?? heuristics.supportsNativeVideo
+      ?? false,
   };
 }
 
@@ -379,6 +500,7 @@ export function parseModelCompatibilityInput(
     'supportsToolChoice',
     'requireFinishReason',
     'supportsEffortUpdates',
+    'supportsNativeVideo',
   ] as const) {
     if (!(key in input)) continue;
     const value = input[key];
@@ -386,6 +508,24 @@ export function parseModelCompatibilityInput(
       return { ok: false, reason: `compatibility.${key} должен быть boolean` };
     }
     replaced[key] = value;
+  }
+  if ('nativeAudioFormats' in input) {
+    const value = input.nativeAudioFormats;
+    if (!Array.isArray(value)) {
+      return { ok: false, reason: 'compatibility.nativeAudioFormats должен быть массивом' };
+    }
+    const formats: NativeAudioFormat[] = [];
+    for (const item of value) {
+      if (typeof item !== 'string' || !(NATIVE_AUDIO_FORMATS as readonly string[]).includes(item)) {
+        return {
+          ok: false,
+          reason: `compatibility.nativeAudioFormats: неизвестный формат «${String(item)}» (допустимы ${NATIVE_AUDIO_FORMATS.join(', ')})`,
+        };
+      }
+      if (!formats.includes(item as NativeAudioFormat)) formats.push(item as NativeAudioFormat);
+    }
+    // Пустой массив — валидное явное значение («ни одного формата»).
+    replaced.nativeAudioFormats = formats;
   }
 
   return { ok: true, value: Object.keys(replaced).length > 0 ? replaced : undefined };

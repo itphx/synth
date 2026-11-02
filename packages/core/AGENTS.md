@@ -2182,7 +2182,11 @@
   `reasoningField` сам означает `requireReasoning: true`, если `requireReasoning` не переопределён.
   Эвристики (`detectCompatibilityHeuristics`, только для незаданных полей): `requireReasoning` — тип/имя
   провайдера `deepseek`, URL с `deepseek.com`, id модели с `deepseek`; `requireAssistantAfterTool` —
-  `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`.
+  `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`;
+  нативные медиа (ADR-115 × ADR-117) — `nativeAudioFormats`/`supportsNativeVideo` по матрице «тип
+  протокола × RouterAI-совместимый хост» (`isRouterAiUrl` в **shared** — единственный носитель
+  host-знания и **только эвристика умолчания**: не-routerai прокси `itphx` нативное видео умеет —
+  живой тест 2026-11-03; host-предикаты `providers/base.ts` удалены).
   Резолв каталога собирается в `server/app/deps.ts` и `backend/app/deps.ts` (им же пользуются шаги
   пайплайнов и aux-модели вложений); `ProviderPool` кладёт значение в `cacheKey`, `toCoreProviderConfig` —
   в конфиг провайдера (`engine/router/{utils,routing}.ts`); внутри провайдера —
@@ -2378,8 +2382,9 @@ blob-порты и `blob_refs` — ADR-116.
 - **Сжатие (`compress.ts`, проводка в `hydrate.ts`).** Только на границе отправки (оригинал в blob
   не меняется): `resolveCompressTarget` по MIME и `attachments.compression`, кэш
   `attachments/.derived/compress/<sha256>_<profile>.<ext>`, `MAX_COMPRESSED_BYTES` 32 МиБ;
-  форматы — PNG→PNG, прочее→JPEG, video→MP4 H.264/AAC (только `supportsNativeVideo`),
-  audio→mp3/wav (`resolveNativeAudioFormat`/`supportsNativeAudio`, `null` — не сжимать);
+  форматы — PNG→PNG, прочее→JPEG, video→MP4 H.264/AAC (только при
+  `compatibility.supportsNativeVideo`), audio→mp3/wav (`resolveNativeAudioFormat` по списку
+  `compatibility.nativeAudioFormats`, `null` — не сжимать);
   сжатая копия не меньше оригинала/ошибка/`no_ffmpeg` → `null` (отправляется оригинал).
 - **Медиа-раннер (`engine/media/runner.ts`).** Единственный путь запуска `ffmpeg` (derive, кадры
   видео, транскод аудио, миниатюры, сжатие): inline — `spawn` в `tmpdir()`, remote — через
@@ -2393,12 +2398,16 @@ blob-порты и `blob_refs` — ADR-116.
   поддержан провайдером) → **derive** (назначена aux-модель семейства — в диалог идёт текст) →
   **drop** (`reason: modality|limit|unavailable`). Для **аудио** при заданной
   `attachments.modalityModels.audio` derive идёт **до** native (явный выбор модели обработки
-  важнее нативного пути — голосовые контейнеры слишком разнородны). `canDeliverNative`
-  (`supportsNativeAudio`/`supportsNativeVideo`): провайдер может не уметь контейнер, хотя
-  модальность в каталоге есть — тогда derive/drop вместо молчаливой потери. Матрица: официальный
-  OpenAI — wav/mp3, видео нет; RouterAI (OpenAI) — wav/mp3/ogg и **видео** через `video_url`;
-  Anthropic-протокол — только wav и только RouterAI (официальный Anthropic аудио не принимает,
-  Anthropic-совместимый RouterAI ogg/mp3 не слышит; видео — нет).
+  важнее нативного пути — голосовые контейнеры слишком разнородны). `canDeliverNative` — по полям
+  слоя совместимости: `compatibility.nativeAudioFormats` (список `wav`/`mp3`/`ogg`) и
+  `compatibility.supportsNativeVideo`: провайдер может не уметь контейнер, хотя
+  модальность в каталоге есть — тогда derive/drop вместо молчаливой потери. Дефолт — эвристика по
+  типу протокола и RouterAI-совместимому хосту (ADR-117): OpenAI-протокол — wav/mp3 (`+ogg` у
+  RouterAI), видео — только у RouterAI-совместимых хостов; Anthropic-протокол — только wav и только
+  у RouterAI (официальный Anthropic аудио не принимает, Anthropic-совместимый RouterAI ogg/mp3 не
+  слышит; видео — нет). Явные значения перекрывают эвристику (пустой список форматов — «ни одного»),
+  поэтому не-routerai прокси с нативным видео (`itphx`, живой тест 2026-11-03) задаёт
+  `supportsNativeVideo: true` явно.
   Модальности **неизвестны** — фильтра нет (вложение уходит как есть: тихая потеря запрещена).
   Модель с `video`, но без `audio`: провайдер доставляет по `video` **только кадры** (аудиодорожка
   не доходит — проверено на RouterAI: `minimax/minimax-m3.1-flash` звука не получает), поэтому
@@ -2420,8 +2429,9 @@ blob-порты и `blob_refs` — ADR-116.
   дедуп по содержимому, иначе суффикс `-2`, `-3`), модели сообщается путь; нет workspace/прав —
   `null` (ход не падает). Уборка каталога не автоматизирована.
 - **Обработка модальностей (`derive.ts`).** `deriveModalityText`: `image`/`pdf` — как есть,
-  `audio` — `wav`/`mp3` как есть либо транскод `ffmpeg` в wav 16 кГц mono, `video` — нативно у
-  RouterAI либо кадры (до 5) через `ffmpeg`; `deriveVideoAudioText` — транскрипт аудиодорожки
+  `audio` — `wav`/`mp3` как есть либо транскод `ffmpeg` в wav 16 кГц mono, `video` — нативно при
+  `compatibility.supportsNativeVideo` либо кадры (до 5) через `ffmpeg`; `deriveVideoAudioText` —
+  транскрипт аудиодорожки
   видео для модели с `video` без `audio` (`-vn` + aux-модель аудио, отдельное семейство кэша
   `video-audio`); производные объекты и кэш — в `attachments/.derived/`
   (ключ `sha256(blobPath|provider/model|family)`); вызов — только через `GatewayProvider`;

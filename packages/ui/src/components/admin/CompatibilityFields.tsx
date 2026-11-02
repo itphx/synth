@@ -12,7 +12,8 @@ import {
   type CompatibilityDraft,
   type CompatibilityTristate,
 } from '@/lib/api/compatibility'
-import { SelectField, TextField } from '../ui/settings'
+import { NATIVE_AUDIO_FORMATS, type NativeAudioFormat } from '@itphx/synth-shared/types'
+import { MultiSelectField, SelectField, TextField } from '../ui/settings'
 
 /** Варианты tri-state: «Авто / Да / Нет». */
 const TRISTATE_OPTIONS: CompatibilityTristate[] = ['', 'true', 'false']
@@ -53,6 +54,18 @@ export function CompatibilityFields({ draft, onChange, saved = false }: Compatib
   const tristateItems = TRISTATE_OPTIONS.map((value) => ({
     value,
     label: tristateLabel(value),
+  }))
+
+  // ADR-117: «Аудио нативно» — режим (авто / явный список / явный пустой список).
+  const nativeAudioModeItems = [
+    { value: '', label: t('admin.compatibility.nativeAudioAuto') },
+    { value: COMPATIBILITY_CUSTOM, label: t('admin.compatibility.nativeAudioCustom') },
+    { value: 'none', label: t('admin.compatibility.nativeAudioNone') },
+  ]
+
+  const nativeAudioFormatOptions = NATIVE_AUDIO_FORMATS.map((format) => ({
+    value: format,
+    label: format,
   }))
 
   return (
@@ -289,6 +302,52 @@ export function CompatibilityFields({ draft, onChange, saved = false }: Compatib
                 ))}
             </SelectContent>
           </SelectField>
+
+          <SelectField
+            label={t('admin.compatibility.supportsNativeVideo')}
+            tooltip={t('admin.compatibility.supportsNativeVideoHint')}
+            value={draft.supportsNativeVideo}
+            onValueChange={(value) => update({ supportsNativeVideo: value as CompatibilityTristate })}
+            ariaLabel={t('admin.compatibility.supportsNativeVideo')}
+            triggerTestId="compatibility-supports-native-video"
+            items={tristateItems}
+          >
+            <SelectContent>
+              {tristateItems.map((item) => (
+                <SelectItem key={item.value || 'auto'} value={item.value}>{item.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </SelectField>
+
+          <SelectField
+            label={t('admin.compatibility.nativeAudioFormats')}
+            tooltip={t('admin.compatibility.nativeAudioFormatsHint')}
+            value={draft.nativeAudioFormatsMode}
+            onValueChange={(value) =>
+              update({ nativeAudioFormatsMode: value as CompatibilityDraft['nativeAudioFormatsMode'] })
+            }
+            ariaLabel={t('admin.compatibility.nativeAudioFormats')}
+            triggerTestId="compatibility-native-audio-formats"
+            items={nativeAudioModeItems}
+          >
+            <SelectContent>
+              {nativeAudioModeItems.map((item) => (
+                <SelectItem key={item.value || 'auto'} value={item.value}>{item.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </SelectField>
+
+          {draft.nativeAudioFormatsMode === COMPATIBILITY_CUSTOM && (
+            <MultiSelectField
+              label={t('admin.compatibility.nativeAudioFormatList')}
+              tooltip={t('admin.compatibility.nativeAudioFormatListHint')}
+              values={draft.nativeAudioFormats}
+              options={nativeAudioFormatOptions}
+              onChange={(next) => update({ nativeAudioFormats: next as NativeAudioFormat[] })}
+              emptyText={t('admin.compatibility.nativeAudioFormatListEmpty')}
+              testIdPrefix="compatibility-native-audio-format"
+            />
+          )}
         </div>
       )}
 

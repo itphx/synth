@@ -108,3 +108,39 @@ describe('CompatibilityFields: effort-режим (supportsEffortUpdates)', () =>
     ).not.toContain('Auto')
   })
 })
+
+describe('CompatibilityFields: нативные видео/аудио (ADR-117)', () => {
+  it('контролы есть в развёрнутом блоке, по умолчанию «авто»', async () => {
+    const container = await renderFields(emptyCompatibilityDraft())
+    const video = container.querySelector('[data-testid="compatibility-supports-native-video"]')
+    const audio = container.querySelector('[data-testid="compatibility-native-audio-formats"]')
+    expect(video).toBeTruthy()
+    expect(audio).toBeTruthy()
+    expect(video!.textContent).toContain('Auto')
+    expect(audio!.textContent).toContain('Auto')
+    // Мульти-селект форматов — только в режиме «Set list».
+    expect(container.querySelector('[data-testid="compatibility-native-audio-format-wav"]')).toBeNull()
+  })
+
+  it('сохранённые значения показываются в контролах', async () => {
+    const draft = draftFromCompatibility({
+      supportsNativeVideo: false,
+      nativeAudioFormats: ['wav'],
+    })
+    const container = await renderFields(draft)
+    expect(
+      container.querySelector('[data-testid="compatibility-supports-native-video"]')!.textContent,
+    ).toContain('No')
+    const chip = container.querySelector('[data-testid="compatibility-native-audio-format-wav"]') as HTMLElement
+    expect(chip).toBeTruthy()
+    expect(chip.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('сохранённый пустой список аудио — режим «не принимает нативно»', async () => {
+    const draft = draftFromCompatibility({ nativeAudioFormats: [] })
+    const container = await renderFields(draft)
+    expect(
+      container.querySelector('[data-testid="compatibility-native-audio-formats"]')!.textContent,
+    ).toContain('Not accepted natively')
+  })
+})

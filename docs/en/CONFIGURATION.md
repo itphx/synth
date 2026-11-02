@@ -2,6 +2,9 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
+> ⚠️ RU-версия обновлена 2026-11-03 (**секция «Каталог моделей»** — слой `compatibility`: поля
+> `supportsNativeVideo`/`nativeAudioFormats` — нативные видео/аудио (ADR-117 × ADR-115) и их
+> эвристика по типу протокола и RouterAI-совместимому хосту — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-02 (**секция «Вложения сообщений» (`attachments.*`)** — `compression` (сжатие на отправке), `thumbnail` (серверные миниатюры), `maxChunkBytes` (chunked-загрузка) — **переведено**); RU-версия обновлена 2026-11-02 (**секции «Вложения сообщений» (`attachments.*`) и «Лимиты загрузки и обратный прокси»** — `maxBytesPerFile` по умолчанию 100 МиБ, nginx/Apache/ingress: транспортный лимит вычисляется из прикладных (единый параметр деплоя) — **переведено**); RU-версия обновлена 2026-11-02 (**секция `session.autoTitle`** «Авто-заголовок сессии» — триггер в начале хода (сразу после первого сообщения пользователя), отсрочка для приветствия/смолтка, `N=2..maxAttempts` — заголовок по диалогу, фоллбек только из реплики с сигналом, ручная регенерация `PATCH /api/v2/sessions/:id {"title": ""}`, env `SYNTH_SESSION_AUTO_TITLE_*` — **переведено**); RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
@@ -1824,13 +1827,19 @@ rather than hardcoded per provider type. The same object exists on two levels:
 | `cacheFormat` | Prompt-cache inline marker format (`cache_control: {type:'ephemeral'}`): `anthropic` — last tool + system + last message boundary; `alibaba` — system + last message boundary (no tools). Budget — ≤4 breakpoints; when set, `prompt_cache_key` is **not** sent | Unset (`prompt_cache_key` only) |
 | `requireFinishReason` | Require `finish_reason` in the stream: a provider that closes the stream without it returned an incomplete answer (incomplete-stream, not retried) | `true` |
 | `supportsEffortUpdates` | Anthropic 5.x effort mode: send `output_config.effort` (tier from the agent/session `effort` or from `reasoningLevel`: `low\|medium\|high`) and **not** send `thinking` — thinking blocks in history are not replayed, `temperature` is not forced. Without the flag — the previous mode, an explicit effort is ignored | `false` (explicit `true` only) |
+| `supportsNativeVideo` | The transport accepts a **video file** natively (the `video_url` block), without splitting it into frames via an aux model | `false` (heuristic: a RouterAI-compatible host) |
+| `nativeAudioFormats` | Audio containers of the native path (the `input_audio`/`audio` blocks): `wav` \| `mp3` \| `ogg`. An explicit **empty list** — "no format at all" (aux model only) — and it overrides the heuristic | Heuristic by type/host: `wav`, `mp3` (`+ogg` on a RouterAI-compatible host; `wav` for `anthropic`; an empty list for the other types) |
 
 - **Priority:** the explicit **model** value → the explicit **provider** value → the **heuristic** →
   the built-in default (`resolveModelCompatibility`). Heuristics (`detectCompatibilityHeuristics`) apply
   only to unset fields: `requireReasoning` — provider type/name `deepseek`, a URL containing
   `deepseek.com`, a model id containing `deepseek`, provider name `minimax` or a `minimax` URL;
   `requireAssistantAfterTool` — `mistral`/`devstral`/
-  `codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField`,
+  `codestral`/`pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`; native media —
+  `nativeAudioFormats`/`supportsNativeVideo` by the matrix “protocol type × RouterAI-compatible host”
+  (`isRouterAiUrl` in shared — the only carrier of host knowledge and **a default heuristic only**:
+  the non-RouterAI proxy `itphx` does take native video — live test 2026-11-03, ADR-117).
+  `maxTokensField`,
   `streamUsage`, `cacheFormat`, `requireFinishReason` and `supportsEffortUpdates` are not heuristically
   detected: local OpenAI-compatible servers often do not know `max_completion_tokens`, and cache inline
   markers, the `finish_reason` requirement and effort mode are enabled explicitly only (existing catalog
@@ -1851,7 +1860,9 @@ rather than hardcoded per provider type. The same object exists on two levels:
   records created before `compatibility` existed.
 - **Who uses it:** the OpenAI-compatible path (`providers/openai.ts`) — the reasoning field name, an
   empty string under `requireReasoning`, the output limit field, the assistant bridge after `tool`,
-  `stream_options`; Ollama — `think` and skipping `tool_choice`; Anthropic — see below. The value is part
+  `stream_options`, the `video_url`/`input_audio` blocks (per `supportsNativeVideo`/
+  `nativeAudioFormats`); Ollama — `think` and skipping `tool_choice`; Anthropic — the `audio` block (per
+  `nativeAudioFormats`) and see below. The value is part
   of the provider cache key (`ProviderPool`), so changing `compatibility` recreates the provider instance.
 
 ```json

@@ -2093,6 +2093,16 @@ export const dict = {
   'admin.compatibility.supportsToolChoiceHint': 'Whether the provider supports tool_choice. Native Ollama does not — “No” stops sending the parameter.',
   'admin.compatibility.supportsEffortUpdates': 'Effort mode (output_config)',
   'admin.compatibility.supportsEffortUpdatesHint': 'Anthropic 5.x: send the effort tier in output_config.effort and do not send thinking. “Auto” — no (explicit opt-in only): otherwise gateways without support for the field receive a 400. The low/medium/high tiers come from the reasoning level; effort cannot disable reasoning — in that case the parameter is not sent.',
+  'admin.compatibility.supportsNativeVideo': 'Native video',
+  'admin.compatibility.supportsNativeVideoHint': 'Whether the provider accepts a video file natively (video_url block). “Auto” — heuristic by provider; “No” — the video is not sent as a file but as frames.',
+  'admin.compatibility.nativeAudioFormats': 'Native audio',
+  'admin.compatibility.nativeAudioFormatsHint': 'Which audio containers the provider accepts natively. “Auto” — heuristic by provider; “Set list” — explicit list; “Not accepted natively” — explicit empty list.',
+  'admin.compatibility.nativeAudioAuto': 'Auto',
+  'admin.compatibility.nativeAudioCustom': 'Set list',
+  'admin.compatibility.nativeAudioNone': 'Not accepted natively',
+  'admin.compatibility.nativeAudioFormatList': 'Audio formats',
+  'admin.compatibility.nativeAudioFormatListHint': 'wav — WAV/PCM; mp3 — MPEG-1 Audio Layer III; ogg — Ogg/Opus (only for providers that understand input_audio with format:\'ogg\').',
+  'admin.compatibility.nativeAudioFormatListEmpty': 'No formats selected',
 
   // Models
   'admin.models.title': 'Models',

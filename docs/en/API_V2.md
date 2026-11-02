@@ -2,6 +2,9 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
+> ⚠️ RU-версия обновлена 2026-11-03 (**§5.9/§5.10** — `compatibility`: поля `supportsNativeVideo`/
+> `nativeAudioFormats` — нативные видео/аудио (ADR-117 × ADR-115); семантика «авто / явный `false` /
+> явный пустой список»; объект `compatibility` — полная замена — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-02 (**§3.3** — события синхронизации мутаций
 > `message.deleted`/`message.updated`/`session.messages.cleared`/`session.messages.merged`/
 > `project.updated`/`project.deleted`/`plan.updated`/`fs.changed` — **переведено**; **§5.5** — `PATCH /api/v2/sessions/:id` с телом
@@ -680,19 +683,27 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 > path is a separate provider `type: openai`/`generic`). An alternative —
 > a window on the Ollama side (`OLLAMA_CONTEXT_LENGTH`/Modelfile).
 
-> **Provider compatibility layer — `compatibility` (ADR-117, 2026-10-30).** An optional
-> `ModelCompatibility` object: `reasoningField` (the openai-chat reasoning field name, default
+> **Provider compatibility layer — `compatibility` (ADR-117, 2026-10-30; native media — 2026-11-03).**
+> An optional `ModelCompatibility` object: `reasoningField` (the openai-chat reasoning field name, default
 > `reasoning_content`), `requireReasoning`, `maxTokensField` (`max_tokens` \| `max_completion_tokens`),
 > `requireAssistantAfterTool`, `streamUsage`, `supportsToolChoice`, `cacheFormat` (`anthropic` \| `alibaba` —
 > `cache_control` inline markers, budget ≤4; when set, `prompt_cache_key` is not sent), `requireFinishReason`
-> (default `true`). Here these are the **provider defaults**
+> (default `true`), `supportsEffortUpdates` (default `false`), `supportsNativeVideo` (default `false`) and
+> `nativeAudioFormats` (the list of containers of the native path: `wav` \| `mp3` \| `ogg`). Here these are
+> the **provider defaults**
 > for all its models; a model overrides fields pointwise (`ModelConfig.compatibility`, §5.10). Semantics —
 > **replacement**: the object replaces the value entirely (a field missing from the object means “auto”,
 > not “keep the previous value”), `null`/`{}` — reset, the field absent — unchanged; an unknown field or a
 > wrong type → `400 VALIDATION_ERROR` (a typo is never silently lost). `GET /api/v2/providers` and
 > `GET /:name` return `compatibility` **only when set**. Resolution priority — model → provider →
 > heuristic → default; heuristics: DeepSeek (`requireReasoning`), the Mistral family
-> (`requireAssistantAfterTool`), native Ollama (`supportsToolChoice: false`). Details and examples —
+> (`requireAssistantAfterTool`), native Ollama (`supportsToolChoice: false`), and for native media — the
+> matrix “protocol type × RouterAI-compatible host” (`nativeAudioFormats`/`supportsNativeVideo`).
+> Semantics of the native-media fields: “auto” (the field is not set) = the server heuristic;
+> `supportsNativeVideo: false` — “does not take it natively”; an **explicit empty list**
+> `nativeAudioFormats` — “no native format at all” (audio through the aux model only). An empty list
+> overrides the heuristic (`??` does not collapse `[]`).
+> Details and examples —
 > [CONFIGURATION.md](../CONFIGURATION.md) §“Model catalog”.
 
 ### 5.10 Models — `/api/v2/models`
@@ -704,12 +715,18 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 | POST | `/api/v2/models/fetch` | both | ADMIN / auth | Sync with the providers |
 | DELETE | `/api/v2/models/:id` | both | ADMIN / auth | Delete |
 
-> **Model compatibility — `compatibility` and `requires_reasoning` (ADR-117, 2026-10-30).** A model may
+> **Model compatibility — `compatibility` and `requires_reasoning` (ADR-117, 2026-10-30; native media —
+> 2026-11-03).** A model may
 > override the provider compatibility layer (§5.9) with the `compatibility` field — the same object
 > (`reasoningField`, `requireReasoning`, `maxTokensField`, `requireAssistantAfterTool`, `streamUsage`,
-> `supportsToolChoice`, `cacheFormat`, `requireFinishReason`), semantics are **replacement**: the object
+> `supportsToolChoice`, `cacheFormat`, `requireFinishReason`, `supportsEffortUpdates`,
+> `supportsNativeVideo`, `nativeAudioFormats`), semantics are **replacement**: the object
 > replaces the value entirely, `null`/`{}` — reset, the field absent — unchanged, an unknown field/type →
 > `400 VALIDATION_ERROR`.
+> The native-media fields are overridden pointwise: `supportsNativeVideo: true` enables the native
+> `video_url` block (by default — only on RouterAI-compatible hosts), and `nativeAudioFormats` lists the
+> accepted containers (`wav`/`mp3`/`ogg`); an **empty list** is a meaningful value — “none at all” (audio
+> through the aux model only) — and it overrides the heuristic.
 > `requires_reasoning` (the camelCase `requiresReasoning` too) is a **shorthand** for
 > `compatibility.requireReasoning`: `true` — the reasoning field is mandatory on **every** assistant
 > message (an empty string when there is no reasoning), `false` — force off, `null` — reset (clears both

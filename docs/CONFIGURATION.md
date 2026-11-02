@@ -1861,13 +1861,19 @@ OpenAI-chat / Anthropic / Ollama, лимит шагов) — [PROVIDERS.md](./PR
 | `cacheFormat` | Формат inline-маркеров prompt-cache (`cache_control: {type:'ephemeral'}`): `anthropic` — последний tool + system + граница последнего сообщения; `alibaba` — system + граница последнего сообщения (без tools). Бюджет — ≤4 breakpoint'а; при заданном значении `prompt_cache_key` **не** отправляется | Не задан (только `prompt_cache_key`) |
 | `requireFinishReason` | Требовать `finish_reason` в стриме: провайдер, закрывший стрим без него, отдал недописанный ответ (incomplete-stream, не ретраится) | `true` |
 | `supportsEffortUpdates` | Effort-режим Anthropic 5.x: отправлять `output_config.effort` (тир из `effort` агента/сессии либо из `reasoningLevel`: `low\|medium\|high`) и **не** отправлять `thinking` — thinking-блоки истории не реплеятся, `temperature` не форсируется. Без флага — прежний режим, явный effort игнорируется | `false` (только явным `true`) |
+| `supportsNativeVideo` | Транспорт принимает **видеофайл** нативно (блок `video_url`), без разбивки на кадры через aux-модель | `false` (эвристика: RouterAI-совместимый хост) |
+| `nativeAudioFormats` | Аудио-контейнеры нативного пути (блоки `input_audio`/`audio`): `wav` \| `mp3` \| `ogg`. Явный **пустой список** — «ни одного формата» (только aux-модель) и перекрывает эвристику | Эвристика по типу/хосту: `wav`, `mp3` (`+ogg` у RouterAI-совместимого хоста; `wav` у `anthropic`; пустой список — у прочих типов) |
 
 - **Приоритет:** явное значение **модели** → явное значение **провайдера** → **эвристика** →
   встроенный дефолт (`resolveModelCompatibility`). Эвристики (`detectCompatibilityHeuristics`)
   применяются только к незаданным полям: `requireReasoning` — тип/имя провайдера `deepseek`, URL с
   `deepseek.com`, id модели с `deepseek`, имя провайдера `minimax` или URL с `minimax`;
   `requireAssistantAfterTool` — `mistral`/`devstral`/`codestral`/
-  `pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`. `maxTokensField`, `streamUsage`,
+  `pixtral`/`mixtral`; `supportsToolChoice: false` — `type: 'ollama'`; нативные медиа —
+  `nativeAudioFormats`/`supportsNativeVideo` по матрице «тип протокола × RouterAI-совместимый хост»
+  (`isRouterAiUrl` в shared — единственный носитель host-знания и **только эвристика умолчания**:
+  не-routerai прокси `itphx` нативное видео умеет — живой тест 2026-11-03, ADR-117).
+  `maxTokensField`, `streamUsage`,
   `cacheFormat`, `requireFinishReason` и `supportsEffortUpdates` не эвристицируются: локальные
   OpenAI-совместимые серверы часто не знают `max_completion_tokens`, а inline-маркеры кэша, требование
   `finish_reason` и effort-режим включаются только явным значением (поведение существующих записей
@@ -1887,8 +1893,10 @@ OpenAI-chat / Anthropic / Ollama, лимит шагов) — [PROVIDERS.md](./PR
   Нормализация — `compatibility.requireReasoning ?? requiresReasoning`. Поле оставлено для записей
   каталога, созданных до появления `compatibility`.
 - **Кто использует:** OpenAI-совместимый путь (`providers/openai.ts`) — имя reasoning-поля, пустая
-  строка при `requireReasoning`, поле лимита вывода, assistant-«мост» после `tool`, `stream_options`;
-  Ollama — `think` и отказ от `tool_choice`; Anthropic — см. ниже. Значение входит в ключ кэша
+  строка при `requireReasoning`, поле лимита вывода, assistant-«мост» после `tool`, `stream_options`,
+  блоки `video_url`/`input_audio` (по `supportsNativeVideo`/`nativeAudioFormats`);
+  Ollama — `think` и отказ от `tool_choice`; Anthropic — блок `audio` (по `nativeAudioFormats`) и см.
+  ниже. Значение входит в ключ кэша
   провайдеров (`ProviderPool`), поэтому смена `compatibility` пересоздаёт экземпляр провайдера.
 
 ```json

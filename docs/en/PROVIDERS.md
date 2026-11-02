@@ -19,7 +19,7 @@ decision and its rationale live in [ADR-117](../arch_decisions/adr-117-provider-
 | **`provider/model` pair** | How a model is addressed in routing, agents, subagents and `list_models` (a model without a provider is ambiguous) | model `id` = `<provider>/<name>` |
 | **Protocol** | Request/response format implemented by an adapter (`openai`/`anthropic`/`ollama`/`decision`/`remote`) | `packages/core/src/providers/` |
 | **Catalog** | Instance-level provider and model records (JSON or DB), not `config.yaml` keys | `{dataDir}/providers/`, `{dataDir}/models/` |
-| **`compatibility`** | Data describing protocol differences of compatible gateways: reasoning field name, output-limit field, `tool_choice`, cache format, `finish_reason` requirement | `ModelCompatibility` — [shared/types/provider.ts](../../packages/shared/src/types/provider.ts) |
+| **`compatibility`** | Data describing protocol differences of compatible gateways: reasoning field name, output-limit field, `tool_choice`, cache format, `finish_reason` requirement, native video/audio | `ModelCompatibility` — [shared/types/provider.ts](../../packages/shared/src/types/provider.ts) |
 
 Providers and models are **instance data** (ADR-023/ADR-096), so a new gateway or proxy is added as a
 catalog record, not by a core release. They have no separate `config.yaml` keys: edit them via the
@@ -149,9 +149,11 @@ reference table in the core.
 
 Modalities feed hydration: if the model accepts the modality, the attachment goes natively; if not, an
 aux model of the family (`attachments.modalityModels`) or a drop with materialization into the
-workspace (ADR-115). Adapters encode only what they physically can: `video_url`/`input_audio{ogg}` —
-RouterAI, `audio{base64}` — Anthropic-compatible RouterAI (wav only); official Anthropic/OpenAI do not
-know these blocks.
+workspace (ADR-115). Adapters encode only what they physically can, and "can" is **compatibility-layer
+data** (§4.1): `compatibility.supportsNativeVideo` (the `video_url` block) and
+`compatibility.nativeAudioFormats` (the `input_audio`/`audio` blocks; containers `wav`/`mp3`/`ogg`).
+The default is a heuristic by protocol type and host (§4.3): RouterAI-compatible gateways take video
+natively, official Anthropic/OpenAI do not.
 
 ### 3.7 Where to look at the catalog
 
@@ -178,9 +180,12 @@ defaults for all models of the provider, `ModelConfig.compatibility` — overrid
 | `cacheFormat` | not set | Inline prompt-cache markers `cache_control: {type:'ephemeral'}`: `anthropic` — last tool + system + tail of the last message; `alibaba` — system + tail, **no** tools. Budget ≤ 4 breakpoints; when set, `prompt_cache_key` is **not** sent | openai-chat |
 | `requireFinishReason` | `true` | A stream without `finish_reason` is an incomplete response → error, not retried | openai-chat |
 | `supportsEffortUpdates` | `false` (explicit value only) | Anthropic 5.x effort mode: send `output_config.effort` (effort tier — from the agent/session `effort` or from `reasoningLevel`) and **not** send `thinking`; thinking blocks in history are not replayed, `temperature` is not forced. Without the flag — previous behaviour, an explicit effort is ignored | anthropic |
+| `supportsNativeVideo` | `false` (heuristic: a RouterAI-compatible host) | The transport accepts a **video file** natively (the `video_url` block), without splitting it into frames via an aux model | openai-chat |
+| `nativeAudioFormats` | heuristic by type/host: `wav`, `mp3` (`+ogg` on a RouterAI-compatible host; `wav` for `anthropic`; an empty list for the other types) | Audio containers of the native path (the `input_audio`/`audio` blocks): `wav` \| `mp3` \| `ogg`. An explicit **empty list** is a meaningful value — "no format at all" | openai-chat, anthropic |
 
 `ResolvedModelCompatibility` is the fully resolved set: every field is filled except `cacheFormat`,
-where `undefined` is a meaningful state ("do not place markers").
+where `undefined` is a meaningful state ("do not place markers"). `supportsNativeVideo` is always a
+boolean, `nativeAudioFormats` is always an array (empty = no native format at all).
 
 **Reasoning level and sampling sit outside `compatibility`.** `reasoningLevel` is set by the agent
 (`AgentDefinition.reasoningLevel`) and the session (`SessionSettings.reasoningLevel`). On session
@@ -218,6 +223,9 @@ normalization is `compatibility.requireReasoning ?? requiresReasoning` (records 
 `compatibility` existed keep working). An explicit `reasoningField` at either level itself implies
 `requireReasoning: true` unless `requireReasoning` is set explicitly (including `false`).
 
+An explicit **empty array** for `nativeAudioFormats` is a meaningful value — "no format at all": `??`
+does not collapse it, so an empty list overrides the heuristic (audio goes through the aux model only).
+
 ### 4.3 Heuristics
 
 Applied **only to unset** fields:
@@ -227,6 +235,8 @@ Applied **only to unset** fields:
 | `requireReasoning: true` | provider type/name `deepseek`, URL contains `deepseek.com`, model id contains `deepseek`; provider name `minimax` or a `minimax` URL (MiniMax adaptive thinking spends the same `max_tokens`, so these models get an output floor of 8192) |
 | `requireAssistantAfterTool: true` | model id contains `mistral`/`devstral`/`codestral`/`pixtral`/`mixtral` |
 | `supportsToolChoice: false` | `type: ollama` (the native `/api/chat` does not know the field) |
+| `nativeAudioFormats` | type `openai`/`generic` — `wav`, `mp3` (`+ogg` if the host is RouterAI-compatible); type `anthropic` — `wav` (only on a RouterAI-compatible host), otherwise an empty list; the other types — an empty list |
+| `supportsNativeVideo: true` | type `openai`/`generic` **and** a RouterAI-compatible host |
 
 `maxTokensField`, `streamUsage`, `cacheFormat`, `requireFinishReason`, `supportsEffortUpdates` are
 **not** heuristicized: otherwise existing catalog records would start behaving differently (local
@@ -234,6 +244,14 @@ servers do not know `max_completion_tokens`; inline cache markers and effort mod
 For `supportsEffortUpdates` the absence of auto-heuristics is deliberate: enabling it changes the
 request body (`output_config` instead of `thinking`), so guessing by model name would send an unknown
 field to gateways without support (400).
+
+**The host heuristic is only a default.** The only domain knowledge left in the compatibility layer is
+`isRouterAiUrl` (shared, `detectCompatibilityHeuristics`); the decision itself is made by **data**
+(`compatibility`), which a provider/model overrides explicitly. The reason for the move — a live test on
+2026-11-03: the non-RouterAI proxy `itphx` (`https://ai.itphx.ru/api/`) **does** take native video
+(the `video_url` block was accepted, HTTP 200, the model described the clip exactly as with the direct
+`routerai.ru`), while the former host predicate gave a false negative. So "can the gateway take video"
+is a question of data, not of a domain name (ADR-117 §10).
 
 ### 4.4 Where it is resolved
 
@@ -277,6 +295,10 @@ draft — [lib/api/compatibility.ts](../../packages/ui/src/lib/api/compatibility
 - `maxTokensField` and `cacheFormat` — selects with "Auto"; `requireFinishReason` and
   `supportsEffortUpdates` — tri-state (for the latter "Auto" means "No": the server enables effort mode
   only with an explicit `true`);
+- `supportsNativeVideo` — tri-state, like the other boolean fields; `nativeAudioFormats` — a mode with a
+  multi-select of the `wav`/`mp3`/`ogg` chips: "Auto" (the server heuristic), "set a list" or "does not
+  accept natively" (an explicit empty list). Explicit values go into the payload as they are — "Auto"
+  and "does not accept" are different things;
 - a "changed"/"adv." badge in lists; a full clear on an entity that has saved parameters sends
   `compatibility: null` (an explicit reset), while on an entity without saved parameters the field is
   not sent at all.
@@ -402,9 +424,26 @@ The hybrid-mode proxy (backend) follows the **same compatibility contract**, not
 - whether the provider actually sends effort is still decided by `compatibility.supportsEffortUpdates`
   (guard inside the provider, §6.1).
 
+### 5.10 Native media: `video_url` and `input_audio`
+
+- A video file goes natively as the block `{type:'video_url', video_url:{url:'data:video/mp4;base64,…'}}`
+  — only when `compatibility.supportsNativeVideo` is `true` (by default — a RouterAI-compatible host).
+  Otherwise hydration treats the transport `video` as unsupported: an aux model (frames via `ffmpeg`)
+  or the attachment is marked as not delivered — there is no silent loss.
+- Audio goes as the `input_audio` block only when its container is in
+  `compatibility.nativeAudioFormats` (`wav`/`mp3`/`ogg`); a format outside the list is not silently lost
+  — it goes to the aux model or to the "not delivered" block.
+- The decision is made by the **data** of the compatibility layer (§4.1), not by a host check: a
+  non-RouterAI proxy may take native video (live test 2026-11-03, `itphx`) — then
+  `compatibility.supportsNativeVideo` is set explicitly.
+
 ## 6. Anthropic specifics
 
 Implementation — [providers/anthropic.ts](../../packages/core/src/providers/anthropic.ts).
+
+Audio goes as the `audio` block only when its container is in `compatibility.nativeAudioFormats`: for
+the Anthropic protocol the default is `wav` on a RouterAI-compatible host, otherwise the list is empty
+(audio goes through the aux model). The fields are compatibility-layer data (§4.1), not a host check.
 
 ### 6.1 Extended thinking
 
@@ -682,6 +721,8 @@ the main loop (it remains for pipeline steps).
 | `tool_choice` is unsupported (`400` unknown field / ignored) | A non-standard server | `compatibility.supportsToolChoice: false` (already the default for native Ollama) |
 | Stream `usage` is zero | The server does not support `stream_options` | `compatibility.streamUsage: false` (the request stops carrying an unknown field; usage stays zero) |
 | `400` about `output_config` / `effort` (Anthropic) | `supportsEffortUpdates` is on but the gateway does not know the field; or the model is not an effort-tier one | remove `supportsEffortUpdates` (the previous `thinking` mode returns); send `xhigh`/`max` only after verifying on the live provider (they are set in agent/session settings — the «Reasoning effort» select) |
+| Video goes as frames instead of the native `video_url` block | `compatibility.supportsNativeVideo` is not set on the provider/model (or is set to `false`) although the gateway takes native video | set `compatibility.supportsNativeVideo: true` on the provider or the model; by default it is `true` only for RouterAI-compatible hosts |
+| Audio goes through the aux model/transcoding although the provider accepts it | the file format is not in `compatibility.nativeAudioFormats` (by default — `wav`/`mp3`, `+ogg` on RouterAI-compatible hosts) | list your own formats: `compatibility.nativeAudioFormats: ["wav","mp3","ogg"]`; an empty list means "none at all" (aux model only) |
 
 ## 12. Known limitations
 
@@ -720,3 +761,8 @@ the main loop (it remains for pipeline steps).
 - **No modality reference table.** If the provider catalog does not report modalities, no restriction
   is applied: an incompatible type is rejected by the provider itself (an error instead of silent loss,
   but without a pre-flight check).
+- **The host heuristic for native media is only a default.** `nativeAudioFormats`/`supportsNativeVideo`
+  are derived by default from the protocol type and a RouterAI-compatible host (`isRouterAiUrl`,
+  shared). A proxy that takes native video or non-standard audio containers but is not called RouterAI
+  has to set the fields explicitly — otherwise it gets frames instead of video and an aux model instead
+  of audio. Live test 2026-11-03: the non-RouterAI proxy `itphx` does take native video (ADR-117 §10).

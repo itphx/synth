@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel, nativeAudioFormatForMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import type { AutoTitleConfig } from '@itphx/synth-shared/config';
 import { autoTitleConfigSchema } from '@itphx/synth-shared/config';
@@ -14,7 +14,7 @@ import { computeUsageCost } from '../providers/usage.js';
 import type { UsageCostBreakdown } from '../providers/usage.js';
 
 import type { LLMMessage, LLMAttachment, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
-import { ProviderFactory, supportsNativeAudio, supportsNativeVideo, buildChatOptions } from '../providers/base.js';
+import { ProviderFactory, resolveProviderCompatibility, buildChatOptions } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import type { ContextOptimizerGatewayHooks } from './context/optimizer.js';
@@ -2998,21 +2998,36 @@ export class ChatOrchestrator {
         // только затем прежний путь (отброс + материализация). Не настроено —
         // `undefined` (derive не вызывается).
         const derive = this._buildAttachmentDerive(session, target.language);
-        // ADR-115: транспортные возможности провайдера (контейнеры аудио/видео).
+        // ADR-115 × ADR-117: транспортные возможности провайдера (контейнеры
+        // аудио/видео) — **данные** слоя совместимости, а не host-проверка.
         // Модальность в каталоге может включать `audio`/`video`, но протокол не
         // умеет конкретный контейнер (ogg у Anthropic, видео у официального
         // OpenAI) — тогда вложение идёт через aux или помечается недоставленным,
         // а не теряется молча.
+        //
+        // Резолв — тот же, что у провайдера хода: явное значение модели →
+        // явное значение провайдера → эвристика (тип протокола/хост) → дефолт.
         const providerConfig = this._providerLoader(target.providerName);
-        const canDeliverNative = providerConfig
-          ? (mime: string) => supportsNativeAudio(
-              providerConfig.type ?? '',
-              providerConfig.baseUrl ?? '',
-              mime,
-            ) || (mime.toLowerCase().startsWith('video/') && supportsNativeVideo(
-              providerConfig.type ?? '',
-              providerConfig.baseUrl ?? '',
-            ))
+        const compatibility = providerConfig
+          ? resolveProviderCompatibility({
+              type: providerConfig.type,
+              name: providerConfig.name,
+              url: providerConfig.baseUrl,
+              model: target.modelId,
+              compatibility: this._resolveModelCompatibility?.(
+                target.providerName,
+                target.modelId,
+              ) ?? providerConfig.compatibility,
+            })
+          : undefined;
+        const nativeAudioFormats = new Set(compatibility?.nativeAudioFormats ?? []);
+        const canDeliverNative = providerConfig && compatibility
+          ? (mime: string) => {
+              const format = nativeAudioFormatForMime(mime);
+              if (format) return nativeAudioFormats.has(format);
+              return mime.toLowerCase().startsWith('video/')
+                && compatibility.supportsNativeVideo;
+            }
           : undefined;
         // ADR-115: транскрипт аудиодорожки видео — `video`-модальность
         // доставляет только кадры, звук модели не доходит. Для модели с
@@ -3025,8 +3040,7 @@ export class ChatOrchestrator {
         const compress = this._buildAttachmentCompress(
           session,
           resolveCompressTarget(
-            providerConfig?.type ?? '',
-            providerConfig?.baseUrl ?? '',
+            compatibility ?? { nativeAudioFormats: [], supportsNativeVideo: false },
           ),
         );
         return hydrateMessageAttachments(messages, source, this._getAttachmentHydrateDeps(), {

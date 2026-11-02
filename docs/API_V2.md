@@ -910,19 +910,28 @@ sha256, небезопасный путь в архиве, небезопасн�
 > путь — отдельный провайдер `type: openai`/`generic`). Альтернатива —
 > окно на стороне Ollama (`OLLAMA_CONTEXT_LENGTH`/Modelfile).
 
-> **Слой совместимости провайдера — `compatibility` (ADR-117, 2026-10-30).** Необязательный объект
-> `ModelCompatibility`: `reasoningField` (имя reasoning-поля openai-chat, дефолт `reasoning_content`),
+> **Слой совместимости провайдера — `compatibility` (ADR-117, 2026-10-30; нативные медиа — 2026-11-03).**
+> Необязательный объект `ModelCompatibility`: `reasoningField` (имя reasoning-поля openai-chat,
+> дефолт `reasoning_content`),
 > `requireReasoning`, `maxTokensField` (`max_tokens` \| `max_completion_tokens`), `requireAssistantAfterTool`,
 > `streamUsage`, `supportsToolChoice`, `cacheFormat` (`anthropic` \| `alibaba` — inline-маркеры
 > `cache_control`, бюджет ≤4; при заданном значении `prompt_cache_key` не отправляется),
-> `requireFinishReason` (дефолт `true`). Здесь это **дефолты провайдера** для всех его моделей; модель
+> `requireFinishReason` (дефолт `true`), `supportsEffortUpdates` (дефолт `false`),
+> `supportsNativeVideo` (дефолт `false`) и `nativeAudioFormats` (список контейнеров нативного пути:
+> `wav` \| `mp3` \| `ogg`). Здесь это **дефолты провайдера** для всех его моделей; модель
 > перекрывает поля точечно (`ModelConfig.compatibility`, §5.10). Семантика — **замена**: объект
 > заменяет значение целиком (отсутствующее в объекте поле означает «авто», а не «сохранить прежнее»),
 > `null`/`{}` — сброс, поле не передано — без изменений; неизвестное поле или неверный тип →
 > `400 VALIDATION_ERROR` (опечатка не теряется молча). `GET /api/v2/providers` и `GET /:name` отдают
 > `compatibility`, **только если он задан**. Приоритет резолва — модель → провайдер → эвристика →
 > дефолт; эвристики: DeepSeek (`requireReasoning`), Mistral-семейство (`requireAssistantAfterTool`),
-> нативный Ollama (`supportsToolChoice: false`). Подробности и примеры — [CONFIGURATION.md](./CONFIGURATION.md)
+> нативный Ollama (`supportsToolChoice: false`), а для нативных медиа — матрица «тип протокола ×
+> RouterAI-совместимый хост» (`nativeAudioFormats`/`supportsNativeVideo`).
+> Семантика полей нативных медиа: «авто» (поле не задано) = серверная эвристика;
+> `supportsNativeVideo: false` — «нативно не умеет»; **явный пустой список** `nativeAudioFormats` —
+> «ни одного нативного формата» (аудио только через aux-модель). Пустой список перекрывает
+> эвристику (`??` не схлопывает `[]`).
+> Подробности и примеры — [CONFIGURATION.md](./CONFIGURATION.md)
 > §«Каталог моделей».
 
 ### 5.10 Models — `/api/v2/models`
@@ -942,12 +951,18 @@ sha256, небезопасный путь в архиве, небезопасн�
 > (вложения не фильтруются, несовместимый тип отклоняет сам провайдер). Фоллбэка `['text']` и
 > справочника модальностей в ядре нет.
 
-> **Совместимость модели — `compatibility` и `requires_reasoning` (ADR-117, 2026-10-30).** Модель может
+> **Совместимость модели — `compatibility` и `requires_reasoning` (ADR-117, 2026-10-30; нативные медиа —
+> 2026-11-03).** Модель может
 > перекрывать провайдерский слой совместимости (§5.9) полем `compatibility` — тот же объект
 > (`reasoningField`, `requireReasoning`, `maxTokensField`, `requireAssistantAfterTool`, `streamUsage`,
-> `supportsToolChoice`, `cacheFormat`, `requireFinishReason`), семантика **замены**: объект заменяет
+> `supportsToolChoice`, `cacheFormat`, `requireFinishReason`, `supportsEffortUpdates`,
+> `supportsNativeVideo`, `nativeAudioFormats`), семантика **замены**: объект заменяет
 > значение целиком, `null`/`{}` — сброс,
 > поле не передано — без изменений, неизвестное поле/тип → `400 VALIDATION_ERROR`.
+> У полей нативных медиа перекрытие точечное: `supportsNativeVideo: true` включает нативный блок
+> `video_url` (по умолчанию — только у RouterAI-совместимых хостов), а `nativeAudioFormats`
+> перечисляет принимаемые контейнеры (`wav`/`mp3`/`ogg`); **пустой список** — осмысленное значение
+> «ни одного» (аудио только через aux-модель) и перекрывает эвристику.
 > `requires_reasoning` (camelCase `requiresReasoning` тоже) — **shorthand** для
 > `compatibility.requireReasoning`: `true` — поле reasoning обязательно у **каждого** assistant-сообщения
 > (пустой строкой, если reasoning нет), `false` — принудительно выключить, `null` — сброс (снимает и

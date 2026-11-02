@@ -123,11 +123,13 @@ export interface HydrateOptions {
    */
   modalities?: readonly AttachmentModality[];
   /**
-   * ADR-115: может ли провайдер хода принять вложение с таким MIME нативно
-   * (`supportsNativeAudio` / `supportsNativeVideo`). Аудио-контейнеры и видео
-   * зависят от протокола: RouterAI принимает `video_url`, официальный
-   * OpenAI/Anthropic — нет (там видео идёт кадрами через aux). Предикат `false`
-   * → aux/derive или явный drop, без тихой потери.
+   * ADR-115 × ADR-117: может ли провайдер хода принять вложение с таким MIME
+   * нативно. Источник — **данные** слоя совместимости
+   * (`compatibility.supportsNativeVideo` / `compatibility.nativeAudioFormats`),
+   * дефолт — эвристика по типу протокола и хосту. Аудио-контейнеры и видео
+   * зависят от протокола: RouterAI-совместимый OpenAI-протокол принимает
+   * `video_url`, официальный OpenAI/Anthropic — нет (там видео идёт кадрами
+   * через aux). Предикат `false` → aux/derive или явный drop, без тихой потери.
    */
   canDeliverNative?: (mime: string) => boolean;
   /** Предел суммарного base64 (по умолчанию `MAX_ATTACHMENT_BASE64_BYTES`). */

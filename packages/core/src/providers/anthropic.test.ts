@@ -9,6 +9,7 @@ import { AnthropicProvider, resolveThinkingBudget } from './anthropic.js';
 import { ChatOrchestrator } from '../engine/orchestrator.js';
 import type { LLMMessage, SystemPromptPayload } from './base.js';
 import type { LLMChunk } from '@itphx/synth-shared';
+import type { ModelCompatibility } from '@itphx/synth-shared';
 import { generateId, makeTextPart, MessageRole, nowISO, type Message } from '@itphx/synth-shared';
 
 const baseParams = {
@@ -16,6 +17,9 @@ const baseParams = {
   apiKey: 'key',
   model: 'claude-test',
   timeout: 30,
+  // Тип протокола (в проде его проставляет `ProviderFactory`): ось эвристики
+  // нативных медиа (ADR-115 × ADR-117).
+  type: 'anthropic',
 };
 
 function makeMessage(overrides: Partial<LLMMessage> = {}): LLMMessage {
@@ -620,6 +624,11 @@ describe('AnthropicProvider — вложения (ADR-115)', () => {
     return new AnthropicProvider({ ...baseParams, url }) as unknown as AnthropicPrivate;
   }
 
+  /** Провайдер с явной capability (ADR-117) — данные, а не host-проверка. */
+  function providerWithCompatibility(compatibility: ModelCompatibility): AnthropicPrivate {
+    return new AnthropicProvider({ ...baseParams, compatibility }) as unknown as AnthropicPrivate;
+  }
+
   it('изображение → image-блок с base64-source', () => {
     const formatted = providerWithModel('claude-sonnet-4-20250514')._formatMessages([
       makeMessage({ content: 'что на фото?', attachments: [imageAttachment] }),
@@ -676,6 +685,35 @@ describe('AnthropicProvider — вложения (ADR-115)', () => {
         source: { type: 'base64', media_type: 'audio/wav', data: 'UklGRg==' },
       },
     ]);
+  });
+
+  it('явная capability nativeAudioFormats:[\'wav\'] → audio-блок (данные, не хост)', () => {
+    const formatted = providerWithCompatibility({ nativeAudioFormats: ['wav'] })._formatMessages([
+      makeMessage({
+        content: 'послушай',
+        attachments: [
+          audioAttachment,
+          { mime: 'audio/mpeg', base64: 'T2dnUw==' },
+        ],
+      }),
+    ]);
+
+    // Только wav — mp3 в списке не значит.
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'послушай' },
+      {
+        type: 'audio',
+        source: { type: 'base64', media_type: 'audio/wav', data: 'UklGRg==' },
+      },
+    ]);
+  });
+
+  it('явный пустой список nativeAudioFormats → аудио не отправляется', () => {
+    const formatted = providerWithCompatibility({ nativeAudioFormats: [] })._formatMessages([
+      makeMessage({ content: 'послушай', attachments: [audioAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([{ type: 'text', text: 'послушай' }]);
   });
 
   it('картинка у модели вне справочника → image-блок (провайдер не фильтрует)', () => {

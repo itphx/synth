@@ -436,7 +436,8 @@ aux-модели задаются конфигом `auxiliary.<task>.{provider,m
   путём отброса.
 - **Что уходит aux-модели.** `image` и `pdf` — часть как есть; `audio` — `wav`/`mp3` как есть,
   остальные контейнеры (`ogg`/`m4a`/`flac`/…) транскодируются `ffmpeg` в `wav` 16 кГц mono
-  (многие провайдеры принимают только wav/mp3); `video` — нативно у RouterAI (`video_url`),
+  (многие провайдеры принимают только wav/mp3); `video` — нативно у провайдеров с
+  `compatibility.supportsNativeVideo` (блок `video_url`; дефолт — RouterAI-совместимые хосты),
   у остальных — через кадры: `ffmpeg` извлекает до 5 кадров JPEG (равномерно по длительности, если
   она известна из `part.data.durationMs`; иначе `fps=1`, не более пяти), кадры уходят image-частями,
   промпт просит описать содержимое по кадрам. `video`-модальность провайдера означает **только
@@ -676,8 +677,9 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   video — `maxHeightPx 720`, `bitrateKbps 2000`, `audioBitrateKbps 96`, `minBytes 8 МиБ`;
   audio — `bitrateKbps 64`, `channels 1`, `sampleRateHz 16000`, `minBytes 4 МиБ`.
 - Форматы: PNG остаётся PNG (lossless scale), прочие изображения → JPEG; видео → MP4 H.264/AAC;
-  аудио → **mp3 или wav** по предикату `supportsNativeAudio` транспорта (`null` — не сжимаем).
-  Видео сжимается только на нативном пути (`supportsNativeVideo`), иначе работает aux-путь (кадры).
+  аудио → **mp3 или wav** по списку `compatibility.nativeAudioFormats` транспорта (`null` — не сжимаем).
+  Видео сжимается только на нативном пути (`compatibility.supportsNativeVideo`), иначе работает
+  aux-путь (кадры).
 - Кэш — `attachments/.derived/compress/<sha256>_<profile>.<ext>` (профиль включает все параметры
   перекодирования); сжатая копия не меньше оригинала → отправляется оригинал; ошибка/нет `ffmpeg` →
   `null` + лог (сжатие — оптимизация, ход не падает); предел сжатой копии — 32 МиБ.
@@ -764,26 +766,30 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   OpenAI `image_url`/`input_audio`, Anthropic `image`/`document`/`audio`, Ollama `images[]`
   (base64 без data-URI; аудио у Ollama-модели без `audio` capability не кодируется); gateway не обфусцирует и
   не логирует base64 (payload-лог и debug-снимок — сводкой `{mime,name,sizeBytes}`);
-  - **форматы аудио** — предикат `supportsNativeAudio(type, baseUrl, mime)` (`providers/base.ts`):
-    официальный OpenAI — wav/mp3; RouterAI (OpenAI-протокол) — wav/mp3 и ogg/opus
+  - **форматы аудио** — список `compatibility.nativeAudioFormats` (слой совместимости, ADR-117):
+    по умолчанию официальный OpenAI — wav/mp3; RouterAI (OpenAI-протокол) — wav/mp3 и ogg/opus
     (`input_audio` с `format:'ogg'`); Anthropic-протокол — **только wav и только RouterAI**
     (официальный Anthropic аудио не принимает; Anthropic-совместимый RouterAI на ogg/mp3 отвечает
-    200, но модель аудио не слышит — проверено на живом API 2026-10-27). Предикат используют
+    200, но модель аудио не слышит — проверено на живом API 2026-10-27). Список используют
     адаптеры при сборке контента и гидратация (`canDeliverNative`) — формат вне списка не теряется
-    молча, а уходит в aux или в блок «не доставлено»;
+    молча, а уходит в aux или в блок «не доставлено». Явный **пустой список** перекрывает
+    эвристику («ни одного формата» — только aux);
   - **aux важнее нативного пути для аудио**: при заданной `attachments.modalityModels.audio`
     аудио-вложение всегда обрабатывается aux-моделью (Hermes), даже если модель сессии заявляет
     `audio` в каталоге — контейнеры голосовых слишком разнородны (ogg/opus/m4a), а провайдерский
     нативный путь для них часто неполный;
-  - **видео — нативно у RouterAI, иначе кадры**: OpenAI-совместимый RouterAI принимает
+  - **видео — нативно там, где это разрешено слоем совместимости, иначе кадры**: провайдер с
+    `compatibility.supportsNativeVideo: true` принимает
     `{type:'video_url', video_url:{url:'data:video/mp4;base64,…'}}` (проверено на живом API
     2026-10-28: модель видит **кадры**; аудиодорожку провайдер не доставляет — на файле с речью
     `minimax/minimax-m3.1-flash` отвечает `NO_AUDIO`, в reasoning «only visual frames»; контраст —
     `google/gemini-3.5-flash` на том же файле даёт транскрипт и `audio_tokens`); официальный
     OpenAI/Anthropic такого блока не знают — там гидратация считает транспорт `video`
     неподдерживаемым и применяет aux-модель (кадры через `ffmpeg`) либо помечает вложение
-    недоставленным — тихой потери нет. Предикат — `supportsNativeVideo(type, baseUrl)`
-    (`providers/base.ts`);
+    недоставленным — тихой потери нет. Признак — поле `compatibility.supportsNativeVideo`
+    (ADR-117); дефолт — эвристика по типу протокола и RouterAI-совместимому хосту, а не host-проверка:
+    не-routerai прокси тоже могут уметь нативное видео (живой тест `itphx` 2026-11-03 — блок
+    `video_url` принят, HTTP 200, модель описала ролик так же, как прямой `routerai.ru`);
   - **транскрипт аудиодорожки видео для модели с `video`, но без `audio`**: дорожка извлекается
     `ffmpeg` (`-vn`, wav 16 кГц mono) и уходит aux-модели **аудио**
     (`attachments.modalityModels.audio`, `deriveVideoAudioText` в `derive.ts`); результат —
@@ -819,7 +825,8 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
   `createModalityModelLookup` в core и backend);
 - **обработка медиа (этап 2, §«Модели обработки по модальностям» → «Реализация»):**
   `deriveModalityText` (`engine/attachments/derive.ts`) — image/pdf как есть, audio wav/mp3 как есть
-  либо транскод `ffmpeg` в wav 16 кГц mono, video — нативно у RouterAI либо кадры (до 5) через
+  либо транскод `ffmpeg` в wav 16 кГц mono, video — нативно при
+  `compatibility.supportsNativeVideo` либо кадры (до 5) через
   `ffmpeg`; `deriveVideoAudioText` — транскрипт аудиодорожки видео (`-vn` + aux-модель аудио,
   отдельное семейство кэша `video-audio`); кэш результата
   `attachments/.derived/<sha256>.json`, производные объекты в blob; промпты
@@ -875,6 +882,18 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
 
 ## История
 
+- 2026-11-03 — **host-проверка нативных медиа перенесена в слой совместимости (ADR-117).**
+  Предикаты `supportsNativeAudio(type, baseUrl, mime)`/`supportsNativeVideo(type, baseUrl)` в
+  `providers/base.ts` удалены; решение принимают **данные**: `compatibility.nativeAudioFormats`
+  (список `wav`/`mp3`/`ogg`) и `compatibility.supportsNativeVideo` (блок `video_url`), резолв —
+  «явное значение модели → явное значение провайдера → эвристика → дефолт» (ADR-117 п. 10). Явный
+  пустой список форматов — осмысленное значение «ни одного» и перекрывает эвристику. Единственный
+  носитель host-знания — `isRouterAiUrl` в **shared**, и только как эвристика умолчания: доменное
+  имя не определяет возможности протокола — живой тест 2026-11-03 показал, что не-routerai прокси
+  `itphx` (`https://ai.itphx.ru/api/`) нативное видео **умеет** (блок `video_url` принят, HTTP 200,
+  модель описала ролик так же, как прямой `routerai.ru`), а прежний host-предикат давал
+  ложноотрицательный ответ. Потребители: адаптеры `openai.ts`/`anthropic.ts`, оркестратор (seam
+  `canDeliverNative`), сжатие (`engine/attachments/compress.ts`).
 - 2026-10-27 — принято как ADR-115 из [PROP-085](./prop-085-multimodal-input.md). Зафиксировано: байты на
   томе через `BlobStore` (не в БД), `blob_refs` для дедупа и GC, аддитивное `attachments` в LLM-контракте,
   UI по образцу OpenChamber (`tmp/refs/openchamber`), видео/ASR/OCR — вне объёма.

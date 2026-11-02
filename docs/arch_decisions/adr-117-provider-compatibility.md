@@ -39,7 +39,8 @@
 
 1. **Один контракт на двух уровнях.** `ModelCompatibility` (`shared/types/provider.ts`):
    `reasoningField`, `requireReasoning`, `maxTokensField`, `requireAssistantAfterTool`,
-   `streamUsage`, `supportsToolChoice`, `cacheFormat`, `requireFinishReason`.
+   `streamUsage`, `supportsToolChoice`, `cacheFormat`, `requireFinishReason`, `supportsEffortUpdates`,
+   `supportsNativeVideo`, `nativeAudioFormats`.
    `ProviderConfig.compatibility` — дефолты для всех моделей
    провайдера, `ModelConfig.compatibility` — перекрывает их по каждому полю. `ModelConfig.requiresReasoning`
    остаётся **shorthand** для `compatibility.requireReasoning` (обратная совместимость записей,
@@ -122,6 +123,38 @@
    (`components/admin/CompatibilityFields.tsx`): tri-state «Авто / Да / Нет» (явный `false` не
    схлопывается в «авто»), селект поля reasoning с вариантом «своё значение», «изменено»-бейдж;
    полная очистка у сущности с сохранёнными параметрами отправляет `compatibility: null`.
+10. **Нативные медиа — данные, а не host-проверка (2026-11-03).** «Умеет ли транспорт принимать
+    видео/аудио» — свойство **протокола конкретного шлюза**, а не его доменного имени; прежний
+    предикат `isRouterAiUrl` (core `providers/base.ts`) давал ложноотрицательный ответ для
+    не-routerai прокси. Живой тест 2026-11-03: `itphx` (`https://ai.itphx.ru/api/`,
+    `POST /api/v1/chat/completions`) нативное видео **умеет** — блок `{type:'video_url',
+    video_url:{url:'data:video/mp4;base64,…'}}` принят (200), модель описала ролик так же, как
+    прямой `routerai.ru`. Поэтому решение переносится в слой совместимости:
+    - `supportsNativeVideo?: boolean` — транспорт принимает видеофайл нативно (блок `video_url`);
+    - `nativeAudioFormats?: NativeAudioFormat[]` — аудио-контейнеры нативного пути
+      (`NativeAudioFormat` = `'wav' | 'mp3' | 'ogg'`; shared-экспорт).
+    Порядок резолва — общий: **явное значение модели → явное значение провайдера → эвристика →
+    дефолт**. Явный **пустой массив** — осмысленное значение «ни одного формата» (`??` не
+    схлопывает `[]`) и перекрывает эвристику.
+    Эвристика (дефолт по типу протокола и RouterAI-совместимому хосту) **дословно воспроизводит
+    прежнее поведение**:
+
+    | тип провайдера | RouterAI-совместимый хост | `nativeAudioFormats` | `supportsNativeVideo` |
+    |---|---|---|---|
+    | `openai`/`generic` | да | `wav`, `mp3`, `ogg` | `true` |
+    | `openai`/`generic` | нет | `wav`, `mp3` | `false` |
+    | `anthropic` | да | `wav` | `false` |
+    | `anthropic` | нет | — | `false` |
+    | прочие (`ollama`/`decision`/`systemone`/…) | любой | — | `false` |
+
+    Основание: `anthropic` принимает аудио только в `wav` и только у RouterAI (Anthropic-совместимый
+    шлюз на ogg/mp3 отвечает 200, но модель аудио не слышит — такие форматы идут через aux-модель);
+    OpenAI-протокол принимает wav/mp3 всегда, `ogg` — расширение RouterAI; блок `video_url` знает
+    только RouterAI-совместимый OpenAI-протокол.
+    Потребители: адаптеры `openai.ts`/`anthropic.ts` (блоки `video_url`/`input_audio`/`audio`),
+    оркестратор (seam `canDeliverNative` гидратации), сжатие (`engine/attachments/compress.ts`).
+    Единственный носитель host-знания — `isRouterAiUrl` в **shared** (`detectCompatibilityHeuristics`);
+    второй реализации нет, старые хост-предикаты core удалены.
 
 **Справочная спецификация** — [PROVIDERS.md](../PROVIDERS.md): протоколы и нормализация URL, таблица
 полей `compatibility` с дефолтами и порядком резолва, особенности OpenAI-chat / Anthropic / Ollama,
@@ -133,6 +166,10 @@
 - **Хардкод по типу провайдера** (`if type === 'deepseek'`). Отвергнуто: шлюзы и прокси
   представляются одним типом (`openai`), а имя/URL/модель у каждого клиента свои; каждый новый
   вариант требовал бы релиза ядра.
+- **Host-проверка для нативных медиа** (`isRouterAiUrl` в core). Отвергнуто (2026-11-03): доменное
+  имя не определяет возможности протокола — не-routerai прокси `itphx` нативное видео умеет
+  (живой тест), а host-предикат давал ложноотрицательный ответ. Хост остался только **эвристикой
+  умолчания** в shared; решение принимают данные (`compatibility`).
 - **Только `requiresReasoning`** (состояние после `ea20dc45`). Отвергнуто как конечное решение:
   закрывает один симптом и оставляет `maxTokensField`, `streamUsage`, `tool_choice`,
   assistant-«мост» и имя reasoning-поля захардкоженными. Поле сохранено как shorthand.
@@ -149,7 +186,7 @@
 - **Хорошо:** кастомные и прокси-провайдеры настраиваются данными, без релиза ядра; шаг-лимит
   работает на DeepSeek; thinking-Anthropic проходит tool-loop; Ollama не получает неизвестное поле;
   дефекты вида «400 у конкретного шлюза» лечатся в админке.
-- **Цена:** контракт шире (8 полей × 2 уровня + shorthand), поверхность для расхождения UI/сервера.
+- **Цена:** контракт шире (11 полей × 2 уровня + shorthand), поверхность для расхождения UI/сервера.
   Риск закрыт replace-семантикой, строгой валидацией и unit-тестами payload/round-trip в UI.
 - **Осознанные отличия от opencode:** дефолт `max_tokens`; `reasoningField` из ответа модели
   авто-детектится по известным полям (`reasoning_content`/`reasoning`), произвольное имя задаётся

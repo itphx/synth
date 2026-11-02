@@ -211,6 +211,38 @@ describe('routes/models (core): compatibility и shorthand requires_reasoning', 
     expect(saved?.compatibility).toEqual({ requireReasoning: false });
   });
 
+  it('ADR-117: нативные медиа модели (supportsNativeVideo/nativeAudioFormats) проходят и сохраняются', async () => {
+    const res = await stores.app.request('/', post({
+      id: 'openai/vision-video',
+      provider: 'openai',
+      compatibility: { supportsNativeVideo: true, nativeAudioFormats: ['wav', 'ogg'] },
+    }));
+    expect(res.status).toBe(201);
+
+    const saved = await stores.modelStore.load('openai/vision-video');
+    expect(saved?.compatibility).toEqual({
+      supportsNativeVideo: true,
+      nativeAudioFormats: ['wav', 'ogg'],
+    });
+
+    const list = await (await stores.app.request('/')).json() as ModelsResponse;
+    const model = list.groups[0]!.models.find((m) => m.id === 'openai/vision-video')!;
+    expect(model.compatibility).toEqual({
+      supportsNativeVideo: true,
+      nativeAudioFormats: ['wav', 'ogg'],
+    });
+  });
+
+  it('ADR-117: неизвестный аудио-формат → 400, модель не сохранена', async () => {
+    const res = await stores.app.request('/', post({
+      id: 'openai/bad-audio',
+      provider: 'openai',
+      compatibility: { nativeAudioFormats: ['flac'] },
+    }));
+    expect(res.status).toBe(400);
+    expect(await stores.modelStore.load('openai/bad-audio')).toBeNull();
+  });
+
   it('POST без поля compatibility не затирает прежнюю совместимость', async () => {
     await stores.modelStore.save('openai/m3', {
       id: 'openai/m3', name: 'm3', provider: 'openai', enabled: true,

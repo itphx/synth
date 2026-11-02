@@ -645,4 +645,80 @@ describe('ProvidersPanel: расширенные параметры (совме�
     await save(host)
     expect(savedBody().compatibility).toEqual({ reasoningField: 'reasoning_details' })
   })
+
+  it('контролы нативных видео/аудио есть в блоке расширенных параметров', async () => {
+    mockProviders([baseProvider])
+    const host = await renderPanel()
+    await openEdit(host)
+    await toggleCompatibility(host)
+
+    expect(host.querySelector('[data-testid="compatibility-supports-native-video"]')).toBeTruthy()
+    expect(host.querySelector('[data-testid="compatibility-native-audio-formats"]')).toBeTruthy()
+    // Мульти-селект форматов — только в режиме «задать список».
+    expect(host.querySelector('[data-testid="compatibility-native-audio-format-wav"]')).toBeNull()
+  })
+
+  it('явный «Нет» по нативному видео уходит false, а не схлопывается в «авто»', async () => {
+    mockProviders([baseProvider])
+    const host = await renderPanel()
+    await openEdit(host)
+    await toggleCompatibility(host)
+
+    await pickOption(host, 'compatibility-supports-native-video', 'admin.compatibility.no')
+    await save(host)
+
+    expect(savedBody().compatibility).toEqual({ supportsNativeVideo: false })
+  })
+
+  it('явный список нативных форматов аудио уходит массивом', async () => {
+    mockProviders([baseProvider])
+    const host = await renderPanel()
+    await openEdit(host)
+    await toggleCompatibility(host)
+
+    await pickOption(host, 'compatibility-native-audio-formats', 'admin.compatibility.nativeAudioCustom')
+    const chip = host.querySelector('[data-testid="compatibility-native-audio-format-wav"]') as HTMLElement
+    expect(chip).toBeTruthy()
+    await act(async () => {
+      chip.click()
+    })
+    await save(host)
+
+    expect(savedBody().compatibility).toEqual({ nativeAudioFormats: ['wav'] })
+  })
+
+  it('«не принимает нативно» уходит пустым списком, а не «авто»', async () => {
+    mockProviders([baseProvider])
+    const host = await renderPanel()
+    await openEdit(host)
+    await toggleCompatibility(host)
+
+    await pickOption(host, 'compatibility-native-audio-formats', 'admin.compatibility.nativeAudioNone')
+    await save(host)
+
+    expect(savedBody().compatibility).toEqual({ nativeAudioFormats: [] })
+  })
+
+  it('сохранённые нативные параметры раскрываются в контролах', async () => {
+    mockProviders([{
+      ...baseProvider,
+      compatibility: { supportsNativeVideo: false, nativeAudioFormats: ['wav'] },
+    }])
+    const host = await renderPanel()
+    await openEdit(host)
+
+    expect(
+      host.querySelector('[data-testid="compatibility-supports-native-video"]')!.textContent,
+    ).toContain('admin.compatibility.no')
+    // Непустой список — режим «задать список»: чип формата уже нажат.
+    const chip = host.querySelector('[data-testid="compatibility-native-audio-format-wav"]') as HTMLElement
+    expect(chip).toBeTruthy()
+    expect(chip.getAttribute('aria-pressed')).toBe('true')
+
+    await save(host)
+    expect(savedBody().compatibility).toEqual({
+      supportsNativeVideo: false,
+      nativeAudioFormats: ['wav'],
+    })
+  })
 })

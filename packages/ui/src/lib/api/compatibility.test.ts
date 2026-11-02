@@ -158,3 +158,76 @@ describe('compatibility: payload запроса', () => {
     expect(buildCompatibilityPayload({ ...saved, supportsEffortUpdates: '' }, true)).toBeNull()
   })
 })
+
+describe('compatibility: нативные видео/аудио (ADR-117)', () => {
+  it('«авто» → новых полей в черновике нет и в payload они не попадают', () => {
+    const draft = emptyCompatibilityDraft()
+    expect(draft.supportsNativeVideo).toBe('')
+    expect(draft.nativeAudioFormatsMode).toBe('')
+    expect(draft.nativeAudioFormats).toEqual([])
+    expect(compatibilityFromDraft(draft)).toBeNull()
+    expect(hasCompatibilityDraftChanges(draft)).toBe(false)
+    expect(buildCompatibilityPayload(draft, false)).toBeUndefined()
+  })
+
+  it('явный false по нативному видео не схлопывается в «авто»', () => {
+    const draft = { ...emptyCompatibilityDraft(), supportsNativeVideo: 'false' as const }
+    expect(compatibilityFromDraft(draft)).toEqual({ supportsNativeVideo: false })
+    expect(buildCompatibilityPayload(draft, false)).toEqual({ supportsNativeVideo: false })
+    expect(hasCompatibilityDraftChanges(draft)).toBe(true)
+  })
+
+  it('явный true по нативному видео уходит boolean', () => {
+    const draft = { ...emptyCompatibilityDraft(), supportsNativeVideo: 'true' as const }
+    expect(compatibilityFromDraft(draft)).toEqual({ supportsNativeVideo: true })
+    expect(buildCompatibilityPayload(draft, false)).toEqual({ supportsNativeVideo: true })
+  })
+
+  it('явный пустой список нативных форматов аудио — не «авто»', () => {
+    const draft = { ...emptyCompatibilityDraft(), nativeAudioFormatsMode: 'none' as const }
+    expect(compatibilityFromDraft(draft)).toEqual({ nativeAudioFormats: [] })
+    expect(buildCompatibilityPayload(draft, false)).toEqual({ nativeAudioFormats: [] })
+    expect(hasCompatibilityDraftChanges(draft)).toBe(true)
+  })
+
+  it('непустой список нативных форматов аудио переживает round-trip', () => {
+    const draft = draftFromCompatibility({
+      supportsNativeVideo: true,
+      nativeAudioFormats: ['wav', 'ogg'],
+    })
+    expect(draft.supportsNativeVideo).toBe('true')
+    expect(draft.nativeAudioFormatsMode).toBe(COMPATIBILITY_CUSTOM)
+    expect(draft.nativeAudioFormats).toEqual(['wav', 'ogg'])
+    expect(compatibilityFromDraft(draft)).toEqual({
+      supportsNativeVideo: true,
+      nativeAudioFormats: ['wav', 'ogg'],
+    })
+  })
+
+  it('сохранённый пустой список разворачивается в режим «не принимает нативно»', () => {
+    const draft = draftFromCompatibility({ nativeAudioFormats: [] })
+    expect(draft.nativeAudioFormatsMode).toBe('none')
+    expect(draft.nativeAudioFormats).toEqual([])
+    expect(compatibilityFromDraft(draft)).toEqual({ nativeAudioFormats: [] })
+  })
+
+  it('сохранённые нативные параметры считаются настроенными (блок раскрыт, бейдж есть)', () => {
+    expect(isCompatibilitySaved({ supportsNativeVideo: false })).toBe(true)
+    expect(isCompatibilitySaved({ nativeAudioFormats: [] })).toBe(true)
+    expect(isCompatibilitySaved({ nativeAudioFormats: ['mp3'] })).toBe(true)
+    expect(isCompatibilitySaved({})).toBe(false)
+  })
+
+  it('полная очистка сохранённых нативных параметров → compatibility: null', () => {
+    const saved = draftFromCompatibility({
+      supportsNativeVideo: true,
+      nativeAudioFormats: ['wav'],
+    })
+    const cleared = {
+      ...saved,
+      supportsNativeVideo: '' as const,
+      nativeAudioFormatsMode: '' as const,
+    }
+    expect(buildCompatibilityPayload(cleared, true)).toBeNull()
+  })
+})

@@ -1,5 +1,5 @@
-import type { EffortLevel, LLMChunk, LLMReasoningBlock, LLMResponse, LlmFinishReason, TokenUsage } from '@itphx/synth-shared';
-import { effortForReasoningLevel } from '@itphx/synth-shared';
+import type { EffortLevel, LLMChunk, LLMReasoningBlock, LLMResponse, LlmFinishReason, TokenUsage, ResolvedModelCompatibility, NativeAudioFormat } from '@itphx/synth-shared';
+import { effortForReasoningLevel, nativeAudioFormatForMime } from '@itphx/synth-shared';
 import {
   BaseProvider,
   fetchModelsCatalog,
@@ -8,7 +8,6 @@ import {
   resolveProviderCompatibility,
   resolveSystemPromptText,
   parseTokenPricing,
-  supportsNativeAudio,
   toNonNegativeNumber,
   type DetailedModelInfo,
   type LLMAttachment,
@@ -723,6 +722,9 @@ export class AnthropicProvider extends BaseProvider {
     messages: LLMMessage[],
     thinkingEnabled = this.reasoningLevel === 'high',
   ): Array<Record<string, unknown>> {
+    // ADR-117: итоговая совместимость (явный `compatibility` provider+model →
+    // shorthand `requiresReasoning` → эвристики) — один раз на запрос.
+    const compatibility = this._resolveCompatibility();
     const formatted: Array<Record<string, unknown>> = [];
     // Дедуп — только для уже выданных tool_result (по tool_call_id). id'ы
     // assistant.tool_use сюда НЕ добавляются: иначе tool_result вырезается и
@@ -819,12 +821,28 @@ export class AnthropicProvider extends BaseProvider {
 
       formatted.push({
         role: msg.role,
-        content: this._contentWithAttachments(msg),
+        content: this._contentWithAttachments(msg, compatibility),
       });
     }
 
     flushToolResults();
     return formatted;
+  }
+
+  /**
+   * ADR-117: итоговая совместимость провайдера: явный `compatibility`
+   * (provider+model) → shorthand `requiresReasoning` → эвристики (в т.ч.
+   * нативные медиа ADR-115 — по типу протокола и RouterAI-совместимому хосту).
+   */
+  private _resolveCompatibility(): ResolvedModelCompatibility {
+    return resolveProviderCompatibility({
+      type: this.type,
+      name: this.name,
+      url: this.url,
+      model: this.model,
+      compatibility: this.compatibility,
+      requiresReasoning: this.requiresReasoning,
+    });
   }
 
   /**
@@ -835,8 +853,11 @@ export class AnthropicProvider extends BaseProvider {
    * получилось) — ровно прежний `[{type:'text', text}]` (текстовый путь не
    * меняется).
    */
-  private _contentWithAttachments(msg: LLMMessage): Array<Record<string, unknown>> {
-    const mediaParts = this._mediaContentParts(msg.attachments);
+  private _contentWithAttachments(
+    msg: LLMMessage,
+    compatibility: ResolvedModelCompatibility = this._resolveCompatibility(),
+  ): Array<Record<string, unknown>> {
+    const mediaParts = this._mediaContentParts(msg.attachments, compatibility);
     if (mediaParts.length === 0) {
       return [{ type: 'text', text: msg.content }];
     }
@@ -852,8 +873,10 @@ export class AnthropicProvider extends BaseProvider {
    *  - `image/*` → `{type:'image', source:{type:'base64', media_type, data}}`;
    *  - `application/pdf` → `{type:'document', source:{type:'base64', media_type:'application/pdf', data}}`;
    *  - `audio/*` → `{type:'audio', source:{type:'base64', media_type, data}}` —
-   *    расширение RouterAI (проверено: wav и ogg); официальный Anthropic API
-   *    аудио не принимает, поэтому блок отправляется только для RouterAI.
+   *    расширение RouterAI; официальный Anthropic API аудио не принимает.
+   *    Контейнер берётся из `compatibility.nativeAudioFormats` (дефолт — только
+   *    `wav` у RouterAI-совместимых шлюзов, см. ADR-117); надёжно декодируется
+   *    лишь `wav` (ogg/mp3 RouterAI возвращает 200, но модель аудио не слышит).
    *  - video и прочее не поддерживаются — пропускаются.
    *
    * Фильтра по справочнику модальностей здесь **нет** (ADR-115): провайдер
@@ -864,8 +887,12 @@ export class AnthropicProvider extends BaseProvider {
    * (например, `minimax/minimax-m3.1-flash` в каталоге RouterAI — vision-модель,
    * которой в справочнике нет).
    */
-  private _mediaContentParts(attachments: LLMAttachment[] | undefined): Array<Record<string, unknown>> {
+  private _mediaContentParts(
+    attachments: LLMAttachment[] | undefined,
+    compatibility: ResolvedModelCompatibility = this._resolveCompatibility(),
+  ): Array<Record<string, unknown>> {
     const parts: Array<Record<string, unknown>> = [];
+    const nativeAudio = new Set<NativeAudioFormat>(compatibility.nativeAudioFormats);
     for (const attachment of attachments ?? []) {
       const mime = attachment.mime.toLowerCase();
       if (mime.startsWith('image/')) {
@@ -878,10 +905,11 @@ export class AnthropicProvider extends BaseProvider {
           type: 'document',
           source: { type: 'base64', media_type: 'application/pdf', data: attachment.base64 },
         });
-      } else if (supportsNativeAudio('anthropic', this.url, mime)) {
+      } else if (nativeAudio.has('wav') && nativeAudioFormatForMime(mime) === 'wav') {
         // RouterAI расширяет Anthropic-протокол аудио-блоком; официальный
         // Anthropic его не знает. Надёжно декодируется только wav (ogg/mp3
-        // возвращают 200, но модель аудио не слышит) — предикат это учитывает.
+        // возвращают 200, но модель аудио не слышит) — список нативных
+        // форматов (`compatibility.nativeAudioFormats`) это учитывает.
         parts.push({
           type: 'audio',
           source: { type: 'base64', media_type: 'audio/wav', data: attachment.base64 },

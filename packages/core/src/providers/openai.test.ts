@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { OpenAIProvider } from './openai.js';
 import type { LLMMessage, SystemPromptPayload } from './base.js';
 import type { LLMChunk } from '@itphx/synth-shared';
+import type { ModelCompatibility } from '@itphx/synth-shared';
 
 const baseParams = {
   url: 'http://api.test.example/v1/chat/completions',
@@ -593,6 +594,7 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
 
   const imageAttachment = { mime: 'image/png', name: 'photo.png', base64: 'iVBORw0KGgo=' };
   const wavAttachment = { mime: 'audio/wav', base64: 'UklGRg==' };
+  const mp3Attachment = { mime: 'audio/mpeg', base64: 'T2dnUw==' };
   const oggAttachment = { mime: 'audio/ogg', base64: 'T2dnUw==' };
   const pdfAttachment = { mime: 'application/pdf', base64: 'JVBERi0=' };
   const videoAttachment = { mime: 'video/mp4', base64: 'AAAAIGZ0eXA=' };
@@ -604,6 +606,11 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
 
   function providerWithUrl(url: string): OpenAIPrivate {
     return new OpenAIProvider({ ...baseParams, url }) as unknown as OpenAIPrivate;
+  }
+
+  /** Провайдер с явной capability (ADR-117) — данные, а не host-проверка. */
+  function providerWithCompatibility(compatibility: ModelCompatibility): OpenAIPrivate {
+    return new OpenAIProvider({ ...baseParams, compatibility }) as unknown as OpenAIPrivate;
   }
 
   it('изображение у vision-модели → content массивом: text + image_url', () => {
@@ -642,6 +649,33 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
   it('ogg у обычного OpenAI-провайдера → аудио не отправляется', () => {
     const formatted = providerWithModel('gpt-4o-audio-preview')._formatMessages([
       makeMessage({ role: 'user', content: 'расшифруй', attachments: [oggAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toBe('расшифруй');
+  });
+
+  it('явная capability nativeAudioFormats:[\'wav\'] → уходит только wav', () => {
+    const formatted = providerWithCompatibility({ nativeAudioFormats: ['wav'] })._formatMessages([
+      makeMessage({
+        role: 'user',
+        content: 'расшифруй',
+        attachments: [wavAttachment, mp3Attachment, oggAttachment],
+      }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'расшифруй' },
+      { type: 'input_audio', input_audio: { data: 'UklGRg==', format: 'wav' } },
+    ]);
+  });
+
+  it('явный пустой список nativeAudioFormats → аудио не уходит ничего', () => {
+    const formatted = providerWithCompatibility({ nativeAudioFormats: [] })._formatMessages([
+      makeMessage({
+        role: 'user',
+        content: 'расшифруй',
+        attachments: [wavAttachment, mp3Attachment, oggAttachment],
+      }),
     ]);
 
     expect(formatted[0]!.content).toBe('расшифруй');
@@ -687,6 +721,33 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
 
   it('видео у обычного OpenAI → не отправляется (нет video_url)', () => {
     const formatted = providerWithModel('gpt-4o')._formatMessages([
+      makeMessage({ role: 'user', content: 'что на видео?', attachments: [videoAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toBe('что на видео?');
+  });
+
+  it('явная capability supportsNativeVideo:true → блок video_url уходит (данные, не хост)', () => {
+    const formatted = providerWithCompatibility({ supportsNativeVideo: true })._formatMessages([
+      makeMessage({ role: 'user', content: 'что на видео?', attachments: [videoAttachment] }),
+    ]);
+
+    expect(formatted[0]!.content).toEqual([
+      { type: 'text', text: 'что на видео?' },
+      {
+        type: 'video_url',
+        video_url: { url: 'data:video/mp4;base64,AAAAIGZ0eXA=' },
+      },
+    ]);
+  });
+
+  it('явная capability supportsNativeVideo:false → video_url не уходит даже у RouterAI-хоста', () => {
+    const disabled = new OpenAIProvider({
+      ...baseParams,
+      url: 'https://routerai.ru/api/v1/chat/completions',
+      compatibility: { supportsNativeVideo: false },
+    }) as unknown as OpenAIPrivate;
+    const formatted = disabled._formatMessages([
       makeMessage({ role: 'user', content: 'что на видео?', attachments: [videoAttachment] }),
     ]);
 

@@ -7,9 +7,10 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { attachmentsConfigSchema, type AttachmentsConfig } from '@itphx/synth-shared';
+import { attachmentsConfigSchema, type AttachmentsConfig, type ModelCompatibility } from '@itphx/synth-shared';
 import { MemoryBlobStore } from '../../storage/memory/content.js';
 import type { MediaRunRequest, MediaRunResult, MediaRunnerLike } from '../media/runner.js';
+import { resolveProviderCompatibility } from '../../providers/base.js';
 import {
   AttachmentCompressor,
   COMPRESS_CACHE_DIR,
@@ -17,6 +18,7 @@ import {
   resolveCompressTarget,
   resolveNativeAudioFormat,
   type AttachmentCompressTarget,
+  type NativeMediaCapability,
 } from './compress.js';
 
 const SHA = 'b'.repeat(64);
@@ -352,28 +354,75 @@ describe('AttachmentCompressor: кэш и деградация', () => {
 });
 
 describe('resolveCompressTarget', () => {
+  /**
+   * Capability транспорта — **данные** слоя совместимости (ADR-117).
+   * Строим их тем же резолвером, что и провайдер/оркестратор, чтобы тест
+   * проверял общий контракт, а не копию матрицы.
+   */
+  function capability(input: {
+    type?: string;
+    url?: string;
+    compatibility?: ModelCompatibility;
+  }): NativeMediaCapability {
+    return resolveProviderCompatibility({
+      type: input.type,
+      url: input.url,
+      compatibility: input.compatibility,
+    });
+  }
+
   it('официальный OpenAI: mp3, без нативного видео', () => {
-    expect(resolveCompressTarget('openai', 'https://api.openai.com/v1')).toEqual({
+    expect(resolveCompressTarget(capability({ type: 'openai', url: 'https://api.openai.com/v1' }))).toEqual({
       audioFormat: 'mp3',
       nativeVideo: false,
     });
   });
 
   it('RouterAI: mp3 и нативное видео', () => {
-    expect(resolveCompressTarget('openai', 'https://routerai.ru/v1')).toEqual({
+    expect(resolveCompressTarget(capability({ type: 'openai', url: 'https://routerai.ru/v1' }))).toEqual({
       audioFormat: 'mp3',
       nativeVideo: true,
     });
   });
 
   it('официальный Anthropic: ни аудио, ни видео', () => {
-    expect(resolveCompressTarget('anthropic', 'https://api.anthropic.com')).toEqual({
+    expect(resolveCompressTarget(capability({ type: 'anthropic', url: 'https://api.anthropic.com' }))).toEqual({
       audioFormat: null,
       nativeVideo: false,
     });
   });
 
   it('Anthropic-совместимый RouterAI: только wav', () => {
-    expect(resolveNativeAudioFormat('anthropic', 'https://routerai.ru/v1')).toBe('wav');
+    expect(resolveNativeAudioFormat(capability({ type: 'anthropic', url: 'https://routerai.ru/v1' }))).toBe('wav');
+  });
+
+  it('явная capability перекрывает эвристику: supportsNativeVideo:true у обычного провайдера', () => {
+    expect(resolveCompressTarget(capability({
+      type: 'openai',
+      url: 'https://api.openai.com/v1',
+      compatibility: { supportsNativeVideo: true },
+    }))).toEqual({
+      audioFormat: 'mp3',
+      nativeVideo: true,
+    });
+  });
+
+  it('явный пустой список форматов — аудио не сжимаем (null)', () => {
+    expect(resolveCompressTarget(capability({
+      type: 'openai',
+      url: 'https://api.openai.com/v1',
+      compatibility: { nativeAudioFormats: [] },
+    }))).toEqual({
+      audioFormat: null,
+      nativeVideo: false,
+    });
+  });
+
+  it('явный список только wav — целевой контейнер wav', () => {
+    expect(resolveNativeAudioFormat(capability({
+      type: 'openai',
+      url: 'https://api.openai.com/v1',
+      compatibility: { nativeAudioFormats: ['wav'] },
+    }))).toBe('wav');
   });
 });
