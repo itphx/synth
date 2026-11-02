@@ -66,7 +66,8 @@
    - `POST /api/v2/sessions/:id/prompt` получает аддитивное `attachments?: string[]` (id вложений) →
      сообщение с частями `[text, image, …]`.
 7. **Конфиг** — секция `attachments` (`maxBytesPerFile`, `maxFilesPerMessage`, `maxBytesPerSession`,
-   `allowedMimePrefixes`, `gcDays`), приоритет CLI > env > config.yaml > defaults (ADR-023).
+   `allowedMimePrefixes`, `gcDays`), приоритет CLI > env > config.yaml > defaults (ADR-023);
+   дефолт `maxBytesPerFile` — **100 МиБ** (паритет с клиентским `MAX_FILE_BYTES`).
 8. **UI — по образцу OpenChamber** (эталонный код: `tmp/refs/openchamber/packages/ui/src`). Копируем
    поведение и структуру, а не код; отличия — из-за серверного хранения (см. §«UI»).
 
@@ -548,6 +549,16 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
    (`attachmentDrafts`), «вложения восстанавливаются» при неудачной отправке, `aria-label` на всех
    действиях, ленивая загрузка превью.
 
+**Черновики композера (2026-11-02).** Текст переживает reload и переключение вкладок:
+`lib/composer-drafts.ts` (localStorage `synth.composer.drafts.v1`, per-session, дебаунс записи 300 мс,
+`flush` на `pagehide`/`beforeunload`/`visibilitychange:hidden`) и `stores/composerDraftsStore.ts`.
+Байты — `lib/draft-attachments.ts` (IndexedDB `synth-composer-drafts`, ключ `sessionId::draftId`):
+`put` при добавлении, `patch` после загрузки (`partId`/`blobPath`) и при ошибке, удаление — при
+удалении чипа/очистке. `attachmentsStore.hydrate(sessionId)` поднимает черновик (`ready`/`error`/
+`pending`, `pending` дозагружается). `ChatInput` больше **не** зовёт `dispose` на unmount, а текст и
+вложения очищаются **после успешной** отправки. Ошибка загрузки (`413`/сеть) видна оверлеем на
+превью и тостом и **блокирует отправку** (`hasFailed`), пока вложение не убрано/не повторено.
+
 Чем отличаемся из-за серверного хранения:
 
 | Референс (OpenChamber) | Synth |
@@ -717,7 +728,7 @@ aux-вызова в счётчики сессии/`metadata.usage` сообще�
 
 - гибрид (`remote/transfer.ts`, publish/fork) байты вложений не переносит — медиа-части на удалённой
   стороне остаются с неразрешённым `blobPath`;
-- черновики вложений не переживают переключение сессии (`attachmentDrafts` из §«UI»);
+- черновики вложений живут в браузере (localStorage/IndexedDB по origin) и не переносятся между устройствами/профилями;
 - предобработка вне объёма: ASR/OCR (извлечение кадров и конвертация аудио — только через внешний
   `ffmpeg` в сервисе обработки, `derive.ts`); видео без `ffmpeg` не обрабатывается;
 - уборка `<workspace>/attachments/` не автоматизирована — каталог живёт как обычные файлы проекта;

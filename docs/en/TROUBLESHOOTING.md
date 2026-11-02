@@ -165,6 +165,41 @@ security:
 
 **End-to-end check:** `./scripts/e2e-executor.sh` starts a real control plane and a real executor and verifies the routing, the fail-closed behaviour and the 401 — see [DEVELOPMENT.md](./DEVELOPMENT.md#end-to-end-test-control-plane--executor).
 
+## 9. 413 when uploading an attachment
+
+`413 PAYLOAD_TOO_LARGE` (or `Request Entity Too Large`) on a file/attachment upload means the
+**smallest** limit on the request path fired. Check in order:
+
+1. **Application** — `attachments.maxBytesPerFile` (default 100 MiB) and `maxBytesPerSession`
+   (1 GiB): `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime
+   `/api/v2/settings/attachments` (UI "Attachments"). Exceeding them gives a `413` with a JSON body —
+   i.e. the backend answered.
+2. **nginx in the UI pod** — `client_max_body_size` (env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`, image
+   default `100m`; Helm — `ui.clientMaxBodySize`). The symptom in the log is `client intended to send
+   too large body`. Check: `kubectl -n <ns> logs deploy/synth-ui`. A change requires a UI pod
+   restart/redeploy (nginx reads the value at startup).
+3. **Ingress** — nginx-ingress: annotation `nginx.ingress.kubernetes.io/proxy-body-size` (the chart
+   sets it from `ui.clientMaxBodySize` when `ingress.controller: nginx`); Traefik has no body limit —
+   look for another proxy.
+4. **External Apache2** — `LimitRequestBody` (default `0` — no limit) and, with `mod_security`
+   enabled, `SecRequestBodyLimit` (its default 12.5 MB cuts uploads) / `SecRequestBodyNoFilesLimit`.
+   A ready-made config block — [CONFIGURATION.md](./CONFIGURATION.md#upload-limits-and-the-reverse-proxy).
+
+Checking without the browser:
+
+```bash
+# use your host/token; a ~100 MB file
+head -c 104857600 /dev/urandom > /tmp/big.bin
+curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  -F file=@/tmp/big.bin -F path=uploads/big.bin -F project_id=<id> \
+  "https://<host>/api/v2/fs/upload"
+```
+
+- `201`/`200` — the limits are sufficient; `413` — check **who** answered (a JSON body from the
+  backend vs HTML from nginx/Apache) and raise that level.
+- The transport limit must be **at least** the application limit plus headroom for the multipart
+  envelope.
+
 ## Where to look at the logs
 
 | Service | Log |

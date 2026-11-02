@@ -652,7 +652,7 @@ describe('resolveAttachmentsSettings (ADR-115)', () => {
     expect(resolved.effective).toEqual({
       enabled: true,
       modalities: { image: true, pdf: true, audio: true, video: true },
-      maxBytesPerFile: 25 * 1024 * 1024,
+      maxBytesPerFile: 100 * 1024 * 1024,
       maxFilesPerMessage: 10,
       maxBytesPerSession: 1024 * 1024 * 1024,
       allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],

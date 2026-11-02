@@ -222,6 +222,8 @@ export function createQueueRoutes(
     let remainingCount = 0;
     /** Найден ли элемент по `id` внутри `safeUpdate` (гонка: исчез между чтениями). */
     let idRemoved = false;
+    /** ADR-118 §4: id user-сообщений истории, реально удалённых возвратом в поле. */
+    const removedMessageIds: string[] = [];
     /** ADR-118 §4: счётчики очереди после извлечения сообщений. */
     let counts: QueueStatePayload = { pendingCount: 0, steerCount: 0 };
 
@@ -254,12 +256,15 @@ export function createQueueRoutes(
       // Удаляем возвращённые user-сообщения из истории по stream_id, чтобы при
       // повторной отправке из поля ввода не было дубля. Активный стрим не трогаем.
       if (removedStreamIds.length > 0) {
+        const removedSet = new Set(removedStreamIds);
         s.messages = s.messages.filter((m) => {
           if (m.role !== MessageRole.USER) return true;
           const sid = m.metadata?.stream_id as string | undefined;
           if (!sid) return true;
           if (sid === activeStreamId) return true;
-          return !removedStreamIds.includes(sid);
+          if (!removedSet.has(sid)) return true;
+          removedMessageIds.push(m.id);
+          return false;
         });
       }
 
@@ -290,6 +295,11 @@ export function createQueueRoutes(
 
     // ADR-118 §4: сообщения извлечены из очереди — состояние очереди.
     publishQueueState(eventBus, sessionId, counts);
+    // ADR-118 §4/§7: возвращённые user-сообщения удалены из истории — другие
+    // клиенты убирают их из ленты по `id`.
+    for (const messageId of removedMessageIds) {
+      eventBus.publish(sessionId, 'message.deleted', { message_id: messageId });
+    }
 
     return c.json({ texts });
   });

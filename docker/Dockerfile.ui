@@ -39,10 +39,18 @@ LABEL org.opencontainers.image.description="Synth web UI: React 19 SPA served by
 # на чужой хост).
 ENV SYNTH_BACKEND_URL=http://synth-backend:5000
 
-# Фильтр envsubst официального образа nginx — regex по именам env-переменных:
-# подставляется ТОЛЬКО SYNTH_BACKEND_URL, поэтому переменные самого nginx
-# ($host, $remote_addr, $proxy_add_x_forwarded_for, $scheme) остаются нетронутыми.
-ENV NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL
+# Лимит тела запроса nginx (`client_max_body_size`): вложения сообщений
+# (POST /sessions/:id/attachments) и /fs/upload. Дефолт nginx — 1m, из-за чего
+# загрузка резалась на 1 МиБ (`413`). Значение согласовано с прикладным лимитом
+# `attachments.maxBytesPerFile` (100 МиБ): транспортный лимит должен быть не
+# меньше прикладного + запас на multipart-обвязку. В Helm — `ui.clientMaxBodySize`.
+ENV SYNTH_NGINX_CLIENT_MAX_BODY_SIZE=100m
+
+# Фильтр envsubst официального образа nginx — awk-regex по именам env-переменных:
+# подставляются ТОЛЬКО SYNTH_BACKEND_URL и SYNTH_NGINX_CLIENT_MAX_BODY_SIZE,
+# поэтому переменные самого nginx ($host, $remote_addr,
+# $proxy_add_x_forwarded_for, $scheme) остаются нетронутыми.
+ENV NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL|SYNTH_NGINX_CLIENT_MAX_BODY_SIZE
 
 # Собранный SPA (vite) + ШАБЛОН nginx-конфига: entrypoint образа подставляет env
 # в /etc/nginx/templates/*.template и кладёт результат в /etc/nginx/conf.d/.

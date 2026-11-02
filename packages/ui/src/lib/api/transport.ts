@@ -24,6 +24,13 @@ export interface TransportClientCallbacks {
 const HEARTBEAT_INTERVAL = 25_000
 const INITIAL_RECONNECT_DELAY = 1_000
 const MAX_RECONNECT_DELAY = 60_000
+/**
+ * Простой, после которого соединение считается «зомби» (PWA вернулась из фона,
+ * сеть давно ушла): `resume()` пересоздаёт транспорт, не дожидаясь backoff.
+ */
+const RESUME_IDLE_TIMEOUT_MS = 90_000
+/** `readyState === OPEN` у WebSocket и EventSource (по спецификации = 1). */
+const SOCKET_OPEN = 1
 
 /**
  * ADR-118 §3: отправка сообщения **не** ждёт подтверждения по транспорту.
@@ -44,9 +51,19 @@ export class TransportClient {
   private backendReady = false
   /** ADR-118 §6: номер последнего виденного события — точка догона (`since`). */
   private since: number | undefined
+  /** Время последней активности соединения (открытие/кадр) — детект «зомби». */
+  private lastActivityAt = 0
+  /** Слушатели жизненного цикла (снимаются в `disconnect`, не в cleanup). */
+  private lifecycleAttached = false
+  private readonly onOnline = () => this.resume()
+  private readonly onPageShow = () => this.resume()
+  private readonly onVisibilityChange = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') this.resume()
+  }
 
   constructor(callbacks: TransportClientCallbacks) {
     this.callbacks = callbacks
+    this.attachLifecycle()
   }
 
   /**
@@ -75,6 +92,7 @@ export class TransportClient {
 
   disconnect(): void {
     this.intentionalClose = true
+    this.detachLifecycle()
     this.cleanupTransport()
     this.transport = 'disconnected'
     this.callbacks.onDisconnect?.('manual')
@@ -86,6 +104,56 @@ export class TransportClient {
 
   isBackendReady(): boolean {
     return this.backendReady
+  }
+
+  /**
+   * Разбудить транспорт после возврата приложения из фона (`online`,
+   * `pageshow`, `visibilitychange`).
+   *
+   * EventSource может выглядеть открытым, но быть «зомби» (соединение давно
+   * мертво, браузер ещё не увидел ошибку) — поэтому одного `readyState`
+   * недостаточно: соединение без активности дольше `RESUME_IDLE_TIMEOUT_MS`
+   * пересоздаётся принудительно, в обход накопленного backoff.
+   */
+  resume(): void {
+    if (this.intentionalClose) return
+    const idle = Date.now() - this.lastActivityAt > RESUME_IDLE_TIMEOUT_MS
+    if (this.transport === 'sse') {
+      if (!this.sseSource || this.sseSource.readyState !== SOCKET_OPEN || idle) {
+        this.reconnectAttempts = 0
+        this.connectSSE()
+      }
+      return
+    }
+    if (this.transport === 'ws') {
+      if (!this.ws || this.ws.readyState !== SOCKET_OPEN || idle) {
+        this.reconnectAttempts = 0
+        this.connectWS()
+      }
+    }
+  }
+
+  /**
+   * Слушатели жизненного цикла вешаются один раз в конструкторе и снимаются
+   * только в `disconnect()`. `cleanupTransport()` (вызывается при каждом
+   * реконнекте) их не трогает — иначе после первого же переподключения
+   * приложение перестало бы замечать возврат из фона.
+   */
+  private attachLifecycle(): void {
+    if (this.lifecycleAttached) return
+    if (typeof window === 'undefined') return
+    window.addEventListener('online', this.onOnline)
+    window.addEventListener('pageshow', this.onPageShow)
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
+    this.lifecycleAttached = true
+  }
+
+  private detachLifecycle(): void {
+    if (!this.lifecycleAttached) return
+    window.removeEventListener('online', this.onOnline)
+    window.removeEventListener('pageshow', this.onPageShow)
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
+    this.lifecycleAttached = false
   }
 
   /**
@@ -172,6 +240,7 @@ export class TransportClient {
 
       this.ws.onopen = () => {
         console.debug('[WS] Connected')
+        this.lastActivityAt = Date.now()
         this.reconnectAttempts = 0
         this.transport = 'ws'
         this.startHeartbeat()
@@ -195,6 +264,8 @@ export class TransportClient {
 
       this.ws.onmessage = (e) => {
         try {
+          // Любой кадр (включая `pong`) — признак живой связи.
+          this.lastActivityAt = Date.now()
           const data = JSON.parse(e.data)
           if (data.type === 'pong') return
 
@@ -234,6 +305,7 @@ export class TransportClient {
 
       this.sseSource.onopen = () => {
         console.debug('[SSE] Connected')
+        this.lastActivityAt = Date.now()
         this.reconnectAttempts = 0
         this.transport = 'sse'
         this.callbacks.onTransportSwitch?.('sse')
@@ -242,6 +314,8 @@ export class TransportClient {
 
       this.sseSource.onmessage = (e) => {
         try {
+          // Любой кадр — признак живой связи (детект «зомби» на возврате из фона).
+          this.lastActivityAt = Date.now()
           const data = JSON.parse(e.data) as WSEvent
           // ADR-118 §6: SSE-кадр несёт `id:` — глобальный номер события
           // (`EventSource.lastEventId`). Он и есть точка догона: `eventSeq` из

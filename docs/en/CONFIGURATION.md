@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-11-02 (**секция `session.autoTitle`** «Авто-заголовок сессии» — триггер в начале хода (сразу после первого сообщения пользователя), отсрочка для приветствия/смолтка, `N=2..maxAttempts` — заголовок по диалогу, фоллбек только из реплики с сигналом, ручная регенерация `PATCH /api/v2/sessions/:id {"title": ""}`, env `SYNTH_SESSION_AUTO_TITLE_*` — **переведено**); RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-11-02 (**секции «Вложения сообщений» (`attachments.*`) и «Лимиты загрузки и обратный прокси»** — `maxBytesPerFile` по умолчанию 100 МиБ, nginx/Apache/ingress — **переведено**); RU-версия обновлена 2026-11-02 (**секция `session.autoTitle`** «Авто-заголовок сессии» — триггер в начале хода (сразу после первого сообщения пользователя), отсрочка для приветствия/смолтка, `N=2..maxAttempts` — заголовок по диалогу, фоллбек только из реплики с сигналом, ручная регенерация `PATCH /api/v2/sessions/:id {"title": ""}`, env `SYNTH_SESSION_AUTO_TITLE_*` — **переведено**); RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -1946,6 +1946,77 @@ parameter of a single call overrides it; `0` — no limit.
   configuration keys: change them per call with the `timeout` parameter.
 - Exceeding a limit is **not** a "Command failed": the model gets the limit value and a hint
   (raise `timeout`, raise the limit in the config, or move the work to the background).
+
+### Message attachments (`attachments.*`, ADR-115)
+
+Limits and policy for message attachments (multimodal input — [ADR-115](../arch_decisions/adr-115-multimodal-input.md),
+API contract — [API_V2.md](./API_V2.md) §5.6.1). Bytes live on the volume in `{dataDir}/blobs`
+(content-addressed); the database only keeps `blob_refs`.
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `attachments.maxBytesPerFile` | Limit of a single file, bytes; exceeding it → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` | `104857600` (100 MiB) |
+| `attachments.maxFilesPerMessage` | Number of attachments in one message; exceeding it → `400 VALIDATION_ERROR`. Env — `SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE` | `10` |
+| `attachments.maxBytesPerSession` | Total volume of the session's attachments; exceeding it on prompt → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION` | `1073741824` (1 GiB) |
+
+- **Priority of the sources.** `SYNTH_ATTACHMENTS_*` (env) > runtime (UI, `settings.json`/PG) >
+  `config.yaml` `attachments` > schema defaults. Fields set via env are locked (`envLocked`):
+  a different value from the UI → `409 CONFLICT`.
+- **Runtime settings.** Settings → "Attachments" (API — `GET/PUT/DELETE /api/v2/settings/attachments`,
+  [API_V2.md](./API_V2.md) §5.21) changes `enabled`/`modalities`/limits/`workspaceFallback`/`modalityModels`/`gcDays`
+  **without a restart**. The full field table is in the RU version of this document.
+
+#### Upload limits and the reverse proxy
+
+An upload passes through several limits, and the **smallest** one wins. The transport limit
+(nginx/Apache/ingress) must be **at least** the application limit plus headroom for the multipart
+envelope.
+
+| Level | What | Where it is set | Default |
+|---|---|---|---|
+| Application | `attachments.maxBytesPerFile` — size of one file | `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime `/api/v2/settings/attachments` (UI "Attachments"; `restartRequired: false`) | 100 MiB (`104857600`) |
+| nginx in the UI pod (image `synth-ui`) | `client_max_body_size` | env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`; in Helm — `ui.clientMaxBodySize` | `100m` |
+| nginx-ingress (k8s) | annotation `nginx.ingress.kubernetes.io/proxy-body-size` | set by the chart when `ingress.controller: nginx` from `ui.clientMaxBodySize`; can be overridden in `ingress.annotations` | `100m` |
+| Traefik | no body limit | — | — |
+| External Apache2 | `LimitRequestBody` (+ mod_security) | Apache config | `0` (no limit) |
+
+The nginx default (`client_max_body_size 1m`) cuts the upload before the application does — that is
+why it is raised to `100m` both in the image and in the chart. If the application limit is raised via
+`config.yaml`/UI, the transport limit must be raised too (with headroom for multipart: headers +
+boundary, tens of kilobytes). A file exactly at the application limit plus the multipart envelope may
+exceed `100m` — near the boundary set the transport limit slightly higher (e.g. `105m`).
+
+**Apache2 as an external ingress.** Apache's `LimitRequestBody` default is `0` (no limit), but if it
+is set — raise it for 100 MiB. `SecRequestBodyLimit`/`SecRequestBodyNoFilesLimit` apply only with
+`mod_security` enabled (its default `SecRequestBodyLimit` = 12.5 MB cuts uploads). Timeouts keep
+100 MB over a mobile network from being dropped; WebSocket is needed for `/ws/events`.
+
+```apache
+<VirtualHost *:443>
+    # External Apache2 as a reverse proxy to Synth UI
+    # Apache default is 0 (no limit), but if set — raise it for 100 MiB:
+    LimitRequestBody 104857600
+    # mod_security (if enabled): the default SecRequestBodyLimit = 12.5 MB cuts uploads
+    # SecRequestBodyLimit 104857600
+    # SecRequestBodyNoFilesLimit 1048576
+    # SecRequestBodyLimitAction Reject
+    # Slow mobile uploads:
+    RequestReadTimeout header=20-40,MinRate=500 body=20-120,MinRate=500
+    ProxyTimeout 300
+    ProxyPass        "/" "http://synth-ui:8080/"
+    ProxyPassReverse "/" "http://synth-ui:8080/"
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^/(.*)$ ws://synth-ui:8080/$1 [P,L]
+</VirtualHost>
+```
+
+- `LimitRequestBody` limits the request body; it can be set per location (`<Location "/api/v2/">`).
+- `SecRequestBodyLimit` / `SecRequestBodyNoFilesLimit` — **only** with `mod_security`;
+  `NoFilesLimit` limits non-file parts, `Limit` limits the whole body.
+- `ProxyTimeout` / `RequestReadTimeout` — so a slow 100 MB upload is not cut by the proxy.
+- The WebSocket rule is mandatory: the event stream goes through `/ws/events` (without it the UI
+  loses live events).
 
 ### Observability (`metrics.*`, ADR-094)
 

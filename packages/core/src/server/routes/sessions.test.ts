@@ -1410,3 +1410,69 @@ describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)'
     expect(persisted?.worktree?.projectId).toBe(persisted?.projectId);
   });
 });
+
+describe('POST /api/v2/sessions/:id/clear — события синхронизации', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-clear-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeMessage(content: string, pinned = false) {
+    return {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local' as const,
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned,
+      hidden: false,
+      author: 'local',
+    };
+  }
+
+  it('оставляет закреплённые и публикует session.messages.cleared + queue.state с нулями', async () => {
+    const { app, sessionManager, eventBus } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'C', userId: 'local' });
+    await sessionManager.addMessage(session.id, makeMessage('keep', true));
+    await sessionManager.addMessage(session.id, makeMessage('drop'));
+
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(session.id, (e) => {
+      events.push({ type: e.type, data: e.data as Record<string, unknown> });
+    });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/clear`, { method: 'POST' });
+    expect(res.status).toBe(200);
+
+    const cleared = (await sessionManager.getSession(session.id))!;
+    expect(cleared.messages.map((m) => m.content)).toEqual(['keep']);
+    expect(cleared.pendingMessages).toEqual([]);
+
+    expect(events).toEqual([
+      { type: 'session.messages.cleared', data: { session_id: session.id } },
+      { type: 'queue.state', data: { pendingCount: 0, steerCount: 0 } },
+    ]);
+  });
+
+  it('несуществующая сессия → 404 и событий нет', async () => {
+    const { app, eventBus } = createTestApp(tmpDir);
+    const published: string[] = [];
+    const original = eventBus.publish.bind(eventBus);
+    eventBus.publish = ((...args: Parameters<typeof original>) => {
+      published.push(args[1]);
+      return original(...args);
+    }) as typeof eventBus.publish;
+
+    const res = await app.request('/api/v2/sessions/missing/clear', { method: 'POST' });
+    expect(res.status).toBe(404);
+    expect(published).toEqual([]);
+  });
+});

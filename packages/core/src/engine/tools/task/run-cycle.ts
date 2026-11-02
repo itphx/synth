@@ -392,6 +392,27 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
   };
   /**
+   * ADR-118 §10: события **инструментов** саб-агента нужны в двух каналах.
+   *
+   * - Родительский (`extra.publish` = `publishChunk` оркестратора) — дерево
+   *   вложенных вызовов под блоком `task`, привязка по `parent_call_id`.
+   * - Дочерний (`publishChildEvent`) — вкладка саб-агента подписана на канал
+   *   ребёнка: без события её live-карточки инструментов не создаются и не
+   *   закрываются результатом. В дочернем канале это **обычная** карточка:
+   *   `parent_call_id` убираем (иначе UI посчитал бы её вложенной), а
+   *   `session_id` — id дочерней сессии (не родительской).
+   */
+  const publishToolEvent = (
+    type: 'tool_call.started' | 'tool_call.result',
+    data: Record<string, unknown>,
+  ): void => {
+    publish?.(type, data);
+    if (!childSessionId) return;
+    const childData = { ...data };
+    delete childData.parent_call_id;
+    publishChildEvent(type, { ...childData, session_id: childSessionId });
+  };
+  /**
    * `streamId` прогона: у blocking-прогона — родительский ход, у
    * переведённого в фон — собственный (поле `extra` мутируется при detach).
    * По нему сверяется маркер `currentStream`: чужой не перетираем и не снимаем.
@@ -700,6 +721,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
        * сумма usage сообщений ребёнка превысит счётчики сессии.
        */
       usage?: TokenUsage,
+      /**
+       * ADR-118 §1: индекс шага сообщения. По умолчанию — текущая итерация;
+       * отчёт «сверх» сохранённого assistant(tool_calls) создаётся после
+       * `iteration++` и передаёт индекс **своего** шага явно.
+       */
+      stepIndex: number = iteration,
     ): Promise<void> => {
       if (!childSessionId || !extra.sessionManager) return;
       try {
@@ -716,6 +743,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           hidden: false,
           agentRole: subagentType,
           model: subagentModel,
+          // ADR-118 §1/§5: сообщение шага дочерней сессии — ход ребёнка = id
+          // дочерней сессии (`step.finished`/`turn.finished` публикуются с этим
+          // `turnId`), индекс шага и терминальный статус. Без этих полей после
+          // перезагрузки вкладка саб-агента не могла восстановить живой шаг
+          // (в истории `turn_id`/`step_index`/`status` были `null`).
+          ...(childSessionId ? { turnId: childSessionId } : {}),
+          stepIndex,
+          status: status === 'cancelled' ? 'cancelled' : status === 'error' ? 'error' : 'completed',
           // ADR-102: сообщение шага несёт расход своего вызова; сумма по
           // сообщениям прогона = счётчики дочерней сессии (`subagentUsage`).
           ...(usage ? { usage } : {}),
@@ -1460,6 +1495,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             pinned: false,
             hidden: false,
             agentRole: subagentType,
+            // ADR-118 §1/§5: шаг дочерней сессии — ход ребёнка = id дочерней
+            // сессии, индекс своего шага, статус «шаг завершён» (результаты
+            // инструментов приходят позже и ложатся в metadata.tool_results).
+            turnId: childSessionId,
+            stepIndex: stepIteration,
+            status: 'completed',
             // ADR-102/ADR-118: расход **своего** шага — в сообщение шага;
             // сумма по сообщениям прогона = счётчики дочерней сессии.
             ...(stepUsage ? { usage: stepUsage } : {}),
@@ -1530,7 +1571,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             },
           };
           const tcStartedAt = new Date().toISOString();
-          publish?.('tool_call.result', {
+          publishToolEvent('tool_call.result', {
             stream_id: extra.streamId,
             session_id: extra.sessionId,
             call_id: tcId,
@@ -1648,7 +1689,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           continue;
         }
 
-        publish?.('tool_call.started', {
+        publishToolEvent('tool_call.started', {
           stream_id: extra.streamId,
           session_id: extra.sessionId,
           call_id: tcId,
@@ -1784,7 +1825,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           }
         }
 
-        publish?.('tool_call.result', {
+        publishToolEvent('tool_call.result', {
           stream_id: extra.streamId,
           session_id: extra.sessionId,
           call_id: tcId,
@@ -1866,11 +1907,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // сохранён с id `stepMessageId`, поэтому отчёт получает свой id
           // (иначе в истории ребёнка были бы две записи с одним id, а UI
           // пропустил бы сообщение с уже занятым id — live-отчёт не появился бы).
-          await persistChildAssistantMessage(reportText, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit');
+          await persistChildAssistantMessage(reportText, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit', undefined, Math.max(0, iteration - 1));
         } else {
           reportMissing = true;
           finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
-          await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit');
+          await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit', undefined, Math.max(0, iteration - 1));
         }
         break;
       }

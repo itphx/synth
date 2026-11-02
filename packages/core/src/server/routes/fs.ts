@@ -68,6 +68,23 @@ export interface FsRoutesOptions {
    * в `content-length`.
    */
   maxUploadBytes?: number;
+  /**
+   * ADR-118 §4 / ADR-095: HTTP-мутация workspace состоялась — уведомить сессии
+   * проекта событием `fs.changed` (дерево Files, редакторы, Git-вкладка). Payload
+   * тот же, что у мутирующих инструментов (`op`/`paths`/`from`/`to`), источник —
+   * HTTP. Вызывается только для project-aware операций (есть `project_id`);
+   * `scope: 'file'` — изменение конкретного пути/путей.
+   */
+  onFsChanged?: (projectId: string, change: FsChangedChange) => void | Promise<void>;
+}
+
+/** Изменение workspace для `FsRoutesOptions.onFsChanged` (форма — как у тулов). */
+export interface FsChangedChange {
+  scope: 'file' | 'all';
+  paths?: string[];
+  op?: 'write' | 'delete' | 'mkdir' | 'move';
+  from?: string;
+  to?: string;
 }
 
 type FsHttpStatus = 400 | 403 | 404 | 409 | 413 | 422 | 500;
@@ -331,6 +348,15 @@ export function createFsRoutes(
     opts.maxUploadBytes && opts.maxUploadBytes > 0
       ? Math.floor(opts.maxUploadBytes)
       : DEFAULT_MAX_UPLOAD_BYTES;
+  const onFsChanged = opts.onFsChanged;
+  /** Уведомить сессии проекта об изменении workspace (только project-aware). */
+  const notifyFsChanged = async (
+    projectId: string | undefined,
+    change: FsChangedChange,
+  ): Promise<void> => {
+    if (!projectId || !onFsChanged) return;
+    await onFsChanged(projectId, change);
+  };
 
   /** 413 `PAYLOAD_TOO_LARGE` — единый ответ на превышение лимита загрузки. */
   const payloadTooLarge = (c: Context): Response =>
@@ -509,6 +535,7 @@ export function createFsRoutes(
       await mkdir(join(fullPath, '..'), { recursive: true }).catch(() => {});
       await writeFile(fullPath, content, 'utf-8');
       const s = await stat(fullPath);
+      await notifyFsChanged(projectId, { scope: 'file', paths: [path], op: 'write' });
       return c.json({ path, content, size: s.size, encoding: 'utf-8' }, 200);
     } catch (err) {
       return fsErrorResponse(c, err);
@@ -592,7 +619,9 @@ export function createFsRoutes(
       }
 
       await writeFile(targetPath, new Uint8Array(data));
-      return c.json({ path: relative(base, targetPath), name: fileName }, 201);
+      const uploadedPath = relative(base, targetPath);
+      await notifyFsChanged(projectId, { scope: 'file', paths: [uploadedPath], op: 'write' });
+      return c.json({ path: uploadedPath, name: fileName }, 201);
     } catch (err) {
       return fsErrorResponse(c, err);
     }
@@ -688,6 +717,7 @@ export function createFsRoutes(
         await unlink(fullPath);
       }
 
+      await notifyFsChanged(projectId, { scope: 'file', paths: [path], op: 'delete' });
       return c.json({ deleted: true, path }, 200);
     } catch (err) {
       return fsErrorResponse(c, err);
@@ -733,6 +763,7 @@ export function createFsRoutes(
       }
 
       await mkdir(fullPath, { recursive: true });
+      await notifyFsChanged(projectId, { scope: 'file', paths: [path], op: 'mkdir' });
       return c.json({ created: true, path }, 201);
     } catch (err) {
       return fsErrorResponse(c, err);
@@ -830,6 +861,12 @@ export function createFsRoutes(
           throw err;
         }
         await rm(fullSource, { recursive: true, force: false });
+      }
+      // ADR-118 §4: перенос/переименование — уведомляем источник и (при
+      // межпроектном переносе) целевой проект.
+      await notifyFsChanged(projectId, { scope: 'file', op: 'move', from: sourcePath, to: targetPath });
+      if (targetProjectId && targetProjectId !== projectId) {
+        await notifyFsChanged(targetProjectId, { scope: 'file', op: 'move', from: sourcePath, to: targetPath });
       }
       return c.json({ moved: true, sourcePath, targetPath }, 200);
     } catch (err) {

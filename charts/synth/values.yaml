@@ -689,6 +689,11 @@ ui:
   # `nameOverride` на имя Service не влияет (он меняет только labels).
   extraEnv: {}
 
+  # Лимит тела запроса, который принимает nginx UI-пода (client_max_body_size).
+  # Должен быть не меньше attachments.maxBytesPerFile (+ запас на multipart).
+  # Дефолт 100m = 100 МиБ; применяется при рестарте/передеплое UI.
+  clientMaxBodySize: "100m"
+
   service:
     type: ClusterIP
     port: 8080

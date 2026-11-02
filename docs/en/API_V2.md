@@ -2,7 +2,9 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-11-02 (**§5.5** — `PATCH /api/v2/sessions/:id` с телом
+> ⚠️ RU-версия обновлена 2026-11-02 (**§3.3** — события синхронизации мутаций
+> `message.deleted`/`message.updated`/`session.messages.cleared`/`session.messages.merged`/
+> `project.updated`/`project.deleted`/`plan.updated`/`fs.changed` — **переведено**; **§5.5** — `PATCH /api/v2/sessions/:id` с телом
 > `{"title": ""}` — регенерация имени по диалогу (синхронно, ответ — DTO сессии;
 > при неудаче заголовок прежний, ответ 200; в гибриде тело проксируется удалённому
 > серверу) и блок «Авто-заголовок сессии (`session.autoTitle`)» — триггер в начале хода,
@@ -313,10 +315,22 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 | `message.accepted` | **addressed** (`recipient` = sender `userId`) | `messageId`, `mode`, `position` — no text |
 | `queue.state` | session channel | `pendingCount`, `steerCount` — **counters only**: no text, no author; `items?` — queue elements with their state (`{id, status: 'queued'\|'starting'}`), **no text and no author** (the element id is the message stream id, `metadata.stream_id`; for the message being processed it matches `current_stream.stream_id`) |
 | `message.delivered` | session channel | `messageId`, `ord`, role, author — no content |
+| `message.deleted` | session channel | `message_id` — message removed from history (`DELETE /messages/:sessionId/:messageId`, batch `action:'delete'`, queue return `POST /queue/:sessionId/return`); one event per actually removed message |
+| `message.updated` | session channel | `message_id`, `pinned?`, `disabled?` — pin/toggle/batch/retry (retry disables messages from the retry point); patched by `id`, live parts are untouched |
+| `session.messages.cleared` | session channel | `session_id` — `POST /sessions/:id/clear`: history cleared (pinned kept), queue reset (`queue.state {0,0}` follows); the client refetches the snapshot |
+| `session.messages.merged` | session channel | `messages` (added messages; may be absent) — `POST /sessions/:id/messages/merge` |
+| `plan.updated` | session channel | — project plan changed by the `plan_write` tool; the client refetches the session |
+| `project.updated` / `project.deleted` | channel of every project session | `project_id` — `PUT`/`DELETE /projects/:id` (deletion is published before removal, while sessions are still enumerable) |
 | `turn.started` / `turn.finished` | session channel | `turnId`, terminal status |
 | `step.started` / `step.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `usage`, `timings`, `attachments` |
 | `step.tools.started` / `step.tools.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `callIds` (`string[]`) — additive: `step.finished` means “the LLM call is done”, these events mark the **tool execution** of that step (published once per step with tool calls, before execution and after `metadata.tool_results` is written) |
 | `part.delta` / `part.updated` | session channel | upsert by `{messageId, partId}` |
+
+Any mutation visible to another client publishes an event: `message.deleted`/`message.updated`
+(messages), `session.messages.cleared`/`session.messages.merged` (history),
+`project.updated`/`project.deleted` (project — to the channel of each of its sessions),
+`plan.updated`, and `fs.changed` (workspace, including HTTP FS with `source: 'http'`). Clients must
+handle them, otherwise the feed “sticks” after another client's action.
 
 `queue.state` is published when messages are enqueued or removed and at turn boundaries — the text
 and the author do not reach the session channel (this removes the former `message.queued` leak).

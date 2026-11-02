@@ -1502,6 +1502,7 @@ export const dict = {
   'chat.attachments.gallery.counter': '{index} / {total}',
   'chat.attachments.dropHint': 'Отпустите файлы, чтобы прикрепить',
   'chat.attachments.waitUpload': 'Дождитесь загрузки вложений',
+  'chat.attachments.fixErrors': 'Уберите или повторите загрузку вложений',
   'chat.attachments.added': '{count, plural, one {Прикреплён # файл} few {Прикреплено # файла} many {Прикреплено # файлов}}',
   'chat.attachments.error.prepare': 'Не удалось подготовить файл',
   'chat.attachments.modelUnsupported':

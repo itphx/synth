@@ -223,9 +223,46 @@ describe('run-cycle — успешное завершение без дочер�
     const assistant = saved.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
     expect(assistant.content).toBe('child answer');
     expect((assistant.usage as TokenUsage).inputTokens).toBe(7);
+    // ADR-118 §1/§5: шаг ребёнка несёт ход (= id дочерней сессии), индекс шага
+    // и терминальный статус — иначе UI не группирует сообщения по ходу.
+    expect(assistant.turnId).toBe(child.id);
+    expect(assistant.stepIndex).toBe(0);
+    expect(assistant.status).toBe('completed');
     expect(result.metadata!.child_session_id).toBe(child.id);
     // Локальный cancel-токен не связан с abortSignal — ничего не отменено.
     expect(result.metadata!.interrupted).toBeUndefined();
+  });
+
+  it('сообщение шага с tool calls сохраняется с turnId/stepIndex/status', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+
+    await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const step = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
+    )!;
+    expect(step.turnId).toBe(child.id);
+    expect(step.stepIndex).toBe(0);
+    expect(step.status).toBe('completed');
+
+    const final = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === 'готово',
+    )!;
+    expect(final.turnId).toBe(child.id);
+    expect(final.stepIndex).toBe(1);
+    expect(final.status).toBe('completed');
   });
 });
 
@@ -1942,6 +1979,68 @@ describe('run-cycle — живой ход дочерней сессии (ADR-118
     // Карточка вызова — до закрытия первого шага.
     const firstStepFinished = childEvents.findIndex((e) => e.type === 'step.finished');
     expect(childEvents.indexOf(toolPart)).toBeLessThan(firstStepFinished);
+  });
+
+  it('tool_call.started/result идут в оба канала: родитель с parent_call_id, ребёнок без', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const events = captureBus(bus);
+    /** Родительский канал (`extra.publish` = publishChunk оркестратора). */
+    const parentEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', { a: 1 }, 'child-tool-call')],
+      [{ isFinal: true, content: 'готово' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok-result' }) });
+
+    await runSubagent(makeConfig({
+      maxSteps: 3,
+      tools: llmTools(),
+      extra: makeExtra({
+        provider,
+        eventBus: bus,
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: registry,
+        callId: 'parent-task-call',
+        publish: (type: string, data: Record<string, unknown>) => parentEvents.push({ type, data }),
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Родитель: ровно по одному событию каждого вида (без задвоения).
+    const parentStarted = parentEvents.filter((e) => e.type === 'tool_call.started');
+    const parentResults = parentEvents.filter((e) => e.type === 'tool_call.result');
+    expect(parentStarted).toHaveLength(1);
+    expect(parentResults).toHaveLength(1);
+    expect(parentStarted[0]!.data).toMatchObject({
+      call_id: 'child-tool-call',
+      parent_call_id: 'parent-task-call',
+      session_id: parent.id,
+    });
+    expect((parentResults[0]!.data.result as ToolResult).content).toBe('ok-result');
+
+    // Ребёнок: обычная карточка — свой `session_id`, без `parent_call_id`.
+    const childToolEvents = events.filter(
+      (e) => e.sessionId === child.id && e.type.startsWith('tool_call.'),
+    );
+    const childStarted = childToolEvents.filter((e) => e.type === 'tool_call.started');
+    const childResults = childToolEvents.filter((e) => e.type === 'tool_call.result');
+    expect(childStarted).toHaveLength(1);
+    expect(childResults).toHaveLength(1);
+    expect(childStarted[0]!.data).toMatchObject({
+      call_id: 'child-tool-call',
+      session_id: child.id,
+    });
+    expect(childStarted[0]!.data.parent_call_id).toBeUndefined();
+    expect(childResults[0]!.data).toMatchObject({
+      call_id: 'child-tool-call',
+      session_id: child.id,
+    });
+    expect(childResults[0]!.data.parent_call_id).toBeUndefined();
+    expect((childResults[0]!.data.result as ToolResult).content).toBe('ok-result');
   });
 
   it('ошибка LLM: turn.finished status=error, currentStream снят', async () => {

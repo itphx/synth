@@ -48,6 +48,7 @@ vi.mock('@/lib/api/synthApi', () => ({
     }),
     getSession: vi.fn().mockResolvedValue({ id: 'parent', messages: [] }),
     getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
+    getSessions: vi.fn().mockResolvedValue([]),
     getStickyNotes: vi.fn().mockResolvedValue({ notes: [] }),
     enqueueMessage: vi.fn().mockResolvedValue(undefined),
     stopGeneration: vi.fn().mockResolvedValue(undefined),
@@ -55,13 +56,15 @@ vi.mock('@/lib/api/synthApi', () => ({
 }))
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 
-import { useTransportStore } from './transportStore'
+import { useTransportStore, __resetTransportResyncForTests } from './transportStore'
 import { useChatStore } from './chatStore'
+import { synthApi } from '@/lib/api/synthApi'
 
 beforeEach(() => {
   // Сброс модульного состояния стора (transport/activeKind) между тестами.
   useTransportStore.getState().disconnect()
   useTransportStore.setState({ transportMode: 'auto', connected: false, activeTransport: 'disconnected' })
+  __resetTransportResyncForTests()
   mocks.instances.length = 0
   vi.clearAllMocks()
 })
@@ -227,5 +230,59 @@ describe('transportStore.connect: окно асинхронного старта
 
     const parts = useChatStore.getState().partsBySession['sess-dup']?.['msg-dup']
     expect(parts?.['msg:text:0']?.text).toBe('ok')
+  })
+})
+
+/**
+ * Регрессия (PWA вернулась из фона): соединение выглядит открытым, но мертво.
+ * `connect()` блокируется guard'ом идемпотентности — нужен `restart()`.
+ */
+describe('transportStore.restart: принудительный перезапуск транспорта', () => {
+  it('пересоздаёт клиент того же транспорта в обход guard`а', async () => {
+    const store = useTransportStore.getState()
+    store.setTransportMode('ws')
+    const first = mocks.instances[0]!
+    await waitConnected(first, 'ws')
+
+    store.restart()
+
+    expect(first.disconnect).toHaveBeenCalledTimes(1)
+    expect(mocks.instances).toHaveLength(2)
+    await waitConnected(mocks.instances[1]!, 'ws')
+    expect(mocks.instances[1]!.connect).toHaveBeenCalledWith('ws')
+  })
+
+  it('в режиме auto перезапускает фактический транспорт после fallback WS→SSE', async () => {
+    const store = useTransportStore.getState()
+    store.setTransportMode('auto')
+    const first = mocks.instances[0]!
+    await waitConnected(first, 'ws')
+
+    first.callbacks.onDisconnect?.('WS closed: 1006')
+    await waitConnected(mocks.instances[1]!, 'sse')
+    expect(mocks.instances).toHaveLength(2)
+
+    store.restart()
+
+    expect(mocks.instances).toHaveLength(3)
+    await waitConnected(mocks.instances[2]!, 'sse')
+    expect(mocks.instances[2]!.connect).toHaveBeenCalledWith('sse')
+  })
+
+  it('после реконнекта перечитывает список сессий (ресинк)', async () => {
+    const store = useTransportStore.getState()
+    store.setTransportMode('sse')
+    const client = mocks.instances[0]!
+    await waitConnected(client, 'sse')
+    // Первое успешное подключение — ресинк не нужен.
+    client.callbacks.onConnect?.()
+    expect(synthApi.getSessions).not.toHaveBeenCalled()
+
+    // Обрыв и восстановление в рамках того же клиента (TransportClient сам
+    // переподключается через backoff — здесь эмулируем успешный onConnect).
+    client.callbacks.onDisconnect?.('SSE error')
+    client.callbacks.onConnect?.()
+
+    await vi.waitFor(() => expect(synthApi.getSessions).toHaveBeenCalled())
   })
 })

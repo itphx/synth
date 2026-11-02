@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createMessageRoutes } from './messages.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
+import type { EventBus } from '../../index.js';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 
@@ -28,11 +29,24 @@ function makeMessage(content: string): Message {
 
 const auth = { requireAuth: async (_c: Context, next: Next) => { await next(); } };
 
-function createTestApp(tmpDir: string) {
+function createTestApp(tmpDir: string, eventBus?: { publish: ReturnType<typeof vi.fn> }) {
   const app = new Hono();
   const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
-  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
+  app.route(
+    '/api/v2/messages',
+    createMessageRoutes(
+      auth,
+      sessionManager,
+      undefined,
+      eventBus ? { eventBus: eventBus as unknown as EventBus } : undefined,
+    ),
+  );
   return { app, sessionManager };
+}
+
+/** Фейковая шина: публикации фиксируются, остальное не нужно роутам сообщений. */
+function makeEventBus() {
+  return { publish: vi.fn() };
 }
 
 /** Сессия с сообщениями `a`,`b`,`c`; возвращает их id в исходном порядке. */
@@ -126,6 +140,28 @@ describe('Messages API — адресация мутаций по id (ADR-118 §
     expect(missing.status).toBe(404);
   });
 
+  it('DELETE существующего сообщения публикует ровно одно message.deleted с message_id', async () => {
+    const eventBus = makeEventBus();
+    const { app, sessionManager } = createTestApp(tmpDir, eventBus);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/${ids[1]}`, { method: 'DELETE' });
+    expect(res.status).toBe(200);
+
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledWith(sessionId, 'message.deleted', { message_id: ids[1] });
+  });
+
+  it('DELETE несуществующего сообщения → 404 и событий нет', async () => {
+    const eventBus = makeEventBus();
+    const { app, sessionManager } = createTestApp(tmpDir, eventBus);
+    const { sessionId } = await seedSession(sessionManager);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/missing-id`, { method: 'DELETE' });
+    expect(res.status).toBe(404);
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
   it('retry ищет точку отсчёта от сообщения, найденного по id', async () => {
     const { app, sessionManager } = createTestApp(tmpDir);
     const { sessionId, ids } = await seedSession(sessionManager);
@@ -202,6 +238,135 @@ describe('Messages API — адресация мутаций по id (ADR-118 §
     const s = await sessionManager.getSession(sessionId);
     expect(s!.messages.map((m) => m.content)).toEqual(['b']);
     expect(s!.messages.map((m) => m.seq)).toEqual([1]);
+  });
+
+  it('batch delete публикует message.deleted только для реально удалённых id', async () => {
+    const eventBus = makeEventBus();
+    const { app, sessionManager } = createTestApp(tmpDir, eventBus);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete', messageIds: [ids[0], ids[2], 'unknown'] }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(eventBus.publish).toHaveBeenCalledTimes(2);
+    const deleted = eventBus.publish.mock.calls.map(
+      ([sid, type, data]) => ({ sid, type, messageId: (data as { message_id: string }).message_id }),
+    );
+    expect(deleted).toEqual([
+      { sid: sessionId, type: 'message.deleted', messageId: ids[0] },
+      { sid: sessionId, type: 'message.deleted', messageId: ids[2] },
+    ]);
+  });
+
+  it('batch pin публикует message.updated на каждый существующий id (с актуальным pinned)', async () => {
+    const eventBus = makeEventBus();
+    const { app, sessionManager } = createTestApp(tmpDir, eventBus);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'pin', messageIds: [ids[0], ids[1], 'unknown'], state: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(eventBus.publish).toHaveBeenCalledTimes(2);
+    expect(eventBus.publish).toHaveBeenNthCalledWith(1, sessionId, 'message.updated', {
+      message_id: ids[0],
+      pinned: true,
+    });
+    expect(eventBus.publish).toHaveBeenNthCalledWith(2, sessionId, 'message.updated', {
+      message_id: ids[1],
+      pinned: true,
+    });
+  });
+
+  it('batch toggle публикует message.updated с актуальным disabled', async () => {
+    const eventBus = makeEventBus();
+    const { app, sessionManager } = createTestApp(tmpDir, eventBus);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    // Первый toggle — включает, второй — выключает; state не задан (инверсия).
+    await sessionManager.withLock(sessionId, async (locked) => {
+      locked.messages[0]!.disabled = true;
+      await sessionManager.updateSession(locked);
+    });
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'toggle', messageIds: [ids[0], ids[1]] }),
+    });
+    expect(res.status).toBe(200);
+    expect(eventBus.publish).toHaveBeenCalledTimes(2);
+    expect(eventBus.publish).toHaveBeenNthCalledWith(1, sessionId, 'message.updated', {
+      message_id: ids[0],
+      disabled: false,
+    });
+    expect(eventBus.publish).toHaveBeenNthCalledWith(2, sessionId, 'message.updated', {
+      message_id: ids[1],
+      disabled: true,
+    });
+  });
+
+  it('toggle публикует ровно одно message.updated с актуальным disabled', async () => {
+    const eventBus = makeEventBus();
+    const { app, sessionManager } = createTestApp(tmpDir, eventBus);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/${ids[1]}/toggle`, { method: 'PATCH' });
+    expect(res.status).toBe(200);
+
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledWith(sessionId, 'message.updated', {
+      message_id: ids[1],
+      disabled: true,
+    });
+
+    // Несуществующий id → 404 и событий нет.
+    eventBus.publish.mockClear();
+    const missing = await app.request(`/api/v2/messages/${sessionId}/missing/toggle`, { method: 'PATCH' });
+    expect(missing.status).toBe(404);
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it('pin публикует ровно одно message.updated с актуальным pinned', async () => {
+    const eventBus = makeEventBus();
+    const { app, sessionManager } = createTestApp(tmpDir, eventBus);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/${ids[2]}/pin`, { method: 'PATCH' });
+    expect(res.status).toBe(200);
+
+    expect(eventBus.publish).toHaveBeenCalledTimes(1);
+    expect(eventBus.publish).toHaveBeenCalledWith(sessionId, 'message.updated', {
+      message_id: ids[2],
+      pinned: true,
+    });
+  });
+
+  it('retry публикует message.updated на затронутые сообщения и queue.state с нулями', async () => {
+    const eventBus = makeEventBus();
+    const { app, sessionManager } = createTestApp(tmpDir, eventBus);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/${ids[1]}/retry`, { method: 'POST' });
+    expect(res.status).toBe(200);
+
+    const calls = eventBus.publish.mock.calls.map(([sid, type, data]) => ({ sid, type, data }));
+    expect(calls).toEqual([
+      { sid: sessionId, type: 'message.updated', data: { message_id: ids[1], disabled: true } },
+      { sid: sessionId, type: 'message.updated', data: { message_id: ids[2], disabled: true } },
+      { sid: sessionId, type: 'queue.state', data: { pendingCount: 0, steerCount: 0 } },
+    ]);
+
+    eventBus.publish.mockClear();
+    const missing = await app.request(`/api/v2/messages/${sessionId}/nope/retry`, { method: 'POST' });
+    expect(missing.status).toBe(404);
+    expect(eventBus.publish).not.toHaveBeenCalled();
   });
 
   it('batch: невалидное действие → 400 INVALID_ACTION, пустой messageIds → 400 INVALID_MESSAGE_IDS', async () => {

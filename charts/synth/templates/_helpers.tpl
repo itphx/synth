@@ -70,6 +70,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
        proxy_pass — рабочий адрес лучше, чем CrashLoop). */ -}}
 {{- define "synth.ui.env" -}}
 {{- $env := dict "SYNTH_BACKEND_URL" (include "synth.ui.backendUrl" .) -}}
+{{- /* Лимит тела запроса nginx UI-пода (вложения); extraEnv применяется поверх
+       и может переопределить значение. */ -}}
+{{- if .Values.ui.clientMaxBodySize -}}
+{{- $_ := set $env "SYNTH_NGINX_CLIENT_MAX_BODY_SIZE" (toString .Values.ui.clientMaxBodySize) -}}
+{{- end -}}
 {{- range $name, $value := (.Values.ui.extraEnv | default dict) -}}
 {{- $_ := set $env $name (toString $value) -}}
 {{- end -}}

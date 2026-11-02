@@ -331,7 +331,9 @@
   дефолтный манифест Service не меняется побайтово); оговорки про цепочку
   «клиент → UI-под → backend-под» — README чарта («Привязка клиента к UI-поду»).
 - **Адрес backend'а в образе UI — из окружения:** `docker/nginx-ui.conf.template` (шаблон nginx +
-  `envsubst` с фильтром `NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL` — переменные nginx не подменяются),
+  `envsubst` с фильтром `NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL|SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` —
+  переменные nginx не подменяются; тот же шаблон содержит `client_max_body_size` из env
+  `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`, дефолт `100m`),
   `docker/Dockerfile.ui` (`ENV SYNTH_BACKEND_URL=http://synth-backend:5000`), чарт —
   `ui.extraEnv.SYNTH_BACKEND_URL` (дефолт — Service backend'а текущего релиза).
 - **Шаг B1 — исполнитель хостит MCP-серверы:** `packages/executor/src/mcp.ts` (`ExecutorMcpHost`:

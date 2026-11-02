@@ -213,6 +213,18 @@ export function mountStandaloneRoutes(
     getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
     // ADR-114: контур worktree'ов проекта (список/создание/удаление/prune).
     ...(deps.worktreeService ? { worktrees: deps.worktreeService } : {}),
+    // ADR-118 §4: изменение/удаление проекта — событие в канал каждой сессии
+    // проекта (контейнер — ресурс проекта, ADR-014). Удаление — до delete,
+    // пока сессии ещё перечисляются.
+    sessionManager,
+    onProjectChanged: async (projectId, kind) => {
+      const sessions = await sessionManager.listSessions({ projectId });
+      for (const s of sessions) {
+        eventBus.publish(s.id, kind === 'deleted' ? 'project.deleted' : 'project.updated', {
+          project_id: projectId,
+        });
+      }
+    },
     // ADR-071 §2.4 / ADR-046 §4.5: сид скоупа нового проекта (снимок дефолтов).
     getProjectSeeds: async () => {
       const defaultMcpServers = Object.entries(config.mcpServers ?? {})
@@ -314,6 +326,23 @@ export function mountStandaloneRoutes(
         outsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
         strict: false,
       }),
+      // ADR-118 §4: HTTP-мутация workspace — `fs.changed` в канал сессий
+      // проекта (тот же payload, что у мутирующих тулов; source аддитивен).
+      onFsChanged: async (projectId, change) => {
+        const sessions = await sessionManager.listSessions({ projectId });
+        for (const s of sessions) {
+          eventBus.publish(s.id, 'fs.changed', {
+            session_id: s.id,
+            project_id: projectId,
+            scope: change.scope,
+            ...(change.paths ? { paths: change.paths } : {}),
+            ...(change.op ? { op: change.op } : {}),
+            ...(change.from ? { from: change.from } : {}),
+            ...(change.to ? { to: change.to } : {}),
+            source: 'http',
+          });
+        }
+      },
     },
   ));
 
@@ -415,6 +444,8 @@ export function mountStandaloneRoutes(
     auth, sessionManager, () => getClient(),
     {
       localOwnerResolver: deps.localOwnerResolver,
+      // ADR-118 §4/§7: удаление сообщения публикует `message.deleted`.
+      eventBus,
       // ADR-115: удаление сообщения снимает ссылки на объекты вложений (`blob_refs`).
       ...(deps.storageContext ? { blobRefs: deps.storageContext.blobRefs } : {}),
     },

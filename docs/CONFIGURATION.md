@@ -1999,7 +1999,7 @@ git:
 |------|-----------|--------------|
 | `attachments.enabled` | Мастер-выключатель вложений: `false` — загрузка запрещена (`415 attachments_disabled`), ссылки `attachments` в промпте отклоняются. Env — `SYNTH_ATTACHMENTS_ENABLED` | `true` |
 | `attachments.modalities` | Семейства MIME, включаемые по отдельности: `image`/`pdf`/`audio`/`video`; выключенное семейство → `415 UNSUPPORTED_MEDIA_TYPE` (и на загрузке, и при постановке промпта). Env — `SYNTH_ATTACHMENTS_MODALITIES` (csv **включённых**, напр. `image,pdf`; отсутствующие выключаются) | все `true` |
-| `attachments.maxBytesPerFile` | Предел размера одного файла, байт; превышение → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` | `26214400` (25 МиБ) |
+| `attachments.maxBytesPerFile` | Предел размера одного файла, байт; превышение → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` | `104857600` (100 МиБ) |
 | `attachments.maxFilesPerMessage` | Предел числа вложений в одном сообщении (проверяется при постановке промпта); превышение → `400 VALIDATION_ERROR`. Env — `SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE` | `10` |
 | `attachments.maxBytesPerSession` | Предел суммарного объёма вложений сессии (по частям в истории сообщений); превышение при промпте → `413 PAYLOAD_TOO_LARGE`. Env — `SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION` | `1073741824` (1 ГиБ) |
 | `attachments.maxBytesPerMessage` | Бюджет вложений, которые **инструменты** прикладывают к текущему ходу (`ToolResult.attachments`, ADR-115 §«Медиа из инструментов»): суммарный объём одной инъекции, байт. Не задано — дефолт оркестратора **20 МиБ** (`DEFAULT_TOOL_ATTACHMENT_MAX_BYTES`); лишнее отбрасывается с логом. На лимиты пользовательских вложений (`maxBytesPerFile`/`maxFilesPerMessage`/`maxBytesPerSession`) не влияет. **Только `config.yaml`** (env нет) | не задано → 20 МиБ |
@@ -2012,7 +2012,7 @@ git:
 attachments:
   enabled: true
   modalities: { image: true, pdf: true, audio: true, video: true }
-  maxBytesPerFile: 26214400
+  maxBytesPerFile: 104857600
   maxFilesPerMessage: 10
   maxBytesPerSession: 1073741824
   # Бюджет вложений инструментов на ход (ADR-115); не задано — 20 МиБ.
@@ -2081,6 +2081,57 @@ attachments:
   объектом.
 - Бэкап и перенос: байты входят в файловый периметр (`synth backup` их включает), но
   `synth storage migrate` их **не** переносит — см. [MAINTENANCE.md](./MAINTENANCE.md).
+
+#### Лимиты загрузки и обратный прокси
+
+Загрузка вложения проходит через несколько лимитов, и «режет» её самый маленький из них.
+Транспортный лимит (nginx/Apache/ingress) должен быть **не меньше** прикладного плюс запас на
+multipart-обвязку.
+
+| Уровень | Что | Где задаётся | По умолчанию |
+|---|---|---|---|
+| Приложение | `attachments.maxBytesPerFile` — размер одного файла | `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime `/api/v2/settings/attachments` (UI «Вложения»; `restartRequired: false`) | 100 МиБ (`104857600`) |
+| nginx UI-пода (образ `synth-ui`) | `client_max_body_size` | env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`; в Helm — `ui.clientMaxBodySize` | `100m` |
+| nginx-ingress (k8s) | аннотация `nginx.ingress.kubernetes.io/proxy-body-size` | ставится чартом при `ingress.controller: nginx` из `ui.clientMaxBodySize`; можно переопределить в `ingress.annotations` | `100m` |
+| Traefik | лимита тела нет | — | — |
+| Внешний Apache2 | `LimitRequestBody` (+ mod_security) | конфиг Apache | `0` (без лимита) |
+
+Дефолт nginx (`client_max_body_size 1m`) режет загрузку раньше приложения — поэтому он поднят до
+`100m` и в образе, и в чарте. Если прикладной лимит увеличен через `config.yaml`/UI, транспортный
+лимит нужно поднять не меньше (с запасом на multipart: заголовки + boundary, десятки килобайт).
+Файл размером ровно в прикладной лимит вместе с multipart-обвязкой может превысить `100m` — при
+работе на границе задайте транспортный лимит чуть выше (например `105m`).
+
+**Apache2 как внешний ingress.** Дефолт `LimitRequestBody` в Apache — `0` (без лимита), но если он
+задан — поднимаем под 100 МиБ. `SecRequestBodyLimit`/`SecRequestBodyNoFilesLimit` действуют, только
+если включён `mod_security` (его дефолт `SecRequestBodyLimit` = 12.5 МБ режет загрузки). Таймауты —
+чтобы 100 МБ по мобильной сети не обрывались; WebSocket — для `/ws/events`.
+
+```apache
+<VirtualHost *:443>
+    # Внешний Apache2 как reverse proxy на Synth UI
+    # Дефолт Apache — 0 (без лимита), но если задан — поднять под 100 МиБ:
+    LimitRequestBody 104857600
+    # mod_security (если включён): дефолтный SecRequestBodyLimit = 12.5 МБ режет загрузки
+    # SecRequestBodyLimit 104857600
+    # SecRequestBodyNoFilesLimit 1048576
+    # SecRequestBodyLimitAction Reject
+    # Медленные мобильные загрузки:
+    RequestReadTimeout header=20-40,MinRate=500 body=20-120,MinRate=500
+    ProxyTimeout 300
+    ProxyPass        "/" "http://synth-ui:8080/"
+    ProxyPassReverse "/" "http://synth-ui:8080/"
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^/(.*)$ ws://synth-ui:8080/$1 [P,L]
+</VirtualHost>
+```
+
+- `LimitRequestBody` — лимит на тело запроса; можно задать точечно в `<Location "/api/v2/">`.
+- `SecRequestBodyLimit` / `SecRequestBodyNoFilesLimit` — **только** при включённом `mod_security`;
+  `NoFilesLimit` ограничивает не-файловые части (формы), `Limit` — всё тело.
+- `ProxyTimeout` / `RequestReadTimeout` — чтобы медленная загрузка 100 МБ не обрывалась прокси.
+- WebSocket-правило обязательно: поток событий идёт через `/ws/events` (без него UI теряет live-события).
 
 ### Наблюдаемость (`metrics.*`, ADR-094)
 

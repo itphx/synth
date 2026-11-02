@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
-import type { SessionManager } from '../../index.js';
+import type { SessionManager, EventBus } from '../../index.js';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import type { Session } from '@itphx/synth-shared';
@@ -9,6 +9,7 @@ import { createSessionAccessGuard, createSessionAccessPredicate } from '../sessi
 import type { SessionAccessKind } from '../session-access-guard.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
+import { publishQueueState } from '../../queue/processor.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -58,6 +59,12 @@ export interface MessageRoutesOptions {
    * сиротой и не будет вычищен GC.
    */
   blobRefs?: BlobRefRepository;
+  /**
+   * ADR-118 §4/§7: шина событий сессии. Удаление сообщения публикует
+   * `message.deleted` (адресация по `id`), чтобы другие клиенты убрали
+   * сообщение из ленты. Не задана — публикации нет (поведение прежнее).
+   */
+  eventBus?: EventBus;
 }
 
 const LOCAL_USER_ID = 'local';
@@ -101,6 +108,7 @@ export function createMessageRoutes(
   const messages: MessageRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
   const onMessagesChanged = opts?.onMessagesChanged;
   const blobRefs = opts?.blobRefs;
+  const eventBus = opts?.eventBus;
   const resolveUserId = opts?.resolveUserId ?? (() => LOCAL_USER_ID);
   const accessPredicate = createSessionAccessPredicate({
     canAccess: opts?.canAccess,
@@ -177,7 +185,9 @@ export function createMessageRoutes(
     // ADR-115: id сообщений, которые будут удалены — зафиксировать ДО операции
     // (проверяем существование до splice). Ссылки на объекты вложений снимаются
     // по id: иначе объект вложений никогда не станет сиротой и не уйдёт в GC.
-    const deletedMessageIds = action === 'delete' && blobRefs
+    // ADR-118 §4/§7: по тем же id публикуется `message.deleted` — только реально
+    // удалённые сообщения (несуществующий id в batch — не ошибка и события нет).
+    const deletedMessageIds = action === 'delete'
       ? messageIds.filter((id) => session.messages.some((m) => m.id === id))
       : [];
 
@@ -188,8 +198,33 @@ export function createMessageRoutes(
       state,
     );
 
+    if (blobRefs) {
+      for (const messageId of deletedMessageIds) {
+        await blobRefs.removeByOwner('message', messageId).catch(() => 0);
+      }
+    }
+
     for (const messageId of deletedMessageIds) {
-      await blobRefs!.removeByOwner('message', messageId).catch(() => 0);
+      eventBus?.publish(sessionId, 'message.deleted', { message_id: messageId });
+    }
+
+    // ADR-118 §4: pin/toggle меняют состояние сообщений — событие в канал
+    // сессии на каждый существующий id (несуществующий id в batch — не ошибка
+    // и события не даёт). Состояние берём из перечитанной сессии: `state`
+    // в запросе необязателен, а `toggle` инвертирует текущее значение.
+    if (action === 'pin' || action === 'toggle') {
+      const updated = await sessionManager.getSession(sessionId);
+      for (const messageId of messageIds) {
+        const msg = updated?.messages.find((m) => m.id === messageId);
+        if (!msg) continue;
+        eventBus?.publish(
+          sessionId,
+          'message.updated',
+          action === 'pin'
+            ? { message_id: messageId, pinned: msg.pinned === true }
+            : { message_id: messageId, disabled: msg.disabled === true },
+        );
+      }
     }
 
     await onMessagesChanged?.(sessionId, c);
@@ -233,6 +268,9 @@ export function createMessageRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
+    // ADR-118 §4: состояние сообщения изменилось — другие клиенты обновляют ленту.
+    eventBus?.publish(sessionId, 'message.updated', { message_id: messageId, disabled });
+
     await onMessagesChanged?.(sessionId, c);
 
     return c.json({ disabled, success: true });
@@ -272,6 +310,9 @@ export function createMessageRoutes(
     if (pinned === null) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
+
+    // ADR-118 §4: состояние сообщения изменилось — другие клиенты обновляют ленту.
+    eventBus?.publish(sessionId, 'message.updated', { message_id: messageId, pinned });
 
     await onMessagesChanged?.(sessionId, c);
 
@@ -317,6 +358,11 @@ export function createMessageRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
+    // ADR-118 §4/§7: сообщение удалено — клиенты убирают его из ленты по `id`.
+    // При 404 (removed === false) и в remote-ветке события нет: удалённый
+    // инстанс публикует у себя, мост форвардит.
+    eventBus?.publish(sessionId, 'message.deleted', { message_id: messageId });
+
     await onMessagesChanged?.(sessionId, c);
 
     return c.json({ success: true });
@@ -347,25 +393,34 @@ export function createMessageRoutes(
 
     // ADR-118 §7: точка отсчёта — найденное по id сообщение (позиция берётся
     // от него, а не из пути).
-    const content = await sessionManager.withLock(sessionId, async (locked) => {
+    const retried = await sessionManager.withLock(sessionId, async (locked) => {
       const index = locked.messages.findIndex((m) => m.id === messageId);
       if (index < 0) return null;
       const text = locked.messages[index]!.content;
+      const affectedIds: string[] = [];
       for (let i = index; i < locked.messages.length; i++) {
         locked.messages[i]!.disabled = true;
+        affectedIds.push(locked.messages[i]!.id);
       }
       locked.pendingMessages = [];
       await sessionManager.updateSession(locked);
-      return text;
+      return { text, affectedIds };
     });
 
-    if (content === null) {
+    if (retried === null) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
+    // ADR-118 §4: сообщения от точки повтора отключены, очередь сброшена —
+    // другие клиенты обновляют ленту и счётчики.
+    for (const affectedId of retried.affectedIds) {
+      eventBus?.publish(sessionId, 'message.updated', { message_id: affectedId, disabled: true });
+    }
+    if (eventBus) publishQueueState(eventBus, sessionId, { pendingCount: 0, steerCount: 0 });
+
     await onMessagesChanged?.(sessionId, c);
 
-    return c.json({ content, success: true });
+    return c.json({ content: retried.text, success: true });
   });
 
   // GET /api/v2/messages/:sessionId/:messageId/debug

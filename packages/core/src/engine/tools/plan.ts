@@ -408,6 +408,11 @@ export const planWriteTool: ToolDefinition = {
       };
     }
 
+    // ADR-039/ADR-118 §4: план проекта изменён — другие клиенты перечитывают
+    // сессию (UI обрабатывает `plan.updated` → полный refresh).
+    const sessionId = extra.sessionId ?? ctx.sessionId ?? session?.id;
+    if (sessionId) extra.eventBus?.publish(sessionId, 'plan.updated', {});
+
     return { content: renderPlanMarkdown(plan), metadata: { plan } };
   },
 };

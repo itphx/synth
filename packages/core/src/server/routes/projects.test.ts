@@ -681,3 +681,62 @@ describe('Project API Routes (visibility, ADR-089)', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('Project API Routes — события изменения проекта (ADR-118 §4)', () => {
+  let tmpDir: string;
+  let store: ProjectStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-projects-events-'));
+    store = new ProjectStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('PUT /:id вызывает onProjectChanged(projectId, updated) после сохранения', async () => {
+    const changes: Array<{ projectId: string; kind: string }> = [];
+    const app = new Hono();
+    app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), store, undefined, {
+      onProjectChanged: (projectId, kind) => { changes.push({ projectId, kind }); },
+    }));
+
+    const created = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'P' }),
+    });
+    const project = (await created.json()) as { id: string };
+
+    const res = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'P2' }),
+    });
+    expect(res.status).toBe(200);
+    expect(changes).toEqual([{ projectId: project.id, kind: 'updated' }]);
+  });
+
+  it('DELETE /:id вызывает onProjectChanged(projectId, deleted) ДО удаления', async () => {
+    const observed: Array<{ projectId: string; kind: string; stillExists: boolean }> = [];
+    const app = new Hono();
+    app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), store, undefined, {
+      onProjectChanged: async (projectId, kind) => {
+        observed.push({ projectId, kind, stillExists: (await store.load(projectId)) !== null });
+      },
+    }));
+
+    const created = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'P' }),
+    });
+    const project = (await created.json()) as { id: string };
+
+    const res = await app.request(`/api/v2/projects/${project.id}`, { method: 'DELETE' });
+    expect(res.status).toBe(204);
+    expect(observed).toEqual([{ projectId: project.id, kind: 'deleted', stillExists: true }]);
+    expect(await store.load(project.id)).toBeNull();
+  });
+});

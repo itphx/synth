@@ -771,3 +771,87 @@ describe('FS upload: лимит размера (DoS-защита)', () => {
     await expect(stat(join(workspacesRoot, 'sneaky.bin'))).rejects.toThrow();
   });
 });
+
+describe('FS project-aware routes — fs.changed после HTTP-мутаций (ADR-118 §4)', () => {
+  let tmpDir: string;
+  let workspacesRoot: string;
+  const jsonHeaders = { 'Content-Type': 'application/json' };
+  let changes: Array<{ projectId: string; change: Record<string, unknown> }>;
+
+  function makeApp(): Hono {
+    const app = new Hono();
+    const projects: Record<string, { workspace?: string }> = {
+      p1: { workspace: 'p1' },
+      p2: { workspace: 'p2' },
+    };
+    app.route('/api/v2/fs', createFsRoutes(createMockAuth(), workspacesRoot, undefined, {
+      getOutsideRootPolicy: () => 'deny',
+      getProtectedPathsPolicy: () => NO_PROTECTED,
+      requireProjectId: true,
+      onFsChanged: (projectId, change) => { changes.push({ projectId, change: change as unknown as Record<string, unknown> }); },
+      getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
+        workspacesRoot,
+        getProject: async (id) => projects[id] ?? null,
+        outsideRootPolicy: () => 'deny',
+        strict: true,
+      }),
+    }));
+    return app;
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fs-changed-'));
+    workspacesRoot = join(tmpDir, 'workspaces');
+    await mkdir(join(workspacesRoot, 'p1'), { recursive: true });
+    await mkdir(join(workspacesRoot, 'p2'), { recursive: true });
+    changes = [];
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('write → fs.changed {op:write, paths:[path]}', async () => {
+    const res = await makeApp().request('/api/v2/fs/write', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ projectId: 'p1', path: 'sub/a.txt', content: 'x' }),
+    });
+    expect(res.status).toBe(200);
+    expect(changes).toEqual([
+      { projectId: 'p1', change: { scope: 'file', paths: ['sub/a.txt'], op: 'write' } },
+    ]);
+  });
+
+  it('mkdir → fs.changed {op:mkdir}, delete → {op:delete}', async () => {
+    const app = makeApp();
+    const mk = await app.request('/api/v2/fs/mkdir', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ projectId: 'p1', path: 'newdir' }),
+    });
+    expect(mk.status).toBe(201);
+
+    const del = await app.request('/api/v2/fs?project_id=p1&path=newdir', { method: 'DELETE' });
+    expect(del.status).toBe(200);
+
+    expect(changes).toEqual([
+      { projectId: 'p1', change: { scope: 'file', paths: ['newdir'], op: 'mkdir' } },
+      { projectId: 'p1', change: { scope: 'file', paths: ['newdir'], op: 'delete' } },
+    ]);
+  });
+
+  it('move → fs.changed {op:move, from, to} (и целевому проекту при межпроектном)', async () => {
+    await writeFile(join(workspacesRoot, 'p1', 'a.txt'), 'x');
+    const res = await makeApp().request('/api/v2/fs/move', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ projectId: 'p1', targetProjectId: 'p2', sourcePath: 'a.txt', targetPath: 'a.txt' }),
+    });
+    expect(res.status).toBe(200);
+    expect(changes).toEqual([
+      { projectId: 'p1', change: { scope: 'file', op: 'move', from: 'a.txt', to: 'a.txt' } },
+      { projectId: 'p2', change: { scope: 'file', op: 'move', from: 'a.txt', to: 'a.txt' } },
+    ]);
+  });
+});

@@ -6,6 +6,12 @@
 {{- if and (eq .Values.ingress.controller "nginx") .Values.ingress.redirectHttpToHttps }}
 {{- $_ := set $annotations "nginx.ingress.kubernetes.io/ssl-redirect" "true" }}
 {{- end }}
+{{- /* Лимит тела запроса на nginx-ingress: согласован с nginx UI-пода
+       (`ui.clientMaxBodySize`) и прикладным `attachments.maxBytesPerFile`.
+       У traefik лимита нет — аннотацию не ставим. */}}
+{{- if eq .Values.ingress.controller "nginx" }}
+{{- $_ := set $annotations "nginx.ingress.kubernetes.io/proxy-body-size" (default "100m" .Values.ui.clientMaxBodySize) }}
+{{- end }}
 {{- range $key, $value := .Values.ingress.annotations }}
 {{- $_ := set $annotations $key $value }}
 {{- end }}

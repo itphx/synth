@@ -72,6 +72,19 @@ px-ширинами, действия видны только по hover, чат
 - `public/sw.js` — `synth-shell-v1`: install precache `'/'` + `skipWaiting`; activate `clients.claim` + чистка старых кэшей; fetch — пропуск не-GET/cross-origin/`/api,/ws,/auth,/admin,/health`; навигация network-first → офлайн-заглушка; статика cache-first (stale-while-revalidate).
 - `index.html` — `<link rel="manifest">`, `theme-color`, `apple-touch-icon`, `apple-mobile-web-app-capable/status-bar-style/title`, `viewport-fit=cover`.
 - Регистрация SW только в `import.meta.env.PROD`.
+- **Авто-обновление (2026-11-02).** `PwaUpdatePrompt` применяет обновление **сам**: `SW.waiting` (при
+  живом controller) → `SKIP_WAITING` + перезагрузка по `controllerchange` (страховка — 1.5 с);
+  расхождение серверной версии (`GET /api/v2/health`) с версией бандла → немедленная перезагрузка.
+  Баннер «Позже/Обновить» остался **аварийным фоллбеком**: после `MAX_AUTO_RELOADS = 2` авто-попыток
+  на один ключ (`workerKey`/`ver:<version>`; счётчик — `sessionStorage synth.pwa.autoReload`, смена
+  ключа сбрасывает) авто-применение отключается. Приватный режим, где `sessionStorage` недоступен,
+  работает без защиты от цикла (best-effort).
+- **Связь после сна/фона.** `TransportClient.resume()` пересоздаёт транспорт, если соединение «зомби»
+  (нет активности > 90 с), по `online`/`pageshow`/`visibilitychange:visible`; `transportStore.restart()`
+  обходит guard идемпотентности `connect()`, `ConnectionGuard` вызывает его и закрывает confirm
+  «перезагрузить» при восстановлении. После реконнекта — `resyncAfterReconnect()`: список сессий,
+  закрытие табов удалённых сессий, перечитывание истории активного чата (потерянные за время офлайна
+  события мутаций).
 
 ### Раздача
 - `docker/nginx-ui.conf.template` (шаблон nginx, `envsubst`; адрес backend'а — из `SYNTH_BACKEND_URL`): `location = /manifest.webmanifest { default_type application/manifest+json; add_header Cache-Control "no-cache"; }` и `location = /sw.js { ... no-cache, no-store, must-revalidate }`.
@@ -91,6 +104,7 @@ px-ширинами, действия видны только по hover, чат
 - `packages/ui/src/lib/confirm.ts`, `stores/confirmStore.ts`
 - `packages/ui/src/components/settings/SettingsModal.tsx`, `components/logviewer/LogsModal.tsx`, `components/admin/ModelsPanel.tsx`
 - `packages/ui/src/hooks/usePwaInstall.ts`, `components/layout/PwaInstallButton.tsx`
+- `packages/ui/src/components/layout/PwaUpdatePrompt.tsx`, `ConnectionGuard.tsx`, `lib/api/transport.ts`, `stores/transportStore.ts`
 - `packages/ui/public/{manifest.webmanifest, sw.js, icons/*}`
 - `packages/ui/index.html`
 - `docker/nginx-ui.conf.template`, `packages/core/src/server/app.ts`

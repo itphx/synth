@@ -10,6 +10,7 @@ import { confirm } from '@/lib/confirm'
 import { notifyMessage } from '@/hooks/useNotification'
 import { prepareAttachmentFiles, type PreparedAttachment } from '@/lib/attachments/prepare'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
+import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
 import { MentionPopup } from './MentionPopup'
 import { CommandAutocomplete } from './CommandAutocomplete'
 import { ModelSelector } from './ModelSelector'
@@ -17,7 +18,7 @@ import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
 import { ReasoningLevelSelector } from './ReasoningLevelSelector'
 import { AttachmentButton } from './attachments/AttachmentButton'
-import { AttachedFilesList } from './attachments/AttachedFilesList'
+import { AttachedFilesList, attachmentErrorText } from './attachments/AttachedFilesList'
 import { AttachmentGallery } from './attachments/AttachmentGallery'
 import { useAttachmentDrop } from './attachments/useAttachmentDrop'
 import { useAttachmentPaste } from './attachments/useAttachmentPaste'
@@ -234,7 +235,15 @@ export function ChatInput({
   // отправка — только кнопкой «Отправить». На устройствах с тачем это также
   // касается десктопов с тачскрином (isTouch = pointer: coarse).
   const { isTouch } = useDevice()
-  const [value, setValue] = useState('')
+  // Текст черновика живёт в сторе (персист в localStorage): переживает
+  // reload, выгрузку PWA, смену сессии и перемонтирование композера.
+  const value = useComposerDraftsStore((state) => state.textBySession[sessionId] ?? '')
+  const setText = useComposerDraftsStore((state) => state.setText)
+  // Алиас сохраняет прежние вызовы `setValue(...)` в компоненте.
+  const setValue = useCallback(
+    (next: string) => setText(sessionId, next),
+    [sessionId, setText],
+  )
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
   // Instance-wide лимиты заметок: заранее отсекаем заведомо отклоняемый запрос
   // (сервер всё равно проверит — 409/400), кнопка гаснет у предела.
@@ -279,18 +288,22 @@ export function ChatInput({
   // ADR-115: черновики вложений сессии (загрузка, чипы, ошибки) живут в сторе.
   const addFiles = useAttachmentsStore((state) => state.addFiles)
   const clearAttachments = useAttachmentsStore((state) => state.clear)
-  const disposeAttachments = useAttachmentsStore((state) => state.dispose)
   const draftAttachments = useAttachmentsStore((state) => state.bySession[sessionId])
   // Незавершённая загрузка блокирует отправку: серверу нужны готовые `partId`.
   const pendingUpload = useAttachmentsStore((state) => state.hasPending(sessionId))
+  // Ошибка загрузки тоже блокирует отправку: пока вложение не загружено,
+  // сообщение ушло бы без него. Пользователь убирает/повторяет загрузку.
+  const failed = useAttachmentsStore((state) => state.hasFailed(sessionId))
   const [gallery, setGallery] = useState<{ open: boolean; index: number }>({ open: false, index: 0 })
 
   /**
-   * Освобождение object URL при смене сессии и размонтировании композера.
-   * `dispose` удаляет и сами черновики: они принадлежат этой сессии и её
-   * композеру, переносить их в другую сессию нельзя (attachmentDrafts — later).
+   * ADR-115: подъём черновиков сессии из хранилища байтов (IndexedDB).
+   * Композер больше не удаляет черновики при размонтировании — они должны
+   * переживать перемонтирование и reload; `hydrate` идемпотентен.
    */
-  useEffect(() => () => disposeAttachments(sessionId), [sessionId, disposeAttachments])
+  useEffect(() => {
+    void useAttachmentsStore.getState().hydrate(sessionId)
+  }, [sessionId])
 
   const autoResize = useCallback(() => {
     const el = textareaRef.current
@@ -325,7 +338,7 @@ export function ChatInput({
       useChatStore.getState().clearRetryInput(sessionId)
       setTimeout(() => textareaRef.current?.focus(), 0)
     }
-  }, [retryText, sessionId])
+  }, [retryText, sessionId, setValue])
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value
@@ -363,7 +376,7 @@ export function ChatInput({
     setCommandState(null)
     setCommandMatches(0)
     textareaRef.current?.focus()
-  }, [])
+  }, [setValue])
 
   const handleCommandMatches = useCallback((count: number) => {
     setCommandMatches(count)
@@ -407,7 +420,7 @@ export function ChatInput({
     // браузер сбрасывал каретку в конец текста.
     pendingCaretRef.current = caret + inserted.length
     setValue(nextValue)
-  }, [])
+  }, [setValue])
 
   /** ADR-115: убрать маркеры удалённых чипов (каскад группы — все имена). */
   const removeAttachmentMarkers = useCallback((names: string[]) => {
@@ -417,7 +430,7 @@ export function ChatInput({
     if (next === valueRef.current) return
     valueRef.current = next
     setValue(next)
-  }, [])
+  }, [setValue])
 
   const handleMouseUp = () => {
     const el = textareaRef.current
@@ -551,12 +564,34 @@ export function ChatInput({
         }
       }
 
+      // Снимок id до добавления: после `addFiles` отличаем новые элементы
+      // (в т.ч. отклонённые по лимиту) от уже висевших в композере.
+      const knownIds = new Set(
+        (useAttachmentsStore.getState().bySession[sessionId] ?? []).map((item) => item.id),
+      )
+
       if (plain.length > 0) await addFiles(sessionId, plain)
       for (const [groupId, groupFiles] of groups) {
         await addFiles(sessionId, groupFiles, { groupId })
       }
 
       insertMediaMarkers(markers)
+
+      const failedItems = (useAttachmentsStore.getState().bySession[sessionId] ?? []).filter(
+        (item) => !knownIds.has(item.id) && item.upload === 'error',
+      )
+      if (failedItems.length > 0) {
+        // Один тост на пачку: ошибки видны и в чипах (оверлей/подсветка),
+        // а отправка заблокирована до удаления или повтора.
+        const tooLarge = failedItems.some((item) => item.error === 'too_large')
+        notifyMessage({
+          text: attachmentErrorText(t, tooLarge ? 'too_large' : 'upload_failed'),
+          type: 'error',
+          category: 'error',
+          sessionId,
+        })
+        return
+      }
 
       notifyMessage({
         text: t('chat.attachments.added', { count: prepared.length }),
@@ -595,6 +630,8 @@ export function ChatInput({
   const handleSend = useCallback(async () => {
     const text = value.trim()
     if (!text) return
+    // Ошибка загрузки блокирует отправку: вложение не должно «потеряться».
+    if (useAttachmentsStore.getState().hasFailed(sessionId)) return
     // ADR-115: пока вложение не загружено, отправлять нечего — серверу нужны
     // готовые `partId`; кнопка в этом состоянии заблокирована.
     if (useAttachmentsStore.getState().hasPending(sessionId)) return
@@ -610,26 +647,28 @@ export function ChatInput({
       if (!ok) return
     }
 
+    try {
+      await sendWithAttachments(text, parts)
+    } catch {
+      // Ошибку показал вызывающий код (ChatTab). Текст и вложения остаются в
+      // композере: пользователь может повторить отправку без потерь.
+      return
+    }
+
+    // Очистка — только после успешной отправки: при ошибке черновик не теряем.
     setValue('')
     setCommandState(null)
     setCommandMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
-
-    try {
-      await sendWithAttachments(text, parts)
-    } catch {
-      // Ошибку показал вызывающий код (ChatTab). Вложения оставляем в
-      // композере: пользователь может повторить отправку без повторной загрузки.
-      return
-    }
     clearAttachments(sessionId)
-  }, [value, agents, sendWithAttachments, sessionId, clearAttachments])
+  }, [value, agents, sendWithAttachments, sessionId, clearAttachments, setValue])
 
   const handleEnqueue = useCallback(async () => {
     const text = value.trim()
     if (!text) return
+    if (useAttachmentsStore.getState().hasFailed(sessionId)) return
     if (useAttachmentsStore.getState().hasPending(sessionId)) return
 
     const parts = splitMessageWithTags(text, agents)
@@ -643,13 +682,6 @@ export function ChatInput({
       if (!ok) return
     }
 
-    setValue('')
-    setCommandState(null)
-    setCommandMatches(0)
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-
     // Отправка во время активного хода (ADR-104): режим задаёт вызывающий код
     // (`effectiveMode`; в UI — `queue`, то есть «в очередь»). Вмешательство в
     // ход (`steer`) композер не выставляет — это возможность API.
@@ -658,8 +690,16 @@ export function ChatInput({
     } catch {
       return
     }
+
+    // Очистка — только после успешной постановки в очередь/отправки.
+    setValue('')
+    setCommandState(null)
+    setCommandMatches(0)
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
     clearAttachments(sessionId)
-  }, [value, agents, sendWithAttachments, sessionId, clearAttachments])
+  }, [value, agents, sendWithAttachments, sessionId, clearAttachments, setValue])
 
   const handleCreateNote = () => {
     const text = value.trim()
@@ -831,9 +871,15 @@ export function ChatInput({
               <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   onClick={handleEnqueue}
-                  disabled={!value.trim() || pendingUpload}
+                  disabled={!value.trim() || pendingUpload || failed}
                   className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={pendingUpload ? t('chat.attachments.waitUpload') : t('chat.input.enqueue')}
+                  title={
+                    failed
+                      ? t('chat.attachments.fixErrors')
+                      : pendingUpload
+                        ? t('chat.attachments.waitUpload')
+                        : t('chat.input.enqueue')
+                  }
                 >
                   <Icon name="arrow-up" className="size-5" />
                 </button>
@@ -864,9 +910,15 @@ export function ChatInput({
                 </button>
                 <button
                   onClick={handleSend}
-                  disabled={!value.trim() || pendingUpload}
+                  disabled={!value.trim() || pendingUpload || failed}
                   className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={pendingUpload ? t('chat.attachments.waitUpload') : t('chat.input.send')}
+                  title={
+                    failed
+                      ? t('chat.attachments.fixErrors')
+                      : pendingUpload
+                        ? t('chat.attachments.waitUpload')
+                        : t('chat.input.send')
+                  }
                 >
                   <Icon name="send-plane" className="size-5" />
                 </button>

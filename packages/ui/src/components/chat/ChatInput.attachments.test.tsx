@@ -37,10 +37,12 @@ vi.mock('./ReasoningLevelSelector', () => ({ ReasoningLevelSelector: () => null 
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { clearAllComposerDrafts } from '@/lib/composer-drafts'
 import { ChatInput } from './ChatInput'
 import { useChatStore } from '@/stores/chatStore'
 import { useSkillsStore } from '@/stores/skillsStore'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
+import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -144,6 +146,10 @@ beforeEach(() => {
   useChatStore.setState({ retryInputBySession: {} })
   useSkillsStore.setState({ commands: null, commandsLoading: false, commandsError: null })
   useAttachmentsStore.setState({ bySession: {} })
+  // Текст композера теперь общий на сессию (стор + localStorage): между тестами
+  // файла его нужно сбрасывать, иначе прошлый черновик попадёт в новый экземпляр.
+  clearAllComposerDrafts()
+  useComposerDraftsStore.setState({ textBySession: {} })
   useProvidersStore.setState({
     models: [],
     selectedProviderName: null,

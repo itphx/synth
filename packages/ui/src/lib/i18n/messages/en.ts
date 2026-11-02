@@ -1525,6 +1525,7 @@ export const dict = {
   'chat.attachments.gallery.counter': '{index} / {total}',
   'chat.attachments.dropHint': 'Drop files to attach',
   'chat.attachments.waitUpload': 'Wait for the attachments to finish uploading',
+  'chat.attachments.fixErrors': 'Remove failed attachments or retry the upload',
   'chat.attachments.added': '{count, plural, one {Attached # file} other {Attached # files}}',
   'chat.attachments.error.prepare': 'Failed to prepare the file',
   'chat.attachments.modelUnsupported':

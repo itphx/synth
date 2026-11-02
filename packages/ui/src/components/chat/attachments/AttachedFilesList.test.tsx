@@ -229,4 +229,42 @@ describe('AttachedFilesList', () => {
     expect(item.upload).toBe('ready')
     expect(item.partId).toBe('srv_broken.txt')
   })
+
+  it('ошибка изображения — заметный оверлей с полным текстом и повтором', async () => {
+    useAttachmentsStore.setState({
+      bySession: {
+        [SESSION]: [
+          draft({
+            name: 'broken.png',
+            mimeType: 'image/png',
+            previewUrl: 'blob:broken',
+            upload: 'error',
+            error: 'too_large',
+            partId: undefined,
+          }),
+        ],
+      },
+    })
+
+    const container = await renderList()
+
+    // Превью и тач-таргет остаются на месте.
+    expect(container.querySelector('[data-testid="attachment-preview"] img')?.getAttribute('src')).toBe(
+      'blob:broken',
+    )
+
+    const overlay = container.querySelector('[data-testid="attachment-image-error"]')
+    expect(overlay).toBeTruthy()
+    expect(overlay?.getAttribute('title')).toBe('File is larger than 100.0 MB')
+    expect(overlay?.textContent).toContain('File is larger than 100.0 MB')
+
+    const retryButton = overlay?.querySelector('[aria-label="Retry upload"]') as HTMLElement | null
+    expect(retryButton).toBeTruthy()
+
+    await click(retryButton!)
+
+    const item = useAttachmentsStore.getState().bySession[SESSION]![0]!
+    expect(item.upload).toBe('ready')
+    expect(item.partId).toBe('srv_broken.png')
+  })
 })

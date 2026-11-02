@@ -122,7 +122,18 @@ export interface ProjectRoutesOptions {
    * когда известно, id записи (ADR-114 §6).
    */
   onWorktreeUpdated?: (projectId: string, detail: WorktreeUpdateDetail) => void;
+  /**
+   * ADR-118 §4: проект изменён (`PUT /:id`) или удалён (`DELETE /:id`) —
+   * уведомить сессии проекта. Реализация в точке сборки публикует
+   * `project.updated`/`project.deleted` в канал каждой сессии проекта
+   * (инвентарь/контейнер — ресурс проекта, ADR-014). Для `deleted` колбэк
+   * вызывается **до** удаления, пока сессии ещё перечисляются.
+   */
+  onProjectChanged?: (projectId: string, kind: ProjectChangeKind) => void | Promise<void>;
 }
+
+/** Вид изменения проекта для `ProjectRoutesOptions.onProjectChanged`. */
+export type ProjectChangeKind = 'updated' | 'deleted';
 
 /**
  * План проекта (ADR-039): структурированный объект ProjectPlan, создаётся/редактируется
@@ -470,6 +481,9 @@ export function createProjectRoutes(
     }
     project.updatedAt = new Date().toISOString();
     await store.save(project);
+    // ADR-118 §4: проект изменён — сессии проекта получают `project.updated`
+    // (другие клиенты перечитывают проект/план/настройки).
+    await opts.onProjectChanged?.(project.id, 'updated');
     return c.json(serializeProject(project));
   });
 
@@ -497,6 +511,8 @@ export function createProjectRoutes(
     if (!canManage(c, project, userId)) {
       return jsonForbidden(c);
     }
+    // ADR-118 §4: уведомляем сессии проекта **до** удаления (пока они видны).
+    await opts.onProjectChanged?.(project.id, 'deleted');
     await store.delete(project.id);
     return c.body(null, 204);
   });

@@ -249,6 +249,15 @@ describe('plan_read / plan_list / plan_write', () => {
     expect(result.content).toContain('[high]');
   });
 
+  it('plan_write публикует plan.updated в канал сессии', async () => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(sessionId, (e) => { events.push({ type: e.type, data: e.data }); });
+
+    const result = await planWriteTool.execute({ action: 'create_item', title: 'Шаг 1' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect(events).toEqual([{ type: 'plan.updated', data: {} }]);
+  });
+
   it('plan_write без проекта — ошибка', async () => {
     await sessionManager.withLock(sessionId, async (s) => {
       s.projectId = undefined;

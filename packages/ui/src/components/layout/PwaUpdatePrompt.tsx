@@ -20,20 +20,64 @@ function workerKey(worker: ServiceWorker): string {
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 /** Простой, после которого первое действие пользователя провоцирует проверку. */
 const IDLE_THRESHOLD_MS = 60 * 60 * 1000
+/** Страховка: controllerchange не пришёл — перезагружаемся сами. */
+const RELOAD_FALLBACK_MS = 1500
+/** Сколько авто-попыток подряд допускается на один и тот же ключ обновления. */
+const MAX_AUTO_RELOADS = 2
+/** Ключ sessionStorage с защитой от цикла авто-обновления. */
+const AUTO_RELOAD_STORAGE_KEY = 'synth.pwa.autoReload'
+
+interface AutoReloadRecord {
+  /** Ключ обновления: `workerKey(waiting)` либо `ver:<version>`. */
+  key: string
+  /** Сколько авто-попыток уже сделано для этого ключа. */
+  count: number
+}
+
+/** Прошлая авто-попытка: приватный режим может запретить sessionStorage. */
+function readAutoReload(): AutoReloadRecord | null {
+  try {
+    const raw = window.sessionStorage.getItem(AUTO_RELOAD_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<AutoReloadRecord> | null
+    if (typeof parsed?.key !== 'string' || typeof parsed.count !== 'number') return null
+    return { key: parsed.key, count: parsed.count }
+  } catch {
+    return null
+  }
+}
+
+function writeAutoReload(record: AutoReloadRecord): void {
+  try {
+    window.sessionStorage.setItem(AUTO_RELOAD_STORAGE_KEY, JSON.stringify(record))
+  } catch {
+    // приватный режим/квота — авто-обновление работает без защиты от цикла
+  }
+}
 
 /**
- * Баннер обновления PWA/SPA. Показывается в двух случаях:
- * — service worker установил новую версию и ждёт команды (skipWaiting убран из install);
- * — серверная версия (публичный `GET /api/v2/health`) отличается от версии текущего бандла.
+ * Авто-обновление PWA/SPA. Обнаружив новую версию, приложение применяет её
+ * **само**, без баннера и вопроса:
+ * — service worker установил новую версию и ждёт команды (`waiting` при живом
+ *   controller) → `SKIP_WAITING` + перезагрузка по `controllerchange` (страховка
+ *   через 1.5 с);
+ * — серверная версия (публичный `GET /api/v2/health`) отличается от версии
+ *   текущего бандла → немедленная перезагрузка страницы.
  *
- * Версия проверяется при монтировании, раз в 30 минут, при возврате в приложение и
- * на первом действии после длительного простоя — без ручной перезагрузки. Кнопка
- * «Обновить» отправляет SKIP_WAITING (если воркер ждёт), иначе перезагружает страницу.
- * «Позже» скрывает баннер до появления новой версии. Компонент расположен вне
- * `AuthGate`, поэтому работает и на экране входа.
+ * Версия проверяется при монтировании, раз в 30 минут, при возврате в
+ * приложение и на первом действии после длительного простоя.
+ *
+ * Защита от цикла: в `sessionStorage` хранится ключ обновления и число
+ * авто-попыток. После `MAX_AUTO_RELOADS` попыток на тот же ключ авто-применение
+ * отключается — показывается прежний баннер с кнопками «Позже»/«Обновить»
+ * (аварийный фоллбек). При смене ключа счётчик сбрасывается.
+ *
+ * Компонент расположен вне `AuthGate`, поэтому авто-обновление работает и на
+ * экране входа.
  */
 export function PwaUpdatePrompt() {
   const { t } = useI18n()
+  /** Баннер показывается только в аварийном фоллбеке (лимит авто-попыток). */
   const [updateReady, setUpdateReady] = useState(false)
   /** Перезагружаем только если обновление инициировал пользователь. */
   const reloadOnControllerChange = useRef(false)
@@ -42,7 +86,47 @@ export function PwaUpdatePrompt() {
   /** Текущая регистрация SW и последняя обнаруженная серверная версия. */
   const registrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const latestVersion = useRef<string | null>(null)
+  /** Авто-применение уже запрошено в этой загрузке страницы (по ключу). */
+  const autoAttempted = useRef<Set<string>>(new Set())
 
+  /** Применить обновление без вопроса. */
+  const applyUpdate = useCallback((waiting: ServiceWorker | null) => {
+    if (waiting) {
+      reloadOnControllerChange.current = true
+      waiting.postMessage({ type: 'SKIP_WAITING' })
+      // страховка: если controllerchange не придёт — перезагружаемся сами
+      window.setTimeout(() => {
+        reloadOnControllerChange.current = false
+        window.location.reload()
+      }, RELOAD_FALLBACK_MS)
+      return
+    }
+    // ждать нечего (например, расхождение версий) — перезагружаем страницу
+    setUpdateReady(false)
+    window.location.reload()
+  }, [])
+
+  /**
+   * Попробовать применить обновление автоматически.
+   * `true` — применять/уже применено (баннер не нужен), `false` — лимит
+   * авто-попыток исчерпан (показываем аварийный баннер).
+   */
+  const tryAutoApply = useCallback(
+    (key: string, waiting: ServiceWorker | null): boolean => {
+      if (autoAttempted.current.has(key)) return true
+      const prev = readAutoReload()
+      const count = prev && prev.key === key ? prev.count : 0
+      if (count >= MAX_AUTO_RELOADS) return false
+      autoAttempted.current.add(key)
+      // Смена ключа (новый воркер/версия) — счётчик начинается с 1.
+      writeAutoReload({ key, count: count + 1 })
+      applyUpdate(waiting)
+      return true
+    },
+    [applyUpdate],
+  )
+
+  /** Ручное обновление из аварийного баннера. */
   const handleUpdate = useCallback(async () => {
     const reg = await navigator.serviceWorker.getRegistration()
     if (reg?.waiting) {
@@ -52,7 +136,7 @@ export function PwaUpdatePrompt() {
       window.setTimeout(() => {
         reloadOnControllerChange.current = false
         window.location.reload()
-      }, 1500)
+      }, RELOAD_FALLBACK_MS)
     } else {
       // ждать нечего (например, расхождение версий) — перезагружаем страницу
       setUpdateReady(false)
@@ -89,16 +173,34 @@ export function PwaUpdatePrompt() {
       removeListeners.push(() => target.removeEventListener(type, handler, options))
     }
 
-    // Единый пересчёт видимости баннера по обоим источникам (SW.waiting и версия).
+    // Единый пересчёт по обоим источникам (SW.waiting и версия): сначала
+    // авто-применение, баннер — только когда авто-попытки исчерпаны.
     const recompute = () => {
       if (cancelled) return
       const waiting = registration?.waiting
       const swKey = waiting && navigator.serviceWorker.controller ? workerKey(waiting) : null
       const verKey = versionMismatch && latestVersion.current ? `ver:${latestVersion.current}` : null
-      const visible =
-        (swKey !== null && !dismissed.current.has(swKey)) ||
-        (verKey !== null && !dismissed.current.has(verKey))
-      setUpdateReady(visible)
+
+      if (swKey) {
+        if (tryAutoApply(swKey, waiting ?? null)) {
+          setUpdateReady(false)
+          return
+        }
+        // Лимит на этот воркер — аварийный баннер, версию не трогаем.
+        setUpdateReady(!dismissed.current.has(swKey))
+        return
+      }
+
+      if (verKey) {
+        if (tryAutoApply(verKey, null)) {
+          setUpdateReady(false)
+          return
+        }
+        setUpdateReady(!dismissed.current.has(verKey))
+        return
+      }
+
+      setUpdateReady(false)
     }
 
     // Сверка версии сервера с версией текущего бандла (публичный health).
@@ -192,7 +294,7 @@ export function PwaUpdatePrompt() {
       for (const remove of removeListeners) remove()
       registrationRef.current = null
     }
-  }, [])
+  }, [tryAutoApply])
 
   if (!updateReady) return null
 

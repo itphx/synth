@@ -24,8 +24,14 @@ export type EventType =
   | 'session.reference.added'
   | 'session.reference.removed'
   | 'session.messages.merged'
+  // История сессии очищена (`POST /sessions/:id/clear`): остались только
+  // закреплённые сообщения, очередь и счётчики сброшены. Канал сессии.
+  | 'session.messages.cleared'
   | 'session.moved'
   | 'project.updated'
+  // Проект удалён (`DELETE /projects/:id`): публикуется в каналы его сессий
+  // **до** удаления, пока состав сессий ещё перечисляется.
+  | 'project.deleted'
   // ADR-114: инвентарь git-worktree'ов проекта изменился (создан/удалён/
   // привязан/отвязан). Событие — в существующей шине (ADR-024), новых
   // транспортных каналов нет.
@@ -50,6 +56,10 @@ export type EventType =
   // `message.delivered` (материализации в истории). `ord` у снимка нет:
   // он выдаётся только при записи в историю.
   | 'message.enqueued'
+  // ADR-118 §4/§7: сообщение удалено из истории (`DELETE /messages/:sessionId/:messageId`
+  // и batch `action: 'delete'`). Событие — в канале сессии, адресация по `id`
+  // (мутации адресуются по id, §7); клиенты убирают сообщение из ленты.
+  | 'message.deleted'
   | 'turn.started'
   | 'turn.finished'
   | 'step.started'
@@ -97,6 +107,9 @@ export type EventType =
   | 'message.quality_check'
   | 'session.routing_category'
   | 'plan.approved'
+  // ADR-039/ADR-118 §4: план проекта изменён (`plan_write`) — клиенты
+  // перечитывают сессию (полный refresh). Канал сессии.
+  | 'plan.updated'
   | 'todos.updated'
   | 'skill.invoked'
   | 'command.invoked'
@@ -217,3 +230,29 @@ export type PartDeltaEventData = PartDeltaPayload;
 
 /** Payload события `part.updated` (ADR-118 §4) — часть обновлена (upsert). */
 export type PartUpdatedEventData = PartUpdatedPayload;
+
+/** Payload события `message.deleted` (ADR-118 §4/§7) — удалённое сообщение. */
+export type MessageDeletedEventData = {
+  /** id удалённого сообщения (мутации адресуются по id, ADR-118 §7). */
+  message_id: string;
+};
+
+/** Payload события `message.updated` (ADR-118 §4) — состояние сообщения изменилось. */
+export type MessageUpdatedEventData = {
+  /** id изменённого сообщения. */
+  message_id: string;
+  /** Новое значение `pinned` (событие приходит от pin/batch pin). */
+  pinned?: boolean;
+  /** Новое значение `disabled` (toggle/batch toggle/retry). */
+  disabled?: boolean;
+};
+
+/** Payload события `session.messages.cleared` — история очищена, кроме закреплённых. */
+export type SessionMessagesClearedEventData = {
+  session_id: string;
+};
+
+/** Payload событий `project.updated`/`project.deleted` — проект сессии изменился. */
+export type ProjectChangedEventData = {
+  project_id: string;
+};

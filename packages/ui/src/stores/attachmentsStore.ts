@@ -2,12 +2,13 @@
 
 import { create } from 'zustand'
 import { uploadSessionAttachment } from '@/lib/api/attachments'
+import { getDraftAttachmentStorage } from '@/lib/draft-attachments'
 
 /** Лимит композера: сколько файлов можно приложить к одному сообщению. */
 export const MAX_FILES_PER_MESSAGE = 10
 
-/** Лимит одного файла: 25 МиБ. */
-export const MAX_FILE_BYTES = 25 * 1024 * 1024
+/** Лимит одного файла: 100 МиБ (паритет с серверным `attachments.maxBytesPerFile`). */
+export const MAX_FILE_BYTES = 100 * 1024 * 1024
 
 /** Состояние загрузки одного элемента композера. */
 export type AttachmentUploadState = 'pending' | 'uploading' | 'ready' | 'error'
@@ -67,12 +68,22 @@ interface AttachmentsState {
   readyPartIds: (sessionId: string) => string[]
   /** Есть незавершённые загрузки — отправку блокируем. */
   hasPending: (sessionId: string) => boolean
+  /** Есть элементы с ошибкой — отправку блокируем до удаления/повтора. */
+  hasFailed: (sessionId: string) => boolean
+  /**
+   * Восстановить черновики сессии из хранилища байтов (reload/перемонтирование).
+   * Идемпотентно: повторный вызов для той же сессии — no-op.
+   */
+  hydrate: (sessionId: string) => Promise<void>
   /** Освободить object URL при размонтировании композера. */
   dispose: (sessionId: string) => void
 }
 
 /** Активные загрузки: ключ `${sessionId}::${id}`. Модульный скоуп — вне React. */
 const controllers = new Map<string, AbortController>()
+
+/** Сессии, черновики которых уже подняты из хранилища байтов (защита от повторов). */
+const hydrated = new Set<string>()
 
 /** Счётчик для фоллбек-id, когда `crypto.randomUUID` недоступен. */
 let localIdCounter = 0
@@ -98,6 +109,17 @@ function createPreviewUrl(file: File, mimeType: string): string {
   if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return ''
   try {
     return URL.createObjectURL(file)
+  } catch {
+    return ''
+  }
+}
+
+/** Предпросмотр восстановленного из хранилища изображения (Blob → object URL). */
+function createPreviewUrlFromBlob(blob: Blob, mimeType: string): string {
+  if (!isImage(mimeType)) return ''
+  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return ''
+  try {
+    return URL.createObjectURL(blob)
   } catch {
     return ''
   }
@@ -167,19 +189,40 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
         signal: controller.signal,
       })
       if (controller.signal.aborted) return
+      const mimeType = uploaded.mime || item.mimeType
+      const size = uploaded.size || item.size
+      const name = uploaded.name || item.name
       patch(sessionId, id, {
         upload: 'ready',
         error: undefined,
         partId: uploaded.id,
         blobPath: uploaded.blobPath,
-        mimeType: uploaded.mime || item.mimeType,
-        size: uploaded.size || item.size,
-        name: uploaded.name || item.name,
+        mimeType,
+        size,
+        name,
       })
-    } catch {
+      // Байты уже в хранилище — фиксируем результат загрузки, чтобы после
+      // reload черновик поднялся сразу готовым (`ready`).
+      void getDraftAttachmentStorage()
+        .patch(sessionId, id, {
+          partId: uploaded.id,
+          blobPath: uploaded.blobPath,
+          mimeType,
+          size,
+          name,
+          error: undefined,
+        })
+        .catch(() => {})
+    } catch (err) {
       // Отмена (clear/remove) — не ошибка: элемент уже уходит из состояния.
       if (controller.signal.aborted) return
-      patch(sessionId, id, { upload: 'error', error: 'upload_failed' })
+      // 413 — серверный лимит файла (может быть меньше локального UX-предела).
+      const reason: AttachmentErrorReason =
+        (err as { status?: number } | null)?.status === 413 ? 'too_large' : 'upload_failed'
+      patch(sessionId, id, { upload: 'error', error: reason })
+      void getDraftAttachmentStorage()
+        .patch(sessionId, id, { error: reason })
+        .catch(() => {})
     } finally {
       const key = controllerKey(sessionId, id)
       if (controllers.get(key) === controller) controllers.delete(key)
@@ -232,9 +275,32 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
         },
       }))
 
-      await Promise.all(
-        drafts.filter((draft) => draft.upload === 'pending').map((draft) => upload(sessionId, draft.id)),
+      // Байты сразу в хранилище: reload/выгрузка PWA не должны терять вложения
+      // (включая отклонённые по лимиту — пользователь видит причину в чипе).
+      const storage = getDraftAttachmentStorage()
+      const persistence = drafts.map((draft) =>
+        storage
+          .put({
+            sessionId,
+            draftId: draft.id,
+            name: draft.name,
+            mimeType: draft.mimeType,
+            size: draft.size,
+            blob: draft.file as File,
+            groupId: draft.groupId,
+            groupSize: draft.groupSize,
+            error: draft.error,
+          })
+          .catch(() => {}),
       )
+
+      // Загрузки стартуют сразу (до ожидания персиста) — состояние `uploading`
+      // выставляется синхронно, как и раньше.
+      const uploads = drafts
+        .filter((draft) => draft.upload === 'pending')
+        .map((draft) => upload(sessionId, draft.id))
+
+      await Promise.all([...persistence, ...uploads])
     },
 
     remove(sessionId, id) {
@@ -245,10 +311,13 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
         ? list.filter((item) => item.groupId === target.groupId)
         : [target]
       const removedIds = new Set(removed.map((item) => item.id))
+      const storage = getDraftAttachmentStorage()
 
       for (const item of removed) {
         abortUpload(sessionId, item.id)
         revokePreviewUrl(item)
+        // Удаление из хранилища — best-effort, UI не ждёт.
+        void storage.remove(sessionId, item.id).catch(() => {})
       }
 
       set((state) => {
@@ -263,6 +332,7 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
         abortUpload(sessionId, item.id)
         revokePreviewUrl(item)
       }
+      void getDraftAttachmentStorage().removeSession(sessionId).catch(() => {})
       set((state) => ({ bySession: { ...state.bySession, [sessionId]: [] } }))
     },
 
@@ -333,12 +403,79 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       )
     },
 
+    hasFailed(sessionId) {
+      return (get().bySession[sessionId] ?? []).some((item) => item.upload === 'error')
+    },
+
+    async hydrate(sessionId) {
+      // Один раз на сессию: повторные монтирования композера не перечитывают
+      // хранилище и не плодят object URL.
+      if (hydrated.has(sessionId)) return
+      hydrated.add(sessionId)
+
+      const records = await getDraftAttachmentStorage()
+        .list(sessionId)
+        .catch(() => [])
+      if (records.length === 0) return
+
+      const existing = get().bySession[sessionId] ?? []
+      const known = new Set(existing.map((item) => item.id))
+      const restored: DraftAttachment[] = []
+
+      for (const record of records) {
+        if (known.has(record.draftId)) continue
+        if (existing.length + restored.length >= MAX_FILES_PER_MESSAGE) break
+
+        const mimeType = record.mimeType || 'application/octet-stream'
+        let file: File | undefined
+        try {
+          file = new File([record.blob], record.name, { type: mimeType })
+        } catch {
+          // Окружение без конструктора File — восстановим без байтов (retry не сработает).
+          file = undefined
+        }
+
+        restored.push({
+          id: record.draftId,
+          file,
+          name: record.name,
+          mimeType,
+          size: record.size,
+          previewUrl: createPreviewUrlFromBlob(record.blob, mimeType),
+          groupId: record.groupId,
+          groupSize: record.groupSize,
+          // Готовое вложение важнее ошибки: после частичного сбоя повторной
+          // загрузки быть не должно.
+          upload: record.partId ? 'ready' : record.error ? 'error' : 'pending',
+          error: record.partId ? undefined : record.error,
+          partId: record.partId,
+          blobPath: record.blobPath,
+        })
+      }
+
+      if (restored.length === 0) return
+
+      set((state) => ({
+        bySession: {
+          ...state.bySession,
+          [sessionId]: [...(state.bySession[sessionId] ?? existing), ...restored],
+        },
+      }))
+
+      // Незавершённые загрузки дозапускаем (fire-and-forget): пользователь
+      // не должен вручную жать «Повторить» после reload.
+      for (const item of restored) {
+        if (item.upload === 'pending') void upload(sessionId, item.id)
+      }
+    },
+
     dispose(sessionId) {
       const list = get().bySession[sessionId] ?? []
       for (const item of list) {
         abortUpload(sessionId, item.id)
         revokePreviewUrl(item)
       }
+      hydrated.delete(sessionId)
       set((state) => {
         const next = { ...state.bySession }
         delete next[sessionId]

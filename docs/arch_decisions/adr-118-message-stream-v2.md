@@ -389,8 +389,41 @@ assistant-сообщение хода — это сообщение **после
   `streamId`/`contentStarted` после reload (`restoreLiveTurnFromSession`); закрытие хода по
   `stream.error`/`stream.cancelled`.
 
+## Доводка 2026-11-02 — reload/переключение вкладок и синхронизация мутаций
+
+- **Живой шаг, у которого закрыт `step.finished`, но идут инструменты.** Ядро публикует
+  `step.finished` **до** запуска инструментов, поэтому после reload/смены вкладки
+  `streaming`-сообщения уже нет. Клиент берёт **последнее assistant-сообщение хода**
+  (`stepMessageForTurn`), «сеет» live-части выполняющихся вызовов (`seedInFlightToolParts`,
+  `status: 'running'`; вызовы с `tool`-сообщением истории считаются завершёнными) и ставит
+  `toolsRunning`, а `turn.messageId` перепривязывает, если сообщение выпало из ленты.
+- **`liveToolMessageId` отдельно от `liveMessageId`.** `tool_call.*`/`subagent.progress`
+  адресуются сообщению шага (или последнему assistant хода), `part.delta`/`part.updated` —
+  строгому `liveMessageId`; иначе события инструментов после reload отбрасывались (пустой
+  `messageId`) и карточки/прогресс терялись.
+- **Историческое сведение результатов.** Снимок истории не содержит `tool_calls[].result`
+  (результаты — скрытые `role: 'tool'` с `metadata.tool_chain`); при мерже они сводятся в
+  `tool_calls` (`hydrateHistoricalToolResults`). Снимок **не удаляет** сообщения активного хода и
+  не затирает `tool_calls` живого шага пустым значением.
+- **Tool-события ребёнка — в оба канала.** `tool_call.started`/`tool_call.result` уходят родителю
+  (с `parent_call_id`) и в канал ребёнка (без него, `session_id` = id ребёнка); assistant-сообщения
+  шага ребёнка сохраняются с `turnId`/`stepIndex`/`status`. Иначе вкладка саб-агента не
+  восстанавливает живой шаг.
+- **Новые события синхронизации мутаций.** `message.deleted` (`{message_id}`), `message.updated`
+  (`{message_id, pinned?, disabled?}`), `session.messages.cleared` (`{session_id}`),
+  `project.updated`/`project.deleted` (`{project_id}`), `plan.updated`. Публикуются
+  соответствующими роутами/тулами; UI обрабатывает их (инвариант 27 корневого `AGENTS.md`).
+  `fs.changed` дополнительно публикуется HTTP-FS (`source: 'http'`).
+- **Очередь/возврат.** `POST /queue/:sessionId/return` публикует `message.deleted` для возвращённых
+  в поле user-сообщений (они удалены из истории) вместе с `queue.state`.
+
 ## История
 
+- 2026-11-02 — доводка: восстановление закрытого шага с выполняющимися инструментами
+  (`liveToolMessageId`/`seedInFlightToolParts`), историческое сведение `tool_chain` → `tool_calls`,
+  защита сообщений активного хода в мерже, tool-события ребёнка в оба канала, события синхронизации
+  мутаций (`message.deleted`/`message.updated`/`session.messages.cleared`/`project.updated`/
+  `project.deleted`/`plan.updated`, HTTP `fs.changed`).
 - 2026-10-30 — принято (решение пользователя): ход как последовательность шагов, единое сообщение,
   адресные события, `Message.ord` как монотонный порядок при сохранении позиционного `seq`,
   контракт приёма `202 {messageId, mode, position}`, догон по журналу событий, адресация мутаций

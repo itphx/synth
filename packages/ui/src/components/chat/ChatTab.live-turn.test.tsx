@@ -157,7 +157,22 @@ describe('ChatTab — восстановление живого хода из и
 
   it('идущий ход не перетирается повторной загрузкой истории', async () => {
     await mount()
-    // Живое событие сменило шаг (`step.started`).
+    // Живое событие сменило шаг (`step.started`): шаг всегда создаёт/апсертит
+    // assistant-сообщение — без него стор не может отличить живой шаг от
+    // «повисшего» id (защита `patchTurnFromSession`).
+    useChatStore.getState().upsertMessage(SESSION, {
+      index: 2,
+      id: 'msg-step-2',
+      role: 'assistant',
+      content: '',
+      status: 'streaming',
+      turn_id: 'turn-1',
+      step_index: 1,
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    })
     useChatStore.getState().patchTurn(SESSION, { messageId: 'msg-step-2', stepIndex: 1 })
 
     await act(async () => {

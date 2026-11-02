@@ -896,7 +896,7 @@ export const modalityModelsSchema = z.object({
 export const attachmentsConfigSchema = z.object({
   enabled: z.boolean().default(true),
   modalities: attachmentModalitiesSchema.prefault({}),
-  maxBytesPerFile: z.number().int().min(1).default(25 * 1024 * 1024),
+  maxBytesPerFile: z.number().int().min(1).default(100 * 1024 * 1024),
   maxFilesPerMessage: z.number().int().min(1).default(10),
   maxBytesPerSession: z.number().int().min(1).default(1024 * 1024 * 1024),
   // ADR-115 §«Медиа из инструментов»: бюджет инъекции вложений тулов на ход.

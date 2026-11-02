@@ -15,7 +15,7 @@ import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
-import { partText, toLivePart, turnHasContent } from '@/lib/messageParts'
+import { normalizeLiveToolPart, partText, toLivePart, turnHasContent } from '@/lib/messageParts'
 import type { Part, PromptAcceptedResponse } from '@itphx/synth-shared/types'
 import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared/types'
 import { synthApi } from '@/lib/api/synthApi'
@@ -194,6 +194,76 @@ function applyHistory(sid: string, messages: MessageData[]): void {
  * - новые сообщения добавляются;
  * - границы идущего хода восстанавливаются (идемпотентно).
  */
+/**
+ * ADR-118 §1: результат инструмента из **истории** — скрытое `tool`-сообщение
+ * (`metadata.tool_chain: true`, в ленте не рисуется) с `tool_call_id`.
+ */
+interface HistoricalToolResult {
+  content: string
+  isError?: boolean
+  completedAt?: string
+}
+
+/**
+ * Собрать результаты завершённых инструментов по id вызова.
+ *
+ * Результаты живут отдельными сообщениями `role: 'tool'` (у родителя и
+ * саб-агента — одинаково); `MessageList` их скрывает (`tool_chain`). Карточка
+ * же строится из `tool_calls` assistant-сообщения, где `result` нет (ADR-118:
+ * `tool_results` в сообщение шага не пишутся). Без сведения после перезагрузки
+ * карточка не знает результата и «мигает»/висит без него.
+ */
+function collectHistoricalToolResults(messages: MessageData[]): Map<string, HistoricalToolResult> {
+  const results = new Map<string, HistoricalToolResult>()
+  for (const m of messages) {
+    if (m.role !== 'tool') continue
+    const metadata = (m.metadata ?? {}) as Record<string, unknown>
+    const id = asNonEmptyString(m.tool_call_id)
+      || asNonEmptyString(metadata.call_id)
+      || asNonEmptyString(metadata.tool_call_id)
+    if (!id || results.has(id)) continue
+    const isError = metadata.isError === true || metadata.is_error === true
+    results.set(id, {
+      content: typeof m.content === 'string' ? m.content : '',
+      ...(isError ? { isError: true } : {}),
+      ...(m.created_at ? { completedAt: m.created_at } : {}),
+    })
+  }
+  return results
+}
+
+/**
+ * ADR-118 §1: историческое сведение результатов инструментов в `tool_calls`
+ * assistant-сообщений (для ленты из снимка истории).
+ *
+ * Меняются только `tool_calls` (и только там, где результата ещё нет);
+ * `parts`/live-части не трогаются — живая часть приоритетнее и в рендере
+ * перекрывает dto-снимок. Неизвестный `call_id` оставляет вызов как есть.
+ */
+function hydrateHistoricalToolResults(messages: MessageData[]): MessageData[] {
+  const results = collectHistoricalToolResults(messages)
+  if (results.size === 0) return messages
+  return messages.map((message) => {
+    if (message.role !== 'assistant' || !message.tool_calls?.length) return message
+    let changed = false
+    const toolCalls = message.tool_calls.map((call) => {
+      if (!call?.id || call.result) return call
+      const result = results.get(call.id)
+      if (!result) return call
+      changed = true
+      return {
+        ...call,
+        result: {
+          content: result.content,
+          ...(result.isError ? { isError: true } : {}),
+        },
+        ...(call.completed_at ? {} : (result.completedAt ? { completed_at: result.completedAt } : {})),
+      }
+    })
+    return changed ? { ...message, tool_calls: toolCalls } : message
+  })
+}
+
 export function mergeServerMessages(sid: string, messages: MessageData[]): void {
   const chat = useChatStore.getState()
   const current = chat.messagesBySession[sid] || []
@@ -206,8 +276,28 @@ export function mergeServerMessages(sid: string, messages: MessageData[]): void 
   // Сообщения сервера без id (локальные ответы системных команд) тоже
   // сохраняем: мержить их не по чему, но терять нельзя.
   const serverLocal = messages.filter((m) => !m.id && !localIndexes.has(m.index))
+  // ADR-118 §4/§7: снимок истории — источник истины по **составу** ленты.
+  // Удалённое на сервере сообщение (есть `id`/`ord`, не live, не вклинивание)
+  // из снимка пропадает и здесь, иначе лента другого клиента «залипала».
+  const serverIds = new Set(messages.map((m) => m.id).filter((id): id is string => !!id))
+  const activeTurnId = turnActive ? chat.turnBySession[sid]?.turnId : undefined
   for (const m of current) {
-    if (m.id) byId.set(m.id, m)
+    if (!m.id) continue
+    // ADR-118 §5: сообщение **активного хода** не удаляем по снимку. Шаг уже
+    // закрыт (`status: 'completed'`, `ord` есть), а серверная запись может
+    // отставать (троттлинг/гонка) — выпавшее из ленты сообщение шага уносило
+    // карточки инструментов и прогресс саб-агентов, хотя ход жив.
+    const belongsToActiveTurn = !!activeTurnId && m.turn_id === activeTurnId
+    if (
+      !belongsToActiveTurn
+      && !serverIds.has(m.id)
+      && m.ord != null
+      && m.status !== 'streaming'
+      && !m.steerPending
+    ) {
+      continue
+    }
+    byId.set(m.id, m)
   }
   for (const m of messages) {
     if (!m.id) continue
@@ -219,10 +309,52 @@ export function mergeServerMessages(sid: string, messages: MessageData[]): void 
     byId.set(m.id, mergeKnownMessage(known, m, turnActive))
   }
   const merged = [...byId.values(), ...localOnly, ...serverLocal]
-  chat.setMessages(sid, merged)
+  // ADR-118 §1: снимок истории не несёт `result` в `tool_calls` (он в скрытых
+  // `tool`-сообщениях) — сводим их здесь, иначе карточка инструмента после
+  // reload/открытия вкладки остаётся без результата.
+  const hydrated = hydrateHistoricalToolResults(merged)
+  chat.setMessages(sid, hydrated)
   // ADR-118 §5: в истории мог появиться живой ход (другой клиент) —
   // восстанавливаем границы, иначе он отрисуется как мёртвое сообщение.
-  restoreLiveTurnFromHistory(sid, merged)
+  restoreLiveTurnFromHistory(sid, hydrated)
+}
+
+/**
+ * Ресинк после восстановления транспорта (PWA вернулась из фона / реконнект).
+ *
+ * Пока связи не было, другие клиенты могли удалить сессии и сообщения —
+ * события об этом потеряны. После переподключения:
+ * 1. перечитываем список сессий;
+ * 2. закрываем center-tab'ы `chat-*`, чьих сессий больше нет (и чистим ленту);
+ * 3. активному чату перечитываем историю — состав ленты приходит из снимка
+ *    (`mergeServerMessages` убирает удалённые сообщения).
+ *
+ * Ошибки глушим: ресинк — уточнение, а не источник правды о ходе.
+ */
+async function resyncAfterReconnect(): Promise<void> {
+  if (useTransportStore.getState().versionMismatch) return
+  await useSessionsStore.getState().loadSessions()
+  if (useTransportStore.getState().versionMismatch) return
+
+  const known = new Set(useSessionsStore.getState().sessions.map((s) => s.id))
+  for (const tab of [...useUIStore.getState().centerTabs]) {
+    if (!tab.id.startsWith('chat-')) continue
+    const sessionId = tab.id.slice('chat-'.length)
+    if (!sessionId || known.has(sessionId)) continue
+    useUIStore.getState().closeTab(tab.id)
+    useChatStore.getState().clearSession(sessionId)
+  }
+
+  const activeTabId = useUIStore.getState().activeCenterTabId
+  if (!activeTabId || !activeTabId.startsWith('chat-')) return
+  const activeSessionId = activeTabId.slice('chat-'.length)
+  if (!activeSessionId || !known.has(activeSessionId)) return
+  try {
+    const r = await synthApi.getSessionMessages(activeSessionId)
+    mergeServerMessages(activeSessionId, r.messages)
+  } catch {
+    // история недоступна — оставляем живое состояние ленты
+  }
 }
 
 /**
@@ -249,6 +381,10 @@ function mergeKnownMessage(
   if (m.status == null && known.status != null) merged.status = known.status
   if (m.turn_id == null && known.turn_id != null) merged.turn_id = known.turn_id
   if (m.step_index == null && known.step_index != null) merged.step_index = known.step_index
+  // ADR-118 §1: вызовы инструментов живого шага не затираются отстающим
+  // снимком (у черновика шага `tool_calls` ещё нет) — иначе после переключения
+  // вкладок карточки инструментов пропадали бы вместе с результатами.
+  if (m.tool_calls == null && known.tool_calls != null) merged.tool_calls = known.tool_calls
   if (m.parts == null && known.parts != null) merged.parts = known.parts
   if (m.content == null && known.content != null) merged.content = known.content
   // Живое сообщение: части/контент — источник live (ADR-118 §5). Но если
@@ -433,6 +569,149 @@ function applyLiveStreamSnapshot(
   }
 }
 
+/** Позиция сообщения в ленте: `ord` (ADR-118 §2), при `null` — серверный `index`. */
+function messageOrder(message: MessageData): number {
+  return message.ord ?? message.index ?? 0
+}
+
+/**
+ * ADR-118 §5: сообщение **шага** хода для адресации live-событий.
+ *
+ * Сначала — живой сегмент (`status: 'streaming'`), иначе — последнее
+ * assistant-сообщение этого хода. Второй случай обязателен: ядро публикует
+ * `step.finished` **до** запуска инструментов, поэтому во время длинного тула
+ * сообщения со статусом `streaming` в истории уже нет, а `tool_call.*`/
+ * `subagent.progress` всё ещё адресуются к сообщению шага. Без фоллбэка после
+ * перезагрузки страницы карточки инструментов и прогресс саб-агентов
+ * отбрасывались (`messageId` пуст).
+ */
+function stepMessageForTurn(messages: MessageData[], turnId: string): MessageData | undefined {
+  if (!turnId) return undefined
+  const ofTurn = messages.filter((m) => m.turn_id === turnId && !!m.id)
+  if (ofTurn.length === 0) return undefined
+  const streaming = ofTurn.filter((m) => m.status === 'streaming')
+  const candidates = streaming.length > 0 ? streaming : ofTurn.filter((m) => m.role === 'assistant')
+  let best: MessageData | undefined
+  for (const m of candidates) {
+    if (!best || messageOrder(m) >= messageOrder(best)) best = m
+  }
+  return best
+}
+
+/** Вызов инструмента, восстановленный из истории сообщения шага. */
+interface RestoredToolCall {
+  id: string
+  name: string
+  args: Record<string, unknown>
+  iteration: number
+  startedAt?: string
+}
+
+/**
+ * ADR-118 §1/§4: вызовы инструментов сообщения шага.
+ *
+ * Источник — `parts` (`type: 'tool_use'`, у части могут быть аргументы в
+ * провайдерской форме `data.function` — нормализуем `normalizeLiveToolPart`),
+ * иначе `tool_calls` (сырая форма провайдера, `arguments` — JSON-строка).
+ */
+function restoreToolCalls(message: MessageData): RestoredToolCall[] {
+  const calls = new Map<string, RestoredToolCall>()
+  for (const part of message.parts ?? []) {
+    if (!part || part.type !== 'tool_use' || !part.id) continue
+    const normalized = normalizeLiveToolPart({ id: part.id, type: 'tool_use', text: '', data: part.data })
+    const data = (normalized.data ?? {}) as Record<string, unknown>
+    const name = typeof data.name === 'string' ? data.name : ''
+    calls.set(part.id, {
+      id: part.id,
+      name: name || 'tool',
+      args: (data.args as Record<string, unknown>) ?? {},
+      iteration: typeof data.iteration === 'number' ? data.iteration : 0,
+      ...(typeof data.startedAt === 'string' && data.startedAt ? { startedAt: data.startedAt } : {}),
+    })
+  }
+  for (const call of message.tool_calls ?? []) {
+    if (!call?.id || calls.has(call.id)) continue
+    const fn = call.function
+    const name = (typeof call.name === 'string' && call.name) || (typeof fn?.name === 'string' ? fn.name : '')
+    if (!name) continue
+    let args: Record<string, unknown> = (call.args as Record<string, unknown>) ?? {}
+    if (typeof fn?.arguments === 'string' && fn.arguments.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(fn.arguments)
+        if (parsed && typeof parsed === 'object') args = parsed as Record<string, unknown>
+      } catch {
+        // аргументы не JSON — оставляем как есть
+      }
+    } else if (fn?.arguments && typeof fn.arguments === 'object') {
+      args = fn.arguments as Record<string, unknown>
+    }
+    calls.set(call.id, {
+      id: call.id,
+      name,
+      args,
+      iteration: typeof call.iteration === 'number' ? call.iteration : 0,
+      ...(typeof call.started_at === 'string' && call.started_at ? { startedAt: call.started_at } : {}),
+    })
+  }
+  return [...calls.values()]
+}
+
+/** id завершённых вызовов: `tool`-сообщения истории (`tool_call_id`/метаданные). */
+function completedToolCallIds(messages: MessageData[]): Set<string> {
+  const ids = new Set<string>()
+  for (const m of messages) {
+    if (m.role !== 'tool') continue
+    const metadata = (m.metadata ?? {}) as Record<string, unknown>
+    const id = asNonEmptyString(m.tool_call_id)
+      || asNonEmptyString(metadata.call_id)
+      || asNonEmptyString(metadata.tool_call_id)
+    if (id) ids.add(id)
+  }
+  return ids
+}
+
+/**
+ * ADR-118 §5: «посев» live-частей **выполняющихся** вызовов шага после
+ * перезагрузки страницы.
+ *
+ * Событие `tool_call.started` пришло до reload и не переигрывается (полный
+ * reload не передаёт `since`), поэтому части вызова в сторе нет, а
+ * `patchPartData` без неё молча no-op — результат (`tool_call.result`) и
+ * прогресс (`subagent.progress`) терялись. Создаём ровно недостающие части
+ * (`status: 'running'`); существующие не перетираем, завершённые вызовы не
+ * сеем.
+ */
+function seedInFlightToolParts(
+  sessionId: string,
+  messageId: string,
+  message: MessageData,
+  messages: MessageData[],
+): number {
+  const calls = restoreToolCalls(message)
+  if (calls.length === 0) return 0
+  const completed = completedToolCallIds(messages)
+  const chat = useChatStore.getState()
+  const existing = chat.partsBySession[sessionId]?.[messageId] ?? {}
+  let seeded = 0
+  for (const call of calls) {
+    if (completed.has(call.id) || existing[call.id]) continue
+    chat.upsertPart(sessionId, messageId, call.id, {
+      id: call.id,
+      type: 'tool_use',
+      text: '',
+      data: {
+        name: call.name,
+        args: call.args,
+        status: 'running',
+        startedAt: call.startedAt ?? new Date().toISOString(),
+        iteration: call.iteration,
+      },
+    })
+    seeded += 1
+  }
+  return seeded
+}
+
 /**
  * ADR-118 §5: восстановление **живого хода** по признакам активного хода из
  * `GET /sessions/:id` (`current_stream`, `status.blocked`).
@@ -521,7 +800,10 @@ export function restoreLiveTurnFromSession(sessionId: string, session: unknown):
     return
   }
   // Сообщение шага хода (из истории) — его id/шаг нужны границам хода.
-  const step = messages.find((m) => m.status === 'streaming' && m.turn_id === turnId)
+  // Если шаг уже закрыт (`step.finished`), берём последнее assistant-сообщение
+  // хода: инструменты шага ещё выполняются и адресуются именно к нему.
+  const step = stepMessageForTurn(messages, turnId)
+  const inFlight = step?.id ? seedInFlightToolParts(sessionId, step.id, step, messages) : 0
   useChatStore.getState().startTurn(sessionId, {
     turnId,
     status: 'streaming',
@@ -529,6 +811,9 @@ export function restoreLiveTurnFromSession(sessionId: string, session: unknown):
     ...(step?.id ? { messageId: step.id } : {}),
     ...(step?.step_index != null ? { stepIndex: step.step_index } : {}),
     ...(agentRole ? { agentRole } : {}),
+    // Инструменты шага выполняются — держим точки «работы» в шапке
+    // последнего сегмента хода (ADR-118 §3).
+    ...(inFlight > 0 ? { toolsRunning: true } : {}),
     contentStarted: turnHasContent(messages, { turnId }, step),
   })
 }
@@ -551,7 +836,10 @@ function patchTurnFromSession(
 ): void {
   const patch: Partial<ActiveTurn> = {}
   // Сообщение шага хода (из истории) — его id/шаг нужны границам хода.
-  const step = source.messages.find((m) => m.status === 'streaming' && m.turn_id === turn.turnId)
+  // Закрытый шаг (`step.finished`) — последнее assistant-сообщение хода; его
+  // выполняющиеся вызовы нужно «посеять» в live-части и сейчас.
+  const step = stepMessageForTurn(source.messages, turn.turnId)
+  const inFlight = step?.id ? seedInFlightToolParts(sessionId, step.id, step, source.messages) : 0
   if (!turn.streamId && source.streamId) patch.streamId = source.streamId
   if (!turn.agentRole && source.agentRole) patch.agentRole = source.agentRole
   const model = turn.model || asNonEmptyString(step?.model)
@@ -559,7 +847,18 @@ function patchTurnFromSession(
   const provider = turn.provider || asNonEmptyString(step?.provider)
   if (!turn.provider && provider) patch.provider = provider
   if (!turn.messageId && step?.id) patch.messageId = step.id
+  // `messageId` хода мог «повиснуть» на сообщении, которого уже нет в ленте
+  // (снимок истории его не содержал) — перепривязываем к шагу хода, иначе
+  // tool-события адресуются несуществующему сообщению.
+  if (
+    turn.messageId
+    && step?.id
+    && !source.messages.some((m) => m.id === turn.messageId)
+  ) {
+    patch.messageId = step.id
+  }
   if (turn.stepIndex == null && step?.step_index != null) patch.stepIndex = step.step_index
+  if (!turn.toolsRunning && inFlight > 0) patch.toolsRunning = true
   if (!turn.contentStarted && turnHasContent(source.messages, turn, step)) {
     patch.contentStarted = true
   }
@@ -1085,6 +1384,12 @@ interface TransportState {
 
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => void
   disconnect: () => void
+  /**
+   * Принудительный перезапуск транспорта в обход guard'а идемпотентности
+   * (`connect()` пропускает повтор к тому же транспорту). Нужен, когда
+   * соединение выглядит открытым, но мертво (PWA после сна/смены сети).
+   */
+  restart: () => void
   setTransportMode: (mode: TransportMode) => void
   /**
    * ADR-118 §3: приём сообщения — **всегда** `202 {messageId, mode, position}`.
@@ -1206,6 +1511,36 @@ export function createDispatcher(): EventDispatcher {
         || (payload.message_id as string)
         || turn?.messageId
         || ''
+    }
+
+    /**
+     * ADR-118 §5: id сообщения шага для **tool-событий** (`tool_call.*`,
+     * `subagent.progress`), отдельно от `liveMessageId` (тот остаётся строгой
+     * привязкой к текущему шагу для `part.delta`/`part.updated`).
+     *
+     * Ядро публикует `tool_call.started` без `messageId` (только `stream_id`,
+     * `call_id`, имя и аргументы), а `step.finished` приходит **до** запуска
+     * инструментов. Поэтому `turn.messageId` (id шага) может быть пуст, когда
+     * шаг уже закрыт: после перезагрузки `restoreLiveTurnFromSession` не
+     * находит `streaming`-сообщения и не заполняет его. Фоллбэк — последнее
+     * assistant-сообщение активного хода: именно в нём живут части вызовов.
+     */
+    const liveToolMessageId = (): string => {
+      const chat = useChatStore.getState()
+      const turn = chat.turnBySession[sid]
+      const direct = (payload.messageId as string)
+        || (payload.message_id as string)
+      if (direct) return direct
+      const messages = chat.messagesBySession[sid] ?? []
+      // id хода доверяем, только пока сообщение есть в ленте: после смены
+      // вкладок/снимка истории оно могло выпасть (гонка записи), и событие
+      // инструмента адресовалось бы несуществующему сообщению.
+      if (turn?.messageId && messages.some((m) => m.id === turn.messageId)) {
+        return turn.messageId
+      }
+      const turnId = turn?.turnId
+      if (!turnId) return ''
+      return stepMessageForTurn(messages, turnId)?.id ?? ''
     }
 
     /**
@@ -1546,7 +1881,7 @@ export function createDispatcher(): EventDispatcher {
         const turn = useChatStore.getState().turnBySession[sid]
         if (!turn || turn.status !== 'streaming') break
         if (turnId && turn.turnId && turnId !== turn.turnId) break
-        const messageId = (payload.messageId as string) || ''
+        const messageId = (payload.messageId as string) || liveToolMessageId()
         const stepIndex = typeof payload.stepIndex === 'number' ? payload.stepIndex : undefined
         patchTurn(sid, {
           toolsRunning: true,
@@ -1709,6 +2044,44 @@ export function createDispatcher(): EventDispatcher {
           created_at: new Date().toISOString(),
         }
         upsertMessage(sid, msg)
+        break
+      }
+
+      // ADR-118 §4/§7: сообщение удалено в другом клиенте (`DELETE /messages/...`
+      // или batch `action:'delete'`). Убираем его из ленты и вместе с live-частями.
+      case 'message.deleted': {
+        const messageId = (payload.message_id as string) || (payload.messageId as string) || ''
+        if (!messageId) break
+        const chatState = useChatStore.getState()
+        const known = chatState.messagesBySession[sid]?.some((m) => m.id === messageId) ?? false
+        const hasParts = Boolean(chatState.partsBySession[sid]?.[messageId])
+        // Неизвестный id — no-op (удаление могло прийти раньше загрузки истории).
+        if (!known && !hasParts) break
+        if (known) chatState.removeMessageById(sid, messageId)
+        if (hasParts) {
+          useChatStore.setState((s) => {
+            const sessionParts = s.partsBySession[sid]
+            if (!sessionParts?.[messageId]) return s
+            const nextSession = { ...sessionParts }
+            delete nextSession[messageId]
+            return { partsBySession: { ...s.partsBySession, [sid]: nextSession } }
+          })
+        }
+        break
+      }
+
+      // ADR-118 §4/§7: состояние сообщения изменилось в другом клиенте (pin /
+      // toggle / batch / retry). Патчим только пришедшие поля — остальное
+      // (в т.ч. live-части `streaming`-сообщения) не трогаем. Неизвестный id —
+      // no-op: событие могло прийти раньше загрузки истории.
+      case 'message.updated': {
+        const messageId = (payload.message_id as string) || (payload.messageId as string) || ''
+        if (!messageId) break
+        const patch: Partial<MessageData> = {}
+        if (typeof payload.pinned === 'boolean') patch.pinned = payload.pinned
+        if (typeof payload.disabled === 'boolean') patch.disabled = payload.disabled
+        if (Object.keys(patch).length === 0) break
+        updateMessageById(sid, messageId, patch)
         break
       }
 
@@ -2127,6 +2500,75 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // История сессии очищена (`POST /sessions/:id/clear`): на сервере остались
+      // только закреплённые сообщения, очередь и счётчики сброшены. Снимок здесь
+      // **авторитетен** — `setMessages`, а не мерж: защита активного хода
+      // (`mergeServerMessages`) оставила бы удалённые сообщения в ленте.
+      case 'session.messages.cleared': {
+        void (async () => {
+          try {
+            const r = await synthApi.getSessionMessages(sid)
+            // Части сообщений, которых нет в новом снимке, больше не нужны
+            // (их id уже не отрисуются). Части живого хода (оставшиеся в снимке)
+            // не трогаем.
+            const previous = useChatStore.getState().messagesBySession[sid] ?? []
+            const nextIds = new Set(r.messages.map((m) => m.id).filter((id): id is string => !!id))
+            const removedIds = previous
+              .map((m) => m.id)
+              .filter((id): id is string => !!id && !nextIds.has(id))
+            if (removedIds.length > 0) {
+              useChatStore.setState((s) => {
+                const sessionParts = s.partsBySession[sid]
+                if (!sessionParts) return s
+                const nextParts = { ...sessionParts }
+                let changed = false
+                for (const id of removedIds) {
+                  if (!nextParts[id]) continue
+                  delete nextParts[id]
+                  changed = true
+                }
+                if (!changed) return s
+                return { partsBySession: { ...s.partsBySession, [sid]: nextParts } }
+              })
+            }
+            useChatStore.getState().setMessages(sid, r.messages)
+            useChatStore.getState().clearQueueState(sid)
+            useChatStore.getState().setQueueCounts(sid, 0, 0)
+          } catch {
+            // Сеть недоступна — очистка останется до следующего refresh истории.
+          }
+        })()
+        break
+      }
+
+      // Сообщения из другой сессии скопированы (`POST /sessions/:id/messages/merge`).
+      // Payload — **только добавленные** сообщения, а не полный снимок истории:
+      // поэтому incoming сводится с уже показанной лентой (иначе семантика
+      // «снимок — источник состава» удалила бы остальные сообщения).
+      case 'session.messages.merged': {
+        const incoming = Array.isArray(payload.messages)
+          ? (payload.messages as MessageData[])
+          : null
+        if (incoming) {
+          const current = useChatStore.getState().messagesBySession[sid] ?? []
+          mergeServerMessages(sid, [...current, ...incoming])
+          break
+        }
+        // Старое ядро не прислало сообщения — перечитываем полную историю.
+        void (async () => {
+          try {
+            const r = await synthApi.getSessionMessages(sid)
+            mergeServerMessages(sid, r.messages)
+          } catch {
+            // История — уточнение; живое состояние ленты не затираем.
+          }
+        })()
+        break
+      }
+
+      // `session.reference.added/removed` осознанно не обрабатываются: вкладка
+      // «Ссылки» перечитывает список при открытии, live-обновление не требуется.
+
       // План утверждён (ADR-039): план живёт в проекте (project.plan), событие
       // plan.approved несёт только session_id/project_id — достаточно полного
       // refresh сессии (план проекта рендерится во вкладке «Проект» отдельно).
@@ -2190,6 +2632,28 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // Проект удалён (`DELETE /projects/:id`): событие приходит в канал каждой
+      // его сессии до удаления. Локально убираем проект, его сессии, чат-вкладки
+      // и состояние лент (API не вызываем — сервер уже удалил).
+      case 'project.deleted': {
+        const projectId = payload.project_id as string | undefined
+        if (!projectId) break
+        useProjectsStore.setState((s) => ({
+          projects: s.projects.filter((p) => p.id !== projectId),
+        }))
+        const sessionIds = useSessionsStore.getState().sessions
+          .filter((sess) => sess.project_id === projectId)
+          .map((sess) => sess.id)
+        for (const sessionId of sessionIds) {
+          useUIStore.getState().closeTab(`chat-${sessionId}`)
+          useChatStore.getState().clearSession(sessionId)
+        }
+        useSessionsStore.setState((s) => ({
+          sessions: s.sessions.filter((sess) => sess.project_id !== projectId),
+        }))
+        break
+      }
+
       // Todo обновлён (todo_write/todo_add/todo_update/todo_delete): мгновенный
       // patch из payload + полный refresh.
       case 'todos.updated': {
@@ -2238,7 +2702,7 @@ export function createDispatcher(): EventDispatcher {
       case 'tool_call_started': {
         const callId = (payload.call_id as string) || ''
         if (!callId) break
-        const messageId = liveMessageId()
+        const messageId = liveToolMessageId()
         if (!messageId) break
         // Вызов относится к шагу, даже если шаг уже закрыт: ядро публикует
         // `step.finished` **до** запуска тулов, а результат приходит позже
@@ -2277,7 +2741,7 @@ export function createDispatcher(): EventDispatcher {
         if (taskRetry && taskRetry.callId && taskRetry.callId === callId) {
           setSubagentRetry(sid, null)
         }
-        const messageId = liveMessageId()
+        const messageId = liveToolMessageId()
         if (!messageId) break
         const result = payload.result as Record<string, unknown> | undefined
         patchPartData(sid, messageId, callId, {
@@ -2314,7 +2778,7 @@ export function createDispatcher(): EventDispatcher {
           model: payload.model as string | undefined,
           provider: payload.provider as string | undefined,
         })
-        const messageId = liveMessageId()
+        const messageId = liveToolMessageId()
         if (!messageId) break
         const parts = useChatStore.getState().partsBySession[sid]?.[messageId] || {}
         const livePart = parts[parentCallId]
@@ -2491,6 +2955,32 @@ let activeKind: 'ws' | 'sse' | null = null
  * пропускается.
  */
 let connectingKind: 'ws' | 'sse' | null = null
+/**
+ * Было ли соединение в этой загрузке страницы. Первое подключение — обычный
+ * старт; все следующие (после обрыва/возврата из фона/`restart`) — реконнект,
+ * после которого нужен ресинк ленты и списка сессий.
+ */
+let everConnected = false
+/** Ресинк уже запущен в текущем эпизоде соединения (WS: `onConnect` + `onBackendReady`). */
+let resyncDoneThisEpisode = false
+
+/** Сброс модульного состояния ресинка (тесты; между наборами держится модулем). */
+export function __resetTransportResyncForTests(): void {
+  everConnected = false
+  resyncDoneThisEpisode = false
+}
+
+/** Зафиксировать успешное подключение: первый раз — запомнить, дальше — ресинк. */
+function noteConnected(): void {
+  if (!everConnected) {
+    everConnected = true
+    resyncDoneThisEpisode = true
+    return
+  }
+  if (resyncDoneThisEpisode) return
+  resyncDoneThisEpisode = true
+  void resyncAfterReconnect().catch(() => {})
+}
 
 export function isTransportConnected(): boolean {
   return transportReady
@@ -2536,6 +3026,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     transportReady = false
     activeKind = null
     connectingKind = null
+    resyncDoneThisEpisode = false
 
     console.debug('[TransportStore] Connecting:', actualMode, '(mode=', mode, ')')
     const dispatcher = createDispatcher()
@@ -2560,6 +3051,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
           set({ connected: true })
           console.debug('[TransportStore] WS socket open, waiting for backend ready...')
         }
+        noteConnected()
       },
       onBackendReady: () => {
         if (transport !== client) return
@@ -2567,6 +3059,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
         transportReady = true
         set({ connected: true, activeTransport: 'ws' })
         console.debug('[TransportStore] Backend ready:', client.getTransport())
+        noteConnected()
       },
       onDisconnect: (reason) => {
         if (transport !== client) return
@@ -2576,6 +3069,8 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
         activeKind = null
         connectingKind = null
         transportReady = false
+        // Следующее успешное подключение — новый эпизод: ресинк нужен снова.
+        resyncDoneThisEpisode = false
         set({ connected: false })
         console.debug('[TransportStore] Disconnected:', reason)
 
@@ -2651,6 +3146,21 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     activeKind = null
     connectingKind = null
     set({ connected: false, activeTransport: 'disconnected' })
+  },
+
+  restart: () => {
+    // Текущий эффективный транспорт: в режиме `auto` это фактический ws/sse
+    // (после fallback — sse), а не «auto» — перезапускаем ровно его.
+    const kind = activeKind
+    console.debug('[TransportStore] Restart transport:', kind)
+    transport?.disconnect()
+    transport = null
+    transportReady = false
+    activeKind = null
+    connectingKind = null
+    resyncDoneThisEpisode = false
+    set({ connected: false, activeTransport: 'disconnected' })
+    get().connect(get().transportMode, kind ?? undefined)
   },
 
   setTransportMode: (mode: TransportMode) => {

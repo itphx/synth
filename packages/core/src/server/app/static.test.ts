@@ -54,6 +54,14 @@ describe('UI Content-Security-Policy', () => {
     const nginx = readFileSync(repoFile('docker/nginx-ui.conf.template'), 'utf8');
     expect(nginx).toContain(UI_CONTENT_SECURITY_POLICY);
   });
+
+  it('nginx UI-пода пропускает тело запроса по env-лимиту (client_max_body_size)', () => {
+    const nginx = readFileSync(repoFile('docker/nginx-ui.conf.template'), 'utf8');
+    // Без этого директивы действует дефолт nginx 1 МБ → 413 на загрузке вложений.
+    expect(nginx).toMatch(
+      /client_max_body_size\s+\$\{SYNTH_NGINX_CLIENT_MAX_BODY_SIZE\}\s*;/,
+    );
+  });
 });
 
 describe('serveStatic', () => {

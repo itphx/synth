@@ -38,11 +38,11 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('attachments по умолчанию: включены, все семейства, 25 МиБ на файл, 10 файлов, 1 ГиБ на сессию, GC 30 дней (ADR-115)', () => {
+  it('attachments по умолчанию: включены, все семейства, 100 МиБ на файл, 10 файлов, 1 ГиБ на сессию, GC 30 дней (ADR-115)', () => {
     expect(defaultConfig.attachments).toEqual({
       enabled: true,
       modalities: { image: true, pdf: true, audio: true, video: true },
-      maxBytesPerFile: 25 * 1024 * 1024,
+      maxBytesPerFile: 100 * 1024 * 1024,
       maxFilesPerMessage: 10,
       maxBytesPerSession: 1024 * 1024 * 1024,
       allowedMimePrefixes: ['image/', 'audio/', 'video/', 'application/pdf', 'text/'],

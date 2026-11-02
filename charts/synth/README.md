@@ -201,6 +201,7 @@ ingress:
 | `ui.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `ui.imagePullSecrets` | `[]` | Секреты для приватного реестра |
 | `ui.extraEnv` | `{}` | Доп. env для контейнера UI (словарь имя → значение). `SYNTH_BACKEND_URL` — адрес backend'а, на который nginx проксирует `/api /ws /auth /admin /health`; по умолчанию — Service backend'а **текущего** релиза (см. «Адрес backend'а для UI») |
+| `ui.clientMaxBodySize` | `100m` | `client_max_body_size` nginx UI-пода (env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`): лимит тела запроса для вложений и `/fs/upload`. Должен быть ≥ `attachments.maxBytesPerFile` + запас на multipart; при nginx-ingress чарт ставит ту же величину в `proxy-body-size` (см. «Лимит загрузки файлов») |
 | `ui.service.sessionAffinity` | `None` | Привязка клиента к UI-поду: `None` \| `ClientIP`. Нужна при `ui.replicaCount > 1` — стабильная цепочка «клиент → UI-под → backend-под» (см. «Привязка клиента к UI-поду») |
 | `ingress.enabled` | `false` | Включить Ingress |
 | `ingress.controller` | `nginx` | Ingress-контроллер: `nginx` \| `traefik` \| `none` |
@@ -237,7 +238,7 @@ UI — это nginx, который проксирует `/api /ws /auth /admin 
 В образе nginx-конфиг — **шаблон** (`/etc/nginx/templates/default.conf.template`),
 entrypoint официального образа `nginx:alpine` подставляет в него переменные
 окружения (`envsubst`). Подстановка ограничена фильтром
-`NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL` — переменные самого nginx
+`NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL|SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` — переменные самого nginx
 (`$host`, `$remote_addr`, `$proxy_add_x_forwarded_for`, `$scheme`) не подменяются.
 
 **Зачем это нужно.** Имя Service backend'а (`synth-backend`) — общее для всех
@@ -343,6 +344,46 @@ ui:
   `backend.service.sessionAffinity`;
 - полноценное решение — **внешний транспорт событий** (PROP-104, общая шина между репликами вместо
   in-process) — отдельное предложение; привязка клиента его не заменяет.
+
+## Лимит загрузки файлов (вложения)
+
+Загрузка вложений проходит через **несколько** лимитов, и режет её самый маленький. Транспортный
+лимит должен быть **не меньше** прикладного + запас на multipart-обвязку (заголовки, boundary —
+десятки килобайт).
+
+| Уровень | Где | Значение в чарте |
+|---|---|---|
+| Приложение | `backend.config.attachments.maxBytesPerFile` (или env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` / runtime-настройка `/api/v2/settings/attachments`) | дефолт core — **100 МиБ** (`104857600`) |
+| nginx UI-пода (образ `synth-ui`) | `client_max_body_size` ← env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` | `ui.clientMaxBodySize`, дефолт **`100m`** |
+| nginx-ingress | аннотация `nginx.ingress.kubernetes.io/proxy-body-size` | ставится чартом при `ingress.controller: nginx` из `ui.clientMaxBodySize` (переопределяется в `ingress.annotations`) |
+| Traefik | лимита тела нет | — |
+| Внешний Apache2 | `LimitRequestBody`, при `mod_security` — `SecRequestBodyLimit` | вне чарта, см. `docs/CONFIGURATION.md` |
+
+```yaml
+ui:
+  # client_max_body_size nginx UI-пода (вложения, /fs/upload).
+  clientMaxBodySize: "100m"
+backend:
+  config:
+    attachments:
+      # Прикладной лимит одного файла; транспортный — не меньше.
+      maxBytesPerFile: 104857600
+```
+
+**Что важно знать:**
+
+- дефолт nginx (`client_max_body_size 1m`) режет загрузку раньше приложения: без этой настройки
+  `POST /api/v2/sessions/<id>/attachments` падал с `413 client intended to send too large body`;
+- значение читается nginx при старте пода ⇒ правка `ui.clientMaxBodySize` применяется после
+  рестарта/передеплоя UI (rollout обновляет Deployment автоматически);
+- `ui.extraEnv` применяется **поверх** — `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` можно переопределить
+  точечно;
+- если транспортный лимит **меньше** прикладного, клиент получит `413` от прокси с HTML-телом (не
+  JSON от backend) — различать по телу ответа;
+- тело multipart **буферизуется в память** и на UI-поде (nginx проксирует поток), и на backend'е:
+  100 МБ × одновременные загрузки — это память; при больших значениях поднимайте `resources.limits.memory`;
+- файл размером ровно в прикладной лимит вместе с multipart-обвязкой может превысить `100m` — на
+  границе задайте транспортный лимит чуть выше (например `105m`).
 
 ## Наблюдаемость
 

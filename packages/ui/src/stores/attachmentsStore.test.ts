@@ -15,14 +15,21 @@ import {
   MAX_FILE_BYTES,
   useAttachmentsStore,
 } from './attachmentsStore'
+import {
+  createMemoryDraftAttachmentStorage,
+  setDraftAttachmentStorageForTests,
+  type DraftAttachmentStorage,
+} from '@/lib/draft-attachments'
 
 const SESSION = 's1'
+
+let memoryStorage: DraftAttachmentStorage
 
 function makeFile(name: string, type = 'text/plain', content = 'hello'): File {
   return new File([content], name, { type })
 }
 
-/** Файл с подменённым размером — создавать 25 МиБ в памяти незачем. */
+/** Файл с подменённым размером — создавать 100 МиБ в памяти незачем. */
 function oversizedFile(name: string, type = 'application/pdf'): File {
   const file = makeFile(name, type)
   Object.defineProperty(file, 'size', { value: MAX_FILE_BYTES + 1 })
@@ -45,7 +52,11 @@ function items(sessionId = SESSION) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // `dispose` снимает и guard гидратации: тесты hydrate не должны зависеть от порядка.
+  useAttachmentsStore.getState().dispose(SESSION)
   useAttachmentsStore.setState({ bySession: {} })
+  memoryStorage = createMemoryDraftAttachmentStorage()
+  setDraftAttachmentStorageForTests(memoryStorage)
   mocks.uploadSessionAttachment.mockImplementation(async (_sessionId: string, file: File) =>
     uploaded(`srv_${file.name}`),
   )
@@ -64,6 +75,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useAttachmentsStore.setState({ bySession: {} })
+  setDraftAttachmentStorageForTests(null)
 })
 
 describe('attachmentsStore: добавление и загрузка', () => {
@@ -298,5 +310,163 @@ describe('attachmentsStore: группы, clear и dispose', () => {
 
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-preview')
     expect(useAttachmentsStore.getState().bySession[SESSION]).toBeUndefined()
+  })
+})
+
+describe('attachmentsStore: персист байтов вложений', () => {
+  it('addFiles сразу сохраняет байты, upload патчит результат', async () => {
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
+
+    const list = items()
+    expect(list).toHaveLength(1)
+    const saved = await memoryStorage.list(SESSION)
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.draftId).toBe(list[0]!.id)
+    expect(saved[0]!.name).toBe('a.txt')
+    expect(saved[0]!.mimeType).toBe('text/plain')
+    expect(saved[0]!.blob).toBeInstanceOf(Blob)
+    // Загрузка завершилась до возврата addFiles — в записи уже есть partId.
+    expect(saved[0]!.partId).toBe('srv_a.txt')
+    expect(saved[0]!.blobPath).toBe('attachments/ab/srv_a.txt')
+  })
+
+  it('413 при загрузке → too_large и в стейте, и в хранилище', async () => {
+    mocks.uploadSessionAttachment.mockRejectedValueOnce(
+      Object.assign(new Error('too big'), { status: 413 }),
+    )
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('big.txt')])
+
+    const draft = items()[0]!
+    expect(draft.upload).toBe('error')
+    expect(draft.error).toBe('too_large')
+    expect((await memoryStorage.list(SESSION))[0]!.error).toBe('too_large')
+  })
+
+  it('прочие ошибки загрузки → upload_failed в хранилище', async () => {
+    mocks.uploadSessionAttachment.mockRejectedValueOnce(new Error('boom'))
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
+
+    expect(items()[0]!.error).toBe('upload_failed')
+    expect((await memoryStorage.list(SESSION))[0]!.error).toBe('upload_failed')
+  })
+
+  it('remove удаляет запись, clear — всю сессию', async () => {
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt'), makeFile('b.txt')])
+    const [first, second] = items()
+
+    useAttachmentsStore.getState().remove(SESSION, first!.id)
+    expect((await memoryStorage.list(SESSION)).map((item) => item.draftId)).toEqual([second!.id])
+
+    useAttachmentsStore.getState().clear(SESSION)
+    expect(await memoryStorage.list(SESSION)).toEqual([])
+  })
+})
+
+describe('attachmentsStore: hydrate после reload', () => {
+  it('восстанавливает ready/pending/error, pending дозагружается', async () => {
+    await memoryStorage.put({
+      sessionId: SESSION,
+      draftId: 'ready',
+      name: 'ready.txt',
+      mimeType: 'text/plain',
+      size: 3,
+      blob: new Blob(['abc']),
+      partId: 'srv_ready',
+      blobPath: 'attachments/ab/ready',
+    })
+    await memoryStorage.put({
+      sessionId: SESSION,
+      draftId: 'failed',
+      name: 'failed.txt',
+      mimeType: 'text/plain',
+      size: 3,
+      blob: new Blob(['bad']),
+      error: 'upload_failed',
+    })
+
+    let release: (() => void) | undefined
+    mocks.uploadSessionAttachment.mockImplementation(async (_sessionId: string, file: File) => {
+      if (file.name === 'pending.txt') {
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+      }
+      return uploaded(`srv_${file.name}`)
+    })
+    await memoryStorage.put({
+      sessionId: SESSION,
+      draftId: 'pending',
+      name: 'pending.txt',
+      mimeType: 'text/plain',
+      size: 3,
+      blob: new Blob(['xyz']),
+    })
+
+    await useAttachmentsStore.getState().hydrate(SESSION)
+
+    const list = items()
+    expect(list.map((item) => item.id)).toEqual(['ready', 'failed', 'pending'])
+    expect(list[0]!.upload).toBe('ready')
+    expect(list[0]!.partId).toBe('srv_ready')
+    expect(list[0]!.file).toBeInstanceOf(File)
+    expect(list[1]!.upload).toBe('error')
+    expect(list[1]!.error).toBe('upload_failed')
+    // pending сразу ушёл в повторную загрузку (uploading).
+    expect(list[2]!.upload).toBe('uploading')
+    expect(useAttachmentsStore.getState().hasPending(SESSION)).toBe(true)
+    expect(useAttachmentsStore.getState().hasFailed(SESSION)).toBe(true)
+    expect(mocks.uploadSessionAttachment).toHaveBeenCalledWith(
+      SESSION,
+      expect.any(File),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+
+    release?.()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(items().find((item) => item.id === 'pending')!.upload).toBe('ready')
+    expect(useAttachmentsStore.getState().hasPending(SESSION)).toBe(false)
+  })
+
+  it('восстанавливает превью только для изображений', async () => {
+    await memoryStorage.put({
+      sessionId: SESSION,
+      draftId: 'img',
+      name: 'photo.png',
+      mimeType: 'image/png',
+      size: 1,
+      blob: new Blob(['x'], { type: 'image/png' }),
+      partId: 'srv_img',
+    })
+    await memoryStorage.put({
+      sessionId: SESSION,
+      draftId: 'doc',
+      name: 'doc.txt',
+      mimeType: 'text/plain',
+      size: 1,
+      blob: new Blob(['y'], { type: 'text/plain' }),
+      partId: 'srv_doc',
+    })
+
+    await useAttachmentsStore.getState().hydrate(SESSION)
+
+    const [image, doc] = items()
+    expect(image!.previewUrl).toBe('blob:mock-preview')
+    expect(doc!.previewUrl).toBe('')
+  })
+
+  it('идемпотентен и не дублирует уже существующие вложения', async () => {
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
+
+    await useAttachmentsStore.getState().hydrate(SESSION)
+    await useAttachmentsStore.getState().hydrate(SESSION)
+
+    expect(items()).toHaveLength(1)
+  })
+
+  it('hasFailed ложен без ошибок', async () => {
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
+    expect(useAttachmentsStore.getState().hasFailed(SESSION)).toBe(false)
   })
 })

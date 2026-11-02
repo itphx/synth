@@ -411,6 +411,13 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `MessageDeliveredPayload.turnId?` — аддитивный ход сообщения (есть там, где сервер знает ход
   в момент материализации: вмешательство на границе шага; у цикла сабагента ход ребёнка = id
   дочерней сессии).
+- **Синхронизация мутаций (ADR-118 §4/§7, 2026-11-02).** В `EventType` добавлены
+  `message.deleted`, `message.updated`, `session.messages.cleared`, `project.deleted`,
+  `plan.updated` (рядом с `message.added`/`project.updated`/`plan.approved`); payload-типы —
+  `MessageDeletedEventData` (`message_id`), `MessageUpdatedEventData`
+  (`message_id`, `pinned?`, `disabled?`), `SessionMessagesClearedEventData` (`session_id`),
+  `ProjectChangedEventData` (`project_id`, для `project.updated`/`project.deleted`). Все события —
+  в канале сессии (у проектных — в канал каждой сессии проекта), новых транспортных каналов нет.
 - ADR-115: **вложения** — медиа-части (`MediaPartType` = `image`/`audio`/`video`/`file`,
   `MediaPartData`: `blobPath`/`sha256`/`mime`/`size`/`name?`/`width?`/`height?`/`durationMs?`/
   `transcript?`; медиа-часть даёт плейсхолдер в `content`, `makeMediaPart`) и ссылки на объекты

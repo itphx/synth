@@ -139,7 +139,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   app.get('/api/v2/openapi.json', auth.requireAuth, (c) => c.json(getPublicOpenApiDocument()));
 
   // Projects routes
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus));
 
   // ADR-091 (этап 2): портативный экспорт/импорт проекта (скачать/загрузить архив).
   // Managed RBAC: скачивание — право чтения проекта (owner/участник/LEAD/ADMIN),
@@ -269,6 +269,22 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       outsideRootPolicy: () => 'deny',
       strict: true,
     }),
+    // ADR-118 §4: HTTP-мутация workspace — `fs.changed` в канал сессий проекта.
+    onFsChanged: async (projectId, change) => {
+      const sessions = await sessionManager.listSessions({ projectId });
+      for (const s of sessions) {
+        eventBus.publish(s.id, 'fs.changed', {
+          session_id: s.id,
+          project_id: projectId,
+          scope: change.scope,
+          ...(change.paths ? { paths: change.paths } : {}),
+          ...(change.op ? { op: change.op } : {}),
+          ...(change.from ? { from: change.from } : {}),
+          ...(change.to ? { to: change.to } : {}),
+          source: 'http',
+        });
+      }
+    },
   }));
 
   // Providers routes

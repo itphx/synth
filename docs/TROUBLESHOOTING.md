@@ -165,6 +165,40 @@ security:
 
 **Сквозная проверка:** `./scripts/e2e-executor.sh` поднимает настоящие control plane и исполнитель и проверяет маршрутизацию, fail-closed и 401 — см. [DEVELOPMENT.md](./DEVELOPMENT.md#сквозной-тест-control-plane--исполнитель).
 
+## 9. 413 при загрузке вложения
+
+`413 PAYLOAD_TOO_LARGE` (или `Request Entity Too Large`) при загрузке файла/вложения — сработал
+**самый маленький** из лимитов на пути запроса. Проверять по порядку:
+
+1. **Приложение** — `attachments.maxBytesPerFile` (по умолчанию 100 МиБ) и `maxBytesPerSession`
+   (1 ГиБ): `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime
+   `/api/v2/settings/attachments` (UI «Вложения»). Превышение даёт `413` с телом JSON — значит,
+   ответил backend.
+2. **nginx UI-пода** — `client_max_body_size` (env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`, дефолт
+   образа `100m`; Helm — `ui.clientMaxBodySize`). Симптом в логе — `client intended to send too
+   large body`. Проверка: `kubectl -n <ns> logs deploy/synth-ui`. Правка требует рестарта/передеплоя
+   UI-пода (значение читается nginx при старте).
+3. **Ingress** — nginx-ingress: аннотация `nginx.ingress.kubernetes.io/proxy-body-size` (чарт
+   ставит её из `ui.clientMaxBodySize` при `ingress.controller: nginx`); у Traefik лимита тела нет —
+   искать другой прокси.
+4. **Внешний Apache2** — `LimitRequestBody` (дефолт `0` — без лимита) и, если включён `mod_security`,
+   `SecRequestBodyLimit` (его дефолт 12.5 МБ режет загрузки) / `SecRequestBodyNoFilesLimit`.
+   Готовый блок конфигурации — [CONFIGURATION.md](./CONFIGURATION.md#лимиты-загрузки-и-обратный-прокси).
+
+Проверка в обход UI (мимо браузера):
+
+```bash
+# подставьте свой хост/токен; файл ~100 МБ
+head -c 104857600 /dev/urandom > /tmp/big.bin
+curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  -F file=@/tmp/big.bin -F path=uploads/big.bin -F project_id=<id> \
+  "https://<host>/api/v2/fs/upload"
+```
+
+- `201`/`200` — лимиты достаточны; `413` — смотреть, **кто** ответил (тело JSON от backend vs
+  HTML от nginx/Apache), и поднимать соответствующий уровень.
+- Транспортный лимит должен быть **не меньше** прикладного + запас на multipart-обвязку.
+
 ## Где смотреть логи
 
 | Сервис | Лог |

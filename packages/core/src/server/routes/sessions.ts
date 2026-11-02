@@ -25,7 +25,7 @@ import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { sessionAxes } from '../../analytics/recorder.js';
 import { MEMORY_NAMESPACE } from '../../engine/plugins/memory-namespace.js';
 import { dropSteerInjections } from '../../engine/steering/apply.js';
-import { requeueMessages } from '../../queue/processor.js';
+import { requeueMessages, publishQueueState } from '../../queue/processor.js';
 import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
 import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
 // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (`ask_user`).
@@ -1795,6 +1795,10 @@ export function createSessionRoutes(
       await sessionManager.updateSession(s);
       return s;
     });
+    // ADR-118 §4: история очищена (кроме закреплённых) — другие клиенты
+    // перечитывают ленту; очередь сброшена (`pendingMessages = []`).
+    eventBus.publish(id, 'session.messages.cleared', { session_id: id });
+    publishQueueState(eventBus, id, { pendingCount: 0, steerCount: 0 });
     return c.json(serializeSession(session, { agentRegistry }));
   });
 

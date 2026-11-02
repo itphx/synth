@@ -139,12 +139,23 @@ export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: Attached
                 <Icon name="close" className="size-3" />
               </button>
               {item.upload === 'error' && (
-                <span
-                  className="absolute inset-x-0 bottom-0 truncate bg-destructive/90 px-1 text-[10px] leading-4 text-destructive-foreground"
+                <div
+                  className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-0.5 overflow-hidden rounded-lg bg-foreground/75 p-1 text-center text-background"
                   title={errorText(item)}
+                  data-testid="attachment-image-error"
                 >
-                  {errorText(item)}
-                </span>
+                  <Icon name="error-warning" className="size-3.5 shrink-0" />
+                  <span className="w-full truncate text-[9px] leading-tight">{errorText(item)}</span>
+                  <button
+                    type="button"
+                    onClick={() => void retry(sessionId, item.id)}
+                    aria-label={t('chat.attachments.retry')}
+                    title={t('chat.attachments.retry')}
+                    className="pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded bg-background/25 text-background hover:bg-background/40 pointer-coarse:size-6"
+                  >
+                    <Icon name="refresh" className="size-3" />
+                  </button>
+                </div>
               )}
             </div>
           ))}

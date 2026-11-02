@@ -41,6 +41,8 @@ export function createMessageRoutes(
         forbidden: (c) => t('auth.forbidden', undefined, c),
       },
       onMessagesChanged: (sessionId) => recalcCanSummarize(sessionId),
+      // ADR-118 §4/§7: удаление сообщения публикует `message.deleted` в канал сессии.
+      eventBus,
       // ADR-115: ссылки на объекты вложений снимаются при удалении сообщения.
       ...(blobRefs ? { blobRefs } : {}),
       resolveUserId: async (c) => (await kit.getCurrentUser(c))?.id ?? '',

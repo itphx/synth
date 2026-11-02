@@ -325,6 +325,12 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 | `message.enqueued` | **адресно** (`recipient` = отправитель сообщения; отправителя нет — владелец сессии, `owner_id ?? user_id`; владельца нет — событие **не публикуется**) | `messageId`, `delivery` (`queue`\|`steer`), `position` (позиция в очереди; `null` — вмешательство очередь не занимает), `message` — **снимок** сообщения: `id`, `role`, `author?`, `content`, `parts?`, `metadata?`, `created_at`; `ord` **нет** (сообщение ещё не записано в историю). Снимок **уже обфусцирован** (ADR-036) — реальных секретов в нём нет |
 | `queue.state` | канал сессии | `pendingCount`, `steerCount` — **только счётчики**: ни текста, ни автора; `items?` — элементы очереди с состоянием (`{id, status: 'queued'\|'starting'}`), **без текста и автора** (id элемента — идентификатор потока сообщения, `metadata.stream_id`; у обрабатываемого сообщения он совпадает с `current_stream.stream_id`) |
 | `message.delivered` | канал сессии | `messageId`, `ord` (монотонный порядок записи), `role`, `author?`, `principal?` (ADR-106), `turnId?` (ход сообщения — **аддитивно**; есть там, где сервер знает ход в момент материализации: вмешательство на границе шага. Для реплики, с которой ход только начинается, ход выдаёт оркестратор позже — клиент берёт его из `turn.started`) |
+| `message.deleted` | канал сессии | `message_id` — сообщение удалено из истории (`DELETE /messages/:sessionId/:messageId`, batch `action:'delete'`, возврат из очереди `POST /queue/:sessionId/return`); одно событие на реально удалённое сообщение |
+| `message.updated` | канал сессии | `message_id`, `pinned?`, `disabled?` — pin/toggle/batch/retry (у retry отключаются сообщения от точки повтора); патч по `id`, live-части не трогаются |
+| `session.messages.cleared` | канал сессии | `session_id` — `POST /sessions/:id/clear`: история очищена (кроме закреплённых), очередь сброшена (`queue.state {0,0}` следом); клиент перечитывает снимок |
+| `session.messages.merged` | канал сессии | `messages` (добавленные сообщения; может отсутствовать) — `POST /sessions/:id/messages/merge` |
+| `plan.updated` | канал сессии | — план проекта изменён тулом `plan_write`; клиент перечитывает сессию |
+| `project.updated` / `project.deleted` | канал каждой сессии проекта | `project_id` — `PUT`/`DELETE /projects/:id` (удаление — до удаления, пока сессии перечисляются) |
 | `turn.started` | канал сессии | `turnId`, `messageId` (реплика, начавшая ход) |
 | `turn.finished` | канал сессии | `turnId`, `status` (`completed`\|`cancelled`\|`error`\|`stopped`) |
 | `step.started` | канал сессии | `turnId`, `stepIndex` (0-based), `messageId` — assistant-сообщение шага создаётся здесь |
@@ -350,6 +356,11 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   во время хода показывает текущий ход.
 - **Детерминированные `partId`:** `msg:text:<ordinal>`, `msg:reasoning:<ordinal>`,
   `<callId>` у вызова инструмента. Части — upsert, повторная доставка не задваивает текст.
+- **События синхронизации мутаций.** Любая мутация, видимая другому клиенту, публикует событие:
+  `message.deleted`/`message.updated` (сообщения), `session.messages.cleared`/`session.messages.merged`
+  (история), `project.updated`/`project.deleted` (проект — в канал каждой его сессии),
+  `plan.updated`, `fs.changed` (workspace, в т.ч. HTTP-FS с `source: 'http'`). Клиенты обязаны их
+  обрабатывать — иначе лента «залипает» после действий другого клиента.
 - **Порядок.** `ord` — монотонный счётчик сессии, выдаётся при материализации записи в
   историю и **не перенумеровывается**; `seq`/индекс остаются позиционными. Клиент
   сортирует ленту по `ord`, а не по порядку прихода.
@@ -639,7 +650,7 @@ content-addressed, поэтому повторная загрузка тех ж�
 | Лимит | Где проверяется | По умолчанию | Нарушение |
 |---|---|---|---|
 | `attachments.enabled` | загрузка и staging | `true` | `415 attachments_disabled` — вложения выключены администратором: клиенту показывать, что отправка вложений недоступна (повтор запроса не поможет; код общий для загрузки в сессию и staging) |
-| `attachments.maxBytesPerFile` | загрузка | 25 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` — до чтения тела, с запасом 64 КиБ на multipart-обвязку; затем по фактическому размеру) |
+| `attachments.maxBytesPerFile` | загрузка | 100 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` — до чтения тела, с запасом 64 КиБ на multipart-обвязку; затем по фактическому размеру) |
 | `attachments.allowedMimePrefixes`, запрет SVG | загрузка | см. выше | `415 UNSUPPORTED_MEDIA_TYPE` |
 | `attachments.maxFilesPerMessage` | `POST …/prompt` | 10 | `400 VALIDATION_ERROR` |
 | контракт OpenAPI/SDK (`promptRequestSchema`) | публикуемая схема §5.30 | не более **50** путей в `attachments` | `400 VALIDATION_ERROR` при валидации схемой; HTTP-обработчик проверяет `maxFilesPerMessage` (см. выше) |

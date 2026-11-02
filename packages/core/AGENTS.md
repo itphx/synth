@@ -326,6 +326,14 @@
   инструментов шага: `callIds`, один раз на шаг с вызовами — до исполнения и после записи
   `metadata.tool_results`; `turn.finished` — после), `part.delta`/`part.updated` (upsert по
   `{messageId, partId}`).
+- **Синхронизация мутаций (2026-11-02).** Роуты публикуют в канал сессии: `message.deleted`
+  (`{message_id}`) — `DELETE /messages/:sessionId/:messageId`, batch `action:'delete'` и возврат
+  сообщений из очереди (`POST /queue/:sessionId/return`); `message.updated`
+  (`{message_id, pinned?|disabled?}`) — toggle/pin/batch/retry; `session.messages.cleared`
+  (`{session_id}`) — `POST /sessions/:id/clear` (+ `queue.state{0,0}`); `plan.updated` — тул
+  `plan_write`; `project.updated`/`project.deleted` (`{project_id}`) — `PUT`/`DELETE /projects/:id`
+  в канал **каждой** сессии проекта (удаление — до удаления); `fs.changed` — HTTP-FS
+  (`source:'http'`). Подробности — ADR-118 §4/§7.
 - **Удалены без dual-emit:** `stream.chunk`, `stream.usage`, `stream.done`, `stream.interrupted`,
   `message.injected`, `message.queued`. Остаются `stream.start`, `stream.cancelled`, `stream.error`,
   `stream.retry`, `stream.ended`, `queue.stalled`, `steer.dropped`, `permission.*`, `tool_call.*`,
@@ -1188,6 +1196,12 @@
   инъекция. Общая точка применения инъекций для основной сессии и ребёнка —
   `engine/steering/apply.ts` (`applySteerInjections`); оркестратор использует её же
   (`ChatOrchestrator._applySteerInjections`). Очереди родителя и ребёнка изолированы.
+  **Tool-события ребёнка — в оба канала (2026-11-02).** `run-cycle` публикует
+  `tool_call.started`/`tool_call.result` в родительский канал (как раньше, с `parent_call_id`) и в
+  канал **ребёнка** (`publishToolEvent`: без `parent_call_id`, `session_id` = id ребёнка) — вкладка
+  саб-агента подписана на свой канал и без этого не видит live-карточки инструментов. Assistant-сообщения
+  шага ребёнка сохраняются с `turnId` (id дочерней сессии), `stepIndex` и терминальным `status` —
+  иначе после reload вкладка не восстанавливает живой шаг.
   Остаток очереди ребёнка в конце прогона снимается до финализации —
   `dropSteerInjections(reason:'turn_ended')` с публикацией `steer.dropped` в канал
   ребёнка (общая точка для обычного завершения, шаг-лимита и бюджета контекста).

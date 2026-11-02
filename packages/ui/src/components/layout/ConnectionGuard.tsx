@@ -4,6 +4,7 @@ import { confirm } from '@/lib/confirm'
 import { useI18n } from '@/lib/i18n'
 import { notifyMessage } from '@/hooks/useNotification'
 import { useAuthStore } from '@/stores/authStore'
+import { useConfirmStore } from '@/stores/confirmStore'
 import { useTransportStore } from '@/stores/transportStore'
 
 const INITIAL_CHECK_DELAY = 2_500
@@ -36,7 +37,18 @@ export function ConnectionGuard() {
   const offlineNotifiedRef = useRef(false)
   const expiredNotifiedRef = useRef(false)
   const reloadPromptedRef = useRef(false)
+  /** Открыт ли confirm «перезагрузить страницу» (чтобы закрыть его при восстановлении). */
+  const reloadDialogOpenRef = useRef(false)
   const lastReconnectAtRef = useRef(0)
+
+  // Связь восстановилась, пока пользователь смотрит confirm «перезагрузить» —
+  // перезагрузка больше не нужна: закрываем диалог без действия.
+  useEffect(() => {
+    if (!connected) return
+    if (!reloadDialogOpenRef.current) return
+    reloadDialogOpenRef.current = false
+    useConfirmStore.getState().closeConfirm(false)
+  }, [connected])
 
   useEffect(() => {
     mountedRef.current = true
@@ -64,6 +76,7 @@ export function ConnectionGuard() {
       offlineNotifiedRef.current = false
       expiredNotifiedRef.current = false
       reloadPromptedRef.current = false
+      reloadDialogOpenRef.current = false
       clearTimers()
     }
 
@@ -72,6 +85,7 @@ export function ConnectionGuard() {
       if (reloadPromptedRef.current) return
       if (useTransportStore.getState().connected) return
       reloadPromptedRef.current = true
+      reloadDialogOpenRef.current = true
       const ok = await confirm({
         title: tRef.current('connection.reloadTitle'),
         message: tRef.current('connection.reloadMessage'),
@@ -79,6 +93,7 @@ export function ConnectionGuard() {
         cancelLabel: tRef.current('connection.reloadCancel'),
         variant: 'warning',
       })
+      reloadDialogOpenRef.current = false
       if (ok && mountedRef.current) {
         window.location.reload()
       }
@@ -89,8 +104,9 @@ export function ConnectionGuard() {
       const now = Date.now()
       if (now - lastReconnectAtRef.current < RECONNECT_THROTTLE) return
       lastReconnectAtRef.current = now
-      const store = useTransportStore.getState()
-      store.connect(store.transportMode)
+      // Через стор, а не `connect()`: guard идемпотентности пропустил бы
+      // повтор к тому же транспорту, хотя соединение «зомби».
+      useTransportStore.getState().restart()
     }
 
     const runCheck = async () => {
@@ -174,6 +190,14 @@ export function ConnectionGuard() {
       }
     }
 
+    // Возврат PWA из фона (bfcache) — тот же повод проверить связь.
+    const onPageShow = () => {
+      if (!episodeActiveRef.current) return
+      if (!useTransportStore.getState().connected) {
+        void runCheck()
+      }
+    }
+
     resetEpisode()
 
     if (!isInitialized || !isAuthenticated || connected) {
@@ -191,11 +215,13 @@ export function ConnectionGuard() {
 
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
+    window.addEventListener('pageshow', onPageShow)
     document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
+      window.removeEventListener('pageshow', onPageShow)
       document.removeEventListener('visibilitychange', onVisibility)
       resetEpisode()
     }

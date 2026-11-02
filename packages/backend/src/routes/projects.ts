@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type {
   ProjectRepository, SessionManager, McpManager, SkillService,
-  SettingsRepository, McpRegistryRepository,
+  SettingsRepository, McpRegistryRepository, EventBus,
 } from '@itphx/synth-core';
 import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
 // ADR-114: сервис worktree'ов — контур `/projects/:id/worktrees*`.
@@ -64,6 +64,12 @@ export function createProjectRoutes(
    * (список/создание/удаление/prune). Не задан — роутов нет.
    */
   worktreeService?: WorktreeService,
+  /**
+   * ADR-118 §4: шина событий — `PUT /:id`/`DELETE /:id` публикуют
+   * `project.updated`/`project.deleted` в канал каждой сессии проекта.
+   * Не задана — публикации нет (поведение прежнее).
+   */
+  eventBus?: EventBus,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
@@ -110,6 +116,20 @@ export function createProjectRoutes(
       getOutsideRootPolicy: () => 'deny',
       // ADR-114: контур worktree'ов проекта.
       ...(worktreeService ? { worktrees: worktreeService } : {}),
+      // ADR-118 §4: изменение/удаление проекта — в канал каждой сессии проекта.
+      ...(eventBus
+        ? {
+            sessionManager,
+            onProjectChanged: async (projectId: string, kind: 'updated' | 'deleted') => {
+              const sessions = await sessionManager.listSessions({ projectId });
+              for (const s of sessions) {
+                eventBus.publish(s.id, kind === 'deleted' ? 'project.deleted' : 'project.updated', {
+                  project_id: projectId,
+                });
+              }
+            },
+          }
+        : {}),
     },
   );
 }
