@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project, ContextDefaults } from '@itphx/synth-shared';
 import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, orderSteerInjections, isDefaultTitle } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
@@ -40,6 +41,13 @@ export interface SessionManagerOptions {
    * создании; явные `settings` запроса всегда приоритетнее.
    */
   contextDefaults?: () => Partial<ContextDefaults>;
+  /**
+   * Идентификатор процесса инстанса — владелец маркеров хода/блокировки
+   * (`currentStream.owner`/`status.blockedOwner`). По умолчанию новый UUID на
+   * процесс; тесты могут зафиксировать значение, чтобы отличать «свой» ход
+   * от оставшегося после рестарта.
+   */
+  instanceId?: string;
 }
 
 export interface SessionTree {
@@ -96,8 +104,12 @@ function filterByUserScope(
 
 export class SessionManager {
   private _locks = new Map<string, Promise<void>>();
+  /** Идентификатор процесса-владельца маркеров хода/блокировки. */
+  readonly instanceId: string;
 
-  constructor(private store: SessionRepository, private _options: SessionManagerOptions = {}) {}
+  constructor(private store: SessionRepository, private _options: SessionManagerOptions = {}) {
+    this.instanceId = _options.instanceId ?? randomUUID();
+  }
 
   private _getLock(sessionId: string): Promise<void> {
     if (!this._locks.has(sessionId)) {
@@ -390,6 +402,7 @@ export class SessionManager {
       if (session.status.blocked) return false;
       session.status.blocked = processId;
       session.status.blockedAt = nowISO();
+      session.status.blockedOwner = this.instanceId;
       await this.store.save(session);
       return true;
     });
@@ -400,6 +413,7 @@ export class SessionManager {
       if (session.status.blocked !== processId) return false;
       session.status.blocked = undefined;
       session.status.blockedAt = undefined;
+      session.status.blockedOwner = undefined;
       await this.store.save(session);
       return true;
     });
@@ -409,6 +423,7 @@ export class SessionManager {
     return this.withLock(sessionId, async (session) => {
       session.status.blocked = undefined;
       session.status.blockedAt = undefined;
+      session.status.blockedOwner = undefined;
       await this.store.save(session);
       return true;
     });
@@ -435,6 +450,90 @@ export class SessionManager {
       }
     }
     return stale;
+  }
+
+  /**
+   * Снять маркеры хода/блокировки, оставшиеся от прошлых процессов.
+   *
+   * Процесс, убитый при rolling update/рестарте, не успевает убрать
+   * `currentStream`/`status.blocked` — процессор очереди такую сессию считает
+   * занятой и не стартует, а UI вечно показывает активность. Маркер считается
+   * чужим, если его `owner` (`currentStream.owner`/`status.blockedOwner`) не
+   * совпадает с `instanceId` этого процесса; отсутствие owner — legacy-запись,
+   * тоже чужая.
+   *
+   * Для каждой такой сессии: под `withLock` снимаются маркеры и состояния
+   * отмены/ретрая, затем **вне лока** вызывается `recoverStreamingMessages`
+   * (он сам берёт лок — вкладывать нельзя). Возвращаются прежние
+   * `turnId`/`streamId` — для события `turn.finished` в UI.
+   *
+   * Живой ход своего процесса (owner === instanceId) не трогается.
+   */
+  async recoverInterruptedSessions(): Promise<Array<{ sessionId: string; turnId?: string; streamId?: string }>> {
+    const sessions = await this.listSessions(undefined, { includeArchived: true, light: true });
+    const recovered: Array<{ sessionId: string; turnId?: string; streamId?: string }> = [];
+
+    for (const listed of sessions) {
+      const streamStale = !!listed.currentStream && listed.currentStream.owner !== this.instanceId;
+      const blockedStale = !!listed.status.blocked && listed.status.blockedOwner !== this.instanceId;
+      if (!streamStale && !blockedStale) continue;
+
+      let turnId: string | undefined;
+      let streamId: string | undefined;
+      let changed = false;
+      let ownLiveStream = false;
+
+      try {
+        await this.withLock(listed.id, async (session) => {
+          // Перепроверяем под локом: за время обхода список мог устареть, а
+          // ход — смениться (в т.ч. на собственный).
+          const staleStream = !!session.currentStream && session.currentStream.owner !== this.instanceId;
+          const staleBlocked = !!session.status.blocked && session.status.blockedOwner !== this.instanceId;
+          if (!staleStream && !staleBlocked) {
+            ownLiveStream = !!session.currentStream;
+            return;
+          }
+          changed = true;
+          if (staleStream && session.currentStream) {
+            turnId = session.currentStream.turnId;
+            streamId = session.currentStream.streamId;
+            session.currentStream = undefined;
+          }
+          if (session.currentStream) ownLiveStream = true;
+          if (staleBlocked) {
+            session.status.blocked = undefined;
+            session.status.blockedAt = undefined;
+            session.status.blockedOwner = undefined;
+          } else if (!session.status.blocked) {
+            // Блокировки нет — владелец не имеет смысла (например, сняли
+            // маркер напрямую, не тронув `blockedOwner`).
+            session.status.blockedOwner = undefined;
+          }
+          session.status.cancelRequested = undefined;
+          session.status.cancelRequestedAt = undefined;
+          session.retry = undefined;
+          session.updatedAt = nowISO();
+          await this.store.save(session);
+        });
+      } catch {
+        // Сессия могла быть удалена — пропускаем, восстановление best-effort.
+        continue;
+      }
+
+      if (!changed) continue;
+      // Сообщения «живого стрима» помечаем прерванными только если своего
+      // живого хода в сессии нет (иначе погасили бы его сегменты).
+      if (!ownLiveStream) {
+        await this.recoverStreamingMessages(listed.id);
+      }
+      recovered.push({
+        sessionId: listed.id,
+        ...(turnId ? { turnId } : {}),
+        ...(streamId ? { streamId } : {}),
+      });
+    }
+
+    return recovered;
   }
 
   async addMessage(sessionId: string, message: Message): Promise<Session | null> {

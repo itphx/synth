@@ -7,6 +7,17 @@ describe('messageVisibility', () => {
     expect(isStateMessage({ metadata: { tool_chain: true } })).toBe(false)
   })
 
+  it('живой tool-chain шаг (status: streaming) виден — с карточками инструментов', () => {
+    expect(isVisibleMessage({ metadata: { tool_chain: true }, status: 'streaming' })).toBe(true)
+    // После завершения шага служебная запись снова скрыта.
+    expect(isVisibleMessage({ metadata: { tool_chain: true }, status: 'completed' })).toBe(false)
+  })
+
+  it('state-сообщение остаётся скрытым даже в streaming', () => {
+    expect(isVisibleMessage({ metadata: { state: true, tool_chain: true }, status: 'streaming' })).toBe(false)
+    expect(isVisibleMessage({ metadata: { type: 'plan_updated' }, status: 'streaming' })).toBe(false)
+  })
+
   it('скрывает state-сообщения по metadata.state === true', () => {
     expect(isVisibleMessage({ metadata: { state: true } })).toBe(false)
   })

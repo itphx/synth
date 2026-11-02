@@ -549,6 +549,9 @@ export function serializeSession(session: Session): Record<string, unknown> {
           // ADR-118 §10: метка хода живого стрима — без неё теряется при
           // перечитывании сессии из БД (`current_stream.turn_id` в DTO).
           turn_id: session.currentStream.turnId ?? null,
+          // Владелец маркера хода (процесс инстанса): по нему рестарт отличает
+          // живой ход от маркера убитого процесса.
+          ...(session.currentStream.owner ? { owner: session.currentStream.owner } : {}),
         }
       : null,
     // Персистентное состояние ретрая (переживает reload/restart): snake_case —
@@ -769,6 +772,7 @@ export function deserializeSession(
           cancelled: currentStream.cancelled as boolean,
           // ADR-118 §10: метка хода живого стрима (legacy-сессии — нет).
           turnId: (currentStream.turn_id as string | undefined) ?? undefined,
+          owner: (currentStream.owner as string | undefined) ?? undefined,
         }
       : undefined,
     // Персистентное состояние ретрая (legacy-записи без поля → undefined).

@@ -641,6 +641,37 @@ export async function createStandaloneDeps(
       );
     }
   }
+  // Session-маркеры хода/блокировки переживают рестарт: процесс, убитый при
+  // rolling update, не успевает снять `currentStream`/`status.blocked`, а
+  // процессор очереди такую сессию считает занятой и не стартует — UI вечно
+  // показывает активность. Восстановление отложено на 60 с, чтобы старый под
+  // успел умереть, а живые маркеры работающего процесса не были сняты.
+  // В деградации хранилище read-only — ничего не пишем.
+  if (!storageDegraded) {
+    const bootRecovery = setTimeout(() => {
+      void sessionManager.recoverInterruptedSessions()
+        .then((recovered) => {
+          for (const r of recovered) {
+            eventBus.publish(r.sessionId, 'turn.finished', {
+              turn_id: r.turnId,
+              turnId: r.turnId,
+              stream_id: r.streamId,
+              status: 'stopped',
+            });
+            eventBus.publish(r.sessionId, 'session.updated', { session_id: r.sessionId });
+          }
+          if (recovered.length) {
+            console.log(`[sessions] сняты маркеры прерванных ходов: ${recovered.length}`);
+          }
+        })
+        .catch((err) => {
+          console.warn(
+            `[sessions] восстановление прерванных ходов: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    }, 60_000);
+    bootRecovery.unref?.();
+  }
   // Retention-очистка терминальных записей реестра (сразу + каждые 6 ч).
   const stopBackgroundRunPruner = storageDegraded
     ? () => {}

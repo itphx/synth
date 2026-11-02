@@ -355,6 +355,15 @@ async function resyncAfterReconnect(): Promise<void> {
   } catch {
     // история недоступна — оставляем живое состояние ленты
   }
+  // После реконнекта серверные признаки хода — источник истины: если маркеры
+  // остались от убитого процесса, `restoreLiveTurnFromSession` закроет
+  // зависший ход (иначе UI вечно показывал бы активность).
+  try {
+    const session = await synthApi.getSession(activeSessionId)
+    restoreLiveTurnFromSession(activeSessionId, session)
+  } catch {
+    // данные сессии недоступны — живое состояние не трогаем
+  }
 }
 
 /**
@@ -778,6 +787,16 @@ export function restoreLiveTurnFromSession(sessionId: string, session: unknown):
   }
 
   if (current && current.status === 'streaming') {
+    // Сервер не подтверждает активность хода (`current_stream`/`blocked`/
+    // `activity`) и в истории нет стримящегося сообщения — маркеры остались от
+    // убитого процесса (rolling update, рестарт): ход закрываем, иначе UI вечно
+    // показывает «streaming». Стримящееся сообщение в истории — живой шаг хода
+    // (сервер мог не успеть отдать `current_stream`), его не гасим.
+    const hasStreamingMessage = messages.some((m) => m.status === 'streaming')
+    if (!hasStream && !blocked && !hasActivity && !hasStreamingMessage) {
+      useChatStore.getState().finishTurn(sessionId, current.turnId, 'stopped')
+      return
+    }
     // Ход уже восстановлен (по истории) — **дополняем** его: `stream_id` нужен
     // для сопоставления `stream.retry` (плашка автоповтора), агент/модель —
     // для шапки хода. Границы хода (`turnId`) не трогаем.

@@ -467,12 +467,16 @@ export class QueueProcessor {
         session = await this.sessionManager.withLock(this.sessionId, async (s) => {
           s.status.blocked = this.sessionId;
           s.status.blockedAt = nowISO();
+          // Владелец маркеров — этот процесс: после рестарта recovery по нему
+          // отличает живой ход от маркера убитого процесса.
+          s.status.blockedOwner = this.sessionManager.instanceId;
           s.currentStream = {
             streamId,
             message: message.content,
             agentRole: message.agentRole,
             startedAt: nowISO(),
             cancelled: false,
+            owner: this.sessionManager.instanceId,
           };
           // Сообщение взято в работу — состояние ретрая (его не было: это первая
           // попытка) снимается: сессия теперь «busy», а не «retry».

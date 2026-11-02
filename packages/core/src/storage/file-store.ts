@@ -454,6 +454,9 @@ function serializeSession(session: Session): SerializedSession {
           // «Хода нет» — `null` (единое представление с PostgreSQL-драйвером
           // и DTO сессии; чтение терпит и отсутствие поля).
           turn_id: session.currentStream.turnId ?? null,
+          // Владелец маркера хода (процесс инстанса): по нему рестарт
+          // отличает живой ход от маркера убитого процесса.
+          ...(session.currentStream.owner ? { owner: session.currentStream.owner } : {}),
         }
       : undefined,
     // Персистентное состояние ретрая (переживает reload/restart): без него
@@ -559,6 +562,7 @@ function deserializeSession(data: SerializedSession): Session {
           // Формы хранения: `null` (новые записи) или отсутствие поля
           // (legacy) — обе читаются как «хода нет».
           turnId: (data.current_stream.turn_id as string | null | undefined) ?? undefined,
+          owner: (data.current_stream.owner as string | null | undefined) ?? undefined,
         }
       : undefined,
     // Персистентное состояние ретрая (legacy-записи без поля → undefined).

@@ -950,6 +950,8 @@ async function startBackgroundSubagent(opts: {
         agentRole: params.subagent_type,
         startedAt: nowISO(),
         cancelled: false,
+        // Владелец маркера — процесс инстанса (recovery после рестарта).
+        owner: sessionManager.instanceId,
       };
       await sessionManager.saveSession(s);
     });

@@ -350,6 +350,11 @@ describe('QueueProcessor — queue.state: состояния элементов 
     ]);
     // Ни текста, ни автора в элементах очереди нет (устранение утечки).
     expect(JSON.stringify(items)).not.toContain('Привет');
+    // Маркеры хода/блокировки несут владельца-процесс: по нему recovery после
+    // рестарта отличает живой ход от маркера убитого процесса.
+    const live = await sessionManager.getSession(session.id);
+    expect(live!.currentStream?.owner).toBe(sessionManager.instanceId);
+    expect(live!.status.blockedOwner).toBe(sessionManager.instanceId);
     const state = events.filter((e) => e.type === 'queue.state').pop()!;
     expect(state.data.content).toBeUndefined();
     expect(state.data.author).toBeUndefined();

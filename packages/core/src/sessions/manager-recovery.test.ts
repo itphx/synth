@@ -23,11 +23,13 @@ function message(partial: Partial<Message> & Pick<Message, 'role' | 'content'>):
 
 describe('SessionManager.recoverStreamingMessages (шаг 2б)', () => {
   let manager: SessionManager;
+  let store: FileStore;
   let tmpDir: string;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-recover-'));
-    manager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    store = new FileStore({ dataDir: tmpDir });
+    manager = new SessionManager(store, { instanceId: 'owner-current' });
   });
 
   afterEach(async () => {
@@ -105,5 +107,152 @@ describe('SessionManager.recoverStreamingMessages (шаг 2б)', () => {
     expect(changed).toBe(0);
     expect(after.updatedAt).toBe(before.updatedAt);
     expect(after.messages).toEqual(before.messages);
+  });
+});
+
+describe('SessionManager.recoverInterruptedSessions (маркеры прошлых процессов)', () => {
+  let manager: SessionManager;
+  let store: FileStore;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-interrupted-'));
+    store = new FileStore({ dataDir: tmpDir });
+    manager = new SessionManager(store, { instanceId: 'owner-current' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Сессия с маркерами хода и блокировки (owner проставляет сохраняющий). */
+  async function withMarkers(
+    saver: SessionManager,
+    opts: { ownerInStream?: string; ownerInBlock?: string; streaming?: boolean } = {},
+  ) {
+    const created = await manager.createSession({ title: 'Interrupted' });
+    if (opts.streaming !== false) {
+      await manager.appendMessage(created.id, message({
+        role: MessageRole.ASSISTANT,
+        content: 'частичный ответ',
+        metadata: { stream_id: 'stream-1', streaming: true },
+      }));
+    }
+    const session = (await manager.getSession(created.id))!;
+    session.currentStream = {
+      streamId: 'stream-1',
+      message: 'запрос',
+      startedAt: nowISO(),
+      cancelled: false,
+      turnId: 'turn-1',
+      ...(opts.ownerInStream ? { owner: opts.ownerInStream } : {}),
+    };
+    session.status.blocked = 'process-1';
+    session.status.blockedAt = nowISO();
+    session.status.blockedOwner = opts.ownerInBlock;
+    if (session.status.blockedOwner === undefined) delete session.status.blockedOwner;
+    await saver.saveSession(session);
+    return created.id;
+  }
+
+  it('чужой owner: маркеры сняты, сообщения помечены interrupted', async () => {
+    const other = new SessionManager(store, { instanceId: 'owner-dead' });
+    const id = await withMarkers(other, { ownerInStream: 'owner-dead', ownerInBlock: 'owner-dead' });
+
+    const recovered = await manager.recoverInterruptedSessions();
+    expect(recovered).toEqual([{ sessionId: id, turnId: 'turn-1', streamId: 'stream-1' }]);
+
+    const stored = (await manager.getSession(id))!;
+    expect(stored.currentStream).toBeUndefined();
+    expect(stored.status.blocked).toBeUndefined();
+    expect(stored.status.blockedAt).toBeUndefined();
+    expect(stored.status.blockedOwner).toBeUndefined();
+    expect(stored.messages[0]!.metadata).toMatchObject({ streaming: false, interrupted: true });
+  });
+
+  it('без owner (legacy/старый под): маркеры сняты', async () => {
+    const created = await manager.createSession({ title: 'Legacy' });
+    const session = (await manager.getSession(created.id))!;
+    session.currentStream = {
+      streamId: 'stream-legacy',
+      message: 'запрос',
+      startedAt: nowISO(),
+      cancelled: false,
+    };
+    // Прямая запись в хранилище — в обход проставления owner.
+    await store.save(session);
+
+    const recovered = await manager.recoverInterruptedSessions();
+    expect(recovered).toEqual([{ sessionId: created.id, streamId: 'stream-legacy' }]);
+
+    const stored = (await manager.getSession(created.id))!;
+    expect(stored.currentStream).toBeUndefined();
+  });
+
+  it('blocked без owner: блокировка снята', async () => {
+    const created = await manager.createSession({ title: 'Legacy blocked' });
+    const session = (await manager.getSession(created.id))!;
+    session.status.blocked = 'process-legacy';
+    session.status.blockedAt = nowISO();
+    await store.save(session);
+
+    const recovered = await manager.recoverInterruptedSessions();
+    expect(recovered).toEqual([{ sessionId: created.id }]);
+
+    const stored = (await manager.getSession(created.id))!;
+    expect(stored.status.blocked).toBeUndefined();
+    expect(stored.status.blockedAt).toBeUndefined();
+    expect(stored.status.blockedOwner).toBeUndefined();
+  });
+
+  it('saveSession/updateSession не присваивают owner чужому legacy-маркеру', async () => {
+    const created = await manager.createSession({ title: 'Legacy save' });
+    const session = (await manager.getSession(created.id))!;
+    session.currentStream = {
+      streamId: 'stream-legacy',
+      message: 'запрос',
+      startedAt: nowISO(),
+      cancelled: false,
+    };
+    session.status.blocked = 'process-legacy';
+    session.status.blockedAt = nowISO();
+
+    // Обычные пути записи (title/очередь/сообщение) не должны «присвоить»
+    // legacy-маркер текущему процессу — иначе recovery счёл бы ход своим.
+    await manager.saveSession(session);
+    const afterSave = (await manager.getSession(created.id))!;
+    expect(afterSave.currentStream?.owner).toBeUndefined();
+    expect(afterSave.status.blockedOwner).toBeUndefined();
+
+    afterSave.title = 'renamed';
+    await manager.updateSession(afterSave);
+    const afterUpdate = (await manager.getSession(created.id))!;
+    expect(afterUpdate.currentStream?.owner).toBeUndefined();
+    expect(afterUpdate.status.blockedOwner).toBeUndefined();
+
+    const recovered = await manager.recoverInterruptedSessions();
+    expect(recovered).toEqual([{ sessionId: created.id, streamId: 'stream-legacy' }]);
+    expect((await manager.getSession(created.id))!.currentStream).toBeUndefined();
+  });
+
+  it('свой owner: живой ход не тронут', async () => {
+    const id = await withMarkers(manager, { ownerInStream: 'owner-current', ownerInBlock: 'owner-current' });
+
+    const recovered = await manager.recoverInterruptedSessions();
+    expect(recovered).toEqual([]);
+
+    const stored = (await manager.getSession(id))!;
+    expect(stored.currentStream).toMatchObject({ streamId: 'stream-1', turnId: 'turn-1', owner: 'owner-current' });
+    expect(stored.status.blocked).toBe('process-1');
+    expect(stored.status.blockedOwner).toBe('owner-current');
+    expect(stored.messages[0]!.metadata?.streaming).toBe(true);
+  });
+
+  it('идемпотентность: повторный проход ничего не находит', async () => {
+    const other = new SessionManager(store, { instanceId: 'owner-dead' });
+    await withMarkers(other, { ownerInStream: 'owner-dead', ownerInBlock: 'owner-dead' });
+
+    expect((await manager.recoverInterruptedSessions()).length).toBe(1);
+    expect(await manager.recoverInterruptedSessions()).toEqual([]);
   });
 });

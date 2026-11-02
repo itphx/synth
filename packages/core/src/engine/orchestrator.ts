@@ -6066,6 +6066,8 @@ export class ChatOrchestrator {
         agentRole: s.settings.agentRole,
         startedAt: nowISO(),
         cancelled: false,
+        // Владелец маркера — процесс инстанса (recovery после рестарта).
+        owner: this._sessionManager.instanceId,
       };
       await this._sessionManager.saveSession(s);
     });

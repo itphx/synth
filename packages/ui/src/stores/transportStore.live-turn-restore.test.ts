@@ -389,3 +389,58 @@ describe('transportStore: серверный снимок живого шага 
     expect(step.status).toBe('completed')
   })
 })
+
+describe('transportStore: зависший ход без серверной активности', () => {
+  it('stale streaming-ход без current_stream/blocked/activity завершается stopped', () => {
+    useChatStore.getState().startTurn(SESSION, { turnId: 'turn-stale', status: 'streaming' })
+
+    restoreLiveTurnFromSession(SESSION, { status: {}, current_stream: null })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-stale',
+      status: 'stopped',
+    })
+  })
+
+  it('stale-ход со streaming-сообщением в истории — живой шаг, не завершается', () => {
+    useChatStore.getState().setMessages(SESSION, [
+      message({ id: 'm-live', turn_id: 'turn-live', status: 'streaming', content: 'частичный ответ' }),
+    ])
+    useChatStore.getState().startTurn(SESSION, { turnId: 'turn-live', status: 'streaming' })
+
+    restoreLiveTurnFromSession(SESSION, { status: {}, current_stream: null })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-live',
+      status: 'streaming',
+    })
+  })
+
+  it('current_stream подтверждает ход — не завершается', () => {
+    useChatStore.getState().startTurn(SESSION, { turnId: 'turn-live', status: 'streaming' })
+
+    restoreLiveTurnFromSession(SESSION, {
+      status: {},
+      current_stream: { stream_id: 'stream-1', turn_id: 'turn-live' },
+    })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-live',
+      status: 'streaming',
+    })
+  })
+
+  it('blocked без current_stream ждёт подтверждения — ход не завершается', () => {
+    useChatStore.getState().startTurn(SESSION, { turnId: 'turn-ask', status: 'streaming' })
+
+    restoreLiveTurnFromSession(SESSION, {
+      status: { blocked: 'process-1' },
+      current_stream: null,
+    })
+
+    expect(useChatStore.getState().turnBySession[SESSION]).toMatchObject({
+      turnId: 'turn-ask',
+      status: 'streaming',
+    })
+  })
+})

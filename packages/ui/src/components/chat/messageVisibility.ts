@@ -22,14 +22,20 @@ export function isStateMessage(m: Pick<MessageData, 'metadata'>): boolean {
 
 /**
  * Видимость сообщения в транскрипте: скрываем служебный tool-chain
- * (`metadata.tool_chain`), state-сообщения (ADR-070 §2.8) и user-сообщение
- * системной команды (`metadata.commandPrompt`, ADR-046 §7.1 — команда
- * объединена с локальным выводом в один блок и отдельным пузырём не нужна).
+ * (`metadata.tool_chain`) **после завершения** шага, state-сообщения
+ * (ADR-070 §2.8) и user-сообщение системной команды (`metadata.commandPrompt`,
+ * ADR-046 §7.1 — команда объединена с локальным выводом в один блок и
+ * отдельным пузырём не нужна).
+ *
+ * Живой tool-chain шаг (`status: 'streaming'`) виден: иначе шаг, который
+ * состоит только из вызовов инструментов, не показывался бы до своего финала
+ * (карточки инструментов жили бы «в пустоте»). После завершения шага он
+ * скрывается — финальный отчёт/результаты остаются в соседних сегментах.
  * `hidden` здесь не используется — он исключает сообщение и из LLM-запроса.
  */
-export function isVisibleMessage(m: Pick<MessageData, 'metadata'>): boolean {
-  if (m.metadata?.tool_chain === true) return false
-  if (m.metadata?.commandPrompt === true) return false
+export function isVisibleMessage(m: Pick<MessageData, 'metadata' | 'status'>): boolean {
   if (isStateMessage(m)) return false
+  if (m.metadata?.commandPrompt === true) return false
+  if (m.metadata?.tool_chain === true && m.status !== 'streaming') return false
   return true
 }

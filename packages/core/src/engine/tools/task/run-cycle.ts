@@ -571,6 +571,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           agentRole: subagentType,
           startedAt: nowISO(),
           cancelled: false,
+          // Владелец маркера — процесс инстанса (recovery после рестарта).
+          owner: extra.sessionManager!.instanceId,
         };
         await extra.sessionManager!.saveSession(s);
       });
