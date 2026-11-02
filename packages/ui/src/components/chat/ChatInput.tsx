@@ -302,6 +302,7 @@ export function ChatInput({
    * переживать перемонтирование и reload; `hydrate` идемпотентен.
    */
   useEffect(() => {
+    void useAttachmentsStore.getState().loadLimits()
     void useAttachmentsStore.getState().hydrate(sessionId)
   }, [sessionId])
 
@@ -585,7 +586,10 @@ export function ChatInput({
         // а отправка заблокирована до удаления или повтора.
         const tooLarge = failedItems.some((item) => item.error === 'too_large')
         notifyMessage({
-          text: attachmentErrorText(t, tooLarge ? 'too_large' : 'upload_failed'),
+          text: attachmentErrorText(t, tooLarge ? 'too_large' : 'upload_failed', {
+            maxBytesPerFile: useAttachmentsStore.getState().limits.maxBytesPerFile,
+            maxFilesPerMessage: useAttachmentsStore.getState().limits.maxFilesPerMessage,
+          }),
           type: 'error',
           category: 'error',
           sessionId,

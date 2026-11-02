@@ -5,7 +5,7 @@ import type { ChangeEvent } from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
-import { ATTACHMENT_ACCEPT } from '@/lib/attachments/accept'
+import { buildAttachmentAccept } from '@/lib/attachments/accept'
 import { useDevice } from '@/hooks/useDevice'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
 
@@ -36,6 +36,12 @@ export function AttachmentButton({
   const { deviceType } = useDevice()
   const inputRef = useRef<HTMLInputElement>(null)
   const addFiles = useAttachmentsStore((state) => state.addFiles)
+  // Лимиты инстанса: `accept` фильтруется по разрешённым семействам,
+  // при выключенных вложениях кнопка блокируется.
+  const limits = useAttachmentsStore((state) => state.limits)
+  const disabledByServer = !limits.enabled
+  const isDisabled = disabled || disabledByServer
+  const label = disabledByServer ? t('chat.attachments.disabled') : t('chat.attachments.attach')
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? [])
@@ -54,10 +60,10 @@ export function AttachmentButton({
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
-        disabled={disabled}
+        disabled={isDisabled}
         data-device={deviceType}
-        aria-label={t('chat.attachments.attach')}
-        title={t('chat.attachments.attach')}
+        aria-label={label}
+        title={label}
         className={cn(
           'inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground',
           'transition-colors hover:bg-interactive-hover hover:text-foreground',
@@ -71,7 +77,7 @@ export function AttachmentButton({
         ref={inputRef}
         type="file"
         multiple
-        accept={ATTACHMENT_ACCEPT}
+        accept={buildAttachmentAccept(limits.modalities)}
         className="hidden"
         tabIndex={-1}
         aria-hidden="true"

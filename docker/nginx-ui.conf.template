@@ -17,8 +17,11 @@ server {
   index index.html;
 
   # Лимит тела запроса: вложения (POST /sessions/:id/attachments) и /fs/upload.
-  # Значение — из env SYNTH_NGINX_CLIENT_MAX_BODY_SIZE (дефолт образа 100m).
-  # Должно быть >= attachments.maxBytesPerFile + multipart-обвязка.
+  # Значение — env SYNTH_NGINX_CLIENT_MAX_BODY_SIZE; по умолчанию его вычисляет
+  # entrypoint-скрипт (docker/ui-entrypoint.d/15-synth-body-size.envsh) из
+  # прикладных лимитов: max(attachments.maxBytesPerFile, storage.maxUploadBytes,
+  # 100 МиБ) + 1 МиБ (multipart-обвязка). Явный env — override (Helm
+  # `ui.clientMaxBodySize`).
   client_max_body_size ${SYNTH_NGINX_CLIENT_MAX_BODY_SIZE};
 
   # Backend-прокси для API/WS (паролится на backend-сервис, порт 5000).

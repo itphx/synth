@@ -1497,6 +1497,7 @@ export const dict = {
 
   // Вложения (ADR-115)
   'chat.attachments.attach': 'Прикрепить файл',
+  'chat.attachments.disabled': 'Вложения отключены администратором',
   'chat.attachments.remove': 'Удалить',
   'chat.attachments.removeNamed': 'Удалить «{name}»',
   'chat.attachments.retry': 'Повторить загрузку',

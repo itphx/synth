@@ -15,6 +15,7 @@ import {
   MAX_FILE_BYTES,
   useAttachmentsStore,
 } from './attachmentsStore'
+import { DEFAULT_ATTACHMENT_LIMITS } from '@/lib/attachments/limits'
 import {
   createMemoryDraftAttachmentStorage,
   setDraftAttachmentStorageForTests,
@@ -36,6 +37,13 @@ function oversizedFile(name: string, type = 'application/pdf'): File {
   return file
 }
 
+/** Файл с заданным размером (без реального выделения памяти). */
+function sizedFile(name: string, size: number, type = 'application/pdf'): File {
+  const file = makeFile(name, type)
+  Object.defineProperty(file, 'size', { value: size })
+  return file
+}
+
 function uploaded(id: string) {
   return {
     id,
@@ -54,7 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   // `dispose` снимает и guard гидратации: тесты hydrate не должны зависеть от порядка.
   useAttachmentsStore.getState().dispose(SESSION)
-  useAttachmentsStore.setState({ bySession: {} })
+  useAttachmentsStore.setState({ bySession: {}, limits: DEFAULT_ATTACHMENT_LIMITS })
   memoryStorage = createMemoryDraftAttachmentStorage()
   setDraftAttachmentStorageForTests(memoryStorage)
   mocks.uploadSessionAttachment.mockImplementation(async (_sessionId: string, file: File) =>
@@ -74,7 +82,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  useAttachmentsStore.setState({ bySession: {} })
+  useAttachmentsStore.setState({ bySession: {}, limits: DEFAULT_ATTACHMENT_LIMITS })
   setDraftAttachmentStorageForTests(null)
 })
 
@@ -468,5 +476,82 @@ describe('attachmentsStore: hydrate после reload', () => {
   it('hasFailed ложен без ошибок', async () => {
     await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
     expect(useAttachmentsStore.getState().hasFailed(SESSION)).toBe(false)
+  })
+})
+
+describe('attachmentsStore: серверные лимиты инстанса', () => {
+  const TWENTY_FIVE_MB = 25 * 1024 * 1024
+
+  it('предпроверка идёт по лимитам инстанса, а не по UX-фоллбеку', async () => {
+    useAttachmentsStore.getState().setLimits({
+      ...DEFAULT_ATTACHMENT_LIMITS,
+      maxBytesPerFile: TWENTY_FIVE_MB,
+      maxFilesPerMessage: 2,
+    })
+
+    await useAttachmentsStore.getState().addFiles(SESSION, [
+      sizedFile('big.pdf', 30 * 1024 * 1024),
+      sizedFile('ok.pdf', 20 * 1024 * 1024),
+    ])
+
+    const [big, ok] = items()
+    expect(big!.upload).toBe('error')
+    expect(big!.error).toBe('too_large')
+    expect(ok!.upload).toBe('ready')
+    expect(ok!.partId).toBe('srv_ok.pdf')
+    expect(mocks.uploadSessionAttachment).toHaveBeenCalledTimes(1)
+    expect(mocks.uploadSessionAttachment).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ name: 'ok.pdf' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('лимит файлов в сообщении берётся из инстанса', async () => {
+    useAttachmentsStore
+      .getState()
+      .setLimits({ ...DEFAULT_ATTACHMENT_LIMITS, maxFilesPerMessage: 2 })
+
+    await useAttachmentsStore
+      .getState()
+      .addFiles(SESSION, [makeFile('a.txt'), makeFile('b.txt'), makeFile('c.txt')])
+
+    const list = items()
+    expect(list.filter((item) => item.upload === 'ready')).toHaveLength(2)
+    expect(list.filter((item) => item.error === 'too_many')).toHaveLength(1)
+    expect(mocks.uploadSessionAttachment).toHaveBeenCalledTimes(2)
+  })
+
+  it('413 с details.maxBytesPerFile кладёт фактический предел в элемент', async () => {
+    mocks.uploadSessionAttachment.mockRejectedValueOnce(
+      Object.assign(new Error('too big'), {
+        status: 413,
+        details: { maxBytesPerFile: TWENTY_FIVE_MB },
+      }),
+    )
+
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('big.txt')])
+
+    const draft = items()[0]!
+    expect(draft.upload).toBe('error')
+    expect(draft.error).toBe('too_large')
+    expect(draft.maxBytes).toBe(TWENTY_FIVE_MB)
+    // Runtime-only: в IndexedDB предел не персистится.
+    expect('maxBytes' in ((await memoryStorage.list(SESSION))[0]!)).toBe(false)
+  })
+
+  it('успешная повторная загрузка очищает maxBytes', async () => {
+    mocks.uploadSessionAttachment.mockRejectedValueOnce(
+      Object.assign(new Error('too big'), { status: 413, details: { maxBytesPerFile: TWENTY_FIVE_MB } }),
+    )
+    await useAttachmentsStore.getState().addFiles(SESSION, [makeFile('a.txt')])
+    const draft = items()[0]!
+    expect(draft.maxBytes).toBe(TWENTY_FIVE_MB)
+
+    await useAttachmentsStore.getState().retry(SESSION, draft.id)
+
+    const retried = items()[0]!
+    expect(retried.upload).toBe('ready')
+    expect(retried.maxBytes).toBeUndefined()
   })
 })

@@ -100,7 +100,9 @@ export function createAttachmentRoutes(
       });
       return c.json(meta, 201);
     } catch (err) {
-      if (err instanceof AttachmentError) return attachmentErrorResponse(c, err, messages);
+      if (err instanceof AttachmentError) {
+        return attachmentErrorResponse(c, err, messages, config.maxBytesPerFile);
+      }
       throw err;
     }
   });
@@ -209,7 +211,16 @@ export async function readAttachmentUploadForm(
     getAttachmentMetricsHook()?.onUpload({ outcome: 'too_large', kind: 'file' });
     return {
       ok: false,
-      response: c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413),
+      response: c.json(
+        {
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: messages.tooLarge(c),
+            details: { maxBytesPerFile: config.maxBytesPerFile },
+          },
+        },
+        413,
+      ),
     };
   }
 
@@ -246,7 +257,16 @@ export async function readAttachmentUploadForm(
     });
     return {
       ok: false,
-      response: c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413),
+      response: c.json(
+        {
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: messages.tooLarge(c),
+            details: { maxBytesPerFile: config.maxBytesPerFile },
+          },
+        },
+        413,
+      ),
     };
   }
 
@@ -269,14 +289,29 @@ export async function readAttachmentUploadForm(
  * HTTP-ответ на отказ `AttachmentService.upload`: `too_large` → `413`,
  * `attachments_disabled`/`unsupported_mime` → `415`. Общий для обоих контуров
  * загрузки (сессия и staging).
+ *
+ * ADR-115: у `413` в `error.details.maxBytesPerFile` — фактический предел
+ * инстанса (клиент показывает его в тексте ошибки); передаётся вызывающим.
  */
 export function attachmentErrorResponse(
   c: Context,
   err: AttachmentError,
   messages: AttachmentRouteMessages,
+  maxBytesPerFile?: number,
 ): Response {
   if (err.code === 'too_large') {
-    return c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.tooLarge(c) } }, 413);
+    return c.json(
+      {
+        error: {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: messages.tooLarge(c),
+          ...(typeof maxBytesPerFile === 'number'
+            ? { details: { maxBytesPerFile } }
+            : {}),
+        },
+      },
+      413,
+    );
   }
   if (err.code === 'attachments_disabled') {
     return c.json(

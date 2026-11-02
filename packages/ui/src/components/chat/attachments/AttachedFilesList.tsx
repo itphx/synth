@@ -4,9 +4,8 @@ import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n, type I18nParams } from '@/lib/i18n'
 import { formatFileSize } from '@/lib/attachments/file-size'
+import { MAX_FILES_PER_MESSAGE, MAX_FILE_BYTES } from '@/lib/attachments/limits'
 import {
-  MAX_FILES_PER_MESSAGE,
-  MAX_FILE_BYTES,
   useAttachmentsStore,
   type DraftAttachment,
   type AttachmentErrorReason,
@@ -28,6 +27,7 @@ export function attachmentFileIcon(item: Pick<DraftAttachment, 'mimeType'>): str
   const mime = item.mimeType.toLowerCase()
   if (mime === 'application/pdf') return 'file-text'
   if (mime.startsWith('audio/')) return 'file-music'
+  if (mime.startsWith('video/')) return 'file-video'
   if (mime.startsWith('image/')) return 'image'
   if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
     return 'file-code'
@@ -49,12 +49,15 @@ const REASON_KEYS: Record<AttachmentErrorReason, string> = {
 export function attachmentErrorText(
   t: (key: string, params?: I18nParams) => string,
   reason: AttachmentErrorReason | undefined,
+  hints?: { maxBytesPerFile?: number; maxFilesPerMessage?: number },
 ): string {
   if (reason === 'too_large') {
-    return t(REASON_KEYS.too_large, { max: formatFileSize(MAX_FILE_BYTES) })
+    return t(REASON_KEYS.too_large, {
+      max: formatFileSize(hints?.maxBytesPerFile ?? MAX_FILE_BYTES),
+    })
   }
   if (reason === 'too_many') {
-    return t(REASON_KEYS.too_many, { max: String(MAX_FILES_PER_MESSAGE) })
+    return t(REASON_KEYS.too_many, { max: String(hints?.maxFilesPerMessage ?? MAX_FILES_PER_MESSAGE) })
   }
   return t(REASON_KEYS.upload_failed)
 }
@@ -66,6 +69,7 @@ export function attachmentErrorText(
 export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: AttachedFilesListProps) {
   const { t } = useI18n()
   const items = useAttachmentsStore((state) => state.bySession[sessionId])
+  const limits = useAttachmentsStore((state) => state.limits)
   const remove = useAttachmentsStore((state) => state.remove)
   const retry = useAttachmentsStore((state) => state.retry)
 
@@ -84,7 +88,10 @@ export function AttachedFilesList({ sessionId, onOpenImage, onRemove }: Attached
   }
 
   const errorText = (item: DraftAttachment): string =>
-    attachmentErrorText(t, item.error)
+    attachmentErrorText(t, item.error, {
+      maxBytesPerFile: item.maxBytes ?? limits.maxBytesPerFile,
+      maxFilesPerMessage: limits.maxFilesPerMessage,
+    })
 
   const removeLabel = (item: DraftAttachment) =>
     t('chat.attachments.removeNamed', { name: item.name })

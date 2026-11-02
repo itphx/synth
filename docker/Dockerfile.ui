@@ -41,10 +41,11 @@ ENV SYNTH_BACKEND_URL=http://synth-backend:5000
 
 # Лимит тела запроса nginx (`client_max_body_size`): вложения сообщений
 # (POST /sessions/:id/attachments) и /fs/upload. Дефолт nginx — 1m, из-за чего
-# загрузка резалась на 1 МиБ (`413`). Значение согласовано с прикладным лимитом
-# `attachments.maxBytesPerFile` (100 МиБ): транспортный лимит должен быть не
-# меньше прикладного + запас на multipart-обвязку. В Helm — `ui.clientMaxBodySize`.
-ENV SYNTH_NGINX_CLIENT_MAX_BODY_SIZE=100m
+# загрузка резалась на 1 МиБ (`413`). Значение НЕ зашито: entrypoint-скрипт
+# docker/ui-entrypoint.d/15-synth-body-size.envsh вычисляет его из прикладных
+# лимитов (`SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, `SYNTH_MAX_UPLOAD_BYTES`):
+# max(…, 100 МиБ) + 1 МиБ на multipart. Явный
+# SYNTH_NGINX_CLIENT_MAX_BODY_SIZE (Helm `ui.clientMaxBodySize`) — override.
 
 # Фильтр envsubst официального образа nginx — awk-regex по именам env-переменных:
 # подставляются ТОЛЬКО SYNTH_BACKEND_URL и SYNTH_NGINX_CLIENT_MAX_BODY_SIZE,
@@ -60,6 +61,12 @@ COPY --from=build /repo/packages/ui/dist /usr/share/nginx/html
 # Права (a+rX) выставлены в build-стадии (аналог защиты в Dockerfile.backend);
 # в целевой стадии RUN нет — образ собирается под arm64 без эмуляции.
 COPY docker/nginx-ui.conf.template /etc/nginx/templates/default.conf.template
+
+# Вычисление транспортного лимита из прикладных (ADR-115): entrypoint nginx
+# source-ит *.envsh из /docker-entrypoint.d/ перед envsubst. Исполняемый бит
+# сохраняется из git — файл должен быть 100755 (RUN в runtime-стадии нет ради
+# arm64: chmod здесь не делаем).
+COPY docker/ui-entrypoint.d/ /docker-entrypoint.d/
 
 EXPOSE 8080
 

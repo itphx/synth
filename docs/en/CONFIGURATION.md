@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-11-02 (**секции «Вложения сообщений» (`attachments.*`) и «Лимиты загрузки и обратный прокси»** — `maxBytesPerFile` по умолчанию 100 МиБ, nginx/Apache/ingress — **переведено**); RU-версия обновлена 2026-11-02 (**секция `session.autoTitle`** «Авто-заголовок сессии» — триггер в начале хода (сразу после первого сообщения пользователя), отсрочка для приветствия/смолтка, `N=2..maxAttempts` — заголовок по диалогу, фоллбек только из реплики с сигналом, ручная регенерация `PATCH /api/v2/sessions/:id {"title": ""}`, env `SYNTH_SESSION_AUTO_TITLE_*` — **переведено**); RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-11-02 (**секции «Вложения сообщений» (`attachments.*`) и «Лимиты загрузки и обратный прокси»** — `maxBytesPerFile` по умолчанию 100 МиБ, nginx/Apache/ingress: транспортный лимит вычисляется из прикладных (единый параметр деплоя) — **переведено**); RU-версия обновлена 2026-11-02 (**секция `session.autoTitle`** «Авто-заголовок сессии» — триггер в начале хода (сразу после первого сообщения пользователя), отсрочка для приветствия/смолтка, `N=2..maxAttempts` — заголовок по диалогу, фоллбек только из реплики с сигналом, ручная регенерация `PATCH /api/v2/sessions/:id {"title": ""}`, env `SYNTH_SESSION_AUTO_TITLE_*` — **переведено**); RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -1968,23 +1968,43 @@ API contract — [API_V2.md](./API_V2.md) §5.6.1). Bytes live on the volume in 
 
 #### Upload limits and the reverse proxy
 
-An upload passes through several limits, and the **smallest** one wins. The transport limit
-(nginx/Apache/ingress) must be **at least** the application limit plus headroom for the multipart
-envelope.
+An upload passes through several limits, and the **smallest** one wins. To avoid tuning every hop by
+hand, the **transport limit is computed** from the application limits:
+`max(attachments.maxBytesPerFile, storage.maxUploadBytes, 100 MiB) + 1 MiB` (headroom for the
+multipart envelope: headers, boundary).
 
 | Level | What | Where it is set | Default |
 |---|---|---|---|
-| Application | `attachments.maxBytesPerFile` — size of one file | `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime `/api/v2/settings/attachments` (UI "Attachments"; `restartRequired: false`) | 100 MiB (`104857600`) |
-| nginx in the UI pod (image `synth-ui`) | `client_max_body_size` | env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`; in Helm — `ui.clientMaxBodySize` | `100m` |
-| nginx-ingress (k8s) | annotation `nginx.ingress.kubernetes.io/proxy-body-size` | set by the chart when `ingress.controller: nginx` from `ui.clientMaxBodySize`; can be overridden in `ingress.annotations` | `100m` |
+| Application (attachments) | `attachments.maxBytesPerFile` — size of one file | `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime `/api/v2/settings/attachments` (UI "Attachments"; `restartRequired: false`) | 100 MiB (`104857600`) |
+| Application (`/fs/upload`) | `storage.maxUploadBytes` — file size for `POST /api/v2/fs/upload` | `config.yaml`, env `SYNTH_MAX_UPLOAD_BYTES` | 100 MiB (`104857600`) |
+| nginx in the UI pod (image `synth-ui`) | `client_max_body_size` | computed by the image entrypoint script from `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`/`SYNTH_MAX_UPLOAD_BYTES`; override — env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` (Helm `ui.clientMaxBodySize`) | computed (`101m` at 100 MiB) |
+| nginx-ingress (k8s) | annotation `nginx.ingress.kubernetes.io/proxy-body-size` | the Helm chart sets the same computed value; override — `ui.clientMaxBodySize` / `ingress.annotations` | computed (`101m`) |
 | Traefik | no body limit | — | — |
 | External Apache2 | `LimitRequestBody` (+ mod_security) | Apache config | `0` (no limit) |
 
+**One deployment parameter.** In Helm that is `attachments.maxBytesPerFile`: the value goes to the
+backend (ConfigMap → env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`), to the UI pod env as the already
+**computed** `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` (the chart does the math) and to the ingress
+annotation — both transport levels are kept in sync from one value. Locally/standalone/`docker
+compose` — env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` (or `config.yaml`); there the UI container
+receives that variable and computes the transport limit with an entrypoint script at startup, so no
+separate nginx setting is needed.
+
+**The transport limit is a ceiling, the application limit is stricter.** A file above
+`attachments.maxBytesPerFile` is rejected by the backend (JSON `413`); the transport limit only stops
+the request before it reaches the application (HTML `413` from the proxy). The 100 MiB floor and the
+`storage.maxUploadBytes` input guarantee that lowering the attachment limit does not break file uploads
+in the file tree: `/fs/upload` has its own limit.
+
 The nginx default (`client_max_body_size 1m`) cuts the upload before the application does — that is
-why it is raised to `100m` both in the image and in the chart. If the application limit is raised via
-`config.yaml`/UI, the transport limit must be raised too (with headroom for multipart: headers +
-boundary, tens of kilobytes). A file exactly at the application limit plus the multipart envelope may
-exceed `100m` — near the boundary set the transport limit slightly higher (e.g. `105m`).
+why the transport limit is computed both in the image and in the chart. If the application limit is
+raised via `config.yaml`/UI, the transport limit is recomputed on the next UI pod start (nginx reads
+the value at startup). An explicit `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`/`ui.clientMaxBodySize` is a full
+override, not an addition: add the +1 MiB headroom yourself when setting it manually.
+
+The UI receives the effective server-side limit from `GET /api/v2/meta` (field
+`attachments.maxBytesPerFile`) — handy for verifying that the deployment took effect and for not
+mixing up the levels.
 
 **Apache2 as an external ingress.** Apache's `LimitRequestBody` default is `0` (no limit), but if it
 is set — raise it for 100 MiB. `SecRequestBodyLimit`/`SecRequestBodyNoFilesLimit` apply only with

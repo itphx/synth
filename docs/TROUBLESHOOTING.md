@@ -172,15 +172,20 @@ security:
 
 1. **Приложение** — `attachments.maxBytesPerFile` (по умолчанию 100 МиБ) и `maxBytesPerSession`
    (1 ГиБ): `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime
-   `/api/v2/settings/attachments` (UI «Вложения»). Превышение даёт `413` с телом JSON — значит,
-   ответил backend.
-2. **nginx UI-пода** — `client_max_body_size` (env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`, дефолт
-   образа `100m`; Helm — `ui.clientMaxBodySize`). Симптом в логе — `client intended to send too
-   large body`. Проверка: `kubectl -n <ns> logs deploy/synth-ui`. Правка требует рестарта/передеплоя
-   UI-пода (значение читается nginx при старте).
-3. **Ingress** — nginx-ingress: аннотация `nginx.ingress.kubernetes.io/proxy-body-size` (чарт
-   ставит её из `ui.clientMaxBodySize` при `ingress.controller: nginx`); у Traefik лимита тела нет —
-   искать другой прокси.
+   `/api/v2/settings/attachments` (UI «Вложения»). Превышение даёт `413` с телом JSON и
+   `error.details.maxBytesPerFile` (фактический предел) — значит, ответил backend. Эффективный
+   серверный лимит UI берёт из `GET /api/v2/meta` (поле `attachments.maxBytesPerFile`): если он
+   отличается от заданного в UI — значение зафиксировано env/деплоем и runtime-настройкой не
+   переопределяется.
+2. **nginx UI-пода** — `client_max_body_size` **вычисляется** entrypoint-скриптом образа
+   (`docker/ui-entrypoint.d/15-synth-body-size.envsh`) из `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` и
+   `SYNTH_MAX_UPLOAD_BYTES`: `max(…, 100 МиБ) + 1 МиБ` (для 100 МиБ — `101m`). Явный
+   `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` (Helm — `ui.clientMaxBodySize`) — override. Симптом в логе —
+   `client intended to send too large body`. Проверка: `kubectl -n <ns> logs deploy/synth-ui`.
+   Значение читается nginx при старте ⇒ правка лимитов/override требует рестарта/передеплоя UI-пода.
+3. **Ingress** — nginx-ingress: аннотация `nginx.ingress.kubernetes.io/proxy-body-size` (чарт ставит
+   **то же вычисленное значение** — по умолчанию `101m`; override — `ui.clientMaxBodySize` /
+   `ingress.annotations`); у Traefik лимита тела нет — искать другой прокси.
 4. **Внешний Apache2** — `LimitRequestBody` (дефолт `0` — без лимита) и, если включён `mod_security`,
    `SecRequestBodyLimit` (его дефолт 12.5 МБ режет загрузки) / `SecRequestBodyNoFilesLimit`.
    Готовый блок конфигурации — [CONFIGURATION.md](./CONFIGURATION.md#лимиты-загрузки-и-обратный-прокси).

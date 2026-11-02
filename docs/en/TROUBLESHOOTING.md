@@ -172,15 +172,20 @@ security:
 
 1. **Application** — `attachments.maxBytesPerFile` (default 100 MiB) and `maxBytesPerSession`
    (1 GiB): `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime
-   `/api/v2/settings/attachments` (UI "Attachments"). Exceeding them gives a `413` with a JSON body —
-   i.e. the backend answered.
-2. **nginx in the UI pod** — `client_max_body_size` (env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`, image
-   default `100m`; Helm — `ui.clientMaxBodySize`). The symptom in the log is `client intended to send
-   too large body`. Check: `kubectl -n <ns> logs deploy/synth-ui`. A change requires a UI pod
-   restart/redeploy (nginx reads the value at startup).
+   `/api/v2/settings/attachments` (UI "Attachments"). Exceeding them gives a `413` with a JSON body
+   and `error.details.maxBytesPerFile` (the effective limit) — i.e. the backend answered. The UI
+   takes the effective server-side limit from `GET /api/v2/meta` (field `attachments.maxBytesPerFile`):
+   if it differs from the value set in the UI, the value is pinned by env/deployment and a runtime
+   setting cannot override it.
+2. **nginx in the UI pod** — `client_max_body_size` is **computed** by the image entrypoint script
+   (`docker/ui-entrypoint.d/15-synth-body-size.envsh`) from `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` and
+   `SYNTH_MAX_UPLOAD_BYTES`: `max(…, 100 MiB) + 1 MiB` (`101m` at 100 MiB). An explicit
+   `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` (Helm — `ui.clientMaxBodySize`) is an override. The symptom in
+   the log is `client intended to send too large body`. Check: `kubectl -n <ns> logs deploy/synth-ui`.
+   nginx reads the value at startup ⇒ a limit/override change requires a UI pod restart/redeploy.
 3. **Ingress** — nginx-ingress: annotation `nginx.ingress.kubernetes.io/proxy-body-size` (the chart
-   sets it from `ui.clientMaxBodySize` when `ingress.controller: nginx`); Traefik has no body limit —
-   look for another proxy.
+   sets the **same computed value** — `101m` by default; override — `ui.clientMaxBodySize` /
+   `ingress.annotations`); Traefik has no body limit — look for another proxy.
 4. **External Apache2** — `LimitRequestBody` (default `0` — no limit) and, with `mod_security`
    enabled, `SecRequestBodyLimit` (its default 12.5 MB cuts uploads) / `SecRequestBodyNoFilesLimit`.
    A ready-made config block — [CONFIGURATION.md](./CONFIGURATION.md#upload-limits-and-the-reverse-proxy).

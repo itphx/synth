@@ -326,6 +326,21 @@ export const MESSAGE_MODEL_VERSION = 2;
 export const MESSAGE_MODEL_QUERY_PARAM = 'messageModel';
 
 /**
+ * ADR-115: эффективные лимиты вложений инстанса (`GET /api/v2/meta`).
+ *
+ * Источник — секция `attachments.*` с приоритетом env > runtime > config >
+ * defaults (тот же резолвер, что у `AttachmentService`). Клиент использует
+ * значения для предпроверки и текстов ошибок; истина — сервер.
+ */
+export type InstanceAttachmentCapabilities = {
+  enabled: boolean;
+  modalities: { image: boolean; pdf: boolean; audio: boolean; video: boolean };
+  maxBytesPerFile: number;
+  maxFilesPerMessage: number;
+  maxBytesPerSession: number;
+};
+
+/**
  * ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).
  *
  * `messageModel` — версия модели сообщений; `eventSeq` — события нумеруются
@@ -337,6 +352,8 @@ export type InstanceCapabilities = {
   eventSeq: boolean;
   replay: boolean;
   version: string;
+  /** ADR-115: эффективные лимиты вложений (аддитивно; старые клиенты игнорируют). */
+  attachments?: InstanceAttachmentCapabilities;
 };
 
 /**

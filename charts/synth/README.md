@@ -143,6 +143,8 @@ ingress:
 | `storage.postgres.secretPasswordKey` | `SYNTH_POSTGRES_PASSWORD` | Ключ внутри Secret с паролем БД |
 | `storage.degradedMode` | `""` | Задел деградации: `fallback-file` \| `halt` (пусто → дефолт core) |
 | `storage.fallbackDir` | `""` | Каталог файлового фоллбека (пусто → `{dataDir}/fallback`) |
+| `storage.maxUploadBytes` | `null` | Лимит файла для `POST /api/v2/fs/upload` (байт, env `SYNTH_MAX_UPLOAD_BYTES`); `null` → дефолт приложения 100 МиБ. Учитывается в транспортном лимите nginx/ingress |
+| `attachments.maxBytesPerFile` | `null` | Предел размера одного вложения (байт, ADR-115) — **единый параметр деплоя**: backend + nginx UI-пода + ingress. `null` → дефолт 100 МиБ и runtime-настройка из админки; задан → фиксируется env |
 | `execution.mode` | `inline` | Топология исполнения (ADR-077): `inline` (в процессе backend'а) \| `remote` (пул исполнителей); переключатель — параметр запуска, смена — рестарт |
 | `execution.remote.url` | `[]` | Адреса исполнителей (список); пусто + `executor.enabled: true` → адрес Service пула |
 | `execution.remote.timeoutMs` | `30000` | Таймаут exec-вызова (env `SYNTH_EXECUTION_TIMEOUT_MS`) |
@@ -201,7 +203,7 @@ ingress:
 | `ui.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `ui.imagePullSecrets` | `[]` | Секреты для приватного реестра |
 | `ui.extraEnv` | `{}` | Доп. env для контейнера UI (словарь имя → значение). `SYNTH_BACKEND_URL` — адрес backend'а, на который nginx проксирует `/api /ws /auth /admin /health`; по умолчанию — Service backend'а **текущего** релиза (см. «Адрес backend'а для UI») |
-| `ui.clientMaxBodySize` | `100m` | `client_max_body_size` nginx UI-пода (env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`): лимит тела запроса для вложений и `/fs/upload`. Должен быть ≥ `attachments.maxBytesPerFile` + запас на multipart; при nginx-ingress чарт ставит ту же величину в `proxy-body-size` (см. «Лимит загрузки файлов») |
+| `ui.clientMaxBodySize` | `""` | **Необязательный** override транспортного лимита (`client_max_body_size` nginx UI-пода, env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`, и аннотация `proxy-body-size` nginx-ingress). Пусто → вычисляется из `attachments.maxBytesPerFile` и `storage.maxUploadBytes`: `max(…, 100 МиБ) + 1 МиБ` (для 100 МиБ — `101m`). См. «Лимит загрузки файлов (вложения)» |
 | `ui.service.sessionAffinity` | `None` | Привязка клиента к UI-поду: `None` \| `ClientIP`. Нужна при `ui.replicaCount > 1` — стабильная цепочка «клиент → UI-под → backend-под» (см. «Привязка клиента к UI-поду») |
 | `ingress.enabled` | `false` | Включить Ingress |
 | `ingress.controller` | `nginx` | Ingress-контроллер: `nginx` \| `traefik` \| `none` |
@@ -347,43 +349,60 @@ ui:
 
 ## Лимит загрузки файлов (вложения)
 
-Загрузка вложений проходит через **несколько** лимитов, и режет её самый маленький. Транспортный
-лимит должен быть **не меньше** прикладного + запас на multipart-обвязку (заголовки, boundary —
-десятки килобайт).
+Загрузка вложений и файлов в дерево (`POST /api/v2/fs/upload`) проходит через **несколько** лимитов,
+и режет её самый маленький. Чтобы не настраивать каждое звено руками, чарт применяет **один
+параметр** — `attachments.maxBytesPerFile` — на всех уровнях: backend, nginx UI-пода и
+nginx-ingress. Транспортный лимит при этом **вычисляется**: `max(attachments.maxBytesPerFile,
+storage.maxUploadBytes, 100 МиБ) + 1 МиБ` (запас на multipart-обвязку: заголовки, boundary).
 
 | Уровень | Где | Значение в чарте |
 |---|---|---|
-| Приложение | `backend.config.attachments.maxBytesPerFile` (или env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` / runtime-настройка `/api/v2/settings/attachments`) | дефолт core — **100 МиБ** (`104857600`) |
-| nginx UI-пода (образ `synth-ui`) | `client_max_body_size` ← env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` | `ui.clientMaxBodySize`, дефолт **`100m`** |
-| nginx-ingress | аннотация `nginx.ingress.kubernetes.io/proxy-body-size` | ставится чартом при `ingress.controller: nginx` из `ui.clientMaxBodySize` (переопределяется в `ingress.annotations`) |
+| Приложение (вложения) | `attachments.maxBytesPerFile` — `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime-настройка `/api/v2/settings/attachments` | `attachments.maxBytesPerFile`; `null` → дефолт core **100 МиБ** (`104857600`) и управление из админки; задан → фиксируется env (runtime-настройка его не переопределяет) |
+| Приложение (`/fs/upload`) | `storage.maxUploadBytes` — env `SYNTH_MAX_UPLOAD_BYTES` | `storage.maxUploadBytes`; `null` → дефолт приложения **100 МиБ** |
+| nginx UI-пода (образ `synth-ui`) | `client_max_body_size` ← env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` | вычисляется: `max(attachments, storage, 100 МиБ) + 1 МиБ` (для 100 МиБ → `101m`); `ui.clientMaxBodySize` — необязательный override |
+| nginx-ingress | аннотация `nginx.ingress.kubernetes.io/proxy-body-size` | то же вычисленное значение (при `ingress.controller: nginx`); переопределяется `ui.clientMaxBodySize` / `ingress.annotations` |
 | Traefik | лимита тела нет | — |
 | Внешний Apache2 | `LimitRequestBody`, при `mod_security` — `SecRequestBodyLimit` | вне чарта, см. `docs/CONFIGURATION.md` |
 
+Значение ingress/nginx — **потолок** (транспорт), прикладной лимит **строже**: файл сверх
+`attachments.maxBytesPerFile` отклоняет backend (JSON-`413`), а транспортный лимит лишь не даёт
+запросу дойти до приложения (HTML-`413` от прокси). Нижняя граница 100 МиБ гарантирует, что
+понижение лимита вложений не сломает загрузку файлов в дереве: у `/fs/upload` свой лимит
+(`storage.maxUploadBytes`), и он тоже участвует в вычислении.
+
 ```yaml
-ui:
-  # client_max_body_size nginx UI-пода (вложения, /fs/upload).
-  clientMaxBodySize: "100m"
-backend:
-  config:
-    attachments:
-      # Прикладной лимит одного файла; транспортный — не меньше.
-      maxBytesPerFile: 104857600
+attachments:
+  # Единый параметр деплоя: backend + nginx UI-пода + ingress.
+  # null — дефолт приложения 100 МиБ и runtime-настройка из админки.
+  maxBytesPerFile: 104857600
+storage:
+  # Лимит POST /api/v2/fs/upload (учитывается в транспортном лимите).
+  maxUploadBytes: 104857600
+# Необязательный override транспортного лимита (обычно не нужен):
+# ui:
+#   clientMaxBodySize: "105m"
 ```
 
 **Что важно знать:**
 
-- дефолт nginx (`client_max_body_size 1m`) режет загрузку раньше приложения: без этой настройки
+- дефолт nginx (`client_max_body_size 1m`) режет загрузку раньше приложения: без настройки
   `POST /api/v2/sessions/<id>/attachments` падал с `413 client intended to send too large body`;
-- значение читается nginx при старте пода ⇒ правка `ui.clientMaxBodySize` применяется после
-  рестарта/передеплоя UI (rollout обновляет Deployment автоматически);
-- `ui.extraEnv` применяется **поверх** — `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` можно переопределить
-  точечно;
-- если транспортный лимит **меньше** прикладного, клиент получит `413` от прокси с HTML-телом (не
-  JSON от backend) — различать по телу ответа;
+- значение читается nginx при старте пода ⇒ изменение `attachments.maxBytesPerFile`,
+  `storage.maxUploadBytes` или `ui.clientMaxBodySize` применяется после рестарта/передеплоя UI
+  (rollout обновляет Deployment автоматически);
+- `attachments.maxBytesPerFile` задаётся **и** в ConfigMap (`SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`
+  для backend), и в env UI-пода (`SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` — вычисленное значение), и в
+  аннотацию ingress — оба уровня согласованы одним значением;
+- `ui.clientMaxBodySize` и `ui.extraEnv.SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` применяются **поверх**
+  вычисленного значения — это полный override, не «прибавка»;
+- **миграция:** кто задавал `ui.clientMaxBodySize` — значение осталось рабочим override'ом; можно
+  оставить как есть либо убрать его и управлять лимитом прикладным
+  `attachments.maxBytesPerFile` (транспортный подтянется сам);
 - тело multipart **буферизуется в память** и на UI-поде (nginx проксирует поток), и на backend'е:
-  100 МБ × одновременные загрузки — это память; при больших значениях поднимайте `resources.limits.memory`;
-- файл размером ровно в прикладной лимит вместе с multipart-обвязкой может превысить `100m` — на
-  границе задайте транспортный лимит чуть выше (например `105m`).
+  100 МБ × одновременные загрузки — это память; при больших значениях поднимайте
+  `resources.limits.memory`;
+- при явном override без запаса файл размером ровно в прикладной лимит вместе с multipart-обвязкой
+  может превысить потолок — закладывайте +1 МиБ (вычисляемое значение уже это делает).
 
 ## Наблюдаемость
 

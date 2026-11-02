@@ -145,7 +145,9 @@ export function createStagingAttachmentRoutes(
       }
       return c.json(meta, 201);
     } catch (err) {
-      if (err instanceof AttachmentError) return attachmentErrorResponse(c, err, messages);
+      if (err instanceof AttachmentError) {
+        return attachmentErrorResponse(c, err, messages, config.maxBytesPerFile);
+      }
       throw err;
     }
   });

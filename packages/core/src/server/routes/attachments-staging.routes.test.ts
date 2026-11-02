@@ -146,8 +146,12 @@ describe('HTTP: staging-загрузка вложений (ADR-115)', () => {
     });
 
     expect(res.status).toBe(413);
-    const body = (await res.json()) as { error: { code: string } };
+    const body = (await res.json()) as {
+      error: { code: string; details?: { maxBytesPerFile?: number } };
+    };
     expect(body.error.code).toBe('PAYLOAD_TOO_LARGE');
+    // ADR-115: фактический предел инстанса — в error.details.
+    expect(body.error.details?.maxBytesPerFile).toBe(1024 * 1024);
   });
 
   it('413 PAYLOAD_TOO_LARGE: файл больше maxBytesPerFile', async () => {
@@ -155,8 +159,11 @@ describe('HTTP: staging-загрузка вложений (ADR-115)', () => {
     const res = await upload(app, pngBytes());
 
     expect(res.status).toBe(413);
-    const body = (await res.json()) as { error: { code: string } };
+    const body = (await res.json()) as {
+      error: { code: string; details?: { maxBytesPerFile?: number } };
+    };
     expect(body.error.code).toBe('PAYLOAD_TOO_LARGE');
+    expect(body.error.details?.maxBytesPerFile).toBe(32);
   });
 
   it('415 attachments_disabled: мастер-выключатель вложений', async () => {

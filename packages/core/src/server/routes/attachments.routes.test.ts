@@ -195,8 +195,12 @@ describe('HTTP: вложения сообщений (ADR-115)', () => {
       const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
       const res = await upload(app, session.id, pngBytes());
       expect(res.status).toBe(413);
-      const body = (await res.json()) as { error: { code: string } };
+      const body = (await res.json()) as {
+        error: { code: string; details?: { maxBytesPerFile?: number } };
+      };
       expect(body.error.code).toBe('PAYLOAD_TOO_LARGE');
+      // ADR-115: фактический предел инстанса — в error.details.
+      expect(body.error.details?.maxBytesPerFile).toBe(20);
     });
 
     it('415 UNSUPPORTED_MEDIA_TYPE: MIME вне белого списка', async () => {

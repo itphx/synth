@@ -22,6 +22,7 @@
 > **Переведено 2026-10-31 (продолжение):** §3.3 — `queue.state.items` (элементы очереди
 > `{id, status: 'queued'|'starting'}` без текста и автора) и правила публикации `queue.state`;
 > §5.5 — DTO сессии `activity` (`idle`/`busy`/`retry`, приоритет, персистентность, миграция `030`).
+> ⚠️ RU-версия обновлена 2026-11-02 (**§5.4** — аддитивное `attachments` в `GET /api/v2/meta`; **§5.6.1** — `413` несёт `error.details.maxBytesPerFile`); §5.4 переведён, §5.6.1 в EN по-прежнему отсутствует — **перевод отстаёт**.
 > ⚠️ RU-версия обновлена 2026-10-30 (**§5.5** — `stream.done.step_limit_reached` / `metadata.step_limit_reached` и статус `limit` (`session.steps_limit`); **§5.5** — `message.queued` как подтверждение приёма (`message_id` = `stream_id`) и дельты `subagent.progress` (`content_delta`/`reasoning_delta`), уточнение «UI-переключателя режима больше нет» (ADR-104); **§5.6** — подпись thinking хранится по блокам (`Part.metadata`/`reasoningBlocks`, `91be3f89`), `content` без reasoning при наличии `parts`; **§5.10** — `compatibility` модели (ADR-117) и `requires_reasoning` как shorthand; **§5.9** — `compatibility` провайдера — **переведено**); RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
@@ -342,7 +343,10 @@ instance (across all session channels); a client resumes
 with `Last-Event-ID` / `?since=` (SSE frames carry `id: <eventSeq>`).
 
 **`GET /api/v2/meta`** (no authentication, like `/health`) returns the instance capabilities:
-`{messageModel, eventSeq, replay, version}`. A client compares `messageModel` **before** connecting
+`{messageModel, eventSeq, replay, version}`. Additive `attachments` (ADR-115):
+`{enabled, modalities, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession}` — the **effective**
+attachment settings (env > runtime > config > defaults, the same resolver as `AttachmentService`); the
+client uses them for pre-checks and error texts, the server stays the source of truth. A client compares `messageModel` **before** connecting
 and does not connect on mismatch (**fail-closed** — silent degradation is forbidden); the server
 enforces the same gate (WS close `1008`, SSE `426`). Legacy `sessions/:id/prompt` returning
 `text/event-stream` and the `send_message` WS frame no longer exist.

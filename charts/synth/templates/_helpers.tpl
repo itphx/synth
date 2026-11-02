@@ -64,17 +64,34 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "http://%s:%d" (include "synth.backend.fullname" .) (.Values.backend.service.port | int64) -}}
 {{- end }}
 
+{{- /* ADR-115: транспортный лимит тела запроса (`client_max_body_size`
+       nginx UI-пода и аннотация `proxy-body-size` ingress) — вычисляется из
+       прикладных лимитов, чтобы один параметр деплоя
+       (`attachments.maxBytesPerFile`) применялся на всех уровнях.
+
+       Формула: max(attachments.maxBytesPerFile, storage.maxUploadBytes,
+       100 МиБ) + 1 МиБ (запас на multipart-обвязку), в мегабайтах.
+       Нижняя граница 100 МиБ — чтобы понижение лимита вложений не сломало
+       `POST /api/v2/fs/upload` (у него свой лимит `storage.maxUploadBytes`).
+       Возвращает строку для nginx, например "101m". */ -}}
+{{- define "synth.attachments.bodySize" -}}
+{{- $att := int64 (default 0 (.Values.attachments | default dict).maxBytesPerFile) -}}
+{{- $fs := int64 (default 0 (.Values.storage | default dict).maxUploadBytes) -}}
+{{- $max := max 104857600 $att $fs -}}
+{{- $mib := add (div (add $max 1048575) 1048576) 1 -}}
+{{- printf "%dm" $mib -}}
+{{- end }}
+
 {{- /* ADR-077: env контейнера UI: адрес backend'а + `ui.extraEnv` (словарь
        имя → значение). extraEnv имеет приоритет, дубликаты не рендерим.
        Пустое значение SYNTH_BACKEND_URL → дефолт (nginx не стартует с пустым
        proxy_pass — рабочий адрес лучше, чем CrashLoop). */ -}}
 {{- define "synth.ui.env" -}}
 {{- $env := dict "SYNTH_BACKEND_URL" (include "synth.ui.backendUrl" .) -}}
-{{- /* Лимит тела запроса nginx UI-пода (вложения); extraEnv применяется поверх
-       и может переопределить значение. */ -}}
-{{- if .Values.ui.clientMaxBodySize -}}
-{{- $_ := set $env "SYNTH_NGINX_CLIENT_MAX_BODY_SIZE" (toString .Values.ui.clientMaxBodySize) -}}
-{{- end -}}
+{{- /* Лимит тела запроса nginx UI-пода: вычисляется из прикладных лимитов
+       (ADR-115), `ui.clientMaxBodySize` — необязательный override; extraEnv
+       применяется поверх и может переопределить значение. */ -}}
+{{- $_ := set $env "SYNTH_NGINX_CLIENT_MAX_BODY_SIZE" (default (include "synth.attachments.bodySize" .) .Values.ui.clientMaxBodySize) -}}
 {{- range $name, $value := (.Values.ui.extraEnv | default dict) -}}
 {{- $_ := set $env $name (toString $value) -}}
 {{- end -}}

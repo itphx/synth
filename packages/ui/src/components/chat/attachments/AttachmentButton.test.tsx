@@ -17,6 +17,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { AttachmentButton } from './AttachmentButton'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
+import { DEFAULT_ATTACHMENT_LIMITS } from '@/lib/attachments/limits'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -86,7 +87,7 @@ beforeEach(() => {
     configurable: true,
     writable: true,
   })
-  useAttachmentsStore.setState({ bySession: {} })
+  useAttachmentsStore.setState({ bySession: {}, limits: DEFAULT_ATTACHMENT_LIMITS })
 })
 
 afterEach(async () => {
@@ -97,7 +98,7 @@ afterEach(async () => {
     })
     container.remove()
   }
-  useAttachmentsStore.setState({ bySession: {} })
+  useAttachmentsStore.setState({ bySession: {}, limits: DEFAULT_ATTACHMENT_LIMITS })
   vi.unstubAllGlobals()
 })
 
@@ -154,5 +155,52 @@ describe('AttachmentButton', () => {
 
     expect(clickSpy).not.toHaveBeenCalled()
     expect(useAttachmentsStore.getState().bySession[SESSION] ?? []).toHaveLength(0)
+  })
+
+  it('accept по умолчанию содержит видео и аудио', async () => {
+    const container = await renderButton()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+    const accept = input.getAttribute('accept') ?? ''
+
+    expect(accept).toContain('image/png')
+    expect(accept).toContain('.docx')
+    expect(accept).toContain('video/mp4')
+    expect(accept).toContain('audio/mpeg')
+    expect(accept).toContain('.mp4')
+    expect(accept).toContain('.mp3')
+  })
+
+  it('выключенная модальность video убирает видео из accept, но не аудио', async () => {
+    useAttachmentsStore.getState().setLimits({
+      ...DEFAULT_ATTACHMENT_LIMITS,
+      modalities: { ...DEFAULT_ATTACHMENT_LIMITS.modalities, video: false },
+    })
+
+    const container = await renderButton()
+    const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
+    const accept = input.getAttribute('accept') ?? ''
+
+    expect(accept).not.toContain('video/')
+    expect(accept).not.toContain('.mp4')
+    expect(accept).toContain('audio/mpeg')
+    expect(accept).toContain('.mp3')
+  })
+
+  it('при выключенных вложениях кнопка заблокирована с подписью disabled', async () => {
+    useAttachmentsStore.getState().setLimits({
+      ...DEFAULT_ATTACHMENT_LIMITS,
+      enabled: false,
+    })
+
+    const container = await renderButton()
+    const button = container.querySelector('button') as HTMLButtonElement
+
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('title')).toBe(
+      'Attachments are disabled by the administrator',
+    )
+    expect(button.getAttribute('aria-label')).toBe(
+      'Attachments are disabled by the administrator',
+    )
   })
 })

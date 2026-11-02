@@ -1362,7 +1362,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`) — **без
   // аутентификации** (как `GET /health`): публичная информация о протоколе,
   // по ней клиент сверяет модель сообщений (fail-closed гейт транспорта).
-  app.route('/api/v2', createMetaRoutes());
+  app.route(
+    '/api/v2',
+    createMetaRoutes({ getAttachments: () => deps.attachmentsSettings.getConfig() }),
+  );
 
   // Глобальный SSE-хаб для всех сессий пользователя (ADR-052: `events:watch`).
   registerEventsSse(app, { auth, eventHub, scopeGuard });

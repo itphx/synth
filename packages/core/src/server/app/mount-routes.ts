@@ -1008,7 +1008,10 @@ export function mountStandaloneRoutes(
   // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`) — **без
   // аутентификации** (как `GET /health`): публичная информация о протоколе,
   // по ней клиент сверяет модель сообщений (fail-closed гейт транспорта).
-  app.route('/api/v2', createMetaRoutes());
+  app.route(
+    '/api/v2',
+    createMetaRoutes({ getAttachments: () => deps.attachmentsSettings.getConfig() }),
+  );
 
   // ADR-069 §9.3: read-only прозрачность проектных инструкций (session/project scope).
   // Резолвер — тот же core-модуль, что у оркестратора (Фаза 1/2a); доступ —

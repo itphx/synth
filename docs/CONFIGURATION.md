@@ -2084,23 +2084,41 @@ attachments:
 
 #### Лимиты загрузки и обратный прокси
 
-Загрузка вложения проходит через несколько лимитов, и «режет» её самый маленький из них.
-Транспортный лимит (nginx/Apache/ingress) должен быть **не меньше** прикладного плюс запас на
-multipart-обвязку.
+Загрузка вложения проходит через несколько лимитов, и «режет» её самый маленький из них. Чтобы не
+настраивать каждое звено вручную, **транспортный лимит вычисляется** из прикладных:
+`max(attachments.maxBytesPerFile, storage.maxUploadBytes, 100 МиБ) + 1 МиБ` (запас на
+multipart-обвязку: заголовки, boundary).
 
 | Уровень | Что | Где задаётся | По умолчанию |
 |---|---|---|---|
-| Приложение | `attachments.maxBytesPerFile` — размер одного файла | `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime `/api/v2/settings/attachments` (UI «Вложения»; `restartRequired: false`) | 100 МиБ (`104857600`) |
-| nginx UI-пода (образ `synth-ui`) | `client_max_body_size` | env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`; в Helm — `ui.clientMaxBodySize` | `100m` |
-| nginx-ingress (k8s) | аннотация `nginx.ingress.kubernetes.io/proxy-body-size` | ставится чартом при `ingress.controller: nginx` из `ui.clientMaxBodySize`; можно переопределить в `ingress.annotations` | `100m` |
+| Приложение (вложения) | `attachments.maxBytesPerFile` — размер одного файла | `config.yaml`, env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`, runtime `/api/v2/settings/attachments` (UI «Вложения»; `restartRequired: false`) | 100 МиБ (`104857600`) |
+| Приложение (`/fs/upload`) | `storage.maxUploadBytes` — размер файла для `POST /api/v2/fs/upload` | `config.yaml`, env `SYNTH_MAX_UPLOAD_BYTES` | 100 МиБ (`104857600`) |
+| nginx UI-пода (образ `synth-ui`) | `client_max_body_size` | вычисляется entrypoint-скриптом образа из env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`/`SYNTH_MAX_UPLOAD_BYTES`; override — env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` (Helm `ui.clientMaxBodySize`) | вычисленное (`101m` при 100 МиБ) |
+| nginx-ingress (k8s) | аннотация `nginx.ingress.kubernetes.io/proxy-body-size` | Helm-чарт ставит то же вычисленное значение; override — `ui.clientMaxBodySize` / `ingress.annotations` | вычисленное (`101m`) |
 | Traefik | лимита тела нет | — | — |
 | Внешний Apache2 | `LimitRequestBody` (+ mod_security) | конфиг Apache | `0` (без лимита) |
 
-Дефолт nginx (`client_max_body_size 1m`) режет загрузку раньше приложения — поэтому он поднят до
-`100m` и в образе, и в чарте. Если прикладной лимит увеличен через `config.yaml`/UI, транспортный
-лимит нужно поднять не меньше (с запасом на multipart: заголовки + boundary, десятки килобайт).
-Файл размером ровно в прикладной лимит вместе с multipart-обвязкой может превысить `100m` — при
-работе на границе задайте транспортный лимит чуть выше (например `105m`).
+**Один параметр деплоя.** В Helm это `attachments.maxBytesPerFile`: значение уходит в backend
+(ConfigMap → env `SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE`), в env UI-пода уже **вычисленным**
+`SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` (чарт считает его сам) и в аннотацию ingress — оба транспортных
+уровня согласованы одним значением. Локально/standalone/`docker compose` — env
+`SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE` (или `config.yaml`); там UI-контейнер получает эту переменную
+и вычисляет транспортный лимит entrypoint-скриптом при старте — отдельную настройку nginx задавать
+не нужно.
+
+**Транспортный лимит — потолок, прикладной — строже.** Файл сверх `attachments.maxBytesPerFile`
+отклоняет backend (JSON-`413`); транспортный лимит лишь не даёт запросу дойти до приложения
+(HTML-`413` от прокси). Нижняя граница 100 МиБ и учёт `storage.maxUploadBytes` гарантируют, что
+понижение лимита вложений не сломает загрузку файлов в дереве: у `/fs/upload` свой лимит.
+
+Дефолт nginx (`client_max_body_size 1m`) режет загрузку раньше приложения — поэтому транспортный
+лимит вычисляется и в образе, и в чарте. Если прикладной лимит увеличен через `config.yaml`/UI,
+транспортный пересчитается автоматически при следующем старте UI-пода (значение читается nginx при
+старте). Явный `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`/`ui.clientMaxBodySize` — полный override, не
+«прибавка»: при ручном значении закладывайте +1 МиБ сами.
+
+Эффективный серверный лимит UI получает из `GET /api/v2/meta` (поле
+`attachments.maxBytesPerFile`) — удобно сверить, что деплой применился, и не путать уровни.
 
 **Apache2 как внешний ingress.** Дефолт `LimitRequestBody` в Apache — `0` (без лимита), но если он
 задан — поднимаем под 100 МиБ. `SecRequestBodyLimit`/`SecRequestBodyNoFilesLimit` действуют, только

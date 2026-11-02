@@ -15,8 +15,9 @@ vi.mock('@/lib/api/attachments', () => ({
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
-import { AttachedFilesList } from './AttachedFilesList'
+import { AttachedFilesList, attachmentFileIcon } from './AttachedFilesList'
 import { useAttachmentsStore, type DraftAttachment } from '@/stores/attachmentsStore'
+import { DEFAULT_ATTACHMENT_LIMITS } from '@/lib/attachments/limits'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -76,7 +77,7 @@ beforeEach(() => {
     configurable: true,
     writable: true,
   })
-  useAttachmentsStore.setState({ bySession: {} })
+  useAttachmentsStore.setState({ bySession: {}, limits: DEFAULT_ATTACHMENT_LIMITS })
 })
 
 afterEach(async () => {
@@ -87,7 +88,7 @@ afterEach(async () => {
     })
     container.remove()
   }
-  useAttachmentsStore.setState({ bySession: {} })
+  useAttachmentsStore.setState({ bySession: {}, limits: DEFAULT_ATTACHMENT_LIMITS })
 })
 
 describe('AttachedFilesList', () => {
@@ -266,5 +267,45 @@ describe('AttachedFilesList', () => {
     const item = useAttachmentsStore.getState().bySession[SESSION]![0]!
     expect(item.upload).toBe('ready')
     expect(item.partId).toBe('srv_broken.png')
+  })
+
+  it('текст too_large берёт предел из 413 элемента, иначе — из лимитов стора', async () => {
+    useAttachmentsStore.setState({
+      limits: { ...DEFAULT_ATTACHMENT_LIMITS, maxBytesPerFile: 25 * 1024 * 1024 },
+      bySession: {
+        [SESSION]: [
+          draft({
+            name: 'server-limit.pdf',
+            mimeType: 'application/pdf',
+            upload: 'error',
+            error: 'too_large',
+            partId: undefined,
+          }),
+          draft({
+            name: 'echoed-limit.pdf',
+            mimeType: 'application/pdf',
+            upload: 'error',
+            error: 'too_large',
+            maxBytes: 5 * 1024 * 1024,
+            partId: undefined,
+          }),
+        ],
+      },
+    })
+
+    const container = await renderList()
+    const titles = Array.from(container.querySelectorAll('[data-testid="attachment-file"]')).map(
+      (element) => element.getAttribute('title'),
+    )
+
+    expect(titles).toEqual([
+      'File is larger than 25.0 MB',
+      'File is larger than 5.0 MB',
+    ])
+  })
+
+  it('видео получает иконку file-video, аудио — file-music', () => {
+    expect(attachmentFileIcon({ mimeType: 'video/mp4' })).toBe('file-video')
+    expect(attachmentFileIcon({ mimeType: 'audio/mpeg' })).toBe('file-music')
   })
 })

@@ -24,6 +24,21 @@ data:
   {{- range $k, $v := .Values.backend.extraEnv }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
+  {{- /* ADR-115: единый параметр деплоя — предел размера одного вложения.
+         Задан в values → фиксируется env (runtime-настройка из UI его не
+         переопределит). Ключ, заданный пользователем в backend.extraEnv,
+         не дублируем. */}}
+  {{- $extraEnv := .Values.backend.extraEnv | default dict }}
+  {{- $attMax := (.Values.attachments | default dict).maxBytesPerFile }}
+  {{- if and $attMax (not (hasKey $extraEnv "SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE")) }}
+  SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE: {{ int64 $attMax | quote }}
+  {{- end }}
+  {{- /* Лимит `POST /api/v2/fs/upload` (storage.maxUploadBytes) — он же вход
+         в вычисление транспортного лимита nginx/ingress. */}}
+  {{- $fsMax := (.Values.storage | default dict).maxUploadBytes }}
+  {{- if and $fsMax (not (hasKey $extraEnv "SYNTH_MAX_UPLOAD_BYTES")) }}
+  SYNTH_MAX_UPLOAD_BYTES: {{ int64 $fsMax | quote }}
+  {{- end }}
 {{- if .Values.caCert }}
 ---
 apiVersion: v1

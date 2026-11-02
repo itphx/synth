@@ -1,0 +1,54 @@
+# ADR-115: транспортный лимит тела запроса для nginx UI-пода.
+#
+# Файл с расширением .envsh официальный entrypoint образа nginx *source*-ит
+# (а не запускает как отдельный процесс), поэтому `export` попадает в
+# окружение последующего envsubst-шага — значение подставляется в
+# /etc/nginx/templates/default.conf.template → client_max_body_size.
+#
+# Значение вычисляется из прикладных лимитов, чтобы один параметр деплоя
+# применялся на всех уровнях:
+#   max(attachments.maxBytesPerFile, storage.maxUploadBytes, 100 МиБ) + 1 МиБ.
+# Нижняя граница 100 МиБ — чтобы понижение лимита вложений не сломало
+# POST /api/v2/fs/upload (у него свой лимит `SYNTH_MAX_UPLOAD_BYTES`).
+#
+# Явно заданный SYNTH_NGINX_CLIENT_MAX_BODY_SIZE — override, не трогаем.
+# Для 100 МиБ получается 101m, для 500 МиБ — 501m.
+
+# Уже задан (Helm/`docker run -e`/compose) — уважаем явное значение.
+# `return` — когда файл source-ится (штатный путь nginx); `exit` — если файл
+# всё же запустили как скрипт (`sh 15-synth-body-size.envsh`).
+if [ -n "${SYNTH_NGINX_CLIENT_MAX_BODY_SIZE:-}" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+# Проверка «неотрицательное целое» — нечисловые/пустые значения приводим к
+# прикладным дефолтам, а не роняем под арифметикой.
+is_uint() {
+  case "$1" in
+    '' | *[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+att="${SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE:-0}"
+fs="${SYNTH_MAX_UPLOAD_BYTES:-104857600}"
+
+if ! is_uint "$att"; then
+  att=0
+fi
+if ! is_uint "$fs"; then
+  fs=104857600
+fi
+
+max="$att"
+if [ "$fs" -gt "$max" ]; then
+  max="$fs"
+fi
+if [ "$max" -lt 104857600 ]; then
+  max=104857600
+fi
+
+# ceil(max / 1 МиБ) + 1 МиБ запаса на multipart-обвязку.
+mib=$(( (max + 1048575) / 1048576 + 1 ))
+
+export SYNTH_NGINX_CLIENT_MAX_BODY_SIZE="${mib}m"

@@ -368,7 +368,9 @@
   события **этой** сессии; явный `opts.eventSeq` (удалённый источник) не ломает монотонность —
   `seq = max(глобальный счётчик + 1, явный)`.
 - **`GET /api/v2/meta`** (`server/routes/meta.ts`, **без аутентификации**; монтируется и в core, и
-  в backend): `{messageModel: 2, eventSeq: true, replay: true, version}`.
+  в backend): `{messageModel: 2, eventSeq: true, replay: true, version}`; аддитивное `attachments`
+  (ADR-115) — эффективные лимиты вложений (`enabled`/`modalities`/лимиты; `MetaRoutesDeps.getAttachments`
+  читается на каждый запрос).
 - **Гейт версии клиента:** WS `/ws/events` без `messageModel=2` закрывается кодом `1008`
   (`messageModel=2 required`), SSE `GET /api/v2/events` отвечает `426 UPGRADE_REQUIRED`; догон —
   `?since=`/`Last-Event-ID`, SSE-кадр несёт `id: <eventSeq>`. Сессионного SSE нет —

@@ -212,6 +212,8 @@ backend:
 # монтируется в backend как /etc/synth/config.yaml. Пароль БД в values НЕ
 # хранится (инвариант 13): он читается в env SYNTH_POSTGRES_PASSWORD из Secret
 # (postgres.existingSecret | secrets.existingSecret, ключ secretPasswordKey).
+# Исключение — `maxUploadBytes`: он уходит в env (ConfigMap <release>-env), чтобы
+# тем же значением управлялся транспортный лимит nginx UI-пода и ingress.
 storage:
   # file (дефолт) | memory (данные НЕ сохраняются — тесты/эмуляция) | postgres.
   # Драйвер `@itphx/synth-storage-postgres` + `pg` входят в образ (optional
@@ -243,6 +245,23 @@ storage:
   degradedMode: ""
   # Каталог файлового фоллбека; пусто → {dataDir}/fallback (внутри PVC backend).
   fallbackDir: ""
+
+  # Максимальный размер файла для POST /api/v2/fs/upload (байт).
+  # Не задан (null) — дефолт приложения 100 МиБ. Учитывается в транспортном
+  # лимите nginx/ingress вместе с attachments.maxBytesPerFile (см. ниже) —
+  # понижение лимита вложений не должно ломать загрузку файлов в дереве.
+  maxUploadBytes: null
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Вложения (ADR-115) — единый параметр деплоя.
+# ─────────────────────────────────────────────────────────────────────────────
+attachments:
+  # ADR-115: предел размера одного вложения (байт) — единый параметр деплоя.
+  # Применяется к backend (`attachments.maxBytesPerFile`), nginx UI-пода и
+  # ingress (с запасом на multipart). Не задан (null) — дефолт приложения
+  # (100 МиБ) и runtime-настройка из админки; задан — фиксируется env и в UI
+  # не переопределяется.
+  maxBytesPerFile: null
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Топология исполнения (ADR-077, шаг 7c) — split-режим «control plane +
@@ -689,10 +708,14 @@ ui:
   # `nameOverride` на имя Service не влияет (он меняет только labels).
   extraEnv: {}
 
-  # Лимит тела запроса, который принимает nginx UI-пода (client_max_body_size).
-  # Должен быть не меньше attachments.maxBytesPerFile (+ запас на multipart).
-  # Дефолт 100m = 100 МиБ; применяется при рестарте/передеплое UI.
-  clientMaxBodySize: "100m"
+  # Необязательный override транспортного лимита: `client_max_body_size` nginx
+  # UI-пода и аннотация `proxy-body-size` nginx-ingress. По умолчанию пусто —
+  # значение вычисляется из `attachments.maxBytesPerFile` и
+  # `storage.maxUploadBytes` (max(…, 100 МиБ) + запас 1 МиБ, см.
+  # «Лимит загрузки файлов (вложения)»). Задавайте, только если нужен явный
+  # потолок (например, свой прокси перед кластером); значение применяется при
+  # рестарте/передеплое UI.
+  clientMaxBodySize: ""
 
   service:
     type: ClusterIP

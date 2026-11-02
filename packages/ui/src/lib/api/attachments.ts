@@ -18,6 +18,8 @@ export interface UploadedAttachment {
 interface AttachmentApiError extends Error {
   status?: number
   code?: string
+  /** Машинные подробности ошибки (`413`: фактический предел инстанса). */
+  details?: { maxBytesPerFile?: number }
 }
 
 /**
@@ -31,13 +33,19 @@ interface AttachmentApiError extends Error {
 async function throwUploadError(response: Response): Promise<never> {
   const body = (await response.json().catch(() => ({ detail: 'Upload failed' }))) as {
     detail?: string
-    error?: { error?: string; message?: string; code?: string }
+    error?: {
+      error?: string
+      message?: string
+      code?: string
+      details?: { maxBytesPerFile?: number }
+    }
   }
   const message =
     body.detail || body.error?.error || body.error?.message || `HTTP ${response.status}`
   throw Object.assign(new Error(message), {
     status: response.status,
     code: body.error?.code,
+    details: body.error?.details,
   }) as AttachmentApiError
 }
 

@@ -1520,6 +1520,7 @@ export const dict = {
 
   // Attachments (ADR-115)
   'chat.attachments.attach': 'Attach file',
+  'chat.attachments.disabled': 'Attachments are disabled by the administrator',
   'chat.attachments.remove': 'Remove',
   'chat.attachments.removeNamed': 'Remove “{name}”',
   'chat.attachments.retry': 'Retry upload',

@@ -502,7 +502,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/i18n/translations/ru` | backend | — | Русский словарь |
 | GET | `/api/v2/i18n/translations/en` | backend | — | Английский словарь |
 | GET | `/api/v2/openapi.json` | оба | auth | Публичная OpenAPI 3.1-спека интеграционного ядра (ADR-052, этап III; `server/openapi/public-openapi.ts`): 28 операций (events/sessions/schedules/llm), именованные `components.schemas`, единый формат ошибок `publicErrorSchema` (`{error:{code,message}}`) |
-| GET | `/api/v2/meta` | оба | — | Возможности инстанса (ADR-118 §8): `{messageModel, eventSeq, replay, version}` — **без аутентификации** (как `/health`). `messageModel` — версия модели сообщений/потока (`2`), `eventSeq` — события нумеруются глобально в пределах инстанса, `replay` — доступен догон по журналу (`Last-Event-ID`/`?since`), `version` — версия инстанса. Клиент сверяет `messageModel` перед подключением к WS/SSE (fail-closed, §3) |
+| GET | `/api/v2/meta` | оба | — | Возможности инстанса (ADR-118 §8): `{messageModel, eventSeq, replay, version}` — **без аутентификации** (как `/health`). `messageModel` — версия модели сообщений/потока (`2`), `eventSeq` — события нумеруются глобально в пределах инстанса, `replay` — доступен догон по журналу (`Last-Event-ID`/`?since`), `version` — версия инстанса. Аддитивно `attachments` (ADR-115): `{enabled, modalities, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession}` — **эффективные** настройки вложений (env > runtime > config > defaults, тот же резолвер, что у `AttachmentService`; клиент использует для предпроверки и текстов ошибок, истина — сервер). Клиент сверяет `messageModel` перед подключением к WS/SSE (fail-closed, §3) |
 
 ### 5.5 Sessions — `/api/v2/sessions`
 
@@ -650,7 +650,7 @@ content-addressed, поэтому повторная загрузка тех ж�
 | Лимит | Где проверяется | По умолчанию | Нарушение |
 |---|---|---|---|
 | `attachments.enabled` | загрузка и staging | `true` | `415 attachments_disabled` — вложения выключены администратором: клиенту показывать, что отправка вложений недоступна (повтор запроса не поможет; код общий для загрузки в сессию и staging) |
-| `attachments.maxBytesPerFile` | загрузка | 100 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` — до чтения тела, с запасом 64 КиБ на multipart-обвязку; затем по фактическому размеру) |
+| `attachments.maxBytesPerFile` | загрузка | 100 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` — до чтения тела, с запасом 64 КиБ на multipart-обвязку; затем по фактическому размеру). Тело отказа несёт `error.details.maxBytesPerFile` — **фактический** предел инстанса (клиент показывает его в тексте ошибки) |
 | `attachments.allowedMimePrefixes`, запрет SVG | загрузка | см. выше | `415 UNSUPPORTED_MEDIA_TYPE` |
 | `attachments.maxFilesPerMessage` | `POST …/prompt` | 10 | `400 VALIDATION_ERROR` |
 | контракт OpenAPI/SDK (`promptRequestSchema`) | публикуемая схема §5.30 | не более **50** путей в `attachments` | `400 VALIDATION_ERROR` при валидации схемой; HTTP-обработчик проверяет `maxFilesPerMessage` (см. выше) |
@@ -680,7 +680,8 @@ multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404
 которых нет пользовательской сессии: шлюзы (Telegram/VK) принимают файл из внешнего канала,
 пайплайны — из шага. Контракт запроса/ответа тот же, что у загрузки в сессию (`multipart/form-data`,
 поле `file`; необязательное `name`) → **201** `{id, blobPath, sha256, mime, size, name?}`, ошибки —
-те же (`400`, `413`, `415`, включая `415 attachments_disabled` при выключенных вложениях).
+те же (`400`, `413` — с `error.details.maxBytesPerFile`, `415`, включая `415 attachments_disabled`
+при выключенных вложениях).
 Полученный `blobPath` дальше передаётся в `POST /sessions/:id/prompt`
 (`attachments: string[]`), в `POST /api/v2/events` (§5.26 — `attachments[]` со ссылками и
 метаданными) или используется как артефакт прогона.

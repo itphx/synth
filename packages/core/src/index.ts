@@ -2167,6 +2167,7 @@ export { createHealthRoutes } from './server/routes/health.js';
 export type { HealthRoutesOptions, ReadinessState } from './server/routes/health.js';
 // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).
 export { createMetaRoutes, instanceCapabilities } from './server/routes/meta.js';
+export type { MetaRoutesDeps } from './server/routes/meta.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
 export { serializeSession, serializeMessage, serializeProject } from './server/serialize.js';

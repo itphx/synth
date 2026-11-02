@@ -3,12 +3,16 @@
 import { create } from 'zustand'
 import { uploadSessionAttachment } from '@/lib/api/attachments'
 import { getDraftAttachmentStorage } from '@/lib/draft-attachments'
+import {
+  DEFAULT_ATTACHMENT_LIMITS,
+  MAX_FILE_BYTES,
+  MAX_FILES_PER_MESSAGE,
+  loadAttachmentLimits,
+  type AttachmentLimits,
+} from '@/lib/attachments/limits'
 
-/** Лимит композера: сколько файлов можно приложить к одному сообщению. */
-export const MAX_FILES_PER_MESSAGE = 10
-
-/** Лимит одного файла: 100 МиБ (паритет с серверным `attachments.maxBytesPerFile`). */
-export const MAX_FILE_BYTES = 100 * 1024 * 1024
+// Совместимость: тесты (и внешние потребители) импортируют константы из стора.
+export { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE }
 
 /** Состояние загрузки одного элемента композера. */
 export type AttachmentUploadState = 'pending' | 'uploading' | 'ready' | 'error'
@@ -33,6 +37,11 @@ export interface DraftAttachment {
   groupSize?: number
   upload: AttachmentUploadState
   error?: AttachmentErrorReason
+  /**
+   * Фактический предел файла из `413 details.maxBytesPerFile` (может быть
+   * меньше UX-фоллбека). Runtime-only: в IndexedDB не персистится.
+   */
+  maxBytes?: number
   /** id серверного вложения после успешной загрузки. */
   partId?: string
   /** Content-addressed путь blob-порта после успешной загрузки. */
@@ -51,6 +60,12 @@ export interface RestorableAttachment {
 
 interface AttachmentsState {
   bySession: Record<string, DraftAttachment[]>
+  /** Эффективные лимиты инстанса (`GET /api/v2/meta`); до ответа — UX-фоллбеки. */
+  limits: AttachmentLimits
+  /** Загрузить лимиты с сервера (кэш 60 с и дедуп — в `loadAttachmentLimits`). */
+  loadLimits: () => Promise<void>
+  /** Подменить лимиты (тесты/транспорт). */
+  setLimits: (limits: AttachmentLimits) => void
   /** Добавить файлы и сразу начать их загрузку. */
   addFiles: (sessionId: string, files: File[], opts?: { groupId?: string }) => Promise<void>
   /** Удалить элемент; у элемента с `groupId` удаляется вся группа. */
@@ -182,7 +197,7 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
 
     const controller = new AbortController()
     controllers.set(controllerKey(sessionId, id), controller)
-    patch(sessionId, id, { upload: 'uploading', error: undefined })
+    patch(sessionId, id, { upload: 'uploading', error: undefined, maxBytes: undefined })
 
     try {
       const uploaded = await uploadSessionAttachment(sessionId, file, {
@@ -195,6 +210,7 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       patch(sessionId, id, {
         upload: 'ready',
         error: undefined,
+        maxBytes: undefined,
         partId: uploaded.id,
         blobPath: uploaded.blobPath,
         mimeType,
@@ -217,9 +233,18 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       // Отмена (clear/remove) — не ошибка: элемент уже уходит из состояния.
       if (controller.signal.aborted) return
       // 413 — серверный лимит файла (может быть меньше локального UX-предела).
-      const reason: AttachmentErrorReason =
-        (err as { status?: number } | null)?.status === 413 ? 'too_large' : 'upload_failed'
-      patch(sessionId, id, { upload: 'error', error: reason })
+      // `details.maxBytesPerFile` — фактический предел инстанса: по нему
+      // показываем текст ошибки, а не по фоллбеку.
+      const status = (err as { status?: number } | null)?.status
+      const reason: AttachmentErrorReason = status === 413 ? 'too_large' : 'upload_failed'
+      const serverMax = (err as { details?: { maxBytesPerFile?: number } } | null)?.details
+        ?.maxBytesPerFile
+      patch(sessionId, id, {
+        upload: 'error',
+        error: reason,
+        maxBytes:
+          status === 413 && typeof serverMax === 'number' && serverMax > 0 ? serverMax : undefined,
+      })
       void getDraftAttachmentStorage()
         .patch(sessionId, id, { error: reason })
         .catch(() => {})
@@ -231,6 +256,16 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
 
   return {
     bySession: {},
+    limits: DEFAULT_ATTACHMENT_LIMITS,
+
+    async loadLimits() {
+      const limits = await loadAttachmentLimits()
+      set({ limits })
+    },
+
+    setLimits(limits) {
+      set({ limits })
+    },
 
     async addFiles(sessionId, files, opts) {
       if (!files.length) return
@@ -238,6 +273,7 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       // Снимок читаем до `set`: дедуп и лимиты считать по актуальному списку,
       // а создавать object URL — вне обновления состояния.
       const current = get().bySession[sessionId] ?? []
+      const limits = get().limits
       const drafts: DraftAttachment[] = []
       let accepted = current.length
 
@@ -248,11 +284,11 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
         if (duplicate) continue
 
         const draft = makeDraft(file, groupId)
-        if (file.size > MAX_FILE_BYTES) {
+        if (file.size > limits.maxBytesPerFile) {
           // Превышение размера — элемент не загружается, но причина остаётся в чипе.
           draft.upload = 'error'
           draft.error = 'too_large'
-        } else if (accepted >= MAX_FILES_PER_MESSAGE) {
+        } else if (accepted >= limits.maxFilesPerMessage) {
           draft.upload = 'error'
           draft.error = 'too_many'
         } else {
@@ -345,13 +381,14 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       if (!item.file) return
 
       // Причину-лимит повторно проверяем: файл мог уменьшиться/освободиться место.
-      if (item.file.size > MAX_FILE_BYTES) {
+      const limits = get().limits
+      if (item.file.size > limits.maxBytesPerFile) {
         patch(sessionId, id, { upload: 'error', error: 'too_large' })
         return
       }
       if (item.error === 'too_many') {
         const active = list.filter((entry) => entry.id !== id && entry.upload !== 'error').length
-        if (active >= MAX_FILES_PER_MESSAGE) {
+        if (active >= limits.maxFilesPerMessage) {
           patch(sessionId, id, { upload: 'error', error: 'too_many' })
           return
         }
@@ -362,6 +399,7 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
 
     restore(sessionId, items) {
       if (items.length === 0) return
+      const maxFiles = get().limits.maxFilesPerMessage
       set((state) => {
         const list = state.bySession[sessionId] ?? []
         const next = list.slice()
@@ -371,7 +409,7 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
           next.map((item) => item.blobPath).filter((path): path is string => !!path),
         )
         for (const item of items) {
-          if (next.length >= MAX_FILES_PER_MESSAGE) break
+          if (next.length >= maxFiles) break
           if (seen.has(item.blobPath)) continue
           seen.add(item.blobPath)
           next.push({
@@ -419,12 +457,13 @@ export const useAttachmentsStore = create<AttachmentsState>()((set, get) => {
       if (records.length === 0) return
 
       const existing = get().bySession[sessionId] ?? []
+      const maxFiles = get().limits.maxFilesPerMessage
       const known = new Set(existing.map((item) => item.id))
       const restored: DraftAttachment[] = []
 
       for (const record of records) {
         if (known.has(record.draftId)) continue
-        if (existing.length + restored.length >= MAX_FILES_PER_MESSAGE) break
+        if (existing.length + restored.length >= maxFiles) break
 
         const mimeType = record.mimeType || 'application/octet-stream'
         let file: File | undefined
