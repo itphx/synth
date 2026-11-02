@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useBackClose } from '@/hooks/useBackClose';
 import type { DebugData } from '../../stores/chatStore';
 
 interface DebugModalProps {
@@ -36,6 +37,9 @@ function KeyValue({ label, value }: { label: string; value: string | number | un
 
 export function DebugModal({ debug, onClose }: DebugModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+
+  // Компонент рендерится только когда открыт — «назад» закрывает окно.
+  useBackClose(true, onClose);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

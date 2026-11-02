@@ -32,9 +32,36 @@ interface MessageHeaderProps {
   onToggleExpand?: () => void
 }
 
-function resolveAuthor(): string {
+/**
+ * Подпись автора реплики.
+ *
+ * `message.author` для своих сообщений — username (в standalone — `local`/`user`,
+ * в старых сообщениях `attach_workspace_file` бывало `User`), для внешних — имя
+ * отправителя (`payload.from`, ADR-089). Своё сообщение показываем именем текущего
+ * пользователя из профиля; чужое — настоящим автором, иначе в шапке всегда стояло
+ * имя зрителя (чужой отправитель выглядел как он сам).
+ *
+ * Внешнее событие без имени отправителя (`metadata.event_id`, но `author` не
+ * проставлен) получает нейтральную подпись `externalFallback`: подставлять имя
+ * зрителя для чужого сообщения нельзя.
+ */
+function resolveAuthor(message: MessageData, externalFallback: string): string {
   const { user, profile } = useAuthStore.getState()
-  return profile?.display_name || user?.username || ''
+  const own = profile?.display_name || user?.username || ''
+  const author = typeof message.author === 'string' ? message.author.trim() : ''
+  const isExternalEvent = message.metadata?.event_id !== undefined
+  if (!author) return isExternalEvent ? externalFallback : own
+  const normalized = author.toLowerCase()
+  const username = user?.username
+  if (
+    (typeof username === 'string' && username.length > 0
+      && normalized === username.toLowerCase())
+    || normalized === 'local'
+    || normalized === 'user'
+  ) {
+    return own
+  }
+  return author
 }
 
 function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, metaOnly, expanded, onToggleExpand }: MessageHeaderProps) {
@@ -98,7 +125,7 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, me
   const userBadge = showUserBadge && (
     <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
       <Icon name="user-3" className="size-3" />
-      <span>{resolveAuthor()}</span>
+      <span>{resolveAuthor(message, t('chat.author.external'))}</span>
     </span>
   )
 

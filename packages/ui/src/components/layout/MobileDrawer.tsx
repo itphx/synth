@@ -2,6 +2,7 @@ import React, { useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
+import { useBackClose } from '@/hooks/useBackClose'
 
 interface MobileDrawerProps {
   side: 'left' | 'right'
@@ -24,6 +25,9 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
   headerActions,
 }) => {
   const { t } = useI18n()
+
+  // Кнопка «назад» закрывает дровер так же, как Esc и клик по backdrop.
+  useBackClose(open, onClose)
 
   useEffect(() => {
     if (!open) return

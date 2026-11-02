@@ -167,6 +167,35 @@ describe('computeSessionStats (ADR-070 §2.6)', () => {
     expect(bob.output_tokens).toBe(20);
   });
 
+  it('вложение тула не становится границей автора: usage хода остаётся у пользователя', async () => {
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
+    await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'q', author: 'alice' }));
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'call', agentRole: 'fixer',
+      toolCalls: [{ id: 't1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+    }));
+    // Вложение тула (ADR-115): role user, автор — системный `Tool`.
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.USER,
+      content: '[image: shot.png]',
+      author: 'Tool',
+      metadata: { source: 'tool-attachment', tool: 'read_file', call_id: 't1', agent_role: 'fixer' },
+    }));
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'a', agentRole: 'fixer', model: 'm', usage: usage(100, 10),
+    }));
+
+    const stats = await computeSessionStats(await load(session), deps());
+
+    // «Tool» — системный актор, а не пользователь: usage шага после вложения
+    // остаётся у автора реплики, которая этот ход начала.
+    expect(stats.users.find((u) => u.author === 'Tool')).toBeUndefined();
+    const alice = stats.users.find((u) => u.author === 'alice')!;
+    expect(alice.messages).toBe(1);
+    expect(alice.input_tokens).toBe(100);
+    expect(alice.output_tokens).toBe(10);
+  });
+
   it('подтягивает usage дочерней сессии task (child_session_id)', async () => {
     const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
     const child = await sessionManager.createSession({ parentId: session.id, settings: { agentRole: 'task' } });

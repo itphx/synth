@@ -21,7 +21,9 @@ export type ClassifiableUserMessage = Pick<Message, 'author' | 'ephemeral' | 'me
  * Признаки (любой): `ephemeral` (локальный ответ `/`-команды), `synthetic`
  * (системные state-сообщения), steer-инъекция (`metadata.steer`), уведомление
  * фонового прогона (`metadata.type === 'background_run_result'`), сообщение
- * шедулера (`metadata.scheduler` / `schedule_id` / `author === 'Scheduler'`).
+ * шедулера (`metadata.scheduler` / `schedule_id` / `author === 'Scheduler'`),
+ * вложение тула (`metadata.source === 'tool-attachment'` — медиа-реплика
+ * текущего хода, см. `_injectToolAttachments`).
  */
 export function isServiceUserMessage(message: ClassifiableUserMessage): boolean {
   if (message.ephemeral) return true;
@@ -31,6 +33,7 @@ export function isServiceUserMessage(message: ClassifiableUserMessage): boolean 
   if (meta?.type === 'background_run_result') return true;
   if (meta?.scheduler === true) return true;
   if (meta?.schedule_id !== undefined) return true;
+  if (meta?.source === 'tool-attachment') return true;
   if (message.author === 'Scheduler') return true;
   return false;
 }

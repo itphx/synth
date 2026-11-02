@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/i18n'
  * единый центрированный блок. Текст внутри выровнен по левому краю, у блока
  * всегда есть шапка (иконка + подпись) и кнопка «Копировать».
  */
-export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler' | 'process'
+export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler' | 'process' | 'attachment'
 
 interface NoticeVariantStyle {
   /** Иконка по умолчанию. */
@@ -33,6 +33,9 @@ const VARIANT_STYLES: Record<NoticeVariant, NoticeVariantStyle> = {
   // ADR-111/ADR-113: завершение фонового прогона — системный блок с иконкой
   // терминала (шелл-процесс) или робота (фоновый саб-агент).
   process: { icon: 'terminal-box', box: 'bg-surface-inset border-border/40 text-foreground' },
+  // ADR-115: вложение, доставленное инструментом, — служебный блок (как
+  // фоновый результат), а не user-пузырь: автор — не текущий пользователь.
+  attachment: { icon: 'attachment-2', box: 'bg-surface-inset border-border/40 text-foreground' },
 }
 
 export interface NoticeProps {

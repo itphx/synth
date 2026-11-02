@@ -2461,7 +2461,8 @@ export class ChatOrchestrator {
    *
    * Тул возвращает ссылки (`ToolResult.attachments`), а не байты. Каждая
    * ссылка становится отдельной user-репликой (`author: 'Tool'`,
-   * `metadata.source: 'tool-attachment'`), которая:
+   * `metadata.source: 'tool-attachment'`, при известной роли —
+   * `metadata.agent_role`), которая:
    *  - персистится в историю (`addMessage`) и публикуется (`message.added`,
    *    `session.updated`) — чат UI видит вложение сразу;
    *  - учитывается в `blob_refs` (`ownerKind: 'message'`) — иначе GC счёл бы
@@ -2474,6 +2475,12 @@ export class ChatOrchestrator {
    * Anthropic собирает все tool_result итерации в одно user-сообщение, поэтому
    * media-реплика идёт отдельным сообщением строго после буфера — пары
    * `tool_use`/`tool_result` не рвутся.
+   *
+   * Сообщение — **служебное** (`isServiceUserMessage`): не реплика человека для
+   * авто-заголовка, не граница автора в статистике и не граница хода в
+   * `suppressDisabledTurns`. В UI оно рисуется системным блоком с подписью
+   * «Агент · <имя> · вложение» (ADR-115), а не user-пузырём: `author: 'Tool'` —
+   * системный актор, имя агента передаётся в `metadata.agent_role`.
    */
   private async _injectToolAttachments(args: {
     session: Session;
@@ -2567,6 +2574,7 @@ export class ChatOrchestrator {
             source: 'tool-attachment',
             tool: item.tool,
             call_id: item.callId,
+            ...(args.agentRole ? { agent_role: args.agentRole } : {}),
           },
         };
 

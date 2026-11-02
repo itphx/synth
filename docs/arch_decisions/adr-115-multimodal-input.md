@@ -291,10 +291,19 @@ plane, исполнитель их не знает. Исполнитель пр�
   user(tool_result)»).
 - **История и живые события.** На каждое принятое вложение создаётся отдельное сообщение:
   `role: user`, `author: 'Tool'`, `content` из плейсхолдеров (`appendMediaPlaceholders` →
-  `[image: name]`), `metadata {source: 'tool-attachment', tool, call_id}`. Оно персистится
+  `[image: name]`), `metadata {source: 'tool-attachment', tool, call_id, agent_role}` (роль
+  агента — для подписи в UI). Оно персистится
   (`SessionManager.addMessage`) и публикуется в канал сессии (`message.added` +
   `session.updated`): чат показывает вложение сразу, без перезагрузки. В `blob_refs` добавляется
   ссылка `{ownerKind: 'message', ownerId}` (best-effort) — иначе GC счёл бы объект сиротой.
+- **Служебный статус сообщения-вложения.** `author: 'Tool'` — системный актор (как
+  `'Subagent'`/`'Process'`), а не текущий пользователь, поэтому сообщение считается **служебным
+  user-сообщением** (`isServiceUserMessage`, `metadata.source === 'tool-attachment'`): не
+  реплика человека для авто-заголовка, не граница автора в статистике (`buildUserStats` не
+  делает `Tool` новым автором usage хода) и не граница хода в `suppressDisabledTurns` (вложение
+  — часть текущего хода: наследует `disabled`, ход не «переоткрывает»). В UI это центрированный
+  `Notice` варианта `attachment` с подписью «Агент · <имя> · вложение» (без известной роли —
+  «Агент · вложение») и полным набором действий, как у фонового результата, а не user-пузырь.
 - **Гидратация — тот же шов, что у истории.** Ссылка маппится в LLM-сообщение
   (`sessionMessagesToLlm`) и гидрируется `hydrateAttachments` оркестратора: модальности модели
   хода (`ModelConfig.modalities`), `attachments.modalityModels`/`derive` для text-only моделей,

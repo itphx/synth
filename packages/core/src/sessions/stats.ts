@@ -284,6 +284,10 @@ function buildUserStats(
 
   for (const msg of session.messages) {
     if (msg.role === MessageRole.USER) {
+      // Вложение тула (ADR-115) — часть текущего хода, а не новая реплика
+      // пользователя: иначе usage последующих шагов хода приписывался бы
+      // системному автору `Tool`.
+      if (msg.metadata?.source === 'tool-attachment') continue;
       currentAuthor = msg.author || 'unknown';
       get(currentAuthor).messages += 1;
       continue;

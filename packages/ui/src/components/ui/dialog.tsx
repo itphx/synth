@@ -3,13 +3,19 @@ import { Dialog as BaseDialog } from "@base-ui/react/dialog"
 import { cn } from "@/lib/utils"
 import { Icon } from "@/components/icon/Icon"
 import { useI18n } from "@/lib/i18n"
+import { useBackClose } from "@/hooks/useBackClose"
 
 let openDialogCount = 0
 
 type AsChildProps = { asChild?: boolean }
 
-function Dialog({ ...props }: React.ComponentProps<typeof BaseDialog.Root>) {
-  return <BaseDialog.Root {...props} />
+function Dialog({ open, actionsRef, ...props }: React.ComponentProps<typeof BaseDialog.Root>) {
+  // Кнопка «назад» (Android/PWA) закрывает верхний оверлей через историю.
+  // Независимый (uncontrolled) диалог не регистрируем: `open` не задан.
+  const innerActionsRef = React.useRef<BaseDialog.Root.Actions | null>(null)
+  const effectiveActionsRef = actionsRef ?? innerActionsRef
+  useBackClose(open === true, () => effectiveActionsRef.current?.close())
+  return <BaseDialog.Root open={open} actionsRef={effectiveActionsRef} {...props} />
 }
 
 function DialogClose({

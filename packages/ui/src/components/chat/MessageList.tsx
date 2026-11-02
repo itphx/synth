@@ -14,6 +14,7 @@ import {
   type StreamRetry,
 } from '@/stores/chatStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useBackClose } from '@/hooks/useBackClose'
 
 /**
  * Группа сообщений ленты (ADR-118 §1): **сегменты одного хода** склеиваются в
@@ -160,9 +161,10 @@ function messageKeyOf(msg: MessageData): string {
  * Плашка «обработка»/«повтор» должна быть у реплики пользователя. Но
  * служебные сообщения тоже приходят с `role: 'user'` и рисуются как
  * `Notice` (без плашки): уведомление о фоне
- * (`metadata.type === 'background_run_result'`), сообщения шедулера и
- * системные команды. Если такая реплика оказывалась последней, плашка
- * уезжала на неё, а индикатор работы хода пропадал.
+ * (`metadata.type === 'background_run_result'`), сообщения шедулера, вложение
+ * тула (`metadata.source === 'tool-attachment'`) и системные команды. Если
+ * такая реплика оказывалась последней, плашка уезжала на неё, а индикатор
+ * работы хода пропадал.
  */
 function isHumanReply(msg: MessageData): boolean {
   const meta = msg.metadata
@@ -172,6 +174,8 @@ function isHumanReply(msg: MessageData): boolean {
   if (meta.commandPrompt === true) return false
   if (meta.scheduler) return false
   if (msg.author === 'Scheduler') return false
+  // ADR-115: вложение тула — не реплика человека (служебный блок).
+  if (meta.source === 'tool-attachment') return false
   return true
 }
 
@@ -241,6 +245,9 @@ export function MessageList({
     const current = useUIStore.getState().expandedChatGroup
     if (current !== null) useUIStore.getState().toggleChatExpanded(current)
   }, [])
+
+  // Кнопка «назад» закрывает развёрнутый ответ (это оверлей поверх ленты).
+  useBackClose(expandedGroupKey !== null, closeExpanded)
 
   /**
    * Тумблер разворота группы. Стабильная ссылка (`useCallback`): пропсы

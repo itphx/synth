@@ -3,7 +3,8 @@
  *
  * Проверяем шов целиком — от `ToolResult.attachments` до запроса провайдеру:
  *  - сообщение-вложение попадает в историю (`author: 'Tool'`,
- *    `metadata.source: 'tool-attachment'`) и учитывается в `blob_refs`;
+ *    `metadata.source: 'tool-attachment'`, `metadata.agent_role`) и учитывается
+ *    в `blob_refs`;
  *  - в `currentMessages` оно вставляется **после** tool-результатов итерации
  *    (assistant(tool_use) → tool → user(media)) — на этом же порядке держится
  *    Anthropic-буфер `tool_result`;
@@ -276,7 +277,13 @@ describe('ChatOrchestrator — вложения тулов в текущем х�
     const message = injected[0]!;
     expect(message.role).toBe(MessageRole.USER);
     expect(message.author).toBe('Tool');
-    expect(message.metadata).toMatchObject({ source: 'tool-attachment', tool: TOOL_NAME, call_id: 'call_media' });
+    expect(message.metadata).toMatchObject({
+      source: 'tool-attachment',
+      tool: TOOL_NAME,
+      call_id: 'call_media',
+      // Роль агента — для подписи служебного блока в UI («Агент · Fixer · вложение»).
+      agent_role: 'fixer',
+    });
     const mediaPart = message.parts.find((p) => p.type === 'image');
     expect(mediaPart).toBeDefined();
     expect(message.content).toContain('[image: shot.png]');

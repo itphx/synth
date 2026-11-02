@@ -357,6 +357,27 @@ describe('autoTitleSession — LLM-заголовок', () => {
     expect(prompt).not.toContain('ночная задача');
   });
 
+  it('вложение тула не считается репликой пользователя', async () => {
+    const session = await sessionWith([
+      userMessage(SIGNAL_TEXT),
+      userMessage('[image: shot.png]', {
+        source: 'tool-attachment',
+        tool: 'read_file',
+        call_id: 'c1',
+        agent_role: 'fixer',
+      }),
+    ]);
+    const { provider, chat } = titleProvider({ content: 'Падающий тест авторизации' });
+
+    const title = await autoTitleSession(session, sessionManager, provider);
+
+    expect(title).toBe('Падающий тест авторизации');
+    expect(chat).toHaveBeenCalledTimes(1);
+    const prompt = chat.mock.calls[0]![0][0]!.content;
+    expect(prompt).toContain(SIGNAL_TEXT);
+    expect(prompt).not.toContain('[image: shot.png]');
+  });
+
   it('deferOnChatter: false — заголовок ставится даже для приветствия', async () => {
     const session = await sessionWith([userMessage(CHATTER_TEXT)]);
     const { provider, chat } = titleProvider({ content: 'Привет' });

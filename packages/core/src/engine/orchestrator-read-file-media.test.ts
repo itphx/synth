@@ -187,6 +187,8 @@ describe('ChatOrchestrator — read_file отдаёт изображение м�
     const injected = session.messages.filter((m) => m.metadata?.source === 'tool-attachment');
     expect(injected).toHaveLength(1);
     expect(injected[0]!.author).toBe('Tool');
+    // Роль агента — для служебной подписи блока вложения в UI.
+    expect(injected[0]!.metadata?.agent_role).toBe('fixer');
     expect(injected[0]!.parts.some((p) => p.type === 'image')).toBe(true);
   });
 });

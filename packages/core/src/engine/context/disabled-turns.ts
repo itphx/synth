@@ -10,7 +10,9 @@
  * Поэтому отключённая **пользовательская** реплика выключает весь свой ход:
  * assistant/tool/error-сообщения до следующей пользовательской реплики.
  * System-state (mode/agent) и summary не подавляются — это состояние, а не
- * часть выключенного хода.
+ * часть выключенного хода. Вложение тула (`metadata.source === 'tool-attachment'`,
+ * ADR-115) — тоже часть текущего хода, а не новая реплика: границу хода оно не
+ * сдвигает и наследует состояние (отключённый ход гасит и вложение).
  *
  * Отключённый assistant с `toolCalls` подавляет свои tool-результаты: иначе
  * они остаются сиротами и провайдер получает `tool` без `tool_use`.
@@ -26,6 +28,11 @@ export function suppressDisabledTurns(messages: readonly Message[]): Message[] {
 
   return messages.map((message) => {
     if (message.role === MessageRole.USER) {
+      // Вложение тула — часть текущего хода, а не новая пользовательская
+      // реплика: границу хода не сдвигает, применяет текущее состояние.
+      if (message.metadata?.source === 'tool-attachment') {
+        return turnDisabled ? { ...message, disabled: true } : message;
+      }
       // Новая пользовательская реплика — новая граница хода.
       turnDisabled = message.disabled === true;
       return message;

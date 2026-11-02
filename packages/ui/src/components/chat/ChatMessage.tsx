@@ -240,6 +240,10 @@ function ChatMessageInner({
   // role:'user' с metadata.type === 'background_run_result' — тоже системный
   // блок (автор прогона — не текущий пользователь, конверт модели в UI лишний).
   const isBackgroundResult = isUser && message.metadata?.type === 'background_run_result'
+  // ADR-115: вложение, доставленное инструментом (`metadata.source === 'tool-attachment'`),
+  // приходит как role:'user' с `author:'Tool'` — это служебный блок, а не
+  // реплика пользователя (автор — не текущий пользователь).
+  const isToolAttachment = isUser && message.metadata?.source === 'tool-attachment'
   // ADR-104: инъекция во время активного хода (`metadata.steer`) — **без
   // маркера**: реплика, вклинившаяся в ход, рисуется обычным пузырём.
   // Режим `interrupt` (`metadata.interrupt === true`) — маркером «прерывание
@@ -897,6 +901,85 @@ function ChatMessageInner({
       <div className="flex items-start">
         {selectionCheckboxEl}
         <div className="min-w-0 flex-1">{backgroundEl}</div>
+      </div>
+    )
+  }
+
+  // ADR-115: вложение, доставленное инструментом, — центрированный служебный
+  // блок (как у фонового результата), а не правый user-пузырь: автор сообщения —
+  // системный `Tool`, агент — в `metadata.agent_role`. Подпись —
+  // «Агент · <имя> · вложение» (без известной роли — «Агент · вложение»),
+  // внутри — вложения сообщения, действия — полный набор.
+  if (isToolAttachment) {
+    const meta = message.metadata as Record<string, unknown> | undefined
+    const role = typeof meta?.agent_role === 'string' ? meta.agent_role : ''
+    const agentName = role
+      ? agents.find((a) => a.id === role)?.display_name || role
+      : ''
+    const label = agentName
+      ? t('chat.notice.toolAttachment', { name: agentName })
+      : t('chat.notice.toolAttachmentAnonymous')
+
+    const selectionCheckboxEl = selectionMode ? (
+      <div className="flex items-center self-stretch pr-1">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => {
+            const ev = e.nativeEvent as MouseEvent
+            handleToggleSelect(ev.shiftKey ?? false)
+          }}
+          className="size-4 rounded border-border cursor-pointer accent-primary"
+        />
+      </div>
+    ) : null
+
+    const attachmentEl = (
+      <Notice
+        variant="attachment"
+        icon="attachment-2"
+        label={label}
+        ariaLabel={label}
+        meta={<MessageHeader message={message} metaOnly />}
+        actions={
+          actionsVisible ? (
+            <MessageActions
+              embedded
+              showCopy={false}
+              messageId={message.id}
+              role={message.role}
+              disabled={message.disabled}
+              pinned={message.pinned}
+              canRetry={canRetry}
+              hasDebug={hasDebug}
+              debugActive={debugActive}
+              readOnly={readOnly}
+              hasStats={showStats}
+              statsContent={<MessageStats message={message} />}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+            />
+          ) : undefined
+        }
+        onCopy={handleCopy}
+        disabled={message.disabled}
+      >
+        {hasAttachments && sessionId ? (
+          <MessageAttachments sessionId={sessionId} parts={messageParts} />
+        ) : null}
+      </Notice>
+    )
+
+    if (!selectionMode) return attachmentEl
+    return (
+      <div className="flex items-start">
+        {selectionCheckboxEl}
+        <div className="min-w-0 flex-1">{attachmentEl}</div>
       </div>
     )
   }

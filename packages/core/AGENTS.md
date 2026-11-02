@@ -811,9 +811,13 @@
   бюджет — `MAX_TOOL_ATTACHMENTS_PER_TURN = 4` и `attachments.maxBytesPerMessage`
   (по умолчанию 20 МиБ); лишнее отбрасывается с логом (текст результата модель всё равно видит).
   Принятое вложение — отдельное сообщение `role: user`, `author: 'Tool'`,
-  `metadata {source: 'tool-attachment', tool, call_id}`, публикуется в канал сессии
+  `metadata {source: 'tool-attachment', tool, call_id, agent_role}` (роль агента — для
+  UI-подписи «Агент · <имя> · вложение»), публикуется в канал сессии
   (`message.added`/`session.updated`) и пишет ссылку в `blob_refs` (best-effort); байты
-  в блобы кладёт только control plane — тул отдаёт ссылку, не base64.
+  в блобы кладёт только control plane — тул отдаёт ссылку, не base64. Сообщение —
+  **служебное** (`isServiceUserMessage`): не реплика человека для авто-заголовка, не
+  граница автора в `sessions/stats.ts` и не граница хода в `disabled-turns.ts`
+  (вложение наследует `disabled` текущего хода).
   **Deny не останавливает ход (обновлено 2026-10-29).** Любой отказ permission-слоя —
   `role.unavailable` (тул недоступен агенту), ask→deny пользователя или запрет политики —
   возвращается модели как обычный `tool_result` с причиной; следующая LLM-итерация
@@ -2336,6 +2340,11 @@ blob-порты и `blob_refs` — ADR-116.
   `durationMs?`, `transcript?`). Медиа-часть обязана давать в `content` плейсхолдер
   (`[image: name.png]`) — иначе строковые производные (поиск, экспорт, PG-маппинг) теряют
   факт вложения.
+- **Вложения из инструментов — служебные.** `_injectToolAttachments` создаёт user-сообщение
+  `author: 'Tool'` с `metadata {source: 'tool-attachment', tool, call_id, agent_role}`; в UI это
+  служебный блок «Агент · <имя> · вложение», а не пузырь пользователя. Для авто-заголовка,
+  статистики автора и границ хода (`disabled-turns`) такое сообщение **не** реплика человека
+  (`sessions/user-messages.ts`, `isServiceUserMessage`).
 - **Сервис (`engine/attachments/service.ts`).** `AttachmentService` — единственная точка
   записи байтов: MIME по **сигнатуре** (не по заявленному), лимиты `attachments.*`, allowlist
   префиксов, запрет `image/svg+xml` (XSS), content-addressed путь `attachments/<sha2>/<sha256>`

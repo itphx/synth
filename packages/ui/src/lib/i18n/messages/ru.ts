@@ -1278,6 +1278,11 @@ export const dict = {
   'chat.notice.restartResumedText': 'Ход был прерван рестартом инстанса и продолжен автоматически',
   'chat.notice.scheduler': 'Планировщик',
   'chat.notice.schedulerNamed': 'Планировщик · {name}',
+  // ADR-115: вложение, доставленное инструментом, — служебный блок.
+  'chat.notice.toolAttachment': 'Агент · {name} · вложение',
+  'chat.notice.toolAttachmentAnonymous': 'Агент · вложение',
+  // ADR-089: внешнее событие без имени отправителя — нейтральная подпись автора.
+  'chat.author.external': 'Внешний отправитель',
   // ADR-111/ADR-113: уведомление о завершении фонового прогона.
   'chat.notice.backgroundProcess': 'Фоновый процесс · {name}',
   'chat.notice.backgroundSubagent': 'Фоновый саб-агент · {name}',

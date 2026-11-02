@@ -68,6 +68,47 @@ describe('suppressDisabledTurns', () => {
     expect(result[3]!.disabled).toBe(false);
   });
 
+  it('вложение тула — часть хода: не сдвигает границу и наследует disabled', () => {
+    const attachment = msg({
+      role: MessageRole.USER,
+      content: '[image: shot.png]',
+      author: 'Tool',
+      metadata: { source: 'tool-attachment', tool: 'read_file', call_id: 't1' },
+    });
+    const messages = [
+      msg({ role: MessageRole.USER, content: 'q', disabled: true }),
+      msg({ role: MessageRole.ASSISTANT, content: 'a' }),
+      attachment,
+      msg({ role: MessageRole.ASSISTANT, content: 'a2' }),
+    ];
+
+    const result = suppressDisabledTurns(messages);
+
+    // Вложение — часть выключенного хода: гасится и ход не «переоткрывает».
+    expect(result[2]!.disabled).toBe(true);
+    expect(result[3]!.disabled).toBe(true);
+  });
+
+  it('вложение тула в активном ходе не включает disabled', () => {
+    const attachment = msg({
+      role: MessageRole.USER,
+      content: '[image: shot.png]',
+      author: 'Tool',
+      metadata: { source: 'tool-attachment', tool: 'read_file', call_id: 't1' },
+    });
+    const messages = [
+      msg({ role: MessageRole.USER, content: 'q' }),
+      msg({ role: MessageRole.ASSISTANT, content: 'a' }),
+      attachment,
+      msg({ role: MessageRole.ASSISTANT, content: 'a2' }),
+    ];
+
+    const result = suppressDisabledTurns(messages);
+
+    expect(result[2]!.disabled).toBe(false);
+    expect(result[3]!.disabled).toBe(false);
+  });
+
   it('не мутирует исходные сообщения', () => {
     const assistant = msg({ role: MessageRole.ASSISTANT, content: 'a' });
     const messages = [

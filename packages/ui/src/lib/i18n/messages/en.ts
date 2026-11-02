@@ -1302,6 +1302,11 @@ export const dict = {
   'chat.notice.restartResumedText': 'The turn was interrupted by an instance restart and continued automatically',
   'chat.notice.scheduler': 'Scheduler',
   'chat.notice.schedulerNamed': 'Scheduler · {name}',
+  // ADR-115: an attachment delivered by a tool — service block.
+  'chat.notice.toolAttachment': 'Agent · {name} · attachment',
+  'chat.notice.toolAttachmentAnonymous': 'Agent · attachment',
+  // ADR-089: external event without a sender name — neutral author label.
+  'chat.author.external': 'External sender',
   // ADR-111/ADR-113: уведомление о завершении фонового прогона.
   'chat.notice.backgroundProcess': 'Background process · {name}',
   'chat.notice.backgroundSubagent': 'Background subagent · {name}',
