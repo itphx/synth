@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, resolveMaxUploadBytes, resolveMaxReadBytes, ensureFirstRun } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, resolveMaxUploadBytes, resolveMaxReadBytes, resolveMaxPreviewBytes, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -281,6 +281,55 @@ describe('resolveMaxReadBytes (лимит чтения файла)', () => {
     expect(resolveMaxReadBytes(c, { SYNTH_MAX_READ_BYTES: '' })).toBe(4 * 1024 * 1024);
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe('resolveMaxPreviewBytes (лимит предпросмотра файла)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('дефолт — 100 МиБ, если ни env, ни config не заданы', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxPreviewBytes: undefined } };
+    expect(resolveMaxPreviewBytes(c, {})).toBe(100 * 1024 * 1024);
+  });
+
+  it('config.storage.maxPreviewBytes применяется, если env не задан', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxPreviewBytes: 1024 * 1024 } };
+    expect(resolveMaxPreviewBytes(c, {})).toBe(1024 * 1024);
+  });
+
+  it('env SYNTH_MAX_PREVIEW_BYTES приоритетнее config (CLI > env > config.yaml > defaults)', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxPreviewBytes: 1024 * 1024 } };
+    expect(resolveMaxPreviewBytes(c, { SYNTH_MAX_PREVIEW_BYTES: '4096' })).toBe(4096);
+  });
+
+  it('невалидное env (не число / вне границ) → warn + фолбэк на config', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxPreviewBytes: 7 * 1024 * 1024 } };
+
+    expect(resolveMaxPreviewBytes(c, { SYNTH_MAX_PREVIEW_BYTES: 'nope' })).toBe(7 * 1024 * 1024);
+    // Ниже минимума (нельзя «залимитировать всё») — игнор, фолбэк на config.
+    expect(resolveMaxPreviewBytes(c, { SYNTH_MAX_PREVIEW_BYTES: '1' })).toBe(7 * 1024 * 1024);
+    // Выше максимума — тоже игнор.
+    expect(resolveMaxPreviewBytes(c, { SYNTH_MAX_PREVIEW_BYTES: String(1024 ** 4) }))
+      .toBe(7 * 1024 * 1024);
+    expect(warn).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
+  });
+
+  it('пустое env-значение → тихий игнор (фолбэк на config), без warn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxPreviewBytes: 3 * 1024 * 1024 } };
+    expect(resolveMaxPreviewBytes(c, { SYNTH_MAX_PREVIEW_BYTES: '' })).toBe(3 * 1024 * 1024);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('не читает реальный process.env, если передан env без переменной', () => {
+    vi.stubEnv('SYNTH_MAX_PREVIEW_BYTES', '1024');
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxPreviewBytes: 9 * 1024 * 1024 } };
+    expect(resolveMaxPreviewBytes(c, {})).toBe(9 * 1024 * 1024);
   });
 });
 

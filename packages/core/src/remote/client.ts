@@ -156,6 +156,12 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** Сырое тело вместо JSON-сериализации (multipart/FormData и т.п.). */
   rawBody?: RequestInit['body'];
+  /**
+   * Дополнительные заголовки запроса (например `Range` для `/api/v2/fs/raw`).
+   * `Authorization`/`Content-Type` переопределяются клиентом — ими нельзя
+   * подменить креды запроса.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -220,7 +226,7 @@ export class RemoteBackendClient {
     const url = new URL(path, this._backendUrl).toString();
 
     const token = await this._getToken();
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...(opts?.headers ?? {}) };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -752,6 +758,19 @@ export class RemoteBackendClient {
   fsDownload(params: { projectId: string; path: string }, opts?: RequestOptions): Promise<Response> {
     const qs = new URLSearchParams({ project_id: params.projectId, path: params.path });
     return this.request<Response>('GET', `/api/v2/fs/download?${qs.toString()}`, undefined, {
+      raw: true,
+      ...opts,
+    });
+  }
+
+  /**
+   * Предпросмотр файла: raw Response (байты потоком, inline-MIME, `Range`/`206`).
+   * Заголовок `Range` пробрасывается как есть (`opts.headers`) — иначе seek в
+   * видео на удалённом мире не работал бы.
+   */
+  fsRaw(params: { projectId: string; path: string }, opts?: RequestOptions): Promise<Response> {
+    const qs = new URLSearchParams({ project_id: params.projectId, path: params.path });
+    return this.request<Response>('GET', `/api/v2/fs/raw?${qs.toString()}`, undefined, {
       raw: true,
       ...opts,
     });

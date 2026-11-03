@@ -324,6 +324,8 @@ export function mountStandaloneRoutes(
       maxUploadBytes: config.maxUploadBytes,
       // Лимит чтения файла: config/env (resolveMaxReadBytes), иначе дефолт фабрики.
       maxReadBytes: config.maxReadBytes,
+      // Лимит предпросмотра файла (GET /raw): config/env (resolveMaxPreviewBytes).
+      maxPreviewBytes: config.maxPreviewBytes,
       getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
         workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
         getProject: (id) => projectStore.load(id),

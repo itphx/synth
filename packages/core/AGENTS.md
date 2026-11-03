@@ -712,6 +712,15 @@
   снимается «Стопом»: `PermissionApprovalManager.waitForDecision(..., signal)`
   (ADR-005) резолвится `{approved:false, cancelled:true}` без публикации
   `permission.asked`, причина в результате тула — ключ `permission.ask_cancelled`.
+- `server/routes/fs.ts` — единственная FS-фабрика (core + backend, ADR-075). `GET /raw` —
+  предпросмотр файла: inline **только** для `INLINE_PREVIEW_KINDS` (`image`/`video`/`audio`/`pdf`,
+  MIME — `fileMime`), иначе `application/octet-stream` + `Content-Disposition: attachment` (HTML —
+  никогда inline: XSS), SVG — CSP `default-src 'none'; style-src 'unsafe-inline'; sandbox`;
+  `Range`/`206` + `Content-Range`, `If-None-Match`/`304`, `Accept-Ranges`, `ETag` (size+mtime),
+  `Last-Modified`; поток `createReadStream` + `Readable.toWeb`; cap `storage.maxPreviewBytes`
+  (`413 FILE_TOO_LARGE`, `details.reason='preview_size'`). `maxPreviewBytes` приходит из
+  `resolveMaxPreviewBytes` в обе сборки (`server/app/mount-routes.ts`, backend
+  `app/mount-routes.ts`/`lib/app-config.ts`).
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
 - `engine/attachments/*` — ADR-115: вложения сообщений (сервис, MIME, приватность, GC,

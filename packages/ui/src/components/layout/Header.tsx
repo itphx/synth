@@ -1,4 +1,5 @@
 import { useMemo, useCallback, useState, useRef } from 'react'
+import { fileKind, type FileKind } from '@itphx/synth-shared/types'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
@@ -33,6 +34,12 @@ interface HeaderProps {
 
 /** Стабильный пустой набор выделения (иначе новый `Set` ломает мемоизацию). */
 const EMPTY_SELECTED_IDS: Set<string> = new Set()
+
+/**
+ * Семейства, которые нельзя открыть в текстовом редакторе: медиа и бинарь
+ * (просмотр — `FileViewerTab`, скачивание — `/fs/download`).
+ */
+const NON_EDITABLE_FILE_KINDS: readonly FileKind[] = ['image', 'video', 'audio', 'pdf', 'binary']
 
 /**
  * Имя каталога из абсолютного пути — фолбэк для индикатора worktree'а,
@@ -81,6 +88,12 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const isFileViewer = activeTab?.type === 'file-viewer'
   const isFileEditor = activeTab?.type === 'file-editor'
   const isCommitDetail = activeTab?.type === 'commit-detail'
+  // «Редактировать» предлагаем только для текста/кода/markdown: медиа и бинарь
+  // в текстовом редакторе бессмысленны (только просмотр/скачивание).
+  const canEditViewedFile =
+    isFileViewer && activeTab?.data.filePath
+      ? !NON_EDITABLE_FILE_KINDS.includes(fileKind(activeTab.data.filePath))
+      : false
 
   // Процент контекстного окна — из общего хука (тот же, что в правой панели).
   const sessionId = activeTab?.data?.sessionId
@@ -571,13 +584,15 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             <span className="text-xs font-mono text-muted-foreground truncate max-w-[16.25rem]">
               {activeTab.data.filePath}
             </span>
-            <button
-              onClick={handleFileEdit}
-              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-              title={t('file.edit')}
-            >
-              <Icon name="edit-2" className="size-3.5" />
-            </button>
+            {canEditViewedFile && (
+              <button
+                onClick={handleFileEdit}
+                className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+                title={t('file.edit')}
+              >
+                <Icon name="edit-2" className="size-3.5" />
+              </button>
+            )}
             <button
               onClick={handleFileDownload}
               className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"

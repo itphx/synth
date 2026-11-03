@@ -11,6 +11,9 @@ import {
   DEFAULT_MAX_READ_BYTES,
   MIN_READ_BYTES,
   MAX_READ_BYTES_LIMIT,
+  DEFAULT_MAX_PREVIEW_BYTES,
+  MIN_PREVIEW_BYTES,
+  MAX_PREVIEW_BYTES_LIMIT,
 } from '../types/index.js';
 import { defaultConfig } from './defaults.js';
 import { normalizePostgresSslMode, type PostgresSslMode } from './tls.js';
@@ -298,6 +301,29 @@ export function resolveMaxReadBytes(config: SynthConfig, env?: NodeJS.ProcessEnv
     );
   }
   return config.storage.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
+}
+
+/**
+ * Максимальный размер файла, отдаваемого `GET /api/v2/fs/raw` (предпросмотр
+ * медиа), в байтах. Приоритет: env `SYNTH_MAX_PREVIEW_BYTES` >
+ * `config.storage.maxPreviewBytes` > `DEFAULT_MAX_PREVIEW_BYTES` (100 МиБ).
+ * Некорректное env-значение (не число или вне границ
+ * `MIN_PREVIEW_BYTES`…`MAX_PREVIEW_BYTES_LIMIT`) — warn и фолбэк на
+ * config/дефолт (fail-soft, как остальные env-резолверы; не падаем).
+ */
+export function resolveMaxPreviewBytes(config: SynthConfig, env?: NodeJS.ProcessEnv): number {
+  const raw = (env ?? process.env).SYNTH_MAX_PREVIEW_BYTES;
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= MIN_PREVIEW_BYTES && n <= MAX_PREVIEW_BYTES_LIMIT) {
+      return Math.floor(n);
+    }
+    console.warn(
+      `[config] невалидное значение SYNTH_MAX_PREVIEW_BYTES="${raw}" ` +
+      `(ожидается число от ${MIN_PREVIEW_BYTES} до ${MAX_PREVIEW_BYTES_LIMIT}) — игнорируется`,
+    );
+  }
+  return config.storage.maxPreviewBytes ?? DEFAULT_MAX_PREVIEW_BYTES;
 }
 
 /**

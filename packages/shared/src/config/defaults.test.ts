@@ -228,6 +228,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.storage.maxReadBytes).toBe(5 * 1024 * 1024);
   });
 
+  it('storage.maxPreviewBytes по умолчанию 100 МиБ (config/env-настраиваемый лимит предпросмотра)', () => {
+    expect(defaultConfig.storage.maxPreviewBytes).toBe(100 * 1024 * 1024);
+  });
+
   it('storage.backend по умолчанию file, postgres пуст, degradedMode fallback-file (ADR-096)', () => {
     expect(defaultConfig.storage.backend).toBe('file');
     expect(defaultConfig.storage.postgres).toEqual({});

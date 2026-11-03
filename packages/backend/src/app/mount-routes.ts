@@ -258,6 +258,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     maxUploadBytes: config.maxUploadBytes,
     // Лимит чтения файла: config/env (resolveMaxReadBytes), иначе дефолт фабрики.
     maxReadBytes: config.maxReadBytes,
+    // Лимит предпросмотра файла (GET /raw): config/env (resolveMaxPreviewBytes).
+    maxPreviewBytes: config.maxPreviewBytes,
     authorizeProject: async (c, projectId) => {
       const user = await auth.getCurrentUser(c);
       if (!user) return false;

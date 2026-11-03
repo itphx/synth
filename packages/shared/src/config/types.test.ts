@@ -1,6 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, llmConfigSchema, contextConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
+
+describe('storageConfigSchema — лимиты чтения/предпросмотра', () => {
+  it('maxPreviewBytes необязателен; в границах 1024…512 МиБ', () => {
+    expect(storageConfigSchema.parse({}).maxPreviewBytes).toBeUndefined();
+    expect(storageConfigSchema.parse({ maxPreviewBytes: 1024 }).maxPreviewBytes).toBe(1024);
+    expect(storageConfigSchema.parse({ maxPreviewBytes: 512 * 1024 * 1024 }).maxPreviewBytes)
+      .toBe(512 * 1024 * 1024);
+    expect(storageConfigSchema.safeParse({ maxPreviewBytes: 1023 }).success).toBe(false);
+    expect(storageConfigSchema.safeParse({ maxPreviewBytes: 512 * 1024 * 1024 + 1 }).success).toBe(false);
+    expect(storageConfigSchema.safeParse({ maxPreviewBytes: 1.5 }).success).toBe(false);
+  });
+
+  it('maxReadBytes — прежние границы не изменились', () => {
+    expect(storageConfigSchema.parse({}).maxReadBytes).toBeUndefined();
+    expect(storageConfigSchema.safeParse({ maxReadBytes: 1023 }).success).toBe(false);
+    expect(storageConfigSchema.safeParse({ maxReadBytes: 1024 }).success).toBe(true);
+  });
+});
 
 describe('contextConfigSchema (context.defaults)', () => {
   it('defaults отсутствует → прежние дефолты SessionManager', () => {

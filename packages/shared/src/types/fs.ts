@@ -97,6 +97,23 @@ export const MIN_READ_BYTES = 1024;
 export const MAX_READ_BYTES_LIMIT = 512 * 1024 * 1024;
 
 /**
+ * Лимит предпросмотра файла (`GET /api/v2/fs/raw`) по умолчанию, байт: 100 МиБ.
+ * Медиа-файлы (видео/аудио/изображения) заметно крупнее текстовых, поэтому
+ * лимит предпросмотра отдельный от `DEFAULT_MAX_READ_BYTES` (5 МиБ — чтение
+ * текста). Файл больше лимита → `413` с машинным кодом `FILE_TOO_LARGE` и
+ * `details.maxPreviewBytes`. Переопределяется конфигом
+ * (`storage.maxPreviewBytes` / env `SYNTH_MAX_PREVIEW_BYTES`) или опцией
+ * фабрики `createFsRoutes` (`FsRoutesOptions.maxPreviewBytes`, для тестов).
+ */
+export const DEFAULT_MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
+
+/** Нижняя граница настраиваемого лимита предпросмотра (байт). */
+export const MIN_PREVIEW_BYTES = 1024;
+
+/** Верхняя граница настраиваемого лимита предпросмотра (байт): 512 МиБ. */
+export const MAX_PREVIEW_BYTES_LIMIT = 512 * 1024 * 1024;
+
+/**
  * Жёсткий предел глубины рекурсивного листинга (`GET /api/v2/fs?maxDepth=`):
  * значение из запроса ограничивается этим числом (было 10).
  */

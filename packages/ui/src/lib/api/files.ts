@@ -10,6 +10,21 @@ import { BASE_URL, fetchJSON } from './base'
  */
 export const FS_LIST_MAX_DEPTH = 3
 
+/**
+ * Результат `HEAD /fs/raw`: предпросмотр медиа может быть отвергнут **до**
+ * загрузки байтов (413 по `storage.maxPreviewBytes`, 404/403). Компонент
+ * показывает причину и «Скачать», а не пустой экран/битую картинку.
+ * `status: 0` — сеть/проверка недоступны: элемент всё равно пробуем показать.
+ */
+export interface RawFileProbe {
+  ok: boolean
+  status: number
+  size: number
+  limit?: number
+  reason?: string
+  message?: string
+}
+
 export const filesApi = {
   // Файловая система (API v2 — /fs?project_id=&path=)
   async listDirectory(
@@ -60,6 +75,74 @@ export const filesApi = {
   downloadFile(projectId: string, path: string): string {
     const params = new URLSearchParams({ project_id: projectId, path })
     return `${BASE_URL}/fs/download?${params.toString()}`
+  },
+
+  /**
+   * URL предпросмотра файла (ADR-115/этап B): inline только для
+   * `INLINE_PREVIEW_KINDS` (image/video/audio/pdf), `Range`/`ETag` — на сервере.
+   * HTML/код/текст сервер отдаёт как `attachment` — в `<img>`/`<iframe>` их не
+   * ставим (XSS), для них — чтение через `readFile`.
+   */
+  rawFileUrl(projectId: string, path: string): string {
+    const params = new URLSearchParams({ project_id: projectId, path })
+    return `${BASE_URL}/fs/raw?${params.toString()}`
+  },
+
+  /** Проверка предпросмотра без загрузки байтов (`HEAD /fs/raw`). */
+  async probeRawFile(projectId: string, path: string): Promise<RawFileProbe> {
+    const params = new URLSearchParams({ project_id: projectId, path })
+    let response: Response
+    try {
+      response = await fetch(`${BASE_URL}/fs/raw?${params.toString()}`, {
+        method: 'HEAD',
+        credentials: 'include',
+      })
+    } catch (e) {
+      return { ok: false, status: 0, size: 0, reason: 'network', message: (e as Error).message }
+    }
+
+    const size = Number(response.headers.get('content-length') ?? 0)
+    if (response.ok) {
+      return { ok: true, status: response.status, size: Number.isFinite(size) ? size : 0 }
+    }
+
+    const body = (await response.json().catch(() => null)) as
+      | { error?: { code?: string; message?: string; error?: string; details?: Record<string, unknown> } }
+      | null
+    const error = body?.error
+    const details = error?.details
+    // HEAD-ответ приходит без тела (Hono его отбрасывает), поэтому причина
+    // отказа и размеры приходят ещё и заголовками (`GET/HEAD /fs/raw`).
+    const headerNumber = (name: string): number | undefined => {
+      const raw = response.headers.get(name)
+      if (raw === null) return undefined
+      const value = Number(raw)
+      return Number.isFinite(value) ? value : undefined
+    }
+    const limitValue = Number(
+      details?.maxPreviewBytes ?? headerNumber('x-synth-preview-max-bytes') ?? 0,
+    )
+    const sizeValue = Number(
+      details?.size ?? headerNumber('x-synth-preview-size') ?? (Number.isFinite(size) ? size : 0),
+    )
+    const headerReason = response.headers.get('x-synth-preview-reason')
+    // Других `413` у `/fs/raw` нет — без тела и заголовков это отказ по размеру
+    // предпросмотра (иначе UI показал бы голый «HTTP 413»).
+    const reason =
+      (typeof details?.reason === 'string' ? details.reason : undefined) ||
+      headerReason ||
+      (response.status === 413 ? 'preview_size' : undefined)
+    return {
+      ok: false,
+      status: response.status,
+      size: Number.isFinite(sizeValue) ? sizeValue : 0,
+      limit: Number.isFinite(limitValue) && limitValue > 0 ? limitValue : undefined,
+      reason,
+      message:
+        error?.message ||
+        error?.error ||
+        (reason === 'preview_size' ? undefined : `HTTP ${response.status}`),
+    }
   },
 
   async createDirectory(projectId: string, path: string): Promise<{ created: boolean; path: string }> {

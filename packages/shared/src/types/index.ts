@@ -40,6 +40,9 @@ export * from './message-stream.js';
 export * from './steering.js';
 // Файловая система (FS API v2)
 export * from './fs.js';
+// Классификация файла по расширению (kind/MIME, allow-list inline-предпросмотра)
+// — browser-safe контракт для UI и ядра.
+export * from './file-kind.js';
 
 // --- Реэкспорт существующих доменных модулей ---
 // Tool types — re-exported from tools.ts

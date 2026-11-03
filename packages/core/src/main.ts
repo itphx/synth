@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, resolveMaxReadBytes, resolveExecutionConfig, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, resolveMaxReadBytes, resolveMaxPreviewBytes, resolveExecutionConfig, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
@@ -219,6 +219,7 @@ program
       executionConfig: execution,
       maxUploadBytes: resolveMaxUploadBytes(synth),
       maxReadBytes: resolveMaxReadBytes(synth),
+      maxPreviewBytes: resolveMaxPreviewBytes(synth),
       uiDistPath: uiPath,
       permissionConfig: synth.permission,
       defaultPlanMode: synth.session?.planMode,

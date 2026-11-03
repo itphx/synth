@@ -271,6 +271,7 @@ export type { ToolsPolicy } from '@itphx/synth-shared/types'
 // ADR-071 §2.3: `ToolsPolicy` — общий контракт `@itphx/synth-shared/types`
 // (импортирован и реэкспортирован выше).
 export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synth-shared'
+export type { RawFileProbe } from './files'
 export type {
   PackInstallationStatus,
   PackProvides,

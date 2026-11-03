@@ -177,3 +177,82 @@ describe('filesApi — ссылки, создание, удаление, пер�
     )
   })
 })
+
+describe('filesApi — проверка предпросмотра (HEAD /fs/raw)', () => {
+  /** Ответ без тела (HEAD) с произвольными заголовками. */
+  function probeResponse(status: number, headers: Record<string, string> = {}): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: new Headers(headers),
+      json: async () => {
+        throw new Error('no body')
+      },
+    } as unknown as Response
+  }
+
+  it('probeRawFile: HEAD → method/credentials, размер из content-length', async () => {
+    fetchMock.mockResolvedValue(probeResponse(200, { 'content-length': '42' }))
+
+    const probe = await synthApi.probeRawFile('p1', 'a/b.png')
+
+    const [url, init] = fetchMock.mock.calls[0]! as [string, RequestInit]
+    expect(url.startsWith('/api/v2/fs/raw?')).toBe(true)
+    expect(new URLSearchParams(url.split('?')[1]).get('path')).toBe('a/b.png')
+    expect(init.method).toBe('HEAD')
+    expect(probe).toEqual({ ok: true, status: 200, size: 42 })
+  })
+
+  it('probeRawFile: 413 без тела — причина и размеры из заголовков', async () => {
+    fetchMock.mockResolvedValue(
+      probeResponse(413, {
+        'x-synth-preview-reason': 'preview_size',
+        'x-synth-preview-max-bytes': '104857600',
+        'x-synth-preview-size': '157286400',
+      }),
+    )
+
+    const probe = await synthApi.probeRawFile('p1', 'video.mp4')
+
+    expect(probe).toMatchObject({
+      ok: false,
+      status: 413,
+      reason: 'preview_size',
+      limit: 104857600,
+      size: 157286400,
+    })
+    // Тела нет — «HTTP 413» не подставляем, UI берёт i18n-ключ.
+    expect(probe.message).toBeUndefined()
+  })
+
+  it('probeRawFile: 413 без тела и заголовков — всё равно preview_size', async () => {
+    fetchMock.mockResolvedValue(probeResponse(413))
+
+    const probe = await synthApi.probeRawFile('p1', 'video.mp4')
+
+    expect(probe.status).toBe(413)
+    expect(probe.reason).toBe('preview_size')
+    expect(probe.size).toBe(0)
+    expect(probe.limit).toBeUndefined()
+  })
+
+  it('probeRawFile: тело ошибки важнее заголовков', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 413,
+      headers: new Headers({ 'x-synth-preview-reason': 'preview_size', 'x-synth-preview-size': '1' }),
+      json: async () => ({
+        error: {
+          code: 'FILE_TOO_LARGE',
+          message: 'Файл превышает лимит предпросмотра',
+          details: { maxPreviewBytes: 16, size: 100, reason: 'preview_size' },
+        },
+      }),
+    } as unknown as Response)
+
+    const probe = await synthApi.probeRawFile('p1', 'big.mp4')
+
+    expect(probe).toMatchObject({ size: 100, limit: 16, reason: 'preview_size' })
+    expect(probe.message).toBe('Файл превышает лимит предпросмотра')
+  })
+})

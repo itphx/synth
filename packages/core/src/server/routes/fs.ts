@@ -6,7 +6,19 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { FileEntry, FsError, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
-import { FsErrorCode, fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema, DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_MAX_READ_BYTES, MAX_FS_LIST_DEPTH, MAX_FS_LIST_ENTRIES } from '@itphx/synth-shared';
+import {
+  FsErrorCode,
+  fsWorkspaceBrowseQuerySchema,
+  fsWorkspaceMkdirBodySchema,
+  DEFAULT_MAX_UPLOAD_BYTES,
+  DEFAULT_MAX_READ_BYTES,
+  DEFAULT_MAX_PREVIEW_BYTES,
+  MAX_FS_LIST_DEPTH,
+  MAX_FS_LIST_ENTRIES,
+  fileKind,
+  fileMime,
+  INLINE_PREVIEW_KINDS,
+} from '@itphx/synth-shared';
 import { checkPath, loadProtectedPaths } from '../../engine/security/protected-paths.js';
 import type { ProtectedPathsPolicy } from '../../engine/security/protected-paths.js';
 import { isInsideReal } from '../../engine/tools/path-utils.js';
@@ -78,6 +90,14 @@ export interface FsRoutesOptions {
    */
   maxReadBytes?: number;
   /**
+   * Максимальный размер файла, отдаваемого `GET /raw` (предпросмотр медиа),
+   * в байтах. Не задан — `DEFAULT_MAX_PREVIEW_BYTES` (100 МиБ); точки монтирования
+   * (standalone/backend) передают сюда `resolveMaxPreviewBytes(config)`.
+   * Проверяется по `stat` **до** чтения байт: файл больше лимита → `413` с
+   * машинным кодом `FILE_TOO_LARGE` и `details.maxPreviewBytes`.
+   */
+  maxPreviewBytes?: number;
+  /**
    * Общий предел числа записей в рекурсивном листинге (`GET /?maxDepth>0`).
    * Не задан — `MAX_FS_LIST_ENTRIES` (10 000); при достижении предела обход
    * прекращается, в ответе `truncated: true`.
@@ -123,6 +143,15 @@ export { DEFAULT_MAX_UPLOAD_BYTES };
  * `FsRoutesOptions.maxReadBytes` (для тестов) → `DEFAULT_MAX_READ_BYTES`.
  */
 export { DEFAULT_MAX_READ_BYTES };
+
+/**
+ * Лимит предпросмотра файла (`GET /raw`) по умолчанию, в байтах: 100 МиБ.
+ * Константа живёт в `@itphx/synth-shared` (чтобы config-схема и core-дефолт
+ * не расходились); реэкспорт сохраняет публичный импорт из `@itphx/synth-core`.
+ * Эффективный лимит: конфиг/env (`resolveMaxPreviewBytes`) → эта опция фабрики
+ * `FsRoutesOptions.maxPreviewBytes` (для тестов) → `DEFAULT_MAX_PREVIEW_BYTES`.
+ */
+export { DEFAULT_MAX_PREVIEW_BYTES };
 
 /** FsError-форма (`{ error: { error, code } }`) — единый формат ошибок FS. */
 function makeFsError(code: string, error: string): { error: FsError } {
@@ -225,6 +254,70 @@ function resolveAgainstRoot(root: string, p: string): string {
 /** true, если путь запрещён политикой защищённых путей (`checkPath` → deny). */
 function isPathDenied(abs: string, cwd: string, policy: ProtectedPathsPolicy): boolean {
   return checkPath(abs, cwd, policy).action === 'deny';
+}
+
+/**
+ * Разобранный диапазон байтов (`Range: bytes=…`).
+ *
+ * - `none` — заголовка нет/он неразборчив → сервер отдаёт файл целиком (200);
+ * - `range` — диапазон в границах файла → `206 Partial Content`;
+ * - `unsatisfiable` — диапазон за пределами файла → `416`.
+ */
+type ByteRange =
+  | { kind: 'none' }
+  | { kind: 'range'; start: number; end: number }
+  | { kind: 'unsatisfiable' };
+
+/**
+ * Разобрать заголовок `Range: bytes=…`.
+ *
+ * Поддерживаются `bytes=start-end`, `bytes=start-` (до конца файла) и
+ * `bytes=-suffix` (последние N байт). Неразборчивый заголовок (в т.ч.
+ * несколько диапазонов через запятую) игнорируется — файл отдаётся целиком.
+ */
+function parseByteRange(header: string | undefined, size: number): ByteRange {
+  if (!header) return { kind: 'none' };
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return { kind: 'none' };
+  const startRaw = match[1] ?? '';
+  const endRaw = match[2] ?? '';
+  if (startRaw === '' && endRaw === '') return { kind: 'none' };
+  if (size === 0) return { kind: 'unsatisfiable' };
+
+  if (startRaw === '') {
+    // `bytes=-suffix` — последние N байт файла.
+    const suffix = Number(endRaw);
+    if (!Number.isFinite(suffix) || suffix <= 0) return { kind: 'none' };
+    return { kind: 'range', start: Math.max(0, size - suffix), end: size - 1 };
+  }
+
+  const start = Number(startRaw);
+  if (!Number.isFinite(start)) return { kind: 'none' };
+  if (start >= size) return { kind: 'unsatisfiable' };
+  if (endRaw === '') return { kind: 'range', start, end: size - 1 };
+
+  const end = Number(endRaw);
+  if (!Number.isFinite(end)) return { kind: 'none' };
+  if (end < start) return { kind: 'none' };
+  return { kind: 'range', start, end: Math.min(end, size - 1) };
+}
+
+/** ETag файла — по размеру и времени модификации (содержимое не хешируем). */
+function fileEtag(size: number, mtimeMs: number): string {
+  return `"${size}-${Math.floor(mtimeMs)}"`;
+}
+
+/**
+ * Совпадение `If-None-Match` с вычисленным ETag (без учёта префикса `W/`).
+ * `*` — совпадает с любым текущим представлением.
+ */
+function etagMatches(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  const tags = header.split(',').map((t) => t.trim()).filter((t) => t !== '');
+  if (tags.includes('*')) return true;
+  const strip = (t: string): string => (t.startsWith('W/') ? t.slice(2) : t);
+  const target = strip(etag);
+  return tags.some((t) => strip(t) === target);
 }
 
 /**
@@ -422,6 +515,10 @@ export function createFsRoutes(
     opts.maxReadBytes && opts.maxReadBytes > 0
       ? Math.floor(opts.maxReadBytes)
       : DEFAULT_MAX_READ_BYTES;
+  const maxPreviewBytes =
+    opts.maxPreviewBytes && opts.maxPreviewBytes > 0
+      ? Math.floor(opts.maxPreviewBytes)
+      : DEFAULT_MAX_PREVIEW_BYTES;
   const maxListEntries =
     opts.maxListEntries && opts.maxListEntries > 0
       ? Math.floor(opts.maxListEntries)
@@ -784,6 +881,135 @@ export function createFsRoutes(
           'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`,
           'Content-Length': String(s.size),
         },
+      });
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  // GET /raw — предпросмотр файла (медиа/изображения/PDF): байты потоком.
+  //
+  // Отличие от `/read` (текст) и `/download` (вложение): отдаёт **inline** с
+  // корректным MIME, поддерживает `Range`/`206` (seek в видео) и `ETag`/`304`.
+  //
+  // Inline-allowlist — `INLINE_PREVIEW_KINDS` (image/video/audio/pdf): всё
+  // остальное (в т.ч. `text/html`) отдаётся как `application/octet-stream` +
+  // `attachment`, иначе HTML исполнился бы в origin приложения (XSS).
+  app.get('/raw', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
+    const projectId = c.req.query('project_id');
+    if (projectId && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const range = c.req.header('range');
+        return await remoteClient.fsRaw(
+          { projectId: toLocalId(projectId), path: c.req.query('path') || '' },
+          {
+            signal: c.req.raw.signal,
+            ...(range ? { headers: { Range: range } } : {}),
+          },
+        );
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
+    try {
+      const { base, projectAware } = await resolveBase(c, projectId);
+      const path = c.req.query('path') || '';
+      if (projectAware && !path) {
+        return c.json(validationError('Ожидается поле path'), 400);
+      }
+
+      const fullPath = resolveRequestedPath(base, path, projectAware);
+      const s = await stat(fullPath).catch(() => null);
+      if (!s) {
+        return c.json(makeFsError(FsErrorCode.NOT_FOUND, `Файл не найден: ${path}`), 404);
+      }
+      if (s.isDirectory()) {
+        return c.json(makeFsError(FsErrorCode.IS_DIRECTORY, 'Указанный путь является директорией'), 400);
+      }
+
+      // Кап предпросмотра: размер известен из `stat` — байты в память не читаются.
+      if (s.size > maxPreviewBytes) {
+        return c.json(
+          makeFsErrorWithDetails(
+            FsErrorCode.FILE_TOO_LARGE,
+            `Файл превышает лимит предпросмотра (${maxPreviewBytes} байт)`,
+            { maxPreviewBytes, size: s.size, reason: 'preview_size' },
+          ),
+          413,
+          // Hono отбрасывает тело HEAD-ответа, поэтому причина отказа и размеры
+          // дублируются заголовками — иначе HEAD-проверка (`probeRawFile`)
+          // видит голый `413` без данных для кнопки «Скачать».
+          {
+            'X-Synth-Preview-Reason': 'preview_size',
+            'X-Synth-Preview-Max-Bytes': String(maxPreviewBytes),
+            'X-Synth-Preview-Size': String(s.size),
+          },
+        );
+      }
+
+      const kind = fileKind(path);
+      const inline = INLINE_PREVIEW_KINDS.includes(kind);
+      const mime = fileMime(path);
+      const fileName = basename(fullPath);
+      const etag = fileEtag(s.size, s.mtimeMs);
+
+      const headers: Record<string, string> = {
+        'Content-Type': inline ? mime : 'application/octet-stream',
+        'Content-Disposition':
+          `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(fileName)}"`,
+        'Accept-Ranges': 'bytes',
+        // Файлы workspace меняются — кэш браузера проверяет по ETag (`304`).
+        'Cache-Control': 'private, no-cache',
+        ETag: etag,
+        'Last-Modified': new Date(s.mtimeMs).toUTCString(),
+        'X-Content-Type-Options': 'nosniff',
+      };
+      // SVG — активное содержимое: при прямой навигации браузер выполняет
+      // скрипты, поэтому документ изолируем (в `<img>` скрипты и так не идут).
+      if (inline && mime === 'image/svg+xml') {
+        headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+      }
+
+      // Условный запрос: файл не изменился — 304 без тела.
+      if (etagMatches(c.req.header('if-none-match'), etag)) {
+        return new Response(null, { status: 304, headers });
+      }
+
+      const range = parseByteRange(c.req.header('range'), s.size);
+      if (range.kind === 'unsatisfiable') {
+        return new Response(null, {
+          status: 416,
+          headers: { ...headers, 'Content-Range': `bytes */${s.size}` },
+        });
+      }
+
+      if (range.kind === 'range') {
+        const length = range.end - range.start + 1;
+        const rangeStream = createReadStream(fullPath, { start: range.start, end: range.end });
+        return new Response(Readable.toWeb(rangeStream) as ReadableStream, {
+          status: 206,
+          headers: {
+            ...headers,
+            'Content-Length': String(length),
+            'Content-Range': `bytes ${range.start}-${range.end}/${s.size}`,
+          },
+        });
+      }
+
+      // HEAD — те же заголовки без тела (поток не открываем).
+      if (c.req.method === 'HEAD') {
+        return new Response(null, { status: 200, headers: { ...headers, 'Content-Length': String(s.size) } });
+      }
+
+      const fileStream = createReadStream(fullPath);
+      return new Response(Readable.toWeb(fileStream) as ReadableStream, {
+        status: 200,
+        headers: { ...headers, 'Content-Length': String(s.size) },
       });
     } catch (err) {
       return fsErrorResponse(c, err);

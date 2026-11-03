@@ -1258,6 +1258,11 @@ export const dict = {
   'file.workspaceRoot': 'Workspace root',
   'file.tooLarge': 'File is too large to view: {size}. Read limit is {limit}.',
   'file.binaryNotReadable': 'Binary files cannot be read in the editor.',
+  'file.previewTooLarge': 'File is too large to preview: {size}. Preview limit is {limit}.',
+  'file.previewFailed': 'Could not display the file.',
+  'file.markdownPreview': 'Preview',
+  'file.markdownSource': 'Source',
+  'file.openInNewTab': 'Open in new tab',
   'file.listTruncated': 'Not all entries are shown: the listing was truncated by the limit.',
 
   // Workspace picker

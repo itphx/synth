@@ -1,5 +1,5 @@
 import type { AuthConfig, TestUser, SynthConfig } from '@itphx/synth-shared';
-import { loadConfig, resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveMaxUploadBytes, resolveMaxReadBytes } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveMaxUploadBytes, resolveMaxReadBytes, resolveMaxPreviewBytes } from '@itphx/synth-shared';
 import type { LoadConfigOptions } from '@itphx/synth-shared/config';
 
 const envStr = (key: string, fallback = ''): string => process.env[key] || fallback;
@@ -18,6 +18,8 @@ export interface BackendConfig {
   maxUploadBytes: number;
   /** Максимальный размер файла, отдаваемого `GET /api/v2/fs/read`, байт (config/env). */
   maxReadBytes: number;
+  /** Максимальный размер файла, отдаваемого `GET /api/v2/fs/raw` (предпросмотр), байт (config/env). */
+  maxPreviewBytes: number;
   port: number;
   auth: AuthConfig;
 }
@@ -82,7 +84,8 @@ export async function loadBackendConfig(options?: LoadConfigOptions): Promise<Ba
   const workspacesRoot = resolveWorkspacesRoot(synth);
   const maxUploadBytes = resolveMaxUploadBytes(synth);
   const maxReadBytes = resolveMaxReadBytes(synth);
+  const maxPreviewBytes = resolveMaxPreviewBytes(synth);
   const port = resolvePort(synth, 'SYNTH_PORT', synth.server.port);
 
-  return { synth, dataDir, workspacesRoot, maxUploadBytes, maxReadBytes, port, auth };
+  return { synth, dataDir, workspacesRoot, maxUploadBytes, maxReadBytes, maxPreviewBytes, port, auth };
 }

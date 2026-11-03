@@ -1234,6 +1234,11 @@ export const dict = {
   'file.workspaceRoot': 'Корень рабочего каталога',
   'file.tooLarge': 'Файл слишком большой для просмотра: {size}. Лимит чтения — {limit}.',
   'file.binaryNotReadable': 'Бинарный файл не читается в редакторе.',
+  'file.previewTooLarge': 'Файл слишком большой для предпросмотра: {size}. Лимит предпросмотра — {limit}.',
+  'file.previewFailed': 'Не удалось показать файл.',
+  'file.markdownPreview': 'Просмотр',
+  'file.markdownSource': 'Исходник',
+  'file.openInNewTab': 'Открыть в новой вкладке',
   'file.listTruncated': 'Показаны не все элементы: список обрезан по лимиту.',
 
   // Workspace picker

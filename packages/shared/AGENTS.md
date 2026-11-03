@@ -159,6 +159,11 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `resolveDegradedMode`) / `fallbackDir` (`resolveStorageFallbackDir`). Пароль БД в схеме
   **не хранится** (инвариант 13) — `resolvePostgresPassword` (env `SYNTH_POSTGRES_PASSWORD`
   → файл `{dataDir}/secrets/postgres-password`).
+- Лимиты файлового контура (`storage.*`): `maxUploadBytes` (`resolveMaxUploadBytes`, env
+  `SYNTH_MAX_UPLOAD_BYTES`), `maxReadBytes` (`resolveMaxReadBytes`, env `SYNTH_MAX_READ_BYTES`) и
+  `maxPreviewBytes` (`resolveMaxPreviewBytes`, env `SYNTH_MAX_PREVIEW_BYTES`, дефолт 100 МиБ) —
+  предпросмотр `GET /api/v2/fs/raw`; приоритет env > config > дефолт, невалидное env — warn + фолбэк
+  (fail-soft), границы — `MIN_*`/`MAX_*` константы из `types/fs.ts`.
 - ADR-099 (единый механизм доверия TLS/CA): секция `security.tls` (`caFile`/`caPem`/
   `certFile`/`keyFile`/`rejectUnauthorized`; взаимоисключение `caFile`↔`caPem`, fail-closed
   на битый/нечитаемый PEM) — типы `SecurityTlsConfig` (`config/types.ts`) и резолверы
@@ -180,6 +185,14 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 ## Схемы и типы
 
 `src/types/index.ts` + `src/schemas/index.ts` — единые контракты сущностей; схемы `projectCreate/Update`, `sessionCreate/Update`.
+- `src/types/file-kind.ts` (browser-safe: только типы, константы и чистые функции, без `node:*`;
+  re-export из `types`): `FileKind` (`text`/`markdown`/`code`/`image`/`video`/`audio`/`pdf`/`binary`),
+  `fileKind(path)`/`fileMime(path)` — классификация и MIME по расширению (регистронезависимо;
+  неизвестное/без расширения → `binary`/`application/octet-stream`) и allow-list
+  `INLINE_PREVIEW_KINDS = ['image','video','audio','pdf']`. Единый контракт UI и ядра: сервер
+  (`GET /api/v2/fs/raw`) по нему выбирает `inline` vs `attachment` — HTML/код/текст **никогда** не
+  `inline` (XSS). Лимиты предпросмотра — `DEFAULT_MAX_PREVIEW_BYTES` (100 МиБ),
+  `MIN_PREVIEW_BYTES`/`MAX_PREVIEW_BYTES_LIMIT`.
 - ADR-046: `src/skills/frontmatter.ts` — толерантный `parseFrontmatter`/`stringifyFrontmatter` формата `SKILL.md` (js-yaml; невалидный YAML → `issues`, не throw; неизвестные ключи сохраняются в `SkillMeta.extra`); типы скиллов — `src/types/skills.ts` (`SkillScope`/`SkillLevel`/`SkillInvocation`/`SkillMeta`/`SkillSummary`/`SkillDetail`/`SkillDiagnostic`, `requires_capabilities`/`requires_toolsets`).
 - `EventType` включает `fs.changed` (мутирующий тул ядра изменил workspace) и `session.moved` (перенос сессии между проектами); потребители — `transportStore` UI (ADR-024). ADR-101: типы событий движка пайплайнов — `pipeline.run.started`/`node_started`/`node_finished`/`awaiting_human`/`finished`/`failed` и `pipeline.completed` (выход `gateway`) в `types/bus-events.ts`; это **инстансные** события (прогон — не сессия) — публикуются в инстансный канал шины, новых транспортных каналов нет.
 - ADR-101: **движок пайплайнов** — `src/types/pipeline-engine.ts` (re-export из `src/types/index.ts`): `PipelineMode` (`plan`/`act`/`yolo`, `PIPELINE_MODES`), `PipelineNodeKind` (`agent`/`script`/`tool`/`human`), `PipelineExitKind` (`session`/`file`/`gateway`/`none`), `PipelineConditionOp` (`eq`/`ne`/`in`/`exists`/`gt`/`lt`), `PipelineCondition`, `PipelineTransition`, `PipelineNode`, `PipelineExit`, `PipelineSpec` (`id`/`name`/`version`/`status`/`mode`/`projectId?`/`io?`/`vars?`/`nodes`/`exits`), `PipelineRunTrigger` (`kind` = `user|gateway|schedule|tool|webhook|manual`, `source?`/`type?`/`payload?`/`dedupKey?`), `StepResult`, `PipelineRunStatus`, `PipelineRun`, `PipelineRunEventType`/`PipelineRunEvent` и `validatePipelineSpec(spec)` — валидатор графа (проблемы **строками**, без throw). Zod — `pipelineModeSchema`/`pipelineNodeKindSchema`/`pipelineExitKindSchema`/`pipelineConditionOpSchema`/`jsonSchemaLikeSchema`/`pipelineConditionSchema`/`pipelineSpecEdgeSchema`/`pipelineSpecNodeSchema`/`pipelineExitSchema`/`pipelineSpecSchema`/`pipelineRunTriggerSchema`/`pipelineStepResultSchema`/`pipelineRunStatusSchema`/`pipelineRunSchema`/`pipelineRunEventTypeSchema`/`pipelineRunEventSchema`. Имя `PipelineTrigger` занято legacy-контрактом ADR-100 (`types/pipeline.ts`) — не путать.

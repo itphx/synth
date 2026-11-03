@@ -209,6 +209,13 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ blo
   `SYNTH_MAX_READ_BYTES`, резолвер `resolveMaxReadBytes` — приоритет env > config > дефолт): размер
   известен из `stat` **до** чтения, содержимое в память не читается; файл больше лимита **или**
   бинарный → `413` `FILE_TOO_LARGE` + `details: {maxReadBytes, size, reason}`. Конфиг — [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Хранилище и рабочий каталог».
+- `GET /api/v2/fs/raw` — предпросмотр файла (**cap `storage.maxPreviewBytes`**, по умолчанию 100 МиБ,
+  env `SYNTH_MAX_PREVIEW_BYTES`, резолвер `resolveMaxPreviewBytes`): **inline только** для
+  `INLINE_PREVIEW_KINDS` (`image`/`video`/`audio`/`pdf`, MIME — `fileMime`), иначе
+  `application/octet-stream` + `attachment` (HTML/код/текст — никогда inline, XSS), SVG — CSP
+  `default-src 'none'; style-src 'unsafe-inline'; sandbox`; `Range`/`206`, `ETag`/`304`,
+  `Accept-Ranges`, `Cache-Control: private, no-cache`; больше лимита → `413` `FILE_TOO_LARGE` +
+  `details: {maxPreviewBytes, size, reason: 'preview_size'}`.
 - `GET /api/v2/fs` — `maxDepth` **≤ 3** (`MAX_FS_LIST_DEPTH`), при `maxDepth>0` — бюджет
   **10 000 записей** (`MAX_FS_LIST_ENTRIES`), по исчерпании обход прекращается, в ответе
   `truncated: true` (ответ неполный).
@@ -704,7 +711,7 @@ docker-демон, нет облачного лимита в 30 минут, кэ
 | проект / сессии / ветвление / merge | [ADR-014](./docs/arch_decisions/adr-014-project-container.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md), [ADR-040](./docs/arch_decisions/adr-040-sessions-without-project.md) |
 | API v2 / Hono | [ADR-017](./docs/arch_decisions/adr-017-api-v2-hono.md), [docs/API_V2.md](./docs/API_V2.md) |
 | пагинация списков / сводные DTO / `listSessions*` | [docs/API_V2.md](./docs/API_V2.md) §5 (сводный блок «Пагинация списков — единый контракт») и §5.5/§5.8/§5.10/§5.34/§5.35, [packages/core/AGENTS.md](./packages/core/AGENTS.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) («Пагинация: список сессий и история ленты», «Пагинация: проекты, пайплайны, прогоны и журнал прогона») |
-| кап чтения файла (`storage.maxReadBytes`) / листинг FS / diff коммита | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Хранилище и рабочий каталог», [docs/API_V2.md](./docs/API_V2.md) §5.12/§5.15 |
+| кап чтения файла (`storage.maxReadBytes`) / предпросмотр (`storage.maxPreviewBytes`) / листинг FS / diff коммита | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Хранилище и рабочий каталог», [docs/API_V2.md](./docs/API_V2.md) §5.12/§5.15 |
 | движки / engine | [ADR-018](./docs/arch_decisions/adr-018-session-engine-selection.md), [ADR-022](./docs/arch_decisions/adr-022-typescript-stack-runner.md). ⚠️ Поле `Session.engine` **удалено** из контракта (публичный OpenAPI/SDK, ответы `GET /sessions*`, `:id/messages`, тела POST/PATCH) — намеренное ломающее изменение; выбор и адаптеры движков — [PROP-050](./docs/arch_decisions/prop-050-external-engines-runner.md) |
 | UI / React / PWA | [ADR-019](./docs/arch_decisions/adr-019-react-spa.md), [ADR-044](./docs/arch_decisions/adr-044-mobile-adaptive-ui-pwa.md), [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) |
 | саб-агенты / контекст | [ADR-026](./docs/arch_decisions/adr-026-subagent-context-modes.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md) |

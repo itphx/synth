@@ -225,7 +225,7 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
               ? t('file.binaryNotReadable')
               : t('file.tooLarge', { size: formatSize(tooLarge.size), limit: formatSize(tooLarge.limit) })}
           </span>
-          {!isBinaryReason && projectId && filePath && (
+          {projectId && filePath && (
             <a
               href={synthApi.downloadFile(projectId, filePath)}
               download={filePath.split('/').pop()}
@@ -245,6 +245,15 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
         <div className="flex flex-col items-center gap-3 text-muted-foreground">
           <Icon name="file-3" className="size-12" />
           <span className="text-sm">{t('file.binaryFile', { size: String(binarySize) })}</span>
+          {projectId && filePath && (
+            <a
+              href={synthApi.downloadFile(projectId, filePath)}
+              download={filePath.split('/').pop()}
+              className="rounded border border-border px-3 py-1 text-xs text-foreground hover:bg-muted"
+            >
+              {t('file.download')}
+            </a>
+          )}
         </div>
       </div>
     )

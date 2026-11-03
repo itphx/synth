@@ -81,6 +81,13 @@ export interface StandaloneConfig {
    * config.yaml `storage.maxReadBytes` > 5 МиБ). Не задан — дефолт 5 МиБ.
    */
   maxReadBytes?: number;
+  /**
+   * Максимальный размер файла, отдаваемого `GET /api/v2/fs/raw` (предпросмотр
+   * медиа), в байтах. Предзаполняется `resolveMaxPreviewBytes` (env
+   * `SYNTH_MAX_PREVIEW_BYTES` > config.yaml `storage.maxPreviewBytes` >
+   * 100 МиБ). Не задан — дефолт 100 МиБ.
+   */
+  maxPreviewBytes?: number;
   uiDistPath?: string;
   systemPromptsDir?: string;
   /** Глобальная секция permission из config.yaml (ADR-029). */

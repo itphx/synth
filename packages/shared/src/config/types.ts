@@ -18,6 +18,8 @@ import {
   MAX_UPLOAD_BYTES_LIMIT,
   MIN_READ_BYTES,
   MAX_READ_BYTES_LIMIT,
+  MIN_PREVIEW_BYTES,
+  MAX_PREVIEW_BYTES_LIMIT,
   ToolCapability,
 } from '../types/index.js';
 import { catalogTrustLevelSchema } from '../types/trust.js';
@@ -129,6 +131,15 @@ export const storageConfigSchema = z.object({
    * Не задано — резолвер подставляет `DEFAULT_MAX_READ_BYTES` (5 МиБ).
    */
   maxReadBytes: z.number().int().min(MIN_READ_BYTES).max(MAX_READ_BYTES_LIMIT).optional(),
+  /**
+   * Максимальный размер файла, отдаваемого `GET /api/v2/fs/raw` (предпросмотр
+   * медиа), в байтах. Валидируется (положительное целое в границах
+   * `MIN_PREVIEW_BYTES`…`MAX_PREVIEW_BYTES_LIMIT`), читать через
+   * `resolveMaxPreviewBytes` (env `SYNTH_MAX_PREVIEW_BYTES` > это поле >
+   * `DEFAULT_MAX_PREVIEW_BYTES`). Не задано — резолвер подставляет
+   * `DEFAULT_MAX_PREVIEW_BYTES` (100 МиБ).
+   */
+  maxPreviewBytes: z.number().int().min(MIN_PREVIEW_BYTES).max(MAX_PREVIEW_BYTES_LIMIT).optional(),
 });
 
 // --- Исполнение (ADR-077) ---
