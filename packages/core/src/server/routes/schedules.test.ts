@@ -198,6 +198,41 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     expect(missing.status).toBe(404);
   });
 
+  it('PUT /:id — смена триггера cron → every очищает cron, nextRunAt по интервалу, повтор идемпотентен', async () => {
+    const app = makeApp();
+    const created = await store.create({
+      name: 'switch',
+      enabled: true,
+      cron: '0 9 * * *',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const body = { name: 'switch', every: '30m', target: { mode: 'bound', sessionId: 's1' } };
+
+    const res = await app.request(`/api/v2/schedules/${created.id}`, json('PUT', body));
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as {
+      schedule: { cron?: string; every?: string; nextRunAt?: string };
+    };
+    expect(payload.schedule.cron).toBeUndefined();
+    expect(payload.schedule.every).toBe('30m');
+    // SchedulerService в тесте зафиксирован на 2026-01-01T00:00:00Z.
+    expect(payload.schedule.nextRunAt).toBe('2026-01-01T00:30:00.000Z');
+
+    const stored = await store.get(created.id);
+    expect(stored?.cron).toBeUndefined();
+    expect(stored?.every).toBe('30m');
+
+    // Повтор того же тела — идемпотентно (старый cron не воскресает).
+    const again = await app.request(`/api/v2/schedules/${created.id}`, json('PUT', body));
+    expect(again.status).toBe(200);
+    const againBody = (await again.json()) as {
+      schedule: { cron?: string; every?: string; nextRunAt?: string };
+    };
+    expect(againBody.schedule.cron).toBeUndefined();
+    expect(againBody.schedule.every).toBe('30m');
+    expect(againBody.schedule.nextRunAt).toBe(payload.schedule.nextRunAt);
+  });
+
   it('DELETE /:id — 204 затем 404', async () => {
     const app = makeApp();
     const created = await store.create({

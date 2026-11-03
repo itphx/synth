@@ -447,6 +447,10 @@ export const scheduleSaveTool: ToolDefinition = {
     const ownerId = current?.ownerId ?? (scope.userId || undefined);
     const input: ScheduleInput = {
       ...validated.data,
+      // Патч частичный: отсутствующие поля не меняются. Пару триггеров порт
+      // заменяет целиком (`ScheduleRepository.update`: собственный ключ
+      // `cron`/`every` сбрасывает второй), поэтому явно проставлять неактивное
+      // поле здесь не нужно.
       ...(ownerId !== undefined ? { ownerId } : {}),
     };
 

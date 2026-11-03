@@ -193,6 +193,13 @@ function truncateOutput(output: string): string {
   return output.slice(0, MAX_GIT_OUTPUT) + '\n... (вывод обрезан)';
 }
 
+/** Первые `max` строк вывода (пустой хвост после последнего перевода строки не считается). */
+function firstLines(output: string, max: number): string {
+  const lines = output.split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  return lines.slice(0, max).join('\n');
+}
+
 /** Ошибка запуска процесса из-за отсутствия бинарника в окружении (ENOENT). */
 function isBinaryMissing(err: unknown): boolean {
   return (err as ExecutionError | null)?.code === 'ENOENT';
@@ -250,8 +257,23 @@ function gitTimeoutResult(
  * Две линии защиты:
  *  1) allowlist формы значения (не может выразить флаг);
  *  2) явный запрет опасных опций (остаётся в силе, если allowlist ослабят).
+ *
+ * Строгость allowlist'а зависит от вида значения: `branch` — имя ветки,
+ * `ref` — ревизия (с суффиксами `~`/`^`), `object` — объект `git show`
+ * (`rev:path`).
  */
-const GIT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/@+-]*$/;
+const GIT_BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/@+-]*$/;
+
+/** Ревизия (`ref`): имя ветки + суффиксы `~`/`^` (`HEAD~1`, `main^2`). */
+const GIT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/@+~^-]*$/;
+
+/**
+ * Имя объекта для `git show`: дополнительно `:` (разделитель «ревизия:путь» —
+ * `HEAD:src/file.ts` отдаёт blob/tree, это чтение) и ревизионные суффиксы
+ * `~`/`^`. Ведущий `-` по-прежнему запрещён, поэтому значение не станет
+ * опцией git (`--output=…` остаётся вне allowlist).
+ */
+const GIT_OBJECT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/@+~^:-]*$/;
 
 /** Имя remote: буквы/цифры и `._-` — без `/`, `:`, `@` (URL невозможен). */
 const GIT_REMOTE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -282,7 +304,7 @@ const FORBIDDEN_GIT_OPTIONS = new Set([
 ]);
 
 /** Тип значения параметра git-тула (определяет allowlist). */
-export type GitValueKind = 'ref' | 'branch' | 'remote';
+export type GitValueKind = 'ref' | 'branch' | 'remote' | 'object';
 
 /**
  * Проверяет значение параметра git-тула. `null` — значение допустимо, иначе
@@ -301,15 +323,29 @@ export function validateGitValue(value: string, kind: GitValueKind): string | nu
   }
 
   // Refspec (`src:dst`) — не имя ветки: mirror-push, удаление ветки на remote.
-  if (kind !== 'remote' && value.includes(':')) {
+  // Исключение — вид `object` (`git show HEAD:src/file.ts`): двоеточие там
+  // разделяет ревизию и путь, а не описывает направление записи.
+  if ((kind === 'ref' || kind === 'branch') && value.includes(':')) {
     return 'must be a plain name, not a refspec (":" is not allowed)';
   }
 
-  const pattern = kind === 'remote' ? GIT_REMOTE_PATTERN : GIT_REF_PATTERN;
+  const pattern = kind === 'remote'
+    ? GIT_REMOTE_PATTERN
+    : kind === 'object'
+      ? GIT_OBJECT_PATTERN
+      : kind === 'branch' ? GIT_BRANCH_PATTERN : GIT_REF_PATTERN;
   if (!pattern.test(value)) {
-    return kind === 'remote'
-      ? 'must be a remote name (letters, digits, ".", "_", "-") — a URL is not allowed'
-      : 'must be a commit/branch name (letters, digits, ".", "_", "/", "@", "+", "-")';
+    if (kind === 'remote') {
+      return 'must be a remote name (letters, digits, ".", "_", "-") — a URL is not allowed';
+    }
+    if (kind === 'object') {
+      return 'must be an object name: a commit/branch name (letters, digits, ".", "_", "/", "@", "+", "-", "~", "^") '
+        + 'or "revision:path" ("HEAD:src/file.ts")';
+    }
+    if (kind === 'branch') {
+      return 'must be a branch name (letters, digits, ".", "_", "/", "@", "+", "-")';
+    }
+    return 'must be a commit/branch name (letters, digits, ".", "_", "/", "@", "+", "-", "~", "^")';
   }
   return null;
 }
@@ -392,9 +428,15 @@ export const gitStatusTool: ToolDefinition = {
 
     try {
       const { stdout } = await runGit(['status', '--porcelain', '--branch'], cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
+      // `--branch` печатает шапку `## <ветка>` всегда, даже в чистом репозитории:
+      // наличие вывода ≠ наличие изменений. Считаем по строкам, кроме шапки.
+      // Саму шапку из `content` не убираем — она полезна модели.
+      const changeLines = stdout
+        .split('\n')
+        .filter((line) => line.trim().length > 0 && !line.startsWith('##'));
       return {
         content: stdout || '(чистая рабочая директория)',
-        metadata: { cwd, hasChanges: stdout.length > 0 },
+        metadata: { cwd, hasChanges: changeLines.length > 0 },
       };
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
@@ -480,7 +522,7 @@ export const gitDiffTool: ToolDefinition = {
 
 export const gitLogTool: ToolDefinition = {
   name: 'git_log',
-  description: 'Show commit logs. Returns hash, author, date, and subject for each commit.',
+  description: 'Show commit logs. Compact one-line output: short hash and subject for each commit.',
   parameters: z.object({
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
@@ -854,11 +896,12 @@ export const gitBranchListTool: ToolDefinition = {
 
     try {
       const branchArgs = ['branch'];
+      // `--all` и `-v`/`-vv` независимы: раньше при `verbose` уходил только
+      // `-vv`, и remote-ветки из вывода пропадали (`all` игнорировался).
+      if (params.all) branchArgs.push('--all');
       if (params.verbose) {
         branchArgs.push(params.all ? '-vv' : '-v');
-      } else if (params.all) {
-        branchArgs.push('--all');
-      } else {
+      } else if (!params.all) {
         branchArgs.push('--format=%(refname:short)');
       }
 
@@ -907,7 +950,8 @@ export const gitShowTool: ToolDefinition = {
   parameters: z.object({
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
-    object: z.string().optional().default('HEAD').describe('Object name — commit hash, tag or branch (default: HEAD). Not a git option'),
+    object: z.string().optional().default('HEAD')
+      .describe('Object name — commit hash, tag, branch, revision with suffix ("HEAD~1", "HEAD^2") or "revision:path" for a tree/blob ("HEAD:src/file.ts") (default: HEAD). Not a git option'),
     stat: z.boolean().optional().default(true).describe('Show diffstat summary (default: true)'),
     timeout: gitTimeoutSchema,
   }),
@@ -927,8 +971,10 @@ export const gitShowTool: ToolDefinition = {
     const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
+    // Вид `object` дополнительно разрешает `HEAD:src/file.ts` (blob/tree) и
+    // ревизионные суффиксы `HEAD~1`/`HEAD^2` — то, что обещает описание тула.
     const object = params.object ?? 'HEAD';
-    const objectError = validateGitValue(object, 'ref');
+    const objectError = validateGitValue(object, 'object');
     if (objectError) return argErrorResult(this.name, `object: ${objectError}`);
 
     try {
@@ -972,7 +1018,8 @@ export const gitBlameTool: ToolDefinition = {
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     file: z.string().describe('Path to the file to blame (relative to the repository root)'),
-    max_count: z.number().int().min(1).optional().describe('Limit the number of lines to show'),
+    max_count: z.number().int().min(1).optional()
+      .describe('Limit the number of lines to show (with line_range — truncate its output)'),
     line_range: z.string().optional().describe('Line range to blame, e.g. "1,10"'),
     timeout: gitTimeoutSchema,
   }),
@@ -993,7 +1040,11 @@ export const gitBlameTool: ToolDefinition = {
 
     try {
       const blameArgs = ['blame'];
-      if (params.max_count) blameArgs.push('--max-count', String(params.max_count));
+      // `--max-count` у `git blame` считает КОММИТЫ, а не строки (одна запись
+      // на коммит → все его строки). Лимит строк выражается только диапазоном:
+      // без `line_range` — `-L 1,<N>`; с `line_range` — диапазон остаётся
+      // пользовательским, а вывод обрезается до N строк ниже.
+      if (params.max_count && !params.line_range) blameArgs.push('-L', `1,${params.max_count}`);
       if (params.line_range) blameArgs.push('-L', params.line_range);
       blameArgs.push('--', params.file);
 
@@ -1002,9 +1053,13 @@ export const gitBlameTool: ToolDefinition = {
         return { content: `Ошибка git blame: ${stderr.trim()}`, isError: true, metadata: { cwd, file: params.file } };
       }
 
+      const output = params.max_count && params.line_range
+        ? firstLines(stdout, params.max_count)
+        : stdout;
+
       return {
-        content: truncateOutput(stdout || '(нет данных blame)'),
-        metadata: { cwd, file: params.file, count: stdout.split('\n').filter(Boolean).length },
+        content: truncateOutput(output || '(нет данных blame)'),
+        metadata: { cwd, file: params.file, count: output.split('\n').filter(Boolean).length },
       };
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
@@ -1098,12 +1153,11 @@ export const gitStashTool: ToolDefinition = {
         return { content: truncateOutput(result.stdout.trim() || `${action} выполнен`), metadata: { cwd } };
       }
 
+      // Порядок важен: `stash push` — подкоманда, опции идут ПОСЛЕ неё
+      // (`stash --include-untracked push` → «subcommand wasn't specified»).
+      stashArgs.push('push');
       if (restored.include_untracked) stashArgs.push('--include-untracked');
-      if (restored.message) {
-        stashArgs.push('push', '-m', restored.message);
-      } else {
-        stashArgs.push('push');
-      }
+      if (restored.message) stashArgs.push('-m', restored.message);
       result = await runGit(stashArgs, cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
       if (result.stderr) {
         return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };

@@ -12,7 +12,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Schedule, ScheduleJob, ToolContext } from '@itphx/synth-shared';
-import { generateId, ProjectRole } from '@itphx/synth-shared';
+import { generateId, ProjectRole, scheduleInputSchema } from '@itphx/synth-shared';
 import {
   scheduleListTool,
   scheduleGetTool,
@@ -27,6 +27,7 @@ import { ProjectStore } from '../../storage/project-store.js';
 import { MemoryScheduleRepository, MemoryJobRepository } from '../../storage/memory/scheduler.js';
 import { MemoryProjectPipelineRepository } from '../../storage/memory/pipelines.js';
 import type { SchedulerService } from '../scheduler/scheduler.js';
+import { nextRunAt } from '../scheduler/schedule-time.js';
 
 /** Фейк планировщика: пересчёт `nextRunAt` и принудительный запуск. */
 class FakeScheduler {
@@ -37,7 +38,13 @@ class FakeScheduler {
 
   async refreshNextRun(id: string): Promise<Schedule | null> {
     this.refreshCalls.push(id);
-    return this._schedules.get(id);
+    const schedule = await this._schedules.get(id);
+    if (!schedule) return null;
+    // Как реальный SchedulerService: nextRunAt считается по действующему
+    // триггеру (cron приоритетнее every — поэтому важно, что старый сброшен).
+    if (!schedule.cron && !schedule.every) return schedule;
+    const at = nextRunAt(schedule, new Date()).toISOString();
+    return this._schedules.setNextRun(id, at);
   }
 
   async runNow(id: string): Promise<Schedule | null> {
@@ -424,6 +431,77 @@ describe('Встроенные тулы расписаний (ADR-051, schedules
     const onlyEnabled = await scheduleListTool.execute({ include_disabled: false }, makeCtx());
     expect(onlyEnabled.metadata?.count).toBe(0);
     expect(onlyEnabled.content).toBe('No schedules');
+  });
+
+  it('частичный патч переключает триггер cron → every: старый cron сбрасывается, nextRunAt — по интервалу', async () => {
+    const created = await scheduleSaveTool.execute(
+      { name: 'Переключение', cron: '0 9 * * *', target: { mode: 'bound', sessionId } },
+      makeCtx(),
+    );
+    const scheduleId = created.metadata?.scheduleId as string;
+    expect((await schedules.get(scheduleId))?.cron).toBe('0 9 * * *');
+
+    const toEvery = await scheduleSaveTool.execute(
+      { schedule_id: scheduleId, every: '15m' },
+      makeCtx(),
+    );
+    expect(toEvery.isError).toBeUndefined();
+
+    const everySchedule = (await schedules.get(scheduleId))!;
+    expect(everySchedule.cron).toBeUndefined();
+    expect(everySchedule.every).toBe('15m');
+    // Запись проходит собственную валидацию (ровно один триггер).
+    expect(scheduleInputSchema.safeParse({
+      name: everySchedule.name,
+      enabled: everySchedule.enabled,
+      cron: everySchedule.cron,
+      every: everySchedule.every,
+      target: everySchedule.target,
+    }).success).toBe(true);
+
+    // nextRunAt — по интервалу (≈ now + 15m), а не по старому cron.
+    const nextFromEvery = Date.parse(everySchedule.nextRunAt!);
+    expect(nextFromEvery - Date.now()).toBeGreaterThan(14 * 60 * 1000);
+    expect(nextFromEvery - Date.now()).toBeLessThanOrEqual(15 * 60 * 1000 + 1000);
+    expect(toEvery.metadata?.nextRunAt).toBe(everySchedule.nextRunAt);
+  });
+
+  it('частичный патч переключает триггер every → cron: старый every сбрасывается', async () => {
+    const created = await scheduleSaveTool.execute(
+      { name: 'Обратное', every: '1h', target: { mode: 'bound', sessionId } },
+      makeCtx(),
+    );
+    const scheduleId = created.metadata?.scheduleId as string;
+
+    const toCron = await scheduleSaveTool.execute(
+      { schedule_id: scheduleId, cron: '30 6 * * *' },
+      makeCtx(),
+    );
+    expect(toCron.isError).toBeUndefined();
+
+    const cronSchedule = (await schedules.get(scheduleId))!;
+    expect(cronSchedule.cron).toBe('30 6 * * *');
+    expect(cronSchedule.every).toBeUndefined();
+    expect(cronSchedule.nextRunAt).toBeDefined();
+  });
+
+  it('правка только name не трогает триггер', async () => {
+    const created = await scheduleSaveTool.execute(
+      { name: 'Имя', cron: '0 9 * * *', target: { mode: 'bound', sessionId } },
+      makeCtx(),
+    );
+    const scheduleId = created.metadata?.scheduleId as string;
+
+    const renamed = await scheduleSaveTool.execute(
+      { schedule_id: scheduleId, name: 'Новое имя' },
+      makeCtx(),
+    );
+    expect(renamed.isError).toBeUndefined();
+
+    const stored = (await schedules.get(scheduleId))!;
+    expect(stored.name).toBe('Новое имя');
+    expect(stored.cron).toBe('0 9 * * *');
+    expect(stored.every).toBeUndefined();
   });
 
   it('schedule_delete удаляет расписание; повторный вызов → not_found', async () => {

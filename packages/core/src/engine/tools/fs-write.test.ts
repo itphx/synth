@@ -697,3 +697,71 @@ describe('fs-write tools — сериализация правок по пути
     expect(fileLockRegistrySize()).toBe(0);
   });
 });
+
+/**
+ * `metadata` записи файла: `bytes` — UTF-8 (а не UTF-16 code units), `lines` —
+ * без пустого элемента после завершающего `\n`; текст результата совпадает
+ * с metadata.
+ */
+describe('fs-write tools — metadata записи', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fswrite-meta-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      ...overrides,
+    };
+  }
+
+  it('кириллица: bytes считаются в UTF-8, а не в длине строки', async () => {
+    const content = 'привет';
+    const result = await writeFileTool.execute({ file_path: 'ru.txt', content }, makeCtx());
+    expect(result.isError).toBeFalsy();
+
+    const meta = result.metadata as { bytes: number; lines: number };
+    expect(meta.bytes).toBe(Buffer.byteLength(content, 'utf-8'));
+    expect(meta.bytes).toBe(12);
+    expect(meta.bytes).not.toBe(content.length);
+    expect(meta.lines).toBe(1);
+    expect(result.content).toContain('12 bytes');
+  });
+
+  it('завершающий \\n не добавляет лишнюю строку', async () => {
+    const cases: Array<[string, number]> = [
+      ['a', 1],
+      ['a\n', 1],
+      ['a\nb', 2],
+      ['a\nb\n', 2],
+    ];
+    for (const [content, expected] of cases) {
+      const result = await writeFileTool.execute(
+        { file_path: 'lines.txt', content },
+        makeCtx(),
+      );
+      expect(result.isError).toBeFalsy();
+      const meta = result.metadata as { lines: number };
+      expect(meta.lines, JSON.stringify(content)).toBe(expected);
+      expect(result.content).toContain(`${expected} lines`);
+    }
+  });
+
+  it('пустой файл — 0 строк и 0 байт', async () => {
+    const result = await writeFileTool.execute({ file_path: 'empty.txt', content: '' }, makeCtx());
+    expect(result.isError).toBeFalsy();
+    const meta = result.metadata as { lines: number; bytes: number };
+    expect(meta.lines).toBe(0);
+    expect(meta.bytes).toBe(0);
+    expect(result.content).toContain('0 lines');
+    expect(result.content).toContain('0 bytes');
+  });
+});

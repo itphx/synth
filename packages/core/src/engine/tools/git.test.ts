@@ -12,6 +12,10 @@ import {
   gitCommitTool,
   gitCheckoutTool,
   gitShowTool,
+  gitStashTool,
+  gitBranchListTool,
+  gitBlameTool,
+  validateGitValue,
   runGit,
   resolveRepoCwd,
 } from './git.js';
@@ -942,5 +946,179 @@ describe('git tools — таймауты', () => {
     expect(result.metadata?.reason).toBe('timeout');
     expect(result.metadata?.timeoutMs).toBe(300_000);
     expect(result.content).toContain('300000');
+  });
+});
+
+/**
+ * Регрессы на реальном git в tmp-каталоге: поведение команд, которое нельзя
+ * проверить по argv (порядок подкоманды stash, счётчик изменений в status,
+ * remote-ветки в `branch --all -vv`, лимит строк blame, объекты `git show`,
+ * detached checkout по ревизии).
+ */
+describe('git tools — реальные операции (регрессы)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-git-real-'));
+    await execFileAsync('git', ['init', '-q'], { cwd: tmpDir });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir });
+    await writeFile(join(tmpDir, 'README.md'), '# Test\n');
+    await execFileAsync('git', ['add', '.'], { cwd: tmpDir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'initial'], { cwd: tmpDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      ...overrides,
+    };
+  }
+
+  it('git_stash: include_untracked реально кладёт неотслеживаемый файл в stash (и с message)', async () => {
+    await writeFile(join(tmpDir, 'README.md'), '# Test\nchanged\n');
+    await writeFile(join(tmpDir, 'untracked.txt'), 'new\n');
+
+    resetGitCalls();
+    const result = await gitStashTool.execute({ include_untracked: true, message: 'wip' }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    // `push` — подкоманда, опции идут после неё; иначе git: «subcommand wasn't specified».
+    expect(gitArgvLists()).toEqual([['stash', 'push', '--include-untracked', '-m', 'wip']]);
+
+    const list = await runGit(['stash', 'list'], tmpDir);
+    expect(list.stdout).toContain('wip');
+
+    const stashed = await runGit(['stash', 'show', '--include-untracked', '--name-only'], tmpDir);
+    expect(stashed.stdout).toContain('untracked.txt');
+
+    // рабочее дерево после stash пустое (и tracked-правка, и untracked убраны)
+    const status = await runGit(['status', '--porcelain'], tmpDir);
+    expect(status.stdout.trim()).toBe('');
+  });
+
+  it('git_status: чистый репозиторий → hasChanges=false, после правки → true', async () => {
+    const clean = await gitStatusTool.execute({}, makeCtx());
+    expect(clean.isError).toBeFalsy();
+    // шапка `## <branch>` остаётся в content, но изменением не считается
+    expect(clean.content).toContain('##');
+    expect(clean.metadata?.hasChanges).toBe(false);
+
+    await writeFile(join(tmpDir, 'README.md'), '# Test\nchanged\n');
+    const dirty = await gitStatusTool.execute({}, makeCtx());
+    expect(dirty.metadata?.hasChanges).toBe(true);
+
+    // один неотслеживаемый файл — тоже изменение
+    await runGit(['checkout', '--', 'README.md'], tmpDir);
+    await writeFile(join(tmpDir, 'new.txt'), 'x\n');
+    const untracked = await gitStatusTool.execute({}, makeCtx());
+    expect(untracked.metadata?.hasChanges).toBe(true);
+  });
+
+  it('git_branch_list: all+verbose показывает remote-ветки (оба флага доходят до git)', async () => {
+    await runGit(['update-ref', 'refs/remotes/origin/topic', 'HEAD'], tmpDir);
+
+    resetGitCalls();
+    const result = await gitBranchListTool.execute({ all: true, verbose: true }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(gitArgvLists()).toEqual([['branch', '--all', '-vv']]);
+    expect(result.content).toContain('remotes/origin/topic');
+    // текущая ветка + удалённая
+    expect(result.metadata?.count).toBe(2);
+  });
+
+  it('git_blame: max_count считает строки (без line_range → -L 1,N)', async () => {
+    await writeFile(join(tmpDir, 'lines.txt'), 'l1\nl2\nl3\n');
+    await runGit(['add', '.'], tmpDir);
+    await runGit(['commit', '-q', '-m', 'lines'], tmpDir);
+
+    resetGitCalls();
+    const result = await gitBlameTool.execute({ file: 'lines.txt', max_count: 1 }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(gitArgvLists()).toEqual([['blame', '-L', '1,1', '--', 'lines.txt']]);
+    expect(result.content.split('\n').filter(Boolean)).toHaveLength(1);
+    expect(result.metadata?.count).toBe(1);
+  });
+
+  it('git_blame: line_range сохраняется, а max_count обрезает вывод', async () => {
+    await writeFile(join(tmpDir, 'lines.txt'), 'l1\nl2\nl3\n');
+    await runGit(['add', '.'], tmpDir);
+    await runGit(['commit', '-q', '-m', 'lines'], tmpDir);
+
+    resetGitCalls();
+    const result = await gitBlameTool.execute({ file: 'lines.txt', line_range: '1,3', max_count: 2 }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(gitArgvLists()).toEqual([['blame', '-L', '1,3', '--', 'lines.txt']]);
+    expect(result.content.split('\n').filter(Boolean)).toHaveLength(2);
+    expect(result.metadata?.count).toBe(2);
+  });
+
+  it('git_show: object="HEAD:<file>" отдаёт содержимое blob, "HEAD~1" работает', async () => {
+    await writeFile(join(tmpDir, 'version.txt'), 'v1\n');
+    await runGit(['add', '.'], tmpDir);
+    await runGit(['commit', '-q', '-m', 'v1'], tmpDir);
+    await writeFile(join(tmpDir, 'version.txt'), 'v2\n');
+    await runGit(['add', '.'], tmpDir);
+    await runGit(['commit', '-q', '-m', 'v2'], tmpDir);
+
+    resetGitCalls();
+    const blob = await gitShowTool.execute({ object: 'HEAD:version.txt' }, makeCtx());
+    expect(blob.isError).toBeFalsy();
+    expect(blob.content.trim()).toBe('v2');
+    expect(gitArgvLists()).toEqual([['show', '--no-ext-diff', '--no-textconv', '--stat', 'HEAD:version.txt']]);
+
+    const prev = await gitShowTool.execute({ object: 'HEAD~1' }, makeCtx());
+    expect(prev.isError).toBeFalsy();
+    // коммит v1: сообщение и добавление файла
+    expect(prev.content).toContain('v1');
+  });
+
+  it('git_checkout: target="HEAD~1" переключает в detached HEAD', async () => {
+    await writeFile(join(tmpDir, 'version.txt'), 'v1\n');
+    await runGit(['add', '.'], tmpDir);
+    await runGit(['commit', '-q', '-m', 'v1'], tmpDir);
+
+    const result = await gitCheckoutTool.execute({ target: 'HEAD~1' }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    const head = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], tmpDir);
+    expect(head.stdout.trim()).toBe('HEAD');
+  });
+});
+
+/** Allowlist значений git-тулов: ослабление под `git show`/`git checkout` не должно открыть опции/refspec. */
+describe('git tools — validateGitValue (allowlist)', () => {
+  it('отвергает опции git', () => {
+    expect(validateGitValue('--output=/tmp/x', 'object')).toContain('--output');
+    expect(validateGitValue('--ext-diff', 'object')).toContain('--ext-diff');
+    expect(validateGitValue('-f', 'ref')).toContain('must not start with');
+    expect(validateGitValue('--force', 'branch')).not.toBeNull();
+    expect(validateGitValue('--force', 'remote')).not.toBeNull();
+    // `--` перед значением не пропускается даже как «ревизия»
+    expect(validateGitValue('-HEAD~1', 'ref')).not.toBeNull();
+  });
+
+  it('refspec запрещён для ref/branch, разрешён для object', () => {
+    expect(validateGitValue('src:dst', 'ref')).toContain('refspec');
+    expect(validateGitValue('src:dst', 'branch')).toContain('refspec');
+    expect(validateGitValue(':refs/heads/x', 'branch')).toContain('refspec');
+    expect(validateGitValue('HEAD:src/file.ts', 'object')).toBeNull();
+  });
+
+  it('ревизионные суффиксы: ref/object — да, branch — нет', () => {
+    expect(validateGitValue('HEAD~1', 'ref')).toBeNull();
+    expect(validateGitValue('HEAD^2', 'ref')).toBeNull();
+    expect(validateGitValue('HEAD~1', 'object')).toBeNull();
+    expect(validateGitValue('main^', 'object')).toBeNull();
+    expect(validateGitValue('feature~1', 'branch')).not.toBeNull();
   });
 });

@@ -182,6 +182,21 @@ export class ScheduleStore implements ScheduleRepository {
 
       const current = file.schedules[index]!;
       const updated: Schedule = { ...current, ...patch, id, updatedAt: nowISO() };
+      // Контракт порта: пара триггеров заменяется целиком. Собственный ключ
+      // `cron`/`every` в патче сбрасывает второй триггер (в т.ч. лечит старую
+      // запись с обоими полями), отсутствие ключей — триггер не трогает.
+      if (Object.hasOwn(patch, 'cron') || Object.hasOwn(patch, 'every')) {
+        if (patch.cron !== undefined) updated.cron = patch.cron;
+        else delete updated.cron;
+        if (patch.every !== undefined) updated.every = patch.every;
+        else delete updated.every;
+      }
+      // Владение — атрибуция/область доступа, а не содержимое: `ownerId`
+      // пользовательским патчем не очищается (`undefined` = «не менять»).
+      if (Object.hasOwn(patch, 'ownerId') && patch.ownerId === undefined) {
+        if (current.ownerId !== undefined) updated.ownerId = current.ownerId;
+        else delete updated.ownerId;
+      }
       file.schedules[index] = updated;
       await this._save(file);
       return updated;

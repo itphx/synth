@@ -88,6 +88,44 @@ describe('ScheduleStore (ADR-051 / ADR-089)', () => {
     expect(await store.update('sch_missing', { enabled: false })).toBeNull();
   });
 
+  it('update: пара триггеров заменяется целиком (cron ↔ every)', async () => {
+    const created = await store.create(input({ every: undefined, cron: '0 9 * * *' }));
+    expect(created.cron).toBe('0 9 * * *');
+
+    // Ключа cron в патче нет — порт именно очищает второй триггер.
+    const switched = await store.update(created.id, { every: '15m' });
+    expect(switched?.cron).toBeUndefined();
+    expect(switched?.every).toBe('15m');
+
+    // После перечитывания из JSON-файла ключ cron не хранится.
+    const reloaded = await store.get(created.id);
+    expect(reloaded?.cron).toBeUndefined();
+    expect(reloaded?.every).toBe('15m');
+
+    const backToCron = await store.update(created.id, { cron: '30 6 * * *' });
+    expect(backToCron?.cron).toBe('30 6 * * *');
+    expect(backToCron?.every).toBeUndefined();
+    expect((await store.get(created.id))?.every).toBeUndefined();
+
+    // Патч без триггеров его не трогает.
+    const renamed = await store.update(created.id, { name: 'Другое имя' });
+    expect(renamed?.cron).toBe('30 6 * * *');
+    expect(renamed?.every).toBeUndefined();
+  });
+
+  it('update: nullability — явный undefined очищает prompt', async () => {
+    const created = await store.create(input({ prompt: 'tick' }));
+    expect(created.prompt).toBe('tick');
+
+    const untouched = await store.update(created.id, { name: 'renamed' });
+    expect(untouched?.prompt).toBe('tick');
+
+    const cleared = await store.update(created.id, { prompt: undefined });
+    expect(cleared?.prompt).toBeUndefined();
+    expect((await store.get(created.id))?.prompt).toBeUndefined();
+    expect((await store.get(created.id))?.every).toBe('1h');
+  });
+
   it('markRun фиксирует lastRunAt/status/error/nextRunAt', async () => {
     const created = await store.create(input());
     const marked = await store.markRun(created.id, {

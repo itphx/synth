@@ -12,6 +12,9 @@
  * - успех: байты на диске равны blob-объекту, путь по умолчанию
  *   (`attachments/<name>` / `<sha8>`), `metadata` результата, нет `.tmp-*`;
  * - выбор вложения: по `name`, по `sha256`, без параметров — последнее в сессии;
+ * - одинаковое содержимое в разных сообщениях — не неоднозначность (по `name` и
+ *   по `sha256`), разные файлы с одним именем — `attach.tool.ambiguous`;
+ * - повторное сохранение того же вложения идемпотентно (`existing: true`);
  * - неоднозначность по `name` → ошибка со списком `name (sha8, messageId)`;
  * - нет вложений / нет совпадений / объект не из `attachments/` → разные ключи;
  * - containment: `../`, абсолютный путь, побег через симлинк;
@@ -23,7 +26,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -267,6 +270,44 @@ describe('save_attachment — сохранение вложения сессии
       expect((await readFile(join(workspace, 'attachments', files[0]!))).toString()).toBe('TWO');
     });
 
+    it('одно имя и одинаковое содержимое в разных сообщениях — выбор по `name` успешен', async () => {
+      // Реальный сценарий: пользователь дважды отправил один и тот же файл.
+      // Содержимое совпадает — подсунуть «не тот файл» невозможно, это не
+      // неоднозначность (раньше тул отправлял модель выбирать sha256).
+      addAttachment('SAME', { name: 'image.png', messageId: 'msg-1', seq: 1 });
+      addAttachment('SAME', { name: 'image.png', messageId: 'msg-2', seq: 2 });
+
+      const result = await saveAttachmentTool.execute({ name: 'image.png' }, makeCtx());
+
+      expect(result.isError).toBeFalsy();
+      expect(result.metadata).toMatchObject({ path: 'attachments/image.png' });
+      expect(result.metadata?.existing).toBeUndefined();
+      expect((await readFile(join(workspace, 'attachments', 'image.png'))).toString()).toBe('SAME');
+      expect(await readdir(join(workspace, 'attachments'))).toEqual(['image.png']);
+    });
+
+    it('дубли содержимого: выбор по `sha256` сохраняет файл', async () => {
+      const first = addAttachment('SAME', { name: 'image.png', messageId: 'msg-1' });
+      addAttachment('SAME', { name: 'image.png', messageId: 'msg-2' });
+
+      const result = await saveAttachmentTool.execute({ sha256: first.sha256 }, makeCtx());
+
+      expect(result.isError).toBeFalsy();
+      expect(result.metadata?.blob_path).toBe(first.blobPath);
+      expect((await readFile(join(workspace, 'attachments', 'image.png'))).toString()).toBe('SAME');
+    });
+
+    it('без селекторов при дублях содержимого выбирается последнее вложение', async () => {
+      addAttachment('SAME', { name: 'image.png', messageId: 'msg-1' });
+      addAttachment('SAME', { name: 'image.png', messageId: 'msg-2' });
+
+      const result = await saveAttachmentTool.execute({}, makeCtx());
+
+      expect(result.isError).toBeFalsy();
+      expect(result.metadata).toMatchObject({ path: 'attachments/image.png' });
+      expect((await readFile(join(workspace, 'attachments', 'image.png'))).toString()).toBe('SAME');
+    });
+
     it('без параметров — последнее медиа-вложение сессии', async () => {
       addAttachment('FIRST', { name: 'first.png' });
       addAttachment('SECOND', { name: 'second.png' });
@@ -411,6 +452,44 @@ describe('save_attachment — сохранение вложения сессии
   });
 
   describe('публикация без перезаписи', () => {
+    it('повторное сохранение того же вложения идемпотентно: `existing: true`, файл не тронут', async () => {
+      addAttachment('DUP', { name: 'shot.png' });
+
+      const first = await saveAttachmentTool.execute({}, makeCtx());
+      expect(first.isError).toBeFalsy();
+      expect(first.metadata?.existing).toBeUndefined();
+
+      const target = join(workspace, 'attachments', 'shot.png');
+      const before = await stat(target);
+
+      const second = await saveAttachmentTool.execute({}, makeCtx());
+
+      expect(second.isError).toBeFalsy();
+      expect(second.metadata).toMatchObject({
+        path: 'attachments/shot.png',
+        existing: true,
+      });
+      expect(second.content).toContain('attachments/shot.png');
+      // Blob повторно не читается: файл уже на месте и совпадает по содержимому.
+      expect(service.read).toHaveBeenCalledTimes(1);
+      const after = await stat(target);
+      expect(after.ino).toBe(before.ino);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      expect((await readFile(target)).toString()).toBe('DUP');
+    });
+
+    it('целевой файл с тем же размером, но другим содержимым → `attach.tool.exists`', async () => {
+      addAttachment('GOOD', { name: 'shot.png' });
+      await mkdir(join(workspace, 'attachments'), { recursive: true });
+      await writeFile(join(workspace, 'attachments', 'shot.png'), 'EVIL');
+
+      const result = await saveAttachmentTool.execute({}, makeCtx());
+
+      expect(result.isError).toBe(true);
+      expect(errorKey(result)).toBe('attach.tool.exists');
+      expect((await readFile(join(workspace, 'attachments', 'shot.png'))).toString()).toBe('EVIL');
+    });
+
     it('существующий файл не перезаписывается, blob не читается', async () => {
       addAttachment('NEWDATA', { name: 'shot.png' });
       await mkdir(join(workspace, 'attachments'), { recursive: true });

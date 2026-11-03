@@ -176,14 +176,21 @@ export const writeFileTool: ToolDefinition = {
       const mode = existing?.isFile() ? existing.mode & 0o777 : undefined;
       await writeFileAtomic(resolvedPath, content, mode);
 
-      const lines = content.split('\n');
+      // `bytes` — в UTF-8 (кириллица/эмодзи занимают больше одного байта),
+      // `lines` — без пустого элемента после завершающего `\n`: '' → 0,
+      // 'a' → 1, 'a\n' → 1, 'a\nb' → 2.
+      const bytes = Buffer.byteLength(content, 'utf-8');
+      const lines = content.length === 0
+        ? 0
+        : content.split('\n').length - (content.endsWith('\n') ? 1 : 0);
+      const textParams = { path: params.file_path, lines: String(lines), bytes: String(bytes) };
       return {
-        content: sm('fs.file_written', { path: params.file_path, lines: String(lines.length), bytes: String(content.length) }),
+        content: sm('fs.file_written', textParams),
         metadata: {
           path: resolvedPath,
-          lines: lines.length,
-          bytes: content.length,
-          i18n: i18nMeta('fs.file_written', { path: params.file_path, lines: String(lines.length), bytes: String(content.length) }),
+          lines,
+          bytes,
+          i18n: i18nMeta('fs.file_written', textParams),
         },
       };
     });

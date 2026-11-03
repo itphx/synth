@@ -25,11 +25,14 @@
  *   пишутся во временный файл `.tmp-<uuid>` того же каталога и публикуются
  *   ссылкой (`link`, fallback `copyFile` с `COPYFILE_EXCL`), поэтому занятое имя
  *   остаётся нетронутым, а модель получает подсказку указать другой `path`.
+ *   **Повторное сохранение идемпотентно:** если в целевом файле уже лежит ровно
+ *   то же содержимое (sha256 совпадает), операция считается успешной
+ *   (`metadata.existing: true`) — «сохрани ещё раз» не упирается в отказ.
  * - Лимитов размера здесь нет: файл уже принят вложениями (`attachments.*`),
  *   проверяется только непустота объекта.
  */
-import { randomUUID } from 'node:crypto';
-import { constants as fsConstants, createWriteStream } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants as fsConstants, createReadStream, createWriteStream } from 'node:fs';
 import { copyFile, link, mkdir, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -158,6 +161,84 @@ function describeCandidate(candidate: AttachmentCandidate): string {
   return `${name} (${sha8}, ${candidate.messageId})`;
 }
 
+/**
+ * Схлопывание кандидатов по объекту blob-хранилища.
+ *
+ * Один и тот же файл, отправленный в чат несколько раз, — это **одно**
+ * вложение, а не неоднозначность: подсунуть «не тот файл» невозможно, потому
+ * что содержимое совпадает. Ключ — `sha256` (content-addressed; fallback —
+ * `blobPath`, если хэш пришёл пустым). Побеждает первое (самое старое)
+ * вхождение в истории — подпись в списке остаётся стабильной.
+ */
+function dedupeCandidates(candidates: readonly AttachmentCandidate[]): AttachmentCandidate[] {
+  const seen = new Set<string>();
+  const unique: AttachmentCandidate[] = [];
+  for (const candidate of candidates) {
+    const key = candidate.data.sha256
+      ? candidate.data.sha256.toLowerCase()
+      : candidate.data.blobPath;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+  }
+  return unique;
+}
+
+/**
+ * SHA-256 содержимого файла **потоком** (`createHash` + `createReadStream`):
+ * файл целиком в память не читается — вложения бывают крупными.
+ */
+async function hashFileSha256(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(filePath), hash);
+  return hash.digest('hex');
+}
+
+/**
+ * В существующем целевом файле уже лежит ровно это вложение?
+ *
+ * Сначала сравнивается размер (дешёвая проверка, файл не читается), затем
+ * sha256 потоком. Не-обычный файл, ошибка `stat`/чтения — «не совпадает»:
+ * перезаписи чужого содержимого нет (fail-closed).
+ */
+async function isSameFileContent(
+  filePath: string,
+  expected: { sha256: string; size: number },
+): Promise<boolean> {
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile() || info.size !== expected.size) return false;
+    const actual = await hashFileSha256(filePath);
+    return actual.toLowerCase() === expected.sha256.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+/** Успешный результат сохранения (`existing` — файл уже лежал на месте). */
+function savedResult(params: {
+  relPath: string;
+  blobPath: string;
+  sha256: string;
+  mime: string;
+  size: number;
+  existing: boolean;
+}): ToolResult {
+  const text = sm('attach.tool.saved', { path: params.relPath, size: String(params.size) });
+  return {
+    content: text,
+    metadata: {
+      i18n: i18nMeta('attach.tool.saved', { path: params.relPath, size: String(params.size) }),
+      path: params.relPath,
+      blob_path: params.blobPath,
+      sha256: params.sha256,
+      mime: params.mime,
+      size: params.size,
+      ...(params.existing ? { existing: true } : {}),
+    },
+  };
+}
+
 export const saveAttachmentTool: ToolDefinition = {
   name: SAVE_ATTACHMENT_TOOL,
   description:
@@ -167,7 +248,8 @@ export const saveAttachmentTool: ToolDefinition = {
     + 'message, sha256 to pick an exact attachment, name to pick by file name, or nothing to take the '
     + 'latest media attachment. Selectors combine: message first, then sha256/name within it. Path is '
     + 'relative to the working directory (default attachments/<name|sha8>); absolute paths and paths '
-    + 'outside the working directory are rejected, and an existing file is never overwritten.',
+    + 'outside the working directory are rejected, and an existing file is never overwritten. Saving the '
+    + 'same attachment to the same path again is a no-op (the existing file is reported).',
   parameters: z.object({
     message_id: z
       .string()
@@ -260,16 +342,20 @@ export const saveAttachmentTool: ToolDefinition = {
       if (byName.length === 0) {
         return failureResult('attach.tool.not_found', { path: wantName }, { name: wantName });
       }
-      if (byName.length > 1) {
-        // Одноимённые вложения (частый случай: `image.png` из разных ходов) —
-        // молча выбрать «первое» значит подсунуть модели не тот файл.
+      // Одноимённые вложения (частый случай: `image.png` из разных ходов)
+      // сначала схлопываются по содержимому: повторная отправка того же файла
+      // не должна выглядеть как «выбери sha256». Разные файлы с одним именем —
+      // по-прежнему неоднозначность: молча выбрать «первое» значит подсунуть
+      // модели не тот файл.
+      const distinct = dedupeCandidates(byName);
+      if (distinct.length > 1) {
         return failureResult(
           'attach.tool.ambiguous',
-          { query: wantName, list: byName.map(describeCandidate).join(', ') },
-          { name: wantName, matches: byName.length },
+          { query: wantName, list: distinct.map(describeCandidate).join(', ') },
+          { name: wantName, matches: distinct.length, occurrences: byName.length },
         );
       }
-      selected = byName[0];
+      selected = distinct[0];
     } else {
       // Ничего не задано — последнее медиа-вложение сессии (обычно то, о котором
       // только что говорил пользователь).
@@ -339,10 +425,23 @@ export const saveAttachmentTool: ToolDefinition = {
     }
     if (isSymlinkEscapeInRoots(roots, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
-    // Существующий файл не перезаписываем: сначала честная проверка (быстрый
-    // отказ до чтения blob), затем публикация без перезаписи (`link`/EXCL).
+    // Существующий файл не перезаписываем. Если в нём уже лежит ровно это
+    // вложение — операция идемпотентна (успех, `existing: true`): повторное
+    // «сохрани файл» не должно упираться в отказ. Чужое содержимое — прежний
+    // отказ с подсказкой указать другой `path`.
+    const expected = { sha256: meta.sha256, size: meta.size };
+    const saved = (existing: boolean): ToolResult =>
+      savedResult({
+        relPath,
+        blobPath: data.blobPath,
+        sha256: meta.sha256,
+        mime: meta.mime,
+        size: meta.size,
+        existing,
+      });
     try {
       await stat(resolvedPath);
+      if (await isSameFileContent(resolvedPath, expected)) return saved(true);
       return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code;
@@ -380,12 +479,14 @@ export const saveAttachmentTool: ToolDefinition = {
 
       // Публикация: `link` атомарен и не перезаписывает; `copyFile` с
       // `COPYFILE_EXCL` — фоллбек для ФС без жёстких ссылок. `rename` здесь не
-      // годится: он молча заменил бы существующий файл.
+      // годится: он молча заменил бы существующий файл. Гонка (файл появился
+      // между проверкой и публикацией) разрешается той же сверкой содержимого.
       try {
         await link(tmpPath, resolvedPath);
       } catch (err) {
         const code = (err as NodeJS.ErrnoException)?.code;
         if (code === 'EEXIST') {
+          if (await isSameFileContent(resolvedPath, expected)) return saved(true);
           return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
         }
         await copyFile(tmpPath, resolvedPath, fsConstants.COPYFILE_EXCL);
@@ -393,6 +494,7 @@ export const saveAttachmentTool: ToolDefinition = {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code;
       if (code === 'EEXIST') {
+        if (await isSameFileContent(resolvedPath, expected)) return saved(true);
         return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
       }
       return failureResult(
@@ -406,17 +508,6 @@ export const saveAttachmentTool: ToolDefinition = {
       if (tmpCreated) await rm(tmpPath, { force: true }).catch(() => undefined);
     }
 
-    const size = meta.size;
-    return {
-      content: sm('attach.tool.saved', { path: relPath, size: String(size) }),
-      metadata: {
-        i18n: i18nMeta('attach.tool.saved', { path: relPath, size: String(size) }),
-        path: relPath,
-        blob_path: data.blobPath,
-        sha256: meta.sha256,
-        mime: meta.mime,
-        size,
-      },
-    };
+    return saved(false);
   },
 };

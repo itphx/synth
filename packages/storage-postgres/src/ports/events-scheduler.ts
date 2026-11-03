@@ -134,32 +134,40 @@ export class PgScheduleRepository {
       params.push(patch.enabled);
       sets.push(`enabled = $${params.length}`);
     }
-    if (patch.cron !== undefined) {
-      params.push(patch.cron);
+    // Пара триггеров заменяется целиком (контракт порта): собственный ключ
+    // `cron`/`every` переписывает **обе** колонки, отсутствующая/`undefined`
+    // уходит в NULL. Иначе очистить прежний триггер было нельзя, а запись с
+    // обоими полями не лечилась.
+    if (Object.hasOwn(patch, 'cron') || Object.hasOwn(patch, 'every')) {
+      params.push(patch.cron ?? null);
       sets.push(`cron = $${params.length}`);
-    }
-    if (patch.every !== undefined) {
-      params.push(patch.every);
+      params.push(patch.every ?? null);
       sets.push(`every = $${params.length}`);
     }
     if (patch.target !== undefined) {
       params.push(jsonbParam(patch.target));
       sets.push(`target = $${params.length}::jsonb`);
     }
-    if (patch.prompt !== undefined) {
-      params.push(patch.prompt);
+    // Nullable-поля — own-property семантика: собственный ключ со значением
+    // `undefined` очищает колонку (`NULL`), отсутствие ключа — не трогает.
+    if (Object.hasOwn(patch, 'prompt')) {
+      params.push(patch.prompt ?? null);
       sets.push(`prompt = $${params.length}`);
     }
-    if (patch.payload !== undefined) {
-      params.push(jsonbParam(patch.payload));
+    if (Object.hasOwn(patch, 'payload')) {
+      params.push(patch.payload !== undefined ? jsonbParam(patch.payload) : null);
       sets.push(`payload = $${params.length}::jsonb`);
     }
+    // Владелец — исключение: это атрибуция/область доступа расписания
+    // (`ownerId === userId`), а не пользовательское содержимое. Патч с
+    // `ownerId: undefined` считается «не менять», иначе владельца можно было
+    // бы случайно потерять и расписание выпало бы из области «свои + проект».
     if (patch.ownerId !== undefined) {
       params.push(patch.ownerId);
       sets.push(`owner_id = $${params.length}`);
     }
-    if (patch.catchUp !== undefined) {
-      params.push(patch.catchUp);
+    if (Object.hasOwn(patch, 'catchUp')) {
+      params.push(patch.catchUp ?? null);
       sets.push(`catch_up = $${params.length}`);
     }
 

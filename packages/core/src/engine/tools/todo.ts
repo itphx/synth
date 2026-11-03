@@ -285,7 +285,9 @@ export const todoWriteTool: ToolDefinition = {
 
 /**
  * todo_list — вернуть текущий список задач. Старые пункты без id получают
- * сгенерированный id в ответе (не сохраняются).
+ * сгенерированный id и он **сохраняется** (одноразовая ленивая миграция):
+ * иначе id из ответа нестабилен (новый `randomUUID` при каждом вызове) и
+ * `todo_update`/`todo_delete` по нему не находят пункт.
  */
 export const todoListTool: ToolDefinition = {
   name: 'todo_list',
@@ -293,7 +295,7 @@ export const todoListTool: ToolDefinition = {
     'Return the current session todo list as a human-readable text. '
     + 'The todo list is the operational task list of this session (distinct from the project plan '
     + 'stored in project.plan); items may be linked to plan items via planItemId. '
-    + 'Items without an id (legacy data) get a generated id in the response.',
+    + 'Items without an id (legacy data) get a generated id, which is persisted (one-time lazy migration).',
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
@@ -306,8 +308,18 @@ export const todoListTool: ToolDefinition = {
 
     let todos: TodoItem[];
     try {
-      const session = await extra!.sessionManager!.getSession(extra!.sessionId!);
-      todos = normalizeTodos(session?.todos);
+      todos = await extra!.sessionManager!.withLock(extra!.sessionId!, async (s) => {
+        const current = normalizeTodos(s.todos);
+        // Ленивая миграция legacy-пунктов без id. Пишем только если id реально
+        // не хватало: у уже нормализованного списка их не бывает, поэтому
+        // повторный `todo_list` ничего не сохраняет (идемпотентно).
+        const missingId = (s.todos ?? []).some((t) => !t.id);
+        if (missingId) {
+          s.todos = current;
+          await extra!.sessionManager!.saveSession(s);
+        }
+        return current;
+      });
     } catch (err) {
       return {
         content: sm('todo.read_error', { error: err instanceof Error ? err.message : String(err) }),

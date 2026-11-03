@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import { executeToolDef } from './tool-execution.js';
-import type { ToolContext } from '@itphx/synth-shared';
+import type { TodoItem, ToolContext } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
 
 interface TodoInput {
@@ -440,5 +440,110 @@ describe('todo tools — обёртки аргументов', () => {
     expect(result.content).toContain('does not match any variant');
     expect(result.content).toContain('variant 1:');
     expect(result.content).toContain('variant 2:');
+  });
+});
+
+/**
+ * Legacy-пункты без `id`: `todo_list` проставляет id **и сохраняет их** —
+ * иначе id из ответа менялся бы при каждом вызове (новый `randomUUID`), и
+ * `todo_update`/`todo_delete` по нему не находили бы пункт.
+ */
+describe('todo tools — ленивая миграция legacy-пунктов без id', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let tmpDir: string;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-todo-legacy-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    const session = await sessionManager.createSession({ title: 'Todo legacy test' });
+    sessionId = session.id;
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(extra?: Record<string, unknown>): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, sessionId, ...(extra ?? {}) },
+    };
+  }
+
+  /** Пункт старого формата: `id` нет вовсе (тип его требует — приводим). */
+  function legacy(
+    content: string,
+    status: TodoItem['status'],
+    priority: TodoItem['priority'],
+  ): TodoItem {
+    return { content, status, priority } as unknown as TodoItem;
+  }
+
+  async function seedLegacy(): Promise<void> {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.todos = [
+        legacy('Найти первопричину', 'in_progress', 'high'),
+        legacy('Написать тест', 'completed', 'low'),
+      ];
+      await sessionManager.saveSession(s);
+    });
+  }
+
+  it('сохраняет id: todo_update по id из ответа меняет пункт, повторный todo_list отдаёт тот же id', async () => {
+    await seedLegacy();
+
+    const first = await todoListTool.execute({}, makeCtx());
+    expect(first.isError).toBeUndefined();
+    const listed = first.metadata?.todos as TodoItem[];
+    expect(listed).toHaveLength(2);
+    expect(listed.every((t) => typeof t.id === 'string' && t.id.length > 0)).toBe(true);
+    // Содержимое и статусы миграция не теряет.
+    expect(listed.map((t) => t.content)).toEqual(['Найти первопричину', 'Написать тест']);
+    expect(listed.map((t) => t.status)).toEqual(['in_progress', 'completed']);
+
+    const targetId = listed[0]!.id;
+    const updated = await todoUpdateTool.execute(
+      { id: targetId, status: 'completed' },
+      makeCtx(),
+    );
+    expect(updated.isError).toBeUndefined();
+
+    const second = await todoListTool.execute({}, makeCtx());
+    expect(second.isError).toBeUndefined();
+    const relisted = second.metadata?.todos as TodoItem[];
+    expect(relisted.map((t) => t.id)).toEqual(listed.map((t) => t.id));
+    expect(relisted[0]!.id).toBe(targetId);
+    expect(relisted[0]!.status).toBe('completed');
+    expect(relisted[0]!.content).toBe('Найти первопричину');
+  });
+
+  it('идемпотентно: у списка с id запись не выполняется', async () => {
+    await todoWriteTool.execute(
+      { todos: [{ content: 'A', status: 'pending', priority: 'medium' }] },
+      makeCtx(),
+    );
+    const save = vi.spyOn(sessionManager, 'saveSession');
+
+    const result = await todoListTool.execute({}, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect(save).not.toHaveBeenCalled();
+    save.mockRestore();
+  });
+
+  it('read-тул не публикует todos.updated', async () => {
+    await seedLegacy();
+    const eventBus = new EventBus();
+    const events: string[] = [];
+    eventBus.subscribe(sessionId, (e) => events.push(e.type));
+
+    const result = await todoListTool.execute({}, makeCtx({ eventBus }));
+    expect(result.isError).toBeUndefined();
+    expect(events).not.toContain('todos.updated');
   });
 });
