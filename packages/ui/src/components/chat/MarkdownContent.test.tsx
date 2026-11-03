@@ -26,13 +26,16 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 async function renderTree(
   content: string,
   streaming = false,
+  resolveAsset?: (target: string) => string | null,
 ): Promise<{ root: Root; container: HTMLElement }> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push({ root, container })
   await act(async () => {
-    root.render(<MarkdownContent content={content} streaming={streaming} />)
+    root.render(
+      <MarkdownContent content={content} streaming={streaming} resolveAsset={resolveAsset} />,
+    )
   })
   return { root, container }
 }
@@ -181,6 +184,214 @@ describe('MarkdownContent: ссылки', () => {
       expect(link.getAttribute('target')).toBeNull()
       expect(link.getAttribute('rel')).toBeNull()
     }
+  })
+})
+
+describe('MarkdownContent: относительные картинки и ссылки (resolveAsset)', () => {
+  /** Резолвер вкладки файла: путь → URL предпросмотра в workspace. */
+  const resolve = (target: string) => `/api/v2/fs/raw?path=${target}`
+  const renderWithResolve = (content: string) => renderTree(content, false, resolve)
+
+  it('картинка с относительным src получает рабочий URL', async () => {
+    const { container } = await renderWithResolve('![a](img.png)')
+
+    const img = container.querySelector('img')
+    expect(img).not.toBeNull()
+    expect(img!.getAttribute('src')!.startsWith('/api/v2/fs/raw?')).toBe(true)
+    expect(img!.getAttribute('src')).toContain('path=img.png')
+    expect(img!.getAttribute('alt')).toBe('a')
+  })
+
+  it('внешняя картинка не резолвится', async () => {
+    const { container } = await renderWithResolve('![a](https://example.com/a.png)')
+
+    const img = container.querySelector('img')
+    expect(img!.getAttribute('src')).toBe('https://example.com/a.png')
+  })
+
+  it('относительная ссылка → href="#" + data-file-path', async () => {
+    const { container } = await renderWithResolve('[файл](docs/a.md)')
+
+    const link = container.querySelector('a')
+    expect(link).not.toBeNull()
+    expect(link!.getAttribute('href')).toBe('#')
+    expect(link!.getAttribute('data-file-path')).toBe('docs/a.md')
+    expect(link!.getAttribute('target')).toBeNull()
+  })
+
+  it('внешняя ссылка и якорь не тронуты', async () => {
+    const { container } = await renderWithResolve(
+      '[внешняя](https://example.com/a) [раздел](#anchor)',
+    )
+
+    const links = Array.from(container.querySelectorAll('a'))
+    expect(links.length).toBe(2)
+    expect(links[0].getAttribute('data-file-path')).toBeNull()
+    expect(links[0].getAttribute('target')).toBe('_blank')
+    expect(links[1].getAttribute('href')).toBe('#anchor')
+    expect(links[1].getAttribute('data-file-path')).toBeNull()
+  })
+
+  it('резолвер вернул null — прежнее поведение (обычная относительная ссылка)', async () => {
+    const { container } = await renderTree('[файл](missing.md)', false, () => null)
+
+    const link = container.querySelector('a')
+    expect(link!.getAttribute('href')).toBe('missing.md')
+    expect(link!.getAttribute('data-file-path')).toBeNull()
+    expect(link!.getAttribute('target')).toBeNull()
+  })
+
+  it('без resolveAsset — прежнее поведение (src/href как в markdown)', async () => {
+    const container = await renderMarkdown('![a](img.png) [файл](docs/a.md)')
+
+    const img = container.querySelector('img')
+    expect(img!.getAttribute('src')).toBe('img.png')
+    const link = container.querySelector('a')
+    expect(link!.getAttribute('href')).toBe('docs/a.md')
+    expect(link!.getAttribute('data-file-path')).toBeNull()
+  })
+
+  it('title ссылки и картинки сохраняется', async () => {
+    const { container } = await renderWithResolve(
+      '![a](img.png "подсказка") [файл](docs/a.md "файл")',
+    )
+
+    expect(container.querySelector('img')!.getAttribute('title')).toBe('подсказка')
+    expect(container.querySelector('a')!.getAttribute('title')).toBe('файл')
+  })
+})
+
+describe('MarkdownContent: заголовки и якорные ссылки', () => {
+  /** `scrollIntoView` в jsdom отсутствует — ставим шпион на прототип. */
+  let scrollSpy: ReturnType<typeof vi.fn>
+  let originalScroll: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    originalScroll = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
+    scrollSpy = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollSpy,
+      configurable: true,
+      writable: true,
+    })
+  })
+
+  afterEach(() => {
+    if (originalScroll) {
+      Object.defineProperty(Element.prototype, 'scrollIntoView', originalScroll)
+    } else {
+      delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  async function clickLink(container: HTMLElement): Promise<MouseEvent> {
+    const link = container.querySelector('a')
+    expect(link).not.toBeNull()
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    await act(async () => {
+      link!.dispatchEvent(event)
+    })
+    return event
+  }
+
+  it('заголовок получает id по GitHub-slug', async () => {
+    const container = await renderMarkdown('# Заголовок')
+
+    const heading = container.querySelector('h1')
+    expect(heading).not.toBeNull()
+    expect(heading?.getAttribute('id')).toBe('заголовок')
+    expect(heading?.textContent).toBe('Заголовок')
+  })
+
+  it('кириллица, регистр и пунктуация в slug', async () => {
+    const container = await renderMarkdown('## Что нового? 🎉\n\n### API v2')
+
+    const ids = Array.from(container.querySelectorAll('h2, h3')).map((el) => el.getAttribute('id'))
+    expect(ids).toEqual(['что-нового', 'api-v2'])
+  })
+
+  it('два одинаковых заголовка получают уникальные id (счётчик на документ)', async () => {
+    const container = await renderMarkdown('# Повтор\n\n## Повтор\n\n### Повтор')
+
+    const ids = Array.from(container.querySelectorAll('h1, h2, h3')).map((el) => el.getAttribute('id'))
+    expect(ids).toEqual(['повтор', 'повтор-1', 'повтор-2'])
+  })
+
+  it('заголовок с разметкой: slug без `*`, инлайн-HTML сохранён', async () => {
+    const container = await renderMarkdown('## **Жирный** пункт')
+
+    const heading = container.querySelector('h2')
+    expect(heading?.getAttribute('id')).toBe('жирный-пункт')
+    expect(heading?.querySelector('strong')?.textContent).toBe('Жирный')
+  })
+
+  it('счётчик дубликатов сбрасывается на каждый документ', async () => {
+    // Два независимых экземпляра markdown: модульный singleton рендерера
+    // оставил бы во втором «один-1» — контракт требует сброса на документ.
+    const first = await renderMarkdown('# Один')
+    const second = await renderMarkdown('# Один')
+
+    expect(first.querySelector('h1')?.getAttribute('id')).toBe('один')
+    expect(second.querySelector('h1')?.getAttribute('id')).toBe('один')
+  })
+
+  it('клик по якорю скроллит к заголовку и не меняет hash в URL', async () => {
+    const container = await renderMarkdown('[К заголовку](#заголовок)\n\n# Заголовок')
+    const before = window.location.hash
+
+    const event = await clickLink(container)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(window.location.hash).toBe(before)
+    expect(scrollSpy).toHaveBeenCalledTimes(1)
+    const target = scrollSpy.mock.contexts[0] as Element
+    expect(target.getAttribute('id')).toBe('заголовок')
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' })
+  })
+
+  it('клик по URL-кодированному якорю работает', async () => {
+    const container = await renderMarkdown(
+      '[К разделу](#%D1%80%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB)\n\n# Раздел',
+    )
+
+    const event = await clickLink(container)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(scrollSpy).toHaveBeenCalledTimes(1)
+    expect((scrollSpy.mock.contexts[0] as Element).getAttribute('id')).toBe('раздел')
+  })
+
+  it('несуществующий якорь — тихий no-op без исключения', async () => {
+    const container = await renderMarkdown('[Нет цели](#нет-такой)\n\n# Есть')
+    const before = window.location.hash
+
+    const event = await clickLink(container)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(window.location.hash).toBe(before)
+    expect(scrollSpy).not.toHaveBeenCalled()
+  })
+
+  it('битый процент в якоре не бросает', async () => {
+    const container = await renderMarkdown('[Битый](#%)\n\n# Есть')
+
+    await expect(clickLink(container)).resolves.toBeDefined()
+    expect(scrollSpy).not.toHaveBeenCalled()
+  })
+
+  it('цель ищется внутри своего контейнера, а не в документе', async () => {
+    // Чужой элемент с тем же id — в документе, но не в этом markdown.
+    const foreign = document.createElement('div')
+    foreign.id = 'заголовок'
+    document.body.appendChild(foreign)
+
+    const container = await renderMarkdown('[К заголовку](#заголовок)\n\n# Заголовок')
+
+    await clickLink(container)
+
+    expect(scrollSpy).toHaveBeenCalledTimes(1)
+    expect((scrollSpy.mock.contexts[0] as Element).closest('.markdown-content')).not.toBeNull()
+    expect(scrollSpy.mock.contexts[0]).not.toBe(foreign)
   })
 })
 

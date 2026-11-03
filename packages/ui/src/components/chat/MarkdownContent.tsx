@@ -5,12 +5,22 @@ import { downloadBlob } from '@/lib/download'
 import { i18nText, useI18nStore } from '@/lib/i18n'
 import { codeFileName } from '@/lib/markdown/codeFile'
 import { getThemeEpoch, highlightCode, subscribeThemeChange } from '@/lib/markdown/highlight'
+import { isExternalOrAnchor } from '@/lib/markdown/relativeAssets'
+import { createSlugger } from '@/lib/markdown/slug'
 
 interface MarkdownContentProps {
   content: string
   className?: string
   /** Трансформация HTML между marked.parser и DOMPurify.sanitize (например, подмена плейсхолдеров). */
   transformHtml?: (html: string) => string
+  /**
+   * Резолвер **относительного** `src`/`href` (`img.png`, `docs/a.md`) в рабочий
+   * URL. `null` — оставить как есть. Внешние ссылки и якоря не передаются.
+   * Принимающая сторона обязана мемоизировать (`useCallback`): резолвер входит
+   * в зависимости использования HTML, иначе markdown пересобирается на каждый
+   * рендер.
+   */
+  resolveAsset?: (target: string) => string | null
   /**
    * Идёт стриминг ответа: парсим отложенное значение (`useDeferredValue`), чтобы
    * не пересобирать весь markdown на каждой дельте. Финальный текст парсится полностью.
@@ -36,7 +46,7 @@ export const MARKDOWN_ALLOWED_TAGS = [
 export const MARKDOWN_ALLOWED_ATTR = [
   'href', 'src', 'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled',
   'data-ph', 'data-lang', 'data-copy-code', 'data-numbered', 'data-copied',
-  'data-download-code', 'data-downloaded',
+  'data-download-code', 'data-downloaded', 'data-file-path',
   'target', 'rel', 'open', 'align',
 ]
 
@@ -71,15 +81,57 @@ function isExternalHref(href?: string): boolean {
 }
 
 /**
- * Локальные renderer'ы marked: заголовок с языком, копирование и скачивание
- * у блоков кода, горизонтальный скролл у таблиц, `target` у внешних ссылок,
- * чип у инлайн-кода. Глобальный `marked.use` не трогаем — инстанс рендерера
- * живёт только здесь.
+ * Найти цель якоря **внутри контейнера** (а не в документе): одно и то же
+ * оглавление может быть отрисовано в чате и во вкладке файла — `document`
+ * увезёт в чужой экземпляр. `CSS.escape` есть не везде (jsdom) — тогда
+ * используем селектор по атрибуту с экранированием кавычек.
  */
-function createMarkdownRenderer(): Renderer {
+function findAnchorTarget(container: HTMLElement, id: string): HTMLElement | null {
+  const escape = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape : null
+  const selector = escape
+    ? `#${escape(id)}`
+    : `[id="${id.replace(/["\\]/g, '\\$&')}"]`
+  try {
+    return container.querySelector<HTMLElement>(selector)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Локальные renderer'ы marked: заголовок с `id` для якорных ссылок, язык,
+ * копирование и скачивание у блоков кода, горизонтальный скролл у таблиц,
+ * `target` у внешних ссылок, чип у инлайн-кода. Глобальный `marked.use` не
+ * трогаем — инстанс рендерера живёт только здесь.
+ *
+ * Рендерер создаётся **на каждый разбор**: `createSlugger()` внутри держит
+ * счётчик дубликатов заголовков, и он обязан сбрасываться на документ.
+ */
+function createMarkdownRenderer(resolveAsset?: (target: string) => string | null): Renderer {
   const renderer = new Renderer()
   const renderTable = renderer.table.bind(renderer)
   const renderLink = renderer.link.bind(renderer)
+  const nextSlug = createSlugger()
+
+  /**
+   * Относительный адрес → рабочий URL (вкладка файла проекта: `/fs/raw`).
+   * Не резолвится/резолвер не передан — оставляем исходное значение.
+   */
+  const resolvedAsset = (target?: string | null): string | null => {
+    if (!resolveAsset || typeof target !== 'string') return null
+    if (isExternalOrAnchor(target)) return null
+    return resolveAsset(target) || null
+  }
+
+  renderer.heading = ({ tokens, depth, text }) => {
+    // `marked` (v5+) сам `id` заголовкам не присваивает — без этого якорные
+    // ссылки из оглавления никуда не ведут. Slug — по GitHub, из текста токена.
+    const level = Math.min(6, Math.max(1, depth))
+    const id = escapeHtml(nextSlug(text))
+    // Инлайн-HTML заголовка (`**жирный**`, код, ссылки) рендерит парсер marked.
+    const inline = renderer.parser.parseInline(tokens)
+    return `<h${level} id="${id}">${inline}</h${level}>`
+  }
 
   renderer.code = ({ text, lang }) => {
     const language = normalizeLanguage(lang)
@@ -108,7 +160,29 @@ function createMarkdownRenderer(): Renderer {
 
   renderer.table = (token) => `<div class="md-table-wrap">${renderTable(token)}</div>`
 
+  renderer.image = ({ href, title, text }) => {
+    // Внешние картинки (`https:`, `//`, `data:`) — как есть; относительные —
+    // через резолвер (вкладка файла: `/fs/raw` из workspace).
+    const src = resolvedAsset(href) ?? href ?? ''
+    const alt = escapeHtml(text ?? '')
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
+    return `<img src="${escapeHtml(src)}" alt="${alt}"${titleAttr}>`
+  }
+
   renderer.link = (token) => {
+    const resolved = resolvedAsset(token.href)
+    if (resolved) {
+      // Ссылка на файл workspace: навигацию перехватывает принимающий компонент
+      // (открывает вкладку), а не браузер — `target=_blank` тут не нужен.
+      // В `data-file-path` кладём **относительный путь из markdown**: резолвер
+      // отдаёт URL (для `src`), а путь для вкладки принимающая сторона получает
+      // тем же правилом от каталога документа (см. `resolveRelativePath`).
+      const titleAttr = token.title ? ` title="${escapeHtml(token.title)}"` : ''
+      const inner = token.tokens?.length
+        ? renderer.parser.parseInline(token.tokens)
+        : escapeHtml(token.text ?? '')
+      return `<a href="#" data-file-path="${escapeHtml(token.href ?? '')}"${titleAttr}>${inner}</a>`
+    }
     const html = renderLink(token)
     // marked возвращает чистый текст, если href не прошёл проверку — не трогаем.
     if (!isExternalHref(token.href) || !html.startsWith('<a ')) return html
@@ -119,8 +193,6 @@ function createMarkdownRenderer(): Renderer {
 
   return renderer
 }
-
-const markdownRenderer = createMarkdownRenderer()
 
 /**
  * Подсветка «в полёте» по блоку кода: промисы переиспользуются между прогонами
@@ -150,7 +222,13 @@ async function writeClipboard(value: string): Promise<boolean> {
   }
 }
 
-export function MarkdownContent({ content, className = '', transformHtml, streaming = false }: MarkdownContentProps) {
+export function MarkdownContent({
+  content,
+  className = '',
+  transformHtml,
+  resolveAsset,
+  streaming = false,
+}: MarkdownContentProps) {
   // Во время стрима показываем отложенный текст: React успевает пропускать
   // промежуточные дельты, парсится не каждый чанк. Финал (`streaming: false`) — полный.
   const deferredContent = useDeferredValue(content)
@@ -167,7 +245,9 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
     if (!source) return ''
     try {
       const tokens = marked.lexer(source)
-      let raw = marked.parser(tokens, { renderer: markdownRenderer })
+      // Рендерер — на каждый разбор: счётчик дубликатов заголовков (slugger)
+      // должен начинаться с нуля для каждого документа.
+      let raw = marked.parser(tokens, { renderer: createMarkdownRenderer(resolveAsset) })
       if (transformHtml) raw = transformHtml(raw)
       return DOMPurify.sanitize(raw, {
         ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
@@ -177,7 +257,7 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
       console.warn('[MarkdownContent] marked failed, falling back to plain text:', e)
       return DOMPurify.sanitize(source)
     }
-  }, [source, transformHtml, dictionary])
+  }, [source, transformHtml, dictionary, resolveAsset])
 
   const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   useEffect(() => {
@@ -282,6 +362,33 @@ export function MarkdownContent({ content, className = '', transformHtml, stream
   const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target
     if (!(target instanceof Element)) return
+
+    // Якорная ссылка из оглавления: скроллим **внутри контейнера** и не пишем
+    // hash в URL (в SPA без роутера он бесполезен и остаётся мусором).
+    const anchor = target.closest<HTMLAnchorElement>('a[href^="#"]')
+    if (anchor) {
+      event.preventDefault()
+      const rawId = (anchor.getAttribute('href') ?? '').slice(1)
+      if (!rawId) return
+      let id = rawId
+      try {
+        id = decodeURIComponent(rawId)
+      } catch {
+        // Битый процент (`#%`) — оставляем как есть, не бросаем.
+      }
+      const container = containerRef.current
+      if (!container) return
+      // Цель ищем только в своём документе: `document.getElementById` увёз бы
+      // в другой отрендеренный экземпляр (чат vs вкладка файла).
+      const heading = findAnchorTarget(container, id)
+      // Цели нет — тихий no-op (не прыгаем в начало документа).
+      if (!heading) return
+      const reduceMotion =
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      heading.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' })
+      return
+    }
 
     const copyButton = target.closest<HTMLButtonElement>('[data-copy-code]')
     if (copyButton) {

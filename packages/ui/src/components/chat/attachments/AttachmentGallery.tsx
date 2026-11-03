@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { attachmentContentUrlFromThumb } from '@/lib/api/attachments'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
+import { ImageViewer } from '../ImageViewer'
 import { isImageAttachment } from './AttachedFilesList'
 
 /** Изображение галереи: URL байтов (сообщение) или blob-URL превью (черновик). */
@@ -30,7 +31,7 @@ export interface AttachmentGalleryProps {
 }
 
 /**
- * Модальная галерея: большая картинка, стрелки, счётчик.
+ * Модальная галерея: большая картинка с зумом (`ImageViewer`), стрелки, счётчик.
  *
  * `Esc`/клик по фону закрывают окно — это штатное поведение `Dialog`
  * (Base UI); фокус при открытии уходит на кнопку закрытия.
@@ -116,13 +117,13 @@ export function AttachmentGallery({
             <Icon name="arrow-right" className="size-5 rotate-180" />
           </button>
 
-          <div className="flex min-w-0 flex-1 items-center justify-center">
+          <div className="flex h-[min(70vh,calc(100dvh-8rem))] min-w-0 flex-1 items-center justify-center overflow-hidden">
             {image.url ? (
-              <img
+              <ImageViewer
+                key={image.url}
                 src={image.url}
                 alt={image.name}
-                data-testid="attachment-gallery-image"
-                className="max-h-[70vh] w-auto max-w-full rounded-lg object-contain"
+                dataTestId="attachment-gallery-image"
               />
             ) : (
               <span className="flex items-center gap-2 text-sm text-muted-foreground">

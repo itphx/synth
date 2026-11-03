@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fileKind } from '@itphx/synth-shared/types'
 import { synthApi } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
+import { resolveRelativePath, splitFilePath } from '@/lib/markdown/relativeAssets'
+import { useUIStore } from '@/stores/useUIStore'
 import { Icon } from '../icon/Icon'
+import { ImageViewer } from './ImageViewer'
 import { MarkdownContent } from './MarkdownContent'
 import type { CenterTab } from '@/stores/useUIStore'
 
@@ -61,6 +64,8 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
   // Markdown: по умолчанию рендер, «Исходник» — `<pre>`.
   const [markdownSource, setMarkdownSource] = useState(false)
 
+  const openTab = useUIStore((s) => s.openTab)
+
   const projectId = tab.data.projectId
   const filePath = tab.data.filePath
   const fileName = filePath ? (filePath.split('/').pop() ?? filePath) : ''
@@ -68,6 +73,42 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
   // Медиа отдаётся inline через `/fs/raw`; текст/код/markdown/неизвестное — чтением.
   const isMedia = kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf'
   const isMarkdown = kind === 'markdown'
+
+  // Относительные `src`/`href` внутри `.md` резолвятся от каталога документа
+  // в workspace (ведущий `/` — корень workspace, выход выше корня — `null`).
+  const assetDir = useMemo(() => (filePath ? splitFilePath(filePath).dir : ''), [filePath])
+  const resolveAsset = useCallback(
+    (target: string): string | null => {
+      if (!projectId) return null
+      const resolved = resolveRelativePath(assetDir, target)
+      return resolved ? synthApi.rawFileUrl(projectId, resolved) : null
+    },
+    [assetDir, projectId],
+  )
+  // Ссылка на файл проекта (`data-file-path` из markdown) открывает вкладку —
+  // как клик по файлу в дереве. Параметры `href="#"` — чтобы остаться в SPA.
+  const handleMarkdownClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      const link = target.closest<HTMLAnchorElement>('a[data-file-path]')
+      if (!link) return
+      event.preventDefault()
+      const assetPath = link.getAttribute('data-file-path')
+      if (!assetPath || !projectId) return
+      // В атрибуте — путь из markdown (как в нём написан): резолвим от каталога
+      // документа; выход выше корня workspace даёт `null` — тихий no-op.
+      const path = resolveRelativePath(assetDir, assetPath)
+      if (!path) return
+      openTab({
+        id: `file-${projectId}/${path}`,
+        type: 'file-viewer',
+        title: path.split('/').pop() ?? path,
+        data: { filePath: path, projectId },
+      })
+    },
+    [assetDir, openTab, projectId],
+  )
 
   useEffect(() => {
     setContent(null)
@@ -218,7 +259,7 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
     const url = synthApi.rawFileUrl(projectId, filePath)
     const handleMediaError = () => setPreviewFailed(true)
     return (
-      <div className="flex flex-1 h-full flex-col bg-background">
+      <div className="flex flex-1 h-full w-full min-w-0 flex-col overflow-hidden bg-background">
         <div className="flex shrink-0 items-center justify-end gap-3 border-b border-border px-3 py-1">
           <a
             href={url}
@@ -230,14 +271,17 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
           </a>
           <DownloadLink projectId={projectId} filePath={filePath} />
         </div>
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+        {/* Картинка живёт в своём контейнере с паном и зумом, поэтому скролл
+            снаружи выключен (`overflow-auto` остаётся для остальных медиа). */}
+        <div
+          className={
+            kind === 'image'
+              ? 'flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4'
+              : 'flex min-h-0 flex-1 items-center justify-center overflow-auto p-4'
+          }
+        >
           {kind === 'image' && (
-            <img
-              src={url}
-              alt={fileName}
-              className="max-h-full max-w-full object-contain"
-              onError={handleMediaError}
-            />
+            <ImageViewer src={url} alt={fileName} onError={handleMediaError} />
           )}
           {kind === 'video' && (
             <video
@@ -273,9 +317,12 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
 
   const showMarkdown = isMarkdown && content !== null
   return (
-    <div className="flex flex-1 h-full flex-col bg-background">
+    <div
+      className="flex flex-1 h-full w-full min-w-0 flex-col overflow-hidden bg-background"
+      data-testid="file-viewer-root"
+    >
       {showMarkdown && (
-        <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1">
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-1">
           <button
             type="button"
             onClick={() => setMarkdownSource(false)}
@@ -302,13 +349,13 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
           </button>
         </div>
       )}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 min-w-0 w-full overflow-auto">
         {showMarkdown && !markdownSource ? (
-          <div className="p-4">
-            <MarkdownContent content={content ?? ''} />
+          <div className="p-4 min-w-0 w-full max-w-full" onClick={handleMarkdownClick}>
+            <MarkdownContent content={content ?? ''} resolveAsset={resolveAsset} />
           </div>
         ) : (
-          <pre className="p-4 text-sm font-mono text-foreground whitespace-pre-wrap break-words min-h-full">
+          <pre className="p-4 min-w-0 w-full max-w-full text-sm font-mono text-foreground whitespace-pre-wrap break-words min-h-full">
             {content}
           </pre>
         )}

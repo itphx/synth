@@ -117,6 +117,8 @@ import {
   RiUploadLine,
   RiUserSmileLine,
   RiUser3Line,
+  RiZoomInLine,
+  RiZoomOutLine,
 } from '@remixicon/react'
 
 const iconMap: Record<string, React.ComponentType<{ className?: string; style?: React.CSSProperties; size?: number | string; [key: string]: unknown }>> = {
@@ -241,6 +243,8 @@ const iconMap: Record<string, React.ComponentType<{ className?: string; style?: 
   'user-3': RiUser3Line,
   'user-smile': RiUserSmileLine,
   'x': RiCloseLine,
+  'zoom-in': RiZoomInLine,
+  'zoom-out': RiZoomOutLine,
 }
 
 export type IconName = keyof typeof iconMap

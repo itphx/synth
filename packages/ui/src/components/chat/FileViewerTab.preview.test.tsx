@@ -18,6 +18,7 @@ vi.mock('@/lib/i18n', () => ({
 }))
 
 const mocks = vi.hoisted(() => ({
+  openTab: vi.fn(),
   readFile: vi.fn(),
   downloadFile: vi.fn(
     (projectId: string, path: string) =>
@@ -29,7 +30,22 @@ const mocks = vi.hoisted(() => ({
   probeRawFile: vi.fn(),
 }))
 
+// Подсветка кода в просмотрщике — тот же `MarkdownContent`, что в чате; shiki
+// здесь не нужен, но факт вызова `highlightCode` проверяем (подсветка жива).
+const highlight = vi.hoisted(() => ({ highlightCode: vi.fn(async () => null) }))
+
+vi.mock('@/lib/markdown/highlight', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/markdown/highlight')>()
+  return { ...actual, highlightCode: highlight.highlightCode }
+})
+
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
+
+// Клик по ссылке на файл открывает center-tab — тот же `openTab`, что у дерева.
+vi.mock('@/stores/useUIStore', () => ({
+  useUIStore: (selector: (state: { openTab: typeof mocks.openTab }) => unknown) =>
+    selector({ openTab: mocks.openTab }),
+}))
 
 import { FileViewerTab } from './FileViewerTab'
 import type { CenterTab } from '@/stores/useUIStore'
@@ -114,6 +130,56 @@ describe('FileViewerTab — предпросмотр файла по семей�
     expect(container.querySelector('pre')?.textContent).toContain('# Заголовок')
   })
 
+  it('markdown с таблицей и кодом → панель не расширяется, скролл внутри блоков', async () => {
+    const content = [
+      '| имя | значение | ещё колонка |',
+      '| --- | --- | --- |',
+      '| 1 | очень-длинное-значение-которое-тянется-дальше-ширины-экрана | 3 |',
+      '',
+      '```ts',
+      'const a = 1',
+      '```',
+    ].join('\n')
+    mocks.readFile.mockResolvedValue({
+      path: 'docs/wide.md',
+      content,
+      size: content.length,
+      encoding: 'utf-8',
+    })
+
+    const container = await render(<FileViewerTab tab={fileTab('docs/wide.md')} />)
+    await act(async () => {})
+
+    // Корень вкладки — flex-item в контейнере вкладок: без `min-w-0` широкий
+    // markdown распирал панель, а `overflow-hidden` родителя обрезал правую часть.
+    const root = container.querySelector<HTMLElement>('[data-testid="file-viewer-root"]')
+    expect(root).not.toBeNull()
+    expect(root!.classList.contains('min-w-0')).toBe(true)
+    expect(root!.classList.contains('w-full')).toBe(true)
+
+    // Обёртка рендера markdown тоже не должна сжиматься/расширяться сверх панели.
+    const markdown = container.querySelector<HTMLElement>('.markdown-content')
+    expect(markdown).not.toBeNull()
+    const wrapper = markdown!.parentElement as HTMLElement
+    expect(wrapper.classList.contains('min-w-0')).toBe(true)
+    expect(wrapper.classList.contains('w-full')).toBe(true)
+    expect(wrapper.classList.contains('max-w-full')).toBe(true)
+
+    // Шапка «Просмотр / Исходник» переносится на узком экране, а не вылезает.
+    const toolbar = root!.firstElementChild as HTMLElement | null
+    expect(toolbar?.classList.contains('flex-wrap')).toBe(true)
+
+    // Таблица и блок кода — со своей горизонтальной прокруткой (внутри себя).
+    expect(container.querySelector('.md-table-wrap')).not.toBeNull()
+    const code = container.querySelector<HTMLElement>('.md-code')
+    expect(code).not.toBeNull()
+    expect(code!.getAttribute('data-lang')).toBe('ts')
+    expect(code!.querySelector('.md-code-pre')).not.toBeNull()
+
+    // Подсветку делает тот же `MarkdownContent`, что и в чате.
+    expect(highlight.highlightCode).toHaveBeenCalledWith('const a = 1', 'ts')
+  })
+
   it('image → `<img>` с src из `/fs/raw`', async () => {
     const container = await render(<FileViewerTab tab={fileTab('pictures/cat.png')} />)
 
@@ -181,6 +247,64 @@ describe('FileViewerTab — предпросмотр файла по семей�
 
     expect(container.querySelector('[data-testid="file-preview-failed"]')).not.toBeNull()
     expect(container.querySelector('a[download]')).not.toBeNull()
+  })
+
+  it('относительные картинки/ссылки в markdown резолвятся от каталога файла', async () => {
+    mocks.readFile.mockResolvedValue({
+      path: 'docs/README.md',
+      content: '![pic](pictures/cat.png)\n\n[файл](a.md)',
+      size: 42,
+      encoding: 'utf-8',
+    })
+
+    const container = await render(<FileViewerTab tab={fileTab('docs/README.md')} />)
+    await act(async () => {})
+
+    // Картинка идёт через `/fs/raw` (workspace), а не от origin приложения.
+    const img = container.querySelector<HTMLImageElement>('.markdown-content img')
+    expect(img).not.toBeNull()
+    expect(img!.getAttribute('src')).toContain('/fs/raw')
+    expect(img!.getAttribute('src')).toContain('path=docs/pictures/cat.png')
+
+    // Ссылка на файл — `data-file-path`, клик открывает вкладку.
+    // В `data-file-path` — путь из markdown, вкладка открывается после резолва
+    // от каталога документа (`docs` + `a.md` → `docs/a.md`).
+    const link = container.querySelector<HTMLAnchorElement>('a[data-file-path]')
+    expect(link).not.toBeNull()
+    expect(link!.getAttribute('data-file-path')).toBe('a.md')
+    expect(link!.getAttribute('href')).toBe('#')
+
+    await act(async () => {
+      link!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(mocks.openTab).toHaveBeenCalledWith({
+      id: 'file-p1/docs/a.md',
+      type: 'file-viewer',
+      title: 'a.md',
+      data: { filePath: 'docs/a.md', projectId: 'p1' },
+    })
+  })
+
+  it('относительная картинка из корня workspace и внешняя ссылка не резолвятся в файл', async () => {
+    mocks.readFile.mockResolvedValue({
+      path: 'README.md',
+      content: '![a](img.png)\n\n[внешняя](https://example.com/a)',
+      size: 42,
+      encoding: 'utf-8',
+    })
+
+    const container = await render(<FileViewerTab tab={fileTab('README.md')} />)
+    await act(async () => {})
+
+    const img = container.querySelector<HTMLImageElement>('.markdown-content img')
+    expect(img!.getAttribute('src')).toContain('path=img.png')
+
+    const external = container.querySelector<HTMLAnchorElement>('.markdown-content a')
+    expect(external!.hasAttribute('data-file-path')).toBe(false)
+    await act(async () => {
+      external!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(mocks.openTab).not.toHaveBeenCalled()
   })
 
   it('отказ проверки предпросмотра (404) → текст ошибки и «Скачать»', async () => {

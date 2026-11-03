@@ -811,6 +811,36 @@ html.device-tablet .notifications-popup {
    поэтому DOM не удваивается: одна строка — один `<span class="md-code-line">`.
    ============================================================= */
 
+/* Markdown не должен распирать контейнер по ширине (мобильная вкладка файла,
+   узкая колонка чата): длинные слова/URL переносятся, медиа ограничено
+   шириной контейнера. Внутренний горизонтальный скролл блоков кода и таблиц
+   остаётся их собственным (`.md-code-pre`/`.md-table-wrap` ниже). */
+.markdown-content {
+  overflow-wrap: break-word;
+}
+
+.markdown-content img,
+.markdown-content video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Якорные ссылки из оглавления (`#slug`): заголовок не должен прилипать
+   к верхней кромке скролл-контейнера — ни во вкладке файла, ни в чате. */
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  scroll-margin-top: 0.75rem;
+}
+
+.markdown-content pre,
+.markdown-content table {
+  max-width: 100%;
+}
+
 .markdown-content .md-code {
   max-width: 100%;
   margin: 0.6rem 0;
@@ -1126,4 +1156,16 @@ html.pointer-coarse .markdown-content .md-code-download {
 
 [data-testid='turn-block'] > div:not([data-step-divider]):not(:last-child) > div:last-child > *:last-child {
   margin-bottom: 0;
+}
+
+/* =============================================================
+   Просмотр изображения с зумом (`ImageViewer`, вкладка файла).
+
+   `-webkit-user-drag` нет в типах React-стилей, поэтому запрет перетаскивания
+   самой картинки живёт здесь (Safari иначе начинает нативный drag вместо
+   пана/щипка), в паре с `draggable={false}` на `<img>`.
+   ============================================================= */
+
+.image-viewer img {
+  -webkit-user-drag: none;
 }
