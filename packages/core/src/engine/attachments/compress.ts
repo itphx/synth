@@ -26,6 +26,9 @@
  *  - image: PNG остаётся PNG (lossless scale, `-compression_level`), остальные
  *    форматы (JPEG/WebP/GIF/…) → JPEG (`-q:v` из `quality`);
  *  - video: H.264/MP4 (`libx264`, `veryfast`, битрейт/буфер, `+faststart`);
+ *    битрейт **адаптивный** по длительности (`resolveVideoBitrateKbps`):
+ *    короткий ролик — как настроено, длинный — ниже, чтобы копия влезла в
+ *    лимит base64 (`MAX_ATTACHMENT_BASE64_BYTES`);
  *  - audio: MP3 (`libmp3lame`) или WAV (`pcm_s16le`) с каналами/частотой
  *    профиля.
  *
@@ -51,6 +54,22 @@ export const COMPRESS_CACHE_DIR = 'attachments/.derived/compress';
 /** Предел размера сжатой копии, байт (защита от раздувания перекодированием). */
 export const MAX_COMPRESSED_BYTES = 32 * 1024 * 1024;
 
+/**
+ * Предел размера **нативной** видеокопии, байт (адаптивный битрейт).
+ *
+ * 14 МиБ файла → ≈18.7 МиБ в base64 (`ceil(size/3)*4`) — влезает в
+ * `MAX_ATTACHMENT_BASE64_BYTES` (20 МиБ) с запасом на контейнер/имя.
+ */
+export const MAX_NATIVE_VIDEO_BYTES = 14 * 1024 * 1024;
+
+/**
+ * Нижняя граница битрейта видео, кбит/с (ниже качество нечитаемо).
+ *
+ * Используется как «потолок вниз» адаптивного битрейта: очень длинное видео
+ * всё равно не влезает — но хотя бы не разваливается совсем.
+ */
+export const MIN_VIDEO_BITRATE_KBPS = 300;
+
 /** Семейство, для которого применяется сжатие (`pdf` не сжимается). */
 export type CompressFamily = 'image' | 'video' | 'audio';
 
@@ -65,6 +84,12 @@ export interface AttachmentCompressInput {
   /** Ширина/высота кадра, если известны (из sidecar). */
   width?: number;
   height?: number;
+  /**
+   * Длительность видео, мс (из sidecar). Нужна для адаптивного битрейта:
+   * длинный ролик иначе не влезает в лимит base64 и отбрасывается по
+   * `limit` (ADR-115).
+   */
+  durationMs?: number;
 }
 
 /**
@@ -168,6 +193,33 @@ export function resolveCompressTarget(
     audioFormat: resolveNativeAudioFormat(capability),
     nativeVideo: capability.supportsNativeVideo,
   };
+}
+
+/**
+ * Целевой битрейт видео с учётом длительности (ADR-115).
+ *
+ * Короткие ролики не теряют качество: пока расчётный битрейт выше
+ * настроенного (`compression.video.bitrateKbps`), берётся настройка. Длинные —
+ * получают битрейт ниже, чтобы сжатая копия влезла в лимит base64
+ * (`MAX_ATTACHMENT_BASE64_BYTES`, 20 МиБ ≈ 15 МиБ файла).
+ *
+ * Формула: `floor(MAX_NATIVE_VIDEO_BYTES * 8 / 1000 / секунды) - аудио` —
+ * это битрейт, при котором видео+звук занимают не больше `MAX_NATIVE_VIDEO_BYTES`.
+ * Результат ограничен: не выше настройки и не ниже `MIN_VIDEO_BITRATE_KBPS`.
+ *
+ * Длительность неизвестна — прежнее поведение (битрейт из настроек).
+ */
+export function resolveVideoBitrateKbps(
+  settings: { bitrateKbps: number; audioBitrateKbps: number },
+  durationMs: number | undefined,
+): number {
+  const max = settings.bitrateKbps;
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0) return max;
+  const seconds = durationMs / 1000;
+  const budgetKbps = Math.floor((MAX_NATIVE_VIDEO_BYTES * 8) / 1000 / seconds);
+  const target = budgetKbps - settings.audioBitrateKbps;
+  if (!Number.isFinite(target)) return max;
+  return Math.min(max, Math.max(MIN_VIDEO_BITRATE_KBPS, target));
 }
 
 /** Сжатие вложений на границе отправки провайдеру (ADR-115). */
@@ -298,7 +350,10 @@ export class AttachmentCompressor {
           return null;
         }
         if (height === null && input.size < settings.minBytes) return null;
-        const maxRate = Math.round(settings.bitrateKbps * 1.5);
+        // Адаптивный битрейт: длинное видео жмём сильнее, чтобы сжатая копия
+        // влезла в лимит base64 (иначе вложение отбрасывается по `limit`).
+        const videoKbps = resolveVideoBitrateKbps(settings, input.durationMs);
+        const maxRate = Math.round(videoKbps * 1.5);
         const args = [
           '-hide_banner',
           '-loglevel',
@@ -312,11 +367,11 @@ export class AttachmentCompressor {
           '-preset',
           'veryfast',
           '-b:v',
-          `${settings.bitrateKbps}k`,
+          `${videoKbps}k`,
           '-maxrate',
           `${maxRate}k`,
           '-bufsize',
-          `${settings.bitrateKbps * 2}k`,
+          `${videoKbps * 2}k`,
           '-pix_fmt',
           'yuv420p',
           '-c:a',
@@ -332,7 +387,9 @@ export class AttachmentCompressor {
         return {
           ext: 'mp4',
           mime: 'video/mp4',
-          profile: `video-${settings.maxHeightPx}-${settings.bitrateKbps}-a${settings.audioBitrateKbps}`,
+          // Профиль включает **вычисленный** битрейт: смена длительности (или
+          // файла) не должна подменять кэш сжатой копии.
+          profile: `video-${settings.maxHeightPx}-${videoKbps}-a${settings.audioBitrateKbps}`,
           args,
         };
       }

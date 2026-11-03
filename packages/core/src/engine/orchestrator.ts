@@ -2769,6 +2769,9 @@ export class ChatOrchestrator {
         size: input.size,
         ...(input.width !== undefined ? { width: input.width } : {}),
         ...(input.height !== undefined ? { height: input.height } : {}),
+        // Длительность (из sidecar) — адаптивный битрейт видео: длинный
+        // ролик иначе не влезает в лимит base64 и отбрасывается по `limit`.
+        ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
       },
       target,
     );

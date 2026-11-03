@@ -132,6 +132,8 @@ export interface BackendAppHandle {
   stopProcessLogPruner: () => void;
   /** ADR-115: остановка GC осиротевших вложений сообщений. */
   stopAttachmentPruner: () => void;
+  /** ADR-115 × ADR-077: остановка уборки временных каталогов медиа-раннера. */
+  stopMediaTempPruner: () => void;
   /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
   webhookStore: WebhookRepository;
   /** ADR-052 (этап II): движок исходящих webhooks. */
@@ -467,6 +469,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       stopProcessLogPruner: () => deps.stopProcessLogPruner(),
       // ADR-115: GC осиротевших вложений сообщений.
       stopAttachmentPruner: () => deps.stopAttachmentPruner(),
+      // ADR-115 × ADR-077: уборка временных каталогов медиа-раннера.
+      stopMediaTempPruner: () => deps.stopMediaTempPruner(),
       // ADR-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
       webhookStore: deps.webhookStore,
       webhookService: deps.webhookService,

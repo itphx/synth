@@ -137,8 +137,9 @@
   есть, `stripMetadata` применяется **только на границе отправки провайдеру** (гидратация/aux-вызов).
   Второй политики лимитов/MIME не заводить: тулы, события и пайплайны ходят сюда же.
   Учёт ссылок — порт `BlobRefRepository` (`blob_refs`; `ownerKind`
-  `message`|`pipeline-run`|`skill`|`process`), GC сирот — `startAttachmentPruner`
-  (нет ссылок **и** старше `attachments.gcDays`).
+  `message`|`pipeline-run`|`skill`|`process`), GC — `startAttachmentPruner`: сироты (нет ссылок
+  **и** старше `attachments.gcDays`) + кэши `.thumbs`/`.derived` (по `gcDays`, без ссылок) +
+  временные объекты `.uploads` (TTL 1 ч, независимо от `gcDays`).
 - Исполнение агентских команд — **только через порт** `ExecutionPort` (`execution/ports`), а не
   прямым `execFile`; реализация по умолчанию — `InlineExecutionPort` (в процессе), удалённая —
   шаг 7b плана ADR-077 (пакет `@itphx/synth-executor`, динамический `import()`). Выбор
@@ -719,6 +720,12 @@
 - `engine/media/runner.ts` — единственный путь запуска `ffmpeg` (inline `spawn` / remote через
   `ExecutionPort.execute` с `requires: ['ffmpeg']`); типизированные исходы, каталог
   `{workspacesRoot}/.synth-media` в `finally`.
+- `engine/media/pruner.ts` — `startMediaTempPruner`: уборка временных каталогов медиа-раннера
+  `{workspacesRoot}/.synth-media/*` (после жёсткого kill раннер не успевает убрать каталог —
+  `finally` не выполняется): TTL `MEDIA_TEMP_TTL_MS` = 1 ч, интервал 6 ч, `unref`, best-effort
+  (ошибка одной записи не мешает остальным), каталог **не создаётся**; вызывается при старте
+  (core `server/app/deps.ts`, backend `app/deps.ts`), останавливается на graceful shutdown
+  (`stopMediaTempPruner`).
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first; микро-слой больше **не ставит** плашку `Dialog — <id8>` (прежний i18n-ключ `session.dialog_title` удалён) — она блокировала нормальное имя; имя сессии теперь даёт авто-тайтл), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы; после неё — ранний триггер авто-имени `_maybeAutoTitle`), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист шага/`turn.finished`, ADR-118 — авто-тайтла здесь больше нет); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
   **Финальный шаг по лимиту шагов (`AgentDefinition.maxSteps`) — механика opencode**
   (`engine/llm/max-steps.ts`, общий модуль с циклом саб-агента): лимит не обрывает ход
@@ -2373,25 +2380,48 @@ blob-порты и `blob_refs` — ADR-116.
   сессии и staging (`registerUploadSessionRoutes`); raw-body — `openAttachmentRawUpload` (имя
   `?name=`/`x-file-name`, `declaredMime` из `Content-Type`, MIME всё равно по сигнатуре).
   Контракт `UploadSessionStore` — **один процесс** (multi-replica — остаток).
+- **GC (`prune.ts`, `startAttachmentPruner`).** Три класса записи, все — в одном прогоне
+  (сразу при старте и далее каждые 6 ч, `unref`, ошибки не роняют): **осиротевшие объекты**
+  (нет `blob_refs` И старше `attachments.gcDays`; sidecar удаляется вместе с объектом) —
+  живой объект старым быть может, поэтому по возрасту не удаляем; **кэши** `attachments/.thumbs/`
+  и `attachments/.derived/` (включая `compress/`) — производные без `blob_refs`, регенерируемые:
+  чистятся по `gcDays` (mtime) **без** проверки ссылок, `gcDays <= 0` — не чистятся;
+  **временные объекты загрузок** `attachments/.uploads/` — temp незавершённой chunked-загрузки:
+  свой TTL `UPLOAD_SESSION_TTL_MS` (1 ч), **независимо от `gcDays`** (иначе при `gcDays = 0`
+  копились бы бесконечно: ленивая уборка сессий загрузки срабатывает только при активности
+  протокола). Счётчик `synth_attachment_gc_removed_total` — суммарно по всем классам.
 - **Миниатюры (`thumbnails.ts`, `?variant=thumb`).** Производный JPEG
   `attachments/.thumbs/<sha256>-<width>.jpg` (legacy без ширины — только при 512), ленивая
   генерация через `MediaRunner` (видео — кадр на 1 с или 10 % длительности), `THUMBNAIL_MAX_WIDTH`
   512/quality 4/кап 4 МиБ; `image`/`video` — кадр, `audio`/`file`/`pdf` — `none`. Метаданные
   `thumb {status,width,height}` — аддитивное поле sidecar (best-effort); при выключенном
   `attachments.thumbnail.enabled` существующие файлы отдаются, новые не создаются.
+  **Длительность видео** (`video`): sidecar → вход вызывающего → проба `ffmpeg -i` без выхода
+  (`parseFfmpegDurationMs` — `Duration: HH:MM:SS.xx` из stderr; ffmpeg завершается ошибкой — это
+  норма). Кладётся в sidecar аддитивно (рядом с `thumb`, существующее значение не перезаписывается)
+  → `AttachmentService.resolve` отдаёт её в сжатие (адаптивный битрейт) и в извлечение кадров.
+  Ошибка/нет `Duration` → поле не пишется (ход не падает).
 - **Сжатие (`compress.ts`, проводка в `hydrate.ts`).** Только на границе отправки (оригинал в blob
   не меняется): `resolveCompressTarget` по MIME и `attachments.compression`, кэш
   `attachments/.derived/compress/<sha256>_<profile>.<ext>`, `MAX_COMPRESSED_BYTES` 32 МиБ;
   форматы — PNG→PNG, прочее→JPEG, video→MP4 H.264/AAC (только при
   `compatibility.supportsNativeVideo`), audio→mp3/wav (`resolveNativeAudioFormat` по списку
   `compatibility.nativeAudioFormats`, `null` — не сжимать);
+  **видео — адаптивный битрейт** (`resolveVideoBitrateKbps`): длительность (из sidecar,
+  `HydrateOptions.compress` → `meta.durationMs`) → `floor(MAX_NATIVE_VIDEO_BYTES * 8 / 1000 /
+  секунды) - audioBitrateKbps`, ограничен настройкой `compression.video.bitrateKbps` сверху и
+  `MIN_VIDEO_BITRATE_KBPS` (300) снизу; без длительности — прежнее поведение (битрейт из настроек).
+  `MAX_NATIVE_VIDEO_BYTES` = 14 МиБ (≈18.7 МиБ base64 — влезает в `MAX_ATTACHMENT_BASE64_BYTES`
+  20 МиБ). Профиль кэша включает **вычисленный** битрейт — смена длительности не подменяет кэш;
   сжатая копия не меньше оригинала/ошибка/`no_ffmpeg` → `null` (отправляется оригинал).
 - **Медиа-раннер (`engine/media/runner.ts`).** Единственный путь запуска `ffmpeg` (derive, кадры
   видео, транскод аудио, миниатюры, сжатие): inline — `spawn` в `tmpdir()`, remote — через
   `ExecutionPort.execute` с `requires: ['ffmpeg']` в `{workspacesRoot}/.synth-media/<uuid>`;
   `MediaRunResult` типизирован (`no_ffmpeg`/`dependency_missing`/`timeout`/`aborted`/`max_output`/
   `failed`), исключений не бросает, каталог удаляется в `finally`. Капы:
-  `MEDIA_FFMPEG_TIMEOUT_MS` 60 c, stdout 32 МиБ / output 64 МиБ.
+  `MEDIA_FFMPEG_TIMEOUT_MS` 60 c, stdout 32 МиБ / output 64 МиБ. После **жёсткого kill** `finally`
+  не выполняется — оставшиеся каталоги `.synth-media/*` убирает `startMediaTempPruner`
+  (`engine/media/pruner.ts`, TTL 1 ч, интервал 6 ч, каталог не создаётся).
 - **Гидратация (`hydrate.ts`) — граница отправки.** Ссылки → `LLMAttachment[]` только из
   реплик **user** (медиа в assistant — исходящее, провайдеру не идёт и в лимит не попадает);
   порядок исходов: **native** (модальность модели известна и принимается, формат аудио

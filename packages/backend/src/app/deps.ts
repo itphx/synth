@@ -74,6 +74,9 @@ import {
   // ADR-115 × ADR-077: медиа-раннер (ffmpeg inline/remote) и серверные миниатюры.
   createMediaRunner,
   ThumbnailService,
+  // ADR-115 × ADR-077: уборка временных каталогов медиа-раннера
+  // (`{workspacesRoot}/.synth-media/*`) — после жёсткого kill они остаются.
+  startMediaTempPruner,
   // ADR-114: сервис worktree'ов (per-session рабочий каталог) + публикация
   // `worktree.updated` в каналы сессий проекта.
   WorktreeService,
@@ -774,6 +777,16 @@ export async function createBackendDeps(
         gcDays: () => attachmentsSettings.getConfig().gcDays,
         ...(attachmentMetrics ? { metrics: attachmentMetrics } : {}),
       });
+
+  // ADR-115 × ADR-077: уборка временных каталогов медиа-раннера
+  // (`{workspacesRoot}/.synth-media/<uuid>`). После жёсткого kill раннер не
+  // успевает убрать каталог (`finally` не выполняется) — такие каталоги
+  // копятся на общем томе. TTL 1 ч, интервал 6 ч, best-effort: каталога нет —
+  // нечего убирать (создавать его не надо). В деградированном режиме
+  // хранилища уборка не нужна (медиа не обрабатывается).
+  const stopMediaTempPruner = storageDegraded
+    ? () => {}
+    : startMediaTempPruner({ workspacesRoot: config.workspacesRoot });
 
   // ADR-094: доменные коллекторы. `metrics` приходит только при
   // `metrics.enabled=true` — иначе реестр остаётся пустым (`/metrics` → 404).
@@ -2025,6 +2038,8 @@ export async function createBackendDeps(
     stopProcessLogPruner,
     // ADR-115: GC осиротевших вложений сообщений.
     stopAttachmentPruner,
+    // ADR-115 × ADR-077: уборка временных каталогов медиа-раннера.
+    stopMediaTempPruner,
     // ADR-115: живое состояние настроек вложений (сервис/промпт/GC + админ-API).
     attachmentsSettings,
     // Политика ограничения контекстного окна (live, админ-API).

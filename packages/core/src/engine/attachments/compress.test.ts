@@ -15,8 +15,10 @@ import {
   AttachmentCompressor,
   COMPRESS_CACHE_DIR,
   jpegQualityValue,
+  MIN_VIDEO_BITRATE_KBPS,
   resolveCompressTarget,
   resolveNativeAudioFormat,
+  resolveVideoBitrateKbps,
   type AttachmentCompressTarget,
   type NativeMediaCapability,
 } from './compress.js';
@@ -193,6 +195,102 @@ describe('AttachmentCompressor: video', () => {
 
     expect(result).toBeNull();
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('AttachmentCompressor: адаптивный битрейт видео', () => {
+  /** Видео крупнее `minBytes` (8 МиБ) — иначе сжатия не будет. */
+  const BIG = 10 * 1024 * 1024;
+
+  it('короткий ролик (31 с) → битрейт из настроек (2000 kbps)', async () => {
+    const blobs = await setup(Buffer.alloc(BIG));
+    const calls: MediaRunRequest[] = [];
+
+    const result = await compressor(blobs, fakeRunner(Buffer.alloc(1024 * 1024), calls)).compress(
+      { blobPath: BLOB_PATH, mime: 'video/mp4', family: 'video', size: BIG, height: 1080, durationMs: 31_000 },
+      { audioFormat: null, nativeVideo: true },
+    );
+
+    expect(result).not.toBeNull();
+    expect(calls[0]!.args).toEqual(
+      expect.arrayContaining(['-b:v', '2000k', '-maxrate', '3000k', '-bufsize', '4000k']),
+    );
+  });
+
+  it('длинный ролик (2 мин) → битрейт ниже настроенного и в args', async () => {
+    const blobs = await setup(Buffer.alloc(BIG));
+    const calls: MediaRunRequest[] = [];
+
+    const result = await compressor(blobs, fakeRunner(Buffer.alloc(1024 * 1024), calls)).compress(
+      { blobPath: BLOB_PATH, mime: 'video/mp4', family: 'video', size: BIG, height: 1080, durationMs: 120_000 },
+      { audioFormat: null, nativeVideo: true },
+    );
+
+    expect(result).not.toBeNull();
+    // floor(14 МиБ * 8 / 1000 / 120 с) = 978 кбит/с, минус аудио (96) = 882.
+    expect(calls[0]!.args).toEqual(
+      expect.arrayContaining(['-b:v', '882k', '-maxrate', '1323k', '-bufsize', '1764k']),
+    );
+  });
+
+  it('очень длинный ролик (5 мин) → нижняя граница 300 kbps', async () => {
+    const blobs = await setup(Buffer.alloc(BIG));
+    const calls: MediaRunRequest[] = [];
+
+    await compressor(blobs, fakeRunner(Buffer.alloc(1024 * 1024), calls)).compress(
+      { blobPath: BLOB_PATH, mime: 'video/mp4', family: 'video', size: BIG, height: 1080, durationMs: 300_000 },
+      { audioFormat: null, nativeVideo: true },
+    );
+
+    expect(calls[0]!.args).toEqual(
+      expect.arrayContaining(['-b:v', '300k', '-maxrate', '450k', '-bufsize', '600k']),
+    );
+  });
+
+  it('без длительности → прежнее поведение (битрейт из настроек)', async () => {
+    const blobs = await setup(Buffer.alloc(BIG));
+    const calls: MediaRunRequest[] = [];
+
+    await compressor(blobs, fakeRunner(Buffer.alloc(1024 * 1024), calls)).compress(
+      { blobPath: BLOB_PATH, mime: 'video/mp4', family: 'video', size: BIG, height: 1080 },
+      { audioFormat: null, nativeVideo: true },
+    );
+
+    expect(calls[0]!.args).toEqual(
+      expect.arrayContaining(['-b:v', '2000k', '-maxrate', '3000k', '-bufsize', '4000k']),
+    );
+  });
+
+  it('профиль кэша включает вычисленный битрейт: смена длительности → другой кэш', async () => {
+    const blobs = await setup(Buffer.alloc(BIG));
+    const calls: MediaRunRequest[] = [];
+    const service = compressor(blobs, fakeRunner(Buffer.alloc(1024 * 1024), calls));
+
+    const short = await service.compress(
+      { blobPath: BLOB_PATH, mime: 'video/mp4', family: 'video', size: BIG, height: 1080, durationMs: 31_000 },
+      { audioFormat: null, nativeVideo: true },
+    );
+    const long = await service.compress(
+      { blobPath: BLOB_PATH, mime: 'video/mp4', family: 'video', size: BIG, height: 1080, durationMs: 120_000 },
+      { audioFormat: null, nativeVideo: true },
+    );
+
+    expect(short).not.toBeNull();
+    expect(long).not.toBeNull();
+    expect(long!.blobPath).not.toBe(short!.blobPath);
+    // Разный профиль → раннер вызван снова (кэш первой копии не подошёл).
+    expect(calls).toHaveLength(2);
+  });
+
+  it('resolveVideoBitrateKbps: без длительности — настройка; с длительностью — по бюджету', () => {
+    const settings = { bitrateKbps: 2000, audioBitrateKbps: 96 };
+    expect(resolveVideoBitrateKbps(settings, undefined)).toBe(2000);
+    expect(resolveVideoBitrateKbps(settings, 0)).toBe(2000);
+    expect(resolveVideoBitrateKbps(settings, 31_000)).toBe(2000);
+    expect(resolveVideoBitrateKbps(settings, 120_000)).toBe(882);
+    expect(resolveVideoBitrateKbps(settings, 300_000)).toBe(MIN_VIDEO_BITRATE_KBPS);
+    // Потолок — настройка: очень короткое видео не разгоняется выше неё.
+    expect(resolveVideoBitrateKbps({ bitrateKbps: 500, audioBitrateKbps: 96 }, 1_000)).toBe(500);
   });
 });
 

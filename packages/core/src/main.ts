@@ -379,6 +379,9 @@ program
       // ADR-115: остановить GC осиротевших вложений сообщений.
       appHandle.stopAttachmentPruner?.();
 
+      // ADR-115 × ADR-077: остановить уборку временных каталогов медиа-раннера.
+      appHandle.stopMediaTempPruner?.();
+
       // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
       // shutdown видит `synth_ready 0`.
       setSynthReady(appHandle.metrics, 0);

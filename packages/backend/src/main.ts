@@ -23,7 +23,7 @@ try {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 }
-const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopAnalyticsRollupPruner, stopScheduler, stopWebhookService, stopWebhookDeliveryPruner, stopMetrics, stopQuestionPruner, stopBackgroundRunPruner, stopProcessLogPruner, stopAttachmentPruner } = handle;
+const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopAnalyticsRollupPruner, stopScheduler, stopWebhookService, stopWebhookDeliveryPruner, stopMetrics, stopQuestionPruner, stopBackgroundRunPruner, stopProcessLogPruner, stopAttachmentPruner, stopMediaTempPruner } = handle;
 
 // ADR-090 (Ф5б-1): старт-активация установленных плагинов.
 // `plugins.lock.json` — источник истины; `plugins.executionEnabled=false`
@@ -106,6 +106,9 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
 
   // ADR-115: остановить GC осиротевших вложений сообщений.
   stopAttachmentPruner();
+
+  // ADR-115 × ADR-077: остановить уборку временных каталогов медиа-раннера.
+  stopMediaTempPruner();
 
   // ADR-094: остановить процессные метрики и фоновые доменные коллекторы
   // (таймеры сессий/хранилища, подписка шины, decision/journal).

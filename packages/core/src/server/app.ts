@@ -670,6 +670,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopProcessLogPruner: () => deps.stopProcessLogPruner(),
     // ADR-115: остановка GC осиротевших вложений сообщений.
     stopAttachmentPruner: () => deps.stopAttachmentPruner(),
+    // ADR-115 × ADR-077: остановка уборки временных каталогов медиа-раннера.
+    stopMediaTempPruner: () => deps.stopMediaTempPruner(),
     // ADR-052 (этап II): остановка движка webhooks и retention-очистки доставок.
     stopWebhookService: () => deps.webhookService.stop(),
     stopWebhookDeliveryPruner: () => deps.stopWebhookDeliveryPruner(),

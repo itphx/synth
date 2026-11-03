@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryBlobStore } from '../../storage/memory/content.js';
 import type { MediaRunRequest, MediaRunnerLike } from '../media/runner.js';
-import { jpegSize, ThumbnailService } from './thumbnails.js';
+import { jpegSize, parseFfmpegDurationMs, ThumbnailService } from './thumbnails.js';
 
 const SHA = 'a'.repeat(64);
 const BLOB_PATH = `attachments/${SHA.slice(0, 2)}/${SHA}`;
@@ -265,5 +265,111 @@ describe('ThumbnailService', () => {
     expect(await blobs.read(`attachments/.thumbs/${SHA}-256.jpg`)).toBeTruthy();
     // Legacy не перезаписан.
     expect(await blobs.read(`attachments/.thumbs/${SHA}.jpg`)).toEqual(jpeg(64, 64));
+  });
+});
+
+describe('ThumbnailService: длительность видео (ADR-115)', () => {
+  /** stderr ffmpeg с длительностью (как печатает при разборе входа). */
+  const DURATION_STDERR =
+    '  Duration: 00:00:31.00, start: 0.000000, bitrate: 1050 kb/s\n' +
+    '  Stream #0:0: Video: h264, yuv420p, 1280x720\n';
+
+  /** Раннер: проба длительности (без `-frames:v`) → stderr, кадр → JPEG. */
+  function probeRunner(
+    probe: Awaited<ReturnType<MediaRunnerLike['run']>>,
+    calls: MediaRunRequest[] = [],
+  ): MediaRunnerLike {
+    return {
+      isRemote: false,
+      run: vi.fn(async (request: MediaRunRequest) => {
+        calls.push(request);
+        const isProbe = !request.args.includes('-frames:v');
+        return isProbe ? probe : { ok: true, outputs: [jpeg(512, 288)] };
+      }),
+    };
+  }
+
+  async function sidecar(blobs: MemoryBlobStore): Promise<Record<string, unknown>> {
+    return JSON.parse((await blobs.read(`${BLOB_PATH}.json`))!.toString('utf-8')) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it('длительность из stderr ffmpeg → sidecar durationMs, кадр на 10% длительности', async () => {
+    const blobs = await setup(Buffer.from('mp4-bytes'), 'video/mp4');
+    const calls: MediaRunRequest[] = [];
+    const service = new ThumbnailService({
+      blobs,
+      runner: probeRunner({ ok: false, outputs: [], reason: 'failed', stderr: DURATION_STDERR }, calls),
+    });
+
+    const meta = await service.ensure({ blobPath: BLOB_PATH, mime: 'video/mp4' });
+
+    expect(meta.status).toBe('ready');
+    const written = await sidecar(blobs);
+    expect(written.durationMs).toBe(31_000);
+    // Кадр берётся на 10% длительности (3.1 с), а не на первой секунде.
+    expect(calls[1]!.args).toEqual(expect.arrayContaining(['-ss', '3.100']));
+  });
+
+  it('ошибка ffmpeg без Duration → durationMs не пишется', async () => {
+    const blobs = await setup(Buffer.from('mp4-bytes'), 'video/mp4');
+    const calls: MediaRunRequest[] = [];
+    const service = new ThumbnailService({
+      blobs,
+      runner: probeRunner({ ok: false, outputs: [], reason: 'no_ffmpeg', error: 'ENOENT' }, calls),
+    });
+
+    await service.ensure({ blobPath: BLOB_PATH, mime: 'video/mp4' });
+
+    const written = await sidecar(blobs);
+    expect(written.durationMs).toBeUndefined();
+    // Кадр всё равно попытались сделать (по умолчанию — первая секунда).
+    expect(calls.some((call) => call.args.includes('-frames:v'))).toBe(true);
+  });
+
+  it('существующий durationMs в sidecar не перезаписывается и не probe-ится', async () => {
+    const blobs = await setup(Buffer.from('mp4-bytes'), 'video/mp4');
+    const written = await blobs.read(`${BLOB_PATH}.json`);
+    const parsed = JSON.parse(written!.toString('utf-8')) as Record<string, unknown>;
+    await blobs.write(`${BLOB_PATH}.json`, JSON.stringify({ ...parsed, durationMs: 5_000 }));
+    const calls: MediaRunRequest[] = [];
+    const service = new ThumbnailService({
+      blobs,
+      runner: probeRunner({ ok: false, outputs: [], reason: 'failed', stderr: DURATION_STDERR }, calls),
+    });
+
+    await service.ensure({ blobPath: BLOB_PATH, mime: 'video/mp4' });
+
+    const after = await sidecar(blobs);
+    expect(after.durationMs).toBe(5_000);
+    // Проба длительности не запускалась — только кадр.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.args).toEqual(expect.arrayContaining(['-ss', '0.500']));
+  });
+
+  it('длительность из входа сохраняется в sidecar без запуска ffmpeg', async () => {
+    const blobs = await setup(Buffer.from('mp4-bytes'), 'video/mp4');
+    const calls: MediaRunRequest[] = [];
+    const service = new ThumbnailService({
+      blobs,
+      runner: probeRunner({ ok: false, outputs: [], reason: 'failed', stderr: DURATION_STDERR }, calls),
+    });
+
+    await service.ensure({ blobPath: BLOB_PATH, mime: 'video/mp4', durationMs: 10_000 });
+
+    const written = await sidecar(blobs);
+    expect(written.durationMs).toBe(10_000);
+    // Только кадр: длительность уже известна вызывающему.
+    expect(calls).toHaveLength(1);
+  });
+
+  it('parseFfmpegDurationMs: HH:MM:SS.xx → мс; N/A и пусто → null', () => {
+    expect(parseFfmpegDurationMs(DURATION_STDERR)).toBe(31_000);
+    expect(parseFfmpegDurationMs('  Duration: 01:02:03.50, start: 0.0')).toBe(3_723_500);
+    expect(parseFfmpegDurationMs('  Duration: N/A, start: 0.0')).toBeNull();
+    expect(parseFfmpegDurationMs('')).toBeNull();
+    expect(parseFfmpegDurationMs(undefined)).toBeNull();
   });
 });

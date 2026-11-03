@@ -367,6 +367,7 @@ export {
   THUMBNAIL_JPEG_QUALITY,
   THUMBNAIL_MAX_BYTES,
   jpegSize,
+  parseFfmpegDurationMs,
   UploadSessionStore,
   UploadSessionError,
   UPLOAD_SESSION_TTL_MS,
@@ -415,6 +416,18 @@ export type {
   MediaSpawnResult,
   MediaSpawner,
 } from './engine/media/runner.js';
+// ADR-115 × ADR-077: уборка временных каталогов медиа-раннера
+// (`{workspacesRoot}/.synth-media/*`) после жёсткого kill.
+export {
+  startMediaTempPruner,
+  MEDIA_TEMP_TTL_MS,
+  MEDIA_TEMP_PRUNE_INTERVAL_MS,
+} from './engine/media/pruner.js';
+export type {
+  MediaTempEntry,
+  MediaTempPrunerFs,
+  MediaTempPrunerOptions,
+} from './engine/media/pruner.js';
 // ADR-115: обработка вложения моделью-обработчиком (aux) — текст вместо байтов.
 export {
   deriveModalityText,

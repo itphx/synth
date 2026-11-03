@@ -1174,6 +1174,34 @@ describe('hydrateMessageAttachments: сжатие на отправке (ADR-115
     ]);
   });
 
+  it('длительность из sidecar пробрасывается в compress (адаптивный битрейт)', async () => {
+    const deps = makeDeps(
+      { 'attachments/aa/video.mp4': PNG_BYTES },
+      { 'attachments/aa/video.mp4': { durationMs: 31_000 } },
+    );
+    const compress = vi.fn(async () => null);
+    const source = [
+      sourceMessage({
+        parts: [
+          mediaPart('video', { blobPath: 'attachments/aa/video.mp4', mime: 'video/mp4' }),
+        ],
+      }),
+    ];
+
+    await hydrateMessageAttachments([llmMessage()], source, deps, {
+      modalities: ['video'],
+      compress,
+    });
+
+    expect(compress).toHaveBeenCalledWith({
+      blobPath: 'attachments/aa/video.mp4',
+      mime: 'video/mp4',
+      family: 'video',
+      size: PNG_BYTES.length,
+      durationMs: 31_000,
+    });
+  });
+
   it('compress вернул null → отправляем оригинал', async () => {
     const deps = makeDeps({ 'attachments/aa/image': PNG_BYTES });
     const compress = vi.fn(async () => null);

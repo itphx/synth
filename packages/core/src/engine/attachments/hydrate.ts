@@ -195,6 +195,8 @@ export interface HydrateOptions {
     size: number;
     width?: number;
     height?: number;
+    /** Длительность видео, мс (из sidecar) — для адаптивного битрейта. */
+    durationMs?: number;
   }) => Promise<{ blobPath: string; mime: string; size: number; name?: string } | null>;
   /**
    * ADR-115: материализация отброшенного вложения в рабочий каталог проекта —
@@ -624,6 +626,7 @@ export async function hydrateMessageAttachments(
               size: meta.size,
               ...(meta.width !== undefined ? { width: meta.width } : {}),
               ...(meta.height !== undefined ? { height: meta.height } : {}),
+              ...(meta.durationMs !== undefined ? { durationMs: meta.durationMs } : {}),
             });
             if (compressed) {
               readPath = compressed.blobPath;

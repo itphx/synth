@@ -49,6 +49,7 @@ export {
   THUMBNAIL_JPEG_QUALITY,
   THUMBNAIL_MAX_BYTES,
   jpegSize,
+  parseFfmpegDurationMs,
 } from './thumbnails.js';
 export type {
   ThumbnailInput,
@@ -60,9 +61,12 @@ export {
   AttachmentCompressor,
   COMPRESS_CACHE_DIR,
   MAX_COMPRESSED_BYTES,
+  MAX_NATIVE_VIDEO_BYTES,
+  MIN_VIDEO_BITRATE_KBPS,
   jpegQualityValue,
   resolveCompressTarget,
   resolveNativeAudioFormat,
+  resolveVideoBitrateKbps,
 } from './compress.js';
 export type {
   AttachmentCompressInput,
