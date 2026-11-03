@@ -2,8 +2,10 @@
  * Относительные пути в Markdown (`![img](pictures/a.png)`, `[файл](docs/a.md)`).
  *
  * В чате база — origin приложения, а во вкладке файла проекта картинки/ссылки
- * должны резолвиться от каталога самого `.md` **внутри workspace**. Модуль
- * чистый (без DOM и React), чтобы правила нормализации проверялись тестами.
+ * должны резолвиться от каталога самого `.md` **внутри workspace**. Правила
+ * нормализации — чистые функции (проверяются тестами); пост-обработка HTML
+ * (`rewriteRelativeAssets`) работает через `DOMParser` и покрывает **и**
+ * markdown-картинки, **и** сырой HTML (`<picture><source srcset=…>`).
  *
  * Безопасность: выход выше корня workspace (`../../x`) не нормализуется, а
  * отбрасывается (`null`) — наружу рабочего каталога мы не подставляем.
@@ -91,4 +93,108 @@ export function resolveRelativePath(baseDir: string, target: string): string | n
 
   if (base.length === 0) return null
   return base.join('/')
+}
+
+/** Уже абсолютный адрес приложения (`/api/…`) — резолвить не нужно. */
+function isAppAbsolute(target: string): boolean {
+  return /^\/api(?:\/|$)/i.test(target.trim())
+}
+
+/**
+ * Кандидаты `srcset` (`url [descriptor], …`) — переписать `url` каждого
+ * относительного кандидата, сохранив дескрипторы (`1x`, `100w`). Разбор по
+ * правилам `srcset`: URL — до пробела (внутренние запятые `data:`-URI
+ * сохраняются), дескриптор — до запятой-разделителя.
+ */
+function rewriteSrcset(
+  srcset: string,
+  resolve: (target: string) => string | null,
+): string {
+  const isSpace = (ch: string) => /\s/.test(ch)
+  const candidates: string[] = []
+  let pos = 0
+
+  while (pos < srcset.length) {
+    // Пропускаем пробелы и запятые-разделители.
+    while (pos < srcset.length && (isSpace(srcset[pos]!) || srcset[pos] === ',')) pos += 1
+    if (pos >= srcset.length) break
+
+    const urlStart = pos
+    while (pos < srcset.length && !isSpace(srcset[pos]!)) pos += 1
+    let url = srcset.slice(urlStart, pos)
+    // Запятая в конце URL — разделитель кандидатов без дескриптора.
+    const hasTrailingComma = url.endsWith(',')
+    if (hasTrailingComma) url = url.replace(/,+$/, '')
+
+    let descriptor = ''
+    if (!hasTrailingComma) {
+      const descriptorStart = pos
+      while (pos < srcset.length && srcset[pos] !== ',') pos += 1
+      descriptor = srcset.slice(descriptorStart, pos).trim()
+      if (srcset[pos] === ',') pos += 1
+    }
+
+    const rewritten = url ? resolve(url) : null
+    const target = rewritten ?? url
+    if (!target) continue
+    candidates.push(descriptor ? `${target} ${descriptor}` : target)
+  }
+
+  return candidates.join(', ')
+}
+
+/**
+ * Пост-обработка готового HTML: относительные `src`/`href`/`srcset`
+ * переписываются резолвером — **и для markdown-разметки, и для сырого HTML**
+ * (`<picture><source srcset=…>`, `<img width=…>`). Абсолютные адреса
+ * (`/api/…`), якоря (`#…`), protocol-relative (`//…`) и схемы (`http:`,
+ * `data:`, `mailto:`) не трогаются.
+ *
+ * Ссылки на файлы становятся `href="#"` + `data-file-path` (относительный путь
+ * из разметки): навигацию перехватывает принимающий компонент. `srcset`
+ * сохраняет дескрипторы (`1x`/`100w`), `media`/`width`/`height`/`alt` — как есть.
+ */
+export function rewriteRelativeAssets(
+  html: string,
+  resolveAsset: (target: string) => string | null,
+): string {
+  if (!html) return html
+
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const body = doc.body
+
+  const resolve = (target?: string | null): string | null => {
+    if (typeof target !== 'string') return null
+    const value = target.trim()
+    if (!value || isExternalOrAnchor(value) || isAppAbsolute(value)) return null
+    return resolveAsset(value) || null
+  }
+
+  const rewriteElementSrcset = (element: Element): void => {
+    const srcset = element.getAttribute('srcset')
+    if (!srcset) return
+    element.setAttribute('srcset', rewriteSrcset(srcset, resolve))
+  }
+
+  for (const image of Array.from(body.querySelectorAll('img'))) {
+    const src = resolve(image.getAttribute('src'))
+    if (src) image.setAttribute('src', src)
+    rewriteElementSrcset(image)
+  }
+
+  for (const source of Array.from(body.querySelectorAll('source'))) {
+    rewriteElementSrcset(source)
+  }
+
+  for (const link of Array.from(body.querySelectorAll('a[href]'))) {
+    const href = link.getAttribute('href')?.trim()
+    if (!href) continue
+    const resolved = resolve(href)
+    if (!resolved) continue
+    // В `data-file-path` — путь из разметки (резолв делает принимающая сторона).
+    link.setAttribute('href', '#')
+    link.setAttribute('data-file-path', href)
+  }
+
+  return body.innerHTML
 }

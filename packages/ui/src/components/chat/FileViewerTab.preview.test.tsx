@@ -307,6 +307,43 @@ describe('FileViewerTab — предпросмотр файла по семей�
     expect(mocks.openTab).not.toHaveBeenCalled()
   })
 
+  it('сырой HTML в README (`<picture>`/`<img>`) → картинки идут через `/fs/raw`', async () => {
+    mocks.readFile.mockResolvedValue({
+      path: 'README.md',
+      content: [
+        '<p align="center">',
+        '  <picture>',
+        '    <source srcset="docs/resources/synth-logo-dark.svg" media="(prefers-color-scheme: dark)">',
+        '    <img src="docs/resources/synth-logo-light.svg" alt="Synth" width="96">',
+        '  </picture>',
+        '</p>',
+        '',
+        '<p align="center">',
+        '  <img src="docs/resources/screens/app-dark.png" alt="Synth" width="100%"/>',
+        '</p>',
+      ].join('\n'),
+      size: 500,
+      encoding: 'utf-8',
+    })
+
+    const container = await render(<FileViewerTab tab={fileTab('README.md')} />)
+    await act(async () => {})
+
+    const images = Array.from(container.querySelectorAll<HTMLImageElement>('.markdown-content img'))
+    expect(images.length).toBe(2)
+    for (const img of images) {
+      expect(img.getAttribute('src')).toContain('/fs/raw')
+    }
+    expect(images[0]!.getAttribute('src')).toContain('path=docs/resources/synth-logo-light.svg')
+    expect(images[0]!.getAttribute('width')).toBe('96')
+    expect(images[1]!.getAttribute('src')).toContain('path=docs/resources/screens/app-dark.png')
+
+    const source = container.querySelector<HTMLElement>('.markdown-content source')
+    expect(source).not.toBeNull()
+    expect(source!.getAttribute('srcset')).toContain('/fs/raw')
+    expect(source!.getAttribute('media')).toBe('(prefers-color-scheme: dark)')
+  })
+
   it('отказ проверки предпросмотра (404) → текст ошибки и «Скачать»', async () => {
     mocks.probeRawFile.mockResolvedValue({ ok: false, status: 404, size: 0, message: 'Файл не найден' })
 

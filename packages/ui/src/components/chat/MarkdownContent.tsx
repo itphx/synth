@@ -5,7 +5,7 @@ import { downloadBlob } from '@/lib/download'
 import { i18nText, useI18nStore } from '@/lib/i18n'
 import { codeFileName } from '@/lib/markdown/codeFile'
 import { getThemeEpoch, highlightCode, subscribeThemeChange } from '@/lib/markdown/highlight'
-import { isExternalOrAnchor } from '@/lib/markdown/relativeAssets'
+import { rewriteRelativeAssets } from '@/lib/markdown/relativeAssets'
 import { createSlugger } from '@/lib/markdown/slug'
 
 interface MarkdownContentProps {
@@ -14,8 +14,10 @@ interface MarkdownContentProps {
   /** Трансформация HTML между marked.parser и DOMPurify.sanitize (например, подмена плейсхолдеров). */
   transformHtml?: (html: string) => string
   /**
-   * Резолвер **относительного** `src`/`href` (`img.png`, `docs/a.md`) в рабочий
-   * URL. `null` — оставить как есть. Внешние ссылки и якоря не передаются.
+   * Резолвер **относительного** `src`/`href`/`srcset` (`img.png`, `docs/a.md`)
+   * в рабочий URL. Применяется пост-обработкой готового HTML
+   * (`rewriteRelativeAssets`) — и к markdown, и к сырому HTML (`<picture>`).
+   * `null` — оставить как есть; внешние ссылки, якоря и `/api/…` не передаются.
    * Принимающая сторона обязана мемоизировать (`useCallback`): резолвер входит
    * в зависимости использования HTML, иначе markdown пересобирается на каждый
    * рендер.
@@ -36,7 +38,7 @@ export const MARKDOWN_ALLOWED_TAGS = [
   'p', 'br', 'strong', 'em', 'u', 's', 'del', 'code', 'pre',
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'ul', 'ol', 'li', 'blockquote',
-  'a', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+  'a', 'img', 'picture', 'source', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
   'span', 'div', 'hr',
   'input', 'label',
   'button', 'details', 'summary',
@@ -44,7 +46,8 @@ export const MARKDOWN_ALLOWED_TAGS = [
 
 /** Разрешённые атрибуты (маркеры раскрытия/копирования/скачивания кода, target/rel ссылок). */
 export const MARKDOWN_ALLOWED_ATTR = [
-  'href', 'src', 'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled',
+  'href', 'src', 'srcset', 'media', 'width', 'height',
+  'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled',
   'data-ph', 'data-lang', 'data-copy-code', 'data-numbered', 'data-copied',
   'data-download-code', 'data-downloaded', 'data-file-path',
   'target', 'rel', 'open', 'align',
@@ -107,21 +110,11 @@ function findAnchorTarget(container: HTMLElement, id: string): HTMLElement | nul
  * Рендерер создаётся **на каждый разбор**: `createSlugger()` внутри держит
  * счётчик дубликатов заголовков, и он обязан сбрасываться на документ.
  */
-function createMarkdownRenderer(resolveAsset?: (target: string) => string | null): Renderer {
+function createMarkdownRenderer(): Renderer {
   const renderer = new Renderer()
   const renderTable = renderer.table.bind(renderer)
   const renderLink = renderer.link.bind(renderer)
   const nextSlug = createSlugger()
-
-  /**
-   * Относительный адрес → рабочий URL (вкладка файла проекта: `/fs/raw`).
-   * Не резолвится/резолвер не передан — оставляем исходное значение.
-   */
-  const resolvedAsset = (target?: string | null): string | null => {
-    if (!resolveAsset || typeof target !== 'string') return null
-    if (isExternalOrAnchor(target)) return null
-    return resolveAsset(target) || null
-  }
 
   renderer.heading = ({ tokens, depth, text }) => {
     // `marked` (v5+) сам `id` заголовкам не присваивает — без этого якорные
@@ -161,28 +154,17 @@ function createMarkdownRenderer(resolveAsset?: (target: string) => string | null
   renderer.table = (token) => `<div class="md-table-wrap">${renderTable(token)}</div>`
 
   renderer.image = ({ href, title, text }) => {
-    // Внешние картинки (`https:`, `//`, `data:`) — как есть; относительные —
-    // через резолвер (вкладка файла: `/fs/raw` из workspace).
-    const src = resolvedAsset(href) ?? href ?? ''
+    // Относительные `src` резолвит пост-обработка HTML
+    // (`rewriteRelativeAssets`) — она же покрывает сырой HTML и `srcset`.
+    const src = href ?? ''
     const alt = escapeHtml(text ?? '')
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
     return `<img src="${escapeHtml(src)}" alt="${alt}"${titleAttr}>`
   }
 
   renderer.link = (token) => {
-    const resolved = resolvedAsset(token.href)
-    if (resolved) {
-      // Ссылка на файл workspace: навигацию перехватывает принимающий компонент
-      // (открывает вкладку), а не браузер — `target=_blank` тут не нужен.
-      // В `data-file-path` кладём **относительный путь из markdown**: резолвер
-      // отдаёт URL (для `src`), а путь для вкладки принимающая сторона получает
-      // тем же правилом от каталога документа (см. `resolveRelativePath`).
-      const titleAttr = token.title ? ` title="${escapeHtml(token.title)}"` : ''
-      const inner = token.tokens?.length
-        ? renderer.parser.parseInline(token.tokens)
-        : escapeHtml(token.text ?? '')
-      return `<a href="#" data-file-path="${escapeHtml(token.href ?? '')}"${titleAttr}>${inner}</a>`
-    }
+    // Относительные `href` → `data-file-path` (см. `rewriteRelativeAssets`):
+    // marked отдаёт их как есть, решает пост-обработка.
     const html = renderLink(token)
     // marked возвращает чистый текст, если href не прошёл проверку — не трогаем.
     if (!isExternalHref(token.href) || !html.startsWith('<a ')) return html
@@ -247,8 +229,11 @@ export function MarkdownContent({
       const tokens = marked.lexer(source)
       // Рендерер — на каждый разбор: счётчик дубликатов заголовков (slugger)
       // должен начинаться с нуля для каждого документа.
-      let raw = marked.parser(tokens, { renderer: createMarkdownRenderer(resolveAsset) })
+      let raw = marked.parser(tokens, { renderer: createMarkdownRenderer() })
       if (transformHtml) raw = transformHtml(raw)
+      // Относительные `src`/`href`/`srcset` (и markdown, и сырой HTML) —
+      // до санитайзера: `data-file-path`/`srcset` должны попасть в allowlist.
+      if (resolveAsset) raw = rewriteRelativeAssets(raw, resolveAsset)
       return DOMPurify.sanitize(raw, {
         ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
         ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTR,

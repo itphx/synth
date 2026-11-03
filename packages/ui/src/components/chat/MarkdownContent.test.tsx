@@ -259,6 +259,49 @@ describe('MarkdownContent: относительные картинки и ссы
     expect(container.querySelector('img')!.getAttribute('title')).toBe('подсказка')
     expect(container.querySelector('a')!.getAttribute('title')).toBe('файл')
   })
+
+  it('сырой HTML как в README: `<picture>` и `<img>` резолвятся, размеры и media сохранены', async () => {
+    const content = [
+      '<p align="center">',
+      '  <picture>',
+      '    <source srcset="docs/resources/synth-logo-dark.svg" media="(prefers-color-scheme: dark)">',
+      '    <img src="docs/resources/synth-logo-light.svg" alt="Synth" width="96">',
+      '  </picture>',
+      '</p>',
+      '',
+      '<p align="center">',
+      '  <img src="docs/resources/screens/app-dark.png" alt="Synth" width="100%"/>',
+      '</p>',
+    ].join('\n')
+
+    const { container } = await renderWithResolve(content)
+
+    const images = Array.from(container.querySelectorAll('img'))
+    expect(images.length).toBe(2)
+    for (const img of images) {
+      expect(img.getAttribute('src')!.startsWith('/api/v2/fs/raw?')).toBe(true)
+    }
+    expect(images[0]!.getAttribute('src')).toContain('path=docs/resources/synth-logo-light.svg')
+    expect(images[0]!.getAttribute('width')).toBe('96')
+    expect(images[1]!.getAttribute('width')).toBe('100%')
+
+    const source = container.querySelector('source')
+    expect(source).not.toBeNull()
+    expect(source!.getAttribute('srcset')).toContain('/api/v2/fs/raw?')
+    expect(source!.getAttribute('srcset')).toContain('path=docs/resources/synth-logo-dark.svg')
+    expect(source!.getAttribute('media')).toBe('(prefers-color-scheme: dark)')
+  })
+
+  it('img srcset с дескрипторами в сыром HTML переписывается', async () => {
+    const { container } = await renderWithResolve(
+      '<img src="a.png" srcset="a.png 1x, b.png 2x" alt="A">',
+    )
+
+    const img = container.querySelector('img')!
+    expect(img.getAttribute('srcset')).toBe(
+      '/api/v2/fs/raw?path=a.png 1x, /api/v2/fs/raw?path=b.png 2x',
+    )
+  })
 })
 
 describe('MarkdownContent: заголовки и якорные ссылки', () => {
