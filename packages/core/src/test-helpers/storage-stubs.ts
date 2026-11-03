@@ -47,6 +47,7 @@ export function stubContextFiles(
     getSubagentNotice: (): string => '',
     getMaxStepsPrompt: (): string => '',
     getSummarizerPrompt: (): string => '',
+    getCompactorPrompt: (): string => '',
     getUserContextTemplate: (): string => '',
     getCompressedDialogTemplate: (): string => '',
     getAttachmentsDroppedTemplate: (): string => '',

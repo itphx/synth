@@ -27,9 +27,13 @@ export function createRecalcCanSummarize({
 
     // Перепроверить флаг summarizationPending при toggle/pin/delete
     let shouldClearPending = false;
-    if (s.summarizationPending && s.settings.summarizationEnabled) {
-      const sumResult = contextOptimizer.shouldSummarize(s);
-      if (!sumResult.triggered) {
+    if (s.summarizationPending) {
+      const compression = typeof contextOptimizer.shouldCompress === 'function'
+        ? contextOptimizer.shouldCompress(s)
+        : { ...contextOptimizer.shouldSummarize(s), mode: 'summarization' as const };
+      if (!compression.triggered || !compression.mode) {
+        shouldClearPending = true;
+      } else if (typeof contextOptimizer.canCompress === 'function' && !contextOptimizer.canCompress(s)) {
         shouldClearPending = true;
       }
     }

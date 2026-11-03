@@ -343,6 +343,14 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 | `step.tools.started` / `step.tools.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `callIds` (`string[]`) — additive: `step.finished` means “the LLM call is done”, these events mark the **tool execution** of that step (published once per step with tool calls, before execution and after `metadata.tool_results` is written) |
 | `part.delta` / `part.updated` | session channel | upsert by `{messageId, partId}` |
 
+**Context compression (ADR-119).** Compression events go to the session channel; no new channels.
+
+| Event | `data` fields |
+|---|---|
+| `context.summarization_pending` | `reason` (`messages`\|`tokens`), `mode` (`summarization`\|`compaction`), `current_tokens?`, `threshold?`, `user_count?` — the trigger fired, compression waits for the next turn |
+| `context.summarization_applied` | `reason` (`auto`\|`manual`\|`overflow`), `mode`, `covered_indices` (`number[]`), `keep_from` (id of the first live message \| `null`), `usage?` — published on the normal path and on overflow; the client clears the pending state and refetches the history (last page) |
+| `context.sliding_window_applied` | `reason`/`trigger_type`, `disabled_indices` (`number[]`) — `sliding_window` disabled older messages (no summary) |
+
 Any mutation visible to another client publishes an event: `message.deleted`/`message.updated`
 (messages), `session.messages.cleared`/`session.messages.merged` (history),
 `project.updated`/`project.deleted` (project — to the channel of each of its sessions),
@@ -514,9 +522,9 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | POST | `/api/v2/sessions/:id/resume-subagent` | both | auth | Resume a subagent → 202 |
 | POST | `/api/v2/sessions/:id/summarize` | both | auth | Request summarization `{status:'enqueued', stream_id}` |
 | POST | `/api/v2/sessions/:id/debug-system-message` | backend | auth | Debug system message |
-| GET | `/api/v2/sessions/:id/optimization` | backend | auth | Context optimization settings |
-| PATCH | `/api/v2/sessions/:id/optimization` | backend | auth | Update the optimization settings |
-| POST | `/api/v2/sessions/:id/optimization/check` | backend | auth | Check the window/summarization triggers |
+| GET | `/api/v2/sessions/:id/optimization` | backend | auth | Context optimization settings (ADR-119): `{context_optimization, summarization_enabled, summarization_trigger_mode, summarize_after_n, summarize_token_threshold, summarization_keep_tokens, compaction_keep_tokens, compaction_token_threshold, summarization_head_messages, summarization_tail_messages, sliding_window_mode, sliding_window_message_limit, sliding_window_token_threshold}`. `context_optimization` ∈ `none`\|`sliding_window`\|`summarization`\|`compaction` (`sticky_notes` — a legacy value of saved sessions); `summarization_head_messages`/`summarization_tail_messages` are **deprecated** (the engine uses a token tail) |
+| PATCH | `/api/v2/sessions/:id/optimization` | backend | auth | Partial patch of the same fields (only changed ones are sent); `context_optimization` switches the whole mode (the modes are mutually exclusive), `summarization_keep_tokens`/`compaction_keep_tokens` — the verbatim tail in tokens (`0` — no tail for summarization), `compaction_token_threshold` — the compaction threshold in % of the window (1..100). Response — the serialized session |
+| POST | `/api/v2/sessions/:id/optimization/check` | backend | auth | Check the triggers: `{sliding_window, summarization, compression, summarization_pending}`. `compression` is **additive** (ADR-119): `{triggered, reason: 'none'\|'messages'\|'tokens', mode: 'summarization'\|'compaction'\|null, currentTokens?, threshold?, userCount?, limit?}` — the single trigger of the effective mode (compaction is token-only) |
 | POST | `/api/v2/sessions/:id/optimization/cancel-summarization` | backend | auth | Cancel the summarization wait |
 | GET | `/api/v2/sessions/:id/references` | both | auth | References `{references}` |
 | POST | `/api/v2/sessions/:id/references` | both | auth | Add a reference → 201 |

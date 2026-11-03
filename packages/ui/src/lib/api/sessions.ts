@@ -468,6 +468,9 @@ export const sessionsApi = {
     summarize_token_threshold: number
     summarization_head_messages: number
     summarization_tail_messages: number
+    summarization_keep_tokens: number
+    compaction_keep_tokens: number
+    compaction_token_threshold: number
   }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization`)
   },
@@ -485,6 +488,9 @@ export const sessionsApi = {
       summarize_token_threshold?: number
       summarization_head_messages?: number
       summarization_tail_messages?: number
+      summarization_keep_tokens?: number
+      compaction_keep_tokens?: number
+      compaction_token_threshold?: number
     },
   ): Promise<SessionData> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization`, {

@@ -852,21 +852,28 @@ export async function runProcessFinalize(
       }
     }
 
-    // Проверить суммаризацию
-    if (optSession.settings.contextOptimization === 'summarization') {
-      const sumResult = deps.optimizer.shouldSummarize(optSession);
-      if (sumResult.triggered) {
-        await deps.sessionManager.withLock(optSession.id, async (s) => {
-          s.summarizationPending = true;
-          await deps.sessionManager.saveSession(s);
-        });
-        deps.eventBus.publish(optSession.id, 'context.summarization_pending', {
-          reason: sumResult.reason,
-          current_tokens: sumResult.currentTokens,
-          threshold: sumResult.threshold,
-          user_count: sumResult.userCount,
-        });
-      }
+    // Проверить сжатие контекста (суммаризация или компактизация)
+    const compression: ReturnType<ContextOptimizer['shouldCompress']> = typeof deps.optimizer.shouldCompress === 'function'
+      ? deps.optimizer.shouldCompress(optSession)
+      : typeof deps.optimizer.shouldSummarize === 'function'
+        ? { ...deps.optimizer.shouldSummarize(optSession), mode: 'summarization' as const }
+        : { triggered: false, reason: 'none' as const, mode: null };
+    if (
+      compression.triggered
+      && compression.mode
+      && (typeof deps.optimizer.canCompress !== 'function' || deps.optimizer.canCompress(optSession))
+    ) {
+      await deps.sessionManager.withLock(optSession.id, async (s) => {
+        s.summarizationPending = true;
+        await deps.sessionManager.saveSession(s);
+      });
+      deps.eventBus.publish(optSession.id, 'context.summarization_pending', {
+        reason: compression.reason,
+        mode: compression.mode,
+        current_tokens: compression.currentTokens,
+        threshold: compression.threshold,
+        user_count: compression.userCount,
+      });
     }
 
     // Обновить canSummarize после всех мутаций

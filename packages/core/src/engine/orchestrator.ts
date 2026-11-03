@@ -139,6 +139,13 @@ import {
 } from './orchestrator/turn-events.js';
 import { setLiveStreamSnapshot } from './live-stream-snapshot.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
+import {
+  createCompressionSummarySaver,
+  forceCompression,
+  type ForceCompressionResult,
+} from './orchestrator/compression.js';
+import { buildOverflowRetryMessages } from './orchestrator/overflow.js';
+import { classifyLlmError } from './llm-error.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type ProviderOverrides, type RouteProviderDeps } from './orchestrator/routing.js';
 import { DEFAULT_MAX_OUTPUT_TOKENS, resolveMaxOutputTokens } from './orchestrator/max-output.js';
 import { ContextLengthExceededError } from '../providers/exceptions.js';
@@ -2964,6 +2971,83 @@ export class ChatOrchestrator {
     );
   }
 
+  /**
+   * Принудительное сжатие для overflow — только в цикле LLM-вызова (после
+   * `context_length`). Ошибки сжатия не валят ход: возвращается `null`
+   * (вызывающий деградирует к штатной обработке ошибки LLM).
+   */
+  private async _forceCompressForOverflow(
+    session: Session,
+    opts: { reason: 'overflow'; minKeepFromIndex?: number },
+  ): Promise<Session | null> {
+    if (!this._optimizer) return null;
+    try {
+      const result: ForceCompressionResult = await forceCompression(
+        session,
+        {
+          optimizer: this._optimizer,
+          sessionManager: this._sessionManager,
+          eventBus: this._eventBus,
+          saveSummary: createCompressionSummarySaver(this._saveAssistantMessage.bind(this)),
+        },
+        opts,
+      );
+      return result.session;
+    } catch (e) {
+      warning(
+        'CONTEXT',
+        `Forced compression failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Собрать `currentMessages` для повтора после overflow: сжать сессию,
+   * перечитать её, взять живой хвост и чекпоинт. `false` — повтор невозможен
+   * (нечего сжимать / разорваны tool-пары) — вызывающий отдаёт исходную ошибку.
+   */
+  private async _tryOverflowRecovery(args: {
+    session: Session;
+    author: string;
+    effectiveAgentRole: string | undefined;
+    providerName: string;
+    model: string;
+    currentMessages: LLMMessage[];
+    baseLlmMessages: LLMMessage[];
+  }): Promise<boolean> {
+    if (!this._optimizer) return false;
+
+    const updated = await this._forceCompressForOverflow(args.session, { reason: 'overflow' });
+    if (!updated) return false;
+
+    const summary = [...updated.messages]
+      .reverse()
+      .find((m) => m.role === MessageRole.SUMMARY && !m.disabled)
+      ?.content ?? '';
+    if (!summary.trim()) return false;
+
+    const live = this._optimizer
+      .getMessagesForLlm(updated)
+      .filter((m) => m.role !== MessageRole.SUMMARY);
+    const tail = sessionMessagesToLlmFn(live, args.effectiveAgentRole, args.author, {
+      provider: args.providerName,
+      model: args.model,
+    });
+
+    // Текущий ход: с его user-реплики (последняя в baseLlmMessages) и до
+    // текущего момента. Пересечение с хвостом схлопывает helper.
+    const turnStart = Math.max(0, args.baseLlmMessages.length - 1);
+    const currentTurn = args.currentMessages.slice(turnStart);
+
+    const rebuilt = buildOverflowRetryMessages({ summary, tail, currentTurn });
+    if (!rebuilt) return false;
+
+    args.currentMessages.length = 0;
+    args.currentMessages.push(...rebuilt);
+    return true;
+  }
+
   /** ADR-095 (шаг 6b-1): зависимости вынесенной подготовки запроса `_processMessage`. */
   private _processSetupDeps(session?: Session): ProcessSetupDeps {
     return {
@@ -4141,6 +4225,11 @@ export class ChatOrchestrator {
 
       // 6. Tool loop — stream LLM, execute tools, continue until no tool calls
       let toolIteration = 0;
+      /**
+       * Один принудительный повтор после переполнения контекста за ход.
+       * Второй `context_length` (или неудачное сжатие) — штатная ошибка.
+       */
+      let overflowRecoveryAttempted = false;
       const currentMessages: LLMMessage[] = [...baseLlmMessages];
       // ADR-115 (outbound): медиа-части ответа хода — их складывает тул
       // `send_attachment`, а к финальному сообщению добавляет финализация
@@ -4555,6 +4644,52 @@ export class ChatOrchestrator {
             });
           }
         } catch (e) {
+          const rawErrorText = e instanceof Error ? e.message : String(e);
+          // Переполнение контекста: один принудительный повтор после сжатия.
+          // System prompt не пересобираем — чекпоинт и хвост идут в `stepMessages`.
+          const isOverflow = e instanceof ContextLengthExceededError
+            || classifyLlmError(rawErrorText) === 'context_length';
+          if (isOverflow && !overflowRecoveryAttempted) {
+            overflowRecoveryAttempted = true;
+            // Частичный текст уже записан — порядок не восстановить безопасно.
+            if (draft.ref() === null) {
+              const recovered = await this._tryOverflowRecovery({
+                session,
+                author,
+                effectiveAgentRole,
+                providerName,
+                model: provider.model || modelName || session.settings.model || '',
+                currentMessages,
+                baseLlmMessages,
+              });
+              if (recovered) {
+                await draft.dispose();
+                // ADR-118 §4: на каждый `step.started` — `step.finished`.
+                // Неудавшийся шаг закрываем ошибкой, повтор идёт с новым
+                // индексом (без двух шагов с одинаковым `stepIndex`).
+                publishStepFinished(publishChunk, {
+                  turnId,
+                  stepIndex,
+                  messageId: stepMessageId,
+                  status: 'error',
+                  ...(iterationUsage ? { usage: iterationUsage } : {}),
+                  provider: providerName,
+                  ...(chunkModel ? { model: chunkModel } : {}),
+                  ...(effectiveAgentRole ? { agentRole: effectiveAgentRole } : {}),
+                });
+                toolIteration += 1;
+                // Следующая итерация должна оценивать уже сжатый промпт.
+                lastIterationPromptChars = this._estimatePromptChars(
+                  currentMessages,
+                  finalSystemPrompt,
+                  tools as Record<string, unknown>[] | undefined,
+                );
+                warning('ORCHESTRATOR', 'Контекст сжатия применён после context_length — повтор шага');
+                continue;
+              }
+            }
+          }
+
           const errMsg = String(e);
           warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 

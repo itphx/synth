@@ -804,11 +804,37 @@
   `context_window_exceeded`/`context_window_tokens`). Неизвестное окно (`0`) не блокирует никогда —
   это предохранитель, а не бюджетирование.
   **Дефолты оптимизации контекста новых сессий (`context.defaults`).** Instance-wide значения
-  (оптимизация, суммаризация, скользящее окно) резолвит `resolveContextDefaults`
+  резолвит `resolveContextDefaults`
   (runtime `settings.json`/PG > `config.yaml` > дефолты схемы; env нет) — `SessionManager` читает
   live-геттер `contextDefaults` **при создании** сессии, поэтому `/api/v2/settings/context-defaults`
   применяется без рестарта. Явные `settings` запроса приоритетнее, существующие сессии не меняются;
-  без опции `SessionManagerOptions.contextDefaults` поведение прежнее (литералы).
+  без опции `SessionManagerOptions.contextDefaults` поведение прежнее (литералы). Режим —
+  `contextOptimization` (`none`|`sliding_window`|`summarization`|`compaction`, взаимоисключающие),
+  дефолт новых сессий — `compaction`.
+  **Сжатие контекста: два режима (ADR-119).** `summarization` — итоги беседы,
+  `compaction` — рабочее состояние по коду/проекту; движок — `engine/context/optimizer.ts`
+  (`effectiveMode` учитывает легаси `none`+`summarizationEnabled`, `shouldCompress`,
+  `prepareCompression`/`completeCompression`, `canCompress`). Хвост — в **токенах**
+  (`summarizationKeepTokens` 5000, `compactionKeepTokens` 15000), а не в сообщениях; суммаризация
+  триггерится по `messages` (N реплик) или `tokens` (% окна), компактизация — только по токенам:
+  `окно − max((100 − pct)% окна, 16000)`, при резерве ≥ окна и неизвестном окне авто-триггер
+  выключен (ручной запуск/overflow работают). Оценка — `input+output` последнего assistant той же
+  пары провайдер/модель + оценка последующих; измерение до последнего SUMMARY не используется.
+  Сжатие — LLM-вызов через `GatewayProvider` (ADR-036), резюме — сообщение `role: summary` с
+  `summaryOf` и `metadata {type:'auto_summary', mode, keepFrom}`; покрытые сообщения получают
+  `disabled` + `metadata.compactedBy` (pinned не трогаются, хвост остаётся живым). Для LLM
+  `getMessagesForLlm` отдаёт `[SUMMARY] + живой хвост`, а `phases/process-setup.ts` вынимает
+  SUMMARY в системный блок `summary` (volatile, order 30, ADR-070) — история = хвост + новые.
+  Промпты — `prompts/system/{SUMMARIZER,COMPACTOR}.{ru,en}.md`; валидация: компактизация ≥2
+  заголовков шаблона, суммаризация — непустой ответ, один nudge-повтор. Бюджет запроса сжатия —
+  окно минус `max(4000, 20% окна)`, при нехватке — уровни усечения от старых к новым (tool-капы
+  300→80, аргументы 120→80), последний user-ход не выбрасывается. Overflow
+  (`ContextLengthExceededError`/`classifyLlmError === 'context_length'`) — **одно** принудительное
+  сжатие за ход, повтор шага с synthetic `[CONTEXT CHECKPOINT]` + хвост + текущий ход
+  (`engine/orchestrator/overflow.ts`, пары tool-вызовов проверяются); второй overflow — штатная
+  ошибка, при `none`/`sliding_window` сжатие не запускается. Событие
+  `context.summarization_applied` (`reason`, `mode`, `covered_indices`, `keep_from`, `usage`) —
+  в обычном пути и при overflow; ожидание — `context.summarization_pending`.
   **Лимиты заметок сессии (`context.stickyNotes`).** Instance-wide ограничения `maxCount`/`maxChars`
   (дефолты 50/2000) резолвит `resolveStickyNotesLimits` (runtime `settings.json`/PG > `config.yaml` >
   схема; env нет), опция `getStickyNoteLimits` core-фабрики сессий читается на каждую операцию —
@@ -926,7 +952,7 @@
   (`shell-guard.ts`: `\` в POSIX-shell — экранирование/регэксп, а не разделитель пути, поэтому
   regex-аргументы (`grep -v '\.sample$'`) путями не считаются, а Windows-пути распознаются явно —
   `C:\…`, `\\server\share`); `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075; исключения — `WORKSPACE_FREE_TOOLS`: `ssh_keys_list`, ресурс инстанса, ADR-076); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
-- `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
+- `engine/context/*` — `ContextBuilder`, `ContextOptimizer` (два режима сжатия — суммаризация и компактизация, ADR-119), `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   `ContextConfig.getMaxStepsPrompt(language)` — требование «только текст» для
   финального шага-отчёта по лимиту шагов — у **саб-агента** (`run-cycle.ts`) и **основного** агента
   (`orchestrator.ts`; общий модуль сборки — `engine/llm/max-steps.ts`, `prompts/system/MAX_STEPS.{lang}.md`;

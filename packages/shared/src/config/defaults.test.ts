@@ -76,15 +76,18 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('context.defaults по умолчанию: прежние значения SessionManager', () => {
+  it('context.defaults по умолчанию: сжатие включено (compaction)', () => {
     expect(defaultConfig.context.defaults).toEqual({
-      contextOptimization: 'none',
-      summarizationEnabled: false,
+      contextOptimization: 'compaction',
+      summarizationEnabled: true,
       summarizationTriggerMode: 'messages',
       summarizeAfterN: 10,
       summarizeTokenThreshold: 50,
       summarizationHeadMessages: 2,
       summarizationTailMessages: 3,
+      summarizationKeepTokens: 5000,
+      compactionKeepTokens: 15000,
+      compactionTokenThreshold: 85,
       slidingWindowMode: 'messages',
       slidingWindowMessageLimit: 10,
       slidingWindowTokenThreshold: 80,

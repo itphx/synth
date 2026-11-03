@@ -24,8 +24,9 @@ type ContextOverrides = Partial<{
   sumMode: 'messages' | 'tokens'
   afterN: number
   tokenThreshold: number
-  headMessages: number
-  tailMessages: number
+  sumKeepTokens: number
+  compKeepTokens: number
+  compThreshold: number
 }>
 
 export function ContextTab() {
@@ -43,35 +44,49 @@ export function ContextTab() {
 
   const [windowEnabled, setWindowEnabled] = useState(false)
   const [sumEnabled, setSumEnabled] = useState(false)
+  const [compEnabled, setCompEnabled] = useState(false)
   const [swMode, setSwMode] = useState<'messages' | 'tokens'>('messages')
   const [swMessageLimit, setSwMessageLimit] = useState(10)
   const [swTokenThreshold, setSwTokenThreshold] = useState(80)
   const [sumMode, setSumMode] = useState<'messages' | 'tokens'>('messages')
   const [afterN, setAfterN] = useState(10)
   const [tokenThreshold, setTokenThreshold] = useState(50)
-  const [headMessages, setHeadMessages] = useState(2)
-  const [tailMessages, setTailMessages] = useState(3)
+  const [sumKeepTokens, setSumKeepTokens] = useState(5000)
+  const [compKeepTokens, setCompKeepTokens] = useState(15000)
+  const [compThreshold, setCompThreshold] = useState(85)
 
   useEffect(() => {
     if (!sessionId) return
     synthApi.getOptimization(sessionId)
       .then((data) => {
-        const mode = data.context_optimization
+        // Legacy-сессия: `summarization_enabled: true` при `context_optimization:
+        // 'none'` — сжатие фактически включено суммаризацией. Показываем
+        // суммаризацию, иначе панель рисует «всё выключено», а движок сжимает.
+        const legacySum = data.context_optimization === 'none' && data.summarization_enabled === true
+        const mode = legacySum ? 'summarization' : data.context_optimization
         setWindowEnabled(mode === 'sliding_window')
         setSumEnabled(mode === 'summarization')
+        setCompEnabled(mode === 'compaction')
         setSwMode((data.sliding_window_mode as 'messages' | 'tokens') || 'messages')
         setSwMessageLimit(data.sliding_window_message_limit)
         setSwTokenThreshold(data.sliding_window_token_threshold)
         setSumMode((data.summarization_trigger_mode as 'messages' | 'tokens') || 'messages')
         setAfterN(data.summarize_after_n)
         setTokenThreshold(data.summarize_token_threshold)
-        setHeadMessages(data.summarization_head_messages)
-        setTailMessages(data.summarization_tail_messages)
+        setSumKeepTokens(data.summarization_keep_tokens ?? 5000)
+        setCompKeepTokens(data.compaction_keep_tokens ?? 15000)
+        setCompThreshold(data.compaction_token_threshold ?? 85)
       })
       .catch(() => {})
   }, [sessionId])
 
-  const mode = sumEnabled ? 'summarization' : windowEnabled ? 'sliding_window' : 'none'
+  const mode = compEnabled
+    ? 'compaction'
+    : sumEnabled
+      ? 'summarization'
+      : windowEnabled
+        ? 'sliding_window'
+        : 'none'
 
   const handleSave = async (newMode: string, overrides: ContextOverrides = {}, rollback?: () => void) => {
     if (!sessionId) return
@@ -82,12 +97,16 @@ export function ContextTab() {
         sliding_window_mode: overrides.swMode ?? swMode,
         sliding_window_message_limit: overrides.swMessageLimit ?? swMessageLimit,
         sliding_window_token_threshold: overrides.swTokenThreshold ?? swTokenThreshold,
-        summarization_enabled: true,
+        // Legacy-флаг: любое сжатие (окно/суммаризация/компактизация) держит его
+        // включённым; выключается только при полном отключении оптимизации —
+        // иначе правка числа в legacy-сессии гасила сжатие.
+        summarization_enabled: newMode !== 'none',
         summarization_trigger_mode: overrides.sumMode ?? sumMode,
         summarize_after_n: overrides.afterN ?? afterN,
         summarize_token_threshold: overrides.tokenThreshold ?? tokenThreshold,
-        summarization_head_messages: overrides.headMessages ?? headMessages,
-        summarization_tail_messages: overrides.tailMessages ?? tailMessages,
+        summarization_keep_tokens: overrides.sumKeepTokens ?? sumKeepTokens,
+        compaction_keep_tokens: overrides.compKeepTokens ?? compKeepTokens,
+        compaction_token_threshold: overrides.compThreshold ?? compThreshold,
       }),
       onSuccess: (result) => {
         useSessionsStore.setState((s) => ({
@@ -100,31 +119,28 @@ export function ContextTab() {
     })
   }
 
-  const toggleWindow = async () => {
+  const toggleMode = async (target: 'window' | 'sum' | 'comp') => {
     if (!sessionId) return
-    const prevWindow = windowEnabled
-    const prevSum = sumEnabled
-    const next = !windowEnabled
-    setWindowEnabled(next)
-    if (next) setSumEnabled(false)
-    const newMode = next ? 'sliding_window' : sumEnabled ? 'summarization' : 'none'
+    const prev = { window: windowEnabled, sum: sumEnabled, comp: compEnabled }
+    const next = {
+      window: target === 'window' ? !windowEnabled : false,
+      sum: target === 'sum' ? !sumEnabled : false,
+      comp: target === 'comp' ? !compEnabled : false,
+    }
+    setWindowEnabled(next.window)
+    setSumEnabled(next.sum)
+    setCompEnabled(next.comp)
+    const newMode = next.comp
+      ? 'compaction'
+      : next.sum
+        ? 'summarization'
+        : next.window
+          ? 'sliding_window'
+          : 'none'
     await handleSave(newMode, {}, () => {
-      setWindowEnabled(prevWindow)
-      setSumEnabled(prevSum)
-    })
-  }
-
-  const toggleSum = async () => {
-    if (!sessionId) return
-    const prevWindow = windowEnabled
-    const prevSum = sumEnabled
-    const next = !sumEnabled
-    setSumEnabled(next)
-    if (next) setWindowEnabled(false)
-    const newMode = next ? 'summarization' : windowEnabled ? 'sliding_window' : 'none'
-    await handleSave(newMode, {}, () => {
-      setWindowEnabled(prevWindow)
-      setSumEnabled(prevSum)
+      setWindowEnabled(prev.window)
+      setSumEnabled(prev.sum)
+      setCompEnabled(prev.comp)
     })
   }
 
@@ -196,7 +212,7 @@ export function ContextTab() {
       <Block
         title={t('rightPanel.context.optimization.sliding_window')}
         enabled={windowEnabled}
-        onToggle={toggleWindow}
+        onToggle={() => void toggleMode('window')}
         pending={isPending(CONTEXT_SAVE_KEY)}
       >
         <SectionHeader label={t('rightPanel.context.sectionWindowSize')} />
@@ -243,7 +259,7 @@ export function ContextTab() {
       <Block
         title={t('rightPanel.context.optimization.summarization')}
         enabled={sumEnabled}
-        onToggle={toggleSum}
+        onToggle={() => void toggleMode('sum')}
         pending={isPending(CONTEXT_SAVE_KEY)}
       >
         <SectionHeader label={t('rightPanel.context.triggersGroup')} />
@@ -283,29 +299,55 @@ export function ContextTab() {
         />
         <SectionHeader label={t('rightPanel.context.compressionGroup')} />
         <NumberSetting
-          label={t('rightPanel.context.headMessages')}
-          value={headMessages}
+          label={t('rightPanel.context.summarizationKeepTokens')}
+          value={sumKeepTokens}
           onChange={(v) => {
-            const prev = headMessages
-            setHeadMessages(v)
-            handleSave(mode, { headMessages: v }, () => setHeadMessages(prev))
+            const prev = sumKeepTokens
+            setSumKeepTokens(v)
+            handleSave(mode, { sumKeepTokens: v }, () => setSumKeepTokens(prev))
           }}
-          min={1}
-          max={20}
-        />
-        <NumberSetting
-          label={t('rightPanel.context.tailMessages')}
-          value={tailMessages}
-          onChange={(v) => {
-            const prev = tailMessages
-            setTailMessages(v)
-            handleSave(mode, { tailMessages: v }, () => setTailMessages(prev))
-          }}
-          min={1}
-          max={20}
+          min={0}
+          max={50000}
         />
         <p className="text-xs text-muted-foreground leading-relaxed">
           {t('rightPanel.context.hint.summarization')}
+        </p>
+      </Block>
+
+      {/* Компактизация */}
+      <Block
+        title={t('rightPanel.context.optimization.compaction')}
+        enabled={compEnabled}
+        onToggle={() => void toggleMode('comp')}
+        pending={isPending(CONTEXT_SAVE_KEY)}
+      >
+        <SectionHeader label={t('rightPanel.context.triggersGroup')} />
+        <NumberSetting
+          label={t('rightPanel.context.compactionThreshold')}
+          value={compThreshold}
+          onChange={(v) => {
+            const prev = compThreshold
+            setCompThreshold(v)
+            handleSave(mode, { compThreshold: v }, () => setCompThreshold(prev))
+          }}
+          min={1}
+          max={100}
+          suffix="%"
+        />
+        <SectionHeader label={t('rightPanel.context.compressionGroup')} />
+        <NumberSetting
+          label={t('rightPanel.context.compactionKeepTokens')}
+          value={compKeepTokens}
+          onChange={(v) => {
+            const prev = compKeepTokens
+            setCompKeepTokens(v)
+            handleSave(mode, { compKeepTokens: v }, () => setCompKeepTokens(prev))
+          }}
+          min={0}
+          max={100000}
+        />
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {t('rightPanel.context.hint.compaction')}
         </p>
       </Block>
     </PanelTab>

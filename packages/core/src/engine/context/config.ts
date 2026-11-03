@@ -570,6 +570,15 @@ export class ContextConfig implements ContextFileRepository {
     return this._readPrompt('SUMMARIZER', 'system', language) ?? '';
   }
 
+  /**
+   * Профиль `compaction`: рабочее состояние по коду/проекту (точные пути,
+   * команды, ошибки, workflow-состояние). Файлы:
+   * prompts/system/COMPACTOR.{lang}.md (только локализованные).
+   */
+  getCompactorPrompt(language = 'ru'): string {
+    return this._readPrompt('COMPACTOR', 'system', language) ?? '';
+  }
+
   getUserContextTemplate(language = 'ru'): string {
     return this._readPrompt('USER_CONTEXT', 'system', language) ?? '';
   }

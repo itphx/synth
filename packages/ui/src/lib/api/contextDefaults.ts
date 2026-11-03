@@ -1,8 +1,8 @@
 // context-defaults: значения по умолчанию для новых сессий.
 //
 // Настройка уровня инстанса (`GET/PUT/DELETE /api/v2/settings/context-defaults`):
-// стратегия оптимизации контекста и параметры автосуммаризации / скользящего
-// окна, которые получают новые сессии. Существующие сессии настройку не
+// стратегия оптимизации контекста и параметры автосуммаризации / компактизации /
+// скользящего окна, которые получают новые сессии. Существующие сессии настройку не
 // подхватывают — у них свои значения в настройках сессии.
 //
 // UI-правило: чтение — строгое (`fetchContextDefaults` бросает ошибку), админ-
@@ -12,7 +12,11 @@ import { BASE_URL, fetchJSON } from './base'
 
 // `sticky_notes` — legacy-значение сессий: в дефолтах инстанса и UI не
 // предлагается, заметки работают независимо от стратегии.
-export type ContextOptimizationStrategy = 'none' | 'sliding_window' | 'summarization'
+export type ContextOptimizationStrategy =
+  | 'none'
+  | 'sliding_window'
+  | 'summarization'
+  | 'compaction'
 
 export type SummarizationTriggerMode = 'messages' | 'tokens'
 export type SlidingWindowMode = 'messages' | 'tokens'
@@ -26,6 +30,12 @@ export interface ContextDefaultsValues {
   summarizeTokenThreshold: number
   summarizationHeadMessages: number
   summarizationTailMessages: number
+  /** Хвост диалога, остающийся дословным при суммаризации (токены). */
+  summarizationKeepTokens: number
+  /** Хвост диалога, остающийся дословным при компактизации (токены). */
+  compactionKeepTokens: number
+  /** Порог запуска компактизации — заполнение окна в процентах (1..100). */
+  compactionTokenThreshold: number
   slidingWindowMode: SlidingWindowMode
   slidingWindowMessageLimit: number
   /** Порог токенов в процентах (1..100). */
@@ -50,6 +60,7 @@ export const CONTEXT_OPTIMIZATION_STRATEGIES: readonly ContextOptimizationStrate
   'none',
   'sliding_window',
   'summarization',
+  'compaction',
 ]
 
 export const SUMMARIZATION_TRIGGER_MODES: readonly SummarizationTriggerMode[] = [
@@ -68,6 +79,9 @@ export const DEFAULT_CONTEXT_DEFAULTS: ContextDefaultsValues = {
   summarizeTokenThreshold: 50,
   summarizationHeadMessages: 2,
   summarizationTailMessages: 3,
+  summarizationKeepTokens: 5000,
+  compactionKeepTokens: 15000,
+  compactionTokenThreshold: 85,
   slidingWindowMode: 'messages',
   slidingWindowMessageLimit: 10,
   slidingWindowTokenThreshold: 80,
@@ -110,6 +124,13 @@ function percentage(value: unknown, fallback: number): number {
     : fallback
 }
 
+/** Токены: целое ≥ 0 (`0` — допустимое значение, хвост не сохраняется). */
+function nonNegativeInteger(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : fallback
+}
+
 function boolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
 }
@@ -146,6 +167,18 @@ function normalizeValues(raw: unknown): ContextDefaultsValues {
     summarizationTailMessages: positiveInteger(
       body.summarizationTailMessages,
       DEFAULT_CONTEXT_DEFAULTS.summarizationTailMessages,
+    ),
+    summarizationKeepTokens: nonNegativeInteger(
+      body.summarizationKeepTokens,
+      DEFAULT_CONTEXT_DEFAULTS.summarizationKeepTokens,
+    ),
+    compactionKeepTokens: nonNegativeInteger(
+      body.compactionKeepTokens,
+      DEFAULT_CONTEXT_DEFAULTS.compactionKeepTokens,
+    ),
+    compactionTokenThreshold: percentage(
+      body.compactionTokenThreshold,
+      DEFAULT_CONTEXT_DEFAULTS.compactionTokenThreshold,
     ),
     slidingWindowMode: isSlidingMode(body.slidingWindowMode)
       ? body.slidingWindowMode

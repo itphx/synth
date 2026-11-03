@@ -1067,13 +1067,16 @@ describe('resolveContextDefaults (context.defaults)', () => {
     expect(resolved.source).toBe('default');
     expect(resolved.defaultsSource).toBe('default');
     expect(resolved.value).toEqual({
-      contextOptimization: 'none',
-      summarizationEnabled: false,
+      contextOptimization: 'compaction',
+      summarizationEnabled: true,
       summarizationTriggerMode: 'messages',
       summarizeAfterN: 10,
       summarizeTokenThreshold: 50,
       summarizationHeadMessages: 2,
       summarizationTailMessages: 3,
+      summarizationKeepTokens: 5000,
+      compactionKeepTokens: 15000,
+      compactionTokenThreshold: 85,
       slidingWindowMode: 'messages',
       slidingWindowMessageLimit: 10,
       slidingWindowTokenThreshold: 80,

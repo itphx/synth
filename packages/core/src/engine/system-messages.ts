@@ -455,6 +455,13 @@ export const SYSTEM_MESSAGES = {
   'command.summary_enqueued': 'Summarization started',
   'command.summary_unavailable': 'Not enough active messages to summarize',
 
+  // --- Сжатие контекста (summarization / compaction) ---
+  'context.compression_empty': 'No messages to compress',
+  'context.compression_failed': 'Context compression failed ({mode}): {reason}',
+  'context.compression_template': 'Compression response does not match the required template',
+  'context.compression_output_limit': 'Compression response was cut off by the output limit',
+  'context.summary_applied': 'Context compacted ({mode})',
+
   // --- Inline shell (ADR-046 §7.4) ---
   'command.inline_shell_disabled': 'Inline shell is disabled',
   'command.inline_shell_denied': 'Inline shell command "!`{command}`" denied: {reason}',

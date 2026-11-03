@@ -56,18 +56,35 @@ export type SessionMode = (typeof SESSION_MODES)[number];
  */
 export interface ContextDefaults {
   /**
+   * Режим сжатия контекста:
+   * - `summarization` — итоги беседы (обобщённые выводы, в т.ч. по tool-вызовам);
+   * - `compaction` — рабочее состояние по коду/проекту (детали, пути, команды);
+   * - `none`/`sliding_window` — без сжатия в SUMMARY.
+   *
    * `sticky_notes` — legacy-значение сессий, в дефолтах и UI не предлагается:
    * заметки работают независимо от стратегии.
    */
-  contextOptimization: 'none' | 'sliding_window' | 'summarization';
+  contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'compaction';
   summarizationEnabled: boolean;
   summarizationTriggerMode: 'messages' | 'tokens';
   /** Число сообщений до запуска суммаризации. */
   summarizeAfterN: number;
   /** Порог суммаризации в процентах окна модели (1..100). */
   summarizeTokenThreshold: number;
+  /**
+   * @deprecated Новый движок сжатия не использует head/tail: граница хвоста
+   * считается по токенам (`summarizationKeepTokens`/`compactionKeepTokens`).
+   * Поле оставлено для обратной совместимости схем/сохранённых настроек.
+   */
   summarizationHeadMessages: number;
+  /** @deprecated См. `summarizationHeadMessages`. */
   summarizationTailMessages: number;
+  /** Хвост дословно для режима суммаризации (токены); `0` — без хвоста. */
+  summarizationKeepTokens: number;
+  /** Хвост дословно для режима компактизации (токены). */
+  compactionKeepTokens: number;
+  /** Порог компактизации в процентах окна модели (1..100). */
+  compactionTokenThreshold: number;
   slidingWindowMode: 'messages' | 'tokens';
   slidingWindowMessageLimit: number;
   /** Порог скользящего окна в процентах окна модели (1..100). */
@@ -146,7 +163,7 @@ export interface SessionSettings {
    * валидироваться), в дефолтах и UI не предлагается: заметки работают
    * независимо от стратегии.
    */
-  contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
+  contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'compaction' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
   slidingWindowMessageLimit: number;
   slidingWindowTokenThreshold: number;
@@ -154,8 +171,16 @@ export interface SessionSettings {
   summarizationTriggerMode: 'messages' | 'tokens';
   summarizeAfterN: number;
   summarizeTokenThreshold: number;
+  /** @deprecated Новый движок сжатия не использует head/tail (см. `summarizationKeepTokens`). */
   summarizationHeadMessages: number;
+  /** @deprecated См. `summarizationHeadMessages`. */
   summarizationTailMessages: number;
+  /** Хвост дословно для режима суммаризации (токены); `0` — без хвоста. */
+  summarizationKeepTokens: number;
+  /** Хвост дословно для режима компактизации (токены). */
+  compactionKeepTokens: number;
+  /** Порог компактизации в процентах окна модели (1..100). */
+  compactionTokenThreshold: number;
   showInterview: boolean;
   websocketEnabled: boolean;
   language?: string;

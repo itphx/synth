@@ -50,11 +50,13 @@ const OPTIMIZATION = {
   sliding_window_mode: 'messages',
   sliding_window_message_limit: 10,
   sliding_window_token_threshold: 80,
+  summarization_enabled: false,
   summarization_trigger_mode: 'messages',
   summarize_after_n: 10,
   summarize_token_threshold: 50,
-  summarization_head_messages: 2,
-  summarization_tail_messages: 3,
+  summarization_keep_tokens: 5000,
+  compaction_keep_tokens: 15000,
+  compaction_token_threshold: 85,
 }
 
 /** Установить значение контролируемого input так, как это делает React. */
@@ -112,6 +114,10 @@ describe('ContextTab — базовая отрисовка', () => {
     expect(container.textContent).toContain(enDict['rightPanel.context.stickyNotes'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sliding_window'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.summarization'])
+    expect(container.textContent).toContain(enDict['rightPanel.context.optimization.compaction'])
+    expect(container.textContent).toContain(enDict['rightPanel.context.summarizationKeepTokens'])
+    expect(container.textContent).toContain(enDict['rightPanel.context.compactionKeepTokens'])
+    expect(container.textContent).toContain(enDict['rightPanel.context.compactionThreshold'])
   })
 
   it('тумблеры сохраняют сразу: во время сохранения — pending-индикация без «запрета»', async () => {
@@ -123,7 +129,7 @@ describe('ContextTab — базовая отрисовка', () => {
 
     const switchAt = (i: number) =>
       container.querySelectorAll<HTMLButtonElement>('button[role="switch"]')[i]
-    expect(container.querySelectorAll('button[role="switch"]')).toHaveLength(2)
+    expect(container.querySelectorAll('button[role="switch"]')).toHaveLength(3)
 
     await act(async () => {
       switchAt(0).click()
@@ -222,6 +228,179 @@ describe('ContextTab — базовая отрисовка', () => {
     expect(switchAt(1).getAttribute('aria-checked')).toBe('false')
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
+    )
+  })
+})
+
+describe('ContextTab — режимы сжатия контекста', () => {
+  const switches = (container: HTMLElement) =>
+    [...container.querySelectorAll<HTMLButtonElement>('button[role="switch"]')]
+  const numbers = (container: HTMLElement) =>
+    [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')]
+
+  it('загружает режим compaction: включён третий тумблер, значения из ответа', async () => {
+    mocks.getOptimization.mockResolvedValue({
+      ...OPTIMIZATION,
+      context_optimization: 'compaction',
+      compaction_keep_tokens: 18000,
+      compaction_token_threshold: 90,
+    })
+    const container = await renderContext()
+
+    expect(switches(container).map((s) => s.getAttribute('aria-checked'))).toEqual([
+      'false',
+      'false',
+      'true',
+    ])
+    // [0..1] окно, [2..3] триггеры суммаризации, [4] хвост суммаризации,
+    // [5] порог компактизации, [6] хвост компактизации.
+    expect(numbers(container).map((i) => i.value)).toEqual([
+      '10',
+      '80',
+      '10',
+      '50',
+      '5000',
+      '90',
+      '18000',
+    ])
+  })
+
+  it('включение компактизации выключает остальные режимы, summarization_enabled=true', async () => {
+    mocks.getOptimization.mockResolvedValue({
+      ...OPTIMIZATION,
+      context_optimization: 'summarization',
+    })
+    const container = await renderContext()
+    expect(switches(container).map((s) => s.getAttribute('aria-checked'))).toEqual([
+      'false',
+      'true',
+      'false',
+    ])
+
+    await act(async () => {
+      switches(container)[2].click()
+    })
+
+    expect(switches(container).map((s) => s.getAttribute('aria-checked'))).toEqual([
+      'false',
+      'false',
+      'true',
+    ])
+    expect(mocks.updateOptimization).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        context_optimization: 'compaction',
+        summarization_enabled: true,
+        summarization_keep_tokens: 5000,
+        compaction_keep_tokens: 15000,
+        compaction_token_threshold: 85,
+      }),
+    )
+  })
+
+  it('выключение суммаризации даёт режим none и summarization_enabled=false', async () => {
+    mocks.getOptimization.mockResolvedValue({
+      ...OPTIMIZATION,
+      context_optimization: 'summarization',
+    })
+    const container = await renderContext()
+
+    await act(async () => {
+      switches(container)[1].click()
+    })
+
+    expect(mocks.updateOptimization).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        context_optimization: 'none',
+        summarization_enabled: false,
+      }),
+    )
+    expect(switches(container).map((s) => s.getAttribute('aria-checked'))).toEqual([
+      'false',
+      'false',
+      'false',
+    ])
+  })
+
+  it('включение скользящего окна держит legacy-флаг сжатия включённым', async () => {
+    const container = await renderContext()
+
+    await act(async () => {
+      switches(container)[0].click()
+    })
+
+    expect(mocks.updateOptimization).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        context_optimization: 'sliding_window',
+        summarization_enabled: true,
+      }),
+    )
+  })
+
+  it('legacy-сессия (none + summarization_enabled) показывается как суммаризация', async () => {
+    mocks.getOptimization.mockResolvedValue({
+      ...OPTIMIZATION,
+      context_optimization: 'none',
+      summarization_enabled: true,
+    })
+    const container = await renderContext()
+
+    expect(switches(container).map((s) => s.getAttribute('aria-checked'))).toEqual([
+      'false',
+      'true',
+      'false',
+    ])
+  })
+
+  it('правка числа в legacy-сессии не выключает сжатие', async () => {
+    mocks.getOptimization.mockResolvedValue({
+      ...OPTIMIZATION,
+      context_optimization: 'none',
+      summarization_enabled: true,
+    })
+    const container = await renderContext()
+
+    await act(async () => {
+      setNativeValue(numbers(container)[4], '7000')
+    })
+
+    expect(mocks.updateOptimization).toHaveBeenLastCalledWith(
+      's1',
+      expect.objectContaining({
+        context_optimization: 'summarization',
+        summarization_enabled: true,
+        summarization_keep_tokens: 7000,
+      }),
+    )
+  })
+
+  it('поля сжатия сохраняются сразу: хвост суммаризации, порог и хвост компактизации', async () => {
+    const container = await renderContext()
+
+    await act(async () => {
+      setNativeValue(numbers(container)[4], '7000')
+    })
+    expect(mocks.updateOptimization).toHaveBeenLastCalledWith(
+      's1',
+      expect.objectContaining({ summarization_keep_tokens: 7000 }),
+    )
+
+    await act(async () => {
+      setNativeValue(numbers(container)[5], '90')
+    })
+    expect(mocks.updateOptimization).toHaveBeenLastCalledWith(
+      's1',
+      expect.objectContaining({ compaction_token_threshold: 90 }),
+    )
+
+    await act(async () => {
+      setNativeValue(numbers(container)[6], '20000')
+    })
+    expect(mocks.updateOptimization).toHaveBeenLastCalledWith(
+      's1',
+      expect.objectContaining({ compaction_keep_tokens: 20000 }),
     )
   })
 })

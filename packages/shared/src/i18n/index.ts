@@ -348,6 +348,12 @@ export const ENGINE_MESSAGE_KEYS = [
   'command.skills_empty',
   'command.summary_enqueued',
   'command.summary_unavailable',
+  // --- Сжатие контекста (summarization / compaction) ---
+  'context.compression_empty',
+  'context.compression_failed',
+  'context.compression_template',
+  'context.compression_output_limit',
+  'context.summary_applied',
   // --- Inline shell (ADR-046 §7.4) ---
   'command.inline_shell_disabled',
   'command.inline_shell_denied',
@@ -857,6 +863,12 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'command.skills_empty': [],
   'command.summary_enqueued': [],
   'command.summary_unavailable': [],
+  // --- Сжатие контекста (summarization / compaction) ---
+  'context.compression_empty': [],
+  'context.compression_failed': ["mode","reason"],
+  'context.compression_template': [],
+  'context.compression_output_limit': [],
+  'context.summary_applied': ["mode"],
   // --- Inline shell (ADR-046 §7.4) ---
   'command.inline_shell_disabled': [],
   'command.inline_shell_denied': ["command","reason"],

@@ -299,6 +299,10 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
+  getCompactorPrompt(): string {
+    return '';
+  }
+
   getUserContextTemplate(): string {
     return '';
   }

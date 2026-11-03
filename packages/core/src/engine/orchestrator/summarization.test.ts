@@ -214,7 +214,7 @@ describe('handleSummarization', () => {
     SummaryProvider.chunks = [
       { content: 'часть ', isFinal: false, model: 'summary-model' },
       { content: 'и середина', isFinal: false, model: 'summary-model' },
-      { content: 'итог всей истории', isFinal: true, usage: USAGE, model: 'summary-model', reasoning: 'размышление' },
+      { content: 'итог всей истории диалога', isFinal: true, usage: USAGE, model: 'summary-model', reasoning: 'размышление' },
     ];
     const sessionId = await makeSession([userMessage('a'), userMessage('b', true), userMessage('c')]);
     const session = (await sessionManager.getSession(sessionId))!;
@@ -243,17 +243,18 @@ describe('handleSummarization', () => {
     const stored = (await sessionManager.getSession(sessionId))!;
     const summary = stored.messages.find((m) => m.role === MessageRole.SUMMARY)!;
     expect(summary).toMatchObject({
-      content: 'итог всей истории',
+      content: 'итог всей истории диалога',
       agentRole: 'summary',
       reasoning: 'размышление',
       summaryOf: [0, 1],
-      metadata: { status: 'completed' },
+      metadata: { status: 'completed', type: 'auto_summary', mode: 'summarization' },
     });
     expect(events.filter((e) => e.type === 'message.added')).toHaveLength(0);
 
     // Засуммаризированные (indices [0,1]) отключены, pinned — нет; сообщения
     // вне indices не трогаются
     expect(stored.messages[0]!.disabled).toBe(true);
+    expect(stored.messages[0]!.metadata?.compactedBy).toBe('summarization');
     expect(stored.messages[1]!.disabled).toBe(false);
     expect(stored.messages[2]!.disabled).toBe(false);
 
@@ -285,7 +286,7 @@ describe('handleSummarization', () => {
   });
 
   it('стоимость добавляется в step.finished только при известных ценах', async () => {
-    SummaryProvider.chunks = [{ content: 'итог', isFinal: true, usage: USAGE, model: 'summary-model' }];
+    SummaryProvider.chunks = [{ content: 'итог всей истории диалога', isFinal: true, usage: USAGE, model: 'summary-model' }];
     const sessionId = await makeSession([userMessage('a')]);
     const session = (await sessionManager.getSession(sessionId))!;
 
@@ -397,7 +398,7 @@ describe('handleSummarization', () => {
   });
 
   it('canSummarize пересчитывается после прогона', async () => {
-    SummaryProvider.chunks = [{ content: 'итог', isFinal: true, usage: USAGE }];
+    SummaryProvider.chunks = [{ content: 'итог всей истории диалога', isFinal: true, usage: USAGE }];
     const sessionId = await makeSession([userMessage('a')]);
     const session = (await sessionManager.getSession(sessionId))!;
     const deps = makeDeps({ optimizer: makeOptimizer({ canSummarize: false }) });
@@ -411,7 +412,7 @@ describe('handleSummarization', () => {
   });
 
   it('тайминги шага в step.finished считаются по фактическим чанкам', async () => {
-    SummaryProvider.chunks = [{ content: 'итог', isFinal: true, usage: USAGE }];
+    SummaryProvider.chunks = [{ content: 'итог всей истории диалога', isFinal: true, usage: USAGE }];
     const sessionId = await makeSession([userMessage('a')]);
     const session = (await sessionManager.getSession(sessionId))!;
 
@@ -424,8 +425,109 @@ describe('handleSummarization', () => {
     expect(timings.chunks).toBe(1);
   });
 
+  it('keepFrom: покрыт только префикс, хвост остаётся живым, metadata.mode/keepFrom', async () => {
+    const content = '## Objective\nсделать\n\n## Work State\n- готово';
+    SummaryProvider.chunks = [{ content, isFinal: true, usage: USAGE, model: 'summary-model' }];
+    const sessionId = await makeSession([userMessage('a'), userMessage('b'), userMessage('c')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+    const deps = makeDeps({
+      optimizer: {
+        prepareCompression: () => ({
+          mode: 'compaction',
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'm', type: 'summary-provider' }),
+          llmMessages: [] as LLMMessage[],
+          systemPrompt: 'COMPACTOR',
+          messagesToCompress: [session.messages[0]!],
+          coveredIndices: [0],
+          keepFromIndex: 1,
+          keepFromId: session.messages[1]!.id,
+          keepMessages: [session.messages[1]!, session.messages[2]!],
+        }),
+        canSummarize: () => true,
+      } as unknown as ContextOptimizer,
+    });
+
+    const result = await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+    );
+
+    expect(result).toEqual({});
+    const stored = (await sessionManager.getSession(sessionId))!;
+    const summary = stored.messages.find((m) => m.role === MessageRole.SUMMARY)!;
+    expect(summary.metadata).toMatchObject({
+      type: 'auto_summary',
+      mode: 'compaction',
+      keepFrom: session.messages[1]!.id,
+    });
+    expect(summary.summaryOf).toEqual([0]);
+    expect(stored.messages[0]!.disabled).toBe(true);
+    expect(stored.messages[0]!.metadata?.compactedBy).toBe('compaction');
+    expect(stored.messages[1]!.disabled).toBe(false);
+    expect(stored.messages[2]!.disabled).toBe(false);
+
+    const applied = events.filter((e) => e.type === 'context.summarization_applied');
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.data).toMatchObject({
+      session_id: sessionId,
+      reason: 'auto',
+      mode: 'compaction',
+      covered_indices: [0],
+      keep_from: session.messages[1]!.id,
+    });
+    expect(published.some((p) => p.event === 'stream.done')).toBe(false);
+  });
+
+  it('m7: nudge-повтор публикует part.updated с финальным текстом (лента = история)', async () => {
+    SummaryProvider.chunks = [{ content: 'итог', isFinal: true, usage: USAGE, model: 'summary-model' }];
+    const sessionId = await makeSession([userMessage('a')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+    const finalText = 'итог всей истории диалога и подробности';
+    const completeCompression = vi.fn(async () => ({
+      content: finalText,
+      response: { content: finalText, model: 'summary-model', usage: USAGE },
+    }));
+    const deps = makeDeps({
+      optimizer: {
+        prepareCompression: () => ({
+          mode: 'summarization',
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'm', type: 'summary-provider' }),
+          llmMessages: [] as LLMMessage[],
+          systemPrompt: 'SUMMARIZER',
+          messagesToCompress: [],
+          coveredIndices: [0],
+          keepFromIndex: -1,
+          keepMessages: [],
+        }),
+        completeCompression,
+        canSummarize: () => true,
+      } as unknown as ContextOptimizer,
+    });
+
+    const result = await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+    );
+
+    expect(result).toEqual({});
+    const updatedPart = published.find(
+      (p) => p.event === 'part.updated' && p.data.partId === 'msg:text:0',
+    );
+    expect(updatedPart).toBeDefined();
+    expect((updatedPart!.data.part as { data?: string }).data).toBe(finalText);
+    expect(published.filter((p) => p.event === 'step.finished')).toHaveLength(1);
+    expect(published.filter((p) => p.event === 'turn.finished')).toHaveLength(1);
+    const summary = (await sessionManager.getSession(sessionId))!.messages.find(
+      (m) => m.role === MessageRole.SUMMARY,
+    )!;
+    expect(summary.content).toBe(finalText);
+
+    // m7: nudge не дублирует событие применения сжатия.
+    const applied = events.filter((e) => e.type === 'context.summarization_applied');
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.data).toMatchObject({ mode: 'summarization', covered_indices: [0] });
+  });
+
   it('summarizerPrompt уходит в провайдера (не в system prompt основного агента)', async () => {
-    SummaryProvider.chunks = [{ content: 'итог', isFinal: true, usage: USAGE }];
+    SummaryProvider.chunks = [{ content: 'итог всей истории диалога', isFinal: true, usage: USAGE }];
     const sessionId = await makeSession([userMessage('a')]);
     const session = (await sessionManager.getSession(sessionId))!;
     const deps = makeDeps({

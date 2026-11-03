@@ -38,6 +38,8 @@ export interface ContextFileRepository {
    */
   getMaxStepsPrompt(language?: string): string;
   getSummarizerPrompt(language?: string): string;
+  /** Профиль `compaction`: рабочее состояние по коду/проекту (prompts/system/COMPACTOR.{lang}.md). */
+  getCompactorPrompt(language?: string): string;
   getUserContextTemplate(language?: string): string;
   getCompressedDialogTemplate(language?: string): string;
   /**

@@ -37,15 +37,18 @@ describe('contextDefaultsSchema (дефолты оптимизации конт�
   it('схема и контракт типа ContextDefaults совпадают', () => {
     expectTypeOf(contextDefaultsSchema.parse({})).toEqualTypeOf<ContextDefaults>();
   });
-  it('parse({}) даёт прежние дефолты SessionManager', () => {
+  it('parse({}) даёт дефолты сжатия (compaction)', () => {
     expect(contextDefaultsSchema.parse({})).toEqual({
-      contextOptimization: 'none',
-      summarizationEnabled: false,
+      contextOptimization: 'compaction',
+      summarizationEnabled: true,
       summarizationTriggerMode: 'messages',
       summarizeAfterN: 10,
       summarizeTokenThreshold: 50,
       summarizationHeadMessages: 2,
       summarizationTailMessages: 3,
+      summarizationKeepTokens: 5000,
+      compactionKeepTokens: 15000,
+      compactionTokenThreshold: 85,
       slidingWindowMode: 'messages',
       slidingWindowMessageLimit: 10,
       slidingWindowTokenThreshold: 80,
@@ -67,6 +70,14 @@ describe('contextDefaultsSchema (дефолты оптимизации конт�
     expect(contextDefaultsSchema.safeParse({ slidingWindowTokenThreshold: 101 }).success).toBe(false);
     expect(contextDefaultsSchema.safeParse({ summarizeTokenThreshold: 1 }).success).toBe(true);
     expect(contextDefaultsSchema.safeParse({ summarizeTokenThreshold: 100 }).success).toBe(true);
+    // Сжатие: keep-токены ≥ 0, порог компактизации 1..100.
+    expect(contextDefaultsSchema.safeParse({ summarizationKeepTokens: -1 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ compactionKeepTokens: -1 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ summarizationKeepTokens: 0 }).success).toBe(true);
+    expect(contextDefaultsSchema.safeParse({ compactionTokenThreshold: 0 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ compactionTokenThreshold: 101 }).success).toBe(false);
+    expect(contextDefaultsSchema.safeParse({ compactionTokenThreshold: 1 }).success).toBe(true);
+    expect(contextDefaultsSchema.safeParse({ compactionTokenThreshold: 100 }).success).toBe(true);
   });
 
   it('неизвестное значение режима — ошибка', () => {

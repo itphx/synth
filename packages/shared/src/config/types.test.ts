@@ -21,15 +21,18 @@ describe('storageConfigSchema — лимиты чтения/предпросмо
 });
 
 describe('contextConfigSchema (context.defaults)', () => {
-  it('defaults отсутствует → прежние дефолты SessionManager', () => {
+  it('defaults отсутствует → сжатие включено (compaction)', () => {
     expect(contextConfigSchema.parse({}).defaults).toEqual({
-      contextOptimization: 'none',
-      summarizationEnabled: false,
+      contextOptimization: 'compaction',
+      summarizationEnabled: true,
       summarizationTriggerMode: 'messages',
       summarizeAfterN: 10,
       summarizeTokenThreshold: 50,
       summarizationHeadMessages: 2,
       summarizationTailMessages: 3,
+      summarizationKeepTokens: 5000,
+      compactionKeepTokens: 15000,
+      compactionTokenThreshold: 85,
       slidingWindowMode: 'messages',
       slidingWindowMessageLimit: 10,
       slidingWindowTokenThreshold: 80,

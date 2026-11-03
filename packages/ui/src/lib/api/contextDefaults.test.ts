@@ -24,6 +24,9 @@ const DEFAULTS: ContextDefaultsValues = {
   summarizeTokenThreshold: 75,
   summarizationHeadMessages: 3,
   summarizationTailMessages: 6,
+  summarizationKeepTokens: 4000,
+  compactionKeepTokens: 18000,
+  compactionTokenThreshold: 70,
   slidingWindowMode: 'tokens',
   slidingWindowMessageLimit: 40,
   slidingWindowTokenThreshold: 60,
@@ -67,6 +70,43 @@ describe('fetchContextDefaults', () => {
       DEFAULT_CONTEXT_DEFAULTS.summarizeTokenThreshold,
     )
     expect(result.source).toBe('default')
+  })
+
+  it('распознаёт стратегию compaction и поля сжатия; невалидные — к дефолтам', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      defaults: {
+        contextOptimization: 'compaction',
+        summarizationKeepTokens: 0,
+        compactionKeepTokens: 25000,
+        compactionTokenThreshold: 95,
+      },
+      source: 'runtime',
+    })))
+
+    const result = await fetchContextDefaults()
+    expect(result.defaults.contextOptimization).toBe('compaction')
+    // `0` — валидное значение (хвост не сохраняется).
+    expect(result.defaults.summarizationKeepTokens).toBe(0)
+    expect(result.defaults.compactionKeepTokens).toBe(25000)
+    expect(result.defaults.compactionTokenThreshold).toBe(95)
+    expect(result.source).toBe('runtime')
+
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      defaults: {
+        summarizationKeepTokens: -1,
+        compactionKeepTokens: 'many',
+        compactionTokenThreshold: 0,
+      },
+    })))
+
+    const broken = await fetchContextDefaults()
+    expect(broken.defaults.summarizationKeepTokens).toBe(
+      DEFAULT_CONTEXT_DEFAULTS.summarizationKeepTokens,
+    )
+    expect(broken.defaults.compactionKeepTokens).toBe(DEFAULT_CONTEXT_DEFAULTS.compactionKeepTokens)
+    expect(broken.defaults.compactionTokenThreshold).toBe(
+      DEFAULT_CONTEXT_DEFAULTS.compactionTokenThreshold,
+    )
   })
 
   it('ошибка 400 пробрасывается с текстом сервера и статусом', async () => {

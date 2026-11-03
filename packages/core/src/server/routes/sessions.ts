@@ -2359,7 +2359,7 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'No provider/model configured for session' } }, 400);
     }
     if (!deps.contextOptimizer.canSummarize(session)) {
-      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Need at least 3 active messages since last summary' } }, 400);
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'No messages to compress (need at least one full turn before the tail)' } }, 400);
     }
 
     const streamId = generateStreamId();

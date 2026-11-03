@@ -1748,20 +1748,47 @@ always win. The values are resolved when a session is created, so a runtime chan
 
 | Field | Default | Meaning |
 |---|---|---|
-| `contextOptimization` | `none` | `none` \| `sliding_window` \| `summarization` |
-| `summarizationEnabled` | `false` | auto-summarization enabled |
-| `summarizationTriggerMode` | `messages` | `messages` \| `tokens` |
-| `summarizeAfterN` | `10` | messages before summarization starts (≥1) |
+| `contextOptimization` | `compaction` | `none` \| `sliding_window` \| `summarization` \| `compaction` — the compression mode; the modes are **mutually exclusive** |
+| `summarizationEnabled` | `true` | legacy flag: only enables the legacy fallback `none` + `true` = summarization |
+| `summarizationTriggerMode` | `messages` | `messages` (N replies) \| `tokens` (% of the window) |
+| `summarizeAfterN` | `10` | user replies since the last summary before summarization starts (≥1) |
 | `summarizeTokenThreshold` | `50` | summarization threshold, % of the model window (1..100) |
-| `summarizationHeadMessages` | `2` | messages kept in the summary head (≥1) |
-| `summarizationTailMessages` | `3` | messages kept in the summary tail (≥1) |
+| `summarizationKeepTokens` | `5000` | verbatim tail for summarization, tokens (`0` — no tail) |
+| `compactionTokenThreshold` | `85` | compaction threshold, % of the model window (1..100) |
+| `compactionKeepTokens` | `15000` | verbatim tail for compaction, tokens |
+| `summarizationHeadMessages` | `2` | **deprecated**: kept in the schema, not used by the engine |
+| `summarizationTailMessages` | `3` | **deprecated**: kept in the schema, not used by the engine |
 | `slidingWindowMode` | `messages` | `messages` \| `tokens` |
 | `slidingWindowMessageLimit` | `10` | messages in the sliding window (≥1) |
 | `slidingWindowTokenThreshold` | `80` | sliding-window threshold, % of the model window (1..100) |
 
+**Modes.** `none` — the history is sent as is; on overflow `context.windowPolicy` applies;
+`sliding_window` — older messages are disabled by a message/token limit (no summary);
+`summarization` — conversation outcomes (what was discussed, what was decided, open questions,
+next steps); `compaction` — working state for the code/project (exact paths, commands, errors,
+decisions, next move). Switching modes is a single `contextOptimization` field; separate flags do
+not enable it (the only exception is the legacy fallback below).
+Specification — [ADR-119](../arch_decisions/adr-119-context-compaction.md).
+
+**Triggers.** Summarization fires by the number of user replies since the last summary
+(`messages`, `summarizeAfterN`) or by window fill (`tokens`, `summarizeTokenThreshold`).
+Compaction is token-only: threshold = `window − max((100 − pct)% of the window, 16000)`, i.e. the
+reserve is at least 16k tokens; with a too-small window (reserve ≥ window) and with an unknown
+window (`0`) the auto trigger is disabled — compression stays available manually and on overflow.
+The trigger does not compress immediately: it sets a pending state (`summarization_pending`), and
+the queue processor performs the compression as a separate service turn before the next message.
+
+**Tail.** `summarizationKeepTokens`/`compactionKeepTokens` define how many recent tokens stay
+verbatim; the covered part is compressed into a summary. For summarization `0` means "no tail".
+The summary goes into the `summary` system block; covered messages get `disabled`, pinned messages
+are never disabled.
+
 Session notes (`context.stickyNotes`) are not an optimization strategy: they work independently of
 the selected strategy (they are always added to the system prompt). `sticky_notes` is only a legacy
-value of saved sessions and is no longer offered in defaults/UI.
+value of saved sessions and is no longer offered in defaults/UI. Legacy sessions with
+`contextOptimization: none` and `summarizationEnabled: true` keep behaving as summarization;
+`summarizationHeadMessages`/`summarizationTailMessages` are kept only for schema and saved-settings
+compatibility.
 
 Priority: runtime (`GET/PUT/DELETE /api/v2/settings/context-defaults`, `settings.json`/PG; PUT is a
 partial patch merged over config) > `config.yaml` `context.defaults` > schema defaults. There are no
@@ -1771,11 +1798,15 @@ env overrides for these values. In managed mode the admin section is restricted 
 context:
   windowPolicy: warn
   defaults:
-    contextOptimization: summarization
+    contextOptimization: compaction
     summarizationEnabled: true
     summarizationTriggerMode: messages
     summarizeAfterN: 12
     summarizeTokenThreshold: 60
+    summarizationKeepTokens: 5000
+    compactionTokenThreshold: 85
+    compactionKeepTokens: 15000
+    # deprecated, not used by the engine:
     summarizationHeadMessages: 2
     summarizationTailMessages: 4
     slidingWindowMode: messages

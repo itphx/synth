@@ -186,6 +186,9 @@ export class SessionManager {
         summarizeTokenThreshold: data.settings?.summarizeTokenThreshold ?? contextDefaults.summarizeTokenThreshold ?? 50,
         summarizationHeadMessages: data.settings?.summarizationHeadMessages ?? contextDefaults.summarizationHeadMessages ?? 2,
         summarizationTailMessages: data.settings?.summarizationTailMessages ?? contextDefaults.summarizationTailMessages ?? 3,
+        summarizationKeepTokens: data.settings?.summarizationKeepTokens ?? contextDefaults.summarizationKeepTokens ?? 5000,
+        compactionKeepTokens: data.settings?.compactionKeepTokens ?? contextDefaults.compactionKeepTokens ?? 15000,
+        compactionTokenThreshold: data.settings?.compactionTokenThreshold ?? contextDefaults.compactionTokenThreshold ?? 85,
         showInterview: data.settings?.showInterview ?? true,
         websocketEnabled: data.settings?.websocketEnabled ?? true,
         // ADR-071 §2.1: активные MCP-серверы сессии. Раньше терялись при создании

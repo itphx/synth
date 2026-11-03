@@ -340,6 +340,14 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 | `part.delta` | канал сессии | `messageId`, `partId`, `field` (`text`\|`raw`), `delta` — **upsert** по `{messageId, partId}` |
 | `part.updated` | канал сессии | `messageId`, `partId`, `part` — **upsert** по `{messageId, partId}` |
 
+**Сжатие контекста (ADR-119).** События сжатия — в канале сессии; новых каналов нет.
+
+| Событие | Поля `data` |
+|---|---|
+| `context.summarization_pending` | `reason` (`messages`\|`tokens`), `mode` (`summarization`\|`compaction`), `current_tokens?`, `threshold?`, `user_count?` — триггер сработал, сжатие ждёт следующего хода |
+| `context.summarization_applied` | `reason` (`auto`\|`manual`\|`overflow`), `mode` (`summarization`\|`compaction`), `covered_indices` (`number[]` — покрытые позиции), `keep_from` (`id` первого живого сообщения \| `null`), `usage?` (расход вызова сжатия). Публикуется и в обычном пути, и при overflow; клиент снимает ожидание и перечитывает историю (последней страницей) |
+| `context.sliding_window_applied` | `reason`/`trigger_type`, `disabled_indices` (`number[]`) — режим `sliding_window` отключил старые сообщения (без резюме) |
+
 Правила:
 
 - **`step.finished` ≠ «шаг целиком завершён».** `step.finished` — «вызов LLM завершён»: ответ
@@ -570,9 +578,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/sessions/:id/resume-subagent` | оба | auth | Возобновить саб-агента → 202 |
 | POST | `/api/v2/sessions/:id/summarize` | оба | auth | Запросить суммаризацию `{status:'enqueued', stream_id}` |
 | POST | `/api/v2/sessions/:id/debug-system-message` | backend | auth | Отладочное системное сообщение |
-| GET | `/api/v2/sessions/:id/optimization` | backend | auth | Настройки оптимизации контекста |
-| PATCH | `/api/v2/sessions/:id/optimization` | backend | auth | Обновить настройки оптимизации |
-| POST | `/api/v2/sessions/:id/optimization/check` | backend | auth | Проверить триггеры окна/суммаризации |
+| GET | `/api/v2/sessions/:id/optimization` | backend | auth | Настройки оптимизации контекста (ADR-119): `{context_optimization, summarization_enabled, summarization_trigger_mode, summarize_after_n, summarize_token_threshold, summarization_keep_tokens, compaction_keep_tokens, compaction_token_threshold, summarization_head_messages, summarization_tail_messages, sliding_window_mode, sliding_window_message_limit, sliding_window_token_threshold}`. `context_optimization` ∈ `none`\|`sliding_window`\|`summarization`\|`compaction` (`sticky_notes` — legacy сохранённых сессий); `summarization_head_messages`/`summarization_tail_messages` — **deprecated** (движок использует хвост в токенах) |
+| PATCH | `/api/v2/sessions/:id/optimization` | backend | auth | Частичный патч тех же полей (передаются только изменяемые); `context_optimization` переключает режим целиком (режимы взаимоисключающие), `summarization_keep_tokens`/`compaction_keep_tokens` — хвост дословно в токенах (`0` — без хвоста для суммаризации), `compaction_token_threshold` — порог компактизации в % окна (1..100). Ответ — сериализованная сессия |
+| POST | `/api/v2/sessions/:id/optimization/check` | backend | auth | Проверить триггеры: `{sliding_window, summarization, compression, summarization_pending}`. `compression` — **аддитивно** (ADR-119): `{triggered, reason: 'none'\|'messages'\|'tokens', mode: 'summarization'\|'compaction'\|null, currentTokens?, threshold?, userCount?, limit?}` — единый триггер эффективного режима (компактизация — только `tokens`) |
 | POST | `/api/v2/sessions/:id/optimization/cancel-summarization` | backend | auth | Снять ожидание суммаризации |
 | GET | `/api/v2/sessions/:id/references` | оба | auth | Ссылки `{references}` |
 | POST | `/api/v2/sessions/:id/references` | оба | auth | Добавить ссылку → 201 |

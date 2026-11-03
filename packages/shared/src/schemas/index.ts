@@ -125,13 +125,18 @@ export function patchObjectSchema<S extends z.ZodRawShape>(
 export const contextDefaultsSchema = z.object({
   // `sticky_notes` — legacy-значение сессий, в дефолтах и UI не предлагается:
   // заметки работают независимо от стратегии оптимизации.
-  contextOptimization: z.enum(['none', 'sliding_window', 'summarization']).default('none'),
-  summarizationEnabled: z.boolean().default(false),
+  contextOptimization: z.enum(['none', 'sliding_window', 'summarization', 'compaction']).default('compaction'),
+  summarizationEnabled: z.boolean().default(true),
   summarizationTriggerMode: z.enum(['messages', 'tokens']).default('messages'),
   summarizeAfterN: z.number().int().min(1).default(10),
   summarizeTokenThreshold: z.number().int().min(1).max(100).default(50),
+  /** @deprecated Новый движок сжатия не использует head/tail (см. `summarizationKeepTokens`). */
   summarizationHeadMessages: z.number().int().min(1).default(2),
+  /** @deprecated См. `summarizationHeadMessages`. */
   summarizationTailMessages: z.number().int().min(1).default(3),
+  summarizationKeepTokens: z.number().int().min(0).default(5000),
+  compactionKeepTokens: z.number().int().min(0).default(15000),
+  compactionTokenThreshold: z.number().int().min(1).max(100).default(85),
   slidingWindowMode: z.enum(['messages', 'tokens']).default('messages'),
   slidingWindowMessageLimit: z.number().int().min(1).default(10),
   slidingWindowTokenThreshold: z.number().int().min(1).max(100).default(80),
@@ -170,7 +175,7 @@ export const sessionSettingsSchema = z.object({
   // ADR-071 §2.4: сессионный скоуп MCP (явно включённые / opt-out).
   mcpServers: z.array(z.string()).optional(),
   mcpDisabledServers: z.array(z.string()).optional(),
-  contextOptimization: z.enum(['none', 'sliding_window', 'summarization', 'sticky_notes']).default('none'),
+  contextOptimization: z.enum(['none', 'sliding_window', 'summarization', 'compaction', 'sticky_notes']).default('none'),
   slidingWindowMode: z.enum(['messages', 'tokens']).default('messages'),
   slidingWindowMessageLimit: z.number().int().min(1).default(10),
   slidingWindowTokenThreshold: z.number().int().min(10).max(100).default(80),
@@ -178,8 +183,13 @@ export const sessionSettingsSchema = z.object({
   summarizationTriggerMode: z.enum(['messages', 'tokens']).default('messages'),
   summarizeAfterN: z.number().int().min(1).default(10),
   summarizeTokenThreshold: z.number().int().min(10).max(100).default(50),
+  /** @deprecated Новый движок сжатия не использует head/tail (см. `summarizationKeepTokens`). */
   summarizationHeadMessages: z.number().int().min(1).default(2),
+  /** @deprecated См. `summarizationHeadMessages`. */
   summarizationTailMessages: z.number().int().min(1).default(3),
+  summarizationKeepTokens: z.number().int().min(0).default(5000),
+  compactionKeepTokens: z.number().int().min(0).default(15000),
+  compactionTokenThreshold: z.number().int().min(1).max(100).default(85),
   showInterview: z.boolean().default(true),
   websocketEnabled: z.boolean().default(true),
   language: z.string().optional(),

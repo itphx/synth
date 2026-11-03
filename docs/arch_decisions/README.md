@@ -60,6 +60,7 @@
 | ADR-113 | Фоновые процессы — реестр, control plane и исполнитель | ✅ Реализовано | [adr-113-background-processes.md](./adr-113-background-processes.md) |
 | ADR-114 | Git worktrees — per-session рабочий каталог | ✅ Реализовано | [adr-114-git-worktrees.md](./adr-114-git-worktrees.md) |
 | ADR-117 | Слой совместимости провайдеров/моделей (`compatibility`: reasoning-поле, лимит вывода, `tool_choice`) и Anthropic thinking round-trip | ✅ Реализовано | [adr-117-provider-compatibility.md](./adr-117-provider-compatibility.md) |
+| ADR-119 | Сжатие контекста — суммаризация и компактизация как два взаимоисключающих режима | ✅ Реализовано | [adr-119-context-compaction.md](./adr-119-context-compaction.md) |
 
 ## Частично
 
@@ -148,4 +149,4 @@
 
 ---
 
-Всего документов: 108 (Решения: 48, Частично: 20, Принятые предложения: 6, Предложения: 24, Vision: 8, Icebox: 1, Legacy: 1).
+Всего документов: 109 (Решения: 49, Частично: 20, Принятые предложения: 6, Предложения: 24, Vision: 8, Icebox: 1, Legacy: 1).

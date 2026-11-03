@@ -89,6 +89,9 @@ const RUNTIME_DEFAULTS: ContextDefaultsValues = {
   summarizeTokenThreshold: 80,
   summarizationHeadMessages: 2,
   summarizationTailMessages: 4,
+  summarizationKeepTokens: 6000,
+  compactionKeepTokens: 12000,
+  compactionTokenThreshold: 90,
   slidingWindowMode: 'messages',
   slidingWindowMessageLimit: 20,
   slidingWindowTokenThreshold: 80,
@@ -150,10 +153,22 @@ async function click(el: HTMLElement | null): Promise<void> {
   await flush()
 }
 
-function summarizationSwitch(container: HTMLElement): HTMLButtonElement | null {
-  return container.querySelector<HTMLButtonElement>(
-    '[data-testid="context-defaults-summarization-toggle"] [role="switch"]',
-  )
+/** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
+async function selectOption(trigger: HTMLElement | null, label: string): Promise<void> {
+  expect(trigger).toBeTruthy()
+  await act(async () => {
+    trigger!.click()
+  })
+  const options = [...document.body.querySelectorAll('[role="option"]')]
+  const option = options.find((o) => o.textContent?.trim().startsWith(label)) as
+    | HTMLElement
+    | undefined
+  expect(option, `option "${label}"`).toBeTruthy()
+  await act(async () => {
+    option!.click()
+  })
+  await flush()
+  await flush()
 }
 
 afterEach(async () => {
@@ -181,14 +196,37 @@ describe('ContextDefaultsSettings — загрузка', () => {
       'new sessions',
     )
     expect(byTestId(container, 'context-defaults-strategy')?.textContent).toContain('Summarization')
+    expect(byTestId(container, 'context-defaults-strategy-hint')?.textContent).toContain(
+      'compressed into a summary',
+    )
     expect((byTestId(container, 'context-defaults-summarize-after') as HTMLInputElement).value).toBe(
       '20',
     )
     expect(
       (byTestId(container, 'context-defaults-summarize-threshold') as HTMLInputElement).value,
     ).toBe('80')
-    expect(summarizationSwitch(container)?.getAttribute('aria-checked')).toBe('true')
+    expect(
+      (byTestId(container, 'context-defaults-summarization-keep') as HTMLInputElement).value,
+    ).toBe('6000')
+    expect((byTestId(container, 'context-defaults-compaction-keep') as HTMLInputElement).value).toBe(
+      '12000',
+    )
+    expect(
+      (byTestId(container, 'context-defaults-compaction-threshold') as HTMLInputElement).value,
+    ).toBe('90')
     expect(byTestId(container, 'context-defaults-reset')).not.toBeNull()
+  })
+
+  it('не показывает устаревшие head/tail и тумблер суммаризации (стратегия — переключатель)', async () => {
+    stubFetch(() => ({ body: response() }))
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'context-defaults-summarization-head')).toBeNull()
+    expect(byTestId(container, 'context-defaults-summarization-tail')).toBeNull()
+    expect(byTestId(container, 'context-defaults-summarization-toggle')).toBeNull()
+    expect(
+      container.querySelector('[data-testid="context-defaults-summarization"] [role="switch"]'),
+    ).toBeNull()
   })
 
   it('ошибка загрузки показывается сообщением и повторяет запрос', async () => {
@@ -209,7 +247,7 @@ describe('ContextDefaultsSettings — загрузка', () => {
 })
 
 describe('ContextDefaultsSettings — сохранение', () => {
-  it('изменение тумблера → PUT с частичным патчем', async () => {
+  it('выбор стратегии «Компактизация» → PUT с частичным патчем и подсказкой', async () => {
     let state = RUNTIME_DEFAULTS
     const calls = stubFetch((call) => {
       if (call.method === 'PUT') {
@@ -220,12 +258,17 @@ describe('ContextDefaultsSettings — сохранение', () => {
     })
     const container = await renderSettings()
 
-    await click(summarizationSwitch(container))
+    await selectOption(byTestId(container, 'context-defaults-strategy'), 'Compaction')
 
     const put = calls.find((call) => call.method === 'PUT')
     expect(put?.url).toBe('/api/v2/settings/context-defaults')
-    expect(JSON.parse(put?.body ?? '{}')).toEqual({ defaults: { summarizationEnabled: false } })
-    expect(summarizationSwitch(container)?.getAttribute('aria-checked')).toBe('false')
+    expect(JSON.parse(put?.body ?? '{}')).toEqual({
+      defaults: { contextOptimization: 'compaction' },
+    })
+    expect(byTestId(container, 'context-defaults-strategy')?.textContent).toContain('Compaction')
+    expect(byTestId(container, 'context-defaults-strategy-hint')?.textContent).toContain(
+      'working state',
+    )
     expect(mocks.notify).toHaveBeenCalled()
   })
 
@@ -261,6 +304,37 @@ describe('ContextDefaultsSettings — сохранение', () => {
     expect(container.textContent).toContain('Enter an integer')
   })
 
+  it('поля компактизации сохраняются частичным патчем (порог — проценты)', async () => {
+    let state = RUNTIME_DEFAULTS
+    const calls = stubFetch((call) => {
+      if (call.method === 'PUT') {
+        const patch = JSON.parse(call.body ?? '{}').defaults as Partial<ContextDefaultsValues>
+        state = { ...state, ...patch }
+      }
+      return { body: response(state) }
+    })
+    const container = await renderSettings()
+
+    const keep = byTestId(container, 'context-defaults-compaction-keep') as HTMLInputElement
+    await act(async () => {
+      setInputValue(keep, '20000')
+    })
+    await blur(keep)
+
+    expect(JSON.parse(calls.find((call) => call.method === 'PUT')?.body ?? '{}')).toEqual({
+      defaults: { compactionKeepTokens: 20000 },
+    })
+
+    const threshold = byTestId(container, 'context-defaults-compaction-threshold') as HTMLInputElement
+    await act(async () => {
+      setInputValue(threshold, '101')
+    })
+    await blur(threshold)
+    // 101 % не проходит валидацию процентов — второго запроса нет.
+    expect(calls.filter((call) => call.method === 'PUT')).toHaveLength(1)
+    expect(container.textContent).toContain('from 1 to 100')
+  })
+
   it('400 от сервера → сообщение и откат к серверному значению', async () => {
     stubFetch((call) =>
       call.method === 'PUT'
@@ -269,12 +343,18 @@ describe('ContextDefaultsSettings — сохранение', () => {
     )
     const container = await renderSettings()
 
-    await click(summarizationSwitch(container))
+    const input = byTestId(container, 'context-defaults-compaction-keep') as HTMLInputElement
+    await act(async () => {
+      setInputValue(input, '20000')
+    })
+    await blur(input)
 
     expect(byTestId(container, 'context-defaults-action-error')?.textContent).toContain(
       'invalid default',
     )
-    expect(summarizationSwitch(container)?.getAttribute('aria-checked')).toBe('true')
+    expect(
+      (byTestId(container, 'context-defaults-compaction-keep') as HTMLInputElement).value,
+    ).toBe('12000')
   })
 })
 

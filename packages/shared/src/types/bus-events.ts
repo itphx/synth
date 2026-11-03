@@ -87,6 +87,7 @@ export type EventType =
   | 'question.asked'
   | 'question.replied'
   | 'context.summarization_pending'
+  | 'context.summarization_applied'
   | 'context.summarized'
   | 'context.sliding_window_applied'
   | 'context.limit_warning'

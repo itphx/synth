@@ -124,13 +124,16 @@ export const defaultConfig: SynthConfig = {
     // Дефолты оптимизации контекста для новых сессий (совпадают с прежними
     // литералами `SessionManager.createSession`).
     defaults: {
-      contextOptimization: 'none',
-      summarizationEnabled: false,
+      contextOptimization: 'compaction',
+      summarizationEnabled: true,
       summarizationTriggerMode: 'messages',
       summarizeAfterN: 10,
       summarizeTokenThreshold: 50,
       summarizationHeadMessages: 2,
       summarizationTailMessages: 3,
+      summarizationKeepTokens: 5000,
+      compactionKeepTokens: 15000,
+      compactionTokenThreshold: 85,
       slidingWindowMode: 'messages',
       slidingWindowMessageLimit: 10,
       slidingWindowTokenThreshold: 80,

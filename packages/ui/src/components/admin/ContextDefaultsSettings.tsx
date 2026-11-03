@@ -11,7 +11,6 @@ import {
   SelectField,
   SettingsRow,
   SettingsSection,
-  ToggleField,
 } from '@/components/ui/settings'
 import {
   CONTEXT_OPTIMIZATION_STRATEGIES,
@@ -41,8 +40,9 @@ const SOURCE_BADGE_CLASS: Record<ContextDefaultsSource, string> = {
 type NumericKey =
   | 'summarizeAfterN'
   | 'summarizeTokenThreshold'
-  | 'summarizationHeadMessages'
-  | 'summarizationTailMessages'
+  | 'summarizationKeepTokens'
+  | 'compactionKeepTokens'
+  | 'compactionTokenThreshold'
   | 'slidingWindowMessageLimit'
   | 'slidingWindowTokenThreshold'
 
@@ -53,9 +53,14 @@ interface NumericFieldConfig {
   testId: string
   suffix?: string
   percent?: boolean
+  /** Нижняя граница (по умолчанию 1; `0` — токены, где ноль допустим). */
+  min?: number
+  /** Верхняя граница для HTML-поля (сервер ограничивает проценты сам). */
+  max?: number
 }
 
-const NUMBER_FIELDS: readonly NumericFieldConfig[] = [
+/** Поля секции «Суммаризация»: триггер и дословный хвост в токенах. */
+const SUMMARIZATION_FIELDS: readonly NumericFieldConfig[] = [
   {
     key: 'summarizeAfterN',
     labelKey: 'settings.contextDefaults.summarization.afterN',
@@ -71,17 +76,37 @@ const NUMBER_FIELDS: readonly NumericFieldConfig[] = [
     percent: true,
   },
   {
-    key: 'summarizationHeadMessages',
-    labelKey: 'settings.contextDefaults.summarization.head',
-    hintKey: 'settings.contextDefaults.summarization.head.hint',
-    testId: 'context-defaults-summarization-head',
+    key: 'summarizationKeepTokens',
+    labelKey: 'settings.contextDefaults.summarization.keepTokens',
+    hintKey: 'settings.contextDefaults.summarization.keepTokens.hint',
+    testId: 'context-defaults-summarization-keep',
+    min: 0,
+    max: 50000,
+  },
+]
+
+/** Поля секции «Компактизация». */
+const COMPACTION_FIELDS: readonly NumericFieldConfig[] = [
+  {
+    key: 'compactionTokenThreshold',
+    labelKey: 'settings.contextDefaults.compaction.tokenThreshold',
+    hintKey: 'settings.contextDefaults.compaction.tokenThreshold.hint',
+    testId: 'context-defaults-compaction-threshold',
+    suffix: '%',
+    percent: true,
   },
   {
-    key: 'summarizationTailMessages',
-    labelKey: 'settings.contextDefaults.summarization.tail',
-    hintKey: 'settings.contextDefaults.summarization.tail.hint',
-    testId: 'context-defaults-summarization-tail',
+    key: 'compactionKeepTokens',
+    labelKey: 'settings.contextDefaults.compaction.keepTokens',
+    hintKey: 'settings.contextDefaults.compaction.keepTokens.hint',
+    testId: 'context-defaults-compaction-keep',
+    min: 0,
+    max: 100000,
   },
+]
+
+/** Поля секции «Скользящее окно». */
+const SLIDING_WINDOW_FIELDS: readonly NumericFieldConfig[] = [
   {
     key: 'slidingWindowMessageLimit',
     labelKey: 'settings.contextDefaults.slidingWindow.messageLimit',
@@ -104,8 +129,14 @@ type ParsedNumber = { value: number } | { errorKey: string }
 function parseNumberInput(field: NumericFieldConfig, raw: string): ParsedNumber {
   const trimmed = raw.trim()
   const value = Number(trimmed)
-  if (!trimmed || !Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
-    return { errorKey: 'settings.contextDefaults.field.integer' }
+  const min = field.min ?? 1
+  if (!trimmed || !Number.isFinite(value) || !Number.isInteger(value) || value < min) {
+    return {
+      errorKey:
+        min === 0
+          ? 'settings.contextDefaults.field.nonNegative'
+          : 'settings.contextDefaults.field.integer',
+    }
   }
   if (field.percent && value > 100) {
     return { errorKey: 'settings.contextDefaults.field.percent' }
@@ -114,11 +145,60 @@ function parseNumberInput(field: NumericFieldConfig, raw: string): ParsedNumber 
 }
 
 /**
+ * Сетка числовых полей секции: черновик обновляется на ввод, коммит — на
+ * `blur`/Enter (паттерн ADR-072 для чисел).
+ */
+function NumberFieldGrid({
+  fields,
+  values,
+  drafts,
+  errors,
+  busy,
+  onDraft,
+  onCommit,
+}: {
+  fields: readonly NumericFieldConfig[]
+  values: ContextDefaultsValues
+  drafts: Partial<Record<NumericKey, string>>
+  errors: Partial<Record<NumericKey, string>>
+  busy: boolean
+  onDraft: (key: NumericKey, value: string) => void
+  onCommit: (field: NumericFieldConfig) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
+      {fields.map((field) => (
+        <NumberField
+          key={field.key}
+          id={`context-defaults-${field.key}`}
+          label={t(field.labelKey)}
+          description={t(field.hintKey)}
+          suffix={field.suffix}
+          value={drafts[field.key] ?? String(values[field.key])}
+          onChange={(event) => onDraft(field.key, event.target.value)}
+          onBlur={() => onCommit(field)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onCommit(field)
+          }}
+          min={field.min ?? 1}
+          max={field.max ?? (field.percent ? 100 : undefined)}
+          step={1}
+          error={errors[field.key]}
+          disabled={busy}
+          data-testid={field.testId}
+        />
+      ))}
+    </div>
+  )
+}
+
+/**
  * ADR-072: блок «Значения по умолчанию для новых сессий».
  *
  * Настройка уровня инстанса (`GET/PUT/DELETE /api/v2/settings/context-defaults`):
- * стратегия оптимизации контекста и параметры автосуммаризации / скользящего
- * окна, которые получают новые сессии. Паттерн сохранения — немедленный, как у
+ * стратегия оптимизации контекста и параметры автосуммаризации / компактизации /
+ * скользящего окна, которые получают новые сессии. Паттерн сохранения — немедленный, как у
  * соседней «Политики окна контекста»: тумблер/селект сохраняются сразу, числа —
  * по завершении ввода (`blur`/Enter). Мутации — ADMIN (guard сервера).
  */
@@ -254,6 +334,16 @@ export function ContextDefaultsSettings() {
     [busy, commit, drafts, t, values],
   )
 
+  const handleDraft = useCallback((key: NumericKey, value: string) => {
+    setDrafts((prev) => ({ ...prev, [key]: value }))
+    setFieldErrors((prev) => {
+      if (!(key in prev)) return prev
+      const copy = { ...prev }
+      delete copy[key]
+      return copy
+    })
+  }, [])
+
   return (
     <SettingsSection
       id="context-defaults"
@@ -365,19 +455,6 @@ export function ContextDefaultsSettings() {
               </p>
             </div>
 
-            <div data-testid="context-defaults-summarization-toggle">
-              <ToggleField
-                label={t('settings.contextDefaults.summarization.enabled')}
-                description={t('settings.contextDefaults.summarization.enabledHint')}
-                enabled={values.summarizationEnabled}
-                disabled={busy}
-                onToggle={() =>
-                  void commit({ summarizationEnabled: !values.summarizationEnabled })
-                }
-                ariaLabel={t('settings.contextDefaults.summarization.enabled')}
-              />
-            </div>
-
             <SelectField
               label={t('settings.contextDefaults.summarization.triggerMode')}
               description={t('settings.contextDefaults.summarization.triggerMode.hint')}
@@ -405,38 +482,40 @@ export function ContextDefaultsSettings() {
               </SelectContent>
             </SelectField>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
-              {NUMBER_FIELDS.slice(0, 4).map((field) => (
-                <NumberField
-                  key={field.key}
-                  id={`context-defaults-${field.key}`}
-                  label={t(field.labelKey)}
-                  description={t(field.hintKey)}
-                  suffix={field.suffix}
-                  value={drafts[field.key] ?? String(values[field.key])}
-                  onChange={(event) => {
-                    const next = event.target.value
-                    setDrafts((prev) => ({ ...prev, [field.key]: next }))
-                    setFieldErrors((prev) => {
-                      if (!(field.key in prev)) return prev
-                      const copy = { ...prev }
-                      delete copy[field.key]
-                      return copy
-                    })
-                  }}
-                  onBlur={() => handleNumberBlur(field)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') handleNumberBlur(field)
-                  }}
-                  min={1}
-                  max={field.percent ? 100 : undefined}
-                  step={1}
-                  error={fieldErrors[field.key]}
-                  disabled={busy}
-                  data-testid={field.testId}
-                />
-              ))}
+            <NumberFieldGrid
+              fields={SUMMARIZATION_FIELDS}
+              values={values}
+              drafts={drafts}
+              errors={fieldErrors}
+              busy={busy}
+              onDraft={handleDraft}
+              onCommit={handleNumberBlur}
+            />
+          </div>
+
+          {/* Компактизация */}
+          <div
+            className="space-y-3 border-t border-border/60 pt-3 min-w-0"
+            data-testid="context-defaults-compaction"
+          >
+            <div>
+              <h4 className="text-sm font-medium text-foreground min-w-0 break-words">
+                {t('settings.contextDefaults.compaction.title')}
+              </h4>
+              <p className="text-xs text-muted-foreground min-w-0 break-words">
+                {t('settings.contextDefaults.compaction.description')}
+              </p>
             </div>
+
+            <NumberFieldGrid
+              fields={COMPACTION_FIELDS}
+              values={values}
+              drafts={drafts}
+              errors={fieldErrors}
+              busy={busy}
+              onDraft={handleDraft}
+              onCommit={handleNumberBlur}
+            />
           </div>
 
           {/* Скользящее окно */}
@@ -479,38 +558,15 @@ export function ContextDefaultsSettings() {
               </SelectContent>
             </SelectField>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
-              {NUMBER_FIELDS.slice(4).map((field) => (
-                <NumberField
-                  key={field.key}
-                  id={`context-defaults-${field.key}`}
-                  label={t(field.labelKey)}
-                  description={t(field.hintKey)}
-                  suffix={field.suffix}
-                  value={drafts[field.key] ?? String(values[field.key])}
-                  onChange={(event) => {
-                    const next = event.target.value
-                    setDrafts((prev) => ({ ...prev, [field.key]: next }))
-                    setFieldErrors((prev) => {
-                      if (!(field.key in prev)) return prev
-                      const copy = { ...prev }
-                      delete copy[field.key]
-                      return copy
-                    })
-                  }}
-                  onBlur={() => handleNumberBlur(field)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') handleNumberBlur(field)
-                  }}
-                  min={1}
-                  max={field.percent ? 100 : undefined}
-                  step={1}
-                  error={fieldErrors[field.key]}
-                  disabled={busy}
-                  data-testid={field.testId}
-                />
-              ))}
-            </div>
+            <NumberFieldGrid
+              fields={SLIDING_WINDOW_FIELDS}
+              values={values}
+              drafts={drafts}
+              errors={fieldErrors}
+              busy={busy}
+              onDraft={handleDraft}
+              onCommit={handleNumberBlur}
+            />
           </div>
 
           {actionError && (

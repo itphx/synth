@@ -191,6 +191,10 @@ export class PgContextFileRepository implements ContextFileRepository, ContextOv
     return this._config.getSummarizerPrompt(language);
   }
 
+  getCompactorPrompt(language?: string): string {
+    return this._config.getCompactorPrompt(language);
+  }
+
   getUserContextTemplate(language?: string): string {
     return this._config.getUserContextTemplate(language);
   }

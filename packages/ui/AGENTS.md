@@ -244,6 +244,13 @@
 - `pending` — по конкретному контролу/сущности (`isPending(\`mcp:${name}\`)`), а не «всё сразу»; во время запроса контрол `pending`, но не `disabled` (повторы гасит обработчик через `isPending`).
 - Повторные success-тосты подавляются окном троттлинга (`throttleMs`, по умолчанию ~1.5 с); error-тосты показываются всегда. Спец-ошибки (403 forbidden, 409 confirm-required) — через `errorKey` (строка или функция от ошибки) либо `silentError` + собственный тост. Общие формулировки — ключи `panel.saved`/`panel.saveError` (не плодить доменные синонимы).
 
+### Вкладка «Контекст» (правая панель, ADR-119)
+- `components/panels/ContextTab.tsx` — три блока-тумблера: «Скользящее окно», «Суммаризация», «Компактизация»; режимы **взаимоисключающие** (включение одного выключает остальные и пишет `context_optimization`). Сохранение — общим `usePanelSettingSave` (немедленный автосейв, откат при ошибке).
+- Поля: окно — тип (`messages`/`tokens`), лимит сообщений, порог %; суммаризация — триггер (`messages`/`tokens`), `summarize_after_n`, `summarize_token_threshold`, `summarization_keep_tokens`; компактизация — `compaction_token_threshold`, `compaction_keep_tokens`. Триггеры — группа `ТРИГГЕРЫ`, хвост/порог — группа `СЖАТИЕ`; подсказки — `rightPanel.context.hint.*`.
+- Legacy-сессия (`context_optimization: none` + `summarization_enabled: true`) показывается как включённая суммаризация; при сохранении уходит производный `summarization_enabled` (`true` для любого режима, кроме `none`). Deprecated `head`/`tail`-поля в панели не показываются.
+- Плашка ожидания снимается по `context.summarization_applied`, история перечитывается последней страницей (`applyHistoryPage`, не `setMessages`); `context.summarization_pending` включает плашку, `context.sliding_window_applied` — точечно патчит `disabled` сообщений (см. `stores/transportStore.ts`).
+- Админ-дефолты новых сессий — `components/admin/ContextDefaultsSettings.tsx`: селект стратегии (`none`/`sliding_window`/`summarization`/`compaction`) + секции суммаризации (триггер, `summarize_after_n`, `summarize_token_threshold`, `summarization_keep_tokens`) и компактизации (`compaction_token_threshold`, `compaction_keep_tokens`); источник (`runtime`/`config`/`default`) — бейджем, поля сохраняются по blur.
+
 ### Стили
 - Tailwind + `cn()` (`lib/utils.ts:4`). Условные классы — через `cn`, не конкатенацию строк.
 - Цвета — только CSS-переменные (`var(--primary)`, `text-foreground`), не hex/oklch-литералы в разметке; темизация — `ThemeSystemProvider` + `styles/design-system.css`.

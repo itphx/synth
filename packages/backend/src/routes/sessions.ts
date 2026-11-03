@@ -560,6 +560,9 @@ export function createSessionRoutes(
       summarize_token_threshold: session.settings.summarizeTokenThreshold,
       summarization_head_messages: session.settings.summarizationHeadMessages,
       summarization_tail_messages: session.settings.summarizationTailMessages,
+      summarization_keep_tokens: session.settings.summarizationKeepTokens,
+      compaction_keep_tokens: session.settings.compactionKeepTokens,
+      compaction_token_threshold: session.settings.compactionTokenThreshold,
     });
   });
 
@@ -585,6 +588,9 @@ export function createSessionRoutes(
       if (body.summarize_token_threshold !== undefined) s.settings.summarizeTokenThreshold = body.summarize_token_threshold;
       if (body.summarization_head_messages !== undefined) s.settings.summarizationHeadMessages = body.summarization_head_messages;
       if (body.summarization_tail_messages !== undefined) s.settings.summarizationTailMessages = body.summarization_tail_messages;
+      if (body.summarization_keep_tokens !== undefined) s.settings.summarizationKeepTokens = body.summarization_keep_tokens;
+      if (body.compaction_keep_tokens !== undefined) s.settings.compactionKeepTokens = body.compaction_keep_tokens;
+      if (body.compaction_token_threshold !== undefined) s.settings.compactionTokenThreshold = body.compaction_token_threshold;
       await sessionManager.saveSession(s);
     });
 
@@ -602,15 +608,19 @@ export function createSessionRoutes(
     // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     if (!contextOptimizer) {
-      return c.json({ sliding_window: { triggered: false }, summarization: { triggered: false } });
+      return c.json({ sliding_window: { triggered: false }, summarization: { triggered: false }, compression: { triggered: false, reason: 'none', mode: null } });
     }
 
     const swResult = contextOptimizer.shouldApplySlidingWindow(session);
     const sumResult = contextOptimizer.shouldSummarize(session);
+    const compression = typeof contextOptimizer.shouldCompress === 'function'
+      ? contextOptimizer.shouldCompress(session)
+      : { ...contextOptimizer.shouldSummarize(session), mode: 'summarization' as const };
 
     return c.json({
       sliding_window: swResult,
       summarization: sumResult,
+      compression,
       summarization_pending: session.summarizationPending,
     });
   });

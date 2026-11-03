@@ -6,8 +6,11 @@
  */
 import type { Message, Session, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, generateId } from '@itphx/synth-shared';
-import type { BaseProvider, CancellationToken, LLMMessage, SystemPromptPayload } from '../../providers/base.js';
+import type { CancellationToken, LLMMessage, SystemPromptPayload } from '../../providers/base.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
+import type { CompressionMode, CompressionPlan } from '../context/optimizer.js';
+import { compressionFinishReasonError, validateCompressionContent } from '../context/optimizer.js';
+import { disableCompressedMessages } from './compression.js';
 import type { DebugCollector } from '../../debug.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
@@ -70,27 +73,46 @@ export async function handleSummarization(
   const streamTiming = new StreamTiming(startedAt);
   const lang = session.settings.language || 'ru';
 
-  let prep: {
-    provider: BaseProvider;
-    llmMessages: LLMMessage[];
-    summarizerPrompt: string;
-    messagesToSummarize: Message[];
-    indices: number[];
-  };
+  let plan: CompressionPlan;
 
   try {
-    prep = deps.optimizer.prepareSummarizationForOrchestrator(session, lang);
+    // Новый движок: единый план сжатия (профиль — по `contextOptimization`).
+    // Легаси-мок/старая реализация оптимизатора без `prepareCompression` —
+    // тонкий адаптер над `prepareSummarizationForOrchestrator`.
+    if (typeof deps.optimizer.prepareCompression === 'function') {
+      // NIT: `metadata.mode` из system-сообщения очереди — приоритетный профиль
+      // (эффективный режим на момент постановки), валидируем значение.
+      const requestedMode = message.metadata?.mode;
+      const modeOpt: { mode?: CompressionMode } = requestedMode === 'summarization'
+        || requestedMode === 'compaction'
+        ? { mode: requestedMode }
+        : {};
+      plan = deps.optimizer.prepareCompression(session, lang, modeOpt);
+    } else {
+      const legacy = deps.optimizer.prepareSummarizationForOrchestrator(session, lang);
+      plan = {
+        mode: 'summarization',
+        provider: legacy.provider,
+        llmMessages: legacy.llmMessages,
+        systemPrompt: legacy.summarizerPrompt,
+        messagesToCompress: legacy.messagesToSummarize,
+        coveredIndices: legacy.indices,
+        keepFromIndex: -1,
+        keepMessages: [],
+      };
+    }
   } catch (e) {
     return { error: String(e), errorType: 'summarization_prep_failed', canRetry: false };
   }
 
-  const provider = prep.provider;
+  const mode: CompressionMode = plan.mode;
+  const provider = plan.provider;
   const providerName = (message.provider as string) || session.settings.provider || '';
 
   debugCollector.captureSessionInfo(session.id, provider.model, providerName, {
     provider_type: provider.type,
     debug_enabled: session.settings.debugEnabled,
-    context_optimization: 'summarization',
+    context_optimization: mode,
   });
 
   // Стрим от LLM суммаризатора
@@ -98,6 +120,7 @@ export async function handleSummarization(
   let accumulatedReasoning = '';
   let finalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   let finalModel: string | undefined;
+  let finalFinishReason: import('@itphx/synth-shared').LlmFinishReason | undefined;
   // ADR-118 §1: суммаризация — ход из одного шага.
   const turnId = `turn_${streamId}`;
   const stepMessageId = generateId();
@@ -114,13 +137,14 @@ export async function handleSummarization(
   signal.addEventListener('abort', () => cancelToken.cancel(), { once: true });
 
   try {
-    for await (const chunk of provider.chatAsync(prep.llmMessages, prep.summarizerPrompt, undefined, debugCollector, cancelToken)) {
+    for await (const chunk of provider.chatAsync(plan.llmMessages, plan.systemPrompt, undefined, debugCollector, cancelToken)) {
       if (cancelToken.cancelled) break;
       if (chunk.isFinal) accumulatedContent = chunk.content;
       else accumulatedContent += chunk.content;
       if (chunk.usage) finalUsage = chunk.usage;
       if (chunk.model) finalModel = chunk.model;
       if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
+      if (chunk.finishReason) finalFinishReason = chunk.finishReason;
 
       // ADR-118 §4: текст шага — дельтами (`part.delta`), рассуждения — частью
       // (`part.updated`).
@@ -153,7 +177,7 @@ export async function handleSummarization(
       providerName,
       agentRole: 'summary',
       content: accumulatedContent,
-      promptChars: deps.estimatePromptChars(prep.llmMessages, prep.summarizerPrompt),
+      promptChars: deps.estimatePromptChars(plan.llmMessages, plan.systemPrompt),
     });
   }
 
@@ -173,14 +197,68 @@ export async function handleSummarization(
     return {};
   }
 
+  // Валидация ответа сжатия: непустое резюме (≥20 символов) / обязательный
+  // шаблон компактизации. При провале — один nudge-повтор (непотоковый).
+  const finishError = compressionFinishReasonError(mode, finalFinishReason);
+  let validationError = finishError;
+  if (!validationError) {
+    const validation = validateCompressionContent(mode, accumulatedContent);
+    if (!validation.ok) {
+      try {
+        const retry = await deps.optimizer.completeCompression(plan);
+        accumulatedContent = retry.content;
+        if (retry.response.usage) finalUsage = retry.response.usage;
+        if (retry.response.model) finalModel = retry.response.model;
+        // m7: клиент уже получил дельты первого (невалидного) ответа —
+        // публикуем полную текстовую часть, чтобы лента совпала с историей.
+        publishPartUpdated(publishChunk, {
+          messageId: stepMessageId,
+          partId: textPartId(0),
+          part: { id: textPartId(0), type: 'text', data: retry.content },
+        });
+      } catch (e) {
+        validationError = String(e);
+      }
+    }
+  }
+  if (validationError) {
+    warning('ORCHESTRATOR', `Compression validation failed (${mode}): ${validationError}`);
+    publishStepFinished(publishChunk, {
+      turnId,
+      stepIndex: 0,
+      messageId: stepMessageId,
+      status: 'error',
+      provider: providerName,
+      agentRole: 'summary',
+    });
+    publishTurnFinished(publishChunk, { turnId, status: 'error' });
+    deps.cancellationTokens.delete(streamId);
+    return deps.handleLlmFailure(session.id, streamId, new Error(validationError), attempt, {
+      debugCollector,
+      durationMs: Date.now() - startedAt,
+      usage: finalUsage,
+      model: finalModel ?? provider.model ?? session.settings.model,
+      providerName,
+      agentRole: 'summary',
+      content: accumulatedContent,
+      promptChars: deps.estimatePromptChars(plan.llmMessages, plan.systemPrompt),
+    });
+  }
+
   // Сохранить summary-сообщение (без message.added — UI получит его через stream.done)
   const durationMs = Date.now() - startedAt;
   const messageCost = deps.computeMessageCost(finalModel, finalUsage);
   await deps.saveAssistantMessage(
     session.id, accumulatedContent, streamId, 'summary',
     finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
-    MessageRole.SUMMARY, prep.indices, true,
-    undefined, undefined, undefined, undefined, { duration_ms: durationMs },
+    MessageRole.SUMMARY, plan.coveredIndices, true,
+    undefined, undefined, undefined, undefined,
+    {
+      duration_ms: durationMs,
+      type: 'auto_summary',
+      mode,
+      ...(plan.keepFromId ? { keepFrom: plan.keepFromId } : {}),
+    },
     undefined, undefined, undefined,
     // ADR-115: медиа-частей ответа в суммаризации нет.
     undefined,
@@ -191,14 +269,19 @@ export async function handleSummarization(
     { turnId, stepIndex: 0, status: 'completed', messageId: stepMessageId },
   );
 
-  // Отключить засуммаризированные сообщения
-  await deps.sessionManager.withLock(session.id, async (s) => {
-    for (const idx of prep.indices) {
-      if (idx >= 0 && idx < s.messages.length && !s.messages[idx]!.pinned) {
-        s.messages[idx]!.disabled = true;
-      }
-    }
-    await deps.sessionManager.saveSession(s);
+  // Отключить только покрытые сообщения (pinned и хвост не трогаем).
+  await disableCompressedMessages(deps, session.id, plan);
+
+  // UI перечитывает историю: сжатие применено (не только overflow-путь).
+  const rawReason = message.metadata?.reason;
+  const appliedReason = rawReason === 'manual' ? 'manual' : 'auto';
+  deps.eventBus.publish(session.id, 'context.summarization_applied', {
+    session_id: session.id,
+    reason: appliedReason,
+    mode,
+    covered_indices: plan.coveredIndices,
+    keep_from: plan.keepFromId ?? null,
+    ...(finalUsage ? { usage: finalUsage } : {}),
   });
 
   const updatedSession = await deps.sessionManager.getSession(session.id);
@@ -231,6 +314,7 @@ export async function handleSummarization(
 
     deps.eventBus.publish(session.id, 'session.updated', {
       session_id: session.id,
+      mode,
       summarization_pending: false,
       can_summarize: freshSession?.canSummarize ?? false,
       input_tokens: freshSession?.inputTokens ?? 0,

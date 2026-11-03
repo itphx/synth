@@ -468,7 +468,12 @@ export class QueueProcessor {
               disabled: false,
               pinned: false,
               hidden: false,
-              metadata: { type: 'summarization_request', reason: 'auto', stream_id: generateStreamId() },
+              metadata: {
+                type: 'summarization_request',
+                reason: 'auto',
+                mode: this.contextOptimizer!.effectiveMode(s) ?? 'summarization',
+                stream_id: generateStreamId(),
+              },
             };
             s.pendingMessages.unshift(sysMsg);
             s.summarizationPending = false;

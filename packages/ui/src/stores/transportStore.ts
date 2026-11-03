@@ -2953,6 +2953,19 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // Ядро применило сжатие истории (обычный путь и overflow,
+      // `_forceCompressForOverflow`): плашка снимается, лента перечитывается
+      // последней страницей. Именно страница (`applyHistoryPage`, не
+      // `setMessages`) — догруженные пользователем старые страницы не теряются.
+      case 'context.summarization_applied': {
+        setSummarizationPending(sid, false)
+        synthApi.getSessionMessages(sid, { limit: MESSAGES_PAGE_LIMIT }).then((r) => {
+          applyHistoryPage(sid, r)
+        }).catch(() => {})
+        refreshSessionFromApi(sid)
+        break
+      }
+
       case 'context.sliding_window_applied': {
         const indices = payload.disabled_indices as number[] | undefined
         if (indices && Array.isArray(indices) && indices.length > 0) {

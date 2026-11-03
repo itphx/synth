@@ -1780,20 +1780,47 @@ context:
 
 | Поле | Дефолт | Значение |
 |---|---|---|
-| `contextOptimization` | `none` | `none` \| `sliding_window` \| `summarization` |
-| `summarizationEnabled` | `false` | авто-суммаризация включена |
-| `summarizationTriggerMode` | `messages` | `messages` \| `tokens` |
-| `summarizeAfterN` | `10` | сообщений до запуска суммаризации (≥1) |
+| `contextOptimization` | `compaction` | `none` \| `sliding_window` \| `summarization` \| `compaction` — режим сжатия; режимы **взаимоисключающие** |
+| `summarizationEnabled` | `true` | legacy-флаг: включает только легаси-фоллбек `none` + `true` = суммаризация |
+| `summarizationTriggerMode` | `messages` | `messages` (N реплик) \| `tokens` (% окна) |
+| `summarizeAfterN` | `10` | реплик пользователя с последнего резюме до запуска суммаризации (≥1) |
 | `summarizeTokenThreshold` | `50` | порог суммаризации, % окна модели (1..100) |
-| `summarizationHeadMessages` | `2` | сообщений в «голове» сводки (≥1) |
-| `summarizationTailMessages` | `3` | сообщений в «хвосте» сводки (≥1) |
+| `summarizationKeepTokens` | `5000` | хвост дословно для суммаризации, токены (`0` — без хвоста) |
+| `compactionTokenThreshold` | `85` | порог компактизации, % окна модели (1..100) |
+| `compactionKeepTokens` | `15000` | хвост дословно для компактизации, токены |
+| `summarizationHeadMessages` | `2` | **deprecated**: сохранён в схеме, движком не используется |
+| `summarizationTailMessages` | `3` | **deprecated**: сохранён в схеме, движком не используется |
 | `slidingWindowMode` | `messages` | `messages` \| `tokens` |
 | `slidingWindowMessageLimit` | `10` | сообщений в скользящем окне (≥1) |
 | `slidingWindowTokenThreshold` | `80` | порог скользящего окна, % окна модели (1..100) |
 
+**Режимы.** `none` — история передаётся целиком, при переполнении действует
+`context.windowPolicy`; `sliding_window` — старые сообщения отключаются по лимиту
+сообщений/токенов (без резюме); `summarization` — итоги беседы (о чём говорили, к чему пришли,
+открытые вопросы, следующие шаги); `compaction` — рабочее состояние по коду/проекту (точные
+пути, команды, ошибки, принятые решения, следующий шаг). Переключение режима — это одно поле
+`contextOptimization`, отдельные флаги его не включают (исключение — легаси-фоллбек ниже).
+Спецификация — [ADR-119](./arch_decisions/adr-119-context-compaction.md).
+
+**Триггеры.** Суммаризация срабатывает по числу реплик пользователя с последнего резюме
+(`messages`, `summarizeAfterN`) либо по заполнению окна (`tokens`, `summarizeTokenThreshold`).
+Компактизация — только по токенам: порог = `окно − max((100 − pct)% окна, 16000)`, то есть
+резерв не меньше 16k токенов; при слишком малом окне (резерв ≥ окна) и при неизвестном окне
+(`0`) авто-триггер выключен — сжатие остаётся доступным вручную и при overflow. Триггер не
+сжимает сразу: он ставит ожидание (`summarization_pending`), сжатие выполняет процессор
+очереди отдельным служебным ходом перед следующим сообщением.
+
+**Хвост.** `summarizationKeepTokens`/`compactionKeepTokens` задают, сколько последних токенов
+остаётся в истории дословно; покрытая часть сжимается в резюме. Для суммаризации `0` означает
+«без хвоста». Резюме уходит в системный блок `summary`, покрытые сообщения получают
+`disabled`, закреплённые (`pinned`) не отключаются.
+
 Заметки сессии (`context.stickyNotes`) — не стратегия оптимизации: они работают независимо от
 выбранной стратегии (добавляются в системный промпт всегда). `sticky_notes` остаётся только
-legacy-значением сохранённых сессий и в дефолтах/UI не предлагается.
+legacy-значением сохранённых сессий и в дефолтах/UI не предлагается. Легаси-сессии с
+`contextOptimization: none` и `summarizationEnabled: true` продолжают работать как суммаризация;
+`summarizationHeadMessages`/`summarizationTailMessages` сохранены только для совместимости схемы
+и сохранённых настроек.
 
 Приоритет: runtime (`GET/PUT/DELETE /api/v2/settings/context-defaults`, `settings.json`/PG; PUT —
 частичный патч, мёржится поверх config) > `config.yaml` `context.defaults` > дефолты схемы.
@@ -1803,11 +1830,15 @@ Env-переменных у этих значений нет. В managed-реж�
 context:
   windowPolicy: warn
   defaults:
-    contextOptimization: summarization
+    contextOptimization: compaction
     summarizationEnabled: true
     summarizationTriggerMode: messages
     summarizeAfterN: 12
     summarizeTokenThreshold: 60
+    summarizationKeepTokens: 5000
+    compactionTokenThreshold: 85
+    compactionKeepTokens: 15000
+    # deprecated, движком не используются:
     summarizationHeadMessages: 2
     summarizationTailMessages: 4
     slidingWindowMode: messages

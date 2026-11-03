@@ -85,13 +85,16 @@ async function put(app: Hono, body: unknown): Promise<Response> {
 }
 
 const DEFAULTS = {
-  contextOptimization: 'none',
-  summarizationEnabled: false,
+  contextOptimization: 'compaction',
+  summarizationEnabled: true,
   summarizationTriggerMode: 'messages',
   summarizeAfterN: 10,
   summarizeTokenThreshold: 50,
   summarizationHeadMessages: 2,
   summarizationTailMessages: 3,
+  summarizationKeepTokens: 5000,
+  compactionKeepTokens: 15000,
+  compactionTokenThreshold: 85,
   slidingWindowMode: 'messages',
   slidingWindowMessageLimit: 10,
   slidingWindowTokenThreshold: 80,
@@ -203,7 +206,7 @@ describe('createContextDefaultsSettingsRoutes', () => {
     const manager = new SessionManager(store, { contextDefaults: () => live.getDefaults() });
 
     const before = await manager.createSession({});
-    expect(before.settings.contextOptimization).toBe('none');
+    expect(before.settings.contextOptimization).toBe('compaction');
     expect(before.settings.summarizeAfterN).toBe(10);
 
     await put(app, { defaults: { contextOptimization: 'summarization', summarizeAfterN: 4 } });
@@ -221,7 +224,7 @@ describe('createContextDefaultsSettingsRoutes', () => {
 
     // Существующая сессия не изменилась.
     const reloaded = await manager.getSession(before.id);
-    expect(reloaded!.settings.contextOptimization).toBe('none');
+    expect(reloaded!.settings.contextOptimization).toBe('compaction');
   });
 
   it('аудит: update и reset пишут scope context-defaults', async () => {
