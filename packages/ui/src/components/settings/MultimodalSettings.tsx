@@ -14,7 +14,7 @@ import {
   type ModalityFamily,
   type ModalityModelRef,
 } from '@/lib/api/synthApi'
-import { useProvidersStore } from '@/stores/providersStore'
+import { useCatalogModels } from '@/hooks/useCatalogModels'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
 import {
@@ -547,8 +547,7 @@ function runningModalities(settings: AttachmentsSettings): string {
 export function MultimodalSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const catalogModels = useProvidersStore((s) => s.models)
-  const loadModels = useProvidersStore((s) => s.loadModels)
+  const catalogModels = useCatalogModels()
 
   const [info, setInfo] = useState<AttachmentsSettingsInfo | null>(null)
   const [defaults, setDefaults] = useState<AttachmentsSettings | null>(null)
@@ -587,12 +586,6 @@ export function MultimodalSettings() {
   useEffect(() => {
     void load()
   }, [load])
-
-  // Каталог моделей нужен для выбора aux-моделей: если он ещё не загружен
-  // (админка «Модели» не открывалась), читаем существующим доменом стора.
-  useEffect(() => {
-    if (useProvidersStore.getState().models.length === 0) void loadModels()
-  }, [loadModels])
 
   const modalityOptions = useMemo(() => {
     const byFamily = {} as Record<ModalityFamily, ModalityModelOption[]>

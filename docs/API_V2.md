@@ -725,9 +725,12 @@ RBAC — как у `POST`-загрузки соответствующего ко
 
 Коды: неизвестная/протухшая сессия загрузки → `404 NOT_FOUND`; `415 attachments_disabled` при
 выключенных вложениях; `415 UNSUPPORTED_MEDIA_TYPE` — MIME вне allowlist (на `complete`).
-Состояние сессий — **в памяти процесса**, временный объект — `attachments/.uploads/<uuid>` на томе
-пода; TTL — 1 час без активности, уборка ленивая (на `create`/`append`/`complete`). Ограничение:
-multi-replica control plane протокол не обслуживает (нужен sticky/один инстанс). Лимиты
+Состояние сессий — **на томе**, рядом с временным объектом: `attachments/.uploads/<uuid>` (байты) и
+sidecar `attachments/.uploads/<uuid>.json` (`{version, sessionId?, name?, mime?, createdAt}`); **смещение
+— фактический размер временного объекта**, поэтому загрузку продолжает любая реплика control plane
+(нужен **общий том `blobs`** — иначе часть попадёт в другой temp-объект). В контуре сессии загрузка
+привязана к сессии (`sessionId` в sidecar): чужая сессия её не видит (`404`). TTL — 1 час без
+активности (уборка ленивая на `create` + фоновый GC `.uploads` по mtime). Лимиты
 (`maxChunkBytes`/`maxBytesPerFile`/`enabled`) читаются из live-резолвера на каждый вызов.
 
 **Раздача (`GET`/`HEAD`).** `:partId` — id **медиа-части сообщения** (`image`/`audio`/`video`/`file`),

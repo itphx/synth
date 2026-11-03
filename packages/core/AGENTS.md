@@ -2373,13 +2373,16 @@ blob-порты и `blob_refs` — ADR-116.
   `BlobStore.writeStream`, считает sha256 инкрементально, копит первые `MIME_HEAD_BYTES` (4 КиБ)
   для `sniffMime`/`looksLikeSvg` и рвёт поток при превышении `maxBytesPerFile`; финал —
   `move` в content-addressed путь и общий `upload`-путь (дедуп, sidecar, миниатюра, метрики).
-  `ingestPath` — тот же финал для готового объекта (chunked). `UploadSessionStore` (in-memory,
-  TTL `UPLOAD_SESSION_TTL_MS` = 1 ч, ленивая уборка) обслуживает протокол
-  `POST …/uploads` → `PUT /:uploadId?offset=N` → `POST …/complete` → `DELETE`; часть ограничена
-  `attachments.maxChunkBytes`, итог — `maxBytesPerFile` (`413`), смещение — `400`. Роуты общие для
-  сессии и staging (`registerUploadSessionRoutes`); raw-body — `openAttachmentRawUpload` (имя
-  `?name=`/`x-file-name`, `declaredMime` из `Content-Type`, MIME всё равно по сигнатуре).
-  Контракт `UploadSessionStore` — **один процесс** (multi-replica — остаток).
+  `ingestPath` — тот же финал для готового объекта (chunked). `UploadSessionStore` (**stateless,
+  multi-replica**: состояние — на томе рядом с temp-объектом, sidecar
+  `attachments/.uploads/<uuid>.json` = `{version, sessionId?, name?, mime?, createdAt}`; **смещение —
+  по фактическому размеру файла**, TTL `UPLOAD_SESSION_TTL_MS` = 1 ч, ленивая уборка) обслуживает
+  протокол `POST …/uploads` → `PUT /:uploadId?offset=N` → `POST …/complete` → `DELETE`; часть
+  ограничена `attachments.maxChunkBytes`, итог — `maxBytesPerFile` (`413`), смещение — `400`.
+  В контуре сессии загрузка привязана к сессии (`sessionId` в sidecar) — чужая сессия её не видит
+  (`404`). Роуты общие для сессии и staging (`registerUploadSessionRoutes`); raw-body —
+  `openAttachmentRawUpload` (имя `?name=`/`x-file-name`, `declaredMime` из `Content-Type`, MIME всё
+  равно по сигнатуре). Требуется **общий том `blobs`** для всех реплик control plane.
 - **GC (`prune.ts`, `startAttachmentPruner`).** Три класса записи, все — в одном прогоне
   (сразу при старте и далее каждые 6 ч, `unref`, ошибки не роняют): **осиротевшие объекты**
   (нет `blob_refs` И старше `attachments.gcDays`; sidecar удаляется вместе с объектом) —

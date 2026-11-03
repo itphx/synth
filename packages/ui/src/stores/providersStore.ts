@@ -23,6 +23,14 @@ interface ProvidersStore {
   modelsError: string | null
   /** Последний применённый запрос каталога (поиск/фильтры) — для «Показать ещё». */
   modelsQuery: ModelsQuery
+  /**
+   * Полный каталог для селекторов моделей (панель сессии/настройки/аналитика):
+   * каталог постраничный, но спискам выбора нужен весь набор — иначе модель
+   * вне текущей страницы недоступна. Грузится один раз (`loadCatalogModels`).
+   */
+  catalogModels: ModelInfo[]
+  catalogLoading: boolean
+  catalogLoaded: boolean
   loading: boolean
   error: string | null
   selectedProviderName: string | null
@@ -35,6 +43,11 @@ interface ProvidersStore {
   loadModels: (query?: ModelsQuery) => Promise<void>
   /** Догрузить следующую страницу каталога (кнопка «Показать ещё»). */
   loadMoreModels: () => Promise<void>
+  /**
+   * Загрузить **полный** каталог для селекторов (все страницы, 500 за раз,
+   * не более 10 страниц). Идемпотентно: повторный вызов — no-op.
+   */
+  loadCatalogModels: () => Promise<void>
   /** Перечитать провайдеров и модели одним заходом (после мутаций каталога). */
   refreshCatalog: () => Promise<void>
   /** Применить свежий список провайдеров; выбор провайдера — только если он стал невалиден. */
@@ -82,6 +95,9 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   modelsLoading: false,
   modelsError: null,
   modelsQuery: {},
+  catalogModels: [],
+  catalogLoading: false,
+  catalogLoaded: false,
   loading: false,
   error: null,
   selectedProviderName: null,
@@ -285,7 +301,39 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
     }
   },
 
+  loadCatalogModels: async () => {
+    const { catalogLoaded, catalogLoading } = get()
+    if (catalogLoaded || catalogLoading) return
+    set({ catalogLoading: true })
+    try {
+      // Каталог постраничный; селекторам нужен весь набор. 500 — потолок
+      // страницы, 10 страниц — предохранитель (5000 моделей).
+      const byId = new Map<string, ModelInfo>()
+      let offset = 0
+      for (let page = 0; page < 10; page += 1) {
+        const { page: chunk } = await synthApi.getModelGroups({ limit: 500, offset })
+        for (const model of chunk.models) {
+          if (!model.enabled || byId.has(model.id)) continue
+          byId.set(model.id, model)
+        }
+        if (chunk.next_offset === null || chunk.models.length === 0) break
+        offset = chunk.next_offset
+      }
+      set({
+        catalogModels: [...byId.values()],
+        catalogLoaded: true,
+        catalogLoading: false,
+      })
+    } catch (e) {
+      set({
+        catalogLoading: false,
+        modelsError: e instanceof Error ? e.message : 'Ошибка загрузки каталога моделей',
+      })
+    }
+  },
+
   refreshCatalog: async () => {
+    set({ catalogModels: [], catalogLoaded: false })
     await Promise.all([get().loadProviders(), get().loadModels()])
   },
 

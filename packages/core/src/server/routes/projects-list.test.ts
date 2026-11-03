@@ -159,14 +159,14 @@ describe('GET /api/v2/projects — страница и сводка-DTO', () => 
     expect(fractional.status).toBe(400);
   });
 
-  it('гибрид: удалённые проекты в merged, next_offset = null', async () => {
+  it('гибрид: удалённые проекты в merged, сквозная пагинация работает', async () => {
     const local = store.create('Локальный', 'local');
     await store.save(local);
     const remote = {
-      listProjects: async () => ({
-        projects: [{ id: 'rp-1', name: 'Удалённый' }],
+      listAllProjects: async () => ({
+        items: [{ id: 'rp-1', name: 'Удалённый' }],
         total: 1,
-        paginationSupported: true,
+        truncated: false,
       }),
     } as unknown as RemoteBackendClient;
 
@@ -181,8 +181,30 @@ describe('GET /api/v2/projects — страница и сводка-DTO', () => 
     expect(body.projects).toHaveLength(2);
     expect(body.projects.find((p) => p.origin === 'local')!.name).toBe('Локальный');
     expect(body.projects.find((p) => p.origin === 'remote')!.id).toBe('remote:rp-1');
-    // Сквозная пагинация через границу миров невозможна.
+    // Обе записи помещаются в страницу — курсор не выдаётся.
     expect(body.next_offset).toBeNull();
     expect(body.total).toBe(2);
+  });
+
+  it('гибрид: merged-список длиннее страницы → next_offset указывает следующую', async () => {
+    const local = store.create('Локальный', 'local');
+    await store.save(local);
+    const remote = {
+      listAllProjects: async () => ({
+        items: [{ id: 'rp-1', name: 'Удалённый' }],
+        total: 1,
+        truncated: false,
+      }),
+    } as unknown as RemoteBackendClient;
+
+    const app = makeApp({}, remote);
+    const body = (await (await app.request('/api/v2/projects?limit=1')).json()) as {
+      projects: Array<{ id: string }>;
+      total: number;
+      next_offset: number | null;
+    };
+    expect(body.projects).toHaveLength(1);
+    expect(body.total).toBe(2);
+    expect(body.next_offset).toBe(1);
   });
 });

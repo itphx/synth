@@ -16,6 +16,9 @@ import { provisionWorkspace, resolveWorkspaceForLocalProject } from '../../engin
 import { serializeProject, serializeProjectSummary } from '../serialize.js';
 import { paginate, parseBoundedInt } from '../pagination.js';
 import { isRemoteRef, toLocalId, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
+// Гибридный merge списков: общий порядок миров + нарезка страницы после merge.
+import { localEntries, remoteEntries, sortHybridList } from './hybrid-list.js';
+import type { HybridListEntry } from './hybrid-list.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import type { WorktreeService, WorktreeUpdateDetail } from '../../engine/worktree/service.js';
@@ -229,29 +232,38 @@ export function createProjectRoutes(
     const elevated = (await opts.resolveElevated?.(c)) ?? false;
     const userId = await currentUserId(c);
     const projects = elevated ? await store.list() : await store.list(userId);
-    const { page, total, next_offset } = paginate(projects, offset, limit);
-    const localDto = page.map(serializeProjectSummary);
     if (!remoteClient) {
+      const { page, total, next_offset } = paginate(projects, offset, limit);
+      const localDto = page.map(serializeProjectSummary);
       return c.json({ projects: localDto, total, offset, limit, next_offset });
     }
     try {
-      const remote = await remoteClient.listProjects();
-      const merged = mergeItems(localDto, remote.projects);
-      // Гибрид: удалённый список приходит **без** постраничной выдачи (старый
-      // сервер отдаёт массив), поэтому сквозная пагинация невозможна —
-      // `next_offset` = null, пока в merged есть удалённые проекты.
-      const nextOffset = remote.projects.length > 0 ? null : next_offset;
-      return c.json({
-        projects: merged,
-        total: total + remote.total,
-        offset,
-        limit,
-        next_offset: nextOffset,
-      });
+      // Гибрид: список **обоих** миров. Удалённая сторона забирается целиком
+      // (обход страниц), merge сортируется по времени записи, и только потом
+      // нарезается страница — иначе порядок «новые сверху» ломался бы на
+      // границе миров, а курсор `next_offset` нельзя было бы выдать.
+      const remoteAll = await remoteClient.listAllProjects();
+      const entries: HybridListEntry<unknown>[] = [
+        ...localEntries(projects),
+        ...remoteEntries(mergeItems([], remoteAll.items)),
+      ];
+      const sorted = sortHybridList(entries);
+      const { page, total, next_offset } = paginate(sorted, offset, limit);
+      const merged = page.map((entry) => (entry.origin === 'local'
+        ? serializeProjectSummary(entry.value as Project)
+        : entry.value as Record<string, unknown>));
+      // Кап страниц удалённого обхода: список неполон — курсор выдавать нельзя.
+      if (remoteAll.truncated) {
+        console.warn('[hybrid] удалённый список проектов обрезан капом страниц — next_offset не выдаётся');
+        return c.json({ projects: merged, total, offset, limit, next_offset: null });
+      }
+      return c.json({ projects: merged, total, offset, limit, next_offset });
     } catch (err) {
       // Offline-деградация: сервер недоступен — отдаём локальный мир.
       if (err instanceof RemoteError) {
         console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
+        const { page, total, next_offset } = paginate(projects, offset, limit);
+        const localDto = page.map(serializeProjectSummary);
         return c.json({ projects: localDto, total, offset, limit, next_offset });
       }
       throw err;

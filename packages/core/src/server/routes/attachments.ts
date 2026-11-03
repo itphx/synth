@@ -22,7 +22,10 @@ import {
   UploadSessionError,
   UploadSessionStore,
 } from '../../engine/attachments/uploads.js';
-import type { CreateUploadSessionInput } from '../../engine/attachments/uploads.js';
+import type {
+  CreateUploadSessionInput,
+  UploadSessionScope,
+} from '../../engine/attachments/uploads.js';
 
 /** Доступные виды медиа-частей (последняя часть пути раздачи). */
 const MEDIA_PART_TYPES = new Set(['image', 'audio', 'video', 'file']);
@@ -71,7 +74,7 @@ export interface AttachmentRoutesDeps {
   config: AttachmentsConfig | (() => AttachmentsConfig);
   /**
    * B2a: реестр сессий chunked-загрузки. Не задан — создаётся внутри фабрики
-   * (in-memory, один процесс; см. `uploads.ts` о multi-replica).
+   * (состояние — на томе, ADR-115 §«Chunked-протокол»; см. `uploads.ts`).
    */
   uploads?: UploadSessionStore;
 }
@@ -551,6 +554,18 @@ export function registerUploadSessionRoutes(app: Hono, opts: UploadSessionRoutes
   const base = opts.basePath ?? '/:id/attachments/uploads';
   const { uploads, messages } = opts;
 
+  /**
+   * Область операции: сессия-владелец контура.
+   *
+   * В контуре сессии база — `/:id/attachments/uploads`, поэтому `id` — id сессии:
+   * загрузка привязывается к ней (sidecar на томе) и чужой сессией не
+   * завершается. В staging-контуре (база `/uploads`) сессии нет — привязки нет.
+   */
+  const scopeOf = (c: Context): UploadSessionScope | undefined => {
+    const sessionId = c.req.param('id');
+    return sessionId ? { sessionId } : undefined;
+  };
+
   const missingSession = async (c: Context): Promise<Response | null> => {
     if (!opts.sessionExists) return null;
     if (await opts.sessionExists(c)) return null;
@@ -599,7 +614,6 @@ export function registerUploadSessionRoutes(app: Hono, opts: UploadSessionRoutes
       return uploadSessionErrorResponse(c, err, messages, limits(config));
     }
   });
-
   app.put(`${base}/:uploadId`, async (c) => {
     const missing = await missingSession(c);
     if (missing) return missing;
@@ -647,7 +661,10 @@ export function registerUploadSessionRoutes(app: Hono, opts: UploadSessionRoutes
     }
 
     try {
-      return c.json(await uploads.append(c.req.param('uploadId'), offset, bytes), 200);
+      return c.json(
+        await uploads.append(c.req.param('uploadId'), offset, bytes, scopeOf(c)),
+        200,
+      );
     } catch (err) {
       return uploadSessionErrorResponse(c, err, messages, limits(config));
     }
@@ -660,7 +677,7 @@ export function registerUploadSessionRoutes(app: Hono, opts: UploadSessionRoutes
     if (!config.enabled) return disabled(c);
 
     try {
-      const meta = await uploads.complete(c.req.param('uploadId'));
+      const meta = await uploads.complete(c.req.param('uploadId'), scopeOf(c));
       if (opts.onComplete) await opts.onComplete(meta, c);
       return c.json(meta, 201);
     } catch (err) {
@@ -672,7 +689,7 @@ export function registerUploadSessionRoutes(app: Hono, opts: UploadSessionRoutes
     const missing = await missingSession(c);
     if (missing) return missing;
     // Идемпотентно: неизвестная/уже отменённая сессия — тоже 204.
-    await uploads.cancel(c.req.param('uploadId'));
+    await uploads.cancel(c.req.param('uploadId'), scopeOf(c));
     return c.body(null, 204);
   });
 }

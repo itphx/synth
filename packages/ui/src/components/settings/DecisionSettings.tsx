@@ -4,6 +4,7 @@ import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { useProvidersStore } from '@/stores/providersStore'
+import { useCatalogModels } from '@/hooks/useCatalogModels'
 import { Button } from '@/components/ui/button'
 import { confirm } from '@/lib/confirm'
 import {
@@ -58,7 +59,7 @@ export function DecisionSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
   const providers = useProvidersStore((s) => s.providers)
-  const models = useProvidersStore((s) => s.models)
+  const models = useCatalogModels()
 
   const [remote, setRemote] = useState<DecisionSettingsData | null>(null)
   const [defaults, setDefaults] = useState<DecisionSettingsData | null>(null)

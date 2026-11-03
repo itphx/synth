@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
+import { useCatalogModels } from '@/hooks/useCatalogModels'
 import {
   DEFAULT_ROUTING_DEFAULTS,
   loadRoutingDefaults,
@@ -50,7 +51,7 @@ const categoryRank = (category: string): number => {
 export function RoutingSettings() {
   const { t } = useI18n()
   const providers = useProvidersStore((s) => s.providers)
-  const models = useProvidersStore((s) => s.models)
+  const models = useCatalogModels()
 
   const [initialSettings] = useState(loadRoutingDefaults)
   const draft = useSettingsDraft<RoutingDefaults>({

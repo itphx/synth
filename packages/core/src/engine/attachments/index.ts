@@ -27,13 +27,16 @@ export {
   UploadSessionStore,
   UploadSessionError,
   UPLOAD_SESSION_TTL_MS,
+  UPLOAD_SESSION_SIDECAR_SUFFIX,
+  UPLOAD_SESSION_SIDECAR_VERSION,
 } from './uploads.js';
 export type {
   AppendedUploadChunk,
   CreatedUploadSession,
   CreateUploadSessionInput,
   UploadSessionErrorCode,
-  UploadSessionRecord,
+  UploadSessionScope,
+  UploadSessionSidecar,
   UploadSessionStoreDeps,
 } from './uploads.js';
 export { stripMetadata } from './strip-metadata.js';

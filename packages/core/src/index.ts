@@ -371,6 +371,8 @@ export {
   UploadSessionStore,
   UploadSessionError,
   UPLOAD_SESSION_TTL_MS,
+  UPLOAD_SESSION_SIDECAR_SUFFIX,
+  UPLOAD_SESSION_SIDECAR_VERSION,
 } from './engine/attachments/index.js';
 export type {
   AttachmentServiceDeps,
@@ -390,7 +392,8 @@ export type {
   CreatedUploadSession,
   CreateUploadSessionInput,
   UploadSessionErrorCode,
-  UploadSessionRecord,
+  UploadSessionScope,
+  UploadSessionSidecar,
   UploadSessionStoreDeps,
 } from './engine/attachments/index.js';
 // ADR-115 × ADR-077: медиа-раннер — единая точка запуска `ffmpeg` (inline —

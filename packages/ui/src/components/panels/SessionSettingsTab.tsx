@@ -5,6 +5,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useProvidersStore } from '@/stores/providersStore'
+import { useCatalogModels } from '@/hooks/useCatalogModels'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { useNotification } from '@/hooks/useNotification'
@@ -296,10 +297,9 @@ export function SessionSettingsTab() {
   const setSelectedProvider = useProvidersStore(s => s.setSelectedProvider)
   const setSelectedModel = useProvidersStore(s => s.setSelectedModel)
   const loadProviders = useProvidersStore(s => s.loadProviders)
-  const loadModels = useProvidersStore(s => s.loadModels)
 
   const providers = useProvidersStore((s) => s.providers)
-  const models = useProvidersStore((s) => s.models)
+  const models = useCatalogModels()
 
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [debugEnabled, setDebugEnabled] = useState(false)
@@ -410,8 +410,7 @@ export function SessionSettingsTab() {
 
   useEffect(() => {
     loadProviders()
-    loadModels()
-  }, [loadProviders, loadModels])
+  }, [loadProviders])
 
   const loadMcpEffective = useCallback(async (id: string) => {
     setMcpLoading(true)

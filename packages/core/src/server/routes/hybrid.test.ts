@@ -74,6 +74,19 @@ function createFakeRemoteClient(overrides: Record<string, unknown> = {}) {
       next_offset: null,
       paginationSupported: true,
     }),
+    // Обход страниц удалённого списка целиком (merge гибрида, ADR-042).
+    listAllProjects: vi.fn().mockResolvedValue({
+      items: [{ id: 'rp-1', name: 'Удалённый проект' }],
+      total: 1,
+      truncated: false,
+    }),
+    listAllSessions: vi.fn().mockResolvedValue({
+      items: [
+        { id: 'rs-1', name: 'Удалённая сессия', project_id: 'rp-1', parent_id: null, references: [{ session_id: 'rs-0' }] },
+      ],
+      total: 1,
+      truncated: false,
+    }),
     getSession: vi.fn().mockResolvedValue({ id: 'rs-1', name: 'Удалённая сессия', project_id: 'rp-1' }),
     createSession: vi.fn().mockResolvedValue({ id: 'rs-new', name: 'Создана на бэке', project_id: 'rp-1' }),
     createProject: vi.fn().mockResolvedValue({ id: 'rp-new', name: 'Проект на бэке' }),
@@ -209,10 +222,10 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       expect(remoteSes.parent_id).toBeNull();
       expect(remoteSes.references![0]!.session_id).toBe('remote:rs-0');
 
-      // Удалённая часть не пагинируется → сквозной курсор неизвестен.
+      // Сквозной курсор: merged-список (2 записи) помещается в страницу.
       expect(body.next_offset).toBeNull();
       expect(body.total).toBe(2);
-      expect(remote.listSessions).toHaveBeenCalled();
+      expect(remote.listAllSessions).toHaveBeenCalled();
     });
 
     it('?project_id=remote:xxx — только удалённые, префикс снят для backend', async () => {
@@ -224,7 +237,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       expect(body.sessions).toHaveLength(1);
       expect(body.sessions[0].origin).toBe('remote');
       expect(body.sessions[0].id).toBe('remote:rs-1');
-      expect(remote.listSessions).toHaveBeenCalledWith('rp-1');
+      expect(remote.listAllSessions).toHaveBeenCalledWith('rp-1');
     });
 
     it('?project_id=remote:xxx без remoteClient → 502 REMOTE_UNAVAILABLE', async () => {
@@ -415,8 +428,8 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const remoteP = body.projects.find((x) => x.origin === 'remote')!;
       expect(remoteP.id).toBe('remote:rp-1');
       expect(remoteP.name).toBe('Удалённый проект');
-      expect(remote.listProjects).toHaveBeenCalled();
-      // Гибрид: удалённая часть приходит без постраничной выдачи → курсор неизвестен.
+      expect(remote.listAllProjects).toHaveBeenCalled();
+      // Сквозной курсор: merged-список (2 записи) помещается в страницу.
       expect(body.next_offset).toBeNull();
       expect(body.total).toBe(2);
     });

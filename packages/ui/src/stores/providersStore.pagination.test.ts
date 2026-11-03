@@ -69,6 +69,9 @@ beforeEach(() => {
     modelsLoading: false,
     modelsError: null,
     modelsQuery: {},
+    catalogModels: [],
+    catalogLoading: false,
+    catalogLoaded: false,
     loading: false,
     error: null,
     selectedProviderName: null,
@@ -189,6 +192,42 @@ describe('providersStore — выбранная модель вне первой
     await useProvidersStore.getState().ensureSelectedModelVisible()
 
     expect(apiMock.getModelGroups).not.toHaveBeenCalled()
+  })
+})
+
+describe('providersStore — полный каталог для селекторов (T6)', () => {
+  it('loadCatalogModels: обходит страницы, фильтрует disabled и дедуплицирует', async () => {
+    apiMock.getModelGroups
+      .mockResolvedValueOnce(page([model('itphx/m1', 'm1'), model('itphx/m2', 'm2', { enabled: false })], 500, 3))
+      .mockResolvedValueOnce(page([model('itphx/m3', 'm3'), model('itphx/m1', 'm1')], null, 3))
+
+    await useProvidersStore.getState().loadCatalogModels()
+
+    const state = useProvidersStore.getState()
+    expect(state.catalogLoaded).toBe(true)
+    expect(state.catalogModels.map((m) => m.name)).toEqual(['m1', 'm3'])
+    expect(apiMock.getModelGroups).toHaveBeenNthCalledWith(1, { limit: 500, offset: 0 })
+    expect(apiMock.getModelGroups).toHaveBeenNthCalledWith(2, { limit: 500, offset: 500 })
+  })
+
+  it('loadCatalogModels: повторный вызов — no-op', async () => {
+    apiMock.getModelGroups.mockResolvedValue(page([model('itphx/m1', 'm1')], null))
+    await useProvidersStore.getState().loadCatalogModels()
+    apiMock.getModelGroups.mockClear()
+
+    await useProvidersStore.getState().loadCatalogModels()
+
+    expect(apiMock.getModelGroups).not.toHaveBeenCalled()
+  })
+
+  it('loadCatalogModels: ошибка — modelsError, каталог не помечен загруженным', async () => {
+    apiMock.getModelGroups.mockRejectedValue(new Error('boom'))
+
+    await useProvidersStore.getState().loadCatalogModels()
+
+    const state = useProvidersStore.getState()
+    expect(state.catalogLoaded).toBe(false)
+    expect(state.modelsError).toContain('boom')
   })
 })
 

@@ -1,9 +1,13 @@
 /**
- * ADR-115 (B2a): chunked-загрузка — реестр сессий и финализация временного
- * объекта (`AttachmentService.ingestPath`).
+ * ADR-115 (B2a): chunked-загрузка — stateless-реестр сессий и финализация
+ * временного объекта (`AttachmentService.ingestPath`).
  *
  * Проверяется: инициализация/части/завершение/отмена, смещение и лимиты,
  * TTL с инъекцией времени, дедуп, sidecar и уборка временного объекта.
+ *
+ * Отдельно — **multi-replica**: состояние сессии лежит на томе (temp + sidecar),
+ * поэтому создание в одном экземпляре стора продолжается в другом (реплики
+ * control plane над общим томом `blobs`).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
@@ -20,6 +24,8 @@ import {
   AttachmentService,
 } from './service.js';
 import {
+  UPLOAD_SESSION_SIDECAR_SUFFIX,
+  UPLOAD_SESSION_SIDECAR_VERSION,
   UploadSessionError,
   UploadSessionStore,
   UPLOAD_SESSION_TTL_MS,
@@ -85,9 +91,16 @@ describe('UploadSessionStore (ADR-115, B2a)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  /** Все временные объекты загрузки (после успешного завершения/уборки — пусто). */
+  /** Временные объекты загрузки (без sidecar'ов). */
   async function tempObjects(): Promise<Array<{ path: string; size: number }>> {
-    return blobs.list(ATTACHMENT_UPLOAD_DIR);
+    const entries = await blobs.list(ATTACHMENT_UPLOAD_DIR);
+    return entries.filter((e) => !e.path.endsWith(UPLOAD_SESSION_SIDECAR_SUFFIX));
+  }
+
+  /** Sidecar'ы сессий загрузки. */
+  async function sidecars(): Promise<Array<{ path: string; size: number }>> {
+    const entries = await blobs.list(ATTACHMENT_UPLOAD_DIR);
+    return entries.filter((e) => e.path.endsWith(UPLOAD_SESSION_SIDECAR_SUFFIX));
   }
 
   it('create: пустой временный объект и maxChunkBytes из конфига', async () => {
@@ -101,12 +114,39 @@ describe('UploadSessionStore (ADR-115, B2a)', () => {
     expect(temps[0]!.path.startsWith(`${ATTACHMENT_UPLOAD_DIR}/`)).toBe(true);
   });
 
+  it('create: sidecar на томе рядом с temp (version/sessionId/name/mime/createdAt)', async () => {
+    const created = await store.create({
+      sessionId: 's1',
+      name: 'photo.png',
+      declaredMime: 'image/png',
+    });
+
+    const [sidecar] = await sidecars();
+    expect(sidecar).toBeDefined();
+    expect(sidecar!.path).toBe(
+      `${ATTACHMENT_UPLOAD_DIR}/${created.uploadId}${UPLOAD_SESSION_SIDECAR_SUFFIX}`,
+    );
+    const parsed = JSON.parse((await blobs.read(sidecar!.path))!.toString('utf-8')) as {
+      version: number;
+      sessionId?: string;
+      name?: string;
+      mime?: string;
+      createdAt: number;
+    };
+    expect(parsed.version).toBe(UPLOAD_SESSION_SIDECAR_VERSION);
+    expect(parsed.sessionId).toBe('s1');
+    expect(parsed.name).toBe('photo.png');
+    expect(parsed.mime).toBe('image/png');
+    expect(parsed.createdAt).toBe(clock.value);
+  });
+
   it('create: заявленный size больше maxBytesPerFile → too_large без временного объекта', async () => {
     await expect(store.create({ size: 2048 })).rejects.toMatchObject({
       name: 'UploadSessionError',
       code: 'too_large',
     });
     expect(await tempObjects()).toHaveLength(0);
+    expect(await sidecars()).toHaveLength(0);
   });
 
   it('create: вложения выключены → AttachmentError attachments_disabled', async () => {
@@ -173,6 +213,7 @@ describe('UploadSessionStore (ADR-115, B2a)', () => {
     expect(await blobs.exists(meta.blobPath)).toBe(true);
     expect(await blobs.exists(`${meta.blobPath}.json`)).toBe(true);
     expect(await tempObjects()).toHaveLength(0);
+    expect(await sidecars()).toHaveLength(0);
 
     // Повторное завершение — сессии уже нет.
     await expect(store.complete(created.uploadId)).rejects.toMatchObject({
@@ -202,18 +243,20 @@ describe('UploadSessionStore (ADR-115, B2a)', () => {
     expect(err).toBeInstanceOf(AttachmentError);
     expect((err as AttachmentError).code).toBe('empty');
     expect(await tempObjects()).toHaveLength(0);
+    expect(await sidecars()).toHaveLength(0);
   });
 
-  it('cancel: удаляет temp и запись, повтор идемпотентен', async () => {
+  it('cancel: удаляет temp и sidecar, повтор идемпотентен', async () => {
     const created = await store.create();
     await store.append(created.uploadId, 0, Buffer.from('abc'));
     await store.cancel(created.uploadId);
     expect(await tempObjects()).toHaveLength(0);
+    expect(await sidecars()).toHaveLength(0);
     await expect(store.cancel(created.uploadId)).resolves.toBeUndefined();
     await expect(store.complete(created.uploadId)).rejects.toMatchObject({ code: 'not_found' });
   });
 
-  it('TTL: протухшая сессия и её temp удаляются лениво', async () => {
+  it('TTL: протухшая сессия и её temp удаляются', async () => {
     const created = await store.create();
     await store.append(created.uploadId, 0, Buffer.from('abc'));
 
@@ -222,16 +265,127 @@ describe('UploadSessionStore (ADR-115, B2a)', () => {
       store.append(created.uploadId, 3, Buffer.from('x')),
     ).rejects.toMatchObject({ name: 'UploadSessionError', code: 'not_found' });
     expect(await tempObjects()).toHaveLength(0);
+    expect(await sidecars()).toHaveLength(0);
   });
 
-  it('TTL: активная сессия переживает уборку (updatedAt обновляется append-ом)', async () => {
+  it('TTL: активная сессия переживает срок (активность обновляет sidecar)', async () => {
     const created = await store.create();
     clock.value += UPLOAD_SESSION_TTL_MS - 1;
     await store.append(created.uploadId, 0, Buffer.from('a'));
     clock.value += UPLOAD_SESSION_TTL_MS - 1;
-    // append обновляет updatedAt — сессия ещё жива.
+    // append обновляет время активности — сессия ещё жива.
     const result = await store.append(created.uploadId, 1, Buffer.from('b'));
     expect(result.received).toBe(2);
+  });
+
+  it('pruneExpired: удаляет протухшие temp и sidecar', async () => {
+    const stale = await store.create();
+    await store.append(stale.uploadId, 0, Buffer.from('abc'));
+
+    clock.value += Math.floor(UPLOAD_SESSION_TTL_MS / 2);
+    const fresh = await store.create();
+    clock.value += Math.floor(UPLOAD_SESSION_TTL_MS / 2) + 1;
+
+    const removed = await store.pruneExpired();
+    expect(removed).toBe(1);
+    expect(await tempObjects()).toHaveLength(1);
+    expect(await blobs.exists(`${ATTACHMENT_UPLOAD_DIR}/${stale.uploadId}`)).toBe(false);
+    expect(await blobs.exists(`${ATTACHMENT_UPLOAD_DIR}/${fresh.uploadId}`)).toBe(true);
+  });
+});
+
+describe('UploadSessionStore: multi-replica (состояние на томе)', () => {
+  let tmpDir: string;
+  let blobs: FileBlobStore;
+  let config: AttachmentsConfig;
+  let service: AttachmentService;
+  let clock: { value: number };
+  /** Реплика 1 — создаёт сессию. */
+  let replicaA: UploadSessionStore;
+  /** Реплика 2 — продолжает и завершает загрузку. */
+  let replicaB: UploadSessionStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-attachment-uploads-mr-'));
+    blobs = new FileBlobStore({ root: join(tmpDir, 'blobs') });
+    config = testConfig();
+    service = new AttachmentService({ blobs, config: () => config });
+    clock = { value: 1_000 };
+    const deps = { service, config: () => config, now: () => clock.value };
+    replicaA = new UploadSessionStore(deps);
+    replicaB = new UploadSessionStore(deps);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('create в одной реплике, append/complete — в другой', async () => {
+    const bytes = pngBytes(9, 12);
+    const created = await replicaA.create({ name: 'photo.png', declaredMime: 'image/png' });
+
+    // Смещение — фактический размер объекта на томе: вторая реплика его знает.
+    const first = await replicaB.append(created.uploadId, 0, bytes.subarray(0, 20));
+    expect(first).toEqual({ received: 20, nextOffset: 20 });
+    const second = await replicaB.append(created.uploadId, 20, bytes.subarray(20));
+    expect(second).toEqual({ received: bytes.length, nextOffset: bytes.length });
+
+    const meta = await replicaB.complete(created.uploadId);
+    expect(meta.sha256).toBe(sha256(bytes));
+    expect(await blobs.exists(meta.blobPath)).toBe(true);
+    expect(await blobs.list(ATTACHMENT_UPLOAD_DIR)).toHaveLength(0);
+  });
+
+  it('сессия, созданная в другой реплике, не «не найдена»', async () => {
+    const created = await replicaA.create();
+    await expect(
+      replicaB.append(created.uploadId, 0, Buffer.from('abc')),
+    ).resolves.toEqual({ received: 3, nextOffset: 3 });
+  });
+
+  it('привязка к сессии: чужая сессия не видит загрузку (not_found)', async () => {
+    const created = await replicaA.create({ sessionId: 's1' });
+
+    await expect(
+      replicaB.append(created.uploadId, 0, Buffer.from('abc'), { sessionId: 's2' }),
+    ).rejects.toMatchObject({ name: 'UploadSessionError', code: 'not_found' });
+    await expect(
+      replicaB.complete(created.uploadId, { sessionId: 's2' }),
+    ).rejects.toMatchObject({ name: 'UploadSessionError', code: 'not_found' });
+
+    // Своя сессия — работает.
+    await expect(
+      replicaB.append(created.uploadId, 0, Buffer.from('abc'), { sessionId: 's1' }),
+    ).resolves.toEqual({ received: 3, nextOffset: 3 });
+  });
+
+  it('привязка к сессии: отмена чужой загрузки не удаляет temp', async () => {
+    const created = await replicaA.create({ sessionId: 's1' });
+    await replicaA.append(created.uploadId, 0, Buffer.from('abc'), { sessionId: 's1' });
+
+    await replicaB.cancel(created.uploadId, { sessionId: 's2' });
+    expect(await blobs.exists(`${ATTACHMENT_UPLOAD_DIR}/${created.uploadId}`)).toBe(true);
+
+    await replicaB.cancel(created.uploadId, { sessionId: 's1' });
+    expect(await blobs.exists(`${ATTACHMENT_UPLOAD_DIR}/${created.uploadId}`)).toBe(false);
+  });
+
+  it('staging-контур: загрузка без sessionId доступна без области', async () => {
+    const created = await replicaA.create({ declaredMime: 'text/plain' });
+    await expect(
+      replicaB.append(created.uploadId, 0, Buffer.from('abc')),
+    ).resolves.toEqual({ received: 3, nextOffset: 3 });
+    await expect(replicaB.complete(created.uploadId)).resolves.toMatchObject({ size: 3 });
+  });
+
+  it('offset сверяется с фактическим размером файла (не со счётчиком в памяти)', async () => {
+    const created = await replicaA.create();
+    await replicaA.append(created.uploadId, 0, Buffer.from('abc'));
+
+    // Вторая реплика не знает счётчика первой — offset берётся из размера файла.
+    await expect(
+      replicaB.append(created.uploadId, 3, Buffer.from('de')),
+    ).resolves.toEqual({ received: 5, nextOffset: 5 });
   });
 });
 

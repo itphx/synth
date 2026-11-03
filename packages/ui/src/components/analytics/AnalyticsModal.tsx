@@ -23,7 +23,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
-import { useProvidersStore } from '@/stores/providersStore'
+import { useCatalogModels } from '@/hooks/useCatalogModels'
 import { AnalyticsTable } from './AnalyticsTable'
 import {
   AnalyticsPrintReport,
@@ -256,7 +256,7 @@ export function AnalyticsModal() {
   const user = useAuthStore((s) => s.user)
   const projects = useProjectsStore((s) => s.projects)
   const agents = useAgentsStore((s) => s.agents)
-  const models = useProvidersStore((s) => s.models)
+  const models = useCatalogModels()
 
   const roles = user?.roles ?? []
   const canSelectUser = roles.some(
@@ -301,7 +301,6 @@ export function AnalyticsModal() {
   useEffect(() => {
     void useProjectsStore.getState().loadProjects()
     void useAgentsStore.getState().loadAgents()
-    void useProvidersStore.getState().loadModels()
   }, [])
 
   // Список пользователей — только для сквозного обзора (иначе сервер вернёт 403).

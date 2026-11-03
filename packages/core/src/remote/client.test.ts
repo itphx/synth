@@ -45,6 +45,7 @@ describe('RemoteBackendClient', () => {
       projects: [{ id: 'p1', name: 'Проект' }],
       total: 1,
       paginationSupported: false,
+      next_offset: null,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       'http://backend.test/api/v2/projects',
@@ -67,7 +68,23 @@ describe('RemoteBackendClient', () => {
       projects: [{ id: 'p1' }],
       total: 7,
       paginationSupported: true,
+      next_offset: 100,
     });
+  });
+
+  it('listProjects: limit/offset уходят в query', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ projects: [], total: 0, offset: 20, limit: 10, next_offset: null }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await makeClient().listProjects({ limit: 10, offset: 20 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/projects?limit=10&offset=20',
+      expect.anything(),
+    );
+    expect(result.next_offset).toBeNull();
   });
 
   it('без токена не шлёт Authorization', async () => {
@@ -159,6 +176,7 @@ describe('RemoteBackendClient', () => {
     expect(list.sessions).toHaveLength(2);
     expect(list.total).toBe(7);
     expect(list.paginationSupported).toBe(true);
+    expect(list.next_offset).toBe(2);
   });
 
   it('listSessions: старый формат (массив) → sessions=[…], пагинация не поддерживается', async () => {
@@ -169,6 +187,94 @@ describe('RemoteBackendClient', () => {
     expect(list.sessions).toHaveLength(1);
     expect(list.total).toBe(1);
     expect(list.paginationSupported).toBe(false);
+    expect(list.next_offset).toBeNull();
+  });
+
+  it('listSessions: limit/offset уходят в query вместе с project_id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await makeClient().listSessions('p1', { limit: 50, offset: 100 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/sessions?project_id=p1&limit=50&offset=100',
+      expect.anything(),
+    );
+  });
+
+  it('listAllProjects: обход страниц до next_offset=null', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ projects: [{ id: 'p1' }], total: 2, offset: 0, limit: 500, next_offset: 1 }))
+      .mockResolvedValueOnce(jsonResponse({ projects: [{ id: 'p2' }], total: 2, offset: 1, limit: 500, next_offset: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const all = await makeClient().listAllProjects();
+
+    expect(all.items.map((p) => p.id)).toEqual(['p1', 'p2']);
+    expect(all.total).toBe(2);
+    expect(all.truncated).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]![0]).toBe('http://backend.test/api/v2/projects?limit=500&offset=0');
+    expect(fetchMock.mock.calls[1]![0]).toBe('http://backend.test/api/v2/projects?limit=500&offset=1');
+  });
+
+  it('listAllProjects: старый сервер (массив) — один вызов, список полный', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([{ id: 'p1' }, { id: 'p2' }]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const all = await makeClient().listAllProjects();
+
+    expect(all.items).toHaveLength(2);
+    expect(all.total).toBe(2);
+    expect(all.truncated).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('listAllProjects: кап страниц → truncated=true (список неполон)', async () => {
+    // Сервер всегда отдаёт курсор дальше — обход упирается в cap.
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
+      const offset = Number(new URL(String(url)).searchParams.get('offset') ?? '0');
+      return jsonResponse({
+        projects: [{ id: `p${offset}` }],
+        total: 1000,
+        offset,
+        limit: 500,
+        next_offset: offset + 1,
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const all = await makeClient().listAllProjects({ maxPages: 3 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(all.truncated).toBe(true);
+    expect(all.items).toHaveLength(3);
+  });
+
+  it('listAllProjects: недвижущийся курсор → truncated=true (без бесконечного цикла)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ projects: [{ id: 'p' }], total: 10, offset: 0, limit: 500, next_offset: 0 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const all = await makeClient().listAllProjects();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(all.truncated).toBe(true);
+  });
+
+  it('listAllSessions: фильтр по проекту сохраняется на всех страницах', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ sessions: [{ id: 's1' }], total: 2, offset: 0, limit: 500, next_offset: 1 }))
+      .mockResolvedValueOnce(jsonResponse({ sessions: [{ id: 's2' }], total: 2, offset: 1, limit: 500, next_offset: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const all = await makeClient().listAllSessions('p1');
+
+    expect(all.items.map((s) => s.id)).toEqual(['s1', 's2']);
+    expect(all.truncated).toBe(false);
+    expect(fetchMock.mock.calls[0]![0]).toBe('http://backend.test/api/v2/sessions?project_id=p1&limit=500&offset=0');
+    expect(fetchMock.mock.calls[1]![0]).toBe('http://backend.test/api/v2/sessions?project_id=p1&limit=500&offset=1');
   });
 
   it('getSessionMessages пробрасывает limit/before в query', async () => {
@@ -181,6 +287,27 @@ describe('RemoteBackendClient', () => {
       'http://backend.test/api/v2/sessions/s1/messages?limit=50&before=12',
       expect.anything(),
     );
+  });
+
+  it('getSessionMessages: нормализует ответ (страница) и голый массив', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      messages: [{ id: 'm1', seq: 1 }],
+      session_id: 's1',
+      has_more: true,
+      next_before: 1,
+    })));
+    const page = await makeClient().getSessionMessages('s1');
+    expect(page).toEqual({
+      messages: [{ id: 'm1', seq: 1 }],
+      session_id: 's1',
+      has_more: true,
+      next_before: 1,
+    });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([{ id: 'm1', seq: 1 }])));
+    const legacy = await makeClient().getSessionMessages('s1');
+    expect(legacy.messages).toHaveLength(1);
+    expect(legacy.has_more).toBeUndefined();
   });
 
   it('getAuthStatus возвращает структуру /auth/status', async () => {

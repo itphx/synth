@@ -11,8 +11,7 @@
 > моделей плоский и постраничный, фильтры `search`/`enabled`/`modality`; **§5.12** — cap чтения файла
 > `storage.maxReadBytes` → `413 FILE_TOO_LARGE` + `details`, `maxDepth` ≤ 3, бюджет 10 000 записей +
 > `truncated`; **§5.15** — обрезка diff коммита > 1 МиБ → `diff_truncated`; **§5.34/§5.35** — пагинация
-> пайплайнов/прогонов и постраничный журнал прогона (`events_limit`/`events_before`) — **перевод отстаёт**:
-> канонический текст — RU §5 (сводный блок), §5.5, §5.8, §5.10, §5.12, §5.15, §5.34, §5.35).
+> пайплайнов/прогонов и постраничный журнал прогона (`events_limit`/`events_before`) — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-03 (**§5.9/§5.10** — `compatibility`: поля `supportsNativeVideo`/
 > `nativeAudioFormats` — нативные видео/аудио (ADR-117 × ADR-115); семантика «авто / явный `false` /
 > явный пустой список»; объект `compatibility` — полная замена — **переведено**).
@@ -37,7 +36,7 @@
 > `{id, status: 'queued'|'starting'}` без текста и автора) и правила публикации `queue.state`;
 > §5.5 — DTO сессии `activity` (`idle`/`busy`/`retry`, приоритет, персистентность, миграция `030`).
 > ⚠️ RU-версия обновлена 2026-11-02 (**§5.4** — аддитивное `attachments` в `GET /api/v2/meta`; **§5.6.1** — `413` несёт `error.details.maxBytesPerFile`); §5.4 переведён, §5.6.1 в EN по-прежнему отсутствует — **перевод отстаёт**.
-> ⚠️ RU-версия обновлена 2026-10-30 (**§5.5** — `stream.done.step_limit_reached` / `metadata.step_limit_reached` и статус `limit` (`session.steps_limit`); **§5.5** — `message.queued` как подтверждение приёма (`message_id` = `stream_id`) и дельты `subagent.progress` (`content_delta`/`reasoning_delta`), уточнение «UI-переключателя режима больше нет» (ADR-104); **§5.6** — подпись thinking хранится по блокам (`Part.metadata`/`reasoningBlocks`, `91be3f89`), `content` без reasoning при наличии `parts`; **§5.10** — `compatibility` модели (ADR-117) и `requires_reasoning` как shorthand; **§5.9** — `compatibility` провайдера — **переведено**); RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.34 — ADR-100/ADR-051, пайплайны; §5.35 — ADR-101, пайплайны проекта/прогоны/шаблоны; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
+> ⚠️ RU-версия обновлена 2026-10-30 (**§5.5** — `stream.done.step_limit_reached` / `metadata.step_limit_reached` и статус `limit` (`session.steps_limit`); **§5.5** — `message.queued` как подтверждение приёма (`message_id` = `stream_id`) и дельты `subagent.progress` (`content_delta`/`reasoning_delta`), уточнение «UI-переключателя режима больше нет» (ADR-104); **§5.6** — подпись thinking хранится по блокам (`Part.metadata`/`reasoningBlocks`, `91be3f89`), `content` без reasoning при наличии `parts`; **§5.10** — `compatibility` модели (ADR-117) и `requires_reasoning` как shorthand; **§5.9** — `compatibility` провайдера — **переведено**); RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -390,6 +389,41 @@ RBAC column: `—` — no auth, `auth` — any authenticated user,
 `ADMIN` — the ADMIN role only, `ADMIN/AUDITOR` — either role.
 In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 
+> **List pagination — a single contract (owner decision, 2026-11-03; a breaking change).**
+> The lists that used to be returned as an **array** are now returned as a **page** — an object
+> `{<items>, total, offset, limit, next_offset}`:
+>
+> | Endpoint | Before | After |
+> |---|---|---|
+> | `GET /api/v2/sessions` | an array of sessions | `{sessions, total, offset, limit, next_offset}` |
+> | `GET /api/v2/sessions/:id/messages` | `{messages, session_id}` | `{messages, session_id, has_more, next_before}` |
+> | `GET /api/v2/projects` | an array of projects | `{projects, total, offset, limit, next_offset}` |
+> | `GET /api/v2/projects/:id/pipelines` | `{pipelines}` | `{pipelines, total, offset, limit, next_offset}` |
+> | `GET /api/v2/projects/:id/pipelines/:pid/runs` | `{runs}` | `{runs, offset, limit, next_offset}` |
+> | `GET /api/v2/pipelines/instances` | `{instances}` | `{instances, offset, limit, next_offset}` |
+> | `GET /api/v2/models` | `{groups:[…]}` | `{models, total, offset, limit, next_offset}` |
+>
+> Common rules: `limit` — an **integer** (a non-numeric/fractional/negative value → `400 VALIDATION_ERROR`;
+> a value above the cap is **clamped** to the cap — a soft boundary), `offset` — the offset from the
+> beginning of the selection (from 0), `next_offset` — the cursor of the next page (`offset + page.length`),
+> `null` — the last page. An empty page (an offset past the end) also yields `next_offset: null` —
+> otherwise the cursor would not move. The lists are **summaries**: the heavy fields (`messages` of a
+> session, `log`/`plan` of a project, `draft` of a pipeline) are not returned in the list — they are in
+> the detail. `total` is not returned where the port returns a limited selection (runs, instances) —
+> there `next_offset` serves as the cursor.
+> **Exception: `GET /api/v2/models` — a hard boundary.** The model catalog parses the parameters itself
+> (not with the common helper) and **rejects** an out-of-range value: `limit` outside `1…500`
+> (including `0`) or a non-integer → `400 VALIDATION_ERROR` (a value above 500 is **not clamped** but
+> rejected); `offset` — non-integer/negative → `400`. The other lists use the soft boundary
+> (clamping to the cap).
+> **Hybrid: end-to-end pagination across the world boundary is impossible.** A remote list arrives
+> **without** paged output (an old server returns the full array), so with remote records present
+> `next_offset` — `null` (the page is the last one end-to-end), and `total` — the sum of the local
+> counter and the remote records. For `GET /:id/messages` the `limit`/`before` parameters are passed
+> through to the remote server; an old server ignores them and returns the **whole** history
+> (a hybrid limitation).
+> Backward compatibility is not supported — the client switches to the object form and paged reading.
+
 ### 5.1 Health — `both`
 
 | Method | Path | RBAC | Purpose |
@@ -449,8 +483,8 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 
 | Method | Path | Build | RBAC | Purpose / req-resp |
 |---|---|---|---|---|
-| GET | `/api/v2/sessions` | both | auth (own+project; LEAD/ADMIN — all) | Session list; `?project_id=` (see the visibility rules below) |
-| POST | `/api/v2/sessions` | both | auth | Create; `{name|title, project_id, settings}` → 201 || GET | `/api/v2/sessions/:id` | both | auth | Session (serialized) |
+| GET | `/api/v2/sessions` | both | auth (own+project; LEAD/ADMIN — all) | **Page** of the session list: `{sessions, total, offset, limit, next_offset}`; `?limit=` (default 100, maximum 500), `?offset=` (default 0), `?project_id=` (see the visibility rules below). The session DTO is a **summary without history**: there is no `messages` key, no `prompt_states`; the queue (`pending_messages`/`pending_count`), the status, `current_stream`, the settings and the counters are kept. ⚠️ **Breaking change:** an array used to be returned; the full history is not returned by the list (see the note below) |
+| POST | `/api/v2/sessions` | both | auth | Create; `{name|title, project_id, settings}` → 201 || GET | `/api/v2/sessions/:id` | both | auth | Session (serialized) — a **summary without history**: there is no `messages` key; the queue (`pending_messages`/`pending_count`), `current_stream`, the status, the settings and the counters are kept. The full history — `GET /api/v2/sessions/:id/messages` |
 | GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Effective MCP scope (ADR-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust, chars?, estTokens?, estimated?}], enabled, disabled, mcpServers, mcpDisabledServers}`. `reason` ∈ `system_disabled\|project_disabled\|session_optout\|not_default`; the project `enabled` gate also applies to system servers. Servers/tools carry `chars`/`estTokens` (ADR-071 §2.8) |
 | PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Toggle MCP (a single switch): `{name, enabled}` → `mcpServers`/`mcpDisabledServers` (opt-out of system ones — via `enabled:false`), or `{mcpServers?, mcpDisabledServers?}` |
 | PATCH | `/api/v2/sessions/:id` | both | auth | `{name, title, mode: plan\|act\|yolo, settings, project_id}`; **`title: ""` (an empty string) — title regeneration**: the server generates the title from the conversation synchronously and returns the session DTO (the name could not be built — the previous title is kept, the response is 200) |
@@ -469,7 +503,7 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | GET | `/api/v2/sessions/:id/questions` | both | auth (read) | The user questions of the session (stage 1 of roadmap 0.12.4 — block 3): `{questions: QuestionRecord[]}`; `?status=pending\|answered\|cancelled` (not set — all statuses), `?limit=` (default 50, maximum 200); the freshest records first. The question service is not wired — 503 `QUESTION_UNAVAILABLE` |
 | POST | `/api/v2/sessions/:id/questions/:qid/answer` | both | auth (**mutation**) | The user's answer to the question: `{answers: string[][]}` (by the question index; the values — from `options[].value`) → 200 `{question}`. A free-text answer is always allowed: any non-empty string of ≤ 1000 characters is valid (a value outside `options[].value` is not an error). 400 `VALIDATION_ERROR` (an invalid body/answer), 404 `NOT_FOUND` (there is no question **or** it belongs to another session), 409 `CONFLICT` (the question is already answered/cancelled) |
 | POST | `/api/v2/sessions/:id/questions/:qid/cancel` | both | auth (**mutation**) | Cancel the question: `{reason?}` → 200 `{question}`; the same 404/409 as in `answer` |
-| GET | `/api/v2/sessions/:id/messages` | both | auth | `{messages, session_id}` |
+| GET | `/api/v2/sessions/:id/messages` | both | auth | **Page** of the history: `{messages, session_id, has_more, next_before}`; `?limit=` (default 200, maximum 500), `?before=` — an exclusive cursor by `seq` (the messages strictly older than the given one); without `before` — the last (newest) page. Inside a page the order is chronological; `index` in the DTO — the position in the **full** history (the pages are stitched together by it). `has_more` — there are older messages; `next_before` — the cursor of the next (older) page (`null` if there are no older ones). An invalid `before`/`limit` → `400 VALIDATION_ERROR`. The message DTO carries `ord` (the monotonic write order), `turn_id`, `step_index`, `status` (`streaming`\|`completed`\|`cancelled`\|`error`, ADR-118 §1/§5) |
 | GET | `/api/v2/sessions/:id/messages/:messageId` | both | auth | A single history message by `id` — the same DTO as a list item (`serializeMessage`, `redactSecrets` by the same secret-reveal right, ADR-036). No session → `404 NOT_FOUND`, no message with that `id` → `404 MESSAGE_NOT_FOUND`. Access — the boundary prefix guard (invariant 16); no checks in the handler |
 | POST | `/api/v2/sessions/:id/clear` | both | auth | Clear the history (except pinned) |
 | POST | `/api/v2/sessions/:id/abort` | both | auth | Reliable Stop (ADR-005): sets the persistent `status.cancel_requested` flag; with a live stream — a graceful cancel, then stops the queue processor; **the queue is kept as a whole** (regular messages, background notifications and replies returned from `steerInbox` are not lost) — **there is no autostart**, resuming is `POST /api/v2/queue/:sessionId/resume` (or a new message submission); **lifts a pending permission wait** (the `permission.asked` resolves as `cancelled` — the tool does not hang until the ask timeout); **interrupts only the active turn** — background processes and background (detached/background) subagents keep running and are stopped separately (`POST /api/v2/processes/:id/stop`, `POST /api/v2/sessions/<child>/abort`, decision 2026-10-31); `{status:'aborted'}`; 404 if there is no session (see below) |
@@ -491,6 +525,9 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Delete a note |
 
 > `SessionSettings` for MCP/skills (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session overrides (a single switch); `mcpDefaultOn`/`skillsDefaultOn` — a **snapshot** of the defaults (`project.defaultOn`/the system default) at session creation time, set by the system, not overwritten by a change of the project default; `undefined` — legacy mode (see the scope endpoints in §5.17.2).
+> **The session list and the history — paged (owner decision, a breaking change).** `GET /api/v2/sessions` **always** returns a summary of the sessions **without the message history**: there is no `messages` key in the DTO at all (not an empty array), and no `prompt_states` in the list either. Previously the list for `ADMIN`/`LEAD` loaded all sessions **with their whole history** — on instances with hundreds of sessions that meant a heap peak and OOM on the entry path. Therefore: the list is a **page** `{sessions, total, offset, limit, next_offset}` (an array is no longer returned), and the full history of a session is available only paged in `GET /api/v2/sessions/:id/messages` (`limit` — default 200, maximum 500; `before` — an exclusive cursor by `seq`). The summary of `GET /api/v2/sessions/:id` and the single-item responses (`POST /`, `PATCH /:id`, `POST /:id/clear`, `POST /:id/fork`) are also without `messages`. The queue (`pending_messages`/`pending_count`), `current_stream`, the status, the settings and the token counters are kept in the summary. Backward compatibility is not supported — the client switches to the object form and to paged reading of the history.
+> **List pagination.** `total` — the number of visible sessions (after the visibility filter and `project_id`); `next_offset` — the cursor of the next page (`offset + page.length`), `null` — the last page. A non-numeric/negative `limit`/`offset` → `400 VALIDATION_ERROR`; a `limit` above 500 is clamped to 500.
+> **Hybrid: pagination across the world boundary is impossible.** A remote list arrives **without** paged output (an old server returns an array), so the end-to-end `next_offset` with remote sessions present — `null`, and `total` — the sum of the local page and the remote sessions. The `limit`/`before` parameters of `GET /:id/messages` are passed through to the remote server; an old server ignores them and returns the **whole** history (a hybrid limitation).
 > **Visibility of `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **all** sessions; otherwise — own personal ones **plus** sessions of projects the user is a member of (the project `owner` or any `members`, any role). A session **without an owner** is visible (parity with access by id). Personal sessions of other users are not visible. `?project_id=` filters on top of this visibility.
 > **Access by id — all `:id` routes of the resource (ADR-089).** A single prefix-guard `server/session-access-guard.ts` (mounted on `/:id` and `/:id/*` together with `requireAuth`; the access kind `read`/`write` is derived from the HTTP method), rule: `ADMIN`/`LEAD` — reading **and** mutating someone else's session are allowed (a deliberate product decision; pinned by the matrix `routes/session-idor-matrix.test.ts`); the session owner / a session without an owner — everything; a member of the session's project: **read** (`GET`/`HEAD`) — any role, including `VIEWER`, **mutation** — `OWNER`/`EDITOR` (`canEditProjectContent`); a foreign user → `403 FORBIDDEN`; a missing session → `404 NOT_FOUND`. Codes are consistent across the whole resource (for a foreign user any `:id` route returns `403`); explicit exceptions: `GET /:id/mcp` — owner|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR`, `GET /:id/export` — the route is **under** the guard (it decides access to the session), while the obfuscation map is a separate privilege of the route-level guard: owner|`ADMIN`|`AUDITOR` (other readers get 200 with a cleaned body; ADR-091 §6). List helper — `server/session-visibility.ts` (`isSessionVisible`), scan — `FileStore.listForUserScope`.
 > **Service-key scope (ADR-052):** `GET /` and `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages` — `sessions:read`. With a non-empty `allowedProjects`, the project projection is checked against the session's `project_id`, otherwise `403 PROJECT_FORBIDDEN`.
@@ -577,17 +614,20 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 
 | Method | Path | Build | RBAC | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v2/projects` | both | auth (owner/member; LEAD/ADMIN — all) | Project list: own/participating, `ADMIN`/`LEAD` — all |
+| GET | `/api/v2/projects` | both | auth (owner/member; LEAD/ADMIN — all) | **Page** of the project list: `{projects, total, offset, limit, next_offset}`; `?limit=` (default 100, maximum 500), `?offset=` (default 0). The project DTO is a **summary**: the heavy fields `log` (the project log) and `plan` (ADR-039) are not in the list; the other detail fields are kept. ⚠️ **Breaking change:** an array used to be returned |
 | POST | `/api/v2/projects` | both | auth | Create `{name, workspace?, repos?, plan?}` → 201 |
 | GET | `/api/v2/projects/:id` | both | auth / owner·member·LEAD·ADMIN | Project (read; VIEWER reads, does not edit) |
 | PUT | `/api/v2/projects/:id` | both | auth / owner·EDITOR·LEAD·ADMIN | Update fields (name, description, current_task, invariants, icon, color, repos, plan, memory); changing `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — project memory policy (ADR-107): `false` removes memory prompt blocks and `plugin_synth_plugin_memory_*` tools for the project while keeping the data; omitted — inherits the instance policy (enabled) |
 | DELETE | `/api/v2/projects/:id` | both | auth / owner·LEAD·ADMIN | Delete → 204 |
-| GET | `/api/v2/projects/:id/stats` | backend | auth | Token/message aggregates |
+| GET | `/api/v2/projects/:id/stats` | both | auth | The token aggregates over the sessions of the project (`total_sessions`, `total_input_tokens`, `total_output_tokens`, `total_tokens`, `total_cache_read_tokens`, `total_cache_write_tokens`, `total_reasoning_tokens`). ⚠️ The `total_messages` field was **removed**: the session list is always light (without history), so there would be nothing to count the messages from; the number of messages of a single session — in `GET /api/v2/sessions/:id/stats` |
 | GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Project MCP scope (ADR-071 §2.4): `{enabled, defaultOn, knownServers}`; `enabled[]` — hard gate (unavailable even in old sessions, including for system servers), `defaultOn[]` — the seed for new sessions |
 | PUT | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Set `{enabled?, defaultOn?}` (references to the registry by name) |
 | POST | `/api/v2/projects/:id/publish` | core | auth | Local project → server (hybrid) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Server project → the local world (hybrid) |
 
+> **The project list — paged and summarized (owner decision, a breaking change).** `GET /api/v2/projects` returns a **page** `{projects, total, offset, limit, next_offset}` (an array is no longer returned — backward compatibility is not supported) and a **summary** of the project: the heavy fields `log` (the project log) and `plan` (ADR-039) are not returned by the list — in a list they would multiply the response size. The full DTO is in the detail `GET /api/v2/projects/:id` (there `log`/`plan` stay). The other detail fields (name, icon, color, members, workspace, repositories, the MCP scope, the memory policy, the status messages, `current_task`, `invariants`) are kept in the summary.
+> **List pagination.** `total` — the number of visible projects; `next_offset` — the cursor of the next page (`offset + page.length`), `null` — the last page. A non-numeric/fractional/negative `limit`/`offset` → `400 VALIDATION_ERROR`; a `limit` above 500 is clamped to 500.
+> **Hybrid: pagination across the world boundary is impossible.** A remote list arrives **without** paged output (an old server returns an array), so the end-to-end `next_offset` with remote projects present — `null`, and `total` — the sum of the local counter and the remote ones.
 > `workspace` (ADR-075): on `POST`/`PUT` the directory is created (`mkdir -p`). Managed: an empty `workspace` → the auto name
 > `slugify(name)` + a suffix under `workspacesRoot`; an absolute path inside root is normalized to a relative one; outside root →
 > `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; changing `workspace` — owner/LEAD/ADMIN, otherwise `403 FORBIDDEN`.
@@ -721,10 +761,15 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 
 | Method | Path | Build | RBAC (backend / core) | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v2/models` | both | auth / auth | Models grouped by provider |
+| GET | `/api/v2/models` | both | auth / auth | **Page** of the model catalog: `{models, total, offset, limit, next_offset}`; `?limit=` (default 100, maximum 500), `?offset=` (default 0). Filters: `?provider=` (the exact provider id), `?enabled=true\|false` (only the enabled/disabled ones; the legacy alias `?enabled_only=true` = `enabled=true`), `?search=` (a case-insensitive substring over the id/name/provider), `?modality=` (the input modality: `text`/`image`/`pdf`/`audio`/`video`). The model DTO is a flat object: `id`, `name`, `provider` (**a string**, not a provider object), `description`, `enabled`, `isDefault`, `contextWindow`, `contextSource`, `maxOutputTokens`, `inputPrice`, `outputPrice`, `cacheReadPrice`, `cacheWritePrice`, `priceSource`, `currency`, `modalities?`, `requiresReasoning?`, `compatibility?`. ⚠️ **Breaking change:** the response used to be `{groups:[{provider:{name,type,icon,defaultModel,currency}, models:[…]}]}` — now it is a flat paged list (the client rebuilds the grouping by provider itself) |
 | POST | `/api/v2/models` | both | ADMIN / auth | Create/update |
 | POST | `/api/v2/models/fetch` | both | ADMIN / auth | Sync with the providers |
 | DELETE | `/api/v2/models/:id` | both | ADMIN / auth | Delete |
+
+> **The model catalog — paged and flat (owner decision, a breaking change).** `GET /api/v2/models` returns a **page** `{models, total, offset, limit, next_offset}` — **an array is no longer returned** (backward compatibility is not supported). Previously the response was an object `{groups:[{provider:{name,type,icon,defaultModel,currency}, models:[…]}]}`; now it is a flat list of models, each with `provider` — a **string** (the provider id), and the provider metadata block (`type`/`icon`/`defaultModel`/`currency`) is **not** in the response (the provider type/icon/currency — in `GET /api/v2/providers`). The filters and the sorting are applied **before** the pagination: `total` — the number of the selected models (after all the filters), the order — first by provider, then by name (`localeCompare`). The parameter boundaries are **hard** (unlike the soft boundary of the other lists): `limit` outside `1…500` (including `0`) or a non-integer, `offset` non-integer/negative → `400 VALIDATION_ERROR` — a value above 500 is **rejected**, not clamped.
+> **The `modality` filter and unknown modalities.** A model matches the filter only if its `modalities` are **known** and contain the given modality; a model with **unknown** modalities (the field is absent) does **not** match the filter — accepting an attachment cannot be confirmed (the same logic as in the `list_models` tool). Modalities that are **not known** — the filter is not applied to that particular modality, the model is never silently excluded from the catalog.
+> **The `enabled` filter — both directions.** `enabled=true` — only the enabled ones, `enabled=false` — only the disabled ones; `enabled_only=true` — the legacy alias of `enabled=true` (kept for old clients). The values `1`/`0` are accepted as `true`/`false`.
+> **Hybrid: the catalog is shared, the pagination is local.** In hybrid mode the local and the remote catalogs are merged **before** the filters and the pagination (a model without a known provider does not get into the output), so `total`/`next_offset` are counted over the merged set — but the remote part arrives **without** paged output (an old server returns the whole list), so with remote models present `next_offset` may become `null` before the list is actually exhausted.
 
 > **Model compatibility — `compatibility` and `requires_reasoning` (ADR-117, 2026-10-30; native media —
 > 2026-11-03).** A model may
@@ -789,8 +834,8 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 
 | Method | Path | Build | RBAC | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v2/fs` | both | auth | Directory listing; `?project_id=&path=&maxDepth=&includeHidden=` |
-| GET | `/api/v2/fs/read` | both | auth | Contents; `?project_id=&path=` |
+| GET | `/api/v2/fs` | both | auth | Directory listing: `{path, entries, truncated}`; `?project_id=&path=&maxDepth=&includeHidden=`. `maxDepth` — **not above 3** (`MAX_FS_LIST_DEPTH`; a larger value from the request is silently clamped to 3), with `maxDepth>0` the recursive walk is limited to **10 000 entries** (`MAX_FS_LIST_ENTRIES`): when the budget is exhausted the walk stops, and the response carries `truncated: true` (the response is **incomplete**). With `maxDepth=0` (the default) the listing is not recursive and the entry limit does not apply |
+| GET | `/api/v2/fs/read` | both | auth | Contents: `{path, content, size, encoding}`; `?project_id=&path=`. **The read cap** — `storage.maxReadBytes` (5 MiB by default, env `SYNTH_MAX_READ_BYTES`): the size is known from `stat`, the content is not read into memory. A file **larger than the limit** or a **binary** one → `413` with the machine code `FILE_TOO_LARGE` and `details: {maxReadBytes, size, reason}` (`reason`: `size` — the size is too large, `binary` — not a text file) |
 | POST | `/api/v2/fs/write` | both | auth | `{projectId, path, content}` |
 | POST | `/api/v2/fs/upload` | both | auth | multipart: `project_id`, `path`, `file`; size limit (default 100 MiB, `DEFAULT_MAX_UPLOAD_BYTES`) → `413 PAYLOAD_TOO_LARGE` |
 | GET | `/api/v2/fs/download` | both | auth | Download; `?project_id=&path=` |
@@ -803,6 +848,8 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 
 > `workspace-root*` (ADR-075): an absolute path inside `workspacesRoot` works; outside root — per policy. Manual workspace selection exists in standalone only: in managed (`requireProjectId`) all three routes return `403 FORBIDDEN` for any role (the project directory is auto-provisioned, and the list of managed workspaces is not exposed).
 > `POST /upload` — a file size limit (default `DEFAULT_MAX_UPLOAD_BYTES` = 100 MiB, overridable via the `FsRoutesOptions.maxUploadBytes` option); checked threefold (the declared `content-length`, `File.size`, the actual number of bytes read) → `413 PAYLOAD_TOO_LARGE` (the actual size guards against a lying/missing `content-length`).
+> **Reading a file — the `storage.maxReadBytes` cap (owner decision).** `GET /fs/read` no longer returns a file of any size in full: the size is known from `stat` **before** the content is read, so a file larger than the limit (5 MiB by default) or a binary one → `413` `FILE_TOO_LARGE` with `details: {maxReadBytes, size, reason}`. The client reads `details` in a machine-readable way instead of parsing the message text. Previously a binary file was returned as `{content:'', encoding:'binary'}` — now that is the same `413` refusal (the reason — in `details.reason`). The limit is configured by `storage.maxReadBytes` / the env `SYNTH_MAX_READ_BYTES` (the priority env > config > default) — see [CONFIGURATION.md](../CONFIGURATION.md) §“Storage and working directory”.
+> **Recursive listing — depth and entry budget.** `maxDepth` is limited to **3** (it was 10): a deep directory walk and the response size for it grow uncontrollably. With `maxDepth>0` the walk runs with a budget of **10 000 entries** — when it is exhausted the walk stops, and the response carries `truncated: true` (the list is **incomplete**; the client must take this into account and must not consider the list exhausted). With `maxDepth=0` (the default) the list is not recursive, the budget does not apply and `truncated` is always `false`.
 > `confirm`: browse is allowed, mkdir requires `confirmOutsideRoot: true`, otherwise `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > `deny`: `403 WORKSPACE_OUTSIDE_ROOT_DENIED` (including `..` traversal); protected paths → `403 PROTECTED_PATH_DENIED`.
 > `mkdir` of an existing path → `409 ALREADY_EXISTS`; browsing a non-existent directory → `404 NOT_FOUND`, not a directory → `400 NOT_A_DIRECTORY`.
@@ -904,7 +951,7 @@ Errors — in the shared shape `{ error: { error, code } }`.
 | POST | `/api/v2/git/repos/remove` | write / auth | `{projectId, id?\|path?, deleteLocal?}` → `{removed, deletedLocal}` (deleting the local directory — `deleteLocal`) |
 | POST | `/api/v2/git/repos/fetch` | write / auth | `{projectId, id?\|path?}` → `{path, lastFetch}`; an SSH URL without a key → 400 `git.ssh_key_required`; a timeout → 504 `git.fetch_timeout` |
 | GET | `/api/v2/git/log` | read / auth | `?project_id=&repo_path=&max_count=` → `{commits}` |
-| GET | `/api/v2/git/commit` | read / auth | `?project_id=&repo_path=&hash=` → `{commit}` |
+| GET | `/api/v2/git/commit` | read / auth | `?project_id=&repo_path=&hash=` → `{commit}`; the commit diff is truncated at the **1 MiB** limit (`MAX_COMMIT_DIFF_BYTES`) — the DTO gains `diff_truncated: true` (the field is absent when the diff was returned in full) |
 
 Backend RBAC: write endpoints (`init`/`clone`/`register`/`remove`/`fetch`) — owner/EDITOR/LEAD/ADMIN (`canEditProjectContent`), otherwise 403; read (`scan`/`log`/`commit`) — the **read** right on the project: owner/project member/`LEAD`/`ADMIN` (`canReadProject`), otherwise 403. The check is a **boundary** guard (`projectGuard('read'|'write')` in the core factory `createGitRoutes`), i.e. **before** the handler; there are no access checks inside the handlers (invariant 16). Core (standalone) — `requireAuth` (standalone has no per-project rights).
 
@@ -926,6 +973,12 @@ An unreadable directory (no permissions) → **409 `git.repo_path_unreadable`**.
 (the `git` section, see [CONFIGURATION.md](./CONFIGURATION.md)) — **504** `git.clone_timeout` /
 `git.fetch_timeout` (not 500: this is not a server failure, the request can be retried). Other git
 errors (no remote, a dropped connection, no permissions) are returned as-is (500 with the original text).
+
+**Commit diff — truncation by size.** `GET /api/v2/git/commit` returns the commit diff **in full**
+while it is not larger than **1 MiB** (`MAX_COMMIT_DIFF_BYTES`); larger — the diff is truncated at the
+byte boundary (a broken trailing UTF-8 character is dropped), and the commit DTO gains
+`diff_truncated: true`. The field is absent when the diff was returned in full. Megabytes of patch do
+not go over the wire; the list of the changed files (`files`) is full at the same time.
 
 > **Behaviour change (managed).** A request for a **non-existent** `projectId` in `/api/v2/git/*` now answers **403 instead of 404** — fail-closed, no existence disclosure (like the FS routes). Previously the read routes (`scan`/`log`/`commit`) did not check access at all and allowed reading another project’s git data by its id.
 
@@ -1664,6 +1717,152 @@ endpoints (`packages/ui/src/components/settings/MaintenanceSettings.tsx`, the AP
 restore, and **"Restart"** (mode status, confirmation, an overlay and polling `GET /health` until
 `startedAt` changes, then a reload). Procedures and security rules —
 [docs/MAINTENANCE.md](../MAINTENANCE.md) (in Russian).
+
+---
+
+### 5.34 Pipelines — `/api/v2/pipelines` (both, ADR-100/ADR-051)
+
+> ⚠️ **ADR-100, getting outdated.** The new pipeline endpoints (the specifications, the versions, the
+> runs, the run log, the instance templates) — **§5.35**. The old endpoints of this section **stay
+> working** (the UI has already moved to the new contour — ADR-101 §5.35); their removal is not planned.
+
+A pipeline in this section is a **declaration + the accounting of a run** (there is no own step engine
+in these endpoints). The target model is "a pipeline as the second engine"
+([ADR-101](../arch_decisions/adr-101-pipeline-engine.md) (in Russian), **implemented**; the format —
+[docs/PIPELINES.md](../PIPELINES.md) (in Russian)): the contract and the routes of this section have
+been extended (the specifications, the versions, the run log, the project binding) — **§5.35**; the
+contract of this legacy section stays in force.
+A single factory `createPipelinesRoutes`; the storage — the `PipelineRepository` port
+(`{dataDir}/pipelines/definitions.json` and `{dataDir}/pipelines/instances.json`).
+**This route does not create the definitions** — the extension-package installer does
+(`POST /api/v2/packs`); the integrity check of the `synth.pack` manifest cannot be bypassed.
+
+| Method | Path | Build | RBAC (managed) | Purpose / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/pipelines` | both | ADMIN / auth | The instance pipeline definitions `{pipelines}` (the steps, `onError`, `maxAttempts`, `ttl`, the provenance `installedBy`) |
+| GET | `/api/v2/pipelines/instances` | both | ADMIN / auth | A page of the run instances `{instances, offset, limit, next_offset}`; the filters `pipelineId`, `status` (`pending`\|`running`\|`waiting`\|`done`\|`failed`\|`cancelled`), `limit` (default 100, maximum 1000), `offset` (default 0); an unknown `status` → 400 `VALIDATION_ERROR`. `total` is not returned: the port returns a limited selection (the cap is 1000) — `next_offset` serves as the cursor |
+| GET | `/api/v2/pipelines/instances/:instanceId` | both | ADMIN / auth | One instance (the step states, `currentStep`, `attempts`, `trigger`) |
+| GET | `/api/v2/pipelines/:id` | both | ADMIN / auth | One definition; none → 404 `NOT_FOUND` |
+| POST | `/api/v2/pipelines/:id/instances` | both | ADMIN **or** the scope `automation:install` | A **manual** start of an instance (a check/debugging; the main start is by an event): the body `{trigger?, payload?}` → 201; no definition → 404 |
+
+**The automaton semantics.** The first step with `waitsFor` is a **trigger**: a matching event creates
+an instance; the subsequent steps with `waitsFor` are **gates**: the event means "the previous step is
+completed and confirmed by a human" — the automaton advances in the existing instance. **The artifact
+between the steps = the event payload** (for example `{draftId}`) — it is stored in the step artifact
+and in `trigger.payload`; the next step takes it from there. The accounting is kept by the funnel
+(ADR-089): the Router's decision carries `pipeline: {id, step}`, the tracker creates/advances the instance.
+
+**UI.** The "Add-ons" section (Settings → "Administration", the `addons` category, the ADMIN role):
+the package registry (the approval and the removal) and "Pipelines" — the definitions and the runs with
+the filters.
+
+### 5.35 Project pipelines, runs and templates — `/api/v2/projects/:id/pipelines*`, `/api/v2/pipeline-runs*`, `/api/v2/pipeline-templates*` (both, ADR-101 Phase 6)
+
+The model "a pipeline as the second engine"
+([ADR-101](../arch_decisions/adr-101-pipeline-engine.md) (in Russian), the format and the device —
+[docs/PIPELINES.md](../PIPELINES.md) (in Russian)): a **project pipeline** (`scope:'project'`) with a
+draft specification and immutable published versions, a **run** (a self-contained record with a
+snapshot of the specification + the execution log) and an **instance template** (the source for the
+instantiation). A single factory `createPipelineProjectRoutes` for core and backend; the storage —
+the `ProjectPipelineRepository` and `PipelineRunRepository` ports (ADR-096), the source of the templates —
+the legacy registry `PipelineRepository` (ADR-100) **plus** the `scope:'instance'` records of the new port.
+
+The paths **do not overlap** with the legacy contour of §5.34 (`/api/v2/pipelines*`): there — a
+"declaration + accounting" (ADR-100), here — the engine with the specifications, the versions and the log
+(ADR-101). The old endpoints stay working (the legacy contour, ADR-100), **the UI has already moved to
+the new contour** — the new endpoints are the main pipeline contour.
+
+**The rights (ADR-089 §5.5/§5.8, invariant 21).**
+
+| Action | Right |
+|---|---|
+| Reading the pipelines and the runs | the **read** right on the project: the owner, a member of the project (any role, including `VIEWER`), `LEAD`, `ADMIN` |
+| Changing (creating, editing, publishing, deleting, starting, HITL) | the right to **change the content** of the project: `OWNER`, `EDITOR`, `LEAD`, `ADMIN`; `VIEWER` reads but does not mutate |
+| The instance templates (the list) and the instantiation | **ADMIN** (managed); core — `requireAuth` (single-user). The instantiation additionally requires the right to change the content of the target project |
+| A service key (ADR-052) | the mutations — the scope `automation:install` (or the `ADMIN` role of the key) **and** the project projection `allowedProjects` (otherwise `403 PROJECT_FORBIDDEN`); without the scope — `403 SCOPE_REQUIRED`. Reading has no scope gate — only the project rights |
+
+The access check is **at the boundary** (a guard), not in the handler (invariant 16): the guard resolves
+the project or the run once and puts the entity into the context; there are no access checks in the
+handlers. No project → `404`; no rights → `403`; a pipeline of a foreign project under a foreign id →
+`404` (there is no such resource in this project).
+
+| Method | Path | Build | RBAC (managed) | Purpose / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/projects/:id/pipelines` | both | the project read right | A **page** of the project pipelines `{pipelines, total, offset, limit, next_offset}`: id, name, `scope`, `projectId`, `draftVersion`, `publishedVersion?`, `installedBy?`, `hasDraft`; `?limit=` (default 100, maximum 500), `?offset=` (default 0). ⚠️ **Breaking change:** the `draft` is **not** returned in the list (it is in the detail `/:pid`) |
+| POST | `/api/v2/projects/:id/pipelines` | both | the project change right (+ `automation:install` for a service key) | Create a pipeline: the body `{name?, description?, spec}` — the `PipelineSpec` specification; the server sets `id`/`version`/`status`/`projectId` → **201** `{pipeline}`; an invalid specification → 400 `VALIDATION_ERROR` with the list of `problems` |
+| GET | `/api/v2/projects/:id/pipelines/:pid` | both | the project read right | `{pipeline, published, versions}` — the draft, the published version and the list of the versions |
+| PUT | `/api/v2/projects/:id/pipelines/:pid` | both | the project change right | Save the draft: the body `{name?, description?, spec}` → 200 `{pipeline}`; the version is **not** changed (the publication is a separate step) |
+| DELETE | `/api/v2/projects/:id/pipelines/:pid` | both | the project change right | Delete the pipeline and its versions → **204**; the runs **stay** (a run is self-contained) |
+| POST | `/api/v2/projects/:id/pipelines/:pid/publish` | both | the project change right | Publish the draft: the immutable version `publishedVersion`, the draft moves to the next version → 200 `{pipeline, published}`; a repeated publication without changes is idempotent (it does not multiply the versions); no draft → 409 `CONFLICT` |
+| GET | `/api/v2/projects/:id/pipelines/:pid/runs` | both | the project read right | A page of the pipeline runs `{runs, offset, limit, next_offset}`; the filters `status` (`pending`/`running`/`awaiting_human`/`done`/`failed`/`cancelled`), `limit` (default 100, maximum 1000), `offset` (default 0); an unknown `status` → 400 `VALIDATION_ERROR`. `total` is not returned: the port returns a limited selection (the cap is 1000) — `next_offset` serves as the cursor |
+| POST | `/api/v2/projects/:id/pipelines/:pid/runs` | both | the project change right | Start a run: the body `{trigger?, version?, attachments?}` (by default — the last published version, the trigger `manual`) → **201** `{run}`; the run goes **in the background** — the client watches the `pipeline.run.*` events; no published version → 409 `pipeline.not_published`; the `attachments[]` did not pass the check → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/pipeline-runs/:runId` | both | the read right of the run's project | The run and a **page of the log**: `{run, events, events_has_more, events_next_before}` (the events: `run.started`/`node.started`/`node.finished`/`edge.taken`/`gate.awaiting`/`run.finished`/`run.failed`); `events_limit` — the page size (default 200, maximum 500), `events_before` — an **exclusive cursor**: canonically — the ordinal number of the event in the run log (a number, numbered from zero, in the order of adding — the log is append-only, and the `ts` marks are not unique); for compatibility the time mark `ts` (ISO-8601) is accepted too — then the events strictly older by time are selected. Without the parameters — the last (newest) page. `events_has_more` — whether there are events older than the first event of the page; `events_next_before` — the cursor of the next (older) page (`null` if there is none). An invalid `events_limit`/`events_before` → 400 `VALIDATION_ERROR`. ⚠️ **Breaking change:** the `limit` parameter is replaced by `events_limit`, and the response gains `events_has_more`/`events_next_before` |
+| GET | `/api/v2/pipeline-runs/:runId/artifacts/:name` | both | the read right of the run's project | The bytes of the run artifact object (`kind: 'blob'`): `Content-Type`, `Content-Disposition: attachment`, `Content-Length`, `ETag`, `Cache-Control: private, max-age=86400`; `If-None-Match` → `304`; no artifact or the blob contour is not wired → `404 NOT_FOUND` |
+| POST | `/api/v2/pipeline-runs/:runId/resume` | both | the change right of the run's project | The human's HITL decision: the body `{approved, output?, comment?}` → 200 `{run}`; the run does not wait for a decision → 409 `pipeline.invalid_state` |
+| POST | `/api/v2/pipeline-runs/:runId/cancel` | both | the change right of the run's project | Cancel the run → 200 `{run}` (the status `cancelled`); the run is already finished → 409 `CONFLICT` |
+| GET | `/api/v2/pipeline-templates` | both | **ADMIN** / auth | The instance templates `{templates}`: `format` (`adr-100` — the legacy package definition, `adr-101` — a `scope:'instance'` record), `name`, `version`, `installedBy?`, `steps` (legacy) or `spec` |
+| POST | `/api/v2/pipeline-templates/:tid/instantiate` | both | **ADMIN** / auth + the change right of the target project | Instantiate the template into a project: the body `{projectId, name?, ensure?}` → **201** `{pipeline, created:true}` (a draft, `draftVersion: 1`, `installedBy.templateId` — the id of the template). `ensure:true` — idempotent: if the project already has a pipeline of this template, **200** `{pipeline, created:false}`. The template is not convertible → 409 `PIPELINE_TEMPLATE_UNSUPPORTED`; no template/project → 404. The built-in memory templates: `builtin:memory-consolidation` (a session → the facts), `builtin:memory-consolidate-facts` (the duplicates of the facts), `builtin:memory-reindex` (all the project indexes) |
+
+**The run artifacts (ADR-101 §9 + ADR-116).** The `file` output writes a file into the project
+workspace **and the same bytes** — into the shared blob port under the path `artifacts/<runId>/<name>`
+(there is no separate artifact storage, the limit is 50 MiB per file; exceeding it — a warning in the
+log, the file stays only in the workspace). An artifact is described by a `PipelineArtifact` with
+`kind: 'blob'` and the fields `path`/`name`/`mime`/`size`; the list of the run artifacts is **at the top
+level** of the `run.finished` payload (`run.finished.payload.artifacts[]`, the source of the MIME/name for
+the serving) and in the `pipeline.run.finished.artifacts[]` event (an additive field). There is no
+separate metadata index — the run log is the source of truth. The `ETag` of the serving — the hash of
+the **path** (the path is unique within a run and immutable). There is **no** automatic retention of the
+artifacts: neither a TTL nor the deletion of the runs through the API, the bytes live in the blob storage
+until a manual cleanup (a known limitation, see [PIPELINES.md](../PIPELINES.md) §2.10.2).
+
+**The run attachments (ADR-115 × ADR-101).** The run body accepts `attachments[]` — references to the
+staging-upload objects (`POST /api/v2/attachments`), the same shape as an external event attachment
+(ADR-089): `{blobPath, sha256, mime, size, name?}`, `blobPath` — only inside `attachments/` (the
+structural cap of the array — 50). The references are checked **before** the run start by the same rules
+as the event ingestion: the object exists, `sha256`/`mime`/`size` match the sidecar, the limits
+`attachments.maxFilesPerMessage` / `maxBytesPerFile` / `maxBytesPerSession`. Any mismatch →
+**400 `VALIDATION_ERROR`** (`problems`: "not found", "does not match the object", "exceeds the limit");
+without the attachment service or the `blob_refs` port the runs with attachments are rejected
+(fail-closed). The accepted references are put under `trigger.payload.attachments` (available to the steps
+without a mapping) and are registered in `blob_refs` with the owner `pipeline-run` (otherwise the GC would
+delete the object the run refers to). The delivery into a step — the common session path (the metadata
+cleanup, the modality filter, the `derive` for a text-only model, the base64 limit); the device —
+[PIPELINES.md](../PIPELINES.md) §2.10.3.
+
+**The error codes of the section:** `UNAUTHORIZED` (401), `FORBIDDEN` (403 — the project rights),
+`SCOPE_REQUIRED` (403 — a service key without `automation:install`), `PROJECT_FORBIDDEN` (403 — a service
+key outside `allowedProjects`), `NOT_FOUND` (404), `VALIDATION_ERROR` (400, with the list of `problems`),
+`CONFLICT` (409 — nothing to publish / the run is finished), `pipeline.not_published` (409),
+`pipeline.invalid_state` (409), `PIPELINE_TEMPLATE_UNSUPPORTED` (409).
+
+**A run error.** `run.error` — the error text; the **machine-readable code** of the reason — in the run
+log (`run.failed.payload.code`: `pipeline.gate_rejected`, `pipeline.gate_timeout`,
+`pipeline.step_failed`, `pipeline.step_timeout`, `pipeline.cancelled`, `pipeline.loop_limit`,
+`permission.denied`).
+
+**The conversion of the legacy definitions (ADR-100 → an ADR-101 template).** A package definition
+(`provides.pipelines[]`, the legacy registry `{dataDir}/pipelines/definitions.json`) — the source of the
+templates; there is no data migration: the conversion is performed **on the fly at the instantiation**
+(`legacyDefinitionToPipelineSpec`):
+
+- the `agent` step → the `agent` node: `id`, `agent`, `title?`, `skill?`, `prompt?`, `timeoutSec?` are
+  carried over as is;
+- the `loop` step is **not converted** (the Loop Engine is out of scope, PROP-057) — a template with such
+  steps is not instantiated: `409 PIPELINE_TEMPLATE_UNSUPPORTED` with the list of the problems;
+- a step without the `agent` field is not converted (the `agent` node requires an agent) — the same 409;
+- `waitsFor` is **not carried over**: in ADR-101 the trigger is set at the run start, and the HITL gate is
+  expressed by the `human` node — the pipeline owner adds it in the draft;
+- the pipeline exit at the instantiation — `none` (the exits are set by hand).
+
+**The storage.** The drafts and the versions — the `ProjectPipelineRepository` port
+(`{dataDir}/pipelines/{pipelines,versions}.json`), the runs and the log — the `PipelineRunRepository`
+(`{dataDir}/pipelines/{runs.json,run-events.jsonl}`); with `storage.backend=postgres` — the
+`@itphx/synth-storage-postgres` driver (ADR-097). The run artifacts (`kind: 'blob'`) — the bytes in the
+shared blob port (`{dataDir}/blobs/artifacts/<runId>/<name>`, the reference accounting — `blob_refs`),
+the metadata — in the run log (ADR-116).
+
+**UI.** The pipelines/runs screen and the visual editor are **implemented** (ADR-101 §5.35): the
+"Pipelines" tab, the pipeline and run pages, the HITL actions, the `@xyflow/react` editor.
 
 ---
 

@@ -7,20 +7,31 @@
  * повторным потоковым проходом и публикует объект как обычное вложение
  * (`AttachmentService.ingestPath`).
  *
- * Устройство:
- * - состояние — **в памяти процесса** (`uploadId → запись`), байты — во временном
- *   объекте blob-порта `attachments/.uploads/<uuid>`;
+ * Устройство — **stateless, multi-replica**:
+ * - состояние сессии лежит **на томе**, рядом с временным объектом: temp
+ *   `attachments/.uploads/<uuid>` и sidecar `attachments/.uploads/<uuid>.json`
+ *   (`{version, sessionId?, name?, mime?, createdAt, updatedAt?}`). В памяти
+ *   процесса ничего не хранится — реплика control plane, которой достался
+ *   запрос, продолжает ту же загрузку;
+ * - **смещение — фактический размер временного объекта** (`stat`), а не счётчик
+ *   в памяти: `received`/`nextOffset` всегда соответствуют байтам на томе;
+ * - привязка к сессии (`sessionId` в sidecar) проверяется на каждой операции:
+ *   чужая загрузка не видна (fail-closed, `not_found` → 404);
  * - лимиты и мастер-выключатель читаются из live-конфига `attachments`
  *   (`maxChunkBytes`/`maxBytesPerFile`/`enabled`) на каждый вызов;
- * - TTL сессии — `UPLOAD_SESSION_TTL_MS` (1 ч): протухшие сессии и их временные
- *   объекты удаляются **лениво** (на `create`/`append`/`complete`), глобального
- *   таймера нет; ошибки уборки не роняют запрос.
+ * - TTL сессии — `UPLOAD_SESSION_TTL_MS` (1 ч) без активности: протухшая
+ *   сессия удаляется (temp + sidecar) и больше не доступна; общая уборка —
+ *   `pruneExpired` (на `create`) и фоновый GC (`engine/attachments/prune.ts`,
+ *   чистит `.uploads` по mtime, TTL 1 ч независимо от `gcDays`).
  *
- * Ограничение multi-replica: временный объект лежит на томе одного пода, а запись
- * сессии — в памяти этого же процесса. Несколько реплик control plane этот
- * протокол не обслуживают (клиент должен попадать на ту же реплику —
- * sticky/один инстанс); для тестов достаточно одной реплики. Перенос состояния в
- * общий стор (`blob_refs`/БД) — отдельная задача, если понадобится.
+ * Ограничение multi-replica: том `blobs` должен быть **общим** для реплик
+ * control plane — иначе загрузка, начатая на одной реплике, не продолжится на
+ * другой (часть попадёт в другой temp-объект либо сессия не найдётся).
+ *
+ * Гонка: части приходят **последовательно** (клиент шлёт следующую по
+ * `nextOffset`); параллельные `append` не гарантируются — проверка смещения
+ * по размеру файла отсекает дубль, а ответом всегда фактический размер
+ * (`received`/`nextOffset`), с которого клиент продолжит.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -35,6 +46,31 @@ import {
 
 /** Срок жизни сессии загрузки без активности (мс). */
 export const UPLOAD_SESSION_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Суффикс sidecar'а сессии загрузки (рядом с временным объектом, на томе).
+ *
+ * Отдельный от `ATTACHMENT_SIDECAR_SUFFIX` (тот — у content-addressed объектов
+ * вложений), но с тем же расширением: файл лежит в служебном каталоге
+ * `.uploads`, а не в контуре раздачи вложений.
+ */
+export const UPLOAD_SESSION_SIDECAR_SUFFIX = '.json';
+
+/** Версия формата sidecar'а сессии загрузки. */
+export const UPLOAD_SESSION_SIDECAR_VERSION = 1;
+
+/**
+ * Минимальный интервал между полными проходами уборки (мс).
+ *
+ * Уборка читает перечень каталога `.uploads` (у файлового blob-порта — обход
+ * дерева), поэтому на каждый `create` её запускать дорого. Порог — не более
+ * одного прохода в минуту на экземпляр стора.
+ */
+const PRUNE_MIN_INTERVAL_MS = 60_000;
+
+/** Идентификатор сессии загрузки — uuid (выдаёт сервер). */
+const UPLOAD_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Машинные коды отказа протокола chunked-загрузки (маппинг в HTTP — на границе
@@ -58,20 +94,32 @@ export class UploadSessionError extends Error {
   }
 }
 
-/** Запись сессии загрузки (in-memory). */
-export interface UploadSessionRecord {
-  /** Сессия-владелец (для контура `/:id/attachments`; staging — нет). */
+/**
+ * Sidecar сессии загрузки (на томе, рядом с временным объектом).
+ *
+ * Единственный источник состояния сессии: `sessionId` — привязка к сессии
+ * (контур `/:id/attachments/uploads`), `name`/`mime` — метаданные файла для
+ * публикации, `createdAt`/`updatedAt` — TTL (время последней активности).
+ */
+export interface UploadSessionSidecar {
+  /** Версия формата (`UPLOAD_SESSION_SIDECAR_VERSION`). */
+  version: number;
+  /** Сессия-владелец (для контура `/:id/attachments/uploads`; staging — нет). */
   sessionId?: string;
-  /** Временный объект blob-порта (`attachments/.uploads/<uuid>`). */
-  path: string;
-  /** Принято байт. */
-  received: number;
   /** Имя файла из инициализации (санитайз — в сервисе при публикации). */
   name?: string;
   /** Заявленный MIME (проверка всё равно по сигнатуре). */
-  declaredMime?: string;
+  mime?: string;
+  /** Момент создания сессии (мс). */
   createdAt: number;
-  updatedAt: number;
+  /** Момент последней активности (мс) — основа TTL. */
+  updatedAt?: number;
+}
+
+/** Область операции: сессия-владелец (для проверки привязки к сессии). */
+export interface UploadSessionScope {
+  /** Сессия-владелец; `undefined` — контур staging (без привязки). */
+  sessionId?: string;
 }
 
 export interface UploadSessionStoreDeps {
@@ -108,16 +156,19 @@ export interface AppendedUploadChunk {
 }
 
 /**
- * Реестр сессий chunked-загрузки (in-memory, один процесс).
+ * Реестр сессий chunked-загрузки — **stateless**: состояние на томе (temp +
+ * sidecar), в памяти процесса ничего не хранится. Несколько экземпляров
+ * стора над одним `BlobStore` (реплики control plane) работают как один.
  */
 export class UploadSessionStore {
-  private readonly _records = new Map<string, UploadSessionRecord>();
   private readonly _service: AttachmentService;
   private readonly _blobs: BlobStore;
   private readonly _configSource: AttachmentsConfig | (() => AttachmentsConfig);
   private readonly _now: () => number;
   private readonly _ttlMs: number;
   private readonly _log: (message: string) => void;
+  /** Время последнего полного прохода уборки (ограничивает стоимость `list`). */
+  private _lastPruneAt = Number.NEGATIVE_INFINITY;
 
   constructor(deps: UploadSessionStoreDeps) {
     this._service = deps.service;
@@ -140,7 +191,110 @@ export class UploadSessionStore {
     }
   }
 
-  /** Начать загрузку: создать пустой временный объект и вернуть лимит части. */
+  /** Путь временного объекта сессии загрузки (на томе). */
+  private _tempPath(uploadId: string): string {
+    return `${ATTACHMENT_UPLOAD_DIR}/${uploadId}`;
+  }
+
+  /** Путь sidecar'а сессии загрузки (на томе, рядом с временным объектом). */
+  private _sidecarPath(uploadId: string): string {
+    return `${ATTACHMENT_UPLOAD_DIR}/${uploadId}${UPLOAD_SESSION_SIDECAR_SUFFIX}`;
+  }
+
+  /** Прочитать sidecar сессии; `null` — сессии нет (или sidecar битый). */
+  private async _readSidecar(uploadId: string): Promise<UploadSessionSidecar | null> {
+    try {
+      const raw = await this._blobs.read(this._sidecarPath(uploadId));
+      if (!raw) return null;
+      const parsed: unknown = JSON.parse(raw.toString('utf-8'));
+      if (typeof parsed !== 'object' || parsed === null) return null;
+      const sidecar = parsed as UploadSessionSidecar;
+      if (typeof sidecar.createdAt !== 'number') return null;
+      return sidecar;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Записать sidecar сессии (атомарно — порт пишет tmp→rename). */
+  private async _writeSidecar(uploadId: string, sidecar: UploadSessionSidecar): Promise<void> {
+    await this._blobs.write(this._sidecarPath(uploadId), JSON.stringify(sidecar));
+  }
+
+  /** Обновить время активности сессии (ошибка записи не роняет запрос). */
+  private async _touch(uploadId: string, sidecar: UploadSessionSidecar): Promise<void> {
+    try {
+      await this._writeSidecar(uploadId, { ...sidecar, updatedAt: this._now() });
+    } catch (err) {
+      // Смещение берётся из размера файла, поэтому сбой записи sidecar'а не
+      // ломает протокол: сессия остаётся рабочей, лишь «стареет» раньше.
+      this._log(
+        `[attachments] sidecar сессии загрузки не обновлён (${uploadId}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /** Удалить temp и sidecar сессии (идемпотентно, ошибки — в лог). */
+  private async _deleteUpload(uploadId: string): Promise<void> {
+    await this._blobs.delete(this._tempPath(uploadId)).catch((err: unknown) => {
+      this._log(
+        `[attachments] временный объект загрузки не удалён (${uploadId}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+    await this._blobs.delete(this._sidecarPath(uploadId)).catch((err: unknown) => {
+      this._log(
+        `[attachments] sidecar сессии загрузки не удалён (${uploadId}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+  }
+
+  /**
+   * Загрузить состояние сессии: sidecar + фактический размер temp-объекта.
+   *
+   * Отказ (`not_found`) — сессии нет, она чужая (привязка к другой сессии) или
+   * протухла (TTL без активности). В последнем случае temp и sidecar удаляются.
+   */
+  private async _loadSession(
+    uploadId: string,
+    scope?: UploadSessionScope,
+  ): Promise<{ tempPath: string; sidecar: UploadSessionSidecar; size: number }> {
+    if (!UPLOAD_ID_PATTERN.test(uploadId)) {
+      throw new UploadSessionError('not_found', 'Сессия загрузки не найдена');
+    }
+    const sidecar = await this._readSidecar(uploadId);
+    if (!sidecar) {
+      throw new UploadSessionError('not_found', 'Сессия загрузки не найдена');
+    }
+    // Привязка к сессии: чужая загрузка выглядит как отсутствующая (fail-closed).
+    if (sidecar.sessionId && sidecar.sessionId !== scope?.sessionId) {
+      throw new UploadSessionError('not_found', 'Сессия загрузки не найдена');
+    }
+    // TTL без активности: протухшая сессия удаляется и больше не доступна.
+    const touchedAt = sidecar.updatedAt ?? sidecar.createdAt;
+    if (this._now() - touchedAt > this._ttlMs) {
+      await this._deleteUpload(uploadId);
+      throw new UploadSessionError('not_found', 'Сессия загрузки протухла');
+    }
+    const tempPath = this._tempPath(uploadId);
+    const stat = await this._blobs.stat(tempPath);
+    if (!stat) {
+      // Temp убран (GC/уборка) — сессии больше нет; sidecar подчищаем.
+      await this._blobs.delete(this._sidecarPath(uploadId)).catch(() => undefined);
+      throw new UploadSessionError('not_found', 'Сессия загрузки не найдена');
+    }
+    return { tempPath, sidecar, size: stat.size };
+  }
+
+  /**
+   * Начать загрузку: создать пустой временный объект и sidecar на томе,
+   * вернуть лимит части.
+   */
   async create(input: CreateUploadSessionInput = {}): Promise<CreatedUploadSession> {
     const config = this._config;
     this._requireEnabled(config);
@@ -158,20 +312,25 @@ export class UploadSessionStore {
     await this._pruneSafely();
 
     const uploadId = randomUUID();
-    const path = `${ATTACHMENT_UPLOAD_DIR}/${uploadId}`;
-    await this._blobs.write(path, Buffer.alloc(0));
-
     const now = this._now();
-    const record: UploadSessionRecord = {
-      path,
-      received: 0,
+    const sidecar: UploadSessionSidecar = {
+      version: UPLOAD_SESSION_SIDECAR_VERSION,
       createdAt: now,
       updatedAt: now,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.declaredMime ? { mime: input.declaredMime } : {}),
     };
-    if (input.sessionId) record.sessionId = input.sessionId;
-    if (input.name) record.name = input.name;
-    if (input.declaredMime) record.declaredMime = input.declaredMime;
-    this._records.set(uploadId, record);
+
+    // Временный объект и sidecar — рядом, на общем томе: состояние сессии не
+    // зависит от того, какая реплика обслуживает запрос.
+    await this._blobs.write(this._tempPath(uploadId), Buffer.alloc(0));
+    try {
+      await this._writeSidecar(uploadId, sidecar);
+    } catch (err) {
+      await this._blobs.delete(this._tempPath(uploadId)).catch(() => undefined);
+      throw err;
+    }
 
     return { uploadId, maxChunkBytes: config.maxChunkBytes };
   }
@@ -179,24 +338,24 @@ export class UploadSessionStore {
   /**
    * Принять часть по смещению `offset` (обязан равняться уже принятому объёму —
    * иначе клиент потерял часть и дописывание склеило бы файл с дырой).
+   *
+   * Принятый объём — **фактический размер временного объекта** на томе.
    */
   async append(
     uploadId: string,
     offset: number,
     bytes: Buffer,
+    scope?: UploadSessionScope,
   ): Promise<AppendedUploadChunk> {
-    await this._pruneSafely();
-    const record = this._records.get(uploadId);
-    if (!record) {
-      throw new UploadSessionError('not_found', 'Сессия загрузки не найдена');
-    }
     const config = this._config;
     this._requireEnabled(config);
 
-    if (!Number.isInteger(offset) || offset !== record.received) {
+    const { tempPath, sidecar, size } = await this._loadSession(uploadId, scope);
+
+    if (!Number.isInteger(offset) || offset !== size) {
       throw new UploadSessionError(
         'offset_mismatch',
-        `Смещение части ${offset} не совпадает с принятым объёмом ${record.received}`,
+        `Смещение части ${offset} не совпадает с принятым объёмом ${size}`,
       );
     }
     if (bytes.length > config.maxChunkBytes) {
@@ -205,44 +364,62 @@ export class UploadSessionStore {
         `Размер части ${bytes.length} Б превышает предел ${config.maxChunkBytes} Б`,
       );
     }
-    if (record.received + bytes.length > config.maxBytesPerFile) {
+    if (size + bytes.length > config.maxBytesPerFile) {
       throw new UploadSessionError(
         'too_large',
-        `Размер вложения ${record.received + bytes.length} Б превышает предел ${config.maxBytesPerFile} Б`,
+        `Размер вложения ${size + bytes.length} Б превышает предел ${config.maxBytesPerFile} Б`,
       );
     }
 
-    if (bytes.length > 0) await this._blobs.append(record.path, bytes);
-    record.received += bytes.length;
-    record.updatedAt = this._now();
+    if (bytes.length > 0) await this._blobs.append(tempPath, bytes);
 
-    return { received: record.received, nextOffset: record.received };
+    // Фактический размер после записи — единственный верный «следующий offset»
+    // (при гонке параллельных append это уже сумма обеих частей).
+    const after = await this._blobs.stat(tempPath);
+    const received = after?.size ?? size + bytes.length;
+
+    // Активность сессии обновляется (важно и для TTL, и для фонового GC по mtime).
+    await this._touch(uploadId, sidecar);
+
+    return { received, nextOffset: received };
   }
 
   /**
-   * Завершить загрузку: опубликовать временный объект как вложение. Запись
-   * снимается до публикации (повторное завершение — `not_found`), временный
-   * объект удаляется в `finally` (при ошибке публикации тоже).
+   * Завершить загрузку: опубликовать временный объект как вложение.
+   *
+   * Sidecar снимается **до** публикации (заявка на завершение): повторное
+   * завершение — `not_found`. Временный объект удаляется в `finally` (при
+   * ошибке публикации тоже — `ingestPath` убирает его сам).
    */
-  async complete(uploadId: string): Promise<UploadedAttachmentMeta> {
-    await this._pruneSafely();
-    const record = this._records.get(uploadId);
-    if (!record) {
-      throw new UploadSessionError('not_found', 'Сессия загрузки не найдена');
-    }
-    this._records.delete(uploadId);
+  async complete(
+    uploadId: string,
+    scope?: UploadSessionScope,
+  ): Promise<UploadedAttachmentMeta> {
+    const config = this._config;
+    this._requireEnabled(config);
+
+    const { tempPath, sidecar } = await this._loadSession(uploadId, scope);
+
+    // Забираем сессию: повторное завершение — `not_found`.
+    await this._blobs.delete(this._sidecarPath(uploadId)).catch((err: unknown) => {
+      this._log(
+        `[attachments] sidecar сессии загрузки не удалён (${uploadId}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
 
     try {
-      return await this._service.ingestPath(record.path, {
-        ...(record.name ? { name: record.name } : {}),
-        ...(record.declaredMime ? { declaredMime: record.declaredMime } : {}),
+      return await this._service.ingestPath(tempPath, {
+        ...(sidecar.name ? { name: sidecar.name } : {}),
+        ...(sidecar.mime ? { declaredMime: sidecar.mime } : {}),
       });
     } finally {
       // `ingestPath` переносит или удаляет объект сам; повторное удаление
       // идемпотентно и страхует путь ошибки.
-      await this._blobs.delete(record.path).catch((err: unknown) => {
+      await this._blobs.delete(tempPath).catch((err: unknown) => {
         this._log(
-          `[attachments] временный объект загрузки не удалён (${record.path}): ${
+          `[attachments] временный объект загрузки не удалён (${uploadId}): ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
@@ -250,44 +427,72 @@ export class UploadSessionStore {
     }
   }
 
-  /** Отменить загрузку: удалить временный объект и запись (идемпотентно). */
-  async cancel(uploadId: string): Promise<void> {
-    const record = this._records.get(uploadId);
-    this._records.delete(uploadId);
-    if (!record) return;
-    await this._blobs.delete(record.path).catch((err: unknown) => {
-      this._log(
-        `[attachments] временный объект отменённой загрузки не удалён (${record.path}): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    });
+  /**
+   * Отменить загрузку: удалить временный объект и sidecar (идемпотентно).
+   *
+   * Чужая (привязанная к другой сессии) загрузка не трогается: отказ молчаливый
+   * (контракт отмены — 204 идемпотентно).
+   */
+  async cancel(uploadId: string, scope?: UploadSessionScope): Promise<void> {
+    if (!UPLOAD_ID_PATTERN.test(uploadId)) return;
+    const sidecar = await this._readSidecar(uploadId);
+    if (sidecar?.sessionId && sidecar.sessionId !== scope?.sessionId) return;
+    await this._deleteUpload(uploadId);
   }
 
   /**
-   * Удалить протухшие сессии и их временные объекты. Вызывается лениво;
-   * возвращает число удалённых записей (тесты/диагностика).
+   * Удалить протухшие сессии (TTL без активности) и их временные объекты.
+   * Возвращает число удалённых записей (тесты/диагностика).
    */
   async pruneExpired(): Promise<number> {
     const now = this._now();
+    const entries = await this._blobs.list(ATTACHMENT_UPLOAD_DIR);
+    const prefix = `${ATTACHMENT_UPLOAD_DIR}/`;
     let removed = 0;
-    for (const [uploadId, record] of this._records) {
-      if (now - record.updatedAt <= this._ttlMs) continue;
-      this._records.delete(uploadId);
-      await this._blobs.delete(record.path).catch((err: unknown) => {
+
+    const temps = new Set<string>();
+    for (const entry of entries) {
+      if (!entry.path.startsWith(prefix)) continue;
+      const name = entry.path.slice(prefix.length);
+      if (name.endsWith(UPLOAD_SESSION_SIDECAR_SUFFIX)) continue;
+      temps.add(name);
+      const sidecar = await this._readSidecar(name);
+      const touchedAt =
+        sidecar?.updatedAt
+        ?? sidecar?.createdAt
+        ?? (await this._blobs.stat(entry.path))?.mtimeMs
+        ?? now;
+      if (now - touchedAt <= this._ttlMs) continue;
+      await this._deleteUpload(name);
+      removed += 1;
+    }
+
+    // Осиротевшие sidecar'ы (temp уже убран GC/публикацией) — тоже в уборку.
+    for (const entry of entries) {
+      if (!entry.path.startsWith(prefix)) continue;
+      const name = entry.path.slice(prefix.length);
+      if (!name.endsWith(UPLOAD_SESSION_SIDECAR_SUFFIX)) continue;
+      const uploadId = name.slice(0, -UPLOAD_SESSION_SIDECAR_SUFFIX.length);
+      if (temps.has(uploadId)) continue;
+      if (await this._blobs.stat(this._tempPath(uploadId))) continue;
+      await this._blobs.delete(entry.path).catch((err: unknown) => {
         this._log(
-          `[attachments] временный объект протухшей загрузки не удалён (${record.path}): ${
+          `[attachments] sidecar сессии загрузки не удалён (${uploadId}): ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
       });
       removed += 1;
     }
+
     return removed;
   }
 
   /** Ленивая уборка: ошибка стора не должна ронять текущий запрос. */
   private async _pruneSafely(): Promise<void> {
+    const now = this._now();
+    if (now - this._lastPruneAt < PRUNE_MIN_INTERVAL_MS) return;
+    this._lastPruneAt = now;
     try {
       await this.pruneExpired();
     } catch (err) {

@@ -110,7 +110,7 @@ export function createStagingAttachmentRoutes(
   /** Эффективные настройки на текущий запрос (ADR-115: runtime без рестарта). */
   const resolveConfig = (): AttachmentsConfig =>
     typeof deps.config === 'function' ? deps.config() : deps.config;
-  // B2a: chunked-загрузка (in-memory реестр сессий; см. `uploads.ts`).
+  // B2a: chunked-загрузка (состояние сессий — на томе; см. `uploads.ts`).
   const uploads = new UploadSessionStore({ service: deps.service, config: deps.config });
 
   // Гейт навешивается на `/*`: покрывает и `POST /` (загрузка), и

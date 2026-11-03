@@ -14,6 +14,9 @@ import type { SerializeSessionOptions } from '../serialize.js';
 import { paginate, parseBoundedInt } from '../pagination.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
+// Гибридный merge списков: общий порядок миров + нарезка страницы после merge.
+import { localEntries, remoteEntries, sortHybridList, sliceRemoteMessages } from './hybrid-list.js';
+import type { HybridListEntry } from './hybrid-list.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
@@ -762,18 +765,15 @@ export function createSessionRoutes(
         : await sessionManager.listSessions({ userId, ownerIds });
     }
 
-    // Видимость уже применена менеджером; дальше — фильтр проекта и страница.
+    // Видимость уже применена менеджером; дальше — фильтр проекта.
     const visible = filterByProject(sessions, projectId);
-    // Общий помощник постраничной выдачи: пустая страница (offset за концом)
-    // даёт `next_offset = null` — иначе курсор не двигался бы.
-    const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
-    // Локальные сериализуем в DTO ДО объединения с remote — иначе в merged-список
-    // попадут сырые Session (camelCase) рядом с remote-DTO (snake_case).
-    const localDto = await Promise.all(
-      page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
-    );
 
     if (!hasRemoteGetter) {
+      // Локальный мир: страница нарезается сразу (сериализуем только страницу).
+      const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
+      const localDto = await Promise.all(
+        page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
+      );
       return c.json(listPage(localDto, total, offset, limit, localNextOffset));
     }
 
@@ -785,24 +785,43 @@ export function createSessionRoutes(
     }
 
     if (!remoteClient) {
+      const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
+      const localDto = await Promise.all(
+        page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
+      );
       return c.json(listPage(localDto, total, offset, limit, localNextOffset));
     }
 
     try {
-      if (projectId && isRemoteRef(projectId)) {
-        const remote = await remoteClient.listSessions(toLocalId(projectId));
-        const merged = mergeItems([], remote.sessions, { remoteProjectId: projectId });
-        // Гибрид: удалённый список не пагинируется на стороне клиента —
-        // `next_offset` неизвестен (см. комментарий выше про `RemoteSessionList`).
-        return c.json(listPage(merged, merged.length, offset, limit, null));
+      // Гибрид: список **обоих** миров. Удалённая сторона забирается целиком
+      // (обход страниц), merge сортируется по времени записи, и только потом
+      // нарезается страница — иначе порядок «новые сверху» ломался бы на
+      // границе миров, а курсор `next_offset` нельзя было бы выдать.
+      const remoteProjectId = projectId && isRemoteRef(projectId) ? toLocalId(projectId) : projectId;
+      const remoteAll = await remoteClient.listAllSessions(remoteProjectId);
+      // Локальные сессии удалённого проекта не существуют — мир «local» пуст.
+      const localList = projectId && isRemoteRef(projectId) ? [] : visible;
+      // Фильтр по проекту на клиенте нужен только для remote-ref проекта
+      // (удалённая сторона фильтрует сама по локальному id проекта).
+      const remoteFilter = projectId && isRemoteRef(projectId) ? { remoteProjectId: projectId } : undefined;
+      const entries: HybridListEntry<unknown>[] = [
+        ...localEntries(localList),
+        ...remoteEntries(mergeItems([], remoteAll.items, remoteFilter)),
+      ];
+      const sorted = sortHybridList(entries);
+      const { page, total, next_offset } = paginate(sorted, offset, limit);
+      // Локальные записи сериализуем только для страницы (история в DTO не идёт).
+      const items = await Promise.all(
+        page.map((entry) => (entry.origin === 'local'
+          ? serializeForReader(c, entry.value as Session, userId, LIST_SERIALIZE_OPTS)
+          : entry.value as Record<string, unknown>)),
+      );
+      // Кап страниц удалённого обхода: список неполон — курсор выдавать нельзя.
+      if (remoteAll.truncated) {
+        console.warn('[hybrid] удалённый список сессий обрезан капом страниц — next_offset не выдаётся');
+        return c.json(listPage(items, total, offset, limit, null));
       }
-      const remote = await remoteClient.listSessions(projectId);
-      const merged = mergeItems(localDto, remote.sessions);
-      // Гибрид: удалённая часть приходит **без** пагинации (старый/новый сервер
-      // отдаёт полный список), поэтому сквозная пагинация невозможна —
-      // `next_offset` = null, пока в merged есть удалённые сессии.
-      const nextOffset = remote.sessions.length > 0 ? null : localNextOffset;
-      return c.json(listPage(merged, total + remote.sessions.length, offset, limit, nextOffset));
+      return c.json(listPage(items, total, offset, limit, next_offset));
     } catch (err) {
       // Offline-деградация: сервер недоступен — отдаём локальный мир.
       if (err instanceof RemoteError) {
@@ -810,6 +829,10 @@ export function createSessionRoutes(
         if (projectId && isRemoteRef(projectId)) {
           return c.json(listPage([], 0, offset, limit, null));
         }
+        const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
+        const localDto = await Promise.all(
+          page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
+        );
         return c.json(listPage(localDto, total, offset, limit, localNextOffset));
       }
       throw err;
@@ -1872,17 +1895,25 @@ export function createSessionRoutes(
       try {
         // Параметры пагинации пробрасываются в удалённый мир. Ограничение:
         // старый удалённый сервер их игнорирует и отдаёт **всю** историю —
-        // тогда `has_more`/`next_before` приходят в его формате (или отсутствуют,
-        // и мы достраиваем их дефолтами ниже).
-        const result = (await remoteClient.getSessionMessages(toLocalId(id), { limit, before })) as Record<string, unknown>;
+        // тогда нарезка по `seq`/`before`/`limit` делается локально (см.
+        // `sliceRemoteMessages`), иначе клиент получил бы всю историю целиком.
+        const remotePage = await remoteClient.getSessionMessages(toLocalId(id), { limit, before });
+        const { page, hasMore, nextBefore } = sliceRemoteMessages(
+          remotePage.messages,
+          limit,
+          before,
+          remotePage.has_more,
+          remotePage.next_before,
+        );
         // session_id в ответе — ссылка на сущность: приводим к remote-ref.
-        const out = { ...result };
-        if (typeof out.session_id === 'string') out.session_id = toRemoteRef(out.session_id);
+        const sessionId = typeof remotePage.session_id === 'string'
+          ? toRemoteRef(remotePage.session_id)
+          : toRemoteRef(toLocalId(id));
         return c.json({
-          messages: Array.isArray(out.messages) ? out.messages : [],
-          session_id: out.session_id,
-          has_more: out.has_more === true,
-          next_before: typeof out.next_before === 'number' ? out.next_before : null,
+          messages: page,
+          session_id: sessionId,
+          has_more: hasMore,
+          next_before: nextBefore,
         });
       } catch (err) {
         const mapped = mapRemoteError(c, err);

@@ -286,6 +286,45 @@ describe('HTTP: chunked-загрузка вложений (B2a)', () => {
       const done = await app.request(`${base}/${uploadId}/complete`, { method: 'POST' });
       expect(done.status).toBe(404);
     });
+
+    it('multi-replica: сессия загрузки с одной реплики завершается на другой', async () => {
+      const { service, blobs } = createService(attachmentsConfig());
+      const session = { id: 's1', messages: [] } as unknown as Session;
+      const replicaA = sessionApp(service, session);
+      const replicaB = sessionApp(service, session);
+
+      const initRes = await init(replicaA, base);
+      expect(initRes.status).toBe(201);
+      const { uploadId } = (await initRes.json()) as { uploadId: string };
+
+      // Часть и завершение — на другой реплике (общий том `blobs`).
+      const payload = pngBytes(1, 10);
+      const chunk = await putChunk(replicaB, `${base}/${uploadId}`, 0, payload);
+      expect(chunk.status).toBe(200);
+      expect(await chunk.json()).toEqual({
+        received: payload.length,
+        nextOffset: payload.length,
+      });
+
+      const done = await replicaB.request(`${base}/${uploadId}/complete`, { method: 'POST' });
+      expect(done.status).toBe(201);
+      expect(await blobs.list('attachments/.uploads')).toHaveLength(0);
+    });
+
+    it('404: загрузка сессии s1 не завершается из сессии s2', async () => {
+      const { service } = createService(attachmentsConfig());
+      const app = sessionApp(service, { id: 's1', messages: [] } as unknown as Session);
+      const initRes = await init(app, base);
+      const { uploadId } = (await initRes.json()) as { uploadId: string };
+      await putChunk(app, `${base}/${uploadId}`, 0, Buffer.from('abc'));
+
+      // Другая сессия (тот же том) — загрузка не видна (fail-closed).
+      const other = sessionApp(service, { id: 's2', messages: [] } as unknown as Session);
+      const done = await other.request(`${base}/${uploadId}/complete`, { method: 'POST' });
+      expect(done.status).toBe(404);
+      const chunk = await upChunk(other, `${base}/${uploadId}`, 3, Buffer.from('x'));
+      expect(chunk.status).toBe(404);
+    });
   });
 
   describe('staging-контур (/api/v2/attachments/uploads)', () => {

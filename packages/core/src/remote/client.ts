@@ -34,11 +34,10 @@ export interface RemoteAuthStatus {
 }
 
 /**
- * Список сессий удалённого мира (гибрид).
+ * Страница списка сессий удалённого мира (гибрид).
  *
  * `paginationSupported: false` — удалённый сервер отдал **массив** (старый
- * контракт без пагинации): тогда сквозная пагинация списка невозможна,
- * вызывающий обязан вернуть merged-список без курсора `next_offset`.
+ * контракт без пагинации): тогда список полный, а `next_offset` всегда `null`.
  */
 export interface RemoteSessionList {
   sessions: Array<Record<string, unknown>>;
@@ -46,14 +45,15 @@ export interface RemoteSessionList {
   total: number;
   /** Удалённый сервер понимает пагинацию списка. */
   paginationSupported: boolean;
+  /** Курсор следующей страницы удалённого списка (`null` — последняя). */
+  next_offset: number | null;
 }
 
 /**
- * Список проектов удалённого мира (гибрид).
+ * Страница списка проектов удалённого мира (гибрид).
  *
  * `paginationSupported: false` — удалённый сервер отдал **массив** (старый
- * контракт без пагинации): тогда сквозная пагинация списка невозможна,
- * вызывающий обязан вернуть merged-список без курсора `next_offset`.
+ * контракт без пагинации): тогда список полный, а `next_offset` всегда `null`.
  */
 export interface RemoteProjectList {
   projects: Array<Record<string, unknown>>;
@@ -61,6 +61,54 @@ export interface RemoteProjectList {
   total: number;
   /** Удалённый сервер понимает пагинацию списка. */
   paginationSupported: boolean;
+  /** Курсор следующей страницы удалённого списка (`null` — последняя). */
+  next_offset: number | null;
+}
+
+/**
+ * Размер страницы при обходе удалённого списка целиком (merge гибрида).
+ * Совпадает с максимумом `limit` на сервере (`MAX_SESSIONS_LIMIT`/`MAX_PROJECTS_LIMIT`).
+ */
+export const REMOTE_LIST_PAGE_LIMIT = 500;
+
+/**
+ * Кап числа страниц при обходе удалённого списка целиком.
+ * Защита от гигантского ответа и от «курсора, который не двигается».
+ */
+export const REMOTE_LIST_MAX_PAGES = 20;
+
+/**
+ * Результат обхода удалённого списка целиком (merge гибрида).
+ *
+ * `truncated: true` — список получен **не полностью** (сработал кап страниц):
+ * вызывающий обязан не выдавать курсор сквозной пагинации (часть записей
+ * удалённой стороны неизвестна).
+ */
+export interface RemoteAllList {
+  /** Все полученные записи удалённого списка (в порядке сервера). */
+  items: Array<Record<string, unknown>>;
+  /** Всего записей на удалённой стороне (по данным сервера). */
+  total: number;
+  /** Список получен не полностью (кап страниц) — пагинация невозможна. */
+  truncated: boolean;
+}
+
+/**
+ * Страница истории сообщений удалённой сессии.
+ *
+ * Старый сервер может проигнорировать `limit`/`before` и вернуть **всю**
+ * историю — тогда `messages` длиннее запрошенного `limit`, а нарезку обязан
+ * сделать вызывающий (роут `GET /sessions/:id/messages`).
+ */
+export interface RemoteMessagePage {
+  /** Сообщения страницы (DTO удалённого сервера). */
+  messages: Array<Record<string, unknown>>;
+  /** id сессии на удалённой стороне (если сервер его прислал). */
+  session_id?: string;
+  /** Удалённый сервер знает, что есть более старые сообщения. */
+  has_more?: boolean;
+  /** Курсор следующей (более старой) страницы. */
+  next_before?: number | null;
 }
 
 /** Плохая запись провайдера с удалённого backend (GET /api/v2/providers). */
@@ -325,20 +373,26 @@ export class RemoteBackendClient {
   }
 
   /**
-   * Список проектов удалённого мира.
+   * Страница списка проектов удалённого мира.
    *
    * Контракт ответа — объект `{projects, total, offset, limit, next_offset}`
    * (пагинация списка). Старый сервер отдаёт **массив** — он нормализуется в
-   * `{projects, total, paginationSupported: false}`: пагинация по такому
-   * ответу недоступна, вызывающий обязан учесть это (см. `RemoteProjectList`).
+   * `{projects, total, paginationSupported: false, next_offset: null}`: список
+   * полный, но постранично его взять нельзя.
+   *
+   * `limit`/`offset` — параметры пагинации списка (пробрасываются в query).
    */
-  async listProjects(): Promise<RemoteProjectList> {
-    const raw = await this.request<unknown>('GET', '/api/v2/projects');
+  async listProjects(params?: { limit?: number; offset?: number }): Promise<RemoteProjectList> {
+    const query: string[] = [];
+    if (params?.limit !== undefined) query.push(`limit=${encodeURIComponent(String(params.limit))}`);
+    if (params?.offset !== undefined) query.push(`offset=${encodeURIComponent(String(params.offset))}`);
+    const suffix = query.length > 0 ? `?${query.join('&')}` : '';
+    const raw = await this.request<unknown>('GET', `/api/v2/projects${suffix}`);
     if (Array.isArray(raw)) {
       const projects = raw as Array<Record<string, unknown>>;
-      return { projects, total: projects.length, paginationSupported: false };
+      return { projects, total: projects.length, paginationSupported: false, next_offset: null };
     }
-    const body = (raw ?? {}) as { projects?: unknown; total?: unknown };
+    const body = (raw ?? {}) as { projects?: unknown; total?: unknown; next_offset?: unknown };
     const projects = Array.isArray(body.projects)
       ? (body.projects as Array<Record<string, unknown>>)
       : [];
@@ -346,27 +400,36 @@ export class RemoteBackendClient {
       projects,
       total: typeof body.total === 'number' ? body.total : projects.length,
       paginationSupported: true,
+      next_offset: typeof body.next_offset === 'number' ? body.next_offset : null,
     };
   }
 
   /**
-   * Список сессий удалённого мира.
+   * Страница списка сессий удалённого мира.
    *
    * Контракт ответа — объект `{sessions, total, offset, limit, next_offset}`
    * (пагинация списка). Старый сервер отдаёт **массив** — он нормализуется в
-   * `{sessions, total, paginationSupported: false}`: пагинация по такому
-   * ответу недоступна, вызывающий обязан учесть это (см. `RemoteSessionList`).
+   * `{sessions, total, paginationSupported: false, next_offset: null}`: список
+   * полный, но постранично его взять нельзя.
+   *
+   * `projectId` — фильтр по проекту (пробрасывается в query); `limit`/`offset`
+   * — параметры пагинации списка.
    */
-  async listSessions(projectId?: string): Promise<RemoteSessionList> {
-    const path = projectId
-      ? `/api/v2/sessions?project_id=${encodeURIComponent(projectId)}`
-      : '/api/v2/sessions';
-    const raw = await this.request<unknown>('GET', path);
+  async listSessions(
+    projectId?: string,
+    params?: { limit?: number; offset?: number },
+  ): Promise<RemoteSessionList> {
+    const query: string[] = [];
+    if (projectId) query.push(`project_id=${encodeURIComponent(projectId)}`);
+    if (params?.limit !== undefined) query.push(`limit=${encodeURIComponent(String(params.limit))}`);
+    if (params?.offset !== undefined) query.push(`offset=${encodeURIComponent(String(params.offset))}`);
+    const suffix = query.length > 0 ? `?${query.join('&')}` : '';
+    const raw = await this.request<unknown>('GET', `/api/v2/sessions${suffix}`);
     if (Array.isArray(raw)) {
       const sessions = raw as Array<Record<string, unknown>>;
-      return { sessions, total: sessions.length, paginationSupported: false };
+      return { sessions, total: sessions.length, paginationSupported: false, next_offset: null };
     }
-    const body = (raw ?? {}) as { sessions?: unknown; total?: unknown };
+    const body = (raw ?? {}) as { sessions?: unknown; total?: unknown; next_offset?: unknown };
     const sessions = Array.isArray(body.sessions)
       ? (body.sessions as Array<Record<string, unknown>>)
       : [];
@@ -374,7 +437,86 @@ export class RemoteBackendClient {
       sessions,
       total: typeof body.total === 'number' ? body.total : sessions.length,
       paginationSupported: true,
+      next_offset: typeof body.next_offset === 'number' ? body.next_offset : null,
     };
+  }
+
+  /**
+   * Полный список проектов удалённого мира (обход страниц) — для merge гибрида.
+   *
+   * Старый сервер (массив) отдаёт весь список одним ответом — обход
+   * заканчивается сразу. Новый сервер — страницы по `REMOTE_LIST_PAGE_LIMIT`
+   * до `next_offset: null`; число страниц ограничено капом
+   * (`REMOTE_LIST_MAX_PAGES`): при превышении `truncated = true`, и вызывающий
+   * обязан не выдавать курсор сквозной пагинации.
+   */
+  listAllProjects(opts?: { maxPages?: number }): Promise<RemoteAllList> {
+    return this._listAll(
+      async (params) => {
+        const page = await this.listProjects(params);
+        return {
+          items: page.projects,
+          total: page.total,
+          paginationSupported: page.paginationSupported,
+          next_offset: page.next_offset,
+        };
+      },
+      opts,
+    );
+  }
+
+  /**
+   * Полный список сессий удалённого мира (обход страниц) — для merge гибрида.
+   * Семантика cap'а — как в `listAllProjects`.
+   */
+  listAllSessions(projectId?: string, opts?: { maxPages?: number }): Promise<RemoteAllList> {
+    return this._listAll(
+      async (params) => {
+        const page = await this.listSessions(projectId, params);
+        return {
+          items: page.sessions,
+          total: page.total,
+          paginationSupported: page.paginationSupported,
+          next_offset: page.next_offset,
+        };
+      },
+      opts,
+    );
+  }
+
+  /** Общий обход страниц удалённого списка (см. `listAllProjects`). */
+  private async _listAll(
+    fetchPage: (params: { limit: number; offset: number }) => Promise<{
+      items: Array<Record<string, unknown>>;
+      total: number;
+      paginationSupported: boolean;
+      next_offset: number | null;
+    }>,
+    opts?: { maxPages?: number },
+  ): Promise<RemoteAllList> {
+    const maxPages = Math.max(1, opts?.maxPages ?? REMOTE_LIST_MAX_PAGES);
+    const items: Array<Record<string, unknown>> = [];
+    let total = 0;
+    let offset = 0;
+    for (let page = 0; page < maxPages; page += 1) {
+      const res = await fetchPage({ limit: REMOTE_LIST_PAGE_LIMIT, offset });
+      items.push(...res.items);
+      total = res.total;
+      if (!res.paginationSupported) {
+        // Старый сервер: вернул весь список одним ответом — обход окончен.
+        return { items, total, truncated: false };
+      }
+      if (res.next_offset === null) {
+        return { items, total, truncated: false };
+      }
+      if (res.next_offset <= offset) {
+        // Сервер вернул недвижущийся курсор — дальнейший обход бессмысленен.
+        return { items, total, truncated: true };
+      }
+      offset = res.next_offset;
+    }
+    // Кап страниц: список получен не полностью — сквозная пагинация невозможна.
+    return { items, total, truncated: true };
   }
 
   getSession(id: string): Promise<unknown> {
@@ -425,15 +567,40 @@ export class RemoteBackendClient {
    * История сообщений удалённой сессии.
    *
    * `limit`/`before` — пагинация (курсор по `seq`). Старый сервер их
-   * игнорирует и отдаёт всю историю — это ограничение гибрида (см. комментарий
-   * в `server/routes/sessions.ts`).
+   * игнорирует и отдаёт **всю** историю — это ограничение гибрида: клиент
+   * возвращает ответ как есть, а нарезку по `seq`/`before`/`limit` делает
+   * вызывающий (роут `GET /sessions/:id/messages`).
    */
-  getSessionMessages(id: string, params?: { limit?: number; before?: number }): Promise<unknown> {
+  async getSessionMessages(
+    id: string,
+    params?: { limit?: number; before?: number },
+  ): Promise<RemoteMessagePage> {
     const query: string[] = [];
     if (params?.limit !== undefined) query.push(`limit=${encodeURIComponent(String(params.limit))}`);
     if (params?.before !== undefined) query.push(`before=${encodeURIComponent(String(params.before))}`);
     const suffix = query.length > 0 ? `?${query.join('&')}` : '';
-    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/messages${suffix}`);
+    const raw = await this.request<unknown>(
+      'GET',
+      `/api/v2/sessions/${encodeURIComponent(id)}/messages${suffix}`,
+    );
+    // Очень старый сервер мог отдать голый массив сообщений.
+    if (Array.isArray(raw)) {
+      return { messages: raw as Array<Record<string, unknown>> };
+    }
+    const body = (raw ?? {}) as {
+      messages?: unknown;
+      session_id?: unknown;
+      has_more?: unknown;
+      next_before?: unknown;
+    };
+    return {
+      messages: Array.isArray(body.messages)
+        ? (body.messages as Array<Record<string, unknown>>)
+        : [],
+      ...(typeof body.session_id === 'string' ? { session_id: body.session_id } : {}),
+      ...(typeof body.has_more === 'boolean' ? { has_more: body.has_more } : {}),
+      ...(typeof body.next_before === 'number' ? { next_before: body.next_before } : {}),
+    };
   }
 
   /** Полный экспорт сессии для переноса между мирами (publish/fork). */
