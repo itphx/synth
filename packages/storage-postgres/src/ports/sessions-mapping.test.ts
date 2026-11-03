@@ -14,6 +14,7 @@ import {
   deserializeMessage,
   deserializeSession,
   deserializeSessionLight,
+  deserializeSessionMeta,
   deserializeSessionRetry,
   deserializeSessionWorktree,
   emptySessionChildren,
@@ -582,7 +583,7 @@ describe('PG-маппинг сообщения: части reasoning с metadata
   });
 });
 
-describe('PG-маппинг сессии: лёгкое чтение сохраняет очередь (ADR-096/ADR-097)', () => {
+describe('PG-маппинг сессии: лёгкие проекции loadLight/listLight (ADR-096/ADR-097)', () => {
   function messageFor(content: string): Message {
     return {
       id: `msg-${content}`,
@@ -619,5 +620,37 @@ describe('PG-маппинг сессии: лёгкое чтение сохран
     expect(light.pendingMessages).toEqual([]);
     expect(light.steerInbox).toEqual([]);
     expect(light.messages).toEqual([]);
+  });
+
+  it('deserializeSessionMeta (loadLight) очищает и историю, и очередь', () => {
+    // Контракт `SessionRepository.loadLight`: сообщения/чекпоинты/очередь пусты —
+    // очередь нужна только `listLight` (recovery/автозапуск).
+    const row = makeRow({
+      pending_messages: [serializeMessage(messageFor('в очереди'))],
+      steer_inbox: [serializeMessage(messageFor('вклинивание'))],
+    });
+
+    const meta = deserializeSessionMeta(row);
+
+    expect(meta.messages).toEqual([]);
+    expect(meta.checkpoints).toEqual([]);
+    expect(meta.pendingMessages).toEqual([]);
+    expect(meta.steerInbox).toEqual([]);
+    // Остальные метаданные — те же, что у лёгкой проекции.
+    expect(meta.id).toBe('sess-1');
+    expect(meta.title).toBe('S');
+    expect(meta.projectId).toBe('proj-1');
+  });
+
+  it('deserializeSessionLight по-прежнему сохраняет очередь (listLight)', () => {
+    // Страховка от «сужения» общей проекции: очередь остаётся только у listLight.
+    const row = makeRow({
+      pending_messages: [serializeMessage(messageFor('в очереди'))],
+      steer_inbox: [serializeMessage(messageFor('вклинивание'))],
+    });
+
+    const light = deserializeSessionLight(row);
+    expect(light.pendingMessages.map((m) => m.content)).toEqual(['в очереди']);
+    expect(light.steerInbox?.map((m) => m.content)).toEqual(['вклинивание']);
   });
 });

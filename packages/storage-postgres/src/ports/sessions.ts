@@ -40,7 +40,9 @@
  *     child-таблицы не читаются; очередь `pendingMessages`/`steerInbox` —
  *     jsonb-колонки самой `sessions` — сохраняется): одна выборка из `sessions`
  *     тем же `WHERE`/порядком, что у `list`; `loadLight` — та же проекция по
- *     одному id (одна выборка по PK), но без очереди;
+ *     одному id (одна выборка по PK), но **без очереди** (`pendingMessages`/
+ *     `steerInbox` пусты) — контракт порта: очередь нужна только recovery/
+ *     автозапуску через `listLight`;
  *   - `list`/`listForUser*` сортируют `updated_at DESC`; архивированные сессии
  *     **не** отфильтровываются — это ответственность менеджера
  *     (`SessionManager.listSessions`, как и у файловой/memory реализаций);
@@ -66,6 +68,7 @@ import {
   deserializeReference,
   deserializeSession,
   deserializeSessionLight,
+  deserializeSessionMeta,
   emptySessionChildren,
   messageRow,
   referenceRow,
@@ -555,8 +558,9 @@ export class PostgresSessionRepository implements SessionRepository {
   }
 
   /**
-   * Метаданные сессии без истории (`SessionRepository.loadLight`): одна
-   * выборка по PK, child-таблицы не читаются.
+   * Метаданные сессии без истории и без очереди (`SessionRepository.loadLight`):
+   * одна выборка по PK, child-таблицы не читаются, `pendingMessages`/`steerInbox`
+   * пусты (очередь отдаёт только `listLight` — recovery/автозапуску).
    */
   async loadLight(sessionId: string): Promise<Session | null> {
     const rows = await this._connection.query<SessionRow>(
@@ -564,7 +568,7 @@ export class PostgresSessionRepository implements SessionRepository {
       [sessionId],
     );
     const row = rows[0];
-    return row ? deserializeSessionLight(row) : null;
+    return row ? deserializeSessionMeta(row) : null;
   }
 
   async delete(sessionId: string): Promise<void> {

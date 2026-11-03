@@ -803,11 +803,28 @@ export function deserializeSession(
  * сохраняется** (`pendingMessages`/`steerInbox` — jsonb-колонки самой `sessions`,
  * истории не тянут, нужны recovery/автозапуску). Метаданные
  * (id/статус/settings/projectId/expiresAt/…) идентичны `deserializeSession` —
- * механика переиспользуется.
+ * механика переиспользуется. Для `loadLight` (без очереди) — `deserializeSessionMeta`.
  */
 export function deserializeSessionLight(row: SessionRow): Session {
   const session = deserializeSession(row, emptySessionChildren());
   session.messages = [];
   session.checkpoints = [];
+  return session;
+}
+
+/**
+ * Строка `sessions` → доменная сессия **без истории и без очереди**
+ * (`SessionRepository.loadLight`, ADR-097): `messages`/`checkpoints` пусты и
+ * `pendingMessages`/`steerInbox` **тоже** — контракт порта (`loadLight`
+ * возвращает только атрибуты сессии, очередь нужна лишь recovery/автозапуску
+ * через `listLight`). Child-таблицы не читаются.
+ *
+ * Строится поверх `deserializeSessionLight` (та же метапроекция), поэтому
+ * остальные поля идентичны `deserializeSession`; отличается только очередь.
+ */
+export function deserializeSessionMeta(row: SessionRow): Session {
+  const session = deserializeSessionLight(row);
+  session.pendingMessages = [];
+  session.steerInbox = [];
   return session;
 }
