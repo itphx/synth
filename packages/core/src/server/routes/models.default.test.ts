@@ -42,8 +42,8 @@ async function makeApp(
 async function listModels(app: ReturnType<typeof createModelRoutes>): Promise<GroupModel[]> {
   const res = await app.request('/');
   expect(res.status).toBe(200);
-  const body = await res.json() as { groups: Array<{ models: GroupModel[] }> };
-  return body.groups.flatMap((group) => group.models);
+  const body = await res.json() as { models: GroupModel[] };
+  return body.models;
 }
 
 function postJSON(body: unknown): RequestInit {

@@ -40,7 +40,12 @@ describe('RemoteBackendClient', () => {
 
     const result = await makeClient().listProjects();
 
-    expect(result).toEqual([{ id: 'p1', name: 'Проект' }]);
+    // Старый сервер отдаёт массив — он нормализуется в объект-список.
+    expect(result).toEqual({
+      projects: [{ id: 'p1', name: 'Проект' }],
+      total: 1,
+      paginationSupported: false,
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       'http://backend.test/api/v2/projects',
       expect.objectContaining({
@@ -48,6 +53,21 @@ describe('RemoteBackendClient', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
       }),
     );
+  });
+
+  it('список проектов нового сервера (объект с пагинацией) — нормализуется', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ projects: [{ id: 'p1' }], total: 7, offset: 0, limit: 100, next_offset: 100 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await makeClient().listProjects();
+
+    expect(result).toEqual({
+      projects: [{ id: 'p1' }],
+      total: 7,
+      paginationSupported: true,
+    });
   });
 
   it('без токена не шлёт Authorization', async () => {
@@ -125,6 +145,44 @@ describe('RemoteBackendClient', () => {
     );
   });
 
+  it('listSessions: объектный контракт (пагинация) нормализуется в RemoteSessionList', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      sessions: [{ id: 's1' }, { id: 's2' }],
+      total: 7,
+      offset: 0,
+      limit: 2,
+      next_offset: 2,
+    })));
+
+    const list = await makeClient().listSessions();
+
+    expect(list.sessions).toHaveLength(2);
+    expect(list.total).toBe(7);
+    expect(list.paginationSupported).toBe(true);
+  });
+
+  it('listSessions: старый формат (массив) → sessions=[…], пагинация не поддерживается', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([{ id: 's1' }])));
+
+    const list = await makeClient().listSessions();
+
+    expect(list.sessions).toHaveLength(1);
+    expect(list.total).toBe(1);
+    expect(list.paginationSupported).toBe(false);
+  });
+
+  it('getSessionMessages пробрасывает limit/before в query', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ messages: [], session_id: 's1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await makeClient().getSessionMessages('s1', { limit: 50, before: 12 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/sessions/s1/messages?limit=50&before=12',
+      expect.anything(),
+    );
+  });
+
   it('getAuthStatus возвращает структуру /auth/status', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
       authenticated: true,
@@ -142,23 +200,23 @@ describe('RemoteBackendClient', () => {
 
   it('listModels переносит полные метаданные моделей (контекст, цены, default)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      groups: [
+      // Контракт каталога — страница `{models, total, offset, limit, next_offset}`.
+      models: [
         {
-          provider: { name: 'itphx', type: 'openai' },
-          models: [
-            {
-              id: 'itphx/local.qwen3:14b', name: 'local.qwen3:14b', provider: 'itphx',
-              description: 'Qwen', enabled: true, isDefault: true,
-              contextWindow: 32_768, contextSource: 'api', maxOutputTokens: 4096,
-              inputPrice: 1.5, outputPrice: 2.5, cacheReadPrice: 0.5, cacheWritePrice: 1,
-            },
-            {
-              id: 'ollama/llama3', name: 'llama3', provider: 'ollama',
-              description: '', enabled: false,
-            },
-          ],
+          id: 'itphx/local.qwen3:14b', name: 'local.qwen3:14b', provider: 'itphx',
+          description: 'Qwen', enabled: true, isDefault: true,
+          contextWindow: 32_768, contextSource: 'api', maxOutputTokens: 4096,
+          inputPrice: 1.5, outputPrice: 2.5, cacheReadPrice: 0.5, cacheWritePrice: 1,
+        },
+        {
+          id: 'ollama/llama3', name: 'llama3', provider: 'ollama',
+          description: '', enabled: false,
         },
       ],
+      total: 2,
+      offset: 0,
+      limit: 500,
+      next_offset: null,
     }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -177,10 +235,26 @@ describe('RemoteBackendClient', () => {
         inputPrice: undefined, outputPrice: undefined, cacheReadPrice: undefined, cacheWritePrice: undefined,
       },
     ]);
+    // Запрашивается максимальная страница — каталог должен быть виден целиком.
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://backend.test/api/v2/models',
+      'http://backend.test/api/v2/models?limit=500',
       expect.objectContaining({ method: 'GET' }),
     );
+  });
+
+  it('listModels понимает legacy-форму групп (старый сервер)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      groups: [
+        {
+          provider: { name: 'itphx', type: 'openai' },
+          models: [{ id: 'itphx/m1', name: 'm1', provider: 'itphx', enabled: true }],
+        },
+      ],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const models = await makeClient().listModels();
+    expect(models.map((m) => m.id)).toEqual(['itphx/m1']);
   });
 
   it('listProviders возвращает провайдеров сервера и шлёт Bearer', async () => {

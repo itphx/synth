@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   consolidateMemory: vi.fn(),
   getMemoryGraph: vi.fn(),
   getProjects: vi.fn(),
+  getProjectsPage: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
 }))
@@ -247,6 +248,14 @@ beforeEach(() => {
   mocks.consolidateMemory.mockResolvedValue({ report: REPORT })
   mocks.getMemoryGraph.mockResolvedValue(GRAPH)
   mocks.getProjects.mockResolvedValue([PROJECT])
+  // Список проектов пагинирован: страница повторяет данные списка.
+  mocks.getProjectsPage.mockImplementation(async () => ({
+    projects: (await mocks.getProjects()) as never[],
+    total: 0,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+  }))
   mocks.confirm.mockResolvedValue(true)
   useProjectsStore.setState({ projects: [PROJECT] as never })
 })

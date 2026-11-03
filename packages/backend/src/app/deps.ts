@@ -696,7 +696,6 @@ export async function createBackendDeps(
             // сессий. Очередь (`pendingMessages`) в light сохраняется.
             const sessions = await sessionManager.listSessions(undefined, {
               includeArchived: false,
-              light: true,
             });
             let queueCandidates = 0;
             let inFlightResumed = 0;
@@ -1085,7 +1084,7 @@ export async function createBackendDeps(
         defaultWorkingDir,
         // Привязанная живая сессия — по полю `session.worktree` (ADR-114 §1.3).
         resolveAttachedSession: async (worktreeId: string) => {
-          const sessions = await sessionManager.listSessions(undefined, { light: true });
+          const sessions = await sessionManager.listSessions(undefined);
           return sessions.find((s) => s.worktree?.worktreeId === worktreeId)?.id;
         },
         onUpdated: (projectId: string, detail) => {

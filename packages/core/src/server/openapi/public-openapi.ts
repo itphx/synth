@@ -246,13 +246,39 @@ const Session = z
     mode: z.enum(['plan', 'act', 'yolo']),
     project_id: z.string().nullable().optional(),
     owner_id: z.string().nullable().optional(),
-    messages: z.array(z.unknown()),
+    messages: z
+      .array(z.unknown())
+      .optional()
+      .openapi({
+        description:
+          'История сообщений. В сводке сессии (список `GET /sessions`, `GET /sessions/:id`) поля нет — полная история отдаётся постранично в `GET /sessions/:id/messages`.',
+      }),
     pending_count: z.number().int().optional(),
     settings: z.record(z.string(), z.unknown()).optional(),
     created_at: z.string().min(1),
     updated_at: z.string().min(1),
   })
   .openapi('Session', { description: 'Сериализованная сессия (публичное подмножество).' });
+
+/**
+ * Страница списка сессий (`GET /sessions`): объект, а не массив (решение
+ * владельца — пагинация обязательна, полная история списком не отдаётся).
+ */
+const SessionListResponse = z
+  .object({
+    sessions: z.array(Session),
+    total: z.number().int().openapi({ description: 'Всего видимых сессий (после фильтра видимости).' }),
+    offset: z.number().int().openapi({ description: 'Смещение текущей страницы.' }),
+    limit: z.number().int().openapi({ description: 'Размер страницы (default 100, max 500).' }),
+    next_offset: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({ description: 'Курсор следующей страницы; `null` — страница последняя.' }),
+  })
+  .openapi('SessionListResponse', {
+    description: 'Страница списка сессий. DTO сессии — сводка без истории сообщений.',
+  });
 
 /** ADR-118 §3: ответ приёма сообщения — `202 {messageId, mode, position}` (без SSE). */
 const SessionPromptAccepted = z
@@ -323,6 +349,19 @@ const SessionMessagesResponse = z
   .object({
     messages: z.array(SessionMessage),
     session_id: z.string(),
+    has_more: z
+      .boolean()
+      .optional()
+      .openapi({ description: 'Есть ли более старые сообщения за пределами страницы.' }),
+    next_before: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .openapi({
+        description:
+          'Курсор следующей (более старой) страницы: минимальный `seq` текущей страницы; `null` — более старых сообщений нет.',
+      }),
   })
   .openapi('SessionMessagesResponse');
 
@@ -425,6 +464,17 @@ const BindingKeyParams = z.object({ id: z.string().min(1), keyId: z.string().min
 
 const SessionsListQuery = z.object({
   project_id: z.string().optional().openapi({ description: 'Фильтр по проекту' }),
+  limit: z.coerce.number().int().positive().optional().openapi({ description: 'Размер страницы: default 100, max 500' }),
+  offset: z.coerce.number().int().nonnegative().optional().openapi({ description: 'Смещение страницы: default 0' }),
+});
+const SessionMessagesQuery = z.object({
+  limit: z.coerce.number().int().positive().optional().openapi({ description: 'Размер страницы: default 200, max 500' }),
+  before: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .openapi({ description: 'Исключающий курсор по `seq`: сообщения строго старше указанного.' }),
 });
 const JournalQuery = z.object({
   limit: z.coerce.number().int().positive().optional().openapi({ description: 'Лимит: default 50, max 500' }),
@@ -631,7 +681,7 @@ const listSessionsRoute = createRoute({
   security: BEARER_SECURITY,
   request: { query: SessionsListQuery },
   responses: {
-    200: jsonResponse('Список сессий', z.array(Session)),
+    200: jsonResponse('Страница списка сессий', SessionListResponse),
     ...publicErrorResponses,
   },
 });
@@ -738,9 +788,9 @@ const getSessionMessagesRoute = createRoute({
   tags: ['sessions'],
   summary: 'Сообщения сессии',
   security: BEARER_SECURITY,
-  request: { params: SessionParams },
+  request: { params: SessionParams, query: SessionMessagesQuery },
   responses: {
-    200: jsonResponse('Сообщения сессии', SessionMessagesResponse),
+    200: jsonResponse('Страница сообщений сессии', SessionMessagesResponse),
     ...publicErrorResponses,
   },
 });
@@ -958,7 +1008,9 @@ export function createPublicOpenApiApp(): OpenAPIHono {
   app.openapi(deleteEventRouteRoute, (c) => c.body(null, 204));
 
   // --- sessions ---
-  app.openapi(listSessionsRoute, (c) => c.json([], 200));
+  app.openapi(listSessionsRoute, (c) =>
+    c.json({ sessions: [], total: 0, offset: 0, limit: 100, next_offset: null }, 200),
+  );
   app.openapi(createSessionRoute, (c) => c.json(SAMPLE_SESSION, 201));
   app.openapi(getSessionRoute, (c) => c.json(SAMPLE_SESSION, 200));
   app.openapi(patchSessionRoute, (c) => c.json(SAMPLE_SESSION, 200));
@@ -970,7 +1022,7 @@ export function createPublicOpenApiApp(): OpenAPIHono {
     c.json({ messageId: 'msg_00000000-0000-0000-0000-000000000000', mode: 'queue' as const, position: 0 }, 202),
   );
   app.openapi(getSessionMessagesRoute, (c) =>
-    c.json({ messages: [], session_id: SAMPLE_SESSION.id }, 200),
+    c.json({ messages: [], session_id: SAMPLE_SESSION.id, has_more: false, next_before: null }, 200),
   );
 
   // --- system (ADR-118 §8) ---

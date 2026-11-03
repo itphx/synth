@@ -25,13 +25,26 @@ import type {
   EventJournalEntry,
   EventRouteRule,
   EventRouteRuleUpsertRequest,
+  FsListParams,
+  FsListResult,
+  FsReadParams,
+  FsReadResult,
+  GitCommitParams,
+  GitCommitResult,
   InstanceCapabilities,
+  ModelListResponse,
+  ModelsListParams,
+  PipelineRunResponse,
+  ProjectListResponse,
+  ProjectPipelinesResponse,
   PromptAcceptedResponse,
   Schedule,
   ScheduleInput,
   ScheduleJob,
+  SerializedProject,
   SerializedSession,
   SessionCreateInput,
+  SessionListResponse,
   SessionMessagesResponse,
   SessionPatch,
   SessionPromptInput,
@@ -70,14 +83,71 @@ interface RequestOptions {
   anonymous?: boolean;
 }
 
-/** Query-параметры списка сессий. */
+/**
+ * Query-параметры списка сессий.
+ *
+ * Пагинация обязательна: `limit` (по умолчанию 100, максимум 500) и `offset`.
+ * Ответ — страница `SessionListResponse`, а не массив.
+ */
 export interface SessionsListParams {
   project_id?: string;
+  /** Размер страницы (1..500). */
+  limit?: number;
+  /** Смещение страницы (с 0). */
+  offset?: number;
+}
+
+/**
+ * Query-параметры страницы истории сообщений.
+ *
+ * `before` — исключающий курсор по `seq`: вернутся сообщения строго старше.
+ */
+export interface SessionMessagesParams {
+  /** Размер страницы (1..500; по умолчанию 200). */
+  limit?: number;
+  /** Курсор: сообщения строго старше указанного `seq`. */
+  before?: number;
 }
 
 /** Query-параметры журнала событий. */
 export interface EventJournalParams {
   limit?: number;
+}
+
+/**
+ * Query-параметры списка проектов.
+ *
+ * Пагинация обязательна: `limit` (по умолчанию 100, максимум 500) и `offset`.
+ * Ответ — страница `ProjectListResponse`, а не массив.
+ */
+export interface ProjectsListParams {
+  /** Размер страницы (1..500). */
+  limit?: number;
+  /** Смещение страницы (с 0). */
+  offset?: number;
+}
+
+/** Query-параметры списка пайплайнов проекта. */
+export interface ProjectPipelinesParams {
+  /** Размер страницы (1..500; по умолчанию 100). */
+  limit?: number;
+  /** Смещение страницы (с 0). */
+  offset?: number;
+}
+
+/**
+ * Query-параметры журнала прогона.
+ *
+ * `events_before` — исключающий курсор: вернутся события строго раньше
+ * указанного. Каноническая форма — **порядковый номер события** в журнале
+ * прогона (число, нумерация с нуля); сервер принимает и метку времени
+ * (`ts`, ISO-8601) — тогда отбираются события строго старше по времени.
+ */
+export interface PipelineRunParams {
+  /** Размер страницы журнала (1..500; по умолчанию 200). */
+  events_limit?: number;
+  /** Курсор: номер события (канонично) или метка времени `ts`. */
+  events_before?: number | string;
 }
 
 /** Query-параметры Job-истории расписания. */
@@ -116,14 +186,16 @@ export interface EventsNamespace {
 
 /** Namespace `sessions`. */
 export interface SessionsNamespace {
-  list(params?: SessionsListParams): Promise<SerializedSession[]>;
+  /** Страница списка сессий (`{sessions, total, offset, limit, next_offset}`). */
+  list(params?: SessionsListParams): Promise<SessionListResponse>;
   create(body: SessionCreateInput): Promise<SerializedSession>;
   get(id: string): Promise<SerializedSession>;
   patch(id: string, body: SessionPatch): Promise<SerializedSession>;
   remove(id: string): Promise<void>;
   /** Отправка сообщения: `202 {messageId, mode, position}` (ADR-118 §3); наблюдение — по шине событий. */
   prompt(id: string, body: SessionPromptInput): Promise<PromptAcceptedResponse>;
-  messages(id: string): Promise<SessionMessagesResponse>;
+  /** Страница истории сообщений (`{messages, session_id, has_more, next_before}`). */
+  messages(id: string, params?: SessionMessagesParams): Promise<SessionMessagesResponse>;
   status(id: string): Promise<SessionStatusResponse>;
 }
 
@@ -140,6 +212,63 @@ export interface SchedulesNamespace {
 /** Namespace `llm` (OpenAI-совместимый прокси, ADR-036). */
 export interface LlmNamespace {
   chatCompletions(body: ChatCompletionsRequest): Promise<ChatCompletionsResponse>;
+}
+
+/**
+ * Namespace `models` — каталог моделей инстанца.
+ *
+ * Список — **страница** `{models, total, offset, limit, next_offset}`; поиск
+ * (`search`) и фильтры (`provider`/`modality`/`enabled`) — на сервере.
+ */
+export interface ModelsNamespace {
+  /** Страница каталога моделей. */
+  list(params?: ModelsListParams): Promise<ModelListResponse>;
+}
+
+/**
+ * Namespace `fs` — файлы и каталоги рабочего каталога проекта.
+ *
+ * Чтение файла ограничено по размеру (`FILE_TOO_LARGE`); рекурсивный листинг
+ * ограничен по глубине и числу записей (`truncated`).
+ */
+export interface FsNamespace {
+  /** Содержимое файла (`GET /fs/read`). */
+  read(params: FsReadParams): Promise<FsReadResult>;
+  /** Список каталога (`GET /fs`). */
+  list(params?: FsListParams): Promise<FsListResult>;
+}
+
+/** Namespace `git` — детали коммита (ADR-076). */
+export interface GitNamespace {
+  /** Коммит с файлами и diff (`GET /git/commit`); diff может быть обрезан. */
+  commit(params: GitCommitParams): Promise<GitCommitResult>;
+}
+
+/**
+ * Namespace `projects`.
+ *
+ * Список — **страница** (`{projects, total, offset, limit, next_offset}`) со
+ * сводкой-DTO: тяжёлые поля `log`/`plan` в списке не отдаются (деталь — полный
+ * DTO).
+ */
+export interface ProjectsNamespace {
+  /** Страница списка проектов. */
+  list(params?: ProjectsListParams): Promise<ProjectListResponse>;
+  /** Проект по id (полный DTO — с `log`/`plan`). */
+  get(id: string): Promise<SerializedProject>;
+}
+
+/**
+ * Namespace `pipelines` (ADR-101): пайплайны проекта и прогон с журналом.
+ */
+export interface PipelinesNamespace {
+  /** Страница пайплайнов проекта (сводка — без черновика `draft`). */
+  projectPipelines(
+    projectId: string,
+    params?: ProjectPipelinesParams,
+  ): Promise<ProjectPipelinesResponse>;
+  /** Прогон + страница журнала (`events_limit`/`events_before`). */
+  run(runId: string, params?: PipelineRunParams): Promise<PipelineRunResponse>;
 }
 
 /** Нормализация базового пути: гарантируем ведущий `/`, убираем завершающий. */
@@ -164,7 +293,12 @@ export class SynthClient {
   readonly events: EventsNamespace;
   readonly sessions: SessionsNamespace;
   readonly schedules: SchedulesNamespace;
+  readonly projects: ProjectsNamespace;
+  readonly pipelines: PipelinesNamespace;
   readonly llm: LlmNamespace;
+  readonly models: ModelsNamespace;
+  readonly fs: FsNamespace;
+  readonly git: GitNamespace;
 
   private readonly _fetch?: typeof fetch;
   private readonly _token?: string;
@@ -233,7 +367,7 @@ export class SynthClient {
 
     this.sessions = {
       list: (params) =>
-        this._request<SerializedSession[]>('/sessions', {
+        this._request<SessionListResponse>('/sessions', {
           query: params as SynthQuery | undefined,
         }),
       create: (body) => this._request<SerializedSession>('/sessions', { method: 'POST', body }),
@@ -250,8 +384,10 @@ export class SynthClient {
           method: 'POST',
           body,
         }),
-      messages: (id) =>
-        this._request<SessionMessagesResponse>(`/sessions/${encodeURIComponent(id)}/messages`),
+      messages: (id, params) =>
+        this._request<SessionMessagesResponse>(`/sessions/${encodeURIComponent(id)}/messages`, {
+          query: params as SynthQuery | undefined,
+        }),
       status: (id) =>
         this._request<SessionStatusResponse>(`/sessions/${encodeURIComponent(id)}/status`),
     };
@@ -285,6 +421,51 @@ export class SynthClient {
         this._request<ChatCompletionsResponse>('/llm/chat/completions', {
           method: 'POST',
           body,
+        }),
+    };
+
+    this.projects = {
+      list: (params) =>
+        this._request<ProjectListResponse>('/projects', {
+          query: params as SynthQuery | undefined,
+        }),
+      get: (id) => this._request<SerializedProject>(`/projects/${encodeURIComponent(id)}`),
+    };
+
+    this.pipelines = {
+      projectPipelines: (projectId, params) =>
+        this._request<ProjectPipelinesResponse>(
+          `/projects/${encodeURIComponent(projectId)}/pipelines`,
+          { query: params as SynthQuery | undefined },
+        ),
+      run: (runId, params) =>
+        this._request<PipelineRunResponse>(`/pipeline-runs/${encodeURIComponent(runId)}`, {
+          query: params as SynthQuery | undefined,
+        }),
+    };
+
+    this.models = {
+      list: (params) =>
+        this._request<ModelListResponse>('/models', {
+          query: params as SynthQuery | undefined,
+        }),
+    };
+
+    this.fs = {
+      read: (params) =>
+        this._request<FsReadResult>('/fs/read', {
+          query: params as SynthQuery | undefined,
+        }),
+      list: (params) =>
+        this._request<FsListResult>('/fs', {
+          query: params as SynthQuery | undefined,
+        }),
+    };
+
+    this.git = {
+      commit: (params) =>
+        this._request<GitCommitResult>('/git/commit', {
+          query: params as SynthQuery | undefined,
         }),
     };
   }

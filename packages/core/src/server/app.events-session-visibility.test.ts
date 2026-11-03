@@ -152,8 +152,9 @@ describe('standalone: видимость сессии из внешнего со
       // 4) Сессия видна в списке локального пользователя и принадлежит `local`.
       const listRes = await req(app, '/api/v2/sessions');
       expect(listRes.status).toBe(200);
-      const list = (await listRes.json()) as Array<{ id: string; owner_id: string | null }>;
-      const found = list.find((s) => s.id === sessionId);
+      // Контракт v2: список сессий — объект-страница `{sessions, total, ...}`.
+      const list = (await listRes.json()) as { sessions: Array<{ id: string; owner_id: string | null }> };
+      const found = list.sessions.find((s) => s.id === sessionId);
       expect(found).toBeTruthy();
       expect(found?.owner_id).toBe('local');
 

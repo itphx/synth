@@ -26,6 +26,7 @@ vi.hoisted(() => {
 const mocks = vi.hoisted(() => ({
   updateSession: vi.fn(),
   getSessions: vi.fn(),
+  getSessionsPage: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
@@ -127,5 +128,146 @@ describe('sessionsStore.renameSession', () => {
 
     expect(result).toBeNull()
     expect(useSessionsStore.getState().error).toBe('отказ')
+  })
+})
+
+/**
+ * Пагинация списка сессий (ADR-089): `GET /sessions` всегда отдаёт страницу
+ * `{sessions, total, offset, limit, next_offset}` — дерево показывает первую
+ * страницу и догружает остальное по кнопке «Показать ещё».
+ */
+describe('sessionsStore — пагинация списка', () => {
+  beforeEach(() => {
+    mocks.getSessionsPage.mockReset()
+    useSessionsStore.setState({
+      sessions: [],
+      total: 0,
+      nextOffset: null,
+      loadingMore: false,
+      listProjectId: null,
+      error: null,
+    })
+  })
+
+  it('loadSessions грузит первую страницу (limit=100) и помнит total/nextOffset', async () => {
+    mocks.getSessionsPage.mockResolvedValue({
+      sessions: [session('s1', 'Первая')],
+      total: 250,
+      offset: 0,
+      limit: 100,
+      next_offset: 100,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+
+    expect(mocks.getSessionsPage).toHaveBeenCalledWith({ project_id: undefined, limit: 100 })
+    const state = useSessionsStore.getState()
+    expect(state.sessions.map((s) => s.id)).toEqual(['s1'])
+    expect(state.total).toBe(250)
+    expect(state.nextOffset).toBe(100)
+  })
+
+  it('loadSessions с фильтром проекта передаёт project_id', async () => {
+    mocks.getSessionsPage.mockResolvedValue({
+      sessions: [],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+
+    await useSessionsStore.getState().loadSessions('p1')
+
+    expect(mocks.getSessionsPage).toHaveBeenCalledWith({ project_id: 'p1', limit: 100 })
+    expect(useSessionsStore.getState().listProjectId).toBe('p1')
+  })
+
+  it('loadMoreSessions дописывает следующую страницу и двигает курсор', async () => {
+    mocks.getSessionsPage.mockResolvedValueOnce({
+      sessions: [session('s1', 'Первая')],
+      total: 3,
+      offset: 0,
+      limit: 100,
+      next_offset: 1,
+    })
+    mocks.getSessionsPage.mockResolvedValueOnce({
+      sessions: [session('s2', 'Вторая')],
+      total: 3,
+      offset: 1,
+      limit: 100,
+      next_offset: 2,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+    await useSessionsStore.getState().loadMoreSessions()
+
+    expect(mocks.getSessionsPage).toHaveBeenLastCalledWith({
+      project_id: undefined,
+      limit: 100,
+      offset: 1,
+    })
+    const state = useSessionsStore.getState()
+    expect(state.sessions.map((s) => s.id)).toEqual(['s1', 's2'])
+    expect(state.nextOffset).toBe(2)
+    expect(state.loadingMore).toBe(false)
+  })
+
+  it('loadMoreSessions не дублирует сессии (по id)', async () => {
+    mocks.getSessionsPage.mockResolvedValueOnce({
+      sessions: [session('s1', 'Первая')],
+      total: 2,
+      offset: 0,
+      limit: 100,
+      next_offset: 1,
+    })
+    mocks.getSessionsPage.mockResolvedValueOnce({
+      sessions: [session('s1', 'Первая'), session('s2', 'Вторая')],
+      total: 2,
+      offset: 1,
+      limit: 100,
+      next_offset: null,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+    await useSessionsStore.getState().loadMoreSessions()
+
+    expect(useSessionsStore.getState().sessions.map((s) => s.id)).toEqual(['s1', 's2'])
+    expect(useSessionsStore.getState().nextOffset).toBeNull()
+  })
+
+  it('loadMoreSessions без курсора — no-op (запроса нет)', async () => {
+    mocks.getSessionsPage.mockResolvedValue({
+      sessions: [session('s1', 'Первая')],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+    mocks.getSessionsPage.mockClear()
+
+    await useSessionsStore.getState().loadMoreSessions()
+
+    expect(mocks.getSessionsPage).not.toHaveBeenCalled()
+  })
+
+  it('ошибка догрузки — error в сторе, список не теряется', async () => {
+    mocks.getSessionsPage.mockResolvedValueOnce({
+      sessions: [session('s1', 'Первая')],
+      total: 2,
+      offset: 0,
+      limit: 100,
+      next_offset: 1,
+    })
+    mocks.getSessionsPage.mockRejectedValueOnce(new Error('сеть'))
+
+    await useSessionsStore.getState().loadSessions()
+    await useSessionsStore.getState().loadMoreSessions()
+
+    const state = useSessionsStore.getState()
+    expect(state.error).toBe('сеть')
+    expect(state.sessions.map((s) => s.id)).toEqual(['s1'])
+    expect(state.loadingMore).toBe(false)
   })
 })

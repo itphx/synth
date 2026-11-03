@@ -3,6 +3,13 @@
 import type { DirectoryListResult, FileReadResult } from '@itphx/synth-shared/types'
 import { BASE_URL, fetchJSON } from './base'
 
+/**
+ * Жёсткий предел глубины рекурсивного листинга (`GET /api/v2/fs?maxDepth=`):
+ * сервер режет глубину до 3 (`MAX_FS_LIST_DEPTH`), поэтому клиент не просит
+ * больше — иначе в ответе просто не будет того, что ожидалось.
+ */
+export const FS_LIST_MAX_DEPTH = 3
+
 export const filesApi = {
   // Файловая система (API v2 — /fs?project_id=&path=)
   async listDirectory(
@@ -14,7 +21,10 @@ export const filesApi = {
     const params = new URLSearchParams({ project_id: projectId })
     if (path) params.set('path', path)
     if (includeHidden) params.set('includeHidden', 'true')
-    if (maxDepth) params.set('maxDepth', String(maxDepth))
+    if (maxDepth) {
+      const depth = Math.min(Math.max(1, Math.floor(maxDepth)), FS_LIST_MAX_DEPTH)
+      params.set('maxDepth', String(depth))
+    }
     return fetchJSON<DirectoryListResult>(`${BASE_URL}/fs?${params.toString()}`)
   },
 

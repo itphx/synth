@@ -448,6 +448,39 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 `ADMIN` — только роль ADMIN, `ADMIN/AUDITOR` — одна из ролей.
 В core колонка `ADMIN` вырождается в `auth` (ролевых проверок нет).
 
+> **Пагинация списков — единый контракт (решение владельца, 2026-11-03; ломающее изменение).**
+> Списки, которые раньше отдавались **массивом**, теперь отдаются **страницей** — объектом
+> `{<items>, total, offset, limit, next_offset}`:
+>
+> | Эндпоинт | Было | Стало |
+> |---|---|---|
+> | `GET /api/v2/sessions` | массив сессий | `{sessions, total, offset, limit, next_offset}` |
+> | `GET /api/v2/sessions/:id/messages` | `{messages, session_id}` | `{messages, session_id, has_more, next_before}` |
+> | `GET /api/v2/projects` | массив проектов | `{projects, total, offset, limit, next_offset}` |
+> | `GET /api/v2/projects/:id/pipelines` | `{pipelines}` | `{pipelines, total, offset, limit, next_offset}` |
+> | `GET /api/v2/projects/:id/pipelines/:pid/runs` | `{runs}` | `{runs, offset, limit, next_offset}` |
+> | `GET /api/v2/pipelines/instances` | `{instances}` | `{instances, offset, limit, next_offset}` |
+> | `GET /api/v2/models` | `{groups:[…]}` | `{models, total, offset, limit, next_offset}` |
+>
+> Общие правила: `limit` — **целое** (нечисловое/дробное/отрицательное → `400 VALIDATION_ERROR`;
+> значение выше потолка **обрезается** до потолка — мягкая граница), `offset` — смещение от начала
+> выборки (с 0), `next_offset` — курсор следующей страницы (`offset + page.length`), `null` — страница
+> последняя. Пустая страница (смещение за концом) тоже даёт `next_offset: null` — иначе курсор не
+> двигался бы. Списки **сводок**: тяжёлые поля (`messages` у сессии, `log`/`plan` у проекта, `draft` у
+> пайплайна) в списке не отдаются — они в детали. `total` не отдаётся там, где порт отдаёт ограниченную
+> выборку (прогоны, экземпляры) — там курсором служит `next_offset`.
+> **Исключение: `GET /api/v2/models` — жёсткая граница.** Каталог моделей разбирает параметры сам
+> (не общим хелпером) и **отвергает** выход за границы: `limit` вне `1…500` (включая `0`) или
+> нецелое число → `400 VALIDATION_ERROR` (значение выше 500 **не обрезается**, а отвергается);
+> `offset` — нецелое/отрицательное → `400`. Для остальных списков действует мягкая граница
+> (обрезание до потолка).
+> **Гибрид: сквозная пагинация через границу миров невозможна.** Удалённый список приходит **без**
+> постраничной выдачи (старый сервер отдаёт полный массив), поэтому при наличии удалённых записей
+> `next_offset` — `null` (страница последняя сквозная), а `total` — сумма локального счётчика и
+> удалённых записей. Для `GET /:id/messages` параметры `limit`/`before` пробрасываются удалённому
+> серверу; старый сервер их игнорирует и отдаёт **всю** историю (ограничение гибрида).
+> Обратная совместимость не поддерживается — клиент переходит на форму-объект и постраничное чтение.
+
 ### 5.1 Health — `оба`
 
 | Метод | Путь | RBAC | Назначение |
@@ -508,8 +541,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 | Метод | Путь | Сборка | RBAC | Назначение / req-resp |
 |---|---|---|---|---|
-| GET | `/api/v2/sessions` | оба | auth (свои+проектные; LEAD/ADMIN — все) | Список сессий; `?project_id=` (см. правила видимости ниже) |
-| POST | `/api/v2/sessions` | оба | auth | Создать; `{name\|title, project_id, settings}` → 201 || GET | `/api/v2/sessions/:id` | оба | auth | Сессия (сериализованная) |
+| GET | `/api/v2/sessions` | оба | auth (свои+проектные; LEAD/ADMIN — все) | **Страница** списка сессий: `{sessions, total, offset, limit, next_offset}`; `?limit=` (дефолт 100, максимум 500), `?offset=` (дефолт 0), `?project_id=` (см. правила видимости ниже). DTO сессии — **сводка без истории**: ключа `messages` нет, `prompt_states` нет; очередь (`pending_messages`/`pending_count`), статус, `current_stream`, настройки и счётчики сохраняются. ⚠️ **Ломающее изменение:** раньше возвращался массив; полная история списком не отдаётся (см. примечание ниже) |
+| POST | `/api/v2/sessions` | оба | auth | Создать; `{name\|title, project_id, settings}` → 201 || GET | `/api/v2/sessions/:id` | оба | auth | Сессия (сериализованная) — **сводка без истории**: ключа `messages` нет; очередь (`pending_messages`/`pending_count`), `current_stream`, статус, настройки и счётчики сохраняются. Полная история — `GET /api/v2/sessions/:id/messages` |
 | GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Эффективный MCP-скоуп (ADR-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust, chars?, estTokens?, estimated?}], enabled, disabled, mcpServers, mcpDisabledServers}`. `reason` ∈ `system_disabled\|project_disabled\|session_optout\|not_default`; проектный гейт `enabled` применяется и к системным серверам. Серверы/тулы несут `chars`/`estTokens` (ADR-071 §2.8) |
 | PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Переключить MCP (один тумблер): `{name, enabled}` → `mcpServers`/`mcpDisabledServers` (opt-out системных — через `enabled:false`), либо `{mcpServers?, mcpDisabledServers?}` |
 | PATCH | `/api/v2/sessions/:id` | оба | auth | `{name, title, mode: plan\|act\|yolo, settings, project_id}`; `worktreeId: string\|null` — привязка сессии к worktree (ADR-114, §5.40); **`title: ""` (пустая строка) — регенерация имени**: сервер синхронно генерирует заголовок по диалогу и возвращает DTO сессии (собрать имя не удалось — заголовок прежний, ответ 200) |
@@ -528,7 +561,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/sessions/:id/questions` | оба | auth (чтение) | Вопросы пользователю сессии (этап 1 roadmap 0.12.4 — блок 3): `{questions: QuestionRecord[]}`; `?status=pending\|answered\|cancelled` (не задан — все статусы), `?limit=` (дефолт 50, максимум 200); записи «свежие первыми». Сервис вопросов не подключён — 503 `QUESTION_UNAVAILABLE` |
 | POST | `/api/v2/sessions/:id/questions/:qid/answer` | оба | auth (**мутация**) | Ответ пользователя на вопрос: `{answers: string[][]}` (по индексу вопроса; значения — из `options[].value`) → 200 `{question}`. 400 `VALIDATION_ERROR` (тело/ответ невалидны), 404 `NOT_FOUND` (вопроса нет **или** он другой сессии), 409 `CONFLICT` (вопрос уже отвечен/отменён) |
 | POST | `/api/v2/sessions/:id/questions/:qid/cancel` | оба | auth (**мутация**) | Отмена вопроса: `{reason?}` → 200 `{question}`; те же 404/409, что и в `answer` |
-| GET | `/api/v2/sessions/:id/messages` | оба | auth | `{messages, session_id}` — история в порядке массива (`seq`); DTO сообщения несёт `ord` (монотонный порядок записи), `turn_id`, `step_index`, `status` (`streaming`\|`completed`\|`cancelled`\|`error`, ADR-118 §1/§5) |
+| GET | `/api/v2/sessions/:id/messages` | оба | auth | **Страница** истории: `{messages, session_id, has_more, next_before}`; `?limit=` (дефолт 200, максимум 500), `?before=` — исключающий курсор по `seq` (сообщения строго старше указанного); без `before` — последняя (самая новая) страница. Внутри страницы порядок хронологический; `index` в DTO — позиция в **полной** истории (страницы склеиваются по нему). `has_more` — есть более старые сообщения; `next_before` — курсор следующей (более старой) страницы (`null`, если более старых нет). Невалидный `before`/`limit` → `400 VALIDATION_ERROR`. DTO сообщения несёт `ord` (монотонный порядок записи), `turn_id`, `step_index`, `status` (`streaming`\|`completed`\|`cancelled`\|`error`, ADR-118 §1/§5) |
 | GET | `/api/v2/sessions/:id/messages/:messageId` | оба | auth | Одно сообщение истории по `id` — DTO как у элемента списка (`serializeMessage`, `redactSecrets` по тому же праву раскрытия секретов, ADR-036). Нет сессии → `404 NOT_FOUND`, нет сообщения с таким `id` → `404 MESSAGE_NOT_FOUND`. Доступ — граничный prefix-guard (инвариант 16), проверок в обработчике нет |
 | POST | `/api/v2/sessions/:id/clear` | оба | auth | Очистить историю (кроме pinned) |
 | POST | `/api/v2/sessions/:id/abort` | оба | auth | Надёжный «Стоп» (ADR-005): ставит персистентный флаг `status.cancel_requested`, при живом стриме — graceful-отмена, затем остановка процессора очереди; **очередь сохраняется целиком** (обычные сообщения, уведомления фона и возвращённые из `steerInbox` реплики не теряются) — **автозапуска обработки нет**, возобновление — `POST /api/v2/queue/:sessionId/resume` (или новая постановка сообщения); **снимает ожидание подтверждения** (`permission.asked` резолвится `cancelled` — инструмент не висит до ask-таймаута); **прерывает только активный ход** — фоновые процессы и фоновые (detached/background) саб-агенты продолжают работу и останавливаются отдельно (`POST /api/v2/processes/:id/stop`, `POST /api/v2/sessions/<child>/abort`, решение 2026-10-31); `{status:'aborted'}`; 404 если сессии нет (см. ниже) |
@@ -551,6 +584,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | оба | auth | Удалить заметку → `{notes}` + `context.sticky_note_deleted` |
 
 > `SessionSettings` MCP/скиллов (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
+> **Список сессий и история — постранично (решение владельца, ломающее изменение).** `GET /api/v2/sessions` **всегда** отдаёт сводку сессий **без истории сообщений**: ключа `messages` в DTO нет вовсе (не пустой массив), `prompt_states` в списке тоже нет. Раньше список для `ADMIN`/`LEAD` грузил все сессии **со всей историей** — на инстансах с сотнями сессий это давало пик heap и OOM на входе. Поэтому: список — **страница** `{sessions, total, offset, limit, next_offset}` (массив больше не возвращается), а полная история сессии доступна только постранично в `GET /api/v2/sessions/:id/messages` (`limit` — дефолт 200, максимум 500; `before` — исключающий курсор по `seq`). Сводка `GET /api/v2/sessions/:id` и точечные ответы (`POST /`, `PATCH /:id`, `POST /:id/clear`, `POST /:id/fork`) — тоже без `messages`. Очередь (`pending_messages`/`pending_count`), `current_stream`, статус, настройки и счётчики токенов в сводке сохраняются. Обратная совместимость не поддерживается — клиент переходит на форму-объект и постраничное чтение истории.
+> **Пагинация списка.** `total` — число видимых сессий (после фильтра видимости и `project_id`); `next_offset` — курсор следующей страницы (`offset + page.length`), `null` — страница последняя. Нечисловой/отрицательный `limit`/`offset` → `400 VALIDATION_ERROR`; `limit` выше 500 обрезается до 500.
+> **Гибрид: пагинация через границу миров невозможна.** Удалённый список приходит **без** постраничной выдачи (старый сервер отдаёт массив), поэтому сквозной `next_offset` при наличии удалённых сессий — `null`, а `total` — сумма локальной страницы и удалённых сессий. Параметры `limit`/`before` в `GET /:id/messages` пробрасываются удалённому серверу; старый сервер их игнорирует и отдаёт **всю** историю (ограничение гибрида).
 > **Видимость `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии проектов, участником которых является пользователь (`owner` проекта или любой `members`, любая роль). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости.
 > **Доступ по id — все `:id`-маршруты ресурса (ADR-089).** Единый prefix-guard `server/session-access-guard.ts` (вешается на `/:id` и `/:id/*` вместе с `requireAuth`; вид доступа `read`/`write` выводится из HTTP-метода), правило: `ADMIN`/`LEAD` — чтение **и** мутация чужой сессии разрешены (осознанное решение продукта; зафиксировано матрицей `routes/session-idor-matrix.test.ts`); владелец сессии / сессия без владельца — всё; участник проекта сессии: **чтение** (`GET`/`HEAD`) — любая роль, включая `VIEWER`, **мутация** — `OWNER`/`EDITOR` (`canEditProjectContent`); чужой пользователь → `403 FORBIDDEN`; несуществующая сессия → `404 NOT_FOUND`. Коды согласованы по всему ресурсу (для чужого на любом `:id`-маршруте — `403`); явные исключения: `GET /:id/mcp` — владелец|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR`, `GET /:id/export` — маршрут **под** guard'ом (доступ к сессии решает он), а карта обфускации — отдельная привилегия route-level guard'а: владелец|`ADMIN`|`AUDITOR` (остальным читателям — 200 с очищенным телом; ADR-091 §6). Хелпер списка — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
 > **Scope service-key (ADR-052):** `GET /` и `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt`, `POST /:id/background` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages` — `sessions:read`. При непустом `allowedProjects` проектная проекция проверяется по `project_id` сессии, иначе `403 PROJECT_FORBIDDEN`.
@@ -793,17 +829,20 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
-| GET | `/api/v2/projects` | оба | auth (owner/член; LEAD/ADMIN — все) | Список проектов: свои/участие, `ADMIN`/`LEAD` — все |
+| GET | `/api/v2/projects` | оба | auth (owner/член; LEAD/ADMIN — все) | **Страница** списка проектов: `{projects, total, offset, limit, next_offset}`; `?limit=` (дефолт 100, максимум 500), `?offset=` (дефолт 0). DTO проекта — **сводка**: тяжёлых полей `log` (журнал проекта) и `plan` (ADR-039) в списке нет; остальные поля детали сохраняются. ⚠️ **Ломающее изменение:** раньше возвращался массив |
 | POST | `/api/v2/projects` | оба | auth | Создать `{name, workspace?, repos?, plan?}` → 201 |
 | GET | `/api/v2/projects/:id` | оба | auth / owner·член·LEAD·ADMIN | Проект (read; VIEWER читает, не редактирует) |
 | PUT | `/api/v2/projects/:id` | оба | auth / owner·EDITOR·LEAD·ADMIN | Обновить поля (name, description, current_task, invariants, icon, color, repos, plan, memory); смена `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — политика памяти проекта (ADR-107): `false` убирает блоки памяти и тулы `plugin_synth_plugin_memory_*`, данные сохраняются; не задано — наследует политику инстанса (включено) |
 | DELETE | `/api/v2/projects/:id` | оба | auth / owner·LEAD·ADMIN | Удалить → 204 |
-| GET | `/api/v2/projects/:id/stats` | backend | auth | Агрегаты токенов/сообщений |
+| GET | `/api/v2/projects/:id/stats` | оба | auth | Агрегаты токенов по сессиям проекта (`total_sessions`, `total_input_tokens`, `total_output_tokens`, `total_tokens`, `total_cache_read_tokens`, `total_cache_write_tokens`, `total_reasoning_tokens`). ⚠️ Поле `total_messages` **удалено**: список сессий всегда лёгкий (без истории), считать сообщения было бы нечем; число сообщений одной сессии — в `GET /api/v2/sessions/:id/stats` |
 | GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Проектный MCP-скоуп (ADR-071 §2.4): `{enabled, defaultOn, knownServers}`; `enabled[]` — hard-gate (недоступно и в старых сессиях, в т.ч. для системных серверов), `defaultOn[]` — сид новых сессий |
 | PUT | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Задать `{enabled?, defaultOn?}` (ссылки на реестр по имени) |
 | POST | `/api/v2/projects/:id/publish` | core | auth | Локальный проект → сервер (гибрид) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Серверный проект → локальный мир (гибрид) |
 
+> **Список проектов — постранично и сводкой (решение владельца, ломающее изменение).** `GET /api/v2/projects` отдаёт **страницу** `{projects, total, offset, limit, next_offset}` (массив больше не возвращается — обратная совместимость не поддерживается) и **сводку** проекта: тяжёлые поля `log` (журнал проекта) и `plan` (ADR-039) в списке не отдаются — списком они множили бы объём ответа. Полный DTO — в детали `GET /api/v2/projects/:id` (там `log`/`plan` остаются). Остальные поля детали (имя, иконка, цвет, участники, workspace, репозитории, MCP-скоуп, политика памяти, статус-сообщения, `current_task`, `invariants`) в сводке сохраняются.
+> **Пагинация списка.** `total` — число видимых проектов; `next_offset` — курсор следующей страницы (`offset + page.length`), `null` — страница последняя. Нечисловой/дробный/отрицательный `limit`/`offset` → `400 VALIDATION_ERROR`; `limit` выше 500 обрезается до 500.
+> **Гибрид: пагинация через границу миров невозможна.** Удалённый список приходит **без** постраничной выдачи (старый сервер отдаёт массив), поэтому сквозной `next_offset` при наличии удалённых проектов — `null`, а `total` — сумма локального счётчика и удалённого.
 > `workspace` (ADR-075): при `POST`/`PUT` каталог создаётся (`mkdir -p`). Managed: пустой `workspace` → авто-имя
 > `slugify(name)` + суффикс под `workspacesRoot`; абсолютный внутри root нормализуется в относительный; вне root →
 > `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; смена `workspace` — владелец/LEAD/ADMIN, иначе `403 FORBIDDEN`.
@@ -938,10 +977,15 @@ sha256, небезопасный путь в архиве, небезопасн�
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
 |---|---|---|---|---|
-| GET | `/api/v2/models` | оба | auth / auth | Модели, сгруппированные по провайдеру |
+| GET | `/api/v2/models` | оба | auth / auth | **Страница** каталога моделей: `{models, total, offset, limit, next_offset}`; `?limit=` (дефолт 100, максимум 500), `?offset=` (дефолт 0). Фильтры: `?provider=` (точный id провайдера), `?enabled=true\|false` (только включённые/выключенные; legacy-алиас `?enabled_only=true` = `enabled=true`), `?search=` (подстрока без учёта регистра по id/имени/провайдеру), `?modality=` (модальность входа: `text`/`image`/`pdf`/`audio`/`video`). DTO модели — плоский объект: `id`, `name`, `provider` (**строка**, не объект провайдера), `description`, `enabled`, `isDefault`, `contextWindow`, `contextSource`, `maxOutputTokens`, `inputPrice`, `outputPrice`, `cacheReadPrice`, `cacheWritePrice`, `priceSource`, `currency`, `modalities?`, `requiresReasoning?`, `compatibility?`. ⚠️ **Ломающее изменение:** раньше отдавался `{groups:[{provider:{name,type,icon,defaultModel,currency}, models:[…]}]}` — теперь плоский список страницей (группировку по провайдеру клиент восстанавливает сам) |
 | POST | `/api/v2/models` | оба | ADMIN / auth | Создать/обновить |
 | POST | `/api/v2/models/fetch` | оба | ADMIN / auth | Синхронизировать с провайдерами |
 | DELETE | `/api/v2/models/:id` | оба | ADMIN / auth | Удалить |
+
+> **Каталог моделей — постранично и плоско (решение владельца, ломающее изменение).** `GET /api/v2/models` отдаёт **страницу** `{models, total, offset, limit, next_offset}` — **массив больше не возвращается** (обратная совместимость не поддерживается). Раньше ответ был объектом `{groups:[{provider:{name,type,icon,defaultModel,currency}, models:[…]}]}`; теперь — плоский список моделей, у каждой `provider` — **строка** (id провайдера), а блок с метаданными провайдера (`type`/`icon`/`defaultModel`/`currency`) в ответе **нет** (тип/иконка/валюта провайдера — в `GET /api/v2/providers`). Фильтры и сортировка применяются **до** пагинации: `total` — число отобранных моделей (после всех фильтров), порядок — сначала провайдер, потом имя (`localeCompare`). Границы параметров **жёсткие** (в отличие от мягкой границы остальных списков): `limit` вне `1…500` (включая `0`) или нецелое число, `offset` нецелое/отрицательное → `400 VALIDATION_ERROR` — значение выше 500 **отвергается**, а не обрезается.
+> **Фильтр `modality` и неизвестные модальности.** Модель под фильтр подходит, только если её `modalities` **известны** и содержат указанную модальность; модель с **неизвестными** модальностями (поля нет) под фильтр **не попадает** — подтвердить приём вложения нельзя (та же логика, что в туле `list_models`). Модальности **неизвестны** — фильтр не применяется только к конкретной модальности, молчаливого исключения модели из каталога не происходит.
+> **Фильтр `enabled` — оба направления.** `enabled=true` — только включённые, `enabled=false` — только выключенные; `enabled_only=true` — legacy-алиас `enabled=true` (оставлен для старых клиентов). Значения `1`/`0` принимаются как `true`/`false`.
+> **Гибрид: каталог — общий, пагинация локальная.** В гибриде локальный и удалённый каталоги сливаются **до** фильтров и пагинации (модель без известного провайдера в выдачу не попадает), поэтому `total`/`next_offset` считаются по объединённому набору — но удалённая часть приходит **без** постраничной выдачи (старый сервер отдаёт весь список), так что при наличии удалённых моделей `next_offset` может быть `null` раньше, чем список реально кончился.
 
 > **Модальности входа модели (ADR-115, решение 2026-10-27).** В модели ответа `GET /api/v2/models`
 > поле `modalities` (`AttachmentModality[]`: `text`/`image`/`pdf`/`audio`/`video`) **опционально**:
@@ -1011,8 +1055,8 @@ sha256, небезопасный путь в архиве, небезопасн�
 
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
-| GET | `/api/v2/fs` | оба | auth | Список каталога; `?project_id=&path=&maxDepth=&includeHidden=` |
-| GET | `/api/v2/fs/read` | оба | auth | Содержимое; `?project_id=&path=` |
+| GET | `/api/v2/fs` | оба | auth | Список каталога: `{path, entries, truncated}`; `?project_id=&path=&maxDepth=&includeHidden=`. `maxDepth` — **не выше 3** (`MAX_FS_LIST_DEPTH`; большее значение из запроса молча обрезается до 3), при `maxDepth>0` рекурсивный обход ограничен **10 000 записей** (`MAX_FS_LIST_ENTRIES`): по исчерпании бюджета обход прекращается, в ответе `truncated: true` (ответ **неполный**). При `maxDepth=0` (дефолт) список не рекурсивный и лимит записей не применяется |
+| GET | `/api/v2/fs/read` | оба | auth | Содержимое: `{path, content, size, encoding}`; `?project_id=&path=`. **Cap чтения** — `storage.maxReadBytes` (по умолчанию 5 МиБ, env `SYNTH_MAX_READ_BYTES`): размер известен из `stat`, содержимое в память не читается. Файл **больше лимита** или **бинарный** → `413` с машинным кодом `FILE_TOO_LARGE` и `details: {maxReadBytes, size, reason}` (`reason`: `size` — велик размер, `binary` — не текстовый файл) |
 | POST | `/api/v2/fs/write` | оба | auth | `{projectId, path, content}` |
 | POST | `/api/v2/fs/upload` | оба | auth | multipart: `project_id`, `path`, `file`; лимит размера (по умолчанию 100 МиБ, `DEFAULT_MAX_UPLOAD_BYTES`) → `413 PAYLOAD_TOO_LARGE` |
 | GET | `/api/v2/fs/download` | оба | auth | Скачать; `?project_id=&path=` |
@@ -1025,6 +1069,8 @@ sha256, небезопасный путь в архиве, небезопасн�
 
 > `workspace-root*` (ADR-075): абсолютный путь внутри `workspacesRoot` работает; вне root — по политике. Ручной выбор workspace — только standalone: в managed (`requireProjectId`) все три маршрута отдают `403 FORBIDDEN` для любой роли (каталог проекта авто-провижнится, перечень управляемых workspace не раскрывается).
 > `POST /upload` — лимит размера файла (по умолчанию `DEFAULT_MAX_UPLOAD_BYTES` = 100 МиБ, переопределяется опцией `FsRoutesOptions.maxUploadBytes`); проверяется троично (заявленный `content-length`, `File.size`, фактический размер прочитанных байт) → `413 PAYLOAD_TOO_LARGE` (фактический размер — защита от лживого/отсутствующего `content-length`).
+> **Чтение файла — cap `storage.maxReadBytes` (решение владельца).** `GET /fs/read` больше не отдаёт файл целиком любого размера: размер известен из `stat` **до** чтения содержимого, поэтому файл больше лимита (по умолчанию 5 МиБ) или бинарный → `413` `FILE_TOO_LARGE` с `details: {maxReadBytes, size, reason}`. Клиент читает `details` машинно, а не разбирает текст сообщения. Раньше бинарный файл отдавался как `{content:'', encoding:'binary'}` — теперь это тот же отказ `413` (причина — в `details.reason`). Лимит настраивается конфигом `storage.maxReadBytes` / env `SYNTH_MAX_READ_BYTES` (приоритет env > config > дефолт) — см. [CONFIGURATION.md](./CONFIGURATION.md) §«Хранилище и рабочий каталог».
+> **Рекурсивный листинг — глубина и бюджет записей.** `maxDepth` ограничен **3** (было 10): глубокий обход каталога и объём ответа на него неконтролируемо растут. При `maxDepth>0` обход идёт с бюджетом в **10 000 записей** — по исчерпании он прекращается, а в ответе `truncated: true` (список **неполный**; клиент обязан это учитывать и не считать список исчерпанным). При `maxDepth=0` (дефолт) список не рекурсивный, бюджет не применяется и `truncated` всегда `false`.
 > `confirm`: browse разрешён, mkdir требует `confirmOutsideRoot: true`, иначе `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > `deny`: `403 WORKSPACE_OUTSIDE_ROOT_DENIED` (в т.ч. traversal `..`); protected-paths → `403 PROTECTED_PATH_DENIED`.
 > `mkdir` существующего пути → `409 ALREADY_EXISTS`; несуществующий каталог browse → `404 NOT_FOUND`, не каталог → `400 NOT_A_DIRECTORY`.
@@ -1126,7 +1172,7 @@ backend — id из AuthKit). Прямая линковка (`POST /identities` 
 | POST | `/api/v2/git/repos/remove` | write / auth | `{projectId, id?\|path?, deleteLocal?}` → `{removed, deletedLocal}` (удаление локального каталога — `deleteLocal`) |
 | POST | `/api/v2/git/repos/fetch` | write / auth | `{projectId, id?\|path?}` → `{path, lastFetch}`; SSH-URL без ключа → 400 `git.ssh_key_required`; таймаут → 504 `git.fetch_timeout` |
 | GET | `/api/v2/git/log` | read / auth | `?project_id=&repo_path=&max_count=` → `{commits}` |
-| GET | `/api/v2/git/commit` | read / auth | `?project_id=&repo_path=&hash=` → `{commit}` |
+| GET | `/api/v2/git/commit` | read / auth | `?project_id=&repo_path=&hash=` → `{commit}`; diff коммита обрезан по пределу **1 МиБ** (`MAX_COMMIT_DIFF_BYTES`) — в DTO добавляется `diff_truncated: true` (поля нет, если diff отдан целиком) |
 
 RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetch`) — owner/EDITOR/LEAD/ADMIN (`canEditProjectContent`), иначе 403; read (`scan`/`log`/`commit`) — право **чтения** проекта: owner/участник проекта/`LEAD`/`ADMIN` (`canReadProject`), иначе 403. Проверка — **граничный** guard (`projectGuard('read'|'write')` в core-фабрике `createGitRoutes`), т.е. **до** обработчика; правил доступа внутри обработчиков нет (инвариант 16). Core (standalone) — `requireAuth` (прав на проект в standalone нет).
 
@@ -1148,6 +1194,12 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 (секция `git`, см. [CONFIGURATION.md](./CONFIGURATION.md)) — **504** `git.clone_timeout` /
 `git.fetch_timeout` (не 500: это не сбой сервера, запрос можно повторить). Прочие ошибки git
 (нет remote, обрыв, нет прав) отдаются как есть (500 с исходным текстом).
+
+**Diff коммита — обрезка по размеру.** `GET /api/v2/git/commit` отдаёт diff коммита **целиком**,
+пока он не больше **1 МиБ** (`MAX_COMMIT_DIFF_BYTES`); больше — diff обрезается по границе байт
+(хвостовой «битый» UTF-8-символ отбрасывается), а в DTO коммита появляется `diff_truncated: true`.
+Поля нет, если diff отдан целиком. Мегабайты патча по проводу не уходят; список изменённых файлов
+(`files`) при этом полный.
 
 > **Изменение поведения (managed).** Запрос к **несуществующему** `projectId` в `/api/v2/git/*` теперь даёт **403 вместо 404** — fail-closed, без раскрытия существования (как в FS-роутах). Раньше read-роуты (`scan`/`log`/`commit`) вообще не проверяли доступ и позволяли читать git-данные чужого проекта по его id.
 
@@ -2096,7 +2148,7 @@ legacy-раздела остаётся действующим.
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|---|
 | GET | `/api/v2/pipelines` | оба | ADMIN / auth | Определения пайплайнов инстанса `{pipelines}` (шаги, `onError`, `maxAttempts`, `ttl`, провенанс `installedBy`) |
-| GET | `/api/v2/pipelines/instances` | оба | ADMIN / auth | Экземпляры прогонов `{instances}`; фильтры `pipelineId`, `status` (`pending\|running\|waiting\|done\|failed\|cancelled`), `limit` (дефолт 100, максимум 1000); неизвестный `status` → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/pipelines/instances` | оба | ADMIN / auth | Страница экземпляров прогонов `{instances, offset, limit, next_offset}`; фильтры `pipelineId`, `status` (`pending\|running\|waiting\|done\|failed\|cancelled`), `limit` (дефолт 100, максимум 1000), `offset` (дефолт 0); неизвестный `status` → 400 `VALIDATION_ERROR`. `total` не отдаётся: порт отдаёт ограниченную выборку (потолок 1000) — курсором служит `next_offset` |
 | GET | `/api/v2/pipelines/instances/:instanceId` | оба | ADMIN / auth | Один экземпляр (состояния шагов, `currentStep`, `attempts`, `trigger`) |
 | GET | `/api/v2/pipelines/:id` | оба | ADMIN / auth | Одно определение; нет → 404 `NOT_FOUND` |
 | POST | `/api/v2/pipelines/:id/instances` | оба | ADMIN **или** scope `automation:install` | **Ручной** запуск экземпляра (проверка/отладка; основной запуск — по событию): тело `{trigger?, payload?}` → 201; нет определения → 404 |
@@ -2142,15 +2194,15 @@ legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `sc
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|---|
-| GET | `/api/v2/projects/:id/pipelines` | оба | право чтения проекта | Пайплайны проекта `{pipelines}`: id, имя, `scope`, `projectId`, `draftVersion`, `publishedVersion?`, `installedBy?`, черновик `draft` |
+| GET | `/api/v2/projects/:id/pipelines` | оба | право чтения проекта | **Страница** пайплайнов проекта `{pipelines, total, offset, limit, next_offset}`: id, имя, `scope`, `projectId`, `draftVersion`, `publishedVersion?`, `installedBy?`, `hasDraft`; `?limit=` (дефолт 100, максимум 500), `?offset=` (дефолт 0). ⚠️ **Ломающее изменение:** черновик `draft` в списке **не отдаётся** (он в детали `/:pid`) |
 | POST | `/api/v2/projects/:id/pipelines` | оба | право изменения проекта (+ `automation:install` для service-key) | Создать пайплайн: тело `{name?, description?, spec}` — спецификация `PipelineSpec`; сервер проставляет `id`/`version`/`status`/`projectId` → **201** `{pipeline}`; невалидная спецификация → 400 `VALIDATION_ERROR` со списком `problems` |
 | GET | `/api/v2/projects/:id/pipelines/:pid` | оба | право чтения проекта | `{pipeline, published, versions}` — черновик, опубликованная версия и список версий |
 | PUT | `/api/v2/projects/:id/pipelines/:pid` | оба | право изменения проекта | Сохранить черновик: тело `{name?, description?, spec}` → 200 `{pipeline}`; версия при этом **не** меняется (публикация — отдельный шаг) |
 | DELETE | `/api/v2/projects/:id/pipelines/:pid` | оба | право изменения проекта | Удалить пайплайн и его версии → **204**; прогоны **остаются** (прогон самодостаточен) |
 | POST | `/api/v2/projects/:id/pipelines/:pid/publish` | оба | право изменения проекта | Опубликовать черновик: неизменяемая версия `publishedVersion`, черновик переезжает на следующую версию → 200 `{pipeline, published}`; повторная публикация без изменений идемпотентна (версии не плодит); черновика нет → 409 `CONFLICT` |
-| GET | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право чтения проекта | Прогоны пайплайна `{runs}`; фильтры `status` (`pending`/`running`/`awaiting_human`/`done`/`failed`/`cancelled`), `limit` (дефолт 100, максимум 1000); неизвестный `status` → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право чтения проекта | Страница прогонов пайплайна `{runs, offset, limit, next_offset}`; фильтры `status` (`pending`/`running`/`awaiting_human`/`done`/`failed`/`cancelled`), `limit` (дефолт 100, максимум 1000), `offset` (дефолт 0); неизвестный `status` → 400 `VALIDATION_ERROR`. `total` не отдаётся: порт отдаёт ограниченную выборку (потолок 1000) — курсором служит `next_offset` |
 | POST | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право изменения проекта | Запуск прогона: тело `{trigger?, version?, attachments?}` (по умолчанию — последняя опубликованная версия, триггер `manual`) → **201** `{run}`; прогон идёт **в фоне** — клиент следит по событиям `pipeline.run.*`; опубликованной версии нет → 409 `pipeline.not_published`; `attachments[]` не прошли проверку → 400 `VALIDATION_ERROR` |
-| GET | `/api/v2/pipeline-runs/:runId` | оба | право чтения проекта прогона | Прогон и журнал `{run, events}` (события: `run.started`/`node.started`/`node.finished`/`edge.taken`/`gate.awaiting`/`run.finished`/`run.failed`); `limit` — последние N событий (дефолт 200, максимум 1000) |
+| GET | `/api/v2/pipeline-runs/:runId` | оба | право чтения проекта прогона | Прогон и **страница журнала**: `{run, events, events_has_more, events_next_before}` (события: `run.started`/`node.started`/`node.finished`/`edge.taken`/`gate.awaiting`/`run.finished`/`run.failed`); `events_limit` — размер страницы (дефолт 200, максимум 500), `events_before` — **исключающий курсор**: канонически — порядковый номер события в журнале прогона (число, нумерация с нуля, по порядку добавления — журнал append-only, а метки `ts` не уникальны); для совместимости принимается и метка времени `ts` (ISO-8601) — тогда отбираются события строго старше по времени. Без параметров — последняя (самая новая) страница. `events_has_more` — есть ли события старше первого события страницы; `events_next_before` — курсор следующей (более старой) страницы (`null`, если её нет). Невалидный `events_limit`/`events_before` → 400 `VALIDATION_ERROR`. ⚠️ **Ломающее изменение:** параметр `limit` заменён на `events_limit`, а в ответе добавлены `events_has_more`/`events_next_before` |
 | GET | `/api/v2/pipeline-runs/:runId/artifacts/:name` | оба | право чтения проекта прогона | Байты артефакта-объекта прогона (`kind: 'blob'`): `Content-Type`, `Content-Disposition: attachment`, `Content-Length`, `ETag`, `Cache-Control: private, max-age=86400`; `If-None-Match` → `304`; нет артефакта или blob-контур не подключён → `404 NOT_FOUND` |
 | POST | `/api/v2/pipeline-runs/:runId/resume` | оба | право изменения проекта прогона | HITL-решение человека: тело `{approved, output?, comment?}` → 200 `{run}`; прогон не ждёт решения → 409 `pipeline.invalid_state` |
 | POST | `/api/v2/pipeline-runs/:runId/cancel` | оба | право изменения проекта прогона | Отмена прогона → 200 `{run}` (статус `cancelled`); прогон уже завершён → 409 `CONFLICT` |

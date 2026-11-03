@@ -25,6 +25,40 @@ import type { ProfileStore, Project } from '@itphx/synth-shared';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Страница списка сессий (`GET /api/v2/sessions`): контракт v2 — объект
+ * `{sessions, total, offset, limit, next_offset}` (массив больше не возвращается).
+ */
+interface SessionListPage {
+  sessions: Array<{
+    id?: string;
+    name?: string | null;
+    project_id?: string | null;
+    owner_id?: string | null;
+    pending_count?: number;
+    pending_messages?: Array<{ content?: string }>;
+    [key: string]: unknown;
+  }>;
+  total: number;
+  offset: number;
+  limit: number;
+  next_offset: number | null;
+}
+
+/** Страница истории сообщений (`GET /api/v2/sessions/:id/messages`). */
+interface MessageListPage {
+  messages: Array<{
+    index?: number;
+    id?: string;
+    seq?: number;
+    content?: string;
+    [key: string]: unknown;
+  }>;
+  session_id: string;
+  has_more: boolean;
+  next_before: number | null;
+}
+
 function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
@@ -473,6 +507,159 @@ describe('Session API Routes (PATCH mode)', () => {
     });
   });
 
+  describe('GET /api/v2/sessions/:id/messages — пагинация истории', () => {
+    /** Сессия с N сообщениями (`seq` 1..N, по порядку). */
+    async function seedHistory(count: number) {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      for (let i = 1; i <= count; i += 1) {
+        await sessionManager.addMessage(session.id, {
+          id: generateId(), role: MessageRole.USER, seq: i, origin: 'local',
+          parts: [makeTextPart(`m${i}`)], content: `m${i}`, createdAt: nowISO(),
+          disabled: false, pinned: false, hidden: false,
+        });
+      }
+      return { app, sessionManager, session };
+    }
+
+    it('последняя страница: без before отдаются самые новые, has_more=false', async () => {
+      const { app, session } = await seedHistory(5);
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages?limit=2`);
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as MessageListPage;
+      expect(body.messages.map((m) => m.content)).toEqual(['m4', 'm5']);
+      expect(body.session_id).toBe(session.id);
+      expect(body.has_more).toBe(true);
+      expect(body.next_before).toBe(4);
+      // `index` — позиция в ПОЛНОЙ истории, а не в странице.
+      expect(body.messages.map((m) => m.index)).toEqual([3, 4]);
+    });
+
+    it('последняя страница без before: has_more=false, next_before=null', async () => {
+      const { app, session } = await seedHistory(3);
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages`);
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as MessageListPage;
+      expect(body.messages).toHaveLength(3);
+      expect(body.has_more).toBe(false);
+      expect(body.next_before).toBeNull();
+    });
+
+    it('before — исключающий курсор: страница строго старше', async () => {
+      const { app, session } = await seedHistory(5);
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages?limit=2&before=4`);
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as MessageListPage;
+      expect(body.messages.map((m) => m.content)).toEqual(['m2', 'm3']);
+      expect(body.has_more).toBe(true);
+      expect(body.next_before).toBe(2);
+    });
+
+    it('постраничный обход до конца истории (next_before → before)', async () => {
+      const { app, session } = await seedHistory(5);
+      const pages: string[][] = [];
+      let before: number | undefined;
+      for (let step = 0; step < 5; step += 1) {
+        const query = before === undefined ? '?limit=2' : `?limit=2&before=${before}`;
+        const res = await app.request(`/api/v2/sessions/${session.id}/messages${query}`);
+        const body = (await res.json()) as MessageListPage;
+        pages.push(body.messages.map((m) => m.content ?? ''));
+        if (!body.has_more || body.next_before === null) break;
+        before = body.next_before;
+      }
+      // Страницы идут от новых к старым; внутри страницы порядок хронологический.
+      expect(pages).toEqual([['m4', 'm5'], ['m2', 'm3'], ['m1']]);
+    });
+
+    it('limit больше длины истории → вся история одной страницей', async () => {
+      const { app, session } = await seedHistory(3);
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages?limit=500`);
+
+      const body = (await res.json()) as MessageListPage;
+      expect(body.messages).toHaveLength(3);
+      expect(body.has_more).toBe(false);
+      expect(body.next_before).toBeNull();
+    });
+
+    it('невалидный before → 400 VALIDATION_ERROR', async () => {
+      const { app, session } = await seedHistory(2);
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages?before=abc`);
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('невалидный limit → 400 VALIDATION_ERROR', async () => {
+      const { app, session } = await seedHistory(2);
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages?limit=-1`);
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('GET /api/v2/sessions — пагинация списка', () => {
+    it('limit/offset режут страницу, next_offset указывает следующую', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      await sessionManager.createSession({ title: 'A', userId: 'local' });
+      await sessionManager.createSession({ title: 'B', userId: 'local' });
+      await sessionManager.createSession({ title: 'C', userId: 'local' });
+
+      const first = (await (await app.request('/api/v2/sessions?limit=2')).json()) as SessionListPage;
+      expect(first.sessions).toHaveLength(2);
+      expect(first.total).toBe(3);
+      expect(first.offset).toBe(0);
+      expect(first.limit).toBe(2);
+      expect(first.next_offset).toBe(2);
+
+      const second = (await (await app.request('/api/v2/sessions?limit=2&offset=2')).json()) as SessionListPage;
+      expect(second.sessions).toHaveLength(1);
+      expect(second.total).toBe(3);
+      expect(second.offset).toBe(2);
+      expect(second.next_offset).toBeNull();
+    });
+
+    it('limit выше максимума обрезается до 500', async () => {
+      const { app } = createTestApp(tmpDir);
+
+      const body = (await (await app.request('/api/v2/sessions?limit=100000')).json()) as SessionListPage;
+      expect(body.limit).toBe(500);
+    });
+
+    it('невалидный limit/offset → 400 VALIDATION_ERROR', async () => {
+      const { app } = createTestApp(tmpDir);
+
+      const badLimit = await app.request('/api/v2/sessions?limit=abc');
+      expect(badLimit.status).toBe(400);
+      expect(((await badLimit.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+
+      const badOffset = await app.request('/api/v2/sessions?offset=-5');
+      expect(badOffset.status).toBe(400);
+      expect(((await badOffset.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('offset за концом выборки → пустая страница, next_offset=null (курсор не застревает)', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      await sessionManager.createSession({ title: 'A', userId: 'local' });
+
+      const body = (await (await app.request('/api/v2/sessions?offset=99')).json()) as SessionListPage;
+      expect(body.sessions).toHaveLength(0);
+      expect(body.total).toBe(1);
+      expect(body.next_offset).toBeNull();
+    });
+  });
+
   describe('POST /api/v2/sessions — агент по умолчанию', () => {
     it('без settings.agentRole берёт значение из resolveDefaultAgent', async () => {
       const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'researcher' });
@@ -775,9 +962,10 @@ describe('GET /api/v2/sessions — фильтр project_id', () => {
 
     const res = await app.request('/api/v2/sessions?project_id=proj-1');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any[];
-    expect(body).toHaveLength(1);
-    expect(body[0].project_id).toBe('proj-1');
+    const body = (await res.json()) as SessionListPage;
+    expect(body.sessions).toHaveLength(1);
+    expect(body.sessions[0]!.project_id).toBe('proj-1');
+    expect(body.total).toBe(1);
   });
 
   it('без project_id возвращает все сессии', async () => {
@@ -788,8 +976,10 @@ describe('GET /api/v2/sessions — фильтр project_id', () => {
 
     const res = await app.request('/api/v2/sessions');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any[];
-    expect(body).toHaveLength(3);
+    const body = (await res.json()) as SessionListPage;
+    expect(body.sessions).toHaveLength(3);
+    expect(body.total).toBe(3);
+    expect(body.next_offset).toBeNull();
   });
 
   it('?project_id=<несуществующий> возвращает пустой список', async () => {
@@ -798,8 +988,9 @@ describe('GET /api/v2/sessions — фильтр project_id', () => {
 
     const res = await app.request('/api/v2/sessions?project_id=missing');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any[];
-    expect(body).toHaveLength(0);
+    const body = (await res.json()) as SessionListPage;
+    expect(body.sessions).toHaveLength(0);
+    expect(body.total).toBe(0);
   });
 
   it('remote:-ref не фильтруется локально (без remote-клиента)', async () => {
@@ -809,8 +1000,8 @@ describe('GET /api/v2/sessions — фильтр project_id', () => {
 
     const res = await app.request('/api/v2/sessions?project_id=remote:abc');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any[];
-    expect(body).toHaveLength(2);
+    const body = (await res.json()) as SessionListPage;
+    expect(body.sessions).toHaveLength(2);
   });
 });
 
@@ -873,8 +1064,8 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
 
     const res = await app.request('/api/v2/sessions');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any[];
-    expect(body.map((s) => s.name).sort()).toEqual(['mine', 'project']);
+    const body = (await res.json()) as SessionListPage;
+    expect(body.sessions.map((s) => s.name).sort()).toEqual(['mine', 'project']);
   });
 
   it('elevated (ADMIN/LEAD) видит все сессии', async () => {
@@ -883,11 +1074,12 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
     await sessionManager.createSession({ title: 'b', userId: 'u2' });
 
     const res = await app.request('/api/v2/sessions');
-    const body = (await res.json()) as any[];
-    expect(body).toHaveLength(2);
+    const body = (await res.json()) as SessionListPage;
+    expect(body.sessions).toHaveLength(2);
+    expect(body.total).toBe(2);
   });
 
-  it('elevated: listSessions вызывается с { light: true }, ответ без истории', async () => {
+  it('elevated: список всегда лёгкий, ответ — страница без истории', async () => {
     const { app, sessionManager } = makeApp({ userId: 'lead', elevated: true });
     const created = await sessionManager.createSession({ title: 'a', userId: 'u1' });
     await sessionManager.addMessage(created.id, {
@@ -904,35 +1096,39 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
     const spy = vi.spyOn(sessionManager, 'listSessions');
     const res = await app.request('/api/v2/sessions');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any[];
+    const body = (await res.json()) as SessionListPage;
 
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith({}, { light: true });
-    expect(body).toHaveLength(1);
-    expect(body[0].messages).toEqual([]);
-    expect('prompt_states' in body[0]).toBe(false);
-    // Очередь и счётчики списка сохранены (listLight их не срезает).
-    expect(body[0].pending_count).toBe(1);
-    expect(body[0].pending_messages).toHaveLength(1);
-    expect(body[0].pending_messages[0].content).toBe('queued');
+    // `listSessions` **всегда** лёгкий — опции `light` больше нет.
+    expect(spy).toHaveBeenCalledWith({});
+    expect(body.sessions).toHaveLength(1);
+    // Ключа `messages` в DTO списка нет вовсе (не пустой массив).
+    expect('messages' in body.sessions[0]!).toBe(false);
+    expect('prompt_states' in body.sessions[0]!).toBe(false);
+    // Очередь и счётчики списка сохранены (лёгкая выборка их не срезает).
+    expect(body.sessions[0]!.pending_count).toBe(1);
+    expect(body.sessions[0]!.pending_messages).toHaveLength(1);
+    expect(body.sessions[0]!.pending_messages?.[0]?.content).toBe('queued');
+    // Форма ответа — страница.
+    expect(body.total).toBe(1);
+    expect(body.offset).toBe(0);
+    expect(body.limit).toBe(100);
+    expect(body.next_offset).toBeNull();
 
-    // Детальная выдача историю по-прежнему отдаёт.
+    // Детальная выдача — сводка: истории нет, она живёт в `/messages`.
     const detail = await app.request(`/api/v2/sessions/${created.id}`);
     expect(detail.status).toBe(200);
-    const detailBody = (await detail.json()) as any;
-    expect(detailBody.messages).toHaveLength(1);
-    expect(detailBody.messages[0].content).toBe('history');
+    const detailBody = (await detail.json()) as Record<string, unknown>;
+    expect('messages' in detailBody).toBe(false);
+    expect(detailBody.pending_count).toBe(1);
   });
 
-  it('обычная ветка: listSessions вызывается с { light: true }', async () => {
+  it('обычная ветка: listSessions вызывается без опции light (метод всегда лёгкий)', async () => {
     const { app, sessionManager } = makeApp({ userId: 'member' });
     const spy = vi.spyOn(sessionManager, 'listSessions');
     const res = await app.request('/api/v2/sessions');
     expect(res.status).toBe(200);
-    expect(spy).toHaveBeenCalledWith(
-      { userId: 'member', ownerIds: undefined },
-      { light: true },
-    );
+    expect(spy).toHaveBeenCalledWith({ userId: 'member', ownerIds: undefined });
   });
 
   it('elevated повышает приоритет над projectIds (все сессии)', async () => {
@@ -941,7 +1137,7 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
     await projectStore.save(project);
     await sessionManager.createSession({ title: 'foreign', userId: 'u2' });
     const res = await app.request('/api/v2/sessions');
-    expect((await res.json() as any[])).toHaveLength(1);
+    expect(((await res.json()) as SessionListPage).sessions).toHaveLength(1);
   });
 
   it('?project_id= фильтрует поверх проектной видимости', async () => {
@@ -954,9 +1150,9 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
     await sessionManager.createSession({ title: 's2', userId: 'member', projectId: p2.id });
 
     const res = await app.request(`/api/v2/sessions?project_id=${p1.id}`);
-    const body = (await res.json()) as any[];
-    expect(body).toHaveLength(1);
-    expect(body[0].name).toBe('s1');
+    const body = (await res.json()) as SessionListPage;
+    expect(body.sessions).toHaveLength(1);
+    expect(body.sessions[0]!.name).toBe('s1');
   });
 
   it('участник проекта получает доступ к её сессии по id (resolveCanAccessExtra)', async () => {

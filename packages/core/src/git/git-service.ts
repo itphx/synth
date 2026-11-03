@@ -50,6 +50,11 @@ export interface GitServiceOptions {
   execution?: ExecutionPort;
   cloneTimeoutMs?: number;
   fetchTimeoutMs?: number;
+  /**
+   * Предел размера diff коммита (байт). Не задан — `MAX_COMMIT_DIFF_BYTES`
+   * (1 МиБ); при превышении diff обрезается, в DTO — `diff_truncated: true`.
+   */
+  maxDiffBytes?: number;
 }
 
 /**
@@ -61,6 +66,29 @@ export interface GitServiceOptions {
  */
 export const DEFAULT_GIT_CLONE_TIMEOUT_MS = 300_000;
 export const DEFAULT_GIT_FETCH_TIMEOUT_MS = 300_000;
+
+/**
+ * Предел размера diff коммита (`GET /api/v2/git/commit`), байт: 1 МиБ.
+ * Diff больше предела обрезается, в DTO добавляется `diff_truncated: true` —
+ * мегабайты патча по проводу не уходят.
+ */
+export const MAX_COMMIT_DIFF_BYTES = 1024 * 1024;
+
+/**
+ * Обрезка diff по пределу размера (байт). Возвращает обрезанный текст и
+ * признак усечения. Граница режется по байтам, не разрывая UTF-8-последовательность
+ * (хвостовой «битый» символ отбрасывается).
+ */
+export function truncateDiff(
+  diff: string,
+  maxBytes: number = MAX_COMMIT_DIFF_BYTES,
+): { diff: string; truncated: boolean } {
+  const bytes = Buffer.from(diff, 'utf-8');
+  if (bytes.length <= maxBytes) return { diff, truncated: false };
+  let cut = bytes.subarray(0, maxBytes).toString('utf-8');
+  if (cut.endsWith('�')) cut = cut.slice(0, -1);
+  return { diff: cut, truncated: true };
+}
 
 /** Нормализация таймаута: отрицательное/нечисловое значение → дефолт. */
 function normalizeTimeout(value: number | undefined, fallback: number): number {
@@ -162,6 +190,7 @@ export class GitService {
   private readonly _execution: ExecutionPort | undefined;
   private readonly _cloneTimeoutMs: number;
   private readonly _fetchTimeoutMs: number;
+  private readonly _maxDiffBytes: number;
 
   constructor(
     private workspacesRoot: string,
@@ -170,6 +199,7 @@ export class GitService {
     this._execution = options.execution;
     this._cloneTimeoutMs = normalizeTimeout(options.cloneTimeoutMs, DEFAULT_GIT_CLONE_TIMEOUT_MS);
     this._fetchTimeoutMs = normalizeTimeout(options.fetchTimeoutMs, DEFAULT_GIT_FETCH_TIMEOUT_MS);
+    this._maxDiffBytes = normalizeTimeout(options.maxDiffBytes, MAX_COMMIT_DIFF_BYTES);
   }
 
   /** Публичный доступ к проверке containment (для роутов/тестов). */
@@ -492,9 +522,11 @@ export class GitService {
     );
     const files = parseNumstatZ(statRaw);
 
-    const diff = (
+    const rawDiff = (
       await this.run(['show', hash, '--patch', '--format='], repoPath, opts)
     ).stdout;
+    // Предел размера diff: мегабайты патча по проводу не уходят.
+    const { diff: diff, truncated: diffTruncated } = truncateDiff(rawDiff, this._maxDiffBytes);
 
     return {
       hash: commitHash,
@@ -508,6 +540,7 @@ export class GitService {
       branch,
       files,
       diff: diff || '',
+      ...(diffTruncated ? { diff_truncated: true } : {}),
     };
   }
 

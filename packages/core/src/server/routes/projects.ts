@@ -13,7 +13,8 @@ import {
 } from '@itphx/synth-shared';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import { provisionWorkspace, resolveWorkspaceForLocalProject } from '../../engine/workspace-provision.js';
-import { serializeProject } from '../serialize.js';
+import { serializeProject, serializeProjectSummary } from '../serialize.js';
+import { paginate, parseBoundedInt } from '../pagination.js';
 import { isRemoteRef, toLocalId, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
@@ -152,6 +153,13 @@ function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: re
   return `Недопустимое значение ${label}: "${String(value)}". Допустимые: ${allowed.join(', ')}`;
 }
 
+/**
+ * Пагинация списка проектов (решение владельца): страница по умолчанию 100,
+ * максимум 500 — как у списка сессий (ADR-118 §4).
+ */
+const DEFAULT_PROJECTS_LIMIT = 100;
+const MAX_PROJECTS_LIMIT = 500;
+
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
 function mapRemoteError(c: Context, err: unknown): Response | undefined {
   const http = remoteErrorToHttp(err);
@@ -196,23 +204,55 @@ export function createProjectRoutes(
   const jsonNotFound = (c: Context) =>
     c.json({ error: { code: 'NOT_FOUND', message: messages.notFound(c) } }, 404);
 
+  /**
+   * GET /api/v2/projects — **страница** списка проектов.
+   *
+   * Ответ — объект `{projects, total, offset, limit, next_offset}` (массив
+   * больше не возвращается — обратная совместимость не поддерживается).
+   *
+   * DTO проекта в списке — **сводка**: тяжёлые поля `log` (журнал проекта) и
+   * `plan` (ADR-039) не отдаются (списком они множили бы объём ответа);
+   * полный DTO — в детали `GET /api/v2/projects/:id`.
+   */
   app.get('/', auth.requireAuth, async (c) => {
+    // Нечисловой/отрицательный `limit`/`offset` → 400 (не молча правим).
+    const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_PROJECTS_LIMIT, MAX_PROJECTS_LIMIT);
+    if (limit === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'limit должен быть целым числом' } }, 400);
+    }
+    const offset = parseBoundedInt(c.req.query('offset'), 0, Number.MAX_SAFE_INTEGER);
+    if (offset === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'offset должен быть целым числом' } }, 400);
+    }
     const remoteClient = resolveClient();
     // ADR-089: elevated (ADMIN/LEAD) — все проекты; иначе — проекты пользователя.
     const elevated = (await opts.resolveElevated?.(c)) ?? false;
     const userId = await currentUserId(c);
     const projects = elevated ? await store.list() : await store.list(userId);
+    const { page, total, next_offset } = paginate(projects, offset, limit);
+    const localDto = page.map(serializeProjectSummary);
     if (!remoteClient) {
-      return c.json(projects.map(serializeProject));
+      return c.json({ projects: localDto, total, offset, limit, next_offset });
     }
     try {
-      const remote = (await remoteClient.listProjects()) as Array<Record<string, unknown>>;
-      return c.json(mergeItems(projects as unknown as Array<Record<string, unknown>>, remote));
+      const remote = await remoteClient.listProjects();
+      const merged = mergeItems(localDto, remote.projects);
+      // Гибрид: удалённый список приходит **без** постраничной выдачи (старый
+      // сервер отдаёт массив), поэтому сквозная пагинация невозможна —
+      // `next_offset` = null, пока в merged есть удалённые проекты.
+      const nextOffset = remote.projects.length > 0 ? null : next_offset;
+      return c.json({
+        projects: merged,
+        total: total + remote.total,
+        offset,
+        limit,
+        next_offset: nextOffset,
+      });
     } catch (err) {
       // Offline-деградация: сервер недоступен — отдаём локальный мир.
       if (err instanceof RemoteError) {
         console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
-        return c.json(projects.map(serializeProject));
+        return c.json({ projects: localDto, total, offset, limit, next_offset });
       }
       throw err;
     }
@@ -637,6 +677,11 @@ export function createProjectRoutes(
     app.get('/:id/stats', auth.requireAuth, async (c) => {
       const project = await store.load(c.req.param('id'));
       if (!project) return jsonNotFound(c);
+      // Список сессий **всегда лёгкий** (метаданные без истории) — полный
+      // список с историями давал пик heap и OOM на больших инстансах.
+      // Счётчик сообщений проекта (`total_messages`) **удалён**: по лёгкому
+      // списку histories нет, а считать «0» было бы ложью. Число сообщений
+      // одной сессии — в `GET /sessions/:id/stats`.
       const sessions = await sessionManager.listSessions({ projectId: project.id });
       let totalInput = 0;
       let totalOutput = 0;
@@ -644,7 +689,6 @@ export function createProjectRoutes(
       let totalCacheRead = 0;
       let totalCacheWrite = 0;
       let totalReasoning = 0;
-      let totalMessages = 0;
       for (const s of sessions) {
         totalInput += s.inputTokens;
         totalOutput += s.outputTokens;
@@ -652,14 +696,12 @@ export function createProjectRoutes(
         totalCacheRead += s.cacheReadTokens;
         totalCacheWrite += s.cacheWriteTokens;
         totalReasoning += s.reasoningTokens;
-        totalMessages += s.messages.length;
       }
       return c.json({
         total_sessions: sessions.length,
         total_input_tokens: totalInput,
         total_output_tokens: totalOutput,
         total_tokens: totalTotal,
-        total_messages: totalMessages,
         total_cache_read_tokens: totalCacheRead,
         total_cache_write_tokens: totalCacheWrite,
         total_reasoning_tokens: totalReasoning,

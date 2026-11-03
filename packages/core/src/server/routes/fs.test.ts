@@ -415,16 +415,17 @@ describe('FS project-aware routes (ADR-075: managed/standalone)', () => {
     expect(await readFile(join(workspacesRoot, 'ws', 'sub', 'hello.txt'), 'utf-8')).toBe('hello');
   });
 
-  it('read бинарного файла (NUL) → encoding binary, content пусто', async () => {
+  it('read бинарного файла (NUL) → 413 FILE_TOO_LARGE (reason=binary)', async () => {
     await writeFile(join(workspacesRoot, 'ws', 'data.xyz'), Buffer.from([1, 0, 2, 3]));
 
     const res = await makeProjectApp({ p1: { workspace: 'ws' } })
       .request('/api/v2/fs/read?project_id=p1&path=data.xyz');
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { content: string; encoding: string; size: number };
-    expect(body.encoding).toBe('binary');
-    expect(body.content).toBe('');
-    expect(body.size).toBe(4);
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as {
+      error: { code: string; details?: { reason?: string; maxReadBytes?: number } };
+    };
+    expect(body.error.code).toBe('FILE_TOO_LARGE');
+    expect(body.error.details?.reason).toBe('binary');
   });
 
   it('read директории → 400 IS_DIRECTORY', async () => {

@@ -76,11 +76,13 @@ vi.hoisted(() => {
 const mocks = vi.hoisted(() => ({
   getProjectPipeline: vi.fn(),
   getProjectPipelines: vi.fn(),
+  getProjectPipelinesPage: vi.fn(),
   updateProjectPipeline: vi.fn(),
   publishProjectPipeline: vi.fn(),
   startPipelineRun: vi.fn(),
   deleteProjectPipeline: vi.fn(),
   listPipelineRuns: vi.fn(),
+  listPipelineRunsPage: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
 }))
@@ -98,6 +100,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { usePipelinesStore } from '@/stores/pipelinesStore'
+import type { PipelineRunRecord } from '@/lib/api/synthApi'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -218,6 +221,11 @@ const RUN_WAITING = {
   startedAt: '2026-10-20T13:00:00.000Z',
 }
 
+/** Страница прогонов — ответ `GET .../pipelines/:pid/runs`. */
+function runsPage(runs: PipelineRunRecord[], nextOffset: number | null = null) {
+  return { runs, offset: 0, limit: 100, next_offset: nextOffset }
+}
+
 async function renderTab(): Promise<HTMLElement> {
   const { container } = await mountTab(TAB)
   return container
@@ -271,6 +279,7 @@ beforeEach(() => {
   mocks.startPipelineRun.mockResolvedValue({ id: 'run9', pipelineId: 'pl1', version: 1, status: 'pending' })
   mocks.deleteProjectPipeline.mockResolvedValue(undefined)
   mocks.listPipelineRuns.mockResolvedValue([RUN_DONE, RUN_WAITING])
+  mocks.listPipelineRunsPage.mockResolvedValue(runsPage([RUN_DONE, RUN_WAITING]))
   mocks.confirm.mockResolvedValue(true)
 
   useAuthStore.setState({
@@ -420,7 +429,7 @@ describe('PipelineTab — переключение вкладок (нет stale-
 
 describe('PipelineTab — список прогонов и фильтр по статусу', () => {
   it('прогоны выводятся списком со статусом и версией', async () => {
-    usePipelinesStore.setState({ runsByPipeline: { pl1: [RUN_DONE, RUN_WAITING] } })
+    usePipelinesStore.setState({ runsByPipeline: { pl1: runsPage([RUN_DONE, RUN_WAITING]) } })
     const container = await renderTab()
     const text = container.textContent ?? ''
 
@@ -433,8 +442,8 @@ describe('PipelineTab — список прогонов и фильтр по с�
   })
 
   it('без прогонов — пустое состояние', async () => {
-    mocks.listPipelineRuns.mockResolvedValue([])
-    usePipelinesStore.setState({ runsByPipeline: { pl1: [] } })
+    mocks.listPipelineRunsPage.mockResolvedValue(runsPage([]))
+    usePipelinesStore.setState({ runsByPipeline: { pl1: runsPage([]) } })
     const container = await renderTab()
 
     expect(container.textContent ?? '').toContain('No runs yet')
@@ -442,7 +451,7 @@ describe('PipelineTab — список прогонов и фильтр по с�
 
   it('смена фильтра статуса перезапрашивает прогоны с фильтром', async () => {
     const container = await renderTab()
-    expect(mocks.listPipelineRuns).toHaveBeenCalledWith('p1', 'pl1', undefined)
+    expect(mocks.listPipelineRunsPage).toHaveBeenCalledWith('p1', 'pl1', { limit: 100 })
 
     const select = container.querySelector('select') as HTMLSelectElement
     expect(select).toBeTruthy()
@@ -454,7 +463,42 @@ describe('PipelineTab — список прогонов и фильтр по с�
     await act(async () => {})
     await act(async () => {})
 
-    expect(mocks.listPipelineRuns).toHaveBeenCalledWith('p1', 'pl1', { status: 'awaiting_human' })
+    expect(mocks.listPipelineRunsPage).toHaveBeenCalledWith('p1', 'pl1', {
+      limit: 100,
+      status: 'awaiting_human',
+    })
+  })
+
+  it('при next_offset кнопка «Показать ещё» догружает следующую страницу прогонов', async () => {
+    mocks.listPipelineRunsPage.mockResolvedValueOnce(runsPage([RUN_DONE], 1))
+    mocks.listPipelineRunsPage.mockResolvedValueOnce(runsPage([RUN_WAITING], null))
+    const container = await renderTab()
+
+    const button = container.querySelector('[data-testid="pipeline-load-more-runs"]') as HTMLButtonElement
+    expect(button).toBeTruthy()
+    expect(button.textContent ?? '').toContain('Show more')
+
+    await act(async () => {
+      button.click()
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(mocks.listPipelineRunsPage).toHaveBeenLastCalledWith('p1', 'pl1', {
+      limit: 100,
+      offset: 1,
+    })
+    const state = usePipelinesStore.getState()
+    expect(state.runsByPipeline.pl1?.runs.map((r) => r.id)).toEqual(['run1', 'run2'])
+    // Последняя страница — кнопки больше нет.
+    expect(container.querySelector('[data-testid="pipeline-load-more-runs"]')).toBeNull()
+  })
+
+  it('без next_offset кнопки «Показать ещё» нет', async () => {
+    mocks.listPipelineRunsPage.mockResolvedValue(runsPage([RUN_DONE], null))
+    const container = await renderTab()
+
+    expect(container.querySelector('[data-testid="pipeline-load-more-runs"]')).toBeNull()
   })
 })
 

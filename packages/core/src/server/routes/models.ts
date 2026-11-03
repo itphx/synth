@@ -6,6 +6,7 @@ import type { ModelConfig, ProviderConfig, ContextSource, AttachmentModality } f
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { hasPriceInput, lookupContextWindow, parseCurrencyInput, parseModelCompatibilityInput } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/index.js';
+import { paginate } from '../pagination.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -210,6 +211,24 @@ function resolveOpt<T>(value: T | (() => T) | undefined, fallback: T): T {
   return value ?? fallback;
 }
 
+/** Размер страницы по умолчанию (`GET /models?limit=`). */
+const DEFAULT_MODELS_LIMIT = 100;
+
+/** Верхняя граница размера страницы (`GET /models?limit=`). */
+const MAX_MODELS_LIMIT = 500;
+
+/**
+ * Разбор целочисленного query-параметра страницы.
+ * Нечисло/дробное/вне границ → `null` (роут отвечает `400 VALIDATION_ERROR`).
+ */
+function parsePageInt(raw: string | undefined, fallback: number, min: number, max: number): number | null {
+  if (raw === undefined || raw === '') return fallback;
+  if (!/^-?\d+$/.test(raw.trim())) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return n;
+}
+
 export function createModelRoutes(
   auth: ModelRoutesAuth,
   modelStore: JsonStoreLike<ModelConfig>,
@@ -408,6 +427,32 @@ export function createModelRoutes(
   app.get('/', auth.requireAuth, async (c) => {
     const filterProvider = c.req.query('provider');
     const onlyEnabled = c.req.query('enabled_only') === 'true' || c.req.query('enabled_only') === '1';
+    // Фильтр `enabled`: `true` — только включённые, `false` — только выключенные;
+    // `enabled_only=true` — legacy-алиас `enabled=true`.
+    const enabledRaw = (c.req.query('enabled') ?? '').trim().toLowerCase();
+    const enabledFilter =
+      enabledRaw === 'true' || enabledRaw === '1'
+        ? true
+        : enabledRaw === 'false' || enabledRaw === '0'
+          ? false
+          : null;
+    // Поиск по подстроке (без учёта регистра) — по id, имени и провайдеру.
+    const search = (c.req.query('search') ?? '').trim().toLowerCase();
+    // Фильтр по модальности входа модели (`AttachmentModality`).
+    const modality = (c.req.query('modality') ?? '').trim().toLowerCase();
+
+    const limit = parsePageInt(c.req.query('limit'), DEFAULT_MODELS_LIMIT, 1, MAX_MODELS_LIMIT);
+    if (limit === null) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: `limit должен быть целым от 1 до ${MAX_MODELS_LIMIT}` },
+      }, 400);
+    }
+    const offset = parsePageInt(c.req.query('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
+    if (offset === null) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'offset должен быть целым неотрицательным числом' },
+      }, 400);
+    }
 
     // Гибрид runtime: extra-модели/провайдеры читаются на каждый запрос.
     const effExtraModels = resolveOpt<ModelConfig[]>(extraModels, []);
@@ -439,82 +484,86 @@ export function createModelRoutes(
       providerMap.set(p.name, p);
     }
 
-    const groups = new Map<string, ModelConfig[]>();
-    for (const m of models) {
-      if (filterProvider && m.provider !== filterProvider) continue;
-      if (onlyEnabled && !m.enabled) continue;
-      if (!providerMap.has(m.provider)) continue;
-
-      const group = groups.get(m.provider) || [];
-      group.push(m);
-      groups.set(m.provider, group);
-    }
-
-    for (const p of providers) {
-      if (!groups.has(p.name)) {
-        groups.set(p.name, []);
+    // Фильтры и сортировка — до пагинации (`total` — число отобранных моделей).
+    const filtered = models.filter((m) => {
+      if (filterProvider && m.provider !== filterProvider) return false;
+      if (onlyEnabled && !m.enabled) return false;
+      if (enabledFilter !== null && m.enabled !== enabledFilter) return false;
+      if (!providerMap.has(m.provider)) return false;
+      if (modality) {
+        // Модальности модели неизвестны — модель под фильтр не подходит
+        // (подтвердить приём вложения нельзя; как в туле `list_models`).
+        if (!m.modalities || !m.modalities.includes(modality as AttachmentModality)) return false;
       }
-    }
+      if (search) {
+        const haystack = `${m.id} ${m.name} ${m.provider}`.toLowerCase();
+        if (!haystack.includes(search)) return false;
+      }
+      return true;
+    });
 
-    const sortedProviderNames = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'ru'));
+    filtered.sort((a, b) => {
+      const byProvider = a.provider.localeCompare(b.provider, 'ru');
+      if (byProvider !== 0) return byProvider;
+      return a.name.localeCompare(b.name, 'ru');
+    });
 
-    // Модель по умолчанию — явная пара provider+model (runtime-настройка или
-    // config-fallback). Не задана — legacy-поведение (`isDefault` модели /
+    const total = filtered.length;
+    // Страница — общим помощтелем постраничной выдачи (курсор `next_offset`
+    // и «пустая страница → null» — как у остальных списков).
+    const { page, next_offset: nextOffset } = paginate(filtered, offset, limit);
+
+    // Модель по умолчанию — явная пара provider+model (runtime-стройка или
+    // config-фолбэк). Не задана — legacy-поведение (`isDefault` модели /
     // `provider.defaultModel`), чтобы не ломать существующие инсталляции.
     const defaultPair = getDefaultModel ? await getDefaultModel() : null;
 
-    const result = sortedProviderNames.map((providerName) => {
-      const groupModels = groups.get(providerName)!;
-      const provider = providerMap.get(providerName);
-      groupModels.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-
+    const result = page.map((m) => {
+      const provider = providerMap.get(m.provider);
       return {
-        provider: {
-          name: providerName,
-          type: provider?.type || 'openai',
-          icon: provider?.icon || '',
-          defaultModel: provider?.defaultModel || '',
-          currency: provider?.currency,
-        },
-        models: groupModels.map((m) => ({
-          id: m.id,
-          name: m.name,
-          provider: m.provider,
-          description: m.description,
-          enabled: m.enabled,
-          isDefault: defaultPair
-            ? m.provider === defaultPair.provider && m.name === defaultPair.model
-            : (m.isDefault || provider?.defaultModel === m.name),
-          contextWindow: m.contextWindow,
-          contextSource: m.contextSource || 'unknown',
-          maxOutputTokens: m.maxOutputTokens,
-          inputPrice: m.inputPrice,
-          outputPrice: m.outputPrice,
-          cacheReadPrice: m.cacheReadPrice,
-          cacheWritePrice: m.cacheWritePrice,
-          priceSource: m.priceSource,
-          currency: m.currency,
-          /**
-           * ADR-115: модальности входа модели (какие вложения она принимает).
-           * Только из конфига модели: каталог провайдера (`POST /models/fetch`)
-           * либо ручной override (`POST /models`). Не заданы — поля нет:
-           * «модальности неизвестны», ограничение не применяется (справочника
-           * модальностей в ядре нет — решение 2026-10-27).
-           */
-          ...(m.modalities && m.modalities.length > 0 ? { modalities: m.modalities } : {}),
-          /**
-           * Thinking-модели DeepSeek: провайдер требует `reasoning_content` у
-           * assistant-сообщений. Не задано — автоопределение по
-           * провайдеру/имени модели (см. `ModelConfig.requiresReasoning`).
-           */
-          ...(m.requiresReasoning !== undefined ? { requiresReasoning: m.requiresReasoning } : {}),
-          /** Особенности протокола модели (перекрывают провайдерские). */
-          ...(m.compatibility ? { compatibility: m.compatibility } : {}),
-        })),
+        id: m.id,
+        name: m.name,
+        provider: m.provider,
+        description: m.description,
+        enabled: m.enabled,
+        isDefault: defaultPair
+          ? m.provider === defaultPair.provider && m.name === defaultPair.model
+          : (m.isDefault || provider?.defaultModel === m.name),
+        contextWindow: m.contextWindow,
+        contextSource: m.contextSource || 'unknown',
+        maxOutputTokens: m.maxOutputTokens,
+        inputPrice: m.inputPrice,
+        outputPrice: m.outputPrice,
+        cacheReadPrice: m.cacheReadPrice,
+        cacheWritePrice: m.cacheWritePrice,
+        priceSource: m.priceSource,
+        currency: m.currency,
+        /**
+         * ADR-115: модальности входа модели (какие вложения она принимает).
+         * Только из конфига модели: каталог провайдера (`POST /models/fetch`)
+         * либо ручной override (`POST /models`). Не заданы — поля нет:
+         * «модальности неизвестны», ограничение не применяется (справочника
+         * модальностей в ядре нет — решение 2026-10-27).
+         */
+        ...(m.modalities && m.modalities.length > 0 ? { modalities: m.modalities } : {}),
+        /**
+         * Thinking-модели DeepSeek: провайдер требует `reasoning_content` у
+         * assistant-сообщений. Не задано — автоопределение по
+         * провайдеру/имени модели (см. `ModelConfig.requiresReasoning`).
+         */
+        ...(m.requiresReasoning !== undefined ? { requiresReasoning: m.requiresReasoning } : {}),
+        /** Особенности протокола модели (перекрывают провайдерские). */
+        ...(m.compatibility ? { compatibility: m.compatibility } : {}),
       };
     });
 
-    return c.json({ groups: result });
+    return c.json({
+      models: result,
+      total,
+      offset,
+      limit,
+      next_offset: nextOffset,
+    });
   });
 
   app.post('/', writeGuard, async (c) => {

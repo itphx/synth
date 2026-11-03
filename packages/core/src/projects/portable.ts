@@ -438,7 +438,9 @@ async function _exportProject(opts: ExportProjectOptions): Promise<ExportProject
   }
 
   const manager = new SessionManager(storage.sessions);
-  const all = await manager.listSessions({ projectId: project.id });
+  // Экспорт переносит **историю** сессий — здесь нужен полный список
+  // (`listSessionsWithMessages`); обычный `listSessions` всегда лёгкий.
+  const all = await manager.listSessionsWithMessages({ projectId: project.id });
   const localSessions: Session[] = [];
   let skippedRemote = 0;
   for (const session of all) {

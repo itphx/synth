@@ -14,6 +14,14 @@ vi.mock('@/lib/api/synthApi', () => ({
     getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
     getStickyNotes: vi.fn().mockResolvedValue({ notes: [] }),
     getProjects: vi.fn().mockResolvedValue([]),
+    // Список проектов пагинирован (ADR-089): стор грузит страницу.
+    getProjectsPage: vi.fn().mockResolvedValue({
+      projects: [],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    }),
   },
 }))
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
@@ -155,7 +163,7 @@ describe('transportStore dispatcher: session.messages.cleared', () => {
     await vi.waitFor(() => {
       expect(useChatStore.getState().messagesBySession[SID]?.map((m) => m.id)).toEqual(['m-pinned'])
     })
-    expect(synthApi.getSessionMessages).toHaveBeenCalledWith(SID)
+    expect(synthApi.getSessionMessages).toHaveBeenCalledWith(SID, { limit: 200 })
     expect(useChatStore.getState().partsBySession[SID]?.['m-1']).toBeUndefined()
     expect(useChatStore.getState().partsBySession[SID]?.['m-pinned']?.['msg:text:0']?.text).toBe('закреплённое')
     expect(useChatStore.getState().pendingBySession[SID]).toBeUndefined()
@@ -197,7 +205,7 @@ describe('transportStore dispatcher: session.messages.merged', () => {
     await vi.waitFor(() => {
       expect(useChatStore.getState().messagesBySession[SID]?.map((m) => m.id).sort()).toEqual(['m-1', 'm-2'])
     })
-    expect(synthApi.getSessionMessages).toHaveBeenCalledWith(SID)
+    expect(synthApi.getSessionMessages).toHaveBeenCalledWith(SID, { limit: 200 })
   })
 })
 

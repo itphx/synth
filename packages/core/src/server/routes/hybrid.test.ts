@@ -55,12 +55,25 @@ function createMockOrchestrator() {
 /** Fake RemoteBackendClient: все вызовы записываются, ответы настраиваются. */
 function createFakeRemoteClient(overrides: Record<string, unknown> = {}) {
   const fake = {
-    listProjects: vi.fn().mockResolvedValue([
-      { id: 'rp-1', name: 'Удалённый проект' },
-    ]),
-    listSessions: vi.fn().mockResolvedValue([
-      { id: 'rs-1', name: 'Удалённая сессия', project_id: 'rp-1', parent_id: null, references: [{ session_id: 'rs-0' }] },
-    ]),
+    listProjects: vi.fn().mockResolvedValue({
+      // Контракт v2: список проектов — объект `{projects, total, next_offset}`.
+      projects: [{ id: 'rp-1', name: 'Удалённый проект' }],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    }),
+    listSessions: vi.fn().mockResolvedValue({
+      // Контракт v2: список сессий — объект `{sessions, total, next_offset}`.
+      sessions: [
+        { id: 'rs-1', name: 'Удалённая сессия', project_id: 'rp-1', parent_id: null, references: [{ session_id: 'rs-0' }] },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+      paginationSupported: true,
+    }),
     getSession: vi.fn().mockResolvedValue({ id: 'rs-1', name: 'Удалённая сессия', project_id: 'rp-1' }),
     createSession: vi.fn().mockResolvedValue({ id: 'rs-new', name: 'Создана на бэке', project_id: 'rp-1' }),
     createProject: vi.fn().mockResolvedValue({ id: 'rp-new', name: 'Проект на бэке' }),
@@ -157,11 +170,13 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const s = await sessionManager.createSession({ title: 'Локальная', userId: 'local' });
 
       const res = await app.request('/api/v2/sessions');
-      const body = (await res.json()) as any[];
-      expect(body).toHaveLength(1);
-      expect(body[0].id).toBe(s.id);
-      expect(body[0].origin).toBe('local');
-      expect(body[0].name).toBe('Локальная');
+      const body = (await res.json()) as any;
+      expect(body.sessions).toHaveLength(1);
+      expect(body.sessions[0].id).toBe(s.id);
+      expect(body.sessions[0].origin).toBe('local');
+      expect(body.sessions[0].name).toBe('Локальная');
+      expect(body.total).toBe(1);
+      expect(body.next_offset).toBeNull();
     });
 
     it('возвращает объединение локальных и удалённых с origin и remote-ссылками', async () => {
@@ -170,19 +185,33 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
 
       const res = await app.request('/api/v2/sessions');
       expect(res.status).toBe(200);
-      const body = (await res.json()) as any[];
-      expect(body).toHaveLength(2);
+      const body = (await res.json()) as {
+        sessions: Array<{
+          origin?: string;
+          id?: string;
+          name?: string;
+          project_id?: string;
+          parent_id?: string | null;
+          references?: Array<{ session_id?: string }>;
+        }>;
+        total: number;
+        next_offset: number | null;
+      };
+      expect(body.sessions).toHaveLength(2);
 
-      const local = body.find((x) => x.origin === 'local')!;
+      const local = body.sessions.find((x) => x.origin === 'local')!;
       expect(local.id).toBe(s.id);
       expect(local.name).toBe('Локальная');
 
-      const remoteSes = body.find((x) => x.origin === 'remote')!;
+      const remoteSes = body.sessions.find((x) => x.origin === 'remote')!;
       expect(remoteSes.id).toBe('remote:rs-1');
       expect(remoteSes.project_id).toBe('remote:rp-1');
       expect(remoteSes.parent_id).toBeNull();
-      expect(remoteSes.references[0].session_id).toBe('remote:rs-0');
+      expect(remoteSes.references![0]!.session_id).toBe('remote:rs-0');
 
+      // Удалённая часть не пагинируется → сквозной курсор неизвестен.
+      expect(body.next_offset).toBeNull();
+      expect(body.total).toBe(2);
       expect(remote.listSessions).toHaveBeenCalled();
     });
 
@@ -191,10 +220,10 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       await sessionManager.createSession({ title: 'Локальная', userId: 'local', projectId: 'prj-1' });
 
       const res = await app.request('/api/v2/sessions?project_id=remote:rp-1');
-      const body = (await res.json()) as any[];
-      expect(body).toHaveLength(1);
-      expect(body[0].origin).toBe('remote');
-      expect(body[0].id).toBe('remote:rs-1');
+      const body = (await res.json()) as any;
+      expect(body.sessions).toHaveLength(1);
+      expect(body.sessions[0].origin).toBe('remote');
+      expect(body.sessions[0].id).toBe('remote:rs-1');
       expect(remote.listSessions).toHaveBeenCalledWith('rp-1');
     });
 
@@ -380,13 +409,16 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
 
       const res = await app.request('/api/v2/projects');
       expect(res.status).toBe(200);
-      const body = (await res.json()) as any[];
-      expect(body).toHaveLength(2);
-      expect(body.find((x) => x.origin === 'local')!.name).toBe('Локальный');
-      const remoteP = body.find((x) => x.origin === 'remote')!;
+      const body = (await res.json()) as { projects: any[]; total: number; next_offset: number | null };
+      expect(body.projects).toHaveLength(2);
+      expect(body.projects.find((x) => x.origin === 'local')!.name).toBe('Локальный');
+      const remoteP = body.projects.find((x) => x.origin === 'remote')!;
       expect(remoteP.id).toBe('remote:rp-1');
       expect(remoteP.name).toBe('Удалённый проект');
       expect(remote.listProjects).toHaveBeenCalled();
+      // Гибрид: удалённая часть приходит без постраничной выдачи → курсор неизвестен.
+      expect(body.next_offset).toBeNull();
+      expect(body.total).toBe(2);
     });
 
     it('без remoteClient — только локальные', async () => {
@@ -394,9 +426,10 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const p = projectStore.create('Локальный', 'local');
       await projectStore.save(p);
       const res = await app.request('/api/v2/projects');
-      const body = (await res.json()) as any[];
-      expect(body).toHaveLength(1);
-      expect(body[0].origin).toBe('local');
+      const body = (await res.json()) as { projects: any[]; total: number };
+      expect(body.projects).toHaveLength(1);
+      expect(body.projects[0].origin).toBe('local');
+      expect(body.total).toBe(1);
     });
   });
 
@@ -431,7 +464,11 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const body: any = await res.json();
       expect(body.session_id).toBe('remote:rs-1');
       expect(body.messages[0].content).toBe('hi');
-      expect(remote.getSessionMessages).toHaveBeenCalledWith('rs-1');
+      // Параметры пагинации пробрасываются в удалённый мир.
+      expect(remote.getSessionMessages).toHaveBeenCalledWith('rs-1', { limit: 200, before: undefined });
+      // Контракт страницы нормализуется (старый сервер без полей → дефолты).
+      expect(body.has_more).toBe(false);
+      expect(body.next_before).toBeNull();
     });
   });
 });

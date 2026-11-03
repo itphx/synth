@@ -55,15 +55,19 @@ describe('Project API Routes', () => {
   });
 
   describe('GET /api/v2/projects', () => {
-    it('возвращает пустой список', async () => {
+    it('возвращает пустую страницу', async () => {
       const { app } = createTestApp();
       const res = await app.request('/api/v2/projects');
       expect(res.status).toBe(200);
       const body: any = await res.json();
-      expect(body).toEqual([]);
+      expect(body.projects).toEqual([]);
+      expect(body.total).toBe(0);
+      expect(body.offset).toBe(0);
+      expect(body.limit).toBe(100);
+      expect(body.next_offset).toBeNull();
     });
 
-    it('возвращает список проектов', async () => {
+    it('возвращает страницу проектов', async () => {
       const { app, store } = createTestApp();
       const p1 = store.create('P1', 'test-user');
       const p2 = store.create('P2', 'test-user');
@@ -72,7 +76,8 @@ describe('Project API Routes', () => {
       const res = await app.request('/api/v2/projects');
       expect(res.status).toBe(200);
       const body: any = await res.json();
-      expect(body).toHaveLength(2);
+      expect(body.projects).toHaveLength(2);
+      expect(body.total).toBe(2);
     });
   });
 
@@ -230,7 +235,6 @@ describe('Project API Routes', () => {
       expect(res.status).toBe(200);
       const body: any = await res.json();
       expect(body.total_sessions).toBe(0);
-      expect(body.total_messages).toBe(0);
       expect(body.total_tokens).toBe(0);
       expect(body.total_input_tokens).toBe(0);
       expect(body.total_output_tokens).toBe(0);
@@ -269,7 +273,8 @@ describe('Project API Routes', () => {
       expect(body.total_output_tokens).toBe(40);
       expect(body.total_tokens).toBe(440);
       expect(body.total_cache_read_tokens).toBe(10);
-      expect(body.total_messages).toBe(3);
+      // Счётчик сообщений проекта удалён (список сессий всегда лёгкий).
+      expect('total_messages' in body).toBe(false);
       expect(sessionManager.listSessions).toHaveBeenCalledWith({ projectId: project.id });
     });
   });
@@ -649,11 +654,11 @@ describe('Project visibility (ADR-089, backend RBAC)', () => {
     await store.save(other);
 
     const mine = await app.request('/api/v2/projects', { headers: wsAuth('owner') });
-    expect((await mine.json() as any[]).map((p) => p.name)).toEqual(['Own']);
+    expect((await mine.json() as { projects: any[] }).projects.map((p) => p.name)).toEqual(['Own']);
 
     for (const role of ['lead', 'admin']) {
       const res = await app.request('/api/v2/projects', { headers: wsAuth(role) });
-      expect((await res.json() as unknown[]).length, role).toBe(2);
+      expect((await res.json() as { projects: any[] }).projects.length, role).toBe(2);
     }
   });
 

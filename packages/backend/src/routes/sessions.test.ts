@@ -112,22 +112,29 @@ describe('Session API Routes', () => {
   });
 
   describe('GET /api/v2/sessions', () => {
-    it('возвращает пустой список', async () => {
+    it('возвращает пустую страницу', async () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions');
       expect(res.status).toBe(200);
+      // Контракт v2: список сессий — объект-страница `{sessions, total, ...}`.
       const body: any = await res.json();
-      expect(body).toEqual([]);
+      expect(body.sessions).toEqual([]);
+      expect(body.total).toBe(0);
+      expect(body.next_offset).toBeNull();
     });
 
-    it('возвращает список сессий', async () => {
+    it('возвращает страницу списка сессий', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
       await sessionManager.createSession({ title: 'S1', userId: 'test-user' });
       await sessionManager.createSession({ title: 'S2', userId: 'test-user' });
       const res = await app.request('/api/v2/sessions');
       expect(res.status).toBe(200);
       const body: any = await res.json();
-      expect(body).toHaveLength(2);
+      expect(body.sessions).toHaveLength(2);
+      expect(body.total).toBe(2);
+      expect(body.offset).toBe(0);
+      expect(body.limit).toBe(100);
+      expect(body.next_offset).toBeNull();
     });
   });
 
@@ -866,7 +873,9 @@ describe('Session visibility (ADR-089, backend RBAC)', () => {
     for (const role of ['lead', 'admin']) {
       const res = await app.request('/api/v2/sessions', { headers: auth(role) });
       expect(res.status, role).toBe(200);
-      expect((await res.json() as unknown[]).length, role).toBe(2);
+      // Контракт v2: список сессий — объект-страница `{sessions, total, ...}`.
+      const body = (await res.json()) as { sessions: unknown[] };
+      expect(body.sessions.length, role).toBe(2);
     }
   });
 
@@ -880,8 +889,8 @@ describe('Session visibility (ADR-089, backend RBAC)', () => {
     await sessionManager.createSession({ title: 'foreign', userId: 'outsider' });
 
     const res = await app.request('/api/v2/sessions', { headers: auth('member') });
-    const body = (await res.json()) as any[];
-    expect(body.map((s) => s.name).sort()).toEqual(['mine', 'project']);
+    const body = (await res.json()) as { sessions: Array<{ name: string }> };
+    expect(body.sessions.map((s) => s.name).sort()).toEqual(['mine', 'project']);
   });
 
   it('участник проекта открывает сессию проекта по id (не 403)', async () => {

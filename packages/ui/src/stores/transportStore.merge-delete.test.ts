@@ -14,7 +14,7 @@ vi.mock('@/lib/api/synthApi', () => ({
 }))
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 
-import { mergeServerMessages } from './transportStore'
+import { mergeServerMessages, applyHistoryPage } from './transportStore'
 import { useChatStore, type MessageData } from './chatStore'
 import { resetChatStore } from './testUtils'
 
@@ -113,5 +113,66 @@ describe('mergeServerMessages: удаление сообщений по сним
     const messages = useChatStore.getState().messagesBySession[SID] ?? []
     expect(messages).toHaveLength(1)
     expect(messages[0]!.content).toBe('новый текст')
+  })
+})
+
+/**
+ * Пагинация истории: снимок `GET /sessions/:id/messages` — это **страница**.
+ *
+ * При `has_more: true` снимок покрывает только последние сообщения, поэтому
+ * сообщения старше границы страницы удалёнными считать нельзя — иначе догрузка
+ * старых страниц «съедалась» бы любым мержем. При `has_more: false` снимок
+ * авторитетен по всему составу (прежнее поведение).
+ */
+describe('mergeServerMessages: пагинация истории', () => {
+  it('сообщение старше границы страницы сохраняется (has_more: true)', () => {
+    const older = message({ index: 0, id: 'm-old', content: 'старое', ord: 1, seq: 1 })
+    const newer = message({ index: 1, id: 'm-new', content: 'новое', ord: 2, seq: 2 })
+    useChatStore.getState().setMessages(SID, [older, newer])
+
+    mergeServerMessages(SID, [newer], { hasMore: true })
+
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual(['m-old', 'm-new'])
+  })
+
+  it('удалённое на сервере сообщение внутри страницы исчезает (has_more: true)', () => {
+    const first = message({ index: 0, id: 'm-first', content: 'первое', ord: 1, seq: 1 })
+    const deleted = message({ index: 1, id: 'm-deleted', content: 'удалено', ord: 2, seq: 2 })
+    const newer = message({ index: 2, id: 'm-new', content: 'новое', ord: 3, seq: 3 })
+    useChatStore.getState().setMessages(SID, [first, deleted, newer])
+
+    // Снимок страницы: сообщение `seq: 2` на сервере удалено.
+    mergeServerMessages(SID, [first, newer], { hasMore: true })
+
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual(['m-first', 'm-new'])
+  })
+
+  it('без has_more снимок авторитетен — старое сообщение удаляется', () => {
+    const older = message({ index: 0, id: 'm-old', content: 'старое', ord: 1, seq: 1 })
+    const newer = message({ index: 1, id: 'm-new', content: 'новое', ord: 2, seq: 2 })
+    useChatStore.getState().setMessages(SID, [older, newer])
+
+    mergeServerMessages(SID, [newer], { hasMore: false })
+
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual(['m-new'])
+  })
+
+  it('applyHistoryPage не сбрасывает курсор «Загрузить старые»', () => {
+    // Курсор указывает на самую старую загруженную страницу; снимок последней
+    // страницы о нём не знает — сбрасывать его нельзя, иначе старые страницы
+    // стали бы недостижимыми.
+    useChatStore.getState().setHistoryPage(SID, { hasMore: true, nextBefore: 5 })
+
+    applyHistoryPage(SID, {
+      messages: [message({ index: 0, id: 'm-new', content: 'новое', ord: 9, seq: 9 })],
+      session_id: SID,
+      has_more: true,
+      next_before: 9,
+    })
+
+    expect(useChatStore.getState().historyPageBySession[SID]).toEqual({
+      hasMore: true,
+      nextBefore: 5,
+    })
   })
 })

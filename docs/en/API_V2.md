@@ -2,6 +2,17 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
+> ⚠️ RU-версия обновлена 2026-11-03 (**пагинация списков** — §5 (сводный блок «Пагинация списков — единый
+> контракт»: массив → страница `{items, total, offset, limit, next_offset}` для `GET /sessions`,
+> `GET /projects`, `GET /projects/:id/pipelines`, `GET /projects/:id/pipelines/:pid/runs`,
+> `GET /pipelines/instances`, `GET /models`; `GET /sessions/:id/messages` → `{messages, session_id,
+> has_more, next_before}`; **§5.5** — список сессий/деталь без истории, `messages` в DTO нет; **§5.8** —
+> сводка проекта без `log`/`plan`, `total_messages` в `/projects/:id/stats` удалён; **§5.10** — каталог
+> моделей плоский и постраничный, фильтры `search`/`enabled`/`modality`; **§5.12** — cap чтения файла
+> `storage.maxReadBytes` → `413 FILE_TOO_LARGE` + `details`, `maxDepth` ≤ 3, бюджет 10 000 записей +
+> `truncated`; **§5.15** — обрезка diff коммита > 1 МиБ → `diff_truncated`; **§5.34/§5.35** — пагинация
+> пайплайнов/прогонов и постраничный журнал прогона (`events_limit`/`events_before`) — **перевод отстаёт**:
+> канонический текст — RU §5 (сводный блок), §5.5, §5.8, §5.10, §5.12, §5.15, §5.34, §5.35).
 > ⚠️ RU-версия обновлена 2026-11-03 (**§5.9/§5.10** — `compatibility`: поля `supportsNativeVideo`/
 > `nativeAudioFormats` — нативные видео/аудио (ADR-117 × ADR-115); семантика «авто / явный `false` /
 > явный пустой список»; объект `compatibility` — полная замена — **переведено**).

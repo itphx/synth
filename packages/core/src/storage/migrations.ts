@@ -30,7 +30,7 @@ export async function migrateSessionScopeSnapshots(deps: SessionScopeMigrationDe
   // ADR-089: миграция должна видеть и архивированные сессии (архив не влияет на скоуп).
   // Лёгкая выборка: для отбора кандидатов нужны только `settings`/`projectId`;
   // уже мигрированные сессии не читают историю вовсе.
-  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true, light: true });
+  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true });
   const projects = new Map<string, Project | null>();
   let systemDefaults: { mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined;
   const getSystemDefaults = async () => {
@@ -272,7 +272,7 @@ export async function migrateMessageStreamV2(deps: MessageStreamMigrationDeps): 
   // ADR-089: миграция видит и архивированные сессии (архив не влияет на порядок).
   // Лёгкая выборка — чтобы не тянуть всю историю в память; полная история
   // читается по одной сессии.
-  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true, light: true });
+  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true });
 
   let updated = 0;
   for (const session of sessions) {
@@ -625,7 +625,7 @@ export async function migrateMessageStreamV2StepParts(
 ): Promise<number> {
   if (await deps.settingsStore.getMigrationMarker(MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION)) return 0;
 
-  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true, light: true });
+  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true });
 
   let updated = 0;
   for (const summary of sessions) {

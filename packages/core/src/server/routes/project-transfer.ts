@@ -98,7 +98,8 @@ export function createProjectTransferRoutes(
       }, 400);
     }
 
-    const localSessions = await sessionManager.listSessions({ projectId: project.id });
+    // Публикация переносит **историю** сессий — нужен полный список.
+    const localSessions = await sessionManager.listSessionsWithMessages({ projectId: project.id });
 
     try {
       const stats = await syncProjectToRemote({

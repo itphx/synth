@@ -23,6 +23,12 @@ import type { ConfirmAction } from './types'
 
 // ---- Files tab ----
 
+/**
+ * Глубина рекурсивного листинга для диалога переноса. Сервер жёстко режет
+ * глубину до 3 (`MAX_FS_LIST_DEPTH`), поэтому больше просить бессмысленно.
+ */
+const MOVE_DIRS_MAX_DEPTH = 3
+
 export function FilesTab() {
   const { t } = useI18n()
   const { notify } = useNotification()
@@ -61,10 +67,13 @@ export function FilesTab() {
   const [activeUploadPath, setActiveUploadPath] = useState<string>('')
   const [moveTarget, setMoveTarget] = useState<{ projectId: string; entry: any } | null>(null)
   const [moveDest, setMoveDest] = useState<string>('')
-  // Каталоги для диалога переноса: рекурсивный листинг workspace (maxDepth 10).
+  // Каталоги для диалога переноса: рекурсивный листинг workspace (глубина
+  // ограничена сервером — MAX_FS_LIST_DEPTH = 3).
   const [moveDirs, setMoveDirs] = useState<string[]>([])
   const [moveDirsLoading, setMoveDirsLoading] = useState(false)
   const [moveDirsFailed, setMoveDirsFailed] = useState(false)
+  /** Список каталогов обрезан сервером по лимиту записей — показываем пометку. */
+  const [moveDirsTruncated, setMoveDirsTruncated] = useState(false)
   const moveDirsCacheRef = useRef<Map<string, string[]>>(new Map())
   const moveLoadProjectRef = useRef<string | null>(null)
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null)
@@ -94,9 +103,11 @@ export function FilesTab() {
 
 
   /**
-   * Рекурсивный листинг каталогов workspace для диалога переноса (maxDepth 10,
-   * относительные пути). Кэш на время сессии: повторное открытие проекта
-   * показывает список сразу и перепроверяет его в фоне.
+   * Рекурсивный листинг каталогов workspace для диалога переноса (глубина
+   * ограничена сервером — MAX_FS_LIST_DEPTH = 3; при maxDepth > 0 обход
+   * обрывается по лимиту записей, тогда ответ помечен `truncated`).
+   * Кэш на время сессии: повторное открытие проекта показывает список сразу и
+   * перепроверяет его в фоне.
    */
   const loadMoveDirs = useCallback(async (projectId: string) => {
     moveLoadProjectRef.current = projectId
@@ -112,7 +123,7 @@ export function FilesTab() {
     }
     try {
       const { showHidden } = useFilesStore.getState()
-      const result = await synthApi.listDirectory(projectId, '', showHidden, 10)
+      const result = await synthApi.listDirectory(projectId, '', showHidden, MOVE_DIRS_MAX_DEPTH)
       const dirs = result.entries
         .filter((e) => e.isDirectory)
         .map((e) => e.path)
@@ -121,6 +132,7 @@ export function FilesTab() {
       if (moveLoadProjectRef.current !== projectId) return
       setMoveDirs(dirs)
       setMoveDirsFailed(false)
+      setMoveDirsTruncated(result.truncated === true)
     } catch {
       if (moveLoadProjectRef.current !== projectId) return
       // Запрос не удался — не блокируем диалог, отдаём каталоги из дерева.
@@ -618,6 +630,15 @@ export function FilesTab() {
                     </button>
                   )
                 })}
+              </div>
+            )}
+            {moveDirsTruncated && (
+              <div
+                className="flex items-start gap-1.5 rounded border border-status-warning/40 bg-status-warning/10 px-2 py-1 text-[0.6875rem] text-status-warning"
+                data-testid="move-dirs-truncated"
+              >
+                <Icon name="alert-triangle" className="mt-0.5 size-3 shrink-0" />
+                <span className="min-w-0 break-words">{t('file.listTruncated')}</span>
               </div>
             )}
             <div className="flex gap-2">

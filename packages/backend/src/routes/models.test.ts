@@ -92,8 +92,8 @@ describe('routes/models', () => {
     expect(res.status).toBe(201);
 
     const list = await stores.app.request(BASE);
-    const body = await list.json() as { groups: Array<{ provider: { name: string }; models: Array<Record<string, unknown>> }> };
-    const model = body.groups.find((g) => g.provider.name === 'p1')!.models[0]!;
+    const body = await list.json() as { models: Array<Record<string, unknown>> };
+    const model = body.models.find((m) => m.provider === 'p1')!;
     expect(model.contextWindow).toBe(4096);
     expect(model.contextSource).toBe('manual');
     expect(model.inputPrice).toBe(1.5);
@@ -398,15 +398,15 @@ describe('routes/models', () => {
   });
 
   describe('валюта модели', () => {
-    interface CurrencyGroup {
-      provider: { name: string; currency?: string };
+    /** Страница каталога моделей: `{models, total, offset, limit, next_offset}`. */
+    interface ModelPage {
       models: Array<Record<string, unknown>>;
+      total: number;
     }
 
-    async function listGroups(): Promise<CurrencyGroup[]> {
+    async function listModels(): Promise<ModelPage> {
       const res = await stores.app.request(BASE);
-      const body = await res.json() as { groups: CurrencyGroup[] };
-      return body.groups;
+      return (await res.json()) as ModelPage;
     }
 
     it('POST с currency=CNY сохраняет модель, GET возвращает model.currency и provider.currency', async () => {
@@ -425,9 +425,10 @@ describe('routes/models', () => {
       const saved = await stores.modelStore.load('p-cur/m-cur');
       expect(saved?.currency).toBe('CNY');
 
-      const group = (await listGroups()).find((g) => g.provider.name === 'p-cur')!;
-      expect(group.provider.currency).toBe('USD');
-      expect(group.models[0]!.currency).toBe('CNY');
+      // Валюта модели — в её записи; валюта провайдера — в `GET /providers`
+      // (в плоском каталоге моделей метаданных провайдера нет).
+      const model = (await listModels()).models.find((m) => m.id === 'p-cur/m-cur')!;
+      expect(model.currency).toBe('CNY');
     });
 
     it('POST с невалидной currency (XXX) — 400 VALIDATION_ERROR', async () => {
@@ -613,9 +614,9 @@ describe('routes/models (backend): колбэки модели по умолча
     await modelStore.save('p1/m2', { id: 'p1/m2', name: 'm2', provider: 'p1', enabled: true });
 
     const body = await (await app.request(BASE)).json() as {
-      groups: Array<{ models: Array<{ id: string; isDefault: boolean }> }>;
+      models: Array<{ id: string; isDefault: boolean }>;
     };
-    const models = body.groups.flatMap((g) => g.models);
+    const models = body.models;
     expect(models.find((m) => m.id === 'p1/m1')?.isDefault).toBe(false);
     expect(models.find((m) => m.id === 'p1/m2')?.isDefault).toBe(true);
   });

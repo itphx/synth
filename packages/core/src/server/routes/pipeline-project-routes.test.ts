@@ -1391,4 +1391,221 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       expect(body.error.problems.join(' ')).toContain('attachments/');
     });
   });
+
+  // ────────────── Пагинация: сводка списка + постраничный журнал ──────────────
+
+  describe('Пагинация списка пайплайнов и журнала прогона', () => {
+    /** Пайплайн с опубликованной версией (иначе прогон не запустить). */
+    async function createPublished(app: Hono): Promise<string> {
+      const created = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+      const { pipeline } = (await created.json()) as any;
+      await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/publish`, { method: 'POST' });
+      return pipeline.id;
+    }
+
+    async function createPipeline(app: Hono, name: string): Promise<string> {
+      const created = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, spec: spec() }),
+      });
+      const { pipeline } = (await created.json()) as any;
+      return pipeline.id;
+    }
+
+    it('GET /projects/:id/pipelines — сводка без draft; деталь — с draft', async () => {
+      const { app } = createHarness({ projects });
+      const pipelineId = await createPipeline(app, 'Релизы');
+
+      const list = await app.request('/api/v2/projects/proj-1/pipelines');
+      expect(list.status).toBe(200);
+      const listBody: any = await list.json();
+      expect(listBody.pipelines).toHaveLength(1);
+      expect(listBody.pipelines[0].id).toBe(pipelineId);
+      // Черновик (тяжёлая спецификация) в списке не отдаётся.
+      expect('draft' in listBody.pipelines[0]).toBe(false);
+      expect(listBody.pipelines[0].hasDraft).toBe(true);
+      expect(listBody.pipelines[0].draftVersion).toBe(1);
+      // Форма ответа — страница.
+      expect(listBody.total).toBe(1);
+      expect(listBody.offset).toBe(0);
+      expect(listBody.limit).toBe(100);
+      expect(listBody.next_offset).toBeNull();
+
+      // Деталь — полный DTO с черновиком.
+      const detail = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}`);
+      const detailBody: any = await detail.json();
+      expect(detailBody.pipeline.draft).toBeTruthy();
+      expect(detailBody.pipeline.draft.id).toBe(pipelineId);
+    });
+
+    it('GET /projects/:id/pipelines — пагинация (limit/offset/total/next_offset)', async () => {
+      const { app } = createHarness({ projects });
+      await createPipeline(app, 'A');
+      await createPipeline(app, 'B');
+      await createPipeline(app, 'C');
+
+      const first = await app.request('/api/v2/projects/proj-1/pipelines?limit=2');
+      const firstBody: any = await first.json();
+      expect(firstBody.pipelines).toHaveLength(2);
+      expect(firstBody.total).toBe(3);
+      expect(firstBody.offset).toBe(0);
+      expect(firstBody.limit).toBe(2);
+      expect(firstBody.next_offset).toBe(2);
+
+      const second = await app.request('/api/v2/projects/proj-1/pipelines?limit=2&offset=2');
+      const secondBody: any = await second.json();
+      expect(secondBody.pipelines).toHaveLength(1);
+      expect(secondBody.offset).toBe(2);
+      expect(secondBody.next_offset).toBeNull();
+    });
+
+    it('GET /projects/:id/pipelines — невалидный limit/offset → 400', async () => {
+      const { app } = createHarness({ projects });
+      const badLimit = await app.request('/api/v2/projects/proj-1/pipelines?limit=abc');
+      expect(badLimit.status).toBe(400);
+      expect(((await badLimit.json()) as any).error.code).toBe('VALIDATION_ERROR');
+      const badOffset = await app.request('/api/v2/projects/proj-1/pipelines?offset=-1');
+      expect(badOffset.status).toBe(400);
+    });
+
+    it('GET /projects/:id/pipelines/:pid/runs — offset/next_offset', async () => {
+      const { app } = createHarness({ projects });
+      const pipelineId = await createPublished(app);
+      for (let i = 0; i < 3; i += 1) {
+        await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/runs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+      }
+
+      const first = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/runs?limit=2`);
+      const firstBody: any = await first.json();
+      expect(firstBody.runs).toHaveLength(2);
+      expect(firstBody.offset).toBe(0);
+      expect(firstBody.limit).toBe(2);
+      expect(firstBody.next_offset).toBe(2);
+
+      const second = await app.request(
+        `/api/v2/projects/proj-1/pipelines/${pipelineId}/runs?limit=2&offset=2`,
+      );
+      const secondBody: any = await second.json();
+      expect(secondBody.runs).toHaveLength(1);
+      expect(secondBody.offset).toBe(2);
+      expect(secondBody.next_offset).toBeNull();
+    });
+
+    it('GET /pipeline-runs/:runId — журнал постранично (events_limit/events_before)', async () => {
+      const { app } = createHarness({ projects });
+      const pipelineId = await createPublished(app);
+      const started = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const { run } = (await started.json()) as any;
+
+      // Без параметров — последняя (самая новая) страница журнала.
+      const all = await app.request(`/api/v2/pipeline-runs/${run.id}`);
+      expect(all.status).toBe(200);
+      const allBody: any = await all.json();
+      expect(allBody.run.id).toBe(run.id);
+      expect(allBody.events.length).toBeGreaterThanOrEqual(3);
+      expect(allBody.events_has_more).toBe(false);
+      expect(allBody.events_next_before).toBeNull();
+
+      // Страница поменьше: курсор указывает на более старые события.
+      const page = await app.request(`/api/v2/pipeline-runs/${run.id}?events_limit=1`);
+      const pageBody: any = await page.json();
+      expect(pageBody.events).toHaveLength(1);
+      expect(pageBody.events_has_more).toBe(true);
+      // Курсор — порядковый номер самого старого события страницы.
+      expect(typeof pageBody.events_next_before).toBe('number');
+      const cursor = pageBody.events_next_before as number;
+      expect(cursor).toBe(allBody.events.length - 1);
+
+      // Курсор исключающий: вернутся строго более старые события.
+      const older = await app.request(
+        `/api/v2/pipeline-runs/${run.id}?events_limit=10&events_before=${cursor}`,
+      );
+      const olderBody: any = await older.json();
+      expect(olderBody.events.length).toBe(allBody.events.length - 1);
+      // Старая страница — префикс журнала (события строго раньше курсора).
+      const key = (e: { ts: string; type: string }) => `${e.ts}|${e.type}`;
+      const allKeys = (allBody.events as Array<{ ts: string; type: string }>).map(key);
+      const olderKeys = (olderBody.events as Array<{ ts: string; type: string }>).map(key);
+      expect(olderKeys).toEqual(allKeys.slice(0, olderKeys.length));
+
+      // Обход журнала назад не теряет и не дублирует события.
+      const collected: string[] = [];
+      let nextBefore: number | null | undefined;
+      for (let i = 0; i < 10; i += 1) {
+        const query = nextBefore === undefined || nextBefore === null
+          ? '?events_limit=1'
+          : `?events_limit=1&events_before=${nextBefore}`;
+        const step = await app.request(`/api/v2/pipeline-runs/${run.id}${query}`);
+        const stepBody: any = await step.json();
+        collected.push(...(stepBody.events as Array<{ ts: string; type: string }>).map((e) => `${e.ts}|${e.type}`));
+        if (!stepBody.events_has_more || stepBody.events_next_before === null) break;
+        nextBefore = stepBody.events_next_before as number;
+      }
+      expect(collected).toHaveLength(allBody.events.length);
+      expect(new Set(collected).size).toBe(collected.length);
+    });
+
+    it('GET /pipeline-runs/:runId — невалидный events_limit/events_before → 400', async () => {
+      const { app } = createHarness({ projects });
+      const pipelineId = await createPublished(app);
+      const started = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const { run } = (await started.json()) as any;
+
+      const badLimit = await app.request(`/api/v2/pipeline-runs/${run.id}?events_limit=abc`);
+      expect(badLimit.status).toBe(400);
+      expect(((await badLimit.json()) as any).error.code).toBe('VALIDATION_ERROR');
+
+      const badBefore = await app.request(`/api/v2/pipeline-runs/${run.id}?events_before=not-a-number`);
+      expect(badBefore.status).toBe(400);
+      const negativeBefore = await app.request(`/api/v2/pipeline-runs/${run.id}?events_before=-1`);
+      expect(negativeBefore.status).toBe(400);
+      const fractionalBefore = await app.request(
+        `/api/v2/pipeline-runs/${run.id}?events_before=1.5`,
+      );
+      expect(fractionalBefore.status).toBe(400);
+    });
+
+    it('GET /pipeline-runs/:runId — курсор-метка времени (совместимость) не теряет события', async () => {
+      const { app } = createHarness({ projects });
+      const pipelineId = await createPublished(app);
+      const started = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const { run } = (await started.json()) as any;
+
+      const all = await app.request(`/api/v2/pipeline-runs/${run.id}`);
+      const allBody: any = await all.json();
+      expect(allBody.events.length).toBeGreaterThanOrEqual(3);
+
+      // Курсор-метка времени: вернутся события строго старше указанной метки.
+      const oldestTs = allBody.events[0].ts as string;
+      const older = await app.request(
+        `/api/v2/pipeline-runs/${run.id}?events_before=${encodeURIComponent(oldestTs)}`,
+      );
+      expect(older.status).toBe(200);
+      const olderBody: any = await older.json();
+      for (const event of olderBody.events as Array<{ ts: string }>) {
+        expect(Date.parse(event.ts)).toBeLessThan(Date.parse(oldestTs));
+      }
+    });
+  });
 });

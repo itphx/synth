@@ -233,7 +233,7 @@ describe('portable export/import проекта (ADR-091)', () => {
     expect(dstProject?.plan?.items).toHaveLength(1);
     expect(dstProject?.plan?.items[0]?.title).toBe('Пункт плана');
 
-    const sessions = await new SessionManager(dstStorage.sessions).listSessions({ projectId: result.projectId });
+    const sessions = await new SessionManager(dstStorage.sessions).listSessionsWithMessages({ projectId: result.projectId });
     expect(sessions).toHaveLength(2);
     expect(new Set(sessions.map((s) => s.id)).size).toBe(2);
     for (const session of sessions) {
@@ -276,7 +276,7 @@ describe('portable export/import проекта (ADR-091)', () => {
     });
 
     expect(result.projectId).toBe(target.id);
-    const sessions = await new SessionManager(dstStorage.sessions).listSessions({ projectId: target.id });
+    const sessions = await new SessionManager(dstStorage.sessions).listSessionsWithMessages({ projectId: target.id });
     expect(sessions).toHaveLength(2);
     // Новый проект не создавался — только целевой.
     expect((await dstStorage.projects.list()).map((p) => p.name)).toEqual(['Цель']);
@@ -559,7 +559,7 @@ describe('portable export/import проекта (ADR-091)', () => {
     const result = await importProject({ dataDir: dst, archive: exported.path, yes: true });
 
     const sessions = await new SessionManager(createFileStorage({ dataDir: dst }).sessions)
-      .listSessions({ projectId: result.projectId });
+      .listSessionsWithMessages({ projectId: result.projectId });
     const withMap = sessions.find((s) => s.obfuscationMap);
     expect(withMap?.obfuscationMap?.[PLACEHOLDER]).toBe(REAL_SECRET);
   });
@@ -944,7 +944,7 @@ describe('portable: вложения сообщений (ADR-115)', () => {
     });
 
     // Часть сообщения сохранена с тем же content-addressed путём.
-    const sessions = await new SessionManager(dstStorage.sessions).listSessions({
+    const sessions = await new SessionManager(dstStorage.sessions).listSessionsWithMessages({
       projectId: result.projectId,
     });
     expect(sessions).toHaveLength(1);
@@ -977,7 +977,7 @@ describe('portable: вложения сообщений (ADR-115)', () => {
     const dstStorage = createFileStorage({ dataDir: dst });
     expect(await dstStorage.blobs.exists(uploaded.blobPath)).toBe(false);
     // Сообщение и часть импортированы (импорт не падает).
-    const sessions = await new SessionManager(dstStorage.sessions).listSessions({
+    const sessions = await new SessionManager(dstStorage.sessions).listSessionsWithMessages({
       projectId: result.projectId,
     });
     expect(sessions[0]?.messages).toHaveLength(1);
@@ -1070,7 +1070,7 @@ describe('portable: вложения сообщений (ADR-115)', () => {
     expect(result.warnings.join('\n')).toContain('dangling');
 
     const dstStorage = createFileStorage({ dataDir: dst });
-    const sessions = await new SessionManager(dstStorage.sessions).listSessions({
+    const sessions = await new SessionManager(dstStorage.sessions).listSessionsWithMessages({
       projectId: result.projectId,
     });
     const media = sessions[0]?.messages[0]?.parts.find((p) => p.type === 'image');

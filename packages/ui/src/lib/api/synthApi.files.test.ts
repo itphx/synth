@@ -33,13 +33,23 @@ describe('filesApi — листинг и чтение', () => {
     await synthApi.listDirectory('p1')
     expect(fetchMock).toHaveBeenCalledWith('/api/v2/fs?project_id=p1', expect.objectContaining({}))
 
-    await synthApi.listDirectory('p1', 'src/sub', true, 10)
+    await synthApi.listDirectory('p1', 'src/sub', true, 3)
     const url = fetchMock.mock.calls[1]![0] as string
     const params = new URLSearchParams(url.split('?')[1])
     expect(params.get('project_id')).toBe('p1')
     expect(params.get('path')).toBe('src/sub')
     expect(params.get('includeHidden')).toBe('true')
-    expect(params.get('maxDepth')).toBe('10')
+    expect(params.get('maxDepth')).toBe('3')
+  })
+
+  it('listDirectory: глубина режется до 3 (сервер режет так же)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ entries: [] }))
+
+    await synthApi.listDirectory('p1', '', false, 10)
+
+    const url = fetchMock.mock.calls[0]![0] as string
+    const params = new URLSearchParams(url.split('?')[1])
+    expect(params.get('maxDepth')).toBe('3')
   })
 
   it('listDirectory: скрытые и maxDepth не передаются при false/0/undefined', async () => {

@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { FileEntry, FsError, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
-import { FsErrorCode, fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema, DEFAULT_MAX_UPLOAD_BYTES } from '@itphx/synth-shared';
+import { FsErrorCode, fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema, DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_MAX_READ_BYTES, MAX_FS_LIST_DEPTH, MAX_FS_LIST_ENTRIES } from '@itphx/synth-shared';
 import { checkPath, loadProtectedPaths } from '../../engine/security/protected-paths.js';
 import type { ProtectedPathsPolicy } from '../../engine/security/protected-paths.js';
 import { isInsideReal } from '../../engine/tools/path-utils.js';
@@ -69,6 +69,21 @@ export interface FsRoutesOptions {
    */
   maxUploadBytes?: number;
   /**
+   * Максимальный размер файла, отдаваемого `GET /read`, в байтах.
+   * Не задан — `DEFAULT_MAX_READ_BYTES` (5 МиБ); точки монтирования
+   * (standalone/backend) передают сюда `resolveMaxReadBytes(config)`.
+   * Проверяется по `stat` **до** чтения содержимого: файл больше лимита
+   * (или бинарный) → `413` с машинным кодом `FILE_TOO_LARGE` и
+   * `details.maxReadBytes`.
+   */
+  maxReadBytes?: number;
+  /**
+   * Общий предел числа записей в рекурсивном листинге (`GET /?maxDepth>0`).
+   * Не задан — `MAX_FS_LIST_ENTRIES` (10 000); при достижении предела обход
+   * прекращается, в ответе `truncated: true`.
+   */
+  maxListEntries?: number;
+  /**
    * ADR-118 §4 / ADR-095: HTTP-мутация workspace состоялась — уведомить сессии
    * проекта событием `fs.changed` (дерево Files, редакторы, Git-вкладка). Payload
    * тот же, что у мутирующих инструментов (`op`/`paths`/`from`/`to`), источник —
@@ -99,9 +114,31 @@ type FsHttpStatus = 400 | 403 | 404 | 409 | 413 | 422 | 500;
  */
 export { DEFAULT_MAX_UPLOAD_BYTES };
 
+/**
+ * Лимит чтения файла (`GET /read`) по умолчанию, в байтах: 5 МиБ.
+ * Константа живёт в `@itphx/synth-shared` (чтобы config-схема и core-дефолт
+ * не расходились); реэкспорт сохраняет прежний публичный импорт из
+ * `@itphx/synth-core`.
+ * Эффективный лимит: конфиг/env (`resolveMaxReadBytes`) → эта опция фабрики
+ * `FsRoutesOptions.maxReadBytes` (для тестов) → `DEFAULT_MAX_READ_BYTES`.
+ */
+export { DEFAULT_MAX_READ_BYTES };
+
 /** FsError-форма (`{ error: { error, code } }`) — единый формат ошибок FS. */
 function makeFsError(code: string, error: string): { error: FsError } {
   return { error: { error, code: code as FsErrorCode } };
+}
+
+/**
+ * FsError-форма с подробностями (`details`) — машиночитаемый отказ:
+ * клиент не разбирает текст сообщения.
+ */
+function makeFsErrorWithDetails(
+  code: string,
+  error: string,
+  details: Record<string, unknown>,
+): { error: FsError } {
+  return { error: { error, code: code as FsErrorCode, details } };
 }
 
 /** Ошибка валидации тела/параметров (legacy-код backend `PERMISSION_DENIED`), HTTP 400. */
@@ -132,6 +169,7 @@ const FS_STATUS: Record<string, FsHttpStatus> = {
   PROTECTED_PATH_DENIED: 403,
   WORKSPACE_CREATE_FAILED: 422,
   PAYLOAD_TOO_LARGE: 413,
+  FILE_TOO_LARGE: 413,
 };
 
 /** Ответ на брошенную ошибку: FsError → по `FS_STATUS`, прочее → 500. */
@@ -139,7 +177,9 @@ function fsErrorResponse(c: Context, err: unknown): Response {
   const e = err as Partial<FsError> | undefined;
   if (e && typeof e.code === 'string') {
     const status = (FS_STATUS[e.code] ?? 500) as FsHttpStatus;
-    return c.json({ error: { error: e.error ?? e.code, code: e.code } }, status);
+    const body: FsError = { error: e.error ?? e.code, code: e.code as FsErrorCode };
+    if (e.details) body.details = e.details;
+    return c.json({ error: body }, status);
   }
   return c.json(
     { error: { error: err instanceof Error ? err.message : String(err), code: FsErrorCode.PERMISSION_DENIED } },
@@ -229,29 +269,57 @@ function resolveRequestedPath(base: string, requestedPath: string, projectAware:
   return full;
 }
 
-/** Глубина рекурсии листинга (0 — только текущий каталог; максимум 10). */
+/**
+ * Глубина рекурсии листинга (0 — только текущий каталог; максимум
+ * `MAX_FS_LIST_DEPTH` = 3). Значение из запроса ограничивается жёстко —
+ * глубокий обход каталога (и ответ на него) неконтролируемо растёт.
+ */
 function parseMaxDepth(raw: string | undefined): number {
   if (!raw) return 0;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 1) return 0;
-  return Math.min(n, 10);
+  return Math.min(n, MAX_FS_LIST_DEPTH);
 }
 
-/** Рекурсивный листинг (паритет с backend): dir-first, затем по имени. */
+/** Бюджет обхода листинга: остаток записей и признак усечения. */
+interface ListBudget {
+  /** Сколько записей ещё можно вернуть (≤ 0 — обход прекращается). */
+  remaining: number;
+  /** Обход прерван по лимиту записей. */
+  truncated: boolean;
+}
+
+/**
+ * Рекурсивный листинг (паритет с backend): dir-first, затем по имени.
+ *
+ * Бюджет (`remaining`) ограничивает общее число записей: при его исчерпании
+ * обход прекращается, а `truncated` в ответе равен `true`. Бюджет задаётся
+ * только при `maxDepth > 0` (при `maxDepth = 0` список не рекурсивный и
+ * лимит не применяется).
+ */
 async function listDirectoryRecursive(
   absDir: string,
   relBase: string,
   maxDepth: number,
   includeHidden: boolean,
   currentDepth: number,
+  budget: ListBudget,
 ): Promise<FileEntry[]> {
   if (currentDepth > maxDepth) return [];
+  if (budget.remaining <= 0) {
+    budget.truncated = true;
+    return [];
+  }
 
   const entries = await readdir(absDir, { withFileTypes: true });
   const result: FileEntry[] = [];
 
   for (const entry of entries) {
     if (!includeHidden && entry.name.startsWith('.')) continue;
+    if (budget.remaining <= 0) {
+      budget.truncated = true;
+      break;
+    }
 
     const relPath = relBase ? `${relBase}/${entry.name}` : entry.name;
     let modifiedAt = 0;
@@ -272,12 +340,14 @@ async function listDirectoryRecursive(
       size,
       modifiedAt,
     });
+    budget.remaining -= 1;
 
     if (entry.isDirectory() && currentDepth < maxDepth) {
       const children = await listDirectoryRecursive(
-        join(absDir, entry.name), relPath, maxDepth, includeHidden, currentDepth + 1,
+        join(absDir, entry.name), relPath, maxDepth, includeHidden, currentDepth + 1, budget,
       );
       result.push(...children);
+      if (budget.remaining <= 0) budget.truncated = true;
     }
   }
 
@@ -348,6 +418,14 @@ export function createFsRoutes(
     opts.maxUploadBytes && opts.maxUploadBytes > 0
       ? Math.floor(opts.maxUploadBytes)
       : DEFAULT_MAX_UPLOAD_BYTES;
+  const maxReadBytes =
+    opts.maxReadBytes && opts.maxReadBytes > 0
+      ? Math.floor(opts.maxReadBytes)
+      : DEFAULT_MAX_READ_BYTES;
+  const maxListEntries =
+    opts.maxListEntries && opts.maxListEntries > 0
+      ? Math.floor(opts.maxListEntries)
+      : MAX_FS_LIST_ENTRIES;
   const onFsChanged = opts.onFsChanged;
   /** Уведомить сессии проекта об изменении workspace (только project-aware). */
   const notifyFsChanged = async (
@@ -441,6 +519,12 @@ export function createFsRoutes(
       const path = c.req.query('path') || '';
       const includeHidden = c.req.query('includeHidden') === 'true';
       const maxDepth = parseMaxDepth(c.req.query('maxDepth'));
+      // Лимит записей применяется только к рекурсивному листингу
+      // (`maxDepth > 0`): при `maxDepth = 0` список не рекурсивный.
+      const budget: ListBudget = {
+        remaining: maxDepth > 0 ? maxListEntries : Number.MAX_SAFE_INTEGER,
+        truncated: false,
+      };
       const fullPath = resolveRequestedPath(base, path, projectAware);
 
       const s = await stat(fullPath).catch(() => null);
@@ -451,8 +535,15 @@ export function createFsRoutes(
         return c.json(makeFsError(FsErrorCode.NOT_A_DIRECTORY, 'Указанный путь не является директорией'), 400);
       }
 
-      const entries = await listDirectoryRecursive(fullPath, path, maxDepth, includeHidden, 0);
-      return c.json({ path: path || '/', entries });
+      const entries = await listDirectoryRecursive(
+        fullPath,
+        path,
+        maxDepth,
+        includeHidden,
+        0,
+        budget,
+      );
+      return c.json({ path: path || '/', entries, truncated: budget.truncated });
     } catch (err) {
       return fsErrorResponse(c, err);
     }
@@ -490,8 +581,29 @@ export function createFsRoutes(
         return c.json(makeFsError(FsErrorCode.IS_DIRECTORY, 'Указанный путь является директорией'), 400);
       }
 
+      // Cap чтения: размер известен из `stat` — содержимое в память не читаем.
+      if (s.size > maxReadBytes) {
+        return c.json(
+          makeFsErrorWithDetails(
+            FsErrorCode.FILE_TOO_LARGE,
+            `Файл превышает лимит чтения (${maxReadBytes} байт)`,
+            { maxReadBytes, size: s.size, reason: 'size' },
+          ),
+          413,
+        );
+      }
+
       if (!(await isTextFile(fullPath))) {
-        return c.json({ path, content: '', size: s.size, encoding: 'binary' });
+        // Бинарный файл содержимое не отдаём: тот же отказ, что и для большого
+        // (машинный код `FILE_TOO_LARGE`), причина — в `details.reason`.
+        return c.json(
+          makeFsErrorWithDetails(
+            FsErrorCode.FILE_TOO_LARGE,
+            'Бинарный файл не читается через HTTP',
+            { maxReadBytes, size: s.size, reason: 'binary' },
+          ),
+          413,
+        );
       }
       const content = await readFile(fullPath, 'utf-8');
       return c.json({ path, content, size: s.size, encoding: 'utf-8' });

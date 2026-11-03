@@ -166,6 +166,55 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ blo
 
 **Ротация мастер-ключа** секретов at-rest (SSH-ключи агентов — ADR-076, внешние доступы — ADR-105, signing-секреты вебхуков — ADR-052): `synth secrets rotate` (`--data-dir`, `--config`, `--old-key`/`--old-key-file`, `--new-key`/`--new-key-file`, `--dry-run`, `--yes`). Без `--yes` (и без `--dry-run`) — отказ; при ключе из env/`config.security.secretKey` его нужно обновить и там (файл игнорируется при старте). Порядок: preflight всех точек (запись, не расшифровываемая ни старым, ни новым ключом, → отказ **до** записи) → перешифровка → перезапись `master.key`.
 
+### Списки: пагинация и сводные DTO (ADR-118 §4)
+
+**Списки отдаются постранично — массив больше не возвращается.** Контракт один на все списки
+(`packages/core/src/server/pagination.ts` — общие `parseBoundedInt`/`paginate`): ответ —
+объект `{<items>, total, offset, limit, next_offset}`; `limit` — целое (нечисловое/дробное/
+отрицательное → `400 VALIDATION_ERROR`, значение выше потолка **обрезается** — мягкая граница),
+`offset` — смещение от начала, `next_offset` — курсор следующей страницы (`null` — последняя).
+**Исключение — `GET /api/v2/models`:** параметры разбирает сам роут, границы **жёсткие** —
+`limit` вне `1…500` (включая `0`) или нецелое, `offset` нецелое/отрицательное → `400`
+(значение выше 500 отвергается, а не обрезается).
+
+| Эндпоинт | Страница | Курсор |
+|---|---|---|
+| `GET /api/v2/sessions` | `{sessions, total, offset, limit, next_offset}` | `offset` |
+| `GET /api/v2/sessions/:id/messages` | `{messages, session_id, has_more, next_before}` | `before` (исключающий, по `seq`) |
+| `GET /api/v2/projects` | `{projects, total, offset, limit, next_offset}` | `offset` |
+| `GET /api/v2/projects/:id/pipelines` | `{pipelines, total, offset, limit, next_offset}` | `offset` |
+| `GET /api/v2/projects/:id/pipelines/:pid/runs` | `{runs, offset, limit, next_offset}` (без `total`) | `offset` |
+| `GET /api/v2/pipelines/instances` | `{instances, offset, limit, next_offset}` (без `total`) | `offset` |
+| `GET /api/v2/models` | `{models, total, offset, limit, next_offset}` | `offset` |
+
+**Списки — сводки, детали — отдельно.** `SessionManager.listSessions` **всегда лёгкий** (метаданные
+без истории): полная история списком не отдаётся (на сотнях сессий это пик heap и OOM на входе) —
+за полной историей только `SessionManager.listSessionsWithMessages` (экспорт/публикация проекта).
+В DTO списка сессий ключа `messages` нет вовсе, `prompt_states` нет; очередь
+(`pending_messages`/`pending_count`), `current_stream`, статус, настройки и счётчики сохраняются.
+Сводка сессии (`GET /sessions/:id`) — тоже без истории. Сводка проекта — без `log`/`plan`
+(ADR-039), сводка пайплайна — без черновика `draft` (признак наличия — `hasDraft`); полные DTO — в
+деталях. `GET /projects/:id/stats` — без `total_messages` (считать не по чему: список лёгкий);
+число сообщений одной сессии — в `GET /sessions/:id/stats`. `GET /api/v2/models` — плоский список
+моделей страницей (не `{groups:[…]}`), `provider` — строка.
+
+**Гибрид: сквозной пагинации нет.** Удалённый список приходит без постраничной выдачи (старый
+сервер отдаёт массив) — при наличии удалённых записей `next_offset` = `null`, а `total` = локальный
+счётчик + удалённые. `limit`/`before` в `GET /:id/messages` пробрасываются удалённому серверу;
+старый сервер их игнорирует и отдаёт всю историю (ограничение гибрида). Спека — [docs/API_V2.md](./docs/API_V2.md) §5.
+
+### Капы чтения файлов и diff (решение владельца, 2026-11-03)
+
+- `GET /api/v2/fs/read` — **cap `storage.maxReadBytes`** (по умолчанию 5 МиБ, env
+  `SYNTH_MAX_READ_BYTES`, резолвер `resolveMaxReadBytes` — приоритет env > config > дефолт): размер
+  известен из `stat` **до** чтения, содержимое в память не читается; файл больше лимита **или**
+  бинарный → `413` `FILE_TOO_LARGE` + `details: {maxReadBytes, size, reason}`. Конфиг — [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Хранилище и рабочий каталог».
+- `GET /api/v2/fs` — `maxDepth` **≤ 3** (`MAX_FS_LIST_DEPTH`), при `maxDepth>0` — бюджет
+  **10 000 записей** (`MAX_FS_LIST_ENTRIES`), по исчерпании обход прекращается, в ответе
+  `truncated: true` (ответ неполный).
+- `GET /api/v2/git/commit` — diff коммита обрезается по **1 МиБ** (`MAX_COMMIT_DIFF_BYTES`), в DTO
+  появляется `diff_truncated: true`.
+
 ### Память (ADR-107)
 
 Память — плагин; ядро даёт порты (`MemoryFactRepository`/`MemoryIndexRepository`), портал (`/api/v2/memory/*`) и сервисы фасада (`facade.memory`/`facade.embed`/`facade.getSettings`/`facade.embedding`/`facade.security`). Устройство подсистемы — [docs/MEMORY.md](./docs/MEMORY.md).
@@ -654,6 +703,8 @@ docker-демон, нет облачного лимита в 30 минут, кэ
 | события / WS / SSE | [ADR-008](./docs/arch_decisions/adr-008-websocket-events.md), [ADR-009](./docs/arch_decisions/adr-009-session-event-bus.md), [ADR-024](./docs/arch_decisions/adr-024-eventhub-transport.md) |
 | проект / сессии / ветвление / merge | [ADR-014](./docs/arch_decisions/adr-014-project-container.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md), [ADR-040](./docs/arch_decisions/adr-040-sessions-without-project.md) |
 | API v2 / Hono | [ADR-017](./docs/arch_decisions/adr-017-api-v2-hono.md), [docs/API_V2.md](./docs/API_V2.md) |
+| пагинация списков / сводные DTO / `listSessions*` | [docs/API_V2.md](./docs/API_V2.md) §5 (сводный блок «Пагинация списков — единый контракт») и §5.5/§5.8/§5.10/§5.34/§5.35, [packages/core/AGENTS.md](./packages/core/AGENTS.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) («Пагинация: список сессий и история ленты», «Пагинация: проекты, пайплайны, прогоны и журнал прогона») |
+| кап чтения файла (`storage.maxReadBytes`) / листинг FS / diff коммита | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Хранилище и рабочий каталог», [docs/API_V2.md](./docs/API_V2.md) §5.12/§5.15 |
 | движки / engine | [ADR-018](./docs/arch_decisions/adr-018-session-engine-selection.md), [ADR-022](./docs/arch_decisions/adr-022-typescript-stack-runner.md). ⚠️ Поле `Session.engine` **удалено** из контракта (публичный OpenAPI/SDK, ответы `GET /sessions*`, `:id/messages`, тела POST/PATCH) — намеренное ломающее изменение; выбор и адаптеры движков — [PROP-050](./docs/arch_decisions/prop-050-external-engines-runner.md) |
 | UI / React / PWA | [ADR-019](./docs/arch_decisions/adr-019-react-spa.md), [ADR-044](./docs/arch_decisions/adr-044-mobile-adaptive-ui-pwa.md), [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) |
 | саб-агенты / контекст | [ADR-026](./docs/arch_decisions/adr-026-subagent-context-modes.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md) |

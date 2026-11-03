@@ -27,6 +27,38 @@ import React from 'react'
 
 const apiMock = vi.hoisted(() => ({
   getModels: vi.fn(),
+  /**
+   * Страница каталога моделей: группы + пагинация (ADR-095, C1).
+   * Мок имитирует сервер: поиск/фильтры применяются к составу страницы,
+   * ответ — `{groups, page:{models,total,offset,limit,next_offset}}`.
+   */
+  getModelGroups: vi.fn(async (query?: { search?: string; provider?: string; enabled?: boolean }) => {
+    const groups = (await apiMock.getModels(query)) as Array<{
+      provider: { name: string }
+      models: Array<{ id: string; name: string; provider: string; enabled: boolean }>
+    }>
+    const search = query?.search?.trim().toLowerCase()
+    const filtered = groups
+      .map((g) => ({
+        ...g,
+        models: g.models.filter((m) => {
+          if (query?.provider && m.provider !== query.provider) return false
+          if (query?.enabled === true && !m.enabled) return false
+          if (!search) return true
+          return (
+            m.name.toLowerCase().includes(search) ||
+            m.id.toLowerCase().includes(search) ||
+            m.provider.toLowerCase().includes(search)
+          )
+        }),
+      }))
+      .filter((g) => g.models.length > 0)
+    const models = filtered.flatMap((g) => g.models)
+    return {
+      groups: filtered,
+      page: { models, total: models.length, offset: 0, limit: 100, next_offset: null },
+    }
+  }),
   getDefaultModel: vi.fn(async (): Promise<{
     defaultModel: { provider: string; model: string } | null
     isOverridden: boolean
@@ -582,6 +614,10 @@ describe('ModelsPanel: глобальный поиск по названию', (
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
     await act(async () => {})
+    // Поиск уходит на сервер с задержкой (debounce 300 мс) — ждём ответа.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    })
   }
 
   beforeEach(() => {
@@ -618,8 +654,8 @@ describe('ModelsPanel: глобальный поиск по названию', (
     expect(container.textContent).toContain('qwen-coder')
     expect(container.textContent).not.toContain('llama-3')
     expect(container.textContent).not.toContain('mistral')
-    // Счётчик в заголовке — «совпало из всего».
-    expect(container.textContent).toContain('1 of 2')
+    // Счётчик в заголовке группы — число моделей в ней (поиск на сервере).
+    expect(container.textContent).toContain('(1 models)')
 
     // Очистка поиска возвращает полный список.
     await typeInto(search, '')

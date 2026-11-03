@@ -19,7 +19,9 @@ import { normalizeLiveToolPart, partText, toLivePart, turnHasContent } from '@/l
 import type { Part, PromptAcceptedResponse } from '@itphx/synth-shared/types'
 import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared/types'
 import { synthApi } from '@/lib/api/synthApi'
+import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
 import type { SessionData } from '@/lib/api/synthApi'
+import type { MessageListResponse } from '@/lib/api/messages'
 import { sessionsApi } from '@/lib/api/sessions'
 import { notifyMessage } from '@/hooks/useNotification'
 import { i18nText } from '@/lib/i18n/text'
@@ -152,8 +154,8 @@ function historyMergeState(sid: string): HistoryMergeState {
 /** Один прогон: загрузка истории + сведение её с живым состоянием. */
 async function fetchHistory(sid: string): Promise<boolean> {
   try {
-    const r = await synthApi.getSessionMessages(sid)
-    applyHistory(sid, r.messages)
+    const r = await synthApi.getSessionMessages(sid, { limit: MESSAGES_PAGE_LIMIT })
+    applyHistoryPage(sid, r)
     return true
   } catch {
     return false
@@ -177,23 +179,21 @@ async function runHistoryMergeLoop(sid: string, state: HistoryMergeState): Promi
 }
 
 /** Свести загруженную историю с живым состоянием стора. */
-function applyHistory(sid: string, messages: MessageData[]): void {
-  mergeServerMessages(sid, messages)
+/**
+ * Применить снимок страницы истории: свести его с живым состоянием сессии.
+ *
+ * Курсор пагинации («Загрузить старые») здесь **не** трогается: снимок
+ * последней страницы не знает про старые страницы, догруженные пользователем,
+ * а его `next_before` указывал бы на уже загруженный диапазон. Курсор живёт в
+ * `historyPageBySession` и обновляется только явной догрузкой старых страниц.
+ */
+export function applyHistoryPage(sid: string, response: MessageListResponse): void {
+  mergeServerMessages(sid, response.messages, {
+    hasMore: response.has_more,
+    nextBefore: response.next_before,
+  })
 }
 
-/**
- * Свести **снимок истории** с живым состоянием сессии (ADR-118 §5).
- *
- * Используется загрузкой сессии (`ChatTab`): снимок сервера — уточнение, а не
- * источник правды о ходе. Прямой `setMessages` затирал живое состояние более
- * старым снимком (переключение сессий во время хода: контент «мелькал» и
- * пропадал до следующего чанка). Здесь:
- *
- * - сообщения с известными id сливаются (`mergeKnownMessage`) — серверные
- *   `null`/`undefined` и **более бедный** снимок не затирают живой текст/части;
- * - новые сообщения добавляются;
- * - границы идущего хода восстанавливаются (идемпотентно).
- */
 /**
  * ADR-118 §1: результат инструмента из **истории** — скрытое `tool`-сообщение
  * (`metadata.tool_chain: true`, в ленте не рисуется) с `tool_call_id`.
@@ -264,7 +264,55 @@ function hydrateHistoricalToolResults(messages: MessageData[]): MessageData[] {
   })
 }
 
-export function mergeServerMessages(sid: string, messages: MessageData[]): void {
+/**
+ * Свести **снимок истории** с живым состоянием сессии (ADR-118 §5).
+ *
+ * Используется загрузкой сессии (`ChatTab`): снимок сервера — уточнение, а не
+ * источник правды о ходе. Прямой `setMessages` затирал живое состояние более
+ * старым снимком (переключение сессий во время хода: контент «мелькал» и
+ * пропадал до следующего чанка). Здесь:
+ *
+ * - сообщения с известными id сливаются (`mergeKnownMessage`) — серверные
+ *   `null`/`undefined` и **более бедный** снимок не затирают живой текст/части;
+ * - новые сообщения добавляются;
+ * - границы идущего хода восстанавливаются (идемпотентно).
+ */
+
+/**
+ * Метаданные страницы истории, если снимок — **страница**, а не вся история.
+ *
+ * `hasMore === true` — снимок покрывает только последнюю страницу: сообщения
+ * старше её нельзя считать удалёнными на сервере (иначе догрузка старых
+ * страниц «съедала» бы их при любом мерже). `hasMore === false` — снимок
+ * авторитетен по всему составу.
+ */
+export interface HistoryPageInfo {
+  /** Есть ли сообщения старше загруженной страницы. */
+  hasMore?: boolean
+  /** Курсор следующей (более старой) страницы — минимальный `seq` страницы. */
+  nextBefore?: number | null
+}
+
+/**
+ * Минимальный `seq` снимка — граница загруженной страницы.
+ *
+ * Сообщения с `seq` меньше границы лежат **за пределами** страницы: снимок
+ * про них ничего не знает, поэтому удалёнными их считать нельзя.
+ */
+function snapshotMinSeq(messages: MessageData[]): number | null {
+  let min: number | null = null
+  for (const m of messages) {
+    if (typeof m.seq !== 'number' || !Number.isFinite(m.seq)) continue
+    if (min === null || m.seq < min) min = m.seq
+  }
+  return min
+}
+
+export function mergeServerMessages(
+  sid: string,
+  messages: MessageData[],
+  page?: HistoryPageInfo,
+): void {
   const chat = useChatStore.getState()
   const current = chat.messagesBySession[sid] || []
   const byId = new Map<string, MessageData>()
@@ -281,6 +329,10 @@ export function mergeServerMessages(sid: string, messages: MessageData[]): void 
   // из снимка пропадает и здесь, иначе лента другого клиента «залипала».
   const serverIds = new Set(messages.map((m) => m.id).filter((id): id is string => !!id))
   const activeTurnId = turnActive ? chat.turnBySession[sid]?.turnId : undefined
+  // Пагинация истории: снимок — только последняя страница → сообщения старше
+  // её границы в снимке не значатся, удалять их нельзя.
+  const preserveOlder = page?.hasMore === true
+  const minSeq = preserveOlder ? snapshotMinSeq(messages) : null
   for (const m of current) {
     if (!m.id) continue
     // ADR-118 §5: сообщение **активного хода** не удаляем по снимку. Шаг уже
@@ -288,9 +340,15 @@ export function mergeServerMessages(sid: string, messages: MessageData[]): void 
     // отставать (троттлинг/гонка) — выпавшее из ленты сообщение шага уносило
     // карточки инструментов и прогресс саб-агентов, хотя ход жив.
     const belongsToActiveTurn = !!activeTurnId && m.turn_id === activeTurnId
+    const outsideLoadedPage =
+      minSeq !== null &&
+      typeof m.seq === 'number' &&
+      Number.isFinite(m.seq) &&
+      m.seq < minSeq
     if (
       !belongsToActiveTurn
       && !serverIds.has(m.id)
+      && !outsideLoadedPage
       && m.ord != null
       && m.status !== 'streaming'
       && !m.steerPending
@@ -350,8 +408,8 @@ async function resyncAfterReconnect(): Promise<void> {
   const activeSessionId = activeTabId.slice('chat-'.length)
   if (!activeSessionId || !known.has(activeSessionId)) return
   try {
-    const r = await synthApi.getSessionMessages(activeSessionId)
-    mergeServerMessages(activeSessionId, r.messages)
+    const r = await synthApi.getSessionMessages(activeSessionId, { limit: MESSAGES_PAGE_LIMIT })
+    applyHistoryPage(activeSessionId, r)
   } catch {
     // история недоступна — оставляем живое состояние ленты
   }
@@ -2526,7 +2584,7 @@ export function createDispatcher(): EventDispatcher {
       case 'session.messages.cleared': {
         void (async () => {
           try {
-            const r = await synthApi.getSessionMessages(sid)
+            const r = await synthApi.getSessionMessages(sid, { limit: MESSAGES_PAGE_LIMIT })
             // Части сообщений, которых нет в новом снимке, больше не нужны
             // (их id уже не отрисуются). Части живого хода (оставшиеся в снимке)
             // не трогаем.
@@ -2551,6 +2609,8 @@ export function createDispatcher(): EventDispatcher {
               })
             }
             useChatStore.getState().setMessages(sid, r.messages)
+            // История очищена — пагинация сбрасывается: старых страниц больше нет.
+            useChatStore.getState().setHistoryPage(sid, { hasMore: false, nextBefore: null })
             useChatStore.getState().clearQueueState(sid)
             useChatStore.getState().setQueueCounts(sid, 0, 0)
           } catch {
@@ -2576,8 +2636,8 @@ export function createDispatcher(): EventDispatcher {
         // Старое ядро не прислало сообщения — перечитываем полную историю.
         void (async () => {
           try {
-            const r = await synthApi.getSessionMessages(sid)
-            mergeServerMessages(sid, r.messages)
+            const r = await synthApi.getSessionMessages(sid, { limit: MESSAGES_PAGE_LIMIT })
+            applyHistoryPage(sid, r)
           } catch {
             // История — уточнение; живое состояние ленты не затираем.
           }
@@ -2703,6 +2763,7 @@ export function createDispatcher(): EventDispatcher {
         if (session.id) {
           useSessionsStore.setState((s) => ({
             sessions: [session, ...s.sessions],
+            total: s.total + 1,
           }))
         }
         break
@@ -2712,6 +2773,7 @@ export function createDispatcher(): EventDispatcher {
         const deletedId = (payload.session_id as string) || sid
         useSessionsStore.setState((s) => ({
           sessions: s.sessions.filter((sess) => sess.id !== deletedId),
+          total: Math.max(0, s.total - 1),
         }))
         useUIStore.getState().closeTab(`chat-${deletedId}`)
         break
@@ -2902,8 +2964,10 @@ export function createDispatcher(): EventDispatcher {
             if (id) chat.updateMessageById(sid, id, { disabled: true })
           }
         } else {
-          synthApi.getSessionMessages(sid).then((r) => {
-            useChatStore.getState().setMessages(sid, r.messages)
+          synthApi.getSessionMessages(sid, { limit: MESSAGES_PAGE_LIMIT }).then((r) => {
+            // Снимок — страница истории: мерж с живым состоянием (не `setMessages`),
+            // иначе догруженные старые страницы ленты терялись бы.
+            applyHistoryPage(sid, r)
           }).catch(() => {})
         }
         break

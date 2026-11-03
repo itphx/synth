@@ -29,6 +29,8 @@ import { buildUsageSegments } from '@/lib/statsSegments'
 import { moveSessionToBackground } from '@/lib/backgroundDetach'
 import { StatsPopoverButton } from './StatsPopoverButton'
 import { synthApi } from '@/lib/api/synthApi'
+import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
+import { applyHistoryPage } from '@/stores/transportStore'
 import { useCallback, useMemo, useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
 
@@ -1235,7 +1237,6 @@ function SessionReferenceCard({
   })
   const currentSessionId = (activeTab?.data?.sessionId as string) || ''
   const openTab = useUIStore((s) => s.openTab)
-  const setMessages = useChatStore((s) => s.setMessages)
 
   const label = (metadata?.label as string) || undefined
   const sourceSessionName = (metadata?.sourceSessionName as string) || undefined
@@ -1265,8 +1266,10 @@ function SessionReferenceCard({
     if (!currentSessionId || !sessionId) return
     try {
       await synthApi.removeSessionReference(currentSessionId, sessionId)
-      const result = await synthApi.getSessionMessages(currentSessionId)
-      setMessages(currentSessionId, result.messages)
+      const result = await synthApi.getSessionMessages(currentSessionId, { limit: MESSAGES_PAGE_LIMIT })
+      // Снимок — страница истории: мерж с живым состоянием (не `setMessages`),
+      // иначе догруженные старые страницы ленты терялись бы.
+      applyHistoryPage(currentSessionId, result)
     } catch {
       // ignore
     }

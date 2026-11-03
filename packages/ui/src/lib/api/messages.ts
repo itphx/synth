@@ -3,9 +3,44 @@
 import type { MessageData } from '@/stores/chatStore'
 import { BASE_URL, fetchJSON } from './base'
 
+/**
+ * Размер страницы истории сообщений, который просит UI.
+ *
+ * Совпадает с серверным дефолтом (`DEFAULT_MESSAGES_LIMIT` в core) — но задаётся
+ * явно: клиент не должен зависеть от серверного дефолта при смене версии.
+ */
+export const MESSAGES_PAGE_LIMIT = 200
+
 export interface MessageListResponse {
   messages: MessageData[]
   session_id: string
+  /**
+   * Есть ли сообщения **старше** загруженной страницы.
+   *
+   * `false` — снимок покрывает всю историю (состав ленты авторитетен:
+   * сообщения, которых в нём нет, удалены на сервере). `true` — снимок —
+   * только последняя страница, и сообщения старше её нельзя считать
+   * удалёнными (иначе догрузка старых страниц «съедала» бы их).
+   */
+  has_more?: boolean
+  /**
+   * Курсор следующей (более старой) страницы — минимальный `seq` текущей
+   * страницы; `null` — более старых сообщений нет.
+   */
+  next_before?: number | null
+}
+
+/**
+ * Параметры страницы истории сообщений (`GET /sessions/:id/messages`).
+ *
+ * Без `before` сервер отдаёт **последнюю** страницу (самые новые), с `before`
+ * — сообщения строго старше курсора (`seq`).
+ */
+export interface MessagePageParams {
+  /** Размер страницы (1..500; по умолчанию на сервере 200). */
+  limit?: number
+  /** Курсор `seq`: вернуть сообщения строго старше указанного. */
+  before?: number
 }
 
 /**
@@ -31,8 +66,24 @@ export interface BatchMessageResult {
  */
 export const messagesApi = {
   // Сообщения (API v2 — путь /messages/:sessionId/:messageId)
-  async getSessionMessages(sessionId: string): Promise<MessageListResponse> {
-    return fetchJSON<MessageListResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages`)
+  /**
+   * Страница истории сессии (`GET /sessions/:id/messages`).
+   *
+   * Без параметров — **последняя** страница (самые новые сообщения);
+   * с `before` — страница строго старше курсора (`seq`). Ответ несёт
+   * `has_more`/`next_before` — по ним UI догружает старые сообщения.
+   */
+  async getSessionMessages(
+    sessionId: string,
+    params?: MessagePageParams,
+  ): Promise<MessageListResponse> {
+    const query = new URLSearchParams()
+    if (params?.limit !== undefined) query.set('limit', String(params.limit))
+    if (params?.before !== undefined) query.set('before', String(params.before))
+    const qs = query.toString()
+    return fetchJSON<MessageListResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`,
+    )
   },
 
   /**

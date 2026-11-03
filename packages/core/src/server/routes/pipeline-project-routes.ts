@@ -52,6 +52,7 @@ import {
   requireScopeOrAdminRole,
 } from '../service-scope.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
+import { paginate, parseBoundedInt } from '../pagination.js';
 
 /**
  * ADR-101 (Э6): HTTP-контур пайплайнов — проектные пайплайны, прогоны,
@@ -346,6 +347,99 @@ const instantiateBodySchema = z.object({
 // ────────────────────────────── Утилиты ──────────────────────────────
 
 /**
+ * Пагинация списка пайплайнов проекта (решение владельца): страница по
+ * умолчанию 100, максимум 500 — как у списка проектов и сессий.
+ */
+const DEFAULT_PIPELINES_LIMIT = 100;
+const MAX_PIPELINES_LIMIT = 500;
+
+/**
+ * Пагинация журнала прогона: страница по умолчанию 200, максимум 500.
+ */
+const DEFAULT_RUN_EVENTS_LIMIT = 200;
+const MAX_RUN_EVENTS_LIMIT = 500;
+
+/**
+ * Курсор журнала прогона.
+ *
+ * Каноническая форма — **порядковый номер события** в журнале прогона (целое,
+ * нумерация с нуля, по порядку добавления): это единственный стабильный
+ * порядок записи журнала (журнал **append-only**, а метки `ts` не уникальны —
+ * несколько событий прогона делят одну миллисекунду, `nowISO()`).
+ *
+ * Для совместимости принимается и **метка времени** (`ts`, ISO-8601): тогда
+ * отбираются события строго старше по времени, а граница страницы
+ * выравнивается по группе событий с общей меткой (события не теряются, но
+ * страница может быть длиннее `events_limit`).
+ */
+type RunEventCursor =
+  | { kind: 'ordinal'; ordinal: number }
+  | { kind: 'timestamp'; ts: string };
+
+/**
+ * Страница журнала прогона (ADR-101).
+ *
+ * Поля `seq`/`ord` у `PipelineRunEventRecord` нет, поэтому номер события
+ * вычисляется **при чтении**: порт отдаёт журнал хронологически (`ts`, при
+ * равных `ts` — порядок добавления; в PostgreSQL это колонка `seq bigserial`,
+ * в файловом и в-памяти реализациях — порядок добавления в журнал), и номер
+ * события — его позиция в этой выборке. Новые события дописываются в конец,
+ * поэтому номера уже выданных событий не меняются.
+ *
+ * Курсор **исключающий**: `events_before` — вернутся события строго с меньшим
+ * номером. Без курсора — последняя (самая новая) страница журнала.
+ */
+function selectRunEventPage(
+  events: PipelineRunEventRecord[],
+  limit: number,
+  cursor: RunEventCursor | undefined,
+): { page: PipelineRunEventRecord[]; hasMore: boolean; nextBefore: number | null } {
+  // Правая граница страницы (exclusive) — индекс в журнале.
+  let end = events.length;
+  if (cursor?.kind === 'ordinal') {
+    end = Math.min(events.length, Math.max(0, cursor.ordinal));
+  } else if (cursor?.kind === 'timestamp') {
+    const cursorMs = Date.parse(cursor.ts);
+    const found = events.findIndex((e) => {
+      const ts = Date.parse(e.ts);
+      return Number.isNaN(ts) ? false : ts >= cursorMs;
+    });
+    end = found === -1 ? events.length : found;
+  }
+  let start = Math.max(0, end - limit);
+  if (cursor?.kind === 'timestamp') {
+    // Выравниваем начало страницы по группе одинаковых `ts` (события не теряются).
+    const headTs = events[start]?.ts;
+    while (start > 0 && events[start - 1]?.ts === headTs) start -= 1;
+  }
+  const page = events.slice(start, end);
+  // Есть ли события старше первого события страницы.
+  const hasMore = start > 0;
+  // Курсор следующей (более старой) страницы — номер самого старого события.
+  return { page, hasMore, nextBefore: hasMore ? start : null };
+}
+
+/**
+ * Разбор курсора журнала (`events_before`).
+ *
+ * Число — порядковый номер события (каноническая форма); иначе — метка
+ * времени (`ts`, ISO-8601). `null` — значение невалидно (400 у вызывающего).
+ */
+function parseRunEventCursor(raw: string | undefined): RunEventCursor | null | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const value = raw.trim();
+  // Числовое значение — порядковый номер события (дробное/отрицательное — отказ).
+  if (/^[+-]?\d+(\.\d+)?$/.test(value)) {
+    const ordinal = Number(value);
+    if (!Number.isInteger(ordinal) || ordinal < 0) return null;
+    return { kind: 'ordinal', ordinal };
+  }
+  // Иначе — метка времени.
+  if (!Number.isFinite(Date.parse(value))) return null;
+  return { kind: 'timestamp', ts: value };
+}
+
+/**
  * Метаданные артефакта из журнала прогона: `run.finished` → `artifacts[]`
  * (ADR-116). `null` — записи нет (MIME неизвестен).
  */
@@ -582,7 +676,14 @@ export function createPipelineProjectRoutes(
     return record;
   };
 
-  /** Краткое представление пайплайна (список). */
+  /**
+   * Краткое представление пайплайна (список **и** деталь).
+   *
+   * Черновик (`draft`) в сводку **не входит** — он тяжёлый (спецификация
+   * целиком) и нужен только в детали `GET /projects/:id/pipelines/:pid`
+   * (и в ответе публикации). Признаки наличия черновика (`hasDraft`,
+   * `draftVersion`) остаются.
+   */
   const pipelineSummary = (record: PipelineRecord) => ({
     id: record.id,
     name: record.name,
@@ -607,19 +708,32 @@ export function createPipelineProjectRoutes(
 
   // ─────────────── Пайплайны проекта ───────────────
 
-  // GET /api/v2/projects/:id/pipelines — пайплайны проекта.
+  // GET /api/v2/projects/:id/pipelines — **страница** пайплайнов проекта.
+  //
+  // Ответ — объект `{pipelines, total, offset, limit, next_offset}`. DTO —
+  // сводка: черновик (`draft`) не отдаётся (он в детали `/:pid`).
   app.get(
     '/projects/:id/pipelines',
     auth.requireAuth,
     projectGuard('read'),
     async (c) => {
+      const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_PIPELINES_LIMIT, MAX_PIPELINES_LIMIT);
+      if (limit === null) {
+        return invalid(c, ['limit: должен быть целым числом'], messages.invalidBody(c));
+      }
+      const offset = parseBoundedInt(c.req.query('offset'), 0, Number.MAX_SAFE_INTEGER);
+      if (offset === null) {
+        return invalid(c, ['offset: должен быть целым числом'], messages.invalidBody(c));
+      }
       const { projectId } = guardedProject(c);
       const records = await deps.pipelines.listPipelines({ scope: 'project', projectId });
+      const { page, total, next_offset } = paginate(records, offset, limit);
       return c.json({
-        pipelines: records.map((record) => ({
-          ...pipelineSummary(record),
-          draft: record.draft,
-        })),
+        pipelines: page.map((record) => pipelineSummary(record)),
+        total,
+        offset,
+        limit,
+        next_offset,
       });
     },
   );
@@ -797,7 +911,11 @@ export function createPipelineProjectRoutes(
 
   // ─────────────── Прогоны ───────────────
 
-  // GET /api/v2/projects/:id/pipelines/:pid/runs — прогоны пайплайна.
+  // GET /api/v2/projects/:id/pipelines/:pid/runs — страница прогонов пайплайна.
+  //
+  // Ответ — `{runs, offset, limit, next_offset}`. `total` **не отдаётся**: порт
+  // прогонов отдаёт ограниченную выборку (потолок 1000) и не знает точного
+  // числа записей — курсором служит `next_offset`.
   app.get(
     '/projects/:id/pipelines/:pid/runs',
     auth.requireAuth,
@@ -819,13 +937,20 @@ export function createPipelineProjectRoutes(
       const rawLimit = c.req.query('limit');
       const parsedLimit = rawLimit === undefined ? Number.NaN : Number.parseInt(rawLimit, 10);
       const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 1000) : 100;
+      const rawOffset = c.req.query('offset');
+      const parsedOffset = rawOffset === undefined ? Number.NaN : Number.parseInt(rawOffset, 10);
+      const offset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
 
+      // Порт отдаёт «последние N» без смещения — добираем страницу сами:
+      // забираем `offset + limit + 1` записей (потолок порта — 1000) и режем.
       const runs = await deps.runs.listRuns({
         pipelineId: record.id,
         ...(status ? { status } : {}),
-        limit,
+        limit: Math.min(offset + limit + 1, 1000),
       });
-      return c.json({ runs });
+      const page = runs.slice(offset, offset + limit);
+      const nextOffset = runs.length > offset + limit ? offset + limit : null;
+      return c.json({ runs: page, offset, limit, next_offset: nextOffset });
     },
   );
 
@@ -930,14 +1055,44 @@ export function createPipelineProjectRoutes(
     },
   );
 
-  // GET /api/v2/pipeline-runs/:runId — прогон + журнал.
+  // GET /api/v2/pipeline-runs/:runId — прогон + страница журнала.
+  //
+  // Ответ — `{run, events, events_has_more, events_next_before}`. Журнал
+  // постраничный: `events_limit` (дефолт 200, максимум 500) и `events_before` —
+  // исключающий курсор по **порядковому номеру события** в журнале прогона
+  // (для совместимости принимается и метка времени `ts`; см.
+  // `selectRunEventPage`/`parseRunEventCursor`). Без параметров — последняя
+  // (самая новая) страница журнала.
   app.get('/pipeline-runs/:runId', auth.requireAuth, runGuard('read'), async (c) => {
     const run = guardedRun(c);
-    const rawLimit = c.req.query('limit');
-    const parsedLimit = rawLimit === undefined ? Number.NaN : Number.parseInt(rawLimit, 10);
-    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 1000) : 200;
-    const events = await deps.runs.listEvents(run.id, { limit });
-    return c.json({ run, events });
+    const limit = parseBoundedInt(
+      c.req.query('events_limit'),
+      DEFAULT_RUN_EVENTS_LIMIT,
+      MAX_RUN_EVENTS_LIMIT,
+    );
+    if (limit === null) {
+      return invalid(c, ['events_limit: должен быть целым числом'], messages.invalidBody(c));
+    }
+    const rawBefore = c.req.query('events_before');
+    const cursor = parseRunEventCursor(rawBefore);
+    if (cursor === null) {
+      return invalid(
+        c,
+        ['events_before: должен быть неотрицательным целым числом (номер события) или меткой времени'],
+        messages.invalidBody(c),
+      );
+    }
+    // Журнал прогона — append-only и небольшой: порт отдаёт «последние N», а
+    // для курсора нужны более старые события — читаем журнал целиком и режем
+    // страницу сами (см. `selectRunEventPage`).
+    const events = await deps.runs.listEvents(run.id);
+    const { page, hasMore, nextBefore } = selectRunEventPage(events, limit, cursor);
+    return c.json({
+      run,
+      events: page,
+      events_has_more: hasMore,
+      events_next_before: nextBefore,
+    });
   });
 
   // GET /api/v2/pipeline-runs/:runId/artifacts/:name — байты артефакта прогона.

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { synthApi } from '@/lib/api/synthApi'
-import { useChatStore } from '@/stores/chatStore'
+import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
+import { applyHistoryPage } from '@/stores/transportStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { PanelTab } from './PanelTab'
 
@@ -35,7 +36,6 @@ export function ReferencesTab({ sessionId }: ReferencesTabProps) {
   const [refs, setRefs] = useState<Reference[]>([])
   const [sessionNames, setSessionNames] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
-  const setMessages = useChatStore(s => s.setMessages)
   const openTab = useUIStore((s) => s.openTab)
 
   const load = async () => {
@@ -82,8 +82,10 @@ export function ReferencesTab({ sessionId }: ReferencesTabProps) {
     e.stopPropagation()
     await synthApi.removeSessionReference(sessionId, refSessionId)
     setRefs((prev) => prev.filter((r) => r.sessionId !== refSessionId))
-    const msgResult = await synthApi.getSessionMessages(sessionId)
-    setMessages(sessionId, msgResult.messages)
+    const msgResult = await synthApi.getSessionMessages(sessionId, { limit: MESSAGES_PAGE_LIMIT })
+    // Снимок — страница истории: мерж с живым состоянием (не `setMessages`),
+    // иначе догруженные старые страницы ленты терялись бы.
+    applyHistoryPage(sessionId, msgResult)
   }
 
   if (loading) {

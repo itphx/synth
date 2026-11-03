@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   getAnalyticsExport: vi.fn(),
   getUsers: vi.fn(),
   getProjects: vi.fn(),
+  getProjectsPage: vi.fn(),
   getAgents: vi.fn(),
   getModels: vi.fn(),
   notify: vi.fn(),
@@ -142,6 +143,14 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.getUsers.mockResolvedValue({ users: [] })
   mocks.getProjects.mockResolvedValue([])
+  // Список проектов пагинирован: страница повторяет данные списка.
+  mocks.getProjectsPage.mockImplementation(async () => ({
+    projects: (await mocks.getProjects()) as never[],
+    total: 0,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+  }))
   mocks.getAgents.mockResolvedValue({ agents: [], default_agent: null })
   mocks.getModels.mockResolvedValue([])
   mocks.getAnalyticsUsage.mockResolvedValue(usageReport())

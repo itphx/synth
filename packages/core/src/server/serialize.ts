@@ -20,10 +20,13 @@ export interface SerializeSessionOptions {
    */
   redactSecrets?: boolean;
   /**
-   * Включать историю сообщений (`messages`). Список сессий (`GET /sessions`)
-   * историю не отправляет — иначе ответ растёт линейно с числом сообщений
-   * всех сессий (на больших инстансах это переполняет heap). `false` →
-   * `messages: []`; `pending_messages` (очередь) остаются.
+   * Включать историю сообщений (`messages`). Список сессий (`GET /sessions`) и
+   * точечные ответы (`GET /sessions/:id`, PATCH и пр.) историю **не** отдают —
+   * иначе ответ растёт линейно с числом сообщений всех сессий (на больших
+   * инстансах это переполняет heap). `false` → ключ `messages` **не включается
+   * вовсе** (не пустой массив); `pending_messages` (очередь) остаются.
+   *
+   * Полная история — только в `GET /api/v2/sessions/:id/messages`.
    *
    * @default true
    */
@@ -122,9 +125,11 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
           branch: session.worktree.branch,
         }
       : null,
-    messages: opts?.includeMessages === false
-      ? []
-      : session.messages.map((m, i) => serializeMessage(m, i, messageOpts)),
+    // ADR-089/решение владельца: полная история списком/деталкой **не
+    // отдаётся** — ключ `messages` не включается вовсе (не `[]`).
+    ...(opts?.includeMessages === false
+      ? {}
+      : { messages: session.messages.map((m, i) => serializeMessage(m, i, messageOpts)) }),
     pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i, messageOpts)),
     pending_count: session.pendingMessages.length,
     current_stream: session.currentStream
@@ -330,7 +335,17 @@ export function serializeEnqueuedMessage(msg: Message): EnqueuedMessageSnapshot 
   };
 }
 
-export function serializeProject(project: Project) {
+/**
+ * Сводка проекта для **списка** (`GET /api/v2/projects`).
+ *
+ * Тяжёлые поля не входят: `log` (журнал проекта — растёт с числом записей) и
+ * `plan` (структура плана ADR-039). Остальные поля детали сохраняются: список
+ * должен отдавать всё, что нужно дереву проектов (имя, иконка, цвет, участники,
+ * workspace, репозитории, MCP-скоуп, политика памяти, статус-сообщения).
+ *
+ * Полный DTO (`log`/`plan`) — в детали `GET /api/v2/projects/:id`.
+ */
+export function serializeProjectSummary(project: Project) {
   return {
     id: project.id,
     origin: 'local' as const,
@@ -354,6 +369,20 @@ export function serializeProject(project: Project) {
       type: sm.type,
       timestamp: sm.timestamp,
     })),
+    created_at: project.createdAt,
+    updated_at: project.updatedAt,
+  };
+}
+
+/**
+ * Полный DTO проекта (деталь `GET /api/v2/projects/:id`, ответы мутаций,
+ * портативный архив проекта).
+ *
+ * = сводка списка + тяжёлые поля `log` (журнал проекта) и `plan` (ADR-039).
+ */
+export function serializeProject(project: Project) {
+  return {
+    ...serializeProjectSummary(project),
     log: (project.log || []).map((e) => ({
       id: e.id,
       text: e.text,
@@ -362,7 +391,5 @@ export function serializeProject(project: Project) {
       author: e.author || null,
     })),
     plan: project.plan ?? null,
-    created_at: project.createdAt,
-    updated_at: project.updatedAt,
   };
 }

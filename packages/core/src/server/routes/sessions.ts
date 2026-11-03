@@ -9,6 +9,9 @@ import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, enqueueSteerMessage, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
 import type { SerializeSessionOptions } from '../serialize.js';
+// Общие помощники постраничной выдачи (`limit`/`offset`/`next_offset`) — один
+// контракт на все списки с пагинацией (сессии, проекты, пайплайны).
+import { paginate, parseBoundedInt } from '../pagination.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
@@ -61,6 +64,52 @@ import type { ApprovalRegistry } from '../../engine/permission/approval.js';
 import type { AuthorityPrincipal } from '@itphx/synth-shared';
 
 const LOCAL_USER_ID = 'local';
+
+/**
+ * Размер страницы списка сессий по умолчанию и максимум.
+ * Решение владельца: список сессий **всегда пагинируется** — полный список
+ * (тем более с историей) на больших инстансах давал пик heap и OOM.
+ */
+export const DEFAULT_SESSIONS_LIMIT = 100;
+export const MAX_SESSIONS_LIMIT = 500;
+
+/**
+ * Размер страницы истории сообщений по умолчанию и максимум
+ * (`GET /api/v2/sessions/:id/messages`).
+ */
+export const DEFAULT_MESSAGES_LIMIT = 200;
+export const MAX_MESSAGES_LIMIT = 500;
+
+/**
+ * Страница истории сообщений (`GET /api/v2/sessions/:id/messages`).
+ *
+ * История упорядочена по возрастанию (`seq` позиционный). Без `before`
+ * отдаётся **последняя** страница (самые новые), с `before` — страница
+ * строго старше курсора.
+ *
+ * - `has_more` — есть ещё более старые сообщения за пределами страницы;
+ * - `next_before` — курсор следующей (более старой) страницы: минимальный
+ *   `seq` текущей страницы; `null`, если более старых сообщений нет.
+ * - `startIndex` — позиция первой записи страницы в **полной** истории
+ *   (нужно для `index` в DTO — клиент склеивает страницы).
+ */
+function selectMessagePage(
+  messages: Message[],
+  limit: number,
+  before: number | undefined,
+): { page: Message[]; hasMore: boolean; nextBefore: number | null; startIndex: number } {
+  const seqOf = (m: Message): number =>
+    typeof m.seq === 'number' && Number.isFinite(m.seq) ? m.seq : 0;
+  // Без курсора — вся история; с курсором — только строго более старые.
+  const eligible = before === undefined
+    ? messages
+    : messages.filter((m) => seqOf(m) < before);
+  const startIndex = Math.max(0, eligible.length - limit);
+  const page = eligible.slice(startIndex);
+  const hasMore = page.length < eligible.length;
+  const minSeq = page.length > 0 ? Math.min(...page.map(seqOf)) : null;
+  return { page, hasMore, nextBefore: hasMore ? minSeq : null, startIndex };
+}
 
 /** Дефолтные лимиты заметок сессии (совпадают со схемой `stickyNotesLimitsSchema`). */
 const DEFAULT_STICKY_NOTE_LIMITS: StickyNotesLimits = { maxCount: 50, maxChars: 2000 };
@@ -644,11 +693,18 @@ export function createSessionRoutes(
 
   /**
    * Ответ списка `GET /`: история сообщений и состояние промпта не отдаются.
-   * `listSessions(..., { light: true })` грузит метаданные без истории, а этот
-   * DTO не добавляет её обратно. Очередь (`pending_messages`/`pending_count`),
+   * `listSessions(...)` **всегда лёгкий** (метаданные без истории), а этот DTO
+   * не добавляет её обратно. Очередь (`pending_messages`/`pending_count`),
    * статус, `current_stream`, настройки и счётчики сохраняются.
    */
   const LIST_SERIALIZE_OPTS = { includeMessages: false, includePromptStates: false } as const;
+
+  /**
+   * Точечный ответ сессии (`GET /:id`, PATCH, create, clear, fork): та же
+   * сводка, что и в списке, но без `prompt_states` — история в DTO не нужна
+   * (её отдаёт `GET /:id/messages`).
+   */
+  const SUMMARY_SERIALIZE_OPTS = { includeMessages: false } as const;
 
   /**
    * Локальная фильтрация списка по project_id. remote-ref (`remote:<uuid>`)
@@ -657,8 +713,32 @@ export function createSessionRoutes(
   const filterByProject = (items: Session[], projectId?: string): Session[] =>
     projectId && !isRemoteRef(projectId) ? items.filter((s) => s.projectId === projectId) : items;
 
+  /**
+   * Страница списка сессий: `{sessions, total, offset, limit, next_offset}`.
+   *
+   * - `total` — число видимых сессий (после фильтра видимости и `project_id`);
+   * - `next_offset` — курсор следующей страницы (`null`, если страница последняя).
+   */
+  const listPage = <T>(
+    sessions: T[],
+    total: number,
+    offset: number,
+    limit: number,
+    nextOffset: number | null,
+  ) => ({ sessions, total, offset, limit, next_offset: nextOffset });
+
   app.get('/', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const projectId = c.req.query('project_id') || undefined;
+    // Пагинация списка (решение владельца): страница по умолчанию 100, максимум
+    // 500. Нечисловой/отрицательный `limit`/`offset` → 400 (не молча правим).
+    const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_SESSIONS_LIMIT, MAX_SESSIONS_LIMIT);
+    if (limit === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'limit должен быть целым числом' } }, 400);
+    }
+    const offset = parseBoundedInt(c.req.query('offset'), 0, Number.MAX_SAFE_INTEGER);
+    if (offset === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'offset должен быть целым числом' } }, 400);
+    }
     const userId = await resolveUserId(c);
     // ADR-089: видимость списка. elevated (ADMIN/LEAD) — все сессии; иначе свои
     // личные + сессии проектов-участий (командная видимость).
@@ -668,9 +748,9 @@ export function createSessionRoutes(
       : (await opts.resolveMemberProjectIds?.(c, userId)) ?? [];
     let sessions: Session[];
     if (elevated) {
-      // `light: true` — метаданные без истории: список не должен загружать
-      // `messages` всех сессий (ADR-089; на больших инстансах это OOM).
-      sessions = await sessionManager.listSessions({}, { light: true });
+      // Список **всегда лёгкий** (метаданные без истории): список не должен
+      // загружать `messages` всех сессий (на больших инстансах это OOM).
+      sessions = await sessionManager.listSessions({});
     } else {
       // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) трактуется
       // как локальный — иначе такие сессии выпадают из списка `local`.
@@ -678,12 +758,23 @@ export function createSessionRoutes(
         ? [...(await opts.localOwnerResolver.resolveLocalOwnerIds())]
         : undefined;
       sessions = memberProjectIds.length > 0
-        ? await sessionManager.listSessions({ userId, projectIds: memberProjectIds, ownerIds }, { light: true })
-        : await sessionManager.listSessions({ userId, ownerIds }, { light: true });
+        ? await sessionManager.listSessions({ userId, projectIds: memberProjectIds, ownerIds })
+        : await sessionManager.listSessions({ userId, ownerIds });
     }
 
+    // Видимость уже применена менеджером; дальше — фильтр проекта и страница.
+    const visible = filterByProject(sessions, projectId);
+    // Общий помощник постраничной выдачи: пустая страница (offset за концом)
+    // даёт `next_offset = null` — иначе курсор не двигался бы.
+    const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
+    // Локальные сериализуем в DTO ДО объединения с remote — иначе в merged-список
+    // попадут сырые Session (camelCase) рядом с remote-DTO (snake_case).
+    const localDto = await Promise.all(
+      page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
+    );
+
     if (!hasRemoteGetter) {
-      return c.json(await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS))));
+      return c.json(listPage(localDto, total, offset, limit, localNextOffset));
     }
 
     const remoteClient = resolveClient();
@@ -694,29 +785,32 @@ export function createSessionRoutes(
     }
 
     if (!remoteClient) {
-      return c.json(await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS))));
+      return c.json(listPage(localDto, total, offset, limit, localNextOffset));
     }
 
     try {
       if (projectId && isRemoteRef(projectId)) {
-        const remote = (await remoteClient.listSessions(toLocalId(projectId))) as Array<Record<string, unknown>>;
-        return c.json(mergeItems([], remote, { remoteProjectId: projectId }));
+        const remote = await remoteClient.listSessions(toLocalId(projectId));
+        const merged = mergeItems([], remote.sessions, { remoteProjectId: projectId });
+        // Гибрид: удалённый список не пагинируется на стороне клиента —
+        // `next_offset` неизвестен (см. комментарий выше про `RemoteSessionList`).
+        return c.json(listPage(merged, merged.length, offset, limit, null));
       }
-      // Локальные сериализуем в DTO ДО объединения — иначе в merged-список
-      // попадут сырые Session (camelCase) рядом с remote-DTO (snake_case).
-      const localDto = await Promise.all(
-        filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
-      );
-      const remote = (await remoteClient.listSessions(projectId)) as Array<Record<string, unknown>>;
-      return c.json(mergeItems(localDto, remote));
+      const remote = await remoteClient.listSessions(projectId);
+      const merged = mergeItems(localDto, remote.sessions);
+      // Гибрид: удалённая часть приходит **без** пагинации (старый/новый сервер
+      // отдаёт полный список), поэтому сквозная пагинация невозможна —
+      // `next_offset` = null, пока в merged есть удалённые сессии.
+      const nextOffset = remote.sessions.length > 0 ? null : localNextOffset;
+      return c.json(listPage(merged, total + remote.sessions.length, offset, limit, nextOffset));
     } catch (err) {
       // Offline-деградация: сервер недоступен — отдаём локальный мир.
       if (err instanceof RemoteError) {
         console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
-        if (projectId && isRemoteRef(projectId)) return c.json([]);
-        return c.json(
-          await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS))),
-        );
+        if (projectId && isRemoteRef(projectId)) {
+          return c.json(listPage([], 0, offset, limit, null));
+        }
+        return c.json(listPage(localDto, total, offset, limit, localNextOffset));
       }
       throw err;
     }
@@ -794,7 +888,8 @@ export function createSessionRoutes(
     // и `session.created` с 0 подписчиков теряется (backend подписывал клиента раньше).
     await opts.onSessionCreated?.(await resolveUserId(c), session.id);
     eventBus.publish(session.id, 'session.created', serializeSession(session, { agentRegistry }));
-    return c.json(serializeSession(session, { agentRegistry }), 201);
+    // Точечный ответ — сводка без истории (история — в `GET /:id/messages`).
+    return c.json(serializeSession(session, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }), 201);
   });
 
   app.get('/:id', auth.requireAuth, scoped('sessions:read'), async (c) => {
@@ -820,7 +915,8 @@ export function createSessionRoutes(
     const readonlyDenied = serviceProjectProjection(c, session.projectId);
     if (readonlyDenied) return readonlyDenied;
     // ADR-036: реальные значения секретов — только читателю с правом раскрытия.
-    return c.json(await serializeForReader(c, session));
+    // Сводка без истории: полная история — в `GET /:id/messages`.
+    return c.json(await serializeForReader(c, session, undefined, SUMMARY_SERIALIZE_OPTS));
   });
 
   app.patch('/:id', auth.requireAuth, scoped('sessions:prompt'), sessionModeGuard, async (c) => {
@@ -1134,7 +1230,8 @@ export function createSessionRoutes(
     for (const event of worktreeEvents) {
       await publishWorktreeUpdated({ eventBus, sessionStore: sessionManager }, event);
     }
-    return c.json(serializeSession(resultSession, { agentRegistry }));
+    // Точечный ответ — сводка без истории (история — в `GET /:id/messages`).
+    return c.json(serializeSession(resultSession, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }));
   });
 
   app.delete('/:id', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
@@ -1752,17 +1849,41 @@ export function createSessionRoutes(
 
   app.get('/:id/messages', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const id = c.req.param('id');
+    // Пагинация истории: `limit` (по умолчанию 200, максимум 500) и `before` —
+    // исключающий курсор по `seq` (сообщения строго старше указанного).
+    const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_MESSAGES_LIMIT, MAX_MESSAGES_LIMIT);
+    if (limit === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'limit должен быть целым числом' } }, 400);
+    }
+    const beforeRaw = c.req.query('before');
+    let before: number | undefined;
+    if (beforeRaw !== undefined && beforeRaw.trim() !== '') {
+      const parsed = Number(beforeRaw);
+      if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'before должен быть целым неотрицательным числом' } }, 400);
+      }
+      before = parsed;
+    }
     if (hasRemoteGetter && isRemoteRef(id)) {
       const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
       try {
-        const result = (await remoteClient.getSessionMessages(toLocalId(id))) as Record<string, unknown>;
+        // Параметры пагинации пробрасываются в удалённый мир. Ограничение:
+        // старый удалённый сервер их игнорирует и отдаёт **всю** историю —
+        // тогда `has_more`/`next_before` приходят в его формате (или отсутствуют,
+        // и мы достраиваем их дефолтами ниже).
+        const result = (await remoteClient.getSessionMessages(toLocalId(id), { limit, before })) as Record<string, unknown>;
         // session_id в ответе — ссылка на сущность: приводим к remote-ref.
         const out = { ...result };
         if (typeof out.session_id === 'string') out.session_id = toRemoteRef(out.session_id);
-        return c.json(out);
+        return c.json({
+          messages: Array.isArray(out.messages) ? out.messages : [],
+          session_id: out.session_id,
+          has_more: out.has_more === true,
+          next_before: typeof out.next_before === 'number' ? out.next_before : null,
+        });
       } catch (err) {
         const mapped = mapRemoteError(c, err);
         if (mapped) return mapped;
@@ -1778,9 +1899,14 @@ export function createSessionRoutes(
     // ADR-036: тот же носитель секретов, что и в `GET /:id` — право раскрытия
     // то же (решается в одной точке — `resolveCanRevealSecrets`).
     const canReveal = await resolveCanRevealSecrets(c, session);
+    const { page, hasMore, nextBefore, startIndex } = selectMessagePage(session.messages, limit, before);
     return c.json({
-      messages: session.messages.map((m, i) => serializeMessage(m, i, { redactSecrets: !canReveal })),
+      // `index` — позиция в **полной** истории (не в странице): клиент
+      // склеивает страницы по нему.
+      messages: page.map((m, i) => serializeMessage(m, startIndex + i, { redactSecrets: !canReveal })),
       session_id: session.id,
+      has_more: hasMore,
+      next_before: nextBefore,
     });
   });
 
@@ -1832,7 +1958,8 @@ export function createSessionRoutes(
     // перечитывают ленту; очередь сброшена (`pendingMessages = []`).
     eventBus.publish(id, 'session.messages.cleared', { session_id: id });
     publishQueueState(eventBus, id, { pendingCount: 0, steerCount: 0 });
-    return c.json(serializeSession(session, { agentRegistry }));
+    // Точечный ответ — сводка без истории.
+    return c.json(serializeSession(session, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }));
   });
 
   app.post('/:id/abort', auth.requireAuth, async (c) => {
@@ -2222,7 +2349,8 @@ export function createSessionRoutes(
     // См. POST /: подписка EventHub до publish (иначе session.fork.created теряется).
     await opts.onSessionForked?.(await resolveUserId(c), fork.id);
     eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork, { agentRegistry }));
-    return c.json(serializeSession(fork, { agentRegistry }), 201);
+    // Точечный ответ — сводка без истории.
+    return c.json(serializeSession(fork, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }), 201);
   });
 
   // GET /api/v2/sessions/:id/references — список ссылок

@@ -110,7 +110,6 @@ function detail(status: string, runId = 'run1') {
     events: EVENTS.map((event) => ({ ...event, runId })),
   }
 }
-
 async function renderTab(): Promise<HTMLElement> {
   const { container } = await mountTab(TAB)
   return container
@@ -161,10 +160,14 @@ beforeEach(() => {
     pipelinesByProject: {},
     loadedProjects: new Set<string>(),
     loadingProjects: new Set<string>(),
+    loadingMoreProjects: new Set<string>(),
     runsByPipeline: {},
+    runsFilterByPipeline: {},
+    loadingMoreRuns: new Set<string>(),
     runDetail: {},
     runError: {},
     runSignal: {},
+    loadingOlderEvents: new Set<string>(),
     error: null,
   })
 })
@@ -364,5 +367,52 @@ describe('PipelineRunTab — журнал прогона', () => {
     const container = await renderTab()
 
     expect(container.textContent ?? '').toContain('No events yet')
+  })
+})
+
+describe('PipelineRunTab — постраничный журнал (старые события)', () => {
+  it('кнопки «Загрузить старые события» нет, когда все события загружены', async () => {
+    const container = await renderTab()
+
+    expect(container.querySelector('[data-testid="pipeline-load-older-events"]')).toBeNull()
+  })
+
+  it('при events_has_more кнопка догружает старые события в начало журнала', async () => {
+    mocks.getPipelineRun.mockResolvedValueOnce({
+      ...detail('done'),
+      events_has_more: true,
+      events_next_before: '2026-10-20T12:00:01.000Z',
+    })
+    mocks.getPipelineRun.mockResolvedValueOnce({
+      run: detail('done').run,
+      events: [{ runId: 'run1', ts: '2026-10-20T11:59:00.000Z', type: 'run.queued' as const }],
+      events_has_more: false,
+      events_next_before: null,
+    })
+
+    const container = await renderTab()
+
+    const button = container.querySelector('[data-testid="pipeline-load-older-events"]') as HTMLButtonElement
+    expect(button).toBeTruthy()
+    expect(button.textContent ?? '').toContain('Load older events')
+
+    await act(async () => {
+      button.click()
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    // Курсор уходит на сервер как `events_before`.
+    expect(mocks.getPipelineRun).toHaveBeenLastCalledWith('run1', {
+      eventsBefore: '2026-10-20T12:00:01.000Z',
+    })
+    const state = usePipelinesStore.getState()
+    expect(state.runDetail.run1?.events.map((e) => e.type)).toEqual([
+      'run.queued',
+      'run.started',
+      'gate.awaiting',
+    ])
+    // Старых событий больше нет — кнопка исчезла.
+    expect(container.querySelector('[data-testid="pipeline-load-older-events"]')).toBeNull()
   })
 })

@@ -448,7 +448,7 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
 
   let sessionsImported = 0;
   if (includeSessions) {
-    const remoteSessions = (await remoteClient.listSessions(remoteProjectId)) as Array<Record<string, unknown>>;
+    const remoteSessions = (await remoteClient.listSessions(remoteProjectId)).sessions;
     // Backend может не отфильтровать по project_id — фильтруем сами.
     const sessionsForProject = remoteSessions.filter(
       (s) => s.project_id === remoteProjectId || s.projectId === remoteProjectId,

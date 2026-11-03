@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
 const apiMock = vi.hoisted(() => ({
-  getSessions: vi.fn(),
+  getSessionsPage: vi.fn(),
   resumeQueue: vi.fn(),
 }))
 
@@ -22,13 +22,27 @@ function makeSession(overrides: Record<string, unknown>) {
   return {
     id: 'abcdef1234567890',
     status: {},
-    messages: [],
     input_tokens: 0,
     output_tokens: 0,
     project_id: null,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-02T00:00:00.000Z',
     pending_messages: [],
+    ...overrides,
+  }
+}
+
+/** Страница списка сессий (контракт `GET /api/v2/sessions`). */
+function makePage(
+  sessions: ReturnType<typeof makeSession>[],
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    sessions,
+    total: sessions.length,
+    offset: 0,
+    limit: 50,
+    next_offset: null,
     ...overrides,
   }
 }
@@ -57,10 +71,12 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
 }
 
 beforeEach(() => {
-  apiMock.getSessions.mockResolvedValue([
-    makeSession({ id: 'regular-1234567890', messages: [{}, {}], input_tokens: 10, output_tokens: 20 }),
-    makeSession({ id: 'blocked-1234567890', status: { blocked: 'resource-lock' }, pending_messages: [{}] }),
-  ])
+  apiMock.getSessionsPage.mockResolvedValue(
+    makePage([
+      makeSession({ id: 'regular-1234567890', input_tokens: 10, output_tokens: 20 }),
+      makeSession({ id: 'blocked-1234567890', status: { blocked: 'resource-lock' }, pending_messages: [{}] }),
+    ]),
+  )
   apiMock.resumeQueue.mockResolvedValue(undefined)
 })
 
@@ -120,6 +136,64 @@ describe('SessionsPanel — миграция на Settings UI Kit (ADR-072)', ()
 
     expect(apiMock.resumeQueue).toHaveBeenCalledTimes(1)
     expect(apiMock.resumeQueue).toHaveBeenCalledWith('blocked-1234567890')
-    expect(apiMock.getSessions).toHaveBeenCalledTimes(2)
+    expect(apiMock.getSessionsPage).toHaveBeenCalledTimes(2)
+  })
+})
+
+/**
+ * Пагинация списка сессий (ADR-089): список **всегда** пагинирован, а
+ * истории сообщений в нём нет — счётчика сообщений в панели быть не должно.
+ */
+describe('SessionsPanel — пагинация списка сессий', () => {
+  it('счётчика сообщений нет (список не содержит истории)', async () => {
+    apiMock.getSessionsPage.mockResolvedValue(
+      makePage([makeSession({ id: 'regular-1234567890', messages: [{ id: 'm1' }, { id: 'm2' }] })]),
+    )
+
+    const container = await renderPanel()
+
+    expect(container.textContent).not.toContain('messages')
+    expect(container.textContent).not.toContain('message')
+  })
+
+  it('в meta — общее число сессий (total), а не размер страницы', async () => {
+    apiMock.getSessionsPage.mockResolvedValue(
+      makePage([makeSession({ id: 'regular-1234567890' })], { total: 137 }),
+    )
+
+    const container = await renderPanel()
+
+    const meta = container.querySelector('[data-testid="settings-header-meta"]')
+    expect(meta?.textContent).toContain('137 sessions')
+  })
+
+  it('при next_offset кнопка «Показать ещё» догружает следующую страницу', async () => {
+    apiMock.getSessionsPage.mockResolvedValueOnce(
+      makePage([makeSession({ id: 'regular-1234567890' })], { total: 2, next_offset: 1 }),
+    )
+    apiMock.getSessionsPage.mockResolvedValueOnce(
+      makePage([makeSession({ id: 'second-1234567890' })], { total: 2, offset: 1, next_offset: null }),
+    )
+
+    const container = await renderPanel()
+
+    const more = buttonByText(container, 'Show more')
+    expect(more).toBeTruthy()
+
+    await act(async () => {
+      more!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(apiMock.getSessionsPage).toHaveBeenLastCalledWith({ limit: 50, offset: 1 })
+    expect(apiMock.getSessionsPage).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain('second-12345')
+    // Последняя страница — кнопки больше нет.
+    expect(buttonByText(container, 'Show more')).toBeFalsy()
+  })
+
+  it('без next_offset кнопки «Показать ещё» нет', async () => {
+    const container = await renderPanel()
+
+    expect(buttonByText(container, 'Show more')).toBeFalsy()
   })
 })

@@ -397,8 +397,13 @@ export function AnalyticsModal() {
     () => [
       { value: '', label: t('analytics.filter.all') },
       ...models.map((model) => ({ value: model.id, label: model.name || model.id })),
+      // Текущий фильтр виден всегда: каталог постраничный, модель может быть
+      // не на загруженной странице — иначе фильтр молча сбрасывался бы.
+      ...(filters.model && !models.some((model) => model.id === filters.model)
+        ? [{ value: filters.model, label: filters.model }]
+        : []),
     ],
-    [models, t],
+    [models, filters.model, t],
   )
   const agentItems = useMemo(
     () => [

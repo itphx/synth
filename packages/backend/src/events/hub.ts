@@ -49,7 +49,7 @@ export class EventHub {
     }
 
     // Нужны только id сессий владельца — лёгкая выборка (без истории сообщений).
-    const sessions = await this.sessionManager.listSessions({ userId: client.userId }, { light: true });
+    const sessions = await this.sessionManager.listSessions({ userId: client.userId });
     console.log(`[EventHub] Register client: user=${client.username} clients=${arr.length} sessions=${sessions.length}`);
 
     for (const s of sessions) {

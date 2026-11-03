@@ -13,8 +13,26 @@ interface SessionsStore {
   sessions: SessionData[]
   loading: boolean
   error: string | null
+  /**
+   * Всего видимых сессий (после фильтра видимости и `project_id`) — из
+   * `GET /sessions` (`total`). Больше, чем в загруженной странице.
+   */
+  total: number
+  /**
+   * Курсор следующей страницы списка (`offset`); `null` — страница последняя.
+   *
+   * Список сессий **всегда пагинирован** (полный список с историей давал пик
+   * heap), поэтому дерево показывает первую страницу и кнопку «Показать ещё».
+   */
+  nextOffset: number | null
+  /** Идёт ли догрузка следующей страницы (`loadMoreSessions`). */
+  loadingMore: boolean
+  /** Фильтр проекта, под которым загружен список (`null` — без проекта). */
+  listProjectId: string | null
 
   loadSessions: (projectId?: string | null) => Promise<void>
+  /** Догрузить следующую страницу списка сессий (кнопка «Показать ещё»). */
+  loadMoreSessions: () => Promise<void>
   createSession: (data: {
     name?: string
     project_id?: string | null
@@ -45,6 +63,14 @@ interface SessionsStore {
 type SessionPatch = { name?: string; title?: string }
 
 /**
+ * Размер страницы списка сессий.
+ *
+ * Совпадает с серверным дефолтом (`DEFAULT_SESSIONS_LIMIT` в core), но задаётся
+ * явно: клиент не должен зависеть от серверного дефолта при смене версии.
+ */
+export const SESSIONS_PAGE_LIMIT = 100
+
+/**
  * PATCH сессии + единая обработка ошибки (общая часть для renameSession и
  * regenerateSessionTitle): при ошибке — `error` в сторе и `null`.
  */
@@ -68,14 +94,66 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   sessions: [],
   loading: false,
   error: null,
+  total: 0,
+  nextOffset: null,
+  loadingMore: false,
+  listProjectId: null,
 
   loadSessions: async (projectId?) => {
     set({ loading: true, error: null })
     try {
-      const sessions = await synthApi.getSessions(projectId)
-      set({ sessions, loading: false })
+      // Список сессий пагинирован (ADR-089): грузим **первую** страницу.
+      const page = await synthApi.getSessionsPage({
+        project_id: projectId ?? undefined,
+        limit: SESSIONS_PAGE_LIMIT,
+      })
+      set({
+        sessions: page.sessions ?? [],
+        total: typeof page.total === 'number' ? page.total : (page.sessions?.length ?? 0),
+        nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
+        listProjectId: projectId ?? null,
+        loading: false,
+      })
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
+    }
+  },
+
+  /**
+   * Догрузка следующей страницы списка (кнопка «Показать ещё»).
+   *
+   * Страница **дописывается** к уже загруженной: разборы проектов, раскрытые
+   * группы и выбранная сессия не сбрасываются (список в сторе — единственный
+   * источник для дерева).
+   */
+  loadMoreSessions: async () => {
+    const { nextOffset, loadingMore, listProjectId } = get()
+    if (loadingMore || nextOffset === null) return
+    set({ loadingMore: true })
+    try {
+      const page = await synthApi.getSessionsPage({
+        project_id: listProjectId ?? undefined,
+        limit: SESSIONS_PAGE_LIMIT,
+        offset: nextOffset,
+      })
+      const incoming = page.sessions ?? []
+      set((s) => {
+        const seen = new Set(s.sessions.map((sess) => sess.id))
+        const merged = [...s.sessions]
+        for (const sess of incoming) {
+          if (seen.has(sess.id)) continue
+          seen.add(sess.id)
+          merged.push(sess)
+        }
+        return {
+          sessions: merged,
+          total: typeof page.total === 'number' ? page.total : s.total,
+          nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
+          loadingMore: false,
+        }
+      })
+    } catch (e) {
+      set({ error: (e as Error).message, loadingMore: false })
     }
   },
 
@@ -91,7 +169,9 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
       // Ответ API почти всегда несёт origin, но страхуемся на случай отсутствия.
       const normalized = { ...session, origin: session.origin ?? data.origin ?? ('local' as const) }
       if (!isTransportConnected()) {
-        set((s) => ({ sessions: [normalized, ...s.sessions] }))
+        // Новая сессия — **в начало** списка; страницы не сбрасываем
+        // (догруженные страницы остаются в сторе).
+        set((s) => ({ sessions: [normalized, ...s.sessions], total: s.total + 1 }))
       }
       return normalized
     } catch (e) {
@@ -179,7 +259,10 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
     try {
       await synthApi.deleteSession(sessionId)
       if (!isTransportConnected()) {
-        set((s) => ({ sessions: s.sessions.filter((sess) => sess.id !== sessionId) }))
+        set((s) => ({
+          sessions: s.sessions.filter((sess) => sess.id !== sessionId),
+          total: Math.max(0, s.total - 1),
+        }))
       }
 
       const tabId = `chat-${sessionId}`

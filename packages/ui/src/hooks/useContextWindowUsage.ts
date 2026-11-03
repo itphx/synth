@@ -23,6 +23,7 @@ import { useContextWindowPolicy } from '@/lib/api/contextWindowSettings'
 import { useChatStore, type MessageData } from '@/stores/chatStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 
 /** Фолбэк окна модели, если у модели не задан `context_window` (оценка). */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
@@ -107,6 +108,11 @@ function usageTotalTokens(usage: MessageData['usage']): number {
  * Total токенов последнего assistant-сообщения **с usage**.
  * Сообщения без `usage` (фоллбек ошибки, служебные) и отключённые/скрытые
  * пропускаются — иначе индикатор обнулялся в конце такого хода.
+ *
+ * Считается **по последнему ответу**, а не по сумме загруженных сообщений:
+ * при постраничной истории (пагинация `GET /sessions/:id/messages`) лента может
+ * быть неполной, а контекстное окно определяется последним вызовом провайдера —
+ * число остаётся верным независимо от того, сколько страниц загружено.
  */
 export function lastAssistantContextTokens(messages: MessageData[] | undefined): number {
   if (!messages) return 0
@@ -135,6 +141,10 @@ export function useContextWindowUsage(sessionId?: string): ContextWindowUsage {
   const sessions = useSessionsStore((s) => s.sessions)
   const selectedModelName = useProvidersStore((s) => s.selectedModelName)
   const modelId = findModelId(sessions, sessionId, selectedModelName)
+
+  // Каталог моделей постраничный: модель сессии может быть не на загруженной
+  // странице — догружаем её, иначе окно контекста неизвестно (оценка).
+  useEnsureModelsLoaded([modelId])
 
   const windowTokens = useProvidersStore((s) => {
     const model = s.models.find((m) => m.id === modelId || m.name === modelId)

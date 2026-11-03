@@ -34,7 +34,9 @@ const mocks = vi.hoisted(() => ({
   getSessions: vi.fn(),
   getAgents: vi.fn(),
   getProjects: vi.fn(),
+  getProjectsPage: vi.fn(),
   getProjectPipelines: vi.fn(),
+  getProjectPipelinesPage: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
 }))
@@ -106,6 +108,11 @@ function projectPipeline(overrides: Record<string, unknown> = {}) {
     updatedAt: '2026-10-01T00:00:00.000Z',
     ...overrides,
   }
+}
+
+/** Страница пайплайнов проекта — ответ `GET /projects/:id/pipelines`. */
+function pipelinesPage(pipelines: unknown[], nextOffset: number | null = null) {
+  return { pipelines, total: pipelines.length, offset: 0, limit: 100, next_offset: nextOffset }
 }
 
 function schedule(overrides: Partial<Schedule> = {}): Schedule {
@@ -204,7 +211,15 @@ beforeEach(() => {
   mocks.getSessions.mockResolvedValue([SESSION])
   mocks.getAgents.mockResolvedValue({ agents: [AGENT], default_agent: 'assistant' })
   mocks.getProjects.mockResolvedValue([PROJECT])
+  mocks.getProjectsPage.mockResolvedValue({
+    projects: [PROJECT],
+    total: 1,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+  })
   mocks.getProjectPipelines.mockResolvedValue([projectPipeline()])
+  mocks.getProjectPipelinesPage.mockResolvedValue(pipelinesPage([projectPipeline()]))
   mocks.confirm.mockResolvedValue(true)
 
   useSessionsStore.setState({ sessions: [SESSION] as never })
@@ -468,6 +483,7 @@ describe('SchedulerTab — цель `pipeline` (ADR-101)', () => {
       ],
     })
     mocks.getProjectPipelines.mockResolvedValue([])
+    mocks.getProjectPipelinesPage.mockResolvedValue(pipelinesPage([]))
     const container = await renderTab()
 
     await waitFor(() => {
@@ -479,6 +495,13 @@ describe('SchedulerTab — цель `pipeline` (ADR-101)', () => {
 
   it('при смене проекта список пайплайнов перезапрашивается', async () => {
     mocks.getProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
+    mocks.getProjectsPage.mockResolvedValue({
+      projects: [PROJECT, PROJECT_TWO],
+      total: 2,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
     const container = await renderTab()
     await openPipelineEditor(container)
     await waitFor(() => {
@@ -490,20 +513,23 @@ describe('SchedulerTab — цель `pipeline` (ADR-101)', () => {
       'Project One',
     )
     await flush()
-    expect(mocks.getProjectPipelines).toHaveBeenCalledWith('p1')
+    expect(mocks.getProjectPipelinesPage).toHaveBeenCalledWith('p1', { limit: 100 })
 
     await selectOption(
       container.querySelector('[data-testid="scheduler-pipeline-project"]'),
       'Project Two',
     )
     await flush()
-    expect(mocks.getProjectPipelines).toHaveBeenCalledWith('p2')
+    expect(mocks.getProjectPipelinesPage).toHaveBeenCalledWith('p2', { limit: 100 })
   })
 
   it('неопубликованный пайплайн показывает предупреждение, но сохраняется', async () => {
     mocks.getProjectPipelines.mockResolvedValue([
       projectPipeline({ publishedVersion: undefined, hasDraft: true }),
     ])
+    mocks.getProjectPipelinesPage.mockResolvedValue(
+      pipelinesPage([projectPipeline({ publishedVersion: undefined, hasDraft: true })]),
+    )
     const container = await renderTab()
     await openPipelineEditor(container)
     await setName(container, 'Draft pipeline')
@@ -734,7 +760,7 @@ describe('SchedulerTab — deep-link из «Памяти» (ADR-101)', () => {
 
     // Пайплайны проекта подгружены для селекта.
     await waitFor(() => {
-      expect(mocks.getProjectPipelines).toHaveBeenCalledWith('p1')
+      expect(mocks.getProjectPipelinesPage).toHaveBeenCalledWith('p1', { limit: 100 })
     })
     // Deep-link ничего не создаёт.
     expect(mocks.createSchedule).not.toHaveBeenCalled()

@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, resolveExecutionConfig, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, resolveMaxReadBytes, resolveExecutionConfig, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
@@ -218,6 +218,7 @@ program
       // порт собирается по ним (параметр запуска, инвариант 24).
       executionConfig: execution,
       maxUploadBytes: resolveMaxUploadBytes(synth),
+      maxReadBytes: resolveMaxReadBytes(synth),
       uiDistPath: uiPath,
       permissionConfig: synth.permission,
       defaultPlanMode: synth.session?.planMode,
@@ -612,7 +613,7 @@ projectCmd
     const remoteClient = session.getClient();
 
     const localSessions = includeSessions
-      ? await new SessionManager(storage.sessions).listSessions({ projectId: project.id })
+      ? await new SessionManager(storage.sessions).listSessionsWithMessages({ projectId: project.id })
       : [];
 
     console.log(`Publish проекта «${project.name}» → ${session.backendUrl}`);
@@ -1041,6 +1042,9 @@ program
 
         const store = (await buildCliStorage(synth, dataDir)).sessions;
         const manager = new SessionManager(store);
+        // Список сессий — **лёгкий** (без истории): полный список с историями
+        // давал пик heap и OOM на инстансах с сотнями сессий. Число сообщений
+        // в лёгкой выборке недоступно — показываем токены.
         const sessions = await manager.listSessions();
 
         if (sessions.length === 0) {
@@ -1048,14 +1052,14 @@ program
           return;
         }
 
-        console.log(`ID                                    Название                              Сообщений  Последняя активность`);
+        console.log(`ID                                    Название                              Токенов  Последняя активность`);
         console.log('─'.repeat(120));
         for (const s of sessions) {
           const title = (s.title || sm('session.default_title')).substring(0, 38).padEnd(38);
-          const msgCount = String(s.messages.length).padStart(9);
+          const tokens = String(s.totalTokens ?? 0).padStart(7);
           const updated = s.updatedAt?.substring(0, 19) || '-';
           const parent = s.parentId ? ` [fork от ${s.parentId.substring(0, 12)}...]` : '';
-          console.log(`${s.id.padEnd(38)} ${title} ${msgCount}  ${updated}${parent}`);
+          console.log(`${s.id.padEnd(38)} ${title} ${tokens}  ${updated}${parent}`);
         }
       }),
   )

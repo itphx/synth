@@ -33,7 +33,37 @@ export interface RemoteAuthStatus {
   user?: { id: string; username: string; roles: string[] } | null;
 }
 
-/** Плоская запись провайдера с удалённого backend (GET /api/v2/providers). */
+/**
+ * Список сессий удалённого мира (гибрид).
+ *
+ * `paginationSupported: false` — удалённый сервер отдал **массив** (старый
+ * контракт без пагинации): тогда сквозная пагинация списка невозможна,
+ * вызывающий обязан вернуть merged-список без курсора `next_offset`.
+ */
+export interface RemoteSessionList {
+  sessions: Array<Record<string, unknown>>;
+  /** Число сессий на удалённой стороне (для старого формата — длина массива). */
+  total: number;
+  /** Удалённый сервер понимает пагинацию списка. */
+  paginationSupported: boolean;
+}
+
+/**
+ * Список проектов удалённого мира (гибрид).
+ *
+ * `paginationSupported: false` — удалённый сервер отдал **массив** (старый
+ * контракт без пагинации): тогда сквозная пагинация списка невозможна,
+ * вызывающий обязан вернуть merged-список без курсора `next_offset`.
+ */
+export interface RemoteProjectList {
+  projects: Array<Record<string, unknown>>;
+  /** Число проектов на удалённой стороне (для старого формата — длина массива). */
+  total: number;
+  /** Удалённый сервер понимает пагинацию списка. */
+  paginationSupported: boolean;
+}
+
+/** Плохая запись провайдера с удалённого backend (GET /api/v2/providers). */
 export interface RemoteProviderInfo {
   name: string;
   type: string;
@@ -230,15 +260,30 @@ export class RemoteBackendClient {
     return this.request<RemoteAuthStatus>('GET', '/auth/status', undefined, opts);
   }
 
-  /** Модель на удалённом backend (плоская запись из групп /api/v2/models). */
+  /**
+   * Модели на удалённом backend.
+   *
+   * Контракт ответа — **страница** `{models, total, offset, limit, next_offset}`
+   * (ADR-052, пагинация обязательна). Старый сервер отдаёт группы
+   * `{groups: [{models: [...]}]}` — он нормализуется в плоский список
+   * (гибрид может быть подключён к инстансу предыдущей версии).
+   */
   listModels(opts?: RequestOptions): Promise<RemoteModelInfo[]> {
-    return this.request<{ groups?: Array<{ models?: Array<Record<string, unknown>> }> }>(
+    return this.request<{
+      models?: Array<Record<string, unknown>>;
+      groups?: Array<{ models?: Array<Record<string, unknown>> }>;
+    }>(
       'GET',
-      '/api/v2/models',
+      // `limit=500` — максимальная страница: зеркалирование каталога моделей
+      // должно видеть весь каталог, а не первые 100 записей.
+      '/api/v2/models?limit=500',
       undefined,
       opts,
-    ).then((data) =>
-      (data?.groups ?? []).flatMap((g) => g.models ?? []).map((m) => ({
+    ).then((data) => {
+      const flat: Array<Record<string, unknown>> = Array.isArray(data?.models)
+        ? data.models
+        : (data?.groups ?? []).flatMap((g) => g.models ?? []);
+      return flat.map((m) => ({
         id: String(m.id ?? ''),
         name: String(m.name ?? m.id ?? ''),
         provider: String(m.provider ?? ''),
@@ -253,8 +298,8 @@ export class RemoteBackendClient {
         cacheReadPrice: typeof m.cacheReadPrice === 'number' ? m.cacheReadPrice : undefined,
         cacheWritePrice: typeof m.cacheWritePrice === 'number' ? m.cacheWritePrice : undefined,
         currency: asCurrency(m.currency),
-      })).filter((m) => m.id !== ''),
-    );
+      })).filter((m) => m.id !== '');
+    });
   }
 
   /** Провайдеры на удалённом backend (GET /api/v2/providers) — для зеркалирования. */
@@ -279,15 +324,57 @@ export class RemoteBackendClient {
     );
   }
 
-  listProjects(): Promise<unknown[]> {
-    return this.request<unknown[]>('GET', '/api/v2/projects');
+  /**
+   * Список проектов удалённого мира.
+   *
+   * Контракт ответа — объект `{projects, total, offset, limit, next_offset}`
+   * (пагинация списка). Старый сервер отдаёт **массив** — он нормализуется в
+   * `{projects, total, paginationSupported: false}`: пагинация по такому
+   * ответу недоступна, вызывающий обязан учесть это (см. `RemoteProjectList`).
+   */
+  async listProjects(): Promise<RemoteProjectList> {
+    const raw = await this.request<unknown>('GET', '/api/v2/projects');
+    if (Array.isArray(raw)) {
+      const projects = raw as Array<Record<string, unknown>>;
+      return { projects, total: projects.length, paginationSupported: false };
+    }
+    const body = (raw ?? {}) as { projects?: unknown; total?: unknown };
+    const projects = Array.isArray(body.projects)
+      ? (body.projects as Array<Record<string, unknown>>)
+      : [];
+    return {
+      projects,
+      total: typeof body.total === 'number' ? body.total : projects.length,
+      paginationSupported: true,
+    };
   }
 
-  listSessions(projectId?: string): Promise<unknown[]> {
+  /**
+   * Список сессий удалённого мира.
+   *
+   * Контракт ответа — объект `{sessions, total, offset, limit, next_offset}`
+   * (пагинация списка). Старый сервер отдаёт **массив** — он нормализуется в
+   * `{sessions, total, paginationSupported: false}`: пагинация по такому
+   * ответу недоступна, вызывающий обязан учесть это (см. `RemoteSessionList`).
+   */
+  async listSessions(projectId?: string): Promise<RemoteSessionList> {
     const path = projectId
       ? `/api/v2/sessions?project_id=${encodeURIComponent(projectId)}`
       : '/api/v2/sessions';
-    return this.request<unknown[]>('GET', path);
+    const raw = await this.request<unknown>('GET', path);
+    if (Array.isArray(raw)) {
+      const sessions = raw as Array<Record<string, unknown>>;
+      return { sessions, total: sessions.length, paginationSupported: false };
+    }
+    const body = (raw ?? {}) as { sessions?: unknown; total?: unknown };
+    const sessions = Array.isArray(body.sessions)
+      ? (body.sessions as Array<Record<string, unknown>>)
+      : [];
+    return {
+      sessions,
+      total: typeof body.total === 'number' ? body.total : sessions.length,
+      paginationSupported: true,
+    };
   }
 
   getSession(id: string): Promise<unknown> {
@@ -334,8 +421,19 @@ export class RemoteBackendClient {
     return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/summarize`);
   }
 
-  getSessionMessages(id: string): Promise<unknown> {
-    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/messages`);
+  /**
+   * История сообщений удалённой сессии.
+   *
+   * `limit`/`before` — пагинация (курсор по `seq`). Старый сервер их
+   * игнорирует и отдаёт всю историю — это ограничение гибрида (см. комментарий
+   * в `server/routes/sessions.ts`).
+   */
+  getSessionMessages(id: string, params?: { limit?: number; before?: number }): Promise<unknown> {
+    const query: string[] = [];
+    if (params?.limit !== undefined) query.push(`limit=${encodeURIComponent(String(params.limit))}`);
+    if (params?.before !== undefined) query.push(`before=${encodeURIComponent(String(params.before))}`);
+    const suffix = query.length > 0 ? `?${query.join('&')}` : '';
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/messages${suffix}`);
   }
 
   /** Полный экспорт сессии для переноса между мирами (publish/fork). */

@@ -553,7 +553,7 @@ describe('task/tool.ts — фоновый саб-агент (PROP-096)', () => {
       if (e.type === 'session.created') created.push(e.type);
     });
 
-    const sessionsBefore = await sessionManager.listSessions(undefined, { light: true });
+    const sessionsBefore = await sessionManager.listSessions();
 
     // 1. Фон выключен инстансом (`backgroundEnabled: false`).
     const disabled = await taskTool.execute(
@@ -590,7 +590,7 @@ describe('task/tool.ts — фоновый саб-агент (PROP-096)', () => {
     expect(noService.metadata!.i18n).toMatchObject({ key: 'task.background_disabled' });
 
     // Дочерней сессии не появилось — «пустого» ребёнка не осталось.
-    const sessionsAfter = await sessionManager.listSessions(undefined, { light: true });
+    const sessionsAfter = await sessionManager.listSessions();
     expect(sessionsAfter).toHaveLength(sessionsBefore.length);
     expect(sessionsAfter.map((s) => s.id)).toEqual(sessionsBefore.map((s) => s.id));
     expect(created).toHaveLength(0);
@@ -975,7 +975,7 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     const parent = await sessionManager.createSession({ title: 'P' });
     const parentProv = makeNamedProvider('parent-prov', 'parent-model');
     const { route, getProvider, router } = makeModelRouterMock({ providerFor: () => null });
-    const sessionsBefore = await sessionManager.listSessions(undefined, { light: true });
+    const sessionsBefore = await sessionManager.listSessions();
 
     const result = await taskTool.execute(
       {
@@ -1012,7 +1012,7 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     expect(getProvider).not.toHaveBeenCalled();
     expect(route).not.toHaveBeenCalled();
     expect(parentProv.chatAsync).not.toHaveBeenCalled();
-    const sessionsAfter = await sessionManager.listSessions(undefined, { light: true });
+    const sessionsAfter = await sessionManager.listSessions();
     expect(sessionsAfter).toHaveLength(sessionsBefore.length);
   });
 
@@ -1213,7 +1213,7 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     const parentProv = makeNamedProvider('parent-prov', 'parent-model');
     const { route, getProvider, router } = makeModelRouterMock({ providerFor: () => null });
 
-    const sessionsBefore = await sessionManager.listSessions(undefined, { light: true });
+    const sessionsBefore = await sessionManager.listSessions();
 
     const result = await taskTool.execute(
       {
@@ -1243,7 +1243,7 @@ describe('task/tool.ts — выбор модели/провайдера саб-�
     // Прогон не пошёл на родительском провайдере.
     expect(parentProv.chatAsync).not.toHaveBeenCalled();
     // Дочерней сессии не создано.
-    const sessionsAfter = await sessionManager.listSessions(undefined, { light: true });
+    const sessionsAfter = await sessionManager.listSessions();
     expect(sessionsAfter).toHaveLength(sessionsBefore.length);
   });
 

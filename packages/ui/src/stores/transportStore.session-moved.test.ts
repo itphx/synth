@@ -5,6 +5,14 @@ vi.mock('@/lib/api/synthApi', () => ({
   synthApi: {
     getSession: vi.fn().mockResolvedValue({ id: 's1', project_id: 'p1', messages: [] }),
     getProjects: vi.fn().mockResolvedValue([]),
+    // Список проектов пагинирован (ADR-089): стор грузит страницу.
+    getProjectsPage: vi.fn().mockResolvedValue({
+      projects: [],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    }),
   },
 }))
 vi.mock('@/hooks/useNotification', () => ({

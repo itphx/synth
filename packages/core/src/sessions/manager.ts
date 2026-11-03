@@ -313,40 +313,87 @@ export class SessionManager {
     this._options.hooks?.emitAsync('session_end', { sessionId });
   }
 
+  /**
+   * Список сессий — **всегда лёгкий** (метаданные без истории, ADR-096).
+   *
+   * Полная история списком **не отдаётся**: `GET /api/v2/sessions` для
+   * ADMIN/LEAD грузил все сессии со всей историей → пик heap и OOM на входе
+   * (решение владельца: полный список не отдаём, только постранично и без
+   * истории). Очередь (`pendingMessages`) при этом сохраняется — она мала и
+   * нужна recovery/автозапуску.
+   *
+   * За полной историей — только экспорт/публикация проекта:
+   * {@link SessionManager.listSessionsWithMessages}.
+   */
   async listSessions(
     filter?: { projectId?: string; userId?: string; projectIds?: string[]; ownerIds?: string[] },
-    options?: { includeArchived?: boolean; light?: boolean },
+    options?: { includeArchived?: boolean },
   ): Promise<Session[]> {
-    // ADR-089: `projectIds` — командная видимость (свои + сессии проектов-участий),
-    // `userId` — только свои. Оба заданы — `projectIds` приоритетнее (он шире).
-    // `ownerIds` — доп. id владельца (standalone: legacy-UUID профиля `local`,
-    // нормализованный при чтении, ADR-089).
-    // `light` — метаданные без истории (`SessionRepository.listLight`): вызывающие,
-    // которым нужны только id/статус/projectId/settings и т.п. Лёгкая выборка
-    // получается целиком (без фильтра) и «свои/проектные» проекции считаются в
-    // памяти — семантика идентична `listForUser`/`listForUserScope`, но без
-    // загрузки `messages`/`checkpoints`.
-    const light = options?.light === true;
-    let sessions: Session[];
-    if (filter?.projectIds) {
-      sessions = light
-        ? filterByUserScope(await this.store.listLight(), filter.userId ?? '', filter.projectIds, filter.ownerIds ?? [])
-        : await this.store.listForUserScope(filter.userId ?? '', filter.projectIds, filter.ownerIds);
-    } else if (filter?.userId) {
-      sessions = light
-        ? filterByUser(await this.store.listLight(), filter.userId, filter.ownerIds ?? [])
-        : await this.store.listForUser(filter.userId, filter.ownerIds);
-    } else {
-      sessions = light ? await this.store.listLight(filter) : await this.store.list(filter);
-    }
+    const sessions = await this._listLight(filter);
     // ADR-089: архивированные сессии скрыты из списков по умолчанию (доступ — getSession по id).
     if (options?.includeArchived) return sessions;
     return sessions.filter((s) => !s.archivedAt);
   }
 
+  /**
+   * Список сессий **с историей** (`messages`/`checkpoints`) — только для
+   * экспорта/публикации/переноса проекта (ADR-091 §6, ADR-042).
+   *
+   * Вызывающий обязан понимать цену вызова: выборка тянет полные истории всех
+   * подходящих сессий. Для обычных списков (UI, метрики, recovery, события
+   * проекта) используется {@link SessionManager.listSessions} — он всегда лёгкий.
+   */
+  async listSessionsWithMessages(
+    filter?: { projectId?: string; userId?: string; projectIds?: string[]; ownerIds?: string[] },
+    options?: { includeArchived?: boolean },
+  ): Promise<Session[]> {
+    const sessions = await this._listFull(filter);
+    if (options?.includeArchived) return sessions;
+    return sessions.filter((s) => !s.archivedAt);
+  }
+
+  /**
+   * Лёгкая выборка (метаданные без истории): «свои/проектные» проекции
+   * считаются в памяти — семантика идентична `listForUser`/`listForUserScope`,
+   * но без загрузки `messages`/`checkpoints`.
+   */
+  private async _listLight(
+    filter?: { projectId?: string; userId?: string; projectIds?: string[]; ownerIds?: string[] },
+  ): Promise<Session[]> {
+    // ADR-089: `projectIds` — командная видимость (свои + сессии проектов-участий),
+    // `userId` — только свои. Оба заданы — `projectIds` приоритетнее (он шире).
+    // `ownerIds` — доп. id владельца (standalone: legacy-UUID профиля `local`,
+    // нормализованный при чтении, ADR-089).
+    if (filter?.projectIds) {
+      return filterByUserScope(
+        await this.store.listLight(),
+        filter.userId ?? '',
+        filter.projectIds,
+        filter.ownerIds ?? [],
+      );
+    }
+    if (filter?.userId) {
+      return filterByUser(await this.store.listLight(), filter.userId, filter.ownerIds ?? []);
+    }
+    return this.store.listLight(filter);
+  }
+
+  /** Полная выборка (с историей) — только для экспорта/публикации. */
+  private async _listFull(
+    filter?: { projectId?: string; userId?: string; projectIds?: string[]; ownerIds?: string[] },
+  ): Promise<Session[]> {
+    if (filter?.projectIds) {
+      return this.store.listForUserScope(filter.userId ?? '', filter.projectIds, filter.ownerIds);
+    }
+    if (filter?.userId) {
+      return this.store.listForUser(filter.userId, filter.ownerIds);
+    }
+    return this.store.list(filter);
+  }
+
   async listActiveSessions(options?: { includeArchived?: boolean }): Promise<Session[]> {
     // Лёгкая выборка: нужны только `status.blocked`/`currentStream` (без истории).
-    const sessions = await this.listSessions(undefined, { ...options, light: true });
+    const sessions = await this.listSessions(undefined, { ...options });
     return sessions.filter((s) => s.status.blocked || s.currentStream);
   }
 
@@ -376,7 +423,7 @@ export class SessionManager {
   async archiveExpired(now: Date = new Date()): Promise<string[]> {
     // Лёгкая выборка: нужны только `expiresAt`/`archivedAt`; архивация подгружает
     // сессию целиком (`archiveSession` → `store.load`), поэтому история не теряется.
-    const sessions = await this.listSessions(undefined, { includeArchived: true, light: true });
+    const sessions = await this.listSessions(undefined, { includeArchived: true });
     const archived: string[] = [];
     for (const session of sessions) {
       if (!session.expiresAt || session.archivedAt) continue;
@@ -432,7 +479,7 @@ export class SessionManager {
   async cleanupStaleLocks(timeoutMinutes = 15): Promise<string[]> {
     // ADR-089: архивированные сессии тоже могут держать устаревший lock — проходим все.
     // Лёгкая выборка: нужен только `status.blocked`/`blockedAt`.
-    const sessions = await this.listSessions(undefined, { includeArchived: true, light: true });
+    const sessions = await this.listSessions(undefined, { includeArchived: true });
     const stale: string[] = [];
     const now = new Date();
 
@@ -476,7 +523,7 @@ export class SessionManager {
     resumeMessage?: Message;
     pendingLeft: number;
   }>> {
-    const sessions = await this.listSessions(undefined, { includeArchived: true, light: true });
+    const sessions = await this.listSessions(undefined, { includeArchived: true });
     const recovered: Array<{
       sessionId: string;
       turnId?: string;

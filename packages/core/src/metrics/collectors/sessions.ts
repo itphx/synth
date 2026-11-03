@@ -2,10 +2,11 @@
  * ADR-094: фоновые gauge сессий/очереди.
  *
  * `synth_sessions_active` — число неархивных сессий; `synth_queue_pending` —
- * сумма `pendingMessages`. `listLight()` по контракту порта очищает
- * `pendingMessages`, поэтому для суммы нужен полный список: у файлового
- * backend стоимость та же (JSON читается целиком), у БД — цена осознанно
- * отложена до появления отдельного агрегатного запроса (см. отчёт).
+ * сумма `pendingMessages`. Список сессий **всегда лёгкий** (`messages`/
+ * `checkpoints` вырезаны), но очередь (`pendingMessages`/`steerInbox`)
+ * по контракту порта **сохраняется** — её и считаем (у файлового backend
+ * стоимость чтения та же, у БД — цена осознанно отложена до появления
+ * отдельного агрегатного запроса, см. отчёт).
  * Интервал — 15 c, таймер `unref`, ошибки не пробрасываются.
  */
 import type { SessionManager } from '../../sessions/manager.js';
@@ -36,7 +37,7 @@ export function startSessionMetrics(
   const collect = async (): Promise<void> => {
     if (stopped) return;
     try {
-      const sessions = await sessionManager.listSessions(undefined, { light: false });
+      const sessions = await sessionManager.listSessions();
       let pending = 0;
       let active = 0;
       for (const session of sessions) {

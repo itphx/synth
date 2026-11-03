@@ -50,6 +50,9 @@ export interface PipelineProvenance {
 /**
  * Пайплайн проекта — краткое представление (`GET .../pipelines` и
  * `GET .../pipelines/:pid`): метаданные + черновик спецификации.
+ *
+ * В **сводке списка** (`GET .../pipelines`) черновика (`draft`) нет — он тяжёлый
+ * и нужен только в детали `GET .../pipelines/:pid`.
  */
 export interface ProjectPipeline {
   id: string
@@ -68,7 +71,7 @@ export interface ProjectPipeline {
   installedBy?: PipelineProvenance
   createdAt: string
   updatedAt: string
-  /** Черновик спецификации (может отсутствовать). */
+  /** Черновик спецификации (только в детали `/:pid`). */
   draft?: PipelineSpec
 }
 
@@ -123,6 +126,48 @@ export interface PipelineRunEvent {
 export interface PipelineRunDetail {
   run: PipelineRunRecord
   events: PipelineRunEvent[]
+  /** Есть ли более старые события журнала (журнал постраничный). */
+  events_has_more?: boolean
+  /**
+   * Курсор следующей (более старой) страницы журнала — метка времени
+   * (`ts`) самого старого события текущей страницы. `null` — старых событий нет.
+   */
+  events_next_before?: string | null
+}
+
+/** Параметры страницы пайплайнов проекта (`GET /projects/:id/pipelines`). */
+export interface ProjectPipelinesParams {
+  /** Размер страницы (сервер: по умолчанию 100, максимум 500). */
+  limit?: number
+  /** Смещение страницы. */
+  offset?: number
+}
+
+/**
+ * Страница пайплайнов проекта (`GET /api/v2/projects/:id/pipelines`).
+ *
+ * Элементы — сводки: черновика (`draft`) в них нет (деталь — `/:pid`).
+ */
+export interface ProjectPipelinesPage {
+  pipelines: ProjectPipeline[]
+  /** Всего пайплайнов проекта. */
+  total: number
+  offset: number
+  limit: number
+  next_offset: number | null
+}
+
+/**
+ * Страница прогонов пайплайна (`GET .../pipelines/:pid/runs`).
+ *
+ * `total` сервер **не отдаёт** (порт отдаёт ограниченную выборку) — курсором
+ * служит `next_offset`.
+ */
+export interface PipelineRunsPage {
+  runs: PipelineRunRecord[]
+  offset: number
+  limit: number
+  next_offset: number | null
 }
 
 /** Шаблон инстанса — источник для инстанцирования в проект. */
@@ -191,6 +236,8 @@ export interface PipelineTemplateInstantiateBody {
 export interface PipelineRunsFilter {
   status?: PipelineRunStatus
   limit?: number
+  /** Смещение страницы (курсор `next_offset` предыдущей страницы). */
+  offset?: number
 }
 
 // ─────────────── Домен ───────────────
@@ -198,15 +245,71 @@ export interface PipelineRunsFilter {
 /** Кодирование id проекта/пайплайна/прогона в путь. */
 const enc = (value: string): string => encodeURIComponent(value)
 
+/** Одна страница пайплайнов проекта (`GET /projects/:id/pipelines`). */
+async function fetchProjectPipelinesPage(
+  projectId: string,
+  params?: ProjectPipelinesParams,
+): Promise<ProjectPipelinesPage> {
+  const query = new URLSearchParams()
+  if (params?.limit !== undefined) query.set('limit', String(params.limit))
+  if (params?.offset !== undefined) query.set('offset', String(params.offset))
+  const qs = query.toString()
+  return fetchJSON<ProjectPipelinesPage>(
+    `${BASE_URL}/projects/${enc(projectId)}/pipelines${qs ? `?${qs}` : ''}`,
+  )
+}
+
+/** Одна страница прогонов пайплайна (`GET .../pipelines/:pid/runs`). */
+async function fetchPipelineRunsPage(
+  projectId: string,
+  pipelineId: string,
+  filter?: PipelineRunsFilter,
+): Promise<PipelineRunsPage> {
+  const params = new URLSearchParams()
+  if (filter?.status) params.set('status', filter.status)
+  if (filter?.limit !== undefined) params.set('limit', String(filter.limit))
+  if (filter?.offset !== undefined) params.set('offset', String(filter.offset))
+  const query = params.toString()
+  return fetchJSON<PipelineRunsPage>(
+    `${BASE_URL}/projects/${enc(projectId)}/pipelines/${enc(pipelineId)}/runs${query ? `?${query}` : ''}`,
+  )
+}
+
 export const pipelineProjectApi = {
   // ─────────────── Пайплайны проекта ───────────────
 
-  /** GET /projects/:id/pipelines — пайплайны проекта. */
-  async getProjectPipelines(projectId: string): Promise<ProjectPipeline[]> {
-    const response = await fetchJSON<{ pipelines?: ProjectPipeline[] }>(
-      `${BASE_URL}/projects/${enc(projectId)}/pipelines`,
-    )
-    return response.pipelines ?? []
+  /**
+   * GET /projects/:id/pipelines — **страница** пайплайнов проекта.
+   *
+   * Ответ — `{pipelines, total, offset, limit, next_offset}`; элементы — сводки
+   * (черновика `draft` в них нет — он в детали `/:pid`).
+   */
+  async getProjectPipelinesPage(
+    projectId: string,
+    params?: ProjectPipelinesParams,
+  ): Promise<ProjectPipelinesPage> {
+    return fetchProjectPipelinesPage(projectId, params)
+  },
+
+  /**
+   * GET /projects/:id/pipelines — список пайплайнов **целиком** (обёртка над
+   * страницей: страницы обходятся подряд). Для потребителей, которым нужен
+   * массив, а не страница (селекты, разделы памяти).
+   */
+  async getProjectPipelines(projectId: string, params?: ProjectPipelinesParams): Promise<ProjectPipeline[]> {
+    const pipelines: ProjectPipeline[] = []
+    let offset = params?.offset
+    for (let page = 0; page < 50; page++) {
+      const result = await fetchProjectPipelinesPage(projectId, {
+        ...params,
+        ...(offset !== undefined ? { offset } : {}),
+      })
+      pipelines.push(...(result.pipelines ?? []))
+      const next = result.next_offset
+      if (typeof next !== 'number') break
+      offset = next
+    }
+    return pipelines
   },
 
   /** POST /projects/:id/pipelines — создать пайплайн (черновик). */
@@ -259,20 +362,27 @@ export const pipelineProjectApi = {
 
   // ─────────────── Прогоны ───────────────
 
-  /** GET /projects/:id/pipelines/:pid/runs — прогоны пайплайна. */
+  /**
+   * GET /projects/:id/pipelines/:pid/runs — **страница** прогонов пайплайна.
+   *
+   * Ответ — `{runs, offset, limit, next_offset}` (`total` сервер не отдаёт).
+   */
+  async listPipelineRunsPage(
+    projectId: string,
+    pipelineId: string,
+    filter?: PipelineRunsFilter,
+  ): Promise<PipelineRunsPage> {
+    return fetchPipelineRunsPage(projectId, pipelineId, filter)
+  },
+
+  /** GET /projects/:id/pipelines/:pid/runs — прогоны одной страницы (массив). */
   async listPipelineRuns(
     projectId: string,
     pipelineId: string,
     filter?: PipelineRunsFilter,
   ): Promise<PipelineRunRecord[]> {
-    const params = new URLSearchParams()
-    if (filter?.status) params.set('status', filter.status)
-    if (filter?.limit) params.set('limit', String(filter.limit))
-    const query = params.toString()
-    const response = await fetchJSON<{ runs?: PipelineRunRecord[] }>(
-      `${BASE_URL}/projects/${enc(projectId)}/pipelines/${enc(pipelineId)}/runs${query ? `?${query}` : ''}`,
-    )
-    return response.runs ?? []
+    const page = await fetchPipelineRunsPage(projectId, pipelineId, filter)
+    return page.runs ?? []
   },
 
   /** POST /projects/:id/pipelines/:pid/runs — запустить прогон (идёт в фоне). */
@@ -288,10 +398,21 @@ export const pipelineProjectApi = {
     return response.run
   },
 
-  /** GET /pipeline-runs/:runId — прогон и журнал событий. */
-  async getPipelineRun(runId: string, opts?: { limit?: number }): Promise<PipelineRunDetail> {
+  /**
+   * GET /pipeline-runs/:runId — прогон и **страница** журнала.
+   *
+   * Журнал постраничный: `eventsLimit` → `events_limit` (дефолт 200, максимум
+   * 500), `eventsBefore` → `events_before` (исключающий курсор по `ts`).
+   * Ответ — `{run, events, events_has_more, events_next_before}`; без курсора
+   * приходит последняя (самая новая) страница журнала.
+   */
+  async getPipelineRun(
+    runId: string,
+    opts?: { eventsLimit?: number; eventsBefore?: string },
+  ): Promise<PipelineRunDetail> {
     const params = new URLSearchParams()
-    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.eventsLimit !== undefined) params.set('events_limit', String(opts.eventsLimit))
+    if (opts?.eventsBefore) params.set('events_before', opts.eventsBefore)
     const query = params.toString()
     return fetchJSON<PipelineRunDetail>(
       `${BASE_URL}/pipeline-runs/${enc(runId)}${query ? `?${query}` : ''}`,

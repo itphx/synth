@@ -48,7 +48,11 @@ vi.mock('@/lib/api/synthApi', () => ({
     }),
     getSession: vi.fn().mockResolvedValue({ id: 'parent', messages: [] }),
     getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
+    // Список сессий пагинирован (ADR-089): стор грузит первую страницу.
     getSessions: vi.fn().mockResolvedValue([]),
+    getSessionsPage: vi.fn().mockResolvedValue({
+      sessions: [], total: 0, offset: 0, limit: 100, next_offset: null,
+    }),
     getStickyNotes: vi.fn().mockResolvedValue({ notes: [] }),
     enqueueMessage: vi.fn().mockResolvedValue(undefined),
     stopGeneration: vi.fn().mockResolvedValue(undefined),
@@ -276,13 +280,13 @@ describe('transportStore.restart: принудительный перезапу�
     await waitConnected(client, 'sse')
     // Первое успешное подключение — ресинк не нужен.
     client.callbacks.onConnect?.()
-    expect(synthApi.getSessions).not.toHaveBeenCalled()
+    expect(synthApi.getSessionsPage).not.toHaveBeenCalled()
 
     // Обрыв и восстановление в рамках того же клиента (TransportClient сам
     // переподключается через backoff — здесь эмулируем успешный onConnect).
     client.callbacks.onDisconnect?.('SSE error')
     client.callbacks.onConnect?.()
 
-    await vi.waitFor(() => expect(synthApi.getSessions).toHaveBeenCalled())
+    await vi.waitFor(() => expect(synthApi.getSessionsPage).toHaveBeenCalled())
   })
 })

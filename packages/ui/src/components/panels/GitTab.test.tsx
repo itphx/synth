@@ -37,6 +37,7 @@ vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   getProjects: vi.fn(),
+  getProjectsPage: vi.fn(),
   getProject: vi.fn(),
   listSshKeys: vi.fn(),
   scanGitRepos: vi.fn(),
@@ -115,6 +116,14 @@ async function renderGitTab(): Promise<HTMLElement> {
 
 beforeEach(() => {
   mocks.getProjects.mockResolvedValue([PROJECT])
+  // Список проектов пагинирован: страница повторяет данные списка.
+  mocks.getProjectsPage.mockImplementation(async () => ({
+    projects: (await mocks.getProjects()) as never[],
+    total: 0,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+  }))
   mocks.getProject.mockResolvedValue(PROJECT)
   mocks.listSshKeys.mockResolvedValue([
     { id: 'k1', name: 'deploy-key', type: 'user', agentIds: [], createdAt: '' },
@@ -158,6 +167,14 @@ describe('GitTab — реестр репозиториев (ADR-076)', () => {
 
   it('не показывает удалённую запись при пустом реестре', async () => {
     mocks.getProjects.mockResolvedValue([{ ...PROJECT, repos: [] }])
+    // Список проектов пагинирован: страница повторяет данные списка.
+    mocks.getProjectsPage.mockImplementation(async () => ({
+      projects: (await mocks.getProjects()) as never[],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    }))
     useProjectsStore.setState({ projects: [{ ...PROJECT, repos: [] }] as never })
 
     const container = await renderGitTab()
@@ -300,6 +317,14 @@ describe('GitTab — индикация, отмена и защита от дв�
   it('fetch: спиннер в строке репозитория и блокировка остальных сетевых действий', async () => {
     const second = { ...REPO, id: 'r2', path: 'vendor/two', name: 'VendorTwo' }
     mocks.getProjects.mockResolvedValue([{ ...PROJECT, repos: [REPO, second] }])
+    // Список проектов пагинирован: страница повторяет данные списка.
+    mocks.getProjectsPage.mockImplementation(async () => ({
+      projects: (await mocks.getProjects()) as never[],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    }))
     useProjectsStore.setState({ projects: [{ ...PROJECT, repos: [REPO, second] }] as never })
 
     let finishFetch: (value: unknown) => void = () => {}

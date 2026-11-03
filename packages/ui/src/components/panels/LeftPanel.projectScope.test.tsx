@@ -36,6 +36,7 @@ const storage = vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   getProjects: vi.fn(),
+  getProjectsPage: vi.fn(),
   getProject: vi.fn(),
   getSessions: vi.fn(),
   listSshKeys: vi.fn(),
@@ -114,6 +115,14 @@ async function renderScope(tab: 'files' | 'git'): Promise<HTMLElement> {
 beforeEach(() => {
   storage.clear()
   mocks.getProjects.mockResolvedValue([P1, P2])
+  // Список проектов пагинирован: страница повторяет данные списка.
+  mocks.getProjectsPage.mockImplementation(async () => ({
+    projects: (await mocks.getProjects()) as never[],
+    total: 0,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+  }))
   mocks.getProject.mockResolvedValue(P1)
   mocks.getSessions.mockResolvedValue([SESSION_S1])
   mocks.listSshKeys.mockResolvedValue([])
@@ -253,6 +262,14 @@ describe('LeftPanel — контекст-ориентированный пока
       error: null,
     })
     mocks.getProjects.mockResolvedValue([P1, { ...P2, workspace: '' }])
+    // Список проектов пагинирован: страница повторяет данные списка.
+    mocks.getProjectsPage.mockImplementation(async () => ({
+      projects: (await mocks.getProjects()) as never[],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    }))
     useUIStore.setState({
       centerTabs: [{ id: 'f1', type: 'file-viewer', title: 'a', data: { projectId: 'p2', filePath: 'beta.txt' } }],
       activeCenterTabId: 'f1',
@@ -270,6 +287,14 @@ describe('LeftPanel — контекст-ориентированный пока
 
   it('единственный проект с workspace → нет обёртки «Другие проекты»', async () => {
     mocks.getProjects.mockResolvedValue([P1])
+    // Список проектов пагинирован: страница повторяет данные списка.
+    mocks.getProjectsPage.mockImplementation(async () => ({
+      projects: (await mocks.getProjects()) as never[],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    }))
     useProjectsStore.setState({ projects: [P1] as never, loading: false, error: null })
     const container = await renderScope('files')
     const text = container.textContent ?? ''

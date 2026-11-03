@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
@@ -33,6 +33,8 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
   const runError = usePipelinesStore((s) => s.runError)
   const runSignal = usePipelinesStore((s) => s.runSignal)
   const loadRun = usePipelinesStore((s) => s.loadRun)
+  const loadOlderRunEvents = usePipelinesStore((s) => s.loadOlderRunEvents)
+  const loadingOlderEvents = usePipelinesStore((s) => s.loadingOlderEvents)
 
   const project = useMemo(
     () => projects.find((p) => p.id === projectId),
@@ -50,6 +52,13 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
 
   const [busy, setBusy] = useState(false)
   const [comment, setComment] = useState('')
+
+  /** Контейнер журнала — его скролл сохраняется при догрузке старых событий. */
+  const journalRef = useRef<HTMLDivElement>(null)
+  /** Высота журнала до догрузки старых событий (для компенсации скролла). */
+  const pendingScrollRestore = useRef<number | null>(null)
+  /** Идёт ли догрузка старых событий журнала. */
+  const loadingOlder = loadingOlderEvents.has(runId)
 
   const reload = useCallback(async () => {
     if (!runId) return
@@ -70,6 +79,27 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
     if (signal === 0) return
     void reload()
   }, [signal, reload])
+
+  /**
+   * Догрузка более старых событий журнала («Загрузить старые события»).
+   *
+   * Старые события добавляются **в начало** журнала, поэтому позиция скролла
+   * сохраняется: после рендера компенсируем разницу высоты контейнера.
+   */
+  const handleLoadOlder = useCallback(async () => {
+    const element = journalRef.current
+    pendingScrollRestore.current = element ? element.scrollHeight : null
+    await loadOlderRunEvents(runId)
+  }, [runId, loadOlderRunEvents])
+
+  useLayoutEffect(() => {
+    if (loadingOlder) return
+    const element = journalRef.current
+    const previousHeight = pendingScrollRestore.current
+    if (!element || previousHeight === null) return
+    pendingScrollRestore.current = null
+    element.scrollTop += element.scrollHeight - previousHeight
+  }, [events.length, loadingOlder])
 
   const resume = async (approved: boolean) => {
     setBusy(true)
@@ -219,10 +249,24 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
         )}
       </header>
 
-      <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-4">
+      <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-4" ref={journalRef}>
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {t('pipelines.journal')}
         </h2>
+        {/* Журнал постраничный: кнопка появляется, пока есть более старые
+            события (`events_has_more`). Догруженные события встают в начало. */}
+        {detail?.events_has_more && (
+          <button
+            type="button"
+            data-testid="pipeline-load-older-events"
+            onClick={() => { void handleLoadOlder() }}
+            disabled={loadingOlder}
+            className="flex w-fit items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground transition-colors disabled:opacity-60"
+          >
+            {loadingOlder && <Icon name="loader-2" className="h-3 w-3 animate-spin" />}
+            {loadingOlder ? t('pipelines.loadingOlderEvents') : t('pipelines.loadOlderEvents')}
+          </button>
+        )}
         {events.length === 0 ? (
           <p className="text-xs text-muted-foreground">{t('pipelines.emptyJournal')}</p>
         ) : (

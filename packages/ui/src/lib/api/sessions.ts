@@ -42,8 +42,11 @@ export interface SessionData {
   /** Канонический ключ цвета сессии (PROJECT_COLOR_KEYS) или null. */
   color?: string | null
   /**
-   * История сообщений. `GET /sessions` (список) историю **не отдаёт** —
-   * массив пуст/поля может не быть; полная история приходит в `GET /sessions/:id`.
+   * История сообщений.
+   *
+   * Список (`GET /sessions`) и детальная сводка (`GET /sessions/:id`) историю
+   * **не отдают** — поле может отсутствовать. Полная история приходит в
+   * `GET /sessions/:id/messages` (постранично).
    */
   messages?: Array<{
     index: number
@@ -171,15 +174,65 @@ export interface PromptInfoResponse {
   toolsDetail?: PromptToolDetail[]
 }
 
+/**
+ * Страница списка сессий (`GET /api/v2/sessions`).
+ *
+ * Список **всегда пагинирован** и не содержит истории сообщений: полный
+ * список сессий со всей историей давал пик heap и OOM на входе (ADR-089).
+ * Полная история — `GET /api/v2/sessions/:id/messages`.
+ */
+export interface SessionListResponse {
+  /** Сессии текущей страницы. */
+  sessions: SessionData[]
+  /** Всего видимых сессий (после фильтра видимости и `project_id`). */
+  total: number
+  /** Смещение текущей страницы. */
+  offset: number
+  /** Размер страницы (по умолчанию 100, максимум 500). */
+  limit: number
+  /** Курсор следующей страницы; `null` — страница последняя. */
+  next_offset: number | null
+}
+
+/** Параметры страницы списка сессий. */
+export interface SessionListParams {
+  project_id?: string | null
+  /** Размер страницы (1..500). */
+  limit?: number
+  /** Смещение страницы (с 0). */
+  offset?: number
+}
+
 export const sessionsApi = {
   // Сессии
-  async getSessions(projectId?: string | null): Promise<SessionData[]> {
-    const params = new URLSearchParams()
-    if (projectId !== undefined && projectId !== null) {
-      params.set('project_id', projectId)
+  /**
+   * Страница списка сессий (`GET /api/v2/sessions`).
+   *
+   * Ответ — объект `{sessions, total, offset, limit, next_offset}`, а не массив.
+   */
+  async getSessionsPage(params?: SessionListParams): Promise<SessionListResponse> {
+    const query = new URLSearchParams()
+    if (params?.project_id !== undefined && params?.project_id !== null) {
+      query.set('project_id', params.project_id)
     }
-    const qs = params.toString()
-    return fetchJSON<SessionData[]>(`${BASE_URL}/sessions${qs ? `?${qs}` : ''}`)
+    if (params?.limit !== undefined) query.set('limit', String(params.limit))
+    if (params?.offset !== undefined) query.set('offset', String(params.offset))
+    const qs = query.toString()
+    return fetchJSON<SessionListResponse>(`${BASE_URL}/sessions${qs ? `?${qs}` : ''}`)
+  },
+
+  /**
+   * Сессии страницы — **только массив** текущей страницы.
+   *
+   * Совместимость с потребителями, которым нужен простой список (панели,
+   * селекторы): берём `sessions` из ответа-объекта. Полная страница с
+   * метаданными пагинации — {@link sessionsApi.getSessionsPage}.
+   */
+  async getSessions(projectId?: string | null): Promise<SessionData[]> {
+    const page = await sessionsApi.getSessionsPage(
+      projectId !== undefined && projectId !== null ? { project_id: projectId } : undefined,
+    )
+    return page.sessions ?? []
   },
 
   async getSession(sessionId: string): Promise<SessionData> {

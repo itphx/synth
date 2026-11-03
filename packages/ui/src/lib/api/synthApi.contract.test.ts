@@ -32,24 +32,24 @@ const EXPECTED_API_METHODS = [
   'getDictionary', 'getDoctor', 'getEgressLog', 'getEgressPolicy', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
   'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus', 'getInstanceCapabilities',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
-  'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMemoryFact', 'getMemoryGraph', 'getMemoryStatus', 'getMessageDebug', 'getMigrations', 'getModels',
+  'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMemoryFact', 'getMemoryGraph', 'getMemoryStatus', 'getMessageDebug', 'getMigrations', 'getModelGroups', 'getModels', 'getModelsPage',
   'getMyIdentities', 'getOAuthCredential', 'getOAuthCredentials', 'getOptimization', 'getPack', 'getPacks', 'getPendingRestore',
   'getPipelineInstances', 'getPipelineRun', 'getPipelineTemplates', 'getPipelines', 'getPlugin', 'getPluginsSettings',
   'getProcess', 'getProcessLogs',
   'getProject', 'getProjectMcp',
-  'getProjectPipeline', 'getProjectPipelines', 'getProjectSkills', 'getProjectStats', 'getProjects', 'getProtectedPaths',
+  'getProjectPipeline', 'getProjectPipelines', 'getProjectPipelinesPage', 'getProjectSkills', 'getProjectStats', 'getProjects', 'getProjectsPage', 'getProtectedPaths',
   'getProviders', 'getProxy', 'getRestartStatus', 'getScheduleJobs', 'getSchedules', 'getSecurityAudit', 'getSecuritySettings',
   'getServiceKey', 'getServiceKeyScopes', 'getServiceKeys', 'getSession',
   'getSessionInstructions', 'getSessionMcpEffective', 'getSessionMemory', 'getSessionMessage', 'getSessionMessages', 'getSessionPrompt',
   'getSessionReferences', 'getSessionSecrets', 'getSessionSkills', 'getSessionSkillsEffective',
-  'getSessionStats', 'getSessions', 'getSkill', 'getSkillBundle',
+  'getSessionStats', 'getSessions', 'getSessionsPage', 'getSkill', 'getSkillBundle',
   'getSkillBundles', 'getSkillFile', 'getSkillFiles', 'getSkills',
   'getSkillsSettings', 'getStatus', 'getStickyNotes', 'getTls', 'getToolsDisabledInfo', 'getToolsPolicyInfo',
   'getUser', 'getUsers', 'getWebhookDeliveries', 'getWebhookSubscription',
   'getWebhookSubscriptions', 'getWorkspacePolicy', 'getWorkspaceRoot', 'getWorkspaceSetting',
   'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate', 'list', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings',
   'listMemoryFacts', 'listMemoryIndexes',
-  'listPipelineRuns', 'listPluginAudit', 'listPlugins', 'listProcesses', 'listSshKeys', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
+  'listPipelineRuns', 'listPipelineRunsPage', 'listPluginAudit', 'listPlugins', 'listProcesses', 'listSshKeys', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'patchSessionMode', 'permissionReply', 'pinMessage', 'probeMcpServer', 'pruneWorktrees', 'publishProject', 'publishProjectPipeline',
   'putSkillFile', 'readFile', 'rebuildMemoryIndex', 'refreshOAuthCredential', 'regenerateWebhookSecret', 'registerGitRepo',
   'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin', 'removeProcess', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'removeWorktree', 'reorderQueue', 'reset', 'resetAgentsLimits', 'resetAttachmentsSettings', 'resetContextFile',
@@ -75,7 +75,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (359)', () => {
+  it('набор методов совпадает с зафиксированным (363)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

@@ -8,7 +8,7 @@ import type {
   PipelineInstanceRecord,
   PipelineRepository,
 } from '../../storage/ports/pipeline-repository.js';
-import { resolvePipelineInstanceLimit } from '../../storage/ports/pipeline-repository.js';
+import { resolvePipelineInstanceLimit, PIPELINE_INSTANCE_MAX_LIMIT } from '../../storage/ports/pipeline-repository.js';
 import { requireScopeOrAdminRole } from '../service-scope.js';
 import type { ScopeGuardFactory } from '../service-scope.js';
 
@@ -101,8 +101,12 @@ export function createPipelinesRoutes(
     return c.json({ pipelines: definitions });
   });
 
-  // GET /api/v2/pipelines/instances — экземпляры (фильтры `pipelineId`/`status`/`limit`).
+  // GET /api/v2/pipelines/instances — экземпляры (фильтры `pipelineId`/`status`/`limit`/`offset`).
   // Регистрируется **до** `/:id` — статический сегмент важнее параметрического.
+  //
+  // Ответ — `{instances, offset, limit, next_offset}`. `total` **не отдаётся**:
+  // порт отдаёт ограниченную выборку (потолок 1000) и не знает точного числа
+  // записей — курсором служит `next_offset`.
   app.get('/instances', readGuard, async (c) => {
     const status = parseStatus(c.req.query('status'));
     if (!status.ok) {
@@ -110,12 +114,20 @@ export function createPipelinesRoutes(
     }
     const limitRaw = c.req.query('limit');
     const parsedLimit = limitRaw === undefined ? Number.NaN : Number.parseInt(limitRaw, 10);
+    const limit = resolvePipelineInstanceLimit(Number.isFinite(parsedLimit) ? parsedLimit : undefined);
+    const offsetRaw = c.req.query('offset');
+    const parsedOffset = offsetRaw === undefined ? Number.NaN : Number.parseInt(offsetRaw, 10);
+    const offset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
+    // Порт отдаёт «последние N» без смещения — добираем страницу сами:
+    // забираем `offset + limit + 1` записей (потолок порта — 1000) и режем.
     const instances = await deps.pipelines.listInstances({
       ...(c.req.query('pipelineId') ? { pipelineId: c.req.query('pipelineId')! } : {}),
       ...(status.value ? { status: status.value } : {}),
-      limit: resolvePipelineInstanceLimit(Number.isFinite(parsedLimit) ? parsedLimit : undefined),
+      limit: Math.min(offset + limit + 1, PIPELINE_INSTANCE_MAX_LIMIT),
     });
-    return c.json({ instances });
+    const page = instances.slice(offset, offset + limit);
+    const nextOffset = instances.length > offset + limit ? offset + limit : null;
+    return c.json({ instances: page, offset, limit, next_offset: nextOffset });
   });
 
   // GET /api/v2/pipelines/instances/:instanceId — конкретный экземпляр.

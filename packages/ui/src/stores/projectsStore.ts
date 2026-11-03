@@ -9,8 +9,23 @@ interface ProjectsStore {
   projects: ProjectData[]
   loading: boolean
   error: string | null
+  /**
+   * Всего проектов (из `total` страницы) — больше, чем в загруженной странице.
+   */
+  total: number
+  /**
+   * Курсор следующей страницы списка (`offset`); `null` — страница последняя.
+   *
+   * Список проектов **всегда пагинирован** (`GET /projects` → страница), в дереве
+   * показывается первая страница и кнопка «Показать ещё».
+   */
+  nextOffset: number | null
+  /** Идёт ли догрузка следующей страницы (`loadMoreProjects`). */
+  loadingMore: boolean
 
   loadProjects: () => Promise<void>
+  /** Догрузить следующую страницу списка проектов (кнопка «Показать ещё»). */
+  loadMoreProjects: () => Promise<void>
   getProject: (id: string) => Promise<ProjectData | null>
   createProject: (data: {
     name: string
@@ -40,18 +55,66 @@ interface ProjectsStore {
   forkRemoteProject: (id: string, opts?: { local_name?: string }) => Promise<ProjectData>
 }
 
+/**
+ * Размер страницы списка проектов.
+ *
+ * Совпадает с серверным дефолтом (`DEFAULT_PROJECTS_LIMIT` в core), но задаётся
+ * явно: клиент не должен зависеть от серверного дефолта при смене версии.
+ */
+export const PROJECTS_PAGE_LIMIT = 100
+
 export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   projects: [],
   loading: false,
   error: null,
+  total: 0,
+  nextOffset: null,
+  loadingMore: false,
 
   loadProjects: async () => {
     set({ loading: true, error: null })
     try {
-      const projects = await synthApi.getProjects()
-      set({ projects, loading: false })
+      // Список проектов пагинирован: грузим **первую** страницу.
+      const page = await synthApi.getProjectsPage({ limit: PROJECTS_PAGE_LIMIT })
+      set({
+        projects: page.projects ?? [],
+        total: typeof page.total === 'number' ? page.total : (page.projects?.length ?? 0),
+        nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
+        loading: false,
+      })
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
+    }
+  },
+
+  /**
+   * Догрузка следующей страницы списка проектов (кнопка «Показать ещё»).
+   *
+   * Страница **дописывается** к уже загруженной: раскрытые проекты и выбранная
+   * сессия не сбрасываются (список в сторе — единственный источник для дерева).
+   */
+  loadMoreProjects: async () => {
+    const { nextOffset, loadingMore } = get()
+    if (loadingMore || nextOffset === null) return
+    set({ loadingMore: true })
+    try {
+      const page = await synthApi.getProjectsPage({
+        limit: PROJECTS_PAGE_LIMIT,
+        offset: nextOffset,
+      })
+      set((s) => {
+        const seen = new Set(s.projects.map((p) => p.id))
+        const incoming = (page.projects ?? []).filter((p) => !seen.has(p.id))
+        return {
+          projects: [...s.projects, ...incoming],
+          total: typeof page.total === 'number' ? page.total : s.total,
+          nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
+        }
+      })
+    } catch (e) {
+      set({ error: (e as Error).message })
+    } finally {
+      set({ loadingMore: false })
     }
   },
 
@@ -79,7 +142,13 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   createProject: async (data) => {
     try {
       const project = await synthApi.createProject(data)
-      set((s) => ({ projects: [project, ...s.projects] }))
+      set((s) => ({
+        projects: [project, ...s.projects],
+        // Курсор страниц считается по позициям на сервере: новый проект сдвигает
+        // их на единицу, поэтому курсор уменьшается (иначе один проект выпадет
+        // из выборки при догрузке).
+        nextOffset: s.nextOffset === null ? null : Math.max(0, s.nextOffset - 1),
+      }))
       return project
     } catch (e) {
       set({ error: (e as Error).message })
@@ -109,7 +178,12 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     }
     try {
       await synthApi.deleteProject(id)
-      set((s) => ({ projects: s.projects.filter((p) => p.id !== id) }))
+      set((s) => ({
+        projects: s.projects.filter((p) => p.id !== id),
+        // Список на сервере тоже сократился — курсор страниц сдвигается на
+        // единицу (см. `createProject`).
+        nextOffset: s.nextOffset === null ? null : Math.max(0, s.nextOffset - 1),
+      }))
       return true
     } catch (e) {
       set({ error: (e as Error).message })

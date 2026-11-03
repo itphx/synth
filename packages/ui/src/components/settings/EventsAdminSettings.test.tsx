@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   createEventRoute: vi.fn(),
   deleteEventRoute: vi.fn(),
   getProjects: vi.fn(),
+  getProjectsPage: vi.fn(),
   getSessions: vi.fn(),
   getAgents: vi.fn(),
   notify: vi.fn(),
@@ -222,6 +223,14 @@ beforeEach(() => {
   }))
   mocks.deleteEventRoute.mockResolvedValue(undefined)
   mocks.getProjects.mockResolvedValue([PROJECT])
+  // Список проектов пагинирован: страница повторяет данные списка.
+  mocks.getProjectsPage.mockImplementation(async () => ({
+    projects: (await mocks.getProjects()) as never[],
+    total: 0,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+  }))
   mocks.getSessions.mockResolvedValue([SESSION])
   mocks.getAgents.mockResolvedValue({ agents: [AGENT], default_agent: 'assistant' })
   mocks.confirm.mockResolvedValue(true)

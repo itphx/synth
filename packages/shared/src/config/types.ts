@@ -16,6 +16,8 @@ import {
   DEFAULT_LLM_FILTER_TIMEOUT_MS,
   MIN_UPLOAD_BYTES,
   MAX_UPLOAD_BYTES_LIMIT,
+  MIN_READ_BYTES,
+  MAX_READ_BYTES_LIMIT,
   ToolCapability,
 } from '../types/index.js';
 import { catalogTrustLevelSchema } from '../types/trust.js';
@@ -119,6 +121,14 @@ export const storageConfigSchema = z.object({
    * Не задано — резолвер подставляет `DEFAULT_MAX_UPLOAD_BYTES` (100 МиБ).
    */
   maxUploadBytes: z.number().int().min(MIN_UPLOAD_BYTES).max(MAX_UPLOAD_BYTES_LIMIT).optional(),
+  /**
+   * Максимальный размер файла, отдаваемого `GET /api/v2/fs/read`, в байтах.
+   * Валидируется (положительное целое в границах `MIN_READ_BYTES`…
+   * `MAX_READ_BYTES_LIMIT`), читать через `resolveMaxReadBytes` (env
+   * `SYNTH_MAX_READ_BYTES` > это поле > `DEFAULT_MAX_READ_BYTES`).
+   * Не задано — резолвер подставляет `DEFAULT_MAX_READ_BYTES` (5 МиБ).
+   */
+  maxReadBytes: z.number().int().min(MIN_READ_BYTES).max(MAX_READ_BYTES_LIMIT).optional(),
 });
 
 // --- Исполнение (ADR-077) ---

@@ -77,6 +77,12 @@ export interface GitRoutesOptions {
    */
   cloneTimeoutMs?: number;
   fetchTimeoutMs?: number;
+  /**
+   * Предел размера diff коммита (`GET /commit`), байт. Не задан —
+   * `MAX_COMMIT_DIFF_BYTES` (1 МиБ): diff больше предела обрезается, в DTO
+   * добавляется `diff_truncated: true`.
+   */
+  maxDiffBytes?: number;
 }
 
 /**
@@ -180,6 +186,7 @@ export function createGitRoutes(
     execution: opts.execution,
     ...(opts.cloneTimeoutMs !== undefined ? { cloneTimeoutMs: opts.cloneTimeoutMs } : {}),
     ...(opts.fetchTimeoutMs !== undefined ? { fetchTimeoutMs: opts.fetchTimeoutMs } : {}),
+    ...(opts.maxDiffBytes !== undefined ? { maxDiffBytes: opts.maxDiffBytes } : {}),
   });
   // `auth.requireAuth` уже навешан на write-эндпоинты выше, поэтому дефолтный
   // writeGuard — no-op (в backend передаётся requireAdmin/RBAC).

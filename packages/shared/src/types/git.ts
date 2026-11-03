@@ -67,4 +67,9 @@ export interface CommitFileInfo {
 export interface CommitDetail extends CommitInfo {
   files: CommitFileInfo[];
   diff: string;
+  /**
+   * Diff обрезан по лимиту размера (`MAX_COMMIT_DIFF_BYTES`): поле присутствует
+   * и равно `true`, когда diff неполон. Отсутствует — diff отдан целиком.
+   */
+  diff_truncated?: boolean;
 }

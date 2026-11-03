@@ -180,14 +180,16 @@ describe('Гибридный режим: локальный core + реальн�
     const remoteProj = (await remoteClient.createProject({ name: 'Удалённый проект', description: 'создан на backend' })) as { id: string };
     const remoteSes = (await remoteClient.createSession({ title: 'Удалённая сессия', project_id: remoteProj.id })) as { id: string };
 
-    const projects = (await (await coreApi('/api/v2/projects')).json()) as Array<Record<string, unknown>>;
-    const rp = projects.find((p) => p.id === `remote:${remoteProj.id}`);
+    // Список проектов — тоже страница-объект `{projects, total, ...}`.
+    const projects = (await (await coreApi('/api/v2/projects')).json()) as { projects: Array<Record<string, unknown>> };
+    const rp = projects.projects.find((p) => p.id === `remote:${remoteProj.id}`);
     expect(rp).toBeDefined();
     expect(rp!.origin).toBe('remote');
     expect(rp!.name).toBe('Удалённый проект');
 
-    const sessions = (await (await coreApi('/api/v2/sessions')).json()) as Array<Record<string, unknown>>;
-    const rs = sessions.find((s) => s.id === `remote:${remoteSes.id}`);
+    // Контракт v2: список сессий — объект-страница `{sessions, total, ...}`.
+    const sessions = (await (await coreApi('/api/v2/sessions')).json()) as { sessions: Array<Record<string, unknown>> };
+    const rs = sessions.sessions.find((s) => s.id === `remote:${remoteSes.id}`);
     expect(rs).toBeDefined();
     expect(rs!.origin).toBe('remote');
     expect(rs!.project_id).toBe(`remote:${remoteProj.id}`);
@@ -202,10 +204,10 @@ describe('Гибридный режим: локальный core + реальн�
     const localProj = (await createRes.json()) as { id: string; origin: string };
     expect(localProj.origin).toBe('local');
 
-    const projects2 = (await (await coreApi('/api/v2/projects')).json()) as Array<Record<string, unknown>>;
-    expect(projects2).toHaveLength(2);
-    expect(projects2.find((p) => p.id === localProj.id)?.origin).toBe('local');
-    expect(projects2.find((p) => p.id === `remote:${remoteProj.id}`)?.origin).toBe('remote');
+    const projects2 = (await (await coreApi('/api/v2/projects')).json()) as { projects: Array<Record<string, unknown>> };
+    expect(projects2.projects).toHaveLength(2);
+    expect(projects2.projects.find((p) => p.id === localProj.id)?.origin).toBe('local');
+    expect(projects2.projects.find((p) => p.id === `remote:${remoteProj.id}`)?.origin).toBe('remote');
   });
 
   it('3. LLM через прокси: локальная сессия → зеркало itphx → backend → FakeProvider', { timeout: 20_000 }, async () => {
@@ -334,7 +336,7 @@ describe('Гибридный режим: локальный core + реальн�
     const remoteProj = (await remoteClient.getProject(stats.projectId)) as { name: string; workspace: string };
     expect(remoteProj.name).toBe('Publish E2E');
 
-    const remoteSessions = (await remoteClient.listSessions(stats.projectId)) as Array<{ id: string; project_id: string }>;
+    const remoteSessions = (await remoteClient.listSessions(stats.projectId)).sessions as Array<{ id: string; project_id: string }>;
     expect(remoteSessions.length).toBeGreaterThan(0);
 
     const exportData = (await remoteClient.exportSession(remoteSessions[0]!.id)) as { messages?: Array<{ content: string }> };
@@ -361,7 +363,8 @@ describe('Гибридный режим: локальный core + реальн�
 
     const localFork = await forkStore.load(forkStats.projectId);
     expect(localFork?.name).toBe('Fork E2E');
-    const forkSessionsList = await forkSessions.listSessions({ projectId: forkStats.projectId });
+    // Импорт переносит историю → здесь нужен полный список сессий.
+    const forkSessionsList = await forkSessions.listSessionsWithMessages({ projectId: forkStats.projectId });
     expect(forkSessionsList[0]?.messages.some((m) => m.content === 'сообщение для переноса')).toBe(true);
 
     const forkFile = await readFile(join(forkDir, 'workspaces', 'fork-e2e', 'notes.txt'), 'utf-8');

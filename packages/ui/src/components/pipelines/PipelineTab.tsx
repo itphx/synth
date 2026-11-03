@@ -117,6 +117,8 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
   const loadProjectPipelines = usePipelinesStore((s) => s.loadProjectPipelines)
   const runsByPipeline = usePipelinesStore((s) => s.runsByPipeline)
   const loadPipelineRuns = usePipelinesStore((s) => s.loadPipelineRuns)
+  const loadMorePipelineRuns = usePipelinesStore((s) => s.loadMorePipelineRuns)
+  const loadingMoreRuns = usePipelinesStore((s) => s.loadingMoreRuns)
 
   const project = useMemo(
     () => projects.find((p) => p.id === projectId),
@@ -181,7 +183,9 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
     void loadPipelineRuns(projectId, pipelineId, statusFilter ? { status: statusFilter } : undefined)
   }, [projectId, pipelineId, statusFilter, loadPipelineRuns, reload])
 
-  const runs = runsByPipeline[pipelineId] ?? []
+  // Список прогонов приходит страницей (`{runs, offset, limit, next_offset}`).
+  const runsPage = runsByPipeline[pipelineId]
+  const runs = runsPage?.runs ?? []
 
   /** Спецификация черновика для сохранения (JSON-режим — из текста). */
   const currentDraftSpec = (): { spec?: PipelineSpecInput; error?: string } => {
@@ -562,6 +566,25 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
                   </button>
                 </li>
               ))}
+              {/* Пагинация прогонов: страница дописывается в стор. */}
+              {runsPage && runsPage.next_offset !== null && (
+                <li>
+                  <button
+                    type="button"
+                    data-testid="pipeline-load-more-runs"
+                    onClick={() => { void loadMorePipelineRuns(projectId, pipelineId) }}
+                    disabled={loadingMoreRuns.has(pipelineId)}
+                    className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground transition-colors disabled:opacity-60"
+                  >
+                    {loadingMoreRuns.has(pipelineId) && (
+                      <Icon name="loader-2" className="h-3 w-3 animate-spin" />
+                    )}
+                    {loadingMoreRuns.has(pipelineId)
+                      ? t('pipelines.loadingMore')
+                      : t('pipelines.loadMore')}
+                  </button>
+                </li>
+              )}
             </ul>
           )}
         </section>

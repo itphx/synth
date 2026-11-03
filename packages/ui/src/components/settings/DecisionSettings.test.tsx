@@ -46,6 +46,8 @@ const providersStore = vi.hoisted(() => ({
     { name: 'clef', provider: 'routerai-decision', enabled: true },
     { name: 'gpt-4o', provider: 'openai', enabled: true },
   ],
+  // Каталог постраничный: догрузка модели, которой нет на загруженной странице.
+  ensureModelLoaded: vi.fn(async () => null),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))

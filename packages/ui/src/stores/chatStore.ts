@@ -446,6 +446,16 @@ interface ChatStore {
   summarizationPendingBySession: Record<string, boolean>
   /** ADR-070 §2.6: live-вклад саб-агентов родительской сессии (для StatsTab). */
   liveSubagentUsageBySession: Record<string, LiveSubagentSessionUsage>
+  /**
+   * Пагинация истории сессии: `hasMore` — есть ли сообщения старше
+   * загруженной страницы, `nextBefore` — курсор следующей (более старой)
+   * страницы (`seq`; `null` — старше нечего).
+   *
+   * Снимок истории приходит постранично (`GET /sessions/:id/messages`), поэтому
+   * лента может быть неполной — состояние живёт в сторе, чтобы кнопка
+   * «Загрузить старые» и её курсор переживали переключение вкладок.
+   */
+  historyPageBySession: Record<string, { hasMore: boolean; nextBefore: number | null }>
   debugModalSessionId: string | null
   /** ADR-118 §7: отладка адресуется по `id` сообщения (индекс нестабилен). */
   debugModalMessageId: string | null
@@ -454,6 +464,16 @@ interface ChatStore {
   selectionBySession: Record<string, { mode: boolean; ids: Set<string> }>
 
   setMessages: (sessionId: string, messages: MessageData[]) => void
+  /**
+   * Догрузить **старые** сообщения (предыдущая страница истории) — в начало
+   * ленты. Дубли по `id` не добавляются, порядок — по `ord`.
+   */
+  prependMessages: (sessionId: string, messages: MessageData[]) => void
+  /** Курсор/наличие следующей (более старой) страницы истории. */
+  setHistoryPage: (
+    sessionId: string,
+    page: { hasMore: boolean; nextBefore: number | null },
+  ) => void
   /** Upsert сообщения по `id` (ADR-118 §7 — идентификатор устойчив). */
   upsertMessage: (sessionId: string, message: MessageData) => void
   /** Точечная правка сообщения по `id`. */
@@ -616,6 +636,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   stickyNotesBySession: {},
   summarizationPendingBySession: {},
   liveSubagentUsageBySession: {},
+  historyPageBySession: {},
   debugModalSessionId: null,
   debugModalMessageId: null,
   retryInputBySession: {},
@@ -624,6 +645,33 @@ export const useChatStore = create<ChatStore>((set) => ({
   setMessages: (sessionId, messages) =>
     set((s) => ({
       messagesBySession: { ...s.messagesBySession, [sessionId]: sortMessagesByOrd(messages) },
+    })),
+
+  /**
+   * Старые сообщения — **в начало** ленты (страница истории «до» курсора).
+   *
+   * Состав страницы авторитетен для своего диапазона: сообщение с тем же id
+   * заменяется свежим снимком (сервер — источник истины по содержимому
+   * истории), порядок — по `ord`.
+   */
+  prependMessages: (sessionId, messages) =>
+    set((s) => {
+      if (messages.length === 0) return s
+      const current = s.messagesBySession[sessionId] || []
+      const merged = new Map<string, MessageData>()
+      for (const m of current) merged.set(m.id ?? `idx:${m.index}`, m)
+      for (const m of messages) merged.set(m.id ?? `idx:${m.index}`, m)
+      return {
+        messagesBySession: {
+          ...s.messagesBySession,
+          [sessionId]: sortMessagesByOrd([...merged.values()]),
+        },
+      }
+    }),
+
+  setHistoryPage: (sessionId, page) =>
+    set((s) => ({
+      historyPageBySession: { ...s.historyPageBySession, [sessionId]: page },
     })),
 
   upsertMessage: (sessionId, message) =>
@@ -1075,6 +1123,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete finalErrorBySession[sessionId]
       const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
       delete liveSubagentUsageBySession[sessionId]
+      const historyPageBySession = { ...s.historyPageBySession }
+      delete historyPageBySession[sessionId]
       return {
         messagesBySession,
         partsBySession,
@@ -1086,6 +1136,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         subagentResumingBySession,
         finalErrorBySession,
         liveSubagentUsageBySession,
+        historyPageBySession,
       }
     }),
 

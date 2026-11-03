@@ -26,7 +26,9 @@ vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   getProjects: vi.fn(),
+  getProjectsPage: vi.fn(),
   getProjectPipelines: vi.fn(),
+  getProjectPipelinesPage: vi.fn(),
   createProjectPipeline: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
@@ -88,6 +90,11 @@ const PIPELINE = {
   updatedAt: '2026-10-20T11:00:00.000Z',
 }
 
+/** Страница пайплайнов проекта — ответ `GET /projects/:id/pipelines`. */
+function pipelinesPage(pipelines: unknown[], nextOffset: number | null = null) {
+  return { pipelines, total: pipelines.length, offset: 0, limit: 100, next_offset: nextOffset }
+}
+
 async function renderTab(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -125,7 +132,15 @@ function createButtons(container: HTMLElement): HTMLElement[] {
 
 beforeEach(() => {
   mocks.getProjects.mockResolvedValue([OWNER_PROJECT])
+  mocks.getProjectsPage.mockResolvedValue({
+    projects: [OWNER_PROJECT],
+    total: 1,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+  })
   mocks.getProjectPipelines.mockResolvedValue([PIPELINE])
+  mocks.getProjectPipelinesPage.mockResolvedValue(pipelinesPage([PIPELINE]))
   mocks.createProjectPipeline.mockResolvedValue(PIPELINE)
   mocks.confirm.mockResolvedValue(true)
 
@@ -173,7 +188,7 @@ describe('PipelinesTab — дерево «проект → пайплайн» (A
 
     await expandProject(container, 'p1')
 
-    expect(mocks.getProjectPipelines).toHaveBeenCalledWith('p1')
+    expect(mocks.getProjectPipelinesPage).toHaveBeenCalledWith('p1', { limit: 100 })
     const node = container.querySelector('[data-tree-node="pipeline:p1:pl1"]') as HTMLElement
     expect(node).toBeTruthy()
     expect(node.textContent ?? '').toContain('Release')
@@ -199,6 +214,7 @@ describe('PipelinesTab — дерево «проект → пайплайн» (A
 
   it('пустое состояние проекта — предложение создать пайплайн', async () => {
     mocks.getProjectPipelines.mockResolvedValue([])
+    mocks.getProjectPipelinesPage.mockResolvedValue(pipelinesPage([]))
     const container = await renderTab()
 
     await expandProject(container, 'p1')
@@ -206,13 +222,56 @@ describe('PipelinesTab — дерево «проект → пайплайн» (A
     expect(container.textContent ?? '').toContain('No pipelines in this project')
     expect(createButtons(container).length).toBeGreaterThan(0)
   })
+
+  it('при next_offset кнопка «Показать ещё» догружает следующую страницу пайплайнов', async () => {
+    mocks.getProjectPipelinesPage.mockResolvedValueOnce(pipelinesPage([PIPELINE], 1))
+    mocks.getProjectPipelinesPage.mockResolvedValueOnce(
+      pipelinesPage([{ ...PIPELINE, id: 'pl2', name: 'Deploy' }], null),
+    )
+    const container = await renderTab()
+    await expandProject(container, 'p1')
+
+    const button = container.querySelector('[data-testid="pipeline-load-more-p1"]') as HTMLButtonElement
+    expect(button).toBeTruthy()
+    expect(button.textContent ?? '').toContain('Show more')
+
+    await act(async () => {
+      button.click()
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(mocks.getProjectPipelinesPage).toHaveBeenLastCalledWith('p1', {
+      limit: 100,
+      offset: 1,
+    })
+    const state = usePipelinesStore.getState()
+    expect(state.pipelinesByProject.p1?.pipelines.map((p) => p.id)).toEqual(['pl1', 'pl2'])
+    // Последняя страница — кнопки больше нет.
+    expect(container.querySelector('[data-testid="pipeline-load-more-p1"]')).toBeNull()
+  })
+
+  it('без next_offset кнопки «Показать ещё» нет', async () => {
+    const container = await renderTab()
+    await expandProject(container, 'p1')
+
+    expect(container.querySelector('[data-testid="pipeline-load-more-p1"]')).toBeNull()
+  })
 })
 
 describe('PipelinesTab — права записи (VIEWER только читает)', () => {
   it('VIEWER не видит кнопок записи (создание)', async () => {
     useProjectsStore.setState({ projects: [VIEWER_PROJECT] as never, loading: false, error: null })
     mocks.getProjects.mockResolvedValue([VIEWER_PROJECT])
+    mocks.getProjectsPage.mockResolvedValue({
+      projects: [VIEWER_PROJECT],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
     mocks.getProjectPipelines.mockResolvedValue([])
+    mocks.getProjectPipelinesPage.mockResolvedValue(pipelinesPage([]))
 
     const container = await renderTab()
     expect(container.textContent ?? '').toContain('Proj2')
@@ -229,7 +288,15 @@ describe('PipelinesTab — права записи (VIEWER только чита
   it('VIEWER видит пайплайны проекта (чтение доступно)', async () => {
     useProjectsStore.setState({ projects: [VIEWER_PROJECT] as never, loading: false, error: null })
     mocks.getProjects.mockResolvedValue([VIEWER_PROJECT])
+    mocks.getProjectsPage.mockResolvedValue({
+      projects: [VIEWER_PROJECT],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
     mocks.getProjectPipelines.mockResolvedValue([{ ...PIPELINE, projectId: 'p2' }])
+    mocks.getProjectPipelinesPage.mockResolvedValue(pipelinesPage([{ ...PIPELINE, projectId: 'p2' }]))
 
     const container = await renderTab()
     await expandProject(container, 'p2')

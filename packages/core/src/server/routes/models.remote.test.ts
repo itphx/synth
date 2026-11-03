@@ -18,9 +18,13 @@ function createMockAuth(): AuthKit {
 const LOCAL_PROVIDER: ProviderConfig = { name: 'local', type: 'openai', baseUrl: 'http://local.test', apiKey: 'k', enabled: true };
 const REMOTE_PROVIDER: ProviderConfig = { name: 'itphx', type: 'remote', baseUrl: 'https://backend.test', apiKey: '', enabled: true };
 
-interface Group {
-  provider: { name: string; type: string };
+/** Страница каталога моделей (`GET /` → `{models, total, offset, limit, next_offset}`). */
+interface ModelPage {
   models: Array<{ id: string; name: string; provider: string }>;
+  total: number;
+  offset: number;
+  limit: number;
+  next_offset: number | null;
 }
 
 describe('createModelRoutes: слияние remote-моделей (Часть 6)', () => {
@@ -45,10 +49,11 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>());
     const res = await app.request('/');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { groups: Group[] };
-    expect(body.groups).toHaveLength(1);
-    expect(body.groups[0]!.provider.name).toBe('local');
-    expect(body.groups[0]!.models.map((m) => m.id)).toEqual(['local-m1']);
+    const body = (await res.json()) as ModelPage;
+    expect(body.models).toHaveLength(1);
+    expect(body.models[0]!.provider).toBe('local');
+    expect(body.models.map((m) => m.id)).toEqual(['local-m1']);
+    expect(body.total).toBe(1);
   });
 
   it('extraModels + extraProviders → remote-группа, дубликаты по id отфильтрованы', async () => {
@@ -66,16 +71,14 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     });
 
     const res = await app.request('/');
-    const body = (await res.json()) as { groups: Group[] };
+    const body = (await res.json()) as ModelPage;
 
-    const remoteGroup = body.groups.find((g) => g.provider.name === 'itphx')!;
-    expect(remoteGroup).toBeDefined();
-    expect(remoteGroup.models.map((m) => m.id)).toEqual(['remote-m1', 'remote-m2']);
-    expect(remoteGroup.provider.type).toBe('remote');
+    const remote = body.models.filter((m) => m.provider === 'itphx');
+    expect(remote.map((m) => m.id)).toEqual(['remote-m1', 'remote-m2']);
 
-    const localGroup = body.groups.find((g) => g.provider.name === 'local')!;
-    expect(localGroup.models).toHaveLength(1);
-    expect(localGroup.models[0]!.name).toBe('m1'); // не m1-dup
+    const local = body.models.filter((m) => m.provider === 'local');
+    expect(local).toHaveLength(1);
+    expect(local[0]!.name).toBe('m1'); // не m1-dup
   });
 
   it('onlyRemoteModels → локальные модели скрыты, остаётся только remote-группа', async () => {
@@ -89,9 +92,9 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     });
 
     const res = await app.request('/');
-    const body = (await res.json()) as { groups: Group[] };
-    expect(body.groups.map((g) => g.provider.name)).toEqual(['itphx']);
-    expect(body.groups[0]!.models.map((m) => m.id)).toEqual(['remote-m1']);
+    const body = (await res.json()) as ModelPage;
+    expect(body.models.map((m) => m.provider)).toEqual(['itphx']);
+    expect(body.models.map((m) => m.id)).toEqual(['remote-m1']);
   });
 
   it('?provider=itphx фильтрует по remote-провайдеру', async () => {
@@ -104,12 +107,10 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     });
 
     const res = await app.request('/?provider=itphx');
-    const body = (await res.json()) as { groups: Group[] };
-    // Существующий контракт: все провайдеры присутствуют, несовпадающие — с пустым списком.
-    const remoteGroup = body.groups.find((g) => g.provider.name === 'itphx')!;
-    expect(remoteGroup.models.map((m) => m.id)).toEqual(['remote-m1']);
-    const localGroup = body.groups.find((g) => g.provider.name === 'local');
-    expect(localGroup?.models).toEqual([]);
+    const body = (await res.json()) as ModelPage;
+    // Фильтр по провайдеру: в страницу попадают только модели нужного провайдера.
+    expect(body.models.map((m) => m.id)).toEqual(['remote-m1']);
+    expect(body.total).toBe(1);
   });
 
   it('enabled_only отфильтровывает отключённые remote-модели', async () => {
@@ -122,7 +123,7 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     });
 
     const res = await app.request('/?enabled_only=true');
-    const body = (await res.json()) as { groups: Group[] };
-    expect(body.groups[0]!.models.map((m) => m.id)).toEqual(['remote-m1']);
+    const body = (await res.json()) as ModelPage;
+    expect(body.models.map((m) => m.id)).toEqual(['remote-m1']);
   });
 });

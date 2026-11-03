@@ -112,9 +112,10 @@ describe('serializeSession — includeMessages/includePromptStates (список
     expect(out.prompt_states).not.toBeNull();
   });
 
-  it('includeMessages:false → messages:[], очередь и счётчик сохранены', () => {
+  it('includeMessages:false → ключа messages нет вовсе, очередь и счётчик сохранены', () => {
     const out = serializeSession(fullSession(), { includeMessages: false }) as Record<string, unknown>;
-    expect(out.messages).toEqual([]);
+    // Ключ не включается (не пустой массив): полная история списком не отдаётся.
+    expect('messages' in out).toBe(false);
     expect(out.pending_count).toBe(1);
     expect((out.pending_messages as unknown[]).length).toBe(1);
   });

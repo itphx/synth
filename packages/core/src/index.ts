@@ -2216,7 +2216,12 @@ export { createMetaRoutes, instanceCapabilities } from './server/routes/meta.js'
 export type { MetaRoutesDeps } from './server/routes/meta.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
-export { serializeSession, serializeMessage, serializeProject } from './server/serialize.js';
+export {
+  serializeSession,
+  serializeMessage,
+  serializeProject,
+  serializeProjectSummary,
+} from './server/serialize.js';
 
 export {
   GatewayProvider,

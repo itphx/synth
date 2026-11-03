@@ -441,7 +441,7 @@ export function SchedulerTab() {
       const projectName =
         projects.find((project) => project.id === target.projectId)?.name || target.projectId
       const pipelineName =
-        (pipelinesByProject[target.projectId] ?? []).find(
+        (pipelinesByProject[target.projectId]?.pipelines ?? []).find(
           (pipeline) => pipeline.id === target.pipelineId,
         )?.name || target.pipelineId
       return `${t('rightPanel.scheduler.target.pipelineRun')}: ${projectName} / ${pipelineName}`
@@ -459,7 +459,7 @@ export function SchedulerTab() {
   /** ADR-101: опции селекта пайплайна — имя + пометка публикации. */
   const pipelineOptions = useMemo(() => {
     if (!editor || editor.mode !== 'pipeline') return []
-    return (pipelinesByProject[editor.pipelineProjectId] ?? []).map((pipeline) => ({
+    return (pipelinesByProject[editor.pipelineProjectId]?.pipelines ?? []).map((pipeline) => ({
       value: pipeline.id,
       label: pipeline.publishedVersion
         ? `${pipeline.name} · ${t('pipelines.publishedVersion', {
@@ -472,7 +472,7 @@ export function SchedulerTab() {
   /** ADR-101: выбранный пайплайн (предупреждение «не опубликован»). */
   const selectedPipeline = useMemo(() => {
     if (!editor || editor.mode !== 'pipeline' || !editor.pipelineId) return undefined
-    return (pipelinesByProject[editor.pipelineProjectId] ?? []).find(
+    return (pipelinesByProject[editor.pipelineProjectId]?.pipelines ?? []).find(
       (pipeline) => pipeline.id === editor.pipelineId,
     )
   }, [editor, pipelinesByProject])

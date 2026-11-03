@@ -449,7 +449,7 @@ projectCmd
     const remoteClient = session.getClient();
 
     const localSessions = includeSessions
-      ? await new SessionManager(new FileStore({ dataDir })).listSessions({ projectId: project.id })
+      ? await new SessionManager(new FileStore({ dataDir })).listSessionsWithMessages({ projectId: project.id })
       : [];
 
     console.log(`Publish проекта «${project.name}» → ${session.backendUrl}`);

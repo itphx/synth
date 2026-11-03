@@ -32,8 +32,13 @@ async function makeApp(tmpDir: string) {
   return { app, modelStore };
 }
 
+/** Страница каталога моделей (`GET /` → `{models, total, offset, limit, next_offset}`). */
 interface ModelsResponse {
-  groups: Array<{ provider: { name: string }; models: Array<Record<string, unknown>> }>;
+  models: Array<Record<string, unknown>>;
+  total: number;
+  offset: number;
+  limit: number;
+  next_offset: number | null;
 }
 
 describe('routes/models (core): модальности входа модели (ADR-115)', () => {
@@ -56,7 +61,7 @@ describe('routes/models (core): модальности входа модели (
 
     const res = await stores.app.request('/');
     const body = (await res.json()) as ModelsResponse;
-    const model = body.groups.find((g) => g.provider.name === 'openai')!.models[0]!;
+    const model = body.models[0]!;
     // Справочника модальностей в ядре нет: «неизвестно» = поле отсутствует,
     // ограничение не применяется (вложение не теряется).
     expect(model).not.toHaveProperty('modalities');
@@ -73,7 +78,7 @@ describe('routes/models (core): модальности входа модели (
 
     const res = await stores.app.request('/');
     const body = (await res.json()) as ModelsResponse;
-    const model = body.groups.find((g) => g.provider.name === 'openai')!.models[0]!;
+    const model = body.models[0]!;
     expect(model.modalities).toEqual(['text', 'image', 'pdf']);
   });
 
@@ -84,7 +89,7 @@ describe('routes/models (core): модальности входа модели (
 
     const res = await stores.app.request('/');
     const body = (await res.json()) as ModelsResponse;
-    const model = body.groups.find((g) => g.provider.name === 'openai')!.models[0]!;
+    const model = body.models[0]!;
     expect(model).not.toHaveProperty('modalities');
   });
 
@@ -152,7 +157,7 @@ describe('routes/models (core): compatibility и shorthand requires_reasoning', 
     expect(saved?.requiresReasoning).toBe(true);
 
     const list = await (await stores.app.request('/')).json() as ModelsResponse;
-    const model = list.groups[0]!.models.find((m) => m.id === 'openai/mistral-large')!;
+    const model = list.models.find((m) => m.id === 'openai/mistral-large')!;
     expect(model.compatibility).toEqual({
       requireAssistantAfterTool: true,
       maxTokensField: 'max_completion_tokens',
@@ -226,7 +231,7 @@ describe('routes/models (core): compatibility и shorthand requires_reasoning', 
     });
 
     const list = await (await stores.app.request('/')).json() as ModelsResponse;
-    const model = list.groups[0]!.models.find((m) => m.id === 'openai/vision-video')!;
+    const model = list.models.find((m) => m.id === 'openai/vision-video')!;
     expect(model.compatibility).toEqual({
       supportsNativeVideo: true,
       nativeAudioFormats: ['wav', 'ogg'],

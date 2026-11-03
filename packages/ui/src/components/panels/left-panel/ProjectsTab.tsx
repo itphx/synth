@@ -11,6 +11,8 @@ import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
+import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
+import { applyHistoryPage } from '@/stores/transportStore'
 import type { EntityOrigin, ProjectData } from '@/lib/api/synthApi'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { useEntityEditStore } from '@/stores/entityEditStore'
@@ -32,9 +34,15 @@ export function ProjectsTab() {
   const { t } = useI18n()
   const projects = useProjectsStore(s => s.projects)
   const loadProjects = useProjectsStore(s => s.loadProjects)
+  const loadMoreProjects = useProjectsStore(s => s.loadMoreProjects)
+  const projectsNextOffset = useProjectsStore(s => s.nextOffset)
+  const loadingMoreProjects = useProjectsStore(s => s.loadingMore)
   const deleteProject = useProjectsStore(s => s.deleteProject)
   const sessions = useSessionsStore(s => s.sessions)
   const loadSessions = useSessionsStore(s => s.loadSessions)
+  const loadMoreSessions = useSessionsStore(s => s.loadMoreSessions)
+  const nextOffset = useSessionsStore(s => s.nextOffset)
+  const loadingMoreSessions = useSessionsStore(s => s.loadingMore)
   const createSession = useSessionsStore(s => s.createSession)
   const forkSession = useSessionsStore(s => s.forkSession)
   const deleteSession = useSessionsStore(s => s.deleteSession)
@@ -267,8 +275,9 @@ export function ProjectsTab() {
           onConfirm: async () => {
             await synthApi.clearSession(session.id)
             useChatStore.getState().clearSession(session.id)
-            const result = await synthApi.getSessionMessages(session.id)
-            useChatStore.getState().setMessages(session.id, result.messages)
+            const result = await synthApi.getSessionMessages(session.id, { limit: MESSAGES_PAGE_LIMIT })
+            // История очищена: снимок авторитетен, пагинация сбрасывается.
+            applyHistoryPage(session.id, result)
           },
         })},
         'separator' as const,
@@ -300,9 +309,9 @@ export function ProjectsTab() {
     }
   }
 
-  const hasItems =
-    (sessionsByProject['__none__']?.length ?? 0) > 0 ||
-    sortedProjects.some((p) => (sessionsByProject[p.id]?.length ?? 0) > 0)
+  // Список проектов и список сессий пагинированы (ADR-089): дерево показывает
+  // первые страницы обоих списков и кнопки «Показать ещё».
+  const hasItems = projects.length > 0 || sessions.length > 0
 
   // Сервер доступен (гибрид включён и не offline) — доступно создание на сервере.
   const hybridOnline = hybridEnabled && !isOffline
@@ -562,6 +571,44 @@ export function ProjectsTab() {
           />
         )
       })}
+
+      {/*
+        Пагинация списка проектов: первая страница загружена целиком, дальше —
+        по кнопке. Раскрытые проекты и выбранная сессия при этом сохраняются:
+        страница дописывается в стор, а не перезагружается.
+      */}
+      {projectsNextOffset !== null && (
+        <div className="px-2 py-1">
+          <button
+            type="button"
+            data-testid="load-more-projects"
+            onClick={() => { void loadMoreProjects() }}
+            disabled={loadingMoreProjects}
+            className="w-full text-left rounded px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-60"
+          >
+            {loadingMoreProjects ? t('leftPanel.loadingMoreProjects') : t('leftPanel.loadMoreProjects')}
+          </button>
+        </div>
+      )}
+
+      {/*
+        Пагинация списка сессий (ADR-089): первая страница загружена целиком,
+        дальше — по кнопке. Раскрытые проекты и выбранная сессия при этом
+        сохраняются: страница дописывается в стор, а не перезагружается.
+      */}
+      {nextOffset !== null && (
+        <div className="px-2 py-1">
+          <button
+            type="button"
+            data-testid="load-more-sessions"
+            onClick={() => { void loadMoreSessions() }}
+            disabled={loadingMoreSessions}
+            className="w-full text-left rounded px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-60"
+          >
+            {loadingMoreSessions ? t('leftPanel.loadingMoreSessions') : t('leftPanel.loadMoreSessions')}
+          </button>
+        </div>
+      )}
     </TreeContainer>
   )
 }

@@ -6,6 +6,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
+import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { useNotification } from '@/hooks/useNotification'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
@@ -362,6 +363,26 @@ export function SessionSettingsTab() {
   const [maxTokens, setMaxTokens] = useState<string>('0')
   // Глобальный дефолт таймаута подтверждения из «Безопасность»
   const [defaultAskTimeoutMs, setDefaultAskTimeoutMs] = useState(30_000)
+
+  // Каталог моделей постраничный: выбранные модели могут быть не на
+  // загруженной странице — догружаем их по ссылке, чтобы селекты были не
+  // пустыми, а метаданные (окно контекста) — известны.
+  useEnsureModelsLoaded([
+    routingContentCodingProvider && routingContentCodingModel
+      ? `${routingContentCodingProvider}/${routingContentCodingModel}` : null,
+    routingContentChatProvider && routingContentChatModel
+      ? `${routingContentChatProvider}/${routingContentChatModel}` : null,
+    routingContentResearchProvider && routingContentResearchModel
+      ? `${routingContentResearchProvider}/${routingContentResearchModel}` : null,
+    routingEscalationFallbackProvider && routingEscalationFallbackModel
+      ? `${routingEscalationFallbackProvider}/${routingEscalationFallbackModel}` : null,
+    routingCostCheapProvider && routingCostCheapModel
+      ? `${routingCostCheapProvider}/${routingCostCheapModel}` : null,
+    routingSubagentProvider && routingSubagentModel
+      ? `${routingSubagentProvider}/${routingSubagentModel}` : null,
+    embedProvider && embedModel ? `${embedProvider}/${embedModel}` : null,
+    selectedProviderName && selectedModelName ? `${selectedProviderName}/${selectedModelName}` : null,
+  ])
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -1199,7 +1220,28 @@ export function SessionSettingsTab() {
                     >
                       <SelectContent>
                         <SelectItem value="auto">{t('routing.subagent.modelAuto')}</SelectItem>
-                        {models.filter((m) => m.enabled).map((m) => (
+                        {[
+                          ...models.filter((m) => m.enabled),
+                          // Текущее значение видно всегда: каталог постраничный,
+                          // модель может быть не на загруженной странице.
+                          ...(routingSubagentModel &&
+                          !models.some(
+                            (m) =>
+                              m.enabled &&
+                              m.name === routingSubagentModel &&
+                              m.provider === routingSubagentProvider,
+                          )
+                            ? [
+                                {
+                                  id: `${routingSubagentProvider}/${routingSubagentModel}`,
+                                  name: routingSubagentModel,
+                                  provider: routingSubagentProvider,
+                                  enabled: true,
+                                  isDefault: false,
+                                },
+                              ]
+                            : []),
+                        ].map((m) => (
                           <SelectItem key={`${m.provider}:${m.name}`} value={`${m.provider}:${m.name}`}>
                             {m.provider}/{m.name}
                           </SelectItem>

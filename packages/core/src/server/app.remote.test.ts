@@ -33,9 +33,14 @@ const REMOTE_PROVIDER: ProviderConfig = {
 const BACKEND_URL = 'https://backend.test';
 const SERVER_USER = { id: 'u-1', username: 'lucky', roles: ['USER'] };
 
-interface Group {
-  provider: { name: string; type: string };
-  models: Array<{ id: string }>;
+/**
+ * Страница каталога моделей (`GET /api/v2/models` → `{models, total, offset,
+ * limit, next_offset}`). Плоский список: провайдер у модели — в поле
+ * `provider`; метаданные провайдера — в `GET /api/v2/providers`.
+ */
+interface ModelPage {
+  models: Array<{ id: string; provider?: string }>;
+  total?: number;
 }
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
@@ -78,7 +83,7 @@ function hybridFetchMock(opts: {
       return Promise.resolve(jsonResponse(providersBody ?? defaultProvidersBody()));
     }
     if (u.includes('/api/v2/models')) {
-      return Promise.resolve(jsonResponse(modelsBody ?? { groups: [] }));
+      return Promise.resolve(jsonResponse(modelsBody ?? { models: [], total: 0, offset: 0, limit: 100, next_offset: null }));
     }
     return Promise.resolve(onOther ? onOther(u, init) : jsonResponse({ error: 'not_found' }, 404));
   });
@@ -86,9 +91,11 @@ function hybridFetchMock(opts: {
 
 function modelsBodyWith(remoteModels: Array<Record<string, unknown>>): unknown {
   return {
-    groups: [
-      { provider: { name: 'itphx', type: 'openai' }, models: remoteModels },
-    ],
+    models: remoteModels,
+    total: remoteModels.length,
+    offset: 0,
+    limit: 500,
+    next_offset: null,
   };
 }
 
@@ -153,10 +160,8 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
 
       const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { groups: Group[] };
-      const group = body.groups.find((g) => g.provider.name === 'itphx');
-      expect(group).toBeDefined();
-      expect(group!.models.map((m) => m.id)).toEqual(['remote/m1']);
+      const body = (await res.json()) as ModelPage;
+      expect(body.models.map((m) => m.id)).toEqual(['remote/m1']);
 
       // Инъекция — только in-memory: в store ничего не записано.
       const modelStore = new JsonStore<ModelConfig>({ dataDir: dir, subdir: 'models' });
@@ -174,8 +179,8 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
       const { app } = await createStandaloneApp({ port: 0, dataDir: dir, apiKey: 'test-key' });
       const res = await app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { groups: Group[] };
-      expect(body.groups.find((g) => g.provider.name === 'itphx')).toBeUndefined();
+      const body = (await res.json()) as ModelPage;
+      expect(body.models.find((m) => m.provider === 'itphx')).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -207,8 +212,8 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
       expect(status.connected).toBe(false);
       expect(status.backendUrl).toBeNull();
       const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
-      const body = (await res.json()) as { groups: Group[] };
-      expect(body.groups.find((g) => g.provider.name === 'itphx')).toBeUndefined();
+      const body = (await res.json()) as ModelPage;
+      expect(body.models.find((m) => m.provider === 'itphx')).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -242,12 +247,20 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
       await handle.disconnectRemote();
 
       // Локальная сессия с itphx после отключения резолвится (зеркало откачено):
-      // GET /api/v2/models не проксируется, локальная группа itphx снова видна.
+      // GET /api/v2/models не проксируется, локальный провайдер снова виден.
       const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
-      const body = (await res.json()) as { groups: Group[] };
-      const localGroup = body.groups.find((g) => g.provider.name === 'itphx');
-      expect(localGroup).toBeDefined();
-      expect(localGroup!.provider.type).toBe('openai');
+      expect(res.status).toBe(200);
+      // Локальный провайдер itphx снова виден после отключения зеркала.
+      // В плоском каталоге моделей провайдера нет — он виден в /providers.
+      const providersRes = await handle.app.request('/api/v2/providers', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      const providersBody = (await providersRes.json()) as {
+        providers: Array<{ name: string; type: string }>;
+      };
+      const localProvider = providersBody.providers.find((x) => x.name === 'itphx');
+      expect(localProvider).toBeDefined();
+      expect(localProvider!.type).toBe('openai');
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -386,10 +399,17 @@ describe('createStandaloneApp: зеркалирование серверных �
       // itphx (openai) видна как раньше.
       await handle.disconnectRemote();
       const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
-      const body = (await res.json()) as { groups: Group[] };
-      const group = body.groups.find((g) => g.provider.name === 'itphx');
-      expect(group).toBeDefined();
-      expect(group!.provider.type).toBe('openai');
+      const body = (await res.json()) as ModelPage;
+      // Модели зеркала после отключения нет (в каталоге только локальные модели).
+      expect(body.models.find((m) => m.id === 'itphx/m1')).toBeUndefined();
+      // Тип локального провайдера — в /providers (плоский каталог моделей его не несёт).
+      const providersRes = await handle.app.request('/api/v2/providers', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      const providersBody = (await providersRes.json()) as {
+        providers: Array<{ name: string; type: string }>;
+      };
+      expect(providersBody.providers.find((x) => x.name === 'itphx')?.type).toBe('openai');
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }

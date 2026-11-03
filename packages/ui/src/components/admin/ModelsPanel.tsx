@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { synthApi, type DefaultModelPair, type ModelGroup, type ModelInfo } from '@/lib/api/synthApi'
+import {
+  synthApi,
+  mergeModelGroups,
+  type DefaultModelPair,
+  type ModelGroup,
+  type ModelInfo,
+  type ModelsQuery,
+} from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
@@ -41,6 +48,9 @@ type EditingPrices = Record<string, {
 /** Группа крупнее порога стартует свёрнутой — не строим тысячи строк DOM сразу. */
 const LARGE_GROUP_THRESHOLD = 50
 
+/** Модальности входа модели — фильтр каталога (ADR-115). */
+const MODEL_MODALITIES = ['text', 'image', 'pdf', 'audio', 'video'] as const
+
 /**
  * Оценки высоты строк виртуального списка (px) — до замера ResizeObserver'ом.
  * На телефоне строка модели — карточка (название / контекст+вкл / цены),
@@ -70,11 +80,21 @@ export const ModelsPanel = () => {
   // Кэш стора: если модели уже загружены где-то в приложении — показываем сразу,
   // без скелетона, и обновляем в фоне.
   const cachedGroups = useProvidersStore((s) => s.modelGroups)
+  const providersList = useProvidersStore((s) => s.providers)
+  const allProviders = useMemo(() => providersList.map((p) => p.name), [providersList])
   const [groups, setGroups] = useState<ModelGroup[]>(cachedGroups)
   const [loading, setLoading] = useState(cachedGroups.length === 0)
+  const [loadingMore, setLoadingMore] = useState(false)
+  // Каталог постраничный: поиск и фильтры — на сервере, в UI держим только
+  // страницу (несколько тысяч моделей грузить нельзя).
+  const [total, setTotal] = useState(0)
+  const [nextOffset, setNextOffset] = useState<number | null>(null)
   const [filterProvider, setFilterProvider] = useState('')
+  const [filterModality, setFilterModality] = useState('')
   const [onlyEnabled, setOnlyEnabled] = useState(false)
   const [search, setSearch] = useState('')
+  // Последний применённый запрос каталога — для «Показать ещё».
+  const queryRef = useRef<ModelsQuery>({})
   const [fetching, setFetching] = useState<string | null>(null)
   const [fetchMsg, setFetchMsg] = useState('')
   const [fetchError, setFetchError] = useState('')
@@ -117,29 +137,83 @@ export const ModelsPanel = () => {
   const [hadCompatibility, setHadCompatibility] = useState(false)
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
-  const load = useCallback(async () => {
+  const loadDefault = useCallback(async () => {
+    try {
+      // Старое ядро без пары default-model не должно ломать панель моделей.
+      const info = await synthApi.getDefaultModel().catch(() => null)
+      if (!info) return
+      setDefaultModel(info.defaultModel ?? null)
+      setDefaultsPair(info.defaults ?? null)
+      setIsOverridden(info.isOverridden)
+    } catch {
+      /* дефолтная пара не критична для списка */
+    }
+  }, [])
+
+  /** Загрузка страницы каталога (поиск/фильтры — на сервере). */
+  const load = useCallback(async (query: ModelsQuery = {}) => {
     // Данные уже в сторе — не закрываем панель скелетоном, обновляем в фоне.
     if (useProvidersStore.getState().modelGroups.length === 0) setLoading(true)
     try {
-      const [data, info] = await Promise.all([
-        synthApi.getModels(),
-        // Старое ядро без пары default-model не должно ломать панель моделей.
-        synthApi.getDefaultModel().catch(() => null),
-      ])
-      const nextGroups = data || []
+      const { groups: nextGroups, page } = await synthApi.getModelGroups(query)
       setGroups(nextGroups)
-      useProvidersStore.getState().applyModelGroups(nextGroups)
-      if (info) {
-        setDefaultModel(info.defaultModel ?? null)
-        setDefaultsPair(info.defaults ?? null)
-        setIsOverridden(info.isOverridden)
-      }
+      setTotal(page.total)
+      setNextOffset(page.next_offset)
+      // Список — страница каталога: выбор модели по нему не проверяем.
+      useProvidersStore.getState().applyModelGroups(nextGroups, { authoritative: false })
     } finally {
       setLoading(false)
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  /** Догрузка следующей страницы каталога («Показать ещё»). */
+  const loadMore = useCallback(async () => {
+    if (nextOffset === null || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const { groups: more, page } = await synthApi.getModelGroups({
+        ...queryRef.current,
+        offset: nextOffset,
+      })
+      const merged = mergeModelGroups(groups, more)
+      setGroups(merged)
+      setNextOffset(page.next_offset)
+      useProvidersStore.getState().applyModelGroups(merged, { authoritative: false })
+    } catch {
+      /* страница не загрузилась — курсор остаётся прежним */
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [groups, nextOffset, loadingMore])
+
+  /** Текущий запрос каталога: поиск + фильтры (уходят на сервер). */
+  const buildQuery = useCallback((): ModelsQuery => {
+    const term = search.trim()
+    return {
+      ...(term ? { search: term } : {}),
+      ...(filterProvider ? { provider: filterProvider } : {}),
+      ...(filterModality ? { modality: filterModality } : {}),
+      ...(onlyEnabled ? { enabled: true } : {}),
+    }
+  }, [search, filterProvider, filterModality, onlyEnabled])
+
+  // Список провайдеров — для фильтра (в каталоге моделей он неполный).
+  useEffect(() => {
+    if (useProvidersStore.getState().providers.length === 0) {
+      void useProvidersStore.getState().loadProviders()
+    }
+  }, [])
+
+  useEffect(() => { void loadDefault() }, [loadDefault])
+
+  // Поиск/фильтры → новая страница каталога. Поиск — с задержкой, чтобы не
+  // дёргать сервер на каждое нажатие.
+  useEffect(() => {
+    const query = buildQuery()
+    queryRef.current = query
+    const timer = setTimeout(() => { void load(query) }, search.trim() ? 300 : 0)
+    return () => clearTimeout(timer)
+  }, [buildQuery, load, search])
 
   // Debounce-таймеры сохранения цен: чистим при размонтировании, чтобы
   // отложенный колбэк не дёрнул setState/API после ухода панели.
@@ -166,7 +240,7 @@ export const ModelsPanel = () => {
       if (data.errors?.length) {
         setFetchError(data.errors.join('; '))
       }
-      await load()
+      await load(queryRef.current)
     } catch (err) {
         setFetchError(err instanceof Error ? err.message : t('admin.models.syncError'))
     } finally {
@@ -188,7 +262,8 @@ export const ModelsPanel = () => {
     }))
     setGroups(nextGroups)
     // Селекторы (чат/настройки/роутинг) живут на сторе — обновляем их сразу.
-    useProvidersStore.getState().applyModelGroups(nextGroups)
+    // Список — страница каталога: выбор модели по нему не проверяем.
+    useProvidersStore.getState().applyModelGroups(nextGroups, { authoritative: false })
     await saveModel(model.id, { enabled: !model.enabled } as ModelInfo)
   }
 
@@ -214,7 +289,7 @@ export const ModelsPanel = () => {
     setDefaultSaving(true)
     try {
       await synthApi.setDefaultModel(next)
-      await load()
+      await load(queryRef.current)
     } catch (err) {
       setDefaultModel(prevPair)
       setIsOverridden(prevOverridden)
@@ -227,14 +302,47 @@ export const ModelsPanel = () => {
   const enabledModelsOf = (providerName: string): ModelInfo[] =>
     (groups.find((g) => g.provider.name === providerName)?.models ?? []).filter((m) => m.enabled)
 
-  const handleDefaultProviderChange = async (providerName: string) => {
-    const first = enabledModelsOf(providerName)[0]
-    if (!first) {
-      // У провайдера нет включённых моделей — сохранять нечего, просто показываем выбор.
-      setDefaultModel(providerName ? { provider: providerName, model: '' } : null)
+  /**
+   * Модели провайдера для селекта «модель по умолчанию». Каталог постраничный,
+   * поэтому модели нужного провайдера могут не попасть в загруженную страницу —
+   * берём их отдельным запросом (только включённые).
+   */
+  const [pairProviderModels, setPairProviderModels] = useState<ModelInfo[]>([])
+
+  useEffect(() => {
+    const provider = defaultModel?.provider || defaultsPair?.provider || ''
+    if (!provider) {
+      setPairProviderModels([])
       return
     }
-    await saveDefaultPair({ provider: providerName, model: first.name })
+    let cancelled = false
+    synthApi
+      .getModelGroups({ provider, enabled: true, limit: 100 })
+      .then(({ page }) => {
+        if (!cancelled) setPairProviderModels(page.models)
+      })
+      .catch(() => {
+        if (!cancelled) setPairProviderModels([])
+      })
+    return () => { cancelled = true }
+  }, [defaultModel?.provider, defaultsPair?.provider])
+
+  const handleDefaultProviderChange = async (providerName: string) => {
+    // У провайдера нет включённых моделей — сохранять нечего, просто показываем выбор.
+    setDefaultModel(providerName ? { provider: providerName, model: '' } : null)
+    if (!providerName) return
+    try {
+      const { page } = await synthApi.getModelGroups({
+        provider: providerName,
+        enabled: true,
+        limit: 100,
+      })
+      const first = page.models[0]
+      if (!first) return
+      await saveDefaultPair({ provider: providerName, model: first.name })
+    } catch {
+      /* провайдер без моделей — выбор остаётся пустым */
+    }
   }
 
   const handleDefaultModelChange = async (modelName: string) => {
@@ -252,7 +360,7 @@ export const ModelsPanel = () => {
       setDefaultModel(res.defaultModel ?? null)
       setDefaultsPair(res.defaults ?? null)
       setIsOverridden(res.isOverridden ?? false)
-      await load()
+      await load(queryRef.current)
     } catch (err) {
       setDefaultError(err instanceof Error ? err.message : t('admin.models.saveDefaultError'))
     } finally {
@@ -278,12 +386,12 @@ export const ModelsPanel = () => {
     )
     try {
       await synthApi.setDefaultModel({ provider: model.provider, model: model.name })
-      await load()
+      await load(queryRef.current)
     } catch (err) {
       setDefaultModel(prevPair)
       setIsOverridden(prevOverridden)
       setDefaultError(err instanceof Error ? err.message : t('admin.models.saveDefaultError'))
-      await load()
+      await load(queryRef.current)
     }
   }
 
@@ -371,7 +479,7 @@ export const ModelsPanel = () => {
     if (!(await confirm({ title: t('admin.models.confirmDelete', { id: modelId }), variant: 'danger' }))) return
     try {
       await synthApi.deleteModel(modelId)
-      await load()
+      await load(queryRef.current)
     } catch { /* ignore */ }
   }
 
@@ -461,7 +569,7 @@ export const ModelsPanel = () => {
       setAddCtx('')
       setAddInPrice('')
       setAddOutPrice('')
-      await load()
+      await load(queryRef.current)
     } catch (err) {
       setAddError(err instanceof Error ? err.message : t('admin.models.createError'))
     } finally {
@@ -507,21 +615,13 @@ export const ModelsPanel = () => {
     if (value) expandGroup(value)
   }
 
-  const allProviders = groups.map((g) => g.provider.name)
-  const totalModels = groups.reduce((sum, g) => sum + g.models.length, 0)
+  const totalModels = total
   const searchTerm = search.trim().toLowerCase()
   const searchActive = searchTerm.length > 0
-  // Поиск — глобальный по названию модели: группа без совпадений скрывается,
-  // счётчик в заголовке показывает «совпало из всего».
+  // Поиск и фильтры — на сервере: группы приходят уже отфильтрованными,
+  // локальной фильтрации списка больше нет.
   const filteredGroups = groups
-    .filter((g) => !filterProvider || g.provider.name === filterProvider)
-    .map((g) => {
-      const available = onlyEnabled ? g.models.filter((m) => m.enabled) : g.models
-      const models = searchActive
-        ? available.filter((m) => m.name.toLowerCase().includes(searchTerm))
-        : available
-      return { provider: g.provider, models, total: available.length }
-    })
+    .map((g) => ({ provider: g.provider, models: g.models, total: g.models.length }))
     .filter((g) => g.models.length > 0)
   const visibleCount = filteredGroups.reduce((sum, g) => sum + g.models.length, 0)
 
@@ -614,13 +714,15 @@ export const ModelsPanel = () => {
       table.getBoundingClientRect().top - scroller.getBoundingClientRect().top
   }, [search, filterProvider, onlyEnabled])
 
-  const enabledProviders = groups.filter((g) => g.models.length > 0)
+  const enabledProviders = useProvidersStore((s) => s.providers)
 
   // Эффективная пара: override из настроек, иначе дефолт (legacy-пара провайдера).
   // Пара не задана — показываем первого провайдера, чтобы селект модели был доступен.
   const pairProvider = defaultModel?.provider || defaultsPair?.provider || allProviders[0] || ''
   const pairModel = defaultModel?.model || defaultsPair?.model || ''
-  const pairModelOptions = enabledModelsOf(pairProvider)
+  const pairModelOptions = pairProviderModels.length > 0
+    ? pairProviderModels
+    : enabledModelsOf(pairProvider)
 
   const formatPrice = (price?: number, currency?: string) => {
     if (price === undefined || price === null) return ''
@@ -649,9 +751,7 @@ export const ModelsPanel = () => {
       />
       <span className="font-medium text-sm min-w-0 break-words">{item.provider.name}</span>
       <span className="text-xs text-muted-foreground">
-        {searchActive
-          ? t('admin.models.modelsCountOf', { shown: item.shown, total: item.total })
-          : t('admin.models.modelsCount', { count: item.shown })}
+        {t('admin.models.modelsCount', { count: item.shown })}
       </span>
       {item.provider.defaultModel && (
         <span className="text-xs text-muted-foreground sm:ml-auto sm:mr-2 min-w-0 break-words">
@@ -1116,7 +1216,7 @@ export const ModelsPanel = () => {
 
       {/* Дополнительные фильтры списка */}
       <SettingsSection id="models-filters-advanced" advanced>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <SelectField
             label={t('admin.models.allProviders')}
             tooltip={t('settings.help.models.filterProvider')}
@@ -1128,6 +1228,20 @@ export const ModelsPanel = () => {
               <SelectItem value="">{t('admin.models.allProviders')}</SelectItem>
               {allProviders.map((p) => (
                 <SelectItem key={p} value={p}>{p}</SelectItem>
+              ))}
+            </SelectContent>
+          </SelectField>
+          <SelectField
+            label={t('admin.models.modality')}
+            tooltip={t('settings.help.models.filterModality')}
+            value={filterModality}
+            onValueChange={setFilterModality}
+            ariaLabel={t('admin.models.modality')}
+          >
+            <SelectContent>
+              <SelectItem value="">{t('admin.models.modalityAny')}</SelectItem>
+              {MODEL_MODALITIES.map((m) => (
+                <SelectItem key={m} value={m}>{t(`admin.models.modality.${m}`)}</SelectItem>
               ))}
             </SelectContent>
           </SelectField>
@@ -1304,6 +1418,21 @@ export const ModelsPanel = () => {
               })}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Каталог постраничный: следующая страница — по кнопке. */}
+      {nextOffset !== null && items.length > 0 && (
+        <div className="flex justify-center pt-1">
+          <Button
+            variant="outline"
+            onClick={() => void loadMore()}
+            disabled={loadingMore}
+            data-testid="models-load-more"
+          >
+            <Icon name="loader-2" className={cn('size-3.5', loadingMore && 'animate-spin')} />
+            {loadingMore ? t('admin.models.loadingMore') : t('admin.models.showMore')}
+          </Button>
         </div>
       )}
     </SettingsPanel>

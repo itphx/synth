@@ -5,8 +5,10 @@ import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '../../stores/useUIStore'
 import { useProjectsStore } from '../../stores/projectsStore'
 import { useChatStore } from '@/stores/chatStore'
+import { applyHistoryPage } from '@/stores/transportStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { synthApi } from '@/lib/api/synthApi'
+import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
 import { useNotification } from '@/hooks/useNotification'
 import { useAuthStore } from '@/stores/authStore'
 import { confirm } from '@/lib/confirm'
@@ -122,8 +124,9 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     try {
       await synthApi.clearSession(sessionId)
       useChatStore.getState().clearSession(sessionId)
-      const result = await synthApi.getSessionMessages(sessionId)
-      useChatStore.getState().setMessages(sessionId, result.messages)
+      const result = await synthApi.getSessionMessages(sessionId, { limit: MESSAGES_PAGE_LIMIT })
+      // История очищена — снимок авторитетен, пагинация сбрасывается.
+      applyHistoryPage(sessionId, result)
       notify({ text: t('chat.session.cleared'), type: 'success', category: 'queue', sessionId })
     } catch {
       notify({ text: t('chat.error.clearSession'), type: 'error', category: 'error', sessionId })
@@ -216,8 +219,10 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
 
   const afterBulkReload = useCallback(async () => {
     if (!sessionId) return
-    const result = await synthApi.getSessionMessages(sessionId)
-    useChatStore.getState().setMessages(sessionId, result.messages)
+    const result = await synthApi.getSessionMessages(sessionId, { limit: MESSAGES_PAGE_LIMIT })
+    // Снимок — страница истории: мерж, а не `setMessages` (иначе догруженные
+    // старые страницы ленты терялись бы).
+    applyHistoryPage(sessionId, result)
     useChatStore.getState().clearSelection(sessionId)
   }, [sessionId])
 

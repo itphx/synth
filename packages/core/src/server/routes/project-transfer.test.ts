@@ -108,6 +108,33 @@ describe('Project transfer routes (publish / fork-local)', () => {
       expect(call.localSessions.map((s) => s.id)).toEqual([session.id]);
     });
 
+    it('publish использует ПОЛНЫЙ список сессий (история в архиве переносится)', async () => {
+      const app = createApp(true);
+      const project = store.create('Local Proj', 'local', { workspace: 'local-proj' });
+      await store.save(project);
+      await mkdir(join(workspacesRoot, 'local-proj'), { recursive: true });
+      const session = await sessionManager.createSession({ title: 'S1', projectId: project.id });
+      await sessionManager.addMessage(session.id, {
+        id: 'm1', role: 'user', seq: 1, origin: 'local',
+        parts: [{ id: 'p1', type: 'text', data: 'привет' }],
+        content: 'привет',
+        createdAt: new Date().toISOString(),
+        disabled: false, pinned: false, hidden: false,
+      } as never);
+
+      const res = await app.request(`/api/v2/projects/${project.id}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(201);
+
+      const call = vi.mocked(syncProjectToRemote).mock.calls[0]![0];
+      // Экспорт переносит историю → список сессий здесь полный (не лёгкий).
+      expect(call.localSessions[0]!.messages).toHaveLength(1);
+      expect(call.localSessions[0]!.messages[0]!.content).toBe('привет');
+    });
+
     it('обновляет существующий remote-проект при remote_project_id (снимает remote: префикс)', async () => {
       const app = createApp(true);
       const project = store.create('Local Proj', 'local', { workspace: 'local-proj' });

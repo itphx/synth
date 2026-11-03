@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { SelectContent, SelectItem } from '../select'
 import { SelectField } from './controls/SelectField'
 
@@ -62,9 +63,19 @@ export function ModelPairSelect({
 }: ModelPairSelectProps) {
   const compact = variant === 'compact'
   const availableProviders = filterOptions ? providers.filter((p) => p.enabled) : providers
-  const availableModels = filterOptions
+  const filteredModels = filterOptions
     ? models.filter((m) => m.enabled && (!provider || m.provider === provider))
     : models
+  /**
+   * Текущее значение видно всегда: каталог моделей постраничный, выбранная
+   * модель может быть не на загруженной странице — иначе селект выглядел бы
+   * пустым (значение не из списка).
+   */
+  const availableModels = useMemo(() => {
+    if (!model) return filteredModels
+    if (filteredModels.some((m) => m.name === model)) return filteredModels
+    return [...filteredModels, { name: model, provider, enabled: true }]
+  }, [filteredModels, model, provider])
 
   const ariaPrefix = ariaLabelPrefix ?? (compact ? label : undefined)
   const providerAria = ariaPrefix ? `${ariaPrefix} — ${providerLabel}` : providerLabel

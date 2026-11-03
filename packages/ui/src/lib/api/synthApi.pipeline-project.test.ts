@@ -220,6 +220,83 @@ describe('pipelineProjectApi — пайплайны проекта (ADR-101 §5.
   })
 })
 
+describe('pipelineProjectApi — страницы пайплайнов, прогонов и журнала', () => {
+  it('getProjectPipelinesPage: GET .../pipelines с limit/offset и разворот страницы', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ pipelines: [PIPELINE], total: 2, offset: 1, limit: 100, next_offset: null }),
+    )
+
+    const page = await synthApi.getProjectPipelinesPage('p1', { limit: 100, offset: 1 })
+
+    expect(lastUrl()).toContain('/api/v2/projects/p1/pipelines?')
+    expect(lastUrl()).toContain('limit=100')
+    expect(lastUrl()).toContain('offset=1')
+    expect(page.pipelines).toHaveLength(1)
+    expect(page.next_offset).toBeNull()
+  })
+
+  it('getProjectPipelines: обёртка собирает все страницы в массив', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ pipelines: [PIPELINE], total: 2, offset: 0, limit: 100, next_offset: 1 }),
+    )
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        pipelines: [{ ...PIPELINE, id: 'pl2' }],
+        total: 2,
+        offset: 1,
+        limit: 100,
+        next_offset: null,
+      }),
+    )
+
+    const pipelines = await synthApi.getProjectPipelines('p1')
+
+    expect(pipelines.map((p) => p.id)).toEqual(['pl1', 'pl2'])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('listPipelineRunsPage: GET .../runs — страница прогонов с курсором', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ runs: [RUN], offset: 0, limit: 100, next_offset: 1 }),
+    )
+
+    const page = await synthApi.listPipelineRunsPage('p1', 'pl1', { limit: 100, offset: 0 })
+
+    expect(page.runs).toHaveLength(1)
+    expect(page.next_offset).toBe(1)
+  })
+
+  it('listPipelineRuns: offset уходит в query', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ runs: [], offset: 0, limit: 100, next_offset: null }))
+
+    await synthApi.listPipelineRuns('p1', 'pl1', { limit: 100, offset: 100 })
+
+    expect(lastUrl()).toContain('offset=100')
+  })
+
+  it('getPipelineRun: events_limit/events_before уходят в query', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        run: RUN,
+        events: [],
+        events_has_more: true,
+        events_next_before: '2026-10-20T12:00:00.000Z',
+      }),
+    )
+
+    const detail = await synthApi.getPipelineRun('run1', {
+      eventsLimit: 50,
+      eventsBefore: '2026-10-20T12:00:00.000Z',
+    })
+
+    expect(lastUrl()).toContain('/api/v2/pipeline-runs/run1?')
+    expect(lastUrl()).toContain('events_limit=50')
+    expect(lastUrl()).toContain('events_before=')
+    expect(detail.events_has_more).toBe(true)
+    expect(detail.events_next_before).toBe('2026-10-20T12:00:00.000Z')
+  })
+})
+
 describe('pipelineProjectApi — HITL-решения и отмена прогона', () => {
   it('resumePipelineRun: одобрение — тело {approved: true}', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ run: { ...RUN, status: 'running' } }))

@@ -4,8 +4,9 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useChatStore, type MessageData, type QueuedMessage } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useTransportStore, mergeServerMessages, restoreLiveTurnFromSession } from '@/stores/transportStore'
+import { useTransportStore, applyHistoryPage, restoreLiveTurnFromSession } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
+import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
 import { stickyNoteErrorKey, useStickyNotesLimits } from '@/lib/api/stickyNotesLimits'
 import { isQueueChangedError } from '@/lib/api/queue'
 import { attachmentThumbnailUrl } from '@/lib/api/attachments'
@@ -129,6 +130,9 @@ export function ChatTab({ tab }: ChatTabProps) {
   const setStreamRetry = useChatStore(s => s.setStreamRetry)
 
   const sessionId = tab.data.sessionId || tab.id
+  // Пагинация истории: есть ли сообщения старше загруженной страницы
+  // (кнопка «Загрузить старые» над лентой).
+  const historyPage = useChatStore(s => s.historyPageBySession[sessionId])
   // Заполнение контекстного окна: тост на 80% (один раз на сессию/порог) и
   // жёлтый блок над композером на 90% (оба выключаются политикой `off`).
   const contextUsage = useContextWindowUsage(sessionId)
@@ -188,13 +192,24 @@ export function ChatTab({ tab }: ChatTabProps) {
     const load = async () => {
       try {
         // Загружаем сообщения — нужно первым
-        const result = await synthApi.getSessionMessages(sessionId)
+        // ADR-118 + пагинация истории: грузим **последнюю** страницу
+        // (`limit`), а не всю историю — старые догружаются по кнопке.
+        const result = await synthApi.getSessionMessages(sessionId, { limit: MESSAGES_PAGE_LIMIT })
         if (cancelled) return
         // ADR-118 §5: снимок истории сводится с живым состоянием, а не
         // заменяет его — иначе переключение сессий во время хода затирало
         // уже показанный контент более старым снимком («мелькал» и пропадал).
         // Границы идущего хода восстанавливаются внутри мержа.
-        mergeServerMessages(sessionId, result.messages)
+        applyHistoryPage(sessionId, result)
+        // Курсор «Загрузить старые» инициализируем **один раз** на сессию:
+        // снимок последней страницы не знает про старые страницы, догруженные
+        // пользователем (иначе они стали бы недостижимыми).
+        if (!useChatStore.getState().historyPageBySession[sessionId]) {
+          useChatStore.getState().setHistoryPage(sessionId, {
+            hasMore: result.has_more === true,
+            nextBefore: typeof result.next_before === 'number' ? result.next_before : null,
+          })
+        }
 
         // Агенты и данные сессии параллельно (независимы друг от друга)
         const [agentsResp, session] = await Promise.all([
@@ -257,6 +272,33 @@ export function ChatTab({ tab }: ChatTabProps) {
     load()
     return () => { cancelled = true }
   }, [sessionId])
+
+  /**
+   * «Загрузить старые»: страница истории **перед** текущей (`before` — курсор
+   * `seq`). Старые сообщения добавляются в начало ленты, курсор пагинации
+   * обновляется (следующая страница — ещё старше).
+   *
+   * Позицию скролла восстанавливает `MessageList` (он владеет контейнером
+   * прокрутки): контент сверху вырос — компенсируем разницу высот.
+   */
+  const handleLoadOlder = useCallback(async () => {
+    const page = useChatStore.getState().historyPageBySession[sessionId]
+    if (!page?.hasMore || page.nextBefore == null) return
+    try {
+      const result = await synthApi.getSessionMessages(sessionId, {
+        limit: MESSAGES_PAGE_LIMIT,
+        before: page.nextBefore,
+      })
+      const chat = useChatStore.getState()
+      chat.prependMessages(sessionId, result.messages ?? [])
+      chat.setHistoryPage(sessionId, {
+        hasMore: result.has_more === true,
+        nextBefore: typeof result.next_before === 'number' ? result.next_before : null,
+      })
+    } catch {
+      notify({ text: t('chat.error.loadOlder'), type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, notify, t])
 
   const handleFork = useCallback(
     async (msg: MessageData) => {
@@ -515,9 +557,9 @@ export function ChatTab({ tab }: ChatTabProps) {
       try {
         if (!msg.id) return
         await synthApi.deleteMessage(sessionId, msg.id)
-        const result = await synthApi.getSessionMessages(sessionId)
+        const result = await synthApi.getSessionMessages(sessionId, { limit: MESSAGES_PAGE_LIMIT })
         // ADR-118 §5: мерж с живым состоянием (см. первичную загрузку).
-        mergeServerMessages(sessionId, result.messages)
+        applyHistoryPage(sessionId, result)
         notify({ text: t('chat.message.deleted'), type: 'info', category: 'message', sessionId })
       } catch {
         notify({ text: t('chat.error.deleteMessage'), type: 'error', category: 'error', sessionId })
@@ -533,9 +575,9 @@ export function ChatTab({ tab }: ChatTabProps) {
       try {
         if (!msg.id) return
         const result = await synthApi.retryMessage(sessionId, msg.id)
-        const reloadResult = await synthApi.getSessionMessages(sessionId)
+        const reloadResult = await synthApi.getSessionMessages(sessionId, { limit: MESSAGES_PAGE_LIMIT })
         // ADR-118 §5: мерж с живым состоянием (см. первичную загрузку).
-        mergeServerMessages(sessionId, reloadResult.messages)
+        applyHistoryPage(sessionId, reloadResult)
         // ADR-115: вложения возвращаются в композер вместе с текстом (маркеры
         // уже в `content` — повторной вставки не будет). `restore` — до
         // `setRetryInput`, чтобы к моменту появления текста чипы уже были.
@@ -946,6 +988,8 @@ export function ChatTab({ tab }: ChatTabProps) {
               retry={streamRetry}
               onRetryNow={handleRetryNow}
               onCancelRetry={handleCancelRetry}
+              hasOlder={historyPage?.hasMore === true}
+              onLoadOlder={handleLoadOlder}
             />
           )}
 

@@ -169,8 +169,9 @@ describe('createStandaloneApp: WS /ws/events — сессии, созданны�
 
       const sessions = await req(app, '/api/v2/sessions');
       expect(sessions.status).toBe(200);
-      const list = (await sessions.json()) as Array<{ id: string; owner_id: string | null }>;
-      const found = list.find((s) => s.id === sessionId);
+      // Контракт v2: список сессий — объект-страница `{sessions, total, ...}`.
+      const list = (await sessions.json()) as { sessions: Array<{ id: string; owner_id: string | null }> };
+      const found = list.sessions.find((s) => s.id === sessionId);
       expect(found?.owner_id).toBe('local');
     } finally {
       client.ws.terminate();

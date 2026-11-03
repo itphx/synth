@@ -117,8 +117,9 @@ describe('standalone: legacy-владелец (UUID профиля `local`) — 
       // 1) Видна в списке локального пользователя `local`.
       const listRes = await req(app, '/api/v2/sessions');
       expect(listRes.status).toBe(200);
-      const list = (await listRes.json()) as Array<{ id: string }>;
-      expect(list.find((s) => s.id === sessionId)).toBeTruthy();
+      // Контракт v2: список сессий — объект-страница `{sessions, total, ...}`.
+      const list = (await listRes.json()) as { sessions: Array<{ id: string }> };
+      expect(list.sessions.find((s) => s.id === sessionId)).toBeTruthy();
 
       // 2) Доступна по id (было 403 при владельце-UUID).
       const detail = await req(app, `/api/v2/sessions/${sessionId}`);
@@ -159,8 +160,8 @@ describe('standalone: legacy-владелец (UUID профиля `local`) — 
 
       const listRes = await req(app, '/api/v2/sessions');
       expect(listRes.status).toBe(200);
-      const list = (await listRes.json()) as Array<{ id: string }>;
-      expect(list.find((s) => s.id === sessionId)).toBeFalsy();
+      const list = (await listRes.json()) as { sessions: Array<{ id: string }> };
+      expect(list.sessions.find((s) => s.id === sessionId)).toBeFalsy();
 
       const detail = await req(app, `/api/v2/sessions/${sessionId}`);
       expect(detail.status).toBe(403);

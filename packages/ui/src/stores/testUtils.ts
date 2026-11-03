@@ -19,5 +19,6 @@ export function resetChatStore(): void {
     stickyNotesBySession: {},
     summarizationPendingBySession: {},
     liveSubagentUsageBySession: {},
+    historyPageBySession: {},
   } as Partial<ReturnType<typeof useChatStore.getState>>)
 }

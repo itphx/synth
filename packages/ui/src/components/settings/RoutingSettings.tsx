@@ -9,6 +9,7 @@ import {
 } from '@/lib/routingDefaults'
 import { confirm } from '@/lib/confirm'
 import { useTransientMessage } from '@/hooks/useTransientMessage'
+import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { synthApi, type DictionaryEntry } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
 import { SelectContent, SelectItem } from '@/components/ui/select'
@@ -61,6 +62,22 @@ export function RoutingSettings() {
   })
 
   const settings = draft.draft ?? DEFAULT_ROUTING_DEFAULTS
+
+  // Каталог моделей постраничный: выбранные модели могут быть не на
+  // загруженной странице — догружаем их по ссылке (иначе селект пустой, а
+  // окно контекста неизвестно).
+  useEnsureModelsLoaded([
+    settings.routingContent.coding.provider && settings.routingContent.coding.model
+      ? `${settings.routingContent.coding.provider}/${settings.routingContent.coding.model}` : null,
+    settings.routingContent.chat.provider && settings.routingContent.chat.model
+      ? `${settings.routingContent.chat.provider}/${settings.routingContent.chat.model}` : null,
+    settings.routingContent.research.provider && settings.routingContent.research.model
+      ? `${settings.routingContent.research.provider}/${settings.routingContent.research.model}` : null,
+    settings.routingEscalation.fallbackProvider && settings.routingEscalation.fallbackModel
+      ? `${settings.routingEscalation.fallbackProvider}/${settings.routingEscalation.fallbackModel}` : null,
+    settings.routingCost.cheapProvider && settings.routingCost.cheapModel
+      ? `${settings.routingCost.cheapProvider}/${settings.routingCost.cheapModel}` : null,
+  ])
 
   const update = (patch: Partial<RoutingDefaults>) => {
     draft.setDraft((s) => ({ ...s, ...patch }))

@@ -131,10 +131,46 @@ describe('Pipelines API Routes (ADR-051/ADR-100)', () => {
     const limited = await app.request('/api/v2/pipelines/instances?limit=1');
     const limitedBody: any = await limited.json();
     expect(limitedBody.instances).toHaveLength(1);
+    expect(limitedBody.offset).toBe(0);
+    expect(limitedBody.limit).toBe(1);
+    expect(limitedBody.next_offset).toBe(1);
 
     // Неизвестный статус → 400 (fail-closed, а не молчаливый фильтр).
     const bad = await app.request('/api/v2/pipelines/instances?status=nope');
     expect(bad.status).toBe(400);
+  });
+
+  it('GET /instances — offset/next_offset (постраничная выдача)', async () => {
+    const app = createTestApp();
+    // Свежие первыми: run-3 (03.01) → run-2 (02.01) → run-1 (01.01).
+    for (const [id, createdAt] of [
+      ['run-1', '2026-01-01T00:00:00.000Z'],
+      ['run-2', '2026-02-01T00:00:00.000Z'],
+      ['run-3', '2026-03-01T00:00:00.000Z'],
+    ] as const) {
+      await store.saveInstance({
+        id,
+        pipelineId: 'publication',
+        status: 'pending',
+        steps: [{ id: 'step-1', status: 'pending' }],
+        attempts: 0,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    }
+
+    const first = await app.request('/api/v2/pipelines/instances?limit=2');
+    const firstBody: any = await first.json();
+    expect(firstBody.instances.map((i: any) => i.id)).toEqual(['run-3', 'run-2']);
+    expect(firstBody.offset).toBe(0);
+    expect(firstBody.limit).toBe(2);
+    expect(firstBody.next_offset).toBe(2);
+
+    const second = await app.request('/api/v2/pipelines/instances?limit=2&offset=2');
+    const secondBody: any = await second.json();
+    expect(secondBody.instances.map((i: any) => i.id)).toEqual(['run-1']);
+    expect(secondBody.offset).toBe(2);
+    expect(secondBody.next_offset).toBeNull();
   });
 
   it('GET /instances/:instanceId — экземпляр; 404 для неизвестного', async () => {

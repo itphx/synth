@@ -343,7 +343,7 @@ describe('Project API Routes (opts: RBAC / stats / MCP / managed)', () => {
     expect((await store.load(created.id))!.ownerId).toBe('alice');
   });
 
-  it('sessionManager: GET /:id/stats агрегирует токены/сообщения, 404 для чужого id', async () => {
+  it('sessionManager: GET /:id/stats агрегирует токены, 404 для чужого id', async () => {
     const listSessions = vi.fn().mockResolvedValue([
       {
         inputTokens: 100, outputTokens: 10, totalTokens: 110,
@@ -367,7 +367,9 @@ describe('Project API Routes (opts: RBAC / stats / MCP / managed)', () => {
     expect(body.total_cache_read_tokens).toBe(5);
     expect(body.total_cache_write_tokens).toBe(1);
     expect(body.total_reasoning_tokens).toBe(2);
-    expect(body.total_messages).toBe(3);
+    // Счётчик сообщений проекта удалён: список сессий всегда лёгкий (без истории),
+    // а ложный «0» в ответе вводил бы в заблуждение.
+    expect('total_messages' in body).toBe(false);
     expect(listSessions).toHaveBeenCalledWith({ projectId: id });
 
     expect((await app.request('/api/v2/projects/nope/stats')).status).toBe(404);
@@ -639,12 +641,12 @@ describe('Project API Routes (visibility, ADR-089)', () => {
     });
 
     const asAlice = await plain.request('/api/v2/projects', { headers: header('alice') });
-    expect(((await asAlice.json()) as unknown[]).map((p: any) => p.name)).toEqual(['OwnerP']);
+    expect(((await asAlice.json()) as { projects: any[] }).projects.map((p: any) => p.name)).toEqual(['OwnerP']);
 
     const asLead = await plain.request('/api/v2/projects', {
       headers: { ...header('lead'), 'X-Elevated': '1' },
     });
-    expect((await asLead.json() as unknown[]).length).toBe(2);
+    expect(((await asLead.json()) as { projects: any[] }).projects).toHaveLength(2);
   });
 
   it('GET /:id — участник (VIEWER) читает проект, посторонний → 403', async () => {

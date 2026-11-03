@@ -28,21 +28,45 @@ afterEach(() => {
 
 describe('sessionsApi — список и карточка сессии', () => {
   it('getSessions(): без query, когда projectId не задан', async () => {
-    fetchMock.mockResolvedValue(jsonResponse([]))
-    await synthApi.getSessions()
+    // Контракт v2: список сессий — объект-страница `{sessions, total, ...}`.
+    fetchMock.mockResolvedValue(jsonResponse({ sessions: [{ id: 's1' }], total: 1, offset: 0, limit: 100, next_offset: null }))
+    const list = await synthApi.getSessions()
     expect(fetchMock).toHaveBeenCalledWith('/api/v2/sessions', expect.objectContaining({}))
+    expect(list).toHaveLength(1)
 
     await synthApi.getSessions(null)
     expect(fetchMock).toHaveBeenLastCalledWith('/api/v2/sessions', expect.objectContaining({}))
   })
 
   it('getSessions(projectId): добавляет project_id с кодированием', async () => {
-    fetchMock.mockResolvedValue(jsonResponse([]))
+    fetchMock.mockResolvedValue(jsonResponse({ sessions: [], total: 0, offset: 0, limit: 100, next_offset: null }))
     await synthApi.getSessions('p/1')
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v2/sessions?project_id=p%2F1',
       expect.objectContaining({}),
     )
+  })
+
+  it('getSessionsPage(): возвращает страницу с метаданными пагинации', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      sessions: [{ id: 's1' }],
+      total: 42,
+      offset: 10,
+      limit: 25,
+      next_offset: 35,
+    }))
+
+    const page = await synthApi.getSessionsPage({ limit: 25, offset: 10, project_id: 'p1' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/sessions?project_id=p1&limit=25&offset=10',
+      expect.objectContaining({}),
+    )
+    expect(page.total).toBe(42)
+    expect(page.offset).toBe(10)
+    expect(page.limit).toBe(25)
+    expect(page.next_offset).toBe(35)
+    expect(page.sessions).toHaveLength(1)
   })
 
   it('getSession: id кодируется (пробел → %20)', async () => {

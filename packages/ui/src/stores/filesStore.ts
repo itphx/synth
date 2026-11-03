@@ -57,6 +57,11 @@ interface FilesStore {
   deletedFiles: Record<string, true>
   /** Черновики открытых редакторов, ключ `${projectId}::${path}`. Runtime-only. */
   draftContents: Record<string, string>
+  /**
+   * Каталоги, ответ листинга которых был обрезан сервером по лимиту записей
+   * (`maxDepth > 0`), ключ `${projectId}/${dir}` (для корня — `${projectId}`).
+   */
+  truncatedDirs: Record<string, boolean>
   loading: boolean
   error: string | null
   expandedProjects: Set<string>
@@ -135,6 +140,7 @@ export const useFilesStore = create<FilesStore>()(
             ...s.treesByProject,
             [dirPath ? `${projectId}/${dirPath}` : projectId]: filterTreeEntries(result.entries),
           },
+          truncatedDirs: { ...s.truncatedDirs, [dirPath ? `${projectId}/${dirPath}` : projectId]: result.truncated === true },
         }))
       }
 
@@ -285,6 +291,7 @@ export const useFilesStore = create<FilesStore>()(
         fileRevisions: {},
         deletedFiles: {},
         draftContents: {},
+        truncatedDirs: {},
         loading: false,
         error: null,
         expandedProjects: new Set<string>(),
@@ -303,6 +310,10 @@ export const useFilesStore = create<FilesStore>()(
                 ...s.treesByProject,
                 [path ? `${projectId}/${path}` : projectId]: filterTreeEntries(result.entries),
               },
+              truncatedDirs: {
+                ...s.truncatedDirs,
+                [path ? `${projectId}/${path}` : projectId]: result.truncated === true,
+              },
               loading: false,
             }))
           } catch (e) {
@@ -319,6 +330,7 @@ export const useFilesStore = create<FilesStore>()(
                 ...s.treesByProject,
                 [`${projectId}/${dirPath}`]: filterTreeEntries(result.entries),
               },
+              truncatedDirs: { ...s.truncatedDirs, [`${projectId}/${dirPath}`]: result.truncated === true },
             }))
           } catch (e) {
             set({ error: (e as Error).message })
@@ -493,6 +505,7 @@ export const useFilesStore = create<FilesStore>()(
                   ...s.treesByProject,
                   [key]: filterTreeEntries(result.entries),
                 },
+                truncatedDirs: { ...s.truncatedDirs, [key]: result.truncated === true },
               }))
             } catch {
               // Каталог мог исчезнуть (смена workspace/удаление) — убираем только
@@ -528,6 +541,7 @@ export const useFilesStore = create<FilesStore>()(
               const result = await synthApi.listDirectory(projectId, dir, showHidden)
               set((s) => ({
                 treesByProject: { ...s.treesByProject, [key]: filterTreeEntries(result.entries) },
+                truncatedDirs: { ...s.truncatedDirs, [key]: result.truncated === true },
               }))
             } catch {
               // Каталог мог исчезнуть — убираем только его ключ.

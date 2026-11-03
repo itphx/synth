@@ -5,9 +5,18 @@ import React from 'react'
 
 const apiMock = vi.hoisted(() => ({
   getSessions: vi.fn(async () => []),
+  // Список сессий пагинирован (ADR-089): админ-панель берёт страницу.
+  getSessionsPage: vi.fn(async () => ({
+    sessions: [], total: 0, offset: 0, limit: 50, next_offset: null,
+  })),
   getProjects: vi.fn(async () => []),
   getUsers: vi.fn(async () => ({ users: [] })),
   getModels: vi.fn(async () => []),
+  // Каталог моделей — постраничный (ADR-095, C1): группы + курсор.
+  getModelGroups: vi.fn(async () => ({
+    groups: [],
+    page: { models: [], total: 0, offset: 0, limit: 100, next_offset: null },
+  })),
   getDefaultModel: vi.fn(async () => ({ defaultModel: null, isOverridden: false, defaults: null })),
   setDefaultModel: vi.fn(async (pair: { provider: string; model: string }) => ({ defaultModel: pair })),
   resetDefaultModel: vi.fn(async () => ({ status: 'restored', defaultModel: null, isOverridden: false, defaults: null })),

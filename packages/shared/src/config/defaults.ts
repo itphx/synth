@@ -5,7 +5,7 @@ import {
   DEFAULT_EGRESS_WEBHOOKS_POLICY,
   DEFAULT_EGRESS_LOG,
 } from '../types/index.js';
-import { DEFAULT_MAX_UPLOAD_BYTES } from '../types/index.js';
+import { DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_MAX_READ_BYTES } from '../types/index.js';
 import { DEFAULT_PROMPT_BLOCK_MAX_CHARS, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '../types/index.js';
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from './types.js';
 import { defaultExecutionConcurrency } from './execution.js';
@@ -29,6 +29,7 @@ export const defaultConfig: SynthConfig = {
     defaultWorkspace: '',
     workspaceOutsideRoot: '',
     maxUploadBytes: DEFAULT_MAX_UPLOAD_BYTES,
+    maxReadBytes: DEFAULT_MAX_READ_BYTES,
   },
   execution: {
     // ADR-077: топология исполнения — параметр запуска (инвариант 24: смена

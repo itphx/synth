@@ -692,10 +692,21 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       messages?: Array<{ content?: string; metadata?: { secrets?: Record<string, string> } }>;
     };
 
-    it('участник проекта (VIEWER) → 200, но реальных значений в ответе нет', async () => {
+    it('сводка сессии (GET /:id) — без истории: секретов в ответе нет вовсе', async () => {
       const { app, session } = await seedSharedSession();
 
-      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('member') });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('owner') });
+      expect(res.status).toBe(ok);
+      const body = (await res.json()) as ReadBody;
+      // История вынесена в `GET /:id/messages` — в сводке её нет.
+      expect(body.messages).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain(REAL_SECRET);
+    });
+
+    it('участник проекта (VIEWER) → 200, но реальных значений в истории нет', async () => {
+      const { app, session } = await seedSharedSession();
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages`, { headers: auth('member') });
       expect(res.status).toBe(ok);
       const body = (await res.json()) as ReadBody;
       expect(JSON.stringify(body)).not.toContain(REAL_SECRET);
@@ -708,7 +719,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
     it('владелец сессии → реальные значения на месте (UI раскрывает плейсхолдер)', async () => {
       const { app, session } = await seedSharedSession();
 
-      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('owner') });
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages`, { headers: auth('owner') });
       expect(res.status).toBe(ok);
       const body = (await res.json()) as ReadBody;
       expect(body.messages?.[0]?.metadata?.secrets).toEqual({ [PLACEHOLDER]: REAL_SECRET });
@@ -717,7 +728,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
     it('ADMIN → реальные значения (тот же набор привилегий, что у GET /:id/secrets)', async () => {
       const { app, session } = await seedSharedSession();
 
-      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('admin') });
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages`, { headers: auth('admin') });
       expect(res.status).toBe(ok);
       const body = (await res.json()) as ReadBody;
       expect(body.messages?.[0]?.metadata?.secrets).toEqual({ [PLACEHOLDER]: REAL_SECRET });
@@ -726,7 +737,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
     it('LEAD без владения → 200, но реальных значений нет', async () => {
       const { app, session } = await seedSharedSession();
 
-      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('lead') });
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages`, { headers: auth('lead') });
       expect(res.status).toBe(ok);
       const body = (await res.json()) as ReadBody;
       expect(JSON.stringify(body)).not.toContain(REAL_SECRET);

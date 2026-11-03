@@ -256,6 +256,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
     // Лимит загрузки: config/env (resolveMaxUploadBytes), иначе дефолт фабрики.
     maxUploadBytes: config.maxUploadBytes,
+    // Лимит чтения файла: config/env (resolveMaxReadBytes), иначе дефолт фабрики.
+    maxReadBytes: config.maxReadBytes,
     authorizeProject: async (c, projectId) => {
       const user = await auth.getCurrentUser(c);
       if (!user) return false;

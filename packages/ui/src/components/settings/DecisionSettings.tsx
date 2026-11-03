@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
+import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { useProvidersStore } from '@/stores/providersStore'
 import { Button } from '@/components/ui/button'
 import { confirm } from '@/lib/confirm'
@@ -73,6 +74,16 @@ export function DecisionSettings() {
     value: remote,
     defaultValue: defaults,
   })
+
+  // Каталог моделей постраничный: выбранные модели могут быть не на
+  // загруженной странице — догружаем их по ссылке (иначе селект пустой).
+  const decisionPair = draft.draft ?? defaults ?? remote
+  useEnsureModelsLoaded([
+    decisionPair?.provider && decisionPair?.model
+      ? `${decisionPair.provider}/${decisionPair.model}` : null,
+    decisionPair?.escalationProvider && decisionPair?.escalationModel
+      ? `${decisionPair.escalationProvider}/${decisionPair.escalationModel}` : null,
+  ])
 
   const load = useCallback(async () => {
     setLoading(true)

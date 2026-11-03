@@ -59,6 +59,8 @@ export type {
   CreateProjectBody,
   UpdateProjectBody,
   ProjectData,
+  ProjectListParams,
+  ProjectListPage,
   ProjectStats,
   PublishProjectResult,
   ProjectMcpResponse,
@@ -73,6 +75,7 @@ export type {
 } from './sessions'
 export type { MessageListResponse } from './messages'
 export type { MessageDetailResponse } from './messages'
+export type { MessagePageParams } from './messages'
 export type {
   WorkspaceRootResponse,
   WorkspaceBrowseResponse,
@@ -83,7 +86,8 @@ export type { GitRepoConfigData } from './git'
 export type { SSHKeyMetaData, SSHKeyCreateBody, SSHKeyUpdateBody } from './ssh-keys'
 export type { AgentMode, AgentInfo, AgentsListResponse } from './agents'
 export type { ProviderInfo, ProviderFetchIconResult, ProviderGroupInfo } from './providers'
-export type { ModelInfo, ModelGroup } from './models'
+export type { ModelInfo, ModelGroup, ModelsPage, ModelsQuery, ModelGroupsPage } from './models'
+export { MODELS_PAGE_LIMIT, mergeModelGroups, groupModelsByProvider } from './models'
 export type { ContextFileEntry } from './context'
 export type { DebugConfigData } from './debug'
 export type { UserInfo, UsersListResponse } from './users'
@@ -297,9 +301,12 @@ export type {
   ProjectPipeline,
   PipelineVersion,
   ProjectPipelineDetail,
+  ProjectPipelinesParams,
+  ProjectPipelinesPage,
   PipelineRunRecord,
   PipelineRunEvent,
   PipelineRunDetail,
+  PipelineRunsPage,
   PipelineTemplate,
   PipelineSpecBody,
   PipelineSpecInput,

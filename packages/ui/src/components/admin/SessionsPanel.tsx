@@ -7,19 +7,60 @@ import { cn } from '@/lib/utils'
 import { SettingsItem, SettingsPanel, SettingsSection } from '../ui/settings'
 import { notifyMessage } from '@/hooks/useNotification'
 
+/**
+ * Размер страницы списка сессий в админ-панели.
+ *
+ * Список сессий пагинирован на сервере (`GET /api/v2/sessions` → страница с
+ * `total`/`next_offset`), поэтому панель показывает страницу и догружает
+ * остальное по кнопке.
+ */
+const SESSIONS_PAGE_LIMIT = 50
+
 export const SessionsPanel = () => {
   const { t, locale } = useI18n()
   const [sessions, setSessions] = useState<SessionData[]>([])
+  const [total, setTotal] = useState(0)
+  const [nextOffset, setNextOffset] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const load = async () => {
     setLoading(true)
     try {
-      const data = await synthApi.getSessions()
-      setSessions(data)
+      const page = await synthApi.getSessionsPage({ limit: SESSIONS_PAGE_LIMIT })
+      setSessions(page.sessions ?? [])
+      setTotal(typeof page.total === 'number' ? page.total : (page.sessions?.length ?? 0))
+      setNextOffset(typeof page.next_offset === 'number' ? page.next_offset : null)
     } finally {
       setLoading(false)
+    }
+  }
+
+  /** Догрузка следующей страницы списка (кнопка «Показать ещё»). */
+  const loadMore = async () => {
+    if (loadingMore || nextOffset === null) return
+    setLoadingMore(true)
+    try {
+      const page = await synthApi.getSessionsPage({
+        limit: SESSIONS_PAGE_LIMIT,
+        offset: nextOffset,
+      })
+      const incoming = page.sessions ?? []
+      setSessions((prev) => {
+        const seen = new Set(prev.map((s) => s.id))
+        return [...prev, ...incoming.filter((s) => !seen.has(s.id))]
+      })
+      if (typeof page.total === 'number') setTotal(page.total)
+      setNextOffset(typeof page.next_offset === 'number' ? page.next_offset : null)
+    } catch (err) {
+      notifyMessage({
+        text: `${t('common.error')}: ${err instanceof Error ? err.message : ''}`.trim(),
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setLoadingMore(false)
     }
   }
 
@@ -42,7 +83,7 @@ export const SessionsPanel = () => {
   return (
     <SettingsPanel
       title={t('admin.sessions.title')}
-      meta={t('admin.sessions.count', { count: sessions.length })}
+      meta={t('admin.sessions.count', { count: total })}
       actions={
         <Button variant="ghost" onClick={load}>
           <Icon name="refresh" className="size-3.5" />
@@ -92,12 +133,9 @@ export const SessionsPanel = () => {
                             {isBlocked ? t('admin.sessions.blocked') : '—'}
                           </span>
                         </div>
+                        {/* Счётчика сообщений нет: список сессий не содержит
+                            истории (она — постранично в `GET /sessions/:id/messages`). */}
                         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground mt-1">
-                          <span>
-                            {s.messages?.length
-                              ? t('admin.sessions.messageCount', { count: s.messages.length })
-                              : '—'}
-                          </span>
                           <span>IN: {s.input_tokens || 0}</span>
                           <span>OUT: {s.output_tokens || 0}</span>
                         </div>
@@ -141,6 +179,15 @@ export const SessionsPanel = () => {
               </SettingsItem>
             )
           })}
+
+          {nextOffset !== null && (
+            <div className="px-4 py-2">
+              <Button variant="ghost" onClick={loadMore} disabled={loadingMore}>
+                <Icon name="refresh" className={cn('size-3.5', loadingMore && 'animate-spin')} />
+                {loadingMore ? t('admin.sessions.loadingMore') : t('admin.sessions.showMore')}
+              </Button>
+            </div>
+          )}
         </SettingsSection>
       )}
     </SettingsPanel>

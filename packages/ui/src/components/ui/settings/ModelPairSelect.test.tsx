@@ -89,3 +89,41 @@ describe('ModelPairSelect — подписи и подсказки (ADR-072/ADR-
     ).toBe('Pair — Model')
   })
 })
+
+describe('ModelPairSelect — постраничный каталог моделей (ADR-095, C1)', () => {
+  it('выбранная модель видна, даже если её нет в загруженной странице', async () => {
+    const host = await renderPair({
+      model: 'model-off-page',
+      models: [{ name: 'model-a', provider: 'itphx' }],
+    })
+
+    const trigger = host.querySelector('[data-testid="pair-model"]') as HTMLElement
+    await act(async () => {
+      trigger.click()
+    })
+    await act(async () => {})
+
+    const options = [...document.body.querySelectorAll('[role="option"]')].map((el) =>
+      (el.textContent ?? '').trim(),
+    )
+    expect(options).toContain('model-off-page')
+  })
+
+  it('в списке нет дубля, если модель уже в загруженной странице', async () => {
+    const host = await renderPair({
+      model: 'model-a',
+      models: [{ name: 'model-a', provider: 'itphx' }],
+    })
+
+    const trigger = host.querySelector('[data-testid="pair-model"]') as HTMLElement
+    await act(async () => {
+      trigger.click()
+    })
+    await act(async () => {})
+
+    const options = [...document.body.querySelectorAll('[role="option"]')].map((el) =>
+      (el.textContent ?? '').trim(),
+    )
+    expect(options.filter((o) => o === 'model-a')).toHaveLength(1)
+  })
+})

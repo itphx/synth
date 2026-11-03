@@ -25,7 +25,15 @@ function makeFakeRemoteClient(overrides: Record<string, unknown> = {}) {
     getProject: vi.fn(async () => ({ id: 'remote-1', name: 'Remote Project', description: 'desc', icon: null, color: null, repos: null, workspace: 'remote-project' })),
     fsWorkspaceMkdir: vi.fn(async () => ({ created: true })),
     importSession: vi.fn(async () => ({ id: 'new-session' })),
-    listSessions: vi.fn(async () => [{ id: 'rs-1', project_id: 'remote-1' }]),
+    // Контракт v2: список сессий удалённого мира — объект `{sessions, total, ...}`.
+    listSessions: vi.fn(async () => ({
+      sessions: [{ id: 'rs-1', project_id: 'remote-1' }],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+      paginationSupported: true,
+    })),
     exportSession: vi.fn(async () => ({
       title: 'RS1',
       sessionOrigin: 'user',
@@ -357,7 +365,7 @@ describe('transfer helpers', () => {
       expect(localProject?.name).toBe('Remote Project');
       expect(localProject?.workspace).toBe('remote-project');
 
-      const sessions = await sessionManager.listSessions({ projectId: stats.projectId });
+      const sessions = await sessionManager.listSessionsWithMessages({ projectId: stats.projectId });
       expect(sessions).toHaveLength(1);
       expect(sessions[0]!.title).toBe('RS1');
       expect(sessions[0]!.messages).toHaveLength(2);
@@ -390,7 +398,7 @@ describe('transfer helpers', () => {
         eventBus,
       });
 
-      const sessions = await sessionManager.listSessions({ projectId: stats.projectId });
+      const sessions = await sessionManager.listSessionsWithMessages({ projectId: stats.projectId });
       expect(sessions).toHaveLength(1);
       const created = seen.filter((e) => e.type === 'session.created');
       expect(created).toHaveLength(1);
@@ -402,10 +410,17 @@ describe('transfer helpers', () => {
 
     it('фильтрует сессии не из этого проекта', async () => {
       const client = makeFakeRemoteClient({
-        listSessions: async () => [
-          { id: 'rs-1', project_id: 'remote-1' },
-          { id: 'rs-2', project_id: 'other-project' },
-        ],
+        listSessions: async () => ({
+          sessions: [
+            { id: 'rs-1', project_id: 'remote-1' },
+            { id: 'rs-2', project_id: 'other-project' },
+          ],
+          total: 2,
+          offset: 0,
+          limit: 100,
+          next_offset: null,
+          paginationSupported: true,
+        }),
       });
       const projectStore = new ProjectStore({ dataDir: tmpDir });
       const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
@@ -457,10 +472,17 @@ describe('transfer helpers', () => {
         },
       };
       const client = makeFakeRemoteClient({
-        listSessions: async () => [
-          { id: 'rs-parent', project_id: 'remote-1' },
-          { id: 'rs-child', project_id: 'remote-1' },
-        ],
+        listSessions: async () => ({
+          sessions: [
+            { id: 'rs-parent', project_id: 'remote-1' },
+            { id: 'rs-child', project_id: 'remote-1' },
+          ],
+          total: 2,
+          offset: 0,
+          limit: 100,
+          next_offset: null,
+          paginationSupported: true,
+        }),
         exportSession: vi.fn(async (id: string) => exportsBySession[id] ?? {}),
       });
       const projectStore = new ProjectStore({ dataDir: tmpDir });
@@ -477,7 +499,7 @@ describe('transfer helpers', () => {
       });
 
       expect(stats.sessionsImported).toBe(2);
-      const sessions = await sessionManager.listSessions({ projectId: stats.projectId });
+      const sessions = await sessionManager.listSessionsWithMessages({ projectId: stats.projectId });
       const parent = sessions.find((s) => s.title === 'Parent')!;
       const child = sessions.find((s) => s.title === 'Child')!;
       expect(parent).toBeDefined();

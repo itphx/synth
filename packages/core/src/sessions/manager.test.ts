@@ -37,6 +37,50 @@ describe('SessionManager', () => {
     };
   }
 
+  it('listSessions ВСЕГДА лёгкий: история вырезана, очередь/статус/settings сохранены', async () => {
+    const session = await manager.createSession({ title: 'S', userId: 'u1' });
+    await manager.addMessage(session.id, makeMsg('история', MessageRole.ASSISTANT));
+    await manager.addPendingMessage(session.id, makeMsg('в очереди'));
+    await manager.safeUpdate(session.id, (s) => {
+      s.status.blocked = 'proc-1';
+      s.currentStream = {
+        streamId: 'stream-1', message: 'x', startedAt: nowISO(), cancelled: false,
+      };
+    });
+
+    const [listed] = await manager.listSessions();
+    expect(listed).toBeDefined();
+    // История вырезана — полный список с историями давал OOM.
+    expect(listed!.messages).toEqual([]);
+    // Очередь и прочее состояние сохранены (нужны recovery/автозапуску).
+    expect(listed!.pendingMessages).toHaveLength(1);
+    expect(listed!.pendingMessages[0]!.content).toBe('в очереди');
+    expect(listed!.status.blocked).toBe('proc-1');
+    expect(listed!.currentStream?.streamId).toBe('stream-1');
+    expect(listed!.settings).toBeDefined();
+  });
+
+  it('listSessionsWithMessages — полный список (история на месте)', async () => {
+    const session = await manager.createSession({ title: 'S', userId: 'u1' });
+    await manager.addMessage(session.id, makeMsg('история', MessageRole.ASSISTANT));
+
+    const [listed] = await manager.listSessionsWithMessages();
+    expect(listed!.messages).toHaveLength(1);
+    expect(listed!.messages[0]!.content).toBe('история');
+  });
+
+  it('listSessionsWithMessages: фильтр по проекту и includeArchived работают так же', async () => {
+    const a = await manager.createSession({ title: 'A', projectId: 'p1' });
+    const b = await manager.createSession({ title: 'B', projectId: 'p2' });
+    await manager.archiveSession(b.id);
+
+    const listed = await manager.listSessionsWithMessages({ projectId: 'p1' });
+    expect(listed.map((s) => s.id)).toEqual([a.id]);
+
+    const all = await manager.listSessionsWithMessages({ projectId: 'p2' }, { includeArchived: true });
+    expect(all.map((s) => s.id)).toEqual([b.id]);
+  });
+
   it('createSession создаёт сессию с дефолтными настройками', async () => {
     const session = await manager.createSession({ title: 'Test' });
     expect(session.id).toBeDefined();
@@ -937,6 +981,7 @@ describe('ADR-089: ephemeral-сессии (TTL, архивация)', () => {
     const all = await manager.listSessions(undefined, { includeArchived: true });
     expect(all.map((s) => s.id)).toContain(archived.id);
   });
+
 
   it('listActiveSessions исключает архивированные', async () => {
     const session = await manager.createSession({});

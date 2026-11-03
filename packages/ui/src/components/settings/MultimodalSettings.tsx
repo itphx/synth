@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
+import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { cn } from '@/lib/utils'
 import {
   MODALITY_FAMILIES,
@@ -600,6 +601,17 @@ export function MultimodalSettings() {
     }
     return byFamily
   }, [catalogModels])
+
+  // Каталог моделей постраничный: назначенная aux-модель может быть не на
+  // загруженной странице — догружаем её, иначе она не попадёт в список
+  // выбора (и «несовместимая» подсказка сработает неверно).
+  const modalityDraft = draft.draft
+  useEnsureModelsLoaded(
+    MODALITY_FAMILIES.map((family) => {
+      const ref = modalityDraft?.modalityModels?.[family]
+      return ref?.provider && ref?.model ? `${ref.provider}/${ref.model}` : null
+    }),
+  )
 
   const envLocked = info?.envLocked ?? []
   const locked = useCallback(

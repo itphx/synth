@@ -89,7 +89,7 @@ describe('transportStore dispatcher: финализация шага (ADR-118 §
     dispatch(makeEvent('step.finished', 's1', { turnId: 't1', stepIndex: 0, messageId: 'm1', status: 'completed' }))
 
     await vi.waitFor(() => {
-      expect(getSessionMessages).toHaveBeenCalledWith('s1')
+      expect(getSessionMessages).toHaveBeenCalledWith('s1', { limit: 200 })
     })
 
     // Сообщение в стере — по серверу: части/контент из истории.
@@ -210,7 +210,7 @@ describe('transportStore dispatcher: финализация шага (ADR-118 §
     }))
 
     await vi.waitFor(() => {
-      expect(getSessionMessages).toHaveBeenCalledWith('s1')
+      expect(getSessionMessages).toHaveBeenCalledWith('s1', { limit: 200 })
     })
 
     const state = useChatStore.getState()

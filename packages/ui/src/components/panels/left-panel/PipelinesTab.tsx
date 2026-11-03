@@ -39,6 +39,8 @@ export function PipelinesTab() {
 
   const pipelinesByProject = usePipelinesStore((s) => s.pipelinesByProject)
   const loadProjectPipelines = usePipelinesStore((s) => s.loadProjectPipelines)
+  const loadMorePipelines = usePipelinesStore((s) => s.loadMorePipelines)
+  const loadingMoreProjects = usePipelinesStore((s) => s.loadingMoreProjects)
 
   /** Раскрытые проекты (локально: список пайплайнов — лёгкий, персист не нужен). */
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -86,7 +88,9 @@ export function PipelinesTab() {
 
   const renderProject = (project: ProjectData) => {
     const isExpanded = expanded.has(project.id)
-    const pipelines = pipelinesByProject[project.id] ?? []
+    // Список пайплайнов приходит страницей (`{pipelines, total, next_offset}`).
+    const page = pipelinesByProject[project.id]
+    const pipelines = page?.pipelines ?? []
     const canEdit = canEditProjectContent(project, user)
 
     return (
@@ -129,7 +133,8 @@ export function PipelinesTab() {
               </div>
             </div>
           ) : (
-            <TreeChildren borderOnHover totalCount={pipelines.length}>
+            <>
+              <TreeChildren borderOnHover totalCount={pipelines.length}>
               {pipelines.map((pipeline) => (
                 <TreeNode
                   key={pipeline.id}
@@ -143,6 +148,27 @@ export function PipelinesTab() {
                 />
               ))}
             </TreeChildren>
+            {/* Пагинация списка пайплайнов проекта: страница дописывается,
+                раскрытие проекта не сбрасывается. */}
+            {page && page.next_offset !== null && (
+              <div className="ml-[0.9375rem] border-l border-sidebar-border pl-4">
+                <button
+                  type="button"
+                  data-testid={`pipeline-load-more-${project.id}`}
+                  onClick={() => { void loadMorePipelines(project.id) }}
+                  disabled={loadingMoreProjects.has(project.id)}
+                  className="flex w-full items-center gap-1 rounded px-2 py-0.5 text-left text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground transition-colors disabled:opacity-60"
+                >
+                  {loadingMoreProjects.has(project.id) && (
+                    <Icon name="loader-2" className="h-3 w-3 animate-spin" />
+                  )}
+                  {loadingMoreProjects.has(project.id)
+                    ? t('pipelines.loadingMore')
+                    : t('pipelines.loadMore')}
+                </button>
+              </div>
+            )}
+            </>
           )
         )}
       </div>

@@ -15,6 +15,7 @@ import {
 } from '@/stores/chatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useBackClose } from '@/hooks/useBackClose'
+import { useI18n } from '@/lib/i18n'
 
 /**
  * Группа сообщений ленты (ADR-118 §1): **сегменты одного хода** склеиваются в
@@ -107,6 +108,14 @@ interface MessageListProps {
   retry?: StreamRetry | null
   onRetryNow?: () => void
   onCancelRetry?: () => void
+  /**
+   * Есть ли сообщения **старше** загруженной страницы истории (пагинация
+   * `GET /sessions/:id/messages`). Пока флаг снят — над лентой рисуется кнопка
+   * «Загрузить старые».
+   */
+  hasOlder?: boolean
+  /** Догрузка старой страницы (обработчик владельца данных — `ChatTab`). */
+  onLoadOlder?: () => void | Promise<void>
 }
 
 const VIRTUALIZE_THRESHOLD = 30
@@ -214,7 +223,10 @@ export function MessageList({
   retry,
   onRetryNow,
   onCancelRetry,
+  hasOlder,
+  onLoadOlder,
 }: MessageListProps) {
+  const { t } = useI18n()
   const scrollRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const chatZoneRef = useRef<HTMLDivElement>(null)
@@ -604,6 +616,48 @@ export function MessageList({
     }
   }, [messages, livePartsSize, turn?.status, autoScroll, scrollToBottom, chatDensity, chatViewMode])
 
+  /**
+   * Пагинация истории: догрузка **старых** сообщений по кнопке над лентой.
+   *
+   * Позиция скролла сохраняется: контент сверху вырос — компенсируем разницу
+   * высот, иначе пользователя «прыгало» бы в начало/конец ленты.
+   */
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const loadOlderScrollRef = useRef<{ top: number; height: number; count: number } | null>(null)
+
+  const handleLoadOlder = useCallback(async () => {
+    if (!onLoadOlder || loadingOlder) return
+    const el = scrollRef.current
+    if (el) {
+      loadOlderScrollRef.current = {
+        top: el.scrollTop,
+        height: el.scrollHeight,
+        count: messages.length,
+      }
+    }
+    // Автоскролл вниз на время догрузки выключаем: пользователь смотрит наверх.
+    setAutoScroll(false)
+    setLoadingOlder(true)
+    try {
+      await onLoadOlder()
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [loadingOlder, messages.length, onLoadOlder])
+
+  // Восстановление позиции после вставки старых сообщений (layout-эффект —
+  // до отрисовки, поэтому лента не «моргает»).
+  useLayoutEffect(() => {
+    const state = loadOlderScrollRef.current
+    if (!state) return
+    if (messages.length === state.count) return
+    loadOlderScrollRef.current = null
+    const el = scrollRef.current
+    if (!el) return
+    const delta = el.scrollHeight - state.height
+    if (delta > 0) el.scrollTop = state.top + delta
+  }, [messages.length])
+
   const shouldVirtualize = visibleMessages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
 
@@ -847,6 +901,19 @@ export function MessageList({
             data-view-mode={chatViewMode}
             data-density={chatDensity}
           >
+            {hasOlder && (
+              <div className="flex justify-center py-2">
+                <button
+                  type="button"
+                  data-testid="load-older"
+                  onClick={() => { void handleLoadOlder() }}
+                  disabled={loadingOlder}
+                  className="rounded-full border border-border/60 bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
+                >
+                  {loadingOlder ? t('chat.loadingOlder') : t('chat.loadOlder')}
+                </button>
+              </div>
+            )}
             <div
               className="relative w-full"
               style={{

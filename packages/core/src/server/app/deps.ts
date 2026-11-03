@@ -729,12 +729,12 @@ export async function createStandaloneDeps(
           // продолжаем — решение за родителем. `light`-список не подходит:
           // он очищает `pendingMessages`.
           try {
-            // `light`: без истории (`messages`/`checkpoints`) — полный список
-            // сессий с историями давал пик heap и OOM на инстансах с сотнями
-            // сессий. Очередь (`pendingMessages`) в light сохраняется.
+            // Список сессий — всегда лёгкий (без истории `messages`/`checkpoints`):
+            // полный список сессий с историями давал пик heap и OOM на инстансах
+            // с сотнями сессий. Очередь (`pendingMessages`) в лёгкой выборке
+            // сохраняется.
             const sessions = await sessionManager.listSessions(undefined, {
               includeArchived: false,
-              light: true,
             });
             let queueCandidates = 0;
             let inFlightResumed = 0;
@@ -1119,7 +1119,7 @@ export async function createStandaloneDeps(
         defaultWorkingDir,
         // Привязанная живая сессия — по полю `session.worktree` (ADR-114 §1.3).
         resolveAttachedSession: async (worktreeId: string) => {
-          const sessions = await sessionManager.listSessions(undefined, { light: true });
+          const sessions = await sessionManager.listSessions(undefined);
           return sessions.find((s) => s.worktree?.worktreeId === worktreeId)?.id;
         },
         onUpdated: (projectId: string, detail) => {
