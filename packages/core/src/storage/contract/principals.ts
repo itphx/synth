@@ -411,6 +411,68 @@ export function describeProjectRepository(
       const all = await repo.list();
       expect(all.map((p) => p.id)).toEqual(['p-member', 'p-foreign', 'p-owner']);
     });
+
+    it('mutate: правка применяется и сохраняется, возвращается сохранённый проект', async () => {
+      const { repo } = await make();
+      await repo.save(makeProject('p1', { name: 'before', invariants: '' }));
+
+      const updated = await repo.mutate('p1', (project) => {
+        project.name = 'after';
+        project.invariants = 'rule';
+        project.updatedAt = '2024-05-01T00:00:00.000Z';
+      });
+
+      expect(updated?.name).toBe('after');
+      expect(updated?.invariants).toBe('rule');
+      const stored = await repo.load('p1');
+      expect(stored?.name).toBe('after');
+      expect(stored?.invariants).toBe('rule');
+    });
+
+    it('mutate неизвестного id → null, мутатор не вызывается', async () => {
+      const { repo } = await make();
+      let called = false;
+      const result = await repo.mutate('missing', () => {
+        called = true;
+      });
+      expect(result).toBeNull();
+      expect(called).toBe(false);
+    });
+
+    it('mutate: брошенный мутатор не сохраняет правку и пробрасывает ошибку', async () => {
+      const { repo } = await make();
+      await repo.save(makeProject('p1', { name: 'before', log: [] }));
+
+      await expect(
+        repo.mutate('p1', (project) => {
+          project.name = 'broken';
+          project.log = [{ id: 'x', text: 'x', createdAt: 't', sessionId: 's', author: 'a' }];
+          throw new Error('mutator failed');
+        }),
+      ).rejects.toThrow('mutator failed');
+
+      const stored = await repo.load('p1');
+      expect(stored?.name).toBe('before');
+      expect(stored?.log).toEqual([]);
+    });
+
+    it('mutate конкурентно: две параллельные правки не теряют друг друга (lost update)', async () => {
+      const { repo } = await make();
+      await repo.save(makeProject('p1', { log: [] }));
+
+      const entry = (id: string) => ({ id, text: id, createdAt: 't', sessionId: 's', author: 'a' });
+      await Promise.all([
+        repo.mutate('p1', (project) => {
+          project.log = [...(project.log ?? []), entry('a')];
+        }),
+        repo.mutate('p1', (project) => {
+          project.log = [...(project.log ?? []), entry('b')];
+        }),
+      ]);
+
+      const stored = await repo.load('p1');
+      expect((stored?.log ?? []).map((e) => e.id).sort()).toEqual(['a', 'b']);
+    });
   });
 }
 

@@ -208,6 +208,25 @@ export class MemoryProjectRepository implements ProjectRepository {
     this._projects.set(project.id, structuredClone(project));
   }
 
+  /**
+   * Атомарный read-modify-write (порт `ProjectRepository.mutate`).
+   *
+   * Операция синхронная (над `Map`), поэтому чтение-правка-запись происходит в
+   * одном тике — гонок нет, лок не нужен. Мутатор работает с клоном: если он
+   * бросит, сохранённая запись остаётся нетронутой (как в файловой реализации,
+   * где запись идёт после успешного мутатора).
+   */
+  async mutate(id: string, mutator: (project: Project) => void): Promise<Project | null> {
+    const stored = this._projects.get(id);
+    if (!stored) return null;
+    const project = structuredClone(stored);
+    mutator(project);
+    project.icon = normalizeIconKey(project.icon);
+    project.color = normalizeColorKey(project.color);
+    this._projects.set(id, structuredClone(project));
+    return project;
+  }
+
   async delete(id: string): Promise<void> {
     this._projects.delete(id);
   }

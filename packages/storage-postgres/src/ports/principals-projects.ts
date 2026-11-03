@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeColorKey, normalizeIconKey } from '@itphx/synth-shared';
 import type { StorageContext } from '@itphx/synth-core';
-import type { PostgresConnection } from '../pool.js';
+import type { PostgresConnection, PostgresExecutor } from '../pool.js';
 import { jsonbParam, requiredIso, type ProjectEntity } from './principals-shared.js';
 
 type ProjectsPort = StorageContext['projects'];
@@ -79,6 +79,69 @@ function rowToProject(row: ProjectRow): ProjectEntity {
   };
 }
 
+/**
+ * Запись проекта в БД (строка + набор участий) **тем же соединением/транзакцией**,
+ * что и вызывающий: `save` и `mutate` не дублируют SQL и не открывают вложенную
+ * транзакцию.
+ */
+async function writeProject(tx: PostgresExecutor, project: ProjectEntity): Promise<void> {
+  await tx.query(
+    `INSERT INTO projects (
+       id, name, owner_id, description, current_task, invariants, icon, color,
+       workspace, plan, log, status_messages, repos, mcp, skills, memory, created_at, updated_at
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8,
+       $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18
+     )
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       owner_id = EXCLUDED.owner_id,
+       description = EXCLUDED.description,
+       current_task = EXCLUDED.current_task,
+       invariants = EXCLUDED.invariants,
+       icon = EXCLUDED.icon,
+       color = EXCLUDED.color,
+       workspace = EXCLUDED.workspace,
+       plan = EXCLUDED.plan,
+       log = EXCLUDED.log,
+       status_messages = EXCLUDED.status_messages,
+       repos = EXCLUDED.repos,
+       mcp = EXCLUDED.mcp,
+       skills = EXCLUDED.skills,
+       memory = EXCLUDED.memory,
+       updated_at = EXCLUDED.updated_at`,
+    [
+      project.id,
+      project.name,
+      project.ownerId,
+      project.description ?? '',
+      project.currentTask ?? '',
+      project.invariants ?? '',
+      project.icon ?? null,
+      project.color ?? null,
+      project.workspace ?? null,
+      jsonbParam(project.plan ?? null),
+      jsonbParam(project.log ?? null),
+      jsonbParam(project.statusMessages ?? []),
+      jsonbParam(project.repos ?? null),
+      jsonbParam(project.mcp ?? null),
+      jsonbParam(project.skills ?? null),
+      jsonbParam(project.memory ?? null),
+      project.createdAt,
+      project.updatedAt,
+    ],
+  );
+
+  // Набор участий — источник истины в самом проекте: заменяем целиком.
+  await tx.query('DELETE FROM project_members WHERE project_id = $1', [project.id]);
+  for (const [userId, role] of Object.entries(project.members ?? {})) {
+    await tx.query(
+      'INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)',
+      [project.id, userId, role],
+    );
+  }
+}
+
 /** Собрать порт проектов поверх SQL. */
 export function createPrincipalProjectsPort(conn: PostgresConnection): ProjectsPort {
   return {
@@ -90,61 +153,34 @@ export function createPrincipalProjectsPort(conn: PostgresConnection): ProjectsP
 
     async save(project: ProjectEntity): Promise<void> {
       await conn.withTransaction(async (tx) => {
-        await tx.query(
-          `INSERT INTO projects (
-             id, name, owner_id, description, current_task, invariants, icon, color,
-             workspace, plan, log, status_messages, repos, mcp, skills, memory, created_at, updated_at
-           ) VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8,
-             $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18
-           )
-           ON CONFLICT (id) DO UPDATE SET
-             name = EXCLUDED.name,
-             owner_id = EXCLUDED.owner_id,
-             description = EXCLUDED.description,
-             current_task = EXCLUDED.current_task,
-             invariants = EXCLUDED.invariants,
-             icon = EXCLUDED.icon,
-             color = EXCLUDED.color,
-             workspace = EXCLUDED.workspace,
-             plan = EXCLUDED.plan,
-             log = EXCLUDED.log,
-             status_messages = EXCLUDED.status_messages,
-             repos = EXCLUDED.repos,
-             mcp = EXCLUDED.mcp,
-             skills = EXCLUDED.skills,
-             memory = EXCLUDED.memory,
-             updated_at = EXCLUDED.updated_at`,
-          [
-            project.id,
-            project.name,
-            project.ownerId,
-            project.description ?? '',
-            project.currentTask ?? '',
-            project.invariants ?? '',
-            project.icon ?? null,
-            project.color ?? null,
-            project.workspace ?? null,
-            jsonbParam(project.plan ?? null),
-            jsonbParam(project.log ?? null),
-            jsonbParam(project.statusMessages ?? []),
-            jsonbParam(project.repos ?? null),
-            jsonbParam(project.mcp ?? null),
-            jsonbParam(project.skills ?? null),
-            jsonbParam(project.memory ?? null),
-            project.createdAt,
-            project.updatedAt,
-          ],
-        );
+        await writeProject(tx, project);
+      });
+    },
 
-        // Набор участий — источник истины в самом проекте: заменяем целиком.
-        await tx.query('DELETE FROM project_members WHERE project_id = $1', [project.id]);
-        for (const [userId, role] of Object.entries(project.members ?? {})) {
-          await tx.query(
-            'INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)',
-            [project.id, userId, role],
-          );
-        }
+    /**
+     * Атомарный read-modify-write (порт `ProjectRepository.mutate`): блокировка
+     * строки `projects` и запись в **одной** транзакции, поэтому параллельные
+     * мутации одного проекта сериализуются и не теряют правки друг друга.
+     *
+     * `FOR UPDATE OF p` — обязательный: `SELECT_PROJECT` содержит
+     * `LEFT JOIN LATERAL`, а `FOR UPDATE` без `OF` PostgreSQL отвергает
+     * («cannot be applied to the nullable side of an outer join»). `OF p`
+     * блокирует только строку проекта (строка агрегата `members` — подзапрос,
+     * её lock не нужен: чтение участий идёт в той же транзакции-снимке, а запись
+     * заменяет набор под той же блокировкой).
+     */
+    async mutate(id: string, mutator: (project: ProjectEntity) => void): Promise<ProjectEntity | null> {
+      return conn.withTransaction(async (tx) => {
+        const rows = await tx.query<ProjectRow>(
+          `${SELECT_PROJECT} WHERE p.id = $1 FOR UPDATE OF p`,
+          [id],
+        );
+        const row = rows[0];
+        if (!row) return null;
+        const project = rowToProject(row);
+        mutator(project);
+        await writeProject(tx, project);
+        return project;
       });
     },
 

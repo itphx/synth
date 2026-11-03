@@ -111,15 +111,24 @@ function normalizeRepos(project: Project): GitRepoConfig[] {
  *
  * Сравнение/канонизация пути — общий шов `git/repo-registry.ts` (тот же, что у
  * HTTP-роутов): `./app` и `app` — одна запись, в реестре путь канонический.
+ *
+ * Правка идёт через атомарный `ProjectRepository.mutate` (реестр читается уже
+ * под локом хранилища) — параллельная правка проекта другой сессией не теряется.
+ * `null` — проект исчез между загрузкой контекста и записью.
  */
 async function registerRepo(
   store: ProjectStoreContract,
-  project: Project,
+  projectId: string,
   input: RepoRegistryInput,
-): Promise<GitRepoConfig> {
-  const { entry, next } = upsertRepoEntry(normalizeRepos(project), input);
-  await store.save({ ...project, repos: next, updatedAt: nowISO() });
-  return entry;
+): Promise<GitRepoConfig | null> {
+  let entry: GitRepoConfig | undefined;
+  const updated = await store.mutate(projectId, (project) => {
+    const result = upsertRepoEntry(normalizeRepos(project), input);
+    project.repos = result.next;
+    project.updatedAt = nowISO();
+    entry = result.entry;
+  });
+  return updated ? (entry ?? null) : null;
 }
 
 function deriveType(url?: string): 'https' | 'ssh' | undefined {
@@ -265,7 +274,7 @@ export const projectRepoCloneTool: ToolDefinition = {
       await ssh.cleanup();
     }
 
-    const entry = await registerRepo(store, project, {
+    const entry = await registerRepo(store, project.id, {
       path: repo.path,
       name: params.name,
       url: params.url,
@@ -274,6 +283,7 @@ export const projectRepoCloneTool: ToolDefinition = {
       sshKeyId: params.sshKeyId,
       lastFetch: nowISO(),
     });
+    if (!entry) return i18nError('project.no_project');
     publishUpdated(extra, ctx, project.id);
 
     return {
@@ -319,11 +329,12 @@ export const projectRepoInitTool: ToolDefinition = {
       return toolExecError(this.name, err);
     }
 
-    await registerRepo(store, project, {
+    const entry = await registerRepo(store, project.id, {
       path: repo.path,
       name: params.name,
       defaultBranch: params.defaultBranch,
     });
+    if (!entry) return i18nError('project.no_project');
     publishUpdated(extra, ctx, project.id);
 
     return {
@@ -368,7 +379,7 @@ export const projectRepoAddTool: ToolDefinition = {
     const containment = safeRelPath(git, wsAbs, params.path);
     if (!containment.ok) return containment.error;
 
-    const entry = await registerRepo(store, project, {
+    const entry = await registerRepo(store, project.id, {
       path: params.path,
       name: params.name,
       url: params.url,
@@ -376,6 +387,7 @@ export const projectRepoAddTool: ToolDefinition = {
       defaultBranch: params.defaultBranch,
       sshKeyId: params.sshKeyId,
     });
+    if (!entry) return i18nError('project.no_project');
     publishUpdated(extra, ctx, project.id);
 
     return {
@@ -451,11 +463,16 @@ export const projectRepoFetchTool: ToolDefinition = {
     }
 
     const updated: GitRepoConfig = { ...entry, lastFetch: nowISO() };
-    await store.save({
-      ...project,
-      repos: repos.map((r) => (r === entry ? updated : r)),
-      updatedAt: nowISO(),
+    // Атомарная правка реестра: запись ищется заново под локом хранилища
+    // (соседняя сессия могла изменить реестр, пока шёл fetch).
+    const saved = await store.mutate(project.id, (target) => {
+      const current = normalizeRepos(target);
+      const idx = current.findIndex((r) => r.id === updated.id);
+      if (idx >= 0) current[idx] = { ...current[idx]!, lastFetch: updated.lastFetch };
+      target.repos = current;
+      target.updatedAt = nowISO();
     });
+    if (!saved) return i18nError('project.no_project');
     publishUpdated(extra, ctx, project.id);
 
     return {
@@ -496,12 +513,13 @@ export const projectRepoRemoveTool: ToolDefinition = {
       return i18nError('project.repo_not_found', { path: params.path ?? params.id ?? '' });
     }
 
-    // deleteLocal не поддерживаем — локальный каталог не удаляем.
-    await store.save({
-      ...project,
-      repos: repos.filter((r) => r !== entry),
-      updatedAt: nowISO(),
+    // deleteLocal не поддерживаем — локальный каталог не удаляем. Правка реестра
+    // атомарна: удаляем запись из актуального состояния под локом хранилища.
+    const saved = await store.mutate(project.id, (target) => {
+      target.repos = normalizeRepos(target).filter((r) => r.id !== entry.id);
+      target.updatedAt = nowISO();
     });
+    if (!saved) return i18nError('project.no_project');
     publishUpdated(extra, ctx, project.id);
 
     return {

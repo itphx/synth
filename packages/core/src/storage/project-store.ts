@@ -29,7 +29,12 @@ export class ProjectStore implements ProjectRepository {
     return join(this.config.dataDir, 'projects');
   }
 
-  async load(id: string): Promise<Project | null> {
+  /**
+   * Чтение без лока — вызывается публичным `load` и `mutate` (последний уже
+   * держит лок: `AsyncLock` не реентрантный, повторный `load` внутри него
+   * привёл бы к дедлоку).
+   */
+  private async _loadUnlocked(id: string): Promise<Project | null> {
     const path = this._projectPath(id);
     try {
       const data = await readFile(path, 'utf-8');
@@ -44,18 +49,45 @@ export class ProjectStore implements ProjectRepository {
     }
   }
 
-  async save(project: Project): Promise<void> {
+  /** Запись без лока — вызывается публичным `save` и `mutate` (лок у вызывающего). */
+  private async _persistUnlocked(project: Project): Promise<void> {
     const path = this._projectPath(project.id);
+    await mkdir(dirname(path), { recursive: true });
+    const data = JSON.stringify(project, null, 2);
+    await atomicWrite(
+      (p, d) => writeFile(p, d, 'utf-8'),
+      (o, n) => rename(o, n),
+      path,
+      data,
+    );
+  }
+
+  async load(id: string): Promise<Project | null> {
+    return this._loadUnlocked(id);
+  }
+
+  async save(project: Project): Promise<void> {
     await this._lock.acquire();
     try {
-      await mkdir(dirname(path), { recursive: true });
-      const data = JSON.stringify(project, null, 2);
-      await atomicWrite(
-        (p, d) => writeFile(p, d, 'utf-8'),
-        (o, n) => rename(o, n),
-        path,
-        data,
-      );
+      await this._persistUnlocked(project);
+    } finally {
+      this._lock.release();
+    }
+  }
+
+  /**
+   * Атомарный read-modify-write (порт `ProjectRepository.mutate`): чтение,
+   * правка и запись — под одним `AsyncLock`, поэтому параллельные мутации
+   * одного проекта не теряют друг друга.
+   */
+  async mutate(id: string, mutator: (project: Project) => void): Promise<Project | null> {
+    await this._lock.acquire();
+    try {
+      const project = await this._loadUnlocked(id);
+      if (!project) return null;
+      mutator(project);
+      await this._persistUnlocked(project);
+      return project;
     } finally {
       this._lock.release();
     }
@@ -136,6 +168,10 @@ export class ProjectStore implements ProjectRepository {
 /**
  * Структурный контракт полного хранилища проектов (чтение + запись) — для тулов
  * и provisioning, которым нужны `save`/`create`/`list`, а не только `load`.
- * Алиас на доменный порт (без `delete`).
+ * Алиас на доменный порт (без `delete`): правки проектных данных идут через
+ * атомарный `mutate` (lost update при `load` + `save`).
  */
-export type ProjectStoreContract = Pick<ProjectRepository, 'load' | 'save' | 'create' | 'list'>;
+export type ProjectStoreContract = Pick<
+  ProjectRepository,
+  'load' | 'save' | 'mutate' | 'create' | 'list'
+>;

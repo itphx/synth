@@ -87,6 +87,12 @@ interface PipelineView {
       if (index === -1) projects.push(p);
       else projects[index] = p;
     },
+    async mutate(id, mutator) {
+      const current = projects.find((p) => p.id === id);
+      if (!current) return null;
+      mutator(current);
+      return current;
+    },
     async delete(id) {
       const index = projects.findIndex((item) => item.id === id);
       if (index !== -1) projects.splice(index, 1);

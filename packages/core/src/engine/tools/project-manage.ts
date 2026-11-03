@@ -12,7 +12,7 @@ import type {
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
-import { provisionWorkspace } from '../workspace-provision.js';
+import { provisionWorkspace, normalizeWorkspace } from '../workspace-provision.js';
 import { isAborted, abortedResult } from './abort.js';
 import { canEditProject } from './project-access.js';
 import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
@@ -125,10 +125,11 @@ export async function loadSessionProject(
   }
 }
 
-function missingDepsError(toolName: string): { content: string; isError: true } {
+function missingDepsError(toolName: string) {
   return {
     content: sm('project.deps_unavailable', { tool: toolName }),
-    isError: true,
+    isError: true as const,
+    metadata: { i18n: i18nMeta('project.deps_unavailable', { tool: toolName }) },
   };
 }
 
@@ -147,7 +148,11 @@ export const projectCreateTool: ToolDefinition = {
   description:
     'Create a new project and attach the current session to it. '
     + 'Use it when the task requires a plan or long-term work with files, but the session has no project yet. '
-    + 'The session todo list is kept; the project plan is taken from the new project.',
+    + 'The session todo list is kept; the project plan is taken from the new project. '
+    + 'Workspace: in managed mode the directory is created automatically (auto name derived from the project name); '
+    + 'in standalone mode omitting `workspace` leaves the project without a working directory, so file, shell and '
+    + 'git tools stay blocked by the workspace gate. An absolute path outside the allowed root cannot be set here — '
+    + 'use project_workspace_set (or the UI) for that. The response reports the workspace relative to the root.',
   parameters: projectCreateSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
@@ -161,20 +166,25 @@ export const projectCreateTool: ToolDefinition = {
 
     const extra = getSessionExtra(ctx);
     if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
-      return {
-        content: sm('project.deps_unavailable', { tool: 'project_create' }),
-        isError: true,
-      };
+      return missingDepsError(this.name);
     }
 
     let session;
     try {
       session = await extra.sessionManager.getSession(extra.sessionId);
     } catch {
-      return { content: sm('project.session_read_error'), isError: true };
+      return {
+        content: sm('project.session_read_error'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.session_read_error') },
+      };
     }
     if (!session) {
-      return { content: sm('project.session_not_found'), isError: true };
+      return {
+        content: sm('project.session_not_found'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.session_not_found') },
+      };
     }
 
     const ownerId = session.ownerId || session.userId || 'local';
@@ -202,9 +212,11 @@ export const projectCreateTool: ToolDefinition = {
     try {
       await extra.projectStore.save(project);
     } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
       return {
-        content: sm('project.save_error', { error: err instanceof Error ? err.message : String(err) }),
+        content: sm('project.save_error', { error }),
         isError: true,
+        metadata: { i18n: i18nMeta('project.save_error', { error }) },
       };
     }
 
@@ -225,7 +237,10 @@ export const projectCreateTool: ToolDefinition = {
     };
     return {
       content: sm('project.created', { name: project.name, json: JSON.stringify(summary) }),
-      metadata: summary,
+      metadata: {
+        ...summary,
+        i18n: i18nMeta('project.created', { name: project.name, json: JSON.stringify(summary) }),
+      },
     };
   },
 };
@@ -249,17 +264,18 @@ export const projectAttachTool: ToolDefinition = {
 
     const extra = getSessionExtra(ctx);
     if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
-      return {
-        content: sm('project.deps_unavailable', { tool: 'project_attach' }),
-        isError: true,
-      };
+      return missingDepsError(this.name);
     }
 
     let project;
     try {
       project = await extra.projectStore.load(params.projectId);
     } catch {
-      return { content: sm('project.read_error'), isError: true };
+      return {
+        content: sm('project.read_error'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.read_error') },
+      };
     }
     if (!project) {
       return { content: sm('project.not_found', { id: params.projectId }), isError: true, metadata: { i18n: i18nMeta('project.not_found', { id: params.projectId }) } };
@@ -273,7 +289,11 @@ export const projectAttachTool: ToolDefinition = {
     try {
       session = await extra.sessionManager.getSession(extra.sessionId);
     } catch {
-      return { content: sm('project.session_read_error'), isError: true };
+      return {
+        content: sm('project.session_read_error'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.session_read_error') },
+      };
     }
     if (!canEditProject(session, project)) {
       return {
@@ -299,6 +319,7 @@ export const projectAttachTool: ToolDefinition = {
         // ADR-114: привязка к worktree снята (worktree принадлежит старому
         // проекту — чужая привязка дала бы каталог вне нового проекта).
         ...(worktreeDetached ? { worktree_detached: true } : {}),
+        i18n: i18nMeta('project.attached', { name: project.name }),
       },
     };
   },
@@ -371,27 +392,34 @@ export const projectUpdateTool: ToolDefinition = {
       };
     }
 
-    if (params.name !== undefined) project.name = params.name;
-    if (params.description !== undefined) project.description = params.description;
-    if (params.icon !== undefined) project.icon = params.icon ?? undefined;
-    if (params.color !== undefined) project.color = params.color ?? undefined;
-    project.updatedAt = nowISO();
-
+    let updated: Project | null;
     try {
-      await extra.projectStore.save(project);
+      // Атомарный read-modify-write: правка и запись под локом хранилища
+      // (иначе параллельное изменение проекта в другой сессии теряется).
+      updated = await extra.projectStore.mutate(project.id, (target) => {
+        if (params.name !== undefined) target.name = params.name;
+        if (params.description !== undefined) target.description = params.description;
+        if (params.icon !== undefined) target.icon = params.icon ?? undefined;
+        if (params.color !== undefined) target.color = params.color ?? undefined;
+        target.updatedAt = nowISO();
+      });
     } catch (err) {
       return {
         content: sm('project.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
+        metadata: { i18n: i18nMeta('project.save_error', { error: err instanceof Error ? err.message : String(err) }) },
       };
+    }
+    if (!updated) {
+      return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
     }
 
     const sessionId = ctx.sessionId || extra.sessionId;
-    extra.eventBus?.publish(sessionId, 'project.updated', { project_id: project.id });
+    extra.eventBus?.publish(sessionId, 'project.updated', { project_id: updated.id });
 
     return {
-      content: sm('project.updated_ok', { name: project.name }),
-      metadata: { id: project.id, name: project.name, i18n: i18nMeta('project.updated_ok', { name: project.name }) },
+      content: sm('project.updated_ok', { name: updated.name }),
+      metadata: { id: updated.id, name: updated.name, i18n: i18nMeta('project.updated_ok', { name: updated.name }) },
     };
   },
 };
@@ -405,8 +433,13 @@ export const projectWorkspaceSetTool: ToolDefinition = {
   name: 'project_workspace_set',
   description:
     'Set the working directory (workspace) of the current project. '
-    + 'The directory is created if missing. Paths outside the allowed root may be denied or require confirmation. '
-    + 'Requires write access to the project.',
+    + 'Managed mode: only paths inside the managed workspaces root are allowed — a path outside it is rejected '
+    + '(confirmation is not supported and not applied). '
+    + 'Standalone mode: an absolute path outside the root follows the confirm/deny policy; pass '
+    + 'confirmOutsideRoot=true to confirm. '
+    + 'An empty string, the root directory itself and degenerate paths (".", "..", "/") are rejected — clearing '
+    + 'the workspace via this tool is not supported. The directory is created if missing. The response reports the '
+    + 'workspace path relative to the managed root. Requires write access to the project.',
   parameters: projectWorkspaceSetSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
@@ -436,8 +469,11 @@ export const projectWorkspaceSetTool: ToolDefinition = {
       };
     }
 
-    // Очистку workspace тулом не поддерживаем: пустая строка — ошибка.
-    if (!params.workspace.trim()) {
+    // Очистку workspace тулом не поддерживаем: пустая строка — ошибка. Путь,
+    // который после нормализации не даёт имени каталога (`"."`, `".."`, `"/"`,
+    // `" / "`), — тоже отказ: иначе `normalizeWorkspace` вернул бы `undefined` и
+    // workspace молча **очистился** бы, а ответ сообщал бы «workspace set».
+    if (!params.workspace.trim() || !normalizeWorkspace(params.workspace)) {
       return {
         content: sm('project.workspace_invalid'),
         isError: true,
@@ -458,20 +494,27 @@ export const projectWorkspaceSetTool: ToolDefinition = {
       return workspaceErrorResult(resolved.code, resolved.message);
     }
 
-    project.workspace = resolved.workspace;
-    project.updatedAt = nowISO();
-
+    // Метаданные workspace после удачного provisioning записываем атомарно:
+    // проект мог измениться другой сессией, пока создавался каталог.
+    let updated: Project | null;
     try {
-      await extra.projectStore.save(project);
+      updated = await extra.projectStore.mutate(project.id, (target) => {
+        target.workspace = resolved.workspace;
+        target.updatedAt = nowISO();
+      });
     } catch (err) {
       return {
         content: sm('project.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
+        metadata: { i18n: i18nMeta('project.save_error', { error: err instanceof Error ? err.message : String(err) }) },
       };
+    }
+    if (!updated) {
+      return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
     }
 
     const sessionId = ctx.sessionId || extra.sessionId;
-    extra.eventBus?.publish(sessionId, 'project.updated', { project_id: project.id });
+    extra.eventBus?.publish(sessionId, 'project.updated', { project_id: updated.id });
 
     const dir = resolved.dir ?? resolved.workspace ?? '';
     return {
@@ -528,23 +571,30 @@ export const projectLogWriteTool: ToolDefinition = {
       author: session?.settings.agentRole || 'assistant',
     };
 
-    const log = project.log ?? [];
-    log.push(entry);
-    project.log = log;
-    project.updatedAt = nowISO();
-
+    let updated: Project | null;
     try {
-      await extra.projectStore.save(project);
+      // Атомарная дозапись: параллельный `project_log_write` другой сессии не
+      // перетирается (раньше `save` всего проекта затирал чужую запись).
+      updated = await extra.projectStore.mutate(project.id, (target) => {
+        target.log = [...(target.log ?? []), entry];
+        target.updatedAt = nowISO();
+      });
     } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
       return {
-        content: sm('project.log_save_error', { error: err instanceof Error ? err.message : String(err) }),
+        content: sm('project.log_save_error', { error }),
         isError: true,
+        metadata: { i18n: i18nMeta('project.log_save_error', { error }) },
       };
     }
+    if (!updated) {
+      return { content: NO_PROJECT_LOG_ERROR, isError: true, metadata: { i18n: i18nMeta('project.log_no_project') } };
+    }
 
+    const count = updated.log?.length ?? 0;
     return {
-      content: sm('project.log_added', { count: String(log.length) }),
-      metadata: { entry, count: log.length },
+      content: sm('project.log_added', { count: String(count) }),
+      metadata: { entry, count, i18n: i18nMeta('project.log_added', { count: String(count) }) },
     };
   },
 };
@@ -577,7 +627,10 @@ export const projectLogReadTool: ToolDefinition = {
     const lines = log.map((e) => `- ${e.createdAt} — ${e.text}`);
     return {
       content: sm('project.log_list', { count: String(log.length), items: lines.join('\n') }),
-      metadata: { count: log.length },
+      metadata: {
+        count: log.length,
+        i18n: i18nMeta('project.log_list', { count: String(log.length), items: lines.join('\n') }),
+      },
     };
   },
 };
@@ -650,15 +703,25 @@ export const projectInvariantsWriteTool: ToolDefinition = {
       };
     }
 
-    project.invariants = params.invariants;
-    project.updatedAt = nowISO();
-
+    let updated: Project | null;
     try {
-      await extra.projectStore.save(project);
+      updated = await extra.projectStore.mutate(project.id, (target) => {
+        target.invariants = params.invariants;
+        target.updatedAt = nowISO();
+      });
     } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
       return {
-        content: sm('project.invariants_save_error', { error: err instanceof Error ? err.message : String(err) }),
+        content: sm('project.invariants_save_error', { error }),
         isError: true,
+        metadata: { i18n: i18nMeta('project.invariants_save_error', { error }) },
+      };
+    }
+    if (!updated) {
+      return {
+        content: NO_PROJECT_INVARIANTS_ERROR,
+        isError: true,
+        metadata: { i18n: i18nMeta('project.invariants_no_project') },
       };
     }
 

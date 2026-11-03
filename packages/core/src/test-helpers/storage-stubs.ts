@@ -124,6 +124,7 @@ export function stubProjectStore(
   return {
     load: async (): Promise<Project | null> => null,
     save: async (_project: Project): Promise<void> => {},
+    mutate: async (): Promise<Project | null> => null,
     delete: async (): Promise<void> => {},
     list: async (): Promise<Project[]> => [],
     create: (_name: string, _ownerId: string): Project => {

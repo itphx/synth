@@ -267,6 +267,39 @@ describe('plan_read / plan_list / plan_write', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('project');
   });
+
+  // Регресс на lost update: раньше `plan_write` делал load → правку в памяти →
+  // `ProjectStore.save` (лок только на запись), поэтому два параллельных вызова
+  // (две сессии одного проекта) перетирали друг друга — терялся один пункт.
+  it('два параллельных plan_write не теряют правку (атомарный mutate)', async () => {
+    const projectBefore = (await projectStore.load(projectId))!;
+    const versionBefore = projectBefore.plan!.version;
+
+    // Вторая сессия того же проекта — как два агента, работающих параллельно.
+    const second = await sessionManager.createSession({ title: 'Plan rw 2', userId: 'u1' });
+    await sessionManager.withLock(second.id, async (s) => {
+      s.projectId = projectId;
+      await sessionManager.saveSession(s);
+    });
+    const secondCtx: ToolContext = {
+      sessionId: second.id,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, eventBus, sessionId: second.id, projectStore },
+    };
+
+    const [first, other] = await Promise.all([
+      planWriteTool.execute({ action: 'create_item', title: 'Первый' }, makeCtx()),
+      planWriteTool.execute({ action: 'create_item', title: 'Второй' }, secondCtx),
+    ]);
+    expect(first.isError).toBeUndefined();
+    expect(other.isError).toBeUndefined();
+
+    const project = (await projectStore.load(projectId))!;
+    expect(project.plan!.items.map((i) => i.title).sort()).toEqual(['Второй', 'Первый']);
+    expect(project.plan!.version).toBe(versionBefore + 2);
+  });
 });
 
 // ---------------------------------------------------------------------------

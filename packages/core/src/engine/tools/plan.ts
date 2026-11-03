@@ -48,16 +48,12 @@ function getPlan(project: Project): ProjectPlan {
 }
 
 /**
- * Сохраняет изменённый план: инкрементирует version, обновляет updatedAt
- * плана и проекта, пишет через projectStore.
+ * Внутренний сигнал «мутатор отклонил правку»: `applyPlanWrite` вернул ошибку
+ * валидации до изменения плана. Бросается **из** мутатора `ProjectRepository.mutate`,
+ * чтобы хранилище ничего не записало (бросок = отсутствие записи), и ловится рядом
+ * с вызовом — модель получает прежний tool-отказ.
  */
-async function savePlan(projectStore: ProjectStoreContract, project: Project, plan: ProjectPlan): Promise<void> {
-  plan.updatedAt = nowISO();
-  plan.version += 1;
-  project.plan = plan;
-  project.updatedAt = nowISO();
-  await projectStore.save(project);
-}
+class PlanWriteRejectedError extends Error {}
 
 /**
  * Markdown-представление плана: заголовок, затем по колонкам (в порядке order)
@@ -132,6 +128,7 @@ export const planEnterTool: ToolDefinition = {
       return {
         content: sm('plan.session_manager_unavailable', { tool: 'plan_enter' }),
         isError: true,
+        metadata: { i18n: i18nMeta('plan.session_manager_unavailable', { tool: 'plan_enter' }) },
       };
     }
     const ok = await updateSessionMode(extra.sessionManager, extra.sessionId, { mode: 'plan' });
@@ -140,7 +137,7 @@ export const planEnterTool: ToolDefinition = {
     }
     return {
       content: sm('plan.enter_success'),
-      metadata: { mode: 'plan' },
+      metadata: { mode: 'plan', i18n: i18nMeta('plan.enter_success') },
     };
   },
 };
@@ -183,7 +180,7 @@ export const planExitTool: ToolDefinition = {
 
     return {
       content: sm('plan.exit_success'),
-      metadata: { mode: 'act', plan_approved: true },
+      metadata: { mode: 'act', plan_approved: true, i18n: i18nMeta('plan.exit_success') },
     };
   },
 };
@@ -392,16 +389,30 @@ export const planWriteTool: ToolDefinition = {
         metadata: { i18n: i18nMeta('project.write_forbidden') },
       };
     }
-    const plan = getPlan(project);
 
-    const result = applyPlanWrite(plan, params);
-    if (result.error) {
-      return { content: result.error, isError: true };
-    }
-
+    // Атомарный read-modify-write: правка и запись — под локом хранилища, иначе
+    // параллельный `plan_write` из другой сессии того же проекта теряется
+    // (load → mutate в памяти → save всего проекта).
+    let savedPlan: ProjectPlan | undefined;
     try {
-      await savePlan(extra.projectStore, project, plan);
+      const saved = await extra.projectStore.mutate(project.id, (target) => {
+        const plan = getPlan(target);
+        const result = applyPlanWrite(plan, params);
+        // Валидация до правки: бросок из мутатора = запись не выполняется.
+        if (result.error) throw new PlanWriteRejectedError(result.error);
+        plan.updatedAt = nowISO();
+        plan.version += 1;
+        target.plan = plan;
+        target.updatedAt = nowISO();
+        savedPlan = plan;
+      });
+      if (!saved) {
+        return { content: sm('plan.no_project'), isError: true, metadata: { i18n: i18nMeta('plan.no_project') } };
+      }
     } catch (err) {
+      if (err instanceof PlanWriteRejectedError) {
+        return { content: err.message, isError: true };
+      }
       return {
         content: sm('plan.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
@@ -413,6 +424,6 @@ export const planWriteTool: ToolDefinition = {
     const sessionId = extra.sessionId ?? ctx.sessionId ?? session?.id;
     if (sessionId) extra.eventBus?.publish(sessionId, 'plan.updated', {});
 
-    return { content: renderPlanMarkdown(plan), metadata: { plan } };
+    return { content: renderPlanMarkdown(savedPlan!), metadata: { plan: savedPlan } };
   },
 };

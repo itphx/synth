@@ -712,4 +712,24 @@ describe('project_workspace_set', () => {
     expect(result.isError).toBe(true);
     expect(result.metadata?.i18n).toEqual({ key: 'project.workspace_invalid' });
   });
+
+  // Дегенеративные пути проходили trim-проверку, но `normalizeWorkspace` давал
+  // `undefined` → workspace молча очищался (ответ «workspace set» с пустым путём).
+  // Очистка workspace тулом не поддерживается — это отказ.
+  it.each(['.', '..', '/', ' / '])(
+    'дегенеративный workspace %j → project.workspace_invalid, workspace не очищается',
+    async (workspace) => {
+      // Непустой workspace, который не должен пропасть.
+      await projectStore.mutate(projectId, (project) => {
+        project.workspace = 'keep-me';
+      });
+
+      const result = await projectWorkspaceSetTool.execute({ workspace }, makeCtx());
+      expect(result.isError).toBe(true);
+      expect(result.metadata?.i18n).toEqual({ key: 'project.workspace_invalid' });
+
+      const stored = (await projectStore.load(projectId))!;
+      expect(stored.workspace).toBe('keep-me');
+    },
+  );
 });
