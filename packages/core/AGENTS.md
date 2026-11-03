@@ -1246,9 +1246,17 @@
   Тулы управления проектом:
   `project_update`/`project_workspace_set` (`project-manage.ts`) и
   `project_repo_clone|init|add|fetch|remove` (`project-repos.ts`) — проект берётся
-  из сессии, смена workspace/регистрация репозиториев сохраняются `ProjectStore.save`
-  и публикуют `project.updated`; `project_update` валидирует `icon`/`color` по
+  из сессии, смена workspace/регистрация репозиториев и правки плана/лога/инвариантов
+  сохраняются **атомарным** `ProjectRepository.mutate` (порт `storage/ports/project-repository.ts`:
+  load → синхронный мутатор → запись под локом хранилища; файловая реализация — `AsyncLock`,
+  PostgreSQL — транзакция с `FOR UPDATE OF p`). `load` + правка в памяти + `save` **не**
+  использовать: лок у `save` только на запись, параллельная правка другой сессии теряется
+  (lost update). Мутатор бросил → записи нет, ошибка пробрасывается. Публикация
+  `project.updated` — после успешного сохранения; `project_update` валидирует `icon`/`color` по
   `PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS` (невалидно → ошибка с перечнем ключей).
+  `project_workspace_set` отклоняет пустую строку, корень и дегенеративные пути (`"."`, `".."`,
+  `"/"`) — очистка workspace тулом не поддерживается; в managed подтверждение вне корня не
+  применяется (только отказ).
   **SSH-ключи (`ssh-keys.ts`, ADR-076).** `ssh_keys_list` — метаданные ключей
   инстанса из `ctx.extra.sshKeyStore` (`list()`/`listForAgent()`; `reveal()` не
   вызывается, секретов в ответе и метаданных нет), capability `git_read` (группа

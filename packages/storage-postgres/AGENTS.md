@@ -284,6 +284,10 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
     гарантирует инвариант и закрывает гонку.
   - `projects` — нормализация `icon`/`color` **при чтении**
     (`normalizeIconKey`/`normalizeColorKey`), паритет с `ProjectStore.load`.
+    `mutate` (атомарный read-modify-write порта `ProjectRepository`) — одна транзакция:
+    `SELECT … FOR UPDATE OF p` (блокировка строки `projects`) → мутатор → запись строки и
+    участий `project_members` тем же соединением. `OF p` обязателен: в выборке есть
+    `LEFT JOIN LATERAL`, а PostgreSQL не позволяет `FOR UPDATE` по nullable-стороне outer join.
   - `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/`pipeline_run_events` (ADR-101,
     миграция 004) — FK нет: удаление пайплайна чистит его версии **в коде** (паритет
     с файловой реализацией), прогоны удалению пайплайна не подвержены вовсе;
