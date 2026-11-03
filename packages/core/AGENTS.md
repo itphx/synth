@@ -76,6 +76,20 @@
 - Любой LLM-вызов — через `GatewayProvider`
   (`engine/gateway/gateway-provider.ts`: guard, обфускация, rate limit, аудит);
   провайдера напрямую не дёргать (ADR-036).
+- **Отключённые администратором провайдер/модель — fail-closed.** `providerLoader`
+  (`server/app/deps.ts`, `backend/app/deps.ts`) возвращает `null` при
+  `provider.enabled === false` — провайдер не создаётся ни в чате, ни в ретраях,
+  ни в пайплайнах/эмбеддингах/суммаризации. Ход получает понятную ошибку:
+  `process-setup` (`providerAvailability` → `provider_disabled`,
+  `resolveModelEnabled === false` → `model_disabled`, ключи `router.*` в
+  `shared/i18n`), а `POST /api/v2/sessions/:id/prompt` проверяет эффективную пару
+  (`body.provider/model` → настройки сессии) через `SessionRoutesDeps.llmAvailability`
+  **до вложений и постановки в очередь** (`400 PROVIDER_DISABLED`/`MODEL_DISABLED`,
+  `details {provider, model?}`). Нет записи в каталоге (`undefined`) — не блокируем.
+  **Гибрид:** remote-ветка `POST /:id/prompt` вызывает `promptSession` с
+  `allowHttpError: true` — 4xx удалённой стороны возвращается `Response` (статус +
+  `code`/`details` тела) и пробрасывается клиенту; 401 по-прежнему `UNAUTHORIZED`,
+  legacy WS-кадр `send_message` (`server/app/ws-events.ts`) опцию **не** передаёт.
 - **Температура LLM-вызова — одна величина на прогон.** Приоритет:
   `AgentDefinition.temperature` → `session.settings.temperature` → дефолт модели
   (`undefined` — поле `temperature` в запросе **не отправляется**,

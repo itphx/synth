@@ -191,6 +191,27 @@ export function mountStandaloneRoutes(
       // ADR-106 Ф3: HTTP-ответ на подтверждение принимает решение через тот же
       // реестр, что и WS-кадр `permission_reply`.
       ...(deps.approvalRegistry ? { approvalRegistry: deps.approvalRegistry } : {}),
+      // Отключённые провайдер/модель отклоняются до постановки в очередь
+      // (каталог — `providerCache`/`modelCache`; нет записи — не блокируем).
+      llmAvailability: {
+        isProviderEnabled: (name: string) => {
+          const provider = providerCache.get(name);
+          return provider ? provider.enabled !== false : undefined;
+        },
+        isModelEnabled: (providerName: string, modelName: string) => {
+          let model = modelCache.get(`${providerName}/${modelName}`) ?? modelCache.get(modelName);
+          if (!model) {
+            for (const candidate of modelCache.values()) {
+              if (candidate.provider !== providerName) continue;
+              if (candidate.name === modelName) {
+                model = candidate;
+                break;
+              }
+            }
+          }
+          return model ? model.enabled !== false : undefined;
+        },
+      },
     },
     {
       resolveDefaultAgent: getDefaultAgentId,

@@ -5,6 +5,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useCatalogModels } from '@/hooks/useCatalogModels'
+import { isSelectableModel, isSelectableProvider, selectableProvidersByName } from '@/lib/modelOptions'
 import { Button } from '@/components/ui/button'
 import { confirm } from '@/lib/confirm'
 import {
@@ -197,10 +198,15 @@ export function DecisionSettings() {
 
   // Только провайдеры decision-протокола (ADR-084); модели — по выбранному провайдеру.
   const decisionProviders = providers.filter(
-    (p) => p.enabled && DECISION_PROVIDER_TYPES.includes(p.type),
+    (p) => isSelectableProvider(p) && DECISION_PROVIDER_TYPES.includes(p.type),
   )
+  const providersByName = selectableProvidersByName(providers)
   const filteredModels = (provider: string) =>
-    models.filter((m) => m.enabled && (!provider || m.provider === provider))
+    models.filter(
+      (m) =>
+        isSelectableModel({ provider: m.provider, enabled: m.enabled }, providersByName)
+        && (!provider || m.provider === provider),
+    )
 
   const current = draft.draft ?? remote
 

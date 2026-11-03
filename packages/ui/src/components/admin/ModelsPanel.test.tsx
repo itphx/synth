@@ -32,7 +32,7 @@ const apiMock = vi.hoisted(() => ({
    * Мок имитирует сервер: поиск/фильтры применяются к составу страницы,
    * ответ — `{groups, page:{models,total,offset,limit,next_offset}}`.
    */
-  getModelGroups: vi.fn(async (query?: { search?: string; provider?: string; enabled?: boolean }) => {
+  getModelGroups: vi.fn(async (query?: { search?: string; provider?: string; enabled?: boolean; offset?: number }) => {
     const groups = (await apiMock.getModels(query)) as Array<{
       provider: { name: string }
       models: Array<{ id: string; name: string; provider: string; enabled: boolean }>
@@ -56,7 +56,7 @@ const apiMock = vi.hoisted(() => ({
     const models = filtered.flatMap((g) => g.models)
     return {
       groups: filtered,
-      page: { models, total: models.length, offset: 0, limit: 100, next_offset: null },
+      page: { models, total: models.length, offset: 0, limit: 100, next_offset: null as number | null },
     }
   }),
   getDefaultModel: vi.fn(async (): Promise<{
@@ -71,7 +71,12 @@ const apiMock = vi.hoisted(() => ({
   deleteModel: vi.fn(async () => undefined),
 }))
 
-vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
+// Мок должен сохранять прочие экспорты модуля (`mergeModelGroups` нужен
+// автоподгрузке страниц), иначе реальный код получает `undefined`.
+vi.mock('@/lib/api/synthApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/synthApi')>()
+  return { ...actual, synthApi: apiMock }
+})
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
@@ -908,5 +913,106 @@ describe('ModelsPanel: расширенные параметры (совмест
       supportsNativeVideo: false,
       nativeAudioFormats: ['wav'],
     })
+  })
+})
+
+describe('ModelsPanel: автоподгрузка страниц при скролле', () => {
+  type ObservedCallback = (entries: IntersectionObserverEntry[], observer: IntersectionObserver) => void
+  const originalIO = (globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver
+  const observers: Array<{ callback: ObservedCallback; disconnect: () => void; trigger: () => void }> = []
+
+  class FakeIntersectionObserver {
+    root: Element | null = null
+    rootMargin = ''
+    thresholds: number[] = []
+    private disconnected = false
+    constructor(
+      private callback: ObservedCallback,
+      _options?: IntersectionObserverInit,
+    ) {
+      observers.push({
+        callback,
+        disconnect: () => { this.disconnected = true },
+        trigger: () => this.trigger(),
+      })
+    }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void { this.disconnected = true }
+    takeRecords(): IntersectionObserverEntry[] { return [] }
+    /** Тест сам «прокручивает» список до sentinel. */
+    trigger(): void {
+      if (this.disconnected) return
+      this.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        this as unknown as IntersectionObserver,
+      )
+    }
+  }
+
+  beforeEach(() => {
+    observers.length = 0
+    ;(globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver =
+      FakeIntersectionObserver
+  })
+
+  afterEach(() => {
+    if (originalIO === undefined) {
+      delete (globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver
+    } else {
+      ;(globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = originalIO
+    }
+  })
+
+  it('sentinel догружает следующую страницу, кнопки «Показать ещё» нет', async () => {
+    const pageModel = (name: string) => ({
+      id: `itphx/${name}`,
+      name,
+      provider: 'itphx',
+      enabled: true,
+      isDefault: false,
+    })
+    apiMock.getModelGroups.mockImplementation(async (query?: { offset?: number }) => {
+      const offset = query?.offset ?? 0
+      const models = offset === 0 ? [pageModel('page-one')] : [pageModel('page-two')]
+      return {
+        groups: [
+          {
+            provider: { name: 'itphx', type: 'openai', icon: '', defaultModel: '', currency: 'USD' },
+            models,
+          },
+        ],
+        page: {
+          models,
+          total: 2,
+          offset,
+          limit: 100,
+          next_offset: (offset === 0 ? 1 : null) as number | null,
+        },
+      }
+    })
+
+    const container = await renderPanel()
+
+    expect(container.textContent).toContain('page-one')
+    // Старой кнопки догрузки больше нет — только sentinel.
+    expect(container.querySelector('[data-testid="models-load-more"]')).toBeNull()
+    expect(container.querySelector('[data-testid="models-auto-load-sentinel"]')).toBeTruthy()
+    expect(observers.length).toBeGreaterThan(0)
+
+    await act(async () => {
+      observers.at(-1)!.trigger()
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(apiMock.getModelGroups).toHaveBeenCalledWith(expect.objectContaining({ offset: 1 }))
+    const names = useProvidersStore
+      .getState()
+      .modelGroups.flatMap((group) => group.models.map((m) => m.name))
+    expect(names).toContain('page-two')
+    // Последняя страница — sentinel больше не нужен.
+    expect(container.querySelector('[data-testid="models-auto-load-sentinel"]')).toBeNull()
   })
 })

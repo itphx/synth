@@ -214,6 +214,11 @@ export const ProvidersPanel = () => {
     iconTitle = form.icon
   }
 
+  // Провайдер по умолчанию отключён: новые сессии не смогут использовать его
+  // модель — предупреждаем администратора вверху панели.
+  const defaultDisabledProvider =
+    providers.find((p) => p.is_default === true && p.enabled === false) ?? null
+
   return (
     <TooltipProvider>
       <SettingsPanel
@@ -225,6 +230,18 @@ export const ProvidersPanel = () => {
         </Button>
       }
     >
+      {defaultDisabledProvider && (
+        <div
+          data-testid="providers-default-disabled-warning"
+          className="flex items-start gap-2 rounded-lg border border-status-notice/40 bg-status-notice/10 px-3 py-2 text-xs text-foreground"
+        >
+          <Icon name="error-warning" className="mt-0.5 size-3.5 shrink-0 text-status-notice" />
+          <span>
+            {t('admin.providers.defaultDisabledWarning', { provider: defaultDisabledProvider.name })}
+          </span>
+        </div>
+      )}
+
       {showForm && (
         <SettingsSection
           id="providers-form"

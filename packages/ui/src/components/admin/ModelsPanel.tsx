@@ -186,6 +186,29 @@ export const ModelsPanel = () => {
     }
   }, [groups, nextOffset, loadingMore])
 
+  /**
+   * Автоподгрузка страниц при скролле: sentinel в конце списка пересекается с
+   * телом панели (`scrollRef` — единственный скролл, ADR-072) → грузим следующую
+   * страницу. Кнопки «Показать ещё» больше нет.
+   */
+  const loadMoreRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (nextOffset === null || loadingMore || loading) return
+    // Старые браузеры/jsdom без IntersectionObserver — просто без автоподгрузки.
+    if (typeof IntersectionObserver === 'undefined') return
+    const root = scrollRef.current
+    const target = loadMoreRef.current
+    if (!root || !target) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMore()
+      },
+      { root, rootMargin: '600px 0px' },
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [loadMore, nextOffset, loading, loadingMore])
+
   /** Текущий запрос каталога: поиск + фильтры (уходят на сервер). */
   const buildQuery = useCallback((): ModelsQuery => {
     const term = search.trim()
@@ -211,6 +234,9 @@ export const ModelsPanel = () => {
   useEffect(() => {
     const query = buildQuery()
     queryRef.current = query
+    // Новый запрос — своя первая страница: старый курсор не должен догружать
+    // «следующую» страницу прежней выборки, пока ответ ещё не пришёл.
+    setNextOffset(null)
     const timer = setTimeout(() => { void load(query) }, search.trim() ? 300 : 0)
     return () => clearTimeout(timer)
   }, [buildQuery, load, search])
@@ -1418,23 +1444,26 @@ export const ModelsPanel = () => {
               })}
             </div>
           </div>
+          {/* Sentinel автоподгрузки: следующий offset подгружается при
+              приближении к концу списка (IntersectionObserver ниже). */}
+          {nextOffset !== null && (
+            <div
+              ref={loadMoreRef}
+              data-testid="models-auto-load-sentinel"
+              aria-busy={loadingMore || undefined}
+              className="flex min-h-4 items-center justify-center gap-1.5 py-1.5 text-xs text-muted-foreground"
+            >
+              {loadingMore && (
+                <>
+                  <Icon name="loader-2" className="size-3.5 animate-spin" />
+                  {t('admin.models.loadingMore')}
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Каталог постраничный: следующая страница — по кнопке. */}
-      {nextOffset !== null && items.length > 0 && (
-        <div className="flex justify-center pt-1">
-          <Button
-            variant="outline"
-            onClick={() => void loadMore()}
-            disabled={loadingMore}
-            data-testid="models-load-more"
-          >
-            <Icon name="loader-2" className={cn('size-3.5', loadingMore && 'animate-spin')} />
-            {loadingMore ? t('admin.models.loadingMore') : t('admin.models.showMore')}
-          </Button>
-        </div>
-      )}
     </SettingsPanel>
     </TooltipProvider>
   )

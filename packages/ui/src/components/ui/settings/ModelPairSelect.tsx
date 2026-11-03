@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { isSelectableModel, isSelectableProvider, selectableProvidersByName } from '@/lib/modelOptions'
 import { SelectContent, SelectItem } from '../select'
 import { SelectField } from './controls/SelectField'
 
@@ -62,9 +63,19 @@ export function ModelPairSelect({
   modelTooltip,
 }: ModelPairSelectProps) {
   const compact = variant === 'compact'
-  const availableProviders = filterOptions ? providers.filter((p) => p.enabled) : providers
+  // `undefined`/отсутствующее поле — «неизвестно»: не отбрасываем (legacy,
+  // синтетические записи). `filterOptions` — списки не должны предлагать модель
+  // отключённого провайдера.
+  const providersByName = useMemo(() => selectableProvidersByName(providers), [providers])
+  const availableProviders = filterOptions
+    ? providers.filter((p) => isSelectableProvider(p))
+    : providers
   const filteredModels = filterOptions
-    ? models.filter((m) => m.enabled && (!provider || m.provider === provider))
+    ? models.filter(
+        (m) =>
+          isSelectableModel({ provider: m.provider ?? provider, enabled: m.enabled }, providersByName)
+          && (!provider || m.provider === provider),
+      )
     : models
   /**
    * Текущее значение видно всегда: каталог моделей постраничный, выбранная

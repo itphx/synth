@@ -217,6 +217,63 @@ describe('runProcessSetup', () => {
     expect((error as Error).message).toContain('msg-provider');
   });
 
+  it('провайдер отключён → провайдерская ошибка provider_disabled, а не provider_not_found', async () => {
+    const { id, message } = await makeSession();
+    const deps = makeDeps({
+      routeProvider: vi.fn(async () => null) as never,
+      providerAvailability: vi.fn(() => 'disabled' as const) as never,
+    });
+
+    const outcome = await runProcessSetup(await makeArgs(id, message), deps);
+
+    expect(outcome.failed).toBe(true);
+    const call = (deps.handleLlmFailure as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const error = call[2] as Error;
+    const ctx = call[4] as Record<string, unknown>;
+    expect(error.message).toBe(sm('router.provider_disabled', { provider: 'setup-provider' }));
+    expect(ctx.errorType).toBe('provider_disabled');
+    // Дальнейшие шаги подготовки не выполнялись.
+    expect(deps.resolveMcpDecisions).not.toHaveBeenCalled();
+    expect(deps.composer.compose).not.toHaveBeenCalled();
+  });
+
+  it('модель отключена → fail-closed model_disabled без LLM-вызова', async () => {
+    const { id, message } = await makeSession();
+    const deps = makeDeps({
+      resolveModelEnabled: vi.fn(() => false) as never,
+    });
+
+    const outcome = await runProcessSetup(await makeArgs(id, message), deps);
+
+    expect(outcome.failed).toBe(true);
+    const call = (deps.handleLlmFailure as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const error = call[2] as Error;
+    const ctx = call[4] as Record<string, unknown>;
+    expect(error.message).toBe(sm('router.model_disabled', { provider: 'setup-provider', model: 'set-model' }));
+    expect(ctx).toMatchObject({
+      errorType: 'model_disabled',
+      providerName: 'setup-provider',
+      model: 'set-model',
+    });
+    // До промпта/инструментов/LLM дело не дошло.
+    expect(deps.resolveMcpDecisions).not.toHaveBeenCalled();
+    expect(deps.composer.compose).not.toHaveBeenCalled();
+    expect(deps.registerCancelToken).not.toHaveBeenCalled();
+  });
+
+  it('resolveModelEnabled === undefined не блокирует ход', async () => {
+    const { id, message } = await makeSession();
+    const deps = makeDeps({
+      resolveModelEnabled: vi.fn(() => undefined) as never,
+    });
+
+    const outcome = await runProcessSetup(await makeArgs(id, message), deps);
+
+    expect(outcome.failed).toBe(false);
+    expect(deps.handleLlmFailure).not.toHaveBeenCalled();
+    expect(deps.resolveMcpDecisions).toHaveBeenCalled();
+  });
+
   it('успешный путь: state-сообщения видны в запросе этого же хода и идемпотентны', async () => {
     const { id, message } = await makeSession();
     const deps = makeDeps();

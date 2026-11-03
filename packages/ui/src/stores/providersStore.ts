@@ -75,12 +75,16 @@ interface ProvidersStore {
 
 /**
  * Выбор провайдера при обновлении каталога (только когда текущий невалиден/пуст):
- * провайдер с непустым `model` → первый enabled → первый.
+ * включённый провайдер с непустым `model` → первый включённый → первый.
+ * Отключённый провайдер не становится выбором «по умолчанию» — если только его
+ * модель не задана как модель инстанса (`applyModelGroups` берёт `isDefault`
+ * из каталога): такая пара остаётся видимой, а отправка отклоняется сервером
+ * с понятной ошибкой (см. `POST /sessions/:id/prompt`).
  */
 function pickProvider(providers: ProviderInfo[]): string | null {
   if (providers.length === 0) return null
   const preferred =
-    providers.find((p) => !!p.model)
+    providers.find((p) => !!p.model && p.enabled !== false)
     ?? providers.find((p) => p.enabled !== false)
     ?? providers[0]
   return preferred?.name ?? null

@@ -11,6 +11,7 @@ import {
 import { confirm } from '@/lib/confirm'
 import { useTransientMessage } from '@/hooks/useTransientMessage'
 import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
+import { isSelectableModel, isSelectableProvider, selectableProvidersByName } from '@/lib/modelOptions'
 import { synthApi, type DictionaryEntry } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
 import { SelectContent, SelectItem } from '@/components/ui/select'
@@ -112,8 +113,14 @@ export function RoutingSettings() {
     }))
   }
 
-  const availableProviders = providers.filter((p) => p.enabled)
-  const filteredModels = (provider: string) => models.filter((m) => m.enabled && (!provider || m.provider === provider))
+  const availableProviders = providers.filter((p) => isSelectableProvider(p))
+  const providersByName = selectableProvidersByName(providers)
+  const filteredModels = (provider: string) =>
+    models.filter(
+      (m) =>
+        isSelectableModel({ provider: m.provider, enabled: m.enabled }, providersByName)
+        && (!provider || m.provider === provider),
+    )
 
   const stateLabel = (enabled: boolean) => (enabled ? t('common.enabled') : t('common.disabled'))
 

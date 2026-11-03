@@ -942,7 +942,11 @@ export async function createStandaloneDeps(
   const providerLoader = (name: string): ProviderConfig | null => {
     if (accessors.isBlockLocalProviders() && accessors.getActiveRemoteProviderNames().size > 0
       && !accessors.getActiveRemoteProviderNames().has(name)) return null;
-    return providerCache.get(name) ?? null;
+    const provider = providerCache.get(name);
+    // Fail-closed: отключённый администратором провайдер не создаётся ни в чате,
+    // ни в ретраях, ни в пайплайнах/эмбеддингах/суммаризации.
+    if (!provider || provider.enabled === false) return null;
+    return provider;
   };
 
   // Загрузчик сохранённого контекстного окна модели (ModelConfig.contextWindow)
@@ -1293,6 +1297,28 @@ export async function createStandaloneDeps(
       : undefined;
   };
 
+  /** Доступность провайдера для понятной ошибки хода (`provider_disabled`). */
+  const providerAvailability = (name: string): 'ok' | 'missing' | 'disabled' => {
+    const provider = providerCache.get(name);
+    if (!provider) return 'missing';
+    return provider.enabled === false ? 'disabled' : 'ok';
+  };
+
+  /** Включена ли модель (`false` — отключена); нет записи — `undefined`. */
+  const resolveModelEnabled = (providerName: string, modelId: string): boolean | undefined => {
+    let model = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
+    if (!model) {
+      for (const candidate of modelCache.values()) {
+        if (candidate.provider !== providerName) continue;
+        if (candidate.name === modelId) {
+          model = candidate;
+          break;
+        }
+      }
+    }
+    return model ? model.enabled !== false : undefined;
+  };
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -1358,6 +1384,10 @@ export async function createStandaloneDeps(
     resolveModelCompatibility,
     // Лимит вывода модели из каталога (кап `max_tokens`) + дефолт `llm.maxTokens`.
     resolveModelMaxOutputTokens,
+    // Понятные ошибки движка: провайдер отключён (`provider_disabled`) и модель
+    // отключена (`model_disabled`) — fail-closed без LLM-вызова.
+    providerAvailability,
+    resolveModelEnabled,
     ...(config.llmMaxTokens !== undefined ? { defaultMaxOutputTokens: config.llmMaxTokens } : {}),
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).

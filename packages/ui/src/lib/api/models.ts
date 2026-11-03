@@ -106,6 +106,9 @@ function toProviderGroup(p: ProviderInfo): ProviderGroupInfo {
     icon: p.icon,
     defaultModel: p.model ?? '',
     currency: p.currency,
+    // Провайдер отключён администратором — модели этой группы не предлагаются
+    // в списках выбора (данные каталога при этом остаются полными).
+    enabled: p.enabled !== false,
   }
 }
 

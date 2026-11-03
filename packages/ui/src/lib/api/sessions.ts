@@ -375,21 +375,19 @@ export const sessionsApi = {
         : {}),
     }
 
-    const response = await fetch(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Enqueue failed' }))
-      throw new Error(error.detail || `HTTP ${response.status}`)
-    }
+    // `fetchJSON` пробрасывает `status`/`code`/`details` (ADR-075/ADR-114):
+    // ошибки провайдера/модели (`PROVIDER_DISABLED`/`MODEL_DISABLED`) доходят до
+    // UI с машиночитаемым кодом и `details`, а не теряются в общем тексте.
+    const payload = await fetchJSON<Partial<PromptAcceptedResponse> | null>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    )
 
     // ADR-118 §3: контракт приёма — `202 {messageId, mode, position}`.
-    // Старый сервер (не-202) — принимаем как `queue` с известным id.
-    const payload = await response.json().catch(() => null) as Partial<PromptAcceptedResponse> | null
+    // Старый сервер (ответ без этих полей) — принимаем как `queue` с известным id.
     return {
       messageId: payload?.messageId || body.messageId as string,
       mode: payload?.mode || (options?.mode && options.mode !== 'queue' ? options.mode : 'queue'),

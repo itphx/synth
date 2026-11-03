@@ -64,6 +64,14 @@ describe('providersStore.applyProviders', () => {
     expect(useProvidersStore.getState().selectedProviderName).toBe('b')
   })
 
+  it('отключённый провайдер с непустым model не выбирается по умолчанию', () => {
+    useProvidersStore.getState().applyProviders([
+      provider('off', { enabled: false, model: 'm' }),
+      provider('on'),
+    ])
+    expect(useProvidersStore.getState().selectedProviderName).toBe('on')
+  })
+
   it('пустой список очищает выбор', () => {
     useProvidersStore.setState({ selectedProviderName: 'a' })
     useProvidersStore.getState().applyProviders([])

@@ -33,6 +33,11 @@ export interface ProviderGroupInfo {
   icon: string
   defaultModel: string
   currency?: string
+  /**
+   * Провайдер включён (`GET /providers` → `enabled`). `undefined` — «неизвестно»
+   * (legacy/синтетическая группа): фильтры выбора такие группы **не** отбрасывают.
+   */
+  enabled?: boolean
 }
 
 export const providersApi = {

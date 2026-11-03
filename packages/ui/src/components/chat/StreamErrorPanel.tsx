@@ -24,7 +24,11 @@ export function StreamErrorPanel({ error, errorType, onRetry }: StreamErrorPanel
     ? t('chat.streamError.contextLength')
     : errorType === 'auth'
       ? t('chat.streamError.authFailed')
-      : t('chat.streamError.generic')
+      : errorType === 'provider_disabled'
+        ? t('chat.streamError.providerDisabled')
+        : errorType === 'model_disabled'
+          ? t('chat.streamError.modelDisabled')
+          : t('chat.streamError.generic')
 
   const showRetry = resolveStreamErrorAction(errorType) === 'retry' && !!onRetry
 
@@ -43,7 +47,8 @@ export function StreamErrorPanel({ error, errorType, onRetry }: StreamErrorPanel
         </button>
       ) : undefined}
     >
-      {errorType !== 'context_length' && errorType !== 'auth' && error && (
+      {errorType !== 'context_length' && errorType !== 'auth'
+        && errorType !== 'provider_disabled' && errorType !== 'model_disabled' && error && (
         <span className="block truncate text-[0.625rem] text-muted-foreground" title={error}>
           {error}
         </span>

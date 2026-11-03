@@ -15,6 +15,8 @@ import {
   type ModalityModelRef,
 } from '@/lib/api/synthApi'
 import { useCatalogModels } from '@/hooks/useCatalogModels'
+import { useProvidersStore } from '@/stores/providersStore'
+import { isSelectableModel, selectableProvidersByName } from '@/lib/modelOptions'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
 import {
@@ -548,6 +550,16 @@ export function MultimodalSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
   const catalogModels = useCatalogModels()
+  // Провайдеры нужны, чтобы не предлагать aux-модели отключённых провайдеров.
+  const providers = useProvidersStore((s) => s.providers)
+  const loadProviders = useProvidersStore((s) => s.loadProviders)
+  useEffect(() => {
+    if (providers.length === 0) void loadProviders()
+  }, [providers.length, loadProviders])
+  const selectableCatalog = useMemo(() => {
+    const providersByName = selectableProvidersByName(providers)
+    return catalogModels.filter((m) => isSelectableModel(m, providersByName))
+  }, [catalogModels, providers])
 
   const [info, setInfo] = useState<AttachmentsSettingsInfo | null>(null)
   const [defaults, setDefaults] = useState<AttachmentsSettings | null>(null)
@@ -590,10 +602,10 @@ export function MultimodalSettings() {
   const modalityOptions = useMemo(() => {
     const byFamily = {} as Record<ModalityFamily, ModalityModelOption[]>
     for (const family of MODALITY_FAMILIES) {
-      byFamily[family] = modelsForModality(catalogModels, family)
+      byFamily[family] = modelsForModality(selectableCatalog, family)
     }
     return byFamily
-  }, [catalogModels])
+  }, [selectableCatalog])
 
   // Каталог моделей постраничный: назначенная aux-модель может быть не на
   // загруженной странице — догружаем её, иначе она не попадёт в список

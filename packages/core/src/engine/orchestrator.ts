@@ -319,6 +319,17 @@ export interface OrchestratorOptions {
    */
   resolveModelMaxOutputTokens?: (providerName: string, modelId: string) => number | undefined;
   /**
+   * Доступность провайдера по каталогу (`disabled` — отключён администратором).
+   * Используется подготовкой хода, чтобы вернуть понятную ошибку
+   * `provider_disabled` вместо `provider_not_found`.
+   */
+  providerAvailability?: (name: string) => 'ok' | 'missing' | 'disabled';
+  /**
+   * Включена ли модель по каталогу (`false` — отключена). `undefined` —
+   * записи нет/неизвестно, не блокируем.
+   */
+  resolveModelEnabled?: (providerName: string, modelId: string) => boolean | undefined;
+  /**
    * `llm.maxTokens` — лимит вывода по умолчанию для новых сессий и моделей
    * без `maxOutputTokens`. Не задан — `DEFAULT_MAX_OUTPUT_TOKENS`.
    */
@@ -826,6 +837,10 @@ export class ChatOrchestrator {
   private readonly _resolveModelCompatibility: ((providerName: string, modelId: string) => ModelCompatibility | undefined) | null;
   /** Лимит вывода модели из каталога (`ModelConfig.maxOutputTokens`). */
   private readonly _resolveModelMaxOutputTokens: ((providerName: string, modelId: string) => number | undefined) | null;
+  /** Доступность провайдера по каталогу (`disabled` — отключён). */
+  private readonly _providerAvailability: ((name: string) => 'ok' | 'missing' | 'disabled') | null;
+  /** Включённость модели по каталогу (`false` — отключена). */
+  private readonly _resolveModelEnabled: ((providerName: string, modelId: string) => boolean | undefined) | null;
   /** `llm.maxTokens` — дефолт лимита вывода (`0`/не задан — константа ядра). */
   private readonly _defaultMaxOutputTokens: number;
   /**
@@ -1276,6 +1291,8 @@ export class ChatOrchestrator {
     this._resolveModelCompatibility = options.resolveModelCompatibility ?? null;
     // Лимит вывода: каталог модели (он же кап) и конфиг `llm.maxTokens`.
     this._resolveModelMaxOutputTokens = options.resolveModelMaxOutputTokens ?? null;
+    this._providerAvailability = options.providerAvailability ?? null;
+    this._resolveModelEnabled = options.resolveModelEnabled ?? null;
     this._defaultMaxOutputTokens = options.defaultMaxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     // ADR-115: live-конфиг вложений — проверяется на каждый ход в
     // `_processSetupDeps().hydrateAttachments` (без рестарта).
@@ -2954,6 +2971,8 @@ export class ChatOrchestrator {
         this._routeProvider(session, message, reasoningLevel, debugCollector, overrides),
       handleLlmFailure: (sessionId, streamId, error, attempt, ctx) =>
         this._handleLlmFailure(sessionId, streamId, error, attempt, ctx),
+      ...(this._providerAvailability ? { providerAvailability: this._providerAvailability } : {}),
+      ...(this._resolveModelEnabled ? { resolveModelEnabled: this._resolveModelEnabled } : {}),
       contextConfig: this._contextConfig,
       permissionConfig: this._permissionConfig,
       cachePolicy: this._cachePolicy,

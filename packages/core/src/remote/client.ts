@@ -152,6 +152,12 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Вернуть сырой Response вместо разобранного JSON (для стримов/SSE). */
   raw?: boolean;
+  /**
+   * Не бросать на HTTP-ошибку — вернуть `Response` как есть, чтобы вызывающий
+   * прочитал `code`/`details` тела (гибрид: проброс 4xx приёма сообщения).
+   * `401` не переопределяется — всегда `UNAUTHORIZED`.
+   */
+  allowHttpError?: boolean;
   /** Таймаут конкретного запроса в мс (переопределяет дефолт); 0 — без таймаута. */
   timeoutMs?: number;
   /** Сырое тело вместо JSON-сериализации (multipart/FormData и т.п.). */
@@ -278,7 +284,7 @@ export class RemoteBackendClient {
     if (res.status === 401) {
       throw new RemoteError('Не авторизован на удалённом сервере', 'UNAUTHORIZED');
     }
-    if (!res.ok) {
+    if (!res.ok && !opts?.allowHttpError) {
       throw new RemoteError(await this._extractError(res, path), `HTTP_${res.status}`);
     }
     if (opts?.raw) {

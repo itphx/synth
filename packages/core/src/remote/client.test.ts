@@ -126,6 +126,44 @@ describe('RemoteBackendClient', () => {
     expect((err as RemoteError).message).toContain('Внутренняя ошибка');
   });
 
+  it('allowHttpError: true → возвращает Response 400 с телом (без RemoteError)', async () => {
+    const errorBody = {
+      error: {
+        code: 'MODEL_DISABLED',
+        message: 'Модель отключена',
+        details: { provider: 'p', model: 'm' },
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(errorBody, 400)));
+
+    const res = await makeClient().promptSession('s1', {}, { allowHttpError: true });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual(errorBody);
+  });
+
+  it('без allowHttpError promptSession по-прежнему бросает RemoteError(HTTP_400)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse({ error: { code: 'MODEL_DISABLED', message: 'Модель отключена' } }, 400),
+    ));
+
+    const err = await makeClient().promptSession('s1', {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('HTTP_400');
+  });
+
+  it('401 бросает UNAUTHORIZED даже при allowHttpError', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'Не авторизован' } }, 401),
+    ));
+
+    const err = await makeClient()
+      .promptSession('s1', {}, { allowHttpError: true })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('UNAUTHORIZED');
+  });
+
   it('таймаут → RemoteError(OFFLINE)', async () => {
     vi.stubGlobal('fetch', hangingFetchMock());
 

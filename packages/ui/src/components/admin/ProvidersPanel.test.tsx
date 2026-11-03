@@ -722,3 +722,36 @@ describe('ProvidersPanel: расширенные параметры (совме�
     })
   })
 })
+
+describe('ProvidersPanel: провайдер по умолчанию отключён', () => {
+  const base: ProviderInfo = {
+    name: 'itphx',
+    type: 'openai',
+    icon: '',
+    url: 'https://api.example.com/v1',
+    model: 'model',
+    enabled: true,
+    is_default: true,
+  }
+
+  it('показывает предупреждение, если провайдер по умолчанию отключён', async () => {
+    vi.mocked(synthApi.getProviders).mockResolvedValueOnce({
+      providers: [{ ...base, enabled: false }],
+      default_provider: 'itphx',
+    })
+    const host = await renderPanel()
+
+    const warning = host.querySelector('[data-testid="providers-default-disabled-warning"]')
+    expect(warning).toBeTruthy()
+    expect(warning!.textContent).toContain('admin.providers.defaultDisabledWarning')
+  })
+
+  it('не показывает предупреждение, если провайдер по умолчанию включён', async () => {
+    vi.mocked(synthApi.getProviders).mockResolvedValueOnce({
+      providers: [base],
+      default_provider: 'itphx',
+    })
+    const host = await renderPanel()
+    expect(host.querySelector('[data-testid="providers-default-disabled-warning"]')).toBeNull()
+  })
+})

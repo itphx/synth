@@ -23,6 +23,7 @@ import { PermissionRequestBar } from './PermissionRequestBar'
 import { QuestionDock } from './QuestionDock'
 import { StickyNotesPanel } from './StickyNotesPanel'
 import { StreamErrorPanel } from './StreamErrorPanel'
+import { SendBlockedPanel, sendBlockedFromError, type SendBlockedState } from './SendBlockedPanel'
 import { ContextWarningPanel } from './ContextWarningPanel'
 import {
   useContextWindowUsage,
@@ -178,6 +179,16 @@ export function ChatTab({ tab }: ChatTabProps) {
   const isSubagent = sessionOrigin === 'subagent'
   const isReadOnly = isSubagent
   const [inputExpanded, setInputExpanded] = useState(false)
+
+  // Отправка заблокирована отключённым провайдером/моделью: понятная плашка над
+  // композером (вместо общего тоста). Снимается при успешной отправке, смене
+  // модели/провайдера и переключении сессии.
+  const selectedProviderName = useProvidersStore(s => s.selectedProviderName)
+  const selectedModelName = useProvidersStore(s => s.selectedModelName)
+  const [sendBlocked, setSendBlocked] = useState<SendBlockedState | null>(null)
+  useEffect(() => {
+    setSendBlocked(null)
+  }, [sessionId, selectedProviderName, selectedModelName])
 
   // ADR-104: режим отправки сообщения по умолчанию для композера. Выбор
   // пользователя (`queue`/`steer`/`interrupt`) делает селектор композера — он
@@ -345,6 +356,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         // ADR-118 §3: ответ — `202 {messageId, mode, position}`; реплика уже
         // показана в ленте оптимистично по `messageId`.
         await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
+        setSendBlocked(null)
         notify({
           text: t('chat.message.sent'),
           type: 'info',
@@ -352,7 +364,13 @@ export function ChatTab({ tab }: ChatTabProps) {
           sessionId,
         })
       } catch (e) {
-        notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+        const blocked = sendBlockedFromError(e)
+        if (blocked) {
+          // Отключённая пара: показываем плашку по коду (тост не дублируем).
+          setSendBlocked(blocked)
+        } else {
+          notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+        }
         // Ошибку пробрасываем композеру: он не очищает вложения при неудаче.
         throw e
       }
@@ -950,7 +968,8 @@ export function ChatTab({ tab }: ChatTabProps) {
       )}
 
       {isEmpty && !isSubagent ? (
-        <div className="flex flex-1 items-center justify-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-2">
+          {sendBlocked && <SendBlockedPanel state={sendBlocked} />}
           <ChatInput
             sessionId={sessionId}
             agents={agentsRef.current}
@@ -999,6 +1018,10 @@ export function ChatTab({ tab }: ChatTabProps) {
               errorType={finalError.errorType}
               onRetry={handleRetryLastFailed}
             />
+          )}
+
+          {!inputExpanded && !isSubagent && sendBlocked && (
+            <SendBlockedPanel state={sendBlocked} />
           )}
 
           {!inputExpanded && !isSubagent && (

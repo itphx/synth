@@ -140,6 +140,14 @@ export function createSessionRoutes(
    * — прокидывается в core-фабрику: роуты заметок живут там (единая реализация).
    */
   getStickyNoteLimits?: () => StickyNotesLimits,
+  /**
+   * Доступность пары провайдер/модель **до постановки в очередь** (каталог
+   * инстанса). Не задана — проверка выключена.
+   */
+  llmAvailability?: {
+    isProviderEnabled?: (name: string) => boolean | undefined
+    isModelEnabled?: (provider: string, model: string) => boolean | undefined
+  },
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -638,7 +646,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,
@@ -705,6 +713,9 @@ export function createSessionRoutes(
         contentRequired: (c) => t('errors.validation.contentRequired', undefined, c),
         queueFull: (c, max) => t('errors.chat.queueFull', { max }, c),
         steerLimitExceeded: (c, max) => t('errors.chat.steerLimitExceeded', { max }, c),
+        // Отключённые провайдер/модель — понятные 400 до постановки в очередь.
+        providerDisabled: (c, provider) => t('errors.chat.providerDisabled', { provider }, c),
+        modelDisabled: (c, provider, model) => t('errors.chat.modelDisabled', { provider, model }, c),
         // Лимиты заметок сессии (`context.stickyNotes`) — instance-wide.
         noteNotFound: (c) => t('errors.notFound.note', undefined, c),
         noteLimitReached: (c, max) => t('errors.conflict.noteLimitReached', { max }, c),

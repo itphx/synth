@@ -212,6 +212,16 @@ export interface SessionRoutesDeps {
    * поведение прежнее (ответ принимается по факту доступа к сессии).
    */
   approvalRegistry?: ApprovalRegistry;
+  /**
+   * Проверка доступности пары провайдер/модель **до постановки в очередь**
+   * (`POST /:id/prompt`). Не задана — проверка выключена (обратная
+   * совместимость и герметичные тесты). `undefined` из метода — записи в
+   * каталоге нет, не блокируем (каталог может быть неполным/удалённым).
+   */
+  llmAvailability?: {
+    isProviderEnabled?: (name: string) => boolean | undefined;
+    isModelEnabled?: (provider: string, model: string) => boolean | undefined;
+  };
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -252,6 +262,10 @@ export interface SessionRouteMessages {
   noteLimitReached: (c: Context, max: number) => string;
   /** Текст заметки длиннее `maxChars` (400 `VALIDATION_ERROR`), `max` — предел инстанса. */
   noteTooLong: (c: Context, max: number) => string;
+  /** Провайдер отключён администратором (400 `PROVIDER_DISABLED`). */
+  providerDisabled: (c: Context, provider: string) => string;
+  /** Модель отключена администратором (400 `MODEL_DISABLED`). */
+  modelDisabled: (c: Context, provider: string, model: string) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -387,6 +401,10 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   noteNotFound: () => 'Заметка не найдена',
   noteLimitReached: (_c: Context, max: number) => `Достигнут лимит заметок сессии (макс. ${max})`,
   noteTooLong: (_c: Context, max: number) => `Текст заметки слишком длинный (макс. ${max} символов)`,
+  providerDisabled: (_c: Context, provider: string) =>
+    `Провайдер «${provider}» отключён — выберите другую модель`,
+  modelDisabled: (_c: Context, provider: string, model: string) =>
+    `Модель ${provider}/${model} отключена — выберите другую модель`,
 };
 
 /**
@@ -1623,7 +1641,12 @@ export function createSessionRoutes(
         ? body.messageId
         : generateStreamId();
       try {
-        const response = await remoteClient.promptSession(toLocalId(sessionId), body, { signal: c.req.raw.signal });
+        const response = await remoteClient.promptSession(toLocalId(sessionId), body, {
+          signal: c.req.raw.signal,
+          // Гибрид: 4xx (например `400 PROVIDER_DISABLED`/`MODEL_DISABLED`) нужно
+          // вернуть клиенту как есть — с `code`/`details` тела, а не `HTTP_400`.
+          allowHttpError: true,
+        });
         // Удалённая сторона ответила новым контрактом — проксируем `202`.
         if (response.status === 202) {
           const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -1632,6 +1655,16 @@ export function createSessionRoutes(
             mode: payload.mode === 'steer' || payload.mode === 'interrupt' ? payload.mode : mode,
             position: typeof payload.position === 'number' ? payload.position : null,
           }, 202);
+        }
+        // Ответ удалённого сервера 4xx (напр. `400 PROVIDER_DISABLED`/
+        // `MODEL_DISABLED`) прокидываем **как есть**: клиент должен увидеть
+        // причину отказа и `details`, а не «сообщение принято». Мягкая
+        // деградация ниже остаётся только для старого сервера (не-4xx не-202).
+        if (response.status >= 400 && response.status < 500) {
+          const payload = await response.json().catch(() => ({
+            error: { code: `HTTP_${response.status}`, message: `HTTP ${response.status}` },
+          }));
+          return c.json(payload as Record<string, unknown>, response.status as 400);
         }
         // Старая версия сервера (не-202): сообщение принято обычной очередью —
         // мягкая деградация, поток НЕ проксируем.
@@ -1661,6 +1694,35 @@ export function createSessionRoutes(
     }
     const promptDenied = serviceProjectProjection(c, session.projectId);
     if (promptDenied) return promptDenied;
+
+    // Отключённые провайдер/модель не должны доходить до очереди: запрос
+    // отклоняется **до** вложений и постановки (иначе ход падал бы в движке,
+    // а сообщение уже стояло бы в очереди). Проверка — по эффективной паре
+    // (тело запроса перекрывает настройки сессии). Нет записи в каталоге —
+    // не блокируем (каталог может быть неполным/удалённым).
+    const effectiveProviderName = (body.provider as string | undefined) || session.settings.provider;
+    const effectiveModelName = (body.model as string | undefined) || session.settings.model;
+    const llmAvailability = deps.llmAvailability;
+    if (effectiveProviderName && llmAvailability?.isProviderEnabled
+      && llmAvailability.isProviderEnabled(effectiveProviderName) === false) {
+      return c.json({
+        error: {
+          code: 'PROVIDER_DISABLED',
+          message: messages.providerDisabled(c, effectiveProviderName),
+          details: { provider: effectiveProviderName },
+        },
+      }, 400);
+    }
+    if (effectiveProviderName && effectiveModelName && llmAvailability?.isModelEnabled
+      && llmAvailability.isModelEnabled(effectiveProviderName, effectiveModelName) === false) {
+      return c.json({
+        error: {
+          code: 'MODEL_DISABLED',
+          message: messages.modelDisabled(c, effectiveProviderName, effectiveModelName),
+          details: { provider: effectiveProviderName, model: effectiveModelName },
+        },
+      }, 400);
+    }
     // Доступ — у prefix-guard (единая точка истины): он учитывает владельца,
     // участника проекта и сквозной обзор ADMIN/LEAD. Здесь остаётся только
     // специфика тела запроса (проверка контента выше).

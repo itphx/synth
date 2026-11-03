@@ -874,7 +874,11 @@ export async function createBackendDeps(
   const providerLoader = (name: string): ProviderConfig | null => {
     // При старте загружаем все конфиги — JsonStore.list() не подходит для быстрого lookup
     // поэтому кешируем провайдеров в Map
-    return providerCache.get(name) ?? null;
+    const provider = providerCache.get(name);
+    // Fail-closed: отключённый администратором провайдер не создаётся ни в чате,
+    // ни в ретраях, ни в пайплайнах/эмбеддингах/суммаризации.
+    if (!provider || provider.enabled === false) return null;
+    return provider;
   };
 
   // ADR-038: синхронизация провайдеров/моделей из переменных окружения (общая
@@ -1241,6 +1245,28 @@ export async function createBackendDeps(
       : undefined;
   };
 
+  /** Доступность провайдера для понятной ошибки хода (`provider_disabled`). */
+  const providerAvailability = (name: string): 'ok' | 'missing' | 'disabled' => {
+    const provider = providerCache.get(name);
+    if (!provider) return 'missing';
+    return provider.enabled === false ? 'disabled' : 'ok';
+  };
+
+  /** Включена ли модель (`false` — отключена); нет записи — `undefined`. */
+  const resolveModelEnabled = (providerName: string, modelId: string): boolean | undefined => {
+    let model = modelCache.get(`${providerName}/${modelId}`) ?? modelCache.get(modelId);
+    if (!model) {
+      for (const candidate of modelCache.values()) {
+        if (candidate.provider !== providerName) continue;
+        if (candidate.name === modelId) {
+          model = candidate;
+          break;
+        }
+      }
+    }
+    return model ? model.enabled !== false : undefined;
+  };
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -1298,6 +1324,9 @@ export async function createBackendDeps(
     resolveModelCompatibility,
     // Лимит вывода модели из каталога (кап `max_tokens`) + дефолт `llm.maxTokens`.
     resolveModelMaxOutputTokens,
+    // Понятные ошибки движка: провайдер/модель отключены — fail-closed.
+    providerAvailability,
+    resolveModelEnabled,
     defaultMaxOutputTokens: config.synth.llm.maxTokens,
     // ADR-115: `attachments.workspaceFallback` — материализация отброшенных
     // вложений в workspace; live-конфиг (проверяется на каждый ход).

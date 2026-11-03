@@ -216,6 +216,18 @@ export interface ProcessSetupDeps {
     attempt: number | undefined,
     ctx: LlmFailureContext,
   ) => Promise<ProcessSetupResult>;
+  /**
+   * Доступность провайдера по каталогу: `disabled` — отключён администратором
+   * (провайдер не создаётся, `routeProvider` вернул `null`); `missing` — записи
+   * нет; `ok` — включён. Не задана — прежняя ошибка `provider_not_found`.
+   */
+  providerAvailability?: (name: string) => 'ok' | 'missing' | 'disabled';
+  /**
+   * Включена ли модель по каталогу (`false` — отключена администратором).
+   * `undefined` — записи нет/неизвестно, не блокируем. Проверяется **после**
+   * выбора провайдера и до первого LLM-вызова.
+   */
+  resolveModelEnabled?: (provider: string, model: string) => boolean | undefined;
   contextConfig: ContextFileRepository | null;
   permissionConfig: PermissionConfig;
   cachePolicy: CachePolicy;
@@ -373,6 +385,12 @@ export async function runProcessSetup(
   if (!routeResult) {
     // Тот же приоритет, что у выбора провайдера: агент → сообщение → сессия.
     const providerName = overrides.provider || (message.provider as string) || session.settings.provider || '';
+    // Отключённый администратором провайдер — отдельная понятная ошибка
+    // (провайдер не создаётся, `routeProvider` вернул `null`).
+    const providerDisabled = deps.providerAvailability?.(providerName) === 'disabled';
+    const failureText = providerDisabled
+      ? sm('router.provider_disabled', { provider: providerName || sm('router.provider_unspecified') })
+      : sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') });
     // Терминальная ошибка конфигурации провайдера: раньше возвращалась без
     // персистентности — после перезагрузки сессия выглядела как «агент
     // думает». Теперь проходит общий путь `_handleLlmFailure` (assistant-
@@ -382,7 +400,7 @@ export async function runProcessSetup(
       result: await deps.handleLlmFailure(
         session.id,
         streamId,
-        new Error(sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') })),
+        new Error(failureText),
         attempt,
         {
           debugCollector,
@@ -390,12 +408,34 @@ export async function runProcessSetup(
           model: overrides.model || session.settings.model,
           providerName,
           agentRole: effectiveAgentRole,
-          errorType: 'provider_not_found',
+          errorType: providerDisabled ? 'provider_disabled' : 'provider_not_found',
         },
       ),
     };
   }
   const { provider, providerName, modelName, decision: routingDecision } = routeResult;
+
+  // Модель отключена администратором — fail-closed: провайдер уже выбран, но
+  // LLM-вызов не делаем (иначе отключение модели ничего не ограничивало бы).
+  if (deps.resolveModelEnabled?.(providerName, modelName) === false) {
+    return {
+      failed: true,
+      result: await deps.handleLlmFailure(
+        session.id,
+        streamId,
+        new Error(sm('router.model_disabled', { provider: providerName, model: modelName })),
+        attempt,
+        {
+          debugCollector,
+          durationMs: Date.now() - streamStartedAt,
+          model: modelName,
+          providerName,
+          agentRole: effectiveAgentRole,
+          errorType: 'model_disabled',
+        },
+      ),
+    };
+  }
 
   debugCollector.captureSessionInfo(session.id, provider.model, provider.name, {
     provider_type: provider.type,

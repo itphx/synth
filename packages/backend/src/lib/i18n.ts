@@ -178,6 +178,9 @@ const en: Dictionary = {
 
   // Chat
   'errors.chat.queueFull': 'Queue is full (max {max} messages)',
+  // Отключённые провайдер/модель — отказ до постановки в очередь.
+  'errors.chat.providerDisabled': 'Provider "{provider}" is disabled — choose another model',
+  'errors.chat.modelDisabled': 'Model {provider}/{model} is disabled — choose another model',
   'errors.chat.steerLimitExceeded':
     'Steering limit reached (max {max} injected messages per turn)',
   // ADR-106 Ф3: подтверждение не принято (нет гранта / повторный ответ / чужой ход).
@@ -367,6 +370,9 @@ const ru: Dictionary = {
 
   // Chat
   'errors.chat.queueFull': 'Очередь переполнена (максимум {max} сообщений)',
+  // Отключённые провайдер/модель — отказ до постановки в очередь.
+  'errors.chat.providerDisabled': 'Провайдер «{provider}» отключён — выберите другую модель',
+  'errors.chat.modelDisabled': 'Модель {provider}/{model} отключена — выберите другую модель',
   'errors.chat.steerLimitExceeded':
     'Достигнут лимит вмешательств в ход (максимум {max} сообщений на ход)',
   // ADR-106 Ф3: подтверждение не принято (нет гранта / повторный ответ / чужой ход).

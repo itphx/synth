@@ -8,7 +8,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { Icon } from '../icon/Icon'
-import { cn } from '@/lib/utils'
+import { isSelectableModel, selectableProvidersByName } from '@/lib/modelOptions'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { Divider } from '../ui/Divider'
 import type { ModelInfo, ProviderInfo } from '@/lib/api/synthApi'
@@ -18,11 +18,21 @@ type DropdownItem =
   | { type: 'label'; text: string; icon: string; id: string; isProvider?: boolean; collapsed?: boolean; providerUrl?: string }
   | { type: 'separator'; id: string }
   | { type: 'model'; model: ModelInfo; provider: ProviderInfo; isFavorite: boolean; id: string }
-  | { type: 'more'; id: string }
 
 export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = false }: { compact?: boolean; sessionId?: string; alwaysShowLabel?: boolean }) {
   const providers = useProvidersStore(s => s.providers)
-  const models = useProvidersStore(s => s.models)
+  /**
+   * Селектор чата работает по **полному каталогу** (`catalogModels`):
+   * пагинация и серверный поиск не нужны — фильтрация локальная, поэтому
+   * модель со «второй страницы» находится сразу. Каталог грузится лениво
+   * при первом открытии дропдауна (`loadCatalogModels`), а не на монтировании.
+   */
+  const catalogModels = useProvidersStore(s => s.catalogModels)
+  const catalogLoading = useProvidersStore(s => s.catalogLoading)
+  const catalogLoaded = useProvidersStore(s => s.catalogLoaded)
+  const loadCatalogModels = useProvidersStore(s => s.loadCatalogModels)
+  const refreshCatalog = useProvidersStore(s => s.refreshCatalog)
+  const modelsError = useProvidersStore(s => s.modelsError)
   const selectedProviderName = useProvidersStore(s => s.selectedProviderName)
   const selectedModelName = useProvidersStore(s => s.selectedModelName)
   const setSelectedProvider = useProvidersStore(s => s.setSelectedProvider)
@@ -31,10 +41,6 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   const recents = useProvidersStore(s => s.recents)
   const toggleFavorite = useProvidersStore(s => s.toggleFavorite)
   const loadProviders = useProvidersStore(s => s.loadProviders)
-  const loadModels = useProvidersStore(s => s.loadModels)
-  const loadMoreModels = useProvidersStore(s => s.loadMoreModels)
-  const modelsNextOffset = useProvidersStore(s => s.modelsNextOffset)
-  const modelsLoading = useProvidersStore(s => s.modelsLoading)
   const loading = useProvidersStore(s => s.loading)
   const error = useProvidersStore(s => s.error)
   const { t } = useI18n()
@@ -48,37 +54,40 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   const currentProvider = providers.find((p) => p.name === selectedProviderName)
   const scrollContainerRef = useRef<HTMLElement | null>(null)
 
-  useEffect(() => {
-    if (providers.length === 0 || models.length === 0) {
-      Promise.all([loadProviders(), loadModels()])
-    }
-  }, [providers.length, models.length])
-
   /**
-   * Поиск по каталогу — **на сервере** (каталог постраничный, локальный фильтр
-   * по первой странице не нашёл бы модель с другой страницы). Запрос уходит с
-   * задержкой, чтобы не дёргать сервер на каждое нажатие.
+   * Списки выбора не показывают модели отключённых провайдеров (и отключённые
+   * модели). Данные стора остаются полными: выбранная отключённая пара
+   * остаётся в триггере — фильтр только на рендере списка, иначе выбор
+   * сбросился бы и ошибка отправки стала бы недостижимой.
    */
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const searchStarted = useRef(false)
-  useEffect(() => {
-    if (!searchStarted.current) {
-      searchStarted.current = true
-      return
-    }
-    if (searchTimer.current) clearTimeout(searchTimer.current)
-    searchTimer.current = setTimeout(() => {
-      const q = searchQuery.trim()
-      if (q) void loadModels({ search: q })
-      else void loadModels({})
-    }, 250)
-    return () => {
-      if (searchTimer.current) clearTimeout(searchTimer.current)
-    }
-  }, [searchQuery, loadModels])
+  const providersByName = useMemo(() => selectableProvidersByName(providers), [providers])
+  const selectable = useCallback(
+    (m: ModelInfo) => isSelectableModel(m, providersByName),
+    [providersByName],
+  )
 
-  const handleRefresh = () => {
-    Promise.all([loadProviders(), loadModels()])
+  // На монтировании грузим только провайдеров (нужны для иконок/триггера).
+  // Модели — полный каталог, лениво при первом открытии дропдауна.
+  useEffect(() => {
+    if (providers.length === 0) void loadProviders()
+  }, [providers.length, loadProviders])
+
+  /** Запросить полный каталог (идемпотентно; повторный вызов — no-op). */
+  const requestCatalog = useCallback(() => {
+    if (!catalogLoaded && !catalogLoading) void loadCatalogModels()
+  }, [catalogLoaded, catalogLoading, loadCatalogModels])
+
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(next)
+      if (next) requestCatalog()
+    },
+    [requestCatalog],
+  )
+
+  const handleRefresh = async () => {
+    await refreshCatalog()
+    await loadCatalogModels()
   }
 
   const toggleCollapse = (providerName: string) => {
@@ -94,8 +103,13 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   }
 
   if (compact) {
+    const compactModels = catalogModels.filter(selectable).slice(0, 10)
     return (
-      <DropdownMenu.Root>
+      <DropdownMenu.Root
+        onOpenChange={(next) => {
+          if (next) requestCatalog()
+        }}
+      >
         <DropdownMenu.Trigger asChild>
           <button className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0">
             <ProviderIcon icon={currentProvider?.icon ?? ''} baseUrl={currentProvider?.url} size={14} className="text-muted-foreground shrink-0" />
@@ -112,7 +126,15 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
             align="end"
             collisionPadding={8}
           >
-            {models.filter((m) => m.enabled).slice(0, 10).map((m) => {
+            {compactModels.length === 0 ? (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                {catalogLoading
+                  ? t('chat.modelControls.loadingMore')
+                  : modelsError && catalogModels.length === 0
+                    ? modelsError
+                    : t('chat.modelControls.noModelsFound')}
+              </div>
+            ) : compactModels.map((m) => {
               const p = providers.find((pv) => pv.name === m.provider)
               return (
               <DropdownMenu.Item
@@ -137,15 +159,15 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   }
 
   const filteredModels = useMemo(
-    () => models.filter((m) => m.enabled),
-    [models],
+    () => catalogModels.filter(selectable),
+    [catalogModels, selectable],
   )
 
   const filteredBySearch = useMemo(() => {
     if (!searchQuery.trim()) return filteredModels
     const q = searchQuery.trim().toLowerCase()
-    // Локальная фильтрация — по тем же полям, что и серверный поиск
-    // (id/имя/провайдер): страховка для старого ядра, которое поиск не умеет.
+    // Локальная фильтрация по полному каталогу — те же поля, что и у
+    // серверного поиска (id/имя/провайдер), но без задержки.
     return filteredModels.filter(
       (m) =>
         m.name.toLowerCase().includes(q) ||
@@ -159,12 +181,12 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
       .map((fav) => {
         const [prov, ...nameParts] = fav.split(':')
         const name = nameParts.join(':')
-        const model = models.find((m) => m.provider === prov && m.name === name)
+        const model = catalogModels.find((m) => m.provider === prov && m.name === name)
         const provider = providers.find((p) => p.name === prov)
-        return model && provider ? { model, provider } : null
+        return model && provider && selectable(model) ? { model, provider } : null
       })
       .filter(Boolean) as { model: ModelInfo; provider: ProviderInfo }[]
-  }, [favorites, models, providers])
+  }, [favorites, catalogModels, providers, selectable])
 
   const recentModels = useMemo(() => {
     return recents
@@ -172,12 +194,12 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
       .map((rec) => {
         const [prov, ...nameParts] = rec.split(':')
         const name = nameParts.join(':')
-        const model = models.find((m) => m.provider === prov && m.name === name)
+        const model = catalogModels.find((m) => m.provider === prov && m.name === name)
         const provider = providers.find((p) => p.name === prov)
-        return model && provider ? { model, provider } : null
+        return model && provider && selectable(model) ? { model, provider } : null
       })
       .filter(Boolean) as { model: ModelInfo; provider: ProviderInfo }[]
-  }, [recents, models, providers])
+  }, [recents, catalogModels, providers, selectable])
 
   const groupedByProvider = useMemo(() => {
     const groups: Record<string, { provider: ProviderInfo; models: ModelInfo[] }> = {}
@@ -260,7 +282,11 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
     }
 
     if (items.length === 0) {
-      if (error && providers.length === 0 && models.length === 0) {
+      if (catalogLoading) {
+        items.push({ type: 'empty', text: t('chat.modelControls.loadingMore'), id: 'loading' })
+      } else if (modelsError && catalogModels.length === 0) {
+        items.push({ type: 'empty', text: modelsError, id: 'error' })
+      } else if (error && providers.length === 0) {
         items.push({ type: 'empty', text: error, id: 'error' })
       } else {
         items.push({ type: 'empty', text: t('chat.modelControls.noModelsFound'), id: 'empty' })
@@ -268,13 +294,8 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
       return items
     }
 
-    // Каталог постраничный: последняя строка списка — «Показать ещё».
-    if (modelsNextOffset !== null) {
-      items.push({ type: 'more', id: 'more' })
-    }
-
     return items
-  }, [favoriteModels, recentModels, groupedByProvider, searchQuery, isFavorite, collapsedProviders, modelsNextOffset])
+  }, [favoriteModels, recentModels, groupedByProvider, searchQuery, isFavorite, collapsedProviders, catalogLoading, catalogModels.length, modelsError, error, providers.length, t])
 
   const handleSelectModel = useCallback(
     (model: ModelInfo, provider: ProviderInfo) => {
@@ -303,7 +324,6 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
         case 'label': return item.isProvider ? 32 : 26
         case 'separator': return 9
         case 'model': return 28
-        case 'more': return 34
       }
     },
     [listItems],
@@ -331,7 +351,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   }, [searchQuery])
 
   return (
-    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
+    <DropdownMenu.Root open={open} onOpenChange={handleOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button
           className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
@@ -398,13 +418,13 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  handleRefresh()
+                  void handleRefresh()
                 }}
-                disabled={loading}
+                disabled={loading || catalogLoading}
                 className="absolute right-7 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
                 title={t('chat.modelControls.refresh')}
               >
-                <Icon name="refresh" className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                <Icon name="refresh" className={`h-3.5 w-3.5 ${loading || catalogLoading ? 'animate-spin' : ''}`} />
               </button>
               <button
                 onClick={(e) => {
@@ -496,26 +516,6 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
 
                   if (item.type === 'separator') {
                     return <div key={item.id} style={style} className="flex items-center px-2"><Divider tone="raised" className="w-full" /></div>
-                  }
-
-                  if (item.type === 'more') {
-                    return (
-                      <div key={item.id} style={style}>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void loadMoreModels()
-                          }}
-                          disabled={modelsLoading}
-                          className="flex w-full items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground transition-colors disabled:opacity-60"
-                          data-testid="model-selector-load-more"
-                        >
-                          <Icon name="loader-2" className={cn('size-3.5', modelsLoading && 'animate-spin')} />
-                          {modelsLoading ? t('chat.modelControls.loadingMore') : t('chat.modelControls.showMore')}
-                        </button>
-                      </div>
-                    )
                   }
 
                   if (item.type === 'model') {

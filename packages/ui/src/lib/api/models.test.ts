@@ -167,6 +167,9 @@ describe('modelsApi — группировка и метаданные пров�
       icon: 'it',
       defaultModel: 'm1',
       currency: 'USD',
+      // Списки выбора фильтруют модели отключённых провайдеров — признак
+      // включённости приходит в группе (каталог `GET /providers` → `enabled`).
+      enabled: true,
     })
     expect(groups[0]!.models.map((m) => m.name)).toEqual(['m1', 'm2'])
   })

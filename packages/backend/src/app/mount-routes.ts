@@ -230,6 +230,27 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // Instance-wide лимиты заметок сессии (`context.stickyNotes`) — live-резолвер
     // для core-фабрики (роуты заметок живут там).
     () => deps.stickyNotesLimitsSettings.getLimits(),
+    // Отключённые провайдер/модель отклоняются до постановки в очередь
+    // (каталог — те же `providerCache`/`modelCache`, что у движка).
+    {
+      isProviderEnabled: (name: string) => {
+        const provider = providerCache.get(name);
+        return provider ? provider.enabled !== false : undefined;
+      },
+      isModelEnabled: (providerName: string, modelName: string) => {
+        let model = modelCache.get(`${providerName}/${modelName}`) ?? modelCache.get(modelName);
+        if (!model) {
+          for (const candidate of modelCache.values()) {
+            if (candidate.provider !== providerName) continue;
+            if (candidate.name === modelName) {
+              model = candidate;
+              break;
+            }
+          }
+        }
+        return model ? model.enabled !== false : undefined;
+      },
+    },
   ));
 
   // Messages routes
