@@ -286,6 +286,27 @@ describe('Встроенные тулы реестра фоновых прого
       expect(result.metadata?.kind).toBe('subagent');
       expect(result.metadata?.child_session_id).toBe(childSessionId);
       expect(result.metadata?.run_id).toBe(record.id);
+      // Текст композитный (лог + summary + id дочерней сессии) — i18n один
+      // ключ не подменяет весь результат, поэтому metadata.i18n здесь нет.
+      expect(result.metadata?.i18n).toBeUndefined();
+    });
+
+    it('лога нет (сервис вернул null) → process.tool.no_log с i18n-метаданными', async () => {
+      const record = await background.startProcess({
+        sessionId,
+        command: 'npm test',
+        cwd: tmpDir,
+      });
+      await background.finish(record.id, { status: 'completed', exitCode: 0 });
+
+      const result = await processLogsTool.execute(
+        { process_id: record.id },
+        makeCtx({ processService: { logs: async () => null } }),
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('There is no log for this background run');
+      expect(result.metadata?.i18n).toEqual({ key: 'process.tool.no_log' });
     });
 
     it('без processService → ошибка process.tool.deps_unavailable', async () => {
@@ -320,6 +341,7 @@ describe('Встроенные тулы реестра фоновых прого
       expect(result.content).toContain('Stop requested');
       expect(result.content).not.toContain('stopped (status');
       expect(result.metadata).toMatchObject({ id: run.id, status: 'running' });
+      expect(result.metadata?.i18n).toEqual({ key: 'process.tool.stopping', params: { id: run.id } });
     });
 
     it('process_stop: running-сабагент → stop вызван', async () => {
@@ -374,6 +396,7 @@ describe('Встроенные тулы реестра фоновых прого
       expect(result.isError).toBeUndefined();
       expect(remove).toHaveBeenCalledWith(run.id);
       expect(result.content).toContain('deleted');
+      expect(result.metadata?.i18n).toEqual({ key: 'process.tool.deleted', params: { id: run.id } });
 
       const again = await processDeleteTool.execute({ id: run.id }, makeCtx());
       expect(again.isError).toBe(true);

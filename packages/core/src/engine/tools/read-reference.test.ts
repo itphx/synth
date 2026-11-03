@@ -61,6 +61,18 @@ describe('read_session_reference', () => {
     expect(result.content).toContain('содержимое referenced-сессии');
   });
 
+  it('пустая referenced-сессия → reference.no_messages с i18n-метаданными', async () => {
+    const empty = await sessionManager.createSession({ title: 'Empty ref' });
+
+    const result = await readSessionReferenceTool.execute({ session_id: empty.id }, makeCtx());
+
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.i18n).toEqual({
+      key: 'reference.no_messages',
+      params: { id: empty.id },
+    });
+  });
+
   it('не принимает path/cwd-параметры от агента', () => {
     const shape = (readSessionReferenceTool.parameters as { shape?: Record<string, unknown> }).shape ?? {};
     expect(Object.keys(shape)).toEqual(['session_id', 'message_range']);

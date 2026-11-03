@@ -206,7 +206,10 @@ export const gitWorktreeListTool: ToolDefinition = {
     try {
       const summaries = await loaded.service.list(loaded.projectId, loaded.project);
       if (summaries.length === 0) {
-        return { content: sm('worktree.tool.list_empty') };
+        return {
+          content: sm('worktree.tool.list_empty'),
+          metadata: { i18n: i18nMeta('worktree.tool.list_empty') },
+        };
       }
       const header = sm('worktree.tool.list_header', { count: String(summaries.length) });
       const rows = summaries.map(summaryRow);
@@ -324,7 +327,10 @@ export const gitWorktreeRemoveTool: ToolDefinition = {
       );
       return {
         content: sm('worktree.tool.removed', { name: record.name }),
-        metadata: { worktree_id: record.id },
+        metadata: {
+          worktree_id: record.id,
+          i18n: i18nMeta('worktree.tool.removed', { name: record.name }),
+        },
       };
     } catch (err) {
       if (isWorktreeError(err) && err.code === 'WORKTREE_DIRTY') {
@@ -370,7 +376,14 @@ export const gitWorktreePruneTool: ToolDefinition = {
           records: String(result.recordsRemoved),
           git_pruned: yesNo(result.gitPruned),
         }),
-        metadata: { records_removed: result.recordsRemoved, git_pruned: result.gitPruned },
+        metadata: {
+          records_removed: result.recordsRemoved,
+          git_pruned: result.gitPruned,
+          i18n: i18nMeta('worktree.tool.pruned', {
+            records: String(result.recordsRemoved),
+            git_pruned: yesNo(result.gitPruned),
+          }),
+        },
       };
     } catch (err) {
       return serviceError(err);

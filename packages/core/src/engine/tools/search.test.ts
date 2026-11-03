@@ -47,6 +47,7 @@ describe('grep_files — параметры ripgrep', () => {
     // а «X.BET.» как текст не встречается (regex бы совпал с «X.BETA»)
     const miss = await grepFilesTool.execute({ pattern: 'X.BET.', literal: true }, makeCtx());
     expect(miss.content).toContain('no matches found');
+    expect(miss.metadata?.i18n).toEqual({ key: 'search.no_matches' });
   });
 
   it('literal=false (regex): точка матчит любой символ', async () => {

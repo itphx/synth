@@ -140,6 +140,10 @@ describe('project-context tools', () => {
   it('list_repos: возвращает сообщение, если репозитории не найдены', async () => {
     const result = await listReposTool.execute({}, makeCtx());
     expect(result.content).toContain('No git repositories in');
+    expect(result.metadata?.i18n).toEqual({
+      key: 'projectctx.repos_none',
+      params: { dir: tmpDir },
+    });
   });
 
   it('list_repos: использует repos из проекта при наличии ProjectStore', async () => {

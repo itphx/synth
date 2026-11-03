@@ -3,7 +3,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/synth-share
 import { ToolCapability } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import { isAborted, abortedResult } from './abort.js';
-import { t as sm } from '../system-messages.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 const paramsSchema = z.object({
   session_id: z.string().describe('ID сессии, на которую есть ссылка'),
@@ -38,7 +38,10 @@ export const readSessionReferenceTool: ToolDefinition = {
     }
 
     if (messages.length === 0) {
-      return { content: sm('reference.no_messages', { id: p.session_id }) };
+      return {
+        content: sm('reference.no_messages', { id: p.session_id }),
+        metadata: { i18n: i18nMeta('reference.no_messages', { id: p.session_id }) },
+      };
     }
 
     const formatted = messages

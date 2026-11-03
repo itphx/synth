@@ -145,6 +145,7 @@ describe('git_worktree_* tools (ADR-114 §5)', () => {
 
       expect(result.isError).toBeFalsy();
       expect(result.content).toContain('The project has no git worktrees');
+      expect(result.metadata?.i18n).toEqual({ key: 'worktree.tool.list_empty' });
     });
 
     it('после создания — строка с веткой, dirty и exists', async () => {
@@ -262,6 +263,7 @@ describe('git_worktree_* tools (ADR-114 §5)', () => {
       const byName = await gitWorktreeRemoveTool.execute({ name: 'wt' }, makeCtx());
       expect(byName.isError).toBeFalsy();
       expect(byName.content).toContain('removed');
+      expect(byName.metadata?.i18n).toEqual({ key: 'worktree.tool.removed', params: { name: 'wt' } });
       expect(await repository.get(id)).toBeNull();
 
       const second = await gitWorktreeCreateTool.execute({ branch: 'feature/y', name: 'wt2' }, makeCtx());
@@ -360,6 +362,10 @@ describe('git_worktree_* tools (ADR-114 §5)', () => {
       expect(result.isError).toBeFalsy();
       expect(result.metadata?.records_removed).toBe(0);
       expect(result.metadata?.git_pruned).toBe(true);
+      expect(result.metadata?.i18n).toEqual({
+        key: 'worktree.tool.pruned',
+        params: { records: '0', git_pruned: 'yes' },
+      });
     });
 
     it('удаляет записи без каталога, живые не трогает', async () => {

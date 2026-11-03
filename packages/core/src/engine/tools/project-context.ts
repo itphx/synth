@@ -7,7 +7,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { runGit } from './git.js';
 import { isAborted, abortedResult } from './abort.js';
-import { t as sm } from '../system-messages.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import type { ExecutionPort } from '../../execution/ports/index.js';
 
@@ -286,6 +286,7 @@ export const listReposTool: ToolDefinition = {
             workingDir: ctx.workingDir,
             ...(project?.workspace ? { projectWorkspace: projectDir } : {}),
             count: 0,
+            i18n: i18nMeta('projectctx.repos_none', { dir: projectDir }),
           },
         };
       }

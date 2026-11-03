@@ -475,7 +475,13 @@ export const globTool: ToolDefinition = {
 
       return {
         content: lines.length > 0 ? lines.join('\n') : sm('fsread.no_files'),
-        metadata: { pattern: params.pattern, count: selected.length, total: files.length, truncated },
+        metadata: {
+          pattern: params.pattern,
+          count: selected.length,
+          total: files.length,
+          truncated,
+          ...(selected.length === 0 ? { i18n: i18nMeta('fsread.no_files') } : {}),
+        },
       };
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка поиска»
@@ -483,7 +489,10 @@ export const globTool: ToolDefinition = {
       const execError = err as ExecutionError;
       // rg: код 1 — «файлов не найдено», это не ошибка
       if (execError.code === 1) {
-        return { content: sm('fsread.no_files'), metadata: { pattern: params.pattern, count: 0, total: 0 } };
+        return {
+          content: sm('fsread.no_files'),
+          metadata: { pattern: params.pattern, count: 0, total: 0, i18n: i18nMeta('fsread.no_files') },
+        };
       }
       // Таймаут — actionable-текст (подсказка сузить поиск), не «ошибка поиска».
       if (isExecutionError(err) && err.reason === 'timeout') {

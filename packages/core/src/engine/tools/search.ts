@@ -274,14 +274,21 @@ export const grepFilesTool: ToolDefinition = {
 
       return {
         content: groups.length > 0 ? formatGroups(groups).join('\n') : sm('search.no_matches'),
-        metadata: { pattern: params.pattern, matches: total },
+        metadata: {
+          pattern: params.pattern,
+          matches: total,
+          ...(groups.length === 0 ? { i18n: i18nMeta('search.no_matches') } : {}),
+        },
       };
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка поиска»
       if (isAborted(ctx)) return abortedResult(this.name);
       const execError = err as ExecutionError;
       if (execError.code === 1) {
-        return { content: sm('search.no_matches'), metadata: { pattern: params.pattern, matches: 0 } };
+        return {
+          content: sm('search.no_matches'),
+          metadata: { pattern: params.pattern, matches: 0, i18n: i18nMeta('search.no_matches') },
+        };
       }
       // Таймаут — actionable-текст (подсказка сузить поиск), не «ошибка поиска».
       if (isExecutionError(err) && err.reason === 'timeout') {

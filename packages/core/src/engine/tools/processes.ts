@@ -343,7 +343,12 @@ export const processLogsTool: ToolDefinition = {
     if (!logs) {
       return {
         content: sm('process.tool.no_log'),
-        metadata: { run_id: record.id, kind: record.kind, status: record.status },
+        metadata: {
+          run_id: record.id,
+          kind: record.kind,
+          status: record.status,
+          i18n: i18nMeta('process.tool.no_log'),
+        },
       };
     }
 
@@ -447,7 +452,12 @@ export const processStopTool: ToolDefinition = {
     const updated = (await registry.get(params.id)) ?? record;
     return {
       content: sm('process.tool.stopping', { id: params.id }),
-      metadata: { id: params.id, status: updated.status, kind: updated.kind },
+      metadata: {
+        id: params.id,
+        status: updated.status,
+        kind: updated.kind,
+        i18n: i18nMeta('process.tool.stopping', { id: params.id }),
+      },
     };
   },
 };
@@ -483,7 +493,12 @@ export const processDeleteTool: ToolDefinition = {
 
     return {
       content: sm('process.tool.deleted', { id: params.id }),
-      metadata: { id: params.id, kind: record.kind, status: record.status },
+      metadata: {
+        id: params.id,
+        kind: record.kind,
+        status: record.status,
+        i18n: i18nMeta('process.tool.deleted', { id: params.id }),
+      },
     };
   },
 };

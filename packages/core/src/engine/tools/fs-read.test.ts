@@ -395,6 +395,7 @@ describe('glob — hidden/limit/сортировка (через rg --files)', (
     expect(out.isError).toBeFalsy();
     expect(out.content).toContain('no files found');
     expect(out.metadata).toMatchObject({ count: 0, total: 0 });
+    expect(out.metadata?.i18n).toEqual({ key: 'fsread.no_files' });
   });
 
   it('описание не обещает сортировку по mtime', async () => {
