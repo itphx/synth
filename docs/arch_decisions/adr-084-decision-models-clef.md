@@ -3,13 +3,13 @@
 > **Статус:** ✅ Реализовано — адаптер/конфиг, Clef-Flash в micro, decision-классификатор
 > маршрутизации, decision-роутинг событий (ADR-089), UI-настройки, эскалационный тир
 > `primary → escalation`, агрегатные метрики и мультимодальный контракт (источник изображений —
-> [PROP-085](./prop-085-multimodal-input.md)).
+> [ADR-115](./adr-115-multimodal-input.md)).
 > **Дата:** 2026-10-04
 > **Обновлено:** 2026-10-10 — Ф6–Ф8: **эскалация** (вторая пара `escalationProvider`/`escalationModel`,
 > единый каскад `decision-cascade.ts` `primary → escalation`), **агрегатные метрики**
 > (`decision-metrics.ts`; `GET/DELETE /settings/decision/metrics`), **мультимодальный контракт**
 > (`images`/`videos` в `DecisionRequest`/`decide`/`MicroInput`; источник медиа —
-> [PROP-085](./prop-085-multimodal-input.md)). Ранее (Ф1–Ф5): `DecisionProvider`, `GatewayProvider.decide`,
+> [ADR-115](./adr-115-multimodal-input.md)). Ранее (Ф1–Ф5): `DecisionProvider`, `GatewayProvider.decide`,
 > `DecisionModel` (micro), `DecisionContentClassifier` (router), `DecisionRuleProvider` (events),
 > конфиг `decision` + `events.decisionRouting`, runtime-API `/settings/decision`, UI «Decision-модели».
 > **Источник:** исследование 2026-10-04 — Cloudflare выпустил decision-модели Clef/Clef-Flash (2026-10-01);
@@ -18,7 +18,7 @@
 > [ADR-036](./adr-036-llm-gateway.md), [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md),
 > [ADR-070](./adr-070-system-prompt-composer.md), [PROP-073](./prop-073-client-integrity-hybrid.md),
 > [PROP-080](./prop-080-managed-hybrid-modes.md), [PROP-081](./prop-081-hybrid-policy-leak-protection.md),
-> [PROP-085](./prop-085-multimodal-input.md).
+> [ADR-115](./adr-115-multimodal-input.md).
 
 **Решение:** добавить в Synth класс **decision-моделей** — моделей, которые за один forward-pass возвращают
 вероятность для каждого допустимого варианта каждого вопроса, без генерации свободного текста и без парсинга
@@ -164,7 +164,7 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 (`packages/shared/src/types/decision.ts`), `DecisionProvider.decide(state, questions, { images, videos })`
 и `MicroInput`/`ClassifyRequest` принимают медиа-массивы; значения добавляются в тело запроса только
 если непусты. Сквозной источник изображений/видео — мультимодальный ввод, который ещё не реализован:
-это [PROP-085](./prop-085-multimodal-input.md); здесь же — только контракт-плумбинг. Применения —
+это [ADR-115](./adr-115-multimodal-input.md); здесь же — только контракт-плумбинг. Применения —
 классификация скриншотов, вложений, фрагментов UI («тип вложения», «нужна ли визуальная проверка»).
 
 ## Метрики
@@ -203,7 +203,7 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
    `[DECISION] … переход на эскалацию …`).
 4. ✅ **Мультимодальный контракт (задел PROP-085).** `images`/`videos` в `DecisionRequest`/
    `DecisionMediaInput`, `DecisionProvider.decide(opts.images/videos)` и `MicroInput`/`ClassifyRequest`;
-   прокидываются в тело запроса, только если непусты. Сквозной источник медиа — [PROP-085](./prop-085-multimodal-input.md).
+   прокидываются в тело запроса, только если непусты. Сквозной источник медиа — [ADR-115](./adr-115-multimodal-input.md).
 5. ✅ **Decision-классификатор маршрутизации.** `DecisionContentClassifier` (ADR-034) — опциональный
    decision-вопрос `choice` `{coding|research|chat}` при низкой уверенности словарного
    `content`-классификатора; приоритет `routingCategory` не меняется.
@@ -297,7 +297,7 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 - [PROP-073](./prop-073-client-integrity-hybrid.md), [PROP-080](./prop-080-managed-hybrid-modes.md),
   [PROP-081](./prop-081-hybrid-policy-leak-protection.md) — целостность/режимы/политики гибрида и защита от утечек.
 - [ADR-072](./adr-072-settings-ui-kit.md) — UI-настройки decision-слоя.
-- [PROP-085](./prop-085-multimodal-input.md) «Мультимодальный ввод» — сквозной источник `images`/`videos`
+- [ADR-115](./adr-115-multimodal-input.md) «Мультимодальный ввод» — сквозной источник `images`/`videos`
   для мультимодального контракта decision-слоя.
 - [docs/ROUTING.md](../ROUTING.md) — пользовательские слои «Быстрые ответы» и «Маршрутизация» (обновлено).
 - [packages/core/AGENTS.md](../../packages/core/AGENTS.md) — код микро-слоя (`engine/router/micro/`).

@@ -2,8 +2,9 @@
 
 > **Статус:** ✅ Реализовано — этапы 1–3 (2026-10-23…24) + steering дочерней (фоновой) сессии саб-агента (2026-10-26, [ADR-111](./adr-111-background-subagent-sessions.md)).
 > **Дата:** 2026-10-23
+> **Источник:** PROP-098 (файл удалён после принятия).
 > **Парные документы (as-built):** [API_V2.md](../API_V2.md) §5.5 (поле `mode`) · [packages/ui/AGENTS.md](../../packages/ui/AGENTS.md) («Чат: режим отправки»)
-> **Связано:** [ADR-005](./adr-005-json-storage.md) («Стоп» — соседняя семантика отмены хода), [ADR-024](./adr-024-eventhub-transport.md) (доставка событий в UI), [ADR-039](./adr-039-plan-in-project.md) (состояние агента через Tool Use), [ADR-089](./adr-089-external-events-automation.md) (события сессии), [PROP-096](./prop-096-background-subagent-sessions.md) (фоновые саб-агенты)
+> **Связано:** [ADR-005](./adr-005-json-storage.md) («Стоп» — соседняя семантика отмены хода), [ADR-024](./adr-024-eventhub-transport.md) (доставка событий в UI), [ADR-039](./adr-039-plan-in-project.md) (состояние агента через Tool Use), [ADR-089](./adr-089-external-events-automation.md) (события сессии), [ADR-111](./adr-111-background-subagent-sessions.md) (фоновые саб-агенты)
 
 ## Контекст
 

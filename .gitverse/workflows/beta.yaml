@@ -1,0 +1,91 @@
+name: Beta packages
+
+# Бета-канал публикации: быстрый путь «как у пользователя» (пакеты из Gitea
+# Package Registry) без сборки из исходников. Полный runbook — docs/PUBLISHING.md
+# §«Бета-версии (Gitea)».
+#
+# Намеренно НЕ проходит релизные гейты: ни `security-gate`, ни `release-notes`,
+# ни аудит записи релиза здесь не запускаются — бета не является релизом, версия
+# имеет вид X.Y.Z-beta.<UTC timestamp>.<sha>[.dirty], а dist-tag `beta`/`next`
+# не двигает `latest`. Опубликованный артефакт помечен как предварительный самим
+# форматом версии (prerelease), и ставить его вместо релиза нельзя.
+#
+# Секреты: `GV_GITEA_TOKEN` — логин `itphx`, должен иметь право `package:write`
+# на пространство `itphx` в Gitea. Если у токена этого права нет — заведите
+# отдельный секрет (например `GV_GITEA_NPM_TOKEN`) и подставьте его ниже в `env`
+# вместо `secrets.GV_GITEA_TOKEN`.
+#
+# GitVerse-особенности (не менять): Node 22 предустановлен (setup-node не нужен),
+# pnpm ставится через npm (как в release.yaml), `${{ env.VAR }}` не поддерживается —
+# переменные только через `env:` шага или shell.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        type: string
+        default: master
+        description: 'Ветка или коммит'
+      base:
+        type: string
+        default: ''
+        description: 'База версии X.Y.Z (пусто — следующий patch)'
+      tag:
+        type: choice
+        options: [beta, next]
+        default: beta
+        description: 'dist-tag'
+      smoke:
+        type: boolean
+        default: true
+        description: 'Проверить установку из реестра'
+      dry_run:
+        type: boolean
+        default: false
+        description: 'Показать план без сборки и публикации'
+
+jobs:
+  publish-beta:
+    name: Бета-пакеты
+    runs-on: synth-ci
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'master' }}
+          # Полная история: версия содержит короткий sha, а сборка и smoke
+          # проверяют именно тот коммит, который указан во входе `ref`.
+          fetch-depth: 0
+
+      - name: Установка pnpm
+        run: npm install -g pnpm@12.14.0
+
+      - name: Публикация бета-пакетов
+        env:
+          GITEA_NPM_TOKEN: ${{ secrets.GV_GITEA_TOKEN }}
+          GITEA_NPM_REGISTRY: https://git.itphx.ru/api/packages/itphx/npm/
+        run: |
+          set -euo pipefail
+
+          ARGS=(--tag "${{ inputs.tag }}")
+
+          # База версии: пусто → скрипт берёт следующий patch от текущей.
+          if [ -n "${{ inputs.base }}" ]; then
+            ARGS+=(--base "${{ inputs.base }}")
+          fi
+
+          if [ "${{ inputs.smoke }}" != "true" ]; then
+            ARGS+=(--no-smoke)
+          fi
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+
+          bash scripts/publish-beta.sh "${ARGS[@]}"
+
+      # Версия нужна для ручной проверки/установки из лога рана. При dry-run
+      # публикации не было — файла может не быть, это не ошибка.
+      - name: Версия бета-пакета
+        if: ${{ !cancelled() }}
+        run: cat tmp/beta-publish/version.txt || true

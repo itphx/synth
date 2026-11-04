@@ -2,6 +2,7 @@
 
 > **Статус:** ⚠️ Частично — Telegram-шлюз реализован и **мультитенантен** («несколько ботов → несколько сред», `tenants.json`); **ядро шлюзов** `@itphx/synth-gateway-core` выделено ([ADR-103](./adr-103-gateway-core-channel-contract.md)); каналы: **Telegram** (реализован), **email** (реализован, `addons/synth-gateway-email`), **VK Messenger** (реализован: код готов и проверен тестами; ждёт публикации, деплоя и проверки на живом сообществе), **MAX Messenger** (Bot API исследован, реализация в очереди); остаток — HA через leader election
 > **Дата:** 2026-10-01
+> **Обновлено:** 2026-11-04 — фактическое состояние каналов: **VK** — код в `addons/synth-gateway-vk` есть, но git-репозиторий **не закоммичен** (0 коммитов); **MAX** — код в `addons/synth-gateway-max` есть, git-репозиторий без коммитов и **remote не настроен**; оба канала **не в деплое** (`synth-deploy/gitrepo.yaml` содержит только `test`, `gateway-telegram`, `media`, `test-allinone`; `gateway-email` закомментирован). Решение и объём — без изменений.
 > **Обновлено:** 2026-10-21 — решение по **общему каркасу адаптеров каналов** принято (§4 — путь выбран), второй канал — **VK Messenger** — реализован (код готов и проверен тестами; ждёт публикации, деплоя и проверки на живом сообществе); 2026-10-14 — **возрождён как действующий AD**: класс **Gateway** выделен в отдельный класс
 > расширений (наряду с Plugin / Add-on / контент-паком, [ADR-086](./adr-086-extensibility-plugins-editions.md));
 > весь материал Telegram-шлюза перенесён сюда из [ADR-086](./adr-086-extensibility-plugins-editions.md)
@@ -13,7 +14,7 @@
 > [ADR-090](./adr-090-extension-api.md) (Plugin / классы расширений), [ADR-089](./adr-089-external-events-automation.md)
 > (Event/Binding/Router, identity/claim-flow), [ADR-030](./adr-030-hooks-agent-events.md) (hooks),
 > [ADR-052](./adr-052-public-api-platform.md) (service-key/scopes/webhooks), [ADR-076](./adr-076-git-repo-registry-ssh.md)
-> (секреты at-rest), [PROP-085](./prop-085-multimodal-input.md) (вложения), [ADR-051](./adr-051-scheduler-pipelines.md)
+> (секреты at-rest), [ADR-115](./adr-115-multimodal-input.md) (вложения), [ADR-051](./adr-051-scheduler-pipelines.md)
 > (ориентир HA — leader election), [ADR-099](./adr-099-egress-tls-trust.md) (egress/прокси).
 
 ## 1. Решение
@@ -62,7 +63,7 @@ Gateway — **не** подвид Add-on'а и **не** Plugin: это само�
 - **Идентичность.** Маппинг внешнего отправителя → профиль/RBAC + **claim-flow** (одноразовый код подтверждения);
   роли внешнего отправителя только **сужают** роли профиля (fail-closed для несопознанных).
 - **Allowlist.** Список доступа (`chatId:ROLE` / `userId:ROLE`) — только сужение прав.
-- **Вложения.** Медиа из чатов → контракт вложений ([PROP-085](./prop-085-multimodal-input.md)).
+- **Вложения.** Медиа из чатов → контракт вложений ([ADR-115](./adr-115-multimodal-input.md)).
 - **Дедуп/идемпотентность.** Дедуп входящих апдейтов и **дедуп отправки** ответов.
 - **Прокси/egress.** Bot API требует прокси (HTTP CONNECT / SOCKS5); OIDC-запросы идут напрямую;
   общий egress-слой — [ADR-099](./adr-099-egress-tls-trust.md).
@@ -81,7 +82,7 @@ Gateway к мессенджерам — эталонный шлюз; реали�
 - **Выход (Synth → шлюз → чат):** SSE `GET /api/v2/events` (watcher) → `sendMessage` по `stream.done`
   (фоллбек `message.added`/`stream.error`).
 - **Маппинг identity** (пользователь мессенджера → профиль/RBAC), **секреты ботов** (at-rest по модели
-  [ADR-076](./adr-076-git-repo-registry-ssh.md)), **дедуп/идемпотентность**, **вложения** (→ [PROP-085](./prop-085-multimodal-input.md)).
+  [ADR-076](./adr-076-git-repo-registry-ssh.md)), **дедуп/идемпотентность**, **вложения** (→ [ADR-115](./adr-115-multimodal-input.md)).
 - **Привязки `Binding`** (чат/тред/топик ↔ сессия/проект) и права — по [ADR-089](./adr-089-external-events-automation.md).
 
 Telegram — **первая** реализация этого подтипа (эталон). Второй канал — **VK Messenger** (решения — см.
@@ -260,7 +261,7 @@ tombstone-файл удалён. Наследование относительн
 | Транспорт webhook и/или long-polling | [ADR-087](./adr-087-gateways.md) §4 (long-polling; webhook отложен) + [ADR-089](./adr-089-external-events-automation.md) (приём событий) |
 | Маппинг идентичности (пользователь мессенджера → профиль/RBAC) | [ADR-089](./adr-089-external-events-automation.md) — поле `identity` у `Event` + claim-flow |
 | Дедуп / идемпотентность | [ADR-089](./adr-089-external-events-automation.md) — `dedupKey` (+ дедуп отправки в шлюзе) |
-| Вложения | [PROP-085](./prop-085-multimodal-input.md) — контракт вложений (по ссылке из `Event`) |
+| Вложения | [ADR-115](./adr-115-multimodal-input.md) — контракт вложений (по ссылке из `Event`) |
 | Секреты ботов at-rest | [ADR-076](./adr-076-git-repo-registry-ssh.md) — мастер-ключ |
 
 ## 6. Открытые вопросы
@@ -289,7 +290,7 @@ tombstone-файл удалён. Наследование относительн
 - [ADR-030](./adr-030-hooks-agent-events.md) — hook-шина: фундамент событийной обработки (hook `message_received`).
 - [ADR-052](./adr-052-public-api-platform.md) — публичный API, service-key/scopes, приём webhook'ов.
 - [ADR-076](./adr-076-git-repo-registry-ssh.md) — хранение секретов ботов at-rest.
-- [PROP-085](./prop-085-multimodal-input.md) — вложения из чатов.
+- [ADR-115](./adr-115-multimodal-input.md) — вложения из чатов.
 - [ADR-051](./adr-051-scheduler-pipelines.md) — ориентир для HA: семы leader election и file-based реализации.
 - [ADR-099](./adr-099-egress-tls-trust.md) — egress/прокси: Bot API требует прокси.
 - [PROP-055](./prop-055-instance-exchange.md) — родственная тема мультитенантности (один бот → несколько инстансов/тенантов).

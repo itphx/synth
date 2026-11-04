@@ -2,6 +2,7 @@
 
 > **Статус:** ✅ Реализовано — 2026-10-26 (inline и remote, протокол исполнителя v3). Detach идущего шелла — реализовано 2026-10-27 (см. «Detach идущего шелла»): контракт порта менять не понадобилось — хэндл даёт существующий `spawnBackground`.
 > **Дата:** 2026-10-26
+> **Источник:** PROP-097 (файл удалён после принятия).
 > **Обновлено:** 2026-10-28 — `stop` и таймаут гаснут **группу процессов**, а не только прямое
 > дитя: ребёнок запускается лидером своей группы (POSIX, `detached: true`; на Windows — прямое
 > убийство), сигнал уходит `kill(-pid)`. Без этого `sh -c 'sleep 30'` там, где оболочка форкает
@@ -14,7 +15,6 @@
 > [ADR-094](./adr-094-observability-metrics.md) (наблюдаемость: события и метрики),
 > [ADR-024](./adr-024-eventhub-transport.md) (единый транспорт событий — новых каналов нет),
 > [ADR-005](./adr-005-json-storage.md) (атомарная запись реестра),
-> [PROP-097](./prop-097-background-processes-registry.md) (исходное предложение).
 
 ## Контекст
 
@@ -171,7 +171,7 @@ remote, протокол исполнителя ≥ 3). Поэтому `execute(
 - [ADR-005](./adr-005-json-storage.md), [ADR-024](./adr-024-eventhub-transport.md),
   [ADR-077](./adr-077-runtime-toolchain.md), [ADR-094](./adr-094-observability-metrics.md),
   [ADR-096](./adr-096-storage-layer.md), [ADR-111](./adr-111-background-subagent-sessions.md),
-  [PROP-097](./prop-097-background-processes-registry.md).
+  PROP-097.
 
 ## История
 

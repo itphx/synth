@@ -3,8 +3,8 @@
 > **Назначение:** «как устроено, точно и полно» — модель записи, хранение, привязка сессии, containment,
 > HTTP-контур, события, lifecycle, ограничения, UI и матрица тестов (класс **Spec** по
 > [ARCH_DECISIONS.md](./ARCH_DECISIONS.md) §1). Решение — в
-> [ADR-114](./arch_decisions/adr-114-git-worktrees.md); исходное предложение —
-> [PROP-049](./arch_decisions/prop-049-git-worktrees.md); рабочий каталог и его политика —
+> [ADR-114](./arch_decisions/adr-114-git-worktrees.md); исходное предложение — PROP-049
+> (удалено после принятия); рабочий каталог и его политика —
 > [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md); реестр репозиториев и
 > `repo_path` — [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md); исполнение команд —
 > [docs/EXECUTION.md](./EXECUTION.md).
@@ -608,8 +608,7 @@ coarse-указателе.
   [ADR-044](./arch_decisions/adr-044-mobile-adaptive-ui-pwa.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md),
   [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md), [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md),
   [ADR-096](./arch_decisions/adr-096-storage-layer.md), [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
-  [PROP-037](./arch_decisions/prop-037-commit-security-step.md),
-  [PROP-049](./arch_decisions/prop-049-git-worktrees.md), [ADR-114](./arch_decisions/adr-114-git-worktrees.md).
+  [PROP-037](./arch_decisions/prop-037-commit-security-step.md), [ADR-114](./arch_decisions/adr-114-git-worktrees.md).
 
 ## История
 

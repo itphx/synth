@@ -26,6 +26,7 @@ The publishing scripts use the `--no-git-checks` flag (publishing happens not fr
 |--------|-----|-------|
 | npmjs.org | `https://registry.npmjs.org` | `NPM_TOKEN` |
 | GitVerse Package Registry | `https://gitverse.ru/api/packages/itphx/npm/` | `GV_TOKEN` |
+| Gitea Package Registry | `https://git.itphx.ru/api/packages/itphx/npm/` | `GITEA_NPM_TOKEN` (publishing; a read token for install) |
 
 Token values are stored in repository secrets (GitVerse CI) and in the local environment. **Never put token values in documentation, code or commits.**
 
@@ -39,6 +40,84 @@ Since 2026 npm has tightened its publishing requirements:
 - **Tokens with `bypass 2FA` do not publish directly** (from January 2027 — only staged publishing with manual 2FA confirmation). When creating a token do NOT choose "bypass 2FA" — use a regular GAT.
 - **GAT tokens without the `unpublish` right** cannot delete a published version — use `npm deprecate` instead of `npm unpublish` (see [Troubleshooting](../TROUBLESHOOTING.md)).
 - **npm v12**: `allowScripts`/`--allow-git`/`--allow-remote` are disabled by default. If installing a package needs lifecycle scripts — `npm approve-scripts`/`--allow-scripts`.
+
+## Beta versions (Gitea)
+
+The beta channel is the fast path "as a user sees it": packages are published to the **Gitea Package Registry** (`git.itphx.ru`) and installed from there with a single command, without building from source. This is how local runs and hybrid mode are checked on the same distribution consumers get, without waiting for a release to npmjs.
+
+Step-by-step procedure and troubleshooting — skill `synth-beta-publish`.
+
+Beta version: `X.Y.Z-beta.<UTC timestamp>.<sha>[.dirty]` — the prerelease suffix separates it from release versions; `<sha>` pins the commit, `.dirty` means the publication was built from a dirty working tree. It is published under the dist-tag `beta` or `next`; **`latest` is not moved** — installing `@itphx/synth` without a tag and the official Helm chart still point at a release.
+
+**All 8 packages** are published in release order (`shared → core → executor → storage-postgres → ui → backend → sdk → synth`).
+
+### Local publishing
+
+```bash
+# token with the package:write right in the itphx namespace
+GITEA_NPM_TOKEN=… ./scripts/publish-beta.sh --base 0.13.4
+```
+
+`--base X.Y.Z` sets the version from which the next patch is computed; without it the script uses the current `packages/synth/package.json` version.
+
+| Flag | Effect |
+|---|---|
+| `--tag beta\|next` | publishing dist-tag (default `beta`) |
+| `--base X.Y.Z` | base version (empty — next patch) |
+| `--no-smoke` | skip the install-from-registry check (faster) |
+| `--dry-run` | show the version and plan; build and publish nothing |
+| `--no-build` | do not rebuild packages (use the existing `dist/`) |
+
+The script writes the computed version to `tmp/beta-publish/version.txt`.
+
+### Publishing from CI
+
+Actions → **`Beta packages`** ([workflow](../../.gitverse/workflows/beta.yaml)), inputs:
+
+- `ref` — branch or commit (default `master`);
+- `base` — base version `X.Y.Z` (empty — next patch);
+- `tag` — dist-tag `beta`/`next`;
+- `smoke` — verify installation from the registry (default yes);
+- `dry_run` — show the plan without building or publishing.
+
+The workflow deliberately **skips the release gates** (`security-gate`, `release-notes`): a beta is not a release and does not replace the audit. The `GV_GITEA_TOKEN` token must have `package:write`; if it does not, create a separate secret and substitute it in the publishing step's `env`.
+
+### Installation
+
+```ini
+@itphx:registry=https://git.itphx.ru/api/packages/itphx/npm/
+//git.itphx.ru/api/packages/itphx/npm/:_authToken=${GITEA_NPM_TOKEN}
+```
+
+```bash
+npm i -g @itphx/synth@beta
+synth --version
+
+# a separate home — the beta does not disturb the working instance
+synth serve --home ~/.local/share/synth-beta
+
+# hybrid: local core, server in K3s (test)
+synth serve --connect https://synth.k3s.itphx.loc --home ~/.local/share/synth-beta --port 4300
+```
+
+### Smoke check
+
+The script installs the published package into `tmp/` and runs `synth --version` — this catches "published but not installable" (broken `workspace:*`, files missing from `files`). Disabled with `--no-smoke`; in CI with the `smoke: false` input.
+
+### Retention
+
+```bash
+./scripts/beta-prune.sh --keep 20          # plan: what would be deleted (safe default)
+./scripts/beta-prune.sh --keep 20 --yes    # delete the extra betas
+```
+
+The script keeps the last N beta versions (semver, descending) and deletes the older ones across all 8 packages. Only versions with `-beta.` are deleted; release versions and the `latest` dist-tag are never touched. Without `--yes` (and with `--dry-run`) it only prints the plan.
+
+### Limitations
+
+- A beta built from a dirty tree is **not reproducible** — the `.dirty` suffix marks it; use a clean commit when reproducibility matters.
+- Docker images and the Helm chart are **not** published as betas — only npm packages in Gitea.
+- The publishing token needs `package:write`; consumers only need a read token for the same registry.
 
 ## Docker image
 
@@ -237,6 +316,10 @@ Every release has a **pair** of files in `docs/releases/`; `changelog.sh` takes 
 and uses it as the release body (when such a file exists, the commit-based auto-generation is skipped).
 Prepare the descriptions in advance, before the tag is pushed.
 
+This is a **mandatory requirement, not a recommendation**: the `release-notes` gate (before `build`)
+fails without non-empty `<version>.md` and `<version>.en.md`. Commit-based auto-generation remains only
+an emergency fallback for a manual/local `changelog.sh` run.
+
 | File | Language | Where the body goes |
 |------|----------|---------------------|
 | `docs/releases/<VERSION>.md` | Russian | body of the **GitVerse Release** (job `create-release`) |
@@ -245,6 +328,14 @@ Prepare the descriptions in advance, before the tag is pushed.
 What to write: what is included in the release, the key changes, **breaking changes**, and an
 installation block (`npm`/`docker`/`helm` commands). For the structure, use
 [`docs/releases/0.10.0.md`](../releases/0.10.0.md) as a reference.
+
+Local check of the pair:
+
+```bash
+pnpm release:notes -- --version 0.13.4
+# or
+node scripts/release-notes-check.mjs --version 0.13.4
+```
 
 `changelog.sh` behaviour:
 
@@ -262,11 +353,35 @@ Example names for version `0.10.1`: `docs/releases/0.10.1.md` and `docs/releases
 
 | Workflow | Trigger | Content |
 |---|---|---|
-| `.gitverse/workflows/release.yaml` | push of a `v*` tag + `workflow_dispatch` | **build and publish** of the release (including the GitHub mirror and release) |
-| `.gitverse/workflows/ci.yaml` | push to `main`/`master`/`feature/**`/`fix/**`/`refactor/**`/`chore/**`/`docs/**` and PR | code tests: typecheck, lint, tests of `shared`/`core`/`executor`/`storage-postgres`/`backend`/`ui`/`sdk`, `helm lint` + `template`, `pnpm audit --audit-level=high` (report-only) |
-| `.gitverse/workflows/ci-docs.yaml` | push to `main`/`master`/`feature/**` and PR, changes by `paths` (docs/AGENTS.md/check scripts) | `node scripts/adr-check.mjs` + `node scripts/docs-link-check.mjs` |
+| `.gitverse/workflows/release.yaml` | push of a `v*` tag + `workflow_dispatch` | **build and publish** of the release (including the GitHub mirror and release); before artifacts are built — the mandatory `security-gate` and `release-notes` gates (`build.needs`) |
+| `.gitverse/workflows/ci.yaml` | push to `main`/`master`/`feature/**`/`fix/**`/`refactor/**`/`chore/**`/`docs/**` and PR | code tests: typecheck, lint, tests of `shared`/`core`/`executor`/`storage-postgres`/`backend`/`ui`/`sdk`, the `test-postgres` job (contract suite against a live PostgreSQL), `helm lint` + `template`, `secret-scan` (tree + history, **blocking**), `pnpm audit --audit-level=high` (report-only) + the vulnerability ratchet as a delta to the baseline (report-only) |
+| `.gitverse/workflows/ci-docs.yaml` | push to `main`/`master`/`feature/**` and PR, changes by `paths` (docs/AGENTS.md/check scripts) | `node scripts/adr-check.mjs` + `node scripts/docs-link-check.mjs` + `node scripts/security-gate.mjs --lint-records` (audit records; pnpm is not installed) |
 
 The split is done via `paths`/`paths-ignore`: `ci.yaml` has `docs/**` and `**/*.md` in `paths-ignore`, so docs pushes do not run the heavy jobs; `ci-docs.yaml` is the opposite — `paths` only for docs, and the job does not install pnpm (the scripts run on bare node).
+
+### Build order in CI
+
+`pnpm install --frozen-lockfile` → `pnpm --filter @itphx/synth-shared build` (required before
+typecheck) → `pnpm --filter @itphx/synth-core build` (needed by the backend and by typecheck of the
+storage driver) → `pnpm --filter @itphx/synth-executor build` (types reference the core dist) →
+`pnpm --filter @itphx/synth-storage-postgres build` → `pnpm typecheck` → `pnpm lint` → `pnpm test`.
+
+Without the shared/core builds, typecheck cannot find the types. Recursive tasks
+(`pnpm typecheck`/`lint`/`test` = `pnpm --recursive run …`) follow the **intentional** cycles
+`core ↔ @itphx/synth-storage-postgres` and `core ↔ @itphx/synth-executor` (core loads both packages
+via dynamic `import()`, the packages peer-depend on core) — allowed by `ignoreWorkspaceCycles: true`
+in `pnpm-workspace.yaml` (pnpm ≥12 otherwise fails with `ERR_PNPM_TASK_CYCLE`; the tasks themselves
+have no dependency between them — the build order is set by the explicit `--filter` calls above).
+Recursive tasks run sequentially per package (`workspaceConcurrency: 1`): otherwise package vitest
+runs compete for CPU and core degradation tests hit `Test timed out in 20000ms`.
+
+The driver is also built in the release gate `lint-and-test` (`release.yaml`): the recursive
+`pnpm test` includes core degradation tests that are not gated by `SYNTH_TEST_POSTGRES_DSN` but
+dynamically import `@itphx/synth-storage-postgres` — without its `dist` the run fails. The driver
+contract suite against a **live** PostgreSQL is a separate `test-postgres` job
+(`SYNTH_TEST_POSTGRES_DSN`; the DB is started by `scripts/ci-postgres.sh`: the `GV_TEST_POSTGRES_DSN`
+secret → local `initdb` → docker `postgres:17-alpine`). `security-gate` and `release-notes` gate
+artifact builds (`build.needs`) — policy and checklist: [docs/security/README.md](../security/README.md).
 
 ### Starting a release
 
@@ -283,10 +398,11 @@ The split is done via `paths`/`paths-ignore`: `ci.yaml` has `docs/**` and `**/*.
 2. Wait for a green `ci.yaml` on `master` (that is the audit commit).
 3. Bump the version in a single `master` commit: 8 × `packages/*/package.json`, `packages/shared/src/version.ts`,
    `charts/synth/Chart.yaml` (`version` + `appVersion`). Confirm `ci.yaml` is green on that commit.
-4. Add the internal audit record `docs/security/releases/<version>.json` (`security-gate` requires it).
-5. Create an **annotated** tag on the commit that contains the record and push it:
+4. Add the pair `docs/releases/<version>.md` + `.en.md` and verify it with `pnpm release:notes -- --version <version>`.
+5. Add the internal audit record `docs/security/releases/<version>.json` (`security-gate` requires it).
+6. Create an **annotated** tag on the commit that contains the record and push it:
    `git tag -a v<version> -m "…" && git push origin v<version>`.
-6. Do not re-create the tag or cancel a run mid-flight: pushing the tag again starts a new run while the
+7. Do not re-create the tag or cancel a run mid-flight: pushing the tag again starts a new run while the
    previous one's jobs still hold slots, and GitVerse may kill both (observed: all jobs marked `failure`
    at the same second, including steps that never started).
 
@@ -299,7 +415,7 @@ Manual alternative (no tag):
 Re-running on the same tag is idempotent: npm versions already in the registry are skipped, the Helm chart is
 overwritten with identical content, and CI artifacts and offline builds are best-effort.
 
-Release workflow: version bump (version.ts + package.json + `charts/synth/Chart.yaml`) → CI checks → build → CHANGELOG → npmjs publish → GitVerse npm publish → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → Helm chart publish (`publish-helm`) → create the GitVerse Release → GitHub mirror (`publish-github`: push `main`+tags, GitHub Release).
+Release workflow: version bump (version.ts + package.json + `charts/synth/Chart.yaml`) → release notes check (`release-notes`) → CI checks → build → CHANGELOG → npmjs publish → GitVerse npm publish → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → Helm chart publish (`publish-helm`) → create the GitVerse Release → GitHub mirror (`publish-github`: push `main`+tags, GitHub Release).
 
 npm packages are published **only** from GitVerse (`publish-npmjs`/`publish-gitverse-npm`) — the GitHub side does not publish npm.
 
@@ -445,14 +561,14 @@ All three **base images** are published to both registries — `gitverse.ru` (pr
 | `synth-backend` | ✅ | ✅ (mirror) | — |
 | `synth-ui` | ✅ | ✅ (mirror) | — |
 
-The artifact size limit (~500 MB) applies not to the base images but to **future additional/full images** (the PROP-082 flavor images: `dev`, `devops`, `browser`, `full`, etc.) — when they appear, they will go **only to Docker Hub**. Only the versioned tag is published (no `latest`) — the same policy as on the GitVerse side.
+The artifact size limit (~500 MB) applies to the **base** images in GitVerse/GHCR. Flavor images (`synth-backend:<version>-<flavor>`, `synth-executor:<version>-<flavor>`) are not published to GitVerse/GHCR — only to the private Gitea `git.itphx.ru/itphx/*` (see the "Executor images and flavors" section), which has no limit; the slim control plane `synth-backend:<version>` is additionally published to Gitea. Only the versioned tag is published (no `latest`) — the same policy as on the GitVerse side.
 
 ### What GitVerse CI does
 
 The `publish-github` job in `.gitverse/workflows/release.yaml` runs after the npm and Docker build/publish (`build-docker`) and after the `changelog` job:
 
 1. **Mirror:** push `master→main` and all tags to `https://github.com/itphx/synth.git` (only `main` + tags, no other branches);
-2. **GitHub Release** for the tag `v<version>` — the body is **in English**: `bash scripts/changelog.sh --lang en` reads `docs/releases/<version>.en.md` (if it is missing — the Russian description with a warning, then commit-based auto-generation), plus an English "Installation" block (npm from npmjs.org/GitVerse, the image from `ghcr.io/itphx/synth:<version>`); creation is idempotent (if a release for the tag exists, the body is updated);
+2. **GitHub Release** for the tag `v<version>` — the body is **in English**: `bash scripts/changelog.sh --lang en` reads `docs/releases/<version>.en.md` (the file is mandatory: the `release-notes` gate will not let a release through without it; the fallback to the Russian description/commit auto-generation is emergency-only, for a manual `release-github.sh`), plus an English "Installation" block (npm from npmjs.org/GitVerse, the image from `ghcr.io/itphx/synth:<version>`); creation is idempotent (if a release for the tag exists, the body is updated);
 3. **Assets — best-effort:** `cli.js` (an artifact of the `build` job), the Helm chart (`helm package charts/synth`, version from `Chart.yaml`), `SHA256SUMS`. If a file is missing, a warning is printed and the work continues; an asset upload error **does not fail** the job, but is visible in the log. On GitHub the standard `uploads.github.com` is used (unlike the GitVerse API, which returns 500 for assets — there the asset is also best-effort).
 
 All three base images (`synth`, `synth-backend`, `synth-ui`) are built in the `build-docker` job (kaniko) into **two** registries at once: `gitverse.ru/itphx/<image>:<version>` and `ghcr.io/itphx/<image>:<version>`. Authorization in GHCR comes from the `GH_TOKEN` secret (reused by all three kaniko steps).

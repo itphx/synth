@@ -99,7 +99,7 @@
 
 - Где хранить стандарт (instance / project / оба)? Как наследуется?
 - Проверки обязательны или предупреждения?
-- Связь с памятью/шаблонами ([PROP-047](./prop-047-memory-gbrain.md), [PROP-068](./prop-068-skills-agents-registry.md))?
+- Связь с памятью/шаблонами ([ADR-122](./adr-122-memory-product.md), [PROP-068](./prop-068-skills-agents-registry.md))?
 - Как не дублировать `synth-docs`/`synth-agents-md` (dev-скиллы) и продуктовый каталог?
 - Линтер — отдельный тул, хук ([ADR-030](./adr-030-hooks-agent-events.md)) или шаг pipeline
   ([ADR-101](./adr-101-pipeline-engine.md))?
@@ -120,4 +120,4 @@
 - [PROP-067](./prop-067-org-guidelines-defaults.md) «Орг-гайдлайны → дефолты инстанса» — источник
   организационных стандартов.
 - [ADR-030](./adr-030-hooks-agent-events.md) «Hooks» — возможная точка авто-проверки.
-- [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — поиск по документации/шаблонам.
+- [ADR-122](./adr-122-memory-product.md) «Память Synth» — поиск по документации/шаблонам.

@@ -4,7 +4,7 @@
 > exec-API, доверенная граница, матрица «что уезжает в исполнитель», развёртывание и миграция
 > (класс **Spec** по [ARCH_DECISIONS.md](./ARCH_DECISIONS.md) §1). Решение — в
 > [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (единый порт `ExecutionPort` и режим `remote`);
-> образы и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md);
+> образы и flavor'ы — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md);
 > конфигурация — [docs/CONFIGURATION.md](./CONFIGURATION.md) §«Исполнение (топология)».
 >
 > **Статус документа:** порт `ExecutionPort`, обе реализации (inline/remote), секция `execution` в конфигурации,
@@ -42,7 +42,7 @@
 | **Remote (split)** | `remote` | в отдельных контейнерах-исполнителях | `synth-backend` (control plane, без toolchain) + `synth-executor` (worker) |
 
 Разделение по образу — не «выключатель», а следствие режима: в `inline` backend'у нужен toolchain
-(образ с flavor'ом — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md)), в `remote` — не нужен, зато
+(образ с flavor'ом — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md)), в `remote` — не нужен, зато
 нужен отдельный образ worker'а.
 
 ### 1.2. Единый переключатель `execution.mode`
@@ -965,7 +965,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 5**: вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 5**: вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -1032,7 +1032,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 
 ### 12.3. Порядок реализации
 
-План **общий с [PROP-082](./arch_decisions/prop-082-full-images-deployment.md)** — нумерация шагов единая;
+План **общий с [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md)** — нумерация шагов единая;
 владелец шага указан в таблице.
 
 | Шаг | Содержание | Владелец | Зависимость от PostgreSQL |
@@ -1127,9 +1127,9 @@ Split-топология технически возможна и при одн�
 - [ADR-038](./arch_decisions/adr-038-npm-packages.md) «Монорепо как набор npm-пакетов» — сборка/публикация.
 - [ADR-023](./arch_decisions/adr-023-configuration.md) «Конфигурация» — приоритет CLI > env > config.yaml > defaults.
 - [ADR-052](./arch_decisions/adr-052-public-api-platform.md) «Публичная API-платформа» — образец машинных ключей.
-- [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) «Full-образы и базовое развёртывание» — all-in-one топология и состав образов.
+- [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения» — all-in-one топология и состав образов (ранее PROP-082).
 - [ADR-113](./arch_decisions/adr-113-background-processes.md) «Фоновые процессы» — общий реестр фоновых процессов.
-- [PROP-049](./arch_decisions/prop-049-git-worktrees.md) «Git worktrees» — персональный cwd как будущая единица работы на исполнителе.
+- [ADR-114](./arch_decisions/adr-114-git-worktrees.md) «Git worktrees» — персональный cwd как будущая единица работы на исполнителе.
 - [PROP-080](./arch_decisions/prop-080-managed-hybrid-modes.md) / [PROP-081](./arch_decisions/prop-081-hybrid-policy-leak-protection.md) — гибрид: где исполняется local vs managed.
 - [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) «UI-терминал» — PTY/attach вне объёма.
 - [PROP-050](./arch_decisions/prop-050-external-engines-runner.md) «Внешние движки» — прецедент отдельного исполняющего сервиса.

@@ -8,7 +8,7 @@
 > [PROP-068](./prop-068-skills-agents-registry.md),
 > [ADR-069](./adr-069-project-instructions-agents-md.md),
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md),
-> [PROP-066](./prop-066-doc-style-skills.md), [PROP-047](./prop-047-memory-gbrain.md).
+> [PROP-066](./prop-066-doc-style-skills.md), [ADR-122](./adr-122-memory-product.md).
 
 **Решение:** механизм **импорта существующих в организации гайдлайнов** (документы, репозитории
 правил, code style, security policy) и применения их как **дефолтных на уровне инстанса** — так,
@@ -56,7 +56,7 @@
 - code style / security policy.
 
 Для «впитывания» больших текстов — опора на память/индексы
-([PROP-047](./prop-047-memory-gbrain.md), RAG). Результат — структурированные правила, а не «свалить
+([ADR-122](./adr-122-memory-product.md), RAG). Результат — структурированные правила, а не «свалить
 весь документ в промпт».
 
 ### 2. Каталог гайдлайнов и scope
@@ -115,7 +115,7 @@ scope (см. п. 2).
   разрешение?
 - Как обновлять при изменении источника (пул/вебхук/расписание)?
 - Где хранить правила: контекст-файлы, скиллы или секция конфига?
-- Как «впитывание» соотносится с памятью/RAG ([PROP-047](./prop-047-memory-gbrain.md)) — правила как
+- Как «впитывание» соотносится с памятью/RAG ([ADR-122](./adr-122-memory-product.md)) — правила как
   индексируемый корпус?
 - Приватность/утечки в гибриде ([PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md))?
 
@@ -130,7 +130,7 @@ scope (см. п. 2).
 - [ADR-029](./adr-029-granular-permissions.md) «Гранулярные permissions» — гейтинг правки/применения.
 - [PROP-066](./prop-066-doc-style-skills.md) «Скиллы и гайдлайны оформления документации» — частный случай
   орг-гайдлайнов (стандарт доков).
-- [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — ingestion/индексация источников.
+- [ADR-122](./adr-122-memory-product.md) «Память Synth» — ingestion/индексация источников.
 - [ADR-070](./adr-070-system-prompt-composer.md) «SystemPromptComposer» — точка вставки правил в промпт.
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — аудит изменений.
 - [ADR-051](./adr-051-scheduler-pipelines.md) «Шедулер и пайплайны» — пересинхронизация источников.

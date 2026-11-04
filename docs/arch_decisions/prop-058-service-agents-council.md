@@ -5,8 +5,9 @@
 > **Источник:** перенесено из `AD-DRAFTS.md` (D13; черновик 2026-09-16); Roadmap + Obsidian-vault
 > `Loop-Engineering-Inner-Outer.md`, `Заметки/Harness Engineering.md` (READ-ONLY). **Включает
 > PROP-031** «Verification синт».
+> **Поглощено:** PROP-031 (файл удалён как дубль).
 > **Связано:** [ADR-026](./adr-026-subagent-context-modes.md), [ADR-029](./adr-029-granular-permissions.md),
-> [ADR-030](./adr-030-hooks-agent-events.md), [PROP-031](./prop-031-verification-agent.md),
+> [ADR-030](./adr-030-hooks-agent-events.md), PROP-031,
 > [ADR-034](./adr-034-model-routing.md), [PROP-057](./prop-057-loop-engine.md),
 > [ADR-101](./adr-101-pipeline-engine.md), [ADR-084](./adr-084-decision-models-clef.md).
 
@@ -93,7 +94,7 @@
 - Инструмент `task` существует (`packages/core/src/engine/tools/task.ts`), но запускает одного
   субагента; `panel`/`consensus`/`debate`/`judge`/`verifier` и Council Gate в коде отсутствуют
   (grep по этим идентификаторам по `packages/core/src/engine/` пуст).
-- PROP-031 не реализован (см. [PROP-031](./prop-031-verification-agent.md)); `qa` — не verifier.
+- PROP-031 не реализован (см. PROP-031); `qa` — не verifier.
 - Автозапуск через hook `plan_approved` невозможен — система хуков не реализована
   ([ADR-030](./adr-030-hooks-agent-events.md)).
 
@@ -109,7 +110,7 @@
 
 ## Связи
 
-- [PROP-031](./prop-031-verification-agent.md) «Verification синт» — вливается в PROP-058 как `verifier`/`judge`.
+- PROP-031 «Verification синт» — вливается в PROP-058 как `verifier`/`judge`.
 - [ADR-030](./adr-030-hooks-agent-events.md) «Hooks для событий агента» — `agent_spawned`/`agent_completed`/
   `plan_approved` для запуска консилиума.
 - [ADR-026](./adr-026-subagent-context-modes.md) «Режимы контекста саб-агента» — изоляция контекста

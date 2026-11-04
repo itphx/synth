@@ -6,7 +6,7 @@
 > **Источник:** перенесено из `AD-DRAFTS.md` (D17, «Умная оптимизация контекста», Roadmap Фаза 3);
 > текущее состояние проверено по `packages/core/src/engine/context/optimizer.ts`.
 > **Связано:** [ADR-070](./adr-070-system-prompt-composer.md), [ADR-097](./adr-097-storage-provider-class.md),
-> [PROP-047](./prop-047-memory-gbrain.md), [ADR-026](./adr-026-subagent-context-modes.md),
+> [ADR-122](./adr-122-memory-product.md), [ADR-026](./adr-026-subagent-context-modes.md),
 > [ADR-036](./adr-036-llm-gateway.md), [ADR-035](./adr-035-micro-model-first.md).
 
 **Решение:** дополнить существующий `ContextOptimizer` **умной оптимизацией контекста** — сделать
@@ -22,7 +22,7 @@
 - **Стратегии `aggressive` / `moderate` / `off`** — единый профиль интенсивности вместо набора
   отдельных флагов.
 - **Хранилище архива**: архивированное не теряется — уходит в память проекта
-  ([PROP-047](./prop-047-memory-gbrain.md)) и/или в `context_snapshot`
+  ([ADR-122](./adr-122-memory-product.md)) и/или в `context_snapshot`
   ([ADR-097](./adr-097-storage-provider-class.md)), при необходимости подтягивается назад
   (recall).
 
@@ -96,7 +96,7 @@
 
 ### 5. Хранилище архива
 
-Архив — не «мусорка»: это вход в память проекта ([PROP-047](./prop-047-memory-gbrain.md)) и/или
+Архив — не «мусорка»: это вход в память проекта ([ADR-122](./adr-122-memory-product.md)) и/или
 `context_snapshot` ([ADR-097](./adr-097-storage-provider-class.md)) с возможностью recall.
 Формально это отдельный вопрос: где хранить, как индексировать, как подтягивать обратно.
 
@@ -113,7 +113,7 @@
 
 ## Открытые вопросы
 
-- Хранить архив в проекте или в памяти ([PROP-047](./prop-047-memory-gbrain.md))?
+- Хранить архив в проекте или в памяти ([ADR-122](./adr-122-memory-product.md))?
 - Как измерять «важность» сообщения — теги, наличие tool-calls, рекурсия, эвристики или LLM?
 - Совмещать с `sticky_notes` или заменять их?
 - Как `archive_context` взаимодействует с уже существующими `disabled`/`hidden`/`ephemeral`?
@@ -126,7 +126,7 @@
   prompt-cache; оптимизация контекста должна не ломать кэш.
 - [ADR-097](./adr-097-storage-provider-class.md) «Хранение истории на PostgreSQL» — `context_snapshot`
   как место хранения/recall архива.
-- [PROP-047](./prop-047-memory-gbrain.md) «Память Synth (Gbrain + композиция)» — память как долгосрочный
+- [ADR-122](./adr-122-memory-product.md) «Память Synth (Gbrain + композиция)» — память как долгосрочный
   архив и источник recall.
 - [ADR-026](./adr-026-subagent-context-modes.md) «Режимы контекста саб-агента» — `summary`/`last_n` как
   родственные механизмы усечения.

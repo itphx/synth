@@ -5,7 +5,7 @@
 > **Источник:** перенесено из `AD-DRAFTS.md` (D10; черновик 2026-09-16); Roadmap, идея 10.
 > **Связано:** [ADR-042](./adr-042-hybrid-mode.md), [ADR-043](./adr-043-unified-identity-login.md),
 > [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-033](./adr-033-session-branching-merge.md),
-> [ADR-097](./adr-097-storage-provider-class.md), [PROP-047](./prop-047-memory-gbrain.md),
+> [ADR-097](./adr-097-storage-provider-class.md), [ADR-122](./adr-122-memory-product.md),
 > [ADR-052](./adr-052-public-api-platform.md), [PROP-073](./prop-073-client-integrity-hybrid.md),
 > [PROP-081](./prop-081-hybrid-policy-leak-protection.md).
 
@@ -70,7 +70,7 @@ API v2.
 
 ### 4. Обмен «памятью»
 
-Целевой потребитель — память Synth ([PROP-047](./prop-047-memory-gbrain.md)): синхронизация индексов,
+Целевой потребитель — память Synth ([ADR-122](./adr-122-memory-product.md)): синхронизация индексов,
 графов и артефактов памяти между инстансами (в т.ч. «company brain» нескольких площадок). Требования к
 формату и направлению (push/pull/bidirectional) определяются в PROP-047; здесь фиксируется **канал** и
 **протокол** обмена.
@@ -121,7 +121,7 @@ API v2.
 - Дельта-синхронизация сообщений (seq/`updatedAt`) — стратегия разрешения конфликтов?
 - Авторизация инстанс↔инстанс (сервисные токены) — формат, ротация, отзыв?
 - Обмен памятью — кто владеет схемой и как совместить с гибридом
-  ([PROP-047](./prop-047-memory-gbrain.md))?
+  ([ADR-122](./adr-122-memory-product.md))?
 - Переносить ли карту обфускации вообще (и как безопасно)?
 - Как обмен соотносится с soft-delete ([PROP-074](./prop-074-soft-delete-retention.md))?
 
@@ -137,7 +137,7 @@ API v2.
   для идемпотентного upsert.
 - [ADR-097](./adr-097-storage-provider-class.md) «История на PostgreSQL» — хранилище курсоров и
   состояния синхронизации.
-- [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — обмен памятью/индексами.
+- [ADR-122](./adr-122-memory-product.md) «Память Synth» — обмен памятью/индексами.
 - [ADR-052](./adr-052-public-api-platform.md) «Публичная API-платформа» — скоупы/токены/контуры.
 - [PROP-073](./prop-073-client-integrity-hybrid.md), [PROP-081](./prop-081-hybrid-policy-leak-protection.md) —
   целостность клиента и защита от утечек при обмене.

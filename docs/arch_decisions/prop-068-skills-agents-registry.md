@@ -182,7 +182,7 @@ synth-skills/
 | `prompts` | персоны/промпт-блоки | блоки `prompts/` ядра ([ADR-070](./adr-070-system-prompt-composer.md)); паков нет |
 | `automation` | маршруты/расписания/loops/pipelines | маршруты/расписания ([ADR-089](./adr-089-external-events-automation.md)/[ADR-051](./adr-051-scheduler-pipelines.md)) есть; паков нет |
 | `policies` | пресеты permissions/tools-policy/mcp-policy | политики есть ([ADR-029](./adr-029-granular-permissions.md)/[ADR-071](./adr-071-mcp-servers-prompt.md)); пресетов-паков нет |
-| `memory` | индексы/паки памяти | нет ([PROP-047](./prop-047-memory-gbrain.md)) |
+| `memory` | индексы/паки памяти | нет ([ADR-122](./adr-122-memory-product.md)) |
 | `ui` | UI-слоты/виджеты | нет (UI-slot отложен, [ADR-090](./adr-090-extension-api.md)) |
 
 **Реестр/индекс/trust/install-policy/провенанс — единые** для всех классов (`kind`) и типов контент-паков

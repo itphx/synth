@@ -2,6 +2,7 @@
 
 > **Статус:** ⚠️ Частично — MVP реализован (`meta.json`, реестр миграций, авто-миграции, `synth migrate`, `synth update`/`--to` (обновление и откат), `synth uninstall`, аудит-журнал обслуживания, **graceful restart из UI**); миграции и перезапуск доступны через admin-API/UI (`/api/v2/maintenance`, раздел «Обслуживание»); остаток — публикация runbook на портале, мульти-инстанс-локи.
 > **Дата:** 2026-10-16
+> **Источник:** PROP-092 (файл удалён после принятия).
 > **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-038](./adr-038-npm-packages.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-091](./adr-091-backup-restore-transfer.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
 ## Контекст

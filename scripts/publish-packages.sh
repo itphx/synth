@@ -20,6 +20,10 @@
 #   ./scripts/publish-packages.sh https://registry.npmjs.org
 #   ./scripts/publish-packages.sh https://gitverse.ru/api/packages/itphx/npm/
 #   ./scripts/publish-packages.sh https://registry.npmjs.org --verify-only  # только проверка
+#   ./scripts/publish-packages.sh https://git.itphx.ru/api/packages/itphx/npm/ --tag beta
+#
+# --tag <name> — dist-tag для публикуемой версии (например, beta/next) для
+#                бета-публикаций. Без флага поведение прежнее: npm ставит latest.
 #
 # Переменные окружения:
 #   VERSION_OVERRIDE — проверить/опубликовать другую версию (по умолчанию из
@@ -36,14 +40,26 @@ cd "$ROOT"
 
 VERIFY_ONLY=0
 NO_VERIFY=0
+TAG=""
+TAG_SET=0
 POSITIONAL=()
-for arg in "$@"; do
-    case "$arg" in
-        --verify-only) VERIFY_ONLY=1 ;;
-        --no-verify) NO_VERIFY=1 ;;
-        *) POSITIONAL+=("$arg") ;;
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --verify-only) VERIFY_ONLY=1; shift ;;
+        --no-verify) NO_VERIFY=1; shift ;;
+        --tag)
+            [ "$#" -ge 2 ] || { echo "ОШИБКА: --tag требует значение (например, --tag beta)" >&2; exit 1; }
+            TAG="$2"; TAG_SET=1; shift 2 ;;
+        --tag=*)
+            TAG="${1#*=}"; TAG_SET=1; shift ;;
+        *) POSITIONAL+=("$1"); shift ;;
     esac
 done
+
+if [ "$TAG_SET" = "1" ] && [ -z "$TAG" ]; then
+    echo "ОШИБКА: --tag требует непустое значение (например, --tag beta)" >&2
+    exit 1
+fi
 
 REGISTRY="${POSITIONAL[0]:?Укажите npm-реестр}"
 VERSION="${VERSION_OVERRIDE:-$(node -e "console.log(require('./packages/synth/package.json').version)")}"
@@ -105,6 +121,7 @@ fi
 echo "━━━ publish-packages ━━━"
 echo "  Реестр:   $REGISTRY"
 echo "  Версия:   $VERSION"
+[ -n "$TAG" ] && echo "  Тег:      $TAG (dist-tag)"
 [ "$VERIFY_ONLY" = "1" ] && echo "  Режим:    только проверка (--verify-only)"
 [ "$NO_VERIFY" = "1" ] && echo "  Режим:    без проверки видимости (--no-verify)"
 echo ""
@@ -125,8 +142,12 @@ for pkg in shared core executor storage-postgres ui backend sdk synth; do
         echo "  ✓ $NAME@$VERSION уже опубликован — пропускаем"
         SKIPPED=$((SKIPPED + 1))
     else
-        echo "  📦 $NAME@$VERSION → $REGISTRY"
-        (cd "packages/$pkg" && pnpm publish --access public --registry "$REGISTRY" --no-git-checks)
+        echo "  📦 $NAME@$VERSION → $REGISTRY${TAG:+ (tag: $TAG)}"
+        if [ -n "$TAG" ]; then
+            (cd "packages/$pkg" && pnpm publish --access public --registry "$REGISTRY" --no-git-checks --tag "$TAG")
+        else
+            (cd "packages/$pkg" && pnpm publish --access public --registry "$REGISTRY" --no-git-checks)
+        fi
         PUBLISHED=$((PUBLISHED + 1))
     fi
 done

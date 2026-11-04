@@ -5,13 +5,13 @@
 > резолв per-session cwd, тулы `git_worktree_*`, HTTP-контур, событие `worktree.updated`), **UI**
 > (§9) и **вызов sweep'а при старте** (§7.4). Подробности — в разделе «Статус в коде».
 > **Дата:** 2026-10-26
+> **Источник:** PROP-049 (файл удалён после принятия).
 > **Связано:** [ADR-014](./adr-014-project-container.md) (проект как контейнер сессий),
 > [ADR-029](./adr-029-granular-permissions.md) (группы правил permission-слоя),
 > [ADR-075](./adr-075-project-workspace-provisioning.md) (рабочий каталог и политика `workspaceOutsideRoot`),
 > [ADR-076](./adr-076-git-repo-registry-ssh.md) (реестр репозиториев, `repo_path`, SSH-ключи),
 > [ADR-096](./adr-096-storage-layer.md) (порты слоя хранения),
 > [ADR-077](./adr-077-runtime-toolchain.md) (исполнение команд через `ExecutionPort`, исполнитель),
-> [PROP-049](./prop-049-git-worktrees.md) (исходное предложение),
 > [PROP-037](./prop-037-commit-security-step.md) (security-step перед коммитом — должен работать в каждом worktree);
 > дополнительно: [ADR-024](./adr-024-eventhub-transport.md) (транспорт событий),
 > [ADR-005](./adr-005-json-storage.md) (атомарная запись), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md) (мобильный UI).
@@ -171,8 +171,7 @@
   [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md),
   [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-075](./adr-075-project-workspace-provisioning.md),
   [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-077](./adr-077-runtime-toolchain.md),
-  [ADR-096](./adr-096-storage-layer.md), [PROP-037](./prop-037-commit-security-step.md),
-  [PROP-049](./prop-049-git-worktrees.md).
+  [ADR-096](./adr-096-storage-layer.md), [PROP-037](./prop-037-commit-security-step.md).
 
 ## История
 

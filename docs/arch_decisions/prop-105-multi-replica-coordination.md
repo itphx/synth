@@ -258,7 +258,7 @@ CREATE TABLE rate_limit_windows (
 - [ADR-096](./adr-096-storage-layer.md) «Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами» — порты и контрактный suite.
 - Историческое предложение о PostgreSQL как втором backend хранения (документ удалён, поглощён ADR-096/ADR-097/ADR-098) — его волны дали `PgMutex`/`PgLeader` и дедуп-claim, на которых стоит это предложение.
 - [PROP-104](./prop-104-external-event-transport.md) «Внешний транспорт событий: публикация между репликами control plane» — общие rate limit'ы и доставка live-настроек в реплики едут на нём; здесь только фиксируется пересечение.
-- [PROP-106](./prop-106-file-ports-to-sql.md) «Файловые порты инстанса в SQL: единое состояние при нескольких репликах» — если FS/package-bound порты (`skills`/`contextFiles`/`blobs`, `packages/storage-postgres/AGENTS.md`) переезжают в SQL, часть «process-local» кэшей (инструкции, discovery) получает общий источник истины — уточнить границу.
+- [ADR-116](./adr-116-instance-state-and-blob-ports.md) «Файловые порты инстанса в SQL: единое состояние при нескольких репликах» — если FS/package-bound порты (`skills`/`contextFiles`/`blobs`, `packages/storage-postgres/AGENTS.md`) переезжают в SQL, часть «process-local» кэшей (инструкции, discovery) получает общий источник истины — уточнить границу.
 - [docs/OBSERVABILITY.md](../OBSERVABILITY.md) — каталог метрик и алерты.
 - [docs/CONFIGURATION.md](../CONFIGURATION.md) — `scheduler.leaderElection`, `events.dedupStore`, `storage.backend`.
 - [docs/MAINTENANCE.md](../MAINTENANCE.md) — runbook обслуживания (место для диагностики очереди).

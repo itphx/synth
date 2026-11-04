@@ -8,7 +8,7 @@
 > **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md),
 > [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-039](./adr-039-plan-in-project.md),
 > [ADR-014](./adr-014-project-container.md), [PROP-054](./prop-054-kanban-backlog.md),
-> [PROP-047](./prop-047-memory-gbrain.md), [ADR-069](./adr-069-project-instructions-agents-md.md).
+> [ADR-122](./adr-122-memory-product.md), [ADR-069](./adr-069-project-instructions-agents-md.md).
 
 **Решение:** сделать в UI **полноценный просмотр и навигацию** по документации проекта, планам
 (`project.plan`) и ToDo сессий — не только read-only блоки, а:
@@ -17,7 +17,7 @@
   `AGENTS.md`, при желании — внешний vault Obsidian);
 - **Редактор плана и ToDo** — правка из UI (сейчас состояние меняет только агент через инструменты);
 - **Связи** — навигация `план ↔ todo ↔ сессия ↔ документ`;
-- **Поиск** (в перспективе — RAG, [PROP-047](./prop-047-memory-gbrain.md)).
+- **Поиск** (в перспективе — RAG, [ADR-122](./adr-122-memory-product.md)).
 
 ## Контекст
 
@@ -48,7 +48,7 @@
 ### 1. Docs-браузер
 
 - Источник документов: репозиторий (`README`, `docs/`, AD) и/или внешний vault (Obsidian Bridge,
-  [PROP-047](./prop-047-memory-gbrain.md)). Требует договорённости о приоритете.
+  [ADR-122](./adr-122-memory-product.md)). Требует договорённости о приоритете.
 - Дерево + рендер (переиспользовать `MarkdownContent`), переходы по относительным ссылкам
   (в т. ч. на другие AD/`AGENTS.md`).
 - Согласовать с панелями Files/Git левой панели и с контекст-ориентированными вкладками
@@ -72,7 +72,7 @@
 ### 4. Поиск
 
 - Первый этап — простой поиск по файлам/плану. Полнотекстовый/RAG — по мере готовности памяти
-  ([PROP-047](./prop-047-memory-gbrain.md)).
+  ([ADR-122](./adr-122-memory-product.md)).
 
 ## Статус реализации в коде
 
@@ -108,7 +108,7 @@
 - [ADR-014](./adr-014-project-container.md) «Проект как контейнер» — источник документов проекта.
 - [PROP-054](./prop-054-kanban-backlog.md) «Kanban-доска, backlog» — интерактивная доска поверх плана;
   общий слой с viewer/редактором.
-- [PROP-047](./prop-047-memory-gbrain.md) «Память Synth / Obsidian Bridge» — внешний vault и RAG-поиск.
+- [ADR-122](./adr-122-memory-product.md) «Память Synth / Obsidian Bridge» — внешний vault и RAG-поиск.
 - [ADR-069](./adr-069-project-instructions-agents-md.md) «Проектные инструкции (AGENTS.md)» — источник
   проектных инструкций для viewer.
 - [ADR-029](./adr-029-granular-permissions.md) «Гранулярные permissions» — права на правку из UI.

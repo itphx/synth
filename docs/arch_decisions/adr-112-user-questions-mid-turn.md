@@ -8,7 +8,7 @@
 > [ADR-101](./adr-101-pipeline-engine.md) (HITL-гейт пайплайна — родственная пауза),
 > [ADR-104](./adr-104-mid-turn-steering.md) (границы хода: что можно прервать),
 > [ADR-106](./adr-106-authority-layer.md) (подтверждения как действие пользователя),
-> [PROP-096](./prop-096-background-subagent-sessions.md) (фоновые прогоны — соседний блок этапа).
+> [ADR-111](./adr-111-background-subagent-sessions.md) (фоновые прогоны — соседний блок этапа).
 
 ## Контекст
 

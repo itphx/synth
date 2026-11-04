@@ -2,6 +2,7 @@
 
 > **Статус:** ✅ Реализовано — решение принято 2026-10-26; фоновые **саб-агенты** в коде, фоновые процессы — [ADR-113](./adr-113-background-processes.md). Detach идущего прогона — контракт зафиксирован 2026-10-27, **ядро реализовано** (реестр активных прогонов, `POST /api/v2/sessions/:id/background`, событие `process.detached`); шелл (`execute_shell`) и UI — в работе.
 > **Дата:** 2026-10-26
+> **Источник:** PROP-096 (файл удалён после принятия).
 > **Связано:** [ADR-026](./adr-026-subagent-context-modes.md) (режимы контекста саб-агента),
 > [ADR-033](./adr-033-session-branching-merge.md) (дочерняя сессия как ветка),
 > [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — фоновые процессы),
@@ -10,7 +11,6 @@
 > [ADR-104](./adr-104-mid-turn-steering.md) (границы хода; steering дочерней сессии),
 > [ADR-107](./adr-107-plugin-facade-services.md) (образец: порт + сервис + точка сборки),
 > [ADR-113](./adr-113-background-processes.md) (фоновые процессы — родственный механизм),
-> [PROP-096](./prop-096-background-subagent-sessions.md) (исходное предложение).
 
 ## Контекст
 
@@ -249,7 +249,7 @@ opencode (`background blocking tools`).
   [ADR-096](./adr-096-storage-layer.md), [ADR-104](./adr-104-mid-turn-steering.md),
   [ADR-107](./adr-107-plugin-facade-services.md),
   [ADR-113](./adr-113-background-processes.md),
-  [PROP-096](./prop-096-background-subagent-sessions.md).
+  PROP-096.
 
 ## История
 

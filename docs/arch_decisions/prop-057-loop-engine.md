@@ -4,8 +4,8 @@
 > **Дата:** 2026-10-08
 > **Источник:** перенесено из `AD-DRAFTS.md` (D12; черновик 2026-09-16); Roadmap Фаза 1; Obsidian-vault
 > `Loop-Engineering-Inner-Outer.md` (READ-ONLY).
-> **Связано:** [ADR-030](./adr-030-hooks-agent-events.md), [PROP-031](./prop-031-verification-agent.md),
-> [ADR-039](./adr-039-plan-in-project.md), [PROP-047](./prop-047-memory-gbrain.md),
+> **Связано:** [ADR-030](./adr-030-hooks-agent-events.md),
+> [ADR-039](./adr-039-plan-in-project.md), [ADR-122](./adr-122-memory-product.md),
 > [PROP-050](./prop-050-external-engines-runner.md), [ADR-051](./adr-051-scheduler-pipelines.md),
 > [PROP-058](./prop-058-service-agents-council.md), [ADR-100](./adr-100-extension-packs-pipelines.md).
 
@@ -82,7 +82,7 @@
 ### 7. Обучение
 
 `guardrails.md` — накопленные ограничения/уроки; `loop-journal.md` — журнал прогонов. Потребитель —
-[PROP-047](./prop-047-memory-gbrain.md) (память) и метрики ([PROP-063](./prop-063-user-learning-metrics.md)).
+[ADR-122](./adr-122-memory-product.md) (память) и метрики ([PROP-063](./prop-063-user-learning-metrics.md)).
 
 ### 8. Где исполнять шаг
 
@@ -117,11 +117,10 @@
 - [ADR-039](./adr-039-plan-in-project.md) «План в проекте, todo в сессии» — инструменты планирования,
   база для циклов.
 - [ADR-030](./adr-030-hooks-agent-events.md) «Hooks для событий агента» — точки запуска/завершения цикла.
-- [PROP-031](./prop-031-verification-agent.md) «Verification синт» — verifier/judge как рубрика проверки
-  (вливается в [PROP-058](./prop-058-service-agents-council.md)).
+- [PROP-058](./prop-058-service-agents-council.md) «Служебные агенты и консилиум» (ранее PROP-031) — verifier/judge как рубрика проверки.
 - [PROP-050](./prop-050-external-engines-runner.md) «Внешние движки — Runner» — возможный исполнитель шага.
 - [ADR-051](./adr-051-scheduler-pipelines.md) «Шедулер и пайплайны» — запуск циклов по расписанию.
 - [PROP-058](./prop-058-service-agents-council.md) «Служебные агенты и консилиум» — verification/consensus.
 - [ADR-101](./adr-101-pipeline-engine.md) «Pipeline Automation» — композиция циклов.
-- [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — журнал/guardrails/шаблоны.
+- [ADR-122](./adr-122-memory-product.md) «Память Synth» — журнал/guardrails/шаблоны.
 - [PROP-063](./prop-063-user-learning-metrics.md) «Обучение пользователя и метрики» — метрики циклов.

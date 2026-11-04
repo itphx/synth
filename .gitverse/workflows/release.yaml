@@ -201,12 +201,38 @@ jobs:
           path: tmp/security/evidence*.json
           if-no-files-found: warn
 
+  # --- Заметки релиза (гейт) ---
+  #
+  # Пара docs/releases/<version>.md + .en.md обязательна: иначе changelog.sh
+  # уходит в авто-сборку из коммитов, и описания релиза не остаётся в репозитории.
+  # Джоба идёт до сборки: build.needs включает её.
+  #
+  # Зависимость от version-bump: на workflow_dispatch ждём bump — версия берётся из
+  # его output. На push тега bump skipped (запускается только для workflow_dispatch),
+  # и версия приходит из `gitverse.ref` (refs/tags/vX.Y.Z). Fail-closed обеспечивает
+  # `--require-version`: если output пуст (bump упал или пропущен без тега), скрипт
+  # вернёт 2 — и `build` не запустится.
+  release-notes:
+    name: Заметки релиза
+    needs: [version-bump]
+    if: ${{ !cancelled() }}
+    runs-on: synth-ci
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Проверить пару заметок
+        run: |
+          node scripts/release-notes-check.mjs \
+            --require-version \
+            --version "${{ needs.version-bump.outputs.version }}" \
+            --ref "${{ gitverse.ref }}"
+
   # --- Сборка ---
   build:
     name: Сборка релизных артефактов
-    # security-gate обязателен: без успешного внутреннего аудита (запись релизуемой версии
-    # + secret-scan + матрица авторизации + ратчет зависимостей) артефакты не собираются.
-    needs: [lint-and-test, security-gate]
+    # `security-gate` и `release-notes` обязательны: без аудита и пары заметок релиза
+    # артефакты не собираются.
+    needs: [lint-and-test, security-gate, release-notes]
     runs-on: synth-ci
     timeout-minutes: 15
     steps:

@@ -19,7 +19,8 @@
     "clean": "pnpm --recursive run clean",
     "security:gate": "node scripts/security-gate.mjs",
     "security:scan": "node scripts/secret-scan.mjs",
-    "security:records": "node scripts/security-gate.mjs --lint-records"
+    "security:records": "node scripts/security-gate.mjs --lint-records",
+    "release:notes": "node scripts/release-notes-check.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

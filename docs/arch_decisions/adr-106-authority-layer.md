@@ -7,6 +7,7 @@
 > по существу, активация в политике инстанса с trust-floor, порты в PostgreSQL; UI-раздел
 > «Полномочия» read-only); остаток — flavor-роли (PROP-082).
 > **Дата:** 2026-10-23
+> **Источник:** PROP-108 (файл удалён после принятия).
 > **Связано:** [ADR-025](./adr-025-plan-act-toggle.md) «Plan/Act», [ADR-029](./adr-029-granular-permissions.md)
 > «Гранулярные permissions», [ADR-089](./adr-089-external-events-automation.md) «Внешние события» (прецедент
 > «сужение, не повышение»), [ADR-052](./adr-052-public-api-platform.md) «API-платформа»,

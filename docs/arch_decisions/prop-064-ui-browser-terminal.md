@@ -7,7 +7,7 @@
 > идея пользователя 2026-09-16 + `Фичи.md` (Terminal)); состояние проверено по `packages/ui/` и `packages/core/`.
 > **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md),
 > [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-029](./adr-029-granular-permissions.md),
-> [ADR-036](./adr-036-llm-gateway.md), [PROP-047](./prop-047-memory-gbrain.md), [ADR-099](./adr-099-egress-tls-trust.md).
+> [ADR-036](./adr-036-llm-gateway.md), [ADR-122](./adr-122-memory-product.md), [ADR-099](./adr-099-egress-tls-trust.md).
 
 **Решение:** добавить в UI две встроенные панели, синхронизированные с агентом и проектом:
 
@@ -68,7 +68,7 @@
 - Для SPA-сборки без нативного хоста `iframe` ограничен `X-Frame-Options`/CSP многих сайтов →
   реалистичен серверный прокси.
 - **Синхронизация с агентом**: агент открывает страницу/вкладку (например, документацию из памяти
-  [PROP-047](./prop-047-memory-gbrain.md) или результат `web_fetch`), человек видит её в панели.
+  [ADR-122](./adr-122-memory-product.md) или результат `web_fetch`), человек видит её в панели.
 
 ### 3. Синхронизация и общее состояние
 
@@ -112,7 +112,7 @@
   touch-first.
 - [ADR-029](./adr-029-granular-permissions.md) «Гранулярные permissions» — гейтинг терминала/браузера.
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — guard/обфускация, безопасность shell/веба.
-- [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — «открыть в браузере» для памяти/документации.
+- [ADR-122](./adr-122-memory-product.md) «Память Synth» — «открыть в браузере» для памяти/документации.
 - [PROP-065](./prop-065-ui-docs-plan-todo.md) «Просмотр документации, планов и ToDo в UI» — соседний
   UI-viewer; браузер и docs-viewer пересекаются по рендеру документов.
 - [ADR-099](./adr-099-egress-tls-trust.md) «Единый egress-слой» — общий сетевой egress для браузерного

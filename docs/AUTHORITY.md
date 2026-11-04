@@ -392,7 +392,7 @@ shadow/выключенном режиме ответ принимается п�
 - [ADR-052](./arch_decisions/adr-052-public-api-platform.md) — service-key и scopes (точечный гейт, не ось Authority-слоя).
 - [ADR-094](./arch_decisions/adr-094-observability-metrics.md) — контракт метрик и запрет id в лейблах.
 - [ADR-096](./arch_decisions/adr-096-storage-layer.md) — порты слоя хранения.
-- [ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md) / [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) / [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) — доставка контента, каталог и flavor-образы (Ф5).
+- [ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md) / [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) / [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) — доставка контента, каталог и flavor-образы (Ф5).
 - [ADR-104](./arch_decisions/adr-104-mid-turn-steering.md) — смена ввода посреди хода (принципал, Ф4).
 - [docs/API_V2.md](./API_V2.md) — §3.1 (подтверждения по WS), §5.5 (`PATCH /sessions/:id`, режим).
 - [docs/OBSERVABILITY.md](./OBSERVABILITY.md) — каталог метрик.

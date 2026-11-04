@@ -1,7 +1,9 @@
 # ADR-105: Внешние доступы — единый слой доступа к внешним сервисам (OAuth-коннекторы)
 
 > **Статус:** ✅ Реализовано — Ф0–Ф4 (2026-10-22…24): сущность `ExternalCredential`, порт (file/memory/PostgreSQL, миграция `012`), OAuth-клиент (PKCE/refresh/revoke через `egressFetch`), host-binding секретных заголовков, подстановка токена в MCP-транспорт с refresh по `401`, запрет plaintext-заголовков (+ миграция), каталог `oauth.providers`, права на привязку, HTTP-контур `/api/v2/oauth`, журнал операций, ротация мастер-ключа (в т.ч. вебхуки), правила бэкапа/переноса, UI «Доступы». Ограничения — ниже (standalone-биндинг, PG-контракт в CI).
-> **Дата:** 2026-10-23 · **Связано:** [ADR-071](./adr-071-mcp-servers-prompt.md) «MCP»,
+> **Дата:** 2026-10-23
+> **Источник:** PROP-107 (файл удалён после принятия).
+> **Связано:** [ADR-071](./adr-071-mcp-servers-prompt.md) «MCP»,
 > [ADR-076](./adr-076-git-repo-registry-ssh.md) «Git-реестр и SSH-ключи» (шифрование at-rest),
 > [ADR-096](./adr-096-storage-layer.md) «Слой хранения», [ADR-099](./adr-099-egress-tls-trust.md) «Egress-слой»,
 > [ADR-091](./adr-091-backup-restore-transfer.md) «Бэкап и перенос». Устройство подсистемы —

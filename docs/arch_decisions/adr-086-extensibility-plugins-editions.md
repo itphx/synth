@@ -27,7 +27,7 @@
 > [ADR-090](./adr-090-extension-api.md) «Extension API v1», [ADR-087](./adr-087-gateways.md) «Шлюзы (gateways)»,
 > [ADR-030](./adr-030-hooks-agent-events.md) «Hooks/Plugin SDK», [ADR-038](./adr-038-npm-packages.md) «npm-пакеты»,
 > [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы», [PROP-068](./prop-068-skills-agents-registry.md) «Реестр и каталог»,
-> [PROP-082](./prop-082-full-images-deployment.md) «Flavor-образы», [ADR-089](./adr-089-external-events-automation.md) «Платформа внешних событий»,
+> [ADR-077](./adr-077-runtime-toolchain.md) «Flavor-образы», [ADR-089](./adr-089-external-events-automation.md) «Платформа внешних событий»,
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md),
 > [ADR-042](./adr-042-hybrid-mode.md), [PROP-080](./prop-080-managed-hybrid-modes.md), [PROP-081](./prop-081-hybrid-policy-leak-protection.md),
 > [PROP-055](./prop-055-instance-exchange.md) «Обмен между инстансами», [ADR-097](./adr-097-storage-provider-class.md) «PostgreSQL».
@@ -73,7 +73,7 @@
 ## Контекст
 
 Synth открыт (лицензия MIT), но расширить его сегодня можно только форком ядра. При этом уже есть заделы:
-публикуемые npm-пакеты ([ADR-038](./adr-038-npm-packages.md)), flavor-образы ([PROP-082](./prop-082-full-images-deployment.md)),
+публикуемые npm-пакеты ([ADR-038](./adr-038-npm-packages.md)), flavor-образы ([ADR-077](./adr-077-runtime-toolchain.md)),
 контент-платформа скиллов/агентов ([ADR-046](./adr-046-skills-and-slash-commands.md)/[PROP-068](./prop-068-skills-agents-registry.md)),
 проект hooks/Plugin SDK ([ADR-030](./adr-030-hooks-agent-events.md)). Не хватает формализованного контракта расширения,
 механизма упаковки/распространения и — отдельно — места для **сервисов**, которые не должны жить в ядре
@@ -117,7 +117,7 @@ allow-list сервера, усиленный **server-scoped токенами**
   **локали (i18n)**, **провайдер/модель-паки**, flavor-образ, toolchain.
 - **Официальные vs community-редакции** с trust-уровнями (иерархия [PROP-068](./prop-068-skills-agents-registry.md)).
 - **Каталог editions**; CLI/API `edition list|install|info|update`.
-- **Сборка из пресета** смыкается с [PROP-082](./prop-082-full-images-deployment.md) (flavor-образы).
+- **Сборка из пресета** смыкается с [ADR-077](./adr-077-runtime-toolchain.md) (flavor-образы).
 - **Upstream-sync** вместо жёсткого форка (rebase/скрипт); рекомендации по именованию и **trademark policy**
   (что можно называть «Synth …»); совместимость лицензий компонентов.
 
@@ -188,7 +188,7 @@ capability-гранты (непустые `capabilities` агента), объя
   режимы `inline`/`out-of-process`).
 - **Публикуемые пакеты** [ADR-038](./adr-038-npm-packages.md) — ключевой enabler editions: 6 независимых npm-пакетов,
   тонкая `@itphx/synth`, `scripts/{build,publish,version-bump}.sh`.
-- **Flavor-образы** [PROP-082](./prop-082-full-images-deployment.md) — уже предтеча «editions» для образов
+- **Flavor-образы** [ADR-077](./adr-077-runtime-toolchain.md) — уже предтеча «editions» для образов
   (`slim/core/dev/devops/browser/full`, alpine+debian); не реализовано.
 - **Контент-платформа** [ADR-046](./adr-046-skills-and-slash-commands.md)/[PROP-068](./prop-068-skills-agents-registry.md) —
   скиллы/agent-packs, реестр, trust/install-policy/провенанс, `skill-creator`; плагины/editions/add-on'ы/шлюзы
@@ -214,7 +214,7 @@ capability-гранты (непустые `capabilities` агента), объя
 [ADR-030](./adr-030-hooks-agent-events.md) (hooks/Plugin SDK — фундамент), [ADR-038](./adr-038-npm-packages.md) (npm),
 [PROP-068](./prop-068-skills-agents-registry.md) (trust/guard/каталог/провенанс + контент-паки/`synth.pack`),
 [ADR-046](./adr-046-skills-and-slash-commands.md) (скиллы/команды/`skill-creator`),
-[PROP-082](./prop-082-full-images-deployment.md) (flavor-образы),
+[ADR-077](./adr-077-runtime-toolchain.md) (flavor-образы),
 [ADR-089](./adr-089-external-events-automation.md) (Event/Binding/Router для событийных add-on'ов и шлюзов),
 [ADR-087](./adr-087-gateways.md) (класс Gateway — шлюзы/Telegram, HA),
 [ADR-090](./adr-090-extension-api.md) (Extension API v1, манифест `synth.pack`, классы),
@@ -242,7 +242,7 @@ capability-гранты (непустые `capabilities` агента), объя
 - Хуки/hook-шина [ADR-030](./adr-030-hooks-agent-events.md) реализованы; Plugin SDK / загрузка плагинов
   (`SynthPlugin`) — **реализованы** ([ADR-090](./adr-090-extension-api.md)).
 - Реестра/каталога editions и add-on'ов нет; install-policy для них не существует.
-- [PROP-082](./prop-082-full-images-deployment.md) (flavor-образы) — не реализовано.
+- [ADR-077](./adr-077-runtime-toolchain.md) (flavor-образы) — не реализовано.
 - [PROP-068](./prop-068-skills-agents-registry.md) (реестр/каталог контента) — не реализовано; [ADR-046](./adr-046-skills-and-slash-commands.md)
   реализован частично (скиллы/команды есть, backend-админка каталога — нет).
 - **Telegram-шлюз** (`addons/synth-gateway-telegram`) — реализован и мультитенантен (см. [ADR-087](./adr-087-gateways.md)).
@@ -289,7 +289,7 @@ _Вопросы шлюза (топология приёма, HA-стейт, ре
 - [ADR-038](./adr-038-npm-packages.md) — npm-пакеты: enabler editions и распространения плагинов.
 - [PROP-068](./prop-068-skills-agents-registry.md) — переиспользуемая инфраструктура trust/guard/каталога/провенанса и единый манифест контент-паков `synth.pack`.
 - [ADR-046](./adr-046-skills-and-slash-commands.md) — механизм скиллов; агент-паки и `skill-creator`.
-- [PROP-082](./prop-082-full-images-deployment.md) — flavor-образы как предтеча editions и образов add-on'ов.
+- [ADR-077](./adr-077-runtime-toolchain.md) — flavor-образы как предтеча editions и образов add-on'ов.
 - [ADR-089](./adr-089-external-events-automation.md) — Event/Binding/Router: как шлюзы и add-on'ы приносят события в Synth.
 - [ADR-042](./adr-042-hybrid-mode.md), [PROP-080](./prop-080-managed-hybrid-modes.md), [PROP-081](./prop-081-hybrid-policy-leak-protection.md) — гибрид и политики для сторонних расширений.
 - [PROP-055](./prop-055-instance-exchange.md) — обмен между инстансами: родственная тема мультитенантности шлюза (один бот → несколько инстансов/тенантов).

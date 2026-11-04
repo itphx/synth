@@ -26,6 +26,7 @@ shared → core → executor → storage-postgres → ui → backend → sdk →
 |--------|-----|-------|
 | npmjs.org | `https://registry.npmjs.org` | `NPM_TOKEN` |
 | GitVerse Package Registry | `https://gitverse.ru/api/packages/itphx/npm/` | `GV_TOKEN` |
+| Gitea Package Registry | `https://git.itphx.ru/api/packages/itphx/npm/` | `GITEA_NPM_TOKEN` (публикация; для установки — read-токен) |
 
 Значения токенов хранятся в секретах репозитория (GitVerse CI) и в локальном окружении. **Никогда не указывайте значения токенов в документации, коде или коммитах.**
 
@@ -39,6 +40,84 @@ shared → core → executor → storage-postgres → ui → backend → sdk →
 - **Токены с `bypass 2FA` не публикуют напрямую** (с января 2027 — только staged publishing с ручным 2FA-подтверждением). При создании токена НЕ выбирать «bypass 2FA» — использовать обычный GAT.
 - **Токены GAT без права `unpublish`** не могут удалить опубликованную версию — вместо `npm unpublish` использовать `npm deprecate` (см. [Диагностика](TROUBLESHOOTING.md)).
 - **npm v12**: `allowScripts`/`--allow-git`/`--allow-remote` выключены по умолчанию. Если при установке пакета нужны lifecycle-скрипты — `npm approve-scripts`/`--allow-scripts`.
+
+## Бета-версии (Gitea)
+
+Бета-канал — быстрый путь «как у пользователя»: пакеты публикуются в **Gitea Package Registry** (`git.itphx.ru`) и ставятся оттуда одной командой, без сборки из исходников. Это нужно, чтобы проверить локальный запуск и гибридный режим на той же поставке, что получают потребители, не дожидаясь релиза в npmjs.
+
+Пошаговая процедура и диагностика — скилл `synth-beta-publish`.
+
+Версия беты: `X.Y.Z-beta.<UTC timestamp>.<sha>[.dirty]` — prerelease-суффикс отделяет её от релизных версий; `<sha>` фиксирует коммит, `.dirty` означает, что публикация собрана из грязного рабочего дерева. Публикуется под dist-tag `beta` или `next`; **`latest` не двигается** — установка `@itphx/synth` без тега и официальный Helm-чарт по-прежнему указывают на релиз.
+
+Публикуются **все 8 пакетов** в порядке релиза (`shared → core → executor → storage-postgres → ui → backend → sdk → synth`).
+
+### Локальная публикация
+
+```bash
+# токен с правом package:write в пространстве itphx
+GITEA_NPM_TOKEN=… ./scripts/publish-beta.sh --base 0.13.4
+```
+
+База `--base X.Y.Z` задаёт версию, от которой считается следующий patch; без неё скрипт берёт текущую версию `packages/synth/package.json`.
+
+| Флаг | Что делает |
+|---|---|
+| `--tag beta\|next` | dist-tag публикации (по умолчанию `beta`) |
+| `--base X.Y.Z` | база версии (пусто — следующий patch) |
+| `--no-smoke` | не проверять установку из реестра (быстрее) |
+| `--dry-run` | показать версию и план, ничего не собирать и не публиковать |
+| `--no-build` | не пересобирать пакеты (использовать готовые `dist/`) |
+
+Скрипт пишет вычисленную версию в `tmp/beta-publish/version.txt`.
+
+### Публикация из CI
+
+Actions → **`Beta packages`** ([workflow](../.gitverse/workflows/beta.yaml)), входы:
+
+- `ref` — ветка или коммит (по умолчанию `master`);
+- `base` — база версии `X.Y.Z` (пусто — следующий patch);
+- `tag` — dist-tag `beta`/`next`;
+- `smoke` — проверить установку из реестра (по умолчанию да);
+- `dry_run` — показать план без сборки и публикации.
+
+Workflow намеренно **не проходит релизные гейты** (`security-gate`, `release-notes`): бета не является релизом и не заменяет аудит. Токен `GV_GITEA_TOKEN` должен иметь `package:write`; если у него этого права нет — заводится отдельный секрет и подставляется в `env` шага публикации.
+
+### Установка
+
+```ini
+@itphx:registry=https://git.itphx.ru/api/packages/itphx/npm/
+//git.itphx.ru/api/packages/itphx/npm/:_authToken=${GITEA_NPM_TOKEN}
+```
+
+```bash
+npm i -g @itphx/synth@beta
+synth --version
+
+# отдельный home — бета не мешает рабочему инстансу
+synth serve --home ~/.local/share/synth-beta
+
+# гибрид: локальный core, сервер в K3s (test)
+synth serve --connect https://synth.k3s.itphx.loc --home ~/.local/share/synth-beta --port 4300
+```
+
+### Smoke-проверка
+
+Скрипт сам ставит опубликованный пакет в `tmp/` и проверяет `synth --version` — так ловится «опубликовано, но не устанавливается» (битые `workspace:*`, отсутствующие файлы в `files`). Отключается флагом `--no-smoke`; в CI — входом `smoke: false`.
+
+### Ретеншн
+
+```bash
+./scripts/beta-prune.sh --keep 20          # план: что будет удалено (безопасный default)
+./scripts/beta-prune.sh --keep 20 --yes    # удалить лишние беты
+```
+
+Скрипт оставляет N последних бета-версий (semver, по убыванию) и удаляет более старые во всех 8 пакетах. Удаляются **только** версии с `-beta.`; релизные версии и dist-tag `latest` не затрагиваются. Без `--yes` (и с `--dry-run`) выполняется только показ плана.
+
+### Ограничения
+
+- Бета, собранная из грязного дерева, **невоспроизводима** — суффикс `.dirty` это помечает; для проверки воспроизводимости публикуйте из чистого коммита.
+- Docker-образы и Helm-чарт беты **не публикуются** — только npm-пакеты в Gitea.
+- Токен публикации требует `package:write`; потребителю достаточно read-токена на тот же реестр.
 
 ## Docker-образ
 
@@ -237,6 +316,10 @@ Docker-образы **не** собирает (их собирает CI GitVerse
 **целиком** и подставляет его как тело релиза (при наличии файла авто-сборка из коммитов не
 запускается). Поэтому описания готовятся заранее — до публикации тега.
 
+Это **обязательное требование, а не рекомендация**: релизный гейт `release-notes` (до `build`)
+падает без непустых `<version>.md` и `<version>.en.md`. Авто-сборка из коммитов остаётся только
+аварийным фоллбеком для ручного/локального запуска.
+
 | Файл | Язык | Куда идёт тело |
 |------|------|----------------|
 | `docs/releases/<VERSION>.md` | русский | тело **GitVerse Release** (job `create-release`) |
@@ -244,6 +327,14 @@ Docker-образы **не** собирает (их собирает CI GitVerse
 
 Что писать: что вошло в релиз, ключевые изменения, **breaking changes**, блок установки
 (команды `npm`/`docker`/`helm`). Ориентир по структуре — [`docs/releases/0.10.0.md`](./releases/0.10.0.md).
+
+Локальная проверка пары:
+
+```bash
+pnpm release:notes -- --version 0.13.4
+# или
+node scripts/release-notes-check.mjs --version 0.13.4
+```
 
 Поведение `changelog.sh`:
 
@@ -260,9 +351,9 @@ Docker-образы **не** собирает (их собирает CI GitVerse
 
 | Workflow | Триггер | Содержание |
 |---|---|---|
-| `.gitverse/workflows/release.yaml` | push тега `v*` + `workflow_dispatch` | **сборка и публикация** релиза (включая GitHub-зеркало и релиз) |
-| `.gitverse/workflows/ci.yaml` | push в `main`/`master`/`feature/**`/`fix/**`/`refactor/**`/`chore/**`/`docs/**` и PR | тесты кода: typecheck, lint, тесты `shared`/`core`/`executor`/`storage-postgres`/`backend`/`ui`/`sdk`, `helm lint` + `template`, `pnpm audit --audit-level=high` (report-only) |
-| `.gitverse/workflows/ci-docs.yaml` | push в `main`/`master`/`feature/**` и PR, изменения по `paths` (доки/AGENTS.md/скрипты проверок) | `node scripts/adr-check.mjs` + `node scripts/docs-link-check.mjs` |
+| `.gitverse/workflows/release.yaml` | push тега `v*` + `workflow_dispatch` | **сборка и публикация** релиза (включая GitHub-зеркало и релиз); до сборки артефактов — обязательные гейты `security-gate` и `release-notes` (`build.needs`) |
+| `.gitverse/workflows/ci.yaml` | push в `main`/`master`/`feature/**`/`fix/**`/`refactor/**`/`chore/**`/`docs/**` и PR | тесты кода: typecheck, lint, тесты `shared`/`core`/`executor`/`storage-postgres`/`backend`/`ui`/`sdk`, задача `test-postgres` (контрактный suite на живой PostgreSQL), `helm lint` + `template`, `secret-scan` (дерево + история, **блокирующая**), `pnpm audit --audit-level=high` (report-only) + ратчет уязвимостей дельтой к baseline (report-only) |
+| `.gitverse/workflows/ci-docs.yaml` | push в `main`/`master`/`feature/**` и PR, изменения по `paths` (доки/AGENTS.md/скрипты проверок) | `node scripts/adr-check.mjs` + `node scripts/docs-link-check.mjs` + `node scripts/security-gate.mjs --lint-records` (записи аудита; pnpm не ставится) |
 
 Разделение сделано через `paths`/`paths-ignore`: у `ci.yaml` в `paths-ignore` есть `docs/**` и `**/*.md`, поэтому доковые пуши не гоняют тяжёлые джобы; у `ci-docs.yaml` наоборот — `paths` только по докам, и джоба не ставит pnpm (скрипты на голом node).
 
@@ -270,6 +361,30 @@ Docker-образы **не** собирает (их собирает CI GitVerse
 host-режим): доступен docker-демон, облачный лимит 30 минут не действует, кэш pnpm/docker
 переиспользуется между прогонами. Это внутренняя инфраструктура: топология, регистрация, обновление
 и диагностика — в приватном репозитории `synth-deploy` (`docs/CI_RUNNERS.md`).
+
+### Порядок сборки в CI
+
+`pnpm install --frozen-lockfile` → `pnpm --filter @itphx/synth-shared build` (обязательно перед
+typecheck) → `pnpm --filter @itphx/synth-core build` (нужен backend'у и typecheck драйвера
+хранилища) → `pnpm --filter @itphx/synth-executor build` (типы ссылаются на dist core) →
+`pnpm --filter @itphx/synth-storage-postgres build` → `pnpm typecheck` → `pnpm lint` → `pnpm test`.
+
+Без сборки shared/core typecheck не найдёт типы. Рекурсивные задачи (`pnpm typecheck`/`lint`/`test`
+= `pnpm --recursive run …`) идут по **намеренным** циклам `core ↔ @itphx/synth-storage-postgres` и
+`core ↔ @itphx/synth-executor` (core подключает оба пакета динамическим `import()`, пакеты —
+peer-dep на core) — они разрешены `ignoreWorkspaceCycles: true` в `pnpm-workspace.yaml` (pnpm ≥12
+иначе роняет их с `ERR_PNPM_TASK_CYCLE`; между самими задачами зависимостей нет — порядок сборки
+задают явные `--filter` выше). Рекурсивные задачи идут последовательно по пакетам
+(`workspaceConcurrency: 1`): иначе vitest пакетов конкурируют за CPU и тесты деградации `core`
+ловят `Test timed out in 20000ms`.
+
+Драйвер собирается и в релизном гейте `lint-and-test` (`release.yaml`): рекурсивный `pnpm test`
+включает тесты деградации core, которые не гейтятся `SYNTH_TEST_POSTGRES_DSN`, но динамически
+импортируют `@itphx/synth-storage-postgres` — без его `dist` прогон падает. Контрактный suite
+драйвера против **живой** PostgreSQL — отдельная задача `test-postgres` (`SYNTH_TEST_POSTGRES_DSN`;
+БД поднимает `scripts/ci-postgres.sh`: секрет `GV_TEST_POSTGRES_DSN` → локальный `initdb` → docker
+`postgres:17-alpine`). `security-gate` и `release-notes` гейтят сборку артефактов
+(`build.needs`) — политика и чек-лист: [docs/security/README.md](./security/README.md).
 
 ### Запуск релиза
 
@@ -285,9 +400,10 @@ host-режим): доступен docker-демон, облачный лими�
 2. Дождаться зелёного `ci.yaml` на `master` (он и есть «коммит аудита»).
 3. Bump версии одним коммитом в `master`: 8 × `packages/*/package.json`, `packages/shared/src/version.ts`,
    `charts/synth/Chart.yaml` (`version` + `appVersion`). Проверить, что `ci.yaml` на этом коммите зелёный.
-4. Положить запись внутреннего аудита `docs/security/releases/<version>.json` (её проверяет `security-gate`).
-5. Поставить **аннотированный** тег на коммит с записью и запушить: `git tag -a v<version> -m "…" && git push origin v<version>`.
-6. Не пересоздавать тег и не отменять прогон «на лету»: повторный push тега запускает новый прогон, а
+4. Положить пару `docs/releases/<version>.md` + `.en.md` и проверить `pnpm release:notes -- --version <version>`.
+5. Положить запись внутреннего аудита `docs/security/releases/<version>.json` (её проверяет `security-gate`).
+6. Поставить **аннотированный** тег на коммит с записью и запушить: `git tag -a v<version> -m "…" && git push origin v<version>`.
+7. Не пересоздавать тег и не отменять прогон «на лету»: повторный push тега запускает новый прогон, а
    у GitVerse незавершённые джобы предыдущего ещё занимают слоты — платформа может снять оба
    (наблюдалось: джобы помечаются `failure` одновременно, включая не запускавшиеся шаги).
 
@@ -302,7 +418,7 @@ Helm-чарт перезаписывается тем же содержимым,
 
 Ручной `workflow_dispatch` сохранён в `release.yaml` (пункты 1–2) — это единственный способ запустить сборку/публикацию без тега.
 
-Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → публикация Helm-чарта (`publish-helm`) → создание GitVerse Release → GitHub-зеркало (`publish-github`: push `main`+теги, GitHub Release).
+Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → проверка заметок (`release-notes`) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → публикация Helm-чарта (`publish-helm`) → создание GitVerse Release → GitHub-зеркало (`publish-github`: push `main`+теги, GitHub Release).
 
 npm-пакеты публикуются **только** из GitVerse (`publish-npmjs`/`publish-gitverse-npm`) — GitHub-контур npm не публикует.
 
@@ -456,14 +572,14 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 | `synth-backend` | ✅ | ✅ (зеркало) | — |
 | `synth-ui` | ✅ | ✅ (зеркало) | — |
 
-Ограничение по размеру артефактов (~500 МБ) касается не базовых образов, а **будущих дополнительных/full-образов** (flavor-образы из PROP-082: `dev`, `devops`, `browser`, `full` и т.п.) — когда они появятся, они пойдут **только в Docker Hub**. Публикуется только версионный тег (без `latest`) — та же политика, что и в GitVerse-контуре.
+Ограничение по размеру артефактов (~500 МБ) касается **базовых** образов в GitVerse/GHCR. Flavor-образы (`synth-backend:<версия>-<flavor>`, `synth-executor:<версия>-<flavor>`) в GitVerse/GHCR не публикуются — только в приватный Gitea `git.itphx.ru/itphx/*` (см. §«Образы исполнителей и flavor'ы»), где лимита нет; slim control plane `synth-backend:<версия>` дополнительно публикуется и в Gitea. Публикуется только версионный тег (без `latest`) — та же политика, что и в GitVerse-контуре.
 
 ### Что делает CI GitVerse
 
 Джоба `publish-github` в `.gitverse/workflows/release.yaml` запускается после сборки/публикации npm и Docker (`build-docker`) и после джобы `changelog`:
 
 1. **Зеркало:** push `master→main` и всех тегов в `https://github.com/itphx/synth.git` (только `main` + теги, никаких других ветвей);
-2. **GitHub Release** для тега `v<version>` — тело **на английском**: `bash scripts/changelog.sh --lang en` берёт `docs/releases/<version>.en.md` (при отсутствии — русское описание с предупреждением, затем авто-сборка из коммитов), плюс англоязычный блок установки «Installation» (npm из npmjs.org/GitVerse, образ из `ghcr.io/itphx/synth:<version>`); создание идемпотентно (если релиз по тегу есть — тело обновляется);
+2. **GitHub Release** для тега `v<version>` — тело **на английском**: `bash scripts/changelog.sh --lang en` берёт `docs/releases/<version>.en.md` (файл обязателен; гейт `release-notes` не пропустит релиз без него; фоллбек на русское описание/авто-сборку — только аварийный, для ручного `release-github.sh`), плюс англоязычный блок установки «Installation» (npm из npmjs.org/GitVerse, образ из `ghcr.io/itphx/synth:<version>`); создание идемпотентно (если релиз по тегу есть — тело обновляется);
 3. **Ассеты — best-effort:** `cli.js` (артефакт джобы `build`), Helm-чарт (`helm package charts/synth`, версия из `Chart.yaml`), `SHA256SUMS`. Если файла нет — печатается предупреждение и работа продолжается; ошибка загрузки ассета **не валит** джобу, но видна в логе. На GitHub используется штатный `uploads.github.com` (в отличие от GitVerse API, который на ассеты отдаёт 500 — там ассет также best-effort).
 
 Все три базовых образа (`synth`, `synth-backend`, `synth-ui`) собираются в джобе `build-docker` (kaniko) сразу в **два** реестра: `gitverse.ru/itphx/<image>:<version>` и `ghcr.io/itphx/<image>:<version>`. Авторизация в GHCR — из секрета `GH_TOKEN` (переиспользуется всеми тремя kaniko-шагами).

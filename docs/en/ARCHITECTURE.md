@@ -189,8 +189,9 @@ Key elements:
 
 ## Key decisions (AD)
 
-The full index of architecture decisions (AD) with statuses is in the root
-[AGENTS.md](../../AGENTS.md), in the "Architecture decision index" section.
+The full index of architecture decisions (AD) with statuses is in
+[docs/arch_decisions/README.md](../arch_decisions/README.md); the summary is in the root
+[AGENTS.md](../../AGENTS.md), in the "Decision and proposal index (ADR / PROP)" section.
 
 ## Storage layer (backends)
 

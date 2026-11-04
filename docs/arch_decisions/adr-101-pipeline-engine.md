@@ -272,6 +272,13 @@
   ограничиться API и событиями? В коде такого тула **нет**; триггер `kind: 'tool'` доступен через API
   (`POST /api/v2/projects/:id/pipelines/:pid/runs` — [API_V2.md](../../API_V2.md) §5.35), решение
   (добавлять тул или оставить API) — открыто.
+
+  > **Обновлено 2026-11-04:** на момент обновления тулы пайплайнов **есть** — `pipeline_run`,
+  > `pipeline_run_status`, `pipeline_run_list`, `pipeline_run_resume`, `pipeline_run_cancel`
+  > (`packages/core/src/engine/tools/pipeline-runs.ts`), а также `pipeline_list`/`pipeline_get`/
+  > `pipeline_save`/`pipeline_publish`/`pipeline_delete`/`pipeline_templates`/`pipeline_instantiate`;
+  > регистрация — `packages/core/src/engine/tools/index.ts`. Вопрос «нужен ли отдельный тул»
+  > закрыт реализацией; текст выше — история.
 - **Rollback/exit-стратегия на уровне цепочки** (переход к альтернативной ветке; для необратимых шагов
   push/deploy — компенсирующие действия, а не откат). Сейчас у прогона есть только `exit`-семантика
   (`session|file|gateway|none`) и ретраи/таймауты шага; отката в границах прогона нет.
@@ -337,6 +344,14 @@
   `hydrateStepAttachments` поверх `hydrateMessageAttachments` (ADR-115): очистка метаданных,
   модальности модели шага, лимит base64, пометка «не доставлено»; для text-only модели —
   `derive` aux-моделью через `GatewayProvider` (ADR-036). Формы вложения в UI запуска нет (остаток).
+
+## Обновлено (2026-11-04)
+
+- **Тулы пайплайнов реализованы** (уточнение к §«Открытые вопросы»): `pipeline_list`, `pipeline_get`,
+  `pipeline_save`, `pipeline_publish`, `pipeline_delete`, `pipeline_run`, `pipeline_run_status`,
+  `pipeline_run_list`, `pipeline_run_resume`, `pipeline_run_cancel`, `pipeline_templates`,
+  `pipeline_instantiate` — `packages/core/src/engine/tools/pipeline-{authoring,runs,templates}.ts`,
+  регистрация в `engine/tools/index.ts`. Утверждение «в коде такого тула нет» устарело.
 
 ## История
 

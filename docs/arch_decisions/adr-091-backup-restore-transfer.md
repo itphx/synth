@@ -2,6 +2,7 @@
 
 > **Статус:** ⚠️ Частично — MVP реализован (`synth backup`/`restore`/`doctor`); admin-API/UI добавлены (`/api/v2/maintenance`, раздел «Обслуживание»); шифрование архива (`--encrypt`) реализовано; портативный экспорт/импорт проекта (`synth project export|import`) реализован (ядро + CLI); остаток — онлайн-консистентность/PITR.
 > **Дата:** 2026-10-16
+> **Источник:** PROP-091 (файл удалён после принятия).
 > **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [PROP-055](./prop-055-instance-exchange.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
 ## Контекст

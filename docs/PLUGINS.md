@@ -703,7 +703,7 @@ const tool: Parameters<PluginFacade['registerTool']>[0] = {
 
 Ядро владеет данными памяти инстанса (факты и индексы с чанками — порты слоя хранения,
 [ADR-096](./arch_decisions/adr-096-storage-layer.md)), плагин — логикой памяти
-([PROP-047](./arch_decisions/prop-047-memory-gbrain.md)). Фасад даёт плагину **готовый доступ к
+([ADR-122](./arch_decisions/adr-122-memory-product.md)). Фасад даёт плагину **готовый доступ к
 этим данным** — с теми же методами, что у портов:
 
 ```typescript

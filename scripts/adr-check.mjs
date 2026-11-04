@@ -8,16 +8,19 @@
  *
  * Что делает:
  *   1. `--write` — парсит `> **Статус:**` (канонический токен) и H1 каждого `docs/arch_decisions/adr-*.md`
- *      и `docs/arch_decisions/prop-*.md` и пересобирает: таблицы в `docs/arch_decisions/README.md`
- *      (Решения / Частично / Принятые предложения (история) / Предложения / Vision / Заменено /
- *      Отклонено / Legacy) и строки индекса ADR/PROP в `AGENTS.md` (между маркерами
- *      `<!-- ad-index:start -->` / `<!-- ad-index:end -->`).
+ *      и `docs/arch_decisions/prop-*.md` и пересобирает таблицы в `docs/arch_decisions/README.md`
+ *      (Решения / Частично / Предложения / Vision / Заменено / Отклонено / Legacy и сводная секция
+ *      «Принятые и поглощённые (файлы удалены)» — по строкам `Источник`/`Принято из`/`Поглощено` в шапках)
+ *      и сводку индекса ADR/PROP в `AGENTS.md` (между маркерами
+ *      `<!-- ad-index:start -->` / `<!-- ad-index:end -->`: количество документов и разбивка
+ *      по статусам со ссылкой на README — полные таблицы живут только в README).
  *   2. проверяет, что все относительные ссылки на `adr-*.md` / `prop-*.md` (в md/ts/tsx) резолвятся, что
- *      каждый документ присутствует в индексе и что нет ссылок на несуществующий документ (упоминания
- *      «голых» номеров прототипных ADR 001–021 — warning).
- *   3. предупреждает, если `✅ Реализовано` без раздела «Статус в коде»/«Реализация», если
- *      actionable-предложение (`🧩 Предложение`) без строки `> **Решение до:**`, и если
- *      `✅ Принято` указано без существующего `(ADR-NNN)` (или не у предложения).
+ *      каждый документ присутствует в индексе и что нет ссылок на несуществующий документ. Упоминания
+ *      удалённых (принятых/поглощённых) PROP по голому id и их файлов-призраков — не предупреждение:
+ *      такие ссылки уже история; ссылка-путь на несуществующий файл остаётся ошибкой.
+ *   3. предупреждает, если `✅ Реализовано` без раздела «Статус в коде»/«Реализация» и если
+ *      actionable-предложение (`🧩 Предложение`) без строки `> **Решение до:**`; ошибка — если
+ *      `✅ Принято` встретилось в файле (принятое предложение должно быть удалено).
  *
  * Классы документов, правила ведения и жизненный цикл — docs/ARCH_DECISIONS.md.
  */
@@ -56,12 +59,14 @@ const TOKEN_REJECTED = '🗑 Отклонено';
 const SECTIONS = [
   { title: 'Решения', tokens: [TOKEN_DONE] },
   { title: 'Частично', tokens: [TOKEN_PARTIAL] },
-  { title: 'Принятые предложения (история)', tokens: [TOKEN_ADOPTED] },
   { title: 'Предложения', tokens: [TOKEN_PROPOSAL, TOKEN_ICEBOX] },
   { title: 'Vision', tokens: [TOKEN_VISION] },
   { title: 'Заменено', tokens: [TOKEN_SUPERSEDED] },
   { title: 'Отклонено', tokens: [TOKEN_REJECTED] },
 ];
+
+/** Заголовок секции удалённых предложений в README. */
+const REMOVED_SECTION_TITLE = 'Принятые и поглощённые (файлы удалены)';
 
 /** ADR прототипа без файлов в каталоге: упоминания в тексте допустимы. */
 const PROTOTYPE_MENTIONS = new Set([
@@ -80,6 +85,12 @@ const STATUS_RE = /^\s*>?\s*\*\*Статус:\*\*\s*(.+)$/m;
 const IMPL_SECTION_RE = /^#{2,4}\s+.*(Статус в коде|Статус реализации|Реализация)/m;
 /** Строка со сроком решения по proposal. */
 const DEADLINE_RE = /^\s*>?\s*\*\*Решение до:\*\*\s*(.+)$/m;
+/** Шапка ADR: источник — принятое предложение (`Источник`/`Принято из`). */
+const SOURCE_RE = /^\s*>\s*\*\*(?:Источник|Принято из):\*\*\s*(.*)$/m;
+/** Шапка PROP: поглощённое предложение-дубль. */
+const ABSORBED_RE = /^\s*>\s*\*\*Поглощено:\*\*\s*(.*)$/m;
+/** Идентификатор предложения в тексте шапки. */
+const PROP_ID_RE = /\bPROP-(\d{3})\b/;
 
 // ── Утилиты ────────────────────────────────────────────────────────────────
 
@@ -126,7 +137,7 @@ function walk(dir, out = []) {
 /** Канонический токен статуса по строке `> **Статус:** …`. */
 function detectToken(statusLine) {
   if (!statusLine) return null;
-  // Принятое предложение: файл остаётся в каталоге как история, статус терминальный.
+  // «Принято» распознаём только чтобы потребовать удалить файл (статус не используется).
   if (/Принято/.test(statusLine)) return TOKEN_ADOPTED;
   if (statusLine.includes(TOKEN_VISION)) return TOKEN_VISION;
   if (statusLine.includes(TOKEN_ICEBOX)) return TOKEN_ICEBOX;
@@ -154,6 +165,10 @@ function parseDocFile(path, legacy) {
   const statusLine = (text.match(STATUS_RE) || [])[1] || '';
   const deadline = (text.match(DEADLINE_RE) || [])[1] || '';
   const adoptedMatch = statusLine.match(/Принято\s*\(ADR-(\d+)\)/);
+  const sourceLine = (text.match(SOURCE_RE) || [])[1] || '';
+  const absorbedLine = (text.match(ABSORBED_RE) || [])[1] || '';
+  const sourceMatch = sourceLine.match(PROP_ID_RE);
+  const absorbedMatch = absorbedLine.match(PROP_ID_RE);
   return {
     num,
     kind,
@@ -165,11 +180,23 @@ function parseDocFile(path, legacy) {
     status: statusLine.trim(),
     token: detectToken(statusLine),
     adoptedAs: adoptedMatch ? adoptedMatch[1] : null,
+    source: sourceMatch ? `PROP-${sourceMatch[1]}` : null,
+    sourceNote: sourceMatch ? sourceNoteOf(sourceLine) : '',
+    absorbed: absorbedMatch ? `PROP-${absorbedMatch[1]}` : null,
     deadline: deadline.trim(),
     legacy: Boolean(legacy),
     hasImplSection: IMPL_SECTION_RE.test(text),
     lines: text.split('\n').length,
   };
+}
+
+/** Примечание из скобок шапки без служебного «файл удалён…»; пустое — значение по умолчанию. */
+function sourceNoteOf(line) {
+  const inner = (line.match(/\(([^)]*)\)/) || [])[1] || '';
+  return inner
+    .replace(/;?\s*файл удалён[^;)]*/i, '')
+    .replace(/^[;,:\s]+|[;,:\s]+$/g, '')
+    .trim();
 }
 
 function readAllDocs() {
@@ -214,13 +241,34 @@ function parseDescriptions(text, { stripLinks = false } = {}) {
 
 const README_HEADER = `# Архитектурные решения и предложения (ADR / PROP)
 
-> Индекс каталога: **ADR** — принятые решения (\`adr-*.md\`), **PROP** — предложения (\`prop-*.md\`); принятое предложение остаётся в каталоге как история со статусом \`✅ Принято (ADR-NNN)\`.
+> Индекс каталога: **ADR** — принятые решения (\`adr-*.md\`), **PROP** — предложения (\`prop-*.md\`). Принятое или поглощённое предложение удаляется; связь — в секции «${REMOVED_SECTION_TITLE}».
 > Правила ведения, жизненный цикл и классы документов — [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md);
 > предложения и сроки решений — [docs/roadmap.md](../roadmap.md).
-> Номера стабильны: файлы не переносятся и не удаляются (ссылок на id по репозиторию — тысячи).
+> Номера стабильны и не переиспользуются; ADR-файлы не удаляются.
 
 Таблицы собираются автоматически — вручную не правь:
 \`node scripts/adr-check.mjs --write\` (проверка — \`node scripts/adr-check.mjs\`).`;
+
+/** Принятые и поглощённые предложения: шапка ADR/PROP → Map<PROP-ID, {targetId, note}>. */
+function collectRemoved(docs) {
+  const byId = new Map(docs.map((doc) => [doc.id, doc]));
+  const removed = new Map();
+  for (const doc of docs) {
+    if (doc.source && !byId.has(doc.source)) {
+      removed.set(doc.source, { targetId: doc.id, note: doc.sourceNote || 'принято' });
+    }
+    if (doc.absorbed && !byId.has(doc.absorbed)) {
+      removed.set(doc.absorbed, { targetId: doc.id, note: doc.sourceNote || 'дубль; поглощён' });
+    }
+  }
+  return removed;
+}
+
+/** Ссылка на живой документ каталога из README (`./<файл>`); нет файла — просто id. */
+function docLinkById(docs, id) {
+  const doc = docs.find((d) => d.id === id);
+  return doc ? `[${id}](./${doc.fileName})` : id;
+}
 
 /** Ячейка статуса: у принятого предложения — с номером ADR. */
 function statusCell(doc) {
@@ -244,6 +292,16 @@ function renderReadme(docs, descriptions) {
     }
     lines.push('');
   }
+  const removed = [...collectRemoved(docs).entries()]
+    .sort(([a], [b]) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')));
+  if (removed.length > 0) {
+    lines.push(`## ${REMOVED_SECTION_TITLE}`, '');
+    lines.push('| ID | Куда | Примечание |', '|----|------|------------|');
+    for (const [id, info] of removed) {
+      lines.push(`| ${id} | ${docLinkById(docs, info.targetId)} | ${info.note} |`);
+    }
+    lines.push('');
+  }
   const legacy = docs.filter((doc) => doc.legacy);
   if (legacy.length > 0) {
     lines.push('## Legacy', '');
@@ -257,30 +315,40 @@ function renderReadme(docs, descriptions) {
   const counts = [
     `Решения: ${docs.filter((d) => d.token === TOKEN_DONE).length}`,
     `Частично: ${docs.filter((d) => d.token === TOKEN_PARTIAL).length}`,
-    `Принятые предложения: ${docs.filter((d) => d.token === TOKEN_ADOPTED).length}`,
     `Предложения: ${docs.filter((d) => d.token === TOKEN_PROPOSAL).length}`,
     `Vision: ${docs.filter((d) => d.token === TOKEN_VISION).length}`,
     `Icebox: ${docs.filter((d) => d.token === TOKEN_ICEBOX).length}`,
     `Legacy: ${docs.filter((d) => d.legacy).length}`,
   ];
-  lines.push('---', '', `Всего документов: ${docs.length} (${counts.join(', ')}).`, '');
+  lines.push(
+    '---',
+    '',
+    `Всего документов: ${docs.length} (${counts.join(', ')}).`,
+    `Удалено: ${removed.length} (принятые и поглощённые предложения; связь — в таблице «${REMOVED_SECTION_TITLE}»).`,
+    '',
+  );
   return lines.join('\n');
 }
 
 // ── Генерация индекса в AGENTS.md ──────────────────────────────────────────
 
-function renderAgentsIndex(docs, descriptions) {
-  const lines = [
-    INDEX_START,
-    '| ID | Суть | Статус | Файл |',
-    '|----|------|--------|------|',
+function renderAgentsIndex(docs) {
+  const removed = collectRemoved(docs);
+  const counts = [
+    `Решения: ${docs.filter((d) => d.token === TOKEN_DONE).length}`,
+    `Частично: ${docs.filter((d) => d.token === TOKEN_PARTIAL).length}`,
+    `Предложения: ${docs.filter((d) => d.token === TOKEN_PROPOSAL).length}`,
+    `Vision: ${docs.filter((d) => d.token === TOKEN_VISION).length}`,
+    `Icebox: ${docs.filter((d) => d.token === TOKEN_ICEBOX).length}`,
+    `Legacy: ${docs.filter((d) => d.legacy).length}`,
   ];
-  for (const doc of docs.filter((d) => !d.legacy)) {
-    const desc = descriptions.get(doc.id) || doc.title;
-    lines.push(`| ${doc.id} | ${desc} | ${statusCell(doc)} | [${doc.id.toLowerCase()}](./${doc.rel}) |`);
-  }
-  lines.push(INDEX_END);
-  return lines.join('\n');
+  return [
+    INDEX_START,
+    `Всего документов: ${docs.length} (${counts.join(', ')}).`,
+    `Удалено: ${removed.size} (принятые и поглощённые предложения).`,
+    'Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).',
+    INDEX_END,
+  ].join('\n');
 }
 
 function replaceAgentsIndex(text, block) {
@@ -312,8 +380,12 @@ function resolveDocTarget(file, target) {
   return candidates.find((c) => existsSync(c)) || null;
 }
 
-function checkLinks(docs) {
+function checkLinks(docs, removed) {
   const files = walk(ROOT);
+  const isRemovedPropFile = (fileName) => {
+    const m = fileName.match(/^prop-(\d+)-/);
+    return Boolean(m && removed.has(`PROP-${m[1]}`));
+  };
   for (const file of files) {
     if (!SCAN_EXT.test(file)) continue;
     const rel = relRoot(file);
@@ -347,14 +419,16 @@ function checkLinks(docs) {
       while ((m = DOC_FILE_TOKEN.exec(line)) !== null) {
         const target = m[0];
         if (checked.has(target)) continue;
+        if (isRemovedPropFile(target)) continue;
         if (!resolveDocTarget(file, target)) {
           warn(`${rel}:${idx + 1}: устаревшее упоминание файла документа — ${target}`);
         }
       }
-      // 4. номера документов без файла (прототипные 001–021 допустимы)
+      // 4. номера документов без файла (прототипные 001–021 и удалённые PROP допустимы)
       DOC_MENTION_RE.lastIndex = 0;
       let mention;
       while ((mention = DOC_MENTION_RE.exec(line)) !== null) {
+        if (removed.has(mention[0])) continue;
         const num = mention[0].replace(/^(?:ADR|PROP)-/, '');
         const exists = docs.some((doc) => doc.num === num);
         if (!exists && !PROTOTYPE_MENTIONS.has(num)) {
@@ -389,17 +463,13 @@ function checkStatusIntegrity(docs) {
       warn(`${doc.rel}: неканонический статус — «${doc.status || 'нет строки Статус'}»`);
     }
     if (doc.token === TOKEN_ADOPTED) {
-      if (doc.kind !== 'PROP') warn(`${doc.rel}: статус «${TOKEN_ADOPTED}» допустим только для предложения`);
-      if (!doc.adoptedAs) warn(`${doc.rel}: «${TOKEN_ADOPTED}» без ссылки на ADR — ожидается «Принято (ADR-NNN)»`);
-      else if (!docs.some((d) => d.kind === 'ADR' && d.num === doc.adoptedAs)) {
-        warn(`${doc.rel}: принято как ADR-${doc.adoptedAs}, но такого ADR в каталоге нет`);
-      }
+      error(`${doc.rel}: «принятое предложение должно быть удалено; статус не используется»`);
     }
     if (doc.kind === 'ADR' && [TOKEN_PROPOSAL, TOKEN_VISION, TOKEN_ICEBOX, TOKEN_ADOPTED].includes(doc.token)) {
       warn(`${doc.rel}: статус предложения у ADR — «${doc.status}»`);
     }
     if (doc.kind === 'PROP' && (doc.token === TOKEN_DONE || doc.token === TOKEN_PARTIAL)) {
-      warn(`${doc.rel}: ADR-статус у предложения — используйте «${TOKEN_ADOPTED} (ADR-NNN)»`);
+      warn(`${doc.rel}: ADR-статус у предложения — принятое предложение оформляется ADR, а файл PROP удаляется`);
     }
   }
 }
@@ -414,8 +484,7 @@ function main() {
     writeText(README_PATH, renderReadme(docs, descriptions));
 
     const agents = readText(AGENTS_PATH);
-    const agentsDescriptions = parseDescriptions(agents);
-    const block = renderAgentsIndex(docs, agentsDescriptions);
+    const block = renderAgentsIndex(docs);
     const updated = replaceAgentsIndex(agents, block);
     if (updated === null) {
       console.error(`✖ AGENTS.md: не найдены маркеры ${INDEX_START} / ${INDEX_END} — индекс не обновлён`);
@@ -427,7 +496,7 @@ function main() {
     return;
   }
 
-  checkLinks(docs);
+  checkLinks(docs, collectRemoved(docs));
   checkIndexCompleteness(docs);
   checkStatusIntegrity(docs);
 

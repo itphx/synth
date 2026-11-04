@@ -4,7 +4,7 @@
 > **Дата:** 2026-10-24
 > **Связано:** [ADR-090](./adr-090-extension-api.md) (слой плагинов — канон; здесь расширяется его периметр),
 > [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (порты, контрактный suite),
-> [ADR-036](./adr-036-llm-gateway.md) (Gateway), [PROP-047](./prop-047-memory-gbrain.md) (память как плагин),
+> [ADR-036](./adr-036-llm-gateway.md) (Gateway), [ADR-122](./adr-122-memory-product.md) (память как плагин),
 > [ADR-094](./adr-094-observability-metrics.md). Устройство — [docs/MEMORY.md](../MEMORY.md),
 > авторская спека — [docs/PLUGINS.md](../PLUGINS.md) §4.5–4.7.
 
@@ -12,7 +12,7 @@
 
 [ADR-090](./adr-090-extension-api.md) дал плагину три точки (`promptBlocks`, `llmFilters`, `tools`) и фасад
 из четырёх методов — достаточно, чтобы **подмешать** контент в промпт, но не чтобы **быть памятью**
-([PROP-047](./prop-047-memory-gbrain.md)): плагину негде хранить факты и индексы (инвариант 2 запрещает
+([ADR-122](./adr-122-memory-product.md)): плагину негде хранить факты и индексы (инвариант 2 запрещает
 писать в `$SYNTH_DATA_DIR` мимо порта), нечем считать эмбеддинги (провайдер недоступен, а прямой вызов —
 нарушение инварианта 3) и неоткуда взять свои настройки (`plugins.json` их хранит, плагин — не читает).
 Плюс inline-тул плагина получал `ToolContext.extra` с `sessionManager`/`projectStore`/`eventBus`, то есть

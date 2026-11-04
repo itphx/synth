@@ -1,9 +1,9 @@
 # Архитектурные решения и предложения (ADR / PROP)
 
-> Индекс каталога: **ADR** — принятые решения (`adr-*.md`), **PROP** — предложения (`prop-*.md`); принятое предложение остаётся в каталоге как история со статусом `✅ Принято (ADR-NNN)`.
+> Индекс каталога: **ADR** — принятые решения (`adr-*.md`), **PROP** — предложения (`prop-*.md`). Принятое или поглощённое предложение удаляется; связь — в секции «Принятые и поглощённые (файлы удалены)».
 > Правила ведения, жизненный цикл и классы документов — [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md);
 > предложения и сроки решений — [docs/roadmap.md](../roadmap.md).
-> Номера стабильны: файлы не переносятся и не удаляются (ссылок на id по репозиторию — тысячи).
+> Номера стабильны и не переиспользуются; ADR-файлы не удаляются.
 
 Таблицы собираются автоматически — вручную не правь:
 `node scripts/adr-check.mjs --write` (проверка — `node scripts/adr-check.mjs`).
@@ -86,23 +86,14 @@
 | ADR-115 | Мультимодальный ввод — вложения сообщений (Part, blob-порт, API, UI) | ⚠️ Частично | [adr-115-multimodal-input.md](./adr-115-multimodal-input.md) |
 | ADR-116 | Состояние инстанса в SQL и blob-порты на томе | ⚠️ Частично | [adr-116-instance-state-and-blob-ports.md](./adr-116-instance-state-and-blob-ports.md) |
 | ADR-118 | Поток сообщений v2 — ход как последовательность шагов | ⚠️ Частично | [adr-118-message-stream-v2.md](./adr-118-message-stream-v2.md) |
-
-## Принятые предложения (история)
-
-| ID | Тема | Статус | Файл |
-|----|------|--------|------|
-| PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI | ✅ Принято (ADR-114) | [prop-049-git-worktrees.md](./prop-049-git-worktrees.md) |
-| PROP-082 | Flavor-образы с toolchain: `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance | ✅ Принято (ADR-077) | [prop-082-full-images-deployment.md](./prop-082-full-images-deployment.md) |
-| PROP-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер | ✅ Принято (ADR-115) | [prop-085-multimodal-input.md](./prop-085-multimodal-input.md) |
-| PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | ✅ Принято (ADR-111) | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
-| PROP-097 | Фоновые процессы — реестр и контроль через UI | ✅ Принято (ADR-113) | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
-| PROP-106 | Файловые порты инстанса в SQL: единое состояние при нескольких репликах | ✅ Принято (ADR-116) | [prop-106-file-ports-to-sql.md](./prop-106-file-ports-to-sql.md) |
+| ADR-120 | Бюджет памяти инстанса — лёгкие листинги, bounded-кэши и капы чтения | ⚠️ Частично | [adr-120-memory-budget.md](./adr-120-memory-budget.md) |
+| ADR-121 | Portable offline-дистрибутивы — pinned Node и ripgrep, SHA256SUMS | ⚠️ Частично | [adr-121-offline-portable-distribution.md](./adr-121-offline-portable-distribution.md) |
+| ADR-122 | Память как продукт — порты, плагин, индексы и recall | ⚠️ Частично | [adr-122-memory-product.md](./adr-122-memory-product.md) |
 
 ## Предложения
 
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
-| PROP-031 | Verification синт | 🧩 Предложение | [prop-031-verification-agent.md](./prop-031-verification-agent.md) |
 | PROP-037 | Security step перед коммитом | 🧩 Предложение | [prop-037-commit-security-step.md](./prop-037-commit-security-step.md) |
 | PROP-048 | Self-help скиллы и admin-MCP: dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | 🧩 Предложение | [prop-048-self-help-skills-admin-mcp.md](./prop-048-self-help-skills-admin-mcp.md) |
 | PROP-053 | CLI и TUI: паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI | 🧩 Предложение | [prop-053-cli-tui.md](./prop-053-cli-tui.md) |
@@ -119,9 +110,7 @@
 | PROP-081 | Политики гибрида и защита от утечек: серверные политики (forbidden/remote-only/full, publish/fork allow | 🧩 Предложение | [prop-081-hybrid-policy-leak-protection.md](./prop-081-hybrid-policy-leak-protection.md) |
 | PROP-083 | Кастомизация инстанса и брендинг: приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings | 🧩 Предложение | [prop-083-instance-customization-branding.md](./prop-083-instance-customization-branding.md) |
 | PROP-093 | Версионирование документации: версионные подкаталоги портала + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093-docs-versioning.md](./prop-093-docs-versioning.md) |
-| PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению (дефекты 1–3 закрыты; остаток — пиннинг) | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
-| PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101-local-installers-platforms.md](./prop-101-local-installers-platforms.md) |
 | PROP-104 | Внешний транспорт событий: публикация между репликами control plane | 🧩 Предложение | [prop-104-external-event-transport.md](./prop-104-external-event-transport.md) |
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105-multi-replica-coordination.md](./prop-105-multi-replica-coordination.md) |
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109-agent-system-federation.md](./prop-109-agent-system-federation.md) |
@@ -132,7 +121,6 @@
 
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
-| PROP-047 | Память Synth (Gbrain + композиция): storage backbone, RAG по памяти и коду/докам, компрессия tool output, 4-layer retrieval, Obsidian bridge | 🧩 Предложение (vision) | [prop-047-memory-gbrain.md](./prop-047-memory-gbrain.md) |
 | PROP-055 | Обмен между инстансами Synth: идемпотентный upsert/дельта, peer-auth, обмен памятью, live-сессии | 🧩 Предложение (vision) | [prop-055-instance-exchange.md](./prop-055-instance-exchange.md) |
 | PROP-057 | Loop Engine и Loop Design Wizard: `/design-loop`, Verification Rubric, LoopRunner, termination guards | 🧩 Предложение (vision) | [prop-057-loop-engine.md](./prop-057-loop-engine.md) |
 | PROP-058 | Служебные агенты и консилиум (Council): panel/consensus/debate/verifier/judge, Council Gate; включает PROP-031 | 🧩 Предложение (vision) | [prop-058-service-agents-council.md](./prop-058-service-agents-council.md) |
@@ -140,6 +128,28 @@
 | PROP-061 | Многослойная безопасность LLM: сканеры промптов/вывода, лимиты, HITL, аудит, неизменяемость аудита | 🧩 Предложение (vision) | [prop-061-llm-security-layers.md](./prop-061-llm-security-layers.md) |
 | PROP-063 | Обучение пользователя и метрики: Pre-PR check, анализ сессий, дашборд без рейтингов | 🧩 Предложение (vision) | [prop-063-user-learning-metrics.md](./prop-063-user-learning-metrics.md) |
 | PROP-067 | «Впитывание» организационных гайдлайнов → дефолты инстанса: ingestion, scope, версионирование/аудит | 🧩 Предложение (vision) | [prop-067-org-guidelines-defaults.md](./prop-067-org-guidelines-defaults.md) |
+
+## Принятые и поглощённые (файлы удалены)
+
+| ID | Куда | Примечание |
+|----|------|------------|
+| PROP-031 | [PROP-058](./prop-058-service-agents-council.md) | дубль; поглощён |
+| PROP-047 | [ADR-122](./adr-122-memory-product.md) | реализованное ядро; vision — docs/MEMORY.md |
+| PROP-049 | [ADR-114](./adr-114-git-worktrees.md) | принято |
+| PROP-082 | [ADR-077](./adr-077-runtime-toolchain.md) | принято |
+| PROP-085 | [ADR-115](./adr-115-multimodal-input.md) | принято |
+| PROP-090 | [ADR-090](./adr-090-extension-api.md) | принято |
+| PROP-091 | [ADR-091](./adr-091-backup-restore-transfer.md) | принято |
+| PROP-092 | [ADR-092](./adr-092-instance-lifecycle-maintenance.md) | принято |
+| PROP-094 | [ADR-094](./adr-094-observability-metrics.md) | принято |
+| PROP-096 | [ADR-111](./adr-111-background-subagent-sessions.md) | принято |
+| PROP-097 | [ADR-113](./adr-113-background-processes.md) | принято |
+| PROP-098 | [ADR-104](./adr-104-mid-turn-steering.md) | принято |
+| PROP-099 | [ADR-120](./adr-120-memory-budget.md) | принято |
+| PROP-101 | [ADR-121](./adr-121-offline-portable-distribution.md) | принято |
+| PROP-106 | [ADR-116](./adr-116-instance-state-and-blob-ports.md) | принято |
+| PROP-107 | [ADR-105](./adr-105-external-credentials.md) | принято |
+| PROP-108 | [ADR-106](./adr-106-authority-layer.md) | принято |
 
 ## Legacy
 
@@ -149,4 +159,5 @@
 
 ---
 
-Всего документов: 109 (Решения: 49, Частично: 20, Принятые предложения: 6, Предложения: 24, Vision: 8, Icebox: 1, Legacy: 1).
+Всего документов: 102 (Решения: 49, Частично: 23, Предложения: 21, Vision: 7, Icebox: 1, Legacy: 1).
+Удалено: 17 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

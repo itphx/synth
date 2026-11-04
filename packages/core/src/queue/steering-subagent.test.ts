@@ -6,7 +6,7 @@
  * родителя и очередь дочерней сессии — разные записи сессий, поэтому
  * вмешательство в ребёнка не попадает в родителя и наоборот. Steering
  * фонового ребёнка (неблокирующая саб-агентская сессия) недоступен до
- * [PROP-096](../../../../docs/arch_decisions/prop-096-background-subagent-sessions.md)
+ * [ADR-111](../../../../docs/arch_decisions/adr-111-background-subagent-sessions.md)
  * — фоновых сессий в коде нет.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

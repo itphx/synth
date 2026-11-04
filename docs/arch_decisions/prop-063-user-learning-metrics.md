@@ -5,7 +5,7 @@
 > **Источник:** перенесено из `AD-DRAFTS.md` (D18, «Обучение пользователя и метрики», Roadmap Фаза 3/4;
 > Obsidian `User-Skills-Learning-Metrics.md`, `Fear-of-Replacement.md`).
 > **Связано:** [PROP-057](./prop-057-loop-engine.md), [ADR-101](./adr-101-pipeline-engine.md),
-> [PROP-047](./prop-047-memory-gbrain.md), [PROP-054](./prop-054-kanban-backlog.md),
+> [ADR-122](./adr-122-memory-product.md), [PROP-054](./prop-054-kanban-backlog.md),
 > [ADR-036](./adr-036-llm-gateway.md), [PROP-083](./prop-083-instance-customization-branding.md).
 
 **Решение:** встроить в Synth **развитие пользователя, а не только ускорение кодинга** —
@@ -36,7 +36,7 @@ Roadmap Фаза 3/4 фиксирует разворот от «скорость
 Есть инфраструктура, на которую это можно опереть:
 - аудит LLM-вызовов JSONL ([ADR-036](./adr-036-llm-gateway.md));
 - `DebugCollector` (`packages/core/src/debug.ts`) — технический слой метрик (микро-слой, промпт);
-- память/индексы ([PROP-047](./prop-047-memory-gbrain.md)) — для анализа истории;
+- память/индексы ([ADR-122](./adr-122-memory-product.md)) — для анализа истории;
 - loops/pipelines ([PROP-057](./prop-057-loop-engine.md), [ADR-101](./adr-101-pipeline-engine.md)) —
   источники данных о прогонах;
 - задачи/backlog ([PROP-054](./prop-054-kanban-backlog.md)) — привязка метрик к задачам.
@@ -59,7 +59,7 @@ rework rate, automation coverage, context freshness, guardrail hit rate. Явн�
 ### 2. Анализ сессий
 
 Периодический разбор истории сессий ([ADR-005](./adr-005-json-storage.md) → [ADR-097](./adr-097-storage-provider-class.md),
-память [PROP-047](./prop-047-memory-gbrain.md)): частые ошибки, повторяющиеся запросы, неиспользуемые
+память [ADR-122](./adr-122-memory-product.md)): частые ошибки, повторяющиеся запросы, неиспользуемые
 возможности. Учитывать приватность: анализ — для самого пользователя.
 
 ### 3. Рекомендации и подсказки
@@ -110,7 +110,7 @@ rework rate, automation coverage, context freshness, guardrail hit rate. Явн�
 
 - [PROP-057](./prop-057-loop-engine.md) «Loop Engine» / [ADR-101](./adr-101-pipeline-engine.md)
   «Pipeline Automation» — источники `loop success rate`, `rework rate`, `automation coverage`.
-- [PROP-047](./prop-047-memory-gbrain.md) «Память Synth» — анализ сессий и долгосрочный контекст.
+- [ADR-122](./adr-122-memory-product.md) «Память Synth» — анализ сессий и долгосрочный контекст.
 - [PROP-054](./prop-054-kanban-backlog.md) «Kanban/backlog» — привязка метрик к задачам; просмотр из UI
   ([PROP-065](./prop-065-ui-docs-plan-todo.md)).
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — аудит как источник данных (с учётом приватности).

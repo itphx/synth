@@ -4,6 +4,7 @@
 > очередь/LLM/хранилище; (2) остальные домены, дашборды и алерты, runbook. **Остаток:** JSON-логи с
 > `request_id`/`session_id` и OpenTelemetry-трейсинг — отдельные задачи (см. «Остаток»).
 > **Дата:** 2026-10-18
+> **Источник:** PROP-094 (файл удалён после принятия).
 > **Связано:** [ADR-023](./adr-023-configuration.md) (конфиг), [ADR-036](./adr-036-llm-gateway.md) (LLM-аудит),
 > [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-052](./adr-052-public-api-platform.md) (webhooks),
 > [ADR-096](./adr-096-storage-layer.md)/[ADR-098](./adr-098-storage-degraded-recovery.md) (хранилище и
