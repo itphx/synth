@@ -183,6 +183,13 @@ import {
   MEMORY_NAMESPACE,
   MEMORY_PLUGIN_NAME,
 } from '../../engine/plugins/memory-namespace.js';
+import {
+  isRemoteRef,
+  remoteErrorToHttp,
+  toLocalId,
+  toRemoteMemoryIndex,
+} from '../../remote/aggregate.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -462,6 +469,16 @@ export interface MemoryRoutesOptions {
     projectId: string,
     mode: 'read' | 'write',
   ) => boolean | Promise<boolean>;
+  /**
+   * Гибрид (ADR-042): клиент удалённого backend.
+   *
+   * Портал памяти остаётся **локальным**: проксируются только мутации
+   * **удалённых** индексов (`projectId` в теле — `remote:…`, либо `:id`
+   * индекса — `remote:…`). Чтение портала (`GET /indexes|/facts|/graph|/status`)
+   * не проксируется — это инстансный ресурс локального мира. Не задан
+   * (managed) — remote-ветки выключены, `remote:`-id отвечают 502.
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
 }
 
 /** Сводка по фактам памяти (namespace портала). */
@@ -877,6 +894,21 @@ export function createMemoryRoutes(
   const guard = opts.guard ?? auth.requireAuth;
   const messages: MemoryRouteMessages = { ...DEFAULT_MESSAGES, ...(opts.messages ?? {}) };
   const namespace = MEMORY_NAMESPACE;
+
+  /** Гибрид (ADR-042): клиент удалённого backend (managed не передаёт). */
+  const resolveRemoteClient = (): RemoteBackendClient | null => opts.getRemoteClient?.() ?? null;
+  /** 502: гибридный режим не настроен, а ресурс — `remote:`. */
+  const remoteUnavailable = (c: Context) =>
+    c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+  /** RemoteError → HTTP-ответ (тот же формат, что у project-роутов). */
+  const mapRemoteError = (c: Context, err: unknown): Response | undefined => {
+    const http = remoteErrorToHttp(err);
+    if (!http) return undefined;
+    return c.json(
+      { error: { code: http.code, message: err instanceof Error ? err.message : String(err) } },
+      http.status as 400 | 401 | 404 | 409 | 500 | 502,
+    );
+  };
 
   /** Порты памяти (могут быть не сконфигурированы — тогда 503). */
   const factsPort = (): MemoryFactRepository | undefined => opts.memory?.facts;
@@ -1302,10 +1334,34 @@ export function createMemoryRoutes(
    * мутаций: сначала «есть ли индекс» (404), потом политика (409).
    */
   app.patch('/indexes/:id', guard, async (c) => {
+    const id = c.req.param('id');
+    // Гибрид (ADR-042): индекс удалённого мира живёт на сервере. id пришёл
+    // `remote:<id>` (из среза памяти удалённой сессии) — снимаем префикс.
+    if (isRemoteRef(id)) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) return remoteUnavailable(c);
+      const body = await readBody(c);
+      if (!body || typeof body.enabled !== 'boolean') {
+        return apiError(c, 'VALIDATION_ERROR', messages.invalidBody(c), 400);
+      }
+      try {
+        const res = (await remoteClient.updateMemoryIndex(toLocalId(id), body)) as Record<string, unknown>;
+        return c.json({
+          ...res,
+          ...(res.index && typeof res.index === 'object'
+            ? { index: toRemoteMemoryIndex(res.index as Record<string, unknown>) }
+            : {}),
+        });
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const indexes = indexesPort();
     if (!indexes) return unavailable(c);
 
-    const id = c.req.param('id');
     const index = await indexes.getIndex(id);
     if (!index || index.namespace !== namespace) return indexNotFound(c);
 
@@ -1347,6 +1403,35 @@ export function createMemoryRoutes(
   app.post('/indexes', guard, async (c) => {
     const body = await readBody(c);
     if (!body) return apiError(c, 'VALIDATION_ERROR', messages.invalidBody(c), 400);
+
+    // Гибрид (ADR-042): индекс в удалённом проекте создаёт сервер (у него есть
+    // проект, workspace и плагин памяти). `projectId` уходит без префикса,
+    // id созданного индекса возвращается `remote:`.
+    const remoteProjectRef =
+      typeof body.projectId === 'string' && body.projectId.trim() ? body.projectId.trim() : '';
+    if (isRemoteRef(remoteProjectRef)) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const res = (await remoteClient.createMemoryIndex({
+          ...body,
+          projectId: toLocalId(remoteProjectRef),
+        })) as Record<string, unknown>;
+        return c.json(
+          {
+            ...res,
+            ...(res.index && typeof res.index === 'object'
+              ? { index: toRemoteMemoryIndex(res.index as Record<string, unknown>) }
+              : {}),
+          },
+          202,
+        );
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
 
     // Источник корпуса: `files` (по умолчанию) или `facts`.
     let sourceKind: MemoryIndexSourceKind = 'files';
@@ -1462,10 +1547,34 @@ export function createMemoryRoutes(
    * нужен только как источник корпуса, чтобы взять workspace).
    */
   app.post('/indexes/:id/rebuild', guard, async (c) => {
+    const id = c.req.param('id');
+    // Гибрид (ADR-042): пересборку индекса удалённого мира исполняет сервер.
+    if (isRemoteRef(id)) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) return remoteUnavailable(c);
+      const body = await readBody(c);
+      if (!body) return apiError(c, 'VALIDATION_ERROR', messages.invalidBody(c), 400);
+      try {
+        const res = (await remoteClient.rebuildMemoryIndex(toLocalId(id), body)) as Record<string, unknown>;
+        return c.json(
+          {
+            ...res,
+            ...(res.index && typeof res.index === 'object'
+              ? { index: toRemoteMemoryIndex(res.index as Record<string, unknown>) }
+              : {}),
+          },
+          202,
+        );
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const indexes = indexesPort();
     if (!indexes) return unavailable(c);
 
-    const id = c.req.param('id');
     const index = await indexes.getIndex(id);
     // Чужой namespace выглядит как «не найдено» — как и у фактов.
     if (!index || index.namespace !== namespace) return indexNotFound(c);
@@ -1502,10 +1611,24 @@ export function createMemoryRoutes(
    * **проектного** индекса — да (`write`), у **инстансного** — нет.
    */
   app.delete('/indexes/:id', guard, async (c) => {
+    const id = c.req.param('id');
+    // Гибрид (ADR-042): удаление индекса удалённого мира — на сервере.
+    if (isRemoteRef(id)) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        await remoteClient.deleteMemoryIndex(toLocalId(id));
+        return c.body(null, 204);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const indexes = indexesPort();
     if (!indexes) return unavailable(c);
 
-    const id = c.req.param('id');
     const index = await indexes.getIndex(id);
     if (!index || index.namespace !== namespace) return indexNotFound(c);
 

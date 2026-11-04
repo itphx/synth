@@ -26,6 +26,15 @@ const OIDC_DISCOVERY = {
 const SERVER_USER = { id: 'u-1', username: 'lucky', roles: ['ADMIN', 'USER'] };
 
 /**
+ * Транспортная ошибка undici: `TypeError: fetch failed` с реальной причиной в
+ * `cause.code` (TLS/DNS/отказ/таймаут).
+ */
+function transportFailure(code: string): TypeError {
+  const cause = Object.assign(new Error(`boom ${code}`), { code });
+  return Object.assign(new TypeError('fetch failed'), { cause });
+}
+
+/**
  * fetch-мок успешного ROPC-входа: дискавери OIDC-меты на backend, token-грант
  * (grant_type=password) на Keycloak, /auth/status с серверным пользователем.
  */
@@ -148,6 +157,34 @@ describe('RemoteConnection.discoverOidc', () => {
 
     expect(err).toBeInstanceOf(RemoteError);
     expect((err as RemoteError).code).toBe('OFFLINE');
+  });
+
+  it('TLS: SELF_SIGNED_CERT_IN_CHAIN → код и подсказка про CA в сообщении', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(transportFailure('SELF_SIGNED_CERT_IN_CHAIN')));
+
+    const conn = new RemoteConnection({});
+    const err = (await conn.discoverOidc(BACKEND).catch((e: unknown) => e)) as RemoteError;
+
+    expect(err).toBeInstanceOf(RemoteError);
+    expect(err.code).toBe('OFFLINE');
+    expect(err.message).toContain('Сервер недоступен: не удалось получить OIDC-параметры');
+    expect(err.message).toContain('SELF_SIGNED_CERT_IN_CHAIN');
+    expect(err.message).toContain('CA');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[hybrid]'));
+    warn.mockRestore();
+  });
+
+  it('DNS: ENOTFOUND → подсказка про DNS', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(transportFailure('ENOTFOUND')));
+
+    const conn = new RemoteConnection({});
+    const err = (await conn.discoverOidc(BACKEND).catch((e: unknown) => e)) as RemoteError;
+
+    expect(err.message).toContain('ENOTFOUND');
+    expect(err.message).toContain('DNS');
+    warn.mockRestore();
   });
 });
 

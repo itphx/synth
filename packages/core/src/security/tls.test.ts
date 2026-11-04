@@ -5,11 +5,13 @@ import { createServer as createHttpServer } from 'node:http';
 import type { Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { readFileSync } from 'node:fs';
+import * as tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as undici from 'undici';
 import {
   buildTlsTrust,
+  buildTlsTrustProfiles,
   applyGlobalTlsTrust,
   egressFetch,
   isTlsTrustConfigured,
@@ -24,6 +26,19 @@ const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
 const CERT_PATH = join(FIX_DIR, 'tls-test-selfsigned.pem');
 const KEY_PATH = join(FIX_DIR, 'tls-test-selfsigned.key');
 const CERT_PEM = readFileSync(CERT_PATH, 'utf-8');
+
+/**
+ * Первый встроенный корень Node — детерминированная часть базового набора CA.
+ * `getCACertificates('default')` (Node ≥ 22.19) и `rootCertificates` дают один и
+ * тот же встроенный набор; системный стор ОС в CI может отсутствовать.
+ */
+function bundledRoot(): string {
+  const getCa = (tls as { getCACertificates?: (kind: string) => string[] }).getCACertificates;
+  const roots = typeof getCa === 'function' ? getCa('default') : tls.rootCertificates;
+  const first = roots[0];
+  if (first === undefined) throw new Error('встроенные корни Node недоступны');
+  return first;
+}
 
 /** Подменный транспорт: пишет аргументы и возвращает `200 ok`. */
 function recordingFetch(): { impl: FetchLike; calls: Array<{ init?: RequestInit }> } {
@@ -48,22 +63,39 @@ function fakeUndici() {
 }
 
 describe('buildTlsTrust', () => {
-  it('пустой конфиг → системное доверие', () => {
+  it('пустой конфиг → системное доверие (trust.ca не задан)', () => {
     const trust = buildTlsTrust(undefined, {});
     expect(trust.rejectUnauthorized).toBe(true);
     expect(trust.ca).toBeUndefined();
     expect(trust.cert).toBeUndefined();
   });
 
-  it('caPem → ca заполнен', () => {
+  it('caPem дополняет встроенные корни, а не заменяет их', () => {
     const trust = buildTlsTrust({ security: { tls: { caPem: CERT_PEM } } }, {});
-    expect(trust.ca).toBe(CERT_PEM);
+    expect(trust.ca).toContain(CERT_PEM);
+    expect(trust.ca).toContain(bundledRoot());
   });
 
   it('отсутствующий caFile → fail-closed (ошибка)', () => {
     expect(() => buildTlsTrust({ security: { tls: { caFile: '/no/such.pem' } } }, {})).toThrow(
       /не удалось прочитать/i,
     );
+  });
+
+  it('per-host профиль без своего CA использует объединённый набор', () => {
+    const runtime = {
+      mappings: [{ id: 'internal', hosts: ['*.internal'], certFile: CERT_PATH, keyFile: KEY_PATH }],
+    };
+    const baseOnly = buildTlsTrustProfiles(undefined, {}, runtime);
+    expect(baseOnly.profiles?.[0]?.ca).toContain(bundledRoot());
+
+    const withUser = buildTlsTrustProfiles(
+      { security: { tls: { caPem: CERT_PEM } } },
+      {},
+      runtime,
+    );
+    expect(withUser.profiles?.[0]?.ca).toContain(CERT_PEM);
+    expect(withUser.profiles?.[0]?.ca).toContain(bundledRoot());
   });
 });
 

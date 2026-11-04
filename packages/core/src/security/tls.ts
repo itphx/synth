@@ -3,9 +3,9 @@
  *
  * Проблема: раньше каждая точка (LLM-провайдеры, MCP, webhooks, гибридный backend,
  * OIDC, git, загрузка иконок/обновлений) ходила в сеть «сырым» глобальным `fetch`,
- * который доверяет только системным CA Node. За корпоративным прокси/CA это либо
- * падало с `self-signed certificate in certificate chain`, либо (при отключении
- * проверки) открывало MITM.
+ * который доверяет только встроенным корням Node (не системному хранилищу ОС). За
+ * корпоративным прокси/CA это либо падало с `self-signed certificate in certificate
+ * chain`, либо (при отключении проверки) открывало MITM.
  *
  * Решение — один слой доверия:
  * - конфиг читается резолверами `resolveTlsConfig`/`resolveTlsTrust`
@@ -16,9 +16,13 @@
  * - `egressFetch` — `fetch` с **явным** dispatcher, не зависящий от глобального
  *   состояния (для точек, где нужен детерминированный транспорт/тесты).
  *
- * Пустая конфигурация — системное доверие, никаких эффектов (поведение не меняется).
- * Заданная конфигурация без пакета `undici` — понятная ошибка (в духе ADR-078),
- * а не тихий фоллбэк на недоверенный транспорт.
+ * Базовый набор доверия — **встроенные корни Node + системное хранилище ОС +
+ * `NODE_EXTRA_CA_CERTS`**; `security.tls` **дополняет** его (конкатенация), а не
+ * заменяет. Пустая конфигурация — этот базовый набор (поведение прежнее плюс
+ * системный стор); `trust.ca` при этом остаётся `undefined`, чтобы не тащить
+ * гигантский PEM в каждый dispatcher — базовый набор применяется как дефолт Node
+ * (`tls.setDefaultCACertificates`). Заданная конфигурация без пакета `undici` —
+ * понятная ошибка (в духе ADR-078), а не тихий фоллбэк на недоверенный транспорт.
  *
  * ⚠️ Находка (не чинится здесь — отдельная задача): `setGlobalDispatcher` из пакета
  * `undici@7` пишет dispatcher в слот `Symbol.for('undici.globalDispatcher.1')`, а
@@ -31,6 +35,7 @@
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import * as tls from 'node:tls';
 import {
   certificateSubjectFromFile,
   certificateSubjectsFromPem,
@@ -65,7 +70,11 @@ export type FetchLike = (input: string | URL | Request, init?: RequestInit) => P
 
 /** Эффективное доверие для undici `Agent({ connect })`. */
 export interface TlsTrust {
-  /** PEM доверенного CA (система + корпоративный CA). */
+  /**
+   * PEM доверенного CA: базовый набор (встроенные корни Node + системный стор ОС
+   * + `NODE_EXTRA_CA_CERTS`) вместе с `security.tls` CA. `undefined` — пользовательский
+   * CA не задан (доверие процесса = базовый набор, применённый как дефолт Node).
+   */
   ca?: string;
   /** PEM клиентского сертификата (mTLS). */
   cert?: string;
@@ -269,6 +278,10 @@ export async function initTlsTrust(
       : deps.dataDir
         ? readTlsRuntimeSettings(deps.dataDir)
         : undefined;
+  // ADR-099 (2026-11-04): базовый набор (встроенные корни + системный стор ОС +
+  // `NODE_EXTRA_CA_CERTS`) ставим дефолтом Node — его видят «сырой» `globalThis.fetch`
+  // и дефолтные транспорты (pg без явного ca, плагины/MCP-фоллбеки). Однократно.
+  applyDefaultCaCertificates();
   const bundle = resolveTrustBundle(config, env, runtime);
   // ADR-099 (D1): прокси резолвится здесь же (env > config > defaults) и
   // применяется к исходящим запросам тем же dispatcher'ом. Fail-closed:
@@ -491,6 +504,10 @@ export interface TlsStatusOptions {
 /**
  * Собирает статус: эффективные источники (env > runtime > config), клиентские
  * профили (per-host) и признак «нужен рестарт». Только метаданные.
+ *
+ * `ca` в статусе — **пользовательский** CA (`security.tls`), а не объединённый
+ * базовый набор; `running`/`saved`/`restartRequired` считаются по применённому
+ * (объединённому) доверию.
  */
 export function getTlsStatus(options: TlsStatusOptions = {}): TlsStatus {
   const env = options.env ?? process.env;
@@ -503,8 +520,11 @@ export function getTlsStatus(options: TlsStatusOptions = {}): TlsStatus {
 
   const profiles = resolveTlsProfiles(options.config, env, runtime);
   const trust = resolveTrustBundle(options.config, env, runtime).trust;
-
-  const caPem = trust.ca;
+  // ADR-099 (2026-11-04): UI показывает **пользовательский** CA (count/subjects/
+  // source), а не объединённый набор — иначе пустая конфигурация выглядела бы как
+  // «850 сертификатов, источник: не настроено». `running`/`saved`/`restartRequired`
+  // считаются по объединённому набору (согласованность с применённым).
+  const caPem = resolveTlsTrust(options.config, env, runtime).ca;
   const status: TlsStatus = {
     ca: {
       source: profiles.sources.ca,
@@ -572,7 +592,130 @@ export function _resetTlsTrustForTests(): void {
   _runtime = null;
   _appliedFingerprint = null;
   _dispatcher = null;
+  _baseCaCache = null;
+  _defaultCaApplied = false;
   resetEgressProxyState();
+}
+
+// ─── базовый набор CA (встроенные корни + системный стор + extra) ────────────
+
+/**
+ * Кэш базового набора CA (мемоизация на процесс). Сбрасывается в
+ * `_resetTlsTrustForTests`; набор не зависит от конфигурации Synth.
+ */
+let _baseCaCache: string[] | null = null;
+
+/** `true` — базовый набор уже применён как дефолт Node (однократно на процесс). */
+let _defaultCaApplied = false;
+
+/**
+ * Системные бандлы Linux для фоллбека на Node без `tls.getCACertificates`
+ * (API появился в Node ≥ 22.19). macOS/Windows без этого API требуют явный
+ * `security.tls` CA — своего парсера системного стора у нас нет.
+ */
+const LINUX_CA_BUNDLES = [
+  '/etc/ssl/certs/ca-certificates.crt',
+  '/etc/pki/tls/certs/ca-bundle.crt',
+  '/etc/ssl/ca-bundle.pem',
+  '/etc/ssl/cert.pem',
+];
+
+/**
+ * Базовый набор CA процесса (ADR-099, 2026-11-04): **встроенные корни Node +
+ * системное хранилище ОС + `NODE_EXTRA_CA_CERTS`**. Мемоизирован; ошибки чтения
+ * игнорируются (набор — доверие по умолчанию, а не конфигурация).
+ */
+function baseCaCertificates(): string[] {
+  if (_baseCaCache !== null) return _baseCaCache;
+  _baseCaCache = collectBaseCaCertificates();
+  return _baseCaCache;
+}
+
+function collectBaseCaCertificates(): string[] {
+  const collected: string[] = [];
+  const getCa = (tls as { getCACertificates?: (kind: string) => string[] }).getCACertificates;
+  if (typeof getCa === 'function') {
+    // Node ≥ 22.19: 'default' — встроенные корни, 'system' — стор ОС,
+    // 'extra' — NODE_EXTRA_CA_CERTS. Объединяем и дедуплицируем по строке.
+    for (const kind of ['default', 'system', 'extra'] as const) {
+      try {
+        collected.push(...getCa(kind));
+      } catch {
+        // недоступный вид хранилища — пропускаем (остальные остаются)
+      }
+    }
+  } else {
+    collected.push(...tls.rootCertificates);
+    const extraPath = process.env.NODE_EXTRA_CA_CERTS;
+    if (extraPath) {
+      const pem = readPemIfReadable(extraPath);
+      if (pem !== undefined) collected.push(pem);
+    }
+    for (const path of [process.env.SSL_CERT_FILE, ...LINUX_CA_BUNDLES]) {
+      if (!path) continue;
+      const pem = readPemIfReadable(path);
+      if (pem !== undefined) {
+        collected.push(pem);
+        break;
+      }
+    }
+  }
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const pem of collected) {
+    if (typeof pem !== 'string' || pem.trim() === '' || seen.has(pem)) continue;
+    seen.add(pem);
+    deduped.push(pem);
+  }
+  return deduped;
+}
+
+/** Читает PEM-файл; любая ошибка → `undefined` (базовый набор не fail-closed). */
+function readPemIfReadable(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Объединяет базовый набор и пользовательский CA (`security.tls`): конкатенация
+ * через `\n`, дедуп по строке. Порядок — базовые корни, затем пользовательский CA.
+ */
+function mergeCaCertificates(base: string[], userCa: string | undefined): string | undefined {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const pem of base) {
+    if (pem.trim() === '' || seen.has(pem)) continue;
+    seen.add(pem);
+    parts.push(pem);
+  }
+  if (userCa !== undefined && userCa.trim() !== '' && !seen.has(userCa)) {
+    parts.push(userCa);
+  }
+  return parts.length > 0 ? parts.join('\n') : undefined;
+}
+
+/**
+ * Применяет базовый набор как **дефолт Node** (`tls.setDefaultCACertificates`,
+ * Node ≥ 22.19) — один раз на процесс. Нужно, чтобы системный стор видели и
+ * «сырой» `globalThis.fetch`, и дефолтные транспорты без явного `ca`.
+ * Функции нет (старый Node) — не падаем: работает обычный дефолт Node.
+ */
+function applyDefaultCaCertificates(): void {
+  if (_defaultCaApplied) return;
+  _defaultCaApplied = true;
+  const setDefault = (tls as { setDefaultCACertificates?: (certs: string[]) => void })
+    .setDefaultCACertificates;
+  if (typeof setDefault !== 'function') return;
+  try {
+    const base = baseCaCertificates();
+    if (base.length > 0) setDefault(base);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn(`[tls] не удалось применить системный набор CA как дефолт Node: ${reason}`);
+  }
 }
 
 // ─── внутреннее состояние ────────────────────────────────────────────────────
@@ -598,8 +741,14 @@ function resolveTrustBundle(
   const trustCfg = resolveTlsTrust(config, env, runtime);
   const profiles = resolveTlsProfiles(config, env, runtime);
 
+  // ADR-099 (2026-11-04): `security.tls.ca` **дополняет** базовый набор
+  // (встроенные корни + системный стор + extra), а не заменяет его.
+  const mergedCa = mergeCaCertificates(baseCaCertificates(), trustCfg.ca);
+
   const trust: TlsTrust = { rejectUnauthorized: trustCfg.rejectUnauthorized };
-  if (trustCfg.ca !== undefined) trust.ca = trustCfg.ca;
+  // Без пользовательского CA `trust.ca` остаётся undefined: доверие процесса —
+  // базовый набор как дефолт Node (см. `initTlsTrust`/`applyDefaultCaCertificates`).
+  if (trustCfg.ca !== undefined) trust.ca = mergedCa;
   if (trustCfg.certFile !== undefined) {
     trust.cert = readPemFile(trustCfg.certFile, 'certFile', /-----BEGIN CERTIFICATE-----/);
   }
@@ -608,7 +757,7 @@ function resolveTrustBundle(
   }
 
   if (profiles.mappings.length > 0) {
-    trust.profiles = profiles.mappings.map((profile) => loadProfile(profile, trustCfg.ca, trustCfg.rejectUnauthorized));
+    trust.profiles = profiles.mappings.map((profile) => loadProfile(profile, mergedCa, trustCfg.rejectUnauthorized));
   }
   return { resolved, trust };
 }

@@ -53,6 +53,18 @@ import {
 } from '../service-scope.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 import { paginate, parseBoundedInt } from '../pagination.js';
+import {
+  isRemoteRef,
+  remoteErrorToHttp,
+  toLocalId,
+  toRemotePipeline,
+  toRemotePipelineDetail,
+  toRemotePipelinePage,
+  toRemotePipelineRun,
+  toRemotePipelineRunDetail,
+  toRemotePipelineRunPage,
+} from '../../remote/aggregate.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
 
 /**
  * ADR-101 (Э6): HTTP-контур пайплайнов — проектные пайплайны, прогоны,
@@ -194,6 +206,16 @@ export interface PipelineProjectRoutesDeps {
    * отклоняются (fail-closed).
    */
   blobRefs?: BlobRefRepository;
+  /**
+   * Гибрид (ADR-042): клиент удалённого backend. Пайплайны, прогоны и шаблоны
+   * удалённого проекта проксируются на сервер; не задан (managed) —
+   * remote-ветки выключены, `remote:`-id отвечают 502 `REMOTE_UNAVAILABLE`.
+   *
+   * Инстансные шаблоны (`GET /pipeline-templates`) проксируются только при
+   * явном `?project_id=remote:…` — сам префиксный проксинг инстансных ресурсов
+   * (`REMOTE_PROXY_PREFIXES`) для них не применяется.
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
 }
 
 export interface PipelineProjectRoutesOptions {
@@ -235,10 +257,28 @@ const PIPELINE_PROJECT_KEY = 'pipelineProject';
 /** Ключ контекста: прогон, разрезолвленный граничным guard'ом. */
 const PIPELINE_RUN_KEY = 'pipelineRun';
 
-/** Проект, разрезолвленный граничным guard'ом (ADR-089, инвариант 16). */
+/**
+ * Проект, разрезолвленный граничным guard'ом (ADR-089, инвариант 16).
+ *
+ * `remote: true` — проект удалённого мира (гибрид): локальный стор не
+ * загружался, права проверяет сервер, обработчик проксирует запрос.
+ */
 interface GuardedProject {
   projectId: string;
-  project: Project;
+  /** Локальный проект; у `remote: true` отсутствует. */
+  project?: Project;
+  remote?: boolean;
+}
+
+/**
+ * Прогон, разрезолвленный граничным guard'ом.
+ *
+ * `remote: true` — прогон удалённого мира: в контексте только `runId`.
+ */
+interface GuardedRun {
+  runId: string;
+  run?: PipelineRunRecord;
+  remote?: boolean;
 }
 
 /**
@@ -544,6 +584,23 @@ export function createPipelineProjectRoutes(
   const currentUserId = async (c: Context): Promise<string> =>
     opts.getCurrentUserId ? await opts.getCurrentUserId(c) : 'local';
 
+  /** Гибрид (ADR-042): клиент удалённого backend (managed не передаёт). */
+  const resolveRemoteClient = (): RemoteBackendClient | null => deps.getRemoteClient?.() ?? null;
+
+  /** RemoteError → HTTP-ответ (тот же формат, что у project-роутов). */
+  const mapRemoteError = (c: Context, err: unknown): Response | undefined => {
+    const http = remoteErrorToHttp(err);
+    if (!http) return undefined;
+    return c.json(
+      { error: { code: http.code, message: err instanceof Error ? err.message : String(err) } },
+      http.status as 400 | 401 | 404 | 409 | 500 | 502,
+    );
+  };
+
+  /** 502: гибридный режим не настроен, а id — `remote:`. */
+  const remoteUnavailable = (c: Context) =>
+    c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+
   /**
    * Реестр активных прогонов **этого процесса** (ADR-101, `run-control.ts`).
    *
@@ -594,6 +651,14 @@ export function createPipelineProjectRoutes(
   const projectGuard = (kind: 'read' | 'write'): Middleware =>
     createMiddleware(async (c, next) => {
       const projectId = c.req.param('id');
+      // Гибрид (ADR-042): проект удалённого мира локальным стором не
+      // загружается — доступ (и вид доступа) проверяет сервер своим токеном.
+      if (projectId && isRemoteRef(projectId)) {
+        if (!resolveRemoteClient()) return remoteUnavailable(c);
+        c.set(PIPELINE_PROJECT_KEY as never, { projectId, remote: true } as never);
+        await next();
+        return;
+      }
       const project = projectId ? await deps.projects.load(projectId) : null;
       if (!project) {
         return c.json({ error: { code: 'NOT_FOUND', message: messages.projectNotFound(c) } }, 404);
@@ -608,6 +673,7 @@ export function createPipelineProjectRoutes(
       await next();
     });
 
+
   /**
    * ГРАНИЧНАЯ проверка доступа к прогону: прогон принадлежит проекту, поэтому
    * права — по правилам проекта (ADR-089). Прогон без проекта — инстансный
@@ -616,6 +682,13 @@ export function createPipelineProjectRoutes(
   const runGuard = (kind: 'read' | 'write'): Middleware =>
     createMiddleware(async (c, next) => {
       const runId = c.req.param('runId');
+      // Гибрид (ADR-042): прогон удалённого мира — в локальном порте его нет.
+      if (runId && isRemoteRef(runId)) {
+        if (!resolveRemoteClient()) return remoteUnavailable(c);
+        c.set(PIPELINE_RUN_KEY as never, { runId, remote: true } as never);
+        await next();
+        return;
+      }
       const run = runId ? await deps.runs.getRun(runId) : null;
       if (!run) return notFoundRun(c);
       if (!run.projectId) return forbidden(c);
@@ -629,7 +702,7 @@ export function createPipelineProjectRoutes(
           ? await canRead(c, project, userId)
           : await canEdit(c, project, userId);
       if (!allowed) return forbidden(c);
-      c.set(PIPELINE_RUN_KEY as never, run as never);
+      c.set(PIPELINE_RUN_KEY as never, { runId: run.id, run } as never);
       await next();
     });
 
@@ -637,9 +710,9 @@ export function createPipelineProjectRoutes(
   const guardedProject = (c: Context): GuardedProject =>
     c.get(PIPELINE_PROJECT_KEY as never) as GuardedProject;
 
-  /** Прогон из контекста guard'а. */
-  const guardedRun = (c: Context): PipelineRunRecord =>
-    c.get(PIPELINE_RUN_KEY as never) as PipelineRunRecord;
+  /** Прогон из контекста guard'а (id есть всегда, запись — у локального). */
+  const guardedRun = (c: Context): GuardedRun =>
+    c.get(PIPELINE_RUN_KEY as never) as GuardedRun;
 
   /** Ответ движка → HTTP (коды ошибок ADR-101, `PIPELINE_ERROR_CODES`). */
   const engineError = (c: Context, err: unknown): Response | undefined => {
@@ -725,7 +798,23 @@ export function createPipelineProjectRoutes(
       if (offset === null) {
         return invalid(c, ['offset: должен быть целым числом'], messages.invalidBody(c));
       }
-      const { projectId } = guardedProject(c);
+      const guarded = guardedProject(c);
+      if (guarded.remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          const page = (await remoteClient.listProjectPipelines(
+            toLocalId(guarded.projectId),
+            { limit, offset },
+          )) as Record<string, unknown>;
+          return c.json(toRemotePipelinePage(page));
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const { projectId } = guarded;
       const records = await deps.pipelines.listPipelines({ scope: 'project', projectId });
       const { page, total, next_offset } = paginate(records, offset, limit);
       return c.json({
@@ -760,6 +849,25 @@ export function createPipelineProjectRoutes(
         );
       }
 
+      if (guardedProject(c).remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          const created = (await remoteClient.createProjectPipeline(
+            toLocalId(guardedProject(c).projectId),
+            parsed.data as Record<string, unknown>,
+          )) as Record<string, unknown>;
+          return c.json(
+            { ...created, ...(created.pipeline ? { pipeline: toRemotePipeline(created.pipeline as Record<string, unknown>) } : {}) },
+            201,
+          );
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+
       // Создание черновика — общими авторскими операциями движка
       // (`engine/pipelines/authoring.ts`): серверные поля спецификации
       // проставляются там, валидация графа — тоже.
@@ -787,7 +895,23 @@ export function createPipelineProjectRoutes(
     auth.requireAuth,
     projectGuard('read'),
     async (c) => {
-      const { projectId } = guardedProject(c);
+      const guarded = guardedProject(c);
+      if (guarded.remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          const detail = (await remoteClient.getProjectPipeline(
+            toLocalId(guarded.projectId),
+            toLocalId(c.req.param('pid') ?? ''),
+          )) as Record<string, unknown>;
+          return c.json(toRemotePipelineDetail(detail));
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const { projectId } = guarded;
       const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
       if (!record) return notFoundPipeline(c);
       const published = record.publishedVersion
@@ -814,8 +938,13 @@ export function createPipelineProjectRoutes(
       const denied = serviceProjectProjection(c, projectId);
       if (denied) return denied;
 
-      const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
-      if (!record) return notFoundPipeline(c);
+      const remoteClient = guardedProject(c).remote ? resolveRemoteClient() : null;
+      if (guardedProject(c).remote && !remoteClient) return remoteUnavailable(c);
+
+      const record = remoteClient
+        ? null
+        : await loadProjectPipeline(c, projectId, c.req.param('pid'));
+      if (!remoteClient && !record) return notFoundPipeline(c);
 
       const body = await c.req.json().catch(() => ({}));
       const parsed = pipelineBodySchema.safeParse(body);
@@ -826,6 +955,29 @@ export function createPipelineProjectRoutes(
           messages.invalidBody(c),
         );
       }
+
+      if (remoteClient) {
+        try {
+          const updated = (await remoteClient.updateProjectPipeline(
+            toLocalId(projectId),
+            toLocalId(c.req.param('pid') ?? ''),
+            parsed.data as Record<string, unknown>,
+          )) as Record<string, unknown>;
+          return c.json({
+            ...updated,
+            ...(updated.pipeline
+              ? { pipeline: toRemotePipeline(updated.pipeline as Record<string, unknown>) }
+              : {}),
+          });
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+
+      // Локальный пайплайн обязан существовать (для remote-ветки выше уже вышли).
+      if (!record) return notFoundPipeline(c);
 
       // Правка черновика — версия **не** bump'ается (ADR-101 §2.8).
       try {
@@ -858,6 +1010,21 @@ export function createPipelineProjectRoutes(
       const denied = serviceProjectProjection(c, projectId);
       if (denied) return denied;
 
+      if (guardedProject(c).remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          await remoteClient.deleteProjectPipeline(
+            toLocalId(projectId),
+            toLocalId(c.req.param('pid') ?? ''),
+          );
+          return c.body(null, 204);
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
       const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
       if (!record) return notFoundPipeline(c);
       await deletePipelineRecord({ pipelines: deps.pipelines, pipelineId: record.id });
@@ -876,6 +1043,22 @@ export function createPipelineProjectRoutes(
       const { projectId } = guardedProject(c);
       const denied = serviceProjectProjection(c, projectId);
       if (denied) return denied;
+
+      if (guardedProject(c).remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          const published = (await remoteClient.publishProjectPipeline(
+            toLocalId(projectId),
+            toLocalId(c.req.param('pid') ?? ''),
+          )) as Record<string, unknown>;
+          return c.json(toRemotePipelineDetail(published));
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
 
       const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
       if (!record) return notFoundPipeline(c);
@@ -922,6 +1105,26 @@ export function createPipelineProjectRoutes(
     projectGuard('read'),
     async (c) => {
       const { projectId } = guardedProject(c);
+      if (guardedProject(c).remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          const page = (await remoteClient.listPipelineRuns(
+            toLocalId(projectId),
+            toLocalId(c.req.param('pid') ?? ''),
+            {
+              ...(c.req.query('status') ? { status: c.req.query('status') as string } : {}),
+              ...(c.req.query('limit') ? { limit: Number(c.req.query('limit')) } : {}),
+              ...(c.req.query('offset') ? { offset: Number(c.req.query('offset')) } : {}),
+            },
+          )) as Record<string, unknown>;
+          return c.json(toRemotePipelineRunPage(page));
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
       const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
       if (!record) return notFoundPipeline(c);
 
@@ -972,9 +1175,6 @@ export function createPipelineProjectRoutes(
       const denied = serviceProjectProjection(c, projectId);
       if (denied) return denied;
 
-      const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
-      if (!record) return notFoundPipeline(c);
-
       const body = await c.req.json().catch(() => ({}));
       const parsed = runBodySchema.safeParse(body);
       if (!parsed.success) {
@@ -984,6 +1184,36 @@ export function createPipelineProjectRoutes(
           messages.invalidBody(c),
         );
       }
+
+      // Гибрид (ADR-042): прогон запускает сервер — у него есть и спецификация,
+      // и движок, и реестр активных прогонов удалённого мира.
+      if (guardedProject(c).remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          const started = (await remoteClient.startPipelineRun(
+            toLocalId(projectId),
+            toLocalId(c.req.param('pid') ?? ''),
+            parsed.data as Record<string, unknown>,
+          )) as Record<string, unknown>;
+          return c.json(
+            {
+              ...started,
+              ...(started.run
+                ? { run: toRemotePipelineRun(started.run as Record<string, unknown>) }
+                : {}),
+            },
+            201,
+          );
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+
+      const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
+      if (!record) return notFoundPipeline(c);
 
       // Опубликованной версии нет — запускать нечего (409).
       const version = parsed.data.version ?? record.publishedVersion;
@@ -1064,7 +1294,27 @@ export function createPipelineProjectRoutes(
   // `selectRunEventPage`/`parseRunEventCursor`). Без параметров — последняя
   // (самая новая) страница журнала.
   app.get('/pipeline-runs/:runId', auth.requireAuth, runGuard('read'), async (c) => {
-    const run = guardedRun(c);
+    const guarded = guardedRun(c);
+    if (guarded.remote) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const detail = (await remoteClient.getPipelineRun(toLocalId(guarded.runId), {
+          ...(c.req.query('events_limit')
+            ? { eventsLimit: Number(c.req.query('events_limit')) }
+            : {}),
+          ...(c.req.query('events_before')
+            ? { eventsBefore: c.req.query('events_before') as string }
+            : {}),
+        })) as Record<string, unknown>;
+        return c.json(toRemotePipelineRunDetail(detail));
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+    const run = guarded.run as PipelineRunRecord;
     const limit = parseBoundedInt(
       c.req.query('events_limit'),
       DEFAULT_RUN_EVENTS_LIMIT,
@@ -1102,10 +1352,15 @@ export function createPipelineProjectRoutes(
   // прогона (`runGuard('read')`: право чтения проекта, ADR-089 §5.5/§5.8);
   // проверок в обработчике нет (инвариант 16).
   app.get('/pipeline-runs/:runId/artifacts/:name', auth.requireAuth, runGuard('read'), async (c) => {
-    const run = guardedRun(c);
-    const store = deps.artifacts;
     const notFound = () =>
       c.json({ error: { code: 'NOT_FOUND', message: messages.artifactNotFound(c) } }, 404);
+    const guarded = guardedRun(c);
+    // Гибрид (ADR-042): байты артефактов удалённого прогона не проксируются
+    // (правой панели они не нужны — там только статус и журнал прогона).
+    // Отвечаем тем же 404, что и для отсутствующего артефакта.
+    if (guarded.remote) return notFound();
+    const run = guarded.run as PipelineRunRecord;
+    const store = deps.artifacts;
     if (!store) return notFound();
 
     const entry = await store.find(run.id, c.req.param('name'));
@@ -1144,7 +1399,7 @@ export function createPipelineProjectRoutes(
     scoped('automation:install'),
     runGuard('write'),
     async (c) => {
-      const run = guardedRun(c);
+      const guarded = guardedRun(c);
       const body = await c.req.json().catch(() => ({}));
       const parsed = resumeBodySchema.safeParse(body);
       if (!parsed.success) {
@@ -1154,6 +1409,27 @@ export function createPipelineProjectRoutes(
           messages.invalidBody(c),
         );
       }
+      if (guarded.remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          const updated = (await remoteClient.resumePipelineRun(
+            toLocalId(guarded.runId),
+            parsed.data as Record<string, unknown>,
+          )) as Record<string, unknown>;
+          return c.json({
+            ...updated,
+            ...(updated.run
+              ? { run: toRemotePipelineRun(updated.run as Record<string, unknown>) }
+              : {}),
+          });
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const run = guarded.run as PipelineRunRecord;
       try {
         const updated = await deps.engine.resume(run.id, {
           approved: parsed.data.approved,
@@ -1177,7 +1453,27 @@ export function createPipelineProjectRoutes(
     scoped('automation:install'),
     runGuard('write'),
     async (c) => {
-      const run = guardedRun(c);
+      const guarded = guardedRun(c);
+      if (guarded.remote) {
+        const remoteClient = resolveRemoteClient();
+        if (!remoteClient) return remoteUnavailable(c);
+        try {
+          const cancelledRemote = (await remoteClient.cancelPipelineRun(
+            toLocalId(guarded.runId),
+          )) as Record<string, unknown>;
+          return c.json({
+            ...cancelledRemote,
+            ...(cancelledRemote.run
+              ? { run: toRemotePipelineRun(cancelledRemote.run as Record<string, unknown>) }
+              : {}),
+          });
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const run = guarded.run as PipelineRunRecord;
       // Идущий в этом процессе прогон — отменяем через AbortController
       // (общий реестр активных прогонов, ADR-101 `run-control.ts`).
       const final = await runControl.cancelAndWait(run.id);
@@ -1214,7 +1510,23 @@ export function createPipelineProjectRoutes(
   // ─────────────── Шаблоны инстанса ───────────────
 
   // GET /api/v2/pipeline-templates — шаблоны инстанса.
+  //
+  // `?project_id=` — подсказка «в каком мире работать»: если проект удалённый,
+  // шаблоны берутся с сервера (шаблоны инстансные — параметр на сервер не
+  // передаётся). Без параметра поведение прежнее — локальные шаблоны.
   app.get('/pipeline-templates', auth.requireAuth, adminGuard, async (c) => {
+    const hintProjectId = c.req.query('project_id')?.trim();
+    if (hintProjectId && isRemoteRef(hintProjectId)) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        return c.json(await remoteClient.listPipelineTemplates());
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
     const templates = await listPipelineTemplates({
       pipelines: deps.pipelines,
       ...(deps.templates ? { templates: deps.templates } : {}),
@@ -1239,6 +1551,34 @@ export function createPipelineProjectRoutes(
       );
     }
     const projectId = parsed.data.projectId;
+
+    // Гибрид (ADR-042): инстанцирование в удалённый проект — на сервере.
+    // Префикс снимается с `projectId`; `installedBy`/id созданного пайплайна
+    // возвращаются с `remote:`.
+    if (isRemoteRef(projectId)) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = (await remoteClient.instantiatePipelineTemplate(
+          c.req.param('tid'),
+          { ...parsed.data, projectId: toLocalId(projectId) },
+        )) as Record<string, unknown>;
+        const created = result.created === true;
+        return c.json(
+          {
+            ...result,
+            ...(result.pipeline
+              ? { pipeline: toRemotePipeline(result.pipeline as Record<string, unknown>) }
+              : {}),
+          },
+          created ? 201 : 200,
+        );
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
 
     // Право на изменение содержимого проекта (инвариант 21): инстанцирование
     // создаёт пайплайн проекта — это мутация содержимого.

@@ -53,6 +53,11 @@
 > первое совпадение; `noProxy` важнее правил; CIDR — только по IP-литералу), пароли и TLS-материалы
 > профилей в `secrets/proxy/`, API `settings/proxy/profiles/:name/*` и `POST settings/proxy/test`,
 > UI-редактор профилей/правил и target-check, legacy-совместимость.
+> **Обновлено:** 2026-11-04 (решение владельца) — базовое доверие = **встроенные корни Node +
+> системное хранилище ОС + `NODE_EXTRA_CA_CERTS`** (`tls.getCACertificates`, Node ≥ 22.19; на старых
+> Node — фоллбек на Linux-бандлы), базовый набор ставится дефолтом Node
+> (`tls.setDefaultCACertificates`); `security.tls.caFile`/`caPem` **дополняют** его, а не заменяют
+> (см. п. 2). PostgreSQL `verify-full` по-прежнему требует явный CA из `security.tls` (fail-closed).
 > **Связано:** [PROP-100](./prop-100-ssrf-dns-rebinding.md),
 > [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
 > (webhooks), [ADR-041](./adr-041-llm-error-taxonomy.md) (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md),
@@ -95,8 +100,14 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
    `undici`-dispatcher (`setGlobalDispatcher(new Agent({ connect }))`) — покрывает обычный `fetch` по
    всему процессу; `egressFetch` — `fetch` с **явным** dispatcher (детерминированно, для тестов и точек
    вне глобального состояния). Инициализация — `initTlsTrust` при старте, **до** первого исходящего
-   запроса (в т.ч. для `syncProvidersFromEnv`, update-checker, дискавери OIDC). Пустая конфигурация —
-   системное доверие, поведение не меняется.
+   запроса (в т.ч. для `syncProvidersFromEnv`, update-checker, дискавери OIDC). Базовое доверие —
+   **встроенные корни Node + системное хранилище ОС + `NODE_EXTRA_CA_CERTS`**: объединяются
+   (`getCACertificates('default'|'system'|'extra')`, Node ≥ 22.19; на старых Node — `rootCertificates`
+   + extra + первый читаемый системный бандл Linux) и ставятся дефолтом Node
+   (`tls.setDefaultCACertificates`), поэтому их видят и «сырой» `fetch`, и дефолтные транспорты.
+   **`security.tls.caFile`/`caPem` дополняют базовый набор, а не заменяют его** (конкатенация, дедуп):
+   иначе вместе с корпоративным CA отрезались бы публичные сайты. Пустая конфигурация — базовый набор
+   процесса (поведение прежнее плюс системный стор ОС).
 3. **Fail-closed на явной конфигурации.** `caFile`+`caPem` одновременно → ошибка; заданный
    отсутствующий/нечитаемый/не-PEM файл → внятная ошибка (никакого тихого фоллбэка на системное
    доверие — опечатка в пути не должна молча ломать доверие к корпоративному CA). Заданное доверие без

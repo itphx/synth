@@ -629,7 +629,18 @@ create their own agents/dispatchers/CA pools.
 | `keyFile` | `SYNTH_TLS_KEY_FILE` | mTLS: path to the client private key PEM (default profile) |
 | `rejectUnauthorized` | `SYNTH_TLS_REJECT_UNAUTHORIZED` | Verify the server certificate (`true`/`1`/`false`/`0`); default `true` |
 
-- **An empty configuration — system trust** (Node's system CAs), behaviour is unchanged.
+- **An empty configuration — process trust:** Node's bundled roots + the **OS system store**
+  (Linux/macOS/Windows via `tls.getCACertificates`, Node ≥ 22.19) + `NODE_EXTRA_CA_CERTS`. The base set
+  is applied as the Node default (`tls.setDefaultCACertificates`), so raw `globalThis.fetch` and default
+  transports see it too.
+- **`caFile`/`caPem` extend the system trust, they do not replace it:** the user CA is concatenated with
+  the base set (deduplicated), so public sites keep verifying.
+- **Node requirement for the system store:** the `tls.getCACertificates` API (Node ≥ 22.19). On older
+  Node the base set is bundled roots + `NODE_EXTRA_CA_CERTS` + the first readable Linux system bundle
+  (`SSL_CERT_FILE`, `/etc/ssl/certs/ca-certificates.crt`, …); on macOS/Windows without this API, set the
+  CA explicitly via `security.tls`.
+- **PostgreSQL `verify-full` remains fail-closed** without an explicit CA from `security.tls` — the
+  system store does not substitute for it (documented decision).
 - **CA bundle:** one CA set for the whole egress; a PEM may contain several certificates. There is **no
   per-host CA** — only client certificates (mTLS) differ per host.
 - **`rejectUnauthorized`:** `true` (default) — server-certificate verification; `false` — verification
@@ -648,8 +659,9 @@ create their own agents/dispatchers/CA pools.
 - **Application:** at startup a global undici dispatcher is built (`setGlobalDispatcher`), so the ordinary
   `fetch` inherits the trust; points outside the shared transport (git) get the CA via
   `http.sslCAInfo=<caFile>` (`caPem` without a file is unavailable to git).
-- **`NODE_EXTRA_CA_CERTS` — compatibility only** (inherited by child processes: MCP stdio, git), **not** a
-  configurable trust mechanism.
+- **`NODE_EXTRA_CA_CERTS` — part of the base set** (Node ≥ 22.19: the `extra` kind; on older Node the
+  file is read directly) and compatibility for child processes (MCP stdio, git); it does **not** replace
+  `security.tls` and is not Synth configuration.
 - **Applied at startup:** `security.tls` is **not** part of `RuntimeSettings`/PG — the dispatcher is
   process-global. The runtime override lives in the **bootstrap file** `{dataDir}/security-tls.json` (see
   below), because it is read **before** connecting to PostgreSQL.

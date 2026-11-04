@@ -246,6 +246,15 @@ describe('ProjectTab — проектный скоуп скиллов (ADR-046 �
     )
   })
 
+  it('ошибка загрузки скоупа → пустое состояние, не вечная «Загрузка…»', async () => {
+    mocks.getProjectSkills.mockRejectedValue(Object.assign(new Error('boom'), { status: 502 }))
+    const container = await renderTab()
+
+    expect(container.querySelector('[data-testid="project-skills-error"]')?.textContent)
+      .toContain(enDict['projectTab.skills.loadError'])
+    expect(container.textContent).not.toContain(enDict['common.loading'])
+  })
+
   it('не-менеджер не видит блок и не запрашивает скиллы', async () => {
     useAuthStore.setState({ user: { id: 'u2', username: 'viewer', roles: [] } as never })
     mocks.getProject.mockResolvedValue({ ...PROJECT, members: { u1: 'owner', u2: 'viewer' } })

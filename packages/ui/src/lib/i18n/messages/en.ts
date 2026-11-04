@@ -1005,6 +1005,7 @@ export const dict = {
   // ADR-071 §2.4: project MCP scope (owner/lead/admin)
   'projectTab.mcp.title': 'MCP servers',
   'projectTab.mcp.empty': 'No MCP servers in the registry yet.',
+  'projectTab.mcp.loadError': 'Failed to load the project MCP servers.',
   'projectTab.mcp.available': 'Available',
   'projectTab.mcp.defaultOn': 'Default on',
   'projectTab.mcp.systemHint': 'System server: managed globally by the administrator, but the project can also disable access for itself.',
@@ -1761,6 +1762,7 @@ export const dict = {
   'projectTab.skills.defaultOn': 'Default on',
   'projectTab.skills.hint': '"Available" — the skill is allowed for the project (otherwise it is unavailable even in existing sessions). "Default on" — enabled in new sessions.',
   'projectTab.skills.forbidden': 'Insufficient permissions to manage project skills',
+  'projectTab.skills.loadError': 'Failed to load the project skills.',
   'rightPanel.stats.skills': 'Skills',
   'rightPanel.stats.commands': 'Commands',
   'rightPanel.stats.colSkill': 'Skill',

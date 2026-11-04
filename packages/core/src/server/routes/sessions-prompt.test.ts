@@ -12,7 +12,9 @@
  *   • `message.accepted` — **адресное** событие (получатель — отправитель);
  *   • `queue.state` несёт **только счётчики** — без текста и без автора;
  *   • `message.delivered` приходит при материализации сообщения в истории и
- *     несёт `ord` (монотонный порядок записи, ADR-118 §2).
+ *     несёт `ord` (монотонный порядок записи, ADR-118 §2);
+ *   • клиентский `messageId` становится id сохранённого сообщения и всех
+ *     связанных событий (регресс на двойную реплику в standalone).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
@@ -283,5 +285,97 @@ describe('POST /api/v2/sessions/:id/prompt — события приёма (ADR-
     const fresh = (await sessionManager.getSession(session.id))!;
     expect(fresh.messages).toHaveLength(1);
     expect(fresh.messages[0]!.ord).toBe(1);
+  });
+
+  it('клиентский messageId становится id сохранённого сообщения и всех событий', async () => {
+    // Регресс: в standalone UI передаёт клиентский `messageId` и сразу рисует
+    // по нему оптимистичный пузырь. Если сервер сохранит сообщение с другим id,
+    // `message.delivered` не найдёт его и клиент загрузит вторую копию — в ленте
+    // появляются две одинаковые реплики (ADR-118 §3).
+    const { app, sessionManager, eventBus } = createTestApp(tmpDir, { realQueue: true });
+    const session = await sessionManager.createSession({ title: 'P', userId: 'local' });
+    const clientId = 'stream-1-1700000000000';
+
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e));
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'привет', messageId: clientId }),
+    });
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as AcceptedBody;
+    // 1. Ответ приёма несёт клиентский id.
+    expect(body.messageId).toBe(clientId);
+
+    // 2. В истории сохранено ровно одно user-сообщение — с тем же id.
+    //    Материализацию делает процессор очереди (он же публикует `message.delivered`).
+    const deadline = Date.now() + 5000;
+    let delivered: BusEvent | undefined;
+    while (Date.now() < deadline && !delivered) {
+      delivered = events.find((e) => e.type === 'message.delivered');
+      if (!delivered) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(delivered).toBeDefined();
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const userMessages = fresh.messages.filter((m) => m.role === 'user');
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]!.id).toBe(clientId);
+    expect(userMessages[0]!.metadata?.stream_id).toBe(clientId);
+
+    // 3. Список истории отдаёт сообщение под этим id (без пары-двойника).
+    const listRes = await app.request(`/api/v2/sessions/${session.id}/messages`);
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as { messages: Array<{ id: string; role: string }> };
+    expect(list.messages.filter((m) => m.role === 'user').map((m) => m.id)).toEqual([clientId]);
+
+    // 4. Точечная загрузка по клиентскому id находит сообщение (раньше — 404).
+    const oneRes = await app.request(`/api/v2/sessions/${session.id}/messages/${clientId}`);
+    expect(oneRes.status).toBe(200);
+    const one = (await oneRes.json()) as { id: string };
+    expect(one.id).toBe(clientId);
+
+    // 5. `message.delivered` несёт тот же id — дедуп в клиенте срабатывает.
+    expect(delivered!.data).toMatchObject({ messageId: clientId, role: 'user' });
+  });
+
+  it('непригодный messageId (пробелы/пусто/не строка) → серверный id во всех ответах и событиях', async () => {
+    // До появления `normalizeClientMessageId` строка из пробелов truthy-проходила
+    // в `streamId`, и сообщение сохранялось с id `'   '`.
+    const { app, sessionManager, eventBus } = createTestApp(tmpDir, { realQueue: true });
+
+    for (const invalid of ['   ', '', 42]) {
+      const session = await sessionManager.createSession({ title: 'P', userId: 'local' });
+      const events: BusEvent[] = [];
+      eventBus.subscribe(session.id, (e) => events.push(e));
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'привет', messageId: invalid }),
+      });
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as AcceptedBody;
+      // Серверный id непустой, без внешних пробелов и не совпадает с мусором.
+      expect(body.messageId).toBeTruthy();
+      expect(body.messageId.trim()).toBe(body.messageId);
+      if (typeof invalid === 'string') expect(body.messageId).not.toBe(invalid);
+
+      // Тот же id — в истории и в `message.delivered`.
+      const deadline = Date.now() + 5000;
+      let delivered: BusEvent | undefined;
+      while (Date.now() < deadline && !delivered) {
+        delivered = events.find((e) => e.type === 'message.delivered');
+        if (!delivered) await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(delivered).toBeDefined();
+      const fresh = (await sessionManager.getSession(session.id))!;
+      const userMessages = fresh.messages.filter((m) => m.role === 'user');
+      expect(userMessages).toHaveLength(1);
+      expect(userMessages[0]!.id).toBe(body.messageId);
+      expect(userMessages[0]!.metadata?.stream_id).toBe(body.messageId);
+      expect(delivered!.data).toMatchObject({ messageId: body.messageId, role: 'user' });
+    }
   });
 });

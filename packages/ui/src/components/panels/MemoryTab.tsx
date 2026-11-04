@@ -302,8 +302,10 @@ export const MemoryTab: React.FC = () => {
     setAutomationLoading(true)
     setAutomationError(null)
     try {
+      // `projectId` — `remote:`-id для удалённого проекта: сервер отдаёт
+      // шаблоны своего инстанса (локальные ему не соответствуют).
       const [templateList, pipelineList] = await Promise.all([
-        synthApi.getPipelineTemplates(),
+        synthApi.getPipelineTemplates(projectId),
         synthApi.getProjectPipelines(projectId),
       ])
       setTemplates(templateList)

@@ -68,7 +68,7 @@ describe('initTlsTrust: bootstrap читается до storage/PG', () => {
     const trust = await initTlsTrust(undefined, {}, { dataDir: dir });
 
     expect(getTlsCaPath()).toBe(runtime.caFile);
-    expect(trust.ca).toBe(CA_PEM);
+    expect(trust.ca).toContain(CA_PEM);
     expect(trust.profiles?.[0]).toMatchObject({
       id: 'internal',
       cert: CLIENT_CERT,
@@ -95,6 +95,13 @@ describe('initTlsTrust: bootstrap читается до storage/PG', () => {
 });
 
 describe('getTlsStatus (будущий API)', () => {
+  it('пустая конфигурация: пользовательского CA нет (count=0, базовый набор не показывается)', () => {
+    const status = getTlsStatus({ env: {} });
+    expect(status.ca.count).toBe(0);
+    expect(status.ca.subjects).toEqual([]);
+    expect(status.ca.source).toBe('none');
+  });
+
   it('не отдаёт PEM/ключи; показывает subject и readOnly', async () => {
     const { runtime } = await makeBootstrap();
     const status = getTlsStatus({ runtime });

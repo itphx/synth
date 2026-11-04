@@ -872,3 +872,18 @@ describe('MemoryTab — автоматизация памяти (ADR-101)', () =
     expect(container.querySelector('[data-testid="memory-automation-list"]')).not.toBeNull()
   })
 })
+
+describe('MemoryTab — гибрид (remote-сессия)', () => {
+  it('remote-сессия: успешный ответ без баннера, шаблоны — с project_id', async () => {
+    mocks.getSessionMemory.mockResolvedValue(
+      memoryPayload({ scope: { projectId: 'remote:p1' } }),
+    )
+
+    const container = await renderMemory()
+
+    expect(container.querySelector('[data-testid="memory-error"]')).toBeNull()
+    expect(mocks.getSessionMemory).toHaveBeenCalledWith('s1')
+    expect(mocks.getPipelineTemplates).toHaveBeenCalledWith('remote:p1')
+    expect(mocks.getProjectPipelines).toHaveBeenCalledWith('remote:p1')
+  })
+})

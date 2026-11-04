@@ -29,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   getProjectMcp: vi.fn(),
   updateProjectMcp: vi.fn(),
   getMcpRegistry: vi.fn(),
+  getProjectSkills: vi.fn(),
+  updateProjectSkills: vi.fn(),
   updateProject: vi.fn(),
   getWorkspaceRoot: vi.fn(),
   notify: vi.fn(),
@@ -107,6 +109,8 @@ beforeEach(() => {
   mocks.getProjectMcp.mockResolvedValue({ enabled: ['srvB'], defaultOn: [], knownServers: ['sys', 'srvB'] })
   mocks.updateProjectMcp.mockResolvedValue({ enabled: ['srvB'], defaultOn: ['srvB'], knownServers: ['sys', 'srvB'] })
   mocks.getMcpRegistry.mockResolvedValue({ entries: REGISTRY })
+  mocks.getProjectSkills.mockResolvedValue({ project_id: 'p1', skills: [], enabled: [], defaultOn: [] })
+  mocks.updateProjectSkills.mockResolvedValue({ project_id: 'p1', skills: [], enabled: [], defaultOn: [] })
   mocks.updateProject.mockResolvedValue(PROJECT)
   mocks.getWorkspaceRoot.mockResolvedValue({ root: '/ws', entries: [] })
 
@@ -389,5 +393,57 @@ describe('ProjectTab — клик по имени/иконке открывае�
     await act(async () => {})
 
     expect(container.querySelector('[data-testid="project-edit-trigger"]')!.textContent).toContain('Renamed project')
+  })
+})
+
+describe('ProjectTab — гибрид и отказы загрузки (MCP)', () => {
+  it('реестр MCP недоступен, скоуп проекта успешен → блок из knownServers, без вечной загрузки', async () => {
+    mocks.getMcpRegistry.mockRejectedValue(apiError(404, 'NOT_FOUND', 'no registry'))
+    const container = await renderTab()
+
+    expect(mocks.getProjectMcp).toHaveBeenCalledWith('p1')
+    expect(container.querySelector('[data-testid="project-mcp-list"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="project-mcp-srvB"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="project-mcp-error"]')).toBeNull()
+    // Бейдж «системный» без записи реестра не рисуется (строка есть, метки нет).
+    const sysRow = container.querySelector('[data-testid="project-mcp-sys"]')
+    expect(sysRow).not.toBeNull()
+    expect(sysRow!.textContent).not.toContain('system')
+  })
+
+  it('скоуп MCP недоступен → честное пустое состояние, не «loading»', async () => {
+    mocks.getProjectMcp.mockRejectedValue(apiError(502, 'REMOTE_UNAVAILABLE'))
+    const container = await renderTab()
+
+    expect(container.querySelector('[data-testid="project-mcp-error"]')?.textContent)
+      .toContain(enDict['projectTab.mcp.loadError'])
+    expect(container.textContent).not.toContain(enDict['common.loading'])
+  })
+
+  it('remote-проект: MCP/скиллы загружаются без projectTab.loadError', async () => {
+    const remoteProject = {
+      ...PROJECT,
+      id: 'remote:p1',
+      origin: 'remote',
+    }
+    mocks.getProject.mockResolvedValue(remoteProject)
+    mocks.getProjectSkills.mockResolvedValue({
+      project_id: 'remote:p1',
+      skills: [],
+      enabled: [],
+      defaultOn: [],
+    })
+    useSessionsStore.setState({
+      sessions: [{ id: 's1', name: 'S', project_id: 'remote:p1', settings: { model: 'm' } }],
+    } as never)
+    useProjectsStore.setState({ projects: [remoteProject] as never })
+
+    const container = await renderTab()
+
+    expect(mocks.getProjectMcp).toHaveBeenCalledWith('remote:p1')
+    expect(container.querySelector('[data-testid="project-mcp-list"]')).not.toBeNull()
+    expect(mocks.notify).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['projectTab.loadError'] }),
+    )
   })
 })

@@ -7,6 +7,7 @@ import { CURRENCIES, type Currency } from '@itphx/synth-shared';
 import type { RemoteRequestInfo } from '../metrics/collectors/hybrid.js';
 // ADR-099: запросы к удалённому backend — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
+import { describeTransportError } from './transport-error.js';
 
 /** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
 function asCurrency(value: unknown): Currency | undefined {
@@ -274,7 +275,12 @@ export class RemoteBackendClient {
         throw new RemoteError(`Таймаут запроса к серверу (${timeoutMs} мс): ${method} ${path}`, 'OFFLINE');
       }
       const reason = err instanceof Error ? err.message : String(err);
-      throw new RemoteError(`Сервер недоступен: ${reason}`, 'OFFLINE');
+      // ADR-099: настоящая причина (TLS/DNS/отказ соединения) — в `cause.code`;
+      // без неё сообщение «fetch failed» бесполезно для диагностики.
+      const detail = describeTransportError(err);
+      // Лог без query/кредов: только метод и путь эндпоинта.
+      console.warn(`[hybrid] ${method} ${path.split('?')[0]}: ${reason}${detail}`);
+      throw new RemoteError(`Сервер недоступен: ${reason}${detail}`, 'OFFLINE');
     } finally {
       if (timer) clearTimeout(timer);
       opts?.signal?.removeEventListener('abort', onExternalAbort);
@@ -636,6 +642,201 @@ export class RemoteBackendClient {
 
   deleteProject(id: string): Promise<void> {
     return this.request<void>('DELETE', `/api/v2/projects/${encodeURIComponent(id)}`);
+  }
+
+  // Память сессии (ADR-107): агрегаты вкладки «Память» удалённой сессии.
+  // Ответ — DTO `GET /api/v2/sessions/:id/memory`; id внутри него принадлежат
+  // удалённому миру и переписываются вызывающим (`remote:`).
+  getSessionMemory(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/memory`);
+  }
+
+  // Проектный скоуп MCP (ADR-071 §2.4) удалённого проекта.
+  getProjectMcp(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/projects/${encodeURIComponent(id)}/mcp`);
+  }
+
+  updateProjectMcp(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('PUT', `/api/v2/projects/${encodeURIComponent(id)}/mcp`, body);
+  }
+
+  // Проектный скоуп скиллов (ADR-046 §4.5) удалённого проекта.
+  getProjectSkills(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/projects/${encodeURIComponent(id)}/skills`);
+  }
+
+  updateProjectSkills(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('PUT', `/api/v2/projects/${encodeURIComponent(id)}/skills`, body);
+  }
+
+  // Worktree'ы удалённого проекта (ADR-114): операции исполняются сервером
+  // (в managed backend — тот же `WorktreeService`).
+  listProjectWorktrees(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/projects/${encodeURIComponent(id)}/worktrees`);
+  }
+
+  createProjectWorktree(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/projects/${encodeURIComponent(id)}/worktrees`, body);
+  }
+
+  pruneProjectWorktrees(id: string, body?: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/projects/${encodeURIComponent(id)}/worktrees/prune`, body ?? {});
+  }
+
+  removeProjectWorktree(id: string, worktreeId: string, opts?: { force?: boolean }): Promise<void> {
+    const suffix = opts?.force ? '?force=true' : '';
+    return this.request<void>(
+      'DELETE',
+      `/api/v2/projects/${encodeURIComponent(id)}/worktrees/${encodeURIComponent(worktreeId)}${suffix}`,
+    );
+  }
+
+  // Пайплайны проекта (ADR-101): список/деталь/публикация.
+  listProjectPipelines(
+    id: string,
+    params?: { limit?: number; offset?: number },
+  ): Promise<unknown> {
+    const query: string[] = [];
+    if (params?.limit !== undefined) query.push(`limit=${encodeURIComponent(String(params.limit))}`);
+    if (params?.offset !== undefined) query.push(`offset=${encodeURIComponent(String(params.offset))}`);
+    const suffix = query.length > 0 ? `?${query.join('&')}` : '';
+    return this.request<unknown>(
+      'GET',
+      `/api/v2/projects/${encodeURIComponent(id)}/pipelines${suffix}`,
+    );
+  }
+
+  createProjectPipeline(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/projects/${encodeURIComponent(id)}/pipelines`, body);
+  }
+
+  getProjectPipeline(id: string, pipelineId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'GET',
+      `/api/v2/projects/${encodeURIComponent(id)}/pipelines/${encodeURIComponent(pipelineId)}`,
+    );
+  }
+
+  updateProjectPipeline(
+    id: string,
+    pipelineId: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.request<unknown>(
+      'PUT',
+      `/api/v2/projects/${encodeURIComponent(id)}/pipelines/${encodeURIComponent(pipelineId)}`,
+      body,
+    );
+  }
+
+  deleteProjectPipeline(id: string, pipelineId: string): Promise<void> {
+    return this.request<void>(
+      'DELETE',
+      `/api/v2/projects/${encodeURIComponent(id)}/pipelines/${encodeURIComponent(pipelineId)}`,
+    );
+  }
+
+  publishProjectPipeline(id: string, pipelineId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/projects/${encodeURIComponent(id)}/pipelines/${encodeURIComponent(pipelineId)}/publish`,
+    );
+  }
+
+  // Прогоны пайплайнов проекта (ADR-101).
+  listPipelineRuns(
+    id: string,
+    pipelineId: string,
+    params?: { limit?: number; offset?: number; status?: string },
+  ): Promise<unknown> {
+    const query: string[] = [];
+    if (params?.limit !== undefined) query.push(`limit=${encodeURIComponent(String(params.limit))}`);
+    if (params?.offset !== undefined) query.push(`offset=${encodeURIComponent(String(params.offset))}`);
+    if (params?.status) query.push(`status=${encodeURIComponent(params.status)}`);
+    const suffix = query.length > 0 ? `?${query.join('&')}` : '';
+    return this.request<unknown>(
+      'GET',
+      `/api/v2/projects/${encodeURIComponent(id)}/pipelines/${encodeURIComponent(pipelineId)}/runs${suffix}`,
+    );
+  }
+
+  startPipelineRun(
+    id: string,
+    pipelineId: string,
+    body?: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/projects/${encodeURIComponent(id)}/pipelines/${encodeURIComponent(pipelineId)}/runs`,
+      body ?? {},
+    );
+  }
+
+  getPipelineRun(
+    runId: string,
+    params?: { eventsLimit?: number; eventsBefore?: string },
+  ): Promise<unknown> {
+    const query: string[] = [];
+    if (params?.eventsLimit !== undefined) {
+      query.push(`events_limit=${encodeURIComponent(String(params.eventsLimit))}`);
+    }
+    if (params?.eventsBefore) query.push(`events_before=${encodeURIComponent(params.eventsBefore)}`);
+    const suffix = query.length > 0 ? `?${query.join('&')}` : '';
+    return this.request<unknown>('GET', `/api/v2/pipeline-runs/${encodeURIComponent(runId)}${suffix}`);
+  }
+
+  resumePipelineRun(runId: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/pipeline-runs/${encodeURIComponent(runId)}/resume`,
+      body,
+    );
+  }
+
+  cancelPipelineRun(runId: string): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/pipeline-runs/${encodeURIComponent(runId)}/cancel`);
+  }
+
+  /**
+   * Шаблоны пайплайнов инстанса (ADR-101).
+   *
+   * `projectId` — необязательная подсказка: если он указывает на удалённый
+   * проект, вызывающий проксирует запрос сюда (сервер проигнорирует параметр
+   * `project_id` — шаблоны инстансные).
+   */
+  listPipelineTemplates(): Promise<unknown> {
+    return this.request<unknown>('GET', '/api/v2/pipeline-templates');
+  }
+
+  instantiatePipelineTemplate(templateId: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/pipeline-templates/${encodeURIComponent(templateId)}/instantiate`,
+      body,
+    );
+  }
+
+  // Портал памяти удалённого инстанса (ADR-107): только мутации индексов —
+  // чтение портала (`GET /indexes|/facts|/graph|/status`) остаётся локальным.
+
+  createMemoryIndex(body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', '/api/v2/memory/indexes', body);
+  }
+
+  updateMemoryIndex(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('PATCH', `/api/v2/memory/indexes/${encodeURIComponent(id)}`, body);
+  }
+
+  rebuildMemoryIndex(id: string, body?: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/memory/indexes/${encodeURIComponent(id)}/rebuild`,
+      body ?? {},
+    );
+  }
+
+  deleteMemoryIndex(id: string): Promise<void> {
+    return this.request<void>('DELETE', `/api/v2/memory/indexes/${encodeURIComponent(id)}`);
   }
 
   // Сообщения

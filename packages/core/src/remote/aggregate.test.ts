@@ -8,6 +8,16 @@ import {
   toRemote,
   mergeItems,
   remoteErrorToHttp,
+  toRemoteMemoryIndex,
+  toRemoteSessionMemory,
+  toRemotePipeline,
+  toRemotePipelinePage,
+  toRemotePipelineDetail,
+  toRemotePipelineRun,
+  toRemotePipelineRunPage,
+  toRemotePipelineRunDetail,
+  toRemoteWorktree,
+  toRemoteWorktreeList,
 } from './aggregate.js';
 import { RemoteError } from './types.js';
 
@@ -142,5 +152,89 @@ describe('remoteErrorToHttp', () => {
   it('не-RemoteError → null', () => {
     expect(remoteErrorToHttp(new Error('обычная ошибка'))).toBeNull();
     expect(remoteErrorToHttp('строка')).toBeNull();
+  });
+});
+
+describe('camelCase-хелперы правой панели (гибрид)', () => {
+  it('toRemoteMemoryIndex: id и projectId → remote:', () => {
+    expect(toRemoteMemoryIndex({ id: 'idx-1', projectId: 'p-1', name: 'docs' })).toEqual({
+      id: 'remote:idx-1',
+      projectId: 'remote:p-1',
+      name: 'docs',
+    });
+  });
+
+  it('toRemoteSessionMemory: scope и индексы → remote:, origin добавляется', () => {
+    const result = toRemoteSessionMemory({
+      scope: { projectId: 'p-1' },
+      indexes: {
+        total: 1,
+        items: [{ id: 'idx-1', projectId: 'p-1', scope: 'project' }],
+      },
+      facts: { active: 2 },
+    });
+    expect(result.origin).toBe('remote');
+    expect(result.scope.projectId).toBe('remote:p-1');
+    expect(result.indexes.items[0]!.id).toBe('remote:idx-1');
+    expect(result.indexes.items[0]!.projectId).toBe('remote:p-1');
+    // исходный объект не мутирован
+    expect(result.facts.active).toBe(2);
+  });
+
+  it('toRemotePipeline / toRemotePipelinePage: id и projectId → remote:', () => {
+    expect(toRemotePipeline({ id: 'pl-1', projectId: 'p-1' })).toEqual({
+      id: 'remote:pl-1',
+      projectId: 'remote:p-1',
+    });
+    const page = toRemotePipelinePage({
+      pipelines: [{ id: 'pl-1', projectId: 'p-1' }],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    });
+    expect(page.pipelines[0]!.id).toBe('remote:pl-1');
+    expect(page.pipelines[0]!.projectId).toBe('remote:p-1');
+    expect(page.total).toBe(1);
+  });
+
+  it('toRemotePipelineDetail: pipeline, published и versions → remote:', () => {
+    const detail = toRemotePipelineDetail({
+      pipeline: { id: 'pl-1', projectId: 'p-1' },
+      published: { pipelineId: 'pl-1', version: 1 },
+      versions: [{ pipelineId: 'pl-1', version: 1 }],
+    });
+    expect(detail.pipeline.id).toBe('remote:pl-1');
+    expect(detail.published?.pipelineId).toBe('remote:pl-1');
+    expect(detail.versions[0]!.pipelineId).toBe('remote:pl-1');
+  });
+
+  it('toRemotePipelineRun*: id/projectId/pipelineId → remote:', () => {
+    expect(toRemotePipelineRun({ id: 'run-1', projectId: 'p-1', pipelineId: 'pl-1' })).toEqual({
+      id: 'remote:run-1',
+      projectId: 'remote:p-1',
+      pipelineId: 'remote:pl-1',
+    });
+    const page = toRemotePipelineRunPage({ runs: [{ id: 'run-1', pipelineId: 'pl-1' }] });
+    expect(page.runs[0]!.id).toBe('remote:run-1');
+    const detail = toRemotePipelineRunDetail({ run: { id: 'run-1', projectId: 'p-1' }, events: [] });
+    expect(detail.run?.id).toBe('remote:run-1');
+    expect(detail.run?.projectId).toBe('remote:p-1');
+  });
+
+  it('toRemoteWorktreeList: projectId/attachedSessionId → remote:, id worktree не префиксуется', () => {
+    const payload = toRemoteWorktreeList({
+      worktrees: [{ id: 'wt-1', projectId: 'p-1', attachedSessionId: 's-1', name: 'feature' }],
+    });
+    expect(payload.worktrees[0]).toEqual({
+      id: 'wt-1',
+      projectId: 'remote:p-1',
+      attachedSessionId: 'remote:s-1',
+      name: 'feature',
+    });
+    expect(toRemoteWorktree({ id: 'wt-2', projectId: 'p-2' })).toEqual({
+      id: 'wt-2',
+      projectId: 'remote:p-2',
+    });
   });
 });

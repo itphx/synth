@@ -981,6 +981,7 @@ export const dict = {
   // ADR-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
   'projectTab.mcp.title': 'MCP-серверы',
   'projectTab.mcp.empty': 'В реестре пока нет MCP-серверов.',
+  'projectTab.mcp.loadError': 'Не удалось загрузить MCP-серверы проекта.',
   'projectTab.mcp.available': 'Доступен',
   'projectTab.mcp.defaultOn': 'По умолчанию',
   'projectTab.mcp.systemHint': 'Системный сервер: администратор управляет им глобально, но проект тоже может выключить доступ у себя.',
@@ -1738,6 +1739,7 @@ export const dict = {
   'projectTab.skills.defaultOn': 'Включён по умолчанию',
   'projectTab.skills.hint': '«Доступен» — скилл разрешён проекту (иначе недоступен и в уже созданных сессиях). «По умолчанию» — включён в новых сессиях.',
   'projectTab.skills.forbidden': 'Недостаточно прав для управления скиллами проекта',
+  'projectTab.skills.loadError': 'Не удалось загрузить скиллы проекта.',
   'rightPanel.stats.skills': 'Скиллы',
   'rightPanel.stats.commands': 'Команды',
   'rightPanel.stats.colSkill': 'Скилл',

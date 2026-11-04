@@ -13,6 +13,7 @@ import type { RemoteCredentials, RemoteUser } from './types.js';
 // ADR-099: дискавери OIDC — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
 import { RemoteError } from './types.js';
+import { describeTransportError } from './transport-error.js';
 import { loadCredentials, saveCredentials, listCredentials } from './credentials.js';
 import { refreshAccessToken } from './device-flow.js';
 import { RemoteSession } from './session.js';
@@ -35,6 +36,19 @@ const PLUGIN_POLICY_TTL_MS = 60_000;
 /** Обрезать завершающие слэши у адреса сервера. */
 function normalizeBaseUrl(url: string): string {
   return url.trim().replace(/\/+$/, '');
+}
+
+/**
+ * Адрес сервера для лога — только origin: без userinfo, пути и query
+ * (в URL не должно утечь ничего похожего на креды).
+ */
+function serverForLog(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return 'сервер';
+  }
 }
 
 /** Токен протух, если expiresAt задан и не позже текущего момента. */
@@ -205,9 +219,17 @@ export class RemoteConnection {
       res = await egressFetch(`${base}/auth/oidc-meta`, {
         signal: AbortSignal.timeout(this.deps.timeoutMs ?? DEFAULT_OIDC_META_TIMEOUT_MS),
       });
-    } catch {
-      if (fallback) return { ...fallback };
-      throw new RemoteError(`Сервер недоступен: не удалось получить OIDC-параметры (${base})`, 'OFFLINE');
+    } catch (err) {
+      // ADR-099: показываем реальную причину транспорта (TLS/DNS/отказ/таймаут),
+      // иначе `fetch failed` не подсказывает, что чинить.
+      const detail = describeTransportError(err);
+      const target = serverForLog(base);
+      if (fallback) {
+        console.warn(`[hybrid] OIDC-дискавери ${target} не удался${detail} — fallback на deps.default*`);
+        return { ...fallback };
+      }
+      console.warn(`[hybrid] не удалось получить OIDC-параметры (${target})${detail}`);
+      throw new RemoteError(`Сервер недоступен: не удалось получить OIDC-параметры (${base})${detail}`, 'OFFLINE');
     }
 
     let body: Record<string, unknown> = {};

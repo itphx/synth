@@ -439,10 +439,17 @@ export const pipelineProjectApi = {
 
   // ─────────────── Шаблоны инстанса ───────────────
 
-  /** GET /pipeline-templates — шаблоны инстанса (ADMIN в managed). */
-  async getPipelineTemplates(): Promise<PipelineTemplate[]> {
+  /**
+   * GET /pipeline-templates — шаблоны инстанса (ADMIN в managed).
+   *
+   * `projectId` — подсказка «в каком мире работать»: для `remote:`-проекта
+   * сервер отдаёт шаблоны удалённого инстанса (локальные ему не подходят).
+   * Без аргумента — прежнее поведение (локальные шаблоны).
+   */
+  async getPipelineTemplates(projectId?: string): Promise<PipelineTemplate[]> {
+    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
     const response = await fetchJSON<{ templates?: PipelineTemplate[] }>(
-      `${BASE_URL}/pipeline-templates`,
+      `${BASE_URL}/pipeline-templates${query}`,
     )
     return response.templates ?? []
   },

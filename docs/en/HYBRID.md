@@ -150,6 +150,25 @@ synth serve --connect https://synth.k3s.itphx.loc
 - Operations on remote entities are proxied to the server; mutations require
   confirmation in the UI (deletion, project switching).
 
+### 2.1 Right panel in hybrid mode
+
+- Remote session memory (`GET /sessions/:id/memory`), the project MCP and skills
+  scope (`/projects/:id/mcp|skills`), worktrees (`/projects/:id/worktrees*`), and
+  pipelines/runs/templates (`/projects/:id/pipelines*`, `/pipeline-runs/*`,
+  `/pipeline-templates`) for `remote:` entities are **proxied to the server** —
+  access and data are checked there.
+- Memory index, pipeline, and run identifiers in those responses carry the
+  `remote:` prefix (the index/pipeline/run lives on the server); worktree ids are
+  not prefixed — they are addressed within the `remote:` project.
+- The local instance memory portal (`GET/POST/PATCH/DELETE /memory/*`) is a
+  resource of the **local** world: reads (`/indexes`, `/status`, `/facts`,
+  `/graph`) serve local records only, and index mutations are proxied only for a
+  `remote:` id/`projectId`.
+- `/api/v2/mcp/registry` exists only in the managed backend; in standalone it is
+  unavailable. The UI takes the project's MCP server list from `knownServers` in
+  the `GET /projects/:id/mcp` response and uses the registry only as an optional
+  source for the "system" badge (a registry failure does not clear the block).
+
 ### 3. LLM centralization
 
 - Remote sessions: the LLM is called by the server engine (already the case).

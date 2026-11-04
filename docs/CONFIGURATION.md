@@ -628,7 +628,18 @@ UI **read-only** с пометкой источника; переопредел�
 | `keyFile` | `SYNTH_TLS_KEY_FILE` | mTLS: путь к PEM-файлу приватного ключа клиента (default-профиль) |
 | `rejectUnauthorized` | `SYNTH_TLS_REJECT_UNAUTHORIZED` | Проверять сертификат сервера (`true`/`1`/`false`/`0`); по умолчанию `true` |
 
-- **Пустая конфигурация — системное доверие** (системные CA Node), поведение не меняется.
+- **Пустая конфигурация — доверие процесса:** встроенные корни Node + **системное хранилище ОС**
+  (Linux/macOS/Windows через `tls.getCACertificates`, Node ≥ 22.19) + `NODE_EXTRA_CA_CERTS`. Базовый
+  набор применяется как дефолт Node (`tls.setDefaultCACertificates`), поэтому его видят и «сырой»
+  `globalThis.fetch`, и дефолтные транспорты.
+- **`caFile`/`caPem` дополняют системное доверие, а не заменяют его:** пользовательский CA
+  конкатенируется с базовым набором (дедуп), публичные сайты продолжают проверяться.
+- **Требование к Node для системного стора:** API `tls.getCACertificates` (Node ≥ 22.19). На старых
+  Node базовый набор = встроенные корни + `NODE_EXTRA_CA_CERTS` + первый читаемый системный бандл
+  Linux (`SSL_CERT_FILE`, `/etc/ssl/certs/ca-certificates.crt`, …); macOS/Windows без этого API —
+  задайте CA явно через `security.tls`.
+- **PostgreSQL `verify-full` по-прежнему fail-closed** без явного CA из `security.tls` — системный
+  стор его не заменяет (документированное решение).
 - **CA-бандл:** один CA-набор на весь egress; в PEM допустимо несколько сертификатов. **Per-host CA
   нет** — различаются только клиентские сертификаты (mTLS).
 - **`rejectUnauthorized`:** `true` (дефолт) — проверка сертификата сервера; `false` — проверка
@@ -648,8 +659,9 @@ UI **read-only** с пометкой источника; переопредел�
 - **Применение:** при старте строится глобальный undici-dispatcher (`setGlobalDispatcher`), обычный
   `fetch` наследует доверие; точки вне общего транспорта (git) получают CA через
   `http.sslCAInfo=<caFile>` (`caPem` без файла git-каналу недоступен).
-- **`NODE_EXTRA_CA_CERTS` — только совместимость** (наследуется дочерними процессами: MCP stdio, git),
-  **не** конфигурируемый механизм доверия.
+- **`NODE_EXTRA_CA_CERTS` — часть базового набора** (Node ≥ 22.19 — вид `extra`; на старых Node
+  читается файлом) и совместимость для дочерних процессов (MCP stdio, git); **не** заменяет
+  `security.tls` и не является конфигурацией Synth.
 - **Применяется при старте:** `security.tls` **не входит** в `RuntimeSettings`/PG — dispatcher
   процесс-глобальный. Runtime-оверрайд живёт в **bootstrap-файле** `{dataDir}/security-tls.json`
   (см. ниже), потому что читается **до** подключения к PostgreSQL.

@@ -70,7 +70,19 @@ setsid pnpm --filter @itphx/synth-ui dev > tmp/ui.log 2>&1 &
 
 ## 7. TLS/certificates (outgoing connections and PostgreSQL)
 
-The single source of TLS/CA trust in Synth is the `security.tls` section (ADR-099). All outgoing connections (LLM providers, MCP, webhooks, hybrid, OIDC/JWKS, icon/update fetching, `web_fetch`) and TLS to PostgreSQL take their CA/client certificates from there.
+The single source of TLS/CA trust in Synth is the `security.tls` section (ADR-099). All outgoing connections (LLM providers, MCP, webhooks, hybrid, OIDC/JWKS, icon/update fetching, `web_fetch`) and TLS to PostgreSQL take their CA/client certificates from there. The process base trust is **Node's bundled roots + the OS system store + `NODE_EXTRA_CA_CERTS`**; `security.tls` **extends** it.
+
+### Hybrid: "Server unavailable: could not fetch OIDC parameters (…)"
+
+**Symptom:** a connection to an external/test instance fails and the UI/CLI shows this message even though `curl` to the same address returns 200. The end of the message carries the cause code (e.g. `: SELF_SIGNED_CERT_IN_CHAIN — TLS: …`), and the `synth serve` log has a line prefixed with `[hybrid]`.
+
+**Cause:** by default Node trusts **only its bundled roots**, not the OS system store. An internal CA (`ITPHX SRV CA` and similar) or a Let's Encrypt root is present in the system but not in Node's bundled set — `fetch` fails with `SELF_SIGNED_CERT_IN_CHAIN`/`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. Synth merges Node's bundled roots + the OS system store + the `security.tls` CA; `caFile`/`caPem` **extend** that trust instead of replacing it (replacing it would cut off public sites).
+
+**Solution:**
+
+- upgrade Node to **≥ 22.19** (the `tls.getCACertificates` API); on older Node, Linux picks up the first readable system bundle (`SSL_CERT_FILE`, `/etc/ssl/certs/ca-certificates.crt`, …), while macOS/Windows require an explicit CA via `security.tls`;
+- or add the CA explicitly: UI "Settings → Network → Trusted CA (TLS)" (`{dataDir}/security-tls.json`) or `security.tls.caFile`/`caPem`; applied after a restart;
+- reading the cause code: TLS — `SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `CERT_HAS_EXPIRED`, `ERR_TLS_CERT_ALTNAME_INVALID`, `ERR_SSL_*` (check the CA and the host name); DNS — `ENOTFOUND`/`EAI_AGAIN`; connection refused — `ECONNREFUSED` (network/firewall/port); timeout — `ETIMEDOUT`/`UND_ERR_CONNECT_TIMEOUT`.
 
 ### `self-signed certificate in certificate chain` / `DEPTH_ZERO_SELF_SIGNED_CERT`
 
@@ -88,7 +100,7 @@ security:
 
 or the env var `SYNTH_TLS_CA_FILE=/etc/synth/tls/ca.crt` (`caPem` — `SYNTH_TLS_CA_PEM`). For mTLS add `certFile`/`keyFile` (`SYNTH_TLS_CERT_FILE`/`SYNTH_TLS_KEY_FILE`). A broken/missing file is fail-closed (a clear error at startup, not a silent fallback).
 
-**Why `NODE_EXTRA_CA_CERTS` is not a solution for the Synth process itself:** the variable affects only Node's standard transport and is **not** Synth configuration; when `security.tls` is set, Synth installs its own global undici dispatcher (`initTlsTrust`), which ignores it. The canonical path is `security.tls`; `NODE_EXTRA_CA_CERTS` remains only a compatibility channel for child processes.
+**About `NODE_EXTRA_CA_CERTS`:** the variable is now part of the **base** trust set (`getCACertificates('extra')` on Node ≥ 22.19, otherwise the file is read directly), but it remains only a compatibility channel for child processes and is **not** Synth configuration: set your CA via `security.tls` (or the UI), and it will extend the system set.
 
 ### `The server does not support SSL connections`
 

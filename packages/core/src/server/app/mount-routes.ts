@@ -822,6 +822,9 @@ export function mountStandaloneRoutes(
       // (тот же сервис вложений, что у приёма событий) и учёт в `blob_refs`.
       attachments: deps.pipelineAttachments,
       blobRefs: deps.storageContext.blobRefs,
+      // ADR-042: пайплайны/прогоны/шаблоны удалённого проекта проксируются
+      // на сервер (managed backend `getRemoteClient` не передаёт).
+      getRemoteClient: () => getClient(),
     },
   ));
 
@@ -937,6 +940,9 @@ export function mountStandaloneRoutes(
       },
       // Каталог данных — рабочий каталог для источника `facts` (нет workspace).
       dataDir,
+      // ADR-042: мутации индексов удалённого мира (`remote:` id/projectId)
+      // проксируются на сервер; чтение портала остаётся локальным.
+      getRemoteClient: () => getClient(),
     },
   ));
 
@@ -1007,6 +1013,10 @@ export function mountStandaloneRoutes(
     sessionManager, skillService, settingsStore, projectStore,
     permissionConfig: config.permissionConfig,
     resolveProjectWorkspace: resolveSkillWorkspace,
+  }, {
+    // ADR-042: проектный скоуп скиллов удалённого проекта — на сервере.
+    // Managed backend опцию не передаёт (remote-ветки выключены).
+    getRemoteClient: () => getClient(),
   }));
   app.route('/api/v2/settings', createSkillSettingsRoutes(auth, { settingsStore }, {
     onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),

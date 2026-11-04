@@ -13,7 +13,10 @@ import type { SerializeSessionOptions } from '../serialize.js';
 // контракт на все списки с пагинацией (сессии, проекты, пайплайны).
 import { paginate, parseBoundedInt } from '../pagination.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
-import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
+import {
+  isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp,
+  toRemoteSessionMemory,
+} from '../../remote/aggregate.js';
 // Гибридный merge списков: общий порядок миров + нарезка страницы после merge.
 import { localEntries, remoteEntries, sortHybridList, sliceRemoteMessages } from './hybrid-list.js';
 import type { HybridListEntry } from './hybrid-list.js';
@@ -279,8 +282,6 @@ export interface SessionRoutesOptions {
   canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
   /** author пользовательских сообщений. Core — 'local'; backend — username. */
   resolveAuthor?: (c: Context) => string | Promise<string>;
-  /** id пользовательского сообщения: 'generated' (core) | 'stream' (backend). */
-  promptMessageId?: 'generated' | 'stream';
   /** Публиковать session.renamed при смене title. Core — true; backend — false. */
   publishRenamed?: boolean;
   /** Публиковать session.deleted ДО удаления. Core — true; backend — false. */
@@ -469,6 +470,15 @@ async function registerAttachmentRefs(
   }
 }
 
+/**
+ * ADR-118 §3: нормализация клиентского `messageId` — единая точка для
+ * standalone- и hybrid-ветки приёма. Не строка, пустая строка или одни
+ * пробелы → пусто (вызывающий выдаёт серверный id); иначе — обрезанное значение.
+ */
+function normalizeClientMessageId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 /** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
 function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: readonly string[]): string {
   return `Недопустимое значение ${label}: "${String(value)}". Допустимые: ${allowed.join(', ')}`;
@@ -550,7 +560,6 @@ export function createSessionRoutes(
   const forkWithOwner = opts.forkWithOwner ?? false;
   const resolveAuthor = opts.resolveAuthor ?? (() => LOCAL_USER_ID);
   const resolveDefaultAgent = opts.resolveDefaultAgent ?? (() => DEFAULT_AGENT_ID);
-  const promptMessageId = opts.promptMessageId ?? 'generated';
   const publishRenamed = opts.publishRenamed ?? true;
   const publishDeletedBefore = opts.publishDeletedBefore ?? true;
   const promptMiddleware = opts.promptMiddleware ?? [];
@@ -1359,7 +1368,25 @@ export function createSessionRoutes(
    * Доступ — у prefix-guard (инвариант 16); здесь не дублируем.
    */
   app.get('/:id/memory', auth.requireAuth, scoped('sessions:read'), async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
+    const memoryId = c.req.param('id');
+    // Гибрид (ADR-042): память удалённой сессии живёт на сервере — проксируем
+    // запрос целиком (локальных портов памяти у неё нет). id в ответе
+    // переписываются в `remote:` (индексы адресуются на сервере).
+    if (hasRemoteGetter && isRemoteRef(memoryId)) {
+      const remoteClient = resolveClient();
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      try {
+        const remote = (await remoteClient.getSessionMemory(toLocalId(memoryId))) as Record<string, unknown>;
+        return c.json(toRemoteSessionMemory(remote));
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+    const session = await sessionManager.getSession(memoryId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
@@ -1637,9 +1664,7 @@ export function createSessionRoutes(
       const mode = isSteerMode(body.mode) ? body.mode : DEFAULT_STEER_MODE;
       // Идентификатор принятого сообщения: `body.messageId` (строка) либо
       // сгенерированный (существующий механизм `generateStreamId`).
-      const requestedMessageId = typeof body.messageId === 'string' && body.messageId.trim() !== ''
-        ? body.messageId
-        : generateStreamId();
+      const requestedMessageId = normalizeClientMessageId(body.messageId) || generateStreamId();
       try {
         const response = await remoteClient.promptSession(toLocalId(sessionId), body, {
           signal: c.req.raw.signal,
@@ -1821,7 +1846,11 @@ export function createSessionRoutes(
     // тогда второй раз он не добавляется (appendMediaPlaceholders).
     const messageContent = appendMediaPlaceholders(content, messageParts);
 
-    const streamId = body.messageId || generateStreamId();
+    // ADR-118 §3: клиентский id нормализуется общей точкой (`normalizeClientMessageId`):
+    // не строка, пустая строка или одни пробелы → серверный id (иначе сообщение
+    // сохранилось бы с id `'   '` и разошлось с историей/событиями).
+    const requestedMessageId = normalizeClientMessageId(body.messageId);
+    const streamId = requestedMessageId || generateStreamId();
     const author = await resolveAuthor(c);
     // ADR-118 §4: отправитель (`userId` запроса) — адресат адресного события
     // `message.accepted`. Пустой — событие уходит в канал сессии (broadcast).
@@ -1832,7 +1861,10 @@ export function createSessionRoutes(
     const turnPrincipal = resolveUserPrincipal(await resolveUserId(c));
 
     const message: Message = {
-      id: promptMessageId === 'stream' ? streamId : generateStreamId(),
+      // ADR-118 §3: id сохранённого сообщения = id принятого (`streamId`:
+      // клиентский `body.messageId` либо выданный сервером) — иначе `202`/события
+      // и история разошлись бы, и клиент нарисовал бы вторую реплику.
+      id: streamId,
       role: MessageRole.USER,
       seq: session.messages.length + 1,
       origin: 'local',
@@ -1849,13 +1881,10 @@ export function createSessionRoutes(
       metadata: { ...(body.metadata || {}), stream_id: streamId },
     };
 
-    // ADR-118 §3: идентификатор принятого сообщения — `body.messageId` (если
-    // строка), иначе id, выданный существующим механизмом (`streamId`/
-    // `generateStreamId()`). Один и тот же id уходит в HTTP-ответ `202` и в
-    // событие `message.accepted`.
-    const acceptedMessageId = typeof body.messageId === 'string' && body.messageId.trim() !== ''
-      ? body.messageId
-      : message.id;
+    // ADR-118 §3: идентификатор принятого сообщения — единый источник истины
+    // (`message.id`). Тот же id уходит в HTTP-ответ `202`, в события
+    // `message.accepted`/`message.enqueued` и в историю.
+    const acceptedMessageId = message.id;
 
     // ADR-104: `steer` — вмешательство в активный ход (без прерывания
     // генерации), `interrupt` — прерывание текущей генерации с продолжением

@@ -15,7 +15,10 @@ import type { ProjectRepository } from '../../storage/ports/project-repository.j
 import { provisionWorkspace, resolveWorkspaceForLocalProject } from '../../engine/workspace-provision.js';
 import { serializeProject, serializeProjectSummary } from '../serialize.js';
 import { paginate, parseBoundedInt } from '../pagination.js';
-import { isRemoteRef, toLocalId, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
+import {
+  isRemoteRef, toLocalId, toRemote, mergeItems, remoteErrorToHttp,
+  toRemoteWorktree, toRemoteWorktreeList,
+} from '../../remote/aggregate.js';
 // Гибридный merge списков: общий порядок миров + нарезка страницы после merge.
 import { localEntries, remoteEntries, sortHybridList } from './hybrid-list.js';
 import type { HybridListEntry } from './hybrid-list.js';
@@ -374,7 +377,24 @@ export function createProjectRoutes(
     const knownMcpServers = (): string[] => opts.getMcpServers?.() ?? [];
 
     app.get('/:id/mcp', auth.requireAuth, async (c) => {
-      const project = await store.load(c.req.param('id'));
+      const mcpId = c.req.param('id');
+      // Гибрид (ADR-042): проектный MCP-скоуп удалённого проекта — на сервере.
+      // `knownServers` берём **только** из ответа сервера: локальный реестр к
+      // удалённому проекту отношения не имеет (иначе UI показал бы чужие имена).
+      if (isRemoteRef(mcpId)) {
+        const remoteClient = resolveClient();
+        if (!remoteClient) {
+          return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+        }
+        try {
+          return c.json(await remoteClient.getProjectMcp(toLocalId(mcpId)));
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const project = await store.load(mcpId);
       if (!project) return jsonNotFound(c);
       const userId = await currentUserId(c);
       if (!canManage(c, project, userId)) return jsonForbidden(c);
@@ -386,16 +406,31 @@ export function createProjectRoutes(
     });
 
     app.put('/:id/mcp', auth.requireAuth, async (c) => {
-      const project = await store.load(c.req.param('id'));
-      if (!project) return jsonNotFound(c);
-      const userId = await currentUserId(c);
-      if (!canManage(c, project, userId)) return jsonForbidden(c);
-
+      const mcpId = c.req.param('id');
       const body = await c.req.json().catch(() => ({}));
       const parsed = projectMcpUpdateSchema.safeParse(body);
       if (!parsed.success) {
         return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
       }
+      // Гибрид (ADR-042): права и известные серверы проверяет сервер проекта —
+      // локальный список сюда не подмешивается.
+      if (isRemoteRef(mcpId)) {
+        const remoteClient = resolveClient();
+        if (!remoteClient) {
+          return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+        }
+        try {
+          return c.json(await remoteClient.updateProjectMcp(toLocalId(mcpId), parsed.data));
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const project = await store.load(mcpId);
+      if (!project) return jsonNotFound(c);
+      const userId = await currentUserId(c);
+      if (!canManage(c, project, userId)) return jsonForbidden(c);
 
       const known = new Set(knownMcpServers());
       for (const name of [...(parsed.data.enabled ?? []), ...(parsed.data.defaultOn ?? [])]) {
@@ -599,9 +634,35 @@ export function createProjectRoutes(
       );
     };
 
+    /**
+     * Гибрид (ADR-042): worktree'ы удалённого проекта исполняет сервер (в
+     * managed backend — тот же `WorktreeService`). `id` проекта снимается до
+     * локального, id worktree'а уходит как есть (он скоупится проектом).
+     */
+    const remoteWorktreeClient = (c: Context): RemoteBackendClient | Response => {
+      const remoteClient = resolveClient();
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      return remoteClient;
+    };
+
     // Список worktree'ов проекта.
     app.get('/:id/worktrees', auth.requireAuth, async (c) => {
-      const project = await store.load(c.req.param('id'));
+      const wtProjectId = c.req.param('id');
+      if (isRemoteRef(wtProjectId)) {
+        const remoteClient = remoteWorktreeClient(c);
+        if (remoteClient instanceof Response) return remoteClient;
+        try {
+          const list = (await remoteClient.listProjectWorktrees(toLocalId(wtProjectId))) as Record<string, unknown>;
+          return c.json(toRemoteWorktreeList(list));
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const project = await store.load(wtProjectId);
       if (!project) return jsonNotFound(c);
       const userId = await currentUserId(c);
       if (!canRead(c, project, userId)) return jsonForbidden(c);
@@ -612,16 +673,39 @@ export function createProjectRoutes(
     // Создание worktree'а. Статический сегмент `prune` объявлен ниже, но
     // пути различаются по методу — конфликта нет.
     app.post('/:id/worktrees', auth.requireAuth, async (c) => {
-      const project = await store.load(c.req.param('id'));
-      if (!project) return jsonNotFound(c);
-      const userId = await currentUserId(c);
-      if (!canEditContent(c, project, userId)) return jsonForbidden(c);
-
+      const wtProjectId = c.req.param('id');
       const body = await c.req.json().catch(() => ({}));
       const parsed = worktreeCreateSchema.safeParse(body);
       if (!parsed.success) {
         return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
       }
+      if (isRemoteRef(wtProjectId)) {
+        const remoteClient = remoteWorktreeClient(c);
+        if (remoteClient instanceof Response) return remoteClient;
+        try {
+          const created = (await remoteClient.createProjectWorktree(
+            toLocalId(wtProjectId),
+            parsed.data as Record<string, unknown>,
+          )) as Record<string, unknown>;
+          return c.json(
+            {
+              ...(created.worktree && typeof created.worktree === 'object'
+                ? { worktree: toRemoteWorktree(created.worktree as Record<string, unknown>) }
+                : created),
+              ...(created.setup ? { setup: created.setup } : {}),
+            },
+            201,
+          );
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const project = await store.load(wtProjectId);
+      if (!project) return jsonNotFound(c);
+      const userId = await currentUserId(c);
+      if (!canEditContent(c, project, userId)) return jsonForbidden(c);
 
       try {
         const result = await worktrees.create(project.id, project, parsed.data, userId);
@@ -637,10 +721,7 @@ export function createProjectRoutes(
 
     // Prune: записи без каталога + `git worktree prune`.
     app.post('/:id/worktrees/prune', auth.requireAuth, async (c) => {
-      const project = await store.load(c.req.param('id'));
-      if (!project) return jsonNotFound(c);
-      const userId = await currentUserId(c);
-      if (!canEditContent(c, project, userId)) return jsonForbidden(c);
+      const wtProjectId = c.req.param('id');
       // Тело опционально: пустое/отсутствующее — успех. Непустое — строгая
       // схема `worktreePruneSchema` (параметров у операции нет, лишнее поле —
       // ошибка валидации, а не молчаливое игнорирование).
@@ -654,6 +735,21 @@ export function createProjectRoutes(
           return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedPrune.error.message } }, 400);
         }
       }
+      if (isRemoteRef(wtProjectId)) {
+        const remoteClient = remoteWorktreeClient(c);
+        if (remoteClient instanceof Response) return remoteClient;
+        try {
+          return c.json(await remoteClient.pruneProjectWorktrees(toLocalId(wtProjectId)));
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const project = await store.load(wtProjectId);
+      if (!project) return jsonNotFound(c);
+      const userId = await currentUserId(c);
+      if (!canEditContent(c, project, userId)) return jsonForbidden(c);
       try {
         const result = await worktrees.prune(project.id, project);
         if (result.recordsRemoved > 0) opts.onWorktreeUpdated?.(project.id, { action: 'pruned' });
@@ -666,12 +762,30 @@ export function createProjectRoutes(
     // Удаление worktree'а: `?force=true` — снимать и с незакоммиченными
     // изменениями; `?force` без значения тоже трактуется как true.
     app.delete('/:id/worktrees/:wid', auth.requireAuth, async (c) => {
-      const project = await store.load(c.req.param('id'));
+      const wtProjectId = c.req.param('id');
+      const forceParam = c.req.query('force');
+      const force = forceParam === 'true' || forceParam === '1' || forceParam === '';
+      if (isRemoteRef(wtProjectId)) {
+        const remoteClient = remoteWorktreeClient(c);
+        if (remoteClient instanceof Response) return remoteClient;
+        try {
+          // id worktree'а — как есть: он адресуется внутри удалённого проекта.
+          await remoteClient.removeProjectWorktree(
+            toLocalId(wtProjectId),
+            c.req.param('wid'),
+            force ? { force: true } : {},
+          );
+          return c.body(null, 204);
+        } catch (err) {
+          const mapped = mapRemoteError(c, err);
+          if (mapped) return mapped;
+          throw err;
+        }
+      }
+      const project = await store.load(wtProjectId);
       if (!project) return jsonNotFound(c);
       const userId = await currentUserId(c);
       if (!canEditContent(c, project, userId)) return jsonForbidden(c);
-      const forceParam = c.req.query('force');
-      const force = forceParam === 'true' || forceParam === '1' || forceParam === '';
       try {
         const removed = await worktrees.remove(project.id, c.req.param('wid'), project, force ? { force: true } : {});
         opts.onWorktreeUpdated?.(project.id, { worktreeId: removed.id, action: 'removed' });

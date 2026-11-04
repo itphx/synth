@@ -70,7 +70,19 @@ setsid pnpm --filter @itphx/synth-ui dev > tmp/ui.log 2>&1 &
 
 ## 7. TLS/сертификаты (исходящие соединения и PostgreSQL)
 
-Единый источник доверия TLS/CA в Synth — секция `security.tls` (ADR-099). Все исходящие соединения (LLM-провайдеры, MCP, webhooks, гибрид, OIDC/JWKS, загрузка иконок/обновлений, `web_fetch`) и TLS к PostgreSQL берут CA/клиентские сертификаты оттуда.
+Единый источник доверия TLS/CA в Synth — секция `security.tls` (ADR-099). Все исходящие соединения (LLM-провайдеры, MCP, webhooks, гибрид, OIDC/JWKS, загрузка иконок/обновлений, `web_fetch`) и TLS к PostgreSQL берут CA/клиентские сертификаты оттуда. Базовое доверие процесса — **встроенные корни Node + системное хранилище ОС + `NODE_EXTRA_CA_CERTS`**; `security.tls` **дополняет** его.
+
+### Гибрид: «Сервер недоступен: не удалось получить OIDC-параметры (…)»
+
+**Симптом:** подключение к внешнему/тестовому инстансу не проходит, UI/CLI показывает это сообщение, хотя `curl` к тому же адресу отвечает 200. В конце сообщения — код причины (например `: SELF_SIGNED_CERT_IN_CHAIN — TLS: …`), в логе `synth serve` — строка с префиксом `[hybrid]`.
+
+**Причина:** Node по умолчанию доверяет **только встроенным корням**, а не системному хранилищу ОС. Внутренний CA (`ITPHX SRV CA` и подобные) или корень Let's Encrypt есть в системе, но не в bundled-наборе Node — `fetch` падает с `SELF_SIGNED_CERT_IN_CHAIN`/`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. Synth объединяет встроенные корни Node + системный стор ОС + `security.tls` CA; `caFile`/`caPem` **дополняют** доверие, а не заменяют его (иначе отрезались бы публичные сайты).
+
+**Решение:**
+
+- обновите Node до **≥ 22.19** (API `tls.getCACertificates`); на старых Node Linux подхватывается первый читаемый системный бандл (`SSL_CERT_FILE`, `/etc/ssl/certs/ca-certificates.crt`, …), для macOS/Windows задайте CA через `security.tls`;
+- либо добавьте CA явно: UI «Настройки → Сеть → Доверенные CA (TLS)» (`{dataDir}/security-tls.json`) или `security.tls.caFile`/`caPem`; применение — после рестарта;
+- как читать код причины: TLS — `SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `CERT_HAS_EXPIRED`, `ERR_TLS_CERT_ALTNAME_INVALID`, `ERR_SSL_*` (проверьте CA и имя хоста); DNS — `ENOTFOUND`/`EAI_AGAIN`; отказ соединения — `ECONNREFUSED` (сеть/файрвол/порт); таймаут — `ETIMEDOUT`/`UND_ERR_CONNECT_TIMEOUT`.
 
 ### `self-signed certificate in certificate chain` / `DEPTH_ZERO_SELF_SIGNED_CERT`
 
@@ -88,7 +100,7 @@ security:
 
 или env `SYNTH_TLS_CA_FILE=/etc/synth/tls/ca.crt` (`caPem` — `SYNTH_TLS_CA_PEM`). Для mTLS добавьте `certFile`/`keyFile` (`SYNTH_TLS_CERT_FILE`/`SYNTH_TLS_KEY_FILE`). Битый/отсутствующий файл — fail-closed (понятная ошибка на старте, не тихий фоллбэк).
 
-**Почему `NODE_EXTRA_CA_CERTS` — не решение для самого процесса Synth:** переменная влияет только на стандартный транспорт Node и **не** является конфигурацией Synth; при заданном `security.tls` Synth ставит собственный глобальный undici-dispatcher (`initTlsTrust`), который её не учитывает. Штатный путь — `security.tls`; `NODE_EXTRA_CA_CERTS` остаётся лишь совместимостью для дочерних процессов.
+**Про `NODE_EXTRA_CA_CERTS`:** переменная теперь входит в **базовый** набор доверия (`getCACertificates('extra')` на Node ≥ 22.19, иначе читается файлом), но остаётся лишь совместимостью для дочерних процессов и **не** является конфигурацией Synth: пользовательский CA задавайте через `security.tls` (или UI), он дополнит системный набор.
 
 ### `The server does not support SSL connections`
 

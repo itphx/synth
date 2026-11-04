@@ -49,9 +49,12 @@ export function ProjectTab() {
   const deployment = useAuthStore((s) => s.deployment)
   const [projectMcp, setProjectMcp] = useState<ProjectMcpResponse | null>(null)
   const [mcpRegistry, setMcpRegistry] = useState<McpRegistryEntry[]>([])
+  // Отказ загрузки скоупа — честное пустое состояние вместо вечного «Загрузка…».
+  const [mcpFailed, setMcpFailed] = useState(false)
 
   // ADR-046 §4.5: проектный скоуп скиллов (owner/lead/admin)
   const [projectSkills, setProjectSkills] = useState<ProjectSkillsResponse | null>(null)
+  const [skillsFailed, setSkillsFailed] = useState(false)
 
   const projectId = session?.project_id ?? null
   const projects = useProjectsStore((s) => s.projects)
@@ -76,20 +79,25 @@ export function ProjectTab() {
     if (!projectId || !canManageMcp) {
       setProjectMcp(null)
       setMcpRegistry([])
+      setMcpFailed(false)
       return
     }
     let cancelled = false
-    Promise.all([synthApi.getProjectMcp(projectId), synthApi.getMcpRegistry()])
-      .then(([mcp, reg]) => {
+    // Реестр (`/mcp/registry`) есть только у backend: в standalone он отвечает
+    // 404. Падение реестра не должно обнулять скоуп проекта — список серверов
+    // берётся из `knownServers` ответа `GET /projects/:id/mcp`, реестр нужен
+    // лишь для бейджа «системный». Поэтому `allSettled`, а не `all`.
+    Promise.allSettled([synthApi.getProjectMcp(projectId), synthApi.getMcpRegistry()])
+      .then(([mcpResult, registryResult]) => {
         if (cancelled) return
-        setProjectMcp(mcp)
-        setMcpRegistry(reg.entries)
-      })
-      .catch(() => {
-        if (!cancelled) {
+        if (mcpResult.status === 'fulfilled') {
+          setProjectMcp(mcpResult.value)
+          setMcpFailed(false)
+        } else {
           setProjectMcp(null)
-          setMcpRegistry([])
+          setMcpFailed(true)
         }
+        setMcpRegistry(registryResult.status === 'fulfilled' ? registryResult.value.entries : [])
       })
     return () => { cancelled = true }
   }, [projectId, canManageMcp])
@@ -97,13 +105,22 @@ export function ProjectTab() {
   useEffect(() => {
     if (!projectId || !canManageMcp) {
       setProjectSkills(null)
+      setSkillsFailed(false)
       return
     }
     let cancelled = false
     Promise.resolve()
       .then(() => synthApi.getProjectSkills(projectId))
-      .then((skills) => { if (!cancelled) setProjectSkills(skills) })
-      .catch(() => { if (!cancelled) setProjectSkills(null) })
+      .then((skills) => {
+        if (cancelled) return
+        setProjectSkills(skills)
+        setSkillsFailed(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setProjectSkills(null)
+        setSkillsFailed(true)
+      })
     return () => { cancelled = true }
   }, [projectId, canManageMcp])
 
@@ -510,6 +527,7 @@ export function ProjectTab() {
           <ProjectMcpBlock
             mcp={projectMcp}
             registry={mcpRegistry}
+            failed={mcpFailed}
             onToggle={handleToggleProjectMcp}
             isPending={(name) => isPending(`mcp:${name}`)}
           />
@@ -520,6 +538,7 @@ export function ProjectTab() {
         <Section title={t('projectTab.skills.title')}>
           <ProjectSkillsBlock
             skills={projectSkills}
+            failed={skillsFailed}
             isPending={(name) => isPending(`skill:${name}`)}
             onToggle={handleToggleProjectSkill}
           />
@@ -831,17 +850,31 @@ function WorktreesBlock({ projectId, sessionId }: { projectId: string; sessionId
 function ProjectMcpBlock({
   mcp,
   registry,
+  failed,
   onToggle,
   isPending,
 }: {
   mcp: ProjectMcpResponse | null
   registry: McpRegistryEntry[]
+  failed?: boolean
   onToggle: (name: string, kind: 'enabled' | 'defaultOn') => void
   isPending: (name: string) => boolean
 }) {
   const { t } = useI18n()
 
   if (!mcp) {
+    // Отказ загрузки — пустое состояние с причиной (иначе блок висел бы
+    // «Загрузка…» вечно: повтора запроса у панели нет).
+    if (failed) {
+      return (
+        <div
+          className="rounded-lg border border-border bg-surface-inset px-3 py-2"
+          data-testid="project-mcp-error"
+        >
+          <div className="text-xs text-destructive">{t('projectTab.mcp.loadError')}</div>
+        </div>
+      )
+    }
     return <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
   }
 
@@ -903,16 +936,28 @@ function ProjectMcpBlock({
 /** ADR-046 §4.5: проектный скоуп скиллов — «Доступен» и «Включён по умолчанию». */
 function ProjectSkillsBlock({
   skills,
+  failed,
   isPending,
   onToggle,
 }: {
   skills: ProjectSkillsResponse | null
+  failed?: boolean
   isPending: (name: string) => boolean
   onToggle: (name: string, kind: 'enabled' | 'defaultOn') => void
 }) {
   const { t } = useI18n()
 
   if (!skills) {
+    if (failed) {
+      return (
+        <div
+          className="rounded-lg border border-border bg-surface-inset px-3 py-2"
+          data-testid="project-skills-error"
+        >
+          <div className="text-xs text-destructive">{t('projectTab.skills.loadError')}</div>
+        </div>
+      )
+    }
     return <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
   }
 

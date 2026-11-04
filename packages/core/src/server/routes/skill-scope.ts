@@ -17,6 +17,8 @@ import type { SkillScopeOptions } from '../../engine/skills/types.js';
 import { accessKindOf, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
+import { isRemoteRef, remoteErrorToHttp, toLocalId, toRemote } from '../../remote/aggregate.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -66,6 +68,12 @@ export interface SkillScopeRoutesOptions {
    * при доступе к сессии. Managed не задаёт (id реальные).
    */
   localOwnerResolver?: LocalOwnerResolver;
+  /**
+   * Гибрид (ADR-042): клиент удалённого backend. Проектный скоуп скиллов
+   * удалённого проекта проксируется на сервер; не задан (managed) —
+   * remote-ветки выключены, `remote:`-id отвечают 502 `REMOTE_UNAVAILABLE`.
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
 }
 
 interface EffectiveSkill {
@@ -245,6 +253,17 @@ export function createProjectSkillScopeRoutes(
   const app = new Hono();
   const writeGuard = opts?.writeGuard ?? (async (_c, next) => { await next(); });
   const resolveUserId = opts?.resolveUserId ?? (() => LOCAL_USER_ID);
+  /** Гибрид (ADR-042): клиент удалённого backend (managed не передаёт). */
+  const resolveRemoteClient = (): RemoteBackendClient | null => opts?.getRemoteClient?.() ?? null;
+  /** RemoteError → HTTP-ответ (тот же формат, что у project-роутов). */
+  const mapRemoteError = (c: Context, err: unknown): Response | undefined => {
+    const http = remoteErrorToHttp(err);
+    if (!http) return undefined;
+    return c.json(
+      { error: { code: http.code, message: err instanceof Error ? err.message : String(err) } },
+      http.status as 400 | 401 | 404 | 409 | 500 | 502,
+    );
+  };
   // Standalone — однопользовательский режим; backend переопределяет
   // `opts.canAccessProject` (owner/LEAD/ADMIN), как project-роуты.
   const canAccessProject = async (project: Project, c: Context, userId: string): Promise<boolean> => {
@@ -269,6 +288,21 @@ export function createProjectSkillScopeRoutes(
 
   const read = async (c: Context) => {
     const id = c.req.param('id') ?? '';
+    // Гибрид (ADR-042): проектный скоуп скиллов удалённого проекта живёт на
+    // сервере — проксируем целиком (локальный SkillService его не знает).
+    if (isRemoteRef(id)) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      try {
+        return c.json(toRemote((await remoteClient.getProjectSkills(toLocalId(id))) as Record<string, unknown>));
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
     const loaded = await loadAccessibleProject(c);
     if (loaded instanceof Response) return loaded;
     const project = loaded;
@@ -294,14 +328,31 @@ export function createProjectSkillScopeRoutes(
   app.get('/:id/skills', auth.requireAuth, read);
 
   app.put('/:id/skills', auth.requireAuth, writeGuard, async (c) => {
-    const loaded = await loadAccessibleProject(c);
-    if (loaded instanceof Response) return loaded;
-    const project = loaded;
+    const putId = c.req.param('id') ?? '';
     const body = await c.req.json().catch(() => ({}));
     const parsed = projectSkillUpdateSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректные данные скиллов проекта' } }, 400);
     }
+    // Гибрид (ADR-042): права проверяет сервер проекта, локальный стор не трогаем.
+    if (isRemoteRef(putId)) {
+      const remoteClient = resolveRemoteClient();
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      try {
+        return c.json(toRemote(
+          (await remoteClient.updateProjectSkills(toLocalId(putId), parsed.data)) as Record<string, unknown>,
+        ));
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+    const loaded = await loadAccessibleProject(c);
+    if (loaded instanceof Response) return loaded;
+    const project = loaded;
     project.skills = {
       enabled: parsed.data.enabled ?? project.skills?.enabled ?? [],
       defaultOn: parsed.data.defaultOn ?? project.skills?.defaultOn ?? [],

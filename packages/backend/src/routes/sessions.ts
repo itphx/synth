@@ -686,7 +686,6 @@ export function createSessionRoutes(
         const user = await kit.getCurrentUser(c);
         return { kind: 'user', id: user?.id ?? '', roles: user?.roles ?? [] };
       },
-      promptMessageId: 'stream',
       publishRenamed: false,
       publishDeletedBefore: false,
       // Instance-wide лимиты заметок сессии (`context.stickyNotes`): роуты
