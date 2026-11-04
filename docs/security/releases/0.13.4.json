@@ -1,0 +1,99 @@
+{
+  "schema": "synth.security.audit/v1",
+  "version": "0.13.4",
+  "commit": "b25863a5",
+  "date": "2026-11-04",
+  "auditor": {
+    "name": "opencode (аудит-агент, deepseek-v4.1-flash), роль read-only",
+    "role": "AUDITOR",
+    "mode": "read-only"
+  },
+  "status": "blocked",
+  "summary": "Аудит 0.13.4 и закрытие находок. Машинные проверки: secret-scan дерева/истории/blob-ов чист (0 находок, 83 подавления — тестовые фикстуры; .gitleaks.toml не менялся), матрица авторизации сессий 102/102, ратчет зависимостей после апгрейдов critical 0/high 0 (prod-audit 0/0/0/0). Найдено и исправлено в этом релизе: HIGH M1 — HTTP git-роуты использовали лексический containment (симлинк наружу вёл init/clone/remove за workspace) → realpath-containment на общем шве + разрешённый путь и повторная проверка перед деструктивными операциями; MEDIUM M2 — суммаризация/компакция шла в обход GatewayProvider при выключенных gateway/метриках → обвязка ставится всегда (passthrough при enabled:false, guard/обфускация по политике llmGateway), ADR-119 приведён к факту; MEDIUM M3 — chunked-загрузка не применяла maxBytesPerSession и не ограничивала число сессий → квота с учётом активных загрузок + maxActiveUploadsPerSession/maxActiveUploads, валидация size, 413 с details; LOW M4 — отладочные packages/storage-postgres/.tmpq удалены из git и добавлены в .gitignore; LOW Helm — режим секретных томов вычисляется (0440 при fsGroup, 0444 при null). Зависимости: overrides fast-uri/ip-address/qs/js-yaml/brace-expansion/source-map-js и @hono/node-server 2.x — high/critical 0. Остаточные риски оформлены исключениями (TOCTOU-окно без openat, guard no-op при выключенном gateway, best-effort квоты без распределённой блокировки, просроченный allowlist истории, dev-only moderate/low). РЕЛИЗ ПОКА ЗАБЛОКИРОВАН процессно: ci.yaml run 2001483 на bf2ec6cc красный (обе причины — исправленный дефект PG и сетевой флейк раннера), коммиты f596d358 (фиксы) и b25863a5 (зависимости) не запушены; записи аудита и пары docs/releases/0.13.4(.en).md нет; версии пакетов 0.13.3.",
+  "checks": {
+    "secret-scan": {
+      "status": "pass",
+      "command": "node scripts/secret-scan.mjs --mode worktree,commits,blobs --report tmp/security/secret-scan-after.json && node scripts/secret-scan.mjs --list-allowlists",
+      "result": "ЧИСТО — находок нет: worktree 2938, commits 958223, blobs 18720; подавлено 83 — только тестовые фикстуры (dummy-ключи, ADR-099/105/106, исторические PEM SSH 193be2ab, токены исполнителя 996c776b/a7c84ca0). .gitleaks.toml за релиз не менялся; новых path-only нет.",
+      "date": "2026-11-04"
+    },
+    "auth-matrix": {
+      "status": "pass",
+      "command": "pnpm --filter @itphx/synth-backend exec vitest run src/routes/sessions-access.test.ts src/routes/session-idor-matrix.test.ts",
+      "result": "2 файла, 102 теста, 102 passed / 0 failed (повторно после правок). Перепись :id-маршрутов со смонтированного createBackendApp() равна матрице; chunked-маршруты вложений включены; чужой USER → 403 на каждом маршруте; позитивная матрица 8 акторов; guard на /:id, /:id/*, /:sessionId, /:sessionId/*. Новых маршрутов вне матрицы нет.",
+      "date": "2026-11-04"
+    },
+    "ci-baseline": {
+      "status": "fail",
+      "command": "CI GitVerse: ci.yaml run 2001483 на bf2ec6cc (2026-11-03) + git log origin/master..HEAD",
+      "result": "КРАСНЫЙ на запушенном коммите: failure «Контрактный suite на живой PostgreSQL» (loadLight) и «Образы (сборка+smoke)» (devops: apk add ansible — DNS-флейк раннера). HEAD и правки не запушены (origin/master..HEAD = 9) → CI на коммите аудита отсутствует. Локально на HEAD+правках: контракт на живой PostgreSQL 244/244 (включая loadLight), драйвер storage-postgres 122/122, полный pnpm test 14 667 passed / 0 failed, typecheck/lint зелёные, helm lint/template зелёные. Ослабить нельзя: нужен зелёный прогон CI на коммите с правками.",
+      "date": "2026-11-04"
+    },
+    "dependencies": {
+      "status": "pass",
+      "command": "pnpm audit --json && pnpm audit --prod --json && node scripts/security-gate.mjs --only dependencies --skip-tests",
+      "result": "После апгрейдов/overrides: critical 0, high 0, moderate 1, low 1 (full); --prod: 0/0/0/0. Остаток — dev-only: minimatch <11 (moderate, eslint/typescript-eslint/@redocly; semver-safe патча нет) и esbuild 0.27.7 (low, tsup). Подняты: vitest/@vitest/coverage-v8 4.1.12; @hono/node-server 2.1.6 (прямых импортов в src нет: сервер на node:http, статика своя; влияние — транспорт @modelcontextprotocol/sdk, e2e не прогонялся); overrides fast-uri 3.1.9, ip-address 10.7.5, qs 6.17.0, js-yaml 4.3.2, brace-expansion 1.1.21/2.1.7/5.0.12, source-map-js 1.2.2 (в пределах мажоров).",
+      "date": "2026-11-04"
+    },
+    "security-review": {
+      "status": "pass_with_exceptions",
+      "command": "docs/security/AUDIT-CHECKLIST.md §3 (обзор изменений релиза) + ревью диффа фиксов",
+      "result": "(1) Новые внешние входы: состав не расширялся; изменены существующие — chunked-загрузка (квоты/лимиты, 400 invalid, 413 details), git-роуты (containment), суммаризация (gateway-обвязка), Helm-режим секретных томов. (2) Авторизация/IDOR: не затрагивалась; матрица 102/102; проверки на границе (prefix-guard). (3) Containment: M1 закрыт статически и на деструктивных операциях — resolveRepoPath делает realpath-проверку (fail-closed на dangling/ELOOP/ошибке), removeLocal/initRepo/cloneRepo работают по разрешённому пути и перепроверяют containment перед операцией, tmpPath клона проверяется; негативные тесты подтверждают, что внешний файл цел, register/remove → 400 git.repo_path_invalid; симлинк внутрь workspace разрешён. Остаток: окно между финальной проверкой и syscall без openat-семантики (исключение git-containment-toctou). (4) SSRF/egress: новых каналов нет; M2 — суммаризация всегда через GatewayProvider (при enabled:false — DISABLED_GATEWAY_CONFIG/passthrough: метрика учитывается, аудит не пишется; при enabled:true — guard/обфускация/фильтр pre_request/аудит, подтверждено тестами); остаток — при выключенном gateway обфускации нет, провайдер суммаризации может отличаться от сессии (исключение summarization-gateway-disabled-no-guard, зафиксировано в ADR-119 §5). Egress-guard webhooks/web-тулов/MCP и TLS-слой не менялись (проверены в первой фазе: DNS всех A/AAAA, CIDR, ручные редиректы, rejectUnauthorized по умолчанию true). (5) Секреты/ключи: secret-scan чист; M4 закрыт — .tmpq удалён из git/диска, .tmpq/ в .gitignore; литеральных секретов не было; в npm-тарбол не попадали. Helm: дефолт 0440 при fsGroup (группа = fsGroup, том readOnly), 0444 только при fsGroup:null (совместимость, world-readable) — рендер обоих режимов и lint проверены; тома данных/workspace не затронуты. (6) Supply-chain: high/critical 0, prod-audit чист; overrides в пределах мажоров; бета-скрипты (workflow_dispatch, latest не двигается, токен env/npmrc 0600) не менялись. (7) Доки vs факт: API_V2/CONFIGURATION (RU+EN) обновлены — лимиты chunked, возможные ключи details, staging без байтовой квоты (верхняя граница maxActiveUploads × maxBytesPerFile), ADR-076 (realpath-containment), ADR-119 §5 (gateway-обвязка), EXECUTION/README (права томов) сверены с кодом. Полный pnpm test на HEAD+правках: 14 667 passed, 0 failed; typecheck/lint зелёные. Не проверено: e2e MCP-транспорта на @hono/node-server 2.x, конкурентные/мультирепликовые сценарии квот, CI на коммите правок (не запушено).",
+      "date": "2026-11-04"
+    }
+  },
+  "exceptions": [
+    {
+      "id": "git-containment-toctou",
+      "scope": "resolveRepoPath возвращает лексический путь; деструктивные операции (removeLocal, mkdir в initRepo, clone/rename, tmpPath) выполняются по разрешённому пути с повторной проверкой непосредственно перед операцией, но окно между проверкой и syscall остаётся (Node fs без openat/O_NOFOLLOW). Подмена компонента пути симлинком в этом окне теоретически выводит операцию за workspace.",
+      "justification": "Статический класс закрыт (симлинк до вызова → PATH_TRAVERSAL, внешние данные целы); окно гонки требует прав редактирования проекта и активной подмены, остаётся принципиально не закрытым без openat-семантики. Риск снижен повторной проверкой и работой по realpath-разрешённому пути.",
+      "followUp": "Перевести деструктивные операции на openat/O_NOFOLLOW-семантику через порт исполнения; добавить детерминированный тест на подмену (инъекция fs) при появлении такой возможности.",
+      "owner": "владелец подсистемы git/workspace (core)",
+      "dueRelease": "0.13.5"
+    },
+    {
+      "id": "summarization-gateway-disabled-no-guard",
+      "scope": "Суммаризация/компакция всегда проходит через GatewayProvider, но при llmGateway.enabled=false (дефолт) guard/обфускация — no-op (общая семантика ADR-036/090), а провайдер суммаризации может быть задан отдельно (summarization.provider/model) и получает полный транскрипт.",
+      "justification": "Соответствует глобальной политике gateway: при выключенном gateway не маскируется и обычный ход. Вызов теперь учитывается метриками и фильтрами при включении gateway; поведение задокументировано в ADR-119 §5. Принятый риск, не дефект реализации.",
+      "followUp": "Рассмотреть обязательную обфускацию для точки суммаризации либо запрет отдельного провайдера без включённого gateway; e2e-проверка фильтров при enabled:true.",
+      "owner": "владелец контекстной подсистемы (core)",
+      "dueRelease": "0.13.5"
+    },
+    {
+      "id": "chunked-upload-quota-best-effort",
+      "scope": "Квоты chunked-загрузки проверяются read-then-act без распределённой блокировки: параллельные create/append (в т.ч. на разных репликах) могут кратковременно превысить лимит; staging-контур без байтовой квоты (верхняя граница maxActiveUploads × maxBytesPerFile ≈ 25 ГиБ при дефолтах), документировано в API_V2/CONFIGURATION.",
+      "justification": "Целевой сценарий (удержание диска незавершёнными загрузками) закрыт: квота сессии, лимиты числа сессий, TTL, уборка. Строгая атомарность требует распределённой блокировки (PROP-105) и для релиза не требуется.",
+      "followUp": "Агрегатная байтовая квота для staging, тест параллельного create, метрика активных upload-сессий, при необходимости — блокировка на томе/БД.",
+      "owner": "владелец подсистемы вложений (core)",
+      "dueRelease": "0.13.5"
+    },
+    {
+      "id": "historical-test-fixture-allowlists",
+      "scope": "Унаследованные allowlist-блоки .gitleaks.toml («путь + dummy-маркер» для исторических фикстур 193be2ab/996c776b/a7c84ca0; path-only .key-фикстуры ADR-099 и путь .gitverse/workflows/release.yaml). В 0.13.4 файл не менялся.",
+      "justification": "История master неизменяема и публична (зеркало GitHub); подавление узкое (путь + конкретное dummy-тело). Просрочено (dueRelease был 0.12.5).",
+      "followUp": "Подтвердить актуальность или удалить вместе с переездом истории; новые фикстуры — генерируемые в рантайме, path-only не расширять.",
+      "owner": "владелец контура безопасности инстанса",
+      "dueRelease": "0.13.5"
+    },
+    {
+      "id": "dev-only-advisories",
+      "scope": "Остаток pnpm audit: minimatch <11 (moderate; eslint/typescript-eslint/@redocly — патч только в мажоре 11) и esbuild 0.27.7 (low; tsup). В поставляемые артефакты не входят.",
+      "justification": "devDependencies инструментария сборки; semver-safe патча нет, мажорный апгрейд eslint-цепочки — отдельная волна. Рантайм-аудит (--prod) чист.",
+      "followUp": "Плановая волна апгрейдов dev-инструментария (eslint 10 / minimatch 11 / tsup), пересчёт baseline.",
+      "owner": "владелец задачи апгрейда зависимостей",
+      "dueRelease": "0.13.5"
+    },
+    {
+      "id": "hono-node-server-major-2",
+      "scope": "Мажорный апгрейд транзитивного runtime-пакета @hono/node-server 1.19.x → 2.1.6 (прямых импортов в src нет; сервер на node:http, статика своя; влияние — транспорт @modelcontextprotocol/sdk).",
+      "justification": "Unit-тесты серверных слоёв и backend зелёные; e2e MCP-транспорта на 2.x не прогонялся. Риск низкий, но требует отдельной e2e-проверки.",
+      "followUp": "Прогон MCP-транспорта (stdio/HTTP) на 2.x в CI/e2e; при регрессе — пин SDK на совместимую версию.",
+      "owner": "владелец задачи апгрейда зависимостей",
+      "dueRelease": "0.13.5"
+    }
+  ],
+  "artifacts": {
+    "evidence": "tmp/security/secret-scan-after.json, tmp/security/audit-0.13.4-after2.json, tmp/v-test.log, tmp/ci-baseline/",
+    "ci_run": ""
+  }
+}
