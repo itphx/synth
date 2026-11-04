@@ -351,7 +351,7 @@ if [ "$DRY_RUN" = "1" ]; then
     for d in "${PKG_DIRS[@]}"; do
         echo "  npm dist-tag add \"$(pkg_name "$d")@$VERSION\" \"$TAG\" --registry \"$REGISTRY\""
     done
-    [ "$SMOKE" = "1" ] && echo "  npm i -g --prefix tmp/beta-publish/smoke \"@itphx/synth@$TAG\" --registry \"$REGISTRY\" --no-audit --no-fund"
+    [ "$SMOKE" = "1" ] && echo "  npm i -g --prefix tmp/beta-publish/smoke \"@itphx/synth@$TAG\" --no-audit --no-fund"
     echo ""
     echo "━━━ dry-run завершён: публикации не было, версии восстанавливаются ━━━"
     exit 0
@@ -399,12 +399,14 @@ fi
 echo "  ✓ @itphx/synth@$TAG → $GOT"
 echo ""
 
+printf '%s\n' "$VERSION" > "$TMP_DIR/version.txt"
+
 # ─── Smoke-тест установки ─────────────────────────────────────────────────────
 if [ "$SMOKE" = "1" ]; then
     SMOKE_DIR="$TMP_DIR/smoke"
     rm -rf "$SMOKE_DIR"
     echo "🧪 Smoke: npm i -g @itphx/synth@$TAG в $SMOKE_DIR ..."
-    npm i -g --prefix "$SMOKE_DIR" "@itphx/synth@$TAG" --registry "$REGISTRY" --no-audit --no-fund
+    npm i -g --prefix "$SMOKE_DIR" "@itphx/synth@$TAG" --no-audit --no-fund
     [ -x "$SMOKE_DIR/bin/synth" ] || die "smoke: не найден $SMOKE_DIR/bin/synth"
     OUT="$("$SMOKE_DIR/bin/synth" --version 2>&1 || true)"
     case "$OUT" in
@@ -415,12 +417,11 @@ if [ "$SMOKE" = "1" ]; then
 fi
 
 # ─── Итог ─────────────────────────────────────────────────────────────────────
-printf '%s\n' "$VERSION" > "$TMP_DIR/version.txt"
 
 echo "━━━ Готово ━━━"
 echo "  Версия:    $VERSION"
 echo "  Тег:       $TAG"
-echo "  Установка: npm i -g @itphx/synth@$TAG --registry $REGISTRY"
+echo "  Установка: npm i -g @itphx/synth@$TAG"
 echo "  Версия сохранена: tmp/beta-publish/version.txt"
 echo ""
 if [ "$BUILD" = "1" ]; then
