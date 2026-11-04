@@ -18,3 +18,16 @@ ignoreWorkspaceCycles: true
 # по одному. Иначе vitest четырёх пакетов конкурируют за CPU и PG-тесты деградации
 # core ловят `Test timed out` (см. проверку CI-гейта).
 workspaceConcurrency: 1
+
+# Пины безопасности (аудит 0.13.4): транзитивные пакеты с patched_versions.
+# app-level overrides, не новые зависимости; поднимают только patch/minor в
+# пределах мажора. Пересматривать при обновлении цепочек-потребителей.
+overrides:
+  fast-uri: ^3.1.7
+  ip-address: ^10.5.1
+  qs: ^6.16.0
+  js-yaml: ^4.3.2
+  brace-expansion@1: ^1.1.18
+  brace-expansion@2: ^2.1.4
+  brace-expansion@5: ^5.0.9
+  source-map-js: ^1.2.2
