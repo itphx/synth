@@ -2435,7 +2435,9 @@ blob-порты и `blob_refs` — ADR-116.
   `attachments/.uploads/<uuid>.json` = `{version, sessionId?, name?, mime?, createdAt}`; **смещение —
   по фактическому размеру файла**, TTL `UPLOAD_SESSION_TTL_MS` = 1 ч, ленивая уборка) обслуживает
   протокол `POST …/uploads` → `PUT /:uploadId?offset=N` → `POST …/complete` → `DELETE`; часть
-  ограничена `attachments.maxChunkBytes`, итог — `maxBytesPerFile` (`413`), смещение — `400`.
+  ограничена `attachments.maxChunkBytes`, итог — `maxBytesPerFile` (`413`), смещение — `400`;
+  `size` — целое ≥ 0 (`invalid` → `400`), квоты — `maxBytesPerSession` (с учётом активных загрузок
+  сессии), `maxActiveUploadsPerSession`/`maxActiveUploads` (staging — только глобальный).
   В контуре сессии загрузка привязана к сессии (`sessionId` в sidecar) — чужая сессия её не видит
   (`404`). Роуты общие для сессии и staging (`registerUploadSessionRoutes`); raw-body —
   `openAttachmentRawUpload` (имя `?name=`/`x-file-name`, `declaredMime` из `Content-Type`, MIME всё
@@ -2534,7 +2536,8 @@ blob-порты и `blob_refs` — ADR-116.
   миниатюра, `404` если её нет); **staging без сессии** — `POST /api/v2/attachments` (те же режимы
   загрузки) и раздача по `GET /api/v2/attachments/:sha256` (шлюзы/пайплайны; объект без ссылок
   живёт `attachments.gcDays`); `attachments: string[]` в `POST /prompt` добавляет медиа-части.
-  Лимиты — `attachments.*` (`maxChunkBytes` — только chunked), нарушение → `413`/`415`.
+  Лимиты — `attachments.*` (`maxChunkBytes` — только chunked; `maxActiveUploads*` — число активных
+  сессий загрузки), нарушение → `413`/`415` (невалидный `size` — `400`).
 - **События и прогоны.** Вложения внешнего события проверяются `EventIngress` (dedupKey
   обязателен); вложения прогона пайплайна — `engine/pipelines/attachments.ts` (вход, маппинг,
   `prev.artifacts`). Подробности — в «Карте модулей».

@@ -82,7 +82,8 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - ADR-115: секция `attachments` (мультимодальный ввод) — `enabled`, `modalities`
   (`image`/`pdf`/`audio`/`video`, ключи — `ATTACHMENT_FAMILIES`; не путать с `AttachmentModality`
   модели, где есть ещё `text`), `maxBytesPerFile`, `maxFilesPerMessage`, `maxBytesPerSession`,
-  `maxBytesPerMessage` (**optional**, без дефолта — бюджет инъекции вложений тулов на ход, читает
+  `maxChunkBytes`, `maxActiveUploadsPerSession` (16), `maxActiveUploads` (256) — лимиты активных
+  сессий chunked-загрузки, `maxBytesPerMessage` (**optional**, без дефолта — бюджет инъекции вложений тулов на ход, читает
   оркестратор), `allowedMimePrefixes`, `workspaceFallback`, `modalityModels` (aux-модели по
   семействам, `{provider, model}`; отсутствие записи — обработка не настроена), `gcDays`;
   `attachmentsConfigSchema`/`attachmentsModalitiesSchema`/`modalityModelsSchema` +
