@@ -490,13 +490,21 @@ async function ensureRgArchive(platformKey, version, opts) {
   return { file: archive, fileName, sha256: actual, source: 'download' };
 }
 
+/** Есть ли команда в PATH (self-hosted раннер может быть без zip/unzip). */
+function hasCommand(cmd) {
+  return spawnSync(cmd, ['--help'], { stdio: 'ignore' }).status !== null;
+}
+
 function extractArchive(archive, destDir) {
   ensureDir(destDir);
   if (archive.endsWith('.zip')) {
     if (process.platform === 'win32') {
       run('tar', ['-xf', archive, '-C', destDir]);
-    } else {
+    } else if (hasCommand('unzip')) {
       run('unzip', ['-q', archive, '-d', destDir]);
+    } else {
+      // Fallback: zipfile из стандартной библиотеки Python (есть на раннере).
+      run('python3', ['-m', 'zipfile', '-e', archive, destDir]);
     }
   } else {
     run('tar', ['-xf', archive, '-C', destDir]);
@@ -857,10 +865,22 @@ function packageBundle(platformKey, stageParent, bundleName, outDir, epoch) {
 
   if (win) {
     setMtimes(path.join(stageParent, bundleName), epoch);
-    run('zip', ['-X', '-r', '-q', target, bundleName], {
-      cwd: stageParent,
-      env: { ...process.env, TZ: 'UTC' },
-    });
+    if (hasCommand('zip')) {
+      run('zip', ['-X', '-r', '-q', target, bundleName], {
+        cwd: stageParent,
+        env: { ...process.env, TZ: 'UTC' },
+      });
+    } else {
+      // Fallback: shutil.make_archive (ZIP_DEFLATED) — на self-hosted раннере
+      // пакета `zip` нет; Python 3 присутствует в образе раннера.
+      run('python3', [
+        '-c',
+        "import shutil,sys; shutil.make_archive(sys.argv[1][:-4],'zip',root_dir=sys.argv[2],base_dir=sys.argv[3])",
+        target,
+        stageParent,
+        bundleName,
+      ]);
+    }
   } else {
     const tar = assertGnuTar();
     run(

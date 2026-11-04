@@ -333,6 +333,9 @@ jobs:
 
       - name: Скачать CHANGELOG
         uses: actions/download-artifact@v4
+        # Артефакт может отсутствовать (квота хранилища GitVerse) — скрипт
+        # использует fallback docs/releases/<version>.md, публикация не блокируется.
+        continue-on-error: true
         with:
           name: changelog
 
@@ -518,8 +521,16 @@ jobs:
             --build-arg "SYNTH_VERSION=$V" \
             --tag "gitverse.ru/itphx/synth:$V" \
             --tag "ghcr.io/itphx/synth:$V" .
-          docker push "gitverse.ru/itphx/synth:$V"
-          docker push "ghcr.io/itphx/synth:$V"
+          push_retry() {
+            for attempt in 1 2 3; do
+              docker push "$1" && return 0
+              echo "push $1: попытка $attempt не удалась, повтор через 10 с" >&2
+              sleep 10
+            done
+            return 1
+          }
+          push_retry "gitverse.ru/itphx/synth:$V"
+          push_retry "ghcr.io/itphx/synth:$V"
 
       - name: Сборка и публикация Docker образа synth-backend (docker)
         env:
@@ -530,8 +541,16 @@ jobs:
             --build-arg "SYNTH_BACKEND_VERSION=$V" \
             --tag "gitverse.ru/itphx/synth-backend:$V" \
             --tag "ghcr.io/itphx/synth-backend:$V" .
-          docker push "gitverse.ru/itphx/synth-backend:$V"
-          docker push "ghcr.io/itphx/synth-backend:$V"
+          push_retry() {
+            for attempt in 1 2 3; do
+              docker push "$1" && return 0
+              echo "push $1: попытка $attempt не удалась, повтор через 10 с" >&2
+              sleep 10
+            done
+            return 1
+          }
+          push_retry "gitverse.ru/itphx/synth-backend:$V"
+          push_retry "ghcr.io/itphx/synth-backend:$V"
 
       - name: Сборка и публикация Docker образа synth-ui (docker)
         env:
@@ -542,8 +561,16 @@ jobs:
             --build-arg "SYNTH_UI_VERSION=$V" \
             --tag "gitverse.ru/itphx/synth-ui:$V" \
             --tag "ghcr.io/itphx/synth-ui:$V" .
-          docker push "gitverse.ru/itphx/synth-ui:$V"
-          docker push "ghcr.io/itphx/synth-ui:$V"
+          push_retry() {
+            for attempt in 1 2 3; do
+              docker push "$1" && return 0
+              echo "push $1: попытка $attempt не удалась, повтор через 10 с" >&2
+              sleep 10
+            done
+            return 1
+          }
+          push_retry "gitverse.ru/itphx/synth-ui:$V"
+          push_retry "ghcr.io/itphx/synth-ui:$V"
 
       # --- arm64 + multi-arch manifest list ---
       # buildx ставится в DOCKER_CONFIG-каталог (туда же, где config.json с
@@ -632,7 +659,7 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
           GITEA_USER: itphx
-          GITEA_TOKEN: ${{ secrets.GV_GITEA_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.GV_GITEA_TOKEN || secrets.GITEA_TOKEN }}
         run: bash scripts/docker-auth-gitea.sh
 
       # Flavor-образы и slim собирает scripts/publish-images.sh: docker + BuildKit,
@@ -640,7 +667,7 @@ jobs:
       # вход в реестр — по GV_GITEA_TOKEN. kaniko на synth-ci недоступен (см. выше).
       - name: Публикация flavor-образов (docker → Gitea)
         env:
-          GV_GITEA_TOKEN: ${{ secrets.GV_GITEA_TOKEN }}
+          GV_GITEA_TOKEN: ${{ secrets.GV_GITEA_TOKEN || secrets.GITEA_TOKEN }}
           GITEA_USER: itphx
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: |
@@ -987,8 +1014,8 @@ jobs:
           git config --local http.https://github.com/.extraheader \
             "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           git remote add github https://github.com/itphx/synth.git 2>/dev/null || true
-          git push github HEAD:refs/heads/main
-          git push github --tags
+          git push --force github HEAD:refs/heads/main
+          git push --force github --tags
 
       - name: Скачать CLI-бандл
         uses: actions/download-artifact@v4
