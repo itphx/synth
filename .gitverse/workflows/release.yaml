@@ -221,11 +221,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Проверить пару заметок
+        # На push тега `version-bump` пропущен, и его output приходит неразвёрнутым
+        # выражением (`${{ steps.bump.outputs.new_version }}`) — подставлять его в
+        # shell нельзя (bad substitution). Поэтому версию берём из ref тега, а output
+        # bump используем только на workflow_dispatch.
         run: |
-          node scripts/release-notes-check.mjs \
-            --require-version \
-            --version "${{ needs.version-bump.outputs.version }}" \
-            --ref "${{ gitverse.ref }}"
+          REF="${{ gitverse.ref }}"
+          case "$REF" in
+            refs/tags/v*)
+              node scripts/release-notes-check.mjs --require-version --ref "$REF"
+              ;;
+            *)
+              node scripts/release-notes-check.mjs --require-version \
+                --version "${{ needs.version-bump.outputs.version }}" --ref "$REF"
+              ;;
+          esac
 
   # --- Сборка ---
   build:
