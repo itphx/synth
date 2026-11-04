@@ -97,6 +97,8 @@ const ATTACHMENTS: AttachmentsSettings = {
   compression: COMPRESSION,
   thumbnail: THUMBNAIL,
   maxChunkBytes: 8 * MIB_BYTES,
+  maxActiveUploadsPerSession: 16,
+  maxActiveUploads: 256,
 }
 
 const DEFAULTS: AttachmentsSettings = {
@@ -329,6 +331,13 @@ describe('MultimodalSettings — состояние и значения', () => 
       '512',
     )
     expect((byTestId(container, 'attachments-max-chunk') as HTMLInputElement).value).toBe('8')
+    // ADR-115: пределы одновременных chunked-загрузок (сессия/инстанс).
+    expect(
+      (byTestId(container, 'attachments-max-active-uploads-per-session') as HTMLInputElement).value,
+    ).toBe('16')
+    expect((byTestId(container, 'attachments-max-active-uploads') as HTMLInputElement).value).toBe(
+      '256',
+    )
 
     // Без правок сохранение недоступно.
     expect((byTestId(container, 'attachments-save') as HTMLButtonElement).disabled).toBe(true)
@@ -362,6 +371,8 @@ describe('MultimodalSettings — состояние и значения', () => 
       compression: COMPRESSION,
       thumbnail: THUMBNAIL,
       maxChunkBytes: 8 * MIB_BYTES,
+      maxActiveUploadsPerSession: 16,
+      maxActiveUploads: 256,
     })
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', text: 'Attachment settings saved' }),
@@ -381,6 +392,47 @@ describe('MultimodalSettings — состояние и значения', () => 
         gcDays: 0,
       }),
     )
+  })
+
+  it('сохраняет пределы активных загрузок (на сессию и инстанс)', async () => {
+    const container = await renderSettings()
+
+    await setInputValue(
+      byTestId(container, 'attachments-max-active-uploads-per-session') as HTMLInputElement,
+      '8',
+    )
+    await setInputValue(
+      byTestId(container, 'attachments-max-active-uploads') as HTMLInputElement,
+      '128',
+    )
+    await click(byTestId(container, 'attachments-save'))
+
+    expect(mocks.updateAttachmentsSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxActiveUploadsPerSession: 8,
+        maxActiveUploads: 128,
+      }),
+    )
+  })
+
+  it('невалидные пределы активных загрузок блокируют сохранение', async () => {
+    const container = await renderSettings()
+
+    const perSession = byTestId(
+      container,
+      'attachments-max-active-uploads-per-session',
+    ) as HTMLInputElement
+    await setInputValue(perSession, '0')
+    expect(container.textContent).toContain('Enter an integer ≥ 1')
+    expect((byTestId(container, 'attachments-save') as HTMLButtonElement).disabled).toBe(true)
+
+    await setInputValue(perSession, '16')
+    const total = byTestId(container, 'attachments-max-active-uploads') as HTMLInputElement
+    await setInputValue(total, '2.5')
+    expect((byTestId(container, 'attachments-save') as HTMLButtonElement).disabled).toBe(true)
+
+    await click(byTestId(container, 'attachments-save'))
+    expect(mocks.updateAttachmentsSettings).not.toHaveBeenCalled()
   })
 
   it('сбрасывает runtime-настройку через DELETE', async () => {
@@ -478,6 +530,35 @@ describe('MultimodalSettings — envLocked и источник env', () => {
     })
     // env-зафиксированные поля в тело не попадают (иначе сервер ответит 409).
     expect(body).not.toHaveProperty('maxBytesPerSession')
+  })
+
+  it('env-зафиксированные пределы активных загрузок не уходят в тело', async () => {
+    mocks.getAttachmentsSettings.mockResolvedValue({
+      ...ENV_INFO,
+      envLocked: [
+        ...ENV_INFO.envLocked,
+        'maxActiveUploadsPerSession',
+        'maxActiveUploads',
+      ],
+    })
+    const container = await renderSettings()
+
+    expect(
+      (byTestId(container, 'attachments-max-active-uploads-per-session') as HTMLInputElement)
+        .disabled,
+    ).toBe(true)
+    expect(
+      (byTestId(container, 'attachments-max-active-uploads') as HTMLInputElement).disabled,
+    ).toBe(true)
+    expect(byTestId(container, 'attachments-active-uploads-env-locked')).toBeTruthy()
+
+    // Меняем другую настройку — env-зафиксированные пределы в тело не попадают.
+    await click(switchByLabel(container, 'PDF'))
+    await click(byTestId(container, 'attachments-save'))
+
+    const body = mocks.updateAttachmentsSettings.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(body).not.toHaveProperty('maxActiveUploadsPerSession')
+    expect(body).not.toHaveProperty('maxActiveUploads')
   })
 
   it('env-зафиксированный maxChunkBytes блокирует поле и не уходит в тело', async () => {
@@ -761,6 +842,8 @@ describe('MultimodalSettings — чистые хелперы', () => {
     const form = formFromAttachments(ATTACHMENTS)
     expect(form.maxFileMiB).toBe('10')
     expect(form.maxSessionMiB).toBe('100')
+    expect(form.maxActiveUploadsPerSession).toBe('16')
+    expect(form.maxActiveUploads).toBe('256')
     expect(form.mimePrefixes).toBe('image/, application/pdf')
     expect(form.image).toBe(true)
     expect(form.video).toBe(false)
@@ -783,6 +866,8 @@ describe('MultimodalSettings — чистые хелперы', () => {
       compression: COMPRESSION,
       thumbnail: THUMBNAIL,
       maxChunkBytes: 8 * MIB_BYTES,
+      maxActiveUploadsPerSession: 16,
+      maxActiveUploads: 256,
     })
   })
 
@@ -807,6 +892,8 @@ describe('MultimodalSettings — чистые хелперы', () => {
       compression: COMPRESSION,
       thumbnail: THUMBNAIL,
       maxChunkBytes: 8 * MIB_BYTES,
+      maxActiveUploadsPerSession: 16,
+      maxActiveUploads: 256,
     })
   })
 

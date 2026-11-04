@@ -234,7 +234,8 @@ spec:
               subPath: itphx-ca.crt
             {{- end }}
             {{- /* ADR-099: Secret с CA/клиентскими сертификатами (только чтение,
-                   0444). В config.yaml уходят ТОЛЬКО пути внутри контейнера. */}}
+                   режим 0440 при заданном fsGroup / 0444 без него). В config.yaml
+                   уходят ТОЛЬКО пути внутри контейнера. */}}
             {{- if include "synth.tls.mounted" . }}
             - name: tls
               mountPath: {{ include "synth.backend.tlsMountDir" . }}
@@ -246,8 +247,9 @@ spec:
             - name: executor-workspace
               mountPath: {{ .Values.executor.workspace.mountPath }}
             {{- end }}
-            {{- /* ADR-077: токен исполнителя — файлом (0444); в env backend'а
-                   идёт путь, а не значение (инвариант 13). */}}
+            {{- /* ADR-077: токен исполнителя — файлом (режим 0440/0444 по
+                   fsGroup); в env backend'а идёт путь, а не значение
+                   (инвариант 13). */}}
             {{- if $executionRemote }}
             - name: executor-token
               mountPath: {{ include "synth.execution.tokenMountDir" . }}
@@ -310,17 +312,20 @@ spec:
           configMap:
             name: {{ include "synth.name" . }}-itphx-ca
         {{- end }}
-        {{- /* ADR-099: CA/клиентские сертификаты — из Secret, права 0444.
-                Том монтируется в контейнер, где процесс работает под uid 1000.
-                При заданном fsGroup доступ давала группа, но при отключённом
-                fsGroup (NFS-workspace, см. README §«NFS-том и смена владельца»)
-                файлы остаются root:root и должны быть читаемы владельцем-процессом.
-                0444 — чтение для uid процесса; запись не нужна (том readOnly). */}}
+        {{- /* ADR-099: CA/клиентские сертификаты — из Secret. Режим считает
+               `synth.secretVolumeMode` от backend.podSecurityContext:
+               при заданном fsGroup — 0440 (владелец файлов root, группа =
+               fsGroup, процесс uid 1000 читает по группе); без fsGroup —
+               0444, потому что владелец остаётся root (не процесс) и
+               группового чтения нет, так что единственный доступный канал —
+               чтение «остальными» (world-readable; совместимость при
+               `fsGroup: null`). Запись не нужна ни в одной ветке: том
+               readOnly. */}}
         {{- if include "synth.tls.mounted" . }}
         - name: tls
           secret:
             secretName: {{ .Values.security.tls.existingSecret }}
-            defaultMode: 0444
+            defaultMode: {{ include "synth.secretVolumeMode" .Values.backend.podSecurityContext }}
         {{- end }}
         {{- /* ADR-077: общий том workspace (control plane ↔ исполнители). */}}
         {{- if $sharedWorkspace }}
@@ -329,15 +334,18 @@ spec:
             claimName: {{ include "synth.executor.workspaceClaim" . }}
         {{- end }}
         {{- /* ADR-077: Secret с токеном исполнителя — ключ спроецирован в файл
-               `token` (0444); backend читает токен по этому пути. Процесс в
-               контейнере — uid 1000: без fsGroup файл принадлежит root:root,
-               поэтому права должны давать чтение владельцу-процессу (0444 —
-               чтение для uid процесса; запись не нужна (том readOnly)). */}}
+               `token`; backend читает токен по этому пути. Режим считает
+               `synth.secretVolumeMode` от backend.podSecurityContext: 0440 при
+               заданном fsGroup (владелец root, группа = fsGroup — процесс
+               uid 1000 читает по группе), иначе 0444 — группового чтения нет,
+               поэтому файл (root:root) приходится делать читаемым «остальным»
+               (world-readable; совместимость при `fsGroup: null`). Запись не
+               нужна: том readOnly. */}}
         {{- if $executionRemote }}
         - name: executor-token
           secret:
             secretName: {{ include "synth.execution.tokenSecretName" . }}
-            defaultMode: 0444
+            defaultMode: {{ include "synth.secretVolumeMode" .Values.backend.podSecurityContext }}
             items:
               - key: {{ include "synth.execution.tokenKey" . }}
                 path: token

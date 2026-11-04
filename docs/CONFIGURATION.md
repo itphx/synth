@@ -2082,6 +2082,20 @@ git:
 | `attachments.compression` | **Сжатие вложений только на границе отправки** провайдеру (ADR-115): в blob и при раздаче через API остаётся оригинал. Мастер-выключатель `enabled` + параметры семейств: `image` (`maxSidePx` 64..8192, `quality` 1..100, `minBytes` — порог, ниже которого не сжимаем (если не превышены размеры кадра), `video` (`maxHeightPx` 144..4320, `bitrateKbps` 100..50000, `audioBitrateKbps` 16..512, `minBytes`), `audio` (`bitrateKbps` 8..512, `channels` 1..2, `sampleRateHz` 8000..48000, `minBytes`). `pdf` не сжимается. Env нет — `config.yaml`/runtime | `enabled: true`; image `2048`/`85`/1 МиБ; video `720`/`2000`/`96`/8 МиБ; audio `64`/`1`/`16000`/4 МиБ |
 | `attachments.thumbnail` | Серверные **миниатюры** вложений для UI: производный маленький JPEG рядом с оригиналом в blob (`attachments/.thumbs/`), оригинальные байты не меняются. `enabled` — генерация, `maxWidthPx` 64..1024 — предел ширины (высота пропорционально). Env нет — `config.yaml`/runtime | `{ enabled: true, maxWidthPx: 512 }` |
 | `attachments.maxChunkBytes` | Размер одной части **chunked-загрузки**, байт (минимум `1024`): части декодируются и складываются потоком, поэтому целый файл в память не поднимается. Env — `SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES` | `8388608` (8 МиБ) |
+| `attachments.maxActiveUploadsPerSession` | Предел числа **одновременных chunked-загрузок одной сессии** (незавершённые сессии в `attachments/.uploads/`): защита от занятия диска загрузками, которые не довели до `complete`. Превышение на `init` → `413 PAYLOAD_TOO_LARGE` (`error.details.maxActiveUploadsPerSession`). Env — `SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS_PER_SESSION` | `16` |
+| `attachments.maxActiveUploads` | Общий предел **активных chunked-загрузок инстанса** — считаются все сессии загрузки на томе `blobs`, включая staging-контур без привязки к сессии. Превышение на `init` → `413 PAYLOAD_TOO_LARGE` (`error.details.maxActiveUploads`). Env — `SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS` | `256` |
+
+`attachments.maxBytesPerSession` применяется также к **активным chunked-загрузкам**: сумма временных
+объектов сессии в `attachments/.uploads/` плюс текущий файл не должна превышать лимит (на `init`
+учитывается заявленный `size`, на `append`/`complete` — фактический размер). Протухшие сессии (TTL
+1 ч) в подсчёт не попадают никогда: уборка троттлится (полный проход — не чаще раза в минуту), но
+загрузки с истёкшим TTL игнорируются при подсчёте, поэтому не занимают ни квоту, ни лимиты числа.
+
+**Staging-контур (без привязки к сессии) ограничен `maxActiveUploads` и `maxBytesPerFile`; байтовой
+квоты на staging нет.** Верхняя граница объёма незавершённых staging-загрузок —
+`maxActiveUploads × maxBytesPerFile` (при дефолтах 256 × 100 МиБ ≈ 25 ГиБ): каждая загрузка не больше
+`maxBytesPerFile`, а их число ограничено общим лимитом инстанса. Отдельная квота для staging не
+вводится — при необходимости снижайте `maxActiveUploads` или `maxBytesPerFile`.
 
 ```yaml
 attachments:
@@ -2111,6 +2125,9 @@ attachments:
   thumbnail: { enabled: true, maxWidthPx: 512 }
   # Размер одной части chunked-загрузки (части складываются потоком).
   maxChunkBytes: 8388608
+  # Пределы числа незавершённых chunked-загрузок: на сессию и глобально.
+  maxActiveUploadsPerSession: 16
+  maxActiveUploads: 256
 ```
 
 - **Приоритет источников.** `SYNTH_ATTACHMENTS_*` (env) > runtime (UI, `settings.json`/PG) >
@@ -2121,8 +2138,10 @@ attachments:
   `enabled`/`modalities`/лимиты/`workspaceFallback`/`modalityModels`/`gcDays`, а также
   `compression`/`thumbnail`/`maxChunkBytes` **без рестарта**: сервис вложений, постановка промпта,
   миниатюры, сжатие и GC читают резолвер на каждый вызов (`restartRequired: false`).
-  `compression`/`thumbnail` — частичный merge по путям; среди этих полей env-ключ есть только у
-  `maxChunkBytes` (`SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES`), у `compression`/`thumbnail` env нет.
+  `compression`/`thumbnail` — частичный merge по путям; среди этих полей env-ключи есть у
+  `maxChunkBytes` (`SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES`), `maxActiveUploadsPerSession`
+  (`SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS_PER_SESSION`) и `maxActiveUploads`
+  (`SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS`), у `compression`/`thumbnail` env нет.
   Изменения пишутся в аудит политик (`scope: "attachments"`).
 - **Модели обработки по модальностям (`attachments.modalityModels`, ADR-115).** Модель сессии
   **не меняется**: aux-модель получает только вложение (описание/извлечённый текст), а диалог

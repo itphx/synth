@@ -40,10 +40,15 @@ function resolveWorkspaceDir(
 }
 
 /**
- * Резолвит путь git-репозитория проекта: абсолютный — как есть (normalize),
- * относительный — относительно рабочего каталога проекта.
+ * Резолвит путь git-репозитория проекта для git-детекта: абсолютный — как есть
+ * (normalize), относительный — относительно рабочего каталога проекта.
+ *
+ * Это **не** containment-проверка: имя однозначное (не `resolveRepoPath`),
+ * чтобы будущая правка не подменила проверку из
+ * `git/git-service.ts` (`resolveRepoPath` → `PATH_TRAVERSAL`). Здесь путь только
+ * для чтения (`detectRepoInfo`), операций с ФС он не выполняет.
  */
-function resolveRepoPath(repoPath: string, projectDir: string): string {
+function resolveRepoPathForDetection(repoPath: string, projectDir: string): string {
   return isAbsolute(repoPath) ? normalize(repoPath) : resolve(projectDir, repoPath);
 }
 
@@ -273,7 +278,7 @@ export const listReposTool: ToolDefinition = {
         // Относительные пути репозиториев резолвим относительно рабочего
         // каталога проекта: `destination` — абсолютный путь внутри workspace,
         // git-детект ищет в правильном месте (ADR-076).
-        const destination = resolveRepoPath(repoCfg.path, projectDir);
+        const destination = resolveRepoPathForDetection(repoCfg.path, projectDir);
         const repo = await detectRepoInfo(destination, ctx.abortSignal, execution);
         parts.push(formatRegistryRepo(repoCfg, destination, repo));
       }

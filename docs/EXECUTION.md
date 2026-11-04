@@ -829,7 +829,9 @@ control plane (тот же namespace) на порт исполнителя, egre
 | `executor.mcp.enabled` / `.servers` | MCP-серверы, которые хостит исполнитель (ADR-077 шаг B1): `[{name, command, args, env}]` → env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто → env не выставляется (дефолт образа: у flavor'ов с браузером — Playwright MCP); `enabled: false` → env `""` = серверов нет |
 
 Токен — **только** из Secret: backend получает его **файлом**
-(`/etc/synth/executor/token`, `0400` → в env идёт путь, `SYNTH_EXECUTION_TOKEN`),
+(`/etc/synth/executor/token`, режим `0440` при заданном
+`backend.podSecurityContext.fsGroup` и `0444` при `fsGroup: null`; том
+`readOnly`; в env идёт путь, `SYNTH_EXECUTION_TOKEN`),
 worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`). Secret и
 ключ общие, поэтому токен совпадает на обеих сторонах; в ConfigMap/values —
 никаких значений (инвариант 13). При `executor.enabled: false` рендер чарта

@@ -135,6 +135,10 @@ export interface AttachmentsSettings {
   thumbnail: AttachmentsThumbnailSettings
   /** ADR-115: размер части chunked-загрузки, байт (минимум 1024). */
   maxChunkBytes: number
+  /** ADR-115: предел одновременных chunked-загрузок одной сессии (целое ≥ 1). */
+  maxActiveUploadsPerSession: number
+  /** ADR-115: общий предел активных chunked-загрузок инстанса (целое ≥ 1). */
+  maxActiveUploads: number
 }
 
 /**

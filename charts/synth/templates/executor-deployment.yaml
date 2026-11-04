@@ -146,13 +146,18 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "synth.executor.workspaceClaim" . }}
         {{- /* CA доверия git — Secret (readonly). Значений в values нет
-               (инвариант 13): только ссылка на Secret. */}}
+               (инвариант 13): только ссылка на Secret. Режим считает
+               `synth.secretVolumeMode` от executor.podSecurityContext: 0440
+               при заданном fsGroup (владелец root, группа = fsGroup — процесс
+               читает по группе), иначе 0444 — группового чтения нет, поэтому
+               файлы (root:root) остаются читаемыми только «остальным»
+               (world-readable; совместимость при `fsGroup: null`). */}}
         {{- with .Values.executor.tls }}
         {{- if .caSecret }}
         - name: executor-tls
           secret:
             secretName: {{ .caSecret }}
-            defaultMode: 0444
+            defaultMode: {{ include "synth.secretVolumeMode" $.Values.executor.podSecurityContext }}
         {{- end }}
         {{- end }}
 {{- end }}

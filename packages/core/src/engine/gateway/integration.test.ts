@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatOrchestrator } from '../orchestrator.js';
@@ -19,6 +19,7 @@ import { GatewayProvider, AuditLogger } from './index.js';
 import { DebugCollector } from '../../debug.js';
 import { ContextConfig } from '../context/config.js';
 import { ContextBuilder } from '../context/builder.js';
+import type { ContextOptimizer, ContextOptimizerGatewayHooks } from '../context/optimizer.js';
 import type { Session, Message, LLMGatewayConfig, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, nowISO } from '@itphx/synth-shared';
 import { enqueueUserMessage, QueueProcessorManager, type ProcessMessageFn } from '../../queue/processor.js';
@@ -88,7 +89,12 @@ describe('ChatOrchestrator × LLM Gateway (ADR-036)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function makeOrchestrator(gatewayConfig?: LLMGatewayConfig, auditLogger?: AuditLogger, contextBuilder?: ContextBuilder) {
+  function makeOrchestrator(
+    gatewayConfig?: LLMGatewayConfig,
+    auditLogger?: AuditLogger,
+    contextBuilder?: ContextBuilder,
+    contextOptimizer?: ContextOptimizer,
+  ) {
     return new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
@@ -104,6 +110,7 @@ describe('ChatOrchestrator × LLM Gateway (ADR-036)', () => {
       dataDir: tmpDir,
       gatewayConfig,
       gatewayAuditLogger: auditLogger,
+      ...(contextOptimizer ? { contextOptimizer } : {}),
     });
   }
 
@@ -277,6 +284,23 @@ describe('ChatOrchestrator × LLM Gateway (ADR-036)', () => {
     const disabled = makeOrchestrator({ ...makeGatewayConfig(), enabled: false });
     const disabledSecrets = await getSecrets.call(disabled, session.id, 'Ключ ⟦SYNTH_SECRET_1⟧ в ответе');
     expect(Object.keys(disabledSecrets)).toHaveLength(0);
+  });
+
+  it('суммаризация всегда получает gateway-обвязку (и при выключенных gateway/метриках)', async () => {
+    // Регрессия M2: раньше `_optimizerGatewayHooks()` возвращал null, если
+    // gateway и метрики выключены, и ContextOptimizer шёл к провайдеру напрямую.
+    const setGatewayHooks = vi.fn<(hooks: ContextOptimizerGatewayHooks | null) => void>();
+    const optimizer = { setGatewayHooks } as unknown as ContextOptimizer;
+
+    makeOrchestrator(undefined, undefined, undefined, optimizer);
+
+    expect(setGatewayHooks).toHaveBeenCalledTimes(1);
+    const hooks = setGatewayHooks.mock.calls[0]![0];
+    expect(hooks).not.toBeNull();
+    // Passthrough-конфиг: вызов пойдёт через GatewayProvider без guard'а.
+    expect(hooks!.config.enabled).toBe(false);
+    // Ленивый AuditLogger не создаёт файлов, пока нет записи.
+    await expect(access(join(tmpDir, 'audit', 'llm-gateway.jsonl'))).rejects.toThrow();
   });
 
   it('setGatewayConfig включает gateway на лету (live-переключение без рестарта)', async () => {

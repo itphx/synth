@@ -149,6 +149,8 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
       },
       thumbnail: { enabled: true, maxWidthPx: 512 },
       maxChunkBytes: 8 * 1024 * 1024,
+      maxActiveUploadsPerSession: 16,
+      maxActiveUploads: 256,
     });
     expect(body.defaults).toEqual(body.attachments);
     // ADR-115: сохранённого runtime-патча нет.
@@ -663,6 +665,27 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
     expect(restored.attachments.maxChunkBytes).toBe(8 * 1024 * 1024);
     expect(restored.saved).toEqual({});
     expect(live.getConfig().compression.image.quality).toBe(70);
+  });
+
+  it('PUT: лимиты числа активных chunked-загрузок → 200, runtime и live; 0 → 400', async () => {
+    const { app, live } = createApp({ dataDir, env: {} });
+
+    const saved = await json(
+      await put(app, { attachments: { maxActiveUploadsPerSession: 3, maxActiveUploads: 40 } }),
+    );
+    expect(saved.attachments.maxActiveUploadsPerSession).toBe(3);
+    expect(saved.attachments.maxActiveUploads).toBe(40);
+    expect(saved.source).toBe('runtime');
+    expect(saved.restartRequired).toBe(false);
+    // Применяется сразу — живой резолвер читает те же значения.
+    expect(live.getConfig().maxActiveUploadsPerSession).toBe(3);
+    expect(live.getConfig().maxActiveUploads).toBe(40);
+
+    for (const key of ['maxActiveUploadsPerSession', 'maxActiveUploads']) {
+      const bad = await put(app, { attachments: { [key]: 0 } });
+      expect(bad.status).toBe(400);
+      expect((await json(bad)).error.code).toBe('VALIDATION_ERROR');
+    }
   });
 
   it('env-lock maxChunkBytes: GET source=env, PUT другим значением → 409', async () => {

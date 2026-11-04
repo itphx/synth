@@ -536,7 +536,8 @@ executor:
 #
 # Пароли/ключи в ConfigMap НЕ кладутся (инвариант 13) — в config.yaml попадают
 # ТОЛЬКО пути внутри контейнера. Сами файлы — в Secret (`existingSecret`),
-# который монтируется в backend как /etc/synth/tls (readOnly, 0444).
+# который монтируется в backend как /etc/synth/tls (readOnly; режим 0440 при
+# заданном backend.podSecurityContext.fsGroup, иначе 0444).
 #
 # Пример: корпоративный CA и клиентский сертификат (mTLS) в Secret `corp-tls`:
 #   security:
@@ -555,8 +556,11 @@ executor:
 # ─────────────────────────────────────────────────────────────────────────────
 security:
   tls:
-    # Secret с CA/клиентскими сертификатами → mount в /etc/synth/tls (0444:
-    # чтение для uid 1000 контейнера; без fsGroup файл был бы недоступен).
+    # Secret с CA/клиентскими сертификатами → mount в /etc/synth/tls (readOnly;
+    # 0440 при заданном backend.podSecurityContext.fsGroup — групповое чтение;
+    # иначе 0444: владелец файлов — root, группового доступа нет, поэтому
+    # читать может только «остальные» (world-readable; совместимость при
+    # `fsGroup: null`, см. README §«Права файлов в Secret-томах»)).
     # Пусто → ничего не монтируется.
     existingSecret: ""
     # Ключи внутри existingSecret; пусто → путь не рендерится.

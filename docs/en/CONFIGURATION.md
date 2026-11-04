@@ -2026,6 +2026,20 @@ API contract — [API_V2.md](./API_V2.md) §5.6.1). Bytes live on the volume in 
 | `attachments.compression` | **Compression only at send time** (upstream provider); the blob keeps the original bytes and API downloads/`save_attachment` return the original. Master switch `enabled` + per-family settings: `image` (`maxSidePx` 64..8192, `quality` 1..100, `minBytes` — threshold below which the file is not compressed unless the frame dimensions exceed the cap), `video` (`maxHeightPx` 144..4320, `bitrateKbps` 100..50000, `audioBitrateKbps` 16..512, `minBytes`), `audio` (`bitrateKbps` 8..512, `channels` 1..2, `sampleRateHz` 8000..48000, `minBytes`). PDF is not compressed. No env — `config.yaml`/runtime | `enabled: true`; image `2048`/`85`/1 MiB; video `720`/`2000`/`96`/8 MiB; audio `64`/`1`/`16000`/4 MiB |
 | `attachments.thumbnail` | Server-side **thumbnails** for the UI: a derived small JPEG next to the original in the blob (`attachments/.thumbs/`); original bytes are untouched. `enabled` — generation, `maxWidthPx` 64..1024 — width cap (height proportional). No env — `config.yaml`/runtime | `{ enabled: true, maxWidthPx: 512 }` |
 | `attachments.maxChunkBytes` | Size of one **chunked upload** part, bytes (minimum `1024`): parts are appended as a stream, so the whole file is never buffered in memory. Env — `SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES` | `8388608` (8 MiB) |
+| `attachments.maxActiveUploadsPerSession` | Maximum number of **concurrent chunked uploads of one session** (unfinished upload sessions under `attachments/.uploads/`): prevents unfinished uploads from filling the disk. Exceeding it on `init` → `413 PAYLOAD_TOO_LARGE` (`error.details.maxActiveUploadsPerSession`). Env — `SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS_PER_SESSION` | `16` |
+| `attachments.maxActiveUploads` | Global maximum of **active chunked uploads of the instance** — every upload session on the `blobs` volume counts, including the staging contour without a session binding. Exceeding it on `init` → `413 PAYLOAD_TOO_LARGE` (`error.details.maxActiveUploads`). Env — `SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS` | `256` |
+
+`attachments.maxBytesPerSession` **also applies to active chunked uploads**: the total of the session's
+temporary objects under `attachments/.uploads/` plus the current file must stay within the limit (on
+`init` the declared `size` counts, on `append`/`complete` the actual size). Expired sessions (1 h TTL)
+**never count**: the cleanup is throttled (a full pass at most once per minute), but the active-upload
+scan skips expired sessions, so they consume neither the quota nor the count limits.
+
+**The staging contour (no session binding) is limited by `maxActiveUploads` and `maxBytesPerFile`;
+there is no byte quota for staging.** The upper bound of unfinished staging uploads is
+`maxActiveUploads × maxBytesPerFile` (256 × 100 MiB ≈ 25 GiB at the defaults): every upload is capped by
+`maxBytesPerFile` and their number by the instance-wide limit. No separate staging quota is introduced —
+lower `maxActiveUploads` or `maxBytesPerFile` if needed.
 
 - **Compression happens on send, the original is preserved.** The compressed copy is cached under
   `attachments/.derived/compress` and used only for the LLM call (and the aux call): the blob, API
@@ -2040,8 +2054,8 @@ API contract — [API_V2.md](./API_V2.md) §5.6.1). Bytes live on the volume in 
 - **Runtime settings.** Settings → "Multimodal input" (API — `GET/PUT/DELETE /api/v2/settings/attachments`,
   [API_V2.md](./API_V2.md) §5.21) changes `enabled`/`modalities`/limits/`workspaceFallback`/`modalityModels`/`gcDays`
   plus `compression`/`thumbnail`/`maxChunkBytes` **without a restart** (deep partial merge for
-  `compression`/`thumbnail`; among these fields only `maxChunkBytes` has an env override). The full
-  field table is in the RU version of this document.
+  `compression`/`thumbnail`; among these fields `maxChunkBytes`, `maxActiveUploadsPerSession` and
+  `maxActiveUploads` have env overrides). The full field table is in the RU version of this document.
 
 #### Upload limits and the reverse proxy
 

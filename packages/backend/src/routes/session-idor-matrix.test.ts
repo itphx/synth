@@ -465,6 +465,8 @@ async function buildWorld(tmpDir: string): Promise<World> {
         compression: defaultConfig.attachments.compression,
         thumbnail: defaultConfig.attachments.thumbnail,
         maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
+        maxActiveUploadsPerSession: defaultConfig.attachments.maxActiveUploadsPerSession,
+        maxActiveUploads: defaultConfig.attachments.maxActiveUploads,
       },
     },
   ));

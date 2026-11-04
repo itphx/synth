@@ -73,6 +73,9 @@ describe('defaultConfig', () => {
       thumbnail: { enabled: true, maxWidthPx: 512 },
       // ADR-115: размер части chunked-загрузки.
       maxChunkBytes: 8 * 1024 * 1024,
+      // ADR-115: пределы числа незавершённых chunked-загрузок.
+      maxActiveUploadsPerSession: 16,
+      maxActiveUploads: 256,
     });
   });
 

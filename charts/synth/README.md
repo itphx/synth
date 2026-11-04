@@ -126,7 +126,7 @@ ingress:
 | `backend.blobs.existingClaim` | `""` | Готовый claim блобов (чарт PVC не создаёт, `accessMode` не проверяет) |
 | `backend.blobs.keepOnUninstall` | `false` | Не удалять PVC блобов при `helm uninstall` (аннотация `helm.sh/resource-policy: keep`) |
 | `backend.extraEnv` | `{}` | Доп. env для backend |
-| `backend.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов томов и политика смены владельца: рекурсивный `chown` только при несовпадении корня (см. «NFS-том и смена владельца») |
+| `backend.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов томов и политика смены владельца: рекурсивный `chown` только при несовпадении корня (см. «NFS-том и смена владельца»). От `fsGroup` же зависит режим Secret-томов: задан → `0440`, `null` → `0444` (см. «Права файлов в Secret-томах») |
 | `backend.progressDeadlineSeconds` | `1200` | Дедлайн прогресса rollout (`Deployment.spec.progressDeadlineSeconds`): медленный первый старт (chown тома, pull) не роняет релиз |
 | `backend.restartMode` | `process` | Restart из UI: `process` \| `supervisor` \| `disabled` (env `SYNTH_RESTART_MODE`, см. «Перезапуск инстанса из UI») |
 | `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`); сюда же домерживается секция `storage` из значений ниже |
@@ -152,7 +152,7 @@ ingress:
 | `execution.remote.failMode` | `fail` | `fail` (fail-closed) \| `inline-fallback` (backend исполняет сам — обход изоляции) |
 | `executor.enabled` | `false` | Включить split-режим: Deployment + Service + PVC пула исполнителей |
 | `executor.replicaCount` | `1` | Размер пула исполнителей |
-| `executor.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов общего тома и политика смены владельца: NFS-том workspace — десятки тысяч файлов, рекурсивный `chown` на каждом старте недопустим (см. «NFS-том и смена владельца») |
+| `executor.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов общего тома и политика смены владельца: NFS-том workspace — десятки тысяч файлов, рекурсивный `chown` на каждом старте недопустим (см. «NFS-том и смена владельца»). От `fsGroup` зависит режим Secret-тома `executor-tls`: задан → `0440`, `null` → `0444` |
 | `executor.progressDeadlineSeconds` | `1200` | Дедлайн прогресса rollout (`Deployment.spec.progressDeadlineSeconds`): медленный первый старт не роняет релиз |
 | `executor.image.repository` | `git.itphx.ru/itphx/synth-executor` | Образ исполнителя |
 | `executor.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
@@ -697,6 +697,35 @@ sealed-secrets и т.п. Зашифрованных секретов в чарт
 > пароль лежит в томе, а не в Secret. Отсутствие пароля там, где он нужен,
 > приводит к ошибке подключения в логах backend, а не к молчаливой работе.
 
+### Права файлов в Secret-томах (`0440`/`0444`)
+
+Secret-тома, которые чарт монтирует сам (`tls` — `security.tls.existingSecret`,
+`executor-token` — `SYNTH_EXECUTION_TOKEN`, `executor-tls` —
+`executor.tls.caSecret`), всегда монтируются `readOnly`, а режим файлов
+**вычисляется** хелпером `synth.secretVolumeMode` из соответствующего
+`podSecurityContext`:
+
+- **`fsGroup` задан (дефолт `1000`)** → `defaultMode: 0440`: kubelet монтирует
+  Secret как `root:root`, но при заданном `fsGroup` переводит группу файлов на
+  этот `fsGroup` и добавляет её процессу в supplemental groups — процессу uid
+  1000 (и любому другому uid в поде) достаточно группового чтения. Запись не
+  нужна: том `readOnly`.
+- **`fsGroup` не задан/`null`** (например, ради NFS-workspace — см. «NFS-том и
+  смена владельца») → `defaultMode: 0444`: владелец и группа остаются `root`,
+  группового доступа нет, поэтому файл должен быть читаем «остальным»
+  (world-readable; это совместимость при `fsGroup: null`) — иначе процесс
+  uid 1000 не прочитает токен исполнителя или CA.
+
+Режим считается **отдельно** для backend (`backend.podSecurityContext`) и
+исполнителя (`executor.podSecurityContext`): если у пода `fsGroup` отключён,
+его Secret-тома получают `0444`, даже когда у второго пода `fsGroup` остался.
+Тома, не содержащие секретов (PVC данных/blobs/workspace, ConfigMap), этот
+хелпер не затрагивает — у них режим задаёт драйвер тома/чужой claim.
+
+Смену группы и выдачу её процессу (supplemental groups) делает kubelet при
+монтировании тома — для in-tree Secret-томов это штатное поведение (исключение
+— CSI-тома с `fsGroupPolicy: None`, но секреты чарт так не монтирует).
+
 ## API-key режим без Keycloak
 
 Backend можно поднять без внешнего IdP: один ключ `SYNTH_API_KEY` даёт роль
@@ -1023,7 +1052,8 @@ helm upgrade --install synth ./charts/synth -f my-values.yaml \
 ### Токен доверия (Secret)
 
 Один Secret обслуживает обе стороны: backend получает токен **файлом**
-(`/etc/synth/executor/token`, режим 0444 → в env идёт путь), исполнитель —
+(`/etc/synth/executor/token`, режим `0440` при заданном `fsGroup`, иначе `0444`
+→ в env идёт путь), исполнитель —
 **значением** в env (`secretKeyRef`). Токен на обеих сторонах совпадает, потому
 что Secret и ключ общие.
 
@@ -1106,12 +1136,14 @@ kubelet при **каждом** старте пода рекурсивно об�
 
 **Если `fsGroup` отключён (`fsGroup: null`).** Отключение убирает рекурсивный
 `chown`, но вместе с ним и групповой доступ к secret-томам: файлы остаются
-`root:root`, а процесс в контейнере работает под uid 1000. Поэтому secret-тома
-`tls` (`security.tls.existingSecret`) и `executor-token`
-(`SYNTH_EXECUTION_TOKEN`) монтируются с `defaultMode: 0444` — иначе процесс
-uid 1000 не прочитает токен исполнителя и CA (backend падает:
-`executor token could not be read`). `0444` валиден и при заданном `fsGroup`
-(тома read-only, запись не нужна).
+`root:root`, а процесс в контейнере работает под uid 1000. Поэтому режим
+Secret-томов `tls` (`security.tls.existingSecret`), `executor-token`
+(`SYNTH_EXECUTION_TOKEN`) и `executor-tls` (`executor.tls.caSecret`) чарт
+**вычисляет** от `fsGroup` пода: при заданном `fsGroup` — `0440` (чтение по
+группе), при `null` — `0444` (чтение «остальными», иначе процесс uid 1000 не
+прочитает токен и CA: backend падает `executor token could not be read`). Тома
+`readOnly`, запись не нужна ни в одной ветке; подробности — §«Права файлов в
+Secret-томах».
 
 Переопределить политику/дедлайн можно значениями:
 
@@ -1294,7 +1326,9 @@ executor:
 
 Что это даёт:
 
-- Secret монтируется в `/etc/synth/tls` **read-only** (`defaultMode: 0444`);
+- Secret монтируется в `/etc/synth/tls` **read-only** (режим `0440` при
+  заданном `executor.podSecurityContext.fsGroup`, иначе `0444` — см. «Права
+  файлов в Secret-томах»);
 - исполнитель получает `SYNTH_EXECUTOR_TLS_CA_FILE=/etc/synth/tls/<caKey>` и
   добавляет его в окружение вызова env-каналом git ≥ 2.31
   (`GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=http.sslCAInfo`,
@@ -1672,7 +1706,9 @@ git-over-https) и для TLS к PostgreSQL (`verify-full`). Пусто (деф�
 
 Секретов в ConfigMap нет (инвариант 13): в `config.yaml` попадают **только пути**
 внутри контейнера, сами файлы — в Secret, который монтируется в backend как
-`/etc/synth/tls` (readOnly, `0444`).
+`/etc/synth/tls` (readOnly; режим `0440` при заданном
+`backend.podSecurityContext.fsGroup`, иначе `0444` — см. «Права файлов в
+Secret-томах»).
 
 ```yaml
 # my-values.yaml

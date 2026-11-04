@@ -838,6 +838,8 @@ describe('portable: вложения сообщений (ADR-115)', () => {
       compression: defaultConfig.attachments.compression,
       thumbnail: defaultConfig.attachments.thumbnail,
       maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
+      maxActiveUploadsPerSession: defaultConfig.attachments.maxActiveUploadsPerSession,
+      maxActiveUploads: defaultConfig.attachments.maxActiveUploads,
     };
   }
 

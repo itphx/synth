@@ -1,11 +1,12 @@
 import { readdir, mkdir, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { resolve as pathResolve, relative, join, isAbsolute, sep } from 'node:path';
+import { resolve as pathResolve, relative, dirname, join, isAbsolute, sep } from 'node:path';
 import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
 import type { ExecutionPort, ExecSecret } from '../execution/ports/index.js';
 import { isExecutionError } from '../execution/ports/index.js';
 import { inspectRepoPath } from './repo-occupancy.js';
 import { gitExec, sanitizeGitEnv } from './exec.js';
+import { isInsideReal, resolveRealPath } from '../engine/tools/path-utils.js';
 
 /**
  * ADR-076 §T3: git-сервис ядра (перенос из backend `lib/git-service.ts`).
@@ -114,8 +115,39 @@ function relativeTime(isoDate: string): string {
 
 /**
  * ADR-076: резолвит относительный путь репозитория ВНУТРИ абсолютного workspace.
- * Абсолютный `repoRelPath` либо выход за workspace (`..`) → ошибка
- * `PATH_TRAVERSAL` (защита от traversal). Пустой `repoRelPath` — сам workspace.
+ *
+ * Проверка двухступенчатая и **fail-closed**:
+ *
+ * 1. лексическая — абсолютный `repoRelPath` либо выход за workspace (`..`) →
+ *    `PATH_TRAVERSAL`;
+ * 2. реальная (с учётом симлинков) — корень и цель разыменовываются
+ *    (`isInsideReal` из `engine/tools/path-utils.ts`, там же обработка
+ *    несуществующей цели и ELOOP). Симлинк внутри workspace, ведущий наружу
+ *    (в том числе в промежуточной компоненте: `link/sub`), и неразрешимый путь
+ *    (dangling-симлинк, цикл, ошибка ФС) отклоняются тем же кодом. Без этого
+ *    шага HTTP-слой (`init`/`clone`/`register`/`remove`) проходил сквозь симлинк
+ *    наружу workspace, а `remove` делает `rm -rf`. Агентские git-тулы защищены
+ *    тем же правилом (`resolveRepoCwd` → `isInsideReal`).
+ *
+ * Несуществующая цель разрешена (`initRepo` создаёт каталог, `cloneRepo` тоже):
+ * `isInsideReal` разыменовывает ближайшего **существующего** предка, остаток
+ * пути проверяется лексически.
+ *
+ * Возвращается **лексический** путь, а не realpath: это адрес вызывающего
+ * (`git`, `inspectRepoPath`), с которым сравнивается/показывается запись
+ * реестра (`project.repos` хранит относительный путь, роуты и тесты ждут
+ * лексическую форму). Разыменование нужно только для проверки.
+ *
+ * **Контракт не меняем:** деструктивные и создающие операции (`removeLocal`,
+ * `initRepo`, `cloneRepo`) не полагаются на этот путь как на адрес ФС — они
+ * вычисляют канонический адрес операции (`resolveOperationalRepoPath`) и
+ * перепроверяют containment непосредственно перед вызовом ФС (`assertInside`).
+ * Иначе остаётся check-then-use: между проверкой и `rm`/`mkdir`/`rename`
+ * компонент пути могут подменить симлинком, и операция уйдёт наружу.
+ *
+ * Функция синхронная осознанно: `path-utils` построена на `realpathSync`, и
+ * ровно та же проверка в агентском слое (`resolveRepoCwd`) синхронная —
+ * второго (async) варианта правила containment не заводим.
  */
 export function resolveRepoPath(workspaceAbsPath: string, repoRelPath: string): string {
   const base = pathResolve(workspaceAbsPath);
@@ -124,7 +156,68 @@ export function resolveRepoPath(workspaceAbsPath: string, repoRelPath: string): 
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw { error: 'Путь репозитория выходит за пределы workspace', code: 'PATH_TRAVERSAL' };
   }
+  if (!isInsideReal(base, repoPath)) {
+    throw {
+      error: 'Путь репозитория выходит за пределы workspace (симлинк или неразрешимый путь)',
+      code: 'PATH_TRAVERSAL',
+    };
+  }
   return repoPath;
+}
+
+/** Ошибка выхода за пределы workspace — тот же код, что у `resolveRepoPath`. */
+function traversalError(): { error: string; code: string } {
+  return {
+    error: 'Путь репозитория выходит за пределы workspace (симлинк или неразрешимый путь)',
+    code: 'PATH_TRAVERSAL',
+  };
+}
+
+/**
+ * Канонический адрес операции: разыменованный путь (ближайший существующий
+ * предок + остаток) с повторной проверкой containment по **реальному** пути.
+ *
+ * Нужен деструктивным/создающим операциям: `rm`/`mkdir`/`rename` должны идти
+ * по адресу без симлинков в уже существующей части, а не по лексическому
+ * пути. `resolveRealPath` = `null` (dangling-симлинк, цикл, ошибка ФС) —
+ * fail-closed.
+ */
+function resolveOperationalRepoPath(workspaceAbsPath: string, repoRelPath: string): string {
+  const base = pathResolve(workspaceAbsPath);
+  const resolved = resolveRealPath(resolveRepoPath(base, repoRelPath));
+  if (resolved === null || !isInsideReal(base, resolved)) {
+    throw traversalError();
+  }
+  return resolved;
+}
+
+/**
+ * Повторная проверка containment непосредственно перед операцией с ФС.
+ *
+ * Сужает окно TOCTOU: между `resolveOperationalRepoPath` и `rm`/`rename`
+ * компонент пути могут подменить симлинком. Гонку это не закрывает полностью
+ * (без `openat`/`O_NOFOLLOW`-семантики), но дешёвая перепроверка перед каждой
+ * операцией отсекает подмену, случившуюся до неё.
+ */
+function assertInside(workspaceAbsPath: string, absPath: string): void {
+  if (!isInsideReal(pathResolve(workspaceAbsPath), absPath)) {
+    throw traversalError();
+  }
+}
+
+/**
+ * Best-effort уборка временного каталога клона: удаляем только если он всё ещё
+ * разрешается внутрь workspace (иначе `rm -rf` по подменённому пути ушёл бы
+ * наружу). Ошибки уборки не подменяют исходную ошибку операции.
+ */
+async function removeTmpQuietly(workspaceAbsPath: string, target: string): Promise<void> {
+  try {
+    const resolved = resolveRealPath(target);
+    if (resolved === null || !isInsideReal(pathResolve(workspaceAbsPath), resolved)) return;
+    await rm(resolved, { recursive: true, force: true });
+  } catch {
+    // уборка best-effort
+  }
 }
 
 /** Имя репозитория из URL (последний сегмент без `.git`). */
@@ -202,7 +295,7 @@ export class GitService {
     this._maxDiffBytes = normalizeTimeout(options.maxDiffBytes, MAX_COMMIT_DIFF_BYTES);
   }
 
-  /** Публичный доступ к проверке containment (для роутов/тестов). */
+  /** Публичный доступ к проверке containment (для роутов/тулов/тестов) — realpath-safe. */
   resolveRepoPath(workspaceAbsPath: string, repoRelPath: string): string {
     return resolveRepoPath(workspaceAbsPath, repoRelPath);
   }
@@ -321,13 +414,21 @@ export class GitService {
     defaultBranch?: string,
     opts?: GitEnvOptions,
   ): Promise<RepoStatus> {
-    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
+    const base = pathResolve(wsAbsPath);
+    // Создание — по каноническому адресу (без симлинков в существующей части):
+    // `mkdir -p`/`git init` не должны проходить сквозь подменённую компоненту.
+    const repoPath = resolveOperationalRepoPath(base, repoRelPath);
+    // Перепроверка непосредственно перед созданием (check-then-use).
+    assertInside(base, repoPath);
     try {
       await mkdir(repoPath, { recursive: true });
     } catch {
       // directory might already exist
     }
     const args = defaultBranch ? ['init', '--initial-branch', defaultBranch] : ['init'];
+    // Каталог уже создан нами, но перепроверяем и перед git init: между
+    // mkdir и запуском путь могли подменить.
+    assertInside(base, repoPath);
     await this.run(args, repoPath, opts);
     return {
       path: repoRelPath,
@@ -350,6 +451,11 @@ export class GitService {
    * сеть, отмена, гонка за путь) убирает временный каталог: на диске **не
    * остаётся ничего**.
    *
+   * Адрес операции — канонический (`resolveOperationalRepoPath`): и целевой
+   * путь, и `tmpPath` строятся от разрешённого родителя и проверяются на
+   * containment перед `mkdir`/`clone`/`rename`; уборка временного каталога — тоже
+   * только внутри workspace (`removeTmpQuietly`).
+   *
    * Ошибки типизированы: таймаут → `git.clone_timeout` (HTTP 504), занятый
    * целевой путь → `git.repo_exists`, прочее — как есть.
    */
@@ -360,17 +466,26 @@ export class GitService {
     branch?: string,
     opts?: GitEnvOptions,
   ): Promise<RepoStatus> {
+    const base = pathResolve(wsAbsPath);
     const effectivePath = repoRelPath || deriveRepoName(url);
-    const repoPath = resolveRepoPath(wsAbsPath, effectivePath);
-    const parentDir = pathResolve(repoPath, '..');
+    // Канонический адрес цели: `mkdir`/`clone`/`rename` идут по нему, а не по
+    // лексическому пути (иначе подменённая компонента уводит операцию наружу).
+    const repoPath = resolveOperationalRepoPath(base, effectivePath);
+    const parentDir = dirname(repoPath);
+    // Родитель тоже обязан быть внутри workspace: иначе временный каталог
+    // оказался бы снаружи (цель — корень workspace).
+    assertInside(base, parentDir);
     try {
       await mkdir(parentDir, { recursive: true });
     } catch {
       // директория может уже существовать
     }
 
-    // Временный каталог — рядом с целевым: `rename` в пределах одной ФС.
+    // Временный каталог — рядом с целью (разрешённый родитель): `rename` в
+    // пределах одной ФС. Строится от канонического `repoPath`, проверяется
+    // отдельно — до создания.
     const tmpPath = `${repoPath}.tmp-${randomUUID()}`;
+    assertInside(base, tmpPath);
     const args = ['clone'];
     if (branch) args.push('--branch', branch);
     args.push(url, tmpPath);
@@ -389,10 +504,14 @@ export class GitService {
           code: 'git.repo_exists',
         };
       }
+      // Перепроверка обоих концов непосредственно перед `rename`.
+      assertInside(base, tmpPath);
+      assertInside(base, repoPath);
       await rename(tmpPath, repoPath);
     } catch (err) {
-      // Главный критерий: после неуспеха на диске не остаётся ничего.
-      await rm(tmpPath, { recursive: true, force: true }).catch(() => undefined);
+      // Главный критерий: после неуспеха на диске не остаётся ничего. Уборка —
+      // только если временный каталог всё ещё внутри workspace.
+      await removeTmpQuietly(base, tmpPath);
       if (isExecutionError(err) && err.reason === 'timeout') {
         throw {
           error: `Клонирование репозитория прервано по таймауту (${this._cloneTimeoutMs} мс)`,
@@ -434,14 +553,22 @@ export class GitService {
 
   /**
    * ADR-076: удаляет локальный каталог репозитория. `rm -rf` выполняется ТОЛЬКО
-   * после проверки containment через `resolveRepoPath` (защита от traversal);
-   * корень workspace удалять запрещено. Это файловая операция, не git-команда.
+   * по каноническому пути внутри workspace (разыменование симлинков — через
+   * `resolveOperationalRepoPath`) и после повторной проверки containment
+   * непосредственно перед `rm`; корень workspace удалять запрещено (и в
+   * лексической, и в реальной форме). Это файловая операция, не git-команда.
    */
   async removeLocal(wsAbsPath: string, repoRelPath: string): Promise<void> {
-    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
-    if (repoPath === pathResolve(wsAbsPath)) {
+    const base = pathResolve(wsAbsPath);
+    const rootResolved = resolveRealPath(base);
+    if (rootResolved === null) throw traversalError();
+    const repoPath = resolveOperationalRepoPath(base, repoRelPath);
+    // Корень workspace — и лексически (путь без симлинков), и после разыменования.
+    if (repoPath === base || repoPath === rootResolved) {
       throw { error: 'Нельзя удалить корень workspace', code: 'PATH_TRAVERSAL' };
     }
+    // Перепроверка непосредственно перед `rm` (check-then-use).
+    assertInside(base, repoPath);
     await rm(repoPath, { recursive: true, force: true });
   }
 

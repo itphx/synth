@@ -698,13 +698,21 @@ content-addressed, поэтому повторная загрузка тех ж�
 | `attachments.allowedMimePrefixes`, запрет SVG | загрузка | см. выше | `415 UNSUPPORTED_MEDIA_TYPE` |
 | `attachments.maxFilesPerMessage` | `POST …/prompt` | 10 | `400 VALIDATION_ERROR` |
 | контракт OpenAPI/SDK (`promptRequestSchema`) | публикуемая схема §5.30 | не более **50** путей в `attachments` | `400 VALIDATION_ERROR` при валидации схемой; HTTP-обработчик проверяет `maxFilesPerMessage` (см. выше) |
-| `attachments.maxBytesPerSession` | `POST …/prompt` | 1 ГиБ | `413 PAYLOAD_TOO_LARGE` |
+| `attachments.maxBytesPerSession` | `POST …/prompt` (по истории) и chunked-загрузка (по активным загрузкам) | 1 ГиБ | `413 PAYLOAD_TOO_LARGE` (в chunked-контуре — `error.details.maxBytesPerSession`) |
 | `attachments.maxChunkBytes` | chunked-загрузка (`PUT …/uploads/:id`) | 8 МиБ | `413 PAYLOAD_TOO_LARGE` (по `Content-Length` и по фактическому телу; `error.details.maxChunkBytes`) |
+| `attachments.maxActiveUploadsPerSession` | chunked-загрузка (`POST …/uploads`, контур сессии) | 16 | `413 PAYLOAD_TOO_LARGE` (`error.details.maxActiveUploadsPerSession`) |
+| `attachments.maxActiveUploads` | chunked-загрузка (`POST …/uploads`, все контуры, включая staging) | 256 | `413 PAYLOAD_TOO_LARGE` (`error.details.maxActiveUploads`) |
 | `attachments.gcDays` | GC (фон) | 30 дней | — (объект без ссылок старше срока удаляется) |
 
-Квота сессии считается по **сумме `size` медиа-частей в истории сессии**, а не по ссылкам, и
-проверяется при постановке сообщения (загрузка файла квоту не проверяет — «лишний» объект станет
-сиротой и уйдёт по `gcDays`). Прочие коды загрузки: `400 VALIDATION_ERROR` (нет поля `file`/битый
+Квота сессии при постановке сообщения считается по **сумме `size` медиа-частей в истории сессии**,
+а не по ссылкам (загрузка файла историю не меняет — «лишний» объект станет сиротой и уйдёт по
+`gcDays`). **Chunked-загрузка проверяет квоту активных (незавершённых) загрузок отдельно**: сумма
+временных объектов этой сессии в `attachments/.uploads` плюс текущий файл не должна превышать
+`attachments.maxBytesPerSession` (на `init` учитывается заявленный `size`, на `append`/`complete` —
+фактический размер). Другая сессия квотой первой не ограничена. Протухшие сессии (TTL 1 ч) **не
+считаются никогда**: `create` сначала запускает уборку (полный проход троттлится — не чаще раза в
+минуту), а подсчёт активных загрузок в любом случае отбрасывает сессии с истёкшим TTL, поэтому мусор
+не занимает ни квоту, ни лимиты числа, даже если ленивая уборка пропущена по троттлингу. Прочие коды загрузки: `400 VALIDATION_ERROR` (нет поля `file`/битый
 multipart), `401`, `403 FORBIDDEN` (чужая сессия, prefix-guard), `404 NOT_FOUND` (сессии нет),
 `415 UNSUPPORTED_MEDIA_TYPE` (тип вне белого списка, SVG; сюда же попадает пустой файл — MIME по
 содержимому не определяется), `415 attachments_disabled` (вложения выключены администратором —
@@ -726,20 +734,33 @@ RBAC — как у `POST`-загрузки соответствующего ко
 
 | Метод | Путь | Назначение / req-resp |
 |---|---|---|
-| POST | `<base>` | инициализация; тело `{name?, mime?, size?}` (все поля необязательны; пустое тело допустимо); `size` больше `maxBytesPerFile` → `413`; **201** `{uploadId, maxChunkBytes}` |
-| PUT | `<base>/:uploadId?offset=N` | часть сырых байтов; `offset` обязан совпадать с уже принятым объёмом, иначе `400 VALIDATION_ERROR`; тело больше `maxChunkBytes` (по `Content-Length` или фактически) → `413` с `details.maxChunkBytes`; итог больше `maxBytesPerFile` → `413` с `details.maxBytesPerFile`; **200** `{received, nextOffset}` |
-| POST | `<base>/:uploadId/complete` | публикация вложения (тот же результат, что у обычной загрузки); **201** `{id, blobPath, sha256, mime, size, name?}`; повторное завершение → `404` |
+| POST | `<base>` | инициализация; тело `{name?, mime?, size?}` (все поля необязательны; пустое тело допустимо); `size` — только целое ≥ 0, иначе `400 VALIDATION_ERROR`; `size` больше `maxBytesPerFile` → `413`; заявленный `size` выводит сумму активных загрузок сессии за `maxBytesPerSession` → `413`; превышены пределы числа активных загрузок (`maxActiveUploadsPerSession`/`maxActiveUploads`) → `413`; **201** `{uploadId, maxChunkBytes}` |
+| PUT | `<base>/:uploadId?offset=N` | часть сырых байтов; `offset` обязан совпадать с уже принятым объёмом, иначе `400 VALIDATION_ERROR`; тело больше `maxChunkBytes` (по `Content-Length` или фактически) → `413` с `details.maxChunkBytes`; итог больше `maxBytesPerFile` → `413` с `details.maxBytesPerFile`; фактический рост выводит сумму активных загрузок сессии за `maxBytesPerSession` → `413` с `details.maxBytesPerSession`; **200** `{received, nextOffset}` |
+| POST | `<base>/:uploadId/complete` | публикация вложения (тот же результат, что у обычной загрузки); итоговый объём с учётом остальных активных загрузок сессии сверяется с `maxBytesPerSession` → `413`; **201** `{id, blobPath, sha256, mime, size, name?}`; повторное завершение → `404` |
 | DELETE | `<base>/:uploadId` | отмена; **204** идемпотентно (неизвестный/уже отменённый id — тоже 204) |
 
 Коды: неизвестная/протухшая сессия загрузки → `404 NOT_FOUND`; `415 attachments_disabled` при
 выключенных вложениях; `415 UNSUPPORTED_MEDIA_TYPE` — MIME вне allowlist (на `complete`).
+`413 PAYLOAD_TOO_LARGE` в chunked-контуре всегда несёт `error.details` с **фактическим** лимитом,
+который сработал: `maxChunkBytes` (одна часть), `maxBytesPerFile` (файл), `maxBytesPerSession`
+(квота активных загрузок сессии), `maxActiveUploadsPerSession` / `maxActiveUploads` (число активных
+загрузок). Клиент читает ключ машинно и показывает значение в тексте ошибки — разбирать `message`
+не нужно; в `details` может быть несколько ключей сразу (общие пределы инстанса + сработавший).
 Состояние сессий — **на томе**, рядом с временным объектом: `attachments/.uploads/<uuid>` (байты) и
 sidecar `attachments/.uploads/<uuid>.json` (`{version, sessionId?, name?, mime?, createdAt}`); **смещение
 — фактический размер временного объекта**, поэтому загрузку продолжает любая реплика control plane
 (нужен **общий том `blobs`** — иначе часть попадёт в другой temp-объект). В контуре сессии загрузка
 привязана к сессии (`sessionId` в sidecar): чужая сессия её не видит (`404`). TTL — 1 час без
 активности (уборка ленивая на `create` + фоновый GC `.uploads` по mtime). Лимиты
-(`maxChunkBytes`/`maxBytesPerFile`/`enabled`) читаются из live-резолвера на каждый вызов.
+(`maxChunkBytes`/`maxBytesPerFile`/`maxBytesPerSession`/`maxActiveUploadsPerSession`/
+`maxActiveUploads`/`enabled`) читаются из live-резолвера на каждый вызов. Квота
+`maxBytesPerSession` для активных загрузок — это сумма временных объектов **этой** сессии плюс
+текущий файл; staging-контур (`sessionId` нет) квоты не имеет, но входит в общий лимит числа
+активных загрузок `maxActiveUploads`. **Байтовой квоты на staging нет**: его объём ограничен
+сверху произведением `maxActiveUploads × maxBytesPerFile` (при дефолтах 256 × 100 МиБ ≈ 25 ГиБ) —
+отдельная квота для staging не вводится. Протухшие сессии в подсчёт не попадают никогда: уборка
+троттлится (не чаще раза в минуту), но загрузки с истёкшим TTL игнорируются при подсчёте и квоту/лимиты
+числа не занимают.
 
 **Раздача (`GET`/`HEAD`).** `:partId` — id **медиа-части сообщения** (`image`/`audio`/`video`/`file`),
 а не `id` из ответа загрузки; путь объекта (`blobPath`) передаётся только в теле промпта. Доступ
@@ -769,7 +790,9 @@ JPEG** (`attachments/.thumbs/<sha256>-<width>.jpg`) — превью для UI, 
 `?name=`/`x-file-name`) → **201** `{id, blobPath, sha256, mime, size, name?}`, ошибки —
 те же (`400`, `413` — с `error.details.maxBytesPerFile`, `415`, включая `415 attachments_disabled`
 при выключенных вложениях). Крупные файлы — тем же chunked-протоколом на
-`/api/v2/attachments/uploads` (init/part/complete/cancel; база, коды и ограничения — §«Chunked-загрузка»).
+`/api/v2/attachments/uploads` (init/part/complete/cancel; база, коды и ограничения — §«Chunked-загрузка»;
+staging ограничен `maxActiveUploads` и `maxBytesPerFile`, **байтовой квоты у него нет** — верхняя
+граница объёма незавершённых staging-загрузок `maxActiveUploads × maxBytesPerFile`).
 Полученный `blobPath` дальше передаётся в `POST /sessions/:id/prompt`
 (`attachments: string[]`), в `POST /api/v2/events` (§5.26 — `attachments[]` со ссылками и
 метаданными) или используется как артефакт прогона.
@@ -1173,7 +1196,8 @@ backend — id из AuthKit). Прямая линковка (`POST /identities` 
 
 Реестр `project.repos` (несколько репозиториев на проект) и git-операции.
 `init`/`clone` **регистрируют** запись в проекте; `repo_path`/`path` — относительны
-`project.workspace` (containment; абсолютный/`..` → `git.repo_path_invalid`).
+`project.workspace` (containment с учётом симлинков: абсолютный/`..`/побег через
+симлинк наружу → `git.repo_path_invalid`).
 Ошибки — в shared-форме `{ error: { error, code } }`.
 
 | Метод | Путь | RBAC (backend / core) | Назначение |
@@ -1416,8 +1440,8 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/settings/metrics/status` | ADMIN (managed) / auth (core) | Live-снимок: `{enabled, running, source, restartRequired, ready, storage:"ok"\|"degraded", storageBackend, version, uptimeSec, exposition:{series,bytes,droppedSeries}, token, endpoints}` |
 | PUT | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Bearer-токен `/metrics` (write-only): `{token}` (после trim ≥16 символов) → `{dataDir}/secrets/metrics-token` (`0600`, атомарно), применяется **сразу**; короткий/пустой → 400 `VALIDATION_ERROR`; токен из env → 409 `CONFLICT`; значение не возвращается |
 | DELETE | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Удалить файл токена (идемпотентно) → `{token:{configured,source}}`; токен из env → 409 `CONFLICT` |
-| GET | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Runtime-настройки вложений (ADR-115): `{attachments:{enabled, modalities:{image,pdf,audio,video}, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession, allowedMimePrefixes, workspaceFallback, modalityModels:{image?,pdf?,audio?,video?}, gcDays, compression:{enabled,image:{enabled,maxSidePx,quality,minBytes},video:{enabled,maxHeightPx,bitrateKbps,audioBitrateKbps,minBytes},audio:{enabled,bitrateKbps,channels,sampleRateHz,minBytes}}, thumbnail:{enabled,maxWidthPx}, maxChunkBytes}, defaults, saved, isOverridden, source:"env"\|"runtime"\|"config"\|"default", envLocked:string[], restartRequired:false, running}`; `attachments` — эффективные значения (в `modalityModels` записи нет — обработка модальности не настроена), `defaults` — база без runtime/env, `saved` — сохранённый runtime-патч как есть (`{}` — runtime-значения нет); приоритет `SYNTH_ATTACHMENTS_*` > runtime > `config.yaml` `attachments` > defaults. `compression`/`thumbnail` — не секреты и не секретные поля; `envLocked` — поля, зафиксированные env; среди новых полей env-ключ есть только у `maxChunkBytes` (`SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES`) |
-| PUT | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Патч `{attachments:{…}}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: сервис вложений, промпт и GC читают резолвер на каждый вызов); `modalities` мёржится вложенно; **`compression`/`thumbnail` мёржатся частично** (глубокий merge по путям: `{compression:{image:{maxSidePx}}}` меняет одно поле, остальные берутся из базы; невалидное значение → 400 с путём поля, напр. `compression.video.bitrateKbps`; неизвестные поля игнорируются) — но UI присылает объекты целиком; неизвестные ключи секции игнорируются; невалидное значение → 400 `VALIDATION_ERROR`; поле из env с другим значением → 409 `CONFLICT`; ответ как у `GET`. **`modalityModels` (ADR-115):** объект «семейство → `{provider, model}`»; `null` (или `{}`) снимает настройку семейства, отсутствие ключа — база (config.yaml) сохраняется; мёржится **по семействам** (runtime дополняет config, перекрывает одну модальность, не трогая остальные). До записи проверяется каталог: провайдер существует, модель `<provider>/<model>` существует, модальности модели **известны** и содержат нужное семейство; иначе 400 с причиной (`modalityModels.<семейство>: …`: какая модель, какие модальности у неё заявлены; для неизвестных модальностей — просьба выполнить `POST /api/v2/models/fetch`). Частичных сохранений нет. Патч заменяет runtime-значение секции **целиком** (как остальные `/settings/*`): незаданные поля возвращаются к config/default — UI-форма при сохранении присылает `modalityModels` вместе с остальными полями, иначе runtime-назначения aux-моделей снимаются. **`maxChunkBytes`** — целое ≥ 1024 (иначе 400) |
+| GET | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Runtime-настройки вложений (ADR-115): `{attachments:{enabled, modalities:{image,pdf,audio,video}, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession, allowedMimePrefixes, workspaceFallback, modalityModels:{image?,pdf?,audio?,video?}, gcDays, compression:{enabled,image:{enabled,maxSidePx,quality,minBytes},video:{enabled,maxHeightPx,bitrateKbps,audioBitrateKbps,minBytes},audio:{enabled,bitrateKbps,channels,sampleRateHz,minBytes}}, thumbnail:{enabled,maxWidthPx}, maxChunkBytes, maxActiveUploadsPerSession, maxActiveUploads}, defaults, saved, isOverridden, source:"env"\|"runtime"\|"config"\|"default", envLocked:string[], restartRequired:false, running}`; `attachments` — эффективные значения (в `modalityModels` записи нет — обработка модальности не настроена), `defaults` — база без runtime/env, `saved` — сохранённый runtime-патч как есть (`{}` — runtime-значения нет); приоритет `SYNTH_ATTACHMENTS_*` > runtime > `config.yaml` `attachments` > defaults. `compression`/`thumbnail` — не секреты и не секретные поля; `envLocked` — поля, зафиксированные env; среди новых полей env-ключи есть у `maxChunkBytes` (`SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES`), `maxActiveUploadsPerSession` (`SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS_PER_SESSION`) и `maxActiveUploads` (`SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS`) |
+| PUT | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Патч `{attachments:{…}}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: сервис вложений, промпт и GC читают резолвер на каждый вызов); `modalities` мёржится вложенно; **`compression`/`thumbnail` мёржатся частично** (глубокий merge по путям: `{compression:{image:{maxSidePx}}}` меняет одно поле, остальные берутся из базы; невалидное значение → 400 с путём поля, напр. `compression.video.bitrateKbps`; неизвестные поля игнорируются) — но UI присылает объекты целиком; неизвестные ключи секции игнорируются; невалидное значение → 400 `VALIDATION_ERROR`; поле из env с другим значением → 409 `CONFLICT`; ответ как у `GET`. **`modalityModels` (ADR-115):** объект «семейство → `{provider, model}`»; `null` (или `{}`) снимает настройку семейства, отсутствие ключа — база (config.yaml) сохраняется; мёржится **по семействам** (runtime дополняет config, перекрывает одну модальность, не трогая остальные). До записи проверяется каталог: провайдер существует, модель `<provider>/<model>` существует, модальности модели **известны** и содержат нужное семейство; иначе 400 с причиной (`modalityModels.<семейство>: …`: какая модель, какие модальности у неё заявлены; для неизвестных модальностей — просьба выполнить `POST /api/v2/models/fetch`). Частичных сохранений нет. Патч заменяет runtime-значение секции **целиком** (как остальные `/settings/*`): незаданные поля возвращаются к config/default — UI-форма при сохранении присылает `modalityModels` вместе с остальными полями, иначе runtime-назначения aux-моделей снимаются. **`maxChunkBytes`** — целое ≥ 1024 (иначе 400); **`maxActiveUploadsPerSession`/`maxActiveUploads`** — целые > 0 |
 | DELETE | `/api/v2/settings/attachments` | ADMIN (managed) / auth (core) | Сброс runtime-значения к env/config/default (ответ как у `GET`); поле из env остаётся зафиксированным (`envLocked`) |
 | GET | `/api/v2/settings/context-window` | ADMIN (managed) / auth (core) | Политика ограничения контекстного окна: `{policy:"off"\|"warn"\|"enforce", saved:"off"\|"warn"\|"enforce"\|null, defaults, source:"env"\|"runtime"\|"config"\|"default", envLocked:boolean, restartRequired:false}`; приоритет `SYNTH_CONTEXT_WINDOW_POLICY` > runtime (`settings.json`/PG) > `config.yaml` `context.windowPolicy` > `warn` |
 | PUT | `/api/v2/settings/context-window` | ADMIN (managed) / auth (core) | `{policy}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: оркестратор читает резолвер перед каждым LLM-вызовом); невалидное значение → 400 `VALIDATION_ERROR`; политика зафиксирована env и запрошено другое значение → 409 `CONFLICT`; ответ как у `GET`; аудит `scope:"context-window"` |

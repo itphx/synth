@@ -71,6 +71,8 @@ const SETTINGS_KEYS = new Set<keyof AttachmentsSettings>([
   'compression',
   'thumbnail',
   'maxChunkBytes',
+  'maxActiveUploadsPerSession',
+  'maxActiveUploads',
 ]);
 
 const MODALITY_KEYS = ATTACHMENT_FAMILIES;
@@ -345,6 +347,8 @@ function validateAttachmentsSettings(
       case 'maxBytesPerFile':
       case 'maxFilesPerMessage':
       case 'maxBytesPerSession':
+      case 'maxActiveUploadsPerSession':
+      case 'maxActiveUploads':
         if (typeof rawValue !== 'number' || !Number.isInteger(rawValue) || rawValue < 1) {
           return { ok: false, detail: `${rawKey}: ожидается целое > 0` };
         }

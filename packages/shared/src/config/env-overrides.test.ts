@@ -468,6 +468,40 @@ describe('attachments modalities env (ADR-115)', () => {
 });
 
 /**
+ * ADR-115: пределы числа активных chunked-загрузок — собственные env-ключи
+ * (`maxActiveUploadsPerSession`/`maxActiveUploads`).
+ */
+describe('attachments chunked upload count env (ADR-115)', () => {
+  it('SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS[_PER_SESSION] применяются', () => {
+    const cfg = applyEnvOverrides(
+      { attachments: { enabled: true } },
+      {
+        SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS_PER_SESSION: '4',
+        SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS: '32',
+      },
+    );
+    expect(cfg.attachments).toMatchObject({
+      enabled: true,
+      maxActiveUploadsPerSession: 4,
+      maxActiveUploads: 32,
+    });
+  });
+
+  it('нечисловое значение (мусор/Infinity) → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(
+      { attachments: { maxActiveUploadsPerSession: 16, maxActiveUploads: 256 } },
+      {
+        SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS_PER_SESSION: 'abc',
+        SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS: 'Infinity',
+      },
+    );
+    expect(cfg.attachments).toEqual({ maxActiveUploadsPerSession: 16, maxActiveUploads: 256 });
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
  * ADR-052/O1: installer service-key'и из env (`SYNTH_BOOTSTRAP_SERVICE_KEYS`,
  * JSON). Секрет передаётся из env/Secret, а не из config.yaml.
  */

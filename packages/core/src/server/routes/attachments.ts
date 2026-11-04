@@ -521,6 +521,7 @@ export function attachmentErrorResponse(
 export interface UploadLimitDetails {
   maxBytesPerFile?: number;
   maxChunkBytes?: number;
+  maxBytesPerSession?: number;
 }
 
 /** Опции регистрации chunked-загрузки (общие для сессии и staging). */
@@ -581,6 +582,7 @@ export function registerUploadSessionRoutes(app: Hono, opts: UploadSessionRoutes
   const limits = (config: AttachmentsConfig): UploadLimitDetails => ({
     maxBytesPerFile: config.maxBytesPerFile,
     maxChunkBytes: config.maxChunkBytes,
+    maxBytesPerSession: config.maxBytesPerSession,
   });
 
   app.post(base, async (c) => {
@@ -769,6 +771,14 @@ export function uploadSessionErrorResponse(
         400,
       );
     }
+    // Некорректный размер инициализации (отрицательный/дробный/`NaN`) — не
+    // «слишком большой»: 400, как и у прочих невалидных параметров протокола.
+    if (err.code === 'invalid') {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: messages.uploadInvalid(c) } },
+        400,
+      );
+    }
     if (err.code === 'too_large_chunk') {
       return c.json(
         {
@@ -783,15 +793,15 @@ export function uploadSessionErrorResponse(
         413,
       );
     }
-    // too_large — общий предел файла.
+    // too_large — общий предел файла, квота сессии или число активных загрузок.
+    // Точный сработавший лимит — в `details` (клиент показывает его в тексте).
+    const details = { ...limits, ...(err.details ?? {}) };
     return c.json(
       {
         error: {
           code: 'PAYLOAD_TOO_LARGE',
           message: messages.tooLarge(c),
-          ...(typeof limits.maxBytesPerFile === 'number'
-            ? { details: { maxBytesPerFile: limits.maxBytesPerFile } }
-            : {}),
+          ...(Object.keys(details).length > 0 ? { details } : {}),
         },
       },
       413,

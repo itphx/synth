@@ -18,7 +18,12 @@
  * - привязка к сессии (`sessionId` в sidecar) проверяется на каждой операции:
  *   чужая загрузка не видна (fail-closed, `not_found` → 404);
  * - лимиты и мастер-выключатель читаются из live-конфига `attachments`
- *   (`maxChunkBytes`/`maxBytesPerFile`/`enabled`) на каждый вызов;
+ *   (`maxChunkBytes`/`maxBytesPerFile`/`maxBytesPerSession`/
+ *   `maxActiveUploadsPerSession`/`maxActiveUploads`/`enabled`) на каждый вызов;
+ * - незавершённые загрузки ограничены по объёму (квота сессии) и по числу
+ *   (на сессию и глобально, включая staging без `sessionId`): уборка протухших
+ *   сессий идёт до подсчёта, а протухшие не попадают в квоту, даже если
+ *   ленивая уборка пропущена по троттлингу;
  * - TTL сессии — `UPLOAD_SESSION_TTL_MS` (1 ч) без активности: протухшая
  *   сессия удаляется (temp + sidecar) и больше не доступна; общая уборка —
  *   `pruneExpired` (на `create`) и фоновый GC (`engine/attachments/prune.ts`,
@@ -74,20 +79,30 @@ const UPLOAD_ID_PATTERN =
 
 /**
  * Машинные коды отказа протокола chunked-загрузки (маппинг в HTTP — на границе
- * роутов: `not_found` → 404, `offset_mismatch` → 400, прочие → 413).
+ * роутов: `not_found` → 404, `offset_mismatch`/`invalid` → 400, прочие → 413).
  * Ошибки лимитов/MIME самого вложения остаются `AttachmentError`.
  */
 export type UploadSessionErrorCode =
   | 'not_found'
   | 'offset_mismatch'
+  | 'invalid'
   | 'too_large_chunk'
   | 'too_large';
 
-/** Отказ протокола chunked-загрузки (нет сессии, смещение, лимит части/файла). */
+/** Отказ протокола chunked-загрузки (нет сессии, смещение, параметры, лимит части/файла). */
 export class UploadSessionError extends Error {
   constructor(
     readonly code: UploadSessionErrorCode,
     message: string,
+    /**
+     * Лимит, который сработал (для `error.details` HTTP-ответа): квота сессии
+     * или число активных загрузок. Необязателен — прежние отказы его не несут.
+     */
+    readonly details?: {
+      maxBytesPerSession?: number;
+      maxActiveUploads?: number;
+      maxActiveUploadsPerSession?: number;
+    },
   ) {
     super(message);
     this.name = 'UploadSessionError';
@@ -292,24 +307,128 @@ export class UploadSessionStore {
   }
 
   /**
+   * Активные сессии загрузки: sidecar есть, время активности не вышло, temp
+   * существует. Протухшие сессии не возвращаются (их удалит `pruneExpired`),
+   * поэтому мусор не занимает квоту и не блокирует лимиты числа.
+   *
+   * Стоимость — один обход `attachments/.uploads` и чтение sidecar'ов; это
+   * происходит на `create` (лимиты числа/квоты) и на `append`/`complete`
+   * только для загрузок, привязанных к сессии.
+   */
+  private async _listActiveUploads(): Promise<
+    Array<{ uploadId: string; sidecar: UploadSessionSidecar; size: number }>
+  > {
+    const now = this._now();
+    const entries = await this._blobs.list(ATTACHMENT_UPLOAD_DIR);
+    const prefix = `${ATTACHMENT_UPLOAD_DIR}/`;
+    const active: Array<{ uploadId: string; sidecar: UploadSessionSidecar; size: number }> = [];
+
+    for (const entry of entries) {
+      if (!entry.path.startsWith(prefix)) continue;
+      const uploadId = entry.path.slice(prefix.length);
+      if (uploadId.endsWith(UPLOAD_SESSION_SIDECAR_SUFFIX)) continue;
+      if (!UPLOAD_ID_PATTERN.test(uploadId)) continue;
+
+      const sidecar = await this._readSidecar(uploadId);
+      if (!sidecar) continue;
+      const touchedAt = sidecar.updatedAt ?? sidecar.createdAt;
+      if (now - touchedAt > this._ttlMs) continue;
+
+      const stat = await this._blobs.stat(entry.path);
+      if (!stat) continue;
+      active.push({ uploadId, sidecar, size: stat.size });
+    }
+
+    return active;
+  }
+
+  /**
+   * Квота сессии для незавершённых chunked-загрузок: сумма активных загрузок
+   * этой сессии (temp-объекты) + текущий файл не должна превышать
+   * `maxBytesPerSession`. Другие сессии не влияют.
+   */
+  private async _assertSessionQuota(
+    config: AttachmentsConfig,
+    sessionId: string,
+    uploadId: string,
+    fileSize: number,
+  ): Promise<void> {
+    const active = await this._listActiveUploads();
+    let used = 0;
+    for (const entry of active) {
+      if (entry.uploadId === uploadId) continue;
+      if (entry.sidecar.sessionId !== sessionId) continue;
+      used += entry.size;
+    }
+    if (used + fileSize <= config.maxBytesPerSession) return;
+    throw new UploadSessionError(
+      'too_large',
+      `Суммарный объём активных загрузок сессии ${used + fileSize} Б превышает предел ${config.maxBytesPerSession} Б`,
+      { maxBytesPerSession: config.maxBytesPerSession },
+    );
+  }
+
+  /**
    * Начать загрузку: создать пустой временный объект и sidecar на томе,
    * вернуть лимит части.
    */
   async create(input: CreateUploadSessionInput = {}): Promise<CreatedUploadSession> {
     const config = this._config;
     this._requireEnabled(config);
-    if (
-      typeof input.size === 'number'
-      && Number.isFinite(input.size)
-      && input.size > config.maxBytesPerFile
-    ) {
+    // Публичный шов: HTTP-парсер (`parseUploadInitBody`) режет `size` сам, но
+    // стор зовут и staging/тесты, поэтому некорректный размер обязан
+    // отбрасываться здесь — иначе отрицательный/дробный/`NaN` обошёл бы квоту.
+    if (input.size !== undefined && (!Number.isInteger(input.size) || input.size < 0)) {
+      throw new UploadSessionError(
+        'invalid',
+        `Размер вложения «${String(input.size)}» должен быть целым неотрицательным числом`,
+      );
+    }
+    if (input.size !== undefined && input.size > config.maxBytesPerFile) {
       throw new UploadSessionError(
         'too_large',
         `Размер вложения ${input.size} Б превышает предел ${config.maxBytesPerFile} Б`,
       );
     }
 
+    // Уборка протухших сессий — до подсчёта лимитов: мусор не должен
+    // блокировать новые загрузки. `_listActiveUploads` дополнительно
+    // игнорирует протухшие, если ленивая уборка пропущена по троттлингу.
     await this._pruneSafely();
+    const active = await this._listActiveUploads();
+
+    if (active.length >= config.maxActiveUploads) {
+      throw new UploadSessionError(
+        'too_large',
+        `Число активных загрузок ${active.length} достигло предела ${config.maxActiveUploads}`,
+        { maxActiveUploads: config.maxActiveUploads },
+      );
+    }
+
+    if (input.sessionId) {
+      const sessionUploads = active.filter(
+        (entry) => entry.sidecar.sessionId === input.sessionId,
+      );
+      if (sessionUploads.length >= config.maxActiveUploadsPerSession) {
+        throw new UploadSessionError(
+          'too_large',
+          `Число активных загрузок сессии ${sessionUploads.length} достигло предела ${config.maxActiveUploadsPerSession}`,
+          { maxActiveUploadsPerSession: config.maxActiveUploadsPerSession },
+        );
+      }
+      // Заявленный размер учитывается сразу: иначе клиент мог бы открыть
+      // несколько «больших» загрузок и только на `append` упереться в квоту.
+      if (typeof input.size === 'number' && Number.isFinite(input.size)) {
+        const used = sessionUploads.reduce((total, entry) => total + entry.size, 0);
+        if (used + input.size > config.maxBytesPerSession) {
+          throw new UploadSessionError(
+            'too_large',
+            `Суммарный объём активных загрузок сессии ${used + input.size} Б превышает предел ${config.maxBytesPerSession} Б`,
+            { maxBytesPerSession: config.maxBytesPerSession },
+          );
+        }
+      }
+    }
 
     const uploadId = randomUUID();
     const now = this._now();
@@ -370,6 +489,11 @@ export class UploadSessionStore {
         `Размер вложения ${size + bytes.length} Б превышает предел ${config.maxBytesPerFile} Б`,
       );
     }
+    // Квота сессии по фактическому росту: активные загрузки этой сессии +
+    // итоговый размер текущего файла. Staging (`sessionId` нет) квоте не подлежит.
+    if (sidecar.sessionId) {
+      await this._assertSessionQuota(config, sidecar.sessionId, uploadId, size + bytes.length);
+    }
 
     if (bytes.length > 0) await this._blobs.append(tempPath, bytes);
 
@@ -398,7 +522,13 @@ export class UploadSessionStore {
     const config = this._config;
     this._requireEnabled(config);
 
-    const { tempPath, sidecar } = await this._loadSession(uploadId, scope);
+    const { tempPath, sidecar, size } = await this._loadSession(uploadId, scope);
+
+    // Квота сессии проверяется и на завершении: файл уже собран, но лимит
+    // мог быть снижен runtime-настройкой после `append`.
+    if (sidecar.sessionId) {
+      await this._assertSessionQuota(config, sidecar.sessionId, uploadId, size);
+    }
 
     // Забираем сессию: повторное завершение — `not_found`.
     await this._blobs.delete(this._sidecarPath(uploadId)).catch((err: unknown) => {

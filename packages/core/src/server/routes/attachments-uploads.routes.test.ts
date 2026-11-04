@@ -16,6 +16,10 @@ import type { AttachmentsConfig, Session } from '@itphx/synth-shared';
 import { defaultConfig } from '@itphx/synth-shared';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
 import { AttachmentService } from '../../engine/attachments/service.js';
+import {
+  UploadSessionError,
+  type UploadSessionStore,
+} from '../../engine/attachments/uploads.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { createAttachmentRoutes } from './attachments.js';
 import {
@@ -37,6 +41,8 @@ function attachmentsConfig(overrides: Partial<AttachmentsConfig> = {}): Attachme
     compression: defaultConfig.attachments.compression,
     thumbnail: defaultConfig.attachments.thumbnail,
     maxChunkBytes: 64,
+    maxActiveUploadsPerSession: 16,
+    maxActiveUploads: 256,
     ...overrides,
   };
 }
@@ -248,6 +254,31 @@ describe('HTTP: chunked-загрузка вложений (B2a)', () => {
       expect(body.error.code).toBe('PAYLOAD_TOO_LARGE');
     });
 
+    it('413: квота сессии по активным chunked-загрузкам', async () => {
+      const { service } = createService(
+        attachmentsConfig({ maxBytesPerFile: 1000, maxBytesPerSession: 100, maxChunkBytes: 64 }),
+      );
+      const app = sessionApp(service, { id: 's1', messages: [] } as unknown as Session);
+      const first = (await (await init(app, base)).json()) as { uploadId: string };
+      const second = (await (await init(app, base)).json()) as { uploadId: string };
+
+      expect(
+        (await putChunk(app, `${base}/${first.uploadId}`, 0, Buffer.alloc(60, 1))).status,
+      ).toBe(200);
+      const res = await putChunk(
+        app,
+        `${base}/${second.uploadId}`,
+        0,
+        Buffer.alloc(60, 1),
+      );
+      expect(res.status).toBe(413);
+      const body = (await res.json()) as {
+        error: { code: string; details?: { maxBytesPerSession?: number } };
+      };
+      expect(body.error.code).toBe('PAYLOAD_TOO_LARGE');
+      expect(body.error.details?.maxBytesPerSession).toBe(100);
+    });
+
     it('413: заявленный size больше maxBytesPerFile на инициализации', async () => {
       const { service } = createService(attachmentsConfig());
       const app = sessionApp(service, { id: 's1', messages: [] } as unknown as Session);
@@ -260,6 +291,34 @@ describe('HTTP: chunked-загрузка вложений (B2a)', () => {
       const app = sessionApp(service, { id: 's1', messages: [] } as unknown as Session);
       const res = await init(app, base, { size: -5 });
       expect(res.status).toBe(400);
+    });
+
+    it('400: отказ стора invalid (некорректный size в обход парсера) → VALIDATION_ERROR', async () => {
+      const { service } = createService(attachmentsConfig());
+      const session = { id: 's1', messages: [] } as unknown as Session;
+      // Публичный шов стора зовут и другие контуры: маппинг `invalid` — 400.
+      const uploads = {
+        create: async () => {
+          throw new UploadSessionError('invalid', 'некорректный размер');
+        },
+      } as unknown as UploadSessionStore;
+      const app = new Hono();
+      app.route(
+        '/',
+        createAttachmentRoutes({
+          sessionManager: {
+            getSession: async (id: string) => (id === session.id ? session : null),
+          } as unknown as SessionManager,
+          service,
+          config: service.config,
+          uploads,
+        }),
+      );
+
+      const res = await init(app, base);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
     it('415 attachments_disabled', async () => {

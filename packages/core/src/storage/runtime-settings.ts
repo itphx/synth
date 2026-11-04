@@ -930,6 +930,9 @@ function normalizeAttachments(config?: AttachmentsConfigInput): AttachmentsSetti
     compression: normalizeCompression(config?.compression),
     thumbnail: mergeDefined(defaults.thumbnail, config?.thumbnail),
     maxChunkBytes: config?.maxChunkBytes ?? defaults.maxChunkBytes,
+    maxActiveUploadsPerSession:
+      config?.maxActiveUploadsPerSession ?? defaults.maxActiveUploadsPerSession,
+    maxActiveUploads: config?.maxActiveUploads ?? defaults.maxActiveUploads,
   };
 }
 
@@ -974,6 +977,9 @@ const ATTACHMENTS_ENV_SCALARS: ReadonlyArray<{
   { key: 'gcDays', env: 'SYNTH_ATTACHMENTS_GC_DAYS', type: 'number', allowZero: true },
   // ADR-115: размер части chunked-загрузки — не меньше 1 КиБ (как в схеме).
   { key: 'maxChunkBytes', env: 'SYNTH_ATTACHMENTS_MAX_CHUNK_BYTES', type: 'number', min: 1024 },
+  // ADR-115: пределы числа одновременных chunked-загрузок (на сессию и глобально).
+  { key: 'maxActiveUploadsPerSession', env: 'SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS_PER_SESSION', type: 'number' },
+  { key: 'maxActiveUploads', env: 'SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS', type: 'number' },
 ];
 
 /**
@@ -1102,6 +1108,11 @@ export function resolveAttachmentsSettings(params: {
     thumbnail,
     // env-скаляр приоритетнее runtime-патча (envLocked не даёт его перекрыть).
     maxChunkBytes: envValues.maxChunkBytes ?? patch.maxChunkBytes ?? base.maxChunkBytes,
+    maxActiveUploadsPerSession:
+      envValues.maxActiveUploadsPerSession
+      ?? patch.maxActiveUploadsPerSession
+      ?? base.maxActiveUploadsPerSession,
+    maxActiveUploads: envValues.maxActiveUploads ?? patch.maxActiveUploads ?? base.maxActiveUploads,
   };
 
   let source: AttachmentsSource;

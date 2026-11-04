@@ -512,6 +512,9 @@ describe('attachmentsConfigSchema (ADR-115)', () => {
       thumbnail: { enabled: true, maxWidthPx: 512 },
       // ADR-115: размер части chunked-загрузки — 8 МиБ.
       maxChunkBytes: 8_388_608,
+      // ADR-115: пределы числа незавершённых chunked-загрузок.
+      maxActiveUploadsPerSession: 16,
+      maxActiveUploads: 256,
     });
   });
 

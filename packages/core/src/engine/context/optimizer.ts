@@ -197,9 +197,13 @@ export function compressionFinishReasonError(
 }
 
 /**
- * ADR-036: gateway-обвязка для суммаризации. Регистрируется оркестратором через
- * setGatewayHooks — общий AuditLogger/RateLimiter и ObfuscationMapStore сессий.
- * Если hooks не заданы или gateway выключен — суммаризация идёт напрямую.
+ * ADR-036/ADR-119: gateway-обвязка для суммаризации. Регистрируется
+ * оркестратором через setGatewayHooks — общий AuditLogger/RateLimiter и
+ * ObfuscationMapStore сессий. Hooks задаются **всегда** (инвариант 3): при
+ * выключенном gateway используется `DISABLED_GATEWAY_CONFIG`, то есть вызов
+ * идёт passthrough (guard/обфускация no-op), но через `GatewayProvider` —
+ * учитывается метриками и проходит общий контур фильтров при включении gateway.
+ * `hooks === null` — только прямое использование оптимизатора без оркестратора.
  */
 export interface ContextOptimizerGatewayHooks {
   config: LLMGatewayConfig;

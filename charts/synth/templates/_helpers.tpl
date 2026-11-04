@@ -202,6 +202,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "synth.execution.tokenMountDir" . }}/token
 {{- end }}
 
+{{- /* Режим файлов в Secret-томах (TLS/CA, токен исполнителя).
+       kubelet монтирует Secret-том как root:root; при заданном fsGroup он же
+       переводит группу файлов на этот fsGroup и добавляет её процессу в
+       supplemental groups — тогда достаточно 0440 (владелец root, чтение
+       группы, запись не нужна: том readOnly). Без fsGroup (например,
+       `fsGroup: null` ради NFS-workspace — см. README §«NFS-том и смена
+       владельца») группа остаётся root, поэтому читать может только
+       «остальные» — 0444 (совместимость с прежним поведением чарта).
+       Аргумент — соответствующий podSecurityContext (backend/executor),
+       чтобы режим считался от того же fsGroup, что применит kubelet.
+       Возвращает "0440" или "0444"; печатать БЕЗ кавычек — это YAML-октал. */ -}}
+{{- define "synth.secretVolumeMode" -}}
+{{- $pse := . | default dict -}}
+{{- if and $pse.fsGroup (gt (int $pse.fsGroup) 0) -}}0440{{- else -}}0444{{- end -}}
+{{- end -}}
+
 {{- define "synth.envName" -}}
 {{- .name | upper | replace "-" "_" }}
 {{- end }}

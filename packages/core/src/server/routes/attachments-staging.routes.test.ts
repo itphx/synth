@@ -43,6 +43,8 @@ function attachmentsConfig(overrides: Partial<AttachmentsConfig> = {}): Attachme
     compression: defaultConfig.attachments.compression,
     thumbnail: defaultConfig.attachments.thumbnail,
     maxChunkBytes: defaultConfig.attachments.maxChunkBytes,
+    maxActiveUploadsPerSession: defaultConfig.attachments.maxActiveUploadsPerSession,
+    maxActiveUploads: defaultConfig.attachments.maxActiveUploads,
     ...overrides,
   };
 }

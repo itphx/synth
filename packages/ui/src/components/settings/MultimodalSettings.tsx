@@ -59,6 +59,8 @@ const ATTACHMENTS_FIELDS = [
   'compression',
   'thumbnail',
   'maxChunkBytes',
+  'maxActiveUploadsPerSession',
+  'maxActiveUploads',
 ] as const
 
 /** Значение select строки «модель по модальности», когда назначения нет. */
@@ -180,6 +182,10 @@ export interface AttachmentsForm {
   thumbnailMaxWidth: string
   /** ADR-115: размер части chunked-загрузки, MiB. */
   maxChunkMiB: string
+  /** ADR-115: предел одновременных chunked-загрузок одной сессии. */
+  maxActiveUploadsPerSession: string
+  /** ADR-115: общий предел активных chunked-загрузок инстанса. */
+  maxActiveUploads: string
 }
 
 /** Байты → MiB для поля ввода: до 2 знаков, без лишних нулей. */
@@ -274,6 +280,8 @@ export function formFromAttachments(settings: AttachmentsSettings): AttachmentsF
     thumbnailEnabled: settings.thumbnail.enabled,
     thumbnailMaxWidth: String(settings.thumbnail.maxWidthPx),
     maxChunkMiB: bytesToMiB(settings.maxChunkBytes),
+    maxActiveUploadsPerSession: String(settings.maxActiveUploadsPerSession),
+    maxActiveUploads: String(settings.maxActiveUploads),
   }
 }
 
@@ -419,6 +427,16 @@ export function buildAttachmentsBody(
     saved.maxChunkMiB,
     savedSettings.maxChunkBytes,
   )
+  body.maxActiveUploadsPerSession = intFromDraft(
+    draft.maxActiveUploadsPerSession,
+    saved.maxActiveUploadsPerSession,
+    savedSettings.maxActiveUploadsPerSession,
+  )
+  body.maxActiveUploads = intFromDraft(
+    draft.maxActiveUploads,
+    saved.maxActiveUploads,
+    savedSettings.maxActiveUploads,
+  )
 
   for (const field of ATTACHMENTS_FIELDS) {
     if (isEnvLockedField(envLocked, field)) delete body[field]
@@ -434,6 +452,8 @@ export interface AttachmentsFormErrors {
   gcDays?: string
   mime?: string
   maxChunkMiB?: string
+  maxActiveUploadsPerSession?: string
+  maxActiveUploads?: string
   imageMaxSide?: string
   imageQuality?: string
   imageMinMiB?: string
@@ -485,6 +505,13 @@ export function validateAttachmentsForm(form: AttachmentsForm): AttachmentsFormE
   const chunkBytes = mibToBytes(form.maxChunkMiB)
   if (chunkBytes === null || chunkBytes < 1024) {
     errors.maxChunkMiB = 'settings.attachments.limits.chunkInvalid'
+  }
+  // ADR-115: пределы активных загрузок — целые > 0 (как в схеме `attachments`).
+  if (!isIntInRange(form.maxActiveUploadsPerSession, 1, Number.MAX_SAFE_INTEGER)) {
+    errors.maxActiveUploadsPerSession = 'settings.attachments.limits.activeUploadsInvalid'
+  }
+  if (!isIntInRange(form.maxActiveUploads, 1, Number.MAX_SAFE_INTEGER)) {
+    errors.maxActiveUploads = 'settings.attachments.limits.activeUploadsInvalid'
   }
   // ADR-115: диапазоны сжатия/миниатюр — те же, что в Zod-схеме.
   if (!isIntInRange(form.imageMaxSide, 64, 8192)) {
@@ -1268,6 +1295,46 @@ export function MultimodalSettings() {
               id="attachments-max-chunk"
               data-testid="attachments-max-chunk"
             />
+            <NumberField
+              label={t('settings.attachments.limits.activePerSession')}
+              description={t('settings.attachments.limits.activePerSessionHint')}
+              tooltip={t('settings.help.attachments.maxActiveUploadsPerSession')}
+              min={1}
+              step={1}
+              value={current.maxActiveUploadsPerSession}
+              onChange={(e) =>
+                draft.update({ maxActiveUploadsPerSession: e.target.value })
+              }
+              error={
+                errors.maxActiveUploadsPerSession
+                  ? t(errors.maxActiveUploadsPerSession)
+                  : undefined
+              }
+              disabled={locked('maxActiveUploadsPerSession')}
+              id="attachments-max-active-uploads-per-session"
+              data-testid="attachments-max-active-uploads-per-session"
+            />
+            <NumberField
+              label={t('settings.attachments.limits.activeTotal')}
+              description={t('settings.attachments.limits.activeTotalHint')}
+              tooltip={t('settings.help.attachments.maxActiveUploads')}
+              min={1}
+              step={1}
+              value={current.maxActiveUploads}
+              onChange={(e) => draft.update({ maxActiveUploads: e.target.value })}
+              error={errors.maxActiveUploads ? t(errors.maxActiveUploads) : undefined}
+              disabled={locked('maxActiveUploads')}
+              id="attachments-max-active-uploads"
+              data-testid="attachments-max-active-uploads"
+            />
+            {(locked('maxActiveUploadsPerSession') || locked('maxActiveUploads')) && (
+              <p
+                data-testid="attachments-active-uploads-env-locked"
+                className="text-xs text-status-warning break-words"
+              >
+                {t('settings.attachments.envLocked')}
+              </p>
+            )}
           </>
         )}
       </SettingsSection>

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
-import { access, chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -299,6 +299,45 @@ describe('Git API Routes (ADR-076 §T3)', () => {
     expect(res.status).toBe(400);
     const body = await res.json() as { error: { code: string } };
     expect(body.error.code).toBe('git.repo_path_invalid');
+  });
+
+  it('register: симлинк внутри workspace наружу → 400 git.repo_path_invalid (не 500)', async () => {
+    const outside = join(root, 'outside');
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, join(workspacesRoot, 'proj', 'escape'));
+
+    const app = makeApp();
+    const res = await post(app, '/repos/register', { projectId, path: 'escape' });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('git.repo_path_invalid');
+    // Запись в реестр не создана.
+    expect((await projectStore.load(projectId))?.repos ?? []).toHaveLength(0);
+  });
+
+  it('remove с deleteLocal: симлинк наружу → 400, внешний каталог цел, запись не удалена', async () => {
+    const outside = join(root, 'keep');
+    await mkdir(outside, { recursive: true });
+    const precious = join(outside, 'precious.txt');
+    await writeFile(precious, 'must survive\n');
+    await symlink(outside, join(workspacesRoot, 'proj', 'evil'));
+
+    // Запись реестра ставим напрямую: register такой путь теперь отклоняет.
+    const project = await projectStore.load(projectId);
+    if (!project) throw new Error('проект не найден');
+    await projectStore.save({
+      ...project,
+      repos: [{ id: 'repo-evil', path: 'evil', name: 'evil' }],
+    });
+
+    const app = makeApp();
+    const res = await post(app, '/repos/remove', { projectId, path: 'evil', deleteLocal: true });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('git.repo_path_invalid');
+    // `rm -rf` не выполнен: внешний файл цел, запись реестра осталась.
+    expect(await exists(precious)).toBe(true);
+    expect((await projectStore.load(projectId))?.repos ?? []).toHaveLength(1);
   });
 
   it('clone: таймаут сетевой операции → 504 git.clone_timeout', async () => {

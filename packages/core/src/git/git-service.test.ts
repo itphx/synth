@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -526,6 +526,145 @@ describe('GitService (ADR-076 §T3, ADR-077)', () => {
     expect(thrownCode(() => resolveRepoPath(ws, '../escape'))).toBe('PATH_TRAVERSAL');
     expect(thrownCode(() => resolveRepoPath(ws, 'a/../../escape'))).toBe('PATH_TRAVERSAL');
     expect(thrownCode(() => resolveRepoPath(ws, '/etc/passwd'))).toBe('PATH_TRAVERSAL');
+  });
+
+  it('resolveRepoPath: несуществующий путь внутри workspace разрешён (initRepo-сценарий)', async () => {
+    // Каталога ещё нет — проверяется ближайший существующий предок (workspace).
+    expect(resolveRepoPath(ws, 'repos/brand/new')).toBe(join(ws, 'repos', 'brand', 'new'));
+
+    await service.initRepo(ws, 'repos/brand/new', 'main');
+    expect(await exists(join(ws, 'repos', 'brand', 'new', '.git'))).toBe(true);
+    expect(resolveRepoPath(ws, 'repos/brand/new')).toBe(join(ws, 'repos', 'brand', 'new'));
+  });
+
+  it('resolveRepoPath: симлинк внутри workspace → наружу отклоняется (PATH_TRAVERSAL)', async () => {
+    const outside = join(root, 'outside');
+    await mkdir(join(outside, 'sub'), { recursive: true });
+    await symlink(outside, join(ws, 'escape'));
+
+    expect(thrownCode(() => resolveRepoPath(ws, 'escape'))).toBe('PATH_TRAVERSAL');
+    // Та же цель через промежуточную компоненту: `link/sub` лексически внутри,
+    // реально — снаружи.
+    expect(thrownCode(() => resolveRepoPath(ws, 'escape/sub'))).toBe('PATH_TRAVERSAL');
+    // Ещё не созданная цель под симлинком наружу — тоже отказ.
+    expect(thrownCode(() => resolveRepoPath(ws, 'escape/new-repo'))).toBe('PATH_TRAVERSAL');
+  });
+
+  it('resolveRepoPath: симлинк в промежуточной компоненте → наружу отклоняется', async () => {
+    const outside = join(root, 'outside');
+    await mkdir(join(outside, 'nested'), { recursive: true });
+    await symlink(outside, join(ws, 'link'));
+
+    expect(thrownCode(() => resolveRepoPath(ws, 'link/nested'))).toBe('PATH_TRAVERSAL');
+    expect(thrownCode(() => resolveRepoPath(ws, 'link/nested/deeper'))).toBe('PATH_TRAVERSAL');
+  });
+
+  it('resolveRepoPath: dangling-симлинк отклоняется (fail-closed)', async () => {
+    await symlink(join(root, 'missing-target'), join(ws, 'dangling'));
+
+    expect(thrownCode(() => resolveRepoPath(ws, 'dangling'))).toBe('PATH_TRAVERSAL');
+    expect(thrownCode(() => resolveRepoPath(ws, 'dangling/sub'))).toBe('PATH_TRAVERSAL');
+  });
+
+  it('resolveRepoPath: симлинк, ведущий ВНУТРЬ workspace, разрешён (легитимный случай)', async () => {
+    await mkdir(join(ws, 'repos', 'real'), { recursive: true });
+    await symlink(join(ws, 'repos', 'real'), join(ws, 'alias'));
+
+    // Возвращается лексический путь (адрес для git), а не realpath.
+    expect(resolveRepoPath(ws, 'alias')).toBe(join(ws, 'alias'));
+    expect(resolveRepoPath(ws, 'alias/file.txt')).toBe(join(ws, 'alias', 'file.txt'));
+  });
+
+  it('removeLocal не удаляет ничего за пределами workspace (симлинк наружу)', async () => {
+    const outside = join(root, 'keep');
+    await mkdir(outside, { recursive: true });
+    const precious = join(outside, 'precious.txt');
+    await writeFile(precious, 'must survive\n');
+    await symlink(outside, join(ws, 'evil'));
+
+    await expect(service.removeLocal(ws, 'evil')).rejects.toMatchObject({ code: 'PATH_TRAVERSAL' });
+    // `rm -rf` не выполнен: внешний каталог и файл целы.
+    expect(await exists(precious)).toBe(true);
+    expect(await exists(join(ws, 'evil'))).toBe(true);
+  });
+
+  // TOCTOU-остаток: проверка и деструктивная операция разнесены во времени.
+  // Статический кейс «компонента уже подменена симлинком до вызова» закрыт
+  // каноническим адресом операции (`resolveOperationalRepoPath`) + перепроверкой
+  // перед ФС; саму гонку (подмена строго между resolve и `rm`) юнит-тестом
+  // детерминированно не воспроизвести без инъекции в fs/`openat`-семантики.
+  it('removeLocal: подменённый родительский компонент (симлинк наружу) → отказ, снаружи цел', async () => {
+    const outside = join(root, 'outside-repos');
+    await mkdir(join(outside, 'app'), { recursive: true });
+    const precious = join(outside, 'app', 'precious.txt');
+    await writeFile(precious, 'must survive\n');
+    await symlink(outside, join(ws, 'repos'));
+
+    await expect(service.removeLocal(ws, 'repos/app')).rejects.toMatchObject({ code: 'PATH_TRAVERSAL' });
+    expect(await exists(precious)).toBe(true);
+    expect(await exists(join(outside, 'app'))).toBe(true);
+  });
+
+  it('initRepo: родительский компонент — симлинк наружу → отказ, снаружи ничего не создано', async () => {
+    const outside = join(root, 'outside-init');
+    await mkdir(outside, { recursive: true });
+    const precious = join(outside, 'precious.txt');
+    await writeFile(precious, 'must survive\n');
+    await symlink(outside, join(ws, 'vendor'));
+
+    await expect(service.initRepo(ws, 'vendor/new', 'main')).rejects.toMatchObject({
+      code: 'PATH_TRAVERSAL',
+    });
+    expect(await exists(join(outside, 'new'))).toBe(false);
+    expect(await exists(precious)).toBe(true);
+    expect(await readdir(outside)).toEqual(['precious.txt']);
+  });
+
+  it('cloneRepo: родительский компонент — симлинк наружу → отказ, снаружи ничего не создано', async () => {
+    const bare = await createBareRepo(root);
+    const outside = join(root, 'outside-clone');
+    await mkdir(outside, { recursive: true });
+    const precious = join(outside, 'precious.txt');
+    await writeFile(precious, 'must survive\n');
+    await symlink(outside, join(ws, 'vendor'));
+
+    await expect(service.cloneRepo(ws, 'vendor/app', `file://${bare}`)).rejects.toMatchObject({
+      code: 'PATH_TRAVERSAL',
+    });
+    expect(await exists(join(outside, 'app'))).toBe(false);
+    expect(await exists(precious)).toBe(true);
+    expect(await listTmpSiblings(outside)).toEqual([]);
+  });
+
+  it('cloneRepo: целью не может быть корень workspace (временный каталог не появляется рядом)', async () => {
+    const bare = await createBareRepo(root);
+    const before = (await readdir(root)).sort();
+
+    await expect(service.cloneRepo(ws, '.', `file://${bare}`)).rejects.toMatchObject({
+      code: 'PATH_TRAVERSAL',
+    });
+    expect((await readdir(root)).sort()).toEqual(before);
+  });
+
+  it('операции по симлинку ВНУТРЬ workspace идут по разрешённому пути, а не по ссылке', async () => {
+    const real = join(ws, 'real-repos');
+    await mkdir(real, { recursive: true });
+    await symlink(real, join(ws, 'alias'));
+
+    // initRepo создаёт каталог в реальном месте.
+    await service.initRepo(ws, 'alias/init', 'main');
+    expect(await exists(join(real, 'init', '.git'))).toBe(true);
+
+    // cloneRepo кладёт клон и `.tmp-*` к реальному родителю.
+    const bare = await createBareRepo(root);
+    await service.cloneRepo(ws, 'alias/clone', `file://${bare}`);
+    expect(await exists(join(real, 'clone', 'README.md'))).toBe(true);
+    expect(await listTmpSiblings(real)).toEqual([]);
+
+    // removeLocal удаляет реальный каталог (по разрешённому пути), ссылка цела.
+    await service.removeLocal(ws, 'alias/clone');
+    expect(await exists(join(real, 'clone'))).toBe(false);
+    expect(await exists(join(ws, 'alias'))).toBe(true);
   });
 
   it('removeLocal удаляет каталог, но отвергает traversal и корень workspace', async () => {

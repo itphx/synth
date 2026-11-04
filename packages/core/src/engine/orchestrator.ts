@@ -1395,8 +1395,8 @@ export class ChatOrchestrator {
 
     // ADR-036: суммаризация (ContextOptimizer) создаёт провайдера напрямую —
     // передаём ему общую gateway-обвязку, чтобы эта точка тоже была защищена.
-    // ADR-094: при включённых метриках обвязка ставится и при выключенном gateway
-    // (учёт вызовов; guard в этом режиме no-op).
+    // ADR-094/ADR-119: обвязка ставится **всегда**; при выключенном gateway —
+    // disabled-конфиг (passthrough, но учёт вызовов и общий контур фильтров).
     this._optimizer?.setGatewayHooks(this._optimizerGatewayHooks());
 
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру).
@@ -1482,12 +1482,14 @@ export class ChatOrchestrator {
   }
 
   /**
-   * ADR-036/ADR-094: gateway-обвязка суммаризации. Задаётся при включённом
-   * gateway или при наличии реестра метрик (тогда — disabled-конфиг: guard
-   * no-op, но вызов учитывается).
+   * ADR-036/ADR-119: gateway-обвязка суммаризации. Задаётся **всегда**
+   * (инвариант 3: любой LLM-вызов — через `GatewayProvider`): при выключенном
+   * gateway берётся `DISABLED_GATEWAY_CONFIG` — вызов идёт passthrough
+   * (guard/обфускация no-op), но учитывается метриками и виден фильтрам при
+   * включении gateway. `AuditLogger` ленив: файл создаётся только при записи,
+   * а при `enabled:false` записей нет.
    */
-  private _optimizerGatewayHooks(): ContextOptimizerGatewayHooks | null {
-    if (!this._gatewayConfig && !this._metrics) return null;
+  private _optimizerGatewayHooks(): ContextOptimizerGatewayHooks {
     const config = this._gatewayConfig ?? DISABLED_GATEWAY_CONFIG;
     const audit = this._gatewayAudit
       ?? new AuditLogger(join(this._dataDir, 'audit', 'llm-gateway.jsonl'));

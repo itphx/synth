@@ -44,6 +44,8 @@ function testConfig(overrides: Partial<AttachmentsConfig> = {}): AttachmentsConf
     compression: defaultConfig.attachments.compression,
     thumbnail: defaultConfig.attachments.thumbnail,
     maxChunkBytes: 64,
+    maxActiveUploadsPerSession: 16,
+    maxActiveUploads: 256,
     ...overrides,
   };
 }
@@ -149,6 +151,23 @@ describe('UploadSessionStore (ADR-115, B2a)', () => {
     expect(await sidecars()).toHaveLength(0);
   });
 
+  it.each<[string, number]>([
+    ['-1', -1],
+    ['NaN', Number.NaN],
+    ['1.5', 1.5],
+  ])('create: некорректный size (%s) → invalid без temp/sidecar', async (_label, size) => {
+    const err = await store.create({ size }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UploadSessionError);
+    expect((err as UploadSessionError).code).toBe('invalid');
+    expect(await tempObjects()).toHaveLength(0);
+    expect(await sidecars()).toHaveLength(0);
+  });
+
+  it('create: size 0 и ровно maxBytesPerFile — допустимы', async () => {
+    await expect(store.create({ sessionId: 's1', size: 0 })).resolves.toBeDefined();
+    await expect(store.create({ sessionId: 's2', size: 1024 })).resolves.toBeDefined();
+  });
+
   it('create: вложения выключены → AttachmentError attachments_disabled', async () => {
     config = testConfig({ enabled: false });
     const err = await store.create().catch((e: unknown) => e);
@@ -196,6 +215,112 @@ describe('UploadSessionStore (ADR-115, B2a)', () => {
     await expect(store.append('nope', 0, Buffer.from('x'))).rejects.toBeInstanceOf(
       UploadSessionError,
     );
+  });
+
+  it('квота сессии: активные загрузки + declaredSize на create → too_large', async () => {
+    config = testConfig({
+      maxBytesPerFile: 1000,
+      maxBytesPerSession: 100,
+      maxChunkBytes: 64,
+    });
+    const first = await store.create({ sessionId: 's1' });
+    await store.append(first.uploadId, 0, Buffer.alloc(60, 1), { sessionId: 's1' });
+
+    // 60 Б уже занято активной загрузкой сессии + 60 Б заявлено → 120 > 100.
+    await expect(store.create({ sessionId: 's1', size: 60 })).rejects.toMatchObject({
+      name: 'UploadSessionError',
+      code: 'too_large',
+    });
+    // Другая сессия квотой первой не ограничена.
+    await expect(store.create({ sessionId: 's2', size: 60 })).resolves.toBeDefined();
+    // Без declaredSize сессию можно открыть: рост проверит append.
+    await expect(store.create({ sessionId: 's1' })).resolves.toBeDefined();
+  });
+
+  it('квота сессии: фактический рост на append → too_large', async () => {
+    config = testConfig({
+      maxBytesPerFile: 1000,
+      maxBytesPerSession: 100,
+      maxChunkBytes: 64,
+    });
+    const first = await store.create({ sessionId: 's1' });
+    const second = await store.create({ sessionId: 's1' });
+    await store.append(first.uploadId, 0, Buffer.alloc(60, 1), { sessionId: 's1' });
+
+    // 60 Б в первой загрузке + 60 Б во второй = 120 > 100.
+    await expect(
+      store.append(second.uploadId, 0, Buffer.alloc(60, 1), { sessionId: 's1' }),
+    ).rejects.toMatchObject({ name: 'UploadSessionError', code: 'too_large' });
+
+    // Другая сессия не страдает от квоты первой.
+    const other = await store.create({ sessionId: 's2' });
+    await expect(
+      store.append(other.uploadId, 0, Buffer.alloc(60, 1), { sessionId: 's2' }),
+    ).resolves.toEqual({ received: 60, nextOffset: 60 });
+  });
+
+  it('квота сессии: complete проверяет сумму активных загрузок той же сессии', async () => {
+    config = testConfig({
+      maxBytesPerFile: 1000,
+      maxBytesPerSession: 100,
+      maxChunkBytes: 64,
+    });
+    const first = await store.create({ sessionId: 's1' });
+    const second = await store.create({ sessionId: 's1' });
+    await store.append(first.uploadId, 0, Buffer.alloc(60, 1), { sessionId: 's1' });
+    await store.append(second.uploadId, 0, Buffer.alloc(30, 1), { sessionId: 's1' });
+
+    // Лимит снижен после append: 60 + 30 = 90 > 80.
+    config = testConfig({
+      maxBytesPerFile: 1000,
+      maxBytesPerSession: 80,
+      maxChunkBytes: 64,
+    });
+    await expect(store.complete(second.uploadId, { sessionId: 's1' })).rejects.toMatchObject({
+      name: 'UploadSessionError',
+      code: 'too_large',
+    });
+  });
+
+  it('лимит числа активных загрузок на сессию', async () => {
+    config = testConfig({ maxActiveUploadsPerSession: 2 });
+    await store.create({ sessionId: 's1' });
+    await store.create({ sessionId: 's1' });
+    await expect(store.create({ sessionId: 's1' })).rejects.toMatchObject({
+      name: 'UploadSessionError',
+      code: 'too_large',
+    });
+    // Другая сессия не блокируется лимитом первой.
+    await expect(store.create({ sessionId: 's2' })).resolves.toBeDefined();
+  });
+
+  it('глобальный лимит активных загрузок включает staging без sessionId', async () => {
+    config = testConfig({ maxActiveUploads: 2 });
+    await store.create({ sessionId: 's1' });
+    await store.create(); // staging: привязки к сессии нет
+    await expect(store.create({ sessionId: 's2' })).rejects.toMatchObject({
+      name: 'UploadSessionError',
+      code: 'too_large',
+    });
+    await expect(store.create()).rejects.toMatchObject({
+      name: 'UploadSessionError',
+      code: 'too_large',
+    });
+  });
+
+  it('протухшие загрузки не занимают квоту и число активных', async () => {
+    config = testConfig({
+      maxBytesPerFile: 1000,
+      maxBytesPerSession: 100,
+      maxChunkBytes: 64,
+      maxActiveUploadsPerSession: 1,
+      maxActiveUploads: 1,
+    });
+    const stale = await store.create({ sessionId: 's1' });
+    await store.append(stale.uploadId, 0, Buffer.alloc(60, 1), { sessionId: 's1' });
+
+    clock.value += UPLOAD_SESSION_TTL_MS + 1;
+    await expect(store.create({ sessionId: 's1', size: 60 })).resolves.toBeDefined();
   });
 
   it('complete: публикует content-addressed объект, пишет sidecar, убирает temp', async () => {

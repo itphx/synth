@@ -35,6 +35,9 @@ const ATTACHMENTS = {
   gcDays: 7,
   workspaceFallback: false,
   allowedMimePrefixes: ['image/', 'application/pdf'],
+  maxChunkBytes: 8 * 1024 * 1024,
+  maxActiveUploadsPerSession: 16,
+  maxActiveUploads: 256,
 }
 
 const INFO = {

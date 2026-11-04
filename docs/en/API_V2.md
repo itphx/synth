@@ -38,7 +38,7 @@
 > **Переведено 2026-10-31 (продолжение):** §3.3 — `queue.state.items` (элементы очереди
 > `{id, status: 'queued'|'starting'}` без текста и автора) и правила публикации `queue.state`;
 > §5.5 — DTO сессии `activity` (`idle`/`busy`/`retry`, приоритет, персистентность, миграция `030`).
-> ⚠️ RU-версия обновлена 2026-11-02 (**§5.4** — аддитивное `attachments` в `GET /api/v2/meta`; **§5.6.1** — `413` несёт `error.details.maxBytesPerFile`); §5.4 переведён, §5.6.1 в EN по-прежнему отсутствует — **перевод отстаёт**.
+> ⚠️ RU-версия обновлена 2026-11-02 (**§5.4** — аддитивное `attachments` в `GET /api/v2/meta`; **§5.6.1** — `413` несёт `error.details.maxBytesPerFile`); §5.4 переведён; §5.6.1 — в EN переведена **часть про chunked-загрузку** (лимиты `maxBytesPerSession` для активных загрузок, `maxActiveUploadsPerSession`/`maxActiveUploads`), полная секция — RU; **перевод отстаёт**.
 > ⚠️ RU-версия обновлена 2026-10-30 (**§5.5** — `stream.done.step_limit_reached` / `metadata.step_limit_reached` и статус `limit` (`session.steps_limit`); **§5.5** — `message.queued` как подтверждение приёма (`message_id` = `stream_id`) и дельты `subagent.progress` (`content_delta`/`reasoning_delta`), уточнение «UI-переключателя режима больше нет» (ADR-104); **§5.6** — подпись thinking хранится по блокам (`Part.metadata`/`reasoningBlocks`, `91be3f89`), `content` без reasoning при наличии `parts`; **§5.10** — `compatibility` модели (ADR-117) и `requires_reasoning` как shorthand; **§5.9** — `compatibility` провайдера — **переведено**); RU-версия обновлена 2026-10-27 (§5.26 — «Вложения события» (`attachments[]`), ADR-115 × ADR-089) — **переведено**; RU-версия обновлена 2026-10-26 (ADR-112/ADR-111/PROP-096/097: **§5.5** — вопросы пользователю (`GET/POST /api/v2/sessions/:id/questions*`) и steering дочерней сессии саб-агента; **§3.2 «Фоновые прогоны и вопросы пользователю»** — перечень серверных событий `user_question.*`/`process.*`/`child.*`; **§5.39 «Фоновые прогоны»** — `/api/v2/processes*` (реестр фоновых прогонов: список/деталь/лог/stop/удаление; граничный guard, инварианты 16/21; деградированный режим хранилища — контур не монтируется, 404)) — **переведено**; RU-версия обновлена 2026-10-25 — **переведено**: §5.36 «Плагины» (ADR-090), §5.38 «Память» (ADR-107: портал + мутации индексов, М2; проектная авторизация портала — инвариант 16; **инстансные индексы** — `scope: 'project'|'instance'`; **секреты и egress** — обфускации при индексации нет, исключения секретов, локальные эмбеддинги), §5.5 `GET /sessions/:id/memory` для вкладки «Память»; **перевод отстаёт** (§5.6.1 — ADR-115, вложения сообщений, staging-загрузка и лимиты; §5.32 — ADR-102, аналитика и отчётность; §5.33 — ADR-100, пакеты расширений; §5.37 — ADR-105, внешние доступы — разделов в EN-файле нет).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
@@ -609,6 +609,48 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > - The **step limit** (`AgentDefinition.maxSteps`) does not create a separate message: it is **one more ordinary step** of the cycle (the tools stay in the request, `tool_choice: 'none'`, the “text only” instruction arrives as a synthetic assistant prefill), so no extra second message appears in the turn history (see §5.5 “Main-agent step limit”).
 > - **Turns already written** (created before this rule) are repaired by the one-off idempotent migration `migrations.message-stream-v2-step-parts` (`schemaVersion` 3, ADR-118 §“Migration and rollback”): the reasoning and `metadata.tool_results` of the old-style final message move into the messages of their own steps (`tool_results` merged by the call `id`), `intermediate_text_blocks` is removed, and `tool_chain` is dropped from the steps that have visible content/calls. The API access does not change; a repeated run is a no-op.
 
+### 5.6.1 Message attachments — chunked upload (RU §5.6.1 is canonical)
+
+Message attachments (ADR-115) live in the blob volume (`{dataDir}/blobs`, content-addressed
+`attachments/<sha2>/<sha256>`); the message carries only the `blobPath` reference. The full section
+(upload, download, limits, staging) is maintained in the RU version; below is the **chunked-upload**
+part with the limits enforced by the current implementation.
+
+Base paths: `/api/v2/sessions/:id/attachments/uploads` (session contour, RBAC — session **write** via
+the prefix guard) and `/api/v2/attachments/uploads` (staging, no session binding).
+
+| Method | Path | Purpose / req-resp |
+|---|---|---|
+| POST | `<base>` | Init: body `{name?, mime?, size?}` (all optional, empty body allowed). `size` must be a non-negative integer, otherwise `400 VALIDATION_ERROR`; `size` above `maxBytesPerFile` → `413`; the declared `size` pushing the session's active uploads above `maxBytesPerSession` → `413`; active upload count limits exceeded → `413`; **201** `{uploadId, maxChunkBytes}` |
+| PUT | `<base>/:uploadId?offset=N` | Raw part: `offset` must equal the received volume, otherwise `400 VALIDATION_ERROR`; a part above `maxChunkBytes` (by `Content-Length` or actual size) → `413` with `details.maxChunkBytes`; total above `maxBytesPerFile` → `413` with `details.maxBytesPerFile`; the **actual growth** pushing the session's active uploads above `maxBytesPerSession` → `413` with `details.maxBytesPerSession`; **200** `{received, nextOffset}` |
+| POST | `<base>/:uploadId/complete` | Publish the attachment (same result as a regular upload); the final size plus the other active uploads of the session is checked against `maxBytesPerSession` → `413`; **201** `{id, blobPath, sha256, mime, size, name?}`; a repeated complete → `404` |
+| DELETE | `<base>/:uploadId` | Cancel; **204**, idempotent (unknown/already cancelled id → 204 as well) |
+
+Limits (live resolver, read on every call):
+
+| Limit | Scope | Default | Violation |
+|---|---|---|---|
+| `attachments.maxChunkBytes` | one `PUT` part | 8 MiB | `413 PAYLOAD_TOO_LARGE` (`details.maxChunkBytes`) |
+| `attachments.maxBytesPerFile` | one file | 100 MiB | `413 PAYLOAD_TOO_LARGE` (`details.maxBytesPerFile`) |
+| `attachments.maxBytesPerSession` | session's **active** chunked uploads (temporary objects under `attachments/.uploads/` plus the current file); on `init` the declared `size` counts, on `append`/`complete` the actual size | 1 GiB | `413 PAYLOAD_TOO_LARGE` (`details.maxBytesPerSession`) |
+| `attachments.maxActiveUploadsPerSession` | number of concurrent chunked uploads of one session | 16 | `413 PAYLOAD_TOO_LARGE` (`details.maxActiveUploadsPerSession`) |
+| `attachments.maxActiveUploads` | number of active chunked uploads of the instance, including staging (no `sessionId`) | 256 | `413 PAYLOAD_TOO_LARGE` (`details.maxActiveUploads`) |
+
+A `413 PAYLOAD_TOO_LARGE` in the chunked contour always carries `error.details` with the **actual**
+limit that fired: `maxChunkBytes` (one part), `maxBytesPerFile` (one file), `maxBytesPerSession` (the
+session's active-upload quota) and `maxActiveUploadsPerSession`/`maxActiveUploads` (active-upload
+count); several keys may be present at once (the instance-wide limits plus the one that fired).
+
+Expired upload sessions (1 h TTL without activity) **never count**: `create` runs a cleanup first (a
+full pass is throttled to at most once per minute), and the active-upload scan always skips sessions
+whose TTL has elapsed — so stale uploads consume neither the quota nor the count limits even when the
+lazy cleanup is skipped by the throttle. The session quota covers only active (unfinished) uploads of
+that session; other sessions are unaffected. Staging has no session quota but counts towards the global
+`maxActiveUploads`. **There is no byte quota for staging**: its upper bound is
+`maxActiveUploads × maxBytesPerFile` (256 × 100 MiB ≈ 25 GiB at the defaults). Upload state is stored
+on the volume (temp object plus sidecar `attachments/.uploads/<uuid>.json`), so any control-plane
+replica can continue an upload — the `blobs` volume must be shared.
+
 ### 5.7 Queue — `/api/v2/queue`
 
 | Method | Path | Build | RBAC | Purpose |
@@ -954,7 +996,8 @@ is not matched to an instance user (`resolveExternalIdentity` → `null`) and th
 
 The `project.repos` registry (several repositories per project) and git operations.
 `init`/`clone` **register** an entry in the project; `repo_path`/`path` are relative to
-`project.workspace` (containment; an absolute path/`..` → `git.repo_path_invalid`).
+`project.workspace` (symlink-aware containment: an absolute path/`..`/escape through a
+symlink to the outside → `git.repo_path_invalid`).
 Errors — in the shared shape `{ error: { error, code } }`.
 
 | Method | Path | RBAC (backend / core) | Purpose |

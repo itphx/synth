@@ -681,6 +681,8 @@ describe('resolveAttachmentsSettings (ADR-115)', () => {
       },
       thumbnail: { enabled: true, maxWidthPx: 512 },
       maxChunkBytes: 8 * 1024 * 1024,
+      maxActiveUploadsPerSession: 16,
+      maxActiveUploads: 256,
     });
   });
 
@@ -730,6 +732,21 @@ describe('resolveAttachmentsSettings (ADR-115)', () => {
     expect(resolved.effective.enabled).toBe(false);
     expect(resolved.effective.gcDays).toBe(0);
     expect(resolved.envLocked).toEqual(['enabled', 'gcDays']);
+  });
+
+  it('env: пределы числа активных chunked-загрузок — source=env, оба ключа в envLocked', () => {
+    const resolved = resolveAttachmentsSettings({
+      // runtime пытается перекрыть глобальный предел — env приоритетнее.
+      runtime: { maxActiveUploads: 10 },
+      env: {
+        SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS_PER_SESSION: '4',
+        SYNTH_ATTACHMENTS_MAX_ACTIVE_UPLOADS: '32',
+      },
+    });
+    expect(resolved.source).toBe('env');
+    expect(resolved.effective.maxActiveUploadsPerSession).toBe(4);
+    expect(resolved.effective.maxActiveUploads).toBe(32);
+    expect(resolved.envLocked).toEqual(['maxActiveUploadsPerSession', 'maxActiveUploads']);
   });
 
   it('env модульности: csv перечисляет включённые семейства', () => {

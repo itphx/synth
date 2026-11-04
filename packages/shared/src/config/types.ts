@@ -1000,7 +1000,12 @@ export const attachmentsThumbnailSchema = z.object({
  * - `thumbnail` — генерация серверных миниатюр для UI (производный JPEG рядом
  *   с оригиналом в blob);
  * - `maxChunkBytes` — размер части при chunked-загрузке (мультичастевой
- *   приём файла без чтения целиком в память), байт.
+ *   приём файла без чтения целиком в память), байт;
+ * - `maxActiveUploadsPerSession` — предел числа одновременных chunked-загрузок
+ *   одной сессии (незавершённые сессии загрузки в `attachments/.uploads/`):
+ *   защита от занятия диска незавершёнными загрузками;
+ * - `maxActiveUploads` — общий предел числа активных chunked-загрузок инстанса
+ *   (включая staging-контур без привязки к сессии).
  */
 export const attachmentsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -1026,6 +1031,17 @@ export const attachmentsConfigSchema = z.object({
    * поднимается; значение задаёт транспортный «шаг» приёма вложений.
    */
   maxChunkBytes: z.number().int().min(1024).default(8 * 1024 * 1024),
+  /**
+   * Предел числа одновременных chunked-загрузок одной сессии. Незавершённые
+   * загрузки живут до TTL (1 ч) и занимают диск, поэтому число сессий загрузки
+   * ограничено отдельно от размера файла/квоты сессии.
+   */
+  maxActiveUploadsPerSession: z.number().int().min(1).default(16),
+  /**
+   * Общий предел активных chunked-загрузок инстанса — считаются все сессии
+   * загрузки на томе `blobs`, включая staging-контур (без `sessionId`).
+   */
+  maxActiveUploads: z.number().int().min(1).default(256),
 });
 
 // --- Наблюдаемость: Prometheus-метрики (ADR-094) ---

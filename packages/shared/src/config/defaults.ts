@@ -325,6 +325,10 @@ export const defaultConfig: SynthConfig = {
     thumbnail: { enabled: true, maxWidthPx: 512 },
     // Предел одной части chunked-загрузки, байт (8 МиБ).
     maxChunkBytes: 8 * 1024 * 1024,
+    // Пределы числа незавершённых chunked-загрузок: одной сессии и инстанса
+    // (включая staging-контур без привязки к сессии).
+    maxActiveUploadsPerSession: 16,
+    maxActiveUploads: 256,
   },
   metrics: {
     // ADR-094: экспорт Prometheus-метрик выключен по умолчанию (`GET /metrics` → 404).
