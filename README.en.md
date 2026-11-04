@@ -1,6 +1,4 @@
-<!-- Логотип README: знак цветной, фон подставляется темой.
-     Светлая тема — synth-logo-light.svg, тёмная — synth-logo-dark.svg (prefers-color-scheme).
-     Пути без "./" — GitVerse ломает /raw/branch/<branch>/./<path>. -->
+<!-- Logo: the mark keeps its colors, the background follows the theme (light/dark). -->
 <p align="center">
   <picture>
     <source srcset="docs/resources/synth-logo-dark.svg" media="(prefers-color-scheme: dark)">
@@ -11,83 +9,47 @@
 # Synth
 
 **AI platform for teamwork.**  
-*Status: MVP — active development, the core is stable. Version: 0.10.1.*
+*0.13.4 — stable core. 0.14 is about company-wide adoption; 1.0 follows the operational baseline.*
 
-> 🌐 **English** · [Russian](./README.md)
-> This is the public GitHub mirror — development happens on [GitVerse](https://gitverse.ru/itphx/synth); see [CONTRIBUTING.md](./CONTRIBUTING.md) for the PR workflow.
+[Русский](./README.md) · [Documentation](https://docs.synth.itphx.ru/) · [GitHub mirror](https://github.com/itphx/synth)
 
-Synth is an AI platform for teamwork. It runs on your own infrastructure
-(self-hosted, enterprise-ready) and also works on a personal machine — with no
-backend, Keycloak or Kubernetes required.
+Synth is a self-hosted platform for working with AI agents as a team. One server hub: people and agents share projects, sessions and history, while keys, models and audit stay on the server. It runs on a laptop, in Docker, in Kubernetes, or in hybrid mode (local UI + corporate server).
 
-One chat: your own agent with tools, MCP and skills.
+## Features
 
-```mermaid
-flowchart LR
-    CLI["@itphx/synth CLI"] --> Core["@itphx/synth-core"]
-    UI["React SPA"] --> API["HTTP / WebSocket"]
-    API --> Core
-    Core --> Ollama["Ollama"]
-    Core --> OpenAI["OpenAI"]
-    Core --> Anthropic["Anthropic"]
-```
+- **One hub.** Keys, models, history and audit live on the server; several people work in the same session.
+- **Agents and tools.** File, shell and git tools, MCP, skills, slash commands, subagents, background processes.
+- **Context.** Session branching, context compaction in two modes (summarization and compaction), routing and decision models.
+- **Security.** LLM Gateway, RBAC, OIDC/API keys/service keys, granular permissions and authority.
+- **Data and knowledge.** Agent memory: facts, project and instance indexes, semantic search. Storage is file-based or PostgreSQL.
+- **Automation.** External events and bindings, cron schedules, pipelines (preview), webhooks.
+- **Extensions.** Extension packs (agents, skills, MCP, pipelines) and plugins with a trust model.
+- **Interface.** Chat modes "bubble"/"feed", response zoom, Markdown with syntax highlighting, PWA and themes.
+- **Operations.** `/health`, `/ready`, `/metrics`, reports, backup/restore/update/migrate, air-gapped delivery.
 
----
-
-## Screenshots
+<details>
+<summary>Screenshots</summary>
 
 <p align="center">
   <img src="docs/resources/screens/app-dark.png" alt="Synth — chat, project files and statistics" width="100%"/>
 </p>
 
-| Chat and tools | Statistics | Agents |
-|---|---|---|
-| ![Chat](docs/resources/screens/chat.png) | ![Statistics](docs/resources/screens/stats.png) | ![Agents](docs/resources/screens/agents.png) |
-
-| Audit log | Mobile chat | Mobile menu |
-|---|---|---|
-| ![Audit](docs/resources/screens/audit.png) | ![Mobile chat](docs/resources/screens/mobile-chat.png) | ![Mobile menu](docs/resources/screens/mobile-menu.png) |
-
-Themes:
-
 | Light (Flexoki) | Dracula | Nord |
 |---|---|---|
-| ![Light](docs/resources/screens/app-light.png) | ![Dracula](docs/resources/screens/theme-dracula.png) | ![Nord](docs/resources/screens/theme-nord.png) |
+| ![Light theme](docs/resources/screens/app-light.png) | ![Dracula theme](docs/resources/screens/theme-dracula.png) | ![Nord theme](docs/resources/screens/theme-nord.png) |
 
----
-
-## Key features
-
-| Area | Capability |
-|---------|-------------|
-| **Centralization** | A single hub for all of the team's AI agents. Collaboration: several users in one session, history on the server |
-| **History and metadata** | JSON files with atomic writes (ADR-005): sessions, projects, providers, models. A normalized PostgreSQL schema (ADR-097) is planned |
-| **Audit** | Every LLM request is logged (ADR-036): who, when, which model, how many tokens — full transparency |
-| **Planning** | A project plan with a kanban structure (ADR-039): columns, priorities, dependencies; todo lives in the session. Managed by the `plan_*`/`todo_*` tools |
-| **MCP** | Model Context Protocol support — pluggable tools and data sources |
-| **Deployment** | Three scenarios: cloud (K8s), local (one command), hybrid (corporate hub + employee's PC) |
-| **Security** | Multi-layered: RBAC (ADMIN/USER/LEAD/AUDITOR), OIDC, API keys, runner isolation |
-| **Code control** | The agent shows and explains every step. You understand what the AI does instead of blindly accepting it |
-
----
+</details>
 
 ## Quick start
 
-> A step-by-step guide (installation, provider setup, first run) is on the portal:
-> [docs.synth.itphx.ru/getting-started/quickstart](https://docs.synth.itphx.ru/getting-started/quickstart/).
+You need Node.js >= 22 (for npm) or Docker. Building from source also needs pnpm.
 
-### npm (global install)
+### npm
 
 ```bash
 npm i -g @itphx/synth
-
-# Run with Ollama (local models)
 ollama pull qwen3.8:27b
 
-# type: ollama talks over the native /api/chat — specify the URL without the /v1 suffix.
-# Compatibility: an old URL with /v1 (or /v1/chat/completions) still works — Synth
-# strips the suffix and logs a warning. Ollama's OpenAI-compatible path is a
-# separate provider: type: openai/generic.
 SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434 \
 SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.8:27b \
 SYNTH_PROVIDER_OLLAMA_TYPE=ollama \
@@ -95,18 +57,9 @@ SYNTH_API_KEY=my-secret-key \
 synth serve
 ```
 
-> **Context window.** `qwen3.8:27b` provides a window of ~100k–256k tokens, but
-> Ollama serves only a small one by default. A provider with `type: ollama` talks
-> over the native `/api/chat`, where `num_ctx` **does apply**: set the window
-> through Synth (`SYNTH_PROVIDER_OLLAMA_NUM_CTX=262144` or the provider's `num_ctx`
-> field), otherwise the Ollama server-side default applies
-> (`OLLAMA_CONTEXT_LENGTH=262144 ollama serve` or a model built with
-> `PARAMETER num_ctx 262144`). See
-> [LLM providers](docs/LLM_PROVIDERS.md) for details.
+Open [http://localhost:4300](http://localhost:4300) and enter the key `my-secret-key`. A `type: ollama` provider talks over the native `/api/chat`, so the URL has no `/v1` suffix; set the context window with `SYNTH_PROVIDER_OLLAMA_NUM_CTX`. See [LLM providers](docs/en/LLM_PROVIDERS.md).
 
-Open [http://localhost:4300](http://localhost:4300) and enter the key `my-secret-key`.
-
-### Docker Compose
+### Docker
 
 ```bash
 git clone https://gitverse.ru/itphx/synth synth && cd synth
@@ -114,117 +67,56 @@ echo "SYNTH_API_KEY=my-secret-key" > .env
 docker compose up -d
 ```
 
-Open [http://localhost:4300](http://localhost:4300) and enter the key `my-secret-key`.
+Open [http://localhost:4300](http://localhost:4300) and enter the same key.
 
-### From source (development)
+### From source
 
 ```bash
 git clone https://gitverse.ru/itphx/synth synth && cd synth
 pnpm install
 pnpm build
-
-# Run through the thin CLI wrapper (@itphx/synth): the UI is resolved from @itphx/synth-ui automatically
-node packages/synth/dist/cli.js serve --api-key my-secret-key
+./scripts/dev.sh
 ```
 
-For development use `./scripts/dev.sh` (backend + UI, ports and variables already configured).
-
-**Requirements:** Node.js >= 22, pnpm >= 11
-
----
+`dev.sh` starts the backend and the UI with ports and variables already configured. See [Development](docs/en/DEVELOPMENT.md) for build, tests and the monorepo layout.
 
 ## CLI chat
 
 ```bash
-# One-shot request
-synth chat "hello" --provider ollama --model qwen3.8:27b
-
-# Interactive mode
-synth chat --provider ollama --model qwen3.8:27b
-
-# Just synth — straight into the interactive chat
-synth
+synth chat "hello" --provider ollama --model qwen3.8:27b   # one-shot request
+synth chat --provider ollama --model qwen3.8:27b           # interactive mode
+synth                                                      # straight into the chat
 ```
 
-See [LLM providers](docs/LLM_PROVIDERS.md) and the [Quick start on the portal](https://docs.synth.itphx.ru/getting-started/quickstart/) for provider setup.
+Provider setup is covered in [LLM providers](docs/en/LLM_PROVIDERS.md).
 
----
+## Hybrid mode
+
+Synth connects to a corporate server and shows local and remote projects in one UI. LLM requests go through the server: keys, models and audit stay there.
+
+```bash
+synth serve --connect https://synth.example.com
+```
+
+Open the UI and sign in with your corporate account. The guide is on the portal: [Hybrid mode](https://docs.synth.itphx.ru/deploy/hybrid/).
 
 ## Documentation
 
-### User documentation
+User guides live on the portal [docs.synth.itphx.ru](https://docs.synth.itphx.ru/) (Russian; the English section of the portal is in progress, and this README is maintained in English).
 
-The canonical source of user guides is the portal
-**[docs.synth.itphx.ru](https://docs.synth.itphx.ru/)** — available in Russian;
-an English version is planned.
+| Document | About |
+|----------|-------|
+| [Architecture](docs/en/ARCHITECTURE.md) | Components and deployment scenarios |
+| [Configuration](docs/en/CONFIGURATION.md) | Environment variables, `config.yaml`, settings precedence |
+| [Development](docs/en/DEVELOPMENT.md) | Build, tests, `dev.sh`, repository layout |
+| [API v2](docs/en/API_V2.md) | HTTP API: endpoints, RBAC, errors |
+| [LLM providers](docs/en/LLM_PROVIDERS.md) | Ollama, OpenAI, Anthropic — setup and models |
+| [Publishing](docs/en/PUBLISHING.md) | npm packages, Docker, CI and release |
+| [Troubleshooting](docs/en/TROUBLESHOOTING.md) | Known issues and solutions |
+| [ADR/PROP](docs/arch_decisions/README.md) | Catalog of architecture decisions |
 
-- [Quick start](https://docs.synth.itphx.ru/getting-started/quickstart/)
-- [Providers](https://docs.synth.itphx.ru/getting-started/providers/)
-- [Hybrid mode](https://docs.synth.itphx.ru/deploy/hybrid/)
-- [Administration](https://docs.synth.itphx.ru/admin/configuration/)
-- [CLI](https://docs.synth.itphx.ru/help/cli/)
-- [FAQ](https://docs.synth.itphx.ru/help/faq/)
-
-### Developer documentation
-
-| File | About |
-|------|-------|
-| [Architecture](docs/ARCHITECTURE.md) | Components, deployment scenarios, full diagram |
-| [Configuration](docs/CONFIGURATION.md) | Environment variables, `config.yaml`, settings precedence |
-| [Development](docs/DEVELOPMENT.md) | Build, tests, `dev.sh`, monorepo structure |
-| [Publishing and release](docs/PUBLISHING.md) | npm packages, Docker, CI release |
-| [API v2](docs/API_V2.md) | HTTP API reference: endpoints, RBAC, errors |
-| [Routing](docs/ROUTING.md) | Fast answers, model selection, embeddings |
-| [Keycloak (OIDC)](docs/KEYCLOAK.md) | Keycloak setup, role provisioning, Synth parameters for the integration |
-| [LLM providers](docs/LLM_PROVIDERS.md) | Ollama, OpenAI, Anthropic — setup and models |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Known issues and solutions |
-| [Architecture decisions](docs/arch_decisions/README.md) | ADR/PROP catalog: rationale and decision history |
-
-> The English catalog of developer docs is in progress — see
-> [docs/en/README.md](docs/en/README.md); mandatory terminology is in
-> [docs/en/GLOSSARY.md](docs/en/GLOSSARY.md).
-
----
-
-## Hybrid mode (local + server)
-
-> The user guide for hybrid mode is on the portal:
-> [docs.synth.itphx.ru/deploy/hybrid](https://docs.synth.itphx.ru/deploy/hybrid/).
-
-Synth connects to a corporate server (for example `https://synth.k3s.itphx.loc`),
-combining local and remote projects/sessions in one UI. LLM requests are
-centralized — they go through the server (keys, models and audit live only there).
-
-A convenient way to start is `./scripts/hybrid.sh [SERVER_URL]` (build + CA + OIDC flags):
-
-```bash
-# The address is known — log in to the UI with username/password
-./scripts/hybrid.sh https://synth.k3s.itphx.loc
-
-# The address is unknown — the UI shows a "Server address" field and username/password
-./scripts/hybrid.sh
-```
-
-The manual equivalent:
-
-```bash
-synth serve --connect https://synth.k3s.itphx.loc \
-  --oidc-issuer https://keycloak.itphx.loc/realms/synth \
-  --oidc-client-id synth-cli
-```
-
-Startup is non-blocking (no device flow in the console): the server comes up
-"cold", and after listening a silent auto-login runs using saved credentials
-(or `--token`); if there are none, you sign in to the UI with username/password
-(ROPC "behind the scenes", the identity comes from the server). The core learns
-the OIDC issuer/client_id from the server (`GET /auth/oidc-meta`) with a fallback
-to `--oidc-issuer`/`--oidc-client-id`.
-
-See [docs/HYBRID.md](docs/HYBRID.md) for details.
-
----
+Everything else is in the [docs/](docs/) directory.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) (English text, legally binding) and
-[LICENSE.ru.md](LICENSE.ru.md) (Russian translation).
+MIT — see [LICENSE](LICENSE) (English text, legally binding) and [LICENSE.ru.md](LICENSE.ru.md) (Russian translation).
