@@ -6,19 +6,19 @@
 
 ## 0.13.4 — стабилизация (ближайший релиз)
 
-Код и test — 0.13.3; 0.13.x в npm ещё не публиковался.
+Код и test — 0.13.4 (bump в этом релизе); 0.13.x в npm ещё не публиковался.
 0.13.4 — стабилизационный публичный релиз: ADR-117, ADR-118 этапы 1–4, ADR-119, вложения, пагинация
 и лёгкие списки уже в коде, поэтому задача релиза — выпустить и стабилизировать, а не дописать.
 
 | # | Цель | Документы | Критерий готовности | Статус |
 |---|---|---|---|---|
-| 1.1 | **Выпуск 0.13.4** | [PUBLISHING.md](./PUBLISHING.md), [MAINTENANCE.md](./MAINTENANCE.md), заметки `docs/releases/0.13.4.md`, запись аудита `docs/security/releases/0.13.4.json`, [security/README.md](./security/README.md) | notes-пара проверена гейтом `release-notes`; аудит записан, гейт `security-gate` зелёный; тег с `master`; npm (8 пакетов), образы, чарт, зеркало GitHub | не начато |
+| 1.1 | **Выпуск 0.13.4** | [PUBLISHING.md](./PUBLISHING.md), [MAINTENANCE.md](./MAINTENANCE.md), заметки `docs/releases/0.13.4.md`, запись аудита `docs/security/releases/0.13.4.json`, [security/README.md](./security/README.md) | notes-пара проверена гейтом `release-notes`; аудит записан, гейт `security-gate` зелёный; тег с `master`; npm (8 пакетов), образы, чарт, зеркало GitHub | в работе: находки аудита закрыты (M1–M4, Helm, зависимости high 0), заметки готовы; ждёт записи аудита, bump, пуша и зелёного CI |
 | 1.2 | **ADR-118, этап 5** | [ADR-118](./arch_decisions/adr-118-message-stream-v2.md), [ADR-052](./arch_decisions/adr-052-public-api-platform.md), [ADR-103](./arch_decisions/adr-103-gateway-core-channel-contract.md) | SDK major выпущен; `message.added` удалён; шлюзы читают `step.finished`; webhook-подписки на новой модели; сервер, UI, шлюзы и SDK — одной волной | этапы 1–4 готовы |
 | 1.3 | **Надёжность рестарта** (дешёвая часть HA) | [ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md) п. 7, [MAINTENANCE.md](./MAINTENANCE.md), `charts/synth` | graceful shutdown: перестать принимать → дождаться drain активного хода → выход; политика повторного запуска инструментов описана и покрыта тестом; PDB, `terminationGracePeriodSeconds`, стратегия раскатки | нет (рестарт обрывает ход) |
 | 1.4 | **Эксплуатационный минимум** | [ADR-094](./arch_decisions/adr-094-observability-metrics.md), [OBSERVABILITY.md](./OBSERVABILITY.md), [ADR-120](./arch_decisions/adr-120-memory-budget.md) | JSON-логи с `request_id`/`session_id`; SLO-минимум (доступность, латентность хода, глубина очереди) с алертами из поставки; RSS-бюджет и нагрузочный регресс-тест (ADR-120) | метрики и алерты есть, логов и SLO нет |
-| 1.5 | **Документация** | `docs/releases/0.13.4.md`, [AGENTS.md](../AGENTS.md) | заметки 0.13.4 на месте; AGENTS (корневой и пакетные) соответствуют коду; `pnpm adr:check` без расхождений | нет |
+| 1.5 | **Документация** | `docs/releases/0.13.4.md`, [AGENTS.md](../AGENTS.md) | заметки 0.13.4 на месте; AGENTS (корневой и пакетные) соответствуют коду; `pnpm adr:check` без расхождений | **готово**: пара `0.13.4.md` + `0.13.4.en.md`, ADR-076/119 и API/CONFIGURATION (RU+EN) обновлены, `adr:check` — 0 ошибок |
 | 1.6 | **HA: зафиксировать решение** | раздел «HA — оценка» ниже, [PROP-104](./arch_decisions/prop-104-external-event-transport.md), [PROP-105](./arch_decisions/prop-105-multi-replica-coordination.md) | полный HA вынесен за 0.13.4; при одной реплике описан контракт «деплой прерывает ход»; дешёвая часть — в строке 1.3 | решение принято 2026-11-04 |
-| 1.7 | **Бета-канал в Gitea** | [PUBLISHING.md](./PUBLISHING.md) §«Бета-версии (Gitea)», `scripts/publish-beta.sh`, `.gitverse/workflows/beta.yaml`, `scripts/beta-prune.sh` | publish-beta + beta.yaml + prune + docs; установка `@beta` проверена smoke | в работе (скрипты и доки на месте, реальной публикации ещё не было) |
+| 1.7 | **Бета-канал в Gitea** | [PUBLISHING.md](./PUBLISHING.md) §«Бета-версии (Gitea)», `scripts/publish-beta.sh`, `.gitverse/workflows/beta.yaml`, `scripts/beta-prune.sh` | publish-beta + beta.yaml + prune + docs; установка `@beta` проверена smoke | **готово**: публикация 8 пакетов в Gitea, `dist-tags.beta`, установка `@beta` и prune проверены (`0.13.3-beta.20261104093532`, `0.13.3-beta.20261104161904`) |
 
 ## HA — оценка (2026-11-04)
 
