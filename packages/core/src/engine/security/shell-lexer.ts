@@ -7,12 +7,18 @@
  * `shell-guard.ts` — обратная совместимость для тестов и потребителей.
  */
 
+/** Операторы перенаправления: длинные — раньше коротких. */
+const REDIRECT_OPERATORS = ['&>>', '>>', '>&', '>|', '<>', '<&', '&>', '>', '<'];
+
 /**
  * Лёгкий shlex-токенизатор (POSIX-подобный).
  * - одинарные кавычки `'...'` — всё литерально;
  * - двойные кавычки `"..."` — кавычки снимаются, `\` экранирует следующий символ;
  * - `\` вне кавычек экранирует следующий символ;
- * - незакрытые кавычки дочитываются до конца строки (не бросаем ошибку).
+ * - незакрытые кавычки дочитываются до конца строки (не бросаем ошибку);
+ * - операторы перенаправления (`>>`, `>&`, `>|`, `<>`, `<&`, `&>>`, `&>`, `>`, `<`)
+ *   вне кавычек и вне `$(...)` выделяются отдельными токенами, разрывая слово
+ *   (`x&>/f` → `x`, `&>`, `/f`; `2>&1` → `2`, `>&`, `1`).
  * Кавычки из токенов удаляются (как shlex.split).
  */
 export function tokenizeCommand(command: string): string[] {
@@ -21,6 +27,14 @@ export function tokenizeCommand(command: string): string[] {
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let substitutionDepth = 0;
+
+  const flush = (): void => {
+    if (current !== '') {
+      tokens.push(current);
+      current = '';
+    }
+  };
 
   for (let i = 0; i < command.length; i++) {
     const ch = command[i]!;
@@ -41,17 +55,37 @@ export function tokenizeCommand(command: string): string[] {
       inDouble = !inDouble;
       continue;
     }
-    if ((ch === ' ' || ch === '\t' || ch === '\n') && !inSingle && !inDouble) {
-      if (current !== '') {
-        tokens.push(current);
-        current = '';
+    if (!inSingle && !inDouble) {
+      if (ch === '$' && command[i + 1] === '(') {
+        substitutionDepth++;
+        current += '$(';
+        i++;
+        continue;
       }
+      if (ch === ')' && substitutionDepth > 0) {
+        substitutionDepth--;
+        current += ch;
+        continue;
+      }
+      // Оператор перенаправления — отдельным токеном (и разрывает слово).
+      if (substitutionDepth === 0) {
+        const op = REDIRECT_OPERATORS.find((candidate) => command.startsWith(candidate, i));
+        if (op) {
+          flush();
+          tokens.push(op);
+          i += op.length - 1;
+          continue;
+        }
+      }
+    }
+    if ((ch === ' ' || ch === '\t' || ch === '\n') && !inSingle && !inDouble) {
+      flush();
       continue;
     }
     current += ch;
   }
   if (escaped) current += '\\';
-  if (current !== '') tokens.push(current);
+  flush();
   return tokens;
 }
 
@@ -74,6 +108,7 @@ export function splitShellSegments(command: string): string[] {
   let inDouble = false;
   let escaped = false;
   let substitutionDepth = 0;
+  let doubleBracket = false;
 
   for (let i = 0; i < command.length; i++) {
     const ch = command[i]!;
@@ -98,6 +133,19 @@ export function splitShellSegments(command: string): string[] {
       continue;
     }
     if (!inSingle && !inDouble) {
+      // `[[ … ]]` — не команда: `&&`/`||`/`|` внутри — операторы условия.
+      if (substitutionDepth === 0 && ch === '[' && command[i + 1] === '[') {
+        doubleBracket = true;
+        current += '[[';
+        i++;
+        continue;
+      }
+      if (doubleBracket && ch === ']' && command[i + 1] === ']') {
+        doubleBracket = false;
+        current += ']]';
+        i++;
+        continue;
+      }
       // Подстановка $(...) — содержимое не анализируем (динамика), но и не
       // разбиваем по разделителям внутри.
       if (ch === '$' && command[i + 1] === '(') {
@@ -112,7 +160,7 @@ export function splitShellSegments(command: string): string[] {
         continue;
       }
     }
-    if (substitutionDepth === 0 && !inSingle && !inDouble) {
+    if (!doubleBracket && substitutionDepth === 0 && !inSingle && !inDouble) {
       if ((ch === '&' && command[i + 1] === '&') || (ch === '|' && command[i + 1] === '|')) {
         if (current.trim() !== '') segments.push(current.trim());
         current = '';

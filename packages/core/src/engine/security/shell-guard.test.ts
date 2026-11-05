@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   tokenizeCommand,
+  splitShellSegments,
   extractCommandPaths,
   isMutatingCommand,
   checkShellCommand,
@@ -955,5 +956,449 @@ describe('checkShellCommand — обход через симлинк', () => {
   it('регрессия: лексический защищённый путь → deny', () => {
     const r = checkShellCommand(`cat ${join(secrets, 'master.key')}`, ws, policy);
     expect(r.action).toBe('deny');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H1–H8: предсуществующие обходы (closure-аудит)
+// ---------------------------------------------------------------------------
+
+describe('tokenizeCommand — операторы перенаправления (H1)', () => {
+  it('оператор выделяется отдельным токеном, слово разрывается', () => {
+    expect(tokenizeCommand('x&>/f')).toEqual(['x', '&>', '/f']);
+    expect(tokenizeCommand('hi>/f')).toEqual(['hi', '>', '/f']);
+    expect(tokenizeCommand('2>&1')).toEqual(['2', '>&', '1']);
+    expect(tokenizeCommand('{fd}>/f')).toEqual(['{fd}', '>', '/f']);
+    expect(tokenizeCommand('x>|/f')).toEqual(['x', '>|', '/f']);
+    expect(tokenizeCommand('x>&/f')).toEqual(['x', '>&', '/f']);
+    expect(tokenizeCommand('x&>>/f')).toEqual(['x', '&>>', '/f']);
+    expect(tokenizeCommand('cat <>/f')).toEqual(['cat', '<>', '/f']);
+  });
+
+  it('кавычки и $() не трогаем', () => {
+    expect(tokenizeCommand('echo "a > b"')).toEqual(['echo', 'a > b']);
+    expect(tokenizeCommand("awk '$1>2'")).toEqual(['awk', '$1>2']);
+    expect(tokenizeCommand("grep 'a|b'")).toEqual(['grep', 'a|b']);
+    expect(tokenizeCommand('echo $(a>b)')).toEqual(['echo', '$(a>b)']);
+  });
+
+  it('splitShellSegments не режет &/| внутри операторов', () => {
+    expect(splitShellSegments('x&>f')).toEqual(['x&>f']);
+    expect(splitShellSegments('x>|f')).toEqual(['x>|f']);
+    expect(splitShellSegments('x>&f')).toEqual(['x>&f']);
+    expect(splitShellSegments('x&>>f')).toEqual(['x&>>f']);
+    // фоновый & и пайп | по-прежнему разделители
+    expect(splitShellSegments('a & b')).toEqual(['a', 'b']);
+    expect(splitShellSegments('a | b')).toEqual(['a', 'b']);
+  });
+});
+
+describe('H1: приклеенные перенаправления проверяются как пути', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('защищённые цели → deny', () => {
+    expect(check('echo x&>/etc/shadow').action).toBe('deny');
+    expect(check('echo hi>/etc/shadow').action).toBe('deny');
+    expect(check('x=1>/etc/shadow').action).toBe('deny');
+    expect(check('{fd}>/etc/shadow').action).toBe('deny');
+    expect(check('x>|/etc/passwd').action).toBe('deny');
+    expect(check('x>&/etc/shadow').action).toBe('deny');
+    expect(check('hi</etc/shadow').action).toBe('deny');
+    expect(check('echo x&>>/etc/passwd').action).toBe('deny');
+    expect(check('cat <>/etc/shadow').action).toBe('deny');
+  });
+
+  it('fd-дубли остаются allow', () => {
+    expect(check('cmd 2>&1').action).toBe('allow');
+    expect(check('cmd >&2').action).toBe('allow');
+    expect(check('cmd >&-').action).toBe('allow');
+  });
+});
+
+describe('H2: префиксные обёртки', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('вложенная shell-команда под обёрткой → deny', () => {
+    const cases = [
+      "env sh -c 'cat /etc/shadow'",
+      "env -i sh -c 'cat /etc/shadow'",
+      "timeout 3 bash -c 'cat /etc/shadow'",
+      "command sh -c 'cat /etc/shadow'",
+      "nohup sh -c 'cat /etc/shadow'",
+      "exec /bin/sh -c 'cat /etc/shadow'",
+      "nice -n 5 sh -c 'cat /etc/shadow'",
+      "stdbuf -o0 sh -c 'cat /etc/shadow'",
+      "xargs sh -c 'cat /etc/shadow'",
+      "flock /tmp/l sh -c 'cat /etc/shadow'",
+      "watch -n 1 'cat /etc/shadow'",
+    ];
+    for (const cmd of cases) expect(check(cmd).action).toBe('deny');
+  });
+
+  it('легитимные обёртки не ломаются', () => {
+    expect(check('env').action).toBe('allow');
+    expect(check('command -v git').action).toBe('allow');
+    expect(check('timeout 5 npm test').action).toBe('allow');
+    expect(check('nice -n 5 ls').action).toBe('allow');
+  });
+
+  it('exec с динамическим именем команды → ask', () => {
+    expect(check("C=/bin/sh; exec $C -c 'cat /etc/shadow'").action).toBe('ask');
+  });
+});
+
+describe('H3: awk system(...), find -exec, код интерпретаторов', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('awk system(...) рекурсивно проверяется', () => {
+    expect(check('awk \'BEGIN{system("cat /etc/shadow")}\'').action).toBe('deny');
+    expect(check('awk \'BEGIN{system("rm -rf /")}\'').action).toBe('deny');
+    expect(check("awk '{print $1}' file").action).toBe('allow');
+  });
+
+  it('awk getline/pipe/redirect и -f — fail-closed ask', () => {
+    expect(check("awk 'BEGIN{getline; print}'").action).toBe('ask');
+    expect(check('awk -f script.awk file').action).toBe('ask');
+  });
+
+  it('find -exec проверяет исполняемую команду', () => {
+    expect(check("find . -exec sh -c 'cat /etc/shadow' ;").action).toBe('deny');
+    expect(check('find . -exec cat {} ;').action).toBe('allow');
+  });
+
+  it('интерпретаторы с кодом: маркер защищённого пути → deny', () => {
+    expect(check(`python3 -c "print(open('/etc/shadow').read())"`).action).toBe('deny');
+    expect(check('node -e "console.log(1)"').action).toBe('allow');
+  });
+});
+
+describe('H4: find -delete/-exec вне периметра', () => {
+  it('стартовый путь вне roots → ask, защищённый старт → deny', () => {
+    const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY, { allowedRoots: [CWD] });
+    expect(check('find /etc -name shadow -delete').action).toBe('ask');
+    expect(check("find /var/synth/data -name '*.key' -delete").action).toBe('ask');
+    expect(check('find ~ -name id_rsa -delete').action).toBe('ask');
+    expect(check('find /etc/shadow -delete').action).toBe('deny');
+    expect(check("find . -name '*.tmp' -delete").action).toBe('allow');
+  });
+});
+
+describe('H5: bare-glob и симлинк', () => {
+  it('симлинк наружу в cwd → ask, обычные файлы → allow', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-shell-bareglob-'));
+    try {
+      const ws = join(dir, 'ws');
+      const secrets = join(dir, 'secrets');
+      await mkdir(ws, { recursive: true });
+      await mkdir(secrets, { recursive: true });
+      await writeFile(join(secrets, 'master.key'), 'KEY');
+      await symlink(join(secrets, 'master.key'), join(ws, 'leak.key'));
+      await writeFile(join(ws, 'a.ts'), 'x');
+      const policy: ShellPolicy = {
+        deniedPaths: [join(secrets, 'master.key')],
+        deniedPrefixes: [secrets],
+        approvalPaths: [],
+        deniedCommandPrefixes: [],
+      };
+      expect(checkShellCommand('cat *', ws, policy, { allowedRoots: [ws] }).action).toBe('ask');
+      expect(checkShellCommand('ls *.ts', ws, policy, { allowedRoots: [ws] }).action).toBe('allow');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('H6: brace expansion', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('простые {a,b} раскрываются до проверки', () => {
+    expect(check('cat /etc/shad{ow,}').action).toBe('deny');
+    expect(check('cp /etc/shadow{,.bak}').action).toBe('deny');
+    expect(check('ls file{1,2}.txt').action).toBe('allow');
+  });
+
+  it('неподдерживаемая форма — ask', () => {
+    expect(check('ls file{1..3}').action).toBe('ask');
+  });
+});
+
+describe('H7: /proc/<pid>/root/<path>', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('алиас проверяется как путь', () => {
+    expect(check('cat /proc/1/root/etc/shadow').action).toBe('deny');
+    expect(check('cat /proc/1/root/etc/hosts').action).toBe('allow');
+    expect(check('cat /proc/self/root/etc/passwd').action).toBe('deny');
+  });
+});
+
+describe('H8: позиционные параметры', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('$1/$@/$* — неизвестная динамика-путь → ask', () => {
+    expect(check('cat $1').action).toBe('ask');
+    expect(check('cat $@').action).toBe('ask');
+    expect(check('cat $*').action).toBe('ask');
+  });
+
+  it('$? / $$ — не пути', () => {
+    expect(check('echo $?').action).toBe('allow');
+    expect(check('echo $$').action).toBe('allow');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F: общий скан встроенных команд + точечные фиксы
+// ---------------------------------------------------------------------------
+
+describe('F: EMBEDDED_EXECUTORS — строка-команда/код проверяется рекурсивно', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('code/команда под встроенным исполнителем → deny', () => {
+    const cases = [
+      "env -S 'cat /etc/shadow'",
+      "sudo -s 'cat /etc/shadow'",
+      "nice -n5 sh -c 'cat /etc/shadow'",
+      "flock /tmp/l -c 'cat /etc/shadow'",
+      `php -r 'readfile("/etc/shadow")'`,
+      `node --eval 'require("fs").readFileSync("/etc/shadow")'`,
+      `python3.11 -c 'print(open("/etc/shadow").read())'`,
+      "su -c 'cat /etc/shadow'",
+      "runuser -c 'cat /etc/shadow'",
+      'doas cat /etc/shadow',
+      "chroot / sh -c 'cat /etc/shadow'",
+      "unshare -r sh -c 'cat /etc/shadow'",
+      "nsenter -t 1 -m sh -c 'cat /etc/shadow'",
+      "script -qec 'cat /etc/shadow' /dev/null",
+      "ssh host 'cat /etc/shadow'",
+      "systemd-run --scope /bin/sh -c 'cat /etc/shadow'",
+      `node20 -e 'require("fs").readFileSync("/etc/shadow")'`,
+      "cat list | xargs -I{} sh -c 'cat ${1}' _ {}",
+      // длинные/слитные формы code-флагов
+      "env --split-string='cat /etc/shadow'",
+      "env -S'cat /etc/shadow'",
+      `node -p "require('fs').readFileSync('/etc/shadow','utf8')"`,
+      `node --eval='require("fs").readFileSync("/etc/shadow")'`,
+    ];
+    for (const cmd of cases) expect(check(cmd).action).not.toBe('allow');
+  });
+
+  it('легитимные команды под исполнителями не ломаются', () => {
+    const cases = [
+      'env',
+      'command -v git',
+      'timeout 5 npm test',
+      'nice -n 5 ls',
+      'stdbuf -oL ls',
+      'xargs -n1 echo',
+      "ssh host 'ls -la'",
+      "script -qec 'ls' /dev/null",
+      "python3 -c 'print(1)'",
+      'node -e "console.log(1)"',
+      "awk '{print $1}' file",
+      'find . -exec cat {} ;',
+      'npm test > /tmp/out 2>&1',
+      'timeout 30 pnpm test',
+      'env NODE_ENV=test pnpm test',
+      "find . -name '*.ts' -print",
+      "awk -F: '{print $1}' /etc/hosts",
+      'watch -n2 date',
+      "nice -n 10 timeout 60 bash -c 'echo hi'",
+      'command git status',
+      'exec 3>/dev/null',
+      'flock /tmp/l npm test',
+      "echo 'a > b' > /tmp/f",
+      "curl 'https://x/?a=1&b=2' > /tmp/o",
+      "grep -E 'a|b' file",
+      "awk -F'|' '{print $2}' file",
+    ];
+    for (const cmd of cases) expect(check(cmd).action).toBe('allow');
+  });
+});
+
+describe('F: точечные фиксы (nice/flock/find/proc/позиционные)', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY, { allowedRoots: [CWD] });
+
+  it('nice: -n5/--adjustment/--adjustment=/ -5 — опции, не команда', () => {
+    const deny = [
+      "nice -n5 sh -c 'cat /etc/shadow'",
+      "nice --adjustment=5 sh -c 'cat /etc/shadow'",
+      "nice --adjustment 5 sh -c 'cat /etc/shadow'",
+      "nice -5 sh -c 'cat /etc/shadow'",
+    ];
+    for (const cmd of deny) expect(check(cmd).action).toBe('deny');
+    expect(check('nice -n 5 ls').action).toBe('allow');
+  });
+
+  it('flock: -c/--command — код; lockfile — путь', () => {
+    expect(check("flock /tmp/l -c 'cat /etc/shadow'").action).toBe('deny');
+    expect(check("flock /tmp/l --command 'cat /etc/shadow'").action).toBe('deny');
+    expect(check("flock /etc/shadow -c 'ls'").action).toBe('deny');
+    expect(check('flock /tmp/l npm test').action).toBe('allow');
+  });
+
+  it('find: динамический стартовый путь → ask', () => {
+    expect(check('find $(pwd)/.. -delete').action).toBe('ask');
+    expect(check('find `pwd`/.. -name "*.tmp" -delete').action).toBe('ask');
+    expect(check("find . -name '*.tmp' -delete").action).toBe('allow');
+  });
+
+  it('/proc/<pid>/cwd/<path> — алиас пути', () => {
+    expect(check('cat /proc/1/cwd/etc/shadow').action).toBe('deny');
+    expect(check('cat /proc/self/cwd/etc/passwd').action).toBe('deny');
+    expect(check('cat /proc/1/cwd/etc/hosts').action).toBe('allow');
+    // `..` после root/cwd не съедается лексической нормализацией
+    expect(check('cat /proc/self/root/../../etc/shadow').action).toBe('deny');
+    expect(check('cat /proc/1/root/../etc/shadow').action).toBe('deny');
+  });
+
+  it('${1}/${@}/${*}/${10}/${0} — ask; $?/$$/$! — allow', () => {
+    for (const token of ['${1}', '${@}', '${*}', '${10}', '${0}']) {
+      expect(check(`cat ${token}`).action).toBe('ask');
+    }
+    expect(check('echo $?').action).toBe('allow');
+    expect(check('echo $$').action).toBe('allow');
+    expect(check('echo $!').action).toBe('allow');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A–E: shell-префиксы, приклеенные опции, контейнеры, cd-периметр, ложные ask
+// ---------------------------------------------------------------------------
+
+describe('A: shell-префиксы перед командой', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('! / time / { } / ( ) / if / while / for / case → проверяется вложенная', () => {
+    const cases = [
+      "! bash -c 'cat /etc/shadow'",
+      "time sh -c 'cat /etc/shadow'",
+      "time -p sh -c 'cat /etc/shadow'",
+      "{ sh -c 'cat /etc/shadow'; }",
+      "( sh -c 'cat /etc/shadow' )",
+      'time find /etc -name x -delete',
+      "! awk 'BEGIN{system(\"cat /etc/shadow\")}'",
+    ];
+    for (const cmd of cases) expect(check(cmd).action).not.toBe('allow');
+  });
+
+  it('легитимные префиксы не ломаются', () => {
+    expect(check('time ls').action).toBe('allow');
+    expect(check('{ ls; }').action).toBe('allow');
+    expect(check('( cd /tmp && ls )').action).toBe('allow');
+    expect(check('if true; then ls; fi').action).toBe('allow');
+  });
+});
+
+describe('B: приклеенные опции-исполнители', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('opts с кодом/маркером → deny', () => {
+    expect(check("ssh -oProxyCommand='cat /etc/shadow' host").action).toBe('deny');
+    expect(check("ssh -oLocalCommand='cat /etc/shadow' host").action).toBe('deny');
+    expect(check("script -qec'cat /etc/shadow' /dev/null").action).toBe('deny');
+    expect(check(`perl -E'open F,"/etc/shadow"'`).action).toBe('deny');
+    expect(check(`node -p'require("fs").readFileSync("/etc/shadow")'`).action).toBe('deny');
+  });
+
+  it('легитимные опции — allow', () => {
+    expect(check("ssh -o StrictHostKeyChecking=no host 'ls'").action).toBe('allow');
+    expect(check("script -qec 'ls' /dev/null").action).toBe('allow');
+  });
+});
+
+describe('C: контейнерные исполнители и код в опциях инструментов', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('docker/kubectl/podman с shell-кодом → deny', () => {
+    expect(check("docker exec c sh -c 'cat /etc/shadow'").action).toBe('deny');
+    expect(check("kubectl exec -it pod -- sh -c 'cat /etc/shadow'").action).toBe('deny');
+    expect(check("podman run --rm img sh -c 'cat /etc/shadow'").action).toBe('deny');
+  });
+
+  it('форматы/переменные контейнеров — allow', () => {
+    expect(check('docker run -e "A=b c" img').action).toBe('allow');
+    expect(check("kubectl exec -it pod -- sh -c 'ls'").action).toBe('allow');
+    expect(check("docker ps --format '{{.Names}}'").action).toBe('allow');
+  });
+
+  it('git -c / tar --to-command / rsync -e → deny', () => {
+    expect(check("git -c core.pager='cat /etc/shadow' log").action).toBe('deny');
+    expect(check("tar --to-command='cat /etc/shadow' -xf a.tar").action).toBe('deny');
+    expect(check("rsync -e 'cat /etc/shadow' a b").action).toBe('deny');
+  });
+});
+
+describe('D: периметр cd/pushd/env -C/chroot', () => {
+  const DATA = '/var/synth/data';
+  const policy: ShellPolicy = {
+    ...TEST_POLICY,
+    deniedPrefixes: [...TEST_POLICY.deniedPrefixes, `${DATA}/secrets`],
+  };
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, policy, { allowedRoots: [CWD] });
+
+  it('cd меняет cwd для последующих сегментов', () => {
+    expect(check('cd ~ && cat .ssh/id_rsa').action).toBe('deny');
+    expect(check('cd / && cat etc/shadow').action).toBe('deny');
+    expect(check(`cd ${DATA} && cat secrets/master.key`).action).toBe('deny');
+    expect(check('cd /tmp && cat /etc/hosts').action).toBe('allow');
+    expect(check('( cd /; cat etc/shadow )').action).toBe('deny');
+  });
+
+  it('env -C / chroot передают cwd в рекурсию', () => {
+    expect(check(`env -C ${DATA} cat secrets/master.key`).action).toBe('deny');
+    expect(check('chroot /etc cat shadow').action).toBe('deny');
+    expect(check(`env -C ${DATA} sh -c 'cat secrets/master.key'`).action).toBe('deny');
+    expect(check(`env --chdir ${DATA} sh -c 'cat secrets/master.key'`).action).toBe('deny');
+    expect(check(`sudo -D ${DATA} sh -c 'cat secrets/master.key'`).action).toBe('deny');
+  });
+
+  it('динамический cd: bindings раскрываются, нерезолвимое — ask', () => {
+    expect(check(`D=${DATA}; cd $D && cat secrets/master.key`).action).toBe('deny');
+    expect(check('D=/tmp; cd $D && ls').action).toBe('allow');
+    expect(check(`cd $(echo ${DATA}) && cat secrets/master.key`).action).not.toBe('allow');
+    expect(check(`pushd $(echo ${DATA}) && cat secrets/master.key`).action).not.toBe('allow');
+    expect(check('cd $(echo /tmp)').action).toBe('ask');
+    expect(check('cd $(pwd)').action).toBe('ask');
+    // `$(...)` не даёт срезать закрывающую скобку как групповую
+    expect(check(`cd "$(echo ${DATA})" && cat secrets/master.key`).action).not.toBe('allow');
+  });
+});
+
+describe('E: ложные ask (brace-форматы, тест-контекст)', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('{{…}} и скобки без запятой — литерал, не brace-expansion', () => {
+    expect(check("docker ps --format '{{.Names}}'").action).toBe('allow');
+    expect(check("kubectl get pods -o jsonpath='{.items[*].name}'").action).toBe('allow');
+  });
+
+  it('$VAR в тест-контексте — значение, не путь', () => {
+    expect(check('[[ "$a" > "$b" ]]').action).toBe('allow');
+    expect(check('test "$a" -gt 2').action).toBe('allow');
+    expect(check('if [ -f "$f" ]; then').action).toBe('allow');
+    // вне тест-контекста — по-прежнему ask
+    expect(check('cat $X').action).toBe('ask');
+  });
+
+  it('find -path осознанно остаётся ask', () => {
+    expect(check("find . -name '*.ts' -not -path './node_modules/*'").action).toBe('ask');
+  });
+});
+
+describe('stdin-код: heredoc/herestring для shell/интерпретаторов', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('<< / <<- / <<< перед shell/интерпретатором → ask', () => {
+    expect(check("bash <<< 'cat /etc/shadow'").action).toBe('ask');
+    expect(check('sh <<EOF\ncat /etc/shadow\nEOF').action).toBe('ask');
+    expect(check("python3 <<EOF\nprint(open('/etc/shadow').read())\nEOF").action).toBe('ask');
+    expect(check('sh <<-EOF\ncat /etc/shadow\nEOF').action).toBe('ask');
+  });
+
+  it('heredoc/herestring для обычных команд не трогаем', () => {
+    expect(check('cat <<EOF > /tmp/f').action).toBe('allow');
+    expect(check("cat <<< 'hello'").action).toBe('allow');
+    expect(check('grep <<< "$x"').action).toBe('allow');
   });
 });

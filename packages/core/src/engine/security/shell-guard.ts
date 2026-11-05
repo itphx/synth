@@ -98,31 +98,209 @@ function normalizeSpace(s: string): string {
 // здесь — реэкспорт: публичный API guard'а не меняется.
 export { tokenizeCommand, splitShellSegments } from './shell-lexer.js';
 
+const SHELL_COMMANDS = new Set(['sh', 'bash', 'zsh']);
+/** Имя shell по basename (`/bin/sh` → `sh`). */
+function shellBasename(cmd: string): string {
+  const slash = cmd.lastIndexOf('/');
+  return slash >= 0 ? cmd.slice(slash + 1) : cmd;
+}
+const EMPTY_FLAGS: ReadonlySet<string> = new Set();
+const SUDO_VALUE_FLAGS: ReadonlySet<string> = new Set(['-u', '-g', '-p', '-C', '-D', '-h', '-r', '-t', '-U', '--user', '--group', '--prompt', '--chdir', '--close-from']);
+const EXEC_VALUE_FLAGS: ReadonlySet<string> = new Set(['-a']);
+const STDBUF_VALUE_FLAGS: ReadonlySet<string> = new Set(['-i', '-o', '-e']);
+const IONICE_VALUE_FLAGS: ReadonlySet<string> = new Set(['-c', '-n', '-p']);
+const XARGS_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '-I', '-n', '-P', '-d', '-E', '-L', '-s', '-a',
+  '--delimiter', '--max-args', '--max-procs', '--arg-file', '--max-lines',
+  '--max-chars', '--eof', '--replace', '--max-procs',
+]);
+const SU_VALUE_FLAGS: ReadonlySet<string> = new Set(['-c', '--command', '-s', '--shell', '-g', '--group', '-G', '-u', '--user', '-w', '--whitelist-environment']);
+const DOAS_VALUE_FLAGS: ReadonlySet<string> = new Set(['-C', '-u']);
+const CHROOT_VALUE_FLAGS: ReadonlySet<string> = new Set(['--userspec', '--groups']);
+const UNSHARE_VALUE_FLAGS: ReadonlySet<string> = new Set(['--setgroups', '--propagation', '--map-user', '--map-group', '--map-users', '--map-groups']);
+const NSENTER_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '-t', '--target', '-S', '--setuid', '-G', '--setgid', '-r', '--root', '-w', '--wd',
+  '--wdns', '--target-ns',
+]);
+const SYSTEMD_RUN_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '-p', '--property', '-u', '--unit', '-E', '--setenv', '--description', '--slice',
+  '--working-directory', '--uid', '--gid', '--nice', '--on-active', '--on-boot',
+  '--on-startup', '--on-unit-active', '--on-unit-inactive', '--on-calendar', '--timer-property',
+]);
+const SSH_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '-p', '-i', '-o', '-l', '-F', '-L', '-R', '-D', '-b', '-c', '-e', '-m', '-S', '-W', '-w', '-J', '-Q', '-O', '-E',
+]);
+const SCRIPT_VALUE_FLAGS: ReadonlySet<string> = new Set(['-c', '--command', '-I', '--log-in', '-O', '--log-out', '-E', '--log-io', '-T', '--log-timing', '--logging-format']);
+
+/** Пропускает опции враппера (флаги со значением — парами). */
+function skipWrapperOptions(
+  tokens: readonly string[],
+  start: number,
+  valueFlags: ReadonlySet<string>,
+): number {
+  let i = start;
+  while (i < tokens.length) {
+    const t = tokens[i]!;
+    if (t === '--') return i + 1;
+    if (valueFlags.has(t)) {
+      i += 2;
+      continue;
+    }
+    if (t.startsWith('-') && t.length > 1) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+/** Экранирует токен для обратной склейки в shell-строку (границы аргументов). */
+function quoteShellToken(token: string): string {
+  if (token !== '' && /^[A-Za-z0-9_@%+=:,./~$^*?-]+$/.test(token)) return token;
+  return `'${token.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Склеивает токены в строку с сохранением границ аргументов. */
+function joinShellTokens(tokens: readonly string[]): string {
+  return tokens.map(quoteShellToken).join(' ');
+}
+
 /**
- * Извлекает вложенную команду из обёрток, исполняющих строку как shell-код:
- * `sh -c <cmd>`, `bash -c <cmd>`, `zsh -c <cmd>`, `eval <cmd>`, `sudo <cmd>`.
- * Возвращает null, если команда не является обёрткой.
+ * Извлекает вложенную команду из обёрток: `sh -c`, `eval`, `sudo`, `env`,
+ * `timeout`, `command`, `builtin`, `exec`, `nohup`, `setsid`, `nice`, `stdbuf`,
+ * `ionice`, `watch`, `flock`, `xargs`. Ведущие обёртки снимаются послойно,
+ * проверяется итоговая команда. `null` — не обёртка.
  */
 export function extractWrappedCommand(segment: string, tokens: string[]): string | null {
-  const cmd = tokens[0] ?? '';
-  if (cmd === 'sh' || cmd === 'bash' || cmd === 'zsh') {
-    // `-c`, слитные `-lc`/`-ec` и приклеенная строка `-c'cmd'`.
-    const flag = /^-([A-Za-z]*)c(.*)$/.exec(tokens[1] ?? '');
-    if (flag) {
-      const rest = [flag[2] ?? '', ...tokens.slice(2)].filter((t) => t !== '').join(' ');
+  let i = 0;
+  for (;;) {
+    const cmd = tokens[i];
+    if (cmd === undefined) return null;
+
+    if (SHELL_COMMANDS.has(shellBasename(cmd))) {
+      // `-c`, слитные `-lc`/`-ec` и приклеенная строка `-c'cmd'`.
+      const flag = /^-([A-Za-z]*)c(.*)$/.exec(tokens[i + 1] ?? '');
+      if (flag) {
+        const rest = [flag[2] ?? '', ...tokens.slice(i + 2)].filter((t) => t !== '').join(' ');
+        if (rest.trim() !== '') return rest;
+        // fallback: токенизатор мог потерять кавычки — берём сырой остаток строки.
+        const m = /(?:^|\s)-[A-Za-z]*c([\s\S]*)$/.exec(segment);
+        return m ? m[1]! : null;
+      }
+      return i === 0 ? null : joinShellTokens(tokens.slice(i));
+    }
+    if (cmd === 'eval') {
+      const rest = tokens.slice(i + 1).join(' ');
       if (rest.trim() !== '') return rest;
-      // fallback: токенизатор мог потерять кавычки — берём сырой остаток строки.
-      const m = /(?:^|\s)-[A-Za-z]*c([\s\S]*)$/.exec(segment);
+      const m = /(?:^|\s)eval\s+([\s\S]*)$/.exec(segment);
       return m ? m[1]! : null;
     }
+    if (cmd === 'sudo') {
+      i = skipWrapperOptions(tokens, i + 1, SUDO_VALUE_FLAGS);
+    } else if (cmd === 'env') {
+      let j = i + 1;
+      while (j < tokens.length) {
+        const t = tokens[j]!;
+        if (t === '-u' || t === '--unset' || t === '-C' || t === '--chdir') {
+          j += 2;
+          continue;
+        }
+        if (t.startsWith('-') && t.length > 1) {
+          j += 1;
+          continue;
+        }
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) {
+          j += 1;
+          continue;
+        }
+        break;
+      }
+      i = j;
+    } else if (cmd === 'timeout') {
+      let j = i + 1;
+      while (j < tokens.length && tokens[j]!.startsWith('-')) {
+        const t = tokens[j]!;
+        if (t === '-s' || t === '--signal' || t === '-k' || t === '--kill-after') j += 2;
+        else j += 1;
+      }
+      j += 1; // длительность
+      i = j;
+    } else if (cmd === 'command') {
+      let j = i + 1;
+      // `-v`/`-V` — поиск, а не исполнение: не разворачиваем.
+      if (tokens[j] === '-v' || tokens[j] === '-V') return null;
+      if (tokens[j] === '-p') j += 1;
+      i = j;
+    } else if (cmd === 'builtin' || cmd === 'nohup') {
+      i += 1;
+    } else if (cmd === 'exec') {
+      i = skipWrapperOptions(tokens, i + 1, EXEC_VALUE_FLAGS);
+    } else if (cmd === 'setsid') {
+      i = skipWrapperOptions(tokens, i + 1, EMPTY_FLAGS);
+    } else if (cmd === 'nice') {
+      let j = i + 1;
+      const t = tokens[j] ?? '';
+      if (t === '-n' || t === '--adjustment') j += 2;
+      else if (/^-\d+$/.test(t) || /^-n\d+$/.test(t) || t.startsWith('--adjustment=')) j += 1;
+      i = j;
+    } else if (cmd === 'stdbuf') {
+      i = skipWrapperOptions(tokens, i + 1, STDBUF_VALUE_FLAGS);
+    } else if (cmd === 'ionice') {
+      i = skipWrapperOptions(tokens, i + 1, IONICE_VALUE_FLAGS);
+    } else if (cmd === 'watch') {
+      let j = i + 1;
+      while (j < tokens.length && tokens[j]!.startsWith('-')) {
+        if (tokens[j] === '-n' || tokens[j] === '--interval') j += 2;
+        else j += 1;
+      }
+      if (/^\d/.test(tokens[j] ?? '')) j += 1; // интервал
+      // watch исполняет команду через `sh -c`: одиночный аргумент — код.
+      if (tokens[j] !== undefined && /\s/.test(tokens[j]!)) return tokens[j]!;
+      i = j;
+    } else if (cmd === 'flock') {
+      let j = i + 1;
+      while (j < tokens.length && tokens[j]!.startsWith('-')) {
+        if (tokens[j] === '-w' || tokens[j] === '--timeout') j += 2;
+        else j += 1;
+      }
+      if (j < tokens.length && !tokens[j]!.startsWith('-')) j += 1; // lockfile
+      // `flock <lock> -c <code>`: код — команда.
+      if (tokens[j] === '-c' || tokens[j] === '--command') {
+        return tokens[j + 1] ?? null;
+      }
+      i = j;
+    } else if (cmd === 'xargs') {
+      i = skipWrapperOptions(tokens, i + 1, XARGS_VALUE_FLAGS);
+    } else if (cmd === 'su' || cmd === 'runuser') {
+      i = skipWrapperOptions(tokens, i + 1, SU_VALUE_FLAGS);
+    } else if (cmd === 'doas') {
+      i = skipWrapperOptions(tokens, i + 1, DOAS_VALUE_FLAGS);
+    } else if (cmd === 'chroot') {
+      let j = skipWrapperOptions(tokens, i + 1, CHROOT_VALUE_FLAGS);
+      if (j < tokens.length && !tokens[j]!.startsWith('-')) j += 1; // newroot
+      i = j;
+    } else if (cmd === 'unshare') {
+      i = skipWrapperOptions(tokens, i + 1, UNSHARE_VALUE_FLAGS);
+    } else if (cmd === 'nsenter') {
+      i = skipWrapperOptions(tokens, i + 1, NSENTER_VALUE_FLAGS);
+    } else if (cmd === 'systemd-run') {
+      i = skipWrapperOptions(tokens, i + 1, SYSTEMD_RUN_VALUE_FLAGS);
+    } else if (cmd === 'ssh') {
+      let j = skipWrapperOptions(tokens, i + 1, SSH_VALUE_FLAGS);
+      if (j < tokens.length && !tokens[j]!.startsWith('-')) j += 1; // host
+      // Удалённая команда исполняется шеллом — разбираем как код (plain join).
+      return j < tokens.length ? tokens.slice(j).join(' ') : null;
+    } else if (cmd === 'script') {
+      const j = skipWrapperOptions(tokens, i + 1, SCRIPT_VALUE_FLAGS);
+      // Остаток — команда/файл typescript; скрипт исполняется шеллом.
+      return j < tokens.length ? tokens.slice(j).join(' ') : null;
+    } else {
+      return i === 0 ? null : joinShellTokens(tokens.slice(i));
+    }
+
+    if (i >= tokens.length) return null;
   }
-  if (cmd === 'eval' || cmd === 'sudo') {
-    const rest = tokens.slice(1).join(' ');
-    if (rest.trim() !== '') return rest;
-    const m = new RegExp(`^${cmd}\\s+([\\s\\S]*)$`).exec(segment);
-    return m ? m[1]! : null;
-  }
-  return null;
 }
 
 /** Есть ли в токене динамика, которую мы не умеем резолвить. */
@@ -146,6 +324,17 @@ function knownVarValue(name: string, cwd: string, env?: PathResolveEnv): string 
 /** Пытается зарезолвить токен в абсолютный путь. */
 export function tryResolvePath(token: string, cwd: string, env?: PathResolveEnv): ExtractedPath | null {
   if (token === '') return null;
+
+  // `/proc/<pid|self>/root|/cwd/<path>` — тот же файл, что `<path>`; проверяем
+  // остаток ДО лексической нормализации (иначе `root/..` съедается как `/proc`).
+  const procAlias = /^\/proc\/(?:\d+|self)\/(?:root|cwd)(\/.+)$/.exec(token);
+  if (procAlias) {
+    const inner = procAlias[1]!;
+    return {
+      path: normalize(inner),
+      source: hasUnresolvedDynamic(inner) ? 'unknown' : 'literal',
+    };
+  }
 
   let base = '';
   let rest = token;
@@ -198,6 +387,52 @@ export function extractCommandPaths(tokens: string[], cwd: string, env?: PathRes
 /** Семейство grep-подобных команд (первый не-флаговый аргумент — паттерн). */
 const GREP_FAMILY = new Set(['grep', 'egrep', 'fgrep', 'rg']);
 const AWK_FAMILY = new Set(['awk', 'gawk', 'mawk']);
+/** Интерпретаторы с кодом в `-c`/`-e`. */
+const INTERPRETER_COMMANDS = new Set(['python', 'python3', 'node', 'nodejs', 'perl', 'ruby', 'php']);
+
+/**
+ * Команды, которым можно передать строку-команду/код (F). Для них аргументы
+ * сканируются на «похожесть на команду/код» и проверяются рекурсивно.
+ */
+const EMBEDDED_EXECUTORS = new Set([
+  'env', 'sudo', 'su', 'runuser', 'doas', 'script', 'ssh', 'chroot', 'unshare',
+  'nsenter', 'systemd-run', 'nice', 'flock', 'xargs', 'timeout', 'command',
+  'nohup', 'setsid', 'stdbuf', 'ionice', 'watch', 'exec', 'builtin',
+  'awk', 'gawk', 'mawk', 'find',
+  'sh', 'bash', 'zsh', 'dash', 'ksh',
+  'python', 'python3', 'node', 'perl', 'ruby', 'php', 'deno', 'bun',
+  'docker', 'podman', 'nerdctl', 'kubectl', 'oc',
+]);
+/** Префиксы interpreters/shell с версией (`python3.11`, `node20`, `sh4`). */
+const EMBEDDED_VERSIONED_PREFIXES = [
+  'python3', 'python', 'node', 'nodejs', 'php', 'ruby', 'perl', 'deno', 'bun',
+  'bash', 'zsh', 'dash', 'ksh', 'sh',
+];
+/** Флаги, значение которых — команда/код. */
+const CODE_VALUE_FLAGS = new Set([
+  '-c', '--command', '-e', '--eval', '-r', '-p', '--print', '-S', '--split-string',
+]);
+const REDIRECT_OPERATOR_TOKENS = new Set(['&>>', '>>', '>&', '>|', '<>', '<&', '&>', '>', '<']);
+/** Максимальная глубина рекурсивной проверки встроенных команд. */
+const MAX_EMBEDDED_DEPTH = 3;
+
+/** Команда входит в набор встроенных исполнителей (с версионными префиксами). */
+function isEmbeddedExecutor(cmd: string): boolean {
+  const base = shellBasename(cmd);
+  if (EMBEDDED_EXECUTORS.has(base)) return true;
+  return EMBEDDED_VERSIONED_PREFIXES.some((prefix) => {
+    if (!base.startsWith(prefix)) return false;
+    const suffix = base.slice(prefix.length);
+    return suffix !== '' && /^[0-9.]+$/.test(suffix);
+  });
+}
+
+/** Является ли токен code-флагом (`-c`, `--eval`, `--eval=…`, `-c<code>`). */
+function isCodeFlagToken(token: string): boolean {
+  if (CODE_VALUE_FLAGS.has(token)) return true;
+  if (/^--(?:eval|command|print|split-string)=/.test(token)) return true;
+  return /^-[ceprp]./.test(token) && !token.startsWith('--');
+}
 // `find`: значения `-path/-ipath/-wholename/-regex/-iregex` НЕ пропускаем —
 // `-path` матчит полный путь (`*` пересекает `/`), поэтому относительный
 // glob-паттерн может указывать на защищённый путь. `-name/-iname` тоже не
@@ -229,15 +464,21 @@ function isLeadingAssignment(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(token);
 }
 
-/** Имя команды сегмента (первый токен, не являющийся ведущим присваиванием). */
-function commandToken(tokens: readonly string[]): string {
+/** Индекс имени команды сегмента (первый токен, не являющийся присваиванием). */
+function commandIndex(tokens: readonly string[]): number {
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
     if (isLeadingAssignment(t)) continue;
     if (t === 'export' && i === 0) continue;
-    return t;
+    return i;
   }
-  return '';
+  return -1;
+}
+
+/** Имя команды сегмента (первый токен, не являющийся ведущим присваиванием). */
+function commandToken(tokens: readonly string[]): string {
+  const idx = commandIndex(tokens);
+  return idx === -1 ? '' : tokens[idx]!;
 }
 
 /**
@@ -408,6 +649,38 @@ function parseRedirectToken(token: string): string | null {
  * fail-closed проверок динамики (маркеры защищённых путей, `ask`), где
  * разрешённый `path` для `source: 'unknown'` недостоверен.
  */
+/**
+ * Простое brace-expansion `{a,b}` (в т.ч. пустые альтернативы, без вложенности,
+ * до 64 вариантов). `'literal'` — раскрывать нечего (или `{fd}`-префикс);
+ * `null` — неподдерживаемая форма (`{1..3}`, вложенность) → fail-closed ask.
+ */
+function expandBraces(token: string): string[] | 'literal' | null {
+  // `{{…}}`/`}}` — не brace-expansion (docker/kubectl-форматы, jsonpath).
+  if (token.includes('{{') || token.includes('}}')) return 'literal';
+  const open = token.indexOf('{');
+  if (open === -1) return 'literal';
+  const close = token.indexOf('}', open + 1);
+  if (close === -1) return 'literal';
+  const body = token.slice(open + 1, close);
+  if (body.includes('{') || body.includes('}')) return null;
+  if (body.includes('..')) return null;
+  const parts = body.split(',');
+  if (parts.length === 1) return 'literal';
+  const prefix = token.slice(0, open);
+  const suffix = token.slice(close + 1);
+  const out: string[] = [];
+  for (const part of parts) {
+    const expanded = expandBraces(prefix + part + suffix);
+    if (expanded === null) return null;
+    const variants = expanded === 'literal' ? [prefix + part + suffix] : expanded;
+    for (const variant of variants) {
+      out.push(variant);
+      if (out.length > 64) return null;
+    }
+  }
+  return out;
+}
+
 export function extractCommandPathTokens(
   tokens: string[],
   cwd: string,
@@ -430,19 +703,35 @@ export function extractCommandPathTokens(
     // find, набор tr, разделитель cut, фильтр jq) — не файловый операнд.
     if (skipIndices?.has(i)) continue;
 
-    const extracted = tryResolvePath(token, cwd, env);
-    if (extracted) result.push({ token, resolved: extracted });
+    const variants = expandBraces(token);
+    if (variants === null) {
+      // Неподдерживаемая форма — неизвестный путь (шаг 6 даст ask).
+      result.push({ token, resolved: { path: resolve(cwd, token), source: 'unknown' } });
+      continue;
+    }
+    const list = variants === 'literal' ? [token] : variants;
+    for (const variant of list) {
+      const extracted = tryResolvePath(variant, cwd, env);
+      if (extracted) result.push({ token: variant, resolved: extracted });
+    }
   }
 
   // Слитные перенаправления (`>/etc/shadow`, `2>/etc/passwd`, `&>…`): цель —
-  // тоже путь, проверяем её как обычный операнд. Раздельные формы (`> file`)
-  // уже попадают в результат выше.
+  // тоже путь, проверяем её как обычный операнд. После разбора операторов
+  // токенизатором это fallback (раздельные формы уже попали выше).
   for (let i = 0; i < tokens.length; i++) {
     const target = parseRedirectToken(tokens[i]!);
     if (target === null) continue;
     if (/^\d+$/.test(target) || target === '-' || target === '&-') continue; // fd
-    const extracted = tryResolvePath(target, cwd, env);
-    if (extracted) result.push({ token: target, resolved: extracted });
+    const variants = expandBraces(target);
+    if (variants === null) {
+      result.push({ token: target, resolved: { path: resolve(cwd, target), source: 'unknown' } });
+      continue;
+    }
+    for (const variant of variants === 'literal' ? [target] : variants) {
+      const extracted = tryResolvePath(variant, cwd, env);
+      if (extracted) result.push({ token: variant, resolved: extracted });
+    }
   }
   return result;
 }
@@ -573,6 +862,9 @@ export function isPathLikeTarget(token: string): boolean {
   if (isUrlToken(token)) return false;
   // `$VAR`, `${VAR}`, `$VAR/...` (но не `$p:` и не `${X}.json` — это текст/имя).
   if (/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?:\/|$)/.test(token)) return true;
+  // Позиционные параметры (`$1`, `${1}`, `$@`, `${@}`, `$*`, `${*}`) —
+  // неизвестная динамика-путь. `$?`, `$$`, `$!` — не пути (allow).
+  if (/^\$(?:\{[0-9@*]+\}|[0-9]+|@|\*)(?:\/|$)/.test(token)) return true;
   if (token.startsWith('~')) return true;
   if (token.startsWith('/')) return true;
   if (token.startsWith('./') || token.startsWith('../')) return true;
@@ -791,7 +1083,7 @@ export function checkShellCommand(
   command: string,
   cwd: string,
   policy: ShellPolicy,
-  options?: { allowedRoots?: readonly string[] },
+  options?: { allowedRoots?: readonly string[]; depth?: number; bindings?: ReadonlyMap<string, ShellBinding> },
 ): ShellCheckResult {
   // Точное совпадение всей команды (например форк-бомба с разделителями внутри).
   for (const prefix of policy.deniedCommandPrefixes) {
@@ -800,7 +1092,10 @@ export function checkShellCommand(
     }
   }
 
-  const segments = splitShellSegments(command);
+  // Тела heredoc не исполняются родительским shell — вырезаем до разбора
+  // (содержимое для shell/интерпретатора закрывается fail-closed ask в сегменте).
+  const analyzed = stripHeredocBodies(command);
+  const segments = splitShellSegments(analyzed);
   if (segments.length === 0) {
     return { action: 'allow', reason: sm('shellguard.allow_default') };
   }
@@ -811,18 +1106,31 @@ export function checkShellCommand(
   const env = resolveEnv(policy);
   // Биндинги считаются на уровне всей команды: `splitShellSegments` разрывает
   // `for ...; do ...` на сегменты, и значение переменной задано в другом.
-  const bindings = collectBindings(command);
+  // Для вложенной команды — база из внешнего контекста + свои присваивания.
+  const ownBindings = collectBindings(analyzed);
+  const bindings = options?.bindings
+    ? new Map<string, ShellBinding>([...options.bindings, ...ownBindings])
+    : ownBindings;
   const roots = [cwd, ...(options?.allowedRoots ?? [])];
+  const depth = options?.depth ?? 0;
 
   let ask: ShellCheckResult | null = null;
+  // Периметр `cd`/`pushd` (N3): cwd меняется для последующих сегментов.
+  let currentCwd = cwd;
   for (const segment of segments) {
     const result = checkShellSegment(
-      segment, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots,
+      segment, currentCwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots, depth,
     );
-    if (!result) continue;
-    // Deny приоритетнее ask: `cat ~/.ssh/config; cat /etc/passwd` → deny.
-    if (result.action === 'deny') return result;
-    ask ??= result;
+    if (result) {
+      // Deny приоритетнее ask: `cat ~/.ssh/config; cat /etc/passwd` → deny.
+      if (result.action === 'deny') return result;
+      ask ??= result;
+    }
+    const nextCwd = resolveCdCwd(segment, currentCwd, env, bindings);
+    if (nextCwd !== null) {
+      if ('cwd' in nextCwd) currentCwd = nextCwd.cwd;
+      else ask ??= askForDynamic(nextCwd.target);
+    }
   }
   if (ask) return ask;
 
@@ -896,8 +1204,15 @@ function isUnderDeniedPrefix(norm: string, prefixEntry: string): boolean {
  * отдельный слой: файловый тул `isSymlinkEscape`).
  */
 function pathVariants(norm: string): string[] {
+  const variants: string[] = [];
   const real = resolveRealPath(norm);
-  return real !== null && real !== norm ? [norm, real] : [norm];
+  if (real !== null && real !== norm) variants.push(norm, real);
+  else variants.push(norm);
+  // `/proc/<pid|self>/root/<path>` и `/cwd/<path>` — тот же файл, что `<path>`
+  // (realpath часто недоступен): проверяем алиас теми же deny/approval.
+  const procRoot = /^\/proc\/(?:\d+|self)\/(?:root|cwd)(\/.+)$/.exec(norm);
+  if (procRoot) variants.push(normalize(procRoot[1]!));
+  return variants;
 }
 
 /** Пустой набор биндингов (когда команда их не задаёт). */
@@ -940,7 +1255,7 @@ const GLOB_READDIR_LIMIT = 2000;
  * Чтение имён каталога с лимитом через `opendirSync` (не грузит весь каталог
  * синхронно). Больше `limit` записей — `null` (дальше обычный `ask`).
  */
-function readDirLimited(dir: string, limit: number): string[] | null {
+function readDirLimited(dir: string, limit: number): string[] | 'too-many' | null {
   let handle: Dir | undefined;
   try {
     handle = opendirSync(dir);
@@ -949,7 +1264,7 @@ function readDirLimited(dir: string, limit: number): string[] | null {
       const entry = handle.readSync();
       if (entry === null) break;
       names.push(entry.name);
-      if (names.length > limit) return null;
+      if (names.length > limit) return 'too-many';
     }
     return names;
   } catch {
@@ -1000,34 +1315,45 @@ function evaluateWorkspaceGlob(
   deniedPrefixes: readonly string[],
 ): WorkspaceGlobEvaluation {
   if (/[$`]/.test(token)) return { kind: 'skip' };
+  if (token.search(GLOB_CHARS_RE) === -1) return { kind: 'skip' };
   const lastSlash = token.lastIndexOf('/');
-  if (lastSlash === -1) return { kind: 'skip' };
-  if (token.search(GLOB_CHARS_RE) === -1 || token.search(GLOB_CHARS_RE) < lastSlash) {
-    return { kind: 'skip' };
+  const bare = lastSlash === -1;
+  let dir: string;
+  let pattern: string;
+  if (bare) {
+    // `*`, `*.ts` — совпадения в рабочем каталоге (H5).
+    dir = cwd;
+    pattern = token;
+  } else {
+    // Только glob в последнем компоненте (`dir/*.srl`).
+    if (token.search(GLOB_CHARS_RE) < lastSlash) return { kind: 'skip' };
+    if (token.split('/').includes('..')) return { kind: 'skip' };
+    const dirToken = lastSlash === 0 ? '/' : token.slice(0, lastSlash);
+    const resolved = tryResolvePath(dirToken, cwd, env);
+    if (!resolved || resolved.source !== 'literal') return { kind: 'skip' };
+    dir = resolved.path;
+    // Литеральный каталог обязан быть внутри периметра (realpath обязателен).
+    if (resolveRealPath(dir) === null || !isInsideRoots(dir, roots)) return { kind: 'skip' };
+    pattern = token.slice(lastSlash + 1);
   }
-  const components = token.split('/');
-  if (components.includes('..')) return { kind: 'skip' };
-
-  const dirToken = lastSlash === 0 ? '/' : token.slice(0, lastSlash);
-  const resolved = tryResolvePath(dirToken, cwd, env);
-  if (!resolved || resolved.source !== 'literal') return { kind: 'skip' };
-  const dir = resolved.path;
-  // Литеральный каталог обязан быть внутри периметра (realpath обязателен).
-  if (resolveRealPath(dir) === null || !isInsideRoots(dir, roots)) return { kind: 'skip' };
-
-  const pattern = token.slice(lastSlash + 1);
   if (pattern === '') return { kind: 'skip' };
+
   const names = readDirLimited(dir, GLOB_READDIR_LIMIT);
-  if (names === null) return { kind: 'skip' };
+  if (names === 'too-many') return { kind: 'result', result: askForDynamic(token) };
+  if (names === null) return bare ? { kind: 'safe' } : { kind: 'skip' };
+  if (names.length === 0) return bare ? { kind: 'safe' } : { kind: 'skip' };
   const matches = names.filter((name) => globMatch(pattern, name));
-  if (matches.length === 0) return { kind: 'skip' };
+  if (matches.length === 0) return bare ? { kind: 'safe' } : { kind: 'skip' };
 
   // Deny приоритетнее ask: сначала все deny и проверка периметра, затем approval.
   let uncertain = false;
   let approval: ShellCheckResult | null = null;
   for (const name of matches) {
     const path = join(dir, name);
-    if (resolveRealPath(path) === null || !isInsideRoots(path, roots)) {
+    const real = resolveRealPath(path);
+    if (real === null || !isInsideRoots(path, roots)) {
+      // Симлинк наружу/неразрешимый путь: bare-glob нельзя молча пропускать.
+      if (bare) return { kind: 'result', result: askForDynamic(token) };
       uncertain = true;
       continue;
     }
@@ -1066,6 +1392,603 @@ function isSinglePathValue(value: string): boolean {
   return value !== '' && !UNSAFE_EXPANDED_VALUE_RE.test(value);
 }
 
+/** ask на динамический/непроверяемый токен. */
+function askForDynamic(token: string): ShellCheckResult {
+  return {
+    action: 'ask',
+    reason: sm('shellguard.ask_path', { path: token }),
+    matchedRule: 'shell-policy.approve',
+    deniedPath: token,
+    messageId: 'ask-protected-path',
+    params: { path: token },
+  };
+}
+
+/** Вхождение в периметр: realpath — если путь существует, иначе лексически. */
+function isInsideRootsLexicalFallback(path: string, roots: readonly string[]): boolean {
+  const real = resolveRealPath(path);
+  return roots.some((root) => {
+    if (!isLexicallyInside(root, path)) return false;
+    if (real === null) return true;
+    const realRoot = resolveRealPath(root);
+    return realRoot !== null && isLexicallyInside(realRoot, real);
+  });
+}
+
+/** Рекурсивная проверка вложенной команды (с общими биндингами и roots). */
+function nestedCheck(
+  code: string,
+  cwd: string,
+  policy: ShellPolicy,
+  deniedPaths: string[],
+  approvalPaths: string[],
+  deniedPrefixes: string[],
+  env: PathResolveEnv | undefined,
+  bindings: ReadonlyMap<string, ShellBinding> | undefined,
+  roots: readonly string[],
+): ShellCheckResult | null {
+  let ask: ShellCheckResult | null = null;
+  for (const segment of splitShellSegments(code)) {
+    const r = checkShellSegment(
+      segment, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots,
+    );
+    if (!r) continue;
+    if (r.action === 'deny') return r;
+    ask ??= r;
+  }
+  return ask;
+}
+
+/** `awk/gawk/mawk`: `system(...)`, `getline`/pipe/redirect, `-f` (программа в файле). */
+function checkAwkProgram(
+  tokens: string[],
+  cwd: string,
+  policy: ShellPolicy,
+  deniedPaths: string[],
+  approvalPaths: string[],
+  deniedPrefixes: string[],
+  env: PathResolveEnv | undefined,
+  bindings: ReadonlyMap<string, ShellBinding> | undefined,
+  roots: readonly string[],
+): ShellCheckResult | null {
+  const idx = commandIndex(tokens);
+  if (idx < 0 || !AWK_FAMILY.has(tokens[idx]!)) return null;
+  let j = idx + 1;
+  while (j < tokens.length) {
+    const t = tokens[j]!;
+    if (t === '-f' || t === '--file') return askForDynamic(tokens.slice(j).join(' '));
+    if (AWK_VALUE_FLAGS.has(t)) {
+      j += 2;
+      continue;
+    }
+    if (t.startsWith('-') && t.length > 1) {
+      j += 1;
+      continue;
+    }
+    break;
+  }
+  const program = tokens[j];
+  if (program === undefined) return null;
+  // Внешние эффекты, которые нельзя проверить статически, — fail-closed.
+  if (/\bgetline\b/.test(program) || program.includes('|')
+    || /\bprint(?:f)?\s*>/.test(program)) {
+    return askForDynamic(program);
+  }
+  const systemRe = /system\s*\(\s*(["'])([\s\S]*?)\1\s*\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = systemRe.exec(program)) !== null) {
+    const code = match[2]!;
+    const r = nestedCheck(code, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots);
+    if (r) return r;
+  }
+  return null;
+}
+
+/** `find ... -exec/-execdir <cmd>`: рекурсивно проверяет исполняемую команду. */
+function checkFindExec(
+  tokens: string[],
+  cwd: string,
+  policy: ShellPolicy,
+  deniedPaths: string[],
+  approvalPaths: string[],
+  deniedPrefixes: string[],
+  env: PathResolveEnv | undefined,
+  bindings: ReadonlyMap<string, ShellBinding> | undefined,
+  roots: readonly string[],
+): ShellCheckResult | null {
+  const idx = commandIndex(tokens);
+  if (idx < 0 || tokens[idx] !== 'find') return null;
+  for (let i = idx + 1; i < tokens.length; i++) {
+    if (tokens[i] !== '-exec' && tokens[i] !== '-execdir') continue;
+    const execTokens: string[] = [];
+    for (let j = i + 1; j < tokens.length; j++) {
+      const t = tokens[j]!;
+      if (t === ';' || t === '+') break;
+      execTokens.push(t === '{}' ? '__FIND_PATH__' : t);
+    }
+    if (execTokens.length === 0) continue;
+    const joined = joinShellTokens(execTokens);
+    const code = extractWrappedCommand(joined, execTokens) ?? joined;
+    const r = nestedCheck(code, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots);
+    if (r) return r;
+  }
+  return null;
+}
+
+/** Содержит ли код интерпретатора защищённый путь/маркер (в т.ч. внутри вызова). */
+function codeTouchesProtectedPath(code: string, policy: ShellPolicy): boolean {
+  if (tokenTouchesProtectedMarker(code, policy)) return true;
+  const entries = [...(policy.deniedPaths ?? []), ...(policy.deniedPrefixes ?? [])];
+  for (const entry of entries) {
+    if (entry.includes('$') || entry.includes('{')) continue;
+    const expanded = expandHome(entry);
+    if (code.includes(entry) || code.includes(expanded)) return true;
+  }
+  return false;
+}
+
+/** `python|node|perl|ruby|php -c/-e <code>`: маркер защищённого пути → deny. */
+function checkInterpreterCode(
+  tokens: string[],
+  policy: ShellPolicy,
+): ShellCheckResult | null {
+  const idx = commandIndex(tokens);
+  if (idx < 0 || !INTERPRETER_COMMANDS.has(tokens[idx]!)) return null;
+  for (let i = idx + 1; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (t !== '-c' && t !== '-e') continue;
+    const code = tokens[i + 1];
+    if (code !== undefined && codeTouchesProtectedPath(code, policy)) {
+      return deniedByDynamicToken(code);
+    }
+  }
+  return null;
+}
+
+/**
+ * `find` с `-delete/-exec/-execdir`: стартовые пути вне периметра → ask,
+ * стартовый путь под deniedPaths/deniedPrefixes → deny (удаление чужого).
+ */
+function checkFindMutationStarts(
+  tokens: string[],
+  cwd: string,
+  env: PathResolveEnv | undefined,
+  roots: readonly string[],
+  deniedPaths: readonly string[],
+  approvalPaths: readonly string[],
+  deniedPrefixes: readonly string[],
+): ShellCheckResult | null {
+  const idx = commandIndex(tokens);
+  if (idx < 0 || tokens[idx] !== 'find') return null;
+  if (!tokens.some((t) => t === '-delete' || t === '-exec' || t === '-execdir')) return null;
+  const starts: string[] = [];
+  for (let i = idx + 1; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (t === '(' || t === '!' || t === ')') break;
+    if (t.startsWith('-') && t.length > 1) break;
+    starts.push(t);
+  }
+  for (const start of starts) {
+    const resolved = tryResolvePath(start, cwd, env);
+    if (!resolved || resolved.source !== 'literal') continue;
+    const classified = classifyResolvedPath(normalize(resolved.path), deniedPaths, approvalPaths, deniedPrefixes);
+    if (classified?.kind === 'deny') return classified.result;
+  }
+  for (const start of starts) {
+    const resolved = tryResolvePath(start, cwd, env);
+    if (!resolved || resolved.source !== 'literal') {
+      // Динамический стартовый путь (`$(pwd)/..`, backtick) — fail-closed ask.
+      if (hasUnresolvedDynamic(start)) return askForDynamic(start);
+      continue;
+    }
+    if (!isInsideRootsLexicalFallback(resolved.path, roots)) return askForDynamic(start);
+  }
+  return null;
+}
+
+/**
+ * Общий скан аргументов встроенных исполнителей (F): токены-команды/код
+ * проверяются рекурсивно; маркер защищённого пути → deny. Awk/find обрабатываются
+ * отдельно (их программа/шаблоны — не команда).
+ */
+function checkEmbeddedExecutorArgs(
+  tokens: string[],
+  cwd: string,
+  policy: ShellPolicy,
+  roots: readonly string[],
+  depth: number,
+  bindings?: ReadonlyMap<string, ShellBinding>,
+): ShellCheckResult | null {
+  const idx = commandIndex(tokens);
+  if (idx < 0) return null;
+  const cmd = tokens[idx]!;
+  if (!isEmbeddedExecutor(cmd)) return null;
+  const base = shellBasename(cmd);
+  if (AWK_FAMILY.has(base) || base === 'find') return null;
+
+  let ask: ShellCheckResult | null = null;
+  // Динамическая «команда» перед code-флагом (`exec $C -c '…'`) — семантика
+  // флага неизвестна: не денним по маркеру, wrapper-рекурсия даст ask.
+  const hasDynamicCommandishBefore = (limit: number): boolean => {
+    for (let k = idx + 1; k < limit; k++) {
+      const tk = tokens[k]!;
+      if (tk.startsWith('-') && tk.length > 1) continue;
+      if (isCodeFlagToken(tokens[k - 1] ?? '')) continue;
+      if (hasUnresolvedDynamic(tk)) return true;
+    }
+    return false;
+  };
+  for (let i = idx + 1; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (REDIRECT_OPERATOR_TOKENS.has(token)) continue;
+    // Слитное перенаправление (`</dev/tcp/…`) уже проверяется wrapper-рекурсией
+    // и fallback-разбором цели — без биндингов даст ложный ask.
+    if (parseRedirectToken(token) !== null) continue;
+    const prev = tokens[i - 1] ?? '';
+    let candidate: string | null = null;
+    // `--eval=…`, `--command=…`, `--print=…`, `--split-string=…`
+    const longEq = /^--(?:eval|command|print|split-string)=(.+)$/.exec(token);
+    if (longEq) {
+      candidate = longEq[1]!;
+    } else if (token.startsWith('-') && token.length > 1) {
+      // Флаг/опция: marker/путь внутри значения → deny; приклеенный код
+      // (`-c<code>`, `-S…`, `-E…`, `script -qec<code>`, `-oX=<code>`) — рекурсия.
+      if (codeTouchesProtectedPath(token, policy)) return deniedByDynamicToken(token);
+      const gluedShort = /^-([ceprpSE])(.+)$/.exec(token);
+      const gluedCluster = /^-[A-Za-z]*c(.+)$/.exec(token);
+      const eqValue = /^--?[^=]+=(.+)$/.exec(token);
+      if (gluedShort && !token.startsWith('--')) candidate = gluedShort[2]!;
+      else if (gluedCluster) candidate = gluedCluster[1]!;
+      else if (eqValue) {
+        const value = eqValue[1]!;
+        if (/\s/.test(value) || /[;|&<>()]/.test(value) || codeTouchesProtectedPath(value, policy)) {
+          candidate = value;
+        }
+      }
+      if (candidate === null) continue;
+    } else if (isCodeFlagToken(prev) || /^-[A-Za-z]*c$/.test(prev)) {
+      candidate = token;
+    } else if (/\s/.test(token) || /[;|&<>()]/.test(token)) {
+      candidate = token;
+    }
+    // Маркер сам по себе не делает обычный файловый операнд «кодом»
+    // (`timeout 20 ansible-vault view secrets/credentials.yml`), но если токен
+    // уже признан кодом/командой — проверяется ниже.
+    if (candidate === null || candidate === '') continue;
+    if (hasDynamicCommandishBefore(i)) continue;
+
+    if (codeTouchesProtectedPath(candidate, policy)) return deniedByDynamicToken(candidate);
+    if (depth >= MAX_EMBEDDED_DEPTH) {
+      ask ??= askForDynamic(candidate);
+      continue;
+    }
+    const result = checkShellCommand(candidate, cwd, policy, {
+      allowedRoots: roots,
+      depth: depth + 1,
+      ...(bindings ? { bindings } : {}),
+    });
+    if (result.action === 'deny') return result;
+    if (result.action === 'ask') ask ??= result;
+  }
+  return ask;
+}
+
+/**
+ * Снимает shell-префиксы, не меняющие команду: `!`, `time [-p]`, `{`, `(`,
+ * `if/while/until/for`, `case … in`, а также ведущие `then/do/else/elif/fi/
+ * done/esac/}`/`)` и хвостовые `}`/`)`. Нужно, чтобы `! bash -c …`, `time sh -c …`,
+ * `{ sh -c …; }`, `( sh -c … )` проверялись как вложенная команда (N1).
+ */
+function stripShellPrefixes(input: string[]): string[] {
+  const arr = input.slice();
+  const shift = (): void => { arr.shift(); };
+  let strippedParen = false;
+  let strippedBrace = false;
+  for (;;) {
+    if (arr.length === 0) return arr;
+    const first = arr[0]!;
+    if (first === '!') { shift(); continue; }
+    if (first === 'time') {
+      shift();
+      while (arr[0] === '-p' || arr[0] === '--') shift();
+      continue;
+    }
+    if (first === '{') {
+      strippedBrace = true;
+      shift();
+      continue;
+    }
+    if (first === '(') {
+      strippedParen = true;
+      shift();
+      continue;
+    }
+    if (first === 'then' || first === 'do' || first === 'else'
+      || first === 'elif' || first === 'fi' || first === 'done' || first === 'esac'
+      || first === '}') {
+      shift();
+      continue;
+    }
+    if (first === 'if' || first === 'while' || first === 'until' || first === 'for') {
+      shift();
+      continue;
+    }
+    if (first === 'case') {
+      shift();
+      while (arr.length > 0 && arr[0] !== 'in') shift();
+      if (arr[0] === 'in') shift();
+      continue;
+    }
+    // Слитное `(`/`!` в начале слова: `(cd /tmp`, `!bash` (не `$(`).
+    if (first.startsWith('(') && !first.startsWith('$(')) {
+      strippedParen = true;
+      arr[0] = first.slice(1);
+      if (arr[0] === '') shift();
+      continue;
+    }
+    if (first.startsWith('!') && first !== '!') {
+      arr[0] = first.slice(1);
+      if (arr[0] === '') shift();
+      continue;
+    }
+    break;
+  }
+  // Хвостовые закрывающие срезаем только для реально снятой пары:
+  // `)`, `}` — если снималась `(`/`{`; keywords — всегда.
+  for (;;) {
+    if (arr.length === 0) break;
+    const last = arr[arr.length - 1]!;
+    if (last === 'fi' || last === 'done' || last === 'esac') {
+      arr.pop();
+      continue;
+    }
+    if (last === ')' && strippedParen) {
+      arr.pop();
+      continue;
+    }
+    if (last === '}' && strippedBrace) {
+      arr.pop();
+      continue;
+    }
+    if (strippedParen && last.endsWith(')') && !last.endsWith('))') && last.length > 1) {
+      arr[arr.length - 1] = last.slice(0, -1);
+      continue;
+    }
+    break;
+  }
+  return arr;
+}
+
+/** Значение code-флага инструмента (`git -c`, `tar --to-command`, `rsync -e`). */
+function checkToolCodeArgs(
+  tokens: string[],
+  cwd: string,
+  policy: ShellPolicy,
+  roots: readonly string[],
+  depth: number,
+  bindings?: ReadonlyMap<string, ShellBinding>,
+): ShellCheckResult | null {
+  const idx = commandIndex(tokens);
+  if (idx < 0) return null;
+  const cmd = shellBasename(tokens[idx]!);
+  const values: string[] = [];
+  if (cmd === 'git') {
+    for (let i = idx + 1; i < tokens.length; i++) {
+      const t = tokens[i]!;
+      if (t === '-c' && tokens[i + 1] !== undefined) {
+        const pair = tokens[i + 1]!;
+        const eq = pair.indexOf('=');
+        if (eq >= 0) values.push(pair.slice(eq + 1));
+        i++;
+      } else if (t.startsWith('-c') && t.includes('=')) {
+        const eq = t.indexOf('=');
+        values.push(t.slice(eq + 1));
+      }
+    }
+  } else if (cmd === 'tar') {
+    for (let i = idx + 1; i < tokens.length; i++) {
+      const t = tokens[i]!;
+      if (t === '--to-command' && tokens[i + 1] !== undefined) {
+        values.push(tokens[i + 1]!);
+        i++;
+      } else if (t.startsWith('--to-command=')) {
+        values.push(t.slice('--to-command='.length));
+      }
+    }
+  } else if (cmd === 'rsync') {
+    for (let i = idx + 1; i < tokens.length; i++) {
+      const t = tokens[i]!;
+      if ((t === '-e' || t === '--rsh') && tokens[i + 1] !== undefined) {
+        values.push(tokens[i + 1]!);
+        i++;
+      } else if (t.startsWith('--rsh=')) {
+        values.push(t.slice('--rsh='.length));
+      } else if (t.startsWith('-e') && t.length > 2) {
+        values.push(t.slice(2));
+      }
+    }
+  }
+  if (values.length === 0) return null;
+  let ask: ShellCheckResult | null = null;
+  for (const value of values) {
+    if (value === '') continue;
+    if (codeTouchesProtectedPath(value, policy)) return deniedByDynamicToken(value);
+    if (!/\s/.test(value) && !/[;|&<>()]/.test(value) && !value.startsWith('-')) continue;
+    if (depth >= MAX_EMBEDDED_DEPTH) {
+      ask ??= askForDynamic(value);
+      continue;
+    }
+    const result = checkShellCommand(value, cwd, policy, {
+      allowedRoots: roots,
+      depth: depth + 1,
+      ...(bindings ? { bindings } : {}),
+    });
+    if (result.action === 'deny') return result;
+    if (result.action === 'ask') ask ??= result;
+  }
+  return ask;
+}
+
+/**
+ * Оценка cwd для вложенной команды обёртки: `env -C`, `chroot <root>`,
+ * `sudo -D/--chdir` (N3). `null` — cwd не меняется.
+ */
+function wrapperCwd(tokens: string[], cwd: string, env: PathResolveEnv | undefined): string | null {
+  const idx = commandIndex(tokens);
+  if (idx < 0) return null;
+  const cmd = shellBasename(tokens[idx]!);
+  const resolve = (value: string | undefined): string | null => {
+    if (value === undefined || value === '') return null;
+    const resolved = tryResolvePath(value, cwd, env);
+    return resolved && resolved.source === 'literal' ? resolved.path : null;
+  };
+  if (cmd === 'env') {
+    for (let i = idx + 1; i < tokens.length; i++) {
+      const t = tokens[i]!;
+      if ((t === '-C' || t === '--chdir') && tokens[i + 1] !== undefined) return resolve(tokens[i + 1]);
+      if (t.startsWith('--chdir=')) return resolve(t.slice('--chdir='.length));
+      if (t.startsWith('-C') && t.length > 2) return resolve(t.slice(2));
+    }
+    return null;
+  }
+  if (cmd === 'sudo') {
+    for (let i = idx + 1; i < tokens.length; i++) {
+      const t = tokens[i]!;
+      if ((t === '-D' || t === '--chdir') && tokens[i + 1] !== undefined) return resolve(tokens[i + 1]);
+      if (t.startsWith('--chdir=')) return resolve(t.slice('--chdir='.length));
+    }
+    return null;
+  }
+  if (cmd === 'chroot') {
+    const j = skipWrapperOptions(tokens, idx + 1, CHROOT_VALUE_FLAGS);
+    return resolve(tokens[j]);
+  }
+  return null;
+}
+
+/** Результат вычисления cwd после `cd`/`pushd`. */
+type CdResolution =
+  | { cwd: string }
+  | { ask: true; target: string }
+  | null;
+
+/** cwd после `cd`/`pushd <literal>`; `ask` — цель нерезолвима (fail-closed). */
+function resolveCdCwd(
+  segment: string,
+  cwd: string,
+  env: PathResolveEnv | undefined,
+  bindings?: ReadonlyMap<string, ShellBinding>,
+): CdResolution {
+  const tokens = stripShellPrefixes(tokenizeCommand(segment));
+  const idx = commandIndex(tokens);
+  if (idx < 0) return null;
+  const cmd = tokens[idx]!;
+  if (cmd !== 'cd' && cmd !== 'pushd') return null;
+  let j = idx + 1;
+  while (j < tokens.length && tokens[j]!.startsWith('-') && tokens[j] !== '-') j += 1;
+  const arg = tokens[j];
+  if (arg === undefined) return { cwd: expandHome('~') };
+  if (arg === '-') return { cwd };
+  if (hasUnresolvedDynamic(arg)) {
+    // `$D` при известном биндинге раскрываем; `$(...)`/backtick/неизвестная — ask.
+    const values = expandToken(arg, bindings ?? EMPTY_BINDINGS);
+    if (values !== null && values.length === 1) {
+      const resolved = tryResolvePath(values[0]!, cwd, env);
+      if (resolved && resolved.source === 'literal') return { cwd: resolved.path };
+    }
+    return { ask: true, target: arg };
+  }
+  const resolved = tryResolvePath(arg, cwd, env);
+  if (resolved && resolved.source === 'literal') return { cwd: resolved.path };
+  return { ask: true, target: arg };
+}
+
+/** Исполнитель, который может читать код/команду из stdin (heredoc/herestring). */
+function isStdinCodeExecutor(cmd: string): boolean {
+  const base = shellBasename(cmd);
+  if (SHELL_COMMANDS.has(base)) return true;
+  if (AWK_FAMILY.has(base)) return true;
+  if (INTERPRETER_COMMANDS.has(base)) return true;
+  return EMBEDDED_VERSIONED_PREFIXES.some((prefix) => {
+    if (!base.startsWith(prefix)) return false;
+    return /^[0-9.]+$/.test(base.slice(prefix.length));
+  });
+}
+
+/**
+ * Базовая команда сегмента (после снятия обёрток) — для проверки heredoc.
+ * Строковое представление вложенной команды от `extractWrappedCommand`
+ * безопасно для определения первого токена: heredoc-операторы не меняют его.
+ */
+function baseCommandForStdin(segment: string, tokens: string[]): string {
+  const inner = extractWrappedCommand(segment, tokens);
+  if (inner === null) {
+    const idx = commandIndex(tokens);
+    return idx >= 0 ? tokens[idx]! : '';
+  }
+  const innerTokens = tokenizeCommand(inner);
+  const idx = commandIndex(innerTokens);
+  return idx >= 0 ? innerTokens[idx]! : '';
+}
+
+/** Ищет heredoc-маркер (`<<`/`<<-`, не `<<<`) вне кавычек; возвращает делимитер. */
+function findHeredocDelimiter(line: string): { delimiter: string; stripTabs: boolean } | null {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < line.length - 1; i++) {
+    const ch = line[i]!;
+    if (ch === '\\' && !inSingle) { i++; continue; }
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
+    if (inSingle || inDouble) continue;
+    if (ch !== '<' || line[i + 1] !== '<') continue;
+    if (line[i + 2] === '<') return null; // herestring — тела нет
+    let j = i + 2;
+    let stripTabs = false;
+    if (line[j] === '-') { stripTabs = true; j++; }
+    while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;
+    let delimiter = '';
+    if (line[j] === "'" || line[j] === '"') {
+      const quote = line[j]!;
+      j++;
+      while (j < line.length && line[j] !== quote) { delimiter += line[j]; j++; }
+    } else {
+      while (j < line.length && /[A-Za-z0-9_]/.test(line[j]!)) { delimiter += line[j]; j++; }
+    }
+    return delimiter === '' ? null : { delimiter, stripTabs };
+  }
+  return null;
+}
+
+/**
+ * Удаляет тела heredoc **только для shell/интерпретаторов**, читающих код из
+ * stdin (их содержимое не анализируется — вместо этого даётся ask). Для прочих
+ * команд (`cat <<EOF`) поведение прежнее: тело остаётся в разборе (интерполяция
+ * переменных и т.п.).
+ */
+function stripHeredocBodies(command: string): string {
+  if (!command.includes('<<')) return command;
+  const lines = command.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    out.push(line);
+    const marker = findHeredocDelimiter(line);
+    if (!marker) continue;
+    // Только если heredoc-команда — shell/интерпретатор/awk.
+    const lineTokens = stripShellPrefixes(tokenizeCommand(line));
+    const base = baseCommandForStdin(line, lineTokens);
+    if (base === '' || !isStdinCodeExecutor(base)) continue;
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const candidate = marker.stripTabs ? lines[j]!.replace(/^\t+/, '') : lines[j]!;
+      if (candidate === marker.delimiter) break;
+    }
+    i = j; // пропускаем тело и строку-делимитер
+  }
+  return out.join('\n');
+}
+
 /** Проверяет один сегмент команды; null — сегмент не нарушает политику. */
 function checkShellSegment(
   segment: string,
@@ -1077,8 +2000,9 @@ function checkShellSegment(
   env?: PathResolveEnv,
   bindings?: ReadonlyMap<string, ShellBinding>,
   roots: readonly string[] = [cwd],
+  depth = 0,
 ): ShellCheckResult | null {
-  const tokens = tokenizeCommand(segment);
+  const tokens = stripShellPrefixes(tokenizeCommand(segment));
   if (tokens.length === 0) return null;
 
   // 1. Запрещённые префиксы команд — матчатся в ЛЮБОМ сегменте (B2).
@@ -1097,24 +2021,59 @@ function checkShellSegment(
   // вложенную команду (B4). Ask из вложенной откладываем: deny внешнего
   // сегмента приоритетнее (`sh -c 'cat ~/.ssh/config' /etc/passwd`).
   let deferredAsk: ShellCheckResult | null = null;
+  // Код на stdin (`<<`, `<<-`, `<<<`): содержимое heredoc/herestring не
+  // анализируется, поэтому для shell/интерпретаторов/awk — fail-closed ask.
+  // `cat <<EOF`, `grep <<< "$x"` не трогаем (команда не исполняет stdin-код).
+  const hasHeredoc = segment.includes('<<');
+  const heredocBase = hasHeredoc ? baseCommandForStdin(segment, tokens) : '';
+  const heredocCode = hasHeredoc && heredocBase !== '' && isStdinCodeExecutor(heredocBase);
+  if (heredocCode) return askForDynamic('<<');
+  const heredocData = hasHeredoc && !heredocCode;
   const inner = extractWrappedCommand(segment, tokens);
   if (inner !== null) {
+    const innerCwd = wrapperCwd(tokens, cwd, env) ?? cwd;
     const innerSegments = splitShellSegments(inner);
     for (const s of innerSegments) {
-      const r = checkShellSegment(s, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots);
+      const r = checkShellSegment(s, innerCwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots, depth);
       if (!r) continue;
       if (r.action === 'deny') return r;
       deferredAsk ??= r;
     }
   }
 
+  // 1c. Встроенные команды/код: awk system(...), find -exec, интерпретаторы.
+  const embedded = checkAwkProgram(tokens, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots)
+    ?? checkFindExec(tokens, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env, bindings, roots)
+    ?? checkInterpreterCode(tokens, policy);
+  if (embedded) {
+    if (embedded.action === 'deny') return embedded;
+    deferredAsk ??= embedded;
+  }
+  // 1d. Общий скан аргументов встроенных исполнителей (F).
+  const executorArgs = checkEmbeddedExecutorArgs(tokens, cwd, policy, roots, depth, bindings);
+  if (executorArgs) {
+    if (executorArgs.action === 'deny') return executorArgs;
+    deferredAsk ??= executorArgs;
+  }
+  // 1e. Код в опциях инструментов (`git -c`, `tar --to-command`, `rsync -e`).
+  const toolCode = checkToolCodeArgs(tokens, cwd, policy, roots, depth, bindings);
+  if (toolCode) {
+    if (toolCode.action === 'deny') return toolCode;
+    deferredAsk ??= toolCode;
+  }
+
   // 2. Неразрешимая динамика ($VAR, ${VAR}, glob, $()) — fail-closed:
   // литеральные фрагменты токена проверяем по маркерам защищённых путей.
   // `cat $SYNTH_DATA_DIR/secrets/master.key`, `$USER/.ssh/id_rsa`,
   // `/data/secrets/*.key`, `$(pwd)/.ssh/x` → deny (раньше проходили молча).
+  // Brace-expansion применяется до маркерной проверки (`$X/shad{ow,}`).
   for (const token of tokens) {
     if (!hasUnresolvedDynamic(token)) continue;
-    if (tokenTouchesProtectedMarker(token, policy)) return deniedByDynamicToken(token);
+    const brace = expandBraces(token);
+    const variants = brace === null || brace === 'literal' ? [token] : brace;
+    if (variants.some((variant) => tokenTouchesProtectedMarker(variant, policy))) {
+      return deniedByDynamicToken(token);
+    }
   }
 
   // 2b. Присваивания `NAME=value`: значение тоже путь и может обойти проверку
@@ -1144,6 +2103,13 @@ function checkShellSegment(
   // 3. Литеральные аргументы: deny (точный путь/префикс) приоритетнее ask;
   // approvalPaths — исключение из deniedPrefixes (`~/.ssh/config` → ask).
   const asks: ShellCheckResult[] = [];
+  const findStarts = checkFindMutationStarts(
+    tokens, cwd, env, roots, deniedPaths, approvalPaths, deniedPrefixes,
+  );
+  if (findStarts) {
+    if (findStarts.action === 'deny') return findStarts;
+    asks.push(findStarts);
+  }
   for (const { resolved } of extracted) {
     if (resolved.source !== 'literal') continue;
     const classified = classifyResolvedPath(
@@ -1199,6 +2165,8 @@ function checkShellSegment(
   // что именно запустится, неизвестно (`C='rm -rf /'; $C`). Ведущие
   // присваивания (`PATH=… ls`) именем команды не считаются.
   const commandWord = commandToken(tokens);
+  const testContext = commandWord === '[' || commandWord === '[['
+    || commandWord === 'test' || commandWord === '((' || commandWord === '(((';
   if (/[$`]/.test(commandWord)) {
     asks.push({
       action: 'ask',
@@ -1216,14 +2184,22 @@ function checkShellSegment(
   // и `origin/master` путями не считаются. Раскрытые значения (4) пропускаем;
   // однокомпонентный glob внутри периметра проверяется по фактическим
   // совпадениям (`evaluateWorkspaceGlob`), остальное — `ask`.
+  const unsupportedBraces = new Set(tokens.filter((token) => expandBraces(token) === null));
   for (let i = 0; i < extracted.length; i++) {
     const { token, resolved } = extracted[i]!;
     if (resolved.source === 'literal') continue;
     if (resolvedDynamic.has(i)) continue;
-    // Слитное перенаправление (`</dev/tcp/…`, `>/file`): сам оператор не путь —
-    // цель уже добавлена отдельным операндом (`extractCommandPathTokens`).
+    // `$VAR` в тест-контексте (`[ … ]`, `[[ … ]]`, `test`, `(( … ))`) или в
+    // heredoc/herestring-данных (`grep <<< "$x"`) — значение, а не путь.
+    if ((testContext || heredocData) && /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(token)) continue;
+    // Слитное перенаправление: сам оператор не путь — цель добавлена операндом.
     if (parseRedirectToken(token) !== null) continue;
-    if (!isPathLikeTarget(token)) continue;
+    if (unsupportedBraces.has(token)) {
+      asks.push(askForDynamic(token));
+      continue;
+    }
+    const isGlob = GLOB_CHARS_RE.test(token);
+    if (!isGlob && !isPathLikeTarget(token)) continue;
     const glob = evaluateWorkspaceGlob(
       token, cwd, env, roots, deniedPaths, approvalPaths, deniedPrefixes,
     );
@@ -1233,14 +2209,8 @@ function checkShellSegment(
       continue;
     }
     if (glob.kind === 'safe') continue;
-    asks.push({
-      action: 'ask',
-      reason: sm('shellguard.ask_path', { path: token }),
-      matchedRule: 'shell-policy.approve',
-      deniedPath: token,
-      messageId: 'ask-protected-path',
-      params: { path: token },
-    });
+    if (!isPathLikeTarget(token)) continue;
+    asks.push(askForDynamic(token));
   }
 
   if (asks.length > 0) return asks[0]!;
