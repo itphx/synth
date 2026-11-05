@@ -5,6 +5,8 @@ import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { InstructionsInfo, InstructionsInfoResolver } from '../../engine/context/instructions.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
+import { isRemoteRef, toLocalId, toRemoteRef, remoteErrorToHttp } from '../../remote/aggregate.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -20,6 +22,8 @@ export interface ContextRoutesMessages {
   forbiddenSession: string;
   forbiddenProject: string;
   internal: string;
+  /** `remote:`-сущность запрошена без подключённого гибрида (502). */
+  remoteUnavailable: string;
 }
 
 const DEFAULT_MESSAGES: ContextRoutesMessages = {
@@ -29,6 +33,7 @@ const DEFAULT_MESSAGES: ContextRoutesMessages = {
   forbiddenSession: 'Недостаточно прав для доступа к сессии',
   forbiddenProject: 'Недостаточно прав для доступа к проекту',
   internal: 'Хранилище не настроено',
+  remoteUnavailable: 'Гибридный режим не настроен',
 };
 
 export interface ContextRoutesOptions {
@@ -56,6 +61,11 @@ export interface ContextRoutesOptions {
   localOwnerResolver?: LocalOwnerResolver;
   /** Локализованные сообщения (backend — `t()`). */
   messages?: (c: Context) => ContextRoutesMessages;
+  /**
+   * Гибрид (ADR-042): клиент удалённого backend. Передан — `remote:`-сущности
+   * форвардятся на сервер; не передан (managed backend) — remote-ветки выключены.
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
 }
 
 /**
@@ -97,6 +107,52 @@ export function createContextRoutes(auth: AuthKit, opts: ContextRoutesOptions): 
   app.get('/instructions', auth.requireAuth, async (c) => {
     const sessionId = c.req.query('session_id');
     const projectId = c.req.query('project_id');
+
+    // Гибрид (ADR-042/ADR-069): `remote:`-сущность живёт на сервере — запрос
+    // форвардится как есть (id — без префикса), ответ возвращается с `remote:`-
+    // ссылкой. Локальная сущность (даже при подключённом гибриде) резолвится
+    // локальным core.
+    const remoteScope: 'session' | 'project' | null =
+      sessionId && isRemoteRef(sessionId)
+        ? 'session'
+        : projectId && isRemoteRef(projectId)
+          ? 'project'
+          : null;
+    if (remoteScope) {
+      let client: RemoteBackendClient | null;
+      try {
+        client = opts.getRemoteClient?.() ?? null;
+      } catch {
+        client = null;
+      }
+      if (!client) {
+        return c.json(
+          { error: { code: 'REMOTE_UNAVAILABLE', message: messages(c).remoteUnavailable } },
+          502,
+        );
+      }
+      const localId = toLocalId(remoteScope === 'session' ? sessionId! : projectId!);
+      const idKey = remoteScope === 'session' ? 'session_id' : 'project_id';
+      try {
+        const data = await client.request<Record<string, unknown>>(
+          'GET',
+          `/api/v2/context/instructions?${idKey}=${encodeURIComponent(localId)}`,
+        );
+        const remoteId = typeof data[idKey] === 'string' ? (data[idKey] as string) : localId;
+        data[idKey] = toRemoteRef(remoteId);
+        return c.json(data);
+      } catch (err) {
+        const http = remoteErrorToHttp(err);
+        if (http) {
+          return c.json(
+            { error: { code: http.code, message: err instanceof Error ? err.message : String(err) } },
+            http.status as 400 | 401 | 403 | 404 | 409 | 500 | 502,
+          );
+        }
+        throw err;
+      }
+    }
+
     const userId = await resolveUserId(c);
 
     if (sessionId) {
@@ -111,9 +167,13 @@ export function createContextRoutes(auth: AuthKit, opts: ContextRoutesOptions): 
       const project = linkedProjectId && opts.projectStore
         ? await opts.projectStore.load(linkedProjectId).catch(() => null)
         : null;
-      const workspace = linkedProjectId && opts.resolveProjectWorkspace
-        ? await opts.resolveProjectWorkspace(linkedProjectId).catch(() => undefined)
-        : undefined;
+      // Рабочий каталог сессии — как у оркестратора: привязка к worktree
+      // (ADR-114) приоритетнее каталога проекта, иначе панель показывает не ту
+      // цепочку инструкций.
+      const workspace = session.worktree?.directory
+        ?? (linkedProjectId && opts.resolveProjectWorkspace
+          ? await opts.resolveProjectWorkspace(linkedProjectId).catch(() => undefined)
+          : undefined);
 
       const info: InstructionsInfo = await opts.resolveInstructions({
         workspace,

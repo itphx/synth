@@ -7,6 +7,7 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
+import { RemoteAuthExpiredError } from '../providers/exceptions.js';
 import type { LLMMessage, CancellationToken } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
@@ -73,12 +74,12 @@ class PartialContentFailingProvider extends BaseProvider {
 /** Провайдер с non-recoverable ошибкой авторизации (ретраи не выполняются). */
 class AuthFailingProvider extends BaseProvider {
   async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
-    throw new Error('401 Unauthorized');
+    throw new RemoteAuthExpiredError();
   }
 
   async *chatAsync(): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
     yield { content: '', isFinal: false, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
-    throw new Error('401 Unauthorized');
+    throw new RemoteAuthExpiredError();
   }
 
   getProviderName(): string {
@@ -299,7 +300,11 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     const assistants = session!.messages.filter((m) => m.role === MessageRole.ASSISTANT);
     expect(assistants).toHaveLength(1);
     expect(assistants[0]!.metadata?.status).toBe('error');
-    expect((assistants[0]!.metadata?.i18n as { key?: string } | undefined)).toBeUndefined();
+    // ADR-041: ключ «сессия истекла» приходит из formatLlmError (класс ошибки),
+    // а не из общей классификации auth_error.
+    expect((assistants[0]!.metadata?.i18n as { key?: string } | undefined)).toEqual({
+      key: 'router.remote_auth_expired',
+    });
   });
 
   // Потеря исходного запроса в tool-цепочке: провайдер отвергает запрос,

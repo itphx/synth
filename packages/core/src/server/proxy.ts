@@ -8,6 +8,10 @@
 // Bearer-токеном: сохраняются method/query/тело (JSON) и статус/заголовки/тело
 // ответа (включая SSE). Остальные пути /api/v2/agents/* остаются локальными
 // (агенты — per-instance).
+// Исключения (REMOTE_PROXY_EXCLUDED_PATHS) — точные пути, которые обязаны
+// обслуживаться локально даже при подключённом гибриде: у них origin-aware
+// логика (напр. /api/v2/context/instructions резолвит инструкции локальной
+// сессии локальным core, а remote:-сессию форвардит сам роут).
 
 import type { Context, MiddlewareHandler } from 'hono';
 import type { RemoteBackendClient } from '../remote/client.js';
@@ -44,6 +48,18 @@ export const REMOTE_PROXY_PATTERNS: readonly RegExp[] = [
   /^\/api\/v2\/agents\/[^/]+\/ssh-keys(?:\/|$)/,
 ];
 
+/**
+ * Точные пути, исключённые из слепого прокси. Они обрабатываются локальным
+ * роутом, который сам решает по origin: локальная сущность — локально,
+ * `remote:`-сущность — форвард на сервер.
+ *
+ * `/api/v2/context/instructions` — origin-aware (ADR-069): остальной
+ * `/api/v2/context/*` (напр. `/context/files`) по-прежнему проксируется.
+ */
+export const REMOTE_PROXY_EXCLUDED_PATHS: readonly string[] = [
+  '/api/v2/context/instructions',
+];
+
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
   'keep-alive',
@@ -56,6 +72,9 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 export function matchesProxyPrefix(path: string): boolean {
+  // Исключения проверяются первыми: точный путь локального origin-aware роута
+  // не должен перехватываться префиксом своего же семейства.
+  if (REMOTE_PROXY_EXCLUDED_PATHS.includes(path)) return false;
   if (REMOTE_PROXY_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`))) return true;
   return REMOTE_PROXY_PATTERNS.some((re) => re.test(path));
 }

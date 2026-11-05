@@ -19,7 +19,11 @@ import type { Message, TokenUsage } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { DebugCollector } from '../../debug.js';
-import { ContextLengthExceededError } from '../../providers/exceptions.js';
+import {
+  ContextLengthExceededError,
+  ProviderError,
+  RemoteAuthExpiredError,
+} from '../../providers/exceptions.js';
 import { LLM_MAX_ATTEMPTS } from '../llm-error.js';
 import { t as sm } from '../system-messages.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './errors.js';
@@ -43,6 +47,17 @@ describe('formatLlmError / errorTypeI18n (ADR-041)', () => {
     }
     expect(formatLlmError(new Error('401 Unauthorized'))).toEqual({ text: '401 Unauthorized' });
     expect(formatLlmError('строка-ошибка')).toEqual({ text: 'строка-ошибка' });
+  });
+
+  it('RemoteAuthExpiredError → ключ router.remote_auth_expired; прочие auth-ошибки — без i18n', () => {
+    expect(formatLlmError(new RemoteAuthExpiredError('p'))).toEqual({
+      text: sm('router.remote_auth_expired'),
+      i18n: { key: 'router.remote_auth_expired' },
+    });
+    // Истёкший API-ключ провайдера (не гибрид) не должен выдавать «сессия истекла».
+    expect(formatLlmError(new ProviderError('invalid api key'))).toEqual({
+      text: 'invalid api key',
+    });
   });
 
   it('errorTypeI18n: ключ только для известных типов', () => {

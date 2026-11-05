@@ -29,4 +29,9 @@ export { AnthropicProvider } from './anthropic.js';
 export { OllamaProvider } from './ollama.js';
 export { RemoteProvider, setRemoteTokenProvider, clearRemoteTokenProviders } from './remote.js';
 export { DecisionProvider } from './decision.js';
-export { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
+export {
+  ProviderError,
+  ContextLengthExceededError,
+  RateLimitError,
+  RemoteAuthExpiredError,
+} from './exceptions.js';

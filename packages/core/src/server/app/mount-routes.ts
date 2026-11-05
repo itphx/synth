@@ -1074,6 +1074,9 @@ export function mountStandaloneRoutes(
       projectStore,
       resolveProjectWorkspace: resolveSkillWorkspace,
       localOwnerResolver: deps.localOwnerResolver,
+      // ADR-042/ADR-069: `remote:`-сессия/проект — инструкции резолвит сервер
+      // (локальная сущность — по-прежнему локальный core).
+      getRemoteClient: () => getClient(),
       resolveContextWindow: (session) => {
         const model = session?.settings.model;
         return model ? modelWindowLoader(model) || undefined : undefined;

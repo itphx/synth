@@ -211,6 +211,7 @@ export {
   ProviderError,
   ContextLengthExceededError,
   RateLimitError,
+  RemoteAuthExpiredError,
 } from './providers/index.js';
 export type { LLMMessage, CancellationToken, ChatOptions, ProviderConfig } from './providers/index.js';
 export { syncProvidersFromEnv } from './providers/sync-from-env.js';

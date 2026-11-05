@@ -10,6 +10,19 @@ export class ProviderError extends Error {
   }
 }
 
+/**
+ * Нет токена для удалённого (гибридного) LLM-провайдера — чаще всего истекла
+ * серверная сессия. Отдельный класс, чтобы i18n-ключ
+ * `router.remote_auth_expired` применялся **только** к этой ситуации, а не к
+ * любой auth-ошибке провайдера (ADR-041).
+ */
+export class RemoteAuthExpiredError extends ProviderError {
+  constructor(message = sm('router.remote_auth_expired'), provider?: string) {
+    super(message, provider);
+    this.name = 'RemoteAuthExpiredError';
+  }
+}
+
 export class ContextLengthExceededError extends Error {
   debugResponse?: Record<string, unknown>;
 

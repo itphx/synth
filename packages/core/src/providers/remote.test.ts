@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RemoteProvider, setRemoteTokenProvider, clearRemoteTokenProviders } from './remote.js';
 import { ProviderFactory } from './index.js';
-import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
+import {
+  ProviderError,
+  ContextLengthExceededError,
+  RateLimitError,
+  RemoteAuthExpiredError,
+} from './exceptions.js';
 import type { LLMMessage, CancellationToken, SystemPromptPayload } from './base.js';
 import type { LLMChunk } from '@itphx/synth-shared';
+import { t as sm } from '../engine/system-messages.js';
 
 function makeMessage(overrides: Partial<LLMMessage> = {}): LLMMessage {
   return {
@@ -140,15 +146,17 @@ describe('RemoteProvider.chat (non-stream)', () => {
     });
   });
 
-  it('отсутствие токена → ProviderError, fetch не вызывается', async () => {
+  it('отсутствие токена → ProviderError с понятным текстом (сессия истекла), fetch не вызывается', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
     const provider = makeProvider({ getToken: async () => null, apiKey: '' });
+    await expect(provider.chat([makeMessage()])).rejects.toBeInstanceOf(RemoteAuthExpiredError);
     await expect(provider.chat([makeMessage()])).rejects.toMatchObject({
-      name: 'ProviderError',
-      message: expect.stringContaining('Нет токена'),
+      name: 'RemoteAuthExpiredError',
+      message: sm('router.remote_auth_expired'),
     });
+    expect(sm('router.remote_auth_expired')).toContain('server session has expired');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

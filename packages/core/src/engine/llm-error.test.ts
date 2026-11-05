@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from './llm-error.js';
-import { ContextLengthExceededError } from '../providers/exceptions.js';
+import { ContextLengthExceededError, RemoteAuthExpiredError } from '../providers/exceptions.js';
+import { t as sm } from './system-messages.js';
 
 describe('classifyLlmError — единая таксономия типов', () => {
   it('классифицирует recoverable-ошибки', () => {
@@ -28,6 +29,20 @@ describe('classifyLlmError — единая таксономия типов', ()
     ).toBe('no_user_query');
     // регистронезависимо
     expect(classifyLlmError('NO USER QUERY FOUND IN MESSAGES')).toBe('no_user_query');
+  });
+});
+
+describe('router.remote_auth_expired — истёкшая сессия гибрида', () => {
+  const msg = sm('router.remote_auth_expired');
+
+  it('классифицируется как auth_error', () => {
+    expect(classifyLlmError(msg)).toBe('auth_error');
+  });
+
+  it('невосстановимая (без 3 бесполезных ретраев)', () => {
+    expect(isLlmErrorRecoverable(new Error(msg), msg)).toBe(false);
+    expect(isLlmErrorRecoverable(new Error(msg), msg, 'auth_error')).toBe(false);
+    expect(isLlmErrorRecoverable(new RemoteAuthExpiredError())).toBe(false);
   });
 });
 

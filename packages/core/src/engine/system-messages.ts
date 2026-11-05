@@ -404,6 +404,12 @@ export const SYSTEM_MESSAGES = {
   'router.rate_limit_exceeded': 'Request rate limit exceeded',
   'router.no_user_query':
     'The model could not process the tool-call chain (the original user query was lost). Try again, reduce the number of tools, or increase the model context window.',
+  // Гибрид (ADR-042): токена к серверу нет — чаще всего истекла серверная
+  // сессия. Текст намеренно содержит маркер «authentication»: classifyLlmError
+  // относит его к `auth_error` (невосстановимая ошибка, без 3 бесполезных
+  // ретраев по 5/15/30 с — ADR-041).
+  'router.remote_auth_expired':
+    'The server session has expired — sign in to hybrid mode again (authentication required)',
 
   // --- Quality check (ADR-034) ---
   'qc.min_length_ok': 'Response length {length} >= {min}',

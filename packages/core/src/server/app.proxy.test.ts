@@ -2,7 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { instructionsConfigSchema } from '@itphx/synth-shared/config';
 import { createStandaloneApp } from './app.js';
+import { matchesProxyPrefix } from './proxy.js';
 import { clearRemoteTokenProviders } from '../providers/remote.js';
 
 const BACKEND_URL = 'https://backend.test';
@@ -43,6 +45,9 @@ async function makeHybridApp() {
     apiKey: 'test-key',
     defaultBackendUrl: BACKEND_URL,
     remoteLlm: 'server',
+    // ADR-069: локальный роут `/api/v2/context/instructions` монтируется только
+    // при заданной секции инструкций (`synth serve` передаёт её всегда).
+    instructionsConfig: instructionsConfigSchema.parse({}),
   });
   await handle.connectRemoteWithApiKey(BACKEND_URL, API_KEY);
   return { dir, handle };
@@ -52,6 +57,16 @@ afterEach(() => {
   clearRemoteTokenProviders();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe('matchesProxyPrefix: исключения из слепого прокси', () => {
+  it('точный /api/v2/context/instructions локальный, остальной /context — проксируется', () => {
+    expect(matchesProxyPrefix('/api/v2/context/instructions')).toBe(false);
+    expect(matchesProxyPrefix('/api/v2/context/files')).toBe(true);
+    expect(matchesProxyPrefix('/api/v2/context')).toBe(true);
+    expect(matchesProxyPrefix('/api/v2/audit')).toBe(true);
+    expect(matchesProxyPrefix('/api/v2/settings')).toBe(false);
+  });
 });
 
 describe('createStandaloneApp: прокси серверных роутов (runtime-подключение)', () => {
@@ -290,6 +305,30 @@ describe('createStandaloneApp: прокси серверных роутов (run
           return false;
         }
       });
+      expect(forwarded).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('GET /api/v2/context/instructions в гибриде обрабатывается локально (400), не проксируется', async () => {
+    const fetchRouter = apiKeyFetchRouter(() => jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchRouter);
+
+    const { dir, handle } = await makeHybridApp();
+    const { app } = handle;
+    try {
+      const res = await app.request('/api/v2/context/instructions', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      // Роут смонтирован локально и валидирует обязательный scope.
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+
+      const forwarded = fetchRouter.mock.calls.filter(
+        ([u]) => String(u).includes('/api/v2/context/instructions'),
+      );
       expect(forwarded).toHaveLength(0);
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});

@@ -26,6 +26,7 @@
 - **`/init` и скилл `synth-agents-md`** (механизм [ADR-046](./adr-046-skills-and-slash-commands.md)) — генерация/обновление/аудит `AGENTS.md`; `/init` улучшает файл на месте, не переписывает вслепую; скилл доступен как `/agents-md` (имя команды занято builtin `/init`).
 - **Отключение и прозрачность.** `instructions.enabled=false`, `excludeProjects`, `--ignore-rules`/`--safe-mode` (env `SYNTH_IGNORE_RULES`), `session.settings.systemPrompt` override (инструкции не добавляются); снимок загруженного — `GET /api/v2/context/instructions` + событие `context.instructions_loaded` + UI-индикатор.
 - **Кэш/инвалидация (R5).** Общий с [ADR-046](./adr-046-skills-and-slash-commands.md) helper подписей `engine/file-signature.ts` (`mtime:size`); результатный кэш резолвера по подписи кандидатов, per-turn мемоизация в оркестраторе, TTL-слот для URL.
+- **Границы в гибриде (2026-11-06).** `GET /api/v2/context/instructions` — origin-aware: локальную сессию резолвит локальный core (каталог worktree, если сессия привязана, иначе workspace проекта), `remote:`-сессию/проект — удалённый backend (права и данные проверяет он, ответ приходит с id в форме `remote:<uuid>`). Слепой прокси к `/api/v2/context` на этот точный путь не применяется; остальной `/api/v2/context/*` проксируется как раньше.
 
 ## Альтернативы
 
@@ -48,10 +49,11 @@
 
 ## Открытые вопросы
 
-Границы в гибриде — кто резолвит инструкции удалённого проекта (сервер/клиент) и куда попадает контент; точная эвристика install-tree-детекта (маркер/`package.json`); `.cursorrules` как ещё одна совместимость; подбор `windowRatio`/floor/ceiling под роутинг моделей ([ADR-034](./adr-034-model-routing.md)). Доставка скилла `synth-agents-md` как обычного скилла (реестр, install/policy) — [PROP-068](./prop-068-skills-agents-registry.md).
+Границы в гибриде — решено 2026-11-06 (origin-aware `GET /api/v2/context/instructions`, см. «Решение»); точная эвристика install-tree-детекта (маркер/`package.json`); `.cursorrules` как ещё одна совместимость; подбор `windowRatio`/floor/ceiling под роутинг моделей ([ADR-034](./adr-034-model-routing.md)). Доставка скилла `synth-agents-md` как обычного скилла (реестр, install/policy) — [PROP-068](./prop-068-skills-agents-registry.md).
 
 ## История
 
+- 2026-11-06 — гибрид: `GET /api/v2/context/instructions` стал origin-aware (локальные сессии — локальный core, `remote:` — сервер), путь выведен из слепого прокси `/api/v2/context`.
 - 2026-10-15 — сжатие до одной страницы: as-built вынесено в spec ([ARCHITECTURE.md](../ARCHITECTURE.md), [CONFIGURATION.md](../CONFIGURATION.md), [API_V2.md](../API_V2.md) §5.13.1, `packages/{core,ui,backend,shared}/AGENTS.md`).
 - 2026-10-01 — R5: общий helper подписей, результатный кэш резолвера, per-turn мемоизация.
 - 2026-10-01 — R1–R4: общий trust-гейт для merged chain и lazy, авто-trust `workspacesRoot`, CLI `--ignore-rules`/`--safe-mode`.

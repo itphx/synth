@@ -9,7 +9,7 @@ import type { PromptMeta, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { DebugCollector } from '../../debug.js';
-import { ContextLengthExceededError } from '../../providers/exceptions.js';
+import { ContextLengthExceededError, RemoteAuthExpiredError } from '../../providers/exceptions.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from '../llm-error.js';
 import { WorktreeDirectoryMissingError } from '../worktree/errors.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -69,6 +69,14 @@ export interface LlmFailureContext {
  * metadata (UI локализует сам).
  */
 export function formatLlmError(error: unknown): { text: string; i18n?: ReturnType<typeof i18nMeta> } {
+  // Гибрид (ADR-042): нет токена к серверу — единый понятный текст и i18n-ключ
+  // **только** для этой ошибки (прочие auth_error остаются с сырым текстом).
+  if (error instanceof RemoteAuthExpiredError) {
+    return {
+      text: sm('router.remote_auth_expired'),
+      i18n: i18nMeta('router.remote_auth_expired'),
+    };
+  }
   // ADR-114 §3.2: исчезнувший каталог worktree — fail-closed с i18n-ключом
   // (`worktree.directory_missing`), а не текстом ошибки в лог-формате.
   if (error instanceof WorktreeDirectoryMissingError) {

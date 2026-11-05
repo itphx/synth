@@ -425,7 +425,21 @@
   `origin`; id не смешивать (`remote/aggregate.ts`).
 - LLM локальных сессий в гибриде — через `RemoteProvider` →
   `POST /api/v2/llm/chat/completions` (`providers/remote.ts`); режим — `remote.llm`
-  (`server` | `local` | `auto`).
+  (`server` | `local` | `auto`). Токен берётся у `RemoteSession.getToken()`
+  (`remote/session.ts`): access-token OIDC, по истечении — refresh **single-flight**
+  (параллельные вызовы ждут один refresh; иначе гонка на token-endpoint при ротации
+  refresh-token давала `invalid_grant` → `null`). Нет токена → `RemoteAuthExpiredError`
+  и i18n-ключ `router.remote_auth_expired` («Сессия на сервере истекла — войдите в
+  гибрид заново»); классифицируется как `auth_error` (невосстановимая, без ретраев).
+  В логе различаются «нет зарегистрированного поставщика токена» (провайдер не зеркало /
+  гибрид отключён) и «поставщик вернул null» (истекла сессия).
+- **Проектные инструкции origin-aware.** `GET /api/v2/context/instructions` — точный путь
+  в `REMOTE_PROXY_EXCLUDED_PATHS` (`server/proxy.ts`), поэтому слепой прокси
+  `/api/v2/context` его не перехватывает: локальную сессию/проект резолвит локальный core
+  (для сессии — каталог worktree, иначе workspace проекта), `remote:`-сущность роут
+  форвардит на сервер (`toLocalId`, ответ с `remote:`-id, ошибки — `remoteErrorToHttp`;
+  без клиента — 502 `REMOTE_UNAVAILABLE`). Остальной `/api/v2/context/*` (напр.
+  `/context/files`) проксируется как раньше (ADR-069).
 - Runtime-подключение: `connectRemote*`/`disconnectRemote` на хэндле
   `createStandaloneApp`; профили серверов — `profiles.ts` (`getProfilesPath(home)` →
   `<home>/profiles.json`; без home — XDG `~/.config/synth/profiles.json`),

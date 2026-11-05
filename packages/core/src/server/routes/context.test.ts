@@ -4,7 +4,7 @@
  * install-tree/trust/disabled, RBAC.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -21,6 +21,8 @@ import {
   type ProjectInstructionsDeps,
 } from '../../engine/context/instructions.js';
 import type { AuthKit } from '../../auth/local.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
+import { RemoteError, type RemoteErrorCode } from '../../remote/types.js';
 
 function createMockAuth(): AuthKit {
   return {
@@ -128,6 +130,12 @@ function accessOpts(getUser: () => string): Partial<ContextRoutesOptions> {
 }
 
 const projectWs = () => join(tmpDir, 'repo');
+
+/** Минимальный стаб RemoteBackendClient: считает `request` и отдаёт/бросает заданное. */
+function remoteClientStub(handler: (path: string) => unknown) {
+  const request = vi.fn(async (_method: string, path: string) => handler(path));
+  return { client: { request } as unknown as RemoteBackendClient, request };
+}
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'synth-context-routes-'));
@@ -298,6 +306,126 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
     expect((await app.request('/api/v2/context/instructions')).status).toBe(400);
     expect((await app.request('/api/v2/context/instructions?project_id=nope')).status).toBe(404);
     expect((await app.request('/api/v2/context/instructions?session_id=nope')).status).toBe(404);
+  });
+});
+
+describe('GET /api/v2/context/instructions — origin-aware в гибриде (ADR-042/ADR-069)', () => {
+  it('локальная сессия при переданном getRemoteClient резолвится локально (клиент не вызывается)', async () => {
+    const ws = projectWs();
+    await saveProject('p1', ws);
+    const session = await sessionManager.createSession({ projectId: 'p1' });
+    const { client, request } = remoteClientStub(() => ({ files: [] }));
+
+    const app = makeApp({
+      workspace: ws,
+      routes: {
+        resolveProjectWorkspace: async () => ws,
+        getRemoteClient: () => client,
+      },
+    });
+
+    const res = await app.request(`/api/v2/context/instructions?session_id=${session.id}`);
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.session_id).toBe(session.id);
+    expect(body.files.map((f: any) => f.path)).toContain('./AGENTS.md');
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('remote:<id> форвардится на сервер с голым id, id в ответе — remote:', async () => {
+    const ws = projectWs();
+    await saveProject('p1', ws);
+    const { client, request } = remoteClientStub((path) => ({
+      session_id: 'srv-1',
+      enabled: true,
+      files: [{ path: './AGENTS.md' }],
+      diagnostics: [],
+      forwarded_path: path,
+    }));
+
+    const app = makeApp({
+      workspace: ws,
+      routes: { getRemoteClient: () => client },
+    });
+
+    const res = await app.request('/api/v2/context/instructions?session_id=remote:srv-1');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.session_id).toBe('remote:srv-1');
+    expect(body.forwarded_path).toBe('/api/v2/context/instructions?session_id=srv-1');
+    expect(request).toHaveBeenCalledWith('GET', '/api/v2/context/instructions?session_id=srv-1');
+  });
+
+  it('remote:-проект форвардится и возвращает project_id с префиксом', async () => {
+    const ws = projectWs();
+    await saveProject('p1', ws);
+    const { client, request } = remoteClientStub(() => ({ project_id: 'p-1', files: [] }));
+
+    const app = makeApp({ workspace: ws, routes: { getRemoteClient: () => client } });
+    const res = await app.request('/api/v2/context/instructions?project_id=remote:p-1');
+
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.project_id).toBe('remote:p-1');
+    expect(request).toHaveBeenCalledWith('GET', '/api/v2/context/instructions?project_id=p-1');
+  });
+
+  it('remote: без клиента → 502 REMOTE_UNAVAILABLE', async () => {
+    const app = makeApp({ workspace: projectWs() });
+    const res = await app.request('/api/v2/context/instructions?session_id=remote:srv-1');
+    expect(res.status).toBe(502);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('REMOTE_UNAVAILABLE');
+  });
+
+  const remoteErrorCases: Array<[RemoteErrorCode, number]> = [
+    ['HTTP_404', 404],
+    ['HTTP_403', 403],
+  ];
+  it.each(remoteErrorCases)('удалённая ошибка %s маппится в тот же HTTP-статус', async (code, status) => {
+    const { client } = remoteClientStub(() => { throw new RemoteError('удалённый отказ', code); });
+    const app = makeApp({ workspace: projectWs(), routes: { getRemoteClient: () => client } });
+
+    const res = await app.request('/api/v2/context/instructions?session_id=remote:srv-1');
+    expect(res.status).toBe(status);
+    const body: any = await res.json();
+    expect(body.error.code).toBe(code);
+    expect(body.error.message).toBe('удалённый отказ');
+  });
+
+  it('session-scope использует каталог worktree как workspace (ADR-114)', async () => {
+    const ws = projectWs();
+    const worktreeDir = join(tmpDir, 'worktrees', 'wt-1');
+    await saveProject('p1', ws);
+    const session = await sessionManager.createSession({ projectId: 'p1' });
+    session.worktree = {
+      worktreeId: 'wt-1',
+      projectId: 'p1',
+      directory: worktreeDir,
+      branch: 'feature',
+    };
+    await sessionManager.saveSession(session);
+
+    const resolveInstructions = vi.fn(async (_query: { workspace?: string }) => ({
+      enabled: true,
+      cap: { chars: 0, source: 'dynamic' as const, contextWindow: 0 },
+      files: [],
+      diagnostics: [],
+    }));
+
+    const app = makeApp({
+      workspace: ws,
+      routes: {
+        resolveInstructions,
+        // Каталог проекта отличается от worktree — должна победить привязка сессии.
+        resolveProjectWorkspace: async () => ws,
+      },
+    });
+
+    const res = await app.request(`/api/v2/context/instructions?session_id=${session.id}`);
+    expect(res.status).toBe(200);
+    expect(resolveInstructions).toHaveBeenCalledTimes(1);
+    expect(resolveInstructions.mock.calls[0]![0]).toMatchObject({ workspace: worktreeDir });
   });
 });
 

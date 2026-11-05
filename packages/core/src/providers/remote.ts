@@ -12,9 +12,10 @@
 import type { LLMChunk, LLMResponse, ReasoningLevel, TokenUsage } from '@itphx/synth-shared';
 import { effortForReasoningLevel } from '@itphx/synth-shared';
 import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken, type ChatOptions } from './base.js';
-import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
+import { ProviderError, ContextLengthExceededError, RateLimitError, RemoteAuthExpiredError } from './exceptions.js';
 import { parseUsageCost } from './usage.js';
-import { info } from '../logger.js';
+import { info, warning } from '../logger.js';
+import { t as sm } from '../engine/system-messages.js';
 // ADR-099: запросы к backend-прокси — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
 import type { DebugCollector } from '../debug.js';
@@ -388,14 +389,31 @@ export class RemoteProvider extends BaseProvider {
 
   private async _resolveToken(): Promise<string> {
     let token: string | null = null;
+    let providerMissing = false;
     if (this._getToken) {
       token = await this._getToken();
+      if (!token) {
+        warning('REMOTE', `Поставщик токена вернул null (сессия на сервере истекла?) — провайдер ${this.name}`);
+      }
     } else {
       const registered = lookupRemoteTokenProvider(this.name);
-      token = registered ? await registered() : (this.apiKey || null);
+      if (registered) {
+        token = await registered();
+        if (!token) {
+          warning('REMOTE', `Поставщик токена вернул null (сессия на сервере истекла?) — провайдер ${this.name}`);
+        }
+      } else {
+        providerMissing = true;
+        token = this.apiKey || null;
+      }
     }
     if (!token) {
-      throw new ProviderError('Нет токена для удалённого LLM-провайдера', this.name);
+      // Пользователю — один понятный текст (ADR-041): частая причина в гибриде —
+      // истёкшая серверная сессия. Диагностика различается в логе выше.
+      if (providerMissing) {
+        warning('REMOTE', `Нет зарегистрированного поставщика токена (провайдер не зеркало / гибрид отключён) — провайдер ${this.name}`);
+      }
+      throw new RemoteAuthExpiredError(sm('router.remote_auth_expired'), this.name);
     }
     return token;
   }
