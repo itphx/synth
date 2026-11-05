@@ -207,3 +207,255 @@ describe('LoginForm: атрибуты полей для автозаполнен
     expect(getLabel(host, 'synth-login-username').htmlFor).toBe(trigger!.id)
   })
 })
+
+describe('LoginForm: клавиатура на мобильном', () => {
+  const originalScrollTo = HTMLElement.prototype.scrollTo
+  let scrollToMock: ReturnType<typeof vi.fn>
+
+  /**
+   * Видимая область экрана. `setHeight` имитирует открытие/закрытие клавиатуры:
+   * Android (interactive-widget=resizes-content) и iOS уменьшают visualViewport.
+   */
+  function installViewport(height: number): { setHeight: (next: number) => void } {
+    vi.stubGlobal('innerHeight', height)
+    const viewport = {
+      width: 400,
+      height,
+      offsetTop: 0,
+      offsetLeft: 0,
+      scale: 1,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    } as unknown as VisualViewport
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
+    return {
+      setHeight: (next: number) => {
+        ;(viewport as unknown as { height: number }).height = next
+      },
+    }
+  }
+
+  function screenEl(host: HTMLElement): HTMLElement {
+    const el = host.querySelector('.login-screen')
+    expect(el).toBeTruthy()
+    return el as HTMLElement
+  }
+
+  beforeEach(() => {
+    // Фейковые таймеры — только таймеры: React-шедулер на MessageChannel не трогаем.
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+    })
+    scrollToMock = vi.fn()
+    // В jsdom нет Element.prototype.scrollTo — стаб нужен, чтобы проверить прокрутку.
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      writable: true,
+      value: scrollToMock,
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    delete (window as unknown as Record<string, unknown>).visualViewport
+    if (originalScrollTo) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+        configurable: true,
+        writable: true,
+        value: originalScrollTo,
+      })
+    } else {
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollTo
+    }
+  })
+
+  it('видимая область уменьшилась: резерв не включается и прокрутки нет', async () => {
+    const viewport = installViewport(800)
+    const host = await renderLoginForm()
+    const input = getInput(host, '#synth-login-apikey')
+
+    act(() => {
+      input.focus()
+    })
+    // Браузер «сообщает» клавиатуру: видимая область уменьшилась.
+    viewport.setHeight(500)
+
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+      vi.advanceTimersByTime(400)
+    })
+
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(false)
+    expect(scrollToMock).not.toHaveBeenCalled()
+  })
+
+  it('видимая область не изменилась: включается фоллбек (резерв + прокрутка)', async () => {
+    installViewport(800)
+    const host = await renderLoginForm()
+    const input = getInput(host, '#synth-login-apikey')
+
+    act(() => {
+      input.focus()
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(true)
+    // Прокрутка отложена: сначала клавиатуре/лейауту дают раскрыться.
+    expect(scrollToMock).not.toHaveBeenCalled()
+
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+    expect(scrollToMock).toHaveBeenCalledTimes(1)
+    expect(scrollToMock).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' })
+  })
+
+  it('blur снимает резерв и сбрасывает состояние', async () => {
+    installViewport(800)
+    const host = await renderLoginForm()
+    const input = getInput(host, '#synth-login-apikey')
+
+    act(() => {
+      input.focus()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(900)
+    })
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(true)
+
+    act(() => {
+      input.blur()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(false)
+    // Возврат формы наверх после снятия резерва.
+    expect(scrollToMock).toHaveBeenCalledTimes(2)
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' })
+  })
+
+  it('переход фокуса между полями не сбрасывает и не пересчитывает резерв', async () => {
+    authState.oidcEnabled = true
+    authState.deployment = 'managed'
+    installViewport(800)
+    const host = await renderLoginForm()
+    const username = getInput(host, '#synth-login-username')
+    const password = getInput(host, '#synth-login-password')
+
+    act(() => {
+      username.focus()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(900)
+    })
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(true)
+    expect(scrollToMock).toHaveBeenCalledTimes(1)
+
+    // Уход фокуса с первого поля и приход на второе внутри blur-задержки (200 мс).
+    act(() => {
+      username.blur()
+    })
+    act(() => {
+      vi.advanceTimersByTime(100)
+      password.focus()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(true)
+    // Повторного фокуса/прокрутки нет — резерв уже включён.
+    expect(scrollToMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('первый фокус сообщил клавиатуру: второе поле после blur не включает резерв повторно', async () => {
+    authState.oidcEnabled = true
+    authState.deployment = 'managed'
+    const viewport = installViewport(800)
+    const host = await renderLoginForm()
+    const username = getInput(host, '#synth-login-username')
+    const password = getInput(host, '#synth-login-password')
+
+    act(() => {
+      username.focus()
+    })
+    viewport.setHeight(500)
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    // Браузер сообщил клавиатуру — резерв не нужен.
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(false)
+
+    // Полный уход фокуса позже blur-задержки: визуальный резерв снят,
+    // но вердикт «клавиатура сообщается» должен сохраниться.
+    act(() => {
+      username.blur()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(false)
+
+    // Второе поле при уже уменьшенной области: базовая высота маленькая,
+    // уменьшения нет — но детект запускаться не должен.
+    act(() => {
+      password.focus()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(false)
+    // Единственный scrollTo — возврат наверх после blur (top: 0), прокрутки вниз нет.
+    expect(scrollToMock).toHaveBeenCalledTimes(1)
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' })
+  })
+
+  it('после фоллбека повторный фокус включает резерв сразу, без нового окна детекта', async () => {
+    authState.oidcEnabled = true
+    authState.deployment = 'managed'
+    installViewport(800)
+    const host = await renderLoginForm()
+    const username = getInput(host, '#synth-login-username')
+    const password = getInput(host, '#synth-login-password')
+
+    act(() => {
+      username.focus()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(true)
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+    expect(scrollToMock).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      username.blur()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(false)
+    expect(scrollToMock).toHaveBeenCalledTimes(2)
+
+    // Режим fallback запомнен: класс возвращается сразу, не через 600 мс детекта.
+    act(() => {
+      password.focus()
+    })
+    expect(screenEl(host).classList.contains('login-screen--keyboard')).toBe(true)
+    expect(scrollToMock).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+    expect(scrollToMock).toHaveBeenCalledTimes(3)
+  })
+})

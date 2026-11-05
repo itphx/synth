@@ -13,6 +13,25 @@ interface DebugUser {
   username: string
 }
 
+/** Клавиатура «сообщается», если видимая область уменьшилась хотя бы на столько. */
+const KEYBOARD_DETECT_DELTA_PX = 100
+/** Как часто проверяем видимую область, пока ждём отчёт браузера о клавиатуре. */
+const KEYBOARD_DETECT_INTERVAL_MS = 120
+/** Сколько ждём отчёт браузера до включения фоллбека (резерв + прокрутка). */
+const KEYBOARD_DETECT_TIMEOUT_MS = 600
+/** Задержка прокрутки вниз после включения резерва (только фоллбек). */
+const KEYBOARD_SCROLL_DELAY_MS = 300
+/** Задержка снятия резерва на blur: переход фокуса между полями его не сбрасывает. */
+const KEYBOARD_BLUR_DELAY_MS = 200
+
+/**
+ * Вердикт о клавиатуре, запомненный на время жизни формы (mount).
+ * Возможности браузера в рамках сессии не меняются, поэтому повторные фокусы
+ * его не пересчитывают: `reported` — резерв не нужен никогда, `fallback` —
+ * резерв включается сразу, `unknown` — идёт первичный детект.
+ */
+type KeyboardMode = 'unknown' | 'reported' | 'fallback'
+
 export const LoginForm = () => {
   const { t } = useI18n()
   const login = useAuthStore(s => s.login)
@@ -41,6 +60,14 @@ export const LoginForm = () => {
   const passwordRef = useRef<HTMLInputElement>(null)
   const loginRef = useRef<HTMLDivElement>(null)
   const blurTimerRef = useRef<number | null>(null)
+  /** Таймер окончания ожидания отчёта браузера о клавиатуре. */
+  const detectStopTimerRef = useRef<number | null>(null)
+  /** Опрос видимой области после фокуса поля. */
+  const detectIntervalRef = useRef<number | null>(null)
+  /** Отложенная прокрутка вниз — только в фоллбек-режиме. */
+  const scrollTimerRef = useRef<number | null>(null)
+  /** Вердикт браузера о клавиатуре — на весь срок жизни формы, blur его не сбрасывает. */
+  const keyboardModeRef = useRef<KeyboardMode>('unknown')
 
   // Список debug-пользователей грузим только в debug-режиме (debugMode из стора).
   useEffect(() => {
@@ -107,23 +134,74 @@ export const LoginForm = () => {
     }
   }
 
-  // На touch при фокусе поля раскрывается клавиатура и перекрывает форму.
-  // Резервируем нижнюю половину экрана (класс login-screen--keyboard) и
-  // прокручиваем страницу вниз — это поднимает форму над клавиатурой при любой
-  // её высоте и независимо от того, обновляет ли браузер visualViewport
-  // (в standalone-PWA, в частности iOS, высота клавиатуры может не сообщаться).
+  // Фоллбек для браузеров без отчёта о клавиатуре: резерв нижней половины
+  // экрана и прокрутка формы вниз. Режим запоминаем до размонтирования —
+  // повторный фокус (в т.ч. на другом поле) включает резерв сразу.
+  const enableKeyboardFallback = () => {
+    keyboardModeRef.current = 'fallback'
+    setKeyboardReserve(true)
+    if (scrollTimerRef.current !== null) window.clearTimeout(scrollTimerRef.current)
+    scrollTimerRef.current = window.setTimeout(() => {
+      scrollTimerRef.current = null
+      const el = loginRef.current
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    }, KEYBOARD_SCROLL_DELAY_MS)
+  }
+
+  // На touch при фокусе поля раскрывается клавиатура. Современные браузеры
+  // (Android с interactive-widget=resizes-content, iOS через visualViewport)
+  // сообщают её высоту: видимая область уменьшается, а шелл уже сжимается по
+  // --synth-app-height (useViewportHeight). В этом случае форма остаётся у
+  // верхнего края — без резерва и программной прокрутки.
+  // Если браузер высоту клавиатуры не сообщает (видимая область не изменилась),
+  // включаем прежний фоллбек: класс login-screen--keyboard (резерв 50vh) и
+  // прокрутку формы вниз — только для таких браузеров, чтобы клавиатура не
+  // учитывалась дважды.
   const handleScreenFocus = (e: React.FocusEvent<HTMLDivElement>) => {
     if (!(e.target instanceof HTMLInputElement)) return
     if (blurTimerRef.current !== null) {
       window.clearTimeout(blurTimerRef.current)
       blurTimerRef.current = null
     }
-    setKeyboardReserve(true)
-    // даём клавиатуре/лейауту раскрыться, затем поднимаем форму вверх
-    window.setTimeout(() => {
-      const el = loginRef.current
-      if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-    }, 300)
+    // Вердикт уже вынесен — повторные фокусы его не пересчитывают. В fallback
+    // резерв включаем сразу: иначе на втором поле (клавиатура уже открыта,
+    // базовая высота уже уменьшена) детект не увидел бы изменения и ошибочно
+    // включил бы резерв ещё раз.
+    if (keyboardModeRef.current === 'reported') return
+    if (keyboardModeRef.current === 'fallback') {
+      enableKeyboardFallback()
+      return
+    }
+    // Опрос уже идёт (переход фокуса до истечения окна) — базу не пересчитываем.
+    if (detectIntervalRef.current !== null) return
+
+    const visibleHeight = () =>
+      Math.min(window.visualViewport?.height ?? window.innerHeight, window.innerHeight)
+    const baseHeight = visibleHeight()
+
+    detectIntervalRef.current = window.setInterval(() => {
+      if (baseHeight - visibleHeight() < KEYBOARD_DETECT_DELTA_PX) return
+      // Браузер сообщил клавиатуру — резерв не нужен, прокрутку не делаем.
+      keyboardModeRef.current = 'reported'
+      if (detectIntervalRef.current !== null) {
+        window.clearInterval(detectIntervalRef.current)
+        detectIntervalRef.current = null
+      }
+      if (detectStopTimerRef.current !== null) {
+        window.clearTimeout(detectStopTimerRef.current)
+        detectStopTimerRef.current = null
+      }
+    }, KEYBOARD_DETECT_INTERVAL_MS)
+
+    detectStopTimerRef.current = window.setTimeout(() => {
+      detectStopTimerRef.current = null
+      if (detectIntervalRef.current !== null) {
+        window.clearInterval(detectIntervalRef.current)
+        detectIntervalRef.current = null
+      }
+      if (keyboardModeRef.current === 'reported') return
+      enableKeyboardFallback()
+    }, KEYBOARD_DETECT_TIMEOUT_MS)
   }
 
   const handleScreenBlur = (e: React.FocusEvent<HTMLDivElement>) => {
@@ -132,15 +210,34 @@ export const LoginForm = () => {
     // небольшая задержка, чтобы переход фокуса между полями не сбрасывал резерв
     blurTimerRef.current = window.setTimeout(() => {
       blurTimerRef.current = null
+      // Полный уход фокуса — прекращаем опрос клавиатуры и снимаем фоллбек.
+      // Вердикт (keyboardModeRef) НЕ сбрасываем: возможность браузера сообщать
+      // клавиатуру не меняется, иначе на втором поле резерв включился бы заново.
+      if (detectIntervalRef.current !== null) {
+        window.clearInterval(detectIntervalRef.current)
+        detectIntervalRef.current = null
+      }
+      if (detectStopTimerRef.current !== null) {
+        window.clearTimeout(detectStopTimerRef.current)
+        detectStopTimerRef.current = null
+      }
+      // Иначе отложенная прокрутка вниз перебьёт возврат формы наверх.
+      if (scrollTimerRef.current !== null) {
+        window.clearTimeout(scrollTimerRef.current)
+        scrollTimerRef.current = null
+      }
       setKeyboardReserve(false)
       const el = loginRef.current
       if (el) el.scrollTo({ top: 0, behavior: 'smooth' })
-    }, 200)
+    }, KEYBOARD_BLUR_DELAY_MS)
   }
 
   useEffect(() => {
     return () => {
       if (blurTimerRef.current !== null) window.clearTimeout(blurTimerRef.current)
+      if (detectStopTimerRef.current !== null) window.clearTimeout(detectStopTimerRef.current)
+      if (detectIntervalRef.current !== null) window.clearInterval(detectIntervalRef.current)
+      if (scrollTimerRef.current !== null) window.clearTimeout(scrollTimerRef.current)
     }
   }, [])
 

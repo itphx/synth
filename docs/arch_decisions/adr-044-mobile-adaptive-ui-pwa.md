@@ -29,7 +29,7 @@ px-ширинами, действия видны только по hover, чат
 | 8 | Touch-first | hover-действия доступны на таче (CSS под `html.pointer-coarse`), touch-таргеты ≥40px, нативные скроллбары на таче, нативный drag&drop отключён на таче |
 | 9 | Подтверждения | `window.confirm` → `ConfirmDialog`; для zustand-сторов — глобальный confirm-сервис (`lib/confirm.ts` + `stores/confirmStore.ts`), рендер в `App` |
 | 10 | Модалки/админка | `SettingsModal`/`LogsModal` на телефоне: категории → горизонтальные скролл-табы; табличные админ-панели (ModelsPanel) — горизонтальный скролл |
-| 11 | Клавиатура | `useKeyboardInset` подписывается на `visualViewport` → CSS-переменная `--kb-inset` → `padding-bottom` композера; Enter на таче = перенос строки, на fine-pointer — отправка; IME учтён |
+| 11 | Клавиатура | `useViewportHeight` → `--synth-app-height = min(100dvh, visualViewport/innerHeight)`; мобильный `.login-screen` — высота от переменной; резерв 50vh на экране входа — только фоллбек для браузеров без отчёта о клавиатуре; Enter на таче = перенос строки, на fine-pointer — отправка; IME учтён |
 | 12 | PWA | **ручной app-shell**: статический `manifest.webmanifest` + минимальный `sw.js` (runtime-кэш шела; `/api,/ws,/auth,/admin,/health` не кэшируются; навигация network-first → офлайн-заглушка) |
 | 13 | Иконки | 192/512/maskable/apple — сгенерированы из логотипа (`font` `rsvg-convert`/ImageMagick) в `public/icons/` |
 | 14 | Инсталл | `usePwaInstall` + `PwaInstallButton` (`beforeinstallprompt`) — кнопка в мобильном хедере; регистрация SW только в prod |
@@ -64,8 +64,21 @@ px-ширинами, действия видны только по hover, чат
 - `App.tsx` рендерит глобальный `<ConfirmDialog>`. `window.confirm` в `packages/ui/src` удалён.
 
 ### Клавиатура
-- `hooks/useKeyboardInset.ts`: `inset = max(0, innerHeight - (visualViewport.height + visualViewport.offsetTop))` → `--kb-inset` на `<html>`.
-- `html.pointer-coarse .chat-composer { padding-bottom: var(--kb-inset, 0px) }` (safe-area уже в `margin-bottom` — без двойного отступа).
+- `hooks/useViewportHeight.ts` (вызывается в `App.tsx`) пишет `--synth-app-height = min(100dvh, h)`,
+  где `h = min(visualViewport.height ?? innerHeight, innerHeight)`: высота шелла равна видимой
+  области и уменьшается вместе с клавиатурой (Android — `interactive-widget=resizes-content`,
+  современный iOS — через `visualViewport`). Отдельного клавиатурного отступа (`--kb-inset`)
+  больше нет — шелл сжимается сам, без двойного учёта.
+- Мобильный `.login-screen` (`styles/index.css`) получает `height: var(--synth-app-height, 100dvh)`:
+  экран входа равен видимой области, а не layout viewport (на iOS layout viewport при открытой
+  клавиатуре не сжимается); `align-items: flex-start` держит карточку у верхнего края.
+- Резерв 50vh (`login-screen--keyboard`) на экране входа — **только фоллбек** для браузеров,
+  которые не сообщают высоту клавиатуры: `LoginForm` после первого фокуса поля ~600 мс опрашивает
+  видимую область. Уменьшилась на ≥100px — клавиатура репортится, резерв и программная прокрутка
+  не включаются; не уменьшилась — включается прежний фоллбек (класс + `scrollTo` вниз).
+- Вердикт «сообщает / не сообщает» запоминается на время жизни формы (`KeyboardMode`): повторные
+  фокусы его не пересчитывают — в `reported` резерв не включается никогда, в `fallback` — сразу,
+  без нового окна детекта (иначе на втором поле форма снова «уезжала» бы).
 - Enter: touch → перенос строки, fine-pointer → отправка; `e.nativeEvent.isComposing` (IME) не отправляет.
 
 ### PWA
@@ -101,7 +114,7 @@ px-ширинами, действия видны только по hover, чат
 - `packages/ui/src/App.tsx`
 - `packages/ui/src/components/chat/{MessageList,ChatInput,ChatTab}.tsx`
 - `packages/ui/src/styles/index.css` (мобильные + touch-правила), `styles/design-system.css`
-- `packages/ui/src/hooks/useKeyboardInset.ts`
+- `packages/ui/src/hooks/useViewportHeight.ts`
 - `packages/ui/src/lib/confirm.ts`, `stores/confirmStore.ts`
 - `packages/ui/src/components/settings/SettingsModal.tsx`, `components/logviewer/LogsModal.tsx`, `components/admin/ModelsPanel.tsx`
 - `packages/ui/src/hooks/usePwaInstall.ts`, `components/layout/PwaInstallButton.tsx`
