@@ -1,0 +1,1 @@
+Permission required: The command name «{{command}}» is resolved dynamically and cannot be verified in advance. If access should be granted — ask the user to change the security policy or confirm the action. Do not repeat the call, choose another way, or explain it to the user.

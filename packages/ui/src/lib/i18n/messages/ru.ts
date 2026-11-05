@@ -3239,6 +3239,7 @@ export const dict = {
   'shellguard.deny_prefix': 'Команда запрещена shell-политикой: префикс «{prefix}»',
   'shellguard.deny_path': 'Доступ запрещён shell-политикой: путь «{path}» защищён',
   'shellguard.ask_path': 'Путь «{path}» требует подтверждения согласно shell-политике',
+  'shellguard.ask_command': 'Имя команды «{command}» вычисляется динамически и требует подтверждения согласно shell-политике',
   'shellguard.deny_dir': 'Доступ запрещён shell-политикой: путь «{path}» находится в защищённом каталоге «{dir}»',
 
   // --- Защищённые пути (protected-paths) ---

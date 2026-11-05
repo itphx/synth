@@ -1989,6 +1989,21 @@ function stripHeredocBodies(command: string): string {
   return out.join('\n');
 }
 
+/** ask: динамическое имя команды (не путь). */
+function askForDynamicCommand(command: string): ShellCheckResult {
+  return {
+    action: 'ask',
+    reason: sm('shellguard.ask_command', { command }),
+    matchedRule: 'shell-policy.approve',
+    deniedPath: command,
+    messageId: 'ask-dynamic-command',
+    params: { command },
+  };
+}
+
+/** Простое значение имени команды: без пробелов/метасимволов/glob. */
+const SIMPLE_COMMAND_VALUE_RE = /^[^\s;|&<>(){}`$*?[\]]+$/;
+
 /** Проверяет один сегмент команды; null — сегмент не нарушает политику. */
 function checkShellSegment(
   segment: string,
@@ -2168,14 +2183,28 @@ function checkShellSegment(
   const testContext = commandWord === '[' || commandWord === '[['
     || commandWord === 'test' || commandWord === '((' || commandWord === '(((';
   if (/[$`]/.test(commandWord)) {
-    asks.push({
-      action: 'ask',
-      reason: sm('shellguard.ask_path', { path: commandWord }),
-      matchedRule: 'shell-policy.approve',
-      deniedPath: commandWord,
-      messageId: 'ask-protected-path',
-      params: { path: commandWord },
-    });
+    // Если имя команды раскрывается из литеральных биндингов (`for t in …`)
+    // в простые значения — проверяем каждый вариант как отдельную команду.
+    const values = expandToken(commandWord, bindings ?? EMPTY_BINDINGS);
+    const simple = values !== null && values.length > 0
+      && values.every((value) => SIMPLE_COMMAND_VALUE_RE.test(value));
+    if (!simple || depth >= MAX_EMBEDDED_DEPTH) {
+      asks.push(askForDynamicCommand(commandWord));
+    } else {
+      const cmdIdx = commandIndex(tokens);
+      for (const value of values!) {
+        const rewrittenTokens = tokens.slice();
+        rewrittenTokens[cmdIdx] = value;
+        const rewritten = joinShellTokens(rewrittenTokens);
+        const r = checkShellSegment(
+          rewritten, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes,
+          env, bindings, roots, depth + 1,
+        );
+        if (!r) continue;
+        if (r.action === 'deny') return r;
+        deferredAsk ??= r;
+      }
+    }
   }
 
   // 6. Неразрешимая динамика-путь без защищённых маркеров: подтверждение

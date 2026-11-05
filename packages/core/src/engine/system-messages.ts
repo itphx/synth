@@ -371,6 +371,7 @@ export const SYSTEM_MESSAGES = {
   'shellguard.deny_prefix': 'Command denied by shell policy: prefix "{prefix}"',
   'shellguard.deny_path': 'Access denied by shell policy: path "{path}" is protected',
   'shellguard.ask_path': 'Path "{path}" requires approval per shell policy',
+  'shellguard.ask_command': 'Command "{command}" is resolved dynamically and requires approval per shell policy',
   'shellguard.deny_dir': 'Access denied by shell policy: path "{path}" is in protected directory "{dir}"',
 
   // --- Защищённые пути (protected-paths) ---

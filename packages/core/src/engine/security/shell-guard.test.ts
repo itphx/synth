@@ -728,9 +728,10 @@ describe('checkShellCommand — паттерны аргументов, workspace
       `C='cat /etc/shadow'; bash -c "$C"`,
       "C='cat /etc/shadow'; sudo $C",
       "C='cat /etc/shadow'; $C",
-      'C=ls; $C',
     ];
     for (const cmd of cases) expect(check(cmd).action).not.toBe('allow');
+    // простые значения раскрываются и проверяются как команда
+    expect(check('C=ls; $C').action).toBe('allow');
     // слитные формы обёртки — тоже рекурсия
     expect(check(`bash -lc 'cat /etc/shadow'`).action).toBe('deny');
     expect(check(`sh -c'cat /etc/shadow'`).action).toBe('deny');
@@ -1042,8 +1043,8 @@ describe('H2: префиксные обёртки', () => {
     expect(check('nice -n 5 ls').action).toBe('allow');
   });
 
-  it('exec с динамическим именем команды → ask', () => {
-    expect(check("C=/bin/sh; exec $C -c 'cat /etc/shadow'").action).toBe('ask');
+  it('exec с раскрываемым именем команды проверяется как команда', () => {
+    expect(check("C=/bin/sh; exec $C -c 'cat /etc/shadow'").action).toBe('deny');
   });
 });
 
@@ -1400,5 +1401,34 @@ describe('stdin-код: heredoc/herestring для shell/интерпретато
     expect(check('cat <<EOF > /tmp/f').action).toBe('allow');
     expect(check("cat <<< 'hello'").action).toBe('allow');
     expect(check('grep <<< "$x"').action).toBe('allow');
+  });
+});
+
+describe('динамическое имя команды: раскрытие простых значений', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('точная команда владельца (for t in …; do "$t" --version) → allow', () => {
+    const cmd = 'echo "HOME=$HOME USER=$(id -un)"; for t in ansible ansible-vault kubectl helm just git; do printf \'%-14s\' "$t"; command -v "$t" >/dev/null 2>&1 && ($t --version 2>&1 | head -1) || echo MISSING; done; echo \'--- tmp/ проекта ---\'; ls -la tmp';
+    expect(check(cmd).action).toBe('allow');
+  });
+
+  it('for-цикл с простыми значениями → allow', () => {
+    expect(check('for t in ansible kubectl; do "$t" --version; done').action).toBe('allow');
+  });
+
+  it('раскрытые значения проверяются как команды', () => {
+    expect(check('C=rm; $C -rf /').action).toBe('deny');
+    expect(check('C=cat; $C /etc/shadow').action).toBe('deny');
+    expect(check("C=/bin/sh; $C -c 'cat /etc/shadow'").action).toBe('deny');
+  });
+
+  it('значения с пробелами/метасимволами и неизвестная динамика → ask', () => {
+    const r = check("C='cat /etc/shadow'; $C");
+    expect(r.action).toBe('ask');
+    expect(r.messageId).toBe('ask-dynamic-command');
+    expect(check("C='rm -rf /'; eval $C").action).toBe('ask');
+    expect(check('X=$(which ls); $X').action).toBe('ask');
+    expect(check('cat $X').action).toBe('ask');
+    expect(check('for c in cat; do $c $1; done').action).toBe('ask');
   });
 });
