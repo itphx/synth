@@ -294,4 +294,28 @@ describe('EventHub — watch-all клиенты (ADR-052/ADR-089)', () => {
 
     expect(received.length).toBe(0);
   });
+
+  // Регресс «no connected user to approve»: watch-all клиент (ADMIN/LEAD,
+  // service-key) подписан только глобально — `subscriberCount` для сессии у
+  // него 0, но подтвердить запрос он может.
+  it('all-клиент делает hasApprovalListeners(session)=true', async () => {
+    const { eventBus, hub } = makeHub([]);
+    const { client } = makeClient(true);
+    await hub.registerClient(client);
+
+    expect(eventBus.subscriberCount('foreign')).toBe(0);
+    expect(eventBus.hasApprovalListeners('foreign')).toBe(true);
+
+    hub.unregisterClient(client);
+    expect(eventBus.hasApprovalListeners('foreign')).toBe(false);
+  });
+
+  it('обычный клиент подтверждает запрос своей сессии (per-session)', async () => {
+    const { eventBus, hub } = makeHub(['mine']);
+    const { client } = makeClient();
+    await hub.registerClient(client);
+
+    expect(eventBus.hasApprovalListeners('mine')).toBe(true);
+    expect(eventBus.hasApprovalListeners('foreign')).toBe(false);
+  });
 });

@@ -63,6 +63,19 @@ interface BusSubscriber {
 }
 
 /**
+ * Опции глобальной подписки (`subscribeAll`).
+ *
+ * `userFacing` — подписчик обслуживает пользователя (UI: WS/SSE-хаб) и может
+ * ответить на запрос подтверждения (`permission.asked`). Машинные глобальные
+ * подписчики (исходящие webhooks, мост гибрида, пайплайны, коллекторы метрик)
+ * флаг **не** ставят: на headless-инстансе подтверждение тогда не публикуется
+ * вовсе и инструмент получает быстрый отказ, а не висит до `askTimeoutMs`.
+ */
+export interface SubscribeAllOptions {
+  userFacing?: boolean;
+}
+
+/**
  * ADR-118 §8: имя параметра, которым клиент заявляет свою модель сообщений
  * (WS — query-параметр, SSE — query-параметр).
  */
@@ -122,6 +135,12 @@ export function parseSinceParam(raw: string | null | undefined): number | null {
 export class EventBus {
   private _subscribers = new Map<string, Set<BusSubscriber>>();
   private _globalSubscribers = new Set<EventHandler>();
+  /**
+   * Подмножество глобальных подписчиков, обслуживающих пользователя (UI/WS/SSE).
+   * Используется только для проверки «есть кому подтвердить» — доставка идёт
+   * по полному набору `_globalSubscribers`.
+   */
+  private _userFacingGlobalSubscribers = new Set<EventHandler>();
   /** ADR-118: номер последнего события **сессии** (`latestEventSeq`). */
   private _seq = new Map<string, number>();
   /**
@@ -171,12 +190,16 @@ export class EventBus {
    * пользователям работает на управляемом backend'е (там у клиента есть
    * `userId`, и адресную доставку фильтрует `EventHub`).
    */
-  subscribeAll(handler: EventHandler): () => void {
+  subscribeAll(handler: EventHandler, opts: SubscribeAllOptions = {}): () => void {
     this._globalSubscribers.add(handler);
+    // `userFacing` — подписчик от имени пользователя (UI/WS/SSE), т.е. может
+    // ответить на `permission.asked`; без опции — машинная подписка.
+    if (opts.userFacing) this._userFacingGlobalSubscribers.add(handler);
     console.debug(`[EventBus] subscribeAll, globalHandlers=${this._globalSubscribers.size}`);
 
     return () => {
       this._globalSubscribers.delete(handler);
+      this._userFacingGlobalSubscribers.delete(handler);
     };
   }
 
@@ -360,6 +383,21 @@ export class EventBus {
 
   subscriberCount(sessionId: string): number {
     return this._subscribers.get(sessionId)?.size ?? 0;
+  }
+
+  /**
+   * «Есть кому подтвердить» (`permission.asked`): per-session подписчики **или**
+   * глобальные подписчики, обслуживающие пользователя (UI/WS/SSE).
+   *
+   * `subscriberCount` не меняется: watch-all клиенты (`ADMIN`/`LEAD`,
+   * service-key) подписаны через `subscribeAll` и per-session счётчика не
+   * увеличивают. Машинные глобальные подписки (webhooks, пайплайны, мост
+   * гибрида) сюда **не** входят — иначе на headless-инстансе подтверждение
+   * публиковалось бы и инструмент висел до `askTimeoutMs`.
+   */
+  hasApprovalListeners(sessionId: string): boolean {
+    if (this.subscriberCount(sessionId) > 0) return true;
+    return this._userFacingGlobalSubscribers.size > 0;
   }
 
   activeSessions(): string[] {

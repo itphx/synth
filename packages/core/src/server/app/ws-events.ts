@@ -311,7 +311,8 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
         if (connection.connected) {
           // Гибрид: события удалённых сессий (remote:<id>) публикует мост —
           // подписываемся на все события (без дублей для локальных).
-          unsubs.push(eventBus.subscribeAll(handler));
+          // `userFacing`: это UI-клиент — он может ответить на `permission.asked`.
+          unsubs.push(eventBus.subscribeAll(handler, { userFacing: true }));
         } else {
           // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) входит в
           // снимок подписок — иначе такие сессии остаются без подписчиков.

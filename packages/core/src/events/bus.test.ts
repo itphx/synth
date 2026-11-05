@@ -143,6 +143,64 @@ describe('EventBus', () => {
   });
 });
 
+// «Есть кому подтвердить» (`permission.asked`): per-session подписчики ЛИБО
+// user-facing глобальные (UI/WS/SSE). Машинные глобальные подписки (webhooks,
+// пайплайны, мост гибрида) подтверждение не обслуживают.
+describe('EventBus — hasApprovalListeners', () => {
+  let bus: EventBus;
+
+  beforeEach(() => {
+    bus = new EventBus();
+  });
+
+  it('без подписчиков — false', () => {
+    expect(bus.hasApprovalListeners('s1')).toBe(false);
+  });
+
+  it('per-session подписка — true', () => {
+    bus.subscribe('s1', vi.fn());
+    expect(bus.hasApprovalListeners('s1')).toBe(true);
+    // Другая сессия не покрыта.
+    expect(bus.hasApprovalListeners('s2')).toBe(false);
+  });
+
+  it('user-facing глобальная подписка (UI/WS/SSE) — true для любой сессии', () => {
+    bus.subscribeAll(vi.fn(), { userFacing: true });
+    expect(bus.hasApprovalListeners('s1')).toBe(true);
+    expect(bus.hasApprovalListeners('never-seen')).toBe(true);
+  });
+
+  it('машинная глобальная подписка (webhooks/пайплайны) — false', () => {
+    bus.subscribeAll(vi.fn());
+    expect(bus.hasApprovalListeners('s1')).toBe(false);
+  });
+
+  it('subscriberCount не меняется глобальными подписками (прежняя семантика)', () => {
+    bus.subscribeAll(vi.fn(), { userFacing: true });
+    expect(bus.subscriberCount('s1')).toBe(0);
+    expect(bus.hasApprovalListeners('s1')).toBe(true);
+  });
+
+  it('отписка user-facing подписчика снимает признак', () => {
+    const unsub = bus.subscribeAll(vi.fn(), { userFacing: true });
+    unsub();
+    expect(bus.hasApprovalListeners('s1')).toBe(false);
+  });
+
+  it('машинная и user-facing подписки не перекрывают друг друга', () => {
+    const machine = vi.fn();
+    const ui = vi.fn();
+    const unsubMachine = bus.subscribeAll(machine);
+    const unsubUi = bus.subscribeAll(ui, { userFacing: true });
+    // Отписка UI не снимает доставку машинному и наоборот.
+    unsubUi();
+    expect(bus.hasApprovalListeners('s1')).toBe(false);
+    bus.publish('s1', 'part.delta', {});
+    expect(machine).toHaveBeenCalledTimes(1);
+    unsubMachine();
+  });
+});
+
 // ADR-118 §4: адресная доставка (`BusEvent.recipient`).
 describe('EventBus — адресная доставка (ADR-118 §4)', () => {
   let bus: EventBus;

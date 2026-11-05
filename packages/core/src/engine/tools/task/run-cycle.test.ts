@@ -807,6 +807,40 @@ describe('run-cycle — permission-слой саб-агента (ADR-029)', () =
     expect(saved.settings.permission!.rules.noop).toBe('allow');
   });
 
+  it('ask approved с watch-all (user-facing) подписчиком — all-клиент UI подтверждает запрос саб-агента', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    // Watch-all клиент (ADMIN/LEAD, service-key): per-session подписок нет,
+    // подтверждение приходит глобально — раньше инструмент получал
+    // `noSubscribers` и не исполнялся.
+    bus.subscribeAll((e) => {
+      if (e.type === 'permission.asked') {
+        bus.publish(e.sessionId, 'permission.replied', {
+          approval_id: (e.data as Record<string, unknown>).approval_id,
+          action: 'allow',
+        });
+      }
+    }, { userFacing: true });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+    const { registry, counters } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, eventBus: bus, sessionManager, sessionId: parent.id, toolRegistry: registry,
+        permissionConfig: { rules: { noop: 'ask' }, askTimeoutMs: 1000 },
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(counters.noop).toBe(1);
+    expect(result.content).toContain('done');
+  });
+
   it('ask denied пользователем: тул не исполняется, но цикл продолжается (модель получает tool_result)', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const bus = new EventBus();

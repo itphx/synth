@@ -114,9 +114,12 @@ export class EventHub {
     const subs = this.clientSubs.get(client);
     if (!subs || subs.has(ALL_SESSIONS_KEY)) return;
 
+    // `userFacing`: клиент (WS/SSE) обслуживает пользователя и может ответить
+    // на `permission.asked`. Без флага подтверждение считалось бы «некому
+    // показать»: у watch-all клиентов per-session подписок нет.
     const unsub = this.eventBus.subscribeAll((event: BusEvent) => {
       this._deliver(client, event);
-    });
+    }, { userFacing: true });
     subs.set(ALL_SESSIONS_KEY, unsub);
   }
 

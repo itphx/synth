@@ -87,7 +87,7 @@ export function registerEventsSse(app: Hono, eventBus: EventBus): void {
           // созданных позже (events-funnel: auto-bind/ephemeral, add-on'ы),
           // терялись («0 subscribers — EVENT LOST»). В гибриде `remote:<id>`
           // публикует мост; локальные сессии обрабатывает оркестратор.
-          unsubs.push(eventBus.subscribeAll(handler));
+          unsubs.push(eventBus.subscribeAll(handler, { userFacing: true }));
 
           // ADR-118 §6: журнал событий — строго после `since` (глобальный хаб
           // подписан на все сессии; номер события глобальный, монотонный в

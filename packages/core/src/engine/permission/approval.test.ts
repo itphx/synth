@@ -26,6 +26,41 @@ describe('PermissionApprovalManager — ask flow', () => {
     expect(decision.noSubscribers).toBe(true);
   });
 
+  it('watch-all (user-facing) клиент получает permission.asked и резолвит ответ', async () => {
+    // Watch-all клиент UI (ADMIN/LEAD, service-key, standalone SSE) подписан
+    // глобально и НЕ имеет per-session подписок — подтверждение должно работать.
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribeAll((e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    }, { userFacing: true });
+
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(asked.at(-1)?.approval_id).toBe('approval_1');
+
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      action: 'allow',
+    });
+
+    const decision = await pending;
+    expect(decision.approved).toBe(true);
+    expect(decision.noSubscribers).toBeUndefined();
+  });
+
+  it('машинный глобальный подписчик не считается — сразу noSubscribers', async () => {
+    // Webhook/пайплайн/мост гибрида: подтверждение никто не покажет, поэтому
+    // не публикуем и не ждём таймаут.
+    const machine = vi.fn();
+    bus.subscribeAll(machine);
+
+    const decision = await manager.waitForDecision('s1', request, 1000);
+    expect(decision.approved).toBe(false);
+    expect(decision.noSubscribers).toBe(true);
+    expect(machine).not.toHaveBeenCalled();
+  });
+
   it('пользователь подтверждает (allow) — тул выполняется', async () => {
     const events: string[] = [];
     bus.subscribe('s1', (e) => events.push(e.type));

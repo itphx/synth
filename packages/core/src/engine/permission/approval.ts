@@ -122,7 +122,9 @@ export function parsePermissionPrincipal(value: unknown): AuthorityPrincipal | u
  *
  * Публикует событие `permission.asked` в EventBus (UI/пользователь может ответить),
  * затем ожидает `permission.replied` с совпадающим approval_id до таймаута.
- * Если у сессии нет подписчиков EventBus — спрашивать некому, возвращает отказ.
+ * Если у сессии нет **пользовательских** подписчиков (per-session либо
+ * user-facing глобальных, напр. watch-all клиент UI) — спрашивать некому,
+ * возвращает отказ; машинные глобальные подписки не считаются.
  *
  * ADR-106 Ф0: событие `permission.asked` **аддитивно** получает `principal`,
  * `turn_id` и `digest` (принципал/ход/отпечаток запроса). Поля опциональны —
@@ -157,7 +159,7 @@ export class PermissionApprovalManager {
     if (signal?.aborted) {
       return { approved: false, cancelled: true };
     }
-    if (this._eventBus.subscriberCount(sessionId) === 0) {
+    if (!this._eventBus.hasApprovalListeners(sessionId)) {
       return { approved: false, noSubscribers: true };
     }
 

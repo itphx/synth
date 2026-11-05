@@ -15,7 +15,7 @@ export {
   MESSAGE_MODEL_QUERY_PARAM, MESSAGE_MODEL_UNSUPPORTED_CLOSE_CODE, MESSAGE_MODEL_UNSUPPORTED_REASON,
   parseMessageModelParam, isSupportedMessageModelParam, parseSinceParam,
 } from './events/bus.js';
-export type { PublishOptions, SubscribeOptions } from './events/bus.js';
+export type { PublishOptions, SubscribeOptions, SubscribeAllOptions } from './events/bus.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).
