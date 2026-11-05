@@ -1542,6 +1542,10 @@ export const dict = {
   'permission.bar.noTimeout': 'waiting without timeout',
   'permission.bar.timeoutTitle': 'Time until request auto-denied',
   'permission.bar.grantedForSession': 'Tool {tool} allowed for the session',
+  'permission.bar.grantedShell': 'Shell allowed for the session: {patterns}',
+  'permission.bar.savePatterns': 'Will be allowed for the session: {patterns}',
+  'permission.bar.saveUnavailable': 'The command pattern cannot be derived — only a one-time allow is possible',
+  'permission.bar.saveUnavailableShort': 'Once only',
   'permission.bar.replyFailed': 'Could not send the answer — the request is still open',
 
   // User questions (stage 1 roadmap 0.13 — block 1.3): dock above the composer.
@@ -1738,6 +1742,8 @@ export const dict = {
   'sessionSettings.allow.empty': 'No approved tools',
   'sessionSettings.allow.hint': 'Allow-rules appear after "Allow in session" in the approval panel',
   'sessionSettings.allow.remove': 'Remove',
+  'sessionSettings.allow.shellAll': 'Shell — all session commands',
+  'sessionSettings.allow.shellPattern': 'Shell — command «{pattern}»',
   // Micro-layer (quick answers) per session
   'sessionSettings.micro.title': 'Quick answers',
   'sessionSettings.micro.tooltip': 'Simple requests — greetings, yes/no, task classification — are handled instantly by rules or embeddings, without calling the large model. This speeds up responses and saves tokens. If a request is complex or confidence is low, the LLM is called automatically. The confidence threshold is configured below.',

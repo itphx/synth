@@ -13,6 +13,8 @@ import {
   loadShellPolicy,
   clearShellPolicyCache,
   matchShellCommandPattern,
+  shellSavePatterns,
+  isShellCommandGranted,
 } from './shell-guard.js';
 import type { ShellPolicy } from './shell-guard.js';
 
@@ -1430,5 +1432,65 @@ describe('динамическое имя команды: раскрытие п�
     expect(check('X=$(which ls); $X').action).toBe('ask');
     expect(check('cat $X').action).toBe('ask');
     expect(check('for c in cat; do $c $1; done').action).toBe('ask');
+  });
+});
+
+describe('shellSavePatterns / isShellCommandGranted', () => {
+  it('паттерны команды: команда + подкоманда', () => {
+    expect(shellSavePatterns('git status --porcelain')).toEqual(['git status *']);
+    expect(shellSavePatterns('git --version')).toEqual(['git *']);
+    expect(shellSavePatterns('kubectl get pods -o wide')).toEqual(['kubectl get *']);
+    expect(shellSavePatterns('docker compose up -d')).toEqual(['docker compose *']);
+    expect(shellSavePatterns('cd /tmp')).toEqual(['cd *']);
+    expect(shellSavePatterns('ls -la')).toEqual(['ls *']);
+  });
+
+  it('for-заголовок паттерн не даёт; тело цикла — даёт', () => {
+    const patterns = shellSavePatterns('for t in ansible kubectl; do "$t" --version; done');
+    expect(patterns).toContain('ansible *');
+    expect(patterns).toContain('kubectl *');
+    expect(patterns ?? []).not.toContain('for *');
+  });
+
+  it('смешанная команда: cd/grep/wc/ansible/ls', () => {
+    const patterns = shellSavePatterns(
+      'cd /var/synth/data && grep -q x file; wc -l file; for t in ansible; do "$t" --version; done; ls -la',
+    );
+    expect(patterns).toEqual(expect.arrayContaining(['cd *', 'grep *', 'wc *', 'ansible *', 'ls *']));
+  });
+
+  it('динамическая команда: простые значения раскрываются, строки-команды → null', () => {
+    expect(shellSavePatterns('C=rm; $C -rf /')).toEqual(['rm *']);
+    expect(shellSavePatterns("C='rm -rf /'; $C")).toBeNull();
+    expect(shellSavePatterns('X=$(which ls); $X')).toBeNull();
+  });
+
+  it('isShellCommandGranted: покрытие каждого сегмента', () => {
+    const rules: Record<string, import('@itphx/synth-shared').PermissionRule> = {
+      execute_shell: { 'git status *': 'allow', 'ls *': 'allow', 'ansible *': 'allow' },
+    };
+    expect(isShellCommandGranted('git status --porcelain', rules)).toBe(true);
+    expect(isShellCommandGranted('ls -la && git status', rules)).toBe(true);
+    expect(isShellCommandGranted('rm -rf /', rules)).toBe(false);
+    expect(isShellCommandGranted('for t in ansible; do "$t" --version; done', rules)).toBe(true);
+    expect(isShellCommandGranted('C=cat; $C /etc/shadow', { execute_shell: { 'cat *': 'allow' } })).toBe(true);
+    expect(isShellCommandGranted('cat $X', { execute_shell: { 'cat *': 'allow' } })).toBe(true);
+    expect(isShellCommandGranted('cat $X', {})).toBe(false);
+    expect(isShellCommandGranted('cat $X', { execute_shell: 'allow' })).toBe(true);
+  });
+
+  it('deny не снимается паттернами: грант не влияет на checkShellCommand', () => {
+    const r = checkShellCommand('C=rm; $C -rf /', CWD, TEST_POLICY);
+    expect(r.action).toBe('deny');
+  });
+});
+
+describe('ask-dynamic-code: чистая подстановка как код/аргумент', () => {
+  it('xargs sh -c "$(cat cmd)" → ask ask-dynamic-code', () => {
+    const r = checkShellCommand("xargs sh -c '$(cat cmd)'", CWD, TEST_POLICY);
+    expect(r.action).toBe('ask');
+    expect(r.messageId).toBe('ask-dynamic-code');
+    expect(r.askKind).toBe('dynamic');
+    expect(r.params?.code).toContain('$(cat');
   });
 });

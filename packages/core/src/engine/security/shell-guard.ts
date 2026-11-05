@@ -24,7 +24,7 @@ import { readFileSync, existsSync, opendirSync, type Dir } from 'node:fs';
 import { join, dirname, resolve, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
-import { globMatch } from '@itphx/synth-shared';
+import { globMatch, type PermissionRule } from '@itphx/synth-shared';
 import { resolveRealPath, isLexicallyInside } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
 import { tokenizeCommand, splitShellSegments } from './shell-lexer.js';
@@ -70,6 +70,11 @@ export interface ShellCheckResult {
   messageId?: string;
   /** Параметры подстановки в сообщение ({{path}}, {{dir}}, {{command}}). */
   params?: Record<string, string>;
+  /**
+   * Причина `ask` (для снятия сессионным shell-грантом). Снимается только
+   * `dynamic`; `protected`/`mutation`/`cwd` — никогда.
+   */
+  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
 }
 
 /** Пустая политика — fallback, если файлы не найдены или невалидны. */
@@ -1129,7 +1134,7 @@ export function checkShellCommand(
     const nextCwd = resolveCdCwd(segment, currentCwd, env, bindings);
     if (nextCwd !== null) {
       if ('cwd' in nextCwd) currentCwd = nextCwd.cwd;
-      else ask ??= askForDynamic(nextCwd.target);
+      else ask ??= askForDynamic(nextCwd.target, 'cwd');
     }
   }
   if (ask) return ask;
@@ -1175,6 +1180,7 @@ function askByPath(hit: string): ShellCheckResult {
     deniedPath: hit,
     messageId: 'ask-protected-path',
     params: { path: normalize(hit) },
+    askKind: 'protected',
   };
 }
 
@@ -1393,7 +1399,10 @@ function isSinglePathValue(value: string): boolean {
 }
 
 /** ask на динамический/непроверяемый токен. */
-function askForDynamic(token: string): ShellCheckResult {
+function askForDynamic(
+  token: string,
+  askKind: NonNullable<ShellCheckResult['askKind']> = 'dynamic',
+): ShellCheckResult {
   return {
     action: 'ask',
     reason: sm('shellguard.ask_path', { path: token }),
@@ -1401,6 +1410,20 @@ function askForDynamic(token: string): ShellCheckResult {
     deniedPath: token,
     messageId: 'ask-protected-path',
     params: { path: token },
+    askKind,
+  };
+}
+
+/** ask: чистая динамическая подстановка передаётся как код/аргумент. */
+function askForDynamicCode(code: string): ShellCheckResult {
+  return {
+    action: 'ask',
+    reason: sm('shellguard.ask_code', { code }),
+    matchedRule: 'shell-policy.approve',
+    deniedPath: code,
+    messageId: 'ask-dynamic-code',
+    params: { code },
+    askKind: 'dynamic',
   };
 }
 
@@ -1578,10 +1601,10 @@ function checkFindMutationStarts(
     const resolved = tryResolvePath(start, cwd, env);
     if (!resolved || resolved.source !== 'literal') {
       // Динамический стартовый путь (`$(pwd)/..`, backtick) — fail-closed ask.
-      if (hasUnresolvedDynamic(start)) return askForDynamic(start);
+      if (hasUnresolvedDynamic(start)) return askForDynamic(start, 'mutation');
       continue;
     }
-    if (!isInsideRootsLexicalFallback(resolved.path, roots)) return askForDynamic(start);
+    if (!isInsideRootsLexicalFallback(resolved.path, roots)) return askForDynamic(start, 'mutation');
   }
   return null;
 }
@@ -1655,6 +1678,12 @@ function checkEmbeddedExecutorArgs(
     // (`timeout 20 ansible-vault view secrets/credentials.yml`), но если токен
     // уже признан кодом/командой — проверяется ниже.
     if (candidate === null || candidate === '') continue;
+    // Чистая динамическая подстановка как код/аргумент: не режем её на
+    // `$(cat` и не рекурсируем по обрывку — fail-closed ask с полным токеном.
+    if (/^\$\([\s\S]*\)$/.test(candidate) || /^`[\s\S]*`$/.test(candidate)
+      || candidate.startsWith('$(')) {
+      return askForDynamicCode(candidate);
+    }
     if (hasDynamicCommandishBefore(i)) continue;
 
     if (codeTouchesProtectedPath(candidate, policy)) return deniedByDynamicToken(candidate);
@@ -1998,6 +2027,7 @@ function askForDynamicCommand(command: string): ShellCheckResult {
     deniedPath: command,
     messageId: 'ask-dynamic-command',
     params: { command },
+    askKind: 'dynamic',
   };
 }
 
@@ -2183,26 +2213,31 @@ function checkShellSegment(
   const testContext = commandWord === '[' || commandWord === '[['
     || commandWord === 'test' || commandWord === '((' || commandWord === '(((';
   if (/[$`]/.test(commandWord)) {
-    // Если имя команды раскрывается из литеральных биндингов (`for t in …`)
-    // в простые значения — проверяем каждый вариант как отдельную команду.
-    const values = expandToken(commandWord, bindings ?? EMPTY_BINDINGS);
-    const simple = values !== null && values.length > 0
-      && values.every((value) => SIMPLE_COMMAND_VALUE_RE.test(value));
-    if (!simple || depth >= MAX_EMBEDDED_DEPTH) {
-      asks.push(askForDynamicCommand(commandWord));
+    // Чистая подстановка как код/команда — отдельное сообщение, не «имя команды».
+    if (commandWord.startsWith('$(') || commandWord.startsWith('`')) {
+      asks.push(askForDynamicCode(commandWord));
     } else {
-      const cmdIdx = commandIndex(tokens);
-      for (const value of values!) {
-        const rewrittenTokens = tokens.slice();
-        rewrittenTokens[cmdIdx] = value;
-        const rewritten = joinShellTokens(rewrittenTokens);
-        const r = checkShellSegment(
-          rewritten, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes,
-          env, bindings, roots, depth + 1,
-        );
-        if (!r) continue;
-        if (r.action === 'deny') return r;
-        deferredAsk ??= r;
+      // Если имя команды раскрывается из литеральных биндингов (`for t in …`)
+      // в простые значения — проверяем каждый вариант как отдельную команду.
+      const values = expandToken(commandWord, bindings ?? EMPTY_BINDINGS);
+      const simple = values !== null && values.length > 0
+        && values.every((value) => SIMPLE_COMMAND_VALUE_RE.test(value));
+      if (!simple || depth >= MAX_EMBEDDED_DEPTH) {
+        asks.push(askForDynamicCommand(commandWord));
+      } else {
+        const cmdIdx = commandIndex(tokens);
+        for (const value of values!) {
+          const rewrittenTokens = tokens.slice();
+          rewrittenTokens[cmdIdx] = value;
+          const rewritten = joinShellTokens(rewrittenTokens);
+          const r = checkShellSegment(
+            rewritten, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes,
+            env, bindings, roots, depth + 1,
+          );
+          if (!r) continue;
+          if (r.action === 'deny') return r;
+          deferredAsk ??= r;
+        }
       }
     }
   }
@@ -2245,6 +2280,152 @@ function checkShellSegment(
   if (asks.length > 0) return asks[0]!;
   if (deferredAsk) return deferredAsk;
   return null;
+}
+
+/** Ключевые слова-заголовки: сегмент не даёт shell-паттерн. */
+const SHELL_HEADER_KEYWORDS = new Set(['for', 'while', 'until', 'if', 'case', 'elif']);
+/** Команды с подкомандой (`git status *`, `kubectl get *`, `docker compose *`). */
+const SUBCOMMAND_TOOLS = new Set([
+  'git', 'kubectl', 'oc', 'docker', 'podman', 'nerdctl', 'helm', 'kustomize',
+  'npm', 'pnpm', 'yarn', 'bun', 'deno', 'cargo', 'go', 'brew', 'pip', 'pip3',
+  'apt', 'apt-get', 'dnf', 'yum', 'pacman', 'systemctl', 'service', 'terraform',
+  'aws', 'gcloud', 'az', 'ansible-galaxy', 'poetry', 'composer', 'dotnet',
+]);
+
+/** Паттерн сессионного гранта для одной команды (команда + подкоманда + `*`). */
+function shellPatternFor(tokens: string[], cmd: string): string {
+  const base = shellBasename(cmd);
+  if (SUBCOMMAND_TOOLS.has(base)) {
+    const sub = tokens[1];
+    if (sub !== undefined && !sub.startsWith('-') && !/[$`;|&<>]/.test(sub)) {
+      return `${cmd} ${sub} *`;
+    }
+  }
+  return `${cmd} *`;
+}
+
+/** Собирает паттерны из вложенной команды; `false` — нерезолвимая динамика. */
+function collectShellPatterns(
+  segment: string,
+  bindings: ReadonlyMap<string, ShellBinding>,
+  out: string[],
+  depth: number,
+): boolean {
+  const rawTokens = tokenizeCommand(segment);
+  if (rawTokens.length === 0) return true;
+  if (SHELL_HEADER_KEYWORDS.has(rawTokens[0]!)) return true;
+  const tokens = stripShellPrefixes(rawTokens);
+  if (tokens.length === 0) return true;
+
+  const inner = extractWrappedCommand(segment, tokens);
+  if (inner !== null) {
+    if (depth >= MAX_EMBEDDED_DEPTH) return false;
+    for (const nested of splitShellSegments(inner)) {
+      if (!collectShellPatterns(nested, bindings, out, depth + 1)) return false;
+    }
+    return true;
+  }
+
+  const cmdIdx = commandIndex(tokens);
+  if (cmdIdx < 0) return true;
+  const cmd = tokens[cmdIdx]!;
+  if (cmd === '') return true;
+
+  if (/[$`]/.test(cmd)) {
+    const values = expandToken(cmd, bindings);
+    if (values === null || values.length === 0) return false;
+    if (!values.every((value) => SIMPLE_COMMAND_VALUE_RE.test(value))) return false;
+    for (const value of values) {
+      const effective = tokens.slice();
+      effective[cmdIdx] = value;
+      out.push(shellPatternFor(effective, value));
+    }
+    return true;
+  }
+  out.push(shellPatternFor(tokens, cmd));
+  return true;
+}
+
+/**
+ * Паттерны для сессионного shell-гранта (`{ "<pattern>": "allow" }`).
+ * `null` — хотя бы одна команда нерезолвима (грант безопасно не выдаётся);
+ * `[]` — паттернов нет (только заголовки). Дедуп, порядок появления, ≤ 20.
+ */
+export function shellSavePatterns(command: string): string[] | null {
+  const bindings = collectBindings(command);
+  const out: string[] = [];
+  for (const segment of splitShellSegments(command)) {
+    if (!collectShellPatterns(segment, bindings, out, 0)) return null;
+  }
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const pattern of out) {
+    if (seen.has(pattern)) continue;
+    seen.add(pattern);
+    unique.push(pattern);
+    if (unique.length >= 20) break;
+  }
+  return unique;
+}
+
+/** Покрыт ли каждый исполняемый сегмент команды allow-паттернами гранта. */
+export function isShellCommandGranted(
+  command: string,
+  rules: Record<string, PermissionRule>,
+): boolean {
+  const rule = rules.execute_shell ?? rules.shell;
+  if (rule === undefined) return false;
+  if (rule === 'allow') return true;
+  if (typeof rule !== 'object' || rule === null) return false;
+  const patterns = Object.entries(rule)
+    .filter(([, action]) => action === 'allow')
+    .map(([pattern]) => pattern);
+  if (patterns.length === 0) return false;
+
+  const bindings = collectBindings(command);
+  let checked = false;
+
+  const matches = (tokens: string[], cmdIdx: number, cmd: string): boolean => {
+    const effective = tokens.slice();
+    effective[cmdIdx] = cmd;
+    const rendered = joinShellTokens(effective);
+    return patterns.some((pattern) => matchShellCommandPattern(pattern, rendered));
+  };
+
+  const grantedSegment = (segment: string, depth: number): boolean => {
+    const rawTokens = tokenizeCommand(segment);
+    if (rawTokens.length === 0) return true;
+    if (SHELL_HEADER_KEYWORDS.has(rawTokens[0]!)) return true;
+    const tokens = stripShellPrefixes(rawTokens);
+    if (tokens.length === 0) return true;
+
+    const inner = extractWrappedCommand(segment, tokens);
+    if (inner !== null) {
+      if (depth >= MAX_EMBEDDED_DEPTH) return false;
+      return splitShellSegments(inner).every((nested) => grantedSegment(nested, depth + 1));
+    }
+
+    const cmdIdx = commandIndex(tokens);
+    if (cmdIdx < 0) return true;
+    const cmd = tokens[cmdIdx]!;
+    checked = true;
+    if (/[$`]/.test(cmd)) {
+      const values = expandToken(cmd, bindings);
+      if (values === null || values.length === 0) return false;
+      return values.every((value) => {
+        if (!SIMPLE_COMMAND_VALUE_RE.test(value)) return false;
+        return matches(tokens, cmdIdx, value);
+      });
+    }
+    return matches(tokens, cmdIdx, cmd);
+  };
+
+  const segments = splitShellSegments(command);
+  if (segments.length === 0) return false;
+  for (const segment of segments) {
+    if (!grantedSegment(segment, 0)) return false;
+  }
+  return checked;
 }
 
 /**

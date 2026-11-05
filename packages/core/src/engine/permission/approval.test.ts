@@ -81,6 +81,51 @@ describe('PermissionApprovalManager — ask flow', () => {
     expect(decision.timeout).toBeUndefined();
   });
 
+  it('save: [] уходит в permission.asked как есть (shell без выводимых паттернов)', async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe('s1', (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const pending = manager.waitForDecision('s1', {
+      ...request,
+      toolName: 'execute_shell',
+      arguments: { command: "C='cat /etc/shadow'; $C" },
+      save: [],
+    }, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Пустой массив — явный сигнал «в сессии сохранить нельзя» (а не отсутствие поля).
+    expect(asked.at(-1)?.save).toEqual([]);
+
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      action: 'allow',
+      once: true,
+    });
+    await pending;
+  });
+
+  it('без save поле в permission.asked не появляется', async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe('s1', (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(asked.at(-1)).not.toHaveProperty('save');
+
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      action: 'allow',
+      once: true,
+    });
+    await pending;
+  });
+
   it('пользователь отклоняет — отказ', async () => {
     const pending = manager.waitForDecision('s1', request, 1000);
     await new Promise((r) => setTimeout(r, 10));

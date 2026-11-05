@@ -9,7 +9,7 @@ import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 
 const LIMIT_OPTIONS = [50, 100, 200, 500]
-const SCOPES: SecurityAuditScope[] = ['tools', 'webhooks', 'mcp']
+const SCOPES: SecurityAuditScope[] = ['tools', 'webhooks', 'mcp', 'permission']
 
 /** Единый стиль select в logviewer (как в AuditLogPanel). */
 const CONTROL_CLASS =
@@ -18,6 +18,8 @@ const CONTROL_CLASS =
 const ACTION_BADGE: Record<string, string> = {
   update: 'bg-status-info/15 text-status-info',
   reset: 'bg-status-warning/15 text-status-warning',
+  grant: 'bg-status-success/15 text-status-success',
+  revoke: 'bg-destructive/15 text-destructive',
 }
 
 /**
@@ -28,15 +30,19 @@ export function summarizePolicy(value: unknown): string {
   if (value == null) return '—'
   if (typeof value === 'string') return value
   if (typeof value === 'object') {
-    const policy = value as { mode?: unknown; list?: unknown; exceptions?: unknown }
-    if (typeof policy.mode === 'string') {
-      const list = Array.isArray(policy.list)
-        ? policy.list.filter((item): item is string => typeof item === 'string')
+    const snapshot = value as { mode?: unknown; list?: unknown; exceptions?: unknown; patterns?: unknown }
+    if (Array.isArray(snapshot.patterns)) {
+      const patterns = snapshot.patterns.filter((item): item is string => typeof item === 'string')
+      return patterns.join(', ') || '—'
+    }
+    if (typeof snapshot.mode === 'string') {
+      const list = Array.isArray(snapshot.list)
+        ? snapshot.list.filter((item): item is string => typeof item === 'string')
         : []
-      const exceptions = Array.isArray(policy.exceptions)
-        ? policy.exceptions.filter((item): item is string => typeof item === 'string')
+      const exceptions = Array.isArray(snapshot.exceptions)
+        ? snapshot.exceptions.filter((item): item is string => typeof item === 'string')
         : []
-      const parts = [`${policy.mode}: ${list.join(', ') || '∅'}`]
+      const parts = [`${snapshot.mode}: ${list.join(', ') || '∅'}`]
       if (exceptions.length > 0) parts.push(`exc ${exceptions.join(', ')}`)
       return parts.join('; ')
     }

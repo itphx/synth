@@ -141,6 +141,13 @@
 - Permissions и режимы — только через `PermissionEvaluator`
   (`engine/permission/evaluator.ts`): `plan`/`act`/`yolo`,
   `allow`/`deny`/`ask`; не хардкодить проверки в тулах (ADR-025/028/029).
+- **Сессионный shell-грант паттернами (ADR-029).** `shellSavePatterns(command)`
+  (`engine/security/shell-guard.ts`) даёт паттерны правила
+  `execute_shell: { "<cmd> *": "allow" }` (`null` — динамика нерезолвима, грант не выдаётся;
+  дедуп, порядок появления, ≤ 20); `isShellCommandGranted` снимает **только** `ask` с
+  `askKind: 'dynamic'` (`protected`/`mutation`/`cwd`/`deny` — никогда); `permission.asked`
+  несёт аддитивное `save`, а выдача пишется в аудит (`scope:'permission'`, `action:'grant'`)
+  через шов `OrchestratorOptions.onPermissionGrant`.
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.

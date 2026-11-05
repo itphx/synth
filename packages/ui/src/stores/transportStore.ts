@@ -2473,6 +2473,10 @@ export function createDispatcher(): EventDispatcher {
         const timeoutMs = (payload.ask_timeout_ms as number | undefined) ?? PERMISSION_ASK_TIMEOUT_MS
         // Превью изменений (аддитивно): diff по файлам, которые тул изменит.
         const preview = parsePermissionPreview(payload.preview)
+        // Shell-грант: паттерны, которые будут разрешены в сессии (аддитивно).
+        const save = Array.isArray(payload.save)
+          ? payload.save.filter((item): item is string => typeof item === 'string')
+          : undefined
 
         usePermissionStore.getState().addRequest(sid, {
           approvalId,
@@ -2482,6 +2486,7 @@ export function createDispatcher(): EventDispatcher {
           askedAt: new Date().toISOString(),
           timeoutMs,
           ...(preview ? { preview } : {}),
+          ...(save ? { save } : {}),
         })
         break
       }

@@ -128,10 +128,10 @@ export interface EgressRequestLogEntry {
 }
 
 /** Скоупы изменений egress-политик/прокси в security-аудите. */
-export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents'] as const;
+export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'permission'] as const;
 export type SecurityAuditScope = (typeof SECURITY_AUDIT_SCOPES)[number];
 
-export const SECURITY_AUDIT_ACTIONS = ['update', 'reset'] as const;
+export const SECURITY_AUDIT_ACTIONS = ['update', 'reset', 'grant', 'revoke'] as const;
 export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];
 
 /**

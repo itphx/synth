@@ -29,7 +29,7 @@ import type {
   AuthorityShadowHook,
   AuthorityShadowContext,
 } from '../authority/hook.js';
-import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
+import { checkShellCommand, isMutatingCommand, isShellCommandGranted, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import { checkPath } from '../security/protected-paths.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
@@ -526,13 +526,20 @@ export class PermissionEvaluator {
         allowedRoots: perimeterRoots(workingDir, input.allowedRoots),
       });
       if (sc.action !== 'allow') {
-        return {
-          action: sc.action,
-          reason: sc.reason,
-          matchedRule: sc.matchedRule,
-          messageId: sc.messageId,
-          params: sc.params,
-        };
+        // Сессионный shell-грант (набор паттернов команд) снимает только
+        // динамический `ask` (непроверяемая динамика); `protected`/`mutation`/
+        // `cwd` и `deny` не снимаются никогда.
+        const liftedByGrant = sc.action === 'ask' && sc.askKind === 'dynamic'
+          && isShellCommandGranted(shellCommand, this._rules);
+        if (!liftedByGrant) {
+          return {
+            action: sc.action,
+            reason: sc.reason,
+            matchedRule: sc.matchedRule,
+            messageId: sc.messageId,
+            params: sc.params,
+          };
+        }
       }
     }
 

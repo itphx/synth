@@ -1516,6 +1516,10 @@ export const dict = {
   'permission.bar.noTimeout': 'ожидание без таймаута',
   'permission.bar.timeoutTitle': 'Время до авто-отклонения запроса',
   'permission.bar.grantedForSession': 'Инструмент {tool} разрешён для сессии',
+  'permission.bar.grantedShell': 'Shell разрешён в сессии: {patterns}',
+  'permission.bar.savePatterns': 'Будет разрешено в сессии: {patterns}',
+  'permission.bar.saveUnavailable': 'Паттерн команды не выводится — можно разрешить только один раз',
+  'permission.bar.saveUnavailableShort': 'Только один раз',
   'permission.bar.replyFailed': 'Не удалось отправить ответ — запрос остался открытым',
 
   // Вопросы пользователю (этап 1 roadmap 0.13 — блок 1.3): док над вводом.
@@ -1715,6 +1719,8 @@ export const dict = {
   'sessionSettings.allow.empty': 'Нет одобренных инструментов',
   'sessionSettings.allow.hint': 'Allow-правила появляются после «Разрешить в сессии» в панели подтверждения',
   'sessionSettings.allow.remove': 'Удалить',
+  'sessionSettings.allow.shellAll': 'Shell — все команды сессии',
+  'sessionSettings.allow.shellPattern': 'Shell — команда «{pattern}»',
   // Микро-слой (быстрые ответы) per-session
   'sessionSettings.micro.title': 'Быстрые ответы',
   'sessionSettings.micro.tooltip': 'Простые запросы — приветствия, да/нет, классификация задач — обрабатываются мгновенно по правилам или embedding, без вызова большой модели. Это ускоряет ответ и экономит токены. Если запрос сложный или уверенность низкая — автоматически вызывается LLM. Порог уверенности настраивается ниже.',
@@ -3240,6 +3246,7 @@ export const dict = {
   'shellguard.deny_path': 'Доступ запрещён shell-политикой: путь «{path}» защищён',
   'shellguard.ask_path': 'Путь «{path}» требует подтверждения согласно shell-политике',
   'shellguard.ask_command': 'Имя команды «{command}» вычисляется динамически и требует подтверждения согласно shell-политике',
+  'shellguard.ask_code': 'Динамическая подстановка «{code}» передаётся как код/аргумент и не может быть проверена заранее',
   'shellguard.deny_dir': 'Доступ запрещён shell-политикой: путь «{path}» находится в защищённом каталоге «{dir}»',
 
   // --- Защищённые пути (protected-paths) ---

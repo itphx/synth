@@ -50,6 +50,11 @@ export interface ApprovalRequest {
    * удалось → поля нет, поведение прежнее.
    */
   preview?: PermissionPreview;
+  /**
+   * Shell-одобрение паттернами (аддитивно): набор командных паттернов, которые
+   * будут разрешены сессии кнопкой «Разрешить в сессии».
+   */
+  save?: string[];
 }
 
 export interface ApprovalDecision {
@@ -271,6 +276,8 @@ export class PermissionApprovalManager {
         digest,
         // ADR-029: аддитивное превью изменений (дифф по файлам).
         ...(request.preview ? { preview: request.preview } : {}),
+        // Shell-грант: какие паттерны будут разрешены в сессии.
+        ...(request.save ? { save: request.save } : {}),
       });
     });
   }

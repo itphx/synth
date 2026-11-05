@@ -18,6 +18,8 @@ export interface PermissionRequest {
    * изменится. Поля нет, если превью не посчиталось или сервер его не прислал.
    */
   preview?: PermissionPreview
+  /** Паттерны shell-гранта, которые будут разрешены в сессии (аддитивно). */
+  save?: string[]
 }
 
 /**

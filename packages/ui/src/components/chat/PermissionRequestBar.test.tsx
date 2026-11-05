@@ -16,6 +16,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { PermissionRequestBar } from './PermissionRequestBar'
 import { usePermissionStore } from '@/stores/permissionStore'
+import { useTransportStore } from '@/stores/transportStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -48,6 +49,18 @@ function addRequest(preview?: PermissionPreview): void {
   })
 }
 
+function addShellRequest(save: string[]): void {
+  usePermissionStore.getState().addRequest(SESSION_ID, {
+    approvalId: 'approval_shell',
+    toolName: 'execute_shell',
+    params: { command: 'ansible-playbook site.yml' },
+    reason: 'правило shell.* → ask',
+    askedAt: new Date().toISOString(),
+    timeoutMs: 30_000,
+    save,
+  })
+}
+
 async function renderBar(sessionId = SESSION_ID): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -73,6 +86,7 @@ afterEach(async () => {
   }
   usePermissionStore.setState({ requestsBySession: {} })
   vi.clearAllMocks()
+  vi.restoreAllMocks()
 })
 
 describe('PermissionRequestBar — превью изменений', () => {
@@ -131,5 +145,75 @@ describe('PermissionRequestBar — превью изменений', () => {
       toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(preview.textContent).toContain('+uno')
+  })
+})
+
+describe('PermissionRequestBar — сессионный shell-грант паттернами', () => {
+  beforeAll(() => {
+    useI18nStore.setState({ locale: 'ru', dictionary: ruDict, loadingLocale: null })
+  })
+
+  it('запрос с save показывает паттерны, которые разрешит «Разрешить в сессии»', async () => {
+    addShellRequest(['ansible *', 'cd *'])
+    const container = await renderBar()
+
+    const row = container.querySelector('[data-testid="permission-save-patterns"]')
+    expect(row).not.toBeNull()
+    expect(row!.textContent).toContain('ansible *')
+    expect(row!.textContent).toContain('cd *')
+  })
+
+  it('без save строка паттернов не рендерится', async () => {
+    addRequest()
+    const container = await renderBar()
+    expect(container.querySelector('[data-testid="permission-save-patterns"]')).toBeNull()
+  })
+
+  it('save: [] (паттерн не выводится) — кнопки «Разрешить в сессии» нет, есть подсказка', async () => {
+    addShellRequest([])
+    const container = await renderBar()
+
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).not.toContain('Разрешить в сессии')
+    expect(labels).toContain('Разрешить один раз')
+    expect(labels).toContain('Запретить')
+
+    const hint = container.querySelector('[data-testid="permission-save-unavailable"]')
+    expect(hint).not.toBeNull()
+    expect(hint!.getAttribute('title')).toContain('Паттерн команды не выводится')
+  })
+
+  it('save с паттернами — кнопка «Разрешить в сессии» на месте', async () => {
+    addShellRequest(['git status *'])
+    const container = await renderBar()
+
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toContain('Разрешить в сессии')
+    expect(container.querySelector('[data-testid="permission-save-unavailable"]')).toBeNull()
+  })
+
+  it('«Разрешить в сессии» отвечает once:false и показывает shell-тост с паттернами', async () => {
+    addShellRequest(['ansible *', 'cd *'])
+    const reply = vi
+      .spyOn(useTransportStore.getState(), 'sendPermissionReply')
+      .mockResolvedValue(true)
+    const container = await renderBar()
+
+    const button = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Разрешить в сессии',
+    )
+    expect(button, 'кнопка «Разрешить в сессии»').toBeTruthy()
+
+    await act(async () => {
+      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(reply).toHaveBeenCalledWith(SESSION_ID, 'approval_shell', true, false)
+    expect(mocks.notify).toHaveBeenCalledTimes(1)
+    const toast = mocks.notify.mock.calls[0]![0] as { text: string; type: string }
+    expect(toast.type).toBe('success')
+    expect(toast.text).toContain('Shell разрешён в сессии')
+    expect(toast.text).toContain('`ansible *`')
+    expect(toast.text).toContain('`cd *`')
   })
 })

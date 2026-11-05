@@ -54,6 +54,7 @@ vi.mock('@/components/ui/popover', async () => {
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { SessionSettingsTab } from './SessionSettingsTab'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -97,8 +98,12 @@ function effective(overrides: Record<string, unknown> = {}) {
   }
 }
 
-async function renderTab(): Promise<HTMLElement> {
-  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+async function renderTab(locale: 'en' | 'ru' = 'en'): Promise<HTMLElement> {
+  useI18nStore.setState({
+    locale,
+    dictionary: locale === 'ru' ? ruDict : enDict,
+    loadingLocale: null,
+  })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -885,5 +890,62 @@ describe('SessionSettingsTab — StrictMode: монтирование не за�
 
     expect(mocks.updateSession).toHaveBeenCalledTimes(1)
     expect(mocks.updateSession.mock.calls[0]![1].settings.debugEnabled).toBe(false)
+  })
+})
+
+describe('SessionSettingsTab — сессионные shell-одобрения (ADR-029)', () => {
+  /** Сессия с готовыми allow-правилами в `settings.permission.rules`. */
+  function setPermissionRules(rules: Record<string, unknown>): void {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          name: 'S',
+          project_id: null,
+          settings: { model: 'm', permission: { rules } },
+        },
+      ],
+    } as never)
+  }
+
+  it('правило «весь execute_shell» читается как «Shell — все команды сессии»', async () => {
+    setPermissionRules({ execute_shell: 'allow' })
+    const container = await renderTab('ru')
+
+    const section = findSection(container, 'Сессионные одобрения')
+    expect(section).toBeTruthy()
+    expect(section!.textContent).toContain('Shell — все команды сессии')
+  })
+
+  it('паттерн-правило читается как «Shell — команда «git status *»»', async () => {
+    setPermissionRules({ execute_shell: { 'git status *': 'allow' } })
+    const container = await renderTab('ru')
+
+    const section = findSection(container, 'Сессионные одобрения')
+    expect(section).toBeTruthy()
+    expect(section!.textContent).toContain('Shell — команда «git status *»')
+    expect(section!.textContent).not.toContain('Shell — все команды сессии')
+  })
+
+  it('удаление паттерн-правила чистит ключ execute_shell в settings.permission.rules', async () => {
+    setPermissionRules({ execute_shell: { 'git status *': 'allow' } })
+    const container = await renderTab('ru')
+
+    const section = findSection(container, 'Сессионные одобрения')!
+    const removeButton = [...section.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Удалить',
+    )
+    expect(removeButton, 'кнопка «Удалить»').toBeTruthy()
+
+    await act(async () => {
+      removeButton!.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    const body = mocks.updateSession.mock.calls[0]![1] as {
+      settings: { permission: { rules: Record<string, unknown> } }
+    }
+    expect(body.settings.permission.rules).toEqual({})
   })
 })

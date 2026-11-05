@@ -9,6 +9,7 @@ import { useCatalogModels } from '@/hooks/useCatalogModels'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { useNotification } from '@/hooks/useNotification'
+import { getToolDisplayName } from '@/lib/toolIcons'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
@@ -705,11 +706,24 @@ export function SessionSettingsTab() {
   const sessionPermission = session?.settings.permission as { rules?: Record<string, string | Record<string, string>>; askTimeoutMs?: number } | undefined
   const sessionAllowRules = sessionPermission?.rules
     ? Object.entries(sessionPermission.rules).flatMap(([tool, value]) => {
-        if (typeof value === 'string') return value === 'allow' ? [{ label: tool, tool, path: undefined as string | undefined }] : []
+        const toolLabel = getToolDisplayName(tool)
+        if (typeof value === 'string') {
+          if (value !== 'allow') return []
+          const label = tool === 'execute_shell'
+            ? t('sessionSettings.allow.shellAll')
+            : toolLabel
+          return [{ label, tool, path: undefined as string | undefined }]
+        }
         if (value && typeof value === 'object') {
           return Object.entries(value as Record<string, string>)
             .filter(([, a]) => a === 'allow')
-            .map(([path]) => ({ label: `${tool}: ${path}`, tool, path }))
+            .map(([key]) => ({
+              label: tool === 'execute_shell'
+                ? t('sessionSettings.allow.shellPattern', { pattern: key })
+                : `${toolLabel}: ${key}`,
+              tool,
+              path: key,
+            }))
         }
         return []
       })

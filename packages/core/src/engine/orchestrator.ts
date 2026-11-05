@@ -98,6 +98,7 @@ import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
+import { shellSavePatterns } from './security/shell-guard.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
@@ -267,6 +268,16 @@ export interface OrchestratorOptions {
    * запись не выполняется, поведение оркестратора не меняется.
    */
   analytics?: AnalyticsRecorder;
+  /**
+   * Аудит выдачи сессионных shell-грантов (паттерны команд). Вызывается
+   * fire-and-forget; ошибка не влияет на ход.
+   */
+  onPermissionGrant?: (entry: {
+    sessionId: string;
+    actor: string;
+    patterns: string[];
+    command: string;
+  }) => void | Promise<void>;
   contextBuilder: ContextBuilder;
   providerLoader: (name: string) => SharedProviderConfig | null;
   contextOptimizer?: ContextOptimizer;
@@ -794,6 +805,8 @@ export class ChatOrchestrator {
   private readonly _defaultWorkingDir: string;
   private readonly _workspacesRoot: string;
   private _permissionConfig: PermissionConfig;
+  /** Аудит выдачи shell-грантов (опция оркестратора). */
+  private readonly _onPermissionGrant: OrchestratorOptions['onPermissionGrant'] | null;
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
   /**
@@ -1280,6 +1293,7 @@ export class ChatOrchestrator {
     this._workspaceManaged = options.workspaceManaged === true;
     this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
+    this._onPermissionGrant = options.onPermissionGrant ?? null;
     this._approvalManager = new PermissionApprovalManager(this._eventBus, {
       ...(options.approvalRegistry ? { registry: options.approvalRegistry } : {}),
     });
@@ -5397,6 +5411,14 @@ export class ChatOrchestrator {
             // запись и должен видеть, ЧТО именно изменится. Не посчиталось →
             // превью нет, запрос подтверждения работает как прежде.
             const preview = await this._buildPermissionPreview(toolName, toolArgs, workingDir, session.id);
+            // Shell-паттерны, которые будут разрешены кнопкой «Разрешить в сессии».
+            // Для `execute_shell` поле `save` передаётся всегда: пустой массив —
+            // сигнал «в сессии сохранить нельзя» (паттерн не выводится, кнопка
+            // «Разрешить в сессии» не показывается).
+            const isShellTool = toolName === 'execute_shell';
+            const shellSave = isShellTool && typeof toolArgs.command === 'string'
+              ? shellSavePatterns(toolArgs.command)
+              : null;
             const approval = await this._approvalManager.waitForDecision(
               session.id,
               {
@@ -5417,6 +5439,8 @@ export class ChatOrchestrator {
                 ...(bindingTarget ? { target: bindingTarget } : {}),
                 // ADR-029: превью изменений (дифф по файлам).
                 ...(preview ? { preview } : {}),
+                // Паттерны shell-гранта для полосы подтверждения.
+                ...(isShellTool ? { save: shellSave ?? [] } : {}),
               },
               effectivePermissionConfig.askTimeoutMs,
               // «Стоп» снимает ожидание подтверждения (иначе инструмент висел
@@ -7096,6 +7120,29 @@ export class ChatOrchestrator {
   }
 
   /** Строит permission-конфиг с добавленным грантом для заданной базы правил. */
+  /**
+   * Shell-грант паттернами (`execute_shell: { "git status *": "allow" }`).
+   * Строка `allow` (весь инструмент) не понижается.
+   */
+  private _applyShellAllow(
+    cfg: PermissionConfig | undefined,
+    patterns: string[],
+  ): PermissionConfig {
+    const base = cfg ?? {
+      rules: { ...this._permissionConfig.rules },
+      askTimeoutMs: this._permissionConfig.askTimeoutMs,
+    };
+    const rules = { ...base.rules };
+    if (rules.execute_shell !== 'allow') {
+      const existing = (typeof rules.execute_shell === 'object' && rules.execute_shell)
+        ? { ...(rules.execute_shell as Record<string, string>) }
+        : {};
+      for (const pattern of patterns) existing[pattern] = 'allow';
+      rules.execute_shell = existing as PermissionRule;
+    }
+    return { ...base, rules };
+  }
+
   private _applyToolAllow(
     cfg: PermissionConfig | undefined,
     toolName: string,
@@ -7133,7 +7180,23 @@ export class ChatOrchestrator {
     workingDir: string,
   ): Promise<PermissionConfig> {
     const paths = extractPaths(toolName, toolArgs, workingDir);
-    const next = this._applyToolAllow(session.settings.permission, toolName, paths);
+    const shellCommand = toolName === 'execute_shell' && typeof toolArgs.command === 'string'
+      ? toolArgs.command
+      : null;
+    const shellPatterns = shellCommand !== null ? shellSavePatterns(shellCommand) : null;
+    // Shell-грант выдаётся ТОЛЬКО паттернами: если команда нерезолвима (`null`,
+    // например `C='cat /etc/shadow'; $C`) или паттернов нет, `execute_shell: 'allow'`
+    // выдавать нельзя — это шире одобренного. Текущий вызов уже одобрен один раз,
+    // будущие спросят снова; конфиг не меняем и зря не сохраняем/паблишим.
+    if (shellCommand !== null && (shellPatterns === null || shellPatterns.length === 0)) {
+      return session.settings.permission ?? this._permissionConfig;
+    }
+    const apply = (cfg: PermissionConfig | undefined): PermissionConfig => (
+      shellPatterns !== null
+        ? this._applyShellAllow(cfg, shellPatterns)
+        : this._applyToolAllow(cfg, toolName, paths)
+    );
+    const next = apply(session.settings.permission);
 
     await this._sessionManager.withLock(session.id, async (s) => {
       s.settings.permission = next;
@@ -7144,6 +7207,16 @@ export class ChatOrchestrator {
       });
     });
 
+    // Аудит выдачи shell-гранта — fire-and-forget, ход не блокирует.
+    if (shellPatterns !== null && shellPatterns.length > 0 && this._onPermissionGrant && shellCommand !== null) {
+      void Promise.resolve(this._onPermissionGrant({
+        sessionId: session.id,
+        actor: session.ownerId ?? 'local',
+        patterns: shellPatterns,
+        command: shellCommand,
+      })).catch(() => {});
+    }
+
     // ADR-029: «Разрешить в сессии» для сабагентской (дочерней) сессии
     // распространяется и на родителя (parentId): путь в правиле — абсолютный
     // канонический, поэтому грант совпадёт при чтении того же файла и родителем,
@@ -7151,7 +7224,7 @@ export class ChatOrchestrator {
     // PermissionEvaluator при следующей обработке (сессия сохраняется в store).
     if (session.parentId) {
       await this._sessionManager.withLock(session.parentId, async (parent) => {
-        parent.settings.permission = this._applyToolAllow(parent.settings.permission, toolName, paths);
+        parent.settings.permission = apply(parent.settings.permission);
         await this._sessionManager.saveSession(parent);
         this._eventBus.publish(parent.id, 'session.updated', {
           session_id: parent.id,

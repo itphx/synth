@@ -59,6 +59,12 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   const hasDetails = !!current.reason || Object.keys(current.params).length > 0
   // Превью изменений: дифф по файлам, которые тул собирается изменить.
   const previewFiles = current.preview?.files ?? []
+  const savePatterns = current.save ?? []
+  // Shell без выводимых паттернов (`save: []`): сессионный грант выдать нельзя —
+  // иначе он был бы шире одобренного. Остаётся только разовое разрешение.
+  const sessionGrantUnavailable = current.toolName === 'execute_shell'
+    && Array.isArray(current.save)
+    && current.save.length === 0
 
   const handleAction = async (approved: boolean, once?: boolean) => {
     const sent = await useTransportStore
@@ -78,8 +84,11 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
     }
     usePermissionStore.getState().removeRequest(sessionId, current.approvalId)
     if (approved && once === false) {
+      const text = current.toolName === 'execute_shell' && savePatterns.length > 0
+        ? t('permission.bar.grantedShell', { patterns: savePatterns.map((p) => `\`${p}\``).join(', ') })
+        : t('permission.bar.grantedForSession', { tool: toolDisplayName })
       notify({
-        text: t('permission.bar.grantedForSession', { tool: toolDisplayName }),
+        text,
         type: 'success',
         category: 'system',
         sessionId,
@@ -166,13 +175,23 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
               </button>
             </>
           )}
-          <button
-            onClick={() => handleAction(true, false)}
-            className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
-            title={t('permission.bar.allowSessionHint')}
-          >
-            {t('permission.bar.allowSession')}
-          </button>
+          {sessionGrantUnavailable ? (
+            <span
+              data-testid="permission-save-unavailable"
+              title={t('permission.bar.saveUnavailable')}
+              className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground cursor-help"
+            >
+              {t('permission.bar.saveUnavailableShort')}
+            </span>
+          ) : (
+            <button
+              onClick={() => handleAction(true, false)}
+              className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+              title={t('permission.bar.allowSessionHint')}
+            >
+              {t('permission.bar.allowSession')}
+            </button>
+          )}
           <button
             onClick={() => handleAction(true, true)}
             className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
@@ -188,6 +207,17 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           </button>
         </div>
       </div>
+
+      {savePatterns.length > 0 && (
+        <div
+          className="px-3 pb-1.5 text-[0.6875rem] text-muted-foreground"
+          data-testid="permission-save-patterns"
+        >
+          {t('permission.bar.savePatterns', {
+            patterns: savePatterns.map((p) => `\`${p}\``).join(', '),
+          })}
+        </div>
+      )}
 
       {previewFiles.length > 0 && (
         <div className="px-3 pb-2 pt-1 space-y-1 border-t border-primary/15" data-testid="permission-preview">

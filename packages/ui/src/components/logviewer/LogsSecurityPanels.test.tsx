@@ -90,6 +90,12 @@ describe('summarizePolicy', () => {
     expect(summarizePolicy(null)).toBe('—')
     expect(summarizePolicy('restored')).toBe('restored')
   })
+
+  it('снимок shell-гранта сворачивается в список паттернов', () => {
+    expect(summarizePolicy({ patterns: ['git status *', 'ls *'] })).toBe('git status *, ls *')
+    // Нет паттернов — прочерк, а не пустая строка.
+    expect(summarizePolicy({ patterns: [] })).toBe('—')
+  })
 })
 
 describe('SecurityAuditPanel — «Безопасность (политики)»', () => {
@@ -116,6 +122,37 @@ describe('SecurityAuditPanel — «Безопасность (политики)»
     await act(async () => {})
 
     expect(mocks.getSecurityAudit).toHaveBeenLastCalledWith(100, 'webhooks')
+  })
+
+  it('в фильтре scope есть permission (shell-гранты сессии)', async () => {
+    const container = await renderPanel(<SecurityAuditPanel />)
+    const scope = container.querySelector('[data-testid="logs-security-scope"]') as HTMLSelectElement
+    const values = [...scope.options].map((option) => option.value)
+    expect(values).toContain('permission')
+
+    await act(async () => {
+      scope.value = 'permission'
+      scope.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => {})
+    expect(mocks.getSecurityAudit).toHaveBeenLastCalledWith(100, 'permission')
+  })
+
+  it('бейджи grant/revoke берут цвета из токенов темы', async () => {
+    mocks.getSecurityAudit.mockResolvedValue({
+      entries: [
+        { ...SECURITY_ENTRY, id: 'sa_grant', scope: 'permission', action: 'grant', before: null, after: { patterns: ['git status *'] } },
+        { ...SECURITY_ENTRY, id: 'sa_revoke', scope: 'permission', action: 'revoke', before: { patterns: ['git status *'] }, after: null },
+      ],
+      count: 2,
+    })
+    const container = await renderPanel(<SecurityAuditPanel />)
+    const table = container.querySelector('[data-testid="logs-security-table"]')!
+    expect(table.textContent).toContain('git status *')
+    // Цвета — только CSS-переменные (`--status-success`/`--destructive`),
+    // поэтому бейджи одинаково читаемы в светлой и тёмной теме.
+    expect(table.innerHTML).toContain('bg-status-success/15')
+    expect(table.innerHTML).toContain('bg-destructive/15')
   })
 
   it('пустой журнал — пустое состояние', async () => {

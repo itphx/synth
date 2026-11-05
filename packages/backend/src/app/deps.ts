@@ -1280,6 +1280,23 @@ export async function createBackendDeps(
     executionPort,
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
+    // Аудит выдачи сессионных shell-грантов (паттерны команд).
+    onPermissionGrant: (entry) => {
+      if (!securityAudit) return;
+      void securityAudit.append({
+        id: `sa_${generateId()}`,
+        ts: nowISO(),
+        actor: entry.actor,
+        scope: 'permission',
+        action: 'grant',
+        source: 'runtime',
+        before: null,
+        after: { sessionId: entry.sessionId, patterns: entry.patterns, command: entry.command },
+        version: 1,
+      }).catch((err: unknown) => {
+        console.warn(`[permission] аудит гранта не записан: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    },
     contextBuilder,
     contextConfig,
     providerLoader,

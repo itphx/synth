@@ -916,3 +916,46 @@ describe('PermissionEvaluator — workspace (ADR-075)', () => {
   });
 });
 
+
+describe('PermissionEvaluator — сессионный shell-грант паттернами', () => {
+  function shellCheck(command: string, config: PermissionConfig) {
+    return new PermissionEvaluator(config).check({
+      toolName: 'execute_shell',
+      params: { command },
+      workingDir: CWD,
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+      shellPolicy: SHELL_POLICY,
+    });
+  }
+
+  it('строковый allow (совместимость) снимает динамический ask', () => {
+    const cfg: PermissionConfig = { rules: { execute_shell: 'allow' }, askTimeoutMs: 30_000 };
+    expect(shellCheck('cat $X', cfg).action).toBe('allow');
+  });
+
+  it('объект allow-паттернов снимает только динамический ask', () => {
+    const cfg: PermissionConfig = {
+      rules: { execute_shell: { 'cat *': 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(shellCheck('cat $X', cfg).action).toBe('allow');
+    // approvalPaths — protected, грант не снимает
+    expect(shellCheck('cat ~/.ssh/config', cfg).action).toBe('ask');
+    // find -delete вне периметра — mutation
+    expect(shellCheck('find /etc -delete', cfg).action).toBe('ask');
+    // нерезолвимый cd — cwd
+    expect(shellCheck('cd $(pwd)', cfg).action).toBe('ask');
+    // deny не ослабляется
+    expect(shellCheck('cat /etc/shadow', cfg).action).toBe('deny');
+  });
+
+  it('паттерны не покрывают команду — ask остаётся', () => {
+    const cfg: PermissionConfig = {
+      rules: { execute_shell: { 'git status *': 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(shellCheck('cat $X', cfg).action).toBe('ask');
+  });
+});
