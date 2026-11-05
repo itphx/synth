@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from './llm-error.js';
+import {
+  classifyLlmError,
+  classifyLlmErrorFor,
+  isLlmErrorRecoverable,
+  LLM_MAX_ATTEMPTS,
+  LLM_RETRY_DELAYS_MS,
+} from './llm-error.js';
 import { ContextLengthExceededError, RemoteAuthExpiredError } from '../providers/exceptions.js';
+import { RemoteError } from '../remote/types.js';
 import { t as sm } from './system-messages.js';
 
 describe('classifyLlmError — единая таксономия типов', () => {
@@ -43,6 +50,30 @@ describe('router.remote_auth_expired — истёкшая сессия гибр�
     expect(isLlmErrorRecoverable(new Error(msg), msg)).toBe(false);
     expect(isLlmErrorRecoverable(new Error(msg), msg, 'auth_error')).toBe(false);
     expect(isLlmErrorRecoverable(new RemoteAuthExpiredError())).toBe(false);
+  });
+});
+
+describe('classifyLlmErrorFor — типизированные remote-ошибки гибрида', () => {
+  it('RemoteError(OFFLINE) → network_error (recoverable)', () => {
+    const err = new RemoteError('Сервер авторизации недоступен: fetch failed', 'OFFLINE');
+    expect(classifyLlmErrorFor(err)).toBe('network_error');
+    expect(isLlmErrorRecoverable(err)).toBe(true);
+  });
+
+  it('RemoteError(AUTH/UNAUTHORIZED) → auth_error (терминально)', () => {
+    expect(classifyLlmErrorFor(new RemoteError('Не удалось обновить токен', 'AUTH'))).toBe('auth_error');
+    expect(classifyLlmErrorFor(new RemoteError('401', 'UNAUTHORIZED'))).toBe('auth_error');
+    expect(isLlmErrorRecoverable(new RemoteError('x', 'AUTH'))).toBe(false);
+    expect(isLlmErrorRecoverable(new RemoteError('x', 'UNAUTHORIZED'))).toBe(false);
+  });
+
+  it('RemoteAuthExpiredError → auth_error (даже если текст локализован)', () => {
+    expect(classifyLlmErrorFor(new RemoteAuthExpiredError())).toBe('auth_error');
+  });
+
+  it('прочие ошибки — по тексту через classifyLlmError', () => {
+    expect(classifyLlmErrorFor(new Error('429 Too Many Requests'))).toBe('rate_limit');
+    expect(classifyLlmErrorFor('fetch failed: ECONNREFUSED')).toBe('network_error');
   });
 });
 

@@ -136,6 +136,48 @@ describe('RemoteSession.ensureAuthenticated', () => {
     expect(saved?.accessToken).toBe('at-valid');
   });
 
+  it('валидный accessToken без issuer/clientId (в opts и credentials) → fail-closed AUTH', async () => {
+    await saveCredentials({
+      backendUrl: 'https://backend.test',
+      accessToken: 'at-valid',
+      refreshToken: 'rt-1',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    }, credsPath());
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const err = await RemoteSession.ensureAuthenticated({
+      backendUrl: 'https://backend.test',
+      authType: 'device',
+      credentialsPath: credsPath(),
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('AUTH');
+    expect((err as RemoteError).message).toContain('войдите в гибрид заново');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('issuer/clientId из сохранённых credentials используются, если opts их не задаёт', async () => {
+    await saveCredentials({
+      backendUrl: 'https://backend.test',
+      accessToken: 'at-valid',
+      refreshToken: 'rt-1',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      issuer: 'https://issuer.test',
+      clientId: 'client-1',
+    }, credsPath());
+
+    vi.stubGlobal('fetch', vi.fn());
+    const session = await RemoteSession.ensureAuthenticated({
+      backendUrl: 'https://backend.test',
+      authType: 'device',
+      credentialsPath: credsPath(),
+    });
+    expect(await session.getToken()).toBe('at-valid');
+  });
+
   it('просроченный accessToken + refreshToken → refresh и сохранение обновлённых credentials', async () => {
     await saveCredentials({
       backendUrl: 'https://backend.test',
@@ -494,7 +536,45 @@ describe('RemoteSession.getToken (Часть 6)', () => {
     expect(await session.getToken()).toBeNull();
   });
 
-  it('сеть недоступна при refresh → null, без исключения', async () => {
+  it('рефрешит за 60 секунд до истечения токена', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    await saveCredentials({
+      backendUrl: 'https://backend.test',
+      accessToken: 'at-still-valid',
+      refreshToken: 'rt-1',
+      expiresAt: '2026-01-01T00:00:30.000Z',
+    }, credsPath());
+
+    const fetchMock = deviceFlowFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+    const session = await RemoteSession.ensureAuthenticated(deviceOpts());
+
+    // До истечения 30 с (< 60 с запаса) — уже обновляем.
+    const token = await session.getToken();
+    expect(token).toBe('at-refreshed');
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes('/token'))).toHaveLength(1);
+  });
+
+  it('токен ещё не истёк — при сетевом сбое refresh возвращает текущий, не валит шаг', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    await saveCredentials({
+      backendUrl: 'https://backend.test',
+      accessToken: 'at-still-valid',
+      refreshToken: 'rt-1',
+      expiresAt: '2026-01-01T00:00:30.000Z',
+    }, credsPath());
+
+    vi.stubGlobal('fetch', deviceFlowFetchMock());
+    const session = await RemoteSession.ensureAuthenticated(deviceOpts());
+
+    // В пределах запаса (refresh запускается), но сам токен формально жив.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    expect(await session.getToken()).toBe('at-still-valid');
+  });
+
+  it('токен истёк, сеть при refresh недоступна → RemoteError(OFFLINE) (recoverable)', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     await saveCredentials({
@@ -510,7 +590,9 @@ describe('RemoteSession.getToken (Часть 6)', () => {
     // Сеть падает во время refresh (и discovery, и token_endpoint)
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
 
-    expect(await session.getToken()).toBeNull();
+    const err = await session.getToken().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('OFFLINE');
   });
 });
 
@@ -584,6 +666,9 @@ describe('RemoteSession.loginWithPassword (ROPC, Часть 10)', () => {
     expect(saved?.user?.username).toBe('lucky');
     expect(saved?.user?.roles).toEqual(['ADMIN', 'USER']);
     expect(saved?.expiresAt).toBeDefined();
+    // issuer/clientId сохраняются — после рестарта refresh не зависит от дискавери.
+    expect(saved?.issuer).toBe('https://issuer.test');
+    expect(saved?.clientId).toBe('synth-cli');
 
     // getToken() авто-рефрешит (сессия умеет refresh) и ходит с токеном
     expect(await session.getToken()).toBe('at-ropc');

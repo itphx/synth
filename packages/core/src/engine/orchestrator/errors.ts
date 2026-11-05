@@ -10,7 +10,8 @@ import { MessageRole } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { DebugCollector } from '../../debug.js';
 import { ContextLengthExceededError, RemoteAuthExpiredError } from '../../providers/exceptions.js';
-import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from '../llm-error.js';
+import { RemoteError } from '../../remote/types.js';
+import { classifyLlmErrorFor, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from '../llm-error.js';
 import { WorktreeDirectoryMissingError } from '../worktree/errors.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { warning } from '../../logger.js';
@@ -76,6 +77,12 @@ export function formatLlmError(error: unknown): { text: string; i18n?: ReturnTyp
       text: sm('router.remote_auth_expired'),
       i18n: i18nMeta('router.remote_auth_expired'),
     };
+  }
+  // Гибрид: сетевой сбой обновления токена — это сетевая ошибка, а не ошибка
+  // провайдера. Иначе UI показал бы русский текст «Сервер авторизации
+  // недоступен…» как ошибку модели (и без i18n-ключа).
+  if (error instanceof RemoteError && error.code === 'OFFLINE') {
+    return { text: sm('router.network_error'), i18n: i18nMeta('router.network_error') };
   }
   // ADR-114 §3.2: исчезнувший каталог worktree — fail-closed с i18n-ключом
   // (`worktree.directory_missing`), а не текстом ошибки в лог-формате.
@@ -159,7 +166,9 @@ export async function handleLlmFailure(
       ? 'worktree_directory_missing'
       : error instanceof ContextLengthExceededError
         ? 'context_length'
-        : classifyLlmError(rawError));
+        // Объект, а не только текст: RemoteError(OFFLINE) → network_error
+        // (recoverable), RemoteError(AUTH) → auth_error (терминально).
+        : classifyLlmErrorFor(error));
   const canRetry = worktreeMissing ? false : isLlmErrorRecoverable(error, rawError, errorType);
 
   // ADR-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,

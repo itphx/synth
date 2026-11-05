@@ -23,6 +23,13 @@ export interface RemoteCredentials {
   refreshToken?: string;
   expiresAt?: string;
   user?: RemoteUser;
+  /**
+   * OIDC issuer/clientId, с которыми получены токены (аддитивно, legacy-записи
+   * без них читаются). Нужны, чтобы после рестарта refresh шёл по сохранённым
+   * параметрам, даже если дискавери сервера недоступен.
+   */
+  issuer?: string;
+  clientId?: string;
 }
 
 /** Код ошибки remote-клиента: OFFLINE (сеть/таймаут), UNAUTHORIZED (401), AUTH (device flow), HTTP_<status>. */

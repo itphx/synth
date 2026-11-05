@@ -8,7 +8,8 @@
  *   unrecoverable — auth_error, model_not_found, context_length,
  *                   provider_not_found, no_user_query
  */
-import { ContextLengthExceededError } from '../providers/exceptions.js';
+import { ContextLengthExceededError, RemoteAuthExpiredError } from '../providers/exceptions.js';
+import { RemoteError } from '../remote/types.js';
 
 /**
  * Классификация ошибки провайдера по тексту. Совпадает с
@@ -29,6 +30,31 @@ export function classifyLlmError(errMsg: string): string {
   if (lower.includes('401') || lower.includes('403') || lower.includes('auth')) return 'auth_error';
   if (lower.includes('model') && (lower.includes('not found') || lower.includes('invalid'))) return 'model_not_found';
   return 'unknown';
+}
+
+/**
+ * Классификация по **объекту** ошибки: типизированные remote-ошибки гибрида
+ * различаются по коду, а не по тексту (русские сообщения текстовый
+ * классификатор не распознаёт).
+ *
+ * - `RemoteError('OFFLINE')` (сеть/таймаут сервера авторизации) → `network_error`
+ *   — recoverable, шаг уходит в обычный retry;
+ * - `RemoteError('AUTH'|'UNAUTHORIZED')` → `auth_error` — терминально, нужен
+ *   повторный вход;
+ * - прочее → `classifyLlmError` по тексту.
+ *
+ * Для случаев, где доступен только текст (например проверка context_length),
+ * остаётся `classifyLlmError`.
+ */
+export function classifyLlmErrorFor(error: unknown): string {
+  // Истёкшая сессия гибрида — всегда auth_error, независимо от языка текста
+  // (русская формулировка не содержит английских auth-паттернов).
+  if (error instanceof RemoteAuthExpiredError) return 'auth_error';
+  if (error instanceof RemoteError) {
+    if (error.code === 'OFFLINE') return 'network_error';
+    if (error.code === 'AUTH' || error.code === 'UNAUTHORIZED') return 'auth_error';
+  }
+  return classifyLlmError(error instanceof Error ? error.message : String(error));
 }
 
 /** Типы ошибок, при которых повтор не имеет смысла. */
@@ -89,6 +115,12 @@ export const MAX_DOOM_LOOP_COUNT = 3;
  */
 export function isLlmErrorRecoverable(error: unknown, errMsg?: string, errorType?: string): boolean {
   if (error instanceof ContextLengthExceededError) return false;
+  // Гибрид: код remote-ошибки решает раньше текста — сетевой сбой refresh
+  // (OFFLINE) восстановим (retry), истёкшая сессия (AUTH/UNAUTHORIZED) — нет.
+  if (error instanceof RemoteError) {
+    if (error.code === 'OFFLINE') return true;
+    if (error.code === 'AUTH' || error.code === 'UNAUTHORIZED') return false;
+  }
   if (errorType && UNRECOVERABLE_TYPES.includes(errorType)) return false;
   const raw = errMsg ?? (error instanceof Error ? error.message : String(error));
   const lower = raw.toLowerCase();

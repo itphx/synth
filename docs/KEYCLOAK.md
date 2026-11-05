@@ -110,6 +110,24 @@ auth:
 
 `cliClientId` (default `synth-cli`) — public client_id, который backend отдаёт локальным клиентам через `GET /auth/oidc-meta` (`cliClientId || 'synth-cli'`, `packages/backend/src/routes/auth.ts`). Локальный core использует его для ROPC/device flow при гибридном подключении (см. [HYBRID.md](HYBRID.md)); в Keycloak это отдельный public-клиент с включённым Direct Access Grants (секрета нет).
 
+### 3.1.1 Offline-токен для гибрида (длинные сессии)
+
+Гибридный вход запрашивает `offline_access` (ROPC: `openid offline_access`, device flow: `openid profile offline_access`) — иначе refresh-токен живёт в рамках SSO-сессии и умирает по `ssoSessionMaxLifespan`/`ssoSessionIdleTimeout` посреди длинного хода или саб-агента (см. [HYBRID.md](HYBRID.md) §3.1). Если scope недоступен, клиент сам откатывается на обычный токен — вход не ломается.
+
+Для клиента `synth-cli` должен быть доступен client scope **`offline_access`**: в Keycloak Admin console → **Clients → synth-cli → Client scopes** добавить `offline_access` (или разрешить его на уровне realm: **Client scopes → offline_access → Scope**). Проверка: ROPC-ответ содержит `refresh_token`, а его JWT payload — `"typ": "Offline"` и `refresh_expires_in: 0`.
+
+Realm-настройки, задающие срок жизни:
+
+| Настройка | Где | Смысл |
+|-----------|-----|-------|
+| `ssoSessionIdleTimeout` | Realm settings → Sessions | idle обычной SSO-сессии (test — 1800 с) |
+| `ssoSessionMaxLifespan` | Realm settings → Sessions | максимум обычной SSO-сессии (test — 36000 с = 10 ч); refresh его **не** продлевает |
+| `offlineSessionIdleTimeout` | Realm settings → Sessions | idle offline-сессии (test — 30 дней) |
+| `offlineSessionMaxLifespan` | Realm settings → Sessions | максимум offline-сессии (test — 60 дней) |
+| `revokeRefreshToken` | Realm settings → Tokens | `false` — refresh-токен не ротируется на каждый refresh (совместимо) |
+
+**Как отключить долгие сессии:** убрать `offline_access` из client scopes клиента `synth-cli`. Клиент получит `invalid_scope` и автоматически повторит вход без offline — останутся ограничения обычной OIDC-сессии (`ssoSessionIdleTimeout`/`ssoSessionMaxLifespan`), и длинные прогоны будут требовать повторного входа.
+
 ### 3.2 Переменные окружения
 
 | Переменная | Назначение |

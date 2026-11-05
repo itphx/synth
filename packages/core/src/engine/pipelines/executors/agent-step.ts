@@ -127,7 +127,7 @@ import type { LLMResponse, StepResult, TokenUsage, ToolDefinition, ToolForLLM } 
 import { error as logError, info as logInfo, warning as logWarning } from '../../../logger.js';
 import type { BaseProvider, LLMMessage, SystemPromptPayload } from '../../../providers/base.js';
 import type { ComposerMcpServer, ComposerSessionLike } from '../../context/composer.js';
-import { classifyLlmError, isLlmErrorRecoverable } from '../../llm-error.js';
+import { classifyLlmErrorFor, isLlmErrorRecoverable } from '../../llm-error.js';
 import { t } from '../../system-messages.js';
 import { GatewayProvider } from '../../gateway/index.js';
 import { buildDenyResult } from '../../tools/tool-execution.js';
@@ -308,7 +308,7 @@ async function runToolUseLoop(
         return failed(ctx, 'pipeline.cancelled', t('pipeline.cancelled'));
       }
       const detail = errorMessage(err);
-      const type = classifyLlmError(detail);
+      const type = classifyLlmErrorFor(err);
       const recoverable = isLlmErrorRecoverable(err, detail, type);
       logger.warning(
         LOG_GROUP,

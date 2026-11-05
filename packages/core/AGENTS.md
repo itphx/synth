@@ -428,9 +428,26 @@
   (`server` | `local` | `auto`). Токен берётся у `RemoteSession.getToken()`
   (`remote/session.ts`): access-token OIDC, по истечении — refresh **single-flight**
   (параллельные вызовы ждут один refresh; иначе гонка на token-endpoint при ротации
-  refresh-token давала `invalid_grant` → `null`). Нет токена → `RemoteAuthExpiredError`
-  и i18n-ключ `router.remote_auth_expired` («Сессия на сервере истекла — войдите в
-  гибрид заново»); классифицируется как `auth_error` (невосстановимая, без ретраев).
+  refresh-token давала `invalid_grant` → `null`).
+  **Offline-токен при входе:** `passwordGrant`/`startDeviceFlow` запрашивают
+  `offline_access` (ROPC `openid offline_access`, device `openid profile offline_access`;
+  при `invalid_scope` — повтор без offline). Иначе refresh умирает по
+  `ssoSessionIdleTimeout`/`ssoSessionMaxLifespan` (на test 30 мин/10 ч) посреди
+  длинного хода/саб-агента; offline-токен живёт по `offlineSession*` realm (30/60 дней).
+  **Refresh с запасом 60 с** (`isTokenExpired(expiresAt, 60_000)`); если refresh упал,
+  а токен ещё не истёк (сработал только запас) — возвращается текущий, шаг не валится.
+  **OFFLINE ≠ AUTH:** сетевой сбой refresh пробрасывается как `RemoteError('OFFLINE')`
+  (recoverable, `network_error` — `classifyLlmErrorFor`/`isLlmErrorRecoverable`), а
+  `invalid_grant`/`AUTH` → `null` → `RemoteAuthExpiredError` + i18n-ключ
+  `router.remote_auth_expired` («Сессия на сервере истекла — войдите в гибрид заново»),
+  классифицируется как `auth_error` (невосстановимая, без ретраев). Текст
+  `RemoteError(OFFLINE)` в сообщении об ошибке локализуется как `router.network_error`
+  (`formatLlmError`).
+  **issuer/clientId хранятся в `RemoteCredentials`** (аддитивно): `ensureAuthenticated`
+  берёт `opts.* ?? existing.*`; при валидном access-token без обоих — fail-closed
+  `RemoteError('AUTH')` (полусессия без refresh умерла бы через 5 минут), а
+  `connectFromSaved` в этом случае возвращает `null` + warning, а не сессию;
+  после рестарта refresh идёт по сохранённым параметрам, даже если дискавери недоступен.
   В логе различаются «нет зарегистрированного поставщика токена» (провайдер не зеркало /
   гибрид отключён) и «поставщик вернул null» (истекла сессия).
 - **Проектные инструкции origin-aware.** `GET /api/v2/context/instructions` — точный путь

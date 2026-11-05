@@ -128,7 +128,8 @@ synth serve --connect https://synth.k3s.itphx.loc
   → local core сохраняет токены в ~/.config/synth/credentials.json (600)
 ```
 
-- Credentials: access_token + refresh_token, автообновление.
+- Credentials: access_token + refresh_token (+ issuer/clientId), автообновление;
+  refresh-токен — offline (`offline_access`), см. §3.1.
 - Команды: `synth connect`, `synth disconnect`, статус в UI.
 - Эндпоинты `/auth/device-start`, `/auth/device-check` и CLI `synth connect` сохранены
   для обратной совместимости/автоматизации, но из UI device flow не вызывается.
@@ -184,6 +185,40 @@ synth serve --connect https://synth.k3s.itphx.loc
   реального провайдера.
 - Политика: **в гибриде локальные провайдеры запрещены полностью** — все
   LLM-запросы идут только через сервер (централизованные ключи/модели).
+
+#### 3.1 Токен гибрида: offline-сессия и refresh
+
+Токен для `/api/v2/llm/chat/completions` берётся у `RemoteSession.getToken()`.
+Чтобы длинные ходы и саб-агенты не падали посреди работы с «сессия истекла»:
+
+- **Вход запрашивает `offline_access`**: ROPC — `scope=openid offline_access`,
+  device flow — `openid profile offline_access`. Если сервер scope не разрешает
+  (`invalid_scope`), клиент автоматически повторяет вход без него — вход работает,
+  но остаются ограничения обычной OIDC-сессии.
+- **Зачем:** обычная SSO-сессия Keycloak ограничена `ssoSessionIdleTimeout` и
+  `ssoSessionMaxLifespan` (на test — 30 мин и 10 ч; refresh обновляет idle, но не
+  max lifespan), поэтому после 10 ч или паузы >30 мин refresh отдаёт `invalid_grant`,
+  и пользователь видит «Сессия на сервере истекла». Offline refresh-токен живёт по
+  `offlineSessionIdleTimeout`/`offlineSessionMaxLifespan` realm (на test — 30/60 дней)
+  и от SSO-сессии не зависит.
+- **Refresh — single-flight** (параллельные LLM-вызовы ждут один запрос: иначе гонка
+  на token-endpoint при ротации refresh-токена давала `invalid_grant`) и с запасом
+  **60 секунд** до истечения access-токена — токен не успевает умереть в середине
+  вызова.
+- **Сетевой сбой refresh — recoverable:** `RemoteError('OFFLINE')` классифицируется
+  как `network_error`, ход уходит в обычный retry. Если токен ещё формально жив
+  (сработал только запас), возвращается он — блип сети не валит шаг.
+- **Истёкшая сессия — терминальна:** `invalid_grant`/`AUTH` → `getToken()` возвращает
+  `null`, провайдер бросает `RemoteAuthExpiredError`, UI показывает
+  `router.remote_auth_expired` («Сессия на сервере истекла — войдите в гибрид заново»),
+  ретраев нет.
+- **issuer/clientId сохраняются в credentials**: после рестарта refresh идёт по
+  сохранённым параметрам, даже если `GET /auth/oidc-meta` недоступен; без обоих
+  параметров сессия не строится «наполовину» — честный отказ с просьбой войти заново
+  (иначе access-токен тихо истечёт через 5 минут).
+- **Уже сохранённые credentials** (без `issuer`/`clientId` и с обычным refresh-токеном)
+  продолжают работать до истечения SSO-сессии; чтобы получить offline-токен, нужно
+  **один раз войти заново** после обновления (выход → вход в UI или `synth connect`).
 
 ### 4. События
 

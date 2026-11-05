@@ -384,43 +384,58 @@ export class RemoteConnection {
     if (!creds?.accessToken) return null;
 
     const expired = isTokenExpired(creds.expiresAt);
-    let issuer: string | undefined;
-    let clientId: string | undefined;
+    const refreshToken = creds.refreshToken;
+    // Протух и обновлять нечем — без сетевых запросов.
+    if (expired && !refreshToken) return null;
+    // issuer/clientId: сначала сохранённые в credentials (они есть у записей,
+    // созданных после входа по логину/паролю), затем дефолты; дискавери лишь
+    // дополняет/обновляет — его недоступность не должна оставлять сессию без
+    // возможности refresh.
+    let issuer: string | undefined = creds.issuer ?? this.deps.defaultIssuer;
+    let clientId: string | undefined = creds.clientId ?? this.deps.defaultClientId;
+    try {
+      const meta = await this.discoverOidc(backendUrl);
+      issuer = meta.issuer;
+      clientId = meta.clientId;
+    } catch {
+      // Дискавери недоступен (сеть/старый сервер/OIDC выключен) — остаёмся
+      // на сохранённых параметрах; если их нет, решаем ниже.
+    }
 
     if (expired) {
-      // Протух + есть refreshToken → дискавери (или deps.default*) и refresh.
-      if (!creds.refreshToken) return null;
+      // Протух + есть refreshToken → refresh по сохранённым/дискавери параметрам.
+      if (!refreshToken || !issuer || !clientId) {
+        console.warn(
+          `[hybrid] не удалось обновить сессию ${serverForLog(backendUrl)}: нет OIDC issuer/clientId — войдите заново`,
+        );
+        return null;
+      }
       try {
-        const meta = await this.discoverOidc(backendUrl);
-        issuer = meta.issuer;
-        clientId = meta.clientId;
-        const refreshed = await refreshAccessToken(issuer, clientId, creds.refreshToken);
+        const refreshed = await refreshAccessToken(issuer, clientId, refreshToken);
         const updated: RemoteCredentials = {
           backendUrl,
           accessToken: refreshed.accessToken,
-          refreshToken: refreshed.refreshToken ?? creds.refreshToken,
+          refreshToken: refreshed.refreshToken ?? refreshToken,
           expiresAt: refreshed.expiresIn
             ? new Date(Date.now() + refreshed.expiresIn * 1000).toISOString()
             : undefined,
           user: creds.user,
+          issuer,
+          clientId,
         };
         await saveCredentials(updated, this.deps.credentialsPath);
       } catch {
-        // дискавери/refresh не удались (сеть, OIDC выключен, invalid_grant) — не авто-логинимся
+        // refresh не удался (сеть, OIDC выключен, invalid_grant) — не авто-логинимся
         return null;
       }
-    } else {
-      // Валидный accessToken: issuer/clientId нужны для runtime-refresh (getToken).
-      // Дискавери best-effort (внутри — fallback на deps.default*); при неудаче сессия
-      // всё равно строится, но авто-refresh в рантайме будет недоступен.
-      try {
-        const meta = await this.discoverOidc(backendUrl);
-        issuer = meta.issuer;
-        clientId = meta.clientId;
-      } catch {
-        issuer = this.deps.defaultIssuer;
-        clientId = this.deps.defaultClientId;
-      }
+    } else if (!issuer || !clientId) {
+      // Валидный accessToken без issuer/clientId — «полусессия»: refresh
+      // недоступен, и сессия тихо умрёт через 5 минут. Лучше не подключаться
+      // автоматически (пользователь войдёт заново).
+      console.warn(
+        `[hybrid] сессия ${serverForLog(backendUrl)} не восстановлена: нет OIDC issuer/clientId — войдите заново`,
+      );
+      return null;
     }
 
     // На диске теперь валидные credentials → ensureAuthenticated выйдет на ветке

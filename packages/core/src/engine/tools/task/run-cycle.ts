@@ -12,7 +12,7 @@ import type { BaseProvider, LLMMessage, CancellationToken } from '../../../provi
 import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
 import { buildDenyResult, executeToolDef } from '../tool-execution.js';
-import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
+import { classifyLlmErrorFor, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
 import { computeUsageCost } from '../../../providers/usage.js';
 import type { UsageCost } from '../../../providers/usage.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
@@ -1206,7 +1206,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // AbortError) — не ошибка, обработается через finishAborted ниже.
           if (isAborted()) break;
           const rawError = err instanceof Error ? err.message : String(err);
-          const errorType = classifyLlmError(rawError);
+          const errorType = classifyLlmErrorFor(err);
           if (!isLlmErrorRecoverable(err, rawError) || attempt >= retryMaxAttempts) {
             // Unrecoverable или попытки исчерпаны — финальная ошибка
             llmFailure = { error: err, errorType, attempts: attempt };

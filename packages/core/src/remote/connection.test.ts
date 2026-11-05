@@ -383,6 +383,72 @@ describe('RemoteConnection.connectFromSaved', () => {
     expect(saved?.refreshToken).toBe('rt-refreshed');
   });
 
+  it('протухший токен, дискавери сервера недоступен, но issuer/clientId в credentials → refresh по сохранённым', async () => {
+    await saveCredentials(validCreds({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+      expiresAt: '2020-01-01T00:00:00.000Z',
+      issuer: ISSUER,
+      clientId: CLIENT_ID,
+    }), credsPath());
+
+    const fetchMock = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      // Дискавери OIDC на backend недоступен (сеть), но issuer уже сохранён.
+      if (u.includes('/auth/oidc-meta')) {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      if (u.includes('.well-known/openid-configuration')) {
+        return Promise.resolve(jsonResponse(OIDC_DISCOVERY));
+      }
+      if (u.includes('/protocol/openid-connect/token')) {
+        const body = init?.body instanceof URLSearchParams ? init.body : null;
+        if (body?.get('grant_type') === 'refresh_token') {
+          return Promise.resolve(jsonResponse({
+            access_token: 'at-refreshed',
+            refresh_token: 'rt-refreshed',
+            expires_in: 3600,
+          }));
+        }
+      }
+      if (u.includes('/auth/status')) {
+        return Promise.resolve(jsonResponse({ authenticated: true, oidc_enabled: true, user: SERVER_USER }));
+      }
+      return Promise.resolve(jsonResponse({ error: 'not_found' }, 404));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const conn = new RemoteConnection({ credentialsPath: credsPath() });
+    const user = await conn.connectFromSaved(BACKEND);
+
+    expect(user?.username).toBe('lucky');
+    expect(conn.connected).toBe(true);
+    expect(conn.issuer).toBe(ISSUER);
+
+    const saved = await loadCredentials(BACKEND, credsPath());
+    expect(saved?.accessToken).toBe('at-refreshed');
+    expect(saved?.issuer).toBe(ISSUER);
+    expect(saved?.clientId).toBe(CLIENT_ID);
+  });
+
+  it('валидный токен без issuer/clientId и без дискавери → null (не полусессия)', async () => {
+    await saveCredentials(validCreds({
+      accessToken: 'at-valid',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    }), credsPath());
+    // /auth/oidc-meta падает сетью, deps.default* не заданы.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const conn = new RemoteConnection({ credentialsPath: credsPath() });
+    const user = await conn.connectFromSaved(BACKEND);
+
+    expect(user).toBeNull();
+    expect(conn.connected).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('войдите заново'));
+    warn.mockRestore();
+  });
+
   it('backendUrl не передан → берёт сохранённые credentials из файла', async () => {
     await saveCredentials(validCreds(), credsPath());
     vi.stubGlobal('fetch', passwordFlowFetchMock());

@@ -49,7 +49,21 @@ export interface PasswordGrantResult {
   accessToken: string;
   refreshToken?: string;
   expiresIn?: number;
+  /**
+   * Срок жизни refresh-токена, сек (`0` — для offline-токена Keycloak поле
+   * приходит нулевым). Диагностика, не секрет.
+   */
+  refreshExpiresIn?: number;
 }
+
+/** Scope по умолчанию для ROPC: offline-токен переживает idle/max-lifespan SSO. */
+const DEFAULT_PASSWORD_SCOPE = 'openid offline_access';
+/** Фоллбек, если сервер не разрешает `offline_access` (realm/client scope выключен). */
+const FALLBACK_PASSWORD_SCOPE = 'openid';
+/** Scope по умолчанию для device flow (offline-токен — та же причина). */
+const DEFAULT_DEVICE_SCOPE = 'openid profile offline_access';
+/** Фоллбек device flow без offline. */
+const FALLBACK_DEVICE_SCOPE = 'openid profile';
 
 /** Параметры postForm: код ошибки при недоступности сервера авторизации. */
 export interface PostFormOptions {
@@ -93,13 +107,19 @@ function num(value: unknown): number | undefined {
   return undefined;
 }
 
-async function getJson(url: string): Promise<Record<string, unknown>> {
+async function getJson(
+  url: string,
+  opts: { networkErrorCode?: RemoteErrorCode } = {},
+): Promise<Record<string, unknown>> {
   let res: Response;
   try {
     res = await egressFetch(url, { signal: AbortSignal.timeout(AUTH_HTTP_TIMEOUT_MS) });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new RemoteError(`Сервер авторизации недоступен: ${reason}`, 'AUTH');
+    throw new RemoteError(
+      `Сервер авторизации недоступен: ${reason}`,
+      opts.networkErrorCode ?? 'AUTH',
+    );
   }
   if (!res.ok) {
     throw new RemoteError(`Не удалось получить конфигурацию OIDC-провайдера (HTTP ${res.status})`, 'AUTH');
@@ -166,10 +186,16 @@ export async function postForm(
 /**
  * Получить конфигурацию OIDC-провайдера: GET {issuer}/.well-known/openid-configuration.
  * Возвращает только endpoint-ы, нужные для device flow.
+ *
+ * `opts.networkErrorCode` — код сетевой ошибки (по умолчанию `AUTH`; при
+ * refresh-пути — `OFFLINE`, чтобы сетевой сбой не выглядел как истёкшая сессия).
  */
-export async function discover(issuer: string): Promise<DeviceFlowDiscovery> {
+export async function discover(
+  issuer: string,
+  opts: { networkErrorCode?: RemoteErrorCode } = {},
+): Promise<DeviceFlowDiscovery> {
   const base = issuer.replace(/\/$/, '');
-  const data = await getJson(`${base}/.well-known/openid-configuration`);
+  const data = await getJson(`${base}/.well-known/openid-configuration`, opts);
   const tokenEndpoint = str(data.token_endpoint);
   const deviceEndpoint = str(data.device_authorization_endpoint);
   if (!tokenEndpoint || !deviceEndpoint) {
@@ -186,13 +212,23 @@ export async function discover(issuer: string): Promise<DeviceFlowDiscovery> {
  * Начать device flow: запросить device_code/user_code у сервера авторизации.
  * Возвращает сессию, по которой нужно показать пользователю user_code и verification_uri.
  */
-export async function startDeviceFlow(issuer: string, clientId: string): Promise<DeviceFlowSession> {
+export async function startDeviceFlow(
+  issuer: string,
+  clientId: string,
+  scope: string = DEFAULT_DEVICE_SCOPE,
+): Promise<DeviceFlowSession> {
   const disc = await discover(issuer);
-  const params = new URLSearchParams({
-    client_id: clientId,
-    scope: 'openid profile',
-  });
-  const body = await postForm(disc.device_authorization_endpoint, params);
+  const request = (requestedScope: string): Promise<Record<string, unknown>> =>
+    postForm(
+      disc.device_authorization_endpoint,
+      new URLSearchParams({ client_id: clientId, scope: requestedScope }),
+    );
+  let body = await request(scope);
+  // Сервер не разрешает `offline_access` (realm/client scope выключен) — повторяем
+  // без него: длинная сессия деградирует до обычной, но вход работает.
+  if (str(body.error) === 'invalid_scope' && scope !== FALLBACK_DEVICE_SCOPE) {
+    body = await request(FALLBACK_DEVICE_SCOPE);
+  }
   const authError = str(body.error);
   if (authError) {
     // RFC 8628 §3.1: сервер может вернуть ошибку (например, unauthorized_client
@@ -281,20 +317,24 @@ export async function pollDeviceToken(
 
 /**
  * Обновить access token по refresh token (grant_type=refresh_token, RFC 6749 §6).
- * Ошибки (в т.ч. invalid_grant) → RemoteError('AUTH') с понятным сообщением.
+ * Ошибки (в т.ч. invalid_grant) → RemoteError('AUTH') с понятным сообщением;
+ * сетевой сбой → RemoteError('OFFLINE') — его нельзя путать с истёкшей сессией
+ * (шаг уйдёт в обычный retry как network_error, а не потребует повторного входа).
+ *
+ * `scope` не отправляем: Keycloak сохраняет offline-тип refresh-токена сам.
  */
 export async function refreshAccessToken(
   issuer: string,
   clientId: string,
   refreshToken: string,
 ): Promise<RefreshTokenResult> {
-  const disc = await discover(issuer);
+  const disc = await discover(issuer, { networkErrorCode: 'OFFLINE' });
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
     client_id: clientId,
   });
-  const body = await postForm(disc.token_endpoint, params);
+  const body = await postForm(disc.token_endpoint, params, { networkErrorCode: 'OFFLINE' });
 
   const accessToken = str(body.access_token);
   if (!accessToken) {
@@ -319,26 +359,42 @@ export async function refreshAccessToken(
  * {issuer}/protocol/openid-connect/token.
  * Ошибки аутентификации (invalid_grant/invalid_client) → RemoteError('AUTH')
  * с понятным русским сообщением; сеть недоступна → RemoteError('OFFLINE').
+ *
+ * Scope по умолчанию — `openid offline_access`: обычная OIDC-сессия ограничена
+ * idle/max-lifespan SSO (на test — 30 мин / 10 ч), и refresh умирает посреди
+ * длинного хода или саб-агента. Offline refresh-токен живёт по `offlineSession*`
+ * realm (на test — 30/60 дней) и не зависит от SSO-сессии. Если сервер не
+ * разрешает `offline_access` (`invalid_scope`), повторяем без него — вход
+ * работает, ограничения realm остаются.
  */
 export async function passwordGrant(
   issuer: string,
   clientId: string,
   username: string,
   password: string,
+  opts: { scope?: string } = {},
 ): Promise<PasswordGrantResult> {
   const base = issuer.replace(/\/+$/, '');
-  const params = new URLSearchParams({
-    grant_type: 'password',
-    client_id: clientId,
-    username,
-    password,
-  });
-  // Сеть недоступна → OFFLINE (а не AUTH, как у postForm по умолчанию):
-  // ROPC-логин из runtime-эндпоинта должен различать «неверные учётные данные»
-  // и «сервер авторизации недоступен».
-  const body = await postForm(`${base}/protocol/openid-connect/token`, params, {
-    networkErrorCode: 'OFFLINE',
-  });
+  const url = `${base}/protocol/openid-connect/token`;
+  const scope = opts.scope ?? DEFAULT_PASSWORD_SCOPE;
+  const request = (requestedScope: string): Promise<Record<string, unknown>> => {
+    const params = new URLSearchParams({
+      grant_type: 'password',
+      client_id: clientId,
+      username,
+      password,
+      scope: requestedScope,
+    });
+    // Сеть недоступна → OFFLINE (а не AUTH, как у postForm по умолчанию):
+    // ROPC-логин из runtime-эндпоинта должен различать «неверные учётные данные»
+    // и «сервер авторизации недоступен».
+    return postForm(url, params, { networkErrorCode: 'OFFLINE' });
+  };
+
+  let body = await request(scope);
+  if (!str(body.access_token) && str(body.error) === 'invalid_scope' && scope !== FALLBACK_PASSWORD_SCOPE) {
+    body = await request(FALLBACK_PASSWORD_SCOPE);
+  }
 
   const accessToken = str(body.access_token);
   if (!accessToken) {
@@ -352,6 +408,7 @@ export async function passwordGrant(
     accessToken,
     refreshToken: str(body.refresh_token),
     expiresIn: num(body.expires_in),
+    refreshExpiresIn: num(body.refresh_expires_in),
   };
 }
 

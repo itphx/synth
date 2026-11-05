@@ -25,6 +25,7 @@ import {
   RemoteAuthExpiredError,
 } from '../../providers/exceptions.js';
 import { LLM_MAX_ATTEMPTS } from '../llm-error.js';
+import { RemoteError } from '../../remote/types.js';
 import { t as sm } from '../system-messages.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './errors.js';
 import type { SaveAssistantMessageFn } from './persistence.js';
@@ -57,6 +58,13 @@ describe('formatLlmError / errorTypeI18n (ADR-041)', () => {
     // Истёкший API-ключ провайдера (не гибрид) не должен выдавать «сессия истекла».
     expect(formatLlmError(new ProviderError('invalid api key'))).toEqual({
       text: 'invalid api key',
+    });
+  });
+
+  it('гибрид: RemoteError(OFFLINE) → router.network_error (не русский текст авторизации)', () => {
+    expect(formatLlmError(new RemoteError('Сервер авторизации недоступен: fetch failed', 'OFFLINE'))).toEqual({
+      text: sm('router.network_error'),
+      i18n: { key: 'router.network_error' },
     });
   });
 
@@ -178,6 +186,30 @@ describe('handleLlmFailure', () => {
     const result = await handleLlmFailure(
       sessionId, 'stream1', new Error('401 Unauthorized'), 1, context(), deps(),
     );
+
+    expect(result).toMatchObject({ errorType: 'auth_error', canRetry: false });
+    expect(saveAssistantMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('гибрид: RemoteError(OFFLINE) → network_error, recoverable; текст — router.network_error', async () => {
+    const sessionId = await sessionWithUserMessage('stream1');
+    const err = new RemoteError('Сервер авторизации недоступен: fetch failed', 'OFFLINE');
+
+    const result = await handleLlmFailure(sessionId, 'stream1', err, 1, context(), deps());
+
+    expect(result).toEqual({
+      error: sm('router.network_error'),
+      errorType: 'network_error',
+      canRetry: true,
+    });
+    expect(saveAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it('гибрид: RemoteError(AUTH) → auth_error, терминально (просьба войти заново)', async () => {
+    const sessionId = await sessionWithUserMessage('stream1');
+    const err = new RemoteError('Не удалось обновить токен: refresh token недействителен или истёк', 'AUTH');
+
+    const result = await handleLlmFailure(sessionId, 'stream1', err, 1, context(), deps());
 
     expect(result).toMatchObject({ errorType: 'auth_error', canRetry: false });
     expect(saveAssistantMessage).toHaveBeenCalledTimes(1);

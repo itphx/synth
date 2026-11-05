@@ -35,11 +35,17 @@ export interface RemoteSessionAuthStatus {
   user?: RemoteUser;
 }
 
-function isTokenExpired(expiresAt?: string): boolean {
+/**
+ * Запас обновления access-токена: refresh запускается за 60 с до истечения,
+ * иначе токен мог истечь прямо во время длинного LLM-вызова/шага.
+ */
+const TOKEN_REFRESH_SKEW_MS = 60_000;
+
+function isTokenExpired(expiresAt?: string, skewMs = 0): boolean {
   if (!expiresAt) return false;
   const ts = Date.parse(expiresAt);
   if (Number.isNaN(ts)) return false;
-  return ts <= Date.now();
+  return ts - skewMs <= Date.now();
 }
 
 export class RemoteSession {
@@ -112,7 +118,9 @@ export class RemoteSession {
   /**
    * Обеспечить аутентифицированную сессию к backendUrl.
    * 1. api_key: токен = apiKey (credentials не сохраняются — это не OAuth-токен, refresh неприменим).
-   * 2. Сохранённый accessToken ещё действителен → используем.
+   * 2. Сохранённый accessToken ещё действителен → используем (issuer/clientId берутся
+   *    из opts, иначе из сохранённых credentials; без обоих — fail-closed: сессия без
+   *    возможности refresh умерла бы через 5 минут, лучше честно попросить войти заново).
    * 3. Просрочен + есть refreshToken + issuer/clientId → refreshAccessToken, обновить и сохранить.
    * 4. Иначе → device flow: discover → startDeviceFlow → onDeviceCode → pollDeviceToken → сохранить.
    */
@@ -137,26 +145,38 @@ export class RemoteSession {
     }
 
     const existing = await loadCredentials(backendUrl, credentialsPath);
+    // issuer/clientId: явные opts приоритетнее, затем — сохранённые в credentials
+    // (иначе после рестарта refresh зависел бы только от дискавери).
+    const issuer = opts.issuer ?? existing?.issuer;
+    const clientId = opts.clientId ?? existing?.clientId;
 
     // Сохранённый accessToken действителен — используем как есть.
     if (existing?.accessToken && !isTokenExpired(existing.expiresAt)) {
+      if (!issuer || !clientId) {
+        // Полусессия без refresh умрёт через 5 минут (access-token Keycloak) —
+        // честный отказ вместо тихой поломки посреди хода.
+        throw new RemoteError(
+          'Не заданы OIDC issuer/clientId — войдите в гибрид заново (нет параметров для обновления токена)',
+          'AUTH',
+        );
+      }
       return finish(new RemoteSession(
         backendUrl, authType, existing.accessToken, credentialsPath, opts.timeoutMs,
-        existing.refreshToken, existing.expiresAt, opts.issuer, opts.clientId,
+        existing.refreshToken, existing.expiresAt, issuer, clientId,
         existing.user,
       ));
     }
 
     // Просрочен, но есть refreshToken — пробуем обновить.
     if (existing?.refreshToken) {
-      if (!opts.issuer || !opts.clientId) {
+      if (!issuer || !clientId) {
         throw new RemoteError(
           'Не заданы remote.auth.issuer/clientId — укажите их в config.yaml или флагами --oidc-issuer/--oidc-client-id',
           'AUTH',
         );
       }
       try {
-        const refreshed = await refreshAccessToken(opts.issuer, opts.clientId, existing.refreshToken);
+        const refreshed = await refreshAccessToken(issuer, clientId, existing.refreshToken);
         const updated: RemoteCredentials = {
           backendUrl,
           accessToken: refreshed.accessToken,
@@ -165,11 +185,13 @@ export class RemoteSession {
             ? new Date(Date.now() + refreshed.expiresIn * 1000).toISOString()
             : undefined,
           user: existing.user,
+          issuer,
+          clientId,
         };
         await saveCredentials(updated, credentialsPath);
         return finish(new RemoteSession(
           backendUrl, authType, updated.accessToken, credentialsPath, opts.timeoutMs,
-          updated.refreshToken, updated.expiresAt, opts.issuer, opts.clientId,
+          updated.refreshToken, updated.expiresAt, issuer, clientId,
           updated.user,
         ));
       } catch (err) {
@@ -183,14 +205,14 @@ export class RemoteSession {
     }
 
     // Ничего нет (или refresh не удался) → device flow.
-    if (!opts.issuer || !opts.clientId) {
+    if (!issuer || !clientId) {
       throw new RemoteError(
         'Не заданы remote.auth.issuer/clientId — укажите их в config.yaml или флагами --oidc-issuer/--oidc-client-id',
         'AUTH',
       );
     }
 
-    const deviceSession = await startDeviceFlow(opts.issuer, opts.clientId);
+    const deviceSession = await startDeviceFlow(issuer, clientId);
     if (onDeviceCode) {
       await onDeviceCode({
         verificationUri: deviceSession.verificationUri,
@@ -206,12 +228,14 @@ export class RemoteSession {
       expiresAt: token.expiresIn
         ? new Date(Date.now() + token.expiresIn * 1000).toISOString()
         : undefined,
+      issuer,
+      clientId,
       // id_token не парсим на этом этапе — user оставляем пустым.
     };
     await saveCredentials(creds, credentialsPath);
     return finish(new RemoteSession(
       backendUrl, authType, creds.accessToken, credentialsPath, opts.timeoutMs,
-      creds.refreshToken, creds.expiresAt, opts.issuer, opts.clientId,
+      creds.refreshToken, creds.expiresAt, issuer, clientId,
     ));
   }
 
@@ -224,6 +248,11 @@ export class RemoteSession {
    * После обмена токена запрашивается серверный пользователь
    * (GET {backendUrl}/auth/status с Bearer access_token); если backend
    * недоступен — credentials уже сохранены, user остаётся пустым.
+   *
+   * Scope входа — `openid offline_access` (см. `passwordGrant`): offline
+   * refresh-токен переживает idle/max-lifespan SSO-сессии, иначе длинные ходы
+   * и саб-агенты падают с «сессия истекла». issuer/clientId сохраняются в
+   * credentials — после рестарта refresh не зависит от дискавери.
    *
    * Ошибки: RemoteError('AUTH') — неверный логин/пароль;
    * RemoteError('OFFLINE') — сервер авторизации недоступен.
@@ -255,6 +284,8 @@ export class RemoteSession {
       accessToken: granted.accessToken,
       refreshToken: granted.refreshToken,
       expiresAt,
+      issuer: opts.issuer,
+      clientId: opts.clientId,
     };
     await saveCredentials(creds, opts.credentialsPath);
 
@@ -292,19 +323,25 @@ export class RemoteSession {
    * Токен для авторизации на удалённом backend (используется RemoteProvider
    * как getToken — автообновление в рантайме).
    * - api_key → apiKey;
-   * - accessToken действителен → как есть;
-   * - протух + refreshToken + issuer/clientId → refreshAccessToken, пересохранение credentials;
-   * - протух без refresh → null (RemoteProvider бросит ProviderError).
+   * - accessToken действителен (с запасом `TOKEN_REFRESH_SKEW_MS`) → как есть;
+   * - refreshToken + issuer/clientId → refreshAccessToken, пересохранение credentials;
+   * - refresh упал/вернул null, а текущий токен ещё не истёк (сработал только
+   *   запас) → возвращаем текущий токен: сетевой блип не должен валить шаг;
+   * - токен истёк и сеть недоступна → `RemoteError('OFFLINE')` (recoverable-
+   *   retry как network_error);
+   * - токен истёк и refresh недействителен (AUTH) → null (RemoteProvider бросит
+   *   `RemoteAuthExpiredError` — «войдите заново»).
    */
   async getToken(): Promise<string | null> {
     if (this.authType === 'api_key') {
       return this._accessToken;
     }
-    if (!isTokenExpired(this._expiresAt)) {
+    if (!isTokenExpired(this._expiresAt, TOKEN_REFRESH_SKEW_MS)) {
       return this._accessToken;
     }
     if (!(this._refreshToken && this._issuer && this._clientId)) {
-      return null;
+      // Обновлять нечем: если токен ещё формально жив (в пределах запаса) — отдаём его.
+      return isTokenExpired(this._expiresAt) ? null : this._accessToken;
     }
     // Single-flight: пока refresh в полёте, все новые вызовы получают тот же
     // промис; успех/ошибка едины для всех ожидающих.
@@ -313,18 +350,25 @@ export class RemoteSession {
     }
     this._refreshPromise = this._refreshAccessToken();
     try {
-      return await this._refreshPromise;
+      const refreshed = await this._refreshPromise;
+      if (refreshed) return refreshed;
+    } catch (err) {
+      // Сеть упала посреди refresh: пока токен не истёк — шаг не валим.
+      if (!isTokenExpired(this._expiresAt)) return this._accessToken;
+      throw err;
     } finally {
       this._refreshPromise = null;
     }
+    // refresh вернул null (AUTH/прочее): тот же принцип — живой токен отдаём.
+    if (!isTokenExpired(this._expiresAt)) return this._accessToken;
+    return null;
   }
 
   /**
    * Обновление access-токена по refresh-гранту с персистом credentials.
-   * Ошибка refresh (RemoteError('AUTH') — невалидный/истёкший refresh token,
-   * либо сеть недоступна) НЕ роняет поток: возвращаем null. Запрос уйдёт без
-   * токена и получит 401/ошибку сети (UNAUTHORIZED/OFFLINE), а RemoteProvider
-   * бросит понятную ошибку «сессия истекла» — корректная offline-деградация.
+   * - сетевой сбой (`RemoteError('OFFLINE')`) — пробрасываем: это recoverable-
+   *   ошибка сети, а не истёкшая сессия;
+   * - `AUTH` (invalid_grant и т.п.) и прочие ошибки — `null` (нужен повторный вход).
    */
   private async _refreshAccessToken(): Promise<string | null> {
     const refreshToken = this._refreshToken;
@@ -340,7 +384,8 @@ export class RemoteSession {
         : undefined;
 
       // Персист: обновляем сохранённые credentials, если есть (иначе после
-      // рестарта сессия возьмёт протухший токен из файла).
+      // рестарта сессия возьмёт протухший токен из файла). issuer/clientId
+      // сохраняем всегда — без них следующий refresh недоступен.
       const existing = await loadCredentials(this.backendUrl, this._credentialsPath);
       if (existing) {
         await saveCredentials(
@@ -349,12 +394,15 @@ export class RemoteSession {
             accessToken: refreshed.accessToken,
             refreshToken: refreshed.refreshToken ?? existing.refreshToken,
             expiresAt: this._expiresAt,
+            issuer: this._issuer,
+            clientId: this._clientId,
           },
           this._credentialsPath,
         );
       }
       return refreshed.accessToken;
-    } catch {
+    } catch (err) {
+      if (err instanceof RemoteError && err.code === 'OFFLINE') throw err;
       return null;
     }
   }
