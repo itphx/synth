@@ -7,10 +7,23 @@ import { applyPersonalChatScale, normalizeChatScale } from '@/lib/uiScale'
 import type { ThemeMode } from '@/lib/theme/themes'
 import type { Locale } from '@/lib/i18n'
 
+/**
+ * `GET /auth/profile` с одним повтором: разовый сбой сети на старте не должен
+ * оставлять приложение без профиля/настроек (транспорт от профиля больше не
+ * зависит — см. `BackendConnection`).
+ */
+async function loadProfileWithRetry(): Promise<Profile> {
+  try {
+    return await api.getProfile()
+  } catch {
+    return api.getProfile()
+  }
+}
+
 export const profileService = {
   async getEffectivePreferences(): Promise<UserPreferences | null> {
     try {
-      const profile = await api.getProfile()
+      const profile = await loadProfileWithRetry()
       useAuthStore.setState({ profile })
       return profile.preferences || null
     } catch (err) {
@@ -21,7 +34,7 @@ export const profileService = {
 
   async getProfile(): Promise<Profile | null> {
     try {
-      const profile = await api.getProfile()
+      const profile = await loadProfileWithRetry()
       useAuthStore.setState({ profile })
       return profile
     } catch (err) {

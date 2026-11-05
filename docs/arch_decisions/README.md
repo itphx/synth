@@ -61,6 +61,7 @@
 | ADR-114 | Git worktrees — per-session рабочий каталог | ✅ Реализовано | [adr-114-git-worktrees.md](./adr-114-git-worktrees.md) |
 | ADR-117 | Слой совместимости провайдеров/моделей (`compatibility`: reasoning-поле, лимит вывода, `tool_choice`) и Anthropic thinking round-trip | ✅ Реализовано | [adr-117-provider-compatibility.md](./adr-117-provider-compatibility.md) |
 | ADR-119 | Сжатие контекста — суммаризация и компактизация как два взаимоисключающих режима | ✅ Реализовано | [adr-119-context-compaction.md](./adr-119-context-compaction.md) |
+| ADR-123 | Связь с сервером — фазовое состояние, гейт входа и офлайн-UX | ✅ Реализовано | [adr-123-connection-state-and-offline-ux.md](./adr-123-connection-state-and-offline-ux.md) |
 
 ## Частично
 
@@ -159,5 +160,5 @@
 
 ---
 
-Всего документов: 102 (Решения: 49, Частично: 23, Предложения: 21, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 103 (Решения: 50, Частично: 23, Предложения: 21, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 17 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

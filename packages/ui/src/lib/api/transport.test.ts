@@ -238,3 +238,156 @@ describe('TransportClient: WS-кадры управления', () => {
     expect(() => client.sendPermissionReply('s1', 'ap-1', true)).not.toThrow()
   })
 })
+
+describe('TransportClient: watchdog, backoff и пробуждение (PWA)', () => {
+  it('нет ни одного кадра > 30 с → сокет закрыт и переподключение (heartbeat)', async () => {
+    vi.useFakeTimers()
+    const onDisconnect = vi.fn()
+    const client = new TransportClient({ onEvent: vi.fn(), onDisconnect })
+    client.connect('ws')
+    const first = FakeWebSocket.last!
+    first.onopen?.()
+
+    // Пинги уходят, но pong не приходит: через 35 с (проверка каждые 5 с)
+    // watchdog обязан признать соединение мёртвым.
+    await vi.advanceTimersByTimeAsync(35_000)
+
+    expect(onDisconnect).toHaveBeenCalledWith('heartbeat')
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(FakeWebSocket.last).not.toBe(first)
+  })
+
+  it('рукопожатие WS: сокет висит в CONNECTING > 10 с → network-обрыв и реконнект', async () => {
+    vi.useFakeTimers()
+    const onDisconnect = vi.fn()
+    const client = new TransportClient({ onEvent: vi.fn(), onDisconnect })
+    client.connect('ws')
+    const first = FakeWebSocket.last!
+    first.readyState = FakeWebSocket.CONNECTING
+
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(onDisconnect).toHaveBeenCalledWith('network')
+    expect(first.readyState).toBe(FakeWebSocket.CLOSED)
+
+    // Реконнект по backoff (1 с) — новый сокет.
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+  })
+
+  it('рукопожатие завершилось onopen — таймаут не срабатывает', async () => {
+    vi.useFakeTimers()
+    const onDisconnect = vi.fn()
+    const client = new TransportClient({ onEvent: vi.fn(), onDisconnect })
+    client.connect('ws')
+    FakeWebSocket.last!.onopen?.()
+
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(onDisconnect).not.toHaveBeenCalled()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
+  it('pong продлевает жизнь соединения (watchdog не срабатывает)', async () => {
+    vi.useFakeTimers()
+    const onDisconnect = vi.fn()
+    const client = new TransportClient({ onEvent: vi.fn(), onDisconnect })
+    client.connect('ws')
+    const ws = FakeWebSocket.last!
+    ws.onopen?.()
+
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(20_000)
+      ws.emit({ type: 'pong' })
+    }
+
+    expect(onDisconnect).not.toHaveBeenCalled()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
+  it('backoff на экране с сетью: потолок 5 с (1 → 2 → 4 → 5)', async () => {
+    vi.useFakeTimers()
+    const client = new TransportClient({ onEvent: vi.fn() })
+    client.connect('ws')
+
+    let ws = FakeWebSocket.last!
+    ws.onclose?.({ code: 1006, reason: '', wasClean: false })
+    for (const delay of [1_000, 2_000, 4_000]) {
+      await vi.advanceTimersByTimeAsync(delay)
+      ws = FakeWebSocket.last!
+      ws.onclose?.({ code: 1006, reason: '', wasClean: false })
+    }
+    const before = FakeWebSocket.instances.length
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(FakeWebSocket.instances).toHaveLength(before)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(FakeWebSocket.instances).toHaveLength(before + 1)
+  })
+
+  it('backoff в фоне/без сети: потолок 60 с', async () => {
+    vi.useFakeTimers()
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    try {
+      const client = new TransportClient({ onEvent: vi.fn() })
+      client.connect('ws')
+      let ws = FakeWebSocket.last!
+      ws.onclose?.({ code: 1006, reason: '', wasClean: false })
+      for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 32_000]) {
+        await vi.advanceTimersByTimeAsync(delay)
+        ws = FakeWebSocket.last!
+        ws.onclose?.({ code: 1006, reason: '', wasClean: false })
+      }
+      const before = FakeWebSocket.instances.length
+      await vi.advanceTimersByTimeAsync(59_999)
+      expect(FakeWebSocket.instances).toHaveLength(before)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(FakeWebSocket.instances).toHaveLength(before + 1)
+    } finally {
+      visibility.mockRestore()
+      onLine.mockRestore()
+    }
+  })
+
+  it('resume прерывает ожидание backoff и переподключается сразу', () => {
+    const client = new TransportClient({ onEvent: vi.fn() })
+    client.connect('ws')
+    const first = FakeWebSocket.last!
+    first.onclose?.({ code: 1006, reason: '', wasClean: false })
+    expect(FakeWebSocket.instances).toHaveLength(1)
+
+    client.resume()
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(FakeWebSocket.last).not.toBe(first)
+  })
+
+  it('resume не рвёт живое соединение', () => {
+    const client = new TransportClient({ onEvent: vi.fn() })
+    client.connect('ws')
+    const first = FakeWebSocket.last!
+    first.onopen?.()
+
+    client.resume()
+
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
+  it('причина обрыва: network при closed, manual/restart при disconnect()', () => {
+    const onDisconnect = vi.fn()
+    const client = new TransportClient({ onEvent: vi.fn(), onDisconnect })
+
+    client.connect('ws')
+    FakeWebSocket.last!.onclose?.({ code: 1006, reason: '', wasClean: false })
+    expect(onDisconnect).toHaveBeenLastCalledWith('network')
+
+    client.connect('sse')
+    FakeEventSource.last!.onerror?.({ type: 'error' })
+    expect(onDisconnect).toHaveBeenLastCalledWith('network')
+
+    client.disconnect('restart')
+    expect(onDisconnect).toHaveBeenLastCalledWith('restart')
+    client.disconnect()
+    expect(onDisconnect).toHaveBeenLastCalledWith('manual')
+  })
+})

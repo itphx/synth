@@ -18,9 +18,9 @@ const mocks = vi.hoisted(() => {
     connect = vi.fn((mode: 'ws' | 'sse') => {
       this.kind = mode
     })
-    disconnect = vi.fn(() => {
+    disconnect = vi.fn((reason = 'manual') => {
       this.kind = 'disconnected'
-      this.callbacks.onDisconnect?.('manual')
+      this.callbacks.onDisconnect?.(reason)
     })
     getTransport = vi.fn(() => this.kind)
     sendMessage = vi.fn().mockResolvedValue(undefined)
@@ -67,7 +67,14 @@ import { synthApi } from '@/lib/api/synthApi'
 beforeEach(() => {
   // Сброс модульного состояния стора (transport/activeKind) между тестами.
   useTransportStore.getState().disconnect()
-  useTransportStore.setState({ transportMode: 'auto', connected: false, activeTransport: 'disconnected' })
+  useTransportStore.setState({
+    transportMode: 'auto',
+    connected: false,
+    activeTransport: 'disconnected',
+    phase: 'connecting',
+    phaseSince: 0,
+    hasEverConnected: false,
+  })
   __resetTransportResyncForTests()
   mocks.instances.length = 0
   vi.clearAllMocks()
@@ -271,6 +278,55 @@ describe('transportStore.restart: принудительный перезапу�
     expect(mocks.instances).toHaveLength(3)
     await waitConnected(mocks.instances[2]!, 'sse')
     expect(mocks.instances[2]!.connect).toHaveBeenCalledWith('sse')
+  })
+
+  it('restart не публикует потерю: фаза reconnecting и phaseSince не сбрасывается', async () => {
+    const store = useTransportStore.getState()
+    store.setTransportMode('ws')
+    const first = mocks.instances[0]!
+    await waitConnected(first, 'ws')
+    first.callbacks.onBackendReady?.()
+    expect(useTransportStore.getState().phase).toBe('online')
+
+    // Обрыв уже случился — идёт восстановление с конкретной отметкой времени.
+    first.callbacks.onDisconnect?.('network')
+    const phaseSince = useTransportStore.getState().phaseSince
+    expect(useTransportStore.getState().phase).toBe('reconnecting')
+
+    store.restart()
+
+    const state = useTransportStore.getState()
+    expect(state.phase).toBe('reconnecting')
+    expect(state.phaseSince).toBe(phaseSince)
+    expect(state.connected).toBe(false)
+    await waitConnected(mocks.instances[1]!, 'ws')
+  })
+
+  it('фазы: onConnect → online, network → reconnecting, manual → connecting', async () => {
+    const store = useTransportStore.getState()
+    store.setTransportMode('ws')
+    const first = mocks.instances[0]!
+    await waitConnected(first, 'ws')
+
+    first.callbacks.onBackendReady?.()
+    expect(useTransportStore.getState().phase).toBe('online')
+    expect(useTransportStore.getState().hasEverConnected).toBe(true)
+
+    first.callbacks.onDisconnect?.('network')
+    expect(useTransportStore.getState().phase).toBe('reconnecting')
+
+    store.disconnect()
+    expect(useTransportStore.getState().phase).toBe('connecting')
+  })
+
+  it('событие браузера offline/online переводит фазу', async () => {
+    useTransportStore.setState({ phase: 'reconnecting', hasEverConnected: true, phaseSince: 1 })
+
+    window.dispatchEvent(new Event('offline'))
+    expect(useTransportStore.getState().phase).toBe('offline')
+
+    window.dispatchEvent(new Event('online'))
+    expect(useTransportStore.getState().phase).toBe('reconnecting')
   })
 
   it('после реконнекта перечитывает список сессий (ресинк)', async () => {

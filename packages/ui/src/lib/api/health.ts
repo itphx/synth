@@ -2,6 +2,9 @@
 
 import { BASE_URL, fetchJSON } from './base'
 
+/** Health — лёгкая проверка; зависший ответ не должен ждать общий дедлайн. */
+const HEALTH_TIMEOUT_MS = 5_000
+
 export const healthApi = {
   /**
    * Публичный health-эндпоинт (без auth): проверка версии сервера на клиенте.
@@ -15,7 +18,7 @@ export const healthApi = {
     startedAt?: string
     build?: string
   }> {
-    return fetchJSON(`${BASE_URL}/health`)
+    return fetchJSON(`${BASE_URL}/health`, { timeoutMs: HEALTH_TIMEOUT_MS })
   },
 
   async checkUpdate(): Promise<{ currentVersion: string; latestVersion: string; hasUpdate: boolean; checkedAt: string }> {

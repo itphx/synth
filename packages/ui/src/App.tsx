@@ -15,7 +15,7 @@ import { GitTabToolbar } from './components/panels/GitTabToolbar'
 import { CenterPanel } from './components/layout/CenterPanel'
 import { MobileDrawer } from './components/layout/MobileDrawer'
 import { BackendConnection } from './components/layout/BackendConnection'
-import { ConnectionGuard } from './components/layout/ConnectionGuard'
+import { ConnectionStatus } from './components/layout/ConnectionStatus'
 import { PwaUpdatePrompt } from './components/layout/PwaUpdatePrompt'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { EntityEditDialog } from './components/ui/EntityEditDialog'
@@ -96,9 +96,16 @@ function useMountedOnce(open: boolean): boolean {
 function DefaultsSync() {
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const isInitialized = useAuthStore(s => s.isInitialized)
+  const authPhase = useAuthStore(s => s.authPhase)
 
   useEffect(() => {
     if (!isInitialized) {
+      return
+    }
+
+    // Недоступный/проверяемый сервер — не гость: ничего не применяем, иначе
+    // холодный старт без сети сбрасывал бы локаль на DEFAULT_LOCALE.
+    if (authPhase === 'checking' || authPhase === 'unreachable') {
       return
     }
 
@@ -146,7 +153,7 @@ function DefaultsSync() {
       })
     }
     apply()
-  }, [isAuthenticated, isInitialized])
+  }, [isAuthenticated, isInitialized, authPhase])
 
   return null
 }
@@ -310,9 +317,11 @@ function App() {
   return (
     <>
       <DefaultsSync />
+      {/* Транспорт и индикация связи живут вне AuthGate: гейт не должен
+          размонтировать переподключение при смене authPhase. */}
+      <BackendConnection />
+      <ConnectionStatus />
       <AuthGate>
-        <BackendConnection />
-        <ConnectionGuard />
         <TooltipProvider>
           <TitleTooltipBridge />
           {isMobile ? mobileLayout : desktopLayout}
@@ -346,6 +355,9 @@ function App() {
         closeButton
         hideProgressBar
         closeOnClick={false}
+        // Иначе при уходе приложения в фон таймер авто-закрытия замирает и
+        // тосты «залипают» после возврата (react-toastify 11: дефолт `true`).
+        pauseOnFocusLoss={false}
         toastClassName="synth-toast"
         style={{
           // @ts-expect-error CSS custom properties

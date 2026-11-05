@@ -108,33 +108,49 @@ async function throwExportError(response: Response): Promise<never> {
   })
 }
 
+/** Отчёты за период могут считаться долго — им нужен дедлайн выше общего 15 с. */
+const ANALYTICS_TIMEOUT_MS = 60_000
+
 export const analyticsApi = {
   // --- ADR-102 §4: сводка инстанса за период (сквозная → elevated/auditor) ---
   /** GET /analytics/summary — итоги usage/activity/decision + стоимость. */
   async getAnalyticsSummary(params: Pick<AnalyticsQuery, 'from' | 'to'> = {}): Promise<AnalyticsSummary> {
     return fetchJSON<AnalyticsSummary>(
       `${BASE_URL}/analytics/summary${encodeQuery({ from: params.from, to: params.to })}`,
+      { timeoutMs: ANALYTICS_TIMEOUT_MS },
     )
   },
 
   /** GET /analytics/usage — токены, стоимость и дериваты по осям. */
   async getAnalyticsUsage(params: AnalyticsQuery = {}): Promise<AnalyticsReport> {
-    return fetchJSON<AnalyticsReport>(`${BASE_URL}/analytics/usage${encodeQuery(reportParams(params))}`)
+    return fetchJSON<AnalyticsReport>(
+      `${BASE_URL}/analytics/usage${encodeQuery(reportParams(params))}`,
+      { timeoutMs: ANALYTICS_TIMEOUT_MS },
+    )
   },
 
   /** GET /analytics/activity — сессии/сообщения/инструменты/ошибки по осям. */
   async getAnalyticsActivity(params: AnalyticsQuery = {}): Promise<AnalyticsReport> {
-    return fetchJSON<AnalyticsReport>(`${BASE_URL}/analytics/activity${encodeQuery(reportParams(params))}`)
+    return fetchJSON<AnalyticsReport>(
+      `${BASE_URL}/analytics/activity${encodeQuery(reportParams(params))}`,
+      { timeoutMs: ANALYTICS_TIMEOUT_MS },
+    )
   },
 
   /** GET /analytics/decision — персистентные метрики decision-слоя (сквозной отчёт). */
   async getAnalyticsDecision(params: AnalyticsQuery = {}): Promise<AnalyticsReport> {
-    return fetchJSON<AnalyticsReport>(`${BASE_URL}/analytics/decision${encodeQuery(reportParams(params))}`)
+    return fetchJSON<AnalyticsReport>(
+      `${BASE_URL}/analytics/decision${encodeQuery(reportParams(params))}`,
+      { timeoutMs: ANALYTICS_TIMEOUT_MS },
+    )
   },
 
   /** GET /analytics/prompt — производные `usage`: кэш, reasoning, output tps. */
   async getAnalyticsPrompt(params: AnalyticsQuery = {}): Promise<AnalyticsReport> {
-    return fetchJSON<AnalyticsReport>(`${BASE_URL}/analytics/prompt${encodeQuery(reportParams(params))}`)
+    return fetchJSON<AnalyticsReport>(
+      `${BASE_URL}/analytics/prompt${encodeQuery(reportParams(params))}`,
+      { timeoutMs: ANALYTICS_TIMEOUT_MS },
+    )
   },
 
   /**

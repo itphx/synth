@@ -15,6 +15,27 @@ vi.mock('@/lib/api/synthApi', () => ({
 // Сборка бандла с известным build id: серверный build сравнивается с ним.
 vi.mock('@/lib/build-info', () => ({ BUILD_ID: 'local-build' }))
 
+// Связь: перезагрузка при обновлении допускается только при `online`
+// (на экране входа транспорта нет — authPhase !== 'authenticated').
+// Настоящие zustand-сторы (минимальные): компонент читает фазы через хуки,
+// а тестам нужен `setState`, меняющий состояние с уведомлением подписчиков.
+const connection = vi.hoisted(() => ({
+  transport: null as unknown as { setState: (patch: { phase: string }) => void },
+  auth: null as unknown as { setState: (patch: { authPhase: string }) => void },
+}))
+vi.mock('@/stores/transportStore', async () => {
+  const { create } = await import('zustand')
+  const store = create<{ phase: string }>()(() => ({ phase: 'online' }))
+  connection.transport = store
+  return { useTransportStore: store }
+})
+vi.mock('@/stores/authStore', async () => {
+  const { create } = await import('zustand')
+  const store = create<{ authPhase: string }>()(() => ({ authPhase: 'authenticated' }))
+  connection.auth = store
+  return { useAuthStore: store }
+})
+
 import { PwaUpdatePrompt } from './PwaUpdatePrompt'
 import { synthApi } from '@/lib/api/synthApi'
 
@@ -83,6 +104,8 @@ function readAutoReload(): { key: string; count: number } | null {
 
 beforeEach(() => {
   vi.stubEnv('PROD', true)
+  connection.transport.setState({ phase: 'online' })
+  connection.auth.setState({ authPhase: 'authenticated' })
   getHealthMock.mockReset()
   getHealthMock.mockResolvedValue(HEALTH_OK)
   reloadSpy = vi.fn()
@@ -355,6 +378,91 @@ describe('PwaUpdatePrompt', () => {
     })
 
     expect(reloadSpy).toHaveBeenCalled()
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+  })
+
+  it('связь потеряна (phase !== online) — не перезагружает при расхождении версий', async () => {
+    connection.transport.setState({ phase: 'reconnecting' })
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
+
+    const host = await mountPrompt()
+
+    expect(reloadSpy).not.toHaveBeenCalled()
+    // Авто-попытка не израсходована — применится после восстановления связи.
+    expect(readAutoReload()).toBeNull()
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+  })
+
+  it('отложенное обновление применяется при восстановлении связи (phase → online)', async () => {
+    connection.transport.setState({ phase: 'reconnecting' })
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
+
+    const host = await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(reloadSpy).not.toHaveBeenCalled()
+    expect(readAutoReload()).toBeNull()
+
+    await act(async () => {
+      connection.transport.setState({ phase: 'online' })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(reloadSpy).toHaveBeenCalledTimes(1)
+    expect(readAutoReload()).toEqual({ key: 'ver:9.9.9', count: 1 })
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+  })
+
+  it('authPhase=unreachable — не перезагружает при расхождении версий и не тратит авто-попытку', async () => {
+    connection.auth.setState({ authPhase: 'unreachable' })
+    connection.transport.setState({ phase: 'connecting' })
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
+
+    const host = await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(reloadSpy).not.toHaveBeenCalled()
+    // Авто-попытка отложена: счётчик в sessionStorage не появился.
+    expect(readAutoReload()).toBeNull()
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+  })
+
+  it('authPhase=checking — перезагрузка откладывается (не тратит авто-попытку)', async () => {
+    connection.auth.setState({ authPhase: 'checking' })
+    connection.transport.setState({ phase: 'connecting' })
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
+
+    const host = await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(reloadSpy).not.toHaveBeenCalled()
+    expect(readAutoReload()).toBeNull()
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+  })
+
+  it('health недоступен — не перезагружает и не показывает баннер', async () => {
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    getHealthMock.mockRejectedValue(new Error('network'))
+
+    const host = await mountPrompt()
+
+    expect(reloadSpy).not.toHaveBeenCalled()
     expect(host.textContent).not.toContain('pwa.updateAvailable')
   })
 

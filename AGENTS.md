@@ -382,7 +382,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 102 (Решения: 49, Частично: 23, Предложения: 21, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 103 (Решения: 50, Частично: 23, Предложения: 21, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 17 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
@@ -397,6 +397,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | документация (портал и dev-доки) | скилл `synth-docs` |
 | storage / JSON / FileStore / порты / деградация | [ADR-005](./docs/arch_decisions/adr-005-json-storage.md), [ADR-096](./docs/arch_decisions/adr-096-storage-layer.md), [ADR-097](./docs/arch_decisions/adr-097-storage-provider-class.md), [ADR-116](./docs/arch_decisions/adr-116-instance-state-and-blob-ports.md), [ADR-098](./docs/arch_decisions/adr-098-storage-degraded-recovery.md), скилл `synth-storage-recovery` |
 | события / WS / SSE / хуки / роутинг сессий | [ADR-008](./docs/arch_decisions/adr-008-websocket-events.md), [ADR-009](./docs/arch_decisions/adr-009-session-event-bus.md), [ADR-024](./docs/arch_decisions/adr-024-eventhub-transport.md), [ADR-030](./docs/arch_decisions/adr-030-hooks-agent-events.md), [ADR-089](./docs/arch_decisions/adr-089-external-events-automation.md) |
+| связь / переподключение / офлайн / PWA-возврат из фона | [ADR-123](./docs/arch_decisions/adr-123-connection-state-and-offline-ux.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 | проект / сессии / ветвление / merge | [ADR-014](./docs/arch_decisions/adr-014-project-container.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md), [ADR-040](./docs/arch_decisions/adr-040-sessions-without-project.md) |
 | API v2 / Hono / пагинация / сводные DTO | [ADR-017](./docs/arch_decisions/adr-017-api-v2-hono.md), [docs/API_V2.md](./docs/API_V2.md) §5 (в т.ч. «Пагинация списков»), [packages/core/AGENTS.md](./packages/core/AGENTS.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 | капы чтения / предпросмотр / листинг FS / diff коммита | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Хранилище и рабочий каталог», [docs/API_V2.md](./docs/API_V2.md) §5.12/§5.15 |

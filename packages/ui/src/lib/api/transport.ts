@@ -13,17 +13,35 @@ export interface WSEvent {
 
 export type TransportKind = 'ws' | 'sse' | 'disconnected'
 
+/**
+ * Причина обрыва соединения. `network` — сокет закрылся/ошибка, `heartbeat` —
+ * не пришло ни одного кадра за watchdog-окно, `restart` — принудительный
+ * перезапуск из UI, `manual` — штатное закрытие (выход из аккаунта),
+ * `auth` — сервер отклонил соединение (например, `1008`).
+ */
+export type TransportDisconnectReason = 'network' | 'heartbeat' | 'restart' | 'manual' | 'auth'
+
 export interface TransportClientCallbacks {
   onEvent: (event: WSEvent) => void
   onConnect?: () => void
+  /** Причина — известные значения `TransportDisconnectReason` (тип `string` для совместимости). */
   onDisconnect?: (reason: string) => void
   onTransportSwitch?: (transport: TransportKind) => void
   onBackendReady?: () => void
 }
 
 const HEARTBEAT_INTERVAL = 25_000
+/** Сколько сокет может висеть в CONNECTING: дольше — рукопожатие считаем сбойным. */
+const HANDSHAKE_TIMEOUT_MS = 10_000
+/** Сколько соединение может молчать (ни одного кадра, включая `pong`), прежде чем считаться мёртвым. */
+const PONG_TIMEOUT_MS = 30_000
+/** Период проверки watchdog'а (и отправки `ping`, когда пора). */
+const PONG_CHECK_INTERVAL = 5_000
 const INITIAL_RECONNECT_DELAY = 1_000
-const MAX_RECONNECT_DELAY = 60_000
+/** Потолок backoff, когда приложение на экране и сеть есть — переподключение быстрое. */
+const MAX_RECONNECT_DELAY_VISIBLE = 5_000
+/** Потолок backoff в фоне/без сети — редкие попытки, чтобы не будить устройство. */
+const MAX_RECONNECT_DELAY_HIDDEN = 60_000
 /**
  * Простой, после которого соединение считается «зомби» (PWA вернулась из фона,
  * сеть давно ушла): `resume()` пересоздаёт транспорт, не дожидаясь backoff.
@@ -45,6 +63,7 @@ export class TransportClient {
   private transport: TransportKind = 'disconnected'
   private callbacks: TransportClientCallbacks
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private handshakeTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempts = 0
   private intentionalClose = false
@@ -90,12 +109,13 @@ export class TransportClient {
     }
   }
 
-  disconnect(): void {
+  disconnect(reason: TransportDisconnectReason = 'manual'): void {
     this.intentionalClose = true
     this.detachLifecycle()
     this.cleanupTransport()
     this.transport = 'disconnected'
-    this.callbacks.onDisconnect?.('manual')
+    this.backendReady = false
+    this.callbacks.onDisconnect?.(reason)
   }
 
   getTransport(): TransportKind {
@@ -117,6 +137,16 @@ export class TransportClient {
    */
   resume(): void {
     if (this.intentionalClose) return
+    // Между попытками стоит backoff-таймер — повод (online/visibility/pageshow)
+    // важнее расписания: переподключаемся сразу, не выжидая задержку.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+      this.reconnectAttempts = 0
+      if (this.transport === 'sse') this.connectSSE()
+      else this.connectWS()
+      return
+    }
     const idle = Date.now() - this.lastActivityAt > RESUME_IDLE_TIMEOUT_MS
     if (this.transport === 'sse') {
       if (!this.sseSource || this.sseSource.readyState !== SOCKET_OPEN || idle) {
@@ -237,9 +267,24 @@ export class TransportClient {
 
     try {
       this.ws = new WebSocket(url)
+      const socket = this.ws
+
+      // Зависший CONNECTING раньше жил до браузерного таймаута (минуты).
+      // 10 с без OPEN — считаем сетевой ошибкой и переподключаемся по backoff.
+      this.handshakeTimer = setTimeout(() => {
+        this.handshakeTimer = null
+        if (this.intentionalClose || this.ws !== socket) return
+        if (socket.readyState === SOCKET_OPEN) return
+        console.debug('[WS] Handshake timeout')
+        this.cleanupTransport()
+        this.backendReady = false
+        this.callbacks.onDisconnect?.('network')
+        this.scheduleReconnect()
+      }, HANDSHAKE_TIMEOUT_MS)
 
       this.ws.onopen = () => {
         console.debug('[WS] Connected')
+        this.clearHandshakeTimer()
         this.lastActivityAt = Date.now()
         this.reconnectAttempts = 0
         this.transport = 'ws'
@@ -251,9 +296,13 @@ export class TransportClient {
 
       this.ws.onclose = (e) => {
         console.debug('[WS] Closed: code=', e.code, 'reason=', e.reason, 'wasClean=', e.wasClean)
+        this.clearHandshakeTimer()
         this.stopHeartbeat()
         if (!this.intentionalClose) {
-          this.callbacks.onDisconnect?.(`WS closed: ${e.code}`)
+          // 1008 (policy violation) — сервер отклонил клиент (в т.ч. версия
+          // модели сообщений/аутентификация): отдельная причина, чтобы UI не
+          // считал это обычной сетевой потерей.
+          this.callbacks.onDisconnect?.(e.code === 1008 ? 'auth' : 'network')
           this.scheduleReconnect()
         }
       }
@@ -334,7 +383,7 @@ export class TransportClient {
       this.sseSource.onerror = (e) => {
         console.debug('[SSE] Error:', e.type)
         if (!this.intentionalClose) {
-          this.callbacks.onDisconnect?.('SSE error')
+          this.callbacks.onDisconnect?.('network')
           this.scheduleReconnect()
         }
       }
@@ -344,13 +393,26 @@ export class TransportClient {
     }
   }
 
+  /**
+   * Потолок backoff: на экране и с сетью — 5 с (переподключение почти
+   * незаметно), в фоне/без сети — 60 с (не будим устройство зря).
+   */
+  private reconnectDelay(attempt: number): number {
+    const visible = typeof document === 'undefined' || document.visibilityState === 'visible'
+    const online = typeof navigator === 'undefined' || navigator.onLine !== false
+    const cap = visible && online ? MAX_RECONNECT_DELAY_VISIBLE : MAX_RECONNECT_DELAY_HIDDEN
+    return Math.min(INITIAL_RECONNECT_DELAY * Math.pow(2, attempt), cap)
+  }
+
   private scheduleReconnect(): void {
-    if (this.intentionalClose) return
-    const delay = Math.min(INITIAL_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts), MAX_RECONNECT_DELAY)
+    if (this.intentionalClose || this.reconnectTimer) return
+    const kind = this.transport
+    const delay = this.reconnectDelay(this.reconnectAttempts)
     this.reconnectAttempts++
     console.debug('[Transport] Reconnect in', delay, 'ms (attempt', this.reconnectAttempts, ')')
     this.reconnectTimer = setTimeout(() => {
-      if (this.sseSource) {
+      this.reconnectTimer = null
+      if (kind === 'sse') {
         this.connectSSE()
       } else {
         this.connectWS()
@@ -358,13 +420,39 @@ export class TransportClient {
     }, delay)
   }
 
+  /**
+   * Watchdog: за `PONG_TIMEOUT_MS` не пришло **ни одного** кадра (включая
+   * `pong`) — соединение мёртвое. Закрываем сокет и переподключаемся сразу,
+   * не дожидаясь, пока браузер заметит обрыв.
+   */
+  private handleHeartbeatTimeout(): void {
+    if (this.intentionalClose || this.transport !== 'ws') return
+    console.debug('[WS] No frames for', PONG_TIMEOUT_MS, 'ms — reconnecting')
+    // Снимаем обработчики сокета ДО close(), иначе onclose даст второй обрыв.
+    this.cleanupTransport()
+    this.backendReady = false
+    this.callbacks.onDisconnect?.('heartbeat')
+    // Стор мог переключить транспорт (auto-fallback WS→SSE) — тогда этот клиент
+    // больше не нужен и второй сокет поднимать нельзя.
+    if (this.intentionalClose) return
+    this.reconnectAttempts = 0
+    this.connectWS()
+  }
+
   private startHeartbeat(): void {
     this.stopHeartbeat()
     this.heartbeatTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
+      if (this.ws?.readyState !== WebSocket.OPEN) return
+      const idle = Date.now() - this.lastActivityAt
+      if (idle > PONG_TIMEOUT_MS) {
+        this.handleHeartbeatTimeout()
+        return
+      }
+      // Пинг шлём, только если давно не было активности (pong обновляет её).
+      if (idle >= HEARTBEAT_INTERVAL) {
         this.ws.send(JSON.stringify({ type: 'ping' }))
       }
-    }, HEARTBEAT_INTERVAL)
+    }, PONG_CHECK_INTERVAL)
   }
 
   private stopHeartbeat(): void {
@@ -374,8 +462,16 @@ export class TransportClient {
     }
   }
 
+  private clearHandshakeTimer(): void {
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer)
+      this.handshakeTimer = null
+    }
+  }
+
   private cleanupTransport(): void {
     this.stopHeartbeat()
+    this.clearHandshakeTimer()
     if (this.ws) {
       this.ws.onopen = null
       this.ws.onclose = null

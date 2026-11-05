@@ -2,6 +2,7 @@
 
 > **Статус:** ✅ Реализовано (0.5.0)
 > **Дата:** 2026-09-06
+> **Обновлено:** 2026-11-05 — `ConnectionGuard` заменён на `ConnectionStatus` (ADR-123): модального confirm «перезагрузить» и тостов о потере/восстановлении связи больше нет, после 15 с разрыва показывается баннер с «Повторить»/«Обновить страницу», `PwaUpdatePrompt` не перезагружает страницу в разрыв.
 
 **Решение:** сделать UI доступным с телефона/планшета и устанавливаемым как PWA,
 **не ломая существующий десктоп-интерфейс**. Принят **единый адаптивный интерфейс**
@@ -81,8 +82,8 @@ px-ширинами, действия видны только по hover, чат
   работает без защиты от цикла (best-effort).
 - **Связь после сна/фона.** `TransportClient.resume()` пересоздаёт транспорт, если соединение «зомби»
   (нет активности > 90 с), по `online`/`pageshow`/`visibilitychange:visible`; `transportStore.restart()`
-  обходит guard идемпотентности `connect()`, `ConnectionGuard` вызывает его и закрывает confirm
-  «перезагрузить» при восстановлении. После реконнекта — `resyncAfterReconnect()`: список сессий,
+  обходит guard идемпотентности `connect()`, `ConnectionStatus` вызывает его по кнопке «Повторить» в
+  баннере (модального confirm больше нет, ADR-123). После реконнекта — `resyncAfterReconnect()`: список сессий,
   закрытие табов удалённых сессий, перечитывание истории активного чата (потерянные за время офлайна
   события мутаций).
 
@@ -104,7 +105,7 @@ px-ширинами, действия видны только по hover, чат
 - `packages/ui/src/lib/confirm.ts`, `stores/confirmStore.ts`
 - `packages/ui/src/components/settings/SettingsModal.tsx`, `components/logviewer/LogsModal.tsx`, `components/admin/ModelsPanel.tsx`
 - `packages/ui/src/hooks/usePwaInstall.ts`, `components/layout/PwaInstallButton.tsx`
-- `packages/ui/src/components/layout/PwaUpdatePrompt.tsx`, `ConnectionGuard.tsx`, `lib/api/transport.ts`, `stores/transportStore.ts`
+- `packages/ui/src/components/layout/PwaUpdatePrompt.tsx`, `ConnectionStatus.tsx`, `lib/api/transport.ts`, `stores/transportStore.ts`
 - `packages/ui/public/{manifest.webmanifest, sw.js, icons/*}`
 - `packages/ui/index.html`
 - `docker/nginx-ui.conf.template`, `packages/core/src/server/app.ts`

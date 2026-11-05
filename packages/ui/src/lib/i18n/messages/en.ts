@@ -602,6 +602,9 @@ export const dict = {
   'auth.loginTitle': 'Sign In',
   'auth.loginSubtitle': 'Enter your API key to access Synth',
   'auth.loginSubtitleOidc': 'Enter your login and password to access Synth',
+  'auth.unreachable.title': 'Server unreachable',
+  'auth.unreachable.message': 'Could not reach the server. Check your network connection and try again.',
+  'auth.unreachable.retry': 'Retry',
   'auth.apiKey': 'API key',
   'auth.apiKeyPlaceholder': 'Enter API key',
   'auth.username': 'Login',
@@ -1663,12 +1666,10 @@ export const dict = {
   'connection.sse': 'SSE mode (WebSocket unavailable)',
   'connection.disconnected': 'Backend unavailable',
   'connection.sessionExpired': 'Your session has expired or the server was restarted. Please sign in again.',
-  'connection.lost': 'Connection lost. Reconnecting…',
-  'connection.offline': 'No network connection.',
-  'connection.reloadTitle': 'Connection not restored',
-  'connection.reloadMessage': 'Could not restore the connection. Reload the page?',
-  'connection.reloadConfirm': 'Reload',
-  'connection.reloadCancel': 'Wait',
+  'connection.banner.title': 'No connection to the server',
+  'connection.banner.message': 'Restoring the connection…',
+  'connection.banner.retry': 'Retry',
+  'connection.banner.reload': 'Reload page',
 
   // Transport modes
   'transport.auto': 'Auto',
@@ -1677,6 +1678,7 @@ export const dict = {
   'transport.autoDesc': 'Auto: WS, fallback to SSE',
   'transport.wsDesc': 'WebSocket only',
   'transport.sseDesc': 'SSE only',
+  'transport.reconnect': 'Click to reconnect · Shift+click to switch mode',
 
   // Hybrid mode (local core + remote backend)
   'hybrid.local': 'local',

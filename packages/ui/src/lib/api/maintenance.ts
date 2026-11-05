@@ -191,16 +191,23 @@ export interface RestartResponse {
   startedAt: string
 }
 
+/** `doctor`/`status` включают пробу БД и могут отвечать дольше общего 15 с. */
+const LONG_READ_TIMEOUT_MS = 60_000
+
 export const maintenanceApi = {
   // --- ADR-091/ADR-092: admin-API обслуживания инстанса ---
   /** GET /maintenance/status — сводный статус инстанса (схема/бэкапы/pending/doctor). */
   async getStatus(): Promise<MaintenanceStatus> {
-    return fetchJSON<MaintenanceStatus>(`${BASE_URL}/maintenance/status`)
+    return fetchJSON<MaintenanceStatus>(`${BASE_URL}/maintenance/status`, {
+      timeoutMs: LONG_READ_TIMEOUT_MS,
+    })
   },
 
   /** GET /maintenance/doctor — полный прогон проверок `synth doctor`. */
   async getDoctor(): Promise<DoctorResult> {
-    return fetchJSON<DoctorResult>(`${BASE_URL}/maintenance/doctor`)
+    return fetchJSON<DoctorResult>(`${BASE_URL}/maintenance/doctor`, {
+      timeoutMs: LONG_READ_TIMEOUT_MS,
+    })
   },
 
   /** GET /maintenance/migrations — состояние схемы данных (ADR-092). */

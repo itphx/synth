@@ -11,9 +11,12 @@
 import type { InstanceCapabilities } from '@itphx/synth-shared/types'
 import { BASE_URL, fetchJSON } from './base'
 
+/** Мета недоступна → всё равно подключаемся (fail-open на клиенте), но по таймауту. */
+const META_TIMEOUT_MS = 5_000
+
 export const metaApi = {
   /** Возможности инстанса (`GET /api/v2/meta`). */
   async getInstanceCapabilities(): Promise<InstanceCapabilities> {
-    return fetchJSON<InstanceCapabilities>(`${BASE_URL}/meta`)
+    return fetchJSON<InstanceCapabilities>(`${BASE_URL}/meta`, { timeoutMs: META_TIMEOUT_MS })
   },
 }

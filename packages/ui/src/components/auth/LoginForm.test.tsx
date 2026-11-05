@@ -10,12 +10,15 @@ vi.mock('@/lib/i18n', () => ({
 const authState = vi.hoisted(() => ({
   login: vi.fn(),
   loginWithPassword: vi.fn(),
+  initialize: vi.fn(),
+  retry: vi.fn(),
   isLoading: false,
   error: null as string | null,
   clearError: vi.fn(),
   oidcEnabled: false,
   debugMode: false,
   deployment: null as 'standalone' | 'managed' | null,
+  authPhase: 'guest' as 'checking' | 'authenticated' | 'guest' | 'unreachable',
 }))
 
 vi.mock('@/stores/authStore', () => ({
@@ -38,6 +41,7 @@ vi.mock('@/lib/api/synthApi', () => ({
 import { api } from '@/lib/api/client'
 import { synthApi } from '@/lib/api/synthApi'
 import { LoginForm } from './LoginForm'
+import { AuthGate } from './AuthGate'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -77,6 +81,7 @@ beforeEach(() => {
   authState.deployment = null
   authState.error = null
   authState.isLoading = false
+  authState.authPhase = 'guest'
   vi.mocked(api.getUsers).mockResolvedValue({ users: [] })
 })
 
@@ -159,6 +164,30 @@ describe('LoginForm: атрибуты полей для автозаполнен
 
     // В API-key ветке поля логина учётной записи нет
     expect(host.querySelector('#synth-login-username')).toBeNull()
+  })
+
+  it('AuthGate в фазе unreachable не показывает форму входа', async () => {
+    authState.authPhase = 'unreachable'
+    authState.oidcEnabled = true
+    authState.deployment = 'managed'
+
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mounted.push({ host, root })
+    await act(async () => {
+      root.render(
+        <AuthGate>
+          <div data-testid="app-content" />
+        </AuthGate>,
+      )
+    })
+    await act(async () => {})
+
+    expect(host.querySelector('[data-testid="auth-unreachable"]')).toBeTruthy()
+    expect(host.querySelector('form')).toBeNull()
+    expect(host.querySelector('#synth-login-apikey')).toBeNull()
+    expect(host.querySelector('[data-testid="app-content"]')).toBeNull()
   })
 
   it('debug-режим: триггер выбора пользователя размечен id и связан с label', async () => {

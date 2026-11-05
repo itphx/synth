@@ -4,6 +4,8 @@ import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { BUILD_ID } from '@/lib/build-info'
+import { useAuthStore } from '@/stores/authStore'
+import { useTransportStore } from '@/stores/transportStore'
 
 /** Уникальный ключ конкретного ожидающего воркера (для «Позже» без «залипания»). */
 const workerKeys = new WeakMap<ServiceWorker, string>()
@@ -27,6 +29,20 @@ const RELOAD_FALLBACK_MS = 1500
 const MAX_AUTO_RELOADS = 2
 /** Ключ sessionStorage с защитой от цикла авто-обновления. */
 const AUTO_RELOAD_STORAGE_KEY = 'synth.pwa.autoReload'
+
+/**
+ * Перезагрузка допустима только когда связь заведомо не нужна или жива:
+ * — `guest` — экран входа, транспорта нет (обновление PWA не должно застревать);
+ * — `authenticated` + `online` — связь есть;
+ * — `checking`/`unreachable` и любая не-`online` фаза транспорта — откладываем
+ *   до следующей проверки, иначе приложение перезапускалось бы в разрыв.
+ */
+function canReloadNow(): boolean {
+  const authPhase = useAuthStore.getState().authPhase
+  if (authPhase === 'guest') return true
+  if (authPhase !== 'authenticated') return false
+  return useTransportStore.getState().phase === 'online'
+}
 
 interface AutoReloadRecord {
   /** Ключ обновления: `workerKey(waiting)` либо `ver:<version>`. */
@@ -110,10 +126,16 @@ export function PwaUpdatePrompt() {
   const latestBuild = useRef<string | null>(null)
   /** Авто-применение уже запрошено в этой загрузке страницы (по ключу). */
   const autoAttempted = useRef<Set<string>>(new Set())
+  /** Отложенное (из-за обрыва) обновление: пересчитать при восстановлении связи. */
+  const recomputeRef = useRef<(() => void) | null>(null)
+  const transportPhase = useTransportStore((s) => s.phase)
+  const authPhase = useAuthStore((s) => s.authPhase)
 
   /** Применить обновление без вопроса. */
   const applyUpdate = useCallback((waiting: ServiceWorker | null, clearCaches = false) => {
     const finish = (pending: ServiceWorker | null) => {
+      // Связь потеряна — не перезагружаемся; следующая проверка повторит.
+      if (!canReloadNow()) return
       if (pending) {
         reloadOnControllerChange.current = true
         pending.postMessage({ type: 'SKIP_WAITING' })
@@ -156,6 +178,8 @@ export function PwaUpdatePrompt() {
    */
   const tryAutoApply = useCallback(
     (key: string, waiting: ServiceWorker | null, clearCaches = false): boolean => {
+      // Не расходуем авто-попытку в разрыве: применим, когда связь вернётся.
+      if (!canReloadNow()) return true
       if (autoAttempted.current.has(key)) return true
       const prev = readAutoReload()
       const count = prev && prev.key === key ? prev.count : 0
@@ -261,11 +285,16 @@ export function PwaUpdatePrompt() {
 
       setUpdateReady(false)
     }
+    // Дать внешнему эффекту (смена фазы связи/authPhase) повторить пересчёт,
+    // не дожидаясь 30-минутного интервала.
+    recomputeRef.current = recompute
 
     // Сверка сборки/версии сервера с текущим бандлом (публичный health).
     // Приоритет — build id; semver сравнивается только когда build id пуст
     // с любой стороны (локальная сборка/старый сервер).
     const checkVersion = async () => {
+      // Свёрнутое/фоновое приложение не проверяет версию (не будим сеть зря).
+      if (document.visibilityState === 'hidden') return
       try {
         const health = await synthApi.getHealth()
         if (cancelled) return
@@ -358,8 +387,15 @@ export function PwaUpdatePrompt() {
       if (intervalId !== null) window.clearInterval(intervalId)
       for (const remove of removeListeners) remove()
       registrationRef.current = null
+      recomputeRef.current = null
     }
   }, [tryAutoApply])
+
+  // Связь восстановилась (или пользователь вышел на экран входа) — применяем
+  // отложенное обновление тем же `recompute()`, без новых таймеров.
+  useEffect(() => {
+    recomputeRef.current?.()
+  }, [transportPhase, authPhase])
 
   if (!updateReady) return null
 

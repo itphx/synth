@@ -16,6 +16,21 @@ html.huawei.dark {
   color-scheme: dark;
 }
 
+/* Полоса «нет связи» — под шапкой, на всю ширину. Позиционируется фиксированно,
+   чтобы не сдвигать ленту/композер; высота шапки: 2.25rem на десктопе,
+   2.75rem на телефоне/планшете (плюс safe-area сверху). */
+.connection-banner {
+  position: fixed;
+  inset-inline: 0;
+  top: 2.25rem;
+  z-index: 40;
+}
+
+html.device-phone .connection-banner,
+html.device-tablet .connection-banner {
+  top: calc(2.75rem + env(safe-area-inset-top, 0px));
+}
+
 @layer utilities {
   @keyframes notification-blink {
     0%, 100% { opacity: 1; }

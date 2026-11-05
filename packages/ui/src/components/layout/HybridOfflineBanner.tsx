@@ -1,4 +1,5 @@
 import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
+import { useTransportStore } from '@/stores/transportStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 
@@ -6,12 +7,17 @@ import { Icon } from '@/components/icon/Icon'
  * Неблокирующий баннер offline-деградации (гибридный режим).
  * Показывается только когда гибрид включён, но backend недоступен
  * (enabled && !connected): удалённые проекты/сессии неактивны, локальные работают.
+ *
+ * Только при `phase === 'online'`: если транспорт тоже не в норме, индикацию
+ * берёт `ConnectionStatus` (полоса с «Повторить»/«Обновить страницу») — два
+ * баннера одновременно не показываются.
  */
 export function HybridOfflineBanner() {
   const { t } = useI18n()
   const isOffline = useHybridStore(selectIsOffline)
+  const phase = useTransportStore((s) => s.phase)
 
-  if (!isOffline) return null
+  if (!isOffline || phase !== 'online') return null
 
   return (
     <div

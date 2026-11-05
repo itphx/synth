@@ -19,7 +19,7 @@ vi.mock('@/lib/api/profileService', () => ({
 
 import { api } from '@/lib/api/client'
 import { profileService } from '@/lib/api/profileService'
-import { useAuthStore } from './authStore'
+import { useAuthStore, __resetAuthRetryForTests } from './authStore'
 
 const INITIAL_STATE = {
   user: null,
@@ -28,6 +28,7 @@ const INITIAL_STATE = {
   isLoading: false,
   isInitialized: false,
   error: null,
+  authPhase: 'checking' as const,
   deployment: null,
   oidcEnabled: false,
   debugMode: false,
@@ -36,6 +37,7 @@ const INITIAL_STATE = {
 describe('authStore: loginWithPassword (лёгкий runtime-вход)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    __resetAuthRetryForTests()
     // Node/витeст без --localstorage-file не даёт localStorage — заглушка.
     vi.stubGlobal('localStorage', { removeItem: vi.fn() })
     useAuthStore.setState(INITIAL_STATE)
@@ -94,11 +96,14 @@ describe('authStore: loginWithPassword (лёгкий runtime-вход)', () => {
 describe('authStore: reauthenticate (только /auth/status, без 401-шума)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    __resetAuthRetryForTests()
     vi.stubGlobal('localStorage', { removeItem: vi.fn() })
     useAuthStore.setState(INITIAL_STATE)
   })
 
   afterEach(() => {
+    __resetAuthRetryForTests()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -115,6 +120,7 @@ describe('authStore: reauthenticate (только /auth/status, без 401-шу�
 
     const s = useAuthStore.getState()
     expect(s.isAuthenticated).toBe(true)
+    expect(s.authPhase).toBe('authenticated')
     expect(s.user?.username).toBe('dev')
     expect(s.deployment).toBe('managed')
     expect(s.oidcEnabled).toBe(true)
@@ -137,6 +143,7 @@ describe('authStore: reauthenticate (только /auth/status, без 401-шу�
 
     const s = useAuthStore.getState()
     expect(s.isAuthenticated).toBe(false)
+    expect(s.authPhase).toBe('guest')
     expect(s.user).toBeNull()
     expect(s.isInitialized).toBe(true)
     expect(s.isLoading).toBe(false)
@@ -144,20 +151,90 @@ describe('authStore: reauthenticate (только /auth/status, без 401-шу�
     expect(api.getSession).not.toHaveBeenCalled()
   })
 
-  it('getStatus reject → не бросает, инициализация завершается гостем', async () => {
-    vi.mocked(api.getStatus).mockRejectedValue(new Error('network'))
+  it('сеть/таймаут GET /auth/status → authPhase=unreachable, а не гость', async () => {
+    // Возможности сервера уже известны (например, с прошлого успешного старта):
+    // сетевая ошибка не должна их сбрасывать и не должна выкидывать на форму входа.
+    useAuthStore.setState({ deployment: 'managed', oidcEnabled: true, debugMode: false })
+    vi.mocked(api.getStatus).mockRejectedValue(new TypeError('Failed to fetch'))
 
     await expect(useAuthStore.getState().reauthenticate()).resolves.toBeUndefined()
 
     const s = useAuthStore.getState()
+    expect(s.authPhase).toBe('unreachable')
     expect(s.isAuthenticated).toBe(false)
     expect(s.user).toBeNull()
     expect(s.isInitialized).toBe(true)
     expect(s.isLoading).toBe(false)
-    expect(s.deployment).toBeNull()
-    expect(s.oidcEnabled).toBe(false)
+    // managed/OIDC не потеряны — при восстановлении форма входа будет прежней.
+    expect(s.deployment).toBe('managed')
+    expect(s.oidcEnabled).toBe(true)
     expect(s.debugMode).toBe(false)
     expect(profileService.initialize).not.toHaveBeenCalled()
+  })
+
+  it('retry после unreachable: успешный ответ → authenticated и снятие backoff', async () => {
+    vi.mocked(api.getStatus).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    await useAuthStore.getState().reauthenticate()
+    expect(useAuthStore.getState().authPhase).toBe('unreachable')
+
+    vi.mocked(api.getStatus).mockResolvedValue({
+      authenticated: true,
+      debug_mode: false,
+      oidc_enabled: true,
+      deployment: 'managed',
+      user: { id: 'u1', username: 'dev', email: null, roles: ['USER'] },
+    })
+
+    await useAuthStore.getState().retry()
+
+    expect(useAuthStore.getState().authPhase).toBe('authenticated')
+    expect(useAuthStore.getState().isAuthenticated).toBe(true)
+  })
+
+  it('retry не создаёт параллельных запросов при isLoading', async () => {
+    useAuthStore.setState({ authPhase: 'unreachable', isLoading: true })
+    await useAuthStore.getState().retry()
+    expect(api.getStatus).not.toHaveBeenCalled()
+  })
+
+  it('событийные повторы не чаще 2.5 с: два visibilitychange → один запрос', async () => {
+    vi.mocked(api.getStatus).mockRejectedValue(new TypeError('Failed to fetch'))
+    await useAuthStore.getState().reauthenticate()
+    expect(api.getStatus).toHaveBeenCalledTimes(1)
+
+    // Два события подряд (флапающая сеть/частые переключения вкладки).
+    document.dispatchEvent(new Event('visibilitychange'))
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    await vi.waitFor(() => expect(api.getStatus).toHaveBeenCalledTimes(2))
+    await Promise.resolve()
+    expect(api.getStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('повторные 5xx растят backoff (2.5 → 5 → 10), без шторма каждые 2.5 с', async () => {
+    vi.useFakeTimers()
+    vi.mocked(api.getStatus).mockRejectedValue(new Error('HTTP 500'))
+
+    await useAuthStore.getState().reauthenticate()
+    expect(api.getStatus).toHaveBeenCalledTimes(1)
+
+    // Первая задержка 2.5 с.
+    await vi.advanceTimersByTimeAsync(2_499)
+    expect(api.getStatus).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(api.getStatus).toHaveBeenCalledTimes(2)
+
+    // Вторая — уже 5 с (индекс не сброшен из-за HTTP-ошибки).
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(api.getStatus).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(api.getStatus).toHaveBeenCalledTimes(3)
+
+    // Третья — 10 с.
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(api.getStatus).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(api.getStatus).toHaveBeenCalledTimes(4)
   })
 })
 

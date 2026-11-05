@@ -597,6 +597,9 @@ export const dict = {
   'auth.loginTitle': 'Вход в систему',
   'auth.loginSubtitle': 'Введите API ключ для доступа к Synth',
   'auth.loginSubtitleOidc': 'Введите логин и пароль для доступа к Synth',
+  'auth.unreachable.title': 'Сервер недоступен',
+  'auth.unreachable.message': 'Не удалось связаться с сервером. Проверьте подключение к сети и повторите попытку.',
+  'auth.unreachable.retry': 'Повторить',
   'auth.apiKey': 'API ключ',
   'auth.apiKeyPlaceholder': 'Введите API ключ',
   'auth.username': 'Логин',
@@ -1640,12 +1643,10 @@ export const dict = {
   'connection.sse': 'SSE режим (WebSocket недоступен)',
   'connection.disconnected': 'Бэкенд недоступен',
   'connection.sessionExpired': 'Сессия истекла или сервер был перезапущен. Войдите заново.',
-  'connection.lost': 'Связь с сервером потеряна. Переподключаемся…',
-  'connection.offline': 'Нет подключения к сети.',
-  'connection.reloadTitle': 'Связь не восстановлена',
-  'connection.reloadMessage': 'Не удалось восстановить соединение с сервером. Обновить страницу?',
-  'connection.reloadConfirm': 'Обновить',
-  'connection.reloadCancel': 'Подождать',
+  'connection.banner.title': 'Нет связи с сервером',
+  'connection.banner.message': 'Восстанавливаем соединение…',
+  'connection.banner.retry': 'Повторить',
+  'connection.banner.reload': 'Обновить страницу',
 
   // Transport modes
   'transport.auto': 'Авто',
@@ -1654,6 +1655,7 @@ export const dict = {
   'transport.autoDesc': 'Автоматически: WS, при ошибке — SSE',
   'transport.wsDesc': 'Только WebSocket',
   'transport.sseDesc': 'Только SSE',
+  'transport.reconnect': 'Нажмите, чтобы переподключиться · Shift+клик — сменить режим',
 
   // Hybrid mode (гибридный режим: локальный core + удалённый backend)
   'hybrid.local': 'локально',

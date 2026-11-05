@@ -1451,10 +1451,24 @@ function notifyBackgroundRun(type: string, payload: Record<string, unknown>): vo
   })
 }
 
+/**
+ * Фаза связи — источник истины для индикации в UI. `connected` оставлен без
+ * изменения семантики (на нём завязаны Header и тесты), но он не различает
+ * «первое подключение» и «потеря связи», поэтому для баннера/индикатора
+ * используется `phase`.
+ */
+export type ConnectionPhase = 'connecting' | 'online' | 'reconnecting' | 'offline'
+
 interface TransportState {
   transportMode: TransportMode
   activeTransport: TransportKind
   connected: boolean
+  /** Текущая фаза связи. */
+  phase: ConnectionPhase
+  /** Момент входа в текущую фазу (мс). Не сбрасывается, если фаза не менялась. */
+  phaseSince: number
+  /** Было ли успешное подключение в этой загрузке страницы (connecting vs reconnecting). */
+  hasEverConnected: boolean
   /** ADR-118 §8: модель сообщений инстанца не совпадает с клиентской. */
   versionMismatch: boolean
   openSessions: Set<string>
@@ -3066,6 +3080,24 @@ export function __resetTransportResyncForTests(): void {
   resyncDoneThisEpisode = false
 }
 
+/** Перевести фазу связи, не сбрасывая `phaseSince`, если фаза не изменилась. */
+function setPhaseIfChanged(next: ConnectionPhase): void {
+  const state = useTransportStore.getState()
+  if (state.phase === next) return
+  useTransportStore.setState({ phase: next, phaseSince: Date.now() })
+}
+
+/** Успешное подключение: `online` и признак «связь уже была». */
+function markOnline(): void {
+  const state = useTransportStore.getState()
+  const patch: Partial<TransportState> = { hasEverConnected: true }
+  if (state.phase !== 'online') {
+    patch.phase = 'online'
+    patch.phaseSince = Date.now()
+  }
+  useTransportStore.setState(patch)
+}
+
 /** Зафиксировать успешное подключение: первый раз — запомнить, дальше — ресинк. */
 function noteConnected(): void {
   if (!everConnected) {
@@ -3090,6 +3122,10 @@ if (import.meta.hot) {
     transportReady = false;
     activeKind = null;
     connectingKind = null;
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('offline', onBrowserOffline);
+      window.removeEventListener('online', onBrowserOnline);
+    }
   });
 }
 
@@ -3097,6 +3133,9 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
   transportMode: 'auto',
   activeTransport: 'disconnected',
   connected: false,
+  phase: 'connecting',
+  phaseSince: Date.now(),
+  hasEverConnected: false,
   versionMismatch: false,
   openSessions: new Set(),
 
@@ -3124,6 +3163,16 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     connectingKind = null
     resyncDoneThisEpisode = false
 
+    // Первое подключение — `connecting`, любое следующее — `reconnecting`
+    // (связь уже была, значит это восстановление, а не старт приложения).
+    const startPhase: ConnectionPhase = get().hasEverConnected ? 'reconnecting' : 'connecting'
+    // `connecting` — всегда новый эпизод старта (в т.ч. поздний логин после
+    // долгого простоя на экране входа): отметку времени обновляем, иначе
+    // баннер «нет связи» вспыхнул бы сразу из-за старого phaseSince.
+    if (get().phase !== startPhase || startPhase === 'connecting') {
+      set({ phase: startPhase, phaseSince: Date.now() })
+    }
+
     console.debug('[TransportStore] Connecting:', actualMode, '(mode=', mode, ')')
     const dispatcher = createDispatcher()
 
@@ -3142,8 +3191,11 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
           transportReady = true
           set({ connected: true, activeTransport: 'sse' })
           console.debug('[TransportStore] Connected (SSE):', client.getTransport())
+          // SSE готов уже на `onopen`; WS ждёт кадр `connected` от backend.
+          markOnline()
         } else {
-          // WS: сокет открыт, но backend ещё не зарегистрировал клиента
+          // WS: сокет открыт, но backend ещё не зарегистрировал клиента —
+          // `online` только по `onBackendReady` (ниже).
           set({ connected: true })
           console.debug('[TransportStore] WS socket open, waiting for backend ready...')
         }
@@ -3155,12 +3207,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
         transportReady = true
         set({ connected: true, activeTransport: 'ws' })
         console.debug('[TransportStore] Backend ready:', client.getTransport())
+        markOnline()
         noteConnected()
       },
       onDisconnect: (reason) => {
         if (transport !== client) return
         // Обрыв/ручное закрытие: клиент больше не считается «активным» —
-        // иначе форс-реконнект (ConnectionGuard) и auto-fallback WS→SSE
+        // иначе форс-реконнект (ConnectionStatus) и auto-fallback WS→SSE
         // блокировались бы guard'ом идемпотентности.
         activeKind = null
         connectingKind = null
@@ -3171,7 +3224,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
         console.debug('[TransportStore] Disconnected:', reason)
 
         if (reason === 'manual') {
+          // Выход из аккаунта: это не «потеря связи», а штатная остановка.
+          setPhaseIfChanged('connecting')
           return
+        }
+        if (reason !== 'restart') {
+          // network | heartbeat | auth и прочие обрывы — восстанавливаемся.
+          setPhaseIfChanged('reconnecting')
         }
 
         const failed = transport
@@ -3236,12 +3295,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
   },
 
   disconnect: () => {
-    transport?.disconnect()
+    transport?.disconnect('manual')
     transport = null
     transportReady = false
     activeKind = null
     connectingKind = null
     set({ connected: false, activeTransport: 'disconnected' })
+    setPhaseIfChanged('connecting')
   },
 
   restart: () => {
@@ -3249,13 +3309,15 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     // (после fallback — sse), а не «auto» — перезапускаем ровно его.
     const kind = activeKind
     console.debug('[TransportStore] Restart transport:', kind)
-    transport?.disconnect()
+    transport?.disconnect('restart')
     transport = null
     transportReady = false
     activeKind = null
     connectingKind = null
     resyncDoneThisEpisode = false
     set({ connected: false, activeTransport: 'disconnected' })
+    // `restart` сам по себе не «потеря»: фазу выставит `connect()` —
+    // `reconnecting`, если связь уже была (phaseSince сохранится, если фаза та же).
     get().connect(get().transportMode, kind ?? undefined)
   },
 
@@ -3407,3 +3469,32 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     set({ openSessions: next })
   },
 }))
+
+/**
+ * Фаза связи по событиям сети браузера: `offline` при уже потерянной связи —
+ * `offline` (сервер точно недоступен), `online` — `reconnecting` и немедленная
+ * попытка (её делает `TransportClient.resume()` на том же событии; здесь только
+ * фаза, чтобы UI не ждал следующего backoff-тика).
+ */
+function onBrowserOffline(): void {
+  const state = useTransportStore.getState()
+  if (state.phase === 'online') setPhaseIfChanged('reconnecting')
+  else if (state.phase !== 'offline') setPhaseIfChanged('offline')
+}
+
+function onBrowserOnline(): void {
+  if (useTransportStore.getState().phase === 'online') return
+  setPhaseIfChanged('reconnecting')
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('offline', onBrowserOffline)
+  window.addEventListener('online', onBrowserOnline)
+}
+
+/** Снять сетевые слушатели (HMR/тесты): без этого при перезагрузке модуля они дублируются. */
+export function __detachConnectionPhaseListenersForTests(): void {
+  if (typeof window === 'undefined') return
+  window.removeEventListener('offline', onBrowserOffline)
+  window.removeEventListener('online', onBrowserOnline)
+}

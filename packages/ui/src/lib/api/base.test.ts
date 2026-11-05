@@ -23,6 +23,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -165,6 +166,107 @@ describe('base.fetchJSON — формат ошибок проекта', () => {
     fetchMock.mockResolvedValue(jsonResponse({ error: { message: 'boom' } }, 409))
 
     await expect(fetchJSON('/api/v2/x')).rejects.toMatchObject({ status: 409, details: undefined })
+  })
+})
+
+describe('base.fetchJSON — дедлайн и внешний signal', () => {
+  it('без внешнего signal ставит собственный AbortSignal (дедлайн)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: 1 }))
+
+    await fetchJSON('/api/v2/thing')
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('внешний signal без timeoutMs уходит в fetch как есть (отмена клона)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: 1 }))
+    const controller = new AbortController()
+
+    await fetchJSON('/api/v2/thing', { signal: controller.signal })
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit
+    expect(init.signal).toBe(controller.signal)
+  })
+
+  it('внешний signal + timeoutMs → комбинированный signal, внешняя отмена срабатывает', async () => {
+    const controller = new AbortController()
+    let sawAbort = false
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        const onAbort = () => {
+          sawAbort = true
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        }
+        if (init.signal?.aborted) onAbort()
+        else init.signal?.addEventListener('abort', onAbort)
+      })
+    })
+
+    const pending = fetchJSON('/api/v2/thing', { signal: controller.signal, timeoutMs: 5_000 }).catch(
+      (err: unknown) => err,
+    )
+    controller.abort()
+
+    await expect(pending).resolves.toMatchObject({ name: 'AbortError' })
+    expect(sawAbort).toBe(true)
+  })
+
+  it('POST без timeoutMs дефолтным дедлайном не обрывается (долгие мутации)', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockImplementation(() => {
+      return new Promise((resolve) => {
+        setTimeout(() => resolve(jsonResponse({ ok: 1 })), 20_000)
+      })
+    })
+
+    let settled = false
+    const pending = fetchJSON<{ ok: number }>('/api/v2/thing', { method: 'POST' }).then((value) => {
+      settled = true
+      return value
+    })
+    const init = fetchMock.mock.calls[0]![1] as RequestInit
+    expect(init.signal).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    await expect(pending).resolves.toEqual({ ok: 1 })
+  })
+
+  it('явный timeoutMs работает и для POST', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        })
+      })
+    })
+
+    const pending = fetchJSON('/api/v2/thing', { method: 'POST', timeoutMs: 3_000 }).catch(
+      (err: unknown) => err,
+    )
+    await vi.advanceTimersByTimeAsync(3_000)
+
+    await expect(pending).resolves.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('дедлайн обрывает зависший запрос (AbortError до ответа)', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        })
+      })
+    })
+
+    const pending = fetchJSON('/api/v2/thing', { timeoutMs: 5_000 }).catch((err: unknown) => err)
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    await expect(pending).resolves.toMatchObject({ name: 'AbortError' })
   })
 })
 

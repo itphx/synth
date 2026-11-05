@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { useI18n } from '@/lib/i18n'
 import { LoginForm } from './LoginForm'
+import { UnreachableScreen } from './UnreachableScreen'
 
 interface AuthGateProps {
   children: React.ReactNode
@@ -9,15 +10,15 @@ interface AuthGateProps {
 
 export const AuthGate = ({ children }: AuthGateProps) => {
   const { t } = useI18n()
-  const isAuthenticated = useAuthStore(s => s.isAuthenticated)
-  const isInitialized = useAuthStore(s => s.isInitialized)
-  const initialize = useAuthStore(s => s.initialize)
+  const authPhase = useAuthStore((s) => s.authPhase)
+  const initialize = useAuthStore((s) => s.initialize)
 
   useEffect(() => {
-    initialize()
+    void initialize()
   }, [initialize])
 
-  if (!isInitialized) {
+  // `checking` — идёт первая проверка (как раньше спиннер).
+  if (authPhase === 'checking') {
     return (
       <div className="viewport-min-h flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
@@ -28,7 +29,12 @@ export const AuthGate = ({ children }: AuthGateProps) => {
     )
   }
 
-  if (!isAuthenticated) {
+  // Сервер/сеть недоступны — это не гость: форму входа не показываем.
+  if (authPhase === 'unreachable') {
+    return <UnreachableScreen />
+  }
+
+  if (authPhase === 'guest') {
     return <LoginForm />
   }
 

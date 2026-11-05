@@ -5,16 +5,20 @@ import { useAuthStore } from '@/stores/authStore'
 
 /**
  * Единый менеджер транспорта.
- * При инициализации/смене transportMode — переподключает транспорт.
+ *
+ * Транспорт запускается по факту авторизации (`authPhase === 'authenticated'`),
+ * а не по наличию профиля: ошибка `GET /auth/profile` (профиль не загрузился)
+ * больше не блокирует подключение. При уходе в `guest`/`unreachable` —
+ * отключается.
  */
 export function BackendConnection() {
-  const profile = useAuthStore((s) => s.profile)
+  const authPhase = useAuthStore((s) => s.authPhase)
   const transportMode = useUIStore((s) => s.transportMode)
   const wasInitRef = useRef(false)
   const prevModeRef = useRef<typeof transportMode | null>(null)
 
   useEffect(() => {
-    if (!profile) {
+    if (authPhase !== 'authenticated') {
       if (wasInitRef.current) {
         useTransportStore.getState().disconnect()
         wasInitRef.current = false
@@ -34,7 +38,7 @@ export function BackendConnection() {
     if (!wasInitRef.current) {
       wasInitRef.current = true
     }
-  }, [profile, transportMode])
+  }, [authPhase, transportMode])
 
   return null
 }

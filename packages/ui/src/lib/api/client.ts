@@ -1,3 +1,5 @@
+import { createTimeoutSignal } from './base'
+
 export interface User {
   id: string
   username: string
@@ -84,15 +86,31 @@ export interface PasswordLoginResponse {
 
 const BASE_URL = '/auth'
 
-async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  })
+/** Дедлайн `/auth/status`: недоступный сервер не должен держать спиннер минутами. */
+const AUTH_STATUS_TIMEOUT_MS = 8_000
+const DEFAULT_AUTH_TIMEOUT_MS = 15_000
+
+interface AuthFetchOptions extends RequestInit {
+  timeoutMs?: number
+}
+
+async function fetchJSON<T>(url: string, options: AuthFetchOptions = {}): Promise<T> {
+  const { timeoutMs = DEFAULT_AUTH_TIMEOUT_MS, ...init } = options
+  const { signal, cleanup } = createTimeoutSignal(timeoutMs)
+  let response: Response
+  try {
+    response = await fetch(url, {
+      ...init,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...init.headers,
+      },
+      signal,
+    })
+  } finally {
+    cleanup()
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
     const error = body as { error?: { message?: string }; detail?: string }
@@ -103,7 +121,7 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   async getStatus(): Promise<AuthStatus> {
-    return fetchJSON<AuthStatus>(`${BASE_URL}/status`)
+    return fetchJSON<AuthStatus>(`${BASE_URL}/status`, { timeoutMs: AUTH_STATUS_TIMEOUT_MS })
   },
 
   async getUsers(): Promise<AuthUsers> {
@@ -129,10 +147,20 @@ export const api = {
   },
 
   async logout(): Promise<void> {
-    await fetch(`${BASE_URL}/logout`, {
-      method: 'POST',
-      credentials: 'include',
-    })
+    // Best-effort: выход не должен «висеть» из-за недоступного сервера —
+    // локальное состояние сбрасывает вызывающий, ошибку/таймаут глушим.
+    const { signal, cleanup } = createTimeoutSignal(5_000)
+    try {
+      await fetch(`${BASE_URL}/logout`, {
+        method: 'POST',
+        credentials: 'include',
+        signal,
+      })
+    } catch {
+      // сервер недоступен — cookie протухнет сама, локальный выход уже произошёл
+    } finally {
+      cleanup()
+    }
   },
 
   async getMe(): Promise<User> {
