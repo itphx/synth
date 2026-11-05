@@ -16,6 +16,7 @@
 // а сообщение без `usage` оставляло прежний процент.
 
 import { useEffect } from 'react'
+import { DEFAULT_CONTEXT_WINDOW } from '@itphx/synth-shared/types'
 
 import { useNotification } from '@/hooks/useNotification'
 import { useI18n } from '@/lib/i18n'
@@ -25,8 +26,14 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 
-/** Фолбэк окна модели, если у модели не задан `context_window` (оценка). */
-export const DEFAULT_CONTEXT_WINDOW = 200_000
+/**
+ * Фолбэк окна модели, если у модели не задан `context_window` (оценка).
+ *
+ * Единый источник — `@itphx/synth-shared` (subpath `/types`: браузерный бандл
+ * не должен тянуть `config/loader` с `node:fs`). То же значение использует
+ * оптимизатор контекста в ядре, поэтому индикатор и авто-сжатие совпадают.
+ */
+export { DEFAULT_CONTEXT_WINDOW }
 
 /** Порог тоста «контекст заполняется», %. */
 export const CONTEXT_WARN_PERCENT = 80

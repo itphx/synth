@@ -2,6 +2,9 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
+> ⚠️ RU-версия обновлена 2026-11-05 (**секция «Дефолты оптимизации контекста»** — неизвестное
+> окно модели (`0`) считается как 200 000 для авто-триггеров компактизации/суммаризации/
+> скользящего окна (`DEFAULT_CONTEXT_WINDOW`, ADR-119) — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-03 (**`storage.maxPreviewBytes`** — лимит предпросмотра
 > `/api/v2/fs/raw` (100 МиБ, env `SYNTH_MAX_PREVIEW_BYTES`, `resolveMaxPreviewBytes`) — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-03 (**секция «Каталог моделей»** — слой `compatibility`: поля
@@ -1785,8 +1788,11 @@ Specification — [ADR-119](../arch_decisions/adr-119-context-compaction.md).
 **Triggers.** Summarization fires by the number of user replies since the last summary
 (`messages`, `summarizeAfterN`) or by window fill (`tokens`, `summarizeTokenThreshold`).
 Compaction is token-only: threshold = `window − max((100 − pct)% of the window, 16000)`, i.e. the
-reserve is at least 16k tokens; with a too-small window (reserve ≥ window) and with an unknown
-window (`0`) the auto trigger is disabled — compression stays available manually and on overflow.
+reserve is at least 16k tokens; with a too-small window (reserve ≥ window) the auto trigger is
+disabled — compression stays available manually and on overflow. **An unknown model window (`0`)
+is treated as 200 000** (`DEFAULT_CONTEXT_WINDOW`): the auto triggers (compaction, summarization by
+`tokens`, sliding window by `tokens`) work from that estimate — the same value the UI context
+indicator shows; an explicitly configured model window always takes precedence.
 The trigger does not compress immediately: it sets a pending state (`summarization_pending`), and
 the queue processor performs the compression as a separate service turn before the next message.
 

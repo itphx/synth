@@ -521,7 +521,7 @@ describe('ContextOptimizer — shouldCompress / effectiveMode', () => {
     expect(optimizer.shouldCompress(s).triggered).toBe(false);
   });
 
-  it('неизвестное окно (0) не включает авто-триггер', () => {
+  it('неизвестное окно (0) считается fallback 200k — авто-триггер включён', () => {
     const noWindow = new ContextOptimizer(
       new ContextConfig({ userDataDir: tmpDir }),
       () => null,
@@ -531,11 +531,17 @@ describe('ContextOptimizer — shouldCompress / effectiveMode', () => {
     const s = session([
       msg('u1', MessageRole.USER, 'a'),
       msg('a1', MessageRole.ASSISTANT, 'b', {
-        model: 'mock-model',
+        model: 'unknown-model-xyz',
         usage: { inputTokens: 999_999, outputTokens: 0, totalTokens: 0 },
       }),
     ], { model: 'unknown-model-xyz', compactionTokenThreshold: 85 });
-    expect(noWindow.shouldCompress(s)).toMatchObject({ triggered: false, mode: 'compaction' });
+    // окно 0 → оценка 200000, резерв max(30000,16000)=30000, порог 170000
+    expect(noWindow.shouldCompress(s)).toMatchObject({
+      triggered: true,
+      reason: 'tokens',
+      mode: 'compaction',
+      threshold: 170_000,
+    });
   });
 
   it('старый SUMMARY без keepFrom не ломает план', () => {
@@ -549,5 +555,136 @@ describe('ContextOptimizer — shouldCompress / effectiveMode', () => {
     expect(plan.coveredIndices).toEqual([1, 2]);
     expect(plan.keepFromIndex).toBe(3);
     expect(plan.llmMessages[0]!.content).toContain('## Предыдущее резюме');
+  });
+});
+
+describe('ContextOptimizer — fallback контекстного окна (DEFAULT_CONTEXT_WINDOW)', () => {
+  let tmpDir: string;
+  let noWindow: ContextOptimizer;
+
+  const makeOptimizer = (window: number): ContextOptimizer =>
+    new ContextOptimizer(
+      new ContextConfig({ userDataDir: tmpDir }),
+      () => null,
+      { provider: 'mock', model: 'mock-model', temperature: 0.1, promptFile: 'SUMMARIZER' },
+      () => window,
+    );
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-opt-window-fallback-'));
+    // Окно модели неизвестно: загрузчик отдаёт 0, справочник имя не знает.
+    noWindow = makeOptimizer(0);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('compaction: порог считается от 200k (85% → 170k), а не отключается', () => {
+    const s = session([
+      msg('u1', MessageRole.USER, 'история'),
+      msg('a1', MessageRole.ASSISTANT, 'ответ', {
+        model: 'unknown-model-xyz',
+        usage: { inputTokens: 170_000, outputTokens: 0, totalTokens: 0 },
+      }),
+    ], { model: 'unknown-model-xyz', compactionTokenThreshold: 85 });
+
+    expect(noWindow.shouldCompress(s)).toMatchObject({
+      triggered: true,
+      reason: 'tokens',
+      mode: 'compaction',
+      currentTokens: 170_000,
+      threshold: 170_000,
+    });
+
+    s.messages[1]!.usage = { inputTokens: 169_999, outputTokens: 0, totalTokens: 0 };
+    expect(noWindow.shouldCompress(s)).toMatchObject({ triggered: false, mode: 'compaction' });
+  });
+
+  it('summarization/tokens: порог 50% от 200k → триггер на 100 000', () => {
+    const s = session([
+      msg('u1', MessageRole.USER, 'история'),
+      msg('a1', MessageRole.ASSISTANT, 'ответ', {
+        model: 'unknown-model-xyz',
+        usage: { inputTokens: 100_000, outputTokens: 0, totalTokens: 0 },
+      }),
+    ], {
+      model: 'unknown-model-xyz',
+      contextOptimization: 'summarization',
+      summarizationTriggerMode: 'tokens',
+      summarizeTokenThreshold: 50,
+    });
+
+    expect(noWindow.shouldCompress(s)).toMatchObject({
+      triggered: true,
+      reason: 'tokens',
+      mode: 'summarization',
+      currentTokens: 100_000,
+      threshold: 100_000,
+    });
+
+    s.messages[1]!.usage = { inputTokens: 99_999, outputTokens: 0, totalTokens: 0 };
+    expect(noWindow.shouldCompress(s).triggered).toBe(false);
+  });
+
+  it('sliding_window/tokens: порог 80% от 200k → триггер на 160 000', () => {
+    const s = session([
+      msg('u1', MessageRole.USER, 'a'),
+      msg('a1', MessageRole.ASSISTANT, 'b', {
+        usage: { inputTokens: 160_000, outputTokens: 0, totalTokens: 0 },
+      }),
+    ], {
+      model: 'unknown-model-xyz',
+      contextOptimization: 'sliding_window',
+      slidingWindowMode: 'tokens',
+      slidingWindowTokenThreshold: 80,
+    });
+
+    expect(noWindow.shouldApplySlidingWindow(s)).toMatchObject({
+      triggered: true,
+      reason: 'tokens',
+      currentTokens: 160_000,
+      threshold: 160_000,
+    });
+
+    s.messages[1]!.usage = { inputTokens: 159_999, outputTokens: 0, totalTokens: 0 };
+    expect(noWindow.shouldApplySlidingWindow(s).triggered).toBe(false);
+  });
+
+  it('явное окно 128k приоритетнее fallback', () => {
+    const explicit = makeOptimizer(128_000);
+    const s = session([
+      msg('u1', MessageRole.USER, 'история'),
+      msg('a1', MessageRole.ASSISTANT, 'ответ', {
+        model: 'unknown-model-xyz',
+        usage: { inputTokens: 110_000, outputTokens: 0, totalTokens: 0 },
+      }),
+    ], { model: 'unknown-model-xyz', compactionTokenThreshold: 85 });
+
+    // 128000 − max(19200, 16000) = 108800 — считается от 128k, не от 200k.
+    expect(explicit.shouldCompress(s)).toMatchObject({
+      triggered: true,
+      mode: 'compaction',
+      threshold: 108_800,
+    });
+
+    s.messages[1]!.usage = { inputTokens: 108_799, outputTokens: 0, totalTokens: 0 };
+    expect(explicit.shouldCompress(s).triggered).toBe(false);
+  });
+
+  it('неизвестное окно + очень маленькая история → не триггерится', () => {
+    const s = session([
+      msg('u1', MessageRole.USER, 'привет'),
+      msg('a1', MessageRole.ASSISTANT, 'ответ', {
+        model: 'unknown-model-xyz',
+        usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150 },
+      }),
+    ], { model: 'unknown-model-xyz', compactionTokenThreshold: 85 });
+
+    expect(noWindow.shouldCompress(s)).toMatchObject({
+      triggered: false,
+      mode: 'compaction',
+      currentTokens: 150,
+    });
   });
 });

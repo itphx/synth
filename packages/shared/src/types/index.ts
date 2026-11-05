@@ -43,6 +43,9 @@ export * from './fs.js';
 // Классификация файла по расширению (kind/MIME, allow-list inline-предпросмотра)
 // — browser-safe контракт для UI и ядра.
 export * from './file-kind.js';
+// Оценка контекстного окна при неизвестном окне модели — общая константа ядра
+// и UI (browser-safe: без node:*; значение — см. `model-metadata.ts`).
+export { DEFAULT_CONTEXT_WINDOW } from '../model-metadata.js';
 
 // --- Реэкспорт существующих доменных модулей ---
 // Tool types — re-exported from tools.ts

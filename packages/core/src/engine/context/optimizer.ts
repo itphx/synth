@@ -8,7 +8,14 @@ import type {
   LLMResponse,
   TokenUsage,
 } from '@itphx/synth-shared';
-import { MessageRole, nowISO, lookupContextWindow, generateId, makeTextPart } from '@itphx/synth-shared';
+import {
+  MessageRole,
+  nowISO,
+  lookupContextWindow,
+  generateId,
+  makeTextPart,
+  DEFAULT_CONTEXT_WINDOW,
+} from '@itphx/synth-shared';
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import type { LLMMessage } from '../../providers/base.js';
 import { BaseProvider, ProviderFactory } from '../../providers/index.js';
@@ -305,7 +312,10 @@ export class ContextOptimizer {
    * - суммаризация: `messages` (N реплик с последнего summary) или `tokens`
    *   (% окна);
    * - компактизация: только токены, порог `window - max((100 - pct)% окна, 16000)`.
-   *   Неизвестное окно (`0`) авто-триггер не включает (`force` работает).
+   *   Неизвестное окно (`0`) считается оценкой `DEFAULT_CONTEXT_WINDOW` (та же,
+   *   что показывает UI), а не «триггер отключён»; явное окно модели приоритетнее.
+   *   Порог не клампится в 1 токен: на малых окнах резерв съедает окно и
+   *   авто-триггер выключается (`force`/overflow работают).
    */
   shouldCompress(session: Session): CompressionTriggerResult {
     const mode = this.effectiveMode(session);
@@ -317,9 +327,9 @@ export class ContextOptimizer {
       // `none + summarizationEnabled` в `effectiveMode`).
       if (session.settings.summarizationTriggerMode === 'tokens') {
         const thresholdPct = session.settings.summarizeTokenThreshold;
-        const contextWindow = this.getContextWindow(session.settings.model);
+        const contextWindow = this._effectiveContextWindow(session.settings.model);
         const currentTokens = this.estimatePromptTokens(session);
-        if (contextWindow > 0 && currentTokens > 0) {
+        if (currentTokens > 0) {
           const threshold = Math.floor(contextWindow * (thresholdPct / 100));
           if (currentTokens >= threshold) {
             return {
@@ -343,10 +353,7 @@ export class ContextOptimizer {
     }
 
     // Компактизация — только токены.
-    const contextWindow = this.getContextWindow(session.settings.model);
-    if (!(contextWindow > 0)) {
-      return { triggered: false, reason: 'none', mode };
-    }
+    const contextWindow = this._effectiveContextWindow(session.settings.model);
     const pct = this._compactionThresholdPercent(session);
     const reserve = Math.max(Math.floor(contextWindow * ((100 - pct) / 100)), 16000);
     // M7: на малых окнах (8k/16k) резерв съедает всё окно — авто-триггер
@@ -418,8 +425,8 @@ export class ContextOptimizer {
     if (mode === 'tokens') {
       const threshold = session.settings.slidingWindowTokenThreshold;
       const lastRequestTokens = this._getLastRequestTokens(session);
-      const contextWindow = this.getContextWindow(model);
-      if (contextWindow > 0 && lastRequestTokens > 0) {
+      const contextWindow = this._effectiveContextWindow(model);
+      if (lastRequestTokens > 0) {
         const tokenThreshold = Math.floor(contextWindow * (threshold / 100));
         if (lastRequestTokens >= tokenThreshold) {
           return { triggered: true, reason: 'tokens', currentTokens: lastRequestTokens, threshold: tokenThreshold };
@@ -790,6 +797,10 @@ export class ContextOptimizer {
     return total;
   }
 
+  /**
+   * Сохранённое окно модели или справочник; `0` — окно **неизвестно** (это не
+   * «включено/выключено», а факт отсутствия данных).
+   */
   getContextWindow(modelId?: string): number {
     if (!modelId) return 0;
     // Приоритет: сохранённое окно модели (ModelConfig.contextWindow из API/вручную),
@@ -803,6 +814,22 @@ export class ContextOptimizer {
   // ====================================================================
   // Приватные методы
   // ====================================================================
+
+  /**
+   * Окно для авто-триггеров: явно заданное окно модели, иначе
+   * `DEFAULT_CONTEXT_WINDOW` — та же оценка, что показывает UI.
+   *
+   * Используется только триггерами (`shouldCompress`, `shouldApplySlidingWindow`).
+   * Лимиты транскрипта/бюджеты сжатия остаются на `getContextWindow` (там `0`
+   * означает «неизвестно, не ограничиваем»).
+   *
+   * Риск осознан: у модели с реальным окном больше 200k сжатие наступит раньше
+   * (консервативно), у модели с меньшим окном предохранителем остаётся
+   * `context.windowPolicy`/overflow.
+   */
+  private _effectiveContextWindow(modelId?: string): number {
+    return this.getContextWindow(modelId) || DEFAULT_CONTEXT_WINDOW;
+  }
 
   private _getAllActiveMessages(session: Session): Message[] {
     return session.messages.filter((m) => !m.disabled && !m.hidden && !m.ephemeral && m.role !== 'summary' && m.role !== 'info');
