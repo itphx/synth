@@ -116,6 +116,7 @@
 | [PROP-105](./arch_decisions/prop-105-multi-replica-coordination.md) | Координация реплик control plane | 2026-11-14 | claim-семантика очереди, общее состояние; основа оценки HA |
 | [PROP-109](./arch_decisions/prop-109-agent-system-federation.md) | Федерация агентных систем | 2027-01-31 | `AgentSystem` как peer; после 0.14 |
 | [PROP-110](./arch_decisions/prop-110-portal-platform.md) | Портал-платформа | 2026-12-31 | UI-kit и оболочка; первый потребитель — `synth-media` |
+| [PROP-124](./arch_decisions/prop-124-remote-ssh-access.md) | SSH-ключи для удалённых хостов: режимы `tools` / `agent` | 2026-12-01 | расширение ADR-076/077; режим выбирает админ инстанса; в `agent` — эфемерный ssh-agent на вызов (Ansible и существующие проекты), без фильтрации хостов |
 
 **Триаж до 2026-11-14:** принять / icebox / отклонить / перенести (перенос — новой датой, а не молчанием).
 Принятое становится ADR, файл PROP удаляется; поглощённое — удаляется с записью «Поглощено»; снятое — в icebox/отклонено.
