@@ -99,3 +99,4 @@
 - **Проверка:** core 9041 passed (1 env-флейк `git-proxy-env`), UI 3520 passed, typecheck/lint 0 ошибок; корпус `ask=11 deny=4`.
 - **Коммит:** `91f5f3d6`.
 - **Далее:** сборка образов + деплой test (версия 0.13.5, номер сборки +), бета-публикация.
+- **Сборка/деплой/бета (2026-11-06):** образы `synth-backend:0.13.5` (slim), `0.13.5-full`, `synth-ui:0.13.5`, `synth-executor:0.13.5-full` с build `e5541c1a`; чарт `synth 0.13.5-5`; `synth-deploy` коммит `7bfff9b`, Fleet применил (оба инстанса ready); `/health` build `e5541c1a`. Бета `0.13.5-beta.20261105210102.e5541c1a` (dist-tag `beta`, 8 пакетов, smoke ок). Версия не менялась.
