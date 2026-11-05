@@ -63,6 +63,16 @@ EOF
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SYNTH="$ROOT"
 
+# Идентификатор сборки (SYNTH_BUILD_ID): commit sha + `-dirty`, если дерево
+# грязное. Пусто — неизвестно (PWA фоллбечится на сравнение semver).
+BUILD_ID="$(git -C "$SYNTH" rev-parse --short HEAD 2>/dev/null || true)"
+if [ -n "$BUILD_ID" ] && [ -n "$(git -C "$SYNTH" status --porcelain 2>/dev/null || true)" ]; then
+    BUILD_ID="${BUILD_ID}-dirty"
+fi
+# UI-бандл тоже несёт build id (сравнение PWA); Docker-образ получает его
+# отдельным --build-arg.
+export SYNTH_BUILD_ID="$BUILD_ID"
+
 BUILD_DOCKER=false
 # Тег `latest` не используем: релиз передаёт явный версионный тег (--docker-tag=<version>),
 # локальная сборка идёт под нейтральным `dev`.
@@ -200,8 +210,11 @@ if $BUILD_DOCKER; then
 
     DOCKER_IMAGE="$DOCKER_REGISTRY/itphx/synth:$DOCKER_TAG"
     echo "  Образ: $DOCKER_IMAGE"
+    echo "  Build: ${BUILD_ID:-(неизвестен)}"
 
-    docker build -t "$DOCKER_IMAGE" -f "$SYNTH/docker/Dockerfile" "$SYNTH" || die "Сборка Docker-образа не удалась"
+    docker build -t "$DOCKER_IMAGE" \
+        --build-arg "SYNTH_BUILD_ID=$BUILD_ID" \
+        -f "$SYNTH/docker/Dockerfile" "$SYNTH" || die "Сборка Docker-образа не удалась"
 
     echo "  готово"
     echo ""

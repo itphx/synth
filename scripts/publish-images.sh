@@ -49,6 +49,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Идентификатор сборки (SYNTH_BUILD_ID): commit sha + `-dirty` при грязном
+# дереве. Передаётся в образ control plane → GET /health (`build`), чтобы PWA
+# замечала пересборку той же semver. Пусто — неизвестно (фоллбек на версию).
+BUILD_ID="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true)"
+if [[ -n "$BUILD_ID" && -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]]; then
+  BUILD_ID="${BUILD_ID}-dirty"
+fi
+
 REGISTRY="${SYNTH_IMAGE_REGISTRY:-git.itphx.ru}"
 NAMESPACE="${SYNTH_IMAGE_NAMESPACE:-itphx}"
 FLAVORS="core dev devops browser full"
@@ -214,6 +222,8 @@ build_image() {
 
   [[ -n "$stage" ]] && args+=(--target "$stage")
   [[ "$image" == "backend" ]] && args+=(--build-arg "SYNTH_BACKEND_VERSION=$TAG_BASE")
+  # Build id нужен control plane (GET /health); исполнителю — не передаём.
+  [[ "$image" == "backend" ]] && args+=(--build-arg "SYNTH_BUILD_ID=$BUILD_ID")
   args+=("$REPO_ROOT")
 
   log "сборка $image (flavor: ${flavor:-slim}) → $tag"

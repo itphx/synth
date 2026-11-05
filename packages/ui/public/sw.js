@@ -1,5 +1,10 @@
 /* Synth PWA — service worker (app-shell, runtime-кэш). */
-const CACHE = 'synth-shell-__SYNTH_VERSION__'
+// Версия + идентификатор сборки: имя кэша обязано меняться при каждой сборке,
+// иначе повторный деплой той же semver оставляет старый шелл в кэше, а новые
+// хэши чанков дают 404. Пустой build id — только версия (без висящего дефиса).
+const CACHE_VERSION = 'synth-shell-__SYNTH_VERSION__'
+const CACHE_BUILD = '__SYNTH_BUILD_ID__'
+const CACHE = CACHE_BUILD ? `${CACHE_VERSION}-${CACHE_BUILD}` : CACHE_VERSION
 
 // Пути, которые НЕ кэшируем: данные/авторизация/реалтайм/служебные.
 const NO_CACHE_URL = /\/api\/|\/ws|\/auth|\/admin|\/health|sw\.js$/

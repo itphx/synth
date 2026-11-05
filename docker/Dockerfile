@@ -61,6 +61,12 @@ RUN set -eux; \
 
 FROM node:22-alpine
 
+# Идентификатор сборки (SYNTH_BUILD_ID): commit sha в CI, локально —
+# git short sha (+`-dirty`). Отдаётся в GET /health (`build`), чтобы PWA
+# замечала пересборку той же semver; пусто — неизвестно (фоллбек на версию).
+ARG SYNTH_BUILD_ID=""
+ENV SYNTH_BUILD_ID=$SYNTH_BUILD_ID
+
 # OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
 # репозиторием-источником (иначе GitHub Packages не показывает связь и
 # унаследованные права доступа). Для GitVerse-сборки (kaniko) метки инертны.

@@ -12,6 +12,9 @@ vi.mock('@/lib/api/synthApi', () => ({
   synthApi: { getHealth: vi.fn() },
 }))
 
+// Сборка бандла с известным build id: серверный build сравнивается с ним.
+vi.mock('@/lib/build-info', () => ({ BUILD_ID: 'local-build' }))
+
 import { PwaUpdatePrompt } from './PwaUpdatePrompt'
 import { synthApi } from '@/lib/api/synthApi'
 
@@ -48,6 +51,8 @@ class MockServiceWorkerContainer extends EventTarget {
 
 let container: MockServiceWorkerContainer
 let reloadSpy: ReturnType<typeof vi.fn>
+let cacheKeys: string[]
+let cachesMock: { keys: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> }
 const mounted: { host: HTMLElement; root: Root }[] = []
 
 async function mountPrompt(): Promise<HTMLElement> {
@@ -91,6 +96,15 @@ beforeEach(() => {
     value: container,
     configurable: true,
   })
+  cacheKeys = []
+  cachesMock = {
+    keys: vi.fn(async () => [...cacheKeys]),
+    delete: vi.fn(async (key: string) => {
+      cacheKeys = cacheKeys.filter((item) => item !== key)
+      return true
+    }),
+  }
+  vi.stubGlobal('caches', cachesMock)
 })
 
 afterEach(async () => {
@@ -105,6 +119,7 @@ afterEach(async () => {
   vi.clearAllTimers()
   vi.useRealTimers()
   window.sessionStorage.clear()
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
@@ -176,6 +191,74 @@ describe('PwaUpdatePrompt', () => {
     expect(host.textContent).toContain('pwa.updateAvailable')
     expect(host.textContent).toContain('pwa.updateLater')
     expect(host.textContent).toContain('pwa.updateNow')
+  })
+
+  it('расхождение build id — чистит кэши, обновляет SW и перезагружает', async () => {
+    cacheKeys = ['synth-shell-0.13.3', 'synth-shell-0.13.3-old']
+    container.controller = {}
+    const registration = new MockRegistration(null)
+    container.registration = registration
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, build: 'server-build' })
+
+    const host = await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(cachesMock.keys).toHaveBeenCalled()
+    expect(cachesMock.delete).toHaveBeenCalledWith('synth-shell-0.13.3')
+    expect(cachesMock.delete).toHaveBeenCalledWith('synth-shell-0.13.3-old')
+    expect(registration.update).toHaveBeenCalled()
+    expect(reloadSpy).toHaveBeenCalledTimes(1)
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expect(readAutoReload()).toEqual({ key: 'build:server-build', count: 1 })
+  })
+
+  it('совпадающий build id — не трогает кэши и не перезагружает', async () => {
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, build: 'local-build' })
+
+    const host = await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(cachesMock.keys).not.toHaveBeenCalled()
+    expect(cachesMock.delete).not.toHaveBeenCalled()
+    expect(reloadSpy).not.toHaveBeenCalled()
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+  })
+
+  it('пустой build id на сервере — фоллбек на сравнение версии', async () => {
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9', build: '' })
+
+    await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(cachesMock.keys).not.toHaveBeenCalled()
+    expect(reloadSpy).toHaveBeenCalledTimes(1)
+    expect(readAutoReload()).toEqual({ key: 'ver:9.9.9', count: 1 })
+  })
+
+  it('после 2 авто-попыток на тот же build id показывает аварийный баннер', async () => {
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    seedAutoReload('build:server-build', 2)
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, build: 'server-build' })
+
+    const host = await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(reloadSpy).not.toHaveBeenCalled()
+    expect(cachesMock.keys).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('pwa.updateAvailable')
   })
 
   it('не показывает баннер, когда версия сервера совпадает', async () => {

@@ -3,8 +3,18 @@
 import { BASE_URL, fetchJSON } from './base'
 
 export const healthApi = {
-  /** Публичный health-эндпоинт (без auth): проверка версии сервера на клиенте. */
-  async getHealth(): Promise<{ status: string; version: string; time: string; startedAt?: string }> {
+  /**
+   * Публичный health-эндпоинт (без auth): проверка версии сервера на клиенте.
+   * `build` — идентификатор сборки (аддитивно, ADR: PWA обновление); пусто —
+   * неизвестен, тогда клиент сравнивает semver.
+   */
+  async getHealth(): Promise<{
+    status: string
+    version: string
+    time: string
+    startedAt?: string
+    build?: string
+  }> {
     return fetchJSON(`${BASE_URL}/health`)
   },
 

@@ -3,6 +3,7 @@ import { SYNTH_VERSION } from '@itphx/synth-shared/version'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
+import { BUILD_ID } from '@/lib/build-info'
 
 /** Уникальный ключ конкретного ожидающего воркера (для «Позже» без «залипания»). */
 const workerKeys = new WeakMap<ServiceWorker, string>()
@@ -56,15 +57,34 @@ function writeAutoReload(record: AutoReloadRecord): void {
 }
 
 /**
+ * Сброс кэшей шелла перед обновлением: при повторном деплое той же semver
+ * старый SW мог сохранить `index.html`/карту чанков, из-за чего новые хэши
+ * ассетов дают 404. `caches` есть не во всех окружениях (и может быть
+ * запрещён) — тогда просто идём дальше.
+ */
+async function clearShellCaches(): Promise<void> {
+  if (typeof caches === 'undefined') return
+  try {
+    const keys = await caches.keys()
+    await Promise.all(keys.map((key) => caches.delete(key)))
+  } catch {
+    // кэш недоступен — обновление всё равно продолжится
+  }
+}
+
+/**
  * Авто-обновление PWA/SPA. Обнаружив новую версию, приложение применяет её
  * **само**, без баннера и вопроса:
  * — service worker установил новую версию и ждёт команды (`waiting` при живом
  *   controller) → `SKIP_WAITING` + перезагрузка по `controllerchange` (страховка
  *   через 1.5 с);
- * — серверная версия (публичный `GET /api/v2/health`) отличается от версии
- *   текущего бандла → немедленная перезагрузка страницы.
+ * — идентификатор сборки сервера (`health.build`) отличается от build id
+ *   текущего бандла → сброс кэшей шелла, `registration.update()` и одна
+ *   перезагрузка (пересборка под той же semver тоже замечается);
+ * — build id неизвестен с любой стороны → прежнее сравнение `health.version`
+ *   с `SYNTH_VERSION`; расхождение → немедленная перезагрузка страницы.
  *
- * Версия проверяется при монтировании, раз в 30 минут, при возврате в
+ * Версия/build проверяются при монтировании, раз в 30 минут, при возврате в
  * приложение и на первом действии после длительного простоя.
  *
  * Защита от цикла: в `sessionStorage` хранится ключ обновления и число
@@ -86,24 +106,47 @@ export function PwaUpdatePrompt() {
   /** Текущая регистрация SW и последняя обнаруженная серверная версия. */
   const registrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const latestVersion = useRef<string | null>(null)
+  /** Серверный build id, разошедшийся с бандлом (для «Позже»/ручного обновления). */
+  const latestBuild = useRef<string | null>(null)
   /** Авто-применение уже запрошено в этой загрузке страницы (по ключу). */
   const autoAttempted = useRef<Set<string>>(new Set())
 
   /** Применить обновление без вопроса. */
-  const applyUpdate = useCallback((waiting: ServiceWorker | null) => {
-    if (waiting) {
-      reloadOnControllerChange.current = true
-      waiting.postMessage({ type: 'SKIP_WAITING' })
-      // страховка: если controllerchange не придёт — перезагружаемся сами
-      window.setTimeout(() => {
-        reloadOnControllerChange.current = false
-        window.location.reload()
-      }, RELOAD_FALLBACK_MS)
+  const applyUpdate = useCallback((waiting: ServiceWorker | null, clearCaches = false) => {
+    const finish = (pending: ServiceWorker | null) => {
+      if (pending) {
+        reloadOnControllerChange.current = true
+        pending.postMessage({ type: 'SKIP_WAITING' })
+        // страховка: если controllerchange не придёт — перезагружаемся сами
+        window.setTimeout(() => {
+          reloadOnControllerChange.current = false
+          window.location.reload()
+        }, RELOAD_FALLBACK_MS)
+        return
+      }
+      // ждать нечего (например, расхождение версий/build id) — перезагружаем страницу
+      setUpdateReady(false)
+      window.location.reload()
+    }
+
+    if (!clearCaches) {
+      finish(waiting)
       return
     }
-    // ждать нечего (например, расхождение версий) — перезагружаем страницу
-    setUpdateReady(false)
-    window.location.reload()
+
+    // Расхождение build id: сбрасываем кэши → проверяем обновление SW → reload.
+    // Свежий `waiting` берём после update(): он мог появиться только что.
+    void clearShellCaches().then(async () => {
+      const reg =
+        registrationRef.current ??
+        (await navigator.serviceWorker.getRegistration().catch(() => undefined))
+      if (!reg) {
+        finish(waiting)
+        return
+      }
+      await reg.update().catch(() => {})
+      finish(reg.waiting ?? waiting)
+    })
   }, [])
 
   /**
@@ -112,15 +155,15 @@ export function PwaUpdatePrompt() {
    * авто-попыток исчерпан (показываем аварийный баннер).
    */
   const tryAutoApply = useCallback(
-    (key: string, waiting: ServiceWorker | null): boolean => {
+    (key: string, waiting: ServiceWorker | null, clearCaches = false): boolean => {
       if (autoAttempted.current.has(key)) return true
       const prev = readAutoReload()
       const count = prev && prev.key === key ? prev.count : 0
       if (count >= MAX_AUTO_RELOADS) return false
       autoAttempted.current.add(key)
-      // Смена ключа (новый воркер/версия) — счётчик начинается с 1.
+      // Смена ключа (новый воркер/версия/build id) — счётчик начинается с 1.
       writeAutoReload({ key, count: count + 1 })
-      applyUpdate(waiting)
+      applyUpdate(waiting, clearCaches)
       return true
     },
     [applyUpdate],
@@ -128,6 +171,8 @@ export function PwaUpdatePrompt() {
 
   /** Ручное обновление из аварийного баннера. */
   const handleUpdate = useCallback(async () => {
+    // Build mismatch: без сброса кэшей перезагрузка вернёт тот же старый шелл.
+    if (latestBuild.current) await clearShellCaches()
     const reg = await navigator.serviceWorker.getRegistration()
     if (reg?.waiting) {
       reloadOnControllerChange.current = true
@@ -148,6 +193,7 @@ export function PwaUpdatePrompt() {
     const waiting = registrationRef.current?.waiting
     if (waiting) dismissed.current.add(workerKey(waiting))
     if (latestVersion.current) dismissed.current.add(`ver:${latestVersion.current}`)
+    if (latestBuild.current) dismissed.current.add(`build:${latestBuild.current}`)
     setUpdateReady(false)
   }, [])
 
@@ -159,6 +205,7 @@ export function PwaUpdatePrompt() {
     let cancelled = false
     let intervalId: number | null = null
     let versionMismatch = false
+    let buildMismatch = false
     let lastActivityAt = Date.now()
     const removeListeners: Array<() => void> = []
     const watchedWorkers = new WeakSet<ServiceWorker>()
@@ -173,13 +220,25 @@ export function PwaUpdatePrompt() {
       removeListeners.push(() => target.removeEventListener(type, handler, options))
     }
 
-    // Единый пересчёт по обоим источникам (SW.waiting и версия): сначала
-    // авто-применение, баннер — только когда авто-попытки исчерпаны.
+    // Единый пересчёт по трём источникам (build id, SW.waiting, версия):
+    // сначала авто-применение, баннер — только когда авто-попытки исчерпаны.
     const recompute = () => {
       if (cancelled) return
       const waiting = registration?.waiting
       const swKey = waiting && navigator.serviceWorker.controller ? workerKey(waiting) : null
+      const buildKey = buildMismatch && latestBuild.current ? `build:${latestBuild.current}` : null
       const verKey = versionMismatch && latestVersion.current ? `ver:${latestVersion.current}` : null
+
+      // Расхождение build id — самый сильный сигнал (waiting SW может быть
+      // старой сборки): сброс кэшей → update SW → reload.
+      if (buildKey) {
+        if (tryAutoApply(buildKey, waiting ?? null, true)) {
+          setUpdateReady(false)
+          return
+        }
+        setUpdateReady(!dismissed.current.has(buildKey))
+        return
+      }
 
       if (swKey) {
         if (tryAutoApply(swKey, waiting ?? null)) {
@@ -203,12 +262,18 @@ export function PwaUpdatePrompt() {
       setUpdateReady(false)
     }
 
-    // Сверка версии сервера с версией текущего бандла (публичный health).
+    // Сверка сборки/версии сервера с текущим бандлом (публичный health).
+    // Приоритет — build id; semver сравнивается только когда build id пуст
+    // с любой стороны (локальная сборка/старый сервер).
     const checkVersion = async () => {
       try {
         const health = await synthApi.getHealth()
         if (cancelled) return
-        versionMismatch = health.version !== SYNTH_VERSION
+        const serverBuild = health.build ?? ''
+        const buildKnown = Boolean(serverBuild) && Boolean(BUILD_ID)
+        buildMismatch = buildKnown && serverBuild !== BUILD_ID
+        versionMismatch = !buildKnown && health.version !== SYNTH_VERSION
+        latestBuild.current = buildMismatch ? serverBuild : null
         latestVersion.current = versionMismatch ? health.version : null
         recompute()
       } catch {

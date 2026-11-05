@@ -37,6 +37,11 @@ export function createHealthRoutes(opts: HealthRoutesOptions = {}): Hono {
   const health = () => ({
     ...storageHealthFields(opts.getStorageDegraded?.() ?? null),
     version: SYNTH_VERSION,
+    // Идентификатор сборки (SYNTH_BUILD_ID): commit sha в CI, локально —
+    // `git rev-parse --short HEAD` (+`-dirty`). Пусто — неизвестно; PWA
+    // сравнивает его с build id бандла и сама обновляет устаревший шелл,
+    // даже если semver не менялся (повторный деплой той же версии).
+    build: (process.env.SYNTH_BUILD_ID ?? '').trim(),
     // Restart: ISO старта процесса — UI сравнивает до/после рестарта.
     startedAt: getProcessStartedAt(),
     time: nowISO(),

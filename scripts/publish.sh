@@ -257,7 +257,9 @@ publish_docker() {
         name="${img%%|*}"; df="${img#*|}"
         [ -f "$df" ] || die "Dockerfile не найден: $df"
         echo "  Сборка $name (из $df)..."
-        docker build -t "$name" -f "$df" "$SYNTH" || die "Сборка Docker-образа не удалась: $name"
+        docker build -t "$name" -f "$df" \
+            --build-arg "SYNTH_BUILD_ID=${SYNTH_BUILD_ID:-}" \
+            "$SYNTH" || die "Сборка Docker-образа не удалась: $name"
         echo "  Публикация $name..."
         docker push "$name" || die "Публикация Docker-образа не удалась: $name"
         echo "  Опубликовано: $name"

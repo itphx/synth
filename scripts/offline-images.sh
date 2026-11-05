@@ -42,6 +42,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Идентификатор сборки (SYNTH_BUILD_ID): commit sha, как в release.yaml.
+# Нужен и control plane (GET /health), и UI-бандлу (сравнение PWA).
+BUILD_ID="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+
 VERSION=""
 PLATFORMS="amd64,arm64"
 OUT_DIR="dist/offline/images"
@@ -226,6 +230,7 @@ build_one() {
     -f "$IMG_DOCKERFILE"
     -t "$tag"
     --build-arg "${IMG_BUILD_ARG}=${VERSION}"
+    --build-arg "SYNTH_BUILD_ID=${BUILD_ID}"
     --provenance=false
     --sbom=false
     --load

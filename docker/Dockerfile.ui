@@ -15,6 +15,12 @@ WORKDIR /repo
 # Копируем весь монорепо (для workspace-зависимостей и сборки shared → ui).
 COPY . .
 
+# Идентификатор сборки (SYNTH_BUILD_ID): попадает в бандл (`__SYNTH_BUILD_ID__`)
+# и в имя кэша service worker (`synth-shell-<version>-<buildId>`). В CI —
+# commit sha; без переменной — пусто, и PWA сравнивает semver.
+ARG SYNTH_BUILD_ID=""
+ENV SYNTH_BUILD_ID=$SYNTH_BUILD_ID
+
 # Установка зависимостей и сборка в порядке: shared → ui (vite build).
 # chmod — здесь, на платформе билдера (в целевой стадии RUN нет: arm64 без QEMU).
 RUN pnpm install --filter @itphx/synth-ui --filter @itphx/synth-shared \

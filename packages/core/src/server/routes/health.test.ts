@@ -54,4 +54,29 @@ describe('createHealthRoutes: /ready (ADR-094)', () => {
     expect(body.status).toBe('degraded');
     expect(body.storage).toMatchObject({ degraded: true, backend: 'postgres' });
   });
+
+  it('/health и /api/v2/health отдают build из SYNTH_BUILD_ID (по умолчанию пусто)', async () => {
+    const previous = process.env.SYNTH_BUILD_ID;
+    try {
+      delete process.env.SYNTH_BUILD_ID;
+      const without = (await (await createHealthRoutes().request('/health')).json()) as Record<
+        string,
+        unknown
+      >;
+      expect(without.build).toBe('');
+      expect(without.version).toBeTruthy();
+
+      process.env.SYNTH_BUILD_ID = 'abc1234';
+      const withBuild = (await (
+        await createHealthRoutes().request('/api/v2/health')
+      ).json()) as Record<string, unknown>;
+      expect(withBuild.build).toBe('abc1234');
+      expect(withBuild.status).toBe('healthy');
+      expect(withBuild.time).toBeTruthy();
+      expect(typeof withBuild.startedAt).toBe('string');
+    } finally {
+      if (previous === undefined) delete process.env.SYNTH_BUILD_ID;
+      else process.env.SYNTH_BUILD_ID = previous;
+    }
+  });
 });

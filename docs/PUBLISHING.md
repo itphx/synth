@@ -123,6 +123,8 @@ synth serve --connect https://synth.k3s.itphx.loc --home ~/.local/share/synth-be
 
 Образ собирается из опубликованного npm-пакета: `npm install -g @itphx/synth@<version>` (зависимости `@itphx/synth-core`/`@itphx/synth-ui`/`@itphx/synth-shared` ставятся как транзитивные, промпты и UI резолвятся из node_modules). Dockerfile: `docker/Dockerfile`.
 
+Образы собираются с идентификатором сборки **`SYNTH_BUILD_ID`** (в CI — commit sha; локально — `git rev-parse --short HEAD`, при грязном дереве с суффиксом `-dirty`). Значение отдаётся в `GET /health` (аддитивное поле `build`) и входит в имя кэша service worker; PWA сравнивает его с build id бандла и при расхождении сама сбрасывает кэши, обновляет SW и один раз перезагружается — пересборка под той же semver больше не оставляет старый шелл. Если build id пуст (локальная сборка без переменной), клиент, как раньше, сравнивает `health.version` с `SYNTH_VERSION`.
+
 Реестр Docker — **`gitverse.ru`** (не `registry.gitverse.ru`!). Образ:
 
 ```

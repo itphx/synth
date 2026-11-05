@@ -25,6 +25,12 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Идентификатор сборки для проверяемого образа (как в релизной сборке).
+BUILD_ID="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true)"
+if [[ -n "$BUILD_ID" && -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]]; then
+  BUILD_ID="${BUILD_ID}-dirty"
+fi
+
 FLAVORS="core dev devops browser full"
 IMAGES="backend executor"
 DO_SMOKE=1
@@ -77,7 +83,11 @@ for image in ${IMAGES//,/ }; do
   for flavor in ${FLAVORS//,/ }; do
     tag="synth-ci/$image:$flavor"
     log "сборка $image ($flavor) → $tag"
-    if ! docker build --file "$dockerfile" --target "$flavor" --tag "$tag" "$REPO_ROOT" >/dev/null; then
+    build_args=()
+    # Build id передаём только control plane (в Dockerfile.executor его нет).
+    [[ "$image" == "backend" ]] && build_args+=(--build-arg "SYNTH_BUILD_ID=$BUILD_ID")
+    if ! docker build --file "$dockerfile" --target "$flavor" --tag "$tag" \
+      ${build_args[@]+"${build_args[@]}"} "$REPO_ROOT" >/dev/null; then
       loge "СБОРКА НЕ УДАЛАСЬ: $image ($flavor)"
       FAILED=1
       continue

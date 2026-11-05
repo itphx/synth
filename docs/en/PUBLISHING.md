@@ -123,6 +123,8 @@ The script keeps the last N beta versions (semver, descending) and deletes the o
 
 The image is built from the published npm package: `npm install -g @itphx/synth@<version>` (the `@itphx/synth-core`/`@itphx/synth-ui`/`@itphx/synth-shared` dependencies are installed transitively, prompts and UI are resolved from node_modules). Dockerfile: `docker/Dockerfile`.
 
+Images are built with a build identifier **`SYNTH_BUILD_ID`** (the commit sha in CI; locally `git rev-parse --short HEAD`, with a `-dirty` suffix on a dirty tree). The value is returned by `GET /health` (additive `build` field) and is part of the service worker cache name; the PWA compares it with the bundle build id and, on a mismatch, clears caches, updates the SW and reloads once — a rebuild under the same semver no longer leaves the old shell behind. If the build id is empty (a local build without the variable), the client falls back to comparing `health.version` with `SYNTH_VERSION`.
+
 The Docker registry is **`gitverse.ru`** (not `registry.gitverse.ru`!). The image:
 
 ```

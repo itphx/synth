@@ -254,6 +254,8 @@ jobs:
       - name: Сборка всех пакетов
         run: |
           pnpm install --frozen-lockfile
+          # Build id в UI-бандл (сравнение PWA) и в образы (--build-arg ниже).
+          export SYNTH_BUILD_ID="$(git rev-parse HEAD)"
           pnpm --filter @itphx/synth-shared build
           pnpm --filter @itphx/synth-core build
           pnpm --filter @itphx/synth-executor build
@@ -365,6 +367,7 @@ jobs:
         run: |
           npm install -g pnpm@12.14.0
           pnpm install --frozen-lockfile
+          export SYNTH_BUILD_ID="$(git rev-parse HEAD)"
           pnpm --filter @itphx/synth-shared build
           pnpm --filter @itphx/synth-core build
           pnpm --filter @itphx/synth-executor build
@@ -402,6 +405,7 @@ jobs:
         run: |
           npm install -g pnpm@12.14.0
           pnpm install --frozen-lockfile
+          export SYNTH_BUILD_ID="$(git rev-parse HEAD)"
           pnpm --filter @itphx/synth-shared build
           pnpm --filter @itphx/synth-core build
           pnpm --filter @itphx/synth-executor build
@@ -517,8 +521,10 @@ jobs:
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
         run: |
           V="${{ steps.docker_tags.outputs.version }}"
+          BID="$(git rev-parse HEAD)"
           docker build --file docker/Dockerfile \
             --build-arg "SYNTH_VERSION=$V" \
+            --build-arg "SYNTH_BUILD_ID=$BID" \
             --tag "gitverse.ru/itphx/synth:$V" \
             --tag "ghcr.io/itphx/synth:$V" .
           push_retry() {
@@ -537,8 +543,10 @@ jobs:
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
         run: |
           V="${{ steps.docker_tags.outputs.version }}"
+          BID="$(git rev-parse HEAD)"
           docker build --file docker/Dockerfile.backend \
             --build-arg "SYNTH_BACKEND_VERSION=$V" \
+            --build-arg "SYNTH_BUILD_ID=$BID" \
             --tag "gitverse.ru/itphx/synth-backend:$V" \
             --tag "ghcr.io/itphx/synth-backend:$V" .
           push_retry() {
@@ -557,8 +565,10 @@ jobs:
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
         run: |
           V="${{ steps.docker_tags.outputs.version }}"
+          BID="$(git rev-parse HEAD)"
           docker build --file docker/Dockerfile.ui \
             --build-arg "SYNTH_UI_VERSION=$V" \
+            --build-arg "SYNTH_BUILD_ID=$BID" \
             --tag "gitverse.ru/itphx/synth-ui:$V" \
             --tag "ghcr.io/itphx/synth-ui:$V" .
           push_retry() {

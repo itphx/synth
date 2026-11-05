@@ -3,12 +3,21 @@ import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import {
+  renderServiceWorker,
+  SW_BUILD_ID_PLACEHOLDER,
+  SW_VERSION_PLACEHOLDER,
+} from "./src/lib/service-worker"
 
 const BACKEND_URL = process.env.VITE_BACKEND_URL || "http://localhost:5000"
 const PORT = parseInt(process.env.VITE_PORT || "5002", 10)
 
-/** Плейсхолдер версии в `public/sw.js`, заменяется при сборке. */
-const SW_VERSION_PLACEHOLDER = "__SYNTH_VERSION__"
+/**
+ * Идентификатор сборки (commit sha в CI; локально — git short sha, возможно с
+ * `-dirty`). Пусто — неизвестен: PWA фоллбечится на сравнение semver.
+ * Пробрасывается в бандл (`define`) и в имя кэша service worker.
+ */
+const BUILD_ID = (process.env.SYNTH_BUILD_ID ?? "").trim()
 
 /**
  * Code-splitting бандла: до этого вся сборка была одним чанком ~2 МБ
@@ -115,9 +124,11 @@ function resolveAllowedHosts(): true | string[] {
 }
 
 /**
- * Подставляет реальную версию Synth в собранный service worker: имя кэша
- * (`synth-shell-<version>`) должно меняться при каждом релизе, иначе байты
- * `/sw.js` идентичны и браузер не увидит новую версию без ручной перезагрузки.
+ * Подставляет реальную версию Synth и идентификатор сборки в собранный
+ * service worker: имя кэша (`synth-shell-<version>[-<buildId>]`) должно
+ * меняться при каждой сборке, иначе байты `/sw.js` идентичны и браузер не
+ * увидит новую версию без ручной перезагрузки (а повторный деплой той же
+ * semver оставит старый шелл в кэше).
  * Источник версии — `packages/shared/package.json` (синхронизирован с SYNTH_VERSION).
  */
 function serviceWorkerVersionPlugin(): Plugin {
@@ -128,17 +139,26 @@ function serviceWorkerVersionPlugin(): Plugin {
       const swPath = path.resolve(__dirname, "dist/sw.js")
       if (!existsSync(swPath)) return
       const source = readFileSync(swPath, "utf8")
-      if (!source.includes(SW_VERSION_PLACEHOLDER)) return
+      if (
+        !source.includes(SW_VERSION_PLACEHOLDER) &&
+        !source.includes(SW_BUILD_ID_PLACEHOLDER)
+      ) {
+        return
+      }
       const pkg = JSON.parse(
         readFileSync(path.resolve(__dirname, "../shared/package.json"), "utf8"),
       ) as { version: string }
-      writeFileSync(swPath, source.replaceAll(SW_VERSION_PLACEHOLDER, pkg.version))
+      writeFileSync(swPath, renderServiceWorker(source, { version: pkg.version, buildId: BUILD_ID }))
     },
   }
 }
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), serviceWorkerVersionPlugin()],
+  define: {
+    // Сборка без SYNTH_BUILD_ID даёт пустую строку: PWA сравнивает semver.
+    __SYNTH_BUILD_ID__: JSON.stringify(BUILD_ID),
+  },
   resolve: {
     alias: [{ find: "@", replacement: path.resolve(__dirname, "src") }],
   },

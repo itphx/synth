@@ -439,7 +439,7 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 
 | Method | Path | RBAC | Purpose |
 |---|---|---|---|
-| GET | `/health` | — | `{status:'healthy', version, time, startedAt}` (`startedAt` — the ISO process start timestamp, ADR-092) |
+| GET | `/health` | — | `{status:'healthy', version, build, time, startedAt}` (`startedAt` — the ISO process start timestamp, ADR-092; `build` — the `SYNTH_BUILD_ID` build identifier, empty when unknown — the PWA uses it to refresh a stale shell) |
 | GET | `/api/v2/health` | — | same (+ a `storage` block when degraded) |
 | GET | `/ready` | — | Readiness (ADR-094): `200` `{status:'ready', storage:'ok'\|'degraded', version, startedAt, time, checks?}`; `503` `{status:'not_ready', …}` only during start-up/fail-closed. Storage degradation does **not** drop readiness (ADR-098) |
 | GET | `/metrics` | none / bearer token | Prometheus exposition 0.0.4 (ADR-094), **outside** `/api/v2`; `metrics.enabled=false` → `404 NOT_FOUND`, with a token set and no `Authorization: Bearer …` → `401 UNAUTHORIZED`; `Content-Type: text/plain; version=0.0.4; charset=utf-8`, `Cache-Control: no-store` |
