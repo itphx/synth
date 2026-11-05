@@ -34,6 +34,15 @@ import type { ShellPolicy } from '../security/shell-guard.js';
 import { checkPath } from '../security/protected-paths.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 
+/**
+ * Периметр сессии: рабочий каталог + дополнительные корни (`allowedRoots`,
+ * ADR-114 — сессия в worktree считает корнем и основной checkout проекта).
+ * Единая точка: используется и правилами (`external_directory`), и shell-guard.
+ */
+function perimeterRoots(workingDir: string, allowedRoots?: readonly string[]): string[] {
+  return allowedRoots && allowedRoots.length > 0 ? [workingDir, ...allowedRoots] : [workingDir];
+}
+
 export interface PermissionCheckInput {
   toolName: string;
   params: Record<string, unknown>;
@@ -513,7 +522,9 @@ export class PermissionEvaluator {
     // Денлист shell-политики: критичный deny/ask поверх конфига (как
     // plan-рестрикция). ApprovalPaths → ask, всё остальное из политики → deny.
     if (shellCommand !== undefined && shellPolicy) {
-      const sc = checkShellCommand(shellCommand, shellCwd, shellPolicy);
+      const sc = checkShellCommand(shellCommand, shellCwd, shellPolicy, {
+        allowedRoots: perimeterRoots(workingDir, input.allowedRoots),
+      });
       if (sc.action !== 'allow') {
         return {
           action: sc.action,
@@ -592,9 +603,7 @@ export class PermissionEvaluator {
     const { paths, isFile, shellCommand } = ctx;
     // Perimeter сессии: рабочий каталог + дополнительные корни (`allowedRoots`).
     // Путь внутри любого из них внешним не считается (сессия в worktree, ADR-114).
-    const roots: readonly string[] = input.allowedRoots && input.allowedRoots.length > 0
-      ? [workingDir, ...input.allowedRoots]
-      : [workingDir];
+    const roots: readonly string[] = perimeterRoots(workingDir, input.allowedRoots);
 
     // ADR-046 §8.1: per-skill permissions — правило `skill` (строка или glob по
     // имени скилла). `deny` скрывает скилл из каталога; `ask` спрашивает.

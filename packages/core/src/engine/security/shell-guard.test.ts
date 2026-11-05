@@ -422,9 +422,10 @@ describe('checkShellCommand — строгий критерий «путь» д�
     expect(check('cat $X/file').action).toBe('ask');
     // `~` + неразрешимая динамика (`~/x` — литерал, резолвится через HOME)
     expect(check('cat ~/x*').action).toBe('ask');
+    // glob от текущего каталога и подъём за его пределы — ask (нет совпадений/вне периметра)
     expect(check('cat ./x*').action).toBe('ask');
     expect(check('cat ../x*').action).toBe('ask');
-    // глоб с разделителем — осознанно ask (может раскрыться в защищённый путь)
+    // многокомпонентный glob — ask (см. workspace-glob)
     expect(check('ls packages/*/package.json').action).toBe('ask');
   });
 
@@ -623,6 +624,177 @@ describe('checkShellCommand — обходы через разделители �
   });
 });
 
+describe('checkShellCommand — паттерны аргументов, workspace-glob и переменные', () => {
+  const check = (cmd: string, cwd = CWD, policy: ShellPolicy = TEST_POLICY, allowedRoots?: string[]) =>
+    checkShellCommand(cmd, cwd, policy, allowedRoots ? { allowedRoots } : undefined);
+
+  it('аргументы-паттерны не считаются путями (sed/grep); find — проверяется', () => {
+    expect(check("sed 's/=.*/=<set>/'").action).toBe('allow');
+    expect(check("grep 's/.*\\.//'").action).toBe('allow');
+    // `-path` матчит полный путь (`*` пересекает `/`) — fail-closed ask
+    expect(check("find . -not -path '*/.git/*'").action).toBe('ask');
+    expect(check("find . -name '*.ts'").action).toBe('allow');
+  });
+
+  it('слитные перенаправления: >&, >|, <>, 2>&, &> — цель проверяется', () => {
+    expect(check("echo 'ssh-rsa' >&~/.ssh/authorized_keys").action).toBe('deny');
+    expect(check('echo x >|/etc/passwd').action).toBe('deny');
+    expect(check('cat <>/etc/shadow').action).toBe('deny');
+    expect(check('cat 2>&/etc/shadow').action).toBe('deny');
+    expect(check('echo x &>/etc/shadow').action).toBe('deny');
+    expect(check('echo x &>>/etc/passwd').action).toBe('deny');
+    // дескрипторы, а не файлы
+    expect(check('cmd 2>&1').action).toBe('allow');
+    expect(check('cmd >&1').action).toBe('allow');
+    // over-block (осознанно): кавычки снимаются, текст выглядит как redirect
+    expect(check("echo '>~/.ssh/authorized_keys'").action).toBe('deny');
+  });
+
+  it('tr: наборы не пути, но цель перенаправления проверяется', () => {
+    expect(check('tr -d a < /etc/shadow').action).toBe('deny');
+    expect(check('tr -d a < /etc/passwd').action).toBe('deny');
+    expect(check('tr a b > ~/.ssh/authorized_keys').action).toBe('deny');
+    // слитные перенаправления
+    expect(check('tr a b &>/etc/shadow').action).toBe('deny');
+    expect(check('cat x >/etc/passwd').action).toBe('deny');
+    // наборы-«пути» не уходят в ask и не денятся
+    expect(check("tr '/' '_' < file.txt").action).toBe('allow');
+    expect(check('tr a b < README.md').action).toBe('allow');
+  });
+
+  it('workspace-glob: однокомпонентный внутри периметра — allow, иначе ask', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-shell-glob-'));
+    try {
+      const ws = join(dir, 'ws');
+      await mkdir(join(ws, 'k3s/certs/k3s/server/tls'), { recursive: true });
+      await writeFile(join(ws, 'k3s/certs/k3s/server/tls/a.srl'), 'x');
+      await mkdir(join(ws, 'other'), { recursive: true });
+      await writeFile(join(ws, 'other', 'a.txt'), 'x');
+
+      // последний компонент, каталог существует — allow
+      expect(check('ls k3s/certs/k3s/server/tls/*.srl', ws).action).toBe('allow');
+      // многокомпонентный glob — ask
+      expect(check('ls packages/*/package.json').action).toBe('ask');
+      expect(check('cat ./*/*.key', ws).action).toBe('ask');
+      // вне периметра — ask
+      expect(check('ls /etc/ssh/ssh_config.d/*').action).toBe('ask');
+      expect(check('ls /proc/*').action).toBe('ask');
+      // нет каталога/совпадений — ask
+      expect(check('ls nope/*.srl', ws).action).toBe('ask');
+      expect(check('cat ./x*', ws).action).toBe('ask');
+      // allowedRoots — тоже периметр
+      expect(check('ls other/*.txt', ws, TEST_POLICY, [join(ws, 'other')]).action).toBe('allow');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('find -path/-ipath: абсолютный путь проверяется как путь', () => {
+    const DATA = '/var/synth/data';
+    const policy: ShellPolicy = {
+      ...TEST_POLICY,
+      deniedPaths: [...TEST_POLICY.deniedPaths, `${DATA}/secrets/master.key`],
+      deniedPrefixes: [...TEST_POLICY.deniedPrefixes, `${DATA}/secrets`],
+    };
+    expect(check('find /etc -path /etc/shadow -delete').action).toBe('deny');
+    expect(check(`find ${DATA} -path ${DATA}/secrets/master.key -delete`, CWD, policy).action).toBe('deny');
+    // `-path` матчит полный путь: относительный glob тоже проверяется (ask)
+    expect(check("find /etc -ipath '/etc/pass*' -delete").action).toBe('ask');
+    expect(check(`find ${DATA} -path '*/*.key' -delete`, CWD, policy).action).toBe('ask');
+    expect(check("find . -path '*/.git/*'").action).toBe('ask');
+    // шаблон без `/` путём не считается
+    expect(check("find . -name '*.ts'").action).toBe('allow');
+    expect(check("find . -name '*shadow*'").action).toBe('allow');
+  });
+
+  it('sed: слитные -e и «скрипт»-путь', () => {
+    expect(check("sed -e's/a/b/' /etc/shadow").action).toBe('deny');
+    expect(check("sed -i -e's/a/b/' /etc/shadow").action).toBe('deny');
+    // нормальная форма не сломана
+    expect(check("sed -n '1,40p' README.md").action).toBe('allow');
+  });
+
+  it('jq: файл из --slurpfile/--rawfile проверяется как путь', () => {
+    expect(check('jq --slurpfile v /etc/shadow .').action).toBe('deny');
+    expect(check('jq --rawfile v /etc/shadow .').action).toBe('deny');
+  });
+
+  it('раскрытое значение-команда не путь; динамическое имя команды — ask', () => {
+    const cases = [
+      "C='cat /etc/shadow'; eval $C",
+      "C='rm -rf /'; eval $C",
+      `C='cat /etc/shadow'; sh -c "$C"`,
+      `C='cat /etc/shadow'; bash -c "$C"`,
+      "C='cat /etc/shadow'; sudo $C",
+      "C='cat /etc/shadow'; $C",
+      'C=ls; $C',
+    ];
+    for (const cmd of cases) expect(check(cmd).action).not.toBe('allow');
+    // слитные формы обёртки — тоже рекурсия
+    expect(check(`bash -lc 'cat /etc/shadow'`).action).toBe('deny');
+    expect(check(`sh -c'cat /etc/shadow'`).action).toBe('deny');
+  });
+
+  it('+= присваивание: значение неизвестно, deny по маркерам сохраняется', () => {
+    const DATA = '/var/synth/data';
+    const policy: ShellPolicy = {
+      ...TEST_POLICY,
+      deniedPaths: [...TEST_POLICY.deniedPaths, `${DATA}/secrets/master.key`],
+      deniedPrefixes: [...TEST_POLICY.deniedPrefixes, `${DATA}/secrets`],
+    };
+    expect(check('D=/var/synth/data/; D+=secrets; cat $D/master.key', CWD, policy).action).toBe('deny');
+    expect(check('H=~/.ss; H+=h; cat $H/id_rsa').action).toBe('deny');
+  });
+
+  it('for-цикл из литеральных слов — allow', () => {
+    expect(check('for r in ansible/itphx.loc k3s/keycloak; do git -C "$r" status; done').action).toBe('allow');
+    expect(check(
+      'for hp in 10.0.0.1:22 10.0.0.2:22; do h=${hp%:*}; p=${hp#*:}; timeout 3 bash -c "</dev/tcp/$h/$p"; done',
+    ).action).toBe('allow');
+  });
+
+  it('присваивание литерала раскрывается: путь проверяется (deny сохраняется)', () => {
+    expect(check('TLS=../../k3s/certs/tls; cat $TLS/client-ca.crt').action).toBe('allow');
+    expect(check('TLS=~/.ssh; cat $TLS/id_rsa').action).toBe('deny');
+    expect(check('for f in ~/.ssh/id_rsa; do cat "$f"; done').action).toBe('deny');
+  });
+
+  it('неизвестная динамика остаётся ask (fail-closed)', () => {
+    expect(check('cat $X').action).toBe('ask');
+    expect(check('cat ${X}').action).toBe('ask');
+    expect(check('cat $X/file').action).toBe('ask');
+    expect(check('for p in $(pgrep -f synth); do cat /proc/$p/comm; done').action).toBe('ask');
+    // значения из потока (`while read`) неизвестны
+    expect(check('while read -r n ip; do echo "$n"; done').action).toBe('ask');
+  });
+});
+
+describe('checkShellCommand — deny приоритетнее ask (внутри сегмента и по сегментам)', () => {
+  const DATA = '/var/synth/data';
+  const policy: ShellPolicy = {
+    ...TEST_POLICY,
+    deniedPaths: [...TEST_POLICY.deniedPaths, `${DATA}/secrets/master.key`],
+    deniedPrefixes: [...TEST_POLICY.deniedPrefixes, `${DATA}/secrets`],
+  };
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, policy);
+
+  it('approval-путь рядом с запрещённым — deny', () => {
+    // known_hosts под deniedPrefix ~/.ssh, config — approvalPath
+    expect(check('cat ~/.ssh/config ~/.ssh/known_hosts').action).toBe('deny');
+    expect(check(`cat ~/.ssh/config ${DATA}/secrets/master.key`).action).toBe('deny');
+  });
+
+  it('deny во втором сегменте перекрывает ask в первом', () => {
+    expect(check('cat ~/.ssh/config; cat /etc/passwd').action).toBe('deny');
+  });
+
+  it('одиночный approval-путь остаётся ask', () => {
+    expect(check('cat ~/.ssh/config').action).toBe('ask');
+    // approvalPaths — исключение из deniedPrefixes и для ls
+    expect(check('ls ~/.ssh/config').action).toBe('ask');
+  });
+});
+
 describe('matchShellCommandPattern', () => {
   it('"*" матчит любую команду', () => {
     expect(matchShellCommandPattern('*', 'npm install express')).toBe(true);
@@ -763,6 +935,21 @@ describe('checkShellCommand — обход через симлинк', () => {
   it('симлинк внутрь на незащищённый путь → allow', () => {
     const r = checkShellCommand('cat inlink/file.txt', ws, policy);
     expect(r.action).toBe('allow');
+  });
+
+  it('workspace-glob через симлинк наружу → ask (realpath вне периметра)', () => {
+    const r = checkShellCommand('ls leakdir/*.key', ws, policy);
+    expect(r.action).toBe('ask');
+  });
+
+  it('многокомпонентный glob через симлинк → ask', () => {
+    expect(checkShellCommand('cat ./*/*.key', ws, policy).action).toBe('ask');
+    expect(checkShellCommand('cat ./leakdir/*', ws, policy).action).toBe('ask');
+  });
+
+  it('workspace-glob по безопасному каталогу → allow', async () => {
+    await writeFile(join(ws, 'sub', 'ok.txt'), 'x');
+    expect(checkShellCommand('cat sub/*.txt', ws, policy).action).toBe('allow');
   });
 
   it('регрессия: лексический защищённый путь → deny', () => {
