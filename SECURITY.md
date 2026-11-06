@@ -6,15 +6,10 @@ Thank you for helping keep Synth and its users safe.
 
 ## Supported versions
 
-Security fixes are provided for the current release line only:
+Security fixes are provided for the latest published release only.
 
-| Version  | Supported |
-| -------- | --------- |
-| `0.10.x` | ✅        |
-| < `0.10` | ❌        |
-
-Pre-1.0 releases are moving quickly; please upgrade to the latest `0.10.x` before
-reporting, and reproduce against it where possible.
+Before reporting an issue, please upgrade to the latest release and, where
+possible, reproduce the problem on it.
 
 ## Reporting a vulnerability
 
@@ -26,7 +21,7 @@ or pull requests.** Instead, contact the maintainers privately:
 
 Please include as much of the following as you can:
 
-- Synth version (for example `0.10.1`) and how it was installed
+- Synth version and how it was installed
   (npm / Docker / Kubernetes / hybrid / from source);
 - operating system and Node.js version;
 - a clear description of the issue and its security impact;
