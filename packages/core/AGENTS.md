@@ -447,7 +447,9 @@
   (recoverable, `network_error` — `classifyLlmErrorFor`/`isLlmErrorRecoverable`), а
   `invalid_grant`/`AUTH` → `null` → `RemoteAuthExpiredError` + i18n-ключ
   `router.remote_auth_expired` («Сессия на сервере истекла — войдите в гибрид заново»),
-  классифицируется как `auth_error` (невосстановимая, без ретраев). Текст
+  `error_type: 'remote_auth_expired'` (невосстановимая, без ретраев; UI показывает
+  действие повторного входа); общий `auth_error` остаётся для прочих auth-ошибок
+  провайдера. Текст
   `RemoteError(OFFLINE)` в сообщении об ошибке локализуется как `router.network_error`
   (`formatLlmError`).
   **issuer/clientId хранятся в `RemoteCredentials`** (аддитивно): `ensureAuthenticated`

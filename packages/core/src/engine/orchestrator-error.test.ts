@@ -294,8 +294,11 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
   // non-recoverable сбой терминален даже на первой попытке.
   it('сохраняет сообщение об ошибке для non-recoverable сбоя на первой попытке', async () => {
     ProviderFactory.register('mockauthfail', AuthFailingProvider);
-    const { sessionId } = await run('mockauthfail', { attempt: 1 });
+    const { result, sessionId } = await run('mockauthfail', { attempt: 1 });
     ProviderFactory['_providers'].delete('mockauthfail');
+    // Истёкшая сессия гибрида — отдельный тип (не общий auth_error).
+    expect(result.errorType).toBe('remote_auth_expired');
+    expect(result.canRetry).toBe(false);
     const session = await sessionManager.getSession(sessionId);
     const assistants = session!.messages.filter((m) => m.role === MessageRole.ASSISTANT);
     expect(assistants).toHaveLength(1);

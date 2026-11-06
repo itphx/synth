@@ -984,20 +984,32 @@ sequenceDiagram
 
 ### 8.14 Критическая ошибка провайдера (non-recoverable)
 
-1. `classifyLlmError` даёт невосстановимый тип (`auth`, `model_not_found`, `context_length`,
-   `provider_not_found`, …) либо `isLlmErrorRecoverable` = `false` — **ретраев нет**,
+1. `classifyLlmError` даёт невосстановимый тип (`auth_error`, `remote_auth_expired`,
+   `model_not_found`, `context_length`, `provider_not_found`, …) либо `isLlmErrorRecoverable`
+   = `false` — **ретраев нет**,
    `stream.retry` не публикуется.
 2. Оркестратор: `step.finished` со статусом `error` (тот же `messageId` шага) → `turn.finished error`;
    `handleLlmFailure` пишет assistant-сообщение об ошибке (текст + `i18n`-ключ ADR-041) и
    `metadata.last_error` в user-реплику.
 3. Процессор: сообщение извлекается из очереди, `blocked`/`currentStream`/`retry` снимаются,
    публикуется `stream.error {can_retry: false, error_type, retry_count}`, затем `queue.state`.
-4. UI: `StreamErrorPanel` над композером с локализованным текстом (`context_length` — «контекстное
-   окно превышено», `auth` — «ошибка авторизации», иначе общий + сырой текст в подсказке); кнопка
-   «Повторить» показывается только для recoverable-типов (`resolveStreamErrorAction`).
+4. UI, лента: assistant-сообщение с терминальным `status: 'error'` — **inline системный блок
+   ошибки**, а не ответ агента (`data-testid="turn-error"`, шапка «Ошибка» + агент/модель/время,
+   тело — локализованный текст по `metadata.i18n`, полный набор действий). `cancelled`/`interrupted`
+   (частичный ответ после «Стопа»/прерывания) остаются обычным ответом с бейджем «Прервано».
+5. UI, плашка над композером: `StreamErrorPanel` с локализованным текстом (`context_length` —
+   «контекстное окно превышено», `auth_error`/legacy `auth` — «ошибка авторизации»,
+   `provider_disabled`/`model_disabled` — соответствующая подсказка, иначе общий + сырой текст в
+   подсказке); кнопка «Повторить» показывается только для recoverable-типов
+   (`network`/`network_error`/`timeout`/`rate_limit`/`server_error`). Для `remote_auth_expired`
+   (истёкшая серверная сессия гибрида) — заголовок `router.remote_auth_expired` и действие
+   «Войти в гибрид заново» (`logout()`), без «Повторить» и сырого текста, и такая же кнопка —
+   в inline-блоке ошибки ленты. Тост открытой сессии (`notifyMessage` в `transportStore`)
+   сохраняется.
 
 Код: `packages/core/src/engine/orchestrator/errors.ts`, `queue/processor.ts`,
-`packages/ui/src/components/chat/StreamErrorPanel.tsx`.
+`packages/ui/src/components/chat/{ChatMessage,StreamErrorPanel}.tsx`,
+`packages/ui/src/lib/streamErrors.ts`.
 
 ### 8.15 Ошибки в дочерней сессии
 

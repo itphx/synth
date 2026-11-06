@@ -406,9 +406,11 @@ export const SYSTEM_MESSAGES = {
   'router.no_user_query':
     'The model could not process the tool-call chain (the original user query was lost). Try again, reduce the number of tools, or increase the model context window.',
   // Гибрид (ADR-042): токена к серверу нет — чаще всего истекла серверная
-  // сессия. Текст намеренно содержит маркер «authentication»: classifyLlmError
-  // относит его к `auth_error` (невосстановимая ошибка, без 3 бесполезных
-  // ретраев по 5/15/30 с — ADR-041).
+  // сессия. `classifyLlmErrorFor` относит типизированную ошибку
+  // (`RemoteAuthExpiredError`/`RemoteError('AUTH'|'UNAUTHORIZED')`) к
+  // `remote_auth_expired` — невосстановимый тип, без 3 бесполезных ретраев по
+  // 5/15/30 с (ADR-041). Маркер «authentication» в тексте остаётся для старых
+  // текстовых путей (`classifyLlmError` = `auth_error`).
   'router.remote_auth_expired':
     'The server session has expired — sign in to hybrid mode again (authentication required)',
 

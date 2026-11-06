@@ -11,7 +11,12 @@ import { StreamErrorPanel } from './StreamErrorPanel'
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
-async function renderPanel(errorType: string, error: string, onRetry?: () => void): Promise<HTMLElement> {
+async function renderPanel(
+  errorType: string,
+  error: string,
+  onRetry?: () => void,
+  onHybridLogin?: () => void,
+): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -19,11 +24,22 @@ async function renderPanel(errorType: string, error: string, onRetry?: () => voi
   await act(async () => {
     root.render(
       <I18nProvider>
-        <StreamErrorPanel error={error} errorType={errorType} onRetry={onRetry} />
+        <StreamErrorPanel
+          error={error}
+          errorType={errorType}
+          onRetry={onRetry}
+          onHybridLogin={onHybridLogin}
+        />
       </I18nProvider>,
     )
   })
   return container
+}
+
+function findButton(container: HTMLElement, label: string): HTMLButtonElement | undefined {
+  return Array.from(container.querySelectorAll('button')).find(
+    (b) => b.textContent?.trim() === label,
+  ) as HTMLButtonElement | undefined
 }
 
 afterEach(async () => {
@@ -61,13 +77,55 @@ describe('StreamErrorPanel (B6: плашка финальной ошибки н�
     expect(btn).toBeUndefined()
   })
 
-  it('auth → локализованный текст про API-ключ, БЕЗ кнопки «Повторить»', async () => {
-    const container = await renderPanel('auth', 'invalid key', () => {})
+  it('auth_error → локализованный текст про API-ключ, БЕЗ кнопки «Повторить»', async () => {
+    const container = await renderPanel('auth_error', 'invalid key', () => {})
     expect(container.textContent).toContain('Ошибка аутентификации провайдера')
+    expect(container.textContent).not.toContain('invalid key')
     const btn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent?.trim() === 'Повторить',
     )
     expect(btn).toBeUndefined()
+  })
+
+  it('legacy auth → тот же текст про API-ключ', async () => {
+    const container = await renderPanel('auth', 'invalid key', () => {})
+    expect(container.textContent).toContain('Ошибка аутентификации провайдера')
+    expect(container.querySelectorAll('button')).toHaveLength(0)
+  })
+
+  it('remote_auth_expired → текст «сессия истекла» + кнопка входа, без «Повторить» и сырого текста', async () => {
+    let relogin = 0
+    const container = await renderPanel(
+      'remote_auth_expired',
+      'server session expired',
+      () => {},
+      () => {
+        relogin += 1
+      },
+    )
+    expect(container.textContent).toContain('Сессия на сервере истекла — войдите в гибрид заново')
+    expect(container.textContent).not.toContain('server session expired')
+    expect(findButton(container, 'Повторить')).toBeUndefined()
+    const login = findButton(container, 'Войти в гибрид заново')
+    expect(login).toBeDefined()
+    await act(async () => {
+      login!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(relogin).toBe(1)
+  })
+
+  it('network_error (актуальный тип ядра) → «Повторить»', async () => {
+    let retried = false
+    const container = await renderPanel('network_error', 'conn refused', () => {
+      retried = true
+    })
+    expect(container.textContent).toContain('Обработка остановлена: ошибка провайдера')
+    const btn = findButton(container, 'Повторить')
+    expect(btn).toBeDefined()
+    await act(async () => {
+      btn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(retried).toBe(true)
   })
 
   it('клик по «Повторить» вызывает onRetry', async () => {

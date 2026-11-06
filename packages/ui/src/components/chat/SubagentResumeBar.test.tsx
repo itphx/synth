@@ -70,6 +70,13 @@ describe('SubagentResumeBar (B8: плашка в дочерней сессии �
     expect(findBtn(container, 'Продолжить')).toBeDefined()
   })
 
+  it('актуальный error_type network_error → «Продолжить» (таксономия ядра)', async () => {
+    const container = await renderBar('child', {
+      attempts: 3, maxRetries: 3, errorType: 'network_error',
+    }, { onResume: () => {}, onStop: () => {} })
+    expect(findBtn(container, 'Продолжить')).toBeDefined()
+  })
+
   it('клик «Продолжить» вызывает resumeSubagent для сессии вкладки', async () => {
     let resumed = false
     const container = await renderBar('child', {

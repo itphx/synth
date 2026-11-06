@@ -6,11 +6,24 @@
  * «Повторить»/«Продолжить» или только текст (повтор бессмысленен).
  */
 
-/** Ошибки, при которых повторная отправка имеет смысл (транзиентные сбои провайдера). */
-export const RECOVERABLE_ERROR_TYPES = ['network', 'timeout', 'rate_limit', 'server_error'] as const
+/**
+ * Ошибки, при которых повторная отправка имеет смысл (транзиентные сбои
+ * провайдера). Legacy-имена `network`/`auth` оставлены для старых ядер и
+ * гибрида: актуальное ядро отдаёт `network_error`/`auth_error`
+ * (`packages/core/src/engine/llm-error.ts`).
+ */
+export const RECOVERABLE_ERROR_TYPES = ['network', 'network_error', 'timeout', 'rate_limit', 'server_error'] as const
 
-/** Ошибки, при которых повторная отправка бессмысленна (кнопка не показывается). */
-export const NON_RETRYABLE_ERROR_TYPES = ['context_length', 'auth', 'model_not_found', 'resume_failed', 'internal', 'unknown'] as const
+/**
+ * Ошибки, при которых повторная отправка бессмысленна (кнопка не показывается).
+ * `remote_auth_expired` — истёкшая сессия гибрида: нужен повторный вход, а не
+ * повтор запроса.
+ */
+export const NON_RETRYABLE_ERROR_TYPES = [
+  'context_length', 'auth', 'auth_error', 'remote_auth_expired',
+  'model_not_found', 'provider_not_found', 'no_user_query', 'validation',
+  'retry_cancelled', 'resume_failed', 'internal', 'unknown',
+] as const
 
 export type RecoverableErrorType = (typeof RECOVERABLE_ERROR_TYPES)[number]
 

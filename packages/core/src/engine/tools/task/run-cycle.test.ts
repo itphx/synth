@@ -21,6 +21,8 @@ import { z } from 'zod';
 import { MessageRole, generateId, nowISO, makeTextPart, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
 import type { ToolContext, ToolDefinition, ToolResult, ToolForLLM, TokenUsage, Message, Session } from '@itphx/synth-shared';
 import type { BaseProvider, CancellationToken, ChatOptions, LLMMessage, SystemPromptInput } from '../../../providers/base.js';
+import { RemoteAuthExpiredError } from '../../../providers/exceptions.js';
+import { RemoteError } from '../../../remote/types.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ModelRouter } from '../../router/router.js';
 import { FileStore } from '../../../storage/file-store.js';
@@ -1138,6 +1140,47 @@ describe('run-cycle — hooks (ADR-030)', () => {
 
     await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
     expect(failed.mock.calls[0]![0]).toMatchObject({ agentId: child.id });
+  });
+
+  it('RemoteAuthExpiredError с русским текстом не ретраится (error_type из classify)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const provider = throwingProvider(
+      new RemoteAuthExpiredError('Сессия на сервере истекла — войдите в гибрид заново'),
+    );
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      // Если бы тип не передавался в `isLlmErrorRecoverable`, цикл сделал бы
+      // 3 попытки (текст русский — паттерны не совпадают); задержки нулевые,
+      // чтобы регрессия падала быстро, а не через 5/15/30 с.
+      retry: { maxRetries: 3, delaysMs: [0, 0, 0] },
+    }));
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata!.attempts).toBe(1);
+    expect(result.metadata!.error_type).toBe('remote_auth_expired');
+  });
+
+  it('RemoteError(AUTH) с русским текстом не ретраится (error_type из classify)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const provider = throwingProvider(
+      new RemoteError('Не удалось обновить токен: refresh token недействителен', 'AUTH'),
+    );
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      retry: { maxRetries: 3, delaysMs: [0, 0, 0] },
+    }));
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata!.attempts).toBe(1);
+    expect(result.metadata!.error_type).toBe('remote_auth_expired');
   });
 });
 

@@ -1207,7 +1207,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           if (isAborted()) break;
           const rawError = err instanceof Error ? err.message : String(err);
           const errorType = classifyLlmErrorFor(err);
-          if (!isLlmErrorRecoverable(err, rawError) || attempt >= retryMaxAttempts) {
+          // `errorType` обязателен: у `RemoteAuthExpiredError`/`RemoteError('AUTH')`
+          // текст может быть русским («Сессия на сервере истекла…») — текстовые
+          // паттерны его не распознают, и без типа саб-агент делал бы бесполезные
+          // ретраи (единая политика с `orchestrator/errors.ts` и agent-step).
+          if (!isLlmErrorRecoverable(err, rawError, errorType) || attempt >= retryMaxAttempts) {
             // Unrecoverable или попытки исчерпаны — финальная ошибка
             llmFailure = { error: err, errorType, attempts: attempt };
             break;

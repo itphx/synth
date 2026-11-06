@@ -3,6 +3,7 @@ import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useChatStore, type MessageData, type QueuedMessage } from '@/stores/chatStore'
+import { useAuthStore } from '@/stores/authStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore, applyHistoryPage, restoreLiveTurnFromSession } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
@@ -448,6 +449,13 @@ export function ChatTab({ tab }: ChatTabProps) {
       notify({ text: `${t('chat.error.retryLast')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
     }
   }, [sessionId, notify, t])
+
+  // Гибрид: истекла серверная сессия (`remote_auth_expired`) — повтор запроса
+  // бессмысленен, нужен повторный вход. `logout()` отключает гибрид и показывает
+  // экран входа с предзаполненным сервером.
+  const handleHybridLogin = useCallback(() => {
+    void useAuthStore.getState().logout()
+  }, [])
 
   // B8: возобновление дочерней сессии (плашка в дочерней сессии)
   const handleResumeSubagent = useCallback(async () => {
@@ -1017,6 +1025,7 @@ export function ChatTab({ tab }: ChatTabProps) {
               error={finalError.error}
               errorType={finalError.errorType}
               onRetry={handleRetryLastFailed}
+              onHybridLogin={handleHybridLogin}
             />
           )}
 

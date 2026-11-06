@@ -75,6 +75,7 @@ describe('formatLlmError / errorTypeI18n (ADR-041)', () => {
     expect(errorTypeI18n('context_length')).toEqual({ key: 'router.context_length_exceeded' });
     expect(errorTypeI18n('no_user_query')).toEqual({ key: 'router.no_user_query' });
     expect(errorTypeI18n('provider_not_found')).toEqual({ key: 'router.provider_not_found' });
+    expect(errorTypeI18n('remote_auth_expired')).toEqual({ key: 'router.remote_auth_expired' });
     expect(errorTypeI18n('unknown')).toBeUndefined();
     expect(errorTypeI18n('auth_error')).toBeUndefined();
   });
@@ -205,14 +206,18 @@ describe('handleLlmFailure', () => {
     expect(saveAssistantMessage).not.toHaveBeenCalled();
   });
 
-  it('гибрид: RemoteError(AUTH) → auth_error, терминально (просьба войти заново)', async () => {
+  it('гибрид: RemoteError(AUTH) → remote_auth_expired, терминально (просьба войти заново)', async () => {
     const sessionId = await sessionWithUserMessage('stream1');
     const err = new RemoteError('Не удалось обновить токен: refresh token недействителен или истёк', 'AUTH');
 
     const result = await handleLlmFailure(sessionId, 'stream1', err, 1, context(), deps());
 
-    expect(result).toMatchObject({ errorType: 'auth_error', canRetry: false });
+    expect(result).toMatchObject({ errorType: 'remote_auth_expired', canRetry: false });
     expect(saveAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(saveAssistantMessage.mock.calls[0]![17]).toMatchObject({
+      status: 'error',
+      i18n: { key: 'router.remote_auth_expired' },
+    });
   });
 
   it('ContextLengthExceededError определяется по классу (русский текст не классифицируется)', async () => {

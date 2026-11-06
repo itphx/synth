@@ -5,8 +5,8 @@
  * retry-цикл саб-агента (task.ts / task-resume.ts) использовал ту же
  * таксономию, что и QueueProcessor основной сессии:
  *   recoverable   — network_error, timeout, rate_limit, server_error, unknown
- *   unrecoverable — auth_error, model_not_found, context_length,
- *                   provider_not_found, no_user_query
+ *   unrecoverable — auth_error, remote_auth_expired, model_not_found,
+ *                   context_length, provider_not_found, no_user_query
  */
 import { ContextLengthExceededError, RemoteAuthExpiredError } from '../providers/exceptions.js';
 import { RemoteError } from '../remote/types.js';
@@ -39,28 +39,30 @@ export function classifyLlmError(errMsg: string): string {
  *
  * - `RemoteError('OFFLINE')` (сеть/таймаут сервера авторизации) → `network_error`
  *   — recoverable, шаг уходит в обычный retry;
- * - `RemoteError('AUTH'|'UNAUTHORIZED')` → `auth_error` — терминально, нужен
- *   повторный вход;
- * - прочее → `classifyLlmError` по тексту.
+ * - `RemoteError('AUTH'|'UNAUTHORIZED')` / `RemoteAuthExpiredError` →
+ *   `remote_auth_expired` — терминально, нужен повторный вход в гибрид
+ *   (это про серверную сессию, а не про ключ провайдера);
+ * - прочее → `classifyLlmError` по тексту (там остаётся `auth_error` для
+ *   прочих auth-ошибок провайдера).
  *
  * Для случаев, где доступен только текст (например проверка context_length),
  * остаётся `classifyLlmError`.
  */
 export function classifyLlmErrorFor(error: unknown): string {
-  // Истёкшая сессия гибрида — всегда auth_error, независимо от языка текста
-  // (русская формулировка не содержит английских auth-паттернов).
-  if (error instanceof RemoteAuthExpiredError) return 'auth_error';
+  // Истёкшая сессия гибрида — всегда remote_auth_expired, независимо от языка
+  // текста (русская формулировка не содержит английских auth-паттернов).
+  if (error instanceof RemoteAuthExpiredError) return 'remote_auth_expired';
   if (error instanceof RemoteError) {
     if (error.code === 'OFFLINE') return 'network_error';
-    if (error.code === 'AUTH' || error.code === 'UNAUTHORIZED') return 'auth_error';
+    if (error.code === 'AUTH' || error.code === 'UNAUTHORIZED') return 'remote_auth_expired';
   }
   return classifyLlmError(error instanceof Error ? error.message : String(error));
 }
 
 /** Типы ошибок, при которых повтор не имеет смысла. */
 const UNRECOVERABLE_TYPES = [
-  'auth_error', 'model_not_found', 'context_length', 'provider_not_found',
-  'validation', 'no_user_query',
+  'auth_error', 'remote_auth_expired', 'model_not_found', 'context_length',
+  'provider_not_found', 'validation', 'no_user_query',
 ];
 
 /**

@@ -121,6 +121,7 @@ export function errorTypeI18n(
     case 'rate_limit': return i18nMeta('router.rate_limit_exceeded');
     case 'context_length': return i18nMeta('router.context_length_exceeded');
     case 'no_user_query': return i18nMeta('router.no_user_query');
+    case 'remote_auth_expired': return i18nMeta('router.remote_auth_expired');
     case 'provider_not_found': return ctx?.providerName
       ? i18nMeta('router.provider_not_found', { provider: ctx.providerName })
       : i18nMeta('router.provider_not_found');
@@ -167,7 +168,8 @@ export async function handleLlmFailure(
       : error instanceof ContextLengthExceededError
         ? 'context_length'
         // Объект, а не только текст: RemoteError(OFFLINE) → network_error
-        // (recoverable), RemoteError(AUTH) → auth_error (терминально).
+        // (recoverable), RemoteError(AUTH)/RemoteAuthExpiredError →
+        // remote_auth_expired (терминально, нужен повторный вход в гибрид).
         : classifyLlmErrorFor(error));
   const canRetry = worktreeMissing ? false : isLlmErrorRecoverable(error, rawError, errorType);
 

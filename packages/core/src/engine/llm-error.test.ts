@@ -42,13 +42,14 @@ describe('classifyLlmError — единая таксономия типов', ()
 describe('router.remote_auth_expired — истёкшая сессия гибрида', () => {
   const msg = sm('router.remote_auth_expired');
 
-  it('классифицируется как auth_error', () => {
+  it('по тексту — legacy auth_error (старые/текстовые пути)', () => {
     expect(classifyLlmError(msg)).toBe('auth_error');
   });
 
   it('невосстановимая (без 3 бесполезных ретраев)', () => {
     expect(isLlmErrorRecoverable(new Error(msg), msg)).toBe(false);
     expect(isLlmErrorRecoverable(new Error(msg), msg, 'auth_error')).toBe(false);
+    expect(isLlmErrorRecoverable(new Error(msg), msg, 'remote_auth_expired')).toBe(false);
     expect(isLlmErrorRecoverable(new RemoteAuthExpiredError())).toBe(false);
   });
 });
@@ -60,15 +61,29 @@ describe('classifyLlmErrorFor — типизированные remote-ошибк
     expect(isLlmErrorRecoverable(err)).toBe(true);
   });
 
-  it('RemoteError(AUTH/UNAUTHORIZED) → auth_error (терминально)', () => {
-    expect(classifyLlmErrorFor(new RemoteError('Не удалось обновить токен', 'AUTH'))).toBe('auth_error');
-    expect(classifyLlmErrorFor(new RemoteError('401', 'UNAUTHORIZED'))).toBe('auth_error');
+  it('RemoteError(AUTH/UNAUTHORIZED) → remote_auth_expired (терминально)', () => {
+    expect(classifyLlmErrorFor(new RemoteError('Не удалось обновить токен', 'AUTH'))).toBe('remote_auth_expired');
+    expect(classifyLlmErrorFor(new RemoteError('401', 'UNAUTHORIZED'))).toBe('remote_auth_expired');
     expect(isLlmErrorRecoverable(new RemoteError('x', 'AUTH'))).toBe(false);
     expect(isLlmErrorRecoverable(new RemoteError('x', 'UNAUTHORIZED'))).toBe(false);
   });
 
-  it('RemoteAuthExpiredError → auth_error (даже если текст локализован)', () => {
-    expect(classifyLlmErrorFor(new RemoteAuthExpiredError())).toBe('auth_error');
+  it('RemoteAuthExpiredError → remote_auth_expired (даже если текст локализован)', () => {
+    expect(classifyLlmErrorFor(new RemoteAuthExpiredError())).toBe('remote_auth_expired');
+  });
+
+  it('русский текст ошибки гибрида: classify + errorType → без ретраев', () => {
+    // Русская формулировка не содержит английских auth-паттернов — именно
+    // `errorType` из `classifyLlmErrorFor` делает ошибку невосстановимой.
+    const expired = new RemoteAuthExpiredError('Сессия на сервере истекла — войдите в гибрид заново');
+    const expiredType = classifyLlmErrorFor(expired);
+    expect(expiredType).toBe('remote_auth_expired');
+    expect(isLlmErrorRecoverable(expired, expired.message, expiredType)).toBe(false);
+
+    const auth = new RemoteError('Не удалось обновить токен: refresh token недействителен', 'AUTH');
+    const authType = classifyLlmErrorFor(auth);
+    expect(authType).toBe('remote_auth_expired');
+    expect(isLlmErrorRecoverable(auth, auth.message, authType)).toBe(false);
   });
 
   it('прочие ошибки — по тексту через classifyLlmError', () => {
@@ -153,7 +168,7 @@ describe('isLlmErrorRecoverable — объединённый набор патт
 
 describe('isLlmErrorRecoverable — приоритет errorType', () => {
   // errorType из UNRECOVERABLE_TYPES -> false, даже если текст их не содержит.
-  it.each(['context_length', 'auth_error', 'model_not_found', 'provider_not_found', 'validation', 'no_user_query'])(
+  it.each(['context_length', 'auth_error', 'remote_auth_expired', 'model_not_found', 'provider_not_found', 'validation', 'no_user_query'])(
     'errorType=%s → false даже без совпадения по тексту',
     (type) => {
       expect(isLlmErrorRecoverable(new Error('argle bargle'), 'argle bargle', type)).toBe(false);

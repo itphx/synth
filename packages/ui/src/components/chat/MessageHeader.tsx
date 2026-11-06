@@ -30,6 +30,11 @@ interface MessageHeaderProps {
   expanded?: boolean
   /** Тумблер разворота ответа (стабильная ссылка из `ChatMessage`). */
   onToggleExpand?: () => void
+  /**
+   * Встроенная шапка (в шапке `Notice`/inline-блока ошибки): без отрицательного
+   * верхнего отступа и нижнего зазора — выравнивание задаёт внешний контейнер.
+   */
+  embedded?: boolean
 }
 
 /**
@@ -64,7 +69,7 @@ function resolveAuthor(message: MessageData, externalFallback: string): string {
   return author
 }
 
-function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, metaOnly, expanded, onToggleExpand }: MessageHeaderProps) {
+function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, metaOnly, expanded, onToggleExpand, embedded }: MessageHeaderProps) {
   const { t } = useI18n()
   const time = message.timestamp || message.created_at
   const formatted = time
@@ -152,7 +157,7 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, me
   }
 
   return (
-    <div className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/70 -mt-1 mb-2">
+    <div className={`flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/70${embedded ? '' : ' -mt-1 mb-2'}`}>
       {userBadge}
       {agentBadge}
 

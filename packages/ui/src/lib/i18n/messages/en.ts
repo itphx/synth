@@ -1494,6 +1494,7 @@ export const dict = {
   'chat.streamError.contextLength': 'Model context window exceeded. Start a new session or shorten the history',
   'chat.streamError.authFailed': 'Provider authentication error. Check the API key in provider settings',
   'chat.streamError.retry': 'Retry',
+  'chat.streamError.hybridRelogin': 'Sign in to hybrid again',
   'chat.streamError.retrySent': 'Request sent again',
   'chat.streamError.providerDisabled': 'Provider is disabled — choose another model',
   'chat.streamError.modelDisabled': 'Model is disabled — choose another model',

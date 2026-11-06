@@ -1468,6 +1468,7 @@ export const dict = {
   'chat.streamError.contextLength': 'Контекстное окно модели превышено. Начните новую сессию или сократите историю',
   'chat.streamError.authFailed': 'Ошибка аутентификации провайдера. Проверьте API-ключ в настройках провайдера',
   'chat.streamError.retry': 'Повторить',
+  'chat.streamError.hybridRelogin': 'Войти в гибрид заново',
   'chat.streamError.retrySent': 'Запрос отправлен повторно',
   'chat.streamError.providerDisabled': 'Провайдер отключён — выберите другую модель',
   'chat.streamError.modelDisabled': 'Модель отключена — выберите другую модель',
