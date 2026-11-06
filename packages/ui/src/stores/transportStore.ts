@@ -41,7 +41,13 @@ const TEXT_PART_PREFIX = 'msg:text:'
 // в сторе независимо от содержимого payload события.
 function refreshSessionFromApi(sid: string) {
   synthApi.getSession(sid)
-    .then((sess) => useSessionsStore.getState().upsertSession(sess))
+    .then((sess) => {
+      useSessionsStore.getState().upsertSession(sess)
+      // ADR-119: серверная оценка занятости контекста из detail-DTO —
+      // источник истины для индикатора (после сжатия она уменьшается).
+      const usage = sess.context_usage
+      if (usage) useChatStore.getState().setContextUsage(sid, usage)
+    })
     .catch(() => {})
 }
 
@@ -1954,6 +1960,13 @@ export function createDispatcher(): EventDispatcher {
           {
             ...(turnId ? { turn_id: turnId } : {}),
             ...(stepIndex != null ? { step_index: stepIndex } : {}),
+            /**
+             * ADR-119: служебный шаг сжатия — это **резюме**, а не ответ
+             * ассистента: роль `summary` вместо `assistant`, чтобы расход
+             * вызова сжатия не выглядел в ленте и в индикаторе как ответ
+             * агента (роль сервера потом побеждает — он пришлёт `summary`).
+             */
+            ...(payload.kind === 'compression' ? { role: 'summary' } : {}),
             status: 'streaming',
           },
           { turnId: turnId || undefined },
@@ -2002,7 +2015,13 @@ export function createDispatcher(): EventDispatcher {
         // стоимость шага приходят здесь (ADR-118 §4) — кладём в сообщение,
         // иначе статистика/аналитика теряют live-данные.
         const patch: Partial<MessageData> = {}
-        const usage = mapUsage(payload.usage)
+        /**
+         * ADR-119: у служебного шага сжатия `usage` — расход **вызова
+         * сжатия** (весь транскрипт на входе), а не занятость контекстного
+         * окна: в сообщение-резюме его не кладём (в историю оно придёт из
+         * серверной записи резюме, а индикатор резюме не учитывает).
+         */
+        const usage = payload.kind === 'compression' ? undefined : mapUsage(payload.usage)
         if (usage) patch.usage = usage
         if (typeof payload.provider === 'string' && payload.provider) patch.provider = payload.provider
         if (typeof payload.model === 'string' && payload.model) patch.model = payload.model
@@ -2978,9 +2997,22 @@ export function createDispatcher(): EventDispatcher {
       // `setMessages`) — догруженные пользователем старые страницы не теряются.
       case 'context.summarization_applied': {
         setSummarizationPending(sid, false)
-        synthApi.getSessionMessages(sid, { limit: MESSAGES_PAGE_LIMIT }).then((r) => {
-          applyHistoryPage(sid, r)
-        }).catch(() => {})
+        // ADR-119: занятость контекста из события — значение «прямо сейчас»
+        // после сжатия. Кладём его ДО перечитывания истории: индикатор
+        // уменьшается сразу, даже если история не перечиталась.
+        const contextTokens = payload.context_tokens
+        const contextLimit = payload.context_limit
+        if (typeof contextTokens === 'number' && typeof contextLimit === 'number') {
+          useChatStore.getState().setContextUsage(sid, {
+            tokens: contextTokens,
+            limit: contextLimit,
+            estimated: false,
+          })
+        }
+        // Перечитывание истории не глотаем молча: `mergeHistory` —
+        // single-flight с trailing-прогоном; при неудаче — один повтор.
+        // Значение из события остаётся фолбэком для индикатора.
+        void mergeHistory(sid).then((ok) => (ok ? undefined : mergeHistory(sid)))
         refreshSessionFromApi(sid)
         break
       }

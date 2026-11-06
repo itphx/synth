@@ -19,6 +19,9 @@ import { warning } from '../../logger.js';
 import type { SaveAssistantMessageFn } from './persistence.js';
 import type { LlmFailureContext } from './errors.js';
 import { StreamTiming } from './stream-stats.js';
+// ADR-119: занятость контекста «прямо сейчас» — тот же счётчик и то же окно,
+// что у триггера сжатия и у индикатора в UI.
+import { computeContextUsage } from '../context/context-usage.js';
 // ADR-118 §4: суммаризация — ход из одного шага (вызов LLM).
 import {
   publishPartDelta,
@@ -126,7 +129,14 @@ export async function handleSummarization(
   const stepMessageId = generateId();
   let publishedReasoning: string | undefined;
   publishTurnStarted(publishChunk, { turnId, messageId: message.id });
-  publishStepStarted(publishChunk, { turnId, stepIndex: 0, messageId: stepMessageId });
+  // ADR-119: `kind: 'compression'` — служебный шаг сжатия (не ответ агента:
+  // его usage — расход вызова сжатия, а не занятость контекстного окна).
+  publishStepStarted(publishChunk, {
+    turnId,
+    stepIndex: 0,
+    messageId: stepMessageId,
+    kind: 'compression',
+  });
 
   const cancelToken: CancellationToken = {
     cancelled: false,
@@ -188,6 +198,7 @@ export async function handleSummarization(
       stepIndex: 0,
       messageId: stepMessageId,
       status: 'cancelled',
+      kind: 'compression',
       provider: providerName,
       agentRole: 'summary',
     });
@@ -227,6 +238,7 @@ export async function handleSummarization(
       stepIndex: 0,
       messageId: stepMessageId,
       status: 'error',
+      kind: 'compression',
       provider: providerName,
       agentRole: 'summary',
     });
@@ -270,6 +282,12 @@ export async function handleSummarization(
   // Отключить только покрытые сообщения (pinned и хвост не трогаем).
   await disableCompressedMessages(deps, session.id, plan);
 
+  // ADR-119: снимок сессии ПОСЛЕ сжатия — оценка занятости контекста должна
+  // учитывать отключённые покрытые сообщения, иначе индикатор «залипнет» на
+  // до-сжатом уровне.
+  const updatedSession = await deps.sessionManager.getSession(session.id);
+  const contextUsage = computeContextUsage(deps.optimizer, updatedSession ?? session);
+
   // UI перечитывает историю: сжатие применено (не только overflow-путь).
   const rawReason = message.metadata?.reason;
   const appliedReason = rawReason === 'manual' ? 'manual' : 'auto';
@@ -280,9 +298,14 @@ export async function handleSummarization(
     covered_indices: plan.coveredIndices,
     keep_from: plan.keepFromId ?? null,
     ...(finalUsage ? { usage: finalUsage } : {}),
+    /**
+     * ADR-119: занятость контекста ПОСЛЕ сжатия (аддитивно). `usage` выше —
+     * расход вызова сжатия, а не занятость окна: UI обновляет индикатор по
+     * `context_tokens`/`context_limit`, не дожидаясь перечитывания истории.
+     */
+    context_tokens: contextUsage.tokens,
+    context_limit: contextUsage.limit,
   });
-
-  const updatedSession = await deps.sessionManager.getSession(session.id);
 
   const chunkStats = streamTiming.snapshot();
   // ADR-118 §4: `stream.done` удалён — шаг закрывает `step.finished`, ход —
@@ -292,6 +315,7 @@ export async function handleSummarization(
     stepIndex: 0,
     messageId: stepMessageId,
     status: 'completed',
+    kind: 'compression',
     usage: finalUsage,
     provider: providerName,
     ...(finalModel ? { model: finalModel } : {}),

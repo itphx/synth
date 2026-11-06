@@ -15,6 +15,9 @@ import type { SaveAssistantMessageFn } from './persistence.js';
 import { DebugCollector } from '../../debug.js';
 import { info } from '../../logger.js';
 import { t as sm } from '../system-messages.js';
+// ADR-119: занятость контекста «прямо сейчас» — тот же счётчик и то же окно,
+// что у триггера сжатия и у индикатора в UI.
+import { computeContextUsage } from '../context/context-usage.js';
 
 /** Причина сжатия (диагностика/событие). */
 export type CompressionReason = 'overflow' | 'auto' | 'manual';
@@ -151,6 +154,13 @@ export async function forceCompression(
 
   await disableCompressedMessages(deps, session.id, plan);
 
+  const updated = await deps.sessionManager.getSession(session.id);
+  if (!updated) throw new Error(`Session ${session.id} not found after compression`);
+
+  // ADR-119: занятость контекста ПОСЛЕ сжатия (покрытые сообщения уже
+  // отключены) — иначе индикатор остался бы на до-сжатом уровне.
+  const contextUsage = computeContextUsage(deps.optimizer, updated);
+
   deps.eventBus.publish(session.id, 'context.summarization_applied', {
     session_id: session.id,
     reason: opts.reason,
@@ -158,10 +168,13 @@ export async function forceCompression(
     covered_indices: plan.coveredIndices,
     keep_from: plan.keepFromId ?? null,
     ...(response.usage ? { usage: response.usage } : {}),
+    /**
+     * ADR-119: занятость контекста после сжатия (аддитивно). `usage` выше —
+     * расход вызова сжатия, а не занятость окна.
+     */
+    context_tokens: contextUsage.tokens,
+    context_limit: contextUsage.limit,
   });
-
-  const updated = await deps.sessionManager.getSession(session.id);
-  if (!updated) throw new Error(`Session ${session.id} not found after compression`);
 
   info(
     'CONTEXT',

@@ -105,6 +105,17 @@ function setMessages(messages: MessageData[], sessionId = 's1'): void {
   useChatStore.setState({ messagesBySession: { [sessionId]: messages } } as never)
 }
 
+/**
+ * ADR-119: серверная оценка занятости контекста (деталь-DTO сессии или
+ * событие `context.summarization_applied`).
+ */
+function setContextUsage(
+  sessionId: string,
+  usage: { tokens: number; limit: number; estimated: boolean },
+): void {
+  useChatStore.setState({ contextUsageBySession: { [sessionId]: usage } } as never)
+}
+
 function setModel(contextWindow?: number): void {
   useProvidersStore.setState({
     models: contextWindow === undefined
@@ -128,6 +139,7 @@ beforeEach(() => {
   } as never)
   setModel(200_000)
   setMessages([])
+  useChatStore.setState({ contextUsageBySession: {} } as never)
 })
 
 afterEach(async () => {
@@ -241,6 +253,98 @@ describe('useContextWindowUsage — токены и окно', () => {
         </I18nProvider>,
       )
     })
+  })
+})
+
+/**
+ * ADR-119: индикатор занятости контекста после компактизации.
+ *
+ * Клиентский расчёт по `usage` последнего assistant-сообщения после сжатия
+ * не годится: замер ДО резюме неактуален (core, M2), а usage служебного шага
+ * сжатия — это расход вызова сжатия, а не занятость окна. Поэтому источник
+ * истины — серверная оценка (`context_usage` / `context_tokens`).
+ */
+describe('useContextWindowUsage — после компактизации (ADR-119)', () => {
+  it('резюме последним: usage до него не берётся (индикатор не остаётся до-сжатым)', async () => {
+    setMessages([
+      withUsage('m1', 195_593),
+      message({ id: 'sum', role: 'summary', content: 'итог беседы' }),
+    ])
+    await render(<Probe sessionId="s1" />)
+    expect(usage.inputTokens).toBe(0)
+    expect(usage.percent).toBe(0)
+  })
+
+  it('резюме последним + серверная оценка: индикатор показывает её', async () => {
+    setContextUsage('s1', { tokens: 20_000, limit: 200_000, estimated: false })
+    setMessages([
+      withUsage('m1', 195_593),
+      message({ id: 'sum', role: 'summary', content: 'итог беседы' }),
+    ])
+    await render(<Probe sessionId="s1" />)
+    expect(usage.inputTokens).toBe(20_000)
+    expect(usage.windowTokens).toBe(200_000)
+    expect(usage.percent).toBe(10)
+  })
+
+  it('свежий замер ПОСЛЕ резюме важнее серверной оценки (после сжатия ход продолжается)', async () => {
+    setContextUsage('s1', { tokens: 20_000, limit: 200_000, estimated: false })
+    setMessages([
+      withUsage('m1', 195_593),
+      message({ id: 'sum', role: 'summary', content: 'итог беседы' }),
+      withUsage('m3', 40_000),
+    ])
+    await render(<Probe sessionId="s1" />)
+    // Замер после резюме — свежий, он и есть занятость контекста.
+    expect(usage.inputTokens).toBe(40_010)
+    expect(usage.percent).toBe(20)
+  })
+
+  it('шаг сжатия (agent_role: summary) не является источником usage', async () => {
+    setMessages([withUsage('m1', 195_593, { agent_role: 'summary' })])
+    await render(<Probe sessionId="s1" />)
+    expect(usage.inputTokens).toBe(0)
+    expect(usage.percent).toBe(0)
+  })
+
+  it('сообщение auto_summary не является источником usage', async () => {
+    setMessages([withUsage('m1', 195_593, { metadata: { type: 'auto_summary' } })])
+    await render(<Probe sessionId="s1" />)
+    expect(usage.inputTokens).toBe(0)
+    expect(usage.percent).toBe(0)
+  })
+
+  it('свежий клиентский замер важнее серверной оценки, а окно — из серверной', async () => {
+    setContextUsage('s1', { tokens: 20_000, limit: 50_000, estimated: false })
+    setMessages([withUsage('m1', 25_000)])
+    await render(<Probe sessionId="s1" />)
+    // Замер последнего assistant после резюме — источник занятости.
+    expect(usage.inputTokens).toBe(25_010)
+    // Окно модели — из серверной оценки (окно одно и то же).
+    expect(usage.windowTokens).toBe(50_000)
+    expect(usage.percent).toBe(50)
+    expect(usage.isEstimated).toBe(false)
+  })
+
+  it('серверная оценка с оценённым окном — isEstimated берётся из неё', async () => {
+    setContextUsage('s1', { tokens: 40_000, limit: 200_000, estimated: true })
+    setMessages([withUsage('m1', 195_593)])
+    await render(<Probe sessionId="s1" />)
+    expect(usage.isEstimated).toBe(true)
+    // Источник занятости — свежий клиентский замер, окно — серверное.
+    expect(usage.inputTokens).toBe(195_603)
+    expect(usage.windowTokens).toBe(200_000)
+    expect(usage.percent).toBe(98)
+  })
+
+  it('сообщение без usage в конце по-прежнему не сбрасывает индикатор в 0', async () => {
+    setMessages([
+      withUsage('m1', 195_593),
+      message({ id: 'm2', content: '' }),
+    ])
+    await render(<Probe sessionId="s1" />)
+    expect(usage.inputTokens).toBe(195_603)
+    expect(usage.percent).toBe(98)
   })
 })
 

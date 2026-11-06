@@ -112,6 +112,33 @@ function usageTotalTokens(usage: MessageData['usage']): number {
 }
 
 /**
+ * ADR-119: сообщение резюме/сжатия — **не** источник контекстного usage.
+ *
+ * Признаки: роль `summary`, агентская роль `summary` (шаг сжатия) или
+ * `metadata.type === 'auto_summary'` (сохранённое резюме). Их `usage` —
+ * расход **вызова сжатия** (весь транскрипт на входе), а не занятость
+ * окна: такой шаг не должен раздувать индикатор.
+ */
+function isSummaryMessage(message: MessageData): boolean {
+  if (message.role === 'summary') return true
+  if (message.agent_role === 'summary') return true
+  return message.metadata?.type === 'auto_summary'
+}
+
+/**
+ * Индекс последнего резюме в ленте (паритет с core, ADR-119 M2).
+ *
+ * Замеры assistant-сообщений **до** последнего резюме неактуальны (они
+ * покрыты резюме) — поэтому в оценке контекста их usage не используется.
+ */
+function lastSummaryIndex(messages: MessageData[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isSummaryMessage(messages[i]!)) return i
+  }
+  return -1
+}
+
+/**
  * Total токенов последнего assistant-сообщения **с usage**.
  * Сообщения без `usage` (фоллбек ошибки, служебные) и отключённые/скрытые
  * пропускаются — иначе индикатор обнулялся в конце такого хода.
@@ -123,9 +150,15 @@ function usageTotalTokens(usage: MessageData['usage']): number {
  */
 export function lastAssistantContextTokens(messages: MessageData[] | undefined): number {
   if (!messages) return 0
+  const summaryIdx = lastSummaryIndex(messages)
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!
     if (message.role !== 'assistant' || message.disabled || message.hidden) continue
+    // Шаг сжатия: его usage — расход вызова сжатия, не занятость окна.
+    if (isSummaryMessage(message)) continue
+    // M2: измерение до последнего резюме неактуально (сообщение покрыто
+    // резюме) — оценку даёт сервер, а не этот замер.
+    if (summaryIdx >= 0 && i <= summaryIdx) continue
     const tokens = usageTotalTokens(message.usage)
     if (tokens > 0) return tokens
   }
@@ -138,6 +171,8 @@ export function streamingContextTokens(messages: MessageData[] | undefined): num
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!
     if (message.status !== 'streaming') continue
+    // Служебный шаг сжатия — не источник контекстного usage.
+    if (isSummaryMessage(message)) continue
     const tokens = usageTotalTokens(message.usage)
     return tokens > 0 ? tokens : 0
   }
@@ -153,12 +188,12 @@ export function useContextWindowUsage(sessionId?: string): ContextWindowUsage {
   // странице — догружаем её, иначе окно контекста неизвестно (оценка).
   useEnsureModelsLoaded([modelId])
 
-  const windowTokens = useProvidersStore((s) => {
+  const modelWindowTokens = useProvidersStore((s) => {
     const model = s.models.find((m) => m.id === modelId || m.name === modelId)
     const window = model?.context_window
     return typeof window === 'number' && window > 0 ? window : DEFAULT_CONTEXT_WINDOW
   })
-  const isEstimated = useProvidersStore((s) => {
+  const isModelWindowEstimated = useProvidersStore((s) => {
     const model = s.models.find((m) => m.id === modelId || m.name === modelId)
     const window = model?.context_window
     return !(typeof window === 'number' && window > 0)
@@ -172,8 +207,32 @@ export function useContextWindowUsage(sessionId?: string): ContextWindowUsage {
   const liveTokens = useChatStore((s) =>
     streamingContextTokens(sessionId ? s.messagesBySession[sessionId] : undefined),
   )
+  /**
+   * ADR-119: **серверная** оценка занятости контекста (деталь-DTO сессии
+   * `context_usage` + событие `context.summarization_applied`) — источник
+   * истины, когда свежего клиентского замера нет.
+   */
+  const serverUsage = useChatStore((s) =>
+    sessionId ? s.contextUsageBySession[sessionId] : undefined,
+  )
 
-  const inputTokens = Math.max(lastTokens, liveTokens)
+  const serverTokens = serverUsage?.tokens ?? 0
+  /**
+   * Выбор источника занятости:
+   * - `lastTokens > 0` — свежий клиентский замер (последний assistant **после**
+   *   последнего резюме): он растёт по ходам, поэтому важнее серверного;
+   * - `lastTokens === 0` — свежего замера на сжатом промпте нет (сразу после
+   *   сжатия, при открытии сессии, когда последний замер был до резюме) →
+   *   берём серверную оценку (она уже посчитана с учётом компактизации).
+   */
+  const useServerUsage = !!serverUsage && lastTokens === 0
+
+  const inputTokens = useServerUsage
+    ? Math.max(serverTokens, liveTokens)
+    : Math.max(lastTokens, liveTokens)
+  // Окно модели — из серверной оценки, если она есть (окно одно и то же).
+  const windowTokens = serverUsage?.limit ?? modelWindowTokens
+  const isEstimated = serverUsage ? serverUsage.estimated : isModelWindowEstimated
   const percent = windowTokens > 0
     ? Math.min(100, Math.max(0, Math.round((inputTokens / windowTokens) * 100)))
     : 0

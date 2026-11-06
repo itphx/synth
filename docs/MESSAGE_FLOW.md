@@ -328,6 +328,9 @@ stateDiagram-v2
 - **Шаг.** Внутри `Busy` шаг живёт `step.started` → `part.*` → `step.finished`; при наличии
   вызовов между `step.finished` и `step.tools.finished` идёт **исполнение инструментов** (ход при
   этом остаётся `Busy`, `step.finished` означает лишь «вызов LLM завершён»).
+- **Служебный шаг сжатия** (ADR-119): помечен `kind: 'compression'` в `step.started`/`step.finished`;
+  его `usage` — расход вызова сжатия (весь транскрипт на входе), а не занятость контекстного окна.
+  Занятость после сжатия приходит полем `context_tokens` в `context.summarization_applied`.
 - **«Стоп»** (`POST /:id/abort`): пишется персистентный `status.cancelRequested` под локом →
   `orchestrator.cancel(streamId)` (graceful: `stream.cancelled` + частичный ответ) →
   `queueManager.requestStop(id)` (будит backoff, абортит LLM-вызов). Очистку

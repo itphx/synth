@@ -904,6 +904,12 @@
   ошибка, при `none`/`sliding_window` сжатие не запускается. Событие
   `context.summarization_applied` (`reason`, `mode`, `covered_indices`, `keep_from`, `usage`) —
   в обычном пути и при overflow; ожидание — `context.summarization_pending`.
+  **Занятость контекста (ADR-119).** Событие `context.summarization_applied` несёт аддитивные
+  `context_tokens`/`context_limit` — оценка занятости **после** сжатия (считается после
+  `disableCompressedMessages`; `usage` в событии — расход вызова сжатия, не занятость). Тот же
+  счётчик отдаётся в detail-DTO сессии как `context_usage {tokens, limit, estimated}`
+  (`serializeSession` c `contextOptimizer`; в списочных сводках не считается). Служебный шаг
+  сжатия помечен `kind: 'compression'` в `step.started`/`step.finished`.
   **Лимиты заметок сессии (`context.stickyNotes`).** Instance-wide ограничения `maxCount`/`maxChars`
   (дефолты 50/2000) резолвит `resolveStickyNotesLimits` (runtime `settings.json`/PG > `config.yaml` >
   схема; env нет), опция `getStickyNoteLimits` core-фабрики сессий читается на каждую операцию —

@@ -743,7 +743,10 @@ export function createSessionRoutes(
     c: Context,
     session: Session,
     userId?: string,
-    serializeOpts?: Pick<SerializeSessionOptions, 'includeMessages' | 'includePromptStates'>,
+    serializeOpts?: Pick<
+      SerializeSessionOptions,
+      'includeMessages' | 'includePromptStates' | 'contextOptimizer'
+    >,
   ) => {
     const canReveal = await resolveCanRevealSecrets(c, session, userId);
     return serializeSession(session, {
@@ -971,7 +974,15 @@ export function createSessionRoutes(
     await opts.onSessionCreated?.(await resolveUserId(c), session.id);
     eventBus.publish(session.id, 'session.created', serializeSession(session, { agentRegistry }));
     // Точечный ответ — сводка без истории (история — в `GET /:id/messages`).
-    return c.json(serializeSession(session, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }), 201);
+    // ADR-119: `context_usage` — занятость контекста «прямо сейчас».
+    return c.json(
+      serializeSession(session, {
+        agentRegistry,
+        ...SUMMARY_SERIALIZE_OPTS,
+        contextOptimizer: deps.contextOptimizer,
+      }),
+      201,
+    );
   });
 
   app.get('/:id', auth.requireAuth, scoped('sessions:read'), async (c) => {
@@ -998,7 +1009,14 @@ export function createSessionRoutes(
     if (readonlyDenied) return readonlyDenied;
     // ADR-036: реальные значения секретов — только читателю с правом раскрытия.
     // Сводка без истории: полная история — в `GET /:id/messages`.
-    return c.json(await serializeForReader(c, session, undefined, SUMMARY_SERIALIZE_OPTS));
+    // ADR-119: `context_usage` — занятость контекста «прямо сейчас»
+    // (в списке сессий оценка не считается — она линейна по истории).
+    return c.json(
+      await serializeForReader(c, session, undefined, {
+        ...SUMMARY_SERIALIZE_OPTS,
+        contextOptimizer: deps.contextOptimizer,
+      }),
+    );
   });
 
   app.patch('/:id', auth.requireAuth, scoped('sessions:prompt'), sessionModeGuard, async (c) => {
@@ -1313,7 +1331,14 @@ export function createSessionRoutes(
       await publishWorktreeUpdated({ eventBus, sessionStore: sessionManager }, event);
     }
     // Точечный ответ — сводка без истории (история — в `GET /:id/messages`).
-    return c.json(serializeSession(resultSession, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }));
+    // ADR-119: `context_usage` — занятость контекста «прямо сейчас».
+    return c.json(
+      serializeSession(resultSession, {
+        agentRegistry,
+        ...SUMMARY_SERIALIZE_OPTS,
+        contextOptimizer: deps.contextOptimizer,
+      }),
+    );
   });
 
   app.delete('/:id', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
@@ -1648,7 +1673,13 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     eventBus.publish(updated.id, 'session.updated', serializeSession(updated, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }));
-    return c.json(serializeSession(updated, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }));
+    return c.json(
+      serializeSession(updated, {
+        agentRegistry,
+        ...SUMMARY_SERIALIZE_OPTS,
+        contextOptimizer: deps.contextOptimizer,
+      }),
+    );
   });
 
   app.post('/:id/optimization/check', auth.requireAuth, async (c) => {
@@ -2477,7 +2508,14 @@ export function createSessionRoutes(
     eventBus.publish(id, 'session.messages.cleared', { session_id: id });
     publishQueueState(eventBus, id, { pendingCount: 0, steerCount: 0 });
     // Точечный ответ — сводка без истории.
-    return c.json(serializeSession(session, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }));
+    // ADR-119: `context_usage` — занятость контекста «прямо сейчас».
+    return c.json(
+      serializeSession(session, {
+        agentRegistry,
+        ...SUMMARY_SERIALIZE_OPTS,
+        contextOptimizer: deps.contextOptimizer,
+      }),
+    );
   });
 
   app.post('/:id/abort', auth.requireAuth, async (c) => {
@@ -2945,7 +2983,15 @@ export function createSessionRoutes(
     await opts.onSessionForked?.(await resolveUserId(c), fork.id);
     eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork, { agentRegistry }));
     // Точечный ответ — сводка без истории.
-    return c.json(serializeSession(fork, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }), 201);
+    // ADR-119: `context_usage` — занятость контекста «прямо сейчас».
+    return c.json(
+      serializeSession(fork, {
+        agentRegistry,
+        ...SUMMARY_SERIALIZE_OPTS,
+        contextOptimizer: deps.contextOptimizer,
+      }),
+      201,
+    );
   });
 
   /** Ссылка удалённой сессии: `sessionId`/`session_id` переписываются в `remote:`. */

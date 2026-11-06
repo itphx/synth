@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSessionRoutes } from './sessions.js';
+import { createSessionRoutes, type SessionRoutesDeps } from './sessions.js';
 import {
   SessionManager,
   EventBus,
@@ -104,6 +104,7 @@ function createTestApp(
   profilesStore?: ProfileStore,
   opts?: { resolveDefaultAgent?: () => string | Promise<string> },
   requestSessionService?: unknown,
+  extraDeps?: Partial<SessionRoutesDeps>,
 ) {
   const app = new Hono();
   const fileStore = new FileStore({ dataDir: tmpDir });
@@ -124,6 +125,7 @@ function createTestApp(
       projectStore,
       profilesStore,
       ...(requestSessionService ? { requestSessionService: requestSessionService as any } : {}),
+      ...(extraDeps ?? {}),
     },
     opts ?? {},
   );
@@ -1718,5 +1720,56 @@ describe('POST /api/v2/sessions/:id/clear — события синхрониз�
     const res = await app.request('/api/v2/sessions/missing/clear', { method: 'POST' });
     expect(res.status).toBe(404);
     expect(published).toEqual([]);
+  });
+});
+
+/**
+ * ADR-119: занятость контекстного окна в DTO сессии.
+ *
+ * Поле считается только для **одной** сессии (detail `GET /:id` и точечные
+ * ответы) — в списочной сводке его нет: оценка линейна по истории.
+ */
+describe('Session API Routes — context_usage (ADR-119)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-ctx-usage-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Стаб оптимизатора: счётчик занятости и окно модели. */
+  function contextOptimizerStub() {
+    return {
+      estimatePromptTokens: vi.fn(() => 12_345),
+      getContextWindow: vi.fn(() => 100_000),
+    } as unknown as SessionRoutesDeps['contextOptimizer'];
+  }
+
+  it('GET /api/v2/sessions/:id отдаёт context_usage {tokens, limit, estimated}', async () => {
+    const { app, sessionManager } = createTestApp(
+      tmpDir, undefined, undefined, undefined, { contextOptimizer: contextOptimizerStub() },
+    );
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}`);
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.context_usage).toEqual({ tokens: 12_345, limit: 100_000, estimated: false });
+  });
+
+  it('GET /api/v2/sessions (список) не содержит context_usage', async () => {
+    const { app, sessionManager } = createTestApp(
+      tmpDir, undefined, undefined, undefined, { contextOptimizer: contextOptimizerStub() },
+    );
+    await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+    const res = await app.request('/api/v2/sessions');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.sessions.length).toBeGreaterThan(0);
+    expect('context_usage' in body.sessions[0]).toBe(false);
   });
 });

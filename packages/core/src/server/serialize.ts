@@ -2,6 +2,19 @@ import type { Session, Message, Project, StatusMessage } from '@itphx/synth-shar
 import type { EnqueuedMessageSnapshot } from '@itphx/synth-shared/types';
 import { isModeApplicable } from '../engine/agents/mode.js';
 import { getLiveStreamSnapshot } from '../engine/live-stream-snapshot.js';
+import {
+  computeContextUsage,
+  type ContextUsage,
+  type ContextUsageSource,
+} from '../engine/context/context-usage.js';
+
+/**
+ * ADR-119: занятость контекста — расчёт живёт в слое движка
+ * (`engine/context/context-usage.ts`), здесь только ре-экспорт для потребителей
+ * DTO (внешние импорты не меняются).
+ */
+export { computeContextUsage };
+export type { ContextUsage, ContextUsageSource };
 
 /** Минимальный тип реестра агентов для вычисления modeApplicable. */
 export interface SerializeAgentRegistry {
@@ -38,6 +51,19 @@ export interface SerializeSessionOptions {
    * @default true
    */
   includePromptStates?: boolean;
+  /**
+   * ADR-119: посчитать занятость контекстного окна и отдать её в DTO
+   * (`context_usage`).
+   *
+   * Поле **аддитивное** и **вычисляемое**: в списочных сводках сессий
+   * (`GET /sessions`) оценка не считается — она проходит по истории и
+   * линейна по числу сообщений. Значение нужно только там, где отдаётся
+   * **одна** сессия (деталь `GET /sessions/:id`, точечные ответы).
+   *
+   * Не передан оптимизатор — ключа `context_usage` в DTO нет вовсе (клиент
+   * без него работает как прежде).
+   */
+  contextOptimizer?: ContextUsageSource | null;
 }
 
 /**
@@ -227,6 +253,16 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     input_tokens: session.inputTokens,
     output_tokens: session.outputTokens,
     total_tokens: session.totalTokens,
+    /**
+     * ADR-119: занятость контекстного окна «прямо сейчас» — оценка после
+     * учёта компактизации (тот же счётчик, что триггерит авто-сжатие).
+     *
+     * Поле **аддитивное**: считается только там, где передан оптимизатор
+     * (`opts.contextOptimizer`) — в списочных сводках сессий его нет.
+     */
+    ...(opts?.contextOptimizer
+      ? { context_usage: computeContextUsage(opts.contextOptimizer, session) }
+      : {}),
     cache_read_tokens: session.cacheReadTokens,
     cache_write_tokens: session.cacheWriteTokens,
     reasoning_tokens: session.reasoningTokens,

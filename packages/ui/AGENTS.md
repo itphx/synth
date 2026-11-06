@@ -331,6 +331,12 @@
   `input + output`, последнего ответа. В Synth `input_tokens` уже включает cache read/write, а
   reasoning входит в output — отдельно их **не** прибавлять. «Сессия» показывает счётчики
   `Session` (сумма всех ходов) — это корректно и не меняется.
+- **Занятость контекста — из серверной оценки (ADR-119).** `useContextWindowUsage` (шапка чата +
+  `StatsTab`) берёт `contextUsageBySession` (`chatStore`) — из detail-DTO `context_usage` и из
+  `context.summarization_applied.context_tokens`; клиентский фолбэк (usage последнего
+  assistant) применяется только если серверного значения нет. Замер assistant **до** последнего
+  SUMMARY не считается, а `usage` служебного шага сжатия (`kind: 'compression'`) занятостью
+  окна **не является**.
 - **TPS/«Длительность» последнего ответа** — от **своего** вызова: `metadata.step_duration_ms ??
   metadata.duration_ms` (`StatsTab.lastDurationMs`, `MessageStats`), при наличии
   `step_duration_ms` TPS = output последнего вызова / его длительность. `duration_ms` остаётся

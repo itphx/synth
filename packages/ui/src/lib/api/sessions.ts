@@ -95,6 +95,12 @@ export interface SessionData {
   sticky_notes: StickyNoteData[]
   summarization_pending: boolean
   can_summarize: boolean
+  /**
+   * ADR-119: занятость контекстного окна «прямо сейчас» (серверная оценка
+   * после учёта компактизации). Поле аддитивное: в списке сессий его нет —
+   * только в точечных ответах (деталь сессии).
+   */
+  context_usage?: ContextUsage | null
   input_tokens: number
   output_tokens: number
   total_tokens: number
@@ -112,6 +118,22 @@ export interface SessionData {
  * (каталог/ветка копируются из записи, чтобы резолв рабочего каталога не
  * требовал чтения порта на каждом ходу). В ответах API — snake_case.
  */
+/**
+ * ADR-119: занятость контекстного окна сессии — **серверная** оценка.
+ *
+ * `tokens` — оценка объёма контекста после учёта компактизации (тот же
+ * счётчик, что триггерит авто-сжатие в ядре), `limit` — окно модели,
+ * `estimated` — окно неизвестно (фолбэк-оценка).
+ */
+export interface ContextUsage {
+  /** Оценка токенов в контексте сессии. */
+  tokens: number
+  /** Окно модели (или фолбэк-оценка). */
+  limit: number
+  /** Окно — фолбэк-оценка: у модели не задан `context_window`. */
+  estimated: boolean
+}
+
 export interface SessionWorktreeBinding {
   /** Идентификатор записи worktree. */
   worktree_id: string

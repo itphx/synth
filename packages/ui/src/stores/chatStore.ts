@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { type ReasoningBlock } from '@itphx/synth-shared/utils'
 import type { MessageStatus, Part, PartMetadata, PartType } from '@itphx/synth-shared/types'
 import type { StickyNoteData } from '@/lib/api/synthApi'
+import type { ContextUsage } from '@/lib/api/sessions'
 import { costCurrencyKey } from '@/lib/currency'
 
 /**
@@ -444,6 +445,17 @@ interface ChatStore {
   finalErrorBySession: Record<string, FinalStreamError | null>
   stickyNotesBySession: Record<string, StickyNoteData[]>
   summarizationPendingBySession: Record<string, boolean>
+  /**
+   * ADR-119: **серверная** занятость контекстного окна сессии — источник
+   * истины для индикатора (шапка чата, панель «Контекстное окно»).
+   *
+   * Заполняется из DTO детали сессии (`context_usage`) и из события
+   * `context.summarization_applied` (`context_tokens`/`context_limit`) —
+   * поэтому после компактизации индикатор уменьшается сразу, без
+   * перечитывания истории. Значение `usage` последнего assistant-сообщения
+   * для этого НЕ годится: после сжатия оно остаётся до-сжатым.
+   */
+  contextUsageBySession: Record<string, ContextUsage>
   /** ADR-070 §2.6: live-вклад саб-агентов родительской сессии (для StatsTab). */
   liveSubagentUsageBySession: Record<string, LiveSubagentSessionUsage>
   /**
@@ -562,6 +574,13 @@ interface ChatStore {
   openDebugModal: (sessionId: string, messageId: string) => void
   closeDebugModal: () => void
   setSummarizationPending: (sessionId: string, pending: boolean) => void
+  /**
+   * ADR-119: записать серверную занятость контекста сессии.
+   *
+   * `null` — значение неизвестно (сессия без оценки): индикатор падает на
+   * клиентский фоллбэк (последний assistant-сообщение).
+   */
+  setContextUsage: (sessionId: string, usage: ContextUsage | null) => void
 
   retryInputBySession: Record<string, string>
   setRetryInput: (sessionId: string, text: string) => void
@@ -635,6 +654,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   finalErrorBySession: {},
   stickyNotesBySession: {},
   summarizationPendingBySession: {},
+  contextUsageBySession: {},
   liveSubagentUsageBySession: {},
   historyPageBySession: {},
   debugModalSessionId: null,
@@ -1179,6 +1199,14 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((s) => ({
       summarizationPendingBySession: { ...s.summarizationPendingBySession, [sessionId]: pending },
     })),
+
+  setContextUsage: (sessionId, usage) =>
+    set((s) => {
+      const next = { ...s.contextUsageBySession }
+      if (usage) next[sessionId] = usage
+      else delete next[sessionId]
+      return { contextUsageBySession: next }
+    }),
 
   setRetryInput: (sessionId, text) =>
     set((s) => ({
