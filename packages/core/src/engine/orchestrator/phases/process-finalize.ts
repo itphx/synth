@@ -213,6 +213,19 @@ export interface ProcessFinalizeDeps {
   ) => { usage: TokenUsage; estimated: boolean };
   computeMessageCost: (model: string | undefined, usage: TokenUsage | undefined) => UsageCost | null;
   saveAssistantMessage: SaveAssistantMessageFn;
+  /**
+   * ADR-118 §1: точечная запись `metadata.tool_results` в сообщение шага
+   * (та же операция, что у цикла Tool Use). Нужна ветке отмены **между
+   * шагами**: результаты вызовов обязаны остаться в своём шаге, иначе
+   * карточки инструментов (в т.ч. `question`, снятый «Стопом») теряются.
+   * Не задана — ветка отмены пишет вызовы только в финальное сообщение
+   * (legacy-поведение).
+   */
+  persistStepToolResults?: (
+    sessionId: string,
+    messageId: string,
+    toolResults: Array<Record<string, unknown>>,
+  ) => Promise<void>;
   resolveAssistantStatus: (
     isCancelled: boolean,
     metadataExtra?: Record<string, unknown>,
@@ -471,6 +484,17 @@ export async function runProcessFinalize(
     // Сообщение сохраняем всегда (в т.ч. при пустом контенте) — статус и
     // статистика отмены не должны теряться.
     //
+    // ADR-118 §1: результаты вызовов последнего шага фиксируем в **его**
+    // сообщении (как это делает цикл Tool Use). Иначе при отмене между шагами
+    // `metadata.tool_results` не пишется никуда (`saveAssistantMessage` не
+    // кладёт их в сообщение хода), и карточки инструментов — в т.ч. `question`,
+    // снятый «Стопом», — из истории пропадают.
+    if (finalStepMessageId && allToolCalls.length > 0 && deps.persistStepToolResults) {
+      const stepResults = allToolCalls.filter((tc) => tc.iteration === finalStepIndex);
+      if (stepResults.length > 0) {
+        await deps.persistStepToolResults(session.id, finalStepMessageId, stepResults);
+      }
+    }
     // ADR-118 §1: id сообщения шага передаём, только если он ещё не занят
     // записью в истории (см. `isStepMessageIdFree`): если запись шага уже
     // сохранена (отмена пришла во время исполнения тула), новая запись

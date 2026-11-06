@@ -568,15 +568,22 @@ export function planMessageStepPartsCleanup(
   });
 
   // 4. Видимость старых шагов: снять `tool_chain` там, где содержимое реально есть.
-  for (const turnSteps of steps.values()) {
-    for (const index of turnSteps) {
-      const original = messages[index]!;
-      if (original.metadata?.tool_chain !== true) continue;
-      const hasCalls = (original.toolCalls?.length ?? 0) > 0;
-      if (!hasCalls && !_hasVisibleContent(original)) continue;
-      delete ensureMetadata(index).tool_chain;
-    }
-  }
+  //
+  // ADR-118 §1: assistant-сообщение с непустым `metadata.tool_results` —
+  // носитель карточек инструментов; оно обязано быть видимым **независимо**
+  // от `turnId`/`stepIndex` (legacy-записи без разметки шага теряли карточки
+  // после перезагрузки). Для размеченных шагов правило прежнее: видимым
+  // становится шаг с вызовами или реальным содержимым.
+  messages.forEach((original, index) => {
+    if (original.role !== MessageRole.ASSISTANT) return;
+    if (original.metadata?.tool_chain !== true) return;
+    const hasResults = Array.isArray(original.metadata.tool_results)
+      && original.metadata.tool_results.length > 0;
+    const isTurnStep = Boolean(original.turnId) && original.stepIndex !== undefined;
+    const hasCalls = (original.toolCalls?.length ?? 0) > 0;
+    if (!hasResults && !(isTurnStep && (hasCalls || _hasVisibleContent(original)))) return;
+    delete ensureMetadata(index).tool_chain;
+  });
 
   // Итоговый diff: патчи только для реально изменившихся сообщений.
   const plan: Array<{ index: number; patch: Partial<Message> }> = [];
@@ -668,5 +675,106 @@ export async function migrateMessageStreamV2StepParts(
   }
 
   await deps.settingsStore.setMigrationMarker(MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION);
+  return updated;
+}
+
+// ── ADR-118: видимость шагов с карточками инструментов ──
+
+/**
+ * Маркер разовой миграции видимости шагов с результатами инструментов.
+ *
+ * Отдельный от `MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION`: та миграция уже
+ * закрыта на существующих инстансах, а правило «шаг с `tool_results` видим»
+ * должно примениться и к ним.
+ */
+export const MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION = 'migrations.message-stream-v2-visible-steps';
+
+/**
+ * ADR-118 §1: план снятия legacy-маркера `metadata.tool_chain` у
+ * assistant-сообщений с непустым `metadata.tool_results`. **Чистая функция**.
+ *
+ * Такие сообщения — носители карточек инструментов (DTO `tool_calls`); скрывать
+ * их нельзя, иначе после reload карточки (в т.ч. `question`) из ленты
+ * пропадают. `role: 'tool'` и сообщения без результатов не трогаются.
+ *
+ * @returns патчи по индексам истории (пусто — мигрировать нечего).
+ */
+export function planVisibleStepCleanup(
+  session: Session,
+): Array<{ index: number; patch: Partial<Message> }> {
+  const messages = session.messages ?? [];
+  const plan: Array<{ index: number; patch: Partial<Message> }> = [];
+  messages.forEach((message, index) => {
+    if (message.role !== MessageRole.ASSISTANT) return;
+    if (message.metadata?.tool_chain !== true) return;
+    const results = message.metadata.tool_results;
+    if (!Array.isArray(results) || results.length === 0) return;
+    const metadata = { ...(message.metadata ?? {}) };
+    delete metadata.tool_chain;
+    plan.push({
+      index,
+      patch: { metadata },
+    });
+  });
+  return plan;
+}
+
+/**
+ * ADR-118 §1: идемпотентная миграция уже записанных сессий — снимает
+ * `tool_chain` у assistant-шагов с карточками инструментов
+ * (`planVisibleStepCleanup`). Закрывается маркером
+ * `MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION`.
+ *
+ * Касается всех сессий (включая дочерние): карточки инструментов нужны и во
+ * вкладке саб-агента; отчёт ребёнка при этом не переписывается — меняется
+ * только маркер видимости.
+ *
+ * @returns число обновлённых сообщений (0 — миграция уже выполнялась).
+ */
+export async function migrateMessageStreamV2VisibleSteps(
+  deps: MessageStepPartsMigrationDeps,
+): Promise<number> {
+  if (await deps.settingsStore.getMigrationMarker(MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION)) return 0;
+
+  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true });
+
+  let updated = 0;
+  for (const summary of sessions) {
+    const full = await deps.sessionManager.getSession(summary.id);
+    if (!full) continue;
+    const messages = full.messages ?? [];
+    if (messages.length === 0) continue;
+
+    const plan = planVisibleStepCleanup(full);
+    if (plan.length === 0) continue;
+
+    const addressing = resolveAddressing(messages);
+    if (!addressing) {
+      warning(
+        'MIGRATION',
+        `Сессия ${full.id}: миграция видимости шагов ADR-118 пропущена — `
+          + 'сообщения не адресуются уникально (дубли seq и id)',
+      );
+      continue;
+    }
+
+    for (const entry of plan) {
+      const message = messages[entry.index]!;
+      const patched: Message = { ...message, ...entry.patch };
+      // Адресация по `id`: нечисловой `seq` переключает порт на поиск по `id`.
+      const target = addressing === 'id' ? { ...patched, seq: Number.NaN } : patched;
+      const saved = await deps.sessionManager.updateMessage(full.id, target);
+      if (!saved || saved.id !== message.id) {
+        warning(
+          'MIGRATION',
+          `Сессия ${full.id}: сообщение ${message.id} не обновлено миграцией видимости шагов ADR-118`,
+        );
+        continue;
+      }
+      updated++;
+    }
+  }
+
+  await deps.settingsStore.setMigrationMarker(MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION);
   return updated;
 }

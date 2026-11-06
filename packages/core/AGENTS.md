@@ -406,6 +406,17 @@
   вида переносятся в сообщения своих шагов (слияние по `id` вызова), удаляется
   `intermediate_text_blocks`, у видимых шагов снимается `tool_chain`; только основные сессии
   (`parentId == null` — отчёт дочерней сессии монолитен), построчно и идемпотентно.
+  **Видимость шагов с карточками** (`schemaVersion` 4) — `planVisibleStepCleanup` /
+  `migrateMessageStreamV2VisibleSteps`, маркер `migrations.message-stream-v2-visible-steps`:
+  `tool_chain` снимается у **любого** assistant-сообщения с непустым `metadata.tool_results`
+  (независимо от `turnId`/`stepIndex`; `role: 'tool'` не трогается). Отдельный маркер нужен,
+  потому что предыдущая миграция на существующих инстансах уже закрыта.
+- **Отмена не теряет карточки инструментов.** В ветке отмены **между шагами**
+  (`phases/process-finalize.ts`, `cancelledBeforeFinal`) результаты вызовов последнего шага
+  точечно пишутся в его сообщение (`persistStepToolResults` → та же
+  `_persistStepToolResults`), а не только передаются в финальное сообщение (там
+  `metadata.tool_results` для сообщений хода не пишется). Иначе `question`, снятый «Стопом»,
+  и другие вызовы исчезали из истории.
 - **Адресация мутаций — только по `id` (ADR-118 §7)** (`server/routes/messages.ts`):
   `PATCH /:sessionId/:messageId/{toggle,pin}`, `DELETE /:sessionId/:messageId`,
   `POST /:sessionId/:messageId/retry`, `GET /:sessionId/:messageId/debug` и

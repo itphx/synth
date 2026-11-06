@@ -10,11 +10,14 @@ import { RuntimeSettingsStore } from './runtime-settings.js';
 import {
   MESSAGE_STREAM_V2_MIGRATION,
   MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION,
+  MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION,
   migrateMessageStreamV2,
   migrateMessageStreamV2StepParts,
+  migrateMessageStreamV2VisibleSteps,
   migrateSessionScopeSnapshots,
   planMessageStepPartsCleanup,
   planMessageStreamMigration,
+  planVisibleStepCleanup,
   SESSION_SCOPE_SNAPSHOT_MIGRATION,
 } from './migrations.js';
 
@@ -430,7 +433,7 @@ describe('migrateMessageStreamV2StepParts (ADR-118 §1: содержимое с�
     expect(JSON.stringify(after)).toBe(JSON.stringify(before));
   });
 
-  it('legacy-сообщения без turn_id не меняются', async () => {
+  it('legacy assistant с tool_results без turn_id: tool_chain снимается (карточки видны)', async () => {
     const legacy: Message[] = [
       msg(MessageRole.USER, 1),
       msg(MessageRole.ASSISTANT, 2, {
@@ -444,13 +447,15 @@ describe('migrateMessageStreamV2StepParts (ADR-118 §1: содержимое с�
       }),
     ];
     const sessionId = await seedSession(legacy);
-    const before = (await sessionManager.getSession(sessionId))!.messages;
 
-    expect(await migrateMessageStreamV2StepParts({ sessionManager, settingsStore })).toBe(0);
+    // ADR-118 §1: шаг с карточками инструментов виден независимо от разметки
+    // шага — маркер снимается, даже если `turnId`/`stepIndex` нет.
+    expect(await migrateMessageStreamV2StepParts({ sessionManager, settingsStore })).toBe(1);
     const after = (await sessionManager.getSession(sessionId))!.messages;
-    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
-    expect(after[1]!.metadata!.tool_chain).toBe(true);
+    expect(after[1]!.metadata!.tool_chain).toBeUndefined();
     expect(after[1]!.metadata!.tool_results).toEqual([{ id: 'call-old', result: 'r', iteration: 0 }]);
+    // Прочие legacy-поля не переписываются этой миграцией.
+    expect(after[1]!.metadata!.intermediate_text_blocks).toEqual([{ text: 'блок', iteration: 0 }]);
   });
 
   it('дочерняя сессия (parentId) не меняется — отчёт саб-агента монолитный', async () => {
@@ -542,5 +547,92 @@ describe('planMessageStepPartsCleanup (ADR-118 §1: чистая функция 
     } as unknown as Session;
     expect(planMessageStepPartsCleanup(child)).toEqual([]);
     expect(planMessageStepPartsCleanup({ id: 's', messages: [] } as unknown as Session)).toEqual([]);
+  });
+});
+
+describe('migrateMessageStreamV2VisibleSteps (ADR-118 §1: видимость шагов с карточками)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let settingsStore: RuntimeSettingsStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-migrate-visible-steps-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function msg(role: MessageRole, seq: number, overrides: Partial<Message> = {}): Message {
+    return {
+      id: `msg-${seq}`,
+      role,
+      seq,
+      origin: 'local',
+      parts: [{ id: `part-${seq}`, type: 'text', data: '' }],
+      content: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...overrides,
+    } as Message;
+  }
+
+  async function seedSession(messages: Message[]): Promise<string> {
+    const session = await sessionManager.createSession({});
+    await sessionManager.saveSession({ ...session, messages });
+    return session.id;
+  }
+
+  it('снимает tool_chain у assistant с tool_results без turn_id, tool-сообщение не трогает', async () => {
+    const results = [{ id: 'call_q', name: 'question', args: { questions: [] }, result: { content: 'ok' } }];
+    const sessionId = await seedSession([
+      msg(MessageRole.USER, 1),
+      msg(MessageRole.ASSISTANT, 2, {
+        // legacy-запись без turnId/stepIndex — раньше оставалась скрытой.
+        metadata: { tool_chain: true, tool_results: results },
+      }),
+      msg(MessageRole.TOOL, 3, {
+        toolCallId: 'call_q',
+        metadata: { tool_chain: true },
+      }),
+    ]);
+
+    expect(await migrateMessageStreamV2VisibleSteps({ sessionManager, settingsStore })).toBe(1);
+
+    const after = (await sessionManager.getSession(sessionId))!.messages;
+    expect(after[1]!.metadata!.tool_chain).toBeUndefined();
+    expect(after[1]!.metadata!.tool_results).toEqual(results);
+    // Служебный tool-результат остаётся скрытым.
+    expect(after[2]!.metadata!.tool_chain).toBe(true);
+  });
+
+  it('идемпотентна: повторный прогон — 0 изменений и маркер', async () => {
+    const sessionId = await seedSession([
+      msg(MessageRole.ASSISTANT, 1, {
+        metadata: { tool_chain: true, tool_results: [{ id: 'call-1', name: 'read_file' }] },
+      }),
+    ]);
+    expect(await migrateMessageStreamV2VisibleSteps({ sessionManager, settingsStore })).toBe(1);
+    expect(await settingsStore.getMigrationMarker(MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION)).toBe(true);
+    const before = (await sessionManager.getSession(sessionId))!.messages;
+
+    expect(await migrateMessageStreamV2VisibleSteps({ sessionManager, settingsStore })).toBe(0);
+    const after = (await sessionManager.getSession(sessionId))!.messages;
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+  });
+
+  it('assistant без tool_results и пустой массив не трогаются', () => {
+    const session = {
+      id: 'sess-1',
+      messages: [
+        msg(MessageRole.ASSISTANT, 1, { metadata: { tool_chain: true } }),
+        msg(MessageRole.ASSISTANT, 2, { metadata: { tool_chain: true, tool_results: [] } }),
+      ],
+    } as unknown as Session;
+    expect(planVisibleStepCleanup(session)).toEqual([]);
   });
 });

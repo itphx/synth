@@ -3211,6 +3211,8 @@ export class ChatOrchestrator {
         this._estimateUsage(usage, promptChars, outputChars),
       computeMessageCost: (model, usage) => this._computeMessageCost(model, usage),
       saveAssistantMessage: this._saveAssistantMessage.bind(this),
+      persistStepToolResults: (sessionId, messageId, toolResults) =>
+        this._persistStepToolResults(sessionId, messageId, toolResults),
       resolveAssistantStatus: (isCancelled, metadataExtra) =>
         this._resolveAssistantStatus(isCancelled, metadataExtra),
       getAssistantSecrets: (sessionId, content) => this._getAssistantSecrets(sessionId, content),

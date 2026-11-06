@@ -13,8 +13,10 @@ import type { SessionManager, SessionProjectStoreLike } from '../sessions/manage
 import {
   MESSAGE_STREAM_V2_MIGRATION,
   MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION,
+  MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION,
   migrateMessageStreamV2,
   migrateMessageStreamV2StepParts,
+  migrateMessageStreamV2VisibleSteps,
   migrateSessionScopeSnapshots,
   SESSION_SCOPE_SNAPSHOT_MIGRATION,
 } from './migrations.js';
@@ -156,6 +158,28 @@ export const MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION_V1: Migration = {
 };
 
 /**
+ * ADR-118 §1: разовая миграция видимости шагов с карточками инструментов —
+ * снимает legacy-маркер `tool_chain` у assistant-сообщений с непустым
+ * `metadata.tool_results` (иначе после reload пропадают карточки вызовов,
+ * в т.ч. `question`). Отдельный маркер
+ * `migrations.message-stream-v2-visible-steps`: предыдущая миграция содержимого
+ * ходов на существующих инстансах уже закрыта, и её правило к ним не применится.
+ */
+export const MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION_V1: Migration = {
+  id: MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION,
+  toVersion: 4,
+  description: 'Видимость шагов с карточками инструментов: снятие legacy tool_chain (ADR-118)',
+  run(deps: MigrationDeps): Promise<number> {
+    // Нет менеджера сессий — мигрировать нечего (каталог сессий не сконфигурирован).
+    if (!deps.sessionManager) return Promise.resolve(0);
+    return migrateMessageStreamV2VisibleSteps({
+      sessionManager: deps.sessionManager,
+      settingsStore: deps.settingsStore,
+    });
+  },
+};
+
+/**
  * Реестр миграций, отсортированный по `toVersion` (`SCHEMA_VERSION` =
  * max `toVersion`). Порядок применения — по возрастанию версии.
  */
@@ -163,6 +187,7 @@ export const MIGRATIONS: Migration[] = [
   SESSION_SCOPE_SNAPSHOTS_MIGRATION_V1,
   MESSAGE_STREAM_V2_MIGRATION_V1,
   MESSAGE_STREAM_V2_STEP_PARTS_MIGRATION_V1,
+  MESSAGE_STREAM_V2_VISIBLE_STEPS_MIGRATION_V1,
 ].sort((a, b) => a.toVersion - b.toVersion);
 
 /** Текущая (ожидаемая кодом) версия схемы данных — max `toVersion` реестра. */

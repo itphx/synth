@@ -81,6 +81,80 @@ function truncate(str: string, maxLen: number): string {
   return str.slice(0, maxLen) + '…'
 }
 
+/** Строка пары «вопрос → ответ» для карточки тула `question`. */
+interface QuestionAnswerRow {
+  header?: string
+  question: string
+  answer: string
+}
+
+/**
+ * Пары «вопрос → выбранный ответ» из аргументов и результата тула `question`.
+ *
+ * Источник — `result.metadata.answers` (`string[][]`, значения `options[].value`)
+ * и `args.questions` (состав вопроса). Значения маппятся на `options[].label`;
+ * неизвестное значение показывается как есть; несколько выбранных вариантов
+ * (`multiple`) — через запятую. Форма не совпала — `null` (рендерим прежний
+ * текст результата).
+ */
+function questionAnswerRows(
+  args: Record<string, unknown> | undefined,
+  result: ToolCallData['result'] | undefined,
+): QuestionAnswerRow[] | null {
+  const answers = result?.metadata?.answers
+  const questions = args?.questions
+  if (!Array.isArray(answers) || !Array.isArray(questions)) return null
+  const rows: QuestionAnswerRow[] = []
+  for (let index = 0; index < questions.length; index += 1) {
+    const item = questions[index] as Record<string, unknown> | null | undefined
+    if (!item || typeof item !== 'object') return null
+    const question = typeof item.question === 'string' ? item.question : ''
+    if (!question) return null
+    const selected = answers[index]
+    if (!Array.isArray(selected)) return null
+    const options = Array.isArray(item.options)
+      ? (item.options as Array<Record<string, unknown> | null | undefined>)
+      : []
+    const values = selected.map((value) => {
+      const raw = typeof value === 'string' ? value : String(value)
+      const option = options.find((candidate) => candidate && candidate.value === raw)
+      const label = option && typeof option.label === 'string' ? option.label : ''
+      return label || raw
+    })
+    rows.push({
+      ...(typeof item.header === 'string' && item.header ? { header: item.header } : {}),
+      question,
+      answer: values.join(', '),
+    })
+  }
+  return rows.length > 0 ? rows : null
+}
+
+/** Читаемые пары «вопрос → ответ» в карточке тула `question`. */
+function QuestionAnswers({
+  rows,
+  emptyText,
+}: {
+  rows: QuestionAnswerRow[]
+  emptyText: string
+}) {
+  return (
+    <div className="space-y-2">
+      {rows.map((row, index) => (
+        <div key={`${index}-${row.question}`} className="text-xs">
+          {row.header && (
+            <div className="text-[0.6875rem] font-medium text-muted-foreground">{row.header}</div>
+          )}
+          <div className="font-medium text-foreground">{row.question}</div>
+          <div className="mt-0.5 text-muted-foreground">
+            {row.answer || <span className="italic opacity-60">{emptyText}</span>}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData['result']; toolCall: ToolCallData }) {
   const [showReasoning, setShowReasoning] = useState(false)
   const [showToolCalls, setShowToolCalls] = useState(false)
@@ -152,9 +226,16 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
   const { t } = useI18n()
   // i18n ядра: metadata.i18n у tool_result → перевод по ключу (fallback — content).
   const resolveI18nText = useResolveI18n()
+  // `question`: ответы пользователя — главное содержимое, вкладка «Результат»
+  // открывается по умолчанию, но только если результат уже есть (иначе
+  // показываем аргументы — вопросы и варианты).
+  const isQuestionTool = toolCall.name === 'question'
+  const preferQuestionResult = isQuestionTool && !!toolCall.result?.content
   const [expanded, setExpanded] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
-  const [viewMode, setViewMode] = useState<'args' | 'result'>(resultFirst ? 'result' : 'args')
+  const [viewMode, setViewMode] = useState<'args' | 'result'>(
+    resultFirst || preferQuestionResult ? 'result' : 'args',
+  )
 
   const isError = toolCall.result?.isError
   const isRunning = toolCall.status === 'running'
@@ -164,6 +245,9 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
   const duration = formatDuration(started, completed)
   const hasResult = !!toolCall.result?.content
   const isSubagent = toolCall.name === 'task'
+  // Спец-рендер результата `question` — пары «вопрос → ответ»; форма не
+  // совпала — прежний текст результата.
+  const questionRows = isQuestionTool ? questionAnswerRows(toolCall.args, toolCall.result) : null
   // `resultFirst` — результат главное содержимое: вкладка «Результат» есть и
   // для `task` (карточка фонового прогона), и открыта по умолчанию.
   const showResultTab = !isSubagent || resultFirst === true
@@ -314,10 +398,13 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
                   <ArgsWithSecrets text={truncate(argsStr, 4000)} secrets={secrets} sessionId={sessionId} />
                 </pre>
               )}
-              {!isSubagent && viewMode === 'result' && hasResult && diff && (
+              {!isSubagent && viewMode === 'result' && hasResult && isQuestionTool && questionRows && (
+                <QuestionAnswers rows={questionRows} emptyText={t('common.empty')} />
+              )}
+              {!isSubagent && viewMode === 'result' && hasResult && !(isQuestionTool && questionRows) && diff && (
                 <DiffView diff={diff} />
               )}
-              {!isSubagent && viewMode === 'result' && hasResult && !diff && (
+              {!isSubagent && viewMode === 'result' && hasResult && !(isQuestionTool && questionRows) && !diff && (
                 <pre className={`text-xs whitespace-pre-wrap overflow-x-auto font-mono ${
                   isError ? 'text-status-error' : 'text-muted-foreground'
                 }`}>
