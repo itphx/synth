@@ -4,7 +4,7 @@ import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
 import { cn } from '@/lib/utils'
-import { isVisibleMessage } from './messageVisibility'
+import { isLlmFailureMessage, isVisibleMessage } from './messageVisibility'
 import { turnHasContent } from '@/lib/messageParts'
 import {
   sortMessagesByOrd,
@@ -340,7 +340,19 @@ export function MessageList({
   // отдельными пузырями — их визуальное представление уже в сообщениях шагов
   // хода (части, вызовы инструментов, рассуждения — ADR-118 §1). Durable
   // state-сообщения режима/плана/todo (ADR-070 §2.8) тоже скрыты в UI.
-  const visibleMessages = useMemo(() => messages.filter(isVisibleMessage), [messages])
+  //
+  // Терминальная ошибка **основной** сессии в ленте не показывается (решение
+  // владельца 2026-11-06): новые ошибки сообщением не сохраняются, а legacy-
+  // записи отсекает `isLlmFailureMessage`. Фильтр — **до** группировки по ходу,
+  // иначе скрытый сегмент оставлял бы пустой блок хода/разделитель. У дочерней
+  // сессии (`isSubagent`) ошибка остаётся: ребёнок рисует её системным
+  // сообщением `role: 'error'`.
+  const visibleMessages = useMemo(
+    () => messages.filter(
+      (m) => (isSubagent === true || !isLlmFailureMessage(m)) && isVisibleMessage(m),
+    ),
+    [messages, isSubagent],
+  )
   /** Группы-ходы (ADR-118 §1) — единица рендера и виртуализации. */
   const groups = useMemo(() => groupMessagesByTurn(visibleMessages), [visibleMessages])
 

@@ -34,6 +34,50 @@ function hasToolResults(m: Pick<MessageData, 'metadata'>): boolean {
 }
 
 /**
+ * Fallback-ответы ядра, которые сохраняются с `metadata.status: 'error'`, но
+ * ошибкой **не являются**: это содержательный финальный текст (лимит вывода,
+ * пустой ответ модели). Статусы `stopped`/`limit` у остальных fallback-ключей
+ * (`session.stopped`, `session.max_iterations`, …) под определение ошибки и так
+ * не попадают — см. `resolveAssistantStatus` в
+ * `packages/core/src/engine/orchestrator/persistence.ts`.
+ */
+const NON_ERROR_FALLBACK_KEYS = new Set([
+  'session.output_limit',
+  'session.empty_response',
+])
+
+/**
+ * Терминальная ошибка LLM **основной** сессии, сохранённая сообщением
+ * (legacy-запись или пустой шаг `step.finished error`).
+ *
+ * Новые ошибки основной сессии сообщением не сохраняются (решение владельца
+ * 2026-11-06; пользователю — плашка `StreamErrorPanel`), но в истории остались
+ * записи прежней версии. В ленте их быть не должно:
+ *  - только `role: 'assistant'`;
+ *  - `metadata.interrupted === true` — это **частичный ответ** после
+ *    «Стопа»/прерывания, а не ошибка (бейдж «Прервано»);
+ *  - терминальный статус ошибки: `status: 'error'` либо legacy
+ *    `status == null && metadata.status === 'error'`;
+ *  - fallback-ответы с содержательным текстом (`session.output_limit`,
+ *    `session.empty_response`) — не ошибка.
+ *
+ * Всё остальное (`router.*`, `worktree.*`, сырой текст без i18n) — ошибка.
+ */
+export function isLlmFailureMessage(
+  m: Pick<MessageData, 'role' | 'status' | 'metadata'>,
+): boolean {
+  if (m.role !== 'assistant') return false
+  const meta = m.metadata
+  if (meta?.interrupted === true) return false
+  const isTerminalError = m.status === 'error'
+    || (m.status == null && meta?.status === 'error')
+  if (!isTerminalError) return false
+  const key = (meta?.i18n as { key?: unknown } | undefined)?.key
+  if (typeof key === 'string' && NON_ERROR_FALLBACK_KEYS.has(key)) return false
+  return true
+}
+
+/**
  * Видимость сообщения в транскрипте: скрываем служебный tool-chain
  * (`metadata.tool_chain`) **после завершения** шага, state-сообщения
  * (ADR-070 §2.8) и user-сообщение системной команды (`metadata.commandPrompt`,

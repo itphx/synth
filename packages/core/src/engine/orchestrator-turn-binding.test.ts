@@ -11,7 +11,8 @@
  *  - успешный ход: сообщение шага получает `turnId`, `stepIndex: 0`,
  *    `status: 'completed'`; реплика пользователя — тот же `turnId`;
  *  - tool-loop из двух шагов: у двух assistant-сообщений разные `stepIndex`;
- *  - отмена — `status: 'cancelled'`, ошибка LLM — `status: 'error'`;
+ *  - отмена — `status: 'cancelled'`; ошибка LLM assistant-сообщения не
+ *    создаёт (терминальный `status: 'error'` — только у частичного черновика);
  *  - `turn.started`/`step.started`/`step.finished` несут те же `messageId`,
  *    что сохранены в сообщениях (финальное сообщение = сообщение шага).
  */
@@ -359,22 +360,24 @@ describe('ChatOrchestrator — turnId/stepIndex/status сообщений ход
     }
   });
 
-  it('ошибка LLM: сообщение об ошибке имеет status error и turnId хода', async () => {
+  it('ошибка LLM: сообщения об ошибке нет, частичный ответ привязан к шагу и ходу', async () => {
     const { messages } = await run('mockfailstep');
 
+    // Решение владельца 2026-11-06: assistant-сообщения об ошибке не создаётся.
     const assistants = messages.filter((m) => m.role === MessageRole.ASSISTANT);
-    const errorMessage = assistants.find((m) => m.metadata?.interrupted !== true)!;
-    expect(errorMessage.content).toContain('Unauthorized');
-    expect(errorMessage.status).toBe('error');
-    expect(errorMessage.turnId).toEqual(expect.any(String));
-    expect(errorMessage.stepIndex).toBe(0);
+    expect(assistants).toHaveLength(1);
 
-    // Частичный черновик того же шага тоже терминальный (`error`).
-    const interrupted = assistants.find((m) => m.metadata?.interrupted === true)!;
+    // Частичный черновик шага — терминальный (`error`), с меткой хода/шага.
+    const interrupted = assistants[0]!;
+    expect(interrupted.content).toContain('частичный ответ');
+    expect(interrupted.metadata?.interrupted).toBe(true);
     expect(interrupted.status).toBe('error');
-    expect(interrupted.turnId).toBe(errorMessage.turnId);
+    expect(interrupted.turnId).toEqual(expect.any(String));
+    expect(interrupted.stepIndex).toBe(0);
 
+    // Сбой виден в `last_error` user-реплики; ход у неё — тот же.
     const user = messages.find((m) => m.role === MessageRole.USER)!;
-    expect(user.turnId).toBe(errorMessage.turnId);
+    expect(user.metadata?.last_error).toContain('Unauthorized');
+    expect(user.turnId).toBe(interrupted.turnId);
   });
 });

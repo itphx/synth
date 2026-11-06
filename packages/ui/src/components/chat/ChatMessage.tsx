@@ -22,8 +22,7 @@ import {
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useAgentsStore } from '@/stores/agentsStore'
-import { useAuthStore } from '@/stores/authStore'
-import { useI18n, useResolveI18n, isValidI18nMeta } from '@/lib/i18n'
+import { useI18n, useResolveI18n } from '@/lib/i18n'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { buildPartsView, resolveLiveParts } from '@/lib/messageParts'
 import { buildUsageSegments } from '@/lib/statsSegments'
@@ -255,30 +254,17 @@ function ChatMessageInner({
   // ADR-104 (этап 2): прерванная генерация — ответ частичный, ход продолжился
   // с новым сообщением. Маркер — `metadata.interrupted` (его ставит
   // `StreamMessageDraft.abort`); у штатного прерывания хода статус ответа уже
-  // `interrupted`. Терминальная ошибка (`status: 'error'`) бейдж не получает —
-  // она рендерится inline-блоком ошибки.
+  // `interrupted`.
+  //
+  // Терминальная ошибка основной сессии в ленту больше **не попадает**
+  // (решение владельца 2026-11-06): ядро не создаёт assistant-сообщение, а
+  // legacy-записи скрывает `isLlmFailureMessage` (`MessageList`). Поэтому
+  // `status: 'error'` у частичного ответа после сбоя («Стоп»/прерывание,
+  // `metadata.interrupted === true`) — это именно ответ с бейджем «Прервано»,
+  // а не ошибка: условие по статусу здесь больше не нужно.
   const isInterrupted = isAssistant && (
     message.metadata?.status === 'interrupted'
-    || (message.metadata?.interrupted === true && message.status !== 'error')
-  )
-  /**
-   * Терминальная ошибка **хода** (ADR-041 × ADR-118): ядро сохраняет её
-   * assistant-сообщением с `metadata.status: 'error'`, а статус сообщения-шага
-   * (`step.finished`) терминален — `error`.
-   *
-   * - `status: 'error'` — единственный надёжный признак: у `StreamMessageDraft`
-   *   при «Стопе» частичный ответ тоже несёт `metadata.status: 'error'`, но
-   *   сообщение-шаг при этом `cancelled`;
-   * - fallback на `metadata.status` — только для legacy-сообщений без статуса
-   *   шага и только когда ответ не помечен `interrupted` (частичный ответ).
-   *
-   * Такое сообщение — не ответ агента, а inline системный блок ошибки.
-   */
-  const isTurnError = isAssistant && (
-    message.status === 'error' ||
-    (message.status == null
-      && message.metadata?.status === 'error'
-      && message.metadata?.interrupted !== true)
+    || message.metadata?.interrupted === true
   )
   const canRetry = isUser
   /** Дебаг-цель хода (финальное сообщение с `debug_data`) — фоллбек на само сообщение. */
@@ -718,7 +704,6 @@ function ChatMessageInner({
   // Компакт: сегмент со сводкой не должен исчезать, даже если весь его контент
   // скрыт (иначе пропала бы строка-сводка с тумблером).
   if (
-    !isTurnError &&
     !displayContent &&
     !message.reasoning &&
     liveToolCalls.length === 0 &&
@@ -743,108 +728,6 @@ function ChatMessageInner({
     )
   }
 
-  /*
-   * Ошибка **хода** (ADR-041 × ADR-118): assistant-сообщение с терминальным
-   * статусом `error` — это не ответ агента, а inline системный блок ошибки.
-   *
-   * В отличие от центрированного `Notice` («посреди ответа»), блок выровнен по
-   * левому краю: вне блока хода — `max-w-[85%]`, внутри (`bare`) — на всю ширину
-   * сегмента. Шапка сохраняет агента/модель/время (контекст ошибки), тело —
-   * локализованный текст (`metadata.i18n` → `router.*`/`worktree.*`/
-   * `session.output_limit`), действия — полный набор как у assistant.
-   * Тост открытой сессии (`transportStore.notifyMessage`) не трогается.
-   */
-  if (isTurnError) {
-    const errorLabel = t('chat.notice.error')
-    // Истёкшая серверная сессия гибрида: повтор запроса бессмысленен — в блоке
-    // есть действие повторного входа (тот же `logout()`, что и у плашки).
-    const needsHybridRelogin =
-      isValidI18nMeta(i18nMeta) && i18nMeta.key === 'router.remote_auth_expired'
-    const handleHybridRelogin = () => {
-      void useAuthStore.getState().logout()
-    }
-
-    const selectionCheckboxEl = selectionMode ? (
-      <div className="flex items-center self-stretch pr-1">
-        <input
-          type="checkbox"
-          checked={isSelected}
-          onChange={(e) => {
-            const ev = e.nativeEvent as MouseEvent
-            handleToggleSelect(ev.shiftKey ?? false)
-          }}
-          className="size-4 rounded border-border cursor-pointer accent-primary"
-        />
-      </div>
-    ) : null
-
-    const errorEl = (
-      <Notice
-        variant="error"
-        inline
-        fullWidth={bare}
-        testId="turn-error"
-        label={errorLabel}
-        ariaLabel={errorLabel}
-        meta={<MessageHeader message={message} isSubagent={isSubagent} embedded />}
-        actions={
-          actionsVisible ? (
-            <MessageActions
-              embedded
-              showCopy={false}
-              messageId={message.id}
-              role={message.role}
-              disabled={message.disabled}
-              pinned={message.pinned}
-              canRetry={canRetry}
-              hasDebug={hasDebug}
-              debugActive={debugActive}
-              readOnly={readOnly}
-              hasStats={showStats}
-              statsContent={<MessageStats message={message} />}
-              onCopy={handleCopy}
-              onToggle={handleToggle}
-              onPin={handlePin}
-              onDelete={handleDelete}
-              onRetry={handleRetry}
-              onDebug={handleDebug}
-              onFork={handleFork}
-            />
-          ) : undefined
-        }
-        onCopy={handleCopy}
-        disabled={message.disabled}
-      >
-        {partsContentEl}
-        {displayContent && (
-          <SecretMarkdown
-            content={resolveI18nText(i18nMeta, displayContent)}
-            secrets={secrets}
-            sessionId={sessionId}
-          />
-        )}
-        {needsHybridRelogin && (
-          <button
-            type="button"
-            data-testid="turn-error-hybrid-relogin"
-            onClick={handleHybridRelogin}
-            className="mt-2 inline-flex cursor-pointer items-center rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-destructive/15 text-destructive transition-colors hover:bg-destructive/25"
-          >
-            {t('chat.streamError.hybridRelogin')}
-          </button>
-        )}
-      </Notice>
-    )
-
-    if (!selectionMode) return errorEl
-    return (
-      <div className="flex items-start">
-        {selectionCheckboxEl}
-        <div className="min-w-0 flex-1">{errorEl}</div>
-      </div>
-    )
-  }
-
   // ADR-046 §7.1: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.
   const noticeVariant: NoticeVariant | null = isSummary
     ? 'summary'
@@ -861,10 +744,38 @@ function ChatMessageInner({
     // текст блока локализуется штатно — из `metadata.i18n`.
     const isRestartResumed = isInfo
       && (message.metadata as Record<string, unknown> | undefined)?.type === 'restart_resumed'
-    const label = isRestartResumed
-      ? t('chat.notice.restartResumed')
-      : t(`chat.notice.${noticeVariant}`)
-    const withMeta = noticeVariant === 'summary' || noticeVariant === 'debug'
+    /**
+     * Терминальная ошибка **саб-агента** (ADR-111): ребёнок сохраняет её
+     * сообщением `role: 'error'` (`run-cycle.ts`), и для пользователя это —
+     * системное сообщение по центру, как завершение фонового прогона
+     * (`Notice` variant `process`), только красное. Подпись — «Ошибка
+     * саб-агента · <имя>», шапка несёт модель/время (как у
+     * `background_run_result`), тело — локализованный текст ошибки.
+     *
+     * Основная сессия таких сообщений больше не создаёт (§8.14); legacy-записи
+     * скрывает `isLlmFailureMessage` (`MessageList`), поэтому ветка ниже
+     * остаётся только для совместимости.
+     */
+    const isSubagentError = isError && isSubagent === true
+    const subagentName = isSubagentError
+      ? (() => {
+          const role = typeof message.agent_role === 'string' ? message.agent_role : ''
+          if (!role) return ''
+          return agents.find((a) => a.id === role)?.display_name || role
+        })()
+      : ''
+    const label = isSubagentError
+      ? (subagentName
+          ? t('chat.notice.subagentError', { name: subagentName })
+          : t('chat.notice.error'))
+      : isRestartResumed
+        ? t('chat.notice.restartResumed')
+        : t(`chat.notice.${noticeVariant}`)
+    const withMeta = noticeVariant === 'summary' || noticeVariant === 'debug' || isSubagentError
+    // Действия — прежний набор: у summary/debug — полный ряд (рядом с копией
+    // `Notice`), у ошибки (в т.ч. саб-агента) — только копирование.
+    const withActions = noticeVariant === 'summary' || noticeVariant === 'debug'
+    const noticeIcon = isSubagentError ? 'robot-2' : undefined
     const selectionCheckboxEl = selectionMode ? (
       <div className="flex items-center self-stretch pr-1">
         <input
@@ -882,11 +793,12 @@ function ChatMessageInner({
     const noticeEl = (
       <Notice
         variant={noticeVariant}
+        icon={noticeIcon}
         label={label}
         ariaLabel={label}
         meta={withMeta ? <MessageHeader message={message} metaOnly /> : undefined}
         actions={
-          withMeta && actionsVisible ? (
+          withActions && actionsVisible ? (
             <MessageActions
               embedded
               showCopy={false}

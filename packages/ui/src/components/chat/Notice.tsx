@@ -55,17 +55,6 @@ export interface NoticeProps {
   disabled?: boolean
   /** aria-label группы (для команды — «Команда»). */
   ariaLabel?: string
-  /**
-   * Inline-вариант: блок выравнивается по левому краю (не центрируется) —
-   * для ошибки хода внутри ленты, а не как системная плашка «посреди ответа».
-   * Вид остальных вариантов не меняется.
-   */
-  inline?: boolean
-  /**
-   * Блок занимает всю ширину контейнера без внешних отступов — для `bare`-
-   * сегмента внутри блока хода (пузырь и padding рисует контейнер группы).
-   */
-  fullWidth?: boolean
   /** data-testid блока (тестовые хуки). */
   testId?: string
 }
@@ -80,8 +69,6 @@ export function Notice({
   onCopy,
   disabled,
   ariaLabel,
-  inline,
-  fullWidth,
   testId,
 }: NoticeProps) {
   const { t } = useI18n()
@@ -89,21 +76,14 @@ export function Notice({
   const copyLabel = t('chat.notice.copy')
 
   return (
-    <div
-      className={cn(
-        'group flex flex-col',
-        inline
-          ? (fullWidth ? 'w-full py-0' : 'px-4 py-3')
-          : 'items-center px-4 py-3',
-      )}
-    >
+    <div className="group flex flex-col items-center px-4 py-3">
       <div
         role="group"
         aria-label={ariaLabel}
         data-testid={testId}
         className={cn(
           'rounded-lg border px-4 py-3 text-left',
-          fullWidth ? 'w-full' : 'w-full max-w-[85%]',
+          'w-full max-w-[85%]',
           style.box,
           style.compact && 'text-xs',
           disabled && 'opacity-50',

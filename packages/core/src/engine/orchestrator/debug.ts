@@ -141,7 +141,6 @@ export async function handleDebugSystemMessage(
     warning('ORCHESTRATOR', `Debug system message stream error: ${e}`);
     deps.cancellationTokens.delete(streamId);
     return deps.handleLlmFailure(session.id, streamId, e, attempt, {
-      debugCollector,
       durationMs: Date.now() - startedAt,
       usage: finalUsage,
       model: finalModel ?? provider.model ?? session.settings.model,

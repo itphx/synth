@@ -4089,7 +4089,6 @@ export class ChatOrchestrator {
       // ошибка уходит через общий обработчик сбоя хода (`canRetry: false`).
       if (!(e instanceof WorktreeDirectoryMissingError)) throw e;
       return this._handleLlmFailure(session.id, streamId, e, attempt, {
-        debugCollector,
         durationMs: Date.now() - streamStartedAt,
         model: session.settings.model,
         providerName: session.settings.provider,
@@ -4525,12 +4524,6 @@ export class ChatOrchestrator {
             agentDef?.reasoningLevel ?? session.settings.reasoningLevel,
           );
 
-        /**
-         * Блокировка по политике контекстного окна: оценка/окно/резерв
-         * кладутся в metadata сообщения об ошибке (`context_window_*`).
-         */
-        let contextWindowBlock: { tokens: number; window: number; reserve: number } | undefined;
-
         try {
           // Политика `enforce`: не отправляем LLM-вызов, если оценка промпта не
           // влезает в окно модели за вычетом резерва на вывод. `warn`/`off` не
@@ -4553,11 +4546,6 @@ export class ChatOrchestrator {
               reserveTokens,
             });
             if (decision.action === 'block') {
-              contextWindowBlock = {
-                tokens: estimatedTokens,
-                window: windowTokens,
-                reserve: reserveTokens,
-              };
               warning(
                 'ORCHESTRATOR',
                 `Контекстное окно превышено (policy=enforce): оценка ${estimatedTokens} > лимит ${decision.allowLimit} ` +
@@ -4731,10 +4719,10 @@ export class ChatOrchestrator {
 
           this._cancellationTokens.delete(streamId);
           return this._handleLlmFailure(session.id, streamId, e, attempt, {
-            debugCollector,
             durationMs: Date.now() - streamStartedAt,
-            // ADR-102: сообщение об ошибке несёт расход своего шага; счётчики —
-            // предыдущие шаги (`turnUsage`) + этот (оценка в обработчике).
+            // ADR-102: расход неудавшегося вызова оценивается в обработчике и
+            // пишется как aux `llm-error`; счётчики получают предыдущие шаги
+            // (`turnUsage`) + этот вызов.
             usage: iterationUsage,
             turnUsage,
             model: this._resolveMessageModel(chunkModel, finalModel, provider, session),
@@ -4742,19 +4730,6 @@ export class ChatOrchestrator {
             agentRole: effectiveAgentRole,
             content: accumulatedContent,
             promptChars: iterationPromptChars,
-            toolResults: allToolCalls.length > 0 ? allToolCalls : undefined,
-            promptMeta,
-            // Политика контекстного окна заблокировала вызов — в metadata
-            // сообщения об ошибке фиксируются оценка и окно (диагностика).
-            ...(contextWindowBlock
-              ? {
-                  contextWindowExceeded: true,
-                  contextWindowTokens: contextWindowBlock.tokens,
-                }
-              : {}),
-            // ADR-118 §1/§5: сообщение об ошибке адресует тот же шаг, что
-            // `step.finished` выше (тот же `messageId`).
-            step: { turnId, stepIndex, status: 'error', messageId: stepMessageId },
           });
         }
 
@@ -6188,16 +6163,12 @@ export class ChatOrchestrator {
         turnStarted = false;
       }
       // Внешний catch может сработать до инициализации локальных переменных
-      // (usage/model/prompt) — сохраняем ошибку с безопасным минимумом.
+      // (usage/model/prompt) — берём безопасный минимум.
       return this._handleLlmFailure(session.id, streamId, e, attempt, {
-        debugCollector,
         durationMs: Date.now() - streamStartedAt,
         model: session.settings.model,
         providerName: session.settings.provider,
         agentRole: effectiveAgentRole,
-        // ADR-118 §1/§5: ход известен всегда; шаг — только если сбой случился
-        // внутри цикла (там передаётся точный `stepIndex`/`messageId`).
-        step: { turnId, status: 'error' },
       });
     } finally {
       this._streamSessions.delete(streamId);
@@ -7099,14 +7070,17 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Единая обработка ошибки LLM-стрима: пишет last_error в user-сообщение
-   * сессии (по stream_id), сохраняет assistant-сообщение об ошибке (только
-   * когда повтор невозможен/исчерпан — см. `attempt`) и возвращает
-   * ProcessMessageResult. Публикация финального исхода (stream.retry для
-   * recoverable / stream.error для non-recoverable) — зона ответственности
-   * QueueProcessor, чтобы не было двойной публикации stream.error. Если ошибка
-   * recoverable — session разблокируется на уровне QueueProcessor после
-   * исчерпания попыток; сессия не остаётся заблокированной навсегда.
+   * Единая обработка ошибки LLM-стрима основной сессии: пишет last_error в
+   * user-сообщение (по stream_id), учитывает расход неудавшегося вызова как
+   * aux `llm-error` (когда повтор невозможен/исчерпан) и возвращает
+   * ProcessMessageResult. Assistant-сообщение об ошибке **не создаётся**
+   * (решение владельца 2026-11-06): в ленте её показывает временная плашка
+   * `stream.error`, после reload в истории ничего не остаётся. Публикация
+   * финального исхода (stream.retry для recoverable / stream.error для
+   * non-recoverable) — зона ответственности QueueProcessor, чтобы не было
+   * двойной публикации stream.error. Если ошибка recoverable — session
+   * разблокируется на уровне QueueProcessor после исчерпания попыток; сессия
+   * не остаётся заблокированной навсегда.
    */
   private async _handleLlmFailure(
     sessionId: string,
@@ -7117,7 +7091,7 @@ export class ChatOrchestrator {
   ): Promise<ProcessMessageResult> {
     return handleLlmFailure(sessionId, streamId, error, attempt, ctx, {
       sessionManager: this._sessionManager,
-      saveAssistantMessage: this._saveAssistantMessage.bind(this),
+      recordUsage: (input) => this._recordAuxUsage(input),
     });
   }
 

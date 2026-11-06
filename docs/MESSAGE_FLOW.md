@@ -999,23 +999,29 @@ sequenceDiagram
    = `false` — **ретраев нет**,
    `stream.retry` не публикуется.
 2. Оркестратор: `step.finished` со статусом `error` (тот же `messageId` шага) → `turn.finished error`;
-   `handleLlmFailure` пишет assistant-сообщение об ошибке (текст + `i18n`-ключ ADR-041) и
-   `metadata.last_error` в user-реплику.
+   `handleLlmFailure` пишет только `metadata.last_error` в user-реплику — **assistant-сообщение
+   об ошибке не создаётся** (решение владельца 2026-11-06): после reload в истории ничего не
+   остаётся. Расход неудавшегося вызова учитывается aux-вызовом `source: 'llm-error'`
+   (счётчики сессии + роллап `usage` без `messages`, ADR-102), один раз — когда повтора уже не будет.
 3. Процессор: сообщение извлекается из очереди, `blocked`/`currentStream`/`retry` снимаются,
    публикуется `stream.error {can_retry: false, error_type, retry_count}`, затем `queue.state`.
-4. UI, лента: assistant-сообщение с терминальным `status: 'error'` — **inline системный блок
-   ошибки**, а не ответ агента (`data-testid="turn-error"`, шапка «Ошибка» + агент/модель/время,
-   тело — локализованный текст по `metadata.i18n`, полный набор действий). `cancelled`/`interrupted`
-   (частичный ответ после «Стопа»/прерывания) остаются обычным ответом с бейджем «Прервано».
+4. UI, лента основной сессии: ошибку **не показывает** (сообщения нет) — только временная плашка
+   `StreamErrorPanel` над композером и тост. Legacy-записи прежней версии (assistant со
+   `status: 'error'` / `metadata.status: 'error'`) скрывает предикат `isLlmFailureMessage`
+   (`components/chat/messageVisibility.ts`): фильтр применяется в `MessageList` **до** группировки
+   по ходу и только для основной сессии (не для дочерней), поэтому скрытый сегмент не оставляет
+   пустого блока хода/разделителя. Fallback-ответы с содержательным текстом
+   (`session.output_limit`/`session.empty_response`) ошибкой не считаются — видны. Частичный ответ
+   до сбоя (`cancelled`/`interrupted`, `metadata.status: 'error'`) остаётся обычным ответом с
+   бейджем «Прервано».
 5. UI, плашка над композером: `StreamErrorPanel` с локализованным текстом (`context_length` —
    «контекстное окно превышено», `auth_error`/legacy `auth` — «ошибка авторизации»,
    `provider_disabled`/`model_disabled` — соответствующая подсказка, иначе общий + сырой текст в
    подсказке); кнопка «Повторить» показывается только для recoverable-типов
    (`network`/`network_error`/`timeout`/`rate_limit`/`server_error`). Для `remote_auth_expired`
    (истёкшая серверная сессия гибрида) — заголовок `router.remote_auth_expired` и действие
-   «Войти в гибрид заново» (`logout()`), без «Повторить» и сырого текста, и такая же кнопка —
-   в inline-блоке ошибки ленты. Тост открытой сессии (`notifyMessage` в `transportStore`)
-   сохраняется.
+   «Войти в гибрид заново» (`logout()`), без «Повторить» и сырого текста.
+   Тост открытой сессии (`notifyMessage` в `transportStore`) сохраняется.
 
 Код: `packages/core/src/engine/orchestrator/errors.ts`, `queue/processor.ts`,
 `packages/ui/src/components/chat/{ChatMessage,StreamErrorPanel}.tsx`,
@@ -1027,8 +1033,14 @@ sequenceDiagram
    историю ребёнка (мусорных сообщений нет).
 2. Терминально после retry: в историю ребёнка — сообщение `role: error`
    (`task.subagent_exec_error` / `..._after_retries`), `turn.finished error`, `currentStream`
-   снимается, хук `agent_failed`. В открытой дочерней сессии ошибка видна этим сообщением и полосой
-   `SubagentResumeBar` («Продолжить»), а не основной плашкой `StreamErrorPanel`.
+   снимается, хук `agent_failed`. В открытой дочерней сессии ошибка видна этим сообщением —
+   для пользователя это центрированный **красный** системный блок, как завершение фонового
+   прогона (`Notice` variant `error`, иконка `robot-2`, подпись `chat.notice.subagentError`
+   «Ошибка саб-агента · <имя>», модель/время в шапке, локализованный текст `metadata.i18n`) — и
+   полосой `SubagentResumeBar` («Продолжить»), а не основной плашкой `StreamErrorPanel`.
+   Это **осознанное отличие** от основной сессии: там терминальная ошибка сообщением не
+   сохраняется (см. §8.14), а ребёнку сообщение нужно — родитель читает отчёт ребёнка и должен
+   видеть, что была проблема.
 3. Родителю: `task_result` с `<status>error</status>` и `isError: true` — для модели родителя это
    обычный `tool_result`, ход **продолжается** (другой инструмент или текстовый ответ).
 4. Отмена (`isAborted`) → `finishAborted`: частичный текст итерации — assistant-сообщение
@@ -1126,8 +1138,8 @@ sequenceDiagram
 
 1. Провайдер отвечает ошибкой переполнения (класс `ContextLengthExceededError` либо текст
    `context_length`) → тип `context_length`, **non-recoverable**: повторов нет.
-2. `step.finished error` → `turn.finished error`; assistant-сообщение об ошибке несёт `i18n`-ключ
-   `router.context_length_exceeded`.
+2. `step.finished error` → `turn.finished error`; assistant-сообщения нет — ошибка видна только
+   плашкой `StreamErrorPanel` (`router.context_length_exceeded`), `last_error` — в user-реплике.
 3. `stream.error {error_type:'context_length', can_retry:false}`, сообщение извлекается из очереди.
 4. UI показывает дружелюбный текст `chat.streamError.contextLength` и **не** показывает сырое
    сообщение провайдера (оно бесполезно пользователю); кнопки «Повторить» нет.

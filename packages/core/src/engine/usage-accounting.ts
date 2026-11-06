@@ -1,7 +1,8 @@
 /**
  * ADR-102/ADR-118 (паритет с opencode `session.usage.recorded`): единый шов
  * учёта **aux-вызовов** LLM — тех, что не становятся assistant-сообщением
- * (title, QA self-check, fork-summary, derive вложения, micro/decision).
+ * (title, QA self-check, fork-summary, derive вложения, micro/decision, а также
+ * неудавшийся LLM-вызов основной сессии — `llm-error`).
  *
  * Инвариант статистики: **сумма usage assistant-сообщений + aux-usage =
  * счётчики сессии** (`Session.inputTokens`/…). Aux-вызовы:
@@ -33,7 +34,9 @@ export type AuxUsageSource =
   | 'fork-summary'
   | 'attachment-derive'
   | 'micro'
-  | 'micro-message';
+  | 'micro-message'
+  /** Терминальная ошибка LLM основной сессии (сообщение не создаётся). */
+  | 'llm-error';
 
 /** Зависимости шва (те же, что у персиста сообщений). */
 export interface AuxUsageDeps {

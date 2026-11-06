@@ -590,11 +590,14 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const toolIdx = session.messages.indexOf(toolMsg!);
     expect(toolIdx).toBe(assistantIdx + 1);
 
-    // Финальное сообщение — ошибка LLM (без вызовов инструментов).
-    const finalAssistant = [...session.messages].reverse().find(
-      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) === 0,
-    );
-    expect(finalAssistant?.metadata?.status).toBe('error');
+    // Финального assistant-сообщения об ошибке больше нет (решение владельца
+    // 2026-11-06): история заканчивается tool-результатом шага, а сбой виден
+    // только в `last_error` user-реплики и в результате хода.
+    const assistantsAfter = session.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistantsAfter).toHaveLength(1);
+    expect(assistantsAfter[0]).toBe(chainAssistant);
+    const userAfter = session.messages.find((m) => m.role === MessageRole.USER)!;
+    expect(userAfter.metadata?.last_error).toBeTruthy();
 
     // Пары для LLM целы: assistant с toolUse → парный tool, без осиротевших tool.
     const llm = sessionMessagesToLlm(session.messages, 'fixer');

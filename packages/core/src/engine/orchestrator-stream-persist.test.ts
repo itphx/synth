@@ -353,11 +353,12 @@ describe('ChatOrchestrator: персистентность частичного 
     expect(interrupted!.content).toContain('Частичный текст');
     expect(interrupted!.metadata).toMatchObject({ streaming: false, status: 'error' });
 
-    // Сообщение об ошибке LLM сохраняется отдельно (семантика handleLlmFailure).
+    // Отдельного assistant-сообщения об ошибке больше нет (решение владельца
+    // 2026-11-06): в истории остаётся только прерванный частичный ответ.
     const errorAssistant = session.messages.find(
       (m) => m.role === MessageRole.ASSISTANT && m.metadata?.status === 'error' && m !== interrupted,
     );
-    expect(errorAssistant).toBeDefined();
+    expect(errorAssistant).toBeUndefined();
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });

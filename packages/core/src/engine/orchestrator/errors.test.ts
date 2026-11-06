@@ -2,12 +2,15 @@
  * ADR-095 (шаг 6a): собственные тесты обработки ошибок LLM-стрима.
  *
  * Контракты:
- *  - `formatLlmError`/`errorTypeI18n` — таксономия ADR-041 + i18n-ключ в metadata;
- *  - `handleLlmFailure` пишет assistant-сообщение об ошибке **только** когда
- *    повтора не будет (`!canRetry || attempt === undefined || attempt > MAX`),
- *    иначе на каждый ретрай в истории появлялся бы дубль (ADR-070 §2.6 Bug 1);
+ *  - `formatLlmError`/`errorTypeI18n` — таксономия ADR-041 (i18n-ключ больше не
+ *    пишется в metadata: сообщения нет);
+ *  - `handleLlmFailure` **не создаёт assistant-сообщение** об ошибке (решение
+ *    владельца 2026-11-06): в истории/ленте после reload ничего не остаётся;
+ *  - расход неудавшегося вызова учитывается как aux `llm-error` **только**
+ *    когда повтора не будет (`!canRetry || attempt === undefined || attempt > MAX`),
+ *    иначе на каждый ретрай счётчики получали бы дубль (ADR-102);
  *  - `last_error` пишется в user-сообщение по `metadata.stream_id`;
- *  - ошибки персистентности не выносят ход.
+ *  - ошибки учёта/персистентности не выносят ход.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,9 +19,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { Message, TokenUsage } from '@itphx/synth-shared';
+import type { AuxUsageRecorder } from '../usage-accounting.js';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
-import { DebugCollector } from '../../debug.js';
 import {
   ContextLengthExceededError,
   ProviderError,
@@ -28,7 +31,6 @@ import { LLM_MAX_ATTEMPTS } from '../llm-error.js';
 import { RemoteError } from '../../remote/types.js';
 import { t as sm } from '../system-messages.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './errors.js';
-import type { SaveAssistantMessageFn } from './persistence.js';
 
 const USAGE: TokenUsage = { inputTokens: 5, outputTokens: 5, totalTokens: 10 };
 
@@ -84,14 +86,12 @@ describe('formatLlmError / errorTypeI18n (ADR-041)', () => {
 describe('handleLlmFailure', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
-  let saveAssistantMessage: ReturnType<typeof vi.fn>;
-  let debugCollector: DebugCollector;
+  let recordUsage: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-errors-'));
     sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
-    saveAssistantMessage = vi.fn(async () => 'error-message');
-    debugCollector = new DebugCollector(false);
+    recordUsage = vi.fn(async () => undefined);
   });
 
   afterEach(async () => {
@@ -101,12 +101,12 @@ describe('handleLlmFailure', () => {
   function deps() {
     return {
       sessionManager,
-      saveAssistantMessage: saveAssistantMessage as unknown as SaveAssistantMessageFn,
+      recordUsage: recordUsage as unknown as AuxUsageRecorder,
     };
   }
 
   function context(overrides: Partial<LlmFailureContext> = {}): LlmFailureContext {
-    return { debugCollector, durationMs: 123, ...overrides };
+    return { durationMs: 123, ...overrides };
   }
 
   async function sessionWithUserMessage(streamId: string): Promise<string> {
@@ -129,7 +129,7 @@ describe('handleLlmFailure', () => {
     return session.id;
   }
 
-  it('recoverable + не последняя попытка: сообщение об ошибке НЕ сохраняется', async () => {
+  it('recoverable + не последняя попытка: расход не пишется, сообщения нет', async () => {
     const sessionId = await sessionWithUserMessage('stream1');
 
     const result = await handleLlmFailure(
@@ -141,11 +141,11 @@ describe('handleLlmFailure', () => {
       errorType: 'network_error',
       canRetry: true,
     });
-    expect(saveAssistantMessage).not.toHaveBeenCalled();
+    expect(recordUsage).not.toHaveBeenCalled();
     expect((await sessionManager.getSession(sessionId))!.messages).toHaveLength(1);
   });
 
-  it('попытки исчерпаны (attempt > LLM_MAX_ATTEMPTS): сообщение сохраняется как терминальное', async () => {
+  it('попытки исчерпаны (attempt > LLM_MAX_ATTEMPTS): расход — aux llm-error, сообщения нет', async () => {
     const sessionId = await sessionWithUserMessage('stream1');
 
     const result = await handleLlmFailure(
@@ -155,30 +155,28 @@ describe('handleLlmFailure', () => {
     );
 
     expect(result.canRetry).toBe(true);
-    expect(saveAssistantMessage).toHaveBeenCalledTimes(1);
-    const call = saveAssistantMessage.mock.calls[0]!;
-    expect(call[0]).toBe(sessionId);
-    expect(call[1]).toBe(sm('router.network_error'));
-    expect(call[2]).toBe('stream1');
-    expect(call[3]).toBe('fixer');
-    // best-effort оценка usage: promptChars/4 и content.length/4
-    expect(call[4]).toMatchObject({ inputTokens: 10, outputTokens: 2, totalTokens: 12 });
-    expect(call[5]).toBe('m');
-    expect(call[9]).toBe('p');
-    expect(call[17]).toMatchObject({
-      duration_ms: 123,
-      status: 'error',
-      i18n: { key: 'router.network_error' },
-      usage_estimated: true,
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    const input = recordUsage.mock.calls[0]![0] as Record<string, unknown>;
+    expect(input).toMatchObject({
+      sessionId,
+      model: 'm',
+      provider: 'p',
+      agent: 'fixer',
+      durationMs: 123,
+      source: 'llm-error',
     });
+    // best-effort оценка usage: promptChars/4 и content.length/4
+    expect(input.usage).toMatchObject({ inputTokens: 10, outputTokens: 2, totalTokens: 12 });
+    // сообщения об ошибке нет — только user-реплика
+    expect((await sessionManager.getSession(sessionId))!.messages).toHaveLength(1);
   });
 
-  it('attempt === undefined (прямой вызов без QueueProcessor) — тоже терминальный путь', async () => {
+  it('attempt === undefined (прямой вызов без QueueProcessor) — терминальный путь', async () => {
     const sessionId = await sessionWithUserMessage('stream1');
 
     await handleLlmFailure(sessionId, 'stream1', new Error('fetch failed'), undefined, context(), deps());
 
-    expect(saveAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(recordUsage).toHaveBeenCalledTimes(1);
   });
 
   it('невосполнимая ошибка (401) терминальна даже на первой попытке', async () => {
@@ -189,10 +187,26 @@ describe('handleLlmFailure', () => {
     );
 
     expect(result).toMatchObject({ errorType: 'auth_error', canRetry: false });
-    expect(saveAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(recordUsage).toHaveBeenCalledTimes(1);
   });
 
-  it('гибрид: RemoteError(OFFLINE) → network_error, recoverable; текст — router.network_error', async () => {
+  it('usage = turnUsage (предыдущие шаги) + оценка текущего вызова', async () => {
+    const sessionId = await sessionWithUserMessage('stream1');
+
+    await handleLlmFailure(
+      sessionId, 'stream1', new Error('401 Unauthorized'), 1,
+      context({
+        usage: USAGE,
+        turnUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+      }),
+      deps(),
+    );
+
+    const input = recordUsage.mock.calls[0]![0] as Record<string, unknown>;
+    expect(input.usage).toEqual({ inputTokens: 6, outputTokens: 7, totalTokens: 13 });
+  });
+
+  it('гибрид: RemoteError(OFFLINE) → network_error, recoverable; расхода нет', async () => {
     const sessionId = await sessionWithUserMessage('stream1');
     const err = new RemoteError('Сервер авторизации недоступен: fetch failed', 'OFFLINE');
 
@@ -203,7 +217,7 @@ describe('handleLlmFailure', () => {
       errorType: 'network_error',
       canRetry: true,
     });
-    expect(saveAssistantMessage).not.toHaveBeenCalled();
+    expect(recordUsage).not.toHaveBeenCalled();
   });
 
   it('гибрид: RemoteError(AUTH) → remote_auth_expired, терминально (просьба войти заново)', async () => {
@@ -213,11 +227,8 @@ describe('handleLlmFailure', () => {
     const result = await handleLlmFailure(sessionId, 'stream1', err, 1, context(), deps());
 
     expect(result).toMatchObject({ errorType: 'remote_auth_expired', canRetry: false });
-    expect(saveAssistantMessage).toHaveBeenCalledTimes(1);
-    expect(saveAssistantMessage.mock.calls[0]![17]).toMatchObject({
-      status: 'error',
-      i18n: { key: 'router.remote_auth_expired' },
-    });
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage.mock.calls[0]![0]).toMatchObject({ source: 'llm-error' });
   });
 
   it('ContextLengthExceededError определяется по классу (русский текст не классифицируется)', async () => {
@@ -228,8 +239,7 @@ describe('handleLlmFailure', () => {
     );
 
     expect(result).toMatchObject({ errorType: 'context_length', canRetry: false });
-    const metadataExtra = saveAssistantMessage.mock.calls[0]![17];
-    expect(metadataExtra).toMatchObject({ i18n: { key: 'router.context_length_exceeded' } });
+    expect(recordUsage).toHaveBeenCalledTimes(1);
   });
 
   it('ctx.errorType приоритетнее классификации по тексту', async () => {
@@ -242,9 +252,6 @@ describe('handleLlmFailure', () => {
     );
 
     expect(result).toMatchObject({ errorType: 'provider_not_found', canRetry: false });
-    expect(saveAssistantMessage.mock.calls[0]![17]).toMatchObject({
-      i18n: { key: 'router.provider_not_found' },
-    });
   });
 
   it('last_error пишется в user-сообщение по stream_id, чужие сообщения не трогаются', async () => {
@@ -280,9 +287,9 @@ describe('handleLlmFailure', () => {
     expect((await sessionManager.getSession(session.id))!.messages).toHaveLength(0);
   });
 
-  it('ошибка сохранения assistant-сообщения не выносит обработку', async () => {
+  it('ошибка учёта расхода не выносит обработку', async () => {
     const sessionId = await sessionWithUserMessage('stream1');
-    saveAssistantMessage.mockRejectedValueOnce(new Error('storage down'));
+    recordUsage.mockRejectedValueOnce(new Error('analytics down'));
 
     const result = await handleLlmFailure(
       sessionId, 'stream1', new Error('401 Unauthorized'), 1, context({ usage: USAGE }), deps(),
@@ -293,26 +300,24 @@ describe('handleLlmFailure', () => {
     expect((await sessionManager.getSession(sessionId))!.messages[0]!.metadata!.last_error).toBe('401 Unauthorized');
   });
 
-  it('без ctx терминальный путь ничего не сохраняет, но возвращает исход ошибки', async () => {
+  it('без ctx расхода нет, но исход ошибки возвращается', async () => {
     const sessionId = await sessionWithUserMessage('stream1');
 
     const result = await handleLlmFailure(sessionId, 'stream1', new Error('401 Unauthorized'), 1, undefined, deps());
 
     expect(result).toMatchObject({ errorType: 'auth_error', canRetry: false });
-    expect(saveAssistantMessage).not.toHaveBeenCalled();
+    expect(recordUsage).not.toHaveBeenCalled();
   });
 
-  it('фактический usage из ctx не помечается как оценённый', async () => {
+  it('без recordUsage (необязательный dep) терминальный путь не падает', async () => {
     const sessionId = await sessionWithUserMessage('stream1');
 
-    await handleLlmFailure(
-      sessionId, 'stream1', new Error('401 Unauthorized'), 1,
-      context({ usage: USAGE, promptChars: 4_000, content: 'частичный ответ' }),
-      deps(),
+    const result = await handleLlmFailure(
+      sessionId, 'stream1', new Error('401 Unauthorized'), 1, context(),
+      { sessionManager },
     );
 
-    const call = saveAssistantMessage.mock.calls[0]!;
-    expect(call[4]).toEqual(USAGE);
-    expect(call[17]).not.toHaveProperty('usage_estimated');
+    expect(result).toMatchObject({ errorType: 'auth_error', canRetry: false });
+    expect((await sessionManager.getSession(sessionId))!.messages).toHaveLength(1);
   });
 });

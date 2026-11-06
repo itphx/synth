@@ -451,22 +451,26 @@ describe('ChatOrchestrator — расход хода (сумма шагов) в 
     expect(sumUsage(messages)).toEqual(USAGE_TURN);
   });
 
-  it('ошибка LLM: сообщение об ошибке — свой шаг, счётчики = сумма сообщений', async () => {
+  it('ошибка LLM: сообщения об ошибке нет, расход ошибки — aux `llm-error`', async () => {
     const { sessionId } = await run([
       { content: 'шаг 1', toolCalls: [{ id: 'call_1', name: 'read_file' }], usage: USAGE_STEP_1 },
       { error: 'provider down' },
     ]);
 
     const messages = await assistantMessages(sessionId);
-    // Шаг 1 — точный usage; сообщение об ошибке — оценка своего шага.
+    // Шаг 1 сохранён своим сообщением с точным usage; сообщения об ошибке нет.
+    expect(messages).toHaveLength(1);
     expect(messages[0]!.usage).toEqual(USAGE_STEP_1);
-    const errorMessage = messages.at(-1)!;
-    expect(errorMessage.metadata?.status).toBe('error');
-    expect(errorMessage.usage?.inputTokens ?? 0).toBeGreaterThan(0);
+    expect(messages[0]!.metadata?.status).not.toBe('error');
 
     const session = (await sessionManager.getSession(sessionId))!;
-    expect(session.inputTokens).toBe(sumUsage(messages).inputTokens);
-    expect(session.outputTokens).toBe(sumUsage(messages).outputTokens);
-    expect(session.totalTokens).toBe(sumUsage(messages).totalTokens);
+    // Счётчики получили и расход шага 1, и оценку неудавшегося вызова
+    // (aux-шов `llm-error`, без сообщения).
+    expect(session.inputTokens).toBeGreaterThan(USAGE_STEP_1.inputTokens);
+    expect(session.outputTokens).toBeGreaterThanOrEqual(USAGE_STEP_1.outputTokens);
+    expect(session.inputTokens).toBeGreaterThan(sumUsage(messages).inputTokens);
+
+    const userMsg = session.messages.find((m) => m.role === MessageRole.USER)!;
+    expect(userMsg.metadata?.last_error).toBeTruthy();
   });
 });

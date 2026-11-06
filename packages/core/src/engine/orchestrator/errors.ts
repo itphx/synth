@@ -4,11 +4,14 @@
  * Вынесено из `engine/orchestrator.ts` без изменения поведения. Класс
  * `ChatOrchestrator` сохраняет делегации `_formatLlmError`, `_errorTypeI18n`,
  * `_handleLlmFailure`; тип `LlmFailureContext` перенесён сюда.
+ *
+ * Решение владельца 2026-11-06: терминальная ошибка **основной** сессии больше
+ * **не создаёт assistant-сообщение** (в истории/ленте ничего не остаётся);
+ * фиксируются `last_error` на user-реплике и aux-расход `llm-error`.
  */
-import type { PromptMeta, TokenUsage } from '@itphx/synth-shared';
+import type { TokenUsage } from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
-import type { DebugCollector } from '../../debug.js';
 import { ContextLengthExceededError, RemoteAuthExpiredError } from '../../providers/exceptions.js';
 import { RemoteError } from '../../remote/types.js';
 import { classifyLlmErrorFor, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from '../llm-error.js';
@@ -16,15 +19,15 @@ import { WorktreeDirectoryMissingError } from '../worktree/errors.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { warning } from '../../logger.js';
 import { estimateUsage, addTokenUsage } from './usage.js';
-import type { AssistantMessageStep, SaveAssistantMessageFn } from './persistence.js';
+import type { AuxUsageRecorder } from '../usage-accounting.js';
 
 /**
- * ADR-070 §2.6: контекст для сохранения assistant-сообщения об ошибке LLM.
- * Заполняется на месте сбоя (там доступны накопленные usage/контент/debug).
+ * Контекст терминальной ошибки LLM основной сессии. Заполняется на месте
+ * сбоя (там доступны накопленные usage/контент). Сообщение об ошибке больше не
+ * пишется — значения нужны только для учёта расхода и `last_error`.
  */
 export interface LlmFailureContext {
-  debugCollector: DebugCollector;
-  /** Длительность прогона до сбоя (metadata.duration_ms). */
+  /** Длительность прогона до сбоя (роллап аналитики `usage`). */
   durationMs: number;
   /** Фактический usage, если провайдер успел его отдать (иначе — оценка). */
   usage?: TokenUsage;
@@ -35,8 +38,6 @@ export interface LlmFailureContext {
   content?: string;
   /** Размер отправленного промпта в символах — база для оценки input-токенов. */
   promptChars?: number;
-  toolResults?: Array<Record<string, unknown>>;
-  promptMeta?: PromptMeta;
   /**
    * Явный тип ошибки (ADR-041). Нужен там, где сообщение локализовано и
    * `classifyLlmError` не может определить тип по тексту (например
@@ -44,22 +45,9 @@ export interface LlmFailureContext {
    */
   errorType?: string;
   /**
-   * Политика контекстного окна (`enforce`) заблокировала LLM-вызов: в
-   * metadata сообщения об ошибке пишутся `context_window_exceeded: true` и
-   * оценка промпта `context_window_tokens`.
-   */
-  contextWindowExceeded?: boolean;
-  /** Оценка промпта в токенах на момент блокировки (диагностика). */
-  contextWindowTokens?: number;
-  /**
-   * ADR-118 §1/§5: шаг, к которому относится сообщение об ошибке (тот же
-   * `messageId`, что у `step.finished`, статус `error`, ход хода).
-   */
-  step?: AssistantMessageStep;
-  /**
-   * ADR-102: расход **предыдущих** шагов хода (без текущего вызова). Ошибка
-   * сохраняет сообщение с расходом своего шага (оценка), а счётчики сессии
-   * получают `turnUsage + этот расход` — без потерь и без двойного счёта.
+   * ADR-102: расход **предыдущих** шагов хода (без текущего вызова). Счётчики
+   * сессии и аналитика получают `turnUsage + оценка этого вызова` — без потерь
+   * и без двойного счёта.
    */
   turnUsage?: TokenUsage;
 }
@@ -105,11 +93,12 @@ export function formatLlmError(error: unknown): { text: string; i18n?: ReturnTyp
 }
 
 /**
- * i18n-ключ по типу ошибки (ADR-041) для metadata assistant-сообщения об ошибке.
+ * i18n-ключ по типу ошибки (ADR-041). Ранее писался в metadata
+ * assistant-сообщения об ошибке; теперь основная сессия сообщения не создаёт,
+ * хелпер оставлен для диагностики/внешних потребителей.
  *
  * `ctx.providerName` нужен ключу `router.provider_not_found` (в en-шаблоне есть
- * `{provider}`): без параметра UI показал бы сырой плейсхолдер. Имя неизвестно —
- * metadata прежняя (без `params`), локализация деградирует на `content`.
+ * `{provider}`): без параметра UI показал бы сырой плейсхолдер.
  */
 export function errorTypeI18n(
   errorType: string,
@@ -129,21 +118,39 @@ export function errorTypeI18n(
   }
 }
 
-/** Зависимости `handleLlmFailure` (персистентность assistant-сообщения об ошибке). */
+/**
+ * Зависимости `handleLlmFailure`.
+ *
+ * `recordUsage` — шов aux-учёта (ADR-102): терминальная ошибка основной сессии
+ * сообщением не становится, но её расход попадает в счётчики/аналитику с
+ * `source: 'llm-error'` (`engine/usage-accounting.ts`, best-effort).
+ */
 export interface HandleLlmFailureDeps {
   sessionManager: SessionManager;
-  saveAssistantMessage: SaveAssistantMessageFn;
+  recordUsage?: AuxUsageRecorder;
 }
 
 /**
- * Единая обработка ошибки LLM-стрима: пишет last_error в user-сообщение
- * сессии (по stream_id), сохраняет assistant-сообщение об ошибке (только
- * когда повтор невозможен/исчерпан — см. `attempt`) и возвращает
- * ProcessMessageResult. Публикация финального исхода (stream.retry для
- * recoverable / stream.error для non-recoverable) — зона ответственности
+ * Единая обработка ошибки LLM-стрима основной сессии.
+ *
+ * Ошибка **не создаёт сообщение** (решение владельца 2026-11-06): в истории и
+ * ленте после reload ничего не остаётся, пользователю показывается временная
+ * плашка `stream.error` (UI). Здесь фиксируются:
+ *  - `last_error` в user-сообщение сессии (по `stream_id`);
+ *  - расход неудавшегося вызова как **aux-вызов** `llm-error` (счётчики сессии
+ *    + роллап `usage`, без `messages`) — только когда повтор невозможен/исчерпан
+ *    (`attempt`); на recoverable-ретраях ничего не пишется, иначе расход
+ *    считался бы многократно.
+ *
+ * Возвращает ProcessMessageResult. Публикация финального исхода (stream.retry
+ * для recoverable / stream.error для non-recoverable) — зона ответственности
  * QueueProcessor, чтобы не было двойной публикации stream.error. Если ошибка
  * recoverable — session разблокируется на уровне QueueProcessor после
  * исчерпания попыток; сессия не остаётся заблокированной навсегда.
+ *
+ * Дочерние сессии (саб-агенты) сохраняют ошибку сообщением `role: 'error'` в
+ * своём цикле (`engine/tools/task/run-cycle.ts`) — основной агент должен видеть,
+ * что была проблема.
  */
 export async function handleLlmFailure(
   sessionId: string,
@@ -173,53 +180,37 @@ export async function handleLlmFailure(
         : classifyLlmErrorFor(error));
   const canRetry = worktreeMissing ? false : isLlmErrorRecoverable(error, rawError, errorType);
 
-  // ADR-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,
-  // когда повтора уже не будет (unrecoverable / последняя попытка / прямой
-  // вызов без QueueProcessor). Иначе на каждый recoverable-ретрай в истории
-  // появлялся бы дубль, а `message.added` мигал бы в UI.
+  // Расход неудавшегося вызова пишем один раз — когда повтора уже не будет
+  // (unrecoverable / последняя попытка / прямой вызов без QueueProcessor).
+  // Иначе на каждый recoverable-ретрай счётчики/аналитика получали бы дубль.
   const isTerminal = !canRetry || attempt === undefined || attempt > LLM_MAX_ATTEMPTS;
 
-  if (isTerminal && ctx) {
+  if (isTerminal && ctx && deps.recordUsage) {
     try {
       const estimated = estimateUsage(
         ctx.usage,
         ctx.promptChars ?? 0,
         (ctx.content ?? '').length,
       );
-      // ADR-102: счётчики/аналитика — расход хода: предыдущие шаги + этот
-      // (оценённый) вызов. Сообщение же несёт только расход своего шага.
+      // ADR-102: расход хода — предыдущие шаги + этот (оценённый) вызов.
       const turnUsage = ctx.turnUsage !== undefined
         ? addTokenUsage(ctx.turnUsage, estimated.usage)
         : estimated.usage;
-      const i18n = formatted.i18n ?? errorTypeI18n(errorType, { providerName: ctx.providerName });
-      await deps.saveAssistantMessage(
-        sessionId, humanError, streamId, ctx.agentRole,
-        estimated.usage, ctx.model, undefined, ctx.debugCollector, false, ctx.providerName,
-        MessageRole.ASSISTANT, undefined, false, ctx.toolResults, undefined,
-        undefined, undefined,
-        {
-          duration_ms: ctx.durationMs,
-          status: 'error',
-          ...(i18n ? { i18n } : {}),
-          ...(estimated.estimated ? { usage_estimated: true } : {}),
-          // Политика контекстного окна (`enforce`) — диагностика блокировки.
-          ...(ctx.contextWindowExceeded ? { context_window_exceeded: true } : {}),
-          ...(ctx.contextWindowTokens !== undefined
-            ? { context_window_tokens: ctx.contextWindowTokens }
-            : {}),
-        },
-        ctx.promptMeta,
-        // ADR-118 §1/§5: сообщение об ошибке — часть того же хода/шага.
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        ctx.step,
-        turnUsage,
-      );
+      // Сообщения нет — aux-запись без `messages`; сессия/аналитика получают
+      // расход как обычный вызов провайдера.
+      await deps.recordUsage({
+        sessionId,
+        usage: turnUsage,
+        ...(ctx.model !== undefined ? { model: ctx.model } : {}),
+        ...(ctx.providerName !== undefined ? { provider: ctx.providerName } : {}),
+        ...(ctx.agentRole !== undefined ? { agent: ctx.agentRole } : {}),
+        durationMs: ctx.durationMs,
+        source: 'llm-error',
+      });
     } catch (err) {
-      warning('ORCHESTRATOR', `Не удалось сохранить assistant-сообщение об ошибке: ${err instanceof Error ? err.message : String(err)}`);
+      // `recordAuxUsage` сам глотает ошибки хранилища/аналитики; здесь — на
+      // случай нестандартного рекордера.
+      warning('ORCHESTRATOR', `Не удалось учесть расход ошибки LLM: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

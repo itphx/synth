@@ -170,7 +170,6 @@ export async function handleSummarization(
     warning('ORCHESTRATOR', `Summarization stream error: ${e}`);
     deps.cancellationTokens.delete(streamId);
     return deps.handleLlmFailure(session.id, streamId, e, attempt, {
-      debugCollector,
       durationMs: Date.now() - startedAt,
       usage: finalUsage,
       model: finalModel ?? provider.model ?? session.settings.model,
@@ -234,7 +233,6 @@ export async function handleSummarization(
     publishTurnFinished(publishChunk, { turnId, status: 'error' });
     deps.cancellationTokens.delete(streamId);
     return deps.handleLlmFailure(session.id, streamId, new Error(validationError), attempt, {
-      debugCollector,
       durationMs: Date.now() - startedAt,
       usage: finalUsage,
       model: finalModel ?? provider.model ?? session.settings.model,

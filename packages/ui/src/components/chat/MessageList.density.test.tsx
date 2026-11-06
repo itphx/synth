@@ -207,16 +207,32 @@ describe('MessageList: компактная плотность ленты', () =
     expect(container.textContent).toContain('Reasoning')
   })
 
-  it('ход с ошибкой раскрыт: сводки нет, содержимое на месте', async () => {
+  it('ход с fallback-ответом (session.output_limit) раскрыт: сводки нет, содержимое на месте', async () => {
     const container = await renderList([
       msg({
         ...pastTurnWithNoise(),
         status: 'error',
+        metadata: { status: 'error', i18n: { key: 'session.output_limit' } },
       }),
     ])
 
     expect(summaryOf(container)).toBeNull()
     expect(container.querySelectorAll('[data-tool-call-toggle]').length).toBeGreaterThan(0)
+  })
+
+  it('терминальная ошибка основной сессии (router.*) в ленту не попадает — сводки и блока нет', async () => {
+    const container = await renderList([
+      msg({
+        ...pastTurnWithNoise(),
+        status: 'error',
+        metadata: { status: 'error', i18n: { key: 'router.network_error' } },
+      }),
+    ])
+
+    expect(summaryOf(container)).toBeNull()
+    expect(container.querySelector('[data-message-id="a1"]')).toBeNull()
+    expect(container.querySelectorAll('[data-testid="turn-block"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[data-tool-call-toggle]')).toHaveLength(0)
   })
 
   it('обычная плотность не меняет прежнее поведение', async () => {

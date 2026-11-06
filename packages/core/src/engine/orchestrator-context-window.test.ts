@@ -2,8 +2,8 @@
  * Политика ограничения контекстного окна в основном цикле оркестратора.
  *
  * `enforce` + оценка промпта больше окна → провайдер **не вызывается**, ход
- * завершается ошибкой `context_length` (`router.context_length_exceeded`),
- * в metadata финального сообщения — `context_window_exceeded`/`context_window_tokens`.
+ * завершается ошибкой `context_length` (`router.context_length_exceeded`);
+ * assistant-сообщения нет — последствия фиксируются в `last_error`.
  * `warn`/`off`/неизвестное окно — вызов идёт как обычно.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -164,14 +164,13 @@ describe('ChatOrchestrator — политика контекстного окн�
     expect(result.errorType).toBe('context_length');
     expect(result.canRetry).toBe(false);
 
+    // Решение владельца 2026-11-06: assistant-сообщения об ошибке нет —
+    // фиксируется только `last_error` user-реплики (пользователю — плашка).
     const session = await sessionManager.getSession(sessionId);
-    const assistant = session!.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
-    expect(assistant).toBeDefined();
-    expect(assistant.metadata?.status).toBe('error');
-    expect((assistant.metadata?.i18n as { key?: string } | undefined)?.key)
-      .toBe('router.context_length_exceeded');
-    expect(assistant.metadata?.context_window_exceeded).toBe(true);
-    expect(typeof assistant.metadata?.context_window_tokens).toBe('number');
+    expect(session!.messages.filter((m) => m.role === MessageRole.ASSISTANT)).toHaveLength(0);
+    const userMsg = session!.messages.find((m) => m.role === MessageRole.USER);
+    expect(userMsg).toBeDefined();
+    expect(userMsg!.metadata?.last_error).toBeTruthy();
   });
 
   it('enforce + оценка влезает в окно → вызов идёт', async () => {

@@ -1394,6 +1394,8 @@ export const dict = {
   // ADR-115: an attachment delivered by a tool — service block.
   'chat.notice.toolAttachment': 'Agent · {name} · attachment',
   'chat.notice.toolAttachmentAnonymous': 'Agent · attachment',
+  // A subagent error in its history — centered system message (ADR-111).
+  'chat.notice.subagentError': 'Subagent error · {name}',
   // ADR-089: external event without a sender name — neutral author label.
   'chat.author.external': 'External sender',
   // ADR-111/ADR-113: уведомление о завершении фонового прогона.

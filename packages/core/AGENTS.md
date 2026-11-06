@@ -364,6 +364,16 @@
 - **Шаг = сообщение, «финал» = смена статуса.** Сообщение шага создаётся на `step.started` со
   `status: 'streaming'`, персистится инкрементально (`engine/orchestrator/stream-persistence.ts`),
   терминальный статус ставится на `step.finished`.
+- **Терминальная ошибка основной сессии — без сообщения (решение владельца 2026-11-06).**
+  `handleLlmFailure` (`engine/orchestrator/errors.ts`) **не создаёт assistant-сообщение**: шаг
+  закрывается событиями (`step.finished error` → `turn.finished error`), пользователю — временная
+  плашка `stream.error`/`StreamErrorPanel`, после reload в истории ничего не остаётся. Фиксируются
+  `metadata.last_error` на user-реплике и расход неудавшегося вызова как aux-вызов
+  `source: 'llm-error'` (`engine/usage-accounting.ts`: счётчики сессии + роллап `usage` без
+  `messages`) — один раз, когда повтора уже не будет. Частичный ответ до сбоя остаётся обычным
+  ответом (draft `abort`, `metadata.interrupted`, бейдж «Прервано»). **Исключение — дочерние
+  сессии:** `run-cycle.ts` по-прежнему пишет ошибку сообщением `role: 'error'`, иначе родитель не
+  увидит, что прогон ребёнка упал.
 - **Снимок живого шага (ADR-118 §5).** `engine/live-stream-snapshot.ts` — in-memory снимок
   стримящегося шага (текст, reasoning, части), обновляется на каждом чанке и снимается на
   `step.finished`; отдаётся в DTO сессии как `current_stream.live` (аддитивно). Нужен, чтобы
@@ -632,7 +642,8 @@
   (`Session.inputTokens`/…) и в роллап `usage` (одна запись на ход: `requests=1`/`messages=1`),
   а `usage` сообщения — в историю и `metadata.cost_*` (стоимость **своего** usage). **Инвариант:
   сумма usage assistant-сообщений + aux-вызовы = счётчики сессии.** Aux-вызовы (title, QA
-  self-check, fork-summary, derive вложений, отклонённые вызовы micro/decision) идут через
+  self-check, fork-summary, derive вложений, отклонённые вызовы micro/decision, неудавшийся
+  LLM-вызов основной сессии `llm-error`) идут через
   `engine/usage-accounting.ts` (`recordAuxUsage`: счётчики сессии + роллап `requests=1` **без**
   `messages`; best-effort; `messages:1` — для микро-ответа, `model=micro:<taskClass>`). `TokenUsage.cost` (стоимость от провайдера) приоритетнее каталога
   (`providers/usage.ts: parseUsageCost`/`computeUsageCost`; `0` достоверен, breakdown — нули,

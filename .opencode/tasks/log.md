@@ -189,3 +189,12 @@
 - **Проверка test:** bundles `synth-test`/`synth-test-allinone` — `1/1`; helm-ревизии 161/71 на чарте `synth-0.13.5-11`; поды Running, UI-digest `sha256:37e6840d…` одинаков в обоих инстансах; `/health` `https://synth.k3s.itphx.loc` и `https://synth-allinone.k3s.itphx.loc` → `version 0.13.5`, `build f804a476`.
 - **Бета:** `GITEA_NPM_TOKEN=… ./scripts/publish-beta.sh --base 0.13.5 --restore-dist` → `0.13.5-beta.20261106094907.f804a476`; 8/8 пакетов в Gitea npm, dist-tag `beta`, `latest` остался `0.13.4`, smoke (`synth --version`) ок; версии и `dist` восстановлены под `0.13.5`.
 - **Остаток:** `synth` в origin (gitverse) не пушился (просьбы не было); локальный dev-core перезапустить для подхвата нового `dist`.
+
+## 2026-11-06 19:05 — Ошибки основной сессии: только плашка (без истории)
+
+- **Задача:** владелец отверг inline-блок ошибки в ленте (коммит `9a2cf1b7`): для **основной** сессии ошибка не должна сохраняться в истории — нужна только временная плашка над композером; для **саб-агентов** ошибки сохранять правильно, но рисовать системным сообщением по центру, как завершение фонового прогона, только красным.
+- **Что изменено (core):** `handleLlmFailure` больше не пишет assistant-сообщение об ошибке: остаются `last_error` на user-реплике и aux-расход `llm-error` (счётчики сессии + роллап аналитики, без `messages`); `LlmFailureContext` очищен от полей, нужных только сообщению; частичный draft после сбоя остаётся ответом (UI — бейдж «Прервано»). Дочение сессии не тронуты — `run-cycle.ts` по-прежнему пишет `role: 'error'`.
+- **Что изменено (ui):** inline-блок `turn-error` удалён вместе с `Notice.inline/fullWidth` и `MessageHeader.embedded`; ошибки основной сессии (включая legacy-записи) скрываются фильтром `isLlmFailureMessage` **до** группировки по ходу (fallback-ответы `session.output_limit`/`session.empty_response` остаются видимыми); ошибка саб-агента — центрированный красный `Notice` (`robot-2`, подпись «Ошибка саб-агента · <имя>», meta модель/время). Плашка `StreamErrorPanel` (в т.ч. «Войти в гибрид заново») — единственное отображение ошибки основной сессии.
+- **Проверка:** core targeted/полный suite (9117 passed, известный env-флейк `git-proxy-env` из-за `no_proxy`), UI full suite 3555 passed, `pnpm typecheck`, сборка core/ui, lint 0 errors.
+- **Коммит:** `d1c7c9a6`? (см. ниже — заполняется после коммита).
+- **Примечание:** в дереве параллельно есть незакоммиченные чужие правки ADR-119 (`server/routes/sessions.ts`, `server/serialize.ts`, `orchestrator/compression.ts`, часть `summarization.ts`) — в коммит не включались.

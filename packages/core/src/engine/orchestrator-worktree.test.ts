@@ -294,12 +294,14 @@ describe('ChatOrchestrator — per-session cwd привязки к worktree (ADR
     // Инструменты не запускались: каталога нет — ход не стартовал.
     expect(probeCalls).toHaveLength(0);
 
-    // Assistant-сообщение об ошибке сохранено с i18n-ключом (ADR-041).
+    // Assistant-сообщения об ошибке нет (решение владельца 2026-11-06):
+    // после reload в истории ничего не остаётся, последствия видны только в
+    // `last_error` user-реплики.
     const stored = (await sessionManager.getSession(session.id))!;
-    const errorMessage = [...stored.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
-    expect(errorMessage).toBeDefined();
-    expect((errorMessage!.metadata as { i18n?: { key?: string } })?.i18n?.key)
-      .toBe('worktree.directory_missing');
+    expect(stored.messages.filter((m) => m.role === MessageRole.ASSISTANT)).toHaveLength(0);
+    const userMsg = stored.messages.find((m) => m.role === MessageRole.USER);
+    expect(userMsg).toBeDefined();
+    expect(userMsg!.metadata?.last_error).toContain('worktree');
   });
 
   it('саб-агент без своей привязки наследует каталог родителя', async () => {

@@ -393,8 +393,8 @@ export async function runProcessSetup(
       : sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') });
     // Терминальная ошибка конфигурации провайдера: раньше возвращалась без
     // персистентности — после перезагрузки сессия выглядела как «агент
-    // думает». Теперь проходит общий путь `_handleLlmFailure` (assistant-
-    // сообщение с metadata.status='error'/i18n + last_error в user-сообщении).
+    // думает». Теперь проходит общий путь `_handleLlmFailure` (last_error в
+    // user-сообщении; assistant-сообщение об ошибке не создаётся).
     return {
       failed: true,
       result: await deps.handleLlmFailure(
@@ -403,7 +403,6 @@ export async function runProcessSetup(
         new Error(failureText),
         attempt,
         {
-          debugCollector,
           durationMs: Date.now() - streamStartedAt,
           model: overrides.model || session.settings.model,
           providerName,
@@ -426,7 +425,6 @@ export async function runProcessSetup(
         new Error(sm('router.model_disabled', { provider: providerName, model: modelName })),
         attempt,
         {
-          debugCollector,
           durationMs: Date.now() - streamStartedAt,
           model: modelName,
           providerName,
