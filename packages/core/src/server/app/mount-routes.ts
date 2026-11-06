@@ -231,6 +231,10 @@ export function mountStandaloneRoutes(
 
   // Projects
   app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, () => getClient(), {
+    // ADR-071 §2.4: проектный MCP-скоуп (`GET/PUT /:id/mcp`) — паритет с
+    // managed backend: без источника серверов маршрут не регистрируется, и
+    // панель «Проект» → «MCP-серверы» получала 404 (в т.ч. для `remote:`).
+    getMcpServers: () => Object.keys(mcpManager.getConfig() ?? {}),
     // ADR-075: автосоздание/нормализация workspace локальных проектов.
     getWorkspacesRoot: () => config.workspacesRoot ?? join(dataDir, 'workspaces'),
     getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
