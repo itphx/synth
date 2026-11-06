@@ -2207,6 +2207,40 @@ export function createSessionRoutes(
         400,
       );
     }
+
+    // Гибрид: ожидающий ask живёт на удалённом backend (`remote:<id>`) —
+    // пересылаем решение туда (включая `hold`). Локальный `permission.replied`
+    // не публикуется: событие/`session.updated` придёт по мосту.
+    if (hasRemoteGetter && isRemoteRef(id)) {
+      const remoteClient = resolveClient();
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      const once = typeof body?.once === 'boolean' ? body.once : undefined;
+      const turnId = typeof body?.turn_id === 'string' && body.turn_id.trim() !== ''
+        ? body.turn_id
+        : undefined;
+      try {
+        const res = await remoteClient.permissionReply(toLocalId(id), approvalId, {
+          action,
+          ...(once !== undefined ? { once } : {}),
+          ...(turnId ? { turn_id: turnId } : {}),
+          ...(typeof body?.digest === 'string' ? { digest: body.digest } : {}),
+        });
+        if (res.status >= 400) {
+          return c.json(
+            res.body ?? { error: { code: 'REMOTE_ERROR', message: 'Ошибка удалённого сервера' } },
+            res.status as 400 | 401 | 403 | 404 | 409 | 500 | 502,
+          );
+        }
+        return c.json(res.body ?? { status: 'ok', action });
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const session = await sessionManager.getSession(id);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);

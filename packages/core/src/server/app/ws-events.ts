@@ -16,6 +16,10 @@ import { extractChildSessionId, extractCreatedSession } from '../../events/child
 import { parsePermissionPrincipal, type ApprovalRegistry } from '../../engine/permission/approval.js';
 import { resolveUserPrincipal } from '../../engine/authority/principal.js';
 import {
+  buildRemotePermissionReplyBody,
+  relayRemotePermissionReply,
+} from './permission-relay.js';
+import {
   INSTANCE_EVENT_CHANNEL,
   MESSAGE_MODEL_QUERY_PARAM,
   MESSAGE_MODEL_UNSUPPORTED_CLOSE_CODE,
@@ -574,6 +578,45 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
               const principal = parsePermissionPrincipal(msg.principal);
               const turnId = typeof msg.turn_id === 'string' && msg.turn_id.trim() !== '' ? msg.turn_id : undefined;
 
+              // Гибрид: ожидающий ask живёт на удалённом backend (`remote:<id>`).
+              // Ответ пересылается туда; локальный `permission.replied` не
+              // публикуется — удалённая сторона опубликует его сама, а мост
+              // событий принесёт `session.updated` в UI.
+              if (isRemoteRef(sid)) {
+                const remote = connection.client;
+                if (!remote) {
+                  ws.send(JSON.stringify({
+                    type: 'error',
+                    session_id: sid,
+                    data: { error: 'Удалённый сервер не подключён' },
+                    timestamp: nowISO(),
+                  }));
+                  return;
+                }
+                const relayBody = buildRemotePermissionReplyBody({
+                  action,
+                  approved: msg.approved,
+                  once: msg.once,
+                  turn_id: turnId,
+                  digest: msg.digest,
+                });
+                (async () => {
+                  const result = await relayRemotePermissionReply(remote, toLocalId(sid), approvalId, relayBody);
+                  if (!result.ok) {
+                    ws.send(JSON.stringify({
+                      type: 'error',
+                      session_id: sid,
+                      data: {
+                        error: result.error,
+                        ...(result.code ? { code: result.code } : {}),
+                      },
+                      timestamp: nowISO(),
+                    }));
+                  }
+                })().catch(() => {});
+                return;
+              }
+
               // ADR-106 Ф3: ответ принимает только **носитель покрывающего
               // гранта** (реестр подтверждений). Реестр не задан — слой
               // Authority выключен/в shadow, поведение прежнее.
@@ -636,6 +679,51 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                   digest: claim.binding?.digest,
                 });
               })().catch(() => {});
+            } else if (msg.type === 'permission_hold') {
+              const sid = msg.session_id;
+              const approvalId = msg.approval_id;
+              if (!sid || !approvalId) return;
+
+              // «Остановить таймер»: удалённая сессия — пересылаем hold туда
+              // (там живёт ожидающий ask); локальная — паритет с backend
+              // (`permission.hold` в шину сессии).
+              if (isRemoteRef(sid)) {
+                const remote = connection.client;
+                if (!remote) {
+                  ws.send(JSON.stringify({
+                    type: 'error',
+                    session_id: sid,
+                    data: { error: 'Удалённый сервер не подключён' },
+                    timestamp: nowISO(),
+                  }));
+                  return;
+                }
+                (async () => {
+                  const result = await relayRemotePermissionReply(
+                    remote,
+                    toLocalId(sid),
+                    approvalId,
+                    { action: 'hold' },
+                  );
+                  if (!result.ok) {
+                    ws.send(JSON.stringify({
+                      type: 'error',
+                      session_id: sid,
+                      data: {
+                        error: result.error,
+                        ...(result.code ? { code: result.code } : {}),
+                      },
+                      timestamp: nowISO(),
+                    }));
+                  }
+                })().catch(() => {});
+                return;
+              }
+
+              eventBus.publish(sid, 'permission.hold', {
+                approval_id: approvalId,
+                session_id: sid,
+              });
             }
           } catch { /* ignore parse errors */ }
         });

@@ -577,6 +577,28 @@ export class RemoteBackendClient {
     return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/abort`);
   }
 
+  /**
+   * Ответ на подтверждение прав удалённой сессии (гибрид).
+   *
+   * Ответ удалённой стороны возвращается как есть (`status` + разобранное тело):
+   * вызывающий сам решает, пробросить `4xx` клиенту (WS/HTTP-путь) или
+   * преобразовать в ошибку. `allowHttpError` не даёт `request` бросить на
+   * `4xx`; `401` по-прежнему `UNAUTHORIZED` (общая политика клиента).
+   */
+  async permissionReply(
+    sessionId: string,
+    approvalId: string,
+    body: { action: 'allow' | 'deny' | 'hold'; once?: boolean; turn_id?: string; digest?: string },
+  ): Promise<{ status: number; body: unknown }> {
+    const res = await this.request<Response>(
+      'POST',
+      `/api/v2/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(approvalId)}`,
+      body,
+      { raw: true, allowHttpError: true },
+    );
+    return { status: res.status, body: await res.json().catch(() => null) };
+  }
+
   summarizeSession(id: string): Promise<unknown> {
     return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/summarize`);
   }

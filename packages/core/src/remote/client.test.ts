@@ -505,3 +505,61 @@ describe('RemoteBackendClient × ADR-094 (метрики запросов)', () 
     });
   });
 });
+
+describe('RemoteBackendClient.permissionReply (гибрид)', () => {
+  it('POST на /permissions/:approvalId с телом и разбором статуса', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ status: 'ok', action: 'allow' }, 200),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await makeClient().permissionReply('rs 1', 'ap/1', {
+      action: 'allow',
+      once: false,
+      turn_id: 'turn-1',
+      digest: 'd-1',
+    });
+
+    expect(result).toEqual({ status: 200, body: { status: 'ok', action: 'allow' } });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/sessions/rs%201/permissions/ap%2F1',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/json',
+        }),
+        body: JSON.stringify({ action: 'allow', once: false, turn_id: 'turn-1', digest: 'd-1' }),
+      }),
+    );
+  });
+
+  it('4xx не бросает: возвращает status и тело (allowHttpError)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ error: { code: 'APPROVAL_DENIED', message: 'нет гранта' } }, 403),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await makeClient().permissionReply('rs-1', 'ap-1', { action: 'deny' });
+
+    expect(result.status).toBe(403);
+    expect(result.body).toEqual({ error: { code: 'APPROVAL_DENIED', message: 'нет гранта' } });
+  });
+
+  it('не-JSON тело ошибки → body null (статус сохраняется)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('boom', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await makeClient().permissionReply('rs-1', 'ap-1', { action: 'hold' });
+
+    expect(result).toEqual({ status: 500, body: null });
+  });
+
+  it('401 по-прежнему UNAUTHORIZED (allowHttpError не переопределяет auth)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({}, 401)));
+
+    await expect(
+      makeClient().permissionReply('rs-1', 'ap-1', { action: 'allow' }),
+    ).rejects.toBeInstanceOf(RemoteError);
+  });
+});
