@@ -211,17 +211,10 @@ export function ChatTab({ tab }: ChatTabProps) {
         // ADR-118 §5: снимок истории сводится с живым состоянием, а не
         // заменяет его — иначе переключение сессий во время хода затирало
         // уже показанный контент более старым снимком («мелькал» и пропадал).
-        // Границы идущего хода восстанавливаются внутри мержа.
+        // Границы идущего хода восстанавливаются внутри мержа. Курсор
+        // «Загрузить старые» выставляет сам `applyHistoryPage` (обновляется
+        // снимком, пока пользователь не догружал старые страницы).
         applyHistoryPage(sessionId, result)
-        // Курсор «Загрузить старые» инициализируем **один раз** на сессию:
-        // снимок последней страницы не знает про старые страницы, догруженные
-        // пользователем (иначе они стали бы недостижимыми).
-        if (!useChatStore.getState().historyPageBySession[sessionId]) {
-          useChatStore.getState().setHistoryPage(sessionId, {
-            hasMore: result.has_more === true,
-            nextBefore: typeof result.next_before === 'number' ? result.next_before : null,
-          })
-        }
 
         // Агенты и данные сессии параллельно (независимы друг от друга)
         const [agentsResp, session] = await Promise.all([
@@ -288,7 +281,8 @@ export function ChatTab({ tab }: ChatTabProps) {
   /**
    * «Загрузить старые»: страница истории **перед** текущей (`before` — курсор
    * `seq`). Старые сообщения добавляются в начало ленты, курсор пагинации
-   * обновляется (следующая страница — ещё старше).
+   * обновляется (следующая страница — ещё старше), а признак `expanded`
+   * защищает уже догруженный диапазон от «омоложения» снимком.
    *
    * Позицию скролла восстанавливает `MessageList` (он владеет контейнером
    * прокрутки): контент сверху вырос — компенсируем разницу высот.
@@ -306,6 +300,9 @@ export function ChatTab({ tab }: ChatTabProps) {
       chat.setHistoryPage(sessionId, {
         hasMore: result.has_more === true,
         nextBefore: typeof result.next_before === 'number' ? result.next_before : null,
+        // Пользователь догружал старые страницы: снимок последней страницы
+        // больше не должен перезаписывать этот курсор.
+        expanded: true,
       })
     } catch {
       notify({ text: t('chat.error.loadOlder'), type: 'error', category: 'error', sessionId })
@@ -419,29 +416,58 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
   }, [sessionId, setStreamRetry, notify, t])
 
-  // B6: повторная отправка последнего user-сообщения, упавшего с финальной ошибкой.
+  // B6: повторная отправка user-реплики, упавшей с финальной ошибкой.
   // Существующий POST /messages/:sid/:idx/retry не re-enqueue (он отключает сообщения
   // и возвращает текст в input), поэтому композиция из существующих эндпоинтов:
   // disable «упавшего» сообщения (не дублируем его в контексте) → повторная отправка
   // его текста через prompt (сообщение встаёт в очередь заново).
+  //
+  // Адресация цели — **реплике упавшего хода**, а не «последней с last_error»:
+  // после `stream.error` история в сторе не перечитывается, и у текущей
+  // реплики `metadata.last_error` обычно ещё нет — поиск по нему повторял бы
+  // давний запрос. Порядок: `message_id` из события → `turn_id` хода →
+  // последняя user-реплика ленты.
   const handleRetryLastFailed = useCallback(async () => {
-    const msgs = useChatStore.getState().messagesBySession[sessionId] || []
-    const lastFailed = [...msgs].reverse().find(
-      (m) => m.role === 'user' && m.metadata?.last_error,
-    )
-    if (!lastFailed) {
-      useChatStore.getState().setFinalStreamError(sessionId, null)
+    const chat = useChatStore.getState()
+    const msgs = chat.messagesBySession[sessionId] || []
+    const finalError = chat.finalErrorBySession[sessionId] ?? null
+
+    let target: MessageData | undefined
+    const failedId = finalError?.messageId
+    if (failedId) {
+      target = msgs.find((m) => m.id === failedId)
+      if (!target) {
+        // Реплики ещё нет в сторе (лента не перечитана) — точечная загрузка.
+        try {
+          const detail = await synthApi.getSessionMessage(sessionId, failedId)
+          target = detail?.message
+        } catch {
+          // 404/сеть — пробуем адресовать по ходу, затем по последней реплике.
+        }
+      }
+    }
+    if (!target && finalError?.turnId) {
+      target = [...msgs].reverse().find(
+        (m) => m.role === 'user' && m.turn_id === finalError.turnId,
+      )
+    }
+    if (!target) {
+      target = [...msgs].reverse().find((m) => m.role === 'user')
+    }
+    if (!target) {
+      // Цели нет — плашку снимаем, ничего не отправляем.
+      chat.setFinalStreamError(sessionId, null)
       return
     }
     try {
-      if (lastFailed.disabled === false && lastFailed.id) {
-        await synthApi.toggleMessage(sessionId, lastFailed.id)
+      if (target.disabled === false && target.id) {
+        await synthApi.toggleMessage(sessionId, target.id)
       }
       const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
-      await synthApi.enqueueMessage(sessionId, lastFailed.content, {
-        agentRole: lastFailed.agent_role || undefined,
-        provider: selectedProviderName || lastFailed.provider || undefined,
-        model: selectedModelName || lastFailed.model || undefined,
+      await synthApi.enqueueMessage(sessionId, target.content, {
+        agentRole: target.agent_role || undefined,
+        provider: selectedProviderName || target.provider || undefined,
+        model: selectedModelName || target.model || undefined,
       })
       useChatStore.getState().setFinalStreamError(sessionId, null)
       notify({ text: t('chat.streamError.retrySent'), type: 'info', category: 'message', sessionId })
@@ -583,6 +609,10 @@ export function ChatTab({ tab }: ChatTabProps) {
       try {
         if (!msg.id) return
         await synthApi.deleteMessage(sessionId, msg.id)
+        // Снимок ниже не увидит удалённое **самое новое** сообщение — защита от
+        // гонки `ord > maxOrd` (`mergeServerMessages`) сохранила бы его;
+        // удаление адресуем явно по id (multi-client — `message.deleted`).
+        useChatStore.getState().removeMessageById(sessionId, msg.id)
         const result = await synthApi.getSessionMessages(sessionId, { limit: MESSAGES_PAGE_LIMIT })
         // ADR-118 §5: мерж с живым состоянием (см. первичную загрузку).
         applyHistoryPage(sessionId, result)

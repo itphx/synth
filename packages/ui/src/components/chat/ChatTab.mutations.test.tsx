@@ -179,6 +179,67 @@ describe('ChatTab — мутации сообщений по id (ADR-118 §7)', 
     expect(synthApi.deleteMessage).toHaveBeenCalledWith(SESSION, 'msg-a')
   })
 
+  it('удаление самого нового сообщения убирает его, хотя снимок без него имеет меньший maxOrd', async () => {
+    // Регресс: защита от гонки «снимок старше записи» (ord > maxOrd снимка)
+    // сохраняла удалённое самое новое сообщение — удаление адресуется по id.
+    const first = { ...message('m-1', 0, 'user', 'первое', 1), seq: 1 }
+    const second = { ...message('m-2', 1, 'assistant', 'второе', 2), seq: 2 }
+    const newest = { ...message('m-3', 2, 'user', 'самое новое', 3), seq: 3 }
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValueOnce({
+      messages: [first, second, newest],
+      session_id: SESSION,
+    } as never)
+    // Снимок после DELETE: самого нового сообщения уже нет, maxOrd = 2.
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValueOnce({
+      messages: [first, second],
+      session_id: SESSION,
+    } as never)
+
+    const container = await mount()
+    expect(useChatStore.getState().messagesBySession[SESSION]?.map((m) => m.id)).toEqual([
+      'm-1',
+      'm-2',
+      'm-3',
+    ])
+
+    await act(async () => {
+      buttonIn(container, 'm-3', 'Delete').click()
+    })
+    await flush(4)
+
+    expect(synthApi.deleteMessage).toHaveBeenCalledWith(SESSION, 'm-3')
+    expect(useChatStore.getState().messagesBySession[SESSION]?.map((m) => m.id)).toEqual([
+      'm-1',
+      'm-2',
+    ])
+  })
+
+  it('удаление среднего сообщения по-прежнему работает', async () => {
+    const first = { ...message('m-1', 0, 'user', 'первое', 1), seq: 1 }
+    const middle = { ...message('m-2', 1, 'assistant', 'среднее', 2), seq: 2 }
+    const last = { ...message('m-3', 2, 'user', 'последнее', 3), seq: 3 }
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValueOnce({
+      messages: [first, middle, last],
+      session_id: SESSION,
+    } as never)
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValueOnce({
+      messages: [first, last],
+      session_id: SESSION,
+    } as never)
+
+    const container = await mount()
+    await act(async () => {
+      buttonIn(container, 'm-2', 'Delete').click()
+    })
+    await flush(4)
+
+    expect(synthApi.deleteMessage).toHaveBeenCalledWith(SESSION, 'm-2')
+    expect(useChatStore.getState().messagesBySession[SESSION]?.map((m) => m.id)).toEqual([
+      'm-1',
+      'm-3',
+    ])
+  })
+
   it('без серверного id действие не уходит в API', async () => {
     vi.mocked(synthApi.getSessionMessages).mockResolvedValue({
       messages: [{ ...MESSAGES[1]!, id: undefined }],

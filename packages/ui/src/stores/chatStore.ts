@@ -260,6 +260,31 @@ export interface FinalStreamError {
   streamId: string
   error: string
   errorType: string
+  /**
+   * id упавшей user-реплики (`stream.error.message_id`, ADR-118 §4).
+   *
+   * «Повторить» должен адресоваться **этой** реплике, а не последней
+   * user-реплике с устаревшим `metadata.last_error`: после ошибки UI историю
+   * не перечитывает, и `last_error` у текущей реплики в сторе обычно ещё нет.
+   * Поля аддитивные — старое ядро их не присылает (defensive-fallback в UI).
+   */
+  messageId?: string
+  /** id хода, в котором произошла ошибка (`stream.error.turn_id`) — фоллбек-адресация. */
+  turnId?: string
+}
+
+/**
+ * Состояние пагинации истории сессии («Загрузить старые»).
+ *
+ * `expanded` — пользователь уже догружал старые страницы. Пока флаг не поднят,
+ * курсор обновляется снимком истории (`applyHistoryPage`); после — снимок
+ * последней страницы курсор **не трогает** (его `next_before` указывал бы на
+ * уже загруженный диапазон).
+ */
+export interface HistoryPageState {
+  hasMore: boolean
+  nextBefore: number | null
+  expanded?: boolean
 }
 
 export interface QueueState {
@@ -467,7 +492,7 @@ interface ChatStore {
    * лента может быть неполной — состояние живёт в сторе, чтобы кнопка
    * «Загрузить старые» и её курсор переживали переключение вкладок.
    */
-  historyPageBySession: Record<string, { hasMore: boolean; nextBefore: number | null }>
+  historyPageBySession: Record<string, HistoryPageState>
   debugModalSessionId: string | null
   /** ADR-118 §7: отладка адресуется по `id` сообщения (индекс нестабилен). */
   debugModalMessageId: string | null
@@ -484,8 +509,13 @@ interface ChatStore {
   /** Курсор/наличие следующей (более старой) страницы истории. */
   setHistoryPage: (
     sessionId: string,
-    page: { hasMore: boolean; nextBefore: number | null },
+    page: HistoryPageState,
   ) => void
+  /**
+   * Удалить курсор пагинации (очистка истории/сессии): следующая загрузка или
+   * мерж инициализирует его заново из снимка.
+   */
+  clearHistoryPage: (sessionId: string) => void
   /** Upsert сообщения по `id` (ADR-118 §7 — идентификатор устойчив). */
   upsertMessage: (sessionId: string, message: MessageData) => void
   /** Точечная правка сообщения по `id`. */
@@ -694,6 +724,14 @@ export const useChatStore = create<ChatStore>((set) => ({
       historyPageBySession: { ...s.historyPageBySession, [sessionId]: page },
     })),
 
+  clearHistoryPage: (sessionId) =>
+    set((s) => {
+      if (!(sessionId in s.historyPageBySession)) return s
+      const historyPageBySession = { ...s.historyPageBySession }
+      delete historyPageBySession[sessionId]
+      return { historyPageBySession }
+    }),
+
   upsertMessage: (sessionId, message) =>
     set((s) => {
       const current = s.messagesBySession[sessionId] || []
@@ -872,7 +910,17 @@ export const useChatStore = create<ChatStore>((set) => ({
       const prev = s.finalErrorBySession[sessionId]
       // no-op если значение не меняется — иначе лишние перерендеры
       if (prev === error || (prev === null && error === null)) return s
-      if (prev && error && prev.streamId === error.streamId && prev.error === error.error && prev.errorType === error.errorType) return s
+      if (
+        prev
+        && error
+        && prev.streamId === error.streamId
+        && prev.error === error.error
+        && prev.errorType === error.errorType
+      ) {
+        // Поля адресации ошибки (`message_id`/`turn_id`) могли дойти позже
+        // первой публикации — тогда ошибка не «та же самая», обновляем запись.
+        if (prev.messageId === error.messageId && prev.turnId === error.turnId) return s
+      }
       return {
         finalErrorBySession: { ...s.finalErrorBySession, [sessionId]: error },
       }

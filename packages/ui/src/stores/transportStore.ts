@@ -186,18 +186,34 @@ async function runHistoryMergeLoop(sid: string, state: HistoryMergeState): Promi
 
 /** Свести загруженную историю с живым состоянием стора. */
 /**
- * Применить снимок страницы истории: свести его с живым состоянием сессии.
+ * Применить снимок страницы истории: свести его с живым состоянием сессии и
+ * обновить курсор «Загрузить старые».
  *
- * Курсор пагинации («Загрузить старые») здесь **не** трогается: снимок
- * последней страницы не знает про старые страницы, догруженные пользователем,
- * а его `next_before` указывал бы на уже загруженный диапазон. Курсор живёт в
- * `historyPageBySession` и обновляется только явной догрузкой старых страниц.
+ * Курсор — **единая точка** обновления: сюда приходят первичная загрузка
+ * сессии, `mergeHistory` (финал шага/ошибка хода/сжатие контекста) и
+ * переподключение. Снимок последней страницы не знает про старые страницы,
+ * догруженные пользователем, поэтому после первой догрузки (`expanded: true`)
+ * курсор не трогается. Пока флаг не поднят, снимок — источник истины и по
+ * курсору: иначе `has_more: false` из первой (маленькой) истории «залипал»
+ * навсегда и кнопка не возвращалась, когда история вырастала.
  */
 export function applyHistoryPage(sid: string, response: MessageListResponse): void {
   mergeServerMessages(sid, response.messages, {
     hasMore: response.has_more,
     nextBefore: response.next_before,
   })
+  const chat = useChatStore.getState()
+  const page = chat.historyPageBySession[sid]
+  if (page?.expanded === true) return
+  const next = {
+    hasMore: response.has_more === true,
+    nextBefore: typeof response.next_before === 'number' ? response.next_before : null,
+    expanded: false as const,
+  }
+  // No-op guard: снимок приходит на каждый `step.finished`/`mergeHistory` —
+  // не создаём новый объект (и не дёргаем перерендер ленты), если курсор тот же.
+  if (page && page.hasMore === next.hasMore && page.nextBefore === next.nextBefore) return
+  chat.setHistoryPage(sid, next)
 }
 
 /**
@@ -314,6 +330,42 @@ function snapshotMinSeq(messages: MessageData[]): number | null {
   return min
 }
 
+/**
+ * Максимальные ключи порядка снимка — граница «снимок старше записи».
+ *
+ * `GET /messages` мог быть снят **до** того, как сообщение материализовалось
+ * (событие `turn.finished` уже закрыло ход, а запись в историю ещё не попала в
+ * снимок). Такое сообщение заведомо новее снимка — удалять его нельзя.
+ */
+function snapshotMaxOrd(messages: MessageData[]): { maxOrd: number | null; maxSeq: number | null } {
+  let maxOrd: number | null = null
+  let maxSeq: number | null = null
+  for (const m of messages) {
+    if (typeof m.ord === 'number' && Number.isFinite(m.ord)) {
+      if (maxOrd === null || m.ord > maxOrd) maxOrd = m.ord
+    }
+    if (typeof m.seq === 'number' && Number.isFinite(m.seq)) {
+      if (maxSeq === null || m.seq > maxSeq) maxSeq = m.seq
+    }
+  }
+  return { maxOrd, maxSeq }
+}
+
+/**
+ * Сообщение **новее снимка** — попасть в него оно не могло (`ord` больше
+ * максимального `ord` снимка; при отсутствии `ord` — `seq` больше максимального
+ * `seq`). Гонка «снимок старше записи»: удалять такое сообщение нельзя.
+ */
+function isNewerThanSnapshot(m: MessageData, maxOrd: number | null, maxSeq: number | null): boolean {
+  if (typeof m.ord === 'number' && Number.isFinite(m.ord) && maxOrd !== null) {
+    return m.ord > maxOrd
+  }
+  if (typeof m.seq === 'number' && Number.isFinite(m.seq) && maxSeq !== null) {
+    return m.seq > maxSeq
+  }
+  return false
+}
+
 export function mergeServerMessages(
   sid: string,
   messages: MessageData[],
@@ -339,6 +391,15 @@ export function mergeServerMessages(
   // её границы в снимке не значатся, удалять их нельзя.
   const preserveOlder = page?.hasMore === true
   const minSeq = preserveOlder ? snapshotMinSeq(messages) : null
+  // Гонка «снимок старше записи»: снимок мог быть снят до материализации
+  // сообщения (ход уже закрыт `turn.finished`, а записи в снимке нет). Такое
+  // сообщение заведомо новее снимка — сохраняем.
+  //
+  // Синхронизация удалений между клиентами (инвариант 27) от этого не страдает:
+  // удалённое на сервере сообщение имеет `ord` **меньше** максимального в
+  // снимке, поэтому по-прежнему удаляется; удаление самого нового сообщения
+  // приходит отдельным `message.deleted`.
+  const { maxOrd, maxSeq } = snapshotMaxOrd(messages)
   for (const m of current) {
     if (!m.id) continue
     // ADR-118 §5: сообщение **активного хода** не удаляем по снимку. Шаг уже
@@ -351,10 +412,12 @@ export function mergeServerMessages(
       typeof m.seq === 'number' &&
       Number.isFinite(m.seq) &&
       m.seq < minSeq
+    const newerThanSnapshot = isNewerThanSnapshot(m, maxOrd, maxSeq)
     if (
       !belongsToActiveTurn
       && !serverIds.has(m.id)
       && !outsideLoadedPage
+      && !newerThanSnapshot
       && m.ord != null
       && m.status !== 'streaming'
       && !m.steerPending
@@ -2440,8 +2503,25 @@ export function createDispatcher(): EventDispatcher {
         // Терминал хода — закрываем ход (иначе композер остаётся в режиме
         // «в очередь + Стоп», а следующие сообщения не стартуют напрямую).
         closeTurnOnTerminal(asNonEmptyString(payload.stream_id), 'error')
-        setFinalStreamError(sid, { streamId, error: rawError, errorType: errorType || 'unknown' })
+        // Адресация «Повторить»: id упавшей user-реплики и id хода (аддитивные
+        // поля нового ядра; старое их не присылает — UI обязан жить и без них).
+        const failedMessageId = asNonEmptyString(payload.message_id)
+          || asNonEmptyString(payload.messageId)
+        const failedTurnId = asNonEmptyString(payload.turn_id)
+          || asNonEmptyString(payload.turnId)
+        setFinalStreamError(sid, {
+          streamId,
+          error: rawError,
+          errorType: errorType || 'unknown',
+          ...(failedMessageId ? { messageId: failedMessageId } : {}),
+          ...(failedTurnId ? { turnId: failedTurnId } : {}),
+        })
         notifyMessage({ text: error, type: 'error', category: 'error', sessionId: sid })
+        // `last_error` упавшей реплики ядро пишет в историю уже после события —
+        // без перечитывания стора «Повторить» не находит текущую реплику и
+        // целится в более старую с устаревшим `last_error`. Один раз на
+        // терминальную ошибку: `mergeHistory` — single-flight (не спамит).
+        void mergeHistory(sid)
         break
       }
 
@@ -2647,8 +2727,11 @@ export function createDispatcher(): EventDispatcher {
               })
             }
             useChatStore.getState().setMessages(sid, r.messages)
-            // История очищена — пагинация сбрасывается: старых страниц больше нет.
-            useChatStore.getState().setHistoryPage(sid, { hasMore: false, nextBefore: null })
+            // История очищена — курсор пагинации удаляется, а затем берётся из
+            // свежего снимка: иначе в смонтированной вкладке кнопка «Загрузить
+            // старые» не вернулась бы, даже когда старые сообщения есть.
+            useChatStore.getState().clearHistoryPage(sid)
+            applyHistoryPage(sid, r)
             useChatStore.getState().clearQueueState(sid)
             useChatStore.getState().setQueueCounts(sid, 0, 0)
           } catch {

@@ -100,7 +100,7 @@ describe('context.summarization_applied', () => {
     useChatStore.setState({
       messagesBySession: { [SID]: [message('m-old', 0, { ord: 1, seq: 1 })] },
       historyPageBySession: {
-        [SID]: { hasMore: true, nextBefore: 1 },
+        [SID]: { hasMore: true, nextBefore: 1, expanded: true },
       },
     } as never)
 

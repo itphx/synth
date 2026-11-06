@@ -281,6 +281,12 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     if (!ok) return
     try {
       await synthApi.batchMessages(sessionId, 'delete', ids)
+      // Снимок ниже не увидит удалённые **самые новые** сообщения — защита от
+      // гонки `ord > maxOrd` (`mergeServerMessages`) сохранила бы их; удаление
+      // адресуем явно по id (multi-client — `message.deleted`).
+      for (const id of ids) {
+        useChatStore.getState().removeMessageById(sessionId, id)
+      }
       await afterBulkReload()
       notify({ text: `Удалено сообщений: ${ids.length}`, type: 'info', category: 'message', sessionId })
     } catch (e) {

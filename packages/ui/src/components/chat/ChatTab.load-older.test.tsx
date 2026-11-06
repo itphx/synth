@@ -14,8 +14,10 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ChatTab } from './ChatTab'
 import { useChatStore } from '@/stores/chatStore'
+import { applyHistoryPage, createDispatcher } from '@/stores/transportStore'
 import { resetChatStore } from '@/stores/testUtils'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
+import type { WSEvent } from '@/lib/api/transport'
 import type { CenterTab } from '@/stores/useUIStore'
 import type { MessageData } from '@/stores/chatStore'
 
@@ -67,6 +69,12 @@ const TAB: CenterTab = {
 }
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
+
+const dispatch = createDispatcher()
+
+function wsEvent(type: string, data: Record<string, unknown> = {}, sessionId = SESSION): WSEvent {
+  return { type, session_id: sessionId, data }
+}
 
 function serverMsg(id: string, ord: number, seq: number): MessageData {
   return {
@@ -156,6 +164,44 @@ describe('ChatTab — пагинация истории ленты', () => {
     expect(useChatStore.getState().historyPageBySession[SESSION]).toEqual({
       hasMore: true,
       nextBefore: 2,
+      expanded: false,
+    })
+    expect(container.querySelector('[data-testid="load-older"]')).not.toBeNull()
+  })
+
+  it('курсор инициализирован при <200 сообщениях, затем история выросла — кнопка появляется', async () => {
+    // Первая загрузка: история короче страницы — старых сообщений нет.
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValueOnce({
+      messages: [serverMsg('m1', 1, 1)],
+      session_id: SESSION,
+      has_more: false,
+      next_before: null,
+    } as never)
+
+    const container = await mount()
+
+    expect(useChatStore.getState().historyPageBySession[SESSION]).toEqual({
+      hasMore: false,
+      nextBefore: null,
+      expanded: false,
+    })
+    expect(container.querySelector('[data-testid="load-older"]')).toBeNull()
+
+    // История выросла: приходит свежий снимок последней страницы.
+    await act(async () => {
+      applyHistoryPage(SESSION, {
+        messages: [serverMsg('m2', 2, 2)],
+        session_id: SESSION,
+        has_more: true,
+        next_before: 2,
+      })
+    })
+    await flush()
+
+    expect(useChatStore.getState().historyPageBySession[SESSION]).toEqual({
+      hasMore: true,
+      nextBefore: 2,
+      expanded: false,
     })
     expect(container.querySelector('[data-testid="load-older"]')).not.toBeNull()
   })
@@ -182,12 +228,80 @@ describe('ChatTab — пагинация истории ленты', () => {
     })
     const messages = useChatStore.getState().messagesBySession[SESSION] ?? []
     expect(messages.map((m) => m.id)).toEqual(['m1', 'm2'])
-    // Больше старых сообщений нет — кнопка исчезает, курсор сброшен.
+    // Больше старых сообщений нет — кнопка исчезает, курсор помечен догруженным.
     expect(useChatStore.getState().historyPageBySession[SESSION]).toEqual({
       hasMore: false,
       nextBefore: null,
+      expanded: true,
     })
     expect(container.querySelector('[data-testid="load-older"]')).toBeNull()
+  })
+
+  it('после догрузки старой страницы курсор не откатывается снимком', async () => {
+    const container = await mount()
+
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValueOnce({
+      messages: [serverMsg('m1', 1, 1)],
+      session_id: SESSION,
+      has_more: false,
+      next_before: null,
+    } as never)
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="load-older"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await flush()
+
+    // Снимок последней страницы (после реконнекта/финала хода) не должен
+    // «омолодить» курсор: старые страницы уже догружены пользователем.
+    await act(async () => {
+      applyHistoryPage(SESSION, {
+        messages: [serverMsg('m3', 3, 3)],
+        session_id: SESSION,
+        has_more: true,
+        next_before: 2,
+      })
+    })
+    await flush()
+
+    expect(useChatStore.getState().historyPageBySession[SESSION]).toEqual({
+      hasMore: false,
+      nextBefore: null,
+      expanded: true,
+    })
+    expect(container.querySelector('[data-testid="load-older"]')).toBeNull()
+  })
+
+  it('после очистки истории кнопка снова появляется при has_more', async () => {
+    // Первая загрузка: старых нет — кнопки нет.
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValueOnce({
+      messages: [serverMsg('m1', 1, 1)],
+      session_id: SESSION,
+      has_more: false,
+      next_before: null,
+    } as never)
+    const container = await mount()
+    expect(container.querySelector('[data-testid="load-older"]')).toBeNull()
+
+    // Другой клиент очистил историю, новые сообщения уже не влезают в страницу.
+    vi.mocked(synthApi.getSessionMessages).mockResolvedValueOnce({
+      messages: [serverMsg('m2', 2, 2)],
+      session_id: SESSION,
+      has_more: true,
+      next_before: 2,
+    } as never)
+    await act(async () => {
+      dispatch(wsEvent('session.messages.cleared', { session_id: SESSION }))
+    })
+    await flush()
+
+    expect(useChatStore.getState().historyPageBySession[SESSION]).toEqual({
+      hasMore: true,
+      nextBefore: 2,
+      expanded: false,
+    })
+    expect(container.querySelector('[data-testid="load-older"]')).not.toBeNull()
   })
 
   it('ошибка догрузки не теряет уже загруженную страницу', async () => {
@@ -207,6 +321,7 @@ describe('ChatTab — пагинация истории ленты', () => {
     expect(useChatStore.getState().historyPageBySession[SESSION]).toEqual({
       hasMore: true,
       nextBefore: 2,
+      expanded: false,
     })
   })
 })

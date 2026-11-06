@@ -150,6 +150,39 @@ describe('transportStore dispatcher: stream.error → финальная оши�
     expect(notifyMessage).toHaveBeenCalled()
   })
 
+  it('message_id/turn_id (snake_case) сохраняются в finalError', () => {
+    dispatch(makeEvent('stream.error', 's1', {
+      stream_id: 'st1',
+      error: 'boom',
+      error_type: 'network_error',
+      can_retry: false,
+      message_id: 'u-1',
+      turn_id: 't-1',
+    }))
+
+    expect(useChatStore.getState().finalErrorBySession['s1']).toMatchObject({
+      messageId: 'u-1',
+      turnId: 't-1',
+    })
+  })
+
+  it('camelCase-дубли messageId/turnId тоже читаются (fallback через ||)', () => {
+    // `asNonEmptyString` возвращает '' (а не null) — fallback обязан быть `||`.
+    dispatch(makeEvent('stream.error', 's1', {
+      stream_id: 'st2',
+      error: 'boom',
+      error_type: 'network_error',
+      can_retry: false,
+      messageId: 'u-2',
+      turnId: 't-2',
+    }))
+
+    expect(useChatStore.getState().finalErrorBySession['s1']).toMatchObject({
+      messageId: 'u-2',
+      turnId: 't-2',
+    })
+  })
+
   it('can_retry:true → плашки нет (бэкенд продолжит ретраи)', () => {
     dispatch(makeEvent('stream.error', 's1', {
       stream_id: 'st1', error: 'boom', error_type: 'network', can_retry: true,

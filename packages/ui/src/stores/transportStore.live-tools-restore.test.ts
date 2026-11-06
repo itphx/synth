@@ -322,9 +322,21 @@ describe('transportStore: переключение вкладок/сессий �
 
     expect(useChatStore.getState().messagesBySession[SESSION]?.some((m) => m.id === STEP)).toBe(true)
 
-    // Ход завершился — снимок снова источник истины по составу ленты.
+    // Ход завершился — снимок снова источник истины по составу ленты. Снимок
+    // должен быть **новее** шага (в нём есть сообщение с бо́льшим `ord`): иначе
+    // сработала бы защита «снимок старше записи» — см. `mergeServerMessages`.
     useChatStore.getState().finishTurn(SESSION, TURN, 'completed')
-    mergeServerMessages(SESSION, [message({ id: 'm-user', role: 'user', content: 'запусти', ord: 1, status: 'completed' })])
+    mergeServerMessages(SESSION, [
+      message({ id: 'm-user', role: 'user', content: 'запусти', ord: 1, status: 'completed' }),
+      message({
+        id: 'm-later',
+        index: 4,
+        role: 'assistant',
+        content: 'готово',
+        ord: 4,
+        status: 'completed',
+      }),
+    ])
 
     expect(useChatStore.getState().messagesBySession[SESSION]?.some((m) => m.id === STEP)).toBe(false)
   })

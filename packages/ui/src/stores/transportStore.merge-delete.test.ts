@@ -43,14 +43,42 @@ beforeEach(() => {
 })
 
 describe('mergeServerMessages: удаление сообщений по снимку сервера', () => {
-  it('сообщение с ord, которого нет в снимке, исчезает из ленты', () => {
+  it('сообщение с ord внутри диапазона снимка, которого нет в снимке, исчезает из ленты', () => {
     const kept = message({ index: 0, id: 'm-keep', content: 'осталось', ord: 1 })
     const deleted = message({ index: 1, id: 'm-deleted', content: 'удалено', ord: 2 })
-    useChatStore.getState().setMessages(SID, [kept, deleted])
+    const newer = message({ index: 2, id: 'm-newer', content: 'новее', ord: 3 })
+    useChatStore.getState().setMessages(SID, [kept, deleted, newer])
 
-    mergeServerMessages(SID, [kept])
+    mergeServerMessages(SID, [kept, newer])
 
-    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual(['m-keep'])
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual(['m-keep', 'm-newer'])
+  })
+
+  it('сообщение с ord новее max(ord) снимка сохраняется, даже если его нет в снимке', () => {
+    // Гонка «снимок старше записи»: снимок снят до материализации сообщения
+    // (ход уже закрыт `turn.finished`), поэтому в нём его нет. Такое сообщение
+    // заведомо новее снимка — удалять его нельзя.
+    const snapshotMsg = message({ index: 0, id: 'm-snapshot', content: 'в снимке', ord: 5 })
+    const trailing = message({ index: 1, id: 'm-trailing', content: 'после снимка', ord: 6 })
+    useChatStore.getState().setMessages(SID, [snapshotMsg, trailing])
+
+    mergeServerMessages(SID, [snapshotMsg])
+
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual([
+      'm-snapshot',
+      'm-trailing',
+    ])
+  })
+
+  it('сообщение с ord внутри диапазона снимка по-прежнему удаляется', () => {
+    const first = message({ index: 0, id: 'm-first', content: 'первое', ord: 1 })
+    const deleted = message({ index: 1, id: 'm-deleted', content: 'удалено', ord: 2 })
+    const last = message({ index: 2, id: 'm-last', content: 'последнее', ord: 3 })
+    useChatStore.getState().setMessages(SID, [first, deleted, last])
+
+    mergeServerMessages(SID, [first, last])
+
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual(['m-first', 'm-last'])
   })
 
   it('оптимистичное сообщение (ord == null) сохраняется', () => {
@@ -157,11 +185,11 @@ describe('mergeServerMessages: пагинация истории', () => {
     expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual(['m-new'])
   })
 
-  it('applyHistoryPage не сбрасывает курсор «Загрузить старые»', () => {
-    // Курсор указывает на самую старую загруженную страницу; снимок последней
-    // страницы о нём не знает — сбрасывать его нельзя, иначе старые страницы
-    // стали бы недостижимыми.
-    useChatStore.getState().setHistoryPage(SID, { hasMore: true, nextBefore: 5 })
+  it('applyHistoryPage не сбрасывает курсор после догрузки старых страниц (expanded)', () => {
+    // Пользователь уже догрузил старую страницу; снимок последней страницы о
+    // ней не знает — сдвигать курсор нельзя, иначе страницы станут
+    // недостижимыми/«омолодятся».
+    useChatStore.getState().setHistoryPage(SID, { hasMore: true, nextBefore: 5, expanded: true })
 
     applyHistoryPage(SID, {
       messages: [message({ index: 0, id: 'm-new', content: 'новое', ord: 9, seq: 9 })],
@@ -173,6 +201,42 @@ describe('mergeServerMessages: пагинация истории', () => {
     expect(useChatStore.getState().historyPageBySession[SID]).toEqual({
       hasMore: true,
       nextBefore: 5,
+      expanded: true,
     })
+  })
+
+  it('пока старые не догружались, курсор обновляется снимком (история выросла)', () => {
+    // Первая загрузка была при короткой истории (`has_more: false`) — после
+    // роста истории курсор обязан обновиться, иначе кнопка «залипает».
+    useChatStore.getState().setHistoryPage(SID, { hasMore: false, nextBefore: null, expanded: false })
+
+    applyHistoryPage(SID, {
+      messages: [message({ index: 0, id: 'm-new', content: 'новое', ord: 9, seq: 9 })],
+      session_id: SID,
+      has_more: true,
+      next_before: 9,
+    })
+
+    expect(useChatStore.getState().historyPageBySession[SID]).toEqual({
+      hasMore: true,
+      nextBefore: 9,
+      expanded: false,
+    })
+  })
+
+  it('повторный снимок с теми же значениями не пересоздаёт запись курсора', () => {
+    // Снимок приходит на каждый `step.finished`/`mergeHistory`: без no-op guard
+    // каждый раз создавался бы новый объект → лишние перерендеры ленты.
+    useChatStore.getState().setHistoryPage(SID, { hasMore: true, nextBefore: 5, expanded: false })
+    const before = useChatStore.getState().historyPageBySession[SID]
+
+    applyHistoryPage(SID, {
+      messages: [message({ index: 0, id: 'm-new', content: 'новое', ord: 9, seq: 9 })],
+      session_id: SID,
+      has_more: true,
+      next_before: 5,
+    })
+
+    expect(useChatStore.getState().historyPageBySession[SID]).toBe(before)
   })
 })
