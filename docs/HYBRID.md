@@ -164,6 +164,17 @@ synth serve --connect https://synth.k3s.itphx.loc
   возвращается с id в форме `remote:<uuid>`. Поэтому слепой прокси к
   `/api/v2/context` на этот точный путь **не применяется** (остальной
   `/api/v2/context/*`, включая `/context/files`, проксируется как раньше).
+- **Все панельные `:id`-маршруты сессии — origin-aware.** Для `remote:`-сессии
+  проксируются `optimization*`, `mcp`, `secrets`, `notes*`, `stats`, `prompt`,
+  `references*`, `questions*`, `children`/`tree`, `fork`, `messages/:messageId`,
+  `clear`, `resume-subagent` (плюс `memory`/`messages`/`abort`/`permissions`/
+  `summarize`/`background`). Вложенные id (`source_session_id`/`sourceSessionId`
+  в `references`/`messages/merge`, `refSid` при удалении ссылки) уходят на сервер
+  **без** префикса, а ответы возвращаются с `remote:`-ссылками (DTO сессии,
+  детей и дерева, `sessionId` ссылок и вопросов); id заметок/сообщений/вопросов
+  адресуются внутри своего мира и не префиксуются. Значит, правые вкладки
+  («Сессия», «Статистика», «Контекст», «Ссылки», док вопросов) в гибриде
+  показывают данные удалённой стороны, а не 404.
 - Идентификаторы индексов памяти, пайплайнов и прогонов в ответах этих роутов
   приходят с префиксом `remote:` (индекс/пайплайн/прогон живут на сервере);
   id worktree'а не префиксуется — он адресуется внутри `remote:`-проекта.

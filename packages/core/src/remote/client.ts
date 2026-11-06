@@ -673,6 +673,154 @@ export class RemoteBackendClient {
     return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/memory`);
   }
 
+  // Оптимизация контекста (ADR-119) удалённой сессии: настройки вкладки
+  // «Контекст» живут в мире этой сессии.
+  getSessionOptimization(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/optimization`);
+  }
+
+  updateSessionOptimization(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('PATCH', `/api/v2/sessions/${encodeURIComponent(id)}/optimization`, body);
+  }
+
+  checkSessionOptimization(id: string): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/optimization/check`);
+  }
+
+  cancelSessionSummarization(id: string): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/sessions/${encodeURIComponent(id)}/optimization/cancel-summarization`,
+    );
+  }
+
+  // MCP-скоуп сессии (ADR-071 §2.4) удалённой сессии.
+  getSessionMcp(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/mcp`);
+  }
+
+  updateSessionMcp(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('PUT', `/api/v2/sessions/${encodeURIComponent(id)}/mcp`, body);
+  }
+
+  // Карта обфускации Gateway (ADR-036) удалённой сессии: право проверяет
+  // удалённая сторона (ADMIN/AUDITOR в managed).
+  getSessionSecrets(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/secrets`);
+  }
+
+  // Панельные `:id`-маршруты удалённой сессии (ADR-042): вкладки «Сессия»,
+  // «Статистика», «Контекст», «Ссылки», док вопросов. Идентификаторы внутри
+  // ответа принадлежат удалённому миру — префикс `remote:` ставит вызывающий.
+  getSessionStatus(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/status`);
+  }
+
+  getSessionPrompt(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/prompt`);
+  }
+
+  getSessionStats(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/stats`);
+  }
+
+  getSessionNotes(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/notes`);
+  }
+
+  createSessionNote(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/notes`, body);
+  }
+
+  updateSessionNote(id: string, noteId: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>(
+      'PATCH',
+      `/api/v2/sessions/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`,
+      body,
+    );
+  }
+
+  deleteSessionNote(id: string, noteId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'DELETE',
+      `/api/v2/sessions/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`,
+    );
+  }
+
+  getSessionMessage(sessionId: string, messageId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'GET',
+      `/api/v2/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}`,
+    );
+  }
+
+  clearSession(id: string): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/clear`);
+  }
+
+  resumeSubagent(id: string): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/resume-subagent`);
+  }
+
+  getSessionChildren(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/children`);
+  }
+
+  getSessionTree(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/tree`);
+  }
+
+  forkSession(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/fork`, body);
+  }
+
+  getSessionReferences(id: string): Promise<unknown> {
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/references`);
+  }
+
+  addSessionReference(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/references`, body);
+  }
+
+  removeSessionReference(id: string, refSessionId: string): Promise<void> {
+    return this.request<void>(
+      'DELETE',
+      `/api/v2/sessions/${encodeURIComponent(id)}/references/${encodeURIComponent(refSessionId)}`,
+    );
+  }
+
+  mergeSessionMessages(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/messages/merge`, body);
+  }
+
+  listSessionQuestions(
+    id: string,
+    params?: { status?: string; limit?: number | string },
+  ): Promise<unknown> {
+    const query = new URLSearchParams();
+    if (params?.status !== undefined) query.set('status', params.status);
+    if (params?.limit !== undefined) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    const suffix = qs ? `?${qs}` : '';
+    return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/questions${suffix}`);
+  }
+
+  answerSessionQuestion(id: string, questionId: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/sessions/${encodeURIComponent(id)}/questions/${encodeURIComponent(questionId)}/answer`,
+      body,
+    );
+  }
+
+  cancelSessionQuestion(id: string, questionId: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/sessions/${encodeURIComponent(id)}/questions/${encodeURIComponent(questionId)}/cancel`,
+      body,
+    );
+  }
+
   // Проектный скоуп MCP (ADR-071 §2.4) удалённого проекта.
   getProjectMcp(id: string): Promise<unknown> {
     return this.request<unknown>('GET', `/api/v2/projects/${encodeURIComponent(id)}/mcp`);

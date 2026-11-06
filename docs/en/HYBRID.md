@@ -157,6 +157,18 @@ synth serve --connect https://synth.k3s.itphx.loc
   pipelines/runs/templates (`/projects/:id/pipelines*`, `/pipeline-runs/*`,
   `/pipeline-templates`) for `remote:` entities are **proxied to the server** —
   access and data are checked there.
+- **All panel `:id` session routes are origin-aware.** For a `remote:` session
+  the following are proxied: `optimization*`, `mcp`, `secrets`, `notes*`,
+  `stats`, `prompt`, `references*`, `questions*`, `children`/`tree`, `fork`,
+  `messages/:messageId`, `clear`, `resume-subagent` (plus `memory`/`messages`/
+  `abort`/`permissions`/`summarize`/`background`). Nested ids (`source_session_id`/
+  `sourceSessionId` in `references`/`messages/merge`, `refSid` on reference
+  deletion) are sent to the server **without** the prefix, while responses come
+  back with `remote:` refs (session, children and tree DTOs, `sessionId` of
+  references and questions); note/message/question ids are addressed inside their
+  own world and are not prefixed. So the right-hand tabs ("Session", "Stats",
+  "Context", "References", the question dock) show the remote side's data in
+  hybrid mode instead of a 404.
 - Memory index, pipeline, and run identifiers in those responses carry the
   `remote:` prefix (the index/pipeline/run lives on the server); worktree ids are
   not prefixed — they are addressed within the `remote:` project.

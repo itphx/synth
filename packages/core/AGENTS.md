@@ -441,6 +441,13 @@
   локальный `EventBus`.
 - Идентификация: id удалённых сущностей — `remote:<uuid>`, маршрутизация по полю
   `origin`; id не смешивать (`remote/aggregate.ts`).
+- **Панельные `:id`-маршруты сессии origin-aware**: для `remote:`-сессии
+  core-фабрика форвардит `status`/`prompt`/`stats`/`notes*`/`references*`/
+  `questions*`/`children`/`tree`/`fork`/`messages/:messageId`/`clear`/
+  `resume-subagent` (и ранее — `optimization*`/`mcp`/`secrets`/`memory`/`messages`/
+  `abort`/`permissions`/`summarize`/`background`) через `forwardRemoteSession`
+  (`server/routes/sessions.ts`): ответы нормализуются в `remote:`, вложенные id —
+  `toLocalId`.
 - LLM локальных сессий в гибриде — через `RemoteProvider` →
   `POST /api/v2/llm/chat/completions` (`providers/remote.ts`); режим — `remote.llm`
   (`server` | `local` | `auto`). Токен берётся у `RemoteSession.getToken()`
@@ -586,7 +593,7 @@
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
-- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
+- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `GET/PATCH /:id/optimization*` (ADR-119) + `POST /:id/optimization/check|cancel-summarization` — вкладка «Контекст», настройки читает движок на core, поэтому маршруты обязаны жить в общей фабрике (в гибриде `remote:` форвардится клиентом); `GET/PUT /:id/mcp` — MCP-скоуп сессии (backend регистрирует свою, более строгую версию раньше); `GET /:id/secrets` — карта обфускации по праву раскрытия (`resolveCanRevealSecrets`); `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `meta` (ADR-118: `GET /api/v2/meta` — возможности инстанса, без аутентификации), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,

@@ -51,10 +51,11 @@ import { createProjectAccess } from './projects.js';
 
 /**
  * Backend-обёртка над core-фабрикой сессий (ТД-1, фаза B2). Здесь остаются только
- * backend-специфичные роуты (MCP-скоуп сессии, секреты, export/import, отладка,
- * оптимизация контекста). Общая логика (список/создание/чтение/изменение/
+ * backend-специфичные роуты (MCP-скоуп сессии и секреты — более строгая политика
+ * managed, export/import, отладка). Общая логика (список/создание/чтение/изменение/
  * удаление, status/prompt/stats, заметки (`notes`), очередь+SSE, children/tree/
- * fork, references, merge) — в `createSessionRoutes` из `@itphx/synth-core`.
+ * fork, references, merge, оптимизация контекста, core-версии MCP-скоупа и
+ * секретов для standalone/гибрида) — в `createSessionRoutes` из `@itphx/synth-core`.
  *
  * RBAC: core-фабрика параметризуется `resolveUserId`/`resolveOwner`/`resolveAuthor`,
  * `canAccess` (владелец|ADMIN) и EventHub-хуками; remote/hybrid-ветки отключены
@@ -63,7 +64,9 @@ import { createProjectAccess } from './projects.js';
  *
  * Исключения из общего prefix-guard'а (собственные правила, роуты зарегистрированы
  * до guard'а): `/:id/mcp` (владелец|ADMIN, ADR-071 §2.4) и `/:id/secrets`
- * (ADMIN|AUDITOR — карта обфускации). `/:id/export` — ПОД guard'ом: доступ к
+ * (ADMIN|AUDITOR — карта обфускации). В core-фабрике есть версии этих маршрутов
+ * для standalone/гибрида; здесь они регистрируются раньше и потому выигрывают,
+ * сохраняя прежнюю политику. `/:id/export` — ПОД guard'ом: доступ к
  * сессии решает ЕДИНЫЙ prefix-guard, а привилегию карты обфускации — отдельный
  * route-level guard (`createSessionExportGuard`, ADR-036); в обработчике проверок
  * доступа нет (инвариант 16).
@@ -349,9 +352,10 @@ export function createSessionRoutes(
 
   // Единый prefix-guard ресурса сессий: вешается ПОСЛЕ `/:id/mcp` и `/:id/secrets`
   // (у них собственные задокументированные правила) и покрывает отладку,
-  // оптимизацию, заметки, ЭКСПОРТ и все core-маршруты (core-фабрика
-  // регистрируется с registerAccessGuard:false — иначе был бы второй источник
-  // правил). `/import` пропускается через guard.skipForId (статический сегмент,
+  // оптимизацию (реализация — в core-фабрике, регистрируется ниже), заметки,
+  // ЭКСПОРТ и все core-маршруты (core-фабрика регистрируется с
+  // registerAccessGuard:false — иначе был бы второй источник правил).
+  // `/import` пропускается через guard.skipForId (статический сегмент,
   // не сессия).
   app.use('/:id', kit.requireAuth, sessionAccessGuard as never);
   app.use('/:id/*', kit.requireAuth, sessionAccessGuard as never);
@@ -540,120 +544,17 @@ export function createSessionRoutes(
     return c.json({ status: 'enqueued', stream_id: streamId });
   });
 
-  // GET /api/v2/sessions/:id/optimization — настройки оптимизации
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.get('/:id/optimization', kit.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
-
-    return c.json({
-      context_optimization: session.settings.contextOptimization,
-      sliding_window_mode: session.settings.slidingWindowMode,
-      sliding_window_message_limit: session.settings.slidingWindowMessageLimit,
-      sliding_window_token_threshold: session.settings.slidingWindowTokenThreshold,
-      summarization_enabled: session.settings.summarizationEnabled,
-      summarization_trigger_mode: session.settings.summarizationTriggerMode,
-      summarize_after_n: session.settings.summarizeAfterN,
-      summarize_token_threshold: session.settings.summarizeTokenThreshold,
-      summarization_head_messages: session.settings.summarizationHeadMessages,
-      summarization_tail_messages: session.settings.summarizationTailMessages,
-      summarization_keep_tokens: session.settings.summarizationKeepTokens,
-      compaction_keep_tokens: session.settings.compactionKeepTokens,
-      compaction_token_threshold: session.settings.compactionTokenThreshold,
-    });
-  });
-
-  // PATCH /api/v2/sessions/:id/optimization — обновить настройки
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.patch('/:id/optimization', kit.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
-
-    const body = await c.req.json().catch(() => ({}));
-
-    await sessionManager.withLock(c.req.param('id'), async (s) => {
-      if (body.context_optimization !== undefined) s.settings.contextOptimization = body.context_optimization;
-      if (body.sliding_window_mode !== undefined) s.settings.slidingWindowMode = body.sliding_window_mode;
-      if (body.sliding_window_message_limit !== undefined) s.settings.slidingWindowMessageLimit = body.sliding_window_message_limit;
-      if (body.sliding_window_token_threshold !== undefined) s.settings.slidingWindowTokenThreshold = body.sliding_window_token_threshold;
-      if (body.summarization_enabled !== undefined) s.settings.summarizationEnabled = body.summarization_enabled;
-      if (body.summarization_trigger_mode !== undefined) s.settings.summarizationTriggerMode = body.summarization_trigger_mode;
-      if (body.summarize_after_n !== undefined) s.settings.summarizeAfterN = body.summarize_after_n;
-      if (body.summarize_token_threshold !== undefined) s.settings.summarizeTokenThreshold = body.summarize_token_threshold;
-      if (body.summarization_head_messages !== undefined) s.settings.summarizationHeadMessages = body.summarization_head_messages;
-      if (body.summarization_tail_messages !== undefined) s.settings.summarizationTailMessages = body.summarization_tail_messages;
-      if (body.summarization_keep_tokens !== undefined) s.settings.summarizationKeepTokens = body.summarization_keep_tokens;
-      if (body.compaction_keep_tokens !== undefined) s.settings.compactionKeepTokens = body.compaction_keep_tokens;
-      if (body.compaction_token_threshold !== undefined) s.settings.compactionTokenThreshold = body.compaction_token_threshold;
-      await sessionManager.saveSession(s);
-    });
-
-    const updated = await sessionManager.getSession(c.req.param('id'));
-    return c.json(serializeSession(updated!, { agentRegistry }));
-  });
-
-  // POST /api/v2/sessions/:id/optimization/check — проверить триггеры
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.post('/:id/optimization/check', kit.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
-
-    if (!contextOptimizer) {
-      return c.json({ sliding_window: { triggered: false }, summarization: { triggered: false }, compression: { triggered: false, reason: 'none', mode: null } });
-    }
-
-    const swResult = contextOptimizer.shouldApplySlidingWindow(session);
-    const sumResult = contextOptimizer.shouldSummarize(session);
-    const compression = typeof contextOptimizer.shouldCompress === 'function'
-      ? contextOptimizer.shouldCompress(session)
-      : { ...contextOptimizer.shouldSummarize(session), mode: 'summarization' as const };
-
-    return c.json({
-      sliding_window: swResult,
-      summarization: sumResult,
-      compression,
-      summarization_pending: session.summarizationPending,
-    });
-  });
-
-  // POST /api/v2/sessions/:id/optimization/cancel-summarization — отменить ожидающую суммаризацию
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.post('/:id/optimization/cancel-summarization', kit.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
-
-    await sessionManager.withLock(session.id, async (s) => {
-      s.summarizationPending = false;
-      await sessionManager.saveSession(s);
-    });
-
-    if (contextOptimizer) {
-      const updated = await sessionManager.getSession(session.id);
-      const can = contextOptimizer.canSummarize(updated!);
-      eventBus.publish(session.id, 'session.updated', {
-        session_id: session.id,
-        can_summarize: can,
-        summarization_pending: false,
-      });
-    }
-
-    return c.json({ success: true });
-  });
+  // GET /api/v2/sessions/:id/optimization — настройки оптимизации контекста
+  // (ADR-119). Реализация — в core-фабрике (нужна standalone/гибриду): backend
+  // монтирует её ниже, единый prefix-guard покрывает доступ (инвариант 16).
 
   // Общая логика — в core-фабрике (backend-специфика выше). Регистрируем её
   // последней: статические/backend-only сегменты должны матчиться раньше.
+  // Оптимизация контекста (ADR-119), MCP-скоуп сессии и карта обфускации живут
+  // в core-фабрике — они нужны standalone/гибриду (`remote:`-сессии
+  // форвардятся на backend). Свои `/:id/mcp` и `/:id/secrets` зарегистрированы
+  // ВЫШЕ и сохраняют более строгую политику managed (владелец|ADMIN и
+  // ADMIN|AUDITOR соответственно) — порядок регистрации оставляет её в силе.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
     { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}) },
