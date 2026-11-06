@@ -8,6 +8,7 @@
 > [ADR-039](./adr-039-plan-in-project.md), [ADR-122](./adr-122-memory-product.md),
 > [PROP-050](./prop-050-external-engines-runner.md), [ADR-051](./adr-051-scheduler-pipelines.md),
 > [PROP-058](./prop-058-service-agents-council.md), [ADR-100](./adr-100-extension-packs-pipelines.md).
+> **Обновлено:** 2026-11-06 — описан кандидат в MVP-срез «Goal Mode» (§9): objective + judge + termination guards.
 
 **Решение:** inner loop (ReAct) в Synth уже автоматический; PROP-057 автоматизирует **outer loop** —
 управляемый цикл «шаг → проверка → повтор» вокруг работы агента.
@@ -89,6 +90,28 @@
 Вариант A — shell напрямую; вариант B — через Runner ([PROP-050](./prop-050-external-engines-runner.md)).
 Определяется в рамках реализации.
 
+### 9. Кандидат в MVP-срез: Goal Mode (2026-11-06)
+
+Первый реализуемый срез outer loop — **режим цели**: пользователь задаёт objective, после каждого
+хода независимый `judge` проверяет прогресс, а `LoopRunner` либо отправляет continuation, либо
+завершает/ставит на паузу. Это частный случай §4, а не отдельная подсистема; статус PROP-057
+остаётся vision, решение о сроках принимается отдельно.
+
+- **Objective** + **Verification Rubric** (`judge`; см. [PROP-058](./prop-058-service-agents-council.md)).
+- **Termination Guards**: `max rounds`, `no-progress`/`stalls`, `budget` (токены), пауза при
+  перезапуске и при ошибке хода.
+- **Continuation** — через очередь сообщений, не прямым вызовом оркестратора; пользовательский ввод
+  имеет приоритет.
+- **UI** — кнопка-цель, строка цели, статусы (`active`/`paused`/`blocked`/`budget`/`complete`).
+- **Референсы:** opencode `packages/core/src/plugin/goal.ts` (вердикты `done`/`continue`/`blocked`/
+  `paused`/`wait`, лимиты, контекстный reminder), openchamber `packages/web/server/lib/session-goal/`
+  (бюджет, статусы, UI, уведомления). Код не копируется: контракты Synth — очередь, события,
+  Gateway, порты хранения.
+
+Поверхность ввода (`/`, `@`, `$`, `#`, `!`) с goal не связана и описана в
+[PROP-126](./prop-126-input-surface-mentions-snippets.md); отдельной команды `/goal` в рамках
+этого среза не вводим — цель задаётся через UI.
+
 ## Статус реализации в коде
 
 **Не реализовано.** Проверено по репозиторию (grep по `packages/**`, исключая `dist/` и `node_modules/`):
@@ -124,3 +147,5 @@
 - [ADR-101](./adr-101-pipeline-engine.md) «Pipeline Automation» — композиция циклов.
 - [ADR-122](./adr-122-memory-product.md) «Память Synth» — журнал/guardrails/шаблоны.
 - [PROP-063](./prop-063-user-learning-metrics.md) «Обучение пользователя и метрики» — метрики циклов.
+- [PROP-126](./prop-126-input-surface-mentions-snippets.md) — поверхность ввода (goal не вводит отдельный префикс).
+- [PROP-064](./prop-064-ui-browser-terminal.md) — терминал в UI, если шаг/проверка цикла идёт через shell.

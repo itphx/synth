@@ -382,7 +382,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 105 (Решения: 50, Частично: 23, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 106 (Решения: 50, Частично: 23, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 17 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
