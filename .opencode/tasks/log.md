@@ -138,3 +138,11 @@
 - **Документация:** `docs/HYBRID.md` + `docs/en/HYBRID.md` §2.1 (список origin-aware маршрутов и нормализация id), `packages/core/AGENTS.md`.
 - **Остаток:** `GET /sessions/:id/export`, `POST /sessions/import`, `POST /:id/debug-system-message` — осознанно backend-only (внутренний/CLI-контракт, UI не использует). Для применения — перезапуск локального core.
 - **Коммит:** не делался (нет явной просьбы).
+
+## 2026-11-06 12:24 — Деплой test 0.13.5-9 и бета b746c9b8
+
+- **Задача:** закоммитить фикс гибридных панельных маршрутов, собрать и задеплоить на test без смены версии (только номер сборки), собрать и опубликовать бету. **Тип:** infra / publish. **Исполнитель:** оркестратор.
+- **Код:** коммит `b746c9b8` (`fix: гибрид — компактизация и панельные маршруты сессии`) в `synth/master` (локально, не запушен).
+- **Test:** `synth-deploy/scripts/build-and-publish.sh --test-only --app-version 0.13.5` (slim: backend/ui/executor) и повтор с `BACKEND_FLAVOR=full` (all-in-one backend). Образы `synth-backend:0.13.5`, `synth-backend:0.13.5-full`, `synth-ui:0.13.5`, `synth-executor:0.13.5-full`, build `b746c9b8`; чарт `synth 0.13.5-9` опубликован и запинен в `test/` + `test-allinone/`; `synth-deploy` коммит `2d434a3` запушен в `main`. Проверено: bundles `synth-test`/`synth-test-allinone` — `1/1`, поды Running, `/health` обоих инстансов — `version 0.13.5`, `build b746c9b8`.
+- **Бета:** `GITEA_NPM_TOKEN=… ./scripts/publish-beta.sh --base 0.13.5 --restore-dist` → `0.13.5-beta.20261106072223.b746c9b8`, 8/8 пакетов в Gitea npm, dist-tag `beta`, `latest` не двигался, smoke (`synth --version`) ок; версии/`dist` восстановлены под `0.13.5`.
+- **Остаток:** при необходимости — push `synth` в origin (gitverse) / github-зеркало; локальный dev-core перезапустить для подхвата `dist`.
