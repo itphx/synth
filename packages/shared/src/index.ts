@@ -309,8 +309,6 @@ export {
   resolveTlsTrust,
   resolveTlsProfiles,
   selectTlsClientProfile,
-  matchTlsHostPattern,
-  normalizeTlsHost,
   isPemContent,
   TLS_ENV,
 } from './config/index.js';

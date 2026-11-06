@@ -2,6 +2,14 @@
 
 import { BASE_URL, fetchJSON } from './base'
 
+/**
+ * PROP-124: способы использования ключа (`git`/`ssh`).
+ *
+ * Тип объявлен локально (как остальные DTO этого домена): core-типы в
+ * браузерный бандл не тащим.
+ */
+export type SSHKeyUsage = 'git' | 'ssh'
+
 /** ADR-076: публичная форма SSH-ключа (секреты `privateKey`/`passphrase` API не отдаёт). */
 export interface SSHKeyMetaData {
   id: string
@@ -9,6 +17,12 @@ export interface SSHKeyMetaData {
   /** Метка типа ключа, дефолт `'user'`. */
   type?: string
   agentIds: string[]
+  /** PROP-124: способы использования ключа (`git`/`ssh`). */
+  usages?: SSHKeyUsage[]
+  /** PROP-124: правила хостов (режим `tools`). */
+  allowHosts?: string[]
+  /** PROP-124: порты (режим `tools`). */
+  allowPorts?: number[]
   createdAt: string
   updatedAt?: string
 }
@@ -20,6 +34,12 @@ export interface SSHKeyCreateBody {
   privateKey: string
   passphrase?: string
   agentIds?: string[]
+  /** PROP-124: способы использования ключа (`git`/`ssh`). */
+  usages?: SSHKeyUsage[]
+  /** PROP-124: правила хостов (режим `tools`). */
+  allowHosts?: string[]
+  /** PROP-124: порты (режим `tools`). */
+  allowPorts?: number[]
 }
 
 /** ADR-076: тело обновления SSH-ключа (partial; без `privateKey` секрет не меняется). */

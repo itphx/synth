@@ -18,6 +18,7 @@ import { MIGRATION_027_CONTEXT_FILES } from './027-context-files.js';
 import { MIGRATION_028_MESSAGE_REASONING_SIGNATURE } from './028-message-reasoning-signature.js';
 import { MIGRATION_029_MESSAGE_STREAM_V2 } from './029-message-stream-v2.js';
 import { MIGRATION_030_SESSION_RETRY } from './030-session-retry.js';
+import { MIGRATION_031_SSH_KEY_POLICY } from './031-ssh-key-policy.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -197,12 +198,11 @@ describe('миграция 029_message_stream_v2 (ADR-118)', () => {
 });
 
 describe('миграция 030_session_retry (ADR-118 — активность сессии)', () => {
-  it('зарегистрирована в реестре под версией 30 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 30', () => {
     const migration = MIGRATIONS.find((m) => m.version === 30);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('030_session_retry');
     expect(migration!.sql).toBe(MIGRATION_030_SESSION_RETRY);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(30);
   });
 
   it('добавляет колонку retry идемпотентно', () => {
@@ -219,5 +219,27 @@ describe('реестр миграций', () => {
     const versions = MIGRATIONS.map((m) => m.version);
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     expect(new Set(versions).size).toBe(versions.length);
+  });
+});
+describe('миграция 031_ssh_key_policy (PROP-124 — политика SSH-ключа)', () => {
+  it('зарегистрирована в реестре под версией 31 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 31);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('031_ssh_key_policy');
+    expect(migration!.sql).toBe(MIGRATION_031_SSH_KEY_POLICY);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(31);
+  });
+
+  it('добавляет колонки политики идемпотентно', () => {
+    expect(MIGRATION_031_SSH_KEY_POLICY).toContain(
+      'ALTER TABLE ssh_keys ADD COLUMN IF NOT EXISTS usages text[] NOT NULL DEFAULT ARRAY[\'git\'];',
+    );
+    expect(MIGRATION_031_SSH_KEY_POLICY).toContain(
+      'ALTER TABLE ssh_keys ADD COLUMN IF NOT EXISTS allow_hosts text[] NOT NULL DEFAULT ARRAY[]::text[];',
+    );
+    expect(MIGRATION_031_SSH_KEY_POLICY).toContain(
+      'ALTER TABLE ssh_keys ADD COLUMN IF NOT EXISTS allow_ports integer[] NOT NULL DEFAULT ARRAY[]::integer[];',
+    );
+    expect(MIGRATION_031_SSH_KEY_POLICY).not.toMatch(/ALTER TABLE(?! ssh_keys ADD COLUMN IF NOT EXISTS)/);
   });
 });

@@ -13,6 +13,7 @@
  */
 
 import { createSshEnv } from '../git/ssh-env.js';
+import { ensureSshSweepStarted } from './ssh-sweep.js';
 import type { ExecSecret } from './ports/index.js';
 
 /** Готовое окружение вызова + идемпотентная очистка. */
@@ -34,6 +35,10 @@ export interface MaterializedSecretEnv {
  * аутентификации.
  */
 export async function materializeSecretEnv(secrets: ExecSecret[]): Promise<MaterializedSecretEnv> {
+  // Процесс, который создаёт каталоги материала, следит и за их уборкой
+  // (PROP-124 §2): reaper лениво поднимается один раз на процесс (таймер
+  // `unref`), первая уборка — сразу (каталоги прошлого упавшего запуска).
+  ensureSshSweepStarted();
   const cleanups: Array<() => Promise<void>> = [];
   const env: Record<string, string> = {};
   try {
@@ -42,6 +47,9 @@ export async function materializeSecretEnv(secrets: ExecSecret[]): Promise<Mater
       const ssh = await createSshEnv({
         privateKey: secret.privateKey,
         ...(secret.passphrase !== undefined ? { passphrase: secret.passphrase } : {}),
+        // PROP-124 §2: режим доставки ключа — git (файл + `GIT_SSH_COMMAND`)
+        // либо agent (эфемерный `ssh-agent`, ключ удаляется после `ssh-add`).
+        ...(secret.mode === 'agent' ? { agent: true } : {}),
       });
       cleanups.push(ssh.cleanup);
       Object.assign(env, ssh.env);

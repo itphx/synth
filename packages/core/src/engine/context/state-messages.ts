@@ -19,10 +19,10 @@ import { renderTodosMarkdown } from '../tools/todo.js';
 
 export type StateMessageType = 'mode_change' | 'plan_updated' | 'todos_updated' | 'agent_switch';
 
-/** ADR-070 §2.9.1: недоступный тул и причина — режим, роль, зависимость окружения, отсутствие workspace или деградация хранилища. */
+/** ADR-070 §2.9.1: недоступный тул и причина — режим, роль, зависимость окружения, отсутствие workspace, деградация хранилища или политика инстанса. */
 export interface UnavailableTool {
   name: string;
-  reason: 'mode' | 'role' | 'dependency' | 'workspace' | 'storage';
+  reason: 'mode' | 'role' | 'dependency' | 'workspace' | 'storage' | 'policy';
   /** Для `dependency` — человекочитаемое имя отсутствующей программы. */
   binary?: string;
   /**
@@ -80,6 +80,18 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
   }
   for (const { name, reason, binary, detail } of tools) {
     if (reason === 'workspace' || reason === 'storage') continue;
+    if (reason === 'policy') {
+      // PROP-124 §0: в режиме `ssh.mode = 'agent'` адресные ssh-тулы
+      // недоступны — ключ выдаётся командам через `execute_shell`.
+      const cause = en
+        ? 'unavailable by the instance policy'
+        : 'недоступно по политике инстанса';
+      const hint = en
+        ? 'addressed SSH tools are available in the "tools" mode (ssh.mode)'
+        : 'адресные ssh-тулы доступны в режиме «tools» (ssh.mode)';
+      lines.push(`- ${name} — ${cause}: ${hint}`);
+      continue;
+    }
     if (reason === 'dependency') {
       const program = binary ?? (en ? 'required program' : 'необходимая программа');
       const cause = en

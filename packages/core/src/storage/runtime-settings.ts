@@ -1,8 +1,8 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits } from '@itphx/synth-shared';
-import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits, SshMode } from '@itphx/synth-shared';
+import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS, SSH_MODES } from '@itphx/synth-shared';
 import { defaultConfig, parseAttachmentsModalities, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
@@ -558,6 +558,121 @@ export function createLiveStickyNotesLimits(params: {
 }
 
 /**
+ * PROP-124: режим работы инстанса с SSH-ключами (`ssh.mode`).
+ *
+ * Приоритет — **env `SYNTH_SSH_MODE` > runtime (`settings.json`/PG) >
+ * config.yaml `ssh.mode` > `tools`**. При env-значении runtime заблокирован
+ * (из UI не перекрывается) — как у остальных enum-настроек инстанса.
+ *
+ * Переменная `SYNTH_SSH_MODE` читается **только здесь** (дедикарованный
+ * резолвер, как `SYNTH_EXECUTION_MODE`/`SYNTH_STORAGE_BACKEND`): второй путь
+ * чтения env в общем реестре `ENV_OVERRIDES` убран — иначе невалидное
+ * значение трактовалось бы двумя способами (старт падал бы в `loadConfig`,
+ * а резолвер — тихо брал дефолт).
+ */
+export type SshModeSource = 'env' | 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга `ssh.mode`. */
+export interface ResolvedSshMode {
+  /** Эффективный режим инстанса. */
+  value: SshMode;
+  /** Источник эффективного значения. */
+  source: SshModeSource;
+  /** Режим задан через env: runtime его не перекрывает. */
+  envLocked: boolean;
+}
+
+/** Env-имя режима инстанса (ADR-023). */
+export const SSH_MODE_ENV = 'SYNTH_SSH_MODE';
+
+/** Канонические значения режима (для валидации env/API). */
+export const SSH_MODE_VALUES = SSH_MODES;
+
+/** Значение по умолчанию (fail-closed): без явного выбора ключ не попадает в команды. */
+export const DEFAULT_SSH_MODE: SshMode = 'tools';
+
+/**
+ * Прочитать режим из env.
+ *
+ * **Fail-closed**: невалидное значение — **ошибка конфигурации**, а не warn +
+ * дефолт (как у соседних enum-параметров инстанса `SYNTH_EXECUTION_MODE`/
+ * `SYNTH_STORAGE_BACKEND`): опечатка в переменной не должна молча оставить
+ * инстанс в режиме по умолчанию. Ошибка всплывает при старте (живое состояние
+ * `createLiveSshMode` собирается при инициализации процесса) — инстанс с
+ * невалидным `SYNTH_SSH_MODE` не поднимается.
+ */
+function readSshModeEnv(env: NodeJS.ProcessEnv): SshMode | undefined {
+  const raw = env[SSH_MODE_ENV];
+  if (raw === undefined || raw === '') return undefined;
+  if ((SSH_MODE_VALUES as readonly string[]).includes(raw)) {
+    return raw as SshMode;
+  }
+  throw new Error(
+    `[config] невалидное значение ${SSH_MODE_ENV}="${raw}": ` +
+      `ожидается одно из ${SSH_MODE_VALUES.map((mode) => `'${mode}'`).join(', ')}`,
+  );
+}
+
+/**
+ * Эффективный режим инстанса — приоритет
+ * **env > runtime > config.yaml > default**.
+ *
+ * Функция чистая (без I/O): её читает HTTP-роут runtime-настройки, поэтому
+ * смена режима из UI применяется без рестарта.
+ */
+export function resolveSshMode(
+  configValue?: SshMode,
+  runtimeValue?: SshMode,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedSshMode {
+  const envValue = readSshModeEnv(env);
+  if (envValue) return { value: envValue, source: 'env', envLocked: true };
+  if (runtimeValue) return { value: runtimeValue, source: 'runtime', envLocked: false };
+  if (configValue) return { value: configValue, source: 'config', envLocked: false };
+  return { value: DEFAULT_SSH_MODE, source: 'default', envLocked: false };
+}
+
+/**
+ * Живое состояние режима инстанса (ADR-023).
+ *
+ * Хранит runtime-значение в памяти (инициализируется из `settings.json`/PG при
+ * старте, обновляется роутом `/api/v2/settings/ssh`).
+ */
+export interface LiveSshMode {
+  getRuntime(): SshMode | undefined;
+  setRuntime(next: SshMode | undefined): void;
+  resolve(): ResolvedSshMode;
+  getMode(): SshMode;
+}
+
+/**
+ * Собрать живое состояние режима инстанса.
+ *
+ * Fail-closed: env проверяется **сразу** (при создании) — невалидный
+ * `SYNTH_SSH_MODE` обрывает старт процесса (живое состояние собирается при
+ * инициализации), а не всплывает позже, на первом же запросе.
+ */
+export function createLiveSshMode(params: {
+  config?: SshMode;
+  runtime?: SshMode;
+  env?: NodeJS.ProcessEnv;
+}): LiveSshMode {
+  let runtime = params.runtime;
+  const env = params.env ?? process.env;
+  // Проверка env на старте: невалидное значение — ошибка конфигурации.
+  resolveSshMode(params.config, runtime, env);
+  const resolve = (): ResolvedSshMode => resolveSshMode(params.config, runtime, env);
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next;
+    },
+    resolve,
+    getMode: () => resolve().value,
+  };
+}
+
+/**
  * Модель по умолчанию инстанса — явная пара `provider` + `model`.
  *
  * Задаётся в UI (раздел «Модели») и хранится в runtime-настройках
@@ -661,6 +776,11 @@ export interface RuntimeSettings {
    * заметки не удаляются и не обрезаются.
    */
   stickyNotesLimits?: Partial<StickyNotesLimits>;
+  /**
+   * PROP-124: режим работы инстанса с SSH-ключами (`tools`|`agent`).
+   * Runtime-override секции `ssh` (админка «SSH-ключи»); применяется сразу.
+   */
+  sshMode?: SshMode;
 }
 
 /**
@@ -1678,6 +1798,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.stickyNotesLimits;
+      return next;
+    });
+  }
+
+  /** PROP-124: режим инстанса для SSH-ключей (`ssh.mode`), undefined — не задан. */
+  async getSshMode(): Promise<SshMode | undefined> {
+    const settings = await this.load();
+    return settings.sshMode;
+  }
+
+  async setSshMode(mode: SshMode): Promise<void> {
+    await this._update((current) => ({ ...current, sshMode: mode }));
+  }
+
+  async clearSshMode(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.sshMode;
       return next;
     });
   }

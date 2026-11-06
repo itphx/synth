@@ -141,6 +141,30 @@ describe('SSH Keys API Routes (ADR-076 §T5)', () => {
     expect(err.error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('PROP-124: пустой список назначений → 400 VALIDATION_ERROR, ключ не создан', async () => {
+    const res = await post('/api/v2/ssh-keys', {
+      name: 'no-usage',
+      privateKey: SAMPLE_KEY,
+      usages: [],
+    });
+    expect(res.status).toBe(400);
+    const err = await res.json() as { error: { code: string } };
+    expect(err.error.code).toBe('VALIDATION_ERROR');
+    // Ключ не создан (тело не прошло валидацию).
+    expect(await store.list()).toHaveLength(0);
+  });
+
+  it('PROP-124: одно назначение → 201, usages в ответе', async () => {
+    const res = await post('/api/v2/ssh-keys', {
+      name: 'git-only',
+      privateKey: SAMPLE_KEY,
+      usages: ['git'],
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json() as { usages: string[] };
+    expect(body.usages).toEqual(['git']);
+  });
+
   it('nested: GET по агенту, POST добавляет agentId, DELETE отвязывает', async () => {
     // GET пустой.
     const empty = await app.request('/api/v2/agents/agent-1/ssh-keys');

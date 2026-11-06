@@ -407,7 +407,14 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       arch: process.arch,
       node: process.version,
       // Аддитивно: старый control plane поле не читает.
-      features: { background: true, secrets: true, mcpAttachments: true },
+      features: {
+        background: true,
+        secrets: true,
+        mcpAttachments: true,
+        sshAgent: true,
+        // Секреты вызова в фоновом запуске (протокол 6, PROP-124 §7).
+        secretsSpawn: true,
+      },
       // Аддитивно: эффективные потолки исполнителя (таймаут и буфер вывода).
       // Снимают «тихий» потолок — control plane видит лимит до вызова,
       // а не узнаёт об усечении по факту.

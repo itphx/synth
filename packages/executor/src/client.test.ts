@@ -85,6 +85,45 @@ async function startLegacyExecutor(body: Record<string, unknown>): Promise<strin
   return `http://127.0.0.1:${port}`;
 }
 
+/**
+ * Исполнитель протокола v6 **без** признака `features.secretsSpawn`:
+ * фоновые процессы умеет, а секреты вызова в фоне — нет (PROP-124 §7).
+ */
+async function startLegacySecretsSpawnExecutor(): Promise<{
+  url: string;
+  spawnCalls: () => number;
+}> {
+  let spawnCalls = 0;
+  const server = createServer((req, res) => {
+    if (req.url === '/capabilities') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          protocol: 6,
+          toolchain: { sh: 'sh 5.2' },
+          os: process.platform,
+          arch: process.arch,
+          node: process.version,
+          features: { background: true, secrets: true, sshAgent: true },
+        }),
+      );
+      return;
+    }
+    if (req.url === '/exec/spawn') {
+      spawnCalls += 1;
+      res.writeHead(201, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ processId: 'proc_legacy' }));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  legacyServers.push(server);
+  return { url: `http://127.0.0.1:${port}`, spawnCalls: () => spawnCalls };
+}
+
 describe('клиент удалённого порта', () => {
   it('успешный вызов — stdout/exitCode/durationMs', async () => {
     const handle = await startExecutor();
@@ -704,9 +743,11 @@ describe('клиент удалённого порта: секреты вызо�
     expect(legacy.execCalls()).toBe(0);
   });
 
-  it('фоновый запуск с секретами — fail-closed ESECRETS', async () => {
-    const handle = await startExecutor();
-    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+  it('фоновый запуск с секретами — fail-closed ESECRETS у адреса без features.secretsSpawn', async () => {
+    // Исполнитель умеет фоновые процессы, но секреты в фоне **не принимает**
+    // (признака `features.secretsSpawn` нет) — адрес в кандидаты не попадает.
+    const legacy = await startLegacySecretsSpawnExecutor();
+    const port = createRemoteExecutionPort({ urls: [legacy.url], token: TOKEN });
 
     const spawn = port.spawnBackground;
     if (!spawn) throw new Error('ожидалась поддержка фонового запуска');
@@ -718,6 +759,128 @@ describe('клиент удалённого порта: секреты вызо�
       .catch((e) => e);
     expect(err).toBeInstanceOf(ExecutionError);
     expect((err as ExecutionError).code).toBe('ESECRETS');
+    // Процесс не должен был запуститься «без ключа».
+    expect(legacy.spawnCalls()).toBe(0);
+  });
+});
+
+/**
+ * PROP-124 §2: секрет в режиме `agent` (`mode:'agent'`) — эфемерный
+ * `ssh-agent` у точки исполнения.
+ *
+ * Исполнитель без признака `features.sshAgent` (протокол < 6) материализует
+ * ключ **файлом** — вызов, ожидающий `SSH_AUTH_SOCK`, поехал бы «не как
+ * заказано». Поэтому адрес не выбирается, а отказ — `ESECRETS`.
+ */
+describe('клиент удалённого порта: агентный режим секрета вызова', () => {
+  /** Исполнитель протокола 4: секреты принимает, агентный режим — нет. */
+  async function startLegacyAgentSecretsExecutor(): Promise<{
+    url: string;
+    execCalls: () => number;
+  }> {
+    let execCalls = 0;
+    const server = createServer((req, res) => {
+      if (req.url === '/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            protocol: 4,
+            toolchain: { sh: 'sh 5.2' },
+            os: process.platform,
+            arch: process.arch,
+            node: process.version,
+            features: { secrets: true },
+          }),
+        );
+        return;
+      }
+      if (req.url === '/exec') {
+        execCalls += 1;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ stdout: 'ok', stderr: '', exitCode: 0, truncated: false, durationMs: 1 }));
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    legacyServers.push(server);
+    return { url: `http://127.0.0.1:${port}`, execCalls: () => execCalls };
+  }
+
+  it('адрес без features.sshAgent не выбирается — fail-closed ESECRETS', async () => {
+    const legacy = await startLegacyAgentSecretsExecutor();
+    const port = createRemoteExecutionPort({ urls: [legacy.url], token: TOKEN });
+
+    const err = await port
+      .execute({
+        command: { kind: 'shell', command: 'printf should-not-run' },
+        secrets: [{ kind: 'ssh-key', privateKey: pem('agent-secret'), mode: 'agent' }],
+      })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).code).toBe('ESECRETS');
+    // Текст отказа — внятный (про признак, а не «что-то сломалось»).
+    expect((err as ExecutionError).message).toContain('sshAgent');
+    // Команда не должна была выполниться «без ключа».
+    expect(legacy.execCalls()).toBe(0);
+  });
+
+  it('адрес с features.sshAgent — выбирается, секрет уходит в тело POST /exec', async () => {
+    // Исполнитель-стаб протокола 6: агентный режим объявляет, но материал
+    // не материализует (нужен настоящий `ssh-agent` — его в тесте нет).
+    let execCalls = 0;
+    const server = createServer((req, res) => {
+      if (req.url === '/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            protocol: 6,
+            toolchain: { sh: 'sh 5.2' },
+            os: process.platform,
+            arch: process.arch,
+            node: process.version,
+            features: { background: true, secrets: true, sshAgent: true, secretsSpawn: true },
+          }),
+        );
+        return;
+      }
+      if (req.url === '/exec') {
+        execCalls += 1;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ stdout: 'ok', stderr: '', exitCode: 0, truncated: false, durationMs: 1 }));
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port: addrPort } = server.address() as AddressInfo;
+    legacyServers.push(server);
+
+    const bodies: unknown[] = [];
+    const capturing: ExecutorFetch = async (url, init) => {
+      if (url.endsWith('/exec') && typeof init?.body === 'string') {
+        bodies.push(JSON.parse(init.body));
+      }
+      return egressFetch(url, init);
+    };
+    const port = createRemoteExecutionPort({
+      urls: [`http://127.0.0.1:${addrPort}`],
+      token: TOKEN,
+      fetchImpl: capturing,
+    });
+
+    const res = await port.execute({
+      command: { kind: 'shell', command: 'printf ok' },
+      secrets: [{ kind: 'ssh-key', privateKey: pem('agent-secret'), mode: 'agent' }],
+    });
+    expect(res.stdout).toBe('ok');
+    expect(execCalls).toBe(1);
+
+    const body = bodies.at(-1) as { secrets?: Array<{ mode?: string }> };
+    expect(body.secrets?.[0]?.mode).toBe('agent');
   });
 });
 
@@ -903,5 +1066,68 @@ describe('клиент удалённого порта: фоновый запу�
     expect(exit.exitCode).toBe(0);
     // Запуск ушёл только к адресу, у которого есть требуемая программа.
     expect(spawnHits).toEqual([String(withGit.port)]);
+  });
+
+  /**
+   * PROP-124 §7: секреты вызова в фоновом запуске.
+   *
+   * Адрес выбирается **только** тот, что объявляет `features.secretsSpawn`:
+   * нет признака — адрес не выбирается (тихого фоллбека нет: процесс не должен
+   * пойти без ключа).
+   */
+  it('секреты вызова уходят в тело POST /exec/spawn на адрес с features.secretsSpawn', async () => {
+    const handle = await startExecutor();
+    const bodies: unknown[] = [];
+    const capturing: ExecutorFetch = async (url, init) => {
+      if (url.endsWith('/exec/spawn') && typeof init?.body === 'string') {
+        bodies.push(JSON.parse(init.body));
+      }
+      return egressFetch(url, init);
+    };
+    const port = createRemoteExecutionPort({
+      urls: [handle.url],
+      token: TOKEN,
+      fetchImpl: capturing,
+    });
+
+    const secret = { kind: 'ssh-key' as const, privateKey: pem('bg-remote-secret') };
+    const spawn = port.spawnBackground;
+    if (!spawn) throw new Error('ожидалась поддержка фонового запуска');
+    const bg = await spawn.call(port, {
+      command: { kind: 'shell', command: 'sleep 0.2' },
+      secrets: [secret],
+    });
+    const exit = await bg.exited;
+    expect(exit.exitCode).toBe(0);
+
+    const body = bodies.at(-1) as { secrets?: Array<{ kind: string; privateKey: string }> };
+    expect(body.secrets).toHaveLength(1);
+    expect(body.secrets?.[0]?.privateKey).toBe(secret.privateKey);
+  });
+
+  it('адрес без features.secretsSpawn исключается из маршрутизации фонового запуска с секретами', async () => {
+    const legacy = await startLegacySecretsSpawnExecutor();
+    const handle = await startExecutor();
+    const spawnHits: string[] = [];
+    const counting: ExecutorFetch = async (url, init) => {
+      if (url.endsWith('/exec/spawn')) spawnHits.push(new URL(url).port);
+      return egressFetch(url, init);
+    };
+    const port = createRemoteExecutionPort({
+      urls: [legacy.url, handle.url],
+      token: TOKEN,
+      fetchImpl: counting,
+    });
+
+    const spawn = port.spawnBackground;
+    if (!spawn) throw new Error('ожидалась поддержка фонового запуска');
+    const bg = await spawn.call(port, {
+      command: { kind: 'shell', command: 'sleep 0.2' },
+      secrets: [{ kind: 'ssh-key', privateKey: pem('bg-remote-secret') }],
+    });
+    const exit = await bg.exited;
+    expect(exit.exitCode).toBe(0);
+    // Запуск ушёл только к адресу с признаком `features.secretsSpawn`.
+    expect(spawnHits).toEqual([String(handle.port)]);
   });
 });

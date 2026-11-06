@@ -5,7 +5,7 @@
  * `kind: 'process'`), здесь — только типы **сервиса**: вход запуска, результат
  * запуска, чтение лога и типизированные ошибки.
  */
-import type { ExecBackgroundChunk, ExecBackgroundProcess, ExecutionPort } from '../../execution/ports/index.js';
+import type { ExecBackgroundChunk, ExecBackgroundProcess, ExecSecret, ExecutionPort } from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 import type { BackgroundRunService } from '../background/service.js';
@@ -72,12 +72,35 @@ export interface ProcessSpawnInput {
   projectId?: string;
   /** Команда (shell-строка). */
   command: string;
+  /**
+   * Команда в форме **argv** (PROP-124 Ф4a) — прямой запуск бинарника без
+   * локальной оболочки.
+   *
+   * Задана — `command` (shell-строка) игнорируется: аргументы не проходят через
+   * shell, поэтому значение аргумента не может быть инъекцией. Нужна тулам,
+   * чья команда не является shell-строкой (адресный `ssh_exec`: `ssh` +
+   * аргументы без локальной оболочки).
+   */
+  argv?: { file: string; args: string[] };
+  /**
+   * Бинарные требования команды (ADR-077) — по умолчанию требование тула
+   * `execute_shell` (`bash`). Для argv-команды — свой бинарник (`ssh`).
+   */
+  requires?: string[];
   /** Рабочий каталог команды. */
   cwd: string;
   /** Дополнительное окружение (мержится поверх базового окружения порта). */
   env?: Record<string, string>;
   /** Таймаут процесса, мс. Не задан/`0` — **без таймаута** (фон по умолчанию). */
   timeoutMs?: number;
+  /**
+   * Секреты вызова (PROP-124 §7) — материал на время жизни фонового процесса.
+   *
+   * Доставляются **точке исполнения** (значением, не путём): в remote-режиме
+   * путь control plane в контейнере исполнителя не существует. Секреты **не
+   * попадают** в запись реестра прогонов и в лог — только в запрос запуска.
+   */
+  secrets?: ExecSecret[];
   /** Короткое имя процесса (для UI; в реестр не пишется). */
   title?: string;
 }

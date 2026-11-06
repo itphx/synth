@@ -2317,6 +2317,7 @@ export const dict = {
   'admin.agents.cap.question': 'user question',
   'admin.agents.cap.process': 'background processes',
   'admin.agents.cap.models': 'models',
+  'admin.agents.cap.ssh': 'remote SSH',
 
   // Subagent fields
   'admin.agents.agentMode': 'Agent type',
@@ -3093,6 +3094,27 @@ export const dict = {
   'sshKeys.nameExists': 'SSH key with name "{name}" already exists',
   'sshKeys.error.nameRequired': 'Name is required',
   'sshKeys.error.keyRequired': 'Private key is required',
+  'sshKeys.mode': 'SSH access mode',
+  'sshKeys.modeHint': 'How keys are handed to command invocations: "Tools" — addressable tools with a mandatory host policy; "SSH agent" — via an ephemeral agent for the duration of the call.',
+  'sshKeys.modeTools': 'Tools (tools)',
+  'sshKeys.modeAgent': 'SSH agent (agent)',
+  'sshKeys.modeEnvLocked': 'Set via environment variable — cannot be changed from the UI',
+  'sshKeys.modeSaved': 'SSH access mode saved',
+  'sshKeys.modeSaveError': 'Failed to save the SSH access mode: {error}',
+  'sshKeys.agentModeNote': 'In ssh-agent mode the key is available to commands for the duration of the call; host filtering is not applied — restrict access on the host side (authorized_keys).',
+  'sshKeys.usages': 'Key usage',
+  'sshKeys.usagesHint': 'Git — key for git operations; SSH — key for ssh access',
+  'sshKeys.usageGit': 'Git',
+  'sshKeys.usageSsh': 'SSH',
+  'sshKeys.sshWithoutAgentWarning': 'A key with the "SSH" usage requires an agent binding: without one the key will not be used.',
+  'sshKeys.usagesRequired': 'Select at least one key usage: without it the key is used neither by git nor by ssh.',
+  'sshKeys.error.usageRequired': 'Select at least one key usage',
+  'sshKeys.allowHosts': 'Allowed hosts',
+  'sshKeys.allowHostsHint': 'Exact host, subdomains (*.corp.example), IP or CIDR. Empty — any host (in "Tools" mode).',
+  'sshKeys.allowHostsEmpty': 'No hosts set',
+  'sshKeys.allowPorts': 'Allowed ports',
+  'sshKeys.allowPortsHint': 'Destination ports 1..65535. Empty — the standard ssh port (22).',
+  'sshKeys.allowPortsEmpty': 'No ports set',
 
   // --- Внешние события (ADR-089) ---
   'events.title': 'Events',
@@ -4344,6 +4366,9 @@ export const dict = {
   'settings.help.agents.color': 'Agent color used to highlight mentions; empty uses the default color.',
   'settings.help.agents.sshKeyName': 'Key name used to select it in git operations; must be unique.',
   'settings.help.agents.sshKeyPrivate': 'OpenSSH/PEM private key; when editing, an empty field keeps the current key.',
+  'settings.help.agents.sshKeyMode': 'Instance mode: how keys are handed to command invocations. "Tools" — addressable tools with a mandatory host policy; "SSH agent" — an ephemeral agent for the duration of the call (no host filtering).',
+  'settings.help.agents.sshKeyAllowHosts': 'Host patterns: exact host, subdomains (*.corp.example), IP literal or CIDR. A lone "*" is not allowed.',
+  'settings.help.agents.sshKeyAllowPorts': 'Destination ports (1..65535). An empty list means the standard ssh port (22).',
   'settings.help.agents.sshKeyPassphrase': 'Passphrase of the private key, if any; stored encrypted.',
 
   // --- Settings help: admin overview (stage 2) ---

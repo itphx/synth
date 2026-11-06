@@ -142,6 +142,7 @@ import {
   createLiveSubagentMaxInputTokens,
   createLiveContextDefaults,
   createLiveStickyNotesLimits,
+  createLiveSshMode,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
 import { AuthorityGuard } from '../../engine/authority/guard.js';
@@ -357,6 +358,13 @@ export async function createStandaloneDeps(
   const stickyNotesLimitsSettings = createLiveStickyNotesLimits({
     config: config.contextConfig?.stickyNotes,
     runtime: await settingsStore.getStickyNotesLimits(),
+  });
+
+  // PROP-124: режим инстанса для SSH-ключей (`ssh.mode`): приоритет
+  // env > runtime > config.yaml > `tools`; применяется без рестарта.
+  const sshModeSettings = createLiveSshMode({
+    config: config.sshConfig?.mode,
+    runtime: await settingsStore.getSshMode(),
   });
 
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
@@ -1491,6 +1499,11 @@ export async function createStandaloneDeps(
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),
+    // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`) — live-геттер:
+    // runtime-настройка (`/api/v2/settings/ssh`) применяется без рестарта.
+    // `tools` (дефолт) — ключ в окружение команд не попадает; `agent` — ключи
+    // роли агента выдаются вызову `execute_shell` (эфемерный `ssh-agent`).
+    getSshMode: () => sshModeSettings.getMode(),
     // ADR-114: сервис worktree'ов — тулы `git_worktree_*` (инвентарь
     // per-session рабочих каталогов проекта).
     ...(worktreeService ? { worktreeService } : {}),
@@ -2117,6 +2130,8 @@ export async function createStandaloneDeps(
     contextDefaultsSettings,
     // Instance-wide лимиты заметок сессии (live, админ-API).
     stickyNotesLimitsSettings,
+    // PROP-124: режим инстанса для SSH-ключей (live, админ-API).
+    sshModeSettings,
     // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhooksConfig,

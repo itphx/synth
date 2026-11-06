@@ -93,6 +93,10 @@ function toSafeMeta(meta: SSHKeyMeta): SSHKeyMeta {
     name: meta.name,
     type: meta.type,
     agentIds: [...meta.agentIds],
+    // PROP-124: политика ключа (публичные поля; секреты не отдаются).
+    usages: [...(meta.usages ?? ['git'])],
+    allowHosts: [...(meta.allowHosts ?? [])],
+    allowPorts: [...(meta.allowPorts ?? [])],
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
   };

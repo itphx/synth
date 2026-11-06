@@ -167,9 +167,11 @@ export interface PromptToolDetail {
    * `admin_disabled` (жёстко отключён администратором через `tools.disabled`),
    * `dependency` (в окружении нет нужной программы — git/rg/sh),
    * `workspace` (не задан рабочий каталог проекта),
-   * `storage` (хранилище недоступно — деградированный read-only режим, ADR-098).
+   * `storage` (хранилище недоступно — деградированный read-only режим, ADR-098),
+   * `policy` (политика инстанса запрещает тул в текущем режиме — PROP-124 §0:
+   * адресные ssh-тулы в режиме `ssh.mode = 'agent'`).
    */
-  reason?: 'mode' | 'role' | 'admin_disabled' | 'dependency' | 'workspace' | 'storage';
+  reason?: 'mode' | 'role' | 'admin_disabled' | 'dependency' | 'workspace' | 'storage' | 'policy';
   /** ADR-071 §2.1: источник инструмента (`built-in` — слой `tools`). */
   source: 'built-in';
   /** ADR-071 §2.6: длина `JSON.stringify` LLM-определения тула (как слой `tools`). */

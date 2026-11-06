@@ -24,7 +24,8 @@
     "schedule",
     "question",
     "process",
-    "models"
+    "models",
+    "ssh"
   ],
   "icon": "clipboard",
   "color": "--primary",

@@ -66,6 +66,18 @@ export const ToolCapability = {
    * доступен и без workspace, и разрешён в plan-режиме (только чтение).
    */
   MODELS: 'models',
+  /**
+   * Адресный SSH-доступ (PROP-124 §4): тулы, обращающиеся к удалённому хосту
+   * по SSH (`ssh_exec` и дальше `ssh_copy`/`ssh_tunnel`).
+   *
+   * Отдельная capability по той же причине, что `pipeline`/`schedule`/`process`:
+   * адресный SSH — доменный ресурс инстанса (реестр ключей + политика
+   * хостов/портов), а не примитив ядра. Capability **не** привязана к рабочему
+   * каталогу проекта, но **зависит от режима инстанса** `ssh.mode`: в режиме
+   * `agent` адресные тулы недоступны (`unavailable(policy)`), см.
+   * `engine/permission/availability.ts`.
+   */
+  SSH: 'ssh',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -103,6 +115,10 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.MODELS]: {
     label: 'Модели',
     description: 'list_models',
+  },
+  [ToolCapability.SSH]: {
+    label: 'Удалённый SSH',
+    description: 'ssh_exec',
   },
 };
 

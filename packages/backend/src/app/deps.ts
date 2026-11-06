@@ -37,6 +37,8 @@ import {
   createLiveContextDefaults,
   // Instance-wide лимиты заметок сессии (`/settings/sticky-notes`).
   createLiveStickyNotesLimits,
+  // PROP-124: режим инстанса для SSH-ключей (`/settings/ssh`).
+  createLiveSshMode,
   createEgressPolicyResolver, createEgressLogSink,
   configureEgressRuntime, startEgressLogPruner,
   // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
@@ -324,6 +326,12 @@ export async function createBackendDeps(
   const stickyNotesLimitsSettings = createLiveStickyNotesLimits({
     config: config.synth.context?.stickyNotes,
     runtime: await settingsStore.getStickyNotesLimits(),
+  });
+  // PROP-124: режим инстанса для SSH-ключей (`ssh.mode`): приоритет
+  // env > runtime > config.yaml > `tools`; применяется без рестарта.
+  const sshModeSettings = createLiveSshMode({
+    config: config.synth.ssh?.mode,
+    runtime: await settingsStore.getSshMode(),
   });
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (не пишем домен в файловый фоллбек).
@@ -1433,6 +1441,11 @@ export async function createBackendDeps(
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),
+    // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`) — live-геттер:
+    // runtime-настройка (`/api/v2/settings/ssh`) применяется без рестарта.
+    // `tools` (дефолт) — ключ в окружение команд не попадает; `agent` — ключи
+    // роли агента выдаются вызову `execute_shell` (эфемерный `ssh-agent`).
+    getSshMode: () => sshModeSettings.getMode(),
     // ADR-114: сервис worktree'ов — тулы `git_worktree_*` (инвентарь
     // per-session рабочих каталогов проекта).
     ...(worktreeService ? { worktreeService } : {}),
@@ -2095,6 +2108,8 @@ export async function createBackendDeps(
     contextDefaultsSettings,
     // Instance-wide лимиты заметок сессии (live, админ-API).
     stickyNotesLimitsSettings,
+    // PROP-124: режим инстанса для SSH-ключей (live, админ-API).
+    sshModeSettings,
     // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhookStore,

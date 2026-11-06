@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel, nativeAudioFormatForMime } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig, SshMode } from '@itphx/synth-shared';
 import type { AutoTitleConfig } from '@itphx/synth-shared/config';
 import { autoTitleConfigSchema } from '@itphx/synth-shared/config';
 import { autoTitleSession } from '../sessions/auto-title.js';
@@ -54,13 +54,14 @@ import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel, DecisionModel } from './router/micro/models/index.js';
 import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
-import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
+import { PermissionEvaluator, extractPaths, isPlanRestricted } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager, type ApprovalRegistry } from './permission/approval.js';
 import { buildPermissionPreview } from './permission/preview.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { createFileStorage } from '../storage/storage-context.js';
 import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
+import { createSshSecretsResolver } from './ssh/access.js';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 import { GitService } from '../git/git-service.js';
 import { MAX_DOOM_LOOP_COUNT } from './llm-error.js';
@@ -437,6 +438,17 @@ export interface OrchestratorOptions {
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
   /** Глобальная секция permission из config.yaml (ADR-029). */
   permissionConfig?: PermissionConfig;
+  /**
+   * PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`) — live-геттер.
+   *
+   * `tools` (дефолт) — ключ в окружение команд не попадает; `agent` — ключи
+   * роли агента выдаются вызову `execute_shell` (эфемерный `ssh-agent`).
+   * Геттер, а не значение: runtime-настройка (`/api/v2/settings/ssh`)
+   * применяется без рестарта.
+   *
+   * Не задан — режим `tools` (fail-closed): секреты в вызовы не выдаются.
+   */
+  getSshMode?: () => SshMode;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (ADR-028). */
   defaultPlanMode?: PlanMode;
   /**
@@ -791,6 +803,12 @@ export class ChatOrchestrator {
   private readonly _profilesStore: ProfileStore | null;
   /** ADR-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
   private readonly _sshKeyStore: SSHKeyRepository | null;
+  /**
+   * PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`) — live-геттер
+   * (runtime-настройка применяется без рестарта). null — режим не задан,
+   * тогда ключи в окружение команд не выдаются (fail-closed, `tools`).
+   */
+  private readonly _getSshMode: (() => SshMode) | null;
   private readonly _gitService: GitService;
   /** Таймауты git-тулов по классу операции (ADR-076; `undefined` — дефолт тула). */
   private readonly _gitLocalTimeoutMs: number | undefined;
@@ -1259,6 +1277,8 @@ export class ChatOrchestrator {
       ?? (options.dataDir
         ? createFileStorage({ dataDir: options.dataDir, env: process.env }).sshKeys
         : null);
+    // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`).
+    this._getSshMode = options.getSshMode ?? null;
     // ADR-070 §2.1: единая точка сборки системного промпта (идемпотентно).
     // ADR-090: реестр блоков промпта — **один** экземпляр
     // на инстанс (его же получает фасад плагинов); второй не создаём.
@@ -3453,6 +3473,9 @@ export class ChatOrchestrator {
       agentCapabilities: agentDef?.capabilities,
       runtimeDeps: this._runtimeDeps,
       workspaceReady,
+      // PROP-124 §0: режим инстанса для SSH-ключей — в слое доступности
+      // (адресные ssh-тулы недоступны в режиме `agent`).
+      getSshMode: () => this._getSshMode?.() ?? 'tools',
     };
     return (tool) => computeToolAvailability(tool.name, tool.capabilities, opts).available;
   }
@@ -3651,6 +3674,8 @@ export class ChatOrchestrator {
         agentCapabilities: agentDef?.capabilities,
         runtimeDeps: this._runtimeDeps,
         workspaceReady,
+        // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`).
+        getSshMode: () => this._getSshMode?.() ?? 'tools',
       });
       if (!availability.available && availability.reason) {
         const dep = availability.reason === 'dependency' ? TOOL_RUNTIME_DEP[tool.name] : undefined;
@@ -3976,6 +4001,8 @@ export class ChatOrchestrator {
         agentCapabilities: agentDef?.capabilities,
         runtimeDeps: this._runtimeDeps,
         workspaceReady,
+        // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`).
+        getSshMode: () => this._getSshMode?.() ?? 'tools',
       });
       const adminDisabled = this._isAdminDisabled(tool);
       // chars = JSON.stringify LLM-определения (тот же расчёт, что слой `tools`).
@@ -5588,6 +5615,29 @@ export class ChatOrchestrator {
                   getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
                   // ADR-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
                   sshKeyStore: this._sshKeyStore ?? undefined,
+                  // PROP-124 §2: секреты вызова для `execute_shell` (режим
+                  // `ssh-агента`): ключи роли агента уходят в вызов **значением**
+                  // (эфемерный `ssh-agent` у точки исполнения). Политика —
+                  // здесь (режим инстанса, роль агента, plan-режим); тул только
+                  // спрашивает список ключей. В plan-режиме ключ не выдаётся.
+                  sshSecrets: createSshSecretsResolver({
+                    ...(this._sshKeyStore ? { store: this._sshKeyStore } : {}),
+                    getMode: () => this._getSshMode?.() ?? 'tools',
+                    // Роль — геттер: читается в момент вызова (ACL ключа —
+                    // `agentIds`, привязка к роли **исполняющего** вызов).
+                    agentRole: () => effectiveAgentRole,
+                    isPlan: () => isPlanRestricted(sessionMode, planMode, planApproved),
+                  }),
+                  // Сборка резолвера для **другой** роли: сабагент исполняет
+                  // вызовы от своего лица, ключ родителя ему не принадлежит
+                  // (`engine/tools/task/run-cycle.ts`).
+                  sshSecretsFor: (opts: { agentRole?: string; isPlan?: boolean }) =>
+                    createSshSecretsResolver({
+                      ...(this._sshKeyStore ? { store: this._sshKeyStore } : {}),
+                      getMode: () => this._getSshMode?.() ?? 'tools',
+                      agentRole: () => opts.agentRole,
+                      isPlan: () => opts.isPlan === true,
+                    }),
                   eventBus: this._eventBus,
                   // ADR-030: шина хуков — `task`/`task-resume` эмитят
                   // agent_spawned/agent_completed/agent_failed в саб-агенте.

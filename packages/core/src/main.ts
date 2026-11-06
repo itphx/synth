@@ -274,6 +274,8 @@ program
       backgroundConfig: synth.background,
       // Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`).
       agentsConfig: synth.agents,
+      // PROP-124: режим инстанса для SSH-ключей (`ssh.mode`).
+      sshConfig: synth.ssh,
       // ADR-115: лимиты вложений сообщений (attachments.*).
       attachmentsConfig: synth.attachments,
       // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).

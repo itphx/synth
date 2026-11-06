@@ -1134,8 +1134,51 @@ export type {
 // ADR-076 §T3: git-сервис ядра, SSH-окружение и фабрика git-роутов.
 export { GitService, resolveRepoPath, deriveRepoName } from './git/git-service.js';
 export type { GitEnvOptions, GitFetchOptions } from './git/git-service.js';
-export { isSshUrl, createSshEnv, SshEnvError } from './git/ssh-env.js';
-export type { CreateSshEnvOptions, SshEnv, SshEnvErrorCode } from './git/ssh-env.js';
+export {
+  isSshUrl,
+  createSshEnv,
+  SshEnvError,
+  SSH_TEMP_DIR_PREFIX,
+  SSH_AGENT_PID_FILE,
+  SSH_OWNER_PID_FILE,
+  isProcessAlive,
+  terminateProcess,
+  readSshOwner,
+} from './git/ssh-env.js';
+export type {
+  CreateSshEnvOptions,
+  SshEnv,
+  SshEnvErrorCode,
+  ProcessKillTimeouts,
+  SshOwnerInfo,
+} from './git/ssh-env.js';
+// PROP-124 §2: единый reaper каталогов SSH-материала (оба режима — inline и
+// remote): критерий уборки — «жив ли владелец», а не «жив ли агент».
+export {
+  sweepStaleSshDirs,
+  startSshSweep,
+  ensureSshSweepStarted,
+  STALE_SSH_DIR_TTL_MS,
+  SSH_SWEEP_INTERVAL_MS,
+} from './execution/ssh-sweep.js';
+export type { SshSweepOptions, SshSweepTimerOptions } from './execution/ssh-sweep.js';
+// PROP-124 §3: единый гейт доступа к SSH-ключам — единственное место, где
+// вызывается `reveal()` (секрет раскрывается только здесь).
+export { resolveSshAccess, SshAccessError, DEFAULT_SSH_PORT } from './engine/ssh/access.js';
+export {
+  resolveSshSecretsForExec,
+  createSshSecretsResolver,
+  MAX_SSH_EXEC_SECRETS,
+} from './engine/ssh/access.js';
+export type {
+  SshAccessRequest,
+  SshAccessResult,
+  SshAccessErrorCode,
+  SshPurpose,
+  SshAccessLogger,
+  SshSecretsForExecRequest,
+  SshSecretsResolverParams,
+} from './engine/ssh/access.js';
 export { createGitRoutes } from './server/routes/git.js';
 export type { GitRoutesAuth, GitProjectStore, GitRoutesOptions } from './server/routes/git.js';
 // ADR-014/ADR-017/ADR-075: единая фабрика проектов (standalone и managed через opts).
@@ -1692,7 +1735,12 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, SSH_MODE_VALUES, DEFAULT_SSH_MODE } from './storage/runtime-settings.js';
+export type {
+  LiveSshMode,
+  ResolvedSshMode,
+  SshModeSource,
+} from './storage/runtime-settings.js';
 export type { LiveSubagentMaxInputTokens, ResolvedSubagentMaxInputTokens } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair, AttachmentsSettings, AttachmentsConfigInput, AttachmentsRuntimeSettings, CompressionRuntimePatch, ThumbnailRuntimePatch, ModalityModelsRuntimePatch, AttachmentsSource, ResolvedAttachmentsSettings, LiveAttachmentsSettings, ContextWindowSource, ResolvedContextWindowPolicy, LiveContextWindowPolicy, ContextDefaultsSource, ResolvedContextDefaults, LiveContextDefaults, StickyNotesLimitsSource, ResolvedStickyNotesLimits, LiveStickyNotesLimits } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
@@ -1992,6 +2040,14 @@ export type {
   StickyNotesSettingsMessages,
   StickyNotesSettingsView,
 } from './server/routes/settings-sticky-notes.js';
+// PROP-124: режим инстанса для SSH-ключей — `/api/v2/settings/ssh`.
+export { createSshSettingsRoutes } from './server/routes/settings-ssh.js';
+export type {
+  SshSettingsDeps,
+  SshSettingsOptions,
+  SshSettingsMessages,
+  SshSettingsView,
+} from './server/routes/settings-ssh.js';
 // Проверка «влезает ли промпт в окно модели» — оркестратор перед LLM-вызовом.
 export { checkContextWindowWindow } from './engine/context/window-guard.js';
 export type {

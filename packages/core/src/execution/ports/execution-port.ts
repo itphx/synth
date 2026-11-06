@@ -65,6 +65,18 @@ export interface ExecSecret {
   privateKey: string;
   /** Passphrase ключа (необязательна): передаётся askpass-скриптом. */
   passphrase?: string;
+  /**
+   * Режим доставки ключа (PROP-124 §2).
+   *
+   * - `git` (по умолчанию) — ключ файлом `0600` + `GIT_SSH_COMMAND`
+   *   (`IdentitiesOnly=yes`); ключ живёт на диске весь вызов;
+   * - `agent` — эфемерный `ssh-agent` на время вызова: `SSH_AUTH_SOCK`
+   *   (+ `SSH_AGENT_PID`) в окружении, приватный ключ после `ssh-add`
+   *   удаляется с диска и остаётся только в памяти агента.
+   *
+   * Поле аддитивное: старый получатель без него ведёт себя как в `git`-режиме.
+   */
+  mode?: 'git' | 'agent';
 }
 
 export interface ExecRequest {

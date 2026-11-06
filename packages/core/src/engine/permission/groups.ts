@@ -130,6 +130,18 @@ export const QUESTION_TOOLS = ['question'];
  */
 export const PROCESS_TOOLS = ['process_list', 'process_logs', 'process_stop', 'process_delete'];
 
+/**
+ * PROP-124 §4/§9: адресные ssh-тулы (`ssh_exec` и дальше `ssh_copy`/
+ * `ssh_tunnel`) — отдельная группа, как `pipeline`/`schedule`/`process`.
+ *
+ * Ключ группы совпадает со значением capability `ssh`, поэтому правило
+ * `permission.rules.ssh` работает и по именам встроенных тулов, и по
+ * capability плагинного тула. В plan-режиме группа блокируется целиком
+ * (`isPlanBlockedTool`, `evaluator.ts`): план ничего не выполняет, а адресный
+ * SSH — выполнение на удалённом хосте.
+ */
+export const SSH_TOOLS = ['ssh_exec'];
+
 /** Все тулы пайплайнов (read + write). */
 export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];
 /** Все тулы расписаний (read + write). */
@@ -163,6 +175,8 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   // Этап 1 roadmap 0.13 (блок 16): реестр фоновых прогонов (ключ совпадает с
   // capability `process`).
   process: PROCESS_TOOLS,
+  // PROP-124 §4/§9: адресные ssh-тулы (ключ совпадает с capability `ssh`).
+  ssh: SSH_TOOLS,
   [ToolCapability.FILE_READ]: READ_TOOLS,
   [ToolCapability.FILE_WRITE]: WRITE_TOOLS,
   [ToolCapability.GIT_READ]: GIT_READ_TOOLS,
@@ -172,7 +186,7 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
 /**
  * Порядок проверки групповых правил (первая сработавшая группа побеждает).
  *
- * Группы `pipeline`/`schedule` стоят **в конце**: их наборы имён не
+ * Группы `pipeline`/`schedule`/`ssh` стоят **в конце**: их наборы имён не
  * пересекаются с прочими группами, поэтому порядок не меняет разрешение
  * существующих правил — а новые группы не сдвигают порядок проверки старых.
  */
@@ -197,6 +211,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'schedule',
   'question',
   'process',
+  'ssh',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

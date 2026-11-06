@@ -12,6 +12,7 @@ import type {
   ContextWindowPolicy,
   ContextDefaults,
   StickyNotesLimits,
+  SshMode,
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
@@ -171,4 +172,13 @@ export interface SettingsRepository {
   getStickyNotesLimits(): Promise<Partial<StickyNotesLimits> | undefined>;
   setStickyNotesLimits(limits: Partial<StickyNotesLimits>): Promise<void>;
   clearStickyNotesLimits(): Promise<void>;
+
+  /**
+   * PROP-124: режим работы инстанса с SSH-ключами (`ssh.mode`).
+   * Применяется сразу (`restartRequired: false` в API); env-фиксация блокирует
+   * запись из UI (409 `CONFLICT`).
+   */
+  getSshMode(): Promise<SshMode | undefined>;
+  setSshMode(mode: SshMode): Promise<void>;
+  clearSshMode(): Promise<void>;
 }

@@ -32,6 +32,7 @@ import type {
   ContextWindowPolicy,
   ContextDefaults,
   StickyNotesLimits,
+  SshMode,
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
@@ -402,6 +403,19 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearStickyNotesLimits(): Promise<void> {
     this._clear('stickyNotesLimits');
+  }
+
+  /** PROP-124: режим инстанса для SSH-ключей (`ssh.mode`). */
+  async getSshMode(): Promise<SshMode | undefined> {
+    return this._settings.sshMode;
+  }
+
+  async setSshMode(mode: SshMode): Promise<void> {
+    this._patch({ sshMode: mode });
+  }
+
+  async clearSshMode(): Promise<void> {
+    this._clear('sshMode');
   }
 }
 

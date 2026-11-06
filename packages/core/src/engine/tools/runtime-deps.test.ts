@@ -74,6 +74,8 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
       rg: expect.any(Boolean),
       sh: expect.any(Boolean),
       bash: expect.any(Boolean),
+      // PROP-124 §4/§5: клиент SSH — зависимость адресного ssh-тула.
+      ssh: expect.any(Boolean),
     });
   });
 
@@ -107,6 +109,8 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
     // Файловые/plan/todo/web/task/skill-тулы зависимости не имеют.
     expect(TOOL_RUNTIME_DEP.read_file).toBeUndefined();
     expect(TOOL_RUNTIME_DEP.web_search).toBeUndefined();
+    // PROP-124 §4/§5: адресный ssh-тул требует клиента SSH.
+    expect(TOOL_RUNTIME_DEP.ssh_exec).toBe('ssh');
   });
 
   it('RUNTIME_DEP_BINARY: человекочитаемые имена', () => {
@@ -114,6 +118,7 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
     expect(RUNTIME_DEP_BINARY.rg).toBe('rg (ripgrep)');
     expect(RUNTIME_DEP_BINARY.sh).toBe('sh');
     expect(RUNTIME_DEP_BINARY.bash).toBe('bash');
+    expect(RUNTIME_DEP_BINARY.ssh).toBe('ssh');
   });
 
   it('runtimeRequires/toolRuntimeRequires: требования берутся из карты тулов', () => {
@@ -122,6 +127,7 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
     expect(toolRuntimeRequires('grep_files')).toEqual(['rg']);
     expect(toolRuntimeRequires('glob')).toEqual(['rg']);
     expect(toolRuntimeRequires('git_status')).toEqual(['git']);
+    expect(toolRuntimeRequires('ssh_exec')).toEqual(['ssh']);
     expect(toolRuntimeRequires('read_file')).toEqual([]);
   });
 });
@@ -145,7 +151,7 @@ describe('runtime-deps: детект через порт (ADR-077)', () => {
     expect(deps.git).toBe(false);
     expect(deps.rg).toBe(true);
     expect(deps.sh).toBe(true);
-    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash', 'ssh']);
     const detail = runtimeDepUnavailableDetail(deps, 'git');
     expect(detail).toBeTruthy();
     expect(detail).toContain('git');
@@ -160,7 +166,7 @@ describe('runtime-deps: детект через порт (ADR-077)', () => {
     const port = new CapabilityPort({ git: false, rg: false, sh: false });
     const remote = await detectRuntimeDeps(port);
 
-    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash', 'ssh']);
     expect(remote.git).toBe(false);
     expect(remote.rg).toBe(false);
     expect(remote.sh).toBe(false);
@@ -239,7 +245,7 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
     const second = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL - 1 });
 
     expect(second).toBe(first);
-    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash', 'ssh']);
   });
 
   it('внеочередной (параллельный) вызов не создаёт лавину проб', async () => {
@@ -249,14 +255,17 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
 
     expect(second).toBe(first);
     await Promise.all([first, second]);
-    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash']);
+    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash', 'ssh']);
 
     // После истечения окна — одна новая проба на все параллельные вызовы.
     const third = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL });
     const fourth = detectRuntimeDeps(port, { ttlMs: TTL, now: TTL });
     expect(fourth).toBe(third);
     await Promise.all([third, fourth]);
-    expect(port.probes).toEqual(['git', 'rg', 'sh', 'bash', 'git', 'rg', 'sh', 'bash']);
+    expect(port.probes).toEqual([
+      'git', 'rg', 'sh', 'bash', 'ssh',
+      'git', 'rg', 'sh', 'bash', 'ssh',
+    ]);
   });
 
   it('TTL истёк → перепроба порта (удалённый режим)', async () => {
@@ -273,7 +282,8 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
     expect(after).not.toBe(before);
     expect(after.sh).toBe(true);
     expect(runtimeDepUnavailableDetail(after, 'sh')).toBeUndefined();
-    expect(port.probes).toHaveLength(8);
+    // Две полные пробы (по пять программ на каждую).
+    expect(port.probes).toHaveLength(10);
   });
 
   it('inline: TTL соблюдается, перепроба локальная (поведение прежнее)', async () => {
@@ -300,8 +310,8 @@ describe('runtime-deps: TTL-кэш детекта (ADR-077)', () => {
   });
 
   it('refreshRuntimeDeps: обновляет снимок по месту (тот же объект)', async () => {
-    const port = new MutableCapabilityPort({ git: true, rg: true, sh: false, bash: false });
-    const snapshot: RuntimeDeps = { git: true, rg: true, sh: false, bash: false };
+    const port = new MutableCapabilityPort({ git: true, rg: true, sh: false, bash: false, ssh: true });
+    const snapshot: RuntimeDeps = { git: true, rg: true, sh: false, bash: false, ssh: true };
     await refreshRuntimeDeps(snapshot, port, { ttlMs: TTL, now: 0 });
     expect(snapshot.sh).toBe(false);
     expect(snapshot.details?.sh).toBeTruthy();

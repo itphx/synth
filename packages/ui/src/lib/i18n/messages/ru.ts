@@ -2297,6 +2297,7 @@ export const dict = {
   'admin.agents.cap.question': 'вопрос пользователю',
   'admin.agents.cap.process': 'фоновые процессы',
   'admin.agents.cap.models': 'модели',
+  'admin.agents.cap.ssh': 'удалённый SSH',
 
   // Subagent fields
   'admin.agents.agentMode': 'Тип агента',
@@ -3354,6 +3355,14 @@ export const dict = {
   'sshkey.encryption_unavailable': 'Шифрование SSH-ключей недоступно: не задан секретный ключ',
   'sshkey.decrypt_failed': 'Не удалось расшифровать SSH-ключ {id}',
   'sshkey.env_failed': 'Не удалось подготовить SSH-окружение (временный ключ или askpass)',
+  // Отказы единого гейта SSH-ключей (PROP-124 §3).
+  'ssh.access.key_not_found': 'SSH-ключ «{key}» не найден',
+  'ssh.access.usage_denied': 'SSH-ключ «{key}» не разрешён для доступа по {usage}',
+  'ssh.access.agent_not_linked': 'SSH-ключ «{key}» не привязан к роли агента «{agent}»',
+  'ssh.access.host_denied': 'Хост «{host}» не разрешён для SSH-ключа «{key}»',
+  'ssh.access.port_denied': 'Порт {port} не разрешён для SSH-ключа «{key}»',
+  'ssh.access.policy_required': 'Для SSH-ключа «{key}» нужен хост: политика хостов обязательна',
+  'ssh.access.ambiguous': 'Подходящих SSH-ключей несколько: {keys} — нужен конкретный',
   'git.ssh_key_required': 'Для репозитория «{path}» требуется SSH-ключ',
   'git.ssh_key_required_hint':
     'Ошибка: для репозитория «{path}» требуется SSH-ключ, но он не задан либо заданный ключ не найден. '
@@ -3615,6 +3624,27 @@ export const dict = {
   'sshKeys.nameExists': 'SSH-ключ с именем «{name}» уже существует',
   'sshKeys.error.nameRequired': 'Укажите имя',
   'sshKeys.error.keyRequired': 'Укажите приватный ключ',
+  'sshKeys.mode': 'Режим доступа по SSH',
+  'sshKeys.modeHint': 'Как ключи выдаются командам вызова: «Инструменты» — адресным тулам с обязательной политикой хостов, «SSH-агент» — через эфемерный агент на время вызова.',
+  'sshKeys.modeTools': 'Инструменты (tools)',
+  'sshKeys.modeAgent': 'SSH-агент (agent)',
+  'sshKeys.modeEnvLocked': 'Задано переменной окружения — изменение из UI недоступно',
+  'sshKeys.modeSaved': 'Режим доступа по SSH сохранён',
+  'sshKeys.modeSaveError': 'Не удалось сохранить режим доступа по SSH: {error}',
+  'sshKeys.agentModeNote': 'В режиме ssh-агента ключ доступен командам на время вызова; фильтрация по хостам не применяется — ограничивайте доступ на стороне хоста (authorized_keys).',
+  'sshKeys.usages': 'Назначение ключа',
+  'sshKeys.usagesHint': 'Git — ключ для git-операций; SSH — ключ для ssh-доступа',
+  'sshKeys.usageGit': 'Git',
+  'sshKeys.usageSsh': 'SSH',
+  'sshKeys.sshWithoutAgentWarning': 'Ключ с назначением «SSH» требует привязки к агенту: без неё ключ не будет использован.',
+  'sshKeys.usagesRequired': 'Выберите хотя бы одно назначение ключа: без него ключ не используется ни в git, ни в ssh.',
+  'sshKeys.error.usageRequired': 'Выберите хотя бы одно назначение ключа',
+  'sshKeys.allowHosts': 'Разрешённые хосты',
+  'sshKeys.allowHostsHint': 'Точный хост, поддомены (*.corp.example), IP или CIDR. Пусто — любой хост (в режиме «Инструменты»).',
+  'sshKeys.allowHostsEmpty': 'Хосты не заданы',
+  'sshKeys.allowPorts': 'Разрешённые порты',
+  'sshKeys.allowPortsHint': 'Порты назначения 1..65535. Пусто — стандартный порт ssh (22).',
+  'sshKeys.allowPortsEmpty': 'Порты не заданы',
 
   // --- Внешние события (ADR-089) ---
   'events.title': 'События',
@@ -4866,6 +4896,9 @@ export const dict = {
   'settings.help.agents.color': 'Цвет агента для подсветки упоминаний; пусто — цвет по умолчанию.',
   'settings.help.agents.sshKeyName': 'Имя ключа для выбора в git-операциях; должно быть уникальным.',
   'settings.help.agents.sshKeyPrivate': 'Приватный ключ OpenSSH/PEM; при редактировании пустое поле сохраняет текущий.',
+  'settings.help.agents.sshKeyMode': 'Режим инстанса: как ключи выдаются командам вызова. «Инструменты» — адресным тулам с обязательной политикой хостов; «SSH-агент» — эфемерный агент на время вызова (без фильтрации по хостам).',
+  'settings.help.agents.sshKeyAllowHosts': 'Шаблоны хостов: точный хост, поддомены (*.corp.example), IP-литерал или CIDR. Одиночный «*» недопустим.',
+  'settings.help.agents.sshKeyAllowPorts': 'Порты назначения (1..65535). Пустой список — стандартный порт ssh (22).',
   'settings.help.agents.sshKeyPassphrase': 'Парольная фраза приватного ключа, если она есть; хранится зашифрованной.',
 
   // --- Settings help: обзор администрирования (этап 2) ---

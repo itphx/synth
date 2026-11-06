@@ -8,7 +8,7 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError } from '../../execution/ports/index.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecSecret, type ExecutionError } from '../../execution/ports/index.js';
 import { BackgroundLimitExceededError } from '../background/types.js';
 import type { ActiveRunRegistry } from '../background/active-runs.js';
 import { BackgroundUnsupportedError } from '../processes/types.js';
@@ -39,11 +39,18 @@ const DEFAULT_TIMEOUT = 120_000;
  * §detach): вместе с `processService` делает foreground-запуск detach-готовым
  * (команда идёт через `spawnBackground`, `POST /sessions/:id/background`
  * переводит её в фон без перезапуска).
+ *
+ * `sshSecrets` — резолвер секретов вызова для режима `ssh.mode = 'agent'`
+ * (PROP-124 §2): ключи роли агента доставляются точке исполнения на время
+ * вызова (эфемерный `ssh-agent`). Резолвер собирает оркестратор — он же
+ * решает политику (режим инстанса, роль агента, plan-режим). Не задан или
+ * вернул пустой список — вызов идёт без ключей (обычное поведение).
  */
 export interface ShellToolExtra {
   processService?: ProcessService;
   backgroundEnabled?: boolean;
   activeRuns?: ActiveRunRegistry;
+  sshSecrets?: () => Promise<ExecSecret[]>;
 }
 
 export const executeShellTool: ToolDefinition = {
@@ -82,10 +89,16 @@ export const executeShellTool: ToolDefinition = {
     // ADR-036: деобфускация в точке потребления — команда может содержать ⟦SYNTH_SECRET_N⟧
     const command = await deobfuscateText(ctx, params.command);
 
+    // PROP-124 §2: секреты вызова (режим `ssh.mode = 'agent'`) — резолвит
+    // оркестратор (политика: режим инстанса, роль агента, plan-режим).
+    // Резолв — **один на вызов**: секреты одинаковы для синхронного,
+    // фонового и detach-пути.
+    const secrets = await resolveShellSecrets(ctx);
+
     // PROP-097: фоновый запуск — команда не блокирует ход, результат придёт
     // уведомлением (см. engine/processes).
     if (params.background === true) {
-      return await startBackgroundProcess(params, command, cwd, ctx);
+      return await startBackgroundProcess(params, command, cwd, ctx, secrets);
     }
 
     // ADR-113 §«Detach идущего шелла»: когда хэндл процесса доступен (есть
@@ -102,6 +115,7 @@ export const executeShellTool: ToolDefinition = {
         displayCommand: params.command,
         cwd,
         timeoutMs: timeout,
+        secrets,
       });
     }
 
@@ -123,6 +137,9 @@ export const executeShellTool: ToolDefinition = {
         signal: ctx.abortSignal,
         maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
         env: { HOME: process.env.HOME || '/root' },
+        // Секреты вызова (PROP-124 §2) — ключи режима `ssh-агента` на время
+        // вызова; при пустом списке поле в запрос не попадает.
+        ...(secrets.length > 0 ? { secrets } : {}),
       });
 
       let output = '';
@@ -206,6 +223,7 @@ async function startBackgroundProcess(
   command: string,
   cwd: string,
   ctx: ToolContext,
+  secrets: ExecSecret[],
 ): Promise<ToolResult> {
   const extra = ctx.extra as ShellToolExtra | undefined;
   // Мастер-выключатель фоновой работы (`background.enabled`) — гейтит и
@@ -235,6 +253,9 @@ async function startBackgroundProcess(
       // Явный таймаут — как задал; без него фоновый процесс живёт без срока.
       ...(params.timeout !== undefined ? { timeoutMs: params.timeout } : {}),
       env: { HOME: process.env.HOME || '/root' },
+      // Секреты вызова (PROP-124 §7) — на время жизни фонового процесса;
+      // в запись реестра и в лог они не попадают.
+      ...(secrets.length > 0 ? { secrets } : {}),
     });
     return {
       content: sm('process.background_started', { id: started.processId, log: started.logPath }),
@@ -266,5 +287,27 @@ async function startBackgroundProcess(
       };
     }
     throw err;
+  }
+}
+
+/**
+ * Секреты вызова для текущего шелл-вызова (PROP-124 §2).
+ *
+ * Резолвер приходит из `ctx.extra.sshSecrets` (его собирает оркестратор) —
+ * тул не знает ни режима инстанса, ни роли агента, ни режима хода: политику
+ * решает вызывающий. Резолвера нет → вызов без секретов (обычное поведение).
+ *
+ * Ошибка резолвера **не роняет вызов**: команда уходит без ключа (гейт сам
+ * логирует свои сбои) — иначе модель видела бы «ошибку» вместо результата
+ * команды, хотя ключ был лишь дополнением.
+ */
+async function resolveShellSecrets(ctx: ToolContext): Promise<ExecSecret[]> {
+  const extra = ctx.extra as ShellToolExtra | undefined;
+  const resolver = extra?.sshSecrets;
+  if (!resolver) return [];
+  try {
+    return (await resolver()) ?? [];
+  } catch {
+    return [];
   }
 }

@@ -26,6 +26,12 @@ import type {
   SkillBundle,
 } from '@itphx/synth-shared';
 import { SKILL_NAME_MAX, SKILL_NAME_REGEX, nowISO, parseFrontmatter, stringifyFrontmatter } from '@itphx/synth-shared';
+import {
+  normalizeSshKeyAllowHosts,
+  normalizeSshKeyAllowPorts,
+  normalizeSshKeyUsages,
+  validateSshKeyPolicy,
+} from '@itphx/synth-shared';
 import type { CreateSkillInput, UpdateSkillMarkdownInput } from '../skill-store.js';
 import type { RotateMasterKeyOptions, RotateMasterKeyResult } from '../ssh-key-store.js';
 import { SSHKeyStoreError } from '../ssh-key-store.js';
@@ -481,6 +487,10 @@ function toMeta(record: SSHKey): SSHKeyMeta {
     name: record.name,
     type: record.type,
     agentIds: [...record.agentIds],
+    // PROP-124: нормализация при чтении (как в файловом сторе).
+    usages: normalizeSshKeyUsages(record.usages),
+    allowHosts: normalizeSshKeyAllowHosts(record.allowHosts),
+    allowPorts: normalizeSshKeyAllowPorts(record.allowPorts),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
@@ -537,6 +547,9 @@ export class MemorySSHKeyRepository implements SSHKeyRepository {
     if (!input.privateKey || input.privateKey.trim() === '') {
       throw new SSHKeyStoreError('invalid', 'Приватный ключ не может быть пустым');
     }
+    // PROP-124: политика ключа проверяется так же, как в файловом сторе.
+    const policy = validateSshKeyPolicy(input);
+    if (!policy.ok) throw new SSHKeyStoreError('invalid', policy.message);
     for (const record of this._keys.values()) {
       if (record.name.toLowerCase() === input.name.toLowerCase()) {
         throw new SSHKeyStoreError('name_exists', `SSH-ключ "${input.name}" уже существует`);
@@ -550,6 +563,10 @@ export class MemorySSHKeyRepository implements SSHKeyRepository {
       privateKey: input.privateKey,
       passphrase: input.passphrase,
       agentIds: input.agentIds ? [...input.agentIds] : [],
+      // PROP-124: политика ключа (`usages` без значения → `['git']`).
+      usages: normalizeSshKeyUsages(input.usages),
+      allowHosts: normalizeSshKeyAllowHosts(input.allowHosts),
+      allowPorts: normalizeSshKeyAllowPorts(input.allowPorts),
       createdAt: now,
       updatedAt: now,
     };
@@ -560,6 +577,10 @@ export class MemorySSHKeyRepository implements SSHKeyRepository {
   async update(id: string, patch: SSHKeyUpdateRequest): Promise<SSHKeyMeta | null> {
     const record = this._keys.get(id);
     if (!record) return null;
+
+    // PROP-124: проверка политики до изменения записи.
+    const policy = validateSshKeyPolicy(patch);
+    if (!policy.ok) throw new SSHKeyStoreError('invalid', policy.message);
 
     const nextName = patch.name;
     if (nextName !== undefined && nextName.toLowerCase() !== record.name.toLowerCase()) {
@@ -579,6 +600,14 @@ export class MemorySSHKeyRepository implements SSHKeyRepository {
     if (nextName !== undefined) record.name = nextName;
     if (patch.type !== undefined) record.type = patch.type;
     if (patch.agentIds !== undefined) record.agentIds = [...patch.agentIds];
+    // PROP-124: политика ключа (пустое поле в patch = «не менять»).
+    if (patch.usages !== undefined) record.usages = normalizeSshKeyUsages(patch.usages);
+    if (patch.allowHosts !== undefined) {
+      record.allowHosts = normalizeSshKeyAllowHosts(patch.allowHosts);
+    }
+    if (patch.allowPorts !== undefined) {
+      record.allowPorts = normalizeSshKeyAllowPorts(patch.allowPorts);
+    }
     record.updatedAt = nowISO();
     return toMeta(record);
   }

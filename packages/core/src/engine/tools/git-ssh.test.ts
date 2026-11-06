@@ -163,6 +163,21 @@ describe('resolveRepoGitEnv (ADR-076 §T6, ADR-077 протокол 4)', () => {
     expect(result.secrets).toBeUndefined();
   });
 
+  it('ключ без usage "git" → git.ssh_key_required (гейт PROP-124 §3)', async () => {
+    // Ключ только для ssh-доступа: в git-операции не пригоден.
+    const key = await sshKeyStore.create({
+      name: 'ssh-only',
+      privateKey: PRIVATE_KEY,
+      usages: ['ssh'],
+    });
+    const sessionId = await seedProject([{ path: 'repo', sshKeyId: key.id }]);
+
+    const result = await resolveRepoGitEnv(makeCtx(sessionId), join(tmpDir, 'repo'));
+    expect(result.error).toBe('git.ssh_key_required');
+    expect(result.errorParams).toEqual({ path: 'repo' });
+    expect(result.secrets).toBeUndefined();
+  });
+
   it('корень workspace (path ".") сопоставляется с cwd проекта', async () => {
     const key = await sshKeyStore.create({ name: 'root-key', privateKey: PRIVATE_KEY });
     const sessionId = await seedProject([{ path: '.', sshKeyId: key.id }]);

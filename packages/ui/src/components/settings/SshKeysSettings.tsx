@@ -5,6 +5,9 @@ import {
   type SSHKeyCreateBody,
   type SSHKeyMetaData,
   type SSHKeyUpdateBody,
+  type SSHKeyUsage,
+  type SshMode,
+  type SshSettings,
 } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
@@ -13,9 +16,12 @@ import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { ConfirmDialog } from '../ui/confirm-dialog'
 import { TooltipProvider } from '../ui/tooltip'
-import { SettingsField, SettingsSection, TextArea, TextField } from '../ui/settings'
+import { ListField, SettingsField, SettingsSection, TextArea, TextField } from '../ui/settings'
 
 type EditorMode = 'create' | 'edit'
+
+/** PROP-124: способы использования ключа — выбор в форме ключа. */
+const USAGE_OPTIONS: readonly SSHKeyUsage[] = ['git', 'ssh']
 
 interface EditorState {
   mode: EditorMode
@@ -24,11 +30,16 @@ interface EditorState {
   privateKey: string
   passphrase: string
   agentIds: string[]
+  usages: SSHKeyUsage[]
+  allowHosts: string[]
+  allowPorts: string[]
 }
 
 interface EditorErrors {
   name?: string
   privateKey?: string
+  /** PROP-124: не выбрано ни одного назначения ключа (пустой `usages`). */
+  usages?: string
 }
 
 const EMPTY_EDITOR: EditorState = {
@@ -37,6 +48,9 @@ const EMPTY_EDITOR: EditorState = {
   privateKey: '',
   passphrase: '',
   agentIds: [],
+  usages: ['git'],
+  allowHosts: [],
+  allowPorts: [],
 }
 
 /**
@@ -60,6 +74,9 @@ export function SshKeysSettings() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<SSHKeyMetaData | null>(null)
+  // PROP-124: режим инстанса (`tools`|`agent`) — переключатель в шапке секции.
+  const [settings, setSettings] = useState<SshSettings | null>(null)
+  const [modeSaving, setModeSaving] = useState(false)
 
   const describeError = useCallback(
     (err: unknown, ctx?: { name?: string; id?: string }): string => {
@@ -92,6 +109,51 @@ export function SshKeysSettings() {
     void load()
   }, [load])
 
+  // PROP-124: режим инстанса (`tools`|`agent`) — отдельный запрос; ошибка не
+  // ломает список ключей (режим просто остаётся дефолтным).
+  useEffect(() => {
+    let cancelled = false
+    void synthApi
+      .getSshSettings()
+      .then((value) => {
+        if (!cancelled) setSettings(value)
+      })
+      .catch(() => {
+        if (!cancelled) setSettings(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /** Режим инстанса: `tools` — по умолчанию (fail-closed). */
+  const mode: SshMode = settings?.mode ?? 'tools'
+  /** В режиме `agent` политика по хостам не применяется — поля скрыты. */
+  const isToolsMode = mode === 'tools'
+
+  const handleModeChange = useCallback(
+    async (next: SshMode) => {
+      if (next === mode) return
+      setModeSaving(true)
+      try {
+        const updated = await synthApi.setSshMode(next)
+        setSettings(updated)
+        notify({ text: t('sshKeys.modeSaved'), type: 'success', category: 'system' })
+      } catch (err) {
+        notify({
+          text: t('sshKeys.modeSaveError', {
+            error: err instanceof Error ? err.message : t('common.error'),
+          }),
+          type: 'error',
+          category: 'error',
+        })
+      } finally {
+        setModeSaving(false)
+      }
+    },
+    [mode, notify, t],
+  )
+
   const agentName = useCallback(
     (id: string): string => agents.find((a) => a.id === id)?.display_name ?? id,
     [agents],
@@ -119,6 +181,9 @@ export function SshKeysSettings() {
       privateKey: '',
       passphrase: '',
       agentIds: [...key.agentIds],
+      usages: key.usages?.length ? [...key.usages] : ['git'],
+      allowHosts: [...(key.allowHosts ?? [])],
+      allowPorts: (key.allowPorts ?? []).map((port) => String(port)),
     })
   }
 
@@ -141,12 +206,29 @@ export function SshKeysSettings() {
     )
   }
 
+  /** PROP-124: переключение способа использования ключа (`git`/`ssh`). */
+  const toggleUsage = (usage: SSHKeyUsage) => {
+    setEditor((prev) =>
+      prev
+        ? {
+            ...prev,
+            usages: prev.usages.includes(usage)
+              ? prev.usages.filter((u) => u !== usage)
+              : [...prev.usages, usage],
+          }
+        : prev,
+    )
+  }
+
   const validate = (state: EditorState): EditorErrors => {
     const errors: EditorErrors = {}
     if (!state.name.trim()) errors.name = t('sshKeys.error.nameRequired')
     if (state.mode === 'create' && !state.privateKey.trim()) {
       errors.privateKey = t('sshKeys.error.keyRequired')
     }
+    // PROP-124: ключ без назначения бесполезен (ни git, ни ssh) — сохранять
+    // такой ключ нельзя (сервер тоже отклоняет пустой список).
+    if (state.usages.length === 0) errors.usages = t('sshKeys.error.usageRequired')
     return errors
   }
 
@@ -159,9 +241,17 @@ export function SshKeysSettings() {
     setSaving(true)
     setSaveError(null)
     try {
+      // PROP-124: политика ключа. В режиме `agent` поля по хостам не
+      // применяются — отправляем сохранённые значения без изменений.
+      const allowPorts = editor.allowPorts
+        .map((port) => Number(port.trim()))
+        .filter((port) => Number.isInteger(port) && port >= 1 && port <= 65535)
       const base = {
         name: editor.name.trim(),
         agentIds: editor.agentIds,
+        usages: editor.usages,
+        allowHosts: editor.allowHosts,
+        allowPorts,
       }
       if (editor.mode === 'create') {
         const body: SSHKeyCreateBody = {
@@ -224,6 +314,56 @@ export function SshKeysSettings() {
           </Button>
         }
       >
+        {/* PROP-124: режим инстанса (`tools`|`agent`) — выбор администратора. */}
+        <SettingsField
+          label={t('sshKeys.mode')}
+          description={t('sshKeys.modeHint')}
+          tooltip={t('settings.help.agents.sshKeyMode')}
+        >
+          <div
+            className="flex flex-wrap items-center gap-2"
+            data-testid="ssh-keys-mode"
+            role="group"
+            aria-label={t('sshKeys.mode')}
+          >
+            {(['tools', 'agent'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => void handleModeChange(value)}
+                disabled={modeSaving || settings?.envLocked === true}
+                aria-pressed={mode === value}
+                data-testid={`ssh-keys-mode-${value}`}
+                className={cn(
+                  'min-h-[var(--control-height)] rounded-lg border px-3 py-1.5 text-xs transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  mode === value
+                    ? 'border-primary bg-interactive-selection text-foreground'
+                    : 'border-border bg-surface-inset text-muted-foreground hover:bg-interactive-hover',
+                  modeSaving && 'cursor-progress opacity-60',
+                )}
+              >
+                {t(value === 'tools' ? 'sshKeys.modeTools' : 'sshKeys.modeAgent')}
+              </button>
+            ))}
+            {settings?.envLocked && (
+              <span className="text-[0.6875rem] text-muted-foreground" data-testid="ssh-keys-mode-locked">
+                {t('sshKeys.modeEnvLocked')}
+              </span>
+            )}
+          </div>
+        </SettingsField>
+
+        {/* В режиме `agent` фильтрация по хостам не применяется — поясняем это. */}
+        {!isToolsMode && (
+          <p
+            className="text-xs text-muted-foreground min-w-0 break-words"
+            data-testid="ssh-keys-agent-mode-note"
+          >
+            {t('sshKeys.agentModeNote')}
+          </p>
+        )}
+
         {loadError && (
           <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
             {loadError}
@@ -313,11 +453,95 @@ export function SshKeysSettings() {
               )}
             </SettingsField>
 
+            {/* PROP-124: способы использования ключа (`git`/`ssh`). */}
+            <SettingsField label={t('sshKeys.usages')} description={t('sshKeys.usagesHint')}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 min-w-0">
+                {USAGE_OPTIONS.map((usage) => {
+                  const checked = editor.usages.includes(usage)
+                  return (
+                    <label
+                      key={usage}
+                      className={cn(
+                        'flex min-h-[var(--control-height)] items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
+                        'transition-colors duration-150 ease-out hover:bg-interactive-hover',
+                        'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
+                        checked && 'bg-interactive-selection',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        data-testid={`ssh-key-usage-${usage}`}
+                        checked={checked}
+                        onChange={() => toggleUsage(usage)}
+                        className="size-4 shrink-0 accent-primary focus-visible:outline-none"
+                        aria-label={t(usage === 'git' ? 'sshKeys.usageGit' : 'sshKeys.usageSsh')}
+                      />
+                      <span className="text-xs min-w-0 break-words">
+                        {t(usage === 'git' ? 'sshKeys.usageGit' : 'sshKeys.usageSsh')}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            </SettingsField>
+
+            {/* PROP-124: ключ для ssh без привязки к агенту использовать нельзя. */}
+            {editor.usages.includes('ssh') && editor.agentIds.length === 0 && (
+              <p
+                role="alert"
+                className="text-xs text-destructive min-w-0 break-words"
+                data-testid="ssh-key-ssh-without-agent"
+              >
+                {t('sshKeys.sshWithoutAgentWarning')}
+              </p>
+            )}
+
+            {/* PROP-124: без назначения ключ не годен ни для git, ни для ssh. */}
+            {editor.usages.length === 0 && (
+              <p
+                role="alert"
+                className="text-xs text-destructive min-w-0 break-words"
+                data-testid="ssh-key-usages-required"
+              >
+                {t('sshKeys.usagesRequired')}
+              </p>
+            )}
+
+            {/* Политика по хостам/портам — только в режиме `tools`. */}
+            {isToolsMode && (
+              <>
+                <div data-testid="ssh-keys-allow-hosts">
+                  <ListField
+                    label={t('sshKeys.allowHosts')}
+                    description={t('sshKeys.allowHostsHint')}
+                    values={editor.allowHosts}
+                    onChange={(allowHosts) => setEditor((prev) => (prev ? { ...prev, allowHosts } : prev))}
+                    placeholder="*.corp.example"
+                    variant="chips"
+                    tooltip={t('settings.help.agents.sshKeyAllowHosts')}
+                    emptyText={t('sshKeys.allowHostsEmpty')}
+                  />
+                </div>
+                <div data-testid="ssh-keys-allow-ports">
+                  <ListField
+                    label={t('sshKeys.allowPorts')}
+                    description={t('sshKeys.allowPortsHint')}
+                    values={editor.allowPorts}
+                    onChange={(allowPorts) => setEditor((prev) => (prev ? { ...prev, allowPorts } : prev))}
+                    placeholder="22"
+                    variant="chips"
+                    tooltip={t('settings.help.agents.sshKeyAllowPorts')}
+                    emptyText={t('sshKeys.allowPortsEmpty')}
+                  />
+                </div>
+              </>
+            )}
+
             <div className="flex flex-wrap items-center gap-2 justify-end">
               <Button
                 variant="primary"
                 onClick={() => void handleSave()}
-                disabled={saving}
+                disabled={saving || editor.usages.length === 0}
                 data-testid="ssh-key-save"
               >
                 {saving ? t('common.saving') : t('common.save')}

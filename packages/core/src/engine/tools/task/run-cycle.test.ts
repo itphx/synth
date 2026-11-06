@@ -2376,3 +2376,85 @@ describe('run-cycle — usage шагов ребёнка (ADR-102/ADR-118)', () =
     expect(usage.cost).toBeUndefined();
   });
 });
+
+/**
+ * PROP-124 §2: ключи SSH выдаются **той роли, которая исполняет вызов**.
+ *
+ * Сабагент исполняет вызовы от своего лица: ключ, привязанный к роли
+ * родителя (`agentIds` — ACL ключа), ему не выдаётся. Поэтому резолвер в
+ * контексте тула сабагента собирается для роли **ребёнка**.
+ */
+describe('run-cycle — ключи SSH по роли сабагента', () => {
+  it('резолвер секретов в контексте тула сабагента собран для роли ребёнка', async () => {
+    const { provider } = scriptedProvider([
+      [toolCallChunk('peek')],
+      [{ isFinal: true, content: 'готово', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, model: 'test-model' }],
+    ]);
+
+    // Ключи, которые «выдаёт» каждый из резолверов.
+    const issued: string[] = [];
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'peek',
+      description: 'peek',
+      parameters: z.object({}).passthrough(),
+      capabilities: [],
+      execute: async (_args: unknown, ctx: ToolContext) => {
+        const extra = ctx.extra as { sshSecrets?: () => Promise<Array<{ privateKey: string }>> };
+        const secrets = (await extra.sshSecrets?.()) ?? [];
+        issued.push(...secrets.map((secret) => secret.privateKey));
+        return { content: 'ok' };
+      },
+    } as unknown as ToolDefinition);
+
+    const extra = makeExtra({
+      provider,
+      toolRegistry: registry,
+      // Резолвер родителя — ключ родителя.
+      sshSecrets: async () => [{ kind: 'ssh-key', privateKey: 'parent-key' }],
+      // Сборка резолвера для произвольной роли (её даёт оркестратор).
+      sshSecretsFor: (opts: { agentRole?: string }) => async () => [
+        { kind: 'ssh-key', privateKey: `key-for-${opts.agentRole ?? '—'}` },
+      ],
+    });
+
+    await runSubagent(makeConfig({ tools: llmTools(), extra, subagentType: 'explore' }));
+
+    // Ключ выдан по роли **ребёнка** (`explore`), а не родителя.
+    expect(issued).toEqual(['key-for-explore']);
+    expect(issued).not.toContain('parent-key');
+  });
+
+  it('без сборки резолвера (sshSecretsFor не задан) — ключи не выдаются', async () => {
+    const { provider } = scriptedProvider([
+      [toolCallChunk('peek')],
+      [{ isFinal: true, content: 'готово', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, model: 'test-model' }],
+    ]);
+
+    const issued: string[] = [];
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'peek',
+      description: 'peek',
+      parameters: z.object({}).passthrough(),
+      capabilities: [],
+      execute: async (_args: unknown, ctx: ToolContext) => {
+        const extra = ctx.extra as { sshSecrets?: () => Promise<Array<{ privateKey: string }>> };
+        const secrets = (await extra.sshSecrets?.()) ?? [];
+        issued.push(...secrets.map((secret) => secret.privateKey));
+        return { content: 'ok' };
+      },
+    } as unknown as ToolDefinition);
+
+    const extra = makeExtra({
+      provider,
+      toolRegistry: registry,
+      // Родительский резолвер без сборки: сабагенту ключи не достаются.
+      sshSecrets: async () => [{ kind: 'ssh-key', privateKey: 'parent-key' }],
+    });
+
+    await runSubagent(makeConfig({ tools: llmTools(), extra, subagentType: 'explore' }));
+
+    expect(issued).toEqual([]);
+  });
+});

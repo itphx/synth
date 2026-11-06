@@ -42,6 +42,7 @@ import { tlsApi } from './tls'
 import { observabilityApi } from './observability'
 import { attachmentsApi } from './settings-attachments'
 import { agentsLimitsApi } from './agentsLimits'
+import { sshSettingsApi } from './settings-ssh'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
 import { packsApi } from './packs'
@@ -83,7 +84,7 @@ export type {
   WorkspacePolicyInfo,
 } from './workspace'
 export type { GitRepoConfigData } from './git'
-export type { SSHKeyMetaData, SSHKeyCreateBody, SSHKeyUpdateBody } from './ssh-keys'
+export type { SSHKeyMetaData, SSHKeyCreateBody, SSHKeyUpdateBody, SSHKeyUsage } from './ssh-keys'
 export type { AgentMode, AgentInfo, AgentsListResponse } from './agents'
 export type { ProviderInfo, ProviderFetchIconResult, ProviderGroupInfo } from './providers'
 export type { ModelInfo, ModelGroup, ModelsPage, ModelsQuery, ModelGroupsPage } from './models'
@@ -258,6 +259,7 @@ export type {
   RestartResponse,
 } from './maintenance'
 export type { AgentsLimitsSettings, AgentsLimitsSource } from './agentsLimits'
+export type { SshSettings, SshMode, SshModeSource } from './settings-ssh'
 export type {
   InstructionFileStatus,
   InstructionSourceKind,
@@ -467,6 +469,7 @@ export const synthApi = {
   ...oauthApi,
   ...maintenanceApi,
   ...agentsLimitsApi,
+  ...sshSettingsApi,
   ...analyticsApi,
   ...logsApi,
   ...egressApi,

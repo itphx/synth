@@ -3,18 +3,20 @@
  *
  * Список tool-дефинишенов постоянен (не фильтруется по режиму/роли/окружению), а
  * доступность конкретного тула вычисляется здесь и передаётся permission-слою
- * как эффект `unavailable(mode | role | dependency | workspace)`:
+ * как эффект `unavailable(mode | role | dependency | workspace | policy)`:
  *  - `mode` — тул откроется, если пользователь переключит режим (plan/act/yolo);
  *  - `role` — тул недоступен текущему агенту, но доступен другому (делегировать);
  *  - `dependency` — в окружении нет нужного бинарника (git/rg/sh);
- *  - `workspace` — у проекта сессии не задан рабочий каталог (file/shell/git).
+ *  - `workspace` — у проекта сессии не задан рабочий каталог (file/shell/git);
+ *  - `policy` — политика инстанса запрещает тул в текущем режиме работы
+ *    (PROP-124 §0: адресные ssh-тулы недоступны при `ssh.mode = 'agent'`).
  *
  * `allow`/`ask`/`deny` — прежние эффекты ADR-029; `deny` — жёсткий запрет без
  * подсказок о переключении/делегировании.
  */
 
 import { ToolCapability } from '@itphx/synth-shared';
-import type { McpServerToolSettings, PlanMode, SessionMode } from '@itphx/synth-shared';
+import type { McpServerToolSettings, PlanMode, SessionMode, SshMode } from '@itphx/synth-shared';
 import { getMcpToolAvailability, isPlanBlockedTool, isPlanRestricted } from './evaluator.js';
 import {
   isRuntimeDepAvailable,
@@ -24,7 +26,7 @@ import {
 } from '../tools/runtime-deps.js';
 import { isStorageDegraded } from './storage-state.js';
 
-export type ToolUnavailableReason = 'mode' | 'role' | 'dependency' | 'workspace' | 'storage';
+export type ToolUnavailableReason = 'mode' | 'role' | 'dependency' | 'workspace' | 'storage' | 'policy';
 
 /**
  * Capabilities, привязанные к рабочему каталогу проекта: без него относительные
@@ -112,6 +114,15 @@ export interface ToolAvailabilityOptions {
    * безопасные тулы (`isToolAvailableInDegradedMode`), прочие `unavailable(storage)`.
    */
   storageDegraded?: boolean;
+  /**
+   * PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`) — **резолвер**.
+   *
+   * Передаётся геттер (по образцу `sshSecrets` в `engine/ssh/access.ts`): режим
+   * меняется на инстансе **live** (runtime-настройка), поэтому значение читается
+   * в момент расчёта, а не копируется в снимок. Не задан — fail-open
+   * (доступность адресных ssh-тулов не проверяется).
+   */
+  getSshMode?: () => SshMode;
 }
 
 /**
@@ -125,9 +136,11 @@ export interface ToolAvailabilityOptions {
  *     определить принадлежность).
  *  2. mode — plan-рестрикция write/edit/git-write (ADR-025) либо MCP-тул,
  *     выключенный в текущем режиме настройками сессии.
- *  3. dependency — в окружении нет внешней программы тула (`TOOL_RUNTIME_DEP`).
- *  4. workspace — не задан рабочий каталог проекта, а тул зависит от него.
- *  5. иначе — доступен.
+ *  3. policy — политика инстанса запрещает тул в текущем режиме работы
+ *     (PROP-124 §0: `ssh.mode = 'agent'` → адресные ssh-тулы недоступны).
+ *  4. dependency — в окружении нет внешней программы тула (`TOOL_RUNTIME_DEP`).
+ *  5. workspace — не задан рабочий каталог проекта, а тул зависит от него.
+ *  6. иначе — доступен.
  */
 export function computeToolAvailability(
   toolName: string,
@@ -168,7 +181,16 @@ export function computeToolAvailability(
     }
   }
 
-  // 3. Зависимость окружения: нет внешней программы тула (git/rg/sh).
+  // 3. Политика инстанса (PROP-124 §0): в режиме `ssh.mode = 'agent'` ключ
+  //    выдаётся командам через `execute_shell`, а адресные ssh-тулы недоступны —
+  //    иначе у одного и того же ключа было бы два толкования. Отказ — с
+  //    причиной `policy`: доступ открывается сменой режима инстанса
+  //    (runtime-настройка «SSH-ключи»), а не переключением режима хода.
+  if (capabilities?.includes(ToolCapability.SSH) && opts.getSshMode?.() === 'agent') {
+    return { available: false, reason: 'policy' };
+  }
+
+  // 4. Зависимость окружения: нет внешней программы тула (git/rg/sh).
   const dep = TOOL_RUNTIME_DEP[toolName];
   if (dep && !isRuntimeDepAvailable(opts.runtimeDeps, dep)) {
     const detail = runtimeDepUnavailableDetail(opts.runtimeDeps, dep);
@@ -179,12 +201,12 @@ export function computeToolAvailability(
     };
   }
 
-  // 4. Рабочий каталог проекта: без `project.workspace` относительные пути
+  // 5. Рабочий каталог проекта: без `project.workspace` относительные пути
   // файловых/shell/git-тулов не имеют определённой базы — недоступны.
   if (opts.workspaceReady === false && isWorkspaceDependentTool(capabilities, toolName)) {
     return { available: false, reason: 'workspace' };
   }
 
-  // 5. Доступен.
+  // 6. Доступен.
   return { available: true };
 }

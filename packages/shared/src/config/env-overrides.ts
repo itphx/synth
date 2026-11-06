@@ -89,6 +89,11 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   // git-тулы агента: локальные изменяющие операции и сетевые (0 — без таймаута).
   { section: 'git', key: 'localTimeoutMs', type: 'number' },
   { section: 'git', key: 'networkTimeoutMs', type: 'number' },
+  // ssh (PROP-124): режим работы инстанса с SSH-ключами (`tools`|`agent`).
+  // Переменная `SYNTH_SSH_MODE` читается НЕ здесь, а дедикарованным
+  // резолвером `resolveSshMode` (core) — как `SYNTH_EXECUTION_MODE`/
+  // `SYNTH_STORAGE_BACKEND`: один путь чтения на переменную, невалидное
+  // значение — ошибка конфигурации (fail-closed), а не warn + дефолт.
   // questions (этап 1 roadmap 0.13 — блок 3): таймаут ответа + retention.
   { section: 'questions', key: 'timeoutMs', type: 'number' },
   { section: 'questions', key: 'retentionDays', type: 'number' },

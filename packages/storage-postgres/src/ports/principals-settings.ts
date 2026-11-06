@@ -391,5 +391,16 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     async clearStickyNotesLimits(): Promise<void> {
       await deleteSetting(conn, 'stickyNotesLimits');
     },
+
+    // PROP-124: режим инстанса для SSH-ключей (`ssh.mode`).
+    async getSshMode(): Promise<RuntimeSettingsValue<'sshMode'> | undefined> {
+      return readSetting<RuntimeSettingsValue<'sshMode'>>(conn, 'sshMode');
+    },
+    async setSshMode(mode: RuntimeSettingsValue<'sshMode'>): Promise<void> {
+      await writeSetting(conn, 'sshMode', mode);
+    },
+    async clearSshMode(): Promise<void> {
+      await deleteSetting(conn, 'sshMode');
+    },
   };
 }

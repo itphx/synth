@@ -41,13 +41,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
+import { SshEnvError } from '../git/ssh-env.js';
 import { warning } from '../logger.js';
 import { probeBinaryThroughPort } from './probe.js';
 import { materializeSecretEnv } from './secret-env.js';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
-  EXECUTION_SECRETS_UNSUPPORTED_CODE,
   ExecutionError,
   type ExecBackgroundChunk,
   type ExecBackgroundExit,
@@ -65,6 +65,18 @@ function resolveInvocation(command: ExecCommand): { file: string; args: string[]
     return { file: command.shell ?? DEFAULT_SHELL_BINARY, args: ['-c', command.command] };
   }
   return { file: command.file, args: command.args ?? [] };
+}
+
+/**
+ * Уточнение к тексту ошибки подготовки секретов — **только код причины**.
+ *
+ * Код (`env_failed`/`agent_failed`) — из закрытого набора и материала не
+ * содержит; текст исходной ошибки в сообщение не попадает (в нём может быть
+ * stderr внешней программы).
+ */
+function sshEnvErrorSuffix(err: unknown): string {
+  if (err instanceof SshEnvError) return ` (${err.code})`;
+  return '';
 }
 
 /**
@@ -543,29 +555,63 @@ export class InlineExecutionPort implements ExecutionPort {
    * процесс control plane не «зависает» из-за фоновой команды.
    */
   async spawnBackground(req: ExecRequest): Promise<ExecBackgroundProcess> {
-    // ADR-077 (протокол 4): секреты вызова **не поддерживаются** в фоне —
-    // процесс переживает вызов, а материал доставляется «на время вызова».
-    // Fail-closed: «тихо» запустить процесс без ключа нельзя.
-    if (req.secrets && req.secrets.length > 0) {
-      throw new ExecutionError({
-        message: 'секреты вызова не поддерживаются для фоновых процессов',
-        code: EXECUTION_SECRETS_UNSUPPORTED_CODE,
-        reason: 'spawn_failed',
-      });
-    }
     const startedAt = Date.now();
     const { file, args } = resolveInvocation(req.command);
-    const child = spawn(file, args, {
-      cwd: req.cwd,
-      // Базовое окружение — всё `process.env`; `env` запроса мержится поверх.
-      env: { ...process.env, ...(req.env ?? {}) },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      // Своя группа процессов (POSIX): `stop`/таймаут должны гасить всё
-      // дерево, а не только прямого ребёнка — иначе форкнутая оболочкой
-      // команда остаётся жить и держит пайпы. На Windows групп процессов в
-      // таком виде нет — там остаётся прямое убийство ребёнка.
-      detached: process.platform !== 'win32',
-    });
+    // PROP-124 §7 (протокол 6): секреты вызова в фоне **поддерживаются** —
+    // материал готовится здесь (как в `execute`) и гасится **вместе с
+    // процессом**: выход, `stop()`, таймаут. Ключ в режиме `agent` живёт в
+    // памяти ssh-агента, а агент **не** входит в группу процессов команды —
+    // поэтому очистка явная и гарантированная (идемпотентная), а не «по
+    // факту выхода».
+    const secrets = req.secrets && req.secrets.length > 0 ? req.secrets : undefined;
+    let materialized: Awaited<ReturnType<typeof materializeSecretEnv>> | undefined;
+    if (secrets) {
+      try {
+        materialized = await materializeSecretEnv(secrets);
+      } catch (err) {
+        // Подготовка материала не удалась (нет `ssh-agent`, битый ключ, сбой FS) —
+        // процесс не запускаем: «тихо» выполнить команду без ключа нельзя.
+        // Ошибка — **типовая** порта (`ExecutionError`, `reason: 'spawn_failed'`),
+        // как и остальные сбои запуска; текст — без материала.
+        throw new ExecutionError({
+          message: `Не удалось подготовить секреты вызова для фонового запуска${sshEnvErrorSuffix(err)}`,
+          code: null,
+          reason: 'spawn_failed',
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    }
+    // Очистка материала — **одна** на весь фоновый процесс: все точки
+    // (выход, `stop()`, таймаут) ждут один и тот же промис, поэтому к моменту
+    // резолва `exited` материал уже убран. Идемпотентна.
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanupMaterial = async (): Promise<void> => {
+      cleanupPromise ??= (async () => {
+        await materialized?.cleanup().catch(() => {});
+      })();
+      await cleanupPromise;
+    };
+    let child: ChildProcess;
+    try {
+      child = spawn(file, args, {
+        cwd: req.cwd,
+        // Базовое окружение — всё `process.env`; `env` запроса мержится поверх;
+        // окружение секретов — поверх `env` (материал доставлен явно для этой
+        // команды, он важнее ambient-значений).
+        env: { ...process.env, ...(req.env ?? {}), ...(materialized?.env ?? {}) },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // Своя группа процессов (POSIX): `stop`/таймаут должны гасить всё
+        // дерево, а не только прямого ребёнка — иначе форкнутая оболочкой
+        // команда остаётся жить и держит пайпы. На Windows групп процессов в
+        // таком виде нет — там остаётся прямое убийство ребёнка.
+        detached: process.platform !== 'win32',
+      });
+    } catch (err) {
+      // Неудача запуска (неверный `cwd` и т. п.) — материал убираем сразу:
+      // процесса, который им пользовался, не будет.
+      await cleanupMaterial();
+      throw err;
+    }
 
     let timeoutTimer: NodeJS.Timeout | null = null;
     let killTimer: NodeJS.Timeout | null = null;
@@ -594,8 +640,11 @@ export class InlineExecutionPort implements ExecutionPort {
       child.once('exit', (code, signal) => {
         finished = true;
         clearTimers();
-        void drainOutputStreams(child, EXIT_DRAIN_MS).then(() => {
+        void drainOutputStreams(child, EXIT_DRAIN_MS).then(async () => {
           output.close();
+          // Материал гасится **до** резолва `exited`: когда хэндл сообщил о
+          // выходе процесса, ключа (и агента) в среде уже нет.
+          await cleanupMaterial();
           resolve({
             exitCode: code ?? null,
             signal: signal ?? null,
@@ -617,16 +666,22 @@ export class InlineExecutionPort implements ExecutionPort {
       clearTimers();
       output.close();
       const errno = (err as NodeJS.ErrnoException).errno;
-      resolveExited({
-        exitCode: typeof errno === 'number' ? errno : -1,
-        signal: null,
-        durationMs: Date.now() - startedAt,
+      // Процесса не будет — материал убираем сразу.
+      void cleanupMaterial().then(() => {
+        resolveExited({
+          exitCode: typeof errno === 'number' ? errno : -1,
+          signal: null,
+          durationMs: Date.now() - startedAt,
+        });
       });
     });
 
     const timeoutMs = req.timeoutMs ?? 0;
     if (timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
+        // Материал гасится вместе с процессом: ключ не переживает остановку
+        // по таймауту.
+        void cleanupMaterial();
         killProcessTree(child, 'SIGTERM');
         killTimer = setTimeout(() => killProcessTree(child, 'SIGKILL'), BACKGROUND_KILL_GRACE_MS);
         killTimer.unref?.();
@@ -635,6 +690,10 @@ export class InlineExecutionPort implements ExecutionPort {
     }
 
     const stop = (signal: NodeJS.Signals = 'SIGTERM'): void => {
+      // Материал гасится **всегда**: остановленный процесс не должен
+      // продолжать пользоваться ключом (иначе ключ пережил бы «стоп»).
+      // Очистка идемпотентна — повторный вызов безопасен.
+      void cleanupMaterial();
       if (finished) return;
       // Группа целиком; `ESRCH`/завершённый процесс — не ошибка (`stop()`
       // не бросает: повторный вызов и гонка с завершением — норма).

@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { SSHKey, SSHKeyMeta, SSHKeyCreateRequest, SSHKeyUpdateRequest } from '@itphx/synth-shared';
-import { AsyncLock, nowISO } from '@itphx/synth-shared';
+import {
+  AsyncLock,
+  nowISO,
+  normalizeSshKeyAllowHosts,
+  normalizeSshKeyAllowPorts,
+  normalizeSshKeyUsages,
+  validateSshKeyPolicy,
+} from '@itphx/synth-shared';
 import { JsonStore } from './json-store.js';
 import {
   CryptoError,
@@ -189,6 +196,7 @@ export class SSHKeyStore {
   /** Создаёт ключ: шифрует секреты, проверяет уникальность имени (case-insensitive). */
   async create(input: SSHKeyCreateRequest): Promise<SSHKeyMeta> {
     assertNonEmptyPrivateKey(input.privateKey);
+    assertValidPolicy(input);
     const key = await this._masterKey();
 
     await this._writeLock.acquire();
@@ -206,6 +214,10 @@ export class SSHKeyStore {
         privateKey: encryptSecret(input.privateKey, key),
         passphrase: input.passphrase === undefined ? undefined : encryptSecret(input.passphrase, key),
         agentIds: input.agentIds ? [...input.agentIds] : [],
+        // PROP-124: политика ключа (`usages` без значения → `['git']`).
+        usages: normalizeSshKeyUsages(input.usages),
+        allowHosts: normalizeSshKeyAllowHosts(input.allowHosts),
+        allowPorts: normalizeSshKeyAllowPorts(input.allowPorts),
         createdAt: now,
         updatedAt: now,
       };
@@ -218,6 +230,7 @@ export class SSHKeyStore {
 
   /** Частично обновляет ключ; при переданных секретах — перешифровывает. */
   async update(id: string, patch: SSHKeyUpdateRequest): Promise<SSHKeyMeta | null> {
+    assertValidPolicy(patch);
     const key = await this._masterKey();
 
     await this._writeLock.acquire();
@@ -243,6 +256,14 @@ export class SSHKeyStore {
       if (nextName !== undefined) record.name = nextName;
       if (patch.type !== undefined) record.type = patch.type;
       if (patch.agentIds !== undefined) record.agentIds = [...patch.agentIds];
+      // PROP-124: политика ключа (пустое поле в patch = «не менять»).
+      if (patch.usages !== undefined) record.usages = normalizeSshKeyUsages(patch.usages);
+      if (patch.allowHosts !== undefined) {
+        record.allowHosts = normalizeSshKeyAllowHosts(patch.allowHosts);
+      }
+      if (patch.allowPorts !== undefined) {
+        record.allowPorts = normalizeSshKeyAllowPorts(patch.allowPorts);
+      }
       record.updatedAt = nowISO();
 
       await this._store.save(id, record);
@@ -333,9 +354,29 @@ function toMeta(record: SSHKey): SSHKeyMeta {
     name: record.name,
     type: record.type,
     agentIds: [...record.agentIds],
+    // PROP-124: нормализация при чтении — у ключей, созданных до Ф1, полей нет:
+    // `usages` → `['git']` (fail-closed), `allowHosts`/`allowPorts` → `[]`.
+    usages: normalizeSshKeyUsages(record.usages),
+    allowHosts: normalizeSshKeyAllowHosts(record.allowHosts),
+    allowPorts: normalizeSshKeyAllowPorts(record.allowPorts),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
+}
+
+/**
+ * PROP-124: проверка политики ключа (типы использования, правила хостов,
+ * порты). Отказ — `SSHKeyStoreError('invalid')` → `400 VALIDATION_ERROR`.
+ */
+function assertValidPolicy(input: {
+  usages?: SSHKeyCreateRequest['usages'];
+  allowHosts?: SSHKeyCreateRequest['allowHosts'];
+  allowPorts?: SSHKeyCreateRequest['allowPorts'];
+}): void {
+  const result = validateSshKeyPolicy(input);
+  if (!result.ok) {
+    throw new SSHKeyStoreError('invalid', result.message);
+  }
 }
 
 function assertNonEmptyPrivateKey(privateKey: string): void {

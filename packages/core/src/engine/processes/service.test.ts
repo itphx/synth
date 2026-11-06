@@ -42,6 +42,8 @@ function createHarness() {
   });
 
   const stopSignals: (NodeJS.Signals | undefined)[] = [];
+  /** Запросы фонового запуска (в них видны секреты вызова). */
+  const spawnRequests: Array<{ secrets?: unknown[] }> = [];
   let resolveExit: ((exit: ExecBackgroundExit) => void) | null = null;
   const exited = new Promise<ExecBackgroundExit>((resolve) => {
     resolveExit = resolve;
@@ -49,17 +51,20 @@ function createHarness() {
 
   const executionPort = {
     execute: async () => ({ stdout: '', stderr: '' }),
-    spawnBackground: async () => ({
-      processId: 'proc_1',
-      pid: 4242,
-      output: (async function* () {
-        // вывода нет — процесс ничего не пишет
-      })(),
-      exited,
-      stop: (signal?: NodeJS.Signals) => {
-        stopSignals.push(signal);
-      },
-    }),
+    spawnBackground: async (req: { secrets?: unknown[] }) => {
+      spawnRequests.push(req);
+      return {
+        processId: 'proc_1',
+        pid: 4242,
+        output: (async function* () {
+          // вывода нет — процесс ничего не пишет
+        })(),
+        exited,
+        stop: (signal?: NodeJS.Signals) => {
+          stopSignals.push(signal);
+        },
+      };
+    },
   } as unknown as ExecutionPort;
 
   const service = new ProcessService({
@@ -74,6 +79,7 @@ function createHarness() {
     service,
     events,
     stopSignals,
+    spawnRequests,
     resolveExit: (exit: ExecBackgroundExit) => resolveExit?.(exit),
   };
 }
@@ -183,5 +189,50 @@ describe('ProcessService — остановка фонового процесс�
     await expect(
       service.spawn({ sessionId: 's1', command: 'sleep 60', cwd: '/tmp' }),
     ).rejects.toBeInstanceOf(BackgroundUnsupportedError);
+  });
+});
+
+/**
+ * PROP-124 §7: секреты вызова в фоновом процессе.
+ *
+ * Материал уходит **в запрос запуска** (значением — точке исполнения), но
+ * **не** попадает в запись реестра прогонов и не в лог: иначе приватный ключ
+ * оказался бы в персистентном хранилище и в журнале процесса.
+ */
+describe('ProcessService — секреты вызова', () => {
+  it('секреты доходят до порта и не попадают в запись реестра и в лог', async () => {
+    const h = createHarness();
+    const secret = {
+      kind: 'ssh-key' as const,
+      privateKey: 'super-secret-private-key',
+      mode: 'agent' as const,
+    };
+
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'sleep 60',
+      cwd: '/tmp',
+      secrets: [secret],
+    });
+
+    // Материал ушёл в запрос запуска — точке исполнения.
+    expect(h.spawnRequests[0]?.secrets).toEqual([secret]);
+
+    // В записи реестра прогона секрета нет.
+    const record = await h.service.get(started.runId);
+    expect(record).toBeTruthy();
+    expect(JSON.stringify(record)).not.toContain('super-secret-private-key');
+
+    // И в логе процесса — тоже.
+    const logs = await h.service.logs(started.runId);
+    expect(logs?.content ?? '').not.toContain('super-secret-private-key');
+  });
+
+  it('без секретов поле secrets в запрос запуска не появляется', async () => {
+    const h = createHarness();
+
+    await h.service.spawn({ sessionId: 's1', command: 'sleep 60', cwd: '/tmp' });
+
+    expect(h.spawnRequests[0]).not.toHaveProperty('secrets');
   });
 });

@@ -30,6 +30,7 @@ import {
   createAgentsLimitsSettingsRoutes,
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
+  createSshSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -723,6 +724,24 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       config: config.synth.context?.stickyNotes,
       live: deps.stickyNotesLimitsSettings,
       securityAudit,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // PROP-124: режим инстанса для SSH-ключей (`ssh.mode`): `tools`|`agent`.
+  // Runtime-override, применяется сразу. Managed RBAC — ADMIN (чтение и
+  // запись): это настройка инстанса.
+  app.route('/api/v2/settings', createSshSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.ssh?.mode,
+      live: deps.sshModeSettings,
+      securityAudit,
+      env: process.env,
     },
     {
       readGuard: auth.requirePermission('ADMIN'),

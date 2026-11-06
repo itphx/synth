@@ -49,8 +49,9 @@ import { appendFile, chmod, mkdir, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import type { ExecCommand } from '@itphx/synth-core';
+import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
 import type { BackgroundProcessStatus, ExecutorErrorReason } from './protocol.js';
+import { materializeSecrets } from './secrets.js';
 import { resolveContainedCwd } from './workspace.js';
 
 /** Базовая оболочка shell-формы (совпадает с `DEFAULT_SHELL_BINARY` в core). */
@@ -141,6 +142,13 @@ export interface BackgroundSpawnInput {
    * `ExecutionPort.spawnBackground`).
    */
   requires?: string[];
+  /**
+   * Секреты вызова (протокол 6, PROP-124 §7): материал, нужный фоновому
+   * процессу на время его жизни. Исполнитель готовит его **у себя**
+   * (каталог `0700`, ключ `0600` либо эфемерный `ssh-agent`) и гасит вместе
+   * с процессом — выход, `stop()`, таймаут, остановка исполнителя.
+   */
+  secrets?: ExecSecret[];
 }
 
 /** Итог фонового запуска: успех либо отказ с протокольной причиной. */
@@ -226,6 +234,12 @@ interface BackgroundEntry extends BackgroundProcessRecord {
    * группу. Терминальный статус ставится после дренажа потоков.
    */
   exitSeen: boolean;
+  /**
+   * Очистка материала секретов вызова (PROP-124 §7): каталог с ключом и
+   * эфемерный `ssh-agent`. Снимается после первой очистки — вызов
+   * идемпотентен.
+   */
+  materialCleanup?: () => Promise<void>;
 }
 
 /**
@@ -396,11 +410,33 @@ export class BackgroundExecService {
       // Очистка старых записей — при каждом запуске (дешёвая операция).
       await this.prune();
 
+      // Секреты вызова (протокол 6, PROP-124 §7) материализуются **до**
+      // запуска процесса: материал нужен процессу на время его жизни, а
+      // гасится вместе с ним (выход, `stop()`, таймаут, остановка
+      // исполнителя). Подготовка не удалась — процесс не запускается вовсе:
+      // «тихо» запустить его без ключа нельзя.
+      let materialized: Awaited<ReturnType<typeof materializeSecrets>> | undefined;
+      if (input.secrets && input.secrets.length > 0) {
+        try {
+          materialized = await materializeSecrets(input.secrets);
+        } catch {
+          // Текст ошибки — без материала: ни ключа, ни passphrase в ответе
+          // быть не должно.
+          return {
+            ok: false,
+            reason: 'internal_error',
+            message: 'не удалось подготовить секреты вызова в исполнителе',
+            code: null,
+          };
+        }
+      }
+
       const id = `proc_${randomUUID()}`;
       let paths: { out: string; err: string };
       try {
         paths = await this._prepareLogFiles(id);
       } catch (err) {
+        await materialized?.cleanup().catch(() => {});
         return {
           ok: false,
           reason: 'internal_error',
@@ -413,23 +449,39 @@ export class BackgroundExecService {
 
       const startedAt = this._now();
       const { file, args } = resolveInvocation(input.command);
-      const child = spawn(file, args, {
-        cwd: cwd.path,
-        // Базовое окружение — всё `process.env`; `env` запроса мержится поверх.
-        env: { ...process.env, ...(input.env ?? {}) },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        // Своя группа процессов (POSIX): `stop`/таймаут должны гасить всё дерево,
-        // а не только прямого ребёнка — иначе shell-форма, где оболочка форкает
-        // команду (`sh -c 'sleep 30'` в busybox/на части раннеров), оставляет
-        // потомка живым: он держит унаследованные пайпы, `close` не приходит, и
-        // запись висит в `running` до естественного выхода команды. Гарантию
-        // «не переживает исполнителя» это не отменяет: `dispose()` гасит группу
-        // сам, а при SIGKILL исполнителя осиротевший ребёнок и раньше оставался
-        // живым (PR_SET_PDEATHSIG в Node недоступен).
-        // На Windows групп процессов в таком виде нет (`process.kill(-pid)`
-        // не поддерживается) — там остаётся прямое убийство ребёнка.
-        detached: process.platform !== 'win32',
-      });
+      let child: ChildProcess;
+      try {
+        child = spawn(file, args, {
+          cwd: cwd.path,
+          // Базовое окружение — всё `process.env`; `env` запроса мержится
+          // поверх; окружение секретов — поверх `env` (материал доставлен явно
+          // для этой команды, он важнее ambient-значений).
+          env: { ...process.env, ...(input.env ?? {}), ...(materialized?.env ?? {}) },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          // Своя группа процессов (POSIX): `stop`/таймаут должны гасить всё дерево,
+          // а не только прямого ребёнка — иначе shell-форма, где оболочка форкает
+          // команду (`sh -c 'sleep 30'` в busybox/на части раннеров), оставляет
+          // потомка живым: он держит унаследованные пайпы, `close` не приходит, и
+          // запись висит в `running` до естественного выхода команды. Гарантию
+          // «не переживает исполнителя» это не отменяет: `dispose()` гасит группу
+          // сам, а при SIGKILL исполнителя осиротевший ребёнок и раньше оставался
+          // живым (PR_SET_PDEATHSIG в Node недоступен).
+          // На Windows групп процессов в таком виде нет (`process.kill(-pid)`
+          // не поддерживается) — там остаётся прямое убийство ребёнка.
+          detached: process.platform !== 'win32',
+        });
+      } catch (err) {
+        // Неудача запуска на уровне Node — процесса не будет: материал убираем.
+        await materialized?.cleanup().catch(() => {});
+        return {
+          ok: false,
+          reason: 'internal_error',
+          message: `не удалось запустить фоновый процесс: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          code: null,
+        };
+      }
 
       const entry: BackgroundEntry = {
         id,
@@ -452,6 +504,7 @@ export class BackgroundExecService {
         stderrChain: Promise.resolve(),
         stopRequested: false,
         exitSeen: false,
+        ...(materialized ? { materialCleanup: materialized.cleanup } : {}),
       };
       this._entries.set(id, entry);
 
@@ -460,6 +513,8 @@ export class BackgroundExecService {
       // libuv, например `-2` для ENOENT).
       child.on('error', (err: Error) => {
         console.warn(`[executor] фоновый процесс ${id} не запущен: ${err.message}`);
+        // Процесса не будет — материал (ключ/агент) убираем сразу.
+        this._cleanupMaterial(entry);
       });
 
       child.stdout?.on('data', (chunk: Buffer) => {
@@ -560,10 +615,16 @@ export class BackgroundExecService {
    * Идемпотентно: повторный вызов не дублирует эскалацию `SIGKILL`.
    * `false` — процесса нет в реестре; для уже завершённого — `true`
    * (операция — no-op, статус процесса не меняется).
+   *
+   * Материал секретов вызова гасится при **любом** вызове `stop` (PROP-124 §7):
+   * остановленный процесс не должен продолжать пользоваться ключом (и
+   * эфемерным агентом) — даже если запись уже не «running» или остановка
+   * запрошена ранее.
    */
   stop(id: string, signal: NodeJS.Signals = 'SIGTERM'): boolean {
     const entry = this._entries.get(id);
     if (!entry) return false;
+    this._cleanupMaterial(entry);
     if (entry.status === 'running') this._terminate(entry, signal);
     return true;
   }
@@ -696,6 +757,9 @@ export class BackgroundExecService {
     signal: NodeJS.Signals | null,
   ): void {
     this._clearTimers(entry);
+    // Материал секретов вызова гасится вместе с процессом (PROP-124 §7):
+    // ключ (и эфемерный агент) не переживает выход фонового процесса.
+    this._cleanupMaterial(entry);
     const finishedAt = this._now();
     entry.finishedAt = finishedAt;
     entry.durationMs = Math.max(0, finishedAt - entry.startedAt);
@@ -752,8 +816,15 @@ export class BackgroundExecService {
    * Остановить процесс сигналом и запланировать эскалацию.
    *
    * Повторный вызов ничего не делает: эскалация `SIGKILL` не дублируется.
+   *
+   * Материал секретов вызова гасится здесь же (PROP-124 §7): остановка по
+   * «стопу», по таймауту и при остановке исполнителя — ключ (и эфемерный
+   * агент) не должен пережить процесс. Очистка идемпотентна и выполняется
+   * **до** проверок состояния — иначе повторный `stop` (или `stop` после
+   * выхода) пропустил бы её.
    */
   private _terminate(entry: BackgroundEntry, signal: NodeJS.Signals): void {
+    this._cleanupMaterial(entry);
     if (entry.status !== 'running') return;
     if (entry.stopRequested) return;
     entry.stopRequested = true;
@@ -762,6 +833,19 @@ export class BackgroundExecService {
       this._signal(entry, 'SIGKILL');
     }, BACKGROUND_KILL_GRACE_MS);
     entry.killTimer.unref?.();
+  }
+
+  /**
+   * Очистить материал секретов вызова (идемпотентно).
+   *
+   * `materialCleanup` снимается после первой очистки — повторный вызов
+   * (выход после `stop()`, `dispose()` после остановки) ничего не делает.
+   */
+  private _cleanupMaterial(entry: BackgroundEntry): void {
+    const cleanup = entry.materialCleanup;
+    if (!cleanup) return;
+    entry.materialCleanup = undefined;
+    void cleanup().catch(() => undefined);
   }
 
   /** Прочитать отрезок файла журнала. */

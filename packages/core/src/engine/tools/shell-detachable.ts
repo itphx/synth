@@ -44,6 +44,7 @@ import {
   type ExecBackgroundChunk,
   type ExecBackgroundExit,
   type ExecBackgroundProcess,
+  type ExecSecret,
   type ExecutionPort,
 } from '../../execution/ports/index.js';
 import type { ActiveRunRegistry } from '../background/active-runs.js';
@@ -87,6 +88,11 @@ export interface DetachableShellInput {
   cwd: string;
   /** Таймаут команды, мс (как у синхронного пути). */
   timeoutMs: number;
+  /**
+   * Секреты вызова (PROP-124 §2) — ключи режима `ssh-агента` на время
+   * процесса; в запрос запуска уходят **значением**, в лог и в реестр — нет.
+   */
+  secrets?: ExecSecret[];
 }
 
 /**
@@ -283,6 +289,8 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
       // фоновом режиме не слушает — «Стоп» и лимит буфера делает этот модуль.
       timeoutMs: input.timeoutMs,
       env: { HOME: process.env.HOME || '/root' },
+      // Секреты вызова (PROP-124 §2) — на время жизни процесса.
+      ...(input.secrets && input.secrets.length > 0 ? { secrets: input.secrets } : {}),
     });
   } catch (err) {
     return spawnFailureResult(input, err);
@@ -472,6 +480,8 @@ async function executionFallback(input: DetachableShellInput): Promise<ToolResul
     signal: input.ctx.abortSignal,
     maxOutputBytes: MAX_BUFFER_BYTES,
     env: { HOME: process.env.HOME || '/root' },
+    // Секреты вызова (PROP-124 §2) — как у основного пути.
+    ...(input.secrets && input.secrets.length > 0 ? { secrets: input.secrets } : {}),
   });
   let output = combineShellStreams(stdout, stderr);
   if (output.length > MAX_OUTPUT_LENGTH) {

@@ -97,16 +97,32 @@
  *   ключ `0600`, askpass `0700`) и удаляет его после вызова;
  * - максимум 4 записи, `kind === 'ssh-key'`, `privateKey` — непустая строка до
  *   16 КиБ, `passphrase` — строка до 4 КиБ; иначе — `400 invalid_request`;
- * - в `POST /exec/spawn` (фоновые процессы) секреты **не поддерживаются**:
- *   процесс переживает вызов, а материал доставляется «на время вызова»;
- * - признак поддержки — `features.secrets: true` в `GET /capabilities`
- *   (и версия протокола ≥ 4).
+ * - `mode` (протокол 6, PROP-124 §2) — режим доставки ключа: `git`
+ *   (по умолчанию; ключ файлом + `GIT_SSH_COMMAND`) либо `agent`
+ *   (эфемерный `ssh-agent`: `SSH_AUTH_SOCK`, ключ удаляется после `ssh-add`);
+ *   иное значение — `400 invalid_request`;
+ * - в `POST /exec/spawn` (фоновые процессы) секреты принимаются **на тех же
+ *   условиях** (протокол 6, PROP-124 §7): те же лимиты и валидация, что у
+ *   `POST /exec`; исполнитель материализует материал у себя и гасит его
+ *   вместе с процессом (выход, `stop()`, таймаут). Признак поддержки —
+ *   `features.secretsSpawn: true` в `GET /capabilities` (старый исполнитель
+ *   признака не объявляет → адрес не выбирается, тихого фоллбека нет);
+ * - признак поддержки синхронной доставки — `features.secrets: true` в
+ *   `GET /capabilities` (и версия протокола ≥ 4); агентный режим —
+ *   `features.sshAgent: true` (протокол ≥ 6).
  */
 
 import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
 
 /**
  * Версия wire-протокола исполнителя.
+ *
+ * **6** — ssh-агент для секрета вызова (PROP-124 §2): у секрета появилось
+ * аддитивное поле `mode` (`git` | `agent`), а исполнитель объявляет признак
+ * `features.sshAgent: true` — он умеет материализовать ключ в эфемерный
+ * `ssh-agent` (`SSH_AUTH_SOCK`), а не только файлом в `GIT_SSH_COMMAND`.
+ * Старый исполнитель (≤ 5) поля `mode` не знает ⇒ агентный режим ему не
+ * доступен (тихого фоллбека в git-режим нет).
  *
  * **5** — вложения MCP-результата (`attachments[]` в ответе `POST /mcp/call`,
  * ADR-115/ADR-077): нетекстовые блоки (`image`/`audio`/`resource.blob`)
@@ -132,7 +148,7 @@ import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
  * потолки таймаута и буфера вывода, чтобы control plane видел «тихий» потолок
  * заранее. Старый исполнитель поля не отдаёт — разбор терпимый.
  */
-export const EXECUTOR_PROTOCOL_VERSION = 5;
+export const EXECUTOR_PROTOCOL_VERSION = 6;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -240,6 +256,18 @@ export interface ExecutorCapabilities {
    *
    * `mcpAttachments: true` — исполнитель отдаёт нетекстовые вложения
    * MCP-результата (`attachments[]` в `POST /mcp/call`, протокол 5, ADR-115).
+   *
+   * `sshAgent: true` — исполнитель умеет материализовать секрет вызова в
+   * эфемерный `ssh-agent` (`mode: 'agent'`, протокол 6, PROP-124 §2):
+   * `SSH_AUTH_SOCK` в окружении вызова, приватный ключ удаляется с диска
+   * сразу после `ssh-add`.
+   *
+   * `secretsSpawn: true` — исполнитель принимает секреты вызова **в
+   * фоновом запуске** (`secrets[]` в `POST /exec/spawn`, протокол 6,
+   * PROP-124 §7): материал готовится у исполнителя и гасится вместе с
+   * процессом. Признак — **только** явный: у старого исполнителя протокола
+   * 6 его нет, поэтому control plane такой адрес не выбирает (тихого фоллбека
+   * нет — процесс не должен пойти без ключа).
    */
   features?: ExecutorFeatures;
   /**
@@ -261,6 +289,21 @@ export interface ExecutorFeatures {
   secrets?: boolean;
   /** Вложения MCP-результата (`attachments[]` в `POST /mcp/call`, протокол 5). */
   mcpAttachments?: boolean;
+  /**
+   * Секрет вызова в режиме ssh-агента (`mode: 'agent'`, протокол 6,
+   * PROP-124 §2): эфемерный `ssh-agent` (`SSH_AUTH_SOCK`), приватный ключ
+   * удаляется с диска сразу после `ssh-add`.
+   */
+  sshAgent?: boolean;
+  /**
+   * Секреты вызова в **фоновом** запуске (`secrets[]` в `POST /exec/spawn`,
+   * протокол 6, PROP-124 §7): материал готовится у исполнителя и гасится
+   * вместе с процессом (выход, `stop()`, таймаут).
+   *
+   * Признак **явный**: у старого исполнителя протокола 6 его нет — такой
+   * адрес в кандидаты на фоновый запуск с секретами не попадает.
+   */
+  secretsSpawn?: boolean;
 }
 
 /** Ответ `GET /health`. */
@@ -437,9 +480,9 @@ export const EXEC_SECRET_LIMITS = {
  * Разбор `secrets[]` — валидный список секретов или причина отказа.
  *
  * Проверки строгие: неизвестный `kind`, непустой/слишком большой ключ,
- * нестроковая passphrase — отказ (`invalid_request`). Молчаливый пропуск
- * означал бы, что команда выполнится **без** ключа, а операция упадёт с
- * невнятной ошибкой аутентификации.
+ * нестроковая passphrase, неизвестный `mode` — отказ (`invalid_request`).
+ * Молчаливый пропуск означал бы, что команда выполнится **без** ключа, а
+ * операция упадёт с невнятной ошибкой аутентификации.
  */
 export function parseExecSecrets(
   raw: unknown,
@@ -487,6 +530,18 @@ export function parseExecSecrets(
         };
       }
       secret.passphrase = record.passphrase;
+    }
+    // Режим доставки ключа (PROP-124 §2): `git` (по умолчанию) либо `agent`.
+    // Неизвестное значение — отказ: молчаливый фоллбек в git-режим означал бы,
+    // что команда выполнится без `SSH_AUTH_SOCK` (тихий сбой аутентификации).
+    if (record.mode !== undefined) {
+      if (record.mode !== 'git' && record.mode !== 'agent') {
+        return {
+          ok: false,
+          message: `поле ${where}.mode: поддерживаются только "git" и "agent"`,
+        };
+      }
+      secret.mode = record.mode;
     }
     secrets.push(secret);
   }
@@ -576,6 +631,14 @@ export interface SpawnExecRequest {
    * `ExecutionPort.spawnBackground`).
    */
   requires?: string[];
+  /**
+   * Секреты вызова (протокол 6, PROP-124 §7): материал, нужный фоновому
+   * процессу **на время его жизни** — исполнитель материализует его у себя
+   * и гасит вместе с процессом (выход, `stop()`, таймаут). Лимиты и
+   * валидация — те же, что у `POST /exec` (`parseExecSecrets`); значения не
+   * логируются и не возвращаются в ответе.
+   */
+  secrets?: ExecSecret[];
 }
 
 /** Тело успешного ответа `POST /exec/spawn`. */
@@ -709,6 +772,12 @@ export function parseStopBackgroundRequestBody(
  *
  * Правила те же, что у `parseExecRequestBody`, но без `maxOutputBytes`
  * (в фоне вывод не буферизуется) и с полем `requires`.
+ *
+ * Секреты вызова принимаются **на тех же условиях**, что у `POST /exec`
+ * (протокол 6, PROP-124 §7): тот же разбор `parseExecSecrets` — те же
+ * лимиты и та же строгость. Молчаливый пропуск означал бы, что процесс
+ * пойдёт **без ключа**, а операция упадёт с невнятной ошибкой
+ * аутентификации.
  */
 export function parseSpawnExecRequestBody(
   body: unknown,
@@ -721,14 +790,6 @@ export function parseSpawnExecRequestBody(
     return {
       ok: false,
       message: 'поле command обязательно: {kind:"shell",command} или {kind:"argv",file,args?}',
-    };
-  }
-  // Секреты вызова в фоне не поддерживаются: фоновый процесс переживает
-  // вызов, а материал доставляется «на время вызова» (протокол 4).
-  if (raw.secrets !== undefined) {
-    return {
-      ok: false,
-      message: 'секреты доступны только для синхронного /exec (фоновые процессы их не поддерживают)',
     };
   }
   const value: SpawnExecRequest = { command: raw.command };
@@ -771,6 +832,15 @@ export function parseSpawnExecRequestBody(
       return { ok: false, message: 'поле requires должно быть массивом непустых строк' };
     }
     value.requires = [...(raw.requires as string[])];
+  }
+
+  // Секреты вызова в фоне (протокол 6, PROP-124 §7) — тот же разбор, что у
+  // `POST /exec`: те же лимиты и та же строгость (молчаливый пропуск ключа
+  // означал бы запуск фонового процесса без ключа).
+  if (raw.secrets !== undefined) {
+    const secrets = parseExecSecrets(raw.secrets);
+    if (!secrets.ok) return secrets;
+    value.secrets = secrets.value;
   }
 
   return { ok: true, value };

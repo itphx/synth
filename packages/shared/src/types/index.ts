@@ -21,8 +21,11 @@ export * from './plugin-protocol.js';
 export * from './mcp.js';
 // Проекты, workspace-политика, иконки/цвета, план (ADR-039/075)
 export * from './project.js';
-// Git-репозитории и SSH-ключи (ADR-076)
+// Git-репозитории и SSH-ключи (ADR-076, PROP-124)
 export * from './git.js';
+// Единая семантика правил хоста (ADR-099 — TLS/egress; PROP-124 — SSH-политика):
+// browser-safe, поэтому читается и ядром, и UI.
+export * from './host-pattern.js';
 // Пользователи, auth и внешние идентичности (ADR-089)
 export * from './user.js';
 // Агенты (определения и режимы)

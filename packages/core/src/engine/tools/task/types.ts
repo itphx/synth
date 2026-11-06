@@ -22,6 +22,7 @@ import type { RuntimeDeps } from '../runtime-deps.js';
 import type { SkillRuntime, SkillScopeOptions } from '../../skills/types.js';
 import type { ProjectStoreLike } from '../../../storage/project-store.js';
 import type { SSHKeyRepository } from '../../../storage/ports/ssh-key-repository.js';
+import type { ExecSecret } from '../../../execution/ports/index.js';
 import type { GitService } from '../../../git/git-service.js';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
 import type { QuestionService } from '../../question/service.js';
@@ -177,6 +178,14 @@ export interface TaskExtra {
   profilesStore?: ProfileStore;
   workspacesRoot?: string;
   sshKeyStore?: SSHKeyRepository;
+  /**
+   * PROP-124 §2: сборка резолвера секретов вызова для указанной роли.
+   *
+   * Сабагент исполняет вызовы **от своего лица**: ключ, привязанный к роли
+   * родителя (`agentIds` — ACL ключа), ему не выдаётся. Поэтому резолвер
+   * сабагента собирается для роли **ребёнка** (см. `run-cycle.ts`).
+   */
+  sshSecretsFor?: (opts: { agentRole?: string; isPlan?: boolean }) => () => Promise<ExecSecret[]>;
   gitService?: GitService;
   /**
    * ADR-076: пределы git-тулов по классу операции (локальные изменяющие /

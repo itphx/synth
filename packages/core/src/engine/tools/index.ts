@@ -84,6 +84,8 @@ import { sendAttachmentTool } from './send-attachment.js';
 import { listModelsTool } from './list-models.js';
 // ADR-076: метаданные SSH-ключей инстанса (id для `sshKeyId` сетевых git-тулов).
 import { sshKeysListTool } from './ssh-keys.js';
+// PROP-124 §4: адресный ssh-тул — выполнение команды на удалённом хосте.
+import { sshExecTool } from './ssh-exec.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -123,6 +125,8 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   gitStashTool,
   // ADR-076: какие ключи доступны для `sshKeyId` (метаданные, без секретов)
   sshKeysListTool,
+  // PROP-124 §4: адресный ssh-тул (режим инстанса `tools`)
+  sshExecTool,
   getProjectInfoTool,
   listReposTool,
   taskTool,

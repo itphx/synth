@@ -27,7 +27,7 @@ import {
   scrubExecutorMcpServers,
   scrubExecutorToken,
 } from './config.js';
-import { sweepStaleSshDirs } from './secrets.js';
+import { sweepStaleSshDirs, startSshSweep } from './secrets.js';
 import { startExecutorServer } from './server.js';
 
 /** Код выхода при штатном завершении. */
@@ -49,9 +49,13 @@ export async function main(): Promise<void> {
   // команда не должна видеть секреты других MCP-серверов.
   scrubExecutorMcpServers();
 
-  // Sweep осиротевших каталогов SSH-ключа: прерванный процесс мог не дойти
+  // Уборка осиротевших каталогов SSH-ключа: прерванный процесс мог не дойти
   // до `finally` — временный ключ не должен лежать в tmp (ADR-077, протокол 4).
   const swept = await sweepStaleSshDirs().catch(() => 0);
+  // Периодическая уборка (раз в 10 минут, таймер `unref`): агент, чей
+  // владелец умер, иначе жил бы с ключом в памяти до конца жизни инстанса.
+  // Стартовая уборка уже выполнена выше — таймер начинает с periodic-тика.
+  const stopSshSweep = await startSshSweep({ immediate: false }).catch(() => (): void => {});
 
   const handle = await startExecutorServer({
     token: config.token,
@@ -86,6 +90,7 @@ export async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     console.log(`[executor] получен ${signal} — останавливаюсь`);
+    stopSshSweep();
     const timer = setTimeout(() => process.exit(EXIT_OK), SHUTDOWN_GRACE_MS);
     timer.unref?.();
     handle

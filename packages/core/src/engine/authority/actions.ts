@@ -124,6 +124,9 @@ const TOOL_ACTIONS: Readonly<Record<string, string>> = {
   project_repo_clone: 'execute',
   project_repo_init: 'execute',
   project_repo_fetch: 'execute',
+  // PROP-124 §4: адресный ssh-тул — исполнение команды на удалённом хосте
+  // (цель — внешний ресурс, см. `TOOL_TARGET_KINDS`).
+  ssh_exec: 'execute',
   // Коммит и публикация.
   git_commit: 'commit',
   git_push: 'commit',
@@ -173,6 +176,8 @@ const CAPABILITY_ACTIONS: Readonly<Record<string, string>> = {
   // плагинных тулов с этими capability (встроенные тулы маппингом выше).
   [ToolCapability.PIPELINE]: 'write',
   [ToolCapability.SCHEDULE]: 'write',
+  // PROP-124 §4: адресный ssh-тул — исполнение (команда на удалённом хосте).
+  [ToolCapability.SSH]: 'execute',
 };
 
 /**
@@ -229,6 +234,9 @@ const TOOL_TARGET_KINDS: Readonly<Record<string, string>> = {
   project_repo_remove: 'workspace',
   web_fetch: 'external',
   web_search: 'external',
+  // PROP-124 §4: адресный ssh-тул обращается к **внешнему** хосту — тот же
+  // вид цели, что у веб-тулов (ресурс вне рабочего каталога сессии).
+  ssh_exec: 'external',
   // ADR-101/ADR-051: пайплайны и расписания — **цель `session`**.
   //
   // Новые виды цели не вводим: проект — свойство сессии (ADR-014), а

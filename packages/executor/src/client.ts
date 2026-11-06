@@ -64,6 +64,17 @@
  * адрес без нужного бинаря и не ответивший адрес исключаются), плюс требование
  * `features.background` (протокол v3): старый исполнитель фоновых процессов
  * не знает.
+ *
+ * Секреты вызова в фоне (PROP-124 §7) — адрес должен объявлять
+ * `features.secretsSpawn` (а для агентного режима — `features.sshAgent`):
+ * нет признака — адрес не выбирается, а отказ — `ESECRETS` (тихого фоллбека
+ * нет: процесс не должен пойти без ключа).
+ *
+ * Секреты вызова в **синхронном** `/exec` — то же правило, но с признаком
+ * `features.secrets` (протокол 4); для режима `agent` (PROP-124 §2) —
+ * ещё и `features.sshAgent` (протокол 6): без него исполнитель материализует
+ * ключ **файлом**, а вызов ждёт `SSH_AUTH_SOCK` — ехать «не как заказано»
+ * нельзя, поэтому адрес не выбирается, а отказ — `ESECRETS`.
  */
 
 import type {
@@ -177,6 +188,20 @@ interface PoolEntry {
   /** Умеет ли исполнитель принимать секреты вызова (`features.secrets`, протокол v4). */
   secrets: boolean;
   /**
+   * Умеет ли исполнитель агентный режим секрета вызова (`features.sshAgent`,
+   * протокол v6, PROP-124 §2): эфемерный `ssh-agent` вместо файла ключа.
+   */
+  sshAgent: boolean;
+  /**
+   * Умеет ли исполнитель принимать секреты вызова в **фоновом** запуске
+   * (`features.secretsSpawn`, протокол v6, PROP-124 §7).
+   *
+   * Признак **явный**: у старого исполнителя протокола 6 его нет — такой
+   * адрес в кандидаты на фоновый запуск с секретами не попадает (тихого
+   * фоллбека нет: процесс не должен пойти без ключа).
+   */
+  secretsSpawn: boolean;
+  /**
    * Эффективные лимиты исполнителя (`limits` в `/capabilities`) — **не
    * обязательны**: у старого исполнителя поля нет (тогда `undefined`).
    */
@@ -192,6 +217,12 @@ const EXECUTOR_PROTOCOL_BACKGROUND = 3;
  * Минимальная версия протокола с секретами вызова (`secrets[]` в `POST /exec`).
  */
 const EXECUTOR_PROTOCOL_SECRETS = 4;
+
+/**
+ * Минимальная версия протокола с агентным режимом секрета вызова
+ * (`mode: 'agent'`, PROP-124 §2): эфемерный `ssh-agent` (`SSH_AUTH_SOCK`).
+ */
+const EXECUTOR_PROTOCOL_SSH_AGENT = 6;
 
 /** Ошибка соединения — повод переключиться на следующий адрес. */
 class ConnectionFailure extends Error {
@@ -432,24 +463,19 @@ export class RemoteExecutionPort implements ExecutionPort {
    * запрос, а держать слот до его конца — значит заблокировать пул.
    */
   async spawnBackground(req: ExecRequest): Promise<ExecBackgroundProcess> {
-    // ADR-077 (протокол 4): секреты вызова в фоне не поддерживаются —
-    // процесс переживает вызов, а материал доставляется «на время вызова».
-    // Fail-closed: «тихо» запустить процесс без ключа нельзя.
-    if (req.secrets && req.secrets.length > 0) {
-      const core = await loadCore();
-      throw await buildExecutionError({
-        reason: 'spawn_failed',
-        code: core.EXECUTION_SECRETS_UNSUPPORTED_CODE,
-        message: 'секреты вызова не поддерживаются для фоновых процессов',
-      });
-    }
     if (this._urls.length === 0) {
       return this._unreachableBackground(new Error('не задано ни одного адреса исполнителя'), req);
     }
+    // PROP-124 §7: секреты вызова в фоне принимают только исполнители с
+    // `features.secretsSpawn` (и `features.sshAgent` — для агентного режима).
+    // Адрес без признака в кандидаты не попадает: «тихо» запустить процесс
+    // без ключа нельзя.
+    const needsSecrets = (req.secrets?.length ?? 0) > 0;
+    const needsAgent = needsSecrets && (req.secrets ?? []).some((s) => s.mode === 'agent');
     const requires = req.requires ?? [];
-    const candidates = await this._backgroundCandidates(requires);
+    const candidates = await this._backgroundCandidates(requires, needsSecrets, needsAgent);
     if (candidates.length === 0) {
-      throw await this._backgroundSelectionError(requires);
+      throw await this._backgroundSelectionError(requires, needsSecrets, needsAgent);
     }
 
     let lastCause: unknown;
@@ -480,8 +506,12 @@ export class RemoteExecutionPort implements ExecutionPort {
     // их понимает; иначе команда выполнилась бы «без ключа» (тихий сбой
     // аутентификации). Старый исполнитель → fail-closed (см. `_executeWithRequirements`).
     const needsSecrets = (req.secrets?.length ?? 0) > 0;
+    // PROP-124 §2: секрет в режиме `agent` требует ещё и `features.sshAgent`
+    // (протокол 6) — иначе исполнитель материализует ключ файлом, а вызов
+    // ожидает `SSH_AUTH_SOCK`.
+    const needsAgent = (req.secrets ?? []).some((secret) => secret.mode === 'agent');
     if (requires.length > 0 || needsSecrets) {
-      return this._executeWithRequirements(req, requires, needsSecrets);
+      return this._executeWithRequirements(req, requires, needsSecrets, needsAgent);
     }
 
     const start = this._cursor;
@@ -517,12 +547,16 @@ export class RemoteExecutionPort implements ExecutionPort {
    *   `dependency_missing` (различимая причина: слой доступности превращает
    *   её в `unavailable(dependency)`);
    * - секреты вызова нужны, а никто их не принимает — ошибка `ESECRETS`
-   *   («нужен протокол 4»): выполнять команду без ключа нельзя.
+   *   («нужен протокол 4»): выполнять команду без ключа нельзя;
+   * - секрет в режиме `agent` нужен, а `features.sshAgent` нет ни у кого —
+   *   тоже `ESECRETS`: без поддержки агента ключ уехал бы файлом, а вызов
+   *   ждал бы `SSH_AUTH_SOCK` (тихо ехать «не как заказано» нельзя).
    */
   private async _executeWithRequirements(
     req: ExecRequest,
     requires: string[],
     needsSecrets = false,
+    needsAgent = false,
   ): Promise<ExecResult> {
     const inventory = await this._ensureInventory();
     const start = this._cursor;
@@ -534,6 +568,7 @@ export class RemoteExecutionPort implements ExecutionPort {
       const entry = inventory.get(url);
       if (!entry || !entry.reachable) continue;
       if (needsSecrets && !entry.secrets) continue;
+      if (needsAgent && !entry.sshAgent) continue;
       if (!requires.every((bin) => entry.binaries.has(bin))) continue;
       candidates.push(url);
     }
@@ -556,6 +591,18 @@ export class RemoteExecutionPort implements ExecutionPort {
           message:
             `исполнитель не поддерживает доставку секретов: ` +
             `нужен протокол ${EXECUTOR_PROTOCOL_SECRETS}`,
+        });
+      }
+      if (needsAgent && !reachable.some((entry) => entry.sshAgent)) {
+        // Агентный режим секрета (PROP-124 §2) — нужен `features.sshAgent`
+        // (протокол 6): без него ключ ушёл бы файлом, а вызов ждёт агента.
+        const core = await loadCore();
+        throw await buildExecutionError({
+          reason: 'spawn_failed',
+          code: core.EXECUTION_SECRETS_UNSUPPORTED_CODE,
+          message:
+            `исполнитель не поддерживает агентный режим секрета вызова: ` +
+            `нужен протокол ${EXECUTOR_PROTOCOL_SSH_AGENT} / features.sshAgent`,
         });
       }
       throw await buildExecutionError({
@@ -590,8 +637,17 @@ export class RemoteExecutionPort implements ExecutionPort {
    * Дополнительное условие — адрес должен уметь фоновые процессы
    * (`features.background` / протокол v3): старый исполнитель `/exec/spawn`
    * не знает.
+   *
+   * Секреты вызова в фоне (PROP-124 §7) — ещё одно условие: адрес должен
+   * объявлять `features.secretsSpawn`, а для агентного режима (`mode:'agent'`)
+   * — ещё и `features.sshAgent`. Нет признака — адрес не выбирается (тихого
+   * фоллбека нет).
    */
-  private async _backgroundCandidates(requires: string[]): Promise<string[]> {
+  private async _backgroundCandidates(
+    requires: string[],
+    needsSecrets = false,
+    needsAgent = false,
+  ): Promise<string[]> {
     const inventory = await this._ensureInventory();
     const start = this._cursor;
     this._cursor = (this._cursor + 1) % this._urls.length;
@@ -602,6 +658,8 @@ export class RemoteExecutionPort implements ExecutionPort {
       const entry = inventory.get(url);
       if (!entry || !entry.reachable) continue;
       if (!entry.background) continue;
+      if (needsSecrets && !entry.secretsSpawn) continue;
+      if (needsAgent && !entry.sshAgent) continue;
       if (!requires.every((bin) => entry.binaries.has(bin))) continue;
       candidates.push(url);
     }
@@ -609,15 +667,20 @@ export class RemoteExecutionPort implements ExecutionPort {
   }
 
   /**
-   * Отказать в фоновом запуске: различаем три причины.
+   * Отказать в фоновом запуске: различаем причины.
    *
    * - пул целиком недоступен → `EUNREACHABLE` (сеть недоступна);
    * - исполнитель не умеет фоновые процессы (протокол < 3) → `EBACKGROUND`
    *   (core превращает это в `background_unsupported`);
+   * - исполнитель не принимает секреты вызова в фоне (нет
+   *   `features.secretsSpawn`) или агентный режим (нет `features.sshAgent`) →
+   *   `ESECRETS` (выполнять процесс без ключа нельзя);
    * - нужной программы нет ни у кого → `dependency_missing`/`EDEPENDENCY`.
    */
   private async _backgroundSelectionError(
     requires: string[],
+    needsSecrets = false,
+    needsAgent = false,
   ): Promise<import('@itphx/synth-core').ExecutionError> {
     const inventory = await this._ensureInventory();
     const reachable = [...inventory.values()].filter((entry) => entry.reachable);
@@ -626,6 +689,27 @@ export class RemoteExecutionPort implements ExecutionPort {
         reason: 'spawn_failed',
         code: 'EUNREACHABLE',
         message: 'исполнитель недоступен: исполнители не ответили на /capabilities',
+      });
+    }
+    if (needsSecrets && !reachable.some((entry) => entry.secretsSpawn)) {
+      // Код отказа — из core (источник истины для обеих сторон).
+      const core = await loadCore();
+      return buildExecutionError({
+        reason: 'spawn_failed',
+        code: core.EXECUTION_SECRETS_UNSUPPORTED_CODE,
+        message:
+          `исполнитель не принимает секреты вызова в фоновом запуске ` +
+          `(нужен признак features.secretsSpawn)`,
+      });
+    }
+    if (needsAgent && !reachable.some((entry) => entry.sshAgent)) {
+      const core = await loadCore();
+      return buildExecutionError({
+        reason: 'spawn_failed',
+        code: core.EXECUTION_SECRETS_UNSUPPORTED_CODE,
+        message:
+          `исполнитель не поддерживает агентный режим секрета вызова ` +
+          `(нужен признак features.sshAgent)`,
       });
     }
     if (reachable.every((entry) => !entry.background)) {
@@ -666,6 +750,9 @@ export class RemoteExecutionPort implements ExecutionPort {
       ...(req.requires !== undefined && req.requires.length > 0
         ? { requires: [...req.requires] }
         : {}),
+      // PROP-124 §7: секреты вызова в фоне — телом запроса (значение, а не
+      // путь: путь control plane в контейнере исполнителя не существует).
+      ...(req.secrets && req.secrets.length > 0 ? { secrets: req.secrets } : {}),
     };
 
     let response: Response;
@@ -805,7 +892,12 @@ export class RemoteExecutionPort implements ExecutionPort {
       const body = (await response.json()) as {
         toolchain?: Record<string, unknown>;
         protocol?: number;
-        features?: { background?: boolean; secrets?: boolean };
+        features?: {
+          background?: boolean;
+          secrets?: boolean;
+          sshAgent?: boolean;
+          secretsSpawn?: boolean;
+        };
         limits?: { timeoutMs?: unknown; maxOutputBytes?: unknown };
       } | null;
       const toolchain = body?.toolchain;
@@ -820,10 +912,27 @@ export class RemoteExecutionPort implements ExecutionPort {
       const background = body?.features?.background === true || protocol >= EXECUTOR_PROTOCOL_BACKGROUND;
       // Секреты вызова — протокол v4 (`secrets[]` в `POST /exec`).
       const secrets = body?.features?.secrets === true || protocol >= EXECUTOR_PROTOCOL_SECRETS;
+      // Агентный режим секрета — протокол v6 (`mode: 'agent'`, PROP-124 §2):
+      // эфемерный `ssh-agent` вместо файла в `GIT_SSH_COMMAND`.
+      const sshAgent = body?.features?.sshAgent === true || protocol >= EXECUTOR_PROTOCOL_SSH_AGENT;
+      // Секреты вызова в **фоновом** запуске (`features.secretsSpawn`, протокол
+      // v6, PROP-124 §7): признак **явный** — фоллбэка по версии протокола
+      // нет (иначе старый исполнитель протокола 6 был бы выбран, а секреты в
+      // фоне он не понимает).
+      const secretsSpawn = body?.features?.secretsSpawn === true;
       // Лимиты исполнителя (`limits`) — аддитивное поле: у старого
       // исполнителя его нет, тогда разбор терпимый (значение `undefined`).
       const limits = parseExecutorLimits(body?.limits);
-      return { reachable: true, binaries, protocol, background, secrets, ...(limits ? { limits } : {}) };
+      return {
+        reachable: true,
+        binaries,
+        protocol,
+        background,
+        secrets,
+        sshAgent,
+        secretsSpawn,
+        ...(limits ? { limits } : {}),
+      };
     } catch {
       // Адрес не ответил — состав неизвестен (в маршрутизации не участвует).
       return unreachableEntry();
@@ -996,7 +1105,15 @@ function describeCause(cause: unknown): string {
 
 /** Запись инвентаря для адреса, не ответившего на `/capabilities`. */
 function unreachableEntry(): PoolEntry {
-  return { reachable: false, binaries: new Set(), protocol: 0, background: false, secrets: false };
+  return {
+    reachable: false,
+    binaries: new Set(),
+    protocol: 0,
+    background: false,
+    secrets: false,
+    sshAgent: false,
+    secretsSpawn: false,
+  };
 }
 
 /**

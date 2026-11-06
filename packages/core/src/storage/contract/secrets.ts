@@ -157,6 +157,49 @@ export function describeSSHKeyRepository(
       await repo.create({ name: 'Key', privateKey: 'X' });
       await expect(repo.create({ name: 'key', privateKey: 'Y' })).rejects.toThrow();
     });
+
+    // PROP-124: политика ключа (`usages`/`allowHosts`/`allowPorts`).
+    it('политика ключа сохраняется и нормализуется при чтении', async () => {
+      const { repo } = await make();
+      const created = await repo.create({
+        name: 'policy',
+        privateKey: 'PRIVATE',
+        usages: ['git', 'ssh'],
+        allowHosts: ['git.example.com', '*.corp.example'],
+        allowPorts: [22, 2222],
+      });
+      expect(created.usages).toEqual(['git', 'ssh']);
+      expect(created.allowHosts).toEqual(['git.example.com', '*.corp.example']);
+      expect(created.allowPorts).toEqual([22, 2222]);
+
+      const fetched = await repo.get(created.id);
+      expect(fetched?.usages).toEqual(['git', 'ssh']);
+      expect(fetched?.allowHosts).toEqual(['git.example.com', '*.corp.example']);
+      expect(fetched?.allowPorts).toEqual([22, 2222]);
+    });
+
+    it('ключ без полей политики (legacy) → usages ["git"], allowHosts [], allowPorts []', async () => {
+      const { repo } = await make();
+      const created = await repo.create({ name: 'legacy', privateKey: 'PRIVATE' });
+      expect(created.usages).toEqual(['git']);
+      expect(created.allowHosts).toEqual([]);
+      expect(created.allowPorts).toEqual([]);
+
+      const fetched = await repo.get(created.id);
+      expect(fetched?.usages).toEqual(['git']);
+      expect(fetched?.allowHosts).toEqual([]);
+      expect(fetched?.allowPorts).toEqual([]);
+    });
+
+    it('невалидный шаблон хоста / порт вне 1..65535 → ошибка', async () => {
+      const { repo } = await make();
+      await expect(
+        repo.create({ name: 'bad-host', privateKey: 'X', allowHosts: ['*'] }),
+      ).rejects.toThrow();
+      await expect(
+        repo.create({ name: 'bad-port', privateKey: 'X', allowPorts: [70000] }),
+      ).rejects.toThrow();
+    });
   });
 }
 

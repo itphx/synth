@@ -24,6 +24,9 @@ import {
 } from '../types/index.js';
 import { catalogTrustLevelSchema } from '../types/trust.js';
 import { PLUGIN_HYBRID_MODES } from '../types/plugin-hybrid.js';
+// PROP-124: режимы инстанса для SSH-ключей (`ssh.mode`) — канонический список
+// в типах (browser-safe), чтобы UI и ядро читали один источник.
+import { SSH_MODES } from '../types/git.js';
 
 const toolCapabilityValues = Object.values(ToolCapability) as [ToolCapability, ...ToolCapability[]];
 
@@ -733,6 +736,25 @@ export const gitConfigSchema = z.object({
   fetchTimeoutMs: z.number().int().min(0).default(300_000),
   localTimeoutMs: z.number().int().min(0).default(120_000),
   networkTimeoutMs: z.number().int().min(0).default(300_000),
+});
+
+// --- SSH-доступ агента (PROP-124) ---
+
+/**
+ * PROP-124: режим работы инстанса с SSH-ключами.
+ *
+ * - `tools` — ключ попадает к потребителю через argv адресных тулов (`-i` на
+ *   время вызова); политика хостов/портов на ключе обязательна;
+ * - `agent` — ключ выдаётся через эфемерный `ssh-agent` на время вызова
+ *   (`SSH_AUTH_SOCK`); фильтрация по хостам не применяется, ограничение —
+ *   на стороне хоста (`authorized_keys`).
+ *
+ * Дефолт — **`tools`** (fail-closed: без явного выбора ключ в окружение
+ * команд не попадает). Переключение режима — runtime-настройка инстанса
+ * (`/api/v2/settings/ssh`), применяется без рестарта.
+ */
+export const sshConfigSchema = z.object({
+  mode: z.enum(SSH_MODES).default('tools'),
 });
 
 // --- Вопросы пользователю (этап 1 roadmap 0.13 — блок 3) ---
@@ -1651,6 +1673,7 @@ export const synthConfigSchema = z.object({
   oauth: oauthConfigSchema.prefault({}),
   analytics: analyticsConfigSchema.prefault({}),
   git: gitConfigSchema.prefault({}),
+  ssh: sshConfigSchema.prefault({}),
   questions: questionsConfigSchema.prefault({}),
   background: backgroundConfigSchema.prefault({}),
   agents: agentsConfigSchema.prefault({}),
@@ -1709,6 +1732,8 @@ export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 /** ADR-076: секция `git` (таймауты сетевых git-операций: clone/fetch). */
 export type GitConfig = z.infer<typeof gitConfigSchema>;
+/** PROP-124: секция `ssh` (режим работы инстанса с SSH-ключами). */
+export type SshConfig = z.infer<typeof sshConfigSchema>;
 /** Этап 1 roadmap 0.13 (блок 3): секция `questions` (таймаут ответа + retention). */
 export type QuestionsConfig = z.infer<typeof questionsConfigSchema>;
 /** Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых прогонов). */

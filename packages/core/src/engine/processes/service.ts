@@ -227,13 +227,22 @@ export class ProcessService {
     let proc: ExecBackgroundProcess;
     try {
       proc = await spawnBackground({
-        command: { kind: 'shell', command: input.command, shell: 'bash' },
+        // PROP-124 Ф4a: argv-команда — прямой запуск бинарника **без**
+        // локальной оболочки (значения аргументов не проходят через shell).
+        // Shell-форма — прежнее поведение `execute_shell`.
+        command: input.argv
+          ? { kind: 'argv', file: input.argv.file, args: [...input.argv.args] }
+          : { kind: 'shell', command: input.command, shell: 'bash' },
         cwd: input.cwd,
         ...(input.env ? { env: input.env } : {}),
         // Фоновый процесс по умолчанию **без таймаута**: он переживает ход агента.
         timeoutMs: input.timeoutMs ?? 0,
         // Бинарное требование тула (`bash`) — как у синхронного запуска (ADR-077).
-        requires: toolRuntimeRequires('execute_shell'),
+        // Для argv-команды — свой бинарник (`ssh` у адресного ssh-тула).
+        requires: input.requires ?? toolRuntimeRequires('execute_shell'),
+        // Секреты вызова (PROP-124 §7) — материал на время жизни процесса;
+        // в запись реестра и в лог они не попадают.
+        ...(input.secrets && input.secrets.length > 0 ? { secrets: input.secrets } : {}),
       });
     } catch (err) {
       // Удалённый исполнитель старой версии (протокол < 3) фоновых процессов
@@ -254,7 +263,10 @@ export class ProcessService {
       record = await this._background.startProcess({
         sessionId: input.sessionId,
         ...(input.projectId ? { projectId: input.projectId } : {}),
-        command: input.command,
+        // В реестр идёт **одна строка** команды: для argv — склейка
+        // «бинарник + аргументы» (только для показа в UI; перезапуска по
+        // этой строке не происходит — процесс уже запущен).
+        command: input.argv ? formatArgvCommand(input.argv) : input.command,
         cwd: input.cwd,
         ...(proc.pid !== undefined ? { pid: proc.pid } : {}),
         processId: proc.processId,
@@ -566,4 +578,15 @@ function delay(ms: number): Promise<void> {
     const timer = setTimeout(resolve, ms);
     timer.unref?.();
   });
+}
+
+/**
+ * Отображение argv-команды одной строкой — для реестра прогонов и UI.
+ *
+ * Только показа: команда из реестра **не перезапускается** (процесс уже
+ * запущен), поэтому склейка без кавычек достаточна — секретов в аргументах
+ * нет (ключ доставляется секретом вызова, а не аргументом).
+ */
+function formatArgvCommand(argv: { file: string; args: string[] }): string {
+  return [argv.file, ...argv.args].join(' ');
 }

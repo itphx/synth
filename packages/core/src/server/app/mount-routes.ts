@@ -29,6 +29,7 @@ import {
   createAgentsLimitsSettingsRoutes,
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
+  createSshSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -684,6 +685,20 @@ export function mountStandaloneRoutes(
       config: config.contextConfig?.stickyNotes,
       live: deps.stickyNotesLimitsSettings,
       securityAudit,
+    },
+  ));
+
+  // PROP-124: режим инстанса для SSH-ключей (`ssh.mode`): `tools`|`agent`.
+  // Runtime-override поверх config.yaml, применяется сразу (без рестарта).
+  // Core — `requireAuth` (single-user).
+  app.route('/api/v2/settings', createSshSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.sshConfig?.mode,
+      live: deps.sshModeSettings,
+      securityAudit,
+      env: process.env,
     },
   ));
 

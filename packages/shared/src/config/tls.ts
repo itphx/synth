@@ -12,6 +12,12 @@
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import type { SecurityTlsConfig } from './types.js';
+// ADR-099: семантика шаблона хоста — общая для всех подсистем (TLS, egress,
+// SSH-политика PROP-124). Реализация живёт в browser-safe модуле
+// `types/host-pattern.ts` (его читает и UI) — второй матчер не заводим.
+import { matchTlsHostPattern, normalizeTlsHost } from '../types/host-pattern.js';
+
+export { matchTlsHostPattern, normalizeTlsHost };
 
 /** Минимальный срез конфига, достаточный резолверу (совместим с `SynthConfig`). */
 export interface TlsConfigSource {
@@ -283,26 +289,11 @@ export function selectTlsClientProfile(
   return profiles.default;
 }
 
-/** Матчинг одного паттерна (`host` | `*.suffix` | `*`); регистронезависимо. */
-export function matchTlsHostPattern(pattern: string, rawHost: string): boolean {
-  const host = normalizeTlsHost(rawHost);
-  if (host === undefined) return false;
-  const value = pattern.trim().toLowerCase().replace(/\.$/, '');
-  if (value === '*') return true;
-  if (value.startsWith('*.')) {
-    const suffix = value.slice(2);
-    return suffix !== '' && host.endsWith(`.${suffix}`);
-  }
-  return host === value;
-}
-
-/** Нормализует host (нижний регистр, без точки в конце и скобок IPv6). */
-export function normalizeTlsHost(rawHost: string | undefined): string | undefined {
-  if (typeof rawHost !== 'string') return undefined;
-  let host = rawHost.trim().toLowerCase().replace(/\.$/, '');
-  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
-  return host === '' ? undefined : host;
-}
+/**
+ * ADR-099: семантика шаблона хоста — общая (см. `types/host-pattern.ts`):
+ * `normalizeTlsHost`/`matchTlsHostPattern` переиспользуются оттуда, второй
+ * матчер в подсистемах не заводится.
+ */
 
 /**
  * Эффективное доверие с прочитанным CA. Fail-closed: `caFile` задан, но файл

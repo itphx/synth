@@ -91,11 +91,13 @@ export type { CwdResolution } from './workspace.js';
 export { ExecService } from './exec-service.js';
 export type { ExecServiceOptions, ExecOutcome } from './exec-service.js';
 
-// Секреты вызова (ADR-077, протокол 4).
+// Секреты вызова (ADR-077, протокол 4; агентный режим — протокол 6, PROP-124 §2).
 export {
   materializeSecrets,
   sweepStaleSshDirs,
+  startSshSweep,
   SSH_TEMP_DIR_PREFIX,
+  SSH_AGENT_PID_FILE,
   STALE_SSH_DIR_TTL_MS,
 } from './secrets.js';
 export type { MaterializedSecrets } from './secrets.js';

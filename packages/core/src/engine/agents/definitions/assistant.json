@@ -25,7 +25,8 @@
     "schedule",
     "question",
     "process",
-    "models"
+    "models",
+    "ssh"
   ],
   "icon": "robot-3",
   "color": "--status-success",

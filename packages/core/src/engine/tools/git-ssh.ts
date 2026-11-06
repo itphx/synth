@@ -7,6 +7,8 @@ import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js
 import { SSHKeyStoreError } from '../../storage/ssh-key-store.js';
 import { toSshSecret } from '../../git/ssh-env.js';
 import type { ExecSecret } from '../../execution/ports/index.js';
+import { resolveSshAccess, SshAccessError } from '../ssh/access.js';
+import type { SystemMessageKey } from '../system-messages.js';
 
 /**
  * ADR-076 §T6: SSH-доступ для сетевых git-тулов (`git_push`/`git_pull`).
@@ -19,6 +21,11 @@ import type { ExecSecret } from '../../execution/ports/index.js';
  * в его контейнере не существует (ADR-077, «Обновлено 2026-10-26», (б)).
  * Ключ не найден/не расшифрован → типизированная ошибка (i18n-ключ), а не
  * молчаливый фейл аутентификации.
+ *
+ * PROP-124 §3: раскрытие ключа идёт **только** через единый гейт
+ * (`engine/ssh/access.ts`) — здесь проверяется, что ключ пригоден для
+ * git-операций (`usages`), а `reveal()` вызывается внутри гейта. Второго
+ * места раскрытия секрета нет.
  */
 
 interface GitSshExtra {
@@ -40,8 +47,8 @@ export interface RepoGitEnvResult {
    * (оставлено ради совместимости сигнатуры вызывающих).
    */
   cleanup: () => Promise<void>;
-  /** i18n-ключ ошибки (`sshkey.not_found` / `sshkey.decrypt_failed`). */
-  error?: string;
+  /** i18n-ключ ошибки (`sshkey.not_found` / `sshkey.decrypt_failed` / `git.ssh_key_required`). */
+  error?: SystemMessageKey;
   /** Параметры подстановки для `error`. */
   errorParams?: Record<string, string>;
 }
@@ -60,34 +67,84 @@ export interface SshEnvByIdResult {
    * (оставлено ради совместимости сигнатуры вызывающих).
    */
   cleanup: () => Promise<void>;
-  /** i18n-ключ ошибки (`sshkey.not_found`). */
-  error?: string;
+  /** i18n-ключ ошибки (`sshkey.not_found` / `git.ssh_key_required`). */
+  error?: SystemMessageKey;
   /** Параметры подстановки для `error`. */
   errorParams?: Record<string, string>;
 }
 
 /**
+ * i18n-ключ движка для отказа гейта (ADR-041) — по образцу `git.ssh_*`.
+ *
+ * Новых ключей в `shared/i18n` на этом этапе не заводим, поэтому отказы
+ * раскрываются существующими:
+ *
+ * - `key_not_found` → `sshkey.not_found` (ключа нет);
+ * - `usage_denied` → `git.ssh_key_required` (для репозитория нужен ключ,
+ *   пригодный для git: указанный ключ для этого не пригоден).
+ *
+ * Остальные коды (`agent_not_linked`/`host_denied`/`port_denied`/
+ * `policy_required`/`ambiguous`) в git-пути не достижимы — они относятся к
+ * `purpose:'ssh'` (адресные тулы/режим `agent`), где потребитель появится
+ * на следующих этапах PROP-124.
+ */
+function sshAccessErrorKey(err: SshAccessError): SystemMessageKey {
+  return err.code === 'key_not_found' ? 'sshkey.not_found' : 'git.ssh_key_required';
+}
+
+/**
+ * Параметры подстановки для i18n-ключа отказа гейта.
+ *
+ * `sshkey.not_found` ждёт `{id}`, `git.ssh_key_required` — `{path}`.
+ */
+function sshAccessErrorParams(
+  err: SshAccessError,
+  ctx: { id: string; path: string },
+): Record<string, string> {
+  return err.code === 'key_not_found' ? { id: ctx.id } : { path: ctx.path };
+}
+
+/**
  * ADR-076: SSH-доступ по явному `sshKeyId` (без привязки к реестру проекта).
- * Общий хелпер HTTP-роутов (`/api/v2/git`) и тулов управления репозиториями:
- * нет ключа/не расшифрован → `sshkey.not_found`.
+ * Общий хелпер HTTP-роутов (`/api/v2/git`) и тулов управления репозиториями.
+ *
+ * Ключ раскрывается **только** через единый гейт (`engine/ssh/access.ts`,
+ * PROP-124 §3): здесь проверяется `usages` (для git нужен `git`), а
+ * `reveal()` вызывается внутри гейта — второго места раскрытия нет.
+ *
+ * `opts.path` — путь репозитория: нужен для i18n-ключа `git.ssh_key_required`
+ * («нужен ключ, пригодный для этого репозитория»).
  */
 export async function resolveSshEnvById(
   sshKeyStore: SSHKeyRepository | undefined,
   sshKeyId?: string,
+  opts?: { path?: string },
 ): Promise<SshEnvByIdResult> {
   if (!sshKeyId) return { cleanup: noopCleanup };
+  if (!sshKeyStore) {
+    return { cleanup: noopCleanup, error: 'sshkey.not_found', errorParams: { id: sshKeyId } };
+  }
 
-  let revealed: { privateKey: string; passphrase?: string } | null = null;
   try {
-    revealed = sshKeyStore ? await sshKeyStore.reveal(sshKeyId) : null;
-  } catch {
+    // Режим инстанса для git не применяется (PROP-124 §3) — в запросе гейта
+    // поля `mode` нет вовсе (union по назначению).
+    const access = await resolveSshAccess({
+      store: sshKeyStore,
+      purpose: 'git',
+      keyId: sshKeyId,
+    });
+    return { secrets: [toSshSecret(access.key)], cleanup: noopCleanup };
+  } catch (err) {
+    if (err instanceof SshAccessError) {
+      return {
+        cleanup: noopCleanup,
+        error: sshAccessErrorKey(err),
+        errorParams: sshAccessErrorParams(err, { id: sshKeyId, path: opts?.path ?? '' }),
+      };
+    }
+    // Ошибка хранилища (расшифровка/мастер-ключ) — прежнее поведение.
     return { cleanup: noopCleanup, error: 'sshkey.not_found', errorParams: { id: sshKeyId } };
   }
-  if (!revealed) {
-    return { cleanup: noopCleanup, error: 'sshkey.not_found', errorParams: { id: sshKeyId } };
-  }
-
-  return { secrets: [toSshSecret(revealed)], cleanup: noopCleanup };
 }
 
 /** POSIX-нормализация относительного пути (`''`/`.` → `.`, убираем `./` и хвостовые `/`). */
@@ -199,18 +256,26 @@ export async function resolveRepoGitEnv(ctx: ToolContext, cwd: string): Promise<
   const entry = findRepoEntry(project, cwd, extra.workspacesRoot, ctx.worktreeRepoPath);
   if (!entry?.sshKeyId) return { cleanup: noopCleanup };
 
-  let revealed: { privateKey: string; passphrase?: string } | null;
   try {
-    revealed = await extra.sshKeyStore.reveal(entry.sshKeyId);
+    // Единый гейт (PROP-124 §3): `usages` проверяется, `reveal()` — внутри.
+    // Режим инстанса для git не применяется — поля `mode` в запросе нет.
+    const access = await resolveSshAccess({
+      store: extra.sshKeyStore,
+      purpose: 'git',
+      keyId: entry.sshKeyId,
+    });
+    return { secrets: [toSshSecret(access.key)], cleanup: noopCleanup };
   } catch (err) {
+    if (err instanceof SshAccessError) {
+      return {
+        cleanup: noopCleanup,
+        error: sshAccessErrorKey(err),
+        errorParams: sshAccessErrorParams(err, { id: entry.sshKeyId, path: entry.path }),
+      };
+    }
     const code = err instanceof SSHKeyStoreError && err.code === 'not_found'
       ? 'sshkey.not_found'
       : 'sshkey.decrypt_failed';
     return { cleanup: noopCleanup, error: code, errorParams: { id: entry.sshKeyId } };
   }
-  if (!revealed) {
-    return { cleanup: noopCleanup, error: 'sshkey.not_found', errorParams: { id: entry.sshKeyId } };
-  }
-
-  return { secrets: [toSshSecret(revealed)], cleanup: noopCleanup };
 }

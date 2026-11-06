@@ -17,6 +17,23 @@ const apiMock = vi.hoisted(() => ({
   setDefaultAgent: vi.fn(async (id: string) => ({ defaultAgent: id })),
   resetDefaultAgent: vi.fn(async () => ({ status: 'restored', defaultAgent: 'assistant', isOverridden: false, defaults: 'assistant' })),
   listSshKeys: vi.fn(async () => []),
+  // PROP-124: режим инстанса для SSH-ключей (`/settings/ssh`).
+  getSshSettings: vi.fn(async () => ({
+    mode: 'tools',
+    saved: null,
+    defaults: 'tools',
+    source: 'config',
+    envLocked: false,
+    restartRequired: false,
+  })),
+  setSshMode: vi.fn(async () => ({
+    mode: 'tools',
+    saved: null,
+    defaults: 'tools',
+    source: 'runtime',
+    envLocked: false,
+    restartRequired: false,
+  })),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))

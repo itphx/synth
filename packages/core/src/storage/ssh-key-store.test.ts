@@ -39,6 +39,95 @@ describe('SSHKeyStore (ADR-076 §T2)', () => {
     expect('passphrase' in created).toBe(false);
   });
 
+  // PROP-124: политика ключа — нормализация при чтении и валидация при записи.
+  it('политика ключа сохраняется (usages/allowHosts/allowPorts)', async () => {
+    const created = await store.create({
+      name: 'policy',
+      privateKey: SAMPLE_KEY,
+      usages: ['git', 'ssh'],
+      allowHosts: ['git.example.com', '*.corp.example'],
+      allowPorts: [22, 2222],
+    });
+    expect(created.usages).toEqual(['git', 'ssh']);
+    expect(created.allowHosts).toEqual(['git.example.com', '*.corp.example']);
+    expect(created.allowPorts).toEqual([22, 2222]);
+
+    const fetched = await store.get(created.id);
+    expect(fetched?.usages).toEqual(['git', 'ssh']);
+    expect(fetched?.allowHosts).toEqual(['git.example.com', '*.corp.example']);
+    expect(fetched?.allowPorts).toEqual([22, 2222]);
+  });
+
+  it('ключ без полей политики нормализуется: usages [git], allowHosts [], allowPorts []', async () => {
+    const created = await store.create({ name: 'legacy', privateKey: SAMPLE_KEY });
+    expect(created.usages).toEqual(['git']);
+    expect(created.allowHosts).toEqual([]);
+    expect(created.allowPorts).toEqual([]);
+  });
+
+  it('запись без полей политики (legacy-файл) читается как [git]/[]/[]', async () => {
+    const created = await store.create({ name: 'legacy-file', privateKey: SAMPLE_KEY });
+    // Legacy-запись на диске: без полей политики.
+    const path = rawPath(created.id);
+    const raw = JSON.parse(await readFile(path, 'utf-8')) as Record<string, unknown>;
+    delete raw.usages;
+    delete raw.allowHosts;
+    delete raw.allowPorts;
+    await writeFile(path, JSON.stringify(raw), 'utf-8');
+
+    const fetched = await store.get(created.id);
+    expect(fetched?.usages).toEqual(['git']);
+    expect(fetched?.allowHosts).toEqual([]);
+    expect(fetched?.allowPorts).toEqual([]);
+  });
+
+  it('невалидный шаблон хоста → ошибка invalid', async () => {
+    await expect(
+      store.create({ name: 'bad', privateKey: SAMPLE_KEY, allowHosts: ['*'] }),
+    ).rejects.toBeInstanceOf(SSHKeyStoreError);
+    await expect(
+      store.create({ name: 'bad2', privateKey: SAMPLE_KEY, allowHosts: ['exa mple.com'] }),
+    ).rejects.toBeInstanceOf(SSHKeyStoreError);
+  });
+
+  it('пустой список назначений → ошибка invalid (create и update)', async () => {
+    // Ключ без назначения бесполезен (ни git, ни ssh) — такая запись не
+    // принимается ни API-схемой, ни хранилищем.
+    await expect(
+      store.create({ name: 'no-usage', privateKey: SAMPLE_KEY, usages: [] }),
+    ).rejects.toBeInstanceOf(SSHKeyStoreError);
+
+    const created = await store.create({ name: 'usage', privateKey: SAMPLE_KEY, usages: ['git'] });
+    await expect(store.update(created.id, { usages: [] })).rejects.toBeInstanceOf(SSHKeyStoreError);
+    // Запись не изменилась.
+    expect((await store.get(created.id))?.usages).toEqual(['git']);
+  });
+
+  it('порт вне 1..65535 → ошибка invalid', async () => {
+    await expect(
+      store.create({ name: 'bad-port', privateKey: SAMPLE_KEY, allowPorts: [0] }),
+    ).rejects.toBeInstanceOf(SSHKeyStoreError);
+    await expect(
+      store.create({ name: 'bad-port2', privateKey: SAMPLE_KEY, allowPorts: [70000] }),
+    ).rejects.toBeInstanceOf(SSHKeyStoreError);
+  });
+
+  it('update: политика меняется; невалидное значение отвергается', async () => {
+    const created = await store.create({ name: 'upd', privateKey: SAMPLE_KEY });
+    const updated = await store.update(created.id, {
+      usages: ['ssh'],
+      allowHosts: ['*.corp.example'],
+      allowPorts: [2222],
+    });
+    expect(updated?.usages).toEqual(['ssh']);
+    expect(updated?.allowHosts).toEqual(['*.corp.example']);
+    expect(updated?.allowPorts).toEqual([2222]);
+
+    await expect(store.update(created.id, { allowHosts: ['*'] })).rejects.toBeInstanceOf(
+      SSHKeyStoreError,
+    );
+  });
+
   it('list/get/listForAgent не содержат privateKey/passphrase', async () => {
     const a = await store.create({ name: 'a', privateKey: SAMPLE_KEY, agentIds: ['agent-1'] });
     await store.create({ name: 'b', privateKey: SAMPLE_KEY });

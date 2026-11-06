@@ -283,10 +283,16 @@ describe('исполнитель: лимиты и служебные эндпо�
       os: string;
       arch: string;
       node: string;
-      features?: { background?: boolean; secrets?: boolean; mcpAttachments?: boolean };
+      features?: {
+        background?: boolean;
+        secrets?: boolean;
+        mcpAttachments?: boolean;
+        sshAgent?: boolean;
+        secretsSpawn?: boolean;
+      };
       limits?: { timeoutMs: number; maxOutputBytes: number };
     };
-    expect(body.protocol).toBe(5);
+    expect(body.protocol).toBe(6);
     expect(body.toolchain.git).toBe('git version 2.39.2');
     expect(body.os.length).toBeGreaterThan(0);
     expect(body.arch.length).toBeGreaterThan(0);
@@ -294,6 +300,10 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
+    // Протокол 6 (PROP-124 §2): агентный режим секрета вызова.
+    expect(body.features?.sshAgent).toBe(true);
+    // Протокол 6 (PROP-124 §7): секреты вызова в фоновом запуске.
+    expect(body.features?.secretsSpawn).toBe(true);
   });
 
   it('capabilities — эффективные лимиты исполнителя (потолок таймаута и вывода)', async () => {
@@ -305,16 +315,26 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       protocol: number;
-      features?: { background?: boolean; secrets?: boolean; mcpAttachments?: boolean };
+      features?: {
+        background?: boolean;
+        secrets?: boolean;
+        mcpAttachments?: boolean;
+        sshAgent?: boolean;
+        secretsSpawn?: boolean;
+      };
       limits?: { timeoutMs: number; maxOutputBytes: number };
     };
     expect(body.limits?.timeoutMs).toBe(600_000);
     expect(body.limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
     // Поле аддитивное: версия протокола и признаки не меняются.
-    expect(body.protocol).toBe(5);
+    expect(body.protocol).toBe(6);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
+    // Протокол 6 (PROP-124 §2): агентный режим секрета вызова.
+    expect(body.features?.sshAgent).toBe(true);
+    // Протокол 6 (PROP-124 §7): секреты вызова в фоновом запуске.
+    expect(body.features?.secretsSpawn).toBe(true);
   });
 
   it('capabilities — лимиты соответствуют заданным оператором', async () => {
@@ -342,6 +362,6 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string; protocol: number };
     expect(body.status).toBe('ok');
-    expect(body.protocol).toBe(5);
+    expect(body.protocol).toBe(6);
   });
 });

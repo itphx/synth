@@ -44,6 +44,11 @@
 import { readdir } from 'node:fs/promises';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { parseFrontmatter, resolveStorageBackend } from '@itphx/synth-shared';
+import {
+  normalizeSshKeyAllowHosts,
+  normalizeSshKeyAllowPorts,
+  normalizeSshKeyUsages,
+} from '@itphx/synth-shared';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { PIPELINE_INSTANCE_MAX_LIMIT } from '../storage/ports/pipeline-repository.js';
 import {
@@ -674,6 +679,9 @@ async function copyWebhookDeliveries(src: StorageContext, dst: StorageContext, c
  * SSH-ключи агентов: секрет расшифровывается `reveal()` у источника и
  * перешифровывается мастер-ключом цели (`create`). Идемпотентность — по имени
  * (уникальное, регистронезависимо). `id` перегенерируется.
+ *
+ * Политика ключа (usages/allowHosts/allowPorts, PROP-124) переносится
+ * как есть — перенос не должен менять права ключа.
  */
 async function copySshKeys(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
   const counter: Counter = { copied: 0, skipped: 0, note: 'id перегенерирован' };
@@ -695,11 +703,19 @@ async function copySshKeys(src: StorageContext, dst: StorageContext, ctx: CopyCo
       ctx.warn(`Предупреждение: SSH-ключ «${key.name}» не расшифрован — пропущен.`);
       continue;
     }
+    // Политика ключа (PROP-124): переносится как есть — иначе ключ молча
+    // откатывался бы к `['git']` без хостов и портов (перенос менял бы
+    // права ключа). Пустой `usages` (легаси-запись, до запрета пустого
+    // списка) нормализуется в дефолт `['git']` — записать `[]` уже нельзя.
+    const usages = normalizeSshKeyUsages(key.usages);
     await dst.sshKeys.create({
       name: key.name,
       type: key.type,
       privateKey: secret.privateKey,
       agentIds: key.agentIds,
+      usages: usages.length > 0 ? usages : undefined,
+      allowHosts: normalizeSshKeyAllowHosts(key.allowHosts),
+      allowPorts: normalizeSshKeyAllowPorts(key.allowPorts),
       ...(secret.passphrase !== undefined ? { passphrase: secret.passphrase } : {}),
     });
     counter.copied += 1;

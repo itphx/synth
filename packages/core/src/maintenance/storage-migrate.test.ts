@@ -139,6 +139,14 @@ async function seed(ctx: StorageContext): Promise<void> {
     createdAt: ISO,
   });
   await ctx.sshKeys.create({ name: 'deploy', privateKey: 'PRIVATE-KEY' });
+  // PROP-124: политика ключа (usages/allowHosts/allowPorts) — переносится.
+  await ctx.sshKeys.create({
+    name: 'deploy-ssh',
+    privateKey: 'PRIVATE-KEY-2',
+    usages: ['git', 'ssh'],
+    allowHosts: ['git.example.com', '*.corp.example'],
+    allowPorts: [22, 2222],
+  });
   await ctx.serviceKeys.create({ label: 'svc', scopes: ['events:read'] }, 'local');
   await ctx.mcpRegistry.add({
     name: 'srv',
@@ -265,7 +273,16 @@ describe('migrateStorageData — перенос данных через порт
     expect((await target!.webhookDeliveries.list()).map((item) => item.id)).toEqual(['whd-1']);
 
     // Секреты/контент/аудит.
-    expect((await target!.sshKeys.list()).map((key) => key.name)).toEqual(['deploy']);
+    expect((await target!.sshKeys.list()).map((key) => key.name).sort()).toEqual([
+      'deploy',
+      'deploy-ssh',
+    ]);
+    // PROP-124: политика ключа переносится как есть (иначе ключ молча
+    // откатился бы к ['git'] без хостов и портов).
+    const migratedKey = (await target!.sshKeys.list()).find((key) => key.name === 'deploy-ssh');
+    expect(migratedKey?.usages).toEqual(['git', 'ssh']);
+    expect(migratedKey?.allowHosts).toEqual(['git.example.com', '*.corp.example']);
+    expect(migratedKey?.allowPorts).toEqual([22, 2222]);
     expect((await target!.serviceKeys.list()).map((key) => key.label)).toEqual(['svc']);
     expect((await target!.mcpRegistry.getByName('srv'))?.name).toBe('srv');
     expect(await target!.skillBundles.exists('bundle-1')).toBe(true);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -16,6 +16,41 @@ import type {
 // Токен собирается из частей в рантайме: значение то же, но в исходнике нет
 // длинного литерала, похожего на настоящий кред (secret-scan).
 const TOKEN = ['executor-token-bg', 'test', '1234567890'].join('-');
+
+// Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
+// заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
+const pem = (body: string): string => {
+  const label = 'OPENSSH PRIVATE KEY';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+};
+const PRIVATE_KEY = pem('executor-bg-secret-material');
+
+/** Команда печатает путь к ключу, извлечённый из `GIT_SSH_COMMAND`. */
+const PRINT_KEY_PATH =
+  'p=$(printf "%s" "$GIT_SSH_COMMAND" | sed "s/.*-i \\([^ ]*\\).*/\\1/"); printf "%s" "$p"';
+
+/** Есть ли путь в файловой системе. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Дождаться, пока путь исчезнет (уборка материала — асинхронная). */
+async function waitRemoved(path: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await exists(path))) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 25);
+      timer.unref?.();
+    });
+  }
+  throw new Error(`путь ${path} не убран`);
+}
 
 let workspace: string;
 let outside: string;
@@ -205,8 +240,57 @@ describe('исполнитель: фоновые процессы — запус
   });
 });
 
-describe('исполнитель: фоновые процессы — журнал', () => {
-  it('логи — stdout и stderr раздельно', async () => {
+/**
+ * Протокол 6 (PROP-124 §7): секреты вызова в **фоновом** запуске.
+ *
+ * Материал готовится у исполнителя (путь control plane в его контейнере не
+ * существует) и гасится **вместе с процессом** — выход, `stop()`, таймаут.
+ * Значения не логируются и не возвращаются в ответе.
+ */
+describe('исполнитель: фоновые процессы — секреты вызова', () => {
+  it('секрет доступен фоновой команде и убран вместе с процессом', async () => {
+    const app = makeApp();
+    const out = join(workspace, 'key-path');
+    const res = await postSpawn(app, {
+      command: { kind: 'shell', command: `${PRINT_KEY_PATH} > ${out}` },
+      secrets: [{ kind: 'ssh-key', privateKey: PRIVATE_KEY }],
+    });
+    expect(res.status).toBe(201);
+    const { processId } = (await res.json()) as SpawnExecResponse;
+
+    const finished = await waitStatus(app, processId);
+    expect(finished.status).toBe('exited');
+    expect(finished.exitCode).toBe(0);
+
+    const keyPath = (await readFile(out, 'utf-8')).trim();
+    expect(keyPath).toContain('synth-ssh-');
+    // Материал убран вместе с процессом: и файл ключа, и его каталог.
+    await waitRemoved(keyPath);
+  });
+
+  it('невалидные секреты — 400 invalid_request (процесс не запускается)', async () => {
+    const app = makeApp();
+    const res = await postSpawn(app, {
+      command: { kind: 'shell', command: 'printf x' },
+      secrets: [{ kind: 'ssh-key', privateKey: '' }],
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('секрет не попадает в ответ (ни при успехе, ни в тексте ошибки)', async () => {
+    const app = makeApp();
+    const res = await postSpawn(app, {
+      command: { kind: 'shell', command: 'printf x' },
+      secrets: [{ kind: 'ssh-key', privateKey: PRIVATE_KEY }],
+    });
+    expect(res.status).toBe(201);
+    const text = await res.text();
+    expect(text).not.toContain('executor-bg-secret-material');
+  });
+});
+
+describe('исполнитель: фоновые процессы — журнал', () => {  it('логи — stdout и stderr раздельно', async () => {
     const app = makeApp();
     const { processId } = (await (
       await postSpawn(app, {
@@ -415,18 +499,28 @@ describe('исполнитель: фоновые процессы — несущ
 });
 
 describe('исполнитель: протокол и прежние маршруты', () => {
-  it('capabilities — протокол 5 и признаки фоновых процессов, секретов и вложений MCP', async () => {
+  it('capabilities — протокол 6 и признаки фоновых процессов, секретов и вложений MCP', async () => {
     const app = makeApp();
     const res = await app.request('/capabilities', { headers: authHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       protocol: number;
-      features?: { background?: boolean; secrets?: boolean; mcpAttachments?: boolean };
+      features?: {
+        background?: boolean;
+        secrets?: boolean;
+        mcpAttachments?: boolean;
+        sshAgent?: boolean;
+        secretsSpawn?: boolean;
+      };
     };
-    expect(body.protocol).toBe(5);
+    expect(body.protocol).toBe(6);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
+    // Протокол 6 (PROP-124 §2): агентный режим секрета вызова.
+    expect(body.features?.sshAgent).toBe(true);
+    // Протокол 6 (PROP-124 §7): секреты вызова в фоновом запуске.
+    expect(body.features?.secretsSpawn).toBe(true);
   });
 
   it('health — счётчики фоновых процессов', async () => {
@@ -437,7 +531,7 @@ describe('исполнитель: протокол и прежние маршр�
       protocol: number;
       background?: { limit: number; active: number };
     };
-    expect(body.protocol).toBe(5);
+    expect(body.protocol).toBe(6);
     expect(body.background?.limit).toBeGreaterThan(0);
     expect(body.background?.active).toBe(0);
   });

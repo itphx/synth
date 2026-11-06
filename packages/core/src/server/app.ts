@@ -188,6 +188,11 @@ export interface StandaloneConfig {
    */
   agentsConfig?: SynthConfig['agents'];
   /**
+   * PROP-124: секция `ssh` — режим работы инстанса с SSH-ключами
+   * (`tools`|`agent`). Не задана — `tools` (fail-closed).
+   */
+  sshConfig?: SynthConfig['ssh'];
+  /**
    * ADR-115: конфигурация вложений сообщений (`attachments.*` — лимиты размера,
    * число файлов, белый список MIME, срок хранения осиротевших объектов).
    * Не задана — умолчания схемы (`defaultConfig.attachments`).

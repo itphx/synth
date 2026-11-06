@@ -304,14 +304,23 @@ export function createGitRoutes(
    * готовый `GIT_SSH_COMMAND`: материал готовит точка исполнения (в
    * remote-режиме — исполнитель; путь control plane в его контейнере не
    * существует).
+   *
+   * Раскрытие ключа — через единый гейт (PROP-124 §3, `engine/ssh/access.ts`):
+   * ключ, не пригодный для git, даёт `git.ssh_key_required` (400).
    */
   async function resolveSshEnv(
     sshKeyId?: string,
+    path?: string,
   ): Promise<{ secrets?: ExecSecret[]; cleanup?: () => Promise<void> }> {
-    const res = await resolveSshEnvById(opts.sshKeyStore, sshKeyId);
+    const res = await resolveSshEnvById(opts.sshKeyStore, sshKeyId, { path });
     if (res.error === 'sshkey.env_failed') {
       // ADR-041: наружу — i18n-ключ, не сырой текст ошибки.
       throw { error: 'sshkey.env_failed', code: 'VALIDATION_ERROR' } satisfies RouteError;
+    }
+    if (res.error === 'git.ssh_key_required') {
+      // Ключ есть, но для git-операций не пригоден (`usages`) — тот же
+      // i18n-ключ, что и «ключ не задан»: нужен ключ, пригодный для репозитория.
+      throw { error: 'git.ssh_key_required', code: 'git.ssh_key_required' } satisfies RouteError;
     }
     if (res.error) {
       throw { error: `SSH-ключ ${sshKeyId} не найден`, code: 'sshkey.not_found' } satisfies RouteError;
@@ -385,7 +394,7 @@ export function createGitRoutes(
       const body = gitInitBodySchema.parse(await c.req.json());
       const project = await loadProject(authorizedProjectId(c));
       const wsPath = await resolveWorkspace(project);
-      const ssh = await resolveSshEnv(body.sshKeyId);
+      const ssh = await resolveSshEnv(body.sshKeyId, body.path);
       try {
         const repo = await gitService.initRepo(
           wsPath,
@@ -426,7 +435,7 @@ export function createGitRoutes(
       const occupancy = await inspectRepoPath(resolveRepoPath(wsPath, relPath));
       if (occupancy) throw occupiedError(relPath, occupancy);
 
-      const ssh = await resolveSshEnv(body.sshKeyId);
+      const ssh = await resolveSshEnv(body.sshKeyId, relPath);
       try {
         const repo = await gitService.cloneRepo(
           wsPath,
@@ -526,7 +535,7 @@ export function createGitRoutes(
       }
 
       const wsPath = await resolveWorkspace(project);
-      const ssh = await resolveSshEnv(entry.sshKeyId);
+      const ssh = await resolveSshEnv(entry.sshKeyId, entry.path);
       const lastFetch = nowISO();
       try {
         await gitService.fetchRepo(wsPath, entry.path, ssh.secrets ? { secrets: ssh.secrets } : undefined);

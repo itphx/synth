@@ -45,14 +45,20 @@ import {
   type ServiceApiKeyCreated,
   type SSHKey,
   type SSHKeyMeta,
+  type SSHKeyUsage,
   type SkillBundle,
   type UpdateServiceApiKeyPatch,
   GlobalRole,
   MCP_REGISTRY_SCHEMA_VERSION,
   SKILL_NAME_MAX,
   SKILL_NAME_REGEX,
+  SSH_KEY_USAGES,
   generateId,
+  normalizeSshKeyAllowHosts,
+  normalizeSshKeyAllowPorts,
+  normalizeSshKeyUsages,
   nowISO,
+  validateSshKeyPolicy,
 } from '@itphx/synth-shared';
 import type {
   CreatePluginServiceKeyInput,
@@ -621,10 +627,34 @@ interface SSHKeyRow extends Row {
   created_at: Date | string;
   updated_at: Date | string | null;
   agent_ids?: unknown;
+  /** PROP-124: способы использования ключа (`git`/`ssh`). */
+  usages?: unknown;
+  /** PROP-124: правила хостов (режим `tools`). */
+  allow_hosts?: unknown;
+  /** PROP-124: порты (режим `tools`). */
+  allow_ports?: unknown;
 }
 
 function bufferToToken(value: Buffer | string): string {
   return Buffer.isBuffer(value) ? value.toString('utf-8') : value;
+}
+
+/** Массив целых из `int[]`/jsonb (невалидные элементы отбрасываются). */
+function asNumberArray(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
+}
+
+/**
+ * PROP-124: типы использования из БД. Колонка отсутствует (строка без миграции)
+ * → `undefined` → нормализация даёт `['git']` (fail-closed). Явно пустой массив
+ * сохраняется пустым — как в файловом сторе.
+ */
+function asSshUsages(value: unknown): SSHKeyUsage[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is SSHKeyUsage =>
+    (SSH_KEY_USAGES as readonly string[]).includes(item),
+  );
 }
 
 function sshKeyToMeta(row: SSHKeyRow, agentIds: string[]): SSHKeyMeta {
@@ -633,6 +663,10 @@ function sshKeyToMeta(row: SSHKeyRow, agentIds: string[]): SSHKeyMeta {
     name: row.name,
     type: row.type ?? 'user',
     agentIds: [...agentIds],
+    // PROP-124: политика ключа (нормализация — как в файловом сторе).
+    usages: normalizeSshKeyUsages(asSshUsages(row.usages)),
+    allowHosts: normalizeSshKeyAllowHosts(asStringArray(row.allow_hosts)),
+    allowPorts: normalizeSshKeyAllowPorts(asNumberArray(row.allow_ports)),
     createdAt: toISO(row.created_at),
   };
   const updatedAt = toISOOrUndefined(row.updated_at);
@@ -716,6 +750,10 @@ class PostgresSSHKeyRepository implements SSHKeyRepository {
         type: row.type ?? 'user',
         privateKey: bufferToToken(row.private_enc),
         agentIds: asStringArray(row.agent_ids),
+        // PROP-124: политика ключа (нормализация — как в файловом сторе).
+        usages: normalizeSshKeyUsages(asSshUsages(row.usages)),
+        allowHosts: normalizeSshKeyAllowHosts(asStringArray(row.allow_hosts)),
+        allowPorts: normalizeSshKeyAllowPorts(asNumberArray(row.allow_ports)),
         createdAt: toISO(row.created_at),
       };
       const updatedAt = toISOOrUndefined(row.updated_at);
@@ -761,6 +799,12 @@ class PostgresSSHKeyRepository implements SSHKeyRepository {
       const { SSHKeyStoreError } = await loadCore();
       throw new SSHKeyStoreError('invalid', 'Приватный ключ не может быть пустым');
     }
+    // PROP-124: политика ключа проверяется так же, как в файловом сторе.
+    const policy = validateSshKeyPolicy(input);
+    if (!policy.ok) {
+      const { SSHKeyStoreError } = await loadCore();
+      throw new SSHKeyStoreError('invalid', policy.message);
+    }
     await this._assertNameUnique(input.name);
     const { core, key } = await this._masterKey();
     const now = nowISO();
@@ -769,12 +813,16 @@ class PostgresSSHKeyRepository implements SSHKeyRepository {
     const privateEnc = core.encryptSecret(input.privateKey, key);
     const passphraseEnc =
       input.passphrase === undefined ? null : core.encryptSecret(input.passphrase, key);
+    // PROP-124: политика ключа (`usages` без значения → `['git']`).
+    const usages = normalizeSshKeyUsages(input.usages);
+    const allowHosts = normalizeSshKeyAllowHosts(input.allowHosts);
+    const allowPorts = normalizeSshKeyAllowPorts(input.allowPorts);
 
     await this._deps.connection.withTransaction(async (tx) => {
       await tx.query(
-        `INSERT INTO ssh_keys (id, name, type, private_enc, passphrase_enc, created_at, updated_at)
-         VALUES ($1,$2,$3,$4::bytea,$5::bytea,$6,$7)`,
-        [id, input.name, input.type ?? 'user', privateEnc, passphraseEnc, now, now],
+        `INSERT INTO ssh_keys (id, name, type, private_enc, passphrase_enc, usages, allow_hosts, allow_ports, created_at, updated_at)
+         VALUES ($1,$2,$3,$4::bytea,$5::bytea,$6::text[],$7::text[],$8::integer[],$9,$10)`,
+        [id, input.name, input.type ?? 'user', privateEnc, passphraseEnc, usages, allowHosts, allowPorts, now, now],
       );
       for (const agentId of agentIds) {
         await tx.query(
@@ -785,7 +833,18 @@ class PostgresSSHKeyRepository implements SSHKeyRepository {
     });
 
     return sshKeyToMeta(
-      { id, name: input.name, type: input.type ?? 'user', private_enc: privateEnc, passphrase_enc: passphraseEnc, created_at: now, updated_at: now },
+      {
+        id,
+        name: input.name,
+        type: input.type ?? 'user',
+        private_enc: privateEnc,
+        passphrase_enc: passphraseEnc,
+        usages,
+        allow_hosts: allowHosts,
+        allow_ports: allowPorts,
+        created_at: now,
+        updated_at: now,
+      },
       agentIds,
     );
   }
@@ -795,6 +854,11 @@ class PostgresSSHKeyRepository implements SSHKeyRepository {
     if (!existing) return null;
     const { core, key } = await this._masterKey();
 
+    // PROP-124: проверка политики до изменения записи.
+    const policy = validateSshKeyPolicy(patch);
+    if (!policy.ok) {
+      throw new core.SSHKeyStoreError('invalid', policy.message);
+    }
     if (patch.name !== undefined && patch.name.toLowerCase() !== existing.name.toLowerCase()) {
       await this._assertNameUnique(patch.name, id);
     }
@@ -813,15 +877,30 @@ class PostgresSSHKeyRepository implements SSHKeyRepository {
           : bufferToToken(existing.passphrase_enc);
     const updatedAt = nowISO();
 
+    // PROP-124: политика ключа (пустое поле в patch = «не менять»).
+    const nextUsages =
+      patch.usages !== undefined
+        ? normalizeSshKeyUsages(patch.usages)
+        : normalizeSshKeyUsages(asSshUsages(existing.usages));
+    const nextAllowHosts =
+      patch.allowHosts !== undefined
+        ? normalizeSshKeyAllowHosts(patch.allowHosts)
+        : normalizeSshKeyAllowHosts(asStringArray(existing.allow_hosts));
+    const nextAllowPorts =
+      patch.allowPorts !== undefined
+        ? normalizeSshKeyAllowPorts(patch.allowPorts)
+        : normalizeSshKeyAllowPorts(asNumberArray(existing.allow_ports));
+
     const agentIds =
       patch.agentIds !== undefined ? [...patch.agentIds] : await this._agentIds(id);
 
     await this._deps.connection.withTransaction(async (tx) => {
       await tx.query(
         `UPDATE ssh_keys
-            SET name = $2, type = $3, private_enc = $4::bytea, passphrase_enc = $5::bytea, updated_at = $6
+            SET name = $2, type = $3, private_enc = $4::bytea, passphrase_enc = $5::bytea,
+                usages = $6::text[], allow_hosts = $7::text[], allow_ports = $8::integer[], updated_at = $9
           WHERE id = $1`,
-        [id, nextName, nextType, nextPrivate, nextPassphrase, updatedAt],
+        [id, nextName, nextType, nextPrivate, nextPassphrase, nextUsages, nextAllowHosts, nextAllowPorts, updatedAt],
       );
       if (patch.agentIds !== undefined) {
         await tx.query('DELETE FROM ssh_key_agents WHERE key_id = $1', [id]);
@@ -841,6 +920,9 @@ class PostgresSSHKeyRepository implements SSHKeyRepository {
         type: nextType,
         private_enc: nextPrivate,
         passphrase_enc: nextPassphrase,
+        usages: nextUsages,
+        allow_hosts: nextAllowHosts,
+        allow_ports: nextAllowPorts,
         created_at: existing.created_at,
         updated_at: updatedAt,
       },

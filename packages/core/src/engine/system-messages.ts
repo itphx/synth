@@ -485,6 +485,15 @@ export const SYSTEM_MESSAGES = {
   'sshkey.encryption_unavailable': 'SSH key encryption is unavailable: secret key is not configured',
   'sshkey.decrypt_failed': 'Failed to decrypt SSH key {id}',
   'sshkey.env_failed': 'Failed to prepare SSH environment (temporary key or askpass)',
+  // Отказы единого гейта SSH-ключей (PROP-124 §3) — по одному ключу на
+  // машинный код отказа (`SshAccessErrorCode`).
+  'ssh.access.key_not_found': 'SSH key "{key}" not found',
+  'ssh.access.usage_denied': 'SSH key "{key}" is not allowed for {usage} access',
+  'ssh.access.agent_not_linked': 'SSH key "{key}" is not linked to the agent role "{agent}"',
+  'ssh.access.host_denied': 'Host "{host}" is not allowed for SSH key "{key}"',
+  'ssh.access.port_denied': 'Port {port} is not allowed for SSH key "{key}"',
+  'ssh.access.policy_required': 'SSH key "{key}" requires a host: the host policy is mandatory',
+  'ssh.access.ambiguous': 'Several SSH keys fit: {keys} — a specific one is required',
   'git.ssh_key_required': 'SSH key is required for repository "{path}"',
   // ADR-076: подсказка вместо тупика — какие ключи доступны и что с ними делать.
   // Прежний `git.ssh_key_required` остаётся для путей без стора ключей (HTTP-роуты,

@@ -225,6 +225,28 @@ describe('sshKeyCreateSchema (ADR-076)', () => {
       expect('createdAt' in parsed.data).toBe(false);
     }
   });
+
+  it('PROP-124: usages — хотя бы одно назначение (пустой список → ошибка)', () => {
+    const empty = sshKeyCreateSchema.safeParse({ name: 'x', privateKey: 'k', usages: [] });
+    expect(empty.success).toBe(false);
+    if (!empty.success) {
+      expect(empty.error.issues[0]?.message).toContain('usages');
+    }
+
+    const one = sshKeyCreateSchema.safeParse({ name: 'x', privateKey: 'k', usages: ['git'] });
+    expect(one.success).toBe(true);
+
+    const both = sshKeyCreateSchema.safeParse({
+      name: 'x',
+      privateKey: 'k',
+      usages: ['git', 'ssh'],
+    });
+    expect(both.success).toBe(true);
+
+    // Обновление: пустой список — тоже отказ (ключ без назначения бесполезен).
+    expect(sshKeyUpdateSchema.safeParse({ usages: [] }).success).toBe(false);
+    expect(sshKeyUpdateSchema.safeParse({ usages: ['ssh'] }).success).toBe(true);
+  });
 });
 
 describe('patchObjectSchema — патч не заполняет отсутствующие ключи (zod 4)', () => {

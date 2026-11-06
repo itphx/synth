@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV } from './runtime-settings.js';
+import { resolveExecutionMode } from '@itphx/synth-shared/config';
+import type { SynthConfig } from '@itphx/synth-shared/config';
 
 describe('RuntimeSettingsStore.clear* (ADR-072 Ф2)', () => {
   let tmpDir: string;
@@ -1210,5 +1212,37 @@ describe('resolveStickyNotesLimits (context.stickyNotes)', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('resolveSshMode / createLiveSshMode (ssh.mode, PROP-124)', () => {
+  it('приоритет env > runtime > config > default', () => {
+    expect(resolveSshMode(undefined, undefined, {}).value).toBe('tools');
+    expect(resolveSshMode('agent', undefined, {}).value).toBe('agent');
+    expect(resolveSshMode('tools', 'agent', {}).value).toBe('agent');
+    const fromEnv = resolveSshMode('tools', 'tools', { [SSH_MODE_ENV]: 'agent' });
+    expect(fromEnv.value).toBe('agent');
+    expect(fromEnv.source).toBe('env');
+    expect(fromEnv.envLocked).toBe(true);
+  });
+
+  it('невалидное значение env → ошибка конфигурации (fail-closed)', () => {
+    const env = { [SSH_MODE_ENV]: 'xxx' };
+    // Ровно как у эталонной enum-переменной `SYNTH_EXECUTION_MODE`: невалидное
+    // значение — исключение, а не тихий дефолт.
+    const reference = (): unknown =>
+      resolveExecutionMode(
+        { execution: { mode: 'inline' } } as unknown as SynthConfig,
+        { SYNTH_EXECUTION_MODE: 'inlne' },
+      );
+    expect(reference).toThrow(/SYNTH_EXECUTION_MODE/);
+    expect(() => resolveSshMode(undefined, undefined, env)).toThrow(/SYNTH_SSH_MODE/);
+    // Живое состояние падает при создании — инстанс с такой переменной не
+    // поднимается (проверка на старте, а не на первом запросе).
+    expect(() => createLiveSshMode({ env })).toThrow(/SYNTH_SSH_MODE/);
+  });
+
+  it('пустое значение env — «не задано» (дефолт)', () => {
+    expect(resolveSshMode(undefined, undefined, { [SSH_MODE_ENV]: '' }).value).toBe('tools');
   });
 });

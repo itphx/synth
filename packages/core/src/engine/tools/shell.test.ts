@@ -251,3 +251,116 @@ describe('execute_shell — фоновый запуск (background: true)', () 
     expect(result.metadata?.process_id).toBe('proc_1');
   });
 });
+
+/**
+ * PROP-124 §2: секреты вызова (режим `ssh-агента`) в `execute_shell`.
+ *
+ * Резолвер приходит из `ctx.extra.sshSecrets` (его собирает оркестратор):
+ * тул получает ключи **один раз на вызов** и передаёт их точке исполнения.
+ * При пустом списке поле `secrets` в запрос не попадает вовсе.
+ */
+describe('execute_shell — секреты вызова (режим ssh-агента)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-shell-ssh-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(extra: Record<string, unknown>): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      extra,
+    };
+  }
+
+  /** Порт-заглушка: пишет запросы (в них видны секреты). */
+  function makePort() {
+    const requests: Array<{ secrets?: unknown[] }> = [];
+    return {
+      requests,
+      async execute(req: { secrets?: unknown[] }) {
+        requests.push(req);
+        return { stdout: 'ok', stderr: '', exitCode: 0, truncated: false, durationMs: 1 };
+      },
+    };
+  }
+
+  const secret = { kind: 'ssh-key' as const, privateKey: 'key-material', mode: 'agent' as const };
+
+  it('режим agent — секреты уходят в порт исполнения', async () => {
+    const port = makePort();
+
+    const result = await executeShellTool.execute(
+      { command: 'echo ok' },
+      makeCtx({ executionPort: port, sshSecrets: async () => [secret] }),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(port.requests[0]?.secrets).toEqual([secret]);
+  });
+
+  it('режим tools (резолвер вернул пусто) — поле secrets в запросе нет', async () => {
+    const port = makePort();
+
+    const result = await executeShellTool.execute(
+      { command: 'echo ok' },
+      makeCtx({ executionPort: port, sshSecrets: async () => [] }),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(port.requests[0]).not.toHaveProperty('secrets');
+  });
+
+  it('резолвера нет — вызов идёт без секретов (поле не появляется)', async () => {
+    const port = makePort();
+
+    const result = await executeShellTool.execute({ command: 'echo ok' }, makeCtx({ executionPort: port }));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.requests[0]).not.toHaveProperty('secrets');
+  });
+
+  it('фоновый запуск — секреты уходят в ProcessService.spawn', async () => {
+    const spawn = vi.fn().mockResolvedValue({
+      runId: 'bgr_1',
+      processId: 'proc_1',
+      logPath: 'processes/bgr_1.log',
+    });
+    const processService = { spawn } as unknown as ProcessService;
+
+    const result = await executeShellTool.execute(
+      { command: 'sleep 1', background: true },
+      makeCtx({
+        processService,
+        backgroundEnabled: true,
+        sshSecrets: async () => [secret],
+      }),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.calls[0]?.[0]).toMatchObject({ secrets: [secret] });
+  });
+
+  it('фоновый запуск без секретов — поле secrets в spawn не появляется', async () => {
+    const spawn = vi.fn().mockResolvedValue({
+      runId: 'bgr_1',
+      processId: 'proc_1',
+      logPath: 'processes/bgr_1.log',
+    });
+    const processService = { spawn } as unknown as ProcessService;
+
+    await executeShellTool.execute(
+      { command: 'sleep 1', background: true },
+      makeCtx({ processService, backgroundEnabled: true }),
+    );
+
+    expect(spawn.mock.calls[0]?.[0]).not.toHaveProperty('secrets');
+  });
+});

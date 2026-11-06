@@ -16,7 +16,7 @@ import { classifyLlmErrorFor, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY
 import { computeUsageCost } from '../../../providers/usage.js';
 import type { UsageCost } from '../../../providers/usage.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
-import { PermissionEvaluator } from '../../permission/evaluator.js';
+import { PermissionEvaluator, isPlanRestricted } from '../../permission/evaluator.js';
 import { PermissionApprovalManager } from '../../permission/approval.js';
 import { buildPermissionPreview } from '../../permission/preview.js';
 import { ObfuscationMapStore } from '../../gateway/obfuscation-map-store.js';
@@ -1712,7 +1712,19 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         const toolExecContext: ToolContext = {
           ...ctx,
           abortSignal: ctx.abortSignal,
-          extra: extra as unknown as Record<string, unknown>,
+          // PROP-124 §2: ключи SSH — по роли **ребёнка**, а не родителя:
+          // `agentIds` — ACL ключа, и ключ родителя (другой роли) сабагенту
+          // не принадлежит. Сборка — копия extra (объект родителя не меняем);
+          // без сборщика — fail-closed (ключи не выдаются вовсе).
+          extra: {
+            ...(extra as unknown as Record<string, unknown>),
+            sshSecrets: extra.sshSecretsFor
+              ? extra.sshSecretsFor({
+                  agentRole: subagentDef?.id ?? subagentType,
+                  isPlan: isPlanRestricted(childSessionMode, childPlanMode, childPlanApproved),
+                })
+              : async () => [],
+          },
         };
         let toolResult: ToolResult;
         let subagentUserDenied = false;

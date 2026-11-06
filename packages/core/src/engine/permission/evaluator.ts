@@ -17,6 +17,7 @@ import {
   getToolGroups,
   PIPELINE_WRITE_TOOLS,
   SCHEDULE_WRITE_TOOLS,
+  SSH_TOOLS,
 } from './groups.js';
 
 // Реэкспорт: историческое место `extractPathParams` — этот модуль (его
@@ -148,8 +149,20 @@ const PLAN_BLOCKED_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
   'process_delete',
 ]);
 
+/**
+ * PROP-124 §9: адресные ssh-тулы (`ssh_exec`) в plan-режиме — **отказ целиком**.
+ *
+ * Явный список имён, как у `PLAN_BLOCKED_AUTOMATION_TOOLS`: capability у них
+ * своя (`ssh`), а не `edit`/`git_write`, поэтому без явного списка plan-режим
+ * разрешил бы выполнение команды на удалённом хосте. Отказ — **существующим
+ * эффектом** permission-слоя (`plan.deny`, `unavailable(mode)`), а не проверкой
+ * внутри тула: проверки прав в тулах не заводят (ADR-025/ADR-029).
+ */
+const PLAN_BLOCKED_SSH_TOOLS: ReadonlySet<string> = new Set(SSH_TOOLS);
+
 export function isPlanBlockedTool(toolName: string, capabilities?: readonly string[]): boolean {
   if (PLAN_BLOCKED_AUTOMATION_TOOLS.has(toolName)) return true;
+  if (PLAN_BLOCKED_SSH_TOOLS.has(toolName)) return true;
   const groups = getToolGroups(toolName, capabilities);
   return groups.includes('edit') || groups.includes('git_write');
 }

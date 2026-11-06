@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { createGitRoutes } from './git.js';
 import type { GitRoutesOptions } from './git.js';
 import { ProjectStore } from '../../storage/project-store.js';
+import { SSHKeyStore } from '../../storage/ssh-key-store.js';
 import { ExecutionError, type ExecRequest, type ExecResult, type ExecutionPort } from '../../execution/ports/index.js';
 
 const passAuth: MiddlewareHandler = async (_c, next) => { await next(); };
@@ -231,6 +232,27 @@ describe('Git API Routes (ADR-076 §T3)', () => {
   it('SSH-url без ключа → 400 git.ssh_key_required', async () => {
     const app = makeApp();
     const res = await post(app, '/repos/clone', { projectId, url: 'git@github.com:org/repo.git', path: 'sshrepo' });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('git.ssh_key_required');
+  });
+
+  it('ключ без usage "git" → 400 git.ssh_key_required (гейт PROP-124 §3)', async () => {
+    // Ключ только для ssh-доступа: в git-операции не пригоден.
+    const sshKeyStore = new SSHKeyStore({ dataDir });
+    const key = await sshKeyStore.create({
+      name: 'ssh-only',
+      privateKey: 'ssh-only-private-key',
+      usages: ['ssh'],
+    });
+
+    const app = makeApp({ sshKeyStore });
+    const res = await post(app, '/repos/clone', {
+      projectId,
+      url: 'git@github.com:org/repo.git',
+      path: 'sshrepo',
+      sshKeyId: key.id,
+    });
     expect(res.status).toBe(400);
     const body = await res.json() as { error: { code: string } };
     expect(body.error.code).toBe('git.ssh_key_required');

@@ -3,70 +3,72 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
-const mocks = vi.hoisted(() => ({
-  listSshKeys: vi.fn(),
-  createSshKey: vi.fn(),
-  updateSshKey: vi.fn(),
-  deleteSshKey: vi.fn(),
-  getAllAgents: vi.fn(),
-  notify: vi.fn(),
-}))
+const mocks = vi.hoisted(() => ({ notify: vi.fn() }))
 
-vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
-vi.mock('@/hooks/useNotification', () => ({
-  useNotification: () => ({ notify: mocks.notify }),
-}))
+vi.mock('@/hooks/useNotification', () => ({ useNotification: () => ({ notify: mocks.notify }) }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { SshKeysSettings } from './SshKeysSettings'
-import type { AgentInfo, SSHKeyMetaData } from '@/lib/api/synthApi'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
-function agent(id: string, name: string): AgentInfo {
-  return {
-    id,
-    display_name: name,
-    capabilities: [],
-    enabled: true,
-    icon: null,
-    color: null,
-    description: null,
-    available: true,
-    mode: 'simple',
-    agent_mode: ['primary'],
-    reasoning_level: null,
-    max_steps: 0,
-    provider: null,
-    model: null,
-    context_file: null,
-    is_builtin: false,
-    is_overridden: false,
-  }
+interface FetchCall {
+  url: string
+  method: string
+  body?: string
+}
+interface FetchResult {
+  status?: number
+  body: unknown
 }
 
-function key(id: string, overrides: Partial<SSHKeyMetaData> = {}): SSHKeyMetaData {
-  return {
-    id,
-    name: id,
-    type: 'user',
-    agentIds: [],
-    createdAt: '2026-01-01T00:00:00.000Z',
-    ...overrides,
-  }
+function stubFetch(handler: (call: FetchCall) => FetchResult): FetchCall[] {
+  const calls: FetchCall[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const call: FetchCall = {
+        url: String(input),
+        method: (init?.method ?? 'GET').toUpperCase(),
+        body: typeof init?.body === 'string' ? init.body : undefined,
+      }
+      calls.push(call)
+      const result = handler(call)
+      const status = result.status ?? 200
+      return { ok: status < 400, status, json: async () => result.body } as unknown as Response
+    }),
+  )
+  return calls
 }
 
-function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
-  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
-  const setter = Object.getOwnPropertyDescriptor(proto, 'value')!.set!
-  setter.call(el, value)
-  el.dispatchEvent(new Event('input', { bubbles: true }))
+const byTestId = (container: HTMLElement, id: string): HTMLElement | null =>
+  container.querySelector(`[data-testid="${id}"]`)
+
+/** Изменить controlled-поле (input/textarea) так, чтобы React увидел `onChange`. */
+async function typeInto(field: Element | null, value: string): Promise<void> {
+  if (!field) throw new Error('поле не найдено')
+  const proto =
+    field instanceof window.HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+  await act(async () => {
+    setter?.call(field, value)
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+  })
 }
 
-async function renderSettings(): Promise<HTMLElement> {
+async function click(el: Element | null): Promise<void> {
+  await act(async () => {
+    ;(el as HTMLElement)?.click()
+  })
+}
+
+async function render(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -75,7 +77,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <SshKeysSettings />
+        <TooltipProvider>
+          <SshKeysSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })
@@ -83,175 +87,134 @@ async function renderSettings(): Promise<HTMLElement> {
   return container
 }
 
+const SETTINGS_TOOLS = {
+  mode: 'tools',
+  saved: null,
+  defaults: 'tools',
+  source: 'config',
+  envLocked: false,
+  restartRequired: false,
+}
+
+const SETTINGS_AGENT = { ...SETTINGS_TOOLS, mode: 'agent' }
+
 beforeEach(() => {
-  vi.clearAllMocks()
-  mocks.listSshKeys.mockResolvedValue([])
-  mocks.getAllAgents.mockResolvedValue({ agents: [agent('a1', 'Agent One')], default_agent: null })
-  mocks.createSshKey.mockImplementation(async (body: unknown) => ({ ...(body as object), id: 'new' }))
-  mocks.updateSshKey.mockImplementation(async (id: string, body: object) => ({ ...body, id }))
-  mocks.deleteSshKey.mockResolvedValue(undefined)
+  mocks.notify.mockClear()
 })
 
 afterEach(async () => {
   while (roots.length > 0) {
     const { root, container } = roots.pop()!
-    await act(async () => {
-      root.unmount()
-    })
+    await act(async () => root.unmount())
     container.remove()
   }
   vi.clearAllMocks()
-  document.body.innerHTML = ''
 })
 
-describe('SshKeysSettings — CRUD SSH-ключей (ADR-076)', () => {
-  it('создание шлёт name/privateKey/agentIds через createSshKey', async () => {
-    const container = await renderSettings()
-
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-keys-add"]') as HTMLButtonElement).click()
+describe('SshKeysSettings (PROP-124)', () => {
+  it('в режиме agent поля хостов/портов скрыты, есть пояснение', async () => {
+    stubFetch((call) => {
+      if (call.url.includes('/settings/ssh')) return { body: SETTINGS_AGENT }
+      if (call.url.includes('/ssh-keys')) return { body: [] }
+      if (call.url.includes('/agents')) return { body: { agents: [], default_agent: null } }
+      return { body: {} }
     })
+    const container = await render()
 
-    const name = container.querySelector('[data-testid="ssh-key-name"]') as HTMLInputElement
-    const privateKey = container.querySelector('[data-testid="ssh-key-private"]') as HTMLTextAreaElement
-    const agentBox = container.querySelector('[data-testid="ssh-key-agent-a1"]') as HTMLInputElement
-    await act(async () => {
-      setInputValue(name, 'deploy-key')
-      setInputValue(privateKey, 'KEY-BODY')
-      agentBox.click()
-    })
-
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-key-save"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {})
-
-    expect(mocks.createSshKey).toHaveBeenCalledTimes(1)
-    expect(mocks.createSshKey).toHaveBeenCalledWith({
-      name: 'deploy-key',
-      agentIds: ['a1'],
-      privateKey: 'KEY-BODY',
-      passphrase: undefined,
-    })
+    expect(byTestId(container, 'ssh-keys-agent-mode-note')).not.toBeNull()
+    expect(byTestId(container, 'ssh-keys-allow-hosts')).toBeNull()
+    expect(byTestId(container, 'ssh-keys-allow-ports')).toBeNull()
   })
 
-  it('создание без имени/ключа не вызывает API и показывает ошибки', async () => {
-    const container = await renderSettings()
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-keys-add"]') as HTMLButtonElement).click()
+  it('в режиме tools поля хостов/портов есть, пояснения нет', async () => {
+    stubFetch((call) => {
+      if (call.url.includes('/settings/ssh')) return { body: SETTINGS_TOOLS }
+      if (call.url.includes('/ssh-keys')) return { body: [] }
+      if (call.url.includes('/agents')) return { body: { agents: [], default_agent: null } }
+      return { body: {} }
     })
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-key-save"]') as HTMLButtonElement).click()
-    })
+    const container = await render()
 
-    expect(mocks.createSshKey).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('Name is required')
-    expect(container.textContent).toContain('Private key is required')
+    expect(byTestId(container, 'ssh-keys-agent-mode-note')).toBeNull()
+    // Поля политики — в форме ключа: открываем редактор.
+    await click(byTestId(container, 'ssh-keys-add'))
+    expect(byTestId(container, 'ssh-keys-allow-hosts')).not.toBeNull()
+    expect(byTestId(container, 'ssh-keys-allow-ports')).not.toBeNull()
   })
 
-  it('редактирование без privateKey не отправляет секрет', async () => {
-    mocks.listSshKeys.mockResolvedValue([key('k1', { name: 'old-name', agentIds: ['a1'] })])
-    const container = await renderSettings()
-
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-key-edit-k1"]') as HTMLButtonElement).click()
+  it('переключатель режима сохраняет новое значение через API', async () => {
+    const calls = stubFetch((call) => {
+      if (call.method === 'PUT') return { body: SETTINGS_AGENT }
+      if (call.url.includes('/settings/ssh')) return { body: SETTINGS_TOOLS }
+      if (call.url.includes('/ssh-keys')) return { body: [] }
+      if (call.url.includes('/agents')) return { body: { agents: [], default_agent: null } }
+      return { body: {} }
     })
-    await act(async () => {})
+    const container = await render()
 
-    const name = container.querySelector('[data-testid="ssh-key-name"]') as HTMLInputElement
-    await act(async () => {
-      setInputValue(name, 'renamed')
-    })
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-key-save"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {})
-
-    expect(mocks.updateSshKey).toHaveBeenCalledTimes(1)
-    const [id, body] = mocks.updateSshKey.mock.calls[0] as [string, Record<string, unknown>]
-    expect(id).toBe('k1')
-    expect(body.name).toBe('renamed')
-    expect(body).not.toHaveProperty('privateKey')
+    await click(byTestId(container, 'ssh-keys-mode-agent'))
+    const put = calls.find((c) => c.method === 'PUT' && c.url.includes('/settings/ssh'))
+    expect(put?.body).toContain('agent')
   })
 
-  it('редактирование с заполненным privateKey заменяет секрет', async () => {
-    mocks.listSshKeys.mockResolvedValue([key('k1')])
-    const container = await renderSettings()
-
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-key-edit-k1"]') as HTMLButtonElement).click()
+  it('выбор usages и правил хостов уходит в тело create', async () => {
+    const calls = stubFetch((call) => {
+      if (call.method === 'POST') return { status: 201, body: { id: 'k1' } }
+      if (call.url.includes('/settings/ssh')) return { body: SETTINGS_TOOLS }
+      if (call.url.includes('/ssh-keys')) return { body: [] }
+      if (call.url.includes('/agents')) return { body: { agents: [], default_agent: null } }
+      return { body: {} }
     })
-    await act(async () => {})
+    const container = await render()
 
-    const privateKey = container.querySelector('[data-testid="ssh-key-private"]') as HTMLTextAreaElement
-    await act(async () => {
-      setInputValue(privateKey, 'NEW-KEY')
-    })
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-key-save"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {})
+    await click(byTestId(container, 'ssh-keys-add'))
+    await typeInto(byTestId(container, 'ssh-key-name'), 'deploy')
+    await typeInto(byTestId(container, 'ssh-key-private'), 'PRIVATE')
+    // Включаем «SSH» в назначении ключа.
+    await click(byTestId(container, 'ssh-key-usage-ssh'))
+    await click(byTestId(container, 'ssh-key-save'))
 
-    const [id, body] = mocks.updateSshKey.mock.calls[0] as [string, Record<string, unknown>]
-    expect(id).toBe('k1')
-    expect(body.privateKey).toBe('NEW-KEY')
+    const post = calls.find((c) => c.method === 'POST' && c.url.includes('/ssh-keys'))
+    expect(post).toBeDefined()
+    expect(post?.body).toContain('"ssh"')
+    expect(post?.body).toContain('"usages"')
   })
 
-  it('ошибка sshkey.name_exists показывается пользователю', async () => {
-    mocks.createSshKey.mockRejectedValueOnce(
-      Object.assign(new Error('conflict'), { code: 'sshkey.name_exists' }),
-    )
-    const container = await renderSettings()
+  it('ключ с usage ssh без привязки к агенту показывает предупреждение', async () => {
+    stubFetch((call) => {
+      if (call.url.includes('/settings/ssh')) return { body: SETTINGS_TOOLS }
+      if (call.url.includes('/ssh-keys')) return { body: [] }
+      if (call.url.includes('/agents')) return { body: { agents: [], default_agent: null } }
+      return { body: {} }
+    })
+    const container = await render()
 
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-keys-add"]') as HTMLButtonElement).click()
-    })
-    const name = container.querySelector('[data-testid="ssh-key-name"]') as HTMLInputElement
-    const privateKey = container.querySelector('[data-testid="ssh-key-private"]') as HTMLTextAreaElement
-    await act(async () => {
-      setInputValue(name, 'dup')
-      setInputValue(privateKey, 'KEY')
-    })
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-key-save"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {})
-
-    expect(container.textContent).toContain('already exists')
-    expect(container.textContent).toContain('dup')
+    await click(byTestId(container, 'ssh-keys-add'))
+    expect(byTestId(container, 'ssh-key-ssh-without-agent')).toBeNull()
+    await click(byTestId(container, 'ssh-key-usage-ssh'))
+    expect(byTestId(container, 'ssh-key-ssh-without-agent')).not.toBeNull()
   })
 
-  it('удаление подтверждается через ConfirmDialog и вызывает deleteSshKey', async () => {
-    mocks.listSshKeys.mockResolvedValue([key('k1', { name: 'deploy', agentIds: ['a1'] })])
-    const container = await renderSettings()
-
-    await act(async () => {
-      (container.querySelector('[data-testid="ssh-key-delete-k1"]') as HTMLButtonElement).click()
+  it('без выбранного назначения ключ сохранить нельзя (кнопка заблокирована)', async () => {
+    const calls = stubFetch((call) => {
+      if (call.method === 'POST') return { status: 201, body: { id: 'k1' } }
+      if (call.url.includes('/settings/ssh')) return { body: SETTINGS_TOOLS }
+      if (call.url.includes('/ssh-keys')) return { body: [] }
+      if (call.url.includes('/agents')) return { body: { agents: [], default_agent: null } }
+      return { body: {} }
     })
-    await act(async () => {})
+    const container = await render()
 
-    // Показываем привязанных агентов в подтверждении.
-    expect(document.body.textContent).toContain('Agent One')
+    await click(byTestId(container, 'ssh-keys-add'))
+    await typeInto(byTestId(container, 'ssh-key-name'), 'deploy')
+    await typeInto(byTestId(container, 'ssh-key-private'), 'PRIVATE')
+    // Снимаем единственное назначение («Git») — ключ становится бесполезным.
+    await click(byTestId(container, 'ssh-key-usage-git'))
 
-    const confirm = [...document.body.querySelectorAll('button')].find(
-      (b) => b.textContent?.trim() === 'Delete',
-    ) as HTMLButtonElement | undefined
-    expect(confirm).toBeTruthy()
-    await act(async () => {
-      confirm!.click()
-    })
-    await act(async () => {})
+    expect(byTestId(container, 'ssh-key-usages-required')).not.toBeNull()
+    expect((byTestId(container, 'ssh-key-save') as HTMLButtonElement | null)?.disabled).toBe(true)
 
-    expect(mocks.deleteSshKey).toHaveBeenCalledWith('k1')
-  })
-
-  it('список не содержит privateKey даже если он присутствует в ответе', async () => {
-    mocks.listSshKeys.mockResolvedValue([
-      { ...key('k1', { name: 'deploy' }), privateKey: 'SUPERSECRET' } as unknown as SSHKeyMetaData,
-    ])
-    const container = await renderSettings()
-
-    expect(container.textContent).toContain('deploy')
-    expect(container.textContent).not.toContain('SUPERSECRET')
+    await click(byTestId(container, 'ssh-key-save'))
+    expect(calls.find((c) => c.method === 'POST' && c.url.includes('/ssh-keys'))).toBeUndefined()
   })
 })

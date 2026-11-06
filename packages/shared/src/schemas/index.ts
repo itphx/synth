@@ -14,6 +14,11 @@ import {
   STEER_MODES,
   DEFAULT_STEER_MODE,
   EFFORT_LEVELS,
+  SSH_KEY_USAGES,
+  MAX_SSH_ALLOW_HOSTS,
+  MAX_SSH_ALLOW_PORTS,
+  isValidHostRule,
+  HOST_RULE_FORMAT_HINT,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey, SessionParticipantRole } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
@@ -281,13 +286,51 @@ export const projectUpdateSchema = z.object({
   memory: projectMemoryUpdateSchema.optional(),
 });
 
-/** ADR-076: тело создания SSH-ключа (`POST /api/v2/ssh-keys`). */
+/**
+ * PROP-124: правило хоста в политике SSH-ключа.
+ *
+ * Семантика — общая с ADR-099 (`matchTlsHostPattern`/`isValidHostRule`):
+ * точный hostname, `*.suffix` (только поддомены), IP-литерал или CIDR.
+ * Одиночный `*` («любой хост») недопустим — fail-closed.
+ */
+const sshHostRuleSchema = z
+  .string()
+  .max(253)
+  .refine((value) => isValidHostRule(value), {
+    message: `невалидный шаблон хоста: ${HOST_RULE_FORMAT_HINT}`,
+  });
+
+/**
+ * ADR-076: тело создания SSH-ключа (`POST /api/v2/ssh-keys`).
+ *
+ * PROP-124: дополнительно принимает `usages` (`git`/`ssh`), `allowHosts`
+ * (правила хостов) и `allowPorts` (порты 1..65535) — политику ключа для
+ * режима инстанса `tools`.
+ */
 export const sshKeyCreateSchema = z.object({
   name: z.string().min(1).max(200),
   type: z.string().optional(),
   privateKey: z.string().min(1),
   passphrase: z.string().optional(),
   agentIds: z.array(z.string()).optional(),
+  /**
+   * PROP-124: способы использования ключа (`git`/`ssh`).
+   *
+   * Пустой список **недопустим**: ключ без назначения бесполезен (не годится
+   * ни для git, ни для ssh) — это тихая ловушка, в которой можно застрять,
+   * сняв оба флажка. Если поле передано — в нём должно быть хотя бы одно
+   * значение (`400 VALIDATION_ERROR`).
+   */
+  usages: z
+    .array(z.enum(SSH_KEY_USAGES))
+    .min(1, {
+      message: `usages: нужен хотя бы один способ использования (${SSH_KEY_USAGES.join('|')})`,
+    })
+    .optional(),
+  /** PROP-124: правила хостов (режим `tools`); лимит — `MAX_SSH_ALLOW_HOSTS`. */
+  allowHosts: z.array(sshHostRuleSchema).max(MAX_SSH_ALLOW_HOSTS).optional(),
+  /** PROP-124: порты (режим `tools`); лимит — `MAX_SSH_ALLOW_PORTS`. */
+  allowPorts: z.array(z.number().int().min(1).max(65535)).max(MAX_SSH_ALLOW_PORTS).optional(),
 });
 
 /** ADR-076: тело обновления SSH-ключа (без id/createdAt). */

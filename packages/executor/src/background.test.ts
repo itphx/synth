@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, realpath, rm, stat } from 'node:fs/promises';
+import { access, mkdtemp, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   BackgroundExecService,
   type BackgroundProcessRecord,
   type BackgroundExecServiceOptions,
 } from './background.js';
+
+// Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
+// заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
+const PRIVATE_KEY = `-----BEGIN OPENSSH PRIVATE KEY-----\nexecutor-background-material\n-----END OPENSSH PRIVATE KEY-----\n`;
 
 let workspace: string;
 let outside: string;
@@ -50,6 +54,26 @@ async function waitTerminal(
     // unref здесь не нужен и вреден: собственное ожидание теста должно держать
     // event loop живым, иначе промис может не разрешиться до конца теста.
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/** Существует ли путь (файл/каталог). */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Дождаться исчезновения пути (очистка материала — асинхронная). */
+async function waitGone(path: string, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!(await exists(path))) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
   }
 }
 
@@ -200,6 +224,54 @@ describe('фоновые процессы: остановка и таймаут'
         }
       }
     }
+  });
+});
+
+/**
+ * Материал секретов вызова (PROP-124 §7) гасится **вместе с** фоновым
+ * процессом: выход, `stop()`, таймаут, остановка исполнителя.
+ *
+ * Отдельный инвариант: **повторный** `stop()` не должен оставлять материал —
+ * остановленный процесс не может продолжать пользоваться ключом (и
+ * эфемерным агентом).
+ */
+describe('фоновые процессы: очистка материала секретов', () => {
+  it('повторный stop() не оставляет материал (ключ и каталог убраны)', async () => {
+    const svc = makeService();
+    // Команда печатает путь к ключу (из `GIT_SSH_COMMAND`) и живёт — чтобы
+    // материал был на диске в момент остановки.
+    const outcome = await svc.spawn({
+      command: { kind: 'shell', command: 'printf "%s" "$GIT_SSH_COMMAND"; sleep 30' },
+      secrets: [{ kind: 'ssh-key', privateKey: PRIVATE_KEY }],
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    // Ждём, пока команда допечатает путь к ключу в журнал.
+    let keyPath = '';
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const logs = await svc.logs(outcome.processId);
+      const match = /ssh -i (\S+)/.exec(logs?.stdout.content ?? '');
+      if (match?.[1]) {
+        keyPath = match[1];
+        break;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    expect(keyPath).toContain('synth-ssh-');
+    const materialDir = dirname(keyPath);
+    // Пока процесс жив — материал на месте.
+    expect(await exists(keyPath)).toBe(true);
+
+    // Повторный `stop()` — идемпотентен и **не** оставляет материал.
+    expect(svc.stop(outcome.processId)).toBe(true);
+    expect(svc.stop(outcome.processId)).toBe(true);
+    const record = await waitTerminal(svc, outcome.processId);
+    expect(record.status).toBe('killed');
+
+    expect(await waitGone(keyPath)).toBe(true);
+    expect(await waitGone(materialDir)).toBe(true);
   });
 });
 

@@ -248,6 +248,11 @@ export const defaultConfig: SynthConfig = {
     localTimeoutMs: 120_000,
     networkTimeoutMs: 300_000,
   },
+  ssh: {
+    // PROP-124: режим работы инстанса с SSH-ключами. `tools` — fail-closed:
+    // без явного выбора ключ не попадает в окружение команд.
+    mode: 'tools',
+  },
   questions: {
     // Этап 1 roadmap 0.13 (блок 3): срок ожидания ответа пользователя на вопрос —
     // по умолчанию **без таймаута** (0): вопрос ждёт, пока ответят или отменят

@@ -256,8 +256,22 @@ export const projectRepoCloneTool: ToolDefinition = {
     }
     if (occupancy) return repoOccupiedResult(relPath, occupancy);
 
-    const ssh = await resolveSshEnvById(extra.sshKeyStore, params.sshKeyId);
-    if (ssh.error) return i18nError(ssh.error as SystemMessageKey, ssh.errorParams);
+    const ssh = await resolveSshEnvById(extra.sshKeyStore, params.sshKeyId, { path: relPath });
+    if (ssh.error) {
+      // Ключ указан, но для git-операций не пригоден (PROP-124 §3, `usages`) —
+      // тот же actionable-текст, что и «ключ не задан»: список доступных ключей.
+      if (ssh.error === 'git.ssh_key_required') {
+        const hint = await buildSshKeyRequiredResult(extra.sshKeyStore, relPath);
+        if (hint) {
+          return {
+            content: [sm(ssh.error, ssh.errorParams), hint.content].join('\n'),
+            isError: true,
+            metadata: hint.metadata,
+          };
+        }
+      }
+      return i18nError(ssh.error as SystemMessageKey, ssh.errorParams);
+    }
 
     let repo: RepoStatus;
     try {
@@ -436,16 +450,16 @@ export const projectRepoFetchTool: ToolDefinition = {
     const containment = safeRelPath(git, wsAbs, entry.path);
     if (!containment.ok) return containment.error;
 
-    const ssh = await resolveSshEnvById(extra.sshKeyStore, entry.sshKeyId);
+    const ssh = await resolveSshEnvById(extra.sshKeyStore, entry.sshKeyId, { path: entry.path });
     if (ssh.error) {
-      // Ключ в записи реестра есть, но в сторе его уже нет (удалён/переименован):
-      // сам по себе `sshkey.not_found` не подсказывает, что делать, — добавляем
-      // список доступных ключей.
-      if (ssh.error === 'sshkey.not_found') {
+      // Ключ в записи реестра есть, но в сторе его уже нет (удалён/переименован)
+      // либо он не пригоден для git-операций (PROP-124 §3, `usages`): сам по себе
+      // текст отказа не подсказывает, что делать, — добавляем список доступных ключей.
+      if (ssh.error === 'sshkey.not_found' || ssh.error === 'git.ssh_key_required') {
         const hint = await buildSshKeyRequiredResult(extra.sshKeyStore, entry.path);
         if (hint) {
           return {
-            content: [sm('sshkey.not_found', ssh.errorParams), hint.content].join('\n'),
+            content: [sm(ssh.error, ssh.errorParams), hint.content].join('\n'),
             isError: true,
             metadata: hint.metadata,
           };

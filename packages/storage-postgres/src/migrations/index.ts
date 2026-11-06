@@ -39,6 +39,7 @@ import { MIGRATION_027_CONTEXT_FILES } from './027-context-files.js';
 import { MIGRATION_028_MESSAGE_REASONING_SIGNATURE } from './028-message-reasoning-signature.js';
 import { MIGRATION_029_MESSAGE_STREAM_V2 } from './029-message-stream-v2.js';
 import { MIGRATION_030_SESSION_RETRY } from './030-session-retry.js';
+import { MIGRATION_031_SSH_KEY_POLICY } from './031-ssh-key-policy.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -82,6 +83,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 28, id: '028_message_reasoning_signature', sql: MIGRATION_028_MESSAGE_REASONING_SIGNATURE },
   { version: 29, id: '029_message_stream_v2', sql: MIGRATION_029_MESSAGE_STREAM_V2 },
   { version: 30, id: '030_session_retry', sql: MIGRATION_030_SESSION_RETRY },
+  { version: 31, id: '031_ssh_key_policy', sql: MIGRATION_031_SSH_KEY_POLICY },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */
