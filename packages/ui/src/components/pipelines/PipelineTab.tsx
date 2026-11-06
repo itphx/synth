@@ -112,6 +112,8 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
 
   const projects = useProjectsStore((s) => s.projects)
   const user = useAuthStore((s) => s.user)
+  // Локальный мир standalone/гибрида однопользовательский — см. `lib/projectAccess.ts`.
+  const deployment = useAuthStore((s) => s.deployment)
   const openTab = useUIStore((s) => s.openTab)
   const closeTab = useUIStore((s) => s.closeTab)
   const loadProjectPipelines = usePipelinesStore((s) => s.loadProjectPipelines)
@@ -124,7 +126,7 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
     () => projects.find((p) => p.id === projectId),
     [projects, projectId],
   )
-  const canEdit = canEditProjectContent(project, user)
+  const canEdit = canEditProjectContent(project, user, { standalone: deployment === 'standalone' })
 
   /**
    * Ключ сущности страницы (`projectId:pipelineId`). Загруженные данные и

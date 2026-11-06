@@ -19,6 +19,7 @@ import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import { ExpandableListRow, RowBadge } from '@/components/panels/ExpandableListRow'
+import { canManageProject } from '@/lib/projectAccess'
 import { PanelTab } from './PanelTab'
 import { useWorktreesStore } from '@/stores/worktreesStore'
 import { confirm } from '@/lib/confirm'
@@ -68,12 +69,12 @@ export function ProjectTab() {
 
   const { run, isPending } = usePanelSettingSave({ sessionId: sessionId || undefined })
 
-  const canManageMcp = !!user && (
-    user.roles?.includes('ADMIN')
-    || user.roles?.includes('LEAD')
-    || project?.owner_id === user.id
-    || project?.members?.[user.id] === 'owner'
-  )
+  // Право управления проектными скоупами (MCP и скиллы). Учитывает локальный
+  // мир standalone/гибрида (`deployment === 'standalone'`), где личность
+  // инстанса — и есть владелец локальных проектов; в managed правило прежнее.
+  const canManageMcp = canManageProject(project ?? storeProject, user, {
+    standalone: deployment === 'standalone',
+  })
 
   useEffect(() => {
     if (!projectId || !canManageMcp) {

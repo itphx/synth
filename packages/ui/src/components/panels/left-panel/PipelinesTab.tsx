@@ -31,6 +31,8 @@ export function PipelinesTab() {
   const projects = useProjectsStore((s) => s.projects)
   const loadProjects = useProjectsStore((s) => s.loadProjects)
   const user = useAuthStore((s) => s.user)
+  // Локальный мир standalone/гибрида однопользовательский — см. `lib/projectAccess.ts`.
+  const deployment = useAuthStore((s) => s.deployment)
   const openTab = useUIStore((s) => s.openTab)
   const onlyActiveProject = useUIStore((s) => s.onlyActiveProject)
   const collapsedProjects = useUIStore((s) => s.collapsedProjects)
@@ -91,7 +93,7 @@ export function PipelinesTab() {
     // Список пайплайнов приходит страницей (`{pipelines, total, next_offset}`).
     const page = pipelinesByProject[project.id]
     const pipelines = page?.pipelines ?? []
-    const canEdit = canEditProjectContent(project, user)
+    const canEdit = canEditProjectContent(project, user, { standalone: deployment === 'standalone' })
 
     return (
       <div key={project.id}>

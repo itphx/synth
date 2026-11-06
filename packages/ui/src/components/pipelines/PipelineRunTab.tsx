@@ -29,6 +29,8 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
 
   const projects = useProjectsStore((s) => s.projects)
   const user = useAuthStore((s) => s.user)
+  // Локальный мир standalone/гибрида однопользовательский — см. `lib/projectAccess.ts`.
+  const deployment = useAuthStore((s) => s.deployment)
   const runDetail = usePipelinesStore((s) => s.runDetail)
   const runError = usePipelinesStore((s) => s.runError)
   const runSignal = usePipelinesStore((s) => s.runSignal)
@@ -40,7 +42,7 @@ export function PipelineRunTab({ tab }: { tab: CenterTab }) {
     () => projects.find((p) => p.id === projectId),
     [projects, projectId],
   )
-  const canEdit = canEditProjectContent(project, user)
+  const canEdit = canEditProjectContent(project, user, { standalone: deployment === 'standalone' })
 
   // Детали прогонов лежат в сторе по id прогона — содержимое «чужого» прогона
   // не подставляется. Ошибка загрузки — тоже по id (см. `runError`).

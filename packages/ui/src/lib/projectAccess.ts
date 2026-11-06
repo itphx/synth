@@ -14,19 +14,51 @@ import type { User } from '@/lib/api/client'
 /** Роли участника проекта (ADR-014, `ProjectRole` в shared). */
 export type ProjectMemberRole = 'owner' | 'editor' | 'viewer'
 
+/** Контекст развёртывания, в котором UI показывает права. */
+export interface ProjectAccessOptions {
+  /** UI работает с локальным core (standalone/гибрид) — `deployment === 'standalone'`. */
+  standalone?: boolean
+}
+
+/**
+ * Есть ли право **управлять** проектом (скоупы MCP и скиллов, workspace и т.п.).
+ *
+ * Зеркалит серверный `canManage`: LEAD / ADMIN, owner проекта, участник с ролью OWNER.
+ * В **локальном мире** (standalone/гибрид) правило шире — см. комментарий ниже.
+ */
+export function canManageProject(
+  project: Pick<ProjectData, 'owner_id' | 'members' | 'origin'> | undefined | null,
+  user: User | null | undefined,
+  options?: ProjectAccessOptions,
+): boolean {
+  if (!project || !user) return false
+  const roles = user.roles ?? []
+  if (roles.includes('ADMIN') || roles.includes('LEAD')) return true
+  // Локальный мир однопользовательский: единственная личность инстанса и есть
+  // владелец локальных проектов. Локальные проекты создаёт сам core с
+  // `owner_id: 'local'` (у `mountStandaloneRoutes` нет `getCurrentUserId`), а
+  // серверный `canManage` в core по умолчанию разрешает (RBAC-хук не передан).
+  // Сравнение id здесь только скрывало бы доступное действие: в гибриде UI
+  // авторизуется серверной личностью (`user.id` = id пользователя backend), и
+  // `'local' !== 'u-…'` навсегда закрывал бы блоки MCP/скиллов.
+  // `remote:`-проекты живут на backend с той же личностью — для них правило прежнее.
+  if (options?.standalone === true && project.origin !== 'remote') return true
+  if (project.owner_id === user.id) return true
+  return project.members?.[user.id] === 'owner'
+}
+
 /**
  * Есть ли право **изменять содержимое** проекта (пайплайны, прогоны, HITL).
  *
  * Зеркалит серверный `canEditProjectContent`: owner / OWNER / EDITOR / LEAD / ADMIN.
  */
 export function canEditProjectContent(
-  project: Pick<ProjectData, 'owner_id' | 'members'> | undefined | null,
+  project: Pick<ProjectData, 'owner_id' | 'members' | 'origin'> | undefined | null,
   user: User | null | undefined,
+  options?: ProjectAccessOptions,
 ): boolean {
   if (!project || !user) return false
-  const roles = user.roles ?? []
-  if (roles.includes('ADMIN') || roles.includes('LEAD')) return true
-  if (project.owner_id === user.id) return true
+  if (canManageProject(project, user, options)) return true
   const memberRole = project.members?.[user.id] as ProjectMemberRole | undefined
-  return memberRole === 'owner' || memberRole === 'editor'
+  return memberRole === 'editor'
 }

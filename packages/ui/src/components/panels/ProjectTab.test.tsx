@@ -420,6 +420,46 @@ describe('ProjectTab — гибрид и отказы загрузки (MCP)', (
     expect(container.textContent).not.toContain(enDict['common.loading'])
   })
 
+  // Регресс: локальные проекты создаёт core с `owner_id: 'local'`, а UI в
+  // гибриде авторизуется серверной личностью (`u1`). Сравнение id скрывало
+  // доступное действие — блоки MCP/скиллов не рендерились вовсе.
+  it('standalone/гибрид: локальный проект управляем единственной личностью инстанса', async () => {
+    const localProject = { ...PROJECT, id: 'p1', origin: 'local', owner_id: 'local', members: {} }
+    mocks.getProject.mockResolvedValue(localProject)
+    useAuthStore.setState({
+      user: { id: 'u1', username: 'someone', roles: [] },
+      deployment: 'standalone',
+    } as never)
+    useSessionsStore.setState({
+      sessions: [{ id: 's1', name: 'S', project_id: 'p1', settings: { model: 'm' } }],
+    } as never)
+    useProjectsStore.setState({ projects: [localProject] as never })
+
+    const container = await renderTab()
+
+    expect(mocks.getProjectMcp).toHaveBeenCalledWith('p1')
+    expect(container.querySelector('[data-testid="project-mcp-list"]')).not.toBeNull()
+  })
+
+  // Managed не меняется: id реальные, RBAC строгий — чужой проект не управляем.
+  it('managed: локальный по origin проект с чужим owner не раскрывает скоупы', async () => {
+    const localProject = { ...PROJECT, id: 'p1', origin: 'local', owner_id: 'local', members: {} }
+    mocks.getProject.mockResolvedValue(localProject)
+    useAuthStore.setState({
+      user: { id: 'u1', username: 'someone', roles: [] },
+      deployment: 'managed',
+    } as never)
+    useSessionsStore.setState({
+      sessions: [{ id: 's1', name: 'S', project_id: 'p1', settings: { model: 'm' } }],
+    } as never)
+    useProjectsStore.setState({ projects: [localProject] as never })
+
+    const container = await renderTab()
+
+    expect(mocks.getProjectMcp).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="project-mcp-list"]')).toBeNull()
+  })
+
   it('remote-проект: MCP/скиллы загружаются без projectTab.loadError', async () => {
     const remoteProject = {
       ...PROJECT,
