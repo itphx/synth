@@ -117,6 +117,7 @@
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109-agent-system-federation.md](./prop-109-agent-system-federation.md) |
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
 | PROP-124 | Удалённый SSH-доступ агента — `ssh_exec`/`ssh_copy`/`ssh_tunnel` на ключах Synth | 🧩 Предложение | [prop-124-remote-ssh-access.md](./prop-124-remote-ssh-access.md) |
+| PROP-125 | Серверные MCP-серверы в локальных сессиях гибрида — режимы relay и tools | 🧩 Предложение | [prop-125-hybrid-remote-mcp.md](./prop-125-hybrid-remote-mcp.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -161,5 +162,5 @@
 
 ---
 
-Всего документов: 104 (Решения: 50, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 105 (Решения: 50, Частично: 23, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 17 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
