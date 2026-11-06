@@ -75,6 +75,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_EXECUTION_TIMEOUT_MS` | ADR-077: exec-call timeout, ms | `30000` |
 | `SYNTH_EXECUTION_CONCURRENCY` | ADR-077: limit of concurrent exec calls | process CPU count |
 | `SYNTH_EXECUTION_FAIL_MODE` | ADR-077: behaviour when the executor is unavailable (`fail`/`inline-fallback`) | `fail` |
+| `SYNTH_SSH_MODE` | PROP-124: instance-wide mode for SSH keys — `tools` (addressable tools, mandatory host policy) \| `agent` (ephemeral `ssh-agent` for the duration of the call). An invalid value is a **configuration error at startup** (fail-closed, like `SYNTH_EXECUTION_MODE`) | `ssh.mode` (`tools`) |
 
 **UI (Vite):**
 
@@ -185,6 +186,18 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_TLS_CERT_FILE` | ADR-099: path to the PEM file of the client certificate (mTLS) | — |
 | `SYNTH_TLS_KEY_FILE` | ADR-099: path to the PEM file of the client private key (mTLS) | — |
 | `SYNTH_TLS_REJECT_UNAUTHORIZED` | ADR-099: verify the server certificate (`true`/`1`/`false`/`0`) | `true` |
+
+> **Exception — `ssh.mode` (PROP-124).** The `SYNTH_SSH_MODE` variable is **not** part of
+> the `ENV_OVERRIDES` registry (`packages/shared/src/config/env-overrides.ts`): the mode is
+> read by a dedicated core resolver (`resolveSshMode`/`createLiveSshMode`,
+> `packages/core/src/storage/runtime-settings.ts`) — like `SYNTH_EXECUTION_MODE`/
+> `SYNTH_STORAGE_BACKEND`. The reason is **fail-closed**: an invalid value must abort the
+> startup instead of producing "a warning in the log + ignore", as for ordinary env
+> overrides.
+> Diagnostic consequence: the `synth config show` dump shows the value from `config.yaml`
+> (the `ssh` section), while the **effective** value follows the priority
+> `env > runtime (UI) > config.yaml > default`; read it from
+> `GET /api/v2/settings/ssh` (the `source` field).
 
 ### Maintenance env variables (ADR-091)
 
@@ -319,6 +332,10 @@ execution:                         # ADR-077: execution topology (startup parame
                                   # SYNTH_EXECUTION_FAIL_MODE
     tokenSecret: ""               # path/reference to the executor token (NOT a value — invariant 13);
                                   # SYNTH_EXECUTION_TOKEN
+
+ssh:                             # PROP-124: instance-wide mode for SSH keys
+  mode: "tools"                  # tools (default, fail-closed) | agent (ephemeral ssh-agent);
+                                  # SYNTH_SSH_MODE; an invalid env value is a startup error
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
@@ -1995,6 +2012,48 @@ git:
   localTimeoutMs: 120000   # SYNTH_GIT_LOCAL_TIMEOUT_MS — commit/checkout/stash
   networkTimeoutMs: 300000 # SYNTH_GIT_NETWORK_TIMEOUT_MS — push/pull
 ```
+
+### SSH access mode (`ssh.*`, PROP-124)
+
+The instance chooses **how** the SSH keys of the registry reach the consumer. The choice is
+made by the instance administrator; both modes rely on the same key registry and the same
+secret-revealing seam (`engine/ssh/access.ts`).
+
+| | `tools` | `agent` |
+|---|---|---|
+| How the key reaches the consumer | argv of the addressable tools (`-i` for the duration of the call) | an ephemeral `ssh-agent` for the duration of the call (`SSH_AUTH_SOCK`) |
+| Host/port policy on the key | **mandatory**, checked before the launch | **not applied** (the limit lives on the host side, `authorized_keys`) |
+| `execute_shell` | does not see the key | the key is visible to all child processes of the call |
+| Ansible and existing projects | do not work (no ssh access from the shell) | work as is |
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `ssh.mode` | Instance-wide mode for SSH keys: `tools` \| `agent`. Env — `SYNTH_SSH_MODE` | `tools` |
+
+```yaml
+ssh:
+  mode: tools   # SYNTH_SSH_MODE — tools | agent
+```
+
+- The default `tools` is **fail-closed**: without an explicit choice the key does not reach
+  the command environment.
+- **Value priority — `env > runtime (UI) > config.yaml > default`.** The runtime value lives
+  in `{dataDir}/settings.json` (or PG) and is changed from the UI without a restart:
+  `GET/PUT/DELETE /api/v2/settings/ssh` (see [API_V2.md](./API_V2.md) §5.15.2).
+- **An invalid env value is a configuration error at startup** (fail-closed, like
+  `SYNTH_EXECUTION_MODE`/`SYNTH_STORAGE_BACKEND`): an instance with `SYNTH_SSH_MODE=aggent`
+  does not come up. There is no second place that reads the variable — one resolver only.
+- **Env locking blocks the UI:** when `SYNTH_SSH_MODE` is set, the runtime value from the UI
+  does not override it — an attempt to change the mode gives `409 CONFLICT`.
+- **The key policy** (`usages`, `allowHosts`, `allowPorts`) is stored **on the key**, not in
+  the instance config, and is edited through the key registry API (see [API_V2.md](./API_V2.md)
+  §5.15.1). In the `agent` mode the host/port fields are **not applied** and are not shown in
+  the key form — they are replaced by an explanation about `authorized_keys`.
+- **Limitations of the `agent` mode (stated plainly).** There is no address filtering: while
+  the call is alive, the process may connect to any host the key trusts (the real boundary is
+  `authorized_keys`: `from=`, `restrict`, `permitopen=`, `command=`). Agent forwarding
+  (`ssh -A`) is possible. The key material is deleted from disk after `ssh-add` and remains
+  only in the agent's memory.
 
 ### Timeouts of the built-in tools
 

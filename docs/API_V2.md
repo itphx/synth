@@ -1246,21 +1246,78 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 
 ### 5.15.1 SSH-ключи агентов — `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` (оба, ADR-076)
 
-Ответы — только `SSHKeyMeta` (`id`/`name`/`type`/`agentIds`/`createdAt`/`updatedAt`);
-`privateKey`/`passphrase` шифруются at-rest (AES-256-GCM) и **никогда** не отдаются.
+Ответы — только `SSHKeyMeta` (`id`/`name`/`type`/`agentIds`/`usages`/`allowHosts`/
+`allowPorts`/`createdAt`/`updatedAt`); `privateKey`/`passphrase` шифруются at-rest
+(AES-256-GCM) и **никогда** не отдаются.
 
 | Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
 | GET | `/api/v2/ssh-keys` | auth | Все ключи; `?agentId=` — ключи агента |
-| POST | `/api/v2/ssh-keys` | ADMIN / auth | Создать: `{name, type?, privateKey, passphrase?, agentIds?}` → 201 |
+| POST | `/api/v2/ssh-keys` | ADMIN / auth | Создать: `{name, type?, privateKey, passphrase?, agentIds?, usages?, allowHosts?, allowPorts?}` → 201 |
 | GET | `/api/v2/ssh-keys/:id` | auth | Ключ по id |
-| PATCH | `/api/v2/ssh-keys/:id` | ADMIN / auth | Частичное обновление (в т.ч. смена `privateKey`) |
+| PATCH | `/api/v2/ssh-keys/:id` | ADMIN / auth | Частичное обновление (в т.ч. смена `privateKey` и политики) |
 | DELETE | `/api/v2/ssh-keys/:id` | ADMIN / auth | Удалить ключ целиком → 204 |
 | GET | `/api/v2/agents/:agentId/ssh-keys` | auth | Ключи, привязанные к агенту |
 | POST | `/api/v2/agents/:agentId/ssh-keys` | ADMIN / auth | Создать с привязкой к агенту (объединяет `agentIds`) → 201 |
 | DELETE | `/api/v2/agents/:agentId/ssh-keys/:keyId` | ADMIN / auth | **Отвязать** ключ от агента (ключ не удаляется) |
 
+**Политика ключа (PROP-124).** Три поля задают, как ключ пригоден:
+
+| Поле | Тип | Правила | Значение по умолчанию |
+|------|-----|---------|----------------------|
+| `usages` | `('git'\|'ssh')[]` | **минимум одно** значение; неизвестное значение → 400 | `['git']` — у ключей, созданных до Ф1, поля нет; при чтении нормализуется в `['git']` (fail-closed) |
+| `allowHosts` | `string[]` | ≤ **50** правил; правило — точный hostname, `*.suffix` (**только поддомены** — сам suffix не матчится), IP-литерал или CIDR (**только по IP-литералу**); шаблон `*` («любой хост») **запрещён** и не разрешает ничего | `[]` — в режиме `tools` пустой список **не разрешает ни одного хоста**; в режиме `agent` поле не применяется |
+| `allowPorts` | `number[]` | ≤ **10** портов; целое **1..65535** | `[]` — разрешён только стандартный порт ssh (**22**) |
+
+- `usages` — способы использования ключа: `git` (ключ подставляется в git-операции,
+  `GIT_SSH_COMMAND`) и `ssh` (выдаётся адресным тулам в режиме `tools` либо эфемерному
+  `ssh-agent` в режиме `agent`).
+- Правила хостов используют **общий матчер** ADR-099 (`hostMatchesRule`): семантика
+  `*.suffix`/CIDR/`*` не переопределяется и не дублируется.
+- **Ошибки записи — 400 `VALIDATION_ERROR`:** пустой `usages`; неизвестное значение
+  `usages`; невалидный шаблон хоста или пустое правило; порт вне 1..65535; превышение
+  лимитов (50 хостов / 10 портов). Уже сохранённые значения **не удаляются** и снова
+  действуют при переключении режима инстанса.
+- **Политика применяется только в режиме `tools`** инстанса (`ssh.mode`, §5.15.2): в
+  режиме `agent` фильтрация по хостам и портам **не применяется**.
+- **Отказ по политике при git-операции** (`/api/v2/git/repos/clone|fetch` и тулы
+  `project_repo_clone`/`project_repo_fetch`) даёт **400 `git.ssh_key_required`** — тот же
+  код, что и «ключ не задан»: нужен ключ, пригодный для git-операций. Ключ, которого
+  нет, даёт `sshkey.not_found` (404).
+- **Секреты не отдаются никогда:** `privateKey`/`passphrase` не входят ни в один ответ
+  (`GET`/`POST`/`PATCH`) — наружу уходят только метаданные ключа.
+
 Коды: `sshkey.not_found` (404), `sshkey.name_exists` (409), `sshkey.decrypt_failed` / `sshkey.encryption_unavailable` (500), `sshkey.env_failed` (400, через `VALIDATION_ERROR`), `VALIDATION_ERROR` (400). Ключи с `passphrase` **поддерживаются**: при git-операции `createSshEnv` готовит askpass (`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`), сбой подготовки → `sshkey.env_failed`. В гибриде nested `/api/v2/agents/:agentId/ssh-keys[/:keyId]` проксируется core на backend (`REMOTE_PROXY_PATTERNS`), как flat `/ssh-keys` и `/git`; прочие подпути `/api/v2/agents` остаются локальными. Мастер-ключ — `SYNTH_SECRET_KEY`/`security.secretKey`/`{dataDir}/secrets/master.key`; ротация — CLI `synth secrets rotate` (не HTTP API).
+
+### 5.15.2 Режим доступа по SSH — `/api/v2/settings/ssh` (оба, PROP-124)
+
+Runtime-настройка инстанса: как SSH-ключи реестра попадают к потребителю — `tools`
+(адресные тулы, обязательная политика хостов/портов) или `agent` (эфемерный `ssh-agent`
+на время вызова). Источник истины — код (`packages/core/src/storage/runtime-settings.ts`,
+`resolveSshMode`/`createLiveSshMode`).
+
+| Метод | Путь | RBAC (backend / core) | Назначение |
+|---|---|---|---|
+| GET | `/api/v2/settings/ssh` | ADMIN (managed) / auth (core) | `{mode:"tools"\|"agent", saved:"tools"\|"agent"\|null, defaults:"tools"\|"agent", source:"env"\|"runtime"\|"config"\|"default", envLocked:boolean, restartRequired:false}` |
+| PUT | `/api/v2/settings/ssh` | ADMIN (managed) / auth (core) | `{mode}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`); невалидное значение → 400 `VALIDATION_ERROR`; режим зафиксирован env и запрошено другое значение → 409 `CONFLICT`; аудит `scope:"ssh"` |
+| DELETE | `/api/v2/settings/ssh` | ADMIN (managed) / auth (core) | Сброс runtime-значения к env/config/default (ответ как у `GET`); аудит `scope:"ssh"` |
+
+- **Поля ответа:** `mode` — эффективный режим; `saved` — сохранённое runtime-значение
+  (`null` — не задано); `defaults` — база без runtime (к чему вернёт `DELETE`);
+  `source` — источник эффективного значения; `envLocked` — режим зафиксирован
+  переменной окружения (runtime его не перекрывает); `restartRequired` — всегда `false`
+  (смена режима применяется без рестарта).
+- **Приоритет — `env > runtime (UI) > config.yaml > default`** (`tools`).
+- **Env-фиксация — 409 `CONFLICT`:** при заданном `SYNTH_SSH_MODE` runtime-значение из UI
+  не перекрывается. `DELETE` при этом сбрасывает runtime к базе, но эффективное значение
+  остаётся env-овым (`mode` и `source` в ответе показывают это).
+- **Невалидное значение env — ошибка конфигурации на старте** (fail-closed, как
+  `SYNTH_EXECUTION_MODE`): инстанс с невалидным `SYNTH_SSH_MODE` не поднимается. Ветка
+  защитная — при ответе 500 с текстом конфигурации, а не молчаливый дефолт.
+- **Аудит** (`scope:"ssh"`, actions `update`/`reset`) — best-effort: ошибка записи аудита не
+  ломает операцию. Материал ключей в аудит не попадает (в нём — только режим).
+- Управление режимом — в UI: раздел «Агенты» → «SSH-ключи» (переключатель режима;
+  ADMIN).
 
 ### 5.16 MCP — `/api/v2/mcp`
 

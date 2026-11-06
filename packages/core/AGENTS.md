@@ -611,6 +611,11 @@
   метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`,
   `attachments-staging` (ADR-115: `/api/v2/attachments` — staging-загрузка без сессии и раздача
   по `sha256`), `settings-attachments` (`/settings/attachments` — runtime-настройки вложений),
+  `settings-ssh` (PROP-124: `/settings/ssh` — режим работы инстанса с SSH-ключами
+  `tools`|`agent`; `GET/PUT/DELETE`, ответ `{mode, saved, defaults, source, envLocked,
+  restartRequired:false}`, `restartRequired` **всегда `false`** — смена режима live;
+  env-фиксация → 409 `CONFLICT`, невалидный режим → 400 `VALIDATION_ERROR`, аудит
+  `scope:'ssh'`; core — `requireAuth`, managed — ADMIN (чтение и запись)),
   `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
   в деградированном режиме хранилища контур **не монтируется** → 404).
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
@@ -2098,19 +2103,78 @@
   исполнитель, ADR-099/ADR-077) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
-- **SSH-доступ — секрет вызова, а не файл в control plane** (ADR-077, протокол 4).
+- **SSH-доступ — секрет вызова, а не файл в control plane** (ADR-077, протокол 4;
+  режим доставки `git`/`agent` — протокол 6, PROP-124 §2).
   Приватный ключ per-agent раскрывается в control plane и уходит в порт **значением**:
   `ExecSecret` (`execution/ports/execution-port.ts`: `kind:'ssh-key'`, `privateKey`,
-  `passphrase?`) в `ExecRequest.secrets`. Материализацию делает **точка исполнения**:
+  `passphrase?`, `mode?:'git'|'agent'`) в `ExecRequest.secrets`. Материализацию делает
+  **точка исполнения**:
   `execution/secret-env.ts` (`materializeSecretEnv` — inline-режим) либо исполнитель
   (`packages/executor/src/secrets.ts` — remote-режим; путь к файлу control plane в его
   контейнере не существует, поэтому прописать его в `GIT_SSH_COMMAND` нельзя).
   Итог: **в control plane временных файлов с ключом не остаётся** — только значение в
   запросе; `git/ssh-env.ts` (`toSshSecret`) превращает раскрытый ключ в `ExecSecret`,
   `engine/tools/git-ssh.ts` отдаёт `secrets` (не `env`), `git/exec.ts` и `git/git-service.ts`
-  передают `secrets` в порт. Значения **не логируются** и **не возвращаются** в ответе;
-  фоновые процессы (`spawnBackground`) секреты не поддерживают — fail-closed с кодом
-  `ESECRETS` (`EXECUTION_SECRETS_UNSUPPORTED_CODE`).
+  передают `secrets` в порт. Значения **не логируются** и **не возвращаются** в ответе.
+  **Фоновые процессы (`spawnBackground`) секреты поддерживают** (протокол 6, PROP-124 §7):
+  материал готовится у точки исполнения и гасится **вместе с процессом** (выход,
+  `stop()`, таймаут) — `inline-execution-port.ts` (`spawnBackground`: `materializeSecretEnv`
+  → `cleanupMaterial`, идемпотентный промис, общий на все точки выхода); подготовка
+  не удалась → процесс **не запускается** (`ExecutionError`, `reason:'spawn_failed'`),
+  «тихо» выполнить команду без ключа нельзя. Удалённый порт требует признака
+  `features.secretsSpawn` (+ `features.sshAgent` для `mode:'agent'`) — адрес без
+  признака в кандидаты не попадает, тихого фоллбека нет.
+- **Уборка SSH-материала — одна реализация на обе стороны** (`execution/ssh-sweep.ts`):
+  `sweepStaleSshDirs`/`startSshSweep`/`ensureSshSweepStarted`; исполнитель делегирует
+  сюда (точечный runtime-импорт core) — иначе core создавал бы каталоги, которые
+  никто не убирает. Критерий уборки — **«жив ли владелец»** (`owner.pid` в каталоге
+  материала: pid процесса + время старта из `/proc/<pid>/stat`), а не «жив ли агент»:
+  владелец мёртв (или pid переиспользован) → агент гасится (`SIGTERM`→`SIGKILL`) и
+  каталог убирается **даже если агент жив**; владелец жив → каталог **не трогается
+  никогда** (длинный фоновый прогон не теряет ключ из-за «старости»). Каталоги без
+  владельца (git-режим, прошлые версии) — по возрасту (TTL час). Периодический
+  reaper — таймер `unref` раз в 10 минут (`SSH_SWEEP_INTERVAL_MS`), первая уборка — сразу
+  (`immediate`); в control plane reaper поднимается **лениво** из `materializeSecretEnv`.
+- **Единый гейт SSH-доступа** (`engine/ssh/access.ts`, PROP-124 §3) — **единственная**
+  точка раскрытия SSH-ключа в ядре (ADR-076/PROP-124): второй вызов `reveal()` стал бы
+  обходом гейта. `resolveSshAccess(req)` — порядок проверок, каждая fail-closed:
+  1) **выбор ключа** (`selectKey`: явный `keyId` либо единственный подходящий; 0 → `key_not_found`,
+     >1 → `ambiguous`);
+  2) **тип использования** (`usages`; ключ без нужного `usage` → `usage_denied`);
+  3) **привязка к агенту** (`agentIds`) — **только** для `purpose:'ssh'` (для git не
+     проверяется — решение владельца); отсутствие роли или несовпадение →
+     `agent_not_linked`;
+  4) **хост/порт** (`allowHosts`/`allowPorts`) — **только** для `purpose:'ssh'` **и**
+     только в режиме `tools` (в `agent` фильтрация не применяется): пустой
+     `allowHosts` → **ни один хост не разрешён** (`host_denied`), пустой `allowPorts` →
+     только порт 22 (`port_denied`), хост не задан → `policy_required`; матчер хостов —
+     общий `hostMatchesRule` (ADR-099);
+  5) **`reveal()` — последним**: до этого момента все проверки пройдены, при отказе
+     секрет **не раскрывается никогда**. Отказ — `SshAccessError` с машинным кодом
+     (`key_not_found`/`usage_denied`/`agent_not_linked`/`host_denied`/`port_denied`/
+     `policy_required`/`ambiguous`); в тексте — имя ключа/хост, **без материала**.
+  Для git (`purpose:'git'`) поле `mode` в запросе **отсутствует** намеренно: режим
+  инстанса для git не применяется, и передавать константу было бы ловушкой.
+  Git-путь отказывает i18n-ключом `git.ssh_key_required` (нужен ключ, пригодный для
+  git), отсутствие ключа — `sshkey.not_found`.
+- **Секреты вызова для режима `agent`** (`engine/ssh/access.ts`):
+  `resolveSshSecretsForExec({store, mode, agentRole, logger?})` — все ключи с
+  `usages:'ssh'`, привязанные к роли агента, в режиме доставки `agent`; лимит
+  `MAX_SSH_EXEC_SECRETS` = 4 (совпадает с лимитом протокола), лишние отбрасываются по
+  стабильному порядку (имя, затем id) с предупреждением **без материала**;
+  `mode !== 'agent'` → **пустой массив** (в режиме `tools` ключ в shell не попадает
+  никогда); без роли агента → пустой массив (fail-closed); ошибки хранилища и ошибки
+  гейта **не бросаются** — ключ пропускается с предупреждением, вызов идёт без ключа.
+  `createSshSecretsResolver({store?, getMode, agentRole?, isPlan?, logger?})` — фабрика
+  резолвера для тула: собирается оркестратором **один раз** и кладётся в контекст как
+  `ShellToolExtra.sshSecrets` (`engine/tools/shell.ts`); тул только спрашивает
+  «какие ключи положены в этот вызов» — политику (режим инстанса, роль, plan-режим)
+  решает оркестратор. **Роль читается в момент вызова** (геттер `agentRole`), а не при
+  создании резолвера: у сабагента своя роль (`engine/tools/task/run-cycle.ts` собирает
+  резолвер для роли **ребёнка**), у основной сессии роль может смениться между
+  вызовами. **В plan-режиме ключ не выдаётся** (`isPlan`): план ничего не выполняет, а
+  ключ в окружении планирования утекал бы в текст плана/лог. Ошибка резолвера **не
+  роняет вызов** — команда уходит без ключа.
 - `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (45 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);
@@ -2202,9 +2266,18 @@
   `modalityModels`/`gcDays`; резолвер `resolveAttachmentsSettings` — env `SYNTH_ATTACHMENTS_*` >
   runtime > config > defaults, `modalityModels` собирается по семействам; применяется **сразу**,
   сервис вложений и pruner читают значение на каждый вызов),
+  `sshMode` + live-состояние (`createLiveSshMode`, PROP-124: режим работы инстанса с
+  SSH-ключами `tools`|`agent`; резолвер `resolveSshMode` — приоритет **env
+  `SYNTH_SSH_MODE` > runtime (`settings.json`/PG) > `config.yaml` `ssh.mode` > `tools`**;
+  невалидный env — **ошибка конфигурации на старте** (fail-closed, как
+  `SYNTH_EXECUTION_MODE`), второй путь чтения переменной не заводим; при env-значении
+  runtime заблокирован (`envLocked`), из UI режим не перекрывается; применяется **сразу**
+  (`restartRequired:false`) — оркестратор и резолверы читают live-значение на каждый
+  вызов; `getSshMode`/`setSshMode`/`clearSshMode`),
   `McpRegistryStore` (единый реестр MCP, ADR-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (ADR-046), `SSHKeyStore`
-  (`secrets/ssh-keys`, шифрование at-rest, ADR-076),
+  (`secrets/ssh-keys`, шифрование at-rest, ADR-076; PROP-124: политика ключа `usages`/
+  `allowHosts`/`allowPorts` — в метаданных, секреты наружу не отдаются),
   `ExternalCredentialStore` (ADR-105 Ф1: внешние доступы к коннекторам —
   `secrets/oauth/credentials.json`, `0600`; access/refresh-токены зашифрованы
   мастер-ключом (`enc:v1:…`), наружу отдаются только метаданные с маской;

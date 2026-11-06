@@ -132,7 +132,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
 - **Схема и миграции (`migrations/*`, `migrate.ts`).** Свой контур версионирования
   (НЕ `meta.json`/ADR-092): таблица `synth_schema_migrations(version int PK, id text,
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
-  (`src/migrations/001-init.ts` … `029-message-stream-v2.ts`; **29 миграций**, реестр —
+  (`src/migrations/001-init.ts` … `031-ssh-key-policy.ts`; **31 миграция**, реестр —
   `src/migrations/index.ts`, версии строго возрастают) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
   Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
@@ -160,6 +160,15 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `028_message_reasoning_signature` — подписи reasoning (ADR-117), `029_message_stream_v2` —
   аддитивные колонки `messages.ord`/`turn_id`/`step_index`/`status` + индекс `(session_id, ord)`
   (ADR-118; данные проставляет построчная миграция ядра — `message-stream-v2`, не SQL).
+  `030_session_retry` — колонка счётчика повторов в `sessions`.
+  `031_ssh_key_policy` — **политика SSH-ключа** (PROP-124): в контракт `SSHKey` добавлены
+  поля `usages` (`git`/`ssh`), `allowHosts` (правила хостов) и `allowPorts` (порты);
+  порт их не писал и не читал — после reload ключ терял политику (тихая потеря данных).
+  Миграция — три идемпотентных `ALTER TABLE ssh_keys ADD COLUMN IF NOT EXISTS`:
+  `usages text[] NOT NULL DEFAULT ARRAY['git']`, `allow_hosts text[] NOT NULL DEFAULT
+  ARRAY[]::text[]`, `allow_ports integer[] NOT NULL DEFAULT ARRAY[]::integer[]`
+  (+ `COMMENT ON COLUMN`). **Дефолты для существующих строк — как при чтении файлового
+  стора** (fail-closed): `usages = {git}`, списки хостов/портов пустые.
   Все идемпотентны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
@@ -281,7 +290,24 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
     `ORDER BY ordinal`, `removeReference` удаляет **все** совпадения
     (паритет с file/memory).
   - `ssh_keys` — `UNIQUE INDEX (lower(name))`: код делает предпроверку, БД
-    гарантирует инвариант и закрывает гонку.
+    гарантирует инвариант и закрывает гонку. **Политика ключа (PROP-124)** —
+    колонки `usages text[]`/`allow_hosts text[]`/`allow_ports integer[]` (миграция
+    `031_ssh_key_policy`); чтение и запись — в `ports/content.ts`
+    (`PostgresSSHKeyRepository`) **с нормализацией из shared**, чтобы поведение
+    совпадало с файловым и memory-стором:
+    - **чтение** (`sshKeyToMeta` и `reveal`): `usages` — `asSshUsages(row.usages)`
+      (значения не из `SSH_KEY_USAGES` отбрасываются; **колонка отсутствует** — строка
+      без миграции — `undefined` → `normalizeSshKeyUsages` даёт `['git']`, fail-closed),
+      `allowHosts` — `normalizeSshKeyAllowHosts(asStringArray(row.allow_hosts))`,
+      `allowPorts` — `normalizeSshKeyAllowPorts(asNumberArray(row.allow_ports))`;
+      явно **пустой** массив `usages` сохраняется пустым (как в файловом сторе) — такой
+      ключ не проходит гейт ни для git, ни для ssh;
+    - **запись** (`create`): `usages`/`allowHosts`/`allowPorts` нормализуются теми же
+      функциями shared и кладутся в колонки (`usages`/`allow_hosts`/`allow_ports`) —
+      значения на БД не нормализуются движком;
+    - **обновление** (`update`): патч `usages`/`allowHosts`/`allowPorts` применяется, если
+      поле передано; иначе берётся **текущее** значение строки (нормализованное) —
+      частичный `PATCH` не затирает политику.
   - `projects` — нормализация `icon`/`color` **при чтении**
     (`normalizeIconKey`/`normalizeColorKey`), паритет с `ProjectStore.load`.
     `mutate` (атомарный read-modify-write порта `ProjectRepository`) — одна транзакция:

@@ -51,6 +51,27 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   общему правилу секций (`ENV_OVERRIDES`). i18n-ключи классификации пути/таймаутов:
   `git.repo_exists`, `git.repo_occupied_repo|stub|dir` (`{path}`, `{entries}` для `dir`),
   `git.repo_path_unreadable`, `git.clone_timeout`/`git.fetch_timeout` (`{timeout}`).
+- PROP-124: **режим инстанса и политика SSH-ключа**. Типы — `src/types/git.ts`:
+  `SSHKeyUsage` (`'git'|'ssh'`) + реестр `SSH_KEY_USAGES`, `SshMode` (`'tools'|'agent'`) +
+  реестр `SSH_MODES`, пределы `MAX_SSH_ALLOW_HOSTS` = 50 / `MAX_SSH_ALLOW_PORTS` = 10.
+  Поля `SSHKey`: `usages?` (`SSHKeyUsage[]`), `allowHosts?` (`string[]`), `allowPorts?`
+  (`number[]`) — опциональные ради обратной совместимости (у ключей до Ф1 их нет).
+  Нормализация — `normalizeSshKeyUsages` (нет поля → `['git']`, fail-closed),
+  `normalizeSshKeyAllowHosts` (нет → `[]`, обрезка пробелов, пустые отбрасываются),
+  `normalizeSshKeyAllowPorts` (нет → `[]`); проверка — `validateSshKeyPolicy`
+  (`{ok:true}|{ok:false;message}`): `usages` — минимум один и только из `SSH_KEY_USAGES`,
+  `allowHosts` — ≤ 50 правил и валидный шаблон хоста, `allowPorts` — ≤ 10 целых 1..65535.
+  Границы хостов — **общий** матчер `src/types/host-pattern.ts`
+  (`isValidHostRule`/`HOST_RULE_FORMAT_HINT`; exact, `*.suffix` — только поддомены,
+  IP-литерал/CIDR — только по IP-литералу, `*` недопустим) — семантику второй раз не
+  заводить. Zod — `sshKeyCreateSchema`/`sshKeyUpdateSchema` (`usages` — непустой массив,
+  `allowHosts` — ≤ 50 по `sshHostRuleSchema`, `allowPorts` — ≤ 10 целых 1..65535).
+  **Конфиг** — секция `ssh` (`sshConfigSchema` + `SshConfig`: `mode` — `z.enum(SSH_MODES)`,
+  default `tools`; дефолт — в `defaults.ts`). **`SYNTH_SSH_MODE` НЕ входит в
+  `ENV_OVERRIDES`** (`src/config/env-overrides.ts`): режим читает дедикарованный резолвер
+  core (`resolveSshMode`) — fail-closed на невалидном значении (как
+  `SYNTH_EXECUTION_MODE`/`SYNTH_STORAGE_BACKEND`), иначе одно значение трактовалось бы
+  двумя способами.
 - ADR-052/O1: `security.bootstrapServiceKeys` (installer service-key'и:
   `label`/`secret`/`scopes`/`roles?`/`description?`; Zod `bootstrapServiceKeySchema`/
   `bootstrapServiceKeysSchema`); объектный env-оверрайд `SYNTH_BOOTSTRAP_SERVICE_KEYS`

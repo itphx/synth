@@ -66,6 +66,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_EXECUTION_TIMEOUT_MS` | ADR-077: таймаут exec-вызова, мс | `30000` |
 | `SYNTH_EXECUTION_CONCURRENCY` | ADR-077: лимит одновременных exec-вызовов | число CPU процесса |
 | `SYNTH_EXECUTION_FAIL_MODE` | ADR-077: поведение при недоступном исполнителе (`fail`/`inline-fallback`) | `fail` |
+| `SYNTH_SSH_MODE` | PROP-124: режим работы инстанса с SSH-ключами — `tools` (адресные тулы, обязательная политика хостов) \| `agent` (эфемерный `ssh-agent` на время вызова). Невалидное значение — **ошибка конфигурации на старте** (fail-closed, как `SYNTH_EXECUTION_MODE`) | `ssh.mode` (`tools`) |
 
 **UI (Vite):**
 
@@ -178,6 +179,17 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_TLS_CERT_FILE` | ADR-099: путь к PEM-файлу клиентского сертификата (mTLS) | — |
 | `SYNTH_TLS_KEY_FILE` | ADR-099: путь к PEM-файлу приватного ключа клиента (mTLS) | — |
 | `SYNTH_TLS_REJECT_UNAUTHORIZED` | ADR-099: проверять сертификат сервера (`true`/`1`/`false`/`0`) | `true` |
+
+> **Исключение — `ssh.mode` (PROP-124).** Переменная `SYNTH_SSH_MODE` **не входит** в
+> реестр `ENV_OVERRIDES` (`packages/shared/src/config/env-overrides.ts`): режим читает
+> дедикарованный резолвер core (`resolveSshMode`/`createLiveSshMode`,
+> `packages/core/src/storage/runtime-settings.ts`) — как `SYNTH_EXECUTION_MODE`/
+> `SYNTH_STORAGE_BACKEND`. Причина — **fail-closed**: невалидное значение должно обрывать
+> старт, а не «предупреждение в лог + игнор», как у обычных env-оверрайдов.
+> Следствие для диагностики: дамп `synth config show` показывает значение из
+> `config.yaml` (секция `ssh`), а **эффективное** значение — по приоритету
+> `env > runtime (UI) > config.yaml > default`; узнать его можно из
+> `GET /api/v2/settings/ssh` (поле `source`).
 
 ### Env-переменные обслуживания (ADR-091)
 
@@ -309,6 +321,10 @@ execution:                         # ADR-077: топология исполне�
                                   # SYNTH_EXECUTION_FAIL_MODE
     tokenSecret: ""               # путь/ссылка на токен исполнителя (НЕ значение — инвариант 13);
                                   # SYNTH_EXECUTION_TOKEN
+
+ssh:                             # PROP-124: режим работы инстанса с SSH-ключами
+  mode: "tools"                  # tools (по умолчанию, fail-closed) | agent (эфемерный ssh-agent);
+                                  # SYNTH_SSH_MODE; неверное значение env — ошибка на старте
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
@@ -2023,6 +2039,48 @@ git:
   localTimeoutMs: 120000   # SYNTH_GIT_LOCAL_TIMEOUT_MS — commit/checkout/stash
   networkTimeoutMs: 300000 # SYNTH_GIT_NETWORK_TIMEOUT_MS — push/pull
 ```
+
+### Режим доступа по SSH (`ssh.*`, PROP-124)
+
+Инстанс выбирает, **как** SSH-ключи реестра попадают к потребителю. Выбор делает
+администратор инстанса; оба режима опираются на один реестр ключей и один шов
+раскрытия секрета (`engine/ssh/access.ts`).
+
+| | `tools` | `agent` |
+|---|---|---|
+| Как ключ попадает к потребителю | argv адресных тулов (`-i` на время вызова) | эфемерный `ssh-agent` на время вызова (`SSH_AUTH_SOCK`) |
+| Политика хостов/портов на ключе | **обязательна**, проверяется до запуска | **не применяется** (ограничение — на стороне хоста, `authorized_keys`) |
+| `execute_shell` | ключа не видит | ключ виден всем дочерним процессам вызова |
+| Ansible и существующие проекты | не работают (нет ssh-доступа из shell) | работают как есть |
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `ssh.mode` | Режим работы инстанса с SSH-ключами: `tools` \| `agent`. Env — `SYNTH_SSH_MODE` | `tools` |
+
+```yaml
+ssh:
+  mode: tools   # SYNTH_SSH_MODE — tools | agent
+```
+
+- **Дефолт `tools`** — fail-closed: без явного выбора ключ не попадает в окружение
+  команд.
+- **Приоритет значения — `env > runtime (UI) > config.yaml > default`.** Runtime-значение
+  живёт в `{dataDir}/settings.json` (или PG) и меняется из UI без рестарта:
+  `GET/PUT/DELETE /api/v2/settings/ssh` (см. [API_V2.md](./API_V2.md) §5.15.2).
+- **Невалидное значение env — ошибка конфигурации на старте** (fail-closed, как
+  `SYNTH_EXECUTION_MODE`/`SYNTH_STORAGE_BACKEND`): инстанс с `SYNTH_SSH_MODE=aggent`
+  не поднимается. Второго пути чтения переменной нет — резолвер один.
+- **Env-фиксация блокирует UI:** при заданном `SYNTH_SSH_MODE` runtime-значение из UI не
+  перекрывается — попытка сменить режим даёт `409 CONFLICT`.
+- **Политика ключа** (`usages`, `allowHosts`, `allowPorts`) хранится **в ключе**, а не в
+  конфиге инстанса, и правится через API реестра ключей (см. [API_V2.md](./API_V2.md)
+  §5.15.1). В режиме `agent` поля хостов/портов **не применяются** и в форме ключа не
+  показываются — вместо них пояснение про `authorized_keys`.
+- **Ограничения режима `agent` (называем прямо).** Адресной фильтрации нет: пока вызов
+  жив, процесс может подключиться к любому хосту, которому доверяет ключ (реальная
+  граница — `authorized_keys`: `from=`, `restrict`, `permitopen=`, `command=`). Форвардинг
+  агента (`ssh -A`) возможен. Материал ключа после `ssh-add` удаляется с диска и остаётся
+  только в памяти агента.
 
 ### Таймауты встроенных тулов
 

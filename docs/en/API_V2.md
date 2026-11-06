@@ -1043,21 +1043,79 @@ not go over the wire; the list of the changed files (`files`) is full at the sam
 
 ### 5.15.1 Agent SSH keys — `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` (both, ADR-076)
 
-Responses — only `SSHKeyMeta` (`id`/`name`/`type`/`agentIds`/`createdAt`/`updatedAt`);
-`privateKey`/`passphrase` are encrypted at-rest (AES-256-GCM) and are **never** returned.
+Responses — only `SSHKeyMeta` (`id`/`name`/`type`/`agentIds`/`usages`/`allowHosts`/
+`allowPorts`/`createdAt`/`updatedAt`); `privateKey`/`passphrase` are encrypted at-rest
+(AES-256-GCM) and are **never** returned.
 
 | Method | Path | RBAC (backend / core) | Purpose |
 |---|---|---|---|
 | GET | `/api/v2/ssh-keys` | auth | All keys; `?agentId=` — an agent's keys |
-| POST | `/api/v2/ssh-keys` | ADMIN / auth | Create: `{name, type?, privateKey, passphrase?, agentIds?}` → 201 |
+| POST | `/api/v2/ssh-keys` | ADMIN / auth | Create: `{name, type?, privateKey, passphrase?, agentIds?, usages?, allowHosts?, allowPorts?}` → 201 |
 | GET | `/api/v2/ssh-keys/:id` | auth | Key by id |
-| PATCH | `/api/v2/ssh-keys/:id` | ADMIN / auth | Partial update (including changing `privateKey`) |
+| PATCH | `/api/v2/ssh-keys/:id` | ADMIN / auth | Partial update (including changing `privateKey` and the policy) |
 | DELETE | `/api/v2/ssh-keys/:id` | ADMIN / auth | Delete the key entirely → 204 |
 | GET | `/api/v2/agents/:agentId/ssh-keys` | auth | Keys linked to the agent |
 | POST | `/api/v2/agents/:agentId/ssh-keys` | ADMIN / auth | Create with a link to the agent (merges `agentIds`) → 201 |
 | DELETE | `/api/v2/agents/:agentId/ssh-keys/:keyId` | ADMIN / auth | **Unlink** the key from the agent (the key is not deleted) |
 
+**Key policy (PROP-124).** Three fields define how a key is fit for use:
+
+| Field | Type | Rules | Default |
+|-------|------|-------|---------|
+| `usages` | `('git'\|'ssh')[]` | **at least one** value; an unknown value → 400 | `['git']` — keys created before stage Ф1 have no such field; on read it is normalized to `['git']` (fail-closed) |
+| `allowHosts` | `string[]` | ≤ **50** rules; a rule is an exact hostname, `*.suffix` (**subdomains only** — the suffix itself does not match), an IP literal or a CIDR (**only by IP literal**); the `*` pattern ("any host") is **forbidden** and allows nothing | `[]` — in the `tools` mode an empty list **allows no host at all**; in the `agent` mode the field is not applied |
+| `allowPorts` | `number[]` | ≤ **10** ports; an integer **1..65535** | `[]` — only the standard ssh port (**22**) is allowed |
+
+- `usages` — how the key is used: `git` (the key is injected into git operations,
+  `GIT_SSH_COMMAND`) and `ssh` (the key is handed to the addressable tools in the `tools`
+  mode or to the ephemeral `ssh-agent` in the `agent` mode).
+- Host rules use the **shared matcher** of ADR-099 (`hostMatchesRule`): the semantics of
+  `*.suffix`/CIDR/`*` are neither redefined nor duplicated.
+- **Write errors — 400 `VALIDATION_ERROR`:** an empty `usages`; an unknown `usages` value;
+  an invalid host pattern or an empty rule; a port outside 1..65535; exceeding the limits
+  (50 hosts / 10 ports). Previously saved values are **not deleted** and take effect again
+  when the instance mode is switched.
+- **The policy applies only in the `tools` instance mode** (`ssh.mode`, §5.15.2): in the
+  `agent` mode the host and port filtering is **not applied**.
+- **A refusal by policy during a git operation** (`/api/v2/git/repos/clone|fetch` and the
+  `project_repo_clone`/`project_repo_fetch` tools) gives **400 `git.ssh_key_required`** — the
+  same code as "no key given": a key suitable for git operations is required. A key that
+  does not exist gives `sshkey.not_found` (404).
+- **Secrets are never returned:** `privateKey`/`passphrase` are not part of any response
+  (`GET`/`POST`/`PATCH`) — only the key metadata goes out.
+
 Codes: `sshkey.not_found` (404), `sshkey.name_exists` (409), `sshkey.decrypt_failed` / `sshkey.encryption_unavailable` (500), `sshkey.env_failed` (400, via `VALIDATION_ERROR`), `VALIDATION_ERROR` (400). Keys with a `passphrase` **are supported**: during a git operation `createSshEnv` prepares askpass (`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`), a preparation failure → `sshkey.env_failed`. In hybrid mode the nested `/api/v2/agents/:agentId/ssh-keys[/:keyId]` is proxied by core to backend (`REMOTE_PROXY_PATTERNS`), like the flat `/ssh-keys` and `/git`; other subpaths of `/api/v2/agents` stay local. The master key — `SYNTH_SECRET_KEY`/`security.secretKey`/`{dataDir}/secrets/master.key`; rotation — the `synth secrets rotate` CLI (not the HTTP API).
+
+### 5.15.2 SSH access mode — `/api/v2/settings/ssh` (both, PROP-124)
+
+Instance-wide runtime setting: how the SSH keys of the registry reach the consumer — `tools`
+(addressable tools, mandatory host/port policy) or `agent` (an ephemeral `ssh-agent` for the
+duration of the call). The source of truth is the code
+(`packages/core/src/storage/runtime-settings.ts`, `resolveSshMode`/`createLiveSshMode`).
+
+| Method | Path | RBAC (backend / core) | Purpose |
+|---|---|---|---|
+| GET | `/api/v2/settings/ssh` | ADMIN (managed) / auth (core) | `{mode:"tools"\|"agent", saved:"tools"\|"agent"\|null, defaults:"tools"\|"agent", source:"env"\|"runtime"\|"config"\|"default", envLocked:boolean, restartRequired:false}` |
+| PUT | `/api/v2/settings/ssh` | ADMIN (managed) / auth (core) | `{mode}` — runtime override (`settings.json`/PG), **applied immediately** (`restartRequired:false`); an invalid value → 400 `VALIDATION_ERROR`; the mode is locked by env and a different value is requested → 409 `CONFLICT`; audit `scope:"ssh"` |
+| DELETE | `/api/v2/settings/ssh` | ADMIN (managed) / auth (core) | Reset the runtime value to env/config/default (the response is the same as for `GET`); audit `scope:"ssh"` |
+
+- **Response fields:** `mode` — the effective mode; `saved` — the stored runtime value
+  (`null` — not set); `defaults` — the base without the runtime value (what `DELETE` returns
+  to); `source` — the source of the effective value; `envLocked` — the mode is pinned by an
+  environment variable (the runtime does not override it); `restartRequired` — always `false`
+  (switching the mode applies without a restart).
+- **Priority — `env > runtime (UI) > config.yaml > default`** (`tools`).
+- **Env locking — 409 `CONFLICT`:** when `SYNTH_SSH_MODE` is set, the runtime value from the
+  UI does not override it. `DELETE` still resets the runtime to the base, but the effective
+  value remains the env one (`mode` and `source` in the response show this).
+- **An invalid env value is a configuration error at startup** (fail-closed, like
+  `SYNTH_EXECUTION_MODE`): an instance with an invalid `SYNTH_SSH_MODE` does not come up.
+  The branch is defensive — it answers 500 with the configuration text instead of silently
+  falling back to the default.
+- **Audit** (`scope:"ssh"`, actions `update`/`reset`) — best-effort: a failure to write the
+  audit entry does not break the operation. Key material never reaches the audit (it holds
+  the mode only).
+- The mode is managed in the UI: the "Agents" section → "SSH keys" (mode switch; ADMIN).
 
 ### 5.16 MCP — `/api/v2/mcp`
 

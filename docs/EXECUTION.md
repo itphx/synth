@@ -14,8 +14,11 @@
 > MCP-серверы у себя (**B1**: `SYNTH_EXECUTOR_MCP_SERVERS`, эндпоинты `/mcp/servers`, `/mcp/tools`,
 > `/mcp/call` — появились в протоколе **2**), а control plane к ним подключён (**B2**: `ExecutorMcpSource` +
 > `attachExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе); **актуальная версия
-> протокола — 5** (вложения MCP-результата `attachments[]` в `POST /mcp/call`, `features.mcpAttachments`,
-> ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б); фон — протокол 3, ADR-113),
+> протокола — 6** (ssh-агент для секрета вызова: `mode` в `secrets[]` + `features.sshAgent`, и
+> секреты вызова в **фоновом** запуске `secrets[]` в `POST /exec/spawn` + `features.secretsSpawn`,
+> PROP-124 §2/§7; вложения MCP-результата `attachments[]` в `POST /mcp/call`,
+> `features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077
+> «Обновлено 2026-10-26», (б); фон — протокол 3, ADR-113),
 > совместимость — по полю `protocol` в `GET /capabilities`.
 > Остаток — `inline-shell` (шаг 9) и runbook переключения топологии (шаг 12).
 > Метрики `synth_executor_*` + `/metrics` исполнителя + диагностика
@@ -24,8 +27,9 @@
 > [MAINTENANCE.md](./MAINTENANCE.md) §«Метрики исполнителя и диагностика split-режима»).
 > Перенос git-операций control plane на `ExecutionPort` вместо
 > `simple-git` **выполнен** (ADR-077 «Обновлено 2026-10-26», (а)); доставка SSH-материала и CA —
-> **тоже** (там же, (б) и (в)): SSH-ключ едет на время вызова полем `secrets[]` (протокол 4),
-> CA — конфигурация исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE`).
+> **тоже** (там же, (б) и (в)): SSH-ключ едет на время вызова полем `secrets[]` (протокол 4;
+> режим доставки `git`/`agent` — протокол 6), CA — конфигурация исполнителя
+> (`SYNTH_EXECUTOR_TLS_CA_FILE`).
 
 ---
 
@@ -162,7 +166,8 @@ interface ExecRequest {
   timeoutMs?: number;               // таймаут вызова
   signal?: AbortSignal;             // отмена («Стоп» сессии)
   maxOutputBytes?: number;          // лимит буфера вывода; по умолчанию DEFAULT_MAX_OUTPUT_BYTES (10 МБ)
-  secrets?: ExecSecret[];           // секреты вызова (протокол 4): SSH-ключ — ЗНАЧЕНИЕ, не путь
+  secrets?: ExecSecret[];           // секреты вызова (протокол 4): SSH-ключ — ЗНАЧЕНИЕ, не путь;
+                                    // mode: 'git' (по умолчанию) | 'agent' (протокол 6, PROP-124 §2)
 }
 
 interface ExecResult {
@@ -234,15 +239,18 @@ interface ExecutionPort {
   `packages/core/src/engine/tools/shell.ts`), git — 20 КБ (`MAX_GIT_OUTPUT`,
   `packages/core/src/engine/tools/git.ts`), `rg` — 200 строк
   (`packages/core/src/engine/tools/search.ts`).
-- **Секреты вызова — `secrets?: ExecSecret[]` (протокол 4).** Материал, нужный точке
+- **Секреты вызова — `secrets?: ExecSecret[]` (протокол 4; режим доставки — протокол 6).**
+  Материал, нужный точке
   исполнения **на время одной команды** (сейчас — приватный SSH-ключ с необязательной
   passphrase, ADR-076). Передаётся **значением**, а не путём к файлу: путь control plane
   в контейнере исполнителя не существует. Материализацию делает **точка исполнения**:
   временный ключ `0600` в каталоге `0700` (+ askpass `0700` при passphrase), удаление —
   **всегда** (успех, ошибка команды, таймаут, отмена). Значения **не логируются** и **не
-  возвращаются** в ответе (ни в успехе, ни в ошибке). Фоновые процессы
-  (`spawnBackground`) секреты **не поддерживают** — fail-closed с кодом `ESECRETS`
-  (`EXECUTION_SECRETS_UNSUPPORTED_CODE`) с обеих сторон.
+  возвращаются** в ответе (ни в успехе, ни в ошибке). **Фоновые процессы**
+  (`spawnBackground`) секреты **поддерживают** (протокол 6, PROP-124 §7): материал
+  готовится у исполнителя и гасится **вместе с процессом** (выход, `stop()`, таймаут);
+  признак поддержки — `features.secretsSpawn` (старый исполнитель → адрес не выбирается,
+  тихого фоллбека нет).
 - **Реализации:** `InlineExecutionPort` — исполнение в процессе поверх `spawn` с
   `detached: true` (лидер группы: «Стоп»/таймаут гасят всё дерево, завершение — по `exit`
   с коротким дренажом; см. «Остановка — по группе процессов…» выше); удалённая — HTTP к
@@ -334,11 +342,11 @@ interface ExecutionPort {
 | Метод | Путь | Назначение |
 |---|---|---|
 | `POST` | `/exec` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, maxOutputBytes?, secrets? }` → `200 { stdout, stderr, exitCode, truncated, durationMs }`; при неудаче — код ошибки с телом `{ error: { reason, code, message, stdout, stderr, killed, signal, truncated, durationMs } }` (зеркалит `ExecutionError`) |
-| `POST` | `/exec/spawn` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, requires? }` → `201 { processId, pid }`; фоновый процесс (ADR-077, шаг 7c; ADR-113): `400` — невалидное тело или `cwd` вне workspace, `429` — превышен лимит живых фоновых процессов |
+| `POST` | `/exec/spawn` | тело: `{ command: ExecCommand, cwd?, env?, timeoutMs?, requires?, secrets? }` → `201 { processId, pid }`; фоновый процесс (ADR-077, шаг 7c; ADR-113): `400` — невалидное тело или `cwd` вне workspace, `429` — превышен лимит живых фоновых процессов; `secrets[]` — секреты вызова в фоне (протокол 6, PROP-124 §7), разбор и лимиты — как у `POST /exec` |
 | `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
 | `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
 | `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса; тело `{ signal }` — `SIGTERM`\|`SIGKILL` (пустое тело — `SIGTERM` по умолчанию, иной сигнал — `400`); через 5 с после `SIGTERM` — `SIGKILL`; сигнал уходит **группе процессов** (потомки shell-формы гаснут вместе с ней), идемпотентно; `404` — процесс не найден |
-| `GET` | `/capabilities` | `{ protocol: 5, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments }, limits?: { timeoutMs, maxOutputBytes } }` — рукопожатие версии протокола и состава toolchain'а; `limits` — **аддитивное** поле (эффективные потолки исполнителя: таймаут команды и буфер вывода): старый control plane его просто не читает, а у старого исполнителя поля нет — это норма |
+| `GET` | `/capabilities` | `{ protocol: 6, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments, sshAgent, secretsSpawn }, limits?: { timeoutMs, maxOutputBytes } }` — рукопожатие версии протокола и состава toolchain'а; `limits` — **аддитивное** поле (эффективные потолки исполнителя: таймаут команды и буфер вывода): старый control plane его просто не читает, а у старого исполнителя поля нет — это норма |
 | `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
 | `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
 | `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError, attachments? }`; `attachments[]` — аддитивное поле протокола **5** (ADR-115): нетекстовые блоки результата (`image`/`audio`/`resource.blob`) в base64 без `data:`-префикса, `{mime, base64, name?}`, до 25 МиБ на файл и 20 МиБ на вызов, при `isError` не собираются; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
@@ -348,7 +356,7 @@ interface ExecutionPort {
 
 ```json
 {
-  "protocol": 5,
+  "protocol": 6,
   "toolchain": {
     "git": "git version 2.39.2",
     "rg": "ripgrep 14.1.0",
@@ -359,12 +367,18 @@ interface ExecutionPort {
   "os": "linux",
   "arch": "x64",
   "node": "v22.11.0",
-  "features": { "background": true, "secrets": true, "mcpAttachments": true },
+  "features": {
+    "background": true,
+    "secrets": true,
+    "mcpAttachments": true,
+    "sshAgent": true,
+    "secretsSpawn": true
+  },
   "limits": { "timeoutMs": 1800000, "maxOutputBytes": 33554432 }
 }
 ```
 
-- **Поле `limits` — аддитивное** (протокол остаётся **5**): эффективные потолки
+- **Поле `limits` — аддитивное** (протокол **6**): эффективные потолки
   исполнителя — таймаут команды (`timeoutMs`) и буфер вывода (`maxOutputBytes`).
   Значения берутся из env исполнителя (`SYNTH_EXECUTOR_MAX_TIMEOUT_MS`,
   `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES`). Старый control plane поле просто не читает
@@ -384,10 +398,12 @@ interface ExecutionPort {
   процессов** команды (через 5 с — `SIGKILL`), потомков не остаётся.
   Семантика «Стоп» (ADR-005) сохраняется: клиентский `AbortSignal` доезжает до
   исполнителя тем же эффектом, что и в inline-режиме.
-- **Версия протокола — 5** (было 1 → 2 → 3 → 4 → 5): добавлены MCP-эндпоинты (v2),
-  фоновые процессы (v3), **секреты вызова** (v4, ADR-077 «Обновлено 2026-10-26», (б))
-  и **вложения MCP-результата** (v5, ADR-115: `attachments[]` в `POST /mcp/call`,
-  признак `features.mcpAttachments`). Старый исполнитель их не знает ⇒ **control plane и
+- **Версия протокола — 6** (было 1 → 2 → 3 → 4 → 5 → 6): добавлены MCP-эндпоинты (v2),
+  фоновые процессы (v3), **секреты вызова** (v4, ADR-077 «Обновлено 2026-10-26», (б)),
+  **вложения MCP-результата** (v5, ADR-115: `attachments[]` в `POST /mcp/call`,
+  признак `features.mcpAttachments`) и **ssh-агент + секреты в фоне** (v6, PROP-124 §2/§7:
+  поле `mode` у секрета вызова + признаки `features.sshAgent`/`features.secretsSpawn`).
+  Старый исполнитель их не знает ⇒ **control plane и
   исполнитель обязаны быть одной версии** (см. «Операционные следствия» в
   [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md)).
 - **Вложения MCP-результата — только с протоколом 5 (деградация, а не отказ).**
@@ -460,10 +476,10 @@ MCP-серверы исполнитель — у него и toolchain, и Chrom
   **только** во flavor'ах с браузером (`browser`/`full`); проверено в контейнере:
   `/mcp/servers` → `up`, 25 инструментов, DOM рендерится. Детали — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) п. 9.
 
-### 4.2.2. Секреты вызова и доверие git (протокол 4)
+### 4.2.2. Секреты вызова и доверие git (протокол 4; режим доставки и фон — протокол 6)
 
 Секреты вызова — **аддитивное** поле `secrets[]` в `POST /exec`
-(`{ kind: 'ssh-key', privateKey, passphrase? }`). Control plane передаёт
+(`{ kind: 'ssh-key', privateKey, passphrase?, mode? }`). Control plane передаёт
 приватный SSH-ключ **значением**: путь к файлу в control plane в контейнере
 исполнителя не существует, поэтому прописать его в `GIT_SSH_COMMAND` нельзя.
 
@@ -481,15 +497,6 @@ MCP-серверы исполнитель — у него и toolchain, и Chrom
   **без** ключа, а операция упадёт с невнятной ошибкой аутентификации.
 - **Значения не логируются и не возвращаются** в ответе (ни в успехе, ни в
   ошибке); в `/capabilities` их нет.
-- **Только синхронный `/exec`.** `POST /exec/spawn` (фоновые процессы) секреты
-  **не поддерживает**: процесс переживает вызов, а материал доставляется «на время
-  вызова». Отказ — fail-closed с обеих сторон: исполнитель отвечает
-  `400 invalid_request`, control plane — ошибкой `ESECRETS`
-  (`EXECUTION_SECRETS_UNSUPPORTED_CODE`).
-- **Признак поддержки — `features.secrets: true`** в `GET /capabilities` (и версия
-  протокола ≥ 4). Исполнитель протокола < 4 **без** этого признака в кандидаты
-  на вызов с секретами **не попадает**; если в пуле нет ни одного такого адреса —
-  отказ `ESECRETS`: выполнять команду без ключа нельзя.
 - **Доверие git (CA) — конфигурация исполнителя**, а не секрет вызова: env
   `SYNTH_EXECUTOR_TLS_CA_FILE` (путь к файлу CA в окружении исполнителя;
   задан, но файл не читается — **ошибка старта**, fail-closed). Исполнитель
@@ -497,6 +504,62 @@ MCP-серверы исполнитель — у него и toolchain, и Chrom
   `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=http.sslCAInfo`,
   `GIT_CONFIG_VALUE_0=<путь>`. Порядок наложения окружения:
   `env` вызова → CA-тройка `GIT_CONFIG_*` → env секрета (перекрывает всё).
+
+#### Режим доставки секрета — `mode` (`git` | `agent`, протокол 6, PROP-124 §2)
+
+У секрета вызова появилось **аддитивное** поле `mode` — режим доставки ключа:
+
+| `mode` | Что делает точка исполнения | Окружение вызова |
+|---|---|---|
+| `git` (по умолчанию) | ключ файлом `0600` в каталоге `0700`; ключ живёт на диске весь вызов | `GIT_SSH_COMMAND` (`IdentitiesOnly=yes`) |
+| `agent` | **эфемерный `ssh-agent`**: `ssh-agent -a <dir>/agent.sock`, `ssh-add <key>`, затем **приватный ключ и askpass-скрипт удаляются с диска** — материал остаётся только в памяти агента | `SSH_AUTH_SOCK` (+ `SSH_AGENT_PID`); `GIT_SSH_COMMAND` **не ставится** (`IdentitiesOnly=yes` несовместим с agent-идентичностями) |
+
+- **Разбор — строгий:** неизвестное значение `mode` → `400 invalid_request`. Молчаливый
+  фоллбек в `git`-режим означал бы, что команда выполнится без `SSH_AUTH_SOCK`
+  (тихий сбой аутентификации).
+- **Признак поддержки — `features.sshAgent: true`** в `GET /capabilities` (и версия
+  протокола ≥ 6). Исполнитель протокола ≤ 5 поля `mode` не знает ⇒ агентный режим ему
+  недоступен; control plane такой адрес **не выбирает** (тихого фоллбека в `git`-режим
+  нет: процесс не должен пойти без `SSH_AUTH_SOCK`).
+- **Git-путь не меняется:** `mode: 'git'` по умолчанию — ключ файлом + `GIT_SSH_COMMAND`.
+- **Владелец каталога материала.** В режиме `agent` в каталог пишется `owner.pid` (pid
+  процесса, создавшего агента, и время старта из `/proc/<pid>/stat` — best-effort).
+
+#### Секреты вызова в фоновом запуске (протокол 6, PROP-124 §7)
+
+`POST /exec/spawn` принимает `secrets[]` — **на тех же условиях**, что `POST /exec`:
+тот же разбор (`parseExecSecrets`), те же лимиты (максимум 4 записи, `kind === 'ssh-key'`,
+`privateKey` до 16 КиБ, `passphrase` до 4 КиБ, `mode` — `git`/`agent`), то же значение
+(не путь). Материал готовится **у исполнителя** и гасится **вместе с процессом**: выход,
+`stop()`, таймаут, остановка исполнителя.
+
+- **Признак поддержки — `features.secretsSpawn: true`** в `GET /capabilities` (только
+  явный: у старого исполнителя протокола 6 его нет). Такой адрес **не попадает** в
+  кандидаты на фоновый запуск с секретами; если в пуле нет ни одного такого адреса —
+  **отказ**, тихого фоллбека нет: процесс не должен пойти без ключа.
+- **Агентный режим в фоне** (`mode: 'agent'`) требует **обоих** признаков:
+  `features.secretsSpawn` **и** `features.sshAgent` (иначе агент в фоне не поднять).
+
+#### Уборка SSH-материала (reaper)
+
+Уборка осиротевших каталогов `synth-ssh-*` — **одна реализация в core**
+(`packages/core/src/execution/ssh-sweep.ts`): и control plane (inline), и исполнитель
+(remote) зовут её (исполнитель делегирует точечным runtime-импортом core).
+
+- **Критерий — «жив ли владелец», а не «жив ли агент».** В режиме `agent` в каталоге
+  лежит `owner.pid`:
+  - владелец **мёртв** (или его pid переиспользован — не совпало время старта) → агент
+    осиротел: его гасят (`SIGTERM` → `SIGKILL`), каталог убирают — **даже если агент ещё
+    жив** (он всё равно никому не нужен);
+  - владелец **жив** → каталог **не трогают никогда**: длинный фоновый прогон не должен
+    терять ключ из-за «старости» каталога.
+- Каталоги **без** владельца (git-режим, каталоги прошлых версий) — прежнее поведение:
+  живой агент не трогают, остальное убирают по возрасту (TTL час).
+- **Периодический reaper** — таймер `unref` раз в **10 минут** (`SSH_SWEEP_INTERVAL_MS`),
+  первая уборка — сразу при старте процесса (`immediate: true`): каталоги, оставшиеся от
+  жёстко убитого запуска, убираются без ожидания первого тика. В control plane reaper
+  поднимается **лениво** — тем же кодом, который материализует секреты
+  (`ensureSshSweepStarted`, `execution/secret-env.ts`).
 
 ### 4.3. Пул адресов, отказ и параллелизм
 
@@ -592,17 +655,20 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/tools/path-utils.ts`);
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
-- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 5`) и
+- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 6`) и
   состав toolchain'а (`git`/`rg`/`sh`/`bash`/`python3`), ОС и архитектуру. Это источник правды для
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
   `git`/`rg`/`bash` доступными там, где их нет. Версия протокола — **контракт совместимости**:
   исполнитель версии 1 не знает MCP-эндпоинтов, версии 2 — фоновых процессов, версии 3 —
-  секретов вызова, версии 4 — вложений MCP-результата (§4.2), поэтому control
+  секретов вызова, версии 4 — вложений MCP-результата, версии 5 — режима `agent` у секрета
+  и секретов в фоновом запуске (§4.2), поэтому control
   plane и пул исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
   Поле `features` — **аддитивное**: `background: true` означает, что исполнитель умеет
   `/exec/spawn` (фоновые процессы, ADR-077 шаг 7c), `secrets: true` — что принимает
   `secrets[]` в `POST /exec` (протокол 4, см. §4.2.2), `mcpAttachments: true` — что отдаёт
-  вложения MCP-результата в `POST /mcp/call` (протокол 5, ADR-115).
+  вложения MCP-результата в `POST /mcp/call` (протокол 5, ADR-115), `sshAgent: true` — что
+  умеет материализовать секрет в режиме `agent` (протокол 6, PROP-124 §2), `secretsSpawn: true`
+  — что принимает `secrets[]` в `POST /exec/spawn` (протокол 6, PROP-124 §7).
 - **Поле `limits` — тоже аддитивное** (§4.2): эффективные потолки исполнителя
   (таймаут команды и буфер вывода). Старый control plane его не читает; **у старого
   исполнителя поля нет — это норма**, тогда лимиты пула неизвестны. В смешанном пуле
@@ -628,6 +694,15 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   протокола ≤ 4 работает как прежде (результат только текстом), версию для
   деградации не проверяют: отказ означал бы, что MCP-тулы пропали из-за
   старого воркера, хотя вызов исправно исполняется.
+- **Требования `features.sshAgent` и `features.secretsSpawn` (протокол 6).** Оба —
+  **требования, а не деградация**: тихий фоллбек означал бы, что процесс пошёл **без
+  ключа** (в `agent`-режиме — без `SSH_AUTH_SOCK`), а операция упала бы с невнятной
+  ошибкой аутентификации. Адрес без `features.sshAgent` в кандидаты на вызов с
+  секретом в режиме `agent` **не попадает**; адрес без `features.secretsSpawn` — в
+  кандидаты на **фоновый** запуск с секретами **не попадает**. Если в пуле нет ни
+  одного подходящего адреса — **отказ** (не тихий запуск без ключа). Синхронные
+  команды без секретов и вызовы с секретами в `git`-режиме от старого исполнителя
+  работать продолжают.
 - **Egress-политика.** Обращения backend'а к исполнителю проходят через политику встроенных
   инструментов (`egress.tools`, `packages/shared/src/config/types.ts`) — адрес исполнителя должен
   быть разрешён; `POST /api/v2/settings/egress/check` (ADR-099) — offline-проверка без запроса.
@@ -967,7 +1042,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 5**: вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 6**: ssh-агент для секрета вызова `mode`/`features.sshAgent` и секреты в фоновом запуске `secrets[]`/`features.secretsSpawn`, PROP-124 §2/§7; вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -1074,6 +1149,12 @@ Split-топология технически возможна и при одн�
   `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0`), применяется при старте (ADR-099),
   а `gitCaConfig()` control plane в remote-режиме не применяется. Старый исполнитель (протокол
   < 4) → fail-closed `ESECRETS`: команда без ключа не выполняется.
+- **Режим доставки секрета и секреты в фоновом запуске** (PROP-124 §2/§7) —
+  **реализовано** (протокол 6): `mode: 'agent'` — эфемерный `ssh-agent` на время вызова
+  (ключ удаляется с диска после `ssh-add`), признак `features.sshAgent`; `secrets[]` в
+  `POST /exec/spawn` — те же разбор и лимиты, материал гасится вместе с процессом, признак
+  `features.secretsSpawn`. Оба признака — **требования**: нет признака — адрес не
+  выбирается, тихого запуска без ключа нет.
 
 **Закрыто решениями выше** (не открытые):
 
@@ -1164,7 +1245,7 @@ Split-топология технически возможна и при одн�
 - 2026-10-26 — **фаза 2 закрыта**: протокол **4** (`secrets[]` в `POST /exec`, `features.secrets`),
   материализация секрета на исполнителе (`mkdtemp` 0700/ключ 0600, удаление в `finally` + sweep
   `synth-ssh-*` при старте), CA исполнителя (`SYNTH_EXECUTOR_TLS_CA_FILE` → `GIT_CONFIG_*`),
-  fail-closed `ESECRETS` для старого исполнителя и для фоновых процессов; §4.2.2 — раздел
+  fail-closed `ESECRETS` для старого исполнителя; §4.2.2 — раздел
   «Секреты вызова и доверие git».
 - 2026-10-26 — **шаг 7d закрыт**: §9 переведён из «план» в «реализовано» — метрики control plane
   (`synth_executor_queue_depth`/`_workers_busy`/`_wait_seconds`/`_commands_total`) и исполнителя
@@ -1181,3 +1262,14 @@ Split-топология технически возможна и при одн�
   шов `_injectToolAttachments`, тот же, что у `web_fetch({include_media})`). Деградация —
   **не отказ**: исполнитель протокола ≤ 4 отдаёт только текст, вызов не падает (поле
   аддитивное, версия для этого не проверяется).
+- 2026-11-07 — **протокол 6: ssh-агент и секреты в фоновом запуске** (PROP-124 §2/§7).
+  У секрета вызова появилось аддитивное поле `mode` (`git` | `agent`); `agent` —
+  эфемерный `ssh-agent` (`SSH_AUTH_SOCK`/`SSH_AGENT_PID`), приватный ключ и
+  askpass-скрипт удаляются с диска сразу после `ssh-add`; признак —
+  `features.sshAgent`. `POST /exec/spawn` принимает `secrets[]` на тех же условиях,
+  что `POST /exec` (тот же разбор и лимиты), материал гасится вместе с процессом;
+  признак — `features.secretsSpawn`. Оба признака — **требования, а не деградация**:
+  адрес без нужного признака в кандидаты не попадает, пул без такого адреса даёт
+  отказ — тихого запуска без ключа нет. Уборка SSH-материала — общая реализация в
+  core (`execution/ssh-sweep.ts`): критерий — «жив ли **владелец**» (`owner.pid`), а не
+  «жив ли агент»; периодический reaper раз в 10 минут, первая уборка — сразу.
