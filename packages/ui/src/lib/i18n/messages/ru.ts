@@ -3363,6 +3363,15 @@ export const dict = {
   'ssh.access.port_denied': 'Порт {port} не разрешён для SSH-ключа «{key}»',
   'ssh.access.policy_required': 'Для SSH-ключа «{key}» нужен хост: политика хостов обязательна',
   'ssh.access.ambiguous': 'Подходящих SSH-ключей несколько: {keys} — нужен конкретный',
+  'ssh.copy.uploaded': 'Файл {local} загружен на хост {host} по пути {remote}',
+  'ssh.copy.downloaded': 'Файл {remote} скачан с хоста {host} в {local}',
+  // PROP-124 §4c: адресный ssh-тул проброса порта (`ssh_tunnel`).
+  'ssh.tunnel.started':
+    'SSH-туннель запущен (направление {direction}): 127.0.0.1:{listen_port} → {target} на хосте {host}. '
+    + 'Процесс {id}, журнал {log}. Туннель живёт до остановки через process_stop.',
+  'ssh.tunnel.socks_unsupported':
+    'SOCKS-проброс (-D) не поддерживается: у него нет целевого порта, поэтому политику портов ключа '
+    + 'применить не к чему. Используйте направление «local» (-L) или «remote» (-R) с явным целевым портом.',
   'git.ssh_key_required': 'Для репозитория «{path}» требуется SSH-ключ',
   'git.ssh_key_required_hint':
     'Ошибка: для репозитория «{path}» требуется SSH-ключ, но он не задан либо заданный ключ не найден. '

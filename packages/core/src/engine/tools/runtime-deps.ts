@@ -36,7 +36,7 @@ import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import { probeBinaryThroughPort } from '../../execution/probe.js';
 import type { ExecutionPort } from '../../execution/ports/index.js';
 
-export type RuntimeDependency = 'git' | 'rg' | 'sh' | 'bash' | 'ssh' | 'ffmpeg';
+export type RuntimeDependency = 'git' | 'rg' | 'sh' | 'bash' | 'ssh' | 'sftp' | 'ffmpeg';
 
 /**
  * Зависимости, входящие в **снимок** `RuntimeDeps` (требования встроенных
@@ -58,8 +58,18 @@ export type ToolRuntimeDependency = Exclude<RuntimeDependency, 'ffmpeg'>;
  * наборе образа (`EXECUTION_BASE_CAPABILITIES`), а в дополнительном toolchain'е
  * исполнителя — поэтому в remote-режиме доступность `ssh` определяется составом
  * пула, а не наличием в control plane.
+ *
+ * `sftp` — клиент SFTP адресного ssh-тула передачи файлов (`ssh_copy`,
+ * PROP-124 §4b): он из того же toolchain'а, что и `ssh` (пакет openssh-client).
  */
-export const RUNTIME_DEPENDENCIES: readonly ToolRuntimeDependency[] = ['git', 'rg', 'sh', 'bash', 'ssh'];
+export const RUNTIME_DEPENDENCIES: readonly ToolRuntimeDependency[] = [
+  'git',
+  'rg',
+  'sh',
+  'bash',
+  'ssh',
+  'sftp',
+];
 
 /**
  * ADR-115: программы обработки медиа (aux-модели, `engine/attachments/derive.ts`).
@@ -87,6 +97,13 @@ export interface RuntimeDeps {
    */
   ssh?: boolean;
   /**
+   * Клиент SFTP — требование адресного ssh-тула передачи файлов
+   * (PROP-124 §4b).
+   *
+   * Поле необязательное — по тем же правилам, что у `ssh`.
+   */
+  sftp?: boolean;
+  /**
    * Детали недоступности — по зависимости (ADR-077).
    *
    * Технический текст (не переводится): в remote-режиме — «в пуле: 2 из 3
@@ -104,6 +121,7 @@ export const RUNTIME_DEP_BINARY: Record<RuntimeDependency, string> = {
   sh: 'sh',
   bash: 'bash',
   ssh: 'ssh',
+  sftp: 'sftp',
   ffmpeg: 'ffmpeg',
 };
 
@@ -114,6 +132,7 @@ export const RUNTIME_DEP_COMMAND: Record<RuntimeDependency, string> = {
   sh: 'sh',
   bash: 'bash',
   ssh: 'ssh',
+  sftp: 'sftp',
   ffmpeg: 'ffmpeg',
 };
 
@@ -151,10 +170,21 @@ export const TOOL_RUNTIME_DEP: Record<string, ToolRuntimeDependency> = {
   // PROP-124 §4/§5: адресный ssh-тул — клиент SSH нужен в окружении
   // исполнения (в remote-режиме — у адреса пула, где есть toolchain с ssh).
   ssh_exec: 'ssh',
+  // PROP-124 §4b: адресный ssh-тул передачи файлов — клиент SFTP.
+  ssh_copy: 'sftp',
+  // PROP-124 §4c: адресный ssh-тул проброса порта — клиент SSH.
+  ssh_tunnel: 'ssh',
 };
 
 /** Fail-open дефолт: все зависимости считаются доступными. */
-export const ALL_RUNTIME_DEPS_AVAILABLE: RuntimeDeps = { git: true, rg: true, sh: true, bash: true, ssh: true };
+export const ALL_RUNTIME_DEPS_AVAILABLE: RuntimeDeps = {
+  git: true,
+  rg: true,
+  sh: true,
+  bash: true,
+  ssh: true,
+  sftp: true,
+};
 
 /** Доступна ли зависимость. `undefined` (детекция не выполнена) → доступна (fail-open). */
 export function isRuntimeDepAvailable(
@@ -254,7 +284,7 @@ async function detectDeps(port: ExecutionPort): Promise<RuntimeDeps> {
     }),
   );
 
-  const deps: RuntimeDeps = { git: false, rg: false, sh: false, bash: false, ssh: false };
+  const deps: RuntimeDeps = { git: false, rg: false, sh: false, bash: false, ssh: false, sftp: false };
   const details: Partial<Record<RuntimeDependency, string>> = {};
   for (const result of results) {
     deps[result.dep] = result.available;
@@ -425,6 +455,7 @@ export async function refreshRuntimeDeps(
   target.sh = fresh.sh;
   target.bash = fresh.bash;
   target.ssh = fresh.ssh;
+  target.sftp = fresh.sftp;
   target.details = fresh.details;
   return target;
 }

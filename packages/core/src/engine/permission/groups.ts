@@ -140,7 +140,7 @@ export const PROCESS_TOOLS = ['process_list', 'process_logs', 'process_stop', 'p
  * (`isPlanBlockedTool`, `evaluator.ts`): план ничего не выполняет, а адресный
  * SSH — выполнение на удалённом хосте.
  */
-export const SSH_TOOLS = ['ssh_exec'];
+export const SSH_TOOLS = ['ssh_exec', 'ssh_copy', 'ssh_tunnel'];
 
 /** Все тулы пайплайнов (read + write). */
 export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];
@@ -234,6 +234,12 @@ export const TOOL_PATH_PARAMS: Record<string, string[]> = {
   create_directory: ['path'],
   execute_shell: ['cwd'],
   grep_files: ['path'],
+  // PROP-124 §4b: локальный путь адресного ssh-тула передачи файлов — путь
+  // файла проекта: правила `external_directory`/`protected_paths` применяются к
+  // нему так же, как к путям файловых тулов (передача наружу — тоже вынос
+  // данных). Путь `remote` (на другом хосте) локальным путём **не** является и
+  // в проверку не попадает.
+  ssh_copy: ['local'],
   git_status: ['path'],
   git_diff: ['path'],
   git_log: ['path'],

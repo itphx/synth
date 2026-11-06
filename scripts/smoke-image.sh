@@ -271,6 +271,9 @@ run_cmd hard-deps/python3-version python3 --version
 run_cmd hard-deps/pip python3 -m pip --version
 run_sh hard-deps/venv 'rm -rf /tmp/smoke-venv && python3 -m venv /tmp/smoke-venv && /tmp/smoke-venv/bin/python --version && rm -rf /tmp/smoke-venv'
 has_bin hard-deps/openssh-client ssh
+has_bin hard-deps/openssh-client-scp scp
+has_bin hard-deps/openssh-client-sftp sftp
+has_bin hard-deps/rsync rsync
 has_file hard-deps/ca-certificates /etc/ssl/certs/ca-certificates.crt
 
 # --- tier 0 ---

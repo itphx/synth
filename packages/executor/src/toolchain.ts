@@ -38,8 +38,23 @@ export type ToolchainInfo = Record<string, string>;
  * `ffmpeg` — возможность медиа-слоя (ADR-115), не встроенного тула: медиа-раннер
  * core маршрутизирует команду по `requires: ['ffmpeg']`, а remote-порт решает
  * это по инвентарю `/capabilities`.
+ *
+ * `ssh`/`scp`/`sftp`/`rsync` — клиенты удалённого доступа (PROP-124 §4/§5):
+ * адресные ssh-тулы (`ssh_exec`, `ssh_copy`) требуют их в окружении
+ * исполнения. В базовый словарь core (`EXECUTION_BASE_CAPABILITIES`) они
+ * **не входят**: в slim-образе их нет, и базовый словарь — это «всегда
+ * доступно» (ADR-078). Поэтому они здесь: инвентарь `/capabilities` — единственный
+ * способ узнать про них control plane, а remote-маршрутизация по
+ * `ExecRequest.requires` (`['ssh']`, `['rsync']`) смотрит именно в него.
  */
-export const EXTRA_TOOLCHAIN_BINARIES = ['python3', 'ffmpeg'] as const;
+export const EXTRA_TOOLCHAIN_BINARIES = [
+  'python3',
+  'ffmpeg',
+  'ssh',
+  'scp',
+  'sftp',
+  'rsync',
+] as const;
 
 /** Таймаут определения версии одного бинарника, мс. */
 const PROBE_TIMEOUT_MS = 3_000;
@@ -59,6 +74,12 @@ function firstLine(value: string): string {
  * `ENOENT` — программы нет. Прочие ошибки (ненулевой код выхода, таймаут) —
  * программа **есть**: отсутствие поддержки `--version` не означает, что
  * программы нет (например, некоторые оболочки).
+ *
+ * Непустой вывод при **неудачном** запуске версией **не** считается: программа
+ * без `--version` печатает usage/ошибку в stderr и выходит с ненулевым кодом
+ * (`ssh`/`scp`/`sftp` — «unknown option -- -»). Такой текст в отчёте был бы
+ * мусором, поэтому при ошибке в отчёт идёт признак наличия (`present`) —
+ * ровно как задокументировано для этого случая.
  */
 async function probeVersion(bin: string): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
@@ -71,7 +92,13 @@ async function probeVersion(bin: string): Promise<string | null> {
           resolve(null);
           return;
         }
-        const version = firstLine(`${stdout}\n${stderr}`);
+        const stdoutLine = firstLine(stdout);
+        if (err) {
+          // Программа есть (не ENOENT), но версию не отдала — «present».
+          resolve(stdoutLine.length > 0 ? stdoutLine : 'present');
+          return;
+        }
+        const version = stdoutLine.length > 0 ? stdoutLine : firstLine(stderr);
         resolve(version.length > 0 ? version : 'present');
       },
     );

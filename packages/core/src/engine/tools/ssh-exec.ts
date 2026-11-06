@@ -35,7 +35,7 @@
  * ней (PROP-124 §7) и в реестр/лог не попадают.
  */
 import { z } from 'zod';
-import { ToolCapability, normalizeSshKeyUsages, normalizeTlsHost } from '@itphx/synth-shared';
+import { ToolCapability, normalizeTlsHost } from '@itphx/synth-shared';
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
 import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 import { toSshSecret } from '../../git/ssh-env.js';
@@ -43,9 +43,8 @@ import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError } from '../../execution/port
 import type { ExecSecret } from '../../execution/ports/index.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { resolveSshAccess, SshAccessError } from '../ssh/access.js';
-import type { SshAccessErrorCode } from '../ssh/access.js';
+import { sshAccessFailureResult, sshToolFailureResult } from '../ssh/result.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
-import type { SystemMessageKey } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { isAborted, abortedResult } from './abort.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
@@ -165,98 +164,6 @@ interface SshExecParams {
 }
 
 /**
- * Ключ i18n отказа гейта (ADR-041).
- *
- * У каждого машинного кода гейта (`SshAccessErrorCode`) свой ключ
- * `ssh.access.<code>` — текст отказа единый для всех потребителей гейта
- * (адресные ssh-тулы, HTTP-роуты), а не только для `ssh_exec`.
- */
-function sshAccessErrorKey(code: SshAccessErrorCode): SystemMessageKey {
-  switch (code) {
-    case 'key_not_found':
-      return 'ssh.access.key_not_found';
-    case 'usage_denied':
-      return 'ssh.access.usage_denied';
-    case 'agent_not_linked':
-      return 'ssh.access.agent_not_linked';
-    case 'host_denied':
-      return 'ssh.access.host_denied';
-    case 'port_denied':
-      return 'ssh.access.port_denied';
-    case 'policy_required':
-      return 'ssh.access.policy_required';
-    case 'ambiguous':
-      return 'ssh.access.ambiguous';
-  }
-}
-
-/**
- * Параметры подстановки отказа гейта.
- *
- * `{key}` — **имя** выбранного ключа (не список ключей: перечень реестра в
- * текст отказа не попадает — модель берёт нужный id через `ssh_keys_list`).
- * `{keys}` (код `ambiguous`) — тоже без перечисления: вместо него указывается
- * инструмент, который перечень даёт.
- */
-async function sshAccessErrorParams(
-  err: SshAccessError,
-  ctx: { store: SSHKeyRepository; keyId?: string; agentRole?: string; host: string; port?: number },
-): Promise<Record<string, string>> {
-  switch (err.code) {
-    case 'usage_denied':
-      return { key: await resolveKeyLabel(ctx), usage: 'ssh' };
-    case 'agent_not_linked':
-      return { key: await resolveKeyLabel(ctx), agent: ctx.agentRole ?? '—' };
-    case 'host_denied':
-      return { key: await resolveKeyLabel(ctx), host: ctx.host };
-    case 'port_denied':
-      return {
-        key: await resolveKeyLabel(ctx),
-        port: String(ctx.port ?? 22),
-      };
-    case 'policy_required':
-      return { key: await resolveKeyLabel(ctx) };
-    case 'ambiguous':
-      // Перечень ключей не раскрываем: указываем инструмент, который его даёт.
-      return { keys: 'ssh_keys_list' };
-    case 'key_not_found':
-      // Ключа нет — называем его id (тот, что запросил агент); без явного id
-      // подходящих ключей в инстансе нет вовсе.
-      return { key: ctx.keyId ?? '—' };
-  }
-}
-
-/**
- * Имя ключа для текста отказа.
- *
- * Только **имя выбранного** ключа (метаданные стора, без секретов): гейт уже
- * выбрал ключ, а перечень реестра наружу не уходит. Явный `key_id` известен
- * точно; без него подходит ровно один ключ (иначе гейт вернул бы `ambiguous`).
- */
-async function resolveKeyLabel(ctx: {
-  store: SSHKeyRepository;
-  keyId?: string;
-  agentRole?: string;
-}): Promise<string> {
-  try {
-    if (ctx.keyId) {
-      const meta = await ctx.store.get(ctx.keyId);
-      return meta?.name ?? ctx.keyId;
-    }
-    const agentRole = ctx.agentRole?.trim();
-    if (!agentRole) return '';
-    const candidates = (await ctx.store.list()).filter(
-      (meta) =>
-        normalizeSshKeyUsages(meta.usages).includes('ssh') && meta.agentIds.includes(agentRole),
-    );
-    return candidates.length === 1 ? candidates[0]!.name : '';
-  } catch {
-    // Хранилище недоступно — текст отказа без имени ключа (сам отказ уже есть).
-    return '';
-  }
-}
-
-/**
  * Сборка argv-команды `ssh`.
  *
  * Порядок: `-F /dev/null` → `-p <port>` (только при заданном порте) →
@@ -328,7 +235,7 @@ export const sshExecTool: ToolDefinition = {
     const extra = (ctx.extra ?? {}) as SshExecExtra;
     const store = extra.sshKeyStore;
     if (!store) {
-      return failureResult('sshkeys.tool.deps_unavailable', {});
+      return sshToolFailureResult('sshkeys.tool.deps_unavailable', {});
     }
 
     // Единый гейт (PROP-124 §3): режим `tools` — политика хостов/портов
@@ -352,28 +259,19 @@ export const sshExecTool: ToolDefinition = {
       secret = toSshSecret(access.key, 'agent');
     } catch (err) {
       if (err instanceof SshAccessError) {
-        const key = sshAccessErrorKey(err.code);
-        const paramsMap = await sshAccessErrorParams(err, {
+        // Отказ гейта — общий контракт (engine/ssh/result.ts): тот же текст и
+        // тот же машинный код, что у остальных адресных ssh-тулов.
+        return await sshAccessFailureResult(err, {
           store,
           ...(params.key_id ? { keyId: params.key_id } : {}),
           ...(ctx.agentRole ? { agentRole: ctx.agentRole } : {}),
           host,
           ...(params.port !== undefined ? { port: params.port } : {}),
         });
-        return {
-          content: sm(key, paramsMap),
-          isError: true,
-          metadata: {
-            // Машинный код отказа — по нему вызывающий (UI/аудит) различает
-            // причины, не разбирая текст.
-            keyCode: err.code,
-            i18n: i18nMeta(key, paramsMap),
-          },
-        };
       }
       // Ошибка хранилища (расшифровка/мастер-ключ) — тот же контракт, что у
       // остальных ssh-тулов.
-      return failureResult('sshkey.decrypt_failed', {
+      return sshToolFailureResult('sshkey.decrypt_failed', {
         id: params.key_id ?? '',
       });
     }
@@ -487,15 +385,6 @@ export const sshExecTool: ToolDefinition = {
   },
 };
 
-/** Отказ с ключом i18n (без параметров). */
-function failureResult(key: SystemMessageKey, params: Record<string, string>): ToolResult {
-  return {
-    content: sm(key, params),
-    isError: true,
-    metadata: { i18n: i18nMeta(key, params) },
-  };
-}
-
 /**
  * Фоновый запуск (PROP-097): ход не блокируется, результат придёт
  * уведомлением.
@@ -515,11 +404,11 @@ async function startBackgroundProcess(
   const extra = (ctx.extra ?? {}) as SshExecExtra;
   // Мастер-выключатель фоновой работы (`background.enabled`).
   if (extra.backgroundEnabled === false) {
-    return failureResult('process.background_disabled', {});
+    return sshToolFailureResult('process.background_disabled', {});
   }
   const service = extra.processService;
   if (!service || !ctx.sessionId) {
-    return failureResult('process.deps_unavailable', {});
+    return sshToolFailureResult('process.deps_unavailable', {});
   }
 
   try {
@@ -551,10 +440,10 @@ async function startBackgroundProcess(
     };
   } catch (err) {
     if (err instanceof BackgroundLimitExceededError) {
-      return failureResult('process.background_limit', { limit: String(err.limit) });
+      return sshToolFailureResult('process.background_limit', { limit: String(err.limit) });
     }
     if (err instanceof BackgroundUnsupportedError) {
-      return failureResult('process.background_unsupported', {});
+      return sshToolFailureResult('process.background_unsupported', {});
     }
     throw err;
   }

@@ -494,6 +494,18 @@ export const SYSTEM_MESSAGES = {
   'ssh.access.port_denied': 'Port {port} is not allowed for SSH key "{key}"',
   'ssh.access.policy_required': 'SSH key "{key}" requires a host: the host policy is mandatory',
   'ssh.access.ambiguous': 'Several SSH keys fit: {keys} — a specific one is required',
+  // PROP-124 §4b: адресный ssh-тул передачи файлов — результат операции.
+  'ssh.copy.uploaded': 'Uploaded {local} to {remote} on host {host}',
+  'ssh.copy.downloaded': 'Downloaded {remote} from host {host} to {local}',
+  // PROP-124 §4c: адресный ssh-тул проброса порта — туннель запущен.
+  'ssh.tunnel.started':
+    'SSH tunnel started (direction {direction}): 127.0.0.1:{listen_port} → {target} on host {host}. '
+    + 'Process {id}, log {log}. The tunnel stays up until it is stopped with process_stop.',
+  // SOCKS-проброс (-D) не поддерживается: у него нет целевого порта, а
+  // значит, нечего проверять политикой портов ключа.
+  'ssh.tunnel.socks_unsupported':
+    'SOCKS forwarding (-D) is not supported: it has no target port, so the key port policy cannot be '
+    + 'checked. Use direction "local" (-L) or "remote" (-R) with an explicit target port instead.',
   'git.ssh_key_required': 'SSH key is required for repository "{path}"',
   // ADR-076: подсказка вместо тупика — какие ключи доступны и что с ними делать.
   // Прежний `git.ssh_key_required` остаётся для путей без стора ключей (HTTP-роуты,

@@ -86,6 +86,10 @@ import { listModelsTool } from './list-models.js';
 import { sshKeysListTool } from './ssh-keys.js';
 // PROP-124 §4: адресный ssh-тул — выполнение команды на удалённом хосте.
 import { sshExecTool } from './ssh-exec.js';
+// PROP-124 §4b: адресный ssh-тул — передача файлов на удалённый хост.
+import { sshCopyTool } from './ssh-copy.js';
+// PROP-124 §4c: адресный ssh-тул — проброс порта через удалённый хост.
+import { sshTunnelTool } from './ssh-tunnel.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -127,6 +131,10 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   sshKeysListTool,
   // PROP-124 §4: адресный ssh-тул (режим инстанса `tools`)
   sshExecTool,
+  // PROP-124 §4b: адресный ssh-тул — передача файлов (режим инстанса `tools`)
+  sshCopyTool,
+  // PROP-124 §4c: адресный ssh-тул — проброс порта (режим инстанса `tools`)
+  sshTunnelTool,
   getProjectInfoTool,
   listReposTool,
   taskTool,

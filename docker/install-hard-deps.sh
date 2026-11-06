@@ -8,7 +8,9 @@
 #   ripgrep        — grep_files
 #   python3 + pip  — пользовательский код в execute_shell
 #   venv           — изолированные окружения python
-#   openssh-client — SSH к репозиториям (ADR-076)
+#   openssh-client — SSH к репозиториям (ADR-076) и к удалённым хостам
+#                    (ssh/scp/sftp — PROP-124 §4/§5)
+#   rsync          — синхронизация файлов с удалённым хостом (PROP-124 §4/§5)
 #   ca-certificates— https-git и pip
 #
 # Скрипт distro-aware: сам выбирает `apk` (alpine) или `apt-get` (debian).
@@ -34,6 +36,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 #   pip             | py3-pip        | python3-pip
 #   venv            | python3        | python3-venv
 #   openssh-client  | openssh-client | openssh-client
+#   rsync           | rsync          | rsync
 #   ca-certificates | ca-certificates| ca-certificates
 #
 # Отличия имён:
@@ -44,7 +47,10 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 #     в debian venv вынесен в отдельный пакет `python3-venv` (там ensurepip
 #     лежит в `python3-venv`, а не в `python3`);
 #   * openssh-client в alpine — виртуальное имя, резолвится в
-#     `openssh-client-default` (сам бинарь ssh).
+#     `openssh-client-default` (сам бинарь ssh); `scp`/`sftp` приезжают
+#     вместе с ним (`openssh-client-common` даёт `cmd:scp`/`cmd:sftp`);
+#   * rsync: имя пакета в alpine и debian совпадает; в slim образ его нет
+#     (slim — control plane без toolchain'а).
 TIER_HARD_DEPS='
 git|git|git
 ripgrep|ripgrep|ripgrep
@@ -52,6 +58,7 @@ python3|python3|python3
 pip|py3-pip|python3-pip
 venv|python3|python3-venv
 openssh-client|openssh-client|openssh-client
+rsync|rsync|rsync
 ca-certificates|ca-certificates|ca-certificates
 '
 

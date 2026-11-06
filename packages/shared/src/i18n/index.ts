@@ -378,6 +378,11 @@ export const ENGINE_MESSAGE_KEYS = [
   'ssh.access.port_denied',
   'ssh.access.policy_required',
   'ssh.access.ambiguous',
+  'ssh.copy.uploaded',
+  'ssh.copy.downloaded',
+  // PROP-124 §4c: адресный ssh-тул проброса порта (`ssh_tunnel`).
+  'ssh.tunnel.started',
+  'ssh.tunnel.socks_unsupported',
   'git.ssh_key_required',
   'git.ssh_key_required_hint',
   'git.ssh_keys_none',
@@ -904,6 +909,11 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'ssh.access.port_denied': ["key", "port"],
   'ssh.access.policy_required': ["key"],
   'ssh.access.ambiguous': ["keys"],
+  'ssh.copy.uploaded': ["local", "remote", "host"],
+  'ssh.copy.downloaded': ["remote", "host", "local"],
+  // PROP-124 §4c: адресный ssh-тул проброса порта (`ssh_tunnel`).
+  'ssh.tunnel.started': ["direction", "listen_port", "target", "host", "id", "log"],
+  'ssh.tunnel.socks_unsupported': [],
   'git.ssh_key_required': ["path"],
   'git.ssh_key_required_hint': ["path", "keys"],
   'git.ssh_keys_none': [],
