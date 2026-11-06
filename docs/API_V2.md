@@ -340,6 +340,7 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 | `step.tools.finished` | канал сессии | `turnId`, `stepIndex`, `messageId`, `callIds` — исполнение инструментов шага завершено, результаты записаны в `metadata.tool_results` сообщения шага |
 | `part.delta` | канал сессии | `messageId`, `partId`, `field` (`text`\|`raw`), `delta` — **upsert** по `{messageId, partId}` |
 | `part.updated` | канал сессии | `messageId`, `partId`, `part` — **upsert** по `{messageId, partId}` |
+| `stream.error` | канал сессии | `stream_id`, `error`, `error_type`, `retry_count`, `can_retry`, а также **аддитивно** `message_id` (id user-реплики, чей ход упал) и `turn_id?` (id хода из `current_stream.turn_id`, снятый до очистки стрима) — адресация плашки ошибки к реплике/ходу |
 
 **Сжатие контекста (ADR-119).** События сжатия — в канале сессии; новых каналов нет.
 

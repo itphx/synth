@@ -342,6 +342,7 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 | `step.started` / `step.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `usage`, `timings`, `attachments` |
 | `step.tools.started` / `step.tools.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `callIds` (`string[]`) — additive: `step.finished` means “the LLM call is done”, these events mark the **tool execution** of that step (published once per step with tool calls, before execution and after `metadata.tool_results` is written) |
 | `part.delta` / `part.updated` | session channel | upsert by `{messageId, partId}` |
+| `stream.error` | session channel | `stream_id`, `error`, `error_type`, `retry_count`, `can_retry`, plus **additive** `message_id` (id of the user message whose turn failed) and `turn_id?` (turn id from `current_stream.turn_id`, captured before the stream is cleared) — lets the client attach the error banner to that message/turn |
 
 **Context compression (ADR-119).** Compression events go to the session channel; no new channels.
 

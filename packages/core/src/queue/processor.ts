@@ -660,7 +660,11 @@ export class QueueProcessor {
 
           if (!isRecoverable || retryCount > LLM_MAX_ATTEMPTS) {
             // Unrecoverable или исчерпаны попытки — удалить из очереди
+            // ADR-118 §4 (аддитивно): адресация ошибки — `message_id` реплики и
+            // `turn_id` хода. `turnId` снимаем ДО очистки `currentStream`.
+            let failedTurnId: string | undefined;
             await this.sessionManager.withLock(this.sessionId, async (s) => {
+              failedTurnId = s.currentStream?.turnId;
               this._removeProcessed(s, message);
               const msg = s.messages.find(
                 (m) => m.metadata?.stream_id === streamId && m.role === 'user',
@@ -684,6 +688,8 @@ export class QueueProcessor {
               error_type: result.errorType || 'unknown',
               retry_count: retryCount,
               can_retry: false,
+              message_id: message.id,
+              ...(failedTurnId ? { turn_id: failedTurnId } : {}),
             });
 
             this._resumeMessage = undefined;
@@ -746,8 +752,10 @@ export class QueueProcessor {
         // currentStream и зависшее pending-сообщение блокируют сессию навсегда:
         // снимаем blocked, чистим currentStream, удаляем сообщение из очереди
         // и фиксируем ошибку в last_error.
+        let failedTurnId: string | undefined;
         try {
           await this.sessionManager.withLock(this.sessionId, async (s) => {
+            failedTurnId = s.currentStream?.turnId;
             this._removeProcessed(s, message);
             const msg = s.messages.find(
               (m) => m.metadata?.stream_id === streamId && m.role === 'user',
@@ -772,6 +780,8 @@ export class QueueProcessor {
           error: String(err),
           error_type: 'internal',
           can_retry: false,
+          message_id: message.id,
+          ...(failedTurnId ? { turn_id: failedTurnId } : {}),
         });
         this._resumeMessage = undefined;
         delete this._retryDelays[streamId];

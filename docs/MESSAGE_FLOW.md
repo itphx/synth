@@ -690,7 +690,7 @@ assistant-сообщение хода**, `seedInFlightToolParts` сеет live-�
 | `tool_call.result` | канал сессии | `stream_id`, `session_id`, `call_id`, `name`, `result`, `iteration` | После исполнения вызова (в т. ч. ошибки/отказ политики) | Результат в карточке |
 | `tool_call.loop` | канал сессии | `stream_id`, `session_id`, `iteration`, `total_tool_calls` | Конец итерации инструментов | Диагностика/прогресс |
 | `stream.retry` | канал сессии | `stream_id`, `attempt`, `max_retries`, `retry_in`, `error` | Recoverable-ошибка, перед backoff | Плашка «Повтор N/M» у реплики |
-| `stream.error` | канал сессии | `stream_id`, `error`, `error_type`, `retry_count`, `can_retry` | Терминальная ошибка (или отмена повторов) | Тост + плашка ошибки, закрытие хода |
+| `stream.error` | канал сессии | `stream_id`, `error`, `error_type`, `retry_count`, `can_retry`, `message_id` (аддитивно — id user-реплики этого хода), `turn_id?` (аддитивно — id хода; снимается до очистки `current_stream`) | Терминальная ошибка (или отмена повторов) | Тост + плашка ошибки, закрытие хода |
 | `stream.cancelled` | канал сессии | `stream_id`, `content`, `status` | «Стоп» (ровно одно событие на отмену) | Закрывает живое сообщение/ход, снимает подтверждения |
 | `queue.stalled` | канал сессии | `pending_count` | Очередь осталась после выхода процессора | Панель «обработка остановлена» |
 | `steer.dropped` | канал сессии | `reason` (`limit`/`aborted`/`turn_ended`), `code?`, `limit?`, `dropped_count`, `error`, `i18n` | Лимит инъекций, «Стоп», конец хода | Тост, сообщение не применено (или возвращено в очередь) |

@@ -530,8 +530,45 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       expect(last.usage).toEqual({ prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 });
     });
 
-    it('ошибка провайдера в стриме шлёт error-объект и [DONE]', async () => {
-      const fake = new FakeProvider();
+    it('keepalive: SSE-комментарий приходит до первого data-кадра', async () => {
+      const { app } = createTestContext(userUser);
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+        stream: true,
+      }));
+      expect(res.status).toBe(200);
+
+      const text = await res.text();
+      // Один `:\n\n` отправляется сразу при старте потока — до данных,
+      // чтобы посредник не закрыл соединение по idle-таймауту.
+      expect(text.startsWith(':\n\n')).toBe(true);
+      const firstData = text.indexOf('data: ');
+      expect(firstData).toBeGreaterThan(0);
+      expect(text.slice(0, firstData)).toContain(':\n\n');
+      // Формат data-кадров не изменился.
+      expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    });
+
+    it('keepalive: после [DONE] таймер не тикает', async () => {
+      vi.useFakeTimers();
+      try {
+        const { app } = createTestContext(userUser);
+        const res = await app.request(BASE, postBody({
+          model: 'fake-model',
+          messages: [{ role: 'user', content: 'привет' }],
+          stream: true,
+        }));
+        const text = await res.text();
+        expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
+        // Поток закрыт — интервал погашен в finally, ни одного pending-таймера.
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ошибка провайдера в стриме шлёт error-объект и [DONE]', async () => {      const fake = new FakeProvider();
       fake.throwError = new RateLimitError('too many requests');
       const { app } = createTestContext(userUser, { fakeProvider: fake });
 

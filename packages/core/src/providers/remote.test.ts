@@ -10,6 +10,7 @@ import {
 import type { LLMMessage, CancellationToken, SystemPromptPayload } from './base.js';
 import type { LLMChunk } from '@itphx/synth-shared';
 import { t as sm } from '../engine/system-messages.js';
+import { classifyLlmError, isLlmErrorRecoverable } from '../engine/llm-error.js';
 
 function makeMessage(overrides: Partial<LLMMessage> = {}): LLMMessage {
   return {
@@ -320,6 +321,128 @@ describe('RemoteProvider.chatAsync (SSE-стрим)', () => {
     };
     await expect(collect()).rejects.toBeInstanceOf(RateLimitError);
   });
+
+  it('заголовки пришли, чанков нет → таймаут первого чанка (не таймаут заголовков)', async () => {
+    // Тело молчит: стрим не отдаёт ни одного чанка. Наш таймер (timeout=1с)
+    // абортит запрос, а стрим реагирует на сигнал ошибкой AbortError.
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: { signal?: AbortSignal }) => {
+      const signal = init.signal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal?.addEventListener('abort', () => {
+            const err = new Error('aborted');
+            err.name = 'AbortError';
+            controller.error(err);
+          }, { once: true });
+        },
+      });
+      return Promise.resolve(new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider({ timeout: 1 });
+    const collect = async () => {
+      const out: LLMChunk[] = [];
+      for await (const c of provider.chatAsync([makeMessage()])) out.push(c);
+      return out;
+    };
+
+    await expect(collect()).rejects.toThrow(/первый чанк за 1с/);
+  });
+
+  it('fetch rejects с cause.code=UND_ERR_SOCKET → текст с кодом и сетевая классификация', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(
+      new TypeError('fetch failed', { cause: { code: 'UND_ERR_SOCKET' } }),
+    ));
+
+    const provider = makeProvider();
+    const collect = async () => {
+      const out: LLMChunk[] = [];
+      for await (const c of provider.chatAsync([makeMessage()])) out.push(c);
+      return out;
+    };
+
+    await expect(collect()).rejects.toThrow(/fetch failed \(UND_ERR_SOCKET\)/);
+    // Классификатор по-прежнему видит исходный текст `fetch failed`.
+    expect(classifyLlmError('fetch failed (UND_ERR_SOCKET)')).toBe('network_error');
+    expect(isLlmErrorRecoverable(new Error('fetch failed (UND_ERR_SOCKET)'))).toBe(true);
+  });
+
+  it('тихое закрытие без [DONE]/finish_reason → ошибка finish_reason', async () => {
+    // Поток закрылся сам (done), не прислав ни финального чанка, ни [DONE].
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'обрыв' } }] }),
+    ])));
+
+    const provider = makeProvider();
+    const collect = async () => {
+      const out: LLMChunk[] = [];
+      for await (const c of provider.chatAsync([makeMessage()])) out.push(c);
+      return out;
+    };
+
+    await expect(collect()).rejects.toThrow(/finish_reason/);
+    expect(isLlmErrorRecoverable(
+      new Error('Удалённый LLM-провайдер закрыл стрим без finish_reason (недописанный ответ)'),
+    )).toBe(false);
+  });
+
+  it('[DONE] без finish_reason → успешный финальный чанк (совместимость со сторонним прокси)', async () => {
+    // Старый/сторонний OpenAI-совместимый прокси может завершить поток только
+    // стандартным SSE-маркером [DONE], без финального чанка finish_reason.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'готово' } }] }),
+      '[DONE]',
+    ])));
+
+    const provider = makeProvider();
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    const final = chunks.find((c) => c.isFinal);
+    expect(final).toBeDefined();
+    expect(final!.content).toBe('готово');
+  });
+
+  it('нормальный стрим с finish_reason stop: usage и tool_calls без регрессий', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({
+        choices: [{
+          index: 0,
+          delta: {
+            tool_calls: [{ index: 0, id: 'call_1', function: { name: 'read_file', arguments: '{"path":' } }],
+          },
+        }],
+      }),
+      JSON.stringify({
+        choices: [{
+          index: 0,
+          delta: { tool_calls: [{ index: 0, function: { arguments: '"a.ts"}' } }] },
+        }],
+      }),
+      JSON.stringify({
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 },
+      }),
+      '[DONE]',
+    ])));
+
+    const provider = makeProvider();
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.usage?.totalTokens).toBe(19);
+    expect(final.toolCalls).toEqual([{
+      index: 0,
+      id: 'call_1',
+      type: 'function',
+      function: { name: 'read_file', arguments: '{"path":"a.ts"}' },
+    }]);
+  });
 });
 
 describe('RemoteProvider: регистрация и токен-реестр', () => {
@@ -539,6 +662,7 @@ describe('RemoteProvider — tool_choice на шаге (лимит шагов)',
   it("chatAsync: options.toolChoice='none' + tools → tool_choice в теле прокси-запроса", async () => {
     const fetchMock = vi.fn().mockResolvedValue(sseResponse([
       JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
       '[DONE]',
     ]));
     vi.stubGlobal('fetch', fetchMock);
@@ -554,7 +678,7 @@ describe('RemoteProvider — tool_choice на шаге (лимит шагов)',
   });
 
   it('chatAsync: без опции поля tool_choice нет', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }), '[DONE]']));
     vi.stubGlobal('fetch', fetchMock);
 
     const provider = makeProvider();
@@ -564,7 +688,7 @@ describe('RemoteProvider — tool_choice на шаге (лимит шагов)',
   });
 
   it('chatAsync: без tools tool_choice не отправляется', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }), '[DONE]']));
     vi.stubGlobal('fetch', fetchMock);
 
     const provider = makeProvider();
@@ -598,7 +722,7 @@ describe('RemoteProvider — reasoning_effort (ADR-117)', () => {
   }
 
   it('стрим: явный options.effort уезжает в reasoning_effort', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }), '[DONE]']));
     vi.stubGlobal('fetch', fetchMock);
 
     const provider = makeProvider();
@@ -623,7 +747,7 @@ describe('RemoteProvider — reasoning_effort (ADR-117)', () => {
   });
 
   it('fallback: без options.effort тир выводится из reasoningLevel провайдера', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }), '[DONE]']));
     vi.stubGlobal('fetch', fetchMock);
 
     const provider = makeProvider({ reasoningLevel: 'high' });
@@ -633,7 +757,7 @@ describe('RemoteProvider — reasoning_effort (ADR-117)', () => {
   });
 
   it('явный options.effort приоритетнее reasoningLevel', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }), '[DONE]']));
     vi.stubGlobal('fetch', fetchMock);
 
     const provider = makeProvider({ reasoningLevel: 'low' });
@@ -645,7 +769,7 @@ describe('RemoteProvider — reasoning_effort (ADR-117)', () => {
   });
 
   it('без effort и без reasoningLevel поля в теле нет (стрим и non-stream)', async () => {
-    const streamFetch = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    const streamFetch = vi.fn().mockResolvedValue(sseResponse([JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }), '[DONE]']));
     vi.stubGlobal('fetch', streamFetch);
     await drain(makeProvider().chatAsync([makeMessage()], 'system'));
     expect(readBody(streamFetch).reasoning_effort).toBeUndefined();
@@ -660,7 +784,7 @@ describe('RemoteProvider — reasoning_effort (ADR-117)', () => {
   });
 
   it("reasoningLevel 'none'/'default' — поля нет (effort-тиром «выключить» нельзя)", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['[DONE]']));
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }), '[DONE]']));
     vi.stubGlobal('fetch', fetchMock);
 
     await drain(makeProvider({ reasoningLevel: 'none' }).chatAsync([makeMessage()], 'system'));

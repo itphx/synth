@@ -334,6 +334,12 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
 }
 
 /**
+ * Интервал SSE keepalive-комментариев прокси (15 с): не даёт idle-таймаутам
+ * посредников закрыть поток, пока провайдер молчит (в т.ч. до первого чанка).
+ */
+const KEEPALIVE_INTERVAL_MS = 15_000;
+
+/**
  * SSE-стрим в OpenAI-формате (text/event-stream).
  * Каждая строка: data: {id, object: 'chat.completion.chunk', created, model,
  * choices: [{index: 0, delta: {content}, finish_reason: null}]}.
@@ -368,7 +374,31 @@ function streamCompletions(
     new ReadableStream({
       async start(controller) {
         const encoder = new TextEncoder();
-        const send = (obj: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        // `enqueue` после закрытия контроллера бросает — глушим: клиент мог
+        // отключиться, и это не ошибка прокси.
+        const enqueue = (chunk: Uint8Array) => {
+          try {
+            controller.enqueue(chunk);
+          } catch {
+            /* stream closed by client */
+          }
+        };
+        const send = (obj: unknown) => enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        // SSE keepalive-комментарии: backend отвечает 200 сразу (только
+        // заголовки), а провайдер может долго не прислать первый чанк. Без
+        // комментариев посредники рвут соединение по idle-таймауту
+        // (nginx `proxy_read_timeout` 300s, Traefik idle) — локальный core
+        // видит `fetch failed` на длинных сессиях. Комментарий не является
+        // `data:`-кадром и не меняет контракт потока.
+        const keepalive = setInterval(() => {
+          enqueue(encoder.encode(':\n\n'));
+        }, KEEPALIVE_INTERVAL_MS);
+        // Таймер не должен держать процесс живым после закрытия потока.
+        (keepalive as { unref?: () => void }).unref?.();
+        // Один комментарий сразу при старте: заголовки уже отданы, и
+        // соединение активно до первого чанка провайдера.
+        enqueue(encoder.encode(':\n\n'));
+
         let finalUsage: TokenUsage | undefined;
         // Накопленные tool_calls: провайдер (OpenAIProvider) отдаёт полный массив в
         // каждом content-чанке и в финальном чанке. Прокси шлёт их ОДИН раз отдельным
@@ -445,9 +475,8 @@ function streamCompletions(
           const mapped = mapProviderError(err);
           send({ error: { code: mapped.code, message: mapped.message } });
         } finally {
-          try {
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-          } catch { /* client disconnected */ }
+          clearInterval(keepalive);
+          enqueue(encoder.encode('data: [DONE]\n\n'));
           try { controller.close(); } catch { /* already closed */ }
         }
       },

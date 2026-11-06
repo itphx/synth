@@ -91,6 +91,32 @@ describe('QueueProcessor — очистка состояния при ошибк
     expect(userMsg!.metadata?.last_error).toBe('invalid model');
   });
 
+  it('stream.error несёт message_id упавшей реплики и turn_id хода', async () => {
+    const session = await sessionManager.createSession({ title: 'Q-ids' });
+    const msg = makeMessage();
+    await sessionManager.addPendingMessage(session.id, msg);
+    const events = collectEvents(eventBus, session.id);
+
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => {
+      // Оркестратор проставляет turnId в живой стрим по ходу обработки.
+      await sessionManager.withLock(session.id, async (s) => {
+        if (s.currentStream) s.currentStream.turnId = 'turn_test';
+        await sessionManager.saveSession(s);
+      });
+      return { error: 'invalid model', errorType: 'model_not_found', canRetry: false };
+    });
+    await processor.start();
+
+    const errorEvent = events.find((e) => e.type === 'stream.error')!;
+    expect(errorEvent.data).toMatchObject({
+      message_id: msg.id,
+      turn_id: 'turn_test',
+      can_retry: false,
+    });
+    const s = await sessionManager.getSession(session.id);
+    expect(s!.currentStream).toBeUndefined();
+  });
+
   it('при исключении processMessage сессия полностью разблокируется (не зависает навсегда)', async () => {
     const { sessionId } = await enqueue();
     const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => {

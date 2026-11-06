@@ -18,6 +18,9 @@ import { info, warning } from '../logger.js';
 import { t as sm } from '../engine/system-messages.js';
 // ADR-099: запросы к backend-прокси — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
+// Причина сетевой ошибки undici (`ECONNRESET`, `UND_ERR_SOCKET`, …) живёт в
+// `error.cause.code` — без неё «fetch failed» не подсказывает, что чинить.
+import { extractTransportErrorCode } from '../remote/transport-error.js';
 import type { DebugCollector } from '../debug.js';
 
 /** Параметры RemoteProvider. url — базовый URL backend (без /api/v2). */
@@ -136,10 +139,15 @@ export class RemoteProvider extends BaseProvider {
     const accumulatedToolCalls: Record<string, unknown>[] = [];
 
     const controller = new AbortController();
-    // Таймаут — на установление соединения и получение заголовков ответа
-    // (backend проксирует заголовки сразу). Как только стрим пошёл, таймер
-    // снимается, дальше стрим длится сколько нужно.
+    // Таймаут — на заголовки и ПЕРВЫЙ чанк тела (как в OpenAIProvider):
+    // backend проксирует заголовки сразу, а тело длинной генерации может
+    // молча не начаться. Как только пришёл первый чанк, таймер снимается —
+    // дальше стрим длится сколько нужно.
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+    const startedAt = Date.now();
+    let firstChunkReceived = false;
+    let bytesReceived = 0;
+    let chunkCount = 0;
 
     // Кнопка «Стоп»: отмена пользователя немедленно прерывает fetch/reader.read().
     if (cancellationToken) {
@@ -162,24 +170,31 @@ export class RemoteProvider extends BaseProvider {
     try {
       resp = await this._request(messages, systemPrompt, tools, true, controller.signal, options);
     } catch (e) {
+      clearTimeout(timer);
       // Отмена пользователя — молча завершаем генератор.
       if (cancellationToken?.cancelled || cancellationToken?.interrupted) return;
       // Таймаут/обрыв до начала стрима: AbortError от нашего таймера.
+      // Это именно таймаут заголовков — не путать с ожиданием первого чанка.
       if (e instanceof Error && e.name === 'AbortError') {
         throw new ProviderError(`Таймаут удалённого LLM-провайдера (${this.timeout}с)`, this.name);
       }
       throw e;
-    } finally {
-      clearTimeout(timer);
     }
 
     if (!resp.body) {
+      clearTimeout(timer);
       throw new ProviderError('Нет тела ответа от удалённого LLM-провайдера', this.name);
     }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    // ADR-117: `finish_reason` — признак корректного завершения стрима.
+    // Backend-прокси всегда шлёт финальный чанк `finish_reason:'stop'`
+    // (routes/llm.ts), поэтому закрытие без него = недописанный ответ.
+    let finishReasonSeen = false;
+    // `[DONE]` завершает весь стрим, а не только внутренний проход по строкам.
+    let streamDone = false;
 
     try {
       while (true) {
@@ -191,6 +206,7 @@ export class RemoteProvider extends BaseProvider {
         const { done, value } = await reader.read();
         if (done) break;
 
+        bytesReceived += value.byteLength;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -200,10 +216,14 @@ export class RemoteProvider extends BaseProvider {
           if (!trimmed || !trimmed.startsWith('data:')) continue;
 
           const dataStr = trimmed.slice(5).trim();
-          if (dataStr === '[DONE]') break;
+          if (dataStr === '[DONE]') {
+            streamDone = true;
+            break;
+          }
 
           try {
             const chunkData = JSON.parse(dataStr) as Record<string, unknown>;
+            chunkCount += 1;
             debugCollector?.captureRawModelResponse(dataStr);
 
             // Ошибка провайдера в середине стрима: backend шлёт
@@ -215,10 +235,16 @@ export class RemoteProvider extends BaseProvider {
 
             const choices = chunkData.choices as Array<Record<string, unknown>> | undefined;
             const delta = choices?.[0]?.delta as Record<string, unknown> | undefined;
+            const rawFinishReason = choices?.[0]?.finish_reason;
+            if (rawFinishReason) finishReasonSeen = true;
 
             if (delta) {
               if (delta.reasoning_content && typeof delta.reasoning_content === 'string') {
                 if (delta.reasoning_content === '.' || delta.reasoning_content === '.\n') continue;
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 accumulatedReasoning += delta.reasoning_content;
                 yield {
                   content: '',
@@ -229,6 +255,10 @@ export class RemoteProvider extends BaseProvider {
               }
 
               if (delta.content && typeof delta.content === 'string') {
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 accumulatedContent += delta.content;
                 yield {
                   content: delta.content,
@@ -239,6 +269,10 @@ export class RemoteProvider extends BaseProvider {
               }
 
               if (delta.tool_calls) {
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 for (const tc of delta.tool_calls as Array<Record<string, unknown>>) {
                   const tcIndex = tc.index as number;
                   const func = tc.function as Record<string, unknown> | undefined;
@@ -277,19 +311,52 @@ export class RemoteProvider extends BaseProvider {
             continue;
           }
         }
+
+        if (streamDone) break;
       }
     } catch (e) {
       // Ошибки чтения стрима (обрыв/AbortError) пробрасываем наружу.
       // При пользовательской отмене и при прерывании генерации (ADR-104)
-      // молча выходим.
+      // молча выходим — отмена не превращается в ошибку.
       if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
-        throw e;
+        if (e instanceof ProviderError || e instanceof ContextLengthExceededError || e instanceof RateLimitError) {
+          throw e;
+        }
+        // Наш таймер истёк до первого чанка: заголовки уже пришли, а тело
+        // молчит. Это НЕ таймаут заголовков — отдельный, понятный текст.
+        if (!firstChunkReceived && e instanceof Error && e.name === 'AbortError') {
+          throw new ProviderError(
+            `Удалённый LLM-провайдер не прислал первый чанк за ${this.timeout}с`,
+            this.name,
+          );
+        }
+        throw this._describeTransportFailure('body', e, {
+          startedAt,
+          chunkCount,
+          bytesReceived,
+        });
       }
     } finally {
       reader.releaseLock();
+      clearTimeout(timer);
     }
 
     if (!cancellationToken?.cancelled && !cancellationToken?.interrupted) {
+      // ADR-117: полный стрим — это либо финальный чанк с `finish_reason`
+      // (наш backend всегда шлёт `'stop'`), либо стандартный SSE-маркер
+      // `[DONE]` (сторонний/старый OpenAI-совместимый прокси может не слать
+      // финальный чанк). `[DONE]` нашего прокси приходит и после error-чанка,
+      // но error-чанк обрабатывается и бросает раньше — поэтому `[DONE]`
+      // безопасно считать признаком завершения. Ошибка — только при тихом
+      // закрытии: нет ни `finish_reason`, ни `[DONE]`.
+      // `finish_reason` в тексте → `UNRECOVERABLE_PATTERNS` (повтор не поможет).
+      if (!finishReasonSeen && !streamDone) {
+        throw new ProviderError(
+          'Удалённый LLM-провайдер закрыл стрим без finish_reason (недописанный ответ)',
+          this.name,
+        );
+      }
+
       debugCollector?.captureApiResponse({
         usage: accumulatedUsage,
         model: this.model,
@@ -352,9 +419,15 @@ export class RemoteProvider extends BaseProvider {
     const url = `${base}${LLM_PROXY_PATH}`;
     const body = this._buildBody(messages, systemPrompt, tools, stream, options);
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
-    const effectiveSignal = signal ?? controller.signal;
+    // Таймер заголовков живёт только у non-stream вызова: в стриме фазу
+    // заголовков и первого чанка покрывает таймер chatAsync (один на запрос),
+    // второй контроллер здесь был no-op и путал фазу.
+    const controller = signal ? undefined : new AbortController();
+    const timer = controller
+      ? setTimeout(() => controller.abort(), this.timeout * 1000)
+      : undefined;
+    const effectiveSignal = signal ?? controller!.signal;
+    const startedAt = Date.now();
 
     try {
       const resp = await egressFetch(url, {
@@ -377,14 +450,48 @@ export class RemoteProvider extends BaseProvider {
       }
       return resp;
     } catch (err) {
+      // Уже классифицированные ошибки провайдера не трогаем.
+      if (err instanceof ProviderError || err instanceof ContextLengthExceededError || err instanceof RateLimitError) {
+        throw err;
+      }
       // Таймаут нашего таймера (когда сигнал не передан извне).
       if (err instanceof Error && err.name === 'AbortError' && !signal?.aborted) {
         throw new ProviderError(`Таймаут удалённого LLM-провайдера (${this.timeout}с)`, this.name);
       }
-      throw err;
+      throw this._describeTransportFailure('headers', err, {
+        startedAt,
+        chunkCount: 0,
+        bytesReceived: 0,
+      });
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
+  }
+
+  /**
+   * Диагностика транспортной ошибки (undici/fetch): причина лежит в
+   * `error.cause.code`. Пишем в лог фазу/время/объём (без секретов) и
+   * возвращаем ошибку с ИСХОДНЫМ текстом + кодом в скобках — `classifyLlmError`
+   * продолжает видеть `fetch failed` и относит сбой к сетевым.
+   */
+  private _describeTransportFailure(
+    phase: 'headers' | 'body',
+    err: unknown,
+    meta: { startedAt: number; chunkCount: number; bytesReceived: number },
+  ): Error {
+    const code = extractTransportErrorCode(err);
+    const message = err instanceof Error ? err.message : String(err);
+    if (code !== undefined) {
+      warning(
+        'REMOTE',
+        `транспортная ошибка (${phase}): provider=${this.name}, model=${this.model}, code=${code}, `
+          + `elapsed_ms=${Date.now() - meta.startedAt}, chunks=${meta.chunkCount}, bytes=${meta.bytesReceived}`,
+      );
+    }
+    if (code === undefined || message.includes(code)) {
+      return err instanceof Error ? err : new Error(message);
+    }
+    return new Error(`${message} (${code})`, { cause: err });
   }
 
   private async _resolveToken(): Promise<string> {
