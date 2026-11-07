@@ -239,3 +239,20 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 - **Relay:** `routes/mcp.ts` монтирует core-фабрику `createMcpRelayRoutes` (`@itphx/synth-core`) — `POST /api/v2/mcp/relay/:name` (stateless, JSON-режим); `GET`/`DELETE` → `405 MCP_RELAY_SESSIONLESS`. На локальном инстансе маршрута нет.
 - **Авторизация:** `requireAuth`; для service-key — scope `mcp:invoke` (семейство `mcp:*`) через `requireScopeForServiceKey`. Дополнительных approval/квот нет.
 - **Признак фичи:** `app/mount-routes.ts` → `getFeatures: () => ({ remoteMcp: true })` в `GET /api/v2/meta` (аддитивно, без аутентификации); у клиента без признака фича выключена.
+
+## Публикация `permission.replied` и её перепись (ADR-106/ADR-127)
+
+- **Ответ пользователя** на подтверждение принимается **только** через реестр
+  (`ApprovalRegistry.claim`, ADR-106 Ф3) — носитель покрывающего гранта; повторный ответ — отказ.
+  Места: WS-кадр `permission_reply` (`src/app/listen.ts`, `packages/core/src/server/app/ws-events.ts`)
+  и HTTP-эндпоинт ответа (`packages/core/src/server/routes/sessions.ts`).
+- **Серверная публикация** (ADR-127) — каскад отказа по пакету ожидающих и авто-одобрение соседнего
+  запроса грантом «Разрешить в сессии»: публикуется в `packages/core/src/engine/permission/approval.ts`,
+  `packages/core/src/engine/orchestrator.ts`, `packages/core/src/engine/tools/task/run-cycle.ts`.
+  Это **не** ответы пользователя — реестр по ним не проходится (решение уже принято), но привязка
+  списывается, поэтому поздний ответ на погашенное подтверждение — отказ (`already_consumed`).
+  Событие помечено (`cascaded`/`auto_approved`), UI по нему снимает карточку.
+- **Перепись** — `packages/backend/src/app/approval-ws.test.ts`: все места публикации
+  `permission.replied` в `packages/core/src` и `packages/backend/src` перечислены явно; новый путь
+  публикации без записи в перепись роняет тест. Ответы пользователя проверяются отдельно — на
+  `claim` и `APPROVAL_DENIED`.

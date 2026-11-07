@@ -2852,3 +2852,50 @@ blob-порты и `blob_refs` — ADR-116.
 - **Релей:** `server/routes/mcp-relay.ts` (`createMcpRelayRoutes`) — фабрика в core, монтирует её **только backend**; stateless + JSON-режим (`GET`/`DELETE` → `405 MCP_RELAY_SESSIONLESS`).
 - **Сид:** `server/app/remote-mcp-seed.ts` (`seedRemoteMcpProjects`, `mergeMcpSeedDefaults`) — авто-сид `project.mcp` существующих проектов, идемпотентно по `project.mcp.remoteSeeded`; публикует `project.updated`.
 - **Проводка:** `server/app/hybrid-remote.ts` — применение состава по признаку `features.remoteMcp` из `GET /api/v2/meta` (старый backend → фича молча выключена), снятие записей при `disconnectRemote`.
+
+## Параллельное исполнение инструментов в шаге (ADR-127)
+
+Вызовы инструментов **одного** assistant-сообщения исполняются **параллельно** (паритет с
+opencode) во всех трёх циклах шага. Цикл разбит на три фазы:
+
+- **A — подготовка** (последовательно, порядок вызовов модели): разбор аргументов, resolve `toolDef`,
+  MCP-скоуп, хук `pre_tool_use`, проверка прав, учёт doom-loop/повторов отказа, ожидание
+  подтверждения (`ask`), сборка контекста вызова;
+- **B — исполнение** (параллельно): все вызовы сегмента стартуют одновременно, результат кладётся в
+  слот по **исходной** позиции вызова, ошибка одного вызова не роняет остальные и не прерывает шаг;
+- **C — фиксация** (последовательно, порядок вызовов модели): IPI-обёртка, ленивые инструкции,
+  `tool_call.result`, персист результата, `currentMessages.push`, `allToolCalls.push`, смена
+  режима/проекта, хук `post_tool_use`.
+
+| Место | Что | Барьеры |
+|---|---|---|
+| `engine/orchestrator.ts` | `prepareToolCall`/`commitToolCall`/`splitToolCallSegments` | `plan_enter`/`plan_exit`/`project_create`/`project_attach`/`project_workspace_set` (`TOOL_BATCH_BARRIER_TOOLS`) — мутирующий вызов завершает сегмент, сегменты идут строго по порядку |
+| `engine/tools/task/run-cycle.ts` | `prepareSubagentToolCall`/`commitSubagentToolCall`/`runSubagentToolSegment` | нет: `deriveSubagentPermission` запрещает `question`/`plan_enter`/`plan_exit`/`task` — эти вызовы не исполняются |
+| `engine/pipelines/executors/agent-step.ts` | параллельное исполнение, последовательная фиксация | нет: права и режим решены для всей партии до исполнения; меняющие состояние тулы в шаге пайплайна и не работают (нет `extra`) |
+
+- **Общий примитив:** `engine/tools/tool-batch.ts` — `runToolBatch(items, options?)`: конкурентный
+  старт, слоты по исходной позиции, изоляция ошибок (батч не отклоняется целиком), `settleOrder` —
+  порядок завершения отдельно от порядка вызовов. Примитив используют все три цикла.
+- **Инварианты:** порядок в истории (`currentMessages`, `metadata.tool_results`, tool-сообщения
+  LLM-запроса) = **порядок вызовов модели** (контракт провайдеров, ADR-117); общее состояние цикла
+  (`doomLoopTracker`, `denyRepeat*`/`hadDeny`/`roleBlocked*`, `effectivePermissionConfig`/
+  `permissionEvaluator`, `sessionMode`/`planApproved`, `tools`/`workingDir`/`allowedRoots`) остаётся
+  последовательным; отмена прерывает весь батч общим сигналом.
+- **Хранилище:** потеря сообщений исключена разнесением фаз — все перезаписи сессии (тулы вида
+  `todo_write`) happen в фазе B под per-session локом с свежей загрузкой, все точечные дозаписи
+  (`appendMessage`) — в фазе C; фазы не пересекаются. Правки слоя хранения не потребовались.
+- **Подтверждения прав:** несколько `ask` одного шага висят **одновременно**
+  (`PermissionApprovalManager.prepareWaiters`/`publishWaiters`); отказ по любому гасит остальные
+  ожидания той же сессии (каскад, `_cascadeDeny`) — ход не ждёт ответов на вопросы, на которые
+  пользователь уже отказал. Каскад живёт в менеджере, не в производителях ответа; серверный отказ
+  (ответ с `reason`) каскада **не** запускает. Одноразовость реестра (ADR-106 Ф3) сохранена:
+  каскадное подтверждение списывается (`ApprovalRegistry.consume`), поздний ответ на него — отказ
+  (`already_consumed`).
+- **Переоценка после гранта:** «Разрешить в сессии» (`once: false`) пересобирает `permissionEvaluator`,
+  покрытые новым правилом ожидания одобряются без нового вопроса. Переоценка идёт с **тем же**
+  контекстом Authority, что и исходная проверка: иначе guard пересчитал бы потолок хода без роли
+  участника (ADR-106 Ф4) и оси агента — и вызов, который слой требует подтвердить, одобрялся бы
+  грантом соседа без вопроса пользователю.
+- **Перепись мест публикации `permission.replied`** — `packages/backend/src/app/approval-ws.test.ts`:
+  ответы пользователя (обязаны проходить через `ApprovalRegistry.claim`) и серверные публикации
+  (каскад/авто-одобрение — перечислены отдельно) учтены раздельно; новый путь публикации роняет тест.
