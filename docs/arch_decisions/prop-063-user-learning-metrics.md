@@ -5,7 +5,7 @@
 > **Источник:** перенесено из `AD-DRAFTS.md` (D18, «Обучение пользователя и метрики», Roadmap Фаза 3/4;
 > Obsidian `User-Skills-Learning-Metrics.md`, `Fear-of-Replacement.md`).
 > **Связано:** [PROP-057](./prop-057-loop-engine.md), [ADR-101](./adr-101-pipeline-engine.md),
-> [ADR-122](./adr-122-memory-product.md), [PROP-054](./prop-054-kanban-backlog.md),
+> [ADR-122](./adr-122-memory-product.md), [ADR-130](./adr-130-plan-journal-work-panel.md),
 > [ADR-036](./adr-036-llm-gateway.md), [PROP-083](./prop-083-instance-customization-branding.md).
 
 **Решение:** встроить в Synth **развитие пользователя, а не только ускорение кодинга** —
@@ -39,7 +39,7 @@ Roadmap Фаза 3/4 фиксирует разворот от «скорость
 - память/индексы ([ADR-122](./adr-122-memory-product.md)) — для анализа истории;
 - loops/pipelines ([PROP-057](./prop-057-loop-engine.md), [ADR-101](./adr-101-pipeline-engine.md)) —
   источники данных о прогонах;
-- задачи/backlog ([PROP-054](./prop-054-kanban-backlog.md)) — привязка метрик к задачам.
+- задачи/backlog ([ADR-130](./adr-130-plan-journal-work-panel.md)) — привязка метрик к задачам.
 
 **Метрики без токенмаксинга.** Заявленный набор: understanding score, loop success rate,
 rework rate, automation coverage, context freshness, guardrail hit rate. Явный антипаттерн —
@@ -111,7 +111,7 @@ rework rate, automation coverage, context freshness, guardrail hit rate. Явн�
 - [PROP-057](./prop-057-loop-engine.md) «Loop Engine» / [ADR-101](./adr-101-pipeline-engine.md)
   «Pipeline Automation» — источники `loop success rate`, `rework rate`, `automation coverage`.
 - [ADR-122](./adr-122-memory-product.md) «Память Synth» — анализ сессий и долгосрочный контекст.
-- [PROP-054](./prop-054-kanban-backlog.md) «Kanban/backlog» — привязка метрик к задачам; просмотр из UI
+- [ADR-130](./adr-130-plan-journal-work-panel.md) «Kanban/backlog» — привязка метрик к задачам; просмотр из UI
   ([PROP-065](./prop-065-ui-docs-plan-todo.md)).
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — аудит как источник данных (с учётом приватности).
 - [PROP-083](./prop-083-instance-customization-branding.md) «Кастомизация/онбординг» — приветственное окно,

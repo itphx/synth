@@ -321,3 +321,11 @@
 - **Проверка:** `pnpm build` — OK; `pnpm typecheck` — 0 ошибок; `pnpm lint` — 0 ошибок (прежние warnings); тесты: core 9637, UI 3748, backend 803, shared 1021, sdk 48, executor 247, plugin-memory 191, storage-postgres 110. Единственный красный `git-proxy-env` — ambient `no_proxy` (на чистом окружении проходит). Dev: backend перезапущен, новые эндпоинты 200, визуальная проверка панели/модалки/журнала/инвариантов/ToDo.
 - **Остатки:** publish проекта (локально → сервер) журнал не переносит (переносится портативным архивом); новые проектные эндпоинты для `remote:`-проектов отдают `502 REMOTE_UNAVAILABLE` (план удалённого проекта остаётся через `PUT /projects/:id`); PROP-054 обновлён как «реализовано», кандидат на принятие в ADR.
 - **Коммит:** не делался (ждёт явной просьбы пользователя).
+
+## 2026-11-08 — ADR-130 и remote-форвард work-роутов
+
+- **Задача:** принять PROP-054 в ADR и доделать остаток по `remote:`-проектам/сессиям. **Тип:** docs + fix (core).
+- **ADR:** создан `docs/arch_decisions/adr-130-plan-journal-work-panel.md` (`✅ Реализовано`), PROP-054 удалён; ссылки в `AGENTS.md`, `packages/ui/AGENTS.md`, ADR-051, PROP-063/065 и `roadmap.md` переведены на ADR-130; индексы `pnpm adr:write` (109 документов, 0 ошибок).
+- **Remote:** общий шов `server/routes/remote-forward.ts` (`raw: true` + `allowHttpError: true`, ответ удалённой стороны как есть, `204`, `remoteErrorToHttp`); форвард плана/журнала/инвариантов (`project-work.ts#forwardRemote`) и ToDo удалённых сессий (`session-todos.ts`) до локальной проверки; core `mount-routes` передаёт `getRemoteClient`, backend — нет. Тесты: plan/log (+14), session-todos, `app.remote` e2e; targeted 75 passed, core typecheck/build, backend typecheck/build.
+- **Проверка:** `adr:check` 0 ошибок; core targeted 75 passed; полный core — 9665 passed, 1 flaky `app.proxy` (изолированно 13 passed); backend typecheck/build OK. Publish проекта журнал по-прежнему не переносит (решение владельца).
+- **Коммиты:** `7952e9f7` — реализация PROP-054; этот коммит — ADR-130 + remote-форвард.

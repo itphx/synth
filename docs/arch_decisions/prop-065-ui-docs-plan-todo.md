@@ -7,7 +7,7 @@
 > идея пользователя 2026-09-16 + `Фичи.md` (Заметки)); состояние проверено по `packages/ui/`.
 > **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md),
 > [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-039](./adr-039-plan-in-project.md),
-> [ADR-014](./adr-014-project-container.md), [PROP-054](./prop-054-kanban-backlog.md),
+> [ADR-014](./adr-014-project-container.md), [ADR-130](./adr-130-plan-journal-work-panel.md),
 > [ADR-122](./adr-122-memory-product.md), [ADR-069](./adr-069-project-instructions-agents-md.md).
 
 **Решение:** сделать в UI **полноценный просмотр и навигацию** по документации проекта, планам
@@ -57,7 +57,7 @@
 ### 2. Редактирование плана и ToDo
 
 > **Обновлено 2026-11-07:** решения по UI/API редактирования плана и ToDo зафиксированы в
-> [PROP-054](./prop-054-kanban-backlog.md) (дополнение 2026-11-07). Здесь остаётся docs-браузер;
+> [ADR-130](./adr-130-plan-journal-work-panel.md) (дополнение 2026-11-07). Здесь остаётся docs-браузер;
 > редактор плана/todo не дублируется.
 
 - Сейчас состояние — только через инструменты агента. UI-редактирование должно идти через **API**
@@ -66,12 +66,12 @@
 - Нужны core-роуты записи плана/todo (сейчас план в backend принимается как `z.unknown()`;
   проверка D9 — требует перепроверки перед реализацией).
 - Интерактивность (drag&drop колонок/карточек, inline-edit) пересекается с Kanban-доской
-  ([PROP-054](./prop-054-kanban-backlog.md)) — общий слой.
+  ([ADR-130](./adr-130-plan-journal-work-panel.md)) — общий слой.
 
 ### 3. Связи и навигация
 
 - Из плана — к задаче/сессии/документу; из документа — к плану/сессии.
-- Связь с backlog ([PROP-054](./prop-054-kanban-backlog.md)).
+- Связь с backlog ([ADR-130](./adr-130-plan-journal-work-panel.md)).
 
 ### 4. Поиск
 
@@ -99,7 +99,7 @@
 - Источник доков — репозиторий или внешний vault Obsidian (или оба)? Приоритет?
 - Редактирование из UI vs только агент? Если да — через какие роуты и с какими правами?
 - Нужен ли полнотекстовый поиск (RAG) сразу или отдельным этапом?
-- Как соотносится с Kanban-доской ([PROP-054](./prop-054-kanban-backlog.md)) — один компонент или разные?
+- Как соотносится с Kanban-доской ([ADR-130](./adr-130-plan-journal-work-panel.md)) — один компонент или разные?
 - Где рендерится документация — центр-таб, левая панель, отдельная вкладка?
 - Как учитывать мобильный UI ([ADR-044](./adr-044-mobile-adaptive-ui-pwa.md))?
 
@@ -110,7 +110,7 @@
 - [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md) «Мобильный UI + PWA» — адаптив viewer.
 - [ADR-039](./adr-039-plan-in-project.md) «План — в проекте, todo — в сессии» — модель состояния.
 - [ADR-014](./adr-014-project-container.md) «Проект как контейнер» — источник документов проекта.
-- [PROP-054](./prop-054-kanban-backlog.md) «Kanban-доска, backlog» — интерактивная доска поверх плана;
+- [ADR-130](./adr-130-plan-journal-work-panel.md) «Kanban-доска, backlog» — интерактивная доска поверх плана;
   общий слой с viewer/редактором.
 - [ADR-122](./adr-122-memory-product.md) «Память Synth / Obsidian Bridge» — внешний vault и RAG-поиск.
 - [ADR-069](./adr-069-project-instructions-agents-md.md) «Проектные инструкции (AGENTS.md)» — источник

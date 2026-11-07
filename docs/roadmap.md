@@ -84,7 +84,6 @@
 
 - [PROP-050](./arch_decisions/prop-050-external-engines-runner.md) — Runner внешних движков (пересматривается в рамках PROP-109).
 - [PROP-053](./arch_decisions/prop-053-cli-tui.md) — CLI и TUI.
-- [PROP-054](./arch_decisions/prop-054-kanban-backlog.md) — Kanban и backlog.
 - [PROP-056](./arch_decisions/prop-056-synth-mcp-server.md) — MCP-сервер Synth для внешних агентов.
 - [PROP-066](./arch_decisions/prop-066-doc-style-skills.md) — doc-стандарты и docs-lint.
 - [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) — кастомизация и брендинг (после PROP-110).
@@ -98,7 +97,6 @@
 | [PROP-037](./arch_decisions/prop-037-commit-security-step.md) | Security step перед коммитом | 2026-11-14 | hook и маркер-хеш, опирается на ADR-029/ADR-036 |
 | [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Self-help скиллы и admin-MCP | 2026-11-14 | read-only status-MCP и deploy-тулы под ADMIN |
 | [PROP-053](./arch_decisions/prop-053-cli-tui.md) | CLI и TUI | 2026-11-14 | паритет CLI; кандидат в icebox |
-| [PROP-054](./arch_decisions/prop-054-kanban-backlog.md) | Kanban-доска и backlog | 2026-11-14 | надстройка над `project.plan` (ADR-039) |
 | [PROP-056](./arch_decisions/prop-056-synth-mcp-server.md) | MCP-сервер Synth для агентов | 2026-11-14 | MCP над API v2, auth, права |
 | [PROP-062](./arch_decisions/prop-062-context-optimization.md) | Оптимизация контекста | 2026-11-14 | `archive_context`, авто-суммаризация; пересекается с ADR-119 |
 | [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) | Терминал и браузер в UI | 2026-11-14 | PTY/WS и webview; горизонт |

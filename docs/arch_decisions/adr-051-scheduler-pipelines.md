@@ -267,7 +267,7 @@ advisory-локом), а также решение для разных dataDir �
 - [PROP-057](./prop-057-loop-engine.md) «Loop Engine» — исполняемая единица, запускаемая по расписанию (D12).
 - [ADR-017](./adr-017-api-v2-hono.md) «API v2» — CRUD-роуты расписаний.
 - [ADR-042](./adr-042-hybrid-mode.md) «Гибридный режим» — размещение планировщика.
-- [PROP-054](./prop-054-kanban-backlog.md) «Kanban-доска, backlog» — задачи как цель запуска по расписанию (D9).
+- [ADR-130](./adr-130-plan-journal-work-panel.md) «Kanban-доска, backlog» — задачи как цель запуска по расписанию (D9).
 
 ## Обновлено (2026-10-21)
 

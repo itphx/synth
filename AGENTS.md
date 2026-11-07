@@ -382,8 +382,8 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 109 (Решения: 55, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
-Удалено: 20 (принятые и поглощённые предложения).
+Всего документов: 109 (Решения: 56, Частично: 23, Предложения: 21, Vision: 7, Icebox: 1, Legacy: 1).
+Удалено: 21 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
 
@@ -434,7 +434,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | наблюдаемость / метрики / health / ready / SLO | [ADR-094](./docs/arch_decisions/adr-094-observability-metrics.md), [docs/OBSERVABILITY.md](./docs/OBSERVABILITY.md) |
 | мультимодальный ввод / вложения / загрузка / миниатюры / сжатие | [ADR-115](./docs/arch_decisions/adr-115-multimodal-input.md), [ADR-116](./docs/arch_decisions/adr-116-instance-state-and-blob-ports.md), [docs/API_V2.md](./docs/API_V2.md) §5.6.1 |
 | память / факты / индексы / recall | [docs/MEMORY.md](./docs/MEMORY.md), [ADR-107](./docs/arch_decisions/adr-107-plugin-facade-services.md), [ADR-122](./docs/arch_decisions/adr-122-memory-product.md) |
-| CLI / TUI / Kanban / backlog | [PROP-053](./docs/arch_decisions/prop-053-cli-tui.md), [PROP-054](./docs/arch_decisions/prop-054-kanban-backlog.md), [PROP-065](./docs/arch_decisions/prop-065-ui-docs-plan-todo.md) |
+| CLI / TUI / Kanban / backlog | [PROP-053](./docs/arch_decisions/prop-053-cli-tui.md), [ADR-130](./docs/arch_decisions/adr-130-plan-journal-work-panel.md), [PROP-065](./docs/arch_decisions/prop-065-ui-docs-plan-todo.md) |
 
 ## Документация
 

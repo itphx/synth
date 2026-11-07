@@ -67,6 +67,7 @@
 | ADR-127 | Параллельное исполнение инструментов в шаге — паритет с opencode | ✅ Реализовано | [adr-127-parallel-tool-execution.md](./adr-127-parallel-tool-execution.md) |
 | ADR-128 | Компактизация на границе шага (mid-turn) | ✅ Реализовано | [adr-128-step-boundary-compaction.md](./adr-128-step-boundary-compaction.md) |
 | ADR-129 | Список задач дочерней сессии саб-агента | ✅ Реализовано | [adr-129-child-session-todos.md](./adr-129-child-session-todos.md) |
+| ADR-130 | Рабочая панель плана, ToDo, журнала и инвариантов | ✅ Реализовано | [adr-130-plan-journal-work-panel.md](./adr-130-plan-journal-work-panel.md) |
 
 ## Частично
 
@@ -103,7 +104,6 @@
 | PROP-037 | Security step перед коммитом | 🧩 Предложение | [prop-037-commit-security-step.md](./prop-037-commit-security-step.md) |
 | PROP-048 | Self-help скиллы и admin-MCP: dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | 🧩 Предложение | [prop-048-self-help-skills-admin-mcp.md](./prop-048-self-help-skills-admin-mcp.md) |
 | PROP-053 | CLI и TUI: паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI | 🧩 Предложение | [prop-053-cli-tui.md](./prop-053-cli-tui.md) |
-| PROP-054 | Kanban-доска, backlog: интерактивная доска поверх `project.plan`, глобальный backlog, assignee/WIP | 🧩 Предложение | [prop-054-kanban-backlog.md](./prop-054-kanban-backlog.md) |
 | PROP-056 | MCP-сервер Synth и скиллы для внешних агентов: MCP над API v2, auth, права, форматы конфигов клиентов | 🧩 Предложение | [prop-056-synth-mcp-server.md](./prop-056-synth-mcp-server.md) |
 | PROP-062 | Умная оптимизация контекста: `archive_context`, авто-суммаризация, приоритизация, стратегии | 🧩 Предложение | [prop-062-context-optimization.md](./prop-062-context-optimization.md) |
 | PROP-064 | Встроенные в UI браузер и терминал: PTY/WS-терминал, webview/iframe-браузер, синхронизация с агентом | 🧩 Предложение | [prop-064-ui-browser-terminal.md](./prop-064-ui-browser-terminal.md) |
@@ -143,6 +143,7 @@
 | PROP-031 | [PROP-058](./prop-058-service-agents-council.md) | дубль; поглощён |
 | PROP-047 | [ADR-122](./adr-122-memory-product.md) | реализованное ядро; vision — docs/MEMORY.md |
 | PROP-049 | [ADR-114](./adr-114-git-worktrees.md) | принято |
+| PROP-054 | [ADR-130](./adr-130-plan-journal-work-panel.md) | принят 2026-11-08 |
 | PROP-082 | [ADR-077](./adr-077-runtime-toolchain.md) | принято |
 | PROP-085 | [ADR-115](./adr-115-multimodal-input.md) | принято |
 | PROP-090 | [ADR-090](./adr-090-extension-api.md) | принято |
@@ -169,5 +170,5 @@
 
 ---
 
-Всего документов: 109 (Решения: 55, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
-Удалено: 20 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
+Всего документов: 109 (Решения: 56, Частично: 23, Предложения: 21, Vision: 7, Icebox: 1, Legacy: 1).
+Удалено: 21 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
