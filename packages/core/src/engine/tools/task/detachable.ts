@@ -26,7 +26,7 @@
  *    работает как раньше (блокирующий прогон).
  */
 import { generateStreamId, nowISO } from '@itphx/synth-shared';
-import type { BackgroundRunRecord, ToolContext, ToolResult } from '@itphx/synth-shared';
+import type { BackgroundRunRecord, ToolContext, ToolResult, TodoItem } from '@itphx/synth-shared';
 import type { CancellationToken } from '../../../providers/base.js';
 import type { BackgroundFinishPatch } from '../../background/types.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
@@ -144,7 +144,16 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
           : status === 'cancelled'
             ? (typeof result.metadata?.partial_output === 'string' ? result.metadata.partial_output : '')
             : result.content;
-        return { status, summary };
+        // ADR-039: итоговый список задач ребёнка — в запись реестра (уходит в
+        // уведомление родителя). Пустой — не передаём (поведение прежнее).
+        const todos = Array.isArray(result.metadata?.todos)
+          ? (result.metadata.todos as TodoItem[])
+          : [];
+        return {
+          status,
+          summary,
+          ...(todos.length > 0 ? { metadata: { todos } } : {}),
+        };
       })();
     finishPromise = service.finish(record.id, patch).catch(() => null);
     return finishPromise;

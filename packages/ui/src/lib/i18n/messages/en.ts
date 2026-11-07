@@ -2328,6 +2328,7 @@ export const dict = {
   'admin.agents.cap.process': 'background processes',
   'admin.agents.cap.models': 'models',
   'admin.agents.cap.ssh': 'remote SSH',
+  'admin.agents.cap.todo': 'todo list',
 
   // Subagent fields
   'admin.agents.agentMode': 'Agent type',

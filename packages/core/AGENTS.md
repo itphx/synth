@@ -1387,6 +1387,17 @@
   После форка у ребёнка сбрасываются унаследованные runtime-флаги родителя —
   `summarizationPending` и `retry` (`engine/tools/task/fork.ts` → `resetForkRuntimeFlags`): они
   относятся к ходу родителя, а не к задаче ребёнка.
+  **Список задач ребёнка — свой (ADR-129).** `todo_*` в цикле ребёнка пишут в **его**
+  `session.todos`: в extra тулов кладётся `todoSessionId = childSessionId`
+  (`engine/tools/task/run-cycle.ts`), а `extra.sessionId` остаётся родительским (события,
+  `permission.ask`/`replied`, проектный скоуп). Стартовый список — параметр `task.todos`
+  (новая сессия — сид, с `task_id` — полная замена; `id` сохраняются), сид — в
+  `prepareChildSession` до `session.created`; унаследованные `todos_updated` родителя при fork
+  удаляются. Актуальность ребёнок видит durable state-сообщением (`task/child-todo-state.ts`), а
+  при доступном `todo_write` и непустом списке — инструкцией `TODO_FINALIZE` (`task/prompt.ts`,
+  файлы `prompts/system/TODO_FINALIZE.{ru,en}.md`). Результат прогона несёт `<todos>` (кап 30) и
+  `metadata.todos`/`todos_unfinished`; в фоне — `metadata.todos` записи реестра и `<todos>` в
+  уведомлении. Авто-merge в список родителя нет.
   **Выбор модели саб-агента (`tool.ts`, `resolveSubagentProvider`).** Приоритет:
   явные `params.provider`/`params.model` → пара агента
   (`AgentDefinition.provider`/`model`; недостающая половина — из родителя, пара,

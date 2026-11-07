@@ -23,6 +23,8 @@ import {
   processDeleteTool,
 } from '../tools/processes.js';
 import { listModelsTool } from '../tools/list-models.js';
+import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool } from '../tools/todo.js';
+import { projectCreateTool } from '../tools/project-manage.js';
 import { computeToolAvailability } from '../permission/availability.js';
 
 /**
@@ -192,5 +194,69 @@ describe('Дефолтные агенты — capability models (ADR-115)', () =
       { agentCapabilities: title!.capabilities, sessionMode: 'act' },
     );
     expect(availability).toEqual({ available: false, reason: 'role' });
+  });
+});
+
+/**
+ * ADR-039: capability `todo` — операционный список задач сессии
+ * (`session.todos`, не `project.plan`). Выдаётся всем встроенным агентам,
+ * кроме `title` (у него нет инструментов вовсе), **в дополнение** к `runtime`
+ * (совместимость с существующими/кастомными агентами).
+ *
+ * Проверка идёт через доступность тулов: read-only агенты должны видеть
+ * `todo_*`, но по-прежнему не видеть `project_create` (нет capability `runtime`).
+ */
+describe('Дефолтные агенты — capability todo (ADR-039)', () => {
+  const agents = loadSystemAgentDefinitions();
+  const byId = new Map(agents.map((a) => [a.id, a]));
+
+  const TODO_TOOLS = [todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool];
+  const WITH_TODO = agents.filter((a) => a.id !== 'title').map((a) => a.id);
+  const READ_ONLY = ['researcher', 'security-auditor', 'explore', 'general'];
+
+  it('набор агентов с todo покрыт тестом целиком', () => {
+    expect([...WITH_TODO, 'title'].sort()).toEqual(agents.map((a) => a.id).sort());
+  });
+
+  it.each(WITH_TODO)('%s имеет capability todo и видит todo_*', (id) => {
+    const agent = byId.get(id)!;
+    expect(agent.capabilities, id).toContain(ToolCapability.TODO);
+    for (const tool of TODO_TOOLS) {
+      const availability = computeToolAvailability(
+        tool.name,
+        tool.capabilities,
+        { agentCapabilities: agent.capabilities, sessionMode: 'act' },
+      );
+      expect(availability.available, `${id} → ${tool.name}`).toBe(true);
+    }
+  });
+
+  it('title (без инструментов) не имеет capability todo', () => {
+    const title = byId.get('title')!;
+    expect(title.capabilities).not.toContain(ToolCapability.TODO);
+    const availability = computeToolAvailability(
+      todoWriteTool.name,
+      todoWriteTool.capabilities,
+      { agentCapabilities: title.capabilities, sessionMode: 'act' },
+    );
+    expect(availability).toEqual({ available: false, reason: 'role' });
+  });
+
+  it.each(READ_ONLY)('%s: todo_* доступны, project_create — unavailable(role)', (id) => {
+    const agent = byId.get(id)!;
+    for (const tool of TODO_TOOLS) {
+      const availability = computeToolAvailability(
+        tool.name,
+        tool.capabilities,
+        { agentCapabilities: agent.capabilities, sessionMode: 'act' },
+      );
+      expect(availability.available, `${id} → ${tool.name}`).toBe(true);
+    }
+    const project = computeToolAvailability(
+      projectCreateTool.name,
+      projectCreateTool.capabilities,
+      { agentCapabilities: agent.capabilities, sessionMode: 'act' },
+    );
+    expect(project).toEqual({ available: false, reason: 'role' });
   });
 });

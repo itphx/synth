@@ -12,6 +12,21 @@ export interface TodoToolExtra {
   sessionManager?: SessionManager;
   eventBus?: EventBus;
   sessionId?: string;
+  /**
+   * ADR-039/ADR-026: чей **список задач** меняют тулы. У прогона саб-агента это
+   * id дочерней сессии (`todoSessionId`), а `sessionId` остаётся родительским —
+   * он отвечает за события/permission/проектный скоуп. Не задан — прежнее
+   * поведение: список сессии `sessionId`.
+   */
+  todoSessionId?: string;
+}
+
+/**
+ * Сессия — владелец списка задач для этого вызова: `todoSessionId` (ребёнок
+ * саб-агента) либо `sessionId` (основная сессия / обратная совместимость).
+ */
+export function resolveTodoSessionId(extra: TodoToolExtra | undefined): string | undefined {
+  return extra?.todoSessionId ?? extra?.sessionId;
 }
 
 const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
@@ -90,7 +105,7 @@ const PRIORITY_LABELS: Record<TodoPriority, string> = {
  * Пункт todo на входе инструмента: id опционален (генерируется при создании),
  * status/priority — обязательны для todo_write (полная замена списка).
  */
-type TodoInputItem = {
+export type TodoInputItem = {
   id?: string;
   content: string;
   status: TodoStatus;
@@ -108,7 +123,9 @@ const todoWriteItemSchema = z.object({
 });
 
 // Пункт для todo_add: content обязателен, status/priority — со значениями по умолчанию.
-const todoAddItemSchema = z.object({
+// Экспортируется: тот же контракт пункта использует стартовый список саб-агента
+// (`task.todos`) — статусы/приоритеты и генерацию id не дублируем.
+export const todoAddItemSchema = z.object({
   id: z.string().optional().describe('Item id (generated if not provided)'),
   content: z.string().describe('Todo item text'),
   status: z.enum(TODO_STATUSES).optional().default('pending').describe('Status of the item'),
@@ -116,8 +133,13 @@ const todoAddItemSchema = z.object({
   planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
 });
 
-/** Приводит пункт к каноническому виду: генерирует id, если его нет. */
-function toTodoItem(input: TodoInputItem): TodoItem {
+/**
+ * Приводит пункт к каноническому виду: генерирует id, если его нет.
+ *
+ * Экспортируется для `task.todos` (сид списка дочерней сессии): id, пришедшие
+ * от модели, сохраняются как есть — по ним родитель сверяет свой список.
+ */
+export function toTodoItem(input: TodoInputItem): TodoItem {
   return {
     id: input.id || randomUUID(),
     content: input.content,
@@ -136,7 +158,7 @@ function requireSessionManager(
   extra: TodoToolExtra | undefined,
   toolName: string,
 ): { content: string; isError: true; metadata?: Record<string, unknown> } | null {
-  if (!extra?.sessionManager || !extra.sessionId) {
+  if (!extra?.sessionManager || !resolveTodoSessionId(extra)) {
     return { content: sm('plan.session_manager_unavailable', { tool: toolName }), isError: true, metadata: { i18n: i18nMeta('plan.session_manager_unavailable', { tool: toolName }) } };
   }
   return null;
@@ -151,6 +173,36 @@ export function renderTodosMarkdown(todos: TodoItem[]): string | null {
   return todos
     .map((t) => `- [${STATUS_LABELS[t.status]}] [${PRIORITY_LABELS[t.priority]}] ${t.content}`)
     .join('\n');
+}
+
+/**
+ * То же markdown-представление, но с капом по числу пунктов (ADR-039):
+ * длинный список не должен раздувать результат саб-агента/уведомление
+ * родителю. Хвост помечается строкой `todo.more`. Пустой список → null.
+ */
+export function renderTodosMarkdownCapped(
+  todos: TodoItem[],
+  maxItems: number = TODO_MAX_OUTPUT_ITEMS,
+): string | null {
+  if (!todos || todos.length === 0) return null;
+  const limit = maxItems > 0 ? maxItems : todos.length;
+  const rendered = renderTodosMarkdown(todos.slice(0, limit));
+  if (!rendered) return null;
+  return todos.length > limit
+    ? `${rendered}\n${sm('todo.more', { count: String(todos.length - limit) })}`
+    : rendered;
+}
+
+/**
+ * Секция `<todos>` для машинного результата: конверт + капнутый рендер.
+ * Пустой список → null (секция не добавляется).
+ */
+export function renderTodosSection(
+  todos: TodoItem[],
+  maxItems: number = TODO_MAX_OUTPUT_ITEMS,
+): string | null {
+  const rendered = renderTodosMarkdownCapped(todos, maxItems);
+  return rendered ? `<todos>\n${rendered}\n</todos>` : null;
 }
 
 /**
@@ -243,7 +295,7 @@ export const todoWriteTool: ToolDefinition = {
   parameters: z.object({
     todos: z.array(todoWriteItemSchema).describe('Full list of todo items to store'),
   }),
-  capabilities: [ToolCapability.RUNTIME],
+  capabilities: [ToolCapability.RUNTIME, ToolCapability.TODO],
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
@@ -256,11 +308,12 @@ export const todoWriteTool: ToolDefinition = {
 
     const missing = requireSessionManager(extra, this.name);
     if (missing) return missing;
+    const todoSessionId = resolveTodoSessionId(extra)!;
 
     const todos = params.todos.map(toTodoItem);
 
     try {
-      await extra!.sessionManager!.withLock(extra!.sessionId!, async (s) => {
+      await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
         s.todos = todos;
         await extra!.sessionManager!.saveSession(s);
       });
@@ -271,8 +324,8 @@ export const todoWriteTool: ToolDefinition = {
       };
     }
 
-    extra!.eventBus?.publish(extra!.sessionId!, 'todos.updated', {
-      session_id: extra!.sessionId!,
+    extra!.eventBus?.publish(todoSessionId, 'todos.updated', {
+      session_id: todoSessionId,
       todos,
     });
 
@@ -297,7 +350,7 @@ export const todoListTool: ToolDefinition = {
     + 'stored in project.plan); items may be linked to plan items via planItemId. '
     + 'Items without an id (legacy data) get a generated id, which is persisted (one-time lazy migration).',
   parameters: z.object({}),
-  capabilities: [ToolCapability.RUNTIME],
+  capabilities: [ToolCapability.RUNTIME, ToolCapability.TODO],
   async execute(_args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
@@ -305,10 +358,11 @@ export const todoListTool: ToolDefinition = {
 
     const missing = requireSessionManager(extra, this.name);
     if (missing) return missing;
+    const todoSessionId = resolveTodoSessionId(extra)!;
 
     let todos: TodoItem[];
     try {
-      todos = await extra!.sessionManager!.withLock(extra!.sessionId!, async (s) => {
+      todos = await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
         const current = normalizeTodos(s.todos);
         // Ленивая миграция legacy-пунктов без id. Пишем только если id реально
         // не хватало: у уже нормализованного списка их не бывает, поэтому
@@ -357,7 +411,7 @@ export const todoAddTool: ToolDefinition = {
   }),
   // Терпимость к `{todos:{item:[…]}}`/`{todos:{items:…}}` от слабых моделей.
   normalizeArgs: (args) => normalizeTodoArgs(args, 'todos', TODO_ITEM_WRAPPER_KEYS),
-  capabilities: [ToolCapability.RUNTIME],
+  capabilities: [ToolCapability.RUNTIME, ToolCapability.TODO],
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
@@ -370,13 +424,14 @@ export const todoAddTool: ToolDefinition = {
 
     const missing = requireSessionManager(extra, this.name);
     if (missing) return missing;
+    const todoSessionId = resolveTodoSessionId(extra)!;
 
     const inputs = Array.isArray(raw.todos) ? raw.todos : [raw.todos];
     const newItems = inputs.map(toTodoItem);
 
     let todos: TodoItem[];
     try {
-      todos = await extra!.sessionManager!.withLock(extra!.sessionId!, async (s) => {
+      todos = await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
         const current = normalizeTodos(s.todos);
         s.todos = [...current, ...newItems];
         await extra!.sessionManager!.saveSession(s);
@@ -389,8 +444,8 @@ export const todoAddTool: ToolDefinition = {
       };
     }
 
-    extra!.eventBus?.publish(extra!.sessionId!, 'todos.updated', {
-      session_id: extra!.sessionId!,
+    extra!.eventBus?.publish(todoSessionId, 'todos.updated', {
+      session_id: todoSessionId,
       todos,
     });
 
@@ -424,7 +479,7 @@ export const todoUpdateTool: ToolDefinition = {
     priority: z.enum(TODO_PRIORITIES).optional().describe('New priority'),
     planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
   }),
-  capabilities: [ToolCapability.RUNTIME],
+  capabilities: [ToolCapability.RUNTIME, ToolCapability.TODO],
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
@@ -443,11 +498,12 @@ export const todoUpdateTool: ToolDefinition = {
 
     const missing = requireSessionManager(extra, this.name);
     if (missing) return missing;
+    const todoSessionId = resolveTodoSessionId(extra)!;
 
     let todos: TodoItem[];
     let found = false;
     try {
-      todos = await extra!.sessionManager!.withLock(extra!.sessionId!, async (s) => {
+      todos = await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
         const current = normalizeTodos(s.todos);
         const idx = current.findIndex((t) => t.id === params.id);
         if (idx < 0) return current;
@@ -479,8 +535,8 @@ export const todoUpdateTool: ToolDefinition = {
       };
     }
 
-    extra!.eventBus?.publish(extra!.sessionId!, 'todos.updated', {
-      session_id: extra!.sessionId!,
+    extra!.eventBus?.publish(todoSessionId, 'todos.updated', {
+      session_id: todoSessionId,
       todos,
     });
 
@@ -509,7 +565,7 @@ export const todoDeleteTool: ToolDefinition = {
   }),
   // Терпимость к `{ids:{item:'…'}}`/`{ids:{ids:[…]}}` от слабых моделей.
   normalizeArgs: (args) => normalizeTodoArgs(args, 'ids', TODO_IDS_WRAPPER_KEYS),
-  capabilities: [ToolCapability.RUNTIME],
+  capabilities: [ToolCapability.RUNTIME, ToolCapability.TODO],
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
@@ -522,6 +578,7 @@ export const todoDeleteTool: ToolDefinition = {
 
     const missing = requireSessionManager(extra, this.name);
     if (missing) return missing;
+    const todoSessionId = resolveTodoSessionId(extra)!;
 
     const ids = Array.isArray(rawIds) ? rawIds : [rawIds];
     const idSet = new Set(ids);
@@ -529,7 +586,7 @@ export const todoDeleteTool: ToolDefinition = {
     let todos: TodoItem[];
     let removed = 0;
     try {
-      todos = await extra!.sessionManager!.withLock(extra!.sessionId!, async (s) => {
+      todos = await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
         const current = normalizeTodos(s.todos);
         const remaining = current.filter((t) => !idSet.has(t.id));
         removed = current.length - remaining.length;
@@ -552,8 +609,8 @@ export const todoDeleteTool: ToolDefinition = {
       };
     }
 
-    extra!.eventBus?.publish(extra!.sessionId!, 'todos.updated', {
-      session_id: extra!.sessionId!,
+    extra!.eventBus?.publish(todoSessionId, 'todos.updated', {
+      session_id: todoSessionId,
       todos,
     });
 

@@ -2308,6 +2308,7 @@ export const dict = {
   'admin.agents.cap.process': 'фоновые процессы',
   'admin.agents.cap.models': 'модели',
   'admin.agents.cap.ssh': 'удалённый SSH',
+  'admin.agents.cap.todo': 'список задач',
 
   // Subagent fields
   'admin.agents.agentMode': 'Тип агента',

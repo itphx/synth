@@ -37,6 +37,12 @@ export interface ContextFileRepository {
    * лимиту шагов (prompts/system/MAX_STEPS.{lang}.md).
    */
   getMaxStepsPrompt(language?: string): string;
+  /**
+   * ADR-039: требование привести список задач саб-агента в актуальное
+   * состояние перед финальным ответом (prompts/system/TODO_FINALIZE.{lang}.md).
+   * Пустая строка — файла нет (блок не добавляется).
+   */
+  getTodoFinalizePrompt(language?: string): string;
   getSummarizerPrompt(language?: string): string;
   /** Профиль `compaction`: рабочее состояние по коду/проекту (prompts/system/COMPACTOR.{lang}.md). */
   getCompactorPrompt(language?: string): string;

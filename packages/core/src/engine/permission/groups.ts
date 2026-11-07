@@ -142,6 +142,20 @@ export const PROCESS_TOOLS = ['process_list', 'process_logs', 'process_stop', 'p
  */
 export const SSH_TOOLS = ['ssh_exec', 'ssh_copy', 'ssh_tunnel'];
 
+/**
+ * ADR-039: операционный список задач сессии (`session.todos`, не `project.plan`).
+ *
+ * Имена **уже** входят в `RUNTIME_TOOLS` — группа `runtime` продолжает их
+ * матчить (тул попадает в обе группы, `getToolGroups`), поэтому правило
+ * `permission.rules.runtime` действует как прежде. Отдельная группа `todo`
+ * нужна, чтобы админ/пользователь мог отключать именно список задач
+ * (`permission.rules.todo`), не выключая остальные примитивы ядра.
+ *
+ * Capability `todo` — **в дополнение** к `runtime` (совместимость с
+ * существующими агентами): у встроенных агентов она есть, кроме `title`.
+ */
+export const TODO_TOOLS = ['todo_write', 'todo_list', 'todo_add', 'todo_update', 'todo_delete'];
+
 /** Все тулы пайплайнов (read + write). */
 export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];
 /** Все тулы расписаний (read + write). */
@@ -177,6 +191,9 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   process: PROCESS_TOOLS,
   // PROP-124 §4/§9: адресные ssh-тулы (ключ совпадает с capability `ssh`).
   ssh: SSH_TOOLS,
+  // ADR-039: список задач сессии (ключ совпадает с capability `todo`).
+  // Имена дублируются в `runtime` намеренно: тул принадлежит обеим группам.
+  todo: TODO_TOOLS,
   [ToolCapability.FILE_READ]: READ_TOOLS,
   [ToolCapability.FILE_WRITE]: WRITE_TOOLS,
   [ToolCapability.GIT_READ]: GIT_READ_TOOLS,
@@ -212,6 +229,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'question',
   'process',
   'ssh',
+  'todo',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

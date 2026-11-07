@@ -207,6 +207,24 @@ describe('messageToLLMMessage', () => {
     expect(messageToLLMMessage(msg(role)).role).toBe(expected);
   });
 
+  it('state-сообщение → role user + обёртка <system-state type="…"> (паритет с основным ходом)', () => {
+    const llm = messageToLLMMessage(msg(MessageRole.SYSTEM, {
+      content: '[TODO]\n- [ ] x',
+      metadata: { type: 'todos_updated', state: true },
+    }));
+
+    expect(llm.role).toBe('user');
+    expect(llm.content).toBe(
+      '<system-state type="todos_updated">\n[TODO]\n- [ ] x\n</system-state>',
+    );
+  });
+
+  it('обычное system-сообщение без metadata.state остаётся role system', () => {
+    const llm = messageToLLMMessage(msg(MessageRole.SYSTEM, { metadata: { type: 'plain' } }));
+    expect(llm.role).toBe('system');
+    expect(llm.content).toBe('content');
+  });
+
   it('переносит id/content/toolCallId/toolUse и zero-usage', () => {
     const toolCalls = [{ id: 'c1', function: { name: 'read_file', arguments: '{}' } }];
     const llm = messageToLLMMessage(msg(MessageRole.ASSISTANT, { id: 'abc', toolCallId: 'tc-9', toolCalls }));

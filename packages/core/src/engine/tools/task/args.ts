@@ -4,6 +4,7 @@
  * ADR-095 (шаг 5): вынесено из `task.ts` без изменения поведения.
  */
 import { z } from 'zod';
+import { todoAddItemSchema } from '../todo.js';
 
 export const taskParametersSchema = z.object({
   description: z.string().describe('A short (3-5 words) description of the task'),
@@ -34,6 +35,15 @@ export const taskParametersSchema = z.object({
     .describe('Routing strategy for the subagent (default: inherit from parent)'),
   skip_context_files: z.boolean().optional()
     .describe('Do not include project instruction files (AGENTS.md) in the subagent prompt. Default: false'),
+  todos: z.array(todoAddItemSchema).optional()
+    .describe(
+      'Starting todo list for the child session: its own operational task list (distinct from the project plan '
+      + 'in project.plan). Item ids are kept as provided so you can reconcile them with your own list; '
+      + 'status defaults to "pending", priority to "medium". '
+      + 'For a new child session this seeds its list; together with task_id it REPLACES the existing list '
+      + '(same semantics as todo_write). Omit to leave an existing child list untouched. '
+      + 'The list is visible to the child as a durable todos state message.',
+    ),
 });
 
 export type TaskParams = z.infer<typeof taskParametersSchema>;

@@ -247,11 +247,17 @@ describe('task/detachable — перевод идущего прогона в ф
     expect(busyChild?.currentStream?.streamId).toBe(streamId);
 
     // Завершение фонового прогона: `completed`, уведомление родителя, очистка.
-    run.finishWith({ content: 'background done', metadata: { final_content: 'background done' } });
+    // ADR-039: итоговый список todo из результата уходит в запись реестра.
+    const todos = [{ id: 't1', content: 'дело', status: 'pending', priority: 'medium' }];
+    run.finishWith({
+      content: 'background done',
+      metadata: { final_content: 'background done', todos },
+    });
     await vi.waitFor(async () => {
       expect((await service.get(runId))?.status).toBe('completed');
     });
     expect((await service.get(runId))?.summary).toBe('background done');
+    expect((await service.get(runId))?.metadata?.todos).toEqual(todos);
     expect(notifications).toHaveLength(1);
     await vi.waitFor(() => expect(unregisterCancelToken).toHaveBeenCalledWith(streamId));
     const finishedChild = await sessionManager.getSession(child.id);

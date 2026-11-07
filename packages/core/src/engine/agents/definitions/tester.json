@@ -21,7 +21,8 @@
     "memory",
     "models",
     "question",
-    "process"
+    "process",
+    "todo"
   ],
   "icon": "bug",
   "color": "--syntax-number",

@@ -32,6 +32,17 @@ import type { BackgroundRunService } from '../../background/service.js';
 // ADR-111 §detach: реестр активных (блокирующих) прогонов сессии.
 import type { ActiveRunRegistry } from '../../background/active-runs.js';
 import type { CancellationToken } from '../../../providers/base.js';
+import type { TodoInputItem } from '../todo.js';
+
+/**
+ * Пункт стартового списка задач дочерней сессии (`task.todos`, ADR-039).
+ *
+ * Контракт пункта — общий с `todo_add` (`todoAddItemSchema`): id сохраняется
+ * (по нему родитель сверяет списки), `status`/`priority` добираются дефолтами
+ * (`pending`/`medium`), `planItemId` — необязательная связь с пунктом плана.
+ * Сериализуется в `session.todos` ребёнка как есть.
+ */
+export type TaskTodoSeed = TodoInputItem;
 
 export interface TaskExtra {
   provider: BaseProvider;

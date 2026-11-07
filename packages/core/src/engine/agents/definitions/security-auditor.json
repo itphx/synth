@@ -14,7 +14,8 @@
     "shell",
     "git_read",
     "mcp",
-    "models"
+    "models",
+    "todo"
   ],
   "icon": "shield-check",
   "color": "--status-warning",

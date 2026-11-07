@@ -42,6 +42,7 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
   resolveSubagentPrompt, runSubagent,
   buildSubagentUnavailableToolsSection,
+  buildTodoFinalizeSection,
   type SubagentRetryConfig, type TaskExtra,
 } from './task.js';
 import {
@@ -51,6 +52,7 @@ import {
   resumeInitialMessages,
   type SubagentResumeErrorCode,
 } from './task/resume-target.js';
+import { ensureTodoStateMessage } from './task/child-todo-state.js';
 
 /** Коды ошибок resume — route маппит их в HTTP-статусы (400/404/409). */
 export type { SubagentResumeErrorCode };
@@ -248,14 +250,37 @@ export async function runSubagentResume(
       streamId,
     });
 
-    // ─── 3. История дочерней сессии → LLM-сообщения (system добавит runSubagent) ──
-    const initialMessages = resumeInitialMessages(freshChild);
+    // ─── 3. Durable state списка задач (ADR-039/ADR-070) ──────────────
+    // Ребёнок видит `session.todos` как state-сообщение `todos_updated` (как
+    // основная сессия). Ошибка derived-сообщения resume не ломает.
+    let resumedChild = freshChild;
+    try {
+      await ensureTodoStateMessage(deps.sessionManager, child.id);
+      const refreshed = await deps.sessionManager.getSession(child.id);
+      if (refreshed) resumedChild = refreshed;
+    } catch {
+      // state-сообщение derived — продолжаем с текущей историей
+    }
+
+    // ─── 4. История дочерней сессии → LLM-сообщения (system добавит runSubagent) ──
+    const initialMessages = resumeInitialMessages(resumedChild);
 
     let systemPrompt = resolveSubagentPrompt(
       agentRole,
       child.settings.language,
       deps.contextConfig?.systemPromptsDir,
     );
+
+    // Тулы resumed-агента собираются один раз: по ним же решается, нужна ли
+    // инструкция финализации списка todo (ADR-039).
+    const subagentTools = deps.agentRegistry.getToolsForAgent(agentDef.id, deps.mcpServers);
+    const todoFinalize = buildTodoFinalizeSection({
+      tools: subagentTools,
+      todos: resumedChild.todos ?? [],
+      contextConfig: deps.contextConfig,
+      language: child.settings.language || 'ru',
+    });
+    if (todoFinalize) systemPrompt += `\n\n${todoFinalize}`;
 
     // ADR-046 §5/§6.2: каталог скиллов resumed-саб-агенту. Binding — родителя,
     // capabilities — самого resumed-агента (executor).
@@ -296,7 +321,6 @@ export async function runSubagentResume(
 
     // ADR-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
     // в системный промпт resumed-саб-агента (как state-сообщение родителя).
-    const subagentTools = deps.agentRegistry.getToolsForAgent(agentDef.id, deps.mcpServers);
     const unavailableSection = buildSubagentUnavailableToolsSection(
       subagentTools,
       deps.runtimeDeps,

@@ -15,7 +15,7 @@ import { BaseProvider, ProviderFactory } from '../../providers/base.js';
 import type { CancellationToken, LLMMessage } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
 import type { AgentRegistry } from '../agents/registry.js';
-import { stubSshKeys } from '../../test-helpers/storage-stubs.js';
+import { stubSshKeys, stubContextFiles } from '../../test-helpers/storage-stubs.js';
 import type { GitService } from '../../git/git-service.js';
 import { z } from 'zod';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
@@ -557,6 +557,54 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(captured[captured.length - 1]!.content).toContain('Resume the interrupted task');
     // Частичный ответ саб-агента в контексте
     expect(captured.some((m) => m.role === 'assistant' && m.content === 'начал анализ...')).toBe(true);
+  });
+
+  // ADR-039: блок [TODO FINALIZE] в system prompt HTTP-resume — по тем же
+  // условиям, что у `task` (доступный `todo_write` + непустой список ребёнка).
+  it('ADR-039: блок финализации todo в system prompt resume', async () => {
+    const { parent, child } = await createInterruptedChild();
+    await mkdir(join(tmpDir, 'prompts', 'subagents'), { recursive: true });
+    await writeFile(join(tmpDir, 'prompts', 'subagents', 'explore.ru.md'), 'ROLE RESUME');
+    // У ребёнка есть задачи — блок должен включиться.
+    await sessionManager.withLock(child, async (s) => {
+      s.todos = [{ id: 't1', content: 'шаг', status: 'pending', priority: 'medium' }];
+      await sessionManager.saveSession(s);
+    });
+    const registry = {
+      get: (id: string) => (id === 'explore' ? { id, agentMode: ['subagent'], maxSteps: 2 } : undefined),
+      getSubagents: () => [{ id: 'explore' }],
+      getToolsForAgent: () => [{
+        type: 'function',
+        function: { name: 'todo_write', description: 'todo', parameters: {} },
+      }],
+    } as unknown as AgentRegistry;
+    let capturedSystem = '';
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, systemPrompt: string) {
+        capturedSystem = systemPrompt;
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: registry,
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+        contextConfig: stubContextFiles({
+          systemPromptsDir: join(tmpDir, 'prompts'),
+          getTodoFinalizePrompt: () => '[TODO FINALIZE] обнови статусы и сохрани id',
+        }),
+      },
+      { child: (await sessionManager.getSession(child))!, parent: (await sessionManager.getSession(parent))!, streamId: 'st-todo', abortSignal: new AbortController().signal },
+    );
+
+    expect(capturedSystem).toContain('ROLE RESUME');
+    expect(capturedSystem).toContain('[TODO FINALIZE]');
   });
 
   // Температура resumed-саб-агента: `agent.temperature` → настройки дочерней

@@ -104,6 +104,19 @@ describe('PermissionEvaluator — группы', () => {
     const cfg: PermissionConfig = { rules: { mcp: 'deny' }, askTimeoutMs: 30_000 };
     expect(evalCheck(cfg, 'some_mcp_tool', {}, ['mcp']).action).toBe('deny');
   });
+
+  it('todo-тулы: группа runtime продолжает применяться (имена остались в RUNTIME_TOOLS)', () => {
+    const cfg: PermissionConfig = { rules: { runtime: 'deny' }, askTimeoutMs: 30_000 };
+    const caps = ['runtime', 'todo'];
+    expect(evalCheck(cfg, 'todo_write', { todos: [] }, caps).action).toBe('deny');
+    expect(evalCheck(cfg, 'todo_list', {}, caps).action).toBe('deny');
+  });
+
+  it('todo-тулы: самостоятельная группа todo (capability) тоже матчится', () => {
+    const cfg: PermissionConfig = { rules: { todo: 'deny' }, askTimeoutMs: 30_000 };
+    const caps = ['runtime', 'todo'];
+    expect(evalCheck(cfg, 'todo_add', { todos: { content: 'x' } }, caps).action).toBe('deny');
+  });
 });
 
 describe('PermissionEvaluator — файловые паттерны', () => {

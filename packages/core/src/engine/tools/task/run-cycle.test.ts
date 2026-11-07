@@ -31,6 +31,7 @@ import { SessionManager } from '../../../sessions/manager.js';
 import { EventBus } from '../../../events/bus.js';
 import { HookBus } from '../../hooks/hook-bus.js';
 import { ToolRegistry } from '../registry.js';
+import { todoWriteTool } from '../todo.js';
 import { LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
 import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { runSubagent, SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS, type SubagentRunConfig } from './run-cycle.js';
@@ -2629,5 +2630,233 @@ describe('run-cycle — ключи SSH по роли сабагента', () => 
     await runSubagent(makeConfig({ tools: llmTools(), extra, subagentType: 'explore' }));
 
     expect(issued).toEqual([]);
+  });
+});
+
+/**
+ * ADR-039: todo-тулы ребёнка получают `extra.todoSessionId` = id дочерней
+ * сессии (а `extra.sessionId` остаётся родительским). Прогон, который зовёт
+ * `todo_write`, обязан менять список **ребёнка**, не родителя, и публиковать
+ * `todos.updated` в канал ребёнка.
+ */
+describe('run-cycle — список todo в результате (ADR-039)', () => {
+  /** Посеять список задач в дочернюю сессию. */
+  async function seedTodos(childId: string, contents: string[] = ['шаг 1', 'шаг 2']): Promise<void> {
+    await sessionManager.withLock(childId, async (s) => {
+      s.todos = contents.map((content, idx) => ({
+        id: `t${idx + 1}`,
+        content,
+        status: idx === 0 ? 'completed' : 'pending',
+        priority: 'medium',
+      }));
+      await sessionManager.saveSession(s);
+    });
+  }
+
+  it('обычное завершение: <todos> в content и metadata.todos/todos_unfinished', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    await seedTodos(child.id, ['сделано', 'осталось']);
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'готово', model: 'test-model' }]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.content).toContain('<todos>');
+    expect(result.content).toContain('сделано');
+    expect(result.content).toContain('</todos>');
+    const todos = result.metadata!.todos as Array<{ id: string; content: string }>;
+    expect(todos.map((t) => t.content)).toEqual(['сделано', 'осталось']);
+    expect(result.metadata!.todos_total).toBe(2);
+    expect(result.metadata!.todos_unfinished).toBe(1);
+  });
+
+  it('пустой список: секции <todos> нет, поля metadata отсутствуют', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'готово' }]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.content).not.toContain('<todos>');
+    expect(result.metadata!.todos).toBeUndefined();
+    expect(result.metadata!.todos_total).toBeUndefined();
+  });
+
+  it('отмена: частичный результат тоже несёт <todos> и metadata.todos', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    await seedTodos(child.id, ['готово', 'не начато']);
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'never' }]]);
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      ctx: makeCtx({ abortSignal: ac.signal }),
+    }));
+
+    expect(result.metadata!.stopped_by).toBe('user');
+    expect(result.content).toContain('<todos>');
+    expect((result.metadata!.todos as Array<{ content: string }>)[1]!.content).toBe('не начато');
+    expect(result.metadata!.todos_unfinished).toBe(1);
+  });
+
+  it('бюджет контекста: детерминированный отчёт тоже несёт <todos>', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    await seedTodos(child.id, ['пункт бюджета']);
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'недостижимо' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'x'.repeat(400) }) });
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, sessionManager, sessionId: parent.id, toolRegistry: registry,
+        subagentMaxInputTokens: 50,
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.metadata!.context_budget_exceeded).toBe(true);
+    expect(result.content).toContain('<todos>');
+    expect(result.content).toContain('пункт бюджета');
+    expect(result.metadata!.todos_total).toBe(1);
+  });
+
+  it('лимит шагов: отчёт по лимиту тоже несёт <todos>', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    await seedTodos(child.id, ['пункт лимита']);
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'отчёт по лимиту' }]]);
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 1,
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.metadata!.step_limit_reached).toBe(true);
+    expect(result.content).toContain('<todos>');
+    expect(result.content).toContain('пункт лимита');
+  });
+});
+
+describe('run-cycle — todo-тулы ребёнка (ADR-039, ownership списка)', () => {
+  it('todo_write в прогоне саб-агента меняет child.todos и публикует событие в канал ребёнка', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+
+    const { provider } = scriptedProvider([
+      [toolCallChunk('todo_write', {
+        todos: [{ content: 'Задача ребёнка', status: 'in_progress', priority: 'high' }],
+      }, 'c1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+
+    const registry = new ToolRegistry();
+    registry.register(todoWriteTool);
+
+    // У агента есть capability todo (плюс runtime), иначе permission-слой
+    // отклонил бы тул по роли.
+    const agentRegistry = {
+      get: (id: string) => ({ id, agentMode: ['subagent'], capabilities: ['runtime', 'todo'] }),
+      getSubagents: () => [],
+      getToolsForAgent: () => [],
+    } as unknown as AgentRegistry;
+
+    const eventBus = new EventBus();
+    const childEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const parentEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(child.id, (e) => childEvents.push({ type: e.type, data: e.data as Record<string, unknown> }));
+    eventBus.subscribe(parent.id, (e) => parentEvents.push({ type: e.type, data: e.data as Record<string, unknown> }));
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: registry,
+        agentRegistry,
+        eventBus,
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+
+    const savedChild = (await sessionManager.getSession(child.id))!;
+    const savedParent = (await sessionManager.getSession(parent.id))!;
+    expect(savedChild.todos!.map((t) => t.content)).toEqual(['Задача ребёнка']);
+    expect(savedChild.todos![0]!.status).toBe('in_progress');
+    expect(savedParent.todos ?? []).toHaveLength(0);
+
+    const updated = childEvents.find((e) => e.type === 'todos.updated');
+    expect(updated).toBeDefined();
+    expect(updated!.data.session_id).toBe(child.id);
+    expect(parentEvents.some((e) => e.type === 'todos.updated')).toBe(false);
+  });
+
+  it('tool-контекст ребёнка: extra.todoSessionId = child, extra.sessionId = parent', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('probe', {}, 'c1')],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+
+    let seen: { todoSessionId?: string; sessionId?: string } = {};
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'probe',
+      description: 'probe',
+      parameters: z.object({}).passthrough(),
+      capabilities: ['runtime', 'todo'],
+      execute: async (_args: unknown, ctx: ToolContext) => {
+        const extra = ctx.extra as { todoSessionId?: string; sessionId?: string };
+        seen = { todoSessionId: extra.todoSessionId, sessionId: extra.sessionId };
+        return { content: 'ok' };
+      },
+    } as unknown as ToolDefinition);
+
+    const agentRegistry = {
+      get: (id: string) => ({ id, agentMode: ['subagent'], capabilities: ['runtime', 'todo'] }),
+      getSubagents: () => [],
+      getToolsForAgent: () => [],
+    } as unknown as AgentRegistry;
+
+    await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry, agentRegistry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(seen).toEqual({ todoSessionId: child.id, sessionId: parent.id });
   });
 });

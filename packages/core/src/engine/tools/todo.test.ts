@@ -536,7 +536,7 @@ describe('todo tools — ленивая миграция legacy-пунктов �
     save.mockRestore();
   });
 
-  it('read-тул не публикует todos.updated', async () => {
+  it('read-тул не публикует todos.updated (todoSessionId)', async () => {
     await seedLegacy();
     const eventBus = new EventBus();
     const events: string[] = [];
@@ -547,3 +547,101 @@ describe('todo tools — ленивая миграция legacy-пунктов �
     expect(events).not.toContain('todos.updated');
   });
 });
+
+/**
+ * ADR-039: у прогона саб-агента todo-тулы меняют список **ребёнка**
+ * (`extra.todoSessionId`), а `extra.sessionId` остаётся родительским (события,
+ * permission, проектный скоуп). Раньше тулы писали в родительский список.
+ */
+describe('todo tools — ownership через todoSessionId (саб-агент)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+  let parentId: string;
+  let childId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-todo-ownership-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const child = await sessionManager.createSession({
+      title: 'Child',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+    });
+    parentId = parent.id;
+    childId = child.id;
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(over: { todoSessionId?: string } = {}): ToolContext {
+    return {
+      sessionId: parentId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: {
+        sessionManager,
+        sessionId: parentId,
+        eventBus,
+        ...(over.todoSessionId !== undefined ? { todoSessionId: over.todoSessionId } : {}),
+      },
+    };
+  }
+
+  it('todo_write пишет в список ребёнка, родительский не меняется, событие — в канал ребёнка', async () => {
+    const childEvents: Array<Record<string, unknown>> = [];
+    const parentEvents: Array<Record<string, unknown>> = [];
+    eventBus.subscribe(childId, (e) => childEvents.push(e.data as Record<string, unknown>));
+    eventBus.subscribe(parentId, (e) => parentEvents.push(e.data as Record<string, unknown>));
+
+    const result = await todoWriteTool.execute(
+      { todos: [{ content: 'Задача ребёнка', status: 'in_progress', priority: 'high' }] },
+      makeCtx({ todoSessionId: childId }),
+    );
+    expect(result.isError).toBeUndefined();
+
+    const child = (await sessionManager.getSession(childId))!;
+    const parent = (await sessionManager.getSession(parentId))!;
+    expect(child.todos).toHaveLength(1);
+    expect(child.todos![0]!.content).toBe('Задача ребёнка');
+    expect(parent.todos ?? []).toHaveLength(0);
+    expect(childEvents).toHaveLength(1);
+    expect(childEvents[0]!.session_id).toBe(childId);
+    expect(parentEvents).toHaveLength(0);
+  });
+
+  it('todo_add/todo_list работают со списком ребёнка', async () => {
+    await todoAddTool.execute(
+      { todos: { content: 'Добавлено ребёнку' } },
+      makeCtx({ todoSessionId: childId }),
+    );
+
+    const child = (await sessionManager.getSession(childId))!;
+    const parent = (await sessionManager.getSession(parentId))!;
+    expect(child.todos!.map((t) => t.content)).toEqual(['Добавлено ребёнку']);
+    expect(parent.todos ?? []).toHaveLength(0);
+
+    const listed = await todoListTool.execute({}, makeCtx({ todoSessionId: childId }));
+    expect(listed.content).toContain('Добавлено ребёнку');
+  });
+
+  it('без todoSessionId — прежнее поведение: список сессии sessionId', async () => {
+    await todoWriteTool.execute(
+      { todos: [{ content: 'Родительская задача', status: 'pending', priority: 'medium' }] },
+      makeCtx(),
+    );
+
+    const parent = (await sessionManager.getSession(parentId))!;
+    const child = (await sessionManager.getSession(childId))!;
+    expect(parent.todos!.map((t) => t.content)).toEqual(['Родительская задача']);
+    expect(child.todos ?? []).toHaveLength(0);
+  });
+});
+

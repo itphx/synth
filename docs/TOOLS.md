@@ -16,7 +16,7 @@
 | SSH-ключи (ADR-076) | `ssh_keys_list` — метаданные ключей инстанса (`id`, `name`, `type`, `agentIds`, `createdAt`; приватный ключ и passphrase — **никогда**), фильтр `agent_id`; capability `git_read`, группа `git_read` (plan разрешён), **без привязки к workspace**. Нужен, чтобы взять `sshKeyId` для `project_repo_clone`/`project_repo_fetch`: у этих тулов текст отказа для SSH-URL перечисляет доступные ключи (`git.ssh_key_required_hint`, `id → name`, до 10) и отсылает к `ssh_keys_list`; нет стора ключей — прежний текст без списка |
 | Git worktrees (ADR-114) | `git_worktree_list`, `git_worktree_create`, `git_worktree_remove`, `git_worktree_prune` — проект **только из сессии**; `git_worktree_list` — только чтение (группа `git_read`), мутации (`create`/`remove`/`prune`) — группа `git_write`, в plan-режиме запрещены; `create` не привязывает сессию — привязку делает `PATCH /api/v2/sessions/:id { worktreeId }` |
 | Удалённый SSH (ADR-124) | `ssh_exec`, `ssh_copy`, `ssh_tunnel` — адресный доступ к удалённому хосту по SSH; capability `ssh`, группа правил `ssh` (authority: действие `execute`, вид цели `external`), в plan-режиме группа блокируется **целиком**; в режиме инстанса `ssh.mode='agent'` — `unavailable(policy)`; ключ — секрет вызова (`ExecSecret.mode='agent'`, эфемерный `ssh-agent`), пути к ключу в argv не бывает; ssh-клиент всегда с `-F /dev/null` (пользовательский `~/.ssh/config` не читается), `-o BatchMode=yes`, `-o StrictHostKeyChecking=accept-new`; параметры и ограничения — в разделе «Адресные SSH-тулы» ниже |
-| План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` |
+| План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` — todo-тулы объявляют capability `[runtime, todo]` (группа правил `todo`, имена продублированы в `runtime`); список принадлежит **сессии вызова**: у саб-агента — своя дочерняя сессия (`extra.todoSessionId`), а не родительская; мутации публикуют `todos.updated` в канал сессии-владельца |
 | Пайплайны (ADR-101) | `pipeline_list`, `pipeline_get`, `pipeline_save`, `pipeline_publish`, `pipeline_delete`, `pipeline_run`, `pipeline_run_status`, `pipeline_run_list`, `pipeline_run_resume`, `pipeline_run_cancel`, `pipeline_templates`, `pipeline_instantiate` — capability `pipeline`; проект **только из сессии** (параметра `project_id` нет), чтение доступно участнику проекта, мутации (`save`/`publish`/`delete`/`run`/`resume`/`cancel`/`instantiate`) — только с правом изменения содержимого проекта (`VIEWER` только читает) и не в plan-режиме; прогон — только по **опубликованной** версии, одновременно у пайплайна не более одного активного прогона; `resume` — действие `approve` (ADR-106) |
 | Расписания (ADR-051) | `schedule_list`, `schedule_get`, `schedule_save`, `schedule_delete`, `schedule_run`, `schedule_jobs` — capability `schedule`; область «**свои + проект**» (свои расписания доступны и без проекта), мутации — по владению или праву изменения содержимого проекта, не в plan-режиме; триггер ровно один (`cron` 5 полей в UTC **или** `every` `30s\|15m\|1h\|24h`); цель `pipeline` требует **опубликованный** пайплайн и не создаёт сессию (прогон в фоне, прогресс — `pipeline_run_status`) |
 | Реестр фоновых прогонов (ADR-111/ADR-113) | `process_list`, `process_logs` (чтение; plan разрешён), `process_stop` (остановка running-прогона: процесс — `SIGTERM`→`SIGKILL`, фоновый саб-агент — abort дочернего прогона), `process_delete` (удаление только терминальной записи); скоуп «своя сессия + дочерние»; мутации в plan запрещены; capability `process`; лог — только у `kind: 'process'` |
@@ -28,6 +28,27 @@
 | Модели (ADR-115) | `list_models` — каталог моделей инстанса (capability `models`, группа `read`, plan разрешён, рабочий каталог не нужен): `provider/model` + `modalities`, **текущая** модель сессии и `defaultFor` (семейства, где модель назначена в `attachments.modalityModels`); без аргументов — компактный ответ (текущая + aux, без дампа каталога: у больших каталогов — сотни моделей), фильтры `modality`/`provider` и `limit` 1..50 (по умолчанию 20); модели без известных модальностей пропускаются и считаются отдельно |
 | Профиль | `profile_update` (capability `user` — выдан только Агенту `assistant`; онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
 | Скиллы | `skill` (ADR-046: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
+
+### Саб-агент `task`: список задач и результат (ADR-129)
+
+- **Параметр `todos`** (`todoAddItemSchema[]`) — стартовый список задач **дочерней** сессии
+  (её операционный список, не `project.plan`). У новой сессии он засевается при создании (до
+  публикации `session.created`); вместе с `task_id` — **полная замена** существующего списка
+  (семантика `todo_write`); без параметра список не трогается. `status` (`pending`/`in_progress`/
+  `completed`/`cancelled`) и `priority` (`high`/`medium`/`low`) опциональны — дефолты `pending` и
+  `medium`; `id` сохраняются как переданы, чтобы вызывающий агент мог сверять списки.
+- **Видимость у ребёнка.** Список синхронизируется durable state-сообщением `todos_updated`
+  (как в основном ходе), а при непустом списке и доступном `todo_write` в системный промпт
+  добавляется `[TODO FINALIZE]` — требование привести список в актуальное состояние. Сам список
+  в промпте не дублируется.
+- **Результат.** В `<task_result>` добавляется секция `<todos>` (кап **30** пунктов, хвост —
+  `todo.more`), а в `metadata` — полный массив `todos`, `todos_total`, `todos_unfinished`. Поля
+  есть во всех терминальных ветках: обычный финал, отмена, ошибка LLM, бюджет контекста
+  (`task.context_budget`), шаг-лимит и жёсткий сбой (`task.subagent_exec_error`). Пустой список —
+  секции и полей нет.
+- **Фон.** Терминальное уведомление фонового прогона содержит тот же `<todos>` и `metadata.todos`;
+  немедленный ответ `background:true` — прежний `{status:'running'}`. Авто-merge в родительский
+  список нет: вызывающий агент сам решает, что перенести (`todo_update`).
 
 Встроенные скиллы автоматизации (ADR-046 §9.5, объявлены в коде — `packages/core/src/engine/skills/builtin.ts`): `synth-pipelines` (команда `/pipelines` — жизненный цикл пайплайна: спецификация → публикация → прогон → журнал, шаблоны инстанца) и `synth-schedules` (команда `/schedules` — cron/интервал → цель, ручной запуск, история срабатываний). Оба требуют capability `pipeline`/`schedule` соответственно и работают в рамках правил области и прав, что и перечисленные выше тулы.
 

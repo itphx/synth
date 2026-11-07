@@ -187,6 +187,10 @@ export class PgContextFileRepository implements ContextFileRepository, ContextOv
     return this._config.getMaxStepsPrompt(language);
   }
 
+  getTodoFinalizePrompt(language?: string): string {
+    return this._config.getTodoFinalizePrompt(language);
+  }
+
   getSummarizerPrompt(language?: string): string {
     return this._config.getSummarizerPrompt(language);
   }

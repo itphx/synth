@@ -7,7 +7,7 @@
  * поведения.
  */
 import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
-import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, ToolDefinition, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType, PermissionDecision } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, ToolDefinition, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType, PermissionDecision, TodoItem } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
@@ -54,6 +54,7 @@ import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks
 import { hasVisibleStepContent } from '../../orchestrator/persistence.js';
 import type { AssistantMessageStatus } from '../../orchestrator/persistence.js';
 import { requeueMessages } from '../../../queue/processor.js';
+import { renderTodosSection } from '../todo.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
 /** Retry саб-агента: максимум попыток LLM-вызова (единая политика — LLM_MAX_ATTEMPTS). */
@@ -165,6 +166,40 @@ async function loadSubagentSecretsMap(extra: TaskExtra): Promise<Record<string, 
  * Текст «только текст» для шага-лимита — общий модуль механики opencode
  * (`engine/llm/max-steps.ts`): его же использует основной цикл оркестратора.
  */
+
+/**
+ * Список задач дочерней сессии (ADR-039) — источник секции `<todos>` в
+ * результате прогона. Ошибка/отсутствие сессии не фатальны: пустой список
+ * (секция просто не добавляется).
+ */
+async function readChildTodos(
+  sessionManager: TaskExtra['sessionManager'],
+  childSessionId: string | undefined,
+): Promise<TodoItem[]> {
+  if (!sessionManager || !childSessionId) return [];
+  try {
+    const child = await sessionManager.getSession(childSessionId);
+    return child?.todos ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * `metadata` результата по списку todo: полный массив (без капа — данные для
+ * UI/аналитики) и числа пунктов. Пустой список → пустой объект (поля не
+ * появляются, поведение прежнее).
+ */
+function todoMetadata(todos: TodoItem[]): Record<string, unknown> {
+  if (todos.length === 0) return {};
+  return {
+    todos,
+    todos_total: todos.length,
+    todos_unfinished: todos.filter(
+      (todo) => todo.status === 'pending' || todo.status === 'in_progress',
+    ).length,
+  };
+}
 
 /**
  * PROP-127 (этап T3): план одного вызова инструмента в цикле саб-агента.
@@ -947,6 +982,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       const stepsCompleted = allSubagentToolCalls.length > 0
         ? allSubagentToolCalls.map((t) => t.name).join(', ')
         : 'none';
+      // ADR-039: актуальный список задач ребёнка — тоже часть результата
+      // (частичный вывод при отмене): заголовок + капнутый рендер.
+      const childTodos = await readChildTodos(extra.sessionManager, childSessionId);
+      const todosSection = renderTodosSection(childTodos);
       return {
         content: [
           '<task_result>',
@@ -955,6 +994,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
           ...(partialContent ? [`<partial_output>\n${partialContent}\n</partial_output>`] : []),
           `<steps_completed>${stepsCompleted}</steps_completed>`,
+          ...(todosSection ? [todosSection] : []),
           sm('task.stopped_before_completion'),
           '</task_result>',
         ].join('\n'),
@@ -971,6 +1011,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           subagent_model: subagentModel,
           tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
           partial_output: partialContent || undefined,
+          ...todoMetadata(childTodos),
         },
       };
     };
@@ -1454,6 +1495,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             retries: attempts,
           });
         }
+        // ADR-039: список задач ребёнка на момент сбоя — часть результата.
+        const failureTodos = await readChildTodos(extra.sessionManager, childSessionId);
+        const failureTodosSection = renderTodosSection(failureTodos);
         return {
           content: [
             '<task_result>',
@@ -1461,6 +1505,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             '<status>error</status>',
             ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
             `<attempts>${attempts}</attempts>`,
+            ...(failureTodosSection ? [failureTodosSection] : []),
             errText,
             '</task_result>',
           ].join('\n'),
@@ -1479,6 +1524,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             subagent_usage: subagentUsage,
             subagent_model: subagentModel,
             tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
+            ...todoMetadata(failureTodos),
           },
         };
       }
@@ -1875,6 +1921,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // без сборщика — fail-closed (ключи не выдаются вовсе).
           extra: {
             ...(extra as unknown as Record<string, unknown>),
+            // ADR-039: todo-тулы ребёнка меняют **его** список, а не список
+            // родителя. `sessionId` в extra остаётся родительским (события,
+            // permission.ask/replied, проектный/automation-скоуп).
+            todoSessionId: childSessionId,
             sshSecrets: extra.sshSecretsFor
               ? extra.sshSecretsFor({
                   agentRole: subagentDef?.id ?? subagentType,
@@ -2434,6 +2484,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       ? `<child_session_id>${childSessionId}</child_session_id>\n`
       : '';
 
+    // ADR-039: актуальный список задач ребёнка — часть результата для
+    // вызывающего агента. В content — markdown с капом (30 пунктов), в
+    // metadata — полный массив (данные UI/аналитики).
+    const resultTodos = await readChildTodos(extra.sessionManager, childSessionId);
+    const resultTodosSection = renderTodosSection(resultTodos);
+
     // ADR-030: `agent_completed` — неблокирующий эмит успешного завершения
     // саб-агента (result — итоговый ответ).
     if (extra.hooks && childSessionId) {
@@ -2444,7 +2500,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
 
     return {
-      content: `<task_result>\n<summary>${description}</summary>\n${qualityBlock}${routedByBlock}${childSessionBlock}\n${qualityOutput}${qaWarningText}${stepsLimitBlock}\n</task_result>`,
+      content: `<task_result>\n<summary>${description}</summary>\n${qualityBlock}${routedByBlock}${childSessionBlock}\n${qualityOutput}${qaWarningText}${stepsLimitBlock}${resultTodosSection ? `\n\n${resultTodosSection}` : ''}\n</task_result>`,
       metadata: {
         subagent_type: subagentType,
         description: description,
@@ -2474,6 +2530,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения).
         subagent_usage: subagentUsage,
         subagent_model: subagentModel,
+        ...todoMetadata(resultTodos),
       },
     };
   } catch (err: unknown) {
@@ -2505,10 +2562,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         error: String(err),
       });
     }
+    // ADR-039: список задач ребёнка на момент жёсткого сбоя — часть результата
+    // (ошибка не должна скрывать, что осталось недоделанным).
+    const crashTodos = await readChildTodos(extra.sessionManager, childSessionId);
+    const crashTodosSection = renderTodosSection(crashTodos);
     return {
-      content: sm('task.subagent_exec_error', { type: subagentType, error: String(err) }),
+      content: `${sm('task.subagent_exec_error', { type: subagentType, error: String(err) })}${crashTodosSection ? `\n\n${crashTodosSection}` : ''}`,
       isError: true,
-      metadata: { subagent_type: subagentType },
+      metadata: { subagent_type: subagentType, ...todoMetadata(crashTodos) },
     };
   } finally {
     // ADR-104: очередь инъекций ребёнка снимается в **любом** терминальном

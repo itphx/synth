@@ -22,6 +22,7 @@ export {
 export type { SubagentRunConfig } from './task/run-cycle.js';
 export {
   buildSubagentUnavailableToolsSection,
+  buildTodoFinalizeSection,
   messageToLLMMessage,
   resolveSubagentPrompt,
 } from './task/prompt.js';

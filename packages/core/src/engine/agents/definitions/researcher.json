@@ -14,7 +14,8 @@
     "git_read",
     "mcp",
     "memory",
-    "models"
+    "models",
+    "todo"
   ],
   "icon": "search-eye",
   "color": "--syntax-keyword",

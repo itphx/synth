@@ -66,6 +66,7 @@
 | ADR-125 | Серверные MCP-серверы в локальных сессиях гибрида — relay и tools | ✅ Реализовано | [adr-125-hybrid-remote-mcp.md](./adr-125-hybrid-remote-mcp.md) |
 | ADR-127 | Параллельное исполнение инструментов в шаге — паритет с opencode | ✅ Реализовано | [adr-127-parallel-tool-execution.md](./adr-127-parallel-tool-execution.md) |
 | ADR-128 | Компактизация на границе шага (mid-turn) | ✅ Реализовано | [adr-128-step-boundary-compaction.md](./adr-128-step-boundary-compaction.md) |
+| ADR-129 | Список задач дочерней сессии саб-агента | ✅ Реализовано | [adr-129-child-session-todos.md](./adr-129-child-session-todos.md) |
 
 ## Частично
 
@@ -168,5 +169,5 @@
 
 ---
 
-Всего документов: 108 (Решения: 54, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 109 (Решения: 55, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 20 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

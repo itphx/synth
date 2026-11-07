@@ -24,7 +24,8 @@
     "schedule",
     "question",
     "process",
-    "models"
+    "models",
+    "todo"
   ],
   "icon": "server",
   "color": "--syntax-type",

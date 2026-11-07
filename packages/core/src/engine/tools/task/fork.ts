@@ -12,7 +12,8 @@ import { serializeSession } from '../../../server/serialize.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
 import { t as sm } from '../../system-messages.js';
 import { recordAuxUsage } from '../../usage-accounting.js';
-import type { ContextMode, TaskExtra } from './types.js';
+import { toTodoItem } from '../todo.js';
+import type { ContextMode, TaskExtra, TaskTodoSeed } from './types.js';
 
 /** Мутабельное состояние дочерней сессии, собираемое `prepareChildSession`. */
 export interface PreparedChildSession {
@@ -49,6 +50,15 @@ export interface PrepareChildSessionOptions {
    */
   provider?: string;
   model?: string;
+  /**
+   * ADR-039: стартовый список задач дочерней сессии (`task.todos`).
+   *
+   * Записывается в `session.todos` ребёнка **до** публикации `session.created`;
+   * id сохраняются (по ним родитель сверяет списки). `undefined` — список не
+   * трогаем. Унаследованные от родителя state-сообщения `todos_updated` при
+   * создании удаляются в любом случае — это derived state родительского списка.
+   */
+  todos?: TaskTodoSeed[];
 }
 
 /**
@@ -70,7 +80,7 @@ export async function prepareChildSession(
   state: PreparedChildSession,
   opts: PrepareChildSessionOptions,
 ): Promise<void> {
-  const { extra, description, subagentType, contextMode, contextCount, childRoutingOverrides, temperature, provider, model } = opts;
+  const { extra, description, subagentType, contextMode, contextCount, childRoutingOverrides, temperature, provider, model, todos } = opts;
 
   // ─── Permissions дочерней сессии (ADR-029): наследуем родителя + deny-дополнения ──
   const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
@@ -242,6 +252,34 @@ export async function prepareChildSession(
           resetForkRuntimeFlags(child);
           await extra.sessionManager.updateSession(child);
           state.childSessionId = child.id;
+        }
+
+        // ADR-039: список задач ребёнка — его собственный. Унаследованные от
+        // родителя state-сообщения `todos_updated` (derived state родительского
+        // списка) при создании удаляем; переданный `todos` — стартовый список
+        // (id сохраняются). Делается ДО публикации `session.created`, чтобы
+        // сессия уходила в хаб уже с seeded `todos`.
+        const manager = extra.sessionManager;
+        if (state.childSessionId && manager) {
+          const seeded = todos !== undefined ? todos.map(toTodoItem) : undefined;
+          try {
+            const updated = await manager.withLock(state.childSessionId, async (s) => {
+              const messages = s.messages.filter(
+                (m) => !(m.metadata?.state === true && m.metadata?.type === 'todos_updated'),
+              );
+              let changed = messages.length !== s.messages.length;
+              if (changed) s.messages = messages;
+              if (seeded !== undefined) {
+                s.todos = seeded;
+                changed = true;
+              }
+              if (changed) await manager.saveSession(s);
+              return s;
+            });
+            state.childMessages = updated.messages;
+          } catch {
+            // не фатально — продолжаем без сида/очистки
+          }
         }
 
         if (extra.eventBus && state.childSessionId) {

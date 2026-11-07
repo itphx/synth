@@ -25,7 +25,8 @@
     "question",
     "process",
     "models",
-    "ssh"
+    "ssh",
+    "todo"
   ],
   "icon": "clipboard",
   "color": "--primary",

@@ -9,7 +9,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageRole, ToolCapability, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { Message, Session, SessionSettings, ToolContext, RouterConfig } from '@itphx/synth-shared';
+import type { Message, Session, SessionSettings, ToolContext, RouterConfig, ToolForLLM } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ModelRouter } from '../../router/router.js';
@@ -599,6 +599,68 @@ describe('task/tool.ts — фоновый саб-агент (PROP-096)', () => {
     expect(await service.list()).toHaveLength(0);
   });
 
+  it('background=true: итоговый список todo уходит в запись реестра (metadata.todos)', async () => {
+    const { provider, release } = gatedProvider();
+    const { service } = makeBackgroundService();
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        background: true,
+        // Стартовый список ребёнка — он же попадает в результат прогона.
+        todos: [{ content: 'фоновая задача', status: 'pending', priority: 'medium' }],
+      },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        backgroundService: service,
+        backgroundEnabled: true,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const runId = String(result.metadata!.background_run_id);
+
+    release();
+    await vi.waitFor(async () => {
+      expect((await service.get(runId))?.status).toBe('completed');
+    });
+
+    const record = await service.get(runId);
+    expect(Array.isArray(record?.metadata?.todos)).toBe(true);
+    expect((record!.metadata!.todos as Array<{ content: string }>)[0]!.content).toBe('фоновая задача');
+  });
+
+  it('background=true: пустой список todo — metadata.todos не передаётся', async () => {
+    const { provider, release } = gatedProvider();
+    const { service } = makeBackgroundService();
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', background: true },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        sessionId: parent.id,
+        backgroundService: service,
+        backgroundEnabled: true,
+      }, parent.id),
+    );
+
+    const runId = String(result.metadata!.background_run_id);
+    release();
+    await vi.waitFor(async () => {
+      expect((await service.get(runId))?.status).toBe('completed');
+    });
+
+    const record = await service.get(runId);
+    expect(record?.metadata?.todos).toBeUndefined();
+  });
+
   it('превышен лимит фоновых саб-агентов сессии — отказ task.background_limit', async () => {
     const { provider, release } = gatedProvider();
     const { service, notifications } = makeBackgroundService({ maxSubagentsPerSession: 1 });
@@ -784,6 +846,84 @@ describe('task/tool.ts — продолжение ребёнка через task
 
     expect(result.isError).toBe(true);
     expect(result.metadata!.i18n).toMatchObject({ key: 'task.resume_session_not_found' });
+  });
+
+  it('task_id + todos — полная замена списка ребёнка; без todos — список сохраняется', async () => {
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    child.todos = [
+      { id: 'old-1', content: 'Старая', status: 'in_progress', priority: 'high' },
+    ];
+    await sessionManager.saveSession(child);
+
+    const first = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        task_id: child.id,
+        todos: [
+          { id: 'seed-1', content: 'Новая A' },
+          { content: 'Новая B' },
+        ],
+      },
+      makeCtx({ provider: makeProvider().provider, agentRegistry: makeAgentRegistry(), sessionManager, sessionId: parent.id }, parent.id),
+    );
+    expect(first.isError).toBeFalsy();
+
+    let saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.todos!.map((t) => t.content)).toEqual(['Новая A', 'Новая B']);
+    expect(saved.todos![0]!.id).toBe('seed-1');
+    // Дефолты — из схемы task (тот же контракт, что todo_add).
+    expect(saved.todos![0]!.status).toBe('pending');
+    expect(saved.todos![0]!.priority).toBe('medium');
+    // Durable state-сообщение списка — в истории ребёнка.
+    expect(
+      saved.messages.some((m) => m.metadata?.state === true && m.metadata?.type === 'todos_updated'),
+    ).toBe(true);
+
+    // Без todos список не трогается.
+    const second = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', task_id: child.id },
+      makeCtx({ provider: makeProvider().provider, agentRegistry: makeAgentRegistry(), sessionManager, sessionId: parent.id }, parent.id),
+    );
+    expect(second.isError).toBeFalsy();
+
+    saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.todos!.map((t) => t.content)).toEqual(['Новая A', 'Новая B']);
+    expect(saved.todos![0]!.id).toBe('seed-1');
+  });
+
+  it('новый ребёнок: todos — стартовый список (id сохраняются, дефолты применяются)', async () => {
+    const { provider } = makeProvider('done');
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'p',
+        subagent_type: 'explore',
+        todos: [
+          { id: 'seed-1', content: 'A' },
+          { content: 'B' },
+        ],
+      },
+      makeCtx({ provider, agentRegistry: makeAgentRegistry(), sessionManager, sessionId: parent.id }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    expect(child.todos!.map((t) => t.id)).toEqual(['seed-1', child.todos![1]!.id]);
+    expect(child.todos![0]!.content).toBe('A');
+    expect(child.todos![0]!.status).toBe('pending');
+    expect(child.todos![0]!.priority).toBe('medium');
+    expect(child.todos![1]!.content).toBe('B');
+    expect(
+      child.messages.some((m) => m.metadata?.state === true && m.metadata?.type === 'todos_updated'),
+    ).toBe(true);
   });
 });
 
@@ -1723,5 +1863,147 @@ describe('task/tool.ts — температура саб-агента', () => {
 
     const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
     expect(child.settings.temperature).toBe(0.35);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-039: инструкция «приведи список todo в актуальное состояние» в system
+// prompt саб-агента. Условие — доступный тул `todo_write` И непустой
+// `session.todos` ребёнка на старте прогона.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TODO_WRITE_LLM_TOOL: ToolForLLM = {
+  type: 'function',
+  function: { name: 'todo_write', description: 'todo', parameters: {} },
+};
+
+const OTHER_LLM_TOOL: ToolForLLM = {
+  type: 'function',
+  function: { name: 'read_file', description: 'read', parameters: {} },
+};
+
+const TODO_FINALIZE_MARKER = '[TODO FINALIZE] обнови статусы и сохрани id';
+
+function makeToolRegistryStub(tools: ToolForLLM[]): AgentRegistry {
+  return {
+    get: (id: string) => ({ id, agentMode: ['subagent'], maxSteps: 2 }),
+    getSubagents: () => [],
+    getToolsForAgent: () => tools,
+  } as unknown as AgentRegistry;
+}
+
+describe('task/tool.ts — инструкция финализации todo в system prompt (ADR-039)', () => {
+  let dir: string;
+  let sessionManager: SessionManager;
+  let parent: Session;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-task-todo-finalize-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+    parent = await sessionManager.createSession({ title: 'P' });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function makeFinalizeConfig() {
+    return stubContextFiles({ getTodoFinalizePrompt: () => TODO_FINALIZE_MARKER });
+  }
+
+  it('новый прогон: непустой список + доступный todo_write → блок в system prompt', async () => {
+    const { provider, chatAsync } = makeProvider('ok');
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        todos: [{ id: 't1', content: 'пункт', status: 'pending', priority: 'high' }],
+      },
+      makeCtx({
+        provider,
+        agentRegistry: makeToolRegistryStub([TODO_WRITE_LLM_TOOL]),
+        sessionManager,
+        sessionId: parent.id,
+        contextConfig: makeFinalizeConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const [, systemPrompt] = chatAsync.mock.calls[0] as unknown as [unknown, string];
+    expect(systemPrompt).toContain(TODO_FINALIZE_MARKER);
+    // Сам список в промпт не дублируется (он в state-сообщении).
+    expect(systemPrompt).not.toContain('- [pending]');
+  });
+
+  it('пустой список — блока нет даже при доступном todo_write', async () => {
+    const { provider, chatAsync } = makeProvider('ok');
+
+    await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore' },
+      makeCtx({
+        provider,
+        agentRegistry: makeToolRegistryStub([TODO_WRITE_LLM_TOOL]),
+        sessionManager,
+        sessionId: parent.id,
+        contextConfig: makeFinalizeConfig(),
+      }, parent.id),
+    );
+
+    const [, systemPrompt] = chatAsync.mock.calls[0] as unknown as [unknown, string | undefined];
+    expect(systemPrompt ?? '').not.toContain(TODO_FINALIZE_MARKER);
+  });
+
+  it('нет тула todo_write — блока нет даже при непустом списке', async () => {
+    const { provider, chatAsync } = makeProvider('ok');
+
+    await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        todos: [{ id: 't1', content: 'пункт', status: 'pending', priority: 'high' }],
+      },
+      makeCtx({
+        provider,
+        agentRegistry: makeToolRegistryStub([OTHER_LLM_TOOL]),
+        sessionManager,
+        sessionId: parent.id,
+        contextConfig: makeFinalizeConfig(),
+      }, parent.id),
+    );
+
+    const [, systemPrompt] = chatAsync.mock.calls[0] as unknown as [unknown, string | undefined];
+    expect(systemPrompt ?? '').not.toContain(TODO_FINALIZE_MARKER);
+  });
+
+  it('продолжение task_id: блок есть при непустом списке ребёнка и todo_write', async () => {
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    await sessionManager.withLock(child.id, async (s) => {
+      s.todos = [{ id: 't1', content: 'продолжить', status: 'in_progress', priority: 'medium' }];
+      await sessionManager.saveSession(s);
+    });
+    const { provider, chatAsync } = makeProvider('ok');
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', task_id: child.id },
+      makeCtx({
+        provider,
+        agentRegistry: makeToolRegistryStub([TODO_WRITE_LLM_TOOL]),
+        sessionManager,
+        sessionId: parent.id,
+        contextConfig: makeFinalizeConfig(),
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const [, systemPrompt] = chatAsync.mock.calls[0] as unknown as [unknown, string];
+    expect(systemPrompt).toContain(TODO_FINALIZE_MARKER);
   });
 });

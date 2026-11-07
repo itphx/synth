@@ -78,6 +78,19 @@ export const ToolCapability = {
    * `engine/permission/availability.ts`.
    */
   SSH: 'ssh',
+  /**
+   * Список задач сессии (ADR-039): тулы `todo_write`/`todo_list`/`todo_add`/
+   * `todo_update`/`todo_delete`.
+   *
+   * Это **операционный список задач сессии** (`session.todos`), а не план
+   * проекта (`project.plan`, тулы `plan_*`). Capability выдаётся **в
+   * дополнение** к `runtime` (совместимость с существующими/кастомными
+   * агентами): группа `runtime` продолжает матчить todo-тулы (имена остаются в
+   * `RUNTIME_TOOLS`), а правило `permission.rules.todo` работает по capability.
+   * Capability **не** привязана к рабочему каталогу проекта
+   * (`WORKSPACE_CAPABILITIES`) — список задач доступен и без workspace.
+   */
+  TODO: 'todo',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -119,6 +132,10 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.SSH]: {
     label: 'Удалённый SSH',
     description: 'ssh_exec',
+  },
+  [ToolCapability.TODO]: {
+    label: 'Список задач сессии',
+    description: 'todo_write, todo_list, todo_add, todo_update, todo_delete',
   },
 };
 

@@ -7,9 +7,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { MessageRole } from '@itphx/synth-shared';
-import type { Message, ToolForLLM } from '@itphx/synth-shared';
+import type { Message, TodoItem, ToolForLLM } from '@itphx/synth-shared';
 import type { LLMMessage } from '../../../providers/base.js';
-import { renderUnavailableTools, type UnavailableTool } from '../../context/state-messages.js';
+import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
+import { renderUnavailableTools, wrapStateContent, type UnavailableTool } from '../../context/state-messages.js';
 import { isWorkspaceDependentTool } from '../../permission/availability.js';
 import { reasoningBlocksOfMessage, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
 import { resolveAgentRoleAlias } from '../../agents/index.js';
@@ -99,6 +100,27 @@ export function buildSubagentUnavailableToolsSection(
   return renderUnavailableTools(unavailable, language);
 }
 
+/**
+ * ADR-039: блок `[TODO FINALIZE]` для системного промпта саб-агента.
+ *
+ * Условие включения — у ребёнка **есть** тул `todo_write` в уже собранном
+ * списке тулов (учитывает capability/админ-отключение) **и** `session.todos`
+ * непуст на старте прогона. Сам список в блок не дублируется: он приходит
+ * модели state-сообщением `todos_updated` (ADR-070 §2.8). Нет файла промпта —
+ * пустая строка (блок не добавляется).
+ */
+export function buildTodoFinalizeSection(opts: {
+  tools: ToolForLLM[] | undefined;
+  todos: TodoItem[] | undefined;
+  contextConfig: Pick<ContextFileRepository, 'getTodoFinalizePrompt'> | undefined;
+  language: string;
+}): string {
+  if (!opts.todos || opts.todos.length === 0) return '';
+  const hasTodoWrite = (opts.tools ?? []).some((tool) => tool.function.name === 'todo_write');
+  if (!hasTodoWrite) return '';
+  return opts.contextConfig?.getTodoFinalizePrompt?.(opts.language) ?? '';
+}
+
 export function messageToLLMMessage(
   msg: Message,
   currentAgentRole?: string,
@@ -115,10 +137,19 @@ export function messageToLLMMessage(
     [MessageRole.ERROR]: 'user',
   };
 
+  // ADR-070 §2.8/§2.9.1: durable state-сообщения (role system, metadata.state)
+  // отдаются модели как синтетическая user-реплика с обёрткой
+  // `<system-state type="…">` — паритет с основным ходом
+  // (`orchestrator/prompt-info.ts`): Anthropic не принимает role system в
+  // messages. Обычные system-сообщения остаются как есть.
+  const stateType = msg.metadata?.state === true && typeof msg.metadata?.type === 'string'
+    ? msg.metadata.type
+    : undefined;
+
   return {
     id: msg.id,
-    role: roleMap[msg.role] || 'user',
-    content: msg.content,
+    role: stateType !== undefined ? 'user' : (roleMap[msg.role] || 'user'),
+    content: stateType !== undefined ? wrapStateContent(stateType, msg.content) : msg.content,
     usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     disabled: false,
     pinned: false,

@@ -566,6 +566,29 @@ export class ContextConfig implements ContextFileRepository {
     return this._readPrompt(stem, 'system', language) ?? '';
   }
 
+  /**
+   * ADR-039/ADR-026: требование привести список задач саб-агента в актуальное
+   * состояние перед финальным ответом (`todo_write`/`todo_update`). Блок
+   * добавляется в system prompt прогона только при доступном ребёнку туле
+   * `todo_write` и непустом `session.todos`; сам список в блоке не дублируется
+   * (он живёт state-сообщением `todos_updated`).
+   *
+   * Файлы: prompts/system/TODO_FINALIZE.{lang}.md — только локализованные
+   * (базового TODO_FINALIZE.md нет). Override через {userDataDir}/user/system/ —
+   * стандартный механизм system-категории, проверяется первым.
+   * Возвращает пустую строку, если файл не найден.
+   */
+  getTodoFinalizePrompt(language = 'ru'): string {
+    const stem = 'TODO_FINALIZE';
+
+    // 1. Пользовательский override system-категории
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
+
+    // 2. Встроенный prompts/system/TODO_FINALIZE.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
   getSummarizerPrompt(language = 'ru'): string {
     return this._readPrompt('SUMMARIZER', 'system', language) ?? '';
   }

@@ -458,6 +458,60 @@ describe('BackgroundRunService — уведомление родителя', () 
     expect(message.content).toContain('отчёт готов');
   });
 
+  it('уведомление несёт <todos> и metadata.todos, если список есть в записи', async () => {
+    const { service, notifications } = createService();
+
+    const record = await service.startSubagent({
+      sessionId: 'parent-1',
+      childSessionId: 'child-1',
+      description: 'собрать отчёт',
+    });
+    const todos = [
+      { id: 't1', content: 'шаг 1', status: 'completed', priority: 'medium' },
+      { id: 't2', content: 'шаг 2', status: 'pending', priority: 'high' },
+    ];
+    await service.finish(record.id, { status: 'completed', summary: 'отчёт готов', metadata: { todos } });
+
+    const message = notifications[0]!.message;
+    expect(message.content).toContain('<summary>');
+    expect(message.content).toContain('<todos>');
+    expect(message.content).toContain('шаг 1');
+    expect(message.content).toContain('шаг 2');
+    expect(message.content).toContain('</todos>');
+    expect(message.metadata?.todos).toEqual(todos);
+  });
+
+  it('без todos конверт прежний (секции <todos> нет)', async () => {
+    const { service, notifications } = createService();
+
+    const record = await service.startSubagent({ sessionId: 'parent-1', childSessionId: 'child-1' });
+    await service.finish(record.id, { status: 'completed', summary: 'итог' });
+
+    const message = notifications[0]!.message;
+    expect(message.content).not.toContain('<todos>');
+    expect(message.metadata?.todos).toBeUndefined();
+  });
+
+  it('длинный список todo в уведомлении капнут (30 пунктов + маркер усечения)', async () => {
+    const { service, notifications } = createService();
+
+    const record = await service.startSubagent({ sessionId: 'parent-1', childSessionId: 'child-1' });
+    const todos = Array.from({ length: 31 }, (_v, idx) => ({
+      id: `t${idx + 1}`,
+      content: `пункт ${idx + 1}`,
+      status: 'pending',
+      priority: 'medium',
+    }));
+    await service.finish(record.id, { status: 'completed', summary: 'итог', metadata: { todos } });
+
+    const message = notifications[0]!.message;
+    expect(message.content).toContain('пункт 30');
+    expect(message.content).not.toContain('пункт 31');
+    expect(message.content).toContain('... and 1 more');
+    // В metadata — полный массив (данные для UI/аналитики).
+    expect((message.metadata?.todos as unknown[]).length).toBe(31);
+  });
+
   it('без onNotifyParent сервис работает без уведомлений (точка сборки не задана)', async () => {
     const repository = new MemoryBackgroundRunRepository();
     const service = new BackgroundRunService({

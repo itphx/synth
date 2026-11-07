@@ -301,6 +301,10 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
+  getTodoFinalizePrompt(): string {
+    return '';
+  }
+
   getSummarizerPrompt(): string {
     return '';
   }

@@ -21,11 +21,12 @@
  *    синглтонов здесь нет.
  */
 import { MessageRole, generateId as generateMessageId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { BackgroundRunRecord, BackgroundRunStatus, Message } from '@itphx/synth-shared';
+import type { BackgroundRunRecord, BackgroundRunStatus, Message, TodoItem } from '@itphx/synth-shared';
 import type { EventBus } from '../../events/bus.js';
 import type { EventType } from '@itphx/synth-shared';
 import type { HookBus } from '../hooks/hook-bus.js';
 import type { BackgroundRunRepository } from '../../storage/ports/background-run-repository.js';
+import { renderTodosSection } from '../tools/todo.js';
 import {
   BackgroundLimitExceededError,
   type BackgroundFinishPatch,
@@ -613,11 +614,18 @@ export function buildSubagentNotification(
   state: 'completed' | 'failed' | 'cancelled',
 ): Message {
   const summary = record.summary ?? '';
+  // ADR-039: итоговый список задач прогона (если он есть в метаданных записи) —
+  // секция `<todos>` после `<summary>`; рендер капнутый (см. tools/todo.ts).
+  const todos = Array.isArray(record.metadata?.todos)
+    ? (record.metadata.todos as TodoItem[])
+    : [];
+  const todosSection = renderTodosSection(todos);
   const content = [
     `<subagent sessionID="${record.childSessionId ?? ''}" state="${state}" description="${record.description ?? ''}">`,
     '<summary>',
     summary,
     '</summary>',
+    ...(todosSection ? [todosSection] : []),
     '</subagent>',
   ].join('\n');
   return {
@@ -646,6 +654,9 @@ export function buildSubagentNotification(
       // Метки прогона — UI рисует по ним карточку результата (как у тула):
       // время старта/финиша, длительность, роль агента.
       ...(record.agentRole ? { agent_role: record.agentRole } : {}),
+      // ADR-039: итоговый список задач ребёнка — данные для UI/аналитики
+      // (в конверте модели — только капнутый рендер).
+      ...(todos.length > 0 ? { todos } : {}),
       started_at: record.startedAt,
       ...(record.finishedAt ? { finished_at: record.finishedAt } : {}),
       ...durationMetadata(record),

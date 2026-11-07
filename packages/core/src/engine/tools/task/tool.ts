@@ -5,7 +5,7 @@
  * в `run-cycle.ts`, создание дочерней сессии — в `fork.ts`, промпт — в `prompt.ts`.
  */
 import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig } from '@itphx/synth-shared';
+import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig, TodoItem } from '@itphx/synth-shared';
 import { DEFAULT_SUBAGENT_DEPTH } from '@itphx/synth-shared/config';
 import { normalizeAgentModes } from '../../agents/normalize.js';
 import type { CancellationToken, LLMMessage, BaseProvider } from '../../../providers/base.js';
@@ -16,7 +16,9 @@ import { argErrorResult } from '../arg-error.js';
 import { BackgroundLimitExceededError } from '../../background/types.js';
 import { publishMessageAdded, resolveSessionDepth } from './child-session.js';
 import { prepareChildSession, type PreparedChildSession } from './fork.js';
-import { buildSubagentUnavailableToolsSection, messageToLLMMessage, resolveSubagentPrompt } from './prompt.js';
+import { ensureTodoStateMessage } from './child-todo-state.js';
+import { toTodoItem } from '../todo.js';
+import { buildSubagentUnavailableToolsSection, buildTodoFinalizeSection, messageToLLMMessage, resolveSubagentPrompt } from './prompt.js';
 import { runSubagent, type SubagentRunConfig } from './run-cycle.js';
 import { runDetachableSubagent } from './detachable.js';
 import { appendResumeMarker, resumeInitialMessages } from './resume-target.js';
@@ -206,10 +208,31 @@ export const taskTool: ToolDefinition = {
       // Фактическая пара прогона — чтобы ребёнок видел именно её.
       provider: resolution.providerName,
       model: resolution.modelName,
+      // ADR-039: стартовый список задач ребёнка (`task.todos`). `undefined` —
+      // список не трогаем (сид только при явном параметре).
+      todos: params.todos,
     });
     const childSessionId = childState.childSessionId;
     let childMessages = childState.childMessages;
     const parentNotesText = childState.parentNotesText;
+
+    // ADR-039/ADR-070: seeded `session.todos` должен быть виден модели как
+    // durable state-сообщение `todos_updated` (как у основной сессии). Список
+    // записан в fork `prepareChildSession` — здесь только state-сообщение и
+    // обновление локальной копии истории для `inherit`/`last_n`.
+    let childTodos: TodoItem[] = [];
+    if (childSessionId && extra.sessionManager) {
+      try {
+        await ensureTodoStateMessage(extra.sessionManager, childSessionId);
+        const refreshed = await extra.sessionManager.getSession(childSessionId);
+        if (refreshed) {
+          childMessages = refreshed.messages;
+          childTodos = refreshed.todos ?? [];
+        }
+      } catch {
+        // state-сообщение derived — его сбой не должен ломать прогон
+      }
+    }
 
     // ADR-026: стандартный системный блок `[SUBAGENT]` добавляется в начало
     // system prompt **только нового** дочернего прогона (продолжения
@@ -220,7 +243,16 @@ export const taskTool: ToolDefinition = {
 
     // ─── Сборка LLM-сообщений ────────────────────────────────────────
     let llmSystemPrompt = (() => {
-      let prompt = [subagentNotice, systemPrompt].filter(Boolean).join('\n\n');
+      // ADR-039: инструкция «приведи список todo в актуальное состояние» —
+      // только если у ребёнка есть тул `todo_write` и список непуст.
+      // Сам список в промпт не дублируется (он в state-сообщении).
+      const todoFinalize = buildTodoFinalizeSection({
+        tools,
+        todos: childTodos,
+        contextConfig: extra.contextConfig,
+        language: subagentLang,
+      });
+      let prompt = [subagentNotice, todoFinalize, systemPrompt].filter(Boolean).join('\n\n');
 
       // Заметки родительской сессии — передаём во всех режимах с контекстом
       // (inherit, summary, last_n), но НЕ в none (чистый лист)
@@ -776,11 +808,29 @@ async function continueChildSession(opts: {
 
   const streamId = generateStreamId();
   // Маркер продолжения — в историю ребёнка (общий помощник с HTTP-resume).
-  const freshChild = await appendResumeMarker(sessionManager, extra.eventBus, {
+  let freshChild = await appendResumeMarker(sessionManager, extra.eventBus, {
     child,
     parentSessionId: ctx.sessionId,
     streamId,
   });
+
+  // ADR-039: `task_id` + `todos` — полная замена списка задач ребёнка (как
+  // `todo_write`); без `todos` список не трогается. State-сообщение
+  // `todos_updated` синхронизируется после этого в любом случае.
+  try {
+    if (params.todos !== undefined) {
+      const normalized = params.todos.map(toTodoItem);
+      await sessionManager.withLock(child.id, async (s) => {
+        s.todos = normalized;
+        await sessionManager.saveSession(s);
+      });
+    }
+    await ensureTodoStateMessage(sessionManager, child.id);
+    const refreshed = await sessionManager.getSession(child.id);
+    if (refreshed) freshChild = refreshed;
+  } catch {
+    // state-сообщение derived — его сбой не должен ломать продолжение
+  }
 
   const childExtra: TaskExtra = {
     ...extra,
@@ -818,16 +868,29 @@ async function continueChildSession(opts: {
   }
   childProvider ??= withAgentSampling(extra.provider, childTemperature, agentTopP, agentTopK);
 
+  // ADR-039: тулы ребёнка собираются один раз — по ним же решается, нужна ли
+  // инструкция финализации списка todo (есть ли `todo_write`).
+  const childTools = extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers);
+  const todoFinalize = buildTodoFinalizeSection({
+    tools: childTools,
+    todos: freshChild.todos ?? [],
+    contextConfig: extra.contextConfig,
+    language: child.settings.language || 'ru',
+  });
+
   return runSubagent({
     subagentType: agentRole,
     description: params.description || child.title || '',
     contextMode: 'none',
     maxSteps: agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS,
-    llmSystemPrompt: resolveSubagentPrompt(
-      agentRole,
-      child.settings.language,
-      extra.contextConfig?.systemPromptsDir,
-    ),
+    llmSystemPrompt: [
+      resolveSubagentPrompt(
+        agentRole,
+        child.settings.language,
+        extra.contextConfig?.systemPromptsDir,
+      ),
+      todoFinalize,
+    ].filter(Boolean).join('\n\n'),
     initialMessages: resumeInitialMessages(freshChild),
     provider: childProvider,
     // Температура продолжения — для QA-эскалации (fallback-модель из пула).
@@ -839,7 +902,7 @@ async function continueChildSession(opts: {
     // (`reasoningLevel` — отдельным полем, `effort` приоритетнее).
     effort: agentDef.effort ?? child.settings.effort,
     reasoningLevel: agentDef.reasoningLevel ?? child.settings.reasoningLevel,
-    tools: extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers),
+    tools: childTools,
     childSessionId: child.id,
     parentSessionId: ctx.sessionId,
     extra: childExtra,
@@ -990,7 +1053,16 @@ async function startBackgroundSubagent(opts: {
         : status === 'cancelled'
           ? (typeof result.metadata?.partial_output === 'string' ? (result.metadata.partial_output as string) : '')
           : result.content;
-      await service.finish(record.id, { status, summary });
+      // ADR-039: итоговый список задач ребёнка — в запись реестра (метаданные
+      // уходят в уведомление родителя и карточку прогона). Пустой — не передаём.
+      const todos = Array.isArray(result.metadata?.todos)
+        ? (result.metadata.todos as TodoItem[])
+        : [];
+      await service.finish(record.id, {
+        status,
+        summary,
+        ...(todos.length > 0 ? { metadata: { todos } } : {}),
+      });
     })
     .catch((err: unknown) => {
       void service.finish(record.id, { status: 'failed', summary: String(err) });

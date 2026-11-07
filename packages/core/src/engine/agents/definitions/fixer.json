@@ -22,7 +22,8 @@
     "memory",
     "models",
     "question",
-    "process"
+    "process",
+    "todo"
   ],
   "icon": "code-s-slash",
   "color": "--status-info",

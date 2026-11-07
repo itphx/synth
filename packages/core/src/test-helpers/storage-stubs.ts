@@ -46,6 +46,7 @@ export function stubContextFiles(
     getSchedulerTurnNotice: (): string => '',
     getSubagentNotice: (): string => '',
     getMaxStepsPrompt: (): string => '',
+    getTodoFinalizePrompt: (): string => '',
     getSummarizerPrompt: (): string => '',
     getCompactorPrompt: (): string => '',
     getUserContextTemplate: (): string => '',

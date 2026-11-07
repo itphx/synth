@@ -17,7 +17,8 @@ import { SessionManager } from '../../../sessions/manager.js';
 import { EventBus } from '../../../events/bus.js';
 import { HookBus } from '../../hooks/hook-bus.js';
 import { prepareChildSession, type PreparedChildSession } from './fork.js';
-import type { ContextMode, TaskExtra } from './types.js';
+import { taskParametersSchema } from './args.js';
+import type { ContextMode, TaskExtra, TaskTodoSeed } from './types.js';
 
 let tmpDir: string;
 let store: FileStore;
@@ -63,6 +64,7 @@ function opts(extra: Partial<TaskExtra>, over: {
   contextMode?: ContextMode;
   contextCount?: number;
   childRoutingOverrides?: Partial<SessionSettings>;
+  todos?: TaskTodoSeed[];
 } = {}) {
   return {
     extra: extra as TaskExtra,
@@ -71,6 +73,7 @@ function opts(extra: Partial<TaskExtra>, over: {
     contextMode: over.contextMode ?? 'none',
     contextCount: over.contextCount ?? 4,
     childRoutingOverrides: over.childRoutingOverrides ?? {},
+    ...(over.todos !== undefined ? { todos: over.todos } : {}),
   };
 }
 
@@ -555,5 +558,86 @@ describe('prepareChildSession — температура саб-агента', (
 
     const child = (await sessionManager.getSession(state.childSessionId!))!;
     expect(child.settings.temperature).toBe(0);
+  });
+});
+
+describe('prepareChildSession — стартовый список задач ребёнка (ADR-039)', () => {
+  it('none: todos пишутся в session.todos ребёнка, id сохраняются, дефолты — из схемы task', async () => {
+    const parent = await makeParent(0);
+    // Дефолты status/priority применяет схема `task` (тот же контракт, что todo_add).
+    const parsed = taskParametersSchema.parse({
+      description: 'd',
+      prompt: 'p',
+      subagent_type: 'explore',
+      todos: [
+        { id: 'fixed-1', content: 'Первая' },
+        { content: 'Вторая' },
+      ],
+    });
+    const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+
+    await prepareChildSession(state, opts(
+      { sessionManager, sessionId: parent.id },
+      { todos: parsed.todos },
+    ));
+
+    const child = (await sessionManager.getSession(state.childSessionId!))!;
+    expect(child.todos).toHaveLength(2);
+    expect(child.todos![0]!.id).toBe('fixed-1');
+    expect(child.todos![0]!.content).toBe('Первая');
+    expect(child.todos![0]!.status).toBe('pending');
+    expect(child.todos![0]!.priority).toBe('medium');
+    expect(child.todos![1]!.id.length).toBeGreaterThan(0);
+    expect(child.todos![1]!.status).toBe('pending');
+    expect(child.todos![1]!.priority).toBe('medium');
+    // Локальная копия истории отражает сохранённую сессию.
+    expect(state.childMessages).toEqual(child.messages);
+  });
+
+  it('inherit/last_n: унаследованные todos_updated удаляются (derived state родителя)', async () => {
+    const parent = await makeParent(3);
+    // Родительский список задач виден в его истории state-сообщением.
+    const todoMsg = makeMsg('[TODO]\n- [ ] родительская', MessageRole.SYSTEM);
+    todoMsg.metadata = { type: 'todos_updated', state: true };
+    await sessionManager.addMessage(parent.id, todoMsg);
+
+    for (const mode of ['inherit', 'last_n'] as const) {
+      const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+      await prepareChildSession(state, opts(
+        { sessionManager, sessionId: parent.id },
+        { contextMode: mode },
+      ));
+
+      const child = (await sessionManager.getSession(state.childSessionId!))!;
+      expect(
+        child.messages.some((m) => m.metadata?.state === true && m.metadata?.type === 'todos_updated'),
+        mode,
+      ).toBe(false);
+      expect(
+        state.childMessages.some((m) => m.metadata?.state === true && m.metadata?.type === 'todos_updated'),
+        mode,
+      ).toBe(false);
+      // Список ребёнка без явного `todos` остаётся пустым (авто-merge нет).
+      expect(child.todos ?? [], mode).toHaveLength(0);
+    }
+  });
+
+  it('session.created публикуется уже с seeded todos', async () => {
+    const parent = await makeParent(0);
+    const bus = new EventBus();
+    const created: Array<Record<string, unknown>> = [];
+    bus.subscribe(parent.id, (e) => {
+      if (e.type === 'session.created') created.push(e.data as Record<string, unknown>);
+    });
+    const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+
+    await prepareChildSession(state, opts(
+      { sessionManager, sessionId: parent.id, eventBus: bus },
+      { todos: [{ id: 't1', content: 'A', status: 'pending', priority: 'medium' }] },
+    ));
+
+    expect(created).toHaveLength(1);
+    const payload = created[0] as { todos?: Array<{ id: string }> };
+    expect(payload.todos?.map((t) => t.id)).toEqual(['t1']);
   });
 });
