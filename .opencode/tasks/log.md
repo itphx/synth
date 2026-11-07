@@ -329,3 +329,13 @@
 - **Remote:** общий шов `server/routes/remote-forward.ts` (`raw: true` + `allowHttpError: true`, ответ удалённой стороны как есть, `204`, `remoteErrorToHttp`); форвард плана/журнала/инвариантов (`project-work.ts#forwardRemote`) и ToDo удалённых сессий (`session-todos.ts`) до локальной проверки; core `mount-routes` передаёт `getRemoteClient`, backend — нет. Тесты: plan/log (+14), session-todos, `app.remote` e2e; targeted 75 passed, core typecheck/build, backend typecheck/build.
 - **Проверка:** `adr:check` 0 ошибок; core targeted 75 passed; полный core — 9665 passed, 1 flaky `app.proxy` (изолированно 13 passed); backend typecheck/build OK. Publish проекта журнал по-прежнему не переносит (решение владельца).
 - **Коммиты:** `7952e9f7` — реализация PROP-054; этот коммит — ADR-130 + remote-форвард.
+
+## 2026-11-08 — Деплой test 0.13.6-11 и бета 234f9fdd
+
+- **Задача:** закоммитить, собрать, задеплоить на test без смены версии (только номер сборки), собрать и опубликовать бету. **Тип:** infra / publish. **Исполнитель:** оркестратор.
+- **Код:** рабочее дерево `synth/` было чистым (HEAD `234f9fdd`), коммитить код не потребовалось — закоммичен только этот журнал.
+- **Test:** версия приложения `0.13.6` не менялась, номер сборки чарта `0.13.6-9` → `-11`. `build-and-publish.sh --test-only --app-version 0.13.6` (slim, чарт `-10`), затем `BACKEND_FLAVOR=full` (чарт `-11`, финальный пиннинг). Образы `synth-backend:0.13.6`, `synth-backend:0.13.6-full`, `synth-ui:0.13.6`, `synth-executor:0.13.6-full`; build `234f9fdd`. `synth-deploy` коммит `0314fc5` запушен в `main`.
+- **Сбой и лечение:** первый прогон full упал на `docker push` слоя `synth-backend:0.13.6-full` (таймаут ответа реестра). Push повторён вручную (прошёл, digest `sha256:4f9aa85d…`), затем полный прогон повторён — чарт `0.13.6-11` опубликован и запинен.
+- **Проверка test:** bundles `synth-test`/`synth-test-allinone` — `1/1`; helm-ревизии 170/80 на чарте `synth-0.13.6-11`; поды раскатаны, UI-digest `sha256:0f407338…` одинаков в обоих инстансах; `/health` обоих инстансов → `version 0.13.6`, `build 234f9fdd`.
+- **Бета:** `publish-beta.sh --base 0.13.6 --restore-dist` → `0.13.6-beta.20261107212810.234f9fdd`; 8/8 пакетов в Gitea npm, dist-tag `beta`, `latest` не двигался (`0.13.4`), smoke (`synth --version`) ок; версии и `dist` восстановлены под `0.13.6`.
+- **Остаток:** `synth` в origin не пушился (просьбы не было); локальный dev-core перезапустить для подхвата нового `dist`.
