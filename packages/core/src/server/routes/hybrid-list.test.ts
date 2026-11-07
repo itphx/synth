@@ -360,6 +360,59 @@ describe('Гибрид: merge списков и пагинация', () => {
       expect(body.next_before).toBe(4);
     });
 
+    it('новый сервер: страница с дублями seq не пересортировывается, метаданные сохраняются', async () => {
+      const remote = makeRemote({
+        getSessionMessages: async () => ({
+          messages: [
+            { id: 'a', seq: 5 },
+            { id: 'b', seq: 0 },
+            { id: 'c', seq: 5 },
+          ],
+          session_id: 's-remote',
+          has_more: true,
+          next_before: 3,
+        }),
+      });
+      const { app } = makeSessionApp(remote);
+
+      const body = (await (await app.request('/api/v2/sessions/remote:s-remote/messages?limit=10')).json()) as MessagePage;
+      // Порядок сервера сохранён (по `seq` не сортируем — дубли перемешались бы).
+      expect(body.messages.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+      expect(body.has_more).toBe(true);
+      expect(body.next_before).toBe(3);
+    });
+
+    it('старый сервер: дубли seq, но абсолютный index — нарезка по index без пустых страниц', async () => {
+      const remote = makeRemote({
+        getSessionMessages: async () => ({
+          messages: [
+            { id: 'm1', seq: 0, index: 0 },
+            { id: 'm2', seq: 0, index: 1 },
+            { id: 'm3', seq: 0, index: 2 },
+            { id: 'm4', seq: 1, index: 3 },
+            { id: 'm5', seq: 2, index: 4 },
+            { id: 'm6', seq: 3, index: 5 },
+          ],
+          session_id: 's-remote',
+        }),
+      });
+      const { app } = makeSessionApp(remote);
+
+      const pages: string[][] = [];
+      let before: number | undefined;
+      for (let step = 0; step < 6; step += 1) {
+        const query = before === undefined ? '?limit=2' : `?limit=2&before=${before}`;
+        const body = (await (await app.request(`/api/v2/sessions/remote:s-remote/messages${query}`)).json()) as MessagePage;
+        expect(body.messages.length).toBeGreaterThan(0);
+        pages.push(body.messages.map((m) => String(m.id)));
+        if (!body.has_more || body.next_before === null) break;
+        before = body.next_before;
+      }
+
+      expect(pages.flat()).toEqual(['m5', 'm6', 'm3', 'm4', 'm1', 'm2']);
+      expect(pages).toHaveLength(3);
+    });
+
     it('новая страница сервера без has_more — has_more=false, next_before=null', async () => {
       const remote = makeRemote({
         getSessionMessages: async () => ({

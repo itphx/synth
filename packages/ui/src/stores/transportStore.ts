@@ -316,52 +316,86 @@ export interface HistoryPageInfo {
 }
 
 /**
- * Минимальный `seq` снимка — граница загруженной страницы.
+ * Границы снимка истории — что именно покрывает снимок.
  *
- * Сообщения с `seq` меньше границы лежат **за пределами** страницы: снимок
- * про них ничего не знает, поэтому удалёнными их считать нельзя.
+ * `seq` — позиционный ключ сообщения, но в legacy-данных он может быть `0` или
+ * немонотонным (десятки записей с `seq: 0` вперемешку), поэтому граница
+ * страницы по нему недостоверна. `index` — абсолютная позиция сообщения в
+ * **полной** истории (поле DTO, ADR-118), она есть и у legacy-записей, поэтому
+ * границы надёжнее определять по ней. `ord` — монотонный порядок записи
+ * (современные данные).
+ *
+ * Считаются только конечные числа; иначе граница считается отсутствующей.
  */
-function snapshotMinSeq(messages: MessageData[]): number | null {
-  let min: number | null = null
-  for (const m of messages) {
-    if (typeof m.seq !== 'number' || !Number.isFinite(m.seq)) continue
-    if (min === null || m.seq < min) min = m.seq
-  }
-  return min
+interface SnapshotBounds {
+  minIndex: number | null
+  maxIndex: number | null
+  minSeq: number | null
+  maxSeq: number | null
+  maxOrd: number | null
 }
 
-/**
- * Максимальные ключи порядка снимка — граница «снимок старше записи».
- *
- * `GET /messages` мог быть снят **до** того, как сообщение материализовалось
- * (событие `turn.finished` уже закрыло ход, а запись в историю ещё не попала в
- * снимок). Такое сообщение заведомо новее снимка — удалять его нельзя.
- */
-function snapshotMaxOrd(messages: MessageData[]): { maxOrd: number | null; maxSeq: number | null } {
-  let maxOrd: number | null = null
-  let maxSeq: number | null = null
+function snapshotBounds(messages: MessageData[]): SnapshotBounds {
+  const bounds: SnapshotBounds = {
+    minIndex: null,
+    maxIndex: null,
+    minSeq: null,
+    maxSeq: null,
+    maxOrd: null,
+  }
   for (const m of messages) {
-    if (typeof m.ord === 'number' && Number.isFinite(m.ord)) {
-      if (maxOrd === null || m.ord > maxOrd) maxOrd = m.ord
+    if (typeof m.index === 'number' && Number.isFinite(m.index)) {
+      if (bounds.minIndex === null || m.index < bounds.minIndex) bounds.minIndex = m.index
+      if (bounds.maxIndex === null || m.index > bounds.maxIndex) bounds.maxIndex = m.index
     }
     if (typeof m.seq === 'number' && Number.isFinite(m.seq)) {
-      if (maxSeq === null || m.seq > maxSeq) maxSeq = m.seq
+      if (bounds.minSeq === null || m.seq < bounds.minSeq) bounds.minSeq = m.seq
+      if (bounds.maxSeq === null || m.seq > bounds.maxSeq) bounds.maxSeq = m.seq
+    }
+    if (typeof m.ord === 'number' && Number.isFinite(m.ord)) {
+      if (bounds.maxOrd === null || m.ord > bounds.maxOrd) bounds.maxOrd = m.ord
     }
   }
-  return { maxOrd, maxSeq }
+  return bounds
 }
 
 /**
- * Сообщение **новее снимка** — попасть в него оно не могло (`ord` больше
- * максимального `ord` снимка; при отсутствии `ord` — `seq` больше максимального
- * `seq`). Гонка «снимок старше записи»: удалять такое сообщение нельзя.
+ * Сообщение **вне загруженной страницы**: снимок (`has_more: true`) его не
+ * покрывает, поэтому удалённым на сервере считать его нельзя.
+ *
+ * Приоритет — `index` (абсолютная позиция в полной истории). Fallback на `seq`
+ * — только когда `index` нет у сообщения или у снимка: `seq` в legacy-данных
+ * бывает `0`/немонотонным и границу не задаёт.
  */
-function isNewerThanSnapshot(m: MessageData, maxOrd: number | null, maxSeq: number | null): boolean {
-  if (typeof m.ord === 'number' && Number.isFinite(m.ord) && maxOrd !== null) {
-    return m.ord > maxOrd
+function isOutsideLoadedPage(m: MessageData, bounds: SnapshotBounds): boolean {
+  if (typeof m.index === 'number' && Number.isFinite(m.index) && bounds.minIndex !== null) {
+    return m.index < bounds.minIndex
   }
-  if (typeof m.seq === 'number' && Number.isFinite(m.seq) && maxSeq !== null) {
-    return m.seq > maxSeq
+  if (typeof m.seq === 'number' && Number.isFinite(m.seq) && bounds.minSeq !== null) {
+    return m.seq < bounds.minSeq
+  }
+  return false
+}
+
+/**
+ * Сообщение **новее снимка** — попасть в него оно не могло. Гонка «снимок
+ * старше записи»: удалять такое сообщение нельзя.
+ *
+ * Приоритет ключей: `ord` (если есть у обоих) → `index` больше максимального
+ * `index` снимка → `seq` больше максимального `seq`. `ord` — монотонный
+ * порядок записи, `index` — абсолютная позиция в полной истории
+ * (`ensureLiveMessage` выдаёт `index = max(indexes) + 1`), `seq` — последний
+ * фоллбек для legacy-данных, где он может быть `0`.
+ */
+function isNewerThanSnapshot(m: MessageData, bounds: SnapshotBounds): boolean {
+  if (typeof m.ord === 'number' && Number.isFinite(m.ord) && bounds.maxOrd !== null) {
+    return m.ord > bounds.maxOrd
+  }
+  if (typeof m.index === 'number' && Number.isFinite(m.index) && bounds.maxIndex !== null) {
+    return m.index > bounds.maxIndex
+  }
+  if (typeof m.seq === 'number' && Number.isFinite(m.seq) && bounds.maxSeq !== null) {
+    return m.seq > bounds.maxSeq
   }
   return false
 }
@@ -390,7 +424,9 @@ export function mergeServerMessages(
   // Пагинация истории: снимок — только последняя страница → сообщения старше
   // её границы в снимке не значатся, удалять их нельзя.
   const preserveOlder = page?.hasMore === true
-  const minSeq = preserveOlder ? snapshotMinSeq(messages) : null
+  // Границы снимка: `index` (абсолютная позиция в полной истории) надёжнее
+  // `seq` — в legacy-данных `seq` бывает `0`/немонотонным.
+  const bounds = snapshotBounds(messages)
   // Гонка «снимок старше записи»: снимок мог быть снят до материализации
   // сообщения (ход уже закрыт `turn.finished`, а записи в снимке нет). Такое
   // сообщение заведомо новее снимка — сохраняем.
@@ -399,7 +435,6 @@ export function mergeServerMessages(
   // удалённое на сервере сообщение имеет `ord` **меньше** максимального в
   // снимке, поэтому по-прежнему удаляется; удаление самого нового сообщения
   // приходит отдельным `message.deleted`.
-  const { maxOrd, maxSeq } = snapshotMaxOrd(messages)
   for (const m of current) {
     if (!m.id) continue
     // ADR-118 §5: сообщение **активного хода** не удаляем по снимку. Шаг уже
@@ -407,12 +442,8 @@ export function mergeServerMessages(
     // отставать (троттлинг/гонка) — выпавшее из ленты сообщение шага уносило
     // карточки инструментов и прогресс саб-агентов, хотя ход жив.
     const belongsToActiveTurn = !!activeTurnId && m.turn_id === activeTurnId
-    const outsideLoadedPage =
-      minSeq !== null &&
-      typeof m.seq === 'number' &&
-      Number.isFinite(m.seq) &&
-      m.seq < minSeq
-    const newerThanSnapshot = isNewerThanSnapshot(m, maxOrd, maxSeq)
+    const outsideLoadedPage = preserveOlder && isOutsideLoadedPage(m, bounds)
+    const newerThanSnapshot = isNewerThanSnapshot(m, bounds)
     if (
       !belongsToActiveTurn
       && !serverIds.has(m.id)

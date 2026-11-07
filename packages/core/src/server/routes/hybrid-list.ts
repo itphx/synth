@@ -90,18 +90,60 @@ export function sortHybridList<T>(entries: HybridListEntry<T>[]): HybridListEntr
   });
 }
 
+/** Ключ порядка DTO истории удалённого мира (значение непрозрачного курсора). */
+type RemoteMessageKey = (message: Record<string, unknown>, index: number) => number;
+
+/**
+ * Ключ порядка страницы удалённой истории: `index` (абсолютная позиция —
+ * уникальна) при монотонности, затем `seq` при монотонности, иначе позиция.
+ * Возвращает `monotone: false` для позиционного ключа — по нему сортировать
+ * нечего (порядок сервера и есть позиция).
+ */
+function resolveRemoteMessageKey(
+  messages: Array<Record<string, unknown>>,
+): { keyOf: RemoteMessageKey; monotone: boolean } {
+  const numeric = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value);
+  /** Значение есть у всех и строго возрастает по массиву. */
+  const monotonic = (pick: (message: Record<string, unknown>) => unknown): boolean => {
+    for (let i = 0; i < messages.length; i += 1) {
+      const value = pick(messages[i]!);
+      if (!numeric(value)) return false;
+      if (i > 0) {
+        const previous = pick(messages[i - 1]!);
+        if (!numeric(previous) || value <= previous) return false;
+      }
+    }
+    return true;
+  };
+  if (messages.length > 0) {
+    if (monotonic((message) => message.index)) {
+      return { keyOf: (message) => message.index as number, monotone: true };
+    }
+    if (monotonic((message) => message.seq)) {
+      return { keyOf: (message) => message.seq as number, monotone: true };
+    }
+  }
+  return { keyOf: (_message, index) => index, monotone: false };
+}
+
 /**
  * Нарезка страницы истории сообщений удалённой сессии.
  *
- * Старый удалённый сервер игнорирует `limit`/`before` и отдаёт **всю**
- * историю — тогда нарезка делается здесь, локально. Новый сервер отдаёт уже
- * готовую страницу: его `has_more`/`next_before` достовернее локальных
- * (сервер знает про более старые сообщения за пределами выборки), поэтому
- * при отсутствии локальной нарезки берутся именно они.
+ * Новый удалённый сервер отдаёт уже готовую страницу вместе с метаданными
+ * (`has_more`/`next_before`) — им и доверяем: страницу **не** перефильтровываем
+ * по `seq` и **не** пересортировываем (в legacy-сессии `seq` не уникален, и
+ * сортировка перемешала бы записи; курсор сервера — тоже непрозрачный).
+ *
+ * Старый сервер игнорирует `limit`/`before` и отдаёт **всю** историю — тогда
+ * страница режется локально по тому же принципу ключа: `index` при
+ * монотонности (абсолютная позиция), иначе `seq` при монотонности, иначе
+ * позиция. Сортировка по ключу — только если он монотонен. `before` в этом
+ * пути пришёл из нашего же `next_before`, поэтому пространство ключей совпадает.
  *
  * - `messages` — DTO сообщений удалённого мира (в порядке сервера);
  * - `limit` — размер страницы;
- * - `before` — исключающий курсор по `seq` (сообщения строго старше);
+ * - `before` — исключающий непрозрачный курсор (значение `next_before`);
  * - `serverHasMore`/`serverNextBefore` — метаданные удалённого сервера.
  *
  * Возвращает страницу в порядке сервера + признак «есть более старые» и
@@ -114,37 +156,38 @@ export function sliceRemoteMessages(
   serverHasMore: boolean | undefined,
   serverNextBefore: number | null | undefined,
 ): { page: Array<Record<string, unknown>>; hasMore: boolean; nextBefore: number | null } {
-  // `seq` — позиционный порядок истории; `index` — запасной признак.
-  const seqOf = (m: Record<string, unknown>, fallback: number): number => {
-    if (typeof m.seq === 'number' && Number.isFinite(m.seq)) return m.seq;
-    if (typeof m.index === 'number' && Number.isFinite(m.index)) return m.index;
-    return fallback;
-  };
-  const indexed = messages.map((m, i) => ({ m, seq: seqOf(m, i) }));
-  // Страховка от неотсортированного ответа: порядок — по возрастанию seq.
-  indexed.sort((a, b) => a.seq - b.seq);
+  const hasServerMeta = serverHasMore !== undefined || serverNextBefore !== undefined;
+  if (hasServerMeta) {
+    // Сервер вернул готовую страницу — берём как есть.
+    if (messages.length <= limit) {
+      return {
+        page: messages,
+        hasMore: serverHasMore === true,
+        nextBefore: serverNextBefore ?? null,
+      };
+    }
+    // Защитный slice: сервер отдал больше, чем просили. Порядок не меняем,
+    // отрезаем хвост (самые новые) и считаем курсор сами. Ключи считаем по
+    // полному ответу — у позиционного ключа это абсолютная позиция, а не 0.
+    const { keyOf } = resolveRemoteMessageKey(messages);
+    const keys = messages.map((message, index) => keyOf(message, index));
+    const page = messages.slice(messages.length - limit);
+    const pageKeys = keys.slice(messages.length - limit);
+    const nextBefore = pageKeys.length > 0 ? Math.min(...pageKeys) : null;
+    return { page, hasMore: true, nextBefore };
+  }
+  const { keyOf, monotone } = resolveRemoteMessageKey(messages);
+  const indexed = messages.map((message, index) => ({ message, key: keyOf(message, index) }));
+  // Сортируем только по монотонному ключу; позиционный порядок уже верный.
+  if (monotone) indexed.sort((a, b) => a.key - b.key);
   const eligible = before === undefined
     ? indexed
-    : indexed.filter((entry) => entry.seq < before);
-  // Сколько сообщений отброшено локальным фильтром `before` — если что-то
-  // отброшено, сервер параметр проигнорировал и его курсор ненадёжен.
-  const filteredOut = indexed.length - eligible.length;
+    : indexed.filter((entry) => entry.key < before);
   const sliced = eligible.length > limit;
   const page = sliced ? eligible.slice(eligible.length - limit) : eligible;
-  const minSeq = page.length > 0 ? page[0]!.seq : null;
-  if (sliced) {
-    // Локальная нарезка (сервер параметры проигнорировал) — «есть ещё» и
-    // курсор считаем сами: более старые записи точно есть.
-    return { page: page.map((entry) => entry.m), hasMore: true, nextBefore: minSeq };
-  }
-  // Страницу сервер собрал сам — признак «есть ещё» берём его (сервер знает
-  // про более старые сообщения), а курсор — свой, если `before` пришлось
-  // применить локально (иначе серверный курсор указывал бы на уже отданное).
-  const hasMore = serverHasMore === true;
-  const nextBefore = hasMore
-    ? (filteredOut > 0 && minSeq !== null
-      ? minSeq
-      : (typeof serverNextBefore === 'number' ? serverNextBefore : minSeq))
-    : null;
-  return { page: page.map((entry) => entry.m), hasMore, nextBefore };
+  const keys = page.map((entry) => entry.key);
+  // Локальная нарезка значит «более старые записи точно есть»; курсор —
+  // минимальный ключ страницы (первое сообщение после сортировки).
+  const nextBefore = sliced && keys.length > 0 ? Math.min(...keys) : null;
+  return { page: page.map((entry) => entry.message), hasMore: sliced, nextBefore };
 }

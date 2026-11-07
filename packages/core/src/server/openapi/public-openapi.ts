@@ -474,7 +474,7 @@ const SessionMessagesQuery = z.object({
     .int()
     .nonnegative()
     .optional()
-    .openapi({ description: 'Исключающий курсор по `seq`: сообщения строго старше указанного.' }),
+    .openapi({ description: 'Непрозрачный исключающий курсор из `next_before`: сообщения строго старше указанного (значение ключа, не обязательно `seq`).' }),
 });
 const JournalQuery = z.object({
   limit: z.coerce.number().int().positive().optional().openapi({ description: 'Лимит: default 50, max 500' }),

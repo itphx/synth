@@ -175,6 +175,57 @@ describe('mergeServerMessages: пагинация истории', () => {
     expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual(['m-first', 'm-new'])
   })
 
+  it('legacy-снимок (все seq: 0): граница страницы по index — догруженное старое сообщение сохраняется', () => {
+    // Legacy-данные: `seq` у всех записей `0` (позиционный ключ сломан), поэтому
+    // минимальный `seq` снимка тоже 0 и граница по нему недостоверна. `index` —
+    // абсолютная позиция в полной истории, она есть и у legacy-записей.
+    const olderLoaded = message({ index: 40, id: 'm-old', content: 'догружено', ord: 40, seq: 0 })
+    const pageFirst = message({ index: 60, id: 'm-page-1', content: 'страница', ord: 60, seq: 0 })
+    const pageLast = message({ index: 61, id: 'm-page-2', content: 'хвост', ord: 61, seq: 0 })
+    useChatStore.getState().setMessages(SID, [olderLoaded, pageFirst, pageLast])
+
+    // Снимок — только последняя страница: её минимальный `index` = 60.
+    mergeServerMessages(SID, [pageFirst, pageLast], { hasMore: true })
+
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual([
+      'm-old',
+      'm-page-1',
+      'm-page-2',
+    ])
+  })
+
+  it('legacy-сообщение без ord новее снимка по index сохраняется (гонка «снимок старше записи»)', () => {
+    // Легаси-запись без `ord`: порядок определяется `index` (абсолютная позиция),
+    // `seq` сломан (`0`). Снимок снят до её материализации — в нём её нет.
+    const snapshotMsg = message({ index: 0, id: 'm-snapshot', content: 'в снимке', ord: null, seq: 0 })
+    const trailing = message({ index: 5, id: 'm-trailing', content: 'после снимка', ord: null, seq: 0 })
+    useChatStore.getState().setMessages(SID, [snapshotMsg, trailing])
+
+    mergeServerMessages(SID, [snapshotMsg], { hasMore: true })
+
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual([
+      'm-snapshot',
+      'm-trailing',
+    ])
+  })
+
+  it('снимок без ord (legacy): сообщение с index больше maxIndex сохраняется', () => {
+    // Снимок — legacy-страница без `ord`, поэтому сравнение по `ord` невозможно.
+    // Запись материализовалась уже после снятия снимка (`ord` у неё есть, у
+    // снимка — нет): граница «новее снимка» выводится из `index`, иначе
+    // сообщение удалялось бы следующим снимком.
+    const snapshotMsg = message({ index: 0, id: 'm-snapshot', content: 'в снимке', ord: null, seq: 0 })
+    const trailing = message({ index: 5, id: 'm-trailing', content: 'после снимка', ord: 7, seq: 0 })
+    useChatStore.getState().setMessages(SID, [snapshotMsg, trailing])
+
+    mergeServerMessages(SID, [snapshotMsg], { hasMore: true })
+
+    expect(ids(useChatStore.getState().messagesBySession[SID] ?? [])).toEqual([
+      'm-snapshot',
+      'm-trailing',
+    ])
+  })
+
   it('без has_more снимок авторитетен — старое сообщение удаляется', () => {
     const older = message({ index: 0, id: 'm-old', content: 'старое', ord: 1, seq: 1 })
     const newer = message({ index: 1, id: 'm-new', content: 'новое', ord: 2, seq: 2 })

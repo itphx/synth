@@ -579,6 +579,98 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(pages).toEqual([['m4', 'm5'], ['m2', 'm3'], ['m1']]);
     });
 
+    /**
+     * Сессия с историей произвольной формы (`seq`/`ord` задаются вручную).
+     * `addMessage` перезаписывает `seq = 0` (falsy) на позицию, поэтому
+     * legacy-форму кладём в `session.messages` и сохраняем целиком.
+     */
+    async function seedCustomHistory(
+      entries: Array<{ seq?: number; ord?: number; content: string }>,
+    ) {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      session.messages = entries.map((entry) => ({
+        id: generateId(),
+        role: MessageRole.USER,
+        seq: entry.seq ?? 0,
+        ord: entry.ord,
+        origin: 'local',
+        parts: [makeTextPart(entry.content)],
+        content: entry.content,
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+      }));
+      await sessionManager.saveSession(session);
+      return { app, sessionManager, session };
+    }
+
+    it('legacy с немонотонным seq (0,0,0,1,2,3): обход по позиции отдаёт всю историю без пустых страниц', async () => {
+      const { app, session } = await seedCustomHistory([
+        { seq: 0, content: 'm1' },
+        { seq: 0, content: 'm2' },
+        { seq: 0, content: 'm3' },
+        { seq: 1, content: 'm4' },
+        { seq: 2, content: 'm5' },
+        { seq: 3, content: 'm6' },
+      ]);
+
+      const pages: string[][] = [];
+      const cursors: Array<number | null> = [];
+      let before: number | undefined;
+      for (let step = 0; step < 6; step += 1) {
+        const query = before === undefined ? '?limit=2' : `?limit=2&before=${before}`;
+        const res = await app.request(`/api/v2/sessions/${session.id}/messages${query}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as MessageListPage;
+        expect(body.messages.length).toBeGreaterThan(0);
+        pages.push(body.messages.map((m) => m.content ?? ''));
+        cursors.push(body.next_before);
+        // Курсор позиции не может быть 0: `before=0` отдал бы пустую страницу.
+        if (body.has_more) expect(body.next_before).not.toBe(0);
+        if (!body.has_more || body.next_before === null) break;
+        before = body.next_before;
+      }
+
+      // Все 6 сообщений ровно по одному разу, ни одной пустой страницы.
+      expect(pages.flat().sort()).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
+      expect(pages.flat()).toHaveLength(6);
+      expect(cursors.at(-1)).toBeNull();
+    });
+
+    it('дубли seq, но монотонный ord: курсор строится по ord, обход корректен', async () => {
+      const { app, session } = await seedCustomHistory([
+        { seq: 1, ord: 1, content: 'm1' },
+        { seq: 1, ord: 2, content: 'm2' },
+        { seq: 2, ord: 3, content: 'm3' },
+        { seq: 2, ord: 4, content: 'm4' },
+        { seq: 3, ord: 5, content: 'm5' },
+        { seq: 3, ord: 6, content: 'm6' },
+      ]);
+
+      const pages: string[][] = [];
+      const cursors: number[] = [];
+      let before: number | undefined;
+      for (let step = 0; step < 6; step += 1) {
+        const query = before === undefined ? '?limit=2' : `?limit=2&before=${before}`;
+        const res = await app.request(`/api/v2/sessions/${session.id}/messages${query}`);
+        const body = (await res.json()) as MessageListPage;
+        expect(body.messages.length).toBeGreaterThan(0);
+        pages.push(body.messages.map((m) => m.content ?? ''));
+        if (!body.has_more || body.next_before === null) {
+          expect(body.next_before).toBeNull();
+          break;
+        }
+        cursors.push(body.next_before);
+        before = body.next_before;
+      }
+
+      expect(pages).toEqual([['m5', 'm6'], ['m3', 'm4'], ['m1', 'm2']]);
+      // Курсор — значение `ord` первой записи страницы (seq дал бы 3, 2).
+      expect(cursors).toEqual([5, 3]);
+    });
+
     it('limit больше длины истории → вся история одной страницей', async () => {
       const { app, session } = await seedHistory(3);
 

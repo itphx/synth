@@ -87,34 +87,81 @@ export const DEFAULT_MESSAGES_LIMIT = 200;
 export const MAX_MESSAGES_LIMIT = 500;
 
 /**
+ * Ключ порядка истории для пагинации: значение, по которому сравниваются
+ * «старше/новее» сообщения.
+ */
+type MessagePageKey = (message: Message, index: number) => number;
+
+/**
+ * Выбирает пригодный ключ порядка истории.
+ *
+ * Штатно это `seq` (позиционный номер, строго возрастает по массиву истории).
+ * В legacy-сессиях (до миграции ADR-118) `seq` не уникален и не монотонен:
+ * часть сообщений имеет `seq = 0`/`NaN` вперемешку с нормальными номерами.
+ * Курсор по такому `seq` «залипал» на `next_before = 0`, следующий запрос
+ * `before=0` отдавал пустую страницу, и кнопка «Загрузить старые» исчезала.
+ * Поэтому ключ выбирается по фактическим данным: `seq` → `ord` (монотонный
+ * счётчик записи, ADR-118) → позиция в массиве (`0..n-1`).
+ */
+function resolveMessagePageKey(messages: Message[]): MessagePageKey {
+  const numeric = (value: number | undefined): value is number =>
+    typeof value === 'number' && Number.isFinite(value);
+  /** Ключ пригоден, только если он есть у всех и строго возрастает по истории. */
+  const monotonic = (pick: (message: Message) => number | undefined): boolean => {
+    for (let i = 0; i < messages.length; i += 1) {
+      const value = pick(messages[i]!);
+      if (!numeric(value)) return false;
+      if (i > 0) {
+        const previous = pick(messages[i - 1]!);
+        if (!numeric(previous) || value <= previous) return false;
+      }
+    }
+    return true;
+  };
+  if (messages.length > 0) {
+    if (monotonic((message) => message.seq)) {
+      return (message) => message.seq!;
+    }
+    if (monotonic((message) => message.ord)) {
+      return (message) => message.ord!;
+    }
+  }
+  // Позиция в массиве уникальна и возрастает всегда.
+  return (_message, index) => index;
+}
+
+/**
  * Страница истории сообщений (`GET /api/v2/sessions/:id/messages`).
  *
- * История упорядочена по возрастанию (`seq` позиционный). Без `before`
- * отдаётся **последняя** страница (самые новые), с `before` — страница
- * строго старше курсора.
+ * Без `before` отдаётся **последняя** страница (самые новые), с `before` —
+ * страница строго старше курсора.
+ *
+ * `before`/`next_before` — **непрозрачный** для клиента курсор: это значение
+ * выбранного ключа (`seq`/`ord`/позиция), а не обязательно `seq`. Клиент
+ * обязан возвращать ровно то, что получил в `next_before`.
  *
  * - `has_more` — есть ещё более старые сообщения за пределами страницы;
- * - `next_before` — курсор следующей (более старой) страницы: минимальный
- *   `seq` текущей страницы; `null`, если более старых сообщений нет.
+ * - `next_before` — курсор следующей (более старой) страницы: ключ первой
+ *   записи текущей страницы; `null`, если более старых сообщений нет.
  * - `startIndex` — позиция первой записи страницы в **полной** истории
- *   (нужно для `index` в DTO — клиент склеивает страницы).
+ *   (нужно для `index` в DTO — клиент склеивает страницы). Страница — префикс
+ *   истории, поэтому позиционная формула сохраняется.
  */
 function selectMessagePage(
   messages: Message[],
   limit: number,
   before: number | undefined,
 ): { page: Message[]; hasMore: boolean; nextBefore: number | null; startIndex: number } {
-  const seqOf = (m: Message): number =>
-    typeof m.seq === 'number' && Number.isFinite(m.seq) ? m.seq : 0;
+  const keyOf = resolveMessagePageKey(messages);
   // Без курсора — вся история; с курсором — только строго более старые.
-  const eligible = before === undefined
-    ? messages
-    : messages.filter((m) => seqOf(m) < before);
+  const eligible = messages
+    .map((message, index) => ({ message, key: keyOf(message, index) }))
+    .filter((entry) => before === undefined || entry.key < before);
   const startIndex = Math.max(0, eligible.length - limit);
   const page = eligible.slice(startIndex);
   const hasMore = page.length < eligible.length;
-  const minSeq = page.length > 0 ? Math.min(...page.map(seqOf)) : null;
-  return { page, hasMore, nextBefore: hasMore ? minSeq : null, startIndex };
+  const nextBefore = hasMore && page.length > 0 ? page[0]!.key : null;
+  return { page: page.map((entry) => entry.message), hasMore, nextBefore, startIndex };
 }
 
 /** Дефолтные лимиты заметок сессии (совпадают со схемой `stickyNotesLimitsSchema`). */
@@ -2380,7 +2427,8 @@ export function createSessionRoutes(
   app.get('/:id/messages', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const id = c.req.param('id');
     // Пагинация истории: `limit` (по умолчанию 200, максимум 500) и `before` —
-    // исключающий курсор по `seq` (сообщения строго старше указанного).
+    // исключающий **непрозрачный** курсор из `next_before` (сообщения строго
+    // старше указанного; это значение ключа, не обязательно `seq`).
     const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_MESSAGES_LIMIT, MAX_MESSAGES_LIMIT);
     if (limit === null) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'limit должен быть целым числом' } }, 400);
