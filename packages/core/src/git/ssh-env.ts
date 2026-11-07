@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,8 +22,10 @@ import type { ExecSecret } from '../execution/ports/index.js';
  * `GIT_SSH_COMMAND` поднимается эфемерный `ssh-agent` на время вызова:
  *
  * 1. каталог `0700`, ключ `0600` — как в git-режиме;
- * 2. `ssh-agent -a <dir>/agent.sock` (сокет в том же каталоге; каталог `0700`,
- *    сам агент проверяет peer-uid);
+ * 2. `ssh-agent -D -a <dir>/agent.sock` (**foreground-режим**: агент остаётся
+ *    нашим ребёнком — тогда его reапит Node, и зомби не копится; в контейнере,
+ *    где процесс — PID 1, демонизированный агент осиротел бы и остался зомби
+ *    навсегда: `kill(pid, 0)` на зомби возвращает успех);
  * 3. `ssh-add <key>` — с passphrase через тот же askpass-механизм
  *    (`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`), без passphrase — без askpass;
  * 4. **ключ и askpass-скрипт удаляются сразу после успешного `ssh-add`**:
@@ -35,7 +37,8 @@ import type { ExecSecret } from '../execution/ports/index.js';
  *    время старта из `/proc/<pid>/stat`, best-effort): по нему reaper
  *    (`execution/ssh-sweep.ts`) понимает, чей это агент;
  * 7. `cleanup` — **жёсткое** завершение агента (`SIGTERM` → ожидание смерти
- *    → `SIGKILL` → ожидание; агент демонизируется и сам не умирает) + `rm -rf`
+ *    → `SIGKILL` → ожидание; агент может игнорировать `SIGTERM`) + ожидание
+ *    `exit` нашего ребёнка (Node reапит его — зомби не остаётся) + `rm -rf`
  *    каталога.
  *
  * Ошибка на любом шаге → `SshEnvError('agent_failed')`; **гарантированный
@@ -98,10 +101,8 @@ export interface CreateSshEnvOptions {
 /**
  * Таймауты эскалации гашения процесса (PROP-124 §2).
  *
- * Агент (`ssh-agent -a`) **демонизируется**: свой SID, reparent к init — он не
- * в группе процессов Node и не умирает вместе с создателем. Поэтому одного
- * `SIGTERM` мало: процесс может его игнорировать, и тогда ключ остаётся в
- * памяти агента навсегда.
+ * Агент может игнорировать `SIGTERM` (и «зависнуть» с ключом в памяти), поэтому
+ * одного `SIGTERM` мало: дальше — эскалация до `SIGKILL`.
  */
 export interface ProcessKillTimeouts {
   /** Ожидание смерти после `SIGTERM`, мс (по умолчанию — 2000). */
@@ -148,18 +149,88 @@ export interface SshOwnerInfo {
 }
 
 /**
+ * Состояние процесса из `/proc/<pid>/stat` (Linux): `R`, `S`, `Z`, …
+ *
+ * `null` — не Linux, нет доступа к `/proc` или процесс не существует.
+ */
+export function readProcessState(pid: number): string | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, 'utf-8');
+    // `comm` может содержать пробелы и скобки — режем по последней `)`.
+    const close = raw.lastIndexOf(')');
+    if (close < 0) return null;
+    // После `comm` идёт поле 3 (`state`).
+    const fields = raw.slice(close + 1).trim().split(/\s+/);
+    return fields[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Жив ли процесс (`process.kill(pid, 0)`).
  *
  * `EPERM` — процесс есть, но прав нет: это тоже «жив» (гасить не сможем, но
  * и считать мёртвым нельзя).
+ *
+ * `Z` (зомби) — процесс **мёртв**: родитель не сделал `wait`, поэтому запись в
+ * таблице процессов ещё есть, а `kill(pid, 0)` возвращает успех. Ресурсы (в
+ * том числе память с ключом) зомби уже освободил — считать его живым нельзя,
+ * иначе `cleanup` ложно пишет «агент остался жив». На не-Linux `/proc` нет —
+ * прежнее поведение (только сигнал `0`).
  */
 export function isProcessAlive(pid: number): boolean {
+  if (readProcessState(pid) === 'Z') return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
+}
+
+/**
+ * Реестр **наших** детей: pid → `ChildProcess`.
+ *
+ * Нужен, чтобы после смерти ребёнка дождаться `exit`: Node reапит его сам, а
+ * без ожидания процесс остаётся зомби (родитель не сделал `wait`) — и
+ * `kill(pid, 0)` на зомби возвращает успех.
+ */
+const ownChildren = new Map<number, ChildProcess>();
+
+/** Запомнить ребёнка, чтобы дождаться его `exit` при гашении. */
+function trackOwnChild(child: ChildProcess): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  ownChildren.set(pid, child);
+  child.once('exit', () => {
+    if (ownChildren.get(pid) === child) ownChildren.delete(pid);
+  });
+}
+
+/**
+ * Дождаться `exit` **нашего** ребёнка (ограниченно по времени).
+ *
+ * После `SIGKILL` ребёнок какое-то время остаётся зомби (Node reапит его при
+ * обработке `SIGCHLD`) — ждём `exit`, чтобы зомби не копился. Чужой процесс
+ * (не наш ребёнок) — ждать нечего: возвращаемся сразу.
+ */
+async function waitOwnChildExit(pid: number, timeoutMs: number): Promise<void> {
+  const child = ownChildren.get(pid);
+  if (!child) return;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    ownChildren.delete(pid);
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, Math.max(0, timeoutMs));
+    timer.unref?.();
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+  ownChildren.delete(pid);
 }
 
 /** Пауза (таймер без `unref`: cleanup ждёт её — процесс не должен «зависнуть»). */
@@ -191,9 +262,13 @@ export async function waitProcessGone(
  * Гасить процесс **наверняка**: `SIGTERM` → ожидание смерти → `SIGKILL` →
  * ожидание смерти.
  *
- * Агент демонизируется и может игнорировать `SIGTERM` — без эскалации он
- * остался бы жить с ключом в памяти. Суммарное ожидание ограничено
- * (`termGraceMs` + `killGraceMs`), поэтому вызов не висит.
+ * Агент может игнорировать `SIGTERM` — без эскалации он остался бы жить с
+ * ключом в памяти. Суммарное ожидание ограничено (`termGraceMs` +
+ * `killGraceMs`), поэтому вызов не висит.
+ *
+ * Зомби (`Z`) считается мёртвым: его ресурсы уже освобождены, а таблица
+ * процессов уберётся, когда родитель сделает `wait` (для **нашего** ребёнка мы
+ * дожидаемся `exit` сами — Node reапит его).
  *
  * @returns `true` — процесс мёртв; `false` — пережил `SIGKILL` (вызывающий
  *   решает, что делать — обычно пишет предупреждение).
@@ -202,22 +277,32 @@ export async function terminateProcess(
   pid: number,
   opts: ProcessKillTimeouts = {},
 ): Promise<boolean> {
-  if (!isProcessAlive(pid)) return true;
   const termGraceMs = opts.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
+  if (!isProcessAlive(pid)) {
+    // Процесс мёртв (или зомби) — но наш ребёнок мог остаться не reапнутым:
+    // дожидаемся `exit`, чтобы зомби не копился.
+    await waitOwnChildExit(pid, killGraceMs);
+    return true;
+  }
   try {
     process.kill(pid, 'SIGTERM');
   } catch {
     // Процесс уже завершён (или нет прав) — дальше только проверка живости.
   }
-  if (await waitProcessGone(pid, termGraceMs, pollMs)) return true;
+  if (await waitProcessGone(pid, termGraceMs, pollMs)) {
+    await waitOwnChildExit(pid, killGraceMs);
+    return true;
+  }
   try {
     process.kill(pid, 'SIGKILL');
   } catch {
     // Нет прав на `SIGKILL` — процесс останется жить, сообщим об этом.
   }
-  return waitProcessGone(pid, killGraceMs, pollMs);
+  const gone = await waitProcessGone(pid, killGraceMs, pollMs);
+  await waitOwnChildExit(pid, killGraceMs);
+  return gone;
 }
 
 /**
@@ -310,6 +395,38 @@ export function toSshSecret(
 }
 
 /**
+ * Нормализовать материал приватного ключа: добавить завершающий перевод строки.
+ *
+ * Ключ в реестре хранится **без** завершающего `\n` (последний байт — `-` от
+ * `-----END OPENSSH PRIVATE KEY-----`). `ssh-add` такой файл не принимает
+ * («invalid format»), `ssh -i` ключ не читает — сбой аутентификации (в
+ * agent-режиме — падение материализации секрета вызова).
+ *
+ * Ключ с `\r\n` не трогаем: он уже заканчивается на `\n`, а переводы строк
+ * внутри менять нельзя (PEM-парсер их не принимает).
+ */
+export function normalizePrivateKeyMaterial(privateKey: string): string {
+  if (privateKey.length === 0) return privateKey;
+  return privateKey.endsWith('\n') ? privateKey : `${privateKey}\n`;
+}
+
+/**
+ * Записать приватный ключ во временный файл `0600` (с нормализацией).
+ *
+ * Единственная точка записи ключа: обе ветки (git и agent) пишут через неё —
+ * ключ без завершающего перевода строки не принимают ни `ssh-add`, ни `ssh`.
+ */
+async function writeKeyFile(dir: string, privateKey: string): Promise<string> {
+  const keyPath = join(dir, 'key');
+  await writeFile(keyPath, normalizePrivateKeyMaterial(privateKey), {
+    encoding: 'utf-8',
+    mode: 0o600,
+  });
+  await chmod(keyPath, 0o600).catch(() => {});
+  return keyPath;
+}
+
+/**
  * Создаёт временный ключ и env для вызова.
  *
  * - **git-режим** (по умолчанию): `GIT_SSH_COMMAND`; ключ с `passphrase`
@@ -348,9 +465,7 @@ async function createGitSshEnv(opts: CreateSshEnvOptions): Promise<SshEnv> {
 
   try {
     await chmod(dir, 0o700).catch(() => {});
-    const keyPath = join(dir, 'key');
-    await writeFile(keyPath, opts.privateKey, { encoding: 'utf-8', mode: 0o600 });
-    await chmod(keyPath, 0o600).catch(() => {});
+    const keyPath = await writeKeyFile(dir, opts.privateKey);
 
     const baseCommand = `ssh -i ${keyPath} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`;
     const env: Record<string, string> = {};
@@ -377,8 +492,9 @@ async function createGitSshEnv(opts: CreateSshEnvOptions): Promise<SshEnv> {
  * Agent-режим (PROP-124 §2): эфемерный `ssh-agent` на время вызова.
  *
  * Порядок: каталог `0700` → **владелец каталога** (`owner.pid`: pid процесса
- * и время старта — best-effort) → ключ `0600` → `ssh-agent -a <dir>/agent.sock`
- * → pid-файл агента в каталоге → `ssh-add` (askpass — при passphrase) →
+ * и время старта — best-effort) → ключ `0600` → `ssh-agent -D -a
+ * <dir>/agent.sock` (foreground: агент — наш ребёнок, Node reапит его) →
+ * pid-файл агента в каталоге → `ssh-add` (askpass — при passphrase) →
  * удаление ключа и askpass-скрипта.
  *
  * Любая ошибка → `SshEnvError('agent_failed')` + гарантированный cleanup
@@ -399,12 +515,13 @@ async function createSshAgentEnv(opts: CreateSshEnvOptions): Promise<SshEnv> {
     if (cleaned) return;
     cleaned = true;
     if (agentPid !== undefined) {
-      // Агент гасим по pid **наверняка**: `ssh-agent -a` демонизируется (свой
-      // SID, reparent к init) — он не в группе процессов Node и не умирает
-      // вместе с создателем. Один `SIGTERM` мог быть проигнорирован: тогда
-      // ключ остался бы в памяти агента навсегда. Поэтому `SIGTERM` → ожидание
-      // → `SIGKILL` → ожидание; пережил `SIGKILL` — предупреждение (без
-      // материала) и продолжение: cleanup идемпотентен и не бросает.
+      // Агент гасим по pid **наверняка**: один `SIGTERM` мог быть проигнорирован
+      // (тогда ключ остался бы в памяти агента навсегда). Поэтому `SIGTERM` →
+      // ожидание → `SIGKILL` → ожидание; пережил `SIGKILL` — предупреждение
+      // (без материала) и продолжение: cleanup идемпотентен и не бросает.
+      //
+      // Зомби (`Z`) считается мёртвым — предупреждение о «неостановленном
+      // агенте» остаётся только для **реально живого** процесса.
       const gone = await terminateProcess(agentPid, opts.agentKill ?? {});
       if (!gone) {
         warning(
@@ -422,9 +539,7 @@ async function createSshAgentEnv(opts: CreateSshEnvOptions): Promise<SshEnv> {
     // мёртв), и уберёт его. Запись — best-effort: без неё каталог просто
     // уберётся по возрасту.
     await writeSshOwner(dir).catch(() => {});
-    const keyPath = join(dir, 'key');
-    await writeFile(keyPath, opts.privateKey, { encoding: 'utf-8', mode: 0o600 });
-    await chmod(keyPath, 0o600).catch(() => {});
+    const keyPath = await writeKeyFile(dir, opts.privateKey);
 
     const sockPath = join(dir, SSH_AGENT_SOCKET);
     const pid = await startSshAgent(sockPath);
@@ -536,24 +651,139 @@ async function runTool(
   }
 }
 
-/** Запуск `ssh-agent` с сокетом в каталоге материала → pid агента. */
+/**
+ * pid агента из вывода `ssh-agent`.
+ *
+ * Демонизированный режим печатает `SSH_AGENT_PID=<pid>`, foreground-режим
+ * (`-D`) — `echo Agent pid <pid>;`.
+ */
+function parseAgentPid(stdout: string): number | null {
+  const byEnv = /SSH_AGENT_PID=(\d+)/.exec(stdout);
+  if (byEnv) return Number(byEnv[1]);
+  const byEcho = /Agent pid (\d+)/.exec(stdout);
+  if (byEcho) return Number(byEcho[1]);
+  return null;
+}
+
+/** Итог одной попытки запуска `ssh-agent`. */
+type AgentStartResult =
+  | { ok: true; pid: number }
+  | { ok: false; missing: boolean; code: number | null; stderr: string };
+
+/**
+ * Запуск `ssh-agent` (одна попытка) → pid агента.
+ *
+ * Агент — **foreground** (`-D`): он не выходит, а печатает pid и живёт, пока
+ * его не погасят. Побочный эффект (нужный): агент остаётся **нашим
+ * ребёнком**, поэтому после смерти его reапит Node — зомби не копится.
+ *
+ * Демонизированный режим (агент форкается и осиротеет) в контейнере, где
+ * процесс — PID 1, оставлял бы осиротевшего агента зомби навсегда: `kill(pid,
+ * 0)` на зомби возвращает успех, и «живость» по сигналу врёт.
+ */
+async function runSshAgent(args: string[]): Promise<AgentStartResult> {
+  const child = spawn('ssh-agent', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  trackOwnChild(child);
+
+  let stdout = '';
+  let stderr = '';
+  let exited = false;
+  let exitCode: number | null = null;
+  let stdoutEnded = false;
+  let settled = false;
+  let resolveResult!: (result: AgentStartResult) => void;
+  const promise = new Promise<AgentStartResult>((resolve) => {
+    resolveResult = resolve;
+  });
+
+  const finish = (result: AgentStartResult): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    resolveResult(result);
+  };
+
+  /** Итог, когда pid уже не появится (поток вывода закрыт, процесс вышел). */
+  const settleIfPossible = (): void => {
+    if (settled) return;
+    const pid = parseAgentPid(stdout);
+    if (pid !== null) {
+      finish({ ok: true, pid });
+      return;
+    }
+    if (exited && stdoutEnded) {
+      finish({ ok: false, missing: false, code: exitCode, stderr });
+    }
+  };
+
+  const timer = setTimeout(() => {
+    // Агент не ответил за таймаут — гасим, попытка неудачная.
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Процесс уже мёртв — не ошибка.
+    }
+    finish({ ok: false, missing: false, code: null, stderr });
+  }, SSH_AGENT_START_TIMEOUT_MS);
+  timer.unref?.();
+
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString('utf-8');
+    settleIfPossible();
+  });
+  child.stdout?.on('end', () => {
+    stdoutEnded = true;
+    settleIfPossible();
+  });
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString('utf-8');
+  });
+  // Ошибка потока не должна становиться необработанной: итог запуска
+  // определяется по pid/коду выхода.
+  child.stdout?.on('error', () => {});
+  child.stderr?.on('error', () => {});
+
+  // Неудача запуска (нет бинарника, нет прав) — событие `error`.
+  child.once('error', (err: NodeJS.ErrnoException) => {
+    finish({ ok: false, missing: err.code === 'ENOENT', code: null, stderr });
+  });
+  // Выход до печати pid (например, старый OpenSSH без `-D`).
+  child.once('exit', (code) => {
+    exited = true;
+    exitCode = code;
+    settleIfPossible();
+  });
+
+  return promise;
+}
+
+/**
+ * Запуск `ssh-agent` с сокетом в каталоге материала → pid агента.
+ *
+ * Сначала — foreground-режим (`-D`), см. `runSshAgent`. Откат — обычный режим
+ * (`ssh-agent -a`): старый OpenSSH (до 7.2) не знает `-D`.
+ */
 async function startSshAgent(sockPath: string): Promise<number> {
-  const started = await runTool('ssh-agent', ['-a', sockPath], process.env, SSH_AGENT_START_TIMEOUT_MS);
-  if (started.missing) {
+  const foreground = await runSshAgent(['-D', '-a', sockPath]);
+  if (foreground.ok) return foreground.pid;
+  if (foreground.missing) {
     throw new SshEnvError('agent_failed', 'ssh-agent недоступен в окружении исполнения');
   }
-  if (started.code !== 0) {
+  // Старый OpenSSH без `-D` — обычный режим: агент демонизируется, pid берётся
+  // из `SSH_AGENT_PID=`. Сокет мог остаться от неудачной попытки — убираем.
+  await rm(sockPath, { force: true }).catch(() => {});
+  const daemon = await runSshAgent(['-a', sockPath]);
+  if (daemon.ok) return daemon.pid;
+  if (daemon.missing) {
+    throw new SshEnvError('agent_failed', 'ssh-agent недоступен в окружении исполнения');
+  }
+  if (daemon.code !== null && daemon.code !== 0) {
     throw new SshEnvError(
       'agent_failed',
-      `Не удалось запустить ssh-agent: код ${started.code}${stderrExcerpt(started.stderr)}`,
+      `Не удалось запустить ssh-agent: код ${daemon.code}${stderrExcerpt(daemon.stderr)}`,
     );
   }
-  const match = /SSH_AGENT_PID=(\d+)/.exec(started.stdout);
-  const pid = match ? Number(match[1]) : Number.NaN;
-  if (!Number.isInteger(pid) || pid <= 0) {
-    throw new SshEnvError('agent_failed', 'ssh-agent не вернул pid агента');
-  }
-  return pid;
+  throw new SshEnvError('agent_failed', 'ssh-agent не вернул pid агента');
 }
 
 /**

@@ -2102,7 +2102,14 @@
   CA `-c http.sslCAInfo=<path>` — **только inline**, в remote-режиме доверие задаёт
   исполнитель, ADR-099/ADR-077) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
-  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
+  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`; **ключ нормализуется перед
+  записью** — без завершающего `\n` его не принимают ни `ssh-add`, ни `ssh`:
+  `normalizePrivateKeyMaterial` + единая точка записи `writeKeyFile` для обеих
+  веток; в agent-режиме агент поднимается в **foreground-режиме** (`ssh-agent -D`,
+  откат на обычный режим для старого OpenSSH) — он остаётся нашим ребёнком, его
+  reапит Node (демонизированный агент в контейнере с процессом-PID 1 осиротел бы
+  и остался зомби: `kill(pid, 0)` на зомби возвращает успех — поэтому «живость»
+  по `/proc/<pid>/stat` считает состояние `Z` мёртвым)).
 - **SSH-доступ — секрет вызова, а не файл в control plane** (ADR-077, протокол 4;
   режим доставки `git`/`agent` — протокол 6, PROP-124 §2).
   Приватный ключ per-agent раскрывается в control plane и уходит в порт **значением**:

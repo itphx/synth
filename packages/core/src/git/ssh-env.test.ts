@@ -1,10 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { access, chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createSshEnv, isSshUrl, SshEnvError } from './ssh-env.js';
+import {
+  createSshEnv,
+  isProcessAlive,
+  isSshUrl,
+  normalizePrivateKeyMaterial,
+  readProcessState,
+  SshEnvError,
+  terminateProcess,
+} from './ssh-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -85,6 +93,58 @@ async function waitProcessGone(pid: number, timeoutMs = 5_000): Promise<boolean>
   return false;
 }
 
+/**
+ * Настоящий **зомби**: процесс завершился, но его родитель жив и не сделал
+ * `wait` — запись в таблице процессов осталась, а `kill(pid, 0)` возвращает
+ * успех.
+ *
+ * Родитель — `sh`, который форкает фонового ребёнка и делает `exec`: после
+ * `exec` фоновым ребёнком «родитель» становится обычный `sleep`, который
+ * детей не reap'ит (в отличие от оболочки с обработчиком `SIGCHLD`).
+ * Так зомби воспроизводится **детерминированно**, независимо от того, кто
+ * переиспользует pid.
+ */
+async function spawnZombie(): Promise<{ pid: number; stop: () => void }> {
+  const parent = spawn('sh', ['-c', 'sleep 300 & echo $!; exec sleep 300'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const pid = await new Promise<number>((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => reject(new Error('не дождались pid фонового процесса')), 10_000);
+    timer.unref?.();
+    parent.stdout?.on('data', (chunk: Buffer) => {
+      buf += chunk.toString('utf-8');
+      const match = /(\d+)/.exec(buf);
+      if (!match) return;
+      clearTimeout(timer);
+      resolve(Number(match[1]));
+    });
+  });
+  // Убиваем фонового процесса — он переходит в состояние `Z` (родитель жив).
+  process.kill(pid, 'SIGKILL');
+  const stop = (): void => {
+    try {
+      parent.kill('SIGKILL');
+    } catch {
+      // Родитель уже мёртв — не ошибка.
+    }
+  };
+  return { pid, stop };
+}
+
+/**
+ * Предупреждения логгера (`warning()` → `console.warn`) за время вызова.
+ *
+ * @returns массив текстов предупреждений
+ */
+function collectWarnings(): { messages: string[]; restore: () => void } {
+  const messages: string[] = [];
+  const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+    messages.push(args.map((a) => String(a)).join(' '));
+  });
+  return { messages, restore: () => spy.mockRestore() };
+}
+
 /** Спецсимволы, ломающие наивную конкатенацию: `$`, `"`, `'`, `\`, пробел, перевод строки. */
 const TRICKY_PASSPHRASE = 'p$a"s\'\\ w\nrd';
 
@@ -92,20 +152,19 @@ const TRICKY_PASSPHRASE = 'p$a"s\'\\ w\nrd';
  * Подставные `ssh-agent`/`ssh-add` — тестовый хелпер для проверки эскалации
  * гашения агента.
  *
- * Настоящий `ssh-agent -a` **демонизируется**: родитель выходит сразу, а
- * «агент» живёт отдельным процессом (свой SID) — и умеет завершаться сам, так
- * что эскалация до `SIGKILL` на нём не проверяется. Подставной агент устроен
- * так же, но **игнорирует** `SIGTERM` (как зависший агент в проде) и живёт,
- * пока не придёт `SIGKILL`:
+ * Настоящий `ssh-agent -D` (foreground-режим, в котором мы его поднимаем)
+ * **не выходит**: он печатает pid и живёт, пока его не погасят. Подставной
+ * агент устроен так же, но может **игнорировать** `SIGTERM` (как зависший
+ * агент в проде) и живёт, пока не придёт `SIGKILL`:
  * - создаёт «сокет» (обычный файл — код проверяет только существование);
- * - печатает `SSH_AGENT_PID=<pid фонового процесса>` в формате, который
- *   понимает разбор;
- * - stdio фонового процесса — `/dev/null` (как у демона: иначе пайп вывода
- *   не закрывается и вызов `execFile` не завершается);
+ * - печатает `echo Agent pid <pid>;` в формате, который понимает разбор;
+ * - pid — **собственный** (`$$`): подставной агент и есть тот процесс, который
+ *   мы гасим (в foreground-режиме агент — наш ребёнок, его reапит Node);
  * - `ssh-add` — заглушка с кодом 0 (ключ добавлять нечем).
  */
-const FAKE_AGENT_SCRIPT = `#!/bin/sh
-# Подставной ssh-agent: демонизируется, игнорирует SIGTERM, живёт до SIGKILL.
+function fakeAgentScript(ignoreSigterm: boolean): string {
+  return `#!/bin/sh
+# Подставной ssh-agent (foreground-режим): живёт, пока не придёт сигнал.
 sock=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -114,11 +173,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ -n "$sock" ]; then : > "$sock"; fi
-( trap "" TERM; while : ; do sleep 0.2; done ) </dev/null >/dev/null 2>&1 &
-agent=$!
-echo "SSH_AGENT_PID=$agent; echo Agent pid $agent;"
-exit 0
+echo "echo Agent pid $$;"
+${ignoreSigterm ? 'trap "" TERM' : ''}
+while : ; do sleep 0.2; done
 `;
+}
 
 const FAKE_SSH_ADD_SCRIPT = `#!/bin/sh
 # Подставной ssh-add: ключ «добавлен» (возвращаем 0).
@@ -128,11 +187,15 @@ exit 0
 /**
  * Подставить подставные `ssh-agent`/`ssh-add` в `PATH`.
  *
+ * @param opts.ignoreSigterm — агент игнорирует `SIGTERM` (иначе умирает от него)
  * @returns функция восстановления исходного `PATH`
  */
-async function withFakeAgentTools(): Promise<() => void> {
+async function withFakeAgentTools(opts: { ignoreSigterm?: boolean } = {}): Promise<() => void> {
   const dir = await mkdtemp(join(tmpdir(), 'synth-fake-agent-'));
-  await writeFile(join(dir, 'ssh-agent'), FAKE_AGENT_SCRIPT, { encoding: 'utf-8', mode: 0o755 });
+  await writeFile(join(dir, 'ssh-agent'), fakeAgentScript(opts.ignoreSigterm === true), {
+    encoding: 'utf-8',
+    mode: 0o755,
+  });
   await writeFile(join(dir, 'ssh-add'), FAKE_SSH_ADD_SCRIPT, { encoding: 'utf-8', mode: 0o755 });
   await chmod(join(dir, 'ssh-agent'), 0o755).catch(() => {});
   await chmod(join(dir, 'ssh-add'), 0o755).catch(() => {});
@@ -235,6 +298,90 @@ describe('ssh-env (ADR-076 §T3)', () => {
   });
 });
 
+/**
+ * Ключ без завершающего перевода строки (живой инстанс, ADR-076).
+ *
+ * Ключ в реестре хранится **без** завершающего `\n` (последний байт — `-` от
+ * `-----END OPENSSH PRIVATE KEY-----`). `ssh-add` такой файл не принимает
+ * («invalid format») — в agent-режиме падала материализация секрета вызова.
+ * Нормализация — в единственной точке записи ключа (`writeKeyFile`): обе
+ * ветки (git и agent).
+ */
+describe('ssh-env: ключ без завершающего перевода строки', () => {
+  it('нормализация дописывает \\n и не трогает ключ, который его уже имеет', () => {
+    expect(normalizePrivateKeyMaterial('KEY')).toBe('KEY\n');
+    expect(normalizePrivateKeyMaterial('KEY\n')).toBe('KEY\n');
+    // CRLF-ключ не ломаем: он уже заканчивается на `\n`.
+    expect(normalizePrivateKeyMaterial('KEY\r\n')).toBe('KEY\r\n');
+    // Пустой материал — как есть (не добавляем мусорный перевод строки).
+    expect(normalizePrivateKeyMaterial('')).toBe('');
+  });
+
+  it('agent:false — в файл ключа дописан \\n (ключ читается ssh)', async () => {
+    const { env, cleanup } = await createSshEnv({ privateKey: '-----BEGIN KEY-----\nsecret' });
+    try {
+      const keyPath = /-i (\S+)/.exec(env.GIT_SSH_COMMAND ?? '')?.[1];
+      expect(keyPath).toBeTruthy();
+      const written = await readFile(keyPath!, 'utf-8');
+      expect(written.endsWith('\n')).toBe(true);
+      expect(written).toBe('-----BEGIN KEY-----\nsecret\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('agent:false — ключ с \\r\\n записывается без изменений', async () => {
+    const material = '-----BEGIN KEY-----\r\nsecret\r\n';
+    const { env, cleanup } = await createSshEnv({ privateKey: material });
+    try {
+      const keyPath = /-i (\S+)/.exec(env.GIT_SSH_COMMAND ?? '')?.[1];
+      expect(keyPath).toBeTruthy();
+      // Байт в байт: переводы строк внутри ключа не меняем.
+      expect(await readFile(keyPath!, 'utf-8')).toBe(material);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe.skipIf(!AGENT_TOOLS_AVAILABLE)('ssh-env: ключ без завершающего \\n (agent-режим)', () => {
+  it('ключ без завершающего \\n добавляется в агент (ssh-add -l видит идентичность)', async () => {
+    // Реальный ключ из реестра: последний байт — `-`, без перевода строки.
+    const privateKey = (await generateKey()).replace(/\n$/, '');
+    expect(privateKey.endsWith('\n')).toBe(false);
+
+    const { env, cleanup } = await createSshEnv({ privateKey, agent: true });
+    try {
+      const sock = env.SSH_AUTH_SOCK!;
+      const { stdout } = await execFileAsync('ssh-add', ['-l'], {
+        env: { ...process.env, SSH_AUTH_SOCK: sock },
+      });
+      // Идентичность в памяти агента есть — значит `ssh-add` принял ключ.
+      expect(String(stdout).trim().length).toBeGreaterThan(0);
+      expect(String(stdout)).toContain('ED25519');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('agent:false — ключ без завершающего \\n записывается валидным (ssh-keygen читает)', async () => {
+    const privateKey = (await generateKey()).replace(/\n$/, '');
+    const { env, cleanup } = await createSshEnv({ privateKey, agent: false });
+    try {
+      const keyPath = /-i (\S+)/.exec(env.GIT_SSH_COMMAND ?? '')?.[1];
+      expect(keyPath).toBeTruthy();
+      const written = await readFile(keyPath!, 'utf-8');
+      expect(written.endsWith('\n')).toBe(true);
+      // Тот же PEM-парсер, что у `ssh`/`ssh-add`: ключ без перевода строки он
+      // не принимает («invalid format»), с переводом — принимает.
+      const { stdout } = await execFileAsync('ssh-keygen', ['-y', '-f', keyPath!]);
+      expect(String(stdout).trim().startsWith('ssh-ed25519')).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
 describe.skipIf(!AGENT_TOOLS_AVAILABLE)('ssh-env: агентный режим (PROP-124 §2)', () => {
   it('agent:true — SSH_AUTH_SOCK/SSH_AGENT_PID, ключ удалён, агент видит идентичность', async () => {
     const privateKey = await generateKey();
@@ -312,13 +459,19 @@ describe.skipIf(!AGENT_TOOLS_AVAILABLE)('ssh-env: агентный режим (P
 });
 
 /**
- * Жизненный цикл агента (PROP-124 §2): агент **демонизируется** — свой SID,
- * reparent к init, не в группе процессов Node. Поэтому `cleanup` обязан
- * гасить его **наверняка**: `SIGTERM` → ожидание → `SIGKILL` → ожидание.
+ * Жизненный цикл агента (PROP-124 §2): агент поднимается в **foreground-режиме**
+ * (`ssh-agent -D`) — он остаётся нашим ребёнком, и после смерти его reапит Node
+ * (в контейнере, где процесс — PID 1, демонизированный агент осиротел бы и
+ * остался зомби навсегда: `kill(pid, 0)` на зомби возвращает успех).
+ *
+ * `cleanup` обязан гасить агент **наверняка**: `SIGTERM` → ожидание → `SIGKILL`
+ * → ожидание. Предупреждение «агент не завершился» — только для **реально
+ * живого** процесса (зомби мёртв).
  */
 describe('ssh-env: жёсткое завершение агента', () => {
-  it('агент, игнорирующий SIGTERM, убит через SIGKILL', async () => {
-    const restorePath = await withFakeAgentTools();
+  it('агент, игнорирующий SIGTERM, убит через SIGKILL — без ложного предупреждения', async () => {
+    const restorePath = await withFakeAgentTools({ ignoreSigterm: true });
+    const warnings = collectWarnings();
     try {
       const { env, cleanup } = await createSshEnv({
         privateKey: 'это не ключ',
@@ -347,8 +500,51 @@ describe('ssh-env: жёсткое завершение агента', () => {
       expect(await exists(dir)).toBe(false);
       // cleanup не висит: суммарное ожидание ограничено таймаутами.
       expect(elapsed).toBeLessThan(5_000);
+      // Ложного «агент остался жив» быть не должно (процесс убит, а не зомби).
+      expect(warnings.messages.filter((m) => m.includes('ssh-agent не завершился'))).toEqual([]);
       // Идемпотентность.
       await expect(cleanup()).resolves.toBeUndefined();
+    } finally {
+      warnings.restore();
+      restorePath();
+    }
+  });
+
+  it('агент, корректно умирающий по SIGTERM — без предупреждения', async () => {
+    const restorePath = await withFakeAgentTools();
+    const warnings = collectWarnings();
+    try {
+      const { env, cleanup } = await createSshEnv({
+        privateKey: 'это не ключ',
+        agent: true,
+        agentKill: { termGraceMs: 300, killGraceMs: 1_000, pollMs: 25 },
+      });
+      const pid = Number(env.SSH_AGENT_PID);
+      expect(Number.isInteger(pid)).toBe(true);
+
+      await cleanup();
+
+      expect(await waitProcessGone(pid)).toBe(true);
+      expect(warnings.messages.filter((m) => m.includes('ssh-agent не завершился'))).toEqual([]);
+    } finally {
+      warnings.restore();
+      restorePath();
+    }
+  });
+
+  it('после cleanup агент reапнут Node — зомби не остаётся', async () => {
+    const restorePath = await withFakeAgentTools();
+    try {
+      const { env, cleanup } = await createSshEnv({
+        privateKey: 'это не ключ',
+        agent: true,
+        agentKill: { termGraceMs: 300, killGraceMs: 1_000, pollMs: 25 },
+      });
+      const pid = Number(env.SSH_AGENT_PID);
+      await cleanup();
+      // Процесса нет вовсе (не зомби): состояние не читается — запись в
+      // таблице процессов убрана.
+      expect(readProcessState(pid)).toBeNull();
     } finally {
       restorePath();
     }
@@ -375,6 +571,56 @@ describe('ssh-env: жёсткое завершение агента', () => {
       }
     } finally {
       restorePath();
+    }
+  });
+});
+
+/**
+ * Зомби (`Z`) — процесс завершился, но родитель не сделал `wait`.
+ *
+ * `kill(pid, 0)` на зомби возвращает успех, поэтому «живость» по сигналу врёт:
+ * процесс мёртв (ресурсы, в том числе память с ключом, освобождены), и
+ * предупреждение «ssh-agent остался жив» — ложное.
+ */
+describe('ssh-env: зомби не считается живым', () => {
+  it('состояние Z — процесс мёртв (isProcessAlive → false)', async () => {
+    const zombie = await spawnZombie();
+    try {
+      // Ждём перехода в состояние `Z`.
+      const deadline = Date.now() + 5_000;
+      while (readProcessState(zombie.pid) !== 'Z' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(readProcessState(zombie.pid)).toBe('Z');
+      // По сигналу зомби «жив» — именно поэтому нужна проверка состояния.
+      expect(() => process.kill(zombie.pid, 0)).not.toThrow();
+      expect(isProcessAlive(zombie.pid)).toBe(false);
+    } finally {
+      zombie.stop();
+    }
+  });
+
+  it('terminateProcess на зомби: процесс мёртв, предупреждения нет', async () => {
+    const zombie = await spawnZombie();
+    const warnings = collectWarnings();
+    try {
+      const deadline = Date.now() + 5_000;
+      while (readProcessState(zombie.pid) !== 'Z' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(readProcessState(zombie.pid)).toBe('Z');
+
+      const gone = await terminateProcess(zombie.pid, {
+        termGraceMs: 100,
+        killGraceMs: 200,
+        pollMs: 25,
+      });
+      // Зомби — мёртвый процесс: эскалация не нужна, ложного предупреждения нет.
+      expect(gone).toBe(true);
+      expect(warnings.messages.filter((m) => m.includes('ssh-agent не завершился'))).toEqual([]);
+    } finally {
+      warnings.restore();
+      zombie.stop();
     }
   });
 });
