@@ -94,6 +94,17 @@
  *   вызов требует подтверждения, ни один вызов партии не исполняется (иначе
  *   после `resume` они исполнились бы повторно).
  *
+ * ### Параллельное исполнение партии (PROP-127, этап T4)
+ *
+ * Вызовы одного ответа модели исполняются **одновременно**
+ * (`runToolBatch`), а результаты фиксируются **последовательно, в порядке
+ * вызовов модели**: провайдер требует один `tool_result` на каждый
+ * `tool_call` и в том же порядке (ADR-117). Планирование (права, отказы,
+ * гейт) остаётся последовательным и целиком предшествует исполнению —
+ * ровно как в основной сессии (PROP-127, этап T2) и в цикле саб-агента
+ * (этап T3). Барьеров в шаге пайплайна нет: см. комментарий у 5.5 в
+ * `runToolUseLoop`.
+ *
  * ### `ask` → гейт → `resume`
  *
  * Узел при возобновлении исполняется **заново** (ADR-101 §2.13), поэтому
@@ -122,16 +133,25 @@
  * `pipeline.cancelled`, не дожидаясь ответа провайдера (промис вызова
  * игнорируется). Провайдер обрывает собственный запрос по своему таймауту.
  */
-import type { LLMResponse, StepResult, TokenUsage, ToolDefinition, ToolForLLM } from '@itphx/synth-shared';
+import type {
+  LLMResponse,
+  StepResult,
+  TokenUsage,
+  ToolDefinition,
+  ToolForLLM,
+  ToolResult,
+} from '@itphx/synth-shared';
 
 import { error as logError, info as logInfo, warning as logWarning } from '../../../logger.js';
 import type { BaseProvider, LLMMessage, SystemPromptPayload } from '../../../providers/base.js';
 import type { ComposerMcpServer, ComposerSessionLike } from '../../context/composer.js';
 import { classifyLlmErrorFor, isLlmErrorRecoverable } from '../../llm-error.js';
-import { t } from '../../system-messages.js';
+import { t, i18n as i18nMeta } from '../../system-messages.js';
 import { GatewayProvider } from '../../gateway/index.js';
 import { buildDenyResult } from '../../tools/tool-execution.js';
 import { zodToJsonSchema } from '../../tools/json-schema.js';
+import { errorText } from '../../tools/error-text.js';
+import { runToolBatch, type ToolBatchOutcome } from '../../tools/tool-batch.js';
 import type { PipelineStepContext } from '../step-context.js';
 import { sanitizeValue } from '../payload.js';
 import type { PipelinePermissionDeps } from '../permissions.js';
@@ -363,11 +383,41 @@ async function runToolUseLoop(
     }
 
     // 5.5. Исполнение разрешённых вызовов и результаты в локальную историю.
-    //      Порядок результатов — как порядок вызовов в ответе модели (провайдеры
-    //      ждут парные `tool_result` в том же порядке).
+    //      PROP-127 (этап T4): вызовы одной партии (одного ответа модели)
+    //      исполняются ПАРАЛЛЕЛЬНО, а результаты фиксируются последовательно,
+    //      в порядке вызовов модели (провайдеры ждут парные `tool_result` в
+    //      том же порядке — ADR-117).
+    //
+    //      Барьеров в шаге пайплайна нет (в отличие от основной сессии):
+    //      - права и режим решены для ВСЕЙ партии ДО исполнения (5.4) —
+    //        состояние, от которого зависит решение по правам, вызовом не
+    //        меняется;
+    //      - режим (`ctx.mode`) и рабочий каталог (`ctx.step.workspace`) заданы
+    //        спецификацией/контекстом шага и на протяжении шага не меняются:
+    //        меняющие их тулы (`plan_enter`/`plan_exit`, `project_*`) в шаге
+    //        пайплайна и не работают — у вызова тула нет `extra` (сессии у
+    //        шага нет, ADR-101 §1), поэтому они возвращают отказ, а не
+    //        меняют состояние.
+    const execPlans = planning.plans.filter(
+      (plan): plan is Extract<ToolCallPlan, { kind: 'execute' }> => plan.kind === 'execute',
+    );
+    const batch = await runToolBatch(
+      execPlans.map((plan) => ({
+        id: plan.call.id,
+        run: () => executeStepTool(ctx, plan.toolDef, plan.call.name, plan.call.args),
+      })),
+    );
+
+    // Фиксация — последовательно, в порядке вызовов модели: `calls` и
+    // локальная история получают результаты в том же порядке, что и вызовы.
+    let execIndex = 0;
     for (const plan of planning.plans) {
       if (plan.kind === 'execute') {
-        const result = await executeStepTool(ctx, plan.toolDef, plan.call.name, plan.call.args);
+        const outcome = batch.outcomes[execIndex];
+        execIndex += 1;
+        const result = outcome?.ok === true
+          ? outcome.value
+          : toolExecErrorResult(plan.call.name, outcome, ctx, logger);
         calls.push({ name: plan.call.name, isError: result.isError === true });
         state.messages.push(toolResultMessage(plan.call, result.content));
         continue;
@@ -531,6 +581,37 @@ function planToolCalls(
   }
 
   return { kind: 'plans', plans };
+}
+
+/**
+ * PROP-127 (этап T4): результат-ошибка для вызова, который не удалось
+ * исполнить.
+ *
+ * Батч не падает целиком: упавший вызов — его слот. Результат — обычный
+ * error-результат тула, шаг продолжается, а пара
+ * assistant(tool_calls) → tool не рвётся.
+ *
+ * Форма — та же, что у `executeToolDef` (`engine/tools/tool-execution.ts`):
+ * исключение самого тула уже превращается в такой результат там, поэтому
+ * поведение шага при падении тула не меняется.
+ */
+function toolExecErrorResult(
+  toolName: string,
+  outcome: ToolBatchOutcome<ToolResult> | undefined,
+  ctx: StepExecutionContext,
+  logger: PipelineEngineLogger,
+): ToolResult {
+  const detail = outcome && !outcome.ok ? errorText(outcome.error) : 'unknown error';
+  logger.warning(
+    LOG_GROUP,
+    `шаг «${ctx.node.id}»: ошибка исполнения тула «${toolName}»: ${detail}`,
+  );
+  const params = { tool: toolName, error: detail };
+  return {
+    content: t('tool.exec_error', params),
+    isError: true,
+    metadata: { i18n: i18nMeta('tool.exec_error', params) },
+  };
 }
 
 /**

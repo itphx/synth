@@ -264,15 +264,38 @@ function replyFrame(actor: Actor, approvalId: string, digest?: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Места, где принимается решение по ответу на подтверждение. Новый путь
- * (например, второй WS-канал или HTTP-эндпоинт ответа) обязан попасть в
- * список **и** проходить через реестр (`claim`).
+ * Места, где решение принимает **пользователь** (ответ на подтверждение).
+ * Новый путь (например, второй WS-канал или HTTP-эндпоинт ответа) обязан
+ * попасть в список **и** проходить через реестр (`claim`).
  */
 const DECISION_POINTS = [
   'packages/backend/src/app/listen.ts',
   'packages/core/src/server/app/ws-events.ts',
   // HTTP-ответ на подтверждение (SSE/не-WS клиенты) — тот же реестр.
   'packages/core/src/server/routes/sessions.ts',
+];
+
+/**
+ * Места, где `permission.replied` публикует **сервер** (PROP-127 T5):
+ *
+ * - каскад отказа по пакету ожидающих подтверждений (opencode-паритет);
+ * - авто-одобрение соседнего запроса грантом «Разрешить в сессии».
+ *
+ * Это **не** ответы пользователя: реестр по ним не проходится (решение по
+ * подтверждению уже принято — иначе «Разрешить в сессии» был бы обходом
+ * `claim`). Одноразовость при этом сохраняется: привязка списывается, поздний
+ * ответ на погашенное подтверждение — отказ (`already_consumed`, ADR-106 Ф3).
+ *
+ * Публикация помечена (`auto_approved`/`cascaded`) — клиент отличает её от
+ * ответа пользователя и убирает карточку подтверждения.
+ */
+const SERVER_PUBLICATION_POINTS = [
+  // Каскад отказа (менеджер подтверждений).
+  'packages/core/src/engine/permission/approval.ts',
+  // Авто-одобрение соседнего запроса грантом (основной ход).
+  'packages/core/src/engine/orchestrator.ts',
+  // Авто-одобрение соседнего запроса грантом (ход саб-агента).
+  'packages/core/src/engine/tools/task/run-cycle.ts',
 ];
 
 /** Корень монорепозитория (по расположению этого файла). */
@@ -303,19 +326,31 @@ describe('ADR-106 Ф3: перепись мест принятия решений
     for (const pkg of ['core', 'backend']) {
       for (const file of await sourceFiles(pkg)) {
         const content = await readFile(join(REPO_ROOT, file), 'utf-8');
-        if (/publish\(\s*[\w.]+\s*,\s*'permission\.replied'/.test(content)) found.push(file);
+        // Шаблон ловит и обычный вызов (`bus.publish(...)`), и опциональную
+        // цепочку (`bus?.publish(...)`), и не-идентификатор канала
+        // (`bus.publish(session.id!, ...)`) — иначе новый путь мог бы уйти
+        // мимо переписи.
+        if (/\.publish\([\s\S]{0,80}?'permission\.replied'/.test(content)) found.push(file);
       }
     }
-    expect(found.sort()).toEqual([...DECISION_POINTS].sort());
+    expect(found.sort()).toEqual([...DECISION_POINTS, ...SERVER_PUBLICATION_POINTS].sort());
   });
 
-  it('каждое место решения проходит через реестр подтверждений (claim)', async () => {
+  it('каждое место решения пользователя проходит через реестр подтверждений (claim)', async () => {
     for (const file of DECISION_POINTS) {
       const content = await readFile(join(REPO_ROOT, file), 'utf-8');
       expect(content, file).toMatch(/approvalRegistry/);
       expect(content, file).toMatch(/\.claim\(/);
       // Отказ должен быть виден клиенту машинным кодом.
       expect(content, file).toMatch(/APPROVAL_DENIED/);
+    }
+  });
+
+  it('серверные публикации помечены (клиент отличает их от ответа пользователя)', async () => {
+    for (const file of SERVER_PUBLICATION_POINTS) {
+      const content = await readFile(join(REPO_ROOT, file), 'utf-8');
+      // Метка «решение принято сервером» — карточка подтверждения снимается.
+      expect(content, file).toMatch(/auto_approved|cascaded/);
     }
   });
 });

@@ -7,17 +7,23 @@
  * поведения.
  */
 import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
-import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, ToolDefinition, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType, PermissionDecision } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
 import { buildDenyResult, executeToolDef } from '../tool-execution.js';
+import { errorText } from '../error-text.js';
+import { runToolBatch, type ToolBatchOutcome } from '../tool-batch.js';
 import { classifyLlmErrorFor, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
 import { computeUsageCost } from '../../../providers/usage.js';
 import type { UsageCost } from '../../../providers/usage.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
-import { PermissionEvaluator, isPlanRestricted } from '../../permission/evaluator.js';
-import { PermissionApprovalManager } from '../../permission/approval.js';
+import { PermissionEvaluator, isPlanRestricted, type PermissionCheckInput } from '../../permission/evaluator.js';
+import {
+  PermissionApprovalManager,
+  type ApprovalRequest,
+  type ApprovalWaiter,
+} from '../../permission/approval.js';
 import { buildPermissionPreview } from '../../permission/preview.js';
 import { ObfuscationMapStore } from '../../gateway/obfuscation-map-store.js';
 import { estimatePromptChars, estimateTokens } from '../../context/token-ratio.js';
@@ -155,6 +161,60 @@ async function loadSubagentSecretsMap(extra: TaskExtra): Promise<Record<string, 
  * Текст «только текст» для шага-лимита — общий модуль механики opencode
  * (`engine/llm/max-steps.ts`): его же использует основной цикл оркестратора.
  */
+
+/**
+ * PROP-127 (этап T3): план одного вызова инструмента в цикле саб-агента.
+ *
+ * - `step-limit` — вызов, запрещённый лимитом шагов: результат публикуется и
+ *   пишется в историю, но `tool_call.started` **не** публикуется (вызов не
+ *   исполнялся) — поведение прежнее.
+ * - `doom` — вызов, остановленный защитой от зацикливания: в историю пишется
+ *   парный tool-результат, но события не публикуются и в `tool_calls` вызов
+ *   не попадает — поведение прежнее.
+ * - `resolved` — вызов, решённый без исполнения (отказ прав, отсутствующий
+ *   тул): результат известен, общий хвост фазы фиксации выполняется.
+ * - `ask` — вызов, ждущий подтверждения пользователя (PROP-127 T5): решение
+ *   принимается в параллельной фазе, затем вызов становится `execute`
+ *   (одобрен) или `resolved` (отказ/таймаут/каскад).
+ * - `execute` — вызов, исполняемый в фазе исполнения батча; у него свой
+ *   `ToolContext` и свой исполнитель.
+ */
+interface SubagentToolPlanBase {
+  /** id вызова — привязка результата, пары assistant→tool и событий. */
+  tcId: string;
+  /** Имя тула в событии и истории. */
+  name: string;
+  /** Аргументы вызова (в истории/метаданных). */
+  args: Record<string, unknown>;
+  /** Момент публикации `tool_call.started` — в `tool_calls.started_at`. */
+  startedAt: string;
+  /**
+   * Вызов изменил правила прав ребёнка («Разрешить в сессии») — **барьер**:
+   * следующий вызов обязан видеть новое правило, поэтому он готовится уже
+   * после фиксации этого вызова.
+   */
+  grantsSession: boolean;
+}
+
+type SubagentToolPlan =
+  | (SubagentToolPlanBase & { kind: 'step-limit'; result: ToolResult })
+  | (SubagentToolPlanBase & { kind: 'doom'; content: string })
+  | (SubagentToolPlanBase & { kind: 'resolved'; result: ToolResult; userDenied: boolean })
+  | (SubagentToolPlanBase & {
+      kind: 'ask';
+      /** Ожидание подтверждения (публикуется и ждётся в параллельной фазе). */
+      waiter: ApprovalWaiter;
+      /** Запрос подтверждения — публикуется как `permission.asked`. */
+      approval: ApprovalRequest;
+      /** Вход проверки прав — переоценка после гранта «в сессии». */
+      checkInput: PermissionCheckInput;
+      /** Решение permission-слоя — для текста отказа. */
+      permissionDecision: PermissionDecision;
+      /** Исполнитель вызова (тот же, что у `execute`). */
+      run: () => Promise<ToolResult>;
+    })
+  | (SubagentToolPlanBase & { kind: 'execute'; run: () => Promise<ToolResult> });
+
 export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult> {
   const {
     subagentType, description, contextMode, maxSteps,
@@ -1558,7 +1618,132 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         reasoningRedacted,
       });
 
-      for (const tc of toolCalls) {
+      /**
+       * PROP-127 (этап T3): вызовы инструментов одного assistant-сообщения
+       * ребёнка исполняются **параллельно**, а порядок вызовов модели
+       * остаётся значимым.
+       *
+       * Тело цикла разбито на три фазы (как в основной сессии, этап T2):
+       *  1. **Подготовка** (последовательно, порядок вызовов модели): разбор
+       *     аргументов, учёт doom-loop, публикация `tool_call.started`,
+       *     проверка прав, ожидание подтверждения (`ask`) и сборка
+       *     `ToolContext` каждого вызова. Здесь живут все счётчики и флаги
+       *     прогона — они по определению последовательны («N одинаковых
+       *     вызовов подряд», «вызов N+1 видит грант из вызова N»).
+       *  2. **Исполнение** (параллельно): вызовы сегмента стартуют
+       *     одновременно (`runToolBatch`), каждый со своим контекстом;
+       *     исключение тула — результат тула (`tool.exec_error`), а не
+       *     падение прогона.
+       *  3. **Фиксация** (последовательно, порядок вызовов модели):
+       *     публикация `tool_call.result`, `allSubagentToolCalls`,
+       *     tool-сообщение в LLM-контексте ребёнка и запись результата в
+       *     историю дочерней сессии.
+       *
+       * **Барьер.** Состояние, которое читают следующие вызовы этого цикла, —
+       * только правила прав ребёнка (`derivedPermission.rules` и запись
+       * `child.settings.permission`): их меняет ответ пользователя «Разрешить
+       * в сессии» (`approval.once === false`) в ветке `ask`. Вызов, получивший
+       * такой грант, завершает сегмент: следующий вызов готовится уже после
+       * его фиксации — ровно как в последовательном цикле.
+       *
+       * Остальные «меняющие состояние» тулы здесь **не** барьер (вывод из
+       * кода, а не по аналогии с основной сессией):
+       *  - `plan_enter`/`plan_exit`/`task`/`question` саб-агенту запрещены
+       *    правилом `deny` (`deriveSubagentPermission`,
+       *    `engine/permission/derive.ts`) — они не исполняются вовсе, а
+       *    `childSessionMode`/`childPlanMode`/`childPlanApproved` читаются
+       *    циклом из снимка, снятого **до** цикла;
+       *  - `project_*` и `todo_*` меняют состояние **родительской** сессии
+       *    (`ctx.sessionId`/`extra.sessionId` — родитель), а цикл читает
+       *    снимок `ctx.workingDir`/`ctx.allowedRoots`, снятый до цикла, —
+       *    их эффект следующим вызовам этого цикла не виден (как и в
+       *    последовательном цикле).
+       */
+
+      /**
+       * Запись tool-результата в историю дочерней сессии (best-effort):
+       * ошибка записи не роняет прогон — результат всё равно уходит модели.
+       */
+      const persistSubagentToolMessage = async (
+        tcId: string,
+        toolName: string,
+        content: string,
+        args: Record<string, unknown>,
+        extraMetadata?: Record<string, unknown>,
+      ): Promise<void> => {
+        if (!childSessionId || !extra.sessionManager) return;
+        try {
+          const toolResultMsg: Message = {
+            id: generateId(),
+            role: MessageRole.TOOL,
+            seq: 0,
+            origin: 'local',
+            parts: [makeTextPart(content)],
+            content,
+            createdAt: nowISO(),
+            disabled: false,
+            pinned: false,
+            hidden: false,
+            toolCallId: tcId,
+            metadata: {
+              ...(extraMetadata ?? {}),
+              stream_id: extra.streamId,
+              tool_chain: true,
+              tool_name: toolName,
+              args,
+            },
+          };
+          const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
+          if (updated && extra.eventBus) {
+            const idx = updated.messages.length - 1;
+            await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
+          }
+        } catch {
+          // не фатально
+        }
+      };
+
+      /**
+       * Исполнение вызова в фазе исполнения батча.
+       *
+       * Исключение тула — результат тула (`tool.exec_error`), а не падение
+       * прогона: ровно так же, как `executeToolDef` отдаёт ошибку исполнения
+       * сама (пара assistant(tool_calls) → tool не рвётся), и так же, как в
+       * основном цикле сессии (PROP-127, этап T2).
+       */
+      const runSubagentTool = async (
+        toolDef: ToolDefinition | undefined,
+        toolName: string,
+        toolArgs: Record<string, unknown>,
+        toolExecContext: ToolContext,
+      ): Promise<ToolResult> => {
+        if (!toolDef) {
+          return {
+            content: sm('tool.not_found', { tool: toolName }),
+            isError: true,
+            metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
+          };
+        }
+        try {
+          return await executeToolDef(toolDef, toolArgs, toolExecContext, toolName);
+        } catch (execError) {
+          const errText = errorText(execError);
+          return {
+            content: sm('tool.exec_error', { tool: toolName, error: errText }),
+            isError: true,
+            metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName, error: errText }) },
+          };
+        }
+      };
+
+      /**
+       * PROP-127 (этап T3): подготовка вызова — последовательно, в порядке
+       * вызовов модели. Возвращает `null` для «кривого» вызова (без имени
+       * тула) — такой вызов пропускается целиком (поведение прежнее).
+       */
+      const prepareSubagentToolCall = async (
+        tc: Record<string, unknown>,
+      ): Promise<SubagentToolPlan | null> => {
         const tcId = (tc.id as string) || `subcall_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
 
@@ -1576,67 +1761,21 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               isError: true,
             },
           };
-          const tcStartedAt = new Date().toISOString();
-          publishToolEvent('tool_call.result', {
-            stream_id: extra.streamId,
-            session_id: extra.sessionId,
-            call_id: tcId,
-            name: toolName,
-            result: limited,
-            iteration: stepIteration,
-            parent_call_id: extra.callId,
-          });
-          allSubagentToolCalls.push({
+          return {
+            kind: 'step-limit',
+            tcId,
             name: toolName,
             args: {},
-            id: tcId,
-            result: { content: limited.content, isError: true },
-            started_at: tcStartedAt,
-            completed_at: new Date().toISOString(),
-            iteration: stepIteration,
-          });
-          messages.push({
-            id: '', role: 'tool',
-            content: limited.content,
-            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-            disabled: false, pinned: false, branchId: '',
-            toolCallId: tcId,
-          });
-          if (childSessionId && extra.sessionManager) {
-            try {
-              const toolResultMsg: Message = {
-                id: generateId(),
-                role: MessageRole.TOOL,
-                seq: 0,
-                origin: 'local',
-                parts: [makeTextPart(limited.content)],
-                content: limited.content,
-                createdAt: nowISO(),
-                disabled: false,
-                pinned: false,
-                hidden: false,
-                toolCallId: tcId,
-                metadata: {
-                  ...(limited.metadata ?? {}),
-                  stream_id: extra.streamId,
-                  tool_chain: true,
-                  tool_name: toolName,
-                  args: {},
-                },
-              };
-              const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
-              if (updated && extra.eventBus) {
-                const idx = updated.messages.length - 1;
-                await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
-              }
-            } catch {
-              // не фатально
-            }
-          }
-          continue;
+            startedAt: new Date().toISOString(),
+            result: limited,
+            grantsSession: false,
+          };
         }
 
-        if (!func?.name) continue;
+        // «Кривой» вызов модели (без имени инструмента) — пропускаем целиком:
+        // ни `tool_call.started`, ни парного tool-результата (в отличие от
+        // цикла основной сессии — здесь поведение прежнее).
+        if (!func?.name) return null;
 
         const toolName = func.name;
         let toolArgs: Record<string, unknown>;
@@ -1648,51 +1787,23 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
         const tcStartedAt = new Date().toISOString();
 
+        // Защита от зацикливания: одинаковый вызов с одинаковыми аргументами.
+        // Счётчик общий на весь прогон, поэтому считается последовательно, в
+        // порядке вызовов модели (фаза подготовки).
         const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
         const doomCount = (doomTracker.get(doomKey) || 0) + 1;
         doomTracker.set(doomKey, doomCount);
 
         if (doomCount >= MAX_DOOM_LOOP_COUNT) {
-          const doomMsg: LLMMessage = {
-            id: '', role: 'tool',
+          return {
+            kind: 'doom',
+            tcId,
+            name: toolName,
+            args: toolArgs,
+            startedAt: tcStartedAt,
             content: sm('tool.doom_loop', { tool: toolName, count: String(doomCount) }),
-            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-            disabled: false, pinned: false, branchId: '',
-            toolCallId: tcId,
+            grantsSession: false,
           };
-          messages.push(doomMsg);
-
-          if (childSessionId && extra.sessionManager) {
-            try {
-              const toolResultMsg: Message = {
-                id: generateId(),
-                role: MessageRole.TOOL,
-                seq: 0,
-                origin: 'local',
-                parts: [makeTextPart(doomMsg.content)],
-                content: doomMsg.content,
-                createdAt: nowISO(),
-                disabled: false,
-                pinned: false,
-                hidden: false,
-                toolCallId: tcId,
-                metadata: {
-                  stream_id: extra.streamId,
-                  tool_chain: true,
-                  tool_name: toolName,
-                  args: toolArgs,
-                },
-              };
-              const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
-              if (updated && extra.eventBus) {
-                const idx = updated.messages.length - 1;
-                await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
-              }
-            } catch {
-              // не фатально
-            }
-          }
-          continue;
         }
 
         publishToolEvent('tool_call.started', {
@@ -1708,7 +1819,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         });
 
         const toolDef = extra.toolRegistry?.get(toolName);
-        // Контекст исполнения тула — общий для веток ask(approved) и allow.
+        // Контекст исполнения тула — свой на каждый вызов (PROP-127): собирается
+        // на фазе подготовки (последовательно) и используется только этим
+        // вызовом.
         const toolExecContext: ToolContext = {
           ...ctx,
           abortSignal: ctx.abortSignal,
@@ -1726,12 +1839,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               : async () => [],
           },
         };
-        let toolResult: ToolResult;
-        let subagentUserDenied = false;
 
         // ADR-029: permission-check саб-агента — permissions дочерней сессии
         // (родитель + deny-дополнения) применяются к каждому tool_call.
-        const permissionDecision = childEvaluator.check({
+        //
+        // PROP-127 (этап T5): вход проверки сохраняем — после гранта
+        // «Разрешить в сессии» его можно переоценить (соседний запрос,
+        // покрытый новым правилом, одобряется без нового вопроса).
+        const checkInput: PermissionCheckInput = {
           toolName,
           params: toolArgs,
           workingDir: ctx.workingDir,
@@ -1751,17 +1866,29 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           runtimeDeps: extra.runtimeDeps,
           // ADR-075: гейт рабочего каталога проекта — как у родителя.
           workspaceReady: extra.workspaceReady,
-        });
+        };
+        const permissionDecision = childEvaluator.check(checkInput);
 
         if (permissionDecision.action === 'deny') {
-          toolResult = buildDenyResult({
-            reason: permissionDecision.reason,
-            matchedRule: permissionDecision.matchedRule,
-            messageId: permissionDecision.messageId,
-            params: permissionDecision.params as Record<string, string> | undefined,
-            contextConfig: extra.contextConfig,
-          });
-        } else if (permissionDecision.action === 'ask') {
+          return {
+            kind: 'resolved',
+            tcId,
+            name: toolName,
+            args: toolArgs,
+            startedAt: tcStartedAt,
+            result: buildDenyResult({
+              reason: permissionDecision.reason,
+              matchedRule: permissionDecision.matchedRule,
+              messageId: permissionDecision.messageId,
+              params: permissionDecision.params as Record<string, string> | undefined,
+              contextConfig: extra.contextConfig,
+            }),
+            userDenied: false,
+            grantsSession: false,
+          };
+        }
+
+        if (permissionDecision.action === 'ask') {
           // ask публикуется в родительскую сессию (extra.sessionId) —
           // пользователь основной сессии видит запрос и отвечает.
           const approvalAskReason = extra.contextConfig && permissionDecision.messageId
@@ -1776,22 +1903,174 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             workingDir: ctx.workingDir,
             secretsMap: await loadSubagentSecretsMap(extra),
           });
-          const approval = await childApprovalManager.waitForDecision(
+          const approval: ApprovalRequest = {
+            approvalId: `approval_${tcId}`,
+            callId: tcId,
+            toolName,
+            arguments: toolArgs,
+            reason: approvalAskReason,
+            ...(preview ? { preview } : {}),
+          };
+          // PROP-127 (этап T5): ожидание готовится здесь, публикуется и
+          // ждётся в параллельной фазе — несколько `ask` одного шага висят
+          // одновременно.
+          const waiter = childApprovalManager.prepareWaiter(
             extra.sessionId!,
-            {
-              approvalId: `approval_${tcId}`,
-              callId: tcId,
-              toolName,
-              arguments: toolArgs,
-              reason: approvalAskReason,
-              ...(preview ? { preview } : {}),
-            },
+            approval,
             derivedPermission.askTimeoutMs,
+            // «Стоп» родителя снимает ожидание подтверждения (иначе тул
+            // висел бы до ask-таймаута).
+            ctx.abortSignal,
           );
+          return {
+            kind: 'ask',
+            tcId,
+            name: toolName,
+            args: toolArgs,
+            startedAt: tcStartedAt,
+            waiter,
+            approval,
+            checkInput,
+            permissionDecision,
+            run: () => runSubagentTool(toolDef, toolName, toolArgs, toolExecContext),
+            grantsSession: false,
+          };
+        }
+
+        // allow — обычное выполнение
+        return {
+          kind: 'execute',
+          tcId,
+          name: toolName,
+          args: toolArgs,
+          startedAt: tcStartedAt,
+          run: () => runSubagentTool(toolDef, toolName, toolArgs, toolExecContext),
+          grantsSession: false,
+        };
+      };
+
+      /**
+       * PROP-127 (этап T3): фиксация вызова — последовательно, в порядке
+       * вызовов модели. Здесь `messages` (LLM-контекст ребёнка), история
+       * дочерней сессии и `allSubagentToolCalls` получают результаты в том же
+       * порядке, что и вызовы модели: провайдерский контракт требует одного
+       * tool-результата на каждый `tool_call` (ADR-117).
+       */
+      const commitSubagentToolCall = async (
+        plan: SubagentToolPlan,
+        execResult?: ToolResult,
+      ): Promise<void> => {
+        // Защита от зацикливания: события не публикуются и в `tool_calls`
+        // вызов не попадает — в историю пишется только парный tool-результат
+        // (поведение прежнее).
+        if (plan.kind === 'doom') {
+          messages.push({
+            id: '', role: 'tool',
+            content: plan.content,
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            disabled: false, pinned: false, branchId: '',
+            toolCallId: plan.tcId,
+          });
+          await persistSubagentToolMessage(plan.tcId, plan.name, plan.content, plan.args);
+          return;
+        }
+
+        // Ожидание подтверждения решено в параллельной фазе — сюда попасть
+        // не должно (план `ask` превращается в `execute`/`resolved`).
+        if (plan.kind === 'ask') return;
+
+        // Шаг-лимит: аргументы вызова в истории пустые, а признак ошибки —
+        // принудительный (поведение прежнее).
+        const isStepLimit = plan.kind === 'step-limit';
+        let toolResult: ToolResult;
+        if (plan.kind === 'execute') {
+          // Результат приходит из батча; запасной вариант — тот же
+          // error-результат тула (исполнитель не отдал результат).
+          toolResult = execResult ?? {
+            content: sm('tool.exec_error', { tool: plan.name, error: 'unknown error' }),
+            isError: true,
+            metadata: { i18n: i18nMeta('tool.exec_error', { tool: plan.name, error: 'unknown error' }) },
+          };
+        } else {
+          toolResult = plan.result;
+        }
+
+        publishToolEvent('tool_call.result', {
+          stream_id: extra.streamId,
+          session_id: extra.sessionId,
+          call_id: plan.tcId,
+          name: plan.name,
+          result: toolResult,
+          iteration: stepIteration,
+          parent_call_id: extra.callId,
+        });
+
+        allSubagentToolCalls.push({
+          name: plan.name,
+          args: isStepLimit ? {} : plan.args,
+          id: plan.tcId,
+          result: { content: toolResult.content, isError: isStepLimit ? true : toolResult.isError },
+          started_at: plan.startedAt,
+          completed_at: new Date().toISOString(),
+          iteration: stepIteration,
+        });
+
+        messages.push({
+          id: '', role: 'tool',
+          content: toolResult.content,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          disabled: false, pinned: false, branchId: '',
+          toolCallId: plan.tcId,
+        });
+
+        await persistSubagentToolMessage(
+          plan.tcId,
+          plan.name,
+          toolResult.content,
+          isStepLimit ? {} : plan.args,
+          plan.kind === 'step-limit' ? plan.result.metadata : undefined,
+        );
+
+        // ADR-029 (обновлено 2026-10-29): отказ (в т.ч. ask→deny) больше не
+        // обрывает цикл — модель получает `tool_result` и может выбрать другой
+        // инструмент. Флаг нужен только для фоллбек-текста `task.stopped_by_deny`,
+        // если содержательного ответа не будет.
+        if (plan.kind === 'resolved' && plan.userDenied) {
+          subagentDenied = true;
+        }
+      };
+
+      /**
+       * PROP-127 (этап T3): один сегмент батча — исполнение (параллельно)
+       * и фиксация (последовательно). Подготовка сегмента уже выполнена.
+       */
+      const runSubagentToolSegment = async (segment: SubagentToolPlan[]): Promise<void> => {
+        // Фаза 2a — подтверждения (PROP-127 T5): все `ask` сегмента
+        // публикуются **разом** — несколько подтверждений висят одновременно,
+        // а отказ по любому гасит остальные (каскад). Решения обрабатываются
+        // по порядку вызовов модели.
+        const askPlans = segment.filter(
+          (plan): plan is Extract<SubagentToolPlan, { kind: 'ask' }> => plan.kind === 'ask',
+        );
+        childApprovalManager.publishWaiters(askPlans.map((plan) => plan.waiter));
+
+        const resolved: SubagentToolPlan[] = [];
+        let grantIndex = -1;
+        for (const plan of segment) {
+          if (plan.kind !== 'ask') {
+            resolved.push(plan);
+            continue;
+          }
+          const approval = await plan.waiter.decision;
           if (approval.approved) {
+            let grantsSession = false;
             if (approval.once === false) {
-              // «Разрешить в сессии» — allow-правило в permissions дочерней сессии
-              derivedPermission.rules[toolName] = 'allow';
+              // «Разрешить в сессии» — allow-правило в permissions дочерней
+              // сессии. Правило меняется **до** исполнения вызова, и следующие
+              // вызовы батча обязаны его видеть — поэтому такой вызов
+              // заканчивает сегмент (барьер).
+              derivedPermission.rules[plan.name] = 'allow';
+              grantsSession = true;
               if (childSessionId && extra.sessionManager) {
                 try {
                   const child = await extra.sessionManager.getSession(childSessionId);
@@ -1803,114 +2082,144 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                   // не фатально
                 }
               }
+              if (grantIndex < 0) grantIndex = resolved.length;
+              // Переоценка ожидающих подтверждений (паритет с opencode, ветка
+              // `always`): новое правило может разрешить соседний запрос — он
+              // одобряется без нового вопроса пользователю.
+              for (const other of askPlans) {
+                if (other.waiter.settled) continue;
+                // Переоценка идёт с ТЕМ ЖЕ входом, что и исходная проверка в
+                // фазе подготовки. Для цикла саб-агента это не меняет ничего:
+                // слой Authority к проверке прав ребёнка не подключён вовсе
+                // (`childEvaluator` — без `authorityGate`), контекста хода в
+                // проверке нет. Правило едино для обоих циклов: переоценка не
+                // должна видеть прав БОЛЬШЕ, чем видела исходная проверка.
+                const recheck = childEvaluator.check({ ...other.checkInput });
+                if (recheck.action === 'allow') {
+                  other.waiter.resolve({ approved: true, action: 'allow' });
+                  // Событие — UI убирает карточку подтверждения (пользователь
+                  // её не отвечал: решение принято грантом по соседнему
+                  // запросу).
+                  extra.eventBus?.publish(extra.sessionId!, 'permission.replied', {
+                    approval_id: other.approval.approvalId,
+                    session_id: extra.sessionId!,
+                    approved: true,
+                    action: 'allow',
+                    auto_approved: true,
+                  });
+                }
+              }
             }
-            if (toolDef) {
-              toolResult = await executeToolDef(toolDef, toolArgs, toolExecContext, toolName);
-            } else {
-              toolResult = {
-                content: sm('tool.not_found', { tool: toolName }),
-                isError: true,
-                metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
-              };
-            }
-          } else {
-            const why = approval.timeout
-              ? sm('permission.ask_timeout')
+            resolved.push({
+              kind: 'execute',
+              tcId: plan.tcId,
+              name: plan.name,
+              args: plan.args,
+              startedAt: plan.startedAt,
+              run: plan.run,
+              grantsSession,
+            });
+            continue;
+          }
+          const why = approval.timeout
+            ? sm('permission.ask_timeout')
+            : approval.cancelled
+              ? sm('permission.ask_cancelled')
               : approval.noSubscribers
                 ? sm('permission.ask_no_subscribers')
                 : sm('permission.ask_denied');
-            toolResult = buildDenyResult({
-              reason: permissionDecision.reason,
-              matchedRule: permissionDecision.matchedRule,
-              messageId: permissionDecision.messageId,
-              params: permissionDecision.params as Record<string, string> | undefined,
+          resolved.push({
+            kind: 'resolved',
+            tcId: plan.tcId,
+            name: plan.name,
+            args: plan.args,
+            startedAt: plan.startedAt,
+            result: buildDenyResult({
+              reason: plan.permissionDecision.reason,
+              matchedRule: plan.permissionDecision.matchedRule,
+              messageId: plan.permissionDecision.messageId,
+              params: plan.permissionDecision.params as Record<string, string> | undefined,
               contextConfig: extra.contextConfig,
               contentSuffix: ` (${why})`,
               defaultI18n: false,
-            });
-            subagentUserDenied = !approval.timeout && !approval.noSubscribers;
-          }
-        } else {
-          // allow — обычное выполнение
-          if (toolDef) {
-            toolResult = await executeToolDef(toolDef, toolArgs, toolExecContext, toolName);
-          } else {
-            toolResult = {
-              content: sm('tool.not_found', { tool: toolName }),
-              isError: true,
-              metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
-            };
-          }
+            }),
+            // Отказ пользователя (не таймаут и не «нет подписчиков»).
+            userDenied: !approval.timeout && !approval.noSubscribers && !approval.cancelled,
+            grantsSession: false,
+          });
         }
 
-        publishToolEvent('tool_call.result', {
-          stream_id: extra.streamId,
-          session_id: extra.sessionId,
-          call_id: tcId,
-          name: toolName,
-          result: toolResult,
-          iteration: stepIteration,
-          parent_call_id: extra.callId,
+        // Фаза 2b — исполнение (параллельно): вызовы сегмента стартуют до
+        // завершения первого; ошибка одного вызова не роняет остальные.
+        // Грант «Разрешить в сессии» — барьер: вызовы после него исполняются
+        // отдельным батчем (как в последовательном цикле, где грант завершал
+        // сегмент).
+        const execEntries: Array<{
+          plan: Extract<SubagentToolPlan, { kind: 'execute' }>;
+          index: number;
+        }> = [];
+        resolved.forEach((plan, index) => {
+          if (plan.kind === 'execute') execEntries.push({ plan, index });
         });
-
-        allSubagentToolCalls.push({
-          name: toolName,
-          args: toolArgs,
-          id: tcId,
-          result: { content: toolResult.content, isError: toolResult.isError },
-          started_at: tcStartedAt,
-          completed_at: new Date().toISOString(),
-          iteration: stepIteration,
-        });
-
-        const toolResultLLMMsg: LLMMessage = {
-          id: '', role: 'tool',
-          content: toolResult.content,
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          disabled: false, pinned: false, branchId: '',
-          toolCallId: tcId,
-        };
-        messages.push(toolResultLLMMsg);
-
-        // Сохранить tool_result в дочернюю сессию
-        if (childSessionId && extra.sessionManager) {
-          try {
-            const toolResultMsg: Message = {
-              id: generateId(),
-              role: MessageRole.TOOL,
-              seq: 0,
-              origin: 'local',
-              parts: [makeTextPart(toolResult.content)],
-              content: toolResult.content,
-              createdAt: nowISO(),
-              disabled: false,
-              pinned: false,
-              hidden: false,
-              toolCallId: tcId,
-              metadata: {
-                stream_id: extra.streamId,
-                tool_chain: true,
-                tool_name: toolName,
-                args: toolArgs,
-              },
-            };
-            const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
-            if (updated && extra.eventBus) {
-              const idx = updated.messages.length - 1;
-              await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
-            }
-          } catch {
-            // не фатально
+        const groups: Array<typeof execEntries> = [];
+        let group: typeof execEntries = [];
+        for (const entry of execEntries) {
+          group.push(entry);
+          if (grantIndex >= 0 && entry.index === grantIndex) {
+            groups.push(group);
+            group = [];
           }
         }
+        if (group.length > 0) groups.push(group);
 
-        // ADR-029 (обновлено 2026-10-29): отказ (в т.ч. ask→deny) больше не
-        // обрывает цикл — модель получает `tool_result` и может выбрать другой
-        // инструмент. Флаг нужен только для фоллбек-текста `task.stopped_by_deny`,
-        // если содержательного ответа не будет.
-        if (subagentUserDenied) {
-          subagentDenied = true;
+        const outcomes = new Map<string, ToolBatchOutcome<ToolResult>>();
+        for (const batchGroup of groups) {
+          const batch = await runToolBatch(
+            batchGroup.map((entry) => ({ id: entry.plan.tcId, run: entry.plan.run })),
+          );
+          batch.outcomes.forEach((outcome, index) => {
+            const entry = batchGroup[index];
+            if (entry) outcomes.set(entry.plan.tcId, outcome);
+          });
         }
+
+        // Фаза 3 — фиксация (последовательно, порядок вызовов модели).
+        for (const plan of resolved) {
+          if (plan.kind !== 'execute') {
+            await commitSubagentToolCall(plan);
+            continue;
+          }
+          const outcome = outcomes.get(plan.tcId);
+          if (outcome?.ok) {
+            await commitSubagentToolCall(plan, outcome.value);
+            continue;
+          }
+          // Батч не падает целиком: упавший вызов — его слот. Результат —
+          // обычный error-результат тула, прогон продолжается, а пара
+          // assistant(tool_calls) → tool не рвётся.
+          const errText = outcome && !outcome.ok ? errorText(outcome.error) : 'unknown error';
+          await commitSubagentToolCall(plan, {
+            content: sm('tool.exec_error', { tool: plan.name, error: errText }),
+            isError: true,
+            metadata: { i18n: i18nMeta('tool.exec_error', { tool: plan.name, error: errText }) },
+          });
+        }
+      };
+
+      // Фаза 1 — подготовка (последовательно, порядок вызовов модели).
+      // Подтверждения (`ask`) не ждут здесь — они публикуются и ждутся в
+      // параллельной фазе (PROP-127 T5): несколько подтверждений одного шага
+      // висят одновременно.
+      const toolSegment: SubagentToolPlan[] = [];
+      for (const tc of toolCalls) {
+        const plan = await prepareSubagentToolCall(tc);
+        // «Кривой» вызов (без имени тула) — пропускаем целиком (поведение
+        // прежнее): ни событий, ни парного результата.
+        if (!plan) continue;
+        toolSegment.push(plan);
+      }
+      if (toolSegment.length > 0) {
+        await runSubagentToolSegment(toolSegment);
       }
 
       // Шаг-лимит: вызовы не исполнялись — цикл завершаем отчётом (механика

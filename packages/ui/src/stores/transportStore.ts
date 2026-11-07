@@ -2621,6 +2621,17 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // Ответ/снятие подтверждения (PROP-127 T5): сервер публикует
+      // `permission.replied` и для запросов, которые пользователь не отвечал —
+      // каскад отказа по пакету ожидающих и авто-одобрение соседнего запроса
+      // грантом «Разрешить в сессии». Карточка снимается с очереди.
+      case 'permission.replied': {
+        const approvalId = payload.approval_id as string | undefined
+        if (!approvalId) break
+        usePermissionStore.getState().removeRequest(sid, approvalId)
+        break
+      }
+
       // Вопросы пользователю (`ask_user`, этап 1 roadmap 0.13 — блок 1.3).
       // ⚠️ Это НЕ `question.asked` — тот означает «очередь зависла» (см. выше).
       case 'user_question.asked': {

@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy, ToolContext, ToolDefinition } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel, nativeAudioFormatForMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig, SshMode } from '@itphx/synth-shared';
 import type { AutoTitleConfig } from '@itphx/synth-shared/config';
@@ -54,9 +54,14 @@ import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel, DecisionModel } from './router/micro/models/index.js';
 import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
-import { PermissionEvaluator, extractPaths, isPlanRestricted } from './permission/evaluator.js';
+import { PermissionEvaluator, extractPaths, isPlanRestricted, type PermissionCheckInput } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
-import { PermissionApprovalManager, type ApprovalRegistry } from './permission/approval.js';
+import {
+  PermissionApprovalManager,
+  type ApprovalRegistry,
+  type ApprovalRequest,
+  type ApprovalWaiter,
+} from './permission/approval.js';
 import { buildPermissionPreview } from './permission/preview.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { createFileStorage } from '../storage/storage-context.js';
@@ -81,6 +86,8 @@ import { serializeMessage, serializeSession } from '../server/serialize.js';
 import { stripMetadata } from './attachments/strip-metadata.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
+// PROP-127 (этап T2): параллельное исполнение батча вызовов инструментов.
+import { runToolBatch, type ToolBatchOutcome } from './tools/tool-batch.js';
 import type { HookBus } from './hooks/hook-bus.js';
 import type { RequestSessionService } from './events/request-session.js';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
@@ -169,6 +176,167 @@ const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 const MAX_REPEATED_DENY_COUNT = 5;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
 const CONTEXT_LIMIT_WARNING_PERCENT = 90;
+
+/**
+ * PROP-127 (этап T2): инструменты, меняющие состояние сессии, — **барьер** батча.
+ *
+ * `plan_enter`/`plan_exit` меняют режим (`sessionMode`/`planApproved`), а
+ * `project_create`/`project_attach`/`project_workspace_set` — рабочий каталог,
+ * периметр и состав тулов. Эффект такого вызова обязан быть виден вызовам,
+ * идущим после него, поэтому вызов завершает сегмент: следующий сегмент
+ * готовится уже после фиксации барьера — ровно как в последовательном цикле.
+ */
+const TOOL_BATCH_BARRIER_TOOLS: ReadonlySet<string> = new Set([
+  'plan_enter',
+  'plan_exit',
+  'project_create',
+  'project_attach',
+  'project_workspace_set',
+]);
+
+/**
+ * PROP-127 (этап T2): результат вызова инструмента в том виде, в котором его
+ * видит цикл шага.
+ *
+ * Именно type-alias (не interface): алиас объектного типа получает неявную
+ * индексную сигнатуру — результат тула остаётся совместим с
+ * `Record<string, unknown>` (например, для debug-коллектора).
+ */
+type ToolCallOutcome = {
+  content: string;
+  isError?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * PROP-127 (этап T2): исход исполнения вызова — результат тула и признак
+ * отмены, зафиксированный **сразу после** его завершения (как в
+ * последовательном цикле, где проверка отмены шла вплотную к исполнению).
+ */
+interface ToolCallExecution {
+  result: ToolCallOutcome;
+  cancelled: boolean;
+}
+
+/**
+ * PROP-127 (этап T2): общие поля плана **исполняемого** вызова.
+ *
+ * Вызов с `kind: 'ask'` — тот же исполняемый вызов, но с ожиданием
+ * подтверждения: решение приходит в параллельной фазе (PROP-127 T5).
+ */
+interface ToolCallExecBase {
+  tcId: string;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  toolDef: ToolDefinition | undefined;
+  /** Исполнитель вызова: свой контекст, свои аргументы. */
+  run: () => Promise<ToolCallExecution>;
+  /** Момент публикации `tool_call.started` — в `allToolCalls.started_at`. */
+  startedAt: string;
+  /** Замер длительности вызова для `post_tool_use`. */
+  startedMs: number;
+  /** Тул исполнен — хук `post_tool_use` эмитится. */
+  executed: boolean;
+  /**
+   * Снимок прав вызова на момент подготовки.
+   *
+   * Грант «Разрешить в сессии» обновляет снимок у вызовов, идущих **после**
+   * него (в последовательном цикле они готовились уже после гранта) — снимок
+   * хранится по ссылке, поэтому обновление видно и в контексте вызова.
+   */
+  permissionRef: { config: PermissionConfig };
+}
+
+/**
+ * PROP-127 (этап T2): план одного вызова инструмента.
+ *
+ * - `short-circuit` — вызов, который не исполняется и не проходит хвост фазы
+ *   фиксации (лимит шагов, «кривой» вызов, doom-loop): результат публикуется
+ *   и пишется в историю как есть.
+ * - `resolved` — вызов, решённый без исполнения (отказ прав, блокировка
+ *   хуком `pre_tool_use`): результат известен, но вызов проходит общий хвост
+ *   фазы фиксации (в `allToolCalls` он попадает).
+ * - `ask` — вызов, ждущий подтверждения пользователя: решение принимается в
+ *   параллельной фазе (PROP-127 T5), затем вызов становится `execute`
+ *   (одобрен) или `resolved` (отказ/таймаут/каскад).
+ * - `execute` — вызов, который исполняется в фазе исполнения батча; у него
+ *   свой `ToolContext` и свой исполнитель.
+ */
+type ToolCallPlan =
+  | {
+      kind: 'short-circuit';
+      tcId: string;
+      /** Имя тула в событии и истории (`unknown` — для «кривого» вызова). */
+      name: string;
+      /** Аргументы вызова в истории (у «кривого»/лимит-шагов — пустые). */
+      args: Record<string, unknown>;
+      result: ToolCallOutcome;
+    }
+  | {
+      kind: 'resolved';
+      tcId: string;
+      toolName: string;
+      toolArgs: Record<string, unknown>;
+      toolDef: ToolDefinition | undefined;
+      result: ToolCallOutcome;
+      /** Момент публикации `tool_call.started` — в `allToolCalls.started_at`. */
+      startedAt: string;
+      /** Замер длительности вызова для `post_tool_use`. */
+      startedMs: number;
+      /** Отмена зафиксирована в момент решения по правам. */
+      cancelled: boolean;
+      /** Тул не исполнялся — хук `post_tool_use` не эмитится. */
+      executed: false;
+    }
+  | (ToolCallExecBase & {
+      kind: 'ask';
+      /** Ожидание подтверждения (публикуется и ждётся в параллельной фазе). */
+      waiter: ApprovalWaiter;
+      /** Запрос подтверждения — публикуется как `permission.asked`. */
+      approval: ApprovalRequest;
+      /** Вход проверки прав — переоценка после гранта «в сессии». */
+      checkInput: PermissionCheckInput;
+      /** Решение permission-слоя — из него собирается текст отказа. */
+      permissionDecision: PermissionDecision;
+    })
+  | (ToolCallExecBase & { kind: 'execute' });
+
+/**
+ * PROP-127 (этап T2): результат тула для исключения исполнения — тот же
+ * `tool.exec_error`, что и у обёртки вызова в цикле шага. Исключение тула не
+ * роняет шаг и не роняет остальные вызовы батча.
+ */
+function toolExecErrorResult(toolName: string, errorText: string): ToolCallOutcome {
+  const params = { tool: toolName, error: errorText };
+  return {
+    content: sm('tool.exec_error', params),
+    isError: true,
+    metadata: { i18n: i18nMeta('tool.exec_error', params) },
+  };
+}
+
+/**
+ * PROP-127 (этап T2): делит вызовы шага на **сегменты** по барьерам.
+ *
+ * Сегмент — максимальная серия вызовов без смены состояния, в конце которой
+ * может стоять один barrier-вызов. Сегменты обрабатываются строго по порядку:
+ * подготовка → исполнение → фиксация. Поэтому смена режима/проекта видна
+ * следующим вызовам так же, как в последовательном цикле.
+ */
+function splitToolCallSegments(toolCalls: Record<string, unknown>[]): Record<string, unknown>[][] {
+  const segments: Record<string, unknown>[][] = [];
+  let current: Record<string, unknown>[] = [];
+  for (const tc of toolCalls) {
+    current.push(tc);
+    const func = tc.function as { name?: string } | undefined;
+    if (func?.name && TOOL_BATCH_BARRIER_TOOLS.has(func.name)) {
+      segments.push(current);
+      current = [];
+    }
+  }
+  if (current.length > 0) segments.push(current);
+  return segments;
+}
 
 /**
  * ADR-115 §«Медиа из инструментов»: сколько вложений тулов вставляется в ход.
@@ -5171,7 +5339,98 @@ export class ChatOrchestrator {
           callIds: stepToolCallIds,
         });
         let modeChangePending = false;
-        for (const tc of toolCalls) {
+        /**
+         * PROP-127 (этап T2): вызовы инструментов одного шага исполняются
+         * **параллельно**, но порядок вызовов модели остаётся значимым.
+         *
+         * Цикл разбит на три фазы:
+         *  1. **Подготовка** (последовательно, порядок вызовов модели): разбор
+         *     аргументов, хук `pre_tool_use`, проверка прав, учёт doom-loop и
+         *     повторяющихся отказов, ожидание подтверждения (`ask`) и сборка
+         *     `ToolContext` каждого вызова. Здесь живут все счётчики и флаги
+         *     шага — они по определению последовательны («N отказов подряд»,
+         *     «вызов N+1 видит грант из вызова N»).
+         *  2. **Исполнение** (параллельно): вызовы сегмента стартуют
+         *     одновременно (`runToolBatch`), каждый со своим контекстом;
+         *     исключение тула — результат тула (`tool.exec_error`), а не
+         *     падение шага.
+         *  3. **Фиксация** (последовательно, порядок вызовов модели): IPI-обёртка,
+         *     ленивые инструкции, публикация `tool_call.result`, персист
+         *     результата, смена режима/проекта, `post_tool_use`, `fs.changed`,
+         *     `allToolCalls` и tool-сообщение в `currentMessages`.
+         *
+         * **Барьеры.** Вызов, меняющий состояние, от которого зависят следующие
+         * вызовы батча (`plan_enter`/`plan_exit` — режим; `project_*` —
+         * рабочий каталог/периметр/состав тулов), завершает сегмент: следующий
+         * сегмент готовится уже после его фиксации — ровно как в
+         * последовательном цикле.
+         *
+         * PROP-127 (этап T5): ожидание подтверждения (`ask`) вынесено из фазы
+         * подготовки в фазу исполнения: подготовка только **готовит** запрос,
+         * а публикуются и ждутся они все **разом** (несколько `ask` одного
+         * шага висят одновременно). Решение по каждому приходит независимо.
+         */
+
+        /**
+         * ADR-030/ADR-029: отказ по правам — событие сессии, неблокирующий хук
+         * аудита безопасности, счётчики шага и error-результат для модели.
+         *
+         * Общая точка для обоих источников отказа: политика (решение принято
+         * в фазе подготовки) и пользователь (решение пришло в параллельной
+         * фазе) — иначе правила разошлись бы.
+         */
+        const applyPermissionDeny = (args: {
+          tcId: string;
+          toolName: string;
+          toolArgs: Record<string, unknown>;
+          decision: PermissionDecision;
+          reason: string;
+        }): ToolCallOutcome => {
+          this._eventBus.publish(session.id, 'permission.denied', {
+            session_id: session.id,
+            call_id: args.tcId,
+            tool: args.toolName,
+            arguments: args.toolArgs,
+            reason: args.reason,
+            matched_rule: args.decision.matchedRule,
+          });
+          // ADR-030: `permission_denied` — неблокирующий эмит рядом с событием
+          // сессии (аудит безопасности/уведомления ИБ).
+          this._hooks?.emitAsync('permission_denied', {
+            tool: args.toolName,
+            input: args.toolArgs,
+            ...(args.reason ? { reason: args.reason } : {}),
+          });
+          const denyResult = buildDenyResult({
+            reason: args.reason,
+            content: args.reason || sm('tool.permission_denied_default'),
+            matchedRule: args.decision.matchedRule,
+            messageId: args.decision.messageId,
+            params: args.decision.params as Record<string, string> | undefined,
+          });
+          hadDeny = true;
+          // ADR-070 §2.9.1 (обновлено 2026-10-29): отказ — ролевой,
+          // пользовательский или политики — возвращается модели как обычный
+          // `tool_result`; следующая LLM-итерация запускается штатно, модель
+          // может выбрать другой инструмент. Ролевой отказ запоминаем только
+          // для фоллбек-текста, если содержательного ответа не будет.
+          if (args.decision.matchedRule === 'role.unavailable') {
+            roleBlocked = true;
+            roleBlockedTool = args.toolName;
+            roleBlockedAgent = effectiveAgentRole;
+          }
+          // Предохранитель от бесконечного повтора одного и того же
+          // deny-вызова (doom-loop такие вызовы намеренно не считает).
+          const denyKey = `${args.toolName}:${JSON.stringify(args.toolArgs)}`;
+          denyRepeatCount = denyRepeatKey === denyKey ? denyRepeatCount + 1 : 1;
+          denyRepeatKey = denyKey;
+          if (denyRepeatCount >= MAX_REPEATED_DENY_COUNT) {
+            denyLoopExceeded = true;
+          }
+          return denyResult;
+        };
+
+        const prepareToolCall = async (tc: Record<string, unknown>): Promise<ToolCallPlan> => {
           const tcId = (tc.id as string) || `call_${Date.now()}`;
           const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
 
@@ -5188,29 +5447,13 @@ export class ChatOrchestrator {
                 isError: true,
               },
             };
-            currentMessages.push({
-              id: '',
-              role: 'tool',
-              content: limited.content,
-              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-              disabled: false,
-              pinned: false,
-              branchId: '',
-              toolCallId: tcId,
-            });
-            publishChunk('tool_call.result', {
-              stream_id: streamId,
-              session_id: session.id,
-              call_id: tcId,
+            return {
+              kind: 'short-circuit',
+              tcId,
               name: limitParams.tool,
+              args: {},
               result: limited,
-              iteration: toolIteration,
-            });
-            await this._persistToolResult(
-              session.id, streamId, providerName, effectiveAgentRole,
-              chunkModel ?? finalModel, limitParams.tool, {}, tcId, limited,
-            );
-            continue;
+            };
           }
 
           if (!func?.name) {
@@ -5225,29 +5468,13 @@ export class ChatOrchestrator {
                 i18n: i18nMeta('tool.malformed_call', { tool: 'unknown', id: tcId }),
               },
             };
-            currentMessages.push({
-              id: '',
-              role: 'tool',
-              content: malformed.content,
-              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-              disabled: false,
-              pinned: false,
-              branchId: '',
-              toolCallId: tcId,
-            });
-            publishChunk('tool_call.result', {
-              stream_id: streamId,
-              session_id: session.id,
-              call_id: tcId,
+            return {
+              kind: 'short-circuit',
+              tcId,
               name: 'unknown',
+              args: {},
               result: malformed,
-              iteration: toolIteration,
-            });
-            await this._persistToolResult(
-              session.id, streamId, providerName, effectiveAgentRole,
-              chunkModel ?? finalModel, 'unknown', {}, tcId, malformed,
-            );
-            continue;
+            };
           }
 
           const toolName = func.name;
@@ -5274,7 +5501,6 @@ export class ChatOrchestrator {
             && (resolvedToolDef.mcpServer == null || !activeMcpSet.has(resolvedToolDef.mcpServer))
             ? undefined
             : resolvedToolDef;
-          let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
 
           // ADR-030: `pre_tool_use` — синхронный хук ДО проверки permission и
           // исполнения тула. Блокировка (`{block:true}`) отменяет исполнение,
@@ -5289,11 +5515,24 @@ export class ChatOrchestrator {
             : null;
           const hookBlocked = preHook?.blocked === true;
 
+          /**
+           * Снимок прав вызова на момент подготовки (PROP-127 T5).
+           *
+           * Хранится по ссылке: грант «Разрешить в сессии» обновляет снимок у
+           * вызовов, идущих **после** него (в последовательном цикле они
+           * готовились уже после гранта и видели новое правило).
+           */
+          const permissionRef = { config: effectivePermissionConfig };
+
           // ADR-029: гранулярные permissions — проверяем ДО doom loop, чтобы
           // deny-повторы не блокировались безликим «Цикл прерван», а получали
           // полноценный feedback (tool_call.result) с объяснением политики.
           // ADR-025: учитываем текущий режим Plan/Act и строгость плана.
-          const permissionDecision = permissionEvaluator.check({
+          //
+          // PROP-127 (этап T5): вход проверки сохраняем — после гранта
+          // «Разрешить в сессии» его можно переоценить (соседний запрос,
+          // покрытый новым правилом, одобряется без нового вопроса).
+          const checkInput: PermissionCheckInput = {
             toolName,
             params: toolArgs,
             workingDir,
@@ -5325,7 +5564,8 @@ export class ChatOrchestrator {
             protectedPathsEnabled: this._getProtectedPathsEnabled(),
             runtimeDeps: this._runtimeDeps,
             workspaceReady,
-          });
+          };
+          const permissionDecision = permissionEvaluator.check(checkInput);
 
           // Doom loop detection — только для вызовов, НЕ заблокированных
           // политикой. Deny-вызовы исключены: каждая попытка должна получать
@@ -5344,32 +5584,13 @@ export class ChatOrchestrator {
                 isError: true,
                 metadata: { i18n: i18nMeta('tool.doom_loop', doomParams) },
               };
-              currentMessages.push({
-                id: '',
-                role: 'tool',
-                content: doomResult.content,
-                usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-                disabled: false,
-                pinned: false,
-                branchId: '',
-                toolCallId: tcId,
-              });
-              publishChunk('tool_call.result', {
-                stream_id: streamId,
-                session_id: session.id,
-                call_id: tcId,
+              return {
+                kind: 'short-circuit',
+                tcId,
                 name: toolName,
+                args: toolArgs,
                 result: doomResult,
-                iteration: toolIteration,
-              });
-              // Пара assistant(tool_calls) → tool обязана попасть в историю:
-              // иначе первый же LLM-вызов следующего хода падает у провайдера
-              // («tool_calls must be followed by tool messages»).
-              await this._persistToolResult(
-                session.id, streamId, providerName, effectiveAgentRole,
-                chunkModel ?? finalModel, toolName, toolArgs, tcId, doomResult,
-              );
-              continue;
+              };
             }
           }
 
@@ -5402,8 +5623,15 @@ export class ChatOrchestrator {
             });
           }
 
-          let executeTool = !hookBlocked && permissionDecision.action === 'allow';
+          const executeTool = !hookBlocked && permissionDecision.action === 'allow';
           let deniedReason: string | undefined;
+          /**
+           * PROP-127 (этап T5): ожидание подтверждения. Ответ **не ждётся**
+           * здесь — подготовка фазы последовательная, а ожидание живёт в
+           * параллельной фазе (несколько `ask` висят одновременно).
+           */
+          let askWaiter: ApprovalWaiter | undefined;
+          let approvalRequest: ApprovalRequest | undefined;
 
           if (!hookBlocked && permissionDecision.action === 'deny') {
             deniedReason = this._securityMessage(permissionDecision, 'en')
@@ -5433,141 +5661,131 @@ export class ChatOrchestrator {
             const shellSave = isShellTool && typeof toolArgs.command === 'string'
               ? shellSavePatterns(toolArgs.command)
               : null;
-            const approval = await this._approvalManager.waitForDecision(
+            approvalRequest = {
+              approvalId: `approval_${tcId}`,
+              callId: tcId,
+              toolName,
+              arguments: toolArgs,
+              reason: this._securityMessage(permissionDecision, 'en')
+                ?? permissionDecision.reason,
+              // ADR-106 Ф0: принципал и ход запроса (аддитивные поля
+              // события `permission.asked`). ADR-106 Ф4: принципал хода —
+              // зафиксированный при приёме ввода (на сообщении), а не
+              // «текущий владелец сессии».
+              principal: turnPrincipal,
+              turnId: streamId,
+              // ADR-106 Ф3: привязка к действию и цели.
+              ...(bindingAction ? { action: bindingAction } : {}),
+              ...(bindingTarget ? { target: bindingTarget } : {}),
+              // ADR-029: превью изменений (дифф по файлам).
+              ...(preview ? { preview } : {}),
+              // Паттерны shell-гранта для полосы подтверждения.
+              ...(isShellTool ? { save: shellSave ?? [] } : {}),
+            };
+            // Ожидание готовится здесь, публикуется и ждётся в параллельной
+            // фазе: так несколько `ask` одного шага висят одновременно.
+            const waiter = this._approvalManager.prepareWaiter(
               session.id,
-              {
-                approvalId: `approval_${tcId}`,
-                callId: tcId,
-                toolName,
-                arguments: toolArgs,
-                reason: this._securityMessage(permissionDecision, 'en')
-                  ?? permissionDecision.reason,
-                // ADR-106 Ф0: принципал и ход запроса (аддитивные поля
-                // события `permission.asked`). ADR-106 Ф4: принципал хода —
-                // зафиксированный при приёме ввода (на сообщении), а не
-                // «текущий владелец сессии».
-                principal: turnPrincipal,
-                turnId: streamId,
-                // ADR-106 Ф3: привязка к действию и цели.
-                ...(bindingAction ? { action: bindingAction } : {}),
-                ...(bindingTarget ? { target: bindingTarget } : {}),
-                // ADR-029: превью изменений (дифф по файлам).
-                ...(preview ? { preview } : {}),
-                // Паттерны shell-гранта для полосы подтверждения.
-                ...(isShellTool ? { save: shellSave ?? [] } : {}),
-              },
+              approvalRequest,
               effectivePermissionConfig.askTimeoutMs,
               // «Стоп» снимает ожидание подтверждения (иначе инструмент висел
               // бы до ask-таймаута): отмена хода резолвит `cancelled:true`.
               toolAbortController.signal,
             );
-            if (approval.approved) {
-              executeTool = true;
-              // «Разрешить в сессии» (once:false) — добавляем allow-правило для
-              // тула в permission-конфиг сессии, чтобы не спрашивать повторно.
-              if (approval.once === false) {
-                effectivePermissionConfig = await this._grantSessionToolAllow(session, toolName, toolArgs, workingDir);
-                permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
-                  authorityShadow: this._authorityShadow,
-                  authorityGate: this._authorityGate,
-                });
-              }
-            } else {
-              // `cancelled` — снято отменой хода, а не ответом пользователя:
-              // это не отказ пользователя, ход завершит штатная отмена.
-              const why = approval.cancelled
-                ? sm('permission.ask_cancelled')
-                : approval.timeout
-                  ? sm('permission.ask_timeout')
-                  : approval.noSubscribers
-                    ? sm('permission.ask_no_subscribers')
-                    : sm('permission.ask_denied');
-              const baseDeny = this._securityMessage(permissionDecision, 'en')
-                ?? `Permission denied: ${permissionDecision.reason}`;
-              deniedReason = `${baseDeny} (${why})`;
-            }
+            askWaiter = waiter;
           }
+
+          // Отмена на момент решения по правам — как в последовательном цикле,
+          // где проверка отмены шла вплотную к решению (без `await` между ними).
+          const decisionCancelled = cancelToken.cancelled || toolAbortController.signal.aborted;
 
           if (hookBlocked) {
             // ADR-030: pre_tool_use заблокировал тул — исполнение не выполняется,
             // модель получает ошибку-результат `hook.blocked` (как прочие ошибки
             // тулов), цикл продолжается.
             const hookReason = preHook?.reason ?? '';
-            toolResult = {
-              content: sm('hook.blocked', { hook: 'pre_tool_use', reason: hookReason }),
-              isError: true,
-              metadata: {
-                i18n: i18nMeta('hook.blocked', { hook: 'pre_tool_use', reason: hookReason }),
+            return {
+              kind: 'resolved',
+              tcId,
+              toolName,
+              toolArgs,
+              toolDef,
+              result: {
+                content: sm('hook.blocked', { hook: 'pre_tool_use', reason: hookReason }),
+                isError: true,
+                metadata: {
+                  i18n: i18nMeta('hook.blocked', { hook: 'pre_tool_use', reason: hookReason }),
+                },
               },
+              startedAt: tcStartedAt,
+              startedMs: tcStartedMs,
+              cancelled: decisionCancelled,
+              executed: false,
             };
-          } else if (!executeTool) {
-            this._eventBus.publish(session.id, 'permission.denied', {
-              session_id: session.id,
-              call_id: tcId,
-              tool: toolName,
-              arguments: toolArgs,
-              reason: deniedReason,
-              matched_rule: permissionDecision.matchedRule,
-            });
-            // ADR-030: `permission_denied` — неблокирующий эмит рядом с событием
-            // сессии (аудит безопасности/уведомления ИБ).
-            this._hooks?.emitAsync('permission_denied', {
-              tool: toolName,
-              input: toolArgs,
-              ...(deniedReason ? { reason: deniedReason } : {}),
-            });
-            toolResult = buildDenyResult({
+          }
+
+          if (!executeTool && !askWaiter) {
+            // ADR-030/ADR-029: отказ — событие сессии и неблокирующий хук
+            // аудита безопасности; дальше — обычный error-результат для модели.
+            const denyResult = applyPermissionDeny({
+              tcId,
+              toolName,
+              toolArgs,
+              decision: permissionDecision,
               reason: deniedReason ?? '',
-              content: deniedReason ?? sm('tool.permission_denied_default'),
-              matchedRule: permissionDecision.matchedRule,
-              messageId: permissionDecision.messageId,
-              params: permissionDecision.params as Record<string, string> | undefined,
             });
-            hadDeny = true;
-            // ADR-070 §2.9.1 (обновлено 2026-10-29): отказ — ролевой,
-            // пользовательский или политики — возвращается модели как обычный
-            // `tool_result`; следующая LLM-итерация запускается штатно, модель
-            // может выбрать другой инструмент. Ролевой отказ запоминаем только
-            // для фоллбек-текста, если содержательного ответа не будет.
-            if (permissionDecision.matchedRule === 'role.unavailable') {
-              roleBlocked = true;
-              roleBlockedTool = toolName;
-              roleBlockedAgent = effectiveAgentRole;
-            }
-            // Предохранитель от бесконечного повтора одного и того же
-            // deny-вызова (doom-loop такие вызовы намеренно не считает).
-            const denyKey = `${toolName}:${JSON.stringify(toolArgs)}`;
-            denyRepeatCount = denyRepeatKey === denyKey ? denyRepeatCount + 1 : 1;
-            denyRepeatKey = denyKey;
-            if (denyRepeatCount >= MAX_REPEATED_DENY_COUNT) {
-              denyLoopExceeded = true;
-            }
-          } else {
-            // Вызов разрешён и исполняется — прогресс есть, счётчик
-            // повторяющихся отказов сбрасываем.
+            return {
+              kind: 'resolved',
+              tcId,
+              toolName,
+              toolArgs,
+              toolDef,
+              result: denyResult,
+              startedAt: tcStartedAt,
+              startedMs: tcStartedMs,
+              cancelled: decisionCancelled,
+              executed: false,
+            };
+          }
+
+          // Вызов разрешён и исполняется — прогресс есть, счётчик
+          // повторяющихся отказов сбрасываем. Для вызова с подтверждением
+          // сброс — после решения (в параллельной фазе).
+          if (!askWaiter) {
             denyRepeatKey = undefined;
             denyRepeatCount = 0;
+          }
+
+          if (toolDef) {
             // Исключение тула — это результат тула, а не падение хода:
             // модель получает error-результат и продолжает (как у deny).
             // Пара assistant(tool_calls) → tool при этом не рвётся.
             const runTool = async (
-              exec: () => Promise<{ content: string; isError?: boolean; metadata?: Record<string, unknown> }>,
-            ): Promise<{ content: string; isError?: boolean; metadata?: Record<string, unknown> }> => {
+              exec: () => Promise<ToolCallOutcome>,
+            ): Promise<ToolCallOutcome> => {
               try {
                 return await exec();
               } catch (execErr) {
                 const errorText = execErr instanceof Error ? execErr.message : String(execErr);
                 warning('ORCHESTRATOR', `Tool "${toolName}" execution failed: ${errorText}`);
-                const params = { tool: toolName, error: errorText };
-                return {
-                  content: sm('tool.exec_error', params),
-                  isError: true,
-                  metadata: { i18n: i18nMeta('tool.exec_error', params) },
-                };
+                return toolExecErrorResult(toolName, errorText);
               }
             };
-            if (toolDef) {
-              toolResult = await runTool(() => executeToolDef(toolDef, toolArgs, {
+            // Права вызова — снимок на момент подготовки: «Разрешить в сессии»
+            // в вызове N меняет конфиг уже после подготовки N (как раньше —
+            // контекст вызова N собирался до ожидания подтверждения N+1).
+            //
+            // PROP-127 (этап T5): снимок — по ссылке (`permissionRef`): грант
+            // «Разрешить в сессии» обновляет его у вызовов, идущих **после**
+            // него (в последовательном цикле они готовились уже после гранта).
+            // Контекст вызова — свой на каждый вызов (PROP-127): собирается
+            // на фазе подготовки (последовательно) и используется только этим
+            // вызовом. Сбой сборки — результат тула (`tool.exec_error`), а не
+            // падение шага (как у `executeToolDef`).
+            let builtContext: ToolContext | undefined;
+            let contextError: unknown;
+            try {
+              builtContext = {
                 sessionId: session.id,
                 messageId: (message.metadata?.stream_id as string) || streamId,
                 // Проект сессии — метаданные хода: плагинный тул (память)
@@ -5737,7 +5955,12 @@ export class ChatOrchestrator {
                   // саб-агента под блоком `task` в родительском стриме.
                   callId: tcId,
                   toolRegistry: this._toolRegistry,
-                  permissionConfig: effectivePermissionConfig,
+                  // Права вызова — снимок на момент подготовки вызова: грант
+                  // «Разрешить в сессии» из вызова N+1 не должен попасть в
+                  // контекст вызова N (как в последовательном цикле).
+                  // PROP-127 (этап T5): значение читается из снимка по ссылке —
+                  // грант обновляет снимок у вызовов, идущих после него.
+                  get permissionConfig() { return permissionRef.config; },
                   // ADR-070 §2.9.1: доступность внешних программ (git/rg/sh) —
                   // в permission-слой саб-агента (enforce `dependency`) и его
                   // `[НЕДОСТУПНЫЕ ТУЛЫ]`.
@@ -5759,35 +5982,148 @@ export class ChatOrchestrator {
                   // ADR-102: aux-расход fork-summary — в аналитику дочерней сессии.
                   analytics: this._analytics ?? undefined,
                 },
-              }, toolName));
-            } else {
-              toolResult = {
+              };
+            } catch (err) {
+              contextError = err;
+            }
+            const toolContext = builtContext;
+            const callToolDef = toolDef;
+
+            const execPlan = {
+              tcId,
+              toolName,
+              toolArgs,
+              toolDef: callToolDef,
+              startedAt: tcStartedAt,
+              startedMs: tcStartedMs,
+              executed: true,
+              permissionRef,
+              run: async (): Promise<ToolCallExecution> => {
+                const result = toolContext
+                  ? await runTool(() => executeToolDef(callToolDef, toolArgs, toolContext, toolName))
+                  : await runTool(async () => { throw contextError; });
+                return {
+                  result,
+                  cancelled: cancelToken.cancelled || toolAbortController.signal.aborted,
+                };
+              },
+            };
+            // PROP-127 (этап T5): вызов с подтверждением — тот же исполняемый
+            // план, но ждущий ответа пользователя (решение — в параллельной
+            // фазе).
+            if (askWaiter && approvalRequest) {
+              return {
+                ...execPlan,
+                kind: 'ask',
+                waiter: askWaiter,
+                approval: approvalRequest,
+                checkInput,
+                permissionDecision,
+              };
+            }
+            return { ...execPlan, kind: 'execute' };
+          }
+
+          // Тул не найден в реестре — результат-ошибка (как у отказа): модель
+          // получает понятный ответ, шаг не падает.
+          const notFoundPlan = {
+            tcId,
+            toolName,
+            toolArgs,
+            toolDef: undefined,
+            startedAt: tcStartedAt,
+            startedMs: tcStartedMs,
+            executed: true,
+            permissionRef,
+            run: async (): Promise<ToolCallExecution> => ({
+              result: {
                 content: sm('tool.not_found', { tool: toolName }),
                 isError: true,
                 metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
-              };
-            }
+              },
+              cancelled: cancelToken.cancelled || toolAbortController.signal.aborted,
+            }),
+          };
+          if (askWaiter && approvalRequest) {
+            return {
+              ...notFoundPlan,
+              kind: 'ask',
+              waiter: askWaiter,
+              approval: approvalRequest,
+              checkInput,
+              permissionDecision,
+            };
           }
+          return { ...notFoundPlan, kind: 'execute' };
+        };
+
+        /**
+         * PROP-127 (этап T2): фиксация результата вызова — последовательно, в
+         * порядке вызовов модели. Здесь `currentMessages` и `allToolCalls`
+         * получают tool-результаты в том же порядке, что и вызовы модели:
+         * провайдерский контракт требует одного tool-результата на каждый
+         * `tool_call` (ADR-117).
+         */
+        const commitToolCall = async (
+          plan: ToolCallPlan,
+          result: ToolCallOutcome,
+          cancelled: boolean,
+        ): Promise<void> => {
+          if (plan.kind === 'short-circuit') {
+            // Лимит шагов / «кривой» вызов / doom-loop: результат публикуется
+            // и пишется в историю как есть. Хвост фазы фиксации (IPI-обёртка,
+            // ленивые инструкции, смена режима/проекта, `allToolCalls`) для них
+            // не выполняется — как и в последовательном цикле.
+            currentMessages.push({
+              id: '',
+              role: 'tool',
+              content: plan.result.content,
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              disabled: false,
+              pinned: false,
+              branchId: '',
+              toolCallId: plan.tcId,
+            });
+            publishChunk('tool_call.result', {
+              stream_id: streamId,
+              session_id: session.id,
+              call_id: plan.tcId,
+              name: plan.name,
+              result: plan.result,
+              iteration: toolIteration,
+            });
+            // Пара assistant(tool_calls) → tool обязана попасть в историю:
+            // иначе первый же LLM-вызов следующего хода падает у провайдера
+            // («tool_calls must be followed by tool messages»).
+            await this._persistToolResult(
+              session.id, streamId, providerName, effectiveAgentRole,
+              chunkModel ?? finalModel, plan.name, plan.args, plan.tcId, plan.result,
+            );
+            return;
+          }
+
+          const { toolName, toolArgs, toolDef } = plan;
+          let toolResult = result;
 
           // Отмена пришла ВО ВРЕМЯ исполнения тула (например task/сабагент).
           // Фиксируем результат (цепочка тулов сохранится в истории), публикуем
           // tool_call.result (UI видит, чем тул завершился) и прекращаем
           // дальнейшие тулы/итерации — обработка завершится как отмена (ниже),
           // а не как обычное завершение с «ответ модели пуст».
-          if (cancelToken.cancelled || toolAbortController.signal.aborted) {
+          if (cancelled) {
             allToolCalls.push({
               name: toolName,
               args: toolArgs,
-              id: tcId,
+              id: plan.tcId,
               result: toolResult,
-              started_at: tcStartedAt,
+              started_at: plan.startedAt,
               completed_at: new Date().toISOString(),
               iteration: toolIteration,
             });
             publishChunk('tool_call.result', {
               stream_id: streamId,
               session_id: session.id,
-              call_id: tcId,
+              call_id: plan.tcId,
               name: toolName,
               result: toolResult,
               iteration: toolIteration,
@@ -5796,10 +6132,10 @@ export class ChatOrchestrator {
             // assistant(tool_calls)) — отмена ниже не должна его потерять.
             await this._persistToolResult(
               session.id, streamId, providerName, effectiveAgentRole,
-              chunkModel ?? finalModel, toolName, toolArgs, tcId, toolResult,
+              chunkModel ?? finalModel, toolName, toolArgs, plan.tcId, toolResult,
             );
             cancelledBeforeFinal = true;
-            break;
+            return;
           }
 
           // IPI-защита: оборачиваем tool-контент по матрице доверия + детектируем
@@ -5907,7 +6243,7 @@ export class ChatOrchestrator {
           publishChunk('tool_call.result', {
             stream_id: streamId,
             session_id: session.id,
-            call_id: tcId,
+            call_id: plan.tcId,
             name: toolName,
             result: toolResult,
             iteration: toolIteration,
@@ -5918,7 +6254,7 @@ export class ChatOrchestrator {
           // чтобы порядок в истории был assistant(tool_calls) → tool → state.
           await this._persistToolResult(
             session.id, streamId, providerName, effectiveAgentRole,
-            chunkModel ?? finalModel, toolName, toolArgs, tcId, toolResult,
+            chunkModel ?? finalModel, toolName, toolArgs, plan.tcId, toolResult,
           );
 
           // classify_conversation: сохраняем категорию в настройках сессии (ADR-034)
@@ -6029,12 +6365,12 @@ export class ChatOrchestrator {
           // только при реальном исполнении (deny и hook-блокировка не эмитят:
           // для отказа есть `permission_denied`, блокировку фиксирует
           // `pre_tool_use`), до `fs.changed`.
-          if (executeTool && toolDef) {
+          if (plan.executed && toolDef) {
             this._hooks?.emitAsync('post_tool_use', {
               tool: toolName,
               input: toolArgs,
               output: toolResult,
-              duration: Date.now() - tcStartedMs,
+              duration: Date.now() - plan.startedMs,
               // ADR-102: оси атрибуции активности (`tool_calls`) — значения
               // сессии уже под рукой, подписчику не нужно её читать.
               sessionId: session.id,
@@ -6050,9 +6386,9 @@ export class ChatOrchestrator {
           allToolCalls.push({
             name: toolName,
             args: toolArgs,
-            id: tcId,
+            id: plan.tcId,
             result: toolResult,
-            started_at: tcStartedAt,
+            started_at: plan.startedAt,
             completed_at: new Date().toISOString(),
             iteration: toolIteration,
           });
@@ -6067,8 +6403,222 @@ export class ChatOrchestrator {
             disabled: false,
             pinned: false,
             branchId: '',
-            toolCallId: tcId,
+            toolCallId: plan.tcId,
           });
+        };
+
+        /**
+         * PROP-127 (этап T5): разрешение подтверждений сегмента.
+         *
+         * Все запросы `ask` сегмента публикуются **разом** — несколько
+         * подтверждений висят одновременно, и пользователь отвечает на любой
+         * из них (отказ по одному гасит остальные — каскад). Решения
+         * обрабатываются **по порядку вызовов модели**.
+         *
+         * Возвращает планы вызовов (запрос → `execute`/`resolved`) и индекс
+         * вызова, получившего грант «Разрешить в сессии» (`-1` — гранта не
+         * было): грант — **барьер**, вызовы после него исполняются отдельно
+         * (как в последовательном цикле, где грант завершал сегмент).
+         */
+        const resolveSegmentApprovals = async (
+          plans: ToolCallPlan[],
+        ): Promise<{ plans: ToolCallPlan[]; grantIndex: number }> => {
+          const askPlans = plans.filter(
+            (plan): plan is Extract<ToolCallPlan, { kind: 'ask' }> => plan.kind === 'ask',
+          );
+          // Публикация — разом: к этому моменту все запросы сегмента готовы,
+          // значит ни один ответ не придёт «в пустоту».
+          this._approvalManager.publishWaiters(askPlans.map((plan) => plan.waiter));
+
+          const resolved: ToolCallPlan[] = [];
+          let grantIndex = -1;
+
+          for (const plan of plans) {
+            if (plan.kind !== 'ask') {
+              resolved.push(plan);
+              continue;
+            }
+            const approval = await plan.waiter.decision;
+            if (approval.approved) {
+              if (approval.once === false) {
+                // «Разрешить в сессии» (once:false) — allow-правило для тула в
+                // permission-конфиг сессии, чтобы не спрашивать повторно.
+                effectivePermissionConfig = await this._grantSessionToolAllow(
+                  session,
+                  plan.toolName,
+                  plan.toolArgs,
+                  workingDir,
+                );
+                permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
+                  authorityShadow: this._authorityShadow,
+                  authorityGate: this._authorityGate,
+                });
+                if (grantIndex < 0) grantIndex = resolved.length;
+                // Барьер гранта: вызовы, идущие после него, видят новое
+                // правило (снимок прав обновляется — как в последовательном
+                // цикле, где они готовились уже после гранта).
+                for (const later of plans.slice(resolved.length + 1)) {
+                  if (later.kind === 'ask' || later.kind === 'execute') {
+                    later.permissionRef.config = effectivePermissionConfig;
+                  }
+                }
+                // Переоценка ожидающих подтверждений (паритет с opencode,
+                // ветка `always`): новое правило может разрешить соседний
+                // запрос — он одобряется без нового вопроса пользователю.
+                for (const other of askPlans) {
+                  if (other.waiter.settled) continue;
+                  // Переоценка идёт с ТЕМ ЖЕ контекстом Authority, что и
+                  // исходная проверка в фазе подготовки. Без `authorityContext`
+                  // guard посчитал бы потолок заново и **без роли участника**:
+                  // участник с правом только на чтение (`viewer`, ADR-106 Ф4)
+                  // потерял бы потолок «read-only», и такой вызов одобрялся бы
+                  // грантом соседа без нового вопроса пользователю. Потолок
+                  // при этом не пересчитывается: контекст хода кэширует его
+                  // (`AuthorityGuard._turnState`), т.е. «списывается один раз»
+                  // — но с правильной ролью.
+                  const recheck = permissionEvaluator.check({ ...other.checkInput });
+                  if (recheck.action === 'allow') {
+                    other.waiter.resolve({ approved: true, action: 'allow' });
+                    // Событие — UI убирает карточку подтверждения (пользователь
+                    // её не отвечал: решение принято грантом по соседнему
+                    // запросу).
+                    this._eventBus.publish(session.id, 'permission.replied', {
+                      approval_id: other.approval.approvalId,
+                      session_id: session.id,
+                      approved: true,
+                      action: 'allow',
+                      auto_approved: true,
+                    });
+                  }
+                }
+              }
+              // Счётчик повторяющихся отказов сбрасываем (вызов разрешён).
+              denyRepeatKey = undefined;
+              denyRepeatCount = 0;
+              resolved.push({
+                kind: 'execute',
+                tcId: plan.tcId,
+                toolName: plan.toolName,
+                toolArgs: plan.toolArgs,
+                toolDef: plan.toolDef,
+                startedAt: plan.startedAt,
+                startedMs: plan.startedMs,
+                executed: true,
+                permissionRef: plan.permissionRef,
+                run: plan.run,
+              });
+              continue;
+            }
+            // `cancelled` — снято отменой хода, а не ответом пользователя:
+            // это не отказ пользователя, ход завершит штатная отмена.
+            const why = approval.cancelled
+              ? sm('permission.ask_cancelled')
+              : approval.timeout
+                ? sm('permission.ask_timeout')
+                : approval.noSubscribers
+                  ? sm('permission.ask_no_subscribers')
+                  : sm('permission.ask_denied');
+            const baseDeny = this._securityMessage(plan.permissionDecision, 'en')
+              ?? `Permission denied: ${plan.permissionDecision.reason}`;
+            const denyResult = applyPermissionDeny({
+              tcId: plan.tcId,
+              toolName: plan.toolName,
+              toolArgs: plan.toolArgs,
+              decision: plan.permissionDecision,
+              reason: `${baseDeny} (${why})`,
+            });
+            resolved.push({
+              kind: 'resolved',
+              tcId: plan.tcId,
+              toolName: plan.toolName,
+              toolArgs: plan.toolArgs,
+              toolDef: plan.toolDef,
+              result: denyResult,
+              startedAt: plan.startedAt,
+              startedMs: plan.startedMs,
+              cancelled: cancelToken.cancelled || toolAbortController.signal.aborted,
+              executed: false,
+            });
+          }
+
+          return { plans: resolved, grantIndex };
+        };
+
+        for (const segment of splitToolCallSegments(toolCalls)) {
+          // Фаза 1 — подготовка (последовательно, порядок вызовов модели).
+          const plans: ToolCallPlan[] = [];
+          for (const tc of segment) {
+            plans.push(await prepareToolCall(tc));
+          }
+
+          // Фаза 2a — подтверждения: все `ask` сегмента публикуются разом и
+          // ждут ответов (PROP-127 T5).
+          const { plans: finalPlans, grantIndex } = await resolveSegmentApprovals(plans);
+
+          // Фаза 2b — исполнение (параллельно): все вызовы сегмента стартуют
+          // до завершения первого; ошибка одного вызова не роняет остальные.
+          // Грант «Разрешить в сессии» — барьер: вызовы после него исполняются
+          // отдельным батчем (как в последовательном цикле, где грант завершал
+          // сегмент).
+          const execEntries: Array<{
+            plan: Extract<ToolCallPlan, { kind: 'execute' }>;
+            index: number;
+          }> = [];
+          finalPlans.forEach((plan, index) => {
+            if (plan.kind === 'execute') execEntries.push({ plan, index });
+          });
+          const groups: Array<typeof execEntries> = [];
+          let group: typeof execEntries = [];
+          for (const entry of execEntries) {
+            group.push(entry);
+            if (grantIndex >= 0 && entry.index === grantIndex) {
+              groups.push(group);
+              group = [];
+            }
+          }
+          if (group.length > 0) groups.push(group);
+
+          const outcomes = new Map<string, ToolBatchOutcome<ToolCallExecution>>();
+          for (const batchGroup of groups) {
+            const batch = await runToolBatch(
+              batchGroup.map((entry) => ({ id: entry.plan.tcId, run: entry.plan.run })),
+            );
+            batch.outcomes.forEach((outcome, index) => {
+              const entry = batchGroup[index];
+              if (entry) outcomes.set(entry.plan.tcId, outcome);
+            });
+          }
+
+          // Фаза 3 — фиксация (последовательно, порядок вызовов модели).
+          for (const plan of finalPlans) {
+            if (plan.kind === 'short-circuit') {
+              await commitToolCall(plan, plan.result, false);
+              continue;
+            }
+            if (plan.kind === 'resolved') {
+              await commitToolCall(plan, plan.result, plan.cancelled);
+              continue;
+            }
+            if (plan.kind === 'ask') {
+              // Ожидание решено в фазе 2a — сюда попасть не должно.
+              continue;
+            }
+            const outcome = outcomes.get(plan.tcId);
+            if (outcome?.ok) {
+              await commitToolCall(plan, outcome.value.result, outcome.value.cancelled);
+              continue;
+            }
+            // Батч не падает целиком: упавший вызов — его слот. Результат —
+            // обычный error-результат тула, шаг продолжается.
+            const errorText = outcome && !outcome.ok && outcome.error instanceof Error
+              ? outcome.error.message
+              : String(outcome && !outcome.ok ? outcome.error : 'unknown error');
+            await commitToolCall(plan, toolExecErrorResult(plan.toolName, errorText), false);
+          }
+
+          // Отмена завершает ход: следующие сегменты не готовятся и не
+          // исполняются (уже исполненные вызовы сегмента зафиксированы выше).
+          if (cancelledBeforeFinal) break;
         }
 
         // ADR-118 §1: результаты вызовов шага — в сообщении шага
