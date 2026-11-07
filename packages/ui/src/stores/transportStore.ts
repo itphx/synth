@@ -3142,6 +3142,20 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // Провал сжатия контекста (ADR-128): плашка ожидания снимается, а
+      // пользователь видит понятное уведомление — иначе провал виден только
+      // в логе ядра, а контекст продолжает расти.
+      case 'context.summarization_failed': {
+        setSummarizationPending(sid, false)
+        notifyMessage({
+          text: String(payload.message || i18nText('notify.compactionFailed')),
+          type: 'warning',
+          category: 'error',
+          sessionId: sid,
+        })
+        break
+      }
+
       case 'context.sliding_window_applied': {
         const indices = payload.disabled_indices as number[] | undefined
         if (indices && Array.isArray(indices) && indices.length > 0) {

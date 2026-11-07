@@ -149,8 +149,10 @@ import {
 import { setLiveStreamSnapshot } from './live-stream-snapshot.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
 import {
+  compressionFailureReason,
   createCompressionSummarySaver,
   forceCompression,
+  publishCompressionFailure,
   type ForceCompressionResult,
 } from './orchestrator/compression.js';
 import { buildOverflowRetryMessages } from './orchestrator/overflow.js';
@@ -3209,6 +3211,27 @@ export class ChatOrchestrator {
         'CONTEXT',
         `Forced compression failed: ${e instanceof Error ? e.message : String(e)}`,
       );
+      // Провал виден пользователю: сжатие не сняло переполнение окна —
+      // сигнал `context.summarization_failed` (фаза `overflow`).
+      // Публикация — best-effort: диагностика не должна менять исходную
+      // ошибку хода (иначе `context_length` превратится в `unknown`).
+      try {
+        const reason = compressionFailureReason(e);
+        const mode = typeof this._optimizer?.effectiveMode === 'function'
+          ? (this._optimizer.effectiveMode(session) ?? 'compaction')
+          : 'compaction';
+        publishCompressionFailure(this._eventBus, session.id, {
+          reason: reason === 'error' ? 'error' : 'overflow',
+          message: e instanceof Error ? e.message : String(e),
+          mode,
+          phase: 'overflow',
+        });
+      } catch (publishError) {
+        warning(
+          'CONTEXT',
+          `Не удалось опубликовать провал сжатия: ${publishError instanceof Error ? publishError.message : String(publishError)}`,
+        );
+      }
       return null;
     }
   }
@@ -3364,6 +3387,26 @@ export class ChatOrchestrator {
         'CONTEXT',
         `Mid-turn compression failed: ${e instanceof Error ? e.message : String(e)}`,
       );
+      // Провал виден пользователю: сжатие на границе шага не состоялось —
+      // событие `context.summarization_failed` (фаза `mid_turn`).
+      // Публикация — best-effort: диагностика не должна менять исходную
+      // ошибку хода.
+      try {
+        const mode = typeof optimizer?.effectiveMode === 'function'
+          ? (optimizer.effectiveMode(args.session) ?? 'compaction')
+          : 'compaction';
+        publishCompressionFailure(this._eventBus, args.session.id, {
+          reason: compressionFailureReason(e),
+          message: e instanceof Error ? e.message : String(e),
+          mode,
+          phase: 'mid_turn',
+        });
+      } catch (publishError) {
+        warning(
+          'CONTEXT',
+          `Не удалось опубликовать провал сжатия: ${publishError instanceof Error ? publishError.message : String(publishError)}`,
+        );
+      }
       return null;
     }
   }

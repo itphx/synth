@@ -126,6 +126,19 @@ recovery через overflow, который дороже, шумнее в ле�
   запрос (роль остаётся `user`), но влияет на читаемость для модели.
 - **Прогресс-гард меняет семантику события**: `insufficient: true` означает «сжатие применилось, но
   порог не снят» — UI может показать это отдельной плашкой.
+- **Провал сжатия виден пользователю.** Раньше провал был только строкой в логе ядра
+  (`Compression response does not match the required template`) — пользователь видел, что контекст
+  растёт, но не знал почему. Теперь ядро публикует событие `context.summarization_failed`
+  (`reason`: `validation`/`no_coverage`/`overflow`/`error`, `message` — локализованный текст ошибки,
+  `mode`, `phase?`: `mid_turn`/`overflow`), а UI снимает плашку ожидания и показывает
+  предупреждение. Публикация best-effort: ошибка публикации не ломает ход.
+- **Валидация допускает degraded-резюме.** Строгая проверка шаблона компактизации (≥2 известных
+  раздела) остаётся основной, но если модель ответила содержательным резюме **в своём формате**
+  (≥200 символов, `MIN_DEGRADED_COMPACTION_LENGTH`), оно принимается как `degraded` — с
+  предупреждением в лог (без содержимого ответа). Модели, не держащие шаблон (например, с
+  локализованными заголовками), больше не «сжимают в никуда»: контекст продолжает расти, а
+  сжатие считается провалом. Строгий вызов `validateCompressionContent` без опций ведёт себя
+  как прежде — только шаблон.
 - **Расход растёт**: каждое mid-turn сжатие — отдельный LLM-вызов суммаризатора (свой `usage`).
   Потолки (2 на ход / 2 на прогон) ограничивают верхнюю границу.
 
@@ -140,10 +153,12 @@ recovery через overflow, который дороже, шумнее в ле�
   `completeCompression({cancelToken})`, `CompressionValidationError`, `CompressionCancelledError`,
   cooldown (`noteCompressionFailure`/`clearCompressionFailure`/`isCompressionCoolingDown`),
   `shouldCompress(session, {ignoreCooldown})`, устойчивая валидация заголовков шаблона
-  (`COMPACTION_SECTION_ALIASES`, `normalizeHeadingLine`, `countCompactionSections`).
+  (`COMPACTION_SECTION_ALIASES`, `normalizeHeadingLine`, `countCompactionSections`), деградированный
+  режим (`validateCompressionContent(mode, content, {allowDegraded})`, `MIN_DEGRADED_COMPACTION_LENGTH`).
 - **Применение и событие:** `packages/core/src/engine/orchestrator/compression.ts` —
   `forceCompression({cancelToken, phase})`, прогресс-гард, аддитивное `phase: 'mid_turn'` в
-  `context.summarization_applied`.
+  `context.summarization_applied`, публикация провала `context.summarization_failed`
+  (`publishCompressionFailure`, `compressionFailureReason`).
 - **Нормализация истории:** `packages/core/src/engine/orchestrator/history-normalize.ts` —
   `resolveHistoryNormalization`/`firstLiveMessageRole` (резюме → user-чекпоинт, когда хвост
   начинается с `assistant`).
@@ -172,14 +187,19 @@ recovery через overflow, который дороже, шумнее в ле�
   cooldown; отмена без cooldown; прогресс-гард; целостность пар tool-вызовов хвоста.
 - `packages/core/src/engine/context/optimizer-compression.test.ts` — срез хвоста по шагу (длинный
   ход не разворачивает хвост), жёсткий пол `minKeepFromIndex`, устойчивая валидация шаблона
-  (EN/RU/регистр/markdown), `nudge: false` = один вызов, cooldown (блокировка/снятие/TTL/
-  `ignoreCooldown`), вторая компактизация покрывает хвост первой, отмена сжатия
-  (`CompressionCancelledError`).
+  (EN/RU/регистр/markdown), деградированный режим (`allowDegraded`: длинный свободный текст
+  принимается, короткий — нет, строгий шаблон не degraded), `completeCompression` с двумя
+  свободными ответами возвращает контент и пишет warning, `nudge: false` = один вызов, cooldown
+  (блокировка/снятие/TTL/`ignoreCooldown`), вторая компактизация покрывает хвост первой, отмена
+  сжатия (`CompressionCancelledError`).
 - `packages/core/src/engine/orchestrator/summarization.test.ts` — провал валидации без ретраев
   (`validation`) + cooldown, сетевая ошибка повторного вызова без cooldown, прогресс-гард →
-  `insufficient` в событии.
+  `insufficient` в событии, деградированный режим (свободный текст 200+ символов → SUMMARY
+  сохранён, сжатие применено), публикация `context.summarization_failed` (`validation`/`error`).
 - `packages/core/src/engine/llm-error.test.ts` — `errorType=validation` невосстановима
   (`canRetry=false`).
+- `packages/ui/src/stores/transportStore.context-summarization.test.ts` — `context.summarization_failed`:
+  плашка ожидания снята, показано предупреждение с текстом ошибки ядра.
 - `packages/core/src/engine/tools/task/fork.test.ts`, `run-cycle.test.ts` — режим ребёнка,
   сброс runtime-флагов после форка, вызов сжатия ребёнка на границе шага.
 

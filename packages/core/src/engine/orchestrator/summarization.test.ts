@@ -724,4 +724,130 @@ describe('handleSummarization', () => {
     expect(noteCompressionFailure).toHaveBeenCalledWith(sessionId);
     expect(clearCompressionFailure).not.toHaveBeenCalled();
   });
+
+  /**
+   * ADR-128: модель ответила содержательным резюме в **своём** формате
+   * (без заголовков шаблона) — деградированный режим: сжатие применяется,
+   * SUMMARY сохраняется, повторного вызова не было.
+   */
+  it('degraded: свободный текст 200+ символов — SUMMARY сохранён, сжатие применено', async () => {
+    const freeform = 'Свободное резюме без заголовков шаблона. '.repeat(8);
+    SummaryProvider.chunks = [{ content: freeform, isFinal: true, usage: USAGE, model: 'summary-model' }];
+    const sessionId = await makeSession([userMessage('a'), userMessage('b')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+
+    const completeCompression = vi.fn(async () => {
+      throw new Error('повтор не должен вызываться');
+    });
+    const deps = makeDeps({
+      optimizer: {
+        prepareCompression: () => ({
+          mode: 'compaction',
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'm', type: 'summary-provider' }),
+          llmMessages: [] as LLMMessage[],
+          systemPrompt: 'COMPACTOR',
+          messagesToCompress: [session.messages[0]!],
+          coveredIndices: [0],
+          keepFromIndex: 1,
+          keepMessages: [session.messages[1]!],
+        }),
+        completeCompression,
+        canSummarize: () => true,
+        shouldCompress: () => ({ triggered: false, reason: 'none', mode: 'compaction' }),
+        noteCompressionFailure: vi.fn(),
+        clearCompressionFailure: vi.fn(),
+      } as unknown as ContextOptimizer,
+    });
+
+    const result = await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+    );
+
+    expect(result).toEqual({});
+    // Содержательное резюме принято — повторный вызов не потребовался.
+    expect(completeCompression).not.toHaveBeenCalled();
+    const stored = (await sessionManager.getSession(sessionId))!;
+    const summary = stored.messages.find((m) => m.role === MessageRole.SUMMARY)!;
+    expect(summary).toBeDefined();
+    expect(summary.content).toBe(freeform);
+    expect(stored.messages[0]!.disabled).toBe(true);
+
+    const applied = events.filter((e) => e.type === 'context.summarization_applied');
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.data).toMatchObject({ mode: 'compaction', covered_indices: [0] });
+    // Провала нет — событие о провале не публикуется.
+    expect(events.filter((e) => e.type === 'context.summarization_failed')).toHaveLength(0);
+  });
+
+  it('провал валидации: публикуется context.summarization_failed (reason: validation)', async () => {
+    SummaryProvider.chunks = [{ content: 'совсем не шаблон', isFinal: true, usage: USAGE }];
+    const sessionId = await makeSession([userMessage('a')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+
+    const completeCompression = vi.fn(async () => {
+      throw new CompressionValidationError('Compression response does not match the required template');
+    });
+    const deps = makeDeps({
+      handleLlmFailure: ((
+        sid: string, streamId: string, error: unknown, attempt: number | undefined, ctx: never,
+      ) => handleLlmFailureReal(sid, streamId, error, attempt, ctx, { sessionManager })) as never,
+      optimizer: {
+        prepareCompression: () => ({
+          mode: 'compaction',
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'm', type: 'summary-provider' }),
+          llmMessages: [] as LLMMessage[],
+          systemPrompt: 'COMPACTOR',
+          messagesToCompress: [],
+          coveredIndices: [0],
+          keepFromIndex: -1,
+          keepMessages: [],
+        }),
+        completeCompression,
+        canSummarize: () => true,
+        shouldCompress: () => ({ triggered: false, reason: 'none', mode: 'compaction' }),
+        noteCompressionFailure: vi.fn(),
+        clearCompressionFailure: vi.fn(),
+      } as unknown as ContextOptimizer,
+    });
+
+    const result = await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+    );
+
+    expect(result).toMatchObject({ errorType: 'validation', canRetry: false });
+    const failed = events.filter((e) => e.type === 'context.summarization_failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).toMatchObject({
+      session_id: sessionId,
+      reason: 'validation',
+      mode: 'compaction',
+    });
+    expect(String(failed[0]!.data.message)).not.toBe('');
+  });
+
+  it('ошибка стрима: публикуется context.summarization_failed (reason: error)', async () => {
+    SummaryProvider.chunks = [{ content: 'частично', isFinal: false }];
+    SummaryProvider.error = new Error('fetch failed');
+    const sessionId = await makeSession([userMessage('a')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+
+    const deps = makeDeps({
+      handleLlmFailure: ((
+        sid: string, streamId: string, error: unknown, attempt: number | undefined, ctx: never,
+      ) => handleLlmFailureReal(sid, streamId, error, attempt, ctx, { sessionManager })) as never,
+    });
+
+    const result = await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', 2, deps,
+    );
+
+    expect(result).toMatchObject({ errorType: 'network_error' });
+    const failed = events.filter((e) => e.type === 'context.summarization_failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).toMatchObject({
+      session_id: sessionId,
+      reason: 'error',
+      mode: 'summarization',
+    });
+  });
 });

@@ -88,6 +88,11 @@ export type EventType =
   | 'question.replied'
   | 'context.summarization_pending'
   | 'context.summarization_applied'
+  // Провал сжатия контекста (ADR-128): сжатие не состоялось — ответ модели
+  // не прошёл валидацию, сжатия было нечего делать или вызов упал. Payload:
+  // `reason` (`validation`|`error`|`no_coverage`|`overflow`), `message`
+  // (локализованный текст ошибки), `mode`, `phase?` (`mid_turn`|`overflow`).
+  | 'context.summarization_failed'
   | 'context.summarized'
   | 'context.sliding_window_applied'
   | 'context.limit_warning'

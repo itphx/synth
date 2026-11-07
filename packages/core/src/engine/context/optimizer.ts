@@ -169,6 +169,17 @@ function countCompactionSections(content: string): number {
 const MIN_SUMMARY_LENGTH = 20;
 
 /**
+ * Минимальная длина «свободного» резюме компактизации (символов) — порог
+ * degraded-режима.
+ *
+ * Модель может ответить содержательным резюме в **своём** формате (без
+ * заголовков шаблона): такой ответ лучше, чем сжатие не состоялось вовсе
+ * (контекст продолжает расти). Ниже порога ответ не считается резюме —
+ * иначе «принималось» бы пустое/обрывок.
+ */
+export const MIN_DEGRADED_COMPACTION_LENGTH = 200;
+
+/**
  * TTL cooldown'а после неудачного сжатия (мс). Пока он активен, авто-триггер
  * сжатия не зовёт LLM: иначе невалидный ответ модели крутится по очереди
  * ретраев, а контекст не сжимается.
@@ -239,11 +250,22 @@ function compressionOmittedMarker(count: number, lang: string): string {
  * Проверка устойчива к регистру, markdown-разметке и локали заголовков —
  * см. `COMPACTION_SECTION_ALIASES`. Порог (≥2 раздела) прежний: «любой
  * непустой текст» ответом не считается.
+ *
+ * `opts.allowDegraded` — **деградированный режим**: если строгая проверка не
+ * прошла, но ответ содержательный (≥`MIN_DEGRADED_COMPACTION_LENGTH`
+ * символов), он принимается как `degraded: true` — модель дала резюме в своём
+ * формате. Это спасает сжатие у моделей, которые не держат шаблон (ADR-128,
+ * «Последствия»): лучше принятое резюме, чем растущий контекст. Строгий
+ * вызов (без opts) поведение не меняет — только шаблон.
+ *
+ * Суммаризация — как прежде (непустой ответ ≥`MIN_SUMMARY_LENGTH`): деградация
+ * там не нужна (формат произвольный).
  */
 export function validateCompressionContent(
   mode: CompressionMode,
   content: string,
-): { ok: true } | { ok: false; reason: string } {
+  opts?: { allowDegraded?: boolean },
+): { ok: true; degraded?: boolean } | { ok: false; reason: string } {
   const text = (content ?? '').trim();
   if (mode === 'summarization') {
     if (text.length < MIN_SUMMARY_LENGTH) {
@@ -253,6 +275,10 @@ export function validateCompressionContent(
   }
   const sections = countCompactionSections(text);
   if (sections < 2) {
+    // Деградированный режим: содержательное резюме в свободном формате.
+    if (opts?.allowDegraded === true && text.length >= MIN_DEGRADED_COMPACTION_LENGTH) {
+      return { ok: true, degraded: true };
+    }
     return { ok: false, reason: `compaction template mismatch (${sections}/2 headings)` };
   }
   return { ok: true };
@@ -799,6 +825,13 @@ export class ContextOptimizer {
    * `opts.cancelToken` — вызов с отменой: потоковый (`chatAsync`) с
    * `cancelToken`, ответ собирается из чанков. Отмена бросает
    * {@link CompressionCancelledError} (не «плохой ответ модели»).
+   *
+   * **Каскад валидации.** Сначала — строгая проверка шаблона; если она не
+   * прошла и разрешён nudge — один повтор с напоминанием о формате. Финальная
+   * проверка допускает **degraded-резюме** (содержательный ответ в своём
+   * формате, ≥`MIN_DEGRADED_COMPACTION_LENGTH` символов) — он принимается с
+   * предупреждением в лог (без содержимого). `CompressionValidationError`
+   * бросается только если и degraded-режим не прошёл.
    */
   async completeCompression(
     plan: CompressionPlan,
@@ -822,6 +855,19 @@ export class ContextOptimizer {
       validation = validateCompressionContent(plan.mode, response.content);
     }
     if (!validation.ok) {
+      // Финальная проверка: содержательное резюме в свободном формате —
+      // принимаем (degraded), иначе — провал валидации.
+      const degraded = validateCompressionContent(plan.mode, response.content, {
+        allowDegraded: true,
+      });
+      if (degraded.ok && degraded.degraded) {
+        warning(
+          'CONTEXT',
+          `Compression (${plan.mode}): ответ без шаблона, но содержательный `
+            + `(${response.content.trim().length} симв.) — резюме принято в свободном формате`,
+        );
+        return { content: response.content, response };
+      }
       throw new CompressionValidationError(
         plan.mode === 'compaction'
           ? sm('context.compression_template')

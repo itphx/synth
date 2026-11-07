@@ -12,6 +12,7 @@ import type { CancellationToken } from '../../providers/base.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { CompressionPlan, ContextOptimizer } from '../context/optimizer.js';
+import { CompressionValidationError } from '../context/optimizer.js';
 import type { SaveAssistantMessageFn } from './persistence.js';
 import { DebugCollector } from '../../debug.js';
 import { info, warning } from '../../logger.js';
@@ -22,6 +23,70 @@ import { computeContextUsage } from '../context/context-usage.js';
 
 /** Причина сжатия (диагностика/событие). */
 export type CompressionReason = 'overflow' | 'auto' | 'manual';
+
+/**
+ * Причина провала сжатия — payload события `context.summarization_failed`.
+ *
+ * - `validation` — модель ответила, но ответ не прошёл проверку формата;
+ * - `no_coverage` — сжимать было нечего (пустое покрытие);
+ * - `overflow` — сжатие не смогло снять переполнение окна;
+ * - `error` — прочие ошибки (сеть, провайдер, сессия).
+ */
+export type CompressionFailureReason = 'validation' | 'error' | 'no_coverage' | 'overflow';
+
+/** Payload события `context.summarization_failed`. */
+export interface CompressionFailurePayload {
+  reason: CompressionFailureReason;
+  /** Локализованный текст ошибки (тот же, что уходит в `handleLlmFailure`). */
+  message: string;
+  /** Профиль сжатия (`summarization`/`compaction`). */
+  mode: string;
+  /** Фаза: `mid_turn` — на границе шага, `overflow` — при переполнении. */
+  phase?: 'mid_turn' | 'overflow';
+}
+
+/**
+ * Причина провала по исключению сжатия.
+ *
+ * `validation` — `CompressionValidationError` (ответ модели не по шаблону);
+ * `no_coverage` — сжимать было нечего (тот же i18n-ключ, что бросает
+ * `prepareCompression`); прочее — `error`.
+ */
+export function compressionFailureReason(error: unknown): CompressionFailureReason {
+  if (error instanceof CompressionValidationError) return 'validation';
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === sm('context.compression_empty')) return 'no_coverage';
+  return 'error';
+}
+
+/**
+ * Опубликовать провал сжатия (`context.summarization_failed`) — сигнал «пользователь
+ * должен знать, что сжатие не состоялось».
+ *
+ * Ошибка публикации не ломает ход: событие — диагностика/уведомление,
+ * а не часть логики хода.
+ */
+export function publishCompressionFailure(
+  eventBus: EventBus | undefined,
+  sessionId: string | undefined,
+  payload: CompressionFailurePayload,
+): void {
+  if (!eventBus || !sessionId) return;
+  try {
+    eventBus.publish(sessionId, 'context.summarization_failed', {
+      session_id: sessionId,
+      reason: payload.reason,
+      message: payload.message,
+      mode: payload.mode,
+      ...(payload.phase ? { phase: payload.phase } : {}),
+    });
+  } catch (err) {
+    warning(
+      'CONTEXT',
+      `Не удалось опубликовать провал сжатия: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
 
 /** Минимальный набор зависимостей применения плана. */
 export interface CompressionApplyDeps {

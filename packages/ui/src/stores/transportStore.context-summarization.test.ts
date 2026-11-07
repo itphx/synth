@@ -18,6 +18,7 @@ vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 import { synthApi } from '@/lib/api/synthApi'
 import type { WSEvent } from '@/lib/api/transport'
 import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
+import { notifyMessage } from '@/hooks/useNotification'
 import { createDispatcher } from './transportStore'
 import { useChatStore, type MessageData } from './chatStore'
 import { resetChatStore } from './testUtils'
@@ -200,5 +201,50 @@ describe('context.summarization_applied', () => {
     })
     // История перечитана с повтором (single-flight + один ретрай).
     expect(getSessionMessages.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+/**
+ * ADR-128: провал сжатия контекста виден пользователю — плашка ожидания
+ * снимается, показывается предупреждение с текстом ошибки ядра.
+ */
+describe('context.summarization_failed', () => {
+  function failedEvent(data: Record<string, unknown>): WSEvent {
+    return { type: 'context.summarization_failed', session_id: SID, data }
+  }
+
+  /** Последний тост (аргумент `notifyMessage`). */
+  function lastNotify(): { text: string; type: string; category: string; sessionId?: string } {
+    const calls = (notifyMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    return calls[calls.length - 1]![0] as { text: string; type: string; category: string; sessionId?: string }
+  }
+
+  it('снимает плашку ожидания и показывает текст ошибки ядра', () => {
+    expect(useChatStore.getState().summarizationPendingBySession[SID]).toBe(true)
+
+    dispatch(failedEvent({
+      reason: 'validation',
+      message: 'Сжатие не удалось: ответ не по шаблону',
+      mode: 'compaction',
+      phase: 'mid_turn',
+    }))
+
+    expect(useChatStore.getState().summarizationPendingBySession[SID]).toBe(false)
+    expect(notifyMessage).toHaveBeenCalledTimes(1)
+    const notify = lastNotify()
+    expect(notify.type).toBe('warning')
+    expect(notify.category).toBe('error')
+    expect(notify.sessionId).toBe(SID)
+    expect(notify.text).toContain('Сжатие не удалось')
+  })
+
+  it('без текста в payload — дефолтное уведомление', () => {
+    dispatch(failedEvent({ reason: 'error', mode: 'compaction' }))
+
+    expect(notifyMessage).toHaveBeenCalledTimes(1)
+    const notify = lastNotify()
+    expect(notify.type).toBe('warning')
+    expect(notify.text.length).toBeGreaterThan(0)
+    expect(notify.text).not.toBe('undefined')
   })
 })

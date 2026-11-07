@@ -1430,6 +1430,9 @@ export const dict = {
   'notify.steer.dropped.limit': 'Per-turn intervention limit: messages not applied — {count}',
   'notify.steer.dropped.aborted': 'Turn stopped — interventions not applied: {count}',
   'notify.steer.dropped.turn_ended': 'Turn already finished — interventions not applied: {count}',
+  // ADR-128: провал сжатия контекста виден пользователю (событие
+  // `context.summarization_failed`).
+  'notify.compactionFailed': 'Context compaction failed',
   'chat.notice.copy': 'Copy',
 
   'chat.message.copied': 'Copied',

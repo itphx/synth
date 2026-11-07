@@ -886,6 +886,45 @@ describe('ContextOptimizer — валидация шаблона компакт�
     const res = validateCompressionContent('compaction', '## Objective\nчего добиваемся');
     expect(res.ok).toBe(false);
   });
+
+  /**
+   * Деградированный режим (ADR-128): модель ответила содержательным резюме в
+   * **своём** формате — лучше принятое сжатие, чем растущий контекст.
+   */
+  it('degraded: содержательный текст без заголовков принимается (allowDegraded)', () => {
+    const long = 'свободное резюме без заголовков. '.repeat(12);
+    expect(long.length).toBeGreaterThanOrEqual(200);
+
+    const res = validateCompressionContent('compaction', long, { allowDegraded: true });
+    expect(res.ok).toBe(true);
+    expect(res.ok === true && res.degraded).toBe(true);
+  });
+
+  it('degraded: короткий текст без заголовков — по-прежнему отказ', () => {
+    const res = validateCompressionContent('compaction', 'короткий текст без заголовков', {
+      allowDegraded: true,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.reason).toContain('0/2 headings');
+  });
+
+  it('degraded: строгий шаблон не помечается degraded', () => {
+    const res = validateCompressionContent(
+      'compaction',
+      '## Objective\nчего добиваемся\n\n## Work State\n- готово',
+      { allowDegraded: true },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.ok === true && res.degraded).toBeUndefined();
+  });
+
+  it('degraded: суммаризация не деградирует (формат произвольный)', () => {
+    const res = validateCompressionContent('summarization', 'свободное резюме беседы', {
+      allowDegraded: true,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.ok === true && res.degraded).toBeUndefined();
+  });
 });
 
 describe('ContextOptimizer — completeCompression: nudge и число вызовов', () => {
@@ -943,6 +982,40 @@ describe('ContextOptimizer — completeCompression: nudge и число вызо
 
     await expect(optimizer.completeCompression(plan)).rejects.toThrow();
     expect(CountingCompressionProvider.chatCalls).toBe(2);
+  });
+
+  /**
+   * Деградированный режим: модель дважды отдала свободный текст (200+ символов)
+   * — сжатие состоялось, контент возвращён, в лог — предупреждение (без
+   * содержимого ответа).
+   */
+  it('degraded: свободный текст 200+ символов — контент возвращён, провала нет', async () => {
+    CountingCompressionProvider.content = 'свободное резюме без заголовков. '.repeat(10);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const plan = optimizer.prepareCompression(compressionSession(), 'ru');
+
+      const result = await optimizer.completeCompression(plan);
+
+      expect(result.content).toBe(CountingCompressionProvider.content);
+      // Предупреждение в лог — факт деградированного режима.
+      expect(warn).toHaveBeenCalled();
+      const logged = warn.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(logged).toContain('свободном формате');
+      // Содержимое ответа в лог не попадает.
+      expect(logged).not.toContain(CountingCompressionProvider.content);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('degraded: nudge:false — свободный текст 200+ символов тоже принимается', async () => {
+    CountingCompressionProvider.content = 'свободное резюме без заголовков. '.repeat(10);
+    const plan = optimizer.prepareCompression(compressionSession(), 'ru');
+
+    const result = await optimizer.completeCompression(plan, { nudge: false });
+    expect(result.content).toBe(CountingCompressionProvider.content);
+    expect(CountingCompressionProvider.chatCalls).toBe(1);
   });
 });
 

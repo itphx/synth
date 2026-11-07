@@ -24,7 +24,7 @@
  */
 import { MessageRole } from '@itphx/synth-shared';
 import type { BaseProvider, CancellationToken, LLMMessage } from '../../../providers/base.js';
-import { forceCompression } from '../../orchestrator/compression.js';
+import { forceCompression, compressionFailureReason, publishCompressionFailure } from '../../orchestrator/compression.js';
 import { buildOverflowRetryMessages } from '../../orchestrator/overflow.js';
 import { warning } from '../../../logger.js';
 import { messageToLLMMessage } from './prompt.js';
@@ -98,9 +98,13 @@ export async function tryCompactChildSession(
     return null;
   }
 
+  // Профиль сжатия ребёнка — для payload провала (`mode`).
+  let childMode: string | null = null;
+
   try {
     const child = await sessionManager.getSession(childSessionId);
     if (!child) return null;
+    childMode = optimizer.effectiveMode(child);
     if (!optimizer.shouldCompress(child).triggered) return null;
     if (typeof optimizer.canCompress === 'function' && !optimizer.canCompress(child)) {
       return null;
@@ -168,6 +172,14 @@ export async function tryCompactChildSession(
       'CONTEXT',
       `Subagent compression failed: ${e instanceof Error ? e.message : String(e)}`,
     );
+    // Провал виден пользователю: сжатие ребёнка на границе шага не состоялось
+    // — событие `context.summarization_failed` в канале child-сессии.
+    publishCompressionFailure(eventBus, childSessionId, {
+      reason: compressionFailureReason(e),
+      message: e instanceof Error ? e.message : String(e),
+      mode: childMode ?? 'compaction',
+      phase: 'mid_turn',
+    });
     return null;
   }
 }

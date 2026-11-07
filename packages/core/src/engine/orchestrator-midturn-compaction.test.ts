@@ -450,7 +450,7 @@ describe('ADR-119: авто-компактификация посреди ход
     const optimizer = makeStubOptimizer({ coveredIndices: [0, 1], failComplete: true });
     const h = await makeHarness({ optimizer, seed: seedMessages() });
 
-    const { result } = await run(h);
+    const { result, busEvents } = await run(h);
 
     // Ход не упал: сжатие не состоялось, но агент ответил.
     expect(result.error).toBeUndefined();
@@ -458,6 +458,14 @@ describe('ADR-119: авто-компактификация посреди ход
     // Провал сжатия отмечен (cooldown) — авто-триггер не будет звать LLM по кругу.
     expect(optimizer.prepareCalls).toBe(1);
     expect(optimizer.noteFailureCalls).toBe(1);
+
+    // Провал виден пользователю: событие `context.summarization_failed`
+    // (фаза `mid_turn`).
+    const failed = busEvents.filter((e) => e.type === 'context.summarization_failed');
+    expect(failed.length).toBe(1);
+    expect(failed[0]!.data.phase).toBe('mid_turn');
+    expect(failed[0]!.data.reason).toBe('error');
+    expect(String(failed[0]!.data.message)).toContain('compression failed');
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });

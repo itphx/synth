@@ -10,7 +10,7 @@ import type { CancellationToken, LLMMessage, SystemPromptPayload } from '../../p
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { CompressionMode, CompressionPlan } from '../context/optimizer.js';
 import { compressionFinishReasonError, CompressionValidationError, validateCompressionContent } from '../context/optimizer.js';
-import { disableCompressedMessages } from './compression.js';
+import { disableCompressedMessages, publishCompressionFailure } from './compression.js';
 import type { DebugCollector } from '../../debug.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
@@ -179,7 +179,7 @@ export async function handleSummarization(
   } catch (e) {
     warning('ORCHESTRATOR', `Summarization stream error: ${e}`);
     deps.cancellationTokens.delete(streamId);
-    return deps.handleLlmFailure(session.id, streamId, e, attempt, {
+    const failure = await deps.handleLlmFailure(session.id, streamId, e, attempt, {
       durationMs: Date.now() - startedAt,
       usage: finalUsage,
       model: finalModel ?? provider.model ?? session.settings.model,
@@ -188,6 +188,14 @@ export async function handleSummarization(
       content: accumulatedContent,
       promptChars: deps.estimatePromptChars(plan.llmMessages, plan.systemPrompt),
     });
+    // Провал виден пользователю: событие сжатия + текст той же ошибки, что
+    // ушёл в `handleLlmFailure`.
+    publishCompressionFailure(deps.eventBus, session.id, {
+      reason: 'error',
+      message: failure.error ?? (e instanceof Error ? e.message : String(e)),
+      mode,
+    });
+    return failure;
   }
 
   if (cancelToken.cancelled) {
@@ -216,8 +224,18 @@ export async function handleSummarization(
   // (`CompressionValidationError`) от сетевой/провайдерской ошибки.
   let retryError: unknown = null;
   if (!validationError) {
-    const validation = validateCompressionContent(mode, accumulatedContent);
-    if (!validation.ok) {
+    // Деградированный режим: содержательное резюме в свободном формате
+    // (модель не держала шаблон) — принимаем, лучше сжатие, чем рост контекста.
+    const validation = validateCompressionContent(mode, accumulatedContent, {
+      allowDegraded: true,
+    });
+    if (validation.ok && validation.degraded) {
+      warning(
+        'ORCHESTRATOR',
+        `Compression (${mode}): ответ без шаблона, но содержательный `
+          + `(${accumulatedContent.trim().length} симв.) — резюме принято в свободном формате`,
+      );
+    } else if (!validation.ok) {
       try {
         const retry = await deps.optimizer.completeCompression(plan, { nudge: false });
         accumulatedContent = retry.content;
@@ -259,7 +277,7 @@ export async function handleSummarization(
       if (typeof deps.optimizer.noteCompressionFailure === 'function') {
         deps.optimizer.noteCompressionFailure(session.id);
       }
-      return deps.handleLlmFailure(session.id, streamId, new Error(validationError), attempt, {
+      const failure = await deps.handleLlmFailure(session.id, streamId, new Error(validationError), attempt, {
         durationMs: Date.now() - startedAt,
         usage: finalUsage,
         model: finalModel ?? provider.model ?? session.settings.model,
@@ -269,10 +287,18 @@ export async function handleSummarization(
         promptChars: deps.estimatePromptChars(plan.llmMessages, plan.systemPrompt),
         errorType: 'validation',
       });
+      // Провал сжатия виден пользователю (событие + текст той же ошибки,
+      // что ушёл в `handleLlmFailure`).
+      publishCompressionFailure(deps.eventBus, session.id, {
+        reason: 'validation',
+        message: failure.error ?? validationError,
+        mode,
+      });
+      return failure;
     }
     // Сетевая/провайдерская ошибка повторного вызова — обычная классификация
     // (`canRetry` по errorType), без cooldown: сжатие «не помогло» — не факт.
-    return deps.handleLlmFailure(
+    const failure = await deps.handleLlmFailure(
       session.id,
       streamId,
       retryError instanceof Error ? retryError : new Error(validationError),
@@ -287,6 +313,12 @@ export async function handleSummarization(
         promptChars: deps.estimatePromptChars(plan.llmMessages, plan.systemPrompt),
       },
     );
+    publishCompressionFailure(deps.eventBus, session.id, {
+      reason: 'error',
+      message: failure.error ?? validationError,
+      mode,
+    });
+    return failure;
   }
 
   // Сохранить summary-сообщение (без message.added — UI получит его через stream.done)

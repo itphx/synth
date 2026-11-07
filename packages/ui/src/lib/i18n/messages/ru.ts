@@ -1406,6 +1406,9 @@ export const dict = {
   'notify.steer.dropped.limit': 'Лимит вмешательств на ход: не применено сообщений — {count}',
   'notify.steer.dropped.aborted': 'Ход остановлен — не применено вмешательств: {count}',
   'notify.steer.dropped.turn_ended': 'Ход закончился — не применено вмешательств: {count}',
+  // ADR-128: провал сжатия контекста виден пользователю (событие
+  // `context.summarization_failed`).
+  'notify.compactionFailed': 'Сжатие контекста не удалось',
   'chat.notice.copy': 'Копировать',
 
   'chat.message.copied': 'Скопировано',

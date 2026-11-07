@@ -334,9 +334,12 @@ describe('ADR-119: авто-компактификация дочерней се
   it('сбой сжатия ставит cooldown (авто-триггер не зовёт LLM по кругу)', async () => {
     const child = await makeChild();
     const optimizer = makeStubOptimizer({ failComplete: true });
+    const eventBus = new EventBus();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(child.id, (e) => events.push({ type: e.type, data: e.data as Record<string, unknown> }));
 
     const rebuilt = await tryCompactChildSession({
-      extra: makeExtra({ contextOptimizer: optimizer }),
+      extra: makeExtra({ contextOptimizer: optimizer, eventBus }),
       childSessionId: child.id,
       subagentType: 'explore',
       provider: makeProvider(),
@@ -347,6 +350,13 @@ describe('ADR-119: авто-компактификация дочерней се
     expect(rebuilt).toBeNull();
     expect(optimizer.prepareCalls).toBe(1);
     expect(optimizer.noteFailureCalls).toBe(1);
+
+    // Провал виден пользователю: событие в канале child-сессии (ADR-128).
+    const failed = events.filter((e) => e.type === 'context.summarization_failed');
+    expect(failed.length).toBe(1);
+    expect(failed[0]!.data.phase).toBe('mid_turn');
+    expect(failed[0]!.data.reason).toBe('error');
+    expect(String(failed[0]!.data.message)).toContain('compression failed');
   });
 
   it('отмена во время сжатия не оставляет cooldown', async () => {
