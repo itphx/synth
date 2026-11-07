@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import type { McpNetworkPolicy, McpRegistryEntry } from '@itphx/synth-shared'
+import type { McpNetworkPolicy, McpRegistryEntry, McpRemoteMode } from '@itphx/synth-shared'
 import { Icon } from '../icon/Icon'
 import { useMcpStore } from '../../stores/mcpStore'
 import { useAuthStore } from '../../stores/authStore'
@@ -416,6 +416,28 @@ export const McpSettings = () => {
                   enabled={editor.formDefault}
                   onToggle={() => editor.setFormDefault((prev) => !prev)}
                 />
+              </SettingsItem>
+              {/* PROP-125: режим доставки серверного MCP в локальные сессии гибрида. */}
+              <SettingsItem>
+                <SelectField
+                  label={t('mcp.remoteMode.label')}
+                  description={t('mcp.remoteMode.hint')}
+                  tooltip={t('settings.help.mcpAdmin.remoteMode')}
+                  value={editor.formRemoteMode}
+                  onValueChange={(value) => editor.setFormRemoteMode(value as McpRemoteMode)}
+                  ariaLabel={t('mcp.remoteMode.label')}
+                  items={[
+                    { value: 'auto', label: t('mcp.remoteMode.auto') },
+                    { value: 'relay', label: t('mcp.remoteMode.relay') },
+                    { value: 'tools', label: t('mcp.remoteMode.tools') },
+                  ]}
+                >
+                  <SelectContent>
+                    <SelectItem value="auto">{t('mcp.remoteMode.auto')}</SelectItem>
+                    <SelectItem value="relay">{t('mcp.remoteMode.relay')}</SelectItem>
+                    <SelectItem value="tools">{t('mcp.remoteMode.tools')}</SelectItem>
+                  </SelectContent>
+                </SelectField>
               </SettingsItem>
               {testResult && (
                 <div

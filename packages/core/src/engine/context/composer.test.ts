@@ -715,6 +715,54 @@ describe('SystemPromptComposer', () => {
       expect(system).not.toContain('Instructions:');
     });
 
+    it('PROP-125: mcp.status для status=error содержит причину (ru/en)', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const servers: ComposerMcpServer[] = [
+        { name: 'broken-srv', tools: [], status: 'error', error: 'relay недоступен: 502' },
+      ];
+
+      const ru = await composer.compose(makeCtx(session, { mcpServers: servers }));
+      expect(ru.system).toContain('[СТАТУС MCP]');
+      expect(ru.system).toContain('- broken-srv: error (причина=relay недоступен: 502)');
+
+      const en = await composer.compose(
+        makeCtx(session, { mcpServers: servers, language: 'en' }),
+      );
+      expect(en.system).toContain('[MCP STATUS]');
+      expect(en.system).toContain('- broken-srv: error (reason=relay недоступен: 502)');
+    });
+
+    it('PROP-125: без error строка статуса не меняется', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const servers: ComposerMcpServer[] = [
+        { name: 'broken-srv', tools: [], status: 'error' },
+      ];
+
+      const { system } = await composer.compose(makeCtx(session, { mcpServers: servers }));
+      expect(system).toContain('- broken-srv: error');
+      expect(system).not.toContain('причина=');
+      expect(system).not.toContain('reason=');
+    });
+
+    it('PROP-125: причина обрезается до 200 символов, переводы строк → пробел', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const long = `первая строка\n${'x'.repeat(400)}`;
+      const servers: ComposerMcpServer[] = [
+        { name: 'broken-srv', tools: [], status: 'error', error: long },
+      ];
+
+      const { system } = await composer.compose(makeCtx(session, { mcpServers: servers }));
+      const line = system.split('\n').find((l) => l.includes('- broken-srv: error'));
+      expect(line).toBeDefined();
+      const reason = line!.slice(line!.indexOf('причина=') + 'причина='.length).replace(/\)$/, '');
+      expect(reason.length).toBeLessThanOrEqual(200);
+      expect(reason.startsWith('первая строка x')).toBe(true);
+      expect(reason).not.toContain('\n');
+    });
+
     it('ADR-071 §2.4: level-aware — уровень сервера и причина отключения', async () => {
       const composer = makeComposer();
       const session = makeSession();

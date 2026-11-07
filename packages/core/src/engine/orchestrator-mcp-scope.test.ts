@@ -119,6 +119,14 @@ function makeMockMcpManager(opts: { defaultOn?: string[] } = {}): McpManager {
       // srvB — пользовательский (community), srvA — instance.
       return name === 'srvB' ? 'user' : 'instance';
     },
+    isRemoteServer(name: string) {
+      // PROP-125: srvB — серверный MCP-сервер гибрида, srvA — локальный.
+      return name === 'srvB';
+    },
+    getServerError(name: string) {
+      // PROP-125: у серверного сервера видна причина (backend офлайн/деградация).
+      return name === 'srvB' ? 'relay недоступен: 502' : undefined;
+    },
     getServerTrust() {
       return 'builtin';
     },
@@ -372,5 +380,44 @@ describe('ChatOrchestrator — per-session MCP scope (ADR-071 §2.1)', () => {
     const servers = await orchestrator.resolveMcpServers(session);
     const srvA = servers.find((s) => s.name === 'srvA')!;
     expect(srvA.toolDetails![0]!.adminDisabled).toBe(true);
+  });
+
+  it('PROP-125: resolveMcpServers отдаёт источник сервера (local/server)', async () => {
+    orchestrator = makeOrchestrator(makeMockMcpManager());
+    const session = await sessionManager.createSession({
+      title: 'source',
+      settings: {
+        provider: 'toolcapture',
+        model: 'm',
+        agentRole: 'fixer',
+        mcpServers: ['srvA', 'srvB'],
+        mcpDefaultOn: ['srvA', 'srvB'],
+      },
+    });
+
+    const servers = await orchestrator.resolveMcpServers(session);
+
+    expect(servers.find((s) => s.name === 'srvA')!.source).toBe('local');
+    expect(servers.find((s) => s.name === 'srvB')!.source).toBe('server');
+  });
+
+  it('PROP-125: resolveMcpServers отдаёт причину недоступности (error)', async () => {
+    orchestrator = makeOrchestrator(makeMockMcpManager());
+    const session = await sessionManager.createSession({
+      title: 'error',
+      settings: {
+        provider: 'toolcapture',
+        model: 'm',
+        agentRole: 'fixer',
+        mcpServers: ['srvA', 'srvB'],
+        mcpDefaultOn: ['srvA', 'srvB'],
+      },
+    });
+
+    const servers = await orchestrator.resolveMcpServers(session);
+
+    // Причина есть только у серверного сервера (PROP-125), у локального — нет.
+    expect(servers.find((s) => s.name === 'srvB')!.error).toBe('relay недоступен: 502');
+    expect(servers.find((s) => s.name === 'srvA')!.error).toBeUndefined();
   });
 });

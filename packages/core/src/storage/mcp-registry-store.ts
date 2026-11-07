@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { McpServerConfig, McpRegistryEntry, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust } from '@itphx/synth-shared';
+import type { McpServerConfig, McpRegistryEntry, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust, McpRemoteMode } from '@itphx/synth-shared';
 import { MCP_REGISTRY_SCHEMA_VERSION, generateId, nowISO, AsyncLock, atomicWrite, safeJsonParse, findForbiddenMcpSecretHeaders, mcpSecretHeaderErrorMessage, MCP_SECRET_HEADER_ERROR_CODE } from '@itphx/synth-shared';
 import type { McpRegistryRepository } from './ports/mcp-registry-repository.js';
 import { warning } from '../logger.js';
@@ -76,6 +76,8 @@ export interface AddMcpRegistryEntryInput {
   enabled?: boolean;
   /** Сид «включён по умолчанию для новых проектов». */
   enabledByDefault?: boolean;
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида (дефолт `auto`). */
+  remoteMode?: McpRemoteMode;
   /** Явный id (для миграций/детерминированного сида); иначе генерируется. */
   id?: string;
 }
@@ -86,6 +88,8 @@ export interface UpdateMcpRegistryEntryInput {
   /** Системный мастер-флаг. */
   enabled?: boolean;
   enabledByDefault?: boolean;
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+  remoteMode?: McpRemoteMode;
   trust?: McpRegistryTrust;
   origin?: McpRegistryOrigin;
 }
@@ -183,6 +187,8 @@ export class McpRegistryStore implements McpRegistryRepository {
         trust: input.trust ?? (input.origin === 'instance' ? 'builtin' : 'community'),
         enabled: input.enabled ?? true,
         enabledByDefault: input.enabledByDefault ?? input.config.enabledByDefault ?? false,
+        // PROP-125: режим доставки в локальные сессии гибрида (дефолт `auto`).
+        remoteMode: input.remoteMode ?? 'auto',
         createdAt: now,
         updatedAt: now,
       };
@@ -216,6 +222,7 @@ export class McpRegistryStore implements McpRegistryRepository {
         trust: patch.trust ?? current.trust,
         enabled: patch.enabled ?? current.enabled,
         enabledByDefault: patch.enabledByDefault ?? current.enabledByDefault,
+        remoteMode: patch.remoteMode ?? current.remoteMode ?? 'auto',
         schemaVersion: MCP_REGISTRY_SCHEMA_VERSION,
         updatedAt: nowISO(),
       };

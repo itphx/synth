@@ -16,6 +16,12 @@ export interface MetaRoutesDeps {
    * без рестарта.
    */
   getAttachments?: () => AttachmentsConfig;
+  /**
+   * PROP-125: возможности инстанса (аддитивно). `remoteMcp` — признак
+   * поддержки `/api/v2/mcp/remote/*` и relay-режима; отсутствие поля у
+   * старого backend'а — фича молча выключена.
+   */
+  getFeatures?: () => { remoteMcp?: boolean } | undefined;
 }
 
 /**
@@ -27,7 +33,9 @@ export interface MetaRoutesDeps {
  * - `replay` — доступен догон по журналу событий (`Last-Event-ID` / `?since`);
  * - `version` — версия инстанса;
  * - `attachments` — эффективные лимиты вложений (ADR-115, аддитивно) — только
- *   при заданном `deps.getAttachments`.
+ *   при заданном `deps.getAttachments`;
+ * - `features` — возможности инстанса (PROP-125, аддитивно) — только при
+ *   заданном `deps.getFeatures` и непустом результате.
  */
 export function instanceCapabilities(deps: MetaRoutesDeps = {}): InstanceCapabilities {
   const capabilities: InstanceCapabilities = {
@@ -50,6 +58,14 @@ export function instanceCapabilities(deps: MetaRoutesDeps = {}): InstanceCapabil
       maxFilesPerMessage: attachments.maxFilesPerMessage,
       maxBytesPerSession: attachments.maxBytesPerSession,
     };
+  }
+  // PROP-125: пустой/незаданный набор признаков — поля `features` нет
+  // (старый клиент читает ответ как прежде).
+  if (deps.getFeatures) {
+    const features = deps.getFeatures();
+    if (features && Object.values(features).some((value) => value !== undefined)) {
+      capabilities.features = features;
+    }
   }
   return capabilities;
 }

@@ -172,4 +172,30 @@ describe('McpRegistryStore (ADR-071 §2.5)', () => {
     expect(entry.config.auth).toBeUndefined();
     expect((await store.get(entry.id))?.config.auth).toBeUndefined();
   });
+
+  // PROP-125: режим доставки сервера в локальные сессии гибрида.
+  it('remoteMode: дефолт auto, update меняет режим, чтение сохраняет', async () => {
+    const entry = await store.add({ name: 'mode-http', config: httpConfig(), origin: 'user' });
+    expect(entry.remoteMode).toBe('auto');
+    expect((await store.get(entry.id))?.remoteMode).toBe('auto');
+
+    const updated = await store.update(entry.id, { remoteMode: 'tools' });
+    expect(updated?.remoteMode).toBe('tools');
+    expect((await store.get(entry.id))?.remoteMode).toBe('tools');
+
+    // Переживает перезапуск (запись в файле).
+    const reloaded = new McpRegistryStore({ dataDir: tmpDir });
+    expect((await reloaded.getByName('mode-http'))?.remoteMode).toBe('tools');
+  });
+
+  it('remoteMode: явный режим при add сохраняется', async () => {
+    const entry = await store.add({
+      name: 'mode-relay',
+      config: httpConfig(),
+      origin: 'instance',
+      remoteMode: 'relay',
+    });
+    expect(entry.remoteMode).toBe('relay');
+    expect((await store.get(entry.id))?.remoteMode).toBe('relay');
+  });
 });

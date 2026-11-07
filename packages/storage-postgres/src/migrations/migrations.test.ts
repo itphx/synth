@@ -19,6 +19,7 @@ import { MIGRATION_028_MESSAGE_REASONING_SIGNATURE } from './028-message-reasoni
 import { MIGRATION_029_MESSAGE_STREAM_V2 } from './029-message-stream-v2.js';
 import { MIGRATION_030_SESSION_RETRY } from './030-session-retry.js';
 import { MIGRATION_031_SSH_KEY_POLICY } from './031-ssh-key-policy.js';
+import { MIGRATION_032_MCP_REMOTE_MODE } from './032-mcp-remote-mode.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -222,12 +223,11 @@ describe('реестр миграций', () => {
   });
 });
 describe('миграция 031_ssh_key_policy (PROP-124 — политика SSH-ключа)', () => {
-  it('зарегистрирована в реестре под версией 31 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 31', () => {
     const migration = MIGRATIONS.find((m) => m.version === 31);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('031_ssh_key_policy');
     expect(migration!.sql).toBe(MIGRATION_031_SSH_KEY_POLICY);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(31);
   });
 
   it('добавляет колонки политики идемпотентно', () => {
@@ -241,5 +241,23 @@ describe('миграция 031_ssh_key_policy (PROP-124 — политика SSH
       'ALTER TABLE ssh_keys ADD COLUMN IF NOT EXISTS allow_ports integer[] NOT NULL DEFAULT ARRAY[]::integer[];',
     );
     expect(MIGRATION_031_SSH_KEY_POLICY).not.toMatch(/ALTER TABLE(?! ssh_keys ADD COLUMN IF NOT EXISTS)/);
+  });
+});
+
+describe('миграция 032_mcp_remote_mode (PROP-125 — режим доставки MCP-сервера)', () => {
+  it('зарегистрирована в реестре под версией 32 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 32);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('032_mcp_remote_mode');
+    expect(migration!.sql).toBe(MIGRATION_032_MCP_REMOTE_MODE);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(32);
+  });
+
+  it('добавляет колонку remote_mode идемпотентно', () => {
+    expect(MIGRATION_032_MCP_REMOTE_MODE).toContain(
+      "ALTER TABLE mcp_registry ADD COLUMN IF NOT EXISTS remote_mode text NOT NULL DEFAULT 'auto';",
+    );
+    expect(MIGRATION_032_MCP_REMOTE_MODE).toContain('COMMENT ON COLUMN mcp_registry.remote_mode');
+    expect(MIGRATION_032_MCP_REMOTE_MODE).not.toMatch(/ALTER TABLE(?! mcp_registry ADD COLUMN IF NOT EXISTS)/);
   });
 });

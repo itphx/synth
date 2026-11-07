@@ -819,6 +819,8 @@ export const StatsTab: React.FC = () => {
                     <tr className="text-muted-foreground">
                       <th className="px-2 py-0.5 text-left font-medium first:pl-0">{t('rightPanel.stats.colServer')}</th>
                       <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colLevel')}</th>
+                      {/* PROP-125: источник сервера — локальный инстанс или сервер гибрида. */}
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colSource')}</th>
                       <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colStatus')}</th>
                       <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.colAvailable')}</th>
                       <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colTools')}</th>
@@ -838,6 +840,11 @@ export const StatsTab: React.FC = () => {
                           >
                             <td className="px-2 py-0.5 text-left max-w-[7rem] truncate first:pl-0" title={server.name}>{server.name}</td>
                             <td className="px-2 py-0.5 text-center">{t(`rightPanel.stats.mcpLevel.${server.level}`)}</td>
+                            <td className="px-2 py-0.5 text-center">
+                              {server.source === 'server'
+                                ? t('rightPanel.stats.mcpSource.server')
+                                : t('rightPanel.stats.mcpSource.local')}
+                            </td>
                             <td className="px-2 py-0.5 text-center">{t(`rightPanel.stats.mcpStatus.${status}`)}</td>
                             <td className="px-2 py-0.5 text-left">{mcpAvailabilityLabel(server, t)}</td>
                             <td
@@ -860,7 +867,8 @@ export const StatsTab: React.FC = () => {
                               data-testid={`stats-mcp-tool-${server.name}-${tool.name}`}
                               className={cn('text-muted-foreground/80', tool.adminDisabled && 'line-through opacity-60')}
                             >
-                              <td className="px-2 py-0.5 text-left first:pl-0" colSpan={5}>
+                              {/* Строки тула повторяют колонки таблицы: 1–6 (имя…тулы), 7 — токены, 8 — автор. */}
+                              <td className="px-2 py-0.5 text-left first:pl-0" colSpan={6}>
                                 <span className="pl-3 font-mono truncate inline-block max-w-[10rem]" title={tool.name}>
                                   {'\u2514'} {tool.name}
                                 </span>

@@ -4,6 +4,14 @@
 
 import { RemoteError } from './types.js';
 import { CURRENCIES, type Currency } from '@itphx/synth-shared';
+// PROP-125: контракт удалённого MCP (сервер гибрида → локальный core).
+import type {
+  InstanceCapabilities,
+  RemoteMcpCallRequest,
+  RemoteMcpCallResult,
+  RemoteMcpServerInfo,
+  RemoteMcpToolsResponse,
+} from '@itphx/synth-shared';
 import type { RemoteRequestInfo } from '../metrics/collectors/hybrid.js';
 // ADR-099: запросы к удалённому backend — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
@@ -317,6 +325,18 @@ export class RemoteBackendClient {
   /** URL удалённого backend (для UI: индикатор подключения, тултипы). */
   get backendUrl(): string {
     return this._backendUrl;
+  }
+
+  /**
+   * PROP-125 §2: текущий access-токен гибрида (или `null`).
+   *
+   * Нужен relay-клиенту локального core: он ходит в `/api/v2/mcp/relay/:name`
+   * обычным MCP-транспортом и подставляет Bearer **на каждый запрос** —
+   * токен обновляется в рантайме (`RemoteSession.getToken()`), поэтому
+   * статический заголовок протух бы.
+   */
+  async getAccessToken(): Promise<string | null> {
+    return this._getToken();
   }
 
   // --- Методы для будущей агрегации миров (Part 2) ---
@@ -1161,6 +1181,63 @@ export class RemoteBackendClient {
   /** Создать каталог в корне workspace backend (для проекта без существующего workspace). */
   fsWorkspaceMkdir(body: { path: string }): Promise<unknown> {
     return this.request<unknown>('POST', '/api/v2/fs/workspace-root/mkdir', body);
+  }
+
+  // --- PROP-125: серверные MCP-серверы гибрида (режим `tools`) ---
+
+  /**
+   * Состав серверных MCP-серверов (`GET /api/v2/mcp/remote/servers`).
+   *
+   * Отдаёт **все** записи реестра сервера (решение 10 владельца) без секретов
+   * и URL с креденшелами (ADR-105) — их в выдаче нет по построению.
+   *
+   * Таймаут 60 с — как у подключения MCP-сервера (`McpClient.connect`).
+   */
+  getRemoteMcpServers(): Promise<RemoteMcpServerInfo[]> {
+    return this.request<RemoteMcpServerInfo[]>('GET', '/api/v2/mcp/remote/servers', undefined, {
+      timeoutMs: 60_000,
+    });
+  }
+
+  /**
+   * Схемы инструментов серверного MCP-сервера (`GET /api/v2/mcp/remote/tools`).
+   *
+   * Имя сервера — query-параметр `server` (экранируется): в реестре имя —
+   * точный ключ, пробелы и спецсимволы допустимы.
+   */
+  getRemoteMcpTools(server: string): Promise<RemoteMcpToolsResponse> {
+    return this.request<RemoteMcpToolsResponse>(
+      'GET',
+      `/api/v2/mcp/remote/tools?server=${encodeURIComponent(server)}`,
+      undefined,
+      { timeoutMs: 60_000 },
+    );
+  }
+
+  /**
+   * Вызов инструмента серверного MCP-сервера (`POST /api/v2/mcp/remote/call`).
+   *
+   * Формат результата — тот же, что у протокола исполнителя 5
+   * (`{content, isError, attachments?}`), таймаут вызова — 120 с (как у
+   * `McpClient.callTool`).
+   */
+  callRemoteMcp(body: RemoteMcpCallRequest): Promise<RemoteMcpCallResult> {
+    return this.request<RemoteMcpCallResult>('POST', '/api/v2/mcp/remote/call', body, {
+      timeoutMs: 120_000,
+    });
+  }
+
+  /**
+   * Возможности инстанса (`GET /api/v2/meta`).
+   *
+   * PROP-125 §3: `features.remoteMcp` — признак поддержки
+   * `/api/v2/mcp/remote/*`; у старого backend'а поля нет — фича молча
+   * выключена (fail-closed, без шума в UI).
+   */
+  getCapabilities(): Promise<InstanceCapabilities> {
+    return this.request<InstanceCapabilities>('GET', '/api/v2/meta', undefined, {
+      timeoutMs: 5_000,
+    });
   }
 
   /** Быстрая проверка доступности backend (GET /health, короткий таймаут). */

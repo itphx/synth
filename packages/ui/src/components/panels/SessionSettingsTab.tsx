@@ -1287,7 +1287,12 @@ export function SessionSettingsTab() {
                     testId={`session-mcp-${srv.name}`}
                     name={srv.name}
                     badges={
-                      <RowBadge tone="neutral">{t(`rightPanel.stats.mcpLevel.${srv.level}`)}</RowBadge>
+                      <>
+                        <RowBadge tone="neutral">{t(`rightPanel.stats.mcpLevel.${srv.level}`)}</RowBadge>
+                        {srv.source === 'server' && (
+                          <RowBadge tone="primary">{t('sessionSettings.mcp.source.server')}</RowBadge>
+                        )}
+                      </>
                     }
                     aside={
                       <label className="flex items-center gap-1">
@@ -1301,9 +1306,12 @@ export function SessionSettingsTab() {
                       </label>
                     }
                     details={
-                      srv.enabled
+                      // PROP-125: причина недоступности серверного MCP (backend офлайн,
+                      // сервер упал, relay не поднялся) — дописывается к статусу.
+                      (srv.enabled
                         ? t(`rightPanel.stats.mcpStatus.${srv.status ?? 'connected'}`)
                         : `${t('rightPanel.stats.mcpStatus.disabled')}${srv.reason ? ` · ${t(`rightPanel.stats.mcpReason.${srv.reason}`)}` : ''}`
+                      ) + (srv.error ? ` · ${srv.error}` : '')
                     }
                   />
                 ))}

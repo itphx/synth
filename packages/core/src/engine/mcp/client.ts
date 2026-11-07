@@ -81,6 +81,15 @@ export interface McpClientOptions {
    * `MCP_ATTACHMENT_MAX_BYTES_PER_FILE`/`MCP_ATTACHMENT_MAX_TOTAL_BYTES`.
    */
   attachmentLimits?: McpAttachmentLimits | undefined;
+  /**
+   * PROP-125: транспорт HTTP-MCP-клиента (релей гибрида).
+   *
+   * Не задан — `egressFetch` (ADR-099: единый источник доверия TLS/CA).
+   * Задан — этот `fetch` используется для **всех** HTTP-запросов транспорта
+   * (initialize/tools/list/tools/call): релей-клиент подставляет в него
+   * динамический Bearer гибрида (PROP-125 §2).
+   */
+  fetch?: typeof fetch | undefined;
 }
 
 /**
@@ -271,6 +280,8 @@ export class McpClient {
   private readonly _credentialSource: McpCredentialSource | undefined;
   /** ADR-115: пределы вложений MCP-результата (транспортные, не конфиг вложений). */
   private readonly _attachmentLimits: McpAttachmentLimits;
+  /** PROP-125: транспорт HTTP-запросов (релей гибрида); по умолчанию — `egressFetch`. */
+  private readonly _fetch: typeof fetch | undefined;
 
   constructor(name: string, config: McpServerConfig, opts: McpClientOptions = {}) {
     this._name = name;
@@ -278,6 +289,7 @@ export class McpClient {
     this._toolTimeout = (config.timeout || 120) * 1000;
     this._credentialSource = opts.credentialSource;
     this._attachmentLimits = opts.attachmentLimits ?? {};
+    this._fetch = opts.fetch;
   }
 
   get name(): string {
@@ -442,16 +454,18 @@ export class McpClient {
     //
     // ADR-099: явно передаём `fetch` с единым доверием TLS/CA — иначе SDK ходит
     // собственным (глобальным) транспортом и настройка `security.tls.caFile`/`caPem`
-    // к MCP-серверу не применялась бы.
+    // к MCP-серверу не применялась бы. PROP-125: для релея гибрида транспорт
+    // задаётся явно (динамический Bearer) — иначе он тоже идёт через egress.
     const headers = this._config.headers;
     const hasHeaders = !!headers && Object.keys(headers).length > 0;
     const auth = this._config.auth;
+    const baseFetch: typeof fetch = this._fetch ?? egressFetch;
 
     // ADR-105 (Ф3): коннектор с `auth.kind='credential'` авторизуется токеном
     // из слоя доступов — он подставляется в **каждый** запрос транспорта
     // (не в статический `requestInit`), при `401` токен обновляется один раз
     // и запрос повторяется. Значение токена не логируется.
-    let fetchImpl: typeof fetch = egressFetch;
+    let fetchImpl: typeof fetch = baseFetch;
     if (auth?.kind === 'credential') {
       if (!this._credentialSource) {
         throw new Error(
@@ -462,7 +476,7 @@ export class McpClient {
         source: this._credentialSource,
         credentialId: auth.credentialId,
         serverName: this._name,
-        baseFetch: egressFetch,
+        baseFetch,
         onRefresh: ({ serverName, credentialId }) =>
           info('MCP', `Токен доступа "${credentialId}" обновлён для сервера "${serverName}"`),
       });

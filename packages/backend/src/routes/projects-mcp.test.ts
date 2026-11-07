@@ -114,10 +114,12 @@ describe('Project MCP scope API (ADR-071 §2.4)', () => {
     const { app } = await makeApp();
     const res = await app.request(`/api/v2/projects/${id}/mcp`, { headers: auth('owner') });
     expect(res.status).toBe(200);
-    const body = await res.json() as { enabled: string[]; defaultOn: string[]; knownServers: string[] };
+    const body = await res.json() as { enabled: string[]; defaultOn: string[]; knownServers: string[]; sources: Record<string, string> };
     expect(body.enabled).toEqual([]);
     expect(body.defaultOn).toEqual([]);
     expect(body.knownServers).toEqual(['srvA', 'srvB']);
+    // PROP-125: источник сервера — у backend удалённых записей нет → `local`.
+    expect(body.sources).toEqual({ srvA: 'local', srvB: 'local' });
   });
 
   it('GET /:id/mcp editor/viewer → 403, lead/admin → 200', async () => {
@@ -142,9 +144,11 @@ describe('Project MCP scope API (ADR-071 §2.4)', () => {
       body: JSON.stringify({ enabled: ['srvA', 'srvB'], defaultOn: ['srvA'] }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { enabled: string[]; defaultOn: string[] };
+    const body = await res.json() as { enabled: string[]; defaultOn: string[]; sources: Record<string, string> };
     expect(body.enabled).toEqual(['srvA', 'srvB']);
     expect(body.defaultOn).toEqual(['srvA']);
+    // PROP-125: `sources` в ответе PUT — тот же контракт, что и в GET.
+    expect(body.sources).toEqual({ srvA: 'local', srvB: 'local' });
 
     const saved = await store.load(id);
     expect(saved!.mcp).toEqual({ enabled: ['srvA', 'srvB'], defaultOn: ['srvA'] });

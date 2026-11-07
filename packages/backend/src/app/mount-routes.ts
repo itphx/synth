@@ -1411,7 +1411,12 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // по ней клиент сверяет модель сообщений (fail-closed гейт транспорта).
   app.route(
     '/api/v2',
-    createMetaRoutes({ getAttachments: () => deps.attachmentsSettings.getConfig() }),
+    createMetaRoutes({
+      getAttachments: () => deps.attachmentsSettings.getConfig(),
+      // PROP-125: сервер гибрида умеет удалённый MCP (`/api/v2/mcp/remote/*`
+      // и relay) — клиент читает признак из `/api/v2/meta`.
+      getFeatures: () => ({ remoteMcp: true }),
+    }),
   );
 
   // Глобальный SSE-хаб для всех сессий пользователя (ADR-052: `events:watch`).

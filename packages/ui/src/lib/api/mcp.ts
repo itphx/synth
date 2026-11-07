@@ -3,6 +3,7 @@
 import type {
   McpNetworkPolicy,
   McpRegistryEntry,
+  McpRemoteMode,
   McpServerConfig,
   McpServerEffective,
 } from '@itphx/synth-shared'
@@ -45,6 +46,8 @@ export interface McpRegistryAddInput {
   enabled?: boolean
   enabledByDefault?: boolean
   origin?: 'instance' | 'user'
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+  remoteMode?: McpRemoteMode
 }
 
 /** ADR-071 §2.5: тело обновления записи реестра MCP. */
@@ -54,6 +57,8 @@ export interface McpRegistryUpdateInput {
   /** Системный мастер-флаг (hard-gate). */
   enabled?: boolean
   enabledByDefault?: boolean
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+  remoteMode?: McpRemoteMode
 }
 
 export const mcpApi = {

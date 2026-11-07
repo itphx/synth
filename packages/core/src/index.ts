@@ -1776,6 +1776,13 @@ export type {
 } from './server/routes/agents.js';
 export { createMcpRoutes } from './server/routes/mcp.js';
 export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
+// PROP-125 §1: серверный MCP-relay (режим `relay`) — фабрика в core,
+// монтирует её только backend.
+export { createMcpRelayRoutes, createRelayServer, toMcpContent } from './server/routes/mcp-relay.js';
+export type {
+  McpRelayRoutesAuth,
+  McpRelayRoutesOptions,
+} from './server/routes/mcp-relay.js';
 
 // ADR-105 (Ф4): HTTP-контур слоя внешних доступов.
 export { createOAuthRoutes, OAuthBindError } from './server/routes/oauth.js';

@@ -18,6 +18,7 @@ import {
   hasServiceScope,
   findForbiddenMcpSecretHeaders,
   mcpSecretHeaderErrorMessage,
+  MCP_REMOTE_MODES,
   MCP_SECRET_HEADER_ERROR_CODE,
 } from '@itphx/synth-shared';
 import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
@@ -42,6 +43,8 @@ const registryAddSchema = z.object({
   /** Системный мастер-флаг (дефолт `true`). */
   enabled: z.boolean().optional(),
   enabledByDefault: z.boolean().optional(),
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида (дефолт `auto`). */
+  remoteMode: z.enum(MCP_REMOTE_MODES).optional(),
   /** Только admin может явно запросить instance-запись; иначе — user/community. */
   origin: z.enum(['instance', 'user']).optional(),
 });
@@ -52,6 +55,8 @@ const registryUpdateSchema = z.object({
   /** Системный мастер-флаг. */
   enabled: z.boolean().optional(),
   enabledByDefault: z.boolean().optional(),
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+  remoteMode: z.enum(MCP_REMOTE_MODES).optional(),
 });
 
 export interface McpRoutesOptions {
@@ -444,7 +449,7 @@ export function createMcpRegistryRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
     }
 
-    const { name, config, enabled, enabledByDefault, origin } = parsed.data;
+    const { name, config, enabled, enabledByDefault, origin, remoteMode } = parsed.data;
     const admin = kit.isAdmin(c);
 
     // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
@@ -502,6 +507,7 @@ export function createMcpRegistryRoutes(
         author,
         enabled,
         enabledByDefault,
+        remoteMode,
       });
     } catch (err) {
       // ADR-105 (Ф3): запрет plaintext-секрета → 400, а не 500.

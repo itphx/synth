@@ -2843,3 +2843,12 @@ blob-порты и `blob_refs` — ADR-116.
 | Гибрид | ADR-042, ADR-045 |
 | Вложения сообщений (медиа-части, гидратация, лимиты) | ADR-115 |
 | Blob-порты на томе, `blob_refs`, блоб-том | ADR-116 |
+
+## MCP в локальных сессиях гибрида (ADR-125)
+
+- **Источник состава:** `engine/mcp/remote-mcp-source.ts` (`RemoteMcpSource`, `RemoteMcpFallbackClient`, `resolveRemoteMcpMode`) — discovery с TTL 120 с / retry 15 с через backend-контракт `GET /api/v2/mcp/remote/servers`; локальный core **не ходит** к upstream MCP и не видит секретов.
+- **Клиенты:** `engine/mcp/remote-backend-mcp-client.ts` (`RemoteBackendMcpClient`, режим `tools`) и relay-клиент (`McpClient` на `/api/v2/mcp/relay/:name`) — обе ветки одной поверхности `McpClientLike`; неудачный relay **всегда** деградирует в `tools` с причиной.
+- **Mенеджер:** в `engine/mcp/manager.ts` — третий вид runtime-записей (рядом с локальным реестром и серверами исполнителя): `setRemoteMcpSource`/`refreshRemoteServers`/`isRemoteServer`/`getServerError`; записи не персистятся, коллизия имён — в пользу локального сервера.
+- **Релей:** `server/routes/mcp-relay.ts` (`createMcpRelayRoutes`) — фабрика в core, монтирует её **только backend**; stateless + JSON-режим (`GET`/`DELETE` → `405 MCP_RELAY_SESSIONLESS`).
+- **Сид:** `server/app/remote-mcp-seed.ts` (`seedRemoteMcpProjects`, `mergeMcpSeedDefaults`) — авто-сид `project.mcp` существующих проектов, идемпотентно по `project.mcp.remoteSeeded`; публикует `project.updated`.
+- **Проводка:** `server/app/hybrid-remote.ts` — применение состава по признаку `features.remoteMcp` из `GET /api/v2/meta` (старый backend → фича молча выключена), снятие записей при `disconnectRemote`.

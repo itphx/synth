@@ -63,6 +63,7 @@
 | ADR-119 | Сжатие контекста — суммаризация и компактизация как два взаимоисключающих режима | ✅ Реализовано | [adr-119-context-compaction.md](./adr-119-context-compaction.md) |
 | ADR-123 | Связь с сервером — фазовое состояние, гейт входа и офлайн-UX | ✅ Реализовано | [adr-123-connection-state-and-offline-ux.md](./adr-123-connection-state-and-offline-ux.md) |
 | ADR-124 | Удалённый SSH-доступ агента — два режима работы с ключами (`tools` / `agent`) | ✅ Реализовано | [adr-124-remote-ssh-access.md](./adr-124-remote-ssh-access.md) |
+| ADR-125 | Серверные MCP-серверы в локальных сессиях гибрида — relay и tools | ✅ Реализовано | [adr-125-hybrid-remote-mcp.md](./adr-125-hybrid-remote-mcp.md) |
 
 ## Частично
 
@@ -117,7 +118,6 @@
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105-multi-replica-coordination.md](./prop-105-multi-replica-coordination.md) |
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109-agent-system-federation.md](./prop-109-agent-system-federation.md) |
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
-| PROP-125 | Серверные MCP-серверы в локальных сессиях гибрида — режимы relay и tools | 🧩 Предложение | [prop-125-hybrid-remote-mcp.md](./prop-125-hybrid-remote-mcp.md) |
 | PROP-126 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | 🧩 Предложение | [prop-126-input-surface-mentions-snippets.md](./prop-126-input-surface-mentions-snippets.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
@@ -155,6 +155,7 @@
 | PROP-107 | [ADR-105](./adr-105-external-credentials.md) | принято |
 | PROP-108 | [ADR-106](./adr-106-authority-layer.md) | принято |
 | PROP-124 | [ADR-124](./adr-124-remote-ssh-access.md) | принято |
+| PROP-125 | [ADR-125](./adr-125-hybrid-remote-mcp.md) | принято |
 
 ## Legacy
 
@@ -164,5 +165,5 @@
 
 ---
 
-Всего документов: 106 (Решения: 51, Частично: 23, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
-Удалено: 18 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
+Всего документов: 106 (Решения: 52, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
+Удалено: 19 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

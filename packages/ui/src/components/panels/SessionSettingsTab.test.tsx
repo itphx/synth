@@ -347,6 +347,75 @@ describe('SessionSettingsTab — MCP-скоуп сессии (ADR-071 §2.4)', (
   })
 })
 
+// PROP-125: серверный MCP-сервер помечается бейджем, причина сбоя — в деталях.
+describe('SessionSettingsTab — источник и причина сбоя MCP (PROP-125)', () => {
+  it('серверный источник даёт бейдж, локальный — нет', async () => {
+    mocks.getSessionMcpEffective.mockResolvedValue(effective({
+      servers: [
+        { name: 'sys', level: 'system', enabled: true, status: 'connected', origin: 'instance', trust: 'builtin', source: 'server', tools: [] },
+        { name: 'proj', level: 'project', enabled: true, status: 'connected', origin: 'user', trust: 'community', source: 'local', tools: [] },
+      ],
+      enabled: ['sys', 'proj'],
+      disabled: [],
+    }))
+
+    const container = await renderTab()
+
+    const sysRow = container.querySelector('[data-testid="session-mcp-sys"]')!
+    expect(sysRow.textContent).toContain(enDict['sessionSettings.mcp.source.server'])
+    const projRow = container.querySelector('[data-testid="session-mcp-proj"]')!
+    expect(projRow.textContent).not.toContain(enDict['sessionSettings.mcp.source.server'])
+  })
+
+  it('причина сбоя (error) дописывается к статусу в раскрываемых деталях', async () => {
+    mocks.getSessionMcpEffective.mockResolvedValue(effective({
+      servers: [
+        {
+          name: 'sys', level: 'system', enabled: true, status: 'error', origin: 'instance',
+          trust: 'builtin', source: 'server', error: 'backend offline', tools: [],
+        },
+      ],
+      enabled: ['sys'],
+      disabled: [],
+    }))
+
+    const container = await renderTab()
+
+    const row = container.querySelector('[data-testid="session-mcp-sys"]')!
+    const cat = row.querySelector('[data-testid="session-mcp-sys-details-toggle"]') as HTMLButtonElement
+    await act(async () => {
+      cat.click()
+    })
+    const details = container.querySelector('[data-testid="session-mcp-sys-details-content"]')!
+    expect(details.textContent).toContain('error')
+    expect(details.textContent).toContain('backend offline')
+  })
+
+  it('причина сбоя дописывается и к отключённому серверу', async () => {
+    mocks.getSessionMcpEffective.mockResolvedValue(effective({
+      servers: [
+        {
+          name: 'sys', level: 'system', enabled: false, reason: 'system_disabled', status: 'disabled',
+          origin: 'instance', trust: 'builtin', source: 'server', error: 'backend offline', tools: [],
+        },
+      ],
+      enabled: [],
+      disabled: ['sys'],
+    }))
+
+    const container = await renderTab()
+
+    const row = container.querySelector('[data-testid="session-mcp-sys"]')!
+    const cat = row.querySelector('[data-testid="session-mcp-sys-details-toggle"]') as HTMLButtonElement
+    await act(async () => {
+      cat.click()
+    })
+    const details = container.querySelector('[data-testid="session-mcp-sys-details-content"]')!
+    expect(details.textContent).toContain('disabled')
+    expect(details.textContent).toContain('backend offline')
+  })
+})
+
 describe('SessionSettingsTab — тумблер MCP: pending vs disabled', () => {
   it('во время in-flight запроса тумблер не disabled и помечен aria-busy', async () => {
     let resolveUpdate!: (value: unknown) => void

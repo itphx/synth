@@ -528,6 +528,8 @@ export function ProjectTab() {
           <ProjectMcpBlock
             mcp={projectMcp}
             registry={mcpRegistry}
+            sources={projectMcp?.sources ?? {}}
+            remote={project?.origin === 'remote'}
             failed={mcpFailed}
             onToggle={handleToggleProjectMcp}
             isPending={(name) => isPending(`mcp:${name}`)}
@@ -851,12 +853,21 @@ function WorktreesBlock({ projectId, sessionId }: { projectId: string; sessionId
 function ProjectMcpBlock({
   mcp,
   registry,
+  sources,
+  remote,
   failed,
   onToggle,
   isPending,
 }: {
   mcp: ProjectMcpResponse | null
   registry: McpRegistryEntry[]
+  /**
+   * PROP-125: источник каждого известного сервера (`local`/`server`).
+   * Отсутствие карты — источник неизвестен, бейдж «серверный» не рисуется.
+   */
+  sources: Record<string, 'local' | 'server'>
+  /** Проект удалённого мира гибрида — все его серверы живут на сервере. */
+  remote?: boolean
   failed?: boolean
   onToggle: (name: string, kind: 'enabled' | 'defaultOn') => void
   isPending: (name: string) => boolean
@@ -893,6 +904,8 @@ function ProjectMcpBlock({
     <div className="flex flex-col gap-1.5" data-testid="project-mcp-list">
       {mcp.knownServers.map((name) => {
         const isSystem = originByName.get(name) === 'instance'
+        // PROP-125: серверный источник — по карте источников или по удалённому проекту.
+        const isServerSource = sources[name] === 'server' || remote === true
         const enabled = mcp.enabled.includes(name) || mcp.defaultOn.includes(name)
         const defaultOn = mcp.defaultOn.includes(name)
         return (
@@ -901,7 +914,10 @@ function ProjectMcpBlock({
             testId={`project-mcp-${name}`}
             name={name}
             badges={
-              isSystem ? <RowBadge tone="primary">{t('rightPanel.stats.mcpLevel.system')}</RowBadge> : undefined
+              <>
+                {isSystem ? <RowBadge tone="primary">{t('rightPanel.stats.mcpLevel.system')}</RowBadge> : undefined}
+                {isServerSource ? <RowBadge tone="primary">{t('projectTab.mcp.source.server')}</RowBadge> : undefined}
+              </>
             }
             aside={
               <>

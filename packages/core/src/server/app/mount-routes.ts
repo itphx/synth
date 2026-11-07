@@ -48,6 +48,7 @@ import { executeToolDef } from '../../engine/tools/tool-execution.js';
 import { MemoryProviderUnavailableError } from '../routes/memory.js';
 import { resolvePluginServerPolicy } from '../../engine/plugins/hybrid-policy.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
+import { mergeMcpSeedDefaults } from './remote-mcp-seed.js';
 import { mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig } from '../../storage/runtime-settings.js';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { resolveProjectWorkspace } from '../fs-workspace.js';
@@ -236,6 +237,15 @@ export function mountStandaloneRoutes(
     // managed backend: без источника серверов маршрут не регистрируется, и
     // панель «Проект» → «MCP-серверы» получала 404 (в т.ч. для `remote:`).
     getMcpServers: () => Object.keys(mcpManager.getConfig() ?? {}),
+    // PROP-125: источник сервера (`local`/`server`) — бейдж «серверный» в UI
+    // панели «Проект» → «MCP-серверы». Локальный core знает и локальные, и
+    // серверные (гибрид) серверы — состав приходит из менеджера.
+    getMcpServerSources: () => Object.fromEntries(
+      Object.keys(mcpManager.getConfig() ?? {}).map((name): [string, 'local' | 'server'] => [
+        name,
+        mcpManager.isRemoteServer(name) ? 'server' : 'local',
+      ]),
+    ),
     // ADR-075: автосоздание/нормализация workspace локальных проектов.
     getWorkspacesRoot: () => config.workspacesRoot ?? join(dataDir, 'workspaces'),
     getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
@@ -254,10 +264,17 @@ export function mountStandaloneRoutes(
       }
     },
     // ADR-071 §2.4 / ADR-046 §4.5: сид скоупа нового проекта (снимок дефолтов).
+    // PROP-125 §2: к локальным дефолтам добавляются серверные (гибрид) —
+    // backend недоступен → только локальные (серверные добавятся при
+    // следующем успешном коннекте авто-сидом).
     getProjectSeeds: async () => {
-      const defaultMcpServers = Object.entries(config.mcpServers ?? {})
+      const localDefaultMcpServers = Object.entries(config.mcpServers ?? {})
         .filter(([, cfg]) => cfg.enabledByDefault === true)
         .map(([name]) => name);
+      const defaultMcpServers = mergeMcpSeedDefaults(
+        localDefaultMcpServers,
+        mcpManager.getRemoteDefaultServerNames(),
+      );
       return {
         mcp: { enabled: [...defaultMcpServers], defaultOn: [...defaultMcpServers] },
         skills: await resolveProjectSkillSeed(

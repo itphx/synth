@@ -2,7 +2,7 @@
 // in-memory кэши, runtime-подключение к удалённому backend, состояние для
 // `/api/v2/hybrid/status` и watcher фактической живости.
 // Вынесено из `server/app.ts` (ADR-095, шаг 4a) — «вынос по швам», без изменения поведения.
-import type { ProviderConfig, ModelConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, InstanceCapabilities } from '@itphx/synth-shared';
 import type { RemoteUser } from '../../remote/types.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteConnection } from '../../remote/connection.js';
@@ -15,6 +15,12 @@ import { ConnectionWatcher } from '../connection-watcher.js';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { EventBus } from '../../index.js';
 import type { StandaloneConfig } from '../app.js';
+import type { McpManager } from '../../engine/mcp/manager.js';
+import type { RemoteMcpSource } from '../../engine/mcp/remote-mcp-source.js';
+import type { ProjectRepository } from '../../storage/ports/project-repository.js';
+import type { SessionManager } from '../../sessions/manager.js';
+import { warning } from '../../logger.js';
+import { seedRemoteMcpProjects } from './remote-mcp-seed.js';
 
 /** Описание одного remote-зеркала серверного провайдера для инъекции в кэши. */
 export interface RemoteProviderSpec {
@@ -61,6 +67,20 @@ export interface HybridRemoteDeps {
   getProviderCache: () => Map<string, ProviderConfig>;
   /** In-memory кэш моделей (зеркала перекрывают записи). */
   getModelCache: () => Map<string, ModelConfig>;
+  /**
+   * Менеджер MCP-серверов (PROP-125): в нём живут runtime-записи серверных
+   * MCP-серверов гибрида (третий вид записей, рядом с локальным реестром и
+   * серверами исполнителя).
+   */
+  getMcpManager: () => McpManager;
+  /** Порт хранилища проектов (авто-сид `project.mcp`, PROP-125 §2). */
+  getProjectStore: () => ProjectRepository;
+  /** Менеджер сессий (список сессий проекта — для публикации `project.updated`). */
+  getSessionManager: () => SessionManager;
+  /**
+   * Источник состава серверных MCP-серверов (`null` — фича не подключена).
+   */
+  getRemoteMcpSource: () => RemoteMcpSource | null;
 }
 
 /**
@@ -179,9 +199,15 @@ export function createHybridRemoteState(
     // как type:'remote' → локальная сессия резолвит имя через providerLoader и
     // RemoteProvider уходит на сервер с явным provider в теле LLM Proxy.
     // Инъекция строго in-memory: в providers/*.json и models/* не пишется.
-    const [rawProviders, rawModels] = await Promise.all([
+    //
+    // PROP-125 §2: третий запрос — возможности инстанса (`features.remoteMcp`).
+    // Он идёт **параллельно** с провайдерами/моделями: последовательный вызов
+    // добавлял бы к логину отдельный RTT (до 5 с) — признак поддержки фичи
+    // нужен сразу после зеркалирования.
+    const [rawProviders, rawModels, capabilities] = await Promise.all([
       client.listProviders({ timeoutMs: 5000 }).catch(() => []),
       client.listModels({ timeoutMs: 5000 }).catch(() => []),
+      client.getCapabilities().catch(() => null),
     ]);
 
     blockLocalProviders = (config.remoteLlm ?? 'server') !== 'local';
@@ -267,7 +293,72 @@ export function createHybridRemoteState(
     // Подключение успешно применено — статус немедленно «живой» (UI видит
     // connected сразу после логина/авто-подключения; тик watcher'а подтвердит).
     hybridLiveness = true;
+
+    // PROP-125 §2: серверные MCP-серверы гибрида. Фича включается по
+    // признаку backend'а (`features.remoteMcp`) — у старого сервера её нет,
+    // тогда источник молча пуст (fail-closed). Ошибки не блокируют подключение:
+    // серверные MCP — аддитивная возможность, а не условие входа.
+    await applyRemoteMcpServers(capabilities);
+
     return user;
+  }
+
+  /**
+   * PROP-125 §2: применить состав серверных MCP-серверов после подключения.
+   *
+   * Порядок: признак поддержки (`features.remoteMcp`) → обновление состава
+   * (`McpManager.refreshRemoteServers`) → авто-сид существующих проектов.
+   * Любая ошибка — предупреждение в лог, подключение не падает.
+   *
+   * `capabilities` — уже полученный ответ `GET /api/v2/meta` (параллельно с
+   * провайдерами/моделями); `null` — запрос не удался → фича выключена.
+   */
+  async function applyRemoteMcpServers(
+    capabilities: InstanceCapabilities | null,
+  ): Promise<void> {
+    const source = deps.getRemoteMcpSource();
+    if (!source) return;
+    const manager = deps.getMcpManager();
+    try {
+      source.setSupported(capabilities?.features?.remoteMcp === true);
+      await manager.refreshRemoteServers();
+      if (source.isSupported) await seedRemoteMcpProjectsFromRemote();
+    } catch (err) {
+      warning(
+        'MCP',
+        `Не удалось применить серверные MCP-серверы: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * PROP-125 §2 (решение 7): авто-сид серверных дефолтов в `project.mcp`
+   * существующих локальных проектов (идемпотентно, маркер `remoteSeeded`).
+   *
+   * Изменение публикует `project.updated` в каналы сессий проекта
+   * (инвариант 27) — иначе панель проекта «залипает» после коннекта.
+   */
+  async function seedRemoteMcpProjectsFromRemote(): Promise<number> {
+    const manager = deps.getMcpManager();
+    const defaults = manager.getRemoteDefaultServerNames();
+    if (defaults.length === 0) return 0;
+    const projects = await deps.getProjectStore().list();
+    return await seedRemoteMcpProjects({
+      projects,
+      defaults,
+      // Известные серверы инстанса (локальные + серверные — после
+      // `refreshRemoteServers` они все в `_config`): для legacy-проектов без
+      // `project.mcp` это стартовая база `enabled` — иначе появление
+      // `enabled` сделало бы локальные серверы `project_disabled` (ADR-071).
+      knownServers: Object.keys(manager.getConfig() ?? {}),
+      mutate: (id, mutator) => deps.getProjectStore().mutate(id, mutator),
+      onUpdated: async (project) => {
+        const sessions = await deps.getSessionManager().listSessions({ projectId: project.id });
+        for (const s of sessions) {
+          deps.getEventBus().publish(s.id, 'project.updated', { project_id: project.id });
+        }
+      },
+    });
   }
 
   // ── Отключение: полный сброс runtime-состояния ──
@@ -276,6 +367,18 @@ export function createHybridRemoteState(
     activeBridge?.stop();
     activeBridge = undefined;
     restoreRemoteMirrors();
+    // PROP-125 §2: серверные MCP-снимаются сразу — состав очищается, а
+    // runtime-записи менеджера удаляются. Отключение не должно падать из-за
+    // ошибки обновления состава.
+    const source = deps.getRemoteMcpSource();
+    if (source) {
+      source.setSupported(false);
+      try {
+        await deps.getMcpManager().refreshRemoteServers();
+      } catch {
+        // глушим: отключение не должно падать
+      }
+    }
     connection.disconnect();
   }
 

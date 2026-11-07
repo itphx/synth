@@ -1,9 +1,12 @@
 import { useState } from 'react'
 
-import type { McpRegistryEntry } from '@itphx/synth-shared'
+import type { McpRegistryEntry, McpRemoteMode } from '@itphx/synth-shared'
 import type { McpServerConfig } from '@/lib/api/synthApi'
 
 export const EMPTY_MCP_CONFIG: McpServerConfig = { type: 'http' }
+
+/** PROP-125: режим доставки по умолчанию — `auto` (relay для http/sse, tools для stdio). */
+export const DEFAULT_MCP_REMOTE_MODE: McpRemoteMode = 'auto'
 
 export interface McpRegistryEditorInput {
   name: string
@@ -12,6 +15,8 @@ export interface McpRegistryEditorInput {
   enabled?: boolean
   /** Включён по умолчанию для новых проектов (сид). */
   enabledByDefault?: boolean
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+  remoteMode?: McpRemoteMode
 }
 
 export interface UseMcpRegistryEditorOptions {
@@ -45,6 +50,8 @@ export function useMcpRegistryEditor({
   const [formConfig, setFormConfig] = useState<McpServerConfig>(EMPTY_MCP_CONFIG)
   const [formEnabled, setFormEnabled] = useState(true)
   const [formDefault, setFormDefault] = useState(false)
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+  const [formRemoteMode, setFormRemoteMode] = useState<McpRemoteMode>(DEFAULT_MCP_REMOTE_MODE)
   const [savingForm, setSavingForm] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<McpRegistryEntry | null>(null)
 
@@ -58,6 +65,7 @@ export function useMcpRegistryEditor({
     setFormConfig(EMPTY_MCP_CONFIG)
     setFormEnabled(true)
     setFormDefault(false)
+    setFormRemoteMode(DEFAULT_MCP_REMOTE_MODE)
     onOpen?.()
   }
 
@@ -67,6 +75,8 @@ export function useMcpRegistryEditor({
     setFormConfig({ ...entry.config })
     setFormEnabled(entry.enabled !== false)
     setFormDefault(entry.enabledByDefault)
+    // PROP-125: у записей, созданных до PROP-125, поля нет — дефолт `auto`.
+    setFormRemoteMode(entry.remoteMode ?? DEFAULT_MCP_REMOTE_MODE)
     onOpen?.()
   }
 
@@ -84,6 +94,7 @@ export function useMcpRegistryEditor({
         config: formConfig,
         enabled: formEnabled,
         enabledByDefault: formDefault,
+        remoteMode: formRemoteMode,
       }
       if (editing === '__new__') {
         await addEntry(input)
@@ -118,6 +129,8 @@ export function useMcpRegistryEditor({
     setFormEnabled,
     formDefault,
     setFormDefault,
+    formRemoteMode,
+    setFormRemoteMode,
     savingForm,
     deleteTarget,
     setDeleteTarget,

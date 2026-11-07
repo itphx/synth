@@ -214,6 +214,61 @@ describe('ProjectTab — проектный MCP-скоуп (ADR-071 §2.4)', () 
   })
 })
 
+// PROP-125: серверные MCP-серверы помечаются бейджем «серверный».
+describe('ProjectTab — источник MCP-сервера (PROP-125)', () => {
+  it('серверный источник из карты sources рисует бейдж, локальный — нет', async () => {
+    mocks.getProjectMcp.mockResolvedValue({
+      enabled: ['srvB'],
+      defaultOn: [],
+      knownServers: ['sys', 'srvB'],
+      sources: { srvB: 'server', sys: 'local' },
+    })
+
+    const container = await renderTab()
+
+    const srvRow = container.querySelector('[data-testid="project-mcp-srvB"]')!
+    expect(srvRow.textContent).toContain(enDict['projectTab.mcp.source.server'])
+
+    const sysRow = container.querySelector('[data-testid="project-mcp-sys"]')!
+    expect(sysRow.textContent).not.toContain(enDict['projectTab.mcp.source.server'])
+    // Бейдж «системный» на месте — источник не сломал существующую метку.
+    expect(sysRow.textContent).toContain('system')
+  })
+
+  it('у проекта удалённого мира все серверы серверные', async () => {
+    const remoteProject = { ...PROJECT, id: 'remote:p1', origin: 'remote' }
+    mocks.getProject.mockResolvedValue(remoteProject)
+    mocks.getProjectMcp.mockResolvedValue({
+      enabled: [],
+      defaultOn: [],
+      knownServers: ['sys'],
+      sources: {},
+    })
+    useSessionsStore.setState({
+      sessions: [{ id: 's1', name: 'S', project_id: 'remote:p1', settings: { model: 'm' } }],
+    } as never)
+    useProjectsStore.setState({ projects: [remoteProject] as never })
+
+    const container = await renderTab()
+
+    const sysRow = container.querySelector('[data-testid="project-mcp-sys"]')!
+    expect(sysRow.textContent).toContain(enDict['projectTab.mcp.source.server'])
+  })
+
+  it('без карты источников бейдж «серверный» не рисуется', async () => {
+    mocks.getProjectMcp.mockResolvedValue({
+      enabled: [],
+      defaultOn: [],
+      knownServers: ['sys', 'srvB'],
+    })
+
+    const container = await renderTab()
+
+    expect(container.querySelector('[data-testid="project-mcp-srvB"]')!.textContent)
+      .not.toContain(enDict['projectTab.mcp.source.server'])
+  })
+})
+
 /** Установить значение в React-инпут (native setter + input event). */
 const setInputValue = async (el: HTMLInputElement, value: string) => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!

@@ -3802,6 +3802,9 @@ export class ChatOrchestrator {
         };
       });
       const chars = toolDetails.reduce((sum, t) => sum + t.chars, 0);
+      // PROP-125: причина недоступности/деградации сервера (без секретов) —
+      // чтобы `GET /sessions/:id/mcp` и промпт показывали не «просто error».
+      const error = manager.getServerError?.(d.name);
       return {
         name: d.name,
         level: d.level,
@@ -3812,6 +3815,9 @@ export class ChatOrchestrator {
         origin: d.origin,
         trust: manager.getServerTrust(d.name),
         author: manager.getServerAuthor(d.name),
+        // PROP-125: источник сервера — локальный инстанс или сервер гибрида.
+        source: manager.isRemoteServer?.(d.name) === true ? 'server' : 'local',
+        ...(error ? { error } : {}),
         tools: rawTools.map((tool) => tool.name),
         chars,
         estTokens: estimateTokens(chars, tokenRatio),
@@ -3839,6 +3845,9 @@ export class ChatOrchestrator {
       const description = manager.getServerDescription(name);
       const instructions = manager.getServerInstructions(name);
       const tools = manager.getServerTools(name) ?? [];
+      // PROP-125: причина недоступности/деградации сервера (без секретов) —
+      // попадает в блок `mcp.status` промпта.
+      const error = manager.getServerError?.(name);
 
       return {
         name,
@@ -3851,6 +3860,7 @@ export class ChatOrchestrator {
         })),
         status,
         ...(decision.reason ? { disabledReason: decision.reason } : {}),
+        ...(error ? { error } : {}),
       };
     });
   }

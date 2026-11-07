@@ -50,6 +50,26 @@ export type {
   ExecutorMcpManagerLike,
   ExecutorMcpDescriptorLike,
 } from './executor-mcp-source.js';
+// PROP-125: серверные MCP-серверы гибрида в режиме `tools`.
+export {
+  RemoteBackendMcpClient,
+  REMOTE_MCP_CONNECT_TIMEOUT_MS,
+  REMOTE_MCP_TOOL_TIMEOUT_MS,
+} from './remote-backend-mcp-client.js';
+export type { RemoteMcpBackendApi } from './remote-backend-mcp-client.js';
+export {
+  RemoteMcpSource,
+  RemoteMcpFallbackClient,
+  resolveRemoteMcpMode,
+  REMOTE_MCP_SOURCE_TTL_MS,
+  REMOTE_MCP_SOURCE_RETRY_MS,
+  REMOTE_MCP_OFFLINE_REASON,
+} from './remote-mcp-source.js';
+export type {
+  RemoteMcpServerSnapshot,
+  RemoteMcpSourceOptions,
+  RemoteMcpFallbackHooks,
+} from './remote-mcp-source.js';
 export { resolveMcpScope, resolveMcpProjectScope } from './scope.js';
 export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './scope.js';
 export { fullMcpAvailability, buildMcpServerSettings, normalizeMcpServerSettings } from './settings.js';

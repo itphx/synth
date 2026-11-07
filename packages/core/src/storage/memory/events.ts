@@ -514,6 +514,8 @@ export class MemoryMcpRegistryRepository implements McpRegistryRepository {
       trust: input.trust ?? (input.origin === 'instance' ? 'builtin' : 'community'),
       enabled: input.enabled ?? true,
       enabledByDefault: input.enabledByDefault ?? input.config.enabledByDefault ?? false,
+      // PROP-125: режим доставки в локальные сессии гибрида (дефолт `auto`).
+      remoteMode: input.remoteMode ?? 'auto',
       createdAt: now,
       updatedAt: now,
     };
@@ -541,6 +543,7 @@ export class MemoryMcpRegistryRepository implements McpRegistryRepository {
       trust: patch.trust ?? current.trust,
       enabled: patch.enabled ?? current.enabled,
       enabledByDefault: patch.enabledByDefault ?? current.enabledByDefault,
+      remoteMode: patch.remoteMode ?? current.remoteMode ?? 'auto',
       schemaVersion: MCP_REGISTRY_SCHEMA_VERSION,
       updatedAt: nowISO(),
     };

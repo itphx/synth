@@ -102,6 +102,15 @@ export interface ProjectRoutesOptions {
    */
   getMcpServers?: () => string[];
   /**
+   * PROP-125: источник каждого известного MCP-сервера (`local`/`server`) — для
+   * бейджа «серверный» в UI (панель «Проект» → «MCP-серверы»).
+   *
+   * Не задан — `sources` пустой (поле в ответе остаётся, UI бейдж не рисует).
+   * Remote-ветка (`remote:`-проект) этот источник **не** использует: сервер
+   * отдаёт состав и источники своих серверов сам.
+   */
+  getMcpServerSources?: () => Record<string, 'local' | 'server'>;
+  /**
    * ADR-071 §2.4 / ADR-046 §4.5: сид скоупа нового проекта (снимок системных
    * дефолтов). Не задан — проект создаётся без `mcp`/`skills` (legacy-гейт открыт).
    */
@@ -375,6 +384,10 @@ export function createProjectRoutes(
   // ADR-071 §2.4: проектный MCP-скоуп (только при заданном источнике серверов).
   if (opts.getMcpServers) {
     const knownMcpServers = (): string[] => opts.getMcpServers?.() ?? [];
+    // PROP-125: источник сервера (`local`/`server`) — бейдж «серверный» в UI.
+    // Без опции — пустая карта (контракт ответа единый).
+    const sources: () => Record<string, 'local' | 'server'> =
+      opts.getMcpServerSources ?? (() => ({}));
 
     app.get('/:id/mcp', auth.requireAuth, async (c) => {
       const mcpId = c.req.param('id');
@@ -402,6 +415,8 @@ export function createProjectRoutes(
         enabled: project.mcp?.enabled ?? [],
         defaultOn: project.mcp?.defaultOn ?? [],
         knownServers: knownMcpServers(),
+        // PROP-125: источник каждого сервера (`local`/`server`).
+        sources: sources(),
       });
     });
 
@@ -445,6 +460,10 @@ export function createProjectRoutes(
       project.mcp = {
         enabled: parsed.data.enabled ?? current.enabled,
         defaultOn: parsed.data.defaultOn ?? current.defaultOn,
+        // PROP-125 §2: маркер авто-сида (`remoteSeeded`) сохраняем — иначе
+        // правка панели стирала бы его и серверный дефолт возвращался в
+        // проект при следующем коннекте, хотя пользователь его выключил.
+        ...(current.remoteSeeded ? { remoteSeeded: current.remoteSeeded } : {}),
       };
       project.updatedAt = new Date().toISOString();
       await store.save(project);
@@ -453,6 +472,8 @@ export function createProjectRoutes(
         enabled: project.mcp.enabled,
         defaultOn: project.mcp.defaultOn,
         knownServers: knownMcpServers(),
+        // PROP-125: источник каждого сервера (`local`/`server`).
+        sources: sources(),
       });
     });
   }

@@ -93,6 +93,17 @@ export function createProjectRoutes(
       },
       autoProvisionWorkspace: true,
       getMcpServers: () => Object.keys(mcpManager?.getConfig() ?? {}),
+      // PROP-125: источник сервера (`local`/`server`) — бейдж «серверный» в UI.
+      // У backend удалённых записей нет (сервер отдаёт состав сам) → `local`,
+      // но контракт ответа единый с core.
+      getMcpServerSources: () => Object.fromEntries(
+        Object.keys(mcpManager?.getConfig() ?? {}).map((name): [string, 'local' | 'server'] => [
+          name,
+          (typeof mcpManager?.isRemoteServer === 'function' && mcpManager.isRemoteServer(name))
+            ? 'server'
+            : 'local',
+        ]),
+      ),
       getProjectSeeds: async () => {
         const defaultMcpServers = mcpRegistryStore
           ? await mcpRegistryStore.toDefaultServers()

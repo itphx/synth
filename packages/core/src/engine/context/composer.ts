@@ -48,6 +48,22 @@ const PROVIDER_BLOCK_HEAD_RATIO = 0.7;
 const PROVIDER_BLOCK_TAIL_RATIO = 0.2;
 
 /**
+ * PROP-125: предел длины причины ошибки MCP-сервера в блоке `mcp.status`
+ * (символов, включая маркер обрезки).
+ */
+const MCP_ERROR_REASON_MAX_CHARS = 200;
+
+/**
+ * PROP-125: причина ошибки MCP-сервера для блока `mcp.status` — однострочная
+ * (переводы строк → пробел) и ограниченная по длине.
+ */
+function formatMcpErrorReason(reason: string): string {
+  const flat = reason.replace(/\r?\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (flat.length <= MCP_ERROR_REASON_MAX_CHARS) return flat;
+  return `${flat.slice(0, MCP_ERROR_REASON_MAX_CHARS - 1)}…`;
+}
+
+/**
  * ADR-107: блок принадлежит плагину памяти.
  *
  * Признак — provenance регистрации (`plugin:<имя>`) или ключ провайдера
@@ -167,6 +183,11 @@ export interface ComposerMcpServer {
    * обратной совместимости с прежним значением.
    */
   disabledReason?: McpDisabledReason | 'session';
+  /**
+   * PROP-125: причина недоступности/деградации сервера (без секретов) —
+   * выводится в блоке `mcp.status` для статуса `error`.
+   */
+  error?: string;
 }
 
 /**
@@ -1005,6 +1026,10 @@ export class SystemPromptComposer {
       if (server.status === 'disabled') {
         const reason = reasonText(server.disabledReason);
         if (reason) parts.push(reason);
+      }
+      // PROP-125: причина недоступности/деградации сервера (`error`).
+      if (server.status === 'error' && server.error) {
+        parts.push(`${en ? 'reason' : 'причина'}=${formatMcpErrorReason(server.error)}`);
       }
       if (server.level) {
         parts.push(`${en ? 'level' : 'уровень'}=${server.level}`);

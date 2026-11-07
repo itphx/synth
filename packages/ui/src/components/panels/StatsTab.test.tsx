@@ -388,6 +388,71 @@ describe('StatsTab — таблицы инструментов и MCP (ADR-071 �
     expect(toolRow.textContent).toContain('~25')
   })
 
+  // PROP-125: колонка «Источник» — локальный инстанс или сервер гибрида.
+  it('колонка «Источник» и значения local/server', async () => {
+    mocks.getSessionMcpEffective.mockResolvedValue({
+      servers: [
+        {
+          name: 'sys', level: 'system', enabled: true, connected: true, status: 'connected',
+          origin: 'instance', trust: 'builtin', author: null, tools: ['echo'], source: 'local',
+        },
+        {
+          name: 'remote', level: 'system', enabled: true, connected: true, status: 'connected',
+          origin: 'instance', trust: 'builtin', author: null, tools: [], source: 'server',
+        },
+      ],
+      enabled: ['sys', 'remote'],
+      disabled: [],
+      mcpServers: [],
+      mcpDisabledServers: [],
+    })
+
+    const container = await renderStats()
+    const section = await expandSection(container, 'MCP')
+
+    // Заголовок колонки есть.
+    const headers = [...section.querySelectorAll('th')].map((th) => th.textContent?.trim())
+    expect(headers).toContain(enDict['rightPanel.stats.colSource'])
+    // Колонка «Источник» — сразу после «Уровень».
+    expect(headers.indexOf(enDict['rightPanel.stats.colSource']))
+      .toBe(headers.indexOf(enDict['rightPanel.stats.colLevel']) + 1)
+
+    const sysRow = container.querySelector('[data-testid="stats-mcp-sys"]')!
+    expect(sysRow.textContent).toContain(enDict['rightPanel.stats.mcpSource.local'])
+    const remoteRow = container.querySelector('[data-testid="stats-mcp-remote"]')!
+    expect(remoteRow.textContent).toContain(enDict['rightPanel.stats.mcpSource.server'])
+  })
+
+  // Строка тула повторяет колонки таблицы: 1–6 объединены, дальше токены и автор.
+  it('строка тула по колонкам совпадает с таблицей (colSpan)', async () => {
+    mocks.getSessionMcpEffective.mockResolvedValue({
+      servers: [
+        {
+          name: 'sys', level: 'system', enabled: true, connected: true, status: 'connected',
+          origin: 'instance', trust: 'builtin', author: null, tools: ['echo'],
+          chars: 100, estTokens: 25, ratio: 4,
+          toolDetails: [{ name: 'echo', chars: 100, estTokens: 25, ratio: 4 }],
+        },
+      ],
+      enabled: ['sys'],
+      disabled: [],
+      mcpServers: [],
+      mcpDisabledServers: [],
+    })
+
+    const container = await renderStats()
+    const section = await expandSection(container, 'MCP')
+
+    const columnCount = section.querySelectorAll('thead th').length
+    expect(columnCount).toBe(8)
+
+    const toolRow = container.querySelector('[data-testid="stats-mcp-tool-sys-echo"]')!
+    const cells = toolRow.querySelectorAll('td')
+    const span = Number(cells[0].getAttribute('colSpan') ?? '1')
+    // 6 объединённых + токены + автор = 8 колонок.
+    expect(span + cells.length - 1).toBe(columnCount)
+  })
+
   it('пустое состояние «MCP»', async () => {
     const container = await renderStats()
     const section = findSection(container, 'MCP')!

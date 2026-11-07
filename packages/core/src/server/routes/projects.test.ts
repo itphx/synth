@@ -390,7 +390,11 @@ describe('Project API Routes (opts: RBAC / stats / MCP / managed)', () => {
 
     const get = await app.request(`/api/v2/projects/${id}/mcp`, { headers: header('owner') });
     expect(get.status).toBe(200);
-    expect(await get.json()).toEqual({ enabled: [], defaultOn: [], knownServers: ['srvA', 'srvB'] });
+    // PROP-125: `sources` — источник каждого сервера (`local`/`server`); без
+    // опции `getMcpServerSources` карта пуста.
+    expect(await get.json()).toEqual({
+      enabled: [], defaultOn: [], knownServers: ['srvA', 'srvB'], sources: {},
+    });
 
     const put = await app.request(`/api/v2/projects/${id}/mcp`, {
       method: 'PUT', headers: header('owner'),
@@ -411,6 +415,87 @@ describe('Project API Routes (opts: RBAC / stats / MCP / managed)', () => {
     const app = makeApp({});
     const id = await seedOwner('NoMcp');
     expect((await app.request(`/api/v2/projects/${id}/mcp`)).status).toBe(404);
+  });
+
+  it('PROP-125: getMcpServerSources → sources в GET/PUT /:id/mcp', async () => {
+    const app = makeApp({
+      ...ownerRbac(),
+      getMcpServers: () => ['srvA', 'srvB'],
+      getMcpServerSources: () => ({ srvA: 'local', srvB: 'server' }),
+    });
+    const id = await seedOwner('Sources');
+
+    const get = await app.request(`/api/v2/projects/${id}/mcp`, { headers: header('owner') });
+    expect(get.status).toBe(200);
+    expect(await get.json()).toEqual({
+      enabled: [],
+      defaultOn: [],
+      knownServers: ['srvA', 'srvB'],
+      sources: { srvA: 'local', srvB: 'server' },
+    });
+
+    const put = await app.request(`/api/v2/projects/${id}/mcp`, {
+      method: 'PUT', headers: header('owner'),
+      body: JSON.stringify({ enabled: ['srvB'] }),
+    });
+    expect(put.status).toBe(200);
+    expect((await put.json() as { sources: Record<string, string> }).sources)
+      .toEqual({ srvA: 'local', srvB: 'server' });
+  });
+
+  it('PROP-125: без getMcpServerSources → sources пустой (контракт ответа единый)', async () => {
+    const app = makeApp({ ...ownerRbac(), getMcpServers: () => ['srvA'] });
+    const id = await seedOwner('NoSources');
+
+    const get = await app.request(`/api/v2/projects/${id}/mcp`, { headers: header('owner') });
+    expect(get.status).toBe(200);
+    expect((await get.json() as { sources: Record<string, string> }).sources).toEqual({});
+
+    const put = await app.request(`/api/v2/projects/${id}/mcp`, {
+      method: 'PUT', headers: header('owner'),
+      body: JSON.stringify({ enabled: ['srvA'] }),
+    });
+    expect(put.status).toBe(200);
+    expect((await put.json() as { sources: Record<string, string> }).sources).toEqual({});
+  });
+
+  it('PROP-125: remote-ветка отдаёт ответ сервера как есть (sources локально не добавляются)', async () => {
+    const remoteClient = {
+      getProjectMcp: vi.fn().mockResolvedValue({
+        enabled: ['srvR'], defaultOn: ['srvR'], knownServers: ['srvR'],
+      }),
+      updateProjectMcp: vi.fn().mockResolvedValue({
+        enabled: [], defaultOn: [], knownServers: ['srvR'],
+      }),
+    };
+    const app = new Hono();
+    app.route('/api/v2/projects', createProjectRoutes(
+      createMockAuth(),
+      store,
+      () => remoteClient as never,
+      {
+        ...ownerRbac(),
+        getMcpServers: () => ['srvA'],
+        getMcpServerSources: () => ({ srvA: 'local' }),
+      },
+    ));
+
+    const get = await app.request('/api/v2/projects/remote:abc/mcp', { headers: header('owner') });
+    expect(get.status).toBe(200);
+    expect(await get.json()).toEqual({
+      enabled: ['srvR'], defaultOn: ['srvR'], knownServers: ['srvR'],
+    });
+    expect(remoteClient.getProjectMcp).toHaveBeenCalledWith('abc');
+
+    const put = await app.request('/api/v2/projects/remote:abc/mcp', {
+      method: 'PUT', headers: header('owner'),
+      body: JSON.stringify({ enabled: ['srvR'] }),
+    });
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({
+      enabled: [], defaultOn: [], knownServers: ['srvR'],
+    });
+    expect(remoteClient.updateProjectMcp).toHaveBeenCalledWith('abc', { enabled: ['srvR'] });
   });
 
   it('messages: переопределённые тексты ошибок используются', async () => {

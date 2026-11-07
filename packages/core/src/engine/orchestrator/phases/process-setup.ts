@@ -457,6 +457,9 @@ export async function runProcessSetup(
   // раскатки исполнителя уходит без браузерных инструментов (тулы появляются
   // только в следующем ходе, по TTL источника).
   await refreshExecutorServers(deps);
+  // PROP-125: состав серверных MCP-серверов гибрида — тоже до расчёта скоупа
+  // (иначе сервер, найденный в этом ходе, не попадёт в список подключаемых).
+  await refreshRemoteMcpServers(deps);
   const mcpDecisions = deps.resolveMcpDecisions(session, projectForState);
   const activeMcpServers = mcpDecisions.filter((d) => d.enabled).map((d) => d.name);
   const activeMcpSet = new Set(activeMcpServers);
@@ -812,6 +815,31 @@ async function refreshExecutorServers(deps: ProcessSetupDeps): Promise<void> {
     warning(
       'MCP',
       `Не удалось обновить состав серверов исполнителя: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Обновить состав серверных MCP-серверов гибрида (PROP-125) — до расчёта
+ * скоупа сессии.
+ *
+ * Источник ленивый (TTL 120 с, короткая пауза 15 с после неудачи), поэтому
+ * обновление внутри хода — обычное дело; без источника (standalone/тесты)
+ * вызов ничего не делает (поведение прежнее).
+ *
+ * Ошибка не ломает ход: недоступный сервер гибрида не должен ронять сессию —
+ * сервер остаётся в составе с причиной (`status: 'error'`).
+ */
+async function refreshRemoteMcpServers(deps: ProcessSetupDeps): Promise<void> {
+  const manager = deps.mcpManager;
+  // Менеджер без метода (тестовые моки) — обновлять нечего.
+  if (!manager?.refreshRemoteServers) return;
+  try {
+    await manager.refreshRemoteServers(deps.toolRegistry ?? undefined);
+  } catch (err) {
+    warning(
+      'MCP',
+      `Не удалось обновить состав серверных MCP-серверов: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }

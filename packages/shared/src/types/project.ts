@@ -43,6 +43,12 @@ export interface ProjectLogEntry {
 export interface ProjectMcpSettings {
   enabled: string[];
   defaultOn: string[];
+  /**
+   * PROP-125: имена серверных MCP-дефолтов, уже применённых к проекту при
+   * подключении гибрида (идемпотентный авто-сид). Выключенный пользователем
+   * сервер повторно не добавляется.
+   */
+  remoteSeeded?: string[];
 }
 
 /**

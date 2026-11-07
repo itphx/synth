@@ -512,3 +512,10 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - Тесты колокейт: `src/**/*.test.ts` (Vitest), сборка — `tsc`.
 - После правки публичной поверхности — `pnpm --filter @itphx/synth-shared build`,
   иначе typecheck зависимых пакетов не увидит типы (см. корневой «GitVerse CI»).
+
+## MCP-контракт гибрида (ADR-125)
+
+- `types/mcp.ts`: `McpRemoteMode` (`auto|relay|tools`) и поле `remoteMode` в записи реестра; `McpServerEffective.source` (`'local'|'server'`) и `error` (причина недоступности, без секретов); типы `RemoteMcpServerInfo`/`RemoteMcpToolInfo`/`RemoteMcpToolsResponse`/`RemoteMcpCallRequest`/`RemoteMcpCallResult`/`McpRemoteAttachment` (шейп результата — как у протокола исполнителя 5).
+- `types/project.ts`: `ProjectMcpSettings.remoteSeeded` — маркер идемпотентного авто-сида серверных MCP-дефолтов.
+- `types/service-keys.ts`: семейство скоупов `mcp` и скоуп `mcp:invoke` (ADR-052).
+- `types/message-stream.ts`: `InstanceCapabilities.features.remoteMcp` — аддитивный признак поддержки удалённого MCP в `GET /api/v2/meta`.

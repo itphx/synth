@@ -467,6 +467,113 @@ describe('RemoteBackendClient', () => {
   });
 });
 
+/**
+ * PROP-125: контракт серверных MCP-серверов в режиме `tools` +
+ * возможности инстанса (`features.remoteMcp`).
+ */
+describe('RemoteBackendClient × PROP-125 (серверные MCP-серверы)', () => {
+  it('getRemoteMcpServers → GET /api/v2/mcp/remote/servers с Bearer', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse([
+        {
+          name: 'playwright-mcp',
+          type: 'stdio',
+          origin: 'instance',
+          trust: 'trusted',
+          enabled: true,
+          enabledByDefault: true,
+          remoteMode: 'tools',
+          status: 'up',
+          toolCount: 25,
+        },
+      ]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const servers = await makeClient().getRemoteMcpServers();
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]).toMatchObject({ name: 'playwright-mcp', remoteMode: 'tools' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/mcp/remote/servers',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      }),
+    );
+  });
+
+  it('getRemoteMcpTools → GET /api/v2/mcp/remote/tools?server=… (имя экранируется)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ server: 'my server', instructions: 'Правила', tools: [] }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await makeClient().getRemoteMcpTools('my server');
+
+    expect(result.instructions).toBe('Правила');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/mcp/remote/tools?server=my%20server',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      }),
+    );
+  });
+
+  it('callRemoteMcp → POST /api/v2/mcp/remote/call с телом и Bearer', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ content: 'ok', isError: false }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await makeClient().callRemoteMcp({
+      server: 'playwright-mcp',
+      tool: 'browser_navigate',
+      arguments: { url: 'https://example.com' },
+    });
+
+    expect(result).toEqual({ content: 'ok', isError: false });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/mcp/remote/call',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/json',
+        }),
+        body: JSON.stringify({
+          server: 'playwright-mcp',
+          tool: 'browser_navigate',
+          arguments: { url: 'https://example.com' },
+        }),
+      }),
+    );
+  });
+
+  it('getCapabilities → GET /api/v2/meta (признак features.remoteMcp)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        messageModel: 2,
+        eventSeq: true,
+        replay: true,
+        version: '1.2.3',
+        features: { remoteMcp: true },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const capabilities = await makeClient().getCapabilities();
+
+    expect(capabilities.features?.remoteMcp).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/meta',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      }),
+    );
+  });
+});
+
 describe('RemoteBackendClient × ADR-094 (метрики запросов)', () => {
   it('onRequest в finally: method/path/status/durationMs, op — нормализованный', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([{ id: 's1' }])));

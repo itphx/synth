@@ -116,7 +116,6 @@
 | [PROP-105](./arch_decisions/prop-105-multi-replica-coordination.md) | Координация реплик control plane | 2026-11-14 | claim-семантика очереди, общее состояние; основа оценки HA |
 | [PROP-109](./arch_decisions/prop-109-agent-system-federation.md) | Федерация агентных систем | 2027-01-31 | `AgentSystem` как peer; после 0.14 |
 | [PROP-110](./arch_decisions/prop-110-portal-platform.md) | Портал-платформа | 2026-12-31 | UI-kit и оболочка; первый потребитель — `synth-media` |
-| [PROP-125](./arch_decisions/prop-125-hybrid-remote-mcp.md) | Серверные MCP-серверы в локальных сессиях гибрида: режимы relay / tools | 2026-12-06 | паритет с удалёнными сессиями; секреты/сеть — на сервере; оба режима, выбор в записи реестра; существующие проекты — авто-сид серверных дефолтов |
 | [PROP-126](./arch_decisions/prop-126-input-surface-mentions-snippets.md) | Поверхность ввода: `/`, `@`, `$`, `#`, `!` | 2026-12-06 | `/compact` — остро; `@` — файлы/агенты/пользователи (`@user` — доставка без хода); `$` — скиллы; `#` — сниппеты (instance/project/user); goal — в PROP-057 |
 
 **Триаж до 2026-11-14:** принять / icebox / отклонить / перенести (перенос — новой датой, а не молчанием).

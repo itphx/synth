@@ -39,6 +39,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import {
   type McpRegistryEntry,
+  type McpRemoteMode,
   type McpServerConfig,
   type MaintenanceAuditEntry,
   type ServiceApiKey,
@@ -1082,6 +1083,8 @@ interface McpRegistryRow extends Row {
   trust: unknown;
   enabled: boolean;
   enabled_by_default: boolean;
+  /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+  remote_mode: string;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -1097,6 +1100,8 @@ function mcpRowToEntry(row: McpRegistryRow): McpRegistryEntry {
     trust: (row.trust as McpRegistryTrust) ?? 'community',
     enabled: row.enabled !== false,
     enabledByDefault: row.enabled_by_default === true,
+    // PROP-125: режим доставки; колонка отсутствует/пуста — `auto`.
+    remoteMode: (row.remote_mode as McpRemoteMode | undefined) ?? 'auto',
     createdAt: toISO(row.created_at),
     updatedAt: toISO(row.updated_at),
   };
@@ -1135,6 +1140,8 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
     trust?: McpRegistryTrust;
     enabled?: boolean;
     enabledByDefault?: boolean;
+    /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+    remoteMode?: McpRemoteMode;
     id?: string;
   }): Promise<McpRegistryEntry> {
     const duplicate = await this._db().query<Row>(
@@ -1155,6 +1162,8 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
       trust: input.trust ?? (input.origin === 'instance' ? 'builtin' : 'community'),
       enabled: input.enabled ?? true,
       enabledByDefault: input.enabledByDefault ?? input.config.enabledByDefault ?? false,
+      // PROP-125: режим доставки в локальные сессии гибрида (дефолт `auto`).
+      remoteMode: input.remoteMode ?? 'auto',
       createdAt: now,
       updatedAt: now,
     };
@@ -1172,8 +1181,8 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
   private async _insert(entry: McpRegistryEntry): Promise<void> {
     await this._db().query(
       `INSERT INTO mcp_registry
-         (id, schema_version, name, config, origin, author, trust, enabled, enabled_by_default, created_at, updated_at)
-       VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11)`,
+         (id, schema_version, name, config, origin, author, trust, enabled, enabled_by_default, remote_mode, created_at, updated_at)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12)`,
       [
         entry.id,
         entry.schemaVersion,
@@ -1184,6 +1193,7 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
         jsonParam(entry.trust),
         entry.enabled,
         entry.enabledByDefault,
+        entry.remoteMode ?? 'auto',
         entry.createdAt,
         entry.updatedAt,
       ],
@@ -1195,6 +1205,8 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
     config?: McpServerConfig;
     enabled?: boolean;
     enabledByDefault?: boolean;
+    /** PROP-125: режим доставки сервера в локальные сессии гибрида. */
+    remoteMode?: McpRemoteMode;
     trust?: McpRegistryTrust;
     origin?: McpRegistryOrigin;
   }): Promise<McpRegistryEntry | null> {
@@ -1219,6 +1231,7 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
       trust: patch.trust ?? entry.trust,
       enabled: patch.enabled ?? entry.enabled,
       enabledByDefault: patch.enabledByDefault ?? entry.enabledByDefault,
+      remoteMode: patch.remoteMode ?? entry.remoteMode ?? 'auto',
       schemaVersion: MCP_REGISTRY_SCHEMA_VERSION,
       updatedAt: nowISO(),
     };
@@ -1226,7 +1239,7 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
       await this._db().query(
         `UPDATE mcp_registry
             SET name = $2, config = $3::jsonb, origin = $4, trust = $5::jsonb,
-                enabled = $6, enabled_by_default = $7, schema_version = $8, updated_at = $9
+                enabled = $6, enabled_by_default = $7, remote_mode = $8, schema_version = $9, updated_at = $10
           WHERE id = $1`,
         [
           id,
@@ -1236,6 +1249,7 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
           jsonParam(updated.trust),
           updated.enabled,
           updated.enabledByDefault,
+          updated.remoteMode ?? 'auto',
           updated.schemaVersion,
           updated.updatedAt,
         ],

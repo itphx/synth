@@ -958,6 +958,9 @@ export const dict = {
   'rightPanel.stats.mcpReason.project_disabled': 'project disabled',
   'rightPanel.stats.mcpReason.system_disabled': 'disabled by administrator',
   'rightPanel.stats.mcpReason.not_default': 'not default',
+  // PROP-125: источник сервера MCP (локальный инстанс или сервер гибрида).
+  'rightPanel.stats.mcpSource.local': 'local',
+  'rightPanel.stats.mcpSource.server': 'server',
   'rightPanel.stats.tokenEstimate': 'Estimated tokens: ~{tokens} (chars {chars}, ratio {ratio})',
   // ADR-070 §2.5: history layer (messages) — composition of sent messages
   'rightPanel.stats.history': 'History',
@@ -1019,6 +1022,8 @@ export const dict = {
   'projectTab.mcp.available': 'Available',
   'projectTab.mcp.defaultOn': 'Default on',
   'projectTab.mcp.systemHint': 'System server: managed globally by the administrator, but the project can also disable access for itself.',
+  // PROP-125: сервер живёт на сервере гибрида, а не в локальном инстансе.
+  'projectTab.mcp.source.server': 'server',
   'projectTab.mcp.hint': '"Available" — the server is allowed for the project (otherwise it is unavailable even in existing sessions). "Default on" — enabled in new sessions.',
   'sessionTab.plan.title': 'Project plan',
   'sessionTab.plan.empty': 'No plan',
@@ -1760,6 +1765,8 @@ export const dict = {
   // ADR-071 §2.4: MCP scope in session
   'sessionSettings.mcp.title': 'MCP servers',
   'sessionSettings.mcp.hint': 'Session-level toggle. Overrides project settings.',
+  // PROP-125: серверный MCP-сервер (живёт на сервере гибрида).
+  'sessionSettings.mcp.source.server': 'server',
   'sessionSettings.mcp.toggleLabel': 'Enabled',
 
   // ADR-046 §4.5/§8.2/§9.3: skills & commands (panels, stats, autocomplete)
@@ -2456,6 +2463,13 @@ export const dict = {
   'mcp.origin.user': 'user',
   'mcp.trust.builtin': 'trusted',
   'mcp.trust.community': 'community',
+
+  // PROP-125: режим доставки серверного MCP в локальные сессии гибрида.
+  'mcp.remoteMode.label': 'Hybrid delivery',
+  'mcp.remoteMode.hint': 'How a server MCP reaches local hybrid sessions: auto — relay for http/sse and tools for stdio; on relay failure tools are always used.',
+  'mcp.remoteMode.auto': 'Auto',
+  'mcp.remoteMode.relay': 'Relay (MCP)',
+  'mcp.remoteMode.tools': 'Tools (API)',
 
   // MCP: network access policy (ADR-071 §2.3.1)
   'mcp.network.title': 'Network access for user MCP servers',
@@ -4217,6 +4231,7 @@ export const dict = {
   'settings.help.mcpAdmin.url': 'HTTP/SSE MCP endpoint URL, e.g. http://localhost:8765/mcp.',
   'settings.help.mcpAdmin.masterEnabled': 'Master availability: a disabled server is unavailable in every project and session.',
   'settings.help.mcpAdmin.enabledByDefault': 'Auto-enable in new projects; existing projects keep their own setting.',
+  'settings.help.mcpAdmin.remoteMode': 'How a server MCP is delivered to local hybrid sessions: auto — relay for http/sse and tools for stdio; on relay failure tools are always used.',
   'settings.help.mcpAdmin.permissionsDefault': 'Default availability for all server tools; per-tool settings override it.',
   'settings.help.mcpAdmin.permissionsPerTool': 'Availability of a specific tool per mode; without a setting it inherits All tools.',
   'settings.help.mcpAdmin.networkMode': 'Mode: deny blocks the listed addresses, allow permits only the listed ones; deny by default.',

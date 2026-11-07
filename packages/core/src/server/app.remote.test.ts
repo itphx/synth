@@ -7,6 +7,7 @@ import { createStandaloneApp, injectRemoteProvider } from './app.js';
 import { closeTestServer } from '../test-helpers/close-server.js';
 import { createLocalAuth, type ServerUserPayload } from '../auth/local.js';
 import { JsonStore } from '../storage/json-store.js';
+import { ProjectStore } from '../storage/project-store.js';
 import { clearRemoteTokenProviders } from '../providers/remote.js';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 
@@ -943,6 +944,201 @@ describe('createStandaloneApp: гибрид-статус и oidc_enabled (адр
       const authRes = await app.request('/auth/status');
       expect(authRes.status).toBe(200);
       expect(((await authRes.json()) as { oidc_enabled: boolean }).oidc_enabled).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+describe('createStandaloneApp: серверные MCP-серверы гибрида (PROP-125)', () => {
+  /** Ответ `/api/v2/meta` backend'а с признаком поддержки фичи. */
+  const META_WITH_REMOTE_MCP = {
+    messageModel: 2,
+    eventSeq: true,
+    replay: true,
+    version: '0.0.0',
+    features: { remoteMcp: true },
+  };
+
+  /** Один серверный MCP-сервер, включённый по умолчанию. */
+  const REMOTE_SERVER = {
+    name: 'playwright-mcp',
+    type: 'stdio',
+    origin: 'instance',
+    trust: 'community',
+    enabled: true,
+    enabledByDefault: true,
+    remoteMode: 'tools',
+    status: 'up',
+    toolCount: 3,
+  };
+
+  it('после connect серверный дефолт попадает в project.mcp и в knownServers панели', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-remote-mcp-'));
+    try {
+      const fetchMock = hybridFetchMock({
+        onOther: (url) => {
+          if (url.includes('/api/v2/meta')) return jsonResponse(META_WITH_REMOTE_MCP);
+          if (url.includes('/api/v2/mcp/remote/servers')) return jsonResponse([REMOTE_SERVER]);
+          return jsonResponse({ error: 'not_found' }, 404);
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const handle = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+        remoteLlm: 'server',
+      });
+
+      // Проект создан ДО подключения — серверных дефолтов на тот момент нет.
+      const createRes = await handle.app.request('/api/v2/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+        body: JSON.stringify({ name: 'Проект гибрида' }),
+      });
+      expect(createRes.status).toBe(201);
+      const project = (await createRes.json()) as { id: string };
+
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+
+      // Авто-сид существующего проекта (PROP-125 §2, решение 7).
+      const projectRes = await handle.app.request(`/api/v2/projects/${project.id}`, {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(projectRes.status).toBe(200);
+      const body = (await projectRes.json()) as {
+        mcp: { enabled: string[]; defaultOn: string[]; remoteSeeded?: string[] } | null;
+      };
+      expect(body.mcp?.enabled).toContain('playwright-mcp');
+      expect(body.mcp?.defaultOn).toContain('playwright-mcp');
+      expect(body.mcp?.remoteSeeded).toContain('playwright-mcp');
+
+      // Панель проекта: серверный сервер виден в списке известных.
+      const mcpRes = await handle.app.request(`/api/v2/projects/${project.id}/mcp`, {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(mcpRes.status).toBe(200);
+      const mcpBody = (await mcpRes.json()) as {
+        enabled: string[];
+        defaultOn: string[];
+        knownServers: string[];
+      };
+      expect(mcpBody.knownServers).toContain('playwright-mcp');
+      expect(mcpBody.enabled).toContain('playwright-mcp');
+
+      // Повторный коннект идемпотентен (маркер remoteSeeded).
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+      const again = await handle.app.request(`/api/v2/projects/${project.id}`, {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      const againBody = (await again.json()) as {
+        mcp: { enabled: string[]; remoteSeeded?: string[] } | null;
+      };
+      expect(againBody.mcp?.enabled).toEqual(['playwright-mcp']);
+      expect(againBody.mcp?.remoteSeeded).toEqual(['playwright-mcp']);
+
+      // Новый проект, созданный ПОСЛЕ подключения, получает серверный дефолт
+      // в сид (локальные + серверные дефолты объединяются).
+      const newRes = await handle.app.request('/api/v2/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+        body: JSON.stringify({ name: 'Новый проект гибрида' }),
+      });
+      expect(newRes.status).toBe(201);
+      const newProject = (await newRes.json()) as {
+        mcp: { enabled: string[]; defaultOn: string[] } | null;
+      };
+      expect(newProject.mcp?.enabled).toContain('playwright-mcp');
+      expect(newProject.mcp?.defaultOn).toContain('playwright-mcp');
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('legacy-проект без project.mcp: локальные серверы не выпадают из гейта', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-remote-mcp-legacy-'));
+    try {
+      const fetchMock = hybridFetchMock({
+        onOther: (url) => {
+          if (url.includes('/api/v2/meta')) return jsonResponse(META_WITH_REMOTE_MCP);
+          if (url.includes('/api/v2/mcp/remote/servers')) return jsonResponse([REMOTE_SERVER]);
+          return jsonResponse({ error: 'not_found' }, 404);
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const handle = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+        remoteLlm: 'server',
+        // Локальный MCP-сервер инстанса (не включён по умолчанию — в сид новых
+        // проектов не попадает, но остаётся доступным проекту).
+        mcpServers: { 'local-srv': { type: 'stdio', command: 'node', args: ['local.js'] } },
+      });
+
+      // Legacy-проект: `project.mcp` отсутствует → проектный гейт не задан
+      // (ADR-071) — доступны все серверы.
+      const store = new ProjectStore({ dataDir: dir });
+      const legacy = store.create('Legacy', 'local');
+      await store.save(legacy);
+      expect(legacy.mcp).toBeUndefined();
+
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+
+      const projectRes = await handle.app.request(`/api/v2/projects/${legacy.id}`, {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(projectRes.status).toBe(200);
+      const body = (await projectRes.json()) as {
+        mcp: { enabled: string[]; defaultOn: string[]; remoteSeeded?: string[] } | null;
+      };
+      // Локальный сервер не выпал (иначе он стал бы `project_disabled`).
+      expect(body.mcp?.enabled).toContain('local-srv');
+      expect(body.mcp?.enabled).toContain('playwright-mcp');
+      // `defaultOn` — только серверный дефолт.
+      expect(body.mcp?.defaultOn).toEqual(['playwright-mcp']);
+      expect(body.mcp?.remoteSeeded).toEqual(['playwright-mcp']);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('старый backend без features.remoteMcp: фича выключена молча (снимок пуст)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-remote-mcp-off-'));
+    try {
+      const fetchMock = hybridFetchMock({
+        onOther: (url) => {
+          // Старый backend: `/api/v2/meta` без `features`, а состава серверов нет.
+          if (url.includes('/api/v2/meta')) {
+            return jsonResponse({ messageModel: 2, eventSeq: true, replay: true, version: '0.0.0' });
+          }
+          return jsonResponse({ error: 'not_found' }, 404);
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const handle = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+        remoteLlm: 'server',
+      });
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+
+      const mcpRes = await handle.app.request('/api/v2/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+        body: JSON.stringify({ name: 'Проект без серверных MCP' }),
+      });
+      const project = (await mcpRes.json()) as { id: string; mcp: { enabled: string[] } | null };
+
+      expect(project.mcp?.enabled ?? []).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }

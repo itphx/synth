@@ -7,6 +7,7 @@ import { McpClient, type McpClientLike, type McpToolResult } from './client.js';
 import type { AttachmentService } from '../attachments/service.js';
 import type { McpCredentialSource } from './credential-auth.js';
 import type { ExecutorMcpSource } from './executor-mcp-source.js';
+import type { RemoteMcpSource } from './remote-mcp-source.js';
 import { evaluateMcpNetworkAccess, hostFromUrl, isHttpMcpConfig } from './network-policy.js';
 import { currentEgressLog } from '../net/egress-runtime.js';
 import { sanitizeEgressTarget } from '../net/egress-guard.js';
@@ -68,6 +69,19 @@ export class McpManager {
   private _executorServers = new Set<string>();
   /** Источник состава серверов исполнителя (только `execution.mode=remote`). */
   private _executorSource: ExecutorMcpSource | null = null;
+  /**
+   * PROP-125: серверные MCP-серверы гибрида (режим `tools`) — **runtime-записи**,
+   * как и серверы исполнителя: не персистятся в реестр `McpRegistryStore`, не
+   * редактируются пользователем, живут только в памяти процесса.
+   */
+  private _remoteSource: RemoteMcpSource | null = null;
+  /** Имена серверных MCP-серверов в текущем снимке. */
+  private readonly _remoteServers = new Set<string>();
+  /**
+   * Системный мастер-флаг серверных MCP-серверов (`enabled` из ответа сервера).
+   * Отдельная карта: `_serverSystemEnabled` — про реестр локального инстанса.
+   */
+  private readonly _remoteSystemEnabled = new Map<string, boolean>();
   /**
    * ADR-105 (Ф3): источник access-токена внешнего доступа — для коннекторов
    * с `auth: { kind: 'credential' }` (подстановка в транспорт).
@@ -188,10 +202,158 @@ export class McpManager {
   }
 
   /**
-   * Фабрика клиента: сервер исполнителя → `ExecutorMcpClient`, иначе инъекция
-   * из опций/`McpClient`. Единственная точка выбора транспорта.
+   * PROP-125: подключить источник состава серверных MCP-серверов гибрида.
+   *
+   * `null` — отключить (standalone/тесты): серверные runtime-записи снимаются,
+   * поведение остаётся прежним (как у источника исполнителя).
+   */
+  setRemoteMcpSource(source: RemoteMcpSource | null): void {
+    this._remoteSource = source;
+    if (!source) {
+      for (const name of this._remoteServers) {
+        delete this._config[name];
+        this._serverOrigins.delete(name);
+      }
+      this._remoteServers.clear();
+      this._remoteSystemEnabled.clear();
+    }
+  }
+
+  /** Источник серверных MCP-серверов подключён? (идемпотентность проводки) */
+  hasRemoteMcpSource(): boolean {
+    return this._remoteSource !== null;
+  }
+
+  /** Имена серверных MCP-серверов в текущем снимке. */
+  getRemoteServerNames(): string[] {
+    return [...this._remoteServers];
+  }
+
+  /** Сервер пришёл из состава сервера гибрида (а не из локального реестра)? */
+  isRemoteServer(name: string): boolean {
+    return this._remoteServers.has(name);
+  }
+
+  /**
+   * Серверные MCP-серверы, включённые по умолчанию (`enabledByDefault`) —
+   * сид `project.mcp` для новых проектов (PROP-125, решение 7).
+   */
+  getRemoteDefaultServerNames(): string[] {
+    if (!this._remoteSource) return [];
+    return this._remoteSource.getDefaultServerNames();
+  }
+
+  /**
+   * Причина последней ошибки серверного MCP-сервера (без секретов).
+   *
+   * Источник отдаёт и причину деградации `relay → tools` (PROP-125, решение 8),
+   * и причину со стороны backend'а (`error` в снимке). Для локальных/реестровых
+   * серверов причина не ведётся — `undefined`.
+   */
+  getServerError(name: string): string | undefined {
+    if (!this._remoteServers.has(name)) return undefined;
+    return this._remoteSource?.getServerError(name);
+  }
+
+  /**
+   * Перечитать состав серверных MCP-серверов и внести их в `_config` как
+   * runtime-записи (помечены `_remoteServers`, origin `instance`).
+   *
+   * По образцу `refreshExecutorServers` (ADR-077 шаг B2), но с двумя отличиями
+   * (PROP-125):
+   * - **коллизия имён** — локальный/реестровый сервер приоритетнее, серверный
+   *   пропускается с предупреждением (как у исполнителя);
+   * - **недоступный сервер** (`status: 'down'`) остаётся в составе (решение 4:
+   *   «показывать ошибку с причиной»), но его тулы снимаются и клиент
+   *   отключается — до восстановления тулы не предлагаются; после
+   *   восстановления `ensureToolsLoaded` переподключит сервер.
+   */
+  async refreshRemoteServers(toolRegistry?: ToolRegistry): Promise<void> {
+    const source = this._remoteSource;
+    if (!source) return;
+
+    await source.ensureFresh();
+    const servers = source.listServers();
+    const seen = new Set<string>();
+
+    for (const server of servers) {
+      const name = server.name;
+      const local = this._config[name];
+      if (local && !this._remoteServers.has(name)) {
+        warning(
+          'MCP',
+          `Серверный MCP-сервер "${name}" конфликтует с локальным/реестровым — ` +
+            `оставлен локальный (тулы серверного сервера не подключены)`,
+        );
+        continue;
+      }
+      seen.add(name);
+      if (!this._remoteServers.has(name)) {
+        this._config[name] = this._remoteRuntimeConfig(name);
+        this._remoteServers.add(name);
+        // System-level (ADR-071): origin `instance`.
+        this._serverOrigins.set(name, 'instance');
+      } else if (!this._config[name]) {
+        // `setConfig` (реестр) мог заменить конфиг целиком — возвращаем
+        // runtime-запись, иначе `connectServer` скажет «не настроен».
+        this._config[name] = this._remoteRuntimeConfig(name);
+        this._serverOrigins.set(name, 'instance');
+      }
+      // Системный мастер-флаг сервера (из ответа сервера), а не из реестра.
+      this._remoteSystemEnabled.set(name, server.enabled);
+
+      if (server.status === 'down') {
+        // Решение 4: сервер недоступен — тулы не предлагаются, причина видна
+        // в `getServerError`/`getServerStatus`.
+        if (toolRegistry) await this.deregisterTools(name, toolRegistry);
+        await this.disconnectServer(name);
+      }
+    }
+
+    // Сервер исчез из состава — снять runtime-запись (и тулы, если передали реестр).
+    for (const name of [...this._remoteServers]) {
+      if (seen.has(name)) continue;
+      if (toolRegistry) await this.deregisterTools(name, toolRegistry);
+      await this.disconnectServer(name);
+      delete this._config[name];
+      this._serverOrigins.delete(name);
+      this._remoteServers.delete(name);
+      this._remoteSystemEnabled.delete(name);
+    }
+  }
+
+  /** Ленивое обновление состава серверных MCP-серверов по TTL (перед загрузкой тулов). */
+  private async _refreshRemoteIfStale(toolRegistry?: ToolRegistry): Promise<void> {
+    const source = this._remoteSource;
+    if (!source || !source.isStale()) return;
+    try {
+      await this.refreshRemoteServers(toolRegistry);
+    } catch (err) {
+      warning(
+        'MCP',
+        `Не удалось обновить состав серверных MCP-серверов: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** Runtime-конфиг серверного MCP-сервера (не персистится, PROP-125). */
+  private _remoteRuntimeConfig(name: string): McpServerConfig {
+    return {
+      type: 'http',
+      description: `MCP-сервер гибрида "${name}" (PROP-125)`,
+      enabledByDefault: true,
+    };
+  }
+
+  /**
+   * Фабрика клиента: серверный MCP-сервер → `RemoteBackendMcpClient`,
+   * сервер исполнителя → `ExecutorMcpClient`, иначе инъекция из опций/`McpClient`.
+   * Единственная точка выбора транспорта.
    */
   private _createClient(name: string, config: McpServerConfig): McpClientLike {
+    if (this._remoteServers.has(name) && this._remoteSource) {
+      return this._remoteSource.createClient(name);
+    }
     if (this._executorServers.has(name) && this._executorSource) {
       return this._executorSource.createClient(name);
     }
@@ -288,6 +450,11 @@ export class McpManager {
   }
 
   isServerSystemEnabled(name: string): boolean {
+    // PROP-125: у серверных MCP-серверов мастер-флаг приходит из ответа
+    // сервера (`enabled`), а не из локального реестра.
+    if (this._remoteServers.has(name)) {
+      return this._remoteSystemEnabled.get(name) ?? true;
+    }
     return this._serverSystemEnabled?.get(name) ?? true;
   }
 
@@ -395,6 +562,12 @@ export class McpManager {
    * - `disconnected` — сервер не создавался (ещё ни разу не подключался).
    */
   getServerStatus(name: string): 'connected' | 'error' | 'circuit-open' | 'disconnected' {
+    // PROP-125 (решение 4): серверный MCP-сервер, помеченный источником как
+    // `down`, — это ошибка с причиной (`getServerError`), а не «неизвестен».
+    if (this._remoteServers.has(name)) {
+      const snapshot = this._remoteSource?.getServer(name);
+      if (snapshot?.status === 'down') return 'error';
+    }
     const entry = this._servers.get(name);
     if (!entry) return 'disconnected';
     if (this._isCircuitOpen(name)) return 'circuit-open';
@@ -407,6 +580,11 @@ export class McpManager {
       // runtime-запись исполнителя могла быть снята `setConfig` (реестр) —
       // восстанавливаем, иначе сервер «не настроен» до следующего refresh.
       config = this._executorRuntimeConfig(name);
+      this._config[name] = config;
+    }
+    if (!config && this._remoteServers.has(name)) {
+      // То же для runtime-записи серверного MCP-сервера (PROP-125).
+      config = this._remoteRuntimeConfig(name);
       this._config[name] = config;
     }
     if (!config) {
@@ -642,6 +820,8 @@ export class McpManager {
   ): Promise<void> {
     // ADR-077 (шаг B2): состав серверов исполнителя обновляется по TTL 120 с.
     await this._refreshExecutorIfStale(toolRegistry);
+    // PROP-125: состав серверных MCP-серверов — тот же ленивый refresh.
+    await this._refreshRemoteIfStale(toolRegistry);
     for (const name of serverNames) {
       if (this._isCircuitBroken(name)) continue;
       try {
@@ -705,6 +885,27 @@ export class McpManager {
   }
 
   /**
+   * PROP-125: вызов инструмента по имени сервера/инструмента (без разбора fullName).
+   *
+   * Точка вызова для backend-контракта удалённого MCP (`/api/v2/mcp/remote/call`):
+   * имя сервера и имя инструмента приходят отдельными полями, поэтому разбор
+   * `server_tool` здесь неуместен (склейка неоднозначна, если в имени сервера
+   * есть `_`). `meta` — `_meta` вызова MCP (PROP-125 §1).
+   */
+  async callServerTool(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    meta?: Record<string, unknown>,
+  ): Promise<McpToolResult> {
+    const entry = this._servers.get(serverName);
+    if (!entry || !entry.client.isConnected) {
+      return { content: `MCP-сервер "${serverName}" не подключён`, isError: true };
+    }
+    return entry.client.callTool(toolName, args, meta);
+  }
+
+  /**
    * Вызывает инструмент MCP-сервера по полному имени (serverName_toolName).
    */
   async callTool(
@@ -719,14 +920,9 @@ export class McpManager {
     const serverName = fullName.slice(0, underscoreIdx);
     const toolName = fullName.slice(underscoreIdx + 1);
 
-    const entry = this._servers.get(serverName);
-    if (!entry || !entry.client.isConnected) {
-      return { content: `MCP-сервер "${serverName}" не подключён`, isError: true };
-    }
-
     // TODO(ADR-036): здесь нет sessionId — деобфускация аргументов невозможна.
     // В основном цикле MCP-тулы вызываются через registerTools() → mcpToolDef.execute(),
     // где деобфускация выполняется на основе ctx.extra.sessionManager.
-    return entry.client.callTool(toolName, args);
+    return this.callServerTool(serverName, toolName, args);
   }
 }

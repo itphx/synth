@@ -298,6 +298,70 @@ describe('McpSettings — реестр MCP (ADR-071 §2.5)', () => {
   })
 })
 
+// PROP-125: режим доставки сервера в локальные сессии гибрида.
+describe('McpSettings — режим доставки в гибрид (PROP-125)', () => {
+  /** Открыть форму редактирования записи реестра. */
+  async function openEdit(container: HTMLElement, name: string): Promise<HTMLElement> {
+    const row = container.querySelector(`[data-testid="mcp-registry-${name}"]`)!
+    const edit = row.querySelector('button[aria-label="Edit"]') as HTMLButtonElement
+    await act(async () => {
+      edit.click()
+    })
+    await act(async () => {})
+    const nameInput = container.querySelector('input[placeholder="my-server"]') as HTMLInputElement
+    return nameInput.closest('section')!
+  }
+
+  it('смена режима на tools уходит в обновление записи', async () => {
+    const container = await renderSettings()
+    const form = await openEdit(container, 'community')
+
+    const trigger = form.querySelector(`[aria-label="${enDict['mcp.remoteMode.label']}"]`) as HTMLElement
+    expect(trigger).not.toBeNull()
+    await selectOption(trigger, enDict['mcp.remoteMode.tools'])
+
+    const save = [...form.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Save',
+    ) as HTMLButtonElement
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateMcpRegistryEntry).toHaveBeenCalledWith(
+      'e-com',
+      expect.objectContaining({ remoteMode: 'tools' }),
+    )
+  })
+
+  it('запись без remoteMode открывается в режиме auto', async () => {
+    const container = await renderSettings()
+    const form = await openEdit(container, 'sys')
+
+    const trigger = form.querySelector(`[aria-label="${enDict['mcp.remoteMode.label']}"]`) as HTMLElement
+    expect(trigger).not.toBeNull()
+    expect(trigger.textContent).toContain(enDict['mcp.remoteMode.auto'])
+  })
+
+  it('сохранение без правки режима уходит с auto', async () => {
+    const container = await renderSettings()
+    const form = await openEdit(container, 'community')
+
+    const save = [...form.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Save',
+    ) as HTMLButtonElement
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateMcpRegistryEntry).toHaveBeenCalledWith(
+      'e-com',
+      expect.objectContaining({ remoteMode: 'auto' }),
+    )
+  })
+})
+
 describe('McpSettings — политика MCP (ADR-071 §2.3)', () => {
   it('ADMIN видит карточку «MCP policy» и сохраняет выбранное значение', async () => {
     const container = await renderSettings()

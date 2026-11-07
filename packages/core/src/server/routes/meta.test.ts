@@ -49,6 +49,24 @@ describe('instanceCapabilities (ADR-118 §8)', () => {
       maxBytesPerSession: 4096,
     });
   });
+
+  // PROP-125: возможности инстанса (`features.remoteMcp`).
+  it('без getFeatures — поля features нет', () => {
+    const caps = instanceCapabilities();
+    expect('features' in caps).toBe(false);
+  });
+
+  it('с getFeatures — features в ответе', () => {
+    const caps = instanceCapabilities({ getFeatures: () => ({ remoteMcp: true }) });
+    expect(caps.features).toEqual({ remoteMcp: true });
+  });
+
+  it('getFeatures без признаков — поля features нет', () => {
+    const caps = instanceCapabilities({ getFeatures: () => undefined });
+    expect('features' in caps).toBe(false);
+    const empty = instanceCapabilities({ getFeatures: () => ({}) });
+    expect('features' in empty).toBe(false);
+  });
 });
 
 describe('GET /meta (ADR-118 §8)', () => {
@@ -63,5 +81,21 @@ describe('GET /meta (ADR-118 §8)', () => {
     expect(body.messageModel).toBe(MESSAGE_MODEL_VERSION);
     expect(body.attachments?.maxBytesPerFile).toBe(1024);
     expect(body.attachments?.maxFilesPerMessage).toBe(3);
+  });
+
+  it('200 и features.remoteMcp в ответе при заданном резолвере', async () => {
+    const app = createMetaRoutes({ getFeatures: () => ({ remoteMcp: true }) });
+    const res = await app.request('/meta');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { features?: { remoteMcp?: boolean } };
+    expect(body.features?.remoteMcp).toBe(true);
+  });
+
+  it('200 и без features, если резолвер не задан', async () => {
+    const app = createMetaRoutes();
+    const res = await app.request('/meta');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { features?: unknown };
+    expect(body.features).toBeUndefined();
   });
 });

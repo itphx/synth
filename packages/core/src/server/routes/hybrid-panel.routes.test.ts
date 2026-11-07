@@ -169,6 +169,8 @@ describe('Гибрид: правая панель (remote-ветки роуто�
       remote ? () => asClient(remote) : undefined,
       {
         getMcpServers: () => ['local-srv'],
+        // PROP-125: источник сервера (`local`/`server`).
+        getMcpServerSources: () => ({ 'local-srv': 'local' }),
         worktrees: worktrees as never,
       },
     ));
@@ -298,6 +300,8 @@ describe('Гибрид: правая панель (remote-ветки роуто�
         enabled: [],
         defaultOn: [],
         knownServers: ['local-srv'],
+        // PROP-125: источник сервера — локальный (серверный отдал бы свой).
+        sources: { 'local-srv': 'local' },
       });
     });
 

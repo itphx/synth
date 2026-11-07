@@ -379,6 +379,11 @@ export type InstanceCapabilities = {
   version: string;
   /** ADR-115: эффективные лимиты вложений (аддитивно; старые клиенты игнорируют). */
   attachments?: InstanceAttachmentCapabilities;
+  /**
+   * PROP-125: возможности инстанса (аддитивно; старые клиенты игнорируют).
+   * `remoteMcp` — признак поддержки `/api/v2/mcp/remote/*` и relay-режима.
+   */
+  features?: { remoteMcp?: boolean };
 };
 
 /**

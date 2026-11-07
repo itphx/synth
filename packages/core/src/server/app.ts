@@ -36,6 +36,7 @@ import { createRemoteProxyMiddleware } from './proxy.js';
 import type { RemoteEventBridge } from '../remote/event-bridge.js';
 import { createStandaloneDeps, createStandaloneStorage } from './app/deps.js';
 import { createHybridRemoteState } from './app/hybrid-remote.js';
+import { RemoteMcpSource } from '../engine/mcp/remote-mcp-source.js';
 import { mountStandaloneRoutes } from './app/mount-routes.js';
 import { registerEventsSse } from './app/sse-events.js';
 import { attachEventWebSocket, EventWebSocketSubscriptions } from './app/ws-events.js';
@@ -378,6 +379,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     onRequest: (info) => hybridOnRequest?.(info),
   });
 
+  // PROP-125 §2: источник состава серверных MCP-серверов гибрида. Клиент
+  // берётся на каждый вызов (гибрид может переподключиться) — поэтому геттер.
+  // Фича включается по признаку backend'а (`features.remoteMcp`) при
+  // подключении (`applyConnected` → `setSupported`).
+  const remoteMcpSource = new RemoteMcpSource({ getClient: () => connection.client });
+
   // Состояние гибрида: зеркала провайдеров/моделей, мост событий, статус живости,
   // публичные connect*/disconnect/logout. Общие зависимости — лениво (deps ниже).
   const hybrid = createHybridRemoteState(config, connection, {
@@ -385,6 +392,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     getProviderStore: () => deps.providerStore,
     getProviderCache: () => deps.providerCache,
     getModelCache: () => deps.modelCache,
+    // PROP-125 §2: серверные MCP-серверы гибрида (состав, авто-сид проектов).
+    getMcpManager: () => deps.mcpManager,
+    getProjectStore: () => deps.projectStore,
+    getSessionManager: () => deps.sessionManager,
+    getRemoteMcpSource: () => remoteMcpSource,
   });
 
   // ADR-094: readiness — приложение готово, когда композиция завершена; при
@@ -517,6 +529,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       wsSubscriptions.subscribeToSession(owner, sessionId);
     },
   }, storage, metricsEnabled ? metrics : undefined);
+
+  // PROP-125 §2: подключаем источник серверных MCP-серверов к менеджеру
+  // (runtime-записи третьего вида). Поддержка фичи — по признаку backend'а
+  // (`features.remoteMcp`), он читается при подключении гибрида.
+  deps.mcpManager.setRemoteMcpSource(remoteMcpSource);
 
   // ADR-094: остановка фоновых коллекторов. Гибридный gauge (`synth_hybrid_connected`)
   // читает состояние подключения при скрейпе — accessor живёт в этой области
@@ -696,6 +713,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopScheduler: () => deps.schedulerService.stop(),
     // ADR-077 (шаг B2): остановка источника MCP-серверов исполнителя (в inline — no-op).
     stopExecutorMcpSource: () => deps.executorMcpSource?.close(),
+    // PROP-125 §2: остановка источника серверных MCP-серверов гибрида.
+    stopRemoteMcpSource: () => remoteMcpSource.close(),
     // ADR-097: освобождение ресурсов backend'а хранения (пул соединений PG);
     // `file`/`memory` `close` не задают — вызов безопасен (optional).
     closeStorage: async () => {

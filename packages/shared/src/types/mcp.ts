@@ -14,6 +14,19 @@ export type McpRegistryOrigin = (typeof MCP_REGISTRY_ORIGINS)[number];
 export const MCP_REGISTRY_TRUST_LEVELS = ['builtin', 'community'] as const;
 export type McpRegistryTrust = (typeof MCP_REGISTRY_TRUST_LEVELS)[number];
 
+/**
+ * PROP-125: режим доставки серверного MCP-сервера в локальные сессии гибрида.
+ *
+ * - `auto` — `relay` для `http`/`sse`, `tools` для `stdio` (дефолт);
+ * - `relay` — полноценный MCP-клиент через backend (`/api/v2/mcp/relay/:name`);
+ * - `tools` — tool-level proxy (`/api/v2/mcp/remote/*`).
+ *
+ * Неудачный relay **всегда** деградирует в `tools` (с причиной в статусе) —
+ * отказа и «тихого» исчезновения сервера нет.
+ */
+export const MCP_REMOTE_MODES = ['auto', 'relay', 'tools'] as const;
+export type McpRemoteMode = (typeof MCP_REMOTE_MODES)[number];
+
 /** Автор записи реестра (кто добавил сервер). */
 export interface McpRegistryAuthor {
   userId: string;
@@ -47,6 +60,11 @@ export interface McpRegistryEntry {
    * изменение не влияет на ранее созданные проекты/сессии.
    */
   enabledByDefault: boolean;
+  /**
+   * PROP-125: как доставлять сервер в локальные сессии гибрида.
+   * Отсутствие поля = `auto` (записи, созданные до PROP-125).
+   */
+  remoteMode?: McpRemoteMode;
   createdAt: string;
   updatedAt: string;
 }
@@ -203,11 +221,25 @@ export interface McpServerEffective {
   origin: McpRegistryOrigin;
   trust: McpRegistryTrust;
   /**
+   * PROP-125: источник для UI — локальный инстанс или сервер гибрида.
+   * Не путать с `origin` (про реестр записи: instance/user).
+   */
+  source?: 'local' | 'server';
+  /**
    * ADR-071 §2.2/§2.6: транспортный статус для таблицы «MCP» в статистике:
    * `disabled` — выключен в эффективном наборе, `connected`/`error`/`circuit-open`
    * — состояние подключения активного сервера.
    */
   status?: 'connected' | 'error' | 'disabled' | 'circuit-open';
+  /**
+   * PROP-125: причина недоступности/деградации сервера (без секретов).
+   *
+   * Для серверных MCP-серверов гибрида — причина, по которой сервер не
+   * работает: backend офлайн, сервер упал или relay не поднялся и клиент
+   * деградировал в режим `tools`. Для локальных серверов поле отсутствует —
+   * ошибки там не ведутся.
+   */
+  error?: string;
   /** ADR-071 §2.5/§2.6: автор записи реестра (null для instance/config-серверов). */
   author?: McpRegistryAuthor | null;
   /** ADR-071 §2.2/§2.6: имена инструментов сервера (пусто, если не подключён). */
@@ -220,6 +252,73 @@ export interface McpServerEffective {
   ratio?: number;
   /** ADR-071 §2.6: пер-тульные chars/estTokens/ratio + признак admin_disabled. */
   toolDetails?: McpToolDetail[];
+}
+
+// --- PROP-125: контракт удалённого MCP (сервер гибрида → локальный core) ---
+
+/**
+ * PROP-125: вложение в результате удалённого MCP-вызова (base64, как в
+ * протоколе исполнителя 5 — ADR-077).
+ */
+export interface McpRemoteAttachment {
+  mime: string;
+  name?: string;
+  base64: string;
+}
+
+/**
+ * PROP-125: описание серверного MCP-сервера для локального клиента.
+ *
+ * Секреты и URL с креденшелами в выдачу не попадают (ADR-105).
+ */
+export interface RemoteMcpServerInfo {
+  name: string;
+  type: 'stdio' | 'sse' | 'http';
+  origin: 'instance' | 'user';
+  trust: McpRegistryTrust;
+  /** Системный мастер-флаг (hard-gate): `false` — сервер недоступен нигде. */
+  enabled: boolean;
+  /** «Включён по умолчанию для новых проектов» (сид `project.mcp`). */
+  enabledByDefault: boolean;
+  /** Фактический режим доставки в локальные сессии (PROP-125). */
+  remoteMode: McpRemoteMode;
+  status: 'idle' | 'up' | 'down';
+  toolCount: number;
+  error?: string;
+  instructions?: string;
+}
+
+/** PROP-125: описание одного инструмента удалённого MCP-сервера. */
+export interface RemoteMcpToolInfo {
+  server: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+/** PROP-125: ответ `GET /api/v2/mcp/remote/tools?server=…`. */
+export interface RemoteMcpToolsResponse {
+  server: string;
+  instructions?: string;
+  tools: RemoteMcpToolInfo[];
+}
+
+/** PROP-125: тело `POST /api/v2/mcp/remote/call`. */
+export interface RemoteMcpCallRequest {
+  server: string;
+  tool: string;
+  arguments?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+}
+
+/**
+ * PROP-125: результат удалённого MCP-вызова — тот же шейп, что у протокола
+ * исполнителя 5 (`docs/EXECUTION.md`): один формат на два «MCP вне процесса».
+ */
+export interface RemoteMcpCallResult {
+  content: string;
+  isError: boolean;
+  attachments?: McpRemoteAttachment[];
 }
 
 // --- ADR-105 (Ф3): запрет plaintext-секретов в заголовках MCP-коннектора ---

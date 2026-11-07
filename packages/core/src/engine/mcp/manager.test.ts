@@ -393,6 +393,28 @@ describe('McpManager', () => {
     expect(result.content).toContain('не подключён');
   });
 
+  // PROP-125: вызов инструмента по паре «сервер/инструмент» — для backend-контракта
+  // удалённого MCP (`/api/v2/mcp/remote/call`), где имя приходит отдельными полями.
+  it('callServerTool вызывает инструмент по имени сервера и инструмента', async () => {
+    mockClientConnected = true;
+    mockClientCallTool.mockResolvedValueOnce({ content: 'remote result', isError: false });
+    await manager.connectServer('test-server');
+
+    const result = await manager.callServerTool('test-server', 'tool1', { arg: 'value' });
+    expect(result.content).toBe('remote result');
+    expect(result.isError).toBe(false);
+    expect(mockClientCallToolArgs).toHaveLength(1);
+    expect(mockClientCallToolArgs[0]!.name).toBe('tool1');
+    expect(mockClientCallToolArgs[0]!.args).toEqual({ arg: 'value' });
+  });
+
+  it('callServerTool для неизвестного сервера возвращает isError с текстом', async () => {
+    const result = await manager.callServerTool('unknown-server', 'tool1', {});
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('не подключён');
+    expect(mockClientCallTool).not.toHaveBeenCalled();
+  });
+
   it('refreshServer переподключает сервер и перерегистрирует инструменты', async () => {
     mockClientConnected = true;
     await manager.connectServer('test-server');

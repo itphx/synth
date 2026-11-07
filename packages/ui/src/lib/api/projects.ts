@@ -129,6 +129,13 @@ export interface ProjectMcpResponse {
   enabled: string[]
   defaultOn: string[]
   knownServers: string[]
+  /**
+   * PROP-125: источник каждого известного сервера (`local`/`server`) — для
+   * бейджа «серверный» в панели «Проект».
+   *
+   * Отсутствует — источник неизвестен (старый сервер) — бейдж не рисуется.
+   */
+  sources?: Record<string, 'local' | 'server'>
 }
 
 /**

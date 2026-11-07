@@ -248,6 +248,65 @@ describe('MCP registry API (ADR-071 §2.5)', () => {
     expect(res.status).toBe(400);
   });
 
+  // PROP-125: режим доставки сервера в локальные сессии гибрида.
+  it('POST /registry: remoteMode=tools → 201, поле в записи и в GET /registry', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer dev', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'srv-tools', config: httpConfig(), remoteMode: 'tools' }),
+    });
+    expect(res.status).toBe(201);
+    const entry = await res.json() as { id: string; remoteMode: string };
+    expect(entry.remoteMode).toBe('tools');
+
+    const list = await makeApp().request('/api/v2/mcp/registry', {
+      headers: { Authorization: 'Bearer dev' },
+    });
+    expect(list.status).toBe(200);
+    const body = await list.json() as { entries: Array<{ name: string; remoteMode: string }> };
+    expect(body.entries.find((e) => e.name === 'srv-tools')?.remoteMode).toBe('tools');
+  });
+
+  it('POST /registry: без remoteMode → дефолт auto', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer dev', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'srv-auto', config: httpConfig() }),
+    });
+    expect(res.status).toBe(201);
+    const entry = await res.json() as { remoteMode: string };
+    expect(entry.remoteMode).toBe('auto');
+  });
+
+  it('POST /registry: невалидный remoteMode → 400', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer dev', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'srv-bad-mode', config: httpConfig(), remoteMode: 'nope' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('PUT /registry/:id: remoteMode меняется', async () => {
+    const created = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer dev', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'srv-mode-put', config: httpConfig() }),
+    });
+    expect(created.status).toBe(201);
+    const entry = await created.json() as { id: string };
+
+    const put = await makeApp().request(`/api/v2/mcp/registry/${entry.id}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer dev', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remoteMode: 'relay' }),
+    });
+    expect(put.status).toBe(200);
+    const updated = await put.json() as { remoteMode: string };
+    expect(updated.remoteMode).toBe('relay');
+    expect((await registry.get(entry.id))?.remoteMode).toBe('relay');
+  });
+
   it('PUT /registry/:id: автор может обновить', async () => {
     const entry = await registry.add({
       name: 'mine',

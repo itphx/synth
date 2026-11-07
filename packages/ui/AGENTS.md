@@ -567,3 +567,10 @@
 | Гибридный режим | [ADR-042](../../docs/arch_decisions/adr-042-hybrid-mode.md) |
 | Мобильный UI / PWA | [ADR-044](../../docs/arch_decisions/adr-044-mobile-adaptive-ui-pwa.md) |
 | Общие инварианты, команды, порты | [корневой AGENTS.md](../../AGENTS.md) |
+
+## MCP источника и причина (ADR-125)
+
+- **Бейдж «серверный»:** в панели «Проект» (`ProjectTab`, `ProjectMcpBlock`) — по карте `sources` ответа `GET /projects/:id/mcp` (`Record<name,'local'|'server'>`); для удалённого (`remote:`) проекта все серверы считаются серверными.
+- **Сессия:** в «Настройках сессии» (`SessionSettingsTab`) — бейдж по `srv.source === 'server'`; в деталях строки к статусу дописывается причина `srv.error` (backend офлайн / сервер упал / relay не поднялся).
+- **Статистика:** в `StatsTab` — колонка «Источник» (`local`/`server`) в таблице MCP.
+- **Режим доставки:** админ-раздел MCP (`McpSettings` + `useMcpRegistryEditor`) — выбор `remoteMode` (`auto`/`relay`/`tools`) в записи реестра; дефолт `auto`, у записей без поля — тоже `auto`.

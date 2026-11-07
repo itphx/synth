@@ -180,6 +180,38 @@ synth serve --connect https://synth.k3s.itphx.loc
   unavailable. The UI takes the project's MCP server list from `knownServers` in
   the `GET /projects/:id/mcp` response and uses the registry only as an optional
   source for the "system" badge (a registry failure does not clear the block).
+  The source of every known server (`local`/`server`) comes in the same response
+  as `sources` — the UI draws the "server" badge from it
+  ([ADR-125](../arch_decisions/adr-125-hybrid-remote-mcp.md)).
+
+### 2.2 MCP in local sessions (ADR-125)
+
+The server-side MCP servers are available to **local** hybrid sessions: they are
+executed by the backend, and the local core reaches them through the server
+contract — secrets, URLs, and the network never leave the server.
+
+- **Delivery modes** (`remoteMode` in the registry entry, default `auto`):
+  `auto` — `relay` for `http`/`sse` and `tools` for `stdio`; `relay` — a full
+  MCP client on `/api/v2/mcp/relay/:name`; `tools` — a tool-level proxy
+  (`/api/v2/mcp/remote/{servers,tools,call}`). A failed relay — **always**
+  degrades to `tools` with the reason in the status, it is not a refusal.
+- **Scope and defaults — as for remote sessions:** the system master → the
+  project gate `project.mcp.enabled` → the session snapshot. Existing projects
+  receive the server-side `enabledByDefault` by **auto-seed** (idempotent, the
+  `project.mcp.remoteSeeded` marker); new projects — the seed from
+  `enabledByDefault`.
+- **Offline/failure:** the servers stay in `GET /sessions/:id/mcp` with
+  `status:'error'` and the reason (`error`); the tools are not offered until
+  the reconnect, and the reason is visible in the `mcp.status` prompt block too.
+- **The relay is stateless** (limitations): a JSON response instead of
+  streaming, no progress/elicitation/resources/prompts and no server-initiated
+  notifications; `GET`/`DELETE` → `405 MCP_RELAY_SESSIONLESS`.
+- **The feature marker** — `features.remoteMcp` in `GET /api/v2/meta`
+  (additive, backend only): an old backend has no marker → the feature is
+  silently off.
+
+Details — [ADR-125](../arch_decisions/adr-125-hybrid-remote-mcp.md), the
+contract — [docs/API_V2.md](./API_V2.md) §5.16.
 
 ### 3. LLM centralization
 

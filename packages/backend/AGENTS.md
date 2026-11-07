@@ -232,3 +232,10 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 | Транспорт EventHub + TransportClient | ADR-024 |
 | LLM Gateway | ADR-036 |
 | Гибрид | ADR-042, `docs/HYBRID.md` |
+
+## Удалённый MCP для гибрида (ADR-125)
+
+- **Контракт `tools`:** `routes/mcp-remote.ts` — `GET /api/v2/mcp/remote/servers`, `GET /api/v2/mcp/remote/tools?server=`, `POST /api/v2/mcp/remote/call`; монтируется в `routes/mcp.ts`. Секреты и URL с креденшелами в ответы/ошибки не попадают.
+- **Relay:** `routes/mcp.ts` монтирует core-фабрику `createMcpRelayRoutes` (`@itphx/synth-core`) — `POST /api/v2/mcp/relay/:name` (stateless, JSON-режим); `GET`/`DELETE` → `405 MCP_RELAY_SESSIONLESS`. На локальном инстансе маршрута нет.
+- **Авторизация:** `requireAuth`; для service-key — scope `mcp:invoke` (семейство `mcp:*`) через `requireScopeForServiceKey`. Дополнительных approval/квот нет.
+- **Признак фичи:** `app/mount-routes.ts` → `getFeatures: () => ({ remoteMcp: true })` в `GET /api/v2/meta` (аддитивно, без аутентификации); у клиента без признака фича выключена.

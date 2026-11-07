@@ -22,6 +22,7 @@ export const SERVICE_SCOPE_FAMILIES = [
   'routes',
   'sessions',
   'schedules',
+  'mcp',
 ] as const;
 
 export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
@@ -41,7 +42,10 @@ export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
  *   (консент-сервисы аддонов);
  * - `plugins:invoke` — server-scoped токен плагина (ADR-090 Ф7, Уровень 2):
  *   ключ, привязанный к `plugin_id`; без этого scope сервер отвергает такой
- *   ключ (fail-closed).
+ *   ключ (fail-closed);
+ * - `mcp:invoke` — вызов серверных MCP-серверов из гибрида (PROP-125):
+ *   удалённый вызов инструмента серверного MCP-сервера; интерактивный
+ *   пользователь гибрида авторизуется `requireAuth` (ADR-043).
  */
 export const SERVICE_SCOPES = [
   'events:ingest',
@@ -62,6 +66,7 @@ export const SERVICE_SCOPES = [
   'automation:install',
   'users:read',
   'plugins:invoke',
+  'mcp:invoke',
 ] as const;
 
 export type ServiceScope = (typeof SERVICE_SCOPES)[number];

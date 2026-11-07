@@ -185,7 +185,37 @@ synth serve --connect https://synth.k3s.itphx.loc
 - `/api/v2/mcp/registry` есть только у managed backend; в standalone он
   недоступен. UI берёт список MCP-серверов проекта из `knownServers` ответа
   `GET /projects/:id/mcp`, а реестр использует лишь как необязательный источник
-  бейджа «системный» (падение реестра не обнуляет блок).
+  бейджа «системный» (падение реестра не обнуляет блок). Источник каждого
+  известного сервера (`local`/`server`) приходит в том же ответе полем
+  `sources` — по нему UI рисует бейдж «серверный»
+  ([ADR-125](./arch_decisions/adr-125-hybrid-remote-mcp.md)).
+
+### 2.2 MCP в локальных сессиях (ADR-125)
+
+Серверные MCP-серверы доступны **локальным** сессиям гибрида: их исполняет
+backend, а локальный core получает к ним доступ через серверный контракт —
+секреты, URL и сеть не покидают сервер.
+
+- **Режимы доставки** (`remoteMode` в записи реестра, дефолт `auto`):
+  `auto` — `relay` для `http`/`sse` и `tools` для `stdio`; `relay` — полноценный
+  MCP-клиент на `/api/v2/mcp/relay/:name`; `tools` — tool-level proxy
+  (`/api/v2/mcp/remote/{servers,tools,call}`). Неудачный relay — **всегда**
+  деградация в `tools` с причиной в статусе, а не отказ.
+- **Скоуп и дефолты — как у удалённых сессий:** системный мастер → проектный
+  гейт `project.mcp.enabled` → сессионный снимок. Существующие проекты
+  получают серверные `enabledByDefault` **авто-сидом** (идемпотентно, маркер
+  `project.mcp.remoteSeeded`); новые проекты — сид из `enabledByDefault`.
+- **Оффлайн/сбой:** серверы остаются в `GET /sessions/:id/mcp` со
+  `status:'error'` и причиной (`error`); тулы не предлагаются до реконнекта,
+  причина видна и в блоке `mcp.status` промпта.
+- **Relay stateless** (ограничения): JSON-ответ вместо стриминга, без
+  progress/elicitation/resources/prompts и server-initiated уведомлений;
+  `GET`/`DELETE` → `405 MCP_RELAY_SESSIONLESS`.
+- **Признак фичи** — `features.remoteMcp` в `GET /api/v2/meta` (аддитивно,
+  только backend): у старого backend признака нет → фича молча выключена.
+
+Подробности — [ADR-125](./arch_decisions/adr-125-hybrid-remote-mcp.md),
+контракт — [docs/API_V2.md](./API_V2.md) §5.16.
 
 ### 3. Централизация LLM
 

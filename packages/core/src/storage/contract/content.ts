@@ -47,6 +47,19 @@ export function describeMcpRegistryRepository(
       expect(await repo.seedFromConfig({ seeded: mcpConfig })).toBe(1);
       expect(await repo.seedFromConfig({ seeded: mcpConfig })).toBe(0);
     });
+
+    // PROP-125: режим доставки сервера в локальные сессии гибрида.
+    it('remoteMode: дефолт auto, update меняет режим, чтение сохраняет', async () => {
+      const { repo } = await make();
+      const entry = await repo.add({ name: 'mode', config: mcpConfig, origin: 'instance' });
+      expect(entry.remoteMode).toBe('auto');
+      expect((await repo.get(entry.id))?.remoteMode).toBe('auto');
+
+      const updated = await repo.update(entry.id, { remoteMode: 'tools' });
+      expect(updated?.remoteMode).toBe('tools');
+      expect((await repo.get(entry.id))?.remoteMode).toBe('tools');
+      expect((await repo.getByName('mode'))?.remoteMode).toBe('tools');
+    });
   });
 }
 
