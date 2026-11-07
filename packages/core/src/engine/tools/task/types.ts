@@ -12,6 +12,7 @@ import type { EventBus } from '../../../events/bus.js';
 import type { HookBus } from '../../hooks/hook-bus.js';
 import type { RequestSessionService } from '../../events/request-session.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
+import type { ForceCompressionDeps } from '../../orchestrator/compression.js';
 import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
 import type { ModelRouter } from '../../router/router.js';
 import type { UsagePricing } from '../../../providers/usage.js';
@@ -48,6 +49,13 @@ export interface TaskExtra {
   /** ADR-030: ядровая шина хуков — agent_spawned/agent_completed/agent_failed саб-агента. */
   hooks?: HookBus;
   contextOptimizer?: ContextOptimizer;
+  /**
+   * ADR-119: сохранение резюме при авто-компактификации **дочерней** сессии
+   * (граница шага цикла саб-агента). Не задано — сжатие ребёнка пропускается
+   * (fail-open): прогон идёт как раньше, страхует предохранитель
+   * `agents.subagentMaxInputTokens`.
+   */
+  saveSummary?: ForceCompressionDeps['saveSummary'];
   parentSessionSettings?: SessionSettings;
   /** ADR-071 §2.1: активные MCP-серверы родительской сессии — скоуп тулов саб-агента. */
   mcpServers?: string[];

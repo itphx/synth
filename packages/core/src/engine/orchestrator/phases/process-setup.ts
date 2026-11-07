@@ -48,6 +48,7 @@ import { syncStateMessages } from '../../context/state-messages.js';
 import { suppressDisabledTurns } from '../../context/disabled-turns.js';
 import { agentKeyOf, buildPromptState, computeExpected, isBlockChanged, isPrefixUnchanged, type PromptStateReason } from '../../context/prompt-state.js';
 import { sessionMessagesToLlm, resolveTurnQuery } from '../prompt-info.js';
+import { resolveHistoryNormalization } from '../history-normalize.js';
 import { DEFAULT_CHARS_PER_TOKEN } from '../../context/token-ratio.js';
 import { t as sm } from '../../system-messages.js';
 import { warning } from '../../../logger.js';
@@ -508,10 +509,21 @@ export async function runProcessSetup(
     ? deps.optimizer.getMessagesForLlm(contextSession)
     : contextSession.messages;
 
-  const summaryContent = optimizedMessages
+  const summaryContentRaw = optimizedMessages
     .filter((m) => m.role === MessageRole.SUMMARY)
     .map((m) => m.content)
     .join('\n\n');
+
+  // ADR-119: хвост после сжатия может начинаться с `assistant` (срез по шагу
+  // в `_buildCompressionBoundary` — прежнее правило «хвост с user»
+  // разворачивало хвост на весь длинный ход). Anthropic требует, чтобы
+  // первое сообщение запроса было `user`: в этом случае резюме уходит из
+  // системного блока в синтетический user-чекпоинт в начале истории.
+  const historyNorm = resolveHistoryNormalization({
+    messages: optimizedMessages,
+    summaryContent: summaryContentRaw,
+  });
+  const summaryContent = historyNorm.summaryContent;
 
   // ADR-071 §2.1: MCP-тулы активных серверов сессии. Регистрация ленивая и
   // аддитивная (без deregister при смене набора): глобальный реестр держит
@@ -722,6 +734,13 @@ export async function runProcessSetup(
         `Не удалось подготовить вложения: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  // Чекпоинт — в начало запроса: первое сообщение должно быть `user`
+  // (Anthropic). Последний элемент не меняется — `baseLlmMessages.length - 1`
+  // по-прежнему указывает на user-реплику текущего хода.
+  if (historyNorm.checkpoint) {
+    baseLlmMessages = [historyNorm.checkpoint, ...baseLlmMessages];
   }
 
   // 4. Get tools from registry. ADR-070 §2.9 + ADR-071 §2.1/§2.3: встроенные —

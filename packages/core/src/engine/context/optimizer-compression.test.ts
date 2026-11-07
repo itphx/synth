@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageRole, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { LLMResponse, Message, Session, TokenUsage } from '@itphx/synth-shared';
-import { ContextOptimizer } from './optimizer.js';
+import { ContextOptimizer, CompressionCancelledError, validateCompressionContent } from './optimizer.js';
 import { ContextConfig } from './config.js';
 import { BaseProvider } from '../../providers/base.js';
+import type { CancellationToken } from '../../providers/base.js';
+import { hasValidToolPairs } from '../orchestrator/overflow.js';
+import { sessionMessagesToLlm } from '../orchestrator/prompt-info.js';
 
 class MockCompressionProvider extends BaseProvider {
   static response: LLMResponse = {
@@ -14,13 +17,42 @@ class MockCompressionProvider extends BaseProvider {
     model: 'mock-compressor',
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   };
+  /** Счётчик потоковых вызовов (`chatAsync`). */
+  static chatAsyncCalls = 0;
+  /** Токен, который провайдер отменяет прямо в стриме (тест отмены). */
+  static cancelToken: CancellationToken | null = null;
 
   async chat(): Promise<LLMResponse> {
     return MockCompressionProvider.response;
   }
 
   async *chatAsync() {
+    MockCompressionProvider.chatAsyncCalls += 1;
+    MockCompressionProvider.cancelToken?.cancel();
     yield { content: MockCompressionProvider.response.content, isFinal: true, usage: MockCompressionProvider.response.usage };
+  }
+
+  getProviderName(): string {
+    return 'mock-compressor';
+  }
+}
+
+/** Провайдер со счётчиком непотоковых вызовов (`chat`). */
+class CountingCompressionProvider extends BaseProvider {
+  static chatCalls = 0;
+  static content = '## Objective\nцель\n\n## Work State\n- готово';
+
+  async chat(): Promise<LLMResponse> {
+    CountingCompressionProvider.chatCalls += 1;
+    return {
+      content: CountingCompressionProvider.content,
+      model: 'mock-compressor',
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    };
+  }
+
+  async *chatAsync() {
+    yield { content: CountingCompressionProvider.content, isFinal: true, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
 
   getProviderName(): string {
@@ -78,6 +110,57 @@ function session(messages: Message[], patch: Partial<Session['settings']> = {}):
 
 function tok(total: number): TokenUsage {
   return { inputTokens: 0, outputTokens: 0, totalTokens: total };
+}
+
+/** Граница хвоста напрямую (приватный метод оптимизатора). */
+interface CompressionBoundary {
+  coveredIndices: number[];
+  keepFromIndex: number;
+  keepFromId?: string;
+  messages: Message[];
+  keepMessages: Message[];
+}
+
+function boundary(
+  optimizer: ContextOptimizer,
+  s: Session,
+  opts: { minKeepFromIndex?: number; keepTokens?: number } = {},
+): CompressionBoundary {
+  const private_ = optimizer as unknown as {
+    _buildCompressionBoundary: (
+      session: Session,
+      mode: string,
+      minKeepFromIndex?: number,
+      keepTokens?: number,
+    ) => CompressionBoundary;
+  };
+  return private_._buildCompressionBoundary(
+    s,
+    'compaction',
+    opts.minKeepFromIndex,
+    opts.keepTokens,
+  );
+}
+
+/** Сессия «1 user + N шагов (assistant с вызовом → tool)». */
+function longTurnSession(steps: number, tokensPerMessage = 100): Session {
+  const messages: Message[] = [msg('u0', MessageRole.USER, 'длинный запрос', { usage: tok(tokensPerMessage) })];
+  for (let i = 0; i < steps; i++) {
+    messages.push(msg(`a${i}`, MessageRole.ASSISTANT, `шаг ${i}`, {
+      usage: tok(tokensPerMessage),
+      toolCalls: [{
+        id: `c${i}`,
+        type: 'function',
+        function: { name: 'read_file', arguments: '{"file_path":"a.ts"}' },
+      }],
+    }));
+    messages.push(msg(`t${i}`, MessageRole.TOOL, `результат ${i}`, {
+      usage: tok(tokensPerMessage),
+      toolCallId: `c${i}`,
+      metadata: { tool_name: 'read_file' },
+    }));
+  }
+  return session(messages, { compactionKeepTokens: 15_000 });
 }
 
 describe('ContextOptimizer — граница хвоста сжатия', () => {
@@ -147,14 +230,18 @@ describe('ContextOptimizer — граница хвоста сжатия', () => 
     expect(plan.keepMessages.map((m) => m.id)).toEqual(['u2', 'a2']);
   });
 
-  it('нет user-границы → хвост пуст', () => {
+  it('нет user-границы → хвост начинается с шага (assistant), покрытия нет', () => {
     const s = session([
       msg('a1', MessageRole.ASSISTANT, 'a1', { usage: tok(100) }),
       msg('t1', MessageRole.TOOL, 't1', { usage: tok(100), toolCallId: 'c1' }),
     ]);
-    const plan = optimizer.prepareCompression(s, 'ru');
-    expect(plan.coveredIndices).toEqual([0, 1]);
-    expect(plan.keepFromIndex).toBe(-1);
+    // Срез по шагу: хвост — весь кандидатный список (начинается с
+    // assistant), покрывать нечего → сжатие падает на пустом покрытии
+    // (корректно: лучше отказ, чем разрыв tool-пар).
+    const b = boundary(optimizer, s);
+    expect(b.coveredIndices).toEqual([]);
+    expect(b.keepMessages.map((m) => m.id)).toEqual(['a1', 't1']);
+    expect(() => optimizer.prepareCompression(s, 'ru')).toThrow();
   });
 
   it('minKeepFromIndex защищает текущий ход от покрытия', () => {
@@ -167,6 +254,73 @@ describe('ContextOptimizer — граница хвоста сжатия', () => 
     expect(plan.coveredIndices).toEqual([0, 1]);
     expect(plan.keepFromIndex).toBe(2);
     expect(plan.keepFromId).toBe('u2');
+  });
+});
+
+describe('ContextOptimizer — срез хвоста по шагу (без user-границы)', () => {
+  let tmpDir: string;
+  let optimizer: ContextOptimizer;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-opt-step-'));
+    optimizer = new ContextOptimizer(
+      new ContextConfig({ userDataDir: tmpDir }),
+      () => null,
+      { provider: 'mock', model: 'mock-compressor', temperature: 0.1, promptFile: 'COMPACTOR' },
+      () => 200_000,
+    );
+    vi.spyOn(
+      ContextOptimizer.prototype as unknown as { _createSummarizationProvider: () => BaseProvider },
+      '_createSummarizationProvider',
+    ).mockReturnValue(
+      new MockCompressionProvider({ url: 'http://mock', apiKey: 'k', model: 'mock-compressor' }),
+    );
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('длинный ход (1 user + 200 шагов) — хвост режется по шагу, а не разворачивается на весь ход', () => {
+    const s = longTurnSession(200);
+    const plan = optimizer.prepareCompression(s, 'ru');
+
+    // Ход покрывается (до фикса user-граница разворачивала хвост на весь
+    // ход: покрытие было пустым, сжатие не уменьшало контекст).
+    expect(plan.coveredIndices.length).toBeGreaterThan(0);
+    // Хвост начинается с шага (user/assistant) — не с середины tool-пары.
+    expect(['assistant', 'user']).toContain(plan.keepMessages[0]!.role);
+    // Хвост укладывается в бюджет (иначе сжатие контекст не уменьшает).
+    expect(plan.keepMessages.length).toBeLessThan(s.messages.length);
+    // Tool-пары хвоста целы: assistant(toolUse) → tool.
+    expect(hasValidToolPairs(sessionMessagesToLlm(plan.keepMessages))).toBe(true);
+    // Покрытый префикс не обрывает пару: его последнее сообщение — не
+    // assistant с вызовом (чей результат остался бы в хвосте без пары).
+    const lastCovered = plan.messagesToCompress[plan.messagesToCompress.length - 1]!;
+    const hasOpenCall = lastCovered.role === MessageRole.ASSISTANT
+      && Array.isArray(lastCovered.toolCalls) && lastCovered.toolCalls.length > 0;
+    expect(hasOpenCall).toBe(false);
+  });
+
+  it('minKeepFromIndex — жёсткий пол: защищённые сообщения не покрываются', () => {
+    const s = longTurnSession(200);
+    const protectedFrom = 250;
+    const plan = optimizer.prepareCompression(s, 'ru', { minKeepFromIndex: protectedFrom });
+
+    // Ни одно защищённое сообщение не покрыто (пол жёсткий).
+    expect(plan.coveredIndices.every((i) => i < protectedFrom)).toBe(true);
+    // Хвост начинается не позже защищённой границы и непуст.
+    expect(plan.keepFromIndex).toBeLessThanOrEqual(protectedFrom);
+    expect(plan.keepMessages.length).toBeGreaterThan(0);
+  });
+
+  it('хвост не привязан к user-сообщению: единственный user — в начале хода', () => {
+    const s = longTurnSession(200);
+    const plan = optimizer.prepareCompression(s, 'ru');
+    // Хвост начинается с шага (assistant), а не с единственного user в начале.
+    expect(plan.keepMessages[0]!.role).toBe(MessageRole.ASSISTANT);
+    expect(plan.coveredIndices.length).toBeGreaterThan(0);
   });
 });
 
@@ -686,5 +840,320 @@ describe('ContextOptimizer — fallback контекстного окна (DEFAU
       mode: 'compaction',
       currentTokens: 150,
     });
+  });
+});
+
+describe('ContextOptimizer — валидация шаблона компактизации', () => {
+  it('принимает английские заголовки (как в шаблоне)', () => {
+    const res = validateCompressionContent(
+      'compaction',
+      '## Objective\nчего добиваемся\n\n## Requirements\n- требования',
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it('принимает markdown-заголовки (**Objective**)', () => {
+    const res = validateCompressionContent(
+      'compaction',
+      '**Objective**\nчего добиваемся\n\n**Requirements**\n- требования',
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it('принимает русские заголовки (модель перевела заголовки)', () => {
+    const res = validateCompressionContent(
+      'compaction',
+      '## Цель\nчего добиваемся\n\n## Важные файлы\n- `a.ts`',
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it('принимает смешанные заголовки и регистр', () => {
+    const res = validateCompressionContent(
+      'compaction',
+      '## objective\nчего добиваемся\n\n## СОСТОЯНИЕ РАБОТЫ\n- готово',
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it('по-прежнему отвергает текст без шаблона (порог ≥2 раздела)', () => {
+    const res = validateCompressionContent('compaction', 'просто текст без заголовков');
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.reason).toContain('0/2 headings');
+  });
+
+  it('один раздел — недостаточно', () => {
+    const res = validateCompressionContent('compaction', '## Objective\nчего добиваемся');
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe('ContextOptimizer — completeCompression: nudge и число вызовов', () => {
+  let tmpDir: string;
+  let optimizer: ContextOptimizer;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-opt-nudge-'));
+    optimizer = new ContextOptimizer(
+      new ContextConfig({ userDataDir: tmpDir }),
+      () => null,
+      { provider: 'mock', model: 'mock-compressor', temperature: 0.1, promptFile: 'COMPACTOR' },
+      () => 200_000,
+    );
+    vi.spyOn(
+      ContextOptimizer.prototype as unknown as { _createSummarizationProvider: () => BaseProvider },
+      '_createSummarizationProvider',
+    ).mockReturnValue(
+      new CountingCompressionProvider({ url: 'http://mock', apiKey: 'k', model: 'mock-compressor' }),
+    );
+    CountingCompressionProvider.chatCalls = 0;
+    CountingCompressionProvider.content = '## Objective\nцель\n\n## Work State\n- готово';
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function compressionSession(): Session {
+    return session([
+      msg('u1', MessageRole.USER, 'история'),
+      msg('a1', MessageRole.ASSISTANT, 'ответ'),
+    ], { compactionKeepTokens: 0 });
+  }
+
+  it('nudge:false — ровно один chat-вызов на невалидном ответе', async () => {
+    CountingCompressionProvider.content = 'совсем не шаблон компактизации';
+    const plan = optimizer.prepareCompression(compressionSession(), 'ru');
+
+    await expect(optimizer.completeCompression(plan, { nudge: false })).rejects.toThrow();
+    expect(CountingCompressionProvider.chatCalls).toBe(1);
+  });
+
+  it('nudge:false — валидный ответ принимается с одним вызовом', async () => {
+    const plan = optimizer.prepareCompression(compressionSession(), 'ru');
+    const result = await optimizer.completeCompression(plan, { nudge: false });
+    expect(result.content).toContain('## Objective');
+    expect(CountingCompressionProvider.chatCalls).toBe(1);
+  });
+
+  it('по умолчанию (nudge не задан) — невалидный ответ добивается вторым вызовом', async () => {
+    CountingCompressionProvider.content = 'совсем не шаблон компактизации';
+    const plan = optimizer.prepareCompression(compressionSession(), 'ru');
+
+    await expect(optimizer.completeCompression(plan)).rejects.toThrow();
+    expect(CountingCompressionProvider.chatCalls).toBe(2);
+  });
+});
+
+describe('ContextOptimizer — cooldown неудачного сжатия', () => {
+  let tmpDir: string;
+  let optimizer: ContextOptimizer;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-opt-cooldown-'));
+    optimizer = new ContextOptimizer(
+      new ContextConfig({ userDataDir: tmpDir }),
+      () => null,
+      { provider: 'mock', model: 'mock-model', temperature: 0.1, promptFile: 'SUMMARIZER' },
+      () => 200_000,
+    );
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Сессия с порогом компактизации, который заведомо превышен. */
+  function overflowingSession(): Session {
+    return session([
+      msg('u1', MessageRole.USER, 'история'),
+      msg('a1', MessageRole.ASSISTANT, 'ответ', {
+        model: 'mock-model',
+        provider: 'mock',
+        usage: { inputTokens: 170_000, outputTokens: 0, totalTokens: 170_000 },
+      }),
+    ], { compactionTokenThreshold: 85 });
+  }
+
+  it('cooldown блокирует shouldCompress, clear — снимает', () => {
+    const s = overflowingSession();
+    expect(optimizer.shouldCompress(s).triggered).toBe(true);
+
+    optimizer.noteCompressionFailure(s.id);
+    expect(optimizer.isCompressionCoolingDown(s.id)).toBe(true);
+    expect(optimizer.shouldCompress(s)).toMatchObject({
+      triggered: false,
+      reason: 'none',
+      mode: 'compaction',
+    });
+
+    optimizer.clearCompressionFailure(s.id);
+    expect(optimizer.isCompressionCoolingDown(s.id)).toBe(false);
+    expect(optimizer.shouldCompress(s).triggered).toBe(true);
+  });
+
+  it('cooldown истекает по TTL (10 минут)', () => {
+    vi.useFakeTimers();
+    const s = overflowingSession();
+
+    optimizer.noteCompressionFailure(s.id);
+    expect(optimizer.isCompressionCoolingDown(s.id)).toBe(true);
+
+    vi.advanceTimersByTime(10 * 60 * 1000);
+    expect(optimizer.isCompressionCoolingDown(s.id)).toBe(false);
+    expect(optimizer.shouldCompress(s).triggered).toBe(true);
+  });
+
+  it('cooldown относится к конкретной сессии', () => {
+    const s = overflowingSession();
+    optimizer.noteCompressionFailure(s.id);
+    expect(optimizer.isCompressionCoolingDown('other-session')).toBe(false);
+  });
+
+  it('ignoreCooldown: прогресс-гард видит порог даже при активном cooldown', () => {
+    const s = overflowingSession();
+
+    optimizer.noteCompressionFailure(s.id);
+    // Публичный вызов — cooldown учитывается (прежнее поведение).
+    expect(optimizer.shouldCompress(s).triggered).toBe(false);
+    // Прогресс-гард после сжатия — cooldown игнорируется.
+    expect(optimizer.shouldCompress(s, { ignoreCooldown: true }).triggered).toBe(true);
+
+    optimizer.clearCompressionFailure(s.id);
+    expect(optimizer.shouldCompress(s, { ignoreCooldown: true }).triggered).toBe(true);
+  });
+});
+
+describe('ContextOptimizer — вторая компактизация покрывает хвост первой', () => {
+  let tmpDir: string;
+  let optimizer: ContextOptimizer;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-opt-tail-'));
+    optimizer = new ContextOptimizer(
+      new ContextConfig({ userDataDir: tmpDir }),
+      () => null,
+      { provider: 'mock', model: 'mock-compressor', temperature: 0.1, promptFile: 'COMPACTOR' },
+      () => 200_000,
+    );
+    vi.spyOn(
+      ContextOptimizer.prototype as unknown as { _createSummarizationProvider: () => BaseProvider },
+      '_createSummarizationProvider',
+    ).mockReturnValue(
+      new MockCompressionProvider({ url: 'http://mock', apiKey: 'k', model: 'mock-compressor' }),
+    );
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('хвост, оставленный первой компактизацией, покрывается второй (SUMMARY не прячет хвост)', () => {
+    // Первая компактизация: покрывает u0/a0, живой хвост — u1/a1/u2.
+    const s = session([
+      msg('u0', MessageRole.USER, 'u0', { usage: tok(100) }),
+      msg('a0', MessageRole.ASSISTANT, 'a0', { usage: tok(100) }),
+      msg('u1', MessageRole.USER, 'u1', { usage: tok(100) }),
+      msg('a1', MessageRole.ASSISTANT, 'a1', { usage: tok(100) }),
+      msg('u2', MessageRole.USER, 'u2', { usage: tok(100) }),
+    ], { compactionKeepTokens: 300 });
+
+    const first = optimizer.prepareCompression(s, 'ru', { keepTokens: 300 });
+    expect(first.coveredIndices).toEqual([0, 1]);
+    expect(first.keepMessages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+
+    // Первое сжатие применено: покрытые отключены, резюме дописано в конец
+    // истории (SUMMARY всегда последний — так его и кладёт `saveSummary`).
+    for (const idx of first.coveredIndices) s.messages[idx]!.disabled = true;
+    s.messages.push(msg('s1', MessageRole.SUMMARY, 'резюме первой компактизации', { usage: tok(10) }));
+
+    // После первой компактизации пришли новые сообщения.
+    s.messages.push(msg('u3', MessageRole.USER, 'u3', { usage: tok(100) }));
+    s.messages.push(msg('a3', MessageRole.ASSISTANT, 'a3', { usage: tok(100) }));
+
+    // Вторая компактизация обязана покрыть «живой хвост» первой (u1/a1/u2), а
+    // не только новые сообщения: иначе он копился бы навсегда и контекст рос.
+    const second = optimizer.prepareCompression(s, 'ru', { keepTokens: 100 });
+    expect(second.coveredIndices).toEqual([2, 3, 4, 6]);
+    expect(second.messagesToCompress.map((m) => m.id)).toEqual(['u1', 'a1', 'u2', 'u3']);
+    // Хвост второй компактизации — то, что осталось живого.
+    expect(second.keepMessages.map((m) => m.id)).toEqual(['a3']);
+    // Первое сжатие не тронуто: его покрытые сообщения остались отключены.
+    expect(s.messages[0]!.disabled).toBe(true);
+    expect(s.messages[1]!.disabled).toBe(true);
+  });
+
+  it('без SUMMARY (первая компактизация) — граница прежняя', () => {
+    const s = session([
+      msg('u1', MessageRole.USER, 'u1', { usage: tok(100) }),
+      msg('a1', MessageRole.ASSISTANT, 'a1', { usage: tok(100) }),
+      msg('u2', MessageRole.USER, 'u2', { usage: tok(100) }),
+    ], { compactionKeepTokens: 100 });
+    const plan = optimizer.prepareCompression(s, 'ru', { keepTokens: 100 });
+    expect(plan.coveredIndices).toEqual([0, 1]);
+    expect(plan.keepMessages.map((m) => m.id)).toEqual(['u2']);
+  });
+});
+
+describe('ContextOptimizer — отмена сжатия', () => {
+  let tmpDir: string;
+  let optimizer: ContextOptimizer;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-opt-cancel-'));
+    optimizer = new ContextOptimizer(
+      new ContextConfig({ userDataDir: tmpDir }),
+      () => null,
+      { provider: 'mock', model: 'mock-compressor', temperature: 0.1, promptFile: 'COMPACTOR' },
+      () => 200_000,
+    );
+    vi.spyOn(
+      ContextOptimizer.prototype as unknown as { _createSummarizationProvider: () => BaseProvider },
+      '_createSummarizationProvider',
+    ).mockReturnValue(
+      new MockCompressionProvider({ url: 'http://mock', apiKey: 'k', model: 'mock-compressor' }),
+    );
+    MockCompressionProvider.chatAsyncCalls = 0;
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('уже отменённый токен: запрос не делается, бросается CompressionCancelledError', async () => {
+    const s = session([
+      msg('u1', MessageRole.USER, 'u1', { usage: tok(100) }),
+      msg('a1', MessageRole.ASSISTANT, 'a1', { usage: tok(100) }),
+    ]);
+    const plan = optimizer.prepareCompression(s, 'ru', { keepTokens: 0 });
+    const token: CancellationToken = { cancelled: true, cancel: () => {} };
+
+    await expect(optimizer.completeCompression(plan, { cancelToken: token }))
+      .rejects.toBeInstanceOf(CompressionCancelledError);
+    // Запрос к провайдеру не уходил.
+    expect(MockCompressionProvider.chatAsyncCalls).toBe(0);
+  });
+
+  it('отмена в середине потока: CompressionCancelledError, ответ не принимается', async () => {
+    const s = session([
+      msg('u1', MessageRole.USER, 'u1', { usage: tok(100) }),
+      msg('a1', MessageRole.ASSISTANT, 'a1', { usage: tok(100) }),
+    ]);
+    const plan = optimizer.prepareCompression(s, 'ru', { keepTokens: 0 });
+    // Провайдер отменяет токен прямо в стриме — ответ уже неполный.
+    const token: CancellationToken = { cancelled: false, cancel: () => { token.cancelled = true; } };
+    MockCompressionProvider.cancelToken = token;
+
+    try {
+      await expect(optimizer.completeCompression(plan, { cancelToken: token }))
+        .rejects.toBeInstanceOf(CompressionCancelledError);
+      expect(MockCompressionProvider.chatAsyncCalls).toBe(1);
+    } finally {
+      MockCompressionProvider.cancelToken = null;
+    }
   });
 });

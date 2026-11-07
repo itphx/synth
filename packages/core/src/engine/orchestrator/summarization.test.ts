@@ -24,7 +24,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { BusEvent, LLMChunk, Message, TokenUsage } from '@itphx/synth-shared';
+import type { BusEvent, LLMChunk, Message, Session, TokenUsage } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { EventBus } from '../../events/bus.js';
@@ -32,8 +32,10 @@ import { DebugCollector } from '../../debug.js';
 import { BaseProvider } from '../../providers/base.js';
 import type { CancellationToken, LLMMessage, SystemPromptInput } from '../../providers/base.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
+import { CompressionValidationError } from '../context/optimizer.js';
 import { saveAssistantMessage, type SaveAssistantMessageFn } from './persistence.js';
 import { handleSummarization, type SummarizationDeps } from './summarization.js';
+import { handleLlmFailure as handleLlmFailureReal } from './errors.js';
 
 const USAGE: TokenUsage = { inputTokens: 20, outputTokens: 8, totalTokens: 28 };
 
@@ -548,5 +550,178 @@ describe('handleSummarization', () => {
     );
 
     expect(SummaryProvider.lastPrompt as SystemPromptInput).toBe('SUMMARIZER_PROMPT');
+  });
+
+  it('невалидный ответ сжатия: без ретраев (validation) + cooldown, повтор без nudge', async () => {
+    SummaryProvider.chunks = [{ content: 'совсем не шаблон', isFinal: true, usage: USAGE }];
+    const sessionId = await makeSession([userMessage('a')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+
+    const completeCompression = vi.fn(async () => {
+      throw new CompressionValidationError('Compression response does not match the required template');
+    });
+    const noteCompressionFailure = vi.fn();
+    const deps = makeDeps({
+      // Настоящий `handleLlmFailure` — проверяем решение о ретрае, а не мок.
+      handleLlmFailure: ((
+        sid: string, streamId: string, error: unknown, attempt: number | undefined, ctx: never,
+      ) => handleLlmFailureReal(sid, streamId, error, attempt, ctx, { sessionManager })) as never,
+      optimizer: {
+        prepareCompression: () => ({
+          mode: 'compaction',
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'm', type: 'summary-provider' }),
+          llmMessages: [] as LLMMessage[],
+          systemPrompt: 'COMPACTOR',
+          messagesToCompress: [],
+          coveredIndices: [0],
+          keepFromIndex: -1,
+          keepMessages: [],
+        }),
+        completeCompression,
+        canSummarize: () => true,
+        shouldCompress: () => ({ triggered: false, reason: 'none', mode: 'compaction' }),
+        noteCompressionFailure,
+        clearCompressionFailure: vi.fn(),
+      } as unknown as ContextOptimizer,
+    });
+
+    const result = await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+    );
+
+    // `validation` — невосстановимый тип: очередь не ретраит служебное сообщение.
+    expect(result).toMatchObject({ errorType: 'validation', canRetry: false });
+    // Ровно один непотоковый вызов и **без** внутреннего nudge.
+    expect(completeCompression).toHaveBeenCalledTimes(1);
+    expect(completeCompression).toHaveBeenCalledWith(expect.anything(), { nudge: false });
+    // Cooldown включён — авто-триггер больше не зовёт LLM по кругу.
+    expect(noteCompressionFailure).toHaveBeenCalledWith(sessionId);
+    // Summary не сохранён.
+    expect((await sessionManager.getSession(sessionId))!.messages.some((m) => m.role === MessageRole.SUMMARY)).toBe(false);
+  });
+
+  it('сетевая ошибка повторного вызова: обычная классификация, без cooldown', async () => {
+    SummaryProvider.chunks = [{ content: 'совсем не шаблон', isFinal: true, usage: USAGE }];
+    const sessionId = await makeSession([userMessage('a')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+
+    const completeCompression = vi.fn(async () => {
+      throw new Error('fetch failed');
+    });
+    const noteCompressionFailure = vi.fn();
+    const deps = makeDeps({
+      handleLlmFailure: ((
+        sid: string, streamId: string, error: unknown, attempt: number | undefined, ctx: never,
+      ) => handleLlmFailureReal(sid, streamId, error, attempt, ctx, { sessionManager })) as never,
+      optimizer: {
+        prepareCompression: () => ({
+          mode: 'compaction',
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'm', type: 'summary-provider' }),
+          llmMessages: [] as LLMMessage[],
+          systemPrompt: 'COMPACTOR',
+          messagesToCompress: [],
+          coveredIndices: [0],
+          keepFromIndex: -1,
+          keepMessages: [],
+        }),
+        completeCompression,
+        canSummarize: () => true,
+        shouldCompress: () => ({ triggered: false, reason: 'none', mode: 'compaction' }),
+        noteCompressionFailure,
+        clearCompressionFailure: vi.fn(),
+      } as unknown as ContextOptimizer,
+    });
+
+    const result = await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+    );
+
+    // Сетевая ошибка — не «провал валидации»: errorType не задан, ретрай
+    // разрешён по обычной классификации.
+    expect(result).toMatchObject({ errorType: 'network_error', canRetry: true });
+    expect(result.errorType).not.toBe('validation');
+    // Cooldown не включаем: сжатие «не помогло» — не факт.
+    expect(noteCompressionFailure).not.toHaveBeenCalled();
+  });
+
+  it('прогресс-гард игнорирует активный cooldown (shouldCompress с ignoreCooldown)', async () => {
+    SummaryProvider.chunks = [{ content: '## Objective\nчего добиваемся\n\n## Work State\n- готово', isFinal: true, usage: USAGE }];
+    const sessionId = await makeSession([userMessage('a'), userMessage('b')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+
+    const shouldCompress = vi.fn((_s: Session, opts?: { ignoreCooldown?: boolean }) => ({
+      triggered: true,
+      reason: 'tokens' as const,
+      mode: 'compaction' as const,
+      ...(opts?.ignoreCooldown ? { ignoreCooldown: true } : {}),
+    }));
+    const noteCompressionFailure = vi.fn();
+    const deps = makeDeps({
+      optimizer: {
+        prepareCompression: () => ({
+          mode: 'compaction',
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'm', type: 'summary-provider' }),
+          llmMessages: [] as LLMMessage[],
+          systemPrompt: 'COMPACTOR',
+          messagesToCompress: [session.messages[0]!],
+          coveredIndices: [0],
+          keepFromIndex: 1,
+          keepMessages: [session.messages[1]!],
+        }),
+        canSummarize: () => true,
+        shouldCompress,
+        noteCompressionFailure,
+        clearCompressionFailure: vi.fn(),
+      } as unknown as ContextOptimizer,
+    });
+
+    await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+    );
+
+    // Прогресс-гард зовёт shouldCompress с ignoreCooldown — активный cooldown
+    // не должен маскировать «сжатие не помогло».
+    expect(shouldCompress).toHaveBeenCalledWith(expect.anything(), { ignoreCooldown: true });
+    const applied = events.filter((e) => e.type === 'context.summarization_applied');
+    expect(applied[0]!.data).toMatchObject({ insufficient: true });
+    expect(noteCompressionFailure).toHaveBeenCalledWith(sessionId);
+  });
+
+  it('прогресс-гард: сжатие не сняло порог → insufficient в событии + cooldown', async () => {
+    SummaryProvider.chunks = [{ content: '## Objective\nчего добиваемся\n\n## Work State\n- готово', isFinal: true, usage: USAGE }];
+    const sessionId = await makeSession([userMessage('a'), userMessage('b')]);
+    const session = (await sessionManager.getSession(sessionId))!;
+
+    const noteCompressionFailure = vi.fn();
+    const clearCompressionFailure = vi.fn();
+    const deps = makeDeps({
+      optimizer: {
+        prepareCompression: () => ({
+          mode: 'compaction',
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'm', type: 'summary-provider' }),
+          llmMessages: [] as LLMMessage[],
+          systemPrompt: 'COMPACTOR',
+          messagesToCompress: [session.messages[0]!],
+          coveredIndices: [0],
+          keepFromIndex: 1,
+          keepMessages: [session.messages[1]!],
+        }),
+        canSummarize: () => true,
+        // Порог после сжатия всё ещё превышен.
+        shouldCompress: () => ({ triggered: true, reason: 'tokens', mode: 'compaction' }),
+        noteCompressionFailure,
+        clearCompressionFailure,
+      } as unknown as ContextOptimizer,
+    });
+
+    await handleSummarization(
+      session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+    );
+
+    const applied = events.filter((e) => e.type === 'context.summarization_applied');
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.data).toMatchObject({ insufficient: true });
+    expect(noteCompressionFailure).toHaveBeenCalledWith(sessionId);
+    expect(clearCompressionFailure).not.toHaveBeenCalled();
   });
 });

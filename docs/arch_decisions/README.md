@@ -65,6 +65,7 @@
 | ADR-124 | Удалённый SSH-доступ агента — два режима работы с ключами (`tools` / `agent`) | ✅ Реализовано | [adr-124-remote-ssh-access.md](./adr-124-remote-ssh-access.md) |
 | ADR-125 | Серверные MCP-серверы в локальных сессиях гибрида — relay и tools | ✅ Реализовано | [adr-125-hybrid-remote-mcp.md](./adr-125-hybrid-remote-mcp.md) |
 | ADR-127 | Параллельное исполнение инструментов в шаге — паритет с opencode | ✅ Реализовано | [adr-127-parallel-tool-execution.md](./adr-127-parallel-tool-execution.md) |
+| ADR-128 | Компактизация на границе шага (mid-turn) | ✅ Реализовано | [adr-128-step-boundary-compaction.md](./adr-128-step-boundary-compaction.md) |
 
 ## Частично
 
@@ -167,5 +168,5 @@
 
 ---
 
-Всего документов: 107 (Решения: 53, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 108 (Решения: 54, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 20 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

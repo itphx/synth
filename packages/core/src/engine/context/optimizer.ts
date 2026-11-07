@@ -17,7 +17,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from '@itphx/synth-shared';
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
-import type { LLMMessage } from '../../providers/base.js';
+import type { CancellationToken, LLMMessage } from '../../providers/base.js';
 import { BaseProvider, ProviderFactory } from '../../providers/index.js';
 import { info, warning } from '../../logger.js';
 import { GatewayProvider, ObfuscationMapStore } from '../gateway/index.js';
@@ -107,8 +107,73 @@ export const COMPACTION_TEMPLATE_HEADINGS = [
   '## Important Context',
 ] as const;
 
+/**
+ * Варианты заголовков разделов компактизации: английский (как в шаблоне) и
+ * русский — модель часто переводит заголовки, и строгая проверка по-английски
+ * роняла сжатие целиком (`Compression response does not match the required
+ * template`). Каждый раздел узнаётся по **любому** из вариантов.
+ *
+ * Ключ — заголовок из `COMPACTION_TEMPLATE_HEADINGS` (без префикса `## `):
+ * шаблон остаётся единственным источником истины для английских заголовков.
+ */
+const COMPACTION_SECTION_ALIASES_RU: Readonly<Record<string, readonly string[]>> = {
+  Objective: ['цель'],
+  Requirements: ['требования'],
+  Decisions: ['решения'],
+  'Work State': ['состояние работы'],
+  'Next Move': ['следующий шаг'],
+  'Relevant Files': ['важные файлы', 'релевантные файлы'],
+  'Important Context': ['важный контекст'],
+};
+
+/** Раздел шаблона → варианты его заголовка (EN из шаблона + RU синонимы). */
+const COMPACTION_SECTION_ALIASES: ReadonlyArray<readonly string[]> = COMPACTION_TEMPLATE_HEADINGS.map(
+  (heading) => {
+    const title = heading.replace(/^##\s*/, '');
+    return [title.toLowerCase(), ...(COMPACTION_SECTION_ALIASES_RU[title] ?? [])];
+  },
+);
+
+/**
+ * Нормализация строки-заголовка: markdown-декор (`##`, `**`, `` ` ``),
+ * регистр и пунктуация. `## **Objective**:` → `objective`.
+ */
+function normalizeHeadingLine(line: string): string {
+  return line
+    .replace(/^[#>\-*+\s]+/, '')
+    .replace(/[*_`~]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Сколько разделов шаблона найдено в ответе. Заголовок считается найденным,
+ * если нормализованная строка начинается с одного из вариантов раздела.
+ */
+function countCompactionSections(content: string): number {
+  const lines = (content ?? '').split('\n');
+  let count = 0;
+  for (const aliases of COMPACTION_SECTION_ALIASES) {
+    const found = lines.some((line) => {
+      const normalized = normalizeHeadingLine(line);
+      return aliases.some((alias) => normalized === alias || normalized.startsWith(`${alias} `));
+    });
+    if (found) count++;
+  }
+  return count;
+}
+
 /** Минимальная длина содержательного резюме (символов). */
 const MIN_SUMMARY_LENGTH = 20;
+
+/**
+ * TTL cooldown'а после неудачного сжатия (мс). Пока он активен, авто-триггер
+ * сжатия не зовёт LLM: иначе невалидный ответ модели крутится по очереди
+ * ретраев, а контекст не сжимается.
+ */
+const COMPRESSION_FAILURE_COOLDOWN_MS = 10 * 60 * 1000;
 
 /** Напоминание модели при нарушении формата (один nudge-повтор). */
 const COMPRESSION_FORMAT_NUDGE: Record<CompressionMode, string> = {
@@ -167,7 +232,14 @@ function compressionOmittedMarker(count: number, lang: string): string {
     : `[… ${count} старых сообщений опущено …]`;
 }
 
-/** Проверка формата/содержания ответа сжатия. */
+/**
+ * Проверка формата/содержания ответа сжатия.
+ *
+ * Компактизация: ответ обязан содержать заголовки шаблона (≥2 разделов).
+ * Проверка устойчива к регистру, markdown-разметке и локали заголовков —
+ * см. `COMPACTION_SECTION_ALIASES`. Порог (≥2 раздела) прежний: «любой
+ * непустой текст» ответом не считается.
+ */
 export function validateCompressionContent(
   mode: CompressionMode,
   content: string,
@@ -179,11 +251,42 @@ export function validateCompressionContent(
     }
     return { ok: true };
   }
-  const headings = COMPACTION_TEMPLATE_HEADINGS.filter((heading) => text.includes(heading));
-  if (headings.length < 2) {
-    return { ok: false, reason: `compaction template mismatch (${headings.length}/2 headings)` };
+  const sections = countCompactionSections(text);
+  if (sections < 2) {
+    return { ok: false, reason: `compaction template mismatch (${sections}/2 headings)` };
   }
   return { ok: true };
+}
+
+/**
+ * Провал валидации ответа сжатия (шаблон/длина) или недопустимый
+ * finish-reason.
+ *
+ * Отличается от сетевой/провайдерской ошибки: повтор того же ответа модели
+ * не поможет — нужен cooldown («сжатие не помогло»), а не ретрай очереди.
+ * Тексты сообщений — прежние (см. `validateCompressionContent` и
+ * `compressionFinishReasonError`).
+ */
+export class CompressionValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CompressionValidationError';
+  }
+}
+
+/**
+ * Сжатие контекста отменено пользователем («Стоп»).
+ *
+ * Отмена ломает итерацию сжатия: ответ модели неполный, валидировать его
+ * нельзя, а «плохой ответ» вводит в cooldown (неверная причина). Поэтому
+ * отмена — отдельный сигнал: вызывающий трактует его как «сжатие не
+ * состоялось» и продолжает ход без сжатия.
+ */
+export class CompressionCancelledError extends Error {
+  constructor(message = 'Compression cancelled') {
+    super(message);
+    this.name = 'CompressionCancelledError';
+  }
 }
 
 /**
@@ -238,6 +341,12 @@ export class ContextOptimizer {
 
   private _summaryCache = new Map<string, { result: Message; hash: string; at: number }>();
   private _gatewayHooks: ContextOptimizerGatewayHooks | null = null;
+  /**
+   * Cooldown после неудачного сжатия: `sessionId` → метка времени провала.
+   * In-memory (переживает только процесс) — сжатие восстанавливается после
+   * рестарта инстанса.
+   */
+  private _compressionFailures = new Map<string, number>();
 
   // Константа: 4 символа ≈ 1 токен (приблизительно, fallback)
   private static readonly CHARS_PER_TOKEN = 4;
@@ -316,10 +425,20 @@ export class ContextOptimizer {
    *   что показывает UI), а не «триггер отключён»; явное окно модели приоритетнее.
    *   Порог не клампится в 1 токен: на малых окнах резерв съедает окно и
    *   авто-триггер выключается (`force`/overflow работают).
+   *
+   * `opts.ignoreCooldown` — прогресс-гард после сжатия: активный cooldown
+   * не должен маскировать «сжатие не помогло» (порог всё ещё превышен).
+   * Публичный вызов без opts — прежнее поведение (cooldown учитывается).
    */
-  shouldCompress(session: Session): CompressionTriggerResult {
+  shouldCompress(session: Session, opts?: { ignoreCooldown?: boolean }): CompressionTriggerResult {
     const mode = this.effectiveMode(session);
     if (!mode) return { triggered: false, reason: 'none', mode: null };
+
+    // Cooldown после неудачного сжатия: авто-триггер не срабатывает, LLM не
+    // зовётся (иначе невалидный ответ модели крутится по кругу ретраев).
+    if (opts?.ignoreCooldown !== true && this.isCompressionCoolingDown(session.id)) {
+      return { triggered: false, reason: 'none', mode };
+    }
 
     if (mode === 'summarization') {
       // m4: источник истины — `contextOptimization`; `summarizationEnabled`
@@ -367,6 +486,41 @@ export class ContextOptimizer {
       return { triggered: true, reason: 'tokens', mode, currentTokens, threshold };
     }
     return { triggered: false, reason: 'none', mode, currentTokens, threshold };
+  }
+
+  // ====================================================================
+  // Cooldown неудачного сжатия
+  // ====================================================================
+
+  /**
+   * Отметить неудачное сжатие сессии: авто-триггер сжатия на
+   * `COMPRESSION_FAILURE_COOLDOWN_MS` не срабатывает.
+   *
+   * Нужен после провала валидации ответа модели (шаблон не собран) — без него
+   * очередь ретраит служебное сообщение суммаризации, каждый ретрай зовёт LLM
+   * и снова падает, а контекст не сжимается.
+   */
+  noteCompressionFailure(sessionId: string): void {
+    if (!sessionId) return;
+    this._compressionFailures.set(sessionId, Date.now());
+  }
+
+  /** Снять cooldown сессии (сжатие прошло или порог снят). */
+  clearCompressionFailure(sessionId: string): void {
+    if (!sessionId) return;
+    this._compressionFailures.delete(sessionId);
+  }
+
+  /** Активен ли cooldown неудачного сжатия для сессии. */
+  isCompressionCoolingDown(sessionId: string): boolean {
+    if (!sessionId) return false;
+    const failedAt = this._compressionFailures.get(sessionId);
+    if (failedAt === undefined) return false;
+    if (Date.now() - failedAt >= COMPRESSION_FAILURE_COOLDOWN_MS) {
+      this._compressionFailures.delete(sessionId);
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -636,30 +790,88 @@ export class ContextOptimizer {
   /**
    * Непотоковый вызов сжатия с валидацией ответа и одним nudge-повтором
    * (компактизация — обязательный шаблон; суммаризация — непустой ответ).
+   *
+   * `opts.nudge === false` — без внутреннего повтора: один вызов, при
+   * невалидном ответе сразу ошибка. Используется стримовым путём, где
+   * повтор уже делает вызывающий (иначе на одну попытку уходит три
+   * LLM-вызова: стрим + completeCompression + внутренний nudge).
+   *
+   * `opts.cancelToken` — вызов с отменой: потоковый (`chatAsync`) с
+   * `cancelToken`, ответ собирается из чанков. Отмена бросает
+   * {@link CompressionCancelledError} (не «плохой ответ модели»).
    */
   async completeCompression(
     plan: CompressionPlan,
+    opts: { nudge?: boolean; cancelToken?: CancellationToken } = {},
   ): Promise<{ content: string; response: LLMResponse }> {
-    let response = await plan.provider.chat(plan.llmMessages, plan.systemPrompt);
+    const nudgeAllowed = opts.nudge !== false;
+    const cancelToken = opts.cancelToken;
+    const call = (systemPrompt: string): Promise<LLMResponse> => (cancelToken
+      ? this._completeCompressionCancellable(plan, cancelToken, systemPrompt)
+      : plan.provider.chat(plan.llmMessages, systemPrompt));
+    let response = await call(plan.systemPrompt);
     const finishError = compressionFinishReasonError(plan.mode, response.finishReason);
-    if (finishError) throw new Error(finishError);
+    if (finishError) throw new CompressionValidationError(finishError);
 
     let validation = validateCompressionContent(plan.mode, response.content);
-    if (!validation.ok) {
+    if (!validation.ok && nudgeAllowed) {
       const nudgePrompt = `${plan.systemPrompt}\n\n${COMPRESSION_FORMAT_NUDGE[plan.mode]}`;
-      response = await plan.provider.chat(plan.llmMessages, nudgePrompt);
+      response = await call(nudgePrompt);
       const secondFinishError = compressionFinishReasonError(plan.mode, response.finishReason);
-      if (secondFinishError) throw new Error(secondFinishError);
+      if (secondFinishError) throw new CompressionValidationError(secondFinishError);
       validation = validateCompressionContent(plan.mode, response.content);
     }
     if (!validation.ok) {
-      throw new Error(
+      throw new CompressionValidationError(
         plan.mode === 'compaction'
           ? sm('context.compression_template')
           : sm('context.compression_failed', { mode: plan.mode, reason: validation.reason }),
       );
     }
     return { content: response.content, response };
+  }
+
+  /**
+   * Сжатие с отменой: потоковый вызов, ответ собирается из чанков.
+   *
+   * Контент копится как в `summarizeStream`: финальный чанк несёт **полный**
+   * накопленный контент — его заменяем, а не складываем (иначе удвоение).
+   * Уже отменённый токен — запрос не делаем вовсе.
+   */
+  private async _completeCompressionCancellable(
+    plan: CompressionPlan,
+    cancelToken: CancellationToken,
+    systemPrompt: string = plan.systemPrompt,
+  ): Promise<LLMResponse> {
+    if (cancelToken.cancelled) throw new CompressionCancelledError();
+    let content = '';
+    let reasoning = '';
+    let model = plan.provider.model;
+    let usage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let finishReason: LlmFinishReason | undefined;
+    const stream = plan.provider.chatAsync(
+      plan.llmMessages,
+      systemPrompt,
+      undefined,
+      undefined,
+      cancelToken,
+    );
+    for await (const chunk of stream) {
+      content = chunk.isFinal && chunk.content ? chunk.content : content + chunk.content;
+      if (chunk.reasoning) reasoning = chunk.reasoning;
+      if (chunk.model) model = chunk.model;
+      if (chunk.usage) usage = chunk.usage;
+      if (chunk.finishReason) finishReason = chunk.finishReason;
+      if (cancelToken.cancelled) throw new CompressionCancelledError();
+    }
+    if (cancelToken.cancelled) throw new CompressionCancelledError();
+    return {
+      content,
+      model,
+      usage,
+      ...(reasoning ? { reasoning } : {}),
+      ...(finishReason ? { finishReason } : {}),
+    };
   }
 
   async summarize(session: Session): Promise<Message> {
@@ -936,8 +1148,27 @@ export class ContextOptimizer {
 
   /**
    * Граница хвоста: кандидаты после последнего SUMMARY; считаем токены с конца,
-   * затем сдвигаем границу вперёд до ближайшего user-сообщения (не рвём ход и
-   * tool-пары). `budget = 0` без `minKeepFromIndex` → хвоста нет.
+   * затем сдвигаем границу **НАЗАД** до ближайшего кандидата, который может
+   * начать хвост, — `user` или `assistant` (шаг хода). Хвост начинается с
+   * шага, а не с середины tool-пары: срез с `assistant(toolUse)` сохраняет его
+   * tool-результаты в хвосте, а покрытый префикс заканчивается tool-результатом
+   * или assistant-сообщением без вызовов.
+   *
+   * Старое правило («хвост обязан начинаться с user») в длинном ходе
+   * разворачивало хвост на весь ход: у хода ровно одно user-сообщение в
+   * начале, поэтому «хвост 15k токенов» превращался в «оставить весь ход» и
+   * сжатие не уменьшало контекст.
+   *
+   * `minKeepFromIndex` — жёсткий пол: защищённые сообщения не покрываются
+   * (сдвиг назад его не отменяет). `budget = 0` без `minKeepFromIndex` →
+   * хвоста нет.
+   *
+   * Кандидаты — **вся** история (не только после последнего SUMMARY):
+   * «живой хвост» предыдущего сжатия лежит ДО последнего SUMMARY (SUMMARY
+   * дописывается в конец истории), и при старте с `lastSummaryIdx + 1` он
+   * никогда не покрывался — накапливался навсегда и контекст рос. Уже
+   * покрытые сообщения отфильтрованы по `disabled`, SUMMARY/INFO — по роли,
+   * pinned — не трогаем.
    */
   private _buildCompressionBoundary(
     session: Session,
@@ -951,8 +1182,7 @@ export class ContextOptimizer {
     messages: Message[];
     keepMessages: Message[];
   } {
-    const lastSummaryIdx = this._findLastSummaryIndex(session.messages);
-    const startIdx = lastSummaryIdx >= 0 ? lastSummaryIdx + 1 : 0;
+    const startIdx = 0;
     const candidates: Array<{ index: number; msg: Message }> = [];
 
     for (let i = startIdx; i < session.messages.length; i++) {
@@ -983,17 +1213,20 @@ export class ContextOptimizer {
       if (protectedPos >= 0) startPos = Math.min(startPos, protectedPos);
     }
 
-    // Хвост обязан начинаться с user-сообщения (иначе разорвали бы ход/tool-пары).
+    // Хвост начинается с шага (user/assistant) — иначе разорвали бы ход и
+    // tool-пары. Сдвиг — НАЗАД от вычисленной границы.
     if (budget > 0 || minKeepFromIndex !== undefined) {
-      const lastUserPos = this._findLastPosWithRole(candidates, MessageRole.USER);
-      if (lastUserPos < 0) {
-        startPos = candidates.length;
-      } else {
-        if (startPos > lastUserPos) startPos = lastUserPos;
-        let p = startPos;
-        while (p < candidates.length && candidates[p]!.msg.role !== MessageRole.USER) p++;
-        startPos = p < candidates.length ? p : candidates.length;
-      }
+      const safePos = this._findSafeTailStart(candidates, startPos);
+      // Безопасного кандидата нет → покрываем ВСЮ историю, хвост пустой.
+      // Это безопасно: пары tool рвать нечего (хвоста нет), а покрытие
+      // непустое, если кандидаты есть.
+      startPos = safePos < 0 ? candidates.length : safePos;
+    }
+
+    // Пол `minKeepFromIndex` — жёсткий: сдвиг границы назад его не отменяет.
+    if (minKeepFromIndex !== undefined) {
+      const protectedPos = candidates.findIndex((c) => c.index >= minKeepFromIndex);
+      if (protectedPos >= 0) startPos = Math.min(startPos, protectedPos);
     }
 
     const covered = candidates.slice(0, startPos);
@@ -1009,6 +1242,26 @@ export class ContextOptimizer {
       messages: covered.map((c) => c.msg),
       keepMessages: keep.map((c) => c.msg),
     };
+  }
+
+  /**
+   * Ближайший безопасный старт хвоста: `user` или `assistant` (шаг хода).
+   * Ищем НАЗАД от `fromPos` (включительно).
+   *
+   * `tool`/`system`/`info`/`summary` стартом быть не могут: разорвали бы
+   * tool-пары (assistant(toolUse) без результата) либо начали хвост с
+   * не-реплики. `-1` — безопасного кандидата нет; вызывающий тогда покрывает
+   * историю целиком (хвост пустой — рвать tool-пары нечего).
+   */
+  private _findSafeTailStart(
+    candidates: Array<{ index: number; msg: Message }>,
+    fromPos: number,
+  ): number {
+    for (let i = Math.min(fromPos, candidates.length - 1); i >= 0; i--) {
+      const role = candidates[i]!.msg.role;
+      if (role === MessageRole.USER || role === MessageRole.ASSISTANT) return i;
+    }
+    return -1;
   }
 
   private _findLastPosWithRole(
@@ -1265,6 +1518,10 @@ export class ContextOptimizer {
     // Резюме — чекпоинт в начале контекста, затем **все** активные сообщения
     // в исходном порядке. Хвост и pinned могут лежать до SUMMARY (SUMMARY
     // дописывается в конец истории) — они обязаны остаться в контексте.
+    //
+    // Хвост может начинаться с `assistant` (срез по шагу в
+    // `_buildCompressionBoundary`) — здесь это не важно: первое сообщение
+    // запроса нормализуется в `process-setup` (см. `resolveHistoryNormalization`).
     const result: Message[] = [];
     const lastSummaryIdx = this._findLastSummaryIndex(session.messages);
 
@@ -1350,12 +1607,20 @@ export class ContextOptimizer {
   /**
    * Есть ли что покрывать (без вызова LLM). Строит границу хвоста для
    * эффективного режима; ошибки/отсутствие режима → `false`.
+   *
+   * Покрываемый префикс должен содержать **шаг** (assistant/tool), а не одну
+   * user-реплику: хвост срезом по шагу может начинаться с assistant, и
+   * покрытие одной реплики контекст не уменьшает («капать нечего»).
    */
   canCompress(session: Session): boolean {
     try {
       const mode = this.effectiveMode(session);
       if (!mode) return false;
-      return this._buildCompressionBoundary(session, mode).coveredIndices.length > 0;
+      const boundary = this._buildCompressionBoundary(session, mode);
+      if (boundary.messages.length === 0) return false;
+      return boundary.messages.some(
+        (m) => m.role === MessageRole.ASSISTANT || m.role === MessageRole.TOOL,
+      );
     } catch {
       return false;
     }

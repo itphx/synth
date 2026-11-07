@@ -117,6 +117,7 @@ sequenceDiagram
     O->>B: step.started stepIndex 1
     B-->>L: следующий сегмент в том же блоке хода
   end
+  Note over O,P: на границе шага — проверка сжатия контекста (ADR-128):<br/>после результатов инструментов, до steer-инъекций;<br/>сжатие не считается шагом
 
   alt recoverable ошибка провайдера
     Q->>B: stream.retry attempt, max_retries, retry_in, error
@@ -296,6 +297,11 @@ sequenceDiagram
       O->>S: _persistStepToolResults в metadata шага
       O->>B: step.tools.finished
     end
+    opt граница шага — проверка сжатия (ADR-128)
+      O->>O: триггер сжатия и пересборка запроса
+      O->>G: вызов сжатия, если порог превышен
+      O->>B: context.summarization_applied phase mid_turn
+    end
   end
   O->>S: runProcessFinalize saveAssistantMessage статус completed
   O->>B: step.finished финального шага
@@ -328,9 +334,17 @@ stateDiagram-v2
 - **Шаг.** Внутри `Busy` шаг живёт `step.started` → `part.*` → `step.finished`; при наличии
   вызовов между `step.finished` и `step.tools.finished` идёт **исполнение инструментов** (ход при
   этом остаётся `Busy`, `step.finished` означает лишь «вызов LLM завершён»).
+- **Граница шага — проверка сжатия (ADR-128).** Между шагами, **после** результатов инструментов
+  и **до** инъекций steering (ADR-104), проверяется триггер сжатия контекста. Сжатие **не
+  считается шагом**: счётчик шагов не растёт, `step.started`/`step.finished` не публикуются, лимит
+  `AgentDefinition.maxSteps` не сдвигается. В цикле саб-агента проверка та же и стоит **перед**
+  предохранителем `agents.subagentMaxInputTokens`.
 - **Служебный шаг сжатия** (ADR-119): помечен `kind: 'compression'` в `step.started`/`step.finished`;
   его `usage` — расход вызова сжатия (весь транскрипт на входе), а не занятость контекстного окна.
   Занятость после сжатия приходит полем `context_tokens` в `context.summarization_applied`.
+  **Mid-turn сжатие идёт без отдельного хода**: оно пересобирает контекст текущего запроса
+  (`[CONTEXT CHECKPOINT]` + живой хвост) вместо отдельного служебного хода очереди, а событие
+  `context.summarization_applied` несёт аддитивное `phase: 'mid_turn'`.
 - **«Стоп»** (`POST /:id/abort`): пишется персистентный `status.cancelRequested` под локом →
   `orchestrator.cancel(streamId)` (graceful: `stream.cancelled` + частичный ответ) →
   `queueManager.requestStop(id)` (будит backoff, абортит LLM-вызов). Очистку

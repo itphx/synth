@@ -7,7 +7,7 @@
  * сессии, а частично применённые мутации состояния сохраняются.
  */
 import { MessageRole } from '@itphx/synth-shared';
-import type { Message, SessionSettings } from '@itphx/synth-shared';
+import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
 import { serializeSession } from '../../../server/serialize.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
 import { t as sm } from '../../system-messages.js';
@@ -52,6 +52,16 @@ export interface PrepareChildSessionOptions {
 }
 
 /**
+ * Сброс унаследованных runtime-флагов форка: ребёнок начинает прогон с
+ * чистого состояния — ни «жду суммаризацию», ни состояние ретрая родителя
+ * (они относятся к ходу родителя, а не к задаче ребёнка).
+ */
+function resetForkRuntimeFlags(session: Session): void {
+  session.summarizationPending = false;
+  session.retry = undefined;
+}
+
+/**
  * Создать дочернюю сессию саб-агента и заполнить историю/заметки родителя.
  * Мутации — в `state` (переживают частичный сбой так же, как локальные
  * переменные прежнего инлайн-блока).
@@ -76,10 +86,17 @@ export async function prepareChildSession(
     agentRole: subagentType,
     permission: derivedPermission,
     planMode: 'auto',
-    // Ребёнок — задача, а не продолжение диалога (как в opencode): авто-оптимизация
-    // контекста и авто-суммаризация родителя не наследуются. Иначе после первого
-    // сообщения/форка мог сработать `shouldSummarize`/`summarizationPending` родителя.
-    contextOptimization: 'none',
+    // Ребёнок — задача, а не продолжение диалога (как в opencode): режим
+    // оптимизации контекста **родителя** не наследуется. Иначе после первого
+    // сообщения/форка мог сработать `shouldSummarize`/`summarizationPending`
+    // родителя.
+    //
+    // Но собственной компактизации у ребёнка теперь есть (ADR-119): длинный
+    // прогон саб-агента без неё упирается в окно модели (или в
+    // предохранитель `agents.subagentMaxInputTokens`, который завершает
+    // прогон детерминированным отчётом). Режим ребёнка — `compaction`
+    // (рабочее состояние по коду/проекту), а не `summarization`.
+    contextOptimization: 'compaction',
     summarizationEnabled: false,
     ...childRoutingOverrides,
     // Фактическая пара прогона — последней: ребёнок видит модель, на которой
@@ -110,6 +127,7 @@ export async function prepareChildSession(
           fork.ownerId = parentSession.ownerId;
           fork.mode = parentSession.mode;
           fork.settings = { ...fork.settings, ...childSettingsPatch };
+          resetForkRuntimeFlags(fork);
           await extra.sessionManager.updateSession(fork);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
@@ -124,6 +142,7 @@ export async function prepareChildSession(
           fork.ownerId = parentSession.ownerId;
           fork.mode = parentSession.mode;
           fork.settings = { ...fork.settings, ...childSettingsPatch };
+          resetForkRuntimeFlags(fork);
           await extra.sessionManager.updateSession(fork);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
@@ -136,6 +155,7 @@ export async function prepareChildSession(
           fork.ownerId = parentSession.ownerId;
           fork.mode = parentSession.mode;
           fork.settings = { ...fork.settings, ...childSettingsPatch };
+          resetForkRuntimeFlags(fork);
           await extra.sessionManager.updateSession(fork);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
@@ -216,6 +236,10 @@ export async function prepareChildSession(
           child.userId = parentSession.userId;
           child.ownerId = parentSession.ownerId;
           child.mode = parentSession.mode;
+          // Новый инстанс и так чистый (`createSession`/funnel не наследуют
+          // runtime-флаги родителя) — но сброс делаем явно: «жду суммаризацию»
+          // и состояние ретрая родителя к задаче ребёнка отношения не имеют.
+          resetForkRuntimeFlags(child);
           await extra.sessionManager.updateSession(child);
           state.childSessionId = child.id;
         }

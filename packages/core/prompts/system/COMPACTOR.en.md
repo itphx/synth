@@ -44,10 +44,16 @@ The concrete next step.
 
 ## Rules
 
+- **Section headings stay strictly English**, exactly as in the template above:
+  `## Objective`, `## Requirements`, `## Decisions`, `## Work State`,
+  `## Next Move`, `## Relevant Files`, `## Important Context`. Only the section
+  **content** may be translated. Reason: compaction validation matches the
+  headings against the template — translated headings break context compaction
+  (the session keeps an uncompressed context and runs into the window limit).
 - Preserve **exact** paths, function/symbol names, commands, error lines, URLs.
 - Do not invent facts: only what is present in the transcript.
 - Do not move already resolved questions into `Open questions`/`Blocked`.
 - Be terse: short bullets, no filler, no repetition.
 - Mark media attachments as `[Вложение: mime]`.
 - Do not mention the compression process.
-- Write in the language of the dialogue.
+- Write the content in the language of the dialogue (headings stay English).

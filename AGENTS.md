@@ -382,7 +382,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 107 (Решения: 53, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 108 (Решения: 54, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 20 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
@@ -407,7 +407,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | permissions / plan-act / полномочия / locked settings | [ADR-025](./docs/arch_decisions/adr-025-plan-act-toggle.md), [ADR-028](./docs/arch_decisions/adr-028-plan-build-strictness.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md), [ADR-106](./docs/arch_decisions/adr-106-authority-layer.md), [docs/AUTHORITY.md](./docs/AUTHORITY.md), [PROP-083](./docs/arch_decisions/prop-083-instance-customization-branding.md) |
 | внешние доступы / OAuth-коннекторы | [ADR-105](./docs/arch_decisions/adr-105-external-credentials.md), [docs/EXTERNAL_ACCESS.md](./docs/EXTERNAL_ACCESS.md) |
 | steering / поток хода / `messageModel` / догон / meta | [ADR-104](./docs/arch_decisions/adr-104-mid-turn-steering.md), [ADR-118](./docs/arch_decisions/adr-118-message-stream-v2.md), [docs/MESSAGE_FLOW.md](./docs/MESSAGE_FLOW.md), [docs/API_V2.md](./docs/API_V2.md) §3.3/§5.4 |
-| сжатие контекста / суммаризация / компактизация / overflow | [ADR-119](./docs/arch_decisions/adr-119-context-compaction.md), [ADR-070](./docs/arch_decisions/adr-070-system-prompt-composer.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Дефолты оптимизации контекста для новых сессий» |
+| сжатие контекста / суммаризация / компактизация / overflow | [ADR-119](./docs/arch_decisions/adr-119-context-compaction.md), [ADR-128](./docs/arch_decisions/adr-128-step-boundary-compaction.md) (сжатие на границе шага — mid-turn), [ADR-070](./docs/arch_decisions/adr-070-system-prompt-composer.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Дефолты оптимизации контекста для новых сессий» |
 | конфиг / локальный home / пути | [ADR-023](./docs/arch_decisions/adr-023-configuration.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md), [ADR-079](./docs/arch_decisions/adr-079-local-home-independent-instances.md), [ADR-045](./docs/arch_decisions/adr-045-hybrid-server-profiles.md) |
 | routing / микро-слой / провайдеры / модели | [ADR-034](./docs/arch_decisions/adr-034-model-routing.md), [ADR-035](./docs/arch_decisions/adr-035-micro-model-first.md), [ADR-084](./docs/arch_decisions/adr-084-decision-models-clef.md), [ADR-117](./docs/arch_decisions/adr-117-provider-compatibility.md), [docs/ROUTING.md](./docs/ROUTING.md), [docs/PROVIDERS.md](./docs/PROVIDERS.md), [docs/LLM_PROVIDERS.md](./docs/LLM_PROVIDERS.md) |
 | безопасность / gateway / целостность клиента / soft-delete | [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md), [PROP-073](./docs/arch_decisions/prop-073-client-integrity-hybrid.md), [PROP-074](./docs/arch_decisions/prop-074-soft-delete-retention.md) |

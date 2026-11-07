@@ -29,7 +29,7 @@ import { ObfuscationMapStore } from '../../gateway/obfuscation-map-store.js';
 import { estimatePromptChars, estimateTokens } from '../../context/token-ratio.js';
 import { buildMaxStepsPrompt, maxStepsAssistantMessage } from '../../llm/max-steps.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
-import { debug } from '../../../logger.js';
+import { debug, info } from '../../../logger.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
 import {
   publishPartDelta,
@@ -45,6 +45,10 @@ import {
 } from '../../orchestrator/turn-events.js';
 import { setLiveStreamSnapshot } from '../../live-stream-snapshot.js';
 import { messageToLLMMessage } from './prompt.js';
+import {
+  tryCompactChildSession,
+  MAX_SUBAGENT_MID_TURN_COMPRESSIONS,
+} from './child-compaction.js';
 import { applySteerInjections, dropSteerInjections } from '../../steering/apply.js';
 import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
 import { hasVisibleStepContent } from '../../orchestrator/persistence.js';
@@ -652,6 +656,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   try {
     let finalContent = '';
     let iteration = 0;
+    /**
+     * ADR-119: сколько раз за прогон уже сжали контекст ребёнка (граница
+     * шага). Потолок — `MAX_SUBAGENT_MID_TURN_COMPRESSIONS`; сжатие не шаг,
+     * лимит шагов агента оно не расходует.
+     */
+    let childCompactions = 0;
     const doomTracker = new Map<string, number>();
     let subagentReasoning = '';
     let subagentDenied = false;
@@ -1005,6 +1015,40 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // итерацию. Результаты инструментов предыдущей итерации уже в
       // `messages`, поэтому пары `toolUse`/`toolResult` не рвутся.
       await applyChildSteerInjections();
+
+      // ─── ADR-119: авто-компактификация дочерней сессии (граница шага) ──
+      // Длинный прогон ребёнка без сжатия упирается в окно модели (или в
+      // предохранитель `agents.subagentMaxInputTokens`, который завершает
+      // прогон детерминированным отчётом). Сжатие подставляет в запрос
+      // пересобранный контекст (`[CONTEXT CHECKPOINT]` + живой хвост);
+      // предохранитель бюджета ниже работает уже по сокращённому `messages`.
+      //
+      // Шаг-лимит имеет приоритет: финальный шаг-отчёт opencode не сжимаем.
+      // Сжатие — не шаг: `iteration`/`toolIteration` не растут.
+      if (!stepLimitStep && childCompactions < MAX_SUBAGENT_MID_TURN_COMPRESSIONS) {
+        const rebuilt = await tryCompactChildSession({
+          extra,
+          childSessionId,
+          subagentType,
+          provider: effectiveProvider,
+          cancelToken,
+          attempts: childCompactions,
+          isAborted,
+        });
+        if (rebuilt) {
+          messages.length = 0;
+          messages.push(...rebuilt);
+          childCompactions += 1;
+          info(
+            'CONTEXT',
+            `Subagent compression applied: ${rebuilt.length} messages in request, `
+              + `session ${childSessionId ?? '-'}`,
+          );
+          // Отмена во время сжатия — прогон закрывается как отменённый
+          // (обычный break-путь цикла).
+          if (isAborted()) break;
+        }
+      }
 
       // ─── Предохранитель бюджета контекста (agents.subagentMaxInputTokens) ──
       // Шаг-лимит имеет приоритет: финальный шаг-отчёт механики opencode не

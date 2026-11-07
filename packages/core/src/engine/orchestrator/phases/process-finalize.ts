@@ -887,17 +887,29 @@ export async function runProcessFinalize(
       && compression.mode
       && (typeof deps.optimizer.canCompress !== 'function' || deps.optimizer.canCompress(optSession))
     ) {
-      await deps.sessionManager.withLock(optSession.id, async (s) => {
-        s.summarizationPending = true;
-        await deps.sessionManager.saveSession(s);
-      });
-      deps.eventBus.publish(optSession.id, 'context.summarization_pending', {
-        reason: compression.reason,
-        mode: compression.mode,
-        current_tokens: compression.currentTokens,
-        threshold: compression.threshold,
-        user_count: compression.userCount,
-      });
+      // Cooldown после неудачного сжатия: не ставим флаг и не публикуем
+      // `context.summarization_pending` — иначе очередь снова упирается в
+      // сжатие, которое уже провалилось (модель не вернула шаблон).
+      const coolingDown = typeof deps.optimizer.isCompressionCoolingDown === 'function'
+        && deps.optimizer.isCompressionCoolingDown(optSession.id);
+      if (coolingDown) {
+        warning(
+          'ORCHESTRATOR',
+          `Сжатие контекста пропущено (cooldown после неудачного сжатия): сессия ${optSession.id}`,
+        );
+      } else {
+        await deps.sessionManager.withLock(optSession.id, async (s) => {
+          s.summarizationPending = true;
+          await deps.sessionManager.saveSession(s);
+        });
+        deps.eventBus.publish(optSession.id, 'context.summarization_pending', {
+          reason: compression.reason,
+          mode: compression.mode,
+          current_tokens: compression.currentTokens,
+          threshold: compression.threshold,
+          user_count: compression.userCount,
+        });
+      }
     }
 
     // Обновить canSummarize после всех мутаций

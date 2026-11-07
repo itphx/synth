@@ -8,12 +8,13 @@
 import type { Message, Session } from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
 import type { LLMResponse } from '@itphx/synth-shared';
+import type { CancellationToken } from '../../providers/base.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { CompressionPlan, ContextOptimizer } from '../context/optimizer.js';
 import type { SaveAssistantMessageFn } from './persistence.js';
 import { DebugCollector } from '../../debug.js';
-import { info } from '../../logger.js';
+import { info, warning } from '../../logger.js';
 import { t as sm } from '../system-messages.js';
 // ADR-119: занятость контекста «прямо сейчас» — тот же счётчик и то же окно,
 // что у триггера сжатия и у индикатора в UI.
@@ -121,6 +122,12 @@ export function createCompressionSummarySaver(
  * Принудительно сжать сессию один раз (overflow). Бросает, если сжимать
  * нечего/провайдер недоступен/ответ не прошёл валидацию — вызывающий решает,
  * деградировать или завершить ход ошибкой.
+ *
+ * `opts.cancelToken` — отменяемый вызов сжатия (ход остановлен «Стопом»):
+ * отмена бросает `CompressionCancelledError`, вызывающий трактует её как
+ * «сжатие не состоялось».
+ * `opts.phase` — фаза сжатия (`mid_turn` — посреди хода, на границе шага);
+ * аддитивно попадает в событие `context.summarization_applied`.
  */
 export async function forceCompression(
   session: Session,
@@ -129,6 +136,8 @@ export async function forceCompression(
     reason: CompressionReason;
     /** Нижняя граница хвоста: текущий ход/реплику не покрываем. */
     minKeepFromIndex?: number;
+    cancelToken?: CancellationToken;
+    phase?: 'mid_turn';
   },
 ): Promise<ForceCompressionResult> {
   const lang = session.settings.language || 'ru';
@@ -142,7 +151,9 @@ export async function forceCompression(
     ...(opts.minKeepFromIndex !== undefined ? { minKeepFromIndex: opts.minKeepFromIndex } : {}),
   });
 
-  const { content, response } = await deps.optimizer.completeCompression(plan);
+  const { content, response } = await deps.optimizer.completeCompression(plan, {
+    ...(opts.cancelToken ? { cancelToken: opts.cancelToken } : {}),
+  });
 
   await deps.saveSummary({
     session,
@@ -156,6 +167,26 @@ export async function forceCompression(
 
   const updated = await deps.sessionManager.getSession(session.id);
   if (!updated) throw new Error(`Session ${session.id} not found after compression`);
+
+  // Прогресс-гард: сжатие обязано снять порог триггера. Если порог остался —
+  // сжатие не помогло: включаем cooldown, чтобы авто-триггер не звал LLM
+  // по кругу (иначе очередь упирается в то же сжатие). Cooldown игнорируем:
+  // иначе активный cooldown маскировал бы «сжатие не помогло».
+  if (
+    typeof deps.optimizer.shouldCompress === 'function'
+    && deps.optimizer.shouldCompress(updated, { ignoreCooldown: true }).triggered
+  ) {
+    if (typeof deps.optimizer.noteCompressionFailure === 'function') {
+      deps.optimizer.noteCompressionFailure(session.id);
+    }
+    warning(
+      'CONTEXT',
+      `Forced compression (${plan.mode}) did not reduce context below the threshold: `
+        + `session ${session.id}`,
+    );
+  } else if (typeof deps.optimizer.clearCompressionFailure === 'function') {
+    deps.optimizer.clearCompressionFailure(session.id);
+  }
 
   // ADR-119: занятость контекста ПОСЛЕ сжатия (покрытые сообщения уже
   // отключены) — иначе индикатор остался бы на до-сжатом уровне.
@@ -174,6 +205,10 @@ export async function forceCompression(
      */
     context_tokens: contextUsage.tokens,
     context_limit: contextUsage.limit,
+    /**
+     * Аддитивно: фаза сжатия (`mid_turn` — посреди хода, на границе шага).
+     */
+    ...(opts.phase ? { phase: opts.phase } : {}),
   });
 
   info(

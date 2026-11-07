@@ -196,6 +196,23 @@ describe('isLlmErrorRecoverable — ContextLengthExceededError', () => {
   });
 });
 
+describe('isLlmErrorRecoverable — ошибка шаблона сжатия', () => {
+  // Компактизация: модель вернула ответ не по шаблону. Повтор того же вызова
+  // не помогает — ошибка терминальная (`validation` в UNRECOVERABLE_TYPES),
+  // иначе QueueProcessor ретраит служебное сообщение суммаризации, пока
+  // очередь не встанет.
+  const msg = 'Compression response does not match the required template';
+
+  it('errorType=validation → невосстановимая (canRetry=false)', () => {
+    expect(isLlmErrorRecoverable(new Error(msg), msg, 'validation')).toBe(false);
+  });
+
+  it('без errorType текст не распознаётся как паттерн (нужен явный тип)', () => {
+    // Фиксирует зависимость от errorType: классификатор по тексту молчит.
+    expect(isLlmErrorRecoverable(new Error(msg), msg)).toBe(true);
+  });
+});
+
 describe('Политика ретрая — единые константы', () => {
   it('LLM_MAX_ATTEMPTS = 3', () => {
     expect(LLM_MAX_ATTEMPTS).toBe(3);

@@ -369,7 +369,7 @@ describe('prepareChildSession — режимы с контекстом', () => {
   });
 
   it.each(['none', 'inherit', 'last_n', 'summary'] as const)(
-    '%s: ребёнок не наследует авто-оптимизацию/суммаризацию родителя',
+    '%s: ребёнок не наследует режим оптимизации/суммаризацию родителя',
     async (mode) => {
       const parent = await makeParent(3);
       const stored = (await sessionManager.getSession(parent.id))!;
@@ -392,10 +392,52 @@ describe('prepareChildSession — режимы с контекстом', () => {
       ));
 
       const child = (await sessionManager.getSession(state.childSessionId!))!;
-      expect(child.settings.contextOptimization).toBe('none');
+      // ADR-119: ребёнок получает собственную компактизацию (режим родителя
+      // не наследуется) — иначе длинный прогон упирается в окно/бюджет.
+      expect(child.settings.contextOptimization).toBe('compaction');
       expect(child.settings.summarizationEnabled).toBe(false);
       // Флаг «жду суммаризацию» не наследуется (createSession/fork создают false).
       expect(child.summarizationPending).toBe(false);
+    },
+  );
+
+  it.each(['inherit', 'last_n', 'summary'] as const)(
+    '%s: унаследованные runtime-флаги форка (summarizationPending/retry) сбрасываются',
+    async (mode) => {
+      const parent = await makeParent(3);
+      // Форк отдаёт сессию с «чужими» runtime-флагами (как если бы они были
+      // унаследованы) — `prepareChildSession` обязан их снять.
+      vi.spyOn(sessionManager, 'forkSession').mockImplementation(async () => {
+        const forked = await sessionManager.createSession({
+          title: 'forked',
+          parentId: parent.id,
+          sessionOrigin: 'fork',
+        });
+        return {
+          ...forked,
+          summarizationPending: true,
+          retry: {
+            streamId: 'stream-1',
+            attempt: 2,
+            maxRetries: 3,
+            retryAt: nowISO(),
+          },
+        } as unknown as Session;
+      });
+
+      const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
+      await prepareChildSession(state, opts(
+        {
+          sessionManager,
+          sessionId: parent.id,
+          contextOptimizer: { summarize: async () => makeMsg('s', MessageRole.SUMMARY) } as never,
+        },
+        { contextMode: mode },
+      ));
+
+      const child = (await sessionManager.getSession(state.childSessionId!))!;
+      expect(child.summarizationPending).toBe(false);
+      expect(child.retry).toBeUndefined();
     },
   );
 

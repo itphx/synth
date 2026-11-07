@@ -899,8 +899,23 @@
   `disabled` + `metadata.compactedBy` (pinned не трогаются, хвост остаётся живым). Для LLM
   `getMessagesForLlm` отдаёт `[SUMMARY] + живой хвост`, а `phases/process-setup.ts` вынимает
   SUMMARY в системный блок `summary` (volatile, order 30, ADR-070) — история = хвост + новые.
+  **Покрытие начинается с начала истории (`startIdx = 0`)** — кандидаты на сжатие не только то,
+  что лежит после последнего SUMMARY: «живой хвост» предыдущего сжатия находится **до** SUMMARY
+  (SUMMARY дописывается в конец истории) и при старте с `lastSummaryIdx + 1` не покрывался никогда —
+  накапливался, и контекст рос. Теперь вторая компактизация покрывает хвост предыдущей.
+  **Граница хвоста — по шагу**, а не по реплике: хвост начинается с `user` **или** `assistant`
+  (шаг хода), старт ищется **назад** от вычисленной границы (`_findSafeTailStart`), чтобы не
+  разорвать пары `tool_use`/`tool_result`. Прежнее правило «хвост с `user`» в длинном ходе
+  (одно `user`-сообщение на весь ход) разворачивало хвост на весь ход — сжатие почти не уменьшало
+  контекст. Если хвост начинается с `assistant`, резюме уходит из системного блока в
+  синтетический user-чекпоинт `[CONTEXT CHECKPOINT]` в начале истории
+  (`engine/orchestrator/history-normalize.ts` → `resolveHistoryNormalization`: часть провайдеров —
+  Anthropic — требует, чтобы первое сообщение запроса было `user`).
   Промпты — `prompts/system/{SUMMARIZER,COMPACTOR}.{ru,en}.md`; валидация: компактизация ≥2
-  заголовков шаблона, суммаризация — непустой ответ, один nudge-повтор. Бюджет запроса сжатия —
+  заголовков шаблона (регистр/markdown-разметка/локаль заголовков не важны — заголовок узнаётся по
+  любому из вариантов раздела, EN-шаблон + RU-синонимы, порог прежний), суммаризация — непустой
+  ответ, nudge-повтор по умолчанию (`completeCompression(plan, { nudge: false })` — без повтора).
+  Бюджет запроса сжатия —
   окно минус `max(4000, 20% окна)`, при нехватке — уровни усечения от старых к новым (tool-капы
   300→80, аргументы 120→80), последний user-ход не выбрасывается. Overflow
   (`ContextLengthExceededError`/`classifyLlmError === 'context_length'`) — **одно** принудительное
@@ -909,6 +924,30 @@
   ошибка, при `none`/`sliding_window` сжатие не запускается. Событие
   `context.summarization_applied` (`reason`, `mode`, `covered_indices`, `keep_from`, `usage`) —
   в обычном пути и при overflow; ожидание — `context.summarization_pending`.
+  **Провал сжатия — терминален и с cooldown'ом.** Ветка валидации ответа сжатия
+  (`engine/orchestrator/summarization.ts`) передаёт в `handleLlmFailure` `errorType: 'validation'`
+  (в `UNRECOVERABLE_TYPES`) → `canRetry=false`, очередь **не ретраит** служебное сообщение
+  суммаризации; там же `optimizer.noteCompressionFailure(session.id)` — in-memory cooldown 10 минут:
+  `shouldCompress` при активном cooldown не триггерится (LLM не зовётся), а
+  `phases/process-finalize.ts` не ставит `summarizationPending` и не публикует
+  `context.summarization_pending`. Cooldown снимается успешным сжатием
+  (`clearCompressionFailure`) или по TTL. Прогресс-гард: после сжатия порог триггера всё ещё
+  превышен → `noteCompressionFailure` + аддитивное `insufficient: true` в
+  `context.summarization_applied` (в `forceCompression` — тот же гард с warning в лог).
+  **Сжатие на границе шага (ADR-128, mid-turn).** Авто-компактизация проверяется **между
+  шагами** — в теле цикла Tool Use после результатов инструментов и **до** инъекций steering
+  (ADR-104): `_tryMidTurnCompression` (`engine/orchestrator.ts`), потолок
+  `MAX_MID_TURN_COMPRESSIONS = 2` на ход. Сжатие **не шаг** — счётчик шагов не растёт, лимит
+  `AgentDefinition.maxSteps` не сдвигается, `step.started`/`step.finished` не публикуются.
+  **Текущий ход не защищается** (`minKeepFromIndex` не передаётся): иначе длинный ход не сжать;
+  защищён только `pinned`. Сжатие применяется к живой сессии (покрытые сообщения получают
+  `disabled`, резюме сохраняется), а в текущий запрос подставляется **пересобранный** контекст
+  `[CONTEXT CHECKPOINT]` + живой хвост (`buildOverflowRetryMessages`); `baseLlmMessages`
+  пересобирается, оценка объёма промпта — пересчитывается. Событие
+  `context.summarization_applied` несёт аддитивное `phase: 'mid_turn'`
+  (`engine/orchestrator/compression.ts` → `forceCompression({cancelToken, phase})`).
+  Отмена во время сжатия — `CompressionCancelledError` (`chatAsync` + `cancelToken`): ход
+  закрывается как отменённый, cooldown **не** ставится (отмена — не провал сжатия).
   **Занятость контекста (ADR-119).** Событие `context.summarization_applied` несёт аддитивные
   `context_tokens`/`context_limit` — оценка занятости **после** сжатия (считается после
   `disableCompressedMessages`; `usage` в событии — расход вызова сжатия, не занятость). Тот же
@@ -936,7 +975,10 @@
   `subagent.context_budget`. **Шаг-лимит имеет приоритет:** финальный шаг-отчёт opencode
   (см. выше) превышением бюджета не считается. **Дефолт — `0` (без лимита)**, `0` —
   ограничение выключено; оценка недоступна/пуста — не блокируем. Это предохранитель объёма
-  промпта, а не окно модели. Значение — instance-wide runtime-настройка
+  промпта, а не окно модели. У саб-агента есть собственная авто-компактизация
+  (`contextOptimization: 'compaction'` + сжатие на границе шага, ADR-128), поэтому
+  предохранитель остаётся **страховкой**: срабатывает он уже по сокращённому контексту.
+  Значение — instance-wide runtime-настройка
   `agents.subagentMaxInputTokens`: резолвер `resolveSubagentMaxInputTokens` (env
   `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` > runtime `settings.json`/PG > `config.yaml` > `0`)
   читается оркестратором при сборке `task` extra (`getSubagentMaxInputTokens`; в
@@ -1329,10 +1371,22 @@
   `ContextConfig.getSubagentNotice`) в начало system prompt; в user-сообщении и истории
   блока нет, продолжение `task_id`/resume его не получает; дефолт
   `context_mode: none` — свежий контекст; во всех режимах ребёнок получает
-  `contextOptimization: 'none'` и `summarizationEnabled: false` (авто-суммаризация родителя не
-  наследуется); `summary` — разовое сжатие истории родителя в системный промпт
+  `contextOptimization: 'compaction'` и `summarizationEnabled: false` (режим оптимизации
+  контекста **родителя не наследуется**; собственная компактизация ребёнка — своя, ADR-128);
+  `summary` — разовое сжатие истории родителя в системный промпт
   (`[PARENT SUMMARY]`, `PreparedChildSession.parentSummaryText`), без SUMMARY-сообщения
   в истории ребёнка (ADR-026, обновление 2026-10-29).
+  **Сжатие ребёнка на границе шага (ADR-128).** Хук `tryCompactChildSession`
+  (`engine/tools/task/child-compaction.ts`) вызывается в `run-cycle.ts` на границе шага прогона
+  — **перед** предохранителем `agents.subagentMaxInputTokens` (тот срабатывает уже по
+  сокращённому контексту); потолок `MAX_SUBAGENT_MID_TURN_COMPRESSIONS = 2` на прогон, текущий
+  прогон не защищается, сжатие — не шаг. Шов сохранения резюме — `TaskExtra.saveSummary`
+  (`engine/tools/task/types.ts`, тип `ForceCompressionDeps['saveSummary']`; пробрасывается в
+  `SubagentResumeDeps` из `task-resume.ts`); без полного набора зависимостей сжатие ребёнка
+  **пропускается** (fail-open) — прогон идёт как раньше, страхует предохранитель бюджета.
+  После форка у ребёнка сбрасываются унаследованные runtime-флаги родителя —
+  `summarizationPending` и `retry` (`engine/tools/task/fork.ts` → `resetForkRuntimeFlags`): они
+  относятся к ходу родителя, а не к задаче ребёнка.
   **Выбор модели саб-агента (`tool.ts`, `resolveSubagentProvider`).** Приоритет:
   явные `params.provider`/`params.model` → пара агента
   (`AgentDefinition.provider`/`model`; недостающая половина — из родителя, пара,

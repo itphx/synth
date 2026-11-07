@@ -24,6 +24,7 @@ import type { BaseProvider, CancellationToken, ChatOptions, LLMMessage, SystemPr
 import { RemoteAuthExpiredError } from '../../../providers/exceptions.js';
 import { RemoteError } from '../../../remote/types.js';
 import type { AgentRegistry } from '../../agents/registry.js';
+import type { ContextOptimizer } from '../../context/optimizer.js';
 import type { ModelRouter } from '../../router/router.js';
 import { FileStore } from '../../../storage/file-store.js';
 import { SessionManager } from '../../../sessions/manager.js';
@@ -418,6 +419,178 @@ describe('run-cycle — предохранитель бюджета контек
     expect(result.metadata!.step_limit_reached).toBe(true);
     expect(result.metadata!.step_limit).toBe(2);
     expect(result.metadata!.context_budget_exceeded).toBeUndefined();
+  });
+});
+
+describe('run-cycle — авто-компактификация дочерней сессии (ADR-119)', () => {
+  /** Сообщение в истории дочерней сессии. */
+  function childMsg(content: string, role: MessageRole = MessageRole.USER): Message {
+    return {
+      id: generateId(),
+      role,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+  }
+
+  /**
+   * Стаб оптимизатора: сжатие срабатывает по триггеру и покрывает первые
+   * два сообщения (старый ход ребёнка).
+   */
+  function makeCompactingOptimizer(coveredIndices: number[]) {
+    const stub = {
+      prepareCalls: 0,
+      completeCalls: 0,
+      compressions: 0,
+      setGatewayHooks: () => {},
+      getContextWindow: () => 100_000,
+      estimatePromptTokens: () => 0,
+      estimateTokens: () => 0,
+      effectiveMode: () => 'compaction',
+      canSummarize: () => true,
+      canCompress: () => true,
+      isCompressionCoolingDown: () => false,
+      noteCompressionFailure: () => {},
+      clearCompressionFailure: () => {},
+      // Сжимать есть что, пока сжатие не состоялось (иначе порог снят).
+      shouldCompress: () => ({
+        triggered: stub.compressions === 0,
+        reason: 'tokens' as const,
+        mode: 'compaction' as const,
+      }),
+      getMessagesForLlm: (session: { messages: Message[] }) =>
+        session.messages.filter((m) => !m.disabled),
+      prepareCompression: () => {
+        stub.prepareCalls += 1;
+        return {
+          mode: 'compaction',
+          provider: {} as BaseProvider,
+          llmMessages: [],
+          systemPrompt: 'COMPACTOR',
+          messagesToCompress: [],
+          coveredIndices,
+          keepFromIndex: -1,
+          keepMessages: [],
+        };
+      },
+      completeCompression: async () => {
+        stub.completeCalls += 1;
+        stub.compressions += 1;
+        return {
+          content: '## Objective\nцель\n\n## Work State\n- готово',
+          response: { content: 's', model: 'm', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+        };
+      },
+    };
+    return stub as unknown as ContextOptimizer & { prepareCalls: number; completeCalls: number };
+  }
+
+  /** Сохранение резюме — как настоящий шов (`createCompressionSummarySaver`). */
+  function makeSaveSummary() {
+    return async (input: {
+      session: Session;
+      content: string;
+      plan: { coveredIndices: number[]; mode: string };
+      response: { model?: string; usage?: TokenUsage };
+    }) => {
+      await sessionManager.addMessage(input.session.id, {
+        ...childMsg(input.content, MessageRole.SUMMARY),
+        summaryOf: input.plan.coveredIndices,
+        model: input.response.model,
+        usage: input.response.usage,
+        metadata: { type: 'auto_summary', mode: input.plan.mode },
+      });
+    };
+  }
+
+  it('контекст ребёнка сжимается на границе шага: запрос начинается с чекпоинта', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // Старый ход ребёнка (покрывается сжатием) + реплика текущего прогона.
+    await sessionManager.addMessage(child.id, childMsg('старый вопрос'));
+    await sessionManager.addMessage(child.id, childMsg('старый ответ', MessageRole.ASSISTANT));
+    await sessionManager.addMessage(child.id, childMsg('текущий вопрос'));
+
+    const { provider, snapshots } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'готово' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+    const optimizer = makeCompactingOptimizer([0, 1]);
+    const eventBus = new EventBus();
+    const busEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(child.id, (e) => busEvents.push({ type: e.type, data: e.data as Record<string, unknown> }));
+
+    const result = await runSubagent(makeConfig({
+      initialMessages: [userMessage('текущий вопрос')],
+      tools: llmTools(),
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: registry,
+        eventBus,
+        contextOptimizer: optimizer,
+        saveSummary: makeSaveSummary(),
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    // Сжатие состоялось — один раз (потолок за прогон — 2).
+    expect(optimizer.prepareCalls).toBe(1);
+    expect(optimizer.completeCalls).toBe(1);
+
+    // Запрос провайдеру начинается с чекпоинта, покрытый прошлый ход исчез.
+    const first = snapshots[0]!;
+    expect(first[0]!.role).toBe('user');
+    expect(first[0]!.content).toContain('[CONTEXT CHECKPOINT]');
+    expect(first.some((m) => m.content === 'старый вопрос')).toBe(false);
+    expect(first.some((m) => m.content === 'текущий вопрос')).toBe(true);
+
+    // Событие сжатия — в канале ребёнка, с фазой `mid_turn`.
+    const applied = busEvents.filter((e) => e.type === 'context.summarization_applied');
+    expect(applied.length).toBe(1);
+    expect(applied[0]!.data.phase).toBe('mid_turn');
+
+    // Резюме — в истории ребёнка, покрытые сообщения отключены.
+    const stored = (await sessionManager.getSession(child.id))!;
+    expect(stored.messages.some((m) => m.role === MessageRole.SUMMARY)).toBe(true);
+    expect(stored.messages[0]!.disabled).toBe(true);
+  });
+
+  it('без оптимизатора/сейвера сжатия нет — прогон идёт как раньше', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    await sessionManager.addMessage(child.id, childMsg('старый вопрос'));
+    await sessionManager.addMessage(child.id, childMsg('старый ответ', MessageRole.ASSISTANT));
+
+    const { provider, snapshots } = scriptedProvider([
+      [{ isFinal: true, content: 'готово' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        contextOptimizer: makeCompactingOptimizer([0, 1]),
+        // сейвера нет — сжатие ребёнка пропускается (fail-open)
+        saveSummary: undefined,
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(snapshots[0]![0]!.content).toBe('hello');
   });
 });
 

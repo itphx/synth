@@ -41,7 +41,7 @@ import { DEFAULT_AGENT_ID, resolveAgentRoleAlias } from './agents/index.js';
 import type { McpManager } from './mcp/manager.js';
 import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
 import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
-import { warning } from '../logger.js';
+import { info, warning } from '../logger.js';
 import { ModelRouter } from './router/router.js';
 import { ContentClassifier } from './router/content-classifier.js';
 import { DecisionContentClassifier } from './router/decision-content-classifier.js';
@@ -159,6 +159,7 @@ import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvi
 import { DEFAULT_MAX_OUTPUT_TOKENS, resolveMaxOutputTokens } from './orchestrator/max-output.js';
 import { ContextLengthExceededError } from '../providers/exceptions.js';
 import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn, type CurrentModelPair } from './orchestrator/prompt-info.js';
+import { resolveHistoryNormalization } from './orchestrator/history-normalize.js';
 import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
 import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
 import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
@@ -169,6 +170,12 @@ import type { AnalyticsRecorder } from '../analytics/recorder.js';
 import { toCoreProviderConfig } from './router/index.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
+/**
+ * ADR-119: сколько раз за ход основного цикла разрешено **посреди хода**
+ * сжать контекст (граница шага, между вызовами инструментов). Сжатие не
+ * шаг: лимит шагов агента (`maxSteps`) оно не расходует.
+ */
+const MAX_MID_TURN_COMPRESSIONS = 2;
 /**
  * Порог одинаковых deny-вызовов подряд, после которого ход завершается
  * (deny не обрывает ход, но и бесконечно повторяться не должен).
@@ -3252,6 +3259,115 @@ export class ChatOrchestrator {
     return true;
   }
 
+  /**
+   * ADR-119: авто-компактизация ПОСРЕДИ хода — на границе шага.
+   *
+   * Сжатие применяется к живой сессии (покрытые сообщения отключаются,
+   * резюме сохраняется), а в текущий запрос подставляется **пересобранная**
+   * выборка: `[CONTEXT CHECKPOINT] + живой хвост`. Системный промпт не
+   * пересобирается — резюме едет чекпоинтом в `currentMessages`.
+   *
+   * Текущий ход **не защищён** (`minKeepFromIndex` не передаётся): иначе
+   * длинный ход не сжать. Хвост срезан по шагу (уже сделано в оптимизаторе),
+   * поэтому пары tool-вызовов не рвутся.
+   *
+   * `null` — сжатие не состоялось (нет триггера / cooldown / потолок
+   * попыток / отмена / ошибка). Тогда ход продолжается как обычно.
+   */
+  private async _tryMidTurnCompression(args: {
+    session: Session;
+    cancelToken: CancellationToken;
+    author: string;
+    effectiveAgentRole: string | undefined;
+    providerName: string;
+    model: string;
+    /** Сколько сжатий уже было за ход (потолок — `MAX_MID_TURN_COMPRESSIONS`). */
+    attempts: number;
+  }): Promise<LLMMessage[] | null> {
+    const optimizer = this._optimizer;
+    if (!optimizer) return null;
+    if (args.attempts >= MAX_MID_TURN_COMPRESSIONS) return null;
+    if (
+      typeof optimizer.isCompressionCoolingDown === 'function'
+      && optimizer.isCompressionCoolingDown(args.session.id)
+    ) {
+      return null;
+    }
+
+    try {
+      const fresh = await this._sessionManager.getSession(args.session.id);
+      if (!fresh) return null;
+      if (!optimizer.shouldCompress(fresh).triggered) return null;
+      if (typeof optimizer.canCompress === 'function' && !optimizer.canCompress(fresh)) return null;
+
+      const result: ForceCompressionResult = await forceCompression(
+        fresh,
+        {
+          optimizer,
+          sessionManager: this._sessionManager,
+          eventBus: this._eventBus,
+          saveSummary: createCompressionSummarySaver(this._saveAssistantMessage.bind(this)),
+        },
+        { reason: 'auto', cancelToken: args.cancelToken, phase: 'mid_turn' },
+      );
+      const updated = result.session;
+
+      const summary = [...updated.messages]
+        .reverse()
+        .find((m) => m.role === MessageRole.SUMMARY && !m.disabled)
+        ?.content ?? '';
+      if (!summary.trim()) {
+        warning('CONTEXT', `Mid-turn compression: пустое резюме, сессия ${args.session.id}`);
+        return null;
+      }
+
+      const live = optimizer
+        .getMessagesForLlm(updated)
+        .filter((m) => m.role !== MessageRole.SUMMARY);
+      const tail = sessionMessagesToLlmFn(live, args.effectiveAgentRole, args.author, {
+        provider: args.providerName,
+        model: args.model,
+      });
+
+      // Текущий ход уже в хвосте (шаги и результаты тулов персистятся), поэтому
+      // отдельный `currentTurn` не нужен — иначе он бы продублировался.
+      const rebuilt = buildOverflowRetryMessages({ summary, tail, currentTurn: [] });
+      if (!rebuilt) {
+        warning(
+          'CONTEXT',
+          `Mid-turn compression: не удалось пересобрать контекст (разорваны tool-пары), сессия ${args.session.id}`,
+        );
+        return null;
+      }
+
+      // Прогресс-гард: сжатие обязано снять порог триггера. Если порог остался
+      // — сжатие не помогло: cooldown, чтобы авто-триггер не звал LLM по кругу.
+      if (optimizer.shouldCompress(updated, { ignoreCooldown: true }).triggered) {
+        if (typeof optimizer.noteCompressionFailure === 'function') {
+          optimizer.noteCompressionFailure(fresh.id);
+        }
+        warning(
+          'CONTEXT',
+          `Mid-turn compression не снял порог триггера, сессия ${args.session.id}`,
+        );
+      }
+
+      return rebuilt;
+    } catch (e) {
+      // Отмена хода — не провал сжатия: cooldown не ставим (иначе следующий
+      // ход не сможет сжаться ещё 10 минут).
+      if (args.cancelToken.cancelled) return null;
+      if (typeof optimizer.noteCompressionFailure === 'function') {
+        optimizer.noteCompressionFailure(args.session.id);
+      }
+      warning(
+        'CONTEXT',
+        `Mid-turn compression failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return null;
+    }
+  }
+
   /** ADR-095 (шаг 6b-1): зависимости вынесенной подготовки запроса `_processMessage`. */
   private _processSetupDeps(session?: Session): ProcessSetupDeps {
     return {
@@ -4098,10 +4214,17 @@ export class ChatOrchestrator {
     const optimizedMessages = this._optimizer
       ? this._optimizer.getMessagesForLlm(session)
       : session.messages;
-    const summaryContent = optimizedMessages
+    const summaryContentRaw = optimizedMessages
       .filter((m) => m.role === MessageRole.SUMMARY)
       .map((m) => m.content)
       .join('\n\n');
+    // ADR-119: манифест отражает реальные слои запроса — резюме уходит из
+    // системного блока в user-чекпоинт, когда хвост начинается с assistant
+    // (см. `process-setup`).
+    const summaryContent = resolveHistoryNormalization({
+      messages: optimizedMessages,
+      summaryContent: summaryContentRaw,
+    }).summaryContent;
 
     // ADR-071 §2.1/§2.3/§2.4: тот же per-session список инструментов, что уходит в
     // запрос (`_processMessage`) — встроенные + MCP эффективного набора сессии
@@ -4439,10 +4562,16 @@ export class ChatOrchestrator {
       const {
         provider, providerName, modelName, routingDecision, language,
         activeMcpServers, activeMcpSet, toolsPolicy, mcpPolicy,
-        baseLlmMessages, finalSystemPrompt, promptMeta,
+        finalSystemPrompt, promptMeta,
         skillsCatalog, projectInstructions, loadedTokenRatio, messagesForLlm,
         cancelToken, toolAbortController,
       } = setup.state;
+      /**
+       * Начальная выборка сообщений хода. После mid-turn сжатия она
+       * пересобирается (`baseLlmMessages = [...currentMessages]`): старый
+       * префикс покрыт резюме и в запросе больше не нужен.
+       */
+      let baseLlmMessages: LLMMessage[] = setup.state.baseLlmMessages;
       let tools = setup.state.tools;
 
       // 6. Tool loop — stream LLM, execute tools, continue until no tool calls
@@ -4452,6 +4581,12 @@ export class ChatOrchestrator {
        * Второй `context_length` (или неудачное сжатие) — штатная ошибка.
        */
       let overflowRecoveryAttempted = false;
+      /**
+       * ADR-119: сколько раз за ход уже сжали контекст ПОСРЕДИ хода (граница
+       * шага). Потолок — `MAX_MID_TURN_COMPRESSIONS`; сжатие не шаг, лимит
+       * шагов агента оно не расходует.
+       */
+      let midTurnCompressions = 0;
       const currentMessages: LLMMessage[] = [...baseLlmMessages];
       // ADR-115 (outbound): медиа-части ответа хода — их складывает тул
       // `send_attachment`, а к финальному сообщению добавляет финализация
@@ -4613,6 +4748,48 @@ export class ChatOrchestrator {
           // Граница шага: генерации в этот момент не было.
         }
 
+        // ADR-119: авто-компактизация ПОСРЕДИ хода — на границе шага, между
+        // вызовами инструментов. Иначе длинный ход (десятки шагов) съедает
+        // контекстное окно целиком и следующий шаг упирается в overflow.
+        //
+        // Условия: не первый шаг хода (на старте контекст ещё не разросся),
+        // не финальный шаг (шаг-лимит — шаг отчёта, сжимать перед ним
+        // незачем). Сжатие не шаг: `toolIteration` не растёт.
+        const isFinalStep = Number.isFinite(maxIterations) && toolIteration + 1 >= maxIterations;
+        if (toolIteration > 0 && !isFinalStep && midTurnCompressions < MAX_MID_TURN_COMPRESSIONS) {
+          const rebuilt = await this._tryMidTurnCompression({
+            session,
+            cancelToken,
+            author,
+            effectiveAgentRole,
+            providerName,
+            model: provider.model || modelName || session.settings.model || '',
+            attempts: midTurnCompressions,
+          });
+          if (rebuilt) {
+            currentMessages.length = 0;
+            currentMessages.push(...rebuilt);
+            baseLlmMessages = [...currentMessages];
+            lastIterationPromptChars = this._estimatePromptChars(
+              currentMessages,
+              finalSystemPrompt,
+              tools as Record<string, unknown>[] | undefined,
+            );
+            midTurnCompressions += 1;
+            info(
+              'CONTEXT',
+              `Mid-turn compression applied: ${rebuilt.length} messages in request, session ${session.id}`,
+            );
+          }
+          // Отмена во время сжатия — ход закрывается как отменённый. Проверка
+          // ВНЕ `if (rebuilt)`: сжатие могло вернуть `null` (отмена внутри
+          // сжатия) — иначе ход пошёл бы дальше с отменённым токеном.
+          if (cancelToken.cancelled) {
+            cancelledBeforeFinal = true;
+            break;
+          }
+        }
+
         // ADR-104: вычитка очереди инъекций — на границе шага (здесь же, где
         // проверяется отмена). Инъекция НИКОГДА не попадает внутрь шага:
         // результаты инструментов предыдущей итерации уже в `currentMessages`,
@@ -4620,7 +4797,6 @@ export class ChatOrchestrator {
         await this._applySteerInjections(
           session, currentMessages, publishChunk, effectiveAgentRole, author, streamId, turnId,
         );
-
         // Лимит шагов агента исчерпан — этот шаг финальный (механика opencode):
         // инструменты остаются в запросе (кэшированный префикс провайдера),
         // вызов запрещается `toolChoice: 'none'`, инструкция «только текст»
@@ -5871,6 +6047,10 @@ export class ChatOrchestrator {
                   // agent_spawned/agent_completed/agent_failed в саб-агенте.
                   hooks: this._hooks ?? undefined,
                   contextOptimizer: this._optimizer ?? undefined,
+                  // ADR-119: авто-компактификация дочерней сессии саб-агента
+                  // (граница шага) — резюме сохраняется тем же швом, что у
+                  // основного цикла (usage/счётчики сессии ребёнка).
+                  saveSummary: createCompressionSummarySaver(this._saveAssistantMessage.bind(this)),
                   // ADR-046 §5: тул `skill` получает рантайм через ToolContext.extra
                   // (в ToolContext нет dataDir); саб-агенты — тот же объект.
                   skillRuntime: this._skillRuntime ?? undefined,
@@ -6999,6 +7179,9 @@ export class ChatOrchestrator {
       toolRegistry: this._toolRegistry ?? undefined,
       contextConfig: this._contextConfig ?? undefined,
       contextOptimizer: this._optimizer ?? undefined,
+      // ADR-119: авто-компактификация дочерней сессии в resume-прогоне —
+      // тот же шов сохранения резюме, что у обычного `task`.
+      saveSummary: createCompressionSummarySaver(this._saveAssistantMessage.bind(this)),
       routerConfig: this._routerConfig ?? undefined,
       securityConfig: this._securityConfig,
       permissionConfig: this._permissionConfig,

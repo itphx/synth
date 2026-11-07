@@ -349,7 +349,7 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 | Event | `data` fields |
 |---|---|
 | `context.summarization_pending` | `reason` (`messages`\|`tokens`), `mode` (`summarization`\|`compaction`), `current_tokens?`, `threshold?`, `user_count?` — the trigger fired, compression waits for the next turn |
-| `context.summarization_applied` | `reason` (`auto`\|`manual`\|`overflow`), `mode`, `covered_indices` (`number[]`), `keep_from` (id of the first live message \| `null`), `usage?` — published on the normal path and on overflow; the client clears the pending state and refetches the history (last page) |
+| `context.summarization_applied` | `reason` (`auto`\|`manual`\|`overflow`), `mode`, `covered_indices` (`number[]`), `keep_from` (id of the first live message \| `null`), `usage?`, `insufficient?` (`true` — compression was applied but the trigger threshold was **not** cleared: the context is still over the limit; the session goes into a 10-minute compression cooldown), `phase?` (`'mid_turn'` — compression applied at a step boundary inside the turn (ADR-128); the field is absent for end-of-turn / overflow / manual compression) — published on the normal path and on overflow; the client clears the pending state and refetches the history (last page) |
 | `context.sliding_window_applied` | `reason`/`trigger_type`, `disabled_indices` (`number[]`) — `sliding_window` disabled older messages (no summary) |
 
 Any mutation visible to another client publishes an event: `message.deleted`/`message.updated`

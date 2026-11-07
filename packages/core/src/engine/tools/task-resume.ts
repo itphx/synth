@@ -73,6 +73,12 @@ export interface SubagentResumeDeps {
   toolRegistry?: ToolRegistry;
   contextConfig?: ContextFileRepository;
   contextOptimizer?: ContextOptimizer;
+  /**
+   * ADR-119: сохранение резюме при авто-компактификации дочерней сессии
+   * (граница шага цикла саб-агента). Не задано — сжатие ребёнка пропускается
+   * (fail-open).
+   */
+  saveSummary?: TaskExtra['saveSummary'];
   routerConfig?: RouterConfig;
   securityConfig?: SecurityConfig;
   /** Fallback permission (глобальный конфиг), если у дочерней сессии нет своей. */
@@ -309,6 +315,8 @@ export async function runSubagentResume(
       sessionManager: deps.sessionManager,
       eventBus: deps.eventBus,
       contextOptimizer: deps.contextOptimizer,
+      // ADR-119: шов сохранения резюме при сжатии ребёнка (граница шага).
+      saveSummary: deps.saveSummary,
       parentSessionSettings: child.settings,
       routerConfig: deps.routerConfig,
       contextConfig: deps.contextConfig,

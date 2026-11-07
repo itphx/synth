@@ -9,7 +9,7 @@ import { MessageRole, generateId } from '@itphx/synth-shared';
 import type { CancellationToken, LLMMessage, SystemPromptPayload } from '../../providers/base.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { CompressionMode, CompressionPlan } from '../context/optimizer.js';
-import { compressionFinishReasonError, validateCompressionContent } from '../context/optimizer.js';
+import { compressionFinishReasonError, CompressionValidationError, validateCompressionContent } from '../context/optimizer.js';
 import { disableCompressedMessages } from './compression.js';
 import type { DebugCollector } from '../../debug.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -208,14 +208,18 @@ export async function handleSummarization(
   }
 
   // Валидация ответа сжатия: непустое резюме (≥20 символов) / обязательный
-  // шаблон компактизации. При провале — один nudge-повтор (непотоковый).
+  // шаблон компактизации. При провале — один непотоковый повтор **без**
+  // внутреннего nudge (иначе одна попытка = три LLM-вызова).
   const finishError = compressionFinishReasonError(mode, finalFinishReason);
   let validationError = finishError;
+  // Объект ошибки повторного вызова: нужен, чтобы отличить провал валидации
+  // (`CompressionValidationError`) от сетевой/провайдерской ошибки.
+  let retryError: unknown = null;
   if (!validationError) {
     const validation = validateCompressionContent(mode, accumulatedContent);
     if (!validation.ok) {
       try {
-        const retry = await deps.optimizer.completeCompression(plan);
+        const retry = await deps.optimizer.completeCompression(plan, { nudge: false });
         accumulatedContent = retry.content;
         if (retry.response.usage) finalUsage = retry.response.usage;
         if (retry.response.model) finalModel = retry.response.model;
@@ -228,6 +232,7 @@ export async function handleSummarization(
         });
       } catch (e) {
         validationError = String(e);
+        retryError = e;
       }
     }
   }
@@ -244,15 +249,44 @@ export async function handleSummarization(
     });
     publishTurnFinished(publishChunk, { turnId, status: 'error' });
     deps.cancellationTokens.delete(streamId);
-    return deps.handleLlmFailure(session.id, streamId, new Error(validationError), attempt, {
-      durationMs: Date.now() - startedAt,
-      usage: finalUsage,
-      model: finalModel ?? provider.model ?? session.settings.model,
-      providerName,
-      agentRole: 'summary',
-      content: accumulatedContent,
-      promptChars: deps.estimatePromptChars(plan.llmMessages, plan.systemPrompt),
-    });
+    // Провал **валидации** (шаблон/длина/finish-reason) — модель ответила не
+    // тем: повтор того же ответа не поможет. Cooldown + `errorType:
+    // 'validation'` (в UNRECOVERABLE_TYPES → очередь не ретраит служебное
+    // сообщение суммаризации).
+    const isValidationFailure = finishError !== null
+      || retryError instanceof CompressionValidationError;
+    if (isValidationFailure) {
+      if (typeof deps.optimizer.noteCompressionFailure === 'function') {
+        deps.optimizer.noteCompressionFailure(session.id);
+      }
+      return deps.handleLlmFailure(session.id, streamId, new Error(validationError), attempt, {
+        durationMs: Date.now() - startedAt,
+        usage: finalUsage,
+        model: finalModel ?? provider.model ?? session.settings.model,
+        providerName,
+        agentRole: 'summary',
+        content: accumulatedContent,
+        promptChars: deps.estimatePromptChars(plan.llmMessages, plan.systemPrompt),
+        errorType: 'validation',
+      });
+    }
+    // Сетевая/провайдерская ошибка повторного вызова — обычная классификация
+    // (`canRetry` по errorType), без cooldown: сжатие «не помогло» — не факт.
+    return deps.handleLlmFailure(
+      session.id,
+      streamId,
+      retryError instanceof Error ? retryError : new Error(validationError),
+      attempt,
+      {
+        durationMs: Date.now() - startedAt,
+        usage: finalUsage,
+        model: finalModel ?? provider.model ?? session.settings.model,
+        providerName,
+        agentRole: 'summary',
+        content: accumulatedContent,
+        promptChars: deps.estimatePromptChars(plan.llmMessages, plan.systemPrompt),
+      },
+    );
   }
 
   // Сохранить summary-сообщение (без message.added — UI получит его через stream.done)
@@ -288,6 +322,21 @@ export async function handleSummarization(
   const updatedSession = await deps.sessionManager.getSession(session.id);
   const contextUsage = computeContextUsage(deps.optimizer, updatedSession ?? session);
 
+  // Прогресс-гард: сжатие обязано снять порог триггера. Если порог остался —
+  // сжатие не помогло: включаем cooldown (следующий авто-триггер не зовёт
+  // LLM) и помечаем это в событии. Cooldown игнорируем: иначе активный
+  // cooldown маскировал бы «сжатие не помогло».
+  const insufficient = updatedSession !== null
+    && typeof deps.optimizer.shouldCompress === 'function'
+    && deps.optimizer.shouldCompress(updatedSession, { ignoreCooldown: true }).triggered;
+  if (insufficient) {
+    if (typeof deps.optimizer.noteCompressionFailure === 'function') {
+      deps.optimizer.noteCompressionFailure(session.id);
+    }
+  } else if (typeof deps.optimizer.clearCompressionFailure === 'function') {
+    deps.optimizer.clearCompressionFailure(session.id);
+  }
+
   // UI перечитывает историю: сжатие применено (не только overflow-путь).
   const rawReason = message.metadata?.reason;
   const appliedReason = rawReason === 'manual' ? 'manual' : 'auto';
@@ -305,6 +354,11 @@ export async function handleSummarization(
      */
     context_tokens: contextUsage.tokens,
     context_limit: contextUsage.limit,
+    /**
+     * Аддитивно: сжатие применилось, но порог триггера не снят — контекст
+     * по-прежнему переполнен. UI может показать, что сжатие не помогло.
+     */
+    ...(insufficient ? { insufficient: true } : {}),
   });
 
   const chunkStats = streamTiming.snapshot();
