@@ -442,6 +442,311 @@ describe('SynthClient — namespaces', () => {
     expect(res.id).toBe('prj_1');
   });
 
+  it('PROP-054: деталь проекта больше НЕ содержит журнал (log) — журнал читается страницей', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(
+        jsonResponse({
+          id: 'prj_1',
+          name: 'Деталь',
+          invariants: '',
+          plan: { version: 3, updatedAt: '2026-11-07T00:00:00.000Z', columns: [], items: [] },
+        }),
+        calls,
+      ),
+    });
+
+    const res = await client.projects.get('prj_1');
+
+    // Журнала в детали нет — поле не просто пустое, его нет вовсе.
+    expect(Object.prototype.hasOwnProperty.call(res, 'log')).toBe(false);
+    expect(res.log).toBeUndefined();
+    // План в детали остаётся (ADR-039).
+    expect(res.plan?.version).toBe(3);
+  });
+
+  it('PROP-054: журнал проекта читается постранично (projectLog)', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(
+        jsonResponse({
+          entries: [
+            {
+              id: 'log_2',
+              text: 'вторая запись',
+              created_at: '2026-11-07T10:00:00.000Z',
+              session_id: 'ses_1',
+              author: 'local',
+              updated_at: null,
+              updated_by: null,
+            },
+          ],
+          total: 12,
+          offset: 5,
+          limit: 50,
+          next_offset: null,
+        }),
+        calls,
+      ),
+    });
+
+    const page = await client.projects.projectLog('prj_1', { limit: 50, offset: 5 });
+
+    expect(first(calls).url).toBe('http://localhost:5000/api/v2/projects/prj_1/log?limit=50&offset=5');
+    expect(page.total).toBe(12);
+    expect(page.offset).toBe(5);
+    expect(page.limit).toBe(50);
+    expect(page.next_offset).toBeNull();
+    expect(page.entries).toHaveLength(1);
+    // DTO записи — snake_case.
+    expect(page.entries[0]).toMatchObject({
+      id: 'log_2',
+      created_at: '2026-11-07T10:00:00.000Z',
+      session_id: 'ses_1',
+      updated_at: null,
+      updated_by: null,
+    });
+  });
+
+  it('PROP-054: CRUD журнала проекта — пути, методы и тела', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(
+        () => jsonResponse({ entry: { id: 'log_1', text: 'текст', created_at: '2026-11-07T10:00:00.000Z' } }),
+        calls,
+      ),
+    });
+
+    const created = await client.projects.createProjectLogEntry('prj_1', { text: 'текст' });
+    await client.projects.updateProjectLogEntry('prj_1', 'log_1', { text: 'правка' });
+
+    expect(calls[0]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/log');
+    expect(calls[0]?.init.method).toBe('POST');
+    expect(JSON.parse(calls[0]?.init.body as string)).toEqual({ text: 'текст' });
+    expect(created.entry.id).toBe('log_1');
+    expect(calls[1]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/log/log_1');
+    expect(calls[1]?.init.method).toBe('PATCH');
+  });
+
+  it('PROP-054: удаление записи журнала → 204 (undefined)', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(new Response(null, { status: 204 }), calls),
+    });
+
+    await expect(client.projects.deleteProjectLogEntry('prj_1', 'log_1')).resolves.toBeUndefined();
+    expect(first(calls).url).toBe('http://localhost:5000/api/v2/projects/prj_1/log/log_1');
+    expect(first(calls).init.method).toBe('DELETE');
+  });
+
+  it('PROP-054: план проекта — чтение и мутации (пункты и колонки)', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(
+        () => jsonResponse({ plan: { version: 2, updatedAt: '2026-11-07T00:00:00.000Z', columns: [], items: [] } }),
+        calls,
+      ),
+    });
+
+    const read = await client.projects.projectPlan('prj_1');
+    await client.projects.createPlanItem('prj_1', { title: 'Пункт' });
+    await client.projects.updatePlanItem('prj_1', 'item_1', { title: 'Пункт 2' });
+    await client.projects.movePlanItem('prj_1', 'item_1', { columnId: 'col_1', afterItemId: 'item_0' });
+    await client.projects.deletePlanItem('prj_1', 'item_1');
+    await client.projects.createPlanColumn('prj_1', { name: 'В работе' });
+    await client.projects.updatePlanColumn('prj_1', 'col_1', { wipLimit: 3 });
+    await client.projects.deletePlanColumn('prj_1', 'col_1', { moveItemsTo: 'backlog', version: 2 });
+    await client.projects.reorderPlanColumns('prj_1', { order: ['col_1', 'col_2'], version: 2 });
+
+    expect(calls[0]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan');
+    expect(calls[0]?.init.method).toBe('GET');
+    expect(read.plan?.version).toBe(2);
+
+    expect(calls[1]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan/items');
+    expect(calls[1]?.init.method).toBe('POST');
+    expect(JSON.parse(calls[1]?.init.body as string)).toEqual({ title: 'Пункт' });
+
+    expect(calls[2]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan/items/item_1');
+    expect(calls[2]?.init.method).toBe('PATCH');
+
+    expect(calls[3]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan/items/item_1/move');
+    expect(calls[3]?.init.method).toBe('PATCH');
+    expect(JSON.parse(calls[3]?.init.body as string)).toEqual({
+      columnId: 'col_1',
+      afterItemId: 'item_0',
+    });
+
+    expect(calls[4]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan/items/item_1');
+    expect(calls[4]?.init.method).toBe('DELETE');
+
+    expect(calls[5]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan/columns');
+    expect(calls[5]?.init.method).toBe('POST');
+
+    expect(calls[6]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan/columns/col_1');
+    expect(calls[6]?.init.method).toBe('PATCH');
+
+    expect(calls[7]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan/columns/col_1');
+    expect(calls[7]?.init.method).toBe('DELETE');
+    // Удаление колонки требует тела (куда переносятся пункты + версия плана).
+    expect(JSON.parse(calls[7]?.init.body as string)).toEqual({ moveItemsTo: 'backlog', version: 2 });
+
+    expect(calls[8]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/plan/columns/order');
+    expect(calls[8]?.init.method).toBe('PUT');
+    expect(JSON.parse(calls[8]?.init.body as string)).toEqual({ order: ['col_1', 'col_2'], version: 2 });
+  });
+
+  it('PROP-054: инварианты проекта — чтение и замена', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(
+        () => jsonResponse({ invariants: '# Правила', updated_at: '2026-11-07T00:00:00.000Z' }),
+        calls,
+      ),
+    });
+
+    const read = await client.projects.projectInvariants('prj_1');
+    const written = await client.projects.putProjectInvariants('prj_1', { invariants: '# Правила' });
+
+    expect(calls[0]?.url).toBe('http://localhost:5000/api/v2/projects/prj_1/invariants');
+    expect(calls[0]?.init.method).toBe('GET');
+    expect(read.invariants).toBe('# Правила');
+    expect(read.updated_at).toBe('2026-11-07T00:00:00.000Z');
+    expect(calls[1]?.init.method).toBe('PUT');
+    expect(JSON.parse(calls[1]?.init.body as string)).toEqual({ invariants: '# Правила' });
+    expect(written.invariants).toBe('# Правила');
+  });
+
+  it('PROP-054: ToDo сессии — чтение и мутации', async () => {
+    const calls: Call[] = [];
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(
+        () =>
+          jsonResponse({
+            todos: [
+              {
+                id: 'todo_1',
+                content: 'Пункт',
+                status: 'pending',
+                priority: 'medium',
+              },
+            ],
+          }),
+        calls,
+      ),
+    });
+
+    const list = await client.sessions.sessionTodos('ses_1');
+    await client.sessions.createSessionTodo('ses_1', { content: 'Пункт' });
+    await client.sessions.updateSessionTodo('ses_1', 'todo_1', { status: 'completed' });
+    await client.sessions.deleteSessionTodo('ses_1', 'todo_1');
+    await client.sessions.reorderSessionTodos('ses_1', { ids: ['todo_1', 'todo_2'] });
+    await client.sessions.clearSessionTodos('ses_1');
+    await client.sessions.clearSessionTodos('ses_1', { statuses: ['cancelled'] });
+
+    expect(calls[0]?.url).toBe('http://localhost:5000/api/v2/sessions/ses_1/todos');
+    expect(calls[0]?.init.method).toBe('GET');
+    expect(list.todos).toHaveLength(1);
+    expect(list.todos[0]?.content).toBe('Пункт');
+
+    expect(calls[1]?.url).toBe('http://localhost:5000/api/v2/sessions/ses_1/todos');
+    expect(calls[1]?.init.method).toBe('POST');
+    expect(JSON.parse(calls[1]?.init.body as string)).toEqual({ content: 'Пункт' });
+
+    expect(calls[2]?.url).toBe('http://localhost:5000/api/v2/sessions/ses_1/todos/todo_1');
+    expect(calls[2]?.init.method).toBe('PATCH');
+
+    expect(calls[3]?.url).toBe('http://localhost:5000/api/v2/sessions/ses_1/todos/todo_1');
+    expect(calls[3]?.init.method).toBe('DELETE');
+
+    expect(calls[4]?.url).toBe('http://localhost:5000/api/v2/sessions/ses_1/todos/order');
+    expect(calls[4]?.init.method).toBe('PUT');
+    expect(JSON.parse(calls[4]?.init.body as string)).toEqual({ ids: ['todo_1', 'todo_2'] });
+
+    expect(calls[5]?.url).toBe('http://localhost:5000/api/v2/sessions/ses_1/todos/clear');
+    expect(calls[5]?.init.method).toBe('POST');
+    // Без тела — сервер сам подставляет статусы по умолчанию.
+    expect(calls[5]?.init.body).toBeUndefined();
+    expect(calls[6]?.init.body).toBeDefined();
+    expect(JSON.parse(calls[6]?.init.body as string)).toEqual({ statuses: ['cancelled'] });
+  });
+
+  it('PROP-054: коды 400/403/404/409 проброшены на уровне клиента', async () => {
+    const cases: Array<{
+      status: number;
+      code: string;
+      run: (client: SynthClient) => Promise<unknown>;
+    }> = [
+      {
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        run: (c) => c.projects.createPlanItem('prj_1', { title: '' }),
+      },
+      {
+        status: 403,
+        code: 'PROJECT_FORBIDDEN',
+        run: (c) => c.projects.putProjectInvariants('prj_1', { invariants: 'x' }),
+      },
+      {
+        status: 404,
+        code: 'NOT_FOUND',
+        run: (c) => c.projects.projectLog('prj_missing'),
+      },
+      {
+        status: 409,
+        code: 'PLAN_VERSION_CONFLICT',
+        run: (c) => c.projects.movePlanItem('prj_1', 'item_1', { columnId: 'col_1', version: 1 }),
+      },
+    ];
+
+    for (const { status, code, run } of cases) {
+      const client = createSynthClient({
+        baseUrl: 'http://localhost:5000',
+        fetch: mockFetch(jsonResponse({ error: { code, message: 'err' } }, status)),
+      });
+      const err = (await run(client).catch((e: unknown) => e)) as SynthApiError;
+      expect(err).toBeInstanceOf(SynthApiError);
+      expect(err.status).toBe(status);
+      expect(err.code).toBe(code);
+      expect(err.message).toBe('err');
+    }
+  });
+
+  it('PROP-054: 409 PLAN_VERSION_CONFLICT несёт актуальный план в теле ошибки', async () => {
+    const client = createSynthClient({
+      baseUrl: 'http://localhost:5000',
+      fetch: mockFetch(
+        jsonResponse(
+          {
+            error: {
+              code: 'PLAN_VERSION_CONFLICT',
+              message: 'conflict',
+              details: { expected: 1, actual: 2 },
+            },
+            plan: { version: 2, updatedAt: '2026-11-07T00:00:00.000Z', columns: [], items: [] },
+          },
+          409,
+        ),
+      ),
+    });
+
+    const err = (await client.projects
+      .movePlanItem('prj_1', 'item_1', { columnId: 'col_1', version: 1 })
+      .catch((e: unknown) => e)) as SynthApiError;
+
+    expect(err).toBeInstanceOf(SynthApiError);
+    expect(err.status).toBe(409);
+    expect(err.code).toBe('PLAN_VERSION_CONFLICT');
+    const body = err.body as { plan?: { version?: number } };
+    expect(body.plan?.version).toBe(2);
+  });
+
   it('pipelines: projectPipelines — страница пайплайнов проекта', async () => {
     const calls: Call[] = [];
     const client = createSynthClient({

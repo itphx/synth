@@ -682,6 +682,22 @@ export class RemoteBackendClient {
     return this.request<unknown>('PUT', `/api/v2/projects/${encodeURIComponent(id)}`, body);
   }
 
+  /**
+   * Страница журнала удалённого проекта (PROP-054): журнал вынесен из детали
+   * проекта, единственный источник записей — `GET /api/v2/projects/:id/log`
+   * (постранично, новые сверху).
+   */
+  getProjectLog(id: string, params?: { limit?: number; offset?: number }): Promise<unknown> {
+    const query = new URLSearchParams();
+    if (params?.limit !== undefined) query.set('limit', String(params.limit));
+    if (params?.offset !== undefined) query.set('offset', String(params.offset));
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return this.request<unknown>(
+      'GET',
+      `/api/v2/projects/${encodeURIComponent(id)}/log${suffix}`,
+    );
+  }
+
   deleteProject(id: string): Promise<void> {
     return this.request<void>('DELETE', `/api/v2/projects/${encodeURIComponent(id)}`);
   }

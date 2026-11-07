@@ -16,18 +16,64 @@
 | SSH-ключи (ADR-076) | `ssh_keys_list` — метаданные ключей инстанса (`id`, `name`, `type`, `agentIds`, `createdAt`; приватный ключ и passphrase — **никогда**), фильтр `agent_id`; capability `git_read`, группа `git_read` (plan разрешён), **без привязки к workspace**. Нужен, чтобы взять `sshKeyId` для `project_repo_clone`/`project_repo_fetch`: у этих тулов текст отказа для SSH-URL перечисляет доступные ключи (`git.ssh_key_required_hint`, `id → name`, до 10) и отсылает к `ssh_keys_list`; нет стора ключей — прежний текст без списка |
 | Git worktrees (ADR-114) | `git_worktree_list`, `git_worktree_create`, `git_worktree_remove`, `git_worktree_prune` — проект **только из сессии**; `git_worktree_list` — только чтение (группа `git_read`), мутации (`create`/`remove`/`prune`) — группа `git_write`, в plan-режиме запрещены; `create` не привязывает сессию — привязку делает `PATCH /api/v2/sessions/:id { worktreeId }` |
 | Удалённый SSH (ADR-124) | `ssh_exec`, `ssh_copy`, `ssh_tunnel` — адресный доступ к удалённому хосту по SSH; capability `ssh`, группа правил `ssh` (authority: действие `execute`, вид цели `external`), в plan-режиме группа блокируется **целиком**; в режиме инстанса `ssh.mode='agent'` — `unavailable(policy)`; ключ — секрет вызова (`ExecSecret.mode='agent'`, эфемерный `ssh-agent`), пути к ключу в argv не бывает; ssh-клиент всегда с `-F /dev/null` (пользовательский `~/.ssh/config` не читается), `-o BatchMode=yes`, `-o StrictHostKeyChecking=accept-new`; параметры и ограничения — в разделе «Адресные SSH-тулы» ниже |
-| План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` — todo-тулы объявляют capability `[runtime, todo]` (группа правил `todo`, имена продублированы в `runtime`); список принадлежит **сессии вызова**: у саб-агента — своя дочерняя сессия (`extra.todoSessionId`), а не родительская; мутации публикуют `todos.updated` в канал сессии-владельца |
+| План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete`, `todo_reorder`, `todo_clear` — todo-тулы объявляют capability `[runtime, todo]` (группа правил `todo`, имена продублированы в `runtime`); список принадлежит **сессии вызова**: у саб-агента — своя дочерняя сессия (`extra.todoSessionId`), а не родительская; мутации публикуют `todos.updated` в канал сессии-владельца |
 | Пайплайны (ADR-101) | `pipeline_list`, `pipeline_get`, `pipeline_save`, `pipeline_publish`, `pipeline_delete`, `pipeline_run`, `pipeline_run_status`, `pipeline_run_list`, `pipeline_run_resume`, `pipeline_run_cancel`, `pipeline_templates`, `pipeline_instantiate` — capability `pipeline`; проект **только из сессии** (параметра `project_id` нет), чтение доступно участнику проекта, мутации (`save`/`publish`/`delete`/`run`/`resume`/`cancel`/`instantiate`) — только с правом изменения содержимого проекта (`VIEWER` только читает) и не в plan-режиме; прогон — только по **опубликованной** версии, одновременно у пайплайна не более одного активного прогона; `resume` — действие `approve` (ADR-106) |
 | Расписания (ADR-051) | `schedule_list`, `schedule_get`, `schedule_save`, `schedule_delete`, `schedule_run`, `schedule_jobs` — capability `schedule`; область «**свои + проект**» (свои расписания доступны и без проекта), мутации — по владению или праву изменения содержимого проекта, не в plan-режиме; триггер ровно один (`cron` 5 полей в UTC **или** `every` `30s\|15m\|1h\|24h`); цель `pipeline` требует **опубликованный** пайплайн и не создаёт сессию (прогон в фоне, прогресс — `pipeline_run_status`) |
 | Реестр фоновых прогонов (ADR-111/ADR-113) | `process_list`, `process_logs` (чтение; plan разрешён), `process_stop` (остановка running-прогона: процесс — `SIGTERM`→`SIGKILL`, фоновый саб-агент — abort дочернего прогона), `process_delete` (удаление только терминальной записи); скоуп «своя сессия + дочерние»; мутации в plan запрещены; capability `process`; лог — только у `kind: 'process'` |
 | Задачи | `task` (в т.ч. `background: true` — фоновый саб-агент, ADR-111; продолжатель — `task({task_id})`), `classify_conversation`, `read_session_reference` |
 | Вопрос пользователю (ADR-112) | `question` — capability `question`, группа правил `question`; пауза хода до ответа (срок — необязательный `timeout` ≥ 5 мин, по умолчанию таймаута нет); саб-агентам `deny`, в plan-режиме разрешён |
 | Проект | `get_project_info`, `list_repos`, `project_create`, `project_attach`, `project_update`, `project_workspace_set`, `project_repo_clone`, `project_repo_init`, `project_repo_add`, `project_repo_fetch`, `project_repo_remove` |
-| Лог/Инварианты | `project_log_write`, `project_log_read`, `project_invariants_read`, `project_invariants_write` |
+| Лог/Инварианты | `project_log_write`, `project_log_update`, `project_log_delete`, `project_log_read`, `project_invariants_read`, `project_invariants_write` |
 | Веб | `web_fetch` (в т.ч. `include_media` — медиа ответа в blob + `ToolResult.attachments`, ADR-115), `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Модели (ADR-115) | `list_models` — каталог моделей инстанса (capability `models`, группа `read`, plan разрешён, рабочий каталог не нужен): `provider/model` + `modalities`, **текущая** модель сессии и `defaultFor` (семейства, где модель назначена в `attachments.modalityModels`); без аргументов — компактный ответ (текущая + aux, без дампа каталога: у больших каталогов — сотни моделей), фильтры `modality`/`provider` и `limit` 1..50 (по умолчанию 20); модели без известных модальностей пропускаются и считаются отдельно |
 | Профиль | `profile_update` (capability `user` — выдан только Агенту `assistant`; онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
 | Скиллы | `skill` (ADR-046: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
+
+### План, ToDo, журнал и инварианты (PROP-054)
+
+Тулы `plan_write`, `todo_*`, `project_log_*`, `project_invariants_write` пишут через
+**доменные сервисы** (`engine/plan/service.ts`, `engine/todo/service.ts`,
+`engine/project/{log,invariants}-service.ts`) — те же, что у HTTP-роутов
+(`/api/v2/projects/:id/plan*`, `/api/v2/sessions/:id/todos*`), поэтому лимиты,
+нормализация порядка и версия плана одинаковы в обоих контурах.
+
+- **`plan_write`** — действия: `create_item` (`title`, `description?`, `columnId?`,
+  `priority?`, `dependsOn?`, `tags?`), `update_item` (`itemId`, `title?`,
+  `description?`, `priority?`, `tags?`), `move_item` (`itemId`, `columnId`,
+  `beforeItemId?`/`afterItemId?` либо `order?`), `delete_item` (`itemId`),
+  `set_dependencies` (`itemId`, `dependsOn`), `add_column` (`name`, `wipLimit?`),
+  `update_column` (`columnId`, `name?`, `wipLimit?`), `delete_column`
+  (`columnId`, `moveItemsTo`), `reorder_columns` (`order` — полный список id
+  колонок). Ответ — **компактный**: id изменённого объекта и новая версия
+  плана; полный markdown — в `plan_read`. После мутации событие `plan.updated`
+  публикуется в каналы **всех сессий проекта** с payload `{project_id, version}`.
+- **`todo_reorder`** (`ids` — желаемый порядок; неизвестные id игнорируются, не
+  названные пункты — в конец) и **`todo_clear`** (`statuses?`; по умолчанию
+  `completed` + `cancelled`). Оба публикуют `todos.updated` в канал сессии.
+- **`project_log_write`** (append), **`project_log_update`** (`entryId`, `text`),
+  **`project_log_delete`** (`entryId`) — журнал проекта; правка ставит
+  аддитивные `updatedAt`/`updatedBy`. После мутации событие `project.updated`
+  публикуется в каналы всех сессий проекта с payload `{project_id, kind:'log'}`.
+- **`project_invariants_write`** — полная замена текста инвариантов; после
+  мутации — `project.updated` с `kind:'invariants'`.
+
+**Лимиты Markdown** (байты; превышение — ошибка валидации, `400 VALIDATION_ERROR`
+в HTTP и отказ тула):
+
+| Поле | Лимит | Где |
+|---|---|---|
+| `invariants` | 64 КиБ | `project.invariants` (попадает в системный промпт) |
+| текст записи журнала | 16 КиБ | `project.log[].text` |
+| описание пункта плана | 16 КиБ | `plan.items[].description` |
+| текст пункта ToDo | 4 КиБ | `session.todos[].content` |
+
+Лимиты и проверки — в `@itphx/synth-shared` (`MARKDOWN_LIMITS`) и в доменных
+сервисах; HTTP и инструменты берут **одну и ту же** проверку.
+
+**Markdown в промпте.** Многострочные значения (`plan.items[].description`,
+`session.todos[].content`, `project.log[].text`) встраиваются в списки с
+**отступом продолжения** (`engine/markdown.ts`): переводы строк и заголовки
+внутри значения не разрывают внешний список.
 
 ### Саб-агент `task`: список задач и результат (ADR-129)
 

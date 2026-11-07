@@ -4,6 +4,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useProjectLogStore } from '@/stores/projectLogStore'
 import { useNotification } from '@/hooks/useNotification'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { formatDateTime } from '@/lib/formatDate'
@@ -19,11 +20,26 @@ import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import { ExpandableListRow, RowBadge } from '@/components/panels/ExpandableListRow'
-import { canManageProject } from '@/lib/projectAccess'
+import { canEditProjectContent, canManageProject } from '@/lib/projectAccess'
+import { canEditSessionContent } from '@/lib/sessionAccess'
+import { MarkdownText } from './work/MarkdownText'
+import { PlanSummary } from './work/PlanSummary'
+import { WorkModal, type WorkTab } from './work/WorkModal'
 import { PanelTab } from './PanelTab'
 import { useWorktreesStore } from '@/stores/worktreesStore'
 import { confirm } from '@/lib/confirm'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
+
+/** Дефолтные колонки нового плана (PROP-054). */
+const DEFAULT_PLAN_COLUMN_KEYS = [
+  'work.plan.defaultColumn.backlog',
+  'work.plan.defaultColumn.todo',
+  'work.plan.defaultColumn.doing',
+  'work.plan.defaultColumn.done',
+] as const
+
+/** Сколько последних записей журнала показывает панель. */
+const JOURNAL_PREVIEW_ENTRIES = 5
 
 export function ProjectTab() {
   const { t, locale } = useI18n()
@@ -42,7 +58,8 @@ export function ProjectTab() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null)
-  const [invariantsDraft, setInvariantsDraft] = useState('')
+  // PROP-054: открытая вкладка модального рабочего окна (null — окно закрыто).
+  const [workTab, setWorkTab] = useState<WorkTab | null>(null)
 
   // ADR-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
   const user = useAuthStore((s) => s.user)
@@ -73,6 +90,17 @@ export function ProjectTab() {
   // мир standalone/гибрида (`deployment === 'standalone'`), где личность
   // инстанса — и есть владелец локальных проектов; в managed правило прежнее.
   const canManageMcp = canManageProject(project ?? storeProject, user, {
+    standalone: deployment === 'standalone',
+  })
+
+  // PROP-054: право изменять содержимое проекта (план/журнал/инварианты).
+  // VIEWER читает, но кнопок правки не видит (инвариант 21).
+  const canEditProject = canEditProjectContent(project ?? storeProject, user, {
+    standalone: deployment === 'standalone',
+  })
+
+  // Право изменять ToDo сессии — отдельная ось (write-доступ к сессии).
+  const canEditTodos = canEditSessionContent(session, user, project ?? storeProject, {
     standalone: deployment === 'standalone',
   })
 
@@ -204,7 +232,6 @@ export function ProjectTab() {
     if (!projectId) {
       setProject(null)
       setWorkspaceDraft('')
-      setInvariantsDraft('')
       return
     }
 
@@ -216,7 +243,6 @@ export function ProjectTab() {
         if (cancelled) return
         setProject(p)
         setWorkspaceDraft(p?.workspace || '')
-        setInvariantsDraft(p?.invariants || '')
       })
       .catch(() => {
         if (!cancelled) notify({ text: t('projectTab.loadError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
@@ -304,7 +330,6 @@ export function ProjectTab() {
             </div>
           </div>
         </Section>
-        <PlanSection project={project} />
       </PanelTab>
     )
   }
@@ -372,22 +397,69 @@ export function ProjectTab() {
     if (target) void performSaveWorkspace(target, true)
   }
 
-  const handleSaveInvariants = async () => {
-    if (!project) return
-    await run({
-      key: 'invariants',
-      run: () => synthApi.updateProject(project.id, { invariants: invariantsDraft }),
-      onSuccess: (updated) => {
-        setProject(updated)
-        setInvariantsDraft(updated.invariants || '')
-        useProjectsStore.getState().updateProjectInList(updated)
-      },
-      silentError: true,
-      onError: (err) => {
-        const msg = err instanceof Error ? err.message : String(err)
-        notify({ text: `${t('panel.saveError')}: ${msg}`, type: 'error', category: 'error', sessionId: sessionId || undefined })
-      },
+  /**
+   * Применить новый план проекта: деталь кладём в стор (`updateProjectInList`),
+   * панель подхватывает её эффектом синхронизации со стором.
+   */
+  const applyPlan = (next: ProjectPlan | null) => {
+    if (!projectId) return
+    const store = useProjectsStore.getState()
+    const current = store.projects.find((p) => p.id === projectId)
+    if (!current) return
+    store.updateProjectInList({ ...current, plan: next })
+  }
+
+  const notifyError = (err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err)
+    notify({
+      text: `${t('panel.saveError')}: ${msg}`,
+      type: 'error',
+      category: 'error',
+      sessionId: sessionId || undefined,
     })
+  }
+
+  /** PROP-054: «+ пункт» — точечное создание пункта плана. */
+  const handleAddPlanItem = async (columnId: string, title: string) => {
+    if (!projectId) return
+    try {
+      const response = await synthApi.createProjectPlanItem(projectId, { title, columnId })
+      applyPlan(response.plan ?? null)
+    } catch (err) {
+      notifyError(err)
+    }
+  }
+
+  /** PROP-054: удаление пункта плана (с подтверждением). */
+  const handleDeletePlanItem = async (itemId: string) => {
+    if (!projectId) return
+    const ok = await confirm({
+      title: t('work.confirm.deleteItemTitle'),
+      message: t('work.confirm.deleteItemMessage'),
+      variant: 'danger',
+    })
+    if (!ok) return
+    try {
+      const response = await synthApi.deleteProjectPlanItem(projectId, itemId)
+      applyPlan(response.plan ?? null)
+    } catch (err) {
+      notifyError(err)
+    }
+  }
+
+  /** Пустой план — создать его с дефолтными колонками. */
+  const handleCreatePlan = async () => {
+    if (!projectId) return
+    try {
+      let plan: ProjectPlan | null = null
+      for (const key of DEFAULT_PLAN_COLUMN_KEYS) {
+        const response = await synthApi.createProjectPlanColumn(projectId, { name: t(key) })
+        plan = response.plan ?? plan
+      }
+      applyPlan(plan)
+    } catch (err) {
+      notifyError(err)
+    }
   }
 
   const openProjectEdit = () => {
@@ -432,7 +504,26 @@ export function ProjectTab() {
         </div>
       </Section>
 
-      <PlanSection project={project} />
+      {/* PROP-054: компактный план — группы по колонкам, полный список — в модальном окне. */}
+      <Section title={t('sessionTab.plan.title')}>
+        <PlanSummary
+          plan={project?.plan ?? null}
+          canEdit={canEditProject}
+          onAddItem={canEditProject ? (columnId, title) => void handleAddPlanItem(columnId, title) : undefined}
+          onDeleteItem={canEditProject ? (itemId) => void handleDeletePlanItem(itemId) : undefined}
+          onCreatePlan={canEditProject ? () => void handleCreatePlan() : undefined}
+          onOpenBoard={() => setWorkTab('board')}
+        />
+      </Section>
+
+      {/* PROP-054: инварианты — под планом: компактное отрендеренное превью + правка в модалке. */}
+      <Section title={t('projectTab.invariants.title')}>
+        <InvariantsPreview
+          invariants={project?.invariants ?? ''}
+          canEdit={canEditProject}
+          onEdit={() => setWorkTab('invariants')}
+        />
+      </Section>
 
       <Section title={t('projectTab.workspace.title')}>
         <div className="flex gap-2">
@@ -501,28 +592,6 @@ export function ProjectTab() {
         onConfirm={confirmOutsideSave}
       />
 
-      <Section title={t('projectTab.invariants.title')}>
-        <div className="flex flex-col gap-2">
-          <textarea
-            value={invariantsDraft}
-            onChange={(e) => setInvariantsDraft(e.target.value)}
-            placeholder={t('projectTab.invariants.placeholder')}
-            rows={4}
-            className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-y"
-          />
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.invariants.hint')}</div>
-            <button
-              onClick={handleSaveInvariants}
-              disabled={isPending('invariants')}
-              className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-            >
-              {isPending('invariants') ? t('projectTab.invariants.saving') : t('projectTab.invariants.save')}
-            </button>
-          </div>
-        </div>
-      </Section>
-
       {canManageMcp && (
         <Section title={t('projectTab.mcp.title')}>
           <ProjectMcpBlock
@@ -548,9 +617,28 @@ export function ProjectTab() {
         </Section>
       )}
 
+      {/* PROP-054: журнал — последние записи страницы; полный список — в модальном окне. */}
       <Section title={t('projectTab.log.title')}>
-        <ProjectLogBlock project={project} />
+        <ProjectJournalPreview projectId={projectId} onOpenAll={() => setWorkTab('journal')} />
       </Section>
+
+      {/* PROP-054: модальное рабочее окно (доска/ToDo/журнал/инварианты/статистика). */}
+      <WorkModal
+        open={workTab !== null}
+        onOpenChange={(open) => {
+          if (open) return
+          setWorkTab(null)
+          // Деталь проекта могла измениться (план/инварианты) — перечитываем её
+          // точечно (не `loadProjects()`: список — сводки, он затирал бы панель).
+          if (projectId) void useProjectsStore.getState().getProject(projectId)
+        }}
+        projectId={projectId}
+        sessionId={sessionId}
+        initialTab={workTab ?? 'board'}
+        canEdit={canEditProject}
+        canEditTodos={canEditTodos}
+        testId="project-work-modal"
+      />
     </PanelTab>
   )
 }
@@ -1033,106 +1121,152 @@ function ProjectSkillsBlock({
   )
 }
 
-function PlanSection({ project }: { project: ProjectData | null }) {  const { t } = useI18n()
-  return (
-    <Section title={t('sessionTab.plan.title')}>
-      <ProjectPlanBlock plan={project?.plan ?? null} />
-    </Section>
-  )
-}
-
-function ProjectLogBlock({ project }: { project: ProjectData | null }) {
+/**
+ * PROP-054: компактное превью инвариантов — отрендеренный Markdown + правка
+ * в модальном окне (лимит 64 КиБ проверяет редактор и сервер).
+ *
+ * В панели инварианты — только чтение: полная правка (Markdown-редактор) —
+ * в модальном рабочем окне.
+ */
+function InvariantsPreview({
+  invariants,
+  canEdit,
+  onEdit,
+}: {
+  invariants: string
+  canEdit: boolean
+  onEdit: () => void
+}) {
   const { t } = useI18n()
-  const log = project?.log ?? []
-  const sorted = [...log].sort((a, b) => b.created_at.localeCompare(a.created_at))
-
-  if (sorted.length === 0) {
-    return (
-      <div className="rounded-lg border border-border bg-surface-inset px-3 py-2">
-        <div className="text-xs text-muted-foreground">{t('projectTab.log.hint')}</div>
-      </div>
-    )
-  }
+  const [expanded, setExpanded] = useState(false)
+  const hasText = invariants.trim().length > 0
+  // Длинные инварианты (несколько абзацев/список) в панели обрезаем; полный
+  // текст доступен по «Показать полностью» и в модальном редакторе.
+  const isLong = invariants.length > 280 || invariants.split('\n').length > 4
 
   return (
-    <div className="space-y-1.5">
-      {sorted.map((entry) => (
-        <div key={entry.id} className="rounded-md border border-border bg-input px-2 py-1.5">
-          <div className="text-[0.625rem] text-muted-foreground/60">{entry.created_at}</div>
-          <div className="text-xs">{entry.text}</div>
+    <div className="flex min-w-0 flex-col gap-1.5" data-testid="project-invariants">
+      {hasText ? (
+        <div
+          className={`min-w-0 rounded-lg border border-border bg-surface-inset px-3 py-2 ${isLong && !expanded ? 'line-clamp-4' : ''}`}
+        >
+          <MarkdownText
+            content={invariants}
+            mode="render"
+            className="text-xs"
+            testId="project-invariants-preview"
+          />
         </div>
-      ))}
+      ) : (
+        <div className="rounded-lg border border-border bg-surface-inset px-3 py-2">
+          <div className="text-xs text-muted-foreground">{t('work.invariants.empty')}</div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {isLong && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              data-testid="project-invariants-expand"
+              className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover"
+            >
+              {expanded ? t('work.invariants.collapse') : t('work.invariants.expand')}
+            </button>
+          )}
+          <div className="min-w-0 text-[0.625rem] text-muted-foreground/60">{t('work.invariants.hint')}</div>
+        </div>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            data-testid="project-invariants-edit"
+            className="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-interactive-hover"
+          >
+            {hasText ? t('work.invariants.edit') : t('work.invariants.add')}
+          </button>
+        )}
+      </div>
     </div>
   )
 }
 
-const PRIORITY_LABELS: Record<string, string> = {
-  high: 'высокий',
-  medium: 'средний',
-  low: 'низкий',
-}
+/**
+ * PROP-054: журнал проекта — последние записи страницы
+ * (`GET /projects/:id/log`), полный список — в модальном окне.
+ *
+ * Журнал вынесен из детали проекта: источник — страница журнала (стор
+ * `stores/projectLogStore.ts`), live-обновление — событие `project.updated`
+ * с `kind: 'log'`.
+ */
+function ProjectJournalPreview({
+  projectId,
+  onOpenAll,
+}: {
+  projectId: string | null
+  onOpenAll: () => void
+}) {
+  const { t, locale } = useI18n()
+  const page = useProjectLogStore((s) => (projectId ? s.byProject[projectId] : undefined))
+  const refresh = useProjectLogStore((s) => s.refresh)
 
-function ProjectPlanBlock({ plan }: { plan: ProjectPlan | null }) {
-  const { t } = useI18n()
-  const [collapsed, setCollapsed] = useState(false)
-  const items = plan?.items ?? []
-  const columns = [...(plan?.columns ?? [])].sort((a, b) => a.order - b.order)
+  useEffect(() => {
+    if (!projectId) return
+    void refresh(projectId)
+  }, [projectId, refresh])
 
-  if (!plan || items.length === 0) {
+  if (!projectId) {
     return (
-      <div className="rounded-lg border border-border bg-surface-inset px-3 py-2">
-        <div className="text-xs text-muted-foreground">{t('sessionTab.plan.empty')}</div>
-        <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">{t('sessionTab.plan.hint')}</div>
+      <div className="text-[0.625rem] text-muted-foreground/60" data-testid="project-journal">
+        {t('projectTab.log.hint')}
       </div>
     )
   }
 
+  const entries = (page?.entries ?? []).slice(0, JOURNAL_PREVIEW_ENTRIES)
+  const total = page?.total ?? 0
+
   return (
-    <div className="rounded-lg border border-border bg-input p-2.5">
-      <div className="flex items-start gap-1.5">
-        <div className={`min-w-0 flex-1 space-y-2 overflow-y-auto pr-1 ${collapsed ? 'max-h-24' : 'max-h-48'}`}>
-          {columns.map((col) => {
-            const colItems = items
-              .filter((i) => i.columnId === col.id)
-              .sort((a, b) => a.order - b.order)
-            return (
-              <div key={col.id} className="space-y-1">
-                <div className="flex items-center gap-1.5 text-[0.625rem] text-muted-foreground/80">
-                  <span className="font-medium">{col.name}</span>
-                  <span className="text-muted-foreground/50">({colItems.length})</span>
-                </div>
-                {colItems.length === 0 ? (
-                  <div className="text-[0.625rem] text-muted-foreground/50">—</div>
-                ) : (
-                  <ul className="space-y-1">
-                    {colItems.map((item) => (
-                      <li key={item.id} className="rounded-md bg-surface-inset px-2 py-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[0.5625rem] font-medium uppercase text-muted-foreground">
-                            {PRIORITY_LABELS[item.priority] ?? item.priority}
-                          </span>
-                          <span className="text-xs">{item.title}</span>
-                        </div>
-                        {item.description && (
-                          <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70">{item.description}</div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )
-          })}
+    <div className="flex min-w-0 flex-col gap-1.5" data-testid="project-journal">
+      {page?.loading && entries.length === 0 && (
+        <div className="text-[0.625rem] text-muted-foreground/60">{t('common.loading')}</div>
+      )}
+
+      {!page?.loading && entries.length === 0 && (
+        <div className="rounded-lg border border-border bg-surface-inset px-3 py-2">
+          <div className="text-xs text-muted-foreground">{t('work.journal.empty')}</div>
         </div>
-        <button
-          type="button"
-          onClick={() => setCollapsed((v) => !v)}
-          className="shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-interactive-hover hover:text-foreground transition-colors"
-          title={collapsed ? t('sessionTab.plan.expand') : t('sessionTab.plan.collapse')}
+      )}
+
+      {entries.map((entry) => (
+        <div
+          key={entry.id}
+          className="min-w-0 rounded-md border border-border bg-input px-2 py-1.5"
+          data-testid={`project-journal-entry-${entry.id}`}
         >
-          <Icon name={collapsed ? 'arrow-down-s' : 'arrow-up-s'} className="size-3.5" />
-        </button>
-      </div>
+          <div className="flex min-w-0 items-center gap-1.5 text-[0.625rem] text-muted-foreground/60">
+            <span className="min-w-0 truncate">{entry.author ?? t('work.journal.unknownAuthor')}</span>
+            <span className="shrink-0">{formatDateTime(entry.created_at, locale)}</span>
+          </div>
+          <MarkdownText
+            content={entry.text}
+            mode="plain"
+            maxLength={200}
+            className="text-xs"
+            testId={`project-journal-entry-${entry.id}-text`}
+          />
+        </div>
+      ))}
+
+      <button
+        type="button"
+        onClick={onOpenAll}
+        data-testid="project-journal-all"
+        className="self-start rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover"
+      >
+        {t('work.journal.all', { count: total })}
+      </button>
     </div>
   )
 }

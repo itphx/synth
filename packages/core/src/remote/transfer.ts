@@ -13,10 +13,15 @@ import type { ProjectRepository } from '../storage/ports/project-repository.js';
 import type { SessionManager } from '../sessions/manager.js';
 import type { RemoteBackendClient } from './client.js';
 import type { EventBus } from '../events/bus.js';
-import { serializeSession } from '../server/serialize.js';
+import { serializeSession, deserializeLogEntry } from '../server/serialize.js';
 
 /** Каталоги, исключаемые из прямой синхронизации файлов. */
 export const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.synth']);
+
+/** Страница журнала удалённого проекта при переносе (PROP-054). */
+const REMOTE_PROJECT_LOG_PAGE_LIMIT = 200;
+/** Кап числа страниц журнала при переносе (защита от бесконечного обхода). */
+const REMOTE_PROJECT_LOG_MAX_PAGES = 20;
 
 /**
  * Преобразовать имя проекта в безопасное относительное имя workspace.
@@ -417,6 +422,42 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
  * контракта скачивания объекта по `blobPath` (пока его нет). Портативный
  * экспорт/импорт проекта (`projects/portable.ts`, формат 2) вложения переносит.
  */
+/**
+ * Загрузить журнал удалённого проекта постранично (PROP-054).
+ *
+ * Журнал вынесен из детали проекта: единственный источник — страница
+ * `GET /api/v2/projects/:id/log` (новые сверху). Обход страниц ограничен
+ * капом: при превышении журнал переносится частично (с предупреждением) —
+ * лучше потерять хвост, чем упасть на переносе.
+ */
+async function loadRemoteProjectLog(
+  remoteClient: RemoteBackendClient,
+  remoteProjectId: string,
+  logger: (message: string) => void,
+): Promise<Project['log'] | undefined> {
+  const entries: NonNullable<Project['log']> = [];
+  let offset = 0;
+  for (let page = 0; page < REMOTE_PROJECT_LOG_MAX_PAGES; page += 1) {
+    let response: unknown;
+    try {
+      response = await remoteClient.getProjectLog(remoteProjectId, {
+        limit: REMOTE_PROJECT_LOG_PAGE_LIMIT,
+        offset,
+      });
+    } catch (err) {
+      logger(`Журнал удалённого проекта не загружен: ${err instanceof Error ? err.message : String(err)}`);
+      return entries;
+    }
+    const body = (response ?? {}) as Record<string, unknown>;
+    const pageEntries = Array.isArray(body.entries) ? (body.entries as Array<Record<string, unknown>>) : [];
+    for (const dto of pageEntries) entries.push(deserializeLogEntry(dto));
+    const next = body.next_offset;
+    if (typeof next !== 'number' || next === null || pageEntries.length === 0) break;
+    offset = next;
+  }
+  return entries;
+}
+
 export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promise<TransferStats> {
   const {
     remoteProjectId, remoteClient, localProjectStore, localSessionManager,
@@ -438,7 +479,10 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
   });
   // Переносим контентные поля проекта: план (ADR-039), лог, инварианты, текущую задачу.
   if (remote.plan && typeof remote.plan === 'object') localProject.plan = remote.plan as Project['plan'];
-  if (Array.isArray(remote.log)) localProject.log = remote.log as Project['log'];
+  // Журнал вынесен из детали проекта (PROP-054) — он приходит отдельной
+  // постраничной выдачей `GET /api/v2/projects/:id/log`.
+  const remoteLog = await loadRemoteProjectLog(remoteClient, remoteProjectId, logger);
+  if (remoteLog && remoteLog.length > 0) localProject.log = remoteLog;
   if (typeof remote.current_task === 'string') localProject.currentTask = remote.current_task;
   if (typeof remote.invariants === 'string') localProject.invariants = remote.invariants;
   await localProjectStore.save(localProject);

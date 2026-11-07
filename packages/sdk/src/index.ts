@@ -32,6 +32,7 @@ export type {
   ScheduleJobsParams,
   ProjectsListParams,
   ProjectPipelinesParams,
+  ProjectLogParams,
   PipelineRunParams,
 } from './client.js';
 export {

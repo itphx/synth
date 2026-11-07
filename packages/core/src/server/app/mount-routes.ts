@@ -11,6 +11,7 @@ import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION } from '@itphx/synth-shar
 import {
   KeyRateLimiter, DEFAULT_AGENT_ID,
   createSessionRoutes, createProjectRoutes,
+  createProjectPlanRoutes, createProjectLogRoutes,
   createProviderRoutes, createModelRoutes, createAgentRoutes, createFsRoutes,
   createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createQueueRoutes, createMessageRoutes, createSettingsRoutes,
@@ -284,6 +285,24 @@ export function mountStandaloneRoutes(
       };
     },
   }));
+
+  // PROP-054: точечные операции плана проекта (`/projects/:id/plan*`) —
+  // та же core-фабрика, что и в managed; RBAC в standalone не разграничивается
+  // (единственный пользователь инстанса — владелец, ADR-079).
+  app.route('/api/v2/projects', createProjectPlanRoutes(
+    { requireAuth: auth.requireAuth },
+    projectStore,
+    { sessionManager, eventBus },
+  ));
+
+  // PROP-054: журнал проекта и инварианты (`/projects/:id/log*`,
+  // `/projects/:id/invariants`). Журнал вынесен из детали проекта — это
+  // единственный источник записей.
+  app.route('/api/v2/projects', createProjectLogRoutes(
+    { requireAuth: auth.requireAuth },
+    projectStore,
+    { sessionManager, eventBus },
+  ));
 
   // Перенос проектов между мирами (гибрид, UI publish/fork): те же пути, что у
   // project-роутов (:id/publish, :id/fork-local — без конфликта с :id). Работает

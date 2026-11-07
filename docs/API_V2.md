@@ -330,8 +330,9 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 | `message.updated` | канал сессии | `message_id`, `pinned?`, `disabled?` — pin/toggle/batch/retry (у retry отключаются сообщения от точки повтора); патч по `id`, live-части не трогаются |
 | `session.messages.cleared` | канал сессии | `session_id` — `POST /sessions/:id/clear`: история очищена (кроме закреплённых), очередь сброшена (`queue.state {0,0}` следом); клиент перечитывает снимок |
 | `session.messages.merged` | канал сессии | `messages` (добавленные сообщения; может отсутствовать) — `POST /sessions/:id/messages/merge` |
-| `plan.updated` | канал сессии | — план проекта изменён тулом `plan_write`; клиент перечитывает сессию |
-| `project.updated` / `project.deleted` | канал каждой сессии проекта | `project_id` — `PUT`/`DELETE /projects/:id` (удаление — до удаления, пока сессии перечисляются) |
+| `plan.updated` | **каналы всех сессий проекта** | `project_id`, `version` — план проекта изменён (тул `plan_write` или HTTP-операция плана); клиент перечитывает **деталь** проекта |
+| `todos.updated` | канал сессии | `todos` — актуальный список задач сессии (`TodoItem[]`: `id`/`content`/`status`/`priority`/`planItemId?`), `session_id` — сессия-владелец списка; публикуется после каждой мутации ToDo (тул `todo_*` или HTTP-операция `/sessions/:id/todos*`); клиент перечитывает список (у саб-агента список принадлежит **его** сессии) |
+| `project.updated` / `project.deleted` | канал каждой сессии проекта | `project_id` — `PUT`/`DELETE /projects/:id` (удаление — до удаления, пока сессии перечисляются); `project.updated` также несёт `kind` (`log`\|`invariants`) — изменился журнал или инварианты проекта |
 | `turn.started` | канал сессии | `turnId`, `messageId` (реплика, начавшая ход) |
 | `turn.finished` | канал сессии | `turnId`, `status` (`completed`\|`cancelled`\|`error`\|`stopped`) |
 | `step.started` | канал сессии | `turnId`, `stepIndex` (0-based), `messageId` — assistant-сообщение шага создаётся здесь |
@@ -468,6 +469,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > | `GET /api/v2/sessions` | массив сессий | `{sessions, total, offset, limit, next_offset}` |
 > | `GET /api/v2/sessions/:id/messages` | `{messages, session_id}` | `{messages, session_id, has_more, next_before}` |
 > | `GET /api/v2/projects` | массив проектов | `{projects, total, offset, limit, next_offset}` |
+> | `GET /api/v2/projects/:id/log` | журнал внутри DTO проекта (`project.log`) | `{entries, total, offset, limit, next_offset}` |
 > | `GET /api/v2/projects/:id/pipelines` | `{pipelines}` | `{pipelines, total, offset, limit, next_offset}` |
 > | `GET /api/v2/projects/:id/pipelines/:pid/runs` | `{runs}` | `{runs, offset, limit, next_offset}` |
 > | `GET /api/v2/pipelines/instances` | `{instances}` | `{instances, offset, limit, next_offset}` |
@@ -570,6 +572,12 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/sessions/:id/memory` | оба | auth | Память сессии для вкладки «Память» (ADR-107): `provider.active`, `scope.projectId`, `lastContext` — блоки `facts`/`recall` из **последнего** хода (`chars`/`estTokens`/`status`, `null` — ходов не было), `facts.active` (активные факты в скоупе), `projectMemory` (`{enabled}` — эффективная политика проекта; `null` — сессия без проекта), `indexes` (всего/project/instance/ready/building/failed + `items`: id/name/scope/state/enabled/projectId; `stale` вычисляется плагином и здесь не отдаётся; у `instance` `enabled` всегда true), `readiness` (`ready`/`degraded`/`unavailable`). Текстов фактов/чанков нет; доступ — чтение сессии (prefix-guard), без дублирующих проверок |
 | GET | `/api/v2/sessions/:id/stats` | оба | auth | Статистика usage (ADR-070): сообщения + рекурсивный usage саб-агентов (tool `task`), агрегаты по агентам/пользователям (`computeSessionStats`). Суммируется `usage` **каждого сообщения** (сообщение = вызов провайдера, ADR-118): сумма по сообщениям хода = расход хода; aux-вызовы (title/QA/fork/derive/micro) — только в счётчиках сессии и роллапе `usage` (`requests=1`, без `messages`) |
 | GET | `/api/v2/sessions/:id/questions` | оба | auth (чтение) | Вопросы пользователю сессии (этап 1 roadmap 0.12.4 — блок 3): `{questions: QuestionRecord[]}`; `?status=pending\|answered\|cancelled` (не задан — все статусы), `?limit=` (дефолт 50, максимум 200); записи «свежие первыми». Сервис вопросов не подключён — 503 `QUESTION_UNAVAILABLE` |
+| GET | `/api/v2/sessions/:id/todos` | оба | auth (чтение сессии) | Список задач сессии (ToDo): `{todos}` — элементы `TodoItem` (`id`/`content`/`status`/`priority`/`planItemId?`) |
+| POST | `/api/v2/sessions/:id/todos` | оба | auth (**мутация** сессии) | Создать пункт: `{content, status?, priority?, planItemId?}` → `{todos}`; `content` — Markdown, лимит 4 КиБ |
+| PATCH | `/api/v2/sessions/:id/todos/:todoId` | оба | auth (**мутация**) | Правка пункта: `{content?, status?, priority?, planItemId? \| null}` → `{todos}` (`planItemId: null` — отвязать от пункта плана) |
+| DELETE | `/api/v2/sessions/:id/todos/:todoId` | оба | auth (**мутация**) | Удалить пункт → `{todos}` |
+| PUT | `/api/v2/sessions/:id/todos/order` | оба | auth (**мутация**) | Новый порядок: `{ids: string[]}` → `{todos}`; принимаются только существующие id (неизвестные игнорируются, не названные пункты — в конец) |
+| POST | `/api/v2/sessions/:id/todos/clear` | оба | auth (**мутация**) | Очистить по статусам: `{statuses?}` → `{todos}` (по умолчанию `completed` + `cancelled`) |
 | POST | `/api/v2/sessions/:id/questions/:qid/answer` | оба | auth (**мутация**) | Ответ пользователя на вопрос: `{answers: string[][]}` (по индексу вопроса; значения — из `options[].value`) → 200 `{question}`. 400 `VALIDATION_ERROR` (тело/ответ невалидны), 404 `NOT_FOUND` (вопроса нет **или** он другой сессии), 409 `CONFLICT` (вопрос уже отвечен/отменён) |
 | POST | `/api/v2/sessions/:id/questions/:qid/cancel` | оба | auth (**мутация**) | Отмена вопроса: `{reason?}` → 200 `{question}`; те же 404/409, что и в `answer` |
 | GET | `/api/v2/sessions/:id/messages` | оба | auth | **Страница** истории: `{messages, session_id, has_more, next_before}`; `?limit=` (дефолт 200, максимум 500), `?before=` — **непрозрачный** исключающий курсор из `next_before` (сообщения строго старше указанного; это значение выбранного сервером ключа, не обязательно `seq` — для legacy-сессий с неуникальным/немонотонным `seq` курсор строится по `ord` или по позиции в истории); без `before` — последняя (самая новая) страница. Внутри страницы порядок хронологический; `index` в DTO — позиция в **полной** истории (страницы склеиваются по нему). `has_more` — есть более старые сообщения; `next_before` — курсор следующей (более старой) страницы (`null`, если более старых нет). Невалидный `before`/`limit` → `400 VALIDATION_ERROR`. DTO сообщения несёт `ord` (монотонный порядок записи), `turn_id`, `step_index`, `status` (`streaming`\|`completed`\|`cancelled`\|`error`, ADR-118 §1/§5) |
@@ -594,6 +602,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PATCH | `/api/v2/sessions/:id/notes/:noteId` | оба | auth | Обновить заметку `{content?, disabled?}` → `{notes}` + `context.sticky_note_updated`; `content` длиннее `maxChars` → 400 `VALIDATION_ERROR`; нет заметки → 404 `NOT_FOUND` |
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | оба | auth | Удалить заметку → `{notes}` + `context.sticky_note_deleted` |
 
+> **Список задач сессии (ToDo) — `/api/v2/sessions/:id/todos*` (PROP-054).** Все операции атомарны под `SessionManager.withLock` (per-session лок); отдельной версии ToDo нет (конфликтов не бывает). Доступ — **единый prefix-guard** сессий: чтение (`GET /:id/todos`) — read-доступ, мутации — write-доступ (владелец/участник проекта с правом изменения/`LEAD`/`ADMIN`); проверок в обработчике нет (инвариант 16). После каждой мутации публикуется `todos.updated` в канал сессии с актуальным списком. Порядок списка — порядок массива; `order` принимает только существующие id (неизвестные игнорируются, не названные пункты дописываются в конец — воскрешения удалённых нет). Текст пункта — Markdown, лимит 4 КиБ (`MARKDOWN_LIMITS.todoContent`); превышение — `400 VALIDATION_ERROR`. Логика — доменный сервис `engine/todo/service.ts`, тот же, что у тулов `todo_*`.
 > `SessionSettings` MCP/скиллов (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
 > **Список сессий и история — постранично (решение владельца, ломающее изменение).** `GET /api/v2/sessions` **всегда** отдаёт сводку сессий **без истории сообщений**: ключа `messages` в DTO нет вовсе (не пустой массив), `prompt_states` в списке тоже нет. Раньше список для `ADMIN`/`LEAD` грузил все сессии **со всей историей** — на инстансах с сотнями сессий это давало пик heap и OOM на входе. Поэтому: список — **страница** `{sessions, total, offset, limit, next_offset}` (массив больше не возвращается), а полная история сессии доступна только постранично в `GET /api/v2/sessions/:id/messages` (`limit` — дефолт 200, максимум 500; `before` — непрозрачный исключающий курсор из `next_before`, не обязательно `seq`). Сводка `GET /api/v2/sessions/:id` и точечные ответы (`POST /`, `PATCH /:id`, `POST /:id/clear`, `POST /:id/fork`) — тоже без `messages`. Очередь (`pending_messages`/`pending_count`), `current_stream`, статус, настройки и счётчики токенов в сводке сохраняются. Обратная совместимость не поддерживается — клиент переходит на форму-объект и постраничное чтение истории.
 > **Пагинация списка.** `total` — число видимых сессий (после фильтра видимости и `project_id`); `next_offset` — курсор следующей страницы (`offset + page.length`), `null` — страница последняя. Нечисловой/отрицательный `limit`/`offset` → `400 VALIDATION_ERROR`; `limit` выше 500 обрезается до 500.
@@ -870,7 +879,7 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 |---|---|---|---|---|
 | GET | `/api/v2/projects` | оба | auth (owner/член; LEAD/ADMIN — все) | **Страница** списка проектов: `{projects, total, offset, limit, next_offset}`; `?limit=` (дефолт 100, максимум 500), `?offset=` (дефолт 0). DTO проекта — **сводка**: тяжёлых полей `log` (журнал проекта) и `plan` (ADR-039) в списке нет; остальные поля детали сохраняются. ⚠️ **Ломающее изменение:** раньше возвращался массив |
 | POST | `/api/v2/projects` | оба | auth | Создать `{name, workspace?, repos?, plan?}` → 201 |
-| GET | `/api/v2/projects/:id` | оба | auth / owner·член·LEAD·ADMIN | Проект (read; VIEWER читает, не редактирует) |
+| GET | `/api/v2/projects/:id` | оба | auth / owner·член·LEAD·ADMIN | Проект (read; VIEWER читает, не редактирует). ⚠️ **Ломающее изменение (PROP-054):** в детали **нет** поля `log` — журнал проекта вынесен в отдельную постраничную страницу `GET /api/v2/projects/:id/log`. Поле `plan` и `invariants` остаются |
 | PUT | `/api/v2/projects/:id` | оба | auth / owner·EDITOR·LEAD·ADMIN | Обновить поля (name, description, current_task, invariants, icon, color, repos, plan, memory); смена `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — политика памяти проекта (ADR-107): `false` убирает блоки памяти и тулы `plugin_synth_plugin_memory_*`, данные сохраняются; не задано — наследует политику инстанса (включено) |
 | DELETE | `/api/v2/projects/:id` | оба | auth / owner·LEAD·ADMIN | Удалить → 204 |
 | GET | `/api/v2/projects/:id/stats` | оба | auth | Агрегаты токенов по сессиям проекта (`total_sessions`, `total_input_tokens`, `total_output_tokens`, `total_tokens`, `total_cache_read_tokens`, `total_cache_write_tokens`, `total_reasoning_tokens`). ⚠️ Поле `total_messages` **удалено**: список сессий всегда лёгкий (без истории), считать сообщения было бы нечем; число сообщений одной сессии — в `GET /api/v2/sessions/:id/stats` |
@@ -879,7 +888,70 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 | POST | `/api/v2/projects/:id/publish` | core | auth | Локальный проект → сервер (гибрид) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Серверный проект → локальный мир (гибрид) |
 
-> **Список проектов — постранично и сводкой (решение владельца, ломающее изменение).** `GET /api/v2/projects` отдаёт **страницу** `{projects, total, offset, limit, next_offset}` (массив больше не возвращается — обратная совместимость не поддерживается) и **сводку** проекта: тяжёлые поля `log` (журнал проекта) и `plan` (ADR-039) в списке не отдаются — списком они множили бы объём ответа. Полный DTO — в детали `GET /api/v2/projects/:id` (там `log`/`plan` остаются). Остальные поля детали (имя, иконка, цвет, участники, workspace, репозитории, MCP-скоуп, политика памяти, статус-сообщения, `current_task`, `invariants`) в сводке сохраняются.
+> **Гибрид и журнал проекта (PROP-054).** Журнал вынесен из детали проекта, поэтому
+> перенос между мирами идёт через постраничную страницу:
+> - **fork-local** (сервер → локально): журнал догружается **страницами**
+>   `GET /api/v2/projects/:id/log` (`remote/client.ts#getProjectLog`), обход страниц
+>   ограничен капом — при его превышении журнал переносится частично (с предупреждением
+>   в лог переноса), лучше потерять хвост, чем упасть на переносе;
+> - **publish** (локально → сервер): журнал **не переносится** — `PUT`/`POST` проекта
+>   поля `log` не принимают (в DTO детали его нет). Перенос журнала в этом направлении
+>   не реализован; пока он нужен — переносите проект портативным архивом
+>   (§5.8.1) или дописывайте журнал на сервере точечными операциями §5.8.2.
+
+### 5.8.2 План, журнал и инварианты проекта (оба, PROP-054)
+
+Точечные операции над рабочими данными проекта. Права — **по правилам проекта**
+(ADR-089 §5.5/§5.8): чтение — право **чтения** проекта (`canReadProject`:
+владелец/любой участник, включая `VIEWER`, а также `LEAD`/`ADMIN`); мутации —
+право **изменения содержимого** (`canEditProjectContent`: `OWNER`/`EDITOR`/
+`LEAD`/`ADMIN`). `VIEWER` читает, но не мутирует (инвариант 21). Проверка —
+граничная (инвариант 16): в обработчиках проверок доступа нет.
+
+| Метод | Путь | RBAC | Назначение / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/projects/:id/plan` | read | План целиком: `{plan}` (`plan: null` — плана нет) |
+| POST | `/api/v2/projects/:id/plan/items` | write | Создать пункт: `{title, description?, columnId?, priority?, dependsOn?, tags?}` → `{plan}`. Без `columnId` — колонка `backlog`, а её нет — первая по `order` |
+| PATCH | `/api/v2/projects/:id/plan/items/:itemId` | write | Правка полей пункта: `{title?, description?, priority?, tags?, dependsOn?}` → `{plan}`. Версия плана **не требуется** (правка применяется к текущему пункту под локом хранилища) |
+| PATCH | `/api/v2/projects/:id/plan/items/:itemId/move` | write | Перемещение: `{columnId, beforeItemId?, afterItemId?, version?}` → `{plan}`. После перемещения порядок колонки нормализуется в `0..n-1` |
+| DELETE | `/api/v2/projects/:id/plan/items/:itemId` | write | Удалить пункт → `{plan}` |
+| POST | `/api/v2/projects/:id/plan/columns` | write | Создать колонку: `{name, wipLimit?}` → `{plan}` |
+| PATCH | `/api/v2/projects/:id/plan/columns/:columnId` | write | Правка колонки: `{name?, wipLimit?}` → `{plan}` |
+| DELETE | `/api/v2/projects/:id/plan/columns/:columnId` | write | Удалить колонку: `{moveItemsTo: string\|null, version}` → `{plan}`. `moveItemsTo` — куда переносятся пункты (обязателен: пункты вместе с колонкой не удаляются); `version` обязателен |
+| PUT | `/api/v2/projects/:id/plan/columns/order` | write | Новый порядок колонок: `{order: string[], version}` → `{plan}` (полный список id; не названные колонки остаются в конце) |
+| GET | `/api/v2/projects/:id/log` | read | Страница журнала: `{entries, total, offset, limit, next_offset}`; `?limit=` (дефолт 50, максимум 200), `?offset=` (дефолт 0). **Новые записи сверху** |
+| POST | `/api/v2/projects/:id/log` | write | Новая запись: `{text}` → 201 `{entry}` |
+| PATCH | `/api/v2/projects/:id/log/:entryId` | write | Правка текста записи: `{text}` → `{entry}` (аддитивные `updated_at`/`updated_by`) |
+| DELETE | `/api/v2/projects/:id/log/:entryId` | write | Удалить запись → `204` |
+| GET | `/api/v2/projects/:id/invariants` | read | Инварианты: `{invariants, updated_at}` |
+| PUT | `/api/v2/projects/:id/invariants` | write | Заменить инварианты: `{invariants}` → `{invariants, updated_at}` (last-write-wins) |
+
+> **Версия плана (оптимистичная блокировка).** `plan.version` растёт на каждую
+> мутацию плана. Операции `move`, удаление колонки и `columns/order` требуют
+> версию (`version` в теле): при несовпадении — `409 PLAN_VERSION_CONFLICT`,
+> в теле — **актуальный план** (`plan`) и `error.details.{expected,actual}`;
+> клиент перечитывает план и повторяет правку. Одиночные правки полей пункта
+> версии не требуют.
+>
+> **Ошибки:** `400 VALIDATION_ERROR` (тело невалидно, в т.ч. превышение лимита
+> Markdown), `403 PROJECT_FORBIDDEN` (нет права изменения содержимого),
+> `404 NOT_FOUND` (проекта/пункта/колонки/записи нет), `409
+> PLAN_VERSION_CONFLICT`.
+>
+> **Лимиты Markdown** (`MARKDOWN_LIMITS` в `@itphx/synth-shared`): описание
+> пункта плана — 16 КиБ, текст записи журнала — 16 КиБ, инварианты — 64 КиБ.
+> Превышение — `400 VALIDATION_ERROR`.
+>
+> **События.** После мутации плана — `plan.updated` в каналы **всех сессий
+> проекта** (`{project_id, version}`); после мутации журнала — `project.updated`
+> (`kind:'log'`), после мутации инвариантов — `project.updated`
+> (`kind:'invariants'`) — также в каналы всех сессий проекта.
+>
+> **Гибрид.** Для удалённого проекта (`remote:<uuid>`) операции не поддержаны —
+> `502 REMOTE_UNAVAILABLE` (правка плана удалённого проекта — через
+> `PUT /api/v2/projects/:id {plan}`).
+
+> **Список проектов — постранично и сводкой (решение владельца, ломающее изменение).** `GET /api/v2/projects` отдаёт **страницу** `{projects, total, offset, limit, next_offset}` (массив больше не возвращается — обратная совместимость не поддерживается) и **сводку** проекта: тяжёлые поля `log` (журнал проекта) и `plan` (ADR-039) в списке не отдаются — списком они множили бы объём ответа. Полный DTO — в детали `GET /api/v2/projects/:id` (там `plan` остаётся, а `log` **вынесен** в страницу `GET /api/v2/projects/:id/log` — PROP-054). Остальные поля детали (имя, иконка, цвет, участники, workspace, репозитории, MCP-скоуп, политика памяти, статус-сообщения, `current_task`, `invariants`) в сводке сохраняются.
 > **Пагинация списка.** `total` — число видимых проектов; `next_offset` — курсор следующей страницы (`offset + page.length`), `null` — страница последняя. Нечисловой/дробный/отрицательный `limit`/`offset` → `400 VALIDATION_ERROR`; `limit` выше 500 обрезается до 500.
 > **Гибрид: пагинация через границу миров невозможна.** Удалённый список приходит **без** постраничной выдачи (старый сервер отдаёт массив), поэтому сквозной `next_offset` при наличии удалённых проектов — `null`, а `total` — сумма локального счётчика и удалённого.
 > `workspace` (ADR-075): при `POST`/`PUT` каталог создаётся (`mkdir -p`). Managed: пустой `workspace` → авто-имя
@@ -887,7 +959,7 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 > `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; смена `workspace` — владелец/LEAD/ADMIN, иначе `403 FORBIDDEN`.
 > RBAC (backend, D5): `PUT` контент (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner/EDITOR/LEAD/ADMIN; `workspace` — owner/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; иначе `403 FORBIDDEN`.
 > **Видимость `GET /api/v2/projects` и `GET /api/v2/projects/:id` (ADR-089).** В списке `ADMIN`/`LEAD` видят **все** проекты, остальные — только свои (`owner` или `members`). Чтение проекта по id — `owner`, **любой участник** (`members`, любая роль, включая `VIEWER`), а также `ADMIN`/`LEAD`; иначе `403 FORBIDDEN`. Это **read-уровень**: он **не расширяет** права на изменение — `manage` (`workspace`/`DELETE`/MCP-скоуп) и `edit` контента остаются owner/EDITOR/LEAD/ADMIN, `VIEWER` читает, но не редактирует (см. `canRead` vs `canManage`/`canEditContent`).
-> Tool-level RBAC (core-тулы чата, ADR-075/D5): `project_log_write`/`project_invariants_write` пишут только при owner/EDITOR (иначе `project.write_forbidden`); `plan_write` пока без гейта (TODO) — `project.plan` защищён HTTP-RBAC.
+> Tool-level RBAC (core-тулы чата, ADR-075/D5): `plan_write`/`project_log_write`/`project_log_update`/`project_log_delete`/`project_invariants_write` пишут только при owner/EDITOR (иначе `project.write_forbidden`) — те же доменные сервисы, что у HTTP-роутов.
 > В core ролевых проверок нет (любой аутентифицированный). Core/standalone:
 > абсолютный вне root — `deny` → `403`, `confirm` без `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > Ошибка создания каталога → `422 WORKSPACE_CREATE_FAILED`.
@@ -919,6 +991,13 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 (ADR-096), а не через собственный файловый контекст: на `storage.backend=postgres`
 скачивание архива раньше отдавало 404 для всех БД-проектов, а импорт уходил в файловое
 хранилище (split-brain).
+
+**Журнал проекта в архиве (PROP-054).** В `project.json` архива журнал **есть** —
+это `serializeProjectArchive` (сводка + `plan` + `log`), а не `serializeProject`
+(деталь API, где журнала уже нет). Импорт восстанавливает записи в доменной форме
+(camelCase: `createdAt`/`sessionId`/`author`/`updatedAt`/`updatedBy`), поэтому
+round-trip экспорт → импорт журнала **не теряет** записи (регресс-тест —
+`packages/core/src/projects/portable.test.ts`).
 
 | Метод | Путь | Сборка | RBAC (managed / core) | Назначение |
 |---|---|---|---|---|
@@ -1934,8 +2013,20 @@ try {
 
 - **Auth:** заголовок `Authorization: Bearer <cred>` с приоритетом **serviceKey → apiKey → token**;
   базовый путь по умолчанию `/api/v2` (переопределяется `apiPath`).
-- **Namespaces:** `events` (ingest/journal/bindings/keys/routes), `sessions` (CRUD + prompt/messages/status),
-  `schedules` (CRUD + run/jobs), `llm` (`chatCompletions`).
+- **Namespaces:** `events` (ingest/journal/bindings/keys/routes), `sessions` (CRUD + prompt/messages/status
+  + **ToDo**: `sessionTodos`/`createSessionTodo`/`updateSessionTodo`/`deleteSessionTodo`/`reorderSessionTodos`/`clearSessionTodos`),
+  `schedules` (CRUD + run/jobs), `projects` (list/get + **план**: `projectPlan`/`createPlanItem`/`updatePlanItem`/
+  `movePlanItem`/`deletePlanItem`/`createPlanColumn`/`updatePlanColumn`/`deletePlanColumn`/`reorderPlanColumns`;
+  **журнал**: `projectLog`/`createProjectLogEntry`/`updateProjectLogEntry`/`deleteProjectLogEntry`;
+  **инварианты**: `projectInvariants`/`putProjectInvariants`), `pipelines`, `models`, `fs`, `git`, `llm`
+  (`chatCompletions`).
+- **PROP-054 в SDK.** Журнал проекта **вынесен из детали**: `projects.get()` возвращает DTO **без**
+  поля `log` (план в детали остаётся), записи журнала читаются постранично — `projects.projectLog(id, {limit, offset})`
+  → `ProjectLogPage` (`{entries, total, offset, limit, next_offset}`; `limit` по умолчанию 50, максимум 200).
+  Журнал и инварианты сериализуются в **snake_case** (`created_at`/`session_id`/`updated_at`/`updated_by`),
+  план приходит **доменной формой** (camelCase: `updatedAt`/`columnId`) — это разные формы, не опечатка.
+  Конфликт версии плана — `409 PLAN_VERSION_CONFLICT`; актуальный план лежит в теле ошибки
+  (`SynthApiError.body.plan`), отдельного DTO для ошибки нет.
 - **Ошибки:** `SynthApiError` (`{status, code, message, body?}`); единый формат `{error:{code,message}}`,
   сетевые сбои → `status: 0` / `NETWORK_ERROR`. Инъекция `fetch` — для тестов/нестандартных рантаймов.
 

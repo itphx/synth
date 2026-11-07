@@ -26,11 +26,18 @@ import { classifyConversationTool } from './classify-conversation.js';
 import { readSessionReferenceTool } from './read-reference.js';
 import { getProjectInfoTool, listReposTool } from './project-context.js';
 import { planEnterTool, planExitTool, planReadTool, planListTool, planWriteTool } from './plan.js';
-import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool } from './todo.js';
+import {
+  todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool,
+  todoReorderTool, todoClearTool,
+} from './todo.js';
 import { profileUpdateTool } from './profile-update.js';
 // Этап 1 roadmap 0.13 (блок 3): вопрос пользователю посреди хода.
 import { questionTool } from './question.js';
-import { projectCreateTool, projectAttachTool, projectUpdateTool, projectWorkspaceSetTool, projectLogWriteTool, projectLogReadTool, projectInvariantsReadTool, projectInvariantsWriteTool } from './project-manage.js';
+import {
+  projectCreateTool, projectAttachTool, projectUpdateTool, projectWorkspaceSetTool,
+  projectLogWriteTool, projectLogUpdateTool, projectLogDeleteTool, projectLogReadTool,
+  projectInvariantsReadTool, projectInvariantsWriteTool,
+} from './project-manage.js';
 import { projectRepoCloneTool, projectRepoInitTool, projectRepoAddTool, projectRepoFetchTool, projectRepoRemoveTool } from './project-repos.js';
 // ADR-101: пайплайны проекта — чтение и авторство (спецификация, версии).
 import {
@@ -151,6 +158,8 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   todoAddTool,
   todoUpdateTool,
   todoDeleteTool,
+  todoReorderTool,
+  todoClearTool,
   profileUpdateTool,
   // Этап 1 roadmap 0.13 (блок 3): вопрос пользователю
   questionTool,
@@ -164,6 +173,8 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   projectRepoFetchTool,
   projectRepoRemoveTool,
   projectLogWriteTool,
+  projectLogUpdateTool,
+  projectLogDeleteTool,
   projectLogReadTool,
   projectInvariantsReadTool,
   projectInvariantsWriteTool,

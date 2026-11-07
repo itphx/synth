@@ -2,7 +2,7 @@
 //
 // Экспорт — самодостаточный архив `<name>.synth-project.tar.gz`: `manifest.json`
 // (tool/formatVersion, проект, число сессий, записи с sha256), `project.json`
-// (`serializeProject`) и `sessions/<id>.json` (переносимый payload
+// (`serializeProjectArchive`) и `sessions/<id>.json` (переносимый payload
 // `buildSessionExport`) по каждой **локальной** сессии проекта; опционально
 // `workspace/**` (`--with-workspace`). Секретов в архиве нет: `secrets/`, ключи,
 // credentials, токены, API-ключи не попадают (это проверяется тестом).
@@ -58,7 +58,7 @@ import { provisionManagedWorkspace } from '../engine/workspace-provision.js';
 import { isAttachmentPath } from '../engine/attachments/service.js';
 import { stripSessionSecrets } from '../engine/gateway/obfuscation-map-store.js';
 import { isInsideReal, resolveRealPath } from '../engine/tools/path-utils.js';
-import { serializeProject } from '../server/serialize.js';
+import { serializeProjectArchive, deserializeLogEntry } from '../server/serialize.js';
 import { LOCAL_USER_ID } from '../server/local-owner.js';
 import { buildSessionExport, resolveLocalWorkspace, walkDir } from '../remote/transfer.js';
 import {
@@ -464,9 +464,10 @@ async function _exportProject(opts: ExportProjectOptions): Promise<ExportProject
   try {
     const sources: ArchiveSource[] = [];
 
-    // project.json — metadata проекта (serializeProject).
+    // project.json — metadata проекта (serializeProjectArchive: сводка + план
+    // + журнал — журнал переносится вместе с проектом, в детали API его нет).
     const projectPath = join(staging, 'project.json');
-    await writeFile(projectPath, JSON.stringify(serializeProject(project), null, 2), 'utf-8');
+    await writeFile(projectPath, JSON.stringify(serializeProjectArchive(project), null, 2), 'utf-8');
     sources.push({ path: 'project.json', type: 'file', absPath: projectPath, mode: 0o644 });
 
     // sessions/<id>.json — переносимый payload каждой локальной сессии.
@@ -821,7 +822,9 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
     target.statusMessages = Array.isArray(projectDto.status_messages)
       ? (projectDto.status_messages as Project['statusMessages'])
       : [];
-    target.log = Array.isArray(projectDto.log) ? (projectDto.log as Project['log']) : [];
+    target.log = Array.isArray(projectDto.log)
+      ? (projectDto.log as Array<Record<string, unknown>>).map(deserializeLogEntry)
+      : [];
     if (projectDto.plan && typeof projectDto.plan === 'object') {
       target.plan = projectDto.plan as Project['plan'];
     }

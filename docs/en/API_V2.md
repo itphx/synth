@@ -2,6 +2,15 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
+> ⚠️ RU-версия обновлена 2026-11-08 (**PROP-054** — **§5.8.2** (новая секция): план/журнал/
+> инварианты проекта — эндпоинты, версия плана (409 `PLAN_VERSION_CONFLICT`), лимиты Markdown, RBAC,
+> события; **§5.8** — в детали проекта поля `log` **больше нет** (журнал — постранично),
+> примечание о переносе журнала в гибриде (fork — страницами, publish — не переносится);
+> **§5.8.1** — журнал в портативном архиве (round-trip без потерь); **§5.5** — ToDo сессии
+> (`/sessions/:id/todos*`); **§3.3** — payload'ы `plan.updated` (`{project_id, version}`),
+> `project.updated` (`{project_id, kind:'log'|'invariants'}`), `todos.updated` (`{todos}`);
+> **§5** — пагинация журнала в общем блоке; **§5.30** — namespaces SDK (план/журнал/инварианты/ToDo)
+> — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-03 (**§5.12** — `GET /api/v2/fs/raw`: inline-allowlist
 > (`INLINE_PREVIEW_KINDS`), MIME по расширению, SVG-CSP, `Range`/206, `ETag`/304, cap
 > `storage.maxPreviewBytes` → `413 FILE_TOO_LARGE` — **переведено**).
@@ -336,8 +345,9 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 | `message.updated` | session channel | `message_id`, `pinned?`, `disabled?` — pin/toggle/batch/retry (retry disables messages from the retry point); patched by `id`, live parts are untouched |
 | `session.messages.cleared` | session channel | `session_id` — `POST /sessions/:id/clear`: history cleared (pinned kept), queue reset (`queue.state {0,0}` follows); the client refetches the snapshot |
 | `session.messages.merged` | session channel | `messages` (added messages; may be absent) — `POST /sessions/:id/messages/merge` |
-| `plan.updated` | session channel | — project plan changed by the `plan_write` tool; the client refetches the session |
-| `project.updated` / `project.deleted` | channel of every project session | `project_id` — `PUT`/`DELETE /projects/:id` (deletion is published before removal, while sessions are still enumerable) |
+| `plan.updated` | channel of **every session of the project** | `project_id`, `version` — the project plan changed (the `plan_write` tool or an HTTP plan operation); the client refetches the project **detail** |
+| `todos.updated` | session channel | `todos` — the current task list of the session (`TodoItem[]`: `id`/`content`/`status`/`priority`/`planItemId?`), `session_id` — the session that owns the list; published after every ToDo mutation (a `todo_*` tool or an HTTP `/sessions/:id/todos*` operation); the client refetches the list (a subagent's list belongs to **its own** session) |
+| `project.updated` / `project.deleted` | channel of every project session | `project_id` — `PUT`/`DELETE /projects/:id` (deletion is published before removal, while sessions are still enumerable); `project.updated` also carries `kind` (`log`\|`invariants`) — the project journal or the invariants changed |
 | `turn.started` / `turn.finished` | session channel | `turnId`, terminal status |
 | `step.started` / `step.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `usage`, `timings`, `attachments` |
 | `step.tools.started` / `step.tools.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `callIds` (`string[]`) — additive: `step.finished` means “the LLM call is done”, these events mark the **tool execution** of that step (published once per step with tool calls, before execution and after `metadata.tool_results` is written) |
@@ -414,6 +424,7 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 > | `GET /api/v2/sessions` | an array of sessions | `{sessions, total, offset, limit, next_offset}` |
 > | `GET /api/v2/sessions/:id/messages` | `{messages, session_id}` | `{messages, session_id, has_more, next_before}` |
 > | `GET /api/v2/projects` | an array of projects | `{projects, total, offset, limit, next_offset}` |
+> | `GET /api/v2/projects/:id/log` | the journal inside the project DTO (`project.log`) | `{entries, total, offset, limit, next_offset}` |
 > | `GET /api/v2/projects/:id/pipelines` | `{pipelines}` | `{pipelines, total, offset, limit, next_offset}` |
 > | `GET /api/v2/projects/:id/pipelines/:pid/runs` | `{runs}` | `{runs, offset, limit, next_offset}` |
 > | `GET /api/v2/pipelines/instances` | `{instances}` | `{instances, offset, limit, next_offset}` |
@@ -539,6 +550,12 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | POST | `/api/v2/sessions/:id/notes` | backend | auth | Create a note → 201 |
 | PATCH | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Update a note |
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Delete a note |
+| GET | `/api/v2/sessions/:id/todos` | both | auth (session read) | The session task list (ToDo): `{todos}` — `TodoItem` elements (`id`/`content`/`status`/`priority`/`planItemId?`) |
+| POST | `/api/v2/sessions/:id/todos` | both | auth (**mutation**) | Create an item: `{content, status?, priority?, planItemId?}` → `{todos}`; `content` — Markdown, limit 4 KiB |
+| PATCH | `/api/v2/sessions/:id/todos/:todoId` | both | auth (**mutation**) | Patch an item: `{content?, status?, priority?, planItemId? \| null}` → `{todos}` (`planItemId: null` — unlink from a plan item) |
+| DELETE | `/api/v2/sessions/:id/todos/:todoId` | both | auth (**mutation**) | Delete an item → `{todos}` |
+| PUT | `/api/v2/sessions/:id/todos/order` | both | auth (**mutation**) | New order: `{ids: string[]}` → `{todos}`; only existing ids are accepted (unknown ids are ignored, the items not named go to the end) |
+| POST | `/api/v2/sessions/:id/todos/clear` | both | auth (**mutation**) | Clear by status: `{statuses?}` → `{todos}` (by default — `completed` + `cancelled`) |
 
 > `SessionSettings` for MCP/skills (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session overrides (a single switch); `mcpDefaultOn`/`skillsDefaultOn` — a **snapshot** of the defaults (`project.defaultOn`/the system default) at session creation time, set by the system, not overwritten by a change of the project default; `undefined` — legacy mode (see the scope endpoints in §5.17.2).
 > **The session list and the history — paged (owner decision, a breaking change).** `GET /api/v2/sessions` **always** returns a summary of the sessions **without the message history**: there is no `messages` key in the DTO at all (not an empty array), and no `prompt_states` in the list either. Previously the list for `ADMIN`/`LEAD` loaded all sessions **with their whole history** — on instances with hundreds of sessions that meant a heap peak and OOM on the entry path. Therefore: the list is a **page** `{sessions, total, offset, limit, next_offset}` (an array is no longer returned), and the full history of a session is available only paged in `GET /api/v2/sessions/:id/messages` (`limit` — default 200, maximum 500; `before` — an opaque exclusive cursor from `next_before`, not necessarily `seq`). The summary of `GET /api/v2/sessions/:id` and the single-item responses (`POST /`, `PATCH /:id`, `POST /:id/clear`, `POST /:id/fork`) are also without `messages`. The queue (`pending_messages`/`pending_count`), `current_stream`, the status, the settings and the token counters are kept in the summary. Backward compatibility is not supported — the client switches to the object form and to paged reading of the history.
@@ -579,6 +596,8 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > **Session DTO — `current_stream.live` (ADR-118 §5).** An additive field of the live turn — a snapshot of the **current (streaming) step** at response time: `{message_id, step_index, turn_id, content, reasoning, parts, updated_at}`; `null` when no step is streaming (finished/not started yet) or the snapshot belongs to another `stream_id`. It lives in core memory (not persisted) and is dropped on `step.finished`; `parts` are the same parts as in `part.delta`/`part.updated` (deterministic ids), so the client merges them without duplicates. It lets a client **open a session mid-turn and see everything up to the current moment** without waiting for the next delta (tab switch, page reload, a second client).
 
 > **Session DTO — `activity` (idle | busy | retry).** An additive field of a serialized session (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) — the **server-side activity status**: `{type: 'idle'}` | `{type: 'busy', turnId: string\|null, streamId: string\|null}` | `{type: 'retry', attempt: number, maxRetries: number, retryAt: string, error?: string, streamId: string}`. Priority: **retry > busy > idle**. `busy` — a turn is running (`current_stream`) or the session is locked (`status.blocked`); `retry` — the LLM call failed with a recoverable error and the processor is waiting for the backoff (`attempt`/`maxRetries` — the attempt number and the limit, `retryAt` — the ISO time of the next attempt, `error` — the text of the last error). The retry state is **persistent** (file store — the `retry` field; PostgreSQL — the `sessions.retry` jsonb column, migration `030`), so after a reload/restart the client sees “retrying” rather than “empty”; it is cleared on a new `stream.start`, on success, on a terminal error and on cancellation/queue reset.
+
+> **The session task list (ToDo) — `/api/v2/sessions/:id/todos*` (PROP-054).** All operations are atomic under `SessionManager.withLock` (a per-session lock); the ToDo list has no version of its own (there are no conflicts). Access — the **single prefix guard** of the sessions: reading (`GET /:id/todos`) — read access, mutations — write access (the owner/a project member with the modification right/`LEAD`/`ADMIN`); there are no checks in the handler (invariant 16). After every mutation `todos.updated` is published to the session channel with the current list. The order of the list is the order of the array; `order` accepts only existing ids (unknown ids are ignored, the items not named are appended to the end — deleted items are not resurrected). The item text is Markdown, limit 4 KiB (`MARKDOWN_LIMITS.todoContent`); exceeding it — `400 VALIDATION_ERROR`. The logic lives in the domain service `engine/todo/service.ts` — the same one the `todo_*` tools use.
 
 ### 5.6 Messages — `/api/v2/messages`
 
@@ -676,7 +695,7 @@ replica can continue an upload — the `blobs` volume must be shared.
 |---|---|---|---|---|
 | GET | `/api/v2/projects` | both | auth (owner/member; LEAD/ADMIN — all) | **Page** of the project list: `{projects, total, offset, limit, next_offset}`; `?limit=` (default 100, maximum 500), `?offset=` (default 0). The project DTO is a **summary**: the heavy fields `log` (the project log) and `plan` (ADR-039) are not in the list; the other detail fields are kept. ⚠️ **Breaking change:** an array used to be returned |
 | POST | `/api/v2/projects` | both | auth | Create `{name, workspace?, repos?, plan?}` → 201 |
-| GET | `/api/v2/projects/:id` | both | auth / owner·member·LEAD·ADMIN | Project (read; VIEWER reads, does not edit) |
+| GET | `/api/v2/projects/:id` | both | auth / owner·member·LEAD·ADMIN | Project (read; VIEWER reads, does not edit). ⚠️ **Breaking change (PROP-054):** the detail has **no** `log` field — the project journal moved to the paged endpoint `GET /api/v2/projects/:id/log`. The `plan` and `invariants` fields stay |
 | PUT | `/api/v2/projects/:id` | both | auth / owner·EDITOR·LEAD·ADMIN | Update fields (name, description, current_task, invariants, icon, color, repos, plan, memory); changing `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — project memory policy (ADR-107): `false` removes memory prompt blocks and `plugin_synth_plugin_memory_*` tools for the project while keeping the data; omitted — inherits the instance policy (enabled) |
 | DELETE | `/api/v2/projects/:id` | both | auth / owner·LEAD·ADMIN | Delete → 204 |
 | GET | `/api/v2/projects/:id/stats` | both | auth | The token aggregates over the sessions of the project (`total_sessions`, `total_input_tokens`, `total_output_tokens`, `total_tokens`, `total_cache_read_tokens`, `total_cache_write_tokens`, `total_reasoning_tokens`). ⚠️ The `total_messages` field was **removed**: the session list is always light (without history), so there would be nothing to count the messages from; the number of messages of a single session — in `GET /api/v2/sessions/:id/stats` |
@@ -685,7 +704,11 @@ replica can continue an upload — the `blobs` volume must be shared.
 | POST | `/api/v2/projects/:id/publish` | core | auth | Local project → server (hybrid) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Server project → the local world (hybrid) |
 
-> **The project list — paged and summarized (owner decision, a breaking change).** `GET /api/v2/projects` returns a **page** `{projects, total, offset, limit, next_offset}` (an array is no longer returned — backward compatibility is not supported) and a **summary** of the project: the heavy fields `log` (the project log) and `plan` (ADR-039) are not returned by the list — in a list they would multiply the response size. The full DTO is in the detail `GET /api/v2/projects/:id` (there `log`/`plan` stay). The other detail fields (name, icon, color, members, workspace, repositories, the MCP scope, the memory policy, the status messages, `current_task`, `invariants`) are kept in the summary.
+> **Hybrid and the project journal (PROP-054).** The journal was moved out of the project detail, so the transfer between worlds goes through the paged endpoint:
+> - **fork-local** (server → local): the journal is loaded **page by page** from `GET /api/v2/projects/:id/log` (`remote/client.ts#getProjectLog`); the number of pages is capped — when the cap is exceeded the journal is transferred partially (with a warning in the transfer log): losing the tail is better than failing the transfer;
+> - **publish** (local → server): the journal is **not transferred** — `PUT`/`POST` of a project do not accept a `log` field (the detail DTO does not have one). Transferring the journal in this direction is not implemented; while it is needed — transfer the project as a portable archive (§5.8.1) or append the journal on the server with the point operations of §5.8.2.
+
+> **The project list — paged and summarized (owner decision, a breaking change).** `GET /api/v2/projects` returns a **page** `{projects, total, offset, limit, next_offset}` (an array is no longer returned — backward compatibility is not supported) and a **summary** of the project: the heavy fields `log` (the project log) and `plan` (ADR-039) are not returned by the list — in a list they would multiply the response size. The full DTO is in the detail `GET /api/v2/projects/:id` (there `plan` stays, while `log` is **moved out** to the paged endpoint `GET /api/v2/projects/:id/log` — PROP-054). The other detail fields (name, icon, color, members, workspace, repositories, the MCP scope, the memory policy, the status messages, `current_task`, `invariants`) are kept in the summary.
 > **List pagination.** `total` — the number of visible projects; `next_offset` — the cursor of the next page (`offset + page.length`), `null` — the last page. A non-numeric/fractional/negative `limit`/`offset` → `400 VALIDATION_ERROR`; a `limit` above 500 is clamped to 500.
 > **Hybrid: pagination across the world boundary is impossible.** A remote list arrives **without** paged output (an old server returns an array), so the end-to-end `next_offset` with remote projects present — `null`, and `total` — the sum of the local counter and the remote ones.
 > `workspace` (ADR-075): on `POST`/`PUT` the directory is created (`mkdir -p`). Managed: an empty `workspace` → the auto name
@@ -693,10 +716,60 @@ replica can continue an upload — the `blobs` volume must be shared.
 > `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; changing `workspace` — owner/LEAD/ADMIN, otherwise `403 FORBIDDEN`.
 > RBAC (backend, D5): `PUT` content (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner/EDITOR/LEAD/ADMIN; `workspace` — owner/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; otherwise `403 FORBIDDEN`.
 > **Visibility of `GET /api/v2/projects` and `GET /api/v2/projects/:id` (ADR-089).** In the list, `ADMIN`/`LEAD` see **all** projects, the rest — only their own (`owner` or `members`). Reading a project by id — `owner`, **any member** (`members`, any role, including `VIEWER`), as well as `ADMIN`/`LEAD`; otherwise `403 FORBIDDEN`. This is a **read level**: it does **not** extend the modification rights — `manage` (`workspace`/`DELETE`/MCP scope) and content `edit` remain owner/EDITOR/LEAD/ADMIN, `VIEWER` reads but does not edit (see `canRead` vs `canManage`/`canEditContent`).
-> Tool-level RBAC (core chat tools, ADR-075/D5): `project_log_write`/`project_invariants_write` write only for owner/EDITOR (otherwise `project.write_forbidden`); `plan_write` is not gated yet (TODO) — `project.plan` is protected by HTTP RBAC.
+> Tool-level RBAC (core chat tools, ADR-075/D5): `plan_write`/`project_log_write`/`project_log_update`/`project_log_delete`/`project_invariants_write` write only for owner/EDITOR (otherwise `project.write_forbidden`) — the same domain services as the HTTP routes.
 > In core there are no role checks (any authenticated user). Core/standalone:
 > an absolute path outside root — `deny` → `403`, `confirm` without `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > Directory creation error → `422 WORKSPACE_CREATE_FAILED`.
+
+### 5.8.2 Project plan, journal and invariants (both, PROP-054)
+
+Point operations over the working data of a project. The rights follow the **project rules**
+(ADR-089 §5.5/§5.8): reading — the right to **read** the project (`canReadProject`:
+owner/any member, including `VIEWER`, as well as `LEAD`/`ADMIN`); mutations — the right to
+**modify the content** (`canEditProjectContent`: `OWNER`/`EDITOR`/`LEAD`/`ADMIN`).
+`VIEWER` reads but does not mutate (invariant 21). The check is a **boundary** one
+(invariant 16): there are no access checks in the handlers.
+
+| Method | Path | RBAC | Purpose / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/projects/:id/plan` | read | The whole plan: `{plan}` (`plan: null` — there is no plan) |
+| POST | `/api/v2/projects/:id/plan/items` | write | Create an item: `{title, description?, columnId?, priority?, dependsOn?, tags?}` → `{plan}`. Without `columnId` — the `backlog` column, and if it is missing — the first one by `order` |
+| PATCH | `/api/v2/projects/:id/plan/items/:itemId` | write | Patch the fields of an item: `{title?, description?, priority?, tags?, dependsOn?}` → `{plan}`. The plan version is **not required** (the patch is applied to the current item under the storage lock) |
+| PATCH | `/api/v2/projects/:id/plan/items/:itemId/move` | write | Move: `{columnId, beforeItemId?, afterItemId?, version?}` → `{plan}`. After the move the order of the column is normalized to `0..n-1` |
+| DELETE | `/api/v2/projects/:id/plan/items/:itemId` | write | Delete an item → `{plan}` |
+| POST | `/api/v2/projects/:id/plan/columns` | write | Create a column: `{name, wipLimit?}` → `{plan}` |
+| PATCH | `/api/v2/projects/:id/plan/columns/:columnId` | write | Patch a column: `{name?, wipLimit?}` → `{plan}` |
+| DELETE | `/api/v2/projects/:id/plan/columns/:columnId` | write | Delete a column: `{moveItemsTo: string\|null, version}` → `{plan}`. `moveItemsTo` — where the items move (mandatory: the items are not deleted together with the column); `version` is mandatory |
+| PUT | `/api/v2/projects/:id/plan/columns/order` | write | The new order of the columns: `{order: string[], version}` → `{plan}` (the full list of ids; the columns not named stay at the end) |
+| GET | `/api/v2/projects/:id/log` | read | A page of the journal: `{entries, total, offset, limit, next_offset}`; `?limit=` (default 50, maximum 200), `?offset=` (default 0). **The newest entries first** |
+| POST | `/api/v2/projects/:id/log` | write | A new entry: `{text}` → 201 `{entry}` |
+| PATCH | `/api/v2/projects/:id/log/:entryId` | write | Patch the text of an entry: `{text}` → `{entry}` (additive `updated_at`/`updated_by`) |
+| DELETE | `/api/v2/projects/:id/log/:entryId` | write | Delete an entry → `204` |
+| GET | `/api/v2/projects/:id/invariants` | read | The invariants: `{invariants, updated_at}` |
+| PUT | `/api/v2/projects/:id/invariants` | write | Replace the invariants: `{invariants}` → `{invariants, updated_at}` (last-write-wins) |
+
+> **The plan version (optimistic locking).** `plan.version` grows on every plan mutation.
+> The operations `move`, the column deletion and `columns/order` require the version
+> (`version` in the body): on a mismatch — `409 PLAN_VERSION_CONFLICT`, the body carries the
+> **current plan** (`plan`) and `error.details.{expected,actual}`; the client refetches the
+> plan and repeats the edit. The single field patches of an item do not require a version.
+>
+> **Errors:** `400 VALIDATION_ERROR` (an invalid body, including a Markdown limit overrun),
+> `403 PROJECT_FORBIDDEN` (no right to modify the content), `404 NOT_FOUND` (no project/item/
+> column/entry), `409 PLAN_VERSION_CONFLICT`.
+>
+> **Markdown limits** (`MARKDOWN_LIMITS` in `@itphx/synth-shared`): the item description —
+> 16 KiB, the text of a journal entry — 16 KiB, the invariants — 64 KiB. An overrun —
+> `400 VALIDATION_ERROR`.
+>
+> **Events.** After a plan mutation — `plan.updated` in the channels of **every session of
+> the project** (`{project_id, version}`); after a journal mutation — `project.updated`
+> (`kind:'log'`), after an invariants mutation — `project.updated` (`kind:'invariants'`) —
+> also to the channels of every session of the project.
+>
+> **Hybrid.** For a remote project (`remote:<uuid>`) the operations are not supported —
+> `502 REMOTE_UNAVAILABLE` (editing the plan of a remote project — via
+> `PUT /api/v2/projects/:id {plan}`).
 
 ### 5.8.1 Portable project export/import — `/api/v2/projects` (both, ADR-091 §6)
 
@@ -725,6 +798,13 @@ in the maintenance audit journal (`export.created`/`import.applied`, ADR-092).
 `StorageContext` (ADR-096), not through their own file context: on `storage.backend=postgres`
 downloading the archive used to return 404 for every database project, while the import went
 into the file store (split-brain).
+
+**The project journal in the archive (PROP-054).** The journal **is** in `project.json` of the
+archive — that is `serializeProjectArchive` (summary + `plan` + `log`), not `serializeProject`
+(the API detail, which no longer has the journal). The import restores the entries in the
+domain form (camelCase: `createdAt`/`sessionId`/`author`/`updatedAt`/`updatedBy`), so the
+export → import round trip **does not lose** the entries (the regression test —
+`packages/core/src/projects/portable.test.ts`).
 
 | Method | Path | Build | RBAC (managed / core) | Purpose |
 |---|---|---|---|---|
@@ -1722,8 +1802,21 @@ try {
 
 - **Auth:** the header `Authorization: Bearer <cred>` with the priority **serviceKey → apiKey → token**;
   the base path defaults to `/api/v2` (overridden by `apiPath`).
-- **Namespaces:** `events` (ingest/journal/bindings/keys/routes), `sessions` (CRUD + prompt/messages/status),
-  `schedules` (CRUD + run/jobs), `llm` (`chatCompletions`).
+- **Namespaces:** `events` (ingest/journal/bindings/keys/routes), `sessions` (CRUD + prompt/messages/status
+  + **ToDo**: `sessionTodos`/`createSessionTodo`/`updateSessionTodo`/`deleteSessionTodo`/`reorderSessionTodos`/`clearSessionTodos`),
+  `schedules` (CRUD + run/jobs), `projects` (list/get + **plan**: `projectPlan`/`createPlanItem`/`updatePlanItem`/
+  `movePlanItem`/`deletePlanItem`/`createPlanColumn`/`updatePlanColumn`/`deletePlanColumn`/`reorderPlanColumns`;
+  **journal**: `projectLog`/`createProjectLogEntry`/`updateProjectLogEntry`/`deleteProjectLogEntry`;
+  **invariants**: `projectInvariants`/`putProjectInvariants`), `pipelines`, `models`, `fs`, `git`, `llm`
+  (`chatCompletions`).
+- **PROP-054 in the SDK.** The project journal is **moved out of the detail**: `projects.get()` returns a DTO
+  **without** the `log` field (the plan stays in the detail), the journal entries are read page by page —
+  `projects.projectLog(id, {limit, offset})` → `ProjectLogPage` (`{entries, total, offset, limit, next_offset}`;
+  `limit` default 50, maximum 200). The journal and the invariants are serialized in **snake_case**
+  (`created_at`/`session_id`/`updated_at`/`updated_by`), while the plan arrives in the **domain form**
+  (camelCase: `updatedAt`/`columnId`) — different forms, not a typo. A plan version conflict —
+  `409 PLAN_VERSION_CONFLICT`; the current plan is in the error body (`SynthApiError.body.plan`), there is
+  no separate DTO for the error.
 - **Errors:** `SynthApiError` (`{status, code, message, body?}`); a single format `{error:{code,message}}`,
   network failures → `status: 0` / `NETWORK_ERROR`. `fetch` injection — for tests/non-standard runtimes.
 

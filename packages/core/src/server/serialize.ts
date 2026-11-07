@@ -411,21 +411,64 @@ export function serializeProjectSummary(project: Project) {
 }
 
 /**
- * Полный DTO проекта (деталь `GET /api/v2/projects/:id`, ответы мутаций,
- * портативный архив проекта).
+ * DTO записи журнала → доменная запись (`ProjectLogEntry`).
  *
- * = сводка списка + тяжёлые поля `log` (журнал проекта) и `plan` (ADR-039).
+ * Нужна там, где записи приходят извне (импорт архива проекта, fork
+ * удалённого проекта): DTO — snake_case, домен — camelCase. Без маппинга
+ * `createdAt`/`sessionId` терялись бы, и запись в журнале выглядела бы
+ * «без времени».
+ */
+export function deserializeLogEntry(dto: Record<string, unknown>) {
+  return {
+    id: String(dto.id ?? ''),
+    text: String(dto.text ?? ''),
+    createdAt: String(dto.created_at ?? dto.createdAt ?? ''),
+    ...(dto.session_id ?? dto.sessionId
+      ? { sessionId: String(dto.session_id ?? dto.sessionId) }
+      : {}),
+    ...(dto.author ? { author: String(dto.author) } : {}),
+    ...(dto.updated_at ?? dto.updatedAt
+      ? { updatedAt: String(dto.updated_at ?? dto.updatedAt) }
+      : {}),
+    ...(dto.updated_by ?? dto.updatedBy
+      ? { updatedBy: String(dto.updated_by ?? dto.updatedBy) }
+      : {}),
+  };
+}
+
+/**
+ * Полный DTO проекта (деталь `GET /api/v2/projects/:id`, ответы мутаций).
+ *
+ * = сводка списка + `plan` (ADR-039). Журнала (`log`) здесь **нет**: он
+ * вынесен из детали проекта (PROP-054) — единственный источник записей —
+ * постраничный endpoint `GET /api/v2/projects/:id/log`.
+ *
+ * Для портативного архива проекта (экспорт/импорт) журнал нужен — там
+ * используется `serializeProjectArchive` (та же сводка + `log`).
  */
 export function serializeProject(project: Project) {
   return {
     ...serializeProjectSummary(project),
+    plan: project.plan ?? null,
+  };
+}
+
+/**
+ * DTO проекта для **портативного архива** (ADR-091 §6): сводка + `plan` +
+ * `log`. Отличается от `serializeProject` (детали API) только журналом —
+ * экспорт/импорт проекта переносит журнал целиком.
+ */
+export function serializeProjectArchive(project: Project) {
+  return {
+    ...serializeProject(project),
     log: (project.log || []).map((e) => ({
       id: e.id,
       text: e.text,
       created_at: e.createdAt,
       session_id: e.sessionId || null,
       author: e.author || null,
+      updated_at: e.updatedAt || null,
+      updated_by: e.updatedBy || null,
     })),
-    plan: project.plan ?? null,
   };
 }

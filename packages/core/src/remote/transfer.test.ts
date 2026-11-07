@@ -408,6 +408,79 @@ describe('transfer helpers', () => {
       expect(created[0]!.data.owner_id).toBe('local');
     });
 
+    it('PROP-054: журнал удалённого проекта догружается страницами (в детали его нет)', async () => {
+      const getProjectLog = vi.fn(async (_id: string, params?: { limit?: number; offset?: number }) => {
+        const offset = params?.offset ?? 0;
+        if (offset === 0) {
+          return {
+            entries: [
+              {
+                id: 'log-2',
+                text: 'вторая',
+                created_at: '2026-01-02T00:00:00.000Z',
+                session_id: 'rs-1',
+                author: 'local',
+                updated_at: null,
+                updated_by: null,
+              },
+            ],
+            total: 2,
+            offset: 0,
+            limit: 200,
+            next_offset: 1,
+          };
+        }
+        return {
+          entries: [
+            {
+              id: 'log-1',
+              text: 'первая',
+              created_at: '2026-01-01T00:00:00.000Z',
+              session_id: null,
+              author: 'local',
+              updated_at: null,
+              updated_by: null,
+            },
+          ],
+          total: 2,
+          offset: 1,
+          limit: 200,
+          next_offset: null,
+        };
+      });
+      const client = makeFakeRemoteClient({ getProjectLog });
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+
+      const stats = await forkProjectToLocal({
+        remoteProjectId: 'remote-1',
+        remoteClient: client,
+        localProjectStore: projectStore,
+        localSessionManager: sessionManager,
+        includeFiles: false,
+        includeSessions: false,
+        localWorkspacesRoot: workspacesRoot,
+      });
+
+      // Страницы обходятся по `next_offset` — журнал не теряется.
+      expect(getProjectLog).toHaveBeenCalledTimes(2);
+      expect(getProjectLog.mock.calls[0]?.[1]).toMatchObject({ limit: 200, offset: 0 });
+      expect(getProjectLog.mock.calls[1]?.[1]).toMatchObject({ limit: 200, offset: 1 });
+
+      const localProject = await projectStore.load(stats.projectId);
+      expect(localProject?.log).toHaveLength(2);
+      // DTO (snake_case) разворачивается в доменную форму (camelCase).
+      expect(localProject?.log?.[0]).toMatchObject({
+        id: 'log-2',
+        text: 'вторая',
+        createdAt: '2026-01-02T00:00:00.000Z',
+        sessionId: 'rs-1',
+        author: 'local',
+      });
+      expect(localProject?.log?.[1]?.id).toBe('log-1');
+      expect(localProject?.log?.[1]?.sessionId).toBeUndefined();
+    });
+
     it('фильтрует сессии не из этого проекта', async () => {
       const client = makeFakeRemoteClient({
         listSessions: async () => ({

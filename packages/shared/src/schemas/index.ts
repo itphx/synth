@@ -19,6 +19,9 @@ import {
   MAX_SSH_ALLOW_PORTS,
   isValidHostRule,
   HOST_RULE_FORMAT_HINT,
+  MARKDOWN_LIMITS,
+  TODO_STATUSES,
+  TODO_PRIORITIES,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey, SessionParticipantRole } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
@@ -1344,3 +1347,241 @@ export const mediaPartSchema = z.object({
 });
 
 export type MediaPartInput = z.infer<typeof mediaPartSchema>;
+
+// --- PROP-054: план (ADR-039), ToDo (ADR-039), журнал и инварианты проекта ---
+//
+// Контракт «план/ToDo/журнал» (PROP-054, дополнение 2026-11-07): у сущностей
+// есть Zod-схемы (в shared), а тела мутаций — **strict** (лишнее поле — ошибка
+// валидации, а не молчаливое игнорирование). При **чтении** (импорт/перенос
+// между мирами) допустим `passthrough` — старые записи могли нести поля,
+// которых больше нет в модели.
+
+/** Приоритет пункта плана (ADR-039). */
+export const PLAN_PRIORITIES = ['high', 'medium', 'low'] as const;
+/** Отношение зависимости пункта плана (ADR-039). */
+export const PLAN_DEPENDENCY_RELATIONS = ['blocked_by', 'blocks', 'relates_to'] as const;
+
+/** Зависимость пункта плана (ADR-039): `projectId` пуст = тот же проект. */
+export const planDependencySchema = z
+  .object({
+    projectId: z.string().optional(),
+    itemId: z.string().min(1),
+    relation: z.enum(PLAN_DEPENDENCY_RELATIONS),
+  })
+  .passthrough();
+
+/** Колонка плана (ADR-039) — статус пункта. */
+export const planColumnSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1).max(100),
+    order: z.number().int(),
+    wipLimit: z.number().int().min(0).optional(),
+  })
+  .passthrough();
+
+/** Пункт плана (ADR-039). `description` — Markdown (лимит `MARKDOWN_LIMITS`). */
+export const planItemSchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string().min(1).max(500),
+    description: z.string().max(MARKDOWN_LIMITS.planDescription).optional(),
+    columnId: z.string().min(1),
+    priority: z.enum(PLAN_PRIORITIES),
+    order: z.number().int(),
+    dependsOn: z.array(planDependencySchema).default([]),
+    tags: z.array(z.string()).optional(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .passthrough();
+
+/** План проекта целиком (ADR-039). */
+export const projectPlanSchema = z
+  .object({
+    version: z.number().int(),
+    updatedAt: z.string(),
+    columns: z.array(planColumnSchema),
+    items: z.array(planItemSchema),
+  })
+  .passthrough();
+
+/** Пункт ToDo сессии (ADR-039). `content` — Markdown (лимит `MARKDOWN_LIMITS`). */
+export const todoItemSchema = z
+  .object({
+    id: z.string().min(1),
+    content: z.string().min(1).max(MARKDOWN_LIMITS.todoContent),
+    status: z.enum(TODO_STATUSES),
+    priority: z.enum(TODO_PRIORITIES),
+    planItemId: z.string().optional(),
+  })
+  .passthrough();
+
+/** Запись журнала проекта (PROP-054): `updatedAt`/`updatedBy` — аддитивные. */
+export const projectLogEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    text: z.string().min(1).max(MARKDOWN_LIMITS.journalEntry),
+    createdAt: z.string(),
+    sessionId: z.string().optional(),
+    author: z.string().optional(),
+    updatedAt: z.string().optional(),
+    updatedBy: z.string().optional(),
+  })
+  .passthrough();
+
+export type PlanDependencyInput = z.infer<typeof planDependencySchema>;
+export type PlanColumnInput = z.infer<typeof planColumnSchema>;
+export type PlanItemInput = z.infer<typeof planItemSchema>;
+export type ProjectPlanInput = z.infer<typeof projectPlanSchema>;
+export type TodoItemInput = z.infer<typeof todoItemSchema>;
+export type ProjectLogEntryInput = z.infer<typeof projectLogEntrySchema>;
+
+// --- Тела HTTP-мутаций плана (PROP-054) — strict ---
+
+/** Создание пункта плана. */
+export const planItemCreateSchema = z
+  .object({
+    title: z.string().min(1).max(500),
+    description: z.string().max(MARKDOWN_LIMITS.planDescription).optional(),
+    columnId: z.string().min(1).optional(),
+    priority: z.enum(PLAN_PRIORITIES).optional(),
+    dependsOn: z.array(planDependencySchema).optional(),
+    tags: z.array(z.string()).optional(),
+  })
+  .strict();
+
+/** Точечная правка полей пункта плана (версия не требуется). */
+export const planItemUpdateSchema = z
+  .object({
+    title: z.string().min(1).max(500).optional(),
+    description: z.string().max(MARKDOWN_LIMITS.planDescription).optional(),
+    priority: z.enum(PLAN_PRIORITIES).optional(),
+    tags: z.array(z.string()).optional(),
+    dependsOn: z.array(planDependencySchema).optional(),
+  })
+  .strict();
+
+/**
+ * Перемещение пункта плана: `beforeItemId`/`afterItemId` — соседи-ориентиры
+ * (упорядочивание без ручного `order`); `version` — оптимистичная блокировка.
+ */
+export const planItemMoveSchema = z
+  .object({
+    columnId: z.string().min(1),
+    beforeItemId: z.string().min(1).optional(),
+    afterItemId: z.string().min(1).optional(),
+    version: z.number().int().optional(),
+  })
+  .strict();
+
+/** Создание колонки плана. */
+export const planColumnCreateSchema = z
+  .object({
+    name: z.string().min(1).max(100),
+    wipLimit: z.number().int().min(0).optional(),
+  })
+  .strict();
+
+/** Правка колонки плана (имя/WIP-лимит). */
+export const planColumnUpdateSchema = z
+  .object({
+    name: z.string().min(1).max(100).optional(),
+    wipLimit: z.number().int().min(0).optional(),
+  })
+  .strict();
+
+/**
+ * Удаление колонки: `moveItemsTo` — куда переносятся её пункты (`null` —
+ * удалить вместе с колонкой); `version` — оптимистичная блокировка.
+ */
+export const planColumnDeleteSchema = z
+  .object({
+    moveItemsTo: z.string().min(1).nullable(),
+    version: z.number().int(),
+  })
+  .strict();
+
+/** Порядок колонок плана (полный список id) + версия. */
+export const planColumnsOrderSchema = z
+  .object({
+    order: z.array(z.string().min(1)),
+    version: z.number().int(),
+  })
+  .strict();
+
+export type PlanItemCreateRequest = z.infer<typeof planItemCreateSchema>;
+export type PlanItemUpdateRequest = z.infer<typeof planItemUpdateSchema>;
+export type PlanItemMoveRequest = z.infer<typeof planItemMoveSchema>;
+export type PlanColumnCreateRequest = z.infer<typeof planColumnCreateSchema>;
+export type PlanColumnUpdateRequest = z.infer<typeof planColumnUpdateSchema>;
+export type PlanColumnDeleteRequest = z.infer<typeof planColumnDeleteSchema>;
+export type PlanColumnsOrderRequest = z.infer<typeof planColumnsOrderSchema>;
+
+// --- Тела HTTP-мутаций ToDo (PROP-054) — strict ---
+
+/** Создание пункта ToDo. */
+export const todoCreateSchema = z
+  .object({
+    content: z.string().min(1).max(MARKDOWN_LIMITS.todoContent),
+    status: z.enum(TODO_STATUSES).optional(),
+    priority: z.enum(TODO_PRIORITIES).optional(),
+    planItemId: z.string().min(1).optional(),
+  })
+  .strict();
+
+/** Точечная правка пункта ToDo (`planItemId: null` — отвязать от пункта плана). */
+export const todoUpdateSchema = z
+  .object({
+    content: z.string().min(1).max(MARKDOWN_LIMITS.todoContent).optional(),
+    status: z.enum(TODO_STATUSES).optional(),
+    priority: z.enum(TODO_PRIORITIES).optional(),
+    planItemId: z.string().min(1).nullable().optional(),
+  })
+  .strict();
+
+/** Новый порядок пунктов ToDo (только существующие id; новые — в конец). */
+export const todoOrderSchema = z
+  .object({
+    ids: z.array(z.string().min(1)),
+  })
+  .strict();
+
+/** Очистка пунктов ToDo по статусам (по умолчанию — `completed` + `cancelled`). */
+export const todoClearSchema = z
+  .object({
+    statuses: z.array(z.enum(TODO_STATUSES)).optional(),
+  })
+  .strict();
+
+export type TodoCreateRequest = z.infer<typeof todoCreateSchema>;
+export type TodoUpdateRequest = z.infer<typeof todoUpdateSchema>;
+export type TodoOrderRequest = z.infer<typeof todoOrderSchema>;
+export type TodoClearRequest = z.infer<typeof todoClearSchema>;
+
+// --- Тела HTTP-мутаций журнала и инвариантов (PROP-054) — strict ---
+
+/** Новая запись журнала проекта (Markdown, лимит `MARKDOWN_LIMITS.journalEntry`). */
+export const projectLogCreateSchema = z
+  .object({
+    text: z.string().min(1).max(MARKDOWN_LIMITS.journalEntry),
+  })
+  .strict();
+
+/** Правка текста записи журнала. */
+export const projectLogUpdateSchema = z
+  .object({
+    text: z.string().min(1).max(MARKDOWN_LIMITS.journalEntry),
+  })
+  .strict();
+
+/** Замена текста инвариантов проекта (Markdown, лимит `MARKDOWN_LIMITS.invariants`). */
+export const projectInvariantsUpdateSchema = z
+  .object({
+    invariants: z.string().max(MARKDOWN_LIMITS.invariants),
+  })
+  .strict();
+
+export type ProjectLogCreateRequest = z.infer<typeof projectLogCreateSchema>;
+export type ProjectLogUpdateRequest = z.infer<typeof projectLogUpdateSchema>;
+export type ProjectInvariantsUpdateRequest = z.infer<typeof projectInvariantsUpdateSchema>;

@@ -29,7 +29,33 @@ export interface ProjectLogEntry {
   createdAt: string;
   sessionId?: string;
   author?: string;
+  /**
+   * PROP-054: аддитивные поля правки записи журнала — кто и когда изменил
+   * текст. Старые записи их не имеют (необязательные).
+   */
+  updatedAt?: string;
+  updatedBy?: string;
 }
+
+/**
+ * PROP-054: лимиты Markdown-полей проекта/сессии (в **байтах**).
+ *
+ * Единый источник истины для HTTP-роутов и инструментов: превышение →
+ * `400 VALIDATION_ERROR`. Значения:
+ * - `invariants` — 64 КиБ (инварианты попадают в системный промпт);
+ * - `journalEntry` — 16 КиБ (запись журнала проекта);
+ * - `planDescription` — 16 КиБ (описание пункта плана);
+ * - `todoContent` — 4 КиБ (текст пункта ToDo сессии).
+ */
+export const MARKDOWN_LIMITS = {
+  invariants: 64 * 1024,
+  journalEntry: 16 * 1024,
+  planDescription: 16 * 1024,
+  todoContent: 4 * 1024,
+} as const;
+
+/** Имя поля Markdown-лимита (ключ `MARKDOWN_LIMITS`). */
+export type MarkdownLimitKey = keyof typeof MARKDOWN_LIMITS;
 
 /**
  * ADR-071 §2.4/§2.5: проектный скоуп MCP — ссылки на записи единого реестра по

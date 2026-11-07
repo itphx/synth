@@ -10,6 +10,7 @@ import type {
   TodoItem,
 } from '@itphx/synth-shared'
 import type { PromptAcceptedResponse, SessionMode, SteerMode } from '@itphx/synth-shared/types'
+import type { TodoPriority, TodoStatus } from '@itphx/synth-shared/types'
 import type { EntityOrigin } from './common'
 import { BASE_URL, fetchJSON } from './base'
 
@@ -223,6 +224,42 @@ export interface SessionListParams {
   limit?: number
   /** Смещение страницы (с 0). */
   offset?: number
+}
+
+// --- ToDo сессии (PROP-054, волна 1) ---
+//
+// Точечные endpoint'ы ToDo: правки из UI идут по write-доступу к сессии
+// (ADR-089, инвариант 16/21). Порядок = порядок массива, отдельной версии
+// нет: операции атомарны под `SessionManager.withLock`.
+
+/** Ответ операций с ToDo: актуальный список пунктов. */
+export interface SessionTodosResponse {
+  todos: TodoItem[]
+}
+
+/** Тело создания пункта ToDo (`POST /sessions/:id/todos`). */
+export interface SessionTodoCreateBody {
+  /** Текст пункта — Markdown (лимит 4 КиБ). */
+  content: string
+  status?: TodoStatus
+  priority?: TodoPriority
+  /** Связь с пунктом плана проекта (ADR-039). */
+  planItemId?: string
+}
+
+/** Тело правки пункта ToDo (`PATCH /sessions/:id/todos/:todoId`). */
+export interface SessionTodoPatchBody {
+  content?: string
+  status?: TodoStatus
+  priority?: TodoPriority
+  /** `null` — снять связь с пунктом плана. */
+  planItemId?: string | null
+}
+
+/** Тело очистки ToDo (`POST /sessions/:id/todos/clear`). */
+export interface SessionTodoClearBody {
+  /** Статусы, которые чистить (по умолчанию — `completed` + `cancelled`). */
+  statuses?: TodoStatus[]
 }
 
 export const sessionsApi = {
@@ -565,5 +602,75 @@ export const sessionsApi = {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/notes/${encodeURIComponent(noteId)}`, {
       method: 'DELETE',
     })
+  },
+
+  // --- ToDo сессии (PROP-054) ---
+
+  /** GET /sessions/:id/todos — актуальный список пунктов ToDo. */
+  async getSessionTodos(sessionId: string): Promise<SessionTodosResponse> {
+    return fetchJSON<SessionTodosResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/todos`,
+    )
+  },
+
+  /** POST /sessions/:id/todos — создать пункт ToDo. */
+  async createSessionTodo(
+    sessionId: string,
+    body: SessionTodoCreateBody,
+  ): Promise<SessionTodosResponse> {
+    return fetchJSON<SessionTodosResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/todos`,
+      { method: 'POST', body: JSON.stringify(body) },
+    )
+  },
+
+  /** PATCH /sessions/:id/todos/:todoId — изменить пункт (текст/статус/приоритет/связь). */
+  async updateSessionTodo(
+    sessionId: string,
+    todoId: string,
+    body: SessionTodoPatchBody,
+  ): Promise<SessionTodosResponse> {
+    return fetchJSON<SessionTodosResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/todos/${encodeURIComponent(todoId)}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+    )
+  },
+
+  /** DELETE /sessions/:id/todos/:todoId — удалить пункт. */
+  async deleteSessionTodo(
+    sessionId: string,
+    todoId: string,
+  ): Promise<SessionTodosResponse> {
+    return fetchJSON<SessionTodosResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/todos/${encodeURIComponent(todoId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  /**
+   * PUT /sessions/:id/todos/order — новый порядок пунктов.
+   *
+   * Принимаются только существующие id: неизвестные игнорируются, новые пункты
+   * дописываются в конец (воскрешения удалённых нет).
+   */
+  async reorderSessionTodos(
+    sessionId: string,
+    ids: string[],
+  ): Promise<SessionTodosResponse> {
+    return fetchJSON<SessionTodosResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/todos/order`,
+      { method: 'PUT', body: JSON.stringify({ ids }) },
+    )
+  },
+
+  /** POST /sessions/:id/todos/clear — очистить пункты по статусам. */
+  async clearSessionTodos(
+    sessionId: string,
+    body: SessionTodoClearBody = {},
+  ): Promise<SessionTodosResponse> {
+    return fetchJSON<SessionTodosResponse>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/todos/clear`,
+      { method: 'POST', body: JSON.stringify(body) },
+    )
   },
 }

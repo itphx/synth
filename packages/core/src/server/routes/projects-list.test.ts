@@ -92,10 +92,11 @@ describe('GET /api/v2/projects — страница и сводка-DTO', () => 
     expect(item.created_at).toBeTruthy();
     expect(item.updated_at).toBeTruthy();
 
-    // Деталь — полный DTO.
+    // Деталь — полный DTO. Журнала (`log`) в детали **нет** (PROP-054): он
+    // вынесен в отдельную страницу `GET /api/v2/projects/:id/log`; план — на месте.
     const detail = await app.request(`/api/v2/projects/${id}`);
     const detailBody = (await detail.json()) as Record<string, unknown>;
-    expect(Array.isArray(detailBody.log)).toBe(true);
+    expect('log' in detailBody).toBe(false);
     expect(detailBody.plan).toBeTruthy();
   });
 

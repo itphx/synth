@@ -306,3 +306,18 @@
 - **Документация:** создан `docs/arch_decisions/adr-129-child-session-todos.md`; подразделы в ADR-026 и ADR-111; `docs/TOOLS.md` (параметр `todos`, результат, capability/владение todo-тулов), `packages/core/AGENTS.md`; индексы пересобраны `pnpm adr:write` (109 документов).
 - **Проверка:** core suite 9588 passed / 258 skipped; `pnpm typecheck` по 9 пакетам — 0 ошибок; целевые тесты todo/fork/tool/prompt/run-cycle/detachable/task-resume/background/config/capabilities — зелёные; `pnpm adr:check` — 0 ошибок.
 - **Коммит:** этот коммит (feat: todo дочерних сессий, ADR-129) — по явной просьбе пользователя.
+
+## 2026-11-08 — Реализация PROP-054: панель плана/ToDo/журнала/инвариантов, Markdown, API
+
+- **Задача:** реализовать PROP-054 — компактные списки в правой панели, модальная рабочая область (доска/ToDo/журнал/инварианты/статистика), Markdown во всех текстовых полях, точечный API, события, инструменты, вынос `log` из детали проекта. **Тип:** feature (shared, core, backend, ui, sdk, docs).
+- **Исполнители:** фоновые сабагенты `general` на `minimax/MiniMax-M3.1-Flash` (backend/shared, UI-фундамент, UI-интеграция, SDK/docs) + read-only researcher (карта интеграции); приёмка и правки — оркестратор.
+- **Что сделано:**
+  - shared: zod-схемы плана/ToDo/журнала, `MARKDOWN_LIMITS` (64/16/16/4 КиБ), аддитивные `updatedAt/updatedBy`.
+  - core: доменные сервисы плана/ToDo/журнала/инвариантов (общие для HTTP и инструментов), точечные роуты, удаление `log` из детали проекта, `serializeProjectArchive` + portable round-trip, fork в гибриде с постраничной догрузкой журнала, события `plan.updated` (все сессии проекта), `project.updated {kind}`, `todos.updated`.
+  - инструменты: `plan_write` + колонки/порядок/`beforeItemId|afterItemId`, `todo_reorder`/`todo_clear`, `project_log_update`/`project_log_delete`, лимиты, многострочный Markdown в промпте.
+  - UI: `TaskGroup`/`TaskRow`, `WorkModal` (доска/ToDo/журнал/инварианты/статистика), `MarkdownEditor`/`MarkdownText`, компактные план/ToDo/журнал/инварианты в панели, права `canEditProjectContent` и write-доступ к сессии, `projectLogStore`, защита детали в `loadProjects`, живые события.
+  - SDK/docs: типы/методы новых эндпоинтов, `docs/API_V2.md` RU/EN, `docs/TOOLS.md`, пакетные `AGENTS.md`.
+  - Визуальная приёмка нашла и исправлены: дубль текста в ToDo-строке, пустые группы плана, сырой ISO-таймстемп журнала, textarea вместо Markdown-редактора в журнале, устаревшие инварианты в открытой модалке.
+- **Проверка:** `pnpm build` — OK; `pnpm typecheck` — 0 ошибок; `pnpm lint` — 0 ошибок (прежние warnings); тесты: core 9637, UI 3748, backend 803, shared 1021, sdk 48, executor 247, plugin-memory 191, storage-postgres 110. Единственный красный `git-proxy-env` — ambient `no_proxy` (на чистом окружении проходит). Dev: backend перезапущен, новые эндпоинты 200, визуальная проверка панели/модалки/журнала/инвариантов/ToDo.
+- **Остатки:** publish проекта (локально → сервер) журнал не переносит (переносится портативным архивом); новые проектные эндпоинты для `remote:`-проектов отдают `502 REMOTE_UNAVAILABLE` (план удалённого проекта остаётся через `PUT /projects/:id`); PROP-054 обновлён как «реализовано», кандидат на принятие в ADR.
+- **Коммит:** не делался (ждёт явной просьбы пользователя).

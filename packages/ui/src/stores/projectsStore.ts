@@ -63,6 +63,22 @@ interface ProjectsStore {
  */
 export const PROJECTS_PAGE_LIMIT = 100
 
+/**
+ * Слияние сводки списка с уже загруженной записью (PROP-054).
+ *
+ * Список проектов — **сводки** (ADR-118 §4): тяжёлых полей `plan` в них нет
+ * (журнал `log` вынесен из детали совсем). Если запись уже есть в сторе с
+ * загруженным планом, сводка его не затирает — иначе `loadProjects()` стирал
+ * бы план открытого проекта (панель «Проект» показывала бы пустой план).
+ *
+ * Если сводка пришла **с** планом (деталь) — она авторитетна.
+ */
+function mergeProjectSummary(existing: ProjectData | undefined, incoming: ProjectData): ProjectData {
+  if (!existing) return incoming
+  if (incoming.plan !== undefined && incoming.plan !== null) return incoming
+  return { ...existing, ...incoming, plan: existing.plan ?? null }
+}
+
 export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   projects: [],
   loading: false,
@@ -76,12 +92,16 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     try {
       // Список проектов пагинирован: грузим **первую** страницу.
       const page = await synthApi.getProjectsPage({ limit: PROJECTS_PAGE_LIMIT })
-      set({
-        projects: page.projects ?? [],
+      set((s) => ({
+        // Сводка не затирает уже загруженную деталь (план) — см. `mergeProjectSummary`.
+        projects: (page.projects ?? []).map((incoming) => {
+          const existing = s.projects.find((p) => p.id === incoming.id)
+          return mergeProjectSummary(existing, incoming)
+        }),
         total: typeof page.total === 'number' ? page.total : (page.projects?.length ?? 0),
         nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
         loading: false,
-      })
+      }))
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
     }

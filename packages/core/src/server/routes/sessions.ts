@@ -55,6 +55,7 @@ import {
   type AttachmentThumbnailProvider,
 } from '../../engine/attachments/service.js';
 import { createAttachmentRoutes } from './attachments.js';
+import { createSessionTodoRoutes } from './session-todos.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 // ADR-111 §detach: вид блокирующего прогона (`POST /:id/background`).
@@ -727,6 +728,22 @@ export function createSessionRoutes(
       ),
     );
   }
+
+  /**
+   * PROP-054: список задач сессии (ToDo) — точечные HTTP-операции
+   * (`/api/v2/sessions/:id/todos*`). Монтируется **внутрь** приложения
+   * сессий, то есть под тем же prefix-guard'ом (вид доступа `read`/`write`
+   * решает он, инвариант 16). Логика — в доменном сервисе
+   * (`engine/todo/service.ts`), тот же, что у инструментов `todo_*`.
+   */
+  app.route(
+    '/',
+    createSessionTodoRoutes({
+      requireAuth: auth.requireAuth,
+      sessionManager,
+      eventBus: deps.eventBus,
+    }),
+  );
 
   /**
    * ADR-106 Ф4 (шаг C): смена режима сессии — **вторая** привилегия, отдельная

@@ -66,8 +66,32 @@ export type {
   PublishProjectResult,
   ProjectMcpResponse,
 } from './projects'
+// PROP-054: точечные операции с планом, журналом и инвариантами проекта.
+export type {
+  ProjectPlanResponse,
+  PlanItemPriority,
+  PlanItemCreateBody,
+  PlanItemPatchBody,
+  PlanItemMoveBody,
+  PlanColumnCreateBody,
+  PlanColumnPatchBody,
+  PlanColumnDeleteBody,
+  PlanColumnsOrderBody,
+  ProjectLogEntryDto,
+  ProjectLogPage,
+  ProjectLogListParams,
+  ProjectLogEntryResponse,
+  ProjectInvariantsResponse,
+} from './projects'
 export type { SessionData, StickyNoteData, PromptInfoResponse } from './sessions'
 export type { SessionWorktreeBinding } from './sessions'
+// PROP-054: точечные операции с ToDo сессии.
+export type {
+  SessionTodosResponse,
+  SessionTodoCreateBody,
+  SessionTodoPatchBody,
+  SessionTodoClearBody,
+} from './sessions'
 export type {
   BackgroundDetachFailure,
   BackgroundDetachItem,

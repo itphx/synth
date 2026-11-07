@@ -40,6 +40,7 @@ import {
   // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).
   createMetaRoutes,
   createOAuthRoutes, bindCredentialToConnector, syncMcpManagerFromRegistry,
+  createProjectPlanRoutes, createProjectLogRoutes,
   resolveProjectWorkspace,
   resolvePluginServerPolicy,
 } from '@itphx/synth-core';
@@ -139,8 +140,58 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // публичную выдачу без auth согласуем отдельно.
   app.get('/api/v2/openapi.json', auth.requireAuth, (c) => c.json(getPublicOpenApiDocument()));
 
+  // RBAC-хелперы проекта (ADR-089 §5.5/§5.8): владелец/участник/LEAD/ADMIN.
+  // Объявлены до монтирования проектов — их используют и контур плана/журнала
+  // (PROP-054), и FS/git-роуты.
+  const projectAccess = createProjectAccess(auth);
+
   // Projects routes
   app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus));
+
+  // PROP-054: точечные операции плана проекта (`/projects/:id/plan*`) —
+  // core-фабрика, RBAC — те же правила проекта (чтение — право чтения,
+  // мутации — право изменения содержимого; `VIEWER` читает, но не мутирует).
+  app.route('/api/v2/projects', createProjectPlanRoutes(
+    { requireAuth: auth.requireAuth },
+    projectStore,
+    {
+      canRead: async (c, project, userId) =>
+        projectAccess.canReadProject(c as never, project, userId),
+      canEditContent: async (c, project, userId) =>
+        projectAccess.canEditProjectContent(c as never, project, userId),
+      getCurrentUserId: async (c) => (await auth.getCurrentUser(c))?.id ?? '',
+      messages: {
+        notFound: (c) => t('errors.notFound.project', undefined, c),
+        forbidden: (c) => t('auth.forbidden', undefined, c),
+        invalidBody: (c) => t('errors.validation.invalidPlanBody', undefined, c),
+        remoteUnavailable: (c) => t('errors.unavailable.remoteProject', undefined, c),
+      },
+      sessionManager,
+      eventBus,
+    },
+  ));
+
+  // PROP-054: журнал проекта и инварианты (`/projects/:id/log*`,
+  // `/projects/:id/invariants`). Журнал вынесен из детали проекта.
+  app.route('/api/v2/projects', createProjectLogRoutes(
+    { requireAuth: auth.requireAuth },
+    projectStore,
+    {
+      canRead: async (c, project, userId) =>
+        projectAccess.canReadProject(c as never, project, userId),
+      canEditContent: async (c, project, userId) =>
+        projectAccess.canEditProjectContent(c as never, project, userId),
+      getCurrentUserId: async (c) => (await auth.getCurrentUser(c))?.id ?? '',
+      messages: {
+        notFound: (c) => t('errors.notFound.project', undefined, c),
+        forbidden: (c) => t('auth.forbidden', undefined, c),
+        invalidBody: (c) => t('errors.validation.invalidLogBody', undefined, c),
+        remoteUnavailable: (c) => t('errors.unavailable.remoteProject', undefined, c),
+      },
+      sessionManager,
+      eventBus,
+    },
+  ));
 
   // ADR-091 (этап 2): портативный экспорт/импорт проекта (скачать/загрузить архив).
   // Managed RBAC: скачивание — право чтения проекта (owner/участник/LEAD/ADMIN),
@@ -271,7 +322,6 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // FS routes (ADR-075): core-фабрика, managed поверх workspace проекта.
   // ADR-089 (P0): доступ к проекту обязателен — иначе любой USER читал/писал бы
   // файлы чужого проекта по id (IDOR). Чтение — canRead, мутации — canEditContent.
-  const projectAccess = createProjectAccess(auth);
   app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot, undefined, {
     requireProjectId: true,
     getOutsideRootPolicy: () => 'deny',

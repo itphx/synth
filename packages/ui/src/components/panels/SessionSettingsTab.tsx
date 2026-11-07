@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import type { TodoItem, TodoStatus, TodoPriority, McpServerEffective } from '@itphx/synth-shared'
+import type { TodoItem, TodoPriority, TodoStatus, McpServerEffective } from '@itphx/synth-shared'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
+import { useAuthStore } from '@/stores/authStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useCatalogModels } from '@/hooks/useCatalogModels'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
@@ -12,6 +13,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { getToolDisplayName } from '@/lib/toolIcons'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
+import type { ProjectData, SessionData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { DEFAULT_SESSION_ICON_COLOR, resolveIconName, resolveIconColor } from '@/lib/entityIcon'
@@ -24,6 +26,9 @@ import { SelectContent, SelectItem } from '../ui/select'
 import { InfoField as Field, InfoSection as Section, ModelPairSelect, SelectField, SliderField } from '../ui/settings'
 import { PanelTab } from './PanelTab'
 import { useWorktreesStore } from '@/stores/worktreesStore'
+import { canEditSessionContent } from '@/lib/sessionAccess'
+import { TodoSummary } from './work/TodoSummary'
+import { WorkModal, type WorkTab } from './work/WorkModal'
 
 /** Задержка автосохранения для инпутов/слайдеров (тумблеры/селекты сохраняются сразу). */
 const AUTOSAVE_DEBOUNCE_MS = 500
@@ -393,6 +398,7 @@ export function SessionSettingsTab() {
   const session = sessions.find((s) => s.id === sessionId)
   const projects = useProjectsStore(s => s.projects)
   const projectName = projects.find(p => p.id === session?.project_id)?.name
+  const project = projects.find((p) => p.id === session?.project_id) ?? null
 
   const { run, isPending } = usePanelSettingSave({ sessionId })
   /** Pending конкретного поля формы (проп `Toggle.pending`). */
@@ -853,8 +859,9 @@ export function SessionSettingsTab() {
           <Field label={t('rightPanel.params.created')} value={formatDateTime(session.created_at, locale)} />
         </Section>
 
+        {/* PROP-054: ToDo сессии — общий визуальный язык с планом (TaskGroup/TaskRow). */}
         <Section title={t('sessionTab.todos.title')}>
-          <SessionTodosBlock todos={session.todos} />
+          <SessionTodosSection session={session} project={project} />
         </Section>
 
         {/* ADR-114 §9: рабочий каталог сессии — каталог проекта или worktree. */}
@@ -1437,19 +1444,6 @@ export function SessionSettingsTab() {
   )
 }
 
-const TODO_STATUS_STYLES: Record<TodoStatus, { labelKey: string; className: string }> = {
-  pending: { labelKey: 'sessionTab.todo.status.pending', className: 'bg-muted text-muted-foreground' },
-  in_progress: { labelKey: 'sessionTab.todo.status.in_progress', className: 'bg-status-info/15 text-status-info' },
-  completed: { labelKey: 'sessionTab.todo.status.completed', className: 'bg-status-success/15 text-status-success' },
-  cancelled: { labelKey: 'sessionTab.todo.status.cancelled', className: 'bg-destructive/10 text-destructive line-through' },
-}
-
-const TODO_PRIORITY_STYLES: Record<TodoPriority, { labelKey: string; className: string }> = {
-  high: { labelKey: 'sessionTab.todo.priority.high', className: 'text-status-error' },
-  medium: { labelKey: 'sessionTab.todo.priority.medium', className: 'text-status-warning' },
-  low: { labelKey: 'sessionTab.todo.priority.low', className: 'text-muted-foreground' },
-}
-
 /**
  * ADR-114 §9: селектор рабочего каталога сессии — каталог проекта или один из
  * worktree'ов проекта.
@@ -1531,40 +1525,123 @@ function WorktreeSelector({ sessionId, projectId }: { sessionId: string; project
   )
 }
 
-function SessionTodosBlock({ todos }: { todos?: TodoItem[] | null }) {
+/**
+ * PROP-054: ToDo сессии — компактные группы по статусам (`TaskGroup`/`TaskRow`).
+ *
+ * Права — write-доступ к сессии (`canEditSessionContent`): VIEWER/чужой видят
+ * список, но не кнопки правки; enforcement остаётся на сервере.
+ * Связь `planItemId` показывается названием пункта плана проекта (ADR-039).
+ */
+function SessionTodosSection({
+  session,
+  project,
+}: {
+  session: SessionData
+  project: ProjectData | null
+}) {
   const { t } = useI18n()
+  const { notify } = useNotification()
+  const user = useAuthStore((s) => s.user)
+  const deployment = useAuthStore((s) => s.deployment)
+  const [workTab, setWorkTab] = useState<WorkTab | null>(null)
 
-  if (!todos || todos.length === 0) {
-    return (
-      <div className="rounded-lg border border-border bg-surface-inset px-3 py-2">
-        <div className="text-xs text-muted-foreground">{t('sessionTab.todos.empty')}</div>
-        <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">{t('sessionTab.todos.hint')}</div>
-      </div>
-    )
+  const todos = session.todos ?? []
+  const canEdit = canEditSessionContent(session, user, project, {
+    standalone: deployment === 'standalone',
+  })
+
+  /** Названия пунктов плана проекта — по `planItemId`. */
+  const planItemTitles = useMemo(() => {
+    const titles: Record<string, string> = {}
+    for (const item of project?.plan?.items ?? []) {
+      titles[item.id] = item.title
+    }
+    return titles
+  }, [project?.plan?.items])
+
+  /** Применить новый список ToDo к сессии в сторе. */
+  const applyTodos = (next: TodoItem[]) => {
+    useSessionsStore.getState().upsertSession({ ...session, todos: next })
+  }
+
+  const notifyError = (err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err)
+    notify({
+      text: `${t('panel.saveError')}: ${msg}`,
+      type: 'error',
+      category: 'error',
+      sessionId: session.id,
+    })
+  }
+
+  const handleAdd = async (content: string, status: TodoStatus) => {
+    try {
+      const response = await synthApi.createSessionTodo(session.id, { content, status })
+      applyTodos(response.todos ?? [])
+    } catch (err) {
+      notifyError(err)
+    }
+  }
+
+  const handleUpdate = async (
+    todoId: string,
+    patch: { content?: string; status?: TodoStatus; priority?: TodoPriority },
+  ) => {
+    try {
+      const response = await synthApi.updateSessionTodo(session.id, todoId, patch)
+      applyTodos(response.todos ?? [])
+    } catch (err) {
+      notifyError(err)
+    }
+  }
+
+  const handleDelete = async (todoId: string) => {
+    try {
+      const response = await synthApi.deleteSessionTodo(session.id, todoId)
+      applyTodos(response.todos ?? [])
+    } catch (err) {
+      notifyError(err)
+    }
+  }
+
+  const handleClear = async () => {
+    try {
+      const response = await synthApi.clearSessionTodos(session.id, {
+        statuses: ['completed', 'cancelled'],
+      })
+      applyTodos(response.todos ?? [])
+    } catch (err) {
+      notifyError(err)
+    }
   }
 
   return (
-    <div className="space-y-1.5">
-      {todos.map((todo, i) => {
-        const statusStyle = TODO_STATUS_STYLES[todo.status]
-        const priorityStyle = TODO_PRIORITY_STYLES[todo.priority] || TODO_PRIORITY_STYLES.low
-        return (
-          <div key={todo.id ?? i} className="flex items-start gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5">
-            <span className={`mt-0.5 inline-flex shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium ${statusStyle.className}`}>
-              {t(statusStyle.labelKey)}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className={`text-xs text-foreground ${todo.status === 'completed' ? 'line-through opacity-60' : ''}`}>
-                {todo.content}
-              </div>
-              <div className={`mt-0.5 text-[0.625rem] font-medium uppercase tracking-wide ${priorityStyle.className}`}>
-                {t(priorityStyle.labelKey)}
-              </div>
-            </div>
-          </div>
-        )
-      })}
-    </div>
+    <>
+      <TodoSummary
+        todos={todos}
+        canEdit={canEdit}
+        planItemTitles={planItemTitles}
+        onOpenPlanItem={() => setWorkTab('board')}
+        onAdd={canEdit ? (content, status) => void handleAdd(content, status) : undefined}
+        onUpdate={canEdit ? (todoId, patch) => void handleUpdate(todoId, patch) : undefined}
+        onDelete={canEdit ? (todoId) => void handleDelete(todoId) : undefined}
+        onClearCompleted={canEdit ? () => void handleClear() : undefined}
+        testId="session-todos"
+      />
+
+      <WorkModal
+        open={workTab !== null}
+        onOpenChange={(open) => {
+          if (open) return
+          setWorkTab(null)
+        }}
+        projectId={session.project_id}
+        sessionId={session.id}
+        initialTab={workTab ?? 'board'}
+        canEdit={false}
+        canEditTodos={canEdit}
+        testId="session-work-modal"
+      />
+    </>
   )
 }
-

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, TodoItem, TodoStatus, TodoPriority } from '@itphx/synth-shared';
@@ -7,6 +6,14 @@ import type { EventBus } from '../../events/bus.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { embedMultiline } from '../markdown.js';
+import {
+  TodoService,
+  TodoLimitExceededError,
+  TodoNotFoundError,
+  TodoValidationError,
+  toTodoItem,
+} from '../todo/service.js';
 
 export interface TodoToolExtra {
   sessionManager?: SessionManager;
@@ -138,21 +145,10 @@ export const todoAddItemSchema = z.object({
  *
  * Экспортируется для `task.todos` (сид списка дочерней сессии): id, пришедшие
  * от модели, сохраняются как есть — по ним родитель сверяет свой список.
+ * Реализация — в доменном сервисе (`engine/todo/service.ts`), чтобы HTTP-роуты
+ * и инструменты вели список одинаково.
  */
-export function toTodoItem(input: TodoInputItem): TodoItem {
-  return {
-    id: input.id || randomUUID(),
-    content: input.content,
-    status: input.status,
-    priority: input.priority,
-    ...(input.planItemId !== undefined ? { planItemId: input.planItemId } : {}),
-  };
-}
-
-/** Нормализует сохранённый список: старые пункты без id получают id на лету. */
-function normalizeTodos(todos: TodoItem[] | undefined): TodoItem[] {
-  return (todos ?? []).map((t) => toTodoItem(t));
-}
+export { toTodoItem, normalizeTodos } from '../todo/service.js';
 
 function requireSessionManager(
   extra: TodoToolExtra | undefined,
@@ -171,7 +167,11 @@ function requireSessionManager(
 export function renderTodosMarkdown(todos: TodoItem[]): string | null {
   if (!todos || todos.length === 0) return null;
   return todos
-    .map((t) => `- [${STATUS_LABELS[t.status]}] [${PRIORITY_LABELS[t.priority]}] ${t.content}`)
+    .map((t) => embedMultiline(
+      `- [${STATUS_LABELS[t.status]}] [${PRIORITY_LABELS[t.priority]}] `,
+      t.content,
+      '  ',
+    ))
     .join('\n');
 }
 
@@ -313,10 +313,7 @@ export const todoWriteTool: ToolDefinition = {
     const todos = params.todos.map(toTodoItem);
 
     try {
-      await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
-        s.todos = todos;
-        await extra!.sessionManager!.saveSession(s);
-      });
+      await new TodoService(extra!.sessionManager!).replaceAll(todoSessionId, todos);
     } catch (err) {
       return {
         content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
@@ -362,18 +359,9 @@ export const todoListTool: ToolDefinition = {
 
     let todos: TodoItem[];
     try {
-      todos = await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
-        const current = normalizeTodos(s.todos);
-        // Ленивая миграция legacy-пунктов без id. Пишем только если id реально
-        // не хватало: у уже нормализованного списка их не бывает, поэтому
-        // повторный `todo_list` ничего не сохраняет (идемпотентно).
-        const missingId = (s.todos ?? []).some((t) => !t.id);
-        if (missingId) {
-          s.todos = current;
-          await extra!.sessionManager!.saveSession(s);
-        }
-        return current;
-      });
+      // Ленивая миграция legacy-пунктов без id — внутри доменного сервиса
+      // (тот же путь, что у HTTP-роутов `GET /sessions/:id/todos`).
+      todos = await new TodoService(extra!.sessionManager!).list(todoSessionId);
     } catch (err) {
       return {
         content: sm('todo.read_error', { error: err instanceof Error ? err.message : String(err) }),
@@ -431,12 +419,16 @@ export const todoAddTool: ToolDefinition = {
 
     let todos: TodoItem[];
     try {
-      todos = await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
-        const current = normalizeTodos(s.todos);
-        s.todos = [...current, ...newItems];
-        await extra!.sessionManager!.saveSession(s);
-        return s.todos!;
-      });
+      todos = await new TodoService(extra!.sessionManager!).add(
+        todoSessionId,
+        inputs.map((one) => ({
+          ...(one.id !== undefined ? { id: one.id } : {}),
+          content: one.content,
+          ...(one.status !== undefined ? { status: one.status } : {}),
+          ...(one.priority !== undefined ? { priority: one.priority } : {}),
+          ...(one.planItemId !== undefined ? { planItemId: one.planItemId } : {}),
+        })),
+      );
     } catch (err) {
       return {
         content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
@@ -450,10 +442,12 @@ export const todoAddTool: ToolDefinition = {
     });
 
     // Одиночное действие: короткая строка о результате + сводка (полный список
-    // не нужен — модель знает, что добавила).
+    // не нужен — модель знает, что добавила). id берём из сохранённого списка
+    // (последние N) — id сгенерирован сервисом.
+    const added = todos.slice(Math.max(0, todos.length - newItems.length));
     return {
       content: renderTodoResult(
-        sm('todo.added', { ids: newItems.map((t) => t.id).join(', ') }),
+        sm('todo.added', { ids: added.map((t) => t.id).join(', ') }),
         todos,
       ),
       metadata: { todos },
@@ -501,36 +495,26 @@ export const todoUpdateTool: ToolDefinition = {
     const todoSessionId = resolveTodoSessionId(extra)!;
 
     let todos: TodoItem[];
-    let found = false;
     try {
-      todos = await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
-        const current = normalizeTodos(s.todos);
-        const idx = current.findIndex((t) => t.id === params.id);
-        if (idx < 0) return current;
-        const item = current[idx]!;
-        const updated: TodoItem = {
-          ...item,
-          ...(params.content !== undefined ? { content: params.content } : {}),
-          ...(params.status !== undefined ? { status: params.status } : {}),
-          ...(params.priority !== undefined ? { priority: params.priority } : {}),
-          ...(params.planItemId !== undefined ? { planItemId: params.planItemId } : {}),
-        };
-        current[idx] = updated;
-        s.todos = current;
-        await extra!.sessionManager!.saveSession(s);
-        found = true;
-        return current;
+      todos = await new TodoService(extra!.sessionManager!).update(todoSessionId, params.id, {
+        ...(params.content !== undefined ? { content: params.content } : {}),
+        ...(params.status !== undefined ? { status: params.status } : {}),
+        ...(params.priority !== undefined ? { priority: params.priority } : {}),
+        ...(params.planItemId !== undefined ? { planItemId: params.planItemId } : {}),
       });
     } catch (err) {
+      if (err instanceof TodoNotFoundError) {
+        return {
+          content: sm('todo.item_not_found', { id: params.id }),
+          isError: true,
+          metadata: { i18n: i18nMeta('todo.item_not_found', { id: params.id }) },
+        };
+      }
+      if (err instanceof TodoLimitExceededError || err instanceof TodoValidationError) {
+        return { content: err.message, isError: true };
+      }
       return {
         content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
-        isError: true,
-      };
-    }
-
-    if (!found) {
-      return {
-        content: sm('todo.item_not_found', { id: params.id }),
         isError: true,
       };
     }
@@ -581,20 +565,22 @@ export const todoDeleteTool: ToolDefinition = {
     const todoSessionId = resolveTodoSessionId(extra)!;
 
     const ids = Array.isArray(rawIds) ? rawIds : [rawIds];
-    const idSet = new Set(ids);
 
     let todos: TodoItem[];
     let removed = 0;
     try {
-      todos = await extra!.sessionManager!.withLock(todoSessionId, async (s) => {
-        const current = normalizeTodos(s.todos);
-        const remaining = current.filter((t) => !idSet.has(t.id));
-        removed = current.length - remaining.length;
-        if (removed === 0) return current;
-        s.todos = remaining;
-        await extra!.sessionManager!.saveSession(s);
-        return remaining;
-      });
+      const service = new TodoService(extra!.sessionManager!);
+      const before = await service.list(todoSessionId);
+      for (const id of ids) {
+        try {
+          await service.remove(todoSessionId, id);
+          removed += 1;
+        } catch (err) {
+          if (!(err instanceof TodoNotFoundError)) throw err;
+        }
+      }
+      todos = await service.list(todoSessionId);
+      if (removed === 0) todos = before;
     } catch (err) {
       return {
         content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
@@ -606,6 +592,7 @@ export const todoDeleteTool: ToolDefinition = {
       return {
         content: sm('todo.items_not_found', { ids: ids.join('", "') }),
         isError: true,
+        metadata: { i18n: i18nMeta('todo.items_not_found', { ids: ids.join('", "') }) },
       };
     }
 
@@ -615,6 +602,115 @@ export const todoDeleteTool: ToolDefinition = {
     });
 
     // Одиночное действие: строка о результате + сводка (без полного списка).
+    return {
+      content: renderTodoResult(sm('todo.deleted', { count: String(removed) }), todos),
+      metadata: { todos },
+    };
+  },
+};
+
+/**
+ * todo_reorder — новый порядок пунктов списка (PROP-054).
+ *
+ * `ids` — желаемый порядок существующих пунктов: неизвестные id игнорируются,
+ * не названные пункты дописываются в конец (воскрешения удалённых нет).
+ */
+export const todoReorderTool: ToolDefinition = {
+  name: 'todo_reorder',
+  description:
+    'Reorder the items of the session todo list. '
+    + 'Parameters: { ids } — the full list of item ids in the desired order '
+    + '(unknown ids are ignored, items not mentioned keep their relative order at the end). '
+    + 'Returns a short confirmation and a summary of the list.',
+  parameters: z.object({
+    ids: z.array(z.string()).describe('Item ids in the desired order'),
+  }),
+  capabilities: [ToolCapability.RUNTIME, ToolCapability.TODO],
+  async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    const ids = (parsed.data as { ids: string[] }).ids;
+    const extra = ctx.extra as TodoToolExtra | undefined;
+
+    const missing = requireSessionManager(extra, this.name);
+    if (missing) return missing;
+    const todoSessionId = resolveTodoSessionId(extra)!;
+
+    let todos: TodoItem[];
+    try {
+      todos = await new TodoService(extra!.sessionManager!).reorder(todoSessionId, ids);
+    } catch (err) {
+      return {
+        content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
+        isError: true,
+      };
+    }
+
+    extra!.eventBus?.publish(todoSessionId, 'todos.updated', {
+      session_id: todoSessionId,
+      todos,
+    });
+
+    return {
+      content: renderTodoResult(sm('todo.updated', { id: String(ids.length) }), todos),
+      metadata: { todos },
+    };
+  },
+};
+
+/**
+ * todo_clear — очистить пункты списка по статусам (PROP-054).
+ *
+ * По умолчанию — `completed` + `cancelled` (снятые/выполненные).
+ */
+export const todoClearTool: ToolDefinition = {
+  name: 'todo_clear',
+  description:
+    'Remove items from the session todo list by status. '
+    + 'Parameters: { statuses? } — statuses to remove (default: completed and cancelled). '
+    + 'Returns a short confirmation and a summary of the remaining list.',
+  parameters: z.object({
+    statuses: z.array(z.enum(TODO_STATUSES)).optional()
+      .describe('Statuses to remove (default: completed, cancelled)'),
+  }),
+  capabilities: [ToolCapability.RUNTIME, ToolCapability.TODO],
+  async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    const statuses = (parsed.data as { statuses?: TodoStatus[] }).statuses;
+    const extra = ctx.extra as TodoToolExtra | undefined;
+
+    const missing = requireSessionManager(extra, this.name);
+    if (missing) return missing;
+    const todoSessionId = resolveTodoSessionId(extra)!;
+
+    let todos: TodoItem[];
+    let removed = 0;
+    try {
+      const service = new TodoService(extra!.sessionManager!);
+      const before = await service.list(todoSessionId);
+      todos = await service.clear(todoSessionId, statuses);
+      removed = before.length - todos.length;
+    } catch (err) {
+      return {
+        content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
+        isError: true,
+      };
+    }
+
+    extra!.eventBus?.publish(todoSessionId, 'todos.updated', {
+      session_id: todoSessionId,
+      todos,
+    });
+
     return {
       content: renderTodoResult(sm('todo.deleted', { count: String(removed) }), todos),
       metadata: { todos },

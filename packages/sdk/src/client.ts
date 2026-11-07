@@ -35,8 +35,23 @@ import type {
   ModelListResponse,
   ModelsListParams,
   PipelineRunResponse,
+  PlanColumnCreateRequest,
+  PlanColumnDeleteRequest,
+  PlanColumnsOrderRequest,
+  PlanColumnUpdateRequest,
+  PlanItemCreateRequest,
+  PlanItemMoveRequest,
+  PlanItemUpdateRequest,
+  ProjectInvariantsResponse,
+  ProjectInvariantsUpdateRequest,
   ProjectListResponse,
+  ProjectLogCreateRequest,
+  ProjectLogEntryResponse,
+  ProjectLogPage,
+  ProjectLogUpdateRequest,
   ProjectPipelinesResponse,
+  ProjectPlanMutationResponse,
+  ProjectPlanResponse,
   PromptAcceptedResponse,
   Schedule,
   ScheduleInput,
@@ -49,6 +64,11 @@ import type {
   SessionPatch,
   SessionPromptInput,
   SessionStatusResponse,
+  SessionTodosResponse,
+  TodoClearRequest,
+  TodoCreateRequest,
+  TodoOrderRequest,
+  TodoUpdateRequest,
 } from './types.js';
 
 /** Базовый путь API v2 по умолчанию. */
@@ -136,6 +156,20 @@ export interface ProjectPipelinesParams {
 }
 
 /**
+ * Query-параметры страницы журнала проекта.
+ *
+ * Тип-алиас (не interface) — см. `ModelsListParams`: у набора
+ * query-параметров TypeScript выводит неявный индекс-сигнатур (нужно для
+ * приведения к `SynthQuery` в клиенте).
+ */
+export type ProjectLogParams = {
+  /** Размер страницы (1..200; по умолчанию 50). */
+  limit?: number;
+  /** Смещение страницы (с 0). */
+  offset?: number;
+};
+
+/**
  * Query-параметры журнала прогона.
  *
  * `events_before` — исключающий курсор: вернутся события строго раньше
@@ -197,6 +231,22 @@ export interface SessionsNamespace {
   /** Страница истории сообщений (`{messages, session_id, has_more, next_before}`). */
   messages(id: string, params?: SessionMessagesParams): Promise<SessionMessagesResponse>;
   status(id: string): Promise<SessionStatusResponse>;
+  /** Список задач сессии (ToDo, PROP-054): `{todos}`. */
+  sessionTodos(id: string): Promise<SessionTodosResponse>;
+  /** Создать пункт ToDo → актуальный список `{todos}`. */
+  createSessionTodo(id: string, body: TodoCreateRequest): Promise<SessionTodosResponse>;
+  /** Правка пункта ToDo → актуальный список `{todos}`. */
+  updateSessionTodo(
+    id: string,
+    todoId: string,
+    body: TodoUpdateRequest,
+  ): Promise<SessionTodosResponse>;
+  /** Удаление пункта ToDo → актуальный список `{todos}`. */
+  deleteSessionTodo(id: string, todoId: string): Promise<SessionTodosResponse>;
+  /** Новый порядок пунктов ToDo (`{ids}`) → актуальный список `{todos}`. */
+  reorderSessionTodos(id: string, body: TodoOrderRequest): Promise<SessionTodosResponse>;
+  /** Очистка пунктов ToDo по статусам (по умолчанию — `completed` + `cancelled`). */
+  clearSessionTodos(id: string, body?: TodoClearRequest): Promise<SessionTodosResponse>;
 }
 
 /** Namespace `schedules` (ADR-051). */
@@ -250,12 +300,76 @@ export interface GitNamespace {
  * Список — **страница** (`{projects, total, offset, limit, next_offset}`) со
  * сводкой-DTO: тяжёлые поля `log`/`plan` в списке не отдаются (деталь — полный
  * DTO).
+ *
+ * PROP-054: журнал проекта **вынесен из детали** — деталь (`GET /:id`) поля
+ * `log` не содержит, записи журнала читаются постранично через `projectLog()`.
+ * План, инварианты и журнал мутируются точечными операциями (`projectPlan()`,
+ * `projectInvariants()`, `projectLog()`), а не через `PUT /projects/:id`.
  */
 export interface ProjectsNamespace {
   /** Страница списка проектов. */
   list(params?: ProjectsListParams): Promise<ProjectListResponse>;
-  /** Проект по id (полный DTO — с `log`/`plan`). */
+  /** Проект по id (полный DTO — с `plan`; **без** `log`). */
   get(id: string): Promise<SerializedProject>;
+  /** План проекта (`GET /:id/plan`): `{plan}` (`plan: null` — плана нет). */
+  projectPlan(id: string): Promise<ProjectPlanResponse>;
+  /** Создать пункт плана (`POST /:id/plan/items`) → `{plan}`. */
+  createPlanItem(id: string, body: PlanItemCreateRequest): Promise<ProjectPlanMutationResponse>;
+  /** Правка полей пункта плана (`PATCH /:id/plan/items/:itemId`) → `{plan}`. */
+  updatePlanItem(
+    id: string,
+    itemId: string,
+    body: PlanItemUpdateRequest,
+  ): Promise<ProjectPlanMutationResponse>;
+  /** Перемещение пункта плана (`PATCH /:id/plan/items/:itemId/move`) → `{plan}`. */
+  movePlanItem(
+    id: string,
+    itemId: string,
+    body: PlanItemMoveRequest,
+  ): Promise<ProjectPlanMutationResponse>;
+  /** Удаление пункта плана (`DELETE /:id/plan/items/:itemId`) → `{plan}`. */
+  deletePlanItem(id: string, itemId: string): Promise<ProjectPlanMutationResponse>;
+  /** Создание колонки плана (`POST /:id/plan/columns`) → `{plan}`. */
+  createPlanColumn(id: string, body: PlanColumnCreateRequest): Promise<ProjectPlanMutationResponse>;
+  /** Правка колонки плана (`PATCH /:id/plan/columns/:columnId`) → `{plan}`. */
+  updatePlanColumn(
+    id: string,
+    columnId: string,
+    body: PlanColumnUpdateRequest,
+  ): Promise<ProjectPlanMutationResponse>;
+  /** Удаление колонки плана (`DELETE /:id/plan/columns/:columnId`) → `{plan}`. */
+  deletePlanColumn(
+    id: string,
+    columnId: string,
+    body: PlanColumnDeleteRequest,
+  ): Promise<ProjectPlanMutationResponse>;
+  /** Новый порядок колонок (`PUT /:id/plan/columns/order`) → `{plan}`. */
+  reorderPlanColumns(
+    id: string,
+    body: PlanColumnsOrderRequest,
+  ): Promise<ProjectPlanMutationResponse>;
+  /** Страница журнала проекта (`GET /:id/log`): `{entries, total, offset, limit, next_offset}`. */
+  projectLog(id: string, params?: ProjectLogParams): Promise<ProjectLogPage>;
+  /** Новая запись журнала (`POST /:id/log`) → `{entry}`. */
+  createProjectLogEntry(
+    id: string,
+    body: ProjectLogCreateRequest,
+  ): Promise<ProjectLogEntryResponse>;
+  /** Правка записи журнала (`PATCH /:id/log/:entryId`) → `{entry}`. */
+  updateProjectLogEntry(
+    id: string,
+    entryId: string,
+    body: ProjectLogUpdateRequest,
+  ): Promise<ProjectLogEntryResponse>;
+  /** Удаление записи журнала (`DELETE /:id/log/:entryId`) → 204. */
+  deleteProjectLogEntry(id: string, entryId: string): Promise<void>;
+  /** Инварианты проекта (`GET /:id/invariants`): `{invariants, updated_at}`. */
+  projectInvariants(id: string): Promise<ProjectInvariantsResponse>;
+  /** Замена инвариантов (`PUT /:id/invariants`) → `{invariants, updated_at}`. */
+  putProjectInvariants(
+    id: string,
+    body: ProjectInvariantsUpdateRequest,
+  ): Promise<ProjectInvariantsResponse>;
 }
 
 /**
@@ -390,6 +504,33 @@ export class SynthClient {
         }),
       status: (id) =>
         this._request<SessionStatusResponse>(`/sessions/${encodeURIComponent(id)}/status`),
+      sessionTodos: (id) =>
+        this._request<SessionTodosResponse>(`/sessions/${encodeURIComponent(id)}/todos`),
+      createSessionTodo: (id, body) =>
+        this._request<SessionTodosResponse>(`/sessions/${encodeURIComponent(id)}/todos`, {
+          method: 'POST',
+          body,
+        }),
+      updateSessionTodo: (id, todoId, body) =>
+        this._request<SessionTodosResponse>(
+          `/sessions/${encodeURIComponent(id)}/todos/${encodeURIComponent(todoId)}`,
+          { method: 'PATCH', body },
+        ),
+      deleteSessionTodo: (id, todoId) =>
+        this._request<SessionTodosResponse>(
+          `/sessions/${encodeURIComponent(id)}/todos/${encodeURIComponent(todoId)}`,
+          { method: 'DELETE' },
+        ),
+      reorderSessionTodos: (id, body) =>
+        this._request<SessionTodosResponse>(`/sessions/${encodeURIComponent(id)}/todos/order`, {
+          method: 'PUT',
+          body,
+        }),
+      clearSessionTodos: (id, body) =>
+        this._request<SessionTodosResponse>(`/sessions/${encodeURIComponent(id)}/todos/clear`, {
+          method: 'POST',
+          body,
+        }),
     };
 
     this.schedules = {
@@ -430,6 +571,74 @@ export class SynthClient {
           query: params as SynthQuery | undefined,
         }),
       get: (id) => this._request<SerializedProject>(`/projects/${encodeURIComponent(id)}`),
+      projectPlan: (id) =>
+        this._request<ProjectPlanResponse>(`/projects/${encodeURIComponent(id)}/plan`),
+      createPlanItem: (id, body) =>
+        this._request<ProjectPlanMutationResponse>(
+          `/projects/${encodeURIComponent(id)}/plan/items`,
+          { method: 'POST', body },
+        ),
+      updatePlanItem: (id, itemId, body) =>
+        this._request<ProjectPlanMutationResponse>(
+          `/projects/${encodeURIComponent(id)}/plan/items/${encodeURIComponent(itemId)}`,
+          { method: 'PATCH', body },
+        ),
+      movePlanItem: (id, itemId, body) =>
+        this._request<ProjectPlanMutationResponse>(
+          `/projects/${encodeURIComponent(id)}/plan/items/${encodeURIComponent(itemId)}/move`,
+          { method: 'PATCH', body },
+        ),
+      deletePlanItem: (id, itemId) =>
+        this._request<ProjectPlanMutationResponse>(
+          `/projects/${encodeURIComponent(id)}/plan/items/${encodeURIComponent(itemId)}`,
+          { method: 'DELETE' },
+        ),
+      createPlanColumn: (id, body) =>
+        this._request<ProjectPlanMutationResponse>(
+          `/projects/${encodeURIComponent(id)}/plan/columns`,
+          { method: 'POST', body },
+        ),
+      updatePlanColumn: (id, columnId, body) =>
+        this._request<ProjectPlanMutationResponse>(
+          `/projects/${encodeURIComponent(id)}/plan/columns/${encodeURIComponent(columnId)}`,
+          { method: 'PATCH', body },
+        ),
+      deletePlanColumn: (id, columnId, body) =>
+        this._request<ProjectPlanMutationResponse>(
+          `/projects/${encodeURIComponent(id)}/plan/columns/${encodeURIComponent(columnId)}`,
+          { method: 'DELETE', body },
+        ),
+      reorderPlanColumns: (id, body) =>
+        this._request<ProjectPlanMutationResponse>(
+          `/projects/${encodeURIComponent(id)}/plan/columns/order`,
+          { method: 'PUT', body },
+        ),
+      projectLog: (id, params) =>
+        this._request<ProjectLogPage>(`/projects/${encodeURIComponent(id)}/log`, {
+          query: params as SynthQuery | undefined,
+        }),
+      createProjectLogEntry: (id, body) =>
+        this._request<ProjectLogEntryResponse>(`/projects/${encodeURIComponent(id)}/log`, {
+          method: 'POST',
+          body,
+        }),
+      updateProjectLogEntry: (id, entryId, body) =>
+        this._request<ProjectLogEntryResponse>(
+          `/projects/${encodeURIComponent(id)}/log/${encodeURIComponent(entryId)}`,
+          { method: 'PATCH', body },
+        ),
+      deleteProjectLogEntry: (id, entryId) =>
+        this._request<void>(
+          `/projects/${encodeURIComponent(id)}/log/${encodeURIComponent(entryId)}`,
+          { method: 'DELETE' },
+        ),
+      projectInvariants: (id) =>
+        this._request<ProjectInvariantsResponse>(`/projects/${encodeURIComponent(id)}/invariants`),
+      putProjectInvariants: (id, body) =>
+        this._request<ProjectInvariantsResponse>(`/projects/${encodeURIComponent(id)}/invariants`, {
+          method: 'PUT',
+          body,
+        }),
     };
 
     this.pipelines = {

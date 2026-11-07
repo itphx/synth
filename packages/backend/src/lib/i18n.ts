@@ -36,6 +36,12 @@ const en: Dictionary = {
   'errors.validation.claimCodeRequired': 'Confirmation code is required',
   'errors.validation.invalidUsername': 'Invalid username',
 
+  // PROP-054: точечные операции плана/журнала/инвариантов проекта
+  'errors.validation.invalidPlanBody': 'Invalid plan request payload',
+  'errors.validation.invalidLogBody': 'Invalid project log request payload',
+  'errors.validation.invalidInvariantsBody': 'Invalid project invariants payload',
+  'errors.unavailable.remoteProject': 'The operation is not available for a remote project',
+
   // ADR-089: приём внешних событий
   'errors.validation.invalidEvent': 'Invalid event payload',
   'errors.validation.invalidBinding': 'Invalid binding payload',
@@ -226,6 +232,12 @@ const ru: Dictionary = {
   'errors.validation.expectedFilesArray': 'expected { files: string[] }',
   'errors.validation.claimCodeRequired': 'Укажите код подтверждения',
   'errors.validation.invalidUsername': 'Некорректное имя пользователя',
+
+  // PROP-054: точечные операции плана/журнала/инвариантов проекта
+  'errors.validation.invalidPlanBody': 'Некорректное тело запроса плана',
+  'errors.validation.invalidLogBody': 'Некорректное тело запроса журнала проекта',
+  'errors.validation.invalidInvariantsBody': 'Некорректное тело запроса инвариантов проекта',
+  'errors.unavailable.remoteProject': 'Операция недоступна для удалённого проекта',
 
   // ADR-089: приём внешних событий
   'errors.validation.invalidEvent': 'Некорректное тело события',

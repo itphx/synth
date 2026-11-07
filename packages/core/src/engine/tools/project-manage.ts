@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { nowISO, ToolCapability, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey } from '@itphx/synth-shared';
 import type {
@@ -17,6 +16,18 @@ import { isAborted, abortedResult } from './abort.js';
 import { canEditProject } from './project-access.js';
 import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { embedMultiline } from '../markdown.js';
+import {
+  ProjectLogService,
+  ProjectLogEntryNotFoundError,
+  ProjectLogLimitExceededError,
+  ProjectLogValidationError,
+} from '../project/log-service.js';
+import {
+  ProjectInvariantsService,
+  ProjectInvariantsLimitExceededError,
+} from '../project/invariants-service.js';
+import { publishProjectUpdated } from '../project/events.js';
 
 export interface ProjectManageExtra {
   sessionManager?: SessionManager;
@@ -525,15 +536,24 @@ export const projectWorkspaceSetTool: ToolDefinition = {
 };
 
 const projectLogWriteSchema = z.object({
-  text: z.string().min(1).describe('Log entry text'),
+  text: z.string().min(1).describe('Log entry text (Markdown)'),
 });
 
+/**
+ * project_log_write — добавить запись в журнал проекта.
+ *
+ * Правка идёт через доменный сервис (`engine/project/log-service.ts`) — тот
+ * же, что у HTTP-роута `POST /api/v2/projects/:id/log`, поэтому лимит
+ * Markdown и атомарная запись одинаковы. После записи публикуется
+ * `project.updated` (`kind: 'log'`) в каналы всех сессий проекта — прежде
+ * события не было, и другие клиенты узнавали о правке только при перезагрузке.
+ */
 export const projectLogWriteTool: ToolDefinition = {
   name: 'project_log_write',
   description:
     'Append an entry to the project work log. The log is a chronological record of work '
-    + 'done in the project (stored in the project, visible in the UI). Requires the session '
-    + 'to be attached to a project.',
+    + 'done in the project (stored in the project, visible in the UI). The entry text is Markdown '
+    + '(limit 16 KiB). Requires the session to be attached to a project.',
   parameters: projectLogWriteSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
@@ -563,23 +583,17 @@ export const projectLogWriteTool: ToolDefinition = {
       };
     }
 
-    const entry: ProjectLogEntry = {
-      id: randomUUID(),
-      text: params.text,
-      createdAt: nowISO(),
-      sessionId: extra.sessionId,
-      author: session?.settings.agentRole || 'assistant',
-    };
-
-    let updated: Project | null;
+    let entry: ProjectLogEntry;
     try {
-      // Атомарная дозапись: параллельный `project_log_write` другой сессии не
-      // перетирается (раньше `save` всего проекта затирал чужую запись).
-      updated = await extra.projectStore.mutate(project.id, (target) => {
-        target.log = [...(target.log ?? []), entry];
-        target.updatedAt = nowISO();
+      entry = await new ProjectLogService(extra.projectStore).append(project.id, {
+        text: params.text,
+        author: session?.settings.agentRole || 'assistant',
+        sessionId: extra.sessionId,
       });
     } catch (err) {
+      if (err instanceof ProjectLogLimitExceededError || err instanceof ProjectLogValidationError) {
+        return { content: err.message, isError: true };
+      }
       const error = err instanceof Error ? err.message : String(err);
       return {
         content: sm('project.log_save_error', { error }),
@@ -587,14 +601,163 @@ export const projectLogWriteTool: ToolDefinition = {
         metadata: { i18n: i18nMeta('project.log_save_error', { error }) },
       };
     }
-    if (!updated) {
-      return { content: NO_PROJECT_LOG_ERROR, isError: true, metadata: { i18n: i18nMeta('project.log_no_project') } };
-    }
 
-    const count = updated.log?.length ?? 0;
+    await publishProjectUpdated(
+      { eventBus: extra.eventBus, sessionManager: extra.sessionManager },
+      project.id,
+      'log',
+    );
+
+    const count = (await extra.projectStore.load(project.id))?.log?.length ?? 0;
     return {
       content: sm('project.log_added', { count: String(count) }),
       metadata: { entry, count, i18n: i18nMeta('project.log_added', { count: String(count) }) },
+    };
+  },
+};
+
+const projectLogUpdateSchema = z.object({
+  entryId: z.string().min(1).describe('Id of the log entry to update'),
+  text: z.string().min(1).describe('New entry text (Markdown)'),
+});
+
+/**
+ * project_log_update — изменить текст записи журнала (PROP-054).
+ *
+ * Правка — через доменный сервис журнала; аддитивные `updatedAt`/`updatedBy`
+ * проставляются сервисом.
+ */
+export const projectLogUpdateTool: ToolDefinition = {
+  name: 'project_log_update',
+  description:
+    'Update the text of an existing entry in the project work log. '
+    + 'Parameters: { entryId, text }. The text is Markdown (limit 16 KiB). '
+    + 'Requires the session to be attached to a project.',
+  parameters: projectLogUpdateSchema,
+  capabilities: [ToolCapability.RUNTIME],
+  async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    const params = parsed.data as { entryId: string; text: string };
+
+    const extra = getSessionExtra(ctx);
+    if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
+      return missingDepsError(this.name);
+    }
+
+    const { session, project } = await loadSessionProject(ctx);
+    if (!project) {
+      return { content: NO_PROJECT_LOG_ERROR, isError: true };
+    }
+    if (!canEditProject(session, project)) {
+      return {
+        content: sm('project.write_forbidden'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.write_forbidden') },
+      };
+    }
+
+    let entry: ProjectLogEntry;
+    try {
+      entry = await new ProjectLogService(extra.projectStore).update(project.id, params.entryId, {
+        text: params.text,
+        updatedBy: session?.settings.agentRole || 'assistant',
+      });
+    } catch (err) {
+      if (err instanceof ProjectLogEntryNotFoundError) {
+        return { content: err.message, isError: true };
+      }
+      if (err instanceof ProjectLogLimitExceededError || err instanceof ProjectLogValidationError) {
+        return { content: err.message, isError: true };
+      }
+      const error = err instanceof Error ? err.message : String(err);
+      return {
+        content: sm('project.log_save_error', { error }),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.log_save_error', { error }) },
+      };
+    }
+
+    await publishProjectUpdated(
+      { eventBus: extra.eventBus, sessionManager: extra.sessionManager },
+      project.id,
+      'log',
+    );
+
+    return {
+      content: sm('project.updated'),
+      metadata: { entry, i18n: i18nMeta('project.updated') },
+    };
+  },
+};
+
+const projectLogDeleteSchema = z.object({
+  entryId: z.string().min(1).describe('Id of the log entry to delete'),
+});
+
+/**
+ * project_log_delete — удалить запись журнала (PROP-054).
+ */
+export const projectLogDeleteTool: ToolDefinition = {
+  name: 'project_log_delete',
+  description:
+    'Delete an entry from the project work log. Parameters: { entryId }. '
+    + 'Requires the session to be attached to a project.',
+  parameters: projectLogDeleteSchema,
+  capabilities: [ToolCapability.RUNTIME],
+  async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    const params = parsed.data as { entryId: string };
+
+    const extra = getSessionExtra(ctx);
+    if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
+      return missingDepsError(this.name);
+    }
+
+    const { session, project } = await loadSessionProject(ctx);
+    if (!project) {
+      return { content: NO_PROJECT_LOG_ERROR, isError: true };
+    }
+    if (!canEditProject(session, project)) {
+      return {
+        content: sm('project.write_forbidden'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.write_forbidden') },
+      };
+    }
+
+    try {
+      await new ProjectLogService(extra.projectStore).remove(project.id, params.entryId);
+    } catch (err) {
+      if (err instanceof ProjectLogEntryNotFoundError) {
+        return { content: err.message, isError: true };
+      }
+      const error = err instanceof Error ? err.message : String(err);
+      return {
+        content: sm('project.log_save_error', { error }),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.log_save_error', { error }) },
+      };
+    }
+
+    await publishProjectUpdated(
+      { eventBus: extra.eventBus, sessionManager: extra.sessionManager },
+      project.id,
+      'log',
+    );
+
+    return {
+      content: sm('project.updated'),
+      metadata: { i18n: i18nMeta('project.updated') },
     };
   },
 };
@@ -624,7 +787,9 @@ export const projectLogReadTool: ToolDefinition = {
       return { content: sm('project.log_empty'), metadata: { count: 0, i18n: i18nMeta('project.log_empty') } };
     }
 
-    const lines = log.map((e) => `- ${e.createdAt} — ${e.text}`);
+    // Многострочный текст записи — с отступом продолжения, иначе переводы
+    // строк разрывают внешний список (PROP-054, «Markdown»).
+    const lines = log.map((e) => embedMultiline(`- ${e.createdAt} — `, e.text, '  '));
     return {
       content: sm('project.log_list', { count: String(log.length), items: lines.join('\n') }),
       metadata: {
@@ -665,15 +830,22 @@ export const projectInvariantsReadTool: ToolDefinition = {
 };
 
 const projectInvariantsWriteSchema = z.object({
-  invariants: z.string().describe('Project invariants text'),
+  invariants: z.string().describe('Project invariants text (Markdown, limit 64 KiB)'),
 });
 
+/**
+ * project_invariants_write — заменить текст инвариантов проекта.
+ *
+ * Правка — через доменный сервис (`engine/project/invariants-service.ts`):
+ * лимит Markdown (64 КиБ) и last-write-wins. После записи публикуется
+ * `project.updated` (`kind: 'invariants'`) — прежде события не было.
+ */
 export const projectInvariantsWriteTool: ToolDefinition = {
   name: 'project_invariants_write',
   description:
     'Set the project invariants — the rules and constraints the model must follow while '
-    + 'working on the project. Replaces the existing value. Requires the session to be '
-    + 'attached to a project.',
+    + 'working on the project. Replaces the existing value. The text is Markdown (limit 64 KiB). '
+    + 'Requires the session to be attached to a project.',
   parameters: projectInvariantsWriteSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
@@ -703,13 +875,12 @@ export const projectInvariantsWriteTool: ToolDefinition = {
       };
     }
 
-    let updated: Project | null;
     try {
-      updated = await extra.projectStore.mutate(project.id, (target) => {
-        target.invariants = params.invariants;
-        target.updatedAt = nowISO();
-      });
+      await new ProjectInvariantsService(extra.projectStore).set(project.id, params.invariants);
     } catch (err) {
+      if (err instanceof ProjectInvariantsLimitExceededError) {
+        return { content: err.message, isError: true };
+      }
       const error = err instanceof Error ? err.message : String(err);
       return {
         content: sm('project.invariants_save_error', { error }),
@@ -717,13 +888,12 @@ export const projectInvariantsWriteTool: ToolDefinition = {
         metadata: { i18n: i18nMeta('project.invariants_save_error', { error }) },
       };
     }
-    if (!updated) {
-      return {
-        content: NO_PROJECT_INVARIANTS_ERROR,
-        isError: true,
-        metadata: { i18n: i18nMeta('project.invariants_no_project') },
-      };
-    }
+
+    await publishProjectUpdated(
+      { eventBus: extra.eventBus, sessionManager: extra.sessionManager },
+      project.id,
+      'invariants',
+    );
 
     return { content: sm('project.invariants_saved'), metadata: { i18n: i18nMeta('project.invariants_saved') } };
   },

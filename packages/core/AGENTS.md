@@ -618,6 +618,29 @@
   `scope:'ssh'`; core — `requireAuth`, managed — ADMIN (чтение и запись)),
   `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
   в деградированном режиме хранилища контур **не монтируется** → 404).
+- **План/ToDo/журнал/инварианты (PROP-054) — доменные сервисы + HTTP-фабрики.**
+  Мутации плана, списка задач, журнала и инвариантов живут в **доменных
+  сервисах** (`engine/plan/service.ts`, `engine/todo/service.ts`,
+  `engine/project/log-service.ts`, `engine/project/invariants-service.ts`) — их зовут
+  **и** инструменты, **и** HTTP-роуты, поэтому лимиты/нормализация/версия не
+  расходятся. План — под `ProjectRepository.mutate` (атомарно), ToDo — под
+  `SessionManager.withLock`. События: `plan.updated` — в каналы **всех** сессий
+  проекта (`{project_id, version}`), `project.updated` — `kind:'log'|'invariants'`,
+  `todos.updated` — в канал сессии (`engine/plan/events.ts`,
+  `engine/project/events.ts`).
+  HTTP-фабрики: `server/routes/project-plan.ts` (`createProjectPlanRoutes` —
+  `/api/v2/projects/:id/plan*`, версия плана как оптимистичная блокировка:
+  `409 PLAN_VERSION_CONFLICT` + актуальный план в теле),
+  `server/routes/project-log.ts` (`createProjectLogRoutes` —
+  `/api/v2/projects/:id/log*` (постранично, новые сверху) и
+  `/api/v2/projects/:id/invariants`),
+  `server/routes/session-todos.ts` (`createSessionTodoRoutes` —
+  `/api/v2/sessions/:id/todos*`, монтируется **внутрь** `createSessionRoutes`, чтобы
+  доступ решал единый prefix-guard сессий),
+  `server/routes/project-work.ts` (общие правила доступа к проекту для этих
+  фабрик: чтение — право чтения, мутации — право изменения содержимого).
+  Журнал **вынесен из детали проекта**: `serializeProject` — без `log`,
+  портативный архив — `serializeProjectArchive` (с журналом).
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
@@ -2456,6 +2479,13 @@
   саб-агентов (tool `task`), агрегаты по агентам/пользователям — для `GET /api/v2/sessions/:id/stats`.
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла; **«Стоп» останавливает только активный ход — очередь (`pendingMessages`) сохраняется целиком**, решение владельца 2026-11-01: снимаются `blocked`/`cancelRequested`/`currentStream`/`retry`, публикуется `queue.state` (счётчики по фактической очереди) и `stream.cancelled` ровно один раз; автозапуска обработки нет — продолжение через `POST /queue/:sessionId/resume` или новую постановку сообщения). Публикация приёма: `message.accepted` (адресное, без текста) и `message.enqueued` (**адресное — только отправителю/владельцу сессии; владельца нет — не публикуется**, со снимком сообщения — снимок уже обфусцирован, `ord` нет; `enqueueUserMessage` → `delivery:'queue'`, `enqueueSteerMessage` → `delivery:'steer'`; при отказе постановки события нет). **Перенос из очереди в очередь инъекций (`fromPending`) — атомарный**: под одним локом сессии проверяется лимит, сообщение снимается из `pendingMessages` и его user-копия из истории (по `metadata.stream_id`, кроме активного стрима) — и только потом публикуется `message.enqueued` (иначе клиент увидел бы реплику в `pending_messages` и удалил её из ленты как «вернувшуюся в очередь»); отказ по лимиту → `reason:'limit'` (429, очередь не тронута), сообщения нет в очереди → `reason:'not_found'` (404, повторный steer того же id).
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
+  **Журнал проекта в гибриде (PROP-054):** журнал вынесен из детали проекта, поэтому
+  `remote/client.ts#getProjectLog(id, {limit, offset})` — единственный способ прочитать
+  его у удалённого проекта; `remote/transfer.ts#forkProjectToLocal` догружает журнал
+  **страницами** (кап числа страниц: при превышении журнал переносится частично, с
+  предупреждением). `syncProjectToRemote` (publish, локально → сервер) журнал **не
+  переносит**: `PUT`/`POST` проекта поля `log` не принимают — ограничение зафиксировано
+  в `docs/API_V2.md` §5.8.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote, `DecisionProvider` (ADR-084: типы `decision` (RouterAI, `POST {base}/decisions`) и `systemone` (Ollama, `POST {base}/v1/systemone`) — endpoint выбирается по типу провайдера). Prompt-cache (ADR-070, `CachePolicy = 'auto' | 'none'` в `base.ts`): `SystemPromptPayload` (`text`/`stablePrefix`/`cacheKey`/`cachePolicy`) — Anthropic отдаёт `system` массивом блоков с `cache_control` (≤4 breakpoint'а, два system), OpenAI/Remote — `prompt_cache_key` (= id сессии) + `stream_options.include_usage`; `usage.ts` — нормализация usage и `computeCacheHitRate` (`cacheReadTokens / inputTokens`, 0 при нуле). Нормализация по провайдерам: Anthropic — `input = input_tokens + cacheRead + cacheWrite`; OpenAI — `prompt_tokens_details.cached_tokens` → `cacheRead`; Remote — usage из ответа прокси в тот же контракт; Ollama — cache-полей нет (`cacheRead = cacheWrite = 0`).
   **Слой совместимости провайдеров и моделей (ADR-117, parity с opencode, 2026-10-30).**
   `ModelCompatibility` (`shared/types/provider.ts`) описывает различия протокола данными, а не

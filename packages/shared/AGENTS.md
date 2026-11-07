@@ -513,6 +513,24 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - После правки публичной поверхности — `pnpm --filter @itphx/synth-shared build`,
   иначе typecheck зависимых пакетов не увидит типы (см. корневой «GitVerse CI»).
 
+## Контракт плана/ToDo/журнала (PROP-054)
+
+- `types/project.ts`: `MARKDOWN_LIMITS` — лимиты Markdown-полей в **байтах**
+  (`invariants` 64 КиБ, `journalEntry` 16 КиБ, `planDescription` 16 КиБ,
+  `todoContent` 4 КиБ); `ProjectLogEntry.updatedAt?`/`updatedBy?` — аддитивные
+  поля правки записи журнала (PROP-054). Экспорт — из subpath
+  `@itphx/synth-shared/types` (браузер-безопасно, без `node:*`).
+- `schemas/index.ts`: `planDependencySchema`/`planColumnSchema`/`planItemSchema`/
+  `projectPlanSchema`/`todoItemSchema`/`projectLogEntrySchema` — **passthrough**
+  (при чтении/импорте неизвестные поля сохраняются); тела мутаций —
+  **strict**: `planItemCreateSchema`/`planItemUpdateSchema`/`planItemMoveSchema`/
+  `planColumnCreateSchema`/`planColumnUpdateSchema`/`planColumnDeleteSchema`/
+  `planColumnsOrderSchema`/`todoCreateSchema`/`todoUpdateSchema`/`todoOrderSchema`/
+  `todoClearSchema`/`projectLogCreateSchema`/`projectLogUpdateSchema`/
+  `projectInvariantsUpdateSchema`. Экспорт — из subpath
+  `@itphx/synth-shared/schemas` (корневой импорт тянет `config/loader` →
+  `node:fs` — в UI брать только subpath).
+
 ## MCP-контракт гибрида (ADR-125)
 
 - `types/mcp.ts`: `McpRemoteMode` (`auto|relay|tools`) и поле `remoteMode` в записи реестра; `McpServerEffective.source` (`'local'|'server'`) и `error` (причина недоступности, без секретов); типы `RemoteMcpServerInfo`/`RemoteMcpToolInfo`/`RemoteMcpToolsResponse`/`RemoteMcpCallRequest`/`RemoteMcpCallResult`/`McpRemoteAttachment` (шейп результата — как у протокола исполнителя 5).

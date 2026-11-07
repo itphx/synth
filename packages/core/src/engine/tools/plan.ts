@@ -1,12 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { nowISO, ToolCapability } from '@itphx/synth-shared';
+import { ToolCapability } from '@itphx/synth-shared';
 import type {
   ToolDefinition,
-  Project,
   ProjectPlan,
-  PlanColumn,
-  PlanItem,
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
@@ -16,6 +12,16 @@ import { canEditProject } from './project-access.js';
 import { loadSessionProject } from './project-manage.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { embedMultiline } from '../markdown.js';
+import {
+  PlanService,
+  PlanColumnNotFoundError,
+  PlanItemNotFoundError,
+  PlanLimitExceededError,
+  PlanValidationError,
+  getPlan,
+} from '../plan/service.js';
+import { publishPlanUpdated } from '../plan/events.js';
 
 export interface PlanToolExtra {
   sessionManager?: SessionManager;
@@ -24,36 +30,8 @@ export interface PlanToolExtra {
   projectStore?: ProjectStoreContract;
 }
 
-const DEFAULT_COLUMNS: PlanColumn[] = [
-  { id: 'backlog', name: sm('plan.default_column_backlog'), order: 0 },
-  { id: 'todo', name: sm('plan.default_column_todo'), order: 1 },
-  { id: 'in_progress', name: sm('plan.default_column_in_progress'), order: 2 },
-  { id: 'done', name: sm('plan.default_column_done'), order: 3 },
-];
-
 const PLAN_PRIORITIES = ['high', 'medium', 'low'] as const;
 const DEPENDENCY_RELATIONS = ['blocked_by', 'blocks', 'relates_to'] as const;
-
-/** Дефолтная структура плана с колонками (для проектов, где plan отсутствует). */
-function defaultPlan(): ProjectPlan {
-  return { version: 1, updatedAt: nowISO(), columns: DEFAULT_COLUMNS.map((c) => ({ ...c })), items: [] };
-}
-
-/** Возвращает план проекта; если plan отсутствует — создаёт дефолтную структуру. */
-function getPlan(project: Project): ProjectPlan {
-  if (!project.plan) {
-    project.plan = defaultPlan();
-  }
-  return project.plan;
-}
-
-/**
- * Внутренний сигнал «мутатор отклонил правку»: `applyPlanWrite` вернул ошибку
- * валидации до изменения плана. Бросается **из** мутатора `ProjectRepository.mutate`,
- * чтобы хранилище ничего не записало (бросок = отсутствие записи), и ловится рядом
- * с вызовом — модель получает прежний tool-отказ.
- */
-class PlanWriteRejectedError extends Error {}
 
 /**
  * Markdown-представление плана: заголовок, затем по колонкам (в порядке order)
@@ -82,7 +60,9 @@ export function renderPlanMarkdown(plan: ProjectPlan): string {
     for (const item of colItems) {
       lines.push(`- [${item.priority}] ${item.title}`);
       if (item.description) {
-        lines.push(`  - ${item.description}`);
+        // Многострочное описание — с отступом продолжения, иначе переводы строк
+        // разрывают внешний список (PROP-054, «Markdown»).
+        lines.push(embedMultiline('  - ', item.description, '    '));
       }
       if (item.dependsOn.length > 0) {
         const deps = item.dependsOn
@@ -236,16 +216,17 @@ const planWriteSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('create_item'),
     title: z.string().min(1).describe('Item title'),
-    description: z.string().optional().describe('Item description'),
+    description: z.string().optional().describe('Item description (Markdown)'),
     columnId: z.string().optional().describe('Target column id (default: backlog)'),
     priority: z.enum(PLAN_PRIORITIES).optional().describe('Item priority (default: medium)'),
     dependsOn: z.array(planDependencySchema).optional().describe('Item dependencies'),
+    tags: z.array(z.string()).optional().describe('Item tags'),
   }),
   z.object({
     action: z.literal('update_item'),
     itemId: z.string().describe('Item id to update'),
     title: z.string().optional().describe('New title'),
-    description: z.string().optional().describe('New description'),
+    description: z.string().optional().describe('New description (Markdown)'),
     priority: z.enum(PLAN_PRIORITIES).optional().describe('New priority'),
     tags: z.array(z.string()).optional().describe('New tags'),
   }),
@@ -253,7 +234,9 @@ const planWriteSchema = z.discriminatedUnion('action', [
     action: z.literal('move_item'),
     itemId: z.string().describe('Item id to move'),
     columnId: z.string().describe('Target column id'),
-    order: z.number().optional().describe('New position within the column'),
+    order: z.number().optional().describe('Position within the column (0-based)'),
+    beforeItemId: z.string().optional().describe('Place the item before this item'),
+    afterItemId: z.string().optional().describe('Place the item after this item'),
   }),
   z.object({
     action: z.literal('delete_item'),
@@ -269,80 +252,87 @@ const planWriteSchema = z.discriminatedUnion('action', [
     name: z.string().min(1).describe('Column name'),
     wipLimit: z.number().optional().describe('Work-in-progress limit'),
   }),
+  z.object({
+    action: z.literal('update_column'),
+    columnId: z.string().describe('Column id to update'),
+    name: z.string().optional().describe('New column name'),
+    wipLimit: z.number().optional().describe('New work-in-progress limit'),
+  }),
+  z.object({
+    action: z.literal('delete_column'),
+    columnId: z.string().describe('Column id to delete'),
+    moveItemsTo: z.string().describe('Column id to move the items into (must differ from the deleted one)'),
+  }),
+  z.object({
+    action: z.literal('reorder_columns'),
+    order: z.array(z.string()).describe('Full list of column ids in the desired order'),
+  }),
 ]);
 
 type PlanWriteInput = z.infer<typeof planWriteSchema>;
 
-function applyPlanWrite(plan: ProjectPlan, params: PlanWriteInput): { error?: string } {
+/**
+ * Компактный итог правки плана: id изменённого объекта + краткая сводка.
+ * Полный markdown плана — в `plan_read` (в ответ `plan_write` он не входит:
+ * ответ должен быть коротким).
+ */
+function renderPlanActionSummary(
+  params: PlanWriteInput,
+  result: ProjectPlan,
+): string {
+  const lines: string[] = [sm('plan.markdown_title', { version: String(result.version) })];
+  const columnName = (id: string): string =>
+    result.columns.find((c) => c.id === id)?.name ?? id;
   switch (params.action) {
     case 'create_item': {
-      const columnId = params.columnId ?? 'backlog';
-      const column = plan.columns.find((c) => c.id === columnId);
-      if (!column) return { error: sm('plan.column_not_found', { columnId }) };
-      const maxOrder = plan.items
-        .filter((i) => i.columnId === columnId)
-        .reduce((max, i) => Math.max(max, i.order), -1);
-      const now = nowISO();
-      const item: PlanItem = {
-        id: randomUUID(),
-        title: params.title,
-        description: params.description,
-        columnId,
-        priority: params.priority ?? 'medium',
-        order: maxOrder + 1,
-        dependsOn: params.dependsOn ?? [],
-        createdAt: now,
-        updatedAt: now,
-      };
-      plan.items.push(item);
-      return {};
+      const item = result.items[result.items.length - 1];
+      if (item) lines.push(`- ${item.id} [${item.priority}] ${item.title} → ${columnName(item.columnId)}`);
+      break;
     }
     case 'update_item': {
-      const item = plan.items.find((i) => i.id === params.itemId);
-      if (!item) return { error: sm('plan.item_not_found', { itemId: params.itemId }) };
-      if (params.title !== undefined) item.title = params.title;
-      if (params.description !== undefined) item.description = params.description;
-      if (params.priority !== undefined) item.priority = params.priority;
-      if (params.tags !== undefined) item.tags = params.tags;
-      item.updatedAt = nowISO();
-      return {};
+      const item = result.items.find((i) => i.id === params.itemId);
+      if (item) lines.push(`- ${item.id} [${item.priority}] ${item.title}`);
+      break;
     }
     case 'move_item': {
-      const item = plan.items.find((i) => i.id === params.itemId);
-      if (!item) return { error: sm('plan.item_not_found', { itemId: params.itemId }) };
-      const column = plan.columns.find((c) => c.id === params.columnId);
-      if (!column) return { error: sm('plan.column_not_found', { columnId: params.columnId }) };
-      item.columnId = params.columnId;
-      if (params.order !== undefined) item.order = params.order;
-      item.updatedAt = nowISO();
-      return {};
+      const item = result.items.find((i) => i.id === params.itemId);
+      if (item) lines.push(`- ${item.id} → ${columnName(item.columnId)}`);
+      break;
     }
     case 'delete_item': {
-      const idx = plan.items.findIndex((i) => i.id === params.itemId);
-      if (idx < 0) return { error: sm('plan.item_not_found', { itemId: params.itemId }) };
-      plan.items.splice(idx, 1);
-      return {};
+      lines.push(`- ${params.itemId} (deleted)`);
+      break;
     }
     case 'set_dependencies': {
-      const item = plan.items.find((i) => i.id === params.itemId);
-      if (!item) return { error: sm('plan.item_not_found', { itemId: params.itemId }) };
-      item.dependsOn = params.dependsOn;
-      item.updatedAt = nowISO();
-      return {};
+      const item = result.items.find((i) => i.id === params.itemId);
+      lines.push(`- ${params.itemId} (${item?.dependsOn.length ?? 0} deps)`);
+      break;
     }
     case 'add_column': {
-      const order = plan.columns.reduce((max, c) => Math.max(max, c.order), -1) + 1;
-      const column: PlanColumn = {
-        id: randomUUID(),
-        name: params.name,
-        order,
-        ...(params.wipLimit !== undefined ? { wipLimit: params.wipLimit } : {}),
-      };
-      plan.columns.push(column);
-      return {};
+      const column = result.columns[result.columns.length - 1];
+      if (column) lines.push(`- ${column.id} ${column.name}`);
+      break;
+    }
+    case 'update_column': {
+      const column = result.columns.find((c) => c.id === params.columnId);
+      if (column) lines.push(`- ${column.id} ${column.name}`);
+      break;
+    }
+    case 'delete_column': {
+      lines.push(`- ${params.columnId} (deleted, items → ${params.moveItemsTo})`);
+      break;
+    }
+    case 'reorder_columns': {
+      const names = [...result.columns]
+        .sort((a, b) => a.order - b.order)
+        .map((c) => c.name);
+      lines.push(names.join(' → '));
+      break;
     }
   }
+  return lines.join('\n');
 }
+
 
 /**
  * plan_write.
@@ -357,11 +347,14 @@ export const planWriteTool: ToolDefinition = {
   name: 'plan_write',
   description:
     'Modify the project plan (kanban). Actions: '
-    + 'create_item (title, description?, columnId?, priority?, dependsOn?), '
+    + 'create_item (title, description?, columnId?, priority?, dependsOn?, tags?), '
     + 'update_item (itemId, title?, description?, priority?, tags?), '
-    + 'move_item (itemId, columnId, order?), delete_item (itemId), '
-    + 'set_dependencies (itemId, dependsOn), add_column (name, wipLimit?). '
-    + 'Returns the updated plan as markdown. The plan is bound to the project.',
+    + 'move_item (itemId, columnId, beforeItemId?/afterItemId? or order?), delete_item (itemId), '
+    + 'set_dependencies (itemId, dependsOn), add_column (name, wipLimit?), '
+    + 'update_column (columnId, name?, wipLimit?), delete_column (columnId, moveItemsTo), '
+    + 'reorder_columns (order — full list of column ids). '
+    + 'Returns a compact summary (id of the changed object and the new plan version); '
+    + 'use plan_read for the full plan as markdown. The plan is bound to the project.',
   parameters: planWriteSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
@@ -390,27 +383,88 @@ export const planWriteTool: ToolDefinition = {
       };
     }
 
-    // Атомарный read-modify-write: правка и запись — под локом хранилища, иначе
-    // параллельный `plan_write` из другой сессии того же проекта теряется
-    // (load → mutate в памяти → save всего проекта).
-    let savedPlan: ProjectPlan | undefined;
+    // Доменный сервис плана: атомарный read-modify-write (`ProjectRepository.mutate`),
+    // нормализация порядка, версия и лимиты Markdown — одни и те же, что у
+    // HTTP-роутов (`/api/v2/projects/:id/plan*`).
+    const service = new PlanService(extra.projectStore);
+    let savedPlan: ProjectPlan;
     try {
-      const saved = await extra.projectStore.mutate(project.id, (target) => {
-        const plan = getPlan(target);
-        const result = applyPlanWrite(plan, params);
-        // Валидация до правки: бросок из мутатора = запись не выполняется.
-        if (result.error) throw new PlanWriteRejectedError(result.error);
-        plan.updatedAt = nowISO();
-        plan.version += 1;
-        target.plan = plan;
-        target.updatedAt = nowISO();
-        savedPlan = plan;
-      });
-      if (!saved) {
-        return { content: sm('plan.no_project'), isError: true, metadata: { i18n: i18nMeta('plan.no_project') } };
+      switch (params.action) {
+        case 'create_item':
+          savedPlan = await service.createItem(project.id, {
+            title: params.title,
+            ...(params.description !== undefined ? { description: params.description } : {}),
+            ...(params.columnId !== undefined ? { columnId: params.columnId } : {}),
+            ...(params.priority !== undefined ? { priority: params.priority } : {}),
+            ...(params.dependsOn !== undefined ? { dependsOn: params.dependsOn } : {}),
+            ...(params.tags !== undefined ? { tags: params.tags } : {}),
+          });
+          break;
+        case 'update_item':
+          savedPlan = await service.updateItem(project.id, params.itemId, {
+            ...(params.title !== undefined ? { title: params.title } : {}),
+            ...(params.description !== undefined ? { description: params.description } : {}),
+            ...(params.priority !== undefined ? { priority: params.priority } : {}),
+            ...(params.tags !== undefined ? { tags: params.tags } : {}),
+          });
+          break;
+        case 'move_item':
+          savedPlan = await service.moveItem(project.id, params.itemId, {
+            columnId: params.columnId,
+            ...(params.order !== undefined ? { order: params.order } : {}),
+            ...(params.beforeItemId !== undefined ? { beforeItemId: params.beforeItemId } : {}),
+            ...(params.afterItemId !== undefined ? { afterItemId: params.afterItemId } : {}),
+          });
+          break;
+        case 'delete_item':
+          savedPlan = await service.deleteItem(project.id, params.itemId);
+          break;
+        case 'set_dependencies':
+          savedPlan = await service.updateItem(project.id, params.itemId, {
+            dependsOn: params.dependsOn,
+          });
+          break;
+        case 'add_column':
+          savedPlan = await service.addColumn(project.id, {
+            name: params.name,
+            ...(params.wipLimit !== undefined ? { wipLimit: params.wipLimit } : {}),
+          });
+          break;
+        case 'update_column':
+          savedPlan = await service.updateColumn(project.id, params.columnId, {
+            ...(params.name !== undefined ? { name: params.name } : {}),
+            ...(params.wipLimit !== undefined ? { wipLimit: params.wipLimit } : {}),
+          });
+          break;
+        case 'delete_column':
+          savedPlan = await service.deleteColumn(project.id, params.columnId, {
+            moveItemsTo: params.moveItemsTo,
+            // Версия не передаётся: оптимистичная блокировка — механизм
+            // HTTP-клиента (UI), у агента правка всегда «свежая».
+          });
+          break;
+        case 'reorder_columns':
+          savedPlan = await service.reorderColumns(project.id, {
+            order: params.order,
+          });
+          break;
       }
     } catch (err) {
-      if (err instanceof PlanWriteRejectedError) {
+      if (err instanceof PlanItemNotFoundError) {
+        return {
+          content: sm('plan.item_not_found', { itemId: err.itemId }),
+          isError: true,
+          metadata: { i18n: i18nMeta('plan.item_not_found', { itemId: err.itemId }) },
+        };
+      }
+      if (err instanceof PlanColumnNotFoundError) {
+        return {
+          content: sm('plan.column_not_found', { columnId: err.columnId }),
+          isError: true,
+          metadata: { i18n: i18nMeta('plan.column_not_found', { columnId: err.columnId }) },
+        };
+      }
+      if (err instanceof PlanValidationError || err instanceof PlanLimitExceededError) {
         return { content: err.message, isError: true };
       }
       return {
@@ -419,11 +473,18 @@ export const planWriteTool: ToolDefinition = {
       };
     }
 
-    // ADR-039/ADR-118 §4: план проекта изменён — другие клиенты перечитывают
-    // сессию (UI обрабатывает `plan.updated` → полный refresh).
-    const sessionId = extra.sessionId ?? ctx.sessionId ?? session?.id;
-    if (sessionId) extra.eventBus?.publish(sessionId, 'plan.updated', {});
+    // ADR-039/ADR-118 §4, PROP-054: план проекта изменён — событие
+    // `plan.updated` идёт в каналы **всех сессий проекта** (не только текущей),
+    // payload — `{project_id, version}`.
+    await publishPlanUpdated(
+      { eventBus: extra.eventBus, sessionManager: extra.sessionManager },
+      project.id,
+      savedPlan.version,
+    );
 
-    return { content: renderPlanMarkdown(savedPlan!), metadata: { plan: savedPlan } };
+    return {
+      content: renderPlanActionSummary(params, savedPlan),
+      metadata: { plan: savedPlan },
+    };
   },
 };

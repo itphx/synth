@@ -13,6 +13,7 @@ import { useInstructionsStore } from './instructionsStore'
 import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
+import { useProjectLogStore } from './projectLogStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
 import { normalizeLiveToolPart, partText, toLivePart, turnHasContent } from '@/lib/messageParts'
@@ -2814,8 +2815,22 @@ export function createDispatcher(): EventDispatcher {
       // План утверждён (ADR-039): план живёт в проекте (project.plan), событие
       // plan.approved несёт только session_id/project_id — достаточно полного
       // refresh сессии (план проекта рендерится во вкладке «Проект» отдельно).
-      case 'plan.approved':
+      case 'plan.approved': {
+        refreshSessionFromApi(sid)
+        break
+      }
+
+      // План проекта изменён (PROP-054): событие идёт в каналы **всех** сессий
+      // проекта с payload `{ project_id, version }`. Перечитываем **деталь**
+      // проекта (`getProject`), а не список: список — сводки без `plan`, он
+      // затирал бы открытую панель «Проект».
       case 'plan.updated': {
+        const explicitProjectId = payload.project_id as string | null | undefined
+        const projectId =
+          explicitProjectId
+          || useSessionsStore.getState().sessions.find((sess) => sess.id === sid)?.project_id
+          || undefined
+        if (projectId) void useProjectsStore.getState().getProject(projectId)
         refreshSessionFromApi(sid)
         break
       }
@@ -2860,16 +2875,23 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // Проект изменён тулами (project_update/workspace_set/repo_*): перечитываем
-      // список проектов с сервера и синхронизируем Git-вкладку (ADR-076) и дерево
-      // Files (ADR-075: смена workspace меняет содержимое).
+      // Проект изменён тулами (project_update/workspace_set/repo_*) или
+      // журналом/инвариантами (PROP-054, `kind: 'log' | 'invariants'`).
+      //
+      // Перечитываем **деталь** проекта (`getProject`), а не список: список —
+      // сводки без `plan`, он затирал бы открытую панель «Проект». Журнал
+      // обновляется отдельно — он вынесен из детали (`GET /projects/:id/log`).
       case 'project.updated': {
         const projectId = payload.project_id as string | undefined
-        if (projectId) void useFilesStore.getState().refreshProject(projectId)
-        useProjectsStore.getState().loadProjects().then(() => {
-          if (!projectId) return
-          const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
-          if (project) void useGitStore.getState().loadRepos(projectId, project.repos ?? null)
+        const kind = payload.kind as string | undefined
+        if (!projectId) break
+        void useFilesStore.getState().refreshProject(projectId)
+        if (kind === 'log') {
+          useProjectLogStore.getState().applyEvent('project.updated', { project_id: projectId, kind })
+        }
+        void useProjectsStore.getState().getProject(projectId).then((project) => {
+          if (!project) return
+          void useGitStore.getState().loadRepos(projectId, project.repos ?? null)
         }).catch(() => {})
         break
       }
@@ -2896,8 +2918,9 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // Todo обновлён (todo_write/todo_add/todo_update/todo_delete): мгновенный
-      // patch из payload + полный refresh.
+      // Todo обновлён (todo_write/todo_add/todo_update/todo_delete): точечный
+      // patch из payload. Полный refresh сессии здесь **не нужен** и был бы
+      // вреден: он затирал бы локальные правки и тянул лишний запрос.
       case 'todos.updated': {
         const patch = payload as Record<string, unknown>
         const sessionPatch: Record<string, unknown> = {}
@@ -2910,7 +2933,6 @@ export function createDispatcher(): EventDispatcher {
             ),
           }))
         }
-        refreshSessionFromApi(sid)
         break
       }
 

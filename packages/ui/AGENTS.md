@@ -220,6 +220,62 @@
 - **Журнал прогона.** `GET /pipeline-runs/:runId` → `{run, events, events_has_more, events_next_before}`; страница — по `events_limit` (дефолт 200) и `events_before` (исключающий курсор по `ts`). Кнопка **«Загрузить старые события»** (`PipelineRunTab`, `data-testid="pipeline-load-older-events"`) — при `events_has_more`; старые события **дописываются в начало** журнала (`pipelinesStore.loadOlderRunEvents`), позиция скролла сохраняется (компенсация разницы `scrollHeight`). Живое обновление (`pipeline.run.*` → `loadRun`) перечитывает только последнюю страницу: уже загруженные старые события не теряются (мерж `mergeRunEvents`), курсор «ещё старше» не «омолаживается».
 - i18n — `leftPanel.loadMoreProjects`/`leftPanel.loadingMoreProjects`, `pipelines.loadMore`/`pipelines.loadingMore`/`pipelines.loadOlderEvents`/`pipelines.loadingOlderEvents` (ru/en, паритет). Тесты — `stores/projectsStore.pagination.test.ts`, `stores/pipelinesStore.pagination.test.ts`, `components/panels/left-panel/ProjectsTab.projects-pagination.test.tsx`, `components/panels/left-panel/PipelinesTab.test.tsx`, `components/pipelines/PipelineTab.test.tsx`, `components/pipelines/PipelineRunTab.test.tsx`, `lib/api/synthApi.projects.test.ts`, `lib/api/synthApi.pipeline-project.test.ts`.
 
+### План, ToDo, журнал, инварианты (PROP-054)
+
+Правая панель и модальное рабочее окно показывают четыре сущности проекта/сессии
+одним визуальным языком. Источник истины — [PROP-054](../../docs/arch_decisions/prop-054-kanban-backlog.md)
+(дополнение 2026-11-07).
+
+- **Общие компоненты** — `components/panels/work/`: `TaskRow` (строка пункта),
+  `TaskGroup` (группа: имя, счётчик, WIP, collapse, «+»), `MarkdownText`
+  (рендер/плоское превью), `MarkdownEditor`, `PlanBoard` (горизонтальная доска),
+  `JournalList`, `InvariantsEditor`, `WorkStats`, `WorkModal` (вкладки «Доска»,
+  «ToDo», «Журнал», «Инварианты», «Статистика»), `PlanSummary` (компактный
+  план для панели), `TodoSummary` (компактный ToDo для панели), общий словарь
+  статусов/приоритетов — `labels.ts`. План и ToDo — **одни** компоненты: свои
+  словари статусов в панели не заводить.
+- **Markdown во всех текстовых полях.** `plan.description`, `todo.content`,
+  `journal.text`, `invariants` — Markdown. В свёрнутом виде — плоское превью
+  (`MarkdownText mode="plain"`), при раскрытии и в модалке — полный рендер
+  (`MarkdownContent`: marked + DOMPurify). Лимиты — `MARKDOWN_LIMITS`
+  (`lib/markdown/limits.ts`): инварианты 64 КиБ, запись журнала 16 КиБ,
+  описание пункта плана 16 КиБ, текст ToDo 4 КиБ.
+- **Журнал вынесен из детали проекта.** `ProjectData.log` больше нет: источник
+  — страница `GET /projects/:id/log` (`synthApi.getProjectLogPage`). Стор —
+  `stores/projectLogStore.ts` (`byProject`/`refresh`/`loadMore`/`applyEvent`);
+  его читают и панель, и `WorkModal`, поэтому событие `project.updated`
+  с `kind: 'log'` обновляет открытое окно журнала. В панели — последние 5
+  записей, полный список — в модалке.
+- **События → точечное обновление, не `loadProjects()`.** `plan.updated` →
+  `useProjectsStore.getState().getProject(projectId)` (`project_id` из payload
+  или проекта сессии); `project.updated` → `getProject(projectId)` + `kind:'log'`
+  → `projectLogStore.refresh`; `todos.updated` → **точечный** патч
+  `session.todos` (полный refresh сессии не делается — он затирал бы правки).
+  `loadProjects()` для детали **не зовут**: список — сводки без `plan`.
+  `projectsStore.loadProjects()` **сливает** сводку с уже загруженной записью
+  и не затирает `plan` (`mergeProjectSummary`).
+- **Права — разные оси.** План/журнал/инварианты — `canEditProjectContent`
+  (`lib/projectAccess.ts`); ToDo — write-доступ к сессии
+  (`canEditSessionContent`, `lib/sessionAccess.ts` — зеркало
+  `packages/core/src/server/session-access-guard.ts`). `VIEWER` видит данные, но
+  не кнопки правки. В `WorkModal` это два флага: `canEdit` (проект) и
+  `canEditTodos` (сессия). Enforcement — на сервере.
+- **Места не меняем:** план и инварианты — во вкладке «Проект» (инварианты —
+  **под планом**, компактное отрендеренное превью + правка в модалке), ToDo —
+  во вкладке «Сессия». Полные списки, доска, журнал, статистика и правка —
+  в модальном окне (`WorkModal`).
+- i18n — `work.plan.*`, `work.todo.*`, `work.invariants.*`, `work.journal.*`,
+  `work.modal.tab.todos` (ru/en, паритет). Тесты —
+  `components/panels/ProjectTab.plan.test.tsx`,
+  `components/panels/ProjectTab.journal.test.tsx`,
+  `components/panels/ProjectTab.invariants.test.tsx`,
+  `components/panels/SessionSettingsTab.todos.test.tsx`,
+  `stores/projectLogStore.test.ts`, `stores/projectsStore.merge.test.ts`,
+  `stores/transportStore.plan-updated.test.ts`,
+  `stores/transportStore.project-updated.test.ts`,
+  `stores/transportStore.todos-updated.test.ts`,
+  `components/panels/work/WorkModal.test.tsx`.
+
 ### Каталог моделей: страницы, поиск на сервере, лимиты файлов и diff (ADR-095, C1)
 - **Каталог моделей постраничный.** `GET /api/v2/models` → страница `{models, total, offset, limit, next_offset}`; поиск (`search`) и фильтры (`provider`/`modality`/`enabled`) — **на сервере**. Старый ответ `{groups}` не приходит — UI разворачивает его в страницу (`lib/api/models.ts`, фоллбэк `getModelsPage`).
 - **Домен API.** `modelsApi.getModelsPage(query?)` — сырая страница; `modelsApi.getModelGroups(query?)` — `{groups, page}`: группы склеиваются из плоского списка + метаданные провайдера из `GET /providers` (`type`/`icon`/`currency`/`defaultModel` — в ответе `/models` их больше нет); `modelsApi.getModels(query?)` — совместимая обёртка (только группы страницы). Хелперы — `groupModelsByProvider`/`mergeModelGroups` (склейка страниц по провайдеру и `id` модели).

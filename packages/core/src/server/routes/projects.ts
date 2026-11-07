@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
@@ -6,6 +5,7 @@ import type { Project, Session, WorkspaceOutsideRootPolicy, ProjectMcpSettings, 
 import {
   projectMcpUpdateSchema,
   projectMemoryUpdateSchema,
+  projectPlanSchema,
   PROJECT_ICON_KEYS,
   PROJECT_COLOR_KEYS,
   isProjectIconKey,
@@ -152,11 +152,13 @@ export interface ProjectRoutesOptions {
 export type ProjectChangeKind = 'updated' | 'deleted';
 
 /**
- * План проекта (ADR-039): структурированный объект ProjectPlan, создаётся/редактируется
- * движком (plan_write). Отдельной zod-схемы в shared нет — принимаем произвольный
- * объект (перенос между мирами), null очищает план.
+ * План проекта (ADR-039): структурированный объект `ProjectPlan`.
+ *
+ * Схема — из `@itphx/synth-shared` (`projectPlanSchema`); `null` очищает план.
+ * Неизвестные поля сохраняются (passthrough) — план переносится между мирами
+ * и может нести поля, которых ещё нет в модели.
  */
-const planFieldSchema = z.unknown().nullable().optional();
+const planFieldSchema = projectPlanSchema.nullable().optional();
 
 /** Мутирующие поля контента проекта (всё, кроме `workspace`): требуют прав редактора. */
 const projectContentFields = [

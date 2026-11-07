@@ -62,7 +62,6 @@ const PROJECT = {
   workspace: null,
   repos: null,
   status_messages: [],
-  log: [],
   plan: null,
   created_at: '',
   updated_at: '',

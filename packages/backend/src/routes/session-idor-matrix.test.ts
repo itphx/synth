@@ -212,6 +212,17 @@ const MATRIX: Row[] = [
   row('sessions', 'PATCH', '/:id/notes/:noteId'),
   row('sessions', 'DELETE', '/:id/notes/:noteId'),
 
+  // --- ToDo сессии (PROP-054) ---
+  // Чтение — правило чтения сессии; мутации — правило мутации (владелец/
+  // EDITOR проекта; VIEWER → 403). Пустое тело → 400 валидации; неизвестный
+  // пункт → 404 (объект не раскрывается).
+  row('sessions', 'GET', '/:id/todos'),
+  row('sessions', 'POST', '/:id/todos', { status: 400 }),
+  row('sessions', 'PATCH', '/:id/todos/:todoId', { status: 404 }),
+  row('sessions', 'DELETE', '/:id/todos/:todoId', { status: 404 }),
+  row('sessions', 'PUT', '/:id/todos/order', { status: 400 }),
+  row('sessions', 'POST', '/:id/todos/clear'),
+
   // --- session skill-scope routes (отдельная фабрика на том же префиксе) ---
   // Та же семантика, что у ресурса сессии: GET — проектное чтение (VIEWER ок),
   // PUT — проектное редактирование (VIEWER → 403).

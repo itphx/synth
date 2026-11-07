@@ -61,6 +61,17 @@ async function makeProject(dataDir: string, name: string): Promise<Fixture> {
   });
   project.currentTask = 'текущая задача';
   project.invariants = 'инварианты проекта';
+  // Журнал проекта (PROP-054): в детали API его нет, но перенос проекта
+  // (экспорт/импорт) переносит журнал целиком.
+  project.log = [
+    {
+      id: 'log-1',
+      text: 'запись журнала',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      sessionId: 's1',
+      author: 'local',
+    },
+  ];
   project.plan = {
     version: 1,
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -258,8 +269,32 @@ describe('portable export/import проекта (ADR-091)', () => {
     expect((refPart?.data as Record<string, unknown>).sessionId).toBe(s1New?.id);
   });
 
-  it('--merge-into: сессии попадают в существующий проект (project_id переписан)', async () => {
+  it('PROP-054: журнал проекта переносится экспортом/импортом (деталь API его не содержит)', async () => {
     const fixture = await makeProject(src, 'Проект A');
+    const exported = await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir });
+
+    // В архиве журнал есть (project.json — serializeProjectArchive).
+    const projectJson = await readFileFromTarGz(exported.path, 'project.json');
+    const archived = JSON.parse(projectJson?.toString('utf-8') ?? '{}') as {
+      log?: Array<Record<string, unknown>>;
+    };
+    expect(archived.log).toHaveLength(1);
+    expect(archived.log![0]!.text).toBe('запись журнала');
+
+    const dst = join(tmpDir, 'dst-log');
+    await mkdir(dst, { recursive: true });
+    const result = await importProject({ dataDir: dst, archive: exported.path, yes: true });
+
+    const dstStorage = createFileStorage({ dataDir: dst });
+    const dstProject = await dstStorage.projects.load(result.projectId);
+    expect(dstProject?.log).toHaveLength(1);
+    // Поля записи восстановлены в доменной форме (camelCase), а не как в DTO.
+    expect(dstProject?.log?.[0]?.createdAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(dstProject?.log?.[0]?.sessionId).toBe('s1');
+    expect(dstProject?.log?.[0]?.author).toBe('local');
+  });
+
+  it('--merge-into: сессии попадают в существующий проект (project_id переписан)', async () => {    const fixture = await makeProject(src, 'Проект A');
     const exported = await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir });
 
     const dst = join(tmpDir, 'merge-dst');

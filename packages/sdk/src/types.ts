@@ -15,11 +15,13 @@ import type {
   EventRouteRule,
   FileEntry,
   InstanceCapabilities,
+  ProjectPlan,
   PromptAcceptedResponse,
   RouteDecision,
   Schedule,
   ScheduleJob,
   SynthEvent,
+  TodoItem,
 } from '@itphx/synth-shared/types';
 import type {
   EventBindingApiKeyCreateRequest,
@@ -27,11 +29,25 @@ import type {
   EventBindingInputRequest,
   EventIngestRequest,
   EventRouteRuleUpsertRequest,
+  PlanColumnCreateRequest,
+  PlanColumnDeleteRequest,
+  PlanColumnsOrderRequest,
+  PlanColumnUpdateRequest,
+  PlanItemCreateRequest,
+  PlanItemMoveRequest,
+  PlanItemUpdateRequest,
+  ProjectInvariantsUpdateRequest,
+  ProjectLogCreateRequest,
+  ProjectLogUpdateRequest,
   PromptRequest,
   PromptRequestInput,
   ScheduleInputRequest,
   SessionCreateRequest,
   SessionUpdateRequest,
+  TodoClearRequest,
+  TodoCreateRequest,
+  TodoOrderRequest,
+  TodoUpdateRequest,
 } from '@itphx/synth-shared/schemas';
 
 // --- Доменные типы и входные DTO (shared) ---
@@ -48,6 +64,17 @@ export type {
   EventRouteRuleUpsertRequest,
   FileEntry,
   InstanceCapabilities,
+  PlanColumnCreateRequest,
+  PlanColumnDeleteRequest,
+  PlanColumnsOrderRequest,
+  PlanColumnUpdateRequest,
+  PlanItemCreateRequest,
+  PlanItemMoveRequest,
+  PlanItemUpdateRequest,
+  ProjectInvariantsUpdateRequest,
+  ProjectLogCreateRequest,
+  ProjectLogUpdateRequest,
+  ProjectPlan,
   PromptAcceptedResponse,
   PromptRequest,
   PromptRequestInput,
@@ -58,6 +85,11 @@ export type {
   SessionCreateRequest,
   SessionUpdateRequest,
   SynthEvent,
+  TodoClearRequest,
+  TodoCreateRequest,
+  TodoItem,
+  TodoOrderRequest,
+  TodoUpdateRequest,
 };
 
 // --- Входные типы запросов (обёртки над shared) ---
@@ -231,11 +263,21 @@ export interface SessionStatusResponse {
 // --- projects: страница списка и сводка-DTO ---
 
 /**
- * Публичный срез сериализованного проекта (`serializeProjectSummary` в core) —
+ * Публичный срез сериализованного проекта (`serializeProject` в core) —
  * транспортный DTO в snake_case.
  *
- * Сводка списка: тяжёлые поля `log` (журнал проекта) и `plan` (ADR-039) **не
- * отдаются**; полный DTO — в `GET /projects/:id`.
+ * Сводка списка (`serializeProjectSummary`): тяжёлые поля `log` (журнал
+ * проекта) и `plan` (ADR-039) **не отдаются**; полный DTO — в
+ * `GET /projects/:id`.
+ *
+ * PROP-054: в детали проекта поля `log` **больше нет** — журнал вынесен в
+ * постраничную страницу `GET /projects/:id/log` (см. `ProjectLogPage`).
+ * Поле `plan` в детали остаётся (`plan: null` — плана нет).
+ *
+ * ⚠️ У типа есть индекс-сигнатура `[key: string]: unknown` — «удаление» поля
+ * `log` из ответа сервера **не ломает компиляцию** (значение просто попадёт в
+ * индекс). Поэтому отсутствие `log` в детали закреплено явным тестом
+ * (`client.test.ts`), а не типом.
  */
 export interface SerializedProject {
   id: string;
@@ -252,6 +294,8 @@ export interface SerializedProject {
   repos?: unknown[] | null;
   mcp?: unknown | null;
   memory?: unknown | null;
+  /** План проекта (ADR-039); `null` — плана нет. В списке проектов не отдаётся. */
+  plan?: ProjectPlan | null;
   status_messages: Array<{ id: string; text: string; type: string; timestamp: string }>;
   created_at: string;
   updated_at: string;
@@ -273,6 +317,99 @@ export interface ProjectListResponse {
   limit: number;
   /** Курсор следующей страницы; `null` — страница последняя. */
   next_offset: number | null;
+}
+
+// --- projects: план, журнал, инварианты (PROP-054) ---
+
+/**
+ * DTO записи журнала проекта (`serializeLogEntry` в core) — транспортный
+ * DTO в snake_case. Текст — Markdown (лимит `MARKDOWN_LIMITS.journalEntry`,
+ * 16 КиБ).
+ */
+export interface ProjectLogEntryDto {
+  id: string;
+  text: string;
+  created_at: string;
+  /** Сессия-автор записи; `null` — запись без сессии. */
+  session_id: string | null;
+  /** Автор записи; `null` — автор не задан. */
+  author: string | null;
+  /** Когда текст правили; `null` — запись не правилась. */
+  updated_at: string | null;
+  /** Кто правил текст; `null` — не правили. */
+  updated_by: string | null;
+  [key: string]: unknown;
+}
+
+/**
+ * Ответ `POST`/`PATCH` `/projects/:id/log*` — созданная или обновлённая запись
+ * журнала.
+ */
+export interface ProjectLogEntryResponse {
+  entry: ProjectLogEntryDto;
+}
+
+/**
+ * Ответ `GET /projects/:id/log` — **страница** журнала проекта.
+ *
+ * Новые записи сверху; пагинация — общий формат API v2
+ * (`{items, total, offset, limit, next_offset}`).
+ */
+export interface ProjectLogPage {
+  /** Записи текущей страницы (новые сверху). */
+  entries: ProjectLogEntryDto[];
+  /** Всего записей журнала. */
+  total: number;
+  /** Смещение текущей страницы. */
+  offset: number;
+  /** Размер страницы (по умолчанию 50, максимум 200). */
+  limit: number;
+  /** Курсор следующей страницы; `null` — страница последняя. */
+  next_offset: number | null;
+}
+
+/**
+ * Ответ `GET /projects/:id/plan` — план проекта целиком.
+ *
+ * `plan: null` — плана ещё нет. ⚠️ План приходит **доменной формой**
+ * (camelCase: `updatedAt`/`columnId`/`createdAt`) — в отличие от журнала и
+ * инвариантов, которые сериализуются в snake_case.
+ */
+export interface ProjectPlanResponse {
+  plan: ProjectPlan | null;
+}
+
+/**
+ * Ответ мутации плана — **актуальный** план после операции.
+ *
+ * При конфликте версии сервер отвечает `409 PLAN_VERSION_CONFLICT` и кладёт
+ * актуальный план в тело ошибки (`plan`) — клиент читает его из
+ * `SynthApiError.body`.
+ */
+export interface ProjectPlanMutationResponse {
+  plan: ProjectPlan;
+}
+
+/**
+ * Ответ `GET`/`PUT /projects/:id/invariants` — текст инвариантов проекта и
+ * время его записи.
+ *
+ * Текст — Markdown (лимит `MARKDOWN_LIMITS.invariants`, 64 КиБ).
+ */
+export interface ProjectInvariantsResponse {
+  invariants: string;
+  updated_at: string;
+}
+
+/**
+ * Ответ ToDo-эндпоинтов сессии (`GET`/`POST`/`PATCH`/`DELETE`
+ * `/sessions/:id/todos*`) — текущий список задач сессии.
+ *
+ * Порядок пунктов — порядок массива; текст — Markdown (лимит
+ * `MARKDOWN_LIMITS.todoContent`, 4 КиБ).
+ */
+export interface SessionTodosResponse {
+  todos: TodoItem[];
 }
 
 // --- pipelines: пайплайны проекта и прогон ---

@@ -1189,6 +1189,88 @@ export type {
   ProjectRouteMessages,
   ProjectStatsSource,
 } from './server/routes/projects.js';
+// PROP-054: точечные HTTP-операции плана/журнала/инвариантов (единая
+// реализация для core и backend; RBAC — через opts).
+export { createProjectPlanRoutes } from './server/routes/project-plan.js';
+export type { ProjectPlanRoutesOptions } from './server/routes/project-plan.js';
+export { createProjectLogRoutes } from './server/routes/project-log.js';
+export type { ProjectLogRoutesOptions } from './server/routes/project-log.js';
+export { createSessionTodoRoutes } from './server/routes/session-todos.js';
+export type { SessionTodoRoutesDeps } from './server/routes/session-todos.js';
+export {
+  createProjectWorkAccess,
+  DEFAULT_PROJECT_WORK_MESSAGES,
+} from './server/routes/project-work.js';
+export type {
+  ProjectWorkRoutesAuth,
+  ProjectWorkRoutesOptions,
+  ProjectWorkRouteMessages,
+} from './server/routes/project-work.js';
+// PROP-054: доменные сервисы плана/ToDo/журнала/инвариантов (общие для
+// инструментов и HTTP-роутов).
+export {
+  PlanService,
+  defaultPlan,
+  getPlan,
+  sortedColumns,
+  sortedItems,
+  normalizePlanOrder,
+  assertMarkdownLimit,
+  PlanItemNotFoundError,
+  PlanColumnNotFoundError,
+  PlanProjectNotFoundError,
+  PlanVersionConflictError,
+  PlanValidationError,
+  PlanLimitExceededError,
+  PLAN_ITEM_TITLE_MAX,
+  PLAN_COLUMN_NAME_MAX,
+} from './engine/plan/service.js';
+export type {
+  PlanStore,
+  PlanItemCreateInput,
+  PlanItemUpdateInput,
+  PlanItemMoveInput,
+  PlanColumnCreateInput,
+  PlanColumnUpdateInput,
+  PlanColumnDeleteInput,
+  PlanColumnsOrderInput,
+} from './engine/plan/service.js';
+export { publishPlanUpdated } from './engine/plan/events.js';
+export type { PlanEventDeps } from './engine/plan/events.js';
+export {
+  TodoService,
+  toTodoItem,
+  normalizeTodos,
+  assertTodoContentLimit,
+  TodoNotFoundError,
+  TodoValidationError,
+  TodoLimitExceededError,
+  DEFAULT_TODO_PRIORITY,
+  DEFAULT_TODO_CLEAR_STATUSES,
+} from './engine/todo/service.js';
+export type {
+  TodoSessionManager,
+  TodoCreateInput,
+  TodoUpdateInput,
+} from './engine/todo/service.js';
+export {
+  ProjectLogService,
+  assertJournalTextLimit,
+  ProjectLogEntryNotFoundError,
+  ProjectLogLimitExceededError,
+  ProjectLogProjectNotFoundError,
+  ProjectLogValidationError,
+} from './engine/project/log-service.js';
+export type { ProjectWorkStore, ProjectLogAppendInput } from './engine/project/log-service.js';
+export {
+  ProjectInvariantsService,
+  assertInvariantsLimit,
+  ProjectInvariantsLimitExceededError,
+  ProjectInvariantsNotFoundError,
+} from './engine/project/invariants-service.js';
+export type { ProjectInvariantsState } from './engine/project/invariants-service.js';
+export { publishProjectUpdated } from './engine/project/events.js';
+export type { ProjectEventDeps, ProjectUpdateKind } from './engine/project/events.js';
 // ADR-089: единый хелпер видимости сессии (списки/доступ по id).
 export { isSessionVisible } from './server/session-visibility.js';
 export type { SessionOwnerCtx } from './server/session-visibility.js';
@@ -2300,6 +2382,8 @@ export {
   serializeSession,
   serializeMessage,
   serializeProject,
+  serializeProjectArchive,
+  deserializeLogEntry,
   serializeProjectSummary,
 } from './server/serialize.js';
 
