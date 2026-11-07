@@ -193,8 +193,8 @@ The script starts a container and checks the content **per flavor** (not only th
 
 | Flavor | Checks |
 |---|---|
-| `core` | `git`, `rg`, `python3` (+`pip`, `python3 -m venv`), `bash`, `jq`, `yq`, `curl`, `openssl`, `ssh`, `ca-certificates` |
-| `dev` | + tier 1 (`make`, `gcc`, `g++`, `patch`, `rsync`), MCP servers (`initialize` over stdio), DB clients (`sqlite3`, `psql`, `redis-cli`, `mysql`), `buildah` |
+| `core` | `git`, `rg`, `python3` (+`pip`, `python3 -m venv`), `bash`, `jq`, `yq`, `curl`, `openssl`, `ssh` (+`scp`, `sftp`), `rsync`, `ca-certificates` |
+| `dev` | + tier 1 (`make`, `gcc`, `g++`, `patch`), MCP servers (`initialize` over stdio), DB clients (`sqlite3`, `psql`, `redis-cli`, `mysql`), `buildah` |
 | `devops` | + tier 2 (`kubectl`, `helm`, `kustomize`, `tofu`/`terraform`, `ansible`, `shellcheck`, `yamllint`, `hadolint`), diagnostics (`dig`, `nc`, `lsof`, `ss`, `traceroute`), `docker --version` (there is no daemon in the image) |
 | `browser` | + `playwright`, headless Chromium start, `xmllint` |
 | `full` | everything above |

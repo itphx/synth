@@ -193,8 +193,8 @@ GV_GITEA_TOKEN=<токен> ./scripts/publish-images.sh --tag-base 0.11.4 \
 
 | Flavor | Проверки |
 |---|---|
-| `core` | `git`, `rg`, `python3` (+`pip`, `python3 -m venv`), `bash`, `jq`, `yq`, `curl`, `openssl`, `ssh`, `ca-certificates` |
-| `dev` | + tier 1 (`make`, `gcc`, `g++`, `patch`, `rsync`), MCP-серверы (`initialize` по stdio), клиенты БД (`sqlite3`, `psql`, `redis-cli`, `mysql`), `buildah` |
+| `core` | `git`, `rg`, `python3` (+`pip`, `python3 -m venv`), `bash`, `jq`, `yq`, `curl`, `openssl`, `ssh` (+`scp`, `sftp`), `rsync`, `ca-certificates` |
+| `dev` | + tier 1 (`make`, `gcc`, `g++`, `patch`), MCP-серверы (`initialize` по stdio), клиенты БД (`sqlite3`, `psql`, `redis-cli`, `mysql`), `buildah` |
 | `devops` | + tier 2 (`kubectl`, `helm`, `kustomize`, `tofu`/`terraform`, `ansible`, `shellcheck`, `yamllint`, `hadolint`), диаг (`dig`, `nc`, `lsof`, `ss`, `traceroute`), `docker --version` (демона в образе нет) |
 | `browser` | + `playwright`, headless-старт Chromium, `xmllint` |
 | `full` | всё вышеперечисленное |

@@ -111,7 +111,7 @@ ENV SYNTH_EXECUTOR_HOST=0.0.0.0
 ENV SYNTH_EXECUTOR_PORT=5100
 
 # Toolchain: hard deps (git, ripgrep, python3 + pip + venv, openssh-client,
-# ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
+# rsync, ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
 # coreutils/findutils/grep/sed/gawk, less, tree, openssl).
 COPY docker/install-lib.sh docker/install-hard-deps.sh docker/install-tier-0.sh /tmp/synth-install/
 RUN set -eux; \

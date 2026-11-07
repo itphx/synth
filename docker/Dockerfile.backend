@@ -124,7 +124,7 @@ RUN set -eux; \
 # ------------------------------------------------------------------------------
 #
 # Toolchain: hard deps (git, ripgrep, python3 + pip + venv, openssh-client,
-# ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
+# rsync, ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
 # coreutils/findutils/grep/sed/gawk, less, tree, openssl). Состав зафиксирован
 # в PROP-082; списки пакетов — в docker/install-hard-deps.sh и
 # docker/install-tier-0.sh (distro-aware: один список на тир, выбор apk/apt).
@@ -340,7 +340,7 @@ ENV SYNTH_DATA_DIR=/var/synth/data
 ENV SYNTH_PORT=5000
 
 # Toolchain: hard deps (git, ripgrep, python3 + pip + venv, openssh-client,
-# ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
+# rsync, ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
 # coreutils/findutils/grep/sed/gawk, less, tree, openssl).
 COPY docker/install-lib.sh docker/install-hard-deps.sh docker/install-tier-0.sh /tmp/synth-install/
 RUN set -eux; \
