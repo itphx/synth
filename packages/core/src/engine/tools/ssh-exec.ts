@@ -14,6 +14,11 @@
  *   команду — поэтому `-o`/`-F`/`-J`/`-l`/`-i` в `argv` остаются аргументами
  *   удалённой команды и локальный ssh их не исполнит (адрес/пользователь/порт
  *   задаются только полями).
+ * - **Пользователь — обязателен.** Конфиг ssh не читается, поэтому
+ *   «умолчательного» пользователя не существует: без явного `user` клиент
+ *   подставил бы локального пользователя исполнителя (`node`) и получил бы
+ *   `Permission denied (publickey,password)` — выглядит как сломанный тул.
+ *   Поэтому `user` — обязательное поле схемы, а адрес всегда `user@host`.
  * - **Ключ — секрет вызова, а не аргумент.** Путь к приватному ключу в argv
  *   утекал бы в `ps`; вместо этого на время вызова поднимается эфемерный
  *   `ssh-agent` (`ExecSecret.mode = 'agent'`, PROP-124 §2), а материал ключа
@@ -112,8 +117,10 @@ const sshExecSchema = z
       .max(64)
       .regex(USER_RE, 'user may contain only letters, digits, dots, dashes and underscores')
       .refine((value) => !value.startsWith('-'), 'user must not start with a dash')
-      .optional()
-      .describe('Remote user account (omitted — the ssh client default is used)'),
+      .describe(
+        'Remote user account (required — the ssh client config is not read, so there is no default '
+        + 'user to fall back to; without it ssh would connect as the local user of the executor)',
+      ),
     port: z
       .number()
       .int()
@@ -155,7 +162,7 @@ const sshExecSchema = z
 /** Параметры тула после валидации схемой. */
 interface SshExecParams {
   host: string;
-  user?: string;
+  user: string;
   port?: number;
   key_id?: string;
   argv: string[];
@@ -178,10 +185,14 @@ interface SshExecParams {
  *   prompt'е);
  * - `-o StrictHostKeyChecking=accept-new` — новый хост принимается, known_hosts
  *   обновляется (режим `accept-new` PROP-124 §6).
+ * - **адрес — всегда с пользователем** (`user@host`): конфиг ssh не читается,
+ *   поэтому «умолчательного» пользователя не существует — без явного `user`
+ *   клиент подставил бы локального пользователя исполнителя (`node`) и получил
+ *   бы `Permission denied (publickey,password)`.
  */
 export function buildSshCommand(params: {
   host: string;
-  user?: string;
+  user: string;
   port?: number;
   argv: string[];
 }): { file: string; args: string[] } {
@@ -192,7 +203,7 @@ export function buildSshCommand(params: {
   if (params.port !== undefined) args.push('-p', String(params.port));
   args.push('-o', 'BatchMode=yes');
   args.push('-o', 'StrictHostKeyChecking=accept-new');
-  args.push(params.user ? `${params.user}@${params.host}` : params.host);
+  args.push(`${params.user}@${params.host}`);
   // Разделитель: всё, что после него, — удалённая команда (опции ssh здесь
   // не действуют).
   args.push('--');
@@ -210,7 +221,9 @@ export const sshExecTool: ToolDefinition = {
   description:
     'Run a command on a remote host over SSH (addressed access, instance mode "tools"). '
     + 'The command is passed as an argument list — no local shell is involved, so values cannot be '
-    + 'injected. The host, port and user are separate fields; the SSH key is chosen by id '
+    + 'injected. The host, port and user are separate fields; the user is required, because the ssh '
+    + 'client config is not read (-F /dev/null) and there is no default user to fall back to — without '
+    + 'it ssh would connect as the local user of the executor. The SSH key is chosen by id '
     + '(see ssh_keys_list) or automatically, and the host/port must be allowed by the key policy. '
     + 'The key is delivered through a temporary ssh-agent for the duration of the call — it never '
     + 'appears in the command line. Timeout: 120000 ms by default (max 600000 ms). '
@@ -279,7 +292,7 @@ export const sshExecTool: ToolDefinition = {
     const secrets = [secret];
     const command = buildSshCommand({
       host,
-      ...(params.user ? { user: params.user } : {}),
+      user: params.user,
       ...(params.port !== undefined ? { port: params.port } : {}),
       argv: params.argv,
     });

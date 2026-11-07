@@ -142,8 +142,10 @@ const sshCopySchema = z
       .max(64)
       .regex(USER_RE, 'user may contain only letters, digits, dots, dashes and underscores')
       .refine((value) => !value.startsWith('-'), 'user must not start with a dash')
-      .optional()
-      .describe('Remote user account (omitted — the ssh client default is used)'),
+      .describe(
+        'Remote user account (required — the ssh client config is not read, so there is no default '
+        + 'user to fall back to; without it ssh would connect as the local user of the executor)',
+      ),
     port: z
       .number()
       .int()
@@ -199,7 +201,7 @@ const sshCopySchema = z
 /** Параметры тула после валидации схемой. */
 interface SshCopyParams {
   host: string;
-  user?: string;
+  user: string;
   port?: number;
   key_id?: string;
   direction: 'upload' | 'download';
@@ -266,14 +268,19 @@ export function buildSftpBatch(params: {
  * Команда — argv-форма (без локальной оболочки пользователя): файл `bash` с
  * фиксированным скриптом и позиционными параметрами. Batch идёт в скрипт
  * аргументом и оттуда — в stdin клиента `sftp` (`sftp -b -`).
+ *
+ * Адрес — всегда `user@host`: конфиг ssh не читается (`-F /dev/null`), поэтому
+ * «умолчательного» пользователя не существует — без явного `user` клиент
+ * подставил бы локального пользователя исполнителя (`node`) и получил бы
+ * `Permission denied (publickey,password)`.
  */
 export function buildSftpCommand(params: {
   host: string;
-  user?: string;
+  user: string;
   port?: number;
   batch: string;
 }): { file: string; args: string[] } {
-  const target = params.user ? `${params.user}@${params.host}` : params.host;
+  const target = `${params.user}@${params.host}`;
   return {
     file: 'bash',
     args: [
@@ -289,8 +296,8 @@ export function buildSftpCommand(params: {
 }
 
 /** Отображение команды для текста результата и метаданных. */
-function formatCommandDisplay(params: { host: string; user?: string; port?: number }): string {
-  const target = params.user ? `${params.user}@${params.host}` : params.host;
+function formatCommandDisplay(params: { host: string; user: string; port?: number }): string {
+  const target = `${params.user}@${params.host}`;
   return `sftp -F /dev/null -b - -P ${params.port ?? DEFAULT_SSH_PORT} ${target}`;
 }
 
@@ -300,7 +307,9 @@ export const sshCopyTool: ToolDefinition = {
     'Copy a file to or from a remote host over SSH (addressed access, instance mode "tools"). '
     + 'Direction "upload" sends the local file to the host, "download" fetches the remote file. '
     + 'The local path is relative to the session working directory; the remote path is absolute or '
-    + 'relative to the remote home directory. The host, port and user are separate fields; the SSH key '
+    + 'relative to the remote home directory. The host, port and user are separate fields; the user '
+    + 'is required, because the ssh client config is not read (-F /dev/null) and there is no default '
+    + 'user to fall back to — without it ssh would connect as the local user of the executor. The SSH key '
     + 'is chosen by id (see ssh_keys_list) or automatically, and the host/port must be allowed by the key '
     + 'policy. The key is delivered through a temporary ssh-agent for the duration of the call — it never '
     + 'appears in the command line. Set recursive=true to copy directories. Timeout: 120000 ms by default '
@@ -384,13 +393,13 @@ export const sshCopyTool: ToolDefinition = {
     });
     const command = buildSftpCommand({
       host,
-      ...(params.user ? { user: params.user } : {}),
+      user: params.user,
       ...(params.port !== undefined ? { port: params.port } : {}),
       batch,
     });
     const displayCommand = formatCommandDisplay({
       host,
-      ...(params.user ? { user: params.user } : {}),
+      user: params.user,
       ...(params.port !== undefined ? { port: params.port } : {}),
     });
     const timeout = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;

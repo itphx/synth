@@ -17,6 +17,7 @@ import type { ProcessSpawnInput } from '../processes/types.js';
 import { computeToolAvailability } from '../permission/availability.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { renderUnavailableTools } from '../context/state-messages.js';
+import { zodToJsonSchema } from './json-schema.js';
 import { buildSshCommand, sshExecTool } from './ssh-exec.js';
 
 const PRIVATE_KEY = 'private-key-material';
@@ -181,7 +182,7 @@ describe('ssh_exec — сборка команды', () => {
   });
 
   it('порт не задан — `-p` не добавляется', () => {
-    const command = buildSshCommand({ host: 'example.com', argv: ['uptime'] });
+    const command = buildSshCommand({ host: 'example.com', user: 'deploy', argv: ['uptime'] });
     expect(command.args).not.toContain('-p');
     expect(command.args).toEqual([
       '-F',
@@ -190,16 +191,102 @@ describe('ssh_exec — сборка команды', () => {
       'BatchMode=yes',
       '-o',
       'StrictHostKeyChecking=accept-new',
-      'example.com',
+      'deploy@example.com',
       '--',
       'uptime',
     ]);
   });
 
-  it('без пользователя адрес — только хост', () => {
-    const command = buildSshCommand({ host: 'example.com', argv: ['uptime'] });
-    expect(command.args).toContain('example.com');
-    expect(command.args.some((arg) => arg.includes('@'))).toBe(false);
+  it('адрес всегда с пользователем (`user@host`) — «умолчательного» пользователя нет', () => {
+    // Конфиг ssh не читается (`-F /dev/null`), поэтому адрес без `@` означал бы
+    // локального пользователя исполнителя (`node`) — `Permission denied`.
+    const command = buildSshCommand({ host: 'example.com', user: 'deploy', argv: ['uptime'] });
+    expect(command.args).toContain('deploy@example.com');
+    expect(command.args.some((arg) => arg === 'example.com')).toBe(false);
+  });
+});
+
+describe('ssh_exec — пользователь обязателен', () => {
+  it('в JSON-схеме тула `user` — обязательное поле', () => {
+    // Модель видит схему тула: `user` должен быть в `required`, иначе она
+    // снова позовёт тул без пользователя.
+    const schema = zodToJsonSchema(sshExecTool.parameters) as {
+      required?: string[];
+      properties?: Record<string, { description?: string }>;
+    };
+    expect(schema.required).toContain('user');
+    // Описание объясняет модели, почему поле обязательно.
+    expect(schema.properties?.user?.description).toContain('required');
+  });
+
+  it('без `user` → отказ валидации, команда не запускается', async () => {
+    const store = new FakeSshKeyStore([usableKey()]);
+    const { ctx, port } = makeCtx({ store });
+
+    const result = await sshExecTool.execute(
+      { host: 'example.com', argv: ['uptime'] },
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    // Текст отказа называет проблемное поле — модель должна повторить вызов
+    // с пользователем.
+    expect(result.content).toContain('user');
+    // Точка исполнения не вызвана — команда не запускалась.
+    expect(port.requests).toHaveLength(0);
+    // Секрет не раскрывался.
+    expect(store.revealCalls).toHaveLength(0);
+  });
+
+  it('пустой `user` → отказ валидации', async () => {
+    const store = new FakeSshKeyStore([usableKey()]);
+    const { ctx, port } = makeCtx({ store });
+
+    const result = await sshExecTool.execute(
+      { host: 'example.com', user: '', argv: ['uptime'] },
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(port.requests).toHaveLength(0);
+  });
+
+  it('`user` с пробелом или ведущим дефисом → отказ валидации', async () => {
+    const store = new FakeSshKeyStore([usableKey()]);
+    const { ctx, port } = makeCtx({ store });
+
+    const withSpace = await sshExecTool.execute(
+      { host: 'example.com', user: 'de ploy', argv: ['uptime'] },
+      ctx,
+    );
+    const withDash = await sshExecTool.execute(
+      { host: 'example.com', user: '-oProxyCommand=id', argv: ['uptime'] },
+      ctx,
+    );
+
+    expect(withSpace.isError).toBe(true);
+    expect(withDash.isError).toBe(true);
+    expect(port.requests).toHaveLength(0);
+  });
+
+  it('границы `user`: 64 символа — можно, 65 — нет; `@` в имени нельзя', async () => {
+    const store = new FakeSshKeyStore([usableKey()]);
+    const { ctx, port } = makeCtx({ store });
+
+    const tooLong = await sshExecTool.execute(
+      { host: 'example.com', user: 'a'.repeat(65), argv: ['uptime'] },
+      ctx,
+    );
+    // `root@evil.com` в поле `user` — попытка подменить адрес: имя не может
+    // содержать `@`, адрес собирается только как `user@host`.
+    const withAt = await sshExecTool.execute(
+      { host: 'example.com', user: 'root@evil.com', argv: ['uptime'] },
+      ctx,
+    );
+
+    expect(tooLong.isError).toBe(true);
+    expect(withAt.isError).toBe(true);
+    expect(port.requests).toHaveLength(0);
   });
 });
 
@@ -211,7 +298,7 @@ describe('ssh_exec — гейт доступа (политика)', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshExecTool.execute(
-      { host: 'example.com', key_id: 'key-1', argv: ['uptime'] },
+      { host: 'example.com', user: 'deploy', key_id: 'key-1', argv: ['uptime'] },
       ctx,
     );
 
@@ -228,7 +315,7 @@ describe('ssh_exec — гейт доступа (политика)', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshExecTool.execute(
-      { host: 'example.com', key_id: 'missing', argv: ['uptime'] },
+      { host: 'example.com', user: 'deploy', key_id: 'missing', argv: ['uptime'] },
       ctx,
     );
 
@@ -241,7 +328,7 @@ describe('ssh_exec — гейт доступа (политика)', () => {
     const store = new FakeSshKeyStore([usableKey({ allowHosts: ['other.example.com'] })]);
     const { ctx, port } = makeCtx({ store });
 
-    const result = await sshExecTool.execute({ host: 'example.com', argv: ['uptime'] }, ctx);
+    const result = await sshExecTool.execute({ host: 'example.com', user: 'deploy', argv: ['uptime'] }, ctx);
 
     expect(result.isError).toBe(true);
     expect(result.metadata?.keyCode).toBe('host_denied');
@@ -253,7 +340,7 @@ describe('ssh_exec — гейт доступа (политика)', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshExecTool.execute(
-      { host: 'example.com', port: 2222, argv: ['uptime'] },
+      { host: 'example.com', user: 'deploy', port: 2222, argv: ['uptime'] },
       ctx,
     );
 
@@ -269,7 +356,7 @@ describe('ssh_exec — гейт доступа (политика)', () => {
     // Явный `key_id`: без него гейт отбирает кандидатов по привязке к роли и
     // отвечает `key_not_found`.
     const result = await sshExecTool.execute(
-      { host: 'example.com', key_id: 'key-1', argv: ['uptime'] },
+      { host: 'example.com', user: 'deploy', key_id: 'key-1', argv: ['uptime'] },
       ctx,
     );
 
@@ -287,7 +374,7 @@ describe('ssh_exec — гейт доступа (политика)', () => {
     ]);
     const { ctx, port } = makeCtx({ store });
 
-    const result = await sshExecTool.execute({ host: 'example.com', argv: ['uptime'] }, ctx);
+    const result = await sshExecTool.execute({ host: 'example.com', user: 'deploy', argv: ['uptime'] }, ctx);
 
     expect(result.isError).toBe(true);
     expect(result.metadata?.keyCode).toBe('ambiguous');
@@ -302,7 +389,7 @@ describe('ssh_exec — доставка ключа', () => {
     const store = new FakeSshKeyStore([usableKey()]);
     const { ctx, port } = makeCtx({ store });
 
-    await sshExecTool.execute({ host: 'example.com', argv: ['uptime'] }, ctx);
+    await sshExecTool.execute({ host: 'example.com', user: 'deploy', argv: ['uptime'] }, ctx);
 
     const request = port.requests[0]!;
     expect(request.secrets).toHaveLength(1);
@@ -321,7 +408,7 @@ describe('ssh_exec — валидация аргументов', () => {
     const store = new FakeSshKeyStore([usableKey()]);
     const { ctx, port } = makeCtx({ store });
 
-    const result = await sshExecTool.execute({ host: 'example.com', argv: [] }, ctx);
+    const result = await sshExecTool.execute({ host: 'example.com', user: 'deploy', argv: [] }, ctx);
 
     expect(result.isError).toBe(true);
     expect(port.requests).toHaveLength(0);
@@ -331,7 +418,7 @@ describe('ssh_exec — валидация аргументов', () => {
     const store = new FakeSshKeyStore([usableKey()]);
     const { ctx, port } = makeCtx({ store });
 
-    const result = await sshExecTool.execute({ host: '-oProxyCommand=id', argv: ['uptime'] }, ctx);
+    const result = await sshExecTool.execute({ host: '-oProxyCommand=id', user: 'deploy', argv: ['uptime'] }, ctx);
 
     expect(result.isError).toBe(true);
     expect(port.requests).toHaveLength(0);
@@ -341,7 +428,7 @@ describe('ssh_exec — валидация аргументов', () => {
     const store = new FakeSshKeyStore([usableKey()]);
     const { ctx, port } = makeCtx({ store });
 
-    const result = await sshExecTool.execute({ host: 'example.com -oX', argv: ['uptime'] }, ctx);
+    const result = await sshExecTool.execute({ host: 'example.com -oX', user: 'deploy', argv: ['uptime'] }, ctx);
 
     expect(result.isError).toBe(true);
     expect(port.requests).toHaveLength(0);
@@ -352,7 +439,7 @@ describe('ssh_exec — валидация аргументов', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshExecTool.execute(
-      { host: 'example.com', argv: ['ls\0la'] },
+      { host: 'example.com', user: 'deploy', argv: ['ls\0la'] },
       ctx,
     );
 
@@ -365,7 +452,7 @@ describe('ssh_exec — валидация аргументов', () => {
     const { ctx } = makeCtx({ store });
 
     const result = await sshExecTool.execute(
-      { host: 'example.com', port: 70000, argv: ['uptime'] },
+      { host: 'example.com', user: 'deploy', port: 70000, argv: ['uptime'] },
       ctx,
     );
 
@@ -385,7 +472,7 @@ describe('ssh_exec — фоновый запуск', () => {
     const { ctx, port } = makeCtx({ store, processService });
 
     const result = await sshExecTool.execute(
-      { host: 'example.com', port: 2222, argv: ['sleep', '60'], background: true },
+      { host: 'example.com', user: 'deploy', port: 2222, argv: ['sleep', '60'], background: true },
       ctx,
     );
 
@@ -405,7 +492,7 @@ describe('ssh_exec — фоновый запуск', () => {
     const { ctx } = makeCtx({ store, backgroundEnabled: false });
 
     const result = await sshExecTool.execute(
-      { host: 'example.com', argv: ['uptime'], background: true },
+      { host: 'example.com', user: 'deploy', argv: ['uptime'], background: true },
       ctx,
     );
 

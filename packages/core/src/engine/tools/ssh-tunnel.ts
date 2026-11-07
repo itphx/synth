@@ -144,8 +144,10 @@ const sshTunnelSchema = z
       .max(64)
       .regex(USER_RE, 'user may contain only letters, digits, dots, dashes and underscores')
       .refine((value) => !value.startsWith('-'), 'user must not start with a dash')
-      .optional()
-      .describe('Remote user account (omitted — the ssh client default is used)'),
+      .describe(
+        'Remote user account (required — the ssh client config is not read, so there is no default '
+        + 'user to fall back to; without it ssh would connect as the local user of the executor)',
+      ),
     port: z
       .number()
       .int()
@@ -203,7 +205,7 @@ const sshTunnelSchema = z
 /** Параметры тула после валидации схемой. */
 interface SshTunnelParams {
   host: string;
-  user?: string;
+  user: string;
   port?: number;
   key_id?: string;
   direction: 'local' | 'remote';
@@ -253,10 +255,15 @@ export function isSocksRequest(args: unknown): boolean {
  *
  * Спецификация проброса: `127.0.0.1:<listen_port>:<target_host>:<target_port>`
  * — слушающий адрес всегда `127.0.0.1` (жёстко, без параметра).
+ *
+ * Адрес — всегда `user@host`: конфиг ssh не читается (`-F /dev/null`),
+ * поэтому «умолчательного» пользователя не существует — без явного `user`
+ * клиент подставил бы локального пользователя исполнителя (`node`) и получил
+ * бы `Permission denied (publickey,password)`.
  */
 export function buildSshTunnelCommand(params: {
   host: string;
-  user?: string;
+  user: string;
   port?: number;
   direction: 'local' | 'remote';
   listenPort: number;
@@ -279,7 +286,7 @@ export function buildSshTunnelCommand(params: {
     `${LISTEN_ADDRESS}:${params.listenPort}:${params.targetHost}:${params.targetPort}`,
   );
   // Адрес — последним: после него опции ssh не разбираются.
-  args.push(params.user ? `${params.user}@${params.host}` : params.host);
+  args.push(`${params.user}@${params.host}`);
   return { file: 'ssh', args };
 }
 
@@ -296,7 +303,9 @@ export const sshTunnelTool: ToolDefinition = {
     + '<target_host>:<target_port> through the SSH host (-L); direction "remote" asks the SSH host to '
     + 'listen and forward back to the target (-R). The listening socket is always 127.0.0.1. '
     + 'The target port must be allowed by the key port policy; the key is chosen by id (see ssh_keys_list) '
-    + 'or automatically, and the host must be allowed by the key host policy. SOCKS forwarding (-D) is not '
+    + 'or automatically, and the host must be allowed by the key host policy. The user is required, because '
+    + 'the ssh client config is not read (-F /dev/null) and there is no default user to fall back to — '
+    + 'without it ssh would connect as the local user of the executor. SOCKS forwarding (-D) is not '
     + 'supported. The tunnel always runs as a background process: it returns a process id and a log path '
     + 'immediately and stays up until it is stopped with process_stop.',
   parameters: sshTunnelSchema,
@@ -390,7 +399,7 @@ export const sshTunnelTool: ToolDefinition = {
 
     const command = buildSshTunnelCommand({
       host,
-      ...(params.user ? { user: params.user } : {}),
+      user: params.user,
       ...(params.port !== undefined ? { port: params.port } : {}),
       direction: params.direction,
       listenPort: params.listen_port,

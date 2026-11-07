@@ -16,6 +16,7 @@ import type { ProcessSpawnInput } from '../processes/types.js';
 import { computeToolAvailability } from '../permission/availability.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { renderUnavailableTools } from '../context/state-messages.js';
+import { zodToJsonSchema } from './json-schema.js';
 import { buildSshTunnelCommand, isSocksRequest, sshTunnelTool } from './ssh-tunnel.js';
 
 const PRIVATE_KEY = 'private-key-material';
@@ -145,6 +146,7 @@ describe('ssh_tunnel — сборка команды', () => {
   it('local: -L со спецификацией 127.0.0.1:<listen>:<target>:<port>', () => {
     const command = buildSshTunnelCommand({
       host: 'example.com',
+      user: 'deploy',
       direction: 'local',
       listenPort: 8080,
       targetHost: 'db.internal',
@@ -163,6 +165,7 @@ describe('ssh_tunnel — сборка команды', () => {
   it('remote: -R со спецификацией 127.0.0.1:<listen>:<target>:<port>', () => {
     const command = buildSshTunnelCommand({
       host: 'example.com',
+      user: 'deploy',
       direction: 'remote',
       listenPort: 9090,
       targetHost: '127.0.0.1',
@@ -177,6 +180,7 @@ describe('ssh_tunnel — сборка команды', () => {
   it('общая часть: -F /dev/null, BatchMode, accept-new, ExitOnForwardFailure, -N', () => {
     const command = buildSshTunnelCommand({
       host: 'example.com',
+      user: 'deploy',
       direction: 'local',
       listenPort: 8080,
       targetHost: 'db.internal',
@@ -221,6 +225,7 @@ describe('ssh_tunnel — сборка команды', () => {
   it('порт не задан — `-p` не добавляется', () => {
     const command = buildSshTunnelCommand({
       host: 'example.com',
+      user: 'deploy',
       direction: 'local',
       listenPort: 8080,
       targetHost: 'db.internal',
@@ -248,7 +253,7 @@ describe('ssh_tunnel — отказ от SOCKS (-D)', () => {
     const { ctx, spawn } = makeCtx({ store });
 
     const result = await sshTunnelTool.execute(
-      { host: 'example.com', direction: 'socks', listen_port: 1080, target_port: 5432 },
+      { host: 'example.com', user: 'deploy', direction: 'socks', listen_port: 1080, target_port: 5432 },
       ctx,
     );
 
@@ -305,7 +310,7 @@ describe('ssh_tunnel — запуск (фоновый процесс)', () => {
     const { ctx, spawn } = makeCtx({ store });
 
     const result = await sshTunnelTool.execute(
-      { host: 'example.com', direction: 'remote', listen_port: 9090, target_port: 5432 },
+      { host: 'example.com', user: 'deploy', direction: 'remote', listen_port: 9090, target_port: 5432 },
       ctx,
     );
 
@@ -323,6 +328,7 @@ describe('ssh_tunnel — запуск (фоновый процесс)', () => {
     await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -349,6 +355,7 @@ describe('ssh_tunnel — запуск (фоновый процесс)', () => {
     await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -370,6 +377,7 @@ describe('ssh_tunnel — гейт доступа (политика)', () => {
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -391,6 +399,7 @@ describe('ssh_tunnel — гейт доступа (политика)', () => {
     const denied = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -405,6 +414,7 @@ describe('ssh_tunnel — гейт доступа (политика)', () => {
     const allowed = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -423,6 +433,7 @@ describe('ssh_tunnel — гейт доступа (политика)', () => {
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -443,6 +454,7 @@ describe('ssh_tunnel — гейт доступа (политика)', () => {
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         key_id: 'key-1',
         direction: 'local',
         listen_port: 8080,
@@ -467,6 +479,7 @@ describe('ssh_tunnel — гейт доступа (политика)', () => {
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -484,12 +497,60 @@ describe('ssh_tunnel — гейт доступа (политика)', () => {
 });
 
 describe('ssh_tunnel — валидация аргументов', () => {
-  it('local без target_host → отказ (целевой хост обязателен)', async () => {
+  it('в JSON-схеме тула `user` — обязательное поле', () => {
+    // Модель видит схему тула: `user` должен быть в `required`, иначе она
+    // снова позовёт тул без пользователя.
+    const schema = zodToJsonSchema(sshTunnelTool.parameters) as {
+      required?: string[];
+      properties?: Record<string, { description?: string }>;
+    };
+    expect(schema.required).toContain('user');
+    expect(schema.properties?.user?.description).toContain('required');
+  });
+
+  it('без `user` → отказ валидации, туннель не запускается', async () => {
+    // Конфиг ssh не читается (`-F /dev/null`): без явного пользователя ssh
+    // подставил бы локального пользователя исполнителя (`node`) — вызов
+    // выглядел бы как сломанный инструмент.
     const store = new FakeSshKeyStore([usableKey()]);
     const { ctx, spawn } = makeCtx({ store });
 
     const result = await sshTunnelTool.execute(
       { host: 'example.com', direction: 'local', listen_port: 8080, target_port: 5432 },
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('user');
+    expect(spawn).not.toHaveBeenCalled();
+    // Секрет не раскрывался.
+    expect(store.revealCalls).toHaveLength(0);
+  });
+
+  it('пустой `user` и `user` с пробелом → отказ валидации', async () => {
+    const store = new FakeSshKeyStore([usableKey()]);
+    const { ctx, spawn } = makeCtx({ store });
+
+    const empty = await sshTunnelTool.execute(
+      { host: 'example.com', user: '', direction: 'local', listen_port: 8080, target_port: 5432 },
+      ctx,
+    );
+    const withSpace = await sshTunnelTool.execute(
+      { host: 'example.com', user: 'de ploy', direction: 'local', listen_port: 8080, target_port: 5432 },
+      ctx,
+    );
+
+    expect(empty.isError).toBe(true);
+    expect(withSpace.isError).toBe(true);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('local без target_host → отказ (целевой хост обязателен)', async () => {
+    const store = new FakeSshKeyStore([usableKey()]);
+    const { ctx, spawn } = makeCtx({ store });
+
+    const result = await sshTunnelTool.execute(
+      { host: 'example.com', user: 'deploy', direction: 'local', listen_port: 8080, target_port: 5432 },
       ctx,
     );
 
@@ -504,6 +565,7 @@ describe('ssh_tunnel — валидация аргументов', () => {
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db internal; rm -rf /',
@@ -523,6 +585,7 @@ describe('ssh_tunnel — валидация аргументов', () => {
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 70000,
         target_host: 'db.internal',
@@ -542,6 +605,7 @@ describe('ssh_tunnel — валидация аргументов', () => {
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -564,6 +628,7 @@ describe('ssh_tunnel — недоступность фоновых процес�
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -583,6 +648,7 @@ describe('ssh_tunnel — недоступность фоновых процес�
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',
@@ -602,6 +668,7 @@ describe('ssh_tunnel — недоступность фоновых процес�
     const result = await sshTunnelTool.execute(
       {
         host: 'example.com',
+        user: 'deploy',
         direction: 'local',
         listen_port: 8080,
         target_host: 'db.internal',

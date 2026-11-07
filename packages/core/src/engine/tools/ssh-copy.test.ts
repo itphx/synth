@@ -19,6 +19,7 @@ import type { ExecRequest, ExecResult, ExecutionPort } from '../../execution/por
 import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 import { computeToolAvailability } from '../permission/availability.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
+import { zodToJsonSchema } from './json-schema.js';
 import { buildSftpBatch, buildSftpCommand, sshCopyTool } from './ssh-copy.js';
 
 const PRIVATE_KEY = 'private-key-material';
@@ -218,10 +219,57 @@ describe('ssh_copy — сборка команды', () => {
     expect(command.args[5]).toBe('deploy@example.com');
   });
 
-  it('порт по умолчанию — 22, пользователь не задан — адрес без @', () => {
-    const command = buildSftpCommand({ host: 'example.com', batch: 'put a /b\n' });
+  it('порт по умолчанию — 22, адрес — всегда с пользователем', () => {
+    const command = buildSftpCommand({ host: 'example.com', user: 'deploy', batch: 'put a /b\n' });
     expect(command.args[4]).toBe('22');
-    expect(command.args[5]).toBe('example.com');
+    expect(command.args[5]).toBe('deploy@example.com');
+  });
+});
+
+describe('ssh_copy — пользователь обязателен', () => {
+  it('в JSON-схеме тула `user` — обязательное поле', () => {
+    // Модель видит схему тула: `user` должен быть в `required`, иначе она
+    // снова позовёт тул без пользователя.
+    const schema = zodToJsonSchema(sshCopyTool.parameters) as {
+      required?: string[];
+      properties?: Record<string, { description?: string }>;
+    };
+    expect(schema.required).toContain('user');
+    expect(schema.properties?.user?.description).toContain('required');
+  });
+
+  it('без `user` → отказ валидации, команда не запускается', async () => {
+    const store = new FakeSshKeyStore([usableKey()]);
+    const { ctx, port } = makeCtx({ store });
+
+    const result = await sshCopyTool.execute(
+      { host: 'example.com', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('user');
+    expect(port.requests).toHaveLength(0);
+    // Секрет не раскрывался.
+    expect(store.revealCalls).toHaveLength(0);
+  });
+
+  it('пустой `user` и `user` с пробелом → отказ валидации', async () => {
+    const store = new FakeSshKeyStore([usableKey()]);
+    const { ctx, port } = makeCtx({ store });
+
+    const empty = await sshCopyTool.execute(
+      { host: 'example.com', user: '', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
+      ctx,
+    );
+    const withSpace = await sshCopyTool.execute(
+      { host: 'example.com', user: 'de ploy', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
+      ctx,
+    );
+
+    expect(empty.isError).toBe(true);
+    expect(withSpace.isError).toBe(true);
+    expect(port.requests).toHaveLength(0);
   });
 });
 
@@ -256,7 +304,7 @@ describe('ssh_copy — вызов порта', () => {
     const { ctx, port } = makeCtx({ store });
 
     await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'dir', remote: '/tmp/dir', recursive: true },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'dir', remote: '/tmp/dir', recursive: true },
       ctx,
     );
 
@@ -268,7 +316,7 @@ describe('ssh_copy — вызов порта', () => {
     const { ctx, port } = makeCtx({ store });
 
     await sshCopyTool.execute(
-      { host: 'example.com', direction: 'download', local: 'a.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'download', local: 'a.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -282,7 +330,7 @@ describe('ssh_copy — доставка ключа', () => {
     const { ctx, port } = makeCtx({ store });
 
     await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -304,7 +352,7 @@ describe('ssh_copy — гейт доступа (политика)', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', key_id: 'key-1', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', key_id: 'key-1', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -321,7 +369,7 @@ describe('ssh_copy — гейт доступа (политика)', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -335,7 +383,7 @@ describe('ssh_copy — гейт доступа (политика)', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', port: 2222, direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', port: 2222, direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -351,7 +399,7 @@ describe('ssh_copy — валидация аргументов', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'a.txt\nput /etc/shadow /tmp/x', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'a.txt\nput /etc/shadow /tmp/x', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -364,7 +412,7 @@ describe('ssh_copy — валидация аргументов', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt\rput /etc/shadow /tmp/x' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt\rput /etc/shadow /tmp/x' },
       ctx,
     );
 
@@ -377,7 +425,7 @@ describe('ssh_copy — валидация аргументов', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'a.txt\0b', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'a.txt\0b', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -390,7 +438,7 @@ describe('ssh_copy — валидация аргументов', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'a.txt', remote: '-R' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'a.txt', remote: '-R' },
       ctx,
     );
 
@@ -403,7 +451,7 @@ describe('ssh_copy — валидация аргументов', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: '*.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: '*.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -416,7 +464,7 @@ describe('ssh_copy — валидация аргументов', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: '/etc/passwd', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: '/etc/passwd', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -429,7 +477,7 @@ describe('ssh_copy — валидация аргументов', () => {
     const { ctx, port } = makeCtx({ store });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'sideways', local: 'a.txt', remote: '/tmp/a.txt' } as never,
+      { host: 'example.com', user: 'deploy', direction: 'sideways', local: 'a.txt', remote: '/tmp/a.txt' } as never,
       ctx,
     );
 
@@ -450,7 +498,7 @@ describe('ssh_copy — периметр сессии (локальный пут�
     const { ctx, port } = makeCtx({ store, workingDir: workspace });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: '../outside.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: '../outside.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -472,7 +520,7 @@ describe('ssh_copy — периметр сессии (локальный пут�
     const { ctx, port } = makeCtx({ store, workingDir: workspace });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'link.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'link.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
@@ -489,7 +537,7 @@ describe('ssh_copy — периметр сессии (локальный пут�
     const { ctx, port } = makeCtx({ store, workingDir: root });
 
     const result = await sshCopyTool.execute(
-      { host: 'example.com', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
+      { host: 'example.com', user: 'deploy', direction: 'upload', local: 'a.txt', remote: '/tmp/a.txt' },
       ctx,
     );
 
