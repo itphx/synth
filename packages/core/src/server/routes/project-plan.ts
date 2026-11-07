@@ -1,5 +1,5 @@
 /**
- * HTTP-контур плана проекта (PROP-054, ADR-039).
+ * HTTP-контур плана проекта (ADR-130, ADR-039).
  *
  * Единая core-фабрика (standalone и managed — одна реализация; backend
  * добавляет только RBAC/i18n через `opts`).
@@ -20,6 +20,10 @@
  * Ошибки: `400 VALIDATION_ERROR` (в т.ч. лимиты Markdown), `403
  * PROJECT_FORBIDDEN`, `404 NOT_FOUND`, `409 PLAN_VERSION_CONFLICT` (в теле —
  * актуальный план).
+ *
+ * Гибрид (ADR-042/ADR-130): для `remote:`-проекта запрос **форвардится** на
+ * удалённый backend (права и валидация — там); без клиента — `502
+ * REMOTE_UNAVAILABLE`.
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -34,7 +38,6 @@ import {
 } from '@itphx/synth-shared';
 import type { ProjectPlan } from '@itphx/synth-shared';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
-import { isRemoteRef } from '../../remote/aggregate.js';
 import {
   PlanService,
   PlanColumnNotFoundError,
@@ -137,7 +140,10 @@ export function createProjectPlanRoutes(
   // GET /api/v2/projects/:id/plan — план целиком (для модального окна доски).
   app.get('/:id/plan', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
+    // Гибрид (ADR-042/ADR-130): план удалённого проекта живёт на сервере —
+    // форвард ДО локальной проверки (права/валидация — на удалённой стороне).
+    const forwarded = await access.forwardRemote(c, projectId, 'GET', '/plan');
+    if (forwarded) return forwarded;
     const guard = await access.authorize(c, projectId, 'read');
     if (guard instanceof Response) return guard;
     try {
@@ -153,8 +159,9 @@ export function createProjectPlanRoutes(
   // POST /api/v2/projects/:id/plan/items — создать пункт.
   app.post('/:id/plan/items', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(c, projectId, 'POST', '/plan/items', body);
+    if (forwarded) return forwarded;
     const parsed = planItemCreateSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     return mutate(c, projectId, (service) => service.createItem(projectId, parsed.data));
@@ -163,9 +170,12 @@ export function createProjectPlanRoutes(
   // PATCH /api/v2/projects/:id/plan/items/:itemId — правка полей пункта.
   app.patch('/:id/plan/items/:itemId', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const itemId = c.req.param('itemId');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(
+      c, projectId, 'PATCH', `/plan/items/${encodeURIComponent(itemId)}`, body,
+    );
+    if (forwarded) return forwarded;
     const parsed = planItemUpdateSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     return mutate(c, projectId, (service) => service.updateItem(projectId, itemId, parsed.data));
@@ -174,9 +184,12 @@ export function createProjectPlanRoutes(
   // PATCH /api/v2/projects/:id/plan/items/:itemId/move — перемещение пункта.
   app.patch('/:id/plan/items/:itemId/move', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const itemId = c.req.param('itemId');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(
+      c, projectId, 'PATCH', `/plan/items/${encodeURIComponent(itemId)}/move`, body,
+    );
+    if (forwarded) return forwarded;
     const parsed = planItemMoveSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     return mutate(c, projectId, (service) => service.moveItem(projectId, itemId, parsed.data));
@@ -185,16 +198,20 @@ export function createProjectPlanRoutes(
   // DELETE /api/v2/projects/:id/plan/items/:itemId — удалить пункт.
   app.delete('/:id/plan/items/:itemId', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const itemId = c.req.param('itemId');
+    const forwarded = await access.forwardRemote(
+      c, projectId, 'DELETE', `/plan/items/${encodeURIComponent(itemId)}`,
+    );
+    if (forwarded) return forwarded;
     return mutate(c, projectId, (service) => service.deleteItem(projectId, itemId));
   });
 
   // POST /api/v2/projects/:id/plan/columns — создать колонку.
   app.post('/:id/plan/columns', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(c, projectId, 'POST', '/plan/columns', body);
+    if (forwarded) return forwarded;
     const parsed = planColumnCreateSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     return mutate(c, projectId, (service) => service.addColumn(projectId, parsed.data));
@@ -203,9 +220,12 @@ export function createProjectPlanRoutes(
   // PATCH /api/v2/projects/:id/plan/columns/:columnId — переименовать/WIP.
   app.patch('/:id/plan/columns/:columnId', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const columnId = c.req.param('columnId');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(
+      c, projectId, 'PATCH', `/plan/columns/${encodeURIComponent(columnId)}`, body,
+    );
+    if (forwarded) return forwarded;
     const parsed = planColumnUpdateSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     return mutate(c, projectId, (service) => service.updateColumn(projectId, columnId, parsed.data));
@@ -214,9 +234,12 @@ export function createProjectPlanRoutes(
   // DELETE /api/v2/projects/:id/plan/columns/:columnId — удалить колонку.
   app.delete('/:id/plan/columns/:columnId', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const columnId = c.req.param('columnId');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(
+      c, projectId, 'DELETE', `/plan/columns/${encodeURIComponent(columnId)}`, body,
+    );
+    if (forwarded) return forwarded;
     const parsed = planColumnDeleteSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     return mutate(c, projectId, (service) => service.deleteColumn(projectId, columnId, parsed.data));
@@ -225,8 +248,9 @@ export function createProjectPlanRoutes(
   // PUT /api/v2/projects/:id/plan/columns/order — новый порядок колонок.
   app.put('/:id/plan/columns/order', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(c, projectId, 'PUT', '/plan/columns/order', body);
+    if (forwarded) return forwarded;
     const parsed = planColumnsOrderSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     return mutate(c, projectId, (service) => service.reorderColumns(projectId, parsed.data));

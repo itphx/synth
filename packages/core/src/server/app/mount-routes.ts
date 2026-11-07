@@ -286,22 +286,24 @@ export function mountStandaloneRoutes(
     },
   }));
 
-  // PROP-054: точечные операции плана проекта (`/projects/:id/plan*`) —
+  // ADR-130: точечные операции плана проекта (`/projects/:id/plan*`) —
   // та же core-фабрика, что и в managed; RBAC в standalone не разграничивается
-  // (единственный пользователь инстанса — владелец, ADR-079).
+  // (единственный пользователь инстанса — владелец, ADR-079). Гибрид (ADR-042):
+  // для `remote:`-проекта запрос форвардится на удалённый backend (права и
+  // валидация — там).
   app.route('/api/v2/projects', createProjectPlanRoutes(
     { requireAuth: auth.requireAuth },
     projectStore,
-    { sessionManager, eventBus },
+    { sessionManager, eventBus, getRemoteClient: () => getClient() },
   ));
 
-  // PROP-054: журнал проекта и инварианты (`/projects/:id/log*`,
+  // ADR-130: журнал проекта и инварианты (`/projects/:id/log*`,
   // `/projects/:id/invariants`). Журнал вынесен из детали проекта — это
-  // единственный источник записей.
+  // единственный источник записей. Гибрид (ADR-042) — форвард `remote:`.
   app.route('/api/v2/projects', createProjectLogRoutes(
     { requireAuth: auth.requireAuth },
     projectStore,
-    { sessionManager, eventBus },
+    { sessionManager, eventBus, getRemoteClient: () => getClient() },
   ));
 
   // Перенос проектов между мирами (гибрид, UI publish/fork): те же пути, что у

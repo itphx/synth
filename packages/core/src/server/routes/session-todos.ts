@@ -1,5 +1,5 @@
 /**
- * HTTP-контур списка задач сессии (ToDo) — PROP-054, ADR-039.
+ * HTTP-контур списка задач сессии (ToDo) — ADR-130, ADR-039.
  *
  * Единая core-фабрика: её зовут HTTP-роуты (`/api/v2/sessions/:id/todos*`).
  * Доступ — **существующий prefix-guard** сессий (`server/session-access-guard.ts`):
@@ -18,6 +18,11 @@
  * Все операции атомарны под `SessionManager.withLock`; отдельной версии ToDo
  * нет (конфликтов не бывает). После мутации публикуется `todos.updated` в
  * канал сессии (payload — актуальный список).
+ *
+ * Гибрид (ADR-042/ADR-130): для `remote:`-сессии запрос **форвардится** на
+ * удалённый backend (список задач живёт в его мире; права и валидация — там).
+ * Prefix-guard сессий `remote:`-id пропускает (`skipForId`), поэтому доступ
+ * проверяет удалённая сторона.
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -30,22 +35,31 @@ import {
 import type { TodoItem } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
+import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import {
   TodoService,
   TodoLimitExceededError,
   TodoNotFoundError,
   TodoValidationError,
 } from '../../engine/todo/service.js';
+import { forwardRemoteRequest, type RemoteForwardMethod } from './remote-forward.js';
 import type { ProjectWorkRoutesAuth } from './project-work.js';
 
 /** Зависимости фабрики ToDo. */
 export interface SessionTodoRoutesDeps extends ProjectWorkRoutesAuth {
   sessionManager: SessionManager;
   eventBus?: EventBus;
+  /**
+   * Гибрид (ADR-042/ADR-130): клиент удалённого backend — для форварда
+   * запросов к удалённой сессии (`remote:<uuid>`). Не задан (managed backend)
+   * — форварда нет.
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
 }
 
 /**
- * API списка задач сессии (PROP-054). Монтируется **внутрь** приложения сессий
+ * API списка задач сессии (ADR-130). Монтируется **внутрь** приложения сессий
  * (`app.route('/', …)`), чтобы доступ решал единый prefix-guard.
  */
 export function createSessionTodoRoutes(deps: SessionTodoRoutesDeps): Hono {
@@ -62,6 +76,32 @@ export function createSessionTodoRoutes(deps: SessionTodoRoutesDeps): Hono {
     return null;
   };
 
+  /**
+   * Форвард запроса к удалённой сессии (ADR-042/ADR-130).
+   *
+   * `null` — запрос локальный. Иначе — готовый HTTP-ответ (список задач
+   * удалённого мира). Форвард — **до** локального сервиса: и права, и
+   * валидация тела решает удалённая сторона.
+   */
+  const forwardRemote = async (
+    c: Context,
+    sessionId: string,
+    method: RemoteForwardMethod,
+    path: string,
+    body?: unknown,
+  ): Promise<Response | null> => {
+    if (!isRemoteRef(sessionId)) return null;
+    const client = deps.getRemoteClient?.() ?? null;
+    if (!client) {
+      return c.json(
+        { error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } },
+        502,
+      );
+    }
+    const fullPath = `/api/v2/sessions/${encodeURIComponent(toLocalId(sessionId))}${path}`;
+    return forwardRemoteRequest(c, client, method, fullPath, body);
+  };
+
   /** Ответ со списком + публикация `todos.updated` в канал сессии. */
   const respond = async (c: Context, sessionId: string, todos: TodoItem[]) => {
     deps.eventBus?.publish(sessionId, 'todos.updated', { session_id: sessionId, todos });
@@ -71,6 +111,8 @@ export function createSessionTodoRoutes(deps: SessionTodoRoutesDeps): Hono {
   // GET /api/v2/sessions/:id/todos — текущий список задач.
   app.get('/:id/todos', deps.requireAuth, async (c) => {
     const sessionId = c.req.param('id');
+    const forwarded = await forwardRemote(c, sessionId, 'GET', '/todos');
+    if (forwarded) return forwarded;
     try {
       return await respond(c, sessionId, await service.list(sessionId));
     } catch (err) {
@@ -84,6 +126,8 @@ export function createSessionTodoRoutes(deps: SessionTodoRoutesDeps): Hono {
   app.post('/:id/todos', deps.requireAuth, async (c) => {
     const sessionId = c.req.param('id');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await forwardRemote(c, sessionId, 'POST', '/todos', body);
+    if (forwarded) return forwarded;
     const parsed = todoCreateSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
@@ -102,6 +146,10 @@ export function createSessionTodoRoutes(deps: SessionTodoRoutesDeps): Hono {
     const sessionId = c.req.param('id');
     const todoId = c.req.param('todoId');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await forwardRemote(
+      c, sessionId, 'PATCH', `/todos/${encodeURIComponent(todoId)}`, body,
+    );
+    if (forwarded) return forwarded;
     const parsed = todoUpdateSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
@@ -119,6 +167,10 @@ export function createSessionTodoRoutes(deps: SessionTodoRoutesDeps): Hono {
   app.delete('/:id/todos/:todoId', deps.requireAuth, async (c) => {
     const sessionId = c.req.param('id');
     const todoId = c.req.param('todoId');
+    const forwarded = await forwardRemote(
+      c, sessionId, 'DELETE', `/todos/${encodeURIComponent(todoId)}`,
+    );
+    if (forwarded) return forwarded;
     try {
       return await respond(c, sessionId, await service.remove(sessionId, todoId));
     } catch (err) {
@@ -132,6 +184,8 @@ export function createSessionTodoRoutes(deps: SessionTodoRoutesDeps): Hono {
   app.put('/:id/todos/order', deps.requireAuth, async (c) => {
     const sessionId = c.req.param('id');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await forwardRemote(c, sessionId, 'PUT', '/todos/order', body);
+    if (forwarded) return forwarded;
     const parsed = todoOrderSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
@@ -149,6 +203,8 @@ export function createSessionTodoRoutes(deps: SessionTodoRoutesDeps): Hono {
   app.post('/:id/todos/clear', deps.requireAuth, async (c) => {
     const sessionId = c.req.param('id');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await forwardRemote(c, sessionId, 'POST', '/todos/clear', body);
+    if (forwarded) return forwarded;
     const parsed = todoClearSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);

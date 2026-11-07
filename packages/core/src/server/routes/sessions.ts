@@ -730,11 +730,13 @@ export function createSessionRoutes(
   }
 
   /**
-   * PROP-054: список задач сессии (ToDo) — точечные HTTP-операции
+   * ADR-130: список задач сессии (ToDo) — точечные HTTP-операции
    * (`/api/v2/sessions/:id/todos*`). Монтируется **внутрь** приложения
    * сессий, то есть под тем же prefix-guard'ом (вид доступа `read`/`write`
    * решает он, инвариант 16). Логика — в доменном сервисе
    * (`engine/todo/service.ts`), тот же, что у инструментов `todo_*`.
+   * Гибрид (ADR-042/ADR-130): для `remote:`-сессии запрос форвардится на
+   * удалённый backend (права/валидация — там).
    */
   app.route(
     '/',
@@ -742,6 +744,7 @@ export function createSessionRoutes(
       requireAuth: auth.requireAuth,
       sessionManager,
       eventBus: deps.eventBus,
+      getRemoteClient: () => resolveClient() ?? null,
     }),
   );
 

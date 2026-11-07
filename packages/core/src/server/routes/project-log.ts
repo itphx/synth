@@ -1,5 +1,5 @@
 /**
- * HTTP-контур журнала и инвариантов проекта (PROP-054).
+ * HTTP-контур журнала и инвариантов проекта (ADR-130).
  *
  * Единая core-фабрика (standalone и managed — одна реализация; backend
  * добавляет только RBAC/i18n через `opts`).
@@ -17,6 +17,10 @@
  *
  * Права: чтение — право чтения проекта, мутации — право изменения
  * содержимого (`VIEWER` читает, но не мутирует — инвариант 21).
+ *
+ * Гибрид (ADR-042/ADR-130): для `remote:`-проекта запрос **форвардится** на
+ * удалённый backend (права и валидация — там); без клиента — `502
+ * REMOTE_UNAVAILABLE`.
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -27,7 +31,6 @@ import {
 } from '@itphx/synth-shared';
 import type { ProjectLogEntry } from '@itphx/synth-shared';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
-import { isRemoteRef } from '../../remote/aggregate.js';
 import { paginate, parseBoundedInt } from '../pagination.js';
 import {
   ProjectLogService,
@@ -109,7 +112,13 @@ export function createProjectLogRoutes(
   // GET /api/v2/projects/:id/log — страница журнала (новые сверху).
   app.get('/:id/log', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
+    // Гибрид (ADR-042/ADR-130): журнал удалённого проекта — на сервере.
+    // Форвард ДО локальной проверки/валидации (права и лимиты — там).
+    const forwarded = await access.forwardRemote(c, projectId, 'GET', '/log', undefined, {
+      limit: c.req.query('limit'),
+      offset: c.req.query('offset'),
+    });
+    if (forwarded) return forwarded;
     const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_PROJECT_LOG_LIMIT, MAX_PROJECT_LOG_LIMIT);
     if (limit === null) {
       return access.jsonInvalid(c, 'limit должен быть целым числом');
@@ -140,8 +149,9 @@ export function createProjectLogRoutes(
   // POST /api/v2/projects/:id/log — новая запись журнала.
   app.post('/:id/log', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(c, projectId, 'POST', '/log', body);
+    if (forwarded) return forwarded;
     const parsed = projectLogCreateSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     const guard = await access.authorize(c, projectId, 'write');
@@ -167,9 +177,12 @@ export function createProjectLogRoutes(
   // PATCH /api/v2/projects/:id/log/:entryId — правка текста записи.
   app.patch('/:id/log/:entryId', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const entryId = c.req.param('entryId');
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(
+      c, projectId, 'PATCH', `/log/${encodeURIComponent(entryId)}`, body,
+    );
+    if (forwarded) return forwarded;
     const parsed = projectLogUpdateSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     const guard = await access.authorize(c, projectId, 'write');
@@ -195,8 +208,11 @@ export function createProjectLogRoutes(
   // DELETE /api/v2/projects/:id/log/:entryId — удалить запись.
   app.delete('/:id/log/:entryId', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const entryId = c.req.param('entryId');
+    const forwarded = await access.forwardRemote(
+      c, projectId, 'DELETE', `/log/${encodeURIComponent(entryId)}`,
+    );
+    if (forwarded) return forwarded;
     const guard = await access.authorize(c, projectId, 'write');
     if (guard instanceof Response) return guard;
     try {
@@ -217,7 +233,8 @@ export function createProjectLogRoutes(
   // GET /api/v2/projects/:id/invariants — текст инвариантов + время записи.
   app.get('/:id/invariants', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
+    const forwarded = await access.forwardRemote(c, projectId, 'GET', '/invariants');
+    if (forwarded) return forwarded;
     const guard = await access.authorize(c, projectId, 'read');
     if (guard instanceof Response) return guard;
     try {
@@ -233,8 +250,9 @@ export function createProjectLogRoutes(
   // PUT /api/v2/projects/:id/invariants — заменить текст инвариантов.
   app.put('/:id/invariants', auth.requireAuth, async (c) => {
     const projectId = c.req.param('id');
-    if (isRemoteRef(projectId)) return access.jsonRemoteUnavailable(c);
     const body = await c.req.json().catch(() => ({}));
+    const forwarded = await access.forwardRemote(c, projectId, 'PUT', '/invariants', body);
+    if (forwarded) return forwarded;
     const parsed = projectInvariantsUpdateSchema.safeParse(body);
     if (!parsed.success) return access.jsonInvalid(c, parsed.error.message);
     const guard = await access.authorize(c, projectId, 'write');

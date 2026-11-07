@@ -1145,6 +1145,71 @@ describe('createStandaloneApp: серверные MCP-серверы гибри�
   });
 });
 
+describe('createStandaloneApp: форвард work-роутов на удалённый backend (ADR-130)', () => {
+  it('план удалённого проекта уходит на backend (проверка монтирования)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-work-forward-'));
+    try {
+      const seen: string[] = [];
+      vi.stubGlobal('fetch', hybridFetchMock({
+        onOther: (url) => {
+          seen.push(url);
+          return jsonResponse({ plan: { version: 7, columns: [], items: [] } });
+        },
+      }));
+
+      const handle = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+      });
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+
+      const res = await handle.app.request('/api/v2/projects/remote:abc/plan', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { plan: { version: number } };
+      expect(body.plan.version).toBe(7);
+      // Id без префикса `remote:` — форвард снимает префикс.
+      expect(seen.some((u) => u.includes('/api/v2/projects/abc/plan'))).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('список задач удалённой сессии уходит на backend (проверка монтирования)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-todos-forward-'));
+    try {
+      const seen: string[] = [];
+      vi.stubGlobal('fetch', hybridFetchMock({
+        onOther: (url) => {
+          seen.push(url);
+          return jsonResponse({ todos: [{ id: 't-1', content: 'шаг', status: 'pending', priority: 'medium' }] });
+        },
+      }));
+
+      const handle = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+      });
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+
+      const res = await handle.app.request('/api/v2/sessions/remote:abc/todos', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { todos: Array<{ id: string }> };
+      expect(body.todos[0]?.id).toBe('t-1');
+      expect(seen.some((u) => u.includes('/api/v2/sessions/abc/todos'))).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 describe('createStandaloneApp: SSE /api/v2/events (standalone, subscribeAll)', () => {
   it('доставляет событие сессии, созданной ПОСЛЕ подключения подписчика (ADR-089)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'synth-app-sse-standalone-'));

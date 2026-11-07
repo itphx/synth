@@ -1,6 +1,6 @@
 /**
  * Общие помощники проектных HTTP-роутов «план / журнал / инварианты»
- * (PROP-054).
+ * (ADR-130).
  *
  * Права доступа (ADR-089 §5.5/§5.8, инвариант 21):
  * - чтение — право **чтения** проекта (`canRead`: владелец / любой участник,
@@ -10,10 +10,20 @@
  *
  * Проверка — **на границе** роута (инвариант 16): обработчик только читает
  * уже проверенный проект и применяет мутацию.
+ *
+ * Гибрид (ADR-042/ADR-130): проект удалённого мира (`remote:<uuid>`) в
+ * локальном порте не лежит — запрос **форвардится** на удалённый backend, и
+ * права/валидация решает **он** (своим токеном и своими правилами проекта).
  */
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { Project } from '@itphx/synth-shared';
+import type { RemoteBackendClient } from '../../remote/client.js';
+import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
+import {
+  forwardRemoteRequest,
+  type RemoteForwardMethod,
+} from './remote-forward.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 export type Middleware = ReturnType<typeof createMiddleware>;
@@ -48,6 +58,14 @@ export interface ProjectWorkRoutesOptions {
   getCurrentUserId?: (c: Context) => string | Promise<string>;
   /** Сообщения (backend — i18n). */
   messages?: Partial<ProjectWorkRouteMessages>;
+  /**
+   * Гибрид (ADR-042/ADR-130): клиент удалённого backend — для форварда
+   * запросов к удалённому проекту (`remote:<uuid>`).
+   *
+   * Не задан (managed backend) — форварда нет: `remote:`-id получает
+   * `502 REMOTE_UNAVAILABLE` (managed не обслуживает удалённые проекты).
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
 }
 
 /** Результат проверки доступа к проекту. */
@@ -122,5 +140,50 @@ export function createProjectWorkAccess(
     return { project, userId };
   };
 
-  return { messages, currentUserId, jsonForbidden, jsonNotFound, jsonInvalid, jsonRemoteUnavailable, authorize };
+  /**
+   * Форвард запроса к удалённому проекту (ADR-042/ADR-130).
+   *
+   * `null` — запрос **локальный** (вызывающий продолжает локальную обработку:
+   * проверка доступа, валидация тела, доменный сервис). Иначе — готовый
+   * HTTP-ответ (успех или ошибка удалённой стороны).
+   *
+   * Порядок в обработчике: форвард — **до** локальной проверки доступа и
+   * валидации: удалённая сторона сама проверяет RBAC и валидирует тело по
+   * своим правилам (ADR-130).
+   *
+   * `path` — путь **после** `/api/v2/projects/:id` (например `/plan`),
+   * `query` — параметры запроса (пробрасываются как есть).
+   */
+  const forwardRemote = async (
+    c: Context,
+    projectId: string,
+    method: RemoteForwardMethod,
+    path: string,
+    body?: unknown,
+    query?: Record<string, string | number | undefined>,
+  ): Promise<Response | null> => {
+    if (!isRemoteRef(projectId)) return null;
+    const client = opts.getRemoteClient?.() ?? null;
+    if (!client) return jsonRemoteUnavailable(c);
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value === undefined) continue;
+      search.set(key, String(value));
+    }
+    const qs = search.toString();
+    const fullPath =
+      `/api/v2/projects/${encodeURIComponent(toLocalId(projectId))}${path}${qs ? `?${qs}` : ''}`;
+    return forwardRemoteRequest(c, client, method, fullPath, body);
+  };
+
+  return {
+    messages,
+    currentUserId,
+    jsonForbidden,
+    jsonNotFound,
+    jsonInvalid,
+    jsonRemoteUnavailable,
+    authorize,
+    forwardRemote,
+  };
 }

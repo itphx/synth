@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-11-08 (**PROP-054** — **§5.8.2** (новая секция): план/журнал/
+> ⚠️ RU-версия обновлена 2026-11-08 (**ADR-130** (бывший PROP-054) — **§5.8.2** (новая секция): план/журнал/
 > инварианты проекта — эндпоинты, версия плана (409 `PLAN_VERSION_CONFLICT`), лимиты Markdown, RBAC,
 > события; **§5.8** — в детали проекта поля `log` **больше нет** (журнал — постранично),
 > примечание о переносе журнала в гибриде (fork — страницами, publish — не переносится);
@@ -11,6 +11,10 @@
 > `project.updated` (`{project_id, kind:'log'|'invariants'}`), `todos.updated` (`{todos}`);
 > **§5** — пагинация журнала в общем блоке; **§5.30** — namespaces SDK (план/журнал/инварианты/ToDo)
 > — **переведено**).
+> ⚠️ RU-версия обновлена 2026-11-08 (**ADR-130** — **гибрид**: §5.8.2 (план/журнал/инварианты) и §5.5
+> (ToDo) удалённой сущности **форвардятся** на удалённый backend (права/валидация — там; ответ
+> удалённой стороны — как есть, `204` — пустое тело, `502 OFFLINE`/`401 UNAUTHORIZED` на ошибках
+> транспорта, без клиента — `502 REMOTE_UNAVAILABLE`) — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-03 (**§5.12** — `GET /api/v2/fs/raw`: inline-allowlist
 > (`INLINE_PREVIEW_KINDS`), MIME по расширению, SVG-CSP, `Range`/206, `ETag`/304, cap
 > `storage.maxPreviewBytes` → `413 FILE_TOO_LARGE` — **переведено**).
@@ -597,7 +601,8 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 
 > **Session DTO — `activity` (idle | busy | retry).** An additive field of a serialized session (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) — the **server-side activity status**: `{type: 'idle'}` | `{type: 'busy', turnId: string\|null, streamId: string\|null}` | `{type: 'retry', attempt: number, maxRetries: number, retryAt: string, error?: string, streamId: string}`. Priority: **retry > busy > idle**. `busy` — a turn is running (`current_stream`) or the session is locked (`status.blocked`); `retry` — the LLM call failed with a recoverable error and the processor is waiting for the backoff (`attempt`/`maxRetries` — the attempt number and the limit, `retryAt` — the ISO time of the next attempt, `error` — the text of the last error). The retry state is **persistent** (file store — the `retry` field; PostgreSQL — the `sessions.retry` jsonb column, migration `030`), so after a reload/restart the client sees “retrying” rather than “empty”; it is cleared on a new `stream.start`, on success, on a terminal error and on cancellation/queue reset.
 
-> **The session task list (ToDo) — `/api/v2/sessions/:id/todos*` (PROP-054).** All operations are atomic under `SessionManager.withLock` (a per-session lock); the ToDo list has no version of its own (there are no conflicts). Access — the **single prefix guard** of the sessions: reading (`GET /:id/todos`) — read access, mutations — write access (the owner/a project member with the modification right/`LEAD`/`ADMIN`); there are no checks in the handler (invariant 16). After every mutation `todos.updated` is published to the session channel with the current list. The order of the list is the order of the array; `order` accepts only existing ids (unknown ids are ignored, the items not named are appended to the end — deleted items are not resurrected). The item text is Markdown, limit 4 KiB (`MARKDOWN_LIMITS.todoContent`); exceeding it — `400 VALIDATION_ERROR`. The logic lives in the domain service `engine/todo/service.ts` — the same one the `todo_*` tools use.
+> **The session task list (ToDo) — `/api/v2/sessions/:id/todos*` (ADR-130).** All operations are atomic under `SessionManager.withLock` (a per-session lock); the ToDo list has no version of its own (there are no conflicts). Access — the **single prefix guard** of the sessions: reading (`GET /:id/todos`) — read access, mutations — write access (the owner/a project member with the modification right/`LEAD`/`ADMIN`); there are no checks in the handler (invariant 16). After every mutation `todos.updated` is published to the session channel with the current list. The order of the list is the order of the array; `order` accepts only existing ids (unknown ids are ignored, the items not named are appended to the end — deleted items are not resurrected). The item text is Markdown, limit 4 KiB (`MARKDOWN_LIMITS.todoContent`); exceeding it — `400 VALIDATION_ERROR`. The logic lives in the domain service `engine/todo/service.ts` — the same one the `todo_*` tools use.
+> **Hybrid (ADR-042/ADR-130).** For a remote session (`remote:<uuid>`) the operations are **forwarded** to the remote backend (the method, the path and the body are preserved; the id is sent without the `remote:` prefix). The session prefix guard skips the `remote:` ids — the access and the validation are decided by the remote side. The response is returned as is (the status + the body), the transport errors — `502 OFFLINE`/`401 UNAUTHORIZED`; the hybrid is not configured — `502 REMOTE_UNAVAILABLE`.
 
 ### 5.6 Messages — `/api/v2/messages`
 
@@ -767,9 +772,15 @@ owner/any member, including `VIEWER`, as well as `LEAD`/`ADMIN`); mutations — 
 > (`kind:'log'`), after an invariants mutation — `project.updated` (`kind:'invariants'`) —
 > also to the channels of every session of the project.
 >
-> **Hybrid.** For a remote project (`remote:<uuid>`) the operations are not supported —
-> `502 REMOTE_UNAVAILABLE` (editing the plan of a remote project — via
-> `PUT /api/v2/projects/:id {plan}`).
+> **Hybrid (ADR-042/ADR-130).** For a remote project (`remote:<uuid>`) the operations are
+> **forwarded** to the remote backend: the method, the path, the body and the query
+> (`limit`/`offset`) are preserved, the local id is stripped (the `remote:` prefix). The rights
+> and the validation are decided by the **remote side** (with its own token and its own project
+> rules) — therefore the forward happens **before** the local access check and the local body
+> validation. The remote response is returned as is: the status and the body (including
+> `409 PLAN_VERSION_CONFLICT` with the current plan), `204` — an empty body. Transport errors —
+> `502 OFFLINE` (the server is unreachable) and `401 UNAUTHORIZED`; the hybrid is not configured
+> (no client) — `502 REMOTE_UNAVAILABLE`.
 
 ### 5.8.1 Portable project export/import — `/api/v2/projects` (both, ADR-091 §6)
 
