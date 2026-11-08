@@ -309,7 +309,7 @@ function deserializePart(data: SerializedPart): Part {
 const MESSAGE_STATUSES: readonly string[] = ['streaming', 'completed', 'cancelled', 'error'];
 
 /** Статус сообщения из колонки `status` (неизвестное значение → `undefined`). */
-function toMessageStatus(value: unknown): Message['status'] {
+export function toMessageStatus(value: unknown): Message['status'] {
   return typeof value === 'string' && MESSAGE_STATUSES.includes(value)
     ? (value as Message['status'])
     : undefined;

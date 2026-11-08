@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import type { Session, Message, MessageStatus, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, SessionWorktree, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, normalizeSessionParticipantRole, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
-import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
+import { findMessageIndex, isStaleDraftWrite, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
 
 export interface StorageConfig {
   dataDir: string;
@@ -698,7 +698,10 @@ export class FileStore implements SessionRepository {
       if (!session) return null;
       const index = findMessageIndex(session.messages, message);
       if (index < 0) return null;
-      const updated = prepareMessageForUpdate(session.messages[index]!, message);
+      const target = session.messages[index]!;
+      // ADR-118 §5: поздняя запись черновика не «воскрешает» закрытый шаг.
+      if (isStaleDraftWrite(target, message)) return target;
+      const updated = prepareMessageForUpdate(target, message);
       session.messages[index] = updated;
       session.updatedAt = nowISO();
       await this._writeSession(session);

@@ -74,6 +74,7 @@ import {
   referenceRow,
   serializeSession,
   stickyNoteRow,
+  toMessageStatus,
   type CheckpointRow,
   type MessageRow,
   type SessionChildren,
@@ -235,6 +236,38 @@ function prepareMessage(message: Message): Message {
       : [makeTextPart(message.content ?? '')],
     createdAt: message.createdAt || nowISO(),
   };
+}
+
+/**
+ * ADR-118 §5: запись черновика частичного стрима — статус `streaming` либо
+ * `metadata.streaming === true`.
+ *
+ * **Паритет с портом**: источник истины — `isDraftMessageWrite` в
+ * `packages/core/src/storage/message-write.ts` (file/memory используют его
+ * напрямую). Драйвер не тянет core рантаймом (только `import type`,
+ * ADR-097), поэтому предикат продублирован здесь — при правке синхронизируйте
+ * оба места.
+ */
+function isDraftMessageWrite(message: Message): boolean {
+  return message.status === 'streaming' || message.metadata?.streaming === true;
+}
+
+/**
+ * ADR-118 §5: поздняя запись черновика поверх **закрытого** сообщения
+ * (терминальный статус `completed`/`cancelled`/`error`). Такая запись
+ * игнорируется целиком — иначе черновик откатит шаг в `streaming` и затрёт
+ * финальный текст.
+ *
+ * Паритет с `isStaleDraftWrite`/`isTerminalMessageStatus` из
+ * `packages/core/src/storage/message-write.ts` (см. комментарий выше).
+ * `target` принимает частичную запись (драйверу достаточно `status` из
+ * `SELECT`), поэтому тип — `{ status }`, а не полный `Message`.
+ */
+function isStaleDraftWrite(target: { status: Message['status'] | null }, incoming: Message): boolean {
+  const terminal = target.status === 'completed'
+    || target.status === 'cancelled'
+    || target.status === 'error';
+  return terminal && isDraftMessageWrite(incoming);
 }
 
 /**
@@ -543,12 +576,23 @@ export class PostgresSessionRepository implements SessionRepository {
     return this._connection.withTransaction(async (tx) => {
       await this._lockSession(tx, sessionId);
 
-      const messageUid = await this._findMessageUid(tx, sessionId, prepared);
-      if (!messageUid) return null;
+      const target = await this._findMessageTarget(tx, sessionId, prepared);
+      if (!target) return null;
+
+      // ADR-118 §5: поздняя запись черновика не «воскрешает» закрытый шаг —
+      // ни строки, ни `sessions.updated_at` не трогаем, отдаём текущую запись.
+      if (isStaleDraftWrite(target, prepared)) {
+        const current = await tx.query<MessageRow>(
+          'SELECT * FROM messages WHERE message_uid = $1',
+          [target.uid],
+        );
+        const currentRow = current[0];
+        return currentRow ? deserializeMessage(currentRow) : null;
+      }
 
       const updated = await tx.query<MessageRow>(
         `UPDATE messages SET ${setSql} WHERE message_uid = $${params.length + 1} RETURNING *`,
-        [...params, messageUid],
+        [...params, target.uid],
       );
       await tx.query('UPDATE sessions SET updated_at = now() WHERE id = $1', [sessionId]);
 
@@ -730,30 +774,32 @@ export class PostgresSessionRepository implements SessionRepository {
   }
 
   /**
-   * `message_uid` цели `updateMessage`: сначала по `seq` (при legacy-дублях —
-   * первая по `seq, created_at, id`), затем fallback по доменному `id`.
+   * Цель `updateMessage`: `message_uid` строки + её текущий `status`
+   * (ADR-118 §5 — для проверки «поздняя запись черновика поверх закрытого
+   * шага»). Сначала по `seq` (при legacy-дублях — первая по
+   * `seq, created_at, id`), затем fallback по доменному `id`.
    */
-  private async _findMessageUid(
+  private async _findMessageTarget(
     tx: PostgresExecutor,
     sessionId: string,
     message: Message,
-  ): Promise<string | null> {
+  ): Promise<{ uid: string; status: Message['status'] | null } | null> {
     if (Number.isFinite(message.seq)) {
-      const rows = await tx.query<{ message_uid: string }>(
-        'SELECT message_uid FROM messages WHERE session_id = $1 AND seq = $2 '
+      const rows = await tx.query<{ message_uid: string; status: unknown }>(
+        'SELECT message_uid, status FROM messages WHERE session_id = $1 AND seq = $2 '
           + 'ORDER BY seq, created_at, id LIMIT 1',
         [sessionId, message.seq],
       );
-      if (rows[0]) return rows[0].message_uid;
+      if (rows[0]) return { uid: rows[0].message_uid, status: toMessageStatus(rows[0].status) ?? null };
     }
 
     if (message.id) {
-      const rows = await tx.query<{ message_uid: string }>(
-        'SELECT message_uid FROM messages WHERE session_id = $1 AND id = $2 '
+      const rows = await tx.query<{ message_uid: string; status: unknown }>(
+        'SELECT message_uid, status FROM messages WHERE session_id = $1 AND id = $2 '
           + 'ORDER BY seq, created_at, id LIMIT 1',
         [sessionId, message.id],
       );
-      if (rows[0]) return rows[0].message_uid;
+      if (rows[0]) return { uid: rows[0].message_uid, status: toMessageStatus(rows[0].status) ?? null };
     }
 
     return null;

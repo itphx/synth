@@ -160,6 +160,10 @@ export class StreamMessageDraft {
    * вызовы лишь помечают черновик «грязным» и дописываются после).
    */
   async flush(): Promise<void> {
+    // После `finalize`/`abort`/`dispose` поздняя троттлинг-запись не должна
+    // «воскрешать» шаг: `status: 'streaming'` вернул бы закрытый шаг в живое
+    // состояние и затёр бы терминальную запись (metadata, content, parts).
+    if (this._closed) return;
     if (!this._ref) {
       if (this._appendPromise) await this._appendPromise;
       if (!this._ref || this._closed) return;
@@ -229,7 +233,14 @@ export class StreamMessageDraft {
     });
 
     try {
-      await this._sessionManager.updateMessage(this._sessionId, message);
+      const saved = await this._sessionManager.updateMessage(this._sessionId, message);
+      // `null` — сообщение не найдено (битый/удалённый файл, гонка): шаг
+      // останется `streaming`, поэтому это не тишина, а диагностика.
+      if (!saved) {
+        this._warnOnce(
+          `StreamMessageDraft: финальная запись шага не применена (сообщение не найдено): ${this.messageId()}`,
+        );
+      }
     } catch (e) {
       this._warnOnce(`StreamMessageDraft: не удалось финализировать сообщение: ${errorText(e)}`);
     }
@@ -299,7 +310,14 @@ export class StreamMessageDraft {
     });
 
     try {
-      await this._sessionManager.updateMessage(this._sessionId, message);
+      const saved = await this._sessionManager.updateMessage(this._sessionId, message);
+      // `null` — сообщение не найдено: частичный текст не сохранён, запись
+      // осталась в промежуточном состоянии — предупреждаем.
+      if (!saved) {
+        this._warnOnce(
+          `StreamMessageDraft: прерванный стрим не сохранён (сообщение не найдено): ${this.messageId()}`,
+        );
+      }
     } catch (e) {
       this._warnOnce(`StreamMessageDraft: не удалось сохранить прерванный стрим: ${errorText(e)}`);
     }
@@ -400,6 +418,9 @@ export class StreamMessageDraft {
   }
 
   private async _write(flags: { streaming: boolean }): Promise<void> {
+    // Defense in depth: между `await`-ами вызывающего `_closed` мог стать true
+    // (`finalize`/`abort`/`dispose` уже записали терминальное состояние).
+    if (this._closed) return;
     if (!this._ref) return;
 
     const content = this._content;
@@ -419,7 +440,14 @@ export class StreamMessageDraft {
 
     try {
       const saved = await this._sessionManager.updateMessage(this._sessionId, message);
-      if (!saved) return;
+      if (!saved) {
+        // `null` — сообщение не найдено: инкрементальная запись не применилась.
+        // `_warnOnce` дедуплицирует по черновику, поэтому спама нет.
+        this._warnOnce(
+          `StreamMessageDraft: частичный стрим не обновлён (сообщение не найдено): ${this.messageId()}`,
+        );
+        return;
+      }
       this._persistedContent = content;
       this._persistedReasoning = reasoning;
       this._lastPersistedAt = Date.now();

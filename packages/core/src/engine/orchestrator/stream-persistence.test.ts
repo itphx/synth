@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Message } from '@itphx/synth-shared';
-import { MessageRole } from '@itphx/synth-shared';
+import { MessageRole, makeTextPart } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import { StreamMessageDraft } from './stream-persistence.js';
 
@@ -21,13 +21,24 @@ function makeBase(): Omit<Message, 'id' | 'seq' | 'content' | 'parts' | 'created
   };
 }
 
-function makeDraft(overrides: { intervalMs?: number; minChars?: number; warn?: (m: string) => void } = {}) {
+function makeDraft(
+  overrides: {
+    intervalMs?: number;
+    minChars?: number;
+    warn?: (m: string) => void;
+    /** Замена `updateMessage`: например, «сообщение не найдено» → `null`. */
+    updateMessageImpl?: (sessionId: string, message: Message) => Promise<Message | null>;
+  } = {},
+) {
+  const { updateMessageImpl, ...options } = overrides;
   const appendMessage = vi.fn(async (_sessionId: string, message: Message) => ({
     ...message,
     id: message.id,
     seq: 7,
   }));
-  const updateMessage = vi.fn(async (_sessionId: string, message: Message) => message);
+  const updateMessage = vi.fn(
+    updateMessageImpl ?? (async (_sessionId: string, message: Message) => message),
+  );
   const sessionManager = { appendMessage, updateMessage } as unknown as DraftManager;
   const draft = new StreamMessageDraft({
     sessionManager,
@@ -35,9 +46,24 @@ function makeDraft(overrides: { intervalMs?: number; minChars?: number; warn?: (
     base: makeBase(),
     intervalMs: 1000,
     minChars: 4096,
-    ...overrides,
+    ...options,
   });
   return { draft, appendMessage, updateMessage };
+}
+
+/**
+ * Доводит черновик до «грязного» состояния: запись создана, но актуальное
+ * содержимое ещё не записано, таймер троттлинга запланирован. Именно так
+ * выглядит черновик в момент `finalize`/`abort`/`dispose`.
+ */
+async function makeDirtyDraft(
+  overrides: Parameters<typeof makeDraft>[0] = {},
+): Promise<ReturnType<typeof makeDraft>> {
+  const made = makeDraft(overrides);
+  made.draft.push('a', '');
+  await vi.advanceTimersByTimeAsync(0);
+  made.draft.push('ab', '');
+  return made;
 }
 
 describe('StreamMessageDraft (шаг 2б)', () => {
@@ -219,6 +245,111 @@ describe('StreamMessageDraft (шаг 2б)', () => {
       type: 'text',
       data: 'начало ответа',
     });
+
+    await draft.dispose();
+  });
+
+  it('flush после finalize не «воскрешает» шаг статусом streaming', async () => {
+    const { draft, updateMessage } = await makeDirtyDraft();
+    const ref = draft.ref();
+
+    await draft.finalize({
+      content: 'финал',
+      parts: [makeTextPart('финал')],
+      reasoning: '',
+      toolCalls: [{ id: 'call_1', function: { name: 'read_file', arguments: '{}' } }],
+      status: 'completed',
+    });
+
+    expect(updateMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessage.mock.calls[0]![1].status).toBe('completed');
+
+    // Поздняя троттлинг-запись (гонка с таймером, `await draft.flush()` из
+    // оркестратора) не должна ни писать, ни портить финальную запись.
+    await draft.flush();
+
+    expect(updateMessage).toHaveBeenCalledTimes(1);
+    const last = updateMessage.mock.calls.at(-1)![1];
+    expect(last.status).toBe('completed');
+    expect(last.metadata?.streaming).toBeUndefined();
+    expect(last.id).toBe(ref!.id);
+    expect(last.content).toBe('финал');
+    expect(last.toolCalls).toHaveLength(1);
+  });
+
+  it('flush после abort не перетирает терминальный статус', async () => {
+    const { draft, updateMessage } = await makeDirtyDraft();
+
+    await draft.abort('причина', 'cancelled');
+
+    expect(updateMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessage.mock.calls[0]![1].status).toBe('cancelled');
+
+    await draft.flush();
+
+    expect(updateMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessage.mock.calls.at(-1)![1].status).toBe('cancelled');
+    expect(updateMessage.mock.calls.at(-1)![1].metadata).toMatchObject({
+      streaming: false,
+      interrupted: true,
+    });
+  });
+
+  it('flush после dispose не пишет ничего', async () => {
+    const { draft, updateMessage } = await makeDirtyDraft();
+
+    await draft.dispose();
+    await draft.flush();
+
+    expect(updateMessage).not.toHaveBeenCalled();
+  });
+
+  it('не применённая финальная запись (updateMessage → null) — предупреждение с id сообщения', async () => {
+    const warn = vi.fn();
+    const { draft } = await makeDirtyDraft({ warn, updateMessageImpl: async () => null });
+    const id = draft.messageId();
+
+    const ref = await draft.finalize({ content: 'финал', parts: [makeTextPart('финал')] });
+
+    // Финализация не бросает и не теряет ссылку на запись.
+    expect(ref).toEqual(draft.ref());
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toBe(
+      `StreamMessageDraft: финальная запись шага не применена (сообщение не найдено): ${id}`,
+    );
+    expect(warn.mock.calls[0]![0]).not.toContain('не удалось финализировать');
+  });
+
+  it('не применённое сохранение прерванного стрима (updateMessage → null) — предупреждение с id', async () => {
+    const warn = vi.fn();
+    const { draft } = await makeDirtyDraft({ warn, updateMessageImpl: async () => null });
+    const id = draft.messageId();
+
+    await draft.abort('причина', 'cancelled');
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toBe(
+      `StreamMessageDraft: прерванный стрим не сохранён (сообщение не найдено): ${id}`,
+    );
+  });
+
+  it('не применённая промежуточная запись (updateMessage → null) — одно предупреждение без спама', async () => {
+    const warn = vi.fn();
+    const { draft, updateMessage } = await makeDirtyDraft({
+      warn,
+      updateMessageImpl: async () => null,
+    });
+    const id = draft.messageId();
+
+    await draft.flush();
+    draft.push('abc', '');
+    await draft.flush();
+
+    expect(updateMessage).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toBe(
+      `StreamMessageDraft: частичный стрим не обновлён (сообщение не найдено): ${id}`,
+    );
 
     await draft.dispose();
   });

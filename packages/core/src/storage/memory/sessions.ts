@@ -23,7 +23,7 @@ import type {
   SessionFilter,
   SessionRepository,
 } from '../ports/index.js';
-import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from '../message-write.js';
+import { findMessageIndex, isStaleDraftWrite, prepareMessageForAppend, prepareMessageForUpdate } from '../message-write.js';
 
 /**
  * Порт хранилища сессий поверх `Map` (семантика `FileStore`).
@@ -84,7 +84,10 @@ export class MemorySessionRepository implements SessionRepository {
     if (!session) return null;
     const index = findMessageIndex(session.messages, message);
     if (index < 0) return null;
-    const updated = prepareMessageForUpdate(session.messages[index]!, message);
+    const target = session.messages[index]!;
+    // ADR-118 §5: поздняя запись черновика не «воскрешает» закрытый шаг.
+    if (isStaleDraftWrite(target, message)) return structuredClone(target);
+    const updated = prepareMessageForUpdate(target, message);
     session.messages[index] = structuredClone(updated);
     session.updatedAt = nowISO();
     return structuredClone(updated);

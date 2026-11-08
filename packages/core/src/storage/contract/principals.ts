@@ -5,7 +5,7 @@ import type {
   SessionRepository,
   SettingsRepository,
 } from '../ports/index.js';
-import { MessageRole, ProjectRole } from '@itphx/synth-shared';
+import { MessageRole, ProjectRole, makeTextPart } from '@itphx/synth-shared';
 import { makeProfile, makeProject, makeSession, makeMessage } from './helpers.js';
 
 /** Паспорт порта `SessionRepository`: round-trip, список, видимость, поиск, сортировка. */
@@ -244,6 +244,115 @@ export function describeSessionRepository(
         seq: 99,
       })).toBeNull();
       expect(await repo.updateMessage('missing-session', makeMessage('ghost'))).toBeNull();
+    });
+
+    it('ADR-118 §5: поздняя запись черновика поверх терминального сообщения-шага игнорируется целиком', async () => {
+      const { repo } = await make();
+      const step = {
+        ...makeMessage('финальный текст'),
+        seq: 1,
+        role: MessageRole.ASSISTANT,
+        status: 'completed' as const,
+        turnId: 'turn-1',
+        stepIndex: 0,
+        metadata: { stream_id: 'stream-1' },
+        createdAt: '2024-02-02T00:00:00.000Z',
+        parts: [makeTextPart('финальный текст')],
+      };
+      await repo.save(makeSession({
+        id: 'stale-draft',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [step],
+      }));
+
+      // Поздняя троттлинг-запись черновика: откат в `streaming` + частичный текст.
+      const returned = await repo.updateMessage('stale-draft', {
+        ...step,
+        status: 'streaming',
+        content: 'частичный',
+        parts: [makeTextPart('частичный')],
+        metadata: { stream_id: 'stream-1', streaming: true },
+      });
+      expect(returned).not.toBeNull();
+      expect(returned!.status).toBe('completed');
+      expect(returned!.content).toBe('финальный текст');
+      expect(returned!.parts?.map((part) => part.data)).toEqual(['финальный текст']);
+      expect(returned!.metadata).toEqual({ stream_id: 'stream-1' });
+
+      // Записи не произошло: терминальная запись и `updatedAt` сессии не тронуты.
+      const loaded = await repo.load('stale-draft');
+      expect(loaded!.messages).toHaveLength(1);
+      expect(loaded!.messages[0]).toMatchObject({
+        status: 'completed',
+        content: 'финальный текст',
+        metadata: { stream_id: 'stream-1' },
+      });
+      expect(loaded!.messages[0]!.parts?.map((part) => part.data)).toEqual(['финальный текст']);
+      expect(loaded!.updatedAt).toBe('2024-01-01T00:00:00.000Z');
+
+      // Вариант без `status`, только с `metadata.streaming` — тоже черновик.
+      const metadataOnly = await repo.updateMessage('stale-draft', {
+        ...step,
+        status: undefined,
+        content: 'ещё один частичный',
+        metadata: { stream_id: 'stream-1', streaming: true },
+      });
+      expect(metadataOnly!.status).toBe('completed');
+      expect(metadataOnly!.content).toBe('финальный текст');
+
+      // Норма не сломана: терминальную запись по-прежнему можно обновлять —
+      // блокируется только запись черновика.
+      const legit = await repo.updateMessage('stale-draft', {
+        ...step,
+        content: 'финальный текст (уточнён)',
+        parts: [makeTextPart('финальный текст (уточнён)')],
+        pinned: true,
+      });
+      expect(legit).not.toBeNull();
+      expect(legit!.status).toBe('completed');
+      expect(legit!.content).toBe('финальный текст (уточнён)');
+      const afterLegit = await repo.load('stale-draft');
+      expect(afterLegit!.messages[0]).toMatchObject({
+        status: 'completed',
+        content: 'финальный текст (уточнён)',
+        pinned: true,
+      });
+      expect(afterLegit!.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('ADR-118 §5: запись черновика в нетерминальное сообщение проходит как раньше', async () => {
+      const { repo } = await make();
+      const draft = {
+        ...makeMessage('первый чанк'),
+        seq: 1,
+        role: MessageRole.ASSISTANT,
+        status: 'streaming' as const,
+        createdAt: '2024-02-02T00:00:00.000Z',
+        parts: [makeTextPart('первый чанк')],
+      };
+      await repo.save(makeSession({
+        id: 'live-draft',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [draft],
+      }));
+
+      const returned = await repo.updateMessage('live-draft', {
+        ...draft,
+        content: 'первый чанк + второй',
+        parts: [makeTextPart('первый чанк + второй')],
+        metadata: { streaming: true },
+      });
+      expect(returned).not.toBeNull();
+      expect(returned!.status).toBe('streaming');
+      expect(returned!.content).toBe('первый чанк + второй');
+
+      const loaded = await repo.load('live-draft');
+      expect(loaded!.messages[0]).toMatchObject({
+        status: 'streaming',
+        content: 'первый чанк + второй',
+        metadata: { streaming: true },
+      });
+      expect(loaded!.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
     });
 
     it('append/update: U+0000 в content/metadata не сохраняется', async () => {

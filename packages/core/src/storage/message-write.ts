@@ -11,6 +11,37 @@
 import type { Message, Session } from '@itphx/synth-shared';
 import { generateId, makeTextPart, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 
+/**
+ * Терминальный статус сообщения-шага: после него шаг не меняется
+ * (ADR-118 §5 — «финал» это смена статуса, а не замена объекта сообщения).
+ */
+export function isTerminalMessageStatus(status: Message['status']): boolean {
+  return status === 'completed' || status === 'cancelled' || status === 'error';
+}
+
+/**
+ * Запись черновика частичного стрима (ADR-118 §5): статус `streaming` либо
+ * `metadata.streaming === true`.
+ */
+export function isDraftMessageWrite(message: Message): boolean {
+  return message.status === 'streaming' || message.metadata?.streaming === true;
+}
+
+/**
+ * Поздняя запись черновика поверх **закрытого** сообщения (ADR-118 §5):
+ * терминальный статус нельзя откатить в `streaming` — иначе шаг «воскресает»
+ * для UI (индикатор хода, «Стоп», запись уезжает в конец ленты) и остаётся
+ * таким навсегда.
+ *
+ * Игнорируется запись **целиком** (не только статус): иначе поздний черновик
+ * затрёт финальный текст/части/`toolCalls`/`metadata` терминальной записи.
+ * Инвариант принадлежит порту хранения (ADR-096) — одна точка истины для
+ * file/memory/postgres реализаций.
+ */
+export function isStaleDraftWrite(target: Message, incoming: Message): boolean {
+  return isTerminalMessageStatus(target.status) && isDraftMessageWrite(incoming);
+}
+
 /** Следующий `seq` в сессии: `max(seq)+1` (legacy `seq = 0` не мешает). */
 function nextSeq(messages: Message[]): number {
   const max = messages.reduce((acc, message) => {

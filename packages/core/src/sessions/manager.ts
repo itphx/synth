@@ -5,7 +5,7 @@ import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBy
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { SessionRepository } from '../storage/ports/session-repository.js';
 import type { ProjectRepository } from '../storage/ports/project-repository.js';
-import { nextOrd } from '../storage/message-write.js';
+import { isTerminalMessageStatus, nextOrd } from '../storage/message-write.js';
 import type { HookBus } from '../engine/hooks/hook-bus.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
 import type { ActivityMeasure, AnalyticsRecorder } from '../analytics/recorder.js';
@@ -69,14 +69,6 @@ function sanitizeMessageNullBytes(message: Message): Message {
   if (message.debugData) message.debugData = stripNullBytesDeep(message.debugData);
   if (message.promptMeta) message.promptMeta = stripNullBytesDeep(message.promptMeta);
   return message;
-}
-
-/**
- * Терминальный статус сообщения-хода (ADR-118 §5): после него шаг не меняется
- * (`streaming` уже не «живой»).
- */
-function isTerminalMessageStatus(status: Message['status']): boolean {
-  return status === 'completed' || status === 'cancelled' || status === 'error';
 }
 
 /**
