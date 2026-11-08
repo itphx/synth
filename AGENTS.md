@@ -363,7 +363,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Среда | Что это | Как разворачивается |
 |---|---|---|
 | **dev** | локальная отладка | `./scripts/dev.sh` |
-| **test** | внутренний тестовый, `https://synth.k3s.itphx.loc` | Fleet (`synth-deploy`): бандлы `synth-test`, `synth-gateway-telegram`, `synth-media`, `synth-test-allinone` (all-in-one); `gateway-email` — в `paths` закомментирован (чарт не опубликован); образы и чарты — в Gitea |
+| **test** | внутренний тестовый, `https://synth.k3s.itphx.loc` | Fleet (`synth-deploy`): бандлы `synth-test`, `synth-gateway-telegram`, `synth-media`; `gateway-email` — в `paths` закомментирован (чарт не опубликован); `synth-test-allinone` (all-in-one) — **выключен с 2026-11-08** (путь убран из `paths`, инстанс удалён, данные на PVC); образы и чарты — в Gitea |
 | **preprod** | `https://synth-release.k3s.itphx.loc` | публикуемый Helm-чарт (GitVerse), релизные образы `gitverse.ru` |
 | **prod** | у нас отсутствует — разворачивают клиенты | публикуемый Helm-чарт (self-host) |
 
