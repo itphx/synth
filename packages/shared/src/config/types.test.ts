@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('storageConfigSchema — лимиты чтения/предпросмотра', () => {
@@ -472,6 +472,29 @@ describe('agentsConfigSchema', () => {
   it('лимит глубины: целые значения принимаются (2 — вложенность на два уровня)', () => {
     expect(agentsConfigSchema.parse({ subagentDepth: 2 }).subagentDepth).toBe(2);
     expect(agentsConfigSchema.parse({ subagentDepth: 5 }).subagentDepth).toBe(5);
+  });
+});
+
+/**
+ * Секция `limits` — лимит тяжёлых операций с сессиями в минуту.
+ */
+describe('limitsConfigSchema', () => {
+  it('дефолт: 10 операций в минуту', () => {
+    expect(limitsConfigSchema.parse({})).toEqual({ sessionOpsPerMinute: 10 });
+  });
+
+  it('0 — ограничение выключено (валидное значение)', () => {
+    expect(limitsConfigSchema.parse({ sessionOpsPerMinute: 0 }).sessionOpsPerMinute).toBe(0);
+  });
+
+  it('целые значения принимаются', () => {
+    expect(limitsConfigSchema.parse({ sessionOpsPerMinute: 1 }).sessionOpsPerMinute).toBe(1);
+    expect(limitsConfigSchema.parse({ sessionOpsPerMinute: 500 }).sessionOpsPerMinute).toBe(500);
+  });
+
+  it('дробное/отрицательное значение отклоняется', () => {
+    expect(limitsConfigSchema.safeParse({ sessionOpsPerMinute: -1 }).success).toBe(false);
+    expect(limitsConfigSchema.safeParse({ sessionOpsPerMinute: 1.5 }).success).toBe(false);
   });
 });
 

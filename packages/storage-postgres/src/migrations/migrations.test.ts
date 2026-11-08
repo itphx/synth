@@ -20,6 +20,7 @@ import { MIGRATION_029_MESSAGE_STREAM_V2 } from './029-message-stream-v2.js';
 import { MIGRATION_030_SESSION_RETRY } from './030-session-retry.js';
 import { MIGRATION_031_SSH_KEY_POLICY } from './031-ssh-key-policy.js';
 import { MIGRATION_032_MCP_REMOTE_MODE } from './032-mcp-remote-mode.js';
+import { MIGRATION_033_SESSION_SOURCE_ID } from './033-session-source-id.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -245,12 +246,11 @@ describe('миграция 031_ssh_key_policy (PROP-124 — политика SSH
 });
 
 describe('миграция 032_mcp_remote_mode (PROP-125 — режим доставки MCP-сервера)', () => {
-  it('зарегистрирована в реестре под версией 32 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 32', () => {
     const migration = MIGRATIONS.find((m) => m.version === 32);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('032_mcp_remote_mode');
     expect(migration!.sql).toBe(MIGRATION_032_MCP_REMOTE_MODE);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(32);
   });
 
   it('добавляет колонку remote_mode идемпотентно', () => {
@@ -259,5 +259,25 @@ describe('миграция 032_mcp_remote_mode (PROP-125 — режим дост
     );
     expect(MIGRATION_032_MCP_REMOTE_MODE).toContain('COMMENT ON COLUMN mcp_registry.remote_mode');
     expect(MIGRATION_032_MCP_REMOTE_MODE).not.toMatch(/ALTER TABLE(?! mcp_registry ADD COLUMN IF NOT EXISTS)/);
+  });
+});
+
+describe('миграция 033_session_source_id (маркер источника при переносе)', () => {
+  it('зарегистрирована в реестре под версией 33 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 33);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('033_session_source_id');
+    expect(migration!.sql).toBe(MIGRATION_033_SESSION_SOURCE_ID);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(33);
+  });
+
+  it('добавляет колонку и partial-индекс идемпотентно', () => {
+    expect(MIGRATION_033_SESSION_SOURCE_ID).toContain(
+      'ALTER TABLE sessions ADD COLUMN IF NOT EXISTS source_session_id text;',
+    );
+    expect(MIGRATION_033_SESSION_SOURCE_ID).toContain(
+      'CREATE INDEX IF NOT EXISTS sessions_project_source_idx ON sessions (project_id, source_session_id) WHERE source_session_id IS NOT NULL;',
+    );
+    expect(MIGRATION_033_SESSION_SOURCE_ID).toContain('COMMENT ON COLUMN sessions.source_session_id');
   });
 });

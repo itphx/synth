@@ -72,7 +72,11 @@ function createMockEventHub() {
   };
 }
 
-function createTestApp(tmpDir: string, profilesStore?: ProfileStore) {
+function createTestApp(
+  tmpDir: string,
+  profilesStore?: ProfileStore,
+  getSessionOpsPerMinute?: () => number,
+) {
   const app = new Hono();
   const kit = createMockKit();
   const fileStore = new FileStore({ dataDir: tmpDir });
@@ -94,6 +98,18 @@ function createTestApp(tmpDir: string, profilesStore?: ProfileStore) {
     undefined,
     projectStore,
     profilesStore,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    getSessionOpsPerMinute,
   );
 
   app.route('/api/v2/sessions', sessionRoutes);
@@ -682,6 +698,278 @@ describe('Session API Routes', () => {
       );
       expect(created).toHaveLength(2);
     });
+
+    // Дедупликация повторного импорта по маркеру источника.
+    it('повторный импорт с тем же source_session_id → 200 updated:true, сессий не прибавилось', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const project = projectStore.create('Dedup', 'test-user');
+      await projectStore.save(project);
+
+      const payload = {
+        title: 'Imported',
+        messages: [
+          {
+            id: 'm1', role: MessageRole.USER, seq: 1, origin: 'local',
+            parts: [{ id: 'p1', type: 'text', data: 'v1' }],
+            content: 'v1', created_at: '2026-01-01T00:00:00.000Z',
+            disabled: false, pinned: false, hidden: false,
+          },
+        ],
+        import: { project_id: project.id, source_session_id: 'src-remote-1' },
+      };
+
+      const first = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      expect(first.status).toBe(201);
+      const firstBody = (await first.json()) as { id: string; updated: boolean };
+      expect(firstBody.updated).toBe(false);
+      const firstId = firstBody.id;
+      expect((await sessionManager.getSession(firstId))?.sourceSessionId).toBe('src-remote-1');
+
+      const second = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...payload,
+          messages: [
+            {
+              id: 'm1', role: MessageRole.USER, seq: 1, origin: 'local',
+              parts: [{ id: 'p1', type: 'text', data: 'v2' }],
+              content: 'v2', created_at: '2026-01-01T00:00:00.000Z',
+              disabled: false, pinned: false, hidden: false,
+            },
+          ],
+        }),
+      });
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as { id: string; updated: boolean };
+      expect(secondBody.updated).toBe(true);
+      expect(secondBody.id).toBe(firstId);
+
+      // Та же запись обновлена, дубля нет.
+      const sessions = await sessionManager.listSessions({ projectId: project.id });
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]!.id).toBe(firstId);
+      const updated = await sessionManager.getSession(firstId);
+      expect(updated?.messages).toHaveLength(1);
+      expect(updated?.messages[0]?.content).toBe('v2');
+    });
+
+    it('без маркера — прежнее поведение: каждый импорт создаёт новую сессию (201, updated:false)', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const project = projectStore.create('NoDedup', 'test-user');
+      await projectStore.save(project);
+      const payload = { title: 'NoMarker', import: { project_id: project.id } };
+
+      for (let i = 0; i < 2; i++) {
+        const res = await app.request('/api/v2/sessions/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        expect(res.status).toBe(201);
+        expect(((await res.json()) as { updated: boolean }).updated).toBe(false);
+      }
+      const sessions = await sessionManager.listSessions({ projectId: project.id });
+      expect(sessions).toHaveLength(2);
+    });
+
+    it('без проекта маркер ЧУЖОЙ сессии не обновляет её — создаётся новая', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const foreign = await sessionManager.createSession({ title: 'Foreign', userId: 'other-user' });
+      foreign.sourceSessionId = 'shared-marker';
+      await sessionManager.saveSession(foreign);
+
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Mine', import: { source_session_id: 'shared-marker' } }),
+      });
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { id: string; updated: boolean };
+      expect(body.updated).toBe(false);
+      expect(body.id).not.toBe(foreign.id);
+
+      // Чужая сессия не тронута.
+      const foreignAfter = await sessionManager.getSession(foreign.id);
+      expect(foreignAfter?.title).toBe('Foreign');
+      expect(foreignAfter?.ownerId).toBe('other-user');
+
+      // Создана новая запись с маркером, принадлежащая текущему пользователю.
+      const created = await sessionManager.getSession(body.id);
+      expect(created?.sourceSessionId).toBe('shared-marker');
+      expect(created?.ownerId).toBe('test-user');
+    });
+
+    it('без проекта маркер СВОЕЙ сессии → 200 updated:true, сессий не прибавилось', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const payload = { title: 'Mine', import: { source_session_id: 'own-marker' } };
+
+      const first = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      expect(first.status).toBe(201);
+      const firstBody = (await first.json()) as { id: string; updated: boolean };
+
+      const second = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as { id: string; updated: boolean };
+      expect(secondBody.updated).toBe(true);
+      expect(secondBody.id).toBe(firstBody.id);
+      expect(await sessionManager.listSessions({ userId: 'test-user' })).toHaveLength(1);
+    });
+
+    it('повторный импорт в проект перезаписывает title/settings, сохраняя id/createdAt/ownerId', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const project = projectStore.create('Rewrite', 'test-user');
+      await projectStore.save(project);
+      const base = { import: { project_id: project.id, source_session_id: 'rewrite-1' } };
+
+      const first = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...base, title: 'V1', settings: { temperature: 0.1 } }),
+      });
+      expect(first.status).toBe(201);
+      const firstId = ((await first.json()) as { id: string }).id;
+      const before = (await sessionManager.getSession(firstId))!;
+
+      const second = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...base, title: 'V2', settings: { temperature: 0.9 } }),
+      });
+      expect(second.status).toBe(200);
+      expect(((await second.json()) as { updated: boolean }).updated).toBe(true);
+
+      const after = (await sessionManager.getSession(firstId))!;
+      expect(after.title).toBe('V2');
+      expect(after.settings.temperature).toBe(0.9);
+      // Идентичность записи сохранена.
+      expect(after.id).toBe(firstId);
+      expect(after.createdAt).toBe(before.createdAt);
+      expect(after.ownerId).toBe(before.ownerId);
+      expect(after.userId).toBe(before.userId);
+    });
+
+    it('заархивированная ранее импортированная сессия не дублируется и остаётся архивной', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const project = projectStore.create('Archived', 'test-user');
+      await projectStore.save(project);
+      const payload = {
+        title: 'Archived import',
+        import: { project_id: project.id, source_session_id: 'archived-1' },
+      };
+
+      const first = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const firstId = ((await first.json()) as { id: string }).id;
+      await sessionManager.archiveSession(firstId);
+
+      const second = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as { id: string; updated: boolean };
+      expect(secondBody.updated).toBe(true);
+      expect(secondBody.id).toBe(firstId);
+
+      // Дубля нет: видимых — 0, с архивом — ровно одна запись.
+      expect(await sessionManager.listSessions({ projectId: project.id })).toHaveLength(0);
+      expect(
+        await sessionManager.listSessions({ projectId: project.id }, { includeArchived: true }),
+      ).toHaveLength(1);
+      // Архив не снимается повторным импортом.
+      expect((await sessionManager.getSession(firstId))?.archivedAt).toBeTruthy();
+    });
+  });
+
+  describe('POST /api/v2/sessions/import-batch', () => {
+    it('импортирует 2 сессии одним запросом и идемпотентен при повторе', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const project = projectStore.create('BatchProject', 'test-user');
+      await projectStore.save(project);
+
+      const body = {
+        sessions: [
+          { title: 'Batch A', import: { project_id: project.id, source_session_id: 'src-a' } },
+          { title: 'Batch B', import: { project_id: project.id, source_session_id: 'src-b' } },
+        ],
+      };
+
+      const first = await app.request('/api/v2/sessions/import-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as {
+        imported: number;
+        updated: number;
+        sessions: Array<{ id: string; source_session_id: string | null; updated: boolean }>;
+      };
+      expect(firstBody.imported).toBe(2);
+      expect(firstBody.updated).toBe(0);
+      expect(firstBody.sessions).toHaveLength(2);
+      expect(firstBody.sessions.map((s) => s.source_session_id)).toEqual(['src-a', 'src-b']);
+      expect(firstBody.sessions.every((s) => s.updated === false)).toBe(true);
+      expect(await sessionManager.listSessions({ projectId: project.id })).toHaveLength(2);
+
+      // Повтор — те же сессии обновляются, дублей нет.
+      const second = await app.request('/api/v2/sessions/import-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as {
+        imported: number;
+        updated: number;
+        sessions: Array<{ id: string; source_session_id: string | null; updated: boolean }>;
+      };
+      expect(secondBody.imported).toBe(0);
+      expect(secondBody.updated).toBe(2);
+      expect(secondBody.sessions.map((s) => s.id)).toEqual(
+        firstBody.sessions.map((s) => s.id),
+      );
+      expect(await sessionManager.listSessions({ projectId: project.id })).toHaveLength(2);
+    });
+
+    it('больше 200 сессий → 400 VALIDATION_ERROR', async () => {
+      const { app } = createTestApp(tmpDir);
+      const sessions = Array.from({ length: 201 }, (_v, i) => ({ title: `S${i}` }));
+      const res = await app.request('/api/v2/sessions/import-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessions }),
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('пустой список → 400 VALIDATION_ERROR', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/import-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessions: [] }),
+      });
+      expect(res.status).toBe(400);
+    });
   });
 
   describe('rate limit тяжёлых операций ресурса сессий', () => {
@@ -709,6 +997,23 @@ describe('Session API Routes', () => {
       }
       expect(statuses.slice(0, 10).every((s) => s === 201)).toBe(true);
       expect(statuses[10]).toBe(429);
+    });
+
+    it('порог читается из live-геттера и применяется без рестарта (0 — без лимита)', async () => {
+      let limit = 2;
+      const { app, sessionManager } = createTestApp(tmpDir, undefined, () => limit);
+      const session = await sessionManager.createSession({ title: 'L', userId: 'test-user' });
+
+      const firstTwo: number[] = [];
+      for (let i = 0; i < 2; i++) {
+        firstTwo.push((await app.request(`/api/v2/sessions/${session.id}/export`)).status);
+      }
+      expect(firstTwo).toEqual([200, 200]);
+      expect((await app.request(`/api/v2/sessions/${session.id}/export`)).status).toBe(429);
+
+      // Runtime-смена порога на «без лимита» действует на следующий же запрос.
+      limit = 0;
+      expect((await app.request(`/api/v2/sessions/${session.id}/export`)).status).toBe(200);
     });
   });
 

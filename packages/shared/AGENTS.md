@@ -130,6 +130,11 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   (Настройки → «Пределы саб-агентов») и через runtime-настройку `/api/v2/settings/agents-limits`
   (`settings.json`/PG), приоритет env > runtime > config; env —
   `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS`; тесты — `defaults.test.ts`/`types.test.ts`/`env-overrides.test.ts`.
+- Секция `limits` (`limitsConfigSchema` + `LimitsConfig`): `sessionOpsPerMinute` — лимит тяжёлых
+  операций с сессиями (`import`/`import-batch`/`export`/`fork`/`merge`), запросов в минуту на
+  креденту; default `10` (`DEFAULT_SESSION_OPS_PER_MINUTE`), `0` — без лимита. Runtime-настройка
+  `/api/v2/settings/limits`, приоритет env > runtime > config; env —
+  `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` (целое ≥ 0, невалидное — warn + игнор).
 - ADR-094: секция `metrics` (`enabled`, default `false`; `metricsConfigSchema` + `MetricsConfig`) —
   мастер-выключатель `GET /metrics`; скалярный env-оверрайд `SYNTH_METRICS_ENABLED` (имя намеренно
   совпадает с Helm-чартом). Токен в схеме **не хранится** (инвариант 13): env `SYNTH_METRICS_TOKEN` /

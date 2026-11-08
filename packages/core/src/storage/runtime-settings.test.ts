@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV } from './runtime-settings.js';
-import { resolveExecutionMode } from '@itphx/synth-shared/config';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV } from './runtime-settings.js';
+import { resolveExecutionMode, DEFAULT_SESSION_OPS_PER_MINUTE } from '@itphx/synth-shared/config';
 import type { SynthConfig } from '@itphx/synth-shared/config';
 
 describe('RuntimeSettingsStore.clear* (ADR-072 Ф2)', () => {
@@ -1244,5 +1244,61 @@ describe('resolveSshMode / createLiveSshMode (ssh.mode, PROP-124)', () => {
 
   it('пустое значение env — «не задано» (дефолт)', () => {
     expect(resolveSshMode(undefined, undefined, { [SSH_MODE_ENV]: '' }).value).toBe('tools');
+  });
+});
+
+describe('resolveSessionOpsPerMinute (limits.sessionOpsPerMinute)', () => {
+  it('config, равный дефолту → source:"default" (схема префилит дефолт)', () => {
+    // На чистом инстансе `config.synth.limits.sessionOpsPerMinute` уже 10
+    // (Zod `prefault`) — это «значение по умолчанию», а не явная настройка.
+    expect(resolveSessionOpsPerMinute(DEFAULT_SESSION_OPS_PER_MINUTE, undefined, {})).toEqual({
+      value: DEFAULT_SESSION_OPS_PER_MINUTE,
+      source: 'default',
+      envLocked: false,
+    });
+  });
+
+  it('config не задан → source:"default"', () => {
+    expect(resolveSessionOpsPerMinute(undefined, undefined, {})).toEqual({
+      value: DEFAULT_SESSION_OPS_PER_MINUTE,
+      source: 'default',
+      envLocked: false,
+    });
+  });
+
+  it('config, отличный от дефолта → source:"config"', () => {
+    expect(resolveSessionOpsPerMinute(25, undefined, {})).toEqual({
+      value: 25,
+      source: 'config',
+      envLocked: false,
+    });
+    // 0 (без лимита) — явное значение, не дефолт.
+    expect(resolveSessionOpsPerMinute(0, undefined, {})).toEqual({
+      value: 0,
+      source: 'config',
+      envLocked: false,
+    });
+  });
+
+  it('runtime приоритетнее config; env приоритетнее runtime', () => {
+    expect(resolveSessionOpsPerMinute(25, 40, {})).toEqual({
+      value: 40,
+      source: 'runtime',
+      envLocked: false,
+    });
+    expect(resolveSessionOpsPerMinute(25, 40, { [SESSION_OPS_PER_MINUTE_ENV]: '7' })).toEqual({
+      value: 7,
+      source: 'env',
+      envLocked: true,
+    });
+  });
+
+  it('живое состояние: runtime-смена применяется без пересоздания', () => {
+    const live = createLiveSessionOpsPerMinute({ config: DEFAULT_SESSION_OPS_PER_MINUTE, env: {} });
+    expect(live.resolve().source).toBe('default');
+    live.setRuntime(30);
+    expect(live.resolve()).toEqual({ value: 30, source: 'runtime', envLocked: false });
+    live.setRuntime(undefined);
+    expect(live.resolve().source).toBe('default');
   });
 });

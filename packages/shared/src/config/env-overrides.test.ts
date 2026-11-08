@@ -52,6 +52,10 @@ describe('toSnakeCase / envOverrideName (ADR-023)', () => {
     expect(envOverrideName({ section: 'agents', key: 'subagentDepth', type: 'number' })).toBe(
       'SYNTH_AGENTS_SUBAGENT_DEPTH',
     );
+    // limits: лимит тяжёлых операций с сессиями в минуту.
+    expect(envOverrideName({ section: 'limits', key: 'sessionOpsPerMinute', type: 'number' })).toBe(
+      'SYNTH_LIMITS_SESSION_OPS_PER_MINUTE',
+    );
     // llm: лимит вывода по умолчанию.
     expect(envOverrideName({ section: 'llm', key: 'maxTokens', type: 'number' })).toBe(
       'SYNTH_LLM_MAX_TOKENS',
@@ -129,6 +133,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       questions: { timeoutMs: 600_000, retentionDays: 14 },
       background: { enabled: true, maxSubagentsPerSession: 2, maxProcessesPerSession: 5, maxRunsPerSession: 10, logMaxBytes: 10_485_760 },
       agents: { subagentMaxInputTokens: 0, subagentDepth: 1 },
+      limits: { sessionOpsPerMinute: 10 },
       attachments: {
         enabled: true,
         modalities: { image: true, pdf: true, audio: true, video: true },
@@ -164,6 +169,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_BACKGROUND_LOG_MAX_BYTES: '2048',
       SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS: '90000',
       SYNTH_AGENTS_SUBAGENT_DEPTH: '2',
+      SYNTH_LIMITS_SESSION_OPS_PER_MINUTE: '25',
       SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE: '10485760',
       SYNTH_ATTACHMENTS_MAX_FILES_PER_MESSAGE: '4',
       SYNTH_ATTACHMENTS_MAX_BYTES_PER_SESSION: '104857600',
@@ -202,6 +208,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.background).toMatchObject({ maxProcessesPerSession: 3, logMaxBytes: 2048 });
     // agents: предохранитель бюджета промпта саб-агента + лимит глубины вложенности.
     expect(cfg.agents).toEqual({ subagentMaxInputTokens: 90_000, subagentDepth: 2 });
+    // limits: лимит тяжёлых операций с сессиями в минуту.
+    expect(cfg.limits).toEqual({ sessionOpsPerMinute: 25 });
     // ADR-115: лимиты и мастер-выключатель вложений сообщений.
     expect(cfg.attachments).toEqual({
       enabled: false,

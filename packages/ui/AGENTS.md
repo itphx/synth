@@ -573,6 +573,10 @@
 - Лимиты в UI — MiB (`bytesToMiB`/`mibToBytes`, `MIB_BYTES`, до 2 знаков), в API — байты; конвертация только этими хелперами.
 - i18n — `settings.category.attachments`, `settings.attachments.*`, `settings.help.attachments.*` (ru/en, паритет). Тест — `components/settings/MultimodalSettings.test.tsx`.
 
+## Лимиты запросов (ADR-023)
+
+- **«Безопасность» → «Лимиты запросов»** (`components/settings/RequestLimitsSettings.tsx`, встраивается в `SecuritySettings`; отдельной категории в `SETTINGS_CATALOG` нет): instance-wide лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute` — импорт/экспорт/форк/merge, запросов в минуту на креденту; `0` — без лимита) через домен `requestLimitsApi` (`lib/api/requestLimits.ts`, barrel `synthApi`): `GET/PUT/DELETE /api/v2/settings/limits`. `NumberField` (целое ≥ 0), бейдж источника (`env`/`runtime`/`config`/`default`), баннер env-фиксации (сервер отвечает `409`, поле заблокировано), Save/Reset; `restartRequired:false` — действует без рестарта. Тесты — `RequestLimitsSettings.test.tsx`, контракт — `synthApi.contract.test.ts`.
+
 ## Сеть (ADR-099)
 
 - **Админ-раздел «Сеть»** (`components/settings/NetworkSettings.tsx`; категория `network`, `labelKey: settings.category.network`, `roles: ['ADMIN']` — сразу после «Безопасности»): «Прокси» (`ProxyStatusSection`) и «Доверенные CA (TLS)» (`TrustedCaSection`).

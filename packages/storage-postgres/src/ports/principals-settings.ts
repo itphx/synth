@@ -49,6 +49,7 @@ const SECTION_KEYS = [
   'proxy',
   'plugins',
   'attachments',
+  'sessionOpsPerMinute',
 ] as const satisfies readonly (keyof RuntimeSettings)[];
 
 const SECTION_KEY_SET: ReadonlySet<string> = new Set<string>(SECTION_KEYS);
@@ -370,6 +371,16 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearSubagentMaxInputTokens(): Promise<void> {
       await deleteSetting(conn, 'subagentMaxInputTokens');
+    },
+
+    async getSessionOpsPerMinute(): Promise<RuntimeSettingsValue<'sessionOpsPerMinute'> | undefined> {
+      return readSetting<RuntimeSettingsValue<'sessionOpsPerMinute'>>(conn, 'sessionOpsPerMinute');
+    },
+    async setSessionOpsPerMinute(value: RuntimeSettingsValue<'sessionOpsPerMinute'>): Promise<void> {
+      await writeSetting(conn, 'sessionOpsPerMinute', value);
+    },
+    async clearSessionOpsPerMinute(): Promise<void> {
+      await deleteSetting(conn, 'sessionOpsPerMinute');
     },
 
     async getContextDefaults(): Promise<RuntimeSettingsValue<'contextDefaults'> | undefined> {

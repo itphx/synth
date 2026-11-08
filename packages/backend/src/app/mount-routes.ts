@@ -28,6 +28,8 @@ import {
   createAttachmentsSettingsRoutes, createModalityModelLookup,
   createContextWindowSettingsRoutes,
   createAgentsLimitsSettingsRoutes,
+  // Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`).
+  createRequestLimitsSettingsRoutes,
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
   createSshSettingsRoutes,
@@ -303,6 +305,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         return model ? model.enabled !== false : undefined;
       },
     },
+    // Лимит тяжёлых операций ресурса сессий (`limits.sessionOpsPerMinute`) —
+    // live-геттер: резолвится на каждый запрос (0 — без лимита).
+    () => deps.sessionOpsPerMinuteSettings.getValue(),
   ));
 
   // Messages routes
@@ -738,6 +743,24 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       settingsStore,
       config: config.synth.agents.subagentMaxInputTokens,
       live: deps.subagentMaxInputTokensSettings,
+      securityAudit,
+      env: process.env,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`):
+  // instance-wide, `0` — без лимита; лимитеры читают резолвер на каждый запрос,
+  // поэтому runtime-настройка применяется без рестарта. Managed — ADMIN.
+  app.route('/api/v2/settings', createRequestLimitsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.limits.sessionOpsPerMinute,
+      live: deps.sessionOpsPerMinuteSettings,
       securityAudit,
       env: process.env,
     },

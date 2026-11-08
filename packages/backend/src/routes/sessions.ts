@@ -50,6 +50,16 @@ import type { ApprovalRegistry } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
+ * Максимум сессий в одном пакетном импорте (`POST /sessions/import-batch`).
+ * Защита от гигантских тел и длинных транзакционных серий.
+ */
+const MAX_IMPORT_BATCH = 200;
+
+/** Предел длины маркера источника (`import.source_session_id`), символов. */
+const MAX_IMPORT_SOURCE_ID_LENGTH = 200;
+
+
+/**
  * Backend-обёртка над core-фабрикой сессий (ТД-1, фаза B2). Здесь остаются только
  * backend-специфичные роуты (MCP-скоуп сессии и секреты — более строгая политика
  * managed, export/import, отладка). Общая логика (список/создание/чтение/изменение/
@@ -151,6 +161,12 @@ export function createSessionRoutes(
     isProviderEnabled?: (name: string) => boolean | undefined
     isModelEnabled?: (provider: string, model: string) => boolean | undefined
   },
+  /**
+   * Лимит тяжёлых операций ресурса сессий (`limits.sessionOpsPerMinute`,
+   * import/export/fork/merge) — live-геттер. Не задан — 10 (прежнее поведение).
+   * `0` — без ограничения; значение применяется без рестарта.
+   */
+  getSessionOpsPerMinute?: () => number,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -161,16 +177,18 @@ export function createSessionRoutes(
     (session.ownerId ?? session.userId) === userId;
 
   /**
-   * Rate limit на тяжёлые/неинтерактивные операции ресурса сессий (import/export/
-   * fork/merge): 10 запросов / 60 с на креду — тот же in-memory `createRateLimiter`,
-   * что у `POST /:id/prompt` (30/60) и `schedules/:id/run` (10/60). Значение ниже
-   * prompt: операции не частые в живом UI, но дорогие (полный объект сессии,
-   * создание форка, копирование сообщений) — защита от всплесков/выкачивания.
+   * Rate limit на тяжёлые/неинтерактивные операции ресурса сессий (import/
+   * export/fork/merge): значение настраивается instance-wide
+   * (`limits.sessionOpsPerMinute`, дефолт 10 запросов / 60 с на креду),
+   * `0` — без лимита. Тот же in-memory `createRateLimiter`, что у
+   * `POST /:id/prompt` (30/60) и `schedules/:id/run` (10/60). Порог —
+   * live-геттер: runtime-изменение из админки применяется без рестарта.
    */
-  const importRateLimit = createRateLimiter(10, 60_000);
-  const exportRateLimit = createRateLimiter(10, 60_000);
-  const forkRateLimit = createRateLimiter(10, 60_000);
-  const mergeRateLimit = createRateLimiter(10, 60_000);
+  const sessionOpsLimit = (): number => getSessionOpsPerMinute?.() ?? 10;
+  const importRateLimit = createRateLimiter(sessionOpsLimit, 60_000);
+  const exportRateLimit = createRateLimiter(sessionOpsLimit, 60_000);
+  const forkRateLimit = createRateLimiter(sessionOpsLimit, 60_000);
+  const mergeRateLimit = createRateLimiter(sessionOpsLimit, 60_000);
 
   /**
    * Единое правило доступа к сессии (читать/писать) — ОДНА точка на весь ресурс
@@ -236,8 +254,8 @@ export function createSessionRoutes(
       sessionNotFound: (c) => t('errors.notFound.session', undefined, c),
       forbidden: (c) => t('auth.forbidden', undefined, c),
     },
-    // `/import` — статический сегмент (не id сессии).
-    skipForId: (id) => id === 'import',
+    // `/import` и `/import-batch` — статические сегменты (не id сессии).
+    skipForId: (id) => id === 'import' || id === 'import-batch',
   });
 
   /**
@@ -399,57 +417,53 @@ export function createSessionRoutes(
     return c.json(decision.withSecrets ? decision.session : stripSessionSecrets(decision.session));
   });
 
-  // POST /api/v2/sessions/import — создать сессию из экспорта другой сессии
-  // (перенос истории между мирами). Тело: объект экспорта + import.project_id
-  // (целевой проект; если не задан — берётся из экспорта). LLM не запускается.
-  // ADR-089: это materialization-операция (создание-как-факт переноса истории),
-  // а не request — идёт прямым `createSession`, минуя funnel `session.requested`.
-  app.post('/import', kit.requireAuth, importRateLimit, async (c) => {
-    const user = (await kit.getCurrentUser(c))!;
-    const body = await c.req.json().catch(() => ({}));
+  /**
+   * Маркер источника из `body.import` (`source_session_id` | `sourceSessionId`):
+   * непустая строка ≤ 200 символов; иначе маркера нет (дедуп не применяется).
+   */
+  const readImportSourceId = (body: Record<string, unknown>): string | undefined => {
+    const imp = body.import as Record<string, unknown> | undefined;
+    const raw = imp?.source_session_id ?? imp?.sourceSessionId;
+    if (typeof raw !== 'string') return undefined;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.length > MAX_IMPORT_SOURCE_ID_LENGTH) return undefined;
+    return trimmed;
+  };
 
-    const targetProjectId = body.import?.project_id
-      ?? body.import?.projectId
-      ?? body.project_id
-      ?? body.projectId
-      ?? undefined;
-
-    if (targetProjectId) {
-      if (!projectStore) {
-        return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Хранилище проектов недоступно' } }, 500);
-      }
-      const existing = await projectStore.load(targetProjectId);
-      if (!existing) {
-        return c.json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Проект не найден' } }, 400);
-      }
-      // Безопасность: импорт привязывает сессию к проекту и выдаёт агенту его
-      // workspace — без проверки доступа к проекту получается IDOR (чтение/запись
-      // файлов чужого проекта).
-      //
-      // Импорт сессии В ПРОЕКТ — это ЗАПИСЬ в проект (инвариант 21: read-уровень
-      // доступа не расширяет права на изменение), поэтому нужен уровень
-      // «редактирование контента проекта» (`canEditProjectContent`: owner /
-      // EDITOR / LEAD / ADMIN) — тот же, что у импорта проекта целиком
-      // (`core/server/routes/project-portable.ts`, `deps.canEdit`). Участник с
-      // ролью VIEWER получает 403.
-      if (!canEditProjectContent(c as Parameters<typeof kit.isAdmin>[0], existing, user.id)) {
-        return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+  /**
+   * Применить тело экспорта к сессии — **одна реализация** для нового импорта и
+   * дедуплицированного обновления.
+   *
+   * `isUpdate: true` (дедуп) — «перезапись выбранного проекта»: `title`,
+   * `settings`, `icon`/`color` и весь контент берутся из тела. Идентичность
+   * записи сохраняется: `id`/`projectId`/`userId`/`ownerId`/`sessionOrigin`/
+   * `createdAt`/`archivedAt`/`sourceSessionId` не трогаются, `parentId`
+   * перезаписывается только если пришёл в теле.
+   *
+   * `isUpdate: false` (новая сессия) — поведение прежнее: `title`/`settings`
+   * уже проставлены `createSession` (с дефолтами), `createdAt` берётся из тела.
+   */
+  const applyImportBody = (
+    session: Session,
+    body: Record<string, unknown>,
+    sourceSessionId?: string,
+    isUpdate = false,
+  ): void => {
+    // Свойства записи: при обновлении — из тела (перезапись проекта), при
+    // создании их уже проставил `createSession` (там же дефолты настроек).
+    if (isUpdate) {
+      if (typeof body.title === 'string') session.title = body.title;
+      if (body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)) {
+        session.settings = body.settings as Session['settings'];
       }
     }
 
-    // ADR-089: materialization (перенос истории), не request — прямой createSession.
-    const session = await sessionManager.createSession({
-      title: typeof body.title === 'string' ? body.title : undefined,
-      projectId: targetProjectId,
-      sessionOrigin: (body.session_origin ?? body.sessionOrigin) as Session['sessionOrigin'] | undefined,
-      settings: (body.settings ?? {}) as Partial<SessionSettings>,
-      userId: user.id,
-      ownerId: user.id,
-    });
-
-    // Переносим историю и состояние из экспорта.
-    // parentId: publish переписывает ссылки на новые remote-id до импорта — сохраняем.
-    session.parentId = (body.parent_id ?? body.parentId) as string | undefined;
+    // parentId: publish переписывает ссылки на новые remote-id до импорта —
+    // сохраняем. При обновлении отсутствие поля в теле не очищает привязку.
+    const parentId = body.parent_id ?? body.parentId;
+    if (typeof parentId === 'string') session.parentId = parentId;
+    else if (parentId === null) session.parentId = undefined;
+    else if (!isUpdate) session.parentId = undefined;
     const messages: Message[] = Array.isArray(body.messages) ? body.messages as Message[] : [];
     session.messages = messages.map((m) => ({ ...structuredClone(m), seq: 0 }));
     session.messages.forEach((m, i) => { m.seq = i + 1; });
@@ -462,15 +476,19 @@ export function createSessionRoutes(
     session.references = Array.isArray(body.references) ? body.references as Session['references'] : [];
     session.checkpoints = Array.isArray(body.checkpoints) ? body.checkpoints as Session['checkpoints'] : [];
     session.mode = (body.mode ?? undefined) as Session['mode'];
-    session.planApproved = body.plan_approved ?? body.planApproved ?? false;
-    session.branchPoint = body.branch_point ?? body.branchPoint;
+    session.planApproved = (body.plan_approved ?? body.planApproved ?? false) as boolean;
+    session.branchPoint = (body.branch_point ?? body.branchPoint) as string | undefined;
     // Метаданные сессии (иконка/цвет) — нормализуем legacy при импорте.
     session.icon = normalizeIconKey(body.icon);
     session.color = normalizeColorKey(body.color);
     session.obfuscationMap = (body.obfuscation_map ?? body.obfuscationMap) as Session['obfuscationMap'];
-    session.createdAt = typeof (body.created_at ?? body.createdAt) === 'string'
-      ? (body.created_at ?? body.createdAt)
-      : session.createdAt;
+    // `createdAt` — идентичность записи: при обновлении сохраняем исходное
+    // серверное значение; при создании — как раньше, из тела экспорта.
+    if (!isUpdate) {
+      session.createdAt = typeof (body.created_at ?? body.createdAt) === 'string'
+        ? (body.created_at ?? body.createdAt) as string
+        : session.createdAt;
+    }
     session.updatedAt = nowISO();
 
     // Сбрасываем runtime-состояние: блокировки/стримы с другого хоста не переносим.
@@ -478,6 +496,7 @@ export function createSessionRoutes(
     session.currentStream = undefined;
     session.summarizationPending = false;
     session.canSummarize = false;
+    session.retry = undefined;
 
     const num = (v: unknown, def = 0): number => (typeof v === 'number' ? v : def);
     session.inputTokens = num(body.input_tokens ?? body.inputTokens);
@@ -491,15 +510,219 @@ export function createSessionRoutes(
     session.cacheReadCost = num(body.cache_read_cost ?? body.cacheReadCost);
     session.cacheWriteCost = num(body.cache_write_cost ?? body.cacheWriteCost);
 
+    // Маркер источника переноса — ключ дедупликации повторного импорта.
+    if (sourceSessionId) session.sourceSessionId = sourceSessionId;
+  };
+
+  type ImportOutcome =
+    | { ok: true; session: Session; updated: boolean }
+    | { ok: false; status: 400 | 403 | 500; code: string; message: string };
+
+  /**
+   * Импорт одной сессии: проверка проекта (право записи), дедуп по маркеру
+   * источника, создание либо обновление. Общий код одиночного и пакетного
+   * маршрутов — дефолты/дедуп не разъезжаются.
+   */
+  const importSessionFromBody = async (
+    body: Record<string, unknown>,
+    userId: string,
+    forbiddenMessage: string,
+    ctx: Parameters<typeof kit.isAdmin>[0],
+  ): Promise<ImportOutcome> => {
+    const imp = (body.import ?? {}) as Record<string, unknown>;
+    const targetProjectId = (imp.project_id
+      ?? imp.projectId
+      ?? body.project_id
+      ?? body.projectId
+      ?? undefined) as string | undefined;
+
+    if (targetProjectId) {
+      if (!projectStore) {
+        return { ok: false, status: 500, code: 'INTERNAL_ERROR', message: 'Хранилище проектов недоступно' };
+      }
+      const existingProject = await projectStore.load(targetProjectId);
+      if (!existingProject) {
+        return { ok: false, status: 400, code: 'PROJECT_NOT_FOUND', message: 'Проект не найден' };
+      }
+      // Безопасность: импорт привязывает сессию к проекту и выдаёт агенту его
+      // workspace — без проверки доступа к проекту получается IDOR (чтение/запись
+      // файлов чужого проекта).
+      //
+      // Импорт сессии В ПРОЕКТ — это ЗАПИСЬ в проект (инвариант 21: read-уровень
+      // доступа не расширяет права на изменение), поэтому нужен уровень
+      // «редактирование контента проекта» (`canEditProjectContent`: owner /
+      // EDITOR / LEAD / ADMIN) — тот же, что у импорта проекта целиком
+      // (`core/server/routes/project-portable.ts`, `deps.canEdit`). Участник с
+      // ролью VIEWER получает 403.
+      if (!canEditProjectContent(ctx, existingProject, userId)) {
+        return { ok: false, status: 403, code: 'FORBIDDEN', message: forbiddenMessage };
+      }
+    }
+
+    const sourceSessionId = readImportSourceId(body);
+
+    // Дедуп: та же исходная сессия уже перенесена — обновляем её, а не создаём
+    // дубль. Область поиска: целевой проект; без проекта — только **свои**
+    // сессии (иначе подставленный чужой маркер обновил бы чужую запись).
+    // `includeArchived` — ранее импортированная и заархивированная сессия не
+    // должна дублироваться при повторной публикации.
+    if (sourceSessionId) {
+      const candidates = await sessionManager.listSessions(
+        targetProjectId ? { projectId: targetProjectId } : { userId },
+        { includeArchived: true },
+      );
+      // Страховка поверх фильтра: обновляем только свою сессию. Если проектный
+      // обзор/видимость вернули чужую запись с тем же маркером — не трогаем её,
+      // создаём новую.
+      const match = candidates.find(
+        (s) => s.sourceSessionId === sourceSessionId && (s.ownerId ?? s.userId) === userId,
+      );
+      if (match) {
+        const existingSession = await sessionManager.getSession(match.id);
+        if (existingSession && (existingSession.ownerId ?? existingSession.userId) === userId) {
+          applyImportBody(existingSession, body, sourceSessionId, true);
+          await sessionManager.saveSession(existingSession);
+          // Инвариант 27: обновление видно другим клиентам.
+          eventBus.publish(
+            existingSession.id,
+            'session.updated',
+            serializeSession(existingSession, { agentRegistry }),
+          );
+          return { ok: true, session: existingSession, updated: true };
+        }
+      }
+    }
+
+    // ADR-089: materialization (перенос истории), не request — прямой createSession.
+    const session = await sessionManager.createSession({
+      title: typeof body.title === 'string' ? body.title : undefined,
+      projectId: targetProjectId,
+      sessionOrigin: (body.session_origin ?? body.sessionOrigin) as Session['sessionOrigin'] | undefined,
+      settings: (body.settings ?? {}) as Partial<SessionSettings>,
+      userId,
+      ownerId: userId,
+    });
+
+    applyImportBody(session, body, sourceSessionId, false);
     await sessionManager.saveSession(session);
 
     // Автоматически подписываем активных клиентов на новую сессию
-    eventHub.subscribeToSession(user.id, session.id).catch((e: unknown) =>
+    eventHub.subscribeToSession(userId, session.id).catch((e: unknown) =>
       console.warn('subscribeToSession failed:', e),
     );
     eventBus.publish(session.id, 'session.created', serializeSession(session, { agentRegistry }));
 
-    return c.json(serializeSession(session, { agentRegistry }), 201);
+    return { ok: true, session, updated: false };
+  };
+
+  // POST /api/v2/sessions/import — создать сессию из экспорта другой сессии
+  // (перенос истории между мирами). Тело: объект экспорта + import.project_id
+  // (целевой проект; если не задан — берётся из экспорта) + опциональный
+  // import.source_session_id — маркер источника (ключ дедупликации повторного
+  // импорта: та же сессия в том же проекте обновляется, а не дублируется).
+  // LLM не запускается.
+  // ADR-089: это materialization-операция (создание-как-факт переноса истории),
+  // а не request — идёт прямым `createSession`, минуя funnel `session.requested`.
+  app.post('/import', kit.requireAuth, importRateLimit, async (c) => {
+    const user = (await kit.getCurrentUser(c))!;
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+
+    const outcome = await importSessionFromBody(
+      body,
+      user.id,
+      t('auth.forbidden', undefined, c),
+      c as Parameters<typeof kit.isAdmin>[0],
+    );
+    if (!outcome.ok) {
+      return c.json({ error: { code: outcome.code, message: outcome.message } }, outcome.status);
+    }
+    // `updated` — аддитивное поле поверх DTO: true — обновлена существующая
+    // запись (dedup по маркеру), false — создана новая.
+    return c.json(
+      { ...serializeSession(outcome.session, { agentRegistry }), updated: outcome.updated },
+      outcome.updated ? 200 : 201,
+    );
+  });
+
+  // POST /api/v2/sessions/import-batch — пакетный импорт сессий одним запросом.
+  // Тело: `{ sessions: Array<тело экспорта + import { project_id, source_session_id }> }`
+  // (1..MAX_IMPORT_BATCH). Элементы обрабатываются **последовательно** тем же
+  // кодом, что одиночный импорт (дедуп/дефолты не разъезжаются). Ошибка на
+  // элементе прерывает пакет; частичные записи безопасны — повтор идемпотентен
+  // благодаря дедупу по `source_session_id`.
+  app.post('/import-batch', kit.requireAuth, importRateLimit, async (c) => {
+    const user = (await kit.getCurrentUser(c))!;
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const rawSessions = body.sessions;
+    if (!Array.isArray(rawSessions) || rawSessions.length < 1 || rawSessions.length > MAX_IMPORT_BATCH) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `sessions: ожидается массив из 1..${MAX_IMPORT_BATCH} элементов`,
+          },
+        },
+        400,
+      );
+    }
+
+    const results: Array<{ source_session_id: string | null; id: string; updated: boolean }> = [];
+    let imported = 0;
+    let updated = 0;
+    for (const item of rawSessions) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'sessions: элемент должен быть объектом экспорта сессии',
+            },
+            details: { imported, updated, source_session_id: null },
+          },
+          400,
+        );
+      }
+      const itemBody = item as Record<string, unknown>;
+      const sourceSessionId = readImportSourceId(itemBody);
+      let outcome: ImportOutcome;
+      try {
+        outcome = await importSessionFromBody(
+          itemBody,
+          user.id,
+          t('auth.forbidden', undefined, c),
+          c as Parameters<typeof kit.isAdmin>[0],
+        );
+      } catch (err) {
+        return c.json(
+          {
+            error: {
+              code: 'INTERNAL_ERROR',
+              message: err instanceof Error ? err.message : 'Импорт сессии не удался',
+            },
+            details: { imported, updated, source_session_id: sourceSessionId ?? null },
+          },
+          500,
+        );
+      }
+      if (!outcome.ok) {
+        return c.json(
+          {
+            error: { code: outcome.code, message: outcome.message },
+            details: { imported, updated, source_session_id: sourceSessionId ?? null },
+          },
+          outcome.status,
+        );
+      }
+      results.push({
+        source_session_id: sourceSessionId ?? null,
+        id: outcome.session.id,
+        updated: outcome.updated,
+      });
+      if (outcome.updated) updated += 1;
+      else imported += 1;
+    }
+
+    return c.json({ sessions: results, imported, updated }, 200);
   });
 
   // POST /api/v2/sessions/:id/debug-system-message — отправить отладочное системное сообщение

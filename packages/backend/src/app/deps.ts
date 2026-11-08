@@ -33,6 +33,8 @@ import {
   createLiveContextWindowPolicy,
   // Бюджет промпта саб-агента (`/settings/agents-limits`).
   createLiveSubagentMaxInputTokens,
+  // Лимит тяжёлых операций с сессиями (`/settings/limits`).
+  createLiveSessionOpsPerMinute,
   // Дефолты оптимизации контекста новых сессий (`/settings/context-defaults`).
   createLiveContextDefaults,
   // Instance-wide лимиты заметок сессии (`/settings/sticky-notes`).
@@ -428,6 +430,13 @@ export async function createBackendDeps(
   const subagentMaxInputTokensSettings = createLiveSubagentMaxInputTokens({
     config: config.synth.agents.subagentMaxInputTokens,
     runtime: await settingsStore.getSubagentMaxInputTokens(),
+  });
+  // Лимит тяжёлых операций ресурса сессий (`limits.sessionOpsPerMinute`):
+  // приоритет env > runtime > config.yaml > 10; `0` — без лимита. Лимитеры
+  // читают значение на каждый запрос — runtime-настройка применяется без рестарта.
+  const sessionOpsPerMinuteSettings = createLiveSessionOpsPerMinute({
+    config: config.synth.limits.sessionOpsPerMinute,
+    runtime: await settingsStore.getSessionOpsPerMinute(),
   });
   const stopEgressLogPruner = storageDegraded || !egressLogConfig.enabled
     ? () => {}
@@ -2104,6 +2113,8 @@ export async function createBackendDeps(
     // Политика ограничения контекстного окна (live, админ-API).
     contextWindowSettings,
     subagentMaxInputTokensSettings,
+    // Лимит тяжёлых операций с сессиями (live, админ-API `/settings/limits`).
+    sessionOpsPerMinuteSettings,
     // Дефолты оптимизации контекста новых сессий (live, админ-API).
     contextDefaultsSettings,
     // Instance-wide лимиты заметок сессии (live, админ-API).

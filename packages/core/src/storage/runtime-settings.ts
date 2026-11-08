@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
 import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits, SshMode } from '@itphx/synth-shared';
 import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS, SSH_MODES } from '@itphx/synth-shared';
-import { defaultConfig, parseAttachmentsModalities, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS } from '@itphx/synth-shared/config';
+import { defaultConfig, parseAttachmentsModalities, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SESSION_OPS_PER_MINUTE } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
 
@@ -396,6 +396,94 @@ export function createLiveSubagentMaxInputTokens(params: {
 }
 
 /**
+ * Источник эффективного значения `limits.sessionOpsPerMinute`.
+ */
+export type SessionOpsPerMinuteSource = 'env' | 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга `limits.sessionOpsPerMinute` (env > runtime > config > default). */
+export interface ResolvedSessionOpsPerMinute {
+  value: number;
+  source: SessionOpsPerMinuteSource;
+  /** Значение задано через env: runtime его не перекрывает. */
+  envLocked: boolean;
+}
+
+/** Env-имя лимита тяжёлых операций с сессиями (ADR-023). */
+export const SESSION_OPS_PER_MINUTE_ENV = 'SYNTH_LIMITS_SESSION_OPS_PER_MINUTE';
+
+/** Прочитать значение из env (целое ≥ 0; невалидное — warn + игнор, fail-soft). */
+function readSessionOpsPerMinuteEnv(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env[SESSION_OPS_PER_MINUTE_ENV];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 0) return value;
+  console.warn(
+    `[config] невалидное значение ${SESSION_OPS_PER_MINUTE_ENV}="${raw}" (ожидается целое ≥ 0) — игнорируется`,
+  );
+  return undefined;
+}
+
+/**
+ * Эффективный лимит тяжёлых операций с сессиями (import/export/fork/merge)
+ * в минуту на креду — приоритет **env > runtime > config.yaml > default (10)**.
+ *
+ * **«Задано явно» vs «дефолт».** Схема конфига префилит дефолт
+ * (`limitsConfigSchema.prefault({})` → 10), поэтому на чистом инстансе
+ * `configValue` уже равен `DEFAULT_SESSION_OPS_PER_MINUTE` — хотя в `config.yaml`
+ * значения нет. Чтобы ветка `source:'default'` была достижима (UI-бейдж
+ * «по умолчанию»), значение, равное дефолту, трактуется как «не задано» и
+ * отдаётся с `source:'default'`. Следствие: явное значение в `config.yaml`,
+ * равное дефолту, неотличимо от его отсутствия — осознанное упрощение
+ * (эффективное значение одно и то же — 10). На `value`/`envLocked` правило
+ * не влияет: `0` (без лимита) явно отлично от дефолта и остаётся `config`.
+ *
+ * Функция чистая: лимитер вызывает её на каждый запрос, поэтому runtime-
+ * изменение из админки применяется без рестарта. `0` — без ограничения.
+ */
+export function resolveSessionOpsPerMinute(
+  configValue?: number,
+  runtimeValue?: number,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedSessionOpsPerMinute {
+  const envValue = readSessionOpsPerMinuteEnv(env);
+  if (envValue !== undefined) return { value: envValue, source: 'env', envLocked: true };
+  if (runtimeValue !== undefined) return { value: runtimeValue, source: 'runtime', envLocked: false };
+  // Значение конфига, равное дефолту схемы, считается «не заданным» (см. выше).
+  if (configValue !== undefined && configValue !== DEFAULT_SESSION_OPS_PER_MINUTE) {
+    return { value: configValue, source: 'config', envLocked: false };
+  }
+  return { value: DEFAULT_SESSION_OPS_PER_MINUTE, source: 'default', envLocked: false };
+}
+
+/** Живое состояние лимита тяжёлых операций (runtime-значение + резолвер). */
+export interface LiveSessionOpsPerMinute {
+  getRuntime(): number | undefined;
+  setRuntime(next: number | undefined): void;
+  resolve(): ResolvedSessionOpsPerMinute;
+  getValue(): number;
+}
+
+/** Собрать живое состояние лимита тяжёлых операций с сессиями. */
+export function createLiveSessionOpsPerMinute(params: {
+  config?: number;
+  runtime?: number;
+  env?: NodeJS.ProcessEnv;
+}): LiveSessionOpsPerMinute {
+  let runtime = params.runtime;
+  const env = params.env ?? process.env;
+  const resolve = (): ResolvedSessionOpsPerMinute =>
+    resolveSessionOpsPerMinute(params.config, runtime, env);
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next ?? undefined;
+    },
+    resolve,
+    getValue: () => resolve().value,
+  };
+}
+
+/**
  * Источник эффективных дефолтов оптимизации контекста.
  *
  * env-оверрайда у этих значений нет (это дефолты новых сессий, а не политика
@@ -763,6 +851,12 @@ export interface RuntimeSettings {
    * резолвер при сборке `task` extra (без рестарта).
    */
   subagentMaxInputTokens?: number;
+  /**
+   * Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`):
+   * import/export/fork/merge, `0` — без ограничения. Применяется **сразу** —
+   * лимитер читает резолвер на каждый запрос (без рестарта).
+   */
+  sessionOpsPerMinute?: number;
   /**
    * Дефолты оптимизации контекста для **новых** сессий (`context.defaults`).
    * Частичный патч: применяется сразу — менеджер сессий читает резолвер при
@@ -1762,6 +1856,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.subagentMaxInputTokens;
+      return next;
+    });
+  }
+
+  /** Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`). */
+  async getSessionOpsPerMinute(): Promise<number | undefined> {
+    const settings = await this.load();
+    return settings.sessionOpsPerMinute;
+  }
+
+  async setSessionOpsPerMinute(value: number): Promise<void> {
+    await this._update((current) => ({ ...current, sessionOpsPerMinute: value }));
+  }
+
+  async clearSessionOpsPerMinute(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.sessionOpsPerMinute;
       return next;
     });
   }

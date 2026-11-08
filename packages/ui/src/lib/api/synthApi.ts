@@ -42,6 +42,7 @@ import { tlsApi } from './tls'
 import { observabilityApi } from './observability'
 import { attachmentsApi } from './settings-attachments'
 import { agentsLimitsApi } from './agentsLimits'
+import { requestLimitsApi } from './requestLimits'
 import { sshSettingsApi } from './settings-ssh'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
@@ -283,6 +284,7 @@ export type {
   RestartResponse,
 } from './maintenance'
 export type { AgentsLimitsSettings, AgentsLimitsSource } from './agentsLimits'
+export type { RequestLimitsSettings, RequestLimitsSource } from './requestLimits'
 export type { SshSettings, SshMode, SshModeSource } from './settings-ssh'
 export type {
   InstructionFileStatus,
@@ -493,6 +495,8 @@ export const synthApi = {
   ...oauthApi,
   ...maintenanceApi,
   ...agentsLimitsApi,
+  // Лимит тяжёлых операций с сессиями: имена домена уникальны (`getRequestLimits` и т.д.).
+  ...requestLimitsApi,
   ...sshSettingsApi,
   ...analyticsApi,
   ...logsApi,

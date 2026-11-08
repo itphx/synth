@@ -54,6 +54,12 @@ export interface SessionRow {
   owner_id: string | null;
   project_id: string | null;
   /**
+   * Маркер источника при переносе между инстансами (`Session.sourceSessionId`),
+   * ключ дедупликации повторного импорта (миграция `033`). В записях, созданных
+   * до миграции, поля нет — чтение даёт `undefined`.
+   */
+  source_session_id?: string | null;
+  /**
    * ADR-114: привязка сессии к worktree (jsonb). В записях, созданных до
    * миграции `023`, поля нет — чтение даёт `undefined`.
    */
@@ -521,6 +527,8 @@ export function serializeSession(session: Session): Record<string, unknown> {
     user_id: session.userId ?? null,
     owner_id: session.ownerId ?? null,
     project_id: session.projectId ?? null,
+    // Маркер источника переноса (ключ дедупликации повторного импорта).
+    source_session_id: session.sourceSessionId ?? null,
     // ADR-114: привязка к worktree (объект в snake_case — как в JSON-файле).
     worktree: session.worktree
       ? {
@@ -752,6 +760,8 @@ export function deserializeSession(
     userId: row.user_id ?? undefined,
     ownerId: row.owner_id ?? undefined,
     projectId: row.project_id ?? undefined,
+    // Маркер источника переноса (legacy-записи без поля → undefined).
+    ...(row.source_session_id ? { sourceSessionId: row.source_session_id } : {}),
     // ADR-114: привязка к worktree (legacy-записи без поля → undefined).
     ...(worktree ? { worktree } : {}),
     messages: children.messages.map(deserializeMessage),

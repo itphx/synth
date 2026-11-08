@@ -28,6 +28,7 @@ import {
   createAttachmentsSettingsRoutes, createModalityModelLookup,
   createContextWindowSettingsRoutes,
   createAgentsLimitsSettingsRoutes,
+  createRequestLimitsSettingsRoutes,
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
   createSshSettingsRoutes,
@@ -696,6 +697,20 @@ export function mountStandaloneRoutes(
       settingsStore,
       config: config.agentsConfig?.subagentMaxInputTokens,
       live: deps.subagentMaxInputTokensSettings,
+      securityAudit,
+      env: process.env,
+    },
+  ));
+
+  // Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`):
+  // import/export/fork/merge, 0 — без лимита; применяется к следующим запросам
+  // без рестарта (лимитер читает резолвер на каждый запрос). Core — `requireAuth`.
+  app.route('/api/v2/settings', createRequestLimitsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.limitsConfig?.sessionOpsPerMinute,
+      live: deps.sessionOpsPerMinuteSettings,
       securityAudit,
       env: process.env,
     },

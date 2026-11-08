@@ -42,7 +42,7 @@ const EXPECTED_API_METHODS = [
   'getProcessLogs', 'getProject', 'getProjectInvariants', 'getProjectLogPage', 'getProjectMcp',
   'getProjectPipeline', 'getProjectPipelines', 'getProjectPipelinesPage', 'getProjectPlan', 'getProjectSkills',
   'getProjectStats', 'getProjects', 'getProjectsPage', 'getProtectedPaths', 'getProviders', 'getProxy',
-  'getRestartStatus', 'getScheduleJobs', 'getSchedules', 'getSecurityAudit', 'getSecuritySettings',
+  'getRequestLimits', 'getRestartStatus', 'getScheduleJobs', 'getSchedules', 'getSecurityAudit', 'getSecuritySettings',
   'getServiceKey', 'getServiceKeyScopes', 'getServiceKeys', 'getSession', 'getSessionInstructions',
   'getSessionMcpEffective', 'getSessionMemory', 'getSessionMessage', 'getSessionMessages', 'getSessionPrompt',
   'getSessionReferences', 'getSessionSecrets', 'getSessionSkills', 'getSessionSkillsEffective', 'getSessionStats',
@@ -63,7 +63,7 @@ const EXPECTED_API_METHODS = [
   'resetAttachmentsSettings', 'resetContextFile', 'resetDecisionMetrics', 'resetDecisionSettings',
   'resetDefaultAgent', 'resetDefaultModel', 'resetDictionary', 'resetEgressPolicy', 'resetEventsSettings',
   'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy', 'resetMcpPolicy',
-  'resetMcpSettings', 'resetPluginsSettings', 'resetProtectedPaths', 'resetProxy', 'resetSkillsSettings',
+  'resetMcpSettings', 'resetPluginsSettings', 'resetProtectedPaths', 'resetProxy', 'resetRequestLimits', 'resetSkillsSettings',
   'resetSshMode', 'resetToolsDisabled', 'resetToolsPolicy', 'restartInstance', 'resumePipelineRun', 'resumeQueue',
   'resumeSubagent', 'retryMessage', 'retryQueueNow', 'returnQueue', 'revokeEventBindingKey', 'revokeServiceKey',
   'rollbackPlugin', 'runSchedule', 'saveAgent', 'saveContextFile', 'saveDebugConfig', 'saveDictionary',
@@ -71,7 +71,7 @@ const EXPECTED_API_METHODS = [
   'saveMcpToolSettings', 'saveModel', 'saveProtectedPaths', 'saveProxy', 'saveSecuritySettings',
   'saveToolsDisabled', 'saveToolsPolicy', 'scanGitRepos', 'scheduleRestore', 'setAgentsLimits', 'setDefaultAgent',
   'setDefaultClient', 'setDefaultModel', 'setEnabled', 'setMemoryIndexEnabled', 'setProfilePassword',
-  'setProxyPassword', 'setSshMode', 'setToken', 'setWorkspacePolicy', 'setWorkspaceSetting', 'startPipelineRun',
+  'setProxyPassword', 'setRequestLimits', 'setSshMode', 'setToken', 'setWorkspacePolicy', 'setWorkspaceSetting', 'startPipelineRun',
   'status', 'steerQueue', 'stopGeneration', 'stopProcess', 'summarizeSession', 'testProvider', 'testProxyRoute',
   'testWebhookSubscription', 'toggleAgent', 'toggleContextFile', 'toggleMessage', 'uninstallPack',
   'unlinkAgentSshKey', 'updateAttachmentsSettings', 'updateDecisionSettings', 'updateEventBindingKey',
@@ -86,7 +86,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (392)', () => {
+  it('набор методов совпадает с зафиксированным (395)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

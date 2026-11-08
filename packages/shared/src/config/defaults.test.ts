@@ -122,6 +122,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.agents).toEqual({ subagentMaxInputTokens: 0, subagentDepth: 1 });
   });
 
+  it('limits по умолчанию: 10 тяжёлых операций с сессиями в минуту', () => {
+    expect(defaultConfig.limits).toEqual({ sessionOpsPerMinute: 10 });
+  });
+
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {
     expect(defaultConfig.llm.defaultProvider).toBe('');
     expect(defaultConfig.llm.defaultModel).toBe('');

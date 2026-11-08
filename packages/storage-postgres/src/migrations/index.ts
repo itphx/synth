@@ -41,6 +41,7 @@ import { MIGRATION_029_MESSAGE_STREAM_V2 } from './029-message-stream-v2.js';
 import { MIGRATION_030_SESSION_RETRY } from './030-session-retry.js';
 import { MIGRATION_031_SSH_KEY_POLICY } from './031-ssh-key-policy.js';
 import { MIGRATION_032_MCP_REMOTE_MODE } from './032-mcp-remote-mode.js';
+import { MIGRATION_033_SESSION_SOURCE_ID } from './033-session-source-id.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -86,6 +87,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 30, id: '030_session_retry', sql: MIGRATION_030_SESSION_RETRY },
   { version: 31, id: '031_ssh_key_policy', sql: MIGRATION_031_SSH_KEY_POLICY },
   { version: 32, id: '032_mcp_remote_mode', sql: MIGRATION_032_MCP_REMOTE_MODE },
+  { version: 33, id: '033_session_source_id', sql: MIGRATION_033_SESSION_SOURCE_ID },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

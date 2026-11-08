@@ -133,6 +133,12 @@ interface SerializedSession {
   owner_id?: string;
   project_id?: string;
   /**
+   * Маркер источника при переносе между инстансами (`Session.sourceSessionId`):
+   * ключ дедупликации повторного импорта. В записях, созданных до появления
+   * поля, его нет — чтение даёт `undefined`.
+   */
+  source_session_id?: string;
+  /**
    * ADR-114: привязка к worktree (аддитивно). В записях, созданных до
    * ADR-114, поля нет — чтение даёт `undefined` (прежнее поведение).
    */
@@ -408,6 +414,9 @@ function serializeSession(session: Session): SerializedSession {
     user_id: session.userId,
     owner_id: session.ownerId,
     project_id: session.projectId,
+    // Маркер источника переноса (ключ дедупликации повторного импорта) —
+    // не теряется при reload.
+    ...(session.sourceSessionId ? { source_session_id: session.sourceSessionId } : {}),
     // ADR-114: привязка к worktree — не теряется при reload (переживает рестарт).
     ...(session.worktree ? { worktree: serializeSessionWorktree(session.worktree) } : {}),
     // ADR-106 Ф4: участники сессии — не теряются при reload.
@@ -513,6 +522,8 @@ function deserializeSession(data: SerializedSession): Session {
     userId: data.user_id,
     ownerId: data.owner_id,
     projectId: data.project_id,
+    // Маркер источника переноса (legacy-записи без поля → undefined).
+    ...(data.source_session_id ? { sourceSessionId: data.source_session_id } : {}),
     // ADR-114: привязка к worktree (legacy-записи без поля → undefined).
     ...(worktree ? { worktree } : {}),
     // ADR-106 Ф4: участники сессии (потолок хода по роли).

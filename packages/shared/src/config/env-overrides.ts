@@ -113,6 +113,8 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'agents', key: 'subagentMaxInputTokens', type: 'number' },
   // agents: лимит глубины вложенности саб-агентов (0 — без ограничения).
   { section: 'agents', key: 'subagentDepth', type: 'number' },
+  // limits: лимит тяжёлых операций с сессиями в минуту (0 — без ограничения).
+  { section: 'limits', key: 'sessionOpsPerMinute', type: 'number' },
   // attachments (ADR-115): вложения сообщений. Семейства MIME
   // (`SYNTH_ATTACHMENTS_MODALITIES`, csv) — объектный ключ, обрабатывается
   // отдельно (`applyAttachmentsModalitiesEnvOverride`); список префиксов

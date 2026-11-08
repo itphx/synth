@@ -375,6 +375,19 @@ export class MemorySettingsRepository implements SettingsRepository {
     this._clear('subagentMaxInputTokens');
   }
 
+  /** Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`). */
+  async getSessionOpsPerMinute(): Promise<number | undefined> {
+    return this._settings.sessionOpsPerMinute;
+  }
+
+  async setSessionOpsPerMinute(value: number): Promise<void> {
+    this._patch({ sessionOpsPerMinute: value });
+  }
+
+  async clearSessionOpsPerMinute(): Promise<void> {
+    this._clear('sessionOpsPerMinute');
+  }
+
   /** Дефолты оптимизации контекста новых сессий (runtime, админка). */
   async getContextDefaults(): Promise<Partial<ContextDefaults> | undefined> {
     return this._settings.contextDefaults

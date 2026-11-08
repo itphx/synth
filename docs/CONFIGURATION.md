@@ -186,6 +186,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (предохранитель по объёму промпта саб-агента; `0` — без ограничения) |
 | `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (лимит глубины вложенности саб-агентов; `0` — без ограничения) |
+| `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` | number | `limits.sessionOpsPerMinute` (лимит тяжёлых операций с сессиями — импорт/экспорт/форк/merge — в минуту на креденту; `0` — без ограничения) |
 | `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (лимит вывода по умолчанию; `0` — авто-дефолт ядра) |
 | `SYNTH_CONTEXT_WINDOW_POLICY` | string (`off`/`warn`/`enforce`) | `context.windowPolicy` (политика ограничения контекстного окна; дефолт `warn`) |
 | `SYNTH_SESSION_AUTO_TITLE_ENABLED` | boolean | `session.autoTitle.enabled` (мастер-выключатель авто-именования сессии) |
@@ -1754,6 +1755,58 @@ agents:
   subagentMaxInputTokens: 0   # 0 — без лимита (дефолт)
   subagentDepth: 1
 ```
+
+### Лимиты запросов (`limits.*`)
+
+Лимит **тяжёлых операций с сессиями** — запросов, которые целиком переносят историю и
+потому дороги по данным и CPU: `POST /api/v2/sessions/import`,
+`POST /api/v2/sessions/import-batch`, `GET /api/v2/sessions/:id/export`,
+`POST /api/v2/sessions/:id/fork`, `POST /api/v2/sessions/:id/merge`. Это защита от
+случайного или намеренного «залива» инстанса переносами (скрипт публикации, цикл
+форков, повторные импорты), а не интерактивный лимит чата: обычная работа с сессией
+(`prompt`, чтение истории, правки) им не ограничена.
+
+Счёт ведётся **на креденту** — ключ лимитера `Authorization` (для запросов без
+заголовка — `x-forwarded-for`), окно 60 секунд. Значение одинаково для всех операций,
+но **счётчики раздельные по семействам**: импорт (включая пакетный `import-batch`) —
+один счётчик, экспорт — свой, форк — свой, `merge` — свой; исчерпанный лимит экспортов
+не блокирует форк. `0` — лимит выключен (счётчик не ведётся).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `limits.sessionOpsPerMinute` | Лимит тяжёлых операций с сессиями (`import`/`import-batch`/`export`/`fork`/`merge`), запросов в минуту на креденту; `0` — без лимита. Настраивается в UI (Настройки → «Безопасность» → «Лимиты запросов») / `GET/PUT/DELETE /api/v2/settings/limits`; приоритет env > runtime > config. Env — `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` | `10` |
+
+```yaml
+limits:
+  sessionOpsPerMinute: 10   # 0 — без лимита
+```
+
+- **Применяется без рестарта.** Лимитеры читают резолвер на каждый запрос, поэтому
+  `PUT /api/v2/settings/limits` (или `DELETE` — сброс к env/config/default) действует
+  на следующий же запрос, `restartRequired: false`. Источник эффективного значения
+  (`env`/`runtime`/`config`/`default`) и env-фиксация (`envLocked`) отдаются в том же
+  ответе.
+- **Приоритет:** env `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` > runtime (`settings.json`/PG,
+  UI/API) > `config.yaml` `limits.sessionOpsPerMinute` > `10`. При env-значении runtime
+  заблокирован: `PUT` другого значения → `409 CONFLICT`, из UI поле недоступно.
+  Невалидное env-значение (не целое ≥ 0) — предупреждение в лог и игнор (fail-soft),
+  действует следующий по приоритету источник.
+- **`0` — без лимита.** Значение `0` (в env/runtime/config) полностью выключает
+  ограничение; отрицательные и дробные значения не принимаются: схема конфига — целое
+  ≥ 0, `PUT` отвечает `400 VALIDATION_ERROR`.
+- **Пакетный импорт — один хит.** `POST /api/v2/sessions/import-batch` (до 200 сессий в
+  запросе) расходует одну единицу лимита, а не по единице на сессию.
+- **Счётчики in-memory, per-process.** В multi-replica инстансе лимит действует **на
+  реплику**, а не на инстанс целиком: суммарная пропускная способность растёт с числом
+  реплик, а сброс процесса обнуляет окна. Для жёсткого общего лимита нужен внешний
+  rate limiter (прокси/шлюз) — в приложении его нет.
+- **Превышение → `429` с `Retry-After`.** Ответ `{error:{code:'RATE_LIMITED', message}}`
+  и заголовок `Retry-After` — целые секунды до конца текущего окна (минимум 1). Клиенту
+  (скрипту публикации) достаточно подождать указанное время и повторить.
+- **Где применяется.** Лимитер навешен в managed backend (`packages/backend/src/routes/sessions.ts`)
+  — там же живут backend-only `import`/`import-batch`/`export`. В standalone-core настройка
+  читается и хранится, но счётчиков нет: маршрутов импорта/экспорта в core-сборке не существует,
+  а `fork`/`merge` там не ограничиваются (лимитер передаётся из backend middleware'ом).
 
 ### Авто-заголовок сессии (`session.autoTitle`)
 

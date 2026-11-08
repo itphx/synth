@@ -123,6 +123,20 @@ export function describeSessionRepository(
       expect(without!.worktree).toBeUndefined();
     });
 
+    it('маркер источника переноса сохраняется round-trip; его отсутствие читается как undefined', async () => {
+      const { repo } = await make();
+
+      await repo.save(makeSession({ id: 'transfer-source', sourceSessionId: 'sess-origin-42' }));
+      const loaded = await repo.load('transfer-source');
+      expect(loaded?.sourceSessionId).toBe('sess-origin-42');
+
+      // Сессия без маркера — прежнее поведение (поля нет).
+      await repo.save(makeSession({ id: 'transfer-no-source' }));
+      const without = await repo.load('transfer-no-source');
+      expect(without).not.toBeNull();
+      expect(without!.sourceSessionId).toBeUndefined();
+    });
+
     it('Anthropic: подпись thinking и opaque `redacted_thinking` переживают round-trip (save/append/update)', async () => {
       const { repo } = await make();
       const signed = {

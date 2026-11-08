@@ -2,6 +2,12 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
+> ⚠️ RU-версия обновлена 2026-11-08 (**секция «Лимиты запросов» (`limits.*`)** — `sessionOpsPerMinute`
+> (тяжёлые операции с сессиями: `import`/`import-batch`/`export`/`fork`/`merge`, запросов в минуту на
+> креденту, `0` — без лимита, дефолт `10`), runtime-настройка `/api/v2/settings/limits`, env
+> `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE`, приоритет env > runtime > config, счётчики in-memory
+> per-process, превышение → `429` + `Retry-After` — **переведено**).
+
 > ⚠️ RU-версия обновлена 2026-11-08 (**`auth.apiKeyRoles` / `SYNTH_API_KEY_ROLES`** —
 > роль пользователя единого API-ключа по умолчанию `USER`, ADMIN — только явной настройкой;
 > bind-host backend — loopback вне контейнера, `0.0.0.0` в контейнере — **переведено**).
@@ -197,6 +203,7 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (stage 1 of roadmap 0.12.4 — block 4) |
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (safeguard on the subagent prompt size; `0` — no limit) |
 | `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (subagent nesting depth limit; `0` — no limit) |
+| `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` | number | `limits.sessionOpsPerMinute` (limit of heavy session operations — import/export/fork/merge — per minute per credential; `0` — no limit) |
 | `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (default output limit; `0` — core default) |
 | `SYNTH_CONTEXT_WINDOW_POLICY` | string (`off`/`warn`/`enforce`) | `context.windowPolicy` (context window limit policy; default `warn`) |
 | `SYNTH_SESSION_AUTO_TITLE_ENABLED` | boolean | `session.autoTitle.enabled` (master switch of the session auto-naming) |
@@ -1722,6 +1729,61 @@ agents:
   subagentMaxInputTokens: 0   # 0 — no limit (default)
   subagentDepth: 1
 ```
+
+### Request limits (`limits.*`)
+
+The limit of **heavy session operations** — requests that carry a whole history and are
+therefore expensive in data and CPU: `POST /api/v2/sessions/import`,
+`POST /api/v2/sessions/import-batch`, `GET /api/v2/sessions/:id/export`,
+`POST /api/v2/sessions/:id/fork`, `POST /api/v2/sessions/:id/merge`. It protects the
+instance from an accidental or deliberate flood of transfers (a publish script, a fork
+loop, repeated imports); it is not an interactive chat limit: ordinary session work
+(`prompt`, reading the history, edits) is not limited by it.
+
+The count is **per credential** — the limiter key is `Authorization` (for requests
+without the header — `x-forwarded-for`), with a 60-second window. The value is shared by
+all the operations, but **the counters are separate per family**: import (including the
+batch `import-batch`) — one counter, export — its own, fork — its own, `merge` — its own;
+an exhausted export limit does not block a fork. `0` disables the limit (no counter is
+kept).
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `limits.sessionOpsPerMinute` | Limit of heavy session operations (`import`/`import-batch`/`export`/`fork`/`merge`), requests per minute per credential; `0` — no limit. Configurable in the UI (Settings → “Security” → “Request limits”) / `GET/PUT/DELETE /api/v2/settings/limits`; priority env > runtime > config. Env — `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` | `10` |
+
+```yaml
+limits:
+  sessionOpsPerMinute: 10   # 0 — no limit
+```
+
+- **Applied without a restart.** The limiters resolve the value on every request, so
+  `PUT /api/v2/settings/limits` (or `DELETE` — reset to env/config/default) takes effect
+  on the very next request, `restartRequired: false`. The source of the effective value
+  (`env`/`runtime`/`config`/`default`) and the env lock (`envLocked`) are returned in the
+  same response.
+- **Priority:** env `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` > runtime (`settings.json`/PG,
+  UI/API) > `config.yaml` `limits.sessionOpsPerMinute` > `10`. With an env value the
+  runtime is locked: `PUT` of another value → `409 CONFLICT`, the UI field is read-only.
+  An invalid env value (not an integer ≥ 0) — a log warning and ignored (fail-soft), the
+  next source by priority applies.
+- **`0` — no limit.** `0` (in env/runtime/config) disables the restriction completely;
+  negative and fractional values are not accepted: the config schema is an integer ≥ 0,
+  `PUT` answers `400 VALIDATION_ERROR`.
+- **A batch import is one hit.** `POST /api/v2/sessions/import-batch` (up to 200 sessions
+  per request) consumes one unit of the limit, not one per session.
+- **Counters are in-memory, per-process.** In a multi-replica instance the limit applies
+  **per replica**, not to the whole instance: the total throughput grows with the number
+  of replicas, and a process restart resets the windows. A hard shared limit requires an
+  external rate limiter (proxy/gateway) — the application does not have one.
+- **Exceeding → `429` with `Retry-After`.** The response is
+  `{error:{code:'RATE_LIMITED', message}}` plus the `Retry-After` header — whole seconds
+  until the end of the current window (minimum 1). For a client (a publish script) it is
+  enough to wait the indicated time and retry.
+- **Where it is applied.** The limiter is wired in the managed backend
+  (`packages/backend/src/routes/sessions.ts`) — the same place as the backend-only
+  `import`/`import-batch`/`export`. In standalone-core the setting is read and stored, but
+  there are no counters: the import/export routes do not exist in the core build, and
+  `fork`/`merge` are not limited there (the limiter is passed in as backend middleware).
 
 ### Session auto-title (`session.autoTitle`)
 

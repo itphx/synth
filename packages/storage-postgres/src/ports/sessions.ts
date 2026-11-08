@@ -107,6 +107,8 @@ export const SESSION_FIELDS = [
   'user_id',
   'owner_id',
   'project_id',
+  // Маркер источника переноса — ключ дедупликации повторного импорта (миграция 033).
+  'source_session_id',
   // ADR-114: привязка сессии к worktree (jsonb, миграция 023).
   'worktree',
   'todos',

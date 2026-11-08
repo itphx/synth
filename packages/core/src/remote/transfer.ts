@@ -12,6 +12,7 @@ import type { DirectoryListResult } from '@itphx/synth-shared';
 import type { ProjectRepository } from '../storage/ports/project-repository.js';
 import type { SessionManager } from '../sessions/manager.js';
 import type { RemoteBackendClient } from './client.js';
+import { RemoteError } from './types.js';
 import type { EventBus } from '../events/bus.js';
 import { serializeSession, deserializeLogEntry } from '../server/serialize.js';
 
@@ -105,9 +106,20 @@ export async function remoteWalk(
   return acc.sort();
 }
 
-/** Собрать тело экспорта сессии из локального объекта Session (camelCase). */
+/**
+ * Собрать тело экспорта сессии из локального объекта Session (camelCase).
+ *
+ * Маркер источника (`sourceSessionId`/`source_session_id`) **вырезается**:
+ * его задаёт вызывающий (`import.source_session_id` при переносе). Иначе при
+ * цепочке A→B→C в тело уехал бы чужой id и дедупликация привязалась бы не к тому
+ * источнику.
+ */
 export function buildSessionExport(session: Session): Record<string, unknown> {
-  return { ...session };
+  const out: Record<string, unknown> = { ...session };
+  delete out.sourceSessionId;
+  // snake_case-вариант возможен у тела, пришедшего из удалённого экспорта.
+  delete out.source_session_id;
+  return out;
 }
 
 /** Минимальная форма сессии для анализа ссылок (Session или экспорт с camelCase). */
@@ -177,6 +189,60 @@ function orderSessionsForTransfer<T extends SessionRefsShape>(sessions: T[]): T[
     for (const s of sessions) if (!order.includes(s.id)) order.push(s.id);
   }
   return order.map((id) => byId.get(id)!);
+}
+
+/**
+ * Уровни зависимостей сессий (publish): в одном уровне — только сессии, чьи
+ * зависимости (`parentId`/`references`) уже перенесены в предыдущих уровнях.
+ * Порядок внутри уровня — исходный (стабильный). Циклы/взаимные ссылки
+ * попадают в последний уровень (их ссылки останутся локальными/null).
+ *
+ * Нужно для пакетного импорта: тела уровня собираются с уже известным
+ * mapping'ом remote-id, а один `import-batch` покрывает ровно уровень.
+ */
+function orderSessionsForTransferLevels<T extends SessionRefsShape>(sessions: T[]): T[][] {
+  if (sessions.length === 0) return [];
+  if (sessions.length === 1) return [sessions];
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const localIds = new Set(byId.keys());
+  const deps = new Map<string, string[]>();
+  const dependents = new Map<string, string[]>();
+  for (const s of sessions) {
+    const refs = collectReferencedSessionIds(s).filter((id) => localIds.has(id) && id !== s.id);
+    deps.set(s.id, refs);
+    for (const dep of refs) {
+      const arr = dependents.get(dep) ?? [];
+      arr.push(s.id);
+      dependents.set(dep, arr);
+    }
+  }
+  const indegree = new Map<string, number>();
+  for (const s of sessions) indegree.set(s.id, (deps.get(s.id) ?? []).length);
+  const originalIndex = new Map(sessions.map((s, i) => [s.id, i]));
+  const levels: string[][] = [];
+  const placed = new Set<string>();
+  let ready = sessions
+    .filter((s) => (indegree.get(s.id) ?? 0) === 0)
+    .map((s) => s.id);
+
+  while (ready.length > 0) {
+    ready.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+    levels.push([...ready]);
+    const next: string[] = [];
+    for (const id of ready) {
+      placed.add(id);
+      for (const dependent of dependents.get(id) ?? []) {
+        const deg = (indegree.get(dependent) ?? 0) - 1;
+        indegree.set(dependent, deg);
+        if (deg === 0) next.push(dependent);
+      }
+    }
+    ready = next;
+  }
+  // Циклы/взаимные ссылки — последним уровнем в исходном порядке.
+  const remaining = sessions.filter((s) => !placed.has(s.id));
+  if (remaining.length > 0) levels.push(remaining.map((s) => s.id));
+  return levels.map((ids) => ids.map((id) => byId.get(id)!));
 }
 
 /** Переписать sessionId в session_reference-части сообщения по mapping (не перенесено → null). */
@@ -351,29 +417,83 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
   let sessionsImported = 0;
   if (includeSessions) {
     // Mapping локальный id → remote id: remote-id создаётся в момент импорта,
-    // поэтому сессии переносим в топологическом порядке (зависимости раньше) и
-    // переписываем parentId/references уже известными remote-id.
+    // поэтому сессии переносим **уровнями зависимостей** (зависимости раньше) и
+    // переписываем parentId/references уже известными remote-id. Один уровень —
+    // один `import-batch` (дедупликация по `source_session_id` на сервере).
     const mapping = new Map<string, string>();
     const transferredMessageIds = new Set<string>();
     for (const s of localSessions) {
       for (const m of s.messages ?? []) transferredMessageIds.add(m.id);
     }
-    const ordered = orderSessionsForTransfer(localSessions);
+    const levels = orderSessionsForTransferLevels(localSessions);
 
-    for (const s of ordered) {
-      const exportBody = rewriteSessionExportForRemote(s, mapping, transferredMessageIds);
-      const created = (await remoteClient.importSession({
-        ...exportBody,
-        import: { project_id: targetProjectId },
-      })) as Record<string, unknown> | null;
-      const remoteId = String(created?.id ?? '');
-      if (remoteId) {
-        mapping.set(s.id, remoteId);
-      } else {
-        logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
+    // Старый backend без `/import-batch` (404/405) — один раз переключаемся на
+    // поштучный цикл для этого и всех последующих уровней (совместимость гибрида).
+    let batchSupported = true;
+    let importRequests = 0;
+
+    for (const level of levels) {
+      if (batchSupported) {
+        const bodies = level.map((s) => ({
+          ...rewriteSessionExportForRemote(s, mapping, transferredMessageIds),
+          // Маркер задаёт вызывающий: локальный id сессии — стабильный ключ
+          // дедупликации повторного publish (унаследованный sourceSessionId
+          // вырезан из тела, чтобы цепочка A→B→C не уехала чужим id).
+          import: { project_id: targetProjectId, source_session_id: s.id },
+        }));
+        try {
+          const response = await remoteClient.importSessions(bodies);
+          importRequests += 1;
+          const bySource = new Map<string, string>();
+          for (const item of response.sessions ?? []) {
+            if (typeof item.source_session_id === 'string' && typeof item.id === 'string' && item.id) {
+              bySource.set(item.source_session_id, item.id);
+            }
+          }
+          for (const s of level) {
+            const remoteId = bySource.get(s.id);
+            if (remoteId) {
+              mapping.set(s.id, remoteId);
+            } else {
+              logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
+            }
+            sessionsImported++;
+            logger(`  сессия: ${s.title || s.id}`);
+          }
+          continue;
+        } catch (err) {
+          if (err instanceof RemoteError && (err.code === 'HTTP_404' || err.code === 'HTTP_405')) {
+            batchSupported = false;
+            logger('  пакетный импорт недоступен на сервере — перехожу на поштучный');
+          } else {
+            throw err;
+          }
+        }
       }
-      sessionsImported++;
-      logger(`  сессия: ${s.title || s.id}`);
+
+      // Поштучный цикл (старый сервер или после отказа батча).
+      for (const s of level) {
+        const exportBody = rewriteSessionExportForRemote(s, mapping, transferredMessageIds);
+        const created = (await remoteClient.importSession({
+          ...exportBody,
+          import: { project_id: targetProjectId, source_session_id: s.id },
+        })) as Record<string, unknown> | null;
+        importRequests += 1;
+        const remoteId = String(created?.id ?? '');
+        if (remoteId) {
+          mapping.set(s.id, remoteId);
+        } else {
+          logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
+        }
+        sessionsImported++;
+        logger(`  сессия: ${s.title || s.id}`);
+      }
+    }
+
+    if (localSessions.length > 0) {
+      logger(
+        `  сессий перенесено: ${sessionsImported}, уровней: ${levels.length}, запросов импорта: ${importRequests}`,
+      );
     }
   }
 

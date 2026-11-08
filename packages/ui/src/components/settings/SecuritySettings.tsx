@@ -12,6 +12,7 @@ import {
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
 import { TooltipProvider } from '../ui/tooltip'
+import { RequestLimitsSettings } from './RequestLimitsSettings'
 import { SelectContent, SelectItem } from '../ui/select'
 import {
   DefaultsBadge,
@@ -645,6 +646,9 @@ export function SecuritySettings() {
           <div className="text-xs text-muted-foreground">{t('security.protectedPaths.baseHint')}</div>
         )}
       </SettingsSection>
+
+      {/* Лимиты тяжёлых операций с сессиями (импорт/экспорт/форк/merge) */}
+      <RequestLimitsSettings />
     </SettingsPanel>
     </TooltipProvider>
   )

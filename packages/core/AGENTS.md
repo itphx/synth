@@ -604,6 +604,14 @@
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
+- **Лимит тяжёлых операций с сессиями.** `limits.sessionOpsPerMinute` — instance-wide, резолвер
+  `resolveSessionOpsPerMinute` (env `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` > runtime
+  `settings.json`/PG > `config.yaml` > `10`; `0` — без лимита) + live-состояние
+  `createLiveSessionOpsPerMinute`; runtime-настройка — `/api/v2/settings/limits`
+  (`createRequestLimitsSettingsRoutes`). Сам ограничитель (in-memory `createRateLimiter`, окно
+  60 с, ключ — `Authorization`, 429 `RATE_LIMITED` + `Retry-After`) навешен в managed backend
+  (`packages/backend/src/routes/sessions.ts`, import/import-batch/export/fork/merge); в
+  standalone-core маршрутов импорта/экспорта нет, счётчиков не заводится.
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `GET/PATCH /:id/optimization*` (ADR-119) + `POST /:id/optimization/check|cancel-summarization` — вкладка «Контекст», настройки читает движок на core, поэтому маршруты обязаны жить в общей фабрике (в гибриде `remote:` форвардится клиентом); `GET/PUT /:id/mcp` — MCP-скоуп сессии (backend регистрирует свою, более строгую версию раньше); `GET /:id/secrets` — карта обфускации по праву раскрытия (`resolveCanRevealSecrets`); `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `meta` (ADR-118: `GET /api/v2/meta` — возможности инстанса, без аутентификации), `dictionaries`, `mcp`, `skills`,
@@ -617,6 +625,11 @@
   restartRequired:false}`, `restartRequired` **всегда `false`** — смена режима live;
   env-фиксация → 409 `CONFLICT`, невалидный режим → 400 `VALIDATION_ERROR`, аудит
   `scope:'ssh'`; core — `requireAuth`, managed — ADMIN (чтение и запись)),
+  `settings-limits` (ADR-023: `/settings/limits` — `createRequestLimitsSettingsRoutes`,
+  лимит тяжёлых операций с сессиями `limits.sessionOpsPerMinute`; `GET/PUT/DELETE`,
+  ответ `{sessionOpsPerMinute, saved, defaults, source, envLocked, restartRequired:false}`,
+  409 `CONFLICT` при env-фиксации, 400 `VALIDATION_ERROR` на `-1`/дробное, аудит
+  `scope:'limits'`; core — `requireAuth`, managed — ADMIN),
   `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
   в деградированном режиме хранилища контур **не монтируется** → 404).
 - **План/ToDo/журнал/инварианты (ADR-130) — доменные сервисы + HTTP-фабрики.**
@@ -2689,6 +2702,10 @@
   `PUT/DELETE /settings/proxy/profiles/:name/password`, `.../tls/ca`, `.../tls/client` (профильные
   секреты write-only, `secrets/proxy/`), `POST /settings/proxy/test` (target-check: маршрут по saved,
   `HEAD` без редиректов, egress-политика до запроса); мутации — `settingsWriteGuard`, аудит `scope:'proxy'`.
+  `createRequestLimitsSettingsRoutes` — `GET/PUT/DELETE /settings/limits`
+  (`limits.sessionOpsPerMinute`: резолвер `resolveSessionOpsPerMinute` + live-состояние,
+  409 `CONFLICT` при env-фиксации, аудит `scope:'limits'`, `restartRequired:false`) —
+  рядом с `/settings/agents-limits`, тот же контракт `{…, saved, defaults, source, envLocked}`.
 - **Видимость сессий/проектов (ADR-089).** Единый хелпер — `server/session-visibility.ts`
   (`isSessionVisible(session, projectStore, { userId, elevated }, projectCache?)`): `elevated`
   (ADMIN/LEAD) → всё; владелец (`ownerId ?? userId`) → да; нет владельца → да; иначе сессия

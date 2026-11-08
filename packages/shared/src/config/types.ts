@@ -847,6 +847,26 @@ export const agentsConfigSchema = z.object({
   subagentDepth: z.number().int().min(0).default(DEFAULT_SUBAGENT_DEPTH),
 });
 
+// --- Лимиты тяжёлых операций с сессиями ---
+
+/**
+ * Дефолт лимита тяжёлых операций с сессиями (import/export/fork/merge) в
+ * минуту на креду: 10. `0` — **без ограничения**.
+ */
+export const DEFAULT_SESSION_OPS_PER_MINUTE = 10;
+
+/**
+ * Секция `limits` — instance-wide лимиты тяжёлых операций.
+ *
+ * - `sessionOpsPerMinute` — число тяжёлых операций с сессиями (import/export/
+ *   fork/merge) в минуту на креду. Применяется ко всем четырём операциям;
+ *   `0` — без ограничения.
+ */
+export const limitsConfigSchema = z.object({
+  sessionOpsPerMinute: z.number().int().min(0).default(DEFAULT_SESSION_OPS_PER_MINUTE),
+});
+export type LimitsConfig = z.infer<typeof limitsConfigSchema>;
+
 // --- Authority-слой (ADR-106) ---
 
 /**
@@ -1684,6 +1704,7 @@ export const synthConfigSchema = z.object({
   questions: questionsConfigSchema.prefault({}),
   background: backgroundConfigSchema.prefault({}),
   agents: agentsConfigSchema.prefault({}),
+  limits: limitsConfigSchema.prefault({}),
   attachments: attachmentsConfigSchema.prefault({}),
   metrics: metricsConfigSchema.prefault({}),
   authority: authorityConfigSchema.prefault({}),

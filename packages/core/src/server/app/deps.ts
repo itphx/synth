@@ -140,6 +140,7 @@ import {
   createLiveAttachmentsSettings,
   createLiveContextWindowPolicy,
   createLiveSubagentMaxInputTokens,
+  createLiveSessionOpsPerMinute,
   createLiveContextDefaults,
   createLiveStickyNotesLimits,
   createLiveSshMode,
@@ -342,6 +343,14 @@ export async function createStandaloneDeps(
   const subagentMaxInputTokensSettings = createLiveSubagentMaxInputTokens({
     config: config.agentsConfig?.subagentMaxInputTokens,
     runtime: await settingsStore.getSubagentMaxInputTokens(),
+  });
+
+  // Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`):
+  // приоритет env > runtime > config.yaml > 10; лимитер читает резолвер на
+  // каждый запрос (runtime-изменение применяется без рестарта).
+  const sessionOpsPerMinuteSettings = createLiveSessionOpsPerMinute({
+    config: config.limitsConfig?.sessionOpsPerMinute,
+    runtime: await settingsStore.getSessionOpsPerMinute(),
   });
 
   // Дефолты оптимизации контекста для **новых** сессий (`context.defaults`):
@@ -2126,6 +2135,8 @@ export async function createStandaloneDeps(
     // Политика ограничения контекстного окна (live, админ-API).
     contextWindowSettings,
     subagentMaxInputTokensSettings,
+    // Лимит тяжёлых операций с сессиями (live, админ-API).
+    sessionOpsPerMinuteSettings,
     // Дефолты оптимизации контекста новых сессий (live, админ-API).
     contextDefaultsSettings,
     // Instance-wide лимиты заметок сессии (live, админ-API).

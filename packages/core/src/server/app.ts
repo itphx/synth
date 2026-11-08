@@ -189,6 +189,11 @@ export interface StandaloneConfig {
    */
   agentsConfig?: SynthConfig['agents'];
   /**
+   * Секция `limits` — лимиты тяжёлых операций с сессиями
+   * (`sessionOpsPerMinute`: import/export/fork/merge; `0` — без лимита).
+   */
+  limitsConfig?: SynthConfig['limits'];
+  /**
    * PROP-124: секция `ssh` — режим работы инстанса с SSH-ключами
    * (`tools`|`agent`). Не задана — `tools` (fail-closed).
    */

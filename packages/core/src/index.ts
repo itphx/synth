@@ -1827,13 +1827,13 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, SSH_MODE_VALUES, DEFAULT_SSH_MODE } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, SSH_MODE_VALUES, DEFAULT_SSH_MODE } from './storage/runtime-settings.js';
 export type {
   LiveSshMode,
   ResolvedSshMode,
   SshModeSource,
 } from './storage/runtime-settings.js';
-export type { LiveSubagentMaxInputTokens, ResolvedSubagentMaxInputTokens } from './storage/runtime-settings.js';
+export type { LiveSubagentMaxInputTokens, ResolvedSubagentMaxInputTokens, LiveSessionOpsPerMinute, ResolvedSessionOpsPerMinute, SessionOpsPerMinuteSource } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair, AttachmentsSettings, AttachmentsConfigInput, AttachmentsRuntimeSettings, CompressionRuntimePatch, ThumbnailRuntimePatch, ModalityModelsRuntimePatch, AttachmentsSource, ResolvedAttachmentsSettings, LiveAttachmentsSettings, ContextWindowSource, ResolvedContextWindowPolicy, LiveContextWindowPolicy, ContextDefaultsSource, ResolvedContextDefaults, LiveContextDefaults, StickyNotesLimitsSource, ResolvedStickyNotesLimits, LiveStickyNotesLimits } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
@@ -2123,6 +2123,14 @@ export type {
   AgentsLimitsSettingsMessages,
   AgentsLimitsSettingsView,
 } from './server/routes/settings-agents-limits.js';
+// Лимиты операций с сессиями — `/api/v2/settings/limits`.
+export { createRequestLimitsSettingsRoutes } from './server/routes/settings-limits.js';
+export type {
+  RequestLimitsSettingsDeps,
+  RequestLimitsSettingsOptions,
+  RequestLimitsSettingsMessages,
+  RequestLimitsSettingsView,
+} from './server/routes/settings-limits.js';
 // Дефолты оптимизации контекста для новых сессий — `/api/v2/settings/context-defaults`.
 export { createContextDefaultsSettingsRoutes } from './server/routes/settings-context-defaults.js';
 export type {

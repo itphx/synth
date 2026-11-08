@@ -673,6 +673,20 @@ export class RemoteBackendClient {
     return this.request<unknown>('POST', '/api/v2/sessions/import', body);
   }
 
+  /**
+   * Пакетный импорт сессий одним запросом (backend ≥ 0.14): тело
+   * `{ sessions: [...элементы экспорта с import { project_id, source_session_id }] }`.
+   * Ответ — по элементу: `{source_session_id, id, updated}`. Старый backend без
+   * маршрута отвечает 404/405 — вызывающий переключается на `importSession`.
+   */
+  importSessions(sessions: Record<string, unknown>[]): Promise<{
+    sessions: Array<{ id?: string; source_session_id?: string; updated?: boolean }>;
+  }> {
+    return this.request<{
+      sessions: Array<{ id?: string; source_session_id?: string; updated?: boolean }>;
+    }>('POST', '/api/v2/sessions/import-batch', { sessions });
+  }
+
   // Проекты
   getProject(id: string): Promise<unknown> {
     return this.request<unknown>('GET', `/api/v2/projects/${encodeURIComponent(id)}`);

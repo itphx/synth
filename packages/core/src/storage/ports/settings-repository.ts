@@ -156,6 +156,16 @@ export interface SettingsRepository {
   clearSubagentMaxInputTokens(): Promise<void>;
 
   /**
+   * Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`:
+   * import/export/fork/merge; `0` — без лимита).
+   * Применяется сразу (лимитер читает резолвер на каждый запрос) —
+   * `restartRequired: false` в API.
+   */
+  getSessionOpsPerMinute(): Promise<number | undefined>;
+  setSessionOpsPerMinute(value: number): Promise<void>;
+  clearSessionOpsPerMinute(): Promise<void>;
+
+  /**
    * Дефолты оптимизации контекста для **новых** сессий (`context.defaults`).
    * Применяются при создании сессии (резолвер читается менеджером) —
    * `restartRequired: false` в API; существующие сессии не меняются.

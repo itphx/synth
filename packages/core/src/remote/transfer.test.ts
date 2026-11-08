@@ -8,6 +8,7 @@ import { SessionManager } from '../sessions/manager.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
 import type { RemoteBackendClient } from './client.js';
+import { RemoteError } from './types.js';
 import {
   syncProjectToRemote,
   forkProjectToLocal,
@@ -19,7 +20,7 @@ import {
 } from './transfer.js';
 
 function makeFakeRemoteClient(overrides: Record<string, unknown> = {}) {
-  const client = {
+  const client: Record<string, unknown> = {
     createProject: vi.fn(async (body: Record<string, unknown>) => ({ id: 'remote-1', ...body })),
     updateProject: vi.fn(async (id: string, body: Record<string, unknown>) => ({ id, ...body })),
     getProject: vi.fn(async () => ({ id: 'remote-1', name: 'Remote Project', description: 'desc', icon: null, color: null, repos: null, workspace: 'remote-project' })),
@@ -73,6 +74,28 @@ function makeFakeRemoteClient(overrides: Record<string, unknown> = {}) {
     fsUpload: vi.fn(async () => ({ path: 'x', name: 'x' })),
     ...overrides,
   };
+  // Дефолтный `importSessions` (батч) делегирует поштучному `importSession`
+  // **эффективного** клиента: тесты, переопределяющие `importSession`, видят
+  // прежнюю последовательность вызовов и id, а новые тесты батча могут
+  // переопределить `importSessions` целиком.
+  if (typeof overrides.importSessions !== 'function') {
+    client.importSessions = vi.fn(async (bodies: Record<string, unknown>[]) => {
+      const sessions: Array<{ id?: string; source_session_id?: string; updated?: boolean }> = [];
+      for (const body of bodies) {
+        const importOne = client.importSession as (b: Record<string, unknown>) => Promise<unknown>;
+        const created = (await importOne(body)) as Record<string, unknown> | null;
+        const imp = body.import as Record<string, unknown> | undefined;
+        sessions.push({
+          ...(typeof imp?.source_session_id === 'string'
+            ? { source_session_id: imp.source_session_id }
+            : {}),
+          ...(created && typeof created.id === 'string' ? { id: created.id } : {}),
+          updated: false,
+        });
+      }
+      return { sessions };
+    });
+  }
   return client as unknown as RemoteBackendClient & typeof client;
 }
 
@@ -197,7 +220,7 @@ describe('transfer helpers', () => {
       const createOrder = (client.createProject as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? 0;
       expect(mkdirOrder).toBeLessThan(createOrder);
       expect(client.importSession).toHaveBeenCalledWith(
-        expect.objectContaining({ import: { project_id: 'remote-1' } }),
+        expect.objectContaining({ import: expect.objectContaining({ project_id: 'remote-1' }) }),
       );
       // текстовые файлы — fsWrite, бинарный — fsUpload; node_modules/.git исключены
       expect(client.fsWrite).toHaveBeenCalledWith({ projectId: 'remote-1', path: 'a.txt', content: 'text' });
@@ -322,6 +345,129 @@ describe('transfer helpers', () => {
       const refPart = childMsgParts.find((p) => p.type === 'session_reference')!;
       expect(refPart.data.sessionId).toBe('remote-ses-A');
       expect((bodies[1]!.messages as Array<{ sourceMsgId: string | null }>)[0]!.sourceMsgId).toBeNull();
+    });
+
+    it('publish: пакетный импорт — один importSessions на уровень зависимостей, mapping по source_session_id', async () => {
+      const importSessions = vi.fn(async (bodies: Record<string, unknown>[]) => ({
+        sessions: bodies.map((b, i) => ({
+          source_session_id: (b.import as Record<string, unknown>).source_session_id as string,
+          id: `remote-batch-${i}`,
+          updated: false,
+        })),
+      }));
+      const client = makeFakeRemoteClient({ importSessions });
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('BatchPublish', 'local');
+      await projectStore.save(project);
+
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const parent = await sessionManager.createSession({ title: 'Parent', projectId: project.id });
+      const child = await sessionManager.createSession({
+        title: 'Child', projectId: project.id, parentId: parent.id,
+      });
+      const freshParent = (await sessionManager.getSession(parent.id))!;
+      const freshChild = (await sessionManager.getSession(child.id))!;
+
+      const stats = await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: false,
+        includeSessions: true,
+        localProjectDir: join(tmpDir, 'ws'),
+        // Намеренно обратный порядок: уровни всё равно parent → child.
+        localSessions: [freshChild, freshParent],
+        log: () => {},
+      });
+
+      expect(stats.sessionsImported).toBe(2);
+      // Два уровня зависимостей — два запроса; поштучный импорт не вызывался.
+      expect(importSessions).toHaveBeenCalledTimes(2);
+      expect(client.importSession).not.toHaveBeenCalled();
+
+      const firstLevel = importSessions.mock.calls[0]![0] as Array<Record<string, unknown>>;
+      const secondLevel = importSessions.mock.calls[1]![0] as Array<Record<string, unknown>>;
+      expect(firstLevel.map((b) => b.id)).toEqual([parent.id]);
+      expect(secondLevel.map((b) => b.id)).toEqual([child.id]);
+      // parentId ребёнка переписан на remote-id родителя из ответа первого уровня.
+      expect(secondLevel[0]!.parentId).toBe('remote-batch-0');
+      // Маркер источника задаёт вызывающий — локальный id сессии.
+      expect((firstLevel[0]!.import as Record<string, unknown>).source_session_id).toBe(parent.id);
+      expect((firstLevel[0]!.import as Record<string, unknown>).project_id).toBe('remote-1');
+    });
+
+    it('publish: унаследованный sourceSessionId вырезан из тела (маркер не уезжает по цепочке)', async () => {
+      const importSessions = vi.fn(async (bodies: Record<string, unknown>[]) => ({
+        sessions: bodies.map((b) => ({
+          source_session_id: (b.import as Record<string, unknown>).source_session_id as string,
+          id: 'remote-marked',
+          updated: false,
+        })),
+      }));
+      const client = makeFakeRemoteClient({ importSessions });
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('MarkerPublish', 'local');
+      await projectStore.save(project);
+
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const session = await sessionManager.createSession({ title: 'FromA', projectId: project.id });
+      session.sourceSessionId = 'origin-session-42';
+      await sessionManager.saveSession(session);
+      const fresh = (await sessionManager.getSession(session.id))!;
+
+      await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: false,
+        includeSessions: true,
+        localProjectDir: join(tmpDir, 'ws'),
+        localSessions: [fresh],
+        log: () => {},
+      });
+
+      const body = (importSessions.mock.calls[0]![0] as Array<Record<string, unknown>>)[0]!;
+      expect(body).not.toHaveProperty('sourceSessionId');
+      expect(body).not.toHaveProperty('source_session_id');
+      expect((body.import as Record<string, unknown>).source_session_id).toBe(session.id);
+    });
+
+    it('publish: старый backend без import-batch (HTTP_404) — переключение на поштучный импорт', async () => {
+      const importSessions = vi.fn(async () => {
+        throw new RemoteError('not found', 'HTTP_404');
+      });
+      const importSession = vi.fn(async (body: Record<string, unknown>) => ({
+        id: `per-${(body.import as Record<string, unknown>).source_session_id as string}`,
+      }));
+      const client = makeFakeRemoteClient({ importSessions, importSession });
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('FallbackPublish', 'local');
+      await projectStore.save(project);
+
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const parent = await sessionManager.createSession({ title: 'Parent', projectId: project.id });
+      const child = await sessionManager.createSession({
+        title: 'Child', projectId: project.id, parentId: parent.id,
+      });
+      const freshParent = (await sessionManager.getSession(parent.id))!;
+      const freshChild = (await sessionManager.getSession(child.id))!;
+
+      const stats = await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: false,
+        includeSessions: true,
+        localProjectDir: join(tmpDir, 'ws'),
+        localSessions: [freshParent, freshChild],
+        log: () => {},
+      });
+
+      expect(stats.sessionsImported).toBe(2);
+      // Батч попробован один раз (первый уровень), дальше — только поштучно.
+      expect(importSessions).toHaveBeenCalledTimes(1);
+      expect(importSession).toHaveBeenCalledTimes(2);
+      const childBody = importSession.mock.calls
+        .map((call) => call[0] as Record<string, unknown>)
+        .find((body) => body.id === child.id)!;
+      expect(childBody.parentId).toBe(`per-${parent.id}`);
     });
 
     it('бросает ошибку, если локальный workspace не существует и нужны файлы', async () => {
