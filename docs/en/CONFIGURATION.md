@@ -6,7 +6,8 @@
 > (тяжёлые операции с сессиями: `import`/`import-batch`/`export`/`fork`/`merge`, запросов в минуту на
 > креденту, `0` — без лимита, дефолт `10`), runtime-настройка `/api/v2/settings/limits`, env
 > `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE`, приоритет env > runtime > config, счётчики in-memory
-> per-process, превышение → `429` + `Retry-After` — **переведено**).
+> per-process, превышение → `429` + `Retry-After`, публикация — чанки по 20 сессий
+> (`IMPORT_BATCH_CHUNK`) и таймаут переноса 120 с — **переведено**).
 
 > ⚠️ RU-версия обновлена 2026-11-08 (**`auth.apiKeyRoles` / `SYNTH_API_KEY_ROLES`** —
 > роль пользователя единого API-ключа по умолчанию `USER`, ADMIN — только явной настройкой;
@@ -1770,7 +1771,10 @@ limits:
   negative and fractional values are not accepted: the config schema is an integer ≥ 0,
   `PUT` answers `400 VALIDATION_ERROR`.
 - **A batch import is one hit.** `POST /api/v2/sessions/import-batch` (up to 200 sessions
-  per request) consumes one unit of the limit, not one per session.
+  per request) consumes one unit of the limit, not one per session. A project publish is
+  split into such requests of **20 sessions** (`IMPORT_BATCH_CHUNK`), so the hit count =
+  the number of requests (≈ 1 hit per 20 sessions), not 1 per project. Transfer requests use
+  an increased timeout (**120 s**) — the limit does not affect them.
 - **Counters are in-memory, per-process.** In a multi-replica instance the limit applies
   **per replica**, not to the whole instance: the total throughput grows with the number
   of replicas, and a process restart resets the windows. A hard shared limit requires an

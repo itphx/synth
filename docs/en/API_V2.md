@@ -5,8 +5,11 @@
 > ⚠️ RU-версия обновлена 2026-11-08 (**§5.5** — `POST /sessions/import`: дедупликация по маркеру
 > `import.source_session_id` (200 при обновлении, `updated:true`; 201 при создании), область дедупа;
 > новый `POST /sessions/import-batch` (1..200 сессий, один хит лимита, `details` при ошибке элемента);
-> **§5.8** — перенос сессий при publish уровнями зависимостей (батч + дедуп + фоллбек на поштучный
-> импорт); **§5.21** — `GET/PUT/DELETE /api/v2/settings/limits` (`limits.sessionOpsPerMinute`) — **переведено**).
+> **§5.8** — перенос сессий при publish уровнями зависимостей (чанки по 20 сессий —
+> `IMPORT_BATCH_CHUNK`, один хит лимита на запрос) с таймаутом переноса 120 с
+> (`TRANSFER_TIMEOUT_MS`) и фоллбеком на поштучный импорт с текущего чанка;
+> **§5.21** — `GET/PUT/DELETE /api/v2/settings/limits`
+> (`limits.sessionOpsPerMinute`) — **переведено**).
 
 > ⚠️ RU-версия обновлена 2026-11-08 (**§1** — новый блок «Единый fail-closed гейт на границе `/api/v2/*`»:
 > `app.use('/api/v2/*', requireAuth)` + allowlist публичных путей (`app/public-routes.ts`, строго
@@ -761,15 +764,21 @@ replica can continue an upload — the `blobs` volume must be shared.
 > - **fork-local** (server → local): the journal is loaded **page by page** from `GET /api/v2/projects/:id/log` (`remote/client.ts#getProjectLog`); the number of pages is capped — when the cap is exceeded the journal is transferred partially (with a warning in the transfer log): losing the tail is better than failing the transfer;
 > - **publish** (local → server): the journal is **not transferred** — `PUT`/`POST` of a project do not accept a `log` field (the detail DTO does not have one). Transferring the journal in this direction is not implemented; while it is needed — transfer the project as a portable archive (§5.8.1) or append the journal on the server with the point operations of §5.8.2.
 
-> **Sessions on publish — dependency levels (dedup by marker).** `syncProjectToRemote`
+> **Sessions on publish — dependency levels, in chunks (dedup by marker).** `syncProjectToRemote`
 > (`remote/transfer.ts`) transfers sessions **level by level**: dependencies first, `parent_id` and
-> `references` are rewritten to the already known remote ids, and each level is sent as **one**
-> `POST /api/v2/sessions/import-batch` (§5.5) request instead of per-session ones. The dedup marker is
-> the local session id (`import.source_session_id`), so a repeated publish **updates** the already
-> transferred sessions (`updated: true`) instead of creating duplicates; a `sourceSessionId` inherited
-> from an earlier transfer is stripped from the body so that the chain A→B→C does not travel under a
-> foreign id. An old server without `/import-batch` (404/405) — switch once to the per-session
-> `POST /api/v2/sessions/import` for this and all subsequent levels (hybrid compatibility).
+> `references` are rewritten to the already known remote ids. Each level is split into
+> **chunks of 20** sessions (the `IMPORT_BATCH_CHUNK` constant), and each chunk is sent as one
+> `POST /api/v2/sessions/import-batch` (§5.5) request instead of per-session ones. One HTTP
+> request = **one** hit of `limits.sessionOpsPerMinute` (§5.21), so a very large project spends
+> several hits (with the default 10/min — up to 200 sessions per minute); transfer requests use an
+> increased timeout of **120 s** (`TRANSFER_TIMEOUT_MS` instead of the client's default 15 s) so
+> that a long history or a large file is not cut off. The dedup marker is the local session id
+> (`import.source_session_id`), so a repeated publish **updates** the already transferred sessions
+> (`updated: true`) instead of creating duplicates; a `sourceSessionId` inherited from an earlier
+> transfer is stripped from the body so that the chain A→B→C does not travel under a foreign id.
+> An old server without `/import-batch` (404/405) — switch once to the per-session
+> `POST /api/v2/sessions/import` **from the current chunk** for this and all subsequent levels
+> (hybrid compatibility).
 
 > **The project list — paged and summarized (owner decision, a breaking change).** `GET /api/v2/projects` returns a **page** `{projects, total, offset, limit, next_offset}` (an array is no longer returned — backward compatibility is not supported) and a **summary** of the project: the heavy fields `log` (the project log) and `plan` (ADR-039) are not returned by the list — in a list they would multiply the response size. The full DTO is in the detail `GET /api/v2/projects/:id` (there `plan` stays, while `log` is **moved out** to the paged endpoint `GET /api/v2/projects/:id/log` — PROP-054). The other detail fields (name, icon, color, members, workspace, repositories, the MCP scope, the memory policy, the status messages, `current_task`, `invariants`) are kept in the summary.
 > **List pagination.** `total` — the number of visible projects; `next_offset` — the cursor of the next page (`offset + page.length`), `null` — the last page. A non-numeric/fractional/negative `limit`/`offset` → `400 VALIDATION_ERROR`; a `limit` above 500 is clamped to 500.

@@ -223,8 +223,14 @@ describe('transfer helpers', () => {
         expect.objectContaining({ import: expect.objectContaining({ project_id: 'remote-1' }) }),
       );
       // текстовые файлы — fsWrite, бинарный — fsUpload; node_modules/.git исключены
-      expect(client.fsWrite).toHaveBeenCalledWith({ projectId: 'remote-1', path: 'a.txt', content: 'text' });
-      expect(client.fsWrite).toHaveBeenCalledWith({ projectId: 'remote-1', path: 'sub/b.ts', content: 'code' });
+      expect(client.fsWrite).toHaveBeenCalledWith(
+        { projectId: 'remote-1', path: 'a.txt', content: 'text' },
+        { timeoutMs: 120_000 },
+      );
+      expect(client.fsWrite).toHaveBeenCalledWith(
+        { projectId: 'remote-1', path: 'sub/b.ts', content: 'code' },
+        { timeoutMs: 120_000 },
+      );
       expect(client.fsUpload).toHaveBeenCalledTimes(1);
       expect(stats).toMatchObject({ projectId: 'remote-1', sessionsImported: 1, filesUploaded: 3, created: true });
     });
@@ -431,10 +437,10 @@ describe('transfer helpers', () => {
     });
 
     it('publish: старый backend без import-batch (HTTP_404) — переключение на поштучный импорт', async () => {
-      const importSessions = vi.fn(async () => {
+      const importSessions = vi.fn(async (_bodies: Record<string, unknown>[], _opts?: { timeoutMs?: number }) => {
         throw new RemoteError('not found', 'HTTP_404');
       });
-      const importSession = vi.fn(async (body: Record<string, unknown>) => ({
+      const importSession = vi.fn(async (body: Record<string, unknown>, _opts?: { timeoutMs?: number }) => ({
         id: `per-${(body.import as Record<string, unknown>).source_session_id as string}`,
       }));
       const client = makeFakeRemoteClient({ importSessions, importSession });
@@ -464,10 +470,93 @@ describe('transfer helpers', () => {
       // Батч попробован один раз (первый уровень), дальше — только поштучно.
       expect(importSessions).toHaveBeenCalledTimes(1);
       expect(importSession).toHaveBeenCalledTimes(2);
+      // Поштучный путь получает увеличенный таймаут переноса.
+      expect(importSession.mock.calls[0]?.[1]).toEqual({ timeoutMs: 120_000 });
       const childBody = importSession.mock.calls
         .map((call) => call[0] as Record<string, unknown>)
         .find((body) => body.id === child.id)!;
       expect(childBody.parentId).toBe(`per-${parent.id}`);
+    });
+
+    it('publish: уровень больше IMPORT_BATCH_CHUNK режется на чанки 20/20/5 с таймаутом переноса', async () => {
+      const importSessions = vi.fn(
+        async (bodies: Record<string, unknown>[], _opts?: { timeoutMs?: number }) => ({
+          sessions: bodies.map((b) => {
+            const sourceId = (b.import as Record<string, unknown>).source_session_id as string;
+            return { source_session_id: sourceId, id: `remote-${sourceId}`, updated: false };
+          }),
+        }),
+      );
+      const client = makeFakeRemoteClient({ importSessions });
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('ChunkedPublish', 'local');
+      await projectStore.save(project);
+
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      // 45 независимых сессий → один уровень зависимостей → 3 чанка (20/20/5).
+      const sessions = [];
+      for (let i = 0; i < 45; i++) {
+        sessions.push(await sessionManager.createSession({ title: `S${i}`, projectId: project.id }));
+      }
+
+      const stats = await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: false,
+        includeSessions: true,
+        localProjectDir: join(tmpDir, 'ws'),
+        localSessions: sessions,
+        log: () => {},
+      });
+
+      expect(stats.sessionsImported).toBe(45);
+      expect(importSessions).toHaveBeenCalledTimes(3);
+      const chunkSizes = importSessions.mock.calls.map(
+        (call) => (call[0] as Array<Record<string, unknown>>).length,
+      );
+      expect(chunkSizes).toEqual([20, 20, 5]);
+      // Каждый чанк — с увеличенным таймаутом переноса (дефолт 15 с не подходит).
+      for (const call of importSessions.mock.calls) {
+        expect(call[1]).toEqual({ timeoutMs: 120_000 });
+      }
+
+      // Mapping собран по всем: каждая сессия получила свой remote-id.
+      const mappedIds = new Set(
+        importSessions.mock.calls.flatMap((call) =>
+          (call[0] as Array<Record<string, unknown>>).map(
+            (b) => (b.import as Record<string, unknown>).source_session_id as string,
+          ),
+        ),
+      );
+      expect(mappedIds.size).toBe(45);
+      expect(client.importSession as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    });
+
+    it('publish: файлы (fsWrite/fsUpload) тоже идут с таймаутом переноса', async () => {
+      const client = makeFakeRemoteClient();
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('FilesTimeout', 'local', { workspace: 'files-timeout' });
+      await projectStore.save(project);
+
+      const localProjectDir = join(tmpDir, 'ws-files');
+      await mkdir(localProjectDir, { recursive: true });
+      await writeFile(join(localProjectDir, 'a.txt'), 'text');
+      await writeFile(join(localProjectDir, 'image.bin'), Buffer.from([1, 0, 2]));
+
+      await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: true,
+        includeSessions: false,
+        localProjectDir,
+        localSessions: [],
+        log: () => {},
+      });
+
+      const fsWriteMock = client.fsWrite as unknown as ReturnType<typeof vi.fn>;
+      const fsUploadMock = client.fsUpload as unknown as ReturnType<typeof vi.fn>;
+      expect(fsWriteMock.mock.calls[0]?.[1]).toEqual({ timeoutMs: 120_000 });
+      expect(fsUploadMock.mock.calls[0]?.[1]).toEqual({ timeoutMs: 120_000 });
     });
 
     it('бросает ошибку, если локальный workspace не существует и нужны файлы', async () => {
@@ -521,6 +610,12 @@ describe('transfer helpers', () => {
 
       const downloaded = await readFile(join(workspacesRoot, 'remote-project', 'src', 'main.ts'));
       expect(downloaded.toString()).toBe('hi');
+      // Скачивание в fork идёт с увеличенным таймаутом переноса (не дефолт 15 с).
+      const fsDownloadMock = client.fsDownload as unknown as ReturnType<typeof vi.fn>;
+      expect(fsDownloadMock.mock.calls.length).toBeGreaterThan(0);
+      for (const call of fsDownloadMock.mock.calls) {
+        expect(call[1]).toEqual({ timeoutMs: 120_000 });
+      }
       const wsStat = await stat(join(workspacesRoot, 'remote-project'));
       expect(wsStat.isDirectory()).toBe(true);
     });

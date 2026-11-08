@@ -172,6 +172,19 @@ describe('RemoteBackendClient', () => {
     expect((err as RemoteError).code).toBe('OFFLINE');
   });
 
+  it('importSessions прокидывает opts.timeoutMs в request (перенос задаёт свой таймаут)', async () => {
+    vi.stubGlobal('fetch', hangingFetchMock());
+
+    // Дефолт клиента большой — сработать должен именно переданный таймаут.
+    const err = await makeClient({ timeoutMs: 30_000 })
+      .importSessions([{ title: 'S' }], { timeoutMs: 20 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('OFFLINE');
+    expect((err as RemoteError).message).toContain('20 мс');
+    expect((err as RemoteError).message).toContain('/api/v2/sessions/import-batch');
+  });
+
   it('POST: createSession сериализует body и шлёт JSON', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 's1' }));
     vi.stubGlobal('fetch', fetchMock);

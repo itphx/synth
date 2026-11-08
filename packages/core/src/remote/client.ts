@@ -668,9 +668,13 @@ export class RemoteBackendClient {
     return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}/export`);
   }
 
-  /** Импорт сессии: body = экспорт + { import: { project_id } }. Создаёт сессию с историей. */
-  importSession(body: Record<string, unknown>): Promise<unknown> {
-    return this.request<unknown>('POST', '/api/v2/sessions/import', body);
+  /**
+   * Импорт сессии: body = экспорт + { import: { project_id } }. Создаёт сессию с историей.
+   * `opts.timeoutMs` — перенос проекта задаёт увеличенный таймаут (клиент не
+   * угадывает: значение передаёт вызывающий, большая история — долгая операция).
+   */
+  importSession(body: Record<string, unknown>, opts?: RequestOptions): Promise<unknown> {
+    return this.request<unknown>('POST', '/api/v2/sessions/import', body, opts);
   }
 
   /**
@@ -678,13 +682,18 @@ export class RemoteBackendClient {
    * `{ sessions: [...элементы экспорта с import { project_id, source_session_id }] }`.
    * Ответ — по элементу: `{source_session_id, id, updated}`. Старый backend без
    * маршрута отвечает 404/405 — вызывающий переключается на `importSession`.
+   * `opts.timeoutMs` — перенос проекта задаёт увеличенный таймаут (клиент не
+   * угадывает: значение передаёт вызывающий; размер пачки ограничивает он же).
    */
-  importSessions(sessions: Record<string, unknown>[]): Promise<{
+  importSessions(
+    sessions: Record<string, unknown>[],
+    opts?: RequestOptions,
+  ): Promise<{
     sessions: Array<{ id?: string; source_session_id?: string; updated?: boolean }>;
   }> {
     return this.request<{
       sessions: Array<{ id?: string; source_session_id?: string; updated?: boolean }>;
-    }>('POST', '/api/v2/sessions/import-batch', { sessions });
+    }>('POST', '/api/v2/sessions/import-batch', { sessions }, opts);
   }
 
   // Проекты
@@ -1164,8 +1173,15 @@ export class RemoteBackendClient {
     return this.request<unknown>('GET', `/api/v2/fs/read?${qs.toString()}`);
   }
 
-  fsWrite(body: { projectId: string; path: string; content: string }): Promise<unknown> {
-    return this.request<unknown>('POST', '/api/v2/fs/write', body);
+  /**
+   * Запись текстового файла. `opts.timeoutMs` — перенос проекта задаёт
+   * увеличенный таймаут (крупный файл на медленном канале не влезает в дефолт).
+   */
+  fsWrite(
+    body: { projectId: string; path: string; content: string },
+    opts?: RequestOptions,
+  ): Promise<unknown> {
+    return this.request<unknown>('POST', '/api/v2/fs/write', body, opts);
   }
 
   fsDelete(params: { projectId: string; path: string }): Promise<unknown> {
@@ -1203,9 +1219,16 @@ export class RemoteBackendClient {
     });
   }
 
-  /** Загрузка файла: multipart FormData пробрасывается как есть (rawBody). */
-  fsUpload(formData: FormData): Promise<unknown> {
-    return this.request<unknown>('POST', '/api/v2/fs/upload', undefined, { rawBody: formData });
+  /**
+   * Загрузка файла: multipart FormData пробрасывается как есть (rawBody).
+   * `opts.timeoutMs` — перенос проекта задаёт увеличенный таймаут (большой
+   * бинарь на медленном канале не влезает в дефолт).
+   */
+  fsUpload(formData: FormData, opts?: RequestOptions): Promise<unknown> {
+    return this.request<unknown>('POST', '/api/v2/fs/upload', undefined, {
+      rawBody: formData,
+      ...opts,
+    });
   }
 
   /** Создать каталог в корне workspace backend (для проекта без существующего workspace). */

@@ -25,6 +25,27 @@ const REMOTE_PROJECT_LOG_PAGE_LIMIT = 200;
 const REMOTE_PROJECT_LOG_MAX_PAGES = 20;
 
 /**
+ * Сессий в одном запросе пакетного импорта (`/sessions/import-batch`).
+ *
+ * Ограничивает длительность одного запроса и память (тело несёт истории сессий),
+ * при этом сохраняет выигрыш по числу round-trip против поштучного переноса.
+ * Серверный лимит пачки — 200 (`MAX_IMPORT_BATCH`); здесь меньше, потому что
+ * publish идёт **уровнями зависимостей** и уровень режется на такие чанки.
+ */
+const IMPORT_BATCH_CHUNK = 20;
+
+/**
+ * Таймаут одного запроса переноса проекта (импорт батча/сессии, запись/загрузка
+ * файла), мс.
+ *
+ * Дефолт клиента (`DEFAULT_TIMEOUT_MS` = 15 с) рассчитан на интерактивные
+ * вызовы. Перенос большой истории и крупных бинарей — штатно долгая операция,
+ * поэтому увеличенный таймаут задаёт **вызывающий**: клиент не угадывает
+ * значение (см. `RequestOptions.timeoutMs`).
+ */
+const TRANSFER_TIMEOUT_MS = 120_000;
+
+/**
  * Преобразовать имя проекта в безопасное относительное имя workspace.
  * ADR-075: единая реализация — `slugifyWorkspaceName` (shared); имя сохранено
  * для обратной совместимости публичного экспорта `remote/index.ts`.
@@ -418,8 +439,9 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
   if (includeSessions) {
     // Mapping локальный id → remote id: remote-id создаётся в момент импорта,
     // поэтому сессии переносим **уровнями зависимостей** (зависимости раньше) и
-    // переписываем parentId/references уже известными remote-id. Один уровень —
-    // один `import-batch` (дедупликация по `source_session_id` на сервере).
+    // переписываем parentId/references уже известными remote-id. Каждый уровень
+    // режется на чанки по `IMPORT_BATCH_CHUNK` (дедупликация по
+    // `source_session_id` на сервере делает повтор идемпотентным).
     const mapping = new Map<string, string>();
     const transferredMessageIds = new Set<string>();
     for (const s of localSessions) {
@@ -428,66 +450,81 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
     const levels = orderSessionsForTransferLevels(localSessions);
 
     // Старый backend без `/import-batch` (404/405) — один раз переключаемся на
-    // поштучный цикл для этого и всех последующих уровней (совместимость гибрида).
+    // поштучный цикл для этого и всех последующих чанков/уровней (совместимость
+    // гибрида). Уже импортированные чанки повторно не переносим.
     let batchSupported = true;
     let importRequests = 0;
 
-    for (const level of levels) {
-      if (batchSupported) {
-        const bodies = level.map((s) => ({
-          ...rewriteSessionExportForRemote(s, mapping, transferredMessageIds),
-          // Маркер задаёт вызывающий: локальный id сессии — стабильный ключ
-          // дедупликации повторного publish (унаследованный sourceSessionId
-          // вырезан из тела, чтобы цепочка A→B→C не уехала чужим id).
-          import: { project_id: targetProjectId, source_session_id: s.id },
-        }));
-        try {
-          const response = await remoteClient.importSessions(bodies);
-          importRequests += 1;
-          const bySource = new Map<string, string>();
-          for (const item of response.sessions ?? []) {
-            if (typeof item.source_session_id === 'string' && typeof item.id === 'string' && item.id) {
-              bySource.set(item.source_session_id, item.id);
+    for (const [levelIndex, level] of levels.entries()) {
+      const levelRequestsStart = importRequests;
+      let index = 0;
+      while (index < level.length) {
+        if (batchSupported) {
+          const chunk = level.slice(index, index + IMPORT_BATCH_CHUNK);
+          const bodies = chunk.map((s) => ({
+            ...rewriteSessionExportForRemote(s, mapping, transferredMessageIds),
+            // Маркер задаёт вызывающий: локальный id сессии — стабильный ключ
+            // дедупликации повторного publish (унаследованный sourceSessionId
+            // вырезан из тела, чтобы цепочка A→B→C не уехала чужим id).
+            import: { project_id: targetProjectId, source_session_id: s.id },
+          }));
+          try {
+            const response = await remoteClient.importSessions(bodies, {
+              timeoutMs: TRANSFER_TIMEOUT_MS,
+            });
+            importRequests += 1;
+            const bySource = new Map<string, string>();
+            for (const item of response.sessions ?? []) {
+              if (typeof item.source_session_id === 'string' && typeof item.id === 'string' && item.id) {
+                bySource.set(item.source_session_id, item.id);
+              }
             }
-          }
-          for (const s of level) {
-            const remoteId = bySource.get(s.id);
-            if (remoteId) {
-              mapping.set(s.id, remoteId);
+            for (const s of chunk) {
+              const remoteId = bySource.get(s.id);
+              if (remoteId) {
+                mapping.set(s.id, remoteId);
+              } else {
+                logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
+              }
+              sessionsImported++;
+              logger(`  сессия: ${s.title || s.id}`);
+            }
+            index += chunk.length;
+            continue;
+          } catch (err) {
+            if (err instanceof RemoteError && (err.code === 'HTTP_404' || err.code === 'HTTP_405')) {
+              batchSupported = false;
+              logger('  пакетный импорт недоступен на сервере — перехожу на поштучный');
             } else {
-              logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
+              throw err;
             }
-            sessionsImported++;
-            logger(`  сессия: ${s.title || s.id}`);
           }
-          continue;
-        } catch (err) {
-          if (err instanceof RemoteError && (err.code === 'HTTP_404' || err.code === 'HTTP_405')) {
-            batchSupported = false;
-            logger('  пакетный импорт недоступен на сервере — перехожу на поштучный');
+        }
+
+        // Поштучный путь (старый сервер или после отказа батча): начинаем с
+        // текущего `index` — уже импортированные чанки этого уровня не повторяем.
+        for (; index < level.length; index++) {
+          const s = level[index]!;
+          const exportBody = rewriteSessionExportForRemote(s, mapping, transferredMessageIds);
+          const created = (await remoteClient.importSession({
+            ...exportBody,
+            import: { project_id: targetProjectId, source_session_id: s.id },
+          }, { timeoutMs: TRANSFER_TIMEOUT_MS })) as Record<string, unknown> | null;
+          importRequests += 1;
+          const remoteId = String(created?.id ?? '');
+          if (remoteId) {
+            mapping.set(s.id, remoteId);
           } else {
-            throw err;
+            logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
           }
+          sessionsImported++;
+          logger(`  сессия: ${s.title || s.id}`);
         }
       }
 
-      // Поштучный цикл (старый сервер или после отказа батча).
-      for (const s of level) {
-        const exportBody = rewriteSessionExportForRemote(s, mapping, transferredMessageIds);
-        const created = (await remoteClient.importSession({
-          ...exportBody,
-          import: { project_id: targetProjectId, source_session_id: s.id },
-        })) as Record<string, unknown> | null;
-        importRequests += 1;
-        const remoteId = String(created?.id ?? '');
-        if (remoteId) {
-          mapping.set(s.id, remoteId);
-        } else {
-          logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
-        }
-        sessionsImported++;
-        logger(`  сессия: ${s.title || s.id}`);
-      }
+      logger(
+        `  уровень ${levelIndex + 1}/${levels.length}: сессий ${level.length}, запросов ${importRequests - levelRequestsStart}`,
+      );
     }
 
     if (localSessions.length > 0) {
@@ -517,9 +554,12 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
         fd.append('project_id', targetProjectId);
         fd.append('path', dirname(rel));
         fd.append('file', new Blob([buf]), basename(rel));
-        await remoteClient.fsUpload(fd);
+        await remoteClient.fsUpload(fd, { timeoutMs: TRANSFER_TIMEOUT_MS });
       } else {
-        await remoteClient.fsWrite({ projectId: targetProjectId, path: rel, content: buf.toString('utf-8') });
+        await remoteClient.fsWrite(
+          { projectId: targetProjectId, path: rel, content: buf.toString('utf-8') },
+          { timeoutMs: TRANSFER_TIMEOUT_MS },
+        );
       }
       filesUploaded++;
       if (filesUploaded % 50 === 0) logger(`  файлов загружено: ${filesUploaded}`);
@@ -744,7 +784,12 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
   if (includeFiles) {
     const files = await remoteWalk(remoteClient, remoteProjectId, '', []);
     for (const rel of files) {
-      const res = await remoteClient.fsDownload({ projectId: remoteProjectId, path: rel });
+      // Перенос бинарей — штатно долгая операция: дефолтного таймаута клиента
+      // (15 с) не хватает для крупного файла на медленном канале.
+      const res = await remoteClient.fsDownload(
+        { projectId: remoteProjectId, path: rel },
+        { timeoutMs: TRANSFER_TIMEOUT_MS },
+      );
       const buf = Buffer.from(await res.arrayBuffer());
       const abs = join(workspaceAbs, rel);
       await mkdir(dirname(abs), { recursive: true });
