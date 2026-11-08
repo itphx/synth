@@ -35,7 +35,7 @@ import {
   packVersionSchema,
   refinePackType,
 } from './pack.js';
-import { CATALOG_TRUST_LEVELS, catalogTrustLevelSchema } from './trust.js';
+import { catalogTrustLevelSchema } from './trust.js';
 
 /** Версия формата индекса каталога расширений. */
 export const CATALOG_INDEX_FORMAT = 1;

@@ -11,6 +11,7 @@
  * Приоритет (ADR-023): CLI-флаги (`overrides`) > env (`SYNTH_*`) > config.yaml > defaults.
  */
 import { bootstrapServiceKeysSchema, oauthProvidersSchema } from './types.js';
+import { GlobalRole } from '../types/user.js';
 
 export type EnvOverrideType = 'boolean' | 'number' | 'string';
 
@@ -34,6 +35,10 @@ export interface EnvOverrideDefinition {
 export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   // llm: лимит вывода по умолчанию (0 — авто-дефолт ядра).
   { section: 'llm', key: 'maxTokens', type: 'number' },
+  // llmGateway (ADR-036): мастер-выключатель шлюза. Дефолт зависит от профиля
+  // (backend/managed — включён, standalone — выключен); env перебивает и его,
+  // и config.yaml, но ниже runtime-тумблера из UI (`settings.json`).
+  { section: 'llmGateway', key: 'enabled', type: 'boolean' },
   // session.autoTitle: авто-именование сессии (мастер-флаг, отсрочка на
   // приветствии, число реплик, порог «сигнала задачи»).
   { section: 'session', key: 'autoTitle.enabled', type: 'boolean' },
@@ -157,6 +162,67 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
 /** camelCase → SNAKE_CASE (`autoBind` → `AUTO_BIND`, `ephemeralTtl` → `EPHEMERAL_TTL`). */
 export function toSnakeCase(value: string): string {
   return value.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+}
+
+/**
+ * Роли пользователя единого API-ключа (`auth.apiKeyRoles`), csv: `ADMIN,USER`.
+ *
+ * Намеренно **fail-closed** (в отличие от прочих env-оверрайдов): неизвестная
+ * роль — ошибка конфигурации на загрузке, а не warn+игнор. Иначе опечатка в
+ * `SYNTH_API_KEY_ROLES` молча оставляла бы дефолт (`USER`) или, хуже, ключ без
+ * ожидаемых прав; для прав доступа это недопустимо.
+ */
+export const API_KEY_ROLES_ENV = 'SYNTH_API_KEY_ROLES';
+
+const API_KEY_ROLE_VALUES = Object.values(GlobalRole) as string[];
+
+/**
+ * Разобрать csv ролей API-ключа (`ADMIN,USER`; регистр и пробелы не важны).
+ * Пустой список и неизвестная роль → `Error` (fail-closed, понятный текст).
+ * Дубликаты схлопываются с сохранением порядка.
+ */
+export function parseApiKeyRoles(raw: string): GlobalRole[] {
+  const tokens = raw
+    .split(',')
+    .map((part) => part.trim().toUpperCase())
+    .filter((part) => part !== '');
+
+  if (tokens.length === 0) {
+    throw new Error(
+      `[config] ${API_KEY_ROLES_ENV}: пустой список ролей; допустимо: ${API_KEY_ROLE_VALUES.join(', ')}`,
+    );
+  }
+
+  const roles: GlobalRole[] = [];
+  for (const token of tokens) {
+    if (!API_KEY_ROLE_VALUES.includes(token)) {
+      throw new Error(
+        `[config] ${API_KEY_ROLES_ENV}: неизвестная роль "${token}"; ` +
+          `допустимо: ${API_KEY_ROLE_VALUES.join(', ')}`,
+      );
+    }
+    const role = token as GlobalRole;
+    if (!roles.includes(role)) roles.push(role);
+  }
+  return roles;
+}
+
+function applyApiKeyRolesEnvOverride<T extends Record<string, unknown>>(
+  config: T,
+  env: NodeJS.ProcessEnv,
+): void {
+  const raw = env[API_KEY_ROLES_ENV];
+  if (raw === undefined || raw === '') return;
+
+  const roles = parseApiKeyRoles(raw);
+
+  const current = config.auth;
+  const auth =
+    current !== null && typeof current === 'object' && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : {};
+  auth.apiKeyRoles = roles;
+  (config as Record<string, unknown>).auth = auth;
 }
 
 /**
@@ -398,10 +464,13 @@ export const OAUTH_PROVIDERS_ENV = 'SYNTH_OAUTH_PROVIDERS';
 
 /**
  * Применяет объектные env-оверрайды, у которых нет плоского строкового
- * представления (сейчас — `security.bootstrapServiceKeys`). Значение парсится
- * как JSON и валидируется схемой; при ошибке парсинга/валидации — warn в console
- * и игнор (fail-soft: кривой installer-ключ не должен ронять старт инстанса —
- * ensure-логика приложения просто ничего не бутстрапит, оператор видит warn).
+ * представления (`auth.apiKeyRoles`, `attachments.modalities`, `oauth.providers`,
+ * `security.bootstrapServiceKeys`). Нескалярные значения парсятся здесь;
+ * `security.bootstrapServiceKeys` — JSON, валидируется схемой, при ошибке
+ * парсинга/валидации warn в console и игнор (fail-soft: кривой installer-ключ не
+ * должен ронять старт инстанса — ensure-логика приложения просто ничего не
+ * бутстрапит, оператор видит warn). Исключение — `auth.apiKeyRoles`: там
+ * неизвестная роль бросает `Error` (fail-closed, права доступа).
  *
  * Мутирует переданный объект (в `loadConfig` — свежий результат `deepMerge`) и
  * возвращает его; секция `security` клонируется, чтобы не мутировать `defaultConfig`.
@@ -410,6 +479,7 @@ export function applyObjectEnvOverrides<T extends Record<string, unknown>>(
   config: T,
   env: NodeJS.ProcessEnv = process.env,
 ): T {
+  applyApiKeyRolesEnvOverride(config, env);
   applyAttachmentsModalitiesEnvOverride(config, env);
   applyOAuthProvidersEnvOverride(config, env);
 

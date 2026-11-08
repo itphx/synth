@@ -102,7 +102,7 @@ synth serve --connect https://synth.example.com
 
 ## Документация
 
-Пользовательские руководства — на портале [docs.synth.itphx.ru](https://docs.synth.itphx.ru/) (русский; английский раздел портала — в работе, английский README поддерживается).
+Пользовательские руководства — на портале [docs.synth.itphx.ru](https://docs.synth.itphx.ru/) (только на русском; английская документация для разработчиков — в [`README.en.md`](README.en.md) и [`docs/en/`](docs/en/)).
 
 | Документ | О чём |
 |----------|-------|

@@ -42,13 +42,9 @@ the language rule in the root [AGENTS.md](../../AGENTS.md)).
   identifiers and file names are stable and referenced across the repository.
 - **Journals and append-only records** (release notes in `docs/releases/`, task
   logs) stay in Russian as well.
-- **User documentation** is not duplicated here. The portal is configured for a
-  bilingual structure (an i18n plugin with an English locale, translated
-  navigation and fallback to the Russian source for untranslated pages), but the
-  English build is currently **disabled** (`build: false` in the portal's
-  `mkdocs.yml`) until the pages are translated — the only English page so far is
-  a stub. The Russian portal therefore remains the canonical source, and keeping
-  English versions in this repository targets the developer documentation, not
-  the user portal.
+- **User documentation** is not duplicated here: the portal
+  [docs.synth.itphx.ru](https://docs.synth.itphx.ru/) is Russian-only, and the
+  English versions in this repository cover the developer documentation, not the
+  user portal.
 - **Terminology.** Use [`GLOSSARY.md`](./GLOSSARY.md) for every translation. On a
   conflict with the English product strings (UI or engine), the product wins.

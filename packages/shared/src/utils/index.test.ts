@@ -68,7 +68,7 @@ describe('safeJsonParse', () => {
 describe('atomicWrite', () => {
   it('пишет во временный файл, затем переименовывает', async () => {
     const calls: string[] = [];
-    const fakeWrite = vi.fn(async (path: string, data: string) => {
+    const fakeWrite = vi.fn(async (path: string, _data: string) => {
       calls.push(`write:${path}`);
     });
     const fakeRename = vi.fn(async (oldPath: string, newPath: string) => {

@@ -13,7 +13,8 @@
   "scripts": {
     "build": "tsup && chmod +x dist/cli.js",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "lint": "eslint src/ --max-warnings 0"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

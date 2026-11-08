@@ -20,6 +20,7 @@
     "security:gate": "node scripts/security-gate.mjs",
     "security:scan": "node scripts/secret-scan.mjs",
     "security:records": "node scripts/security-gate.mjs --lint-records",
+    "security:records:test": "node --test scripts/security-gate.records.test.mjs",
     "release:notes": "node scripts/release-notes-check.mjs"
   },
   "devDependencies": {

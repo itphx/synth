@@ -1,7 +1,15 @@
 {
   "schema": "synth.security.policy/v1",
-  "updated": "2026-10-20",
+  "updated": "2026-11-08",
   "recordDir": "docs/security/releases",
+  "recordCiRun": {
+    "requireCommitMatchFrom": "0.13.5",
+    "note": "С 0.13.5 прогон CI в artifacts.ci_run обязан быть на коммите записи (sha == record.commit), иначе error. Для более ранних записей несовпадение — предупреждение (историю не переписываем)."
+  },
+  "recordWording": {
+    "requireObservableFrom": "0.13.4",
+    "note": "С 0.13.4 result проверок pass/pass_with_exceptions не может содержать предположительных формулировок («ожидается», «expected» и т.п.): PASS — наблюдаемый результат. Более ранние записи не переписываются (там «expected» встречается как literal-вывод vitest)."
+  },
   "requiredCheckIds": ["secret-scan", "auth-matrix", "ci-baseline", "dependencies", "security-review"],
   "authMatrix": {
     "files": [
@@ -21,10 +29,11 @@
     "mode": "ratchet",
     "command": "pnpm audit --json",
     "profile": "post-upgrade",
+    "countsRequiredFrom": "0.13.4",
     "profileSwitch": {
       "owner": "владелец задачи апгрейда зависимостей (@devops/@orchestrator)",
-      "moveWhen": "условие переключения: после апгрейдов @modelcontextprotocol/sdk >= 1.31.0 и simple-git 4.x (и проверки фактического pnpm audit) поменять profile на \"post-upgrade\" и уточнить baseline по факту. ВЫПОЛНЕНО 2026-10-15: @modelcontextprotocol/sdk 1.29.0 → 1.32.1, simple-git 3.36.0 → 4.0.2 (+ транзитивный proxy-addr 2.0.7 → 2.0.8), profile = \"post-upgrade\", baseline уточнён фактом (critical 0, high 39).",
-      "why": "переключатель виден в диффе: ослабление/усиление ратчета — явное изменение политики, а не тихая правка проверки"
+      "moveWhen": "условие переключения: после апгрейдов @modelcontextprotocol/sdk >= 1.31.0 и simple-git 4.x (и проверки фактического pnpm audit) поменять profile на \"post-upgrade\" и уточнить baseline по факту. ВЫПОЛНЕНО 2026-10-15: @modelcontextprotocol/sdk 1.29.0 → 1.32.1, simple-git 3.36.0 → 4.0.2 (+ транзитивный proxy-addr 2.0.7 → 2.0.8), profile = \"post-upgrade\". baseline синхронизирован с фактом 2026-11-08: critical 0, high 0 (факт записи 0.13.4: full 0/0, --prod 0/0/0/0). Повышение baseline — только осознанным изменением политики (см. why).",
+      "why": "переключатель виден в диффе: ослабление/усиление ратчета — явное изменение политики, а не тихая правка проверки. baseline = факт аудита, а не запас: расхождение записи с baseline ловит гейт (если запись выше — error, если baseline выше факта — warning «ратчет ослаблен»)"
     },
     "profiles": {
       "pre-upgrade": {
@@ -33,9 +42,9 @@
         "note": "ИСТОРИЧЕСКОЕ состояние до апгрейдов (2026-10-16, pnpm audit --json): 3 critical + 42 high (moderate ~48, low ~12–13 — база advisory дрейфует, для ратчета не важны); все 45 critical+high — транзитивные, у всех 15 затронутых модулей есть patched_versions. Действовало до апгрейда sdk/simple-git; профиль не активен."
       },
       "post-upgrade": {
-        "baseline": { "critical": 0, "high": 31 },
+        "baseline": { "critical": 0, "high": 0 },
         "failOnDirect": true,
-        "note": "АКТИВНЫЙ профиль с 2026-10-20 (факт, `pnpm audit --json` после апгрейда hono/ws/undici/js-yaml): critical 0, high 31, moderate 24, low 6, прямых уязвимых модулей 0 (прямые = critical/high в прямых runtime-зависимостях воркспейса). Снято 8 high: hono 1123999 (4.12.21 → 4.13.13), ws 1123259 (8.20.1 → 8.22.0), undici 1121187/1121244/1121247/1130718/1240041/1240050 (7.26.0 → 7.30.1). Остаток high 31 — транзитивные патч-уровня, все с patched_versions: brace-expansion 15, fast-uri 7, js-yaml 3 (экземпляр 4.1.1, зафиксированный @redocly/openapi-core в devDep-цепочке ui; прямые экземпляры 4.3.2 чисты), nanoid 2, vite 1, postcss 1, ip-address 1, source-map-js 1. Уточнение про vite: это ПРЯМАЯ зависимость packages/ui, но devDependencies (инструментарий сборки) — в поставляемые артефакты не входит и релиз не блокирует; там же moderate/low (dompurify, @hono/node-server) — информационные. Формулировка «все остальные — вне прямых зависимостей» верна для runtime-зависимостей; для dev-зависимостей (vite) — нет. Падение порогов — отдельной волной апгрейдов."
+        "note": "АКТИВНЫЙ профиль с 2026-10-20; baseline синхронизирован с фактом 2026-11-08. Факт записи аудита 0.13.4 (после overrides fast-uri/ip-address/qs/js-yaml/brace-expansion/source-map-js и @hono/node-server 2.x): `pnpm audit --json` full critical 0, high 0, moderate 1, low 1; `--prod` 0/0/0/0; прямых уязвимых модулей 0 (прямые = critical/high в прямых runtime-зависимостях воркспейса). Остаток — dev-only: minimatch <11 (moderate, eslint/typescript-eslint/@redocly; semver-safe патча нет) и esbuild 0.27.7 (low, tsup); в поставляемые артефакты не входят. Историческое состояние до апгрейдов — в профиле pre-upgrade. baseline — это факт, а не запас: запись с counts выше baseline гейт отвергает, а baseline выше факта даёт предупреждение «ратчет ослаблен» и требует осознанной синхронизации (profileSwitch), а не тихой правки."
       }
     }
   }

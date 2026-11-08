@@ -24,6 +24,7 @@ import {
 } from '../types/index.js';
 import { catalogTrustLevelSchema } from '../types/trust.js';
 import { PLUGIN_HYBRID_MODES } from '../types/plugin-hybrid.js';
+import { GlobalRole } from '../types/user.js';
 // PROP-124: режимы инстанса для SSH-ключей (`ssh.mode`) — канонический список
 // в типах (browser-safe), чтобы UI и ядро читали один источник.
 import { SSH_MODES } from '../types/git.js';
@@ -210,6 +211,12 @@ export const executionConfigSchema = z.object({
 export const authConfigSchema = z.object({
   debugMode: z.boolean().default(false),
   apiKey: z.string().optional(),
+  /**
+   * Роли пользователя единого API-ключа (`auth.apiKey`, вне debug/OIDC).
+   * Дефолт — `USER`: права ADMIN не выдаются по факту наличия ключа, только
+   * явной настройкой (fail-closed). Env — `SYNTH_API_KEY_ROLES` (csv).
+   */
+  apiKeyRoles: z.array(globalRoleSchema).default([GlobalRole.USER]),
   testUsers: z
     .array(
       z.object({

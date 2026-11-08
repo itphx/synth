@@ -44,7 +44,9 @@
 4. **OIDC JWT** — при `config.oidc.enabled`: `Authorization: Bearer <jwt>`,
    верификация через lazy OIDC-клиент.
 5. **API key** — при `!debugMode && !oidc.enabled && config.apiKey`:
-   `Authorization: Bearer <SYNTH_API_KEY>` → пользователь `api` с ролью `ADMIN`.
+   `Authorization: Bearer <SYNTH_API_KEY>` → пользователь `api` с ролями из
+   `auth.apiKeyRoles` (env `SYNTH_API_KEY_ROLES`, дефолт `['USER']`; ADMIN —
+   только явной настройкой). Сравнение ключа — постоянное по времени.
 
 Роли: `ADMIN`, `USER`, `LEAD`, `AUDITOR`.
 
@@ -99,6 +101,39 @@ Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 | `requirePermission(...roles)` | Нет пользователя → `401 UNAUTHORIZED`; пользователь есть, но ни одной из перечисленных ролей → `403 FORBIDDEN`. Используют `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), webhooks (`ADMIN`), maintenance (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
 
 > **Правило 401/403 (semantics):** отсутствие аутентификации → `401 UNAUTHORIZED`; аутентифицирован, но роли/прав не хватает → `403 FORBIDDEN`; service-key без нужного scope → `403 SCOPE_REQUIRED` (это про scope, не про аутентификацию).
+
+### Единый fail-closed гейт на границе `/api/v2/*` (F6)
+
+Доступ ко всему дереву API проверяется **на границе приложения**: в
+`packages/backend/src/app.ts` после `attachUser` и `/auth`-роутов (и до
+plugin-bound guard'а, guard'а деградации и монтирования роутов) висит
+`app.use('/api/v2/*', requireAuth)`. Публичные пути перечислены явно —
+`PUBLIC_API_V2_PATHS` / `isPublicApiV2Path` (`packages/backend/src/app/public-routes.ts`),
+**строго по методу+пути** (wildcard по префиксу запрещён). Сейчас публичны
+только `GET /api/v2/health`, `GET /api/v2/meta` (ADR-118 §8) и
+`GET /api/v2/i18n/current`, `GET /api/v2/i18n/translations/{ru,en}`; `OPTIONS`
+(CORS preflight) отвечает CORS-middleware до гейта и разрешён явно.
+
+Следствия:
+
+- новый роутер, смонтированный без guard'а, **не становится анонимным** — он
+  требует аутентификации по умолчанию; чтобы открыть путь, его вносят в
+  allowlist (и в перепись);
+- проверки аутентификации внутри обработчиков не дублируются (инвариант 16) —
+  там остаются только RBAC/область доступа;
+- неизвестный путь под `/api/v2/*` без креды тоже отдаёт `401`; `404 NOT_FOUND`
+  приходит уже после прохождения гейта (поведение `app.notFound` не менялось);
+- порядок middleware (`attachUser` → per-key rate limit → гейт →
+  `requirePluginTokenBinding` → guard деградации → роуты) сохраняет работу
+  service-key и plugin-bound ключей (ADR-052/ADR-090 Ф7).
+
+Перепись — `packages/backend/src/app/route-access-census.test.ts`: на реально
+смонтированном `createBackendApp()` каждый маршрут `/api/v2/*` без креды →
+`401 UNAUTHORIZED`; все `:param`-маршруты сверяются с явным реестром
+`DECLARED_PARAM_ROUTES` (правило доступа + место реализации) **в обе стороны**;
+для каждого — негативная проверка «чужой `USER` на несуществующий id» (не `2xx`
+и не `500`; допустимые коды зафиксированы в записи реестра). Новый или
+удалённый маршрут роняет тест с diff'ом.
 
 Отдельно от `middleware.ts` — **scope-гейты service-key** (`packages/backend/src/auth/service-scope.ts`:
 `scopeGuard`/`serviceProjectProjection`, делегируют core-`requireScope`/`checkServiceProjectProjection` и отдают
@@ -506,7 +541,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 |---|---|---|---|
 | GET | `/health` | — | `{status:'healthy', version, build, time, startedAt}` (`startedAt` — ISO-метка старта процесса, ADR-092; `build` — идентификатор сборки `SYNTH_BUILD_ID`, пусто — неизвестен — PWA обновляет устаревший шелл по нему) |
 | GET | `/api/v2/health` | — | то же (+ блок `storage` в деградации) |
-| GET | `/ready` | — | Readiness (ADR-094): `200` `{status:'ready', storage:'ok'\|'degraded', version, startedAt, time, checks?}`; `503` `{status:'not_ready', …}` только на старте/fail-closed. Деградация хранилища **не** снимает readiness (ADR-098) |
+| GET | `/ready` | — | Readiness (ADR-094): `200` `{status:'ready', storage:'ok'\|'degraded', version, startedAt, time, llmGateway?:'enabled'\|'disabled', warnings?:['llm-gateway-disabled'], checks?}`; `503` `{status:'not_ready', …}` только на старте/fail-closed. Деградация хранилища **не** снимает readiness (ADR-098); выключенный LLM-шлюз — предупреждение (`llmGateway`/`warnings` в `/health` и `/ready`), статус не меняет |
 | GET | `/metrics` | нет / bearer-токен | Prometheus exposition 0.0.4 (ADR-094), **вне** `/api/v2`; `metrics.enabled=false` → `404 NOT_FOUND`, при заданном токене без `Authorization: Bearer …` → `401 UNAUTHORIZED`; `Content-Type: text/plain; version=0.0.4; charset=utf-8`, `Cache-Control: no-store` |
 
 Каталог метрик, лейблы, скрейп, алерты и диагностика — [OBSERVABILITY.md](./OBSERVABILITY.md);
@@ -540,9 +575,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | DELETE | `/auth/profile/preferences` | backend | auth | Сбросить preferences |
 | GET | `/auth/profile/avatar` | backend | auth | PNG-аватар (`404` если нет) |
 | POST | `/auth/profile/avatar` | backend | auth | Загрузить/удалить аватар (binary) |
-| GET | `/auth/locales` | backend | — | Список локалей (`ru`,`en`) |
+| GET | `/auth/locales` | оба | — | Список локалей (`ru`,`en`) — публичный, нужен экрану входа |
 | GET | `/auth/users` | backend | debug | Тестовые пользователи (только debug) |
-| GET | `/auth/defaults` | backend | — | Умолчания оформления |
+| GET | `/auth/defaults` | оба | — | Умолчания оформления (встроенные + сохранённые) — публичный, нужен экрану входа |
 | PUT | `/auth/defaults` | backend | ADMIN | Сохранить умолчания |
 
 ### 5.4 Прочее
@@ -1424,8 +1459,8 @@ Runtime-настройка инстанса: как SSH-ключи реестр�
 | DELETE | `/api/v2/mcp/servers/:name` | backend | ADMIN или scope `addons:install` | Удалить |
 | POST | `/api/v2/mcp/servers/:name/test` | backend | ADMIN или scope `addons:install` | Проверить подключение (+опц. `config`) |
 | GET | `/api/v2/mcp/servers/:name/tools` | backend | auth | Инструменты сервера (probe при необходимости) |
-| GET | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (канонический — `/sessions/:id/mcp`) |
-| PUT | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers?, mcpDisabledServers?}` (совместим с `/sessions/:id/mcp`) |
+| GET | `/api/v2/mcp/session/:sessionId` | backend | владелец\|ADMIN | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (канонический — `/sessions/:id/mcp`) |
+| PUT | `/api/v2/mcp/session/:sessionId` | backend | владелец\|ADMIN | Legacy: `{mcpServers?, mcpDisabledServers?}` (совместим с `/sessions/:id/mcp`) |
 | POST | `/api/v2/mcp/probe` | оба | auth | `{name}` → `{name, tools}`, `MCP_CONNECT_ERROR` |
 | GET | `/api/v2/mcp/registry` | backend | auth | Единый реестр MCP-серверов (ADR-071 §2.5): `{entries}`; запись несёт `enabled` (мастер hard-gate, дефолт `true`) и `enabledByDefault` (дефолт для НОВЫХ проектов) |
 | POST | `/api/v2/mcp/registry` | backend | auth (stdio — только ADMIN; service-key — scope `addons:install`) | Добавить запись: `{name, config, enabled?, enabledByDefault?, origin?, remoteMode?}` → 201; stdio — только ADMIN (scope не ослабляет); HTTP — любой; service-key без scope `addons:install` → 403 `SCOPE_REQUIRED`. **instance**-origin (`origin:'instance'` или installer-ключ со scope) доступен ADMIN **или** service-key со scope `addons:install`; интерактив без ADMIN создаёт `user`-запись даже с `origin:'instance'`. `remoteMode` (`auto\|relay\|tools`, дефолт `auto`) — режим доставки серверного MCP в локальные сессии гибрида (ADR-125) |

@@ -54,6 +54,7 @@ import { t } from './lib/i18n.js';
 import type { EventHub } from './events/hub.js';
 import { createBackendDeps, createBackendStorage } from './app/deps.js';
 import { mountBackendRoutes } from './app/mount-routes.js';
+import { isPublicApiV2Path } from './app/public-routes.js';
 import { createBackendListen } from './app/listen.js';
 
 export interface CreateBackendAppOptions {
@@ -63,7 +64,7 @@ export interface CreateBackendAppOptions {
   dataDir?: string;
   /** Debug auth: переопределяет SYNTH_AUTH_DEBUG (тестовые ключи admin-key-123 и т.п.). */
   authDebug?: boolean;
-  /** Единый API-ключ (роль ADMIN): переопределяет SYNTH_API_KEY. */
+  /** Единый API-ключ (роли из `auth.apiKeyRoles`, дефолт USER): переопределяет SYNTH_API_KEY. */
   apiKey?: string;
   /** Порт: переопределяет SYNTH_PORT. 0 — эфемерный (для тестов). */
   port?: number;
@@ -223,12 +224,18 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // ADR-094: `/ready` — readiness (200 и при деградации, 503 — только не готов).
     const degradedInfo: StorageContext['degraded'] | null = storage.degraded ?? null;
     let initialized = false;
+    // F4 (аудит S1): эффективное состояние LLM-шлюза (`deps.gatewayConfig.enabled`,
+    // с учётом runtime-тумблера из UI) — для предупреждения в `/health`/`/ready`.
+    // deps создаются ниже: геттер ленивый (до сборки — поля нет).
+    let depsRef: Awaited<ReturnType<typeof createBackendDeps>> | null = null;
     app.route('/', createHealthRoutes({
       getStorageDegraded: () => degradedInfo ?? null,
       getReadiness: () => ({
         ready: initialized,
         storage: degradedInfo ? 'degraded' : 'ok',
       }),
+      getLlmGatewayState: () =>
+        depsRef ? (depsRef.gatewayConfig?.enabled ? 'enabled' : 'disabled') : null,
     }));
 
     // ADR-094: `/metrics` — до auth (скрейп по сети pod'а, опциональный bearer).
@@ -319,6 +326,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       metricsEnabled ? metrics : undefined,
       execution,
     );
+    // F4 (аудит S1): health-геттер состояния LLM-шлюза читает эффективный конфиг
+    // (`deps.gatewayConfig` — config + runtime-тумблер), который готов только здесь.
+    depsRef = deps;
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(
@@ -335,6 +345,29 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         mode: deps.pluginRuntime.config.hybrid.mode,
       },
     ));
+
+    // F6 (аудит §6.1) — единый fail-closed гейт на границе `/api/v2/*`.
+    //
+    // Роутеры создаются фабриками с `{ requireAuth }`, но сама граница
+    // приложения проверку не гарантировала: новый роутер, смонтированный без
+    // guard'а, становился анонимным (перепись маршрутов покрывала 3 роутера
+    // из 59). Здесь — последняя проверка для всего дерева API, кроме
+    // allowlist публичных путей (`app/public-routes.ts`; строго метод+путь,
+    // без wildcard по префиксу).
+    //
+    // Порядок важен: после `attachUser` (service-key и cookie-пользователь уже
+    // в контексте — `requireAuth` берёт его оттуда без повторной проверки) и
+    // `/auth`-роутов, до plugin-bound guard'а (он различает только
+    // service-key, аноним до него не доходит), guard'а деградации и
+    // монтирования роутов. Проверок внутри обработчиков не добавляем —
+    // там остаются только RBAC/область доступа (инвариант 16).
+    app.use('/api/v2/*', createMiddleware(async (c, next) => {
+      if (isPublicApiV2Path(c.req.method, c.req.path)) {
+        await next();
+        return;
+      }
+      return auth.requireAuth(c, next);
+    }));
 
     // ADR-090 Ф7 (Уровень 2): plugin-bound service-key (`plugin_id`)
     // принимается только с заголовком `X-Synth-Plugin-Id` и тем же

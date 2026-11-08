@@ -10,6 +10,7 @@ import {
   type ProtectedPathsPolicy,
 } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
+import { Icon } from '../icon/Icon'
 import { TooltipProvider } from '../ui/tooltip'
 import { SelectContent, SelectItem } from '../ui/select'
 import {
@@ -356,6 +357,18 @@ export function SecuritySettings() {
             tooltip={t('settings.help.security.gatewayEnabled')}
           />
         </SettingsItem>
+
+        {/* F4 (аудит S1): выключенный шлюз — прямой доступ к провайдеру. */}
+        {gatewayDraft.enabled === false && (
+          <div
+            role="alert"
+            data-testid="gateway-disabled-warning"
+            className="flex items-start gap-2 rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning"
+          >
+            <Icon name="error-warning" className="mt-0.5 size-4 shrink-0" />
+            <span>{t('gateway.disabledWarning')}</span>
+          </div>
+        )}
 
         <SettingsItem>
           <ToggleField

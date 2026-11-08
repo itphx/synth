@@ -80,3 +80,44 @@ describe('createHealthRoutes: /ready (ADR-094)', () => {
     }
   });
 });
+
+/**
+ * F4 (аудит S1): выключенный LLM-шлюз — предупреждение в `/health` и `/ready`,
+ * но readiness (HTTP 200) не ломается (ADR-094/инвариант 25).
+ */
+describe('createHealthRoutes: состояние LLM-шлюза (F4)', () => {
+  it('gateway disabled → 200, llmGateway=disabled, warnings содержит llm-gateway-disabled', async () => {
+    const app = createHealthRoutes({ getLlmGatewayState: () => 'disabled' });
+    const res = await app.request('/ready');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe('ready');
+    expect(body.llmGateway).toBe('disabled');
+    expect(body.warnings).toEqual(['llm-gateway-disabled']);
+  })
+
+  it('gateway disabled → /health и /api/v2/health тоже предупреждают', async () => {
+    const app = createHealthRoutes({ getLlmGatewayState: () => 'disabled' });
+    for (const path of ['/health', '/api/v2/health']) {
+      const body = (await (await app.request(path)).json()) as Record<string, unknown>;
+      expect(body.llmGateway).toBe('disabled');
+      expect(body.warnings).toEqual(['llm-gateway-disabled']);
+    }
+  })
+
+  it('gateway enabled → llmGateway=enabled, warnings нет', async () => {
+    const app = createHealthRoutes({ getLlmGatewayState: () => 'enabled' });
+    const body = (await (await app.request('/ready')).json()) as Record<string, unknown>;
+    expect(body.llmGateway).toBe('enabled');
+    expect(body.warnings).toBeUndefined();
+  })
+
+  it('состояние не задано → поля отсутствуют (обратная совместимость)', async () => {
+    const body = (await (await createHealthRoutes().request('/ready')).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(body.llmGateway).toBeUndefined();
+    expect(body.warnings).toBeUndefined();
+  })
+})

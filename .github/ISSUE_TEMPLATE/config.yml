@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Documentation portal
     url: https://docs.synth.itphx.ru/
-    about: Guides, quick start, providers, hybrid mode, CLI and FAQ (RU + EN).
+    about: Guides, quick start, providers, hybrid mode, CLI and FAQ (Russian).
   - name: Telegram community
     url: https://t.me/synth_dev
     about: Ask questions and follow announcements in the community channel.

@@ -55,7 +55,7 @@ export async function atomicWrite(
  * строка возвращается, если NUL-байтов нет.
  */
 export function stripNullBytes(value: string): string {
-  return value.includes('\u0000') ? value.replace(/\u0000/g, '') : value;
+  return value.includes('\u0000') ? value.replaceAll('\u0000', '') : value;
 }
 
 /** Обычный объект-литерал (`{}` или `Object.create(null)`), не класс/Date/Buffer. */

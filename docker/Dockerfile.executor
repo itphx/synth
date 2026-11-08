@@ -44,6 +44,21 @@
 # arm64-сборка flavor'а требует QEMU/binfmt (PROP-082, решение по arm64 —
 # вариант A). `${BUILDPLATFORM:-linux/amd64}` — дефолт для kaniko/legacy
 # `docker build`.
+#
+# PID 1 и зомби (аудит 0.13.4 §5.2). Runtime-стадии запускают не `dist/main.js`,
+# а `docker/init.sh` (`synth-init`) → `dist/init.js`
+# (`packages/executor/src/init.ts`) → `dist/main.js`:
+#   * reaping осиротевших детей делает только PID 1, и это умеет POSIX-шелл
+#     (`waitpid(-1)` в обработчике SIGCHLD), но НЕ Node: libuv ждёт лишь pid'ы
+#     своих handle'ов, поэтому усыновлённые сироты остаются зомби (проверено на
+#     node 22.23 / libuv 1.51). Для исполнителя это критично: он массово
+#     порождает процессы (shell-команды тулов, фоновые прогоны, MCP-серверы);
+#   * Node-обёртка запускает приложение отдельной process group, пробрасывает
+#     SIGTERM/SIGINT/SIGHUP всей группе (штатное гашение фоновых процессов —
+#     `main.ts`) и сохраняет код выхода (гибель от сигнала — 128+N);
+#   * `tini`/`docker-init` в образ не ставится: это лишний пакет в runtime, а
+#     `sh` уже есть в базовом образе.
+
 ARG BUILDPLATFORM
 
 FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
@@ -150,7 +165,11 @@ RUN set -eux; \
     node -e "import('@itphx/synth-core').then((m) => { if (!m.InlineExecutionPort) { throw new Error('core без InlineExecutionPort'); } console.log('core runtime OK'); }).catch((e) => { console.error(e); process.exit(1); })"
 
 EXPOSE 5100
-CMD ["node", "dist/main.js"]
+# PID 1 (аудит 0.13.4 §5.2): `synth-init` — sh-скрипт (reaping осиротевших
+# детей; Node/libuv этого не умеет), он запускает `dist/init.js` — Node-обёртку
+# (проброс сигналов всей process group и кода выхода). Шапка файла.
+COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `dev` — core + tier 1 + tier 4 + tier 5 + БД-клиенты + buildah + ffmpeg
@@ -317,7 +336,11 @@ RUN set -eux; \
     node -e "import('@itphx/synth-core').then((m) => { if (!m.InlineExecutionPort) { throw new Error('core без InlineExecutionPort'); } console.log('core runtime OK'); }).catch((e) => { console.error(e); process.exit(1); })"
 
 EXPOSE 5100
-CMD ["node", "dist/main.js"]
+# PID 1 (аудит 0.13.4 §5.2): `synth-init` — sh-скрипт (reaping осиротевших
+# детей; Node/libuv этого не умеет), он запускает `dist/init.js` — Node-обёртку
+# (проброс сигналов всей process group и кода выхода). Шапка файла.
+COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `full` — browser + tier 2 + tier 4 + tier 5 + БД + docker CLI + buildah

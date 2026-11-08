@@ -5,6 +5,7 @@
 // тестах без запуска процесса.
 
 import { createBackendApp } from './app.js';
+import { detectContainer, resolveBindHost } from './lib/bind-host.js';
 import {
   configureRestart,
   resolveRestartMode,
@@ -12,7 +13,9 @@ import {
   setSynthReady,
 } from '@itphx/synth-core';
 
-const host = process.env.SYNTH_HOST || '0.0.0.0';
+// Аудит F5: вне контейнера слушаем loopback (наружу — только явным SYNTH_HOST);
+// в контейнере/K8s — 0.0.0.0, иначе порт недоступен снаружи.
+const host = resolveBindHost(process.env, detectContainer(process.env));
 
 // ADR-077: fail-closed на старте (неверный `execution.mode` или `remote` —
 // удалённый исполнитель ещё не реализован, шаг 7 плана) — с понятным текстом.

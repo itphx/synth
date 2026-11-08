@@ -6,6 +6,8 @@ import type { RemoteCredentials, RemoteUser } from '../../remote/types.js';
 import { RemoteError } from '../../remote/types.js';
 import { startDeviceFlow, pollDeviceToken } from '../../remote/device-flow.js';
 import { saveCredentials } from '../../remote/credentials.js';
+import type { DefaultsRepository } from '../../storage/ports/index.js';
+import { resolveAppearanceDefaults } from '../appearance-defaults.js';
 
 /**
  * Remote-зависимости standalone auth-роутов (гибридный режим).
@@ -50,6 +52,12 @@ export interface AuthRoutesRemoteDeps {
    * игнорируются — главное локальная очистка.
    */
   logoutRemote?: () => Promise<void>;
+  /**
+   * Порт умолчаний оформления инстанса (`GET /auth/defaults`, ADR-096).
+   * Не передан — отдаются только встроенные умолчания: UI на экране входа
+   * не должен получать 404 (ошибка в консоли браузера).
+   */
+  defaultsStore?: DefaultsRepository | null;
 }
 
 function normalizeUrl(url: string): string {
@@ -135,6 +143,22 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
   const app = new Hono();
   // Активный device flow (один на сервер; новый start перезаписывает старый).
   let activeDeviceFlow: ActiveDeviceFlow | null = null;
+
+  // GET /locales — публичный список языков UI (паритет с backend).
+  // UI запрашивает его на экране входа; без маршрута консоль браузера
+  // показывала 404 (аудит F13).
+  app.get('/locales', (c) => c.json({
+    locales: [
+      { code: 'ru', name: 'Russian', native_name: 'Русский' },
+      { code: 'en', name: 'English', native_name: 'English' },
+    ],
+    default: 'ru',
+  }));
+
+  // GET /defaults — публичные умолчания оформления инстанса (паритет с
+  // backend): встроенные значения + сохранённые поверх. Доступны до входа —
+  // по ним UI настраивает тему/масштаб экрана входа.
+  app.get('/defaults', async (c) => c.json(await resolveAppearanceDefaults(deps.defaultsStore)));
 
   app.get('/status', async (c) => {
     let user = auth.getCurrentUser(c);

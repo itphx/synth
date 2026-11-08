@@ -115,6 +115,10 @@ function semverParts(v) {
   return { nums, pre: pre ?? null };
 }
 
+function isSemver(v) {
+  return typeof v === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v);
+}
+
 /** Сравнение SemVer: -1 / 0 / 1 (prerelease меньше релиза, как в SemVer 2.0.0 §11). */
 function semverCompare(a, b) {
   const pa = semverParts(a);
@@ -157,6 +161,33 @@ function sha256(path) {
 /** Обязательные поля записи аудита (`docs/security/README.md` §«Схема записи»). Waiver-статусов нет. */
 const RECORD_CHECK_STATUSES = ['pass', 'pass_with_exceptions'];
 const RECORD_STATUSES = ['approved', 'approved_with_exceptions', 'blocked'];
+/** Статусы, при которых запись утверждает, что проверки выполнены → нужен прогон CI и машинные счётчики. */
+const RECORD_APPROVED_STATUSES = ['approved', 'approved_with_exceptions'];
+
+/**
+ * Предположительные формулировки в `result`: запись не должна «ожидать» зелёный прогон —
+ * она фиксирует наблюдаемый результат. Регулярка намеренно широкая (рус + англ) и
+ * регистронезависимая; проверяются все проверки со статусом pass/pass_with_exceptions.
+ */
+const SPECULATIVE_RESULT_RE = /(?:ожида(?:ется|лся|ем|ть)|предполага(?:ется|лся)|должен\s+быть\s+зел[её]н|expect(?:ed)?)/i;
+
+/** Совпадение sha по префиксу: `record.commit` может быть коротким (7–40 hex). */
+function sameCommit(a, b) {
+  const x = String(a).toLowerCase();
+  const y = String(b).toLowerCase();
+  return x === y || x.startsWith(y) || y.startsWith(x);
+}
+
+/**
+ * Коммит `sha` лежит в той же линии истории, что и `commit` (предок или потомок).
+ * Строгий «только предок» отвергал бы нормальный случай «прогон CI на следующем коммите
+ * после аудита»; посторонний коммит другой ветки по-прежнему отвергается.
+ */
+function commitRelated(sha, commit) {
+  return sameCommit(sha, commit)
+    || gitOk(['merge-base', '--is-ancestor', sha, commit])
+    || gitOk(['merge-base', '--is-ancestor', commit, sha]);
+}
 
 function validateRecord(record, { version, policy }) {
   const errors = [];
@@ -192,6 +223,89 @@ function validateRecord(record, { version, policy }) {
     }
     if (!c.command) errors.push(`checks.${id}: не заполнено поле command — проверка не воспроизводима`);
     if (!c.result) errors.push(`checks.${id}: не заполнено поле result — нет наблюдаемого результата`);
+  }
+  // Любая (не только обязательная) проверка со статусом pass не может опираться на «ожидается»:
+  // PASS — это наблюдаемый результат, а не прогноз. Правило действует и в `--lint-records`.
+  const wordingFrom = policy.recordWording?.requireObservableFrom;
+  const wordingApplies = typeof wordingFrom !== 'string'
+    || semverCompare(record.version ?? version, wordingFrom) >= 0;
+  if (wordingApplies) {
+    for (const [id, c] of Object.entries(checks)) {
+      if (!c || !RECORD_CHECK_STATUSES.includes(c.status)) continue;
+      const match = SPECULATIVE_RESULT_RE.exec(String(c.result ?? ''));
+      if (match) {
+        errors.push(
+          `checks.${id}.result: предположительная формулировка («${match[0]}») — нужен наблюдаемый результат/команда/прогон`,
+        );
+      }
+    }
+  } else {
+    warnings.push(`checks: правило «нет предположительных формулировок в result» не применяется к записи ${record.version} (введено с ${wordingFrom})`);
+  }
+  // `artifacts.ci_run` — привязка записи к CI: для утверждённых записей это факт прогона,
+  // а не обещание. Допустим только sha коммита из линии истории коммита записи.
+  if (RECORD_APPROVED_STATUSES.includes(record.status)) {
+    const ciRun = record.artifacts?.ci_run;
+    if (typeof ciRun !== 'string' || !ciRun.trim()) {
+      errors.push('artifacts.ci_run: не заполнен — для approved/approved_with_exceptions нужен фактический прогон CI (номер run + sha коммита)');
+    } else if (/<[^<>]+>/.test(ciRun)) {
+      errors.push(`artifacts.ci_run: плейсхолдер «${ciRun.trim()}» — нужен фактический прогон CI (номер run + sha коммита)`);
+    } else {
+      const shas = [...new Set((ciRun.match(/\b[0-9a-f]{7,40}\b/gi) ?? []).map((s) => s.toLowerCase()))];
+      const commitKnown = /^[0-9a-f]{7,40}$/.test(commit) && gitOk(['cat-file', '-e', `${commit}^{commit}`]);
+      if (!commitKnown) {
+        warnings.push(`artifacts.ci_run: привязка не проверена — commit ${commit || '—'} отсутствует в локальной истории`);
+      } else {
+        const candidates = shas.filter((s) => gitOk(['cat-file', '-e', `${s}^{commit}`]));
+        const onRecordCommit = candidates.find((s) => sameCommit(s, commit));
+        const related = onRecordCommit ?? candidates.find((s) => commitRelated(s, commit));
+        if (!related) {
+          errors.push(
+            `artifacts.ci_run: нет sha коммита, связанного с коммитом записи ${commit} — ` +
+            'прогон CI должен быть на коммите записи (или в той же линии истории)',
+          );
+        } else if (!onRecordCommit) {
+          const strictFrom = policy.recordCiRun?.requireCommitMatchFrom;
+          const strict = typeof strictFrom === 'string' && semverCompare(record.version ?? version, strictFrom) >= 0;
+          const text = `artifacts.ci_run: прогон не на коммите записи (${related} ≠ ${commit})`;
+          if (strict) errors.push(`${text} — с ${strictFrom} требуется совпадение sha с record.commit`);
+          else warnings.push(text);
+        }
+      }
+    }
+  }
+  // Ратчет — машинная сверка «запись ≤ baseline»: counts в записи должны быть числами,
+  // иначе расхождение ратчета с фактом (S7) снова станет невидимым.
+  const dependencies = checks.dependencies;
+  if (dependencies && RECORD_CHECK_STATUSES.includes(dependencies.status) && policy.dependencies?.mode !== 'off') {
+    const countsFrom = policy.dependencies?.countsRequiredFrom;
+    const applies = typeof countsFrom !== 'string' || semverCompare(record.version ?? version, countsFrom) >= 0;
+    if (!applies) {
+      warnings.push(`checks.dependencies.counts: машинная сверка не применяется к записи ${record.version} (правило введено с ${countsFrom})`);
+    } else {
+      const counts = dependencies.counts;
+      const valid =
+        counts && typeof counts === 'object'
+        && Number.isInteger(counts.critical) && counts.critical >= 0
+        && Number.isInteger(counts.high) && counts.high >= 0;
+      if (!valid) {
+        errors.push('checks.dependencies.counts: нужны машинночитаемые counts {critical: <int≥0>, high: <int≥0>} — иначе ратчет не сверить с baseline');
+      } else {
+        const profileName = policy.dependencies?.profile;
+        const baseline = policy.dependencies?.profiles?.[profileName]?.baseline;
+        if (baseline) {
+          for (const severity of ['critical', 'high']) {
+            const fact = counts[severity];
+            const limit = baseline[severity];
+            if (fact > limit) {
+              errors.push(`checks.dependencies.counts.${severity}=${fact} превышает baseline.${severity}=${limit} — запись превышает baseline`);
+            } else if (limit > fact) {
+              warnings.push(`checks.dependencies.counts.${severity}=${fact} < baseline.${severity}=${limit} — ратчет ослаблен — синхронизируйте baseline с фактом`);
+            }
+          }
+        }
+      }
+    }
   }
   for (const e of record.exceptions ?? []) {
     if (!e || !e.id) errors.push('в exceptions[] есть запись без id');
@@ -635,6 +749,25 @@ function validatePolicy(policy) {
       if (typeof prof?.baseline?.critical !== 'number' || typeof prof?.baseline?.high !== 'number') {
         errors.push(`dependencies.profiles.${name}.baseline: нужны числовые critical и high`);
       }
+    }
+  }
+  if ('countsRequiredFrom' in deps && !isSemver(deps.countsRequiredFrom)) {
+    errors.push('dependencies.countsRequiredFrom: SemVer-версия, с которой запись обязана содержать counts');
+  }
+  if ('recordCiRun' in policy) {
+    const cfg = policy.recordCiRun;
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+      errors.push('recordCiRun: объект { requireCommitMatchFrom: "X.Y.Z" }');
+    } else if (!isSemver(cfg.requireCommitMatchFrom)) {
+      errors.push('recordCiRun.requireCommitMatchFrom: SemVer-версия, с которой прогон CI обязан быть на коммите записи');
+    }
+  }
+  if ('recordWording' in policy) {
+    const cfg = policy.recordWording;
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+      errors.push('recordWording: объект { requireObservableFrom: "X.Y.Z" }');
+    } else if (!isSemver(cfg.requireObservableFrom)) {
+      errors.push('recordWording.requireObservableFrom: SemVer-версия, с которой result не может содержать предположительных формулировок');
     }
   }
   if ('bootstrap' in policy) {

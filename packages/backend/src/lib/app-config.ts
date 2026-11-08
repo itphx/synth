@@ -1,6 +1,7 @@
 import type { AuthConfig, TestUser, SynthConfig } from '@itphx/synth-shared';
 import { loadConfig, resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveMaxUploadBytes, resolveMaxReadBytes, resolveMaxPreviewBytes } from '@itphx/synth-shared';
 import type { LoadConfigOptions } from '@itphx/synth-shared/config';
+import { resolveApiKeyRoles } from '../auth/api-key.js';
 
 const envStr = (key: string, fallback = ''): string => process.env[key] || fallback;
 const envBool = (key: string, fallback = false): boolean =>
@@ -62,6 +63,9 @@ function buildAuthConfig(defaults: SynthConfig['auth']): AuthConfig {
   return {
     debugMode,
     apiKey: envStr('SYNTH_API_KEY', defaults.apiKey ?? ''),
+    // Аудит F5: роли API-ключа — только явная настройка (`auth.apiKeyRoles` /
+    // `SYNTH_API_KEY_ROLES`), дефолт USER. Неизвестная роль — ошибка загрузки.
+    apiKeyRoles: resolveApiKeyRoles(defaults.apiKeyRoles),
     testUsers,
     sessionMaxAgeMinutes: envInt('SYNTH_SESSION_MAX_AGE', defaults.sessionMaxAgeMinutes),
     oidc: oidcEnabled
@@ -78,7 +82,14 @@ function buildAuthConfig(defaults: SynthConfig['auth']): AuthConfig {
 }
 
 export async function loadBackendConfig(options?: LoadConfigOptions): Promise<BackendConfig> {
-  const synth = await loadConfig(options);
+  // F4 (аудит S1): профиль backend/managed включает LLM-шлюз по умолчанию —
+  // обфускация секретов, аудит каждого запроса и rate limit должны работать
+  // «из коробки». Явные config.yaml/env/CLI и runtime-тумблер из UI это
+  // перебивают (приоритет выше профиля). Standalone остаётся выключенным.
+  const synth = await loadConfig({
+    baseDefaults: { llmGateway: { enabled: true } },
+    ...options,
+  });
   const auth = buildAuthConfig(synth.auth);
   const dataDir = resolveDataDir(synth);
   const workspacesRoot = resolveWorkspacesRoot(synth);

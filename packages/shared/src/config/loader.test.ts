@@ -261,3 +261,72 @@ describe('loadConfig — SYNTH_BOOTSTRAP_SERVICE_KEYS (ADR-052/O1)', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * F4 (аудит S1): профильные дефолты (`baseDefaults`) — выше общего
+ * `defaultConfig`, но ниже config.yaml/env/CLI.
+ */
+describe('loadConfig — baseDefaults профиля (F4)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  async function writeConfig(yaml: string): Promise<string> {
+    dir = await mkdtemp(join(tmpdir(), 'synth-config-base-'));
+    const path = join(dir, 'config.yaml');
+    await writeFile(path, yaml, 'utf-8');
+    return path;
+  }
+
+  it('поднимает дефолт, не трогая остальные значения', async () => {
+    const cfg = await loadConfig({
+      configPath: await writeConfig('{}\n'),
+      env: {},
+      baseDefaults: { llmGateway: { enabled: true } },
+    });
+    expect(cfg.llmGateway.enabled).toBe(true);
+    expect(cfg.llmGateway.inputMode).toBe(defaultConfig.llmGateway.inputMode);
+  });
+
+  it('config.yaml перебивает профиль-дефолт', async () => {
+    const cfg = await loadConfig({
+      configPath: await writeConfig('llmGateway:\n  enabled: false\n'),
+      env: {},
+      baseDefaults: { llmGateway: { enabled: true } },
+    });
+    expect(cfg.llmGateway.enabled).toBe(false);
+  });
+
+  it('env перебивает профиль-дефолт', async () => {
+    const cfg = await loadConfig({
+      configPath: await writeConfig('{}\n'),
+      env: { SYNTH_LLM_GATEWAY_ENABLED: 'false' },
+      baseDefaults: { llmGateway: { enabled: true } },
+    });
+    expect(cfg.llmGateway.enabled).toBe(false);
+  });
+
+  it('CLI-overrides перебивают профиль-дефолт', async () => {
+    const cfg = await loadConfig({
+      configPath: await writeConfig('{}\n'),
+      env: {},
+      baseDefaults: { llmGateway: { enabled: true } },
+      overrides: { llmGateway: { ...defaultConfig.llmGateway, enabled: false } },
+    });
+    expect(cfg.llmGateway.enabled).toBe(false);
+  });
+
+  it('без baseDefaults (standalone) шлюз остаётся выключенным', async () => {
+    const cfg = await loadConfig({
+      configPath: await writeConfig('{}\n'),
+      env: {},
+    });
+    expect(cfg.llmGateway.enabled).toBe(false);
+  });
+});

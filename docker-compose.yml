@@ -48,12 +48,29 @@
 # max(attachments, upload, 100 МиБ) + 1 МиБ) — вручную задавать
 # `client_max_body_size` не нужно; пустые значения → дефолты приложения.
 # ─────────────────────────────────────────────────────────────────────────────
+# PID 1 и зомби (аудит 0.13.4 §5.2). Контейнеру нужен init-процесс, который
+# пожинает осиротевших детей: иначе завершившиеся процессы остаются зомби и
+# `kill(pid, 0)` «успешен» для давно мёртвого. Два уровня защиты:
+#   * `init: true` у сервисов — Docker поднимает `docker-init` (tini) как PID 1
+#     (пакет в образ ставить не нужно);
+#   * образы backend/executor запускают `synth-init` — sh-скрипт
+#     (`docker/init.sh`: reaping + проброс сигналов), он запускает `dist/init.js`
+#     (`packages/*/src/init.ts`: проброс сигналов всей process group и кода
+#     выхода, включая 75 — рестарт, ADR-092). Node-обёртка одна reaping не
+#     делает: libuv ждёт только своих детей.
+# Проверка: `docker compose exec <сервис> ps -o pid,ppid,stat,comm` — строк со
+# `stat` = `Z` быть не должно. В K8s `init: true` нет; там работает `synth-init`
+# внутри образа (см. docs/MAINTENANCE.md §«PID 1 и зомби»).
+# ─────────────────────────────────────────────────────────────────────────────
 services:
   synth:
     build:
       context: .
       dockerfile: docker/Dockerfile
     container_name: synth
+    # PID 1 = docker-init (tini): пожинает зомби и пробрасывает сигналы.
+    # Образ в роли PID 1 — CLI (`synth serve`), своего reaping не делает.
+    init: true
     ports:
       - "4300:4300"
     environment:
@@ -190,6 +207,10 @@ services:
       target: core
     image: ${SYNTH_IMAGE_BACKEND:-synth-backend}:${SYNTH_IMAGE_BACKEND_TAG:-local-core}
     container_name: synth-backend
+    # PID 1 = docker-init (tini): reaping зомби + проброс сигналов. Обёртка
+    # образа (`dist/init.js`) делает то же внутри, `init: true` — страховка
+    # для случая, когда команда образа переопределена (`docker compose run`).
+    init: true
     ports:
       - "${SYNTH_BACKEND_PUBLISH:-127.0.0.1:5000}:5000"
     environment:
@@ -239,6 +260,8 @@ services:
       target: slim
     image: ${SYNTH_IMAGE_BACKEND_SLIM:-synth-backend}:${SYNTH_IMAGE_BACKEND_SLIM_TAG:-local-slim}
     container_name: synth-backend-split
+    # PID 1 = docker-init (tini): см. комментарий у all-in-one backend.
+    init: true
     ports:
       - "${SYNTH_BACKEND_PUBLISH:-127.0.0.1:5000}:5000"
     environment:
@@ -310,6 +333,9 @@ services:
       target: dev
     image: ${SYNTH_IMAGE_EXECUTOR:-synth-executor}:${SYNTH_IMAGE_EXECUTOR_TAG:-local-dev}
     container_name: synth-executor
+    # PID 1 = docker-init (tini): исполнитель порождает процессы чаще всех,
+    # страховка поверх обёртки образа (`dist/init.js`).
+    init: true
     environment:
       # Токен доступа к API исполнителя (обязателен — fail-closed) и корень
       # workspace (граница containment'а). Значение токена — то же, что в файле,
@@ -344,6 +370,9 @@ services:
       dockerfile: docker/Dockerfile.ui
     image: ${SYNTH_IMAGE_UI:-synth-ui}:${SYNTH_IMAGE_UI_TAG:-local}
     container_name: synth-ui
+    # PID 1 = docker-init (tini): nginx-entrypoint порождает процессы;
+    # необязательно, но снимает класс «зомби от entrypoint-скриптов».
+    init: true
     ports:
       - "${SYNTH_UI_PUBLISH:-127.0.0.1:5002}:8080"
     environment:

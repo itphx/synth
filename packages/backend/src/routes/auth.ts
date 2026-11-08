@@ -10,24 +10,16 @@ import { t } from '../lib/i18n.js';
 import { getDefaultLang, setDefaultLang, type Lang } from '../lib/i18n-config.js';
 import type { AppearanceDefaults } from '../lib/defaults-store.js';
 import type { DefaultsRepository } from '@itphx/synth-core';
+import { resolveAppearanceDefaults } from '@itphx/synth-core';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 
 const OIDC_STATE_COOKIE = 'oidc_state';
 
 // Встроенные умолчания оформления (совпадают с тем, что использует UI
-// по умолчанию: packages/ui/src/lib/defaults.ts + uiScale.ts).
-// `null` — «умолчание не задано»: UI берёт встроенный дефолт.
-const BUILT_IN_DEFAULTS = {
-  themeMode: 'system' as const,
-  theme: 'synthesis',
-  uiScaleMobile: null as number | null,
-  uiScaleDesktop: null as number | null,
-  chatViewMode: null as 'detailed' | 'feed' | null,
-  chatDensity: null as 'normal' | 'compact' | null,
-  chatScaleMobile: null as number | null,
-  chatScaleDesktop: null as number | null,
-};
+// по умолчанию: packages/ui/src/lib/defaults.ts + uiScale.ts) живут в core —
+// один источник для standalone (`GET /auth/defaults`) и managed (здесь),
+// поэтому ответы сборок не расходятся (аудит F13).
 
 /**
  * Поля умолчаний оформления, которые принимает `PUT /defaults`.
@@ -81,14 +73,8 @@ export function createAuthRoutes(
   };
 
   // Сохранённые умолчания перекрывают встроенные; uiScaleMobile/uiScaleDesktop: null — умолчание не задано.
-  const resolveDefaults = async () => {
-    const stored: AppearanceDefaults = defaultsStore ? await defaultsStore.loadDefaults() : {};
-    return {
-      locale: getDefaultLang(),
-      ...BUILT_IN_DEFAULTS,
-      ...stored,
-    };
-  };
+  const resolveDefaults = async () =>
+    resolveAppearanceDefaults(defaultsStore, getDefaultLang());
   const getOidcClient = createLazyOidcClient(config.oidc);
 
   // GET /auth/login — редирект на Keycloak authorize endpoint

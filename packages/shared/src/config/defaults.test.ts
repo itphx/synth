@@ -1,7 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import type { SynthConfig } from './types.js';
+import { describe, it, expect } from 'vitest';
 import { defaultConfig } from './defaults.js';
-import { defaultConfig as defaultsModule } from './defaults.js';
 import { defaultExecutionConcurrency } from './execution.js';
 
 describe('defaultConfig', () => {

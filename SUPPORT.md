@@ -4,9 +4,9 @@ Need help with Synth? Here is where to look and where to ask.
 
 ## Documentation
 
-The canonical user documentation lives on the portal:
+The canonical user documentation lives on the portal (Russian only):
 
-- **Portal (RU by default, EN under `/en/`):** <https://docs.synth.itphx.ru/>
+- **Portal:** <https://docs.synth.itphx.ru/>
 - Quick start: <https://docs.synth.itphx.ru/getting-started/quickstart/>
 - Providers: <https://docs.synth.itphx.ru/getting-started/providers/>
 - Hybrid mode: <https://docs.synth.itphx.ru/deploy/hybrid/>
@@ -15,6 +15,7 @@ The canonical user documentation lives on the portal:
 
 Developer documentation is in this repository — start with
 [`README.md`](./README.md), [`docs/`](./docs/) and [`AGENTS.md`](./AGENTS.md).
+English versions: [`README.en.md`](./README.en.md), [`docs/en/`](./docs/en/).
 
 ## Questions and discussions
 

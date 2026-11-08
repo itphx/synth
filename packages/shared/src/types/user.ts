@@ -32,6 +32,13 @@ export interface TestUser {
 export interface AuthConfig {
   debugMode: boolean;
   apiKey?: string;
+  /**
+   * Роли, выдаваемые пользователю единого API-ключа (`auth.apiKey` /
+   * `SYNTH_API_KEY`) вне debug/OIDC. По умолчанию `['USER']` — права ADMIN
+   * выдаются только **явной** настройкой (`auth.apiKeyRoles` /
+   * `SYNTH_API_KEY_ROLES`), а не по факту наличия ключа.
+   */
+  apiKeyRoles?: GlobalRole[];
   testUsers?: TestUser[];
   sessionMaxAgeMinutes: number;
   oidc?: {

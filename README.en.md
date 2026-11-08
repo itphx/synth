@@ -102,7 +102,7 @@ Open the UI and sign in with your corporate account. The guide is on the portal:
 
 ## Documentation
 
-User guides live on the portal [docs.synth.itphx.ru](https://docs.synth.itphx.ru/) (Russian; the English section of the portal is in progress, and this README is maintained in English).
+User guides live on the portal [docs.synth.itphx.ru](https://docs.synth.itphx.ru/) (Russian only; the English developer documentation is in this repository — see [`docs/en/`](./docs/en/)).
 
 | Document | About |
 |----------|-------|

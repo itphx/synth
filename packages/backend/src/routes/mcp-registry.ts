@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { Context } from 'hono';
+import type { Context, Next } from 'hono';
 import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
 import type {
@@ -366,11 +366,37 @@ export function createMcpRegistryRoutes(
 
   // --- MCP-серверы сессии (legacy; канонический эндпоинт — /api/v2/sessions/:id/mcp) ---
   if (sessionManager) {
+    /**
+     * ADR-071 §2.4 / инвариант 16: доступ к MCP-скоупу сессии — **владелец
+     * сессии или ADMIN** (та же политика, что у `GET/PUT /api/v2/sessions/:id/mcp`
+     * в core-фабрике; LEAD и участник проекта сюда не допускаются).
+     *
+     * Проверка — на границе роута, до обработчика: нет сессии → 404, чужой →
+     * 403. Без неё legacy-путь `/api/v2/mcp/session/:sessionId` был IDOR:
+     * любой аутентифицированный читал и менял MCP-скоуп **чужой** сессии по id
+     * (обнаружено переписью маршрутов `route-access-census.test.ts`).
+     */
+    const sessionOwnerGuard = async (c: Context, next: Next): Promise<Response | void> => {
+      const session = await sessionManager.getSession(c.req.param('sessionId') ?? '');
+      if (!session) {
+        return c.json(
+          { error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } },
+          404,
+        );
+      }
+      const user = currentUser(c);
+      const ownerId = session.ownerId ?? session.userId;
+      if (!user?.id || (ownerId !== user.id && !kit.isAdmin(c))) {
+        return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+      }
+      await next();
+    };
+
     /** Известные серверы — единый реестр. */
     const knownServerNames = async (): Promise<Set<string>> =>
       new Set((await registry.list()).map((e) => e.name));
 
-    app.get('/session/:sessionId', kit.requireAuth, async (c) => {
+    app.get('/session/:sessionId', kit.requireAuth, sessionOwnerGuard, async (c) => {
       const sessionId = c.req.param('sessionId');
       const session = await sessionManager.getSession(sessionId);
       if (!session) {
@@ -390,7 +416,7 @@ export function createMcpRegistryRoutes(
       });
     });
 
-    app.put('/session/:sessionId', kit.requireAuth, async (c) => {
+    app.put('/session/:sessionId', kit.requireAuth, sessionOwnerGuard, async (c) => {
       const sessionId = c.req.param('sessionId');
       const session = await sessionManager.getSession(sessionId);
       if (!session) {

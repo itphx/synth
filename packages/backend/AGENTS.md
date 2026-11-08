@@ -107,7 +107,7 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 | `/api/v2/projects/:id/plan*`, `/api/v2/projects/:id/log*`, `/api/v2/projects/:id/invariants` | core `createProjectPlanRoutes`/`createProjectLogRoutes` (PROP-054): точечные операции плана/журнала/инвариантов. RBAC — **по правилам проекта** (ADR-089 §5.5/§5.8): чтение — `canReadProject` (владелец/участник/`LEAD`/`ADMIN`), мутации — `canEditProjectContent` (`OWNER`/`EDITOR`/`LEAD`/`ADMIN`; `VIEWER` читает, но не мутирует — инвариант 21); проверка — граничные guard'ы фабрики, в обработчиках проверок нет (инвариант 16). Ошибки: `400 VALIDATION_ERROR` (в т.ч. лимиты Markdown), `403 PROJECT_FORBIDDEN`, `404 NOT_FOUND`, `409 PLAN_VERSION_CONFLICT` (в теле — актуальный план). Журнал постраничный (`?limit&offset`, новые сверху) и **вынесен из детали проекта** (`GET /:id` поля `log` больше не содержит) |
 | `/api/v2/messages`, `/queue` | `routes/{messages,queue}.ts` — обёртки над core `createMessageRoutes`/`createQueueRoutes` (i18n, `onMessagesChanged` = `recalc-can-summarize`) |
 | `/api/v2/agents` | `routes/agents.ts` — обёртка над core `createAgentRoutes` (guards: `GET /` = `requireAuth`, `/all`+мутации = `requireAdmin`) |
-| `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, ADR-071; запись — ADMIN или service-key со scope `addons:install`) |
+| `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, ADR-071; запись — ADMIN или service-key со scope `addons:install`; **legacy `/session/:id` — владелец|ADMIN**, guard `sessionOwnerGuard` — та же политика, что у `/sessions/:id/mcp`) |
 | `/api/v2/context`, `/users` | local `routes/*`; `/users` — чтение (список/детали) под `requireAdminOrScope('users:read')`, `GET /:id` отдаёт `identities` профиля (snake_case, ADR-089), мутации — `requireAdmin` |
 | `/api/v2/fs` | core `createFsRoutes` (ADR-075): managed opts — `requireProjectId`, `deny`, `getProjectWorkspace` (`resolveProjectWorkspace`, strict) |
 | `/api/v2/git` | core `createGitRoutes` (T4): `authorizeProject` = `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN) — write-эндпоинты (`init/clone/register/remove/fetch`); `authorizeRead` = `canReadProject` (owner/участник/LEAD/ADMIN) — read (`scan/log/commit`). Проверка — граничный guard core-фабрики (ADR-089, инвариант 16) |
@@ -152,7 +152,7 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 
 ## Аутентификация
 
-- Порядок в `getCurrentUser`: service-key (`synth_svc_…`, ADR-052 — синтетический пользователь `{id:'service:<keyId>', roles}` + `scopes`/`allowedProjects`) → cookie `user_session` → debug test-users (по `Authorization`) → OIDC JWT (если `oidc.enabled`) → единый API-key (`SYNTH_API_KEY`, роль ADMIN, вне debug/OIDC). Резолвер ключа — `config.resolveServiceKey` (`ServiceApiKeyStore.resolveBySecret` + `touch`), неизвестный/отозванный/истёкший → 401.
+- Порядок в `getCurrentUser`: service-key (`synth_svc_…`, ADR-052 — синтетический пользователь `{id:'service:<keyId>', roles}` + `scopes`/`allowedProjects`) → cookie `user_session` → debug test-users (по `Authorization`) → OIDC JWT (если `oidc.enabled`) → единый API-key (`SYNTH_API_KEY`, вне debug/OIDC; роли — `auth.apiKeyRoles`, дефолт `USER`, ADMIN только явной настройкой; сравнение — `apiKeyEquals` на sha256 + `timingSafeEqual`). Резолвер ключа — `config.resolveServiceKey` (`ServiceApiKeyStore.resolveBySecret` + `touch`), неизвестный/отозванный/истёкший → 401.
 - OIDC (`src/auth/oidc.ts`, ADR-099): дискавери, обмен кода/пароля и чтение JWKS идут через `egressFetch` (единое доверие TLS/CA), а `createRemoteJWKSet` получает **явный** транспорт `customFetch: (url, init) => egressFetch(url, init)` — не зависит от глобального состояния dispatcher.
 - Scope-гейты service-key (`scopeGuard`/`serviceProjectProjection`, `src/auth/service-scope.ts`) работают поверх `requireAuth`/`requirePermission`: ограничивают только service-key (`403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`), для интерактивных кред — no-op.
 - **Guard plugin-bound токена (ADR-090 Ф7, Уровень 2)** — `src/auth/plugin-scope.ts`
@@ -165,6 +165,23 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
   локализация отказов. Сигнал `plugins: {enabled, mode}` (без списка имён) backend отдаёт в
   публичном `GET /auth/oidc-meta` — для дискавери локального core в гибриде.
 - Комбинированные guard'ы `src/auth/guards.ts` (ADR-052/O1): `requireAdminOrScope(...scopes)` — service-key требует scope (`403 SCOPE_REQUIRED`), интерактив — роль ADMIN (нет аутентификации → `401 UNAUTHORIZED`, аутентифицирован без ADMIN → `403 FORBIDDEN`); роуты `/mcp/servers*` PUT/DELETE/test, запись скиллов, чтение user-API. `requireScopeForServiceKey(...scopes)` — service-key требует scope, интерактив без изменений (`POST /mcp/registry`).
+- **Единый fail-closed гейт границы `/api/v2/*` (F6, аудит §6.1)** — `src/app.ts`:
+  после `attachUser` и `/auth`-роутов, до plugin-bound guard'а, guard'а деградации и
+  монтирования роутов висит `app.use('/api/v2/*', createMiddleware(... auth.requireAuth))`.
+  Публичные пути — **только** allowlist `PUBLIC_API_V2_PATHS`/`isPublicApiV2Path`
+  (`src/app/public-routes.ts`), строго по методу+пути (без wildcard по префиксу):
+  `GET /api/v2/health`, `GET /api/v2/meta` (ADR-118 §8),
+  `GET /api/v2/i18n/{current,translations/ru,translations/en}`; `OPTIONS` (CORS preflight)
+  разрешён явно — CORS-middleware отвечает до гейта. Следствие: новый роутер без guard'а
+  анонимным **не станет** (нужна явная запись в allowlist), а проверки аутентификации в
+  обработчиках не дублируются (инвариант 16). Порядок middleware
+  (`attachUser` → per-key rate limit → гейт → `requirePluginTokenBinding` → guard
+  деградации → роуты) сохраняет работу service-key и plugin-bound ключей (ADR-052/ADR-090 Ф7).
+  Перепись — `src/app/route-access-census.test.ts`: каждый маршрут `/api/v2/*` без креды →
+  `401 UNAUTHORIZED`; все `:param`-маршруты сверяются с явным реестром
+  `DECLARED_PARAM_ROUTES` (правило доступа + место реализации) в обе стороны; для каждого —
+  «чужой USER на несуществующий id» → не `2xx` и не `500` (допустимые коды — в записи реестра,
+  `2xx` допустим только с обоснованием `note`).
 - Cookie-сессии — in-memory (`Map`), переживают только процесс; срок — `sessionMaxAgeMinutes`.
 - Логин/логаут/сессия и **профиль** — под `/auth/*`: `/auth/profile`, `/auth/profile/preferences`, `/auth/profile/avatar`.
 - Debug-ключи и `SYNTH_AUTH_DEBUG` описаны в корневом `AGENTS.md` — не дублировать; сами ключи задаёт `buildAuthConfig` в `src/lib/app-config.ts`.
@@ -185,6 +202,7 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 ## LLM Proxy
 
 - Единственный LLM-эндпоинт backend — `POST /api/v2/llm/chat/completions` (OpenAI-совместимый), роутер `src/routes/llm.ts`.
+- **Дефолт шлюза — включён** (F4, аудит S1): `loadBackendConfig` передаёт shared `loadConfig` профильные `baseDefaults: { llmGateway: { enabled: true } }` — обфускация секретов, аудит каждого запроса и rate limit работают «из коробки». Явные `config.yaml` / `SYNTH_LLM_GATEWAY_ENABLED` и runtime-тумблер из UI (`settings.json`, `mergeLlmGatewayConfig`) выше профиля; standalone остаётся `false`. Эффективное значение — `deps.gatewayConfig.enabled`; при выключенном шлюзе `/health` и `/ready` отдают `llmGateway:'disabled'` + `warnings:['llm-gateway-disabled']`.
 - ADR-052: на прокси навешан `scopeGuard('llm:chat')` — service-key без `llm:chat` → `403 SCOPE_REQUIRED` (проектной проекции у прокси нет).
 - Реализован на ядре: `GatewayProvider` + `ProviderFactory` + `AuditLogger`/`RateLimiter`/`SecretPatternStore`. Любой LLM-вызов — только через Gateway (ADR-036); провайдера напрямую не инстанцировать. `tool_choice` (`auto`|`none`|`required`) из тела пробрасывается в `chat`/`chatAsync` провайдера (`ChatOptions`, только вместе с `tools[]`) — им идёт финальный шаг-отчёт по лимиту шагов; `GatewayProvider.chat` пробрасывает опции как `chatAsync`.
 - ADR-094: прокси передаёт `onCall: createLlmCallRecorder(deps.metrics)` в `GatewayProvider` (при `metrics.enabled`) — единственная точка `synth_llm_*`; не считать LLM-вызовы в обход Gateway.
@@ -194,7 +212,8 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 ## Конфигурация и i18n
 
 - Единственная точка входа конфига — `loadBackendConfig()` (`src/lib/app-config.ts`) → shared `loadConfig`; возвращает `{ synth, dataDir, workspacesRoot, port, auth }`.
-- `buildAuthConfig` читает `SYNTH_AUTH_DEBUG`, `SYNTH_API_KEY`, `SYNTH_OIDC_*`, `SYNTH_SESSION_MAX_AGE`, `SYNTH_TEST_*_KEY`; тестовые пользователи — только при debug.
+- `buildAuthConfig` читает `SYNTH_AUTH_DEBUG`, `SYNTH_API_KEY`, `SYNTH_API_KEY_ROLES`, `SYNTH_OIDC_*`, `SYNTH_SESSION_MAX_AGE`, `SYNTH_TEST_*_KEY`; тестовые пользователи — только при debug. Роли API-ключа валидируются (`ADMIN|USER|LEAD|AUDITOR`), неизвестная роль — ошибка конфигурации; дефолт `USER`.
+- Bind-host (`src/lib/bind-host.ts`): `SYNTH_HOST` приоритетен; без него вне контейнера — `127.0.0.1`, в контейнере (`/.dockerenv`, `KUBERNETES_SERVICE_HOST`, `SYNTH_IN_CONTAINER`) — `0.0.0.0`.
 - `SYNTH_PROVIDER_*_API_KEY|URL|MODEL|TYPE|NUM_CTX` синхронизируются в `JsonStore` провайдеров/моделей при старте (`syncProvidersFromEnv`). `NUM_CTX` (целое > 0) задаёт `ProviderConfig.numCtx` — размер контекста провайдера (`num_ctx` Ollama); приоритет над `ModelConfig.contextWindow`.
 - `packages/backend/config.yaml` содержит только `mcp.servers`; остальной конфиг ищется каскадно (`findConfigPath`). В dev `dev.sh` задаёт `SYNTH_CONFIG` на этот файл (если он существует), поэтому `mcp.servers` подхватываются; `loadConfig` учитывает `SYNTH_CONFIG` (ADR-023).
 - При старте `mcp.servers` из config сидируются в `McpRegistryStore` — единственный источник истины MCP (ADR-071). Legacy-роуты `/api/v2/mcp/servers*` и `/mcp/session/:id` — тонкие адаптеры над реестром; собственного хранилища MCP-конфига (`YamlMcpConfigStore`/`McpConfigStore`) в backend больше нет.
@@ -206,6 +225,7 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 - Юнит-тесты роутеров поднимают Hono с mock-`AuthKit`; сквозные — `createBackendApp()` in-process (см. `src/integration/hybrid.integration.test.ts`).
 - `createBackendApp` сам изолирует env (dataDir, debug auth, ключи, провайдеры) — в тестах не выставляй env вручную поверх.
 - Dev-запуск: `./scripts/dev.sh backend` (порт и env — в корневом `AGENTS.md`).
+- Запуск в контейнере: `CMD ["/bin/sh","/usr/local/bin/synth-init","node","dist/init.js"]` — `docker/init.sh` (PID 1: reaping осиротевших детей) → `src/init.ts` (`dist/init.js`: запуск `main.js` в своей process group, проброс сигналов и кода выхода, включая 75) → `src/main.ts`. Node reaping не умеет (libuv ждёт только своих детей) — поэтому ступеней две; тест — `src/init.test.ts`, runbook — `docs/MAINTENANCE.md` §«PID 1 и зомби».
 - Сборка пакета: `tsc -p tsconfig.build.json` (`package.json`); системные дефиниции агентов берутся из `@itphx/synth-core`, собственных ассетов у backend нет.
 
 ## Чего не делать

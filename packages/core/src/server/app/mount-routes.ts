@@ -104,8 +104,11 @@ export interface StandaloneRoutesContext {
 }
 
 /**
- * Смонтировать все `/api/v2/*`-роуты и статический stub `/api/config/themes`
- * в порядке, идентичном прежнему `createStandaloneApp`.
+ * Смонтировать все `/api/v2/*`-роуты в порядке, идентичном прежнему
+ * `createStandaloneApp`.
+ *
+ * Публичные заглушки (`/api/config/themes`) регистрируются в `app.ts` ДО
+ * `requireAuth` — здесь их быть не должно (иначе маршрут попадал под guard).
  */
 export function mountStandaloneRoutes(
   app: Hono,
@@ -141,8 +144,6 @@ export function mountStandaloneRoutes(
       : null;
   const getEventsSettings = deps.getEventsSettings;
   const setEventsSettings = deps.setEventsSettings;
-  // API-заглушки для UI
-  app.get('/api/config/themes', (c) => c.json({ themes: [] }));
 
   // Sessions
   app.route('/api/v2/sessions', createSessionRoutes(

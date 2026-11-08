@@ -1275,6 +1275,61 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
      `/settings/tls` и что рестарт действительно произошёл (смена `startedAt`), а не был перехвачен
      другим процессом.
 
+## PID 1 и зомби (контейнеры)
+
+**Цель:** в контейнере не накапливаются процессы-зомби (`stat` = `Z`) и «Стоп» в чате не оставляет
+после себя живой хвост процессов; проверка — `ps -o pid,ppid,stat,comm` внутри контейнера не содержит
+строк со `stat = Z`, а `docker inspect -f '{{.State.ExitCode}}'` показывает код приложения
+(например, `75` после рестарта из UI).
+
+**Почему это нужно.** Приложение, запущенное как PID 1 (`node dist/main.js`), не пожинает
+**осиротевших** детей: когда убивают родителя (shell команды), его потомки переподвешиваются к PID 1 и
+после завершения остаются зомби. Зомби занимают слоты PID и ломают проверку «процесс ещё жив»
+(`kill(pid, 0)` для зомби успешен) — из-за этого в среде аудита 0.13.4 (§5.2) детерминированно падали
+abort-тесты исполнения. Node/libuv этого не решает: libuv вызывает `waitpid` **только** для pid'ов
+своих child-handle'ов, усыновлённых сирот он не жнёт (проверено на Node 22 / libuv 1.51).
+
+**Как сделано (две ступени, пакеты в runtime-стадию не добавляются):**
+
+1. **PID 1 — `synth-init`** (`docker/init.sh`, ставится в образ как `/usr/local/bin/synth-init`).
+   POSIX-шелл в обработчике `SIGCHLD` вызывает `waitpid(-1)` и жнёт всех детей, включая
+   усыновлённых; он же пробрасывает `SIGTERM`/`SIGINT`/`SIGHUP` дочернему процессу и выходит с его
+   кодом. `sh` уже есть в базовых образах, поэтому `tini`/`docker-init` в образ не нужны (runtime-стадия
+   `slim` вообще не имеет `RUN` — multi-arch без QEMU).
+2. **`dist/init.js`** (`packages/backend/src/init.ts`, `packages/executor/src/init.ts`) — запускает
+   приложение (`dist/main.js`) в отдельной process group, пробрасывает сигнал **всей группе**
+   (вместе с потомками команды) и сохраняет код выхода (в т.ч. `75` — рестарт, ADR-092; `128+N` —
+   гибель от сигнала).
+
+`CMD` образов backend/executor: `["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]`.
+
+**Площадки:**
+
+- **Docker Compose** — у `synth`, `synth-backend`, `synth-backend-split`, `synth-executor`, `synth-ui`
+  включён `init: true` (Docker поднимает `docker-init` как PID 1) — страховка для случая, когда
+  команда образа переопределена (`docker compose run`).
+- **Kubernetes (Helm-чарт)** — настроек не требует: reaping делает `synth-init` внутри образа.
+  `terminationGracePeriodSeconds` в чарте не задаётся → действует дефолт Kubernetes (30 с, не ноль);
+  `backend.restartMode: process` (`SYNTH_RESTART_MODE=process`) работает как раньше: `synth-init`
+  возвращает `75`, pod перезапускается по `restartPolicy: Always`.
+- **Standalone/дев** — `synth serve`/`tsx src/main.ts` запускаются под shell/systemd/dev.sh; reaping —
+  забота супервизора, обёртка не нужна.
+
+**Диагностика:**
+
+```bash
+# Docker: есть ли зомби в контейнере
+docker compose exec synth-backend ps -o pid,ppid,stat,comm
+# K8s: то же через pod (образы alpine/debian-slim, ps есть)
+kubectl -n synth exec deploy/synth-backend -- ps -o pid,ppid,stat,comm
+# Код выхода контейнера (75 после рестарта из UI — норма)
+docker inspect -f '{{.State.ExitCode}}' synth-backend
+```
+
+Если после прогона сценария «Стоп» в списке остались строки `Z` — проверьте, что запущен образ с
+`synth-init` (а не старый `CMD ["node","dist/main.js"]`) и что команда контейнера не переопределена
+в обход `synth-init`.
+
 ## Метрики исполнителя и диагностика split-режима
 
 **Цель:** в split-топологии (`execution.mode: remote`, ADR-077) понять, жив ли пул

@@ -16,6 +16,12 @@ export interface ReadinessState {
   checks?: Record<string, string>;
 }
 
+/** Состояние LLM-шлюза (ADR-036) для диагностики health/ready. */
+export type LlmGatewayState = 'enabled' | 'disabled';
+
+/** Предупреждение в теле `/health`/`/ready`, когда шлюз выключен. */
+export const LLM_GATEWAY_DISABLED_WARNING = 'llm-gateway-disabled';
+
 export interface HealthRoutesOptions {
   /**
    * ADR-098 (W5): текущее состояние деградации хранилища. Не задано/`null` —
@@ -29,10 +35,26 @@ export interface HealthRoutesOptions {
    * 503 отдаётся **только** при `ready:false` (старт не завершён/fail-closed).
    */
   getReadiness?: () => ReadinessState;
+  /**
+   * Состояние LLM-шлюза: `disabled` → запросы идут к провайдеру напрямую
+   * (нет обфускации секретов, аудита и rate limit). Это **предупреждение**,
+   * а не not_ready: HTTP-код не меняется (ADR-094/инвариант 25).
+   * Не задано/`null` — поля не выводятся (совместимость контракта).
+   */
+  getLlmGatewayState?: () => LlmGatewayState | null;
 }
 
 export function createHealthRoutes(opts: HealthRoutesOptions = {}): Hono {
   const app = new Hono();
+
+  const gatewayFields = (): Record<string, unknown> => {
+    const state = opts.getLlmGatewayState?.() ?? null;
+    if (!state) return {};
+    return {
+      llmGateway: state,
+      ...(state === 'disabled' ? { warnings: [LLM_GATEWAY_DISABLED_WARNING] } : {}),
+    };
+  };
 
   const health = () => ({
     ...storageHealthFields(opts.getStorageDegraded?.() ?? null),
@@ -44,6 +66,8 @@ export function createHealthRoutes(opts: HealthRoutesOptions = {}): Hono {
     build: (process.env.SYNTH_BUILD_ID ?? '').trim(),
     // Restart: ISO старта процесса — UI сравнивает до/после рестарта.
     startedAt: getProcessStartedAt(),
+    // F4 (аудит S1): диагностика LLM-шлюза — предупреждение, не смена статуса.
+    ...gatewayFields(),
     time: nowISO(),
   });
 
@@ -58,6 +82,8 @@ export function createHealthRoutes(opts: HealthRoutesOptions = {}): Hono {
         storage: state.storage,
         version: SYNTH_VERSION,
         startedAt: getProcessStartedAt(),
+        // F4 (аудит S1): readiness не ломается при выключенном шлюзе.
+        ...gatewayFields(),
         time: nowISO(),
         ...(state.checks ? { checks: state.checks } : {}),
       },

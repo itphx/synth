@@ -13,6 +13,14 @@ export interface LoadConfigOptions {
   overrides?: Partial<SynthConfig>;
   /** ADR-023: источник env для оверрайдов; по умолчанию `process.env` (в тестах — свой env). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Дефолты профиля (например, backend/managed): глубокий мёрж **после**
+   * общего `defaultConfig` и **до** `config.yaml`/env/CLI. Позволяет профилю
+   * поднять дефолт (`llmGateway.enabled: true`), не перебивая явную
+   * конфигурацию (приоритет: CLI > env > config.yaml > профиль-дефолт >
+   * общий дефолт).
+   */
+  baseDefaults?: Record<string, unknown>;
 }
 
 const CONFIG_SEARCH_PATHS = [
@@ -97,7 +105,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Synth
 
   warnLegacyKeys(fileConfig, options.env ?? process.env);
 
-  const merged = deepMerge(defaultConfig as unknown as Record<string, unknown>, fileConfig);
+  // Профильные дефолты (backend/managed) — выше общего `defaultConfig`, но ниже
+  // `config.yaml`/env/CLI: явная настройка всегда перебивает профиль.
+  const withBaseDefaults = options.baseDefaults
+    ? deepMerge(defaultConfig as unknown as Record<string, unknown>, options.baseDefaults)
+    : (defaultConfig as unknown as Record<string, unknown>);
+  const merged = deepMerge(withBaseDefaults, fileConfig);
   // ADR-023: env-оверрайды скалярных ключей вложенных секций применяются одним
   // местом — поверх defaults + config.yaml и ниже CLI-overrides
   // (приоритет: CLI > env > config.yaml > defaults).

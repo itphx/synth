@@ -211,6 +211,11 @@ jobs:
       - name: Сборка @itphx/synth-core
         run: pnpm --filter @itphx/synth-core build
       - name: Тесты
+        # NODE_ENV=test — явно (аудит 0.13.4, F11): набор не должен зависеть от
+        # ambient NODE_ENV (`vitest.config.ts` пиннит его сам, env фиксирует
+        # намерение в CI).
+        env:
+          NODE_ENV: test
         run: pnpm --filter @itphx/synth-ui test
 
   # Плагин памяти (ADR-107). Тесты пакета в рантайме импортируют

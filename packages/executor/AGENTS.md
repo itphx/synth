@@ -562,7 +562,10 @@ MCP-вызова на текст и нетекстовые блоки и отд�
 невалидные числа — тоже ошибка (явная настройка оператора не должна молча
 превращаться в дефолт).
 
-Запуск: `node dist/main.js` (в образе — `/app/dist/main.js`). Graceful shutdown
+Запуск: `node dist/main.js` (в образе — `/app/dist/main.js` через цепочку
+`synth-init` (`docker/init.sh`: reaping PID 1) → `dist/init.js` (проброс сигналов
+всей process group и кода выхода) → `dist/main.js`; см. `docs/MAINTENANCE.md`
+§«PID 1 и зомби»). Graceful shutdown
 по `SIGINT`/`SIGTERM`: сервер закрывается, **фоновые процессы останавливаются**
 (`SIGTERM` → `SIGKILL`).
 

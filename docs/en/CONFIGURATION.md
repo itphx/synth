@@ -2,6 +2,9 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
+> ⚠️ RU-версия обновлена 2026-11-08 (**`auth.apiKeyRoles` / `SYNTH_API_KEY_ROLES`** —
+> роль пользователя единого API-ключа по умолчанию `USER`, ADMIN — только явной настройкой;
+> bind-host backend — loopback вне контейнера, `0.0.0.0` в контейнере — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-05 (**секция «Дефолты оптимизации контекста»** — неизвестное
 > окно модели (`0`) считается как 200 000 для авто-триггеров компактизации/суммаризации/
 > скользящего окна (`DEFAULT_CONTEXT_WINDOW`, ADR-119) — **переведено**).
@@ -32,7 +35,8 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 
 | Variable | Purpose | Default |
 |-----------|------------|--------------|
-| `SYNTH_API_KEY` | Key to log into the API (backend → role ADMIN; core standalone → role ADMIN). If not set, `synth serve` generates a stable local key in `{dataDir}/secrets/api-key` | — |
+| `SYNTH_API_KEY` | Key to log into the API (backend → roles from `auth.apiKeyRoles`, default `USER`; core standalone → role ADMIN). If not set, `synth serve` generates a stable local key in `{dataDir}/secrets/api-key` | — |
+| `SYNTH_API_KEY_ROLES` | Roles of the backend single API-key user (csv: `ADMIN,USER`); allowed `ADMIN`/`USER`/`LEAD`/`AUDITOR`; an unknown role is a configuration error at startup | `USER` |
 | `SYNTH_DATA_DIR` | Data directory (sessions, projects, providers, models) | per mode: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
 | `SYNTH_STORAGE_BACKEND` | ADR-096: physical storage backend: `file` (JSON files, ADR-005), `memory` (in-memory, data is **not** persisted) or `postgres` (ADR-097) | `file` |
 | `SYNTH_POSTGRES_DSN` | ADR-097: PostgreSQL connection string (takes precedence over separate `host`/`port`/`database`/`user`) | — |
@@ -55,7 +59,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_MAX_PREVIEW_BYTES` | Maximum file size served by `/api/v2/fs/raw` — media preview (`storage.maxPreviewBytes`), bytes | `104857600` (100 MiB) |
 | `SYNTH_CONFIG` | Path to `config.yaml` (takes precedence over the cascading search) | cascading search |
 | `SYNTH_HOME` | ADR-079: base home directory of a local instance (`--home`): config/data/profiles/credentials are resolved from it | — |
-| `SYNTH_HOST` | Listening address of the HTTP servers (backend — `0.0.0.0`; `synth serve` — `127.0.0.1`) | `0.0.0.0` / `127.0.0.1` (serve) |
+| `SYNTH_HOST` | Listening address of the HTTP servers. Backend: outside a container — `127.0.0.1`, inside a container — `0.0.0.0`; `synth serve` — `127.0.0.1`. An explicit value always wins | `127.0.0.1` (backend outside a container) / `0.0.0.0` (container) / `127.0.0.1` (serve) |
 | `SYNTH_PORT` | Backend port | `5000` |
 | `SYNTH_CORE_PORT` | Core port (and `synth serve`) | `4300` |
 | `SYNTH_RUNNER_PORT` | Runner port | `5200` |
@@ -93,6 +97,31 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_PROVIDER_<NAME>_API_KEY` | API key |
 | `SYNTH_PROVIDER_<NAME>_MODEL` | Default model |
 | `SYNTH_PROVIDER_<NAME>_TYPE` | Type: `openai`, `anthropic`, `ollama`, `decision`, `systemone` |
+
+### API-key roles (`auth.apiKeyRoles`, `SYNTH_API_KEY_ROLES`)
+
+The backend single API key (`auth.apiKey` / `SYNTH_API_KEY`) authenticates the
+`api` user but **does not grant ADMIN by default**: roles come from an explicit
+setting, the default is `['USER']`. ADMIN rights for such a key are an
+operator's deliberate decision (otherwise a leaked key immediately gives full
+control over the instance).
+
+| Field / env | Purpose | Default |
+|-----------|------------|--------------|
+| `auth.apiKeyRoles` | Roles of the single API-key user (outside debug/OIDC): array of `ADMIN` \| `USER` \| `LEAD` \| `AUDITOR` | `['USER']` |
+| `SYNTH_API_KEY_ROLES` | Same via env — csv (`ADMIN,USER`), case and spaces are ignored; takes precedence over `config.yaml` (ADR-023) | `USER` |
+
+An unknown role (in env or `config.yaml`) is a **configuration error at load
+time** (fail-closed, startup aborts with a clear message): silently keeping the
+default or shrinking the set is not acceptable for access rights. Debug keys
+(`SYNTH_AUTH_DEBUG`, test users), OIDC and service keys are **not** affected —
+they carry their own roles.
+
+```yaml
+auth:
+  apiKey: ""                       # SYNTH_API_KEY; pass via env/secret only
+  apiKeyRoles: ["USER"]            # SYNTH_API_KEY_ROLES; ADMIN only explicitly
+```
 
 ### Env overrides of nested sections (ADR-023)
 
@@ -339,6 +368,7 @@ ssh:                             # PROP-124: instance-wide mode for SSH keys
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
+  apiKeyRoles: ["USER"]           # SYNTH_API_KEY_ROLES: roles of the single API key (default USER, not ADMIN)
   sessionMaxAgeMinutes: 1440
   # oidc: { enabled: false, issuer: "", clientId: "", clientSecret: "", redirectUri: "http://localhost:5002/auth/callback", cliClientId: "synth-cli" }
 
@@ -450,12 +480,19 @@ microFirst:
   microLlmEnabled: false
 
 llmGateway:
-  enabled: false                  # disabled by default
+  enabled: true                   # profile default: backend/managed — true, standalone — false
   inputMode: "obfuscate"          # obfuscate | block
   logPayloads: false
   payloadLogPath: ""              # path of the full JSONL log; empty → {dataDir}/audit/llm-payloads.jsonl
   rateLimit: { userPerMinute: 60, providerPerMinute: 120 }
   audit: { enabled: true, logPath: "" }   # empty logPath → {dataDir}/audit/llm-gateway.jsonl
+
+> The default of `llmGateway.enabled` depends on the profile: **backend/managed — `true`** (secret
+> obfuscation, per-request audit, and rate limit work out of the box), **standalone — `false`**.
+> Override — `SYNTH_LLM_GATEWAY_ENABLED` / `config.yaml`; the runtime toggle in the UI
+> ("Security → Security gateway", `settings.json`) is **higher** than `config.yaml`. When the
+> gateway is off, `/health` and `/ready` add `llmGateway: "disabled"` and
+> `warnings: ["llm-gateway-disabled"]` — a warning; the readiness HTTP code does not change.
 
 decision:                         # ADR-084: decision models (System One: Clef/Jev/…)
   enabled: false                  # master switch of the decision layer

@@ -22,7 +22,8 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 | Переменная | Назначение | По умолчанию |
 |-----------|------------|--------------|
-| `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль ADMIN). Если не задан, `synth serve` генерирует устойчивый локальный ключ в `{dataDir}/secrets/api-key` | — |
+| `SYNTH_API_KEY` | Ключ для входа в API (backend → роли из `auth.apiKeyRoles`, по умолчанию `USER`; core standalone → роль ADMIN). Если не задан, `synth serve` генерирует устойчивый локальный ключ в `{dataDir}/secrets/api-key` | — |
+| `SYNTH_API_KEY_ROLES` | Роли пользователя единого API-ключа backend (csv: `ADMIN,USER`); допустимы `ADMIN`/`USER`/`LEAD`/`AUDITOR`, неизвестная роль — ошибка конфигурации на старте | `USER` |
 | `SYNTH_DATA_DIR` | Каталог данных (сессии, проекты, провайдеры, модели) | по режиму: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
 | `SYNTH_STORAGE_BACKEND` | ADR-096: физический backend хранения: `file` (JSON-файлы, ADR-005), `memory` (in-memory, данные **не** сохраняются) или `postgres` (ADR-097) | `file` |
 | `SYNTH_POSTGRES_DSN` | ADR-097: строка подключения PostgreSQL (приоритетнее отдельных `host`/`port`/`database`/`user`) | — |
@@ -45,7 +46,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_MAX_PREVIEW_BYTES` | Максимальный размер файла, отдаваемого `/api/v2/fs/raw` — предпросмотр медиа (`storage.maxPreviewBytes`), байт | `104857600` (100 МиБ) |
 | `SYNTH_CONFIG` | Путь к `config.yaml` (приоритетнее каскадного поиска) | каскадный поиск |
 | `SYNTH_HOME` | ADR-079: базовый home-каталог локального инстанса (`--home`): config/data/profiles/credentials резолвятся от него | — |
-| `SYNTH_HOST` | Адрес прослушивания HTTP-серверов (backend — `0.0.0.0`; `synth serve` — `127.0.0.1`) | `0.0.0.0` / `127.0.0.1` (serve) |
+| `SYNTH_HOST` | Адрес прослушивания HTTP-серверов. Backend: вне контейнера — `127.0.0.1`, в контейнере — `0.0.0.0`; `synth serve` — `127.0.0.1`. Явное значение приоритетно | `127.0.0.1` (backend вне контейнера) / `0.0.0.0` (контейнер) / `127.0.0.1` (serve) |
 | `SYNTH_PORT` | Порт бэкенда | `5000` |
 | `SYNTH_CORE_PORT` | Порт core (и `synth serve`) | `4300` |
 | `SYNTH_RUNNER_PORT` | Порт раннера | `5200` |
@@ -84,6 +85,31 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_PROVIDER_<NAME>_API_KEY` | API-ключ |
 | `SYNTH_PROVIDER_<NAME>_MODEL` | Модель по умолчанию |
 | `SYNTH_PROVIDER_<NAME>_TYPE` | Тип: `openai`, `anthropic`, `ollama`, `decision`, `systemone` |
+
+### Роли API-ключа (`auth.apiKeyRoles`, `SYNTH_API_KEY_ROLES`)
+
+Единый API-ключ backend (`auth.apiKey` / `SYNTH_API_KEY`) аутентифицирует
+пользователя `api`, но **не выдаёт права ADMIN по умолчанию**: роли берутся из
+явной настройки, дефолт — `['USER']`. Права ADMIN для такого ключа — только
+осознанное решение оператора (иначе утечка ключа сразу даёт полный контроль над
+инстансом).
+
+| Поле / env | Назначение | По умолчанию |
+|-----------|------------|--------------|
+| `auth.apiKeyRoles` | Роли пользователя единого API-ключа (вне debug/OIDC): массив `ADMIN` \| `USER` \| `LEAD` \| `AUDITOR` | `['USER']` |
+| `SYNTH_API_KEY_ROLES` | То же через env — csv (`ADMIN,USER`), регистр/пробелы не важны; приоритетнее `config.yaml` (ADR-023) | `USER` |
+
+Неизвестная роль (в env или `config.yaml`) — **ошибка конфигурации при
+загрузке** (fail-closed, старт прерывается с понятным текстом): для прав доступа
+недопустимо молча оставлять дефолт или урезать набор. Debug-ключи
+(`SYNTH_AUTH_DEBUG`, тестовые пользователи), OIDC и service-key эта настройка
+**не затрагивает** — у них свои роли.
+
+```yaml
+auth:
+  apiKey: ""                       # SYNTH_API_KEY; передавать только env/секретом
+  apiKeyRoles: ["USER"]            # SYNTH_API_KEY_ROLES; ADMIN — только явно
+```
 
 ### Env-оверрайды вложенных секций (ADR-023)
 
@@ -328,6 +354,7 @@ ssh:                             # PROP-124: режим работы инста�
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
+  apiKeyRoles: ["USER"]           # SYNTH_API_KEY_ROLES: роли единого API-ключа (по умолчанию USER, не ADMIN)
   sessionMaxAgeMinutes: 1440
   # oidc: { enabled: false, issuer: "", clientId: "", clientSecret: "", redirectUri: "http://localhost:5002/auth/callback", cliClientId: "synth-cli" }
 
@@ -443,12 +470,19 @@ microFirst:
   microLlmEnabled: false
 
 llmGateway:
-  enabled: false                  # выключен по умолчанию
+  enabled: true                   # дефолт профиля: backend/managed — true, standalone — false
   inputMode: "obfuscate"          # obfuscate | block
   logPayloads: false
   payloadLogPath: ""              # путь JSONL полного лога; пусто → {dataDir}/audit/llm-payloads.jsonl
   rateLimit: { userPerMinute: 60, providerPerMinute: 120 }
   audit: { enabled: true, logPath: "" }   # logPath пуст → {dataDir}/audit/llm-gateway.jsonl
+
+> Дефолт `llmGateway.enabled` зависит от профиля: **backend/managed — `true`** (обфускация
+> секретов, аудит каждого запроса и rate limit работают «из коробки»), **standalone — `false`**.
+> Переопределение — `SYNTH_LLM_GATEWAY_ENABLED` / `config.yaml`; runtime-тумблер из UI
+> («Безопасность → Шлюз безопасности», `settings.json`) **выше** `config.yaml`. При выключенном
+> шлюзе `/health` и `/ready` аддитивно отдают `llmGateway: "disabled"` и
+> `warnings: ["llm-gateway-disabled"]` — это предупреждение, HTTP-код readiness не меняется.
 
 decision:                         # ADR-084: decision-модели (System One: Clef/Jev/…)
   enabled: false                  # мастер-выключатель decision-слоя

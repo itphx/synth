@@ -7,6 +7,7 @@ import {
   OAUTH_PROVIDERS_ENV,
   ATTACHMENTS_MODALITIES_ENV,
   envOverrideName,
+  parseApiKeyRoles,
   parseAttachmentsModalities,
   parseEnvValue,
   toSnakeCase,
@@ -647,5 +648,61 @@ describe('applyObjectEnvOverrides — oauth.providers (ADR-105 Ф3)', () => {
     const cfg = makeConfig();
     const out = applyObjectEnvOverrides(cfg, {});
     expect(providersOf(out)).toEqual({});
+  });
+});
+
+describe('SYNTH_API_KEY_ROLES — роли пользователя единого API-ключа (аудит F5)', () => {
+  it('csv применяется в auth.apiKeyRoles (регистр/пробелы не важны)', () => {
+    const cfg = applyObjectEnvOverrides(
+      { auth: { apiKeyRoles: ['USER'] } },
+      { SYNTH_API_KEY_ROLES: ' admin, USER ' },
+    );
+    expect((cfg.auth as { apiKeyRoles: string[] }).apiKeyRoles).toEqual(['ADMIN', 'USER']);
+  });
+
+  it('неизвестная роль → ошибка конфигурации (fail-closed, не warn+игнор)', () => {
+    expect(() => applyObjectEnvOverrides({}, { SYNTH_API_KEY_ROLES: 'ADMIN,ROOT' })).toThrow(
+      /SYNTH_API_KEY_ROLES.*ROOT/,
+    );
+  });
+
+  it('пустой список → ошибка конфигурации', () => {
+    expect(() => applyObjectEnvOverrides({}, { SYNTH_API_KEY_ROLES: ' , ' })).toThrow(
+      /SYNTH_API_KEY_ROLES/,
+    );
+  });
+
+  it('env не задан / пустая строка → конфиг не меняется', () => {
+    const withKey = { auth: { apiKeyRoles: ['LEAD'] } };
+    expect(applyObjectEnvOverrides(withKey, {})).toEqual(withKey);
+    expect(applyObjectEnvOverrides(withKey, { SYNTH_API_KEY_ROLES: '' })).toEqual(withKey);
+  });
+
+  it('parseApiKeyRoles: дубликаты схлопываются', () => {
+    expect(parseApiKeyRoles('LEAD,lead,USER')).toEqual(['LEAD', 'USER']);
+  });
+});
+
+describe('llmGateway.enabled env (F4, аудит S1)', () => {
+  it('имя переменной — SYNTH_LLM_GATEWAY_ENABLED', () => {
+    expect(envOverrideName({ section: 'llmGateway', key: 'enabled', type: 'boolean' })).toBe(
+      'SYNTH_LLM_GATEWAY_ENABLED',
+    );
+  });
+
+  it('применяется к вложенной секции llmGateway', () => {
+    const cfg = applyEnvOverrides(
+      { llmGateway: { enabled: true, inputMode: 'obfuscate' } },
+      { SYNTH_LLM_GATEWAY_ENABLED: 'false' },
+    );
+    expect((cfg.llmGateway as { enabled: boolean }).enabled).toBe(false);
+    expect((cfg.llmGateway as { inputMode: string }).inputMode).toBe('obfuscate');
+  });
+
+  it('невалидное значение → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides({ llmGateway: { enabled: true } }, { SYNTH_LLM_GATEWAY_ENABLED: 'nope' });
+    expect((cfg.llmGateway as { enabled: boolean }).enabled).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('storageConfigSchema — лимиты чтения/предпросмотра', () => {

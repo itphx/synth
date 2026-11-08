@@ -27,7 +27,9 @@
 
 `src/config/`: `types.ts` (Zod-схема + `SynthConfig`), `defaults.ts`
 (`defaultConfig`), `merge.ts` (`deepMerge`), `loader.ts` (`loadConfig`, приоритет
-defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureDataDir`).
+defaults ← профильные `baseDefaults` ← yaml ← env ← overrides; `baseDefaults` —
+дефолты профиля (backend/managed включает `llmGateway.enabled`), не перебивают
+явную конфигурацию), `resolve.ts` (env-резолверы, `ensureDataDir`).
 - **Добавление поля = `types.ts` + `defaults.ts` + тест** (`defaults.test.ts`).
 - Дефолты `plugins.*` сверяются тестом (`src/config/plugins-docs-defaults.test.ts`) с
   `docs/CONFIGURATION.md` (RU и EN) — расхождение с кодом ломает сборку.

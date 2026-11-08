@@ -104,8 +104,8 @@ curl -s -H "Authorization: Bearer $(cat "$SYNTH_DATA_DIR/secrets/metrics-token")
 
 | Эндпоинт | Смысл | Коды |
 |---|---|---|
-| `GET /health`, `GET /api/v2/health` | **Liveness**: процесс жив и отвечает | всегда `200`; в деградации — `status:'degraded'` + блок `storage` (аддитивно) |
-| `GET /ready` | **Readiness**: приложение инициализировано (storage context собран, миграции применены, очередь готова) | `200` — готов; `503` — **только** старт не завершён или fail-closed |
+| `GET /health`, `GET /api/v2/health` | **Liveness**: процесс жив и отвечает | всегда `200`; в деградации — `status:'degraded'` + блок `storage` (аддитивно); при выключенном LLM-шлюзе — `llmGateway:'disabled'` + `warnings` |
+| `GET /ready` | **Readiness**: приложение инициализировано (storage context собран, миграции применены, очередь готова) | `200` — готов; `503` — **только** старт не завершён или fail-closed; выключенный LLM-шлюз readiness **не** снимает |
 
 Ключевое правило: **деградированное хранилище не снимает readiness**. Read-only-инстанс
 (ADR-098) продолжает обслуживать трафик и остаётся доступным ADMIN для диагностики; вывод pod'а из
@@ -119,6 +119,7 @@ curl -s -H "Authorization: Bearer $(cat "$SYNTH_DATA_DIR/secrets/metrics-token")
   "status": "ready",
   "storage": "ok",
   "version": "0.x.y",
+  "llmGateway": "enabled",
   "startedAt": "2026-10-19T10:00:00.000Z",
   "time": "2026-10-19T10:05:00.000Z"
 }
@@ -126,6 +127,12 @@ curl -s -H "Authorization: Bearer $(cat "$SYNTH_DATA_DIR/secrets/metrics-token")
 
 При неготовности — `503` и `"status": "not_ready"`; причина может быть детализирована в
 необязательном `checks` (например `{"migrations":"pending"}`). `storage` — `ok` | `degraded`.
+
+Поле `llmGateway` (`enabled` | `disabled`, аддитивно в `/health`, `/api/v2/health` и `/ready`)
+показывает эффективное состояние LLM-шлюза (ADR-036) с учётом runtime-тумблера. Если шлюз
+выключен, рядом приходит `warnings: ["llm-gateway-disabled"]`: запросы идут к провайдеру
+напрямую — нет обфускации секретов, аудита и rate limit. Это **предупреждение**: readiness
+остаётся `200` (ADR-094/инвариант 25), поля нет при неизвестном состоянии (обратная совместимость).
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' localhost:5000/ready     # 200 — готов, 503 — нет

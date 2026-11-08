@@ -175,7 +175,7 @@ API requests (except `GET /health`) are authenticated. Roles: `ADMIN`, `USER`, `
 
 | Mode | Where | Mechanism |
 |-------|-----|----------|
-| API Key | backend (`SYNTH_API_KEY`) | A single key → the ADMIN role |
+| API Key | backend (`SYNTH_API_KEY`) | A single key → roles from `auth.apiKeyRoles` (default `USER`; ADMIN explicitly) |
 | API Key | core standalone (`synth serve`, `--api-key`/`SYNTH_API_KEY`; otherwise an auto-generated key at `{dataDir}/secrets/api-key`) | A single key → the ADMIN role |
 | Debug | backend (`SYNTH_AUTH_DEBUG=true`) | Test users (admin-key-123, user-key-456, lead-key-789, auditor-key-012) |
 | OIDC | backend (Keycloak) | JWT + cookie `user_session` |

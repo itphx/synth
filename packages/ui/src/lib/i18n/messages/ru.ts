@@ -480,6 +480,7 @@ export const dict = {
   'gateway.patterns.saved': 'Паттерны сохранены',
   'gateway.patterns.empty': 'Нет паттернов',
   'gateway.secret.hidden': 'Значение скрыто',
+  'gateway.disabledWarning': 'LLM-шлюз выключен: запросы идут к провайдеру напрямую — нет обфускации секретов, аудита и rate limit.',
   'security.protectedPaths.title': 'Защищённые пути',
   'security.protectedPaths.description': 'Сквозная проверка файловых и shell-тулов: попытки доступа к защищённым путям (секреты, конфиги, системные файлы) блокируются до применения правил permissions.',
   'security.protectedPaths.defaultBadge': 'по умолчанию',

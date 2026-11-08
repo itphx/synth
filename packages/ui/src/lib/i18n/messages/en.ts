@@ -485,6 +485,7 @@ export const dict = {
   'gateway.patterns.saved': 'Patterns saved',
   'gateway.patterns.empty': 'No patterns',
   'gateway.secret.hidden': 'Value hidden',
+  'gateway.disabledWarning': 'LLM gateway is off: requests go directly to the provider — no secret obfuscation, audit, or rate limit.',
   'security.protectedPaths.title': 'Protected paths',
   'security.protectedPaths.description': 'Cross-cutting check of file and shell tools: attempts to access protected paths (secrets, configs, system files) are blocked before permission rules are applied.',
   'security.protectedPaths.defaultBadge': 'default',

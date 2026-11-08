@@ -4,6 +4,7 @@ import {
   DEFAULT_EGRESS_TOOLS_POLICY,
   DEFAULT_EGRESS_WEBHOOKS_POLICY,
   DEFAULT_EGRESS_LOG,
+  GlobalRole,
 } from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_MAX_READ_BYTES, DEFAULT_MAX_PREVIEW_BYTES } from '../types/index.js';
 import { DEFAULT_PROMPT_BLOCK_MAX_CHARS, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '../types/index.js';
@@ -53,6 +54,9 @@ export const defaultConfig: SynthConfig = {
   },
   auth: {
     debugMode: false,
+    // Единый API-ключ выдаёт только базовую роль; ADMIN — явной настройкой
+    // (`auth.apiKeyRoles` / `SYNTH_API_KEY_ROLES`).
+    apiKeyRoles: [GlobalRole.USER],
     sessionMaxAgeMinutes: 1440,
   },
   llm: {

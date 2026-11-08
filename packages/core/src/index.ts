@@ -1006,6 +1006,16 @@ export {
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
 // ADR-096 (W2.3): умолчания оформления (перенесено из backend) — файловая реализация.
 export { DefaultsStore, UI_SCALE_MIN, UI_SCALE_MAX, CHAT_SCALE_MIN, CHAT_SCALE_MAX } from './storage/defaults-store.js';
+// ADR-096 (W2.3, аудит F13): встроенные умолчания оформления — один источник
+// для standalone (`GET /auth/defaults` в core) и managed (backend).
+export {
+  BUILT_IN_APPEARANCE_DEFAULTS,
+  resolveAppearanceDefaults,
+} from './server/appearance-defaults.js';
+export type {
+  BuiltInAppearanceDefaults,
+  ResolvedAppearanceDefaults,
+} from './server/appearance-defaults.js';
 // ADR-096 (W2.3): единый контекст слоя хранения + фабрики `file`/`memory`.
 export {
   createFileStorage,

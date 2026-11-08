@@ -40,6 +40,20 @@
 # на amd64-раннере без QEMU/binfmt. `${BUILDPLATFORM:-linux/amd64}` — дефолт
 # для kaniko/legacy `docker build`.
 #
+# PID 1 и зомби (аудит 0.13.4 §5.2). Ни одна стадия не запускает
+# `dist/main.js` напрямую: PID 1 — `docker/init.sh` (ставится как `synth-init`),
+# он запускает `dist/init.js` (`packages/backend/src/init.ts`), а та —
+# `dist/main.js`.
+#   * reaping осиротевших детей делает только PID 1, и это умеет POSIX-шелл
+#     (`waitpid(-1)` в обработчике SIGCHLD), но НЕ Node: libuv ждёт лишь pid'ы
+#     своих handle'ов, поэтому усыновлённые сироты остаются зомби (проверено
+#     на node 22.23 / libuv 1.51);
+#   * Node-обёртка запускает приложение отдельной process group и пробрасывает
+#     SIGTERM/SIGINT/SIGHUP всей группе, а также сохраняет код выхода
+#     (75 — рестарт инстанса, ADR-092; 128+N — гибель от сигнала);
+#   * `tini`/`docker-init` в образ НЕ ставится: runtime-стадия `slim` не имеет
+#     ни одного `RUN` (multi-arch без QEMU), а `sh` уже есть в базовом образе.
+#
 # Архитектурное ограничение для flavor'ов (решение A — PROP-082):
 # установка пакетов требует `RUN` в ЦЕЛЕВОЙ архитектуре, поэтому стадия
 # `core` собирается под целевую платформу, и arm64-сборка flavor'а требует
@@ -192,7 +206,11 @@ COPY --from=build /out/deploy-plugins /opt/synth/plugins
 
 WORKDIR /app
 # Права (a+rX) выставлены в стадии сборки, здесь только читаем из образа.
-CMD ["node", "dist/main.js"]
+# PID 1 (аудит 0.13.4 §5.2): `synth-init` — sh-скрипт (reaping осиротевших
+# детей), он запускает `dist/init.js` — Node-обёртку (проброс сигналов всей
+# process group и кода выхода, включая 75). Подробности — шапка файла.
+COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `dev` — core + tier 1 + tier 4 + tier 5 + БД-клиенты + buildah
@@ -407,7 +425,10 @@ COPY --from=build /repo/packages/backend/dist /app/dist
 COPY --from=build /out/deploy-plugins /opt/synth/plugins
 
 WORKDIR /app
-CMD ["node", "dist/main.js"]
+# PID 1 (аудит 0.13.4 §5.2): sh-скрипт reaping'а → `dist/init.js` (сигналы
+# всей process group + код выхода, включая 75). Подробности — шапка файла.
+COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `full` — browser + tier 2 + tier 4 + tier 5 + БД + docker CLI + buildah
@@ -515,4 +536,8 @@ COPY --from=build /out/deploy-plugins /opt/synth/plugins
 
 WORKDIR /app
 # Права (a+rX) выставлены в стадии сборки, здесь только читаем из образа.
-CMD ["node", "dist/main.js"]
+# PID 1 (аудит 0.13.4 §5.2): `synth-init` — sh-скрипт (reaping осиротевших
+# детей), он запускает `dist/init.js` — Node-обёртку (проброс сигналов всей
+# process group и кода выхода, включая 75). Подробности — шапка файла.
+COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]

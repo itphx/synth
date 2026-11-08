@@ -2,6 +2,10 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
+> ⚠️ RU-версия обновлена 2026-11-08 (**§1** — новый блок «Единый fail-closed гейт на границе `/api/v2/*`»:
+> `app.use('/api/v2/*', requireAuth)` + allowlist публичных путей (`app/public-routes.ts`, строго
+> метод+путь), порядок middleware (service-key/plugin-bound работают), перепись доступа
+> `route-access-census.test.ts` — **переведено**).
 > ⚠️ RU-версия обновлена 2026-11-08 (**ADR-130** (бывший PROP-054) — **§5.8.2** (новая секция): план/журнал/
 > инварианты проекта — эндпоинты, версия плана (409 `PLAN_VERSION_CONFLICT`), лимиты Markdown, RBAC,
 > события; **§5.8** — в детали проекта поля `log` **больше нет** (журнал — постранично),
@@ -96,7 +100,9 @@ and nested `/agents/:agentId/ssh-keys` are proxied to backend (the remaining `/a
 4. **OIDC JWT** — when `config.oidc.enabled`: `Authorization: Bearer <jwt>`,
    verified through a lazy OIDC client.
 5. **API key** — when `!debugMode && !oidc.enabled && config.apiKey`:
-   `Authorization: Bearer <SYNTH_API_KEY>` → user `api` with the `ADMIN` role.
+   `Authorization: Bearer <SYNTH_API_KEY>` → user `api` with the roles from
+   `auth.apiKeyRoles` (env `SYNTH_API_KEY_ROLES`, default `['USER']`; ADMIN only
+   with an explicit setting). The key comparison is constant-time.
 
 Roles: `ADMIN`, `USER`, `LEAD`, `AUDITOR`.
 
@@ -151,6 +157,41 @@ Debug users (`SYNTH_AUTH_DEBUG=true`):
 | `requirePermission(...roles)` | No user → `401 UNAUTHORIZED`; user present but holds none of the listed roles → `403 FORBIDDEN`. Used by `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), webhooks (`ADMIN`), maintenance (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
 
 > **401/403 rule (semantics):** no authentication → `401 UNAUTHORIZED`; authenticated but lacking the role/rights → `403 FORBIDDEN`; a service key missing the required scope → `403 SCOPE_REQUIRED` (this is about scope, not authentication).
+
+### Single fail-closed gate on the `/api/v2/*` boundary (F6)
+
+Access to the whole API tree is checked **at the application boundary**: in
+`packages/backend/src/app.ts`, after `attachUser` and the `/auth` routes (and
+before the plugin-bound guard, the storage-degradation guard and route
+mounting), `app.use('/api/v2/*', requireAuth)` is mounted. Public paths are
+listed explicitly — `PUBLIC_API_V2_PATHS` / `isPublicApiV2Path`
+(`packages/backend/src/app/public-routes.ts`), **strictly by method+path**
+(prefix wildcards are forbidden). Today only `GET /api/v2/health`,
+`GET /api/v2/meta` (ADR-118 §8) and `GET /api/v2/i18n/current`,
+`GET /api/v2/i18n/translations/{ru,en}` are public; `OPTIONS` (CORS preflight)
+is answered by the CORS middleware before the gate and is allowed explicitly.
+
+Consequences:
+
+- a new router mounted without a guard **does not become anonymous** — it
+  requires authentication by default; to open a path, add it to the allowlist
+  (and to the census);
+- authentication checks are not duplicated inside handlers (invariant 16) —
+  they keep only RBAC/access scope;
+- an unknown path under `/api/v2/*` without credentials also returns `401`;
+  `404 NOT_FOUND` is returned only after the gate is passed (`app.notFound`
+  behaviour is unchanged);
+- the middleware order (`attachUser` → per-key rate limit → gate →
+  `requirePluginTokenBinding` → degradation guard → routes) keeps service keys
+  and plugin-bound keys working (ADR-052/ADR-090 §7).
+
+Census — `packages/backend/src/app/route-access-census.test.ts`: on a really
+mounted `createBackendApp()` every `/api/v2/*` route without credentials →
+`401 UNAUTHORIZED`; every `:param` route is matched **both ways** against the
+explicit `DECLARED_PARAM_ROUTES` registry (access rule + place of
+implementation); for each route a negative "foreign `USER` on a missing id"
+probe (never `2xx`, never `500`; allowed codes are fixed in the registry entry).
+A new or removed route fails the test with a diff.
 
 Separate from `middleware.ts` — **service key scope gates** (`packages/backend/src/auth/service-scope.ts`:
 `scopeGuard`/`serviceProjectProjection`, they delegate to the core `requireScope`/`checkServiceProjectProjection` and return
@@ -461,7 +502,7 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 |---|---|---|---|
 | GET | `/health` | — | `{status:'healthy', version, build, time, startedAt}` (`startedAt` — the ISO process start timestamp, ADR-092; `build` — the `SYNTH_BUILD_ID` build identifier, empty when unknown — the PWA uses it to refresh a stale shell) |
 | GET | `/api/v2/health` | — | same (+ a `storage` block when degraded) |
-| GET | `/ready` | — | Readiness (ADR-094): `200` `{status:'ready', storage:'ok'\|'degraded', version, startedAt, time, checks?}`; `503` `{status:'not_ready', …}` only during start-up/fail-closed. Storage degradation does **not** drop readiness (ADR-098) |
+| GET | `/ready` | — | Readiness (ADR-094): `200` `{status:'ready', storage:'ok'\|'degraded', version, startedAt, time, llmGateway?:'enabled'\|'disabled', warnings?:['llm-gateway-disabled'], checks?}`; `503` `{status:'not_ready', …}` only during start-up/fail-closed. Storage degradation does **not** drop readiness (ADR-098); a disabled LLM gateway is a warning (`llmGateway`/`warnings` in `/health` and `/ready`), the status does not change |
 | GET | `/metrics` | none / bearer token | Prometheus exposition 0.0.4 (ADR-094), **outside** `/api/v2`; `metrics.enabled=false` → `404 NOT_FOUND`, with a token set and no `Authorization: Bearer …` → `401 UNAUTHORIZED`; `Content-Type: text/plain; version=0.0.4; charset=utf-8`, `Cache-Control: no-store` |
 
 The metric catalogue, labels, scrape, alerts and troubleshooting — [OBSERVABILITY.md](../OBSERVABILITY.md) (RU);
@@ -495,9 +536,9 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | DELETE | `/auth/profile/preferences` | backend | auth | Reset preferences |
 | GET | `/auth/profile/avatar` | backend | auth | PNG avatar (`404` if absent) |
 | POST | `/auth/profile/avatar` | backend | auth | Upload/delete the avatar (binary) |
-| GET | `/auth/locales` | backend | — | List of locales (`ru`,`en`) |
+| GET | `/auth/locales` | both | — | List of locales (`ru`,`en`) — public, used by the login screen |
 | GET | `/auth/users` | backend | debug | Test users (debug only) |
-| GET | `/auth/defaults` | backend | — | UI appearance defaults |
+| GET | `/auth/defaults` | both | — | UI appearance defaults (built-in + saved) — public, used by the login screen |
 | PUT | `/auth/defaults` | backend | ADMIN | Save the defaults |
 
 ### 5.4 Miscellaneous
@@ -1223,8 +1264,8 @@ duration of the call). The source of truth is the code
 | DELETE | `/api/v2/mcp/servers/:name` | backend | ADMIN or scope `addons:install` | Delete |
 | POST | `/api/v2/mcp/servers/:name/test` | backend | ADMIN or scope `addons:install` | Test the connection (+optional `config`) |
 | GET | `/api/v2/mcp/servers/:name/tools` | backend | auth | Server tools (probe if needed) |
-| GET | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (canonical — `/sessions/:id/mcp`) |
-| PUT | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers?, mcpDisabledServers?}` (compatible with `/sessions/:id/mcp`) |
+| GET | `/api/v2/mcp/session/:sessionId` | backend | owner\|ADMIN | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (canonical — `/sessions/:id/mcp`) |
+| PUT | `/api/v2/mcp/session/:sessionId` | backend | owner\|ADMIN | Legacy: `{mcpServers?, mcpDisabledServers?}` (compatible with `/sessions/:id/mcp`) |
 | POST | `/api/v2/mcp/probe` | both | auth | `{name}` → `{name, tools}`, `MCP_CONNECT_ERROR` |
 | GET | `/api/v2/mcp/registry` | backend | auth | Unified MCP server registry (ADR-071 §2.5): `{entries}`; an entry carries `enabled` (master hard-gate, default `true`) and `enabledByDefault` (default for NEW projects) |
 | POST | `/api/v2/mcp/registry` | backend | auth (stdio — ADMIN only; service-key — scope `addons:install`) | Add an entry: `{name, config, enabled?, enabledByDefault?, origin?, remoteMode?}` → 201; stdio — ADMIN only (a scope does not relax this); HTTP — anyone; a service-key without the `addons:install` scope → 403 `SCOPE_REQUIRED`. The **instance** origin (`origin:'instance'` or an installer key with the scope) is available to ADMIN **or** a service-key with the `addons:install` scope; interactive use without ADMIN creates a `user` entry even with `origin:'instance'`. `remoteMode` (`auto\|relay\|tools`, default `auto`) — the delivery mode of a server-side MCP into the local hybrid sessions (ADR-125) |

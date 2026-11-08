@@ -144,6 +144,9 @@ describe('backend: контракт монтирования роутов (mount
       '/api/v2/i18n/translations/ru',
       '/api/v2/i18n/translations/en',
       '/api/config/themes',
+      // Экран входа: языки и умолчания оформления (аудит F13) — без auth.
+      '/auth/locales',
+      '/auth/defaults',
     ]) {
       const res = await req(path);
       expect(res.status, `публичный роут ${path}`).toBe(200);
@@ -153,9 +156,17 @@ describe('backend: контракт монтирования роутов (mount
   it('ADR-094: /ready публичный, /metrics при metrics.enabled=false → 404 и серии не создаются', async () => {
     const ready = await req('/ready');
     expect(ready.status).toBe(200);
-    const readyBody = (await ready.json()) as { status: string; storage: string };
+    const readyBody = (await ready.json()) as {
+      status: string;
+      storage: string;
+      llmGateway?: string;
+      warnings?: string[];
+    };
     expect(readyBody.status).toBe('ready');
     expect(readyBody.storage).toBe('ok');
+    // F4 (аудит S1): backend-профиль включает LLM-шлюз по умолчанию.
+    expect(readyBody.llmGateway).toBe('enabled');
+    expect(readyBody.warnings).toBeUndefined();
 
     const res = await req('/metrics');
     expect(res.status).toBe(404);

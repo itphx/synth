@@ -129,6 +129,28 @@ describe('SecuritySettings — без политики инструментов 
   })
 })
 
+describe('SecuritySettings — предупреждение о выключенном LLM-шлюзе (F4, аудит S1)', () => {
+  it('enabled=false → заметное предупреждение показано', async () => {
+    const container = await renderSettings()
+
+    const warning = container.querySelector('[data-testid="gateway-disabled-warning"]')
+    expect(warning).not.toBeNull()
+    expect(warning!.getAttribute('role')).toBe('alert')
+    expect(warning!.textContent).toContain('LLM gateway is off')
+  })
+
+  it('enabled=true → предупреждения нет', async () => {
+    mocks.getLlmGatewaySettingsInfo.mockResolvedValue({
+      settings: { enabled: true, inputMode: 'obfuscate', logPayloads: false },
+      isOverridden: true,
+      defaults: { enabled: true, inputMode: 'obfuscate', logPayloads: false, rateLimit: { userPerMinute: 60, providerPerMinute: 120 } },
+    })
+    const container = await renderSettings()
+
+    expect(container.querySelector('[data-testid="gateway-disabled-warning"]')).toBeNull()
+  })
+})
+
 describe('SecuritySettings — миграция на Settings UI Kit (ADR-072)', () => {
   it('каркас — SettingsPanel с единственным scroll-контейнером и без pr-2', async () => {
     const container = await renderSettings()

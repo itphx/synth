@@ -175,7 +175,7 @@ synth
 
 | Режим | Где | Механизм |
 |-------|-----|----------|
-| API Key | backend (`SYNTH_API_KEY`) | Один ключ → роль ADMIN |
+| API Key | backend (`SYNTH_API_KEY`) | Один ключ → роли из `auth.apiKeyRoles` (по умолчанию `USER`; ADMIN — явно) |
 | API Key | core standalone (`synth serve`, `--api-key`/`SYNTH_API_KEY`; иначе авто-ключ `{dataDir}/secrets/api-key`) | Один ключ → роль ADMIN |
 | Debug | backend (`SYNTH_AUTH_DEBUG=true`) | Тестовые пользователи (admin-key-123, user-key-456, lead-key-789, auditor-key-012) |
 | OIDC | backend (Keycloak) | JWT + cookie `user_session` |

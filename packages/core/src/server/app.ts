@@ -410,6 +410,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       ready: initialized,
       storage: storage.degraded ? 'degraded' : 'ok',
     }),
+    // F4 (аудит S1): standalone профиль оставляет шлюз выключенным по умолчанию —
+    // диагностика предупреждает, но readiness не ломает. Эффективное значение
+    // (config.yaml + runtime-тумблер) — у оркестратора (`isGatewayEnabled`);
+    // `deps` создаётся ниже (ленивое замыкание, как у hybrid-состояния выше).
+    getLlmGatewayState: () => (deps.orchestrator.isGatewayEnabled() ? 'enabled' : 'disabled'),
   });
   app.route('/', healthRoutes);
 
@@ -426,6 +431,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const hybridRoutes = createHybridRoutes(hybrid.getHybridState);
   app.route('/', hybridRoutes);
 
+  // Публичная заглушка UI: список пользовательских тем пока пуст, но клиент
+  // запрашивает его ещё на экране входа. Регистрируется ДО `requireAuth`
+  // (`/api/*`), иначе экран входа получает 401 и шумит в консоли (аудит F13).
+  app.get('/api/config/themes', (c) => c.json({ themes: [] }));
+
   // Auth routes — без auth (только spa-login проверяет ключ сам)
   app.route('/auth', createAuthRoutes(auth, {
     connection,
@@ -438,6 +448,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     hybridEnabled: config.hybridEnabled,
     rememberServer: hybrid.rememberServer,
     logoutRemote: hybrid.logoutRemote,
+    // ADR-096: публичные умолчания оформления (`GET /auth/defaults`) — тот же
+    // контекст хранения, что у остальных доменных портов (паритет с backend).
+    defaultsStore: storage.defaults,
   }));
 
 

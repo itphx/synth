@@ -6,6 +6,7 @@ import type { Context } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';
 import { createLazyOidcClient } from './oidc.js';
+import { apiKeyEquals, resolveApiKeyRoles } from './api-key.js';
 
 const SESSION_COOKIE = 'user_session';
 
@@ -144,14 +145,17 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
     // 4. API Key mode (продакшен без OIDC)
     if (!config.debugMode && !config.oidc?.enabled && config.apiKey) {
       const apiKey = extractBearerToken(c.req.header('Authorization'));
-      if (apiKey === config.apiKey) {
+      // Постоянное по времени сравнение (аудит F5): неверный/пустой ключ → не
+      // аутентифицирован; роли — из явной настройки, по умолчанию USER.
+      if (apiKeyEquals(apiKey, config.apiKey)) {
+        const roles = resolveApiKeyRoles(config.apiKeyRoles);
         return {
           id: 'api',
           username: 'api',
-          roles: ['ADMIN'],
+          roles,
           preferredLanguage: 'ru',
           createdAt: '',
-          teamRole: 'ADMIN',
+          teamRole: roles[0] ?? 'USER',
           notes: '',
           interviewCompleted: false,
         };

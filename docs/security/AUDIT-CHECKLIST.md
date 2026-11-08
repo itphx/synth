@@ -6,8 +6,24 @@
 `docs/security/releases/<version>.json` вносит в ветку релиза релиз-менеджер.
 
 Правило формата: каждая строка — **команда + наблюдаемый результат** (не «прочитал и одобрил»).
-`PASS` без приведённой команды и вывода запрещён. Waiver-статусов нет: проверку нельзя «извинить» —
-если она не выполнена, запись неполная и **гейт блокирует релиз**.
+
+Запреты, которые проверяет гейт (`security-gate --lint-records`):
+
+- **`PASS` без команды и наблюдаемого вывода запрещён** — пустые `command`/`result` блокируют релиз;
+- **предположительные формулировки в `result` запрещены гейтом** — «ожидается/ожидался/ожидаем/
+  ожидать», «предполагается/предполагался», «должен быть зелён», `expect`/`expected`
+  (регистронезависимо, рус+англ) при статусе `pass`/`pass_with_exceptions` → ошибка: нужен
+  наблюдаемый результат/команда/прогон;
+- **`artifacts.ci_run` — факт, а не обещание**: для `approved`/`approved_with_exceptions` обязателен
+  номер прогона + sha коммита из линии истории `record.commit`; «прогон на коммите записи — следующий
+  шаг» в `ci_run` недопустим как замена прогону. С `policy.recordCiRun.requireCommitMatchFrom`
+  (`0.13.5`) несовпадение sha с `record.commit` — ошибка, до неё — предупреждение.
+- **`checks.dependencies.counts`** (`critical`/`high`, целые) обязателен для `pass`/
+  `pass_with_exceptions`: запись выше baseline — ошибка, baseline выше записи — предупреждение
+  «ратчет ослаблен».
+
+Waiver-статусов нет: проверку нельзя «извинить» — если она не выполнена, запись неполная и
+**гейт блокирует релиз**.
 
 ## 0. Подготовка
 
@@ -89,10 +105,14 @@ pnpm install --frozen-lockfile
 pnpm audit --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).metadata.vulnerabilities))'
 ```
 
-Ожидаемо для активного профиля ратчета (`post-upgrade`, с 2026-10-20): `critical 0`, `high 31`,
-прямых уязвимых модулей 0. Канонические пороги — `policy.dependencies.profiles[policy.dependencies.profile].baseline`.
+Ожидаемо для активного профиля ратчета (`post-upgrade`, baseline синхронизирован с фактом
+2026-11-08): `critical 0`, `high 0` (full; `--prod` 0/0/0/0), прямых уязвимых модулей 0.
+Канонические пороги — `policy.dependencies.profiles[policy.dependencies.profile].baseline`.
+В запись — машинночитаемые `counts: { critical, high }`: гейт сверяет их с baseline (выше — ошибка
+«запись превышает baseline», ниже — предупреждение «ратчет ослаблен»).
 Новые critical/high → апгрейд до `patched_versions`, либо исключение в записи (`exceptions[]` с
-`owner` и `dueRelease`), либо **блокировка релиза**.
+`owner` и `dueRelease`), либо **блокировка релиза**. Повышать baseline «под факт» можно только
+осознанно через `profileSwitch`, а не тихой правкой порога.
 
 ```bash
 pnpm audit --audit-level=high          # человекочитаемо; в ci.yaml — report-only
@@ -100,9 +120,9 @@ node scripts/security-gate.mjs --only dependencies --skip-tests   # ровно �
 ```
 
 Апгрейды `@modelcontextprotocol/sdk ≥ 1.31.0` (`1.32.1`) и `simple-git 4.x` (`4.0.2`) внесены 2026-10-15 —
-профиль ратчета в `policy.json` переключён на `post-upgrade`; после апгрейда `hono`/`ws`/`undici`/`js-yaml`
-2026-10-20 `baseline` уточнён фактом (`critical 0`, `high 31`). Меняя пороги, правьте
-`policy.dependencies.profile`/`profiles` (историю состояний оставляйте в `profiles`).
+профиль ратчета в `policy.json` переключён на `post-upgrade`; после апгрейдов и overrides 0.13.4
+baseline синхронизирован с фактом 2026-11-08 (`critical 0`, `high 0`). Меняя пороги, правьте
+`policy.dependencies.profile`/`profiles` через `profileSwitch` (историю состояний оставляйте в `profiles`).
 
 ## 5. Baseline CI
 
@@ -114,12 +134,19 @@ node scripts/security-gate.mjs --only dependencies --skip-tests   # ровно �
 Записать в `checks.ci-baseline.result` номер run'а и статус джоб. Красные джобы вне `report-only` →
 блокировка (сначала фикс, потом тег).
 
+В `artifacts.ci_run` — **фактический** прогон: номер run'а + sha коммита из линии истории
+`record.commit`. С `policy.recordCiRun.requireCommitMatchFrom` (`0.13.5`) прогон обязан быть ровно на
+коммите записи, иначе гейт блокирует. Обещание «прогон будет после этого коммита» в `ci_run` не
+заменяет прогон (для записей до 0.13.5 несовпадение видно предупреждением).
+
 ## 6. Запись аудита (заполняет аудитор, вносит релиз-менеджер)
 
 1. взять `docs/security/TEMPLATE.json` — или, если для версии есть образец
    `docs/security/releases/<version>.json.example` (машинные результаты уже вписаны),
    `cp docs/security/releases/<version>.json.example docs/security/releases/<version>.json` —
    и заполнить **все** проверки: `status` + `command` + `result` (+ `date`), включая `security-review`;
+   в `dependencies` — машинные `counts: { critical, high }`; в `artifacts.ci_run` — фактический
+   прогон (run + sha) и ничего вместо него;
 2. заполнить `exceptions[]` целиком (`id`, `scope`, `justification`, `followUp`, `owner`, `dueRelease`);
 3. проверить локально:
 
@@ -145,6 +172,7 @@ node scripts/security-gate.mjs --lint-records                                   
 - не применяет изменения (тег, публикация, реестры, `helm upgrade` — релиз-менеджер);
 - не создаёт и не правит файлы, не коммитит (роль read-only: `edit: deny`, `write: deny`);
 - не подменяет `@tester`: регрессии — тестировщик, классы уязвимостей и релизный гейт — аудитор;
-- не ставит `PASS` без команды и вывода и не подгоняет ожидание под факт;
+- не ставит `PASS` без команды и вывода, не пишет «ожидается/expected» в `result` и не подгоняет
+  ожидание под факт;
 - не ослабляет гейт под результат: `minTests`, `baseline`, список файлов матрицы, секрет-правила —
   только явным изменением политики с обоснованием.

@@ -23,7 +23,7 @@
 
 | Файл | Назначение |
 |------|------------|
-| `policy.json` | политика гейта: обязательные проверки, команды, пороги, переключатель ратчета, список кандидатов матрицы |
+| `policy.json` | политика гейта: обязательные проверки, команды, пороги, переключатель ратчета, список кандидатов матрицы; границы машинных правил записи (`recordCiRun.requireCommitMatchFrom`, `recordWording.requireObservableFrom`, `dependencies.countsRequiredFrom`) |
 | `releases/<version>.json` | запись аудита релиза (**схема ниже**) |
 | `releases/<version>.json.example` | заполняемый образец записи (машинные результаты уже вписаны; расширение `.example` — чтобы незаполненная запись не лежала в `releases/` как «почти готовая» и не красила docs-CI) |
 | `TEMPLATE.json` | пустая запись с нуля |
@@ -34,7 +34,8 @@
 ```text
 1. прогнать аудит      → node scripts/security-gate.mjs --version <ver> --skip-tests   (быстрые проверки)
                         + node scripts/security-gate.mjs --version <ver> --report tmp/security/evidence.json (полный, с vitest и pnpm audit)
-2. записать результат  → docs/security/releases/<ver>.json (каждая проверка: status + command + result)
+2. записать результат  → docs/security/releases/<ver>.json (каждая проверка: status + command + result;
+                        dependencies: counts; artifacts.ci_run — фактический прогон run + sha)
 3. закоммитить         → «docs(security): запись аудита <ver>» в ветку релиза (master)
 4. поставить тег       → v<ver>; CI-джоба security-gate перечитает запись из дерева тега и прогонит проверки заново
 ```
@@ -73,13 +74,13 @@ git tag -a v0.10.2 -m "Release v0.10.2" && git push --follow-tags
     "secret-scan":  { "status": "pass", "command": "…", "result": "…", "date": "…" },
     "auth-matrix":  { "status": "pass", "command": "…", "result": "…", "date": "…" },
     "ci-baseline":  { "status": "pass", "command": "…", "result": "…", "date": "…" },
-    "dependencies": { "status": "pass_with_exceptions", "command": "pnpm audit --json", "result": "…", "date": "…" },
+    "dependencies": { "status": "pass", "command": "pnpm audit --json", "counts": { "critical": 0, "high": 0 }, "result": "…", "date": "…" },
     "security-review": { "status": "pass", "command": "docs/security/AUDIT-CHECKLIST.md §3", "result": "…", "date": "…" }
   },
   "exceptions": [                    // известные исключения (принятые уязвимости/риски) с обязательным follow-up
     { "id": "GHSA-…", "scope": "…", "justification": "…", "followUp": "…", "owner": "…", "dueRelease": "0.11.0" }
   ],
-  "artifacts": { "evidence": "tmp/security/evidence.json", "ci_run": "…" }
+  "artifacts": { "evidence": "tmp/security/evidence.json", "ci_run": "2012022 — ci.yaml, commit 4999ed11, success (14/14)" }
 }
 ```
 
@@ -92,10 +93,30 @@ git tag -a v0.10.2 -m "Release v0.10.2" && git push --follow-tags
    `pass` | `pass_with_exceptions` **и заполненные `command` + `result`** (пустые — ошибка:
    проверка без команды и наблюдаемого результата не считается выполненной).
 4. Каждое исключение заполнено целиком: `id`, `scope`, `justification`, `followUp`, `owner`, `dueRelease`.
-5. Плейсхолдеры вида `<…>` не блокируют, но печатаются предупреждением — личность аудитора и номер
-   run'а машинно проверить нельзя (это осознанный процесс-контроль, см. «Остаточные риски»).
+5. Плейсхолдеры вида `<…>` не блокируют, но печатаются предупреждением — личность аудитора машинно
+   проверить нельзя (это осознанный процесс-контроль, см. «Остаточные риски»). Исключение —
+   `artifacts.ci_run`: там плейсхолдер и отсутствие прогона — ошибка (п. 7).
+6. **Никаких предположительных формулировок в `result`.** Для любой проверки со статусом `pass` /
+   `pass_with_exceptions` гейт отвергает `result` с «ожидается/ожидался/ожидаем/ожидать»,
+   «предполагается/предполагался», «должен быть зелён», `expect`/`expected` (регистронезависимо,
+   рус+англ): PASS — это наблюдаемый результат/команда/прогон, а не прогноз. Правило действует и в
+   `--lint-records` (поле политики `recordWording.requireObservableFrom`; записи до этой границы не
+   переписываются — там `expected` встречается как literal-вывод vitest).
+7. **`artifacts.ci_run` — факт прогона, а не обещание.** Для статусов `approved` /
+   `approved_with_exceptions` поле обязательно: непустая строка (не плейсхолдер `<…>`), в ней есть
+   sha коммита из линии истории `record.commit` (гейт проверяет через `git merge-base --is-ancestor`;
+   коммит следующего шага в той же линии допустим). Если sha не равен `record.commit` — предупреждение
+   «прогон не на коммите записи», а с версии из `policy.recordCiRun.requireCommitMatchFrom` (`0.13.5`)
+   это **ошибка**: запись релиза должна опираться на прогон ровно на её коммите.
+8. **`checks.dependencies.counts` — машинная сверка записи с baseline.** Для статусов `pass` /
+   `pass_with_exceptions` нужны целые `critical` и `high` (правило действует с
+   `policy.dependencies.countsRequiredFrom`, `0.13.4`): `counts.* > baseline.*` — **ошибка**
+   («запись превышает baseline»), `baseline.* > counts.*` — предупреждение «ратчет ослаблен —
+   синхронизируйте baseline с фактом». Так расхождение ратчета с фактом не может остаться незамеченным.
 
 Записи для версий до внедрения гейта не создаются: аудит задним числом — фикция, а не аудит.
+Новые машинные правила применяются с явной границы версии (поля `record*` в `policy.json`), чтобы
+не переписывать исторические записи: старые записи показывают предупреждение, а не ошибку.
 
 ## Уязвимости зависимостей: два состояния ратчета
 
@@ -104,7 +125,7 @@ git tag -a v0.10.2 -m "Release v0.10.2" && git push --follow-tags
 | Профиль (`policy.dependencies.profile`) | Пороги | Когда действует |
 |---|---|---|
 | `pre-upgrade` (историческое) | `critical ≤ 3`, `high ≤ 42`, `failOnDirect: true` | до апгрейдов `@modelcontextprotocol/sdk ≥ 1.31.0` и `simple-git 4.x`; профиль не активен |
-| `post-upgrade` (**сейчас**, с 2026-10-20) | `critical 0`, `high 31`, `failOnDirect: true` | после апгрейдов `@modelcontextprotocol/sdk 1.29.0 → 1.32.1`, `simple-git 3.36.0 → 4.0.2` (+ транзитивный `proxy-addr 2.0.7 → 2.0.8`) и прямых runtime-зависимостей `hono 4.12.21 → 4.13.13`, `ws 8.20.1 → 8.22.0`, `undici 7.26.0 → 7.30.1`, `js-yaml 4.1.1 → 4.3.2`. Пороги — факт по `pnpm audit --json` (critical 0, high 31, moderate 24, low 6, прямых 0): остаток high — транзитивные патч-уровня (brace-expansion 15, fast-uri 7, js-yaml 3, nanoid 2, vite/postcss/ip-address/source-map-js по 1) |
+| `post-upgrade` (**сейчас**, с 2026-10-20; baseline синхронизирован 2026-11-08) | `critical 0`, `high 0`, `failOnDirect: true` | после апгрейдов `@modelcontextprotocol/sdk 1.29.0 → 1.32.1`, `simple-git 3.36.0 → 4.0.2` (+ транзитивный `proxy-addr 2.0.7 → 2.0.8`), прямых runtime-зависимостей `hono 4.12.21 → 4.13.13`, `ws 8.20.1 → 8.22.0`, `undici 7.26.0 → 7.30.1`, `js-yaml 4.1.1 → 4.3.2` и overrides записи 0.13.4 (`fast-uri`, `ip-address`, `qs`, `js-yaml`, `brace-expansion`, `source-map-js`, `@hono/node-server 2.x`). Факт по `pnpm audit --json`: full critical 0, high 0, moderate 1, low 1; `--prod` 0/0/0/0; прямых 0. Остаток — dev-only (minimatch moderate, esbuild low) |
 
 **Что считается «прямой» уязвимостью.** Модуль стоит в пути `pnpm audit` сразу за импортером
 (`<пакет>><зависимость>`; два и более `>` — транзитивная зависимость) **и** объявлен в
@@ -114,10 +135,19 @@ git tag -a v0.10.2 -m "Release v0.10.2" && git push --follow-tags
 `packages/ui`) в поставляемые артефакты не входят и релиз не блокируют, но остаются в счётчиках
 и в разборе записи аудита.
 
+**Контракт ратчета (машинный).**
+
+* `baseline` — это **факт** последнего аудита, а не запас: значения в `policy.dependencies.profiles`
+  совпадают с тем, что показал `pnpm audit --json`. Повышение baseline — только осознанным
+  изменением политики через `profileSwitch` (видно в диффе, с owner/why), а не тихой правкой.
+* Запись аудита обязана нести машинночитаемые `checks.dependencies.counts` (`critical`/`high`,
+  целые ≥ 0); гейт сверяет её с baseline активного профиля: выше baseline — **ошибка**,
+  ниже baseline — предупреждение «ратчет ослаблен» (значит политику пора синхронизировать с фактом).
+* `pnpm audit` в `ci.yaml` остаётся **report-only** (второй шаг — видимая дельта к baseline);
+  блокирует только релизный гейт.
+
 Переключатель — `policy.dependencies.profile` (поле `profileSwitch` описывает, **кто** и **когда**
 его двигает). Ослабление/усиление ратчета видно в диффе и не может быть сделано незаметно.
-`pnpm audit` в `ci.yaml` остаётся **report-only** (второй шаг — видимая дельта к baseline);
-блокирует только релизный гейт.
 
 ## Локальный прогон (до тега)
 

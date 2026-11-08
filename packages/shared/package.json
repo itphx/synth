@@ -51,7 +51,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "lint": "eslint src/ --max-warnings 1"
   },
   "dependencies": {
     "js-yaml": "^4.3.2",
