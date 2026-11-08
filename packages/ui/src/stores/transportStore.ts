@@ -472,10 +472,14 @@ export function mergeServerMessages(
   // `tool`-сообщениях) — сводим их здесь, иначе карточка инструмента после
   // reload/открытия вкладки остаётся без результата.
   const hydrated = hydrateHistoricalToolResults(merged)
-  chat.setMessages(sid, hydrated)
+  // Застрявшие черновики шага (`streaming` посреди истории, который так и не
+  // финализировали) нормализуем на клиенте — иначе они поднимают фантомный ход
+  // и «прилипают» к концу ленты. Данные чинит сервер отдельной задачей.
+  const normalized = normalizeStaleStreaming(hydrated)
+  chat.setMessages(sid, normalized)
   // ADR-118 §5: в истории мог появиться живой ход (другой клиент) —
   // восстанавливаем границы, иначе он отрисуется как мёртвое сообщение.
-  restoreLiveTurnFromHistory(sid, hydrated)
+  restoreLiveTurnFromHistory(sid, normalized)
 }
 
 /**
@@ -582,6 +586,66 @@ function mergeKnownMessage(
 }
 
 /**
+ * Наибольший серверный `ord` в наборе сообщений (`null` — ord нет ни у кого).
+ *
+ * `ord` — монотонный порядок записи в историю (ADR-118 §2): сообщение с
+ * максимальным `ord` — последнее записанное, то есть самое свежее.
+ */
+export function maxServerOrd(messages: MessageData[]): number | null {
+  let max: number | null = null
+  for (const m of messages) {
+    if (typeof m.ord === 'number' && Number.isFinite(m.ord) && (max === null || m.ord > max)) {
+      max = m.ord
+    }
+  }
+  return max
+}
+
+/**
+ * ADR-118 §5: может ли сообщение быть **живым шагом** хода.
+ *
+ * - `disabled` — нет (сжатое/отключённое сообщение живым быть не может);
+ * - у сообщения есть `ord`, и существует сообщение с бо́льшим `ord` — нет
+ *   (значит, после него уже писали историю: это застрявший черновик шага,
+ *   который так и не финализировали).
+ *
+ * Живым считается только свежайшее по `ord` `streaming`-сообщение (или
+ * клиентский live-сегмент без `ord` — он ещё не материализован).
+ */
+export function isLiveStreamingMessage(m: MessageData, maxOrd: number | null): boolean {
+  if (m.status !== 'streaming') return false
+  if (m.disabled === true) return false
+  if (m.ord == null) return true
+  if (maxOrd == null) return true
+  return m.ord === maxOrd
+}
+
+/**
+ * Клиентская нормализация застрявших черновиков шага (данные чинит сервер
+ * отдельной задачей): `streaming`-сообщение, которое живым быть не может
+ * (`isLiveStreamingMessage` ложно), переводится в нейтральный терминальный
+ * статус `completed`.
+ *
+ * Почему `completed`, а не `error`/`cancelled`: ложный бейдж ошибки/остановки
+ * не нужен — шаг просто остался черновиком, а записи в истории уже написаны
+ * после него. Сообщение при этом остаётся в ленте на своём месте по `ord`.
+ *
+ * Нет `streaming`-сообщений — возвращается тот же массив (та же ссылка):
+ * лишний перерендер не провоцируем.
+ */
+function normalizeStaleStreaming(messages: MessageData[]): MessageData[] {
+  if (!messages.some((m) => m.status === 'streaming')) return messages
+  const maxOrd = maxServerOrd(messages)
+  let changed = false
+  const next = messages.map((m) => {
+    if (m.status !== 'streaming' || isLiveStreamingMessage(m, maxOrd)) return m
+    changed = true
+    return { ...m, status: 'completed' as const }
+  })
+  return changed ? next : messages
+}
+
+/**
  * ADR-118 §5/§6: восстановление **живого хода** из истории после перезагрузки.
  *
  * История (`GET /sessions/:id/messages`) несёт `ord`/`turn_id`/`step_index`/
@@ -595,7 +659,11 @@ function mergeKnownMessage(
  * хода, который идёт прямо сейчас (в сторе он свежее истории).
  */
 export function restoreLiveTurnFromHistory(sessionId: string, messages: MessageData[]): void {
-  const streaming = messages.filter((m) => m.status === 'streaming')
+  // Живой шаг — только свежайшее по `ord` (и не `disabled`) `streaming`-сообщение:
+  // застрявший черновик посреди истории ходом не является (фантомный ход давал
+  // мигающий индикатор, режим «идёт ход» и бесполезную кнопку «Стоп»).
+  const maxOrd = maxServerOrd(messages)
+  const streaming = messages.filter((m) => isLiveStreamingMessage(m, maxOrd))
   const last = streaming[streaming.length - 1]
   if (!last) return
   const turnId = last.turn_id || last.id || ''
@@ -947,11 +1015,13 @@ export function restoreLiveTurnFromSession(sessionId: string, session: unknown):
 
   if (current && current.status === 'streaming') {
     // Сервер не подтверждает активность хода (`current_stream`/`blocked`/
-    // `activity`) и в истории нет стримящегося сообщения — маркеры остались от
-    // убитого процесса (rolling update, рестарт): ход закрываем, иначе UI вечно
-    // показывает «streaming». Стримящееся сообщение в истории — живой шаг хода
-    // (сервер мог не успеть отдать `current_stream`), его не гасим.
-    const hasStreamingMessage = messages.some((m) => m.status === 'streaming')
+    // `activity`) и в истории нет живого шага — маркеры остались от убитого
+    // процесса (rolling update, рестарт): ход закрываем, иначе UI вечно
+    // показывает «streaming». Streaming-сообщение в истории считается живым
+    // шагом только если оно свежайшее по `ord` и не `disabled` — застрявший
+    // черновик (фантомный ход, поднятый из него) здесь и закрывается.
+    const maxOrd = maxServerOrd(messages)
+    const hasStreamingMessage = messages.some((m) => isLiveStreamingMessage(m, maxOrd))
     if (!hasStream && !blocked && !hasActivity && !hasStreamingMessage) {
       useChatStore.getState().finishTurn(sessionId, current.turnId, 'stopped')
       return
