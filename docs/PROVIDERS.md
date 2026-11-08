@@ -414,7 +414,16 @@ Mistral-семейство не принимает историю, где пос
   `requiresReasoning` → `model.compatibility`. Поэтому guard'ы (`requireReasoning`, `maxTokensField`,
   `cacheFormat`, `supportsEffortUpdates`) работают и на прокси;
 - отправляет ли провайдер effort, по-прежнему решает `compatibility.supportsEffortUpdates`
-  (guard в провайдере, §6.1).
+  (guard в провайдере, §6.1);
+- **usage проксируется без потерь** — в OpenAI-совместимом виде, чтобы гибридная статистика
+  совпадала с локальной: `cacheReadTokens` → `prompt_tokens_details.cached_tokens`,
+  `reasoningTokens` → `completion_tokens_details.reasoning_tokens`, `cacheWriteTokens` →
+  `cache_creation_input_tokens` (Anthropic-совместимый fallback, его читает `RemoteProvider`),
+  стоимость провайдера — `cost` + `currency` (`parseUsageCost`, приоритетнее каталожной цены).
+  Базовые `prompt_tokens`/`completion_tokens`/`total_tokens` без изменений; детали-объекты
+  добавляются только при значении > 0, поэтому у провайдера без кэша/размышлений ответ прежний.
+  Работает одинаково в non-stream и в финальном чанке стрима, иначе локальный core терял бы
+  кэш/размышления/стоимость (нулевые счётчики в панели «Статистика»).
 
 ### 5.10 Нативные медиа: `video_url` и `input_audio`
 

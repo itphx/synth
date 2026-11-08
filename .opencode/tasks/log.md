@@ -339,3 +339,11 @@
 - **Проверка test:** bundles `synth-test`/`synth-test-allinone` — `1/1`; helm-ревизии 170/80 на чарте `synth-0.13.6-11`; поды раскатаны, UI-digest `sha256:0f407338…` одинаков в обоих инстансах; `/health` обоих инстансов → `version 0.13.6`, `build 234f9fdd`.
 - **Бета:** `publish-beta.sh --base 0.13.6 --restore-dist` → `0.13.6-beta.20261107212810.234f9fdd`; 8/8 пакетов в Gitea npm, dist-tag `beta`, `latest` не двигался (`0.13.4`), smoke (`synth --version`) ок; версии и `dist` восстановлены под `0.13.6`.
 - **Остаток:** `synth` в origin не пушился (просьбы не было); локальный dev-core перезапустить для подхвата нового `dist`.
+
+## 2026-11-08 — Гибрид: usage через LLM Proxy без потерь
+
+- **Задача:** в гибридном режиме в панели «Статистика» нулевые «Кэш чтение/запись», «Размышления», «Попадание в кэш», «Стоимость» при корректных входных/выходных токенах. **Тип:** bug fix (backend, docs).
+- **Причина:** `toOpenAiUsage` (`packages/backend/src/routes/llm.ts`) переводил `TokenUsage` в OpenAI-формат только полями `prompt_tokens`/`completion_tokens`/`total_tokens`. Гибридный `RemoteProvider._parseUsage` читает `prompt_tokens_details.cached_tokens`, `cache_creation_input_tokens`, `completion_tokens_details.reasoning_tokens` и `usage.cost` — через прокси они не приходили, поэтому локальное ядро считало кэш/размышления/стоимость нулями (в локальном режиме usage идёт напрямую, там значения были).
+- **Что сделано:** `toOpenAiUsage` передаёт cache read/write, reasoning и стоимость провайдера (`cost`+`currency`) в non-stream и в финальном чанке стрима; детали-объекты добавляются только при значении > 0 (обратная совместимость). Тесты `packages/backend/src/routes/llm.test.ts` (`FakeProvider.usageOverride`, 4 кейса: non-stream/stream с полным usage, нулевые детали, прежний ответ). Документация — `docs/PROVIDERS.md` §5.9 и EN-версия.
+- **Проверка:** backend suite — 806 passed (61 файл); `providers/remote.test.ts` — 40 passed; backend typecheck/build — OK; eslint изменённых файлов — 0 errors (31 предсуществующий warning `no-explicit-any`).
+- **Коммит:** не делался (ждёт явной просьбы пользователя).

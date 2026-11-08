@@ -422,7 +422,16 @@ The hybrid-mode proxy (backend) follows the **same compatibility contract**, not
   `requiresReasoning` → `model.compatibility`. That is why the guards (`requireReasoning`,
   `maxTokensField`, `cacheFormat`, `supportsEffortUpdates`) work through the proxy as well;
 - whether the provider actually sends effort is still decided by `compatibility.supportsEffortUpdates`
-  (guard inside the provider, §6.1).
+  (guard inside the provider, §6.1);
+- **usage is proxied losslessly** — in the OpenAI-compatible shape, so that hybrid statistics match the
+  local ones: `cacheReadTokens` → `prompt_tokens_details.cached_tokens`, `reasoningTokens` →
+  `completion_tokens_details.reasoning_tokens`, `cacheWriteTokens` → `cache_creation_input_tokens`
+  (Anthropic-compatible fallback read by `RemoteProvider`), provider cost — `cost` + `currency`
+  (`parseUsageCost`, takes precedence over catalogue pricing). The base
+  `prompt_tokens`/`completion_tokens`/`total_tokens` are unchanged; detail objects are added only when
+  the value is > 0, so a provider without cache/reasoning returns the same response as before. It works
+  identically in non-stream and in the final stream chunk — otherwise the local core would lose
+  cache/reasoning/cost (zeroed counters in the "Statistics" panel).
 
 ### 5.10 Native media: `video_url` and `input_audio`
 

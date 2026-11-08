@@ -140,13 +140,44 @@ function mapProviderError(err: unknown): ProviderErrorMapping {
   return { status: 502, code: 'PROVIDER_ERROR', message };
 }
 
-/** OpenAI-формат usage из TokenUsage ядра. */
-function toOpenAiUsage(usage: TokenUsage): Record<string, number> {
-  return {
+/**
+ * OpenAI-формат usage из TokenUsage ядра — **без потерь**.
+ *
+ * Гибридный `RemoteProvider` (`providers/remote.ts`) читает из ответа прокси
+ * `prompt_tokens_details.cached_tokens`, `cache_creation_input_tokens`
+ * (Anthropic-совместимый fallback), `completion_tokens_details.reasoning_tokens`
+ * и провайдерскую стоимость (`parseUsageCost`). Если прокси отдаёт только
+ * `prompt/completion/total_tokens`, локальная статистика в гибриде показывает
+ * нули по кэшу/размышлениям/стоимости — поэтому передаём всё.
+ *
+ * Детали-объекты добавляются только при заданном значении > 0: у провайдера без
+ * кэша/размышлений ответ остаётся прежним (`{prompt,completion,total}_tokens`).
+ */
+function toOpenAiUsage(usage: TokenUsage): Record<string, unknown> {
+  const result: Record<string, unknown> = {
     prompt_tokens: usage.inputTokens ?? 0,
     completion_tokens: usage.outputTokens ?? 0,
     total_tokens: usage.totalTokens ?? 0,
   };
+  // ADR-070 §2.3: cache read — та же точка, что читает RemoteProvider.
+  if (usage.cacheReadTokens && usage.cacheReadTokens > 0) {
+    result.prompt_tokens_details = { cached_tokens: usage.cacheReadTokens };
+  }
+  if (usage.reasoningTokens && usage.reasoningTokens > 0) {
+    result.completion_tokens_details = { reasoning_tokens: usage.reasoningTokens };
+  }
+  // Anthropic-совместимый fallback: `RemoteProvider._parseUsage` берёт
+  // cache write именно отсюда (в OpenAI-формате своего поля нет).
+  if (usage.cacheWriteTokens && usage.cacheWriteTokens > 0) {
+    result.cache_creation_input_tokens = usage.cacheWriteTokens;
+  }
+  // Стоимость провайдера приоритетнее каталожной цены (`parseUsageCost`).
+  // `0` — достоверная нулевая стоимость, поэтому проверяем само наличие.
+  if (usage.cost && Number.isFinite(usage.cost.amount)) {
+    result.cost = usage.cost.amount;
+    result.currency = usage.cost.currency;
+  }
+  return result;
 }
 
 /**

@@ -22,6 +22,7 @@ import type {
   LLMGatewayConfig,
   ModelConfig,
   ProviderConfig as SharedProviderConfig,
+  TokenUsage,
   User,
 } from '@itphx/synth-shared';
 
@@ -77,6 +78,11 @@ class FakeProvider extends BaseProvider {
   lastChatOptions: ChatOptions | undefined;
   /** Опции последнего `chatAsync` (проверка проброса `tool_choice` в стриме). */
   lastAsyncOptions: ChatOptions | undefined;
+  /**
+   * Если задан — провайдер возвращает этот usage вместо дефолтного
+   * `{11,7,18}` (проверка проброса cache/reasoning/стоимости через прокси).
+   */
+  usageOverride: TokenUsage | undefined;
 
   constructor(model = 'fake-model') {
     super({ url: 'http://fake.local/v1', apiKey: 'test-key', model, name: 'fake' });
@@ -104,7 +110,7 @@ class FakeProvider extends BaseProvider {
     return {
       content,
       model: this.model,
-      usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
+      usage: this.usageOverride ?? { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
       ...(this.toolCalls ? { toolCalls: this.toolCalls } : {}),
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     };
@@ -147,7 +153,7 @@ class FakeProvider extends BaseProvider {
     yield {
       content: '',
       isFinal: true,
-      usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
+      usage: this.usageOverride ?? { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
       ...(this.toolCalls ? { toolCalls: this.toolCalls } : {}),
       ...(effectiveReasoning ? { reasoning: effectiveReasoning } : {}),
     };
@@ -463,6 +469,56 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       expect(toolMsg.content).toBe('содержимое файла');
     });
 
+    it('non-stream: нулевые детали не добавляются (обратная совместимость)', async () => {
+      const fake = new FakeProvider();
+      fake.usageOverride = {
+        inputTokens: 5,
+        outputTokens: 3,
+        totalTokens: 8,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+      };
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.usage).toEqual({ prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 });
+    });
+
+    it('non-stream: usage проходит без потерь (cache read/write, reasoning, стоимость)', async () => {
+      const fake = new FakeProvider();
+      fake.usageOverride = {
+        inputTokens: 1000,
+        outputTokens: 200,
+        totalTokens: 1200,
+        cacheReadTokens: 800,
+        cacheWriteTokens: 100,
+        reasoningTokens: 150,
+        cost: { amount: 0.0123, currency: 'USD' },
+      };
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.usage).toEqual({
+        prompt_tokens: 1000,
+        completion_tokens: 200,
+        total_tokens: 1200,
+        prompt_tokens_details: { cached_tokens: 800 },
+        completion_tokens_details: { reasoning_tokens: 150 },
+        cache_creation_input_tokens: 100,
+        cost: 0.0123,
+        currency: 'USD',
+      });
+    });
+
     it('non-stream: tool_calls/reasoning_content пробрасываются в choices[0].message', async () => {
       const fake = new FakeProvider();
       fake.toolCalls = [
@@ -528,6 +584,44 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       const last = parsed[parsed.length - 1]!;
       expect(last.choices[0].finish_reason).toBe('stop');
       expect(last.usage).toEqual({ prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 });
+    });
+
+    it('stream: usage финального чанка проходит без потерь (cache read/write, reasoning, стоимость)', async () => {
+      const fake = new FakeProvider();
+      fake.usageOverride = {
+        inputTokens: 1000,
+        outputTokens: 200,
+        totalTokens: 1200,
+        cacheReadTokens: 800,
+        cacheWriteTokens: 100,
+        reasoningTokens: 150,
+        cost: { amount: 0.0123, currency: 'USD' },
+      };
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+        stream: true,
+        stream_options: { include_usage: true },
+      }));
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const lines = text.split('\n').filter((l) => l.startsWith('data: '));
+      const parsed = lines
+        .filter((l) => !l.includes('[DONE]'))
+        .map((l) => JSON.parse(l.slice(6)));
+      const last = parsed[parsed.length - 1]!;
+      expect(last.choices[0].finish_reason).toBe('stop');
+      expect(last.usage).toEqual({
+        prompt_tokens: 1000,
+        completion_tokens: 200,
+        total_tokens: 1200,
+        prompt_tokens_details: { cached_tokens: 800 },
+        completion_tokens_details: { reasoning_tokens: 150 },
+        cache_creation_input_tokens: 100,
+        cost: 0.0123,
+        currency: 'USD',
+      });
     });
 
     it('keepalive: SSE-комментарий приходит до первого data-кадра', async () => {
