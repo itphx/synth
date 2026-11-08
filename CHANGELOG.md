@@ -22,10 +22,10 @@ corresponding tag range.
 
 ## [Unreleased]
 
-Work in progress towards `0.13.5`. This is **not a release**: the version in
-`packages/*/package.json` is a development line, and only betas (`X.Y.Z-beta.<ts>.<sha>`, dist-tags
-`beta`/`next`) are published to the internal npm registry — the `latest` dist-tag does not move
-until the release gate passes.
+Work in progress towards `0.13.7` (the development line ran through `0.13.5` → `0.13.7`). This is
+**not a release**: the version in `packages/*/package.json` is a development line, and only betas
+(`X.Y.Z-beta.<ts>.<sha>`, dist-tags `beta`/`next`) are published to the internal npm registry — the
+`latest` dist-tag does not move until the release gate passes.
 
 ### Added
 
@@ -39,6 +39,30 @@ until the release gate passes.
   (`synth-shell-<version>[-<buildId>]`). A build-id mismatch resets the caches, calls
   `registration.update()` and reloads once; the semver comparison stays as the fallback when a build
   id is unknown on either side.
+- **SSH access to remote hosts** ([ADR-124](./docs/arch_decisions/adr-124-remote-ssh-access.md)).
+  Per-agent keys are stored encrypted (`secrets/ssh-keys/`); two modes — `tools` (`ssh_exec`,
+  `ssh_copy`, `ssh_tunnel`) and `agent` (ephemeral forwarding) — plus `ssh`/`rsync` in the runtime
+  images. A key without a trailing newline no longer breaks `ssh-add`, `user` is required by the SSH
+  tools, and the agent runs in the foreground.
+- **Server-side MCP servers in local hybrid sessions** ([ADR-125](./docs/arch_decisions/adr-125-hybrid-remote-mcp.md)).
+  Local sessions can use the server's MCP registry (tool-level proxy and protocol relay) under the
+  same enable/scope rules as remote ones; existing projects are seeded idempotently
+  (`ProjectMcpSettings.remoteSeeded`), a failed relay degrades to tool-level with a reason.
+- **Parallel tool calls within a step** ([ADR-127](./docs/arch_decisions/adr-127-parallel-tool-execution.md)).
+  Independent calls of one step execute concurrently (parity with opencode) while the step's events
+  keep the declared order.
+- **Mid-turn compaction** ([ADR-128](./docs/arch_decisions/adr-128-step-boundary-compaction.md)).
+  Context compression runs at the step boundary when the window is nearly full instead of waiting
+  for the end of the turn; a degraded or failed compaction is reported rather than silently skipped.
+- **Child-session To Do lists** ([ADR-129](./docs/arch_decisions/adr-129-child-session-todos.md)).
+  A sub-agent keeps its own list (`task.todos` seed, durable state message, `<todos>` in the result
+  and in the background notification, `todo` capability), without merging into the parent's list.
+- **Work panel: plan, To Do, journal, invariants** ([ADR-130](./docs/arch_decisions/adr-130-plan-journal-work-panel.md)).
+  Compact lists in the right panel, a modal workspace (board / To Do / journal / invariants / stats),
+  Markdown editors, a point API with events, and a header button that opens it.
+- **Heavy-operation limit and batch import.** The limit for heavy operations is configurable; bulk
+  import deduplicates entries instead of creating copies.
+- **Hybrid project publish progress.** Publishing a project reports progress in percent.
 
 ### Changed
 
@@ -51,6 +75,15 @@ until the release gate passes.
   Project management rights in the local world are decided by a new `canManageProject` helper
   instead of comparing `user.id` with `project.owner_id`, which permanently blocked the MCP/skills
   blocks and the pipeline write actions for a plain `USER`.
+- **Hybrid reliability.** Project publish is not bound by the 15 s request timeout; list endpoints
+  degrade clearly when the remote is offline instead of hanging; the hybrid LLM proxy keeps cache,
+  reasoning and cost in usage; the LLM stream survives reconnects and a turn error is addressed to
+  its session.
+- **Remote project work data.** Plan, journal, invariants and To Do of `remote:` projects and
+  sessions are forwarded to the remote backend (read and write) instead of being answered locally.
+- **Observability.** `llmGateway.enabled` defaults by profile (managed/backend — `true`, standalone
+  — `false`); `/health` reports `llmGateway: 'disabled'` plus an `llm-gateway-disabled` warning
+  without affecting readiness.
 
 ### Fixed
 
@@ -78,6 +111,18 @@ until the release gate passes.
   declared `contextWindow` gets a 200,000-token fallback for the auto-compaction and sliding-window
   triggers. A tool approval now reaches globally subscribed watch-all clients (`subscribeAll` with a
   `userFacing` flag) instead of failing with "no connected user to approve".
+- **Stuck streaming step.** A step that finished in the data is no longer rendered as active; a
+  phantom turn is not created and the step is not moved to the end of the feed. The terminal status
+  of a step is not rolled back to `streaming` by a late draft.
+- **History pagination.** The cursor works for legacy sessions with a non-unique `seq`; a retry is
+  addressed to the right message and a snapshot race no longer duplicates history.
+- **Mobile login.** On Android (PWA and browser) the form no longer jumps above the keyboard; the
+  screen uses the visible viewport height, and the 50vh fallback is used only when the viewport does
+  not shrink.
+- **Plan board.** Pointer drag of cards works, the stats card renders, and duplicate columns are
+  guarded (with column removal from the UI and an explicit `409 PLAN_VERSION_CONFLICT` handling).
+- **Images.** `synth-init` was copied into the image with a restrictive mode (`0711`), so a non-root
+  container could not read it; the build stage now applies `a+rX` to it.
 
 ### Security
 
@@ -86,6 +131,15 @@ until the release gate passes.
   in force. If the pattern cannot be derived, only the one-time approval is issued. The grant is
   audited with `scope=permission`, `action=grant`, and the `permission.asked` event carries the
   saved patterns.
+- **Auth boundary.** A single fail-closed gate `app.use('/api/v2/*', requireAuth)` with a
+  method+path allowlist of public routes (`packages/backend/src/app/public-routes.ts`): a router
+  mounted without a guard does not become anonymous. A route-access census test fails when a router
+  appears outside the matrix.
+- **API-key roles.** `auth.apiKeyRoles` (`SYNTH_API_KEY_ROLES`, csv) sets the roles of an API-key
+  user; the default is `USER`, ADMIN only by explicit configuration; the key comparison is
+  constant-time.
+- **0.13.4 audit P0.** Findings F3–F13 are closed (the auth gate, the API-key default and the route
+  census above are part of it).
 
 ## [0.13.4] — 2026-11-04
 
