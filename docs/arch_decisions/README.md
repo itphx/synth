@@ -122,6 +122,7 @@
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109-agent-system-federation.md](./prop-109-agent-system-federation.md) |
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
 | PROP-126 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | 🧩 Предложение | [prop-126-input-surface-mentions-snippets.md](./prop-126-input-surface-mentions-snippets.md) |
+| PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -170,5 +171,5 @@
 
 ---
 
-Всего документов: 109 (Решения: 56, Частично: 23, Предложения: 21, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 110 (Решения: 56, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 21 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

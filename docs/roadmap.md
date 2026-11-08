@@ -115,6 +115,7 @@
 | [PROP-109](./arch_decisions/prop-109-agent-system-federation.md) | Федерация агентных систем | 2027-01-31 | `AgentSystem` как peer; после 0.14 |
 | [PROP-110](./arch_decisions/prop-110-portal-platform.md) | Портал-платформа | 2026-12-31 | UI-kit и оболочка; первый потребитель — `synth-media` |
 | [PROP-126](./arch_decisions/prop-126-input-surface-mentions-snippets.md) | Поверхность ввода: `/`, `@`, `$`, `#`, `!` | 2026-12-06 | `/compact` — остро; `@` — файлы/агенты/пользователи (`@user` — доставка без хода); `$` — скиллы; `#` — сниппеты (instance/project/user); goal — в PROP-057 |
+| [PROP-131](./arch_decisions/prop-131-external-dependency-mirrors.md) | Зеркала внешних зависимостей сборки | 2026-12-08 | инцидент GitHub 2026-11-08; Gitea Generic + манифест + sha256; базовые образы и npm — отдельными решениями |
 
 **Триаж до 2026-11-14:** принять / icebox / отклонить / перенести (перенос — новой датой, а не молчанием).
 Принятое становится ADR, файл PROP удаляется; поглощённое — удаляется с записью «Поглощено»; снятое — в icebox/отклонено.
