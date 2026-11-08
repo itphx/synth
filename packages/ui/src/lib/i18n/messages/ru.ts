@@ -91,6 +91,7 @@ export const dict = {
   'header.settings': 'Настройки',
   'header.logs': 'Логи и аудит',
   'header.chatView.title': 'Вид и плотность чата',
+  'header.workModal.title': 'Рабочая область: доска, задачи, журнал',
 
   // Settings modal
   'settings.title': 'Настройки',
@@ -1042,6 +1043,7 @@ export const dict = {
   'work.board.empty': 'Плана нет',
   'work.board.addItem': '+ пункт',
   'work.board.addColumn': 'Добавить колонку',
+  'work.board.deleteColumn': 'Удалить колонку',
   'work.board.defaultColumnName': 'Новая колонка',
   'work.board.itemPlaceholder': 'Название пункта',
   'work.board.itemTitle': 'Название пункта',
@@ -1105,6 +1107,12 @@ export const dict = {
   'work.confirm.deleteItemMessage': 'Пункт плана будет удалён без возможности восстановления.',
   'work.confirm.deleteEntryTitle': 'Удалить запись журнала?',
   'work.confirm.deleteEntryMessage': 'Запись журнала будет удалена без возможности восстановления.',
+  'work.confirm.deleteTodoTitle': 'Удалить задачу?',
+  'work.confirm.deleteTodoMessage': 'Пункт ToDo будет удалён без возможности восстановления.',
+  'work.confirm.clearTodosTitle': 'Очистить выполненные задачи?',
+  'work.confirm.clearTodosMessage': 'Выполненные и отменённые пункты будут удалены без возможности восстановления.',
+  'work.confirm.deleteColumnTitle': 'Удалить колонку?',
+  'work.confirm.deleteColumnMessage': 'Колонка «{name}» будет удалена. Пунктов в ней: {count}; они также будут удалены.',
   // ADR-069 §9.3: проектные инструкции (AGENTS.md chain/sources)
   'sessionTab.instructions.title': 'Проектные инструкции',
   'sessionTab.instructions.summary': '{count, plural, one {# файл} few {# файла} many {# файлов}} · {chars} символов',

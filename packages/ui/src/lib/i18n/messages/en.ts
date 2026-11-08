@@ -96,6 +96,7 @@ export const dict = {
   'header.settings': 'Settings',
   'header.logs': 'Logs & Audit',
   'header.chatView.title': 'Chat view & density',
+  'header.workModal.title': 'Work area: board, tasks, journal',
 
   // Settings modal
   'settings.title': 'Settings',
@@ -1066,6 +1067,7 @@ export const dict = {
   'work.board.empty': 'No plan',
   'work.board.addItem': '+ item',
   'work.board.addColumn': 'Add column',
+  'work.board.deleteColumn': 'Delete column',
   'work.board.defaultColumnName': 'New column',
   'work.board.itemPlaceholder': 'Item title',
   'work.board.itemTitle': 'Item title',
@@ -1129,6 +1131,12 @@ export const dict = {
   'work.confirm.deleteItemMessage': 'The plan item will be removed and cannot be restored.',
   'work.confirm.deleteEntryTitle': 'Delete the journal entry?',
   'work.confirm.deleteEntryMessage': 'The journal entry will be removed and cannot be restored.',
+  'work.confirm.deleteTodoTitle': 'Delete the task?',
+  'work.confirm.deleteTodoMessage': 'The ToDo item will be removed and cannot be restored.',
+  'work.confirm.clearTodosTitle': 'Clear completed tasks?',
+  'work.confirm.clearTodosMessage': 'Completed and cancelled items will be removed and cannot be restored.',
+  'work.confirm.deleteColumnTitle': 'Delete the column?',
+  'work.confirm.deleteColumnMessage': 'The column “{name}” will be deleted. It contains {count} item(s); they will also be deleted.',
   // ADR-069 §9.3: project instructions (AGENTS.md chain/sources)
   'sessionTab.instructions.title': 'Project instructions',
   'sessionTab.instructions.summary': '{count, plural, one {# file} other {# files}} · {chars} chars',

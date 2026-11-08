@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
+vi.mock('@/lib/confirm', () => ({ confirm: vi.fn().mockResolvedValue(true) }))
 vi.mock('@/hooks/useNotification', () => ({
   useNotification: () => ({ notify: mocks.notify }),
 }))

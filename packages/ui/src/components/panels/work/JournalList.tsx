@@ -107,7 +107,7 @@ export function JournalList({
               onChange={(e) => onFiltersChange({ ...(filters ?? {}), author: e.target.value || undefined })}
               aria-label={t('work.journal.filter.author')}
               data-testid="journal-filter-author"
-              className="min-w-0 rounded border border-border bg-input px-1 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              className="min-w-0 rounded border border-border bg-input px-1 py-0.5 text-base text-foreground sm:text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="">{t('work.journal.filter.all')}</option>
               {(authors ?? []).map((author) => (
@@ -125,7 +125,7 @@ export function JournalList({
               onChange={(e) => onFiltersChange({ ...(filters ?? {}), sessionId: e.target.value || undefined })}
               aria-label={t('work.journal.filter.session')}
               data-testid="journal-filter-session"
-              className="min-w-0 rounded border border-border bg-input px-1 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              className="min-w-0 rounded border border-border bg-input px-1 py-0.5 text-base text-foreground sm:text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="">{t('work.journal.filter.all')}</option>
               {(sessions ?? []).map((session) => (
@@ -144,7 +144,7 @@ export function JournalList({
               onChange={(e) => onFiltersChange({ ...(filters ?? {}), date: e.target.value || undefined })}
               aria-label={t('work.journal.filter.date')}
               data-testid="journal-filter-date"
-              className="min-w-0 rounded border border-border bg-input px-1 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              className="min-w-0 rounded border border-border bg-input px-1 py-0.5 text-base text-foreground sm:text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </label>
         </div>
@@ -229,7 +229,7 @@ export function JournalList({
                         title={t('work.task.action.edit')}
                         aria-label={t('work.task.action.edit')}
                         data-testid={`journal-entry-${entry.id}-edit`}
-                        className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+                        className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <Icon name="edit-2" className="size-3" />
                       </button>
@@ -241,7 +241,7 @@ export function JournalList({
                         title={t('work.task.action.delete')}
                         aria-label={t('work.task.action.delete')}
                         data-testid={`journal-entry-${entry.id}-delete`}
-                        className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-destructive"
+                        className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <Icon name="trash-2" className="size-3" />
                       </button>

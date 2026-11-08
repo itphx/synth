@@ -115,10 +115,22 @@ export function WorkModal({
   const reportError = useCallback(
     (err: unknown) => {
       const code = (err as { code?: string } | null)?.code
-      setError(code === PLAN_VERSION_CONFLICT ? t('work.error.conflict') : t('work.error.save'))
+      if (code === PLAN_VERSION_CONFLICT) {
+        setError(t('work.error.conflict'))
+        // 409 — план изменился (модель/другой клиент): перечитываем актуальный,
+        // чтобы следующая правка шла с новой версией.
+        if (projectId) {
+          void synthApi
+            .getProjectPlan(projectId)
+            .then((response) => setPlan(response.plan ?? null))
+            .catch(() => {})
+        }
+      } else {
+        setError(t('work.error.save'))
+      }
       onError?.(err)
     },
-    [onError, t],
+    [onError, projectId, t],
   )
 
   const loadPlan = useCallback(async () => {
@@ -258,6 +270,33 @@ export function WorkModal({
       }
     },
     [projectId, reportError],
+  )
+
+  const deleteColumn = useCallback(
+    async (columnId: string) => {
+      if (!projectId || !plan) return
+      const column = plan.columns.find((entry) => entry.id === columnId)
+      if (!column) return
+      const count = plan.items.filter((item) => item.columnId === columnId).length
+      const ok = await askConfirm({
+        title: t('work.confirm.deleteColumnTitle'),
+        message: t('work.confirm.deleteColumnMessage', { name: column.name, count }),
+      })
+      if (!ok) return
+      setSaving(true)
+      try {
+        const response = await synthApi.deleteProjectPlanColumn(projectId, columnId, {
+          moveItemsTo: null,
+          version: plan.version,
+        })
+        setPlan(response.plan ?? null)
+      } catch (err) {
+        reportError(err)
+      } finally {
+        setSaving(false)
+      }
+    },
+    [askConfirm, plan, projectId, reportError, t],
   )
 
   const addColumn = useCallback(async () => {
@@ -412,6 +451,11 @@ export function WorkModal({
   const deleteTodo = useCallback(
     async (todoId: string) => {
       if (!sessionId) return
+      const ok = await askConfirm({
+        title: t('work.confirm.deleteTodoTitle'),
+        message: t('work.confirm.deleteTodoMessage'),
+      })
+      if (!ok) return
       setSaving(true)
       try {
         const response = await synthApi.deleteSessionTodo(sessionId, todoId)
@@ -422,11 +466,16 @@ export function WorkModal({
         setSaving(false)
       }
     },
-    [reportError, sessionId],
+    [askConfirm, reportError, sessionId, t],
   )
 
   const clearTodos = useCallback(async () => {
     if (!sessionId) return
+    const ok = await askConfirm({
+      title: t('work.confirm.clearTodosTitle'),
+      message: t('work.confirm.clearTodosMessage'),
+    })
+    if (!ok) return
     setSaving(true)
     try {
       const response = await synthApi.clearSessionTodos(sessionId, {
@@ -438,7 +487,7 @@ export function WorkModal({
     } finally {
       setSaving(false)
     }
-  }, [reportError, sessionId])
+  }, [askConfirm, reportError, sessionId, t])
 
   /** Порядок пунктов ToDo (массив) — переупорядочивание в модальном окне. */
   const moveTodo = useCallback(
@@ -466,11 +515,11 @@ export function WorkModal({
 
   const tabs = useMemo(
     () => [
-      { value: 'board', label: t('work.modal.tab.board') },
-      { value: 'todos', label: t('work.modal.tab.todos') },
-      { value: 'journal', label: t('work.modal.tab.journal') },
-      { value: 'invariants', label: t('work.modal.tab.invariants') },
-      { value: 'stats', label: t('work.modal.tab.stats') },
+      { value: 'board', label: t('work.modal.tab.board'), title: t('work.modal.tab.board') },
+      { value: 'todos', label: t('work.modal.tab.todos'), title: t('work.modal.tab.todos') },
+      { value: 'journal', label: t('work.modal.tab.journal'), title: t('work.modal.tab.journal') },
+      { value: 'invariants', label: t('work.modal.tab.invariants'), title: t('work.modal.tab.invariants') },
+      { value: 'stats', label: t('work.modal.tab.stats'), title: t('work.modal.tab.stats') },
     ],
     [t],
   )
@@ -495,6 +544,7 @@ export function WorkModal({
             value={tab}
             onChange={(next) => setTab(next as WorkTab)}
             ariaLabel={t('work.modal.title')}
+            wrap
           />
 
           {error && (
@@ -513,7 +563,7 @@ export function WorkModal({
                       onChange={(e) => setEditTitle(e.target.value)}
                       aria-label={t('work.board.itemTitle')}
                       data-testid="work-modal-item-title"
-                      className="min-w-0 rounded border border-border bg-input px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="min-w-0 rounded border border-border bg-input px-2 py-1 text-base text-foreground sm:text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                     <MarkdownEditor
                       value={editDescription}
@@ -535,6 +585,7 @@ export function WorkModal({
                   onDeleteItem={canEdit ? (itemId) => void deleteItem(itemId) : undefined}
                   onAddItem={canEdit ? (columnId, title) => void addItem(columnId, title) : undefined}
                   onRenameColumn={canEdit ? (columnId, name) => void renameColumn(columnId, name) : undefined}
+                  onDeleteColumn={canEdit ? (columnId) => void deleteColumn(columnId) : undefined}
                   onAddColumn={canEdit ? () => void addColumn() : undefined}
                   testId="work-modal-board"
                 />

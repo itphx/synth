@@ -264,6 +264,17 @@
   **под планом**, компактное отрендеренное превью + правка в модалке), ToDo —
   во вкладке «Сессия». Полные списки, доска, журнал, статистика и правка —
   в модальном окне (`WorkModal`).
+- **Кнопка «Рабочая область» в шапке.** На chat-вкладке (`Header.tsx`, desktop
+  и mobile) открывает `WorkModal` с вкладки «Доска»; иконка — `layout-masonry`.
+  У «Вид и плотность чата» (`ChatViewControls`) иконка — `menu` (прежняя
+  `layout-masonry` отдана новой кнопке). Обе кнопки — тач-таргет ≥24 px
+  (`h-6 w-6` на desktop, 36–40 px на mobile) и с `focus-visible`-кольцом.
+- **Опасные действия — с подтверждением.** Удаление пункта плана, записи
+  журнала, пункта ToDo и «очистить выполненные» спрашивают подтверждение
+  (`confirm`/`WorkModal.confirmAction`); отказ не меняет состояние.
+- **Инпуты на mobile — 16px.** Текстовые поля work-компонентов используют
+  `text-base sm:text-xs` (iOS Safari не зумит страницу при фокусе); вкладки
+  `WorkModal` переносятся (`Tabs wrap`), а не обрезаются на 320 px.
 - i18n — `work.plan.*`, `work.todo.*`, `work.invariants.*`, `work.journal.*`,
   `work.modal.tab.todos` (ru/en, паритет). Тесты —
   `components/panels/ProjectTab.plan.test.tsx`,

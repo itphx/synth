@@ -115,7 +115,7 @@ export function TodoSummary({
             type="button"
             onClick={onClearCompleted}
             data-testid={`${testId}-clear`}
-            className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover"
+            className="min-h-6 shrink-0 rounded border border-border px-2 py-1 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {t('work.todo.clearCompleted')}
           </button>
@@ -156,7 +156,7 @@ export function TodoSummary({
             placeholder={t('work.todo.placeholder')}
             aria-label={t('work.todo.placeholder')}
             data-testid={`${testId}-add-textarea`}
-            className="w-full min-w-0 resize-y rounded border border-border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            className="w-full min-w-0 resize-y rounded border border-border bg-background px-2 py-1 text-base text-foreground sm:text-xs focus:outline-none focus:ring-1 focus:ring-ring"
           />
           <div className="flex items-center justify-between gap-2">
             <select
@@ -235,7 +235,7 @@ export function TodoSummary({
                               onClick={() => onMoveUp(todo.id)}
                               aria-label={t('work.todo.moveUp')}
                               data-testid={`${testId}-item-${todo.id}-up`}
-                              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+                              className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               <Icon name="arrow-up-s" className="size-3" />
                             </button>
@@ -246,7 +246,7 @@ export function TodoSummary({
                               onClick={() => onMoveDown(todo.id)}
                               aria-label={t('work.todo.moveDown')}
                               data-testid={`${testId}-item-${todo.id}-down`}
-                              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+                              className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               <Icon name="arrow-down-s" className="size-3" />
                             </button>
@@ -286,7 +286,7 @@ export function TodoSummary({
                       rows={3}
                       aria-label={t('work.todo.edit')}
                       data-testid={`${testId}-item-${todo.id}-textarea`}
-                      className="w-full min-w-0 resize-y rounded border border-border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="w-full min-w-0 resize-y rounded border border-border bg-background px-2 py-1 text-base text-foreground sm:text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                     <div className="flex items-center justify-end gap-1">
                       <button

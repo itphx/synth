@@ -67,7 +67,7 @@ export function TaskGroup({
           title={isCollapsed ? t('work.group.expand') : t('work.group.collapse')}
           aria-label={isCollapsed ? t('work.group.expand') : t('work.group.collapse')}
           data-testid={testId ? `${testId}-toggle` : undefined}
-          className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Icon name={isCollapsed ? 'arrow-right-s' : 'arrow-down-s'} className="size-3.5" />
         </button>
@@ -101,7 +101,7 @@ export function TaskGroup({
             title={t('work.group.add')}
             aria-label={t('work.group.add')}
             data-testid={testId ? `${testId}-add` : undefined}
-            className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Icon name="add" className="size-3.5" />
           </button>

@@ -1170,7 +1170,7 @@ function InvariantsPreview({
               type="button"
               onClick={() => setExpanded((v) => !v)}
               data-testid="project-invariants-expand"
-              className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover"
+              className="min-h-6 shrink-0 rounded border border-border px-2 py-1 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {expanded ? t('work.invariants.collapse') : t('work.invariants.expand')}
             </button>
@@ -1182,7 +1182,7 @@ function InvariantsPreview({
             type="button"
             onClick={onEdit}
             data-testid="project-invariants-edit"
-            className="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-interactive-hover"
+            className="min-h-6 shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {hasText ? t('work.invariants.edit') : t('work.invariants.add')}
           </button>
@@ -1263,7 +1263,7 @@ function ProjectJournalPreview({
         type="button"
         onClick={onOpenAll}
         data-testid="project-journal-all"
-        className="self-start rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover"
+        className="min-h-6 self-start rounded border border-border px-2 py-1 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {t('work.journal.all', { count: total })}
       </button>

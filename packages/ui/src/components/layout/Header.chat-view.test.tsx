@@ -143,6 +143,17 @@ describe('Header: быстрый переключатель вида и плот
     expect(segment('Compact')).toBeTruthy()
   })
 
+  it('кнопка «Рабочая область» открывает модальное окно', async () => {
+    await renderHeader()
+    const button = document.querySelector('[data-testid="header-work-modal"]') as HTMLButtonElement | null
+    expect(button).not.toBeNull()
+    await act(async () => {
+      button!.click()
+    })
+    await act(async () => {})
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
   it('переключение вида и плотности сразу меняет стор и уезжает в профиль', async () => {
     await renderHeader()
 

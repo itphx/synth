@@ -172,7 +172,7 @@ export function MarkdownEditor({
                 aria-label={t(item.labelKey)}
                 title={t(item.labelKey)}
                 data-testid={`${testId ?? 'markdown-editor'}-${item.action}`}
-                className="rounded border border-border px-1.5 py-0.5 text-[0.625rem] font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:cursor-default disabled:opacity-40"
+                className="min-h-6 rounded border border-border px-2 py-1 text-[0.625rem] font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
               >
                 {t(item.labelKey)}
               </button>
@@ -186,7 +186,7 @@ export function MarkdownEditor({
             aria-label={label ?? t('work.markdown.editor')}
             data-testid={`${testId ?? 'markdown-editor'}-textarea`}
             rows={6}
-            className="w-full min-w-0 resize-y rounded-md border border-border bg-input px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring read-only:cursor-default read-only:opacity-70"
+            className="w-full min-w-0 resize-y rounded-md border border-border bg-input px-2 py-1.5 text-base text-foreground sm:text-xs focus:outline-none focus:ring-1 focus:ring-ring read-only:cursor-default read-only:opacity-70"
           />
         </>
       ) : (

@@ -93,7 +93,7 @@ export function PlanSummary({
               type="button"
               onClick={onOpenBoard}
               data-testid={`${testId}-board`}
-              className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-foreground transition-colors hover:bg-interactive-hover"
+              className="min-h-6 shrink-0 rounded border border-border px-2 py-1 text-[0.625rem] text-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {t('work.modal.tab.board')}
             </button>
@@ -131,7 +131,7 @@ export function PlanSummary({
             type="button"
             onClick={onOpenBoard}
             data-testid={`${testId}-board`}
-            className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-foreground transition-colors hover:bg-interactive-hover"
+            className="inline-flex min-h-6 shrink-0 items-center gap-1 rounded border border-border px-2 py-1 text-[0.625rem] text-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Icon name="layout-masonry" className="size-3" />
             {t('work.modal.tab.board')}
@@ -183,13 +183,13 @@ export function PlanSummary({
                     placeholder={t('work.board.itemPlaceholder')}
                     aria-label={t('work.board.itemPlaceholder')}
                     data-testid={`${testId}-add-input`}
-                    className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-base text-foreground sm:text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                   />
                   <button
                     type="button"
                     onClick={() => submitAdd(column.id)}
                     data-testid={`${testId}-add-submit`}
-                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-foreground transition-colors hover:bg-interactive-hover"
+                    className="min-h-6 shrink-0 rounded border border-border px-2 py-1 text-[0.625rem] text-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {t('common.create')}
                   </button>
@@ -200,7 +200,7 @@ export function PlanSummary({
                       setDraft('')
                     }}
                     data-testid={`${testId}-add-cancel`}
-                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover"
+                    className="min-h-6 shrink-0 rounded border border-border px-2 py-1 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {t('common.cancel')}
                   </button>
@@ -212,7 +212,7 @@ export function PlanSummary({
                   type="button"
                   onClick={() => setExpandedGroups((prev) => ({ ...prev, [column.id]: true }))}
                   data-testid={`${testId}-group-${column.id}-more`}
-                  className="self-start rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover"
+                  className="min-h-6 self-start rounded border border-border px-2 py-1 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {t('work.plan.showMore', { count: hidden })}
                 </button>
@@ -223,7 +223,7 @@ export function PlanSummary({
                   type="button"
                   onClick={() => setExpandedGroups((prev) => ({ ...prev, [column.id]: false }))}
                   data-testid={`${testId}-group-${column.id}-less`}
-                  className="self-start rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover"
+                  className="min-h-6 self-start rounded border border-border px-2 py-1 text-[0.625rem] text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {t('work.plan.showLess')}
                 </button>

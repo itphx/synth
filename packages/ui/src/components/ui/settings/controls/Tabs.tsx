@@ -15,6 +15,8 @@ export interface TabsProps {
   onChange: (value: string) => void
   ariaLabel?: string
   variant?: 'segmented' | 'underline'
+  /** Разрешить перенос вкладок на несколько строк вместо горизонтального скролла. */
+  wrap?: boolean
   className?: string
 }
 
@@ -31,6 +33,7 @@ export function Tabs({
   onChange,
   ariaLabel,
   variant = 'segmented',
+  wrap = false,
   className,
 }: TabsProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -77,7 +80,8 @@ export function Tabs({
       role="tablist"
       aria-label={ariaLabel}
       className={cn(
-        'tab-scroll-container flex w-full min-w-0 items-stretch gap-1 overflow-x-auto',
+        'tab-scroll-container flex w-full min-w-0 items-stretch gap-1',
+        wrap ? 'flex-wrap overflow-visible' : 'overflow-x-auto',
         // Сегментированный вариант — дорожка с внутренним отступом 2px (та же
         // схема, что у `SegmentedControl`): активная вкладка не касается
         // контура, общая высота остаётся `--control-height` (30px).
@@ -100,6 +104,7 @@ export function Tabs({
               isUnderline
                 ? 'h-[var(--control-height)] rounded-none py-1.5'
                 : 'h-[calc(var(--control-height)-0.25rem)] rounded-md',
+              wrap && 'min-w-[5rem]',
               item.title ? 'truncate' : 'break-words',
               isUnderline
                 ? active

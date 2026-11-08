@@ -10,6 +10,7 @@ import { useCatalogModels } from '@/hooks/useCatalogModels'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { useEnsureModelsLoaded } from '@/hooks/useEnsureModelsLoaded'
 import { useNotification } from '@/hooks/useNotification'
+import { confirm } from '@/lib/confirm'
 import { getToolDisplayName } from '@/lib/toolIcons'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
@@ -1596,6 +1597,12 @@ function SessionTodosSection({
   }
 
   const handleDelete = async (todoId: string) => {
+    const ok = await confirm({
+      title: t('work.confirm.deleteTodoTitle'),
+      message: t('work.confirm.deleteTodoMessage'),
+      variant: 'danger',
+    })
+    if (!ok) return
     try {
       const response = await synthApi.deleteSessionTodo(session.id, todoId)
       applyTodos(response.todos ?? [])
@@ -1605,6 +1612,12 @@ function SessionTodosSection({
   }
 
   const handleClear = async () => {
+    const ok = await confirm({
+      title: t('work.confirm.clearTodosTitle'),
+      message: t('work.confirm.clearTodosMessage'),
+      variant: 'danger',
+    })
+    if (!ok) return
     try {
       const response = await synthApi.clearSessionTodos(session.id, {
         statuses: ['completed', 'cancelled'],

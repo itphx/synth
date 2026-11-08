@@ -59,14 +59,14 @@ export const ChatViewControls = ({ variant = 'desktop' }: ChatViewControlsProps)
             variant === 'mobile'
               // Тач-таргет ≥40px на грубом указателе (ADR-044).
               ? 'flex h-9 w-9 items-center justify-center rounded-lg pointer-coarse:size-10'
-              : 'flex items-center justify-center rounded p-1',
+              : 'flex h-6 w-6 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           )}
           title={title}
           aria-label={title}
           aria-haspopup="dialog"
           data-testid="chat-view-controls"
         >
-          <Icon name="layout-masonry" className={variant === 'mobile' ? 'h-5 w-5' : 'size-3.5'} />
+          <Icon name="menu" className={variant === 'mobile' ? 'h-5 w-5' : 'size-3.5'} />
         </button>
       </PopoverTrigger>
 

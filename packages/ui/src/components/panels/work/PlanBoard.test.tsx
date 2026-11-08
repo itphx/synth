@@ -160,6 +160,19 @@ describe('PlanBoard: kanban-доска плана', () => {
     expect(onAddItem).toHaveBeenCalledWith('col-doing', 'Новый пункт')
   })
 
+  it('удаление колонки зовёт onDeleteColumn', async () => {
+    const onDeleteColumn = vi.fn()
+    const container = await render(
+      <PlanBoard plan={PLAN} onDeleteColumn={onDeleteColumn} testId="board" />,
+    )
+    const button = container.querySelector('[data-testid="board-column-col-backlog-delete"]') as HTMLButtonElement
+    expect(button).not.toBeNull()
+    await act(async () => {
+      button.click()
+    })
+    expect(onDeleteColumn).toHaveBeenCalledWith('col-backlog')
+  })
+
   it('пустой план показывает пустое состояние', async () => {
     const container = await render(<PlanBoard plan={null} testId="board" />)
     expect(container.querySelector('[data-testid="board-empty"]')).not.toBeNull()

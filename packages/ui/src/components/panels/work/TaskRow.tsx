@@ -147,7 +147,7 @@ export function TaskRow({
                 title={t('work.task.action.edit')}
                 aria-label={t('work.task.action.edit')}
                 data-testid={testId ? `${testId}-edit` : undefined}
-                className="rounded p-1 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <Icon name="edit-2" className="size-3.5" />
               </button>
@@ -166,7 +166,7 @@ export function TaskRow({
                 aria-label={t('work.task.action.move')}
                 aria-expanded={moveTargets && moveTargets.length > 0 ? showMenu : undefined}
                 data-testid={testId ? `${testId}-move` : undefined}
-                className="rounded p-1 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <Icon name="expand-up-down" className="size-3.5" />
               </button>
@@ -178,7 +178,7 @@ export function TaskRow({
                 title={t('work.task.action.delete')}
                 aria-label={t('work.task.action.delete')}
                 data-testid={testId ? `${testId}-delete` : undefined}
-                className="rounded p-1 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-destructive"
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <Icon name="trash-2" className="size-3.5" />
               </button>
@@ -194,7 +194,7 @@ export function TaskRow({
             title={expanded ? t('work.task.collapse') : t('work.task.expand')}
             aria-label={expanded ? t('work.task.collapse') : t('work.task.expand')}
             data-testid={testId ? `${testId}-expand` : undefined}
-            className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Icon name={expanded ? 'arrow-down-s' : 'arrow-right-s'} className="size-3.5" />
           </button>

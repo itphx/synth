@@ -30,6 +30,8 @@ export interface PlanBoardProps {
   onAddItem?: (columnId: string, title: string) => void
   /** Колонка переименована. */
   onRenameColumn?: (columnId: string, name: string) => void
+  /** Колонка удалена (пункты удаляются вместе с ней — подтверждение у вызывающего). */
+  onDeleteColumn?: (columnId: string) => void
   /** Добавлена колонка. */
   onAddColumn?: () => void
   /** Маркер для тестов. */
@@ -58,6 +60,7 @@ export function PlanBoard({
   onDeleteItem,
   onAddItem,
   onRenameColumn,
+  onDeleteColumn,
   onAddColumn,
   testId,
 }: PlanBoardProps) {
@@ -146,7 +149,7 @@ export function PlanBoard({
                     }}
                     aria-label={t('work.board.columnName')}
                     data-testid={testId ? `${testId}-column-${column.id}-name-input` : undefined}
-                    className="min-w-0 flex-1 rounded border border-border bg-input px-1 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    className="min-w-0 flex-1 rounded border border-border bg-input px-1 py-0.5 text-base text-foreground sm:text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                   />
                 ) : (
                   <span className="min-w-0 flex-1 truncate text-[0.625rem] font-medium text-foreground" data-testid={testId ? `${testId}-column-${column.id}-name` : undefined}>
@@ -176,9 +179,21 @@ export function PlanBoard({
                     title={t('work.task.action.edit')}
                     aria-label={t('work.task.action.edit')}
                     data-testid={testId ? `${testId}-column-${column.id}-rename` : undefined}
-                    className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <Icon name="edit-2" className="size-3" />
+                  </button>
+                )}
+                {!readOnly && onDeleteColumn && columns.length > 1 && renamingColumn !== column.id && (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteColumn(column.id)}
+                    title={t('work.board.deleteColumn')}
+                    aria-label={t('work.board.deleteColumn')}
+                    data-testid={testId ? `${testId}-column-${column.id}-delete` : undefined}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Icon name="trash-2" className="size-3" />
                   </button>
                 )}
               </header>
@@ -225,7 +240,7 @@ export function PlanBoard({
                             title={t('work.task.action.edit')}
                             aria-label={t('work.task.action.edit')}
                             data-testid={testId ? `${testId}-item-${item.id}-edit` : undefined}
-                            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+                            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <Icon name="edit-2" className="size-3" />
                           </button>
@@ -237,7 +252,7 @@ export function PlanBoard({
                           aria-label={t('work.task.action.move')}
                           aria-expanded={moveMenuFor === item.id}
                           data-testid={testId ? `${testId}-item-${item.id}-move` : undefined}
-                          className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+                          className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <Icon name="expand-up-down" className="size-3" />
                         </button>
@@ -248,7 +263,7 @@ export function PlanBoard({
                             title={t('work.task.action.delete')}
                             aria-label={t('work.task.action.delete')}
                             data-testid={testId ? `${testId}-item-${item.id}-delete` : undefined}
-                            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-destructive"
+                            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <Icon name="trash-2" className="size-3" />
                           </button>
@@ -273,7 +288,7 @@ export function PlanBoard({
                               onMoveItem?.(item.id, target.id)
                             }}
                             data-testid={testId ? `${testId}-item-${item.id}-move-${target.id}` : undefined}
-                            className="rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-foreground transition-colors hover:bg-interactive-hover"
+                            className="min-h-6 rounded border border-border px-2 py-1 text-[0.625rem] text-foreground transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             {target.name}
                           </button>
@@ -301,7 +316,7 @@ export function PlanBoard({
                       placeholder={t('work.board.itemPlaceholder')}
                       aria-label={t('work.board.itemPlaceholder')}
                       data-testid={testId ? `${testId}-column-${column.id}-quick-input` : undefined}
-                      className="min-w-0 rounded border border-border bg-input px-1 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="min-w-0 rounded border border-border bg-input px-1 py-0.5 text-base text-foreground sm:text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                   ) : (
                     <button

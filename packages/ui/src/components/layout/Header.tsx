@@ -24,6 +24,9 @@ import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 import { HybridStatusIndicator } from './HybridStatusIndicator'
 import { PwaInstallButton } from './PwaInstallButton'
 import { ChatViewControls } from './ChatViewControls'
+import { WorkModal } from '../panels/work/WorkModal'
+import { canEditProjectContent } from '@/lib/projectAccess'
+import { canEditSessionContent } from '@/lib/sessionAccess'
 import { useDevice } from '@/hooks/useDevice'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { useWorktreesStore, findWorktree } from '@/stores/worktreesStore'
@@ -70,6 +73,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const setMobileRightOpen = useUIStore((s) => s.setMobileRightOpen)
   const setRightPanelTab = useUIStore((s) => s.setRightPanelTab)
   const user = useAuthStore((s) => s.user)
+  const deployment = useAuthStore((s) => s.deployment)
   const { deviceType } = useDevice()
   const isMobile = deviceType !== 'desktop'
   const projects = useProjectsStore((s) => s.projects)
@@ -99,6 +103,17 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const sessionId = activeTab?.data?.sessionId
   const sessions = useSessionsStore((s) => s.sessions)
   const activeSession = sessionId ? sessions.find((s) => s.id === sessionId) : undefined
+
+  // PROP-054 / ADR-130: рабочая область из шапки — доступна для чат-вкладки.
+  const [workOpen, setWorkOpen] = useState(false)
+  const workProjectId = activeSession?.project_id ?? null
+  const workProject = workProjectId ? projects.find((p) => p.id === workProjectId) : undefined
+  const canEditWork = canEditProjectContent(workProject, user, {
+    standalone: deployment === 'standalone',
+  })
+  const canEditWorkTodos = canEditSessionContent(activeSession, user, workProject, {
+    standalone: deployment === 'standalone',
+  })
 
   const {
     inputTokens: contextInputTokens,
@@ -357,11 +372,25 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     forwardCallbackRef.current = true
   }
 
+  const workModal = (
+    <WorkModal
+      open={workOpen}
+      onOpenChange={setWorkOpen}
+      projectId={workProjectId}
+      sessionId={sessionId ?? null}
+      initialTab="board"
+      canEdit={canEditWork}
+      canEditTodos={canEditWorkTodos}
+      testId="header-work-modal"
+    />
+  )
+
   if (isMobile) {
     const canSeeLogs = !!user?.roles?.some((r) => r === 'ADMIN' || r === 'AUDITOR')
     const iconBtn = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground'
     return (
-      <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border/70 bg-background px-2">
+      <>
+        <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border/70 bg-background px-2">
         <button
           onClick={() => setMobileLeftOpen(!mobileLeftOpen)}
           className={iconBtn}
@@ -396,6 +425,17 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           <NotificationPopup />
           <AnalyticsButton />
           <PwaInstallButton />
+          {isChatTab && (
+            <button
+              onClick={() => setWorkOpen(true)}
+              className={iconBtn}
+              title={t('header.workModal.title')}
+              aria-label={t('header.workModal.title')}
+              data-testid="header-work-modal"
+            >
+              <Icon name="layout-masonry" className="h-5 w-5" />
+            </button>
+          )}
           {isChatTab && <ChatViewControls variant="mobile" />}
           <QuickSettingsPopup
             onSettingsClick={onSettingsClick}
@@ -430,12 +470,15 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             <Icon name="layout-right" className="h-5 w-5" />
           </button>
         </div>
-      </header>
+        </header>
+        {workModal}
+      </>
     )
   }
 
   return (
-    <header className="flex h-9 items-center justify-between px-3 bg-background">
+    <>
+      <header className="flex h-9 items-center justify-between px-3 bg-background">
       <div className="flex items-center gap-3 min-w-0">
         {!leftPanel.isOpen && (
           <button
@@ -509,6 +552,17 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                   <Icon name="checkbox-multiple" className="size-3.5" />
                 </button>
               )}
+
+              {/* PROP-054 / ADR-130: рабочая область проекта и сессии */}
+              <button
+                onClick={() => setWorkOpen(true)}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                title={t('header.workModal.title')}
+                aria-label={t('header.workModal.title')}
+                data-testid="header-work-modal"
+              >
+                <Icon name="layout-masonry" className="size-3.5" />
+              </button>
 
               {/* Быстрый доступ к виду и плотности ленты */}
               <ChatViewControls />
@@ -729,6 +783,8 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           </button>
         )}
       </div>
-    </header>
+      </header>
+      {workModal}
+    </>
   )
 }
