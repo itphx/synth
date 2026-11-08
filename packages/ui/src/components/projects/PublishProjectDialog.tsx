@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
@@ -6,12 +6,40 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { notifyMessage } from '@/hooks/useNotification'
 import { useProjectsStore } from '@/stores/projectsStore'
-import type { ProjectData } from '@/lib/api/synthApi'
+import { synthApi, type ProjectData, type PublishProgress } from '@/lib/api/synthApi'
+
+/**
+ * Период опроса `GET /projects/:id/publish/progress`, пока идёт публикация.
+ * Публикация может идти минутами — прогресс тянем часто, но одним запросом за раз.
+ */
+export const PUBLISH_PROGRESS_POLL_MS = 600
+
+/**
+ * Человекочитаемый размер (1024-основание). Локальный хелпер: общая утилита байт
+ * живёт в настройках обслуживания (`MaintenanceSettings`), тянуть тот модуль в
+ * диалог публикации незачем.
+ */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${Math.round(bytes)} B`
+  const units = ['KiB', 'MiB', 'GiB', 'TiB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  const rounded = value >= 10 ? value.toFixed(0) : value.toFixed(1)
+  return `${rounded} ${units[unit]}`
+}
 
 /**
  * Диалог «Опубликовать на сервер» (гибрид): локальный проект → удалённый backend.
  * Два режима: создать новый проект на сервере (имя сохраняется) или обновить
  * существующий удалённый проект. Сессии и файлы переносятся всегда.
+ *
+ * Пока идёт публикация, диалог опрашивает прогресс (процент, фаза, счётчики
+ * сессий/файлов). Старое ядро без маршрута (`404`) — молча остаётся спиннер.
  */
 interface PublishProjectDialogProps {
   open: boolean
@@ -29,6 +57,54 @@ export function PublishProjectDialog({ open, onOpenChange, project, remoteProjec
   const [selectedId, setSelectedId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [progress, setProgress] = useState<PublishProgress | null>(null)
+
+  // Опрос прогресса: одна цепочка `setTimeout`, один запрос в полёте за раз.
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inFlightRef = useRef(false)
+  const pollingRef = useRef(false)
+  const mountedRef = useRef(true)
+
+  const stopPolling = useCallback(() => {
+    pollingRef.current = false
+    if (pollTimerRef.current !== null) {
+      clearTimeout(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+  }, [])
+
+  const pollOnce = useCallback(async function poll(projectId: string): Promise<void> {
+    if (!pollingRef.current || inFlightRef.current) return
+    inFlightRef.current = true
+    try {
+      const next = await synthApi.getPublishProgress(projectId)
+      if (mountedRef.current && pollingRef.current) setProgress(next)
+    } catch (e) {
+      // Бар не показываем (старое ядро без маршрута, сбой опроса) и не шумим
+      // тостами: ошибку самой публикации покажет POST.
+      if (mountedRef.current) setProgress(null)
+      if ((e as { status?: number } | null)?.status === 404) pollingRef.current = false
+    } finally {
+      inFlightRef.current = false
+      if (mountedRef.current && pollingRef.current) {
+        pollTimerRef.current = setTimeout(() => { void poll(projectId) }, PUBLISH_PROGRESS_POLL_MS)
+      }
+    }
+  }, [])
+
+  const startPolling = useCallback((projectId: string) => {
+    stopPolling()
+    pollingRef.current = true
+    void pollOnce(projectId)
+  }, [pollOnce, stopPolling])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      stopPolling()
+    }
+  }, [stopPolling])
 
   useEffect(() => {
     if (open) {
@@ -36,16 +112,26 @@ export function PublishProjectDialog({ open, onOpenChange, project, remoteProjec
       setSelectedId('')
       setBusy(false)
       setError(null)
+      setProgress(null)
+    } else {
+      stopPolling()
     }
-  }, [open, project.id])
+  }, [open, project.id, stopPolling])
 
   const submit = async () => {
     if (busy) return
     setBusy(true)
     setError(null)
+    setProgress(null)
     try {
       const remoteProjectId = mode === 'existing' && selectedId ? selectedId : undefined
-      await publishProject(project.id, remoteProjectId ? { remote_project_id: remoteProjectId } : undefined)
+      const publishPromise = publishProject(
+        project.id,
+        remoteProjectId ? { remote_project_id: remoteProjectId } : undefined,
+      )
+      // Первый опрос — сразу после старта POST, не дожидаясь его ответа.
+      startPolling(project.id)
+      await publishPromise
       notifyMessage({
         text: t('hybrid.publishDialog.success', { name: project.name }),
         type: 'success',
@@ -55,11 +141,14 @@ export function PublishProjectDialog({ open, onOpenChange, project, remoteProjec
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
+      stopPolling()
+      setProgress(null)
       setBusy(false)
     }
   }
 
   const overwriteExisting = mode === 'existing' && !!selectedId
+  const showProgress = progress !== null && progress.phase !== 'error'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -127,6 +216,49 @@ export function PublishProjectDialog({ open, onOpenChange, project, remoteProjec
             </span>
           </button>
         </div>
+
+        {showProgress && progress && (
+          <div className="flex flex-col gap-1.5">
+            <div
+              data-testid="publish-progress"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress.percent}
+              className="h-1 w-full overflow-hidden rounded-full bg-interactive"
+            >
+              <div
+                className="h-full rounded-full bg-primary transition-[width] duration-300"
+                style={{ width: `${progress.percent}%` }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t('hybrid.publishDialog.progress.percent', { percent: progress.percent })}
+              {' · '}
+              {t(`hybrid.publishDialog.progress.phase.${progress.phase}`)}
+            </p>
+            {progress.sessions.total > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {t('hybrid.publishDialog.progress.phase.sessions')}{' '}
+                {t('hybrid.publishDialog.progress.sessions', {
+                  done: progress.sessions.done,
+                  total: progress.sessions.total,
+                })}
+              </p>
+            )}
+            {progress.files.total > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {t('hybrid.publishDialog.progress.phase.files')}{' '}
+                {t('hybrid.publishDialog.progress.files', {
+                  done: progress.files.done,
+                  total: progress.files.total,
+                  doneBytes: formatBytes(progress.files.bytesDone),
+                  totalBytes: formatBytes(progress.files.bytesTotal),
+                })}
+              </p>
+            )}
+          </div>
+        )}
 
         {error && <p className="text-xs text-destructive">{error}</p>}
 

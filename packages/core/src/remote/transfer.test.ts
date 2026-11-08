@@ -9,6 +9,7 @@ import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
 import type { RemoteBackendClient } from './client.js';
 import { RemoteError } from './types.js';
+import type { TransferProgress } from './transfer-progress.js';
 import {
   syncProjectToRemote,
   forkProjectToLocal,
@@ -233,6 +234,96 @@ describe('transfer helpers', () => {
       );
       expect(client.fsUpload).toHaveBeenCalledTimes(1);
       expect(stats).toMatchObject({ projectId: 'remote-1', sessionsImported: 1, filesUploaded: 3, created: true });
+    });
+
+    it('publish: прогресс — totals до фазы сессий, счётчики по одной, проценты не убывают, финал 100', async () => {
+      const client = makeFakeRemoteClient();
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('Progress', 'local', { workspace: 'progress' });
+      await projectStore.save(project);
+
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const s1 = await sessionManager.createSession({ title: 'S1', projectId: project.id });
+      const s2 = await sessionManager.createSession({ title: 'S2', projectId: project.id });
+
+      const localProjectDir = join(tmpDir, 'ws-progress');
+      await mkdir(localProjectDir, { recursive: true });
+      await writeFile(join(localProjectDir, 'a.txt'), 'text'); // 4 байта
+      await writeFile(join(localProjectDir, 'image.bin'), Buffer.from([1, 0, 2])); // 3 байта
+
+      const snapshots: TransferProgress[] = [];
+      const stats = await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: true,
+        includeSessions: true,
+        localProjectDir,
+        localSessions: [s1, s2],
+        onProgress: (p) => snapshots.push(p),
+      });
+
+      expect(stats.sessionsImported).toBe(2);
+      expect(stats.filesUploaded).toBe(2);
+      expect(snapshots.length).toBeGreaterThan(4);
+
+      // Старт — фаза project, 0 %.
+      expect(snapshots[0]).toMatchObject({ active: true, phase: 'project', percent: 0 });
+      expect(typeof snapshots[0]!.startedAt).toBe('string');
+
+      // Totals известны ДО фазы сессий (инвентарь файлов посчитан заранее).
+      const sessionsStart = snapshots.find((p) => p.phase === 'sessions' && p.sessions.done === 0)!;
+      expect(sessionsStart.sessions).toEqual({ done: 0, total: 2 });
+      expect(sessionsStart.files).toMatchObject({ done: 0, total: 2, bytesDone: 0, bytesTotal: 7 });
+
+      // Сессии инкрементируются по одной.
+      expect(snapshots.some((p) => p.phase === 'sessions' && p.sessions.done === 1)).toBe(true);
+
+      // Файлы: после каждого — +1 и +size.
+      expect(snapshots.some((p) => p.phase === 'files' && p.files.done === 1 && p.files.bytesDone === 4)).toBe(true);
+
+      // Проценты целые, 0..100 и монотонно не убывают.
+      let previous = 0;
+      for (const p of snapshots) {
+        expect(Number.isInteger(p.percent)).toBe(true);
+        expect(p.percent).toBeGreaterThanOrEqual(previous);
+        expect(p.percent).toBeLessThanOrEqual(100);
+        previous = p.percent;
+      }
+
+      // Финал — done/100, неактивен.
+      expect(snapshots.at(-1)).toMatchObject({
+        active: false,
+        phase: 'done',
+        percent: 100,
+        sessions: { done: 2, total: 2 },
+        files: { done: 2, total: 2, bytesDone: 7, bytesTotal: 7 },
+        error: null,
+      });
+    });
+
+    it('publish: пустой проект — прогресс 0 → 100 на финише', async () => {
+      const client = makeFakeRemoteClient();
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('EmptyProgress', 'local', { workspace: 'empty-progress' });
+      await projectStore.save(project);
+      const localProjectDir = join(tmpDir, 'ws-empty-progress');
+      await mkdir(localProjectDir, { recursive: true });
+
+      const snapshots: TransferProgress[] = [];
+      await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: true,
+        includeSessions: true,
+        localProjectDir,
+        localSessions: [],
+        onProgress: (p) => snapshots.push(p),
+      });
+
+      expect(snapshots[0]).toMatchObject({ phase: 'project', percent: 0 });
+      expect(snapshots.some((p) => p.phase === 'sessions' && p.percent === 0)).toBe(true);
+      expect(snapshots.at(-1)).toMatchObject({ active: false, phase: 'done', percent: 100 });
+      expect(snapshots.filter((p) => p.percent === 100)).toHaveLength(1);
     });
 
     it('обновляет существующий проект при remoteProjectId', async () => {

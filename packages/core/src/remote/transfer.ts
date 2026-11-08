@@ -15,6 +15,8 @@ import type { RemoteBackendClient } from './client.js';
 import { RemoteError } from './types.js';
 import type { EventBus } from '../events/bus.js';
 import { serializeSession, deserializeLogEntry } from '../server/serialize.js';
+import { computeTransferPercent, emptyTransferProgress } from './transfer-progress.js';
+import type { TransferProgress } from './transfer-progress.js';
 
 /** Каталоги, исключаемые из прямой синхронизации файлов. */
 export const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.synth']);
@@ -336,6 +338,12 @@ export interface SyncProjectToRemoteOptions {
   localProjectDir: string;
   localSessions: Session[];
   log?: (msg: string) => void;
+  /**
+   * Прогресс публикации (счётчики + процент). Опционален: CLI publish/fork и
+   * прочие потребители работают без него. Проценты монотонны (см.
+   * `computeTransferPercent`), финал — `done`/100.
+   */
+  onProgress?: (progress: TransferProgress) => void;
 }
 
 export interface ForkProjectToLocalOptions {
@@ -370,6 +378,95 @@ export interface TransferStats {
 }
 
 /**
+ * Эмиттер прогресса публикации: держит текущий снапшот и пересчитывает
+ * `percent` чистой функцией `computeTransferPercent` (клампится к прежнему
+ * максимуму — полоса не откатывается назад).
+ *
+ * Счётчики фаз меняет вызывающий: `startSessions` задаёт totals (файлы —
+ * штук и байт), `sessionDone`/`fileDone` инкрементируют по одному элементу.
+ */
+function createProgressReporter(onProgress?: (progress: TransferProgress) => void) {
+  let snapshot: TransferProgress = emptyTransferProgress();
+
+  const emit = (patch: Partial<TransferProgress>): void => {
+    if (!onProgress) return;
+    const sessions = { ...snapshot.sessions, ...(patch.sessions ?? {}) };
+    const files = { ...snapshot.files, ...(patch.files ?? {}) };
+    const percent = patch.percent ?? computeTransferPercent({
+      sessions,
+      files,
+      percent: snapshot.percent,
+    });
+    snapshot = {
+      ...snapshot,
+      ...patch,
+      sessions,
+      files,
+      percent,
+      updatedAt: new Date().toISOString(),
+    };
+    onProgress({ ...snapshot, sessions: { ...sessions }, files: { ...files } });
+  };
+
+  return {
+    /** Старт: фаза `project` (создание/обновление проекта на сервере), 0 %. */
+    begin(): void {
+      snapshot = emptyTransferProgress();
+      emit({
+        active: true,
+        phase: 'project',
+        percent: 0,
+        startedAt: new Date().toISOString(),
+      });
+    },
+    /** Totals известны (проект создан): фаза `sessions`. */
+    startSessions(totals: { sessions: number; files: number; bytes: number }): void {
+      emit({
+        active: true,
+        phase: 'sessions',
+        sessions: { done: 0, total: totals.sessions },
+        files: { done: 0, total: totals.files, bytesDone: 0, bytesTotal: totals.bytes },
+      });
+    },
+    /** Импортирована одна сессия (байты не трогаем — они про файлы). */
+    sessionDone(): void {
+      emit({ sessions: { done: snapshot.sessions.done + 1, total: snapshot.sessions.total } });
+    },
+    /** Переход к фазе файлов. */
+    startFiles(): void {
+      emit({ phase: 'files' });
+    },
+    /** Загружен один файл: +1 к счётчику и +size к байтам. */
+    fileDone(bytes: number): void {
+      const size = Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
+      emit({
+        files: {
+          done: snapshot.files.done + 1,
+          total: snapshot.files.total,
+          bytesDone: snapshot.files.bytesDone + size,
+          bytesTotal: snapshot.files.bytesTotal,
+        },
+      });
+    },
+    /** Финал: `done`, 100 %, счётчики доведены до totals (пустой проект — тоже 100). */
+    finish(): void {
+      emit({
+        active: false,
+        phase: 'done',
+        percent: 100,
+        sessions: { done: snapshot.sessions.total, total: snapshot.sessions.total },
+        files: {
+          done: snapshot.files.total,
+          total: snapshot.files.total,
+          bytesDone: snapshot.files.bytesTotal,
+          bytesTotal: snapshot.files.bytesTotal,
+        },
+      });
+    },
+  };
+}
+
+/**
  * Publish: локальный проект → сервер.
  * 1. Создать/обновить проект на сервере (без локального workspace-пути —
  *    на сервере задаётся свой workspace: slug(name) для нового, существующий
@@ -380,9 +477,11 @@ export interface TransferStats {
 export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Promise<TransferStats> {
   const {
     localProject, remoteClient, remoteProjectId, includeFiles, includeSessions,
-    localProjectDir, localSessions, log,
+    localProjectDir, localSessions, log, onProgress,
   } = opts;
   const logger = log ?? (() => {});
+  const progress = createProgressReporter(onProgress);
+  progress.begin();
 
   let targetProjectId = remoteProjectId;
   let targetWorkspace: string | undefined;
@@ -434,6 +533,36 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
       // Каталог уже существует (409 ALREADY_EXISTS) — это не ошибка.
     });
   }
+
+  // Инвентарь файлов — ДО фазы сессий: общий объём (штук и байт) нужен, чтобы
+  // проценты были монотонными и фаза файлов не «прыгала». Читаются файлы
+  // по-прежнему один раз — в цикле загрузки; здесь только пути и размеры.
+  const fileInventory: Array<{ rel: string; size: number }> = [];
+  if (includeFiles) {
+    try {
+      const s = await stat(localProjectDir);
+      if (!s.isDirectory()) {
+        throw new Error(`Workspace не является директорией: ${localProjectDir}`);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('не является директорией')) throw err;
+      throw new Error(`Каталог workspace не найден: ${localProjectDir}`);
+    }
+
+    const files = await walkDir(localProjectDir);
+    for (const rel of files) {
+      // Размер известен до чтения: байты — вес фазы файлов. Файл исчез между
+      // обходом и stat — считаем нулевым, чтобы не уронить перенос.
+      const fileStat = await stat(join(localProjectDir, rel)).catch(() => null);
+      fileInventory.push({ rel, size: fileStat && fileStat.isFile() ? fileStat.size : 0 });
+    }
+  }
+
+  progress.startSessions({
+    sessions: includeSessions ? localSessions.length : 0,
+    files: fileInventory.length,
+    bytes: fileInventory.reduce((sum, file) => sum + file.size, 0),
+  });
 
   let sessionsImported = 0;
   if (includeSessions) {
@@ -487,6 +616,7 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
                 logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
               }
               sessionsImported++;
+              progress.sessionDone();
               logger(`  сессия: ${s.title || s.id}`);
             }
             index += chunk.length;
@@ -518,6 +648,7 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
             logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
           }
           sessionsImported++;
+          progress.sessionDone();
           logger(`  сессия: ${s.title || s.id}`);
         }
       }
@@ -536,18 +667,8 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
 
   let filesUploaded = 0;
   if (includeFiles) {
-    try {
-      const s = await stat(localProjectDir);
-      if (!s.isDirectory()) {
-        throw new Error(`Workspace не является директорией: ${localProjectDir}`);
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('не является директорией')) throw err;
-      throw new Error(`Каталог workspace не найден: ${localProjectDir}`);
-    }
-
-    const files = await walkDir(localProjectDir);
-    for (const rel of files) {
+    progress.startFiles();
+    for (const { rel, size } of fileInventory) {
       const buf = await readFile(join(localProjectDir, rel));
       if (isBinaryBuffer(buf)) {
         const fd = new FormData();
@@ -562,10 +683,12 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
         );
       }
       filesUploaded++;
+      progress.fileDone(size);
       if (filesUploaded % 50 === 0) logger(`  файлов загружено: ${filesUploaded}`);
     }
   }
 
+  progress.finish();
   return { projectId: targetProjectId, sessionsImported, filesUploaded, filesDownloaded: 0, created };
 }
 

@@ -2481,6 +2481,20 @@ export type {
   RemoteConfig,
   RemoteEventBridgeOptions,
 } from './remote/index.js';
+export {
+  TransferProgressRegistry,
+  computeTransferPercent,
+  emptyTransferProgress,
+  transferProgressKey,
+  TRANSFER_PROGRESS_TTL_MS,
+} from './remote/index.js';
+export type {
+  TransferProgress,
+  TransferPhase,
+  TransferProgressPatch,
+  TransferPercentInput,
+  TransferProgressRegistryOptions,
+} from './remote/index.js';
 
 export {
   getProfilesPath,

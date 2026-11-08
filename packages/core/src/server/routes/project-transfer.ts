@@ -17,7 +17,20 @@ import type { RemoteBackendClient } from '../../remote/client.js';
 import type { EventBus } from '../../events/bus.js';
 import { isRemoteRef, toLocalId, toRemoteRef, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { resolveLocalWorkspace, syncProjectToRemote, forkProjectToLocal } from '../../remote/transfer.js';
+import {
+  TransferProgressRegistry,
+  transferProgressKey,
+} from '../../remote/transfer-progress.js';
 import { serializeProject } from '../serialize.js';
+
+/**
+ * Реестр прогресса публикации — один на процесс.
+ *
+ * Ключ записи — `${userId}:${projectId}`: чужой пользователь не видит чужой
+ * прогресс (для него запись выглядит как `idle`). Снапшоты in-memory и живут
+ * ~10 минут после завершения (см. `TransferProgressRegistry`).
+ */
+export const projectPublishProgress = new TransferProgressRegistry();
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
 function mapRemoteError(c: Context, err: unknown): Response | undefined {
@@ -58,9 +71,22 @@ export function createProjectTransferRoutes(
    * владельца по `session.created`, без переподключения).
    */
   eventBus?: EventBus,
+  /**
+   * Реестр прогресса публикации. Дефолт — модульный singleton процесса
+   * (`projectPublishProgress`), чтобы `POST /:id/publish` и
+   * `GET /:id/publish/progress` видели одну и ту же запись даже при разных
+   * экземплярах фабрики.
+   */
+  progressRegistry: TransferProgressRegistry = projectPublishProgress,
 ): Hono {
   const app = new Hono();
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
+
+  /** id пользователя запроса — часть ключа прогресса (чужой прогресс не виден). */
+  const resolveUserId = async (c: Context): Promise<string> => {
+    const user = await Promise.resolve(auth.getCurrentUser?.(c) ?? null);
+    return user?.id ?? 'local';
+  };
 
   // POST /api/v2/projects/:id/publish — локальный проект → сервер.
   // Тело: { remote_project_id?: string } — id существующего удалённого проекта (в форме
@@ -99,9 +125,14 @@ export function createProjectTransferRoutes(
     }
 
     // Публикация переносит **историю** сессий — нужен полный список.
-    const localSessions = await sessionManager.listSessionsWithMessages({ projectId: project.id });
+    // Прогресс — в реестре (ключ по пользователю и проекту): с этого момента
+    // `GET /:id/publish/progress` отдаёт живые счётчики.
+    const userId = await resolveUserId(c);
+    const progressKey = transferProgressKey(userId, project.id);
+    progressRegistry.begin(progressKey);
 
     try {
+      const localSessions = await sessionManager.listSessionsWithMessages({ projectId: project.id });
       const stats = await syncProjectToRemote({
         localProject: project,
         remoteClient,
@@ -110,7 +141,9 @@ export function createProjectTransferRoutes(
         includeSessions: true,
         localProjectDir,
         localSessions,
+        onProgress: (progress) => { progressRegistry.update(progressKey, progress); },
       });
+      progressRegistry.complete(progressKey);
       return c.json({
         ok: true,
         project_id: toRemoteRef(stats.projectId),
@@ -119,8 +152,23 @@ export function createProjectTransferRoutes(
         files_uploaded: stats.filesUploaded,
       }, 201);
     } catch (err) {
+      progressRegistry.fail(progressKey, err);
       return mapTransferError(c, err);
     }
+  });
+
+  // GET /api/v2/projects/:id/publish/progress — прогресс публикации (опрос UI).
+  // Только счётчики: путей/имён файлов и секретов в ответе нет. Неизвестный
+  // проект/никогда не публиковали/чужой пользователь → `{active:false, phase:"idle"}`.
+  app.get('/:id/publish/progress', auth.requireAuth, async (c) => {
+    const id = c.req.param('id');
+    if (isRemoteRef(id)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'Нельзя опубликовать удалённый проект' },
+      }, 400);
+    }
+    const userId = await resolveUserId(c);
+    return c.json(progressRegistry.get(transferProgressKey(userId, id)));
   });
 
   // POST /api/v2/projects/:id/fork-local — удалённый проект → локальный мир.

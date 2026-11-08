@@ -613,7 +613,9 @@
   (`packages/backend/src/routes/sessions.ts`, import/import-batch/export/fork/merge); в
   standalone-core маршрутов импорта/экспорта нет, счётчиков не заводится.
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `GET/PATCH /:id/optimization*` (ADR-119) + `POST /:id/optimization/check|cancel-summarization` — вкладка «Контекст», настройки читает движок на core, поэтому маршруты обязаны жить в общей фабрике (в гибриде `remote:` форвардится клиентом); `GET/PUT /:id/mcp` — MCP-скоуп сессии (backend регистрирует свою, более строгую версию раньше); `GET /:id/secrets` — карта обфускации по праву раскрытия (`resolveCanRevealSecrets`); `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
-  `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
+  `project-transfer` (publish/fork-local + `GET /:id/publish/progress` — прогресс публикации;
+  реестр `remote/transfer-progress.ts`, in-memory, ключ `userId:projectId`, TTL 10 мин),
+  `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `meta` (ADR-118: `GET /api/v2/meta` — возможности инстанса, без аутентификации), `dictionaries`, `mcp`, `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
   `service-keys`, `webhooks`, `oauth` (ADR-105 Ф4: `/api/v2/oauth/credentials*` — выдача,

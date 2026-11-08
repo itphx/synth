@@ -8,6 +8,8 @@
 > **§5.8** — перенос сессий при publish уровнями зависимостей (чанки по 20 сессий —
 > `IMPORT_BATCH_CHUNK`, один хит лимита на запрос) с таймаутом переноса 120 с
 > (`TRANSFER_TIMEOUT_MS`) и фоллбеком на поштучный импорт с текущего чанка;
+> **§5.8** — новый `GET /projects/:id/publish/progress` (прогресс публикации
+> опросом: процент/фазы/счётчики, in-memory, TTL 10 мин, `remote:`-id → 400);
 > **§5.21** — `GET/PUT/DELETE /api/v2/settings/limits`
 > (`limits.sessionOpsPerMinute`) — **переведено**).
 
@@ -758,6 +760,7 @@ replica can continue an upload — the `blobs` volume must be shared.
 | GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Project MCP scope (ADR-071 §2.4): `{enabled, defaultOn, knownServers, sources?}`; `enabled[]` — hard gate (unavailable even in old sessions, including for system servers), `defaultOn[]` — the seed for new sessions. `sources` (ADR-125) — the source of every known server: `Record<name, 'local'\|'server'>` (the "server" badge in the UI); the field is additive, without it the source is unknown |
 | PUT | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Set `{enabled?, defaultOn?}` (references to the registry by name); the auto-seed marker `project.mcp.remoteSeeded` (ADR-125) is kept — a server-side default the user turned off does not come back |
 | POST | `/api/v2/projects/:id/publish` | core | auth | Local project → server (hybrid) |
+| GET | `/api/v2/projects/:id/publish/progress` | core | auth | Publish progress for UI polling: `{active, phase, percent, sessions, files, startedAt, updatedAt, error}` (see the block below) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Server project → the local world (hybrid) |
 
 > **Hybrid and the project journal (PROP-054).** The journal was moved out of the project detail, so the transfer between worlds goes through the paged endpoint:
@@ -779,6 +782,30 @@ replica can continue an upload — the `blobs` volume must be shared.
 > An old server without `/import-batch` (404/405) — switch once to the per-session
 > `POST /api/v2/sessions/import` **from the current chunk** for this and all subsequent levels
 > (hybrid compatibility).
+
+> **Publish progress — `GET /api/v2/projects/:id/publish/progress` (core, auth).**
+> The UI polls it every 600 ms while `POST /:id/publish` is running (no new event channel is
+> introduced — invariant 6). Snapshots live in `remote/transfer-progress.ts`
+> (`TransferProgressRegistry`): **in-memory**, key `userId:projectId`, TTL **10 minutes**;
+> the response carries counters only — no paths, file names or secrets.
+>
+> | Field | Value |
+> |---|---|
+> | `active` | `true` while the transfer is running |
+> | `phase` | `idle` \| `project` \| `sessions` \| `files` \| `done` \| `error` |
+> | `percent` | integer 0..100, monotonic (never decreases) |
+> | `sessions` | `{done, total}` — sessions |
+> | `files` | `{done, total, bytesDone, bytesTotal}` — files |
+> | `startedAt` / `updatedAt` | an ISO string or `null` |
+> | `error` | a short text for `phase:"error"`, otherwise `null` |
+>
+> **Percent.** Both phases non-empty — sessions 50 % (by count) + files 50 % (by bytes; no
+> bytes — by count); one phase non-empty — its share is 100 %; both empty — 0 %, and the
+> `done` finish sets 100 %. Success — `active:false, phase:"done", percent:100`; failure —
+> `active:false, phase:"error"` + `error`. **Never published / unknown project / another
+> user** — `{active:false, phase:"idle", percent:0}`, counters `0`, `startedAt`/`updatedAt:
+> null`. A `remote:` id → `400 VALIDATION_ERROR`. Polling an old core (no endpoint, 404) —
+> the UI shows no progress.
 
 > **The project list — paged and summarized (owner decision, a breaking change).** `GET /api/v2/projects` returns a **page** `{projects, total, offset, limit, next_offset}` (an array is no longer returned — backward compatibility is not supported) and a **summary** of the project: the heavy fields `log` (the project log) and `plan` (ADR-039) are not returned by the list — in a list they would multiply the response size. The full DTO is in the detail `GET /api/v2/projects/:id` (there `plan` stays, while `log` is **moved out** to the paged endpoint `GET /api/v2/projects/:id/log` — PROP-054). The other detail fields (name, icon, color, members, workspace, repositories, the MCP scope, the memory policy, the status messages, `current_task`, `invariants`) are kept in the summary.
 > **List pagination.** `total` — the number of visible projects; `next_offset` — the cursor of the next page (`offset + page.length`), `null` — the last page. A non-numeric/fractional/negative `limit`/`offset` → `400 VALIDATION_ERROR`; a `limit` above 500 is clamped to 500.

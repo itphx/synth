@@ -42,7 +42,7 @@ const EXPECTED_API_METHODS = [
   'getProcessLogs', 'getProject', 'getProjectInvariants', 'getProjectLogPage', 'getProjectMcp',
   'getProjectPipeline', 'getProjectPipelines', 'getProjectPipelinesPage', 'getProjectPlan', 'getProjectSkills',
   'getProjectStats', 'getProjects', 'getProjectsPage', 'getProtectedPaths', 'getProviders', 'getProxy',
-  'getRequestLimits', 'getRestartStatus', 'getScheduleJobs', 'getSchedules', 'getSecurityAudit', 'getSecuritySettings',
+  'getPublishProgress', 'getRequestLimits', 'getRestartStatus', 'getScheduleJobs', 'getSchedules', 'getSecurityAudit', 'getSecuritySettings',
   'getServiceKey', 'getServiceKeyScopes', 'getServiceKeys', 'getSession', 'getSessionInstructions',
   'getSessionMcpEffective', 'getSessionMemory', 'getSessionMessage', 'getSessionMessages', 'getSessionPrompt',
   'getSessionReferences', 'getSessionSecrets', 'getSessionSkills', 'getSessionSkillsEffective', 'getSessionStats',

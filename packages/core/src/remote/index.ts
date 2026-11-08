@@ -37,4 +37,19 @@ export {
   EXCLUDED_DIRS,
 } from './transfer.js';
 export type { SyncProjectToRemoteOptions, ForkProjectToLocalOptions, TransferStats } from './transfer.js';
+export {
+  TransferProgressRegistry,
+  computeTransferPercent,
+  emptyTransferProgress,
+  sanitizeTransferError,
+  transferProgressKey,
+  TRANSFER_PROGRESS_TTL_MS,
+} from './transfer-progress.js';
+export type {
+  TransferProgress,
+  TransferPhase,
+  TransferProgressPatch,
+  TransferPercentInput,
+  TransferProgressRegistryOptions,
+} from './transfer-progress.js';
 export type { RemoteConfig } from '@itphx/synth-shared';

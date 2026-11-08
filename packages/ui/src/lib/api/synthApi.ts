@@ -65,6 +65,8 @@ export type {
   ProjectListPage,
   ProjectStats,
   PublishProjectResult,
+  PublishProgress,
+  PublishProgressPhase,
   ProjectMcpResponse,
 } from './projects'
 // PROP-054: точечные операции с планом, журналом и инвариантами проекта.

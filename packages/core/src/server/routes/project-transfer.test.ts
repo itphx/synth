@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
+import type { User } from '@itphx/synth-shared';
 import { createProjectTransferRoutes } from './project-transfer.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import { FileStore } from '../../storage/file-store.js';
@@ -29,7 +30,12 @@ vi.mock('../../remote/transfer.js', async (importOriginal) => {
 
 function createMockAuth(): AuthKit {
   return {
-    getCurrentUser: () => null,
+    // Пользователь задаётся заголовком `x-test-user` (по умолчанию — `local`):
+    // нужно для проверки, что прогресс виден только публиковавшему.
+    getCurrentUser: (c: Context) => {
+      const id = c.req.header('x-test-user');
+      return (id ? { id, username: id, roles: [] } : null) as unknown as User | null;
+    },
     requireAuth: async (_c: Context, next: Next) => { await next(); },
   } as unknown as AuthKit;
 }
@@ -253,6 +259,86 @@ describe('Project transfer routes (publish / fork-local)', () => {
       });
       expect(res.status).toBe(400);
       expect(forkProjectToLocal).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /:id/publish/progress', () => {
+    it('до публикации — idle', async () => {
+      const app = createApp(true);
+      const project = store.create('IdleProj', 'local', { workspace: 'idle-proj' });
+      await store.save(project);
+
+      const res = await app.request(`/api/v2/projects/${project.id}/publish/progress`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        active: false,
+        phase: 'idle',
+        percent: 0,
+        sessions: { done: 0, total: 0 },
+        files: { done: 0, total: 0, bytesDone: 0, bytesTotal: 0 },
+      });
+    });
+
+    it('после публикации — done/100; чужой пользователь видит idle (ключ по userId)', async () => {
+      const app = createApp(true);
+      const project = store.create('DoneProj', 'local', { workspace: 'done-proj' });
+      await store.save(project);
+      await mkdir(join(workspacesRoot, 'done-proj'), { recursive: true });
+
+      const publish = await app.request(`/api/v2/projects/${project.id}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-test-user': 'u1' },
+        body: JSON.stringify({}),
+      });
+      expect(publish.status).toBe(201);
+
+      const own = await app.request(`/api/v2/projects/${project.id}/publish/progress`, {
+        headers: { 'x-test-user': 'u1' },
+      });
+      expect(own.status).toBe(200);
+      expect(await own.json()).toMatchObject({
+        active: false,
+        phase: 'done',
+        percent: 100,
+        error: null,
+      });
+
+      const foreign = await app.request(`/api/v2/projects/${project.id}/publish/progress`, {
+        headers: { 'x-test-user': 'u2' },
+      });
+      expect(await foreign.json()).toMatchObject({ active: false, phase: 'idle', percent: 0 });
+
+      // Без заголовка — локальный пользователь (`local`): для u1 он чужой.
+      const local = await app.request(`/api/v2/projects/${project.id}/publish/progress`);
+      expect(await local.json()).toMatchObject({ active: false, phase: 'idle' });
+    });
+
+    it('ошибка публикации — phase:"error" с кратким текстом', async () => {
+      const app = createApp(true);
+      const project = store.create('ErrProj', 'local', { workspace: 'err-proj' });
+      await store.save(project);
+      await mkdir(join(workspacesRoot, 'err-proj'), { recursive: true });
+      vi.mocked(syncProjectToRemote).mockRejectedValueOnce(new Error('сервер недоступен\n    at stack'));
+
+      const publish = await app.request(`/api/v2/projects/${project.id}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(publish.status).toBe(500);
+
+      const res = await app.request(`/api/v2/projects/${project.id}/publish/progress`);
+      expect(await res.json()).toMatchObject({
+        active: false,
+        phase: 'error',
+        error: 'сервер недоступен',
+      });
+    });
+
+    it('400 для удалённого проекта', async () => {
+      const app = createApp(true);
+      const res = await app.request('/api/v2/projects/remote:abc/publish/progress');
+      expect(res.status).toBe(400);
     });
   });
 });

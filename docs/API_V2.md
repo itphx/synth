@@ -929,6 +929,7 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 | GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Проектный MCP-скоуп (ADR-071 §2.4): `{enabled, defaultOn, knownServers, sources?}`; `enabled[]` — hard-gate (недоступно и в старых сессиях, в т.ч. для системных серверов), `defaultOn[]` — сид новых сессий. `sources` (ADR-125) — источник каждого известного сервера: `Record<name, 'local'\|'server'>` (бейдж «серверный» в UI); поле аддитивное, при отсутствии источник неизвестен |
 | PUT | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Задать `{enabled?, defaultOn?}` (ссылки на реестр по имени); маркер авто-сида `project.mcp.remoteSeeded` (ADR-125) сохраняется — выключенный пользователем серверный дефолт не возвращается |
 | POST | `/api/v2/projects/:id/publish` | core | auth | Локальный проект → сервер (гибрид) |
+| GET | `/api/v2/projects/:id/publish/progress` | core | auth | Прогресс публикации для опроса UI: `{active, phase, percent, sessions, files, startedAt, updatedAt, error}` (см. блок ниже) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Серверный проект → локальный мир (гибрид) |
 
 > **Гибрид и журнал проекта (PROP-054).** Журнал вынесен из детали проекта, поэтому
@@ -956,6 +957,30 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 > из тела вырезается, чтобы цепочка A→B→C не уехала чужим id. Старый сервер без
 > `/import-batch` (404/405) — один раз переключаемся на поштучный `POST /api/v2/sessions/import`
 > **с текущего чанка** для этого и всех последующих уровней (совместимость гибрида).
+
+> **Прогресс публикации — `GET /api/v2/projects/:id/publish/progress` (core, auth).**
+> UI опрашивает его каждые 600 мс, пока идёт `POST /:id/publish` (нового канала событий
+> не вводим — инвариант 6). Снапшоты — `remote/transfer-progress.ts`
+> (`TransferProgressRegistry`): **in-memory**, ключ `userId:projectId`, TTL **10 минут**;
+> в ответе только счётчики — без путей, имён файлов и секретов.
+>
+> | Поле | Значение |
+> |---|---|
+> | `active` | `true`, пока идёт перенос |
+> | `phase` | `idle` \| `project` \| `sessions` \| `files` \| `done` \| `error` |
+> | `percent` | целое 0..100, монотонно (не убывает) |
+> | `sessions` | `{done, total}` — сессии |
+> | `files` | `{done, total, bytesDone, bytesTotal}` — файлы |
+> | `startedAt` / `updatedAt` | ISO-строка или `null` |
+> | `error` | краткий текст при `phase:"error"`, иначе `null` |
+>
+> **Процент.** Обе фазы непусты — сессии 50 % (по количеству) + файлы 50 % (по байтам;
+> если байтов нет — по количеству); непуста одна фаза — её доля = 100 %; обе пусты —
+> 0 %, на финише `done` ставит 100 %. Успех — `active:false, phase:"done", percent:100`;
+> ошибка — `active:false, phase:"error"` + `error`. **Не публиковали / неизвестный проект /
+> чужой пользователь** — `{active:false, phase:"idle", percent:0}`, счётчики `0`,
+> `startedAt`/`updatedAt: null`. `remote:`-id → `400 VALIDATION_ERROR`. Опрос старого core
+> (эндпоинта нет, 404) — UI прогресс не показывает.
 
 ### 5.8.2 План, журнал и инварианты проекта (оба, PROP-054)
 

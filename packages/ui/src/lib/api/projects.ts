@@ -131,6 +131,92 @@ export interface PublishProjectResult {
   files_uploaded: number
 }
 
+// --- Прогресс публикации проекта (GET /projects/:id/publish/progress) ---
+//
+// Публикация может идти минутами, поэтому сервер отдаёт снимок прогресса:
+// процент = сессии 50% (по количеству) + файлы 50% (по байтам).
+
+/** Фаза публикации: `project` → `sessions` → `files` → `done`, ошибка — `error`. */
+export type PublishProgressPhase = 'idle' | 'project' | 'sessions' | 'files' | 'done' | 'error'
+
+/** Снимок прогресса публикации проекта. */
+export interface PublishProgress {
+  active: boolean
+  phase: PublishProgressPhase
+  /** Общий процент 0…100. */
+  percent: number
+  sessions: { done: number; total: number }
+  files: { done: number; total: number; bytesDone: number; bytesTotal: number }
+  startedAt: string | null
+  updatedAt: string | null
+  error: string | null
+}
+
+const PUBLISH_PROGRESS_PHASES: readonly PublishProgressPhase[] = [
+  'idle',
+  'project',
+  'sessions',
+  'files',
+  'done',
+  'error',
+]
+
+/** Пустой (нейтральный) снимок прогресса — для сброса и битого ответа. */
+export function emptyPublishProgress(): PublishProgress {
+  return {
+    active: false,
+    phase: 'idle',
+    percent: 0,
+    sessions: { done: 0, total: 0 },
+    files: { done: 0, total: 0, bytesDone: 0, bytesTotal: 0 },
+    startedAt: null,
+    updatedAt: null,
+    error: null,
+  }
+}
+
+function nonNegativeInt(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
+  return Math.floor(value)
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+/**
+ * Defensive-нормализация ответа `/publish/progress`: битое/отсутствующее поле
+ * не должно ломать диалог (старое ядро, неполный payload) — получаем нейтральный
+ * снимок, а не исключение.
+ */
+export function normalizePublishProgress(raw: unknown): PublishProgress {
+  const empty = emptyPublishProgress()
+  if (!raw || typeof raw !== 'object') return empty
+  const r = raw as Record<string, unknown>
+  const sessions = (r.sessions && typeof r.sessions === 'object' ? r.sessions : {}) as Record<string, unknown>
+  const files = (r.files && typeof r.files === 'object' ? r.files : {}) as Record<string, unknown>
+  const phase =
+    typeof r.phase === 'string' && (PUBLISH_PROGRESS_PHASES as readonly string[]).includes(r.phase)
+      ? (r.phase as PublishProgressPhase)
+      : 'idle'
+  const rawPercent = typeof r.percent === 'number' && Number.isFinite(r.percent) ? r.percent : 0
+  return {
+    active: r.active === true,
+    phase,
+    percent: Math.min(100, Math.max(0, Math.round(rawPercent))),
+    sessions: { done: nonNegativeInt(sessions.done), total: nonNegativeInt(sessions.total) },
+    files: {
+      done: nonNegativeInt(files.done),
+      total: nonNegativeInt(files.total),
+      bytesDone: nonNegativeInt(files.bytesDone),
+      bytesTotal: nonNegativeInt(files.bytesTotal),
+    },
+    startedAt: nullableString(r.startedAt),
+    updatedAt: nullableString(r.updatedAt),
+    error: nullableString(r.error),
+  }
+}
+
 /** ADR-071 §2.4: ответ GET/PUT /projects/:id/mcp — проектный MCP-скоуп. */
 export interface ProjectMcpResponse {
   enabled: string[]
@@ -378,6 +464,19 @@ export const projectsApi = {
       method: 'POST',
       body: JSON.stringify(opts || {}),
     })
+  },
+
+  /**
+   * GET /projects/:id/publish/progress — снимок прогресса публикации.
+   *
+   * Бросает при сетевой/HTTP-ошибке (диалог гасит ошибку молча — старое ядро
+   * без маршрута отвечает `404`), тело нормализуется defensive-функцией.
+   */
+  async getPublishProgress(id: string): Promise<PublishProgress> {
+    const raw = await fetchJSON<unknown>(
+      `${BASE_URL}/projects/${encodeURIComponent(id)}/publish/progress`,
+    )
+    return normalizePublishProgress(raw)
   },
 
   async forkRemoteProject(id: string, opts?: { local_name?: string }): Promise<ProjectData> {
