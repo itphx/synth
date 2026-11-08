@@ -72,6 +72,61 @@ function sanitizeMessageNullBytes(message: Message): Message {
 }
 
 /**
+ * Терминальный статус сообщения-хода (ADR-118 §5): после него шаг не меняется
+ * (`streaming` уже не «живой»).
+ */
+function isTerminalMessageStatus(status: Message['status']): boolean {
+  return status === 'completed' || status === 'cancelled' || status === 'error';
+}
+
+/**
+ * id вызовов инструментов шага: `toolCalls` плюс `metadata.tool_results`
+ * (результаты дописываются в то же сообщение при стриминге). Дубликаты
+ * схлопываются — один и тот же вызов может быть в обоих местах.
+ */
+function stepToolCallIds(message: Message): string[] {
+  const ids = new Set<string>();
+  for (const call of message.toolCalls ?? []) {
+    const id = (call as { id?: unknown } | null)?.id;
+    if (typeof id === 'string' && id) ids.add(id);
+  }
+  const results = message.metadata?.tool_results;
+  if (Array.isArray(results)) {
+    for (const entry of results) {
+      const id = (entry as { id?: unknown } | null)?.id;
+      if (typeof id === 'string' && id) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * id tool-сообщений, идущих **после** шага `index`: пара ищется только вперёд
+ * (tool обязан идти после своего assistant(tool_calls) в OpenAI-совместимой
+ * истории).
+ */
+function laterToolMessageIds(messages: Message[], index: number): Set<string> {
+  const ids = new Set<string>();
+  for (let j = index + 1; j < messages.length; j++) {
+    const candidate = messages[j]!;
+    if (candidate.role === MessageRole.TOOL && candidate.toolCallId) ids.add(candidate.toolCallId);
+  }
+  return ids;
+}
+
+/**
+ * Терминальный статус «застрявшего» шага: `completed`, если у **каждого**
+ * вызова есть последующее tool-сообщение с его id, иначе `cancelled`
+ * (пары нет — результат не пришёл, шаг прерван).
+ */
+function terminalStatusForStep(messages: Message[], index: number): 'completed' | 'cancelled' {
+  const callIds = stepToolCallIds(messages[index]!);
+  if (callIds.length === 0) return 'cancelled';
+  const laterIds = laterToolMessageIds(messages, index);
+  return callIds.every((id) => laterIds.has(id)) ? 'completed' : 'cancelled';
+}
+
+/**
  * Лёгкая проекция «свои сессии» (паритет с `listForUser`): владелец задан в
  * `userId`/`ownerIds`. Применяется к лёгкому списку (`listLight`), где сообщения
  * не нужны.
@@ -537,7 +592,11 @@ export class SessionManager {
 
     for (const listed of sessions) {
       const streamStale = !!listed.currentStream && listed.currentStream.owner !== this.instanceId;
-      const blockedStale = !!listed.status.blocked && listed.status.blockedOwner !== this.instanceId;
+      // `blockedOwner` без `blocked` — тоже сирота: маркер сняли, владельца
+      // забыли (сейчас чинится в местах снятия, старые записи — здесь).
+      const blockedStale =
+        (!!listed.status.blocked || !!listed.status.blockedOwner) &&
+        listed.status.blockedOwner !== this.instanceId;
       if (!streamStale && !blockedStale) continue;
 
       let turnId: string | undefined;
@@ -552,7 +611,9 @@ export class SessionManager {
           // Перепроверяем под локом: за время обхода список мог устареть, а
           // ход — смениться (в т.ч. на собственный).
           const staleStream = !!session.currentStream && session.currentStream.owner !== this.instanceId;
-          const staleBlocked = !!session.status.blocked && session.status.blockedOwner !== this.instanceId;
+          const staleBlocked =
+            (!!session.status.blocked || !!session.status.blockedOwner) &&
+            session.status.blockedOwner !== this.instanceId;
           if (!staleStream && !staleBlocked) {
             ownLiveStream = !!session.currentStream;
             pendingLeft = session.pendingMessages.length;
@@ -757,6 +818,10 @@ export class SessionManager {
    *
    * - `metadata.streaming === true` → `streaming:false`, `interrupted:true`,
    *   `metadata.status='error'` (частичный текст остаётся в истории);
+   * - сообщение-черновик (`status==='streaming'` либо `metadata.streaming`)
+   *   получает **терминальный** `status`: `completed`, если у каждого вызова
+   *   есть последующее tool-сообщение, иначе `cancelled` (см.
+   *   `terminalStatusForStep`); уже терминальный статус не перетирается;
    * - assistant с `toolCalls`, для которого хотя бы у одного `id` нет
    *   последующего tool-сообщения с этим `toolCallId`, помечается
    *   `disabled:true` + `metadata.interrupted:true` — `sessionMessagesToLlm`
@@ -770,7 +835,11 @@ export class SessionManager {
     return this.withLock(sessionId, async (session) => {
       let changed = 0;
 
-      for (const message of session.messages) {
+      for (let i = 0; i < session.messages.length; i++) {
+        const message = session.messages[i]!;
+        const isDraft = message.metadata?.streaming === true || message.status === 'streaming';
+        if (!isDraft) continue;
+        let touched = false;
         if (message.metadata?.streaming === true) {
           message.metadata = {
             ...message.metadata,
@@ -778,8 +847,15 @@ export class SessionManager {
             interrupted: true,
             status: 'error',
           };
-          changed++;
+          touched = true;
         }
+        // `message.status` — то, что читает UI (индикатор хода): без
+        // терминального статуса запись выглядит «живой» бесконечно.
+        if (!isTerminalMessageStatus(message.status)) {
+          message.status = terminalStatusForStep(session.messages, i);
+          touched = true;
+        }
+        if (touched) changed++;
       }
 
       for (let i = 0; i < session.messages.length; i++) {
@@ -794,13 +870,7 @@ export class SessionManager {
 
         // Пары ищем только среди последующих tool-сообщений: tool обязан идти
         // после своего assistant(tool_calls) в OpenAI-совместимой истории.
-        const laterToolIds = new Set<string>();
-        for (let j = i + 1; j < session.messages.length; j++) {
-          const candidate = session.messages[j]!;
-          if (candidate.role === MessageRole.TOOL && candidate.toolCallId) {
-            laterToolIds.add(candidate.toolCallId);
-          }
-        }
+        const laterToolIds = laterToolMessageIds(session.messages, i);
 
         const hasOrphan = callIds.some((id) => !laterToolIds.has(id));
         if (!hasOrphan) continue;
@@ -816,6 +886,63 @@ export class SessionManager {
         await this.store.save(session);
       }
       return changed;
+    });
+  }
+
+  /**
+   * Безопасный ремонт «застрявших» шагов **при чтении** истории.
+   *
+   * Зачем: после гонки (рестарт/смена процесса/неудачная финализация) в
+   * истории может остаться assistant-сообщение с `status: 'streaming'` (или
+   * `metadata.streaming === true`), хотя хода давно нет; UI принимает такую
+   * запись за живой ход (индикатор «идёт», кнопка «Стоп», лента «прилипает»
+   * к концу).
+   *
+   * Почему это безопасно:
+   * - при наличии `currentStream` метод **ничего не делает** — шаг может быть
+   *   ещё живым (чужие маркеры разбирает `recoverInterruptedSessions`);
+   * - статус выставляется только если он не терминальный (уже
+   *   `completed`/`cancelled`/`error` не перетираются);
+   * - метод идемпотентен и пишет сессию **только при изменениях**;
+   * - в отличие от `recoverStreamingMessages` он не помечает `disabled`
+   *   осиротевшие `tool_calls` и не трогает `metadata.status`: ремонт идёт в
+   *   тёплом состоянии (чтение истории), а не после stale lock.
+   */
+  async repairStaleStreamingMessages(
+    sessionId: string,
+  ): Promise<{ changed: number; session: Session | null }> {
+    return this.withLock(sessionId, async (session) => {
+      // Активный шаг (любой owner, в т.ч. чужой) — не наш случай.
+      if (session.currentStream) return { changed: 0, session };
+
+      let changed = 0;
+      for (let i = 0; i < session.messages.length; i++) {
+        const message = session.messages[i]!;
+        if (message.role !== MessageRole.ASSISTANT) continue;
+        const isDraft = message.status === 'streaming' || message.metadata?.streaming === true;
+        if (!isDraft) continue;
+
+        let touched = false;
+        if (!isTerminalMessageStatus(message.status)) {
+          // Шаг не финализирован: терминальный статус по наличию пар
+          // tool-вызовов + снятый признак стрима.
+          message.status = terminalStatusForStep(session.messages, i);
+          message.metadata = { ...(message.metadata ?? {}), streaming: false, interrupted: true };
+          touched = true;
+        } else if (message.metadata?.streaming === true) {
+          // Статус уже терминальный — не перетираем, но признак «стрим»
+          // снимаем (иначе UI и хук чтения видят живой шаг).
+          message.metadata = { ...message.metadata, streaming: false, interrupted: true };
+          touched = true;
+        }
+        if (touched) changed++;
+      }
+
+      if (changed > 0) {
+        session.updatedAt = nowISO();
+        await this.store.save(session);
+      }
+      return { changed, session };
     });
   }
 

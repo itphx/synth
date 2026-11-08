@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,7 +36,7 @@ describe('SessionManager.recoverStreamingMessages (шаг 2б)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('помечает streaming-сообщения прерванными', async () => {
+  it('помечает streaming-сообщения прерванными и финализирует статус', async () => {
     const session = await manager.createSession({ title: 'Recovery' });
     await manager.appendMessage(session.id, message({
       role: MessageRole.ASSISTANT,
@@ -54,7 +54,53 @@ describe('SessionManager.recoverStreamingMessages (шаг 2б)', () => {
       interrupted: true,
       status: 'error',
     });
+    // Тулов нет — терминальный статус `cancelled` (а не «живой» streaming).
+    expect(assistant.status).toBe('cancelled');
     expect(assistant.content).toBe('частичный ответ');
+  });
+
+  it('tool_results с парным tool-сообщением → completed', async () => {
+    const session = await manager.createSession({ title: 'Recovery tool results' });
+    await manager.appendMessage(session.id, message({
+      role: MessageRole.ASSISTANT,
+      content: 'шаг с инструментом',
+      metadata: { stream_id: 's1', streaming: true, tool_results: [{ id: 'call_1', name: 'read_file' }] },
+    }));
+    await manager.appendMessage(session.id, message({
+      role: MessageRole.TOOL,
+      content: 'результат',
+      toolCallId: 'call_1',
+    }));
+
+    const changed = await manager.recoverStreamingMessages(session.id);
+    expect(changed).toBe(1);
+
+    const stored = (await manager.getSession(session.id))!;
+    const assistant = stored.messages[0]!;
+    expect(assistant.status).toBe('completed');
+    expect(assistant.metadata?.streaming).toBe(false);
+    expect(assistant.metadata?.interrupted).toBe(true);
+  });
+
+  it('status=streaming без metadata.streaming → терминальный статус', async () => {
+    const session = await manager.createSession({ title: 'Recovery status only' });
+    await manager.appendMessage(session.id, message({
+      role: MessageRole.ASSISTANT,
+      content: 'черновик шага',
+      status: 'streaming',
+      metadata: { stream_id: 's1', tool_results: [{ id: 'call_1', name: 'read_file' }] },
+    }));
+    await manager.appendMessage(session.id, message({
+      role: MessageRole.TOOL,
+      content: 'результат',
+      toolCallId: 'call_1',
+    }));
+
+    const changed = await manager.recoverStreamingMessages(session.id);
+    expect(changed).toBe(1);
+
+    const stored = (await manager.getSession(session.id))!;
+    expect(stored.messages[0]!.status).toBe('completed');
   });
 
   it('отключает assistant(tool_calls) без пары, парные не трогает', async () => {
@@ -107,6 +153,111 @@ describe('SessionManager.recoverStreamingMessages (шаг 2б)', () => {
     expect(changed).toBe(0);
     expect(after.updatedAt).toBe(before.updatedAt);
     expect(after.messages).toEqual(before.messages);
+  });
+});
+
+describe('SessionManager.repairStaleStreamingMessages (ремонт при чтении)', () => {
+  let manager: SessionManager;
+  let store: FileStore;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-repair-streaming-'));
+    store = new FileStore({ dataDir: tmpDir });
+    manager = new SessionManager(store, { instanceId: 'owner-current' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** «Настоящая» застрявшая запись: status=streaming + tool_results + парный tool. */
+  async function stuckSession(): Promise<string> {
+    const created = await manager.createSession({ title: 'Stuck' });
+    await manager.appendMessage(created.id, message({
+      role: MessageRole.ASSISTANT,
+      content: 'черновик шага',
+      status: 'streaming',
+      metadata: { stream_id: 's1', tool_results: [{ id: 'call_1', name: 'read_file' }] },
+    }));
+    await manager.appendMessage(created.id, message({
+      role: MessageRole.TOOL,
+      content: 'результат',
+      toolCallId: 'call_1',
+    }));
+    return created.id;
+  }
+
+  it('финализирует застрявший шаг и снимает metadata.streaming', async () => {
+    const id = await stuckSession();
+
+    const result = await manager.repairStaleStreamingMessages(id);
+    expect(result.changed).toBeGreaterThan(0);
+    expect(result.session).not.toBeNull();
+
+    const stored = (await manager.getSession(id))!;
+    expect(stored.messages[0]!.status).toBe('completed');
+    expect(stored.messages[0]!.metadata?.streaming).toBe(false);
+    expect(stored.messages[0]!.metadata?.interrupted).toBe(true);
+    // `disabled` и `metadata.status` ремонт при чтении не ставит.
+    expect(stored.messages[0]!.disabled).toBe(false);
+    expect(stored.messages[0]!.metadata?.status).toBeUndefined();
+  });
+
+  it('идемпотентен: повтор не меняет сессию', async () => {
+    const id = await stuckSession();
+    await manager.repairStaleStreamingMessages(id);
+    const before = (await manager.getSession(id))!;
+
+    const saveSpy = vi.spyOn(store, 'save');
+    const again = await manager.repairStaleStreamingMessages(id);
+    const after = (await manager.getSession(id))!;
+
+    expect(again.changed).toBe(0);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.messages).toEqual(before.messages);
+    expect(saveSpy).not.toHaveBeenCalled();
+    saveSpy.mockRestore();
+  });
+
+  it('при активном currentStream ничего не меняет и не пишет', async () => {
+    const id = await stuckSession();
+    const session = (await manager.getSession(id))!;
+    session.currentStream = {
+      streamId: 's1',
+      message: 'запрос',
+      startedAt: nowISO(),
+      cancelled: false,
+    };
+    await manager.saveSession(session);
+    const before = (await manager.getSession(id))!;
+
+    const saveSpy = vi.spyOn(store, 'save');
+    const result = await manager.repairStaleStreamingMessages(id);
+    const after = (await manager.getSession(id))!;
+
+    expect(result.changed).toBe(0);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.messages[0]!.status).toBe('streaming');
+    expect(after.messages[0]!.metadata?.streaming).toBeUndefined();
+    expect(saveSpy).not.toHaveBeenCalled();
+    saveSpy.mockRestore();
+  });
+
+  it('чистая сессия: changed === 0, записи нет', async () => {
+    const created = await manager.createSession({ title: 'Clean repair' });
+    await manager.appendMessage(created.id, message({
+      role: MessageRole.ASSISTANT,
+      content: 'готовый ответ',
+      status: 'completed',
+      metadata: { stream_id: 's1' },
+    }));
+
+    const saveSpy = vi.spyOn(store, 'save');
+    const result = await manager.repairStaleStreamingMessages(created.id);
+    expect(result.changed).toBe(0);
+    expect(saveSpy).not.toHaveBeenCalled();
+    saveSpy.mockRestore();
   });
 });
 
@@ -202,6 +353,21 @@ describe('SessionManager.recoverInterruptedSessions (маркеры прошлы
     const stored = (await manager.getSession(created.id))!;
     expect(stored.status.blocked).toBeUndefined();
     expect(stored.status.blockedAt).toBeUndefined();
+    expect(stored.status.blockedOwner).toBeUndefined();
+  });
+
+  it('сирота blockedOwner без blocked: маркер снят', async () => {
+    const created = await manager.createSession({ title: 'Orphan owner' });
+    const session = (await manager.getSession(created.id))!;
+    session.status.blockedOwner = 'owner-dead';
+    // Прямая запись в хранилище — в обход проставления owner.
+    await store.save(session);
+
+    const recovered = await manager.recoverInterruptedSessions();
+    expect(recovered).toEqual([{ sessionId: created.id, pendingLeft: 0 }]);
+
+    const stored = (await manager.getSession(created.id))!;
+    expect(stored.status.blocked).toBeUndefined();
     expect(stored.status.blockedOwner).toBeUndefined();
   });
 

@@ -2508,12 +2508,24 @@ export function createSessionRoutes(
         throw err;
       }
     }
-    const session = await sessionManager.getSession(id);
+    let session = await sessionManager.getSession(id);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     const messagesDenied = serviceProjectProjection(c, session.projectId);
     if (messagesDenied) return messagesDenied;
+    // История могла остаться с незафинализированным шагом (`status: 'streaming'`):
+    // UI принимает такое сообщение за живой ход (индикатор «идёт», «Стоп»,
+    // запись «прилипает» к концу ленты). Ремонт — только при отсутствии активного
+    // стрима, идемпотентно; сбой не должен ломать чтение.
+    if (!session.currentStream && session.messages.some(
+      (m) => m.role === MessageRole.ASSISTANT && (m.status === 'streaming' || m.metadata?.streaming === true),
+    )) {
+      try {
+        const repaired = await sessionManager.repairStaleStreamingMessages(session.id);
+        if (repaired.session) session = repaired.session;
+      } catch { /* best-effort */ }
+    }
     // ADR-036: тот же носитель секретов, что и в `GET /:id` — право раскрытия
     // то же (решается в одной точке — `resolveCanRevealSecrets`).
     const canReveal = await resolveCanRevealSecrets(c, session);

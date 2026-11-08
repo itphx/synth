@@ -273,6 +273,7 @@ export function createQueueRoutes(
       if (remainingCount === 0) {
         s.status.blocked = undefined;
         s.status.blockedAt = undefined;
+        s.status.blockedOwner = undefined;
         s.currentStream = undefined;
         // Очередь сброшена — состояние ретрая (повтор) тоже неактуально.
         s.retry = undefined;

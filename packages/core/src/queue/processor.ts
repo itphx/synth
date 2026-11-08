@@ -292,6 +292,7 @@ export class QueueProcessor {
       // Очередь НЕ чистится: «Стоп» останавливает только активный ход.
       s.status.blocked = undefined;
       s.status.blockedAt = undefined;
+      s.status.blockedOwner = undefined;
       s.status.cancelRequested = undefined;
       s.status.cancelRequestedAt = undefined;
       s.currentStream = undefined;
@@ -353,6 +354,7 @@ export class QueueProcessor {
       if (active) this._removeProcessed(s, active);
       s.status.blocked = undefined;
       s.status.blockedAt = undefined;
+      s.status.blockedOwner = undefined;
       s.currentStream = undefined;
       // Ретраи отменены — состояние ретрая снимается (иначе DTO сессии
       // продолжал бы показывать «повтор» при отменённых ретраях).
@@ -674,6 +676,7 @@ export class QueueProcessor {
               }
               s.status.blocked = undefined;
               s.status.blockedAt = undefined;
+              s.status.blockedOwner = undefined;
               s.currentStream = undefined;
               // Терминальная ошибка — повторов не будет: состояние ретрая снимается.
               s.retry = undefined;
@@ -736,6 +739,7 @@ export class QueueProcessor {
           }
           s.status.blocked = undefined;
           s.status.blockedAt = undefined;
+          s.status.blockedOwner = undefined;
           s.currentStream = undefined;
           // Ход завершился успехом — состояние ретрая неактуально.
           s.retry = undefined;
@@ -765,6 +769,7 @@ export class QueueProcessor {
             }
             s.status.blocked = undefined;
             s.status.blockedAt = undefined;
+            s.status.blockedOwner = undefined;
             s.currentStream = undefined;
             // Полная очистка — состояние ретрая тоже.
             s.retry = undefined;
