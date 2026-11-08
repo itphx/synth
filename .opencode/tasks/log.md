@@ -356,6 +356,20 @@
 - **Проверка:** core build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; core targeted 56 passed; UI targeted 69 passed (hybridStore/sessionsStore/projectsStore/authStore/banner/LoginForm); UI build OK. Полные прогоны от исполнителя: UI 3775 passed; core 583 passed, 2 падения вне правки (`git-proxy-env` из-за `no_proxy` в окружении, транзиентный `app.proxy`).
 - **Коммит:** не делался (рабочее дерево содержит и параллельные правки других сессий). Для проверки в UI нужен перезапуск dev (`./scripts/dev.sh`) — запущенный core работает на старом `dist`.
 
+## 2026-11-08 — Кнопка «Рабочая область» в шапке и better-interface review панелей/модалки
+
+- **Задача:** добавить кнопку открытия `WorkModal` на верхнюю панель (иконку забрать у «Вид и плотность чата», старой кнопке — новую) и пройтись по правой панели/модальному окну скиллом `better-interface`. **Тип:** feature + UI polish.
+- **Шапка:** desktop/mobile кнопка `header-work-modal` с иконкой `layout-masonry` (открывает `WorkModal` → «Доска»); у `ChatViewControls` иконка заменена на `menu`; обе кнопки — 24px на desktop, 36–40px на mobile, focus-visible ring.
+- **Найдено и исправлено (better-interface):**
+  - HIGH Accessibility: удаление пункта ToDo и «очистить выполненные» выполнялись без подтверждения — добавлен `confirm` (панель) и `askConfirm` (модалка) с явным последствием.
+  - MEDIUM Accessibility: icon-only кнопки work-компонентов и шапки были <24px — приведены к `h-6 w-6` + `focus-visible:ring`.
+  - MEDIUM Layout: 5 вкладок `WorkModal` обрезались на 320px (`До…`, `Жу…`) — `Tabs` получил `wrap`, вкладки переносятся 3+2, подписи видны.
+  - MEDIUM Typography: текстовые инпуты work-компонентов были 12px на mobile (iOS zoom) — `text-base sm:text-xs`.
+  - MEDIUM UI/Function: дубликаты колонок плана нельзя было удалить из UI — в `PlanBoard` добавлено удаление колонки (с подтверждением и удалением её пунктов), `WorkModal` вызывает точечный API.
+  - MEDIUM Writing/Recovery: 409 `PLAN_VERSION_CONFLICT` показывал общую ошибку — теперь явно «план изменился» + перечитывание плана.
+- **Проверка:** UI typecheck — 0 ошибок; lint — 0 ошибок (28 прежних warnings); полный UI vitest — 365 файлов / 3777 тестов; UI build OK; Playwright 1600×1000 и 320×800 (шапка, все вкладки модалки, правая панель). 200% zoom и полный keyboard-walk не прогонялись — помечено как Not verified.
+- **Коммит:** `2c0b06fd` (`feat(ui): рабочая область из шапки и better-interface правки панелей/модалки`).
+
 ## 2026-11-08 — Застрявший `streaming`-шаг: фантомная активность и «отключённый вызов» в конце ленты
 
 - **Задача:** по дампу сессии `mw586del-78p-ck12sfn1` разобрать два симптома: (1) в сессии «идёт активность», кнопка «Стоп» ничего не останавливает; (2) в конце диалога постоянно виден отключённый вызов инструмента (пропадает во время стрима, потом возвращается). **Тип:** bug fix (core + ui). **Исполнители:** `@fixer` ×2 (параллельно).
