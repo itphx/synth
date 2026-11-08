@@ -275,10 +275,13 @@
 - **Инпуты на mobile — 16px.** Текстовые поля work-компонентов используют
   `text-base sm:text-xs` (iOS Safari не зумит страницу при фокусе); вкладки
   `WorkModal` переносятся (`Tabs wrap`), а не обрезаются на 320 px.
-- **Drag-image карточки плана.** Фон/рамка карточки — на внутреннем слое,
-  `draggable`-элемент без фона; призрак рисуется на canvas со скруглёнными
-  прозрачными углами (`setRoundedDragImage`), нативный прямоугольный снимок не
-  используется.
+- **Перетаскивание карточки плана — pointer-drag, не HTML5 DnD.** Хук
+  `usePlanCardDrag` (`components/panels/work/usePlanCardDrag.ts`): drag после
+  порога 5 px, preview — точный DOM-клон карточки (`position: fixed`,
+  `pointer-events: none`, `aria-hidden`), нативного drag-image нет; drop —
+  `elementFromPoint` + `[data-plan-column-id]`; Esc/pointercancel отменяют;
+  клик после drag подавляется. Touch не перехватывается (ADR-044 — меню
+  «Переместить»). В `PlanBoard` нет `draggable`/`dragstart`/`drop`.
 - **Статистика** — отдельная карточка по центру (`max-w-sm`, рамка/фон), чтобы
   подпись и значение не разъезжались на широком модальном окне.
 - i18n — `work.plan.*`, `work.todo.*`, `work.invariants.*`, `work.journal.*`,

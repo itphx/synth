@@ -1,4 +1,25 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
+
+// React регистрирует pointer-события только при наличии PointerEvent в окружении.
+vi.hoisted(() => {
+  const g = globalThis as unknown as { PointerEvent?: unknown; MouseEvent: typeof MouseEvent }
+  if (typeof g.PointerEvent === 'undefined') {
+    class PointerEventPolyfill extends MouseEvent {
+      readonly pointerId: number
+      readonly pointerType: string
+      constructor(type: string, init: MouseEventInit & { pointerId?: number; pointerType?: string } = {}) {
+        super(type, { ...init, bubbles: true, cancelable: true })
+        this.pointerId = init.pointerId ?? 1
+        this.pointerType = init.pointerType ?? 'mouse'
+      }
+    }
+    g.PointerEvent = PointerEventPolyfill
+    if (typeof window !== 'undefined') {
+      ;(window as unknown as { PointerEvent?: unknown }).PointerEvent = PointerEventPolyfill
+    }
+  }
+})
+
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
@@ -65,23 +86,22 @@ const PLAN = {
   ],
 }
 
-/** Минимальный `DataTransfer` для jsdom (настоящего нет). */
-function fakeDataTransfer() {
-  const store = new Map<string, string>()
-  return {
-    effectAllowed: '',
-    setData: (key: string, value: string) => {
-      store.set(key, value)
-    },
-    getData: (key: string) => store.get(key) ?? '',
+type PointerInit = MouseEventInit & { pointerId?: number; pointerType?: string }
+
+/** PointerEvent для jsdom (нативного конструктора нет). */
+class PointerEventStub extends MouseEvent {
+  readonly pointerId: number
+  readonly pointerType: string
+
+  constructor(type: string, init: PointerInit = {}) {
+    super(type, { ...init, bubbles: true, cancelable: true })
+    this.pointerId = init.pointerId ?? 1
+    this.pointerType = init.pointerType ?? 'mouse'
   }
 }
 
-/** Событие drag/drop с подставленным `dataTransfer`. */
-function dragEvent(type: string, dataTransfer: ReturnType<typeof fakeDataTransfer>): Event {
-  const event = new Event(type, { bubbles: true, cancelable: true })
-  Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
-  return event
+function pointerEvent(type: string, init: PointerInit = {}): PointerEvent {
+  return new PointerEventStub(type, init) as unknown as PointerEvent
 }
 
 describe('PlanBoard: kanban-доска плана', () => {
@@ -116,29 +136,48 @@ describe('PlanBoard: kanban-доска плана', () => {
     expect(onMoveItem).toHaveBeenCalledWith('item-1', 'col-doing')
   })
 
-  it('native HTML5 drag & drop: перетаскивание карточки в колонку', async () => {
+  it('pointer-drag: карточка перетаскивается в колонку', async () => {
     const onMoveItem = vi.fn()
     const container = await render(<PlanBoard plan={PLAN} onMoveItem={onMoveItem} testId="board" />)
     const card = container.querySelector('[data-testid="board-item-item-1"]') as HTMLElement
     const target = container.querySelector('[data-testid="board-column-col-doing"]') as HTMLElement
-    const dataTransfer = fakeDataTransfer()
-
-    await act(async () => {
-      card.dispatchEvent(dragEvent('dragstart', dataTransfer))
-    })
-    expect(dataTransfer.getData('text/plain')).toBe('item-1')
-
-    await act(async () => {
-      target.dispatchEvent(dragEvent('dragover', dataTransfer))
-      target.dispatchEvent(dragEvent('drop', dataTransfer))
-    })
-    expect(onMoveItem).toHaveBeenCalledWith('item-1', 'col-doing')
+    // jsdom не реализует elementFromPoint — подменяем «под курсором» целью.
+    const originalElementFromPoint = document.elementFromPoint
+    document.elementFromPoint = () => target
+    try {
+      await act(async () => {
+        card.dispatchEvent(pointerEvent('pointerdown', { clientX: 10, clientY: 10, pointerId: 1 }))
+      })
+      await act(async () => {
+        window.dispatchEvent(pointerEvent('pointermove', { clientX: 40, clientY: 40, pointerId: 1 }))
+      })
+      await act(async () => {
+        window.dispatchEvent(pointerEvent('pointermove', { clientX: 80, clientY: 80, pointerId: 1 }))
+      })
+      // Призрак — императивный клон в body с aria-hidden.
+      expect(document.body.querySelector('[aria-hidden="true"]')).not.toBeNull()
+      await act(async () => {
+        window.dispatchEvent(pointerEvent('pointerup', { clientX: 80, clientY: 80, pointerId: 1 }))
+      })
+      expect(document.body.querySelector('[aria-hidden="true"]')).toBeNull()
+      expect(onMoveItem).toHaveBeenCalledWith('item-1', 'col-doing')
+    } finally {
+      document.elementFromPoint = originalElementFromPoint
+    }
   })
 
   it('read-only: карточки не перетаскиваются, действий нет', async () => {
-    const container = await render(<PlanBoard plan={PLAN} readOnly testId="board" />)
+    const onMoveItem = vi.fn()
+    const container = await render(
+      <PlanBoard plan={PLAN} readOnly onMoveItem={onMoveItem} testId="board" />,
+    )
     const card = container.querySelector('[data-testid="board-item-item-1"]') as HTMLElement
-    expect(card.getAttribute('draggable')).toBe('false')
+    await act(async () => {
+      card.dispatchEvent(pointerEvent('pointerdown', { clientX: 10, clientY: 10, pointerId: 1 }))
+      window.dispatchEvent(pointerEvent('pointermove', { clientX: 80, clientY: 80, pointerId: 1 }))
+      window.dispatchEvent(pointerEvent('pointerup', { clientX: 80, clientY: 80, pointerId: 1 }))
+    })
+    expect(onMoveItem).not.toHaveBeenCalled()
     expect(container.querySelector('[data-testid="board-item-item-1-move"]')).toBeNull()
   })
 

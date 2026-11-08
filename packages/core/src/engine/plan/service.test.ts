@@ -127,6 +127,30 @@ describe('PlanService', () => {
     expect(after.columns.find((c) => c.id === 'backlog')).toBeUndefined();
   });
 
+  it('add_column не создаёт дубликат стандартной колонки (RU/EN-синонимы)', async () => {
+    await expect(service.addColumn(projectId, { name: 'Backlog' }))
+      .rejects.toBeInstanceOf(PlanValidationError);
+    await expect(service.addColumn(projectId, { name: 'To Do' }))
+      .rejects.toBeInstanceOf(PlanValidationError);
+    await expect(service.addColumn(projectId, { name: 'В работе' }))
+      .rejects.toBeInstanceOf(PlanValidationError);
+
+    // Произвольная колонка создаётся, но её дубль (в другом регистре) — нет.
+    const plan = await service.addColumn(projectId, { name: 'Архив' });
+    expect(plan.columns.some((column) => column.name === 'Архив')).toBe(true);
+    await expect(service.addColumn(projectId, { name: 'архив' }))
+      .rejects.toBeInstanceOf(PlanValidationError);
+  });
+
+  it('update_column не переименовывает колонку в существующую', async () => {
+    const plan = await service.addColumn(projectId, { name: 'Архив' });
+    const archive = plan.columns.find((column) => column.name === 'Архив')!;
+    await expect(service.updateColumn(projectId, 'backlog', { name: archive.name }))
+      .rejects.toBeInstanceOf(PlanValidationError);
+    await expect(service.updateColumn(projectId, archive.id, { name: 'Готово' }))
+      .rejects.toBeInstanceOf(PlanValidationError);
+  });
+
   it('неизвестный пункт — PlanItemNotFoundError', async () => {
     await expect(service.updateItem(projectId, 'nope', { title: 'x' }))
       .rejects.toBeInstanceOf(PlanItemNotFoundError);

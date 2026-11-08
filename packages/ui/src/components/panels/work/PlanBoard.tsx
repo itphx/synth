@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Icon } from '@/components/icon/Icon'
 import { MarkdownText } from './MarkdownText'
 import { WORK_PRIORITY_CLASSES, WORK_PRIORITY_LABEL_KEYS } from './labels'
+import { usePlanCardDrag } from './usePlanCardDrag'
 
 export interface PlanBoardProps {
   /** План проекта (`null` — плана нет). */
@@ -13,11 +14,11 @@ export interface PlanBoardProps {
   /** Только чтение: карточки не перетаскиваются, действия скрыты. */
   readOnly?: boolean
   /**
-   * Разрешить drag & drop (нативный HTML5).
+   * Разрешить перетаскивание карточек (Pointer Events).
    *
-   * На тач-устройствах DnD отключён (ADR-044) — перемещение через меню
-   * (кнопка «Переместить» на карточке). По умолчанию DnD включён, а выключать
-   * его должен вызывающий (он знает про указатель).
+   * На тач-устройствах drag отключён (ADR-044) — перемещение через меню
+   * (кнопка «Переместить» на карточке); хук сам пропускает touch. По умолчанию
+   * drag включён, а выключать его должен вызывающий (он знает про права).
    */
   dragEnabled?: boolean
   /** Пункт перемещён в колонку. */
@@ -47,9 +48,11 @@ function itemsOfColumn(items: PlanItem[], columnId: string): PlanItem[] {
 
 /**
  * Kanban-доска плана (PROP-054): колонки горизонтально, карточки перетаскиваются
- * нативным HTML5 DnD, на тач-устройствах перемещение — через меню.
+ * на Pointer Events через `usePlanCardDrag` (preview — точный DOM-клон карточки;
+ * нативного drag-image с прямоугольными углами нет). На тач-устройствах
+ * перемещение — через меню «Переместить» (ADR-044).
  *
- * Новых зависимостей нет: DnD — нативные `draggable`/`dragover`/`drop`.
+ * Новых зависимостей нет.
  */
 export function PlanBoard({
   plan,
@@ -71,6 +74,11 @@ export function PlanBoard({
   const [columnNameDraft, setColumnNameDraft] = useState('')
   const [quickAddColumn, setQuickAddColumn] = useState<string | null>(null)
   const [quickTitle, setQuickTitle] = useState('')
+  const { onPointerDown, draggingCardId } = usePlanCardDrag({
+    enabled: dragEnabled && !readOnly,
+    onColumnChange: setDragOverColumn,
+    onDrop: (itemId, columnId) => onMoveItem?.(itemId, columnId),
+  })
 
   const columns = [...(plan?.columns ?? [])].sort((a, b) => a.order - b.order)
   const items = plan?.items ?? []
@@ -105,7 +113,11 @@ export function PlanBoard({
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-2" data-testid={testId ?? 'plan-board'}>
+    <div
+      className="flex min-w-0 flex-col gap-2"
+      data-testid={testId ?? 'plan-board'}
+      onPointerDown={onPointerDown}
+    >
       <div
         className="flex min-w-0 gap-2 overflow-x-auto pb-1"
         data-testid={testId ? `${testId}-columns` : 'plan-board-columns'}
@@ -120,22 +132,8 @@ export function PlanBoard({
                 'flex w-60 min-w-[15rem] shrink-0 flex-col gap-1.5 rounded-lg border border-border/60 bg-surface-inset p-2',
                 dragOverColumn === column.id && 'border-primary',
               )}
+              data-plan-column-id={column.id}
               data-testid={testId ? `${testId}-column-${column.id}` : `plan-board-column-${column.id}`}
-              onDragOver={(e) => {
-                if (!dragEnabled || readOnly) return
-                e.preventDefault()
-                setDragOverColumn(column.id)
-              }}
-              onDragLeave={() => {
-                if (dragOverColumn === column.id) setDragOverColumn(null)
-              }}
-              onDrop={(e) => {
-                if (!dragEnabled || readOnly) return
-                e.preventDefault()
-                setDragOverColumn(null)
-                const itemId = e.dataTransfer.getData('text/plain')
-                if (itemId) onMoveItem?.(itemId, column.id)
-              }}
             >
               <header className="flex min-w-0 items-center gap-1.5">
                 {renamingColumn === column.id ? (
@@ -202,14 +200,14 @@ export function PlanBoard({
                 {columnItems.map((item) => (
                   <article
                     key={item.id}
-                    draggable={dragEnabled && !readOnly}
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData('text/plain', item.id)
-                      e.dataTransfer.effectAllowed = 'move'
-                    }}
-                    className="group flex min-w-0 flex-col gap-1 rounded-md border border-border/60 bg-input px-2 py-1.5"
+                    data-plan-card-id={item.id}
+                    className={cn(
+                      'group min-w-0 select-none',
+                      draggingCardId === item.id && 'opacity-40',
+                    )}
                     data-testid={testId ? `${testId}-item-${item.id}` : `plan-board-item-${item.id}`}
                   >
+                    <div className="flex min-w-0 flex-col gap-1 rounded-md border border-border/60 bg-input px-2 py-1.5">
                     <div className="flex min-w-0 items-start gap-1.5">
                       <span className="min-w-0 flex-1 break-words text-xs text-foreground">{item.title}</span>
                       <span
@@ -295,6 +293,7 @@ export function PlanBoard({
                         ))}
                       </div>
                     )}
+                    </div>
                   </article>
                 ))}
               </div>

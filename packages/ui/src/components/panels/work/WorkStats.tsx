@@ -122,7 +122,8 @@ export function WorkStats({
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-3" data-testid={testId ?? 'work-stats'}>
+    <div className="flex w-full justify-center" data-testid={testId ?? 'work-stats'}>
+      <div className="flex w-full max-w-sm min-w-0 flex-col gap-3 rounded-xl border border-border bg-surface-inset p-4">
       <StatSection title={t('work.stats.plan')} testId="work-stats-plan">
         <StatRow
           label={t('work.stats.total')}
@@ -200,6 +201,7 @@ export function WorkStats({
           ))}
         </div>
       </StatSection>
+      </div>
     </div>
   )
 }

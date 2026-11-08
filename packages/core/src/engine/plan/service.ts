@@ -98,6 +98,50 @@ export const PLAN_ITEM_TITLE_MAX = 500;
 /** Предел длины имени колонки. */
 export const PLAN_COLUMN_NAME_MAX = 100;
 
+/**
+ * Синонимы имён стандартных колонок (RU/EN). Нужны, чтобы `add_column` не
+ * создавал второй «Backlog» рядом с «Бэклог» и второй «To Do» рядом с
+ * «К выполнению» — именно так в старых планах появлялись дубликаты.
+ */
+const DEFAULT_COLUMN_ALIASES: Record<string, readonly string[]> = {
+  backlog: ['backlog', 'бэклог'],
+  todo: ['todo', 'to do', 'к выполнению'],
+  in_progress: ['in progress', 'в работе'],
+  done: ['done', 'готово'],
+};
+
+/** Нормализованное имя колонки (регистр/лишние пробелы не важны). */
+function normalizeColumnName(name: string): string {
+  return name.trim().toLocaleLowerCase('ru').replace(/\s+/g, ' ');
+}
+
+/** Каноническая стандартная колонка по имени/синониму (`null` — не стандартная). */
+function defaultColumnKey(name: string): string | null {
+  const normalized = normalizeColumnName(name);
+  for (const [key, aliases] of Object.entries(DEFAULT_COLUMN_ALIASES)) {
+    if (aliases.includes(normalized)) return key;
+  }
+  return null;
+}
+
+/**
+ * Найти колонку-дубликат по имени или синониму стандартной колонки.
+ * `exceptId` — не считать саму колонку при переименовании.
+ */
+function findDuplicateColumn(
+  plan: ProjectPlan,
+  name: string,
+  exceptId?: string,
+): PlanColumn | undefined {
+  const normalized = normalizeColumnName(name);
+  const key = defaultColumnKey(name);
+  return plan.columns.find((column) => {
+    if (column.id === exceptId) return false;
+    if (normalizeColumnName(column.name) === normalized) return true;
+    return key !== null && defaultColumnKey(column.name) === key;
+  });
+}
+
 /** Ввод: создание пункта плана. */
 export interface PlanItemCreateInput {
   title: string;
@@ -352,6 +396,12 @@ export class PlanService {
       throw new PlanValidationError(`Column name exceeds ${PLAN_COLUMN_NAME_MAX} characters`);
     }
     return this._mutate(projectId, (plan) => {
+      const duplicate = findDuplicateColumn(plan, name);
+      if (duplicate) {
+        throw new PlanValidationError(
+          `Column "${name}" already exists (id: ${duplicate.id}, name: ${duplicate.name})`,
+        );
+      }
       const column: PlanColumn = {
         id: randomUUID(),
         name,
@@ -377,7 +427,16 @@ export class PlanService {
     return this._mutate(projectId, (plan) => {
       const column = plan.columns.find((c) => c.id === columnId);
       if (!column) throw new PlanColumnNotFoundError(columnId);
-      if (patch.name !== undefined) column.name = patch.name.trim();
+      if (patch.name !== undefined) {
+        const name = patch.name.trim();
+        const duplicate = findDuplicateColumn(plan, name, columnId);
+        if (duplicate) {
+          throw new PlanValidationError(
+            `Column "${name}" already exists (id: ${duplicate.id}, name: ${duplicate.name})`,
+          );
+        }
+        column.name = name;
+      }
       if (patch.wipLimit !== undefined) column.wipLimit = patch.wipLimit;
     });
   }
