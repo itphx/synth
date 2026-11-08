@@ -273,12 +273,13 @@ export function createProjectRoutes(
       }
       return c.json({ projects: merged, total, offset, limit, next_offset });
     } catch (err) {
-      // Offline-деградация: сервер недоступен — отдаём локальный мир.
+      // Offline-деградация: сервер недоступен — отдаём локальный мир с
+      // аддитивным признаком `remote_offline` (ADR-123).
       if (err instanceof RemoteError) {
         console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
         const { page, total, next_offset } = paginate(projects, offset, limit);
         const localDto = page.map(serializeProjectSummary);
-        return c.json({ projects: localDto, total, offset, limit, next_offset });
+        return c.json({ projects: localDto, total, offset, limit, next_offset, remote_offline: true });
       }
       throw err;
     }

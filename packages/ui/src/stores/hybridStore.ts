@@ -14,17 +14,26 @@ interface HybridStore {
   backendUrl: string | null
   user: HybridUser | null
   loading: boolean
+  /**
+   * Удалённая сторона деградировала по факту ответа списка (`remote_offline`):
+   * сервер мог ответить «локальным миром», хотя статус гибрида ещё не обновился.
+   * Сбрасывается успешным `loadStatus` с `connected === true`.
+   */
+  remoteDegraded: boolean
   /** Timestamp последней успешной/попытки проверки статуса (для кеша loadStatus). */
   lastCheckedAt: number | null
 
   loadStatus: () => Promise<void>
+  /** Отметить/снять offline-деградацию удалённой стороны (из списков). */
+  markRemoteDegraded: (value: boolean) => void
   startPolling: (intervalMs?: number) => void
   stopPolling: () => void
 }
 
 /** Гибрид включён, но backend недоступен — удалённые сущности неактивны. */
-export const selectIsOffline = (s: Pick<HybridStore, 'enabled' | 'connected'>): boolean =>
-  s.enabled && !s.connected
+export const selectIsOffline = (
+  s: Pick<HybridStore, 'enabled' | 'connected'> & { remoteDegraded?: boolean },
+): boolean => (s.enabled && !s.connected) || s.remoteDegraded === true
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -37,6 +46,7 @@ export const useHybridStore = create<HybridStore>((set, get) => ({
   backendUrl: null,
   user: null,
   loading: false,
+  remoteDegraded: false,
   lastCheckedAt: null,
 
   // GET /api/v2/hybrid/status (без auth). Ошибка → гибрид выключен (сброс).
@@ -57,11 +67,19 @@ export const useHybridStore = create<HybridStore>((set, get) => ({
         backendUrl: status.backendUrl ?? null,
         user: status.user ?? null,
         loading: false,
+        // Успешный статус с живым подключением снимает деградацию, отмеченную
+        // списками (`remote_offline`): причина исчезла.
+        ...(status.connected ? { remoteDegraded: false } : {}),
       })
     } catch {
       // Эндпоинт недоступен (сервер без hybrid-роута) — считаем, что гибрид выключен.
       set({ enabled: false, connected: false, backendUrl: null, user: null, loading: false })
     }
+  },
+
+  markRemoteDegraded: (value: boolean) => {
+    if (get().remoteDegraded === value) return
+    set({ remoteDegraded: value })
   },
 
   startPolling: (intervalMs = 30_000) => {

@@ -90,6 +90,11 @@ export interface ProjectListPage {
   offset: number
   limit: number
   next_offset: number | null
+  /**
+   * Аддитивный признак offline-деградации гибрида (ADR-123): удалённая сторона
+   * недоступна, в странице только локальный мир. Отсутствует в обычных ответах.
+   */
+  remote_offline?: boolean
 }
 
 /**

@@ -23,7 +23,7 @@ describe('hybridStore', () => {
     vi.useFakeTimers()
     vi.clearAllMocks()
     useHybridStore.getState().stopPolling()
-    useHybridStore.setState({ enabled: false, connected: false, backendUrl: null, user: null, loading: false, lastCheckedAt: null })
+    useHybridStore.setState({ enabled: false, connected: false, backendUrl: null, user: null, loading: false, lastCheckedAt: null, remoteDegraded: false })
   })
 
   afterEach(() => {
@@ -126,5 +126,37 @@ describe('hybridStore', () => {
     expect(selectIsOffline({ ...s, enabled: true, connected: false })).toBe(true)
     expect(selectIsOffline({ ...s, enabled: true, connected: true })).toBe(false)
     expect(selectIsOffline({ ...s, enabled: false, connected: false })).toBe(false)
+  })
+
+  it('selectIsOffline учитывает remoteDegraded (списки ответили remote_offline)', () => {
+    const s = useHybridStore.getState()
+    expect(selectIsOffline({ ...s, enabled: true, connected: true, remoteDegraded: true })).toBe(true)
+    expect(selectIsOffline({ ...s, enabled: true, connected: false, remoteDegraded: false })).toBe(true)
+    expect(selectIsOffline({ ...s, enabled: false, connected: false, remoteDegraded: false })).toBe(false)
+  })
+
+  it('markRemoteDegraded: ставит и снимает флаг', () => {
+    useHybridStore.getState().markRemoteDegraded(true)
+    expect(useHybridStore.getState().remoteDegraded).toBe(true)
+    useHybridStore.getState().markRemoteDegraded(false)
+    expect(useHybridStore.getState().remoteDegraded).toBe(false)
+  })
+
+  it('loadStatus с connected=true снимает remoteDegraded', async () => {
+    useHybridStore.setState({ remoteDegraded: true })
+    vi.mocked(synthApi.getHybridStatus).mockResolvedValue(ENABLED_CONNECTED)
+
+    await useHybridStore.getState().loadStatus()
+
+    expect(useHybridStore.getState().remoteDegraded).toBe(false)
+  })
+
+  it('loadStatus без подключения не сбрасывает remoteDegraded', async () => {
+    useHybridStore.setState({ remoteDegraded: true })
+    vi.mocked(synthApi.getHybridStatus).mockResolvedValue({ enabled: true, connected: false, backendUrl: 'https://backend.example', user: null, serverConfigured: true, serverLoginAvailable: true })
+
+    await useHybridStore.getState().loadStatus()
+
+    expect(useHybridStore.getState().remoteDegraded).toBe(true)
   })
 })

@@ -215,14 +215,15 @@ export class RemoteConnection {
         : null;
 
     let res: Response;
+    const timeoutMs = this.deps.timeoutMs ?? DEFAULT_OIDC_META_TIMEOUT_MS;
     try {
       res = await egressFetch(`${base}/auth/oidc-meta`, {
-        signal: AbortSignal.timeout(this.deps.timeoutMs ?? DEFAULT_OIDC_META_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       // ADR-099: показываем реальную причину транспорта (TLS/DNS/отказ/таймаут),
       // иначе `fetch failed` не подсказывает, что чинить.
-      const detail = describeTransportError(err);
+      const detail = describeTransportError(err, { timeoutMs });
       const target = serverForLog(base);
       if (fallback) {
         console.warn(`[hybrid] OIDC-дискавери ${target} не удался${detail} — fallback на deps.default*`);

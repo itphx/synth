@@ -38,6 +38,7 @@ export const LoginForm = () => {
   const loginWithPassword = useAuthStore(s => s.loginWithPassword)
   const isLoading = useAuthStore(s => s.isLoading)
   const error = useAuthStore(s => s.error)
+  const errorCode = useAuthStore(s => s.errorCode)
   const clearError = useAuthStore(s => s.clearError)
   // Возможности сервера берём из стора: их заполняет reauthenticate() из GET /auth/status.
   // AuthGate рендерит LoginForm только после isInitialized, поэтому первый кадр формы
@@ -121,8 +122,8 @@ export const LoginForm = () => {
     }
   }, [deployment, oidcEnabled])
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  /** Отправка формы: общая точка для submit и кнопки «Повторить» (офлайн-блок). */
+  const submit = async () => {
     clearError()
     if (oidcEnabled) {
       // В гибриде поле «Сервер» всегда видно (предзаполнено lastServer/
@@ -133,6 +134,15 @@ export const LoginForm = () => {
       await login(apiKey, username || undefined)
     }
   }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await submit()
+  }
+
+  // Сервер недоступен (сеть/таймаут) — отдельный блок с подсказкой и повтором:
+  // это не «неверный пароль», и текст ошибки без причины не помогает.
+  const serverUnreachable = error != null && errorCode === 'OFFLINE'
 
   // Фоллбек для браузеров без отчёта о клавиатуре: резерв нижней половины
   // экрана и прокрутка формы вниз. Режим запоминаем до размонтирования —
@@ -441,7 +451,32 @@ export const LoginForm = () => {
             </>
           )}
 
-          {error && (
+          {serverUnreachable ? (
+            <div
+              data-testid="login-server-unreachable"
+              className="flex flex-col gap-2 p-3 rounded-lg bg-status-warning/10 text-status-warning text-sm"
+            >
+              <div className="flex items-center gap-2">
+                <Icon name="error-warning" className="size-4 shrink-0" />
+                <span className="font-medium">{t('login.serverUnreachable')}</span>
+              </div>
+              <div className="text-xs break-words opacity-90">{error}</div>
+              <div className="text-xs opacity-80">{t('login.serverUnreachableHint')}</div>
+              <button
+                type="button"
+                onClick={() => void submit()}
+                disabled={isLoading}
+                className={cn(
+                  'self-start px-3 py-1.5 rounded-md text-xs font-medium',
+                  'bg-status-warning/20 hover:bg-status-warning/30',
+                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                  'transition-colors'
+                )}
+              >
+                {t('login.retry')}
+              </button>
+            </div>
+          ) : error && (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
               <Icon name="error-warning" className="size-4 shrink-0" />
               {error}

@@ -42,6 +42,7 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 vi.mock('@/lib/confirm', () => ({ confirm: vi.fn(async () => true) }))
 
 import { useProjectsStore } from './projectsStore'
+import { useHybridStore } from './hybridStore'
 
 function project(id: string): ProjectData {
   return {
@@ -140,5 +141,39 @@ describe('projectsStore — пагинация списка проектов', (
     const state = useProjectsStore.getState()
     expect(state.projects.map((p) => p.id)).toEqual(['p2'])
     expect(state.nextOffset).toBe(1)
+  })
+})
+
+describe('projectsStore: offline-деградация гибрида (remote_offline)', () => {
+  beforeEach(() => {
+    mocks.getProjectsPage.mockReset()
+    useHybridStore.setState({ remoteDegraded: false })
+  })
+
+  it('remote_offline не затирает ранее загруженные remote-проекты, stale=true', async () => {
+    const remoteProject: ProjectData = { ...project('remote:p1'), origin: 'remote' }
+    useProjectsStore.setState({ projects: [remoteProject], total: 1, stale: false })
+    mocks.getProjectsPage.mockResolvedValue({ ...page([]), remote_offline: true })
+
+    await useProjectsStore.getState().loadProjects()
+
+    const s = useProjectsStore.getState()
+    expect(s.projects.map((p) => p.id)).toEqual(['remote:p1'])
+    expect(s.total).toBe(1)
+    expect(s.stale).toBe(true)
+    expect(useHybridStore.getState().remoteDegraded).toBe(true)
+  })
+
+  it('обычный ответ принимается, stale=false и флаг деградации снят', async () => {
+    useHybridStore.setState({ remoteDegraded: true })
+    useProjectsStore.setState({ projects: [project('old')], stale: true })
+    mocks.getProjectsPage.mockResolvedValue(page([project('new')]))
+
+    await useProjectsStore.getState().loadProjects()
+
+    const s = useProjectsStore.getState()
+    expect(s.projects.map((p) => p.id)).toEqual(['new'])
+    expect(s.stale).toBe(false)
+    expect(useHybridStore.getState().remoteDegraded).toBe(false)
   })
 })

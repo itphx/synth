@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { ProjectData, GitRepoConfigData, EntityOrigin, PublishProjectResult } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
 import { useSessionsStore } from './sessionsStore'
+import { useHybridStore } from './hybridStore'
 import { i18nText } from '@/lib/i18n/text'
 import { confirm } from '@/lib/confirm'
 
@@ -22,6 +23,12 @@ interface ProjectsStore {
   nextOffset: number | null
   /** Идёт ли догрузка следующей страницы (`loadMoreProjects`). */
   loadingMore: boolean
+  /**
+   * Список показан по данным до потери связи (offline-деградация гибрида):
+   * сервер ответил локальным миром (`remote_offline`), ранее загруженные
+   * удалённые проекты сохранены.
+   */
+  stale: boolean
 
   loadProjects: () => Promise<void>
   /** Догрузить следующую страницу списка проектов (кнопка «Показать ещё»). */
@@ -86,22 +93,48 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   total: 0,
   nextOffset: null,
   loadingMore: false,
+  stale: false,
 
   loadProjects: async () => {
     set({ loading: true, error: null })
     try {
       // Список проектов пагинирован: грузим **первую** страницу.
       const page = await synthApi.getProjectsPage({ limit: PROJECTS_PAGE_LIMIT })
-      set((s) => ({
-        // Сводка не затирает уже загруженную деталь (план) — см. `mergeProjectSummary`.
-        projects: (page.projects ?? []).map((incoming) => {
-          const existing = s.projects.find((p) => p.id === incoming.id)
-          return mergeProjectSummary(existing, incoming)
-        }),
-        total: typeof page.total === 'number' ? page.total : (page.projects?.length ?? 0),
-        nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
-        loading: false,
-      }))
+      const remoteOffline = page.remote_offline === true
+      useHybridStore.getState().markRemoteDegraded(remoteOffline)
+      const incoming = page.projects ?? []
+      set((s) => {
+        if (!remoteOffline) {
+          return {
+            // Сводка не затирает уже загруженную деталь (план) — см. `mergeProjectSummary`.
+            projects: incoming.map((item) => {
+              const existing = s.projects.find((p) => p.id === item.id)
+              return mergeProjectSummary(existing, item)
+            }),
+            total: typeof page.total === 'number' ? page.total : incoming.length,
+            nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
+            loading: false,
+            stale: false,
+          }
+        }
+        // Offline-деградация: сервер отдал только локальный мир. Ранее
+        // загруженные удалённые проекты не затираем.
+        const hadRemote = s.projects.some((p) => p.origin === 'remote')
+        const hasRemote = incoming.some((p) => p.origin === 'remote')
+        if (hadRemote && !hasRemote) {
+          return { loading: false, stale: true }
+        }
+        return {
+          projects: incoming.map((item) => {
+            const existing = s.projects.find((p) => p.id === item.id)
+            return mergeProjectSummary(existing, item)
+          }),
+          total: typeof page.total === 'number' ? page.total : incoming.length,
+          nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
+          loading: false,
+          stale: true,
+        }
+      })
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
     }

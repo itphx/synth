@@ -6,6 +6,7 @@ import { loadRoutingDefaults, routingDefaultsToSettings } from '@/lib/routingDef
 import { useUIStore } from './useUIStore'
 import { useChatStore } from './chatStore'
 import { isTransportConnected } from './transportStore'
+import { useHybridStore } from './hybridStore'
 import { i18nText } from '@/lib/i18n/text'
 import { confirm } from '@/lib/confirm'
 
@@ -29,6 +30,12 @@ interface SessionsStore {
   loadingMore: boolean
   /** Фильтр проекта, под которым загружен список (`null` — без проекта). */
   listProjectId: string | null
+  /**
+   * Список показан по данным до потери связи (offline-деградация гибрида):
+   * сервер ответил локальным миром (`remote_offline`), удалённая часть
+   * недоступна — ранее загруженные удалённые сессии сохранены.
+   */
+  stale: boolean
 
   loadSessions: (projectId?: string | null) => Promise<void>
   /** Догрузить следующую страницу списка сессий (кнопка «Показать ещё»). */
@@ -98,6 +105,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   nextOffset: null,
   loadingMore: false,
   listProjectId: null,
+  stale: false,
 
   loadSessions: async (projectId?) => {
     set({ loading: true, error: null })
@@ -107,12 +115,35 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
         project_id: projectId ?? undefined,
         limit: SESSIONS_PAGE_LIMIT,
       })
-      set({
-        sessions: page.sessions ?? [],
-        total: typeof page.total === 'number' ? page.total : (page.sessions?.length ?? 0),
-        nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
-        listProjectId: projectId ?? null,
-        loading: false,
+      const remoteOffline = page.remote_offline === true
+      useHybridStore.getState().markRemoteDegraded(remoteOffline)
+      const incoming = page.sessions ?? []
+      set((s) => {
+        if (!remoteOffline) {
+          return {
+            sessions: incoming,
+            total: typeof page.total === 'number' ? page.total : incoming.length,
+            nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
+            listProjectId: projectId ?? null,
+            loading: false,
+            stale: false,
+          }
+        }
+        // Offline-деградация: сервер отдал только локальный мир. Ранее
+        // загруженный удалённый список не затираем — иначе «все сессии пропали».
+        const hadRemote = s.sessions.some((sess) => sess.origin === 'remote')
+        const hasRemote = incoming.some((sess) => sess.origin === 'remote')
+        if (hadRemote && !hasRemote) {
+          return { listProjectId: projectId ?? null, loading: false, stale: true }
+        }
+        return {
+          sessions: incoming,
+          total: typeof page.total === 'number' ? page.total : incoming.length,
+          nextOffset: typeof page.next_offset === 'number' ? page.next_offset : null,
+          listProjectId: projectId ?? null,
+          loading: false,
+          stale: true,
+        }
       })
     } catch (e) {
       set({ error: (e as Error).message, loading: false })

@@ -130,6 +130,8 @@ interface AuthState {
   isLoading: boolean
   isInitialized: boolean
   error: string | null
+  /** Машинный код последней ошибки входа (`OFFLINE`, `UNAUTHORIZED`, …). */
+  errorCode: string | null
   /** Фаза гейта входа (источник истины для `AuthGate`). */
   authPhase: AuthPhase
   /** Тип развёртывания сервера ('standalone'|'managed') — runtime-детекция. */
@@ -161,6 +163,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isLoading: false,
   isInitialized: false,
   error: null,
+  errorCode: null,
   authPhase: 'checking',
   deployment: null,
   oidcEnabled: false,
@@ -238,7 +241,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   login: async (apiKey: string, username?: string) => {
-    set({ isLoading: true, error: null })
+    set({ isLoading: true, error: null, errorCode: null })
     try {
       const response = await api.spaLogin({ api_key: apiKey, username })
       set({
@@ -254,6 +257,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : 'Login failed',
+        errorCode: (err as { code?: string }).code ?? null,
         isLoading: false,
         isInitialized: true,
         authPhase: 'guest',
@@ -262,7 +266,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loginWithPassword: async (server: string, username: string, password: string) => {
-    set({ isLoading: true, error: null })
+    set({ isLoading: true, error: null, errorCode: null })
     try {
       const response = await api.loginWithPassword(server, username, password)
       // Обычный runtime-вход: личность приходит с сервера сразу (без перезапуска
@@ -280,6 +284,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : 'Login failed',
+        errorCode: (err as { code?: string }).code ?? null,
         isLoading: false,
         isInitialized: true,
         authPhase: 'guest',
@@ -327,7 +332,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: null, profile: null, isAuthenticated: false, isLoading: false, authPhase: 'guest' })
   },
 
-  clearError: () => set({ error: null }),
+  clearError: () => set({ error: null, errorCode: null }),
 }))
 
 /** Сброс модульных таймеров автоповтора (тесты). */

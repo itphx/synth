@@ -849,7 +849,9 @@ export function createSessionRoutes(
    * Страница списка сессий: `{sessions, total, offset, limit, next_offset}`.
    *
    * - `total` — число видимых сессий (после фильтра видимости и `project_id`);
-   * - `next_offset` — курсор следующей страницы (`null`, если страница последняя).
+   * - `next_offset` — курсор следующей страницы (`null`, если страница последняя);
+   * - `remote_offline` — аддитивный признак offline-деградации гибрида: удалённая
+   *   сторона недоступна, в странице только локальный мир (ADR-123).
    */
   const listPage = <T>(
     sessions: T[],
@@ -857,7 +859,15 @@ export function createSessionRoutes(
     offset: number,
     limit: number,
     nextOffset: number | null,
-  ) => ({ sessions, total, offset, limit, next_offset: nextOffset });
+    options: { remoteOffline?: boolean } = {},
+  ) => ({
+    sessions,
+    total,
+    offset,
+    limit,
+    next_offset: nextOffset,
+    ...(options.remoteOffline ? { remote_offline: true } : {}),
+  });
 
   app.get('/', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const projectId = c.req.query('project_id') || undefined;
@@ -952,17 +962,19 @@ export function createSessionRoutes(
       }
       return c.json(listPage(items, total, offset, limit, next_offset));
     } catch (err) {
-      // Offline-деградация: сервер недоступен — отдаём локальный мир.
+      // Offline-деградация: сервер недоступен — отдаём локальный мир и
+      // отмечаем это аддитивным `remote_offline` (UI не должен выглядеть так,
+      // будто удалённые сессии пропали).
       if (err instanceof RemoteError) {
         console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
         if (projectId && isRemoteRef(projectId)) {
-          return c.json(listPage([], 0, offset, limit, null));
+          return c.json(listPage([], 0, offset, limit, null, { remoteOffline: true }));
         }
         const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
         const localDto = await Promise.all(
           page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
         );
-        return c.json(listPage(localDto, total, offset, limit, localNextOffset));
+        return c.json(listPage(localDto, total, offset, limit, localNextOffset, { remoteOffline: true }));
       }
       throw err;
     }

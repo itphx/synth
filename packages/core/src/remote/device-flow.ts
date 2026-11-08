@@ -6,6 +6,8 @@ import { RemoteError } from './types.js';
 import type { RemoteErrorCode } from './types.js';
 // ADR-099: OIDC device flow — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
+// Причина транспортной ошибки — та же, что у дискавери OIDC.
+import { describeTransportError } from './transport-error.js';
 
 /** Таймаут HTTP-запросов к серверу авторизации. */
 const AUTH_HTTP_TIMEOUT_MS = 15_000;
@@ -159,8 +161,11 @@ export async function postFormDetailed(
       ? await opts.fetchImpl(url, init)
       : await egressFetch(url, init);
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new RemoteError(`Сервер авторизации недоступен: ${reason}`, opts.networkErrorCode ?? 'AUTH');
+    // Причина — та же, что у дискавери: таймаут (`AbortSignal.timeout`),
+    // TLS/DNS/отказ соединения (ADR-099). Код ошибки не меняем.
+    const detail = describeTransportError(err, { timeoutMs });
+    const reason = detail || (err instanceof Error ? `: ${err.message}` : '');
+    throw new RemoteError(`Сервер авторизации недоступен${reason}`, opts.networkErrorCode ?? 'AUTH');
   }
   let body: Record<string, unknown> = {};
   try {

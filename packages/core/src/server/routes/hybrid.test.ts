@@ -190,6 +190,8 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       expect(body.sessions[0].name).toBe('Локальная');
       expect(body.total).toBe(1);
       expect(body.next_offset).toBeNull();
+      // Чисто локальный ответ не несёт признака offline-деградации.
+      expect(body).not.toHaveProperty('remote_offline');
     });
 
     it('возвращает объединение локальных и удалённых с origin и remote-ссылками', async () => {
@@ -225,7 +227,39 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       // Сквозной курсор: merged-список (2 записи) помещается в страницу.
       expect(body.next_offset).toBeNull();
       expect(body.total).toBe(2);
+      // Успешный ответ — без признака offline-деградации (аддитивное поле).
+      expect(body).not.toHaveProperty('remote_offline');
       expect(remote.listAllSessions).toHaveBeenCalled();
+    });
+
+    it('удалённый backend недоступен → 200 с локальным миром и remote_offline', async () => {
+      const remote = createFakeRemoteClient({
+        listAllSessions: vi.fn().mockRejectedValue(new RemoteError('Сервер недоступен: timeout', 'OFFLINE')),
+      });
+      const { app, sessionManager } = createTestApp(remote, tmpDir);
+      const s = await sessionManager.createSession({ title: 'Локальная', userId: 'local' });
+
+      const res = await app.request('/api/v2/sessions');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { sessions: Array<{ id: string; origin?: string }>; remote_offline?: boolean };
+      // Локальный мир отдан, удалённый отмечен признаком деградации.
+      expect(body.remote_offline).toBe(true);
+      expect(body.sessions).toHaveLength(1);
+      expect(body.sessions[0]!.id).toBe(s.id);
+      expect(body.sessions[0]!.origin).toBe('local');
+    });
+
+    it('remote-проект недоступен → 200 с пустой страницей и remote_offline', async () => {
+      const remote = createFakeRemoteClient({
+        listAllSessions: vi.fn().mockRejectedValue(new RemoteError('Сервер недоступен: timeout', 'OFFLINE')),
+      });
+      const { app } = createTestApp(remote, tmpDir);
+
+      const res = await app.request('/api/v2/sessions?project_id=remote:rp-1');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { sessions: unknown[]; remote_offline?: boolean };
+      expect(body.remote_offline).toBe(true);
+      expect(body.sessions).toHaveLength(0);
     });
 
     it('?project_id=remote:xxx — только удалённые, префикс снят для backend', async () => {
@@ -432,6 +466,25 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       // Сквозной курсор: merged-список (2 записи) помещается в страницу.
       expect(body.next_offset).toBeNull();
       expect(body.total).toBe(2);
+      // Успешный ответ — без признака offline-деградации (аддитивное поле).
+      expect(body).not.toHaveProperty('remote_offline');
+    });
+
+    it('удалённый backend недоступен → 200 с локальным миром и remote_offline', async () => {
+      const remote = createFakeRemoteClient({
+        listAllProjects: vi.fn().mockRejectedValue(new RemoteError('Сервер недоступен: timeout', 'OFFLINE')),
+      });
+      const { app, projectStore } = createTestApp(remote, tmpDir);
+      const p = projectStore.create('Локальный', 'local');
+      await projectStore.save(p);
+
+      const res = await app.request('/api/v2/projects');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { projects: any[]; remote_offline?: boolean };
+      expect(body.remote_offline).toBe(true);
+      expect(body.projects).toHaveLength(1);
+      expect(body.projects[0].id).toBe(p.id);
+      expect(body.projects[0].origin).toBe('local');
     });
 
     it('без remoteClient — только локальные', async () => {
@@ -443,6 +496,8 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       expect(body.projects).toHaveLength(1);
       expect(body.projects[0].origin).toBe('local');
       expect(body.total).toBe(1);
+      // Чисто локальный ответ не несёт признака offline-деградации.
+      expect(body).not.toHaveProperty('remote_offline');
     });
   });
 

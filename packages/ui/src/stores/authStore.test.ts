@@ -28,6 +28,7 @@ const INITIAL_STATE = {
   isLoading: false,
   isInitialized: false,
   error: null,
+  errorCode: null,
   authPhase: 'checking' as const,
   deployment: null,
   oidcEnabled: false,
@@ -90,6 +91,43 @@ describe('authStore: loginWithPassword (лёгкий runtime-вход)', () => {
     expect(s.isAuthenticated).toBe(false)
     expect(s.user).toBeNull()
     expect(profileService.initialize).not.toHaveBeenCalled()
+  })
+
+  it('сетевая ошибка с кодом OFFLINE → errorCode для отдельного блока формы', async () => {
+    vi.mocked(api.loginWithPassword).mockRejectedValue(
+      Object.assign(new Error('Сервер недоступен: не удалось получить OIDC-параметры'), {
+        code: 'OFFLINE',
+        status: 502,
+      }),
+    )
+
+    await useAuthStore.getState().loginWithPassword('https://backend.example', 'dev', 'pass')
+
+    const s = useAuthStore.getState()
+    expect(s.errorCode).toBe('OFFLINE')
+    expect(s.isAuthenticated).toBe(false)
+  })
+
+  it('успех после ошибки сбрасывает errorCode', async () => {
+    useAuthStore.setState({ error: 'было', errorCode: 'OFFLINE' })
+    vi.mocked(api.loginWithPassword).mockResolvedValue({
+      deployment: 'standalone',
+      user: { id: 'u3', username: 'dev', email: null, roles: ['USER'] },
+    })
+
+    await useAuthStore.getState().loginWithPassword('https://backend.example', 'dev', 'pass')
+
+    expect(useAuthStore.getState().errorCode).toBeNull()
+    expect(useAuthStore.getState().error).toBeNull()
+  })
+
+  it('clearError сбрасывает текст и код', () => {
+    useAuthStore.setState({ error: 'было', errorCode: 'OFFLINE' })
+
+    useAuthStore.getState().clearError()
+
+    expect(useAuthStore.getState().error).toBeNull()
+    expect(useAuthStore.getState().errorCode).toBeNull()
   })
 })
 

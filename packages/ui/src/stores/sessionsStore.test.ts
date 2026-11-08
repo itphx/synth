@@ -34,6 +34,7 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 vi.mock('./transportStore', () => ({ isTransportConnected: () => false }))
 
 import { useSessionsStore } from './sessionsStore'
+import { useHybridStore } from './hybridStore'
 import { useUIStore, type CenterTab } from './useUIStore'
 
 function session(id: string, name: string | null): SessionData {
@@ -269,5 +270,70 @@ describe('sessionsStore — пагинация списка', () => {
     expect(state.error).toBe('сеть')
     expect(state.sessions.map((s) => s.id)).toEqual(['s1'])
     expect(state.loadingMore).toBe(false)
+  })
+})
+
+describe('sessionsStore: offline-деградация гибрида (remote_offline)', () => {
+  beforeEach(() => {
+    mocks.getSessionsPage.mockReset()
+    useHybridStore.setState({ remoteDegraded: false })
+  })
+
+  it('remote_offline не затирает ранее загруженный remote-список, stale=true', async () => {
+    const remoteSession: SessionData = { ...session('remote:r1', 'Удалённая'), origin: 'remote' }
+    useSessionsStore.setState({ sessions: [remoteSession], total: 1, nextOffset: null, stale: false })
+    mocks.getSessionsPage.mockResolvedValue({
+      sessions: [],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+      remote_offline: true,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+
+    const s = useSessionsStore.getState()
+    expect(s.sessions.map((x) => x.id)).toEqual(['remote:r1'])
+    expect(s.total).toBe(1)
+    expect(s.stale).toBe(true)
+    expect(useHybridStore.getState().remoteDegraded).toBe(true)
+  })
+
+  it('remote_offline без прежнего списка — принимает локальный мир, stale=true', async () => {
+    useSessionsStore.setState({ sessions: [], total: 0, nextOffset: null, stale: false })
+    mocks.getSessionsPage.mockResolvedValue({
+      sessions: [session('s1', 'Локальная')],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+      remote_offline: true,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+
+    const s = useSessionsStore.getState()
+    expect(s.sessions.map((x) => x.id)).toEqual(['s1'])
+    expect(s.stale).toBe(true)
+  })
+
+  it('обычный ответ принимается, stale=false и флаг деградации снят', async () => {
+    useHybridStore.setState({ remoteDegraded: true })
+    useSessionsStore.setState({ sessions: [session('s1', 'Старая')], stale: true })
+    mocks.getSessionsPage.mockResolvedValue({
+      sessions: [session('s2', 'Новая')],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+
+    const s = useSessionsStore.getState()
+    expect(s.sessions.map((x) => x.id)).toEqual(['s2'])
+    expect(s.stale).toBe(false)
+    expect(useHybridStore.getState().remoteDegraded).toBe(false)
   })
 })

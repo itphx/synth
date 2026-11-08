@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { passwordGrant, refreshAccessToken, startDeviceFlow } from './device-flow.js';
+import { passwordGrant, refreshAccessToken, startDeviceFlow, postFormDetailed } from './device-flow.js';
 import { RemoteError } from './types.js';
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -225,5 +225,25 @@ describe('passwordGrant (ROPC) — offline-токен', () => {
     expect(err).toBeInstanceOf(RemoteError);
     expect((err as RemoteError).code).toBe('AUTH');
     expect((err as RemoteError).message).toContain('Неверный логин или пароль');
+  });
+});
+
+describe('postFormDetailed: причина сетевой ошибки', () => {
+  it('таймаут → «Сервер авторизации недоступен» с причиной, код не меняется', async () => {
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), {
+      name: 'TimeoutError',
+    });
+    const err = await postFormDetailed('https://issuer.test/token', new URLSearchParams(), {
+      fetchImpl: vi.fn().mockRejectedValue(timeout),
+      timeoutMs: 15_000,
+      networkErrorCode: 'OFFLINE',
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('OFFLINE');
+    expect((err as RemoteError).message).toContain('Сервер авторизации недоступен');
+    expect((err as RemoteError).message).toContain('за 15 с');
+    // Сырой текст AbortSignal больше не единственное объяснение.
+    expect((err as RemoteError).message).not.toContain('The operation was aborted');
   });
 });

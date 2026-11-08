@@ -51,4 +51,31 @@ describe('describeTransportError', () => {
   it('нет кода → пустая строка (текст ошибки не меняется)', () => {
     expect(describeTransportError(new TypeError('Failed to fetch'))).toBe('');
   });
+
+  it('явный таймаут (TimeoutError от AbortSignal.timeout) → причина с секундами', () => {
+    const err = Object.assign(new Error('The operation was aborted due to timeout'), {
+      name: 'TimeoutError',
+    });
+    expect(describeTransportError(err, { timeoutMs: 15_000 })).toBe(
+      ': timeout — сервер не ответил за 15 с',
+    );
+  });
+
+  it('AbortError без timeoutMs → таймаут без числа', () => {
+    const err = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    expect(describeTransportError(err)).toBe(': timeout — сервер не ответил');
+  });
+
+  it('дробные секунды — один знак после запятой', () => {
+    const err = Object.assign(new Error('timeout'), { name: 'TimeoutError' });
+    expect(describeTransportError(err, { timeoutMs: 2_500 })).toBe(
+      ': timeout — сервер не ответил за 2.5 с',
+    );
+  });
+
+  it('таймаут в cause тоже распознаётся', () => {
+    const cause = Object.assign(new Error('timeout'), { name: 'TimeoutError' });
+    const err = Object.assign(new TypeError('fetch failed'), { cause });
+    expect(describeTransportError(err, { timeoutMs: 5_000 })).toContain('timeout');
+  });
 });

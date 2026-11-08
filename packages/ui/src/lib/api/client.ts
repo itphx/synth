@@ -113,8 +113,15 @@ async function fetchJSON<T>(url: string, options: AuthFetchOptions = {}): Promis
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
-    const error = body as { error?: { message?: string }; detail?: string }
-    throw new Error(error.error?.message || error.detail || `HTTP ${response.status}`)
+    const payload = body as { error?: { message?: string; code?: string }; detail?: string }
+    // Машинный код/статус нужны вызывающему (форма входа различает «сервер
+    // недоступен» и «неверный пароль») — прикрепляем как у `lib/api/base.ts`.
+    const error = new Error(
+      payload.error?.message || payload.detail || `HTTP ${response.status}`,
+    ) as Error & { status?: number; code?: string }
+    error.status = response.status
+    if (payload.error?.code) error.code = payload.error.code
+    throw error
   }
   return response.json()
 }

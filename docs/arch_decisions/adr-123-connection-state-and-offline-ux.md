@@ -170,6 +170,33 @@
 | Индикатор транспорта, PWA-обновление (пересчёт при смене `phase`/`authPhase`), тосты | `components/layout/GlobalTransportIndicator.tsx`, `components/layout/PwaUpdatePrompt.tsx`, `App.tsx` (`pauseOnFocusLoss={false}`) |
 | Тесты | `components/layout/ConnectionStatus.test.tsx`, `components/auth/AuthGate.test.tsx`, `stores/authStore.test.ts`, `components/auth/LoginForm.test.tsx`, `stores/transportStore.connect.test.ts`, `lib/api/transport.test.ts`, `lib/api/base.test.ts`, `components/layout/PwaUpdatePrompt.test.tsx` |
 
+## As-built (2026-11-08): offline-деградация удалённой стороны гибрида
+
+Инцидент: после пробуждения ноутбука удалённый backend недоступен, но локальный core отвечал
+«локальным миром» без признака деградации — UI показывал пустой список сессий («все пропали»), а
+офлайн определялся только по `/hybrid/status` с задержкой.
+
+- **Признак в ответе.** `GET /api/v2/sessions` и `GET /api/v2/projects` в catch-ветке `RemoteError`
+  добавляют аддитивное `remote_offline: true` (в обычных ответах поля нет); контракт пагинации не
+  меняется (ADR-118 §4, docs/API_V2.md §«Пагинация списков»).
+- **`hybridStore.remoteDegraded`** ставится при `remote_offline` из списков сессий/проектов и
+  снимается успешным `loadStatus` с `connected === true`. `selectIsOffline` = `enabled && !connected`
+  **или** `remoteDegraded` — баннер появляется сразу, не дожидаясь опроса статуса.
+- **`stale` в `sessionsStore`/`projectsStore`**: при `remote_offline` ранее загруженные `remote:`
+  записи **не затираются**, список помечается `stale: true`; `HybridOfflineBanner` при `stale`
+  добавляет строку `hybrid.staleList` («Показаны данные до потери связи»). Взаимоисключение с
+  `ConnectionStatus` (только при `phase === 'online'`) сохранено.
+- **Форма входа.** Транспортные ошибки несли `fetch failed`/`The operation was aborted due to
+  timeout` без причины: `describeTransportError` теперь распознаёт `TimeoutError`/`AbortError`
+  (`: timeout — сервер не ответил за 15 с`), OIDC-дискавери и `postFormDetailed` передают в него
+  `timeoutMs`. `/auth`-клиент прикрепляет к `Error` `status` и `code`; `authStore.errorCode ===
+  'OFFLINE'` даёт отдельный блок «Сервер недоступен» с подсказкой и кнопкой повтора, а 401 —
+  прежний блок «неверный пароль».
+- **Тесты:** `remote/transport-error.test.ts` (таймаут с/без `timeoutMs`, `cause`),
+  `remote/device-flow.test.ts` (текст причины), `server/routes/hybrid.test.ts` (`remote_offline`
+  и его отсутствие), UI — `stores/{hybridStore,sessionsStore,authStore}.test.ts`,
+  `components/layout/HybridOfflineBanner.test.tsx`, `components/auth/LoginForm.test.tsx`.
+
 ## История
 
 - 2026-11-05 — решение зафиксировано (инцидент офлайн-UX в PWA: форма входа, «залипшая» модалка,

@@ -26,6 +26,37 @@ const DNS_HINT = 'DNS: имя не разрешается';
 const REFUSED_HINT = 'соединение отклонено (сеть/файрвол/порт)';
 const TIMEOUT_HINT = 'таймаут соединения';
 
+/** Опции описания транспортной ошибки. */
+export interface DescribeTransportErrorOptions {
+  /** Дедлайн запроса в мс: попадает в текст таймаута (`за 15 с`). */
+  timeoutMs?: number;
+}
+
+/**
+ * Признак сработавшего дедлайна: `AbortSignal.timeout` бросает DOMException
+ * `TimeoutError` без `code`, ручная отмена — `AbortError`. Проверяем и сам
+ * объект, и `cause` (fetch может обернуть причину).
+ */
+function isTimeoutLike(err: unknown, depth = 0): boolean {
+  if (err === null || typeof err !== 'object' || depth > 5) return false;
+  const value = err as { name?: unknown; cause?: unknown };
+  if (value.name === 'TimeoutError' || value.name === 'AbortError') return true;
+  return isTimeoutLike(value.cause, depth + 1);
+}
+
+/** Секунды с одним знаком после запятой; целые — без дробной части (`15 с`). */
+function formatTimeoutSeconds(timeoutMs: number): string {
+  const seconds = timeoutMs / 1000;
+  return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1);
+}
+
+function describeTimeout(timeoutMs?: number): string {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return ': timeout — сервер не ответил';
+  }
+  return `: timeout — сервер не ответил за ${formatTimeoutSeconds(timeoutMs)} с`;
+}
+
 /**
  * Достаёт `code` из ошибки, её `cause` и (для `AggregateError` undici) из
  * вложенных ошибок. Глубина ограничена, чтобы не зациклиться на кривых объектах.
@@ -55,8 +86,16 @@ function hintForCode(code: string): string | undefined {
 /**
  * Возвращает суффикс к сообщению об ошибке: `: <code> — <подсказка>`
  * (неизвестный код — только `: <code>`; кода нет — пустая строка).
+ *
+ * Явный таймаут (`AbortSignal.timeout` → `TimeoutError`) проверяется **до** кода:
+ * у такого DOMException `code` нет, и без отдельной ветки причина терялась —
+ * пользователь видел «Сервер недоступен» без объяснения.
  */
-export function describeTransportError(err: unknown): string {
+export function describeTransportError(
+  err: unknown,
+  opts: DescribeTransportErrorOptions = {},
+): string {
+  if (isTimeoutLike(err)) return describeTimeout(opts.timeoutMs);
   const code = extractTransportErrorCode(err);
   if (code === undefined) return '';
   const hint = hintForCode(code);

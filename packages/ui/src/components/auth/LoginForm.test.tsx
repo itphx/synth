@@ -14,6 +14,7 @@ const authState = vi.hoisted(() => ({
   retry: vi.fn(),
   isLoading: false,
   error: null as string | null,
+  errorCode: null as string | null,
   clearError: vi.fn(),
   oidcEnabled: false,
   debugMode: false,
@@ -80,6 +81,7 @@ beforeEach(() => {
   authState.debugMode = false
   authState.deployment = null
   authState.error = null
+  authState.errorCode = null
   authState.isLoading = false
   authState.authPhase = 'guest'
   vi.mocked(api.getUsers).mockResolvedValue({ users: [] })
@@ -457,5 +459,49 @@ describe('LoginForm: клавиатура на мобильном', () => {
       vi.advanceTimersByTime(300)
     })
     expect(scrollToMock).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('LoginForm: «сервер недоступен» отдельно от «неверный пароль»', () => {
+  it('OFFLINE → блок с заголовком, подсказкой и кнопкой повтора', async () => {
+    authState.oidcEnabled = true
+    authState.deployment = 'managed'
+    authState.error = 'Сервер недоступен: не удалось получить OIDC-параметры'
+    authState.errorCode = 'OFFLINE'
+
+    const host = await renderLoginForm()
+
+    const block = host.querySelector('[data-testid="login-server-unreachable"]')
+    expect(block).toBeTruthy()
+    expect(host.textContent).toContain('login.serverUnreachable')
+    expect(host.textContent).toContain('login.serverUnreachableHint')
+    // Текст сервера сохранён — причина видна пользователю.
+    expect(host.textContent).toContain('OIDC-параметры')
+
+    const retry = Array.from(host.querySelectorAll('button')).find(
+      (b) => b.textContent === 'login.retry',
+    ) as HTMLButtonElement | undefined
+    expect(retry).toBeTruthy()
+    expect(retry!.disabled).toBe(false)
+
+    await act(async () => {
+      retry!.click()
+    })
+    // Повтор — повторная отправка формы (тот же вход по паролю).
+    expect(authState.loginWithPassword).toHaveBeenCalledTimes(1)
+  })
+
+  it('401 (неверный пароль) → прежний красный блок без offline-кнопки', async () => {
+    authState.oidcEnabled = true
+    authState.deployment = 'managed'
+    authState.error = 'Не удалось войти: Неверный логин или пароль'
+    authState.errorCode = 'UNAUTHORIZED'
+
+    const host = await renderLoginForm()
+
+    expect(host.querySelector('[data-testid="login-server-unreachable"]')).toBeNull()
+    expect(host.textContent).toContain('Неверный логин или пароль')
+    expect(host.textContent).not.toContain('login.retry')
+    expect(host.textContent).not.toContain('login.serverUnreachableHint')
   })
 })
