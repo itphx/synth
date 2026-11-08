@@ -106,7 +106,10 @@ RUN mkdir -p /out \
 # Права чиним на платформе билдера: файлы pnpm deploy имеют mode 770 (root)
 # и под runAsUser 1000 недоступны. В целевой стадии права не чинятся (важно
 # для кросс-сборки arm64 без эмуляции) — COPY сохраняет режимы как есть.
-RUN chmod -R a+rX /out/app /out/core
+# `synth-init` копируется в runtime-стадии из build (`COPY` переносит режим как
+# есть) — при umask/ACL контекста он может стать 0711, и uid 1000 не прочитает
+# его (`sh: can't open …: Permission denied`). Поэтому чиним и его.
+RUN chmod -R a+rX /out/app /out/core /repo/docker/init.sh
 
 # ------------------------------------------------------------------------------
 # flavor `core` — рантайм исполнителя + hard deps + tier 0

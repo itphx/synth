@@ -117,7 +117,10 @@ RUN mkdir -p /out && pnpm --filter @itphx/synth-backend deploy --prod --legacy /
 # umask 002/ACL это 660 (EACCES у uid 1000 на /app/dist/main.js). Поэтому чиним
 # оба источника до COPY. В целевой стадии RUN нет (важно для кросс-сборки arm64
 # без эмуляции).
-RUN chmod -R a+rX /out/app /repo/packages/backend/dist
+# `synth-init` копируется в runtime-стадию из build (`COPY` переносит режим как
+# есть) — при umask/ACL контекста он может стать 0711, и uid 1000 не прочитает
+# его (`sh: can't open …: Permission denied`). Поэтому чиним и его.
+RUN chmod -R a+rX /out/app /repo/packages/backend/dist /repo/docker/init.sh
 
 # Ф5в (PROP-090 §«Managed deploy-time»): deploy-плагины из образа.
 # Каталог `docker/plugins/` (или `docker/deploy-plugins/`) в контексте сборки
