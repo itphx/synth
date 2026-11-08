@@ -123,6 +123,31 @@ regexes = [
 ]
 regexTarget = "line"
 
+# 3.0. Новые фикстуры SSH-ключей (ADR-124) и dummy-литералы в тестах процессов/роутов:
+#      `private-key-material`, `super-secret-private-key`, `ssh-only-private-key` — заглушки
+#      в фейковых сторах, а `executor-background-material` — тело рантайм-собранного PEM
+#      в `background.test.ts` (заголовок собирается шаблоном, тело заведомо не ключ).
+#      Подавление — пара «путь + dummy-маркер» (AND), поэтому реальный ключ/кред в тех же
+#      файлах (другое значение) остаётся находкой; маркеры — только тела заглушек.
+[[allowlists]]
+description = "тестовые фикстуры SSH-ключей и dummy-литералы (ADR-124, TEST ONLY)"
+paths = [
+  '''packages/core/src/engine/processes/service\.test\.ts$''',
+  '''packages/core/src/engine/ssh/access\.test\.ts$''',
+  '''packages/core/src/engine/tools/ssh-copy\.test\.ts$''',
+  '''packages/core/src/engine/tools/ssh-exec\.test\.ts$''',
+  '''packages/core/src/engine/tools/ssh-tunnel\.test\.ts$''',
+  '''packages/core/src/server/routes/git\.test\.ts$''',
+  '''packages/executor/src/background\.test\.ts$''',
+]
+regexes = [
+  '''private-key-material''',
+  '''super-secret-private-key''',
+  '''ssh-only-private-key''',
+  '''executor-background-material''',
+]
+regexTarget = "line"
+
 # 3.1. Имена env-переменных как плейсхолдер значения токена (ADR-077, ADR-052):
 #      в примерах конфигурации executor'а и в схеме конфигурации ядра значение
 #      токена — это ИМЯ переменной (`SYNTH_EXECUTOR_TOKEN`), а не секрет.
