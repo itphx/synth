@@ -137,21 +137,56 @@ function resolveOutputLimits(context: ToolContext): ToolOutputLimits {
 }
 
 /**
+ * Маркеры, которые тул положил в конец своего вывода
+ * (`metadata.truncationNote`, `metadata.excludedNote`).
+ *
+ * Тул, усекший результат по своему лимиту, кладёт свой маркер в конец вывода
+ * и дублирует его текст в `metadata.truncationNote`. Общий бунд режет вывод по
+ * голове — без этой подсказки маркер тула потерялся бы, и модель не увидела бы
+ * объяснение самого тула (например «показано 40 из 46 совпадений»).
+ *
+ * Маркеры берутся **явно** из метаданных, а не угадываются по последней строке:
+ * иначе последняя строка обычного вывода (а не маркер) продублировалась бы в
+ * конце усечённого результата.
+ *
+ * Их может быть несколько (усечение + «скрыто совпадений в исключённых
+ * путях») — до модели должны дойти оба.
+ */
+function toolTailNotes(result: ToolResult): string[] {
+  const notes: string[] = [];
+  for (const note of [result.metadata?.truncationNote, result.metadata?.excludedNote]) {
+    if (typeof note === 'string' && note !== '') notes.push(note);
+  }
+  return notes;
+}
+
+/**
  * Общий предел вывода тула: результат длиннее лимита усекается, в конец
  * добавляется пояснение (`tool.output_bounded`), а в metadata — признак
  * усечения и счётчики (`truncated`/`outputBounded`).
  *
  * Не трогаем:
  * - результаты с ошибкой (`isError`) — текст ошибки несёт диагностику, а не вывод;
- * - результаты, у которых тул **сам** усек вывод (`metadata.truncated === true`) —
- *   там уже стоит собственный маркер усечения.
+ * - результаты, которые тул **сам уложил в общий бюджет**
+ *   (`metadata.outputBounded`) — там уже стоит собственный маркер усечения.
+ *
+ * `metadata.truncated` («тул усек результат по своему лимиту»: пагинация
+ * `read_file`/`list_directory`, число совпадений `grep_files`) общий бунд
+ * **не отменяет**. Раньше этот флаг полностью отключал предел вывода, и тул
+ * мог выключить его сам — инцидент 2026-11-08: `grep_files` с одной строкой
+ * в 236 КБ (минифицированный source map) пометил результат как усечённый и
+ * унёс в контекст модели 243 КБ.
  */
 function applyOutputLimit(result: ToolResult, context: ToolContext): ToolResult {
   if (result.isError) return result;
-  if (result.metadata?.truncated === true) return result;
   if (typeof result.content !== 'string') return result;
+  // Тул сам уложил вывод в общий бюджет и уже поставил свой маркер —
+  // общий бунд повторно не применяем (иначе второй маркер подряд).
+  if (result.metadata?.outputBounded) return result;
 
-  const bounded = boundToolOutput(result.content, resolveOutputLimits(context));
+  const bounded = boundToolOutput(result.content, resolveOutputLimits(context), {
+    tailNote: toolTailNotes(result),
+  });
   if (!bounded.truncated) return result;
 
   return {

@@ -13,6 +13,7 @@ import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError } from '../../execution/ports/index.js';
 import { SEARCH_TIMEOUT_MS, classifySearchPath, searchPathErrorResult } from './search.js';
+import { MAX_LINE_LENGTH, clampLine } from './line-limits.js';
 import { sniffMime } from '../attachments/sniff-mime.js';
 import { ingestMediaFile, isIngestibleMediaMime } from './fs-read-media.js';
 
@@ -23,8 +24,11 @@ import { ingestMediaFile, isIngestibleMediaMime } from './fs-read-media.js';
  */
 export const MAX_READ_LINES = 2_000;
 export const MAX_READ_BYTES = 50 * 1024;
-/** Максимальная длина одной возвращаемой строки (дальше — суффикс-маркер). */
-export const MAX_LINE_LENGTH = 2_000;
+/**
+ * Максимальная длина одной возвращаемой строки — общая константа с поисковыми
+ * тулами (`line-limits.ts`; прежде константа жила только здесь).
+ */
+export { MAX_LINE_LENGTH };
 /** Сколько первых байт смотрим, чтобы отличить бинарь от текста. */
 const BINARY_SNIFF_BYTES = 8 * 1024;
 /** Доля непечатных байт, при которой файл считается бинарным. */
@@ -128,9 +132,8 @@ async function sniffFileHead(filePath: string): Promise<{ binary: boolean; mime?
 }
 
 /** Обрезка слишком длинной строки с маркером (в вывод не уходит «простыня»). */
-function clampLine(line: string): string {
-  if (line.length <= MAX_LINE_LENGTH) return line;
-  return line.slice(0, MAX_LINE_LENGTH) + sm('fsread.line_truncated');
+function clampReadLine(line: string): string {
+  return clampLine(line, sm('fsread.line_truncated'));
 }
 
 interface TextPage {
@@ -170,7 +173,7 @@ async function readTextPage(filePath: string, offset: number, limit: number): Pr
         truncated = true;
         continue;
       }
-      const text = clampLine(raw);
+      const text = clampReadLine(raw);
       const line = `${lineNo}: ${text}`;
       const size = Buffer.byteLength(line, 'utf-8') + (lines.length > 0 ? 1 : 0);
       if (bytes + size > MAX_READ_BYTES) {
@@ -227,8 +230,10 @@ export const readFileTool: ToolDefinition = {
       const lines = [...page.lines];
       // Следующий offset — продолжение чтения без повторного обхода файла.
       const nextOffset = offset + lines.length;
+      let truncationNote: string | undefined;
       if (page.truncated) {
-        lines.push(sm('fsread.directory_truncated', { count: String(page.lines.length), next: String(nextOffset) }));
+        truncationNote = sm('fsread.directory_truncated', { count: String(page.lines.length), next: String(nextOffset) });
+        lines.push(truncationNote);
       }
       return {
         content: lines.join('\n') || sm('fsread.empty_directory'),
@@ -239,6 +244,9 @@ export const readFileTool: ToolDefinition = {
           offset,
           limit,
           truncated: page.truncated,
+          // Маркер усечения — текстом: общий бунд вывода возвращает его в
+          // конец, если срежет хвост (см. `tool-execution.ts`).
+          ...(truncationNote ? { truncationNote } : {}),
           nextOffset,
           bytes: Buffer.byteLength(lines.join('\n'), 'utf-8'),
         },
@@ -321,8 +329,10 @@ export const readFileTool: ToolDefinition = {
     const lines = [...page.lines];
     // Следующий offset — продолжение чтения без повторного обхода файла.
     const nextOffset = offset + lines.length;
+    let truncationNote: string | undefined;
     if (page.truncated) {
-      lines.push(sm('fsread.truncated', { count: String(page.lines.length), next: String(nextOffset) }));
+      truncationNote = sm('fsread.truncated', { count: String(page.lines.length), next: String(nextOffset) });
+      lines.push(truncationNote);
     }
 
     // Пустой файл и `offset` за концом — разные случаи: пустой говорит сам за
@@ -341,6 +351,9 @@ export const readFileTool: ToolDefinition = {
         offset,
         limit,
         truncated: page.truncated,
+        // Маркер усечения — текстом: общий бунд вывода возвращает его в
+        // конец, если срежет хвост (см. `tool-execution.ts`).
+        ...(truncationNote ? { truncationNote } : {}),
         nextOffset,
         bytes: page.bytes,
       },
@@ -379,8 +392,10 @@ export const listDirectoryTool: ToolDefinition = {
     const lines = [...page.lines];
     // Следующий offset — продолжение листинга без повторного обхода каталога.
     const nextOffset = offset + lines.length;
+    let truncationNote: string | undefined;
     if (page.truncated) {
-      lines.push(sm('fsread.directory_truncated', { count: String(page.lines.length), next: String(nextOffset) }));
+      truncationNote = sm('fsread.directory_truncated', { count: String(page.lines.length), next: String(nextOffset) });
+      lines.push(truncationNote);
     }
 
     return {
@@ -391,6 +406,9 @@ export const listDirectoryTool: ToolDefinition = {
         offset,
         limit,
         truncated: page.truncated,
+        // Маркер усечения — текстом: общий бунд вывода возвращает его в
+        // конец, если срежет хвост (см. `tool-execution.ts`).
+        ...(truncationNote ? { truncationNote } : {}),
         nextOffset,
       },
     };
@@ -471,7 +489,11 @@ export const globTool: ToolDefinition = {
       const truncated = files.length > limit;
 
       const lines = [...selected];
-      if (truncated) lines.push(sm('fsread.glob_truncated', { count: String(selected.length), total: String(files.length) }));
+      let truncationNote: string | undefined;
+      if (truncated) {
+        truncationNote = sm('fsread.glob_truncated', { count: String(selected.length), total: String(files.length) });
+        lines.push(truncationNote);
+      }
 
       return {
         content: lines.length > 0 ? lines.join('\n') : sm('fsread.no_files'),
@@ -480,6 +502,9 @@ export const globTool: ToolDefinition = {
           count: selected.length,
           total: files.length,
           truncated,
+          // Маркер усечения — текстом: общий бунд вывода возвращает его в
+          // конец, если срежет хвост (см. `tool-execution.ts`).
+          ...(truncationNote ? { truncationNote } : {}),
           ...(selected.length === 0 ? { i18n: i18nMeta('fsread.no_files') } : {}),
         },
       };

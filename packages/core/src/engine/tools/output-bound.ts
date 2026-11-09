@@ -32,6 +32,23 @@ export interface BoundedToolOutput {
   totalLines: number;
 }
 
+/** Опции усечения вывода тула. */
+export interface BoundToolOutputOptions {
+  /**
+   * Маркер усечения самого тула (текст, который тул положил в конец своего
+   * вывода и продублировал в `metadata.truncationNote`).
+   *
+   * Общий бунд режет вывод по голове — без этой подсказки маркер тула
+   * потерялся бы, и модель не увидела бы объяснение самого тула (например
+   * «показано 40 из 46 совпадений»). Маркер возвращается в конец усечённого
+   * вывода; если бунд его не срезал — возвращается как есть (дубля не будет).
+   *
+   * Список — когда тул оставил несколько маркеров (например усечение вывода
+   * и «скрыто совпадений в исключённых путях»): оба должны дойти до модели.
+   */
+  tailNote?: string | string[];
+}
+
 /** Байтовая длина строки в UTF-8. */
 function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
@@ -73,8 +90,16 @@ function splitLines(content: string): string[] {
  *
  * Считаются **все** строки исходного вывода (`totalLines`), в конец усечённого
  * текста добавляется маркер `tool.output_bounded` с числом показанных строк.
+ *
+ * `opts.tailNote` — маркер усечения самого тула: он возвращается в конец
+ * усечённого вывода (между выводом и общим маркером), чтобы объяснение тула
+ * не потерялось. Если бунд маркер не срезал — возвращается как есть, без дубля.
  */
-export function boundToolOutput(content: string, limits: ToolOutputLimits): BoundedToolOutput {
+export function boundToolOutput(
+  content: string,
+  limits: ToolOutputLimits,
+  opts: BoundToolOutputOptions = {},
+): BoundedToolOutput {
   const maxLines = Math.max(1, Math.floor(limits.maxLines));
   const maxBytes = Math.max(1, Math.floor(limits.maxBytes));
 
@@ -115,8 +140,15 @@ export function boundToolOutput(content: string, limits: ToolOutputLimits): Boun
     total: String(totalLines),
   });
 
+  // Маркер тула возвращаем, только если бунд его не оставил в усечённой части.
+  const notes = (Array.isArray(opts.tailNote) ? opts.tailNote : [opts.tailNote]).filter(
+    (note): note is string => typeof note === 'string' && note !== '',
+  );
+  const missing = notes.filter((note) => !kept.includes(note));
+  const tail = missing.length > 0 ? missing.join('\n\n') : undefined;
+
   return {
-    content: `${kept}\n\n${marker}`,
+    content: tail !== undefined ? `${kept}\n\n${tail}\n\n${marker}` : `${kept}\n\n${marker}`,
     truncated: true,
     shownLines,
     totalLines,

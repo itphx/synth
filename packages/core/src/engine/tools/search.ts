@@ -4,6 +4,8 @@ import { stat } from 'node:fs/promises';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolResult } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, pathEscapesWorkspaceResult, isIgnoredSearchPath } from './path-utils.js';
+import { clampLine } from './line-limits.js';
+import { matchSearchExclusion, searchRootInsideExcludedDir } from './search-exclusions.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -87,6 +89,19 @@ interface GrepGroup {
 }
 
 /**
+ * Текст совпадения — с капом длины строки (общий с `read_file`).
+ *
+ * Кап применяется к самому тексту совпадения, а не к готовой строке вывода:
+ * иначе минифицированный бандл или source map (файл целиком в одну строку)
+ * уносит в контекст модели сотни килобайт — инцидент 2026-11-08: одно
+ * совпадение в `*.js.map` дало 236 487 символов. Разбор/группировка совпадений
+ * и общий счётчик `metadata.matches` от этого не меняются.
+ */
+function clampMatchText(text: string): string {
+  return clampLine(text, sm('search.line_truncated'));
+}
+
+/**
  * Разбор строки результата `rg` (`path:line:text`).
  *
  * Особый случай: если цель поиска — один файл, ripgrep не печатает путь
@@ -98,14 +113,14 @@ function parseMatchLine(raw: string, searchDir: string, singleFile: boolean): Gr
   if (singleFile) {
     const withoutPath = /^(\d+):([\s\S]*)$/.exec(raw);
     if (!withoutPath) return null;
-    return { file: searchDir, line: Number(withoutPath[1]), text: withoutPath[2] ?? '' };
+    return { file: searchDir, line: Number(withoutPath[1]), text: clampMatchText(withoutPath[2] ?? '') };
   }
   const withPath = /^(.*?):(\d+):([\s\S]*)$/.exec(raw);
   if (!withPath) return null;
   const file = withPath[1] ?? '';
   const line = Number(withPath[2]);
   if (file === '' || !Number.isInteger(line)) return null;
-  return { file, line, text: withPath[3] ?? '' };
+  return { file, line, text: clampMatchText(withPath[3] ?? '') };
 }
 
 /**
@@ -154,7 +169,7 @@ function formatGroups(groups: GrepGroup[]): string[] {
 export const grepFilesTool: ToolDefinition = {
   name: 'grep_files',
   description:
-    `Search file contents using ripgrep's regular expression syntax or literal text matching (literal=true). Returns matching lines grouped by file (a path line, then "  Line N: text" per match); narrow the search with path or include. Returns at most ${DEFAULT_SEARCH_LIMIT} matching lines by default (limit up to ${MAX_SEARCH_LIMIT}). Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.`,
+    `Search file contents using ripgrep's regular expression syntax or literal text matching (literal=true). Returns matching lines grouped by file (a path line, then "  Line N: text" per match); narrow the search with path or include. Returns at most ${DEFAULT_SEARCH_LIMIT} matching lines by default (limit up to ${MAX_SEARCH_LIMIT}); long matching lines are truncated. Dependency and build-artifact paths (node_modules, dist, coverage, *.map, lock files) are excluded by default — pass path explicitly to search inside them. Path is resolved against the project working directory; prefer relative paths. Paths outside it require explicit user approval and are normally denied.`,
   parameters: z.object({
     pattern: z.string().describe('The regex pattern (or literal text with literal=true) to search for in file contents'),
     path: z.string().optional().describe('File or directory to search in (defaults to working directory)'),
@@ -201,6 +216,10 @@ export const grepFilesTool: ToolDefinition = {
     const hidden = params.hidden === true;
     // Цель поиска — один файл: ripgrep тогда не печатает путь в строке вывода.
     const singleFile = pathState === 'file';
+    // Исключения по умолчанию (зависимости/артефакты сборки/lock-файлы) не
+    // применяются, если корень поиска сам лежит в исключаемой области:
+    // явный путь важнее исключения (см. `search-exclusions.ts`).
+    const exclusionsEnabled = !searchRootInsideExcludedDir(searchDir, ctx.workingDir);
 
     try {
       // Один `-n` (раньше флаг дублировался как `--line-number` и `-n`)
@@ -238,21 +257,55 @@ export const grepFilesTool: ToolDefinition = {
       });
 
       const matches: GrepMatch[] = [];
+      // Скрытые совпадения (мусорные пути) считаем отдельно: модель должна
+      // знать, что часть вывода не показана, иначе поиск выглядит полным.
+      const excludedCategories = new Set<string>();
+      let excludedMatches = 0;
       for (const raw of stdout.split('\n')) {
         if (!raw) continue;
         const match = parseMatchLine(raw, searchDir, singleFile);
         if (!match) continue;
+        const relPath = relative(searchDir, match.file);
         // Служебные пути (`.git`, скрытые без `hidden`) отсекаем по сегментам
         // пути относительно каталога поиска: маска `--glob` перекрывает
         // скрытие рипгрепа, а негативный `--glob '!.git/**'` матчится
         // относительно cwd процесса, а не пути поиска. Явно названный файл
         // (цель поиска) не фильтруется — его запросили самим.
-        if (!singleFile && isIgnoredSearchPath(relative(searchDir, match.file), hidden)) continue;
+        if (!singleFile && isIgnoredSearchPath(relPath, hidden)) continue;
+        // Мусор по умолчанию (зависимости, артефакты сборки, lock-файлы):
+        // путь считается относительно корня поиска, поэтому явный путь внутрь
+        // исключаемой области остаётся рабочим.
+        if (exclusionsEnabled) {
+          const exclusion = matchSearchExclusion(relPath);
+          if (exclusion) {
+            excludedMatches += 1;
+            excludedCategories.add(exclusion.label);
+            continue;
+          }
+        }
         matches.push(match);
       }
 
       const groups = groupMatches(matches, searchDir, ctx.workingDir);
       const total = groups.reduce((sum, group) => sum + group.matches.length, 0);
+      // Маркер исключений — отдельный от маркера усечения (`search.matches_truncated`):
+      // один говорит «показаны не все совпадения», другой — «часть путей скрыта».
+      const excludedNote =
+        excludedMatches > 0
+          ? sm('search.matches_excluded', {
+              count: String(excludedMatches),
+              categories: [...excludedCategories].sort().join(', '),
+            })
+          : undefined;
+      const exclusionMetadata = {
+        ...(excludedMatches > 0
+          ? {
+              excludedMatches,
+              excludedCategories: [...excludedCategories].sort(),
+              excludedNote,
+            }
+          : {}),
+      };
 
       if (total > limit) {
         // Лимит — общий по строкам совпадений, а не «200 на файл»
@@ -265,19 +318,32 @@ export const grepFilesTool: ToolDefinition = {
           remaining -= taken.length;
         }
         const truncated = formatGroups(shown);
-        truncated.push(sm('search.matches_truncated', { shown: String(limit), total: String(total) }));
+        const truncationNote = sm('search.matches_truncated', { shown: String(limit), total: String(total) });
+        truncated.push(truncationNote);
+        // Оба маркера доезжают до модели: усечения и исключений.
+        if (excludedNote) truncated.push(excludedNote);
         return {
           content: truncated.join('\n'),
-          metadata: { pattern: params.pattern, matches: total, truncated: true },
+          metadata: {
+            pattern: params.pattern,
+            matches: total,
+            truncated: true,
+            // Маркер усечения — текстом: общий бунд вывода возвращает его в
+            // конец, если срежет хвост (см. `tool-execution.ts`).
+            truncationNote,
+            ...exclusionMetadata,
+          },
         };
       }
 
+      const body = groups.length > 0 ? formatGroups(groups).join('\n') : sm('search.no_matches');
       return {
-        content: groups.length > 0 ? formatGroups(groups).join('\n') : sm('search.no_matches'),
+        content: excludedNote ? `${body}\n${excludedNote}` : body,
         metadata: {
           pattern: params.pattern,
           matches: total,
-          ...(groups.length === 0 ? { i18n: i18nMeta('search.no_matches') } : {}),
+          ...(groups.length === 0 && !excludedNote ? { i18n: i18nMeta('search.no_matches') } : {}),
+          ...exclusionMetadata,
         },
       };
     } catch (err: unknown) {

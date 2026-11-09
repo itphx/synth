@@ -3239,6 +3239,9 @@ export const dict = {
   // --- Поиск ---
   'search.no_matches': '(совпадений не найдено)',
   'search.matches_truncated': '... (показаны {shown} из {total} совпадений)',
+  'search.line_truncated': '... (строка совпадения обрезана)',
+  'search.matches_excluded':
+    '... (скрыто совпадений: {count}; пропущены исключённые пути — {categories})',
   'search.rg_not_installed': '(rg (ripgrep) не установлен. Поиск недоступен)',
   'search.error': 'Ошибка поиска: {error}',
   'search.path_not_found': 'Путь поиска не найден: {path}',

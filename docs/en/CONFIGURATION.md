@@ -1241,10 +1241,20 @@ limits wins.
 | `tools.outputMaxBytes` | Limit on the size of a tool result in UTF-8 bytes (≥ 1) | `51200` |
 
 - Env — `SYNTH_TOOLS_OUTPUT_MAX_LINES` / `SYNTH_TOOLS_OUTPUT_MAX_BYTES`.
-- A tool that **truncated the output itself** is left alone: if the result is marked
-  `metadata.truncated === true`, the common limit is not applied (the tool already has its own
-  truncation marker). Error results (`isError`) are not cut either — the error text carries
-  diagnostics, not output.
+- A tool that **truncated the output by its own limit** (`read_file`/`list_directory`
+  pagination, the number of `grep_files` matches) is still cut by the common limit:
+  `metadata.truncated` means "the tool truncated the result by its own limit", not
+  "the tool already fits the byte budget". A tool cannot switch the output limit off
+  (incident 2026-11-08: `grep_files` with a single 236 KB line marked the result as
+  truncated and pushed 243 KB into the model context).
+- The only result that is not cut again is one whose tool **already fitted it into the
+  common budget** (`metadata.outputBounded` — the common limit has already been applied
+  and the tool's own truncation marker is already in place).
+- The tool's own truncation marker (`metadata.truncationNote`) is not lost when the
+  common limit cuts the tail of the output: it is returned to the end of the truncated
+  result — next to the common `tool.output_bounded` marker.
+- Error results (`isError`) are not cut either — the error text carries diagnostics,
+  not output.
 - When the output is cut, an explanation `tool.output_bounded` is appended: how many lines are
   shown out of how many and how to narrow the request; the metadata carries `truncated: true`
   and `outputBounded: {shownLines, totalLines}`.
@@ -1252,6 +1262,7 @@ limits wins.
   tool artifacts) — the model has to repeat the request with a narrower condition if it needs
   the rest.
 - This does **not** replace the per-tool limits (`read_file` — 2000 lines/50 KB,
+  a line ≤ 2000 characters; `grep_files` — a matching line ≤ 2000 characters;
   `execute_shell` — its own output cap): the common limit sits above them and fires last.
 
 ```yaml

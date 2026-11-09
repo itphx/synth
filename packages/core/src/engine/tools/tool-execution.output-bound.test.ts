@@ -4,8 +4,13 @@
  * Проверяем правила chokepoint'а:
  * - успешный результат длиннее лимита усекается (маркер + `metadata.truncated`
  *   + `metadata.outputBounded`);
- * - результат, который тул **сам** усек (`metadata.truncated === true`), не
- *   режется второй раз;
+ * - результат, который тул **сам** усек по своему лимиту (`metadata.truncated`),
+ *   общий бунд всё равно применяет — тул не может отключить предел вывода;
+ * - результат, который тул **сам уложил в общий бюджет**
+ *   (`metadata.outputBounded`), повторно не режется;
+ * - маркер усечения самого тула (`metadata.truncationNote`) не теряется, когда
+ *   общий бунд срезает хвост вывода;
+ * - маркеры усечения и исключений (`metadata.excludedNote`) доезжают оба;
  * - результат с ошибкой (`isError`) не трогается;
  * - лимиты берутся из `ctx.extra.toolOutputLimits`, без них — дефолты секции
  *   `tools` (2000 строк / 51200 байт).
@@ -15,6 +20,7 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { ToolCapability, type ToolContext, type ToolDefinition } from '@itphx/synth-shared';
 import { executeToolDef } from './tool-execution.js';
+import { t as sm } from '../system-messages.js';
 
 function toolOf(
   execute: ToolDefinition['execute'],
@@ -71,7 +77,12 @@ describe('executeToolDef — общий предел вывода', () => {
     expect(result.metadata?.outputBounded).toBeUndefined();
   });
 
-  it('тул, усекший вывод сам (metadata.truncated), не режется второй раз', async () => {
+  it('тул, усекший результат по счёту (metadata.truncated), всё равно режется общим бундом', async () => {
+    // Семантика `metadata.truncated` изменена (инцидент 2026-11-08): флаг
+    // означает «тул усек результат по своему лимиту» (пагинация read_file,
+    // число совпадений grep_files), а НЕ «тул уже уложился в байтовый бюджет».
+    // Прежде этот флаг полностью отключал общий предел — из-за этого
+    // grep_files с одной строкой в 236 КБ унёс в контекст модели 243 КБ.
     const content = ['l1', 'l2', 'l3', 'l4', 'l5'].join('\n');
     const tool = toolOf(async () => ({
       content,
@@ -85,9 +96,142 @@ describe('executeToolDef — общий предел вывода', () => {
       'tool_test',
     );
 
+    expect(result.metadata?.truncated).toBe(true);
+    expect(result.metadata?.outputBounded).toEqual({ shownLines: 2, totalLines: 5 });
+    expect(result.content.startsWith('l1\nl2')).toBe(true);
+    expect(result.content).not.toContain('l3');
+    expect(result.content).toContain(sm('tool.output_bounded', { shown: '2', total: '5' }));
+  });
+
+  it('тул, усекший результат по счёту и уложившийся в бюджет, не трогается', async () => {
+    const note = sm('search.matches_truncated', { shown: '2', total: '5' });
+    const content = ['l1', 'l2', note].join('\n');
+    const tool = toolOf(async () => ({
+      content,
+      metadata: { truncated: true, truncationNote: note },
+    }));
+
+    const result = await executeToolDef(
+      tool,
+      {},
+      ctxWith({ toolOutputLimits: { maxLines: 100, maxBytes: 1000 } }),
+      'tool_test',
+    );
+
     expect(result.content).toBe(content);
     expect(result.metadata?.truncated).toBe(true);
     expect(result.metadata?.outputBounded).toBeUndefined();
+  });
+
+  it('маркер усечения самого тула не теряется, когда общий бунд срезает хвост', async () => {
+    // Тул усек результат по счёту и пометил свой маркер (`truncationNote`),
+    // общий бунд срезает хвост — маркер тула возвращается в конец вывода.
+    const note = sm('search.matches_truncated', { shown: '2', total: '5' });
+    const content = ['l1', 'l2', 'l3', 'l4', note].join('\n');
+    const tool = toolOf(async () => ({
+      content,
+      metadata: { truncated: true, truncationNote: note },
+    }));
+
+    const result = await executeToolDef(
+      tool,
+      {},
+      ctxWith({ toolOutputLimits: { maxLines: 2, maxBytes: 1000 } }),
+      'tool_test',
+    );
+
+    expect(result.content).toContain(note);
+    expect(result.content).toContain(sm('tool.output_bounded', { shown: '2', total: '5' }));
+    // Маркер не продублирован: в выводе он ровно один раз.
+    expect(result.content.split(note).length - 1).toBe(1);
+  });
+
+  it('маркеры усечения и исключений не теряются, когда общий бунд срезает хвост', async () => {
+    // grep_files оставляет два маркера: «показаны не все совпадения» и
+    // «скрыто совпадений в исключённых путях». Общий бунд срезает хвост —
+    // оба маркера должны дойти до модели.
+    const truncation = sm('search.matches_truncated', { shown: '2', total: '5' });
+    const excluded = sm('search.matches_excluded', { count: '3', categories: '*.map, node_modules' });
+    const content = ['l1', 'l2', 'l3', 'l4', truncation, excluded].join('\n');
+    const tool = toolOf(async () => ({
+      content,
+      metadata: {
+        truncated: true,
+        truncationNote: truncation,
+        excludedNote: excluded,
+        excludedMatches: 3,
+      },
+    }));
+
+    const result = await executeToolDef(
+      tool,
+      {},
+      ctxWith({ toolOutputLimits: { maxLines: 2, maxBytes: 1000 } }),
+      'tool_test',
+    );
+
+    expect(result.content).toContain(truncation);
+    expect(result.content).toContain(excluded);
+    // Каждый маркер — ровно один раз.
+    expect(result.content.split(truncation).length - 1).toBe(1);
+    expect(result.content.split(excluded).length - 1).toBe(1);
+    // Счётчик скрытых совпадений не теряется.
+    expect(result.metadata?.excludedMatches).toBe(3);
+  });
+
+  it('тул, сам уложивший вывод в общий бюджет (metadata.outputBounded), повторно не режется', async () => {
+    const content = ['l1', 'l2', 'l3', 'l4', 'l5'].join('\n');
+    const tool = toolOf(async () => ({
+      content,
+      metadata: { truncated: true, outputBounded: { shownLines: 5, totalLines: 5 } },
+    }));
+
+    const result = await executeToolDef(
+      tool,
+      {},
+      ctxWith({ toolOutputLimits: { maxLines: 2, maxBytes: 1000 } }),
+      'tool_test',
+    );
+
+    expect(result.content).toBe(content);
+    expect(result.metadata?.truncated).toBe(true);
+  });
+
+  it('метаданные пагинации тула (truncated/totalLines/offset/limit) не теряются', async () => {
+    // read_file/list_directory: тул усек страницу по своему лимиту — общий
+    // бунд не отменяет его метаданные, они остаются в результате.
+    const note = sm('fsread.truncated', { count: '2', next: '2' });
+    const content = ['1: a', '2: b', note].join('\n');
+    const tool = toolOf(async () => ({
+      content,
+      metadata: {
+        path: '/workspace/a.ts',
+        type: 'file',
+        totalLines: 10,
+        offset: 0,
+        limit: 2,
+        truncated: true,
+        truncationNote: note,
+      },
+    }));
+
+    const result = await executeToolDef(
+      tool,
+      {},
+      ctxWith({ toolOutputLimits: { maxLines: 100, maxBytes: 1000 } }),
+      'tool_test',
+    );
+
+    expect(result.metadata).toMatchObject({
+      path: '/workspace/a.ts',
+      type: 'file',
+      totalLines: 10,
+      offset: 0,
+      limit: 2,
+      truncated: true,
+    });
+    expect(result.content).toContain('1: a');
+    expect(result.content).toContain(note);
   });
 
   it('результат с ошибкой (isError) не усекается', async () => {

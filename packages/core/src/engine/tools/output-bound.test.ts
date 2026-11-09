@@ -118,6 +118,58 @@ describe('boundToolOutput — общий предел вывода тула', ()
     expect(result.content).toBe('');
   });
 
+  it('маркер усечения самого тула (tailNote) возвращается в конец вывода', () => {
+    const note = '... (showing 4 of 9 matches)';
+    const content = ['l1', 'l2', 'l3', 'l4', 'l5', note].join('\n');
+    const result = boundToolOutput(content, { maxLines: 2, maxBytes: 1000 }, { tailNote: note });
+
+    expect(result.truncated).toBe(true);
+    // Маркер тула не потерян и не продублирован.
+    expect(result.content.split(note).length - 1).toBe(1);
+    expect(result.content).toContain(note);
+    expect(result.content.endsWith(sm('tool.output_bounded', { shown: '2', total: '6' }))).toBe(true);
+  });
+
+  it('маркер тула, который бунд не срезал, не дублируется', () => {
+    const note = '... (showing 1 of 1 matches)';
+    const content = ['l1', note].join('\n');
+    const result = boundToolOutput(content, { maxLines: 10, maxBytes: 1000 }, { tailNote: note });
+
+    expect(result.truncated).toBe(false);
+    expect(result.content).toBe(content);
+    expect(result.content.split(note).length - 1).toBe(1);
+  });
+
+  it('несколько маркеров тула (tailNote[]) возвращаются в хвост усечённого вывода', () => {
+    // Тул оставил два маркера: «показаны не все совпадения» и «скрыто совпадений
+    // в исключённых путях». Общий бунд срезает хвост — оба маркера должны
+    // дойти до модели.
+    const truncation = '... (showing 4 of 9 matches)';
+    const excluded = '... (1 matches hidden: excluded paths were skipped — node_modules)';
+    const content = ['l1', 'l2', 'l3', 'l4', 'l5', truncation, excluded].join('\n');
+    const result = boundToolOutput(content, { maxLines: 2, maxBytes: 1000 }, { tailNote: [truncation, excluded] });
+
+    expect(result.truncated).toBe(true);
+    expect(result.content).toContain(truncation);
+    expect(result.content).toContain(excluded);
+    // Каждый маркер — ровно один раз.
+    expect(result.content.split(truncation).length - 1).toBe(1);
+    expect(result.content.split(excluded).length - 1).toBe(1);
+    expect(result.content.endsWith(sm('tool.output_bounded', { shown: '2', total: '7' }))).toBe(true);
+  });
+
+  it('маркеры, которые бунд не срезал, не дублируются (список)', () => {
+    const truncation = '... (showing 1 of 1 matches)';
+    const excluded = '... (1 matches hidden: excluded paths were skipped — node_modules)';
+    const content = ['l1', truncation, excluded].join('\n');
+    const result = boundToolOutput(content, { maxLines: 10, maxBytes: 1000 }, { tailNote: [truncation, excluded] });
+
+    expect(result.truncated).toBe(false);
+    expect(result.content).toBe(content);
+    expect(result.content.split(truncation).length - 1).toBe(1);
+    expect(result.content.split(excluded).length - 1).toBe(1);
+  });
+
   it('некорректные лимиты не ломают функцию (минимум 1)', () => {
     const result = boundToolOutput('a\nb', { maxLines: 0, maxBytes: 0 });
 

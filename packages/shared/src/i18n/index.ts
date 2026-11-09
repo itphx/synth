@@ -141,6 +141,10 @@ export const ENGINE_MESSAGE_KEYS = [
   'web.too_many_redirects',
   'search.no_matches',
   'search.matches_truncated',
+  // Кап длины строки совпадения (общий с `read_file`).
+  'search.line_truncated',
+  // Скрытые совпадения в исключённых путях (зависимости/артефакты сборки).
+  'search.matches_excluded',
   'search.rg_not_installed',
   'search.error',
   // Различимые причины отказа поиска (ADR-041): путь не найден / путь не
@@ -676,6 +680,8 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'web.too_many_redirects': [],
   'search.no_matches': [],
   'search.matches_truncated': ["shown","total"],
+  'search.line_truncated': [],
+  'search.matches_excluded': ["count","categories"],
   'search.rg_not_installed': [],
   'search.error': ["error"],
   'search.path_not_found': ["path"],

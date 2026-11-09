@@ -7,10 +7,10 @@
 
 | Группа | Тулы |
 |---|---|
-| Файлы (чтение) | `read_file` (потоком; `offset`/`limit`, дефолт и максимум 2000 строк, cap 50 КБ, строка ≤ 2000 символов; бинарь — ошибка с подсказкой, каталог — листинг), `list_directory`, `glob` (на `rg --files`: `hidden`, `limit` 100/макс 1000, сортировка по имени) |
+| Файлы (чтение) | `read_file` (потоком; `offset`/`limit`, дефолт и максимум 2000 строк, cap 50 КБ, строка ≤ 2000 символов; бинарь — ошибка с подсказкой, каталог — листинг), `list_directory`, `glob` (на `rg --files`: `hidden`, `limit` 100/макс 1000, сортировка по имени; **без исключений поиска** — перечисление отвечает на вопрос «что есть в проекте») |
 | Файлы (запись) | `write_file`, `edit_file`, `create_directory`, `delete_file`, `patch` (`patch` — атомарная мультифайловая правка: JSON-массив `edits[]` с `file_path`/`old_string`/`new_string`/`replace_all`, 1..50 правок, всё-или-ничего — при любой ошибке ни один файл не меняется; запись атомарна по файлу tmp→rename с откатом) |
 | Вложения (ADR-115) | `attach_workspace_file` — файл из workspace → **вложение диалога** (capability `file_read`, группа `read`, plan разрешён): containment (`path-utils`), `stat` до чтения, общие лимиты/allowlist `attachments.*`; тул возвращает `ToolResult.attachments`, а оркестратор (`_injectToolAttachments`) вставляет медиа-часть в **текущий** ход — сообщение служебное (`metadata.source='tool-attachment'`, `author='Tool'`, `metadata.agent_role`), в UI это системный блок «Агент · <имя> · вложение», а не user-пузырь; `blob_refs` пишет инъекция. `save_attachment` — вложение **текущей** сессии → файл в workspace (capability `file_write`, группа `write`, plan запрещён): выбор по сообщению (`message_id`/`message_seq`), затем `sha256`/`name`/последнее (неоднозначное имя → ошибка `attach.tool.ambiguous`), только объекты `attachments/`, публикация **без перезаписи** (`link`/`COPYFILE_EXCL`, занято → `attach.tool.exists`), `fs.changed`. `send_attachment` — файл workspace → вложение **ответа** (capability `file_read`, группа `read`): медиа-часть в коллектор хода → `parts` финального assistant-сообщения → `step.finished.attachments`; ошибка/отмена хода ничего не отправляет |
-| Поиск | `grep_files` (`literal`, `caseSensitive` — default true, `hidden`, `limit` 100/макс 1000 по строкам совпадений), `glob` |
+| Поиск | `grep_files` (`literal`, `caseSensitive` — default true, `hidden`, `limit` 100/макс 1000 по строкам совпадений; строка совпадения ≤ 2000 символов — длинная строка обрезается маркером `search.line_truncated`, общий счётчик совпадений при этом реальный; **мусорные пути исключены по умолчанию** — см. «Исключения поиска» ниже), `glob` (перечисление — без исключений) |
 | Shell | `execute_shell` |
 | Git | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_branch_list`, `git_show`, `git_blame`, `git_stash` |
 | SSH-ключи (ADR-076) | `ssh_keys_list` — метаданные ключей инстанса (`id`, `name`, `type`, `agentIds`, `createdAt`; приватный ключ и passphrase — **никогда**), фильтр `agent_id`; capability `git_read`, группа `git_read` (plan разрешён), **без привязки к workspace**. Нужен, чтобы взять `sshKeyId` для `project_repo_clone`/`project_repo_fetch`: у этих тулов текст отказа для SSH-URL перечисляет доступные ключи (`git.ssh_key_required_hint`, `id → name`, до 10) и отсылает к `ssh_keys_list`; нет стора ключей — прежний текст без списка |
@@ -28,6 +28,43 @@
 | Модели (ADR-115) | `list_models` — каталог моделей инстанса (capability `models`, группа `read`, plan разрешён, рабочий каталог не нужен): `provider/model` + `modalities`, **текущая** модель сессии и `defaultFor` (семейства, где модель назначена в `attachments.modalityModels`); без аргументов — компактный ответ (текущая + aux, без дампа каталога: у больших каталогов — сотни моделей), фильтры `modality`/`provider` и `limit` 1..50 (по умолчанию 20); модели без известных модальностей пропускаются и считаются отдельно |
 | Профиль | `profile_update` (capability `user` — выдан только Агенту `assistant`; онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
 | Скиллы | `skill` (ADR-046: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
+
+**Общий предел вывода** (`tools.outputMaxLines`/`tools.outputMaxBytes`, по умолчанию
+2000 строк / 51 200 байт) применяется в единой точке вызова (`executeToolDef`)
+**поверх** лимитов тулов: усечение результата самим тулом (пагинация
+`read_file`/`list_directory`, число совпадений `grep_files`) общий предел не
+отменяет — отключить его тул не может (см.
+[`docs/CONFIGURATION.md`](./CONFIGURATION.md) §«Предел вывода инструментов»).
+
+### Исключения поиска (`grep_files`)
+
+По умолчанию `grep_files` **не показывает** совпадения из служебных и
+сгенерированных путей — зависимостей и артефактов сборки:
+
+| Вид | Значения |
+|---|---|
+| Каталоги (сегмент пути на любой глубине) | `node_modules`, `dist`, `build`, `out`, `coverage`, `.venv`, `venv`, `__pycache__`, `.next`, `.turbo`, `.cache` |
+| Файлы (имя файла) | `*.map`, `*.min.js`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `*.lock` |
+
+Правила — в `packages/core/src/engine/tools/search-exclusions.ts`.
+
+- **Считаются относительно корня поиска.** Исключается сегмент пути *внутри*
+  каталога поиска; сам корень исключением не считается.
+- **Явный путь важнее исключения.** Если `path` указывает на каталог внутри
+  исключаемой области (`path: "node_modules/@itphx/synth-ui"`) или прямо на
+  исключённый файл — поиск идёт, исключения внутри не применяются.
+- **Прозрачность.** Скрытые совпадения считаются: в вывод добавляется маркер
+  `search.matches_excluded` («сколько совпадений скрыто и какие категории
+  пропущены»), а в `metadata` — `excludedMatches` (число) и
+  `excludedCategories` (список категорий). Маркер не конфликтует с маркером
+  усечения `search.matches_truncated` — оба доезжают до модели (в том числе
+  когда общий предел вывода срезает хвост).
+- **`glob`/`list_directory` не фильтруются** — перечисление отвечает на вопрос
+  «что есть в проекте» (включая артефакты сборки), а не «где искать совпадения».
+
+Основание — инцидент 2026-11-08: поиск из корня workspace нашёл совпадение в
+`node_modules/@itphx/synth-ui/dist/assets/currency-D7Ta9S_Z.js.map` (файл целиком
+в одну строку — 236 487 символов) и унёс в контекст модели 243 КБ.
 
 ### План, ToDo, журнал и инварианты (PROP-054)
 

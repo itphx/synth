@@ -205,6 +205,14 @@ export const SYSTEM_MESSAGES = {
   // --- Поиск ---
   'search.no_matches': '(no matches found)',
   'search.matches_truncated': '... (showing {shown} of {total} matches)',
+  // Строка совпадения длиннее капа (`line-limits.ts`: `MAX_LINE_LENGTH`)
+  // обрезается — иначе одна минифицированная строка (source map) съедает
+  // контекстное окно модели.
+  'search.line_truncated': '... (line truncated)',
+  // Совпадения в исключённых путях (зависимости, артефакты сборки, lock-файлы)
+  // скрываются по умолчанию — маркер говорит модели, что часть вывода не показана.
+  'search.matches_excluded':
+    '... ({count} matches hidden: excluded paths were skipped — {categories})',
   'search.rg_not_installed': '(rg (ripgrep) is not installed. Search is unavailable)',
   'search.error': 'Search error: {error}',
   // Различимые причины отказа поиска: модель должна понимать, что именно

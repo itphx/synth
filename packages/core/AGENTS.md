@@ -1403,11 +1403,39 @@
   `{path,type,totalLines|totalEntries,offset,limit,truncated,bytes}`. `glob` — на
   `rg --files` (`cwd` = каталог поиска, `hidden`, `limit` 100/макс 1000,
   сортировка по имени, `.git` и скрытые без `hidden` отсекает общий фильтр
-  `isIgnoredSearchPath` в `path-utils.ts`); `grep_files` — `literal`,
+  `isIgnoredSearchPath` в `path-utils.ts`; **без исключений поиска** — перечисление
+  отвечает на вопрос «что есть в проекте», а не «где искать совпадения»); `grep_files` — `literal`,
   `caseSensitive` (default true), `hidden`, `limit` 100/макс 1000 (лимит общий по
-  строкам совпадений); оба тула — предел 30 с (`SEARCH_TIMEOUT_MS`), истечение —
+  строкам совпадений); **строка совпадения ≤ 2000 символов** — кап общий с
+  `read_file` (`line-limits.ts`: `MAX_LINE_LENGTH`/`clampLine`, маркер
+  `search.line_truncated`; применяется к тексту совпадения, счётчик
+  `metadata.matches` остаётся реальным); оба тула — предел 30 с
+  (`SEARCH_TIMEOUT_MS`), истечение —
   `tool.search_timeout` с советом сузить путь/шаблон. Оба тула объявлены зависимыми от `rg`
-  (`TOOL_RUNTIME_DEP`). `execute_shell` принимает `cwd` (относительно рабочего
+  (`TOOL_RUNTIME_DEP`). **Общий предел вывода** (`tools.outputMaxLines`/
+  `tools.outputMaxBytes`; `applyOutputLimit` в `tool-execution.ts`) стоит **выше**
+  лимитов тулов и **не отменяется** флагом `metadata.truncated` («тул усек
+  результат по своему лимиту»): отключить предел тул не может (инцидент
+  2026-11-08: `grep_files` с одной строкой в 236 КБ унёс в контекст модели
+  243 КБ). Повторно не режется только результат, уложенный самим тулом в общий
+  бюджет (`metadata.outputBounded`); маркер усечения тула
+  (`metadata.truncationNote`) общий бунд не теряет — возвращает в конец
+  (маркеров может быть несколько — `tailNote: string | string[]` в
+  `output-bound.ts`; `toolTailNotes` в `tool-execution.ts` собирает
+  `truncationNote` **и** `excludedNote`). **Исключения поиска по умолчанию**
+  (`grep_files`): зависимости и артефакты сборки в вывод не попадают —
+  `engine/tools/search-exclusions.ts` (`EXCLUDED_SEARCH_DIRECTORIES`:
+  `node_modules`/`dist`/`build`/`out`/`coverage`/`.venv`/`venv`/`__pycache__`/
+  `.next`/`.turbo`/`.cache`; `EXCLUDED_SEARCH_FILE_PATTERNS`: `*.map`/
+  `*.min.js`/`package-lock.json`/`pnpm-lock.yaml`/`yarn.lock`/`*.lock`).
+  Фильтр — **пост-фильтр по пути относительно корня поиска** (не `--glob`
+  ripgrep: база негативной маски — cwd процесса, а не корень поиска), поэтому
+  скрытые совпадения **считаются**: маркер `search.matches_excluded` в выводе +
+  `metadata.excludedMatches`/`metadata.excludedCategories`/`metadata.excludedNote`.
+  Явный путь важнее исключения: корень поиска внутри исключаемой области
+  (`searchRootInsideExcludedDir`) → исключения не применяются вовсе.
+  `glob`/`list_directory` не фильтруются (перечисление ≠ поиск совпадений).
+  `execute_shell` принимает `cwd` (относительно рабочего
   каталога), оболочка — bash, большой вывод усекается маркером; предел по умолчанию —
   120 с, параметр `timeout` (0..600000, `0` — без лимита) его перекрывает; истечение —
   `tool.shell_timeout` с подсказкой (тот же контракт у detach-пути,
