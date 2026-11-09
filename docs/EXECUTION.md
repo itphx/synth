@@ -230,7 +230,7 @@ interface ExecutionPort {
   типа (`name === 'ExecutionError'`) и форму ошибки (`reason`/`message`).
 - **`stdin` не реализован.** Потребности в неинтерактивном вводе у домена нет: exec-API
   обслуживает только неинтерактивные команды (PTY/attach — вне объёма этой версии,
-  [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md)). Поле не добавлено «на будущее» — при
+  [PROP-132](./arch_decisions/prop-132-ui-terminal.md)). Поле не добавлено «на будущее» — при
   реальной потребности контракт изменится осознанно.
 - **Два лимита вывода — это разные вещи.** `maxOutputBytes` — лимит **порта** (буфер
   процесса; по умолчанию 10 МБ — как прежний `maxBuffer`); превышение → ошибка с
@@ -626,7 +626,7 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   (kubelet дочищает контейнер после смерти pod'а) и в зоне worker'а (собственный reaper: при старте
   worker убивает процессы предыдущего экземпляра, если они пережили перезапуск; `execute_shell` уже
   убивает **группу процессов** по SIGTERM при «Стопе», `packages/core/src/engine/tools/shell.ts`).
-- **Интерактивность.** PTY/attach-режим — вне объёма этой версии (референс — PROP-064
+- **Интерактивность.** PTY/attach-режим — вне объёма этой версии (референс — PROP-132
   «UI-терминал»); exec-API — только неинтерактивные команды.
 
 ---
@@ -1214,7 +1214,7 @@ Split-топология технически возможна и при одн�
 - [ADR-113](./arch_decisions/adr-113-background-processes.md) «Фоновые процессы» — общий реестр фоновых процессов.
 - [ADR-114](./arch_decisions/adr-114-git-worktrees.md) «Git worktrees» — персональный cwd как будущая единица работы на исполнителе.
 - [PROP-080](./arch_decisions/prop-080-managed-hybrid-modes.md) / [PROP-081](./arch_decisions/prop-081-hybrid-policy-leak-protection.md) — гибрид: где исполняется local vs managed.
-- [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) «UI-терминал» — PTY/attach вне объёма.
+- [PROP-132](./arch_decisions/prop-132-ui-terminal.md) «UI-терминал» — PTY/attach вне объёма.
 - [PROP-050](./arch_decisions/prop-050-external-engines-runner.md) «Внешние движки» — прецедент отдельного исполняющего сервиса.
 - [docs/CONFIGURATION.md](./CONFIGURATION.md) — конфигурация (секция `execution`).
 - [docs/OBSERVABILITY.md](./OBSERVABILITY.md) — каталог метрик (`synth_executor_*`).

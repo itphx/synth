@@ -3,7 +3,7 @@
 > **Статус:** 🧩 Предложение
 > **Дата:** 2026-11-06
 > **Решение до:** 2026-12-06
-> **Связано:** [ADR-046](./adr-046-skills-and-slash-commands.md), [ADR-115](./adr-115-multimodal-input.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-104](./adr-104-mid-turn-steering.md), [ADR-118](./adr-118-message-stream-v2.md), [ADR-119](./adr-119-context-compaction.md), [PROP-057](./prop-057-loop-engine.md), [PROP-064](./prop-064-ui-browser-terminal.md), [PROP-068](./prop-068-skills-agents-registry.md)
+> **Связано:** [ADR-046](./adr-046-skills-and-slash-commands.md), [ADR-115](./adr-115-multimodal-input.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-104](./adr-104-mid-turn-steering.md), [ADR-118](./adr-118-message-stream-v2.md), [ADR-119](./adr-119-context-compaction.md), [PROP-057](./prop-057-loop-engine.md), [PROP-132](./prop-132-ui-terminal.md), [PROP-068](./prop-068-skills-agents-registry.md)
 
 ## Контекст (что есть сейчас)
 
@@ -45,7 +45,7 @@
 | 4 | `@` | Файлы, агенты, пользователи. Скиллы — только `$`. `@user` — граница: текст до него идёт агенту, текст от него — пользователю без запуска хода |
 | 5 | `$` | Скиллы |
 | 6 | `#` | Сниппеты, три уровня: `instance` / `project` / `user`; приоритет `user > project > instance`; без рекурсии |
-| 7 | `!` | Shell-режим композера; вывод прикрепляется к следующему сообщению **по кнопке**; контракт исполнения — в [PROP-064](./prop-064-ui-browser-terminal.md) |
+| 7 | `!` | Shell-режим композера; вывод прикрепляется к следующему сообщению **по кнопке**; контракт исполнения — в [PROP-132](./prop-132-ui-terminal.md) |
 | 8 | `/review` для общих задач | Не вводить; достаточно git-гейта для кодового ревью |
 
 ## Предлагаемое решение
@@ -239,11 +239,11 @@ system-промптах — нет, иначе сниппет становитс
 - `!` в начале сообщения переводит композер в shell-режим; команда исполняется **тем же** путём, что
   `execute_shell`: ExecutionPort, permissions, containment, cwd проекта, timeout/лимиты. Отдельного
   PTY/exec-пути не появляется.
-- Вывод — в панели терминала ([PROP-064](./prop-064-ui-browser-terminal.md)); по умолчанию в LLM не
+- Вывод — в панели терминала ([PROP-132](./prop-132-ui-terminal.md)); по умолчанию в LLM не
   отправляется. Кнопка «прикрепить вывод» добавляет его к следующему сообщению; точный UX кнопки —
   при реализации терминала.
 - `Esc` или пустой композер — выход из режима. В plan-режиме — read-only/запрет по общим правилам.
-- Синтаксис и ограничения — здесь; PTY, транспорт и UI — в PROP-064.
+- Синтаксис и ограничения — здесь; PTY, транспорт и UI — в PROP-132.
 
 ### 6. Goal не входит в этот PROP
 
@@ -299,7 +299,7 @@ Goal — не ещё один префикс и не ещё одна коман�
   очередь, structured payload.
 - [ADR-119](./adr-119-context-compaction.md) — `/compact`.
 - [PROP-057](./prop-057-loop-engine.md) — Goal Mode как MVP-срез outer loop.
-- [PROP-064](./prop-064-ui-browser-terminal.md) — PTY/терминал и `!`-режим.
+- [PROP-132](./prop-132-ui-terminal.md) — PTY/терминал и `!`-режим.
 - [PROP-068](./prop-068-skills-agents-registry.md) — реестр скиллов/команд и каталог.
 
 ## История

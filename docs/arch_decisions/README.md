@@ -106,7 +106,7 @@
 | PROP-053 | CLI и TUI: паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI | 🧩 Предложение | [prop-053-cli-tui.md](./prop-053-cli-tui.md) |
 | PROP-056 | MCP-сервер Synth и скиллы для внешних агентов: MCP над API v2, auth, права, форматы конфигов клиентов | 🧩 Предложение | [prop-056-synth-mcp-server.md](./prop-056-synth-mcp-server.md) |
 | PROP-062 | Умная оптимизация контекста: `archive_context`, авто-суммаризация, приоритизация, стратегии | 🧩 Предложение | [prop-062-context-optimization.md](./prop-062-context-optimization.md) |
-| PROP-064 | Встроенные в UI браузер и терминал: PTY/WS-терминал, webview/iframe-браузер, синхронизация с агентом | 🧩 Предложение | [prop-064-ui-browser-terminal.md](./prop-064-ui-browser-terminal.md) |
+| PROP-064 | Браузер под управлением агента — серверный headless и пользовательский headed | 🧩 Предложение | [prop-064-agent-browser.md](./prop-064-agent-browser.md) |
 | PROP-065 | Просмотр документации, планов и ToDo в UI: docs-браузер, редактор плана/todo, связи, внешний vault | 🧩 Предложение | [prop-065-ui-docs-plan-todo.md](./prop-065-ui-docs-plan-todo.md) |
 | PROP-066 | Скиллы и гайдлайны оформления документации: doc-стандарты, шаблоны, авто-проверка (docs-lint) | 🧩 Предложение | [prop-066-doc-style-skills.md](./prop-066-doc-style-skills.md) |
 | PROP-068 | Реестр и каталог скиллов и агентов: свой репозиторий, индекс, trust/guard, install-policy, agent-packs | 🧩 Предложение | [prop-068-skills-agents-registry.md](./prop-068-skills-agents-registry.md) |
@@ -123,6 +123,7 @@
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
 | PROP-126 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | 🧩 Предложение | [prop-126-input-surface-mentions-snippets.md](./prop-126-input-surface-mentions-snippets.md) |
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
+| PROP-132 | Встроенный терминал в UI | 🧩 Предложение | [prop-132-ui-terminal.md](./prop-132-ui-terminal.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -171,5 +172,5 @@
 
 ---
 
-Всего документов: 110 (Решения: 56, Частично: 23, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 111 (Решения: 56, Частично: 23, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 21 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

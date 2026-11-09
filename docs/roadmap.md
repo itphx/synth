@@ -1,7 +1,7 @@
 # Roadmap
 
 > Индекс ближайших работ и предложений со ссылками на документы — не история и не спецификация.
-> Актуально на **2026-11-05**. Правила классов и статусов — [ARCH_DECISIONS.md](./ARCH_DECISIONS.md),
+> Актуально на **2026-11-09**. Правила классов и статусов — [ARCH_DECISIONS.md](./ARCH_DECISIONS.md),
 > каталог решений — [arch_decisions/README.md](./arch_decisions/README.md).
 
 ## 0.13.4 — стабилизация (выпущен)
@@ -73,7 +73,6 @@
 |---|---|---|
 | [PROP-110](./arch_decisions/prop-110-portal-platform.md) | Портал-платформа | общий UI-kit, единый вход и оболочка портала; первый потребитель — `synth-media` |
 | [PROP-109](./arch_decisions/prop-109-agent-system-federation.md) | Федерация | внешняя агентная система как управляемый peer: реестр, права, маршрутизация |
-| [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) | Терминал и браузер в UI | PTY/WS-терминал и webview, синхронизация с агентом |
 | [PROP-055](./arch_decisions/prop-055-instance-exchange.md) | Обмен инстансами | идемпотентный upsert/дельта, peer-auth |
 | [PROP-057](./arch_decisions/prop-057-loop-engine.md) / [PROP-058](./arch_decisions/prop-058-service-agents-council.md) | Loop и Council | внешний цикл с рубрикой; служебные агенты и консилиум |
 | [PROP-060](./arch_decisions/prop-060-multi-contour-bridge.md) | Contour Bridge | шлюз между контурами, обезличивание, аудит |
@@ -99,7 +98,7 @@
 | [PROP-053](./arch_decisions/prop-053-cli-tui.md) | CLI и TUI | 2026-11-14 | паритет CLI; кандидат в icebox |
 | [PROP-056](./arch_decisions/prop-056-synth-mcp-server.md) | MCP-сервер Synth для агентов | 2026-11-14 | MCP над API v2, auth, права |
 | [PROP-062](./arch_decisions/prop-062-context-optimization.md) | Оптимизация контекста | 2026-11-14 | `archive_context`, авто-суммаризация; пересекается с ADR-119 |
-| [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) | Терминал и браузер в UI | 2026-11-14 | PTY/WS и webview; горизонт |
+| [PROP-064](./arch_decisions/prop-064-agent-browser.md) | Браузер под управлением агента | 2026-11-14 | серверный headless уже есть; пользовательский headed — только local/hybrid |
 | [PROP-065](./arch_decisions/prop-065-ui-docs-plan-todo.md) | Docs/план/ToDo в UI | 2026-11-14 | docs-браузер, Obsidian Bridge |
 | [PROP-066](./arch_decisions/prop-066-doc-style-skills.md) | Doc-стандарты и docs-lint | 2026-11-14 | дёшево, ничего не блокирует |
 | [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) | Реестр и каталог расширений | 2026-11-14 | остаток ADR-046; каталог-MVP — в 0.14 |
@@ -116,6 +115,7 @@
 | [PROP-110](./arch_decisions/prop-110-portal-platform.md) | Портал-платформа | 2026-12-31 | UI-kit и оболочка; первый потребитель — `synth-media` |
 | [PROP-126](./arch_decisions/prop-126-input-surface-mentions-snippets.md) | Поверхность ввода: `/`, `@`, `$`, `#`, `!` | 2026-12-06 | `/compact` — остро; `@` — файлы/агенты/пользователи (`@user` — доставка без хода); `$` — скиллы; `#` — сниппеты (instance/project/user); goal — в PROP-057 |
 | [PROP-131](./arch_decisions/prop-131-external-dependency-mirrors.md) | Зеркала внешних зависимостей сборки | 2026-12-08 | инцидент GitHub 2026-11-08; Gitea Generic + манифест + sha256; базовые образы и npm — отдельными решениями |
+| [PROP-132](./arch_decisions/prop-132-ui-terminal.md) | Встроенный терминал в UI | 2026-12-31 | PTY/WS, панель терминала; `!`-режим — в PROP-126 |
 
 **Триаж до 2026-11-14:** принять / icebox / отклонить / перенести (перенос — новой датой, а не молчанием).
 Принятое становится ADR, файл PROP удаляется; поглощённое — удаляется с записью «Поглощено»; снятое — в icebox/отклонено.

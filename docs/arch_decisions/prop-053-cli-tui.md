@@ -83,4 +83,4 @@ CLI не является полноценным клиентом удалённ
 - [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — `/`-команды в интерактивном CLI.
 - [ADR-079](./adr-079-local-home-independent-instances.md) «Локальный home» — пути и изоляция инстансов.
 - [ADR-043](./adr-043-unified-identity-login.md) «Единая идентичность» — аутентификация как клиента API.
-- Смежные черновики: D19/PROP-064 (встроенные терминал/браузер в UI).
+- Смежные черновики: D19 — [PROP-064](./prop-064-agent-browser.md) (браузер) и [PROP-132](./prop-132-ui-terminal.md) (терминал).
