@@ -48,7 +48,7 @@ const TRUST_SOURCE_BADGE_CLASS: Record<SkillsTrustedProjectDirsSource, string> =
 }
 
 /**
- * ADR-046 §4.5/§9.2 / ADR-072: админ-категория «Скиллы» — instance-реестр с CRUD
+ * ADR-046 §4.5/§9.2 / ADR-072: админ-категория «Скиллы и инструкции» — instance-реестр с CRUD
  * (`SKILL.md` + supporting-файлы), system-level enable/disable группами
  * (categories/groups) и точечно (name), политика включения.
  */

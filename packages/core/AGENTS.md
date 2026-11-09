@@ -400,9 +400,20 @@
   события **этой** сессии; явный `opts.eventSeq` (удалённый источник) не ломает монотонность —
   `seq = max(глобальный счётчик + 1, явный)`.
 - **`GET /api/v2/meta`** (`server/routes/meta.ts`, **без аутентификации**; монтируется и в core, и
-  в backend): `{messageModel: 2, eventSeq: true, replay: true, version}`; аддитивное `attachments`
+  в backend; в обеих сборках публичен — общий allowlist `server/app/public-routes.ts`):
+  `{messageModel: 2, eventSeq: true, replay: true, version}`; аддитивное `attachments`
   (ADR-115) — эффективные лимиты вложений (`enabled`/`modalities`/лимиты; `MetaRoutesDeps.getAttachments`
   читается на каждый запрос).
+- **Признаки возможностей (`features`, PROP-125).** `MetaRoutesDeps.getFeatures` — резолвер
+  `{remoteMcp?: boolean; users?: boolean}`; отсутствие поля/признака = «фичи нет» (fail-closed).
+  **`features.users`** — признак, что инстанс обслуживает `/api/v2/users*` (управление
+  пользователями): **managed backend — всегда `true`** (маршрут смонтирован в
+  `packages/backend/src/routes/users.ts`); **core standalone (чистый) — `false`** (маршрута нет,
+  проксировать нечего); **core в гибриде — `true` ровно тогда, когда удалённый backend
+  подключён** — в `server/app/mount-routes.ts` это `getFeatures: () => ({ users: Boolean(getClient()) })`
+  (`ctx.remote.getClient()` → `connection.client`; `null`, пока нет сессии), т.е. ровно то же
+  условие, при котором работает прокси `/api/v2/users` (`REMOTE_PROXY_PREFIXES` в
+  `server/proxy.ts`). Клиент не догадывается о наличии эндпоинта — читает признак из `/meta`.
 - **Гейт версии клиента:** WS `/ws/events` без `messageModel=2` закрывается кодом `1008`
   (`messageModel=2 required`), SSE `GET /api/v2/events` отвечает `426 UPGRADE_REQUIRED`; догон —
   `?since=`/`Last-Event-ID`, SSE-кадр несёт `id: <eventSeq>`. Сессионного SSE нет —
@@ -604,6 +615,20 @@
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
+- **Гейт на границе `/api/*` — fail-closed, публичные пути — allowlist (F6, аудит §6.1).**
+  В `server/app.ts` вместо сплошного `app.use('/api/*', requireAuth)` висит middleware,
+  который пропускает **только** пути из общего (с managed backend) allowlist
+  `PUBLIC_API_V2_PATHS`/`isPublicApiV2Path` (`server/app/public-routes.ts`,
+  ADR-017/ADR-018: общая логика HTTP — в core; backend — реэкспорт из core).
+  Публичны `GET /api/v2/health`, `GET /api/v2/meta` (ADR-118 §8 — клиент сверяет
+  модель сообщений **до логина**), `GET /api/v2/i18n/current`,
+  `GET /api/v2/i18n/translations/{ru,en}`; `OPTIONS` (CORS preflight) разрешён явно.
+  Строго по методу+пути (wildcard по префиксу запрещён): всё остальное под `/api/*`
+  требует ключа (`401 UNAUTHORIZED`), новый роутер без guard'а анонимным **не**
+  становится. Публичная заглушка `GET /api/config/themes` зарегистрирована **до**
+  гейта и потому остаётся публичной. Allowlist общий для обеих сборок, поэтому
+  i18n-пути из него в standalone отвечают `404` (таких роутов в core нет) — не
+  `401`. Тест — `server/app.public-routes.test.ts`.
 - **Лимит тяжёлых операций с сессиями.** `limits.sessionOpsPerMinute` — instance-wide, резолвер
   `resolveSessionOpsPerMinute` (env `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` > runtime
   `settings.json`/PG > `config.yaml` > `10`; `0` — без лимита) + live-состояние

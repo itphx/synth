@@ -5,9 +5,10 @@ import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import {
   SETTINGS_CATALOG,
   SETTINGS_CATEGORIES,
-  isCategoryAvailableForDeployment,
+  isCategoryAvailable,
   normalizeSettingsQuery,
   searchSettings,
+  type SettingsCategoryMeta,
 } from './settings-catalog'
 
 const t = (key: string) => (enDict as Record<string, string>)[key] ?? key
@@ -60,38 +61,55 @@ describe('settings-catalog — «Управление контекстом»', (
   })
 })
 
-describe('settings-catalog — раздел «Пользователи» и режим развёртывания', () => {
-  it('помечен `deployments: [\'managed\']` — эндпоинт `/api/v2/users` есть только в backend', () => {
+describe('settings-catalog — раздел «Пользователи» и признаки инстанса', () => {
+  it('помечен `requiresFeatures: [\'users\']` — эндпоинт `/api/v2/users` есть не везде', () => {
     const category = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')
     expect(category).toBeDefined()
     expect(category?.roles).toEqual(['ADMIN'])
-    expect(category?.deployments).toEqual(['managed'])
+    expect(category?.requiresFeatures).toEqual(['users'])
   })
 
-  it('в managed доступен; в чистом standalone — нет; неизвестный deployment — fail-closed', () => {
+  it('виден, только если сервер объявил фичу (`features.users === true`)', () => {
     const users = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')!
-    expect(isCategoryAvailableForDeployment(users, 'managed')).toBe(true)
-    expect(isCategoryAvailableForDeployment(users, 'standalone')).toBe(false)
-    expect(isCategoryAvailableForDeployment(users, null)).toBe(false)
+    expect(isCategoryAvailable(users, { users: true })).toBe(true)
   })
 
-  it('в standalone доступен при подключённом гибриде (удалённый backend проксируется)', () => {
+  it('нет признака (`features === undefined`) — скрыт (fail-closed)', () => {
     const users = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')!
-    expect(isCategoryAvailableForDeployment(users, 'standalone', true)).toBe(true)
-    expect(isCategoryAvailableForDeployment(users, 'standalone', false)).toBe(false)
+    expect(isCategoryAvailable(users, undefined)).toBe(false)
+    expect(isCategoryAvailable(users, null)).toBe(false)
   })
 
-  it('неизвестный deployment скрывает раздел даже при подключённом гибриде', () => {
+  it('признак `false` — скрыт', () => {
     const users = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')!
-    expect(isCategoryAvailableForDeployment(users, null, true)).toBe(false)
+    expect(isCategoryAvailable(users, { users: false })).toBe(false)
   })
 
-  it('категория без `deployments` доступна во всех режимах', () => {
+  it('признак отсутствует в объекте `features` — скрыт', () => {
+    const users = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')!
+    expect(isCategoryAvailable(users, {})).toBe(false)
+    expect(isCategoryAvailable(users, { remoteMcp: true })).toBe(false)
+  })
+
+  it('категория без `requiresFeatures` доступна всегда', () => {
     const profile = SETTINGS_CATEGORIES.find((cat) => cat.id === 'profile')!
-    expect(profile.deployments).toBeUndefined()
-    expect(isCategoryAvailableForDeployment(profile, 'managed')).toBe(true)
-    expect(isCategoryAvailableForDeployment(profile, 'standalone')).toBe(true)
-    expect(isCategoryAvailableForDeployment(profile, null)).toBe(true)
+    expect(profile.requiresFeatures).toBeUndefined()
+    expect(isCategoryAvailable(profile, undefined)).toBe(true)
+    expect(isCategoryAvailable(profile, null)).toBe(true)
+    expect(isCategoryAvailable(profile, { users: false })).toBe(true)
+  })
+
+  it('несколько требуемых фич — нужны все', () => {
+    const category: SettingsCategoryMeta = {
+      id: 'x',
+      group: 'personal',
+      labelKey: 'settings.category.profile',
+      icon: 'user-smile',
+      requiresFeatures: ['users', 'remoteMcp'],
+    }
+    expect(isCategoryAvailable(category, { users: true, remoteMcp: true })).toBe(true)
+    expect(isCategoryAvailable(category, { users: true })).toBe(false)
+    expect(isCategoryAvailable(category, { remoteMcp: true })).toBe(false)
   })
 })
 

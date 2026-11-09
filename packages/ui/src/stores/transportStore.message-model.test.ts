@@ -57,6 +57,7 @@ vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 
 import { useTransportStore, createDispatcher, resetEventSeqTracking, restoreLiveTurnFromHistory } from './transportStore'
 import { useChatStore, type MessageData } from './chatStore'
+import { useInstanceCapabilitiesStore } from './instanceCapabilitiesStore'
 import { resetChatStore } from './testUtils'
 import { notifyMessage } from '@/hooks/useNotification'
 import type { WSEvent } from '@/lib/api/transport'
@@ -80,6 +81,9 @@ beforeEach(() => {
   mocks.instances.length = 0
   vi.clearAllMocks()
   mocks.api.getInstanceCapabilities.mockResolvedValue(CAPS_OK)
+  // Кэш `/meta` живёт в сторе возможностей инстанса — сбрасываем, чтобы
+  // каждый тест сверялся со своим ответом сервера.
+  useInstanceCapabilitiesStore.getState().resetForTests()
   resetEventSeqTracking()
   resetChatStore()
 })

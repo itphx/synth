@@ -67,6 +67,27 @@ describe('instanceCapabilities (ADR-118 §8)', () => {
     const empty = instanceCapabilities({ getFeatures: () => ({}) });
     expect('features' in empty).toBe(false);
   });
+
+  // `features.users` — признак, что инстанс обслуживает `/api/v2/users*`
+  // (управление пользователями): managed — всегда; core standalone — нет;
+  // core в гибриде — пока подключён удалённый backend.
+  it('features.users === true, когда контур обслуживается', () => {
+    const caps = instanceCapabilities({ getFeatures: () => ({ users: true }) });
+    expect(caps.features).toEqual({ users: true });
+  });
+
+  it('features.users === false — блок features присутствует, признак выключен', () => {
+    const caps = instanceCapabilities({ getFeatures: () => ({ users: false, remoteMcp: false }) });
+    expect('features' in caps).toBe(true);
+    expect(caps.features?.users).toBe(false);
+    expect(caps.features?.remoteMcp).toBe(false);
+  });
+
+  it('features без users — блок есть, признак отсутствует (fail-closed: «фичи нет»)', () => {
+    const caps = instanceCapabilities({ getFeatures: () => ({ remoteMcp: true }) });
+    expect(caps.features).toEqual({ remoteMcp: true });
+    expect(caps.features?.users).toBeUndefined();
+  });
 });
 
 describe('GET /meta (ADR-118 §8)', () => {
@@ -97,5 +118,13 @@ describe('GET /meta (ADR-118 §8)', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { features?: unknown };
     expect(body.features).toBeUndefined();
+  });
+
+  it('200 и features.users в ответе при заданном резолвере', async () => {
+    const app = createMetaRoutes({ getFeatures: () => ({ users: true }) });
+    const res = await app.request('/meta');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { features?: { users?: boolean } };
+    expect(body.features?.users).toBe(true);
   });
 });

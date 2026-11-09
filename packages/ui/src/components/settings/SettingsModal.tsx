@@ -4,14 +4,14 @@ import { Button } from "../ui/button"
 import { Icon } from "../icon/Icon"
 import { useUIStore } from "../../stores/useUIStore"
 import { useAuthStore } from "@/stores/authStore"
-import { useHybridStore, selectIsRemoteAvailable } from "@/stores/hybridStore"
+import { useInstanceCapabilitiesStore } from "@/stores/instanceCapabilitiesStore"
 import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 import { useDevice } from "@/hooks/useDevice"
 import {
   SETTINGS_CATEGORIES,
   SETTINGS_GROUPS,
-  isCategoryAvailableForDeployment,
+  isCategoryAvailable,
   searchSettings,
   type SettingsCategoryMeta,
 } from "@/lib/settings-catalog"
@@ -93,24 +93,23 @@ export const SettingsModal = () => {
   const hasQuery = query.trim().length > 0
 
   const userRoles = user?.roles ?? []
-  const deployment = useAuthStore(s => s.deployment)
-  // Удалённый backend доступен: гибрид включён, подключён и не деградировал.
-  // Тогда локальный core проксирует `/api/v2/*` на удалённый сервер, и
-  // backend-only эндпоинты (например `/api/v2/users`) работают и в standalone.
-  const remoteAvailable = useHybridStore(selectIsRemoteAvailable)
+  // Признаки инстанса из `GET /api/v2/meta` → `features` (сервер объявляет,
+  // что он обслуживает). Раздел, завязанный на опциональный эндпоинт
+  // (например «Пользователи» → `/api/v2/users`), помечен `requiresFeatures`
+  // в каталоге; нет признака — раздел скрыт (fail-closed, без «мигания»).
+  const features = useInstanceCapabilitiesStore((s) => s.capabilities?.features)
 
-  // Режим развёртывания: раздел, завязанный на backend-only эндпоинт (например
-  // «Пользователи» → `/api/v2/users`, которого нет в чистом standalone), помечен
-  // `deployments` в каталоге и скрыт, если нужный backend недоступен.
-  // Неизвестный deployment (до `/auth/status`) — fail-closed: раздел скрыт,
-  // ничего не мигает.
-  const deploymentCategories = SETTINGS_CATEGORIES.filter((cat) =>
-    isCategoryAvailableForDeployment(cat, deployment, remoteAvailable),
-  )
+  // Открытие окна инициирует загрузку возможностей: иначе раздел может не
+  // появиться, если транспорт ещё не подключался (и `/meta` не спрашивали).
+  useEffect(() => {
+    if (!isSettingsDialogOpen) return
+    void useInstanceCapabilitiesStore.getState().load()
+  }, [isSettingsDialogOpen])
 
   // Продвинутые категории скрыты, пока не включён режим «Расширенные»; роли —
   // как раньше: пользователь без роли категорию не видит.
-  const roleCategories = deploymentCategories.filter(
+  const featureCategories = SETTINGS_CATEGORIES.filter((cat) => isCategoryAvailable(cat, features))
+  const roleCategories = featureCategories.filter(
     (cat) => !cat.roles || cat.roles.some((r) => userRoles.includes(r)),
   )
   const visibleCategories = roleCategories.filter((cat) => settingsShowAdvanced || !cat.advanced)
@@ -121,8 +120,8 @@ export const SettingsModal = () => {
 
   // Поиск идёт по всем категориям, доступным роли: скрытые advanced-разделы
   // должны находиться, даже когда тумблер «Расширенные» выключен. Разделы,
-  // недоступные в режиме развёртывания, в поиске не находятся — иначе раздел
-  // нашёлся бы, но не открылся.
+  // недоступные на инстансе (нет требуемой фичи), в поиске не находятся —
+  // иначе раздел нашёлся бы, но не открылся.
   const roleCategoryIds = new Set(roleCategories.map((cat) => cat.id))
   const searchResult = hasQuery ? searchSettings(t, query) : { categories: [], entries: [] }
   const resultCategories = searchResult.categories.filter((cat) => roleCategoryIds.has(cat.id))

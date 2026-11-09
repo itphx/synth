@@ -1192,7 +1192,16 @@ export function mountStandaloneRoutes(
   // по ней клиент сверяет модель сообщений (fail-closed гейт транспорта).
   app.route(
     '/api/v2',
-    createMetaRoutes({ getAttachments: () => deps.attachmentsSettings.getConfig() }),
+    createMetaRoutes({
+      getAttachments: () => deps.attachmentsSettings.getConfig(),
+      // `features.users` — признак, что инстанс обслуживает `/api/v2/users*`
+      // (управление пользователями). В чистом standalone маршрута нет и
+      // проксировать нечего → `false`. В гибриде локальный core проксирует
+      // `/api/v2/users` на удалённый backend (`REMOTE_PROXY_PREFIXES`), и
+      // прокси работает ровно тогда, когда удалённый backend подключён
+      // (`getClient()` → `null`, пока нет сессии).
+      getFeatures: () => ({ users: Boolean(getClient()) }),
+    }),
   );
 
   // ADR-069 §9.3: read-only прозрачность проектных инструкций (session/project scope).

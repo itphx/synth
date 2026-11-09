@@ -9,8 +9,6 @@
  * сколько нужно для рабочего поиска и перехода к уже размеченным секциям.
  */
 
-import type { DeploymentKind } from '@/lib/api/client'
-
 export type SettingsGroupId =
   | 'personal'
   | 'adminOverview'
@@ -29,14 +27,18 @@ export interface SettingsCategoryMeta {
   /** Скрыта, пока не включён режим «Расширенные». */
   advanced?: boolean
   /**
-   * Режимы развёртывания, в которых раздел доступен. Раздел, завязанный на
-   * backend-only эндпоинт (например `/api/v2/users`, которого нет в чистом
-   * standalone), помечается `deployments: ['managed']` — он требует
-   * managed backend (в гибриде backend доступен через прокси локального core).
+   * Фичи инстанса, необходимые разделу; берутся из `GET /api/v2/meta` →
+   * `features` (сервер объявляет, что он обслуживает).
    *
-   * Не задан — раздел виден во всех режимах.
+   * Раздел, завязанный на опциональный эндпоинт (например `/api/v2/users`,
+   * которого нет в чистом standalone), помечается `requiresFeatures: ['users']`.
+   *
+   * Нет признака (сервер не объявил / старая версия) — раздел скрыт
+   * (fail-closed).
+   *
+   * Не задан — раздел виден всегда.
    */
-  deployments?: DeploymentKind[]
+  requiresFeatures?: string[]
   /** Синонимы для поиска (ru/en, нижний регистр). */
   keywords?: string[]
 }
@@ -189,17 +191,17 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     keywords: ['projects', 'workspace', 'проекты', 'рабочий каталог'],
   },
   {
-    // Управление пользователями — нужен managed backend: `/api/v2/users*`
-    // смонтирован лишь в packages/backend/src/routes/users.ts. В чистом
-    // standalone такого эндпоинта нет (404) → раздел скрыт по режиму
-    // развёртывания. В гибриде раздел доступен: локальный core проксирует
-    // `/api/v2/users` на удалённый backend (REMOTE_PROXY_PREFIXES).
+    // Управление пользователями — нужно, чтобы инстанс обслуживал
+    // `/api/v2/users*`. Признак объявляет сервер: `GET /api/v2/meta` →
+    // `features.users` (managed backend — `true`; чистый standalone — `false`;
+    // core в гибриде — `true`, пока удалённый backend подключён и проксирует
+    // `/api/v2/users` на него). Нет признака — раздел скрыт (fail-closed).
     id: 'users',
     group: 'adminOverview',
     labelKey: 'settings.category.users',
     icon: 'user-smile',
     roles: ['ADMIN'],
-    deployments: ['managed'],
+    requiresFeatures: ['users'],
     keywords: ['users', 'accounts', 'пользователи', 'учётные записи'],
   },
 
@@ -278,7 +280,7 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     labelKey: 'settings.category.skillsAdmin',
     icon: 'book-open',
     roles: ['ADMIN'],
-    keywords: ['skills', 'скиллы'],
+    keywords: ['skills', 'skills and instructions', 'instructions', 'trusted directories', 'скиллы', 'инструкции', 'доверенные каталоги'],
   },
   {
     id: 'commands',
@@ -486,37 +488,27 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
 ]
 
 /**
- * Доступен ли раздел в текущем режиме развёртывания.
+ * Доступен ли раздел на текущем инстансе.
  *
- * Раздел без `deployments` доступен везде. Раздел, помеченный
- * `deployments` (например `['managed']` для `/api/v2/users`), требует
- * **managed backend** — но бэкенд доступен не только в managed-инстансе:
+ * Раздел без `requiresFeatures` доступен всегда. Раздел, помеченный
+ * `requiresFeatures` (например `['users']` для `/api/v2/users`), требует
+ * признака, который **объявляет сервер**: `GET /api/v2/meta` → `features`.
  *
- * - `deployment === 'managed'` — эндпоинт есть локально;
- * - `deployment === 'standalone'` + `remoteAvailable` (подключённый гибрид) —
- *   локальный core проксирует `/api/v2/*` на удалённый backend
- *   (`REMOTE_PROXY_PREFIXES` в `packages/core/src/server/proxy.ts`), поэтому
- *   эндпоинт тоже работает.
+ * Признак строгий: `true` — доступно; `false`/`undefined` — «фичи нет».
+ * Нет ответа мета (старый сервер, сеть) — **fail-closed**: раздел скрыт,
+ * чтобы он не «мигал» при первом рендере и не дёргал отсутствующий эндпоинт.
  *
- * Неизвестный `deployment` (до ответа `/auth/status`) — **fail-closed**: раздел
- * скрыт. Так он не «мигает» при первом рендере и не дёргает отсутствующий
- * эндпоинт.
- *
- * @param deployment режим развёртывания из `useAuthStore`
- * @param remoteAvailable удалённый backend доступен (гибрид подключён и не
- *   деградировал) — признак из `useHybridStore`
+ * @param category категория каталога
+ * @param features признаки инстанса из `features` (`undefined` — не объявлены)
  */
-export function isCategoryAvailableForDeployment(
+export function isCategoryAvailable(
   category: SettingsCategoryMeta,
-  deployment: DeploymentKind | null,
-  remoteAvailable = false,
+  features: Record<string, boolean | undefined> | null | undefined,
 ): boolean {
-  if (!category.deployments || category.deployments.length === 0) return true
-  if (!deployment) return false
-  if (category.deployments.includes(deployment)) return true
-  // Standalone + подключённый гибрид: удалённый backend доступен через прокси
-  // локального core — требуемый эндпоинт существует и отвечает.
-  return deployment === 'standalone' && remoteAvailable
+  const required = category.requiresFeatures
+  if (!required || required.length === 0) return true
+  if (!features) return false
+  return required.every((name) => features[name] === true)
 }
 
 export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [

@@ -63,16 +63,31 @@ vi.mock('../admin/UsersPanel', () => ({ UsersPanel: () => <div>users-page</div> 
 vi.mock('../admin/DefaultsPanel', () => ({ DefaultsPanel: () => <div>defaults-page</div> }))
 vi.mock('../admin/DebugPanel', () => ({ DebugPanel: () => <div>debug-page</div> }))
 
+// `/api/v2/meta` — единственный источник признаков инстанса.
+vi.mock('@/lib/api/synthApi', () => ({
+  synthApi: {
+    getInstanceCapabilities: vi.fn(),
+  },
+}))
+
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { SettingsModal } from './SettingsModal'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/authStore'
-import { useHybridStore } from '@/stores/hybridStore'
+import { useInstanceCapabilitiesStore } from '@/stores/instanceCapabilitiesStore'
+import { synthApi } from '@/lib/api/synthApi'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Root[] = []
+
+const CAPS_BASE = {
+  messageModel: 2,
+  eventSeq: true,
+  replay: true,
+  version: '0.13.7',
+}
 
 function setNativeValue(el: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
@@ -92,6 +107,10 @@ async function renderModal(): Promise<void> {
       </I18nProvider>,
     )
   })
+  // Ждём ответ `/meta` и перерисовку (признаки приходят из ответа сервера).
+  await act(async () => {
+    await Promise.resolve()
+  })
 }
 
 function navText(): string {
@@ -107,7 +126,8 @@ beforeEach(() => {
     settingsFocus: null,
   })
   useAuthStore.setState({ user: { roles: ['ADMIN'] } as never, deployment: null })
-  useHybridStore.setState({ enabled: false, connected: false, remoteDegraded: false })
+  useInstanceCapabilitiesStore.getState().resetForTests()
+  vi.mocked(synthApi.getInstanceCapabilities).mockResolvedValue(CAPS_BASE)
 })
 
 afterEach(() => {
@@ -115,54 +135,67 @@ afterEach(() => {
     for (const root of roots.splice(0)) root.unmount()
   })
   document.body.innerHTML = ''
+  useInstanceCapabilitiesStore.getState().resetForTests()
+  vi.clearAllMocks()
 })
 
 /**
- * `/api/v2/users*` смонтирован только в managed backend. В standalone раздел
- * «Пользователи» скрыт (иначе он падал бы с 404) — **кроме** режима с
- * подключённым гибридом: там локальный core проксирует `/api/v2/*` на
- * удалённый backend, и эндпоинт работает.
+ * Раздел «Пользователи» завязан на `/api/v2/users*`. Признак, что инстанс
+ * этот эндпоинт обслуживает, объявляет **сервер**: `GET /api/v2/meta` →
+ * `features.users`. Нет признака — раздел скрыт (fail-closed).
  */
-describe('SettingsModal — раздел «Пользователи» и режим развёртывания', () => {
-  it('в managed раздел «Пользователи» виден для ADMIN', async () => {
+describe('SettingsModal — раздел «Пользователи» и признаки инстанса', () => {
+  it('без `features.users` раздел скрыт даже для ADMIN', async () => {
+    vi.mocked(synthApi.getInstanceCapabilities).mockResolvedValue({
+      ...CAPS_BASE,
+      features: { users: false },
+    })
+
+    await renderModal()
+
+    expect(navText()).not.toContain('Users')
+  })
+
+  it('сервер без блока `features` (старый сервер) — раздел скрыт', async () => {
+    vi.mocked(synthApi.getInstanceCapabilities).mockResolvedValue(CAPS_BASE)
+
+    await renderModal()
+
+    expect(navText()).not.toContain('Users')
+  })
+
+  it('`features: { users: true }` — раздел виден для ADMIN', async () => {
+    vi.mocked(synthApi.getInstanceCapabilities).mockResolvedValue({
+      ...CAPS_BASE,
+      features: { users: true },
+    })
+
+    await renderModal()
+
+    expect(navText()).toContain('Users')
+  })
+
+  it('признак приходит из `/meta`: режим развёртывания больше не влияет', async () => {
+    useAuthStore.setState({ deployment: 'standalone' })
+    vi.mocked(synthApi.getInstanceCapabilities).mockResolvedValue({
+      ...CAPS_BASE,
+      features: { users: true },
+    })
+
+    await renderModal()
+
+    expect(navText()).toContain('Users')
+  })
+
+  it('обратно: `deployment: managed`, но признака нет — раздел скрыт', async () => {
     useAuthStore.setState({ deployment: 'managed' })
-    await renderModal()
 
-    expect(navText()).toContain('Users')
-  })
-
-  it('в чистом standalone раздел не виден даже для ADMIN', async () => {
-    useAuthStore.setState({ deployment: 'standalone' })
     await renderModal()
 
     expect(navText()).not.toContain('Users')
   })
 
-  it('в standalone с подключённым гибридом раздел виден (эндпоинт проксируется)', async () => {
-    useAuthStore.setState({ deployment: 'standalone' })
-    useHybridStore.setState({ enabled: true, connected: true, remoteDegraded: false })
-    await renderModal()
-
-    expect(navText()).toContain('Users')
-  })
-
-  it('в standalone с деградировавшим гибридом раздел скрыт', async () => {
-    useAuthStore.setState({ deployment: 'standalone' })
-    useHybridStore.setState({ enabled: true, connected: true, remoteDegraded: true })
-    await renderModal()
-
-    expect(navText()).not.toContain('Users')
-  })
-
-  it('при неизвестном deployment раздел скрыт (fail-closed, без «мигания»)', async () => {
-    useAuthStore.setState({ deployment: null })
-    await renderModal()
-
-    expect(navText()).not.toContain('Users')
-  })
-
-  it('в standalone раздел не находится и поиском — открыть его нельзя', async () => {
-    useAuthStore.setState({ deployment: 'standalone' })
+  it('без признака раздел не находится и поиском — открыть его нельзя', async () => {
     await renderModal()
 
     const input = document.querySelector('[data-testid="settings-search-input"]') as HTMLInputElement
@@ -174,9 +207,11 @@ describe('SettingsModal — раздел «Пользователи» и реж�
     expect(document.querySelector('[data-testid="settings-search-entry-users.new"]')).toBeNull()
   })
 
-  it('в standalone с гибридом раздел находится поиском и открывается', async () => {
-    useAuthStore.setState({ deployment: 'standalone' })
-    useHybridStore.setState({ enabled: true, connected: true, remoteDegraded: false })
+  it('с признаком раздел находится поиском и открывается', async () => {
+    vi.mocked(synthApi.getInstanceCapabilities).mockResolvedValue({
+      ...CAPS_BASE,
+      features: { users: true },
+    })
     await renderModal()
 
     const input = document.querySelector('[data-testid="settings-search-input"]') as HTMLInputElement
@@ -197,30 +232,7 @@ describe('SettingsModal — раздел «Пользователи» и реж�
     expect(document.body.textContent).toContain('users-page')
   })
 
-  it('в managed раздел находится поиском и открывается', async () => {
-    useAuthStore.setState({ deployment: 'managed' })
-    await renderModal()
-
-    const input = document.querySelector('[data-testid="settings-search-input"]') as HTMLInputElement
-    await act(async () => {
-      setNativeValue(input, 'users')
-    })
-
-    const category = document.querySelector(
-      '[data-testid="settings-search-category-users"]',
-    ) as HTMLButtonElement
-    expect(category).not.toBeNull()
-
-    await act(async () => {
-      category.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-
-    expect(useUIStore.getState().settingsPage).toBe('users')
-    expect(document.body.textContent).toContain('users-page')
-  })
-
-  it('в standalone сохранённый settingsPage=users не открывает раздел', async () => {
-    useAuthStore.setState({ deployment: 'standalone' })
+  it('без признака сохранённый settingsPage=users не открывает раздел', async () => {
     useUIStore.setState({ settingsPage: 'users' })
     await renderModal()
 

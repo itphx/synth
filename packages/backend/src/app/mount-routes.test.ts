@@ -153,6 +153,21 @@ describe('backend: контракт монтирования роутов (mount
     }
   });
 
+  it('публичный /api/v2/meta объявляет features: remoteMcp + users (managed)', async () => {
+    const res = await req('/api/v2/meta');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      messageModel: number;
+      features?: { remoteMcp?: boolean; users?: boolean };
+    };
+    expect(body.messageModel).toBe(2);
+    // Маршрут `/api/v2/users*` (управление пользователями) смонтирован в
+    // backend → контур есть всегда, признак объявляется сервером.
+    expect(body.features?.users).toBe(true);
+    // PROP-125: сервер гибрида умеет удалённый MCP (`/api/v2/mcp/remote/*`).
+    expect(body.features?.remoteMcp).toBe(true);
+  });
+
   it('ADR-094: /ready публичный, /metrics при metrics.enabled=false → 404 и серии не создаются', async () => {
     const ready = await req('/ready');
     expect(ready.status).toBe(200);

@@ -6,7 +6,7 @@ vi.mock('@/lib/api/synthApi', () => ({
   },
 }))
 
-import { useHybridStore, selectIsOffline, selectIsRemoteAvailable } from './hybridStore'
+import { useHybridStore, selectIsOffline } from './hybridStore'
 import { synthApi } from '@/lib/api/synthApi'
 
 const ENABLED_CONNECTED = {
@@ -133,20 +133,6 @@ describe('hybridStore', () => {
     expect(selectIsOffline({ ...s, enabled: true, connected: true, remoteDegraded: true })).toBe(true)
     expect(selectIsOffline({ ...s, enabled: true, connected: false, remoteDegraded: false })).toBe(true)
     expect(selectIsOffline({ ...s, enabled: false, connected: false, remoteDegraded: false })).toBe(false)
-  })
-
-  it('selectIsRemoteAvailable: удалённый backend доступен (enabled && connected && !remoteDegraded)', () => {
-    const s = useHybridStore.getState()
-    // Чистый standalone: гибрид выключен — удалённого backend нет.
-    expect(selectIsRemoteAvailable({ ...s, enabled: false, connected: false })).toBe(false)
-    // Гибрид включён, но не подключён — тоже недоступен.
-    expect(selectIsRemoteAvailable({ ...s, enabled: true, connected: false })).toBe(false)
-    // Подключён и не деградировал — доступен.
-    expect(selectIsRemoteAvailable({ ...s, enabled: true, connected: true })).toBe(true)
-    // Деградация удалённой стороны — доступен быть не должен.
-    expect(
-      selectIsRemoteAvailable({ ...s, enabled: true, connected: true, remoteDegraded: true }),
-    ).toBe(false)
   })
 
   it('markRemoteDegraded: ставит и снимает флаг', () => {

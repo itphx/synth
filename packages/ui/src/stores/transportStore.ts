@@ -14,6 +14,7 @@ import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import { useProjectLogStore } from './projectLogStore'
+import { useInstanceCapabilitiesStore } from './instanceCapabilitiesStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
 import { normalizeLiveToolPart, partText, toLivePart, turnHasContent } from '@/lib/messageParts'
@@ -3520,8 +3521,10 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     connectingKind = actualMode
     transport = client
     // ADR-118 §8: **fail-closed** сверка версий модели сообщений. Сначала
-    // возможности инстанса (`GET /api/v2/meta`); при несовпадении — отказ
-    // подключения с понятным сообщением (тихая деградация запрещена).
+    // возможности инстанса (`GET /api/v2/meta` — через
+    // `instanceCapabilitiesStore`, единственную точку обращения к `/meta`);
+    // при несовпадении — отказ подключения с понятным сообщением (тихая
+    // деградация запрещена).
     const startTransport = (since: number | undefined) => {
       connectingKind = null
       // Без точки догона второй аргумент не передаём (чистый контракт connect).
@@ -3529,12 +3532,17 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       else client.connect(actualMode, { since })
     }
     void Promise.resolve()
-      .then(() => synthApi.getInstanceCapabilities())
+      // `force: true` — сверка версий идёт против **живого** сервера: кэш
+      // (60 с) мог бы скрыть обновление `messageModel` и привести к циклу
+      // переподключений (сервер отклоняет клиента с 1008).
+      .then(() => useInstanceCapabilitiesStore.getState().load({ force: true }))
       .then((caps) => {
         // Пока шла проверка, клиент мог быть заменён/сброшен — стартовать
         // покинутый клиент нельзя (иначе он жил бы параллельно с новым).
         if (transport !== client) return
-        if (!supportsMessageModel(caps)) {
+        // Мета недоступна (`caps === null`) — подключаемся: гейт на сервере всё
+        // равно отклонит несовместимый клиент.
+        if (caps && !supportsMessageModel(caps)) {
           connectingKind = null
           activeKind = null
           transportReady = false
@@ -3555,8 +3563,9 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       })
       .catch(() => {
         if (transport !== client) return
-        // Мета недоступна — подключаемся: гейт `messageModel=2` на сервере
-        // всё равно откажет несовместимый клиент.
+        // Неожиданная ошибка загрузки возможностей (сам стор глотает ошибку
+        // сети и отдаёт `null`) — подключаемся: гейт `messageModel=2` на
+        // сервере всё равно откажет несовместимый клиент.
         set({ versionMismatch: false })
         startTransport(maxEventSeq())
       })

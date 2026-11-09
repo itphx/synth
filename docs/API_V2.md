@@ -110,11 +110,19 @@ Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 `packages/backend/src/app.ts` после `attachUser` и `/auth`-роутов (и до
 plugin-bound guard'а, guard'а деградации и монтирования роутов) висит
 `app.use('/api/v2/*', requireAuth)`. Публичные пути перечислены явно —
-`PUBLIC_API_V2_PATHS` / `isPublicApiV2Path` (`packages/backend/src/app/public-routes.ts`),
-**строго по методу+пути** (wildcard по префиксу запрещён). Сейчас публичны
+`PUBLIC_API_V2_PATHS` / `isPublicApiV2Path`
+(`packages/core/src/server/app/public-routes.ts` — **общий** allowlist для обеих
+сборок; в backend `packages/backend/src/app/public-routes.ts` — тонкий реэкспорт
+из core, ADR-017/ADR-018), **строго по методу+пути** (wildcard по префиксу
+запрещён). Сейчас публичны
 только `GET /api/v2/health`, `GET /api/v2/meta` (ADR-118 §8) и
 `GET /api/v2/i18n/current`, `GET /api/v2/i18n/translations/{ru,en}`; `OPTIONS`
 (CORS preflight) отвечает CORS-middleware до гейта и разрешён явно.
+
+> **Публичность одинакова в обеих сборках.** В standalone-core тот же allowlist
+> разбирает гейт на границе `/api/*` (`packages/core/src/server/app.ts`), поэтому
+> `GET /api/v2/meta` и `GET /api/v2/health` отвечают **без аутентификации** и там
+> (ADR-118 §8: клиент сверяет модель сообщений до логина).
 
 Следствия:
 
@@ -151,8 +159,11 @@ service-key, **не** RBAC).
 | Cookie `synth_session` | HMAC-подписанный API-ключ (v1) либо JSON `{v:2, kind:'local'\|'server', user}` (v2, гибридная личность). |
 | `requireAuth` | Единственный глобальный guard; ролевых `403`/`ADMIN`-проверок в standalone нет (scope-гейты `requireScope`/`checkServiceProjectProjection` работают только для service-key). Локальный **prefix-guard доступа к сессии** (`server/session-access-guard.ts`) навешен и здесь: в single-user все сессии — владельца `local`/без владельца (доступ есть), чужой владелец → `403`, нет сессии → `404`. |
 
-В standalone `requireAuth` навешан глобально на `/api/*`, поэтому все `/api/v2/*`
-эндпоинты (кроме health и `hybrid/status`) требуют ключ. Гибридный вход
+В standalone `requireAuth` навешан глобально на `/api/*` — за вычетом
+allowlist'а публичных путей (тот же, что у managed backend,
+`packages/core/src/server/app/public-routes.ts`): `GET /api/v2/health` и
+`GET /api/v2/meta` (ADR-118 §8) отвечают **без ключа**, остальные `/api/v2/*`
+эндпоинты (как и `hybrid/status`) требуют ключ. Гибридный вход
 (`/auth/login`, `/auth/device-*`) ставит cookie v2 с серверной личностью.
 
 ### Rate limiting (только backend)
@@ -599,7 +610,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/i18n/translations/ru` | backend | — | Русский словарь |
 | GET | `/api/v2/i18n/translations/en` | backend | — | Английский словарь |
 | GET | `/api/v2/openapi.json` | оба | auth | Публичная OpenAPI 3.1-спека интеграционного ядра (ADR-052, этап III; `server/openapi/public-openapi.ts`): 28 операций (events/sessions/schedules/llm), именованные `components.schemas`, единый формат ошибок `publicErrorSchema` (`{error:{code,message}}`) |
-| GET | `/api/v2/meta` | оба | — | Возможности инстанса (ADR-118 §8): `{messageModel, eventSeq, replay, version}` — **без аутентификации** (как `/health`). `messageModel` — версия модели сообщений/потока (`2`), `eventSeq` — события нумеруются глобально в пределах инстанса, `replay` — доступен догон по журналу (`Last-Event-ID`/`?since`), `version` — версия инстанса. Аддитивно `attachments` (ADR-115): `{enabled, modalities, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession}` — **эффективные** настройки вложений (env > runtime > config > defaults, тот же резолвер, что у `AttachmentService`; клиент использует для предпроверки и текстов ошибок, истина — сервер). Аддитивно `features` (ADR-125, **только backend**): `{remoteMcp?: boolean}` — признак поддержки `/api/v2/mcp/remote/*` и relay-режима; у старого backend поле отсутствует → фича молча выключена (fail-closed). Клиент сверяет `messageModel` перед подключением к WS/SSE (fail-closed, §3) |
+| GET | `/api/v2/meta` | оба | — | Возможности инстанса (ADR-118 §8): `{messageModel, eventSeq, replay, version}` — **без аутентификации** (как `/health`) **в обеих сборках** (standalone и managed; общий allowlist — `packages/core/src/server/app/public-routes.ts`). `messageModel` — версия модели сообщений/потока (`2`), `eventSeq` — события нумеруются глобально в пределах инстанса, `replay` — доступен догон по журналу (`Last-Event-ID`/`?since`), `version` — версия инстанса. Аддитивно `attachments` (ADR-115): `{enabled, modalities, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession}` — **эффективные** настройки вложений (env > runtime > config > defaults, тот же резолвер, что у `AttachmentService`; клиент использует для предпроверки и текстов ошибок, истина — сервер). Аддитивно `features` (PROP-125): `{remoteMcp?: boolean; users?: boolean}` — признаки возможностей инстанса; **отсутствие поля/признака = «фичи нет»** (fail-closed — как у старого backend без `features`). `remoteMcp` — поддержка `/api/v2/mcp/remote/*` и relay-режима (**только backend**); `users` — признак, что инстанс **обслуживает `/api/v2/users*`** (управление пользователями): **managed backend — всегда `true`** (маршрут смонтирован в backend); **core standalone (чистый) — `false`** (маршрута нет, проксировать нечего); **core в гибриде — `true` ровно тогда, когда удалённый backend подключён** (тогда локальный core проксирует `/api/v2/users` на него — `REMOTE_PROXY_PREFIXES`; без подключения прокси не работает → `false`). Клиент сверяет `messageModel` перед подключением к WS/SSE (fail-closed, §3) |
 
 ### 5.5 Sessions — `/api/v2/sessions`
 
@@ -1323,6 +1334,14 @@ Read-only прозрачность загруженных проектных и�
 ADR-069 Ф2a (`engine/context/instructions.ts`); `status` — `loaded`/`truncated`/`blocked`/`dedup`/`skipped`/`untrusted`/`skipped-install-tree`/`excluded`/`fetch-error`. Без `session_id`/`project_id` → 400; неизвестный id → 404; чужой доступ → 403. Запись в хранилище не выполняется.
 
 ### 5.14 Users — `/api/v2/users` (backend, ADMIN или scope `users:read`)
+
+> **Признак фичи** — `features.users` в `GET /api/v2/meta` (§5.4): инстанс сам
+> объявляет, обслуживает ли он `/api/v2/users*`. Managed backend — всегда `true`
+> (маршрут смонтирован); core standalone (чистый) — `false` (маршрута нет,
+> проксировать нечего); core в гибриде — `true` ровно тогда, когда удалённый
+> backend подключён (тогда локальный core проксирует `/api/v2/users` на него).
+> Отсутствие признака = «фичи нет» (fail-closed). Клиент не строит догадок о
+> доступности эндпоинта — читает признак.
 
 Чтение списка/деталей доступно роли `ADMIN` **или** service-key со scope
 `users:read` (машинное чтение профилей/идентичностей аддонами); мутации —

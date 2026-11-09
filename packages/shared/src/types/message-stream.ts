@@ -382,8 +382,17 @@ export type InstanceCapabilities = {
   /**
    * PROP-125: возможности инстанса (аддитивно; старые клиенты игнорируют).
    * `remoteMcp` — признак поддержки `/api/v2/mcp/remote/*` и relay-режима.
+   *
+   * `users` — признак, что инстанс **обслуживает `/api/v2/users*`**
+   * (управление пользователями):
+   * - managed backend — всегда `true` (маршрут смонтирован в backend);
+   * - core standalone (чистый) — `false` (маршрута нет, проксировать нечего);
+   * - core в гибриде — `true` **ровно тогда, когда удалённый backend
+   *   подключён** (тогда локальный core проксирует `/api/v2/users` на него).
+   *
+   * Отсутствие поля/признака = «фичи нет» (fail-closed, как `remoteMcp`).
    */
-  features?: { remoteMcp?: boolean };
+  features?: { remoteMcp?: boolean; users?: boolean };
 };
 
 /**

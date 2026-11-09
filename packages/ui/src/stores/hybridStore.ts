@@ -35,21 +35,6 @@ export const selectIsOffline = (
   s: Pick<HybridStore, 'enabled' | 'connected'> & { remoteDegraded?: boolean },
 ): boolean => (s.enabled && !s.connected) || s.remoteDegraded === true
 
-/**
- * Удалённый backend **доступен**: гибрид включён, подключён и не деградировал.
- *
- * В этом режиме локальный core проксирует `/api/v2/*` на удалённый сервер
- * (`REMOTE_PROXY_PREFIXES`, `packages/core/src/server/proxy.ts`), поэтому
- * backend-only эндпоинты (например `/api/v2/users`) доступны и в
- * standalone-инстансе — в отличие от чистого standalone.
- *
- * Не путать с `selectIsOffline`: тот true, когда гибрид **выключен**
- * (`enabled && !connected`), т.е. это «не гибрид», а не «удалённый недоступен».
- */
-export const selectIsRemoteAvailable = (
-  s: Pick<HybridStore, 'enabled' | 'connected' | 'remoteDegraded'>,
-): boolean => s.enabled && s.connected && s.remoteDegraded !== true
-
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 /** Кеш статуса: повторный loadStatus в пределах окна не делает запрос (не плодить трафик). */

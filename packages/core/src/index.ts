@@ -2448,6 +2448,10 @@ export { createMetaRoutes, instanceCapabilities } from './server/routes/meta.js'
 export type { MetaRoutesDeps } from './server/routes/meta.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
+// F6 (аудит §6.1): allowlist публичных путей `/api/v2/*` — общий для core
+// (standalone) и managed backend (ADR-017/ADR-018: общая логика HTTP — в core).
+export { PUBLIC_API_V2_PATHS, isPublicApiV2Path } from './server/app/public-routes.js';
+export type { PublicApiRoute } from './server/app/public-routes.js';
 // Единый маппинг `SynthConfig` → опции `createStandaloneApp` (обе точки входа
 // standalone: core-`main.ts` и публичный CLI `@itphx/synth`).
 export { buildStandaloneOptions } from './server/app/standalone-options.js';

@@ -178,11 +178,19 @@ Access to the whole API tree is checked **at the application boundary**: in
 before the plugin-bound guard, the storage-degradation guard and route
 mounting), `app.use('/api/v2/*', requireAuth)` is mounted. Public paths are
 listed explicitly — `PUBLIC_API_V2_PATHS` / `isPublicApiV2Path`
-(`packages/backend/src/app/public-routes.ts`), **strictly by method+path**
+(`packages/core/src/server/app/public-routes.ts` — the **shared** allowlist of
+both builds; in the backend `packages/backend/src/app/public-routes.ts` is a thin
+re-export from core, ADR-017/ADR-018), **strictly by method+path**
 (prefix wildcards are forbidden). Today only `GET /api/v2/health`,
 `GET /api/v2/meta` (ADR-118 §8) and `GET /api/v2/i18n/current`,
 `GET /api/v2/i18n/translations/{ru,en}` are public; `OPTIONS` (CORS preflight)
 is answered by the CORS middleware before the gate and is allowed explicitly.
+
+> **Publicness is the same in both builds.** In standalone-core the same
+> allowlist is applied by the gate on the `/api/*` boundary
+> (`packages/core/src/server/app.ts`), so `GET /api/v2/meta` and
+> `GET /api/v2/health` answer **without authentication** there as well (ADR-118 §8:
+> the client checks the message model before logging in).
 
 Consequences:
 
@@ -220,8 +228,11 @@ project projection, **not** RBAC).
 | `synth_session` cookie | An HMAC-signed API key (v1) or JSON `{v:2, kind:'local'\|'server', user}` (v2, hybrid identity). |
 | `requireAuth` | The only global guard; there are no role-based `403`/`ADMIN` checks in standalone (the `requireScope`/`checkServiceProjectProjection` scope gates work only for a service key). The local **session access prefix-guard** (`server/session-access-guard.ts`) is mounted here too: in single-user mode all sessions belong to `local`/have no owner (access granted), a foreign owner → `403`, a missing session → `404`. |
 
-In standalone, `requireAuth` is attached globally to `/api/*`, so all `/api/v2/*`
-endpoints (except health and `hybrid/status`) require a key. The hybrid login
+In standalone, `requireAuth` is attached globally to `/api/*` — except for the
+allowlist of public paths (the same one as in the managed backend,
+`packages/core/src/server/app/public-routes.ts`): `GET /api/v2/health` and
+`GET /api/v2/meta` (ADR-118 §8) answer **without a key**, all other `/api/v2/*`
+endpoints (as well as `hybrid/status`) require a key. The hybrid login
 (`/auth/login`, `/auth/device-*`) sets a v2 cookie with the server identity.
 
 ### Rate limiting (backend only)
@@ -436,14 +447,22 @@ Event journal and resume: every event gets a monotonic `eventSeq` that is global
 instance (across all session channels); a client resumes
 with `Last-Event-ID` / `?since=` (SSE frames carry `id: <eventSeq>`).
 
-**`GET /api/v2/meta`** (no authentication, like `/health`) returns the instance capabilities:
+**`GET /api/v2/meta`** (no authentication, like `/health` — **in both builds**,
+standalone and managed; the shared allowlist lives in
+`packages/core/src/server/app/public-routes.ts`) returns the instance capabilities:
 `{messageModel, eventSeq, replay, version}`. Additive `attachments` (ADR-115):
 `{enabled, modalities, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession}` — the **effective**
 attachment settings (env > runtime > config > defaults, the same resolver as `AttachmentService`); the
 client uses them for pre-checks and error texts, the server stays the source of truth. Additive
-`features` (ADR-125, **backend only**): `{remoteMcp?: boolean}` — the marker of the support of
-`/api/v2/mcp/remote/*` and the relay mode; an old backend has no field → the feature is silently off
-(fail-closed). A client compares `messageModel` **before** connecting
+`features` (PROP-125): `{remoteMcp?: boolean; users?: boolean}` — the markers of the instance
+capabilities; **a missing field/marker means "the feature is not there"** (fail-closed — the same
+as an old backend without `features`). `remoteMcp` — the support of `/api/v2/mcp/remote/*` and the
+relay mode (**backend only**); `users` — the marker that the instance **serves `/api/v2/users*`**
+(user management): the **managed backend is always `true`** (the route is mounted there); the
+**pure core standalone is `false`** (no route, nothing to proxy); the **core in hybrid mode is
+`true` exactly while the remote backend is connected** (then the local core proxies
+`/api/v2/users` to it — `REMOTE_PROXY_PREFIXES`; without a connection the proxy does not work →
+`false`). A client compares `messageModel` **before** connecting
 and does not connect on mismatch (**fail-closed** — silent degradation is forbidden); the server
 enforces the same gate (WS close `1008`, SSE `426`). Legacy `sessions/:id/prompt` returning
 `text/event-stream` and the `send_message` WS frame no longer exist.
@@ -1131,6 +1150,13 @@ Response: `{ session_id?\|project_id?, enabled, cap: { chars, source: 'dynamic'\
 ADR-069 Phase 2a resolver (`engine/context/instructions.ts`); `status` — `loaded`/`truncated`/`blocked`/`dedup`/`skipped`/`untrusted`/`skipped-install-tree`/`excluded`/`fetch-error`. Without `session_id`/`project_id` → 400; an unknown id → 404; someone else's access → 403. Nothing is written to storage.
 
 ### 5.14 Users — `/api/v2/users` (backend, ADMIN or scope `users:read`)
+
+> **The feature marker** — `features.users` in `GET /api/v2/meta` (§5.4): the instance itself
+> declares whether it serves `/api/v2/users*`. The managed backend is always `true` (the route is
+> mounted there); the pure core standalone is `false` (no route, nothing to proxy); the core in
+> hybrid mode is `true` exactly while the remote backend is connected (then the local core proxies
+> `/api/v2/users` to it). A missing marker means "the feature is not there" (fail-closed). The
+> client does not guess the endpoint availability — it reads the marker.
 
 Reading the list/details is available to the `ADMIN` role **or** a service-key with the
 `users:read` scope (machine reading of profiles/identities by add-ons); mutations —

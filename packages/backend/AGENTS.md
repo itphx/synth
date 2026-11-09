@@ -178,7 +178,10 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
   после `attachUser` и `/auth`-роутов, до plugin-bound guard'а, guard'а деградации и
   монтирования роутов висит `app.use('/api/v2/*', createMiddleware(... auth.requireAuth))`.
   Публичные пути — **только** allowlist `PUBLIC_API_V2_PATHS`/`isPublicApiV2Path`
-  (`src/app/public-routes.ts`), строго по методу+пути (без wildcard по префиксу):
+  (**общий с core**: `packages/core/src/server/app/public-routes.ts`; в backend —
+  тонкий реэкспорт `src/app/public-routes.ts`, ADR-017/ADR-018 — общая логика HTTP
+  живёт в core, и allowlist должен быть один для обеих сборок), строго по
+  методу+пути (без wildcard по префиксу):
   `GET /api/v2/health`, `GET /api/v2/meta` (ADR-118 §8),
   `GET /api/v2/i18n/{current,translations/ru,translations/en}`; `OPTIONS` (CORS preflight)
   разрешён явно — CORS-middleware отвечает до гейта. Следствие: новый роутер без guard'а
@@ -269,6 +272,7 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 - **Relay:** `routes/mcp.ts` монтирует core-фабрику `createMcpRelayRoutes` (`@itphx/synth-core`) — `POST /api/v2/mcp/relay/:name` (stateless, JSON-режим); `GET`/`DELETE` → `405 MCP_RELAY_SESSIONLESS`. На локальном инстансе маршрута нет.
 - **Авторизация:** `requireAuth`; для service-key — scope `mcp:invoke` (семейство `mcp:*`) через `requireScopeForServiceKey`. Дополнительных approval/квот нет.
 - **Признак фичи:** `app/mount-routes.ts` → `getFeatures: () => ({ remoteMcp: true })` в `GET /api/v2/meta` (аддитивно, без аутентификации); у клиента без признака фича выключена.
+- **Признак контура пользователей:** там же `getFeatures: () => ({ remoteMcp: true, users: true })` — маршрут `/api/v2/users*` (управление пользователями) смонтирован в backend (`src/routes/users.ts`), поэтому контур есть **всегда** и признак `users` объявляется `true`. В core standalone маршрута нет (`users: false`), а в core в гибриде — `true` лишь пока подключён удалённый backend (тогда core проксирует `/api/v2/users` на него). Отсутствие признака у клиента = «фичи нет» (fail-closed).
 
 ## Публикация `permission.replied` и её перепись (ADR-106/ADR-127)
 

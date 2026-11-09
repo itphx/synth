@@ -43,8 +43,8 @@ describe('SettingsModal — категории скиллов и команд (A
   it('ключи категорий переведены (ru/en)', () => {
     expect(enDict['settings.category.skills']).toBe('Skills')
     expect(ruDict['settings.category.skills']).toBe('Скиллы')
-    expect(enDict['settings.category.skillsAdmin']).toBe('Skills')
-    expect(ruDict['settings.category.skillsAdmin']).toBe('Скиллы')
+    expect(enDict['settings.category.skillsAdmin']).toBe('Skills and instructions')
+    expect(ruDict['settings.category.skillsAdmin']).toBe('Скиллы и инструкции')
     expect(enDict['settings.category.commands']).toBe('Commands')
     expect(ruDict['settings.category.commands']).toBe('Команды')
   })

@@ -1504,7 +1504,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       getAttachments: () => deps.attachmentsSettings.getConfig(),
       // PROP-125: сервер гибрида умеет удалённый MCP (`/api/v2/mcp/remote/*`
       // и relay) — клиент читает признак из `/api/v2/meta`.
-      getFeatures: () => ({ remoteMcp: true }),
+      // `users: true` — маршрут `/api/v2/users*` (управление пользователями)
+      // смонтирован в backend (`src/routes/users.ts`), поэтому контур есть
+      // всегда; в core standalone его нет, а в core в гибриде он есть лишь
+      // пока подключён удалённый backend (там — прокси).
+      getFeatures: () => ({ remoteMcp: true, users: true }),
     }),
   );
 

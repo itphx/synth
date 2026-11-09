@@ -20,8 +20,15 @@ export interface MetaRoutesDeps {
    * PROP-125: возможности инстанса (аддитивно). `remoteMcp` — признак
    * поддержки `/api/v2/mcp/remote/*` и relay-режима; отсутствие поля у
    * старого backend'а — фича молча выключена.
+   *
+   * `users` — признак, что инстанс обслуживает `/api/v2/users*`
+   * (управление пользователями): managed backend — всегда `true` (маршрут
+   * смонтирован); core standalone (чистый) — `false` (маршрута нет,
+   * проксировать нечего); core в гибриде — `true` ровно тогда, когда
+   * удалённый backend подключён (тогда прокси перенаправляет запрос).
+   * Отсутствие поля/признака = «фичи нет» (fail-closed).
    */
-  getFeatures?: () => { remoteMcp?: boolean } | undefined;
+  getFeatures?: () => { remoteMcp?: boolean; users?: boolean } | undefined;
 }
 
 /**
@@ -35,7 +42,11 @@ export interface MetaRoutesDeps {
  * - `attachments` — эффективные лимиты вложений (ADR-115, аддитивно) — только
  *   при заданном `deps.getAttachments`;
  * - `features` — возможности инстанса (PROP-125, аддитивно) — только при
- *   заданном `deps.getFeatures` и непустом результате.
+ *   заданном `deps.getFeatures` и непустом результате. `features.users` —
+ *   признак, что инстанс обслуживает `/api/v2/users*` (управление
+ *   пользователями): managed — всегда; core standalone — нет; core в
+ *   гибриде — есть, пока удалённый backend подключён и прокси
+ *   перенаправляет запрос. Отсутствие признака = «фичи нет» (fail-closed).
  */
 export function instanceCapabilities(deps: MetaRoutesDeps = {}): InstanceCapabilities {
   const capabilities: InstanceCapabilities = {

@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { createMiddleware } from 'hono/factory';
 import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig, PostgresStorageConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import type { SessionConfig } from '@itphx/synth-shared/config';
 import {
@@ -42,6 +43,7 @@ import { registerEventsSse } from './app/sse-events.js';
 import { attachEventWebSocket, EventWebSocketSubscriptions } from './app/ws-events.js';
 import { createStandaloneHttpServer } from './app/http-server.js';
 import { createStorageDegradedGuard, createStorageStatusRoutes } from './storage-degraded.js';
+import { isPublicApiV2Path } from './app/public-routes.js';
 
 /** Роль ADMIN у пользователя запроса (standalone — единственный владелец `local`). */
 function hasAdminRole(c: Context): boolean {
@@ -462,8 +464,24 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   }));
 
 
-  // Всё остальное требует аутентификации
-  app.use('/api/*', auth.requireAuth);
+  // F6 (аудит §6.1) — единый fail-closed гейт на границе `/api/*`.
+  //
+  // Публичные пути — **только** allowlist `PUBLIC_API_V2_PATHS`/
+  // `isPublicApiV2Path` (`./app/public-routes.ts`; общий с managed backend,
+  // ADR-017/ADR-018), строго по методу+пути (без wildcard по префиксу):
+  // `GET /api/v2/health`, `GET /api/v2/meta` (ADR-118 §8),
+  // `GET /api/v2/i18n/{current,translations/ru,translations/en}`; `OPTIONS`
+  // (CORS preflight) разрешён явно — CORS-middleware отвечает до гейта.
+  // Следствие: новый роутер без guard'а анонимным **не станет** (нужна явная
+  // запись в allowlist), а проверки аутентификации в обработчиках не
+  // дублируются (инвариант 16).
+  app.use('/api/*', createMiddleware(async (c, next) => {
+    if (isPublicApiV2Path(c.req.method, c.req.path)) {
+      await next();
+      return;
+    }
+    return auth.requireAuth(c, next);
+  }));
   app.use('/ws/*', auth.requireAuth);
 
   // ADR-090 Ф7 (Уровень 2): plugin-bound service-key (`plugin_id`) принимается

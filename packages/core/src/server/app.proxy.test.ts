@@ -357,3 +357,43 @@ describe('createStandaloneApp: прокси серверных роутов (run
     }
   });
 });
+
+/**
+ * Признак `features.users` в `GET /api/v2/meta` (ADR-118 §8): инстанс сам
+ * объявляет, обслуживает ли он `/api/v2/users*` (управление пользователями).
+ */
+describe('createStandaloneApp: признак features.users в /api/v2/meta', () => {
+  it('чистый standalone — features.users === false (маршрута /api/v2/users нет)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-meta-standalone-'));
+    try {
+      const { app } = await createStandaloneApp({ port: 0, dataDir: dir, apiKey: 'test-key' });
+
+      const res = await app.request('/api/v2/meta', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { features?: { users?: boolean } };
+      expect(body.features?.users).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('гибрид с подключённым backend — features.users === true (прокси /api/v2/users работает)', async () => {
+    const fetchRouter = apiKeyFetchRouter(() => jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchRouter);
+
+    const { dir, handle } = await makeHybridApp();
+    const { app } = handle;
+    try {
+      const res = await app.request('/api/v2/meta', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { features?: { users?: boolean } };
+      expect(body.features?.users).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});

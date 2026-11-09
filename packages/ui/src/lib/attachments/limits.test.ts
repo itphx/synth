@@ -4,8 +4,10 @@ const mocks = vi.hoisted(() => ({
   getInstanceCapabilities: vi.fn(),
 }))
 
-vi.mock('@/lib/api/meta', () => ({
-  metaApi: { getInstanceCapabilities: mocks.getInstanceCapabilities },
+// `/meta` читается через `stores/instanceCapabilitiesStore` — единственную
+// точку обращения клиента к `/api/v2/meta`.
+vi.mock('@/lib/api/synthApi', () => ({
+  synthApi: { getInstanceCapabilities: mocks.getInstanceCapabilities },
 }))
 
 import type { InstanceAttachmentCapabilities } from '@itphx/synth-shared/types'

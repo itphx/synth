@@ -3,9 +3,12 @@
 // Источник истины — серверные `attachments.*` (`GET /api/v2/meta` →
 // `InstanceAttachmentCapabilities`). Константы ниже — UX-фоллбеки: они нужны
 // до ответа сервера (первый рендер композера) и когда сервер старый/недоступен.
+//
+// Ответ `/meta` берётся из `stores/instanceCapabilitiesStore` — это единственная
+// точка обращения клиента к `/meta` (кэш 60 с + дедуп живут в сторе).
 
 import type { InstanceAttachmentCapabilities } from '@itphx/synth-shared/types'
-import { metaApi } from '@/lib/api/meta'
+import { useInstanceCapabilitiesStore } from '@/stores/instanceCapabilitiesStore'
 
 /** UX-фоллбек предела одного файла: 100 МиБ (паритет с серверным дефолтом). */
 export const MAX_FILE_BYTES = 100 * 1024 * 1024
@@ -24,12 +27,6 @@ export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   maxFilesPerMessage: MAX_FILES_PER_MESSAGE,
   maxBytesPerSession: 1024 * 1024 * 1024,
 }
-
-/** Кэш ответа сервера: лимиты меняются редко, спамить `/meta` незачем. */
-const CACHE_TTL_MS = 60_000
-
-let cached: { limits: AttachmentLimits; at: number } | null = null
-let inflight: Promise<AttachmentLimits> | null = null
 
 function positiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
@@ -69,34 +66,20 @@ export function normalizeAttachmentLimits(
 }
 
 /**
- * Эффективные лимиты инстанса с кэшем на 60 с и дедупом одновременных вызовов.
+ * Эффективные лимиты инстанса.
  *
- * Ошибка сети/старый сервер → значения по умолчанию (тоже кэшируются на TTL,
- * чтобы не дёргать `/meta` на каждый файл).
+ * Ответ `/meta` берётся из `stores/instanceCapabilitiesStore` (единственная
+ * точка обращения к `/meta`): там же кэш на 60 с и дедуп одновременных вызовов.
+ *
+ * Ошибка сети/старый сервер → значения по умолчанию (пустой ответ тоже
+ * кэшируется на TTL — `/meta` не дёргается на каждый файл).
  */
 export async function loadAttachmentLimits(): Promise<AttachmentLimits> {
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.limits
-  if (inflight) return inflight
-
-  inflight = (async () => {
-    try {
-      const capabilities = await metaApi.getInstanceCapabilities()
-      const limits = normalizeAttachmentLimits(capabilities?.attachments)
-      cached = { limits, at: Date.now() }
-      return limits
-    } catch {
-      cached = { limits: DEFAULT_ATTACHMENT_LIMITS, at: Date.now() }
-      return DEFAULT_ATTACHMENT_LIMITS
-    } finally {
-      inflight = null
-    }
-  })()
-
-  return inflight
+  const capabilities = await useInstanceCapabilitiesStore.getState().load()
+  return normalizeAttachmentLimits(capabilities?.attachments)
 }
 
 /** Сброс кэша между тестами (в рантайме не нужен). */
 export function resetAttachmentLimitsCacheForTests(): void {
-  cached = null
-  inflight = null
+  useInstanceCapabilitiesStore.getState().resetForTests()
 }
