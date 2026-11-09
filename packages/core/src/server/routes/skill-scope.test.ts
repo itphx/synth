@@ -24,6 +24,17 @@ function createMockAuth(): AuthKit {
   } as unknown as AuthKit;
 }
 
+/** Ответ `GET/PUT /api/v2/settings/skills` (trust-блок — ADR-046/ADR-069). */
+interface SkillsSettingsBody {
+  disabled: { categories: string[]; groups: string[]; skills: string[] };
+  disabledForNewProjects: { categories: string[]; groups: string[]; skills: string[] };
+  policy: string;
+  trustedProjectDirs: string[];
+  trustedProjectDirsDefaults: string[];
+  trustedProjectDirsSource: 'runtime' | 'config' | 'default';
+  restartRequired: boolean;
+}
+
 let tmpDir: string;
 let sessionManager: SessionManager;
 let projectStore: ProjectStore;
@@ -164,6 +175,103 @@ describe('scope-API скиллов (ADR-046 §4.5)', () => {
     const reset: any = await (await app.request('/api/v2/settings/skills')).json();
     expect(reset.disabled.skills).toEqual([]);
     expect(reset.policy).toBe('auto');
+  });
+
+  it('settings: trust — GET дефолты/source, PUT массивом → runtime', async () => {
+    const app = makeApp({ trustedProjectDirsDefaults: ['/cfg/dir'] });
+    const get = (await (await app.request('/api/v2/settings/skills')).json()) as SkillsSettingsBody;
+    expect(get.trustedProjectDirsDefaults).toEqual(['/cfg/dir']);
+    expect(get.trustedProjectDirs).toEqual(['/cfg/dir']);
+    expect(get.trustedProjectDirsSource).toBe('config');
+    expect(get.restartRequired).toBe(true);
+
+    // Сначала включаем hard-gate: PUT только с trust не должен его сбрасывать.
+    await json(app, '/api/v2/settings/skills', {
+      disabled: { categories: ['quality'], groups: [], skills: [] },
+    }, 'PUT');
+
+    const put = await json(app, '/api/v2/settings/skills', {
+      trustedProjectDirs: [' /rt/a ', '', '  ', '/rt/b'],
+    }, 'PUT');
+    expect(put.status).toBe(200);
+    const after = (await put.json()) as SkillsSettingsBody;
+    expect(after.trustedProjectDirs).toEqual(['/rt/a', '/rt/b']);
+    expect(after.trustedProjectDirsSource).toBe('runtime');
+    expect(after.trustedProjectDirsDefaults).toEqual(['/cfg/dir']);
+    expect(after.restartRequired).toBe(true);
+    expect(after.disabled.categories).toEqual(['quality']);
+  });
+
+  it('settings: trust — без config-дефолтов source=default', async () => {
+    const app = makeApp();
+    const body = (await (await app.request('/api/v2/settings/skills')).json()) as SkillsSettingsBody;
+    expect(body.trustedProjectDirsDefaults).toEqual([]);
+    expect(body.trustedProjectDirs).toEqual([]);
+    expect(body.trustedProjectDirsSource).toBe('default');
+    expect(body.restartRequired).toBe(true);
+  });
+
+  it('settings: trust — PUT null сбрасывает runtime к config', async () => {
+    const app = makeApp({ trustedProjectDirsDefaults: ['/cfg/dir'] });
+    await json(app, '/api/v2/settings/skills', { trustedProjectDirs: ['/rt'] }, 'PUT');
+
+    const reset = await json(app, '/api/v2/settings/skills', { trustedProjectDirs: null }, 'PUT');
+    expect(reset.status).toBe(200);
+    const body = (await reset.json()) as SkillsSettingsBody;
+    expect(body.trustedProjectDirs).toEqual(['/cfg/dir']);
+    expect(body.trustedProjectDirsSource).toBe('config');
+  });
+
+  it('settings: trust — невалидный массив → 400 VALIDATION_ERROR', async () => {
+    const app = makeApp();
+    const cases: unknown[] = [
+      'nope',
+      ['/a', 42],
+      Array.from({ length: 101 }, (_, i) => `/dir/${i}`),
+      [`/${'x'.repeat(4096)}`],
+      {},
+    ];
+    for (const value of cases) {
+      const res = await json(app, '/api/v2/settings/skills', { trustedProjectDirs: value }, 'PUT');
+      expect(res.status, JSON.stringify(value)).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    }
+    // Валидация — до мутаций: runtime не записан.
+    const get = (await (await app.request('/api/v2/settings/skills')).json()) as SkillsSettingsBody;
+    expect(get.trustedProjectDirsSource).toBe('default');
+  });
+
+  it('settings: trust — границы валидации (100 элементов / 4096 символов) и пустой массив', async () => {
+    const app = makeApp({ trustedProjectDirsDefaults: ['/cfg/dir'] });
+    const maxDirs = Array.from({ length: 100 }, (_, i) => `/dir/${i}`);
+    const ok = await json(app, '/api/v2/settings/skills', { trustedProjectDirs: maxDirs }, 'PUT');
+    expect(ok.status).toBe(200);
+    const boundary = (await ok.json()) as SkillsSettingsBody;
+    expect(boundary.trustedProjectDirs).toHaveLength(100);
+
+    const longDir = `/${'x'.repeat(4095)}`;
+    expect(longDir).toHaveLength(4096);
+    const longRes = await json(app, '/api/v2/settings/skills', { trustedProjectDirs: [longDir] }, 'PUT');
+    expect(longRes.status).toBe(200);
+
+    // Пустой массив — явный runtime-override (не сброс к config).
+    const emptyRes = await json(app, '/api/v2/settings/skills', { trustedProjectDirs: [] }, 'PUT');
+    const empty = (await emptyRes.json()) as SkillsSettingsBody;
+    expect(empty.trustedProjectDirs).toEqual([]);
+    expect(empty.trustedProjectDirsSource).toBe('runtime');
+  });
+
+  it('settings: trust — DELETE не сбрасывает runtime-trust', async () => {
+    const app = makeApp({ trustedProjectDirsDefaults: ['/cfg/dir'] });
+    await json(app, '/api/v2/settings/skills', { trustedProjectDirs: ['/rt'] }, 'PUT');
+
+    const del = await json(app, '/api/v2/settings/skills', undefined, 'DELETE');
+    expect(del.status).toBe(200);
+
+    const body = (await (await app.request('/api/v2/settings/skills')).json()) as SkillsSettingsBody;
+    expect(body.trustedProjectDirs).toEqual(['/rt']);
+    expect(body.trustedProjectDirsSource).toBe('runtime');
   });
 });
 

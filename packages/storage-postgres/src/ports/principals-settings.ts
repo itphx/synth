@@ -39,6 +39,7 @@ const SECTION_KEYS = [
   'skillsDisabled',
   'skillsDisabledForNewProjects',
   'skillsPolicy',
+  'skillsTrustedProjectDirs',
   'mcpNetworkPolicy',
   'egress',
   'defaultAgent',
@@ -208,6 +209,16 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearSkillsPolicy(): Promise<void> {
       await deleteSetting(conn, 'skillsPolicy');
+    },
+
+    async getSkillsTrustedProjectDirs(): Promise<string[] | undefined> {
+      return readSetting<string[]>(conn, 'skillsTrustedProjectDirs');
+    },
+    async setSkillsTrustedProjectDirs(dirs: string[]): Promise<void> {
+      await writeSetting(conn, 'skillsTrustedProjectDirs', dirs);
+    },
+    async clearSkillsTrustedProjectDirs(): Promise<void> {
+      await deleteSetting(conn, 'skillsTrustedProjectDirs');
     },
 
     async getTokenRatio(model: string): Promise<number | undefined> {

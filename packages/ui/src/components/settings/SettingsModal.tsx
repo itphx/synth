@@ -4,12 +4,14 @@ import { Button } from "../ui/button"
 import { Icon } from "../icon/Icon"
 import { useUIStore } from "../../stores/useUIStore"
 import { useAuthStore } from "@/stores/authStore"
+import { useHybridStore, selectIsRemoteAvailable } from "@/stores/hybridStore"
 import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 import { useDevice } from "@/hooks/useDevice"
 import {
   SETTINGS_CATEGORIES,
   SETTINGS_GROUPS,
+  isCategoryAvailableForDeployment,
   searchSettings,
   type SettingsCategoryMeta,
 } from "@/lib/settings-catalog"
@@ -91,10 +93,24 @@ export const SettingsModal = () => {
   const hasQuery = query.trim().length > 0
 
   const userRoles = user?.roles ?? []
+  const deployment = useAuthStore(s => s.deployment)
+  // Удалённый backend доступен: гибрид включён, подключён и не деградировал.
+  // Тогда локальный core проксирует `/api/v2/*` на удалённый сервер, и
+  // backend-only эндпоинты (например `/api/v2/users`) работают и в standalone.
+  const remoteAvailable = useHybridStore(selectIsRemoteAvailable)
+
+  // Режим развёртывания: раздел, завязанный на backend-only эндпоинт (например
+  // «Пользователи» → `/api/v2/users`, которого нет в чистом standalone), помечен
+  // `deployments` в каталоге и скрыт, если нужный backend недоступен.
+  // Неизвестный deployment (до `/auth/status`) — fail-closed: раздел скрыт,
+  // ничего не мигает.
+  const deploymentCategories = SETTINGS_CATEGORIES.filter((cat) =>
+    isCategoryAvailableForDeployment(cat, deployment, remoteAvailable),
+  )
 
   // Продвинутые категории скрыты, пока не включён режим «Расширенные»; роли —
   // как раньше: пользователь без роли категорию не видит.
-  const roleCategories = SETTINGS_CATEGORIES.filter(
+  const roleCategories = deploymentCategories.filter(
     (cat) => !cat.roles || cat.roles.some((r) => userRoles.includes(r)),
   )
   const visibleCategories = roleCategories.filter((cat) => settingsShowAdvanced || !cat.advanced)
@@ -104,7 +120,9 @@ export const SettingsModal = () => {
   const activePage = resolveActiveSettingsPage(visibleCategories, settingsPage)
 
   // Поиск идёт по всем категориям, доступным роли: скрытые advanced-разделы
-  // должны находиться, даже когда тумблер «Расширенные» выключен.
+  // должны находиться, даже когда тумблер «Расширенные» выключен. Разделы,
+  // недоступные в режиме развёртывания, в поиске не находятся — иначе раздел
+  // нашёлся бы, но не открылся.
   const roleCategoryIds = new Set(roleCategories.map((cat) => cat.id))
   const searchResult = hasQuery ? searchSettings(t, query) : { categories: [], entries: [] }
   const resultCategories = searchResult.categories.filter((cat) => roleCategoryIds.has(cat.id))

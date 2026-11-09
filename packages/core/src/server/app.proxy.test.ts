@@ -183,7 +183,7 @@ describe('createStandaloneApp: прокси серверных роутов (run
     }
   });
 
-  it('без подключения → next(): /api/v2/audit локально отсутствует (404), fetch не вызывается', async () => {
+  it('без подключения → next(): /api/v2/audit обслуживается локально, fetch не вызывается', async () => {
     const fetchRouter = apiKeyFetchRouter(() => jsonResponse({ ok: true }));
     vi.stubGlobal('fetch', fetchRouter);
 
@@ -194,9 +194,12 @@ describe('createStandaloneApp: прокси серверных роутов (run
       const res = await app.request('/api/v2/audit', {
         headers: { Authorization: 'Bearer test-key' },
       });
-      expect(res.status).toBe(404);
-      const body = (await res.json()) as { error: { code: string } };
-      expect(body.error.code).toBe('NOT_FOUND');
+      // Аудит LLM Gateway переехал в core-фабрику и обслуживается локально
+      // (пустой журнал — файла ещё нет). Прокси без подключения не перехватывает.
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { entries: unknown[]; total: number };
+      expect(body.entries).toEqual([]);
+      expect(body.total).toBe(0);
       expect(fetchRouter).not.toHaveBeenCalled();
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});

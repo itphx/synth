@@ -66,6 +66,9 @@ export interface ProjectSkillsResponse {
   defaultOn: string[]
 }
 
+/** ADR-046/069: откуда взялся эффективный список доверенных каталогов. */
+export type SkillsTrustedProjectDirsSource = 'runtime' | 'config' | 'default'
+
 /** ADR-046 §4.5: ответ GET/PUT /api/v2/settings/skills. */
 export interface SkillsSettingsResponse {
   /** Мастер-гейт: скиллы, недоступные нигде. */
@@ -73,6 +76,17 @@ export interface SkillsSettingsResponse {
   /** Сид новых проектов: что не включать по умолчанию. */
   disabledForNewProjects: SkillsDisabledRequest
   policy: ToolsPolicy
+  /**
+   * Project-trust (ADR-046/069): эффективный список доверенных каталогов.
+   * Поле аддитивное — старый сервер может его не отдавать.
+   */
+  trustedProjectDirs?: string[]
+  /** Значения из `config.yaml` (`skills.trustedProjectDirs`). */
+  trustedProjectDirsDefaults?: string[]
+  /** Источник эффективного списка. */
+  trustedProjectDirsSource?: SkillsTrustedProjectDirsSource
+  /** `true` — изменения доверия применяются после перезапуска инстанса. */
+  restartRequired?: boolean
 }
 
 export const skillsApi = {
@@ -198,11 +212,15 @@ export const skillsApi = {
     return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`)
   },
 
-  /** PUT /settings/skills — сохранить мастер-гейт, сид новых проектов и (опционально) политику. */
+  /**
+   * PUT /settings/skills — частичное обновление: мастер-гейт, сид новых проектов,
+   * политика и/или доверенные каталоги (`null` — сброс к конфигу).
+   */
   async updateSkillsSettings(input: {
-    disabled: SkillsDisabledRequest
+    disabled?: SkillsDisabledRequest
     disabledForNewProjects?: SkillsDisabledRequest
     policy?: ToolsPolicy
+    trustedProjectDirs?: string[] | null
   }): Promise<SkillsSettingsResponse> {
     return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`, {
       method: 'PUT',

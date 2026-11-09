@@ -15,12 +15,16 @@ import {
   createProviderRoutes, createModelRoutes, createAgentRoutes, createFsRoutes,
   createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createQueueRoutes, createMessageRoutes, createSettingsRoutes,
-  createDictionaryRoutes, createMcpRoutes, createEventRoutes, createSchedulerRoutes,
+  createDictionaryRoutes, createMcpRoutes, createMcpRegistryRoutes, createEventRoutes, createSchedulerRoutes,
   createOAuthRoutes, bindCredentialToConnector,
   createAuditRoutes,
   createServiceKeyRoutes, createWebhookRoutes, createSkillRoutes, createCommandRoutes,
   createSkillBundleRoutes, createSessionSkillScopeRoutes, createProjectSkillScopeRoutes,
   createSkillSettingsRoutes, createIdentityRoutes, createContextRoutes,
+  // ADR-036/ADR-095: логи сервисов, аудит LLM Gateway, regex-паттерны,
+  // файлы контекста и конфигурация групп логирования — общие core-фабрики.
+  createLogsRoutes, resolveLogDir,
+  createGatewayPatternsRoutes, createContextFileRoutes, createDebugRoutes,
   createMaintenanceRoutes, createProjectPortableRoutes,
   createAnalyticsRoutes, AnalyticsService,
   createStorageContextAsync,
@@ -39,6 +43,9 @@ import {
   createPluginsRoutes, createPluginSettingsRoutes,
   createMemoryRoutes, MEMORY_PLUGIN_NAME,
   createMetaRoutes,
+  // ADR-099: приёмник журнала внешних запросов (scope `providers` и др.) —
+  // тот же sink, что регистрируется в `configureEgressRuntime`.
+  currentEgressLog,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -50,6 +57,7 @@ import { executeToolDef } from '../../engine/tools/tool-execution.js';
 import { MemoryProviderUnavailableError } from '../routes/memory.js';
 import { resolvePluginServerPolicy } from '../../engine/plugins/hybrid-policy.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
+import { syncMcpManagerFromRegistry } from '../../engine/mcp/manager-sync.js';
 import { mergeMcpSeedDefaults } from './remote-mcp-seed.js';
 import { mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig } from '../../storage/runtime-settings.js';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
@@ -271,9 +279,10 @@ export function mountStandaloneRoutes(
     // backend недоступен → только локальные (серверные добавятся при
     // следующем успешном коннекте авто-сидом).
     getProjectSeeds: async () => {
-      const localDefaultMcpServers = Object.entries(config.mcpServers ?? {})
-        .filter(([, cfg]) => cfg.enabledByDefault === true)
-        .map(([name]) => name);
+      // ADR-071 §2.5: локальные дефолты MCP-серверов — из реестра (источник
+      // истины): туда сидируются серверы из `config.mcpServers`, и правки
+      // реестра тоже видны здесь.
+      const localDefaultMcpServers = await deps.mcpRegistryStore.toDefaultServers();
       const defaultMcpServers = mergeMcpSeedDefaults(
         localDefaultMcpServers,
         mcpManager.getRemoteDefaultServerNames(),
@@ -349,6 +358,14 @@ export function mountStandaloneRoutes(
     testEnabled: true,
     // Дефолтный провайдер — из явной пары provider+model (runtime, fallback — config).
     getDefaultModel: async () => (await settingsStore.getDefaultModel()) ?? configDefaultModel(),
+    // ADR-099/PROP-100: favicon домена — через общий egress-guard (SSRF-политика
+    // `egress.tools` + единое доверие TLS/CA). Журнал — тот же sink, что у
+    // web_fetch/web_search (регистрируется в `configureEgressRuntime`).
+    fetchIcon: {
+      enabled: true,
+      resolvePolicy: () => egressResolver.resolveTools(),
+      log: currentEgressLog(),
+    },
   }));
 
   // Models: remote-модели/провайдер читаются на каждый запрос (runtime-подключение).
@@ -503,7 +520,35 @@ export function mountStandaloneRoutes(
   ));
 
   // Журналы безопасности: аудит изменений политик + внешние запросы (egress).
-  app.route('/api/v2/audit', createAuditRoutes(auth, { securityAudit, egressRequests }));
+  // ADR-036: плюс голый аудит LLM Gateway (`GET /api/v2/audit`,
+  // `POST /api/v2/audit/revealed`) — тот же AuditLogger, что у оркестратора.
+  app.route('/api/v2/audit', createAuditRoutes(auth, {
+    securityAudit,
+    egressRequests,
+    gatewayAudit: {
+      auditLogPath: deps.gatewayAuditLogPath,
+      logger: deps.gatewayAuditLogger,
+      sessionExists: async (sessionId: string) =>
+        (await sessionManager.getSession(sessionId)) !== null,
+    },
+  }));
+
+  // Логи сервисов (core|ui|backend) + полный payload-лог LLM (ADR-036).
+  // В standalone файлов логов сервисов обычно нет — роут отдаёт пустой хвост
+  // (не 404 «маршрут не найден»).
+  app.route('/api/v2/logs', createLogsRoutes(auth, {
+    logDir: resolveLogDir(),
+    payloadLogPath: deps.gatewayPayloadLogPath,
+  }, { missingFile: 'empty' }));
+
+  // ADR-036: regex-паттерны детекции секретов LLM Gateway.
+  app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, deps.gatewayPatternStore));
+
+  // ADR-069/ADR-070: файлы контекста/промптов инстанца.
+  app.route('/api/v2/context', createContextFileRoutes(auth, deps.contextFiles));
+
+  // Конфигурация групп логирования (debug-раздел админки).
+  app.route('/api/v2/admin/debug', createDebugRoutes(auth));
 
   // ADR-102 (волна 1): отчёты аналитики — только чтение. В standalone-режиме
   // единственный ключ → ADMIN, поэтому `resolveElevated` по умолчанию true (сквозной обзор).
@@ -800,6 +845,29 @@ export function mountStandaloneRoutes(
   // MCP (probe подключения к серверу)
   app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));
 
+  // ADR-071 §2.5: единый реестр MCP-серверов — та же core-фабрика, что и в
+  // managed (legacy `/servers*`, `/session/:id`, `/registry*`). В standalone
+  // реестр — **источник истины**: серверы из `config.mcpServers` сидируются в
+  // него при старте, менеджер заполняется его картами, любая правка реестра
+  // перечитывает их (`syncMcpManagerFromRegistry`).
+  app.route('/api/v2/mcp', createMcpRegistryRoutes(
+    { requireAuth: auth.requireAuth },
+    mcpManager,
+    sessionManager,
+    {
+      registry: deps.mcpRegistryStore,
+      // ADR-071 §2.3.1: сетевая политика MCP — живая (runtime-настройка из
+      // админки поверх config.yaml).
+      getNetworkPolicy: () => egressResolver.resolveMcp(),
+      // ADR-105 (Ф3): порт слоя внешних доступов — право привязать доступ к
+      // коннектору проверяется на границе (инвариант 16).
+      credentials: deps.storageContext.externalCredentials,
+      // Standalone — single-user инстанс (ADR-079): право участника проекта
+      // не сужается (единственный владелец — локальный пользователь).
+      canEditProject: async () => true,
+    },
+  ));
+
   // ADR-105 (Ф4): HTTP-контур слоя внешних доступов. Standalone: единственный
   // владелец — локальный пользователь (`owner.kind='local'`, инвариант 19),
   // он же ADMIN — правило изменения записи реестра MCP не сужается.
@@ -823,10 +891,10 @@ export function mountStandaloneRoutes(
           credentialId,
           canModify: () => true,
         });
-        // Синхронизации с менеджером MCP здесь нет: в standalone конфиг
-        // серверов приходит из `config.mcpServers`, а реестр — источник истины
-        // только в managed-инстансе (ADR-071 §2.5). Перезапись менеджера из
-        // реестра стёрла бы серверы из конфига.
+        // ADR-071 §2.5 / ADR-105 §5: реестр — источник истины для конфигурации
+        // серверов и в standalone. Без синхронизации менеджер остался бы со
+        // старым конфигом (без `auth: { kind: 'credential' }`).
+        await syncMcpManagerFromRegistry(mcpManager, deps.mcpRegistryStore);
       },
     },
   ));
@@ -1091,7 +1159,10 @@ export function mountStandaloneRoutes(
     // Managed backend опцию не передаёт (remote-ветки выключены).
     getRemoteClient: () => getClient(),
   }));
-  app.route('/api/v2/settings', createSkillSettingsRoutes(auth, { settingsStore }, {
+  app.route('/api/v2/settings', createSkillSettingsRoutes(auth, {
+    settingsStore,
+    trustedProjectDirsDefaults: config.skillsConfig?.trustedProjectDirs ?? [],
+  }, {
     onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
   }));
 
@@ -1133,7 +1204,7 @@ export function mountStandaloneRoutes(
         config: config.instructionsConfig,
         dictionaryStore: dictionaries,
         dataDir,
-        trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+        trustedProjectDirs: deps.skillsTrustedProjectDirs,
         // ADR-069 R3: авто-trust workspace внутри workspacesRoot (как в оркестраторе).
         workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
         // ADR-077: `git rev-parse` — через порт исполнения (тот же, что у тулов).

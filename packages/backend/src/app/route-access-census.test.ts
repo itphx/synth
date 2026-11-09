@@ -50,7 +50,7 @@ const G_RUN =
 const G_PROCESS =
   'process-access (право на сессию-владельца прогона): backend src/routes/processes.ts';
 const G_MCP_SESSION =
-  'session-owner|ADMIN: backend src/routes/mcp-registry.ts (sessionOwnerGuard)';
+  'session-owner|ADMIN: core src/server/routes/mcp-registry.ts (sessionOwnerGuard)';
 const G_OWNER = 'owner-only (только свои записи): core src/server/routes/{identities,oauth}.ts';
 const G_AUTH = 'auth: requireAuth (ресурс инстанса — владельца у записи нет)';
 const G_ADMIN = 'admin: requirePermission("ADMIN")';
@@ -62,6 +62,11 @@ const G_ADMIN_PROJECT =
   'admin + project-edit: core src/server/routes/pipeline-project-routes.ts (adminGuard/instantiate)';
 const G_SCOPE =
   'service-key scope (интерактив — no-op): backend src/auth/service-scope.ts scopeGuard("events:ingest")';
+// Перенесённые в core-фабрики роуты — место реализации указывает на core.
+const G_ADMIN_CONTEXT_FILES =
+  'admin: requirePermission("ADMIN"): core src/server/routes/context-files.ts (adminGuard)';
+const G_ADMIN_AUDITOR_LOGS =
+  'admin-or-auditor: requirePermission("ADMIN","AUDITOR"): core src/server/routes/logs.ts (readGuard)';
 
 /** Правила, требующие принадлежности ресурса — чужой USER никогда не получает 2xx. */
 const OWNERSHIP_GUARDS = new Set<string>([
@@ -254,10 +259,10 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('PATCH', '/api/v2/providers/:name', G_ADMIN, [403], { body: {} }),
   r('DELETE', '/api/v2/providers/:name', G_ADMIN, [403]),
   r('DELETE', '/api/v2/models/:id', G_ADMIN, [403]),
-  r('GET', '/api/v2/context/files/:name', G_ADMIN, [403]),
-  r('POST', '/api/v2/context/files/:name', G_ADMIN, [403], { body: {} }),
-  r('POST', '/api/v2/context/files/:name/restore_to_default', G_ADMIN, [403], { body: {} }),
-  r('DELETE', '/api/v2/context/files/:name', G_ADMIN, [403]),
+  r('GET', '/api/v2/context/files/:name', G_ADMIN_CONTEXT_FILES, [403]),
+  r('POST', '/api/v2/context/files/:name', G_ADMIN_CONTEXT_FILES, [403], { body: {} }),
+  r('POST', '/api/v2/context/files/:name/restore_to_default', G_ADMIN_CONTEXT_FILES, [403], { body: {} }),
+  r('DELETE', '/api/v2/context/files/:name', G_ADMIN_CONTEXT_FILES, [403]),
 
   // --- Скиллы, команды, bundles, словари ---
   r('GET', '/api/v2/skills/:name', G_AUTH, [404]),
@@ -312,7 +317,7 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('GET', '/api/v2/users/:id', G_ADMIN, [403]),
   r('PUT', '/api/v2/users/:id', G_ADMIN, [403], { body: {} }),
   r('DELETE', '/api/v2/users/:id', G_ADMIN, [403]),
-  r('GET', '/api/v2/logs/:name', G_ADMIN_AUDITOR, [403]),
+  r('GET', '/api/v2/logs/:name', G_ADMIN_AUDITOR_LOGS, [403]),
   r('GET', '/api/v2/maintenance/backups/:name/download', G_ADMIN, [403]),
   r('DELETE', '/api/v2/maintenance/backups/:name', G_ADMIN, [403]),
 
@@ -324,12 +329,12 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('POST', '/api/v2/mcp/servers/:name/test', G_ADMIN_OR_SCOPE, [403], { body: {} }),
   // Legacy-путь MCP-скоупа сессии — та же политика, что у `/sessions/:id/mcp`
   // (владелец|ADMIN). Дыра «любой аутентифицированный» закрыта guard'ом в
-  // `src/routes/mcp-registry.ts` по результатам этой переписи.
+  // `core src/server/routes/mcp-registry.ts` по результатам этой переписи.
   r('GET', '/api/v2/mcp/session/:sessionId', G_MCP_SESSION, [404]),
   r('PUT', '/api/v2/mcp/session/:sessionId', G_MCP_SESSION, [404], { body: {} }),
   // Реестр: мутации — автор записи или ADMIN (неизвестный id → 404 до роли).
-  r('PUT', '/api/v2/mcp/registry/:id', 'admin-or-author: backend src/routes/mcp-registry.ts', [404], { body: {} }),
-  r('DELETE', '/api/v2/mcp/registry/:id', 'admin-or-author: backend src/routes/mcp-registry.ts', [404]),
+  r('PUT', '/api/v2/mcp/registry/:id', 'admin-or-author: core src/server/routes/mcp-registry.ts', [404], { body: {} }),
+  r('DELETE', '/api/v2/mcp/registry/:id', 'admin-or-author: core src/server/routes/mcp-registry.ts', [404]),
   // Relay (ADR-125): stateless JSON-режим — GET/DELETE не поддерживаются (405);
   // POST требует auth (+ scope `mcp:invoke` для service-key).
   r('GET', '/api/v2/mcp/relay/:name', G_AUTH, [405]),

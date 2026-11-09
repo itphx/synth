@@ -38,6 +38,11 @@ export interface SkillScopeRoutesDeps {
   permissionConfig?: PermissionConfig;
   /** Резолв рабочего каталога проекта по id (project-скиллы). */
   resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>;
+  /**
+   * ADR-046/ADR-069: `config.yaml` `skills.trustedProjectDirs` — дефолт
+   * project-trust гейта; runtime-значение (`settings.json`/PG) приоритетнее.
+   */
+  trustedProjectDirsDefaults?: readonly string[];
 }
 
 export interface SkillScopeRoutesOptions {
@@ -366,19 +371,68 @@ export function createProjectSkillScopeRoutes(
 
 export function createSkillSettingsRoutes(
   auth: AuthKit,
-  deps: Pick<SkillScopeRoutesDeps, 'settingsStore'>,
+  deps: Pick<SkillScopeRoutesDeps, 'settingsStore' | 'trustedProjectDirsDefaults'>,
   opts?: SkillScopeRoutesOptions,
 ): Hono {
   const app = new Hono();
   const writeGuard = opts?.writeGuard ?? (async (_c, next) => { await next(); });
 
-  app.get('/skills', auth.requireAuth, async (c) => {
+  /** Максимум элементов и длина одного пути в runtime-trust (валидация входа). */
+  const MAX_TRUSTED_DIRS = 100;
+  const MAX_TRUSTED_DIR_LENGTH = 4096;
+
+  /** Полный ответ `GET/PUT /settings/skills` (trust-блок включён). */
+  const buildSettingsResponse = async () => {
     const disabled = (await deps.settingsStore?.getSkillsDisabled()) ?? { categories: [], groups: [], skills: [] };
     const disabledForNewProjects = (await deps.settingsStore?.getSkillsDisabledForNewProjects())
       ?? { categories: [], groups: [], skills: [] };
     const policy = (await deps.settingsStore?.getSkillsPolicy()) ?? 'auto';
-    return c.json({ disabled, disabledForNewProjects, policy });
-  });
+    // Trust-гейт: runtime (settings.json/PG) приоритетнее config.yaml; `undefined`
+    // — runtime не задан. Уровень 3 — дефолт (config пуст).
+    const trustedProjectDirsDefaults = [...(deps.trustedProjectDirsDefaults ?? [])];
+    const runtimeTrusted = await deps.settingsStore?.getSkillsTrustedProjectDirs();
+    const trustedProjectDirs = runtimeTrusted ?? trustedProjectDirsDefaults;
+    const trustedProjectDirsSource: 'runtime' | 'config' | 'default' =
+      runtimeTrusted !== undefined
+        ? 'runtime'
+        : trustedProjectDirsDefaults.length > 0 ? 'config' : 'default';
+    return {
+      disabled,
+      disabledForNewProjects,
+      policy,
+      trustedProjectDirs,
+      trustedProjectDirsDefaults,
+      trustedProjectDirsSource,
+      // Инвариант 24: резолверы trust-гейта собираются на старте процесса.
+      restartRequired: true,
+    };
+  };
+
+  /**
+   * Нормализует `trustedProjectDirs` из тела PUT: trim, пустые отбрасываются,
+   * не более 100 элементов, каждый ≤ 4096 символов. `null` — сброс runtime.
+   */
+  const normalizeTrustedProjectDirs = (
+    value: unknown,
+  ): { dirs: string[] } | { error: string } => {
+    if (!Array.isArray(value)) return { error: 'trustedProjectDirs должен быть массивом строк' };
+    const dirs: string[] = [];
+    for (const item of value) {
+      if (typeof item !== 'string') return { error: 'trustedProjectDirs должен быть массивом строк' };
+      const trimmed = item.trim();
+      if (!trimmed) continue;
+      if (trimmed.length > MAX_TRUSTED_DIR_LENGTH) {
+        return { error: `Элемент trustedProjectDirs длиннее ${MAX_TRUSTED_DIR_LENGTH} символов` };
+      }
+      dirs.push(trimmed);
+    }
+    if (dirs.length > MAX_TRUSTED_DIRS) {
+      return { error: `trustedProjectDirs: не более ${MAX_TRUSTED_DIRS} элементов` };
+    }
+    return { dirs };
+  };
+
+  app.get('/skills', auth.requireAuth, async (c) => c.json(await buildSettingsResponse()));
 
   app.put('/skills', auth.requireAuth, writeGuard, async (c) => {
     if (!deps.settingsStore) return c.json({ error: { code: 'INTERNAL_ERROR', message: 'settingsStore не настроен' } }, 500);
@@ -387,12 +441,30 @@ export function createSkillSettingsRoutes(
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректные данные отключения скиллов' } }, 400);
     }
+    // Trust-гейт: отсутствие поля — не трогаем; `null` — сброс runtime к config;
+    // массив — замена runtime. Валидируем до любых мутаций.
+    const hasTrusted = body !== null && typeof body === 'object'
+      && Object.prototype.hasOwnProperty.call(body, 'trustedProjectDirs');
+    const trustedRaw = hasTrusted ? body.trustedProjectDirs : undefined;
+    let trustedDirs: string[] | undefined;
+    if (hasTrusted && trustedRaw !== null) {
+      const normalized = normalizeTrustedProjectDirs(trustedRaw);
+      if ('error' in normalized) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: normalized.error } }, 400);
+      }
+      trustedDirs = normalized.dirs;
+    }
     if (parsed.data.disabled) {
       await deps.settingsStore.setSkillsDisabled(parsed.data.disabled);
     } else if (body.disabled === undefined) {
       // Legacy-совместимость: тело-бакет `{categories,groups,skills}`.
-      const legacy = skillsDisabledSchema.safeParse(body);
-      if (legacy.success) await deps.settingsStore.setSkillsDisabled(legacy.data);
+      // Только при наличии хотя бы одного из этих полей — иначе `{}` (или тело
+      // с новыми полями, напр. `trustedProjectDirs`) сбрасывало бы hard-gate.
+      const legacyShape = ['categories', 'groups', 'skills'].some((key) => key in body);
+      if (legacyShape) {
+        const legacy = skillsDisabledSchema.safeParse(body);
+        if (legacy.success) await deps.settingsStore.setSkillsDisabled(legacy.data);
+      }
     }
     if (parsed.data.disabledForNewProjects) {
       await deps.settingsStore.setSkillsDisabledForNewProjects(parsed.data.disabledForNewProjects);
@@ -400,12 +472,13 @@ export function createSkillSettingsRoutes(
     if (typeof parsed.data.policy === 'string') {
       await deps.settingsStore.setSkillsPolicy(parsed.data.policy as never);
     }
+    if (hasTrusted) {
+      if (trustedRaw === null) await deps.settingsStore.clearSkillsTrustedProjectDirs();
+      else if (trustedDirs) await deps.settingsStore.setSkillsTrustedProjectDirs(trustedDirs);
+    }
     const disabled = (await deps.settingsStore.getSkillsDisabled()) ?? { categories: [], groups: [], skills: [] };
     opts?.onSkillsDisabledChange?.(disabled);
-    const disabledForNewProjects = (await deps.settingsStore.getSkillsDisabledForNewProjects())
-      ?? { categories: [], groups: [], skills: [] };
-    const policy = await deps.settingsStore.getSkillsPolicy();
-    return c.json({ disabled, disabledForNewProjects, policy: policy ?? 'auto' });
+    return c.json(await buildSettingsResponse());
   });
 
   app.delete('/skills', auth.requireAuth, writeGuard, async (c) => {

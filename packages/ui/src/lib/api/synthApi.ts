@@ -136,6 +136,7 @@ export type {
   SessionSkillsResponse,
   ProjectSkillsResponse,
   SkillsSettingsResponse,
+  SkillsTrustedProjectDirsSource,
 } from './skills'
 export type { CommandsListResponse } from './commands'
 export type { SkillBundlesResponse } from './skill-bundles'

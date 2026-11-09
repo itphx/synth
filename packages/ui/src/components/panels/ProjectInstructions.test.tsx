@@ -179,6 +179,48 @@ describe('ProjectInstructions (ADR-069 §9.3)', () => {
     expect(container.textContent).toContain(enDict['sessionTab.instructions.noProject'])
   })
 
+  it('пусто + diagnostics untrusted: причина, каталог и подсказка про доверенные каталоги', async () => {
+    mocks.getSessionInstructions.mockResolvedValue(info({
+      files: [],
+      workspace: '/home/u/proj',
+      diagnostics: [
+        {
+          level: 'warning',
+          code: 'untrusted',
+          message: 'Недоверенный проект — инструкции не загружены: каталог не в skills.trustedProjectDirs',
+          path: '/home/u/proj',
+        },
+      ],
+    }))
+    const container = await render()
+
+    const block = container.querySelector('[data-testid="instructions-untrusted"]')
+    expect(block).not.toBeNull()
+    expect(block!.textContent).toContain(enDict['sessionTab.instructions.untrusted.title'])
+    expect(block!.textContent).toContain(enDict['sessionTab.instructions.untrusted.reason'])
+    expect(block!.textContent).toContain('/home/u/proj')
+    expect(block!.textContent).toContain(enDict['sessionTab.instructions.untrusted.hint'])
+
+    // «Файлы не найдены» в этом случае не показываем.
+    expect(container.textContent).not.toContain(enDict['sessionTab.instructions.empty'])
+    expect(container.querySelector('[data-testid="instructions-empty"]')).toBeNull()
+  })
+
+  it('пусто + диагностика excluded: локализованный текст и путь', async () => {
+    mocks.getSessionInstructions.mockResolvedValue(info({
+      files: [],
+      workspace: '/home/u/proj',
+      diagnostics: [
+        { level: 'info', code: 'excluded', message: 'Проект исключён', path: '/home/u/proj' },
+      ],
+    }))
+    const container = await render()
+
+    expect(container.textContent).toContain(enDict['sessionTab.instructions.diagnostic.excluded'])
+    expect(container.textContent).toContain('/home/u/proj')
+    expect(container.textContent).not.toContain(enDict['sessionTab.instructions.empty'])
+  })
+
   it('blocked-файл: статус blocked и признак обрезки в списке', async () => {
     mocks.getSessionInstructions.mockResolvedValue(info({
       files: [

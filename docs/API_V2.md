@@ -17,9 +17,11 @@
 
 **Доступность по сборкам** в таблицах ниже: `backend` — только managed-хаб,
 `core` — только standalone, `оба` — обе сборки. У core набор уже: нет
-`context/users/audit/logs/gateway/llm/i18n/admin`, зато есть `auth/*`,
+`users/llm/i18n/admin`, зато есть `auth/*`,
 `hybrid/status`, а также `/git` и `/ssh-keys` (ADR-076; core-фабрики, в backend
-монтируются с RBAC). В гибриде на backend проксируются `/git`, flat `/ssh-keys`
+монтируются с RBAC). Роуты `context/files*`, `audit`, `logs`, `gateway/patterns`
+и `admin/debug/config` переехали в core-фабрики (доступны в обеих сборках;
+managed добавляет RBAC). В гибриде на backend проксируются `/git`, flat `/ssh-keys`
 и nested `/agents/:agentId/ssh-keys` (остальные подпути `/agents` — локальны).
 
 ---
@@ -1148,7 +1150,7 @@ sha256, небезопасный путь в архиве, небезопасн�
 | PATCH | `/api/v2/providers/:name` | оба | ADMIN / auth | Частичное обновление (в т.ч. `num_ctx`, `compatibility`) |
 | DELETE | `/api/v2/providers/:name` | оба | ADMIN / auth | Удалить |
 | POST | `/api/v2/providers/:name/test` | оба | ADMIN / auth | Тест подключения |
-| POST | `/api/v2/providers/fetch-icon` | backend | ADMIN | Favicon домена (сырой data-URL); UI сохраняет иконку уже сжатой (маленький PNG data-URL) |
+| POST | `/api/v2/providers/fetch-icon` | оба | ADMIN / auth | Favicon домена (сырой data-URL); UI сохраняет иконку уже сжатой (маленький PNG data-URL) |
 
 > **Поле `num_ctx` / `numCtx` (размер контекста).** Размер контекста
 > провайдера (`ProviderConfig.numCtx`, у Ollama — `num_ctx`) задаётся полем
@@ -1296,17 +1298,17 @@ sha256, небезопасный путь в архиве, небезопасн�
 > Единая (core) реализация: `FsError`-форма; backend монтирует core-фабрику с `deny` (managed) и обязательным `project_id`;
 > standalone — политика из `settings/workspace-policy`, без `project_id` — плоский root, проект без workspace — fallback на root.
 
-### 5.13 Context — `/api/v2/context` (backend)
+### 5.13 Context — `/api/v2/context` (core+backend)
 
-| Метод | Путь | RBAC | Назначение |
+| Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
-| GET | `/api/v2/context/files` | ADMIN | Список; `?category=user\|role\|system` |
-| GET | `/api/v2/context/files/:name` | ADMIN | Содержимое; `?category=` |
-| POST | `/api/v2/context/files/:name` | ADMIN | Сохранить `{content, category}` или `{action:'toggle'}` |
-| DELETE | `/api/v2/context/files/:name` | ADMIN | Удалить; `?category=` |
-| POST | `/api/v2/context/files/:name/restore_to_default` | ADMIN | Восстановить системный; `?category=` |
-| GET | `/api/v2/context/enabled` | ADMIN | `{enabled:[]}` |
-| POST | `/api/v2/context/enabled` | ADMIN | `{files:[]}` |
+| GET | `/api/v2/context/files` | ADMIN / auth | Список; `?category=user\|role\|system` |
+| GET | `/api/v2/context/files/:name` | ADMIN / auth | Содержимое; `?category=` |
+| POST | `/api/v2/context/files/:name` | ADMIN / auth | Сохранить `{content, category}` или `{action:'toggle'}` |
+| DELETE | `/api/v2/context/files/:name` | ADMIN / auth | Удалить; `?category=` |
+| POST | `/api/v2/context/files/:name/restore_to_default` | ADMIN / auth | Восстановить системный; `?category=` |
+| GET | `/api/v2/context/enabled` | ADMIN / auth | `{enabled:[]}` |
+| POST | `/api/v2/context/enabled` | ADMIN / auth | `{files:[]}` |
 
 ### 5.13.1 Проектные инструкции — `/api/v2/context/instructions` (core+backend, ADR-069)
 
@@ -1501,20 +1503,20 @@ Runtime-настройка инстанса: как SSH-ключи реестр�
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
 |---|---|---|---|---|
-| GET | `/api/v2/mcp/servers` | backend | auth | Настроенные серверы + `connected` |
-| POST | `/api/v2/mcp/servers` | backend | ADMIN | `{name, config}` → 201 |
-| GET | `/api/v2/mcp/servers/:name` | backend | auth | Конфиг сервера |
-| PUT | `/api/v2/mcp/servers/:name` | backend | ADMIN или scope `addons:install` | Обновить конфиг |
-| DELETE | `/api/v2/mcp/servers/:name` | backend | ADMIN или scope `addons:install` | Удалить |
-| POST | `/api/v2/mcp/servers/:name/test` | backend | ADMIN или scope `addons:install` | Проверить подключение (+опц. `config`) |
-| GET | `/api/v2/mcp/servers/:name/tools` | backend | auth | Инструменты сервера (probe при необходимости) |
-| GET | `/api/v2/mcp/session/:sessionId` | backend | владелец\|ADMIN | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (канонический — `/sessions/:id/mcp`) |
-| PUT | `/api/v2/mcp/session/:sessionId` | backend | владелец\|ADMIN | Legacy: `{mcpServers?, mcpDisabledServers?}` (совместим с `/sessions/:id/mcp`) |
+| GET | `/api/v2/mcp/servers` | оба | auth | Настроенные серверы + `connected` |
+| POST | `/api/v2/mcp/servers` | оба | ADMIN | `{name, config}` → 201 |
+| GET | `/api/v2/mcp/servers/:name` | оба | auth | Конфиг сервера |
+| PUT | `/api/v2/mcp/servers/:name` | оба | ADMIN или scope `addons:install` | Обновить конфиг |
+| DELETE | `/api/v2/mcp/servers/:name` | оба | ADMIN или scope `addons:install` | Удалить |
+| POST | `/api/v2/mcp/servers/:name/test` | оба | ADMIN или scope `addons:install` | Проверить подключение (+опц. `config`) |
+| GET | `/api/v2/mcp/servers/:name/tools` | оба | auth | Инструменты сервера (probe при необходимости) |
+| GET | `/api/v2/mcp/session/:sessionId` | оба | владелец\|ADMIN | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (канонический — `/sessions/:id/mcp`) |
+| PUT | `/api/v2/mcp/session/:sessionId` | оба | владелец\|ADMIN | Legacy: `{mcpServers?, mcpDisabledServers?}` (совместим с `/sessions/:id/mcp`) |
 | POST | `/api/v2/mcp/probe` | оба | auth | `{name}` → `{name, tools}`, `MCP_CONNECT_ERROR` |
-| GET | `/api/v2/mcp/registry` | backend | auth | Единый реестр MCP-серверов (ADR-071 §2.5): `{entries}`; запись несёт `enabled` (мастер hard-gate, дефолт `true`) и `enabledByDefault` (дефолт для НОВЫХ проектов) |
-| POST | `/api/v2/mcp/registry` | backend | auth (stdio — только ADMIN; service-key — scope `addons:install`) | Добавить запись: `{name, config, enabled?, enabledByDefault?, origin?, remoteMode?}` → 201; stdio — только ADMIN (scope не ослабляет); HTTP — любой; service-key без scope `addons:install` → 403 `SCOPE_REQUIRED`. **instance**-origin (`origin:'instance'` или installer-ключ со scope) доступен ADMIN **или** service-key со scope `addons:install`; интерактив без ADMIN создаёт `user`-запись даже с `origin:'instance'`. `remoteMode` (`auto\|relay\|tools`, дефолт `auto`) — режим доставки серверного MCP в локальные сессии гибрида (ADR-125) |
-| PUT | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN или scope `addons:install` | Обновить запись (`enabled` — мастер-флаг реестра); installer-ключ со scope обновляет instance-записи (scope-ветка переживает ротацию ключа) |
-| DELETE | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Удалить запись |
+| GET | `/api/v2/mcp/registry` | оба | auth | Единый реестр MCP-серверов (ADR-071 §2.5): `{entries}`; запись несёт `enabled` (мастер hard-gate, дефолт `true`) и `enabledByDefault` (дефолт для НОВЫХ проектов) |
+| POST | `/api/v2/mcp/registry` | оба | auth (stdio — только ADMIN; service-key — scope `addons:install`) | Добавить запись: `{name, config, enabled?, enabledByDefault?, origin?, remoteMode?}` → 201; stdio — только ADMIN (scope не ослабляет); HTTP — любой; service-key без scope `addons:install` → 403 `SCOPE_REQUIRED`. **instance**-origin (`origin:'instance'` или installer-ключ со scope) доступен ADMIN **или** service-key со scope `addons:install`; интерактив без ADMIN создаёт `user`-запись даже с `origin:'instance'`. `remoteMode` (`auto\|relay\|tools`, дефолт `auto`) — режим доставки серверного MCP в локальные сессии гибрида (ADR-125) |
+| PUT | `/api/v2/mcp/registry/:id` | оба | автор/ADMIN или scope `addons:install` | Обновить запись (`enabled` — мастер-флаг реестра); installer-ключ со scope обновляет instance-записи (scope-ветка переживает ротацию ключа) |
+| DELETE | `/api/v2/mcp/registry/:id` | оба | автор/ADMIN | Удалить запись |
 | GET | `/api/v2/mcp/remote/servers` | backend | auth (service-key — scope `mcp:invoke`) | Состав серверных MCP-серверов (ADR-125): `[{name, type, origin, trust, enabled, enabledByDefault, remoteMode, status, toolCount, error?, instructions?}]` — **все** записи реестра (`instance` + `user` любого автора), без секретов и URL |
 | GET | `/api/v2/mcp/remote/tools?server=` | backend | auth (service-key — scope `mcp:invoke`) | Схемы инструментов сервера + `instructions`: `{server, instructions?, tools:[{server, name, description, inputSchema}]}`. 400 `VALIDATION_ERROR` (нет `server`), 404 `MCP_REMOTE_SERVER_NOT_FOUND`, 502 `MCP_REMOTE_SERVER_DOWN` (сервер не поднялся), 503 `MCP_REMOTE_UNAVAILABLE` |
 | POST | `/api/v2/mcp/remote/call` | backend | auth (service-key — scope `mcp:invoke`) | Вызов инструмента: `{server, tool, arguments?, meta?}` → `{content, isError, attachments?}` (шейп протокола исполнителя 5, ADR-077). 400 `VALIDATION_ERROR`, 404 `MCP_REMOTE_SERVER_NOT_FOUND`, 409 `MCP_SERVER_DISABLED` (выключен мастером), 502 `MCP_REMOTE_SERVER_DOWN`/`MCP_REMOTE_CALL_FAILED`, 503 `MCP_REMOTE_UNAVAILABLE` |
@@ -1527,6 +1529,8 @@ Runtime-настройка инстанса: как SSH-ключи реестр�
 > **Оффлайн.** Серверы остаются в `GET /api/v2/sessions/:id/mcp` со `status:'error'` и причиной в поле `error` (без секретов); тулы не предлагаются до реконнекта, причина видна и в блоке `mcp.status` промпта.
 > **Признак фичи** — `features.remoteMcp` в `GET /api/v2/meta` (§5.4): у старого backend признака нет → фича молча выключена (fail-closed).
 
+> **Реестр — источник истины в обоих режимах (ADR-071 §2.5).** HTTP-фабрика реестра — в core (`packages/core/src/server/routes/mcp-registry.ts`), её монтируют и standalone, и managed; backend передаёт RBAC-guard'ы и i18n, core — свои дефолты. В standalone серверы из `config.mcpServers` **сидируются** в реестр при старте (`seedFromConfig`, идемпотентно по имени), а менеджер MCP заполняется картами реестра — поэтому мутация реестра (`POST/PUT/DELETE /api/v2/mcp/registry*`) **не стирает** серверы из конфига: они уже в реестре как `origin:'instance'` записи. Второго хранилища конфигурации MCP нет.
+>
 > Резолвинг MCP per-item (ADR-071 §2.4): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; дефолт — opt-in (off). Мастер `enabled` (реестр) и проектный `enabled` — live hard-gate (в т.ч. старые сессии и системные серверы), `enabledByDefault`/`project.defaultOn` — snapshot (`mcpDefaultOn`). Причины: `system_disabled\|project_disabled\|session_optout\|not_default`. `McpServerConfig.enabled` — только сид записи реестра (`seedFromConfig`), в резолвинге не участвует. Отсутствие `project.mcp` — гейт не задан (legacy).
 
 > `config.auth` (ADR-105 Ф0/Ф3) — ссылка на внешний доступ: `{kind:'credential', credentialId}`; коннектор авторизуется токеном из слоя доступов, сам токен в реестре/конфиге не лежит. Поле аддитивно — записи без `auth` валидны. Токен подставляет транспорт (`Authorization: Bearer <token>` в каждом HTTP-запросе), при `401` он обновляется (refresh) и запрос повторяется — **ровно один refresh на запрос**. Выдача/ротация доступов — Ф4 (`/api/v2/oauth/credentials`, ещё не реализовано); до этого доступ заводится кодом (через порт), а коннектор ссылается на него по `credentialId`.
@@ -1582,29 +1586,32 @@ Runtime-настройка инстанса: как SSH-ключи реестр�
 
 > Резолвинг скиллов per-item (ADR-046): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; дефолт — opt-in (off). Системное/проектное отключение — live hard-gate (в т.ч. старые сессии), дефолты — snapshot (`skillsDefaultOn`). Отсутствие `project.skills` — гейт не задан (legacy).
 
-### 5.18 Audit — `/api/v2/audit` (backend)
+### 5.18 Audit — `/api/v2/audit` (core+backend)
 
-| Метод | Путь | RBAC | Назначение |
+| Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
-| GET | `/api/v2/audit` | ADMIN/AUDITOR | Аудит Gateway; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
-| POST | `/api/v2/audit/revealed` | auth | `{sessionId, placeholder}` → `{ok:true}` |
-| GET | `/api/v2/audit/security` | ADMIN/AUDITOR (core — auth) | Аудит изменений egress-политик, прокси и TLS (ADR-099): append-only `{dataDir}/audit/security.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=tools\|webhooks\|mcp\|proxy\|tls` → `{entries, count}` («свежие первыми»); записи `scope:"proxy"` — без пароля, URL redacted; `scope:"tls"` — пути/hosts/subject, без PEM/ключей |
-| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR (core — auth) | Журнал внешних запросов (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; тела/заголовки не логируются; `via` (`proxy`\|`direct`\|`fallback`) — фактический маршрут |
+| GET | `/api/v2/audit` | ADMIN/AUDITOR / auth | Аудит Gateway; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
+| POST | `/api/v2/audit/revealed` | auth / auth | `{sessionId, placeholder}` → `{ok:true}` |
+| GET | `/api/v2/audit/security` | ADMIN/AUDITOR / auth | Аудит изменений egress-политик, прокси и TLS (ADR-099): append-only `{dataDir}/audit/security.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=tools\|webhooks\|mcp\|proxy\|tls` → `{entries, count}` («свежие первыми»); записи `scope:"proxy"` — без пароля, URL redacted; `scope:"tls"` — пути/hosts/subject, без PEM/ключей |
+| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR / auth | Журнал внешних запросов (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; тела/заголовки не логируются; `via` (`proxy`\|`direct`\|`fallback`) — фактический маршрут |
 
-### 5.19 Logs — `/api/v2/logs` (backend)
+### 5.19 Logs — `/api/v2/logs` (core+backend)
 
-| Метод | Путь | RBAC | Назначение |
+| Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
-| GET | `/api/v2/logs/llm` | ADMIN/AUDITOR | Payload-лог LLM; `?sessionId=&limit=` (≤500) |
-| GET | `/api/v2/logs/:name` | ADMIN/AUDITOR | Хвост `core\|ui\|backend`; `?tail=` (1..2000), `?search=` |
+| GET | `/api/v2/logs/llm` | ADMIN/AUDITOR / auth | Payload-лог LLM; `?sessionId=&limit=` (≤500) |
+| GET | `/api/v2/logs/:name` | ADMIN/AUDITOR / auth | Хвост `core\|ui\|backend`; `?tail=` (1..2000), `?search=` |
 
-### 5.20 Gateway patterns — `/api/v2/gateway` (backend, ADMIN)
+> В standalone файлов логов сервисов обычно нет — роут отдаёт пустой хвост
+> (`200`, `lines: []`), а не «маршрут не найден».
 
-| Метод | Путь | Назначение |
-|---|---|---|
-| GET | `/api/v2/gateway/patterns` | Паттерны секретов + признак override |
-| PUT | `/api/v2/gateway/patterns` | Сохранить override |
-| DELETE | `/api/v2/gateway/patterns` | Сброс к дефолту |
+### 5.20 Gateway patterns — `/api/v2/gateway` (core+backend, ADMIN)
+
+| Метод | Путь | RBAC (backend / core) | Назначение |
+|---|---|---|---|
+| GET | `/api/v2/gateway/patterns` | ADMIN / auth | Паттерны секретов + признак override |
+| PUT | `/api/v2/gateway/patterns` | ADMIN / auth | Сохранить override |
+| DELETE | `/api/v2/gateway/patterns` | ADMIN / auth | Сброс к дефолту |
 
 ### 5.21 Settings — `/api/v2/settings` (оба)
 
@@ -1749,12 +1756,12 @@ Runtime-настройка инстанса: как SSH-ключи реестр�
 | GET | `/api/v2/updates/check` | auth | Проверка новой версии |
 | POST | `/api/v2/updates/apply` | auth | SSE-стрим `npm i -g @itphx/synth@latest` |
 
-### 5.25 Admin/debug — `/api/v2/admin/debug` (backend, ADMIN)
+### 5.25 Admin/debug — `/api/v2/admin/debug` (core+backend, ADMIN)
 
-| Метод | Путь | Назначение |
-|---|---|---|
-| GET | `/api/v2/admin/debug/config` | Группы логирования + уровни |
-| POST | `/api/v2/admin/debug/config` | `{groups}` → `{status:'saved'}`; merge — сохраняются только переданные группы, остальные overrides не сбрасываются |
+| Метод | Путь | RBAC (backend / core) | Назначение |
+|---|---|---|---|
+| GET | `/api/v2/admin/debug/config` | ADMIN / auth | Группы логирования + уровни |
+| POST | `/api/v2/admin/debug/config` | ADMIN / auth | `{groups}` → `{status:'saved'}`; merge — сохраняются только переданные группы, остальные overrides не сбрасываются |
 
 ### 5.26 Events — `оба`
 

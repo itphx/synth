@@ -1302,3 +1302,36 @@ describe('resolveSessionOpsPerMinute (limits.sessionOpsPerMinute)', () => {
     expect(live.resolve().source).toBe('default');
   });
 });
+
+describe('RuntimeSettingsStore: project-trust скиллов (ADR-046/ADR-069)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-trust-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('set/get/clear (undefined — runtime не задан)', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getSkillsTrustedProjectDirs()).toBeUndefined();
+
+    await store.setSkillsTrustedProjectDirs([' /work/a ', '/work/b']);
+    expect(await store.getSkillsTrustedProjectDirs()).toEqual([' /work/a ', '/work/b']);
+
+    await store.clearSkillsTrustedProjectDirs();
+    expect(await store.getSkillsTrustedProjectDirs()).toBeUndefined();
+  });
+
+  it('clear не трогает соседние секции', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setSkillsPolicy('available');
+    await store.setSkillsTrustedProjectDirs(['/work']);
+    await store.clearSkillsTrustedProjectDirs();
+
+    expect(await store.getSkillsPolicy()).toBe('available');
+    expect((await store.load()).skillsTrustedProjectDirs).toBeUndefined();
+  });
+});

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { OriginSelector } from '@/components/ui/OriginSelector'
 import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
@@ -23,7 +23,7 @@ export function CreateProjectPopover({
   trigger: React.ReactNode
   align?: 'start' | 'center' | 'end'
   onCreated?: (project: ProjectData) => void | Promise<void>
-  onError?: () => void
+  onError?: (error?: unknown) => void
 }) {
   const { t } = useI18n()
   const createProject = useProjectsStore(s => s.createProject)
@@ -38,21 +38,34 @@ export function CreateProjectPopover({
   const [pickerOpen, setPickerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Пикер каталога и подтверждение рендерятся порталом: фокус уходит из поповера,
+  // и Radix (non-modal Popover) шлёт onOpenChange(false). Пока вложенный диалог
+  // открыт, закрытие поповера игнорируем — иначе диалог закрывается вместе с ним.
+  const nestedDialogOpenRef = useRef(false)
+  nestedDialogOpenRef.current = pickerOpen || confirmOpen
 
   // ADR-075: managed — ФС принадлежит backend, remote-проект живёт на сервере;
   // в обоих случаях каталог создаётся автоматически, путь не передаём.
   const workspaceReadOnly = deployment === 'managed' || origin === 'remote'
 
   const handleOpenChange = (next: boolean) => {
+    if (!next && nestedDialogOpenRef.current) return
     if (next) {
       setName('')
       setOrigin('local')
       setWorkspace('')
+      setError(null)
     } else {
       setPickerOpen(false)
       setConfirmOpen(false)
     }
     setOpen(next)
+  }
+
+  const preventNestedDismiss = (event: Event) => {
+    if (nestedDialogOpenRef.current) event.preventDefault()
   }
 
   /**
@@ -64,6 +77,7 @@ export function CreateProjectPopover({
     const trimmed = name.trim()
     if (!trimmed || submitting) return
     setSubmitting(true)
+    setError(null)
     try {
       const created = await createProject({
         name: trimmed,
@@ -71,6 +85,7 @@ export function CreateProjectPopover({
         ...(!workspaceReadOnly && workspace.trim() ? { workspace: workspace.trim() } : {}),
         ...(confirmOutsideRoot ? { confirmOutsideRoot: true } : {}),
       })
+      setError(null)
       setOpen(false)
       await onCreated?.(created)
     } catch (err) {
@@ -78,7 +93,9 @@ export function CreateProjectPopover({
         setConfirmOpen(true)
         return
       }
-      onError?.()
+      const detail = err instanceof Error ? err.message : String(err)
+      setError(t('createProject.error', { error: detail }))
+      onError?.(err)
     } finally {
       setSubmitting(false)
     }
@@ -100,6 +117,8 @@ export function CreateProjectPopover({
           align={align}
           className="w-64 p-3"
           onOpenAutoFocus={(e) => e.preventDefault()}
+          onInteractOutside={preventNestedDismiss}
+          onEscapeKeyDown={preventNestedDismiss}
         >
           <form
             onSubmit={(e) => { e.preventDefault(); void handleSubmit() }}
@@ -143,6 +162,16 @@ export function CreateProjectPopover({
                     {t('workspace.select')}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {error && (
+              <div
+                role="alert"
+                data-testid="create-project-error"
+                className="rounded border border-destructive/30 bg-destructive/10 px-2 py-1 text-[0.65rem] text-destructive break-words"
+              >
+                {error}
               </div>
             )}
 

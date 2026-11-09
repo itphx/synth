@@ -5,6 +5,7 @@ import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import {
   SETTINGS_CATALOG,
   SETTINGS_CATEGORIES,
+  isCategoryAvailableForDeployment,
   normalizeSettingsQuery,
   searchSettings,
 } from './settings-catalog'
@@ -56,6 +57,41 @@ describe('settings-catalog — «Управление контекстом»', (
     expect(sectionIds).toContain('context-defaults')
     expect(sectionIds).toContain('context-window-policy')
     expect(sectionIds).toContain('context-window-hints')
+  })
+})
+
+describe('settings-catalog — раздел «Пользователи» и режим развёртывания', () => {
+  it('помечен `deployments: [\'managed\']` — эндпоинт `/api/v2/users` есть только в backend', () => {
+    const category = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')
+    expect(category).toBeDefined()
+    expect(category?.roles).toEqual(['ADMIN'])
+    expect(category?.deployments).toEqual(['managed'])
+  })
+
+  it('в managed доступен; в чистом standalone — нет; неизвестный deployment — fail-closed', () => {
+    const users = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')!
+    expect(isCategoryAvailableForDeployment(users, 'managed')).toBe(true)
+    expect(isCategoryAvailableForDeployment(users, 'standalone')).toBe(false)
+    expect(isCategoryAvailableForDeployment(users, null)).toBe(false)
+  })
+
+  it('в standalone доступен при подключённом гибриде (удалённый backend проксируется)', () => {
+    const users = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')!
+    expect(isCategoryAvailableForDeployment(users, 'standalone', true)).toBe(true)
+    expect(isCategoryAvailableForDeployment(users, 'standalone', false)).toBe(false)
+  })
+
+  it('неизвестный deployment скрывает раздел даже при подключённом гибриде', () => {
+    const users = SETTINGS_CATEGORIES.find((cat) => cat.id === 'users')!
+    expect(isCategoryAvailableForDeployment(users, null, true)).toBe(false)
+  })
+
+  it('категория без `deployments` доступна во всех режимах', () => {
+    const profile = SETTINGS_CATEGORIES.find((cat) => cat.id === 'profile')!
+    expect(profile.deployments).toBeUndefined()
+    expect(isCategoryAvailableForDeployment(profile, 'managed')).toBe(true)
+    expect(isCategoryAvailableForDeployment(profile, 'standalone')).toBe(true)
+    expect(isCategoryAvailableForDeployment(profile, null)).toBe(true)
   })
 })
 

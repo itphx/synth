@@ -21,7 +21,11 @@ import {
   createProjectPortableRoutes,
   createStorageContextAsync,
   ProjectInstructionsResolver, createInstructionsInfoResolver,
-  createSettingsRoutes, createDictionaryRoutes, createAuditRoutes as createSecurityAuditRoutes, currentEgressLog,
+  createSettingsRoutes, createDictionaryRoutes, createAuditRoutes, currentEgressLog,
+  // ADR-036/ADR-095: логи, аудит LLM Gateway, regex-паттерны, файлы контекста
+  // и группы логирования — core-фабрики (backend передаёт RBAC/i18n через opts).
+  createLogsRoutes, resolveLogDir,
+  createGatewayPatternsRoutes, createContextFileRoutes, createDebugRoutes,
   createContextRoutes as createCoreContextRoutes,
   createMetricsSettingsRoutes,
   // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального ввода.
@@ -56,12 +60,7 @@ import { createProviderRoutes } from '../routes/providers.js';
 import { createModelRoutes } from '../routes/models.js';
 import { createAgentRoutes } from '../routes/agents.js';
 import { createMcpRoutes } from '../routes/mcp.js';
-import { createContextRoutes as createContextFileRoutes } from '../routes/context.js';
-import { createDebugRoutes } from '../routes/debug.js';
 import { createUserRoutes } from '../routes/users.js';
-import { createAuditRoutes } from '../routes/audit.js';
-import { createLogsRoutes, resolveLogDir } from '../routes/logs.js';
-import { createGatewayPatternsRoutes } from '../routes/gateway-patterns.js';
 import { createLlmRoutes } from '../routes/llm.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { scopeGuard, serviceProjectProjection } from '../auth/service-scope.js';
@@ -387,8 +386,14 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, contextConfig));
 
-  // Context routes (глобальные identity-файлы; админ-мутации)
-  app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig));
+  // Context routes (файлы контекста/промптов инстанца; админ-мутации) — core-фабрика.
+  app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig, {
+    adminGuard: auth.requireAdmin,
+    messages: {
+      fileNotFound: (c) => t('errors.notFound.file', undefined, c),
+      expectedFilesArray: (c) => t('errors.validation.expectedFilesArray', undefined, c),
+    },
+  }));
 
   // User admin routes
   app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
@@ -1198,7 +1203,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       || project.ownerId === userId
       || project.members?.[userId] === ProjectRole.OWNER,
   }));
-  app.route('/api/v2/settings', createSkillSettingsRoutes(auth as unknown as CoreAuthKit, { settingsStore }, {
+  app.route('/api/v2/settings', createSkillSettingsRoutes(auth as unknown as CoreAuthKit, {
+    settingsStore,
+    trustedProjectDirsDefaults: config.synth.skills.trustedProjectDirs ?? [],
+  }, {
     writeGuard: auth.requireAdmin,
     onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
   }));
@@ -1234,24 +1242,38 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   }));
 
-  // LLM Gateway audit routes (ADR-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
-  app.route('/api/v2/audit', createAuditRoutes(auth, {
-    auditLogPath: gatewayAuditLogger.logPath,
-    sessionExists: async (sessionId: string) => {
-      const session = await sessionManager.getSession(sessionId);
-      return session !== null;
+  // LLM Gateway audit routes (ADR-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные.
+  // Одна core-фабрика на весь префикс `/api/v2/audit`: голый аудит Gateway (`/`),
+  // `POST /revealed`, журнал безопасности (`/security`) и журнал egress (`/egress`).
+  app.route('/api/v2/audit', createAuditRoutes(auth as unknown as CoreAuthKit, {
+    securityAudit,
+    egressRequests,
+    gatewayAudit: {
+      auditLogPath: gatewayAuditLogger.logPath,
+      sessionExists: async (sessionId: string) => {
+        const session = await sessionManager.getSession(sessionId);
+        return session !== null;
+      },
+      logger: gatewayAuditLogger,
     },
-    logger: gatewayAuditLogger,
+  }, {
+    readGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
+    gatewayReadGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
+    revealedGuard: auth.requireAuth,
   }));
 
   // Логи сервисов (core/ui/backend) + полный лог запросов/ответов LLM — чтение, только ADMIN/AUDITOR
   app.route('/api/v2/logs', createLogsRoutes(auth, {
     logDir: resolveLogDir(),
     payloadLogPath: gatewayPayloadLogPath,
+  }, {
+    readGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
   }));
 
   // LLM Gateway patterns routes (ADR-036) — управление regex-паттернами детекции секретов, только ADMIN
-  app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));
+  app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore, {
+    adminGuard: auth.requireAdmin,
+  }));
 
   // LLM Proxy (гибридный режим, Часть 5) — OpenAI-совместимый POST /api/v2/llm/chat/completions.
   // Локальный core гоняет LLM-запросы централизованно через LLM Gateway (ADR-036):
@@ -1402,14 +1424,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   ));
 
-  // Журналы безопасности: аудит изменений политик + внешние запросы (egress).
-  // Managed RBAC: чтение только ADMIN/AUDITOR.
-  app.route('/api/v2/audit', createSecurityAuditRoutes(auth as unknown as CoreAuthKit, {
-    securityAudit,
-    egressRequests,
-  }, {
-    readGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
-  }));
+  // Журналы безопасности (аудит политик + egress) и голый аудит LLM Gateway
+  // смонтированы **одной** core-фабрикой выше (префикс `/api/v2/audit`).
 
   // ADR-102 (волна 1): отчёты аналитики — только чтение, данных без локализации.
   // Managed RBAC (§7): ADMIN/LEAD — сквозной обзор; AUDITOR — чтение всех отчётов;
@@ -1451,7 +1467,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       config: config.synth.instructions,
       dictionaryStore: dictionaries,
       dataDir,
-      trustedProjectDirs: config.synth.skills.trustedProjectDirs,
+      trustedProjectDirs: deps.skillsTrustedProjectDirs,
       // ADR-069 R3: авто-trust workspace внутри workspacesRoot (managed-каталоги).
       workspacesRoot: config.workspacesRoot,
       // ADR-077: `git rev-parse` — через порт исполнения (тот же, что у тулов).
@@ -1496,5 +1512,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   registerEventsSse(app, { auth, eventHub, scopeGuard });
 
   // Admin routes (кроме graceful shutdown — он живёт в main.ts, т.к. требует server)
-  app.route('/api/v2/admin/debug', createDebugRoutes(auth));
+  app.route('/api/v2/admin/debug', createDebugRoutes(auth, {
+    adminGuard: auth.requireAdmin,
+    messages: {
+      groupsRequired: (c) => t('errors.validation.groupsRequired', undefined, c),
+      generic: (c) => t('errors.generic', undefined, c),
+    },
+  }));
 }

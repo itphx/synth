@@ -798,6 +798,11 @@ export interface RuntimeSettings {
   skillsDisabledForNewProjects?: SkillsDisabledRequest;
   /** ADR-046 §4.5: глобальная политика включения скиллов (админка). */
   skillsPolicy?: ToolsPolicy;
+  /**
+   * ADR-046/ADR-069: runtime-override project-trust гейта
+   * (`skills.trustedProjectDirs`). Применяется при старте — `restartRequired`.
+   */
+  skillsTrustedProjectDirs?: string[];
   /** Разовые идемпотентные миграции: имя → `true` (выполнено). */
   migrations?: Record<string, boolean>;
   /** ADR-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
@@ -1595,6 +1600,27 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.skillsPolicy;
+      return next;
+    });
+  }
+
+  /**
+   * ADR-046/ADR-069: runtime-override project-trust гейта
+   * (`skills.trustedProjectDirs`); `undefined` — значение из config.yaml.
+   */
+  async getSkillsTrustedProjectDirs(): Promise<string[] | undefined> {
+    const settings = await this.load();
+    return settings.skillsTrustedProjectDirs;
+  }
+
+  async setSkillsTrustedProjectDirs(dirs: string[]): Promise<void> {
+    await this._update((current) => ({ ...current, skillsTrustedProjectDirs: [...dirs] }));
+  }
+
+  async clearSkillsTrustedProjectDirs(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.skillsTrustedProjectDirs;
       return next;
     });
   }

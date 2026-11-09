@@ -6,9 +6,11 @@ import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
+import { useNotification } from '@/hooks/useNotification'
 
 export const ProjectsTabToolbar: React.FC = () => {
   const { t } = useI18n()
+  const { notify } = useNotification()
   const sortMode = useSessionsTreeStore(s => s.sortMode)
   const toggleSortMode = useSessionsTreeStore(s => s.toggleSortMode)
   const selectionMode = useSessionsTreeStore(s => s.selectionMode)
@@ -53,6 +55,14 @@ export const ProjectsTabToolbar: React.FC = () => {
             <Icon name="folder-add" className="h-4 w-4" />
           </button>
         }
+        onError={(err) => {
+          const detail = err instanceof Error ? err.message : String(err)
+          notify({
+            text: t('createProject.error', { error: detail }),
+            type: 'error',
+            category: 'error',
+          })
+        }}
       />
 
       <button

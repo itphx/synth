@@ -1,35 +1,33 @@
+/**
+ * Backend-специфика HTTP-контура конфигурации групп логирования (debug-раздел).
+ *
+ * Логика роута — в core-фабрике (`packages/core/src/server/routes/debug.ts`,
+ * тесты там). Здесь — managed-обвязка: guard `requireAdmin` на обоих методах
+ * и локализованные тексты ошибок (i18n, ADR-041).
+ */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import { createDebugRoutes } from './debug.js';
+import { createDebugRoutes } from '@itphx/synth-core';
 import { getAllGroups, resetGroupOverrides } from '@itphx/synth-core';
+import { t } from '../lib/i18n.js';
 import type { User } from '@itphx/synth-shared';
 
 const adminUser: User = {
-  id: 'admin',
-  username: 'admin',
-  roles: ['ADMIN'],
-  preferredLanguage: 'ru',
-  createdAt: '',
-  teamRole: 'ADMIN',
-  notes: '',
-  interviewCompleted: false,
+  id: 'admin', username: 'admin', roles: ['ADMIN'], preferredLanguage: 'ru',
+  createdAt: '', teamRole: 'ADMIN', notes: '', interviewCompleted: false,
 };
-
 const userUser: User = {
-  id: 'developer',
-  username: 'developer',
-  roles: ['USER'],
-  preferredLanguage: 'ru',
-  createdAt: '',
-  teamRole: 'USER',
-  notes: '',
-  interviewCompleted: false,
+  id: 'developer', username: 'developer', roles: ['USER'], preferredLanguage: 'ru',
+  createdAt: '', teamRole: 'USER', notes: '', interviewCompleted: false,
 };
 
-function createMockKit(user: User) {
+function createMockKit(user: User | null) {
   return {
     requireAuth: async (c: Context, next: Next) => {
+      if (!user) {
+        return c.json({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }, 401);
+      }
       c.set('user', user);
       await next();
     },
@@ -40,76 +38,63 @@ function createMockKit(user: User) {
       }
       await next();
     },
-    requirePermission: (...roles: string[]) => async (c: Context, next: Next) => {
-      const u = c.get('user') as User | undefined;
-      if (!u || !roles.some((r) => u.roles.includes(r))) {
-        return c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403);
-      }
-      await next();
-    },
     getCurrentUser: () => user,
   };
 }
 
-function createApp(user: User) {
-  const app = new Hono();
-  const kit = createMockKit(user);
-  app.use('*', kit.requireAuth);
-  app.route('/api/v2/admin/debug', createDebugRoutes(kit as any));
-  return app;
-}
-
-function postConfig(app: Hono, groups?: Record<string, string>) {
-  return app.request('/api/v2/admin/debug/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(groups === undefined ? {} : { groups }),
-  });
-}
-
-describe('Debug Config API Routes', () => {
+describe('routes/debug: managed-обвязка core-фабрики debug-конфига', () => {
   beforeEach(() => {
     resetGroupOverrides();
   });
 
-  describe('POST /api/v2/admin/debug/config', () => {
-    it('сохраняет переданные группы (merge)', async () => {
-      const res = await postConfig(createApp(adminUser), { ROUTES: 'DEBUG' });
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ status: 'saved' });
-      expect(getAllGroups().ROUTES).toBe('DEBUG');
-    });
+  function createApp(user: User | null) {
+    const app = new Hono();
+    const kit = createMockKit(user);
+    app.use('*', kit.requireAuth);
+    app.route('/api/v2/admin/debug', createDebugRoutes(
+      { requireAuth: kit.requireAuth },
+      {
+        adminGuard: kit.requireAdmin,
+        messages: {
+          groupsRequired: (c) => t('errors.validation.groupsRequired', undefined, c),
+          generic: (c) => t('errors.generic', undefined, c),
+        },
+      },
+    ));
+    return app;
+  }
 
-    it('не сбрасывает overrides другой категории', async () => {
-      const app = createApp(adminUser);
-      await postConfig(app, { OPENAI: 'DEBUG', ANTHROPIC: 'ERROR' });
-      await postConfig(app, { ROUTES: 'DEBUG', STORAGE: 'ERROR' });
-
-      const groups = getAllGroups();
-      expect(groups.OPENAI).toBe('DEBUG');
-      expect(groups.ANTHROPIC).toBe('ERROR');
-      expect(groups.ROUTES).toBe('DEBUG');
-      expect(groups.STORAGE).toBe('ERROR');
+  function postConfig(app: Hono, groups?: Record<string, string>) {
+    return app.request('/api/v2/admin/debug/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(groups === undefined ? {} : { groups }),
     });
+  }
 
-    it('возвращает 400 VALIDATION_ERROR без groups', async () => {
-      const res = await postConfig(createApp(adminUser));
-      expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('VALIDATION_ERROR');
-    });
+  it('USER → 403 на обоих методах (guard ADMIN)', async () => {
+    const app = createApp(userUser);
+    expect((await app.request('/api/v2/admin/debug/config')).status).toBe(403);
+    expect((await postConfig(app, { ROUTES: 'DEBUG' })).status).toBe(403);
+  });
 
-    it('возвращает 400 на невалидный уровень', async () => {
-      const res = await postConfig(createApp(adminUser), { ROUTES: 'TRACE' });
-      expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('VALIDATION_ERROR');
-      expect(getAllGroups().ROUTES).toBe('WARNING');
-    });
+  it('ADMIN → 200; группы сохраняются', async () => {
+    const res = await postConfig(createApp(adminUser), { ROUTES: 'DEBUG' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'saved' });
+    expect(getAllGroups().ROUTES).toBe('DEBUG');
+  });
 
-    it('недоступен для USER (403)', async () => {
-      const res = await postConfig(createApp(userUser), { ROUTES: 'DEBUG' });
-      expect(res.status).toBe(403);
-    });
+  it('текст ошибки локализован (i18n, ADR-041)', async () => {
+    const res = await postConfig(createApp(adminUser));
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toBe(t('errors.validation.groupsRequired'));
+  });
+
+  it('без креды → 401', async () => {
+    const res = await createApp(null).request('/api/v2/admin/debug/config');
+    expect(res.status).toBe(401);
   });
 });

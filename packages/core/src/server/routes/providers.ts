@@ -2,9 +2,16 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { JsonStoreLike } from '../../storage/json-store.js';
-import type { ProviderConfig } from '@itphx/synth-shared';
+import type { EgressPolicy, ProviderConfig } from '@itphx/synth-shared';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { parseCurrencyInput, parseModelCompatibilityInput, renderIcon } from '@itphx/synth-shared';
+import {
+  PRIVATE_EGRESS_POLICY,
+  checkEgressUrl,
+  fetchWithEgressGuard,
+  sanitizeEgressTarget,
+  type EgressLogSink,
+} from '../../engine/net/egress-guard.js';
 import { ProviderFactory } from '../../index.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -26,6 +33,30 @@ export interface ProviderRouteMessages {
   connectionError: (c: Context) => string;
   /** `num_ctx`/`numCtx` задан, но не целое > 0. */
   numCtxInvalid: (c: Context) => string;
+  /** Фавикон домена не найден (в т.ч. адрес заблокирован egress-политикой). */
+  faviconNotFound: (c: Context) => string;
+  /** Ошибка загрузки фавикона. */
+  faviconFetchError: (c: Context) => string;
+}
+
+/**
+ * Опции `POST /api/v2/providers/fetch-icon` (ADR-099/PROP-100).
+ *
+ * Маршрут включается явно (`enabled: true`): в managed — всегда, в core —
+ * по решению сборки. Guard и rate-limit — на стороне вызывающего (managed:
+ * ADMIN + лимит 10/60 с; core: локальный пользователь всегда ADMIN).
+ */
+export interface ProviderFetchIconOptions {
+  /** Включить маршрут. По умолчанию — выключен. */
+  enabled?: boolean;
+  /** Guard на маршрут (managed — requireAdmin; core — requireAuth). */
+  guard?: Middleware;
+  /** Доп. middleware (rate limiter) — применяются после guard'а. */
+  middleware?: Middleware[];
+  /** Живой резолвер egress-политики `egress.tools` (per-request). */
+  resolvePolicy?: () => Promise<EgressPolicy>;
+  /** Приёмник журнала внешних запросов (scope `providers`). */
+  log?: EgressLogSink;
 }
 
 /** Первое заданное (не `undefined`) значение — для алиасов входных полей. */
@@ -69,6 +100,11 @@ export interface ProviderRoutesOptions {
   /** Доп. middleware для POST /:name/test (например, rate limiter), в порядке применения. */
   testMiddleware?: Middleware[];
   /**
+   * `POST /fetch-icon` — получить фавикон домена провайдера.
+   * Не задано — маршрут не регистрируется (core по умолчанию выключает).
+   */
+  fetchIcon?: ProviderFetchIconOptions;
+  /**
    * Модель по умолчанию инстанса (явная пара provider+model) — из неё берутся
    * `is_default`/`default_provider` в GET `/`. Не задан/`null` — дефолтного
    * провайдера нет (никаких «первый по порядку»).
@@ -86,6 +122,8 @@ const DEFAULT_MESSAGES: ProviderRouteMessages = {
   urlInvalid: () => 'URL обязателен и должен быть абсолютным http(s)',
   connectionError: () => 'Ошибка подключения',
   numCtxInvalid: () => 'num_ctx должен быть целым числом > 0',
+  faviconNotFound: () => 'Favicon не найден',
+  faviconFetchError: () => 'Ошибка получения favicon',
 };
 
 /**
@@ -105,6 +143,119 @@ export function createProviderRoutes(
   const testGuard = opts.testGuard ?? auth.requireAuth;
   const testMiddleware = opts.testMiddleware ?? [];
   const messages: ProviderRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
+
+  // POST /api/v2/providers/fetch-icon — получить favicon с домена.
+  // Статический сегмент регистрируем ДО параметрических (`/:name`).
+  const fetchIcon = opts.fetchIcon;
+  if (fetchIcon?.enabled) {
+    const iconGuard = fetchIcon.guard ?? auth.requireAuth;
+    app.post('/fetch-icon', iconGuard, ...(fetchIcon.middleware ?? []), async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      const url = body.url?.trim();
+      if (!url) {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: messages.urlRequired(c) },
+        }, 400);
+      }
+
+      let origin: string;
+      try {
+        origin = new URL(url).origin;
+      } catch {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: messages.urlInvalid(c) },
+        }, 400);
+      }
+
+      // SSRF-защита: resolved egress-политика (включая exceptions и DNS-резолв).
+      const policy = fetchIcon.resolvePolicy ? await fetchIcon.resolvePolicy() : PRIVATE_EGRESS_POLICY;
+      const networkCheck = await checkEgressUrl(origin, policy);
+      if (!networkCheck.allowed) {
+        // Отказ до HTTP-запроса — фиксируем в журнале egress (ответ остаётся 400).
+        if (fetchIcon.log) {
+          const target = sanitizeEgressTarget(origin);
+          try {
+            await fetchIcon.log({
+              scope: 'providers',
+              host: target.host,
+              url: target.url,
+              method: 'GET',
+              status: 'blocked',
+              reason: networkCheck.reason,
+              ...(networkCheck.matchedRule ? { matchedRule: networkCheck.matchedRule } : {}),
+            });
+          } catch (err) {
+            console.warn(`[providers] egress log: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: messages.urlInvalid(c) },
+        }, 400);
+      }
+
+      try {
+        const iconUrl = `${origin}/favicon.ico`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+
+        const resp = await fetchWithEgressGuard(iconUrl, {
+          signal: controller.signal,
+          headers: { Accept: 'image/*' },
+        }, { policy, scope: 'providers', log: fetchIcon.log });
+        clearTimeout(timer);
+
+        if (resp.ok && resp.headers.get('content-type')?.includes('image')) {
+          const buffer = await resp.arrayBuffer();
+          const ct = resp.headers.get('content-type') || 'image/x-icon';
+          const b64 = Buffer.from(buffer).toString('base64');
+          return c.json({ icon: `data:${ct};base64,${b64}`, source: iconUrl });
+        }
+
+        // Попробовать найти <link rel="icon"> в HTML
+        const htmlController = new AbortController();
+        const htmlTimer = setTimeout(() => htmlController.abort(), 5000);
+
+        const htmlResp = await fetchWithEgressGuard(origin, {
+          signal: htmlController.signal,
+          headers: { Accept: 'text/html' },
+        }, { policy, scope: 'providers', log: fetchIcon.log });
+        clearTimeout(htmlTimer);
+
+        if (htmlResp.ok) {
+          const html = await htmlResp.text();
+          const match = html.match(/<link[^>]*rel=["'](?:shortcut\s+)?icon["'][^>]*href=["']([^"']+)["']/i)
+            || html.match(/<link[^>]*href=["']([^"']+)["'][^>]*rel=["'](?:shortcut\s+)?icon["']/i);
+
+          if (match) {
+            const href = match[1];
+            if (href) {
+              let resolved = href;
+              if (resolved.startsWith('/')) resolved = `${origin}${resolved}`;
+              else if (!resolved.startsWith('http')) resolved = `${origin}/${resolved}`;
+
+              const iconResp = await fetchWithEgressGuard(resolved, {
+                signal: AbortSignal.timeout(5000),
+                headers: { Accept: 'image/*' },
+              }, { policy, scope: 'providers', log: fetchIcon.log });
+              if (iconResp.ok) {
+                const buffer = await iconResp.arrayBuffer();
+                const ct = iconResp.headers.get('content-type') || 'image/x-icon';
+                const b64 = Buffer.from(buffer).toString('base64');
+                return c.json({ icon: `data:${ct};base64,${b64}`, source: resolved });
+              }
+            }
+          }
+        }
+
+        return c.json({ icon: null, error: messages.faviconNotFound(c) });
+      } catch (err) {
+        return c.json({
+          icon: null,
+          error: err instanceof Error ? err.message : messages.faviconFetchError(c),
+        });
+      }
+    });
+  }
 
   app.get('/', auth.requireAuth, async (c) => {
     const providers = await store.list();

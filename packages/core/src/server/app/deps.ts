@@ -89,6 +89,8 @@ import {
   createEgressLogSink,
   configureEgressRuntime,
   startEgressLogPruner,
+  // ADR-036: общий AuditLogger LLM Gateway (оркестратор + HTTP-роут аудита).
+  AuditLogger,
   // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
   OAuthCredentialService,
   OAuthProviderRegistry,
@@ -407,6 +409,15 @@ export async function createStandaloneDeps(
   const runtimeGateway = await settingsStore.getLlmGatewaySettings();
   const gatewayConfig = mergeLlmGatewayConfig(config.gatewayConfig, runtimeGateway);
 
+  // ADR-036: общий AuditLogger LLM Gateway создаётся **снаружи**, чтобы
+  // оркестратор и HTTP-роут `GET /api/v2/audit` писали/читали **один и тот же**
+  // JSONL (`{dataDir}/audit/llm-gateway.jsonl`) — как в managed backend.
+  const gatewayAuditLogPath = join(dataDir, 'audit', 'llm-gateway.jsonl');
+  const gatewayAuditLogger = new AuditLogger(gatewayAuditLogPath);
+  // Полный лог запросов/ответов LLM (после обфускации) — тот же путь, что
+  // использует оркестратор (ADR-036); отдаётся в `GET /api/v2/logs/llm`.
+  const gatewayPayloadLogPath = join(dataDir, 'audit', 'llm-payloads.jsonl');
+
   // Защищённые пути: runtime-настройка protectedPaths.enabled (тумблер из UI) приоритетнее config.yaml
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(config.securityConfig, runtimeSecurity);
@@ -424,6 +435,13 @@ export async function createStandaloneDeps(
   // ADR-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
   const effectiveSkillsDisabled = (await settingsStore.getSkillsDisabled())
     ?? { categories: [], groups: [], skills: [] };
+  // ADR-046/ADR-069: project-trust гейт скиллов/команд/инструкций. Runtime
+  // (`settings.json`/PG) приоритетнее `config.yaml`; применяется при старте
+  // (резолверы собираются здесь) — `restartRequired` в API, инвариант 24.
+  const effectiveSkillsTrustedProjectDirs =
+    (await settingsStore.getSkillsTrustedProjectDirs())
+    ?? config.skillsConfig?.trustedProjectDirs
+    ?? [];
 
   // ADR-075: политика workspace вне root. config/env — дефолт; runtime-override
   // (settings.json) применяется при старте и live через PUT /settings/workspace-policy
@@ -451,10 +469,9 @@ export async function createStandaloneDeps(
     // (`messages_assistant`/`messages_tool`); пользовательские — в процессоре.
     analytics,
     // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
+    // Список MCP-серверов — из реестра (источник истины, ADR-071 §2.5).
     systemDefaultsProvider: async () => ({
-      mcpDefaultOn: Object.entries(config.mcpServers ?? {})
-        .filter(([, cfg]) => cfg.enabledByDefault === true)
-        .map(([name]) => name),
+      mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
       skillsDefaultOn: (await resolveProjectSkillSeed(
         skillService,
         await settingsStore.getSkillsDisabledForNewProjects(),
@@ -483,7 +500,21 @@ export async function createStandaloneDeps(
           getRetentionDays: () => config.analyticsConfig?.retentionDays ?? 400,
         });
   const mcpManager = new McpManager();
-  mcpManager.setConfig(config.mcpServers ?? {});
+  // ADR-071 §2.5: единый источник истины для конфигурации MCP-серверов —
+  // реестр `McpRegistryStore` (в standalone так же, как в managed). Instance-
+  // серверы из `config.mcpServers` сидируются в реестр при старте (идемпотентно
+  // по имени), менеджер заполняется картами реестра. Правка записи реестра
+  // перечитывает карты (`syncMcpManagerFromRegistry`) — серверы из конфига при
+  // этом не исчезают: они уже в реестре.
+  await mcpRegistryStore.seedFromConfig(config.mcpServers ?? {});
+  const mcpMaps = await mcpRegistryStore.toManagerMaps();
+  mcpManager.setConfig(mcpMaps.servers);
+  mcpManager.setServerOrigins(mcpMaps.origins);
+  mcpManager.setServerTrusts(mcpMaps.trusts);
+  mcpManager.setServerAuthors(mcpMaps.authors);
+  mcpManager.setDefaultServers(mcpMaps.defaults);
+  // ADR-071 §2.4: системный мастер-флаг серверов (реестр `enabled`).
+  mcpManager.setServerSystemEnabled(mcpMaps.systemEnabled);
 
   // ADR-071 §2.3.1: политика сетевого доступа MCP резолвится при каждом
   // подключении/probe (live; живые соединения остаются на политике коннекта).
@@ -1053,7 +1084,7 @@ export async function createStandaloneDeps(
     store: storageContext.skills,
     configPaths: config.skillsConfig?.paths,
     urls: config.skillsConfig?.urls,
-    trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+    trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
     toolsets: config.skillsConfig?.toolsets,
   });
 
@@ -1078,9 +1109,8 @@ export async function createStandaloneDeps(
         ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
         : {}),
       resolveSystemDefaults: async () => ({
-        mcpDefaultOn: Object.entries(config.mcpServers ?? {})
-          .filter(([, cfg]) => cfg.enabledByDefault === true)
-          .map(([name]) => name),
+        // ADR-071 §2.5: дефолты MCP-серверов — из реестра (источник истины).
+        mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
         skillsDefaultOn: (await resolveProjectSkillSeed(
           skillService,
           await settingsStore.getSkillsDisabledForNewProjects(),
@@ -1099,7 +1129,7 @@ export async function createStandaloneDeps(
       maxArgumentsLength: config.commandsConfig?.maxArgumentsLength ?? 10_000,
       maxRenderedBytes: config.commandsConfig?.maxRenderedBytes ?? 200_000,
       toolsets: config.skillsConfig?.toolsets ?? {},
-      trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+      trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
       inlineShell: config.skillsConfig?.inlineShell ?? false,
     },
     skillRuntime: skillService,
@@ -1448,6 +1478,10 @@ export async function createStandaloneDeps(
     ...(config.sessionConfig?.autoTitle ? { autoTitle: config.sessionConfig.autoTitle } : {}),
     securityConfig: effectiveSecurityConfig,
     gatewayConfig,
+    // ADR-036: общий AuditLogger — оркестратор и `GET /api/v2/audit` пишут
+    // в один и тот же JSONL.
+    gatewayAuditLogger,
+    gatewayPayloadLogPath,
     gatewayPatternStore: patternStore,
     // ADR-090/«Точка promptBlocks»: бюджеты слоя плагинов.
     // Реестр фильтров создаётся оркестратором (`getLlmFilters()`), бюджет блока
@@ -1483,7 +1517,7 @@ export async function createStandaloneDeps(
     // ADR-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
     instructionsConfig: config.instructionsConfig,
     // ADR-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
-    instructionsTrustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+    instructionsTrustedProjectDirs: effectiveSkillsTrustedProjectDirs,
     // ADR-084: decision-слой микро-каскада (config.decision). Runtime-обновление —
     // через `setDecisionConfig` (Ф5).
     decisionConfig: effectiveDecisionSettings,
@@ -2102,6 +2136,12 @@ export async function createStandaloneDeps(
     defaultWorkingDir,
     /** ADR-075: начальная политика workspace вне root (config/env + runtime-override). */
     workspaceOutsideRootPolicy: effectiveWorkspaceOutsideRootPolicy,
+    /**
+     * ADR-046/ADR-069: эффективный project-trust гейт скиллов/команд/инструкций
+     * (runtime > config), снятый на старте. Нужен резолверу инструкций в
+     * `mount-routes` (а не только оркестратору).
+     */
+    skillsTrustedProjectDirs: effectiveSkillsTrustedProjectDirs,
     protectedPathsStore,
     projectStore,
     sessionManager,
@@ -2151,6 +2191,13 @@ export async function createStandaloneDeps(
     egressLogConfig,
     securityAudit,
     egressRequests,
+    // ADR-036: общий AuditLogger LLM Gateway (оркестратор + `GET /api/v2/audit`)
+    // и путь payload-лога (`GET /api/v2/logs/llm`) — тот же JSONL.
+    gatewayAuditLogger,
+    gatewayAuditLogPath,
+    gatewayPayloadLogPath,
+    // ADR-036: порт regex-паттернов детекции секретов (`GET /api/v2/gateway/patterns`).
+    gatewayPatternStore: patternStore,
     // ADR-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
     analyticsRollups,
     // ADR-102: write-path — сборщик роллапов (+ остановка детачей hook-подписки и pruner'а).

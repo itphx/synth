@@ -163,6 +163,8 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
     const body: any = await res.json();
     expect(body.session_id).toBe(session.id);
     expect(body.enabled).toBe(true);
+    // UI показывает точный путь trust-подсказки — workspace в ответе.
+    expect(body.workspace).toBe(ws);
     // windowRatio 0.06 * 128_000 = 7 680, но floor minChars 20 000.
     expect(body.cap.chars).toBe(20_000);
     expect(body.cap.source).toBe('dynamic');
@@ -194,6 +196,8 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
     expect(body.diagnostics).toEqual([
       expect.objectContaining({ level: 'info', code: 'no-project' }),
     ]);
+    // Нет workspace — поля нет.
+    expect(body).not.toHaveProperty('workspace');
   });
 
   it('project scope: резолвит инструкции проекта', async () => {
@@ -207,6 +211,7 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
     expect(res.status).toBe(200);
     const body: any = await res.json();
     expect(body.project_id).toBe('p1');
+    expect(body.workspace).toBe(ws);
     expect(body.files.map((f: any) => f.path)).toContain('./AGENTS.md');
   });
 

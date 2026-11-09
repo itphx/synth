@@ -1,17 +1,7 @@
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
-import type { AuthKit } from '../auth/middleware.js';
-import type {
-  SessionManager, McpManager, McpRegistryRepository, ExternalCredentialRepository,
-} from '@itphx/synth-core';
-import {
-  createCredentialBindGuard,
-  evaluateMcpNetworkAccess,
-  getServiceCredential,
-  McpRegistryValidationError,
-  syncMcpManagerFromRegistry,
-} from '@itphx/synth-core';
 import type { McpServerConfig, McpNetworkPolicy, McpRegistryEntry, User } from '@itphx/synth-shared';
 import {
   sessionMcpScopeSchema,
@@ -22,12 +12,114 @@ import {
   MCP_SECRET_HEADER_ERROR_CODE,
 } from '@itphx/synth-shared';
 import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
-import { requireAdminOrScope, requireScopeForServiceKey } from '../auth/guards.js';
-import { t } from '../lib/i18n.js';
+import type { McpManager } from '../../engine/mcp/index.js';
+import { evaluateMcpNetworkAccess } from '../../engine/mcp/network-policy.js';
+import { syncMcpManagerFromRegistry } from '../../engine/mcp/manager-sync.js';
+import type { SessionManager } from '../../sessions/manager.js';
+import type { McpRegistryRepository } from '../../storage/ports/mcp-registry-repository.js';
+import type { ExternalCredentialRepository } from '../../storage/ports/external-credential-repository.js';
+import { McpRegistryValidationError } from '../../storage/mcp-registry-store.js';
+import { createCredentialBindGuard } from '../credential-bind-guard.js';
+import { getServiceCredential, requireScope, requireScopeOrAdminRole } from '../service-scope.js';
 
-// Backend-only MCP-роуты (ADR-071 §2.5): legacy `/servers*`, `/session/:id` и
-// единый реестр `/registry*`. Probe (`POST /probe`) — общая логика core,
-// монтируется в `routes/mcp.ts` ПЕРЕД этим роутером.
+/**
+ * ADR-071 §2.5: единый реестр MCP-серверов — HTTP-контур (core + managed).
+ *
+ * Фабрика общая для standalone (core) и managed (backend): backend передаёт
+ * свои guard'ы (RBAC/service-scope) и i18n-сообщения через `opts`, core —
+ * core-дефолты и русские литералы. Логика здесь одна — расхождение правил
+ * между режимами невозможно (инвариант «общая логика — в core»).
+ *
+ * В standalone реестр — **источник истины** для конфигурации серверов
+ * (паритет с managed): `config.mcp.servers` сидируются в реестр при старте
+ * (`seedFromConfig`), менеджер заполняется картами реестра, а любая мутация
+ * реестра перечитывает их (`syncMcpManagerFromRegistry`).
+ */
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
+type Middleware = ReturnType<typeof createMiddleware>;
+
+/** Минимальный auth-контракт фабрики: в core и backend общий (структурно). */
+export interface McpRegistryRoutesAuth {
+  requireAuth: Middleware;
+  /**
+   * Роль `ADMIN` у пользователя запроса. Не задана — определяется по
+   * `user.roles` (локальный пользователь standalone — `ADMIN`).
+   */
+  isAdmin?: (c: Context) => boolean;
+}
+
+/** Локализуемые сообщения: backend передаёт `t()`, core — русские литералы. */
+export interface McpRegistryRouteMessages {
+  serverExists: (c: Context, name: string) => string;
+  serverExistsInRegistry: (c: Context, name: string) => string;
+  serverNotFound: (c: Context, name: string) => string;
+  serverNotConfigured: (c: Context, name: string) => string;
+  entryNotFound: (c: Context, id: string) => string;
+  sessionNotFound: (c: Context) => string;
+  forbidden: (c: Context) => string;
+  credentialNotFound: (c: Context) => string;
+  stdioAdminOnlyAdd: (c: Context) => string;
+  stdioAdminOnlyUpdate: (c: Context) => string;
+  updateForbidden: (c: Context) => string;
+  deleteForbidden: (c: Context) => string;
+  networkPolicyViolation: (c: Context, reason?: string) => string;
+  managerNotConfigured: (c: Context) => string;
+}
+
+const DEFAULT_MESSAGES: McpRegistryRouteMessages = {
+  serverExists: (_c, name) => `Сервер "${name}" уже существует`,
+  serverExistsInRegistry: (_c, name) => `Сервер "${name}" уже существует в реестре`,
+  serverNotFound: (_c, name) => `Сервер "${name}" не найден`,
+  serverNotConfigured: (_c, name) => `Сервер "${name}" не настроен`,
+  entryNotFound: (_c, id) => `Запись "${id}" не найдена`,
+  sessionNotFound: () => 'Сессия не найдена',
+  forbidden: () => 'Недостаточно прав',
+  credentialNotFound: () => 'Внешний доступ не найден',
+  stdioAdminOnlyAdd: () => 'stdio-серверы может добавлять только ADMIN',
+  stdioAdminOnlyUpdate: () => 'stdio-серверы может изменять только ADMIN',
+  updateForbidden: () => 'Обновлять запись может автор или ADMIN',
+  deleteForbidden: () => 'Удалять запись может автор или ADMIN',
+  networkPolicyViolation: (_c, reason) => reason ?? 'Адрес запрещён сетевой политикой',
+  managerNotConfigured: () => 'McpManager не настроен',
+};
+
+export interface McpRegistryRoutesOptions {
+  /** ADR-071 §2.5: единый реестр MCP-серверов (источник истины). */
+  registry: McpRegistryRepository;
+  /** ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов. */
+  networkPolicy?: McpNetworkPolicy;
+  /**
+   * ADR-071 §2.3.1: динамический источник политики (runtime-настройка из админки).
+   * Приоритетнее статической `networkPolicy`; читается на каждый запрос.
+   */
+  getNetworkPolicy?: () => Promise<McpNetworkPolicy | undefined>;
+  /**
+   * ADR-105 (Ф3): порт слоя внешних доступов — право привязать доступ
+   * к коннектору проверяется на границе (инвариант 16). Не задан — привязка
+   * запрещена (fail-closed).
+   */
+  credentials?: ExternalCredentialRepository;
+  /**
+   * ADR-105 (Ф3): право участника проекта **изменять содержимое** проекта
+   * (`OWNER`/`EDITOR`, а также `LEAD`/`ADMIN`) — для доступа уровня проекта.
+   */
+  canEditProject?: (c: Context, projectId: string) => boolean | Promise<boolean>;
+  /** Guard «только ADMIN» (`POST /servers`). Core-дефолт — проверка роли. */
+  requireAdmin?: Middleware;
+  /**
+   * Guard «ADMIN или scope `addons:install`» (`PUT/DELETE /servers/:name`,
+   * `POST /servers/:name/test`). Core-дефолт — `requireScopeOrAdminRole`.
+   */
+  requireAdminOrScope?: Middleware;
+  /**
+   * Guard «service-key → scope `addons:install`» (`POST /registry`);
+   * интерактивные креды — без изменений. Core-дефолт — `requireScope`.
+   */
+  requireScopeForServiceKey?: Middleware;
+  /** Сообщения об отказах (backend — i18n, core — русские литералы). */
+  messages?: Partial<McpRegistryRouteMessages>;
+}
 
 const addServerSchema = z.object({
   name: z.string().min(1),
@@ -59,28 +151,28 @@ const registryUpdateSchema = z.object({
   remoteMode: z.enum(MCP_REMOTE_MODES).optional(),
 });
 
-export interface McpRoutesOptions {
-  /** ADR-071 §2.5: единый реестр MCP-серверов (источник истины для `/servers` и `/registry`). */
-  registry: McpRegistryRepository;
-  /** ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов. */
-  networkPolicy?: McpNetworkPolicy;
-  /**
-   * ADR-071 §2.3.1: динамический источник политики (runtime-настройка из админки).
-   * Приоритетнее статической `networkPolicy`; читается на каждый запрос.
-   */
-  getNetworkPolicy?: () => Promise<McpNetworkPolicy | undefined>;
-  /**
-   * ADR-105 (Ф3): порт слоя внешних доступов — право привязать доступ
-   * к коннектору проверяется на границе (инвариант 16). Не задан — привязка
-   * запрещена (fail-closed).
-   */
-  credentials?: ExternalCredentialRepository;
-  /**
-   * ADR-105 (Ф3): право участника проекта **изменять содержимое** проекта
-   * (`OWNER`/`EDITOR`, а также `LEAD`/`ADMIN`) — для доступа уровня проекта.
-   */
-  canEditProject?: (c: Context, projectId: string) => boolean | Promise<boolean>;
+/** Роль `ADMIN` у пользователя запроса (core-дефолт проверки `isAdmin`). */
+function userHasAdminRole(c: Context): boolean {
+  const user = c.get('user') as { roles?: string[] } | undefined;
+  return !!user && Array.isArray(user.roles) && user.roles.includes('ADMIN');
 }
+
+/**
+ * Core-дефолт guard'а «только ADMIN»: нет аутентификации → 401, нет роли →
+ * 403 (семантика HTTP, как у backend `requireAdmin`).
+ */
+const requireAdminRole: Middleware = createMiddleware(async (c, next) => {
+  // `c.get` в middleware-контексте — с узким набором ключей (как в
+  // `server/service-scope.ts`).
+  const user = c.get('user' as never) as { roles?: string[] } | undefined;
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Требуется аутентификация' } }, 401);
+  }
+  if (!Array.isArray(user.roles) || !user.roles.includes('ADMIN')) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Недостаточно прав' } }, 403);
+  }
+  await next();
+});
 
 /**
  * ADR-105 (Ф3): plaintext-секрет в заголовках коннектора запрещён —
@@ -97,7 +189,7 @@ function secretHeaderError(
 }
 
 /**
- * ADR-105 (Ф3): хранилище реестра — последний рубеж запрета plaintext-секрета.
+ * ADR-105 (Ф3): хранилище реестра — последний ругеж запрета plaintext-секрета.
  * Ошибка валидации → 400 с тем же кодом (иначе роут отдал бы 500).
  */
 function secretHeaderStoreError(err: unknown): { code: string; message: string } | null {
@@ -108,13 +200,19 @@ function secretHeaderStoreError(err: unknown): { code: string; message: string }
 }
 
 export function createMcpRegistryRoutes(
-  kit: AuthKit,
+  auth: McpRegistryRoutesAuth,
   mcpManager: McpManager | null,
   sessionManager: SessionManager | null,
-  options: McpRoutesOptions,
+  options: McpRegistryRoutesOptions,
 ): Hono {
   const app = new Hono();
   const registry = options.registry;
+  const messages: McpRegistryRouteMessages = { ...DEFAULT_MESSAGES, ...options.messages };
+  const isAdmin = auth.isAdmin ?? userHasAdminRole;
+  const adminGuard = options.requireAdmin ?? requireAdminRole;
+  const adminOrScopeGuard = options.requireAdminOrScope ?? requireScopeOrAdminRole('addons:install');
+  const scopeForServiceKeyGuard = options.requireScopeForServiceKey ?? requireScope('addons:install');
+
   const resolveNetworkPolicy = async (): Promise<McpNetworkPolicy | undefined> =>
     (options.getNetworkPolicy ? await options.getNetworkPolicy() : undefined) ?? options.networkPolicy;
 
@@ -145,8 +243,8 @@ export function createMcpRegistryRoutes(
     },
     ...(options.canEditProject ? { canEditProject: options.canEditProject } : {}),
     messages: {
-      notFound: (c) => t('errors.notFound.credential', undefined, c),
-      forbidden: (c) => t('auth.forbidden', undefined, c),
+      notFound: (c) => messages.credentialNotFound(c),
+      forbidden: (c) => messages.forbidden(c),
     },
   });
 
@@ -161,6 +259,7 @@ export function createMcpRegistryRoutes(
   };
 
   const checkNetwork = async (
+    c: Context,
     config: McpServerConfig,
     origin: 'instance' | 'user',
   ): Promise<{ code: string; message: string } | null> => {
@@ -171,16 +270,19 @@ export function createMcpRegistryRoutes(
     if (!policy) return null;
     const result = await evaluateMcpNetworkAccess(config.url, policy);
     if (result.allowed) return null;
-    return { code: 'NETWORK_POLICY_VIOLATION', message: result.reason ?? 'Адрес запрещён сетевой политикой' };
+    return {
+      code: 'NETWORK_POLICY_VIOLATION',
+      message: messages.networkPolicyViolation(c, result.reason),
+    };
   };
 
   // ---------------------------------------------------------------------------
   // Legacy `/servers*` — тонкие адаптеры над единым реестром (ADR-071 §2.5).
-  // Второго хранилища (config.yaml) больше нет: источник истины — McpRegistryStore.
+  // Второго хранилища (config.yaml) больше нет: источник истины — реестр.
   // ---------------------------------------------------------------------------
 
   // --- Список настроенных серверов ---
-  app.get('/servers', kit.requireAuth, async (c) => {
+  app.get('/servers', auth.requireAuth, async (c) => {
     const entries = await registry.list();
     const result: Record<string, { name: string; config: McpServerConfig; connected: boolean }> = {};
     for (const entry of entries) {
@@ -190,7 +292,7 @@ export function createMcpRegistryRoutes(
   });
 
   // --- Добавить сервер (instance-запись; ADMIN) ---
-  app.post('/servers', kit.requireAdmin, async (c) => {
+  app.post('/servers', adminGuard, async (c) => {
     const body = await c.req.json();
     const parsed = addServerSchema.safeParse(body);
     if (!parsed.success) {
@@ -199,7 +301,7 @@ export function createMcpRegistryRoutes(
 
     const { name, config } = parsed.data;
     if (await registry.getByName(name)) {
-      return c.json({ error: { code: 'CONFLICT', message: `Сервер "${name}" уже существует` } }, 409);
+      return c.json({ error: { code: 'CONFLICT', message: messages.serverExists(c, name) } }, 409);
     }
 
     // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
@@ -214,7 +316,7 @@ export function createMcpRegistryRoutes(
       return c.json({ error: bindError }, bindError.code === 'NOT_FOUND' ? 404 : 403);
     }
 
-    const networkError = await checkNetwork(config, 'instance');
+    const networkError = await checkNetwork(c, config, 'instance');
     if (networkError) {
       return c.json({ error: networkError }, 400);
     }
@@ -227,21 +329,21 @@ export function createMcpRegistryRoutes(
   });
 
   // --- Получить сервер ---
-  app.get('/servers/:name', kit.requireAuth, async (c) => {
+  app.get('/servers/:name', auth.requireAuth, async (c) => {
     const name = c.req.param('name');
     const entry = await registry.getByName(name);
     if (!entry) {
-      return c.json({ error: { code: 'NOT_FOUND', message: `Сервер "${name}" не найден` } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.serverNotFound(c, name) } }, 404);
     }
     return c.json({ name: entry.name, config: entry.config, connected: isConnected(entry.name) });
   });
 
   // --- Обновить сервер (ADMIN или scope `addons:install`) ---
-  app.put('/servers/:name', requireAdminOrScope('addons:install'), async (c) => {
+  app.put('/servers/:name', adminOrScopeGuard, async (c) => {
     const name = c.req.param('name');
     const entry = await registry.getByName(name);
     if (!entry) {
-      return c.json({ error: { code: 'NOT_FOUND', message: `Сервер "${name}" не найден` } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.serverNotFound(c, name) } }, 404);
     }
 
     const body = await c.req.json();
@@ -266,7 +368,7 @@ export function createMcpRegistryRoutes(
       return c.json({ error: bindError }, bindError.code === 'NOT_FOUND' ? 404 : 403);
     }
 
-    const networkError = await checkNetwork(parsed.data, entry.origin);
+    const networkError = await checkNetwork(c, parsed.data, entry.origin);
     if (networkError) {
       return c.json({ error: networkError }, 400);
     }
@@ -278,11 +380,11 @@ export function createMcpRegistryRoutes(
   });
 
   // --- Удалить сервер (ADMIN или scope `addons:install`) ---
-  app.delete('/servers/:name', requireAdminOrScope('addons:install'), async (c) => {
+  app.delete('/servers/:name', adminOrScopeGuard, async (c) => {
     const name = c.req.param('name');
     const entry = await registry.getByName(name);
     if (!entry) {
-      return c.json({ error: { code: 'NOT_FOUND', message: `Сервер "${name}" не найден` } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.serverNotFound(c, name) } }, 404);
     }
 
     if (mcpManager) {
@@ -295,7 +397,7 @@ export function createMcpRegistryRoutes(
   });
 
   // --- Проверить подключение (ADMIN или scope `addons:install`) ---
-  app.post('/servers/:name/test', requireAdminOrScope('addons:install'), async (c) => {
+  app.post('/servers/:name/test', adminOrScopeGuard, async (c) => {
     const name = c.req.param('name');
 
     // Принимаем опциональный конфиг в теле — для теста до сохранения.
@@ -310,7 +412,7 @@ export function createMcpRegistryRoutes(
     config ??= (await registry.getByName(name))?.config;
 
     if (!config) {
-      return c.json({ error: { code: 'NOT_FOUND', message: `Сервер "${name}" не найден` } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.serverNotFound(c, name) } }, 404);
     }
 
     // ADR-105 (Ф3): probe/тест не подключается к коннектору с plaintext-секретом.
@@ -320,7 +422,7 @@ export function createMcpRegistryRoutes(
     }
 
     if (!mcpManager) {
-      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'McpManager не настроен' } }, 500);
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: messages.managerNotConfigured(c) } }, 500);
     }
 
     try {
@@ -334,11 +436,11 @@ export function createMcpRegistryRoutes(
   });
 
   // --- Список инструментов сервера ---
-  app.get('/servers/:name/tools', kit.requireAuth, async (c) => {
+  app.get('/servers/:name/tools', auth.requireAuth, async (c) => {
     const name = c.req.param('name');
     const entry = await registry.getByName(name);
     if (!entry) {
-      return c.json({ error: { code: 'NOT_FOUND', message: `Сервер "${name}" не найден` } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.serverNotFound(c, name) } }, 404);
     }
 
     if (!mcpManager) {
@@ -380,14 +482,14 @@ export function createMcpRegistryRoutes(
       const session = await sessionManager.getSession(c.req.param('sessionId') ?? '');
       if (!session) {
         return c.json(
-          { error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } },
+          { error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } },
           404,
         );
       }
       const user = currentUser(c);
       const ownerId = session.ownerId ?? session.userId;
-      if (!user?.id || (ownerId !== user.id && !kit.isAdmin(c))) {
-        return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+      if (!user?.id || (ownerId !== user.id && !isAdmin(c))) {
+        return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
       }
       await next();
     };
@@ -396,11 +498,11 @@ export function createMcpRegistryRoutes(
     const knownServerNames = async (): Promise<Set<string>> =>
       new Set((await registry.list()).map((e) => e.name));
 
-    app.get('/session/:sessionId', kit.requireAuth, sessionOwnerGuard, async (c) => {
+    app.get('/session/:sessionId', auth.requireAuth, sessionOwnerGuard, async (c) => {
       const sessionId = c.req.param('sessionId');
       const session = await sessionManager.getSession(sessionId);
       if (!session) {
-        return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+        return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
       }
 
       const entries = await registry.list();
@@ -416,11 +518,11 @@ export function createMcpRegistryRoutes(
       });
     });
 
-    app.put('/session/:sessionId', kit.requireAuth, sessionOwnerGuard, async (c) => {
+    app.put('/session/:sessionId', auth.requireAuth, sessionOwnerGuard, async (c) => {
       const sessionId = c.req.param('sessionId');
       const session = await sessionManager.getSession(sessionId);
       if (!session) {
-        return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+        return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
       }
 
       const body = await c.req.json().catch(() => ({}));
@@ -434,7 +536,7 @@ export function createMcpRegistryRoutes(
 
       for (const name of [...(mcpServers ?? []), ...(mcpDisabledServers ?? [])]) {
         if (!known.has(name)) {
-          return c.json({ error: { code: 'VALIDATION_ERROR', message: `Сервер "${name}" не настроен` } }, 400);
+          return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.serverNotConfigured(c, name) } }, 400);
         }
       }
 
@@ -459,7 +561,7 @@ export function createMcpRegistryRoutes(
   // --- Единый реестр MCP-серверов (ADR-071 §2.5) ---
 
   // Список записей реестра (auth).
-  app.get('/registry', kit.requireAuth, async (c) => {
+  app.get('/registry', auth.requireAuth, async (c) => {
     const entries = await registry.list();
     return c.json({ entries });
   });
@@ -468,7 +570,7 @@ export function createMcpRegistryRoutes(
   // ADR-052/O1: service-key должен нести scope `addons:install` (интерактив без
   // изменений — HTTP добавляет любой, stdio-проверка ниже). Installer-ключ со
   // scope создаёт instance-записи (общие для инстанса) без роли ADMIN.
-  app.post('/registry', kit.requireAuth, requireScopeForServiceKey('addons:install'), async (c) => {
+  app.post('/registry', auth.requireAuth, scopeForServiceKeyGuard, async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = registryAddSchema.safeParse(body);
     if (!parsed.success) {
@@ -476,7 +578,7 @@ export function createMcpRegistryRoutes(
     }
 
     const { name, config, enabled, enabledByDefault, origin, remoteMode } = parsed.data;
-    const admin = kit.isAdmin(c);
+    const admin = isAdmin(c);
 
     // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
     const secretError = secretHeaderError(config);
@@ -500,7 +602,7 @@ export function createMcpRegistryRoutes(
       // stdio — только ADMIN (scope НЕ ослабляет проверку).
       if (!admin) {
         return c.json({
-          error: { code: 'FORBIDDEN', message: 'stdio-серверы может добавлять только ADMIN' },
+          error: { code: 'FORBIDDEN', message: messages.stdioAdminOnlyAdd(c) },
         }, 403);
       }
       entryOrigin = 'instance';
@@ -511,13 +613,13 @@ export function createMcpRegistryRoutes(
       trust = entryOrigin === 'instance' ? 'builtin' : 'community';
     }
 
-    const networkError = await checkNetwork(config, entryOrigin);
+    const networkError = await checkNetwork(c, config, entryOrigin);
     if (networkError) {
       return c.json({ error: networkError }, 400);
     }
 
     if (await registry.getByName(name)) {
-      return c.json({ error: { code: 'CONFLICT', message: `Сервер "${name}" уже существует в реестре` } }, 409);
+      return c.json({ error: { code: 'CONFLICT', message: messages.serverExistsInRegistry(c, name) } }, 409);
     }
 
     const user = currentUser(c);
@@ -546,14 +648,14 @@ export function createMcpRegistryRoutes(
   });
 
   // Обновить запись (автор, ADMIN или installer-ключ со scope `addons:install`).
-  app.put('/registry/:id', kit.requireAuth, async (c) => {
+  app.put('/registry/:id', auth.requireAuth, async (c) => {
     const id = c.req.param('id');
     const existing = await registry.get(id);
     if (!existing) {
-      return c.json({ error: { code: 'NOT_FOUND', message: `Запись "${id}" не найдена` } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.entryNotFound(c, id) } }, 404);
     }
 
-    const admin = kit.isAdmin(c);
+    const admin = isAdmin(c);
     const user = currentUser(c);
     // Автор записи (для service-key автор — `service:<keyId>`), ADMIN **или**
     // installer-ключ со scope `addons:install`: аддон может обновлять созданные
@@ -561,7 +663,7 @@ export function createMcpRegistryRoutes(
     // (id меняется, author-check бы не сработал).
     const isAuthor = existing.author?.userId === user?.id;
     if (!admin && !isAuthor && !isInstallerKey(c)) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Обновлять запись может автор или ADMIN' } }, 403);
+      return c.json({ error: { code: 'FORBIDDEN', message: messages.updateForbidden(c) } }, 403);
     }
 
     const body = await c.req.json().catch(() => null);
@@ -572,7 +674,7 @@ export function createMcpRegistryRoutes(
 
     const nextConfig = parsed.data.config ?? existing.config;
     if (nextConfig.type === 'stdio' && !admin) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'stdio-серверы может изменять только ADMIN' } }, 403);
+      return c.json({ error: { code: 'FORBIDDEN', message: messages.stdioAdminOnlyUpdate(c) } }, 403);
     }
 
     // ADR-105 (Ф3): plaintext-секрет в заголовках → 400 (не 500).
@@ -591,7 +693,7 @@ export function createMcpRegistryRoutes(
       return c.json({ error: bindError }, bindError.code === 'NOT_FOUND' ? 404 : 403);
     }
 
-    const networkError = await checkNetwork(nextConfig, existing.origin);
+    const networkError = await checkNetwork(c, nextConfig, existing.origin);
     if (networkError) {
       return c.json({ error: networkError }, 400);
     }
@@ -602,7 +704,7 @@ export function createMcpRegistryRoutes(
       && await registry.getByName(parsed.data.name)
     ) {
       return c.json({
-        error: { code: 'CONFLICT', message: `Сервер "${parsed.data.name}" уже существует в реестре` },
+        error: { code: 'CONFLICT', message: messages.serverExistsInRegistry(c, parsed.data.name) },
       }, 409);
     }
 
@@ -620,17 +722,17 @@ export function createMcpRegistryRoutes(
   });
 
   // Удалить запись (автор или ADMIN).
-  app.delete('/registry/:id', kit.requireAuth, async (c) => {
+  app.delete('/registry/:id', auth.requireAuth, async (c) => {
     const id = c.req.param('id');
     const existing = await registry.get(id);
     if (!existing) {
-      return c.json({ error: { code: 'NOT_FOUND', message: `Запись "${id}" не найдена` } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.entryNotFound(c, id) } }, 404);
     }
 
-    const admin = kit.isAdmin(c);
+    const admin = isAdmin(c);
     const user = currentUser(c);
     if (!admin && existing.author?.userId !== user?.id) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Удалять запись может автор или ADMIN' } }, 403);
+      return c.json({ error: { code: 'FORBIDDEN', message: messages.deleteForbidden(c) } }, 403);
     }
 
     if (mcpManager) await mcpManager.disconnectServer(existing.name);

@@ -1,12 +1,12 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { join, dirname, resolve } from 'node:path';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
-import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust, egressFetch, setSynthReady } from '@itphx/synth-core';
+import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust, egressFetch, setSynthReady, buildStandaloneOptions, resolveExecutionForStartup } from '@itphx/synth-core';
 import { createPluginCliContext, createPluginCommand } from '@itphx/synth-core/cli/plugin-commands.js';
 import { createMemoryCommand } from '@itphx/synth-core/cli/memory-commands.js';
 import { createMemoryConnectionResolver } from '@itphx/synth-core/cli/memory-connection.js';
@@ -130,6 +130,17 @@ program
       overrides,
     });
 
+    // ADR-077: топология исполнения (`execution.mode`/env `SYNTH_EXECUTION_*`) —
+    // тот же fail-closed резолвинг, что в core `main.ts` (общий шов): неизвестный
+    // режим или недоступный удалённый исполнитель прерывают старт, а не «молча
+    // уходят в inline». Раньше публичный CLI секцию `execution` не передавал вовсе.
+    const executionResolution = await resolveExecutionForStartup(synth, { env: process.env });
+    if (!executionResolution.ok) {
+      console.error(executionResolution.message);
+      process.exit(1);
+    }
+    const execution = executionResolution.execution;
+
     // ADR-099: доверие TLS/CA — до первого исходящего запроса (гибрид/провайдеры).
     await initTls(synth, { home });
 
@@ -187,27 +198,24 @@ program
       options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
 
     const appHandle = await createStandaloneApp({
+      // Конфиг-производные опции — общий шов с core `main.ts`
+      // (`server/app/standalone-options.ts`). Раньше публичный CLI передавал лишь
+      // малую часть секций, и в npm-инсталляции игнорировались
+      // `skills.trustedProjectDirs`, `commands`, `permission`, `tools`,
+      // `mcp.servers`, `plugins`, `git`, `attachments`, `limits`, `execution` и др.
+      ...buildStandaloneOptions({
+        synth,
+        dataDir,
+        home,
+        ignoreRules,
+        execution,
+        env: process.env,
+      }),
+      // Запуск-специфичные поля (CLI-флаги, гибрид, профили/credentials).
       port,
       dataDir,
       apiKey,
-      // ADR-096: физический backend хранения (env > config.yaml > file) —
-      // паритет с core `main.ts`/`chat.ts` (иначе публичный `synth serve`
-      // игнорировал бы `storage.backend`).
-      storageBackend: resolveStorageBackend(synth, process.env),
-      postgresConfig: resolvePostgresConfig(synth, process.env),
-      postgresPassword: resolvePostgresPassword({ dataDir }, process.env),
-      degradedMode: resolveDegradedMode(synth),
-      fallbackDir: resolveStorageFallbackDir(synth, process.env, home),
-      workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
-      defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
-      maxUploadBytes: resolveMaxUploadBytes(synth),
       uiDistPath,
-      // ADR-094: метрики (`metrics.enabled`, env SYNTH_METRICS_ENABLED) — паритет
-      // с dev-CLI (`core/main.ts`); иначе публичный `synth serve` не видел флаг.
-      metricsConfig: synth.metrics,
-      // ADR-069: конфигурация проектных инструкций (AGENTS.md); при
-      // --ignore-rules/--safe-mode — выключена.
-      instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
@@ -222,8 +230,6 @@ program
             credentialsPath,
           }
         : undefined,
-      remoteLlm: synth.remote.llm,
-      remoteTimeoutMs: synth.remote.timeoutMs,
       remoteCredentialsPath: credentialsPath,
       profilesPath,
     });

@@ -9,6 +9,8 @@
  * сколько нужно для рабочего поиска и перехода к уже размеченным секциям.
  */
 
+import type { DeploymentKind } from '@/lib/api/client'
+
 export type SettingsGroupId =
   | 'personal'
   | 'adminOverview'
@@ -26,6 +28,15 @@ export interface SettingsCategoryMeta {
   roles?: string[]
   /** Скрыта, пока не включён режим «Расширенные». */
   advanced?: boolean
+  /**
+   * Режимы развёртывания, в которых раздел доступен. Раздел, завязанный на
+   * backend-only эндпоинт (например `/api/v2/users`, которого нет в чистом
+   * standalone), помечается `deployments: ['managed']` — он требует
+   * managed backend (в гибриде backend доступен через прокси локального core).
+   *
+   * Не задан — раздел виден во всех режимах.
+   */
+  deployments?: DeploymentKind[]
   /** Синонимы для поиска (ru/en, нижний регистр). */
   keywords?: string[]
 }
@@ -178,11 +189,17 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     keywords: ['projects', 'workspace', 'проекты', 'рабочий каталог'],
   },
   {
+    // Управление пользователями — нужен managed backend: `/api/v2/users*`
+    // смонтирован лишь в packages/backend/src/routes/users.ts. В чистом
+    // standalone такого эндпоинта нет (404) → раздел скрыт по режиму
+    // развёртывания. В гибриде раздел доступен: локальный core проксирует
+    // `/api/v2/users` на удалённый backend (REMOTE_PROXY_PREFIXES).
     id: 'users',
     group: 'adminOverview',
     labelKey: 'settings.category.users',
     icon: 'user-smile',
     roles: ['ADMIN'],
+    deployments: ['managed'],
     keywords: ['users', 'accounts', 'пользователи', 'учётные записи'],
   },
 
@@ -467,6 +484,40 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     keywords: ['debug', 'logs', 'отладка', 'логи'],
   },
 ]
+
+/**
+ * Доступен ли раздел в текущем режиме развёртывания.
+ *
+ * Раздел без `deployments` доступен везде. Раздел, помеченный
+ * `deployments` (например `['managed']` для `/api/v2/users`), требует
+ * **managed backend** — но бэкенд доступен не только в managed-инстансе:
+ *
+ * - `deployment === 'managed'` — эндпоинт есть локально;
+ * - `deployment === 'standalone'` + `remoteAvailable` (подключённый гибрид) —
+ *   локальный core проксирует `/api/v2/*` на удалённый backend
+ *   (`REMOTE_PROXY_PREFIXES` в `packages/core/src/server/proxy.ts`), поэтому
+ *   эндпоинт тоже работает.
+ *
+ * Неизвестный `deployment` (до ответа `/auth/status`) — **fail-closed**: раздел
+ * скрыт. Так он не «мигает» при первом рендере и не дёргает отсутствующий
+ * эндпоинт.
+ *
+ * @param deployment режим развёртывания из `useAuthStore`
+ * @param remoteAvailable удалённый backend доступен (гибрид подключён и не
+ *   деградировал) — признак из `useHybridStore`
+ */
+export function isCategoryAvailableForDeployment(
+  category: SettingsCategoryMeta,
+  deployment: DeploymentKind | null,
+  remoteAvailable = false,
+): boolean {
+  if (!category.deployments || category.deployments.length === 0) return true
+  if (!deployment) return false
+  if (category.deployments.includes(deployment)) return true
+  // Standalone + подключённый гибрид: удалённый backend доступен через прокси
+  // локального core — требуемый эндпоинт существует и отвечает.
+  return deployment === 'standalone' && remoteAvailable
+}
 
 export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
   // profile

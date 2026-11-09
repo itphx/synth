@@ -80,6 +80,15 @@ export interface SettingsRepository {
   setSkillsPolicy(policy: ToolsPolicy): Promise<void>;
   clearSkillsPolicy(): Promise<void>;
 
+  /**
+   * ADR-046/ADR-069: runtime-override project-trust гейта (`skills.trustedProjectDirs`).
+   * Применяется при старте (резолверы скиллов/команд/инструкций собираются на
+   * старте) — `restartRequired: true` в API, инвариант 24.
+   */
+  getSkillsTrustedProjectDirs(): Promise<string[] | undefined>;
+  setSkillsTrustedProjectDirs(dirs: string[]): Promise<void>;
+  clearSkillsTrustedProjectDirs(): Promise<void>;
+
   getTokenRatio(model: string): Promise<number | undefined>;
   getTokenRatios(): Promise<Record<string, number>>;
   setTokenRatio(model: string, ratio: number): Promise<void>;

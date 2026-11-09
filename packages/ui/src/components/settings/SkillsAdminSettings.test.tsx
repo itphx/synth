@@ -129,15 +129,30 @@ beforeEach(() => {
     disabled: { ...EMPTY_SKILLS_DISABLED },
     disabledForNewProjects: { ...EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS },
     policy: 'auto',
+    trustedProjectDirs: [],
+    trustedProjectDirsDefaults: [],
+    trustedProjectDirsSource: 'default',
+    restartRequired: false,
   })
   mocks.updateSkillsSettings.mockImplementation(async (input: {
-    disabled: unknown
+    disabled?: unknown
     disabledForNewProjects?: unknown
     policy?: unknown
+    trustedProjectDirs?: string[] | null
   }) => ({
-    disabled: input.disabled,
+    disabled: input.disabled ?? { categories: [], groups: [], skills: [] },
     disabledForNewProjects: input.disabledForNewProjects ?? { categories: [], groups: [], skills: [] },
     policy: input.policy ?? 'auto',
+    trustedProjectDirs:
+      input.trustedProjectDirs === null ? [] : (input.trustedProjectDirs ?? []),
+    trustedProjectDirsDefaults: [],
+    trustedProjectDirsSource:
+      input.trustedProjectDirs === undefined
+        ? 'default'
+        : input.trustedProjectDirs === null
+          ? 'config'
+          : 'runtime',
+    restartRequired: input.trustedProjectDirs !== undefined,
   }))
   mocks.resetSkillsSettings.mockResolvedValue(undefined)
 
@@ -150,6 +165,10 @@ beforeEach(() => {
     settingsDisabled: null,
     settingsDisabledForNewProjects: null,
     settingsPolicy: 'auto',
+    settingsTrustedProjectDirs: [],
+    settingsTrustedProjectDirsDefaults: [],
+    settingsTrustedProjectDirsSource: 'default',
+    settingsTrustRestartRequired: false,
     settingsLoading: false,
     settingsError: null,
   })
@@ -335,6 +354,83 @@ describe('SkillsAdminSettings — админ-реестр скиллов (ADR-04
     })
     await act(async () => {})
     expect(mocks.resetSkillsSettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('доверенные каталоги: секция, источник и плашка restartRequired', async () => {
+    mocks.getSkillsSettings.mockResolvedValue({
+      disabled: { ...EMPTY_SKILLS_DISABLED },
+      disabledForNewProjects: { ...EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS },
+      policy: 'auto',
+      trustedProjectDirs: ['/srv/trusted'],
+      trustedProjectDirsDefaults: [],
+      trustedProjectDirsSource: 'runtime',
+      restartRequired: true,
+    })
+    const container = await renderSettings()
+
+    const section = container.querySelector('[data-settings-section="skills-admin-trusted"]')
+    expect(section).not.toBeNull()
+    expect(section!.textContent).toContain(enDict['skillsAdmin.trust.title'])
+    expect(
+      container.querySelector('[data-testid="skills-trust-source"]')?.textContent,
+    ).toContain(enDict['skillsAdmin.trust.source.runtime'])
+    expect(container.querySelector('[data-testid="skills-trust-restart"]')).not.toBeNull()
+  })
+
+  it('доверенные каталоги: Save отправляет trustedProjectDirs', async () => {
+    mocks.getSkillsSettings.mockResolvedValue({
+      disabled: { ...EMPTY_SKILLS_DISABLED },
+      disabledForNewProjects: { ...EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS },
+      policy: 'auto',
+      trustedProjectDirs: ['/srv/trusted'],
+      trustedProjectDirsDefaults: [],
+      trustedProjectDirsSource: 'runtime',
+      restartRequired: false,
+    })
+    const container = await renderSettings()
+
+    const input = container.querySelector(
+      '[data-settings-section="skills-admin-trusted"] input[type="text"]',
+    ) as HTMLInputElement
+    expect(input.value).toBe('/srv/trusted')
+    await act(async () => {
+      setInputValue(input, '/srv/new')
+    })
+
+    const save = container.querySelector('[data-testid="skills-trust-save"]') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateSkillsSettings).toHaveBeenCalledWith({
+      trustedProjectDirs: ['/srv/new'],
+    })
+    // Ответ сохранения несёт restartRequired — после Save показываем плашку.
+    expect(container.querySelector('[data-testid="skills-trust-restart"]')).not.toBeNull()
+  })
+
+  it('доверенные каталоги: Reset отправляет null (сброс к конфигу)', async () => {
+    mocks.getSkillsSettings.mockResolvedValue({
+      disabled: { ...EMPTY_SKILLS_DISABLED },
+      disabledForNewProjects: { ...EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS },
+      policy: 'auto',
+      trustedProjectDirs: ['/srv/trusted'],
+      trustedProjectDirsDefaults: [],
+      trustedProjectDirsSource: 'runtime',
+      restartRequired: false,
+    })
+    const container = await renderSettings()
+
+    const reset = container.querySelector('[data-testid="skills-trust-reset"]') as HTMLButtonElement
+    expect(reset.disabled).toBe(false)
+    await act(async () => {
+      reset.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateSkillsSettings).toHaveBeenCalledWith({ trustedProjectDirs: null })
   })
 
   it('удаление instance-скилла подтверждается через ConfirmDialog', async () => {

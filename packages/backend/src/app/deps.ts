@@ -994,6 +994,13 @@ export async function createBackendDeps(
   // ADR-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
   const skillsDisabled = (await settingsStore.getSkillsDisabled())
     ?? { categories: [], groups: [], skills: [] };
+  // ADR-046/ADR-069: project-trust гейт скиллов/команд/инструкций. Runtime
+  // (`settings.json`/PG) приоритетнее `config.yaml`; применяется при старте —
+  // `restartRequired` в API, инвариант 24.
+  const effectiveSkillsTrustedProjectDirs =
+    (await settingsStore.getSkillsTrustedProjectDirs())
+    ?? config.synth.skills.trustedProjectDirs
+    ?? [];
   // ADR-084: runtime/эффективный конфиг decision-слоя (админка) приоритетнее
   // config.yaml `decision`. Live-применяется ко всем трём потребителям
   // (микро-каскад, роутер, события ADR-089) через `live.setDecision`.
@@ -1049,7 +1056,7 @@ export async function createBackendDeps(
     store: storageContext.skills,
     configPaths: config.synth.skills.paths,
     urls: config.synth.skills.urls,
-    trustedProjectDirs: config.synth.skills.trustedProjectDirs,
+    trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
     toolsets: config.synth.skills.toolsets,
   });
 
@@ -1063,7 +1070,7 @@ export async function createBackendDeps(
       maxArgumentsLength: config.synth.commands.maxArgumentsLength,
       maxRenderedBytes: config.synth.commands.maxRenderedBytes,
       toolsets: config.synth.skills.toolsets,
-      trustedProjectDirs: config.synth.skills.trustedProjectDirs,
+      trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
       inlineShell: config.synth.skills.inlineShell ?? false,
     },
     skillRuntime: skillService,
@@ -1422,7 +1429,7 @@ export async function createBackendDeps(
     // ADR-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
     instructionsConfig: config.synth.instructions,
     // ADR-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
-    instructionsTrustedProjectDirs: config.synth.skills.trustedProjectDirs,
+    instructionsTrustedProjectDirs: effectiveSkillsTrustedProjectDirs,
     // ADR-089: late-bound funnel создания сессий для тула `task` (саб-агент).
     // Сервис создаётся ниже (после оркестратора) — геттер читает его в рантайме.
     getRequestSessionService: () => requestSessionService,
@@ -2059,6 +2066,12 @@ export async function createBackendDeps(
     defaultsStore,
     defaultWorkingDir,
     getDefaultAgentId,
+    /**
+     * ADR-046/ADR-069: эффективный project-trust гейт скиллов/команд/инструкций
+     * (runtime > config), снятый на старте; нужен резолверу инструкций в
+     * `mount-routes`.
+     */
+    skillsTrustedProjectDirs: effectiveSkillsTrustedProjectDirs,
     egressResolver,
     egressLogConfig,
     securityAudit,

@@ -56,6 +56,11 @@ export interface InstructionsInfo {
   cap: { chars: number; source: 'dynamic' | 'override'; contextWindow: number }
   files: InstructionFileInfo[]
   diagnostics: InstructionDiagnostic[]
+  /**
+   * Абсолютный каталог, для которого резолвились инструкции (рабочий каталог
+   * сессии/проекта). Нужен для подсказки project-trust; аддитивное поле.
+   */
+  workspace?: string
 }
 
 export const instructionsApi = {

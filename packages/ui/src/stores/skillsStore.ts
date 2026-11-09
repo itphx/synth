@@ -10,6 +10,8 @@ import type {
 } from '@itphx/synth-shared'
 import {
   synthApi,
+  type SkillsSettingsResponse,
+  type SkillsTrustedProjectDirsSource,
   type ToolsPolicy,
 } from '../lib/api/synthApi'
 import { i18nText } from '@/lib/i18n/text'
@@ -67,6 +69,13 @@ export interface SkillsStore {
   /** Сид новых проектов: что не включать по умолчанию. */
   settingsDisabledForNewProjects: SkillsDisabledRequest | null
   settingsPolicy: ToolsPolicy
+  /** Project-trust (ADR-046/069): эффективный список доверенных каталогов. */
+  settingsTrustedProjectDirs: string[]
+  /** Значения из `config.yaml` (`skills.trustedProjectDirs`). */
+  settingsTrustedProjectDirsDefaults: string[]
+  settingsTrustedProjectDirsSource: SkillsTrustedProjectDirsSource
+  /** `true` — изменения доверия применяются после перезапуска инстанса. */
+  settingsTrustRestartRequired: boolean
   settingsLoading: boolean
   settingsError: string | null
 
@@ -107,6 +116,8 @@ export interface SkillsStore {
     disabledForNewProjects?: SkillsDisabledRequest
     policy?: ToolsPolicy
   }) => Promise<void>
+  /** Project-trust: сохранить список (`null` — сброс к конфигу). */
+  saveSkillsTrustedProjectDirs: (dirs: string[] | null) => Promise<void>
   resetSkillsSettings: () => Promise<void>
 
   recordSkillInvoked: (event: SkillInvokedEvent) => void
@@ -135,6 +146,10 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
   settingsDisabled: null,
   settingsDisabledForNewProjects: null,
   settingsPolicy: DEFAULT_SKILLS_POLICY,
+  settingsTrustedProjectDirs: [],
+  settingsTrustedProjectDirsDefaults: [],
+  settingsTrustedProjectDirsSource: 'default',
+  settingsTrustRestartRequired: false,
   settingsLoading: false,
   settingsError: null,
 
@@ -357,6 +372,7 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
         settingsDisabledForNewProjects: r.disabledForNewProjects
           ?? EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
         settingsPolicy: r.policy,
+        ...trustedProjectDirsPatch(r),
         settingsLoading: false,
       })
     } catch (err) {
@@ -377,6 +393,28 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
           ?? input.disabledForNewProjects
           ?? EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
         settingsPolicy: r.policy,
+        // Ответ мог прийти от старого сервера без полей доверия — не затираем текущие.
+        ...trustedProjectDirsPatch(r, get().settingsTrustedProjectDirs),
+        settingsLoading: false,
+      })
+    } catch (err) {
+      set({
+        settingsError: err instanceof Error ? err.message : i18nText('skills.error.saveSettings'),
+        settingsLoading: false,
+      })
+      throw err
+    }
+  },
+
+  saveSkillsTrustedProjectDirs: async (dirs) => {
+    set({ settingsLoading: true, settingsError: null })
+    try {
+      const r = await synthApi.updateSkillsSettings({ trustedProjectDirs: dirs })
+      // При сбросе (`null`) сервер возвращает эффективный список из конфига;
+      // если старый сервер поля не отдал — подставляем конфиг-дефолт.
+      const fallback = dirs ?? r.trustedProjectDirsDefaults ?? get().settingsTrustedProjectDirsDefaults
+      set({
+        ...trustedProjectDirsPatch(r, fallback),
         settingsLoading: false,
       })
     } catch (err) {
@@ -392,10 +430,14 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
     set({ settingsLoading: true, settingsError: null })
     try {
       await synthApi.resetSkillsSettings()
+      const trustedDefaults = get().settingsTrustedProjectDirsDefaults
       set({
         settingsDisabled: { ...EMPTY_SKILLS_DISABLED },
         settingsDisabledForNewProjects: { ...EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS },
         settingsPolicy: DEFAULT_SKILLS_POLICY,
+        settingsTrustedProjectDirs: trustedDefaults,
+        settingsTrustedProjectDirsSource: trustedDefaults.length > 0 ? 'config' : 'default',
+        settingsTrustRestartRequired: false,
         settingsLoading: false,
       })
     } catch (err) {
@@ -425,6 +467,29 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
     })
   },
 }))
+
+/**
+ * Патч состояния доверенных каталогов из ответа настроек скиллов.
+ * Поля аддитивные: старый сервер их не отдаёт — берём безопасные значения
+ * (`effectiveFallback` сохраняет текущий список, источник — `default`).
+ */
+function trustedProjectDirsPatch(
+  r: SkillsSettingsResponse,
+  effectiveFallback: string[] = [],
+): Pick<
+  SkillsStore,
+  | 'settingsTrustedProjectDirs'
+  | 'settingsTrustedProjectDirsDefaults'
+  | 'settingsTrustedProjectDirsSource'
+  | 'settingsTrustRestartRequired'
+> {
+  return {
+    settingsTrustedProjectDirs: r.trustedProjectDirs ?? effectiveFallback,
+    settingsTrustedProjectDirsDefaults: r.trustedProjectDirsDefaults ?? [],
+    settingsTrustedProjectDirsSource: r.trustedProjectDirsSource ?? 'default',
+    settingsTrustRestartRequired: r.restartRequired ?? false,
+  }
+}
 
 /** Деталь скилла → сводка реестра (без тела/файлов). */
 function toSummary(detail: SkillDetail): SkillSummary {

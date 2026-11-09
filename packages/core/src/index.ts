@@ -502,11 +502,16 @@ export {
   RemoteExecutionUnavailableError,
 } from './execution/remote.js';
 // ADR-077 (шаг 3): проверка режима исполнения при старте процесса.
-export { checkExecutionMode, assertExecutionModeSupported } from './execution/startup.js';
+export {
+  checkExecutionMode,
+  assertExecutionModeSupported,
+  resolveExecutionForStartup,
+} from './execution/startup.js';
 export type {
   ExecutionStartupCheck,
   ExecutionStartupIssue,
   ExecutionEnvironmentProbe,
+  ExecutionStartupResolution,
 } from './execution/startup.js';
 export {
   detectRuntimeDeps,
@@ -1843,7 +1848,41 @@ export { localApiKeyFilePath, resolveOrCreateLocalApiKey } from './auth/local-ke
 export { createSettingsRoutes } from './server/routes/settings.js';
 export type { SettingsRoutesDeps } from './server/routes/settings.js';
 export { createAuditRoutes } from './server/routes/audit.js';
-export type { AuditRoutesDeps, AuditRoutesOptions } from './server/routes/audit.js';
+export type {
+  AuditRoutesDeps,
+  AuditRoutesOptions,
+  AuditRoutesMessages,
+  GatewayAuditDeps,
+} from './server/routes/audit.js';
+// ADR-036/ADR-095: HTTP-контур логов сервисов и payload-лога LLM — общий для core и backend.
+export { createLogsRoutes, resolveLogDir } from './server/routes/logs.js';
+export type {
+  LogsRoutesAuth,
+  LogsRoutesDeps,
+  LogsRoutesOptions,
+  LogsRouteMessages,
+} from './server/routes/logs.js';
+// ADR-036: HTTP-контур regex-паттернов детекции секретов — общий для core и backend.
+export { createGatewayPatternsRoutes } from './server/routes/gateway-patterns.js';
+export type {
+  GatewayPatternsRoutesAuth,
+  GatewayPatternsRoutesOptions,
+  GatewayPatternsRouteMessages,
+} from './server/routes/gateway-patterns.js';
+// ADR-069/ADR-070: HTTP-контур файлов контекста/промптов — общий для core и backend.
+export { createContextFileRoutes } from './server/routes/context-files.js';
+export type {
+  ContextFileRoutesAuth,
+  ContextFileRoutesOptions,
+  ContextFileRouteMessages,
+} from './server/routes/context-files.js';
+// HTTP-контур конфигурации групп логирования (debug-раздел админки) — общий для core и backend.
+export { createDebugRoutes } from './server/routes/debug.js';
+export type {
+  DebugRoutesAuth,
+  DebugRoutesOptions,
+  DebugRouteMessages,
+} from './server/routes/debug.js';
 // ADR-102: HTTP-фабрика отчётов аналитики (только чтение) — общая для core и backend.
 export { createAnalyticsRoutes } from './server/routes/analytics.js';
 export type {
@@ -1855,7 +1894,12 @@ export type {
 export { createDictionaryRoutes } from './server/routes/dictionaries.js';
 export type { DictionaryRoutesAuth, DictionaryRoutesOptions } from './server/routes/dictionaries.js';
 export { createProviderRoutes } from './server/routes/providers.js';
-export type { ProviderRoutesAuth, ProviderRoutesOptions, ProviderRouteMessages } from './server/routes/providers.js';
+export type {
+  ProviderRoutesAuth,
+  ProviderRoutesOptions,
+  ProviderRouteMessages,
+  ProviderFetchIconOptions,
+} from './server/routes/providers.js';
 export { createModelRoutes } from './server/routes/models.js';
 export type { ModelRoutesAuth, ModelRoutesOptions, ModelRouteMessages } from './server/routes/models.js';
 export { createAgentRoutes } from './server/routes/agents.js';
@@ -1868,6 +1912,14 @@ export type {
 } from './server/routes/agents.js';
 export { createMcpRoutes } from './server/routes/mcp.js';
 export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
+// ADR-071 §2.5: единый реестр MCP-серверов — HTTP-фабрика в core (standalone
+// и managed монтируют её одну; backend передаёт RBAC-guard'ы и i18n).
+export { createMcpRegistryRoutes } from './server/routes/mcp-registry.js';
+export type {
+  McpRegistryRoutesAuth,
+  McpRegistryRoutesOptions,
+  McpRegistryRouteMessages,
+} from './server/routes/mcp-registry.js';
 // PROP-125 §1: серверный MCP-relay (режим `relay`) — фабрика в core,
 // монтирует её только backend.
 export { createMcpRelayRoutes, createRelayServer, toMcpContent } from './server/routes/mcp-relay.js';
@@ -2396,6 +2448,10 @@ export { createMetaRoutes, instanceCapabilities } from './server/routes/meta.js'
 export type { MetaRoutesDeps } from './server/routes/meta.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
+// Единый маппинг `SynthConfig` → опции `createStandaloneApp` (обе точки входа
+// standalone: core-`main.ts` и публичный CLI `@itphx/synth`).
+export { buildStandaloneOptions } from './server/app/standalone-options.js';
+export type { StandaloneOptionsInput } from './server/app/standalone-options.js';
 export {
   serializeSession,
   serializeMessage,

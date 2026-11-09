@@ -164,6 +164,49 @@ describe('CreateProjectPopover — workspace (ADR-075)', () => {
     expect(onCreated).toHaveBeenCalled()
   })
 
+  it('409 вне корня: показывает подтверждение, не закрывает форму и повторяет с confirmOutsideRoot', async () => {
+    mocks.createProject
+      .mockRejectedValueOnce(
+        Object.assign(new Error('confirm'), {
+          code: 'WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED',
+          status: 409,
+        }),
+      )
+      .mockResolvedValueOnce(PROJECT)
+
+    const { onCreated } = await renderPopover()
+    await setInputValue(byTestId('create-project-workspace') as HTMLInputElement, '/outside/ws')
+    const nameInput = document.body.querySelector('input[placeholder="Project name"]') as HTMLInputElement
+    await setInputValue(nameInput, 'Outside project')
+
+    await click(byTestId('create-project-submit'))
+    await act(async () => {})
+
+    // Подтверждение открылось, а форма/поповер остались на месте.
+    expect(byTestId('create-project-error')).toBeNull()
+    expect(byTestId('create-project-submit')).not.toBeNull()
+    const dialog = document.body.querySelector('[data-slot="dialog-content"]') as HTMLElement | null
+    expect(dialog).not.toBeNull()
+    expect(dialog!.textContent).toContain('Create outside workspace root?')
+
+    const confirmBtn = [...dialog!.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Create',
+    ) as HTMLButtonElement | undefined
+    expect(confirmBtn, 'кнопка подтверждения').toBeTruthy()
+
+    await click(confirmBtn)
+    await act(async () => {})
+
+    expect(mocks.createProject).toHaveBeenCalledTimes(2)
+    expect(mocks.createProject).toHaveBeenLastCalledWith({
+      name: 'Outside project',
+      origin: 'local',
+      workspace: '/outside/ws',
+      confirmOutsideRoot: true,
+    })
+    expect(onCreated).toHaveBeenCalledWith(PROJECT)
+  })
+
   it('managed: поле скрыто, workspace не передаётся', async () => {
     useAuthStore.setState({ deployment: 'managed' } as never)
     await renderPopover()

@@ -198,6 +198,19 @@ export class MemorySettingsRepository implements SettingsRepository {
     this._clear('skillsPolicy');
   }
 
+  /** ADR-046/ADR-069: runtime-override project-trust гейта. */
+  async getSkillsTrustedProjectDirs(): Promise<string[] | undefined> {
+    return this._settings.skillsTrustedProjectDirs;
+  }
+
+  async setSkillsTrustedProjectDirs(dirs: string[]): Promise<void> {
+    this._patch({ skillsTrustedProjectDirs: [...dirs] });
+  }
+
+  async clearSkillsTrustedProjectDirs(): Promise<void> {
+    this._clear('skillsTrustedProjectDirs');
+  }
+
   async getTokenRatio(model: string): Promise<number | undefined> {
     return this._settings.tokenRatios?.[model];
   }

@@ -84,9 +84,11 @@ live under `/auth/*` (without the `/api/v2` prefix), health — under `/health` 
 
 **Build availability** in the tables below: `backend` — managed hub only,
 `core` — standalone only, `both` — both builds. Core has a narrower set: no
-`context/users/audit/logs/gateway/llm/i18n/admin`, but it does have `auth/*`,
+`users/llm/i18n/admin`, but it does have `auth/*`,
 `hybrid/status`, as well as `/git` and `/ssh-keys` (ADR-076; core factories,
-mounted in backend with RBAC). In hybrid mode, `/git`, flat `/ssh-keys`
+mounted in backend with RBAC). The `context/files*`, `audit`, `logs`,
+`gateway/patterns` and `admin/debug/config` routes moved into core factories
+(available in both builds; managed adds RBAC). In hybrid mode, `/git`, flat `/ssh-keys`
 and nested `/agents/:agentId/ssh-keys` are proxied to backend (the remaining `/agents` subpaths are local).
 
 ---
@@ -962,7 +964,7 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 | PATCH | `/api/v2/providers/:name` | both | ADMIN / auth | Partial update (`num_ctx`, `compatibility`, …) |
 | DELETE | `/api/v2/providers/:name` | both | ADMIN / auth | Delete |
 | POST | `/api/v2/providers/:name/test` | both | ADMIN / auth | Connection test |
-| POST | `/api/v2/providers/fetch-icon` | backend | ADMIN | Domain favicon (a raw data URL); the UI stores the icon already compressed (a small PNG data URL) |
+| POST | `/api/v2/providers/fetch-icon` | both | ADMIN / auth | Domain favicon (a raw data URL); the UI stores the icon already compressed (a small PNG data URL) |
 
 > **The `num_ctx` / `numCtx` field (context size).** The context size
 > of a provider (`ProviderConfig.numCtx`, for Ollama — `num_ctx`) is set by the field
@@ -1104,17 +1106,17 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 > A single (core) implementation: the `FsError` shape; backend mounts the core factory with `deny` (managed) and a mandatory `project_id`;
 > standalone — the policy from `settings/workspace-policy`, without `project_id` — a flat root, a project without a workspace — fallback to root.
 
-### 5.13 Context — `/api/v2/context` (backend)
+### 5.13 Context — `/api/v2/context` (core+backend)
 
-| Method | Path | RBAC | Purpose |
+| Method | Path | RBAC (backend / core) | Purpose |
 |---|---|---|---|
-| GET | `/api/v2/context/files` | ADMIN | List; `?category=user\|role\|system` |
-| GET | `/api/v2/context/files/:name` | ADMIN | Contents; `?category=` |
-| POST | `/api/v2/context/files/:name` | ADMIN | Save `{content, category}` or `{action:'toggle'}` |
-| DELETE | `/api/v2/context/files/:name` | ADMIN | Delete; `?category=` |
-| POST | `/api/v2/context/files/:name/restore_to_default` | ADMIN | Restore the system one; `?category=` |
-| GET | `/api/v2/context/enabled` | ADMIN | `{enabled:[]}` |
-| POST | `/api/v2/context/enabled` | ADMIN | `{files:[]}` |
+| GET | `/api/v2/context/files` | ADMIN / auth | List; `?category=user\|role\|system` |
+| GET | `/api/v2/context/files/:name` | ADMIN / auth | Contents; `?category=` |
+| POST | `/api/v2/context/files/:name` | ADMIN / auth | Save `{content, category}` or `{action:'toggle'}` |
+| DELETE | `/api/v2/context/files/:name` | ADMIN / auth | Delete; `?category=` |
+| POST | `/api/v2/context/files/:name/restore_to_default` | ADMIN / auth | Restore the system one; `?category=` |
+| GET | `/api/v2/context/enabled` | ADMIN / auth | `{enabled:[]}` |
+| POST | `/api/v2/context/enabled` | ADMIN / auth | `{files:[]}` |
 
 ### 5.13.1 Project instructions — `/api/v2/context/instructions` (core+backend, ADR-069)
 
@@ -1310,20 +1312,20 @@ duration of the call). The source of truth is the code
 
 | Method | Path | Build | RBAC (backend / core) | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v2/mcp/servers` | backend | auth | Configured servers + `connected` |
-| POST | `/api/v2/mcp/servers` | backend | ADMIN | `{name, config}` → 201 |
-| GET | `/api/v2/mcp/servers/:name` | backend | auth | Server config |
-| PUT | `/api/v2/mcp/servers/:name` | backend | ADMIN or scope `addons:install` | Update the config |
-| DELETE | `/api/v2/mcp/servers/:name` | backend | ADMIN or scope `addons:install` | Delete |
-| POST | `/api/v2/mcp/servers/:name/test` | backend | ADMIN or scope `addons:install` | Test the connection (+optional `config`) |
-| GET | `/api/v2/mcp/servers/:name/tools` | backend | auth | Server tools (probe if needed) |
-| GET | `/api/v2/mcp/session/:sessionId` | backend | owner\|ADMIN | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (canonical — `/sessions/:id/mcp`) |
-| PUT | `/api/v2/mcp/session/:sessionId` | backend | owner\|ADMIN | Legacy: `{mcpServers?, mcpDisabledServers?}` (compatible with `/sessions/:id/mcp`) |
+| GET | `/api/v2/mcp/servers` | both | auth | Configured servers + `connected` |
+| POST | `/api/v2/mcp/servers` | both | ADMIN | `{name, config}` → 201 |
+| GET | `/api/v2/mcp/servers/:name` | both | auth | Server config |
+| PUT | `/api/v2/mcp/servers/:name` | both | ADMIN or scope `addons:install` | Update the config |
+| DELETE | `/api/v2/mcp/servers/:name` | both | ADMIN or scope `addons:install` | Delete |
+| POST | `/api/v2/mcp/servers/:name/test` | both | ADMIN or scope `addons:install` | Test the connection (+optional `config`) |
+| GET | `/api/v2/mcp/servers/:name/tools` | both | auth | Server tools (probe if needed) |
+| GET | `/api/v2/mcp/session/:sessionId` | both | owner\|ADMIN | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (canonical — `/sessions/:id/mcp`) |
+| PUT | `/api/v2/mcp/session/:sessionId` | both | owner\|ADMIN | Legacy: `{mcpServers?, mcpDisabledServers?}` (compatible with `/sessions/:id/mcp`) |
 | POST | `/api/v2/mcp/probe` | both | auth | `{name}` → `{name, tools}`, `MCP_CONNECT_ERROR` |
-| GET | `/api/v2/mcp/registry` | backend | auth | Unified MCP server registry (ADR-071 §2.5): `{entries}`; an entry carries `enabled` (master hard-gate, default `true`) and `enabledByDefault` (default for NEW projects) |
-| POST | `/api/v2/mcp/registry` | backend | auth (stdio — ADMIN only; service-key — scope `addons:install`) | Add an entry: `{name, config, enabled?, enabledByDefault?, origin?, remoteMode?}` → 201; stdio — ADMIN only (a scope does not relax this); HTTP — anyone; a service-key without the `addons:install` scope → 403 `SCOPE_REQUIRED`. The **instance** origin (`origin:'instance'` or an installer key with the scope) is available to ADMIN **or** a service-key with the `addons:install` scope; interactive use without ADMIN creates a `user` entry even with `origin:'instance'`. `remoteMode` (`auto\|relay\|tools`, default `auto`) — the delivery mode of a server-side MCP into the local hybrid sessions (ADR-125) |
-| PUT | `/api/v2/mcp/registry/:id` | backend | author/ADMIN or scope `addons:install` | Update an entry (`enabled` — the registry master flag); an installer key with the scope updates instance entries (the scope branch survives key rotation) |
-| DELETE | `/api/v2/mcp/registry/:id` | backend | author/ADMIN | Delete an entry |
+| GET | `/api/v2/mcp/registry` | both | auth | Unified MCP server registry (ADR-071 §2.5): `{entries}`; an entry carries `enabled` (master hard-gate, default `true`) and `enabledByDefault` (default for NEW projects) |
+| POST | `/api/v2/mcp/registry` | both | auth (stdio — ADMIN only; service-key — scope `addons:install`) | Add an entry: `{name, config, enabled?, enabledByDefault?, origin?, remoteMode?}` → 201; stdio — ADMIN only (a scope does not relax this); HTTP — anyone; a service-key without the `addons:install` scope → 403 `SCOPE_REQUIRED`. The **instance** origin (`origin:'instance'` or an installer key with the scope) is available to ADMIN **or** a service-key with the `addons:install` scope; interactive use without ADMIN creates a `user` entry even with `origin:'instance'`. `remoteMode` (`auto\|relay\|tools`, default `auto`) — the delivery mode of a server-side MCP into the local hybrid sessions (ADR-125) |
+| PUT | `/api/v2/mcp/registry/:id` | both | author/ADMIN or scope `addons:install` | Update an entry (`enabled` — the registry master flag); an installer key with the scope updates instance entries (the scope branch survives key rotation) |
+| DELETE | `/api/v2/mcp/registry/:id` | both | author/ADMIN | Delete an entry |
 | GET | `/api/v2/mcp/remote/servers` | backend | auth (service-key — scope `mcp:invoke`) | The set of the server-side MCP servers (ADR-125): `[{name, type, origin, trust, enabled, enabledByDefault, remoteMode, status, toolCount, error?, instructions?}]` — **all** registry entries (`instance` + `user` of any author), without secrets and URLs |
 | GET | `/api/v2/mcp/remote/tools?server=` | backend | auth (service-key — scope `mcp:invoke`) | The tool schemas of the server + `instructions`: `{server, instructions?, tools:[{server, name, description, inputSchema}]}`. 400 `VALIDATION_ERROR` (no `server`), 404 `MCP_REMOTE_SERVER_NOT_FOUND`, 502 `MCP_REMOTE_SERVER_DOWN` (the server did not come up), 503 `MCP_REMOTE_UNAVAILABLE` |
 | POST | `/api/v2/mcp/remote/call` | backend | auth (service-key — scope `mcp:invoke`) | Call a tool: `{server, tool, arguments?, meta?}` → `{content, isError, attachments?}` (the shape of the executor protocol 5, ADR-077). 400 `VALIDATION_ERROR`, 404 `MCP_REMOTE_SERVER_NOT_FOUND`, 409 `MCP_SERVER_DISABLED` (off by the master flag), 502 `MCP_REMOTE_SERVER_DOWN`/`MCP_REMOTE_CALL_FAILED`, 503 `MCP_REMOTE_UNAVAILABLE` |
@@ -1336,6 +1338,8 @@ duration of the call). The source of truth is the code
 > **Offline.** The servers stay in `GET /api/v2/sessions/:id/mcp` with `status:'error'` and the reason in the `error` field (without secrets); the tools are not offered until the reconnect, and the reason is visible in the `mcp.status` prompt block too.
 > **The feature marker** — `features.remoteMcp` in `GET /api/v2/meta` (§5.4): an old backend has no marker → the feature is silently off (fail-closed).
 
+> **The registry is the source of truth in both modes (ADR-071 §2.5).** The HTTP factory of the registry lives in core (`packages/core/src/server/routes/mcp-registry.ts`) and is mounted by both standalone and managed; the backend passes the RBAC guards and i18n, core passes its own defaults. In standalone the servers from `config.mcpServers` are **seeded** into the registry on start (`seedFromConfig`, idempotent by name), and the MCP manager is filled from the registry maps — so a registry mutation (`POST/PUT/DELETE /api/v2/mcp/registry*`) does **not** wipe the servers from the config: they are already in the registry as `origin:'instance'` entries. There is no second storage of the MCP configuration.
+>
 > MCP per-item resolution (ADR-071 §2.4): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; the default is opt-in (off). The registry master `enabled` and the project `enabled` are a live hard-gate (including old sessions and system servers); `enabledByDefault`/`project.defaultOn` are a snapshot (`mcpDefaultOn`). Reasons: `system_disabled\|project_disabled\|session_optout\|not_default`. `McpServerConfig.enabled` is only the seed of a registry entry (`seedFromConfig`) and does not participate in resolution. A missing `project.mcp` means no gate is set (legacy).
 >
 > `config.auth` (ADR-105 F0/F3) — a reference to an external access: `{kind:'credential', credentialId}`; the connector is authorized with a token from the access layer, the token itself never lives in the registry/config. The field is additive — entries without `auth` are valid. The transport injects the token (`Authorization: Bearer <token>` on every HTTP request); on `401` it refreshes the token and repeats the request — **exactly one refresh per request**. Issuing/rotating accesses is F4 (`/api/v2/oauth/credentials`, not implemented yet); until then an access is created in code (through the port) and connectors reference it by `credentialId`.
@@ -1391,29 +1395,32 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 
 > Skill per-item resolution (ADR-046): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; the default is opt-in (off). A system/project disable is a live hard-gate (including old sessions); defaults are a snapshot (`skillsDefaultOn`). A missing `project.skills` means no gate is set (legacy).
 
-### 5.18 Audit — `/api/v2/audit` (backend)
+### 5.18 Audit — `/api/v2/audit` (core+backend)
 
-| Method | Path | RBAC | Purpose |
+| Method | Path | RBAC (backend / core) | Purpose |
 |---|---|---|---|
-| GET | `/api/v2/audit` | ADMIN/AUDITOR | Gateway audit; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
-| POST | `/api/v2/audit/revealed` | auth | `{sessionId, placeholder}` → `{ok:true}` |
-| GET | `/api/v2/audit/security` | ADMIN/AUDITOR (core — auth) | Audit of egress policy, proxy and TLS changes (ADR-099): append-only `{dataDir}/audit/security.jsonl`; `?limit=` (default 100, max 1000), `?scope=tools\|webhooks\|mcp\|proxy\|tls` → `{entries, count}` (newest first); `scope:"proxy"` records carry no password and redacted URLs; `scope:"tls"` — paths/hosts/subject, no PEM/keys |
-| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR (core — auth) | Outbound request journal (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (default 100, max 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; bodies and headers are not logged; `via` (`proxy`\|`direct`\|`fallback`) is the actual route |
+| GET | `/api/v2/audit` | ADMIN/AUDITOR / auth | Gateway audit; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
+| POST | `/api/v2/audit/revealed` | auth / auth | `{sessionId, placeholder}` → `{ok:true}` |
+| GET | `/api/v2/audit/security` | ADMIN/AUDITOR / auth | Audit of egress policy, proxy and TLS changes (ADR-099): append-only `{dataDir}/audit/security.jsonl`; `?limit=` (default 100, max 1000), `?scope=tools\|webhooks\|mcp\|proxy\|tls` → `{entries, count}` (newest first); `scope:"proxy"` records carry no password and redacted URLs; `scope:"tls"` — paths/hosts/subject, no PEM/keys |
+| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR / auth | Outbound request journal (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (default 100, max 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; bodies and headers are not logged; `via` (`proxy`\|`direct`\|`fallback`) is the actual route |
 
-### 5.19 Logs — `/api/v2/logs` (backend)
+### 5.19 Logs — `/api/v2/logs` (core+backend)
 
-| Method | Path | RBAC | Purpose |
+| Method | Path | RBAC (backend / core) | Purpose |
 |---|---|---|---|
-| GET | `/api/v2/logs/llm` | ADMIN/AUDITOR | LLM payload log; `?sessionId=&limit=` (≤500) |
-| GET | `/api/v2/logs/:name` | ADMIN/AUDITOR | Tail of `core\|ui\|backend`; `?tail=` (1..2000), `?search=` |
+| GET | `/api/v2/logs/llm` | ADMIN/AUDITOR / auth | LLM payload log; `?sessionId=&limit=` (≤500) |
+| GET | `/api/v2/logs/:name` | ADMIN/AUDITOR / auth | Tail of `core\|ui\|backend`; `?tail=` (1..2000), `?search=` |
 
-### 5.20 Gateway patterns — `/api/v2/gateway` (backend, ADMIN)
+> In standalone there are usually no service log files — the route returns an
+> empty tail (`200`, `lines: []`), not "route not found".
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/api/v2/gateway/patterns` | Secret patterns + an override flag |
-| PUT | `/api/v2/gateway/patterns` | Save the override |
-| DELETE | `/api/v2/gateway/patterns` | Reset to the default |
+### 5.20 Gateway patterns — `/api/v2/gateway` (core+backend, ADMIN)
+
+| Method | Path | RBAC (backend / core) | Purpose |
+|---|---|---|---|
+| GET | `/api/v2/gateway/patterns` | ADMIN / auth | Secret patterns + an override flag |
+| PUT | `/api/v2/gateway/patterns` | ADMIN / auth | Save the override |
+| DELETE | `/api/v2/gateway/patterns` | ADMIN / auth | Reset to the default |
 
 ### 5.21 Settings — `/api/v2/settings` (both)
 
@@ -1543,12 +1550,12 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 | GET | `/api/v2/updates/check` | auth | Check for a new version |
 | POST | `/api/v2/updates/apply` | auth | SSE stream of `npm i -g @itphx/synth@latest` |
 
-### 5.25 Admin/debug — `/api/v2/admin/debug` (backend, ADMIN)
+### 5.25 Admin/debug — `/api/v2/admin/debug` (core+backend, ADMIN)
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/api/v2/admin/debug/config` | Logging groups and levels |
-| POST | `/api/v2/admin/debug/config` | `{groups}` → `{status:'saved'}`; merge — only the passed groups are saved, the other overrides are not reset |
+| Method | Path | RBAC (backend / core) | Purpose |
+|---|---|---|---|
+| GET | `/api/v2/admin/debug/config` | ADMIN / auth | Logging groups and levels |
+| POST | `/api/v2/admin/debug/config` | ADMIN / auth | `{groups}` → `{status:'saved'}`; merge — only the passed groups are saved, the other overrides are not reset |
 
 ### 5.26 Events — `both`
 

@@ -1,12 +1,13 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, resolveMaxReadBytes, resolveMaxPreviewBytes, resolveExecutionConfig, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveStorageBackend, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
 import { t as sm } from './engine/system-messages.js';
 import { egressFetch, initTlsTrust } from './security/tls.js';
 import { configureRestart, resolveRestartMode, RESTART_EXIT_CODE } from './server/restart.js';
-import { checkExecutionMode } from './execution/startup.js';
+import { resolveExecutionForStartup } from './execution/startup.js';
+import { buildStandaloneOptions } from './server/app/standalone-options.js';
 import { setSynthReady } from './metrics/collectors/ready.js';
 import { createPluginCliContext, createPluginCommand } from './cli/plugin-commands.js';
 import { createMemoryCommand } from './cli/memory-commands.js';
@@ -69,6 +70,9 @@ async function buildCliStorage(
  *
  * `inline` (дефолт) — прежнее поведение, ничего не меняется.
  *
+ * Резолвинг — общий шов `resolveExecutionForStartup` (тот же у публичного CLI
+ * `synth serve`); здесь только выход процесса на отказе.
+ *
  * @returns эффективная секция `execution` — её же получает сборка приложения
  *          (порт исполнения собирается по этому режиму).
  */
@@ -76,19 +80,15 @@ async function resolveExecutionStartup(
   synth: SynthConfig,
   cliMode?: string,
 ): Promise<ResolvedExecutionConfig> {
-  let execution: ResolvedExecutionConfig;
-  try {
-    execution = resolveExecutionConfig(synth, process.env, { mode: cliMode });
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+  const resolution = await resolveExecutionForStartup(synth, {
+    cliMode,
+    env: process.env,
+  });
+  if (!resolution.ok) {
+    console.error(resolution.message);
     process.exit(1);
   }
-  const check = await checkExecutionMode(execution);
-  if (!check.ok) {
-    console.error(check.message);
-    process.exit(1);
-  }
-  return execution;
+  return resolution.execution;
 }
 
 program
@@ -203,95 +203,22 @@ program
     const profilesPath = options.profiles || resolveProfilesPath(home);
 
     const appHandle = await createStandaloneApp({
+      // Конфиг-производные опции — общий шов с публичным CLI `synth serve`
+      // (`server/app/standalone-options.ts`): хранилище, лимиты, permissions,
+      // tools/mcp, skills/commands, плагины, git/attachments и прочие секции.
+      ...buildStandaloneOptions({
+        synth,
+        dataDir,
+        home,
+        ignoreRules,
+        execution,
+        env: process.env,
+      }),
+      // Запуск-специфичные поля (CLI-флаги, гибрид, профили) — после spread.
       port,
       dataDir,
       apiKey,
-      // ADR-096: физический backend хранения (env > config.yaml > file).
-      storageBackend: resolveStorageBackend(synth, process.env),
-      postgresConfig: resolvePostgresConfig(synth, process.env),
-      postgresPassword: resolvePostgresPassword({ dataDir }, process.env),
-      degradedMode: resolveDegradedMode(synth),
-      fallbackDir: resolveStorageFallbackDir(synth, process.env, home),
-      workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
-      defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
-      // ADR-077: режим исполнения и параметры удалённого исполнителя —
-      // порт собирается по ним (параметр запуска, инвариант 24).
-      executionConfig: execution,
-      maxUploadBytes: resolveMaxUploadBytes(synth),
-      maxReadBytes: resolveMaxReadBytes(synth),
-      maxPreviewBytes: resolveMaxPreviewBytes(synth),
       uiDistPath: uiPath,
-      permissionConfig: synth.permission,
-      defaultPlanMode: synth.session?.planMode,
-      // Секция `session` целиком: planMode + autoTitle (авто-именование).
-      sessionConfig: synth.session,
-      securityConfig: synth.security,
-      // ADR-099 (D1): HTTP/HTTPS-прокси единого egress-слоя.
-      proxyConfig: synth.proxy,
-      // ADR-076: мастер-ключ шифрования SSH-ключей (env > config > file в dataDir).
-      secretKey: resolveSecretKey(synth, process.env),
-      gatewayConfig: synth.llmGateway,
-      llmCachePolicy: synth.llm.cache,
-      // Лимит вывода по умолчанию (`llm.maxTokens`) — резолв `max_tokens` вызова.
-      llmMaxTokens: synth.llm.maxTokens,
-      // ADR-089: дефолтные provider/model инстанса — для сессий из внешних событий
-      // (materialize ephemeral/bind), когда явная модель не задана.
-      llmDefaults: { provider: synth.llm.defaultProvider, model: synth.llm.defaultModel },
-      toolsPolicy: synth.tools.policy,
-      mcpPolicy: synth.mcp?.policy,
-      toolsDisabled: synth.tools.disabled,
-      // Общий предел вывода инструментов (`tools.outputMaxLines`/
-      // `tools.outputMaxBytes`).
-      toolsConfig: synth.tools,
-      // Политика ограничения контекстного окна (`context.windowPolicy`):
-      // runtime-override в админке, env `SYNTH_CONTEXT_WINDOW_POLICY` приоритетнее.
-      contextConfig: synth.context,
-      // ADR-075: политика для абсолютного workspace вне root (env > config > 'confirm').
-      workspaceOutsideRootPolicy: resolveWorkspaceOutsideRootPolicy(synth) || 'confirm',
-      mcpServers: synth.mcp?.servers ?? {},
-      // ADR-046: конфигурация скиллов (paths/trustedProjectDirs/inlineShell).
-      skillsConfig: synth.skills,
-      // ADR-046 §7: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
-      commandsConfig: synth.commands,
-      // ADR-069 Фаза 1: конфигурация проектных инструкций (AGENTS.md).
-      // ADR-069 §9.2: ignore-rules/safe-mode → enabled=false (без мутации конфига).
-      instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
-      // ADR-089: конфигурация приёма внешних событий (allowedSources/ephemeralTtl).
-      eventsConfig: synth.events,
-      // ADR-051 (срез) / ADR-089: конфигурация планировщика (enabled/tickSec).
-      schedulerConfig: synth.scheduler,
-      // ADR-084: конфигурация decision-слоя микро-каскада.
-      decisionConfig: synth.decision,
-      // ADR-105 (Ф3): каталог OAuth-провайдеров (описания внешних доступов).
-      oauthProviders: synth.oauth.providers,
-      // ADR-102: конфигурация аналитики (retention суточных роллапов).
-      analyticsConfig: synth.analytics,
-      // ADR-076: таймауты сетевых git-операций (clone/fetch).
-      gitConfig: synth.git,
-      // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (таймаут ответа).
-      questionsConfig: synth.questions,
-      // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов (PROP-096).
-      backgroundConfig: synth.background,
-      // Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`).
-      agentsConfig: synth.agents,
-      // Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`).
-      limitsConfig: synth.limits,
-      // PROP-124: режим инстанса для SSH-ключей (`ssh.mode`).
-      sshConfig: synth.ssh,
-      // ADR-115: лимиты вложений сообщений (attachments.*).
-      attachmentsConfig: synth.attachments,
-      // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
-      metricsConfig: synth.metrics,
-      // ADR-106 Ф1: Authority-слой (по умолчанию выключен).
-      authorityConfig: synth.authority,
-      // ADR-090: конфигурация слоя плагинов (политики + бюджеты).
-      pluginsConfig: synth.plugins,
-      // ADR-052 (этап II): конфигурация исходящих webhooks (enabled/retry).
-      webhooksConfig: synth.webhooks,
-      // ADR-071 §2.3.1 / egress: политика сетевого доступа (config-фоллбек).
-      mcpNetworkPolicy: synth.mcp.networkPolicy,
-      // Egress: настраиваемая политика tools/webhooks + журнал внешних запросов.
-      egressConfig: synth.egress,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
@@ -304,8 +231,6 @@ program
             credentialsPath,
           }
         : undefined,
-      remoteLlm: synth.remote.llm,
-      remoteTimeoutMs: synth.remote.timeoutMs,
       remoteCredentialsPath: credentialsPath,
       profilesPath,
     });

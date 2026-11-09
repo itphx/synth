@@ -134,6 +134,8 @@ export interface InstructionsInfo {
   cap: { chars: number; source: 'dynamic' | 'override'; contextWindow: number };
   files: InstructionsReportFile[];
   diagnostics: InstructionsReportDiagnostic[];
+  /** Абсолютный workspace, для которого резолвились инструкции (нет workspace — поля нет). */
+  workspace?: string;
 }
 
 /** Метаданные запроса снимка (окно модели и projectId для `excludeProjects`). */
@@ -1345,6 +1347,9 @@ export function createInstructionsInfoResolver(
       signal: query.signal,
       injection: query.injection,
     });
-    return buildInstructionsInfo(result, config, query.contextWindow);
+    const info = buildInstructionsInfo(result, config, query.contextWindow);
+    // UI показывает точный путь в подсказке trust-гейта.
+    info.workspace = query.workspace;
+    return info;
   };
 }

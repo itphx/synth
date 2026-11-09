@@ -616,8 +616,11 @@
   `project-transfer` (publish/fork-local + `GET /:id/publish/progress` — прогресс публикации;
   реестр `remote/transfer-progress.ts`, in-memory, ключ `userId:projectId`, TTL 10 мин),
   `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
-  `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `meta` (ADR-118: `GET /api/v2/meta` — возможности инстанса, без аутентификации), `dictionaries`, `mcp`, `skills`,
+  `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `meta` (ADR-118: `GET /api/v2/meta` — возможности инстанса, без аутентификации), `dictionaries`, `mcp`, `mcp-registry` (ADR-071: HTTP-контур реестра MCP — см. §MCP), `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
+  `logs`, `audit`, `gateway-patterns`, `context-files`, `debug` (админ-контуры LLM Gateway,
+  логов, файлов контекста и групп логирования — общая реализация для standalone и
+  managed; детали — в следующем пункте),
   `service-keys`, `webhooks`, `oauth` (ADR-105 Ф4: `/api/v2/oauth/credentials*` — выдача,
   метаданные, refresh, отзыв, привязка к MCP-коннектору), `maintenance`, `analytics`,
   `attachments-staging` (ADR-115: `/api/v2/attachments` — staging-загрузка без сессии и раздача
@@ -634,6 +637,44 @@
   `scope:'limits'`; core — `requireAuth`, managed — ADMIN),
   `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
   в деградированном режиме хранилища контур **не монтируется** → 404).
+- **Админ-контуры — одна реализация на standalone и managed (ADR-036/ADR-069/ADR-070).**
+  Общая логика переехала из backend в core; различаются только guard'ы и тексты
+  (через `opts`): core-дефолт — `requireAuth` + русские литералы, managed —
+  `requireAdmin`/`requirePermission` + `t()`.
+  - `server/routes/logs.ts` — `createLogsRoutes(auth, deps, opts)`: `GET /api/v2/logs/:name`
+    — хвост лог-файла сервиса (`core|ui|backend`; строгий whitelist, path traversal
+    невозможен; `?tail=` 1..2000, `?search=`), `GET /api/v2/logs/llm` — payload-лог LLM
+    (`?sessionId&limit`; логирование выключено или файла нет → `{entries: [], total: 0}`).
+    Статический `/llm` регистрируется **до** параметрического `/:name`. Deps: `logDir`
+    (`resolveLogDir()` — env `SYNTH_LOG_DIR`, иначе поиск существующего `cwd/tmp` /
+    `cwd/../tmp`), `payloadLogPath` (`{dataDir}/audit/llm-payloads.jsonl`). Опции:
+    `readGuard` (managed — `requirePermission('ADMIN','AUDITOR')`, core — `requireAuth`),
+    `missingFile` (`'not-found'` — managed; `'empty'` — standalone: файлов логов вовсе нет →
+    пустой хвост, а не 404), `messages`.
+  - `server/routes/audit.ts` — `createAuditRoutes`: журналы безопасности (`GET /security`)
+    и egress (`GET /egress`) **и** голый аудит LLM Gateway — `GET /api/v2/audit`
+    (append-only JSONL) и `POST /api/v2/audit/revealed` (фиксация раскрытия плейсхолдера
+    секрета). Голые пути монтируются **только при заданном `deps.gatewayAudit`** =
+    `{ auditLogPath, logger, sessionExists }` — тот же `AuditLogger`, что у оркестратора
+    (в standalone пишет в `{dataDir}/audit/llm-gateway.jsonl`); без него остаются только
+    `/security` и `/egress`. Guard'ы: `readGuard` (managed — ADMIN|AUDITOR, core —
+    `requireAuth`), `gatewayReadGuard` (по умолчанию — `readGuard`), `revealedGuard`
+    (по умолчанию — `requireAuth`: раскрытие делает пользователь сессии), `messages`.
+  - `server/routes/gateway-patterns.ts` — `createGatewayPatternsRoutes(auth, store, opts)`:
+    `GET/PUT/DELETE /api/v2/gateway/patterns` — regex-паттерны детекции секретов
+    (ADR-036); схема «системный + override» (пользовательский список заменяет дефолтный,
+    `DELETE` — сброс к встроенным). Зависимость — порт `SecretPatternRepository`
+    (`deps.gatewayPatternStore`). Guard — `adminGuard` (managed — `requireAdmin`,
+    core — `requireAuth`), `messages`.
+  - `server/routes/context-files.ts` — `createContextFileRoutes(auth, repo, opts)`:
+    `GET/POST/DELETE /api/v2/context/files*`, `GET/POST /api/v2/context/enabled` — файлы
+    контекста/промптов инстанца (ADR-069/ADR-070). Зависимость — порт
+    `ContextFileRepository` (`deps.contextFiles`). Существующая `createContextRoutes`
+    (инструкции проекта, ADR-069) монтируется на том же префиксе — пути не конфликтуют
+    (`/instructions` против `/files*` и `/enabled`).
+  - `server/routes/debug.ts` — `createDebugRoutes(auth, opts)`: `GET/POST
+    /api/v2/admin/debug/config` — группы логирования (раздел «Отладка» админки).
+    Guard — `adminGuard` (managed — `requireAdmin`, core — `requireAuth`), `messages`.
 - **План/ToDo/журнал/инварианты (ADR-130) — доменные сервисы + HTTP-фабрики.**
   Мутации плана, списка задач, журнала и инвариантов живут в **доменных
   сервисах** (`engine/plan/service.ts`, `engine/todo/service.ts`,
@@ -2694,6 +2735,28 @@
   backups/restore/**restart**; `writeGuard`/`readGuard`/`messages`/`maxUploadBytes`, восстановление — офлайн).
   `createAnalyticsRoutes` (ADR-102: только чтение — summary/usage/activity/decision/prompt/export;
   RBAC через `resolveElevated`/`resolveAuditor`/`resolveUserId`, `messages` — i18n).
+  `createLogsRoutes`/`resolveLogDir` (хвост лог-файла сервиса + payload-лог LLM,
+  `/api/v2/logs`; `readGuard`/`missingFile`/`messages`; каталог логов — env
+  `SYNTH_LOG_DIR`, иначе поиск `cwd/tmp`/`cwd/../tmp`).
+  `createAuditRoutes` (журналы безопасности/egress **и** голый аудит LLM Gateway:
+  `GET /api/v2/audit` + `POST /api/v2/audit/revealed` — монтируются только при заданном
+  `deps.gatewayAudit` = `{ auditLogPath, logger, sessionExists }`; guard'ы —
+  `readGuard`/`gatewayReadGuard`/`revealedGuard`).
+  `createGatewayPatternsRoutes` (regex-паттерны детекции секретов, ADR-036; порт
+  `SecretPatternRepository`, guard — `adminGuard`).
+  `createContextFileRoutes` (файлы контекста/промптов инстанца, ADR-069/ADR-070; порт
+  `ContextFileRepository`, guard — `adminGuard`).
+  `createDebugRoutes` (группы логирования, `/api/v2/admin/debug/config`; guard —
+  `adminGuard`).
+  `createMcpRegistryRoutes` (HTTP-контур реестра MCP, ADR-071: `/registry*`, legacy
+  `/servers*` и `/session/:sessionId`; **реестр — источник истины в обоих режимах**:
+  в standalone `config.mcpServers` сидируются в реестр при старте — `seedFromConfig`,
+  менеджер наполняется из `toManagerMaps()`).
+  `createProviderRoutes` — опция `fetchIcon` (`ProviderFetchIconOptions`):
+  `POST /api/v2/providers/fetch-icon` — favicon домена провайдера. Маршрут включается
+  явно (`enabled: true`); SSRF-политика — общий egress-guard (`checkEgressUrl`/
+  `fetchWithEgressGuard`, ADR-099/PROP-100), guard и rate-limit — на стороне вызывающего.
+  Статический сегмент `/fetch-icon` регистрируется **до** параметрического `/:name`.
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
   `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).
   `createAgentRoutes` — опция `scopeGuard` для записи агентов (ADR-052; дефолт —
@@ -2915,6 +2978,22 @@ blob-порты и `blob_refs` — ADR-116.
   `ToolCapability.MCP`; деобфускация аргументов — в `execute` через `ObfuscationMapStore`.
 - HTTP: `POST /api/v2/mcp/probe` (`server/routes/mcp.ts`); доступность MCP по
   режимам — `GET/PUT /api/v2/settings/mcp`. Отдельного `/mcp/session/:id` в core нет.
+- **HTTP-контур реестра MCP — в core** (`server/routes/mcp-registry.ts`,
+  `createMcpRegistryRoutes(auth, mcpManager, sessionManager, opts)`): одна
+  реализация на standalone и managed. Пути: `/registry*` (CRUD записей),
+  legacy `/servers*` и `/session/:sessionId`. Guard'ы и i18n — через `opts`
+  (`requireAdmin`/`requireAdminOrScope`/`requireScopeForServiceKey`, `messages`);
+  core-дефолты — проверка роли `ADMIN`, `requireScopeOrAdminRole('addons:install')`,
+  `requireScope('addons:install')` и русские литералы. Backend монтирует ту же
+  фабрику и подставляет свои guard'ы/`t()`.
+  **Реестр — источник истины в standalone тоже** (ADR-071 §2.5): при старте
+  `config.mcpServers` сидируются в реестр (`seedFromConfig`, идемпотентно по
+  имени), менеджер заполняется картами реестра (`toManagerMaps`), любая мутация
+  реестра перечитывает их (`syncMcpManagerFromRegistry`) — серверы из конфига при
+  этом не исчезают (они уже в реестре как `origin:'instance'`). Сид — в
+  `server/app/deps.ts` (рядом с созданием `McpManager`), монтирование роутов —
+  `server/app/mount-routes.ts` (`/api/v2/mcp`), дефолты новых проектов/сессий —
+  `mcpRegistryStore.toDefaultServers()`.
 - Единый реестр серверов — `McpRegistryStore` (ADR-071): уровни system/project/session,
   per-item резолвинг эффективного набора — `engine/mcp/scope.ts`
   (`enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`,

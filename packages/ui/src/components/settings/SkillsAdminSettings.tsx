@@ -8,8 +8,8 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { ConfirmDialog } from '../ui/confirm-dialog'
-import { SettingsActions, SettingsPanel, SettingsSection, useSettingsDraft } from '../ui/settings'
-import type { ToolsPolicy } from '@/lib/api/synthApi'
+import { ListField, SettingsActions, SettingsPanel, SettingsSection, useSettingsDraft } from '../ui/settings'
+import type { SkillsTrustedProjectDirsSource, ToolsPolicy } from '@/lib/api/synthApi'
 import { PolicySettingsCard } from './PolicySettingsCard'
 import { SkillEditorForm, type SkillEditorErrors, type SkillFileDraft } from './SkillEditorForm'
 
@@ -40,6 +40,13 @@ const EMPTY_SKILLS_GATES: SkillsGates = {
   disabledForNewProjects: EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
 }
 
+/** ADR-046/069: цвета бейджа источника доверенных каталогов. */
+const TRUST_SOURCE_BADGE_CLASS: Record<SkillsTrustedProjectDirsSource, string> = {
+  runtime: 'bg-primary/15 text-primary',
+  config: 'bg-muted text-muted-foreground',
+  default: 'bg-muted text-muted-foreground',
+}
+
 /**
  * ADR-046 §4.5/§9.2 / ADR-072: админ-категория «Скиллы» — instance-реестр с CRUD
  * (`SKILL.md` + supporting-файлы), system-level enable/disable группами
@@ -68,7 +75,14 @@ export function SkillsAdminSettings() {
   const settingsError = useSkillsStore((s) => s.settingsError)
   const fetchSkillsSettings = useSkillsStore((s) => s.fetchSkillsSettings)
   const saveSkillsSettings = useSkillsStore((s) => s.saveSkillsSettings)
+  const saveSkillsTrustedProjectDirs = useSkillsStore((s) => s.saveSkillsTrustedProjectDirs)
   const resetSkillsSettings = useSkillsStore((s) => s.resetSkillsSettings)
+  const settingsTrustedProjectDirs = useSkillsStore((s) => s.settingsTrustedProjectDirs)
+  const settingsTrustedProjectDirsDefaults = useSkillsStore(
+    (s) => s.settingsTrustedProjectDirsDefaults,
+  )
+  const settingsTrustedProjectDirsSource = useSkillsStore((s) => s.settingsTrustedProjectDirsSource)
+  const settingsTrustRestartRequired = useSkillsStore((s) => s.settingsTrustRestartRequired)
 
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [editingOriginalFiles, setEditingOriginalFiles] = useState<string[]>([])
@@ -80,6 +94,11 @@ export function SkillsAdminSettings() {
   const [savedPolicy, setSavedPolicy] = useState<ToolsPolicy>(DEFAULT_SKILLS_POLICY)
   const [policySaving, setPolicySaving] = useState(false)
   const [policyError, setPolicyError] = useState<string | null>(null)
+
+  // Project-trust (ADR-046/069): черновик списка каталогов живёт локально.
+  const [trustDirs, setTrustDirs] = useState<string[]>([])
+  const [trustSaving, setTrustSaving] = useState(false)
+  const [trustError, setTrustError] = useState<string | null>(null)
 
   // Обе оси гейтов сохраняются одним PUT: стабильная ссылка нужна для эффекта синхронизации.
   const settingsGates = useMemo<SkillsGates | null>(
@@ -114,6 +133,13 @@ export function SkillsAdminSettings() {
     setPolicy(settingsPolicy)
     setSavedPolicy(settingsPolicy)
   }, [settingsPolicy])
+
+  useEffect(() => {
+    setTrustDirs(settingsTrustedProjectDirs)
+  }, [settingsTrustedProjectDirs])
+
+  const trustDirty = !sameStringList(trustDirs, settingsTrustedProjectDirs)
+  const trustIsDefault = sameStringList(settingsTrustedProjectDirs, settingsTrustedProjectDirsDefaults)
 
   const categories = useMemo(() => uniqueValues(skills, (s) => s.category), [skills])
   const groups = useMemo(() => uniqueValues(skills, (s) => s.groups), [skills])
@@ -257,6 +283,45 @@ export function SkillsAdminSettings() {
         type: 'error',
         category: 'error',
       })
+    }
+  }
+
+  const handleSaveTrust = async () => {
+    setTrustSaving(true)
+    setTrustError(null)
+    try {
+      await saveSkillsTrustedProjectDirs(trustDirs)
+      notify({ text: t('skillsAdmin.trust.saved'), type: 'success', category: 'system' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'HTTP'
+      setTrustError(message)
+      notify({
+        text: t('skillsAdmin.trust.saveError', { error: message }),
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setTrustSaving(false)
+    }
+  }
+
+  const handleResetTrust = async () => {
+    setTrustSaving(true)
+    setTrustError(null)
+    try {
+      // `null` — сброс к config-дефолту (`skills.trustedProjectDirs`).
+      await saveSkillsTrustedProjectDirs(null)
+      notify({ text: t('skillsAdmin.trust.saved'), type: 'success', category: 'system' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'HTTP'
+      setTrustError(message)
+      notify({
+        text: t('skillsAdmin.trust.saveError', { error: message }),
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setTrustSaving(false)
     }
   }
 
@@ -421,6 +486,84 @@ export function SkillsAdminSettings() {
           cancelTestId="skills-disabled-cancel"
           resetTestId="skills-disabled-reset"
         />
+      </SettingsSection>
+
+      {/* Project-trust (ADR-046/069): доверенные каталоги проектов */}
+      <SettingsSection
+        id="skills-admin-trusted"
+        title={t('skillsAdmin.trust.title')}
+        description={t('skillsAdmin.trust.hint')}
+      >
+        {settingsError && !settingsGates && (
+          <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+            {settingsError}
+          </div>
+        )}
+        {settingsLoading && !settingsGates && (
+          <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
+        )}
+
+        {settingsGates && (
+          <>
+            <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+              <span
+                data-testid="skills-trust-source"
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-[0.625rem] font-medium',
+                  TRUST_SOURCE_BADGE_CLASS[settingsTrustedProjectDirsSource],
+                )}
+              >
+                {t(`skillsAdmin.trust.source.${settingsTrustedProjectDirsSource}`)}
+              </span>
+            </div>
+
+            <ListField
+              label={t('skillsAdmin.trust.paths')}
+              values={trustDirs}
+              onChange={setTrustDirs}
+              emptyText={t('skillsAdmin.trust.empty')}
+              disabled={trustSaving}
+            />
+
+            {trustError && (
+              <div
+                role="alert"
+                data-testid="skills-trust-error"
+                className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive min-w-0 break-words"
+              >
+                {trustError}
+              </div>
+            )}
+
+            {settingsTrustRestartRequired && (
+              <div
+                role="status"
+                data-testid="skills-trust-restart"
+                className="flex items-start gap-2 rounded-lg bg-status-warning/10 p-3 text-xs text-status-warning min-w-0"
+              >
+                <Icon name="refresh" className="mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0 break-words">{t('skillsAdmin.trust.restartRequired')}</span>
+              </div>
+            )}
+
+            <p className="text-xs text-muted-foreground min-w-0">
+              {t('skillsAdmin.trust.resetHint')}
+            </p>
+
+            <SettingsActions
+              onSave={() => void handleSaveTrust()}
+              onReset={() => void handleResetTrust()}
+              saveDisabled={!trustDirty || trustSaving || settingsLoading}
+              resetDisabled={trustSaving || settingsLoading}
+              isDefault={trustIsDefault}
+              saving={trustSaving}
+              saveLabel={t('skillsAdmin.trust.save')}
+              resetLabel={t('skillsAdmin.trust.reset')}
+              saveTestId="skills-trust-save"
+              resetTestId="skills-trust-reset"
+            />
+          </>
+        )}
       </SettingsSection>
 
       <PolicySettingsCard
@@ -643,6 +786,11 @@ function DisabledGroup({
       )}
     </div>
   )
+}
+
+/** Сравнение списков строк по составу и порядку (черновик доверенных каталогов). */
+function sameStringList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index])
 }
 
 function uniqueValues<T>(items: T[] | null, select: (item: T) => string | string[] | undefined): string[] {

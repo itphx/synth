@@ -6,6 +6,9 @@ import { cn } from '@/lib/utils'
 import { Icon } from '@/components/icon/Icon'
 import type { InstructionFileInfo, InstructionFileStatus } from '@/lib/api/synthApi'
 
+/** Коды диагностик пустого снимка, для которых есть локализованный текст. */
+const KNOWN_DIAGNOSTIC_CODES = new Set(['skipped-install-tree', 'excluded', 'fetch-error'])
+
 const STATUS_CLASS: Record<InstructionFileStatus, string> = {
   loaded: 'bg-muted text-muted-foreground',
   truncated: 'bg-muted text-foreground',
@@ -71,18 +74,81 @@ export function ProjectInstructions({ sessionId }: { sessionId: string }) {
   }
 
   if (info.files.length === 0) {
-    const noProject = info.diagnostics.some((d) => d.code === 'no-project')
-    const diagnostic = noProject
-      ? undefined
-      : info.diagnostics.find((d) => d.level === 'error' || d.level === 'warning')
+    // Сессия без проекта — прежнее пустое состояние с причиной.
+    if (info.diagnostics.some((d) => d.code === 'no-project')) {
+      return (
+        <div className="rounded-lg border border-border bg-surface-inset px-3 py-2" data-testid="instructions-empty">
+          <div className="text-xs text-muted-foreground">
+            {t('sessionTab.instructions.noProject')}
+          </div>
+        </div>
+      )
+    }
+
+    // Project-trust (ADR-046/069): каталог вне доверенных — показываем причину,
+    // каталог и где включить доверие, а не «файлы не найдены».
+    const untrusted = info.diagnostics.find((d) => d.code === 'untrusted')
+    if (untrusted) {
+      return (
+        <div
+          className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2"
+          data-testid="instructions-untrusted"
+        >
+          <div className="flex items-start gap-1.5">
+            <Icon name="shield-keyhole" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+            <div className="min-w-0 space-y-1">
+              <div className="text-xs font-medium text-foreground">
+                {t('sessionTab.instructions.untrusted.title')}
+              </div>
+              <p className="text-[0.6875rem] text-muted-foreground break-words">
+                {t('sessionTab.instructions.untrusted.reason')}
+              </p>
+              {info.workspace && (
+                <div className="min-w-0">
+                  <span className="text-[0.625rem] text-muted-foreground/70">
+                    {t('sessionTab.instructions.untrusted.path')}:{' '}
+                  </span>
+                  <span className="font-mono text-[0.625rem] text-foreground break-all" dir="ltr">
+                    {info.workspace}
+                  </span>
+                </div>
+              )}
+              <p
+                className="text-[0.6875rem] text-muted-foreground break-words"
+                data-testid="instructions-untrusted-hint"
+              >
+                {t('sessionTab.instructions.untrusted.hint')}
+              </p>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    // Прочие warning/error: локализуем по коду, fallback — сообщение сервера.
+    const diagnostic = info.diagnostics.find(
+      (d) => d.level === 'error' || d.level === 'warning' || KNOWN_DIAGNOSTIC_CODES.has(d.code),
+    )
+    if (!diagnostic) {
+      return (
+        <div className="rounded-lg border border-border bg-surface-inset px-3 py-2" data-testid="instructions-empty">
+          <div className="text-xs text-muted-foreground">{t('sessionTab.instructions.empty')}</div>
+        </div>
+      )
+    }
     return (
       <div className="rounded-lg border border-border bg-surface-inset px-3 py-2" data-testid="instructions-empty">
         <div className="text-xs text-muted-foreground">
-          {t(noProject ? 'sessionTab.instructions.noProject' : 'sessionTab.instructions.empty')}
+          {KNOWN_DIAGNOSTIC_CODES.has(diagnostic.code)
+            ? t(`sessionTab.instructions.diagnostic.${diagnostic.code}`)
+            : diagnostic.message}
         </div>
-        {diagnostic && (
-          <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60 break-words">
-            {diagnostic.message}
+        {diagnostic.path && (
+          <div
+            className="mt-0.5 font-mono text-[0.625rem] text-muted-foreground/60 break-all"
+            dir="ltr"
+          >
+            {diagnostic.path}
           </div>
         )}
       </div>

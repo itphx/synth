@@ -182,3 +182,14 @@ describe('StorageContext (ADR-096, W2.3)', () => {
     expect(owner.map((s) => s.id)).toContain(session.id);
   });
 });
+
+describe('SettingsRepository: project-trust скиллов (ADR-046/ADR-069)', () => {
+  it('memory: set/get/clear', async () => {
+    const ctx = createMemoryStorage({ dataDir: join(tmpdir(), 'synth-memory-trust') });
+    expect(await ctx.settings.getSkillsTrustedProjectDirs()).toBeUndefined();
+    await ctx.settings.setSkillsTrustedProjectDirs(['/work/a']);
+    expect(await ctx.settings.getSkillsTrustedProjectDirs()).toEqual(['/work/a']);
+    await ctx.settings.clearSkillsTrustedProjectDirs();
+    expect(await ctx.settings.getSkillsTrustedProjectDirs()).toBeUndefined();
+  });
+});
