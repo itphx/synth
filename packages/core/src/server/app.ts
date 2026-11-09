@@ -456,6 +456,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // ADR-096: публичные умолчания оформления (`GET /auth/defaults`) — тот же
     // контекст хранения, что у остальных доменных портов (паритет с backend).
     defaultsStore: storage.defaults,
+    // Профиль владельца инстанса: standalone GET/PUT/PATCH/DELETE /auth/profile
+    // работают с локальным стором (в гибриде по-прежнему проксируются на backend).
+    profilesStore: storage.profiles,
   }));
 
 

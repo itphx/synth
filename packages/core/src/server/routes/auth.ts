@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { User } from '@itphx/synth-shared';
+import type { ProfileData, ProfileStore, User } from '@itphx/synth-shared';
 import { serverUserToUser, type LocalAuthKit, type ServerUserPayload } from '../../auth/local.js';
 import type { RemoteConnection } from '../../remote/connection.js';
 import type { RemoteCredentials, RemoteUser } from '../../remote/types.js';
@@ -58,6 +58,41 @@ export interface AuthRoutesRemoteDeps {
    * не должен получать 404 (ошибка в консоли браузера).
    */
   defaultsStore?: DefaultsRepository | null;
+  /**
+   * Стор профилей пользователей (local standalone): локальный профиль владельца
+   * инстанса (`local` или серверная личность в гибриде). Без него GET/PUT
+   * /auth/profile работают в прежнем fallback-режиме (паритет со старым
+   * поведением), а PATCH/DELETE preferences не персистят данные.
+   */
+  profilesStore?: ProfileStore | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Полный DTO профиля — паритет с backend `GET /auth/profile`
+ * (`packages/backend/src/routes/auth.ts`). `team_roles` — аддитивно: UI читает
+ * массив, а не одиночный `team_role`.
+ */
+function profileToDto(user: User, profile: ProfileData | null): Record<string, unknown> {
+  return {
+    id: user.id,
+    username: user.username,
+    email: profile?.email ?? user.email,
+    phone: profile?.phone ?? null,
+    roles: profile?.roles ?? user.roles,
+    preferred_language: user.preferredLanguage,
+    team_role: profile?.teamRoles?.[0] ?? user.teamRole,
+    team_roles: profile?.teamRoles ?? [],
+    notes: profile?.notes ?? user.notes,
+    interview_completed: profile?.interviewCompleted ?? user.interviewCompleted,
+    display_name: profile?.displayName ?? null,
+    is_active: profile?.isActive ?? true,
+    created_at: profile?.createdAt ?? user.createdAt,
+    preferences: (profile?.preferences as Record<string, unknown>) ?? {},
+  };
 }
 
 function normalizeUrl(url: string): string {
@@ -399,7 +434,8 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
   });
 
   // GET /auth/profile — в гибриде проксируется на backend (серверный профиль
-  // с настройками и предпочтениями), в локальном режиме — минимальный профиль.
+  // с настройками и предпочтениями), локально — профиль из `profilesStore`
+  // (паритет DTO с backend). Без стора — прежняя минимальная заглушка.
   app.get('/profile', async (c) => {
     const client = deps.connection.client;
     if (client) {
@@ -415,16 +451,26 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     }
     const user = auth.getCurrentUser(c);
     if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
-    return c.json({
-      id: user.id,
+    if (!deps.profilesStore) {
+      return c.json({
+        id: user.id,
+        username: user.username,
+        phone: null,
+        roles: user.roles,
+        preferences: {},
+      });
+    }
+    // Локальный профиль создаётся при первом обращении (username — ключ).
+    const profile = await deps.profilesStore.getOrCreateProfile({
       username: user.username,
-      phone: null,
       roles: user.roles,
-      preferences: {},
     });
+    return c.json(profileToDto(user, profile));
   });
 
-  // PUT /auth/profile — в гибриде проксируется на backend.
+  // PUT /auth/profile — в гибриде проксируется на backend; локально —
+  // персист в `profilesStore` тех же полей, что сохраняет backend. Ответ несёт
+  // `profile` — UI (`updateProfile`) читает именно его.
   app.put('/profile', async (c) => {
     const client = deps.connection.client;
     if (client) {
@@ -441,7 +487,106 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     }
     const user = auth.getCurrentUser(c);
     if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
-    return c.json({ status: 'ok', user: { id: user.id, username: user.username, roles: user.roles } });
+    const rawBody = await c.req.json().catch(() => ({}));
+    const body = isRecord(rawBody) ? rawBody : {};
+    if (!deps.profilesStore) {
+      return c.json({ status: 'ok', user: { id: user.id, username: user.username, roles: user.roles } });
+    }
+
+    // In-memory обновление личности (паритет с backend; не персистится —
+    // серверная личность в гибриде живёт в cookie, локальная — константа).
+    if (typeof body.preferred_language === 'string') user.preferredLanguage = body.preferred_language;
+    if (typeof body.team_role === 'string') user.teamRole = body.team_role;
+    if (typeof body.notes === 'string') user.notes = body.notes;
+    if (typeof body.interview_completed === 'boolean') user.interviewCompleted = body.interview_completed;
+
+    const profile = await deps.profilesStore.getOrCreateProfile({
+      username: user.username,
+      roles: user.roles,
+    });
+    if (typeof body.notes === 'string') profile.notes = body.notes;
+    // Новый формат — массив `team_roles`; legacy `team_role` — одиночное значение.
+    const teamRoles = Array.isArray(body.team_roles)
+      ? body.team_roles.filter((r): r is string => typeof r === 'string')
+      : typeof body.team_role === 'string'
+        ? [body.team_role]
+        : undefined;
+    if (teamRoles !== undefined) profile.teamRoles = teamRoles;
+    if (typeof body.display_name === 'string' && body.display_name) profile.displayName = body.display_name;
+    if (typeof body.interview_completed === 'boolean') {
+      profile.interviewCompleted = body.interview_completed;
+      profile.interviewCompletedAt = body.interview_completed ? new Date().toISOString() : undefined;
+    }
+    if (isRecord(body.preferences)) {
+      profile.preferences = { ...(profile.preferences ?? {}), ...body.preferences };
+    }
+    if (typeof body.email === 'string') profile.email = body.email;
+    if (typeof body.phone === 'string') profile.phone = body.phone;
+    await deps.profilesStore.saveProfile(profile);
+
+    return c.json({ status: 'ok', profile: profileToDto(user, profile) });
+  });
+
+  // PATCH /auth/profile/preferences — слить preferences. В гибриде проксируется
+  // на backend; локально — merge в профиль.
+  app.patch('/profile/preferences', async (c) => {
+    const client = deps.connection.client;
+    if (client) {
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        const result = await client.request<unknown>('PATCH', '/auth/profile/preferences', body);
+        return c.json(result);
+      } catch (err) {
+        if (err instanceof RemoteError && err.code === 'OFFLINE') {
+          return c.json({ error: { code: 'OFFLINE', message: err.message } }, 502);
+        }
+        return c.json({ error: { code: 'UNAUTHORIZED', message: 'Не авторизован на удалённом сервере' } }, 401);
+      }
+    }
+    const user = auth.getCurrentUser(c);
+    if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
+    const rawBody = await c.req.json().catch(() => ({}));
+    const patch = isRecord(rawBody) ? rawBody : {};
+    if (!deps.profilesStore) {
+      return c.json({ status: 'ok', preferences: patch });
+    }
+    const profile = await deps.profilesStore.getOrCreateProfile({
+      username: user.username,
+      roles: user.roles,
+    });
+    profile.preferences = { ...(profile.preferences ?? {}), ...patch };
+    await deps.profilesStore.saveProfile(profile);
+    return c.json({ status: 'ok', preferences: profile.preferences });
+  });
+
+  // DELETE /auth/profile/preferences — сбросить preferences (оставить avatar,
+  // как backend). В гибриде проксируется на backend.
+  app.delete('/profile/preferences', async (c) => {
+    const client = deps.connection.client;
+    if (client) {
+      try {
+        const result = await client.request<unknown>('DELETE', '/auth/profile/preferences');
+        return c.json(result);
+      } catch (err) {
+        if (err instanceof RemoteError && err.code === 'OFFLINE') {
+          return c.json({ error: { code: 'OFFLINE', message: err.message } }, 502);
+        }
+        return c.json({ error: { code: 'UNAUTHORIZED', message: 'Не авторизован на удалённом сервере' } }, 401);
+      }
+    }
+    const user = auth.getCurrentUser(c);
+    if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
+    if (!deps.profilesStore) {
+      return c.json({ status: 'ok', preferences: {} });
+    }
+    const profile = await deps.profilesStore.getProfileByUsername(user.username);
+    if (profile) {
+      const avatar = (profile.preferences as Record<string, unknown> | undefined)?.avatar;
+      profile.preferences = avatar ? { avatar } : {};
+      await deps.profilesStore.saveProfile(profile);
+      return c.json({ status: 'ok', preferences: profile.preferences });
+    }
+    return c.json({ status: 'ok', preferences: {} });
   });
 
   return app;

@@ -541,10 +541,10 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | POST | `/auth/device-start` | core | — | OIDC device flow: `verification_uri`, `user_code` |
 | POST | `/auth/device-check` | core | — | Device flow status |
 | POST | `/auth/logout` | both | — | Cookie reset (`204`); in core — revoke+disconnect |
-| GET | `/auth/profile` | both | auth | Profile (in hybrid mode it is proxied to backend) |
-| PUT | `/auth/profile` | both | auth | Update the profile |
-| PATCH | `/auth/profile/preferences` | backend | auth | Merge preferences |
-| DELETE | `/auth/profile/preferences` | backend | auth | Reset preferences |
+| GET | `/auth/profile` | both | auth | Profile (in hybrid mode it is proxied to backend; in standalone — the local profile from the store, same DTO as backend) |
+| PUT | `/auth/profile` | both | auth | Update the profile (proxied in hybrid mode; in standalone persists the local profile, response `{status, profile}`) |
+| PATCH | `/auth/profile/preferences` | both | auth | Merge preferences (proxied to backend in hybrid mode) |
+| DELETE | `/auth/profile/preferences` | both | auth | Reset preferences keeping `avatar` (proxied to backend in hybrid mode) |
 | GET | `/auth/profile/avatar` | backend | auth | PNG avatar (`404` if absent) |
 | POST | `/auth/profile/avatar` | backend | auth | Upload/delete the avatar (binary) |
 | GET | `/auth/locales` | both | — | List of locales (`ru`,`en`) — public, used by the login screen |

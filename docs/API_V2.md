@@ -577,10 +577,10 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/auth/device-start` | core | — | OIDC device flow: `verification_uri`, `user_code` |
 | POST | `/auth/device-check` | core | — | Статус device flow |
 | POST | `/auth/logout` | оба | — | Сброс cookie (`204`); в core — revoke+disconnect |
-| GET | `/auth/profile` | оба | auth | Профиль (в гибриде проксируется на backend) |
-| PUT | `/auth/profile` | оба | auth | Обновить профиль |
-| PATCH | `/auth/profile/preferences` | backend | auth | Слить preferences |
-| DELETE | `/auth/profile/preferences` | backend | auth | Сбросить preferences |
+| GET | `/auth/profile` | оба | auth | Профиль (в гибриде проксируется на backend; в standalone — локальный профиль из стора, DTO как у backend) |
+| PUT | `/auth/profile` | оба | auth | Обновить профиль (в гибриде проксируется; в standalone персистит локальный профиль, ответ `{status, profile}`) |
+| PATCH | `/auth/profile/preferences` | оба | auth | Слить preferences (в гибриде проксируется на backend) |
+| DELETE | `/auth/profile/preferences` | оба | auth | Сбросить preferences, оставив `avatar` (в гибриде проксируется на backend) |
 | GET | `/auth/profile/avatar` | backend | auth | PNG-аватар (`404` если нет) |
 | POST | `/auth/profile/avatar` | backend | auth | Загрузить/удалить аватар (binary) |
 | GET | `/auth/locales` | оба | — | Список локалей (`ru`,`en`) — публичный, нужен экрану входа |

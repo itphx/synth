@@ -7,6 +7,7 @@ import { createLocalAuth } from '../../auth/local.js';
 import { createAuthRoutes, type AuthRoutesRemoteDeps } from './auth.js';
 import { RemoteConnection } from '../../remote/connection.js';
 import { RemoteError } from '../../remote/types.js';
+import { FileProfileStore } from '../../storage/profile-store.js';
 
 // Реестр профилей изолируем: даже если граф теста дотянется до app.ts (авто-логин
 // → /auth/status → getHybridState), дефолтный путь ~/.config/synth/profiles.json
@@ -660,6 +661,235 @@ describe('auth routes (гибридная runtime-личность, RemoteConnec
       const body = (await res.json()) as { username: string; roles: string[] };
       expect(body.username).toBe('local');
       expect(body.roles).toEqual(['ADMIN']);
+    });
+  });
+
+  describe('GET/PUT/PATCH/DELETE /auth/profile (standalone, FileProfileStore)', () => {
+    /** Приложение со стором профилей и cookie локального пользователя. */
+    async function makeLocalApp() {
+      const store = new FileProfileStore({ dataDir: tmpDir });
+      const app = new Hono().route('/auth', createAuthRoutes(
+        createLocalAuth({ apiKey: API_KEY }),
+        makeDeps({ profilesStore: store }, { tmpDir }),
+      ));
+      const login = await app.request('/auth/spa-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: API_KEY }),
+      });
+      return { app, store, cookie: extractCookieValue(login.headers.get('Set-Cookie'))! };
+    }
+
+    it('PUT сохраняет поля, возвращает profile и GET отдаёт сохранённое', async () => {
+      const { app, store, cookie } = await makeLocalApp();
+      const headers = { 'Content-Type': 'application/json', Cookie: `${COOKIE_NAME}=${cookie}` };
+
+      const put = await app.request('/auth/profile', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          display_name: 'Люк',
+          email: 'lucky@example.test',
+          phone: '+10000000000',
+          notes: '',
+          interview_completed: true,
+          team_roles: ['developer', 'qa'],
+          preferences: { theme: 'dark', locale: 'ru' },
+        }),
+      });
+      expect(put.status).toBe(200);
+      const putBody = (await put.json()) as {
+        status: string;
+        profile: Record<string, unknown>;
+      };
+      expect(putBody.status).toBe('ok');
+      // Критично для UI: ответ PUT несёт profile (а не только user).
+      expect(putBody.profile).toMatchObject({
+        username: 'local',
+        display_name: 'Люк',
+        email: 'lucky@example.test',
+        phone: '+10000000000',
+        notes: '',
+        interview_completed: true,
+        team_roles: ['developer', 'qa'],
+        team_role: 'developer',
+        preferences: { theme: 'dark', locale: 'ru' },
+      });
+      expect(putBody.profile.is_active).toBe(true);
+      expect(typeof putBody.profile.created_at).toBe('string');
+
+      // Персист: время завершения интервью проставлено.
+      const persisted = await store.getProfileByUsername('local');
+      expect(persisted?.interviewCompleted).toBe(true);
+      expect(persisted?.interviewCompletedAt).toBeTruthy();
+      expect(persisted?.teamRoles).toEqual(['developer', 'qa']);
+      expect(persisted?.preferences).toEqual({ theme: 'dark', locale: 'ru' });
+
+      const get = await app.request('/auth/profile', {
+        headers: { Cookie: `${COOKIE_NAME}=${cookie}` },
+      });
+      expect(get.status).toBe(200);
+      const getBody = (await get.json()) as Record<string, unknown>;
+      expect(getBody).toMatchObject({
+        username: 'local',
+        display_name: 'Люк',
+        email: 'lucky@example.test',
+        notes: '',
+        interview_completed: true,
+        team_roles: ['developer', 'qa'],
+        preferences: { theme: 'dark', locale: 'ru' },
+      });
+
+      // interview_completed: false снимает время завершения; legacy team_role поддержан.
+      const putOff = await app.request('/auth/profile', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ interview_completed: false, team_role: 'tester' }),
+      });
+      expect(putOff.status).toBe(200);
+      const afterOff = await store.getProfileByUsername('local');
+      expect(afterOff?.interviewCompleted).toBe(false);
+      expect(afterOff?.interviewCompletedAt).toBeUndefined();
+      expect(afterOff?.teamRoles).toEqual(['tester']);
+    });
+
+    it('PATCH preferences сливает, DELETE оставляет только avatar', async () => {
+      const { app, cookie } = await makeLocalApp();
+      const headers = { 'Content-Type': 'application/json', Cookie: `${COOKIE_NAME}=${cookie}` };
+
+      const patch1 = await app.request('/auth/profile/preferences', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ theme: 'dark', avatar: 'avatar.png' }),
+      });
+      expect(patch1.status).toBe(200);
+      expect(await patch1.json()).toEqual({
+        status: 'ok',
+        preferences: { theme: 'dark', avatar: 'avatar.png' },
+      });
+
+      const patch2 = await app.request('/auth/profile/preferences', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ locale: 'en' }),
+      });
+      expect(await patch2.json()).toEqual({
+        status: 'ok',
+        preferences: { theme: 'dark', avatar: 'avatar.png', locale: 'en' },
+      });
+
+      const del = await app.request('/auth/profile/preferences', {
+        method: 'DELETE',
+        headers: { Cookie: `${COOKIE_NAME}=${cookie}` },
+      });
+      expect(del.status).toBe(200);
+      expect(await del.json()).toEqual({ status: 'ok', preferences: { avatar: 'avatar.png' } });
+
+      // GET видит тот же результат (персист).
+      const get = await app.request('/auth/profile', {
+        headers: { Cookie: `${COOKIE_NAME}=${cookie}` },
+      });
+      expect(((await get.json()) as { preferences: unknown }).preferences).toEqual({ avatar: 'avatar.png' });
+    });
+
+    it('GET создаёт локальный профиль, если его ещё нет', async () => {
+      const { app, store, cookie } = await makeLocalApp();
+      expect(await store.getProfileByUsername('local')).toBeNull();
+
+      const get = await app.request('/auth/profile', {
+        headers: { Cookie: `${COOKIE_NAME}=${cookie}` },
+      });
+      expect(get.status).toBe(200);
+      const body = (await get.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        username: 'local',
+        roles: ['ADMIN'],
+        team_roles: [],
+        notes: '',
+        interview_completed: false,
+        preferences: {},
+      });
+
+      const created = await store.getProfileByUsername('local');
+      expect(created).not.toBeNull();
+      expect(created?.username).toBe('local');
+    });
+
+    it('без profilesStore — прежний fallback (GET заглушка, PUT {status,user})', async () => {
+      const app = makeApp(makeDeps({}, { tmpDir }));
+      const login = await app.request('/auth/spa-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: API_KEY }),
+      });
+      const cookie = extractCookieValue(login.headers.get('Set-Cookie'))!;
+
+      const get = await app.request('/auth/profile', {
+        headers: { Cookie: `${COOKIE_NAME}=${cookie}` },
+      });
+      expect(get.status).toBe(200);
+      expect(((await get.json()) as { preferences: unknown }).preferences).toEqual({});
+
+      const put = await app.request('/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: `${COOKIE_NAME}=${cookie}` },
+        body: JSON.stringify({ display_name: 'X' }),
+      });
+      expect(put.status).toBe(200);
+      expect(await put.json()).toEqual({
+        status: 'ok',
+        user: { id: 'local', username: 'local', roles: ['ADMIN'] },
+      });
+
+      // PATCH/DELETE не падают без стора и не персистят.
+      const patch = await app.request('/auth/profile/preferences', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: `${COOKIE_NAME}=${cookie}` },
+        body: JSON.stringify({ theme: 'dark' }),
+      });
+      expect(await patch.json()).toEqual({ status: 'ok', preferences: { theme: 'dark' } });
+
+      const del = await app.request('/auth/profile/preferences', {
+        method: 'DELETE',
+        headers: { Cookie: `${COOKIE_NAME}=${cookie}` },
+      });
+      expect(await del.json()).toEqual({ status: 'ok', preferences: {} });
+    });
+
+    it('PATCH/DELETE preferences в гибриде проксируются на backend', async () => {
+      vi.stubGlobal('fetch', vi.fn((url: string | URL | Request, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes('/auth/oidc-meta')) {
+          return Promise.resolve(jsonResponse({ enabled: true, issuer: ISSUER, clientId: CLIENT_ID }));
+        }
+        if (u.includes('/protocol/openid-connect/token')) {
+          return Promise.resolve(jsonResponse({ access_token: 'at', refresh_token: 'rt', expires_in: 300 }));
+        }
+        if (u.includes('/auth/status')) {
+          return Promise.resolve(jsonResponse({ authenticated: true, oidc_enabled: true, user: SERVER_USER }));
+        }
+        if (u.includes('/auth/profile/preferences')) {
+          const method = init?.method ?? 'GET';
+          return Promise.resolve(jsonResponse({ status: 'ok', method, preferences: { theme: 'dark' } }));
+        }
+        return Promise.resolve(jsonResponse({ error: 'not_found' }, 404));
+      }));
+
+      const deps = makeDeps({ defaultBackendUrl: BACKEND }, { tmpDir });
+      await deps.connectRemote(BACKEND, 'lucky', 'secret');
+      const app = makeApp(deps);
+
+      const patch = await app.request('/auth/profile/preferences', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ theme: 'dark' }),
+      });
+      expect(patch.status).toBe(200);
+      expect(await patch.json()).toEqual({ status: 'ok', method: 'PATCH', preferences: { theme: 'dark' } });
+
+      const del = await app.request('/auth/profile/preferences', { method: 'DELETE' });
+      expect(del.status).toBe(200);
+      expect(await del.json()).toEqual({ status: 'ok', method: 'DELETE', preferences: { theme: 'dark' } });
     });
   });
 });
