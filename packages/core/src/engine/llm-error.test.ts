@@ -37,6 +37,62 @@ describe('classifyLlmError — единая таксономия типов', ()
     // регистронезависимо
     expect(classifyLlmError('NO USER QUERY FOUND IN MESSAGES')).toBe('no_user_query');
   });
+
+  it('400 с телом «Internal Server Error» — серверный сбой (server_error)', () => {
+    // Шлюз (LiteLLM-совместимый) отдаёт 400 с «Internal Server Error» — падение
+    // апстрима, а не некорректный запрос. Реальный текст из прод-инстанса:
+    expect(
+      classifyLlmError(
+        'Bad request: {"detail":"Internal Server Error (request_id: 52993302-6b57-4e69-983e-244315f0ca3d)"}',
+      ),
+    ).toBe('server_error');
+    expect(classifyLlmError('Internal Server Error')).toBe('server_error');
+  });
+
+  it('«Internal Server Error» не перебивает более специфичные типы', () => {
+    expect(
+      classifyLlmError('Bad request: {"detail":"Internal Server Error (request_id: x)"} 401'),
+    ).toBe('auth_error');
+    expect(
+      classifyLlmError('context length exceeded (Internal Server Error)'),
+    ).toBe('context_length');
+  });
+});
+
+describe('isLlmErrorRecoverable — серверный сбой в 400-обёртке', () => {
+  const gateway400 =
+    'Bad request: {"detail":"Internal Server Error (request_id: 52993302-6b57-4e69-983e-244315f0ca3d)"}';
+
+  it('восстановим: провайдер-слой добавляет «Bad request: » ЛЮБОМУ 400', () => {
+    const type = classifyLlmError(gateway400);
+    expect(type).toBe('server_error');
+    expect(isLlmErrorRecoverable(new Error(gateway400), gateway400, type)).toBe(true);
+  });
+
+  it('восстановим и без переданного errorType (по телу)', () => {
+    expect(isLlmErrorRecoverable(new Error(gateway400), gateway400)).toBe(true);
+  });
+
+  it('настоящий клиентский 400 остаётся невосстановимым', () => {
+    const bad = 'Bad request: {"detail":"invalid schema for tool call"}';
+    const type = classifyLlmError(bad);
+    expect(type).toBe('unknown');
+    expect(isLlmErrorRecoverable(new Error(bad), bad, type)).toBe(false);
+  });
+
+  it('no_user_query (потеря user-реплики) остаётся невосстановимым', () => {
+    const bad = 'Bad request: {"detail":"no user query found in messages"}';
+    const type = classifyLlmError(bad);
+    expect(type).toBe('no_user_query');
+    expect(isLlmErrorRecoverable(new Error(bad), bad, type)).toBe(false);
+  });
+
+  it('auth_error остаётся невосстановимым даже при упоминании internal server error', () => {
+    const bad = 'Bad request: {"detail":"Internal Server Error"} 401 Unauthorized';
+    const type = classifyLlmError(bad);
+    expect(type).toBe('auth_error');
+    expect(isLlmErrorRecoverable(new Error(bad), bad, type)).toBe(false);
+  });
 });
 
 describe('router.remote_auth_expired — истёкшая сессия гибрида', () => {

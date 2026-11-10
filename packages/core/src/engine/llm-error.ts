@@ -29,6 +29,12 @@ export function classifyLlmError(errMsg: string): string {
   if (lower.includes('context length') || lower.includes('too long')) return 'context_length';
   if (lower.includes('401') || lower.includes('403') || lower.includes('auth')) return 'auth_error';
   if (lower.includes('model') && (lower.includes('not found') || lower.includes('invalid'))) return 'model_not_found';
+  // Провайдер-шлюз (LiteLLM-совместимый) отдаёт HTTP 400 с телом
+  // `{"detail":"Internal Server Error (request_id: …)"}` — это отказ СЕРВЕРНОЙ
+  // стороны (упал апстрим/модель), а не некорректный запрос. Проверка стоит
+  // последней: более специфичные признаки (context_length/auth/model) выше
+  // побеждают.
+  if (lower.includes('internal server error')) return 'server_error';
   return 'unknown';
 }
 
@@ -112,7 +118,11 @@ export const MAX_DOOM_LOOP_COUNT = 3;
  * нет. Приоритеты:
  *   1. ContextLengthExceededError (по классу) — невосполнима.
  *   2. Явно переданный `errorType` из UNRECOVERABLE_TYPES — невосполнима.
- *   3. Иначе — по подстрокам UNRECOVERABLE_PATTERNS в
+ *   3. `errorType === 'server_error'` — ВОССТАНОВИМА: серверный отказ (5xx либо
+ *      400 с телом «Internal Server Error») семантически важнее подстрочной
+ *      проверки — префикс «Bad request: » от провайдер-слоя гасил бы ретрай.
+ *   4. Тело с «internal server error» без переданного типа — тоже серверный сбой.
+ *   5. Иначе — по подстрокам UNRECOVERABLE_PATTERNS в
  *      `errMsg ?? error.message ?? String(error)`.
  */
 export function isLlmErrorRecoverable(error: unknown, errMsg?: string, errorType?: string): boolean {
@@ -126,5 +136,14 @@ export function isLlmErrorRecoverable(error: unknown, errMsg?: string, errorType
   if (errorType && UNRECOVERABLE_TYPES.includes(errorType)) return false;
   const raw = errMsg ?? (error instanceof Error ? error.message : String(error));
   const lower = raw.toLowerCase();
+  // Серверный сбой (5xx либо 400 с телом «Internal Server Error») — ВОССТАНОВИМО,
+  // и семантический тип здесь важнее тупой проверки подстрок. Иначе префикс
+  // «Bad request: », который провайдер-слой добавляет ЛЮБОМУ 400
+  // (`providers/openai.ts:_handleErrors`), гасил ретрай даже там, где отказ
+  // серверный: сабагент/ход умирал без повтора, теряя накопленную работу.
+  if (errorType === 'server_error') return true;
+  // Тело «Internal Server Error» без переданного типа (вызывающий не посчитал
+  // errorType) — тоже серверный сбой: ретрай помогает.
+  if (lower.includes('internal server error')) return true;
   return !UNRECOVERABLE_PATTERNS.some((p) => lower.includes(p));
 }

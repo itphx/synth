@@ -239,6 +239,18 @@
   тулами `plan_*`/`todo_*`, не JSON-блоком в ответе модели (ADR-039).
 - Ошибки LLM — через `classifyLlmError`/`isLlmErrorRecoverable`
   (`engine/llm-error.ts`); строки движка — по ключам `shared/i18n` (ADR-041).
+  **Серверный сбой в 400-обёртке — восстановимо.** Провайдер-слой добавляет
+  префикс `Bad request: ` **любому** HTTP 400 (`providers/openai.ts:_handleErrors`),
+  а шлюз (LiteLLM-совместимый) отдаёт 400 с телом
+  `{"detail":"Internal Server Error (request_id: …)"}` — это падение апстрима, не
+  некорректный запрос. `classifyLlmError` узнаёт `internal server error` →
+  `server_error`, а `isLlmErrorRecoverable` отдаёт приоритет **типу** над
+  подстрочной проверкой `UNRECOVERABLE_PATTERNS` (иначе `bad request` гасил бы
+  ретрай). Клиентские 400 (`no_user_query`, `validation`, `context_length`,
+  `auth_error`) остаются невосстановимыми. Ретрай: 3 попытки, backoff 5/15/30 с
+  (`LLM_MAX_ATTEMPTS`/`LLM_RETRY_DELAYS_MS`) — сабагент публикует `subagent.retry`,
+  основная сессия — `stream.retry` (+ персистентный `session.retry`, переживает
+  reload).
 - События сессии — локальный `EventBus`; UI слушает через EventHub/TransportClient
   (`/ws/events`) с SSE-фоллбеком (ADR-008/009/024).
 - **Приём и наблюдение разведены (ADR-118).** `POST /api/v2/sessions/:id/prompt` **только
