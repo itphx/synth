@@ -271,7 +271,9 @@ export function createUpdateRoutes(
 
         const child = spawn(
           'npm',
-          ['install', '-g', `${PACKAGE_NAME}@${target}`, '--registry', registry],
+          // Scoped-ключ, не `--registry`: публичные зависимости должны ставиться
+          // из реестра по умолчанию (в Gitea их нет — иначе 404).
+          ['install', '-g', `${PACKAGE_NAME}@${target}`, `--@itphx:registry=${registry}`],
           { stdio: ['ignore', 'pipe', 'pipe'], env: { ...env } },
         );
 

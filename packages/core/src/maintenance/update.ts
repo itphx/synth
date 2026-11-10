@@ -132,10 +132,20 @@ function _normalizeTarget(raw: string): string | null {
   return isSemver(value) ? value : null;
 }
 
-/** Аргументы `npm install` (без shell): пакет, версия, опционально реестр. */
-function _installArgs(version: string, registry: string, includeRegistry: boolean): string[] {
+/**
+ * Аргументы `npm install` (без shell): пакет, версия, опционально реестр.
+ *
+ * Реестр задаётся **scoped-ключом** `--@itphx:registry`, а не `--registry`:
+ * иначе npm тянет из беты/зеркала и публичные зависимости (`hono`, `commander`…)
+ * и падает с 404 — в реестре Gitea их нет.
+ */
+export function buildUpdateInstallArgs(
+  version: string,
+  registry: string,
+  includeRegistry: boolean,
+): string[] {
   const args = ['install', '-g', `${PACKAGE_NAME}@${version}`];
-  if (includeRegistry) args.push('--registry', registry);
+  if (includeRegistry) args.push(`--@itphx:registry=${registry}`);
   return args;
 }
 
@@ -143,7 +153,7 @@ function _installArgs(version: string, registry: string, includeRegistry: boolea
 function _defaultInstall(version: string, registry: string): Promise<number> {
   const includeRegistry = registry !== DEFAULT_STABLE_REGISTRY;
   return new Promise<number>((resolveCode, reject) => {
-    const child = spawn('npm', _installArgs(version, registry, includeRegistry), {
+    const child = spawn('npm', buildUpdateInstallArgs(version, registry, includeRegistry), {
       stdio: 'inherit',
       env: { ...process.env },
     });
@@ -243,7 +253,7 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
     current: resolveUpdateChannel(current),
     target: resolveUpdateChannel(target),
   });
-  const installCommand = `npm ${_installArgs(target, registry, includeRegistry).join(' ')}`;
+  const installCommand = `npm ${buildUpdateInstallArgs(target, registry, includeRegistry).join(' ')}`;
 
   // 4. `--dry-run` — печать плана, установка не запускается, аудита нет.
   if (dryRun) {

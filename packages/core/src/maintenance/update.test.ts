@@ -5,7 +5,30 @@
 import { describe, expect, it } from 'vitest';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
-import { runUpdateCommand } from './update.js';
+import { buildUpdateInstallArgs, runUpdateCommand } from './update.js';
+
+/** ADR-133: реестр канала задаётся scoped-ключом, зависимости — из npm по умолчанию. */
+describe('buildUpdateInstallArgs (ADR-133)', () => {
+  it('стабильный реестр по умолчанию — без флага реестра', () => {
+    expect(buildUpdateInstallArgs('1.2.3', 'https://registry.npmjs.org', false)).toEqual([
+      'install',
+      '-g',
+      '@itphx/synth@1.2.3',
+    ]);
+  });
+
+  it('бета-канал — один scoped-аргумент --@itphx:registry=<url>', () => {
+    const args = buildUpdateInstallArgs('1.2.3-beta.1', 'https://git.example/npm', true);
+    expect(args).toEqual([
+      'install',
+      '-g',
+      '@itphx/synth@1.2.3-beta.1',
+      '--@itphx:registry=https://git.example/npm',
+    ]);
+    // `--registry` сломал бы установку: публичные зависимости в Gitea отсутствуют.
+    expect(args).not.toContain('--registry');
+  });
+});
 
 /** Собирает вывод `log`/`error` в массивы. */
 function capture(): { logs: string[]; errors: string[]; log: (m: string) => void; error: (m: string) => void } {
