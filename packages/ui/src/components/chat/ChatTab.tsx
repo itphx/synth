@@ -9,6 +9,7 @@ import { useTransportStore, applyHistoryPage, restoreLiveTurnFromSession } from 
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
 import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
 import { stickyNoteErrorKey, useStickyNotesLimits } from '@/lib/api/stickyNotesLimits'
+import { restorePendingPermissions, restorePendingQuestions } from '@/lib/pendingRestore'
 import { isQueueChangedError } from '@/lib/api/queue'
 import { attachmentThumbnailUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
@@ -276,6 +277,24 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
     load()
     return () => { cancelled = true }
+  }, [sessionId])
+
+  /**
+   * Восстановление незакрытых запросов сессии: подтверждения прав
+   * (`permission.asked`) и вопросы пользователю (`user_question.asked`)
+   * приходят только live-событиями. После перезагрузки страницы (или
+   * протухшей аутентификации) эти события уже прошли — клиент о них не
+   * знает, и карточка/док пропадают: ход висит до ask-таймаута.
+   *
+   * Точка восстановления — здесь, а не в `PermissionRequestBar`/`QuestionDock`:
+   * оба смонтированы условно (`!inputExpanded && !isSubagent`), поэтому при
+   * развёрнутом композере эффект восстановления не выполнялся вовсе.
+   *
+   * Ошибка загрузки — тихая (запрос покажут live-события).
+   */
+  useEffect(() => {
+    void restorePendingPermissions(sessionId)
+    void restorePendingQuestions(sessionId)
   }, [sessionId])
 
   /**

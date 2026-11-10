@@ -52,7 +52,7 @@ const EXPECTED_API_METHODS = [
   'getWebhookDeliveries', 'getWebhookSubscription', 'getWebhookSubscriptions', 'getWorkspacePolicy',
   'getWorkspaceRoot', 'getWorkspaceSetting', 'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate',
   'list', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings', 'listMemoryFacts',
-  'listMemoryIndexes', 'listPipelineRuns', 'listPipelineRunsPage', 'listPluginAudit', 'listPlugins',
+  'listMemoryIndexes', 'listPendingPermissions', 'listPipelineRuns', 'listPipelineRunsPage', 'listPluginAudit', 'listPlugins',
   'listProcesses', 'listSshKeys', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'moveProjectPlanItem', 'patchSessionMode', 'permissionReply', 'pinMessage', 'probeMcpServer', 'probeRawFile',
   'pruneWorktrees', 'publishProject', 'publishProjectPipeline', 'putProjectInvariants', 'putSkillFile',
@@ -86,7 +86,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (395)', () => {
+  it('набор методов совпадает с зафиксированным (397)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

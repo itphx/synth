@@ -4,6 +4,7 @@ import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
+import { restorePendingQuestions } from '@/lib/pendingRestore'
 import { useQuestionStore, pendingFor } from '@/stores/questionStore'
 import { formatRemaining } from '@/lib/formatDuration'
 import { cn } from '@/lib/utils'
@@ -11,9 +12,6 @@ import { cn } from '@/lib/utils'
 interface QuestionDockProps {
   sessionId: string
 }
-
-/** Сколько вопросов загружаем при восстановлении (сервер: максимум 200). */
-const PENDING_LIMIT = 50
 
 /** Выбранные значения вариантов по индексу вопроса. */
 type SelectionMap = Record<number, string[]>
@@ -77,24 +75,11 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
 
   // Восстановление после перезагрузки: pending-вопросы сессии с сервера.
   // Ошибка загрузки — тихая (событие/следующая попытка покажут вопрос).
+  // Основная точка восстановления — `ChatTab` (смонтирован всегда, в отличие
+  // от дока): док размонтирован при развёрнутом композере, и запрос не должен
+  // «теряться» только из-за этого.
   useEffect(() => {
-    let cancelled = false
-    synthApi
-      .list(sessionId, { status: 'pending', limit: PENDING_LIMIT })
-      .then((res) => {
-        if (cancelled) return
-        const fetched = res.questions ?? []
-        // Вопрос, пришедший событием `user_question.asked` пока идёт в сети —
-        // сохраняем его, иначе он пропадёт из дока.
-        const known = new Set(fetched.map((q) => q.id))
-        const local = (useQuestionStore.getState().bySession[sessionId] ?? [])
-          .filter((q) => q.status === 'pending' && !known.has(q.id))
-        useQuestionStore.getState().setAll(sessionId, [...fetched, ...local])
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
+    void restorePendingQuestions(sessionId)
   }, [sessionId])
 
   // Новый вопрос — новые ответы (шаги/выборы не переносятся между записями).
@@ -123,6 +108,10 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
   const questions: QuestionItem[] = record?.questions ?? []
   const total = questions.length
   const current = questions[step]
+  /** Текст «своего ответа» текущего шага. */
+  const customText = custom[step] ?? ''
+  /** Раскрыто ли поле «свой ответ» на текущем шаге. */
+  const customVisible = customOpen[step] ?? false
 
   /** Ответ на вопрос по индексу: выбранные значения + свой ответ. */
   const answerFor = useCallback(
@@ -242,6 +231,9 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
   useEffect(() => {
     if (!record) return
     const onKeyDown = (event: KeyboardEvent) => {
+      // IME-композиция (китайский/японский/корейский ввод): Enter завершает
+      // композицию, а не отправляет ответ.
+      if (event.isComposing) return
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
         event.preventDefault()
         void primaryRef.current()
@@ -260,11 +252,25 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [record])
 
+  /**
+   * Поле «свой ответ» — многострочное: авто-рост под содержимое
+   * (по образцу композера чата, `ChatInput.autoResize`).
+   */
+  const customRef = useRef<HTMLTextAreaElement | null>(null)
+  const autoResizeCustom = useCallback(() => {
+    const el = customRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+  }, [])
+
+  useEffect(() => {
+    autoResizeCustom()
+  }, [customText, step, customVisible, autoResizeCustom])
+
   if (!record || !current) return null
 
   const selectedValues = selected[step] ?? []
-  const customText = custom[step] ?? ''
-  const customVisible = customOpen[step] ?? false
 
   /** Текст ответа для шага проверки: label варианта, иначе сам ответ. */
   const answerText = (index: number): string => {
@@ -421,7 +427,7 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
                       <div className="text-xs font-medium text-foreground break-words">
                         {item.header}
                       </div>
-                      <div className="text-xs text-muted-foreground break-words">
+                      <div className="text-xs text-muted-foreground whitespace-pre-wrap break-words">
                         {answerText(index)}
                       </div>
                     </div>
@@ -534,12 +540,13 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
                 {t('question.dock.custom')}
               </button>
               {customVisible && (
-                <input
-                  type="text"
+                <textarea
+                  ref={customRef}
+                  rows={2}
                   value={customText}
                   onChange={(e) => handleCustomChange(step, e.target.value, !!current.multiple)}
-                  placeholder={t('question.dock.custom')}
-                  className="w-full rounded border border-border/60 bg-surface-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary/50"
+                  placeholder={t('question.dock.customPlaceholder')}
+                  className="w-full min-h-[1.25rem] resize-none rounded border border-border/60 bg-surface-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary/50"
                 />
               )}
             </div>

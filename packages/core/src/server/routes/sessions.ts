@@ -67,7 +67,7 @@ import { makeMediaPart, appendMediaPlaceholders } from '@itphx/synth-shared';
 import type { Part } from '@itphx/synth-shared';
 // ADR-106 Ф3 / ADR-005: HTTP-ответ на подтверждение (`permission_reply` без WS)
 // принимает решение через тот же реестр подтверждений.
-import type { ApprovalRegistry } from '../../engine/permission/approval.js';
+import type { ApprovalRegistry, PendingApproval } from '../../engine/permission/approval.js';
 import type { AuthorityPrincipal } from '@itphx/synth-shared';
 
 const LOCAL_USER_ID = 'local';
@@ -167,6 +167,36 @@ function selectMessagePage(
 
 /** Дефолтные лимиты заметок сессии (совпадают со схемой `stickyNotesLimitsSchema`). */
 const DEFAULT_STICKY_NOTE_LIMITS: StickyNotesLimits = { maxCount: 50, maxChars: 2000 };
+
+/**
+ * DTO ожидающего подтверждения (ADR-029) — восстановление полосы
+ * подтверждения после перезагрузки страницы.
+ *
+ * Формат — **snake_case, как payload события `permission.asked`**
+ * (`approval_id`/`tool`/`arguments`/`reason`/`ask_timeout_ms`), чтобы клиент
+ * переиспользовал разбор карточки. Дополнительно:
+ * - `asked_at` — ISO-8601 момент публикации запроса (от него клиент считает
+ *   остаток таймера: `asked_at + ask_timeout_ms`);
+ * - `held` — пользователь нажал «Остановить таймер» (`permission.hold`):
+ *   запрос живёт до ответа, таймер не ставится.
+ *
+ * `preview`/`save` — **только если они есть** в запросе (аддитивно, как в
+ * событии `permission.asked`).
+ */
+function toPendingPermissionDto(pending: PendingApproval): Record<string, unknown> {
+  const { request } = pending;
+  return {
+    approval_id: request.approvalId,
+    tool: request.toolName,
+    arguments: request.arguments,
+    reason: request.reason,
+    asked_at: pending.askedAt,
+    ask_timeout_ms: pending.timeoutMs,
+    held: pending.held,
+    ...(request.preview ? { preview: request.preview } : {}),
+    ...(request.save ? { save: request.save } : {}),
+  };
+}
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -2836,6 +2866,41 @@ export function createSessionRoutes(
       digest: claim.binding?.digest,
     });
     return c.json({ status: 'ok', action });
+  });
+
+  // GET /api/v2/sessions/:id/permissions — ожидающие ответа подтверждения
+  // сессии (ADR-029).
+  //
+  // Зачем: запрос подтверждения (`permission.asked`) существует только как
+  // live-событие — после перезагрузки страницы (или протухшей аутентификации)
+  // клиент ничего не знает: карточка подтверждения пропадает, а инструмент
+  // висит до ask-таймаута. Этот эндпоинт — источник истины для восстановления
+  // карточки: тот же снимок запроса, что уходил в событии.
+  //
+  // Формат ответа — snake_case, как payload события `permission.asked`
+  // (`approval_id`/`tool`/`arguments`/`reason`/`ask_timeout_ms`), чтобы клиент
+  // переиспользовал разбор. Дополнительно `asked_at` (ISO-8601 — от него
+  // клиент считает остаток таймера) и `held` (пользователь нажал «Остановить
+  // таймер» — запрос живёт до ответа, таймер не ставится).
+  //
+  // Доступ — граничный prefix-guard (`/:id/*`, вид доступа `read` из метода);
+  // в обработчике проверок нет (инвариант 16).
+  app.get('/:id/permissions', auth.requireAuth, scoped('sessions:read'), async (c) => {
+    const id = c.req.param('id');
+    // Гибрид: ожидание живёт на стороне сессии — форвард на удалённый backend
+    // (права/валидация — на удалённой стороне, как у прочих форвардов).
+    const forwarded = await forwardRemoteSession(
+      c,
+      id,
+      (client, localId) => client.listSessionPermissions(localId),
+      (result) => {
+        const dto = (result ?? {}) as Record<string, unknown>;
+        return { ...dto, permissions: Array.isArray(dto.permissions) ? dto.permissions : [] };
+      },
+    );
+    if (forwarded) return forwarded;
+    const pending = orchestrator.listPendingApprovals(id);
+    return c.json({ permissions: pending.map(toPendingPermissionDto) });
   });
 
   // POST /api/v2/sessions/:id/background — перевести идущие **блокирующие**

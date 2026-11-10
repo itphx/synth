@@ -13,6 +13,11 @@ import type { PromptAcceptedResponse, SessionMode, SteerMode } from '@itphx/synt
 import type { TodoPriority, TodoStatus } from '@itphx/synth-shared/types'
 import type { EntityOrigin } from './common'
 import { BASE_URL, fetchJSON } from './base'
+import {
+  PERMISSION_ASK_TIMEOUT_MS,
+  parsePermissionPreview,
+  type PermissionRequest,
+} from '@/stores/permissionStore'
 
 export interface SessionData {
   id: string
@@ -185,6 +190,61 @@ export interface BackgroundSessionResponse {
   sessionId: string
   detached: BackgroundDetachItem[]
   failed?: BackgroundDetachFailure[]
+}
+
+/**
+ * Ожидающее ответа подтверждение прав — DTO `GET /sessions/:id/permissions`.
+ *
+ * Snake_case — как payload события `permission.asked` (ADR-029), чтобы клиент
+ * переиспользовал разбор. `asked_at` (ISO-8601) — момент публикации запроса,
+ * от него считается остаток таймера; `held` — пользователь остановил таймер
+ * (запрос живёт до ответа, таймер ставить нельзя).
+ */
+export interface PendingPermissionDto {
+  approval_id?: string
+  tool?: string
+  arguments?: Record<string, unknown> | null
+  reason?: string | null
+  asked_at?: string | null
+  ask_timeout_ms?: number | null
+  held?: boolean | null
+  /** Превью изменений (аддитивно) — разбирается `parsePermissionPreview`. */
+  preview?: unknown
+  /** Паттерны shell-гранта, которые будут разрешены в сессии (аддитивно). */
+  save?: string[] | null
+}
+
+/**
+ * Разбор DTO ожидающего подтверждения в запись стора (`PermissionRequest`).
+ *
+ * `null` — запись без `approval_id` (ответ сервера битый): пропускаем её,
+ * чтобы в очереди не появилась карточка, на которую нельзя ответить.
+ */
+function toPermissionRequest(dto: PendingPermissionDto): PermissionRequest | null {
+  const approvalId = typeof dto.approval_id === 'string' ? dto.approval_id.trim() : ''
+  if (!approvalId) return null
+
+  const preview = parsePermissionPreview(dto.preview)
+  const save = Array.isArray(dto.save)
+    ? dto.save.filter((item): item is string => typeof item === 'string')
+    : undefined
+  const args = dto.arguments && typeof dto.arguments === 'object' ? dto.arguments : {}
+
+  return {
+    approvalId,
+    toolName: dto.tool || 'tool',
+    params: args as Record<string, unknown>,
+    reason: dto.reason ?? '',
+    // Момент публикации запроса: без него остаток таймера не считается —
+    // отдаём «сейчас» (запрос живёт полный срок, как будто пришёл событием).
+    askedAt: dto.asked_at || new Date().toISOString(),
+    // `0` — «без таймаута» (сервер не отклоняет запрос по времени) — значение
+    // сохраняется как есть; отсутствие поля — дефолт ask-таймаута.
+    timeoutMs: dto.ask_timeout_ms ?? PERMISSION_ASK_TIMEOUT_MS,
+    ...(dto.held ? { held: true } : {}),
+    ...(preview ? { preview } : {}),
+    ...(save ? { save } : {}),
+  }
 }
 
 /** ADR-070 §2.5: ответ GET /sessions/:id/prompt — состав системного промпта. */
@@ -488,6 +548,33 @@ export const sessionsApi = {
         body: JSON.stringify(body),
       },
     )
+  },
+
+  /**
+   * Ожидающие ответа подтверждения прав сессии
+   * (`GET /sessions/:id/permissions`) — восстановление карточки после
+   * перезагрузки страницы (ADR-029).
+   *
+   * Запрос подтверждения живёт только как live-событие `permission.asked`:
+   * после перезагрузки страницы (или протухшей аутентификации) клиент о нём
+   * ничего не знает — карточка пропадает, а инструмент висит до ask-таймаута.
+   * Этот снимок — источник истины для восстановления.
+   *
+   * Формат ответа — snake_case, как payload события `permission.asked`:
+   * `approval_id`/`tool`/`arguments`/`reason`/`ask_timeout_ms`, плюс
+   * `asked_at` (ISO-8601 — от него клиент считает остаток таймера) и `held`
+   * (пользователь остановил таймер — запрос живёт до ответа).
+   */
+  async listPendingPermissions(sessionId: string): Promise<PermissionRequest[]> {
+    const res = await fetchJSON<{ permissions?: PendingPermissionDto[] }>(
+      `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/permissions`,
+    )
+    const out: PermissionRequest[] = []
+    for (const dto of res.permissions ?? []) {
+      const request = toPermissionRequest(dto)
+      if (request) out.push(request)
+    }
+    return out
   },
 
   /**

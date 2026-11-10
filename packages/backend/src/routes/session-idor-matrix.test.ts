@@ -169,6 +169,10 @@ const MATRIX: Row[] = [
   // HTTP-ответ на подтверждение (SSE/не-WS): мутация сессии (право изменения
   // содержимого проекта, VIEWER → 403). Пустое тело → 400 VALIDATION_ERROR.
   row('sessions', 'POST', '/:id/permissions/:approvalId', { status: 400 }),
+  // Восстановление полосы подтверждения после перезагрузки страницы
+  // (ADR-029): список ожидающих ответа подтверждений — **чтение** сессии
+  // (владелец/участник проекта с правом чтения/ADMIN/LEAD).
+  row('sessions', 'GET', '/:id/permissions'),
 
   // --- ADR-115: вложения сообщений (core-фабрика внутри приложения сессий) ---
   // Чтение байтов — правило чтения сессии; неизвестная часть → 404 (объект не
@@ -383,6 +387,9 @@ function createMockOrchestrator() {
     getModelPricing: vi.fn().mockReturnValue(null),
     resolveMcpServers: vi.fn().mockResolvedValue([]),
     startSubagentResume: vi.fn().mockResolvedValue({ status: 'resumed' }),
+    // ADR-029: восстановление полосы подтверждения после перезагрузки
+    // страницы — `GET /:id/permissions` отдаёт список ожиданий сессии.
+    listPendingApprovals: vi.fn().mockReturnValue([]),
     // ADR-111 §detach: реестр активных (блокирующих) прогонов сессии —
     // `POST /:id/background` без зарегистрированных прогонов отвечает 200
     // пустой сводкой (нечего переводить).

@@ -113,6 +113,9 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('GET', '/api/v2/sessions/:id/prompt', G_SESSION, [404]),
   r('GET', '/api/v2/sessions/:id/memory', G_SESSION, [404]),
   r('GET', '/api/v2/sessions/:id/questions', G_SESSION, [404]),
+  // Восстановление полосы подтверждения после перезагрузки страницы (ADR-029):
+  // список ожидающих ответа подтверждений — чтение сессии (тот же prefix-guard).
+  r('GET', '/api/v2/sessions/:id/permissions', G_SESSION, [404]),
   r('GET', '/api/v2/sessions/:id/stats', G_SESSION, [404]),
   r('GET', '/api/v2/sessions/:id/messages', G_SESSION, [404]),
   r('GET', '/api/v2/sessions/:id/messages/:messageId', G_SESSION, [404]),

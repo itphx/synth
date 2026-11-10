@@ -61,6 +61,7 @@ import {
   type ApprovalRegistry,
   type ApprovalRequest,
   type ApprovalWaiter,
+  type PendingApproval,
 } from './permission/approval.js';
 import { buildPermissionPreview } from './permission/preview.js';
 import { emptyPermissionConfig } from './permission/derive.js';
@@ -1864,6 +1865,21 @@ export class ChatOrchestrator {
    */
   setDefaultPermissionTimeout(askTimeoutMs: number): void {
     this._permissionConfig = { ...this._permissionConfig, askTimeoutMs };
+  }
+
+  /**
+   * ADR-029: ожидающие ответа подтверждения сессии.
+   *
+   * Источник истины для восстановления полосы подтверждения после
+   * перезагрузки страницы: HTTP-роут `GET /api/v2/sessions/:id/permissions`
+   * отдаёт список ожиданий сессии (`PendingApproval`).
+   *
+   * Состояние — **в памяти процесса**: после рестарта инстанса ожидания
+   * теряются (осознанное ограничение; персистентность — отдельное решение
+   * владельца: ADR + миграции).
+   */
+  listPendingApprovals(sessionId: string): PendingApproval[] {
+    return this._approvalManager.listPending(sessionId);
   }
 
   /**
@@ -7934,7 +7950,8 @@ export class ChatOrchestrator {
   /** Строит permission-конфиг с добавленным грантом для заданной базы правил. */
   /**
    * Shell-грант паттернами (`execute_shell: { "git status *": "allow" }`).
-   * Строка `allow` (весь инструмент) не понижается.
+   * Строка `allow` (весь инструмент) не понижается; строка `deny` — грант
+   * не выдаётся вовсе (запрет одобрением не перебивается).
    */
   private _applyShellAllow(
     cfg: PermissionConfig | undefined,
@@ -7945,10 +7962,16 @@ export class ChatOrchestrator {
       askTimeoutMs: this._permissionConfig.askTimeoutMs,
     };
     const rules = { ...base.rules };
-    if (rules.execute_shell !== 'allow') {
-      const existing = (typeof rules.execute_shell === 'object' && rules.execute_shell)
-        ? { ...(rules.execute_shell as Record<string, string>) }
+    const current = rules.execute_shell;
+    if (current !== 'allow' && current !== 'deny') {
+      const existing = (typeof current === 'object' && current)
+        ? { ...(current as Record<string, string>) }
         : {};
+      // Строковое `ask` при конвертации в объект теряло catch-all: неодобренные
+      // команды проваливались в дефолт `allow` — это шире одобренного.
+      // Поэтому переносим `ask` в `'*': 'ask'`: одобренные паттерны
+      // разрешены, остальные спрашиваются дальше.
+      if (current === 'ask') existing['*'] = 'ask';
       for (const pattern of patterns) existing[pattern] = 'allow';
       rules.execute_shell = existing as PermissionRule;
     }

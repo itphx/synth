@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ChatOrchestrator } from './orchestrator.js';
 import { PermissionEvaluator } from './permission/evaluator.js';
+import { shellSavePatterns } from './security/shell-guard.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import type { ShellPolicy } from './security/shell-guard.js';
 
@@ -41,6 +42,46 @@ describe('shell-грант сессии (оркестратор)', () => {
       askTimeoutMs: 30_000,
     }, ['cat *']);
     expect(keep.rules.execute_shell).toBe('allow');
+  });
+
+  it('_applyShellAllow: строковый ask сохраняет catch-all, deny не перебивается', () => {
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+    };
+    // Строковый `ask` → объект с catch-all: неодобренные команды спрашиваются.
+    const merged = proto._applyShellAllow.call(ctx, {
+      rules: { execute_shell: 'ask' },
+      askTimeoutMs: 30_000,
+    }, ['ls *']);
+    expect(merged.rules.execute_shell).toEqual({ '*': 'ask', 'ls *': 'allow' });
+
+    // `deny` грантом не перебивается.
+    const denied = proto._applyShellAllow.call(ctx, {
+      rules: { execute_shell: 'deny' },
+      askTimeoutMs: 30_000,
+    }, ['ls *']);
+    expect(denied.rules.execute_shell).toBe('deny');
+  });
+
+  it('грант из строкового ask: одобренная команда — allow, неодобренная — ask', () => {
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+    };
+    const merged = proto._applyShellAllow.call(ctx, {
+      rules: { execute_shell: 'ask' },
+      askTimeoutMs: 30_000,
+    }, ['ls *']);
+    const decision = (command: string) => new PermissionEvaluator(merged).check({
+      toolName: 'execute_shell',
+      params: { command },
+      workingDir: '/workspace/project',
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+      shellPolicy: SHELL_POLICY,
+    }).action;
+    expect(decision('ls -la')).toBe('allow');
+    expect(decision('rm -rf x')).toBe('ask');
   });
 
   it('нерезолвимая динамика: грант не выдаётся, конфиг не меняется и не сохраняется', async () => {
@@ -135,5 +176,29 @@ describe('shell-грант сессии (оркестратор)', () => {
       shellPolicy: SHELL_POLICY,
     });
     expect(decision.action).toBe('allow');
+  });
+
+  it('сценарий: одобрение `cd "$HOME" && ls -la` → повтор разрешён, чужая команда — ask', () => {
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+    };
+    const command = 'cd "$HOME" && ls -la';
+    const patterns = shellSavePatterns(command);
+    expect(patterns).toEqual(['cd *', 'ls *']);
+    const merged = proto._applyShellAllow.call(ctx, {
+      rules: { execute_shell: 'ask' },
+      askTimeoutMs: 30_000,
+    }, patterns ?? []);
+    const decision = (cmd: string) => new PermissionEvaluator(merged).check({
+      toolName: 'execute_shell',
+      params: { command: cmd },
+      workingDir: '/workspace/project',
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+      shellPolicy: SHELL_POLICY,
+    }).action;
+    expect(decision(command)).toBe('allow');
+    expect(decision('rm -rf x')).toBe('ask');
   });
 });

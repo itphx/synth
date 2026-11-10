@@ -1700,6 +1700,7 @@ export const dict = {
   // User questions (stage 1 roadmap 0.13 — block 1.3): dock above the composer.
   'question.dock.title': 'The agent asked a question',
   'question.dock.custom': 'Your own answer',
+  'question.dock.customPlaceholder': 'Your own answer — multiple lines allowed',
   'question.dock.submit': 'Answer',
   'question.dock.cancel': 'Cancel',
   'question.dock.next': 'Next',

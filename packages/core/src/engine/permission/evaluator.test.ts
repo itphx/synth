@@ -971,4 +971,50 @@ describe('PermissionEvaluator — сессионный shell-грант патт
     };
     expect(shellCheck('cat $X', cfg).action).toBe('ask');
   });
+
+  it('грант в execute_shell резолвится по команде, а не по пути cwd', () => {
+    const cfg: PermissionConfig = {
+      rules: { shell: 'ask', execute_shell: { 'ls *': 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    // Одобренная команда — allow: правило по имени тула перехватывает
+    // команду раньше группового правила `shell`.
+    expect(shellCheck('ls -la', cfg).action).toBe('allow');
+    // Неодобренная — доходит до группового правила и спрашивается.
+    expect(shellCheck('rm -rf x', cfg).action).toBe('ask');
+  });
+
+  it('catch-all строкового ask: неодобренная команда спрашивается', () => {
+    const cfg: PermissionConfig = {
+      rules: { execute_shell: { '*': 'ask', 'ls *': 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(shellCheck('ls -la', cfg).action).toBe('allow');
+    expect(shellCheck('rm -rf x', cfg).action).toBe('ask');
+  });
+
+  it('грант по команде не снимает гейт внешнего каталога', () => {
+    const cfg: PermissionConfig = {
+      rules: { shell: 'ask', execute_shell: { 'ls *': 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    const d = new PermissionEvaluator(cfg).check({
+      toolName: 'execute_shell',
+      params: { command: 'ls -la', cwd: '/elsewhere' },
+      workingDir: CWD,
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+      shellPolicy: SHELL_POLICY,
+    });
+    expect(d.action).toBe('ask');
+  });
+
+  it('правило execute_shell по путям (legacy) продолжает работать', () => {
+    const cfg: PermissionConfig = {
+      rules: { execute_shell: { [CWD]: 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(shellCheck('ls -la', cfg).action).toBe('allow');
+  });
 });

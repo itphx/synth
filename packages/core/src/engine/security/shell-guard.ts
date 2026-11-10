@@ -1925,6 +1925,12 @@ function resolveCdCwd(
       const resolved = tryResolvePath(values[0]!, cwd, env);
       if (resolved && resolved.source === 'literal') return { cwd: resolved.path };
     }
+    // Известные переменные окружения (`$HOME`, `${HOME}`, `$PWD`,
+    // `$SYNTH_DATA_DIR`) резолвим тем же путём, что и литерал: цель
+    // однозначна — спрашивать нечего. Неизвестная переменная, `$(...)` и
+    // backtick остаются ask (fail-closed).
+    const known = tryResolvePath(arg, cwd, env);
+    if (known && known.source === 'literal') return { cwd: known.path };
     return { ask: true, target: arg };
   }
   const resolved = tryResolvePath(arg, cwd, env);
@@ -2346,6 +2352,30 @@ function collectShellPatterns(
   return true;
 }
 
+/** Делимитеры heredoc в команде — закрывающая строка-делимитер не команда. */
+function heredocDelimiters(command: string): Set<string> {
+  const out = new Set<string>();
+  for (const line of command.split('\n')) {
+    const marker = findHeredocDelimiter(line);
+    if (marker) out.add(marker.delimiter);
+  }
+  return out;
+}
+
+/**
+ * Строка не является командой: пустая, комментарий/shebang, закрывающий
+ * делимитер heredoc или строка только из метасимволов (`[`, `]`, `}` и т.п.).
+ * Такие строки — текст скрипта, а не команды: в паттерны гранта они не
+ * попадают (иначе в панели одобрений копятся «EOF *», «#!/bin/bash *»).
+ */
+function isNonCommandSegment(segment: string, delimiters: ReadonlySet<string>): boolean {
+  const trimmed = segment.trim();
+  if (trimmed === '') return true;
+  if (trimmed.startsWith('#')) return true;
+  if (delimiters.has(trimmed)) return true;
+  return !/[A-Za-z0-9_]/.test(trimmed);
+}
+
 /**
  * Паттерны для сессионного shell-гранта (`{ "<pattern>": "allow" }`).
  * `null` — хотя бы одна команда нерезолвима (грант безопасно не выдаётся);
@@ -2354,7 +2384,13 @@ function collectShellPatterns(
 export function shellSavePatterns(command: string): string[] | null {
   const bindings = collectBindings(command);
   const out: string[] = [];
-  for (const segment of splitShellSegments(command)) {
+  // Тела heredoc (для shell/интерпретаторов) вырезаются, служебные строки
+  // (shebang, комментарии, закрывающий делимитер, только метасимволы)
+  // отсекаются — команды это только остальные строки.
+  const analyzed = stripHeredocBodies(command);
+  const delimiters = heredocDelimiters(command);
+  for (const segment of splitShellSegments(analyzed)) {
+    if (isNonCommandSegment(segment, delimiters)) continue;
     if (!collectShellPatterns(segment, bindings, out, 0)) return null;
   }
   const seen = new Set<string>();
@@ -2422,7 +2458,12 @@ export function isShellCommandGranted(
 
   const segments = splitShellSegments(command);
   if (segments.length === 0) return false;
+  // Служебные строки (shebang, комментарии, закрывающий делимитер heredoc,
+  // только метасимволы) — не команды: грант их не покрывает, как и
+  // `shellSavePatterns` их не выдаёт.
+  const delimiters = heredocDelimiters(command);
   for (const segment of segments) {
+    if (isNonCommandSegment(segment, delimiters)) continue;
     if (!grantedSegment(segment, 0)) return false;
   }
   return checked;

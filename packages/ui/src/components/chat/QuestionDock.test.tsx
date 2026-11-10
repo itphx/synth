@@ -85,9 +85,9 @@ function setupQuestions(records: QuestionRecord[] = [makeRecord()]): QuestionRec
   return records
 }
 
-/** Значение controlled-инпута в React (обход кэша значения на элементе). */
-function setInputValue(input: HTMLInputElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+/** Значение controlled-textarea в React (обход кэша значения на элементе). */
+function setTextareaValue(input: HTMLTextAreaElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!
   setter.call(input, value)
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
@@ -200,10 +200,10 @@ describe('QuestionDock (док вопросов агента над вводом
       customToggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    const input = container.querySelector('input[type="text"]') as HTMLInputElement
+    const input = container.querySelector('textarea') as HTMLTextAreaElement
     expect(input).toBeTruthy()
     await act(async () => {
-      setInputValue(input, 'мой вариант')
+      setTextareaValue(input, 'мой вариант')
     })
 
     // Выбор варианта снят.
@@ -623,13 +623,122 @@ describe('QuestionDock (док вопросов агента над вводом
     await act(async () => {
       customToggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    const input = container.querySelector('input[type="text"]') as HTMLInputElement
+    const input = container.querySelector('textarea') as HTMLTextAreaElement
 
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
 
     expect(mocks.cancel).not.toHaveBeenCalled()
+  })
+
+  it('поле «свой ответ» — textarea: перенос строки возможен, подсказка отдельная', async () => {
+    setupQuestions()
+    const container = await renderDock()
+
+    const customToggle = findButton(container, 'Свой ответ')
+    await act(async () => {
+      customToggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    const area = container.querySelector('textarea') as HTMLTextAreaElement
+    expect(area).toBeTruthy()
+    expect(area.tagName).toBe('TEXTAREA')
+    // Подпись кнопки и placeholder поля — разные строки.
+    expect(area.getAttribute('placeholder')).toBe('Свой ответ — можно несколько строк')
+  })
+
+  it('Enter в поле «свой ответ» — перенос строки: ответ не отправляется, текст не теряется', async () => {
+    setupQuestions()
+    const container = await renderDock()
+
+    const customToggle = findButton(container, 'Свой ответ')
+    await act(async () => {
+      customToggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const area = container.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => {
+      setTextareaValue(area, 'первая строка')
+    })
+
+    await act(async () => {
+      area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    // Ответ не отправлен, текст остался в поле.
+    expect(mocks.answer).not.toHaveBeenCalled()
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('первая строка')
+  })
+
+  it('перенос строки в «своём ответе» доезжает в answers без искажений', async () => {
+    setupQuestions()
+    const container = await renderDock()
+
+    const customToggle = findButton(container, 'Свой ответ')
+    await act(async () => {
+      customToggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const area = container.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => {
+      setTextareaValue(area, 'строка 1\nстрока 2')
+    })
+
+    const submit = findButton(container, 'Ответить')
+    await act(async () => {
+      submit!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(mocks.answer).toHaveBeenCalledWith(SESSION_ID, 'qst_1', [['строка 1\nстрока 2']])
+  })
+
+  it('Ctrl+Enter из поля «свой ответ» отправляет ответ', async () => {
+    setupQuestions()
+    const container = await renderDock()
+
+    const customToggle = findButton(container, 'Свой ответ')
+    await act(async () => {
+      customToggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const area = container.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => {
+      setTextareaValue(area, 'мой ответ')
+    })
+
+    await act(async () => {
+      area.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }),
+      )
+    })
+
+    expect(mocks.answer).toHaveBeenCalledWith(SESSION_ID, 'qst_1', [['мой ответ']])
+  })
+
+  it('Ctrl+Enter во время IME-композиции ответ не отправляет', async () => {
+    setupQuestions()
+    const container = await renderDock()
+
+    const customToggle = findButton(container, 'Свой ответ')
+    await act(async () => {
+      customToggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const area = container.querySelector('textarea') as HTMLTextAreaElement
+    // Ответ заполнен — иначе отправка и так была бы невозможна.
+    await act(async () => {
+      setTextareaValue(area, 'мой ответ')
+    })
+
+    await act(async () => {
+      area.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter',
+          ctrlKey: true,
+          isComposing: true,
+          bubbles: true,
+        }),
+      )
+    })
+
+    expect(mocks.answer).not.toHaveBeenCalled()
   })
 })
 

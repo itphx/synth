@@ -146,7 +146,7 @@ function QuestionAnswers({
             <div className="text-[0.6875rem] font-medium text-muted-foreground">{row.header}</div>
           )}
           <div className="font-medium text-foreground">{row.question}</div>
-          <div className="mt-0.5 text-muted-foreground">
+          <div className="mt-0.5 text-muted-foreground whitespace-pre-wrap">
             {row.answer || <span className="italic opacity-60">{emptyText}</span>}
           </div>
         </div>

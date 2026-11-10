@@ -731,7 +731,10 @@ html.pointer-coarse .question-dock button:not([role="switch"]) {
 
 html.device-phone .question-dock input:not([type="checkbox"]):not([type="radio"]),
 html.device-tablet .question-dock input:not([type="checkbox"]):not([type="radio"]),
-html.pointer-coarse .question-dock input:not([type="checkbox"]):not([type="radio"]) {
+html.pointer-coarse .question-dock input:not([type="checkbox"]):not([type="radio"]),
+html.device-phone .question-dock textarea,
+html.device-tablet .question-dock textarea,
+html.pointer-coarse .question-dock textarea {
   min-height: var(--control-height-touch);
 }
 

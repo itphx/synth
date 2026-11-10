@@ -60,6 +60,18 @@ interface PermissionStore {
   clearSession: (sessionId: string) => void
   /** «Остановить таймер»: снять UI-таймер для approvalId и пометить запрос как held. */
   holdRequest: (sessionId: string, approvalId: string) => void
+  /**
+   * Восстановление очереди по снимку с сервера (`GET /sessions/:id/permissions`).
+   *
+   * Слияние: записи снимка + локальные, которых в снимке нет (запрос пришёл
+   * событием `permission.asked`, но до сервера ещё не дошёл). Таймер для
+   * восстановленных записей ставится на **остаток** срока (`askedAt` +
+   * `timeoutMs` − сейчас), а не на полный `timeoutMs`: сервер при таймауте
+   * `permission.replied` не публикует, карточку снимает только локальный
+   * таймер — без остатка она «залипла» бы навсегда. `held`-запрос таймера не
+   * получает (живёт до ответа), истёкший (остаток ≤ 0) не добавляется.
+   */
+  setAll: (sessionId: string, requests: PermissionRequest[]) => void
 }
 
 /** Таймеры истечения по approval_id (вне состояния, чтобы не вызывать ре-рендеры). */
@@ -71,6 +83,39 @@ function clearExpiryTimer(approvalId: string): void {
     clearTimeout(timer)
     expiryTimers.delete(approvalId)
   }
+}
+
+/**
+ * Остаток до истечения запроса (мс).
+ *
+ * `null` — таймер не нужен: запрос `held` (пользователь остановил таймер) или
+ * `timeoutMs <= 0` (сервер не отклоняет запрос по времени — живёт до ответа).
+ * Иначе — остаток от момента публикации запроса (`askedAt`).
+ */
+function remainingMs(req: PermissionRequest, now: number): number | null {
+  if (req.held) return null
+  if (req.timeoutMs <= 0) return null
+  const asked = Date.parse(req.askedAt)
+  // Момент публикации неизвестен/не разобран — считаем от «сейчас»
+  // (запрос живёт полный срок, как будто пришёл событием).
+  const base = Number.isFinite(asked) ? asked : now
+  return base + req.timeoutMs - now
+}
+
+/**
+ * Поставить таймер истечения на остаток времени запроса.
+ *
+ * `false` — запрос уже истёк (остаток ≤ 0): в очередь его добавлять нельзя.
+ */
+function scheduleExpiry(sessionId: string, req: PermissionRequest, now: number): boolean {
+  const remaining = remainingMs(req, now)
+  clearExpiryTimer(req.approvalId)
+  if (remaining === null) return true
+  if (remaining <= 0) return false
+  expiryTimers.set(req.approvalId, setTimeout(() => {
+    usePermissionStore.getState().removeRequest(sessionId, req.approvalId)
+  }, remaining))
+  return true
 }
 
 export const usePermissionStore = create<PermissionStore>()((set, get) => ({
@@ -136,6 +181,40 @@ export const usePermissionStore = create<PermissionStore>()((set, get) => ({
     const next = requests.map((r) =>
       r.approvalId === approvalId ? { ...r, held: true } : r,
     )
+    set((s) => ({
+      requestsBySession: { ...s.requestsBySession, [sessionId]: next },
+    }))
+  },
+
+  setAll: (sessionId, requests) => {
+    const current = get().requestsBySession[sessionId] ?? []
+    const snapshotIds = new Set(requests.map((r) => r.approvalId))
+    const now = Date.now()
+
+    // Снимок сервера — источник истины по составу очереди и по времени:
+    // таймер каждой записи ставится на остаток её срока.
+    const next: PermissionRequest[] = []
+    for (const req of requests) {
+      // Истёкший запрос не восстанавливаем — сервер его уже отклонил.
+      if (!scheduleExpiry(sessionId, req, now)) continue
+      next.push(req)
+    }
+    // Локальные записи, которых в снимке нет: запрос пришёл событием
+    // `permission.asked`, но в снимок ещё не попал. Сохраняем — карточка
+    // не должна «прыгать» из-под пользователя.
+    for (const req of current) {
+      if (snapshotIds.has(req.approvalId)) continue
+      next.push(req)
+    }
+
+    if (next.length === 0) {
+      set((s) => {
+        const requestsBySession = { ...s.requestsBySession }
+        delete requestsBySession[sessionId]
+        return { requestsBySession }
+      })
+      return
+    }
     set((s) => ({
       requestsBySession: { ...s.requestsBySession, [sessionId]: next },
     }))

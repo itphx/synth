@@ -658,7 +658,7 @@ export {
   emptyPermissionConfig,
   getToolGroups,
 } from './engine/permission/index.js';
-export type { PermissionCheckInput, ApprovalRequest, ApprovalDecision } from './engine/permission/index.js';
+export type { PermissionCheckInput, ApprovalRequest, ApprovalDecision, PendingApproval } from './engine/permission/index.js';
 
 // ADR-106 Ф3: реестр подтверждений (привязка к ходу + носитель покрывающего гранта).
 export { ApprovalRegistry } from './engine/permission/approval.js';

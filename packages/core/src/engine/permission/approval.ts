@@ -107,6 +107,30 @@ export interface ApprovalWaiter {
 }
 
 /**
+ * Pending-запрос подтверждения: опубликован (`permission.asked`) и ждёт ответа.
+ *
+ * Снимок запроса на момент публикации — по нему UI восстанавливает полосу
+ * подтверждения после перезагрузки страницы (ADR-029): карточка должна быть
+ * та же, что была до перезагрузки (тул, аргументы, превью, причина).
+ */
+export interface PendingApproval {
+  /** Сессия, которой адресован запрос. */
+  sessionId: string;
+  /** Запрос подтверждения (аргументы тула, причина, превью, shell-паттерны). */
+  request: ApprovalRequest;
+  /** Таймаут ожидания ответа (мс); `0` — без авто-отклонения. */
+  timeoutMs: number;
+  /** Момент публикации запроса (ISO-8601) — от него считается остаток таймера. */
+  askedAt: string;
+  /**
+   * true — пользователь нажал «Остановить таймер» (`permission.hold`):
+   * авто-отклонение снято, запрос живёт до ответа. Восстановленная карточка
+   * не должна ставить свой таймер.
+   */
+  held: boolean;
+}
+
+/**
  * Внутреннее состояние ожидания (не часть публичного контракта).
  */
 interface WaiterState {
@@ -217,6 +241,20 @@ export function parsePermissionPrincipal(value: unknown): AuthorityPrincipal | u
  * каждому приходит независимо (свой `approval_id`).
  */
 export class PermissionApprovalManager {
+  /**
+   * Реестр ожидающих ответа запросов подтверждения (ADR-029).
+   *
+   * Ключ — `approvalId`, значение — снимок запроса (`PendingApproval`).
+   * Нужен для восстановления полосы подтверждения после перезагрузки
+   * страницы: HTTP-роут `GET /api/v2/sessions/:id/permissions` отдаёт список
+   * ожиданий сессии.
+   *
+   * Состояние — **в памяти процесса**: после рестарта инстанса ожидания
+   * теряются (осознанное ограничение; персистентность — отдельное решение
+   * владельца: ADR + миграции).
+   */
+  private readonly _pending = new Map<string, PendingApproval>();
+
   constructor(
     private readonly _eventBus: EventBus,
     private readonly _options: { registry?: ApprovalRegistry } = {},
@@ -304,6 +342,27 @@ export class PermissionApprovalManager {
     return waiter.decision;
   }
 
+  /**
+   * Ожидающие ответа подтверждения сессии (ADR-029).
+   *
+   * Источник истины для восстановления полосы подтверждения после
+   * перезагрузки страницы: HTTP-роут `GET /api/v2/sessions/:id/permissions`.
+   * Ответ/таймаут/отмена хода/каскадный отказ убирают запись — в списке её
+   * уже нет.
+   */
+  listPending(sessionId: string): PendingApproval[] {
+    const out: PendingApproval[] = [];
+    for (const item of this._pending.values()) {
+      if (item.sessionId === sessionId) out.push(item);
+    }
+    return out;
+  }
+
+  /** Ожидание подтверждения по `approvalId` (любая сессия). */
+  get(approvalId: string): PendingApproval | undefined {
+    return this._pending.get(approvalId);
+  }
+
   /** Ожидание, закрытое сразу (без публикации запроса). */
   private _closedWaiter(
     sessionId: string,
@@ -340,6 +399,9 @@ export class PermissionApprovalManager {
       state.unsubscribe();
       if (signal && state.abortListener) signal.removeEventListener('abort', state.abortListener);
       this._options.registry?.close(request.approvalId);
+      // Запрос больше не ожидает ответа — в списке pending его быть не должно
+      // (ответ/таймаут/отмена хода/каскадный отказ — любой путь через `finish`).
+      this._pending.delete(request.approvalId);
       resolveDecision(d);
     };
 
@@ -373,6 +435,10 @@ export class PermissionApprovalManager {
         if (!state.held) {
           state.held = true;
           if (state.timer) clearTimeout(state.timer);
+          // Восстановленная карточка не должна ставить свой таймер — запрос
+          // живёт до ответа (метка `held` уезжает в DTO восстановления).
+          const pending = this._pending.get(request.approvalId);
+          if (pending) pending.held = true;
         }
         return;
       }
@@ -429,6 +495,16 @@ export class PermissionApprovalManager {
     // ADR-106 Ф0/Ф3: привязка подтверждения регистрируется ДО публикации —
     // ответ мгновенного подписчика должен найти привязку.
     this._registerBinding(waiter);
+
+    // Реестр ожиданий: запрос появился в списке pending ДО публикации —
+    // восстановление после перезагрузки не должно его потерять.
+    this._pending.set(request.approvalId, {
+      sessionId,
+      request,
+      timeoutMs,
+      askedAt: new Date().toISOString(),
+      held: false,
+    });
 
     this._eventBus.publish(sessionId, 'permission.asked', {
       approval_id: request.approvalId,

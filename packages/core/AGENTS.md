@@ -637,7 +637,7 @@
   60 с, ключ — `Authorization`, 429 `RATE_LIMITED` + `Retry-After`) навешен в managed backend
   (`packages/backend/src/routes/sessions.ts`, import/import-batch/export/fork/merge); в
   standalone-core маршрутов импорта/экспорта нет, счётчиков не заводится.
-- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `GET/PATCH /:id/optimization*` (ADR-119) + `POST /:id/optimization/check|cancel-summarization` — вкладка «Контекст», настройки читает движок на core, поэтому маршруты обязаны жить в общей фабрике (в гибриде `remote:` форвардится клиентом); `GET/PUT /:id/mcp` — MCP-скоуп сессии (backend регистрирует свою, более строгую версию раньше); `GET /:id/secrets` — карта обфускации по праву раскрытия (`resolveCanRevealSecrets`); `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
+- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `GET/PATCH /:id/optimization*` (ADR-119) + `POST /:id/optimization/check|cancel-summarization` — вкладка «Контекст», настройки читает движок на core, поэтому маршруты обязаны жить в общей фабрике (в гибриде `remote:` форвардится клиентом); `GET/PUT /:id/mcp` — MCP-скоуп сессии (backend регистрирует свою, более строгую версию раньше); `GET /:id/secrets` — карта обфускации по праву раскрытия (`resolveCanRevealSecrets`); `GET /:id/permissions` — ожидающие ответа подтверждения сессии (ADR-029; восстановление полосы подтверждения после перезагрузки страницы; источник — seam `ChatOrchestrator.listPendingApprovals` → `PermissionApprovalManager.listPending`, состояние в памяти процесса; в гибриде `remote:` форвардится клиентом); `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
   `project-transfer` (publish/fork-local + `GET /:id/publish/progress` — прогресс публикации;
   реестр `remote/transfer-progress.ts`, in-memory, ключ `userId:projectId`, TTL 10 мин),
   `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
@@ -1191,7 +1191,14 @@
 - `engine/permission/*` — permissions (`PERMISSION_GROUPS`; группа `plugin` — ADR-090 Ф3в: матчится
   **по источнику** `ToolSource` (`getToolGroups(toolName, capabilities, source?)`,
   `PermissionCheckInput.toolSource`), а не по capability, — плагин с `file_read`/`search` не
-  «выписывается» из правила `plugin`); `engine/security/*` — injection/shell/protected paths
+  «выписывается» из правила `plugin`); **реестр ожиданий подтверждения** (`approval.ts`:
+  `PermissionApprovalManager._pending` → `PendingApproval` — снимок запроса на момент публикации;
+  `listPending(sessionId)`/`get(approvalId)`) — источник истины для восстановления полосы
+  подтверждения после перезагрузки страницы: HTTP `GET /api/v2/sessions/:id/permissions`
+  (`server/routes/sessions.ts`) отдаёт список ожиданий; seam оркестратора —
+  `ChatOrchestrator.listPendingApprovals(sessionId)`. Состояние — **в памяти процесса**:
+  после рестарта инстанса ожидания теряются (персистентность — отдельное решение владельца:
+  ADR + миграции); `engine/security/*` — injection/shell/protected paths
   (`shell-guard.ts`: `\` в POSIX-shell — экранирование/регэксп, а не разделитель пути, поэтому
   regex-аргументы (`grep -v '\.sample$'`) путями не считаются, а Windows-пути распознаются явно —
   `C:\…`, `\\server\share`; аргументы-паттерны (`sed`-скрипт, regexp `grep`, программа `awk`,

@@ -635,7 +635,7 @@ export class PermissionEvaluator {
     // 1. Правило по конкретному имени тула
     const toolRule = this._rules[toolName];
     if (toolRule !== undefined) {
-      const d = this._resolveRule(toolName, toolRule, paths, workingDir);
+      const d = this._resolveToolRule(toolName, toolRule, paths, workingDir, shellCommand, isFile, roots);
       if (d) return d;
     }
     // 2. external_directory — только пути вне workingDir.
@@ -692,6 +692,42 @@ export class PermissionEvaluator {
       action: 'allow',
       reason: sm('permission.no_rules', { tool: toolName }),
     };
+  }
+
+  /**
+   * Правило по имени тула (слой 1).
+   *
+   * Для `execute_shell` **объектное** правило — набор паттернов КОМАНД
+   * (сессионный shell-грант `execute_shell: { "ls *": "allow" }`), а не путей:
+   * у execute_shell единственный path-параметр — `cwd`, и по нему грант не
+   * матчился никогда (правило лежало мёртвым, одобрение спрашивалось снова).
+   * Правило по путям (`{ "/каталог": "allow" }`) резолвится как раньше.
+   */
+  private _resolveToolRule(
+    toolName: string,
+    rule: PermissionRule,
+    paths: string[],
+    workingDir: string,
+    shellCommand: string | undefined,
+    isFile: boolean,
+    roots: readonly string[],
+  ): PermissionDecision | undefined {
+    const isObjectRule = typeof rule === 'object' && rule !== null;
+    if (toolName !== 'execute_shell' || shellCommand === undefined || !isObjectRule) {
+      return this._resolveRule(toolName, rule, paths, workingDir);
+    }
+    const byCommand = this._resolveShellRule(toolName, rule, shellCommand, workingDir);
+    if (!byCommand) {
+      // Паттерн команды не совпал — резолвим правило по путям (как раньше).
+      return this._resolveRule(toolName, rule, paths, workingDir);
+    }
+    // `allow` по команде не снимает гейт внешнего каталога: грант покрывает
+    // команду, а не рабочий каталог (cwd вне периметра → ask, как и для
+    // группового правила `shell`, которое проверяется после этого гейта).
+    if (byCommand.action === 'allow' && isFile && paths.some((p) => !isInsideAnyRoot(p, roots))) {
+      return undefined;
+    }
+    return byCommand;
   }
 
   private _resolveRule(

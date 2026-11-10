@@ -6,7 +6,7 @@ export type { ToolAvailability, ToolUnavailableReason } from './availability.js'
 export { setStorageDegradedState, isStorageDegraded, getStorageDegradedState } from './storage-state.js';
 export type { StorageAvailabilityState } from './storage-state.js';
 export { PermissionApprovalManager, computePermissionDigest, parsePermissionPrincipal } from './approval.js';
-export type { ApprovalRequest, ApprovalDecision } from './approval.js';
+export type { ApprovalRequest, ApprovalDecision, PendingApproval } from './approval.js';
 export { buildPermissionPreview } from './preview.js';
 export type { PermissionPreviewInput } from './preview.js';
 export { deriveSubagentPermission, emptyPermissionConfig, DEFAULT_ASK_TIMEOUT_MS } from './derive.js';

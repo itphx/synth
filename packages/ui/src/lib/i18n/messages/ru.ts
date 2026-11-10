@@ -1674,6 +1674,7 @@ export const dict = {
   // Вопросы пользователю (этап 1 roadmap 0.13 — блок 1.3): док над вводом.
   'question.dock.title': 'Агент задал вопрос',
   'question.dock.custom': 'Свой ответ',
+  'question.dock.customPlaceholder': 'Свой ответ — можно несколько строк',
   'question.dock.submit': 'Ответить',
   'question.dock.cancel': 'Отменить',
   'question.dock.next': 'Далее',

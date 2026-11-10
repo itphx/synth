@@ -619,6 +619,21 @@ export class RemoteBackendClient {
     return { status: res.status, body: await res.json().catch(() => null) };
   }
 
+  /**
+   * Ожидающие ответа подтверждения сессии (гибрид, ADR-029).
+   *
+   * Запрос подтверждения живёт на стороне сессии — список ожиданий читает
+   * удалённый backend, а локальный core форвардит ответ как есть. Формат:
+   * `{permissions: [...]}` — тот же, что у локального роута
+   * `GET /api/v2/sessions/:id/permissions`.
+   */
+  listSessionPermissions(sessionId: string): Promise<unknown> {
+    return this.request<unknown>(
+      'GET',
+      `/api/v2/sessions/${encodeURIComponent(sessionId)}/permissions`,
+    );
+  }
+
   summarizeSession(id: string): Promise<unknown> {
     return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/summarize`);
   }

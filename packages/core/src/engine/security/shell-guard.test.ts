@@ -1368,6 +1368,28 @@ describe('D: периметр cd/pushd/env -C/chroot', () => {
   });
 });
 
+describe('D2: cd с переменной окружения — цель резолвится, неразрешимое — ask', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('известные переменные ($HOME/${HOME}/$PWD) → allow', () => {
+    expect(check('cd $HOME').action).toBe('allow');
+    expect(check('cd "$HOME"').action).toBe('allow');
+    expect(check('cd ${HOME}').action).toBe('allow');
+    expect(check('cd $PWD').action).toBe('allow');
+  });
+
+  it('неизвестная переменная и подстановка — ask (fail-closed сохранён)', () => {
+    expect(check('cd $UNKNOWN').action).toBe('ask');
+    expect(check('cd $(pwd)').action).toBe('ask');
+    expect(check('cd `pwd`').action).toBe('ask');
+  });
+
+  it('после cd $HOME периметр считается от домашнего каталога', () => {
+    // `~/.ssh/id_rsa` подтверждается относительно $HOME, а не прежнего cwd.
+    expect(check('cd $HOME && cat .ssh/id_rsa').action).toBe('deny');
+  });
+});
+
 describe('E: ложные ask (brace-форматы, тест-контекст)', () => {
   const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
 
@@ -1463,6 +1485,32 @@ describe('shellSavePatterns / isShellCommandGranted', () => {
     expect(shellSavePatterns('C=rm; $C -rf /')).toEqual(['rm *']);
     expect(shellSavePatterns("C='rm -rf /'; $C")).toBeNull();
     expect(shellSavePatterns('X=$(which ls); $X')).toBeNull();
+  });
+
+  it('heredoc: shebang и закрывающий делимитер — не команды', () => {
+    const patterns = shellSavePatterns([
+      "cat <<'EOF'",
+      '#!/bin/bash',
+      'set -e',
+      'cd /tmp',
+      'ls -la',
+      'chmod +x out/s.sh',
+      'EOF',
+    ].join('\n'));
+    expect(patterns).toEqual(['cat *', 'set *', 'cd *', 'ls *', 'chmod *']);
+    expect(patterns ?? []).not.toContain('#!/bin/bash *');
+    expect(patterns ?? []).not.toContain('EOF *');
+  });
+
+  it('heredoc: пустые строки и строки только из метасимволов — не команды', () => {
+    const patterns = shellSavePatterns(["cat <<'EOF'", '', ']', 'EOF'].join('\n'));
+    expect(patterns).toEqual(['cat *']);
+  });
+
+  it('дедуп и потолок 20 паттернов сохранены', () => {
+    expect(shellSavePatterns('ls -la\nls -l\nls')).toEqual(['ls *']);
+    const many = Array.from({ length: 30 }, (_, i) => `cmd${i} arg`).join('\n');
+    expect(shellSavePatterns(many)).toHaveLength(20);
   });
 
   it('isShellCommandGranted: покрытие каждого сегмента', () => {
