@@ -218,6 +218,11 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 > `env > runtime (UI) > config.yaml > default`; узнать его можно из
 > `GET /api/v2/settings/ssh` (поле `source`).
 
+`synth config show` по умолчанию **маскирует** секреты (`core.apiKey`,
+`security.secretKey`, `remote.auth.apiKey`, `auth.oidc.clientSecret`,
+`storage.postgres.password` и т.п. → `***`). Сырые значения выводит только явный
+`--show-secrets` — такой вывод считается секретом и не должен попадать в журналы/CI.
+
 ### Env-переменные обслуживания (ADR-091)
 
 Ключ шифрования архива бэкапа — **внешний ключ оператора** (не мастер-ключ инстанса).

@@ -94,7 +94,7 @@
 |---|---|---|---|
 | [ADR-097](./arch_decisions/adr-097-storage-provider-class.md) | Хранилище: остаток класса расширения | 2026-11-14 | принят; остаток — авто-возврат к БД без рестарта, документы |
 | [PROP-037](./arch_decisions/prop-037-commit-security-step.md) | Security step перед коммитом | 2026-11-14 | hook и маркер-хеш, опирается на ADR-029/ADR-036 |
-| [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Self-help скиллы и admin-MCP | 2026-11-14 | read-only status-MCP и deploy-тулы под ADMIN |
+| [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Self-help скиллы и admin-MCP | 2026-11-14 | срез self-help реализован ([ADR-131](./arch_decisions/adr-131-self-management-tools.md)); read-only hybrid discovery реализован; cross-world move/remote MCP — не критично; остаток — deploy-тулы/status-MCP |
 | [PROP-053](./arch_decisions/prop-053-cli-tui.md) | CLI и TUI | 2026-11-14 | паритет CLI; кандидат в icebox |
 | [PROP-056](./arch_decisions/prop-056-synth-mcp-server.md) | MCP-сервер Synth для агентов | 2026-11-14 | MCP над API v2, auth, права |
 | [PROP-062](./arch_decisions/prop-062-context-optimization.md) | Оптимизация контекста | 2026-11-14 | `archive_context`, авто-суммаризация; пересекается с ADR-119 |

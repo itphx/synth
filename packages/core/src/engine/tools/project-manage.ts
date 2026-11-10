@@ -13,9 +13,20 @@ import type { EventBus } from '../../events/bus.js';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
 import { provisionWorkspace, normalizeWorkspace } from '../workspace-provision.js';
 import { isAborted, abortedResult } from './abort.js';
-import { canEditProject } from './project-access.js';
+import { canEditProject, resolveSessionUserId } from './project-access.js';
+import {
+  type PrincipalExtra,
+  candidateSummary,
+  formatProjectCandidates,
+  projectRoleLabel,
+  resolveProjectRef,
+  resolveViewer,
+} from './project-resolve.js';
 import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { isRemoteRef, toRemoteRef } from '../../remote/aggregate.js';
+import { RemoteError } from '../../remote/types.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
 import { embedMultiline } from '../markdown.js';
 import {
   ProjectLogService,
@@ -29,7 +40,7 @@ import {
 } from '../project/invariants-service.js';
 import { publishProjectUpdated } from '../project/events.js';
 
-export interface ProjectManageExtra {
+export interface ProjectManageExtra extends PrincipalExtra {
   sessionManager?: SessionManager;
   projectStore?: ProjectStoreContract;
   sessionId?: string;
@@ -40,6 +51,8 @@ export interface ProjectManageExtra {
   workspaceManaged?: boolean;
   /** ADR-075: политика абсолютного workspace вне `workspacesRoot`. */
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
+  /** Workstream A1: клиент удалённого backend (гибрид) для attach-проверок. */
+  getRemoteClient?: () => RemoteBackendClient | null;
 }
 
 /** Извлекает зависимости для project_create / project_attach из ctx.extra. */
@@ -151,7 +164,10 @@ const projectCreateSchema = z.object({
 });
 
 const projectAttachSchema = z.object({
-  projectId: z.string().min(1).describe('Id of the project to attach the session to'),
+  projectId: z.string().min(1).optional().describe('Id of the project to attach the session to'),
+  project: z.string().min(1).optional().describe('Project id or exact name (case-insensitive)'),
+}).refine((value) => Boolean(value.projectId || value.project), {
+  message: 'Either projectId or project is required',
 });
 
 export const projectCreateTool: ToolDefinition = {
@@ -256,12 +272,78 @@ export const projectCreateTool: ToolDefinition = {
   },
 };
 
+async function fetchRemoteProjectsForAttach(
+  client: RemoteBackendClient,
+): Promise<{ items: Array<Record<string, unknown>> } | { offline: true }> {
+  try {
+    const all = await client.listAllProjects();
+    return { items: all.items };
+  } catch (err) {
+    if (err instanceof RemoteError) return { offline: true };
+    return { offline: true };
+  }
+}
+
+function remoteMatchesByName(
+  items: Array<Record<string, unknown>>,
+  name: string,
+): Array<Record<string, unknown>> {
+  const needle = name.trim().toLowerCase();
+  return items.filter((item) => String(item.name ?? '').trim().toLowerCase() === needle);
+}
+
+interface HybridCandidate {
+  origin: 'local' | 'remote';
+  id: string;
+  name: string;
+  workspace: string | null;
+}
+
+function candidateLine(candidate: HybridCandidate): string {
+  const workspace = candidate.workspace ? `, workspace: ${candidate.workspace}` : '';
+  return `- ${candidate.origin}: ${candidate.name} (${candidate.id}${workspace})`;
+}
+
+function crossInstanceResult(
+  name: string,
+  id: string,
+  candidates?: HybridCandidate[],
+) {
+  return {
+    content: sm('project.cross_instance', { name, id }),
+    isError: true as const,
+    metadata: {
+      cross_instance: true,
+      project_id: id,
+      ...(candidates && candidates.length > 0 ? { candidates } : {}),
+      i18n: i18nMeta('project.cross_instance', { name, id }),
+    },
+  };
+}
+
+function hybridAmbiguousResult(name: string, candidates: HybridCandidate[]) {
+  const items = candidates.map(candidateLine).join('\n');
+  return {
+    content: sm('project.hybrid_ambiguous', { name, items }),
+    isError: true as const,
+    metadata: {
+      ambiguous: true,
+      hybrid: true,
+      candidates,
+      i18n: i18nMeta('project.hybrid_ambiguous', { name, items }),
+    },
+  };
+}
+
 export const projectAttachTool: ToolDefinition = {
   name: 'project_attach',
   description:
-    'Attach the current session to an existing project by id. '
-    + 'The session todo list is kept; the project plan is taken from the target project. '
-    + 'Errors if the project does not exist.',
+    'Move/attach the current session to a project by id or exact name. If you only know the name, '
+    + 'call list_projects or pass `project`; ambiguity returns candidates. When both `projectId` and '
+    + '`project` are given, `projectId` wins. The session todo list is kept; the project plan is taken '
+    + 'from the target project. Errors if the project does not exist or write access is denied. '
+    + 'If the target project has no workspace, file/shell/git tools stay blocked until '
+    + 'project_workspace_set is called (the response reports the warning).',
   parameters: projectAttachSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
@@ -271,25 +353,114 @@ export const projectAttachTool: ToolDefinition = {
     if (!parsed.success) {
       return argErrorResult(this.name, parsed.error.issues);
     }
-    const params = parsed.data as { projectId: string };
+    const params = parsed.data as { projectId?: string; project?: string };
 
     const extra = getSessionExtra(ctx);
     if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
       return missingDepsError(this.name);
     }
 
-    let project;
-    try {
-      project = await extra.projectStore.load(params.projectId);
-    } catch {
-      return {
-        content: sm('project.read_error'),
-        isError: true,
-        metadata: { i18n: i18nMeta('project.read_error') },
-      };
+    const client = extra.getRemoteClient?.() ?? null;
+    const ref = params.projectId ?? params.project!;
+
+    // Cross-world move не поддерживается: ссылка `remote:` — не привязываем.
+    if (isRemoteRef(ref)) {
+      return crossInstanceResult(ref, ref);
     }
-    if (!project) {
-      return { content: sm('project.not_found', { id: params.projectId }), isError: true, metadata: { i18n: i18nMeta('project.not_found', { id: params.projectId }) } };
+
+    let project: Project | null = null;
+    if (params.projectId) {
+      // Явный id — приоритетный путь (совместимость с прежним вызовом).
+      try {
+        project = await extra.projectStore.load(params.projectId);
+      } catch {
+        return {
+          content: sm('project.read_error'),
+          isError: true,
+          metadata: { i18n: i18nMeta('project.read_error') },
+        };
+      }
+      if (!project) {
+        return { content: sm('project.not_found', { id: params.projectId }), isError: true, metadata: { i18n: i18nMeta('project.not_found', { id: params.projectId }) } };
+      }
+    } else {
+      // Имя (или id, если агент передал его в `project`) — общий резолвер:
+      // точное совпадение без учёта регистра; неоднозначность — кандидаты.
+      const viewer = await resolveViewer(ctx, extra);
+      const resolved = await resolveProjectRef(extra.projectStore, params.project!, viewer);
+      if (resolved.status === 'not_found') {
+        if (client) {
+          const remote = await fetchRemoteProjectsForAttach(client);
+          if ('offline' in remote) {
+            return {
+              content: sm('project.query_not_found', { name: params.project! }),
+              isError: true,
+              metadata: {
+                found: false,
+                remote_offline: true,
+                i18n: i18nMeta('project.query_not_found', { name: params.project! }),
+              },
+            };
+          }
+          const matches = remoteMatchesByName(remote.items, params.project!);
+          if (matches.length > 0) {
+            const candidates: HybridCandidate[] = matches.map((item) => ({
+              origin: 'remote',
+              id: toRemoteRef(String(item.id ?? '')),
+              name: String(item.name ?? ''),
+              workspace: typeof item.workspace === 'string' ? item.workspace : null,
+            }));
+            return crossInstanceResult(params.project!, candidates[0]!.id, candidates);
+          }
+        }
+        return {
+          content: sm('project.query_not_found', { name: params.project! }),
+          isError: true,
+          metadata: {
+            found: false,
+            i18n: i18nMeta('project.query_not_found', { name: params.project! }),
+          },
+        };
+      }
+      if (resolved.status === 'ambiguous') {
+        const items = formatProjectCandidates(resolved.candidates);
+        return {
+          content: sm('project.query_ambiguous', { name: params.project!, items }),
+          isError: true,
+          metadata: {
+            ambiguous: true,
+            candidates: resolved.candidates.map(candidateSummary),
+            i18n: i18nMeta('project.query_ambiguous', { name: params.project!, items }),
+          },
+        };
+      }
+      project = resolved.project;
+
+      // Локальный проект найден: при доступном remote-мире проверяем одноимённый
+      // удалённый проект — молча привязывать к локальному нельзя.
+      if (client) {
+        const remote = await fetchRemoteProjectsForAttach(client);
+        if (!('offline' in remote)) {
+          const matches = remoteMatchesByName(remote.items, project.name);
+          if (matches.length > 0) {
+            const candidates: HybridCandidate[] = [
+              {
+                origin: 'local',
+                id: project.id,
+                name: project.name,
+                workspace: project.workspace ?? null,
+              },
+              ...matches.map((item) => ({
+                origin: 'remote' as const,
+                id: toRemoteRef(String(item.id ?? '')),
+                name: String(item.name ?? ''),
+                workspace: typeof item.workspace === 'string' ? item.workspace : null,
+              })),
+            ];
+            return hybridAmbiguousResult(project.name, candidates);
+          }
+        }
+      }
     }
 
     // Безопасность (ADR-075/D5): привязка сессии к чужому проекту выдаёт агенту его
@@ -314,6 +485,14 @@ export const projectAttachTool: ToolDefinition = {
       };
     }
 
+    const userId = resolveSessionUserId(session) ?? 'local';
+    const myRole = projectRoleLabel(project, userId);
+    // Идемпотентность: сессия уже в этом проекте — ничего не меняем и
+    // `session.moved` не публикуем (иначе клиенты/хабы получат ложный перенос).
+    if (session?.projectId === project.id) {
+      return attachResult(project, myRole, { sameProject: true });
+    }
+
     const worktreeDetached = await attachSessionToProject(
       extra.sessionManager,
       extra.projectStore,
@@ -322,19 +501,38 @@ export const projectAttachTool: ToolDefinition = {
       project.id,
     );
 
-    return {
-      content: sm('project.attached', { name: project.name }),
-      metadata: {
-        id: project.id,
-        name: project.name,
-        // ADR-114: привязка к worktree снята (worktree принадлежит старому
-        // проекту — чужая привязка дала бы каталог вне нового проекта).
-        ...(worktreeDetached ? { worktree_detached: true } : {}),
-        i18n: i18nMeta('project.attached', { name: project.name }),
-      },
-    };
+    return attachResult(project, myRole, { worktreeDetached });
   },
 };
+
+/**
+ * Ответ `project_attach`: id/name/workspace/`my_role` + факт снятия привязки к
+ * worktree и предупреждение об отсутствии workspace (file/shell/git-тулы
+ * останутся недоступны до `project_workspace_set`).
+ */
+function attachResult(
+  project: Project,
+  myRole: 'OWNER' | 'EDITOR' | 'VIEWER' | null,
+  flags: { worktreeDetached?: boolean; sameProject?: boolean },
+) {
+  const workspace = project.workspace ?? null;
+  const hasWorkspace = Boolean(project.workspace);
+  const key = hasWorkspace ? 'project.attached' : 'project.attached_no_workspace';
+  const params = { name: project.name };
+  return {
+    content: sm(key, params),
+    metadata: {
+      id: project.id,
+      name: project.name,
+      workspace,
+      my_role: myRole,
+      ...(flags.worktreeDetached ? { worktree_detached: true } : {}),
+      ...(flags.sameProject ? { same_project: true } : {}),
+      ...(hasWorkspace ? {} : { warning: 'project_has_no_workspace' as const }),
+      i18n: i18nMeta(key, params),
+    },
+  };
+}
 
 const projectUpdateSchema = z.object({
   name: z.string().min(1).optional().describe('New project name'),

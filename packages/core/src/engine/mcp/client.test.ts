@@ -199,6 +199,84 @@ describe('McpClient (stdio)', () => {
     expect(result.content).toBe('Tool error message');
   });
 
+  it('истёкшая MCP-сессия: reconnect и один повтор вызова', async () => {
+    await client.connect();
+    mockCallTool
+      .mockRejectedValueOnce(new Error('Streamable HTTP error: Error POSTing to endpoint: Session not found'))
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok after reconnect' }], isError: false });
+
+    const result = await client.callTool('search', { q: 'test' });
+    expect(result.isError).toBe(false);
+    expect(result.content).toBe('ok after reconnect');
+    expect(mockConnect).toHaveBeenCalledTimes(2);
+    expect(mockClose).toHaveBeenCalledTimes(1);
+    expect(mockListTools).toHaveBeenCalledTimes(2);
+  });
+
+  it('параллельные вызовы делят один reconnect-цикл', async () => {
+    await client.connect();
+    mockCallTool
+      .mockRejectedValueOnce(new Error('Session not found'))
+      .mockRejectedValueOnce(new Error('Session not found'))
+      .mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], isError: false });
+
+    const [first, second] = await Promise.all([
+      client.callTool('search', { q: 'one' }),
+      client.callTool('search', { q: 'two' }),
+    ]);
+    expect(first.isError).toBe(false);
+    expect(second.isError).toBe(false);
+    expect(mockConnect).toHaveBeenCalledTimes(2);
+    expect(mockClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('обычная ошибка вызова не запускает reconnect', async () => {
+    await client.connect();
+    mockCallTool.mockRejectedValueOnce(new Error('boom'));
+
+    const result = await client.callTool('search', { q: 'test' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('boom');
+    expect(mockConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('повторная expiry после reconnect — ошибка без бесконечности', async () => {
+    await client.connect();
+    mockCallTool
+      .mockRejectedValueOnce(new Error('Session not found'))
+      .mockRejectedValueOnce(new Error('Session not found'));
+
+    const result = await client.callTool('search', { q: 'test' });
+    expect(result.isError).toBe(true);
+    expect(mockConnect).toHaveBeenCalledTimes(2);
+  });
+
+  it('tool-level isError с текстом Session not found не запускает reconnect', async () => {
+    await client.connect();
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'Session not found' }],
+      isError: true,
+    });
+
+    const result = await client.callTool('search', { q: 'test' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe('Session not found');
+    expect(mockConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('сбой reconnect возвращает reconnect failed, не бросает', async () => {
+    mockConnect
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('connection refused'));
+    await client.connect();
+    mockCallTool.mockRejectedValueOnce(new Error('Session not found'));
+
+    const result = await client.callTool('search', { q: 'test' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('reconnect failed');
+    expect(result.content).toContain('connection refused');
+  });
+
   it('callTool обрабатывает пустой результат', async () => {
     await client.connect();
     mockCallTool.mockResolvedValueOnce({

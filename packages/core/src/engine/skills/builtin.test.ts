@@ -8,11 +8,15 @@ import {
   SYNTH_AGENTS_MD_NAME,
   SYNTH_PIPELINES_COMMAND,
   SYNTH_PIPELINES_NAME,
+  SYNTH_INSTANCE_COMMAND,
+  SYNTH_INSTANCE_NAME,
   SYNTH_SCHEDULES_COMMAND,
   SYNTH_SCHEDULES_NAME,
+  SYNTH_STORAGE_RECOVERY_NAME,
   buildBuiltinSkills,
   buildSkillCreatorMeta,
   buildSynthAgentsMdMeta,
+  buildSynthInstanceMeta,
   buildSynthPipelinesMeta,
   buildSynthSchedulesMeta,
 } from './builtin.js';
@@ -198,5 +202,79 @@ describe('builtin skills автоматизации: synth-pipelines и synth-sc
   it('мета-сборщики не переиспользуют объект между вызовами', () => {
     expect(buildSynthPipelinesMeta()).not.toBe(buildSynthPipelinesMeta());
     expect(buildSynthSchedulesMeta()).not.toBe(buildSynthSchedulesMeta());
+  });
+});
+
+/**
+ * Workstream A1/A2: встроенный скилл `synth-instance` — self-help по инстансу и
+ * MCP (вход, реестр MCP, проекты/сессии, сетевая политика, перезапуск).
+ */
+describe('builtin skill synth-instance (Workstream A1/A2)', () => {
+  it('присутствует, trusted/system, команда instance, category ops, trigger auto', () => {
+    const skill = buildBuiltinSkills({ dataDir: '/data' }).find((s) => s.name === SYNTH_INSTANCE_NAME);
+    expect(skill).toBeDefined();
+    expect(skill!.trusted).toBe(true);
+    expect(skill!.mtimeMs).toBe(0);
+    expect(skill!.source).toBe(BUILTIN_SOURCE);
+    expect(skill!.source.level).toBe('system');
+
+    const meta = skill!.meta;
+    expect(meta.name).toBe(SYNTH_INSTANCE_NAME);
+    expect(meta.command).toBe(SYNTH_INSTANCE_COMMAND);
+    expect(meta.category).toBe('ops');
+    expect(meta.trigger).toBe('auto');
+    expect(meta.scope).toBe('instance');
+    expect(meta.mode).toBe('any');
+    expect(meta.invocation).toBe('both');
+    expect(meta.userInvocable).toBe(true);
+    expect(meta.disableModelInvocation).toBe(false);
+    expect(meta.requiresCapabilities).toEqual([]);
+    expect(meta.relatedSkills).toEqual([SYNTH_STORAGE_RECOVERY_NAME]);
+    expect(meta.tags).toEqual(expect.arrayContaining([
+      'synth-instance', 'setup', 'admin', 'mcp', 'troubleshooting', 'self-help',
+    ]));
+  });
+
+  it('body содержит обязательные разделы и маркеры', () => {
+    const skill = buildBuiltinSkills().find((s) => s.name === SYNTH_INSTANCE_NAME)!;
+    for (const section of [
+      '## When to use',
+      '## Know the instance',
+      '## Auth in standalone',
+      '## MCP model',
+      '## MCP tools',
+      '## Add and enable a server',
+      '## Projects and sessions',
+      '## Troubleshooting',
+      '## Recipe: Playwright MCP',
+      '## Verify',
+      '## Safety',
+    ]) {
+      expect(skill.body, section).toContain(section);
+    }
+    for (const marker of [
+      'synth_info',
+      'synth_mcp_add',
+      'project_attach',
+      'list_projects',
+      'Session not found',
+      '{dataDir}/secrets/api-key',
+      'Playwright',
+    ]) {
+      expect(skill.body, marker).toContain(marker);
+    }
+
+    // Порядок в «Add and enable a server»: list → add → test → enable.
+    const start = skill.body.indexOf('## Add and enable a server');
+    const end = skill.body.indexOf('## Projects and sessions', start);
+    const section = skill.body.slice(start, end);
+    const order = ['synth_mcp_list', 'synth_mcp_add', 'synth_mcp_test', 'synth_mcp_enable']
+      .map((marker) => section.indexOf(marker));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it('buildSynthInstanceMeta не переиспользует объект между вызовами', () => {
+    expect(buildSynthInstanceMeta()).not.toBe(buildSynthInstanceMeta());
   });
 });

@@ -266,6 +266,23 @@ export function mcpAttachmentsOnlyText(count: number): string {
   return `Инструмент вернул ${count} вложений (текста нет)`;
 }
 
+/**
+ * Признак истечения MCP-сессии (transport-level), а не ошибки инструмента.
+ *
+ * Streamable HTTP держит `mcp-session-id`; после рестарта MCP-сервера старый id
+ * неизвестен и SDK отвечает `Session not found` (иногда 404/`not initialized`).
+ * Такие ошибки — повод переподключиться и повторить вызов **один раз**.
+ * Tool-level `isError` с таким текстом сюда не попадает: его разбирает
+ * `_callOnce` как обычный результат.
+ */
+export function isSessionExpiredError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /session not found/i.test(message)
+    || /server not initialized/i.test(message)
+    || /session.*(expired|unknown|invalid)/i.test(message)
+    || /\b404\b.*session/i.test(message);
+}
+
 export class McpClient {
   private _name: string;
   private _config: McpServerConfig;
@@ -282,6 +299,11 @@ export class McpClient {
   private readonly _attachmentLimits: McpAttachmentLimits;
   /** PROP-125: транспорт HTTP-запросов (релей гибрида); по умолчанию — `egressFetch`. */
   private readonly _fetch: typeof fetch | undefined;
+  /**
+   * Workstream C: общий in-flight reconnect после истечения MCP-сессии.
+   * Параллельные вызовы ждут один и тот же цикл disconnect→connect.
+   */
+  private _reconnectPromise: Promise<void> | null = null;
 
   constructor(name: string, config: McpServerConfig, opts: McpClientOptions = {}) {
     this._name = name;
@@ -351,62 +373,115 @@ export class McpClient {
     args: Record<string, unknown>,
     meta?: Record<string, unknown>,
   ): Promise<McpToolResult> {
-    if (!this._client || !this._connected) {
-      return { content: `MCP-сервер "${this._name}" не подключён`, isError: true };
-    }
-
     try {
-      const timeoutPromise = new Promise<McpToolResult>((_, reject) =>
-        setTimeout(() => reject(new Error(`Таймаут вызова инструмента "${name}" (${this._toolTimeout}ms)`)), this._toolTimeout),
-      );
-
-      const callPromise = (async (): Promise<McpToolResult> => {
-        // `_meta` запроса `tools/call` (не путать с transport session id
-        // Streamable HTTP): контекст Synth-сессии для внешних MCP-серверов.
-        const result = await this._client!.callTool({
-          name,
-          arguments: args,
-          ...(meta ? { _meta: meta } : {}),
-        });
-
-        if (result.isError) {
-          const errorText = (result.content as Array<{ type: string; text?: string }>)
-            .filter((c) => c.type === 'text' && c.text)
-            .map((c) => c.text!)
-            .join('\n');
-          return {
-            content: errorText || 'Инструмент вернул ошибку',
-            isError: true,
-          };
-        }
-
-        // ADR-115: нетекстовые блоки (`image`/`audio`/`resource.blob`) — во вложения.
-        // Текст собираем тем же проходом (`text` + `resource.text`), чтобы не читать
-        // результат дважды и не разойтись в правилах.
-        const parts = collectMcpContent(result.content, this._attachmentLimits);
-
-        let content =
-          parts.texts.join('\n') ||
-          (parts.attachments.length > 0
-            ? mcpAttachmentsOnlyText(parts.attachments.length)
-            : 'Инструмент выполнен (пустой результат)');
-        if (content.length > MAX_TOOL_RESULT_CHARS) {
-          content = content.slice(0, MAX_TOOL_RESULT_CHARS) + `\n\n...(усечено, полный размер: ${content.length} символов)`;
-        }
-
-        return {
-          content,
-          isError: false,
-          ...(parts.attachments.length > 0 ? { attachments: parts.attachments } : {}),
-        };
-      })();
-
-      return await Promise.race([callPromise, timeoutPromise]);
+      return await this._callWithReconnect(name, args, meta, false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       error(`MCP`, `Ошибка вызова "${name}" на сервере "${this._name}": ${msg}`);
       return { content: `Ошибка: ${msg}`, isError: true };
     }
+  }
+
+  /** Один вызов `tools/call`; транспортные исключения пробрасываются. */
+  private async _callOnce(
+    name: string,
+    args: Record<string, unknown>,
+    meta?: Record<string, unknown>,
+  ): Promise<McpToolResult> {
+    if (!this._client || !this._connected) {
+      return { content: `MCP-сервер "${this._name}" не подключён`, isError: true };
+    }
+
+    const timeoutPromise = new Promise<McpToolResult>((_, reject) =>
+      setTimeout(() => reject(new Error(`Таймаут вызова инструмента "${name}" (${this._toolTimeout}ms)`)), this._toolTimeout),
+    );
+
+    const callPromise = (async (): Promise<McpToolResult> => {
+      // `_meta` запроса `tools/call` (не путать с transport session id
+      // Streamable HTTP): контекст Synth-сессии для внешних MCP-серверов.
+      const result = await this._client!.callTool({
+        name,
+        arguments: args,
+        ...(meta ? { _meta: meta } : {}),
+      });
+
+      if (result.isError) {
+        const errorText = (result.content as Array<{ type: string; text?: string }>)
+          .filter((c) => c.type === 'text' && c.text)
+          .map((c) => c.text!)
+          .join('\n');
+        return {
+          content: errorText || 'Инструмент вернул ошибку',
+          isError: true,
+        };
+      }
+
+      // ADR-115: нетекстовые блоки (`image`/`audio`/`resource.blob`) — во вложения.
+      // Текст собираем тем же проходом (`text` + `resource.text`), чтобы не читать
+      // результат дважды и не разойтись в правилах.
+      const parts = collectMcpContent(result.content, this._attachmentLimits);
+
+      let content =
+        parts.texts.join('\n') ||
+        (parts.attachments.length > 0
+          ? mcpAttachmentsOnlyText(parts.attachments.length)
+          : 'Инструмент выполнен (пустой результат)');
+      if (content.length > MAX_TOOL_RESULT_CHARS) {
+        content = content.slice(0, MAX_TOOL_RESULT_CHARS) + `\n\n...(усечено, полный размер: ${content.length} символов)`;
+      }
+
+      return {
+        content,
+        isError: false,
+        ...(parts.attachments.length > 0 ? { attachments: parts.attachments } : {}),
+      };
+    })();
+
+    return await Promise.race([callPromise, timeoutPromise]);
+  }
+
+  /**
+   * Вызов с авто-reconnect при истечении MCP-сессии: ровно один повтор.
+   *
+   * `retried` не даёт бесконечному циклу: повторная expiry после reconnect
+   * возвращается как обычная ошибка вызова.
+   */
+  private async _callWithReconnect(
+    name: string,
+    args: Record<string, unknown>,
+    meta: Record<string, unknown> | undefined,
+    retried: boolean,
+  ): Promise<McpToolResult> {
+    try {
+      return await this._callOnce(name, args, meta);
+    } catch (err) {
+      if (retried || !isSessionExpiredError(err)) throw err;
+      try {
+        await this._reconnectAfterExpiry();
+      } catch (reconnectErr) {
+        const reason = reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr);
+        error(`MCP`, `Переподключение "${this._name}" не удалось: ${reason}`);
+        return { content: `reconnect failed: ${reason}`, isError: true };
+      }
+      return this._callWithReconnect(name, args, meta, true);
+    }
+  }
+
+  /**
+   * Переподключение после истечения сессии. Параллельные вызовы ждут **один**
+   * цикл `disconnect → connect` (общий `_reconnectPromise`).
+   */
+  private async _reconnectAfterExpiry(): Promise<void> {
+    if (this._reconnectPromise) return this._reconnectPromise;
+    const promise = (async () => {
+      info(`MCP`, `Сессия сервера "${this._name}" истекла, переподключаюсь`);
+      await this.disconnect();
+      await this.connect();
+    })().finally(() => {
+      this._reconnectPromise = null;
+    });
+    this._reconnectPromise = promise;
+    return promise;
   }
 
   private async _connectStdio(): Promise<void> {

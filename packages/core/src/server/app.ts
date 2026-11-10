@@ -557,6 +557,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const deps = await createStandaloneDeps(config, {
     getActiveRemoteProviderNames: () => hybrid.getActiveRemoteProviderNames(),
     isBlockLocalProviders: () => hybrid.isBlockLocalProviders(),
+    // Workstream A1: read-only hybrid awareness инструментов проектов/сессий —
+    // тот же клиент, что у HTTP-роутов (локальный + удалённый миры).
+    getRemoteClient: () => connection.client,
     // ADR-090 Ф7: серверная политика плагинов удалённого сервера. Нет
     // подключения/сервер недоступен → политика неизвестна → локальный плагин
     // работает в режиме cooperative (помечен «не проверен сервером»).

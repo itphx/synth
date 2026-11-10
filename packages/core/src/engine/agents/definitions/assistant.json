@@ -27,7 +27,8 @@
     "process",
     "models",
     "ssh",
-    "todo"
+    "todo",
+    "instance"
   ],
   "icon": "robot-3",
   "color": "--status-success",

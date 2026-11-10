@@ -57,6 +57,16 @@ export const SYNTH_SCHEDULES_NAME = 'synth-schedules';
 export const SYNTH_SCHEDULES_COMMAND = 'schedules';
 
 /**
+ * Workstream A1/A2: имя встроенного скилла-руководства по инстансу и MCP
+ * (вход/ключи, реестр MCP, проекты/сессии, сетевая политика, перезапуск).
+ * Команда `instance` не занята.
+ */
+export const SYNTH_INSTANCE_NAME = 'synth-instance';
+
+/** Slash-команда скилла `synth-instance`. */
+export const SYNTH_INSTANCE_COMMAND = 'instance';
+
+/**
  * Синтетический каталог-источник builtin-скиллов: system-уровень, `trusted: true`.
  * Идёт **первым** в discovery, поэтому не перекрывается project/instance.
  */
@@ -459,6 +469,237 @@ export function buildSynthSchedulesMeta(): SkillMeta {
 }
 
 /**
+ * Тело встроенного `synth-instance` (модель-facing англоязычный runbook).
+ *
+ * Самодостаточно: в npm-пакете нет `docs/`, поэтому только команды, HTTP
+ * эндпоинты и инструменты. Секреты не читаются и не печатаются.
+ */
+const SYNTH_INSTANCE_BODY = `# Synth instance — setup and diagnostics
+
+Self-help runbook for configuring and diagnosing a Synth instance from chat:
+auth/keys, MCP registry, projects and sessions, network policy, restart.
+If the \`synth_*\` tools are unavailable for your agent, delegate to @admin or
+use the UI/API instead of inventing shell/curl workarounds.
+
+## When to use
+- First run or reconfiguration of Synth (ports, data dir, API key, storage).
+- MCP does not work: a server is missing, listed but has no tools, or tools fail.
+- The user asks to add/update/enable/remove an MCP server.
+- A session must be moved into a project (the user only knows the project name).
+- Diagnostics: 401, policy denies, "Session not found", after an MCP restart.
+
+## Know the instance
+- \`synth_info\` — version, mode, dataDir, workingDir, workspacesRoot, auth flags
+  (never values), storage backend/degraded, feature flags, counts.
+- \`synth doctor --json\` — instance health (data dir, schema, storage probe).
+- \`GET /health\` and \`GET /api/v2/meta\` — liveness/capabilities (message model,
+  remote MCP, users feature). \`/health\` is outside \`/api/v2\`.
+- Standalone core listens on **4300** by default: \`--port\`, \`SYNTH_CORE_PORT\`,
+  or \`core.port\`. It is NOT \`server.port\` (that is the managed backend).
+- dataDir comes from \`SYNTH_DATA_DIR\` / \`--data-dir\` / \`storage.dataDir\`;
+  local home — \`--home\` / \`SYNTH_HOME\`.
+- NEVER read \`{dataDir}/secrets/*\` with file/shell tools, and never print key
+  values. \`synth_info\` only reports \`localKeyPresent\`/\`apiKeyConfigured\` flags.
+
+## Auth in standalone
+Priority for the instance API key:
+1. \`--api-key\`
+2. \`SYNTH_API_KEY\`
+3. \`core.apiKey\` (config)
+4. generated \`{dataDir}/secrets/api-key\` (printed once at first start)
+
+The local key is ADMIN and is a secret: do not echo it, do not put it into chat,
+commands visible to others, or files. The UI login session cookie is separate
+from the API key — do not forge or copy cookies. Managed instances use OIDC
+and/or scoped service keys; a service key differs from an event binding key
+and carries \`scopes\`/\`allowedProjects\`.
+
+## MCP model
+- The **registry** is the source of truth (\`{dataDir}\` storage via the MCP
+  repository). \`config.mcp.servers\` is only a seed at startup; editing it does
+  not change a running instance.
+- Levels: \`system\` (registry \`enabled\` master flag) → \`project.mcp.enabled\`
+  (hard gate) → session (\`settings.mcpServers\`, \`mcpDisabledServers\`,
+  \`mcpDefaultOn\`). Default is opt-in: a newly added server is **off** for the
+  session until enabled.
+- Transports: \`stdio\`, \`http\` (Streamable HTTP; the URL usually ends with
+  \`/mcp\`), \`sse\`. Tool names are \`<server>_<tool>\`.
+- Network policy: \`origin:"user"\` HTTP/SSE are checked (loopback/private ranges
+  denied unless an exception exists); \`origin:"instance"\` and stdio are trusted
+  (ADMIN only). \`synth_mcp_list\` shows the policy decision per server.
+
+## MCP tools
+| Tool | Purpose |
+|---|---|
+| \`synth_mcp_list\` | registry, status, effective scope, policy; no secrets |
+| \`synth_mcp_test\` | temporary connect to an already configured (existing) server + tool list; does not register |
+| \`synth_mcp_add\` | add a server (opt-in for sessions) |
+| \`synth_mcp_update\` | change config/master flags (user record: author or ADMIN/LEAD; instance record: ADMIN) |
+| \`synth_mcp_remove\` | disconnect + remove from registry |
+| \`synth_mcp_enable\` | enable/disable at \`session\`/\`project\`/\`instance\` |
+| \`synth_mcp_reconnect\` | reconnect without restarting Synth |
+
+Mutate only as: user records — author or ADMIN/LEAD; stdio and \`origin:"instance"\`
+require **ADMIN**. Plaintext secret headers are rejected (use the credential
+layer / UI). Never put tokens into \`config.headers\` or \`config.env\`.
+
+## Add and enable a server
+1. \`synth_mcp_list\` — see what exists and its effective state.
+2. \`synth_mcp_add\` an HTTP server (local service, ADMIN):
+\`\`\`json
+{"name":"playwright","config":{"type":"http","url":"http://127.0.0.1:8931/mcp"},"origin":"instance"}
+\`\`\`
+   A local service is added as \`origin:"instance"\` (ADMIN) to bypass the
+   loopback policy; otherwise use \`origin:"user"\` **and** add an egress/network
+   exception in settings.
+3. \`synth_mcp_add\` a stdio server (ADMIN only):
+\`\`\`json
+{"name":"filesystem","config":{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem@latest","/workspace"]}}
+\`\`\`
+4. \`synth_mcp_test {"name":"<name>"}\` — check the **already added** server
+   (temporary connect + tool list, does not register; the config comes from the
+   registry, so the server must be added first).
+5. Enable it: \`synth_mcp_enable {"name":"playwright","enabled":true,"level":"session"}\`
+   (\`project\` for the current project, \`instance\` for the master flag).
+6. Verify with \`synth_mcp_list\` and call a server tool (for Playwright —
+   \`browser_navigate\`, \`browser_snapshot\`).
+7. If a server's tools fail after the MCP process restarted ("Session not
+   found"), run \`synth_mcp_reconnect {"name":"..."}\` — no Synth restart.
+
+\`enabledByDefault\` only affects **new projects**; project \`defaultOn\` is a
+snapshot and does not change existing sessions.
+
+## Projects and sessions
+- \`list_projects {"query":"..."}\` — compact list of visible projects.
+- \`get_project {"project":"id-or-exact-name"}\` — details, role, can_edit.
+- **Never guess a project id.** Use \`list_projects\`/\`get_project\`.
+- \`project_attach {"project":"Exact Name"}\` — id or exact name (case-insensitive);
+  ambiguous names return candidates, no silent pick. Moving detaches a git
+  worktree, resets plan approval and publishes \`session.moved\`. If the target
+  has no workspace, file/shell/git tools stay blocked until
+  \`project_workspace_set\`.
+- \`list_sessions\`, \`get_session_info\`, \`session_rename {title}\` — discovery and
+  renaming of the current session (no message history in responses).
+
+## Hybrid: local core + backend
+Hybrid mode has **two independent worlds**. Tools execute in the world of the
+session (local session → local core; remote session → backend).
+
+- Discovery tools are **read-only** and show both worlds: \`list_projects\` /
+  \`list_sessions\` add \`origin: "local" | "remote"\`; remote ids are
+  \`remote:<uuid>\`; remote items have \`can_attach:false\`, \`cross_instance:true\`.
+- \`get_project\` with \`remote:<id>\` reads the remote project; by name it first
+  resolves locally, then searches the remote world.
+- \`list_sessions\`: no project filter merges both worlds; a local project shows
+  local sessions only; a \`remote:\` project shows remote sessions only.
+- \`remote_offline\` / \`remote_truncated\` mean the backend is unreachable / the
+  list is page-capped; the local world still works.
+- \`project_attach\` works **inside the current world only**:
+  - \`remote:\` or a name that exists only remotely → \`project.cross_instance\`
+    (no attach);
+  - the same name locally and remotely → \`project.hybrid_ambiguous\` (candidates,
+    never a silent pick);
+  - a local \`projectId\` attaches without a remote check.
+- Cross-world move is **not supported** (not critical): use
+  \`synth project export/import\`, publish/fork, or create the session in the
+  target world. Remote MCP merge/management is also not critical: \`synth_mcp_*\`
+  manages the local registry; server-side MCP (PROP-125) is a separate layer.
+
+## Troubleshooting
+| Symptom | Cause / action |
+|---|---|
+| 401 / "no key" | API key missing/invalid; check \`synth_info\` auth flags; use \`--api-key\`/\`SYNTH_API_KEY\` (do not read the key file) |
+| \`MCP_CONNECT_ERROR\` | server down or wrong URL/transport; for an already added server run \`synth_mcp_test\`, otherwise \`synth_mcp_add\` and then \`synth_mcp_test\`/\`synth_mcp_reconnect\` |
+| policy deny for loopback | user HTTP/SSE to private address; add as \`origin:"instance"\` (ADMIN) or add a network-policy exception |
+| server listed but no tools | not enabled in the session (opt-in), project gate, or stale snapshot; \`synth_mcp_enable\` at session/project |
+| "Session not found" after MCP restart | stale MCP session; \`synth_mcp_reconnect\` (no Synth restart) |
+| project is on the other instance | \`project.cross_instance\`; do not try to attach — use \`synth project export/import\` or fork/publish/create the session there |
+| stdio rejected | stdio/instance mutations require ADMIN |
+| plaintext auth header rejected | use the credential layer (ADR-105) / UI; never put secrets in headers |
+| \`npm\` \`SELF_SIGNED_CERT_IN_CHAIN\` | run \`npm\` with \`NODE_OPTIONS=--use-system-ca\` (outside Synth) |
+| Chrome "unsupported flag" infobar in Playwright | launch Chrome with \`--test-type\` |
+
+## Recipe: Playwright MCP with one shared headed Chrome
+- Package: \`@playwright/mcp@0.0.84\`; system Chrome; X display \`DISPLAY=:1\`.
+- \`~/.config/playwright-mcp/config.json\`:
+\`\`\`json
+{
+  "browser": {
+    "launchOptions": {"channel": "chrome", "headless": false, "args": ["--test-type"]},
+    "userDataDir": "/home/<user>/.cache/playwright-mcp-profile",
+    "isolated": false
+  },
+  "server": {"port": 8931, "host": "127.0.0.1", "sharedBrowserContext": true}
+}
+\`\`\`
+- systemd user unit (\`~/.config/systemd/user/playwright-mcp.service\`):
+\`\`\`ini
+[Unit]
+Description=Playwright MCP (shared headed Chrome)
+[Service]
+Environment=DISPLAY=:1
+Environment=NODE_OPTIONS=--use-system-ca
+ExecStart=/usr/bin/node /path/to/@playwright/mcp/cli.js --config %h/.config/playwright-mcp/config.json
+Restart=on-failure
+[Install]
+WantedBy=default.target
+\`\`\`
+  Then \`systemctl --user enable --now playwright-mcp\` and
+  \`loginctl enable-linger $USER\`.
+- Add to Synth as \`origin:"instance"\`, URL \`http://127.0.0.1:8931/mcp\`; enable
+  at session or project level; verify with \`browser_navigate\`/\`browser_snapshot\`.
+- Security: bind loopback only; use \`--allowed-hosts\`; \`browser_run_code_unsafe\`
+  is RCE — keep it off; never store secrets in the Chrome profile or reports.
+
+## Verify
+- \`synth_info\` shows the expected mode/dataDir/storage and no secret values.
+- \`synth_mcp_list\` shows the server, status and effective scope.
+- A server tool call succeeds (e.g. \`browser_snapshot\`).
+- Session/project changes are visible in \`list_sessions\`/\`get_project\`.
+- Hybrid: remote items carry \`remote:\` ids, \`origin:"remote"\`, \`can_attach:false\`;
+  \`project.cross_instance\`/\`project.hybrid_ambiguous\` mean no cross-world attach.
+- No secrets were printed or written by your commands.
+
+## Safety
+- Never read or print \`{dataDir}/secrets/*\`; never put tokens in
+  \`config.headers\`/\`config.env\` (use credentials).
+- Do not restart Synth to apply MCP changes: the registry is live; use
+  \`synth_mcp_reconnect\` for a restarted MCP server.
+- Do not treat \`config.yaml mcp.servers\` as the source of truth — it is a seed.
+- Hybrid: \`synth_mcp_*\` manages the local registry only; do not assume remote MCP servers are merged.
+- Do not forge UI cookies or reuse another user's session/key.
+`;
+
+/** `SkillMeta` встроенного `synth-instance` (Workstream A1/A2). */
+export function buildSynthInstanceMeta(): SkillMeta {
+  return {
+    name: SYNTH_INSTANCE_NAME,
+    description:
+      'Настройка и диагностика инстанса Synth: вход, MCP-серверы, проекты и сессии, сетевая политика, перезапуск',
+    userInvocable: true,
+    disableModelInvocation: false,
+    invocation: 'both',
+    trigger: 'auto',
+    command: SYNTH_INSTANCE_COMMAND,
+    category: 'ops',
+    tags: [
+      'synth-instance',
+      'setup',
+      'admin',
+      'mcp',
+      'projects',
+      'sessions',
+      'troubleshooting',
+      'self-help',
+    ],
+    relatedSkills: [SYNTH_STORAGE_RECOVERY_NAME],
+    requiresCapabilities: [],
+    scope: 'instance',
+    mode: 'any',
+  };
+}
+
+/**
  * Собирает встроенные скиллы. `dir`/`file` — синтетические пути (на ФС нет);
  * `mtimeMs: 0` — builtin вне mtime-инвалидации watcher'а.
  */
@@ -487,5 +728,6 @@ export function buildBuiltinSkills(opts: { dataDir?: string } = {}): DiscoveredS
     build(SYNTH_STORAGE_RECOVERY_NAME, buildSynthStorageRecoveryMeta(), SYNTH_STORAGE_RECOVERY_BODY),
     build(SYNTH_PIPELINES_NAME, buildSynthPipelinesMeta(), SYNTH_PIPELINES_BODY),
     build(SYNTH_SCHEDULES_NAME, buildSynthSchedulesMeta(), SYNTH_SCHEDULES_BODY),
+    build(SYNTH_INSTANCE_NAME, buildSynthInstanceMeta(), SYNTH_INSTANCE_BODY),
   ];
 }

@@ -26,7 +26,8 @@
     "process",
     "models",
     "ssh",
-    "todo"
+    "todo",
+    "instance"
   ],
   "icon": "clipboard",
   "color": "--primary",

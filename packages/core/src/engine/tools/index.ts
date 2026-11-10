@@ -25,6 +25,20 @@ import { skillTool } from './skill.js';
 import { classifyConversationTool } from './classify-conversation.js';
 import { readSessionReferenceTool } from './read-reference.js';
 import { getProjectInfoTool, listReposTool } from './project-context.js';
+// Проекты/сессии для агента: список, поиск по имени, сведения и переименование
+// текущей сессии (агент больше не просит id проекта у пользователя).
+import { listProjectsTool, getProjectTool } from './project-query.js';
+import { listSessionsTool, getSessionInfoTool, sessionRenameTool } from './session-manage.js';
+// Workstream A1: read-only инстанс/MCP — сведения об инстансе, реестр и проверка.
+import { synthInfoTool, synthMcpListTool, synthMcpTestTool } from './instance.js';
+// Workstream A2: write-мутации MCP (add/update/remove/enable/reconnect).
+import {
+  synthMcpAddTool,
+  synthMcpUpdateTool,
+  synthMcpRemoveTool,
+  synthMcpEnableTool,
+  synthMcpReconnectTool,
+} from './instance-mcp.js';
 import { planEnterTool, planExitTool, planReadTool, planListTool, planWriteTool } from './plan.js';
 import {
   todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool,
@@ -144,6 +158,21 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   sshTunnelTool,
   getProjectInfoTool,
   listReposTool,
+  // Проекты/сессии: список и детали проектов, список/сведения/переименование сессий.
+  listProjectsTool,
+  getProjectTool,
+  listSessionsTool,
+  getSessionInfoTool,
+  sessionRenameTool,
+  // Workstream A1: инстанс и MCP-реестр (read-only).
+  synthInfoTool,
+  synthMcpListTool,
+  synthMcpTestTool,
+  synthMcpAddTool,
+  synthMcpUpdateTool,
+  synthMcpRemoveTool,
+  synthMcpEnableTool,
+  synthMcpReconnectTool,
   taskTool,
   skillTool,
   classifyConversationTool,

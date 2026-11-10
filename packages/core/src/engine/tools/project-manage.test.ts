@@ -9,6 +9,7 @@ import { ProjectStore } from '../../storage/project-store.js';
 import { EventBus } from '../../events/bus.js';
 import type { ToolContext } from '@itphx/synth-shared';
 import { generateId, ProjectRole } from '@itphx/synth-shared';
+import { RemoteError } from '../../remote/types.js';
 
 describe('project_create / project_attach', () => {
   let tmpDir: string;
@@ -732,4 +733,296 @@ describe('project_workspace_set', () => {
       expect(stored.workspace).toBe('keep-me');
     },
   );
+});
+
+/**
+ * Workstream B: `project_attach` по имени проекта (агент не просит id у
+ * пользователя), идемпотентность, предупреждение об отсутствии workspace.
+ * Общий резолвер имени — тот же, что у `get_project` (`project-resolve.ts`).
+ */
+describe('project_attach — по имени (Workstream B)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let eventBus: EventBus;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-attach-name-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    eventBus = new EventBus();
+
+    const session = await sessionManager.createSession({ title: 'No project' });
+    sessionId = session.id;
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.ownerId = 'u1';
+      s.userId = 'u1';
+      await sessionManager.saveSession(s);
+    });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId, eventBus, workspacesRoot: join(tmpDir, 'workspaces') },
+    };
+  }
+
+  function collectMoved(): Array<Record<string, unknown>> {
+    const moved: Array<Record<string, unknown>> = [];
+    eventBus.subscribe(sessionId, (event) => {
+      if (event.type === 'session.moved') moved.push(event.data as Record<string, unknown>);
+    });
+    return moved;
+  }
+
+  it('привязывает по точному имени без учёта регистра и публикует session.moved', async () => {
+    const project = projectStore.create('Named Project', 'u1', { workspace: 'named-ws' });
+    await projectStore.save(project);
+    const moved = collectMoved();
+
+    const result = await projectAttachTool.execute({ project: 'named project' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.id).toBe(project.id);
+    expect(result.metadata?.name).toBe('Named Project');
+    expect(result.metadata?.workspace).toBe('named-ws');
+    expect(result.metadata?.my_role).toBe('OWNER');
+    expect(result.metadata?.warning).toBeUndefined();
+
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBe(project.id);
+    expect(moved).toHaveLength(1);
+    expect(moved[0]?.project_id).toBe(project.id);
+  });
+
+  it('projectId приоритетнее project, если переданы оба', async () => {
+    const byId = projectStore.create('ById', 'u1');
+    const byName = projectStore.create('ByName', 'u1');
+    await projectStore.save(byId);
+    await projectStore.save(byName);
+
+    const result = await projectAttachTool.execute({ projectId: byId.id, project: 'ByName' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBe(byId.id);
+  });
+
+  it('неоднозначное имя — кандидаты, сессия не переносится', async () => {
+    const a = projectStore.create('Dup', 'u1');
+    const b = projectStore.create('Dup', 'u1');
+    await projectStore.save(a);
+    await projectStore.save(b);
+    const moved = collectMoved();
+
+    const result = await projectAttachTool.execute({ project: 'Dup' }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.ambiguous).toBe(true);
+    expect((result.metadata?.candidates as unknown[]).length).toBe(2);
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBeUndefined();
+    expect(moved).toHaveLength(0);
+  });
+
+  it('несуществующее имя — ошибка без переноса', async () => {
+    const result = await projectAttachTool.execute({ project: 'Missing' }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.found).toBe(false);
+    expect(result.content).toContain('not found');
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBeUndefined();
+  });
+
+  it('чужой проект по имени не резолвится (fail-closed), по id — write_forbidden', async () => {
+    const foreign = projectStore.create('Foreign', 'someone-else');
+    await projectStore.save(foreign);
+
+    const byName = await projectAttachTool.execute({ project: 'Foreign' }, makeCtx());
+    expect(byName.isError).toBe(true);
+    expect(byName.metadata?.found).toBe(false);
+
+    const byId = await projectAttachTool.execute({ projectId: foreign.id }, makeCtx());
+    expect(byId.isError).toBe(true);
+    expect(byId.metadata?.i18n).toEqual({ key: 'project.write_forbidden' });
+
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBeUndefined();
+  });
+
+  it('сессия уже в этом проекте — no-op без session.moved', async () => {
+    const project = projectStore.create('Same', 'u1', { workspace: 'same-ws' });
+    await projectStore.save(project);
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.projectId = project.id;
+      s.planApproved = true;
+      await sessionManager.saveSession(s);
+    });
+    const moved = collectMoved();
+
+    const result = await projectAttachTool.execute({ project: 'Same' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.same_project).toBe(true);
+    expect(moved).toHaveLength(0);
+
+    const stored = (await sessionManager.getSession(sessionId))!;
+    expect(stored.projectId).toBe(project.id);
+    // no-op не сбрасывает утверждённый план.
+    expect(stored.planApproved).toBe(true);
+  });
+
+  it('проект без workspace — предупреждение project_has_no_workspace', async () => {
+    const project = projectStore.create('No Workspace', 'u1');
+    await projectStore.save(project);
+
+    const result = await projectAttachTool.execute({ project: 'No Workspace' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.workspace).toBeNull();
+    expect(result.metadata?.warning).toBe('project_has_no_workspace');
+    expect(result.content).toContain('no workspace');
+  });
+
+  it('привязка к worktree снимается и при переносе по имени', async () => {
+    const current = projectStore.create('Current', 'u1');
+    const target = projectStore.create('Target', 'u1');
+    await projectStore.save(current);
+    await projectStore.save(target);
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.projectId = current.id;
+      s.worktree = {
+        worktreeId: 'wkt_name',
+        projectId: current.id,
+        directory: join(tmpDir, 'worktrees', 'feature'),
+        branch: 'feature/x',
+      };
+      await sessionManager.saveSession(s);
+    });
+    const moved = collectMoved();
+
+    const result = await projectAttachTool.execute({ project: 'Target' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.worktree_detached).toBe(true);
+    expect(moved[0]?.worktree_detached).toBe(true);
+
+    const stored = (await sessionManager.getSession(sessionId))!;
+    expect(stored.projectId).toBe(target.id);
+    expect(stored.worktree).toBeUndefined();
+  });
+
+  it('ни projectId, ни project — ошибка аргументов', async () => {
+    const result = await projectAttachTool.execute({}, makeCtx());
+    expect(result.isError).toBe(true);
+  });
+});
+
+/**
+ * Workstream A1: cross-world attach запрещён; локальный attach не блокируется
+ * offline-деградацией remote, но одноимённый remote-проект даёт hybrid_ambiguous.
+ */
+describe('project_attach — hybrid awareness', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let eventBus: EventBus;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-hybrid-attach-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    eventBus = new EventBus();
+    const session = await sessionManager.createSession({ title: 'No project' });
+    sessionId = session.id;
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.ownerId = 'u1';
+      s.userId = 'u1';
+      await sessionManager.saveSession(s);
+    });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(remote?: unknown): ToolContext {
+    const ctx: ToolContext = {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId, eventBus, workspacesRoot: join(tmpDir, 'workspaces') },
+    };
+    if (remote) (ctx.extra as Record<string, unknown>).getRemoteClient = () => remote;
+    return ctx;
+  }
+
+  function remoteClient(items: Array<Record<string, unknown>>, fail = false) {
+    return {
+      listAllProjects: async () => {
+        if (fail) throw new RemoteError('offline', 'OFFLINE');
+        return { items, total: items.length, truncated: false };
+      },
+    };
+  }
+
+  it('remote: id → cross_instance, сессия не привязана', async () => {
+    const moved: unknown[] = [];
+    eventBus.subscribe(sessionId, (event) => { if (event.type === 'session.moved') moved.push(event); });
+    const result = await projectAttachTool.execute({ projectId: 'remote:rp1' }, makeCtx(remoteClient([])));
+    expect(result.isError).toBe(true);
+    expect(result.metadata).toMatchObject({ cross_instance: true, project_id: 'remote:rp1' });
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBeUndefined();
+    expect(moved).toHaveLength(0);
+  });
+
+  it('имя есть только в remote → cross_instance с кандидатами', async () => {
+    const result = await projectAttachTool.execute(
+      { project: 'Remote Only' },
+      makeCtx(remoteClient([{ id: 'rp1', name: 'Remote Only', workspace: 'rw' }])),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.cross_instance).toBe(true);
+    const candidates = result.metadata?.candidates as Array<Record<string, unknown>>;
+    expect(candidates).toEqual([
+      expect.objectContaining({ origin: 'remote', id: 'remote:rp1', name: 'Remote Only', workspace: 'rw' }),
+    ]);
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBeUndefined();
+  });
+
+  it('локальный и remote с одним именем → hybrid_ambiguous', async () => {
+    const local = projectStore.create('Shared', 'u1');
+    await projectStore.save(local);
+    const result = await projectAttachTool.execute(
+      { project: 'Shared' },
+      makeCtx(remoteClient([{ id: 'rp1', name: 'Shared', workspace: 'rw' }])),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toMatchObject({ key: 'project.hybrid_ambiguous' });
+    const candidates = result.metadata?.candidates as Array<Record<string, unknown>>;
+    expect(candidates.map((candidate) => candidate.origin).sort()).toEqual(['local', 'remote']);
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBeUndefined();
+  });
+
+  it('локальный projectId привязывается без remote-проверки', async () => {
+    const local = projectStore.create('Shared', 'u1');
+    await projectStore.save(local);
+    const result = await projectAttachTool.execute(
+      { projectId: local.id },
+      makeCtx(remoteClient([{ id: 'rp1', name: 'Shared' }])),
+    );
+    expect(result.isError).toBeUndefined();
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBe(local.id);
+  });
+
+  it('remote offline не блокирует локальный attach по имени', async () => {
+    const local = projectStore.create('Solo', 'u1');
+    await projectStore.save(local);
+    const result = await projectAttachTool.execute(
+      { project: 'Solo' },
+      makeCtx(remoteClient([], true)),
+    );
+    expect(result.isError).toBeUndefined();
+    expect((await sessionManager.getSession(sessionId))!.projectId).toBe(local.id);
+  });
 });

@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { join, dirname, resolve } from 'node:path';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, redactConfigSecrets, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
@@ -10,6 +10,7 @@ import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust
 import { createPluginCliContext, createPluginCommand } from '@itphx/synth-core/cli/plugin-commands.js';
 import { createMemoryCommand } from '@itphx/synth-core/cli/memory-commands.js';
 import { createMemoryConnectionResolver } from '@itphx/synth-core/cli/memory-connection.js';
+import { createMcpCommand } from '@itphx/synth-core/cli/mcp-commands.js';
 
 const require = createRequire(import.meta.url);
 
@@ -640,6 +641,9 @@ program.addCommand(
   }),
 );
 
+// ADR-071 §2.5: `synth mcp …` — тот же клиент реестра MCP, что в core-`main.ts`.
+program.addCommand(createMcpCommand());
+
 program
   .command('chat')
   .description('Одноразовый чат-запрос')
@@ -682,11 +686,13 @@ const configCmd = new Command('config')
 
 configCmd
   .command('show')
-  .description('Показать текущую конфигурацию')
+  .description('Показать текущую конфигурацию (секреты маскируются; --show-secrets — сырые значения)')
   .option('--config <path>', 'путь к config.yaml')
+  .option('--show-secrets', 'показать секреты без маскирования (осторожно: вывод — секрет)')
   .action(async (options) => {
     const synth = await loadConfig({ configPath: options.config });
-    console.log(JSON.stringify(synth, null, 2));
+    const config = options.showSecrets ? synth : redactConfigSecrets(synth);
+    console.log(JSON.stringify(config, null, 2));
   });
 
 const providerCmd = new Command('provider')

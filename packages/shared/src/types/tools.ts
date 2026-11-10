@@ -91,6 +91,17 @@ export const ToolCapability = {
    * (`WORKSPACE_CAPABILITIES`) — список задач доступен и без workspace.
    */
   TODO: 'todo',
+  /**
+   * Инстанс и MCP-реестр (read-only, Workstream A1): тулы `synth_info`,
+   * `synth_mcp_list`, `synth_mcp_test`.
+   *
+   * Отдельная capability по той же причине, что `pipeline`/`schedule`/
+   * `process`/`models`: инстанс и его MCP-реестр — доменный ресурс, а не
+   * примитив ядра. Capability **не** привязана к рабочему каталогу проекта
+   * (`WORKSPACE_CAPABILITIES`) — сведения об инстансе доступны и без workspace.
+   * Write-тулы (`synth_mcp_add`/…) — следующий шаг.
+   */
+  INSTANCE: 'instance',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -136,6 +147,10 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.TODO]: {
     label: 'Список задач сессии',
     description: 'todo_write, todo_list, todo_add, todo_update, todo_delete',
+  },
+  [ToolCapability.INSTANCE]: {
+    label: 'Инстанс и MCP',
+    description: 'synth_info, synth_mcp_list, synth_mcp_test',
   },
 };
 

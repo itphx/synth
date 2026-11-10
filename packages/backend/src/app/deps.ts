@@ -3,6 +3,7 @@
 // (ADR-046), runtime-настройки (ADR-005/023).
 // Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
 import { mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   ProviderConfig, ModelConfig, ModelCompatibility, ToolsDisabledConfig, WebhooksConfig,
@@ -18,6 +19,7 @@ import {
 } from '@itphx/synth-shared';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
+import type { InstanceRuntimeMeta } from '@itphx/synth-core';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -1291,6 +1293,33 @@ export async function createBackendDeps(
     return model ? model.enabled !== false : undefined;
   };
 
+  // Workstream A1: снимок метаданных инстанса для read-only тула `synth_info`
+  // (managed). Секретов нет: только флаги наличия ключей/настроек.
+  const authDebug = config.auth.debugMode === true;
+  const oidcEnabled = config.auth.oidc?.enabled === true;
+  const apiKeyConfigured = Boolean(config.auth.apiKey || process.env.SYNTH_API_KEY);
+  const instanceMeta: InstanceRuntimeMeta = {
+    mode: 'managed',
+    server: { port: config.port },
+    auth: {
+      mode: authDebug ? 'debug' : oidcEnabled ? 'oidc' : apiKeyConfigured ? 'api-key' : 'unknown',
+      localKeyPresent: existsSync(join(dataDir, 'secrets/api-key')),
+      apiKeyConfigured,
+      oidcEnabled,
+      debug: authDebug,
+    },
+    storage: {
+      backend: resolveStorageBackend(config.synth, process.env),
+      degraded: storageDegraded,
+    },
+    features: {
+      mcp: true,
+      metrics: config.synth.metrics.enabled === true,
+      memory: true,
+      restartMode: process.env.SYNTH_RESTART_MODE ?? 'disabled',
+    },
+  };
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -1338,6 +1367,11 @@ export async function createBackendDeps(
     // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
     promptBlocks,
     mcpManager,
+    // Workstream A1: реестр MCP и снимок инстанса — read-only тулы
+    // `synth_info`/`synth_mcp_list`/`synth_mcp_test`. Политика читается live.
+    mcpRegistry: mcpRegistryStore,
+    getMcpNetworkPolicy: () => egressResolver.resolveMcp(),
+    instanceMeta,
     projectStore,
     // Онбординг: тул `profile_update` сохраняет ответы интервью в профиль.
     profilesStore,

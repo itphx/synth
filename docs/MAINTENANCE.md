@@ -1678,6 +1678,46 @@ synth memory list --scope instance
 по таймауту — код выхода 1.
 
 
+## CLI `synth mcp` (реестр MCP-серверов)
+
+**Цель:** посмотреть и обслужить реестр MCP-серверов (ADR-071) из CLI без UI. Команда — тонкий
+клиент HTTP API v2 **локального** инстанса: нужен запущенный `synth serve` и его API-ключ
+(`--api-key` → `SYNTH_API_KEY` → `core.apiKey` → файл `{dataDir}/secrets/api-key`; ключ никогда
+не печатается). Адрес — `http://127.0.0.1:${SYNTH_CORE_PORT:-core.port}`.
+
+```bash
+# 1. Реестр (таблица: имя/тип/origin/trust/enabled); --json — сырой ответ
+synth mcp list
+
+# 2. HTTP/SSE-сервер (origin user по умолчанию — проверяется сетевая политика)
+synth mcp add --name search --type http --url https://mcp.example/mcp --description "Поиск"
+
+# 3. stdio-сервер: команда, аргументы и переменные окружения (флаги можно повторять)
+synth mcp add --name fs --type stdio --command npx \
+  --arg -y --arg @modelcontextprotocol/server-filesystem --arg /workspace \
+  --env TOKEN=... --enabled-by-default
+
+# 4. Временное подключение: toolCount/tools или error
+synth mcp test search
+
+# 5. Переподключение после рестарта MCP-сервера (без рестарта Synth)
+synth mcp reconnect search
+
+# 6. Удаление записи реестра
+synth mcp remove search
+```
+
+`--origin instance|user` (по умолчанию `user` — сервер проходит проверку сетевой политики MCP,
+loopback/private/SSRF-диапазоны по умолчанию запрещены). `--origin instance` — **только** для
+локальных/доверенных сервисов (ADMIN): instance-записи политикой не проверяются, поэтому
+пометить удалённый HTTP/SSE-сервер как `instance` — значит обойти `mcpNetworkPolicy` и получить
+SSRF-риск. `add` не включает сервер в сессии/проекты — это делает инструмент `synth_mcp_enable`
+(у CLI нет контекста сессии). **Секреты:** заголовки (`headers`) CLI не поддерживает — токены
+коннекторов заводите через UI и слой внешних доступов (ADR-105), а не plaintext-заголовком.
+Ошибки API печатаются как `<КОД>: <текст>` с кодом выхода 1; недоступный инстанс — «сервер не
+отвечает на 127.0.0.1:<port>; запустите synth serve».
+
+
 ## Обслуживание из UI
 
 **Цель:** выполнить эксплуатационные операции без CLI; доступно только роли ADMIN.

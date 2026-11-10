@@ -115,6 +115,7 @@ synth uninstall              # удаление инстанса (--purge|--purg
 synth storage migrate --to postgres|file  # перенос данных инстанса между backend'ами хранения, идемпотентно (--dry-run|--yes) — ADR-097
 synth analytics rebuild [--from <date>] [--dry-run|--yes]  # идемпотентная пересборка суточных роллапов аналитики (ADR-102)
 synth memory status|list|index|rebuild|drop  # портал памяти: индексы и факты (--scope, --wait, --json) — ADR-107
+synth mcp list|add|test|remove|reconnect  # реестр MCP локального инстанса; ключ читается внутри, не печатается — ADR-071/ADR-131
 ```
 
 **Перенос проекта между инстансами** (ADR-091 §6, по умолчанию без секретов — карта обфускации Gateway вырезается, `--with-secrets` только ADMIN/LEAD; materialization с новыми id):
@@ -330,10 +331,12 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - **Пайплайны/расписания (ADR-101/051)** — `pipeline_*`, `schedule_*`.
 - **Процессы/задачи/вопрос (ADR-111/112/113)** — `process_list|logs|stop|delete`, `task`, `classify_conversation`, `read_session_reference`, `question`.
 - **Проект/лог/инварианты** — `get_project_info`, `list_repos`, `project_*`, `project_log_*`, `project_invariants_*`.
+- **Инстанс/MCP (self-help)** — `synth_info`, `synth_mcp_list|test|add|update|remove|enable|reconnect` (capability `instance`, in-process, без секретов) — ADR-131.
+- **Проекты/сессии** — `list_projects`, `get_project`, `list_sessions`, `get_session_info`, `session_rename`; `project_attach` принимает id или точное имя (кандидаты при неоднозначности). В гибриде discovery read-only сливает оба мира (`origin`, `remote:` id, `cross_instance`), `project_attach` **не** делает cross-world move (`project.cross_instance`/`project.hybrid_ambiguous`).
 - **Веб/модели** — `web_fetch`, `web_search`, `list_models`.
 - **Профиль/скиллы** — `profile_update`, `skill`.
 
-Встроенные скиллы `synth-pipelines`/`synth-schedules`, доступность групп (`ToolCapability`), MCP-слои и правило «deny не останавливает ход» — [docs/TOOLS.md](./docs/TOOLS.md).
+Встроенные скиллы `synth-pipelines`/`synth-schedules`/`synth-instance` (команда `/instance` — self-help инстанса/MCP/проектов/сессий, ADR-131), доступность групп (`ToolCapability`), MCP-слои и правило «deny не останавливает ход» — [docs/TOOLS.md](./docs/TOOLS.md).
 
 **Роли агентов: прежний набор и миграция.** Набор ролей заменён: `pm`/`developer`/`qa`/`analyst`/`auditor` → `leader`/`fixer`/`tester`/`researcher`/`security-auditor`; каноническая карта — `LEGACY_AGENT_ROLE_ALIASES` (`engine/agents/migrations.ts`). Два шва, оба обязательны: (1) **миграция stored-агентов** при старте (`migrateLegacyStoredAgents` в `server/app/deps.ts` и `backend/app/deps.ts` до `registerStoredAgents`) — запись прежнего id переносит только пользовательские настройки (`enabled`, `provider`, `model`, `temperature`, `topP`, `topK`, `reasoningLevel`, `groups`) в **встроенное** определение целевого агента (идентичность, права, промпт, лимиты — из поставки), существующую целевую запись не перетирает, устаревшую удаляет, идемпотентна; (2) **runtime-алиас** (`ChatOrchestrator._resolveEffectiveAgentRole`) — у старых сессий `settings.agentRole` остаётся исторической меткой (`pm`), но промпт/capabilities/лимиты берутся у `leader`; фоллбек на `assistant` — только для роли, которой нет ни в реестре, ни в алиасах. Полнота ролевых файлов (RU+EN у каждого `contextFile`) закреплена тестом `engine/agents/definitions.test.ts`.
 
@@ -382,7 +385,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 111 (Решения: 56, Частично: 23, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 112 (Решения: 56, Частично: 24, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 21 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
@@ -413,6 +416,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | безопасность / gateway / целостность клиента / soft-delete | [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md), [PROP-073](./docs/arch_decisions/prop-073-client-integrity-hybrid.md), [PROP-074](./docs/arch_decisions/prop-074-soft-delete-retention.md) |
 | workspace / worktrees / git-репозитории / SSH-ключи | [ADR-075](./docs/arch_decisions/adr-075-project-workspace-provisioning.md), [ADR-114](./docs/arch_decisions/adr-114-git-worktrees.md), [docs/WORKTREES.md](./docs/WORKTREES.md), [ADR-076](./docs/arch_decisions/adr-076-git-repo-registry-ssh.md) |
 | инструменты / образы / тулчейн / executor | [ADR-077](./docs/arch_decisions/adr-077-runtime-toolchain.md), [ADR-078](./docs/arch_decisions/adr-078-runtime-dependency-availability.md), [docs/EXECUTION.md](./docs/EXECUTION.md), [docs/TOOLS.md](./docs/TOOLS.md) |
+| self-help инстанса / MCP из чата / проект-сессия | скилл `synth-instance`, [ADR-131](./docs/arch_decisions/adr-131-self-management-tools.md), [docs/TOOLS.md](./docs/TOOLS.md) |
 | план / todo | [ADR-039](./docs/arch_decisions/adr-039-plan-in-project.md) |
 | ошибки LLM / i18n | [ADR-041](./docs/arch_decisions/adr-041-llm-error-taxonomy.md) |
 | гибрид | [ADR-042](./docs/arch_decisions/adr-042-hybrid-mode.md), [ADR-043](./docs/arch_decisions/adr-043-unified-identity-login.md), [ADR-045](./docs/arch_decisions/adr-045-hybrid-server-profiles.md), [PROP-080](./docs/arch_decisions/prop-080-managed-hybrid-modes.md), [PROP-081](./docs/arch_decisions/prop-081-hybrid-policy-leak-protection.md), [docs/HYBRID.md](./docs/HYBRID.md), скилл `synth-hybrid` |

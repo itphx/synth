@@ -25,7 +25,8 @@
     "question",
     "process",
     "models",
-    "todo"
+    "todo",
+    "instance"
   ],
   "icon": "shield-keyhole",
   "color": "--status-error",

@@ -25,7 +25,10 @@ import {
 import { listModelsTool } from '../tools/list-models.js';
 import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool } from '../tools/todo.js';
 import { projectCreateTool } from '../tools/project-manage.js';
+import { synthInfoTool, synthMcpListTool, synthMcpTestTool } from '../tools/instance.js';
 import { computeToolAvailability } from '../permission/availability.js';
+import { isPlanBlockedTool } from '../permission/evaluator.js';
+import { INSTANCE_WRITE_TOOLS, getToolGroups } from '../permission/groups.js';
 
 /**
  * Агенты, которым нужны capability пайплайнов и расписаний: авторство и запуск
@@ -258,5 +261,49 @@ describe('Дефолтные агенты — capability todo (ADR-039)', () => 
       { agentCapabilities: agent.capabilities, sessionMode: 'act' },
     );
     expect(project).toEqual({ available: false, reason: 'role' });
+  });
+});
+
+/**
+ * Workstream A1: capability `instance` — read-only инстанс/MCP
+ * (`synth_info`, `synth_mcp_list`, `synth_mcp_test`).
+ *
+ * Получают агенты, которые ведут инфраструктуру/автоматизацию инстанса:
+ * `assistant`, `admin`, `devops`, `leader`. Read-only аудит безопасности
+ * (`security-auditor`), исполнители и researcher — нет.
+ */
+describe('Дефолтные агенты — capability instance (Workstream A1)', () => {
+  const agents = loadSystemAgentDefinitions();
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const WITH_INSTANCE = ['assistant', 'admin', 'devops', 'leader'];
+  const WITHOUT_INSTANCE = ['security-auditor', 'tester', 'researcher', 'fixer', 'explore', 'general', 'title'];
+  const INSTANCE_TOOLS_LIST = [synthInfoTool, synthMcpListTool, synthMcpTestTool];
+
+  it.each(WITH_INSTANCE)('%s имеет capability instance и видит read-тулы', (id) => {
+    const agent = byId.get(id)!;
+    expect(agent.capabilities, id).toContain(ToolCapability.INSTANCE);
+    for (const tool of INSTANCE_TOOLS_LIST) {
+      const availability = computeToolAvailability(tool.name, tool.capabilities, {
+        agentCapabilities: agent.capabilities,
+        sessionMode: 'act',
+      });
+      expect(availability.available, `${id} → ${tool.name}`).toBe(true);
+    }
+  });
+
+  it.each(WITHOUT_INSTANCE)('%s не имеет capability instance', (id) => {
+    const agent = byId.get(id)!;
+    expect(agent.capabilities, id).not.toContain(ToolCapability.INSTANCE);
+  });
+
+  it('read-тулы доступны в plan-режиме, write-тулы — блокируются', () => {
+    expect(INSTANCE_WRITE_TOOLS.length).toBeGreaterThan(0);
+    for (const tool of INSTANCE_TOOLS_LIST) {
+      expect(isPlanBlockedTool(tool.name, tool.capabilities), tool.name).toBe(false);
+      expect(getToolGroups(tool.name, tool.capabilities)).toContain('instance');
+    }
+    for (const name of INSTANCE_WRITE_TOOLS) {
+      expect(isPlanBlockedTool(name), name).toBe(true);
+    }
   });
 });

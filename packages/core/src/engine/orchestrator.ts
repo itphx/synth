@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy, ToolContext, ToolDefinition } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, McpNetworkPolicy, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy, ToolContext, ToolDefinition } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel, nativeAudioFormatForMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig, SshMode } from '@itphx/synth-shared';
 import type { AutoTitleConfig } from '@itphx/synth-shared/config';
@@ -39,6 +39,9 @@ import type { AutomationRuntime } from './tools/automation-runtime.js';
 import type { AgentRegistry } from './agents/registry.js';
 import { DEFAULT_AGENT_ID, resolveAgentRoleAlias } from './agents/index.js';
 import type { McpManager } from './mcp/manager.js';
+import type { RemoteBackendClient } from '../remote/client.js';
+import type { McpRegistryRepository } from '../storage/ports/mcp-registry-repository.js';
+import type { InstanceRuntimeMeta } from './instance/meta.js';
 import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
 import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
 import { info, warning } from '../logger.js';
@@ -468,6 +471,27 @@ export interface OrchestratorOptions {
   toolRegistry?: ToolRegistry;
   agentRegistry?: AgentRegistry;
   mcpManager?: McpManager;
+  /**
+   * Workstream A1: клиент удалённого backend (гибрид) — read-only merge
+   * проектов/сессий в инструментах. `null` — гибрид не подключён.
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
+  /**
+   * Workstream A1: реестр MCP-серверов (порт `McpRegistryRepository`) — для
+   * read-only тулов `synth_mcp_list`/`synth_mcp_test`. Не задан — тулы вернут
+   * понятную ошибку зависимостей.
+   */
+  mcpRegistry?: McpRegistryRepository;
+  /**
+   * Workstream A1: эффективная сетевая политика MCP (ADR-071 §2.3.1) — читается
+   * на каждый вызов (runtime-настройка), без копирования в снимок.
+   */
+  getMcpNetworkPolicy?: () => Promise<McpNetworkPolicy | undefined>;
+  /**
+   * Workstream A1: снимок метаданных инстанса для `synth_info` (без секретов).
+   * Не задан — поля инстанса в ответе будут `null`.
+   */
+  instanceMeta?: InstanceRuntimeMeta;
   routerConfig?: RouterConfig;
   /**
    * ADR-084: конфигурация decision-слоя (config.yaml `decision`). Не задана/
@@ -985,6 +1009,12 @@ export class ChatOrchestrator {
    */
   private readonly _warnedUnknownAgentRoles = new Set<string>();
   private readonly _mcpManager: McpManager | null;
+  /** Workstream A1: клиент удалённого backend (гибрид) для тулов. */
+  private readonly _getRemoteClient: (() => RemoteBackendClient | null) | null;
+  /** Workstream A1: реестр MCP и снимок инстанса для read-only тулов. */
+  private readonly _mcpRegistry: McpRegistryRepository | null;
+  private readonly _getMcpNetworkPolicy: (() => Promise<McpNetworkPolicy | undefined>) | null;
+  private readonly _instanceMeta: InstanceRuntimeMeta | null;
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
   private readonly _router: ModelRouter | null;
   private readonly _routerConfig: RouterConfig | null;
@@ -1250,6 +1280,27 @@ export class ChatOrchestrator {
   }
 
   /**
+   * Принципал хода для тулов проектов/сессий (`list_projects`, `get_project`,
+   * `list_sessions`, …): id пользователя и роли профиля.
+   *
+   * Владелец сессии — человек: `ownerId` → `userId` → `local` (standalone).
+   * Роли читаются из профиля (`loadProfile`); нет стора/профиля/ошибка чтения —
+   * пустой набор (fail-closed: elevated-права не выдаются «по умолчанию»).
+   */
+  private async _resolveToolPrincipal(
+    session: Session,
+  ): Promise<{ userId: string; roles: string[] }> {
+    const userId = session.ownerId || session.userId || 'local';
+    if (!this._profilesStore) return { userId, roles: [] };
+    try {
+      const profile = await this._profilesStore.loadProfile(userId);
+      return { userId, roles: profile?.roles ?? [] };
+    } catch {
+      return { userId, roles: [] };
+    }
+  }
+
+  /**
    * Определение агента по роли с фоллбеком на агента по умолчанию.
    *
    * В инстансах с историей `settings.agentRole` может ссылаться на роль,
@@ -1458,6 +1509,10 @@ export class ChatOrchestrator {
     this._toolRegistry = options.toolRegistry ?? null;
     this._agentRegistry = options.agentRegistry ?? null;
     this._mcpManager = options.mcpManager ?? null;
+    this._getRemoteClient = options.getRemoteClient ?? null;
+    this._mcpRegistry = options.mcpRegistry ?? null;
+    this._getMcpNetworkPolicy = options.getMcpNetworkPolicy ?? null;
+    this._instanceMeta = options.instanceMeta ?? null;
     this._routerConfig = options.routerConfig ?? null;
     this._decisionConfig = options.decisionConfig ?? null;
     this._contextConfig = options.contextConfig ?? null;
@@ -4564,6 +4619,10 @@ export class ChatOrchestrator {
     // он не пересчитывается «от текущего» владельца сессии; для старых
     // сообщений без принципала — совместимый fallback (владелец сессии).
     const turnPrincipal = resolveTurnPrincipal(session, message);
+    // Идентичность для тулов проектов/сессий (list_projects/get_project/
+    // list_sessions): владелец сессии и роли профиля. Elevated (ADMIN/LEAD)
+    // расширяет видимость; нет профиля — пустые роли (fail-closed).
+    const toolPrincipal = await this._resolveToolPrincipal(session);
     // ADR-071 §2.4: проект сессии — носитель project-скоупа MCP; загружаем один
     // раз: нужен рабочему каталогу, state-сообщениям, резолвингу MCP и Composer.
     let projectForState: Project | null = null;
@@ -6194,6 +6253,12 @@ export class ChatOrchestrator {
                   projectStore: this._projectStore ?? undefined,
                   // Онбординг: тул `profile_update` сохраняет ответы интервью.
                   profilesStore: this._profilesStore ?? undefined,
+                  // Проекты/сессии: принципал хода и elevated-признак для
+                  // видимости (чужие проекты не показываются, ADMIN/LEAD видят всё).
+                  principal: toolPrincipal,
+                  isElevatedPrincipal: toolPrincipal.roles.some(
+                    (role) => role.toUpperCase() === 'ADMIN' || role.toUpperCase() === 'LEAD',
+                  ),
                   workspacesRoot: this._workspacesRoot,
                   // ADR-075/ADR-076: тулы управления проектом (workspace, репозитории).
                   gitService: this._gitService,
@@ -6317,6 +6382,15 @@ export class ChatOrchestrator {
                   parentSessionSettings: session.settings,
                   // ADR-071 §2.1: саб-агент наследует MCP-скоуп родителя.
                   mcpServers: activeMcpServers,
+                  // Workstream A1: read-only тулы инстанса/MCP — реестр, статусы,
+                  // эффективный scope и сетевая политика (без секретов).
+                  mcpManager: this._mcpManager ?? undefined,
+                  getRemoteClient: this._getRemoteClient ?? undefined,
+                  mcpRegistry: this._mcpRegistry ?? undefined,
+                  getMcpNetworkPolicy: this._getMcpNetworkPolicy ?? undefined,
+                  instanceMeta: this._instanceMeta ?? undefined,
+                  resolveMcpServers: () => this.resolveMcpServers(session),
+                  resolveMcpServersFor: (target: Session) => this.resolveMcpServers(target),
                   modelRouter: this._router ?? undefined,
                   routerConfig: this._routerConfig ?? undefined,
                   contextConfig: this._contextConfig ?? undefined,

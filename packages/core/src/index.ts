@@ -254,6 +254,7 @@ export type { StoredDictionary, DictionaryLanguage } from './engine/router/index
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
+export type { InstanceRuntimeMeta } from './engine/instance/meta.js';
 // Этап 1 roadmap 0.13 (блок 3): подсистема «вопрос пользователю» (`ask_user`) —
 // сервис (постановка/ожидание/ответ/отмена), retention-очистка и типизированные
 // ошибки. Публично: managed-backend собирает тот же сервис (паритет core↔backend).

@@ -96,6 +96,7 @@
 | ADR-120 | Бюджет памяти инстанса — лёгкие листинги, bounded-кэши и капы чтения | ⚠️ Частично | [adr-120-memory-budget.md](./adr-120-memory-budget.md) |
 | ADR-121 | Portable offline-дистрибутивы — pinned Node и ripgrep, SHA256SUMS | ⚠️ Частично | [adr-121-offline-portable-distribution.md](./adr-121-offline-portable-distribution.md) |
 | ADR-122 | Память как продукт — порты, плагин, индексы и recall | ⚠️ Частично | [adr-122-memory-product.md](./adr-122-memory-product.md) |
+| ADR-131 | Self-management инструменты инстанса и MCP | ⚠️ Частично | [adr-131-self-management-tools.md](./adr-131-self-management-tools.md) |
 
 ## Предложения
 
@@ -172,5 +173,5 @@
 
 ---
 
-Всего документов: 111 (Решения: 56, Частично: 23, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 112 (Решения: 56, Частично: 24, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 21 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

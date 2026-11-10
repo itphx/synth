@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveStorageBackend, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveStorageBackend, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, redactConfigSecrets, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
@@ -12,6 +12,7 @@ import { setSynthReady } from './metrics/collectors/ready.js';
 import { createPluginCliContext, createPluginCommand } from './cli/plugin-commands.js';
 import { createMemoryCommand } from './cli/memory-commands.js';
 import { createMemoryConnectionResolver } from './cli/memory-connection.js';
+import { createMcpCommand } from './cli/mcp-commands.js';
 
 const program = new Command();
 
@@ -735,6 +736,10 @@ program.addCommand(
   }),
 );
 
+// ADR-071 §2.5: `synth mcp …` — клиент HTTP API v2 локального инстанса
+// (`/api/v2/mcp/*`). Транспорт — обычный `fetch` (localhost).
+program.addCommand(createMcpCommand());
+
 program
   .command('chat')
   .description('Одноразовый чат-запрос')
@@ -786,11 +791,13 @@ program
   .description('Управление конфигурацией')
   .addCommand(
     new Command('show')
-      .description('Показать текущую конфигурацию')
+      .description('Показать текущую конфигурацию (секреты маскируются; --show-secrets — сырые значения)')
       .option('--config <path>', 'путь к config.yaml')
+      .option('--show-secrets', 'показать секреты без маскирования (осторожно: вывод — секрет)')
       .action(async (options) => {
         const synth = await loadConfig({ configPath: options.config });
-        console.log(JSON.stringify(synth, null, 2));
+        const config = options.showSecrets ? synth : redactConfigSecrets(synth);
+        console.log(JSON.stringify(config, null, 2));
       }),
   )
   .addCommand(

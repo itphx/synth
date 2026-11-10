@@ -3,6 +3,7 @@
 // скиллы/команды (ADR-046), runtime-настройки (ADR-005/023).
 // Вынесено из `server/app.ts` (ADR-095, шаг 4a) — «вынос по швам», без изменения поведения.
 import { mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   ProviderConfig, ModelConfig, ModelCompatibility, ToolsPolicy, ToolsDisabledConfig,
@@ -12,6 +13,8 @@ import type {
 import { ensureDataDir, mergeModelCompatibility, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION, generateId, makeTextPart, nowISO, MessageRole } from '@itphx/synth-shared';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 import { serializeMessage } from '../serialize.js';
+import type { InstanceRuntimeMeta } from '../../engine/instance/meta.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
 
 /**
  * Fallback-текст info-блока автопродолжения после рестарта: content — en-текст
@@ -178,6 +181,12 @@ export interface HybridMirrorAccessors {
  * Швы сборки standalone-зависимостей: зеркала гибрида + ADR-089-подписка хаба.
  */
 export interface StandaloneDepsAccessors extends HybridMirrorAccessors {
+  /**
+   * Workstream A1: клиент удалённого backend (гибрид) — read-only merge
+   * проектов/сессий в инструментах (`list_projects`/`list_sessions`).
+   * `null` — гибрид не подключён (только локальный мир).
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
   /**
    * ADR-089: колбэк после материализации сессии funnel'ом
    * (`RequestSessionService.onSessionMaterialized`) и **до** доставки события в неё.
@@ -1366,6 +1375,34 @@ export async function createStandaloneDeps(
     return model ? model.enabled !== false : undefined;
   };
 
+  // Workstream A1: снимок метаданных инстанса для read-only тула `synth_info`.
+  // Секретов нет: `localKeyPresent` — только факт существования файла (не
+  // читаем), `apiKeyConfigured` — только флаг наличия значения.
+  const authDebug = process.env.SYNTH_AUTH_DEBUG === 'true';
+  const apiKeyConfigured = Boolean(config.apiKey || process.env.SYNTH_API_KEY);
+  const localKeyPresent = existsSync(join(dataDir, 'secrets/api-key'));
+  const instanceMeta: InstanceRuntimeMeta = {
+    mode: config.hybridEnabled ? 'hybrid' : 'standalone',
+    server: { port: config.port },
+    auth: {
+      mode: authDebug ? 'debug' : apiKeyConfigured ? 'api-key' : localKeyPresent ? 'local-key' : 'unknown',
+      localKeyPresent,
+      apiKeyConfigured,
+      oidcEnabled: false,
+      debug: authDebug,
+    },
+    storage: {
+      backend: config.storageBackend ?? 'file',
+      degraded: storageDegraded,
+    },
+    features: {
+      mcp: true,
+      metrics: Boolean(metrics),
+      memory: true,
+      restartMode: process.env.SYNTH_RESTART_MODE ?? 'disabled',
+    },
+  };
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -1501,6 +1538,13 @@ export async function createStandaloneDeps(
     // (`synth_memory_context_*`).
     ...(memoryTelemetry ? { onMemoryContext: memoryTelemetry.recordContext } : {}),
     mcpManager,
+    // Workstream A1: реестр MCP и снимок инстанса — read-only тулы
+    // `synth_info`/`synth_mcp_list`/`synth_mcp_test`. Политика читается live.
+    mcpRegistry: mcpRegistryStore,
+    getMcpNetworkPolicy: () => egressResolver.resolveMcp(),
+    instanceMeta,
+    // Workstream A1: гибрид — read-only merge проектов/сессий в тулах.
+    getRemoteClient: accessors.getRemoteClient,
     cachePolicy: config.llmCachePolicy,
     toolsPolicy: effectiveToolsPolicy,
     mcpPolicy: effectiveMcpPolicy,

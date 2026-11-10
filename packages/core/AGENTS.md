@@ -1411,6 +1411,13 @@
   (404/сеть/таймаут) повторяется через `EXECUTOR_MCP_SOURCE_RETRY_MS` (15 с) — иначе backend,
   стартовавший раньше пода исполнителя, «запоминал» пустой состав на весь TTL; успешный
   пустой ответ — валидный снимок и живёт до TTL.
+  **Auto-reconnect MCP-сессии (ADR-131):** `McpClient.callTool` при transport-ошибке истечения
+  сессии (`Session not found`/`not initialized`/404-session) делает `disconnect → connect` и
+  **один** повтор; параллельные вызовы делят один reconnect-цикл. `synth_mcp_reconnect` —
+  ручной путь (refreshServer + register). Tool-level `isError` с таким текстом reconnect не
+  запускает. **Read-only hybrid awareness (ADR-131):** discovery-тулы получают `getRemoteClient`
+  через `extra` и сливают локальный/удалённый миры проектов/сессий (`origin`, `remote:` id),
+  `project_attach` запрещает cross-instance.
   **Вложения MCP-результата (ADR-115, протокол исполнителя 5):** `McpClient` (stdio/HTTP) и
   `ExecutorMcpClient` раскладывают `content` на текст и нетекстовые блоки
   (`collectMcpContent`: `text`/`resource.text` → текст, `image`/`audio`/`resource.blob` →
@@ -1453,7 +1460,9 @@
   capability `pipeline`) и `synth-schedules` (ADR-051: команда `/schedules`, capability
   `schedule`) — последние два описывают агенту жизненный цикл пайплайна (спецификация →
   публикация → прогон → журнал, шаблоны инстанца) и расписания (cron/интервал → цель, ручной
-  запуск, история срабатываний). Команды встроенных скиллов **уникальны** и не пересекаются с
+  запуск, история срабатываний). `synth-instance` (ADR-131: команда `/instance`, trigger `auto`) —
+  self-help инстанса/MCP/проектов/сессий; capability не требуется (при недоступности `synth_*`
+  делегирует @admin/UI). Команды встроенных скиллов **уникальны** и не пересекаются с
   встроенными slash-командами (`help`/`skills`/`commands`/`summary`/`init`) — иначе
   `resolveCatalog` (`engine/commands/resolver.ts`) эмитил бы диагностику `shadowed` и скилл
   был бы недостижим. Тесты — `engine/skills/*.test.ts`.
@@ -1466,7 +1475,12 @@
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill, profile_update, вложения `attach_workspace_file`/
   `save_attachment`/`send_attachment`, каталог `list_models`, метаданные SSH-ключей
-  `ssh_keys_list`). Атомарная мультифайловая правка — `patch` (`patch.ts`):
+  `ssh_keys_list`). **Self-help (ADR-131):** `instance.ts` — `synth_info`/`synth_mcp_list|test`
+  (read, capability `instance`), `instance-mcp.ts` — `synth_mcp_add|update|remove|enable|reconnect`
+  (write, plan блокирует), `project-query.ts`/`session-manage.ts`/`project-resolve.ts` —
+  `list_projects`/`get_project`/`list_sessions`/`get_session_info`/`session_rename`; `project_attach`
+  принимает `projectId` **или** `project` (id/точное имя; при неоднозначности — кандидаты).
+  Атомарная мультифайловая правка — `patch` (`patch.ts`):
   JSON-массив `edits[]`, 1..50 правок за вызов, **всё-или-ничего** — все правки
   проверяются и применяются в памяти до записи, при любой ошибке ни один файл
   не меняется; запись атомарна по файлу (tmp в том же каталоге → rename), при сбое
@@ -2067,6 +2081,10 @@
   (опрос состояния до `ready`/`failed`), `--timeout`, `--json`, `--yes` (для `drop`).
   Коды выхода: `0` — успех, `1` — отказ (HTTP-ошибка, сеть, нет токена, `drop` без `--yes`,
   таймаут ожидания).
+- `cli/mcp-commands.ts` — **CLI `synth mcp`** (ADR-071/ADR-131): тонкий клиент реестра MCP
+  локального инстанса (`list`/`add`/`test`/`remove`/`reconnect`), без дублирования логики
+  HTTP-контура; ключ читается внутри процесса (env/config/`{dataDir}/secrets/api-key`) и
+  **не печатается**. Подключён в `main.ts` и `packages/synth/src/cli.ts`.
 - `server/routes/plugins.ts` — **Ф5б-2: HTTP-контур плагинов**. `createPluginsRoutes(auth, deps, opts)`:
   `GET /`, `GET /audit` (**журнал действий плагинов**: `{entries}` — хвост, `limit` (дефолт 50,
   максимум 500) и фильтр `plugin`; маршрут объявлен **до** `/:name`; guard — `readGuard`, чтение

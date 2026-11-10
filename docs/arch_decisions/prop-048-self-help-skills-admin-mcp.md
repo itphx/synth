@@ -1,6 +1,6 @@
 # PROP-048: Self-help скиллы и admin-MCP для Synth
 
-> **Статус:** 🧩 Предложение — Self-help: dogfooding-развёртывание, runbook-скиллы, read-only status-MCP, deploy-тулы (ADMIN)
+> **Статус:** 🧩 Предложение — остаток: deploy-тулы/status-MCP; срез self-help реализован → [ADR-131](./adr-131-self-management-tools.md)
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D3, идея 3 — dogfooding).
@@ -8,7 +8,10 @@
 > [PROP-037](./prop-037-commit-security-step.md), [PROP-056](./prop-056-synth-mcp-server.md),
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md),
 > [ADR-079](./adr-079-local-home-independent-instances.md), [ADR-091](./adr-091-backup-restore-transfer.md),
-> [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [ADR-097](./adr-097-storage-provider-class.md).
+> [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [ADR-097](./adr-097-storage-provider-class.md),
+> [ADR-131](./adr-131-self-management-tools.md).
+> **Уточнение (2026-11-10):** срез self-help реализован — см. [ADR-131](./adr-131-self-management-tools.md);
+> остаток — deploy-тулы/status-MCP и hybrid/credential.
 
 **Решение:** использовать Synth для развёртывания и сопровождения самого Synth (**dogfooding**): админ
 поднимает локальный Synth и **с его помощью** разворачивает сервер, управляет им и диагностирует проблемы.
@@ -77,22 +80,43 @@ ops-скиллы автоматизируют **через локальный Sy
   в контекст LLM и в аудит.
 - Credentials — в `secrets/` вне git-репозитория `synth/` (инвариант корневого `AGENTS.md`).
 
+## Принятый к реализации срез (2026-11-10)
+
+Срез реализован по [ADR-131](./adr-131-self-management-tools.md): встроенный скилл
+`synth-instance` + instance/MCP/project/session-инструменты, auto-reconnect MCP-сессии,
+CLI `synth mcp`, redaction `synth config show`. Остаток — deploy-тулы и read-only
+status-MCP (см. «Открытые вопросы»); детали и гейтинг — в ADR-131.
+
 ## Статус реализации в коде
 
-**Не реализовано.**
+Срез self-help реализован ([ADR-131](./adr-131-self-management-tools.md)); deploy/status-MCP не реализованы.
 
-Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
+Есть:
 
-- Admin API/RBAC/OIDC — реализованы (`packages/backend/src/routes/*`, роли `ADMIN`/`USER`/`LEAD`/`AUDITOR`).
-- Helm-чарт `charts/synth/` присутствует; `synth-deploy/` — внешний репозиторий; скрипты в `scripts/` на месте.
-- MCP представлен только клиентом (`packages/core/src/engine/mcp/`); серверных MCP-регистраций нет.
-- Runbook-скиллов deploy/admin/troubleshoot, status-MCP, deploy-тулов и роли `devops` нет.
+- capability `instance`, группы read/write и встроенный скилл `synth-instance` (`/instance`, auto);
+- `synth_info` и `synth_mcp_list|test|add|update|remove|enable|reconnect` (in-process, без секретов);
+- `list_projects`, `get_project`, `list_sessions`, `get_session_info`, `session_rename`;
+  `project_attach` по `projectId` или точному имени (кандидаты при неоднозначности);
+- auto-reconnect MCP-сессии в `McpClient`; CLI `synth mcp *`; redaction `synth config show`;
+- read-only hybrid discovery проектов/сессий (`origin`, `remote:` id, `remote_offline`/`remote_truncated`) и
+  cross-instance attach guard (`project.cross_instance`/`project.hybrid_ambiguous`);
+- HTTP/UI реестра MCP (ADR-071), `mcpNetworkPolicy`, `synth doctor`, `attachSessionToProject`.
+
+Нет:
+
+- K8s/Helm deploy-тулы и операции с кластером;
+- внешний read-only status-MCP (PROP-056);
+- cross-world move и remote MCP merge/management — **не критично**, остатки ADR-131;
+- credential-auth в инструментах (остаток ADR-131).
 
 ## Открытые вопросы
 
-- Деплой-скиллы — только инструкции или реальные тулы с доступом к K8s/Helm?
-- Как не отдать секреты кластера в контекст LLM ([ADR-036](./adr-036-llm-gateway.md))?
-- Нужна ли отдельная роль `devops`?
+- Deploy-скиллы и deploy-тулы: только инструкции или реальные тулы с доступом к K8s/Helm?
+  **Остаётся открытым** (вне среза).
+- Нужен ли внешний read-only status-MCP поверх тех же данных, если in-process-инструменты уже
+  отвечают на вопросы агента?
+- **Не критично:** cross-world move (p.2) и remote MCP merge/management (p.3); read-only hybrid
+  discovery уже реализован в ADR-131. Остаётся credential-auth в инструментах.
 
 ## Связи
 
@@ -100,5 +124,13 @@ ops-скиллы автоматизируют **через локальный Sy
 - [PROP-056](./prop-056-synth-mcp-server.md) «MCP-сервер Synth» — общая основа для status-MCP (D11).
 - [ADR-036](./adr-036-llm-gateway.md) / [PROP-037](./prop-037-commit-security-step.md) — секреты, guard, security-step.
 - [ADR-023](./adr-023-configuration.md) — конфигурация инстанса; [ADR-029](./adr-029-granular-permissions.md) — гейтинг ADMIN.
+- [ADR-071](./adr-071-mcp-servers-prompt.md) — единый реестр MCP (уровни, скоуп, представление в промпте).
+- [ADR-105](./adr-105-external-credentials.md) — credentials: запрет plaintext-заголовков, секреты вне контекста LLM.
+- [ADR-106](./adr-106-authority-layer.md) — authority-слой: ADMIN-гейтинг write-операций.
+- [ADR-131](./adr-131-self-management-tools.md) — реализованный срез self-help-инструментов инстанса/MCP.
 - [ADR-079](./adr-079-local-home-independent-instances.md) — изолированные локальные инстансы для dogfooding.
 - Смежные черновики: D11/PROP-056 (MCP-сервер), D28/ADR-086 (contribution flow — dogfooding тем же Synth).
+
+## История
+
+- 2026-11-10 — срез self-help реализован → [ADR-131](./adr-131-self-management-tools.md) (skill + instance/MCP/project/session tools, auto-reconnect, CLI, redaction); остаток — deploy/status-MCP.

@@ -279,7 +279,7 @@ export {
   type LLMGatewayRateLimitConfig,
   type LLMGatewayAuditConfig,
 } from './config/index.js';
-export { defaultConfig, loadConfig } from './config/index.js';
+export { defaultConfig, loadConfig, redactConfigSecrets } from './config/index.js';
 export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveIgnoreRules, resolveHome, resolveProfilesPath, resolveCredentialsPath, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun, resolveDecisionProvider, resolveDecisionModel, resolveMaxUploadBytes, resolveMaxReadBytes, resolveMaxPreviewBytes } from './config/index.js';
 export type { StorageBackend, ResolvedPostgresConfig } from './config/index.js';
 export { applyEnvOverrides, envOverrideName, toSnakeCase, parseEnvValue, ENV_OVERRIDES } from './config/index.js';

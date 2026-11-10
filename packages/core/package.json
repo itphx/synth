@@ -60,6 +60,10 @@
       "types": "./dist/cli/memory-connection.d.ts",
       "import": "./dist/cli/memory-connection.js"
     },
+    "./cli/mcp-commands.js": {
+      "types": "./dist/cli/mcp-commands.d.ts",
+      "import": "./dist/cli/mcp-commands.js"
+    },
     "./engine/gateway/index.js": {
       "types": "./dist/engine/gateway/index.d.ts",
       "import": "./dist/engine/gateway/index.js"

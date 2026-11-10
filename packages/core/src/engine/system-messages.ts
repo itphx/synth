@@ -42,6 +42,15 @@ export const SYSTEM_MESSAGES = {
   'session.retry_cancelled': 'Retries cancelled by the user',
   'session.subtask_title': 'Subtask: {description}',
 
+  // --- Управление сессиями из чата (list_sessions/get_session_info/rename) ---
+  'session.list': 'Sessions ({count}):\n{items}',
+  'session.list_empty': 'No sessions available.',
+  'session.details': 'Session "{name}" ({id})\n{json}',
+  'session.not_found': 'Error: session {id} not found',
+  'session.rename_ok': 'Session renamed to "{title}".',
+  'session.save_error': 'Error saving the session: {error}',
+  'session.remote_truncated': 'Remote session list is truncated (page cap) — cross-world pagination is unavailable.',
+
   // --- Сабагент (task) ---
   'task.stopped_by_user': 'Task stopped by the user',
   'task.stopped_before_completion':
@@ -272,6 +281,16 @@ export const SYSTEM_MESSAGES = {
   // --- Проект ---
   'project.deps_unavailable': 'Error: session manager or project store unavailable for {tool}',
   'project.session_read_error': 'Error: failed to read the session',
+  'project.query_not_found': 'Project "{name}" not found. Use list_projects to see available projects.',
+  'project.query_ambiguous': 'Project name "{name}" is ambiguous. Candidates:\n{items}',
+  'project.list': 'Projects ({count}):\n{items}',
+  'project.list_empty': 'No projects available.',
+  'project.details': 'Project "{name}" ({id})\n{json}',
+  'project.attached_no_workspace': 'Session attached to project "{name}". Warning: the project has no workspace — file, shell and git tools are unavailable until project_workspace_set is called.',
+  'project.cross_instance': 'Project "{name}" ({id}) belongs to another instance. Use `synth project export`/`import` or create the session on that instance.',
+  'project.hybrid_ambiguous': 'Project name "{name}" exists locally and on the remote instance. Candidates:\n{items}',
+  'project.remote_unavailable': 'Error: the remote instance is unavailable (hybrid is not connected)',
+  'project.remote_truncated': 'Remote project list is truncated (page cap) — cross-world pagination is unavailable.',
   'project.session_not_found': 'Error: session not found',
   'project.save_error': 'Error saving the project: {error}',
   'project.workspace_create_error': 'Error creating project workspace: {error}',
@@ -768,6 +787,35 @@ export const SYSTEM_MESSAGES = {
   'models.list.provider_unknown': 'Provider "{provider}" not found in the model catalog',
   'models.list.deps_unavailable': 'The model catalog is unavailable in this build',
   'models.list.unavailable': 'The model catalog is unavailable: {reason}',
+
+  // --- Инстанс и MCP-реестр (Workstream A1) ---
+  'instance.deps_unavailable': 'Error: instance/MCP dependencies are unavailable for {tool}',
+  'instance.info': 'Instance information:\n{json}',
+  'instance.mcp_list': 'MCP servers ({count}):\n{json}',
+  'instance.mcp_not_found': 'MCP server "{name}" is not configured. Available servers: {available}',
+  'instance.mcp_test_ok': 'MCP server "{name}" is reachable; tools: {count}.',
+  'instance.mcp_test_failed': 'MCP server "{name}" check failed: {error}',
+
+  // --- Write-мутации MCP (Workstream A2) ---
+  'instance.mcp_add.added': 'MCP server "{name}" added ({origin}). It is not enabled for the session; call synth_mcp_enable to use it.',
+  'instance.mcp_update.updated': 'MCP server "{name}" updated.',
+  'instance.mcp_remove.removed': 'MCP server "{name}" removed.',
+  'instance.mcp_enable.session_ok': 'MCP server "{name}" for the session: {enabled}.',
+  'instance.mcp_enable.project_ok': 'MCP server "{name}" for the project: {enabled}.',
+  'instance.mcp_enable.instance_ok': 'MCP server "{name}" at the instance level: {enabled}.',
+  'instance.mcp_enable.no_project': 'No project: the project-level MCP switch is available only within a project',
+  'instance.mcp_enable.no_session': 'Error: the current session is unavailable',
+  'instance.mcp_enable.session_forbidden': 'Error: only the session owner (or ADMIN/LEAD) can change MCP settings for this session',
+  'instance.mcp_reconnect.ok': 'MCP server "{name}" reconnected; tools: {count}.',
+  'instance.mcp_reconnect.failed': 'MCP server "{name}" did not reconnect: {error}',
+  'instance.mcp.forbidden': 'Error: not enough permissions for this MCP operation (record author, or ADMIN/LEAD required)',
+  'instance.mcp.instance_forbidden': 'Error: this MCP operation requires ADMIN (instance records, stdio, instance master flag)',
+  'instance.mcp.project_forbidden': 'Error: you do not have permission to change this project (owner or editor role required)',
+  'instance.mcp.credential_unsupported': 'Error: credential-backed MCP auth is not supported by this tool — bind the credential via the UI/API',
+  'instance.mcp.secret_header': 'Error: MCP config contains plaintext secret headers: {error}',
+  'instance.mcp.network_denied': 'Error: MCP network policy denied {url}: {reason}. Add a local service as origin "instance" (ADMIN) or add an exception in settings.',
+  'instance.mcp.invalid_config': 'Error: invalid MCP config: {error}',
+  'instance.mcp.exists': 'Error: MCP server "{name}" already exists',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

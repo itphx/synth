@@ -1051,6 +1051,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
   app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
     registry: mcpRegistryStore,
+    // Переподключение сервера (`POST /servers/:name/reconnect`) — снять и
+    // заново зарегистрировать MCP-инструменты в общем реестре.
+    toolRegistry,
     // Политика резолвится на каждый запрос (live; исключения/режим — из стора).
     getNetworkPolicy: () => egressResolver.resolveMcp(),
     // ADR-105 (Ф3): порт слоя внешних доступов — право привязать доступ

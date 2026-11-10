@@ -13,6 +13,7 @@ import {
 } from '@itphx/synth-shared';
 import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
 import type { McpManager } from '../../engine/mcp/index.js';
+import type { ToolRegistry } from '../../engine/tools/index.js';
 import { evaluateMcpNetworkAccess } from '../../engine/mcp/network-policy.js';
 import { syncMcpManagerFromRegistry } from '../../engine/mcp/manager-sync.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -119,6 +120,12 @@ export interface McpRegistryRoutesOptions {
   requireScopeForServiceKey?: Middleware;
   /** Сообщения об отказах (backend — i18n, core — русские литералы). */
   messages?: Partial<McpRegistryRouteMessages>;
+  /**
+   * Реестр инструментов (для `POST /servers/:name/reconnect`): с ним
+   * переподключение идёт через `McpManager.refreshServer` (снять/перерегистрировать
+   * MCP-тулы), без него — `disconnectServer` + `connectServer`.
+   */
+  toolRegistry?: ToolRegistry;
 }
 
 const addServerSchema = z.object({
@@ -394,6 +401,36 @@ export function createMcpRegistryRoutes(
     await syncManagerConfig();
 
     return c.json({ success: true });
+  });
+
+  // --- Переподключить сервер без рестарта инстанса (ADMIN или scope `addons:install`) ---
+  app.post('/servers/:name/reconnect', adminOrScopeGuard, async (c) => {
+    const name = c.req.param('name');
+    const entry = await registry.getByName(name);
+    if (!entry) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.serverNotFound(c, name) } }, 404);
+    }
+
+    if (!mcpManager) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: messages.managerNotConfigured(c) } }, 500);
+    }
+
+    try {
+      if (options.toolRegistry) {
+        await mcpManager.refreshServer(name, options.toolRegistry);
+      } else {
+        await mcpManager.disconnectServer(name);
+        await mcpManager.connectServer(name);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ success: false, error: message });
+    }
+
+    const status = mcpManager.getServerStatus(name);
+    const connected = status === 'connected';
+    const toolCount = (mcpManager.getServerTools(name) ?? []).length;
+    return c.json({ success: true, name, status, connected, toolCount });
   });
 
   // --- Проверить подключение (ADMIN или scope `addons:install`) ---

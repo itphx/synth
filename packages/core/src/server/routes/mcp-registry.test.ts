@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import type { McpServerConfig, McpNetworkPolicy } from '@itphx/synth-shared';
 import { McpRegistryStore, MemoryExternalCredentialRepository } from '../../index.js';
 import type { McpManager } from '../../engine/mcp/index.js';
+import type { ToolRegistry } from '../../engine/tools/index.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { createMcpRegistryRoutes } from './mcp-registry.js';
 
@@ -83,9 +84,12 @@ function createMockMcpManager() {
     setDefaultServers: vi.fn(),
     setServerSystemEnabled: vi.fn(),
     disconnectServer: vi.fn(async () => {}),
+    connectServer: vi.fn(async () => {}),
+    refreshServer: vi.fn(async () => {}),
     getConfiguredServers: vi.fn(() => []),
     getConfig: vi.fn(() => ({})),
-    getServerTools: vi.fn(() => []),
+    getServerTools: vi.fn((): Array<{ name: string }> => []),
+    getServerStatus: vi.fn(() => 'connected'),
     probeServer: vi.fn(async () => []),
   };
 }
@@ -615,5 +619,137 @@ describe('createMcpRegistryRoutes: session-owner guard (legacy /session/:id)', (
     });
     expect(res.status).toBe(200);
     expect(sessions.get('own')?.settings.mcpServers).toEqual(['known']);
+  });
+});
+
+describe('createMcpRegistryRoutes: POST /servers/:name/reconnect', () => {
+  let registry: McpRegistryStore;
+  let tmpDir: string;
+  let mcpManager: ReturnType<typeof createMockMcpManager>;
+
+  function makeApp(opts: { withManager?: boolean; toolRegistry?: ToolRegistry } = {}) {
+    const app = new Hono();
+    app.use('*', async (c: Context, next: Next) => {
+      const auth = resolveAuth(c.req.header('Authorization'));
+      if (auth) {
+        c.set('user', auth.user);
+        if (auth.scopes) {
+          c.set('serviceKey', {
+            keyId: auth.user.id,
+            label: auth.user.username,
+            roles: auth.user.roles,
+            scopes: auth.scopes,
+          });
+        }
+      }
+      await next();
+    });
+    const routes = createMcpRegistryRoutes(
+      createMockAuth(),
+      opts.withManager === false ? null : (mcpManager as unknown as McpManager),
+      null,
+      {
+        registry,
+        ...(opts.toolRegistry ? { toolRegistry: opts.toolRegistry } : {}),
+      },
+    );
+    app.route('/api/v2/mcp', routes);
+    return app;
+  }
+
+  function reconnect(token: string, name = 'srv') {
+    return makeApp().request(`/api/v2/mcp/servers/${name}/reconnect`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-mcp-reconnect-'));
+    registry = new McpRegistryStore({ dataDir: tmpDir });
+    mcpManager = createMockMcpManager();
+    await registry.add({ name: 'srv', config: httpConfig(), origin: 'instance', trust: 'builtin' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('не найдено → 404 NOT_FOUND', async () => {
+    const res = await reconnect('admin', 'missing');
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('без mcpManager → 500 INTERNAL_ERROR', async () => {
+    await registry.add({ name: 'srv2', config: httpConfig(), origin: 'instance', trust: 'builtin' });
+    const res = await makeApp({ withManager: false }).request('/api/v2/mcp/servers/srv2/reconnect', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin' },
+    });
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('INTERNAL_ERROR');
+  });
+
+  it('с toolRegistry переподключает через refreshServer и отдаёт статус', async () => {
+    mcpManager.getServerStatus.mockReturnValue('connected');
+    mcpManager.getServerTools.mockReturnValue([{ name: 'a' }, { name: 'b' }]);
+
+    const toolRegistry = {} as ToolRegistry;
+    const res = await makeApp({ toolRegistry }).request('/api/v2/mcp/servers/srv/reconnect', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(mcpManager.refreshServer).toHaveBeenCalledWith('srv', toolRegistry);
+    expect(mcpManager.disconnectServer).not.toHaveBeenCalled();
+    expect(mcpManager.connectServer).not.toHaveBeenCalled();
+    expect(await res.json()).toEqual({
+      success: true,
+      name: 'srv',
+      status: 'connected',
+      connected: true,
+      toolCount: 2,
+    });
+  });
+
+  it('без toolRegistry — disconnect + connect', async () => {
+    mcpManager.getServerTools.mockReturnValue([]);
+    const res = await reconnect('admin');
+
+    expect(res.status).toBe(200);
+    expect(mcpManager.refreshServer).not.toHaveBeenCalled();
+    expect(mcpManager.disconnectServer).toHaveBeenCalledWith('srv');
+    expect(mcpManager.connectServer).toHaveBeenCalledWith('srv');
+  });
+
+  it('ошибка переподключения → success:false (как /test)', async () => {
+    mcpManager.refreshServer.mockRejectedValueOnce(new Error('boom'));
+    const toolRegistry = {} as ToolRegistry;
+    const res = await makeApp({ toolRegistry }).request('/api/v2/mcp/servers/srv/reconnect', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: false, error: 'boom' });
+  });
+
+  it('guard: service-key без scope → 403 SCOPE_REQUIRED, со scope → 200', async () => {
+    // Интерактивные креды в core проходят (single-user standalone, как у
+    // PUT/DELETE); ограничение — только для service-key без scope.
+    const interactive = await reconnect('dev');
+    expect(interactive.status).toBe(200);
+
+    const allowed = await reconnect('svc-scope');
+    expect(allowed.status).toBe(200);
+
+    const noScope = await reconnect('svc-noscope');
+    expect(noScope.status).toBe(403);
+    const body = await noScope.json() as { error: { code: string } };
+    expect(body.error.code).toBe('SCOPE_REQUIRED');
   });
 });

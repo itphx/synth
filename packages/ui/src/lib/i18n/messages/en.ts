@@ -2498,6 +2498,7 @@ export const dict = {
   'admin.agents.cap.models': 'models',
   'admin.agents.cap.ssh': 'remote SSH',
   'admin.agents.cap.todo': 'todo list',
+  'admin.agents.cap.instance': 'instance & MCP',
 
   // Subagent fields
   'admin.agents.agentMode': 'Agent type',

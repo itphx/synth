@@ -48,6 +48,13 @@ const RUNTIME_TOOLS = [
   'read_session_reference',
   'get_project_info',
   'list_repos',
+  // Проекты/сессии для агента (list/get/rename): метаданные, не файловая
+  // система — группа runtime, поэтому доступны и в plan-режиме.
+  'list_projects',
+  'get_project',
+  'list_sessions',
+  'get_session_info',
+  'session_rename',
   'plan_enter',
   'plan_exit',
   'todo_write',
@@ -143,6 +150,29 @@ export const PROCESS_TOOLS = ['process_list', 'process_logs', 'process_stop', 'p
 export const SSH_TOOLS = ['ssh_exec', 'ssh_copy', 'ssh_tunnel'];
 
 /**
+ * Workstream A1: read-only инстанс/MCP — `synth_info`, `synth_mcp_list`,
+ * `synth_mcp_test`.
+ *
+ * Отдельная группа, как `pipeline`/`schedule`/`process`/`models`: инстанс и его
+ * MCP-реестр — доменный ресурс. Ключ группы совпадает со значением capability
+ * `instance`, поэтому правило `permission.rules.instance` работает и по именам
+ * встроенных тулов, и по capability плагинного тула.
+ *
+ * Write-тулы (`synth_mcp_add`/`update`/`remove`) — следующий шаг; список
+ * `INSTANCE_WRITE_TOOLS` заведён заранее как шов блокировки в plan-режиме
+ * (`isPlanBlockedTool`).
+ */
+export const INSTANCE_READ_TOOLS = ['synth_info', 'synth_mcp_list', 'synth_mcp_test'];
+export const INSTANCE_WRITE_TOOLS = [
+  'synth_mcp_add',
+  'synth_mcp_update',
+  'synth_mcp_remove',
+  'synth_mcp_enable',
+  'synth_mcp_reconnect',
+];
+export const INSTANCE_TOOLS = [...INSTANCE_READ_TOOLS, ...INSTANCE_WRITE_TOOLS];
+
+/**
  * ADR-039: операционный список задач сессии (`session.todos`, не `project.plan`).
  *
  * Имена **уже** входят в `RUNTIME_TOOLS` — группа `runtime` продолжает их
@@ -191,6 +221,8 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   process: PROCESS_TOOLS,
   // PROP-124 §4/§9: адресные ssh-тулы (ключ совпадает с capability `ssh`).
   ssh: SSH_TOOLS,
+  // Workstream A1: read-only инстанс/MCP (ключ совпадает с capability `instance`).
+  instance: INSTANCE_TOOLS,
   // ADR-039: список задач сессии (ключ совпадает с capability `todo`).
   // Имена дублируются в `runtime` намеренно: тул принадлежит обеим группам.
   todo: TODO_TOOLS,
@@ -230,6 +262,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'process',
   'ssh',
   'todo',
+  'instance',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

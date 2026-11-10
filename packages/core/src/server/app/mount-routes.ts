@@ -865,6 +865,9 @@ export function mountStandaloneRoutes(
       // Standalone — single-user инстанс (ADR-079): право участника проекта
       // не сужается (единственный владелец — локальный пользователь).
       canEditProject: async () => true,
+      // Переподключение сервера (`POST /servers/:name/reconnect`) — снять и
+      // заново зарегистрировать MCP-инструменты в общем реестре.
+      toolRegistry,
     },
   ));
 

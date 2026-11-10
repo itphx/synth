@@ -18,6 +18,7 @@ import {
   PIPELINE_WRITE_TOOLS,
   SCHEDULE_WRITE_TOOLS,
   SSH_TOOLS,
+  INSTANCE_WRITE_TOOLS,
 } from './groups.js';
 
 // Реэкспорт: историческое место `extractPathParams` — этот модуль (его
@@ -163,6 +164,9 @@ const PLAN_BLOCKED_SSH_TOOLS: ReadonlySet<string> = new Set(SSH_TOOLS);
 export function isPlanBlockedTool(toolName: string, capabilities?: readonly string[]): boolean {
   if (PLAN_BLOCKED_AUTOMATION_TOOLS.has(toolName)) return true;
   if (PLAN_BLOCKED_SSH_TOOLS.has(toolName)) return true;
+  // Workstream A1: write-тулы инстанса/MCP (пока список пуст) — блокируются в
+  // plan-режиме, read-тулы (`synth_info`/`synth_mcp_list`/`synth_mcp_test`) — нет.
+  if (INSTANCE_WRITE_TOOLS.includes(toolName)) return true;
   const groups = getToolGroups(toolName, capabilities);
   return groups.includes('edit') || groups.includes('git_write');
 }
