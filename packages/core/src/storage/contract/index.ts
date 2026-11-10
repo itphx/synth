@@ -84,4 +84,7 @@ export { describeBackgroundRunRepository } from './background-run-repository.con
 // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
 export { describeWorktreeRepository } from './worktree-repository.contract.js';
 
+// ADR-029: ожидания подтверждения прав (отдельный стор).
+export { describePendingApprovalRepository } from './pending-approval-repository.contract.js';
+
 export { createTmpDir, makeSession, makeMessage, makeProject, makeProfile } from './helpers.js';

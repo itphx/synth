@@ -79,6 +79,23 @@ function addTriggerRequest(trigger: PermissionTrigger, overrides: {
   })
 }
 
+/**
+ * Восстановленное после рестарта инстанса ожидание (ADR-029): живой waiter'а
+ * нет, ответ применяется как разрешение в сессии.
+ */
+function addRestoredRequest(): void {
+  usePermissionStore.getState().addRequest(SESSION_ID, {
+    approvalId: 'approval_restored',
+    toolName: 'execute_shell',
+    params: { command: 'ls -la' },
+    reason: 'правило shell.* → ask',
+    askedAt: new Date().toISOString(),
+    timeoutMs: 0,
+    held: true,
+    restored: true,
+  })
+}
+
 /** Клик по кнопке «Подробнее» (шапка полосы). */
 async function expandBar(container: HTMLElement): Promise<void> {
   const toggle = container.querySelector('button[title="Подробнее"]')
@@ -482,5 +499,55 @@ describe('PermissionRequestBar — подсветка подозрительно
     expect(params.textContent).toContain('/home/rdv')
     // Команда не дублируется в списке параметров.
     expect(params.textContent).not.toContain('cat /home/rdv/.ssh/config')
+  })
+})
+
+/**
+ * ADR-029: восстановленное после рестарта инстанса ожидание.
+ *
+ * Живой waiter'а после рестарта нет — ответ применяется как разрешение в
+ * сессии. Карточка помечается короткой пометкой; сама карточка, блок «Что
+ * вызвало вопрос» и подсветка — как обычно.
+ */
+describe('PermissionRequestBar — восстановленное ожидание (после рестарта)', () => {
+  beforeAll(() => {
+    useI18nStore.setState({ locale: 'ru', dictionary: ruDict, loadingLocale: null })
+  })
+
+  it('показывает пометку о перезапуске инстанса', async () => {
+    addRestoredRequest()
+    const container = await renderBar()
+
+    const note = container.querySelector('[data-testid="permission-restored"]')
+    expect(note).not.toBeNull()
+    expect(note!.textContent).toContain('Инстанс был перезапущен')
+  })
+
+  it('у обычного ожидания пометки нет', async () => {
+    addRequest()
+    const container = await renderBar()
+
+    expect(container.querySelector('[data-testid="permission-restored"]')).toBeNull()
+  })
+
+  it('карточка и кнопки ответа — как обычно (пометка не меняет поведение)', async () => {
+    addRestoredRequest()
+    const reply = vi
+      .spyOn(useTransportStore.getState(), 'sendPermissionReply')
+      .mockResolvedValue(true)
+    const container = await renderBar()
+
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toContain('Разрешить один раз')
+    expect(labels).toContain('Запретить')
+
+    const deny = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Запретить',
+    )!
+    await act(async () => {
+      deny.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(reply).toHaveBeenCalledWith(SESSION_ID, 'approval_restored', false, undefined)
   })
 })

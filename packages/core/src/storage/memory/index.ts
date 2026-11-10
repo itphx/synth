@@ -76,3 +76,5 @@ export { MemoryQuestionRepository } from './questions.js';
 export { MemoryBackgroundRunRepository } from './background-runs.js';
 // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
 export { MemoryWorktreeRepository } from './worktrees.js';
+// ADR-029: ожидания подтверждения прав (отдельный стор, не документ сессии).
+export { MemoryPendingApprovalRepository } from './pending-approvals.js';

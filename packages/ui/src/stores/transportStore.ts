@@ -1459,6 +1459,23 @@ function isAlreadyConsumed(err: unknown): boolean {
 }
 
 /**
+ * ADR-029: ожидание **восстановлено после рестарта инстанса**?
+ *
+ * Живой реестр подтверждений живёт в памяти процесса: после рестарта он
+ * пуст, а ожидание остаётся в документе сессии (`Session.pendingApprovals`)
+ * и приходит в снимке `GET /sessions/:id/permissions` с признаком
+ * `restored: true`.
+ *
+ * Ответ на такое ожидание уходит **по HTTP** (`POST /sessions/:id/permissions/:approvalId`):
+ * WS-кадр `permission_reply` знает только про живые ожидания (реестр
+ * Authority в памяти процесса, привязки к восстановленному id нет).
+ */
+function isRestoredApproval(sessionId: string, approvalId: string): boolean {
+  const requests = usePermissionStore.getState().requestsBySession[sessionId];
+  return !!requests?.some((r) => r.approvalId === approvalId && r.restored === true);
+}
+
+/**
  * ADR-111/ADR-113: UI-уведомления о фоновой работе (старт/финиш).
  *
  * Дедупа нет: каждое пришедшее событие фоновой работы даёт уведомление —
@@ -2707,6 +2724,18 @@ export function createDispatcher(): EventDispatcher {
         const approvalId = payload.approval_id as string | undefined
         if (!approvalId) break
         usePermissionStore.getState().removeRequest(sid, approvalId)
+        // DTO-счётчик висящих подтверждений в сторе сессий — тоже протухает:
+        // ответ снимает одно ожидание, а список сессий заново не запрашивается.
+        // Уменьшаем счётчик локально (в минус не уходим). Если у сессии остались
+        // другие ожидания — их видно по живому стору (`requestsBySession`).
+        useSessionsStore.setState((s) => ({
+          sessions: s.sessions.map((sess) => {
+            if (sess.id !== sid) return sess
+            const count = sess.pending_approvals ?? 0
+            if (count <= 0) return sess
+            return { ...sess, pending_approvals: count - 1 }
+          }),
+        }))
         break
       }
 
@@ -3695,7 +3724,11 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
   },
 
   sendPermissionReply: async (sessionId, approvalId, approved, once) => {
-    if (transport && transportReady && transport.getTransport() === 'ws') {
+    // ADR-029: восстановленное после рестарта инстанса ожидание отвечаем
+    // по HTTP — WS-кадр о таких ожиданиях не знает (реестр подтверждений в
+    // памяти процесса, привязки нет).
+    const restored = isRestoredApproval(sessionId, approvalId);
+    if (!restored && transport && transportReady && transport.getTransport() === 'ws') {
       console.debug('[TransportStore] sendPermissionReply via WS:', sessionId, approvalId, approved, once)
       transport.sendPermissionReply(sessionId, approvalId, approved, once)
       return true
@@ -3703,7 +3736,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     // WS нет (SSE/фоллбек после разрыва): отвечаем HTTP-путём — иначе запрос
     // висел бы до ask-таймаута (инцидент на test: «Запретить» терялся).
     try {
-      console.debug('[TransportStore] sendPermissionReply via HTTP POST:', sessionId, approvalId, approved)
+      console.debug('[TransportStore] sendPermissionReply via HTTP POST:', sessionId, approvalId, approved, 'restored:', restored)
       await sessionsApi.permissionReply(sessionId, approvalId, {
         action: approved ? 'allow' : 'deny',
         ...(once !== undefined ? { once } : {}),

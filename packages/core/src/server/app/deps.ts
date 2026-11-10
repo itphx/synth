@@ -1375,6 +1375,11 @@ export async function createStandaloneDeps(
     authorityGate: authorityGuard?.gate,
     // ADR-106 Ф3: реестр подтверждений (привязка к ходу + носитель гранта).
     ...(approvalRegistry ? { approvalRegistry } : {}),
+    // ADR-029: отдельное хранилище ожиданий подтверждения (ADR-096) —
+    // персистентная копия ожидания, переживающая рестарт инстанса. Документ
+    // сессии не трогаем: запись в него — полная замена истории, а результаты
+    // параллельных тулов пишутся точечно (`appendMessage`, ADR-118 §4).
+    ...(storageDegraded ? {} : { pendingApprovalRepository: storageContext.pendingApprovals }),
     // ADR-077: порт исполнения команд (inline — исполнение в процессе;
     // режим — параметр запуска, инвариант 24). Тот же порт получает и
     // детект внешних зависимостей (ниже) — иначе они смотрели бы в разные
@@ -1566,6 +1571,28 @@ export async function createStandaloneDeps(
     isCancelRequested: async (sid) =>
       (await sessionManager.getSession(sid))?.status.cancelRequested === true,
   });
+
+  // ADR-029: восстановление ожиданий подтверждения после рестарта инстанса.
+  //
+  // Живой реестр ожиданий живёт в памяти процесса и после рестарта пуст, а
+  // вопрос пользователю — ещё актуален. Персистентная копия лежит в
+  // **отдельном хранилище ожиданий** (`storage.pendingApprovals`, ADR-096) —
+  // в документе сессии её быть не может (гонка lost update с точечной
+  // записью истории, ADR-118 §4).
+  //
+  // Паттерн — тот же, что у `questionService.recoverOnStart()`: best-effort,
+  // ошибка не роняет старт.
+  if (!storageDegraded) {
+    try {
+      await orchestrator.restorePendingApprovals();
+    } catch (err) {
+      console.warn(
+        `[permission] восстановление ожиданий подтверждения не удалось: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 
   // ADR-090 (Ф5б-2): эффективный конфиг слоя = config.yaml (+env) поверх
   // runtime-настроек (`settings.json`/PG): админка `/api/v2/settings/plugins`

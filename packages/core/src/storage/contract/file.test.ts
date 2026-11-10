@@ -33,6 +33,7 @@ import {
   describeMcpRegistryRepository,
   describePackRepository,
   describePipelineRepository,
+  describePendingApprovalRepository,
   describePipelineRunRepository,
   describeProfileRepository,
   describeProjectPipelineRepository,
@@ -97,6 +98,7 @@ import { FileAuthorityDecisionJournal } from '../file-authority-decision-journal
 import { FileQuestionStore } from '../file-question-store.js';
 import { FileBackgroundRunStore } from '../file-background-run-store.js';
 import { FileWorktreeStore } from '../file-worktree-store.js';
+import { FilePendingApprovalStore } from '../file-pending-approval-store.js';
 
 /** Мастер-ключ для шифрующих хранилищ (base64, 32 байта) — файл master.key не создаётся. */
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -392,6 +394,13 @@ describe('контрактные тесты файловых реализаци�
   describeWorktreeRepository('FileWorktreeStore → WorktreeRepository', async () => ({
     repo: new FileWorktreeStore({ dataDir: await tmp() }),
   }));
+
+  // ADR-029: ожидания подтверждения прав (`pending-approvals.json`) —
+  // отдельный стор, не документ сессии.
+  describePendingApprovalRepository(
+    'FilePendingApprovalStore → PendingApprovalRepository',
+    async () => ({ repo: new FilePendingApprovalStore({ dataDir: await tmp() }) }),
+  );
 
   // Файловая деталь (ADR-005/ADR-114): повреждённый JSON — **понятная ошибка**,
   // а не тихий пустой список (иначе «все worktree'ы потеряны» выглядели бы как

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventBus } from '../../events/bus.js';
 import { PermissionApprovalManager } from './approval.js';
 import type { ApprovalRequest } from './approval.js';
+import { MemoryPendingApprovalRepository } from '../../storage/memory/pending-approvals.js';
 
 describe('PermissionApprovalManager — ask flow', () => {
   let bus: EventBus;
@@ -396,5 +397,243 @@ describe('PermissionApprovalManager — ask flow', () => {
 
     bus.publish('s1', 'permission.replied', { approval_id: 'approval_1', session_id: 's1', approved: false });
     await pending;
+  });
+});
+
+/**
+ * Счётчик ожидающих подтверждений по сессиям (`listPendingCounts`).
+ *
+ * Источник для DTO-поля `pending_approvals`: дерево сессий должно знать о
+ * висящем запросе и **после перезагрузки страницы** (живой стор клиента пуст).
+ */
+describe('PermissionApprovalManager — listPendingCounts', () => {
+  let bus: EventBus;
+  let manager: PermissionApprovalManager;
+
+  beforeEach(() => {
+    bus = new EventBus();
+    manager = new PermissionApprovalManager(bus);
+  });
+
+  /** Опубликовать запрос подтверждения (живой `permission.asked`). */
+  function ask(sessionId: string, approvalId: string): void {
+    // Подписчик нужен: без пользовательских подписчиков спрашивать некому —
+    // менеджер закрывает ожидание без публикации.
+    bus.subscribe(sessionId, () => {});
+    const waiter = manager.prepareWaiter(
+      sessionId,
+      {
+        approvalId,
+        callId: `call-${approvalId}`,
+        toolName: 'execute_shell',
+        arguments: { command: 'ls -la' },
+        reason: 'нужна проверка',
+      },
+      0, // без таймаута — запрос живёт до ответа
+    );
+    manager.publishWaiters([waiter]);
+  }
+
+  it('пустой реестр — пустая карта', () => {
+    expect(manager.listPendingCounts().size).toBe(0);
+  });
+
+  it('два ожидания в одной сессии — счётчик 2', () => {
+    ask('s1', 'ap-1');
+    ask('s1', 'ap-2');
+
+    const counts = manager.listPendingCounts();
+    expect(counts.size).toBe(1);
+    expect(counts.get('s1')).toBe(2);
+  });
+
+  it('две сессии — по одному ожиданию в каждой', () => {
+    ask('s1', 'ap-1');
+    ask('s2', 'ap-2');
+
+    const counts = manager.listPendingCounts();
+    expect(counts.size).toBe(2);
+    expect(counts.get('s1')).toBe(1);
+    expect(counts.get('s2')).toBe(1);
+  });
+
+  it('после ответа запись исчезает из счётчика', () => {
+    ask('s1', 'ap-1');
+    ask('s1', 'ap-2');
+    expect(manager.listPendingCounts().get('s1')).toBe(2);
+
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'ap-1',
+      session_id: 's1',
+      action: 'allow',
+    });
+
+    const counts = manager.listPendingCounts();
+    expect(counts.get('s1')).toBe(1);
+    expect(manager.get('ap-1')).toBeUndefined();
+  });
+});
+
+/**
+ * ADR-029: **отдельное хранилище ожиданий** — персистентная копия ожидания,
+ * переживающая рестарт инстанса (живой реестр живёт в памяти процесса).
+ *
+ * Контракт:
+ * - при публикации запроса — запись ожидания (`repository.save`);
+ * - при settle/таймауте/отмене/каскадном отказе — запись снимается
+ *   (`repository.delete`);
+ * - ошибка хранилища **не ломает ход** (best-effort).
+ */
+describe('PermissionApprovalManager — хранилище ожиданий', () => {
+  let bus: EventBus;
+
+  const request: ApprovalRequest = {
+    approvalId: 'approval_1',
+    callId: 'call_1',
+    toolName: 'execute_shell',
+    arguments: { command: 'ls -la' },
+    reason: 'правило shell.* → ask',
+  };
+
+  beforeEach(() => {
+    bus = new EventBus();
+  });
+
+  /** Менеджер с хранилищем ожиданий (in-memory) и его снимок. */
+  function makeManager(): {
+    manager: PermissionApprovalManager;
+    repository: MemoryPendingApprovalRepository;
+  } {
+    const repository = new MemoryPendingApprovalRepository();
+    const manager = new PermissionApprovalManager(bus, { repository });
+    return { manager, repository };
+  }
+
+  it('публикация запроса — запись попадает в хранилище', async () => {
+    const { manager, repository } = makeManager();
+    bus.subscribe('s1', () => {});
+
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await vi.waitFor(async () => {
+      expect((await repository.list('s1')).length).toBe(1);
+    });
+
+    const [record] = await repository.list('s1');
+    expect(record!.approvalId).toBe('approval_1');
+    expect(record!.sessionId).toBe('s1');
+    expect(record!.toolName).toBe('execute_shell');
+    expect(record!.arguments).toEqual({ command: 'ls -la' });
+    expect(record!.reason).toBe('правило shell.* → ask');
+
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      approved: true,
+    });
+    await pending;
+  });
+
+  it('ответ снимает запись из хранилища', async () => {
+    const { manager, repository } = makeManager();
+    bus.subscribe('s1', () => {});
+
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await vi.waitFor(async () => {
+      expect((await repository.list('s1')).length).toBe(1);
+    });
+
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      approved: true,
+    });
+    await pending;
+
+    await vi.waitFor(async () => {
+      expect((await repository.list('s1')).length).toBe(0);
+    });
+  });
+
+  it('таймаут снимает запись из хранилища', async () => {
+    const { manager, repository } = makeManager();
+    bus.subscribe('s1', () => {});
+
+    await manager.waitForDecision('s1', request, 20);
+
+    await vi.waitFor(async () => {
+      expect((await repository.list('s1')).length).toBe(0);
+    }, { timeout: 2000 });
+  });
+
+  it('ошибка хранилища не ломает ход (ответ всё равно резолвится)', async () => {
+    const manager = new PermissionApprovalManager(bus, {
+      repository: {
+        save: () => Promise.reject(new Error('хранилище недоступно')),
+        delete: () => Promise.reject(new Error('хранилище недоступно')),
+        list: () => Promise.reject(new Error('хранилище недоступно')),
+        clear: () => Promise.reject(new Error('хранилище недоступно')),
+      },
+    });
+    bus.subscribe('s1', () => {});
+
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      approved: true,
+    });
+
+    const decision = await pending;
+    expect(decision.approved).toBe(true);
+  });
+
+  it('восстановление после рестарта: запись из хранилища видна как restored', async () => {
+    const repository = new MemoryPendingApprovalRepository();
+    await repository.save({
+      approvalId: 'approval_restored',
+      sessionId: 's1',
+      toolName: 'execute_shell',
+      arguments: { command: 'ls -la' },
+      reason: 'правило shell.* → ask',
+      askedAt: '2026-01-01T00:00:00.000Z',
+      timeoutMs: 5000,
+    });
+
+    // «Процесс №2» — новый менеджер поверх того же хранилища.
+    const manager = new PermissionApprovalManager(bus, { repository });
+    const restored = await manager.restoreFromRepository();
+    expect(restored).toBe(1);
+
+    const pending = manager.listPending('s1');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.restored).toBe(true);
+    // Таймера после рестарта нет — запрос живёт до ответа.
+    expect(pending[0]!.held).toBe(true);
+    expect(pending[0]!.request.toolName).toBe('execute_shell');
+
+    // Счётчик DTO учитывает восстановленное ожидание.
+    expect(manager.listPendingCounts().get('s1')).toBe(1);
+  });
+
+  it('снятие восстановленного ожидания убирает его из хранилища', async () => {
+    const repository = new MemoryPendingApprovalRepository();
+    await repository.save({
+      approvalId: 'approval_restored',
+      sessionId: 's1',
+      toolName: 'execute_shell',
+      arguments: {},
+      reason: '',
+      askedAt: '2026-01-01T00:00:00.000Z',
+      timeoutMs: 0,
+    });
+
+    const manager = new PermissionApprovalManager(bus, { repository });
+    await manager.restoreFromRepository();
+    await manager.removeRestored('approval_restored');
+
+    expect(manager.listPending('s1')).toHaveLength(0);
+    expect(await repository.list()).toEqual([]);
   });
 });

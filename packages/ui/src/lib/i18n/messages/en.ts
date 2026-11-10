@@ -1697,6 +1697,9 @@ export const dict = {
   'permission.bar.saveUnavailable': 'The command pattern cannot be derived — only a one-time allow is possible',
   'permission.bar.saveUnavailableShort': 'Once only',
   'permission.bar.replyFailed': 'Could not send the answer — the request is still open',
+  // Approval restored after an instance restart (ADR-029): there is no live
+  // request left, the answer is applied as a session-level permission.
+  'permission.bar.restored': 'The instance was restarted — the approval will apply as a session permission',
 
   // Human-readable explanation of the ask, built from the structured trigger:
   // instead of the LLM-facing reason text the user sees WHAT triggered it.

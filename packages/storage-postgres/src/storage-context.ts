@@ -92,6 +92,9 @@ import { buildContextFilePorts } from './ports/context-files.js';
 import { buildQuestionPorts } from './ports/questions.js';
 import { buildBackgroundRunPorts } from './ports/background-runs.js';
 import { buildWorktreePorts } from './ports/worktrees.js';
+// ADR-029: ожидания подтверждения прав — отдельный стор (таблица
+// `pending_approvals`, миграция 035), а не поле документа сессии.
+import { buildPendingApprovalPorts } from './ports/pending-approvals.js';
 // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (таблица `blob_refs`).
 import { buildBlobRefPorts } from './ports/blob-refs.js';
 import { buildPluginLockPorts } from './ports/plugin-lock.js';
@@ -241,6 +244,9 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // ADR-114: инвентарь git-worktree'ов — generic-таблица `documents`
     // (`kind='worktree'`), без новой миграции.
     ...buildWorktreePorts(deps),
+    // ADR-029: ожидания подтверждения прав — отдельная таблица
+    // `pending_approvals` (миграция 035); документ сессии не трогаем.
+    ...buildPendingApprovalPorts(deps),
     // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища — таблица
     // `blob_refs` (миграция 024). Байты объектов остаются на томе (`blobs`).
     ...buildBlobRefPorts(deps),

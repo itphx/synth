@@ -112,6 +112,10 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   const toolDisplayName = getToolDisplayName(current.toolName)
   const trigger = current.trigger
   const cause = describePermissionCause(trigger)
+  // Восстановленное после рестарта инстанса ожидание (ADR-029): живого
+  // waiter'а нет, ответ применяется как разрешение в сессии. Пометка —
+  // короткая, карточка и блок «Что вызвало вопрос» — как обычно.
+  const isRestored = current.restored === true
   // Токен-виновник: путь/код/команда, ради которых спросили.
   const culpritToken = cause?.token
   const causeText = cause ? t(cause.key, cause.params) : ''
@@ -287,6 +291,15 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           </button>
         </div>
       </div>
+
+      {isRestored && (
+        <div
+          className="px-3 pb-1.5 text-[0.6875rem] text-muted-foreground"
+          data-testid="permission-restored"
+        >
+          {t('permission.bar.restored')}
+        </div>
+      )}
 
       {savePatterns.length > 0 && (
         <div

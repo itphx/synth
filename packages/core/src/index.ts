@@ -798,6 +798,9 @@ export type { FileBackgroundRunStoreConfig } from './storage/file-background-run
 // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
 export { FileWorktreeStore } from './storage/file-worktree-store.js';
 export type { FileWorktreeStoreConfig } from './storage/file-worktree-store.js';
+// ADR-029: ожидания подтверждения прав — отдельный стор (`pending-approvals.json`).
+export { FilePendingApprovalStore } from './storage/file-pending-approval-store.js';
+export type { FilePendingApprovalStoreConfig } from './storage/file-pending-approval-store.js';
 // Этап 1 roadmap 0.13 (блок 1.4.1b): сервис worktree'ов (ADR-114) — git-операции,
 // lifecycle инвентаря, детект secondary worktree.
 export {
@@ -939,6 +942,9 @@ export type {
   BackgroundRunRepository,
   // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
   WorktreeRepository,
+  // ADR-029: ожидания подтверждения прав (отдельный стор — не документ сессии).
+  PendingApprovalRepository,
+  PendingApprovalRecord,
   // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (дедуп/GC).
   BlobRefRepository,
   BlobRef,
@@ -997,6 +1003,8 @@ export {
   MemoryBackgroundRunRepository,
   // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
   MemoryWorktreeRepository,
+  // ADR-029: ожидания подтверждения прав (отдельный стор).
+  MemoryPendingApprovalRepository,
   // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища.
   MemoryBlobRefRepository,
 } from './storage/memory/index.js';

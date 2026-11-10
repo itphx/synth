@@ -178,4 +178,54 @@ describe('sessionsApi — ожидающие подтверждения прав
 
     expect(requests.map((r) => r.approvalId)).toEqual(['apr_1'])
   })
+
+  /**
+   * ADR-029: восстановленное после рестарта инстанса ожидание.
+   *
+   * Живой реестр подтверждений живёт в памяти процесса: после рестарта он
+   * пуст, а ожидание остаётся в документе сессии. Снимок отдаёт его с
+   * признаком `restored: true` — клиент по нему и отвечает по HTTP.
+   */
+  it('restored: true — ожидание помечено как восстановленное', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        permissions: [
+          {
+            approval_id: 'apr_restored',
+            tool: 'execute_shell',
+            arguments: { command: 'ls' },
+            reason: 'правило shell.* → ask',
+            asked_at: '2026-01-01T12:00:00.000Z',
+            ask_timeout_ms: 0,
+            held: true,
+            restored: true,
+          },
+        ],
+      }),
+    )
+
+    const [request] = await sessionsApi.listPendingPermissions('s1')
+
+    expect(request!.restored).toBe(true)
+    expect(request!.held).toBe(true)
+  })
+
+  it('у обычного ожидания признака restored нет', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        permissions: [
+          {
+            approval_id: 'apr_1',
+            tool: 'execute_shell',
+            asked_at: '2026-01-01T12:00:00.000Z',
+            ask_timeout_ms: 30_000,
+          },
+        ],
+      }),
+    )
+
+    const [request] = await sessionsApi.listPendingPermissions('s1')
+
+    expect(request!.restored).toBeUndefined()
+  })
 })

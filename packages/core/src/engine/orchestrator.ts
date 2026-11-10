@@ -62,7 +62,9 @@ import {
   type ApprovalRequest,
   type ApprovalWaiter,
   type PendingApproval,
+  type PendingApprovalResolution,
 } from './permission/approval.js';
+import type { PendingApprovalRepository } from '../storage/ports/pending-approval-repository.js';
 import { buildPermissionPreview } from './permission/preview.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { createFileStorage } from '../storage/storage-context.js';
@@ -718,6 +720,20 @@ export interface OrchestratorOptions {
    * Не задан — поведение прежнее (слой Authority выключен или shadow).
    */
   approvalRegistry?: ApprovalRegistry;
+  /**
+   * ADR-029: **отдельное хранилище ожиданий подтверждения** (ADR-096).
+   *
+   * Порт из `StorageContext.pendingApprovals`: персистентная копия ожидания,
+   * переживающая рестарт инстанса (живой реестр — в памяти процесса).
+   *
+   * Не документ сессии: запись в документ — полная замена истории, а
+   * результаты параллельных тулов пишутся точечно (`appendMessage`,
+   * ADR-118 §4) → полная запись затирала бы их (гонка lost update).
+   *
+   * Не задан — ожидания живут только в памяти процесса (поведение до
+   * ADR-029): переживать рестарт они не будут.
+   */
+  pendingApprovalRepository?: PendingApprovalRepository;
   /** ADR-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
@@ -1494,6 +1510,14 @@ export class ChatOrchestrator {
     this._onPermissionGrant = options.onPermissionGrant ?? null;
     this._approvalManager = new PermissionApprovalManager(this._eventBus, {
       ...(options.approvalRegistry ? { registry: options.approvalRegistry } : {}),
+      // ADR-029: живой реестр ожиданий живёт в памяти процесса — после
+      // рестарта инстанса он пуст. Персистентная копия — в **отдельном
+      // хранилище ожиданий** (ADR-096), а не в документе сессии: запись в
+      // документ — полная замена истории и затирала бы точечные записи
+      // результатов параллельных тулов (ADR-118 §4, гонка lost update).
+      ...(options.pendingApprovalRepository
+        ? { repository: options.pendingApprovalRepository }
+        : {}),
     });
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
     // Авто-именование сессии: конфиг секции `session.autoTitle` (дефолты схемы).
@@ -1874,12 +1898,116 @@ export class ChatOrchestrator {
    * перезагрузки страницы: HTTP-роут `GET /api/v2/sessions/:id/permissions`
    * отдаёт список ожиданий сессии (`PendingApproval`).
    *
-   * Состояние — **в памяти процесса**: после рестарта инстанса ожидания
-   * теряются (осознанное ограничение; персистентность — отдельное решение
-   * владельца: ADR + миграции).
+   * Состояние — **в памяти процесса**: после рестарта инстанса живой реестр
+   * пуст. Персистентная копия — в **отдельном хранилище ожиданий**
+   * (`PendingApprovalRepository`, ADR-096); её читает `GET /:id/permissions`
+   * и счётчик DTO (восстановленные ожидания помечены `restored: true`).
    */
   listPendingApprovals(sessionId: string): PendingApproval[] {
     return this._approvalManager.listPending(sessionId);
+  }
+
+  /**
+   * ADR-029: число ожидающих ответа подтверждений **по сессиям** (счётчик).
+   *
+   * Источник для DTO сессии (`pending_approvals`): дерево сессий должно знать
+   * о висящем запросе и **после перезагрузки страницы** — живой стор клиента
+   * (`usePermissionStore`) в этот момент пуст.
+   *
+   * Один проход по реестру ожиданий (`Map<sessionId, count>`), а не перебор
+   * списков по каждой сессии.
+   */
+  listPendingApprovalCounts(): Map<string, number> {
+    return this._approvalManager.listPendingCounts();
+  }
+
+  /**
+   * ADR-029: найти ожидание подтверждения сессии — с указанием его вида.
+   *
+   * Виды:
+   * - `live` — живое ожидание (реестр в памяти процесса): отвечающий
+   *   waiter есть, ответ будит прежний вызов;
+   * - `settled` — запрос был опубликован **этим** процессом и уже закрыт
+   *   (ответ/таймаут/отмена): повторный ответ обязан быть отказом
+   *   (`already_consumed`), грантом он быть не может;
+   * - `restored` — ожидание **восстановлено после рестарта инстанса**
+   *   (снимок из хранилища ожиданий, живого waiter'а нет): ответ применяется
+   *   как грант в сессии.
+   *
+   * `undefined` — такого ожидания у сессии нет.
+   */
+  resolvePendingApproval(
+    session: Session,
+    approvalId: string,
+  ): PendingApprovalResolution | undefined {
+    // Живое ожидание — из реестра в памяти процесса (восстановленные
+    // ожидания сюда не попадают: у них отвечающего waiter'а нет).
+    const live = this._approvalManager.getLive(approvalId);
+    if (live && live.sessionId === session.id) return { kind: 'live', pending: live };
+    if (this._approvalManager.isPublished(approvalId)) return { kind: 'settled' };
+    // Восстановленное ожидание — снимок из хранилища ожиданий (ADR-029).
+    const restored = this._approvalManager.getRestored(approvalId);
+    if (restored && restored.sessionId === session.id) return { kind: 'restored', record: restored };
+    return undefined;
+  }
+
+  /**
+   * ADR-029: снять **восстановленное** ожидание подтверждения.
+   *
+   * Вызывается HTTP-роутом при ответе на восстановленное ожидание (живого
+   * waiter'а нет — путь `finish` менеджера не срабатывает). Снимает запись и
+   * в реестре, и в **хранилище ожиданий**. Идемпотентно.
+   */
+  async clearPendingApproval(sessionId: string, approvalId: string): Promise<void> {
+    await this._approvalManager.removeRestored(approvalId);
+  }
+
+  /**
+   * ADR-029: восстановить ожидания подтверждения из **хранилища ожиданий**.
+   *
+   * Вызывается один раз при старте инстанса (рядом с
+   * `questionService.recoverOnStart()` — тот же паттерн «восстановление после
+   * рестарта»): живой реестр ожиданий после рестарта пуст, а вопрос
+   * пользователю ещё актуален.
+   *
+   * Ошибка чтения не роняет старт (ожидания просто не восстановятся).
+   */
+  async restorePendingApprovals(): Promise<number> {
+    return this._approvalManager.restoreFromRepository();
+  }
+
+  /**
+   * ADR-029: «Разрешить в сессии» для **восстановленного** ожидания.
+   *
+   * После рестарта инстанса живого ожидания нет (waiter мёртв) — разбудить
+   * прежний вызов нечем. Поэтому ответ «Разрешить» на восстановленное
+   * ожидание применяется как **allow-правило в правилах сессии** — ровно тем
+   * же механизмом, что «Разрешить в сессии» у живого ожидания: продолженный
+   * ход, который задаст тот же вопрос, будет одобрен без нового вопроса.
+   *
+   * Публичный метод — HTTP-роут `POST /:id/permissions/:approvalId` вызывает
+   * его для ожидания, которого нет в живом реестре.
+   */
+  async grantSessionToolAllow(
+    session: Session,
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+  ): Promise<PermissionConfig> {
+    // Рабочий каталог нужен для вычисления абсолютных путей (file-тулы).
+    // Каталог привязки недоступен — грант считаем от рабочего каталога по
+    // умолчанию (для shell-тулов каталог не влияет на выдачу гранта).
+    let workingDir = this._defaultWorkingDir;
+    try {
+      workingDir = await this._resolveWorkingDir(session);
+    } catch (err) {
+      warning(
+        'PERMISSION',
+        `Не удалось разрезолвить рабочий каталог сессии ${session.id} для гранта ${toolName}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    return this._grantSessionToolAllow(session, toolName, toolArgs, workingDir);
   }
 
   /**

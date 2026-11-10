@@ -8,7 +8,19 @@ import {
 } from '@itphx/synth-shared';
 
 import type { EventBus } from '../../events/bus.js';
+import { warning } from '../../logger.js';
+import type {
+  PendingApprovalRecord,
+  PendingApprovalRepository,
+} from '../../storage/ports/pending-approval-repository.js';
 import { computeAuthorityApprovalDigest } from '../authority/resolve.js';
+
+/**
+ * Потолок числа id запросов подтверждения, помнящихся как «опубликованные
+ * этим процессом» (ADR-029). Только для различения «восстановлено после
+ * рестарта» и «уже закрыто в этом процессе» — старые id вытесняются (FIFO).
+ */
+const MAX_PUBLISHED_APPROVAL_IDS = 500;
 
 export interface ApprovalRequest {
   approvalId: string;
@@ -147,7 +159,26 @@ export interface PendingApproval {
    * не должна ставить свой таймер.
    */
   held: boolean;
+  /**
+   * true — ожидание **восстановлено после рестарта инстанса**: живого
+   * waiter'а нет, ответ применяется как грант в сессии.
+   */
+  restored?: boolean;
 }
+
+/**
+ * ADR-029: вид ожидания подтверждения (результат поиска по сессии).
+ *
+ * - `live` — ожидание живёт в памяти процесса (отвечающий waiter есть);
+ * - `settled` — запрос был опубликован этим процессом и уже закрыт
+ *   (повторный ответ — отказ, а не грант);
+ * - `restored` — ожидание восстановлено после рестарта инстанса (снимок из
+ *   **отдельного хранилища ожиданий**; живого waiter'а нет).
+ */
+export type PendingApprovalResolution =
+  | { kind: 'live'; pending: PendingApproval }
+  | { kind: 'settled' }
+  | { kind: 'restored'; record: PendingApprovalRecord };
 
 /**
  * Внутреннее состояние ожидания (не часть публичного контракта).
@@ -185,6 +216,66 @@ function isUserDenyReply(data: Record<string, unknown>): boolean {
   if (data.action === 'deny') return true;
   // Старый формат `{ approved: false }` — тоже отказ.
   return data.action === undefined && data.approved === false;
+}
+
+/**
+ * Снимок ожидания (`PendingApproval`) → запись **отдельного хранилища
+ * ожиданий** (`PendingApprovalRecord`).
+ *
+ * Отбрасываются поля, которые живут только в памяти процесса (`callId`,
+ * превью, shell-паттерны) — в хранилище нужны только «что спросили» (тул,
+ * аргументы, причина, «виновник») и метаданные ожидания.
+ *
+ * Почему отдельный стор, а не поле документа сессии: документ сессии пишется
+ * полной перезаменой (`save`), а результаты параллельных тулов — точечно
+ * (`appendMessage`, ADR-118 §4) → полная запись затирала бы точечные записи
+ * (гонка lost update).
+ */
+export function toPendingApprovalRecord(
+  pending: PendingApproval,
+  sessionId: string,
+): PendingApprovalRecord {
+  const { request } = pending;
+  return {
+    approvalId: request.approvalId,
+    sessionId,
+    toolName: request.toolName,
+    arguments: request.arguments ?? {},
+    reason: request.reason ?? '',
+    ...(request.trigger ? { trigger: request.trigger } : {}),
+    askedAt: pending.askedAt,
+    timeoutMs: pending.timeoutMs,
+    ...(request.turnId ? { turnId: request.turnId } : {}),
+    ...(request.principal?.id ? { principal: request.principal.id } : {}),
+  };
+}
+
+/**
+ * Запись хранилища ожиданий → снимок ожидания (`PendingApproval`).
+ *
+ * Обратное преобразование для **восстановления после рестарта**: живого
+ * waiter'а нет, поэтому снимок помечается `restored: true`, а таймер не
+ * восстанавливается (`held: true` — запрос живёт до ответа).
+ */
+export function toRestoredPendingApproval(record: PendingApprovalRecord): PendingApproval {
+  return {
+    sessionId: record.sessionId,
+    request: {
+      approvalId: record.approvalId,
+      // `callId` живёт только в памяти процесса — у восстановленного ожидания
+      // его нет (событие `permission.asked` уже прошло).
+      callId: record.approvalId,
+      toolName: record.toolName,
+      arguments: record.arguments ?? {},
+      reason: record.reason ?? '',
+      ...(record.trigger ? { trigger: record.trigger } : {}),
+      ...(record.turnId ? { turnId: record.turnId } : {}),
+    },
+    timeoutMs: record.timeoutMs ?? 0,
+    askedAt: record.askedAt,
+    held: true,
+    restored: true,
+  };
 }
 
 /**
@@ -259,6 +350,25 @@ export function parsePermissionPrincipal(value: unknown): AuthorityPrincipal | u
  * `publishWaiters` публикует все `permission.asked` разом, а решение по
  * каждому приходит независимо (свой `approval_id`).
  */
+/**
+ * Опции менеджера ожиданий подтверждения.
+ */export interface PermissionApprovalManagerOptions {
+  /** Реестр подтверждений Authority-слоя (ADR-106 Ф3). */
+  registry?: ApprovalRegistry;
+  /**
+   * **Отдельное хранилище ожиданий** (ADR-029, ADR-096) — персистентная
+   * копия ожидания, переживающая рестарт инстанса.
+   *
+   * Не документ сессии: запись в документ сессии — полная замена истории,
+   * а результаты параллельных тулов пишутся точечно (`appendMessage`,
+   * ADR-118 §4) → полная запись затирала бы их (гонка lost update).
+   *
+   * Не задан — ожидания живут только в памяти процесса (поведение до
+   * ADR-029): переживать рестарт они не будут.
+   */
+  repository?: PendingApprovalRepository;
+}
+
 export class PermissionApprovalManager {
   /**
    * Реестр ожидающих ответа запросов подтверждения (ADR-029).
@@ -268,16 +378,51 @@ export class PermissionApprovalManager {
    * страницы: HTTP-роут `GET /api/v2/sessions/:id/permissions` отдаёт список
    * ожиданий сессии.
    *
-   * Состояние — **в памяти процесса**: после рестарта инстанса ожидания
-   * теряются (осознанное ограничение; персистентность — отдельное решение
-   * владельца: ADR + миграции).
+   * Состояние — **в памяти процесса**: после рестарта инстанса живой
+   * реестр пуст. Персистентная копия — в **отдельном хранилище ожиданий**
+   * (`PendingApprovalRepository`), а её снимок в этом процессе — в
+   * `_restored`.
    */
   private readonly _pending = new Map<string, PendingApproval>();
 
+  /**
+   * Ожидания, **восстановленные после рестарта инстанса** (ADR-029).
+   *
+   * Ключ — `approvalId`, значение — запись хранилища ожиданий
+   * (`PendingApprovalRecord`). Живого waiter'а нет: ответ на такое
+   * ожидание применяется как **грант в сессии**, а не будит прежний вызов.
+   *
+   * Наполняется один раз при старте (`restoreFromRepository`).
+   */
+  private readonly _restored = new Map<string, PendingApprovalRecord>();
+
+  /**
+   * id запросов подтверждения, **опубликованных этим процессом** (ADR-029).
+   *
+   * Нужно, чтобы отличить «ожидание восстановлено после рестарта» (снимок
+   * из хранилища ожиданий) от «ожидание жило в этом процессе и уже закрыто»
+   * (повторный ответ на только что отвеченный запрос). Во втором случае
+   * повторный ответ обязан быть отказом (`already_consumed`), а не грантом.
+   *
+   * Ограничен по размеру (FIFO) — старые id вытесняются.
+   */
+  private readonly _published = new Set<string>();
+  private readonly _publishedOrder: string[] = [];
+
   constructor(
     private readonly _eventBus: EventBus,
-    private readonly _options: { registry?: ApprovalRegistry } = {},
+    private readonly _options: PermissionApprovalManagerOptions = {},
   ) {}
+
+  /**
+   * ADR-029: опубликован ли запрос подтверждения **этим** процессом.
+   *
+   * `false` — запрос не был опубликован здесь: он либо восстановлен из
+   * хранилища ожиданий (после рестарта инстанса), либо неизвестен вовсе.
+   */
+  isPublished(approvalId: string): boolean {
+    return this._published.has(approvalId);
+  }
 
   /**
    * Подготовить ожидания подтверждений.
@@ -368,18 +513,136 @@ export class PermissionApprovalManager {
    * перезагрузки страницы: HTTP-роут `GET /api/v2/sessions/:id/permissions`.
    * Ответ/таймаут/отмена хода/каскадный отказ убирают запись — в списке её
    * уже нет.
+   *
+   * Возвращаются **живые** ожидания (реестр в памяти процесса) и
+   * **восстановленные** (снимок из хранилища ожиданий после рестарта
+   * инстанса; помечены `restored: true`).
    */
   listPending(sessionId: string): PendingApproval[] {
     const out: PendingApproval[] = [];
     for (const item of this._pending.values()) {
       if (item.sessionId === sessionId) out.push(item);
     }
+    for (const record of this._restored.values()) {
+      if (record.sessionId !== sessionId) continue;
+      // Живое ожидание с тем же id важнее снимка (восстановление могло
+      // прочитать запись, которую уже опубликовал этот процесс).
+      if (this._pending.has(record.approvalId)) continue;
+      out.push(toRestoredPendingApproval(record));
+    }
     return out;
   }
 
   /** Ожидание подтверждения по `approvalId` (любая сессия). */
   get(approvalId: string): PendingApproval | undefined {
+    const live = this._pending.get(approvalId);
+    if (live) return live;
+    const restored = this._restored.get(approvalId);
+    return restored ? toRestoredPendingApproval(restored) : undefined;
+  }
+
+  /**
+   * **Живое** ожидание подтверждения по `approvalId` (без восстановленных).
+   *
+   * Различение нужно для вида ожидания (`live`/`restored`): у восстановленного
+   * ожидания отвечающего waiter'а нет — ответ применяется как грант в сессии,
+   * а не будит прежний вызов.
+   */
+  getLive(approvalId: string): PendingApproval | undefined {
     return this._pending.get(approvalId);
+  }
+
+  /**
+   * Запись **восстановленного** ожидания (по `approvalId`) — если оно есть.
+   *
+   * Источник для ответа на восстановленное ожидание: `allow` применяется как
+   * грант в сессии (живого waiter'а нет), `deny` — просто снимает ожидание.
+   */
+  getRestored(approvalId: string): PendingApprovalRecord | undefined {
+    return this._restored.get(approvalId);
+  }
+
+  /**
+   * Восстановить ожидания из **хранилища ожиданий** (ADR-029).
+   *
+   * Вызывается один раз при старте инстанса: живой реестр ожиданий после
+   * рестарта пуст, а вопрос пользователю — ещё актуален. Восстановленные
+   * ожидания попадают в `_restored` и видны в `GET /:id/permissions` с
+   * признаком `restored: true`.
+   *
+   * Ошибка чтения — не повод ронять старт: ожидания просто не восстановятся.
+   */
+  async restoreFromRepository(): Promise<number> {
+    const repository = this._options.repository;
+    if (!repository) return 0;
+    let records: PendingApprovalRecord[];
+    try {
+      records = await repository.list();
+    } catch (err) {
+      warning(
+        'PERMISSION',
+        `Не удалось прочитать ожидания подтверждения из хранилища: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return 0;
+    }
+    let restored = 0;
+    for (const record of records) {
+      if (!record?.approvalId) continue;
+      // Живое ожидание этого процесса важнее снимка.
+      if (this._pending.has(record.approvalId)) continue;
+      this._restored.set(record.approvalId, record);
+      restored += 1;
+    }
+    return restored;
+  }
+
+  /**
+   * Снять **восстановленное** ожидание: убрать из реестра и из хранилища.
+   *
+   * Вызывается HTTP-роутом при ответе на восстановленное ожидание (живого
+   * waiter'а нет — путь `finish` не срабатывает). Идемпотентно.
+   */
+  async removeRestored(approvalId: string): Promise<void> {
+    this._restored.delete(approvalId);
+    const repository = this._options.repository;
+    if (!repository) return;
+    try {
+      await repository.delete(approvalId);
+    } catch (err) {
+      warning(
+        'PERMISSION',
+        `Не удалось снять ожидание подтверждения ${approvalId} из хранилища: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Счётчики ожидающих подтверждений по сессиям (один проход по реестру).
+   *
+   * Источник для DTO списка сессий: дерево сессий должно знать о висящем
+   * запросе и **после перезагрузки страницы** (живой стор клиента пуст).
+   *
+   * Карта `sessionId → число висящих запросов`; сессия без ожиданий в карте
+   * отсутствует. Ответ/таймаут/отмена хода/каскадный отказ убирают запись —
+   * счётчик уменьшается.
+   *
+   * Учитываются и **восстановленные** ожидания (после рестарта инстанса) —
+   * иначе счётчик DTO обнулился бы, а вопрос пользователю висел бы.
+   */
+  listPendingCounts(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const item of this._pending.values()) {
+      counts.set(item.sessionId, (counts.get(item.sessionId) ?? 0) + 1);
+    }
+    for (const record of this._restored.values()) {
+      if (this._pending.has(record.approvalId)) continue;
+      counts.set(record.sessionId, (counts.get(record.sessionId) ?? 0) + 1);
+    }
+    return counts;
   }
 
   /** Ожидание, закрытое сразу (без публикации запроса). */
@@ -421,6 +684,9 @@ export class PermissionApprovalManager {
       // Запрос больше не ожидает ответа — в списке pending его быть не должно
       // (ответ/таймаут/отмена хода/каскадный отказ — любой путь через `finish`).
       this._pending.delete(request.approvalId);
+      // Персистентная копия (отдельное хранилище ожиданий) снимается тем же
+      // путём — иначе после рестарта инстанса ожидание «воскреснет».
+      this._deleteFromRepository(request.approvalId);
       resolveDecision(d);
     };
 
@@ -517,13 +783,20 @@ export class PermissionApprovalManager {
 
     // Реестр ожиданий: запрос появился в списке pending ДО публикации —
     // восстановление после перезагрузки не должно его потерять.
-    this._pending.set(request.approvalId, {
+    const pending: PendingApproval = {
       sessionId,
       request,
       timeoutMs,
       askedAt: new Date().toISOString(),
       held: false,
-    });
+    };
+    this._pending.set(request.approvalId, pending);
+    this._rememberPublished(request.approvalId);
+
+    // Персистентная копия ожидания — в **отдельном хранилище ожиданий**:
+    // живой реестр живёт в памяти процесса и после рестарта инстанса пуст
+    // (ADR-029). Документ сессии не трогаем (гонка lost update, ADR-118 §4).
+    this._saveToRepository(pending, sessionId);
 
     this._eventBus.publish(sessionId, 'permission.asked', {
       approval_id: request.approvalId,
@@ -606,6 +879,84 @@ export class PermissionApprovalManager {
       target: boundTarget,
       digest: this._digestOf(request, waiter.sessionId),
     });
+  }
+
+  /**
+   * Запомнить id опубликованного запроса (см. `_published`) — с ограничением
+   * по размеру (FIFO).
+   */
+  private _rememberPublished(approvalId: string): void {
+    if (this._published.has(approvalId)) return;
+    this._published.add(approvalId);
+    this._publishedOrder.push(approvalId);
+    while (this._publishedOrder.length > MAX_PUBLISHED_APPROVAL_IDS) {
+      const oldest = this._publishedOrder.shift();
+      if (oldest !== undefined) this._published.delete(oldest);
+    }
+  }
+
+  /**
+   * Записать ожидание в **хранилище ожиданий** (ADR-029).
+   *
+   * Best-effort: ошибка записи **не ломает ход** — ожидание просто не
+   * переживёт рестарт (как было до ADR-029). Ошибка — в лог (группа
+   * `PERMISSION`), без содержимого аргументов тула.
+   */
+  private _saveToRepository(pending: PendingApproval, sessionId: string): void {
+    const repository = this._options.repository;
+    if (!repository) return;
+    const record = toPendingApprovalRecord(pending, sessionId);
+    try {
+      const result = repository.save(record);
+      if (result && typeof result.catch === 'function') {
+        void result.catch((err: unknown) => {
+          warning(
+            'PERMISSION',
+            `Не удалось сохранить ожидание подтверждения ${record.approvalId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        });
+      }
+    } catch (err) {
+      warning(
+        'PERMISSION',
+        `Не удалось сохранить ожидание подтверждения ${record.approvalId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Снять ожидание из **хранилища ожиданий** (ADR-029).
+   *
+   * Best-effort: ошибка удаления **не ломает ход** — запись просто останется
+   * в хранилище (восстановление после рестарта покажет лишний вопрос).
+   */
+  private _deleteFromRepository(approvalId: string): void {
+    const repository = this._options.repository;
+    if (!repository) return;
+    try {
+      const result = repository.delete(approvalId);
+      if (result && typeof result.catch === 'function') {
+        void result.catch((err: unknown) => {
+          warning(
+            'PERMISSION',
+            `Не удалось снять ожидание подтверждения ${approvalId} из хранилища: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        });
+      }
+    } catch (err) {
+      warning(
+        'PERMISSION',
+        `Не удалось снять ожидание подтверждения ${approvalId} из хранилища: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 }
 

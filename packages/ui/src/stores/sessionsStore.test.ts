@@ -337,3 +337,111 @@ describe('sessionsStore: offline-деградация гибрида (remote_off
     expect(useHybridStore.getState().remoteDegraded).toBe(false)
   })
 })
+
+/**
+ * Счётчик висящих подтверждений (`pending_approvals`, ADR-029).
+ *
+ * **Отсутствие поля в DTO ≠ «ожиданий нет»**: старый сервер (или точечный
+ * ответ `GET /sessions/:id` без счётчика) поле не отдаёт — прежнее значение
+ * сохраняем, иначе метка «ждёт подтверждения прав» пропала бы вслед за любым
+ * точечным обновлением сессии. Поле есть — доверяем (даже `0`).
+ */
+describe('sessionsStore: счётчик pending_approvals', () => {
+  beforeEach(() => {
+    mocks.getSessionsPage.mockReset()
+    mocks.updateSession.mockReset()
+    useSessionsStore.setState({ sessions: [], total: 0, nextOffset: null, error: null })
+  })
+
+  it('upsertSession с DTO без pending_approvals сохраняет прежний счётчик', () => {
+    useSessionsStore.setState({
+      sessions: [{ ...session('s1', 'Сессия'), pending_approvals: 2 }],
+    })
+
+    useSessionsStore.getState().upsertSession({ ...session('s1', 'Сессия'), name: 'Переименовано' })
+
+    const stored = useSessionsStore.getState().sessions[0]!
+    expect(stored.name).toBe('Переименовано')
+    expect(stored.pending_approvals).toBe(2)
+  })
+
+  it('upsertSession с pending_approvals: 0 обнуляет счётчик (поле есть — доверяем)', () => {
+    useSessionsStore.setState({
+      sessions: [{ ...session('s1', 'Сессия'), pending_approvals: 2 }],
+    })
+
+    useSessionsStore.getState().upsertSession({
+      ...session('s1', 'Сессия'),
+      pending_approvals: 0,
+    })
+
+    expect(useSessionsStore.getState().sessions[0]!.pending_approvals).toBe(0)
+  })
+
+  it('upsertSession без прежней записи добавляет сессию как есть', () => {
+    useSessionsStore.getState().upsertSession({
+      ...session('s2', 'Новая'),
+      pending_approvals: 1,
+    })
+
+    const stored = useSessionsStore.getState().sessions[0]!
+    expect(stored.id).toBe('s2')
+    expect(stored.pending_approvals).toBe(1)
+  })
+
+  it('переименование (PATCH) без счётчика не обнуляет прежнее значение', async () => {
+    useSessionsStore.setState({
+      sessions: [{ ...session('s1', 'Старое название'), pending_approvals: 1 }],
+    })
+    mocks.updateSession.mockResolvedValue(session('s1', 'Новое название'))
+
+    await useSessionsStore.getState().renameSession('s1', 'Новое название')
+
+    expect(useSessionsStore.getState().sessions[0]!.pending_approvals).toBe(1)
+  })
+
+  it('перенос сессии (PATCH project_id) без счётчика не обнуляет прежнее значение', async () => {
+    useSessionsStore.setState({
+      sessions: [{ ...session('s1', 'Сессия'), pending_approvals: 1 }],
+    })
+    mocks.updateSession.mockResolvedValue({ ...session('s1', 'Сессия'), project_id: 'p2' })
+
+    await useSessionsStore.getState().moveSession('s1', 'p2')
+
+    expect(useSessionsStore.getState().sessions[0]!.pending_approvals).toBe(1)
+  })
+
+  it('loadSessions без счётчика в DTO сохраняет прежнее значение', async () => {
+    useSessionsStore.setState({
+      sessions: [{ ...session('s1', 'Сессия'), pending_approvals: 3 }],
+    })
+    mocks.getSessionsPage.mockResolvedValue({
+      sessions: [session('s1', 'Сессия')],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+
+    expect(useSessionsStore.getState().sessions[0]!.pending_approvals).toBe(3)
+  })
+
+  it('loadSessions со счётчиком в DTO доверяет серверу', async () => {
+    useSessionsStore.setState({
+      sessions: [{ ...session('s1', 'Сессия'), pending_approvals: 3 }],
+    })
+    mocks.getSessionsPage.mockResolvedValue({
+      sessions: [{ ...session('s1', 'Сессия'), pending_approvals: 0 }],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+
+    await useSessionsStore.getState().loadSessions()
+
+    expect(useSessionsStore.getState().sessions[0]!.pending_approvals).toBe(0)
+  })
+})

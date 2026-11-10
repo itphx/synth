@@ -199,6 +199,11 @@ function toPendingPermissionDto(pending: PendingApproval): Record<string, unknow
     ...(request.preview ? { preview: request.preview } : {}),
     ...(request.save ? { save: request.save } : {}),
     ...(request.trigger ? { trigger: request.trigger } : {}),
+    // ADR-029: ожидание, восстановленное после рестарта инстанса: отвечающего
+    // waiter'а уже нет, поэтому ответ применяется как **грант в сессии**, а не
+    // будит прежний вызов. Таймера после рестарта нет (`held: true`) — запрос
+    // живёт до ответа.
+    ...(pending.restored ? { restored: true } : {}),
   };
 }
 
@@ -846,7 +851,7 @@ export function createSessionRoutes(
     userId?: string,
     serializeOpts?: Pick<
       SerializeSessionOptions,
-      'includeMessages' | 'includePromptStates' | 'contextOptimizer'
+      'includeMessages' | 'includePromptStates' | 'contextOptimizer' | 'pendingApprovals'
     >,
   ) => {
     const canReveal = await resolveCanRevealSecrets(c, session, userId);
@@ -856,6 +861,33 @@ export function createSessionRoutes(
       ...serializeOpts,
     });
   };
+
+  /**
+   * ADR-029: число ожидающих ответа подтверждений по сессиям.
+   *
+   * Считается **один раз на запрос** (один проход по реестру ожиданий), а не
+   * на каждую сессию страницы. Нужно дереву сессий: после перезагрузки
+   * страницы живой стор клиента пуст, а метка «ждёт подтверждения прав»
+   * должна остаться (поле DTO `pending_approvals`).
+   *
+   * Seam не задан (частичный мок оркестратора в тестах) — счётчик пустой,
+   * поле `pending_approvals` = 0 (ожиданий нет).
+   */
+  const pendingApprovalCounts = (): Map<string, number> =>
+    orchestrator.listPendingApprovalCounts?.() ?? new Map<string, number>();
+
+  /**
+   * ADR-029: число ожиданий подтверждения для DTO сессии (`pending_approvals`).
+   *
+   * Источник — **менеджер ожиданий** (`PermissionApprovalManager.listPendingCounts`):
+   * он считает и живые ожидания (реестр в памяти процесса), и восстановленные
+   * после рестарта инстанса (снимок из хранилища ожиданий). Документ сессии
+   * в этом не участвует: запись ожидания в него — полная замена истории, а
+   * результаты параллельных тулов пишутся точечно (`appendMessage`,
+   * ADR-118 §4) → гонка lost update.
+   */
+  const pendingApprovalCount = (session: Session, liveCounts: Map<string, number>): number =>
+    liveCounts.get(session.id) ?? 0;
 
   /**
    * Ответ списка `GET /`: история сообщений и состояние промпта не отдаются.
@@ -941,12 +973,23 @@ export function createSessionRoutes(
     // Видимость уже применена менеджером; дальше — фильтр проекта.
     const visible = filterByProject(sessions, projectId);
 
+    // ADR-029: число висящих подтверждений по сессиям — **один раз на запрос**
+    // (один проход по реестру ожиданий), не на каждую сессию страницы.
+    // Нужно дереву сессий: после перезагрузки страницы живой стор клиента
+    // пуст, а метка «ждёт подтверждения прав» должна остаться.
+    const pendingCounts = pendingApprovalCounts();
+    const serializeLocalPage = (items: Session[]) =>
+      Promise.all(
+        items.map((s) => serializeForReader(c, s, userId, {
+          ...LIST_SERIALIZE_OPTS,
+          pendingApprovals: pendingApprovalCount(s, pendingCounts),
+        })),
+      );
+
     if (!hasRemoteGetter) {
       // Локальный мир: страница нарезается сразу (сериализуем только страницу).
       const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
-      const localDto = await Promise.all(
-        page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
-      );
+      const localDto = await serializeLocalPage(page);
       return c.json(listPage(localDto, total, offset, limit, localNextOffset));
     }
 
@@ -959,9 +1002,7 @@ export function createSessionRoutes(
 
     if (!remoteClient) {
       const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
-      const localDto = await Promise.all(
-        page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
-      );
+      const localDto = await serializeLocalPage(page);
       return c.json(listPage(localDto, total, offset, limit, localNextOffset));
     }
 
@@ -984,9 +1025,14 @@ export function createSessionRoutes(
       const sorted = sortHybridList(entries);
       const { page, total, next_offset } = paginate(sorted, offset, limit);
       // Локальные записи сериализуем только для страницы (история в DTO не идёт).
+      // Локальные сессии получают счётчик подтверждений; удалённые — DTO
+      // приходит от удалённой стороны (там же считается свой счётчик).
       const items = await Promise.all(
         page.map((entry) => (entry.origin === 'local'
-          ? serializeForReader(c, entry.value as Session, userId, LIST_SERIALIZE_OPTS)
+          ? serializeForReader(c, entry.value as Session, userId, {
+            ...LIST_SERIALIZE_OPTS,
+            pendingApprovals: pendingApprovalCount(entry.value as Session, pendingCounts),
+          })
           : entry.value as Record<string, unknown>)),
       );
       // Кап страниц удалённого обхода: список неполон — курсор выдавать нельзя.
@@ -1005,9 +1051,7 @@ export function createSessionRoutes(
           return c.json(listPage([], 0, offset, limit, null, { remoteOffline: true }));
         }
         const { page, total, next_offset: localNextOffset } = paginate(visible, offset, limit);
-        const localDto = await Promise.all(
-          page.map((s) => serializeForReader(c, s, userId, LIST_SERIALIZE_OPTS)),
-        );
+        const localDto = await serializeLocalPage(page);
         return c.json(listPage(localDto, total, offset, limit, localNextOffset, { remoteOffline: true }));
       }
       throw err;
@@ -1124,10 +1168,13 @@ export function createSessionRoutes(
     // Сводка без истории: полная история — в `GET /:id/messages`.
     // ADR-119: `context_usage` — занятость контекста «прямо сейчас»
     // (в списке сессий оценка не считается — она линейна по истории).
+    // ADR-029: `pending_approvals` — число висящих подтверждений сессии
+    // (точечный DTO показывается в UI и должен быть согласован со списком).
     return c.json(
       await serializeForReader(c, session, undefined, {
         ...SUMMARY_SERIALIZE_OPTS,
         contextOptimizer: deps.contextOptimizer,
+        pendingApprovals: pendingApprovalCount(session, pendingApprovalCounts()),
       }),
     );
   });
@@ -2806,6 +2853,45 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
 
+    // ADR-029: вид ожидания — живое / уже закрытое в этом процессе /
+    // восстановленное после рестарта инстанса (снимок из **хранилища
+    // ожиданий**, а не из документа сессии).
+    const resolution = orchestrator.resolvePendingApproval?.(session, approvalId);
+
+    // Восстановленное ожидание: живого waiter'а нет (процесс, который его
+    // ждал, умер) — разбудить прежний вызов нечем. Поэтому ответ применяется
+    // как **грант в сессии** (тот же механизм, что «Разрешить в сессии»):
+    // продолженный ход, задавший тот же вопрос, будет одобрен без нового
+    // вопроса. «Запретить» — просто снимает ожидание.
+    if (resolution?.kind === 'restored') {
+      // «Остановить таймер» здесь бессмысленно: таймера нет (процесс, который
+      // его поставил, умер) — останавливать нечего.
+      if (action === 'hold') {
+        return c.json(
+          { error: { code: 'VALIDATION_ERROR', message: messages.permissionInvalid(c) } },
+          400,
+        );
+      }
+      const approved = action === 'allow';
+      if (approved) {
+        await orchestrator.grantSessionToolAllow(
+          session,
+          resolution.record.toolName,
+          resolution.record.arguments ?? {},
+        );
+      }
+      // Снятие ожидания (реестр + хранилище ожиданий; счётчик DTO → 0).
+      await orchestrator.clearPendingApproval?.(id, approvalId);
+      eventBus.publish(id, 'permission.replied', {
+        approval_id: approvalId,
+        session_id: id,
+        approved,
+        action,
+        restored: true,
+      });
+      return c.json({ status: 'ok', action });
+    }
+
     // «Остановить таймер»: авто-отклонение по таймауту снимается, запрос ждёт
     // ответа. Реестр не трогаем — привязка ещё нужна для ответа.
     if (action === 'hold') {
@@ -2903,6 +2989,8 @@ export function createSessionRoutes(
       },
     );
     if (forwarded) return forwarded;
+    // ADR-029: живые ожидания (реестр в памяти процесса) + восстановленные
+    // после рестарта инстанса (снимок из хранилища ожиданий; `restored: true`).
     const pending = orchestrator.listPendingApprovals(id);
     return c.json({ permissions: pending.map(toPendingPermissionDto) });
   });

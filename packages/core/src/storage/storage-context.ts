@@ -53,6 +53,7 @@ import type {
   MemoryFactRepository,
   MemoryIndexRepository,
   PackRepository,
+  PendingApprovalRepository,
   PipelineRepository,
   PipelineRunRepository,
   ProfileRepository,
@@ -128,6 +129,9 @@ import { FileQuestionStore } from './file-question-store.js';
 import { FileBackgroundRunStore } from './file-background-run-store.js';
 // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
 import { FileWorktreeStore } from './file-worktree-store.js';
+// ADR-029: ожидания подтверждения прав — отдельный стор (документ сессии не
+// трогается: гонка lost update с точечной записью истории, ADR-118 §4).
+import { FilePendingApprovalStore } from './file-pending-approval-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
@@ -187,6 +191,7 @@ import {
   MemoryWebhookRepository,
   MemoryDedupRepository,
   MemoryWorktreeRepository,
+  MemoryPendingApprovalRepository,
 } from './memory/index.js';
 
 /** Физический backend хранения (`storage.backend` в конфиге). */
@@ -445,6 +450,15 @@ export interface StorageContext {
    * (`documents`, `kind='worktree'` — без новой миграции).
    */
   worktrees: WorktreeRepository;
+  /**
+   * ADR-029: ожидания подтверждения прав — **отдельный стор**, а не поле
+   * документа сессии: запись в документ сессии — полная перезапись истории,
+   * а результаты параллельных тулов пишутся точечно (`appendMessage`,
+   * ADR-118) → полная запись затирала бы их (гонка lost update).
+   * Реализовано файловым (`{dataDir}/pending-approvals.json`), in-memory и
+   * драйвером PostgreSQL (таблица `pending_approvals`).
+   */
+  pendingApprovals: PendingApprovalRepository;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -731,6 +745,9 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов
     // (`worktrees.json`).
     worktrees: new FileWorktreeStore({ dataDir }),
+    // ADR-029: ожидания подтверждения прав (`pending-approvals.json`) —
+    // отдельный стор: документ сессии не трогаем.
+    pendingApprovals: new FilePendingApprovalStore({ dataDir }),
   };
 }
 
@@ -796,6 +813,8 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     backgroundRuns: new MemoryBackgroundRunRepository(),
     // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов.
     worktrees: new MemoryWorktreeRepository(),
+    // ADR-029: ожидания подтверждения прав (отдельный стор).
+    pendingApprovals: new MemoryPendingApprovalRepository(),
   };
 }
 

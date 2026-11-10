@@ -38,6 +38,7 @@ import {
   describeMcpRegistryRepository,
   describePackRepository,
   describePipelineRepository,
+  describePendingApprovalRepository,
   describePipelineRunRepository,
   describeProfileRepository,
   describeProjectPipelineRepository,
@@ -285,4 +286,9 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов (ADR-114; generic
   // таблица `documents`, `kind='worktree'` — без новой миграции).
   describeWorktreeRepository('PG → WorktreeRepository', () => makePort('worktrees'));
+
+  // ADR-029: ожидания подтверждения прав (таблица `pending_approvals`,
+  // миграция 035) — отдельный стор, не документ сессии.
+  describePendingApprovalRepository('PG → PendingApprovalRepository', () =>
+    makePort('pendingApprovals'));
 });

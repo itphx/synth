@@ -64,6 +64,11 @@ export interface SerializeSessionOptions {
    * без него работает как прежде).
    */
   contextOptimizer?: ContextUsageSource | null;
+  /**
+   * Число неотвеченных запросов подтверждения прав сессии (ADR-029).
+   * Не задано — поле не включается в DTO (у клиента = 0).
+   */
+  pendingApprovals?: number;
 }
 
 /**
@@ -262,6 +267,18 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
      */
     ...(opts?.contextOptimizer
       ? { context_usage: computeContextUsage(opts.contextOptimizer, session) }
+      : {}),
+    /**
+     * ADR-029: число неотвеченных запросов подтверждения прав сессии.
+     *
+     * Поле **аддитивное**: считается только там, где передан счётчик
+     * (`opts.pendingApprovals`) — иначе ключа в DTO нет вовсе (клиент без
+     * него работает как прежде). Нужно дереву сессий: после перезагрузки
+     * страницы живой стор клиента пуст, а метка «ждёт подтверждения прав»
+     * должна остаться.
+     */
+    ...(opts?.pendingApprovals !== undefined
+      ? { pending_approvals: opts.pendingApprovals }
       : {}),
     cache_read_tokens: session.cacheReadTokens,
     cache_write_tokens: session.cacheWriteTokens,

@@ -403,6 +403,16 @@
 - **`ord` — монотонный порядок.** Выдаётся при материализации записи в историю
   (`storage/message-write.ts`, `nextOrd`), **не перенумеровывается**; `seq` остаётся позиционным.
   DTO (`server/serialize.ts`) несёт `ord`/`turn_id`/`step_index`/`status`.
+- **Временное состояние хода в сессии** (`Session`) — персистится в документе сессии
+  (файловое хранилище и PostgreSQL — один и тот же JSONB-документ), чтобы переживало
+  перезапуск инстанса и перезагрузку страницы: `session.retry` (ретрай хода),
+  `session.current_stream` (снимок живого шага/активный ход) и
+  **`session.pendingApprovals`** (ожидания подтверждения прав, ADR-029 — список
+  `SessionPendingApproval`; появляется при публикации `permission.asked`, снимается при
+  ответе/таймауте/отмене хода/каскадном отказе; после рестарта инстанса живой реестр
+  ожиданий пуст, а этот список — источник восстановления: `GET /:id/permissions` отдаёт
+  такие ожидания с `restored: true`, а ответ на них применяется как грант в сессии —
+  подробности в разделе «engine/permission/*»).
 - **Шина** (`events/bus.ts`): адресная доставка по `BusEvent.recipient` (подписчик с чужим
   `recipient` событие не получает; широковещание — только для гибридного моста), **глобальный**
   монотонный `eventSeq` (сквозной по всем сессионным каналам инстанса — точка догона одна на
@@ -649,7 +659,7 @@
   60 с, ключ — `Authorization`, 429 `RATE_LIMITED` + `Retry-After`) навешен в managed backend
   (`packages/backend/src/routes/sessions.ts`, import/import-batch/export/fork/merge); в
   standalone-core маршрутов импорта/экспорта нет, счётчиков не заводится.
-- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `GET/PATCH /:id/optimization*` (ADR-119) + `POST /:id/optimization/check|cancel-summarization` — вкладка «Контекст», настройки читает движок на core, поэтому маршруты обязаны жить в общей фабрике (в гибриде `remote:` форвардится клиентом); `GET/PUT /:id/mcp` — MCP-скоуп сессии (backend регистрирует свою, более строгую версию раньше); `GET /:id/secrets` — карта обфускации по праву раскрытия (`resolveCanRevealSecrets`); `GET /:id/permissions` — ожидающие ответа подтверждения сессии (ADR-029; восстановление полосы подтверждения после перезагрузки страницы; источник — seam `ChatOrchestrator.listPendingApprovals` → `PermissionApprovalManager.listPending`, состояние в памяти процесса; в гибриде `remote:` форвардится клиентом); `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
+- `server/routes/*` — `health`, `hybrid`, `auth`, `sessions` (`GET /:id/memory` — агрегаты памяти сессии для вкладки «Память», ADR-107; `GET/PATCH /:id/optimization*` (ADR-119) + `POST /:id/optimization/check|cancel-summarization` — вкладка «Контекст», настройки читает движок на core, поэтому маршруты обязаны жить в общей фабрике (в гибриде `remote:` форвардится клиентом); `GET/PUT /:id/mcp` — MCP-скоуп сессии (backend регистрирует свою, более строгую версию раньше); `GET /:id/secrets` — карта обфускации по праву раскрытия (`resolveCanRevealSecrets`); `GET /:id/permissions` — ожидающие ответа подтверждения сессии (ADR-029; восстановление полосы подтверждения после перезагрузки страницы; источник — seam `ChatOrchestrator.listPendingApprovals` → `PermissionApprovalManager.listPending`, состояние в памяти процесса; **плюс** восстановленные после рестарта инстанса ожидания из **хранилища ожиданий** (`storage/ports/pending-approval-repository.ts`; файл `{dataDir}/pending-approvals.json`, in-memory, PostgreSQL — таблица `pending_approvals`, миграция 034) — с признаком `restored: true` и `held: true` (таймера после рестарта нет); в гибриде `remote:` форвардится клиентом); **счётчик подтверждений в DTO сессии** — поле `pending_approvals` (ADR-029; `serializeSession` c опцией `pendingApprovals`; список сессий и `GET /:id` — источник seam `ChatOrchestrator.listPendingApprovalCounts` → `PermissionApprovalManager.listPendingCounts`; считается один раз на запрос; значение — из реестра ожиданий (живые + восстановленные)); `POST /:id/permissions/:approvalId` — ответ на подтверждение; для **восстановленного** ожидания (`resolvePendingApproval → restored`) ответ применяется как грант в сессии (`allow`), снимает ожидание (`deny`), а `hold` даёт `400` (обход `ApprovalRegistry.claim` — привязки к восстановленному id нет); `POST /:id/background` — detach блокирующих прогонов, ADR-111; вложенные маршруты `attachments.ts` — `POST /:id/attachments` / `GET /:id/attachments/:partId`), `messages`, `projects` (`memory` — политика памяти проекта),
   `project-transfer` (publish/fork-local + `GET /:id/publish/progress` — прогресс публикации;
   реестр `remote/transfer-progress.ts`, in-memory, ключ `userId:projectId`, TTL 10 мин),
   `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
@@ -1213,9 +1223,42 @@
   `listPending(sessionId)`/`get(approvalId)`) — источник истины для восстановления полосы
   подтверждения после перезагрузки страницы: HTTP `GET /api/v2/sessions/:id/permissions`
   (`server/routes/sessions.ts`) отдаёт список ожиданий; seam оркестратора —
-  `ChatOrchestrator.listPendingApprovals(sessionId)`. Состояние — **в памяти процесса**:
-  после рестарта инстанса ожидания теряются (персистентность — отдельное решение владельца:
-  ADR + миграции); `engine/security/*` — injection/shell/protected paths
+  `ChatOrchestrator.listPendingApprovals(sessionId)`. **Счётчик по сессиям** —
+  `PermissionApprovalManager.listPendingCounts()` (`Map<sessionId, count>`, один проход по
+  реестру) → seam `ChatOrchestrator.listPendingApprovalCounts()` → DTO сессии:
+  поле **`pending_approvals`** (`server/serialize.ts`, опция `pendingApprovals`; `0` — ожиданий
+  нет) в `GET /api/v2/sessions` (страница) и `GET /api/v2/sessions/:id` — по нему дерево
+  сессий помечает строку статусом `approval` **после перезагрузки страницы** (живой стор
+  клиента в этот момент пуст); счётчик считается **один раз на запрос**, не на каждую
+  **Живой реестр — в памяти процесса** (`PermissionApprovalManager._pending`):
+  после рестарта инстанса он пуст. **Персистентная копия ожидания — в отдельном
+  порте слоя хранения** `storage/ports/pending-approval-repository.ts`
+  (`PendingApprovalRecord`: `approvalId`/`sessionId`/`ownerId?`/`toolName`/`arguments`/
+  `reason`/`trigger?`/`askedAt`/`timeoutMs`/`turnId?`/`principal?`; реализации —
+  файловая `{dataDir}/pending-approvals.json`, in-memory и PostgreSQL — таблица
+  `pending_approvals`, миграция `034`; контрактный suite обязателен). Отдельная
+  таблица, а не поле документа сессии: документ сессии пишется полной заменой
+  (`save`), а результаты параллельных тулов — точечно (`appendMessage`, ADR-118 §4) →
+  запись ожидания в тот же документ затирала бы точечные записи (гонка lost
+  update). Запись ведёт сам менеджер через репозиторий (`save` при публикации,
+  `delete` при снятии; best-effort: ошибка записи **не ломает ход**). Восстановление
+  при старте — `ChatOrchestrator.restorePendingApprovals()` →
+  `PermissionApprovalManager.restoreFromRepository()` (вызывается в `deps.ts` core и
+  backend рядом с `questionService.recoverOnStart()`).
+  **Жизненный цикл записи:** появляется при публикации запроса (`permission.asked`),
+  снимается при ответе, таймауте, отмене хода и каскадном отказе (тот же путь `finish`).
+  **Вид ожидания** — `ChatOrchestrator.resolvePendingApproval(session, approvalId)`:
+  `live` (реестр в памяти) / `settled` (опубликовано этим процессом и уже закрыто —
+  повторный ответ обязан быть отказом, а не грантом) / `restored` (снимок из хранилища
+  ожиданий, живого waiter'а нет) / `undefined`. **Ответ на восстановленное ожидание**
+  (`POST /api/v2/sessions/:id/permissions/:approvalId`): живого waiter'а нет — прежний
+  вызов разбудить нечем, поэтому `allow` применяется как **грант в сессии**
+  (`grantSessionToolAllow` → allow-правило в `session.settings.permission.rules`),
+  `deny` — просто снимает ожидание, `hold` — `400` (таймера, который останавливать,
+  не существует). Ветка ответа **обходит `ApprovalRegistry.claim`** — привязки к
+  восстановленному id нет (реестр Authority живёт в памяти процесса), доступ к
+  сессии решает граничный prefix-guard (`server/session-access-guard.ts`, вид `write`
+  по HTTP-методу); `engine/security/*` — injection/shell/protected paths
   (`shell-guard.ts`: `\` в POSIX-shell — экранирование/регэксп, а не разделитель пути, поэтому
   regex-аргументы (`grep -v '\.sample$'`) путями не считаются, а Windows-пути распознаются явно —
   `C:\…`, `\\server\share`; аргументы-паттерны (`sed`-скрипт, regexp `grep`, программа `awk`,

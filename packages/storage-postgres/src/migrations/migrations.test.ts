@@ -21,6 +21,7 @@ import { MIGRATION_030_SESSION_RETRY } from './030-session-retry.js';
 import { MIGRATION_031_SSH_KEY_POLICY } from './031-ssh-key-policy.js';
 import { MIGRATION_032_MCP_REMOTE_MODE } from './032-mcp-remote-mode.js';
 import { MIGRATION_033_SESSION_SOURCE_ID } from './033-session-source-id.js';
+import { MIGRATION_034_PENDING_APPROVALS } from './034-pending-approvals.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -263,12 +264,11 @@ describe('миграция 032_mcp_remote_mode (PROP-125 — режим дост
 });
 
 describe('миграция 033_session_source_id (маркер источника при переносе)', () => {
-  it('зарегистрирована в реестре под версией 33 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 33', () => {
     const migration = MIGRATIONS.find((m) => m.version === 33);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('033_session_source_id');
     expect(migration!.sql).toBe(MIGRATION_033_SESSION_SOURCE_ID);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(33);
   });
 
   it('добавляет колонку и partial-индекс идемпотентно', () => {
@@ -279,5 +279,30 @@ describe('миграция 033_session_source_id (маркер источник�
       'CREATE INDEX IF NOT EXISTS sessions_project_source_idx ON sessions (project_id, source_session_id) WHERE source_session_id IS NOT NULL;',
     );
     expect(MIGRATION_033_SESSION_SOURCE_ID).toContain('COMMENT ON COLUMN sessions.source_session_id');
+  });
+});
+
+describe('миграция 034_pending_approvals (ожидания подтверждений, ADR-029)', () => {
+  it('зарегистрирована в реестре под версией 34 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 34);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('034_pending_approvals');
+    expect(migration!.sql).toBe(MIGRATION_034_PENDING_APPROVALS);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(34);
+  });
+
+  it('создаёт таблицу ожиданий и индекс по сессии идемпотентно', () => {
+    expect(MIGRATION_034_PENDING_APPROVALS).toContain(
+      'CREATE TABLE IF NOT EXISTS pending_approvals (',
+    );
+    expect(MIGRATION_034_PENDING_APPROVALS).toContain(
+      'CREATE INDEX IF NOT EXISTS pending_approvals_session_idx ON pending_approvals (session_id);',
+    );
+    expect(MIGRATION_034_PENDING_APPROVALS).toContain(
+      'COMMENT ON TABLE pending_approvals',
+    );
+    // Ожидания лежат в отдельной таблице, а не в документе сессии: полная
+    // запись сессии затирала бы точечные записи результатов параллельных тулов.
+    expect(MIGRATION_034_PENDING_APPROVALS).not.toContain('ALTER TABLE sessions');
   });
 });

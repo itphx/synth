@@ -63,11 +63,15 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { usePermissionStore } from '@/stores/permissionStore'
+import { createDispatcher } from '@/stores/transportStore'
 import { ProjectsTab } from './ProjectsTab'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
+
+/** Диспетчер транспорта — живое событие `permission.replied`. */
+const dispatch = createDispatcher()
 
 function session(id: string): SessionData {
   return {
@@ -92,6 +96,11 @@ function session(id: string): SessionData {
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
   }
+}
+
+/** Сессия с серверным счётчиком висящих подтверждений (ADR-029). */
+function sessionWithPending(id: string, count: number): SessionData {
+  return { ...session(id), pending_approvals: count }
 }
 
 async function renderTree(): Promise<HTMLElement> {
@@ -238,5 +247,122 @@ describe('ProjectsTab — статус «ждёт подтверждения п�
 
     const dot = statusDot(sessionNode(container, 's1'))!
     expect(dot.classList.contains('bg-status-info')).toBe(true)
+  })
+
+  it('после перезагрузки страницы метка приходит из DTO (pending_approvals)', async () => {
+    // Живой стор пуст: событие `permission.asked` в этой вкладке не приходило
+    // (перезагрузка страницы) — метку должен дать серверный счётчик в DTO.
+    usePermissionStore.setState({ requestsBySession: {} })
+    vi.mocked(synthApi.getSessionsPage).mockResolvedValue({
+      sessions: [sessionWithPending('s1', 1)],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+    useSessionsStore.setState({
+      sessions: [sessionWithPending('s1', 1)] as never,
+      total: 1,
+      nextOffset: null,
+      loadingMore: false,
+      listProjectId: null,
+    })
+
+    const container = await renderTree()
+
+    const node = sessionNode(container, 's1')
+    const dot = statusDot(node)!
+    expect(dot.classList.contains('bg-status-caution')).toBe(true)
+    expect(dot.getAttribute('aria-label')).toBe('Approval needed')
+
+    const label = labelSpan(node)
+    expect(label).not.toBeNull()
+    expect(label!.classList.contains('text-status-caution')).toBe(true)
+  })
+
+  it('DTO-счётчик важнее идущего хода', async () => {
+    usePermissionStore.setState({ requestsBySession: {} })
+    vi.mocked(synthApi.getSessionsPage).mockResolvedValue({
+      sessions: [sessionWithPending('s1', 2)],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+    useSessionsStore.setState({
+      sessions: [sessionWithPending('s1', 2)] as never,
+      total: 1,
+      nextOffset: null,
+      loadingMore: false,
+      listProjectId: null,
+    })
+    useChatStore.setState({
+      turnBySession: { s1: { turnId: 't1', status: 'streaming' } } as never,
+    })
+
+    const container = await renderTree()
+
+    const dot = statusDot(sessionNode(container, 's1'))!
+    expect(dot.classList.contains('bg-status-caution')).toBe(true)
+    expect(dot.classList.contains('bg-status-info')).toBe(false)
+  })
+
+  it('нулевой счётчик в DTO метки не даёт (поведение не сломано)', async () => {
+    usePermissionStore.setState({ requestsBySession: {} })
+    vi.mocked(synthApi.getSessionsPage).mockResolvedValue({
+      sessions: [sessionWithPending('s1', 0)],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+    useSessionsStore.setState({
+      sessions: [sessionWithPending('s1', 0)] as never,
+      total: 1,
+      nextOffset: null,
+      loadingMore: false,
+      listProjectId: null,
+    })
+
+    const container = await renderTree()
+
+    expect(statusDot(sessionNode(container, 's1'))).toBeNull()
+  })
+
+  it('после ответа метка пропадает: живой стор пуст + DTO-счётчик обнулён', async () => {
+    // «Перезагрузка страницы»: событие `permission.asked` в этой вкладке не
+    // приходило — метку даёт серверный счётчик в DTO.
+    usePermissionStore.setState({ requestsBySession: {} })
+    vi.mocked(synthApi.getSessionsPage).mockResolvedValue({
+      sessions: [sessionWithPending('s1', 1)],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    })
+    useSessionsStore.setState({
+      sessions: [sessionWithPending('s1', 1)] as never,
+      total: 1,
+      nextOffset: null,
+      loadingMore: false,
+      listProjectId: null,
+    })
+
+    const container = await renderTree()
+
+    const dot = statusDot(sessionNode(container, 's1'))!
+    expect(dot.classList.contains('bg-status-caution')).toBe(true)
+
+    // Ответ на подтверждение: карточка снята, DTO-счётчик уменьшен.
+    await act(async () => {
+      dispatch({
+        type: 'permission.replied',
+        session_id: 's1',
+        data: { approval_id: 'a1' },
+      })
+    })
+
+    expect(useSessionsStore.getState().sessions[0]!.pending_approvals).toBe(0)
+    expect(statusDot(sessionNode(container, 's1'))).toBeNull()
   })
 })

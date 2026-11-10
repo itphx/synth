@@ -90,10 +90,26 @@ async function patchSession(sessionId: string, patch: SessionPatch): Promise<Ses
   }
 }
 
+/**
+ * Правило счётчика висящих подтверждений (`pending_approvals`).
+ *
+ * **Отсутствие поля в DTO ≠ «ожиданий нет»**: старый сервер (или точечный
+ * ответ `GET /sessions/:id` без счётчика) поле не отдаёт — прежнее значение
+ * сохраняем, иначе метка «ждёт подтверждения прав» пропала бы вслед за
+ * любым точечным обновлением сессии. Поле есть — доверяем ему (даже `0`).
+ */
+function withPendingApprovals(prev: SessionData | undefined, next: SessionData): SessionData {
+  if (!prev || next.pending_approvals !== undefined) return next
+  if (prev.pending_approvals === undefined) return next
+  return { ...next, pending_approvals: prev.pending_approvals }
+}
+
 /** Обновить запись сессии в сторе по ответу сервера. */
 function applySession(sessionId: string, updated: SessionData): void {
   useSessionsStore.setState((s) => ({
-    sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
+    sessions: s.sessions.map((sess) =>
+      sess.id === sessionId ? withPendingApprovals(sess, updated) : sess,
+    ),
   }))
 }
 
@@ -117,8 +133,13 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
       })
       const remoteOffline = page.remote_offline === true
       useHybridStore.getState().markRemoteDegraded(remoteOffline)
-      const incoming = page.sessions ?? []
       set((s) => {
+        // Список DTO без `pending_approvals` (старый сервер) — прежние
+        // счётчики ожиданий сохраняем: отсутствие поля не значит «ожиданий нет».
+        const prevById = new Map(s.sessions.map((sess) => [sess.id, sess]))
+        const incoming = (page.sessions ?? []).map((sess) =>
+          withPendingApprovals(prevById.get(sess.id), sess),
+        )
         if (!remoteOffline) {
           return {
             sessions: incoming,
@@ -232,7 +253,9 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
       const updated = await synthApi.updateSession(sessionId, { project_id: projectId })
       if (!isTransportConnected()) {
         set((s) => ({
-          sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
+          sessions: s.sessions.map((sess) =>
+            sess.id === sessionId ? withPendingApprovals(sess, updated) : sess,
+          ),
         }))
       }
       return updated
@@ -271,7 +294,9 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
     try {
       const updated = await synthApi.updateSession(sessionId, meta)
       set((s) => ({
-        sessions: s.sessions.map((sess) => (sess.id === sessionId ? { ...sess, ...updated } : sess)),
+        sessions: s.sessions.map((sess) =>
+          sess.id === sessionId ? withPendingApprovals(sess, { ...sess, ...updated }) : sess,
+        ),
       }))
       return updated
     } catch (e) {
@@ -318,7 +343,9 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
     try {
       const updated = await synthApi.patchSessionMode(sessionId, mode)
       set((s) => ({
-        sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
+        sessions: s.sessions.map((sess) =>
+          sess.id === sessionId ? withPendingApprovals(sess, updated) : sess,
+        ),
       }))
       return updated
     } catch (e) {
@@ -330,11 +357,18 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   // Кладёт актуальные данные сессии в стор (например, после GET /sessions/:id).
   // Повторяет паттерн setSessionMode (map), но добавляет сессию, если её ещё нет
   // в сторе (например, до loadSessions или для сессии из другого проекта).
+  //
+  // DTO без `pending_approvals` (старый сервер, событие без счётчика) —
+  // отсутствие поля НЕ значит «ожиданий нет»: прежнее значение сохраняем.
   upsertSession: (session) =>
     set((s) => {
       const exists = s.sessions.some((ses) => ses.id === session.id)
       if (!exists) return { sessions: [session, ...s.sessions] }
-      return { sessions: s.sessions.map((ses) => (ses.id === session.id ? session : ses)) }
+      return {
+        sessions: s.sessions.map((ses) =>
+          ses.id === session.id ? withPendingApprovals(ses, session) : ses,
+        ),
+      }
     }),
 
   getSessionsByProject: (projectId) => {

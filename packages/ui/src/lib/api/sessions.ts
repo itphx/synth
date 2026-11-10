@@ -108,6 +108,14 @@ export interface SessionData {
    * только в точечных ответах (деталь сессии).
    */
   context_usage?: ContextUsage | null
+  /**
+   * Число неотвеченных запросов подтверждения прав (ADR-029); 0 — нет.
+   *
+   * Аддитивное поле DTO сессии: список и деталь отдают его, чтобы дерево
+   * сессий показывало метку «ждёт подтверждения прав» и **после перезагрузки
+   * страницы** (живой стор клиента в этот момент пуст).
+   */
+  pending_approvals?: number
   input_tokens: number
   output_tokens: number
   total_tokens: number
@@ -219,6 +227,12 @@ export interface PendingPermissionDto {
    * `arguments`, параметры виновника — в `trigger.params`.
    */
   trigger?: unknown
+  /**
+   * true — ожидание **восстановлено после рестарта инстанса** (ADR-029):
+   * живого ожидания в процессе нет, ответ применяется как разрешение
+   * в сессии. Аддитивно: у обычного ожидания поля нет.
+   */
+  restored?: boolean | null
 }
 
 /**
@@ -253,6 +267,9 @@ function toPermissionRequest(dto: PendingPermissionDto): PermissionRequest | nul
     ...(preview ? { preview } : {}),
     ...(save ? { save } : {}),
     ...(trigger ? { trigger } : {}),
+    // Восстановленное после рестарта инстанса ожидание (ADR-029): живого
+    // waiter'а больше нет, ответ применяется как разрешение в сессии.
+    ...(dto.restored ? { restored: true } : {}),
   }
 }
 
@@ -573,6 +590,10 @@ export const sessionsApi = {
    * `approval_id`/`tool`/`arguments`/`reason`/`ask_timeout_ms`, плюс
    * `asked_at` (ISO-8601 — от него клиент считает остаток таймера) и `held`
    * (пользователь остановил таймер — запрос живёт до ответа).
+   *
+   * Аддитивно: `restored: true` — ожидание **восстановлено после рестарта
+   * инстанса** (снимок в документе сессии, ADR-029). Живого waiter'а нет:
+   * ответ применяется как разрешение в сессии и уходит по HTTP, а не WS.
    */
   async listPendingPermissions(sessionId: string): Promise<PermissionRequest[]> {
     const res = await fetchJSON<{ permissions?: PendingPermissionDto[] }>(

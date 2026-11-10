@@ -153,9 +153,29 @@ export function ProjectsTab() {
     return set
   }, [centerTabs])
 
+  /**
+   * Счётчик висящих подтверждений по сессиям из DTO (`pending_approvals`).
+   *
+   * Живой канал — стор `usePermissionStore` (событие `permission.asked` в этой
+   * вкладке); после **перезагрузки страницы** стор пуст, и метку «ждёт
+   * подтверждения прав» берёт серверный счётчик в DTO сессии. Карта
+   * пересобирается через `useMemo` — не на каждом рендере.
+   */
+  const pendingApprovalsBySession = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const s of sessions) {
+      const count = s.pending_approvals ?? 0
+      if (count > 0) map.set(s.id, count)
+    }
+    return map
+  }, [sessions])
+
   const getSessionStatus = (sessionId: string) => {
     // Ждёт подтверждения прав — самое важное: ход пользователя заблокирован.
+    // Два источника: живой стор (событие в этой вкладке) и DTO-счётчик
+    // (`pending_approvals`) — после перезагрузки страницы живого нет.
     if ((requestsBySession[sessionId]?.length ?? 0) > 0) return 'approval' as const
+    if ((pendingApprovalsBySession.get(sessionId) ?? 0) > 0) return 'approval' as const
     // ADR-118 §1: активный ход сессии — единственный признак «идёт генерация».
     if (turnBySession[sessionId]?.status === 'streaming') return 'streaming' as const
     const qi = queueBySession[sessionId]

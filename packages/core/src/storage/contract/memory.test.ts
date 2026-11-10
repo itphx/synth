@@ -31,6 +31,7 @@ import {
   describeMcpRegistryRepository,
   describePackRepository,
   describePipelineRepository,
+  describePendingApprovalRepository,
   describePipelineRunRepository,
   describeProfileRepository,
   describeProjectPipelineRepository,
@@ -95,6 +96,7 @@ import {
   MemoryWebhookDeliveryRepository,
   MemoryWebhookRepository,
   MemoryWorktreeRepository,
+  MemoryPendingApprovalRepository,
 } from '../memory/index.js';
 
 /**
@@ -317,6 +319,12 @@ describe('контрактные тесты in-memory реализаций по�
   describeWorktreeRepository('MemoryWorktreeRepository → WorktreeRepository', async () => ({
     repo: new MemoryWorktreeRepository(),
   }));
+
+  // ADR-029: ожидания подтверждения прав (отдельный стор).
+  describePendingApprovalRepository(
+    'MemoryPendingApprovalRepository → PendingApprovalRepository',
+    async () => ({ repo: new MemoryPendingApprovalRepository() }),
+  );
 });
 
 /** Специфика memory-реализаций: изоляция экземпляров и замороженные дефолты. */
