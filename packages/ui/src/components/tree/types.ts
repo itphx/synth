@@ -3,7 +3,16 @@ import type { ContextMenuItem } from '@/components/ui/contextMenu'
 
 export type ContextMenuEntry = ContextMenuItem | 'separator'
 
-export type TreeStatus = 'streaming' | 'blocked' | 'stalled' | 'pending'
+/**
+ * Статус узла дерева (точка-индикатор в правом конце строки).
+ *
+ * - `streaming` — идёт генерация;
+ * - `blocked` — сессия заблокирована;
+ * - `stalled` — очередь зависла;
+ * - `pending` — в очереди есть сообщения;
+ * - `approval` — ждёт подтверждения прав (запрос `permission.asked`).
+ */
+export type TreeStatus = 'streaming' | 'blocked' | 'stalled' | 'pending' | 'approval'
 
 export interface TreeAction {
   id: string

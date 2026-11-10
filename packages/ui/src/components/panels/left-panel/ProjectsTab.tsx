@@ -5,6 +5,7 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useChatStore } from '@/stores/chatStore'
+import { usePermissionStore } from '@/stores/permissionStore'
 import { useNotificationStore } from '@/stores/notificationStore'
 import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
 import { useI18n } from '@/lib/i18n'
@@ -60,6 +61,8 @@ export function ProjectsTab() {
   const toggleSelected = useSessionsTreeStore(s => s.toggleSelected)
   const turnBySession = useChatStore((s) => s.turnBySession)
   const queueBySession = useChatStore((s) => s.queueBySession)
+  // Запросы подтверждения прав (`permission.asked`): ждём действия пользователя.
+  const requestsBySession = usePermissionStore((s) => s.requestsBySession)
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
   const isOffline = useHybridStore(selectIsOffline)
@@ -151,6 +154,8 @@ export function ProjectsTab() {
   }, [centerTabs])
 
   const getSessionStatus = (sessionId: string) => {
+    // Ждёт подтверждения прав — самое важное: ход пользователя заблокирован.
+    if ((requestsBySession[sessionId]?.length ?? 0) > 0) return 'approval' as const
     // ADR-118 §1: активный ход сессии — единственный признак «идёт генерация».
     if (turnBySession[sessionId]?.status === 'streaming') return 'streaming' as const
     const qi = queueBySession[sessionId]

@@ -2004,6 +2004,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             arguments: toolArgs,
             reason: approvalAskReason,
             ...(preview ? { preview } : {}),
+            // Структурная причина ask'а («виновник») — как в основном ходе.
+            trigger: {
+              ...(permissionDecision.messageId ? { messageId: permissionDecision.messageId } : {}),
+              ...(permissionDecision.params ? { params: permissionDecision.params } : {}),
+              ...(permissionDecision.matchedRule ? { matchedRule: permissionDecision.matchedRule } : {}),
+              ...(permissionDecision.askKind ? { askKind: permissionDecision.askKind } : {}),
+            },
           };
           // PROP-127 (этап T5): ожидание готовится здесь, публикуется и
           // ждётся в параллельной фазе — несколько `ask` одного шага висят

@@ -5916,6 +5916,14 @@ export class ChatOrchestrator {
               ...(preview ? { preview } : {}),
               // Паттерны shell-гранта для полосы подтверждения.
               ...(isShellTool ? { save: shellSave ?? [] } : {}),
+              // Структурная причина ask'а («виновник»): id сообщения +
+              // параметры + вид ask'а — UI показывает, ЧТО вызвало вопрос.
+              trigger: {
+                ...(permissionDecision.messageId ? { messageId: permissionDecision.messageId } : {}),
+                ...(permissionDecision.params ? { params: permissionDecision.params } : {}),
+                ...(permissionDecision.matchedRule ? { matchedRule: permissionDecision.matchedRule } : {}),
+                ...(permissionDecision.askKind ? { askKind: permissionDecision.askKind } : {}),
+              },
             };
             // Ожидание готовится здесь, публикуется и ждётся в параллельной
             // фазе: так несколько `ask` одного шага висят одновременно.

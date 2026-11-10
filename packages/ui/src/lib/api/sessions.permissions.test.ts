@@ -118,6 +118,57 @@ describe('sessionsApi — ожидающие подтверждения прав
     expect(request!.preview?.files?.[0]?.path).toBe('a.txt')
   })
 
+  it('trigger (структурная причина ask\'а) переносится в запись', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        permissions: [
+          {
+            approval_id: 'apr_1',
+            tool: 'execute_shell',
+            asked_at: '2026-01-01T12:00:00.000Z',
+            ask_timeout_ms: 30_000,
+            arguments: { command: 'cat ~/.ssh/config' },
+            trigger: {
+              messageId: 'ask-protected-path',
+              params: { path: '/home/rdv/.ssh/config' },
+              matchedRule: 'shell-policy.approve',
+              askKind: 'protected',
+            },
+          },
+        ],
+      }),
+    )
+
+    const [request] = await sessionsApi.listPendingPermissions('s1')
+
+    expect(request!.trigger).toEqual({
+      messageId: 'ask-protected-path',
+      params: { path: '/home/rdv/.ssh/config' },
+      matchedRule: 'shell-policy.approve',
+      askKind: 'protected',
+    })
+  })
+
+  it('битый trigger игнорируется — запись остаётся рабочей', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        permissions: [
+          {
+            approval_id: 'apr_1',
+            tool: 'execute_shell',
+            asked_at: '2026-01-01T12:00:00.000Z',
+            ask_timeout_ms: 30_000,
+            trigger: 'не объект',
+          },
+        ],
+      }),
+    )
+
+    const [request] = await sessionsApi.listPendingPermissions('s1')
+
+    expect(request!.trigger).toBeUndefined()
+  })
+
   it('запись без approval_id пропускается', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ permissions: [{ tool: 'read_file' }, { approval_id: 'apr_1' }] }),

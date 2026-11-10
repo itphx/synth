@@ -785,6 +785,7 @@ export const dict = {
   'leftPanel.confirmClearSession': 'Clear all messages in session?',
   'leftPanel.streaming': 'Streaming',
   'leftPanel.attentionNeeded': 'Attention needed',
+  'leftPanel.approvalNeeded': 'Approval needed',
   'leftPanel.answerReady': 'Answer ready',
   'leftPanel.blocked': 'Blocked',
   'leftPanel.notifications': '{count} notif.',
@@ -1696,6 +1697,24 @@ export const dict = {
   'permission.bar.saveUnavailable': 'The command pattern cannot be derived — only a one-time allow is possible',
   'permission.bar.saveUnavailableShort': 'Once only',
   'permission.bar.replyFailed': 'Could not send the answer — the request is still open',
+
+  // Human-readable explanation of the ask, built from the structured trigger:
+  // instead of the LLM-facing reason text the user sees WHAT triggered it.
+  'permission.bar.cause': 'What triggered this',
+  'permission.bar.cause.protected': 'Protected path: {path}',
+  'permission.bar.cause.dynamicPath': 'Could not verify path {path} — the value is computed at runtime',
+  'permission.bar.cause.mutation': 'Change outside the working directory: {path}',
+  'permission.bar.cause.cwd': 'Could not verify the working directory: {path}',
+  'permission.bar.cause.code': 'Code is passed from a variable — verification required: {code}',
+  'permission.bar.cause.command': 'The command name is computed dynamically: {command}',
+  'permission.bar.cause.rule': 'Rule {rule} matched',
+  'permission.bar.cause.generic': 'The tool requires permission approval',
+  'permission.bar.technical': 'Technical details',
+  'permission.bar.technicalRule': 'Rule: {rule}',
+  'permission.bar.technicalMessage': 'Message: {message}',
+  'permission.bar.suspicious': 'Suspicious part: {token}',
+  'permission.bar.highlightHint': 'The highlighted part is what raised the concern',
+  'permission.bar.command': 'Command',
 
   // User questions (stage 1 roadmap 0.13 — block 1.3): dock above the composer.
   'question.dock.title': 'The agent asked a question',

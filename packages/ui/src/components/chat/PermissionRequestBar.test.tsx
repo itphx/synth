@@ -15,7 +15,7 @@ vi.mock('@/hooks/useNotification', () => ({
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { PermissionRequestBar } from './PermissionRequestBar'
-import { usePermissionStore } from '@/stores/permissionStore'
+import { usePermissionStore, type PermissionTrigger } from '@/stores/permissionStore'
 import { useTransportStore } from '@/stores/transportStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -58,6 +58,32 @@ function addShellRequest(save: string[]): void {
     askedAt: new Date().toISOString(),
     timeoutMs: 30_000,
     save,
+  })
+}
+
+/** Запрос с структурной причиной ask'а (`trigger`) — как шлёт новое ядро. */
+function addTriggerRequest(trigger: PermissionTrigger, overrides: {
+  toolName?: string
+  params?: Record<string, unknown>
+  reason?: string
+} = {}): void {
+  usePermissionStore.getState().addRequest(SESSION_ID, {
+    approvalId: 'approval_trigger',
+    toolName: overrides.toolName ?? 'execute_shell',
+    params: overrides.params ?? { command: 'cat ~/.ssh/config' },
+    reason: overrides.reason
+      ?? 'Permission required: The path <$STUB_LOG> requires confirmation according to the protected-paths policy. Do not repeat the call, choose another way, or explain it to the user.',
+    askedAt: new Date().toISOString(),
+    timeoutMs: 30_000,
+    trigger,
+  })
+}
+
+/** Клик по кнопке «Подробнее» (шапка полосы). */
+async function expandBar(container: HTMLElement): Promise<void> {
+  const toggle = container.querySelector('button[title="Подробнее"]')
+  await act(async () => {
+    toggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 }
 
@@ -215,5 +241,246 @@ describe('PermissionRequestBar — сессионный shell-грант пат�
     expect(toast.text).toContain('Shell разрешён в сессии')
     expect(toast.text).toContain('`ansible *`')
     expect(toast.text).toContain('`cd *`')
+  })
+})
+
+/**
+ * Человеческая причина вместо LLM-текста: ядро присылает структурный
+ * «виновник» (`trigger`), UI строит из него понятную фразу и подсвечивает
+ * подозрительный участок.
+ */
+describe('PermissionRequestBar — человеческая причина (trigger)', () => {
+  beforeAll(() => {
+    useI18nStore.setState({ locale: 'ru', dictionary: ruDict, loadingLocale: null })
+  })
+
+  it('защищённый путь: показывает «Защищённый путь» и подсвечивает токен', async () => {
+    addTriggerRequest({
+      messageId: 'ask-protected-path',
+      params: { path: '/home/rdv/.ssh/config' },
+      matchedRule: 'shell-policy.approve',
+      askKind: 'protected',
+    })
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('Что вызвало вопрос')
+    expect(cause.textContent).toContain('Защищённый путь')
+    expect(cause.textContent).toContain('/home/rdv/.ssh/config')
+
+    // Токен-виновник подсвечен.
+    const hl = cause.querySelectorAll('[data-testid="permission-highlight"]')
+    expect(hl.length).toBeGreaterThan(0)
+    expect([...hl].map((s) => s.textContent)).toContain('/home/rdv/.ssh/config')
+  })
+
+  it('динамический путь: «значение вычисляется в рантайме»', async () => {
+    addTriggerRequest({
+      messageId: 'ask-protected-path',
+      params: { path: '$HOME/.ssh/config' },
+      askKind: 'dynamic',
+    })
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('Не удалось проверить путь')
+    expect(cause.textContent).toContain('$HOME/.ssh/config')
+  })
+
+  it('мутация вне рабочего каталога', async () => {
+    addTriggerRequest({
+      messageId: 'ask-protected-path',
+      params: { path: '/etc/hosts' },
+      askKind: 'mutation',
+    })
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('Изменение вне рабочего каталога')
+    expect(cause.textContent).toContain('/etc/hosts')
+  })
+
+  it('неразрешённый рабочий каталог', async () => {
+    addTriggerRequest({
+      messageId: 'ask-protected-path',
+      params: { path: '/var/tmp' },
+      askKind: 'cwd',
+    })
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('Не удалось проверить рабочий каталог')
+    expect(cause.textContent).toContain('/var/tmp')
+  })
+
+  it('динамический код: подсвечивается код', async () => {
+    addTriggerRequest({
+      messageId: 'ask-dynamic-code',
+      params: { code: '$(cat payload.sh)' },
+      askKind: 'dynamic',
+    })
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('Код передаётся из переменной')
+    expect(cause.textContent).toContain('$(cat payload.sh)')
+
+    const hl = [...cause.querySelectorAll('[data-testid="permission-highlight"]')]
+    expect(hl.map((s) => s.textContent)).toContain('$(cat payload.sh)')
+  })
+
+  it('динамическая команда: подсвечивается имя команды', async () => {
+    addTriggerRequest({
+      messageId: 'ask-dynamic-command',
+      params: { command: '$CMD' },
+      askKind: 'dynamic',
+    })
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('Имя команды вычисляется динамически')
+    expect(cause.textContent).toContain('$CMD')
+  })
+
+  it('сработавшее правило: называем правило', async () => {
+    addTriggerRequest({
+      matchedRule: 'shell-policy.approve',
+      params: { command: 'cat ~/.ssh/config' },
+    })
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('Сработало правило')
+    expect(cause.textContent).toContain('shell-policy.approve')
+  })
+
+  it('при trigger есть прежний LLM-текст reason по умолчанию не виден', async () => {
+    addTriggerRequest({
+      messageId: 'ask-protected-path',
+      params: { path: '/home/rdv/.ssh/config' },
+      matchedRule: 'shell-policy.approve',
+      askKind: 'protected',
+    })
+    const container = await renderBar()
+
+    expect(container.textContent).not.toContain('Do not repeat the call')
+    expect(container.textContent).not.toContain('protected-paths policy')
+
+    // Но он доступен в «Технических деталях» (свёрнутый блок).
+    const toggle = container.querySelector('[data-testid="permission-technical-toggle"]')!
+    expect(toggle).not.toBeNull()
+    expect(container.querySelector('[data-testid="permission-technical"]')).toBeNull()
+
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    const technical = container.querySelector('[data-testid="permission-technical"]')!
+    expect(technical.textContent).toContain('Do not repeat the call')
+    expect(technical.textContent).toContain('shell-policy.approve')
+    expect(technical.textContent).toContain('ask-protected-path')
+  })
+
+  it('без trigger показывается прежний текст reason (fallback старого сервера)', async () => {
+    usePermissionStore.getState().addRequest(SESSION_ID, {
+      approvalId: 'approval_legacy',
+      toolName: 'execute_shell',
+      params: { command: 'cat ~/.ssh/config' },
+      reason: 'Permission required: protected-paths policy.',
+      askedAt: new Date().toISOString(),
+      timeoutMs: 30_000,
+    })
+    const container = await renderBar()
+
+    expect(container.textContent).toContain('Причина')
+    expect(container.textContent).toContain('protected-paths policy.')
+    // Без trigger блока «Технические детали» нет — прятать нечего.
+    expect(container.querySelector('[data-testid="permission-technical-toggle"]')).toBeNull()
+  })
+})
+
+describe('PermissionRequestBar — подсветка подозрительного участка', () => {
+  beforeAll(() => {
+    useI18nStore.setState({ locale: 'ru', dictionary: ruDict, loadingLocale: null })
+  })
+
+  it('токен-виновник подсвечен в значении command', async () => {
+    addTriggerRequest(
+      {
+        messageId: 'ask-protected-path',
+        params: { path: '/home/rdv/.ssh/config' },
+        askKind: 'protected',
+      },
+      { params: { command: 'cat /home/rdv/.ssh/config' } },
+    )
+    const container = await renderBar()
+    await expandBar(container)
+
+    const command = container.querySelector('[data-testid="permission-command"]')!
+    expect(command.textContent).toContain('cat /home/rdv/.ssh/config')
+
+    const hl = [...command.querySelectorAll('[data-testid="permission-highlight"]')]
+    expect(hl.map((s) => s.textContent)).toContain('/home/rdv/.ssh/config')
+  })
+
+  it('путь нормализован в абсолютный — ищем по basename', async () => {
+    addTriggerRequest(
+      {
+        messageId: 'ask-protected-path',
+        params: { path: '/home/rdv/.ssh/config' },
+        askKind: 'protected',
+      },
+      { params: { command: 'cat ~/.ssh/config' } },
+    )
+    const container = await renderBar()
+    await expandBar(container)
+
+    const command = container.querySelector('[data-testid="permission-command"]')!
+    const hl = [...command.querySelectorAll('[data-testid="permission-highlight"]')]
+    expect(hl.length).toBeGreaterThan(0)
+    expect(hl.map((s) => s.textContent).join('')).toContain('config')
+  })
+
+  it('токен не найден в команде — блок не пустой, токен показан строкой', async () => {
+    addTriggerRequest(
+      {
+        messageId: 'ask-protected-path',
+        params: { path: '/home/rdv/.ssh/config' },
+        askKind: 'protected',
+      },
+      { params: { command: 'cat /tmp/other' } },
+    )
+    const container = await renderBar()
+    await expandBar(container)
+
+    const command = container.querySelector('[data-testid="permission-command"]')!
+    expect(command.textContent).toContain('cat /tmp/other')
+    expect(command.querySelectorAll('[data-testid="permission-highlight"]').length).toBe(0)
+
+    const suspicious = container.querySelector('[data-testid="permission-suspicious-in-command"]')!
+    expect(suspicious.textContent).toContain('Подозрительный участок')
+    expect(suspicious.textContent).toContain('/home/rdv/.ssh/config')
+  })
+
+  it('команда — отдельным блоком, остальные параметры — списком «ключ: значение»', async () => {
+    addTriggerRequest(
+      {
+        messageId: 'ask-protected-path',
+        params: { path: '/home/rdv/.ssh/config' },
+        askKind: 'protected',
+      },
+      { params: { command: 'cat /home/rdv/.ssh/config', cwd: '/home/rdv' } },
+    )
+    const container = await renderBar()
+    await expandBar(container)
+
+    const command = container.querySelector('[data-testid="permission-command"]')!
+    expect(command.textContent).toContain('cat /home/rdv/.ssh/config')
+
+    const params = container.querySelector('[data-testid="permission-params"]')!
+    expect(params.textContent).toContain('cwd')
+    expect(params.textContent).toContain('/home/rdv')
+    // Команда не дублируется в списке параметров.
+    expect(params.textContent).not.toContain('cat /home/rdv/.ssh/config')
   })
 })

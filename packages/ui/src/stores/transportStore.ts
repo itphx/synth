@@ -6,7 +6,7 @@ import { useProjectsStore } from './projectsStore'
 import { useGitStore } from './gitStore'
 import { useFilesStore } from './filesStore'
 import { useUIStore } from './useUIStore'
-import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS, parsePermissionPreview } from './permissionStore'
+import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS, parsePermissionPreview, parsePermissionTrigger } from './permissionStore'
 import { useQuestionStore } from './questionStore'
 import { useSkillsStore } from './skillsStore'
 import { useInstructionsStore } from './instructionsStore'
@@ -2668,6 +2668,8 @@ export function createDispatcher(): EventDispatcher {
         if (!approvalId) break
 
         const toolName = (payload.tool as string) || (payload.tool_name as string) || 'tool'
+        // ⚠️ `payload.params` — АРГУМЕНТЫ ТУЛА (уже занято). Параметры
+        // «виновника» лежат в `payload.trigger.params` — не путать.
         const params = (payload.arguments as Record<string, unknown>)
           || (payload.params as Record<string, unknown>)
           || {}
@@ -2679,6 +2681,9 @@ export function createDispatcher(): EventDispatcher {
         const save = Array.isArray(payload.save)
           ? payload.save.filter((item): item is string => typeof item === 'string')
           : undefined
+        // Структурная причина ask'а («виновник») — аддитивно: без него UI
+        // показывает прежний текст причины.
+        const trigger = parsePermissionTrigger(payload.trigger)
 
         usePermissionStore.getState().addRequest(sid, {
           approvalId,
@@ -2689,6 +2694,7 @@ export function createDispatcher(): EventDispatcher {
           timeoutMs,
           ...(preview ? { preview } : {}),
           ...(save ? { save } : {}),
+          ...(trigger ? { trigger } : {}),
         })
         break
       }

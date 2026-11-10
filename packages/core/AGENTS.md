@@ -1203,7 +1203,12 @@
 - `engine/permission/*` — permissions (`PERMISSION_GROUPS`; группа `plugin` — ADR-090 Ф3в: матчится
   **по источнику** `ToolSource` (`getToolGroups(toolName, capabilities, source?)`,
   `PermissionCheckInput.toolSource`), а не по capability, — плагин с `file_read`/`search` не
-  «выписывается» из правила `plugin`); **реестр ожиданий подтверждения** (`approval.ts`:
+  «выписывается» из правила `plugin`); **структурная причина ask'а («виновник»)** —
+  `PermissionDecision.askKind` (`dynamic`/`protected`/`mutation`/`cwd`) + `params` (путь/команда/код)
+  → `ApprovalRequest.trigger` (`{messageId?, params?, matchedRule?, askKind?}`) → аддитивное поле
+  `trigger` в событии `permission.asked` и в DTO `GET /api/v2/sessions/:id/permissions` (UI показывает,
+  **что** вызвало вопрос, и подсвечивает токен в аргументах вызова; имя верхнего уровня — `trigger`,
+  не `params`: в payload `params` уже занят аргументами тула); **реестр ожиданий подтверждения** (`approval.ts`:
   `PermissionApprovalManager._pending` → `PendingApproval` — снимок запроса на момент публикации;
   `listPending(sessionId)`/`get(approvalId)`) — источник истины для восстановления полосы
   подтверждения после перезагрузки страницы: HTTP `GET /api/v2/sessions/:id/permissions`

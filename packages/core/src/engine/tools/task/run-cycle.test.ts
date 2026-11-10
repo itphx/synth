@@ -983,6 +983,44 @@ describe('run-cycle — permission-слой саб-агента (ADR-029)', () =
     expect(saved.settings.permission!.rules.noop).toBe('allow');
   });
 
+  it('ask саб-агента: в permission.asked уходит trigger (виновник — команда)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe(parent.id, (e) => {
+      if (e.type === 'permission.asked') {
+        asked.push(e.data as Record<string, unknown>);
+        bus.publish(parent.id, 'permission.replied', {
+          approval_id: (e.data as Record<string, unknown>).approval_id,
+          action: 'allow',
+          once: true,
+        });
+      }
+    });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('execute_shell', { command: 'npm install express' })],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+    const { registry, counters } = makeRegistry({ execute_shell: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, eventBus: bus, sessionManager, sessionId: parent.id, toolRegistry: registry,
+        permissionConfig: { rules: { shell: { '*': 'allow', 'npm install *': 'ask' } }, askTimeoutMs: 1000 },
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(counters.execute_shell).toBe(1);
+    // Структурная причина ask'а — как в основном ходе: UI подсвечивает
+    // виновника в тексте команды.
+    const trigger = asked.at(-1)?.trigger as Record<string, unknown> | undefined;
+    expect(trigger?.matchedRule).toBe('shell.npm install *');
+    expect((trigger?.params as Record<string, string>).command).toBe('npm install express');
+  });
+
   it('ask approved с watch-all (user-facing) подписчиком — all-клиент UI подтверждает запрос саб-агента', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });

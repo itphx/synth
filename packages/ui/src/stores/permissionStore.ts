@@ -3,6 +3,28 @@ import type { PermissionPreview, PermissionPreviewFile } from '@itphx/synth-shar
 
 export const PERMISSION_ASK_TIMEOUT_MS = 30_000
 
+/**
+ * Структурная причина ask'а — «виновник» в машиночитаемом виде.
+ *
+ * Приходит из ядра аддитивно (ADR-029): id security-сообщения, параметры
+ * подстановки, ключ сработавшего правила и вид ask'а. UI по нему строит
+ * ЧЕЛОВЕЧЕСКОЕ объяснение («Защищённый путь: …») вместо LLM-текста причины
+ * и подсвечивает токен-виновник в аргументах вызова.
+ *
+ * ⚠️ Это НЕ аргументы тула: аргументы лежат в `PermissionRequest.params`,
+ * параметры виновника — здесь (`trigger.params`).
+ */
+export interface PermissionTrigger {
+  /** id security-сообщения (например `ask-protected-path`). */
+  messageId?: string
+  /** Параметры подстановки (`{ path }` / `{ command }` / `{ code }`). */
+  params?: Record<string, string>
+  /** Ключ правила, которое сработало (например `shell-policy.approve`). */
+  matchedRule?: string
+  /** Вид ask'а от shell-guard: dynamic/protected/mutation/cwd. */
+  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd'
+}
+
 export interface PermissionRequest {
   approvalId: string
   toolName: string
@@ -20,6 +42,43 @@ export interface PermissionRequest {
   preview?: PermissionPreview
   /** Паттерны shell-гранта, которые будут разрешены в сессии (аддитивно). */
   save?: string[]
+  /**
+   * Структурная причина ask'а (аддитивно): «виновник» — путь/код/команда,
+   * ради которых спросили. Поля нет у старого сервера — тогда UI показывает
+   * прежний текст причины.
+   */
+  trigger?: PermissionTrigger
+}
+
+/** Виды ask'а, которые различает ядро. */
+const PERMISSION_ASK_KINDS = new Set(['dynamic', 'protected', 'mutation', 'cwd'])
+
+/**
+ * Разбор `trigger` из payload'а события / DTO восстановления.
+ *
+ * Данные приходят по проводу — разбираем их строго: неправильная форма →
+ * `trigger` просто не появляется (поведение прежнее: показываем reason).
+ */
+export function parsePermissionTrigger(value: unknown): PermissionTrigger | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+  const trigger: PermissionTrigger = {}
+
+  if (typeof raw.messageId === 'string' && raw.messageId) trigger.messageId = raw.messageId
+  if (typeof raw.matchedRule === 'string' && raw.matchedRule) trigger.matchedRule = raw.matchedRule
+  if (typeof raw.askKind === 'string' && PERMISSION_ASK_KINDS.has(raw.askKind)) {
+    trigger.askKind = raw.askKind as PermissionTrigger['askKind']
+  }
+  if (raw.params && typeof raw.params === 'object' && !Array.isArray(raw.params)) {
+    const params: Record<string, string> = {}
+    for (const [key, item] of Object.entries(raw.params as Record<string, unknown>)) {
+      if (typeof item === 'string') params[key] = item
+      else if (typeof item === 'number' || typeof item === 'boolean') params[key] = String(item)
+    }
+    if (Object.keys(params).length > 0) trigger.params = params
+  }
+
+  return Object.keys(trigger).length > 0 ? trigger : undefined
 }
 
 /**

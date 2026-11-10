@@ -105,3 +105,67 @@ describe('transportStore dispatcher: permission.asked (превью измене
     expect(requests[0]!.preview).toBeUndefined()
   })
 })
+
+describe('transportStore dispatcher: permission.asked (trigger — структурная причина)', () => {
+  beforeEach(() => {
+    usePermissionStore.setState({ requestsBySession: {} })
+    vi.clearAllMocks()
+  })
+
+  it('trigger из payload\'а попадает в запрос подтверждения', () => {
+    dispatch(makeEvent('permission.asked', 's1', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      tool: 'execute_shell',
+      arguments: { command: 'cat ~/.ssh/config' },
+      reason: 'LLM-текст причины',
+      trigger: {
+        messageId: 'ask-protected-path',
+        params: { path: '/home/rdv/.ssh/config' },
+        matchedRule: 'shell-policy.approve',
+        askKind: 'protected',
+      },
+    }))
+
+    const requests = usePermissionStore.getState().requestsBySession['s1']!
+    expect(requests[0]!.trigger).toEqual({
+      messageId: 'ask-protected-path',
+      params: { path: '/home/rdv/.ssh/config' },
+      matchedRule: 'shell-policy.approve',
+      askKind: 'protected',
+    })
+  })
+
+  it('trigger.params не путается с аргументами тула (payload.params)', () => {
+    dispatch(makeEvent('permission.asked', 's1', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      tool: 'execute_shell',
+      // Аргументы тула — в `params` верхнего уровня.
+      params: { command: 'cat ~/.ssh/config' },
+      trigger: {
+        messageId: 'ask-protected-path',
+        params: { path: '/home/rdv/.ssh/config' },
+      },
+    }))
+
+    const requests = usePermissionStore.getState().requestsBySession['s1']!
+    expect(requests[0]!.params).toEqual({ command: 'cat ~/.ssh/config' })
+    expect(requests[0]!.trigger?.params).toEqual({ path: '/home/rdv/.ssh/config' })
+  })
+
+  it('битый trigger игнорируется — запрос подтверждения остаётся рабочим', () => {
+    dispatch(makeEvent('permission.asked', 's1', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      tool: 'write_file',
+      arguments: { file_path: 'a.txt' },
+      reason: 'ask',
+      trigger: { messageId: 'ask-protected-path', askKind: 'неизвестный' },
+    }))
+
+    const requests = usePermissionStore.getState().requestsBySession['s1']!
+    expect(requests[0]!.trigger?.messageId).toBe('ask-protected-path')
+    expect(requests[0]!.trigger?.askKind).toBeUndefined()
+  })
+})

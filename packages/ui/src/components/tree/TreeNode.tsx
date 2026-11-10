@@ -7,11 +7,35 @@ import type { TreeNodeBase, TreeAction, TreeStatus } from './types'
 
 const iconSizeMap = { sm: 'h-3.5 w-3.5', md: 'h-4 w-4' } as const
 
-const statusConfig: Record<TreeStatus, { className: string; title: string }> = {
-  streaming: { className: 'bg-status-info animate-notification-blink', title: '' },
-  blocked: { className: 'bg-destructive', title: '' },
-  stalled: { className: 'bg-status-warning animate-notification-blink', title: '' },
-  pending: { className: 'bg-muted-foreground', title: '' },
+/**
+ * Классы точки-индикатора по статусу узла.
+ *
+ * Семантика — только токены темы (`status-*`/`destructive`), палитра Tailwind
+ * в дереве не используется. `status-caution` — единственный токен, который
+ * стабильно оранжевый и в светлой, и в тёмной схеме (`status-warning` несёт
+ * иную семантику — «очередь зависла», и в ряде тем он не оранжевый).
+ */
+const statusClassName: Record<TreeStatus, string> = {
+  streaming: 'bg-status-info animate-notification-blink',
+  blocked: 'bg-destructive',
+  stalled: 'bg-status-warning animate-notification-blink',
+  pending: 'bg-muted-foreground',
+  approval: 'bg-status-caution animate-notification-blink',
+}
+
+/**
+ * Текстовый дубль статуса: цвет точки сам по себе недоступен для скринридера,
+ * поэтому у точки есть подпись (`aria-label` + тултип). Ключи из `leftPanel.*`
+ * — уже в обоих словарях, новых не заводим.
+ */
+const statusLabelKey: Record<TreeStatus, string> = {
+  streaming: 'leftPanel.streaming',
+  blocked: 'leftPanel.blocked',
+  stalled: 'leftPanel.attentionNeeded',
+  pending: 'leftPanel.answerReady',
+  // Статус `approval` — ждёт подтверждения прав: свой ключ, чтобы не путать
+  // его с «очередь зависла» (`stalled` → `attentionNeeded`).
+  approval: 'leftPanel.approvalNeeded',
 }
 
 function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVisible: boolean }) {
@@ -122,6 +146,8 @@ export function TreeNode({
   const renameRef = useRef<HTMLInputElement>(null)
   const rowRef = useRef<HTMLDivElement>(null)
   const hasUnread = (unreadCount ?? 0) > 0
+  // Подпись статуса — текстовый дубль цвета точки (доступность).
+  const statusLabel = status ? t(statusLabelKey[status]) : ''
 
   useEffect(() => {
     if (isRenaming) {
@@ -241,7 +267,11 @@ export function TreeNode({
               <span
                 className={cn(
                   'truncate text-sm leading-tight',
-                  hasUnread ? 'text-orange-400' : labelMuted ? 'text-muted-foreground' : 'text-foreground',
+                  // «Ждёт подтверждения прав» — акцент важнее непрочитанного.
+                  status === 'approval' ? 'text-status-caution'
+                    : hasUnread ? 'text-orange-400'
+                    : labelMuted ? 'text-muted-foreground'
+                    : 'text-foreground',
                 )}
                 title={label}
               >
@@ -298,8 +328,10 @@ export function TreeNode({
 
       {status && !isRenaming && (
         <span
-          className={cn('ml-auto h-2 w-2 shrink-0 rounded-full', statusConfig[status].className)}
-          title={statusConfig[status].title}
+          className={cn('ml-auto h-2 w-2 shrink-0 rounded-full', statusClassName[status])}
+          role="img"
+          aria-label={statusLabel}
+          title={statusLabel}
         />
       )}
     </div>

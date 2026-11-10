@@ -118,7 +118,9 @@ export function QueuePanel({
     : 'bg-surface-inset'
 
   return (
-    <div className={cn('shrink-0 mx-auto w-4/5 rounded-lg border', borderClass, bgClass)}>
+    // `mt-2` — единый ритм композерной зоны (как у полосы подтверждений и
+    // дока вопросов): зазор над блоком равен зазору под ним.
+    <div className={cn('shrink-0 mx-auto mt-2 w-4/5 rounded-lg border', borderClass, bgClass)}>
       <div className="flex items-center justify-between gap-2 px-3 py-1.5">
         <button
           onClick={() => setCollapsed(!collapsed)}

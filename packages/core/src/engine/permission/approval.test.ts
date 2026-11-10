@@ -361,4 +361,40 @@ describe('PermissionApprovalManager — ask flow', () => {
     bus.publish('s1', 'permission.replied', { approval_id: 'approval_1', session_id: 's1', approved: false });
     await pending;
   });
+
+  it('trigger публикуется в permission.asked (структурная причина ask\'а)', async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe('s1', (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const trigger = {
+      messageId: 'ask-protected-path',
+      params: { path: '/etc/secret' },
+      matchedRule: 'protected-paths.ask',
+      askKind: 'protected' as const,
+    };
+    const pending = manager.waitForDecision('s1', { ...request, trigger }, 50);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(asked.at(-1)?.trigger).toEqual(trigger);
+
+    bus.publish('s1', 'permission.replied', { approval_id: 'approval_1', session_id: 's1', approved: false });
+    await pending;
+  });
+
+  it('без trigger поле trigger в событии отсутствует', async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe('s1', (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const pending = manager.waitForDecision('s1', request, 50);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect('trigger' in (asked.at(-1) ?? {})).toBe(false);
+
+    bus.publish('s1', 'permission.replied', { approval_id: 'approval_1', session_id: 's1', approved: false });
+    await pending;
+  });
 });

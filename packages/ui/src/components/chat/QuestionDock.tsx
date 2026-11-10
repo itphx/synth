@@ -302,8 +302,10 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
     'flex items-center gap-1.5 rounded px-2.5 py-1 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-40 disabled:hover:bg-primary/15'
 
   return (
+    // `mt-2` — единый ритм композерной зоны: зазор между соседними
+    // блоками (очередь / полоса подтверждений / док вопроса) одинаков.
     <div
-      className="question-dock shrink-0 mx-auto w-4/5 rounded-lg border border-primary/30 bg-primary/5"
+      className="question-dock shrink-0 mx-auto mt-2 w-4/5 rounded-lg border border-primary/30 bg-primary/5"
       data-question-dock="true"
     >
       <div className="flex items-center gap-2 px-3 py-1.5">

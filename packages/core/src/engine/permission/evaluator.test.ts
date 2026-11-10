@@ -1018,3 +1018,96 @@ describe('PermissionEvaluator — сессионный shell-грант патт
     expect(shellCheck('ls -la', cfg).action).toBe('allow');
   });
 });
+
+/**
+ * Структурная причина ask'а («виновник»): решение несёт machine-readable
+ * токен (путь/команда/код) и вид ask'а — UI показывает, ЧТО вызвало вопрос,
+ * и может подсветить это место в аргументах вызова.
+ */
+describe('PermissionEvaluator — структурная причина ask\'а', () => {
+  function shellAsk(command: string, policy: ShellPolicy) {
+    return new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'execute_shell',
+      params: { command },
+      workingDir: CWD,
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+      shellPolicy: policy,
+    });
+  }
+
+  it('shell-ask с askKind \'cwd\' доходит до PermissionDecision.askKind', () => {
+    const d = shellAsk('cd $(pwd)', SHELL_POLICY);
+    expect(d.action).toBe('ask');
+    expect(d.askKind).toBe('cwd');
+    expect(d.messageId).toBe('ask-protected-path');
+    expect(d.params?.path).toBe('$(pwd)');
+  });
+
+  it('shell-ask по защищённому пути несёт askKind \'protected\' и params.path', () => {
+    const d = shellAsk('cat ~/.ssh/config', SHELL_POLICY);
+    expect(d.action).toBe('ask');
+    expect(d.askKind).toBe('protected');
+    expect(d.params?.path).toContain('.ssh/config');
+  });
+
+  it('ask по защищённым путям (ProtectedPaths) несёт askKind \'protected\'', () => {
+    const protectedPaths: ProtectedPathsPolicy = {
+      deniedPaths: [],
+      deniedPrefixes: [],
+      approvalPaths: ['~/.ssh/config'],
+      deniedCommandPrefixes: [],
+    };
+    const d = new PermissionEvaluator({
+      rules: { external_directory: { '*': 'allow' } },
+      askTimeoutMs: 30_000,
+    }).check({
+      toolName: 'read_file',
+      params: { file_path: '~/.ssh/config' },
+      workingDir: CWD,
+      protectedPaths,
+      protectedPathsEnabled: true,
+    });
+    expect(d.action).toBe('ask');
+    expect(d.askKind).toBe('protected');
+    expect(d.messageId).toBe('ask-protected-path');
+    expect(d.params?.path).toContain('.ssh/config');
+  });
+
+  it('ask по правилу сессии (путь) несёт params.path', () => {
+    const cfg: PermissionConfig = {
+      rules: { read: { '*': 'allow', '*.env': 'ask' } },
+      askTimeoutMs: 30_000,
+    };
+    const d = evalCheck(cfg, 'read_file', { file_path: join(CWD, '.env') });
+    expect(d.action).toBe('ask');
+    expect(d.params?.path).toBe(join(CWD, '.env'));
+    expect(d.matchedRule).toBe('read.*.env');
+  });
+
+  it('ask по правилу сессии (команда) несёт params.command', () => {
+    const cfg: PermissionConfig = {
+      rules: { shell: { '*': 'allow', 'npm install *': 'ask' } },
+      askTimeoutMs: 30_000,
+    };
+    const d = new PermissionEvaluator(cfg).check({
+      toolName: 'execute_shell',
+      params: { command: 'npm install express' },
+      workingDir: CWD,
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+    });
+    expect(d.action).toBe('ask');
+    expect(d.params?.command).toBe('npm install express');
+  });
+
+  it('external_directory по умолчанию несёт params.path', () => {
+    const cfg: PermissionConfig = { rules: {}, askTimeoutMs: 30_000 };
+    const d = evalCheck(cfg, 'read_file', { file_path: '/etc/passwd' });
+    expect(d.action).toBe('ask');
+    expect(d.matchedRule).toBe('external_directory.default');
+    expect(d.params?.path).toBe('/etc/passwd');
+  });
+});

@@ -755,6 +755,7 @@ export const dict = {
   'leftPanel.confirmClearSession': 'Очистить все сообщения в сессии?',
   'leftPanel.streaming': 'Идёт генерация',
   'leftPanel.attentionNeeded': 'Требуется внимание',
+  'leftPanel.approvalNeeded': 'Требуется подтверждения прав',
   'leftPanel.answerReady': 'Ответ готов',
   'leftPanel.blocked': 'Заблокировано',
   'leftPanel.notifications': '{count} уведом.',
@@ -1670,6 +1671,24 @@ export const dict = {
   'permission.bar.saveUnavailable': 'Паттерн команды не выводится — можно разрешить только один раз',
   'permission.bar.saveUnavailableShort': 'Только один раз',
   'permission.bar.replyFailed': 'Не удалось отправить ответ — запрос остался открытым',
+
+  // Человеческое объяснение ask'а по структурному триггеру (`trigger`):
+  // вместо LLM-текста причины человек видит, ЧТО вызвало вопрос.
+  'permission.bar.cause': 'Что вызвало вопрос',
+  'permission.bar.cause.protected': 'Защищённый путь: {path}',
+  'permission.bar.cause.dynamicPath': 'Не удалось проверить путь {path} — значение вычисляется в рантайме',
+  'permission.bar.cause.mutation': 'Изменение вне рабочего каталога: {path}',
+  'permission.bar.cause.cwd': 'Не удалось проверить рабочий каталог: {path}',
+  'permission.bar.cause.code': 'Код передаётся из переменной — требуется проверка: {code}',
+  'permission.bar.cause.command': 'Имя команды вычисляется динамически: {command}',
+  'permission.bar.cause.rule': 'Сработало правило {rule}',
+  'permission.bar.cause.generic': 'Инструмент требует подтверждения прав',
+  'permission.bar.technical': 'Технические детали',
+  'permission.bar.technicalRule': 'Правило: {rule}',
+  'permission.bar.technicalMessage': 'Сообщение: {message}',
+  'permission.bar.suspicious': 'Подозрительный участок: {token}',
+  'permission.bar.highlightHint': 'Подсвечен участок, вызвавший подозрение',
+  'permission.bar.command': 'Команда',
 
   // Вопросы пользователю (этап 1 roadmap 0.13 — блок 1.3): док над вводом.
   'question.dock.title': 'Агент задал вопрос',

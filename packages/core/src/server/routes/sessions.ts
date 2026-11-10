@@ -182,6 +182,9 @@ const DEFAULT_STICKY_NOTE_LIMITS: StickyNotesLimits = { maxCount: 50, maxChars: 
  *
  * `preview`/`save` — **только если они есть** в запросе (аддитивно, как в
  * событии `permission.asked`).
+ *
+ * `trigger` — структурная причина ask'а («виновник»): machine-readable id
+ * сообщения + параметры; аддитивно, поле появляется только если оно есть.
  */
 function toPendingPermissionDto(pending: PendingApproval): Record<string, unknown> {
   const { request } = pending;
@@ -195,6 +198,7 @@ function toPendingPermissionDto(pending: PendingApproval): Record<string, unknow
     held: pending.held,
     ...(request.preview ? { preview: request.preview } : {}),
     ...(request.save ? { save: request.save } : {}),
+    ...(request.trigger ? { trigger: request.trigger } : {}),
   };
 }
 

@@ -551,6 +551,9 @@ export class PermissionEvaluator {
             matchedRule: sc.matchedRule,
             messageId: sc.messageId,
             params: sc.params,
+            // Вид ask'а (dynamic/protected/mutation/cwd) — UI различает
+            // причину вопроса без разбора текста.
+            askKind: sc.askKind,
           };
         }
       }
@@ -582,6 +585,8 @@ export class PermissionEvaluator {
             matchedRule: cp.matchedRule,
             messageId: cp.messageId,
             params: cp.params,
+            // Защищённый путь — тот же вид ask'а, что и у shell-guard.
+            askKind: 'protected',
           };
         }
       }
@@ -661,6 +666,9 @@ export class PermissionEvaluator {
           action,
           reason: sm('permission.external_directory_default', { path: p, action }),
           matchedRule: 'external_directory.default',
+          // Структурный «виновник» — путь, ради которого спросили (UI может
+          // подсветить его в аргументах вызова).
+          params: { path: p },
         };
       }
     }
@@ -761,6 +769,8 @@ export class PermissionEvaluator {
             action,
             reason: sm('permission.rule_pattern_matched', { key, pattern, action, path: p }),
             matchedRule: `${key}.${pattern}`,
+            // Структурный «виновник» — путь, который попал под правило.
+            params: { path: p },
           };
         }
       }
@@ -800,6 +810,8 @@ export class PermissionEvaluator {
           action,
           reason: sm('permission.rule_command_matched', { key, pattern, action, command }),
           matchedRule: `${key}.${pattern}`,
+          // Структурный «виновник» — команда, которая попала под правило.
+          params: { command },
         };
       }
     }

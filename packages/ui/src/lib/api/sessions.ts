@@ -16,6 +16,7 @@ import { BASE_URL, fetchJSON } from './base'
 import {
   PERMISSION_ASK_TIMEOUT_MS,
   parsePermissionPreview,
+  parsePermissionTrigger,
   type PermissionRequest,
 } from '@/stores/permissionStore'
 
@@ -212,6 +213,12 @@ export interface PendingPermissionDto {
   preview?: unknown
   /** Паттерны shell-гранта, которые будут разрешены в сессии (аддитивно). */
   save?: string[] | null
+  /**
+   * Структурная причина ask'а («виновник», аддитивно) — разбирается
+   * `parsePermissionTrigger`. ⚠️ Это НЕ аргументы тула: аргументы — в
+   * `arguments`, параметры виновника — в `trigger.params`.
+   */
+  trigger?: unknown
 }
 
 /**
@@ -228,6 +235,7 @@ function toPermissionRequest(dto: PendingPermissionDto): PermissionRequest | nul
   const save = Array.isArray(dto.save)
     ? dto.save.filter((item): item is string => typeof item === 'string')
     : undefined
+  const trigger = parsePermissionTrigger(dto.trigger)
   const args = dto.arguments && typeof dto.arguments === 'object' ? dto.arguments : {}
 
   return {
@@ -244,6 +252,7 @@ function toPermissionRequest(dto: PendingPermissionDto): PermissionRequest | nul
     ...(dto.held ? { held: true } : {}),
     ...(preview ? { preview } : {}),
     ...(save ? { save } : {}),
+    ...(trigger ? { trigger } : {}),
   }
 }
 

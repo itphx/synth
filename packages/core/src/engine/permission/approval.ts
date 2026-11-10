@@ -55,6 +55,25 @@ export interface ApprovalRequest {
    * будут разрешены сессии кнопкой «Разрешить в сессии».
    */
   save?: string[];
+  /**
+   * Структурная причина ask'а: id security-сообщения + параметры.
+   *
+   * «Виновник» в машиночитаемом виде — UI может показать, ЧТО именно
+   * вызвало вопрос, и подсветить токен в тексте команды/аргументах.
+   *
+   * Аддитивно: старый UI новых полей не видит, новый UI умеет работать без них
+   * (пустой `trigger`/`undefined` — причина показывается прежним текстом).
+   */
+  trigger?: {
+    /** id security-сообщения (например `ask-protected-path`). */
+    messageId?: string;
+    /** Параметры подстановки (например `{ path }`/`{ command }`/`{ code }`). */
+    params?: Record<string, string>;
+    /** Ключ правила, которое сработало. */
+    matchedRule?: string;
+    /** Вид ask'а от shell-guard: dynamic/protected/mutation/cwd. */
+    askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+  };
 }
 
 export interface ApprovalDecision {
@@ -522,6 +541,8 @@ export class PermissionApprovalManager {
       ...(request.preview ? { preview: request.preview } : {}),
       // Shell-грант: какие паттерны будут разрешены в сессии.
       ...(request.save ? { save: request.save } : {}),
+      // Структурная причина ask'а («виновник») — machine-readable.
+      ...(request.trigger ? { trigger: request.trigger } : {}),
     });
   }
 

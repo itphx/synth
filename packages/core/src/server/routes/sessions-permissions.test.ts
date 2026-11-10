@@ -162,6 +162,39 @@ describe('HTTP: восстановление ожиданий подтвержд
     expect('save' in body.permissions[0]!).toBe(false);
   });
 
+  it('trigger (структурная причина ask\'а) переживает перезагрузку страницы', async () => {
+    const world = createApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    ask(world, session.id, {
+      approvalId: 'ap-trigger',
+      trigger: {
+        messageId: 'ask-protected-path',
+        params: { path: '/etc/secret' },
+        matchedRule: 'protected-paths.ask',
+        askKind: 'protected',
+      },
+    });
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}/permissions`);
+    const body = (await res.json()) as { permissions: Array<Record<string, unknown>> };
+    expect(body.permissions[0]!.trigger).toEqual({
+      messageId: 'ask-protected-path',
+      params: { path: '/etc/secret' },
+      matchedRule: 'protected-paths.ask',
+      askKind: 'protected',
+    });
+  });
+
+  it('trigger отсутствует, если его нет в запросе (аддитивно)', async () => {
+    const world = createApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    ask(world, session.id, { approvalId: 'ap-no-trigger' });
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}/permissions`);
+    const body = (await res.json()) as { permissions: Array<Record<string, unknown>> };
+    expect('trigger' in body.permissions[0]!).toBe(false);
+  });
+
   it('после ответа запрос исчезает из списка', async () => {
     const world = createApp(tmpDir);
     const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
