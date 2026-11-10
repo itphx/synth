@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SkillRegistry } from './registry.js';
-import { buildBuiltinSkills, SYNTH_AGENTS_MD_NAME, SYNTH_INSTANCE_NAME, SYNTH_PIPELINES_NAME, SYNTH_SCHEDULES_NAME, SYNTH_STORAGE_RECOVERY_NAME } from './builtin.js';
+import { buildBuiltinSkills, SYNTH_AGENTS_MD_NAME, SYNTH_INSTANCE_NAME, SYNTH_PIPELINES_NAME, SYNTH_SCHEDULES_NAME, SYNTH_SERVICE_NAME, SYNTH_STORAGE_RECOVERY_NAME } from './builtin.js';
 import type { SkillSource } from './types.js';
 
 let root: string;
@@ -47,6 +47,7 @@ describe('SkillRegistry — builtin (ADR-046 §9.5)', () => {
       SYNTH_PIPELINES_NAME,
       SYNTH_SCHEDULES_NAME,
       SYNTH_INSTANCE_NAME,
+      SYNTH_SERVICE_NAME,
       'local-skill',
     ]);
     expect(skills[0]!.trusted).toBe(true);
@@ -93,6 +94,7 @@ describe('SkillRegistry — builtin (ADR-046 §9.5)', () => {
       SYNTH_PIPELINES_NAME,
       SYNTH_SCHEDULES_NAME,
       SYNTH_INSTANCE_NAME,
+      SYNTH_SERVICE_NAME,
     ]);
   });
 });

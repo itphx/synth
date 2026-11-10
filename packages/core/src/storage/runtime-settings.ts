@@ -82,6 +82,64 @@ export interface MetricsRuntimeSettings {
 }
 
 /**
+ * ADR-133: runtime-настройки проверки обновлений (админка).
+ *
+ * Приоритет эффективного значения: env `SYNTH_UPDATES_CHECK` > runtime
+ * (`settings.json`/PG) > config.yaml `updates.check` > default `false`.
+ * Применяется **сразу**: планировщик перечитывает значение на каждом тике,
+ * поэтому тумблер работает без рестарта.
+ */
+export interface UpdatesRuntimeSettings {
+  check?: boolean;
+}
+
+/** Источник эффективного значения `updates.check`. */
+export type UpdatesCheckSource = 'env' | 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга `updates.check` (env > runtime > config > default). */
+export interface ResolvedUpdatesCheck {
+  check: boolean;
+  source: UpdatesCheckSource;
+  /** Значение задано через env: runtime его не перекрывает. */
+  envLocked: boolean;
+}
+
+/** Env-имя автопроверки обновлений (ADR-023/ADR-133). */
+export const UPDATES_CHECK_ENV = 'SYNTH_UPDATES_CHECK';
+
+/**
+ * Разбор env-флага `SYNTH_UPDATES_CHECK` (`true`/`1`, `false`/`0`);
+ * пусто/невалидно — «не задано».
+ */
+export function parseUpdatesCheckEnv(env: NodeJS.ProcessEnv = process.env): boolean | undefined {
+  const raw = env[UPDATES_CHECK_ENV];
+  if (raw === undefined || raw === '') return undefined;
+  const value = raw.toLowerCase();
+  if (value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  return undefined;
+}
+
+/**
+ * Эффективный флаг автопроверки обновлений — приоритет
+ * **env > runtime > config.yaml > default (`false`)**.
+ *
+ * Функция чистая: планировщик читает её на каждом тике, поэтому переключение
+ * тумблера в UI применяется без рестарта.
+ */
+export function resolveUpdatesCheck(
+  configCheck?: boolean,
+  runtimeCheck?: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedUpdatesCheck {
+  const envValue = parseUpdatesCheckEnv(env);
+  if (envValue !== undefined) return { check: envValue, source: 'env', envLocked: true };
+  if (runtimeCheck !== undefined) return { check: runtimeCheck, source: 'runtime', envLocked: false };
+  if (configCheck === true) return { check: true, source: 'config', envLocked: false };
+  return { check: false, source: 'default', envLocked: false };
+}
+
+/**
  * ADR-090 / ADR-023: runtime-настройки секции `plugins` (слой плагинов),
  * сохраняемые через UI. Состав ключей — ровно `pluginsConfigSchema`
  * (`@itphx/synth-shared/config`): политики (`enabled`/`runtimeInstall`/
@@ -829,6 +887,8 @@ export interface RuntimeSettings {
   decision?: DecisionRuntimeSettings;
   /** ADR-094: runtime-настройки наблюдаемости (`metrics.enabled`). */
   metrics?: MetricsRuntimeSettings;
+  /** ADR-133: runtime-настройки проверки обновлений (`updates.check`). */
+  updates?: UpdatesRuntimeSettings;
   /** ADR-090: runtime-настройки секции `plugins` (админка, слой плагинов). */
   plugins?: Partial<PluginsRuntimeSettings>;
   /**
@@ -1792,6 +1852,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.metrics;
+      return next;
+    });
+  }
+
+  /** ADR-133: runtime-настройки проверки обновлений, {} — не заданы. */
+  async getUpdates(): Promise<Partial<UpdatesRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.updates ?? {};
+  }
+
+  async setUpdates(config: Partial<UpdatesRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, updates: config }));
+  }
+
+  async clearUpdates(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.updates;
       return next;
     });
   }

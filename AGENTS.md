@@ -110,13 +110,16 @@ synth doctor                 # health инстанса (--json) — ADR-091
 synth backup --out <dir>     # архив каталога данных (--with-secrets|--with-workspace|--live|--encrypt [--key-file]) — ADR-091
 synth restore <archive>      # восстановление (--dry-run|--yes|--no-safety-copy|--key-file) — ADR-091
 synth migrate                # миграции схемы данных (--dry-run|--yes) — ADR-092
-synth update [--apply] [--to <version>]  # проверка/обновление/откат пакета (--dry-run|--yes|--json) — ADR-092
+synth update [--check] [--apply] [--channel auto|stable|beta] [--to <version>] [--registry <url>]  # проверка/обновление/откат по каналу (--dry-run|--yes|--json) — ADR-092/ADR-133
 synth uninstall              # удаление инстанса (--purge|--purge-db|--dry-run|--yes; по умолчанию данные сохраняются) — ADR-092
 synth storage migrate --to postgres|file  # перенос данных инстанса между backend'ами хранения, идемпотентно (--dry-run|--yes) — ADR-097
 synth analytics rebuild [--from <date>] [--dry-run|--yes]  # идемпотентная пересборка суточных роллапов аналитики (ADR-102)
 synth memory status|list|index|rebuild|drop  # портал памяти: индексы и факты (--scope, --wait, --json) — ADR-107
 synth mcp list|add|test|remove|reconnect  # реестр MCP локального инстанса; ключ читается внутри, не печатается — ADR-071/ADR-131
+synth service install|status|start|stop|restart|enable|disable|logs|uninstall  # userspace-сервис systemd (--user): шаблонный unit, автозапуск, linger, логи — ADR-134
 ```
+
+**Каналы обновлений (ADR-133).** Секция `updates` (`check`/`channel`/`intervalHours`/`stableRegistry`/`betaRegistry`; env `SYNTH_UPDATES_*`, приоритет **env > runtime(UI) > config > default**): канал `auto` выводится из версии (`-beta.` ⇒ beta), автопроверка **выключена по умолчанию**, явная (`synth update --check`, `?force=1`) всегда игнорирует кэш (успех 24 ч, ошибка 1 ч); self-update — только при user-level npm prefix, бета-реестр Gitea читается без токена. Детали — [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Обновления (ADR-133)», API — [docs/API_V2.md](./docs/API_V2.md) §5.24.
 
 **Перенос проекта между инстансами** (ADR-091 §6, по умолчанию без секретов — карта обфускации Gateway вырезается, `--with-secrets` только ADMIN/LEAD; materialization с новыми id):
 
@@ -336,7 +339,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - **Веб/модели** — `web_fetch`, `web_search`, `list_models`.
 - **Профиль/скиллы** — `profile_update`, `skill`.
 
-Встроенные скиллы `synth-pipelines`/`synth-schedules`/`synth-instance` (команда `/instance` — self-help инстанса/MCP/проектов/сессий, ADR-131), доступность групп (`ToolCapability`), MCP-слои и правило «deny не останавливает ход» — [docs/TOOLS.md](./docs/TOOLS.md).
+Встроенные скиллы `synth-pipelines`/`synth-schedules`/`synth-instance` (команда `/instance` — self-help инстанса/MCP/проектов/сессий, ADR-131)/`synth-service` (команда `/service` — регистрация userspace-сервиса systemd, ADR-134), доступность групп (`ToolCapability`), MCP-слои и правило «deny не останавливает ход» — [docs/TOOLS.md](./docs/TOOLS.md).
 
 **Роли агентов: прежний набор и миграция.** Набор ролей заменён: `pm`/`developer`/`qa`/`analyst`/`auditor` → `leader`/`fixer`/`tester`/`researcher`/`security-auditor`; каноническая карта — `LEGACY_AGENT_ROLE_ALIASES` (`engine/agents/migrations.ts`). Два шва, оба обязательны: (1) **миграция stored-агентов** при старте (`migrateLegacyStoredAgents` в `server/app/deps.ts` и `backend/app/deps.ts` до `registerStoredAgents`) — запись прежнего id переносит только пользовательские настройки (`enabled`, `provider`, `model`, `temperature`, `topP`, `topK`, `reasoningLevel`, `groups`) в **встроенное** определение целевого агента (идентичность, права, промпт, лимиты — из поставки), существующую целевую запись не перетирает, устаревшую удаляет, идемпотентна; (2) **runtime-алиас** (`ChatOrchestrator._resolveEffectiveAgentRole`) — у старых сессий `settings.agentRole` остаётся исторической меткой (`pm`), но промпт/capabilities/лимиты берутся у `leader`; фоллбек на `assistant` — только для роли, которой нет ни в реестре, ни в алиасах. Полнота ролевых файлов (RU+EN у каждого `contextFile`) закреплена тестом `engine/agents/definitions.test.ts`.
 
@@ -378,14 +381,14 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 **CI и релиз.** Джобы — self-hosted раннер `synth-ci`; порядок сборки, особенности GitVerse, секреты, реестры образов, `security-gate` и публикация — [docs/PUBLISHING.md](./docs/PUBLISHING.md) §«CI/CD (GitVerse)»; внутренний аудит — [docs/security/README.md](./docs/security/README.md), скилл `synth-security-audit`. Перед тегом — обязательная пара `docs/releases/<version>.md` + `.en.md` (гейт `release-notes`); без неё релиз не собирается.
 
-**Бета-канал.** `./scripts/publish-beta.sh` публикует все 8 пакетов в npm-реестр Gitea (`X.Y.Z-beta.<ts>.<sha>`, dist-tag `beta`/`next`, `latest` не двигается; CI — workflow `Beta packages`), `./scripts/beta-prune.sh --keep N` — ретеншн бет (по умолчанию только план, удаление — `--yes`); беты не проходят релизные гейты — [docs/PUBLISHING.md](./docs/PUBLISHING.md) §«Бета-версии (Gitea)».
+**Бета-канал.** `./scripts/publish-beta.sh` публикует все 8 пакетов в npm-реестр Gitea (`X.Y.Z-beta.<ts>.<sha>`, dist-tag `beta`/`next`, `latest` не двигается; CI — workflow `Beta packages`), `./scripts/beta-prune.sh --keep N` — ретеншн бет (по умолчанию только план, удаление — `--yes`); беты не проходят релизные гейты. Реестр читается **без токена** (проверка обновлений и `npm i -g @itphx/synth@beta --registry …`), токен нужен только публикации; переход beta → stable — понижение (`synth update --channel stable --apply`, подтверждается) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) §«Бета-версии (Gitea)».
 
 ## Индекс решений и предложений (ADR / PROP)
 
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 112 (Решения: 56, Частично: 24, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 114 (Решения: 58, Частично: 24, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 21 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->

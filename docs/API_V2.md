@@ -1773,12 +1773,92 @@ Runtime-настройка инстанса: как SSH-ключи реестр�
 |---|---|---|---|
 | POST | `/api/v2/llm/chat/completions` | auth + rate limit | LLM Proxy (см. §4) |
 
-### 5.24 Updates — `/api/v2/updates` (core)
+### 5.24 Updates — `/api/v2/updates` и `/api/v2/settings/updates` (core)
 
-| Метод | Путь | RBAC | Назначение |
+ADR-133: каналы обновлений (`auto` — по установленной версии, `stable`, `beta`), проверка
+версии с кэшем по каналам и установка пакета. Реестры и env — [CONFIGURATION.md](./CONFIGURATION.md)
+§«Обновления (ADR-133)».
+
+| Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
-| GET | `/api/v2/updates/check` | auth | Проверка новой версии |
-| POST | `/api/v2/updates/apply` | auth | SSE-стрим `npm i -g @itphx/synth@latest` |
+| GET | `/api/v2/updates/check?channel=&force=1` | ADMIN / auth | Проверка версии канала |
+| POST | `/api/v2/updates/apply` | ADMIN / auth | SSE-поток установки `npm install -g @itphx/synth@<version> --registry <реестр>` |
+| GET | `/api/v2/settings/updates` | ADMIN / auth | Эффективные настройки автопроверки и канала |
+| PUT | `/api/v2/settings/updates` | ADMIN / auth | `{check: boolean}` — runtime-тумблер (применяется сразу) |
+| DELETE | `/api/v2/settings/updates` | ADMIN / auth | Сброс runtime-значения к env/config/default |
+
+**`GET /api/v2/updates/check`.** `channel` — `auto|stable|beta` (иное → `400 VALIDATION_ERROR`);
+`force=1` (или `true`) игнорирует кэш. Ответ — `UpdateInfo`:
+
+```json
+{
+  "currentVersion": "0.13.7",
+  "latestVersion": "0.14.0-beta.1",
+  "channel": "beta",
+  "prerelease": true,
+  "registry": "https://git.itphx.ru/api/packages/itphx/npm",
+  "hasUpdate": true,
+  "checkedAt": "2026-01-01T00:00:00.000Z",
+  "error": "…"
+}
+```
+
+`error` присутствует только у кэшированной неудачной проверки (кэш ошибки — 1 ч); явная проверка
+(`force=1`) сетевую ошибку не кэширует, а отдаёт `502 UPDATE_CHECK_FAILED`. Без `force` свежий кэш
+(успех — `updates.intervalHours`, по умолчанию 24 ч) возвращается как есть.
+
+**`POST /api/v2/updates/apply`.** Тело `{version?: string, channel?: 'stable'|'beta', restart?: boolean}`:
+
+- `version` — **точная** версия `X.Y.Z` (префикс `v` допустим; dist-tag `beta` не принимается →
+  `400 VALIDATION_ERROR`) и обязана существовать в реестре **выбранного канала** (иначе `400`);
+- `channel` — канал установки (по умолчанию — канал установленной версии); невалидное значение → `400`;
+- `restart` — после успешной установки запросить graceful restart (exit 75, ADR-092), только если
+  режим рестарта поддержан.
+
+До стрима проверяются: admission-гейт self-update (`409 UPDATE_UNSUPPORTED` с `reason`, если
+Docker/Helm/managed или системный npm-prefix) и доступность целевой версии (`502 UPDATE_CHECK_FAILED`
+при сетевой ошибке). Успешный ответ — `200` с `text/event-stream`; кадры `data: {...}`:
+
+| `type` | Содержимое |
+|---|---|
+| `start` | `{message, version, channel, registry}` — начало установки |
+| `progress` / `stderr` | `{data}` — вывод npm (обрезанные строки) |
+| `done` | `{version, channel, registry, restartScheduled, message}` — установка завершена |
+| `error` | `{message}` — npm/установка завершились ошибкой (аудит `update.failed`) |
+
+`restartScheduled` — рестарт действительно запрошен (`restart:true` **и** `getRestartStatus().supported`);
+запрос рестарта идёт после кадра `done`. Аудит: `update.applied`/`update.failed` с
+`{from, to, channel, registry, version}`. При `restart:false` (или неподдержанном рестарте) клиент
+сам вызывает `POST /api/v2/maintenance/restart`; установка без перезапуска не меняет версию
+работающего процесса.
+
+**`GET/PUT/DELETE /api/v2/settings/updates`.** Ответ (все методы):
+
+```json
+{
+  "check": false,
+  "source": "default",
+  "envLocked": false,
+  "channel": "auto",
+  "intervalHours": 24,
+  "stableRegistry": "https://registry.npmjs.org",
+  "betaRegistry": "https://git.itphx.ru/api/packages/itphx/npm/",
+  "restartRequired": false
+}
+```
+
+- `source` — `default` | `config` | `runtime` | `env` (приоритет env > runtime > config > default);
+- `envLocked: true` — `SYNTH_UPDATES_CHECK` задан в env: `PUT` → `409 CONFLICT`, менять можно только env;
+- `PUT` принимает `{check: boolean}` (иначе `400 VALIDATION_ERROR`) и пишет runtime
+  (`settings.json`/PG); применяется **сразу** — планировщик перечитывает значение на каждом тике
+  (`restartRequired: false`, в т.ч. включение автопроверки после старта);
+- `DELETE` сбрасывает runtime к env/config/default;
+- `channel` и реестры — только из `config.yaml`/env (runtime меняет лишь `check`).
+
+**RBAC.** Core (standalone, `synth serve`) — один API-ключ (роль ADMIN), guard — `requireAuth`.
+Managed backend — `requirePermission('ADMIN')` на **чтение и установку** (`/updates/check`,
+`/updates/apply`) и на все методы `/settings/updates`: любой аутентифицированный USER не
+запускает self-update и не меняет автопроверку (admission-гейт — вторая линия, не замена RBAC).
 
 ### 5.25 Admin/debug — `/api/v2/admin/debug` (core+backend, ADMIN)
 

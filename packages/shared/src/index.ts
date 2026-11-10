@@ -266,6 +266,11 @@ export {
   modalityModelRefSchema,
   modalityModelsSchema,
   ATTACHMENT_FAMILIES,
+  // ADR-133: секция `updates` — каналы и проверка обновлений.
+  type UpdatesConfig,
+  updatesConfigSchema,
+  UPDATE_CHANNEL_CHOICES,
+  type UpdateChannelChoiceSetting,
   type WebhooksConfig,
   webhooksConfigSchema,
   type RemoteConfig,

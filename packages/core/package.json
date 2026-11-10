@@ -64,6 +64,10 @@
       "types": "./dist/cli/mcp-commands.d.ts",
       "import": "./dist/cli/mcp-commands.js"
     },
+    "./cli/service-commands.js": {
+      "types": "./dist/cli/service-commands.d.ts",
+      "import": "./dist/cli/service-commands.js"
+    },
     "./engine/gateway/index.js": {
       "types": "./dist/engine/gateway/index.d.ts",
       "import": "./dist/engine/gateway/index.js"

@@ -6,11 +6,12 @@ import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
-import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust, egressFetch, setSynthReady, buildStandaloneOptions, resolveExecutionForStartup } from '@itphx/synth-core';
+import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust, egressFetch, setSynthReady, buildStandaloneOptions, resolveExecutionForStartup, configureRestart, resolveRestartMode, RESTART_EXIT_CODE, startUpdateScheduler } from '@itphx/synth-core';
 import { createPluginCliContext, createPluginCommand } from '@itphx/synth-core/cli/plugin-commands.js';
 import { createMemoryCommand } from '@itphx/synth-core/cli/memory-commands.js';
 import { createMemoryConnectionResolver } from '@itphx/synth-core/cli/memory-connection.js';
 import { createMcpCommand } from '@itphx/synth-core/cli/mcp-commands.js';
+import { createServiceCommand } from '@itphx/synth-core/cli/service-commands.js';
 
 const require = createRequire(import.meta.url);
 
@@ -70,6 +71,7 @@ program
   .option('--oidc-issuer <url>', 'OIDC issuer — fallback дискавери для входа в UI (гибридный режим)')
   .option('--oidc-client-id <id>', 'OIDC client_id — fallback дискавери для входа в UI (гибридный режим)')
   .option('--token <key>', 'API-ключ для аутентификации на удалённом backend (гибридный режим)')
+  .option('--restart-mode <mode>', 'режим перезапуска из UI: disabled | process | supervisor')
   .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
   .option('--safe-mode', 'безопасный режим: проектные инструкции не грузятся')
   .action(async (options) => {
@@ -238,7 +240,7 @@ program
 
     let shuttingDown = false;
 
-    async function gracefulShutdown(signal: string): Promise<void> {
+    async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
       if (shuttingDown) return;
       shuttingDown = true;
       console.log(`\n[Shutdown] Получен сигнал ${signal}, завершаю...`);
@@ -262,23 +264,51 @@ program
         if (err) console.error('[Shutdown] WSS close error:', err);
       });
 
-      process.exit(0);
+      process.exit(exitCode);
     }
 
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 
+    // ADR-092 п. 7: Restart из UI — graceful shutdown с кодом 75, процесс
+    // поднимает внешний супервизор. Режим: CLI-флаг > SYNTH_RESTART_MODE
+    // (без настройки — `disabled`, endpoint отдаёт `supported:false`).
+    // Раньше публичный CLI настройку не читал вовсе, и в npm-поставке
+    // `POST /api/v2/maintenance/restart` всегда отвечал 409 RESTART_UNSUPPORTED.
+    const restartMode = resolveRestartMode(process.env, options.restartMode);
+    configureRestart({
+      mode: restartMode,
+      request: () => gracefulShutdown('API', RESTART_EXIT_CODE),
+    });
+
     const host = options.host;
 
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);
-      console.log(`  API-ключ: ${apiKey}`);
+      // Инвариант 13: секрет не попадает в stdout/journal — показываем префикс и путь.
+      const keyHint = apiKeyPath ? ` (полный — в ${apiKeyPath})` : '';
+      console.log(`  API-ключ: ${apiKey.slice(0, 8)}…${keyHint}`);
       if (apiKeyCreated && apiKeyPath) {
-        console.log(`  (сохранён: ${apiKeyPath})`);
+        console.log(`  (ключ создан при первом запуске)`);
       }
       if (remoteEnabled) {
         console.log(`  Удалённый backend: ${remoteBackendUrl}. Если сервер не подключён — войдите в UI (адрес сервера + логин/пароль).`);
       }
+      if (restartMode !== 'disabled') {
+        console.log(`  Перезапуск из UI: включён (режим ${restartMode}, exit code ${RESTART_EXIT_CODE})`);
+      }
+
+      // ADR-133: фоновая проверка обновлений — только при `updates.check === true`
+      // (env > runtime-тумблер > config), тумблер перечитывается на каждом тике.
+      void startUpdateScheduler({
+        dataDir,
+        config: synth.updates,
+        settingsStore: appHandle.settingsStore,
+        onUpdate: (info) => {
+          console.log(`\n  Доступна новая версия ${info.latestVersion} (канал ${info.channel}; текущая: ${info.currentVersion})`);
+          console.log(`  Проверка: synth update --check --channel ${info.channel}`);
+        },
+      });
 
       // Фоновый watcher живости гибридного подключения: если backend недоступен
       // на старте или лёг позже — периодически (15 с) проверяет доступность и
@@ -644,6 +674,9 @@ program.addCommand(
 // ADR-071 §2.5: `synth mcp …` — тот же клиент реестра MCP, что в core-`main.ts`.
 program.addCommand(createMcpCommand());
 
+// ADR-134: `synth service …` — userspace-сервис инстанса (systemd --user).
+program.addCommand(createServiceCommand());
+
 program
   .command('chat')
   .description('Одноразовый чат-запрос')
@@ -971,6 +1004,9 @@ program
   .option('--config <path>', 'путь к config.yaml')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
   .option('--apply', 'установить целевую версию (без него — только проверка)')
+  .option('--check', 'только проверка, без установки (ADR-133)')
+  .option('--channel <channel>', 'канал: auto | stable | beta')
+  .option('--registry <url>', 'реестр, перебивающий реестр канала')
   .option('--to <version>', 'целевая версия X.Y.Z — обновление или откат')
   .option('--dry-run', 'показать план без установки')
   .option('--yes', 'пропустить подтверждение')
@@ -990,10 +1026,14 @@ program
         dataDir,
         to: options.to as string | undefined,
         apply: !!options.apply,
+        check: !!options.check,
+        channel: options.channel as 'auto' | 'stable' | 'beta' | undefined,
+        registry: options.registry as string | undefined,
         dryRun: !!options.dryRun,
         yes: !!options.yes,
         json: !!options.json,
         audit: storage.maintenanceAudit,
+        deps: { configChannel: synth.updates.channel, updates: synth.updates, home: home ?? undefined },
       });
     } finally {
       await storage.close?.().catch(() => {});

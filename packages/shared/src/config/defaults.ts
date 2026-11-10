@@ -348,6 +348,20 @@ export const defaultConfig: SynthConfig = {
     // ADR-094: экспорт Prometheus-метрик выключен по умолчанию (`GET /metrics` → 404).
     enabled: false,
   },
+  updates: {
+    // ADR-133: автопроверка обновлений **выключена по умолчанию** — инстанс не
+    // ходит в реестры без явного согласия владельца (офлайн/закрытый контур не
+    // шумит запросами). Явная проверка (`synth update --check`, `?force=1`) от
+    // этого флага не зависит.
+    check: false,
+    // Канал выводится из установленной версии (`-beta.` ⇒ beta), иначе stable.
+    channel: 'auto',
+    // TTL успешной проверки; ошибка кэшируется на 1 ч.
+    intervalHours: 24,
+    // Стабильный канал — npmjs; бета — npm-реестр Gitea (чтение без токена).
+    stableRegistry: 'https://registry.npmjs.org',
+    betaRegistry: 'https://git.itphx.ru/api/packages/itphx/npm/',
+  },
   authority: {
     // ADR-106 Ф1: Authority-слой выключен по умолчанию — права не меняются.
     enabled: false,

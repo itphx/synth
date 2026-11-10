@@ -34,6 +34,7 @@ import { serviceKeysApi } from './service-keys'
 import { webhooksApi } from './webhooks'
 import { oauthApi } from './oauth'
 import { maintenanceApi } from './maintenance'
+import { updatesApi } from './updates'
 import { analyticsApi } from './analytics'
 import { logsApi } from './logs'
 import { egressApi } from './egress'
@@ -497,6 +498,7 @@ export const synthApi = {
   ...webhooksApi,
   ...oauthApi,
   ...maintenanceApi,
+  ...updatesApi,
   ...agentsLimitsApi,
   // Лимит тяжёлых операций с сессиями: имена домена уникальны (`getRequestLimits` и т.д.).
   ...requestLimitsApi,

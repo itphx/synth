@@ -67,6 +67,16 @@ export const SYNTH_INSTANCE_NAME = 'synth-instance';
 export const SYNTH_INSTANCE_COMMAND = 'instance';
 
 /**
+ * ADR-134: имя встроенного скилла регистрации userspace-сервиса systemd
+ * (`synth service install`). Команда `service` не занята ни встроенными
+ * командами, ни другими скиллами.
+ */
+export const SYNTH_SERVICE_NAME = 'synth-service';
+
+/** Slash-команда скилла `synth-service`. */
+export const SYNTH_SERVICE_COMMAND = 'service';
+
+/**
  * Синтетический каталог-источник builtin-скиллов: system-уровень, `trusted: true`.
  * Идёт **первым** в discovery, поэтому не перекрывается project/instance.
  */
@@ -699,6 +709,101 @@ export function buildSynthInstanceMeta(): SkillMeta {
   };
 }
 
+/** Тело встроенного `synth-service` (model-facing, ADR-134). */
+const SYNTH_SERVICE_BODY = `# Synth service (systemd --user)
+
+Register the local Synth instance as a **userspace** systemd service so it keeps
+running and starts automatically. The unit is generated from a fixed template by
+\`synth service install\` (ADR-134) — never write unit files yourself.
+
+## When to use
+- The user wants the instance to "always run", survive logout/reboot, or be
+  managed with \`systemctl --user\`.
+- The user asks how to see service logs, restart the instance, or enable
+  autostart on a Linux machine.
+- A restart from the UI answers 409 \`RESTART_UNSUPPORTED\` because no supervisor
+  is running — the service unit fixes this (\`SYNTH_RESTART_MODE=process\`,
+  \`RestartForceExitStatus=75\`).
+
+## Ask the user first
+Use the \`question\` tool (1–5 questions, with options) before installing:
+1. **Mode** — standalone or hybrid. Hybrid needs a backend URL and the OIDC
+   issuer/client ID used by the UI login.
+2. **Data location** — a dedicated \`--home <dir>\` (config/data/profiles/
+   credentials in one tree) or \`--data-dir <dir>\` (data only). Do not invent a
+   path; ask.
+3. **Port** — default 4300; ask if the user expects another one.
+4. **Bind address** — \`127.0.0.1\` (default, loopback), \`0.0.0.0\` (all
+   interfaces — warn: reachable from the network, check authentication) or a
+   specific IP.
+5. **Autostart / linger** — enable autostart and \`loginctl enable-linger\` so the
+   service starts after reboot without an interactive login (best-effort).
+
+For **hybrid**, remind the user to run \`synth connect --backend <url>\` **once by
+hand** first: the unit stores no tokens, the service reuses the saved
+credentials (device flow). \`--oidc-issuer\`/\`--oidc-client-id\` are **not** written
+to the unit — they belong in \`config.yaml\` next to the home directory.
+
+If the \`question\` tool is unavailable (not granted to the current agent), ask the
+same questions as plain text and wait for the answers.
+
+## Steps
+1. Show the plan: \`synth service install --print-unit --port <n> --host <addr>
+   (--home <dir>|--data-dir <dir>) [--connect <url>]\`. The unit template and
+   paths are printed; nothing is written.
+2. Get explicit confirmation from the user (paths, port, bind address, hybrid
+   URL, autostart/linger).
+3. Install **without sudo**:
+   \`synth service install --port <n> --host <addr> (--home <dir>|--data-dir <dir>)
+   [--connect <url>] [--no-autostart] [--no-start] [--no-linger]\`.
+   Add \`--json\` when you need machine-readable output.
+4. Verify: \`synth service status --json\` — \`installed:true\`, \`active\`, \`pid\`,
+   \`linger\`, \`health.ok\`.
+5. Verify the endpoint: \`GET http://127.0.0.1:<port>/health\` (or the configured
+   host) returns \`{status, version, startedAt}\`.
+
+## Verify
+- \`synth service status --json\` shows \`installed:true\` and \`managed:true\`.
+- \`health.ok\` is \`true\` and \`startedAt\` is fresh.
+- \`systemctl --user is-enabled synth.service\` answers \`enabled\` (unless
+  \`--no-autostart\` was requested).
+- Logs are readable: \`synth service logs -n 100\` (or \`-f\` to follow).
+- No secret value (API key, token) was printed anywhere.
+
+## Safety
+- Do NOT write \`~/.config/systemd/user/synth.service\` or the env file with file
+  tools — the template lives in code; manual edits are overwritten on the next
+  install.
+- Do NOT use \`sudo\`, \`systemctl --system\` or a system-wide unit: \`--system\` is
+  not supported. One user — their own instances (ADR-079).
+- Do NOT print, copy or put secrets into the unit or \`service.env\`. The API key
+  lives in \`{dataDir}/secrets/api-key\`; hybrid auth uses saved credentials.
+- Do NOT delete or move instance data — \`synth service uninstall\` removes only
+  the unit; data removal is \`synth uninstall\`.
+- If systemd is unavailable (container, non-Linux), say so and do not emulate the
+  service: use Docker/Helm (ADR-077) or ask the administrator.
+`;
+
+/** `SkillMeta` встроенного `synth-service` (ADR-134). */
+export function buildSynthServiceMeta(): SkillMeta {
+  return {
+    name: SYNTH_SERVICE_NAME,
+    description:
+      'Регистрация инстанса Synth как userspace-сервиса systemd (synth service install): автозапуск, логи, рестарт',
+    userInvocable: true,
+    disableModelInvocation: false,
+    invocation: 'both',
+    trigger: 'manual',
+    command: SYNTH_SERVICE_COMMAND,
+    category: 'instance',
+    tags: ['synth-service', 'systemd', 'service', 'autostart', 'install', 'ops'],
+    relatedSkills: [SYNTH_INSTANCE_NAME],
+    requiresCapabilities: [ToolCapability.SHELL, ToolCapability.QUESTION],
+    scope: 'instance',
+    mode: 'any',
+  };
+}
+
 /**
  * Собирает встроенные скиллы. `dir`/`file` — синтетические пути (на ФС нет);
  * `mtimeMs: 0` — builtin вне mtime-инвалидации watcher'а.
@@ -729,5 +834,6 @@ export function buildBuiltinSkills(opts: { dataDir?: string } = {}): DiscoveredS
     build(SYNTH_PIPELINES_NAME, buildSynthPipelinesMeta(), SYNTH_PIPELINES_BODY),
     build(SYNTH_SCHEDULES_NAME, buildSynthSchedulesMeta(), SYNTH_SCHEDULES_BODY),
     build(SYNTH_INSTANCE_NAME, buildSynthInstanceMeta(), SYNTH_INSTANCE_BODY),
+    build(SYNTH_SERVICE_NAME, buildSynthServiceMeta(), SYNTH_SERVICE_BODY),
   ];
 }

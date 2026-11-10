@@ -334,6 +334,17 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
       await deleteSetting(conn, 'metrics');
     },
 
+    // ADR-133: runtime-тумблер автоматической проверки обновлений.
+    async getUpdates(): Promise<RuntimeSettingsValue<'updates'>> {
+      return (await readSetting<RuntimeSettingsValue<'updates'>>(conn, 'updates')) ?? {};
+    },
+    async setUpdates(config: RuntimeSettingsValue<'updates'>): Promise<void> {
+      await writeSetting(conn, 'updates', config);
+    },
+    async clearUpdates(): Promise<void> {
+      await deleteSetting(conn, 'updates');
+    },
+
     async getPlugins(): Promise<RuntimeSettingsValue<'plugins'>> {
       return (await readSetting<RuntimeSettingsValue<'plugins'>>(conn, 'plugins')) ?? {};
     },

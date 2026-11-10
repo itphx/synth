@@ -51,6 +51,13 @@ shared → core → executor → storage-postgres → ui → backend → sdk →
 
 Публикуются **все 8 пакетов** в порядке релиза (`shared → core → executor → storage-postgres → ui → backend → sdk → synth`).
 
+**Чтение реестра — без токена.** Проверка обновлений и установка из Gitea не требуют
+аутентификации: `synth update --check --channel beta` читает dist-tag `beta` публичным GET
+метаданных пакета, а `npm i -g @itphx/synth@beta --registry https://git.itphx.ru/api/packages/itphx/npm/`
+работает без `.npmrc`-токена. Токен `GITEA_NPM_TOKEN` с правом `package:write` нужен **только
+публикации** (`publish-beta.sh`/CI). Закрытый контур, где реестр требует read-токен, — исключение:
+тогда токен задаётся в `.npmrc` как условие установки пакета, а не как условие проверки версии.
+
 ### Локальная публикация
 
 ```bash
@@ -100,6 +107,23 @@ synth serve --home ~/.local/share/synth-beta
 synth serve --connect https://synth.k3s.itphx.loc --home ~/.local/share/synth-beta --port 4300
 ```
 
+### Переход с беты на стабильную версию
+
+Переход `beta → stable` — это **понижение** (стабильная версия ниже текущей беты), поэтому команда
+помечает операцию как откат и требует подтверждения:
+
+```bash
+synth update --check --channel stable          # что доступно в стабильном канале
+synth update --channel stable --apply          # понижение: подтвердить «ОТКАТ»
+synth service restart                          # или POST /api/v2/maintenance/restart, или кнопка в UI
+synth doctor                                   # после старта — без fail
+```
+
+Версия из бета-канала при этом **не** удаляется и не мигрируется; данные инстанса остаются на месте
+(понижение версии не откатывает схему — при необходимости восстановление только из бэкапа,
+см. [MAINTENANCE.md](./MAINTENANCE.md) §«Обновление и откат»). Обратно на бету — обычное обновление
+по каналу `beta` (`--channel beta --apply`).
+
 ### Smoke-проверка
 
 Скрипт сам ставит опубликованный пакет в `tmp/` и проверяет `synth --version` — так ловится «опубликовано, но не устанавливается» (битые `workspace:*`, отсутствующие файлы в `files`). Отключается флагом `--no-smoke`; в CI — входом `smoke: false`.
@@ -117,7 +141,7 @@ synth serve --connect https://synth.k3s.itphx.loc --home ~/.local/share/synth-be
 
 - Бета, собранная из грязного дерева, **невоспроизводима** — суффикс `.dirty` это помечает; для проверки воспроизводимости публикуйте из чистого коммита.
 - Docker-образы и Helm-чарт беты **не публикуются** — только npm-пакеты в Gitea.
-- Токен публикации требует `package:write`; потребителю достаточно read-токена на тот же реестр.
+- Токен публикации требует `package:write`; для чтения реестра (проверка обновлений, установка `@beta`) токен не нужен — он остаётся нужен только закрытым реестрам, где read требует `.npmrc`.
 
 ## Docker-образ
 

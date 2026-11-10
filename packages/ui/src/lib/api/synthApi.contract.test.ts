@@ -9,10 +9,10 @@ import { synthApi } from './synthApi'
  * метода: при осознанном добавлении/удалении методa тест обновляется руками.
  */
 const EXPECTED_API_METHODS = [
-  'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'answer', 'applyMigrations', 'approvePack',
+  'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'answer', 'applyMigrations', 'applyUpdate', 'approvePack',
   'approvePlugin', 'auditRevealed', 'backgroundSession', 'backupDownloadUrl', 'batchMessages',
   'bindOAuthCredential', 'bindWorktree', 'browseWorkspaceRoot', 'cancel', 'cancelPipelineRun', 'cancelQueueRetry',
-  'cancelRestore', 'cancelSummarization', 'checkEgress', 'checkProxy', 'checkUpdate', 'claimIdentity',
+  'cancelRestore', 'cancelSummarization', 'checkEgress', 'checkProxy', 'checkUpdate', 'checkUpdates', 'claimIdentity',
   'clearAudit', 'clearProfilePassword', 'clearProxyPassword', 'clearQueue', 'clearSession', 'clearSessionTodos',
   'clearWorkspacePolicy', 'cloneGitRepo', 'consolidateMemory', 'createAgentSshKey', 'createBackup',
   'createDirectory', 'createEventBindingKey', 'createEventRoute', 'createMemoryIndex', 'createOAuthCredential',
@@ -48,14 +48,14 @@ const EXPECTED_API_METHODS = [
   'getSessionReferences', 'getSessionSecrets', 'getSessionSkills', 'getSessionSkillsEffective', 'getSessionStats',
   'getSessionTodos', 'getSessions', 'getSessionsPage', 'getSkill', 'getSkillBundle', 'getSkillBundles',
   'getSkillFile', 'getSkillFiles', 'getSkills', 'getSkillsSettings', 'getSshSettings', 'getStatus',
-  'getStickyNotes', 'getTls', 'getToolsDisabledInfo', 'getToolsPolicyInfo', 'getUser', 'getUsers',
+  'getStickyNotes', 'getTls', 'getToolsDisabledInfo', 'getToolsPolicyInfo', 'getUpdatesSettings', 'getUser', 'getUsers',
   'getWebhookDeliveries', 'getWebhookSubscription', 'getWebhookSubscriptions', 'getWorkspacePolicy',
   'getWorkspaceRoot', 'getWorkspaceSetting', 'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate',
   'list', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings', 'listMemoryFacts',
   'listMemoryIndexes', 'listPendingPermissions', 'listPipelineRuns', 'listPipelineRunsPage', 'listPluginAudit', 'listPlugins',
   'listProcesses', 'listSshKeys', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'moveProjectPlanItem', 'patchSessionMode', 'permissionReply', 'pinMessage', 'probeMcpServer', 'probeRawFile',
-  'pruneWorktrees', 'publishProject', 'publishProjectPipeline', 'putProjectInvariants', 'putSkillFile',
+  'pruneWorktrees', 'publishProject', 'publishProjectPipeline', 'putProjectInvariants', 'putSkillFile', 'putUpdatesSettings',
   'rawFileUrl', 'readFile', 'rebuildMemoryIndex', 'refreshOAuthCredential', 'regenerateWebhookSecret',
   'registerGitRepo', 'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin',
   'removeProcess', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'removeWorktree',
@@ -64,7 +64,7 @@ const EXPECTED_API_METHODS = [
   'resetDefaultAgent', 'resetDefaultModel', 'resetDictionary', 'resetEgressPolicy', 'resetEventsSettings',
   'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy', 'resetMcpPolicy',
   'resetMcpSettings', 'resetPluginsSettings', 'resetProtectedPaths', 'resetProxy', 'resetRequestLimits', 'resetSkillsSettings',
-  'resetSshMode', 'resetToolsDisabled', 'resetToolsPolicy', 'restartInstance', 'resumePipelineRun', 'resumeQueue',
+  'resetSshMode', 'resetToolsDisabled', 'resetToolsPolicy', 'resetUpdatesSettings', 'restartInstance', 'resumePipelineRun', 'resumeQueue',
   'resumeSubagent', 'retryMessage', 'retryQueueNow', 'returnQueue', 'revokeEventBindingKey', 'revokeServiceKey',
   'rollbackPlugin', 'runSchedule', 'saveAgent', 'saveContextFile', 'saveDebugConfig', 'saveDictionary',
   'saveEgressPolicy', 'saveGatewayPatterns', 'saveLlmGatewaySettings', 'saveMcpNetworkPolicy', 'saveMcpPolicy',
@@ -86,7 +86,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (397)', () => {
+  it('набор методов совпадает с зафиксированным (402)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

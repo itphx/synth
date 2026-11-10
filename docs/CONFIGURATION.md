@@ -264,7 +264,29 @@ synth serve
 
 Деплой-дефолты: Helm-чарт — `backend.restartMode: process` (+ env `SYNTH_RESTART_MODE`), Docker Compose —
 `restart: unless-stopped` + `SYNTH_RESTART_MODE=process`, `scripts/dev.sh` — `supervisor`, bare
-`synth serve` — `disabled`. Пример systemd-юнита:
+`synth serve` — `disabled`.
+
+**Локальный инстанс на машине разработчика (`systemd --user`)** — штатный путь `synth service install`
+([ADR-134](./arch_decisions/adr-134-instance-service-systemd-user.md)). Команда пишет unit
+`~/.config/systemd/user/synth.service` из фиксированного шаблона (в нём уже
+`Environment=SYNTH_RESTART_MODE=process`, `Restart=on-failure`, `RestartForceExitStatus=75`,
+`RestartSec=3`, `KillMode=mixed`, `TimeoutStopSec=30`), env-файл `~/.config/synth/service.env`
+(0600, без секретов) и включает автозапуск:
+
+```bash
+synth service install --port 4300 --home ~/synth-instance   # либо --data-dir <dir>
+synth service status --json
+synth service logs -f
+```
+
+`--print-unit` только печатает unit, `--dry-run` — план и unit; оба ничего не пишут и не вызывают
+`systemctl`. `--no-autostart`/`--no-start`/`--no-linger` отключают соответствующие шаги. Гибрид —
+`--connect <url>`: токенов в unit нет, нужны сохранённые credentials после ручного
+`synth connect --backend <url>` (device flow). Чужой unit без маркера
+`Managed by synth service install` не перезаписывается (`--force`).
+
+Ручной unit — **только фоллбек**, если `synth service` недоступна (unit при этом вне управления
+команды, маркер не ставится):
 
 ```ini
 [Service]
@@ -279,6 +301,62 @@ Deployment — `kubectl rollout restart deployment/<release>-synth-backend` (и�
 `restart.requested`. UI ждёт смены `startedAt` в `GET /health` (до 90 с), затем перезагружается.
 
 `GET /health` и `GET /api/v2/health` отдают аддитивное поле `startedAt` (ISO) — метка старта процесса.
+
+### Обновления (ADR-133)
+
+Каналы обновлений и фоновая проверка версии `@itphx/synth`. Канал **выводится из
+установленной версии** (`-beta.` в версии ⇒ `beta`, иначе `stable`), файла-маркера нет;
+`updates.channel` — необязательный override. Источники — по каналу: `stable` читает
+dist-tag `latest` из npmjs, `beta` — dist-tag `beta` из npm-реестра Gitea. **Бета-реестр
+читается без токена** — токен (`GITEA_NPM_TOKEN`) нужен только публикации, а не проверке
+обновлений или установке из публичного реестра.
+
+| Ключ | Тип / значения | Дефолт | Назначение |
+|------|----------------|--------|------------|
+| `updates.check` | boolean | `false` | Автопроверка в фоне (**выключена по умолчанию** — офлайн-инстанс не шумит запросами) |
+| `updates.channel` | `auto` \| `stable` \| `beta` | `auto` | Канал: `auto` — по установленной версии (`-beta.` ⇒ beta) |
+| `updates.intervalHours` | целое ≥ 1 | `24` | TTL успешной проверки (кэш `{dataDir}/update-check.json`, по каналам); запись с ошибкой живёт **1 ч** |
+| `updates.stableRegistry` | URL | `https://registry.npmjs.org` | Реестр стабильного канала (dist-tag `latest`) |
+| `updates.betaRegistry` | URL | `https://git.itphx.ru/api/packages/itphx/npm/` | Реестр бета-канала (dist-tag `beta`; чтение без токена) |
+
+```yaml
+updates:
+  # Автопроверка выключена по умолчанию; явная проверка работает всегда.
+  check: false
+  # auto — канал по установленной версии (-beta. ⇒ beta), либо stable/beta.
+  channel: auto
+  # TTL успешной проверки, часы; ошибка кэшируется на 1 ч.
+  intervalHours: 24
+  stableRegistry: https://registry.npmjs.org
+  betaRegistry: https://git.itphx.ru/api/packages/itphx/npm/
+```
+
+Env-переменные (приоритет **env > runtime(UI) > config.yaml > default**):
+
+| Переменная | Ключ |
+|------------|------|
+| `SYNTH_UPDATES_CHECK` | `updates.check` (`true`/`false`; при заданном env запись из UI → 409 `CONFLICT`, `envLocked: true`) |
+| `SYNTH_UPDATES_CHANNEL` | `updates.channel` |
+| `SYNTH_UPDATES_INTERVAL_HOURS` | `updates.intervalHours` |
+| `SYNTH_UPDATES_STABLE_REGISTRY` | `updates.stableRegistry` |
+| `SYNTH_UPDATES_BETA_REGISTRY` | `updates.betaRegistry` |
+
+Runtime-тумблер автопроверки (`check`) — раздел UI «Обновления» / `GET|PUT|DELETE
+/api/v2/settings/updates`; применяется **сразу** (планировщик перечитывает значение на
+каждом тике), `restartRequired: false`. Включение после старта работает и при
+изначально выключенной проверке: планировщик держит таймеры, пока передан порт
+runtime-настроек, а выключенный тик запросов не делает. Канал и реестры — из
+`config.yaml`/env (runtime меняет только `check`).
+
+**Явная проверка кэш игнорирует всегда:** `synth update --check`, `GET
+/api/v2/updates/check?force=1`, кнопка «Проверить» в UI. Сетевая ошибка в явном режиме —
+`502 UPDATE_CHECK_FAILED`; в фоне — тихая запись с `error` на 1 ч.
+
+**Требование к установке (self-update):** только **user-level npm prefix** — `npm prefix -g`
+должен лежать внутри `$HOME`. Системная/root-установка не трогается: CLI-предпросмотр
+отказывает до запуска npm, API `POST /api/v2/updates/apply` отвечает `409
+UPDATE_UNSUPPORTED` с причиной. В Docker/Helm/managed self-update запрещён по той же
+причине (обновление выполняется образом/выпуском), независимо от prefix.
 
 ## config.yaml
 

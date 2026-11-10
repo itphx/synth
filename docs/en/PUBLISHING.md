@@ -51,6 +51,13 @@ Beta version: `X.Y.Z-beta.<UTC timestamp>.<sha>[.dirty]` — the prerelease suff
 
 **All 8 packages** are published in release order (`shared → core → executor → storage-postgres → ui → backend → sdk → synth`).
 
+**The registry is read without a token.** Update checks and installation from Gitea need no
+authentication: `synth update --check --channel beta` reads the `beta` dist-tag with a public package
+metadata GET, and `npm i -g @itphx/synth@beta --registry https://git.itphx.ru/api/packages/itphx/npm/`
+works without an `.npmrc` token. A `GITEA_NPM_TOKEN` with the `package:write` right is needed **only for
+publishing** (`publish-beta.sh`/CI). A closed registry that requires a read token is the exception: then
+the token in `.npmrc` is a condition for installing the package, not for checking its version.
+
 ### Local publishing
 
 ```bash
@@ -100,6 +107,22 @@ synth serve --home ~/.local/share/synth-beta
 synth serve --connect https://synth.k3s.itphx.loc --home ~/.local/share/synth-beta --port 4300
 ```
 
+### Switching from beta to stable
+
+The `beta → stable` switch is a **downgrade** (the stable version is lower than the current beta), so the
+command marks it as a rollback and asks for confirmation:
+
+```bash
+synth update --check --channel stable          # what is available on the stable channel
+synth update --channel stable --apply          # downgrade: confirm "ROLLBACK"
+synth service restart                          # or POST /api/v2/maintenance/restart, or the UI button
+synth doctor                                   # after start — no fail
+```
+
+The beta version is **not** removed or migrated; the instance data stays in place (a downgrade does not
+roll the schema back — if needed, recovery is only from a backup, see [MAINTENANCE.md](./MAINTENANCE.md)
+§"Update and rollback"). Going back to beta is an ordinary channel update (`--channel beta --apply`).
+
 ### Smoke check
 
 The script installs the published package into `tmp/` and runs `synth --version` — this catches "published but not installable" (broken `workspace:*`, files missing from `files`). Disabled with `--no-smoke`; in CI with the `smoke: false` input.
@@ -117,7 +140,7 @@ The script keeps the last N beta versions (semver, descending) and deletes the o
 
 - A beta built from a dirty tree is **not reproducible** — the `.dirty` suffix marks it; use a clean commit when reproducibility matters.
 - Docker images and the Helm chart are **not** published as betas — only npm packages in Gitea.
-- The publishing token needs `package:write`; consumers only need a read token for the same registry.
+- The publishing token needs `package:write`; reading the registry (update checks, installing `@beta`) needs no token — it remains necessary only for closed registries whose read side requires an `.npmrc`.
 
 ## Docker image
 

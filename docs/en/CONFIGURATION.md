@@ -296,6 +296,60 @@ reloads.
 `GET /health` and `GET /api/v2/health` return an additive `startedAt` field (ISO) — the process start
 timestamp.
 
+### Updates (ADR-133)
+
+Update channels and background version checks for `@itphx/synth`. The channel is **derived from the
+installed version** (`-beta.` in the version ⇒ `beta`, otherwise `stable`); there is no marker file.
+`updates.channel` is an optional override. Sources are per channel: `stable` reads the `latest`
+dist-tag from npmjs, `beta` reads the `beta` dist-tag from the Gitea npm registry. **The beta registry
+is read without a token** — a token (`GITEA_NPM_TOKEN`) is needed only for publishing, not for update
+checks or installation from the public registry.
+
+| Key | Type / values | Default | Purpose |
+|-----|---------------|---------|---------|
+| `updates.check` | boolean | `false` | Background auto-check (**off by default** — an offline instance must not send registry requests) |
+| `updates.channel` | `auto` \| `stable` \| `beta` | `auto` | Channel: `auto` — from the installed version (`-beta.` ⇒ beta) |
+| `updates.intervalHours` | integer ≥ 1 | `24` | TTL of a successful check (cache `{dataDir}/update-check.json`, per channel); an error entry lives **1 h** |
+| `updates.stableRegistry` | URL | `https://registry.npmjs.org` | Stable-channel registry (`latest` dist-tag) |
+| `updates.betaRegistry` | URL | `https://git.itphx.ru/api/packages/itphx/npm/` | Beta-channel registry (`beta` dist-tag; read without a token) |
+
+```yaml
+updates:
+  # Auto-check is off by default; an explicit check always runs.
+  check: false
+  # auto — channel from the installed version (-beta. ⇒ beta), or stable/beta.
+  channel: auto
+  # TTL of a successful check, hours; errors are cached for 1 h.
+  intervalHours: 24
+  stableRegistry: https://registry.npmjs.org
+  betaRegistry: https://git.itphx.ru/api/packages/itphx/npm/
+```
+
+Environment variables (priority **env > runtime(UI) > config.yaml > default**):
+
+| Variable | Key |
+|----------|-----|
+| `SYNTH_UPDATES_CHECK` | `updates.check` (`true`/`false`; when set in env, a UI write → 409 `CONFLICT`, `envLocked: true`) |
+| `SYNTH_UPDATES_CHANNEL` | `updates.channel` |
+| `SYNTH_UPDATES_INTERVAL_HOURS` | `updates.intervalHours` |
+| `SYNTH_UPDATES_STABLE_REGISTRY` | `updates.stableRegistry` |
+| `SYNTH_UPDATES_BETA_REGISTRY` | `updates.betaRegistry` |
+
+Runtime auto-check toggle (`check`) — UI section "Updates" / `GET|PUT|DELETE /api/v2/settings/updates`;
+applies **immediately** (the scheduler re-reads the value on every tick), `restartRequired: false`.
+Enabling after start also works when the check was initially off: the scheduler keeps timers as long as
+the runtime settings port is provided, and a disabled tick sends no requests. Channel and registries
+come from `config.yaml`/env (runtime changes only `check`).
+
+**An explicit check always ignores the cache:** `synth update --check`, `GET /api/v2/updates/check?force=1`,
+the "Check" button in the UI. A network error in explicit mode → `502 UPDATE_CHECK_FAILED`; in the
+background — a silent cached error entry for 1 h.
+
+**Installation requirement (self-update):** **user-level npm prefix only** — `npm prefix -g` must be
+inside `$HOME`. A system/root installation is never touched: the CLI preview fails before running npm,
+and `POST /api/v2/updates/apply` answers `409 UPDATE_UNSUPPORTED` with a reason. In Docker/Helm/managed
+self-update is forbidden for the same reason (updates ship as an image/release), regardless of prefix.
+
 ## config.yaml
 
 Cascading search (from the highest priority to the lowest):

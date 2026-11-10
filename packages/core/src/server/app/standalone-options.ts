@@ -144,6 +144,8 @@ export function buildStandaloneOptions(input: StandaloneOptionsInput): Partial<S
     attachmentsConfig: synth.attachments,
     // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
     metricsConfig: synth.metrics,
+    // ADR-133: каналы и проверка обновлений (`updates.*`).
+    updatesConfig: synth.updates,
     // ADR-106 Ф1: Authority-слой (по умолчанию выключен).
     authorityConfig: synth.authority,
     // ADR-090: конфигурация слоя плагинов (политики + бюджеты).

@@ -28,6 +28,8 @@ import {
   createGatewayPatternsRoutes, createContextFileRoutes, createDebugRoutes,
   createContextRoutes as createCoreContextRoutes,
   createMetricsSettingsRoutes,
+  // ADR-133: обновления — проверка по каналам, SSE-установка и тумблер автопроверки.
+  createUpdateRoutes, createUpdatesSettingsRoutes,
   // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального ввода.
   createAttachmentsSettingsRoutes, createModalityModelLookup,
   createContextWindowSettingsRoutes,
@@ -1404,6 +1406,29 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // События/decision наследуют тот же guard (если не заданы отдельно).
     settingsWriteGuard: auth.requirePermission('ADMIN'),
   }));
+
+  // ADR-133: обновления (`/api/v2/updates`) — проверка по каналам и SSE-установка.
+  // Managed RBAC: проверка и применение — только ADMIN (как обслуживание инстанса).
+  // Admission-гейт внутри роута: в managed/Docker/K8s self-update → 409
+  // `UPDATE_UNSUPPORTED` (обновление выполняется образом/выпуском).
+  app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir, {
+    updates: config.synth.updates,
+    audit: maintenanceAudit,
+  }, {
+    readGuard: auth.requirePermission('ADMIN'),
+    writeGuard: auth.requirePermission('ADMIN'),
+  }));
+
+  // ADR-133: админ-раздел «Обновления» — runtime-тумблер автопроверки.
+  // Managed RBAC: чтение и запись — только ADMIN.
+  app.route('/api/v2/settings', createUpdatesSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    { settingsStore, config: config.synth.updates, env: process.env },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
 
   // ADR-094: админ-раздел «Наблюдаемость» — runtime `metrics.enabled` (рестарт),
   // live-статус и bearer-токен `/metrics` (write-only, применяется сразу).

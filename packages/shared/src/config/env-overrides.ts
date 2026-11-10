@@ -133,6 +133,13 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'attachments', key: 'maxActiveUploads', type: 'number' },
   // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
   { section: 'metrics', key: 'enabled', type: 'boolean' },
+  // updates (ADR-133): каналы обновлений. `check` — автопроверка в фоне;
+  // `channel` — `auto`|`stable`|`beta`; интервал и реестры каналов.
+  { section: 'updates', key: 'check', type: 'boolean' },
+  { section: 'updates', key: 'channel', type: 'string' },
+  { section: 'updates', key: 'intervalHours', type: 'number' },
+  { section: 'updates', key: 'stableRegistry', type: 'string' },
+  { section: 'updates', key: 'betaRegistry', type: 'string' },
   // tools: общий предел вывода инструментов (строк/байт).
   { section: 'tools', key: 'outputMaxLines', type: 'number' },
   { section: 'tools', key: 'outputMaxBytes', type: 'number' },

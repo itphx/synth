@@ -1093,6 +1093,39 @@ export const attachmentsConfigSchema = z.object({
   maxActiveUploads: z.number().int().min(1).default(256),
 });
 
+// --- Обновления пакета (ADR-133) ---
+
+/**
+ * ADR-133: канал обновлений — значение настройки `updates.channel`.
+ *
+ * - `auto` (дефолт) — канал выводится из установленной версии: `-beta.` в
+ *   `SYNTH_VERSION` ⇒ `beta`, иначе `stable` (файл-маркер не заводится);
+ * - `stable`/`beta` — явный override (в т.ч. для смены канала вручную).
+ */
+export const UPDATE_CHANNEL_CHOICES = ['auto', 'stable', 'beta'] as const;
+export type UpdateChannelChoiceSetting = (typeof UPDATE_CHANNEL_CHOICES)[number];
+
+/**
+ * ADR-133: секция `updates` — каналы и проверка обновлений.
+ *
+ * - `check` — автопроверка обновлений в фоне (**по умолчанию выключена**:
+ *   офлайн-инстансы не должны шуметь запросами к реестрам);
+ * - `channel` — `auto` (по установленной версии) | `stable` | `beta`;
+ * - `intervalHours` — TTL успешной проверки, часы (ошибка кэшируется на 1 ч);
+ * - `stableRegistry` — реестр стабильного канала (`latest`);
+ * - `betaRegistry` — реестр бета-канала (`beta`; Gitea читается без токена,
+ *   токен нужен только публикации).
+ */
+export const updatesConfigSchema = z.object({
+  check: z.boolean().default(false),
+  channel: z.enum(['auto', 'stable', 'beta']).default('auto'),
+  intervalHours: z.number().int().min(1).default(24),
+  stableRegistry: z.string().default('https://registry.npmjs.org'),
+  betaRegistry: z.string().default('https://git.itphx.ru/api/packages/itphx/npm/'),
+});
+
+export type UpdatesConfig = z.infer<typeof updatesConfigSchema>;
+
 // --- Наблюдаемость: Prometheus-метрики (ADR-094) ---
 
 /**
@@ -1707,6 +1740,7 @@ export const synthConfigSchema = z.object({
   limits: limitsConfigSchema.prefault({}),
   attachments: attachmentsConfigSchema.prefault({}),
   metrics: metricsConfigSchema.prefault({}),
+  updates: updatesConfigSchema.prefault({}),
   authority: authorityConfigSchema.prefault({}),
   plugins: pluginsConfigSchema.prefault({}),
   egress: egressConfigSchema.prefault({}),

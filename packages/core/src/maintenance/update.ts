@@ -1,23 +1,42 @@
-// ADR-092: тело CLI-команды `synth update` — обновление и **откат** пакета
-// (`--to <version>`). Переиспользуется dev-CLI (`packages/core/src/main.ts`) и
-// публичным `synth` (`packages/synth/src/cli.ts`, паритет PROP-053); логики в CLI нет.
+// ADR-092 + ADR-133: тело CLI-команды `synth update` — проверка, обновление и
+// **откат** пакета по каналам. Переиспользуется dev-CLI (`packages/core/src/main.ts`)
+// и публичным `synth` (`packages/synth/src/cli.ts`, паритет PROP-053); логики в
+// CLI нет.
 //
-// Без `--apply` команда только проверяет (текущая/целевая версия, что делать),
-// `--dry-run` печатает план и **ничего не запускает**, `--apply` ставит
-// `@itphx/synth@<version>` через `npm install -g`. Целевая версия из `--to`
-// валидируется (semver) и проверяется по списку реестра; версия ниже текущей —
-// откат (в приглашении явное «ОТКАТ»). Сеть/установка инжектируются через
-// `deps` — тесты не делают реальных запросов.
+// Канал выводится из установленной версии (`-beta.` ⇒ beta), override —
+// `--channel auto|stable|beta` / `updates.channel`. Реестр — по каналу
+// (`updates.stableRegistry`/`updates.betaRegistry`), `--registry <url>`
+// перебивает. Без флагов поведение прежнее: stable → npmjs.
 //
-// Аудит (best-effort, ADR-092): успех — `update.applied`/`rollback.applied`
-// (`details: {from, to}`), несуществующая версия и провал/ошибка установки —
-// `update.failed` с `error`. Ошибка проверки версий (сеть) записи не оставляет —
-// операция не начиналась.
+// Без `--apply`/с `--check` команда только проверяет (текущая/целевая версия,
+// что делать), `--dry-run` печатает план и **ничего не запускает**, `--apply`
+// ставит `@itphx/synth@<version>` через `npm install -g … --registry …`.
+// Целевая версия из `--to` валидируется (semver) и проверяется по списку
+// реестра **этого** канала; beta → stable — откат («ОТКАТ на релиз»).
+//
+// Перед установкой (только `--apply`) — preflight user-level prefix:
+// `npm prefix -g` должен быть внутри `$HOME`; root/системную установку не
+// трогаем (иначе `npm install -g` пишет в системный каталог).
+//
+// Аудит (best-effort, ADR-092): `update.checked` — при проверке; успех —
+// `update.applied`/`rollback.applied`, провал — `update.failed`
+// (`details: {from, to, channel, registry, version}`).
 import { spawn } from 'node:child_process';
-import { SYNTH_VERSION } from '@itphx/synth-shared';
+import { SYNTH_VERSION, type UpdatesConfig } from '@itphx/synth-shared';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
-import { compareVersions, fetchAvailableVersions, fetchLatestVersion, isSemver } from '../update-checker.js';
+import {
+  DEFAULT_STABLE_REGISTRY,
+  compareVersions,
+  fetchAvailableVersions,
+  fetchLatestVersion,
+  isSemver,
+  resolveUpdateChannel,
+  resolveUpdatesRegistry,
+  type UpdateChannel,
+  type UpdateChannelChoice,
+} from '../update-checker.js';
 import { recordMaintenanceAudit } from './audit.js';
+import { checkUserLevelPrefix } from './self-update.js';
 
 /** Имя публикуемого пакета CLI (`@itphx/synth`, ADR-038). */
 const PACKAGE_NAME = '@itphx/synth';
@@ -32,26 +51,44 @@ const OPERATION_LABELS: Record<UpdateOperation, string> = {
   none: 'без изменений',
 };
 
-/** Инъекция сети/установки (ADR-092) — тесты подменяют и не ходят в реестр. */
+/** Инъекция сети/установки (ADR-092/ADR-133) — тесты не ходят в реестр. */
 export interface UpdateCommandDeps {
-  /** Список версий из реестра (по умолчанию — npm). */
-  fetchVersions?: () => Promise<string[]>;
-  /** Последняя версия (по умолчанию — `latest`-тег npm, совместимо с update-checker). */
-  fetchLatest?: () => Promise<string>;
+  /** Список версий из реестра канала. */
+  fetchVersions?: (opts: { channel: UpdateChannel; registry: string }) => Promise<string[]>;
+  /** Последняя версия канала (`dist-tags.latest`/`dist-tags.beta`). */
+  fetchLatest?: (opts: { channel: UpdateChannel; registry: string }) => Promise<string>;
   /** Установка версии: код возврата (по умолчанию — `npm install -g`). */
-  install?: (version: string) => Promise<number>;
+  install?: (version: string, registry: string) => Promise<number>;
   /** Текущая версия (по умолчанию — `SYNTH_VERSION`). */
   currentVersion?: string;
+  /**
+   * Preflight user-level prefix: вернуть текст отказа или `null` (ок).
+   * По умолчанию — реальная проверка `npm prefix -g` внутри `$HOME`; при
+   * инъекции `install` (тесты/кастом) по умолчанию **не** выполняется.
+   */
+  preflight?: () => Promise<string | null>;
+  /** `$HOME` для preflight (тесты). */
+  home?: string;
+  /** Канал из конфига (`updates.channel`), если флаг `--channel` не задан. */
+  configChannel?: UpdateChannelChoice;
+  /** Эффективная секция `updates` (реестры каналов). */
+  updates?: Partial<UpdatesConfig>;
 }
 
-/** Опции CLI-команды `synth update` (ADR-092). */
+/** Опции CLI-команды `synth update` (ADR-092/ADR-133). */
 export interface UpdateCommandOptions {
   /** Каталог данных инстанса (резолвится CLI: `--data-dir`/`--home`/config). */
   dataDir: string;
-  /** Целевая версия (`--to`), без «v». `undefined` → последняя известная. */
+  /** Целевая версия (`--to`), без «v». `undefined` → последняя версия канала. */
   to?: string;
   /** Установить целевую версию (без него — только проверка). */
   apply?: boolean;
+  /** Только проверка, без установки (даже если передан `--apply`). */
+  check?: boolean;
+  /** Канал проверки: `auto` (по версии) | `stable` | `beta`. */
+  channel?: UpdateChannelChoice;
+  /** Реестр, перебивающий реестр канала. */
+  registry?: string;
   /** Предпросмотр: показать план, ничего не устанавливать. */
   dryRun?: boolean;
   /** Пропустить интерактивное подтверждение. */
@@ -66,14 +103,26 @@ export interface UpdateCommandOptions {
   error?: (msg: string) => void;
   /** Для тестов: замена интерактивного подтверждения (по умолчанию — `readline`). */
   confirm?: (question: string) => Promise<boolean>;
-  /** Для тестов: инъекция сети/установки (по умолчанию — реальные). */
+  /** Для тестов: инъекция сети/установки/preflight (по умолчанию — реальные). */
   deps?: UpdateCommandDeps;
 }
 
-/** Тип операции по сравнению целевой версии с текущей (ADR-092). */
-export function operationOf(current: string, target: string): UpdateOperation {
+/**
+ * Тип операции по сравнению версий (ADR-133): переход beta → stable — откат
+ * (даже если семвер стабильной версии выше), stable → beta — обновление.
+ * Каналы не переданы — по семвер-сравнению (совместимо с ADR-092).
+ */
+export function operationOf(
+  current: string,
+  target: string,
+  channels?: { current?: UpdateChannel; target?: UpdateChannel },
+): UpdateOperation {
   const cmp = compareVersions(target, current);
   if (cmp === 0) return 'none';
+  if (channels?.current && channels.target) {
+    if (channels.current === 'beta' && channels.target === 'stable') return 'rollback';
+    if (channels.current === 'stable' && channels.target === 'beta') return 'update';
+  }
   return cmp > 0 ? 'update' : 'rollback';
 }
 
@@ -83,10 +132,18 @@ function _normalizeTarget(raw: string): string | null {
   return isSemver(value) ? value : null;
 }
 
-/** Установка целевой версии через npm (`npm install -g @itphx/synth@<version>`). */
-function _defaultInstall(version: string): Promise<number> {
+/** Аргументы `npm install` (без shell): пакет, версия, опционально реестр. */
+function _installArgs(version: string, registry: string, includeRegistry: boolean): string[] {
+  const args = ['install', '-g', `${PACKAGE_NAME}@${version}`];
+  if (includeRegistry) args.push('--registry', registry);
+  return args;
+}
+
+/** Установка целевой версии через npm (`npm install -g … [--registry …]`). */
+function _defaultInstall(version: string, registry: string): Promise<number> {
+  const includeRegistry = registry !== DEFAULT_STABLE_REGISTRY;
   return new Promise<number>((resolveCode, reject) => {
-    const child = spawn('npm', ['install', '-g', `${PACKAGE_NAME}@${version}`], {
+    const child = spawn('npm', _installArgs(version, registry, includeRegistry), {
       stdio: 'inherit',
       env: { ...process.env },
     });
@@ -107,9 +164,14 @@ async function _defaultConfirm(question: string): Promise<boolean> {
   }
 }
 
+/** Разбор `--registry`: нормализация без хвостового `/`. */
+function _normalizeRegistryFlag(raw: string): string {
+  return raw.trim().replace(/\/+$/, '');
+}
+
 /**
- * Выполняет `synth update` (ADR-092): проверка, предпросмотр (`--dry-run`) или
- * установка/откат (`--apply [--to <version>]`).
+ * Выполняет `synth update` (ADR-092/ADR-133): проверка, предпросмотр
+ * (`--dry-run`) или установка/откат (`--apply [--to <version>]`).
  *
  * @returns код выхода процесса (0 — успех/предпросмотр/отмена, 1 — ошибка).
  */
@@ -118,31 +180,48 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
   const error = opts.error ?? ((msg: string) => console.error(msg));
   const deps = opts.deps ?? {};
   const current = deps.currentVersion ?? SYNTH_VERSION;
-  const apply = !!opts.apply;
+  const apply = !!opts.apply && !opts.check;
   const dryRun = !!opts.dryRun;
 
-  // 1. Целевая версия: `--to` (валидация формата) либо последняя известная (сеть ниже).
+  // 1. Канал и реестр: флаг > конфиг > установленная версия; `--registry`
+  //    перебивает реестр канала.
+  const channelChoice = opts.channel ?? deps.configChannel ?? 'auto';
+  const channel = resolveUpdateChannel(current, channelChoice);
+  const registry = opts.registry !== undefined
+    ? _normalizeRegistryFlag(opts.registry)
+    : resolveUpdatesRegistry(channel, deps.updates);
+  const includeRegistry = opts.registry !== undefined
+    || channel === 'beta'
+    || registry !== DEFAULT_STABLE_REGISTRY;
+
+  // 2. Целевая версия: `--to` (валидация формата) либо последняя версия канала.
   let target = '';
   if (opts.to !== undefined) {
     const normalized = _normalizeTarget(opts.to);
     if (!normalized) {
-      error(`Ошибка: --to «${opts.to}» — не semver (ожидается X.Y.Z; префикс v допустим).`);
+      error(
+        `Ошибка: --to «${opts.to}» — не semver (ожидается X.Y.Z; префикс v допустим). ` +
+        'dist-tag и имена каналов (например beta) не принимаются: устанавливается только точная версия.',
+      );
       return 1;
     }
     target = normalized;
   }
 
-  // 2. Сеть: список версий (для `--to`) либо последняя версия. Ошибка сети — без аудита.
+  // 3. Сеть: список версий канала (для `--to`) либо последняя версия. Ошибка сети — без аудита.
   try {
     if (target) {
-      const versions = await (deps.fetchVersions ?? fetchAvailableVersions)();
+      const versions = await (deps.fetchVersions ?? ((o) => fetchAvailableVersions(o.registry)))({
+        channel,
+        registry,
+      });
       if (!versions.includes(target)) {
-        const message = `версия ${target} не найдена в реестре npm`;
+        const message = `версия ${target} не найдена в реестре канала ${channel} (${registry})`;
         await recordMaintenanceAudit(opts.audit, {
           op: 'update.failed',
           status: 'failed',
           actor: 'cli',
-          details: { from: current, to: target },
+          details: { from: current, to: target, channel, registry, version: target },
           error: message,
         });
         const newest = versions.length > 0 ? versions[versions.length - 1] : '—';
@@ -150,22 +229,37 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
         return 1;
       }
     } else {
-      target = await (deps.fetchLatest ?? fetchLatestVersion)();
+      target = await (deps.fetchLatest ?? ((o) => fetchLatestVersion(o.channel, o.registry)))({
+        channel,
+        registry,
+      });
     }
   } catch (err) {
     error(`Ошибка проверки версий: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
 
-  const operation = operationOf(current, target);
-  const installCommand = `npm install -g ${PACKAGE_NAME}@${target}`;
+  const operation = operationOf(current, target, {
+    current: resolveUpdateChannel(current),
+    target: resolveUpdateChannel(target),
+  });
+  const installCommand = `npm ${_installArgs(target, registry, includeRegistry).join(' ')}`;
 
-  // 3. `--dry-run` — печать плана, установка не запускается, аудита нет.
+  // 4. `--dry-run` — печать плана, установка не запускается, аудита нет.
   if (dryRun) {
     if (opts.json) {
       log(
         JSON.stringify(
-          { currentVersion: current, targetVersion: target, operation, apply, dryRun: true, installCommand },
+          {
+            currentVersion: current,
+            targetVersion: target,
+            operation,
+            channel,
+            registry,
+            apply,
+            dryRun: true,
+            installCommand,
+          },
           null,
           2,
         ),
@@ -174,6 +268,7 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
       log(`[dry-run] План обновления пакета ${PACKAGE_NAME}`);
       log(`  сейчас: ${current}`);
       log(`  станет: ${target}`);
+      log(`  канал: ${channel} (${registry})`);
       log(`  тип операции: ${OPERATION_LABELS[operation]}`);
       log(`  команда: ${installCommand}`);
       log('(dry-run: установка не выполнялась)');
@@ -181,12 +276,27 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
     return 0;
   }
 
-  // 4. Без `--apply` — только проверка: что установлено, что доступно и что делать.
+  // 5. Без `--apply`/с `--check` — только проверка: что установлено, что доступно и что делать.
   if (!apply) {
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'update.checked',
+      status: 'ok',
+      actor: 'cli',
+      details: { from: current, to: target, channel, registry, version: target },
+    });
+
     if (opts.json) {
       log(
         JSON.stringify(
-          { currentVersion: current, targetVersion: target, operation, apply: false, installCommand },
+          {
+            currentVersion: current,
+            targetVersion: target,
+            operation,
+            channel,
+            registry,
+            apply: false,
+            installCommand,
+          },
           null,
           2,
         ),
@@ -194,28 +304,40 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
       return 0;
     }
     log(`Текущая версия: ${current}`);
+    log(`Канал: ${channel} (${registry})`);
     log(`Целевая версия: ${target}`);
     log(`Тип операции: ${OPERATION_LABELS[operation]}`);
     if (operation === 'none') {
       log('Обновление не требуется.');
     } else {
-      log(`Для установки выполните: synth update --apply --to ${target}`);
+      log(`Для установки выполните: synth update --apply --to ${target} --channel ${channel}`);
     }
     return 0;
   }
 
-  // 5. Целевая версия совпадает с текущей — устанавливать нечего.
+  // 6. Целевая версия совпадает с текущей — устанавливать нечего.
   if (operation === 'none') {
     log(`Версия ${target} уже установлена — установка не требуется.`);
     return 0;
   }
 
-  // 6. Подтверждение (при откате — явное «ОТКАТ на более старую версию»).
+  // 7. Preflight user-level prefix (только реальная установка; при инъекции
+  //    `install` в тестах проверка не выполняется, если не задана явно).
+  const preflight = deps.preflight ?? (deps.install ? undefined : () => checkUserLevelPrefix({ home: deps.home }));
+  if (preflight) {
+    const refusal = await preflight();
+    if (refusal) {
+      error(`Ошибка: ${refusal}`);
+      return 1;
+    }
+  }
+
+  // 8. Подтверждение (при откате — явное «ОТКАТ»).
   if (!opts.yes) {
     const confirm = opts.confirm ?? _defaultConfirm;
     const action =
       operation === 'rollback'
-        ? `ОТКАТ на более старую версию ${target}`
+        ? `ОТКАТ на версию ${target}${resolveUpdateChannel(target) === 'stable' && resolveUpdateChannel(current) === 'beta' ? ' (релиз)' : ' (более старую)'}`
         : `установка ${target}`;
     const ok = await confirm(`Выполнить ${action} (сейчас ${current})? [y/N] `);
     if (!ok) {
@@ -224,18 +346,18 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
     }
   }
 
-  // 7. Установка (по умолчанию — `npm install -g`).
-  log(`Установка ${PACKAGE_NAME}@${target}...`);
+  // 9. Установка (по умолчанию — `npm install -g … --registry …`).
+  log(`Установка ${PACKAGE_NAME}@${target} (канал ${channel}, реестр ${registry})...`);
   let code: number;
   try {
-    code = await (deps.install ?? _defaultInstall)(target);
+    code = await (deps.install ?? _defaultInstall)(target, registry);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await recordMaintenanceAudit(opts.audit, {
       op: 'update.failed',
       status: 'failed',
       actor: 'cli',
-      details: { from: current, to: target },
+      details: { from: current, to: target, channel, registry, version: target },
       error: message,
     });
     error(`Ошибка установки ${PACKAGE_NAME}@${target}: ${message}`);
@@ -248,27 +370,42 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
       op: 'update.failed',
       status: 'failed',
       actor: 'cli',
-      details: { from: current, to: target },
+      details: { from: current, to: target, channel, registry, version: target },
       error: message,
     });
     error(`Ошибка установки ${PACKAGE_NAME}@${target}: ${message}`);
     return 1;
   }
 
-  // 8. Аудит успеха: обновление или откат.
+  // 10. Аудит успеха: обновление или откат.
   await recordMaintenanceAudit(opts.audit, {
     op: operation === 'rollback' ? 'rollback.applied' : 'update.applied',
     status: 'ok',
     actor: 'cli',
-    details: { from: current, to: target },
+    details: { from: current, to: target, channel, registry, version: target },
   });
 
   if (opts.json) {
-    log(JSON.stringify({ currentVersion: current, targetVersion: target, operation, applied: true }, null, 2));
+    log(
+      JSON.stringify(
+        {
+          currentVersion: current,
+          targetVersion: target,
+          operation,
+          channel,
+          registry,
+          applied: true,
+        },
+        null,
+        2,
+      ),
+    );
   }
   log('');
   log(`${operation === 'rollback' ? 'Откат выполнен' : 'Обновление установлено'}: ${PACKAGE_NAME}@${target}.`);
-  log('Перезапустите инстанс — миграции схемы данных применятся при старте автоматически.');
+  log(`Канал: ${channel} (реестр ${registry}).`);
+  log('Перезапустите инстанс: synth service restart (или «Перезапустите инстанс» в UI).');
+  log('Миграции схемы данных применятся при старте автоматически.');
   log('После запуска проверьте состояние инстанса: synth doctor');
   return 0;
 }

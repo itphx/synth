@@ -24,6 +24,7 @@ import type {
   RuntimeSettings,
   SecurityRuntimeSettings,
   AttachmentsRuntimeSettings,
+  UpdatesRuntimeSettings,
 } from '../runtime-settings.js';
 
 /**
@@ -127,6 +128,15 @@ export interface SettingsRepository {
   getMetrics(): Promise<Partial<MetricsRuntimeSettings>>;
   setMetrics(config: Partial<MetricsRuntimeSettings>): Promise<void>;
   clearMetrics(): Promise<void>;
+
+  /**
+   * ADR-133: runtime-настройка автопроверки обновлений (`updates.check`).
+   * Применяется сразу (планировщик перечитывает значение на каждом тике) —
+   * `restartRequired: false` в API.
+   */
+  getUpdates(): Promise<Partial<UpdatesRuntimeSettings>>;
+  setUpdates(config: Partial<UpdatesRuntimeSettings>): Promise<void>;
+  clearUpdates(): Promise<void>;
 
   /**
    * ADR-090: runtime-настройки слоя плагинов (секция `plugins`).

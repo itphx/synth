@@ -12,6 +12,8 @@ import {
   SYNTH_INSTANCE_NAME,
   SYNTH_SCHEDULES_COMMAND,
   SYNTH_SCHEDULES_NAME,
+  SYNTH_SERVICE_COMMAND,
+  SYNTH_SERVICE_NAME,
   SYNTH_STORAGE_RECOVERY_NAME,
   buildBuiltinSkills,
   buildSkillCreatorMeta,
@@ -19,6 +21,7 @@ import {
   buildSynthInstanceMeta,
   buildSynthPipelinesMeta,
   buildSynthSchedulesMeta,
+  buildSynthServiceMeta,
 } from './builtin.js';
 
 describe('builtin skills (ADR-046 §9.5)', () => {
@@ -276,5 +279,62 @@ describe('builtin skill synth-instance (Workstream A1/A2)', () => {
 
   it('buildSynthInstanceMeta не переиспользует объект между вызовами', () => {
     expect(buildSynthInstanceMeta()).not.toBe(buildSynthInstanceMeta());
+  });
+});
+
+/**
+ * ADR-134: встроенный скилл `synth-service` — регистрация userspace-сервиса
+ * systemd (`/service`). Unit пишется только CLI, агент файлов не трогает.
+ */
+describe('builtin skill synth-service (ADR-134)', () => {
+  it('присутствует, trusted/system, команда service, category instance, trigger manual', () => {
+    const skill = buildBuiltinSkills({ dataDir: '/data' }).find((s) => s.name === SYNTH_SERVICE_NAME);
+    expect(skill).toBeDefined();
+    expect(skill!.trusted).toBe(true);
+    expect(skill!.mtimeMs).toBe(0);
+    expect(skill!.source.level).toBe('system');
+
+    const meta = skill!.meta;
+    expect(meta.name).toBe(SYNTH_SERVICE_NAME);
+    expect(meta.command).toBe(SYNTH_SERVICE_COMMAND);
+    expect(meta.category).toBe('instance');
+    expect(meta.trigger).toBe('manual');
+    expect(meta.scope).toBe('instance');
+    expect(meta.mode).toBe('any');
+    expect(meta.invocation).toBe('both');
+    expect(meta.userInvocable).toBe(true);
+    expect(meta.disableModelInvocation).toBe(false);
+    expect(meta.requiresCapabilities).toEqual([ToolCapability.SHELL, ToolCapability.QUESTION]);
+    expect(meta.relatedSkills).toEqual([SYNTH_INSTANCE_NAME]);
+    expect(meta.tags).toEqual(expect.arrayContaining(['synth-service', 'systemd', 'autostart']));
+  });
+
+  it('body содержит обязательные разделы и маркеры', () => {
+    const skill = buildBuiltinSkills().find((s) => s.name === SYNTH_SERVICE_NAME)!;
+    for (const section of [
+      '## When to use',
+      '## Ask the user first',
+      '## Steps',
+      '## Verify',
+      '## Safety',
+    ]) {
+      expect(skill.body, section).toContain(section);
+    }
+    for (const marker of [
+      'synth service install --print-unit',
+      'synth service status --json',
+      'synth connect --backend',
+      'question',
+      'loginctl enable-linger',
+      'sudo',
+      '--system',
+      '/health',
+    ]) {
+      expect(skill.body, marker).toContain(marker);
+    }
+  });
+
+  it('buildSynthServiceMeta не переиспользует объект между вызовами', () => {
+    expect(buildSynthServiceMeta()).not.toBe(buildSynthServiceMeta());
   });
 });

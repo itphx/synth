@@ -1165,42 +1165,65 @@ kubectl -n synth exec deploy/synth-backend -- sh -lc '
 
 ## Обновление и откат
 
-**Цель:** обновить пакет `@itphx/synth` до новой версии или осознанно откатиться на более старую;
-ожидаемый результат — инстанс стартует на целевой версии без ошибок совместимости схемы, `synth doctor`
-без `fail`.
+**Цель:** обновить пакет `@itphx/synth` до версии выбранного канала или осознанно откатиться на
+более старую; ожидаемый результат — инстанс стартует на целевой версии без ошибок совместимости
+схемы, `synth doctor` без `fail`.
 
-Команда работает с **глобально установленным** пакетом (`npm install -g @itphx/synth`); в dev-репозитории
-то же доступно как `node packages/core/dist/main.js update …`.
+Команда работает с **глобально установленным** пакетом (`npm install -g @itphx/synth`); в
+dev-репозитории то же доступно как `node packages/core/dist/main.js update …`. Каналы, реестры и
+кэш проверки — [CONFIGURATION.md](./CONFIGURATION.md) §«Обновления (ADR-133)».
+
+**Канал.** `auto` (дефолт) — по установленной версии: `-beta.` в версии ⇒ `beta`, иначе `stable`.
+`--channel stable|beta` переключает явно; флаг приоритетнее `updates.channel` в конфиге.
+Стабильный канал — npmjs (`latest`), бета — npm-реестр Gitea (`beta`); **бета-реестр читается без
+токена** (токен нужен только публикации). `--registry <url>` перебивает реестр канала (закрытый
+контур с read-токеном в `.npmrc`).
 
 1. **Перед обновлением — бэкап** (см. «Бэкап»): после обновления миграция может изменить данные
    необратимо.
-2. **Проверка.** `synth update` — печатает текущую и целевую (последнюю известную по `latest`) версию, тип
-   операции (обновление/откат/без изменений) и подсказку, что делать; `--json` — машиночитаемо.
-3. **Предпросмотр.** `synth update --dry-run [--to <version>]` — печатает план (`npm install -g
-   @itphx/synth@<version>`, «сейчас → станет», тип операции) и **ничего не устанавливает** (аудита тоже нет).
-4. **Обновление.** `synth update --apply` — установка последней версии; без `--yes` запрашивается
-   подтверждение `[y/N]`.
-5. **Откат (standalone, npm).** `synth update --to <prev> --apply` — установка конкретной версии. `--to`
-   валидируется (semver `X.Y.Z`, префикс `v` допустим) и обязан **существовать в реестре npm**, иначе —
-   ошибка с кодом выхода 1. Если целевая версия ниже текущей, операция помечается как **откат**, и в
+2. **Проверка.** `synth update --check [--channel stable|beta]` — печатает текущую и последнюю
+   версию канала, тип операции (обновление/откат/без изменений) и подсказку; кэш проверки
+   **игнорируется** (явная проверка работает всегда). `--json` — машиночитаемо. Без `--check`/`--apply`
+   команда тоже только проверяет.
+3. **Предпросмотр.** `synth update --dry-run [--channel …] [--to <version>]` — печатает план
+   (`npm install -g @itphx/synth@<version> --registry <реестр канала>`, «сейчас → станет», тип
+   операции) и **ничего не устанавливает** (аудита тоже нет).
+4. **Обновление.** `synth update --apply [--channel …]` — установка последней версии канала; без
+   `--yes` запрашивается подтверждение `[y/N]`.
+5. **Конкретная версия / откат (standalone, npm).** `synth update --to <version> --apply` —
+   установка точной версии. `--to` валидируется (semver `X.Y.Z`, префикс `v` допустим) и обязан
+   **существовать в реестре выбранного канала**, иначе — ошибка с кодом выхода 1 (dist-tag вроде
+   `beta` не принимается). Если целевая версия ниже текущей, операция помечается как **откат**, и в
    приглашении явно пишется «ОТКАТ на более старую версию». `--to` **без** `--apply` ничего не
    устанавливает — только сообщает команду для установки.
-6. **Правило понижения:** **понижение версии не мигрирует данные назад.** Откат данных = только
+6. **Смена канала beta → stable.** `synth update --channel stable --apply` — это **понижение**
+   (стабильная версия ниже текущей беты): команда помечает операцию как откат и требует
+   подтверждения. Обратный переход (stable → beta) — обычное обновление по каналу `beta`.
+7. **Правило понижения:** **понижение версии не мигрирует данные назад.** Откат данных = только
    `synth restore` из бэкапа, снятого до обновления; сама версия пакета откатывается отдельно
    (`synth update --to <prev> --apply`, для K8s — `helm rollback <release> <revision>`).
-7. **Порядок «понижение версии + восстановление данных»:** остановить сервис → вернуть версию пакета →
+8. **Порядок «понижение версии + восстановление данных»:** остановить сервис → вернуть версию пакета →
    `synth restore <archive> --yes` → `synth doctor`. Если схема архива старше пакета (`doctor` покажет
    `schema: pending`), примените `synth migrate --yes` (или просто запустите инстанс — авто-миграция на
    старте со страховочной копией).
-8. **K8s (managed):** обновление — публикуемым Helm-чартом (новый тег образа); откат —
-   `helm rollback <release> <revision>`; при необходимости восстановите данные из бэкапа
-   ([PUBLISHING.md](./PUBLISHING.md)).
-9. **После успеха** команда напоминает про **перезапуск инстанса** (миграции схемы данных применятся на
-   старте автоматически) и про `synth doctor`.
-10. **Аудит** ([ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)): успех пишется в
-    `{dataDir}/audit/maintenance.jsonl` как `update.applied`/`rollback.applied` (`details: {from, to}`);
-    провал/ошибка установки или несуществующая версия — `update.failed` с `error`.
-11. *Ожидаемо:* после обновления — старт без ошибок совместимости схемы, `synth doctor` без `fail`;
+9. **Цепочка «обновить → перезапустить».** Установка меняет пакет на диске, но работающий процесс
+   остаётся на старой версии, пока не перезапустится. Перезапуск — штатный graceful shutdown с кодом
+   75 ([ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md), ADR-134):
+   `POST /api/v2/maintenance/restart {confirm:true}` (ADMIN), кнопка «Перезапустить» в UI
+   (Настройки → «Обслуживание») или `synth service restart` (userspace-сервис systemd). Режим —
+   `SYNTH_RESTART_MODE`: без супервизора (`disabled`) авто-перезапуска нет — поднимите процесс
+   вручную. `POST /api/v2/updates/apply` с `{restart:true}` делает это сам, если рестарт поддержан.
+10. **Проверка после старта.** `synth doctor` — без `fail` (схема данных, целостность хранилища,
+    доступность backend'а); `synth --version` и `GET /health` (`version`/`startedAt`) подтверждают,
+    что поднялся новый процесс. UI ждёт смены `startedAt` в `/health` (до 90 с), затем перезагружается.
+11. **K8s (managed):** обновление — публикуемым Helm-чартом (новый тег образа); откат —
+    `helm rollback <release> <revision>`; при необходимости восстановите данные из бэкапа
+    ([PUBLISHING.md](./PUBLISHING.md)). Self-update в контейнере запрещён (`409 UPDATE_UNSUPPORTED`).
+12. **Аудит** ([ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)): проверка —
+    `update.checked`, успех — `update.applied`/`rollback.applied` (`details: {from, to, channel,
+    registry, version}`); провал/ошибка установки или несуществующая версия — `update.failed` с
+    `error`.
+13. *Ожидаемо:* после обновления — старт без ошибок совместимости схемы, `synth doctor` без `fail`;
     страховочная копия перед авто-миграцией — в `{dataDir}/backups/`.
 
 ## Перезапуск инстанса
@@ -1240,9 +1263,12 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
    - **Docker Compose:** `restart: unless-stopped` + `SYNTH_RESTART_MODE=process` (в compose-файле).
      Без restart policy (`docker run`) контейнер **не** поднимется — используйте `--restart` или
      оставьте `disabled`.
-   - **systemd:** `ExecStart=/usr/bin/synth serve --restart-mode process`, `Restart=on-failure`
-     (код 75 — «временно не могу», unit поднимается), `RestartSec=2`; проверка —
-     `systemctl status synth`, `journalctl -u synth -n 50`.
+   - **systemd:** штатно — `synth service install` (см. «Сервис инстанса (systemd --user)»,
+     [ADR-134](./arch_decisions/adr-134-instance-service-systemd-user.md)): unit уже несёт
+     `SYNTH_RESTART_MODE=process` и `RestartForceExitStatus=75`. Ручной вариант (фоллбек):
+     `ExecStart=/usr/bin/synth serve --restart-mode process`, `Restart=on-failure` (код 75 —
+     «временно не могу», unit поднимается), `RestartSec=2`; проверка — `synth service status`
+     (или `systemctl --user status synth`), `journalctl --user -u synth -n 50`.
    - **pm2:** `autorestart: true` + `SYNTH_RESTART_MODE=process`; проверка — `pm2 status`, `pm2 logs`.
    - **dev:** `./scripts/dev.sh` ставит `SYNTH_RESTART_MODE=supervisor` и сам перезапускает процесс
      (в `tmp/backend.log` — строка `[supervisor] … restart requested (exit 75)`).
@@ -1274,6 +1300,99 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
    - Изменения TLS/прокси «не применились» — проверьте `restartRequired` в `GET /settings/proxy`/
      `/settings/tls` и что рестарт действительно произошёл (смена `startedAt`), а не был перехвачен
      другим процессом.
+
+## Сервис инстанса (systemd --user)
+
+**Цель:** инстанс работает постоянно и поднимается после перезагрузки без ручного супервизора; перезапуск
+из UI/CLI (exit 75, ADR-092) работает «из коробки». Штатный путь — `synth service` (ADR-134): unit пишется
+из фиксированного шаблона в `~/.config/systemd/user/synth.service`, env-файл — в
+`~/.config/synth/service.env`. Только `--user`-контур (root/`--system` не поддерживается, ADR-079).
+
+### Установка
+
+```bash
+# standalone: каталог данных в home-дереве или отдельно
+synth service install --port 4300 --home ~/synth-instance
+synth service install --port 4301 --data-dir /srv/synth/data
+
+# гибрид: сначала ОДИН раз вручную — вход (device flow), потом установка
+synth connect --backend https://synth.example
+synth service install --connect https://synth.example --home ~/synth-instance
+```
+
+- `--print-unit` — только напечатать unit (для ревью), `--dry-run` — план и unit; оба **ничего не пишут**
+  и не вызывают `systemctl`.
+- `--no-autostart` (без `systemctl enable`), `--no-start` (не запускать), `--no-linger` (без
+  `loginctl enable-linger`).
+- `--host` по умолчанию `127.0.0.1`; `0.0.0.0`/`::` — предупреждение «доступен из сети, проверьте
+  аутентификацию». `--port` по умолчанию — `core.port` из конфига (4300).
+- `--oidc-issuer`/`--oidc-client-id` в unit **не** пишутся (нужны UI-входу): положите их в
+  `config.yaml` рядом с home (`remote.auth.*`).
+- Чужой unit (без маркера `Managed by synth service install`) не перезаписывается — нужен `--force`.
+- После установки команда ждёт `GET http://<host>:<port>/health` до 30 с; итог печатает пути unit/env,
+  URL, **путь** к API-ключу (`{dataDir}/secrets/api-key`, без значения), `journalctl --user -u synth -f`
+  и режим рестарта.
+
+### Статус и управление
+
+```bash
+synth service status            # сводка: unit, активность, PID, autostart, linger, health
+synth service status --json     # {unitPath, installed, managed, enabled, active, pid, port, host, home, connect, restartMode, linger, health}
+synth service start|stop|restart|enable|disable
+synth service logs -n 100       # журнал; -f — следить
+```
+
+`status --json` на отсутствующем unit отдаёт `{installed:false}` и код 0. Секреты команда не читает и не
+печатает. `start/stop/restart/enable/disable` — тонкие обёртки `systemctl --user <verb> synth.service`,
+код выхода `systemctl` пробрасывается; без установленного unit — понятная ошибка.
+
+### Linger (автозапуск после перезагрузки)
+
+`loginctl enable-linger $USER` включается установкой (best-effort): без linger сервис живёт до выхода из
+сеанса, а после перезагрузки не стартует. Неудача (нет прав/нет logind) — **предупреждение**, установка
+успешна; включите вручную:
+
+```bash
+loginctl enable-linger "$USER"
+loginctl show-user "$USER" -p Linger     # Linger=yes
+```
+
+### Гибрид
+
+Unit не содержит токенов: авторизация — сохранённые credentials после ручного `synth connect --backend
+<url>` (device flow, ADR-043/ADR-105). Порядок: `synth connect` → `synth service install --connect <url>`.
+Если сервер недоступен, инстанс стартует без гибрида (watcher переподключится), локальные сессии работают.
+
+### Перезапуск через exit 75
+
+Unit фиксирует `Environment=SYNTH_RESTART_MODE=process`, `Restart=on-failure` и
+`RestartForceExitStatus=75`: `POST /api/v2/maintenance/restart {confirm:true}` завершает процесс кодом 75,
+systemd считает это штатным «временно не могу» и поднимает unit заново (`RestartSec=3`). Проверка —
+новый `startedAt` в `/health` и `synth service status --json` (`pid` изменился).
+
+### Удаление
+
+```bash
+synth service uninstall --dry-run   # план: stop, disable, rm unit, daemon-reload
+synth service uninstall             # удалить unit (env-файл и данные сохраняются)
+```
+
+`uninstall` останавливает и выключает сервис, удаляет unit (чужой — только с `--force`) и делает
+`daemon-reload`; **env-файл не удаляется** (в нём могут быть настройки) — путь печатается. Данные инстанса
+не трогаются: удаление данных — `synth uninstall` (ADR-092).
+
+### Диагностика
+
+- `systemd не найден в PATH` / `systemctl --user недоступен` — не Linux/нет userspace-systemd или не
+  задан `XDG_RUNTIME_DIR` (`export XDG_RUNTIME_DIR=/run/user/$(id -u)`); в контейнерах используйте
+  Docker/Helm (ADR-077).
+- Установка прошла, но `/health` не отвечает — команда печатает `systemctl --user status synth` и
+  последние 50 строк `journalctl` (частые причины: занятый порт, неверный `--home`, сломанный
+  `config.yaml`).
+- `synth service status` показывает `active: inactive` — `synth service logs -n 100`, затем
+  `synth service restart`.
+- unit помечен «без маркера synth» — файл создан вручную; команда не будет его перезаписывать/удалять
+  без `--force`.
 
 ## PID 1 и зомби (контейнеры)
 

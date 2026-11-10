@@ -208,6 +208,8 @@ export interface StandaloneConfig {
   attachmentsConfig?: SynthConfig['attachments'];
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
   metricsConfig?: SynthConfig['metrics'];
+  /** ADR-133: конфигурация обновлений (`updates.*`) из config.yaml/env. */
+  updatesConfig?: SynthConfig['updates'];
   /**
    * ADR-106 Ф1: секция `authority` (мастер-выключатель слоя + режим
    * наблюдения). Не задана/выключена — Authority-слой не считает решения.
@@ -708,6 +710,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopConnectionWatcher: () => connectionWatcher?.stop(),
     getHybridStatus: hybrid.getHybridState,
     eventBus: deps.eventBus,
+    // ADR-133: порт runtime-настроек — планировщик обновлений перечитывает
+    // тумблер `updates.check` на каждом тике (без рестарта).
+    settingsStore: deps.settingsStore,
     // ADR-089: ядро событий — роутер, funnel создания сессий и хранилища
     // (понадобятся на этапах 5–6 при подключении роутов приёма событий).
     eventRouter: deps.eventRouter,

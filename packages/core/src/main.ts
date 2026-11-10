@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveStorageBackend, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, redactConfigSecrets, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { join, resolve } from 'node:path';
-import { checkForUpdatesBackground } from './update-checker.js';
+import { startUpdateScheduler } from './update-scheduler.js';
 import { t as sm } from './engine/system-messages.js';
 import { egressFetch, initTlsTrust } from './security/tls.js';
 import { configureRestart, resolveRestartMode, RESTART_EXIT_CODE } from './server/restart.js';
@@ -13,6 +13,7 @@ import { createPluginCliContext, createPluginCommand } from './cli/plugin-comman
 import { createMemoryCommand } from './cli/memory-commands.js';
 import { createMemoryConnectionResolver } from './cli/memory-connection.js';
 import { createMcpCommand } from './cli/mcp-commands.js';
+import { createServiceCommand } from './cli/service-commands.js';
 
 const program = new Command();
 
@@ -399,9 +400,17 @@ program
         })();
       }
 
-      checkForUpdatesBackground(dataDir, (info) => {
-        console.log(`\n  Доступна новая версия ${info.latestVersion} (текущая: ${info.currentVersion})`);
-        console.log(`  Выполните synth update --apply для обновления.`);
+      // ADR-133: фоновая проверка обновлений — планировщик с задержкой 30 с.
+      // `check` выключен по умолчанию; тумблер runtime перечитывается на каждом
+      // тике (включение из UI без рестарта), выключенный тик запросов не делает.
+      void startUpdateScheduler({
+        dataDir,
+        config: synth.updates,
+        settingsStore: appHandle.settingsStore,
+        onUpdate: (info) => {
+          console.log(`\n  Доступна новая версия ${info.latestVersion} (канал ${info.channel}; текущая: ${info.currentVersion})`);
+          console.log(`  Обновление: synth update --check --channel ${info.channel}`);
+        },
       });
     });
   });
@@ -740,6 +749,10 @@ program.addCommand(
 // (`/api/v2/mcp/*`). Транспорт — обычный `fetch` (localhost).
 program.addCommand(createMcpCommand());
 
+// ADR-134: `synth service …` — userspace-сервис инстанса (systemd --user).
+// Тот же модуль, что в `packages/synth/src/cli.ts`.
+program.addCommand(createServiceCommand());
+
 program
   .command('chat')
   .description('Одноразовый чат-запрос')
@@ -766,9 +779,16 @@ program
     await initTls(synth, { dataDir });
     await ensureDataDir(dataDir);
 
-    checkForUpdatesBackground(dataDir, (info) => {
-      console.log(`\n  Доступна новая версия ${info.latestVersion} (текущая: ${info.currentVersion})`);
-      console.log(`  Выполните synth update --apply для обновления.\n`);
+    // ADR-133: планировщик проверки обновлений (в chat — без runtime-порта;
+    // запускается только при `updates.check`). Таймеры `unref` — процесс
+    // завершится сразу после ответа.
+    void startUpdateScheduler({
+      dataDir,
+      config: synth.updates,
+      onUpdate: (info) => {
+        console.log(`\n  Доступна новая версия ${info.latestVersion} (канал ${info.channel}; текущая: ${info.currentVersion})`);
+        console.log(`  Обновление: synth update --check --channel ${info.channel}\n`);
+      },
     });
 
     const { runSingleChat } = await import('./server/chat.js');
@@ -941,6 +961,9 @@ program
   .command('update')
   .description('Проверить обновления, установить или откатить пакет (ADR-092)')
   .option('--apply', 'установить целевую версию (без него — только проверка)')
+  .option('--check', 'только проверка, без установки (ADR-133)')
+  .option('--channel <channel>', 'канал: auto | stable | beta')
+  .option('--registry <url>', 'реестр, перебивающий реестр канала')
   .option('--to <version>', 'целевая версия X.Y.Z — обновление или откат')
   .option('--dry-run', 'показать план без установки')
   .option('--json', 'вывод в JSON')
@@ -960,10 +983,14 @@ program
       dataDir,
       to: options.to as string | undefined,
       apply: !!options.apply,
+      check: !!options.check,
+      channel: options.channel as 'auto' | 'stable' | 'beta' | undefined,
+      registry: options.registry as string | undefined,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
       json: !!options.json,
       audit: storage.maintenanceAudit,
+      deps: { configChannel: synth.updates.channel, updates: synth.updates },
     });
     if (code !== 0) process.exit(code);
   });

@@ -330,6 +330,9 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('PUT', '/api/v2/mcp/servers/:name', G_ADMIN_OR_SCOPE, [403], { body: {} }),
   r('DELETE', '/api/v2/mcp/servers/:name', G_ADMIN_OR_SCOPE, [403]),
   r('POST', '/api/v2/mcp/servers/:name/test', G_ADMIN_OR_SCOPE, [403], { body: {} }),
+  // Переподключение MCP-сервера без рестарта (ADR-131) — та же мутирующая
+  // политика, что у правки записи (ADMIN или scope `addons:install`).
+  r('POST', '/api/v2/mcp/servers/:name/reconnect', G_ADMIN_OR_SCOPE, [403], { body: {} }),
   // Legacy-путь MCP-скоупа сессии — та же политика, что у `/sessions/:id/mcp`
   // (владелец|ADMIN). Дыра «любой аутентифицированный» закрыта guard'ом в
   // `core src/server/routes/mcp-registry.ts` по результатам этой переписи.

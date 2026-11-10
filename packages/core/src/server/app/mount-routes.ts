@@ -33,6 +33,7 @@ import {
   createContextWindowSettingsRoutes,
   createAgentsLimitsSettingsRoutes,
   createRequestLimitsSettingsRoutes,
+  createUpdatesSettingsRoutes,
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
   createSshSettingsRoutes,
@@ -470,8 +471,11 @@ export function mountStandaloneRoutes(
     },
   ));
 
-  // Updates
-  app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir));
+  // Updates (ADR-133): проверка по каналам и SSE-установка с admission-гейтом.
+  app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir, {
+    updates: config.updatesConfig,
+    audit: maintenanceAudit,
+  }));
 
   // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
@@ -700,6 +704,14 @@ export function mountStandaloneRoutes(
       getUptimeSec: ctx.metrics.getUptimeSec,
       version: SYNTH_VERSION,
     },
+  ));
+
+  // ADR-133: админ-раздел «Обновления» — runtime-тумблер автопроверки
+  // (`updates.check`). Применяется сразу (планировщик перечитывает значение).
+  // Core: чтение/мутации — `requireAuth` (single-user).
+  app.route('/api/v2/settings', createUpdatesSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    { settingsStore, config: config.updatesConfig, env: process.env },
   ));
 
   // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального

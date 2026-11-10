@@ -151,7 +151,13 @@ describe('runUpdateCommand (ADR-092)', () => {
     expect(list.map((e) => e.op)).toEqual(['update.applied']);
     expect(list[0]!.status).toBe('ok');
     expect(list[0]!.actor).toBe('cli');
-    expect(list[0]!.details).toEqual({ from: '0.10.0', to: '1.0.0' });
+    expect(list[0]!.details).toMatchObject({
+      from: '0.10.0',
+      to: '1.0.0',
+      channel: 'stable',
+      registry: 'https://registry.npmjs.org',
+      version: '1.0.0',
+    });
   });
 
   it('--apply --to старше: rollback.applied, в приглашении «ОТКАТ»', async () => {
@@ -182,7 +188,13 @@ describe('runUpdateCommand (ADR-092)', () => {
 
     const list = await audit.list();
     expect(list.map((e) => e.op)).toEqual(['rollback.applied']);
-    expect(list[0]!.details).toEqual({ from: '0.10.0', to: '0.9.0' });
+    expect(list[0]!.details).toMatchObject({
+      from: '0.10.0',
+      to: '0.9.0',
+      channel: 'stable',
+      registry: 'https://registry.npmjs.org',
+      version: '0.9.0',
+    });
   });
 
   it('--apply --yes: приглашения нет', async () => {
@@ -378,5 +390,134 @@ describe('runUpdateCommand (ADR-092)', () => {
     expect(code).toBe(0);
     expect(calls).toEqual(['1.0.0']);
     expect(logs.join('\n')).toContain('synth doctor');
+  });
+});
+
+describe('runUpdateCommand: каналы и preflight (ADR-133)', () => {
+  it('--to beta (dist-tag) → ошибка, сеть не трогается', async () => {
+    const { errors, error } = capture();
+    let called = false;
+    const code = await runUpdateCommand({
+      dataDir: '/tmp/does-not-matter',
+      to: 'beta',
+      error,
+      deps: {
+        currentVersion: '0.13.7',
+        fetchVersions: async () => {
+          called = true;
+          return [];
+        },
+      },
+    });
+
+    expect(code).toBe(1);
+    expect(called).toBe(false);
+    expect(errors.join('\n')).toContain('не semver');
+    expect(errors.join('\n')).toContain('dist-tag');
+  });
+
+  it('--to вне реестра канала → exit 1 с указанием канала', async () => {
+    const { errors, error } = capture();
+    const code = await runUpdateCommand({
+      dataDir: '/tmp/does-not-matter',
+      to: '0.12.0',
+      channel: 'beta',
+      error,
+      deps: { currentVersion: '0.13.7-beta.1', fetchVersions: async () => ['0.13.7-beta.1'] },
+    });
+
+    expect(code).toBe(1);
+    expect(errors.join('\n')).toContain('0.12.0');
+    expect(errors.join('\n')).toContain('канала beta');
+  });
+
+  it('preflight prefix вне HOME → exit 1 с инструкцией, установки нет', async () => {
+    const { errors, error } = capture();
+    const audit = new MemoryMaintenanceAuditRepository();
+    const { calls, install } = fakeInstall(0);
+
+    const code = await runUpdateCommand({
+      dataDir: '/tmp/does-not-matter',
+      to: '1.0.0',
+      apply: true,
+      yes: true,
+      error,
+      audit,
+      deps: {
+        currentVersion: '0.10.0',
+        fetchVersions: async () => ['0.10.0', '1.0.0'],
+        install,
+        preflight: async () =>
+          'npm prefix -g (/usr) вне $HOME (/home/user)\n  npm config set prefix ~/.npm-global',
+      },
+    });
+
+    expect(code).toBe(1);
+    expect(calls).toEqual([]);
+    expect(errors.join('\n')).toContain('npm config set prefix');
+    expect(await audit.list()).toEqual([]);
+  });
+
+  it('--check --json: только проверка, установка не вызывается, аудит update.checked', async () => {
+    const { logs, log, error } = capture();
+    const audit = new MemoryMaintenanceAuditRepository();
+    const { calls, install } = fakeInstall(0);
+
+    const code = await runUpdateCommand({
+      dataDir: '/tmp/does-not-matter',
+      check: true,
+      apply: true,
+      json: true,
+      log,
+      error,
+      audit,
+      deps: { currentVersion: '0.10.0', fetchLatest: async () => '1.0.0', install },
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([]);
+    const parsed = JSON.parse(logs[0]!) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      currentVersion: '0.10.0',
+      targetVersion: '1.0.0',
+      channel: 'stable',
+      registry: 'https://registry.npmjs.org',
+      apply: false,
+    });
+    const list = await audit.list();
+    expect(list.map((e) => e.op)).toEqual(['update.checked']);
+  });
+
+  it('beta → stable: откат «на релиз»', async () => {
+    const { log, error } = capture();
+    const audit = new MemoryMaintenanceAuditRepository();
+    const { calls, install } = fakeInstall(0);
+    const questions: string[] = [];
+
+    const code = await runUpdateCommand({
+      dataDir: '/tmp/does-not-matter',
+      to: '0.14.0',
+      apply: true,
+      log,
+      error,
+      audit,
+      confirm: async (question) => {
+        questions.push(question);
+        return true;
+      },
+      deps: {
+        currentVersion: '0.14.0-beta.1',
+        fetchVersions: async () => ['0.14.0-beta.1', '0.14.0'],
+        install,
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual(['0.14.0']);
+    expect(questions[0]).toContain('ОТКАТ');
+    expect(questions[0]).toContain('релиз');
+    const list = await audit.list();
+    expect(list.map((e) => e.op)).toEqual(['rollback.applied']);
+    expect(list[0]!.details).toMatchObject({ channel: 'beta', version: '0.14.0' });
   });
 });

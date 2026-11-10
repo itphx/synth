@@ -44,6 +44,7 @@ import type {
   RuntimeSettings,
   SecurityRuntimeSettings,
   AttachmentsRuntimeSettings,
+  UpdatesRuntimeSettings,
 } from '../runtime-settings.js';
 import type { AppearanceDefaults, DefaultsRepository, DictionaryRepository, ProtectedPathsRepository, SecretPatternRepository, SettingsRepository } from '../ports/index.js';
 import type { SecretPattern, SecretPatternsRaw } from '../../engine/gateway/secret-pattern-store.js';
@@ -324,6 +325,18 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearMetrics(): Promise<void> {
     this._clear('metrics');
+  }
+
+  async getUpdates(): Promise<Partial<UpdatesRuntimeSettings>> {
+    return structuredClone(this._settings.updates ?? {});
+  }
+
+  async setUpdates(config: Partial<UpdatesRuntimeSettings>): Promise<void> {
+    this._patch({ updates: config });
+  }
+
+  async clearUpdates(): Promise<void> {
+    this._clear('updates');
   }
 
   async getPlugins(): Promise<Partial<PluginsRuntimeSettings>> {

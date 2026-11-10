@@ -5,6 +5,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { SettingsPanel, SettingsSection } from '../ui/settings'
+import { UpdatesCard } from './UpdatesCard'
 
 interface Stats {
   totalSessions: number
@@ -72,6 +73,9 @@ export const DashboardPanel = () => {
           </div>
         )}
       </SettingsSection>
+
+      {/* ADR-133: канал обновлений, автопроверка и установка новой версии. */}
+      <UpdatesCard />
     </SettingsPanel>
   )
 }

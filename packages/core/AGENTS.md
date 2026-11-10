@@ -765,13 +765,26 @@
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
   `{dataDir}/maintenance/`), `backup.ts`/`restore.ts` (архив/снятие), `doctor.ts` (`synth doctor`),
-  `update.ts` (`synth update` — проверка/обновление/**откат** пакета `--to <version>`, аудит
-  `update.applied`/`rollback.applied`/`update.failed`), `startup.ts` (`applyPendingRestore` —
+  `update.ts` (`synth update` — проверка/обновление/**откат** по каналам ADR-133: `--check`,
+  `--channel auto|stable|beta`, `--registry <url>`, `--to <точная версия из реестра канала>`; аудит
+  `update.checked`/`update.applied`/`rollback.applied`/`update.failed`), `self-update.ts`
+  (admission-гейт self-update и user-level npm prefix `npm prefix -g` внутри `$HOME`),
+  `startup.ts` (`applyPendingRestore` —
   офлайн-восстановление при старте, `applyStartupMigrations` — авто-миграции со страховочной копией),
   `audit.ts` (`recordMaintenanceAudit` — best-effort запись аудит-событий обслуживания
   `backup`/`restore`/`migrate`/`update`/`rollback`/`uninstall`, ADR-092; порт
   `MaintenanceAuditRepository`). HTTP-фабрика — `server/routes/maintenance.ts`
   (`createMaintenanceRoutes`).
+- **Обновления (ADR-133).** `update-checker.ts` — каналы (`auto` по `-beta.`, `stable`/`beta`),
+  реестры (`stableRegistry` npmjs / `betaRegistry` Gitea — чтение без токена), prerelease-aware
+  `compareVersions`, кэш по каналам `{dataDir}/update-check.json` (успех `intervalHours`, ошибка 1 ч),
+  `force` для явной проверки; `update-scheduler.ts` — фоновая проверка (`check` off по умолчанию;
+  первый тик 30 с, затем интервал; тумблер runtime перечитывается на каждом тике, таймеры живут,
+  пока передан порт настроек); `server/routes/updates.ts` — `/api/v2/updates/check|apply`
+  (`readGuard`/`writeGuard`, по умолчанию `requireAuth`; managed — ADMIN), SSE-установка и
+  admission-гейт `maintenance/self-update.ts`; `server/routes/settings-updates.ts` —
+  `/api/v2/settings/updates` (runtime-тумблер `check`, `source`/`envLocked`, приоритет env > runtime >
+  config > default). CLI `synth service` — `cli/service-commands.ts` (см. ниже, ADR-134).
 - `analytics/*` — ADR-102: аналитика и отчётность инстанса. `recorder.ts` — `AnalyticsRecorder`
   (best-effort инкремент бакетов `usage`/`activity`/`decision` через порт `AnalyticsRollupRepository`,
   ошибки порта не пробрасываются), `hooks.ts` — `attachAnalyticsActivityHooks` (жизненный цикл
@@ -2085,6 +2098,15 @@
   локального инстанса (`list`/`add`/`test`/`remove`/`reconnect`), без дублирования логики
   HTTP-контура; ключ читается внутри процесса (env/config/`{dataDir}/secrets/api-key`) и
   **не печатается**. Подключён в `main.ts` и `packages/synth/src/cli.ts`.
+- `cli/service-commands.ts` — **CLI `synth service`** (ADR-134): userspace-сервис
+  `systemd --user` (`install|status|start|stop|restart|enable|disable|logs|uninstall`,
+  `--print-unit`/`--dry-run`/`--json`). Unit — единый шаблон (`renderServiceUnit`:
+  `SYNTH_RESTART_MODE=process`, `Restart=on-failure`, `RestartForceExitStatus=75`),
+  маркер `Managed by synth service install` (чужой unit — только `--force`),
+  env-файл `0600` без секретов, `loginctl enable-linger` best-effort, `logs` —
+  `journalctl --user -u synth`. Внешние команды, `/health` и окружение инъектируются
+  (`ServiceCommandDeps`) — тесты не трогают реальный systemd. Подключён в `main.ts` и
+  `packages/synth/src/cli.ts`; встроенный скилл `synth-service` — в `engine/skills/builtin.ts`.
 - `server/routes/plugins.ts` — **Ф5б-2: HTTP-контур плагинов**. `createPluginsRoutes(auth, deps, opts)`:
   `GET /`, `GET /audit` (**журнал действий плагинов**: `{entries}` — хвост, `limit` (дефолт 50,
   максимум 500) и фильтр `plugin`; маршрут объявлен **до** `/:name`; guard — `readGuard`, чтение

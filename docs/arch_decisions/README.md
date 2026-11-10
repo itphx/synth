@@ -68,6 +68,8 @@
 | ADR-128 | Компактизация на границе шага (mid-turn) | ✅ Реализовано | [adr-128-step-boundary-compaction.md](./adr-128-step-boundary-compaction.md) |
 | ADR-129 | Список задач дочерней сессии саб-агента | ✅ Реализовано | [adr-129-child-session-todos.md](./adr-129-child-session-todos.md) |
 | ADR-130 | Рабочая панель плана, ToDo, журнала и инвариантов | ✅ Реализовано | [adr-130-plan-journal-work-panel.md](./adr-130-plan-journal-work-panel.md) |
+| ADR-133 | Каналы обновлений и проверка обновлений | ✅ Реализовано | [adr-133-update-channels.md](./adr-133-update-channels.md) |
+| ADR-134 | Сервис инстанса: synth service и systemd --user | ✅ Реализовано | [adr-134-instance-service-systemd-user.md](./adr-134-instance-service-systemd-user.md) |
 
 ## Частично
 
@@ -173,5 +175,5 @@
 
 ---
 
-Всего документов: 112 (Решения: 56, Частично: 24, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 114 (Решения: 58, Частично: 24, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 21 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

@@ -1718,6 +1718,37 @@ export type {
 // ADR-092: `synth update` — проверка/обновление/откат пакета (`--to <version>`), паритет dev-CLI и публичного CLI (PROP-053).
 export { runUpdateCommand, operationOf } from './maintenance/update.js';
 export type { UpdateCommandOptions, UpdateCommandDeps, UpdateOperation } from './maintenance/update.js';
+// ADR-133: каналы обновлений, admission-гейт self-update и фоновый планировщик.
+export {
+  checkForUpdates,
+  checkForUpdatesBackground,
+  fetchAvailableVersions,
+  fetchDistTags,
+  fetchLatestVersion,
+  isSemver,
+  parseVersion,
+  isNewer,
+  compareVersions,
+  resolveUpdateChannel,
+  resolveUpdatesRegistry,
+  packageMetadataUrl,
+  DEFAULT_STABLE_REGISTRY,
+  DEFAULT_BETA_REGISTRY,
+  UPDATE_PACKAGE_NAME,
+} from './update-checker.js';
+export type {
+  UpdateInfo,
+  UpdateCheckOptions,
+  UpdateChannel,
+  UpdateChannelChoice,
+} from './update-checker.js';
+export { startUpdateScheduler } from './update-scheduler.js';
+export type { UpdateSchedulerOptions, UpdateSchedulerHandle } from './update-scheduler.js';
+export { getSelfUpdateSupport, checkUserLevelPrefix, npmGlobalPrefix, isPathInside } from './maintenance/self-update.js';
+export type { SelfUpdateSupport, SelfUpdateSupportDeps } from './maintenance/self-update.js';
+// ADR-133: HTTP-контур обновлений (`/api/v2/updates`).
+export { createUpdateRoutes } from './server/routes/updates.js';
+export type { UpdateRoutesDeps, UpdateRoutesOptions, UpdateApplyBody } from './server/routes/updates.js';
 // ADR-092: авто-миграции при старте (обязательная страховочная копия, лок).
 export { applyStartupMigrations, applyPendingRestore } from './maintenance/startup.js';
 export type {
@@ -2358,6 +2389,24 @@ export type {
   MetricsSource,
   MetricsReadiness,
 } from './server/routes/metrics-settings.js';
+// ADR-133: runtime-тумблер автопроверки обновлений (`/api/v2/settings/updates`).
+export { createUpdatesSettingsRoutes } from './server/routes/settings-updates.js';
+export type {
+  UpdatesSettingsDeps,
+  UpdatesSettingsOptions,
+  UpdatesSettingsMessages,
+  UpdatesSettingsView,
+} from './server/routes/settings-updates.js';
+export {
+  UPDATES_CHECK_ENV,
+  parseUpdatesCheckEnv,
+  resolveUpdatesCheck,
+} from './storage/runtime-settings.js';
+export type {
+  UpdatesRuntimeSettings,
+  UpdatesCheckSource,
+  ResolvedUpdatesCheck,
+} from './storage/runtime-settings.js';
 // ADR-094: доменные коллекторы — проводка в `createStandaloneDeps`/`app.ts`
 // (шина сессий, сессии/очередь, хранилище, decision-слой, гибрид, readiness).
 export {

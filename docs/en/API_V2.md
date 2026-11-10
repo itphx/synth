@@ -1574,12 +1574,93 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 |---|---|---|---|
 | POST | `/api/v2/llm/chat/completions` | auth + rate limit | LLM Proxy (see §4) |
 
-### 5.24 Updates — `/api/v2/updates` (core)
+### 5.24 Updates — `/api/v2/updates` and `/api/v2/settings/updates` (core)
 
-| Method | Path | RBAC | Purpose |
+ADR-133: update channels (`auto` — from the installed version, `stable`, `beta`), a version check with a
+per-channel cache, and package installation. Registries and env — [CONFIGURATION.md](./CONFIGURATION.md)
+§"Updates (ADR-133)".
+
+| Method | Path | RBAC (backend / core) | Purpose |
 |---|---|---|---|
-| GET | `/api/v2/updates/check` | auth | Check for a new version |
-| POST | `/api/v2/updates/apply` | auth | SSE stream of `npm i -g @itphx/synth@latest` |
+| GET | `/api/v2/updates/check?channel=&force=1` | ADMIN / auth | Check the channel version |
+| POST | `/api/v2/updates/apply` | ADMIN / auth | SSE stream of `npm install -g @itphx/synth@<version> --registry <registry>` |
+| GET | `/api/v2/settings/updates` | ADMIN / auth | Effective auto-check and channel settings |
+| PUT | `/api/v2/settings/updates` | ADMIN / auth | `{check: boolean}` — runtime toggle (applies immediately) |
+| DELETE | `/api/v2/settings/updates` | ADMIN / auth | Reset the runtime value to env/config/default |
+
+**`GET /api/v2/updates/check`.** `channel` — `auto|stable|beta` (anything else → `400 VALIDATION_ERROR`);
+`force=1` (or `true`) ignores the cache. Response — `UpdateInfo`:
+
+```json
+{
+  "currentVersion": "0.13.7",
+  "latestVersion": "0.14.0-beta.1",
+  "channel": "beta",
+  "prerelease": true,
+  "registry": "https://git.itphx.ru/api/packages/itphx/npm",
+  "hasUpdate": true,
+  "checkedAt": "2026-01-01T00:00:00.000Z",
+  "error": "…"
+}
+```
+
+`error` is present only for a cached failed check (error cache — 1 h); an explicit check (`force=1`) does
+not cache a network error but answers `502 UPDATE_CHECK_FAILED`. Without `force` a fresh cache entry
+(success — `updates.intervalHours`, 24 h by default) is returned as is.
+
+**`POST /api/v2/updates/apply`.** Body `{version?: string, channel?: 'stable'|'beta', restart?: boolean}`:
+
+- `version` — an **exact** `X.Y.Z` version (the `v` prefix is allowed; the `beta` dist-tag is rejected →
+  `400 VALIDATION_ERROR`) and must exist in the **selected channel** registry (otherwise `400`);
+- `channel` — install channel (default — the installed version's channel); an invalid value → `400`;
+- `restart` — request a graceful restart after a successful install (exit 75, ADR-092), only if the
+  restart mode is supported.
+
+Before the stream the route checks the self-update admission gate (`409 UPDATE_UNSUPPORTED` with
+`reason` for Docker/Helm/managed or a system npm prefix) and the target version (`502
+UPDATE_CHECK_FAILED` on a network error). A successful response is `200` with `text/event-stream`;
+frames `data: {...}`:
+
+| `type` | Content |
+|---|---|
+| `start` | `{message, version, channel, registry}` — installation started |
+| `progress` / `stderr` | `{data}` — npm output (trimmed lines) |
+| `done` | `{version, channel, registry, restartScheduled, message}` — installation finished |
+| `error` | `{message}` — npm/installation failed (audit `update.failed`) |
+
+`restartScheduled` — a restart was actually requested (`restart:true` **and**
+`getRestartStatus().supported`); the restart request goes out after the `done` frame. Audit:
+`update.applied`/`update.failed` with `{from, to, channel, registry, version}`. With `restart:false`
+(or an unsupported restart) the client calls `POST /api/v2/maintenance/restart` itself; installing
+without a restart does not change the running process version.
+
+**`GET/PUT/DELETE /api/v2/settings/updates`.** Response (all methods):
+
+```json
+{
+  "check": false,
+  "source": "default",
+  "envLocked": false,
+  "channel": "auto",
+  "intervalHours": 24,
+  "stableRegistry": "https://registry.npmjs.org",
+  "betaRegistry": "https://git.itphx.ru/api/packages/itphx/npm/",
+  "restartRequired": false
+}
+```
+
+- `source` — `default` | `config` | `runtime` | `env` (priority env > runtime > config > default);
+- `envLocked: true` — `SYNTH_UPDATES_CHECK` is set in env: `PUT` → `409 CONFLICT`, only env can change it;
+- `PUT` accepts `{check: boolean}` (otherwise `400 VALIDATION_ERROR`) and writes runtime
+  (`settings.json`/PG); applies **immediately** — the scheduler re-reads the value on every tick
+  (`restartRequired: false`, including enabling the auto-check after start);
+- `DELETE` resets runtime to env/config/default;
+- `channel` and registries come only from `config.yaml`/env (runtime changes `check` only).
+
+**RBAC.** Core (standalone, `synth serve`) — a single API key (ADMIN role), guard `requireAuth`.
+Managed backend — `requirePermission('ADMIN')` for **read and install** (`/updates/check`,
+`/updates/apply`) and for every `/settings/updates` method: any authenticated USER cannot start a
+self-update or change the auto-check (the admission gate is a second line, not a replacement for RBAC).
 
 ### 5.25 Admin/debug — `/api/v2/admin/debug` (core+backend, ADMIN)
 

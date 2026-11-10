@@ -21,6 +21,7 @@ export type MaintenanceAuditOp =
   | 'migrate.applied'
   | 'migrate.failed'
   | 'update.applied'
+  | 'update.checked'
   | 'rollback.applied'
   | 'update.failed'
   | 'uninstall.purge'
