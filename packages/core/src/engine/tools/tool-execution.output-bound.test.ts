@@ -7,7 +7,10 @@
  * - результат, который тул **сам** усек по своему лимиту (`metadata.truncated`),
  *   общий бунд всё равно применяет — тул не может отключить предел вывода;
  * - результат, который тул **сам уложил в общий бюджет**
- *   (`metadata.outputBounded`), повторно не режется;
+ *   (`metadata.outputBounded`), в пределах лимита повторно не режется, но
+ *   сам маркер **не отменяет** общий предел: поддельный маркер с выводом
+ *   больше бюджета приводит к усечению (аудит 0.13.8 — исключение
+ *   `tool-output-cap-bypass-via-metadata`);
  * - маркер усечения самого тула (`metadata.truncationNote`) не теряется, когда
  *   общий бунд срезает хвост вывода;
  * - маркеры усечения и исключений (`metadata.excludedNote`) доезжают оба;
@@ -179,7 +182,11 @@ describe('executeToolDef — общий предел вывода', () => {
     expect(result.metadata?.excludedMatches).toBe(3);
   });
 
-  it('тул, сам уложивший вывод в общий бюджет (metadata.outputBounded), повторно не режется', async () => {
+  it('тул, пометивший вывод как уложенный в бюджет (metadata.outputBounded), в пределах лимита не режется повторно', async () => {
+    // Маркер тула больше **не отменяет** общий предел — решение принимает
+    // фактический размер вывода. Если вывод действительно в бюджете, он
+    // остаётся как есть, а собственный маркер/счётчики тула сохраняются
+    // (второго маркера усечения не появляется).
     const content = ['l1', 'l2', 'l3', 'l4', 'l5'].join('\n');
     const tool = toolOf(async () => ({
       content,
@@ -189,12 +196,59 @@ describe('executeToolDef — общий предел вывода', () => {
     const result = await executeToolDef(
       tool,
       {},
-      ctxWith({ toolOutputLimits: { maxLines: 2, maxBytes: 1000 } }),
+      ctxWith({ toolOutputLimits: { maxLines: 100, maxBytes: 1000 } }),
       'tool_test',
     );
 
     expect(result.content).toBe(content);
     expect(result.metadata?.truncated).toBe(true);
+    // Счётчики тула не переписаны: усечения не было.
+    expect(result.metadata?.outputBounded).toEqual({ shownLines: 5, totalLines: 5 });
+  });
+
+  it('тул подставил metadata.outputBounded с поддельными счётчиками — вывод всё равно усекается', async () => {
+    // Негативный кейс: маркер «уже в бюджете» не отменяет общий предел.
+    const content = ['l1', 'l2', 'l3', 'l4', 'l5'].join('\n');
+    const tool = toolOf(async () => ({
+      content,
+      metadata: { truncated: true, outputBounded: { shownLines: 1, totalLines: 1 } },
+    }));
+
+    const result = await executeToolDef(
+      tool,
+      {},
+      ctxWith({ toolOutputLimits: { maxLines: 2, maxBytes: 1000 } }),
+      'tool_test',
+    );
+
+    expect(result.metadata?.truncated).toBe(true);
+    // В metadata — фактические счётчики, а не поддельные от тула.
+    expect(result.metadata?.outputBounded).toEqual({ shownLines: 2, totalLines: 5 });
+    expect(result.content.startsWith('l1\nl2')).toBe(true);
+    expect(result.content).not.toContain('l3');
+    expect(result.content).toContain(sm('tool.output_bounded', { shown: '2', total: '5' }));
+  });
+
+  it('тул подставил metadata.outputBounded = true — общий предел всё равно применяется', async () => {
+    // Форма пробы аудита 0.13.8: 600 001 байт и маркер от тула.
+    const tool = toolOf(async () => ({
+      content: 'x'.repeat(600_001),
+      metadata: { outputBounded: true },
+    }));
+
+    const result = await executeToolDef(
+      tool,
+      {},
+      ctxWith({ toolOutputLimits: { maxLines: 2000, maxBytes: 51200 } }),
+      'tool_test',
+    );
+
+    expect(result.metadata?.truncated).toBe(true);
+    // Поддельный маркер перезаписан фактическим.
+    expect(result.metadata?.outputBounded).toEqual({ shownLines: 1, totalLines: 1 });
+    // В контекст ушло не больше байтового бюджета (без маркера усечения).
+    expect(Buffer.byteLength(result.content.split('\n\n')[0]!, 'utf8')).toBeLessThanOrEqual(51_200);
+    expect(result.content).toContain(sm('tool.output_bounded', { shown: '1', total: '1' }));
   });
 
   it('метаданные пагинации тула (truncated/totalLines/offset/limit) не теряются', async () => {

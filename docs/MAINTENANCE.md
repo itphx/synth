@@ -1177,7 +1177,9 @@ dev-репозитории то же доступно как `node packages/core
 `--channel stable|beta` переключает явно; флаг приоритетнее `updates.channel` в конфиге.
 Стабильный канал — npmjs (`latest`), бета — npm-реестр Gitea (`beta`); **бета-реестр читается без
 токена** (токен нужен только публикации). `--registry <url>` перебивает реестр канала (закрытый
-контур с read-токеном в `.npmrc`).
+контур с read-токеном в `.npmrc`). Установка идёт `npm install -g @itphx/synth@<version>
+--@itphx:registry=<реестр>` — **scoped-ключ** npm, а не `--registry`: иначе из зеркала тянутся и
+публичные зависимости (`hono`, `commander`…) и установка падает с 404.
 
 1. **Перед обновлением — бэкап** (см. «Бэкап»): после обновления миграция может изменить данные
    необратимо.
@@ -1186,7 +1188,7 @@ dev-репозитории то же доступно как `node packages/core
    **игнорируется** (явная проверка работает всегда). `--json` — машиночитаемо. Без `--check`/`--apply`
    команда тоже только проверяет.
 3. **Предпросмотр.** `synth update --dry-run [--channel …] [--to <version>]` — печатает план
-   (`npm install -g @itphx/synth@<version> --registry <реестр канала>`, «сейчас → станет», тип
+   (`npm install -g @itphx/synth@<version> --@itphx:registry=<реестр канала>`, «сейчас → станет», тип
    операции) и **ничего не устанавливает** (аудита тоже нет).
 4. **Обновление.** `synth update --apply [--channel …]` — установка последней версии канала; без
    `--yes` запрашивается подтверждение `[y/N]`.
@@ -1267,7 +1269,7 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
      [ADR-134](./arch_decisions/adr-134-instance-service-systemd-user.md)): unit уже несёт
      `SYNTH_RESTART_MODE=process` и `RestartForceExitStatus=75`. Ручной вариант (фоллбек):
      `ExecStart=/usr/bin/synth serve --restart-mode process`, `Restart=on-failure` (код 75 —
-     «временно не могу», unit поднимается), `RestartSec=2`; проверка — `synth service status`
+     «временно не могу», unit поднимается), `RestartSec=3`; проверка — `synth service status`
      (или `systemctl --user status synth`), `journalctl --user -u synth -n 50`.
    - **pm2:** `autorestart: true` + `SYNTH_RESTART_MODE=process`; проверка — `pm2 status`, `pm2 logs`.
    - **dev:** `./scripts/dev.sh` ставит `SYNTH_RESTART_MODE=supervisor` и сам перезапускает процесс

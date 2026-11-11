@@ -35,7 +35,9 @@
    живёт `intervalHours`, ошибка — 1 ч; офлайн — тихо, без ошибок в UI. Явная проверка работает
    всегда и кэш игнорирует: `synth update --check`, `GET /api/v2/updates/check?force=1`, кнопка в UI.
 4. **Только уведомление, никакой автоустановки** (`notify`). Установка — явное действие:
-   `npm install -g @itphx/synth@<version> --registry <реестр канала>` — и только при user-level
+   `npm install -g @itphx/synth@<version> --@itphx:registry=<реестр канала>` — **scoped-ключ** npm,
+   а не `--registry`: иначе из зеркала тянутся и публичные зависимости (`hono`, `commander`…) и
+   установка падает с 404 — и только при user-level
    prefix (`npm prefix -g` внутри `$HOME`); иначе отказ с инструкцией (root-установку не трогаем).
 5. **Сравнение версий — prerelease-aware** (`compareVersions`, ADR-092). Переход `beta → stable` —
    понижение: помечается как откат и требует подтверждения, а не «обновления».

@@ -442,7 +442,11 @@ describe('HTTP: восстановленное ожидание подтверж
   }
 
   /** Снимок ожидания, который оставил умерший процесс. */
-  function restoredRecord(approvalId: string, sessionId: string): PendingApprovalRecord {
+  function restoredRecord(
+    approvalId: string,
+    sessionId: string,
+    overrides: Partial<PendingApprovalRecord> = {},
+  ): PendingApprovalRecord {
     return {
       approvalId,
       sessionId,
@@ -451,6 +455,7 @@ describe('HTTP: восстановленное ожидание подтверж
       reason: 'правило gated_tool → ask',
       askedAt: new Date().toISOString(),
       timeoutMs: 0,
+      ...overrides,
     };
   }
 
@@ -462,8 +467,9 @@ describe('HTTP: восстановленное ожидание подтверж
     world: { repository: MemoryPendingApprovalRepository; orchestrator: ChatOrchestrator },
     sessionId: string,
     approvalId: string,
+    overrides: Partial<PendingApprovalRecord> = {},
   ): Promise<void> {
-    await world.repository.save(restoredRecord(approvalId, sessionId));
+    await world.repository.save(restoredRecord(approvalId, sessionId, overrides));
     await world.orchestrator.restorePendingApprovals();
   }
 
@@ -580,5 +586,212 @@ describe('HTTP: восстановленное ожидание подтверж
       body: JSON.stringify({ action: 'allow' }),
     });
     expect(res.status).toBe(200);
+  });
+});
+
+/**
+ * ADR-029 (аудит 0.13.8, MEDIUM): ответ «Разрешить» на **восстановленное**
+ * после рестарта ожидание выдавал постоянный сессионный грант шире одобренного.
+ *
+ * Живая ветка («Разрешить в сессии») считает грант по структурной причине
+ * ask'а — «виновнику» (`shellGrantPlan`): для `protected`/`mutation`/`cwd`
+ * гранта нет вовсе, для `dynamic` — каталог виновника. Восстановленная ветка
+ * trigger'а не передавала → срабатывал legacy-путь `shellSavePatterns`
+ * (`rm -rf /srv/data` → вечный паттерн `rm *`).
+ *
+ * Теперь снимок trigger'а из хранилища ожиданий используется, а у старых
+ * записей без trigger'а грант **не выдаётся** (fail-closed): одобрение снимает
+ * вопрос, но правило в сессию не пишется.
+ */
+describe('HTTP: восстановленное ожидание — грант не шире одобренного (ADR-029)', () => {
+  let tmpDir: string;
+
+  function makeCtxBuilder(): ContextBuilder {
+    return {
+      buildSystemPrompt: async () => 'system prompt',
+      buildBaseBlocks: async () => [
+        { key: 'role', tier: 'stable', order: 10, content: 'system prompt' },
+      ],
+    } as unknown as ContextBuilder;
+  }
+
+  /** Приложение с настоящим оркестратором над хранилищем сессий. */
+  function createRealApp(dir: string) {
+    const app = new Hono();
+    const sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+    const eventBus = new EventBus();
+    const queueManager = createMockQueueManager();
+    const repository = new MemoryPendingApprovalRepository();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: () => null,
+      permissionConfig: { rules: {}, askTimeoutMs: 0 } as unknown as PermissionConfig,
+      defaultWorkingDir: dir,
+      contextConfig: new ContextConfig({ userDataDir: join(tmpdir(), 'context') }),
+      pendingApprovalRepository: repository,
+    });
+    app.route('/api/v2/sessions', createSessionRoutes(
+      createMockAuth(),
+      {
+        sessionManager,
+        eventBus,
+        queueManager: queueManager as unknown as QueueProcessorManager,
+        processMessage: orchestrator.createProcessMessage(),
+        orchestrator,
+      },
+    ));
+    return { app, sessionManager, eventBus, orchestrator, repository };
+  }
+
+  /** Снимок ожидания, который оставил умерший процесс. */
+  function restoredRecord(
+    approvalId: string,
+    sessionId: string,
+    overrides: Partial<PendingApprovalRecord> = {},
+  ): PendingApprovalRecord {
+    return {
+      approvalId,
+      sessionId,
+      toolName: 'gated_tool',
+      arguments: {},
+      reason: 'правило gated_tool → ask',
+      askedAt: new Date().toISOString(),
+      timeoutMs: 0,
+      ...overrides,
+    };
+  }
+
+  async function seedRestored(
+    world: { repository: MemoryPendingApprovalRepository; orchestrator: ChatOrchestrator },
+    sessionId: string,
+    approvalId: string,
+    overrides: Partial<PendingApprovalRecord> = {},
+  ): Promise<void> {
+    await world.repository.save(restoredRecord(approvalId, sessionId, overrides));
+    await world.orchestrator.restorePendingApprovals();
+  }
+
+  async function reply(
+    world: { app: Hono },
+    sessionId: string,
+    approvalId: string,
+  ): Promise<Response> {
+    return world.app.request(`/api/v2/sessions/${sessionId}/permissions/${approvalId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'allow' }),
+    });
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-restored-grant-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('shell-ask (mutation): правило в сессии НЕ появляется — ни `rm *`, ни allow на execute_shell', async () => {
+    const world = createRealApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    await seedRestored(world, session.id, 'ap-shell-mutation', {
+      toolName: 'execute_shell',
+      arguments: { command: 'rm -rf /srv/data' },
+      trigger: { askKind: 'mutation', params: { path: '/srv/data' } },
+    });
+
+    const res = await reply(world, session.id, 'ap-shell-mutation');
+    expect(res.status).toBe(200);
+
+    const after = (await world.sessionManager.getSession(session.id))!;
+    // Одобрено было удаление одного пути — не все команды `rm`.
+    expect(after.settings.permission?.rules?.execute_shell).toBeUndefined();
+    expect(JSON.stringify(after.settings.permission ?? {})).not.toContain('rm *');
+    // Правил в сессии не появилось вовсе (конфиг не менялся).
+    expect(after.settings.permission).toBeUndefined();
+    // Ожидание снято (вопрос закрыт), ожидание снято из хранилища.
+    expect(await world.repository.list()).toEqual([]);
+    expect(world.orchestrator.listPendingApprovals(session.id)).toHaveLength(0);
+  });
+
+  it('shell-ask (dynamic): грант — ТОЛЬКО каталог виновника, а не вся команда', async () => {
+    const world = createRealApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    await seedRestored(world, session.id, 'ap-shell-dynamic', {
+      toolName: 'execute_shell',
+      arguments: { command: 'grep -l x /srv/data/*.conf' },
+      trigger: { askKind: 'dynamic', params: { path: '/srv/data/*.conf' } },
+    });
+
+    const res = await reply(world, session.id, 'ap-shell-dynamic');
+    expect(res.status).toBe(200);
+
+    const after = (await world.sessionManager.getSession(session.id))!;
+    // Каталог виновника — `external_directory`; командный паттерн не выдан.
+    expect(after.settings.permission?.rules?.external_directory).toEqual({ '/srv/data/*': 'allow' });
+    expect(after.settings.permission?.rules?.execute_shell).toBeUndefined();
+    expect(await world.repository.list()).toEqual([]);
+  });
+
+  it('shell-ask БЕЗ trigger (старая запись): гранта нет (fail-closed), ожидание снято', async () => {
+    const world = createRealApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    // Снимок без снимка trigger'а (запись старше его появления): виновник
+    // неизвестен → широкий паттерн («rm *») выдавать нельзя.
+    await seedRestored(world, session.id, 'ap-shell-legacy', {
+      toolName: 'execute_shell',
+      arguments: { command: 'rm -rf /srv/data' },
+    });
+
+    const res = await reply(world, session.id, 'ap-shell-legacy');
+    expect(res.status).toBe(200);
+
+    const after = (await world.sessionManager.getSession(session.id))!;
+    expect(after.settings.permission?.rules?.execute_shell).toBeUndefined();
+    expect(JSON.stringify(after.settings.permission ?? {})).not.toContain('rm *');
+    // Одобрение сняло вопрос — но правило не записано.
+    expect(await world.repository.list()).toEqual([]);
+    expect(world.orchestrator.listPendingApprovals(session.id)).toHaveLength(0);
+  });
+
+  it('не-shell тул: прежнее поведение — allow по конкретному пути', async () => {
+    const world = createRealApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    await seedRestored(world, session.id, 'ap-read-file', {
+      toolName: 'read_file',
+      arguments: { file_path: '/srv/data/secret.txt' },
+    });
+
+    const res = await reply(world, session.id, 'ap-read-file');
+    expect(res.status).toBe(200);
+
+    const after = (await world.sessionManager.getSession(session.id))!;
+    expect(after.settings.permission?.rules?.read_file).toEqual({
+      '/srv/data/secret.txt': 'allow',
+    });
+    expect(await world.repository.list()).toEqual([]);
+  });
+
+  it('shell-запись без команды: гранта нет (fail-closed) — правило по путям для shell не пишется', async () => {
+    // Битая/рукотворная запись: команда отсутствует. Грант «по путям» для
+    // `execute_shell` permission-слой читает как разрешение всех команд в
+    // каталоге (`cwd`) — это шире одобренного, поэтому гранта нет.
+    const world = createRealApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    await seedRestored(world, session.id, 'ap-shell-nocmd', {
+      toolName: 'execute_shell',
+      arguments: { cwd: 'sub' },
+      trigger: { askKind: 'dynamic', params: { path: 'sub' } },
+    });
+
+    const res = await reply(world, session.id, 'ap-shell-nocmd');
+    expect(res.status).toBe(200);
+
+    const after = (await world.sessionManager.getSession(session.id))!;
+    expect(after.settings.permission?.rules?.execute_shell).toBeUndefined();
+    expect(after.settings.permission?.rules?.external_directory).toBeUndefined();
+    expect(await world.repository.list()).toEqual([]);
   });
 });

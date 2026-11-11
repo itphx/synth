@@ -709,7 +709,15 @@ the main loop (it remains for pipeline steps).
   [OBSERVABILITY.md](../OBSERVABILITY.md) (RU).
 - **Errors** — the ADR-041 taxonomy (`classifyLlmError`/`isLlmErrorRecoverable`,
   `engine/llm-error.ts`): transport errors are retried, invalid output (including incomplete-stream)
-  is not; engine strings go through `shared/i18n` keys.
+  is not; engine strings go through `shared/i18n` keys. **A server failure wrapped in a provider 400 is
+  recoverable:** the provider layer prepends `Bad request: ` to **any** HTTP 400
+  (`providers/openai.ts:_handleErrors`), while the gateway (LiteLLM-compatible) returns 400 with the body
+  `{"detail":"Internal Server Error (request_id: …)"}` — that is an upstream failure, not a malformed
+  request. `classifyLlmError` recognises `internal server error` → `server_error`, and
+  `isLlmErrorRecoverable` gives the **type** priority over the substring check (otherwise `bad request`
+  would suppress the retry). Client-side 400s (`no_user_query`, `validation`, `context_length`,
+  `auth_error`) stay unrecoverable. Retries: 3 attempts, backoff 5/15/30 s — a subagent publishes
+  `subagent.retry`, the main session publishes `stream.retry` (+ a persistent `session.retry`).
 - **Attachments** — ADR-115: modalities are catalog data; the guard/obfuscation work only with text,
   and metadata is stripped by `stripMetadata` at the send boundary.
 
@@ -720,6 +728,7 @@ the main loop (it remains for pipeline steps).
 | `400` "The `reasoning_content` in the thinking mode must be passed back to the API" | A DeepSeek-compatible gateway with a "non-default" provider/model name: the heuristic did not fire, so assistant messages go out without the reasoning field | `compatibility.requireReasoning: true` (and/or `reasoningField` with the actual field name) on the provider or the model |
 | `400` about `thinking`/`signature` (Anthropic) | Thinking is disabled in this request while history contains blocks; or the signature was lost on a multi-block response | do not mix `reasoningLevel` within one session; the signature is stored per block (§6.2) — check the record was not created by an older core; for gateways without signatures use `reasoningLevel: none` |
 | `400` "max_tokens must be greater than thinking.budget_tokens" | The output limit is smaller than the thinking budget (hard-coded budget with a small `max_tokens`) | the budget is now derived from the actual `max_tokens` (§6.1); if `max_tokens ≤ 1024` thinking is disabled automatically; raise the model's `maxOutputTokens`/the provider's `maxTokens` |
+| `400 Bad request: {"detail":"Internal Server Error (request_id: …)"}` | The gateway (LiteLLM-compatible) returned a 400 whose body says internal server error — an upstream failure, not a malformed request | Nothing to configure: `classifyLlmError` yields `server_error` (recoverable) — the turn retries automatically (3 attempts, backoff 5/15/30 s). Look for the upstream cause using the `request_id` from the body |
 | `temperature` has no effect with thinking (Anthropic) | The API requires `temperature: 1` when thinking is enabled | by design; to control variability lower `reasoningLevel` or disable thinking |
 | `tool_choice: required` does not work with thinking | Anthropic forbids a forced tool call with thinking — it is coerced to `auto` | drop `required` or disable thinking |
 | The stream fails with "The provider closed the stream without finish_reason" | `requireFinishReason: true` (default) while the server does not send `finish_reason` | `compatibility.requireFinishReason: false` for that provider/model (the error is unrecoverable, retries will not help) |

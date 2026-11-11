@@ -694,7 +694,15 @@ top-level `system` — он есть только у `/api/generate`).
   [OBSERVABILITY.md](./OBSERVABILITY.md).
 - **Ошибки** — таксономия ADR-041 (`classifyLlmError`/`isLlmErrorRecoverable`,
   `engine/llm-error.ts`): транспортные ошибки ретраятся, invalid-output (в т.ч. incomplete-stream)
-  — нет; тексты движка — через ключи `shared/i18n`.
+  — нет; тексты движка — через ключи `shared/i18n`. **Серверный сбой в 400-обёртке провайдера —
+  восстановимо:** провайдер-слой добавляет префикс `Bad request: ` **любому** HTTP 400
+  (`providers/openai.ts:_handleErrors`), а шлюз (LiteLLM-совместимый) отдаёт 400 с телом
+  `{"detail":"Internal Server Error (request_id: …)"}` — это падение апстрима, а не некорректный
+  запрос. `classifyLlmError` узнаёт `internal server error` → `server_error`, а `isLlmErrorRecoverable`
+  отдаёт приоритет **типу** над подстрочной проверкой (иначе `bad request` гасил бы ретрай).
+  Клиентские 400 (`no_user_query`, `validation`, `context_length`, `auth_error`) остаются
+  невосстановимыми. Ретрай: 3 попытки, backoff 5/15/30 с — сабагент публикует `subagent.retry`,
+  основная сессия — `stream.retry` (+ персистентный `session.retry`).
 - **Вложения** — ADR-115: модальности — данные каталога; guard/обфускация работают только с
   текстом, метаданные срезаются `stripMetadata` на границе отправки.
 
@@ -705,6 +713,7 @@ top-level `system` — он есть только у `/api/generate`).
 | `400` «The `reasoning_content` in the thinking mode must be passed back to the API» | Провайдер/модель DeepSeek-совместимого шлюза с «не-дефолтным» именем: эвристика не сработала, assistant-сообщения уходят без reasoning-поля | `compatibility.requireReasoning: true` (и/или `reasoningField` с фактическим именем поля) на провайдере или модели |
 | `400` по `thinking`/`signature` (Anthropic) | thinking в этом запросе выключен, а история содержит блоки; или подпись потеряна при мульти-блочном ответе | не смешивать `reasoningLevel` в одной сессии; подпись хранится по блокам (§6.2) — проверить, что запись не создана старым ядром; для шлюзов без подписи — `reasoningLevel: none` |
 | `400` «max_tokens must be greater than thinking.budget_tokens» | Лимит вывода меньше бюджета thinking (жёсткий бюджет при малом `max_tokens`) | бюджет теперь считается от фактического `max_tokens` (§6.1); если `max_tokens ≤ 1024` — thinking отключается сам; поднять `maxOutputTokens` модели/`maxTokens` провайдера |
+| `400 Bad request: {"detail":"Internal Server Error (request_id: …)"}` | Шлюз (LiteLLM-совместимый) отдал 400 с телом про внутреннюю ошибку сервера — падение апстрима, а не некорректный запрос | Настраивать нечего: `classifyLlmError` даёт `server_error` (восстановимо) — ход повторяется автоматически (3 попытки, backoff 5/15/30 с). Искать причину в апстриме по `request_id` из тела |
 | `temperature` не действует при thinking (Anthropic) | API требует `temperature: 1` при включённом thinking | так и задумано; для управления вариативностью — `reasoningLevel` ниже или thinking выключить |
 | `tool_choice: required` не срабатывает при thinking | Anthropic запрещает принудительный вызов при thinking — коэрсится в `auto` | убрать `required` или выключить thinking |
 | Стрим обрывается ошибкой «Провайдер закрыл стрим без finish_reason» | `requireFinishReason: true` (дефолт), а сервер не присылает `finish_reason` | `compatibility.requireFinishReason: false` для этого провайдера/модели (ошибка невосстановимая, ретраи не помогут) |

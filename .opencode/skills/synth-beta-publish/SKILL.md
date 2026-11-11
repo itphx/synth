@@ -108,9 +108,11 @@ synth serve --connect https://synth.k3s.itphx.loc --home ~/.local/share/synth-be
 
 ```bash
 npm i -g --prefix tmp/beta-smoke @itphx/synth@beta \
-  --registry https://git.itphx.ru/api/packages/itphx/npm/
+  --@itphx:registry=https://git.itphx.ru/api/packages/itphx/npm/
 tmp/beta-smoke/bin/synth --version
 ```
+
+Scoped-ключ, а не `--registry`: из Gitea тянутся только пакеты `@itphx/*`, публичные транзитивные зависимости (hono, zod) — из npmjs по умолчанию; глобальный `--registry` увёл бы их в Gitea и дал 404.
 
 ## Ретеншн
 

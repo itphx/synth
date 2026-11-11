@@ -2876,10 +2876,25 @@ export function createSessionRoutes(
       }
       const approved = action === 'allow';
       if (approved) {
+        // ADR-029: грант восстановленного ожидания считается по **той же**
+        // схеме, что и живая ветка («Разрешить в сессии»): структурная причина
+        // ask'а («виновник») берётся из снимка ожидания (`record.trigger`) —
+        // только `params`/`askKind`, без служебных полей.
+        //
+        // У старых записей (снимок без trigger'а) виновник неизвестен → для
+        // `execute_shell` грант **не выдаётся** (fail-closed в оркестраторе:
+        // паттерн «на всю команду» шире одобренного — для `rm -rf /srv/data`
+        // это вечный `rm *`). Одобрение снимает вопрос, правило в сессию не
+        // пишется. Для не-shell тулов поведение прежнее (грант по путям).
+        const record = resolution.record;
+        const trigger = record.trigger
+          ? { params: record.trigger.params, askKind: record.trigger.askKind }
+          : undefined;
         await orchestrator.grantSessionToolAllow(
           session,
-          resolution.record.toolName,
-          resolution.record.arguments ?? {},
+          record.toolName,
+          record.arguments ?? {},
+          trigger,
         );
       }
       // Снятие ожидания (реестр + хранилище ожиданий; счётчик DTO → 0).

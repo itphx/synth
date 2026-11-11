@@ -76,9 +76,29 @@ permission:
 > - **Провод.** `permission.asked` и DTO `GET /api/v2/sessions/:id/permissions` несут аддитивные
 >   `commands?: string[]` (точные сегменты), `save?: string[]` (паттерны; `[]` — грант не предлагается)
 >   и `saveDirectories?: string[]` (каталоги; в payload — camelCase, как исторически). Выдача гранта
->   пишется в аудит (`scope:'permission'`, `action:'grant'`) через `OrchestratorOptions.onPermissionGrant`;
->   `_grantSessionToolAllow` без `trigger` (восстановленное после рестарта ожидание) идёт legacy-путём
->   `shellSavePatterns`.
+>   пишется в аудит (`scope:'permission'`, `action:'grant'`) через `OrchestratorOptions.onPermissionGrant`.
+>
+> > **Обновлено 2026-11-11 (аудит 0.13.8, MEDIUM): восстановленное после рестарта ожидание — тот же
+> > план гранта, без legacy-пути.**
+> > Ответ «Разрешить» на ожидание, **восстановленное после рестарта инстанса**
+> > (`resolvePendingApproval → restored`), применяется как грант в сессии. Раньше trigger'а («виновника»)
+> > в эту ветку не передавали, и срабатывал legacy-путь `shellSavePatterns` — паттерн «на всю команду»:
+> > для `rm -rf /srv/data` это постоянное правило `execute_shell: { "rm *": "allow" }`, то есть грант
+> > **шире одобренного** (одобрено удаление одного пути — разрешены все `rm`).
+> > Теперь:
+> > - **trigger берётся из снимка ожидания** (`PendingApprovalRecord.trigger` → только `params`/`askKind`) —
+> >   восстановленная ветка считает грант тем же `shellGrantPlan`, что и живая: `protected`/`mutation`/`cwd` —
+> >   гранта нет, `dynamic` — каталог виновника (`external_directory`), командный паттерн не выдаётся;
+> > - **старая запись без trigger'а — fail-closed**: для `execute_shell` грант **не выдаётся** вовсе
+> >   (правило в сессию не пишется, ожидание просто снимается) — виновник неизвестен, а паттерн «на всю
+> >   команду» шире одобренного; для не-shell тулов поведение прежнее (грант по путям);
+> > - legacy-путь `shellSavePatterns` в `_grantSessionToolAllow` **удалён**: командные паттерны
+> >   (`execute_shell: { "<cmd> *": "allow" }`) оркестратор больше не выдаёт — ни в живой, ни в
+> >   восстановленной ветке (в живой `shellGrantPlan` их не возвращает); грант — каталогом виновника.
+> >   Правило `execute_shell: { "<cmd> *": "allow" }` в конфиге остаётся рабочим (оно читается
+> >   `isShellCommandGranted` в `evaluator.ts`), но **не выдаётся** автоматически.
+> > - **Инвариант.** Грант не снимает `deny`, `approvalPaths`, `protected`/`mutation`/`cwd` (жёсткий слой
+> >   выше правил) и не расширяет периметр: динамика покрывается каталогом виновника, а не всей командой.
 > - **Сверка с opencode.** `packages/core/src/shell/parse.ts` (`ARITY`/`prefix`) разбирает команду на
 >   сегменты так же, как наш `splitShellSegments`; в `session-permission-dock.tsx` показываются
 >   `resources` запроса (аналог наших `commands`); `cd`-цели в `file-access.ts` трактуются как

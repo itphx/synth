@@ -243,7 +243,7 @@ export type { PromptBlockRegistrationOptions, RegisteredPromptBlock } from './en
 export type { ComposerSessionLike } from './engine/context/index.js';
 
 export { ChatOrchestrator } from './engine/orchestrator.js';
-export type { OrchestratorOptions, ProcessMessageResult, ModelPricing } from './engine/orchestrator.js';
+export type { OrchestratorOptions, ProcessMessageResult, ModelPricing, PermissionGrantTrigger } from './engine/orchestrator.js';
 export { runSubagentResume, validateSubagentResume, SubagentResumeError } from './engine/tools/task-resume.js';
 export type { SubagentResumeDeps, SubagentResumeOptions, SubagentResumeResult, SubagentResumeErrorCode } from './engine/tools/task-resume.js';
 export { SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS } from './engine/tools/task.js';

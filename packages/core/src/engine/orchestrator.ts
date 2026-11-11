@@ -113,7 +113,7 @@ import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
-import { shellGrantPlan, shellSavePatterns } from './security/shell-guard.js';
+import { shellGrantPlan } from './security/shell-guard.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
@@ -429,6 +429,24 @@ export type { AssistantMessageStatus } from './orchestrator/persistence.js';
  * метрик (`synth_memory_context_*`), плагин памяти — через фасад.
  */
 export type { MemoryContextEntry } from './orchestrator/phases/process-setup.js';
+
+/**
+ * ADR-029: структурная причина ask'а («виновник») для расчёта сессионного
+ * гранта — те же поля, что у `ApprovalRequest.trigger`, но без
+ * служебных (`messageId`/`matchedRule`): нужны только параметры подстановки и
+ * вид ask'а.
+ *
+ * Для `execute_shell` грант **без** trigger'а не выдаётся (fail-closed):
+ * паттерн «на всю команду» шире одобренного. Живая ветка всегда передаёт
+ * trigger (решение permission-слоя); восстановленная после рестарта — снимок
+ * trigger'а из хранилища ожиданий, а у старых записей его нет → гранта нет.
+ */
+export type PermissionGrantTrigger = {
+  /** Параметры подстановки виновника (`{ path }`/`{ code }`/`{ command }`). */
+  params?: Record<string, string>;
+  /** Вид ask'а от shell-guard. */
+  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+};
 
 export interface ModelPricing {
   inputPrice?: number;
@@ -2045,11 +2063,17 @@ export class ChatOrchestrator {
    *
    * Публичный метод — HTTP-роут `POST /:id/permissions/:approvalId` вызывает
    * его для ожидания, которого нет в живом реестре.
+   *
+   * `trigger` — структурная причина ask'а («виновник») из снимка ожидания:
+   * без неё грант для `execute_shell` **не выдаётся** (fail-closed — паттерн
+   * «на всю команду» шире одобренного, ADR-029); для остальных тулов грант по
+   * путям прежний.
    */
   async grantSessionToolAllow(
     session: Session,
     toolName: string,
     toolArgs: Record<string, unknown>,
+    trigger?: PermissionGrantTrigger,
   ): Promise<PermissionConfig> {
     // Рабочий каталог нужен для вычисления абсолютных путей (file-тулы).
     // Каталог привязки недоступен — грант считаем от рабочего каталога по
@@ -2065,7 +2089,7 @@ export class ChatOrchestrator {
         }`,
       );
     }
-    return this._grantSessionToolAllow(session, toolName, toolArgs, workingDir);
+    return this._grantSessionToolAllow(session, toolName, toolArgs, workingDir, trigger);
   }
 
   /**
@@ -8282,35 +8306,51 @@ export class ChatOrchestrator {
    * вызывающим, у которого есть решение permission-слоя:
    *  - `dynamic` — грант **каталогом** (`external_directory`, `<dir>/*`);
    *  - `protected`/`mutation`/`cwd` — жёсткий слой выше правил (ADR-029),
-   *    грант не выдаётся вообще (`save: []`, без каталогов);
-   *  - без `trigger` (восстановленное после рестарта ожидание / старый путь)
-   *    — прежнее поведение (паттерны `shellSavePatterns`).
+   *    грант не выдаётся вообще (`save: []`, без каталогов).
+   *
+   * **Без `trigger` грант для `execute_shell` не выдаётся** (fail-closed):
+   * виновник неизвестен, а паттерн «на всю команду» (legacy `shellSavePatterns`)
+   * шире одобренного — для `rm -rf /srv/data` это вечный `rm *`. Такой случай
+   * — восстановленное после рестарта ожидание, у которого снимок trigger'а
+   * отсутствует (запись старше её появления): одобрение снимает вопрос, но
+   * правило в сессию не пишется. Для не-shell тулов поведение прежнее (грант
+   * по путям).
+   *
+   * Инвариант ADR-029: грант **не** снимает `deny`, `approvalPaths`,
+   * `protected`/`mutation`/`cwd` (жёсткий слой выше правил) и не расширяет
+   * периметр: динамика покрывается каталогом виновника, а не всей командой.
    */
   private async _grantSessionToolAllow(
     session: Session,
     toolName: string,
     toolArgs: Record<string, unknown>,
     workingDir: string,
-    trigger?: { params?: Record<string, string>; askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' },
+    trigger?: PermissionGrantTrigger,
   ): Promise<PermissionConfig> {
     const paths = extractPaths(toolName, toolArgs, workingDir);
-    const shellCommand = toolName === 'execute_shell' && typeof toolArgs.command === 'string'
+    const isShellTool = toolName === 'execute_shell';
+    const shellCommand = isShellTool && typeof toolArgs.command === 'string'
       ? toolArgs.command
       : null;
+    // `execute_shell` без команды — грант не выдаём (fail-closed): правило
+    // «по путям» (`_applyToolAllow` пишет ключ-путь, напр. `cwd`) permission-слой
+    // для shell читает как разрешение **всех** команд в этом каталоге — это
+    // шире одобренного. Штатно у shell-вызова команда есть всегда.
+    if (isShellTool && shellCommand === null) {
+      return session.settings.permission ?? this._permissionConfig;
+    }
     // База для каталогов гранта — то же, что `shellCwd` shell-policy: `cwd`
     // тула (относительно рабочего каталога) или рабочий каталог сессии.
     const grantCwd = typeof toolArgs.cwd === 'string' && toolArgs.cwd.trim() !== ''
       ? resolvePath(toolArgs.cwd, workingDir)
       : workingDir;
-    // С trigger — план по сегменту-виновнику (динамика → каталог); без него —
-    // legacy-паттерны всей команды (совместимость восстановленных ожиданий).
+    // План гранта по сегменту-виновнику (ADR-029): без trigger'а (или при
+    // askKind ≠ 'dynamic') план пуст — грант не выдаётся.
     const grantPlan = shellCommand !== null
       ? shellGrantPlan(shellCommand, trigger, { cwd: grantCwd })
       : null;
-    const shellPatterns = shellCommand !== null
-      ? (trigger === undefined
-        ? shellSavePatterns(shellCommand)
-        : (grantPlan && grantPlan.patterns.length > 0 ? grantPlan.patterns : null))
+    const shellPatterns = grantPlan !== null && grantPlan.patterns.length > 0
+      ? grantPlan.patterns
       : null;
     const shellDirectories = grantPlan?.directories ?? [];
     // Shell-грант выдаётся ТОЛЬКО паттернами/каталогами: если команда

@@ -140,68 +140,52 @@ describe('shell-грант сессии (оркестратор)', () => {
     expect((ctx._applyToolAllow as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
   });
 
-  it('выдача гранта: паттерны в сессии + следующий check — allow, callback аудита вызван', async () => {
+  it('без trigger (восстановленная запись): грант не выдаётся — конфиг не меняется, аудита нет', async () => {
+    // ADR-029 (аудит 0.13.8, MEDIUM): виновник неизвестен → командный паттерн
+    // «на всю команду» шире одобренного (`rm -rf /srv/data` → вечный `rm *`).
+    // Живая ветка всегда передаёт trigger (решение permission-слоя); у
+    // восстановленного после рестарта ожидания trigger берётся из снимка, а у
+    // старых записей его нет → гранта нет вовсе (fail-closed).
     const session = {
       id: 's1',
       ownerId: 'user1',
       parentId: undefined as string | undefined,
-      settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
+      settings: { permission: { rules: { execute_shell: 'ask' }, askTimeoutMs: 30_000 } as PermissionConfig },
     };
-    const saved: PermissionConfig[] = [];
-    const granted: Array<{
-      sessionId: string;
-      actor: string;
-      patterns: string[];
-      directories: string[];
-      command: string;
-    }> = [];
+    const saveSession = vi.fn(async () => {});
+    const publish = vi.fn();
+    const granted: unknown[] = [];
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
       _sessionManager: {
         withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
-        saveSession: async () => {},
+        saveSession,
       },
-      _eventBus: { publish: () => {} },
-      _onPermissionGrant: (entry: {
-        sessionId: string;
-        actor: string;
-        patterns: string[];
-        directories: string[];
-        command: string;
-      }) => {
+      _eventBus: { publish },
+      _onPermissionGrant: (entry: unknown) => {
         granted.push(entry);
       },
       _applyShellAllow: proto._applyShellAllow,
+      _applyDirectoryAllow: proto._applyDirectoryAllow,
+      _applyToolAllow: vi.fn(),
     };
 
     const config = await proto._grantSessionToolAllow.call(
       ctx,
       session,
       'execute_shell',
-      { command: 'git status --porcelain' },
+      { command: 'rm -rf /srv/data' },
       '/workspace/project',
     );
-    saved.push(config);
-    expect(config.rules.execute_shell).toEqual({ 'git status *': 'allow' });
-    expect(granted).toEqual([{
-      sessionId: 's1',
-      actor: 'user1',
-      patterns: ['git status *'],
-      directories: [],
-      command: 'git status --porcelain',
-    }]);
 
-    // Следующий check в той же сессии: динамический ask снят грантом.
-    const decision = new PermissionEvaluator(config).check({
-      toolName: 'execute_shell',
-      params: { command: 'git status $BRANCH' },
-      workingDir: '/workspace/project',
-      sessionMode: 'act',
-      planMode: 'auto',
-      planApproved: false,
-      shellPolicy: SHELL_POLICY,
-    });
-    expect(decision.action).toBe('allow');
+    // Ни `execute_shell: 'allow'`, ни паттерна `rm *` — конфиг не тронут.
+    expect(config).toBe(session.settings.permission);
+    expect(config.rules.execute_shell).toBe('ask');
+    expect(saveSession).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(granted).toHaveLength(0);
+    // Fallback на `_applyToolAllow` (грант по путям) не вызывался.
+    expect((ctx._applyToolAllow as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
   });
 
   it('сценарий: одобрение `cd "$HOME" && ls -la` → повтор разрешён, чужая команда — ask', () => {
@@ -272,6 +256,7 @@ describe('shell-грант сессии: каталог вместо патте�
       await writeFile(join(root, 'a.js'), 'x');
       const session = baseSession();
       const published: string[] = [];
+      const saveSession = vi.fn(async () => {});
       const granted: Array<{
         sessionId: string;
         actor: string;
@@ -283,7 +268,7 @@ describe('shell-грант сессии: каталог вместо патте�
         _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
         _sessionManager: {
           withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
-          saveSession: async () => {},
+          saveSession,
         },
         _eventBus: { publish: (_s: string, type: string) => { published.push(type); } },
         _onPermissionGrant: (entry: {
@@ -313,6 +298,7 @@ describe('shell-грант сессии: каталог вместо патте�
       // Командный паттерн не выдан, каталог — выдан.
       expect(config.rules.execute_shell).toBeUndefined();
       expect(config.rules.external_directory).toEqual({ [`${root}/*`]: 'allow' });
+      expect(saveSession).toHaveBeenCalled();
       expect(published).toEqual(['session.updated']);
       expect(granted).toEqual([{
         sessionId: 's1',

@@ -53,8 +53,10 @@ shared → core → executor → storage-postgres → ui → backend → sdk →
 
 **Чтение реестра — без токена.** Проверка обновлений и установка из Gitea не требуют
 аутентификации: `synth update --check --channel beta` читает dist-tag `beta` публичным GET
-метаданных пакета, а `npm i -g @itphx/synth@beta --registry https://git.itphx.ru/api/packages/itphx/npm/`
-работает без `.npmrc`-токена. Токен `GITEA_NPM_TOKEN` с правом `package:write` нужен **только
+метаданных пакета, а `npm i -g @itphx/synth@beta --@itphx:registry=https://git.itphx.ru/api/packages/itphx/npm/`
+работает без `.npmrc`-токена. Реестр задаётся **scoped-ключом** `--@itphx:registry`, а не `--registry`:
+иначе npm тянет из зеркала и публичные зависимости (`hono`, `commander`…) и падает с 404.
+Токен `GITEA_NPM_TOKEN` с правом `package:write` нужен **только
 публикации** (`publish-beta.sh`/CI). Закрытый контур, где реестр требует read-токен, — исключение:
 тогда токен задаётся в `.npmrc` как условие установки пакета, а не как условие проверки версии.
 
@@ -336,6 +338,10 @@ Docker-образы **не** собирает (их собирает CI GitVerse
 Версия берётся из `packages/synth/package.json` (`<VERSION>`). О роли описаний релизов — см.
 [Описания релизов](#описания-релизов).
 
+Журнал изменений в корне — **пара** файлов: `CHANGELOG.ru.md` (канон) и `CHANGELOG.md`
+(EN-зеркало для публичного GitHub). `scripts/changelog.sh` генерирует тело релиза, а не эти
+файлы: корневой журнал ведётся вручную.
+
 ## Описания релизов
 
 Каждому релизу соответствует **пара** файлов в `docs/releases/`; `changelog.sh` берёт файл
@@ -521,7 +527,7 @@ Synth: EventIngress → Router (ADR-089)
 |---|---|
 | тег релиза | `--tag` / `SYNTH_RELEASE_TAG` → тег на `HEAD` → `v<версия>` из `packages/synth/package.json` |
 | предыдущий тег | список semver-тегов (`git tag --sort=-v:refname`) — соседний перед текущим |
-| описание релиза | `--changelog` → `changelog-partial.md` (артефакт джобы `changelog`) → `docs/releases/<VERSION>.md` → генерация `scripts/changelog.sh` → `CHANGELOG.md` |
+| описание релиза | `--changelog` → `changelog-partial.md` (артефакт джобы `changelog`) → `docs/releases/<VERSION>.md` → генерация `scripts/changelog.sh` → `CHANGELOG.md` (EN-зеркало) / `CHANGELOG.ru.md` (канон) |
 | highlights | до 7 строк из описания релиза без markdown-заголовков (вводный абзац + пункты списка) |
 | коммиты | `git log PREV..TAG --no-merges` (`sha` + `subject`), максимум 100 |
 | новые AD | файлы, добавленные в `docs/arch_decisions/` после прошлого релиза; суть и статус — из таблицы AD-индекса в `AGENTS.md` |

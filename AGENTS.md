@@ -8,6 +8,8 @@
 
 Русский — канонический язык документации. Для публичного GitHub-зеркала поддерживаются EN-версии: `README.en.md` в корне и спецификации в `docs/en/`. Терминология — [`docs/en/GLOSSARY.md`](./docs/en/GLOSSARY.md); при расхождении с англоязычными строками продукта (UI `packages/ui/src/lib/i18n/messages/en.ts`, движок `packages/core/src/engine/system-messages.ts`) приоритет у продукта.
 
+Пара журнала изменений: `CHANGELOG.md` — EN-файл публичного зеркала, канон — `CHANGELOG.ru.md`.
+
 Меняешь RU-документ, у которого есть EN-версия — обнови EN в том же коммите. Если перевод отстаёт осознанно — пометь расхождение в шапке EN-файла строкой вида `> ⚠️ RU-версия обновлена <дата>; перевод отстаёт`.
 
 ## Инварианты (не нарушать)
@@ -381,7 +383,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 **CI и релиз.** Джобы — self-hosted раннер `synth-ci`; порядок сборки, особенности GitVerse, секреты, реестры образов, `security-gate` и публикация — [docs/PUBLISHING.md](./docs/PUBLISHING.md) §«CI/CD (GitVerse)»; внутренний аудит — [docs/security/README.md](./docs/security/README.md), скилл `synth-security-audit`. Перед тегом — обязательная пара `docs/releases/<version>.md` + `.en.md` (гейт `release-notes`); без неё релиз не собирается.
 
-**Бета-канал.** `./scripts/publish-beta.sh` публикует все 8 пакетов в npm-реестр Gitea (`X.Y.Z-beta.<ts>.<sha>`, dist-tag `beta`/`next`, `latest` не двигается; CI — workflow `Beta packages`), `./scripts/beta-prune.sh --keep N` — ретеншн бет (по умолчанию только план, удаление — `--yes`); беты не проходят релизные гейты. Реестр читается **без токена** (проверка обновлений и `npm i -g @itphx/synth@beta --registry …`), токен нужен только публикации; переход beta → stable — понижение (`synth update --channel stable --apply`, подтверждается) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) §«Бета-версии (Gitea)».
+**Бета-канал.** `./scripts/publish-beta.sh` публикует все 8 пакетов в npm-реестр Gitea (`X.Y.Z-beta.<ts>.<sha>`, dist-tag `beta`/`next`, `latest` не двигается; CI — workflow `Beta packages`), `./scripts/beta-prune.sh --keep N` — ретеншн бет (по умолчанию только план, удаление — `--yes`); беты не проходят релизные гейты. Реестр читается **без токена** (проверка обновлений и `npm i -g @itphx/synth@beta --@itphx:registry=…`), токен нужен только публикации; переход beta → stable — понижение (`synth update --channel stable --apply`, подтверждается) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) §«Бета-версии (Gitea)».
 
 ## Индекс решений и предложений (ADR / PROP)
 

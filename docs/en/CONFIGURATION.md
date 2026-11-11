@@ -284,7 +284,7 @@ Compose — `restart: unless-stopped` + `SYNTH_RESTART_MODE=process`, `scripts/d
 [Service]
 ExecStart=/usr/bin/synth serve --restart-mode process
 Restart=on-failure        # code 75 means "temporarily unavailable", the unit comes back
-RestartSec=2
+RestartSec=3
 ```
 
 **Multi-replica:** the endpoint restarts only the process/pod that served the request; for the whole
@@ -1301,9 +1301,16 @@ limits wins.
   "the tool already fits the byte budget". A tool cannot switch the output limit off
   (incident 2026-11-08: `grep_files` with a single 236 KB line marked the result as
   truncated and pushed 243 KB into the model context).
-- The only result that is not cut again is one whose tool **already fitted it into the
-  common budget** (`metadata.outputBounded` — the common limit has already been applied
-  and the tool's own truncation marker is already in place).
+- The only result that is not cut again is one that **really** fits the common
+  budget. The marker `metadata.outputBounded` ("the tool already fitted the output
+  into the common budget") **does not switch the limit off**: its truthfulness is
+  not verified, so the decision is made by the actual size of the output. Output
+  within the budget is returned as is (with the tool's own marker and counters,
+  no second marker); output beyond the budget is cut, and the metadata carries the
+  **actual** `truncated: true` and `outputBounded: {shownLines, totalLines}` (the
+  tool's forged counters are overwritten). Audit 0.13.8, exception
+  `tool-output-cap-bypass-via-metadata`: a tool forged the marker and pushed
+  600,001 bytes into the model context.
 - The tool's own truncation marker (`metadata.truncationNote`) is not lost when the
   common limit cuts the tail of the output: it is returned to the end of the truncated
   result — next to the common `tool.output_bounded` marker.

@@ -143,10 +143,11 @@
   `allow`/`deny`/`ask`; не хардкодить проверки в тулах (ADR-025/028/029).
 - **Сессионный shell-грант по сегменту-виновнику (ADR-029).** `shellGrantPlan(command, trigger, {cwd})`
   (`engine/security/shell-guard.ts`) — единственный расчёт гранта: `commands` (все исполняемые
-  сегменты — то же разбиение `splitShellSegments`, trim; для показа человеку), `patterns` (паттерны
-  правила `execute_shell: { "<cmd> *": "allow" }`) и `directories` (каталоги для
-  `external_directory: "<dir>/*"`). Семантика: `askKind: 'dynamic'` (непроверяемый glob/динамика) —
-  командный паттерн **не выдаётся** (`patterns: []`), грант идёт каталогом виновника
+  сегменты — то же разбиение `splitShellSegments`, trim; для показа человеку), `patterns`
+  (**всегда `[]`** — командные паттерны правила `execute_shell: { "<cmd> *": "allow" }` оркестратор
+  не выдаёт ни в одном виде ask'а; поле оставлено в контракте, legacy-путь `shellSavePatterns`
+  удалён) и `directories` (каталоги для `external_directory: "<dir>/*"`). Семантика:
+  `askKind: 'dynamic'` (непроверяемый glob/динамика) — грант идёт каталогом виновника
   (`grantDirectoryForToken`: каталог-часть токена; bare-glob → `cwd` сегмента; `$VAR`/`$(...)` —
   каталога нет); `protected`/`mutation`/`cwd` — ни паттернов, ни каталогов (жёсткий слой выше
   правил, карточка предлагает только разовое разрешение). Снятие ask проверяется в
@@ -156,10 +157,16 @@
   внутри периметра или под **явным** `allow` правила `external_directory` (дефолт
   `external_directory: ask` снятием не считается); `protected`/`mutation`/`cwd`/`deny` не снимаются
   никогда. `permission.asked` и DTO `GET /:id/permissions` несут аддитивные `commands`,
-  `save` (`[]` — грант не предлагается) и `saveDirectories` (в payload — camelCase); выдача
+  `save` (для `execute_shell` **всегда `[]`** — командный паттерн не предлагается; грант идёт
+  каталогом) и `saveDirectories` (в payload — camelCase); выдача
   пишется в аудит (`scope:'permission'`, `action:'grant'`) через шов
-  `OrchestratorOptions.onPermissionGrant`. Без `trigger` (восстановленное после рестарта ожидание)
-  `_grantSessionToolAllow` идёт legacy-путём `shellSavePatterns`.
+  `OrchestratorOptions.onPermissionGrant`. **Без `trigger` грант для `execute_shell` не
+  выдаётся** (fail-closed): виновник неизвестен, а паттерн «на всю команду» (legacy
+  `shellSavePatterns`, путь удалён) шире одобренного — так восстановленное после рестарта ожидание без снимка
+  trigger'а (`PendingApprovalRecord.trigger`) снимает вопрос, но не пишет правило в сессию; для
+  не-shell тулов поведение прежнее (грант по путям). Восстановленная ветка HTTP-роута
+  (`POST /:id/permissions/:approvalId`) передаёт `resolution.record.trigger` (только
+  `params`/`askKind`) — тот же план `shellGrantPlan`, что и в живой ветке.
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
@@ -1589,8 +1596,14 @@
   лимитов тулов и **не отменяется** флагом `metadata.truncated` («тул усек
   результат по своему лимиту»): отключить предел тул не может (инцидент
   2026-11-08: `grep_files` с одной строкой в 236 КБ унёс в контекст модели
-  243 КБ). Повторно не режется только результат, уложенный самим тулом в общий
-  бюджет (`metadata.outputBounded`); маркер усечения тула
+  243 КБ). **Маркер `metadata.outputBounded` («тул сам уложил вывод в общий
+  бюджет») тоже не отменяет предел** — правдивость маркера не проверяется,
+  решение принимает фактический размер вывода: в бюджете — результат как есть
+  (маркер и счётчики тула сохраняются, второго маркера нет), за бюджетом —
+  усечение, а `truncated`/`outputBounded` в metadata перезаписываются
+  **фактическими** значениями (аудит 0.13.8, исключение
+  `tool-output-cap-bypass-via-metadata`: поддельный маркер уносил 600 001 байт
+  в контекст модели); маркер усечения тула
   (`metadata.truncationNote`) общий бунд не теряет — возвращает в конец
   (маркеров может быть несколько — `tailNote: string | string[]` в
   `output-bound.ts`; `toolTailNotes` в `tool-execution.ts` собирает
@@ -2515,7 +2528,7 @@
   вызовами. **В plan-режиме ключ не выдаётся** (`isPlan`): план ничего не выполняет, а
   ключ в окружении планирования утекал бы в текст плана/лог. Ошибка резолвера **не
   роняет вызов** — команда уходит без ключа.
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (45 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (48 файлов-описаний, `DocumentRepository<T>` даёт три поля; `AnalyticsRollupRepository` — суточные роллапы аналитики, ADR-102;
   `ExternalCredentialRepository` — внешние доступы к коннекторам (ADR-105 Ф1; файловое/в-памяти
   хранилища — `ExternalCredentialStore`, контракт — `storage/contract/external-credential-repository.contract.ts`);
   `CredentialAuditRepository` — append-only журнал операций со слоем доступов (ADR-105 Ф4;

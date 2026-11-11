@@ -20,20 +20,69 @@ What follows is a compressed, human-readable journal of the released versions wi
 notes. Every entry below is traceable either to a prepared release note or to the commits of the
 corresponding tag range.
 
-## [Unreleased]
+## [0.13.8] — 2026-11-11
 
-Work in progress towards `0.13.7` (the development line ran through `0.13.5` → `0.13.7`). This is
-**not a release**: the version in `packages/*/package.json` is a development line, and only betas
-(`X.Y.Z-beta.<ts>.<sha>`, dist-tags `beta`/`next`) are published to the internal npm registry — the
-`latest` dist-tag does not move until the release gate passes.
+Cumulative notes for the `0.13.x` wave (0.13.5–0.13.8), not a single patch delta: more than 120
+commits after v0.13.4 publish the self-help layer for the instance, update channels, a systemd user
+service, approval requests that survive a restart and the MCP registry moved into core — plus SSH
+access, server-side MCP in hybrid sessions, parallel tool calls, mid-turn compaction, child-session To
+Do lists and the work panel. Versions 0.13.5–0.13.7 were never published to npm (only betas in the
+internal registry), so the notes cover the whole range.
 
 ### Added
 
-- **Session-scoped shell approvals by patterns.** A new "allow in this session" grant derives
-  command patterns (command plus subcommand, wrappers stripped) from the approved command and stores
-  them in the session's `execute_shell` entry; every segment of a later command must be covered by
-  the saved allow-patterns. The legacy form (`execute_shell=allow` as a string) keeps working and
-  means "all commands".
+- **Self-help tools for the instance, MCP and projects/sessions**
+  ([ADR-131](./docs/arch_decisions/adr-131-self-management-tools.md)). A new `instance` capability
+  and permission group; read tools work in `plan` mode, write tools do not. `synth_info`,
+  `synth_mcp_list|test` (read) and `synth_mcp_add|update|remove|enable|reconnect` (write) let the
+  agent inspect and service its own instance — no curl, no hand-inspecting `dist`, and secrets are
+  never read or returned. Project/session discovery (`list_projects`, `get_project`, `list_sessions`,
+  `get_session_info`, `session_rename`) returns compact summaries; `project_attach` accepts an id
+  **or** an exact name and reports candidates when ambiguous. An expired MCP session reconnects once
+  and retries. Built-in skill `synth-instance` (command `/instance`), CLI `synth mcp
+  list|add|test|remove|reconnect` (the key is read inside the process and never printed) and
+  `synth config show` with secrets redacted by default.
+- **Update channels** ([ADR-133](./docs/arch_decisions/adr-133-update-channels.md)). The channel is
+  derived from the installed version (`-beta.` ⇒ `beta`), overridable via `updates.channel` /
+  `SYNTH_UPDATES_*`. `stable` reads the `latest` dist-tag from npmjs, `beta` reads `beta` from the
+  Gitea npm registry — readable without a token. The background check is **off by default**
+  (`updates.check: false`); an explicit check always ignores the cache (success 24 h, error 1 h).
+  Installation is explicit and only with a user-level npm prefix; in Docker/Helm/managed self-update
+  is refused (`409 UPDATE_UNSUPPORTED`). `beta → stable` is treated as a rollback and needs
+  confirmation. CLI `synth update --check|--apply|--channel|--registry|--to|--dry-run|--json`; UI
+  block “Updates” in the control panel, applied over SSE with an automatic restart.
+- **`synth service` — the instance as a systemd `--user` service**
+  ([ADR-134](./docs/arch_decisions/adr-134-instance-service-systemd-user.md)).
+  `install|status|start|stop|restart|enable|disable|logs|uninstall` with `--print-unit`,
+  `--dry-run`, `--json`; a fixed unit template (`Restart=on-failure`,
+  `RestartForceExitStatus=75`, `RestartSec=3`, `KillMode=mixed`, `TimeoutStopSec=30`,
+  `SYNTH_RESTART_MODE=process`) and a marker that protects a foreign unit without `--force`. Linger
+  is enabled best-effort, secrets stay out of the unit and the journal, and the hybrid variant keeps
+  no tokens. Built-in skill `synth-service` (command `/service`); `synth serve --restart-mode
+  disabled|process|supervisor` in the npm CLI.
+- **Approvals that survive an instance restart.** A dedicated storage port
+  (`{dataDir}/pending-approvals.json`; PostgreSQL — table `pending_approvals`, migration 034) keeps
+  pending approval requests. After a restart the request comes back as restored: `allow` applies as a
+  grant in the session, `deny` removes it, `hold` → `400`. The session DTO gained
+  `pending_approvals`, and the UI marks the restored card. The grant on a restored request is
+  computed by the same plan as on a live one, so it is never wider than what was approved: a dynamic
+  path gets a directory grant, while `mutation`/`protected`/`cwd` are not lifted by a grant — the
+  question is asked again; with no snapshot of the reason, a shell command gets no grant at all.
+- **A structural “culprit” in the approval bar.** `permission.asked` and the recovery DTO carry
+  `trigger` (`messageId`/`params`/`matchedRule`/`askKind`), so the bar shows what triggered the
+  question, highlights the offending token in the reason and in the command, keeps the command in a
+  separate block and collapses the technical details. The session tree marks a pending request with
+  the `approval` status — an orange dot **and** a label, not color alone.
+- **Session-scoped shell approvals by directory.** The "allow in this session" grant for
+  `execute_shell` is computed from the segment that triggered the question: a dynamic ask (an
+  unverifiable glob, `$(...)`) yields the culprit's directory, and the session gets an
+  `external_directory: "<dir>/*" = allow` rule. A command-wide template is never issued — it is wider
+  than what was approved (for `rm -rf /srv/data` it would be a permanent `rm *`). The ask is lifted
+  only when every actual match of the glob is inside the perimeter or covered by an explicit
+  `external_directory` rule; `mutation`, `protected` and `cwd` are not lifted by a grant, and when
+  the reason is unknown no rule is written at all (fail-closed). The issued grant is audited
+  (`scope=permission`, `action=grant`) together with the directories. The legacy form
+  (`execute_shell=allow` as a string) keeps working and means "all commands".
 - **PWA build id.** `SYNTH_BUILD_ID` (commit sha) is baked into the images, is returned by
   `GET /health` as `build` and reaches the UI bundle and the service-worker cache name
   (`synth-shell-<version>[-<buildId>]`). A build-id mismatch resets the caches, calls
@@ -66,6 +115,28 @@ Work in progress towards `0.13.7` (the development line ran through `0.13.5` →
 
 ### Changed
 
+- **The MCP registry and the remaining backend-only routes moved into core**
+  ([ADR-071](./docs/arch_decisions/adr-071-mcp-servers-prompt.md) §2.5). Standalone no longer answers
+  `404` on `/api/v2/mcp/registry*`, and the registry is the source of truth in both modes: servers from
+  `config.mcpServers` are seeded into it at startup (`seedFromConfig`, idempotent) and the MCP manager
+  is filled from the registry maps, so editing the registry no longer erases the configured servers.
+  Also moved into core: `/logs/:name` and `/logs/llm`, `/audit` and `/audit/revealed`,
+  `/gateway/patterns`, `/context/files*` and `/context/enabled`, `/admin/debug/config`,
+  `POST /providers/fetch-icon` — only the guards and texts differ.
+- **The server announces the instance's capabilities** (`/meta`, ADR-118 §8). `GET /api/v2/meta`
+  reports `features.users`, settings sections declare the features they need (`requiresFeatures`) and
+  are hidden when the server does not serve them — previously the UI guessed from the deployment type
+  and broke in hybrid mode. A single `instanceCapabilitiesStore` (TTL 60 s plus deduplication) is now
+  the only path to `/meta`, and the allowlist of public paths lives in core for both builds.
+- **Caps on search and read tools.** A 2000-character line cap for `grep_files` and `read_file`
+  (marker `search.line_truncated`) with a real `metadata.matches` counter; the overall tool output
+  limit can no longer be cancelled by the `metadata.truncated` flag the tool set itself, and
+  truncation markers move to the tail (`metadata.truncationNote`). Search skips `node_modules`,
+  `dist`, `build`, `out`, `coverage`, `.venv`, `venv`, `__pycache__`, `.next`, `.turbo`, `.cache`,
+  `*.map`, `*.min.js` and lock files — an explicit path wins over the exclusion, and hidden matches
+  are reported (`search.matches_excluded`, `metadata.excludedMatches`) rather than lost. `glob` and
+  `list_directory` are untouched. Regression of the incident that carried 243 KB into the context:
+  242,999 → 1,930 characters.
 - **Hybrid mode.** Panel session routes and compaction are forwarded to the remote backend;
   permission replies (`permission_reply` over WS and the HTTP approval route) are forwarded to
   `remote:<id>` instead of staying in the local core. Long sessions use an offline token with a
@@ -87,6 +158,23 @@ Work in progress towards `0.13.7` (the development line ran through `0.13.5` →
 
 ### Fixed
 
+- **Profile in standalone** (`GET/PUT/PATCH/DELETE /auth/profile`) — saving the profile no longer
+  requires a managed deployment.
+- **A server-side failure inside a provider's 400 wrapper is recoverable.** `internal server error`
+  is classified as `server_error`, so the turn retries instead of dying; client-side 400s
+  (`no_user_query`, `validation`, `context_length`, `auth_error`) stay unrecoverable.
+- **One reload after an update/restart** instead of two: shell caches are reset, a one-shot marker is
+  set, and the waiting service worker is accepted quietly (`SKIP_WAITING`).
+- **Skill availability is computed from the agent's capabilities.** The DTO gained
+  `missingCapabilities`, so a skill is no longer marked unavailable because the capability set was
+  not passed.
+- **Installation from the beta registry** uses the scoped key `--@itphx:registry` — public
+  dependencies are no longer pulled from the closed registry.
+- **The mobile approval bar** fits the screen (the timer and the actions wrap, commands no longer
+  expand a heredoc over the whole screen); the reason for code on stdin is readable in plain words;
+  the questionnaire hint appears only after the first attempt.
+- **Localization.** The empty-screen subtitle is translated, and the worktree form in the Russian
+  strings follows the invariant shape.
 - **Shell-guard.** Closed the deny-list bypasses: the redirection operator is a separate token
   (`x&>/f`, `hi>/f`, `2>&1`, `{fd}>/f`), embedded executors (`env`, `sudo`, `su`, `script`, `ssh`,
   `chroot`, `nice`, `flock`, `xargs`, `docker`, `kubectl`, `awk`, `find`, interpreters) are scanned
@@ -126,11 +214,12 @@ Work in progress towards `0.13.7` (the development line ran through `0.13.5` →
 
 ### Security
 
-- **Shell approvals by patterns do not widen the deny rules.** A session grant clears only the
-  dynamic ask (`askKind=dynamic`); `deny`, `approvalPaths`, find-mutations and a dynamic `cd` stay
-  in force. If the pattern cannot be derived, only the one-time approval is issued. The grant is
-  audited with `scope=permission`, `action=grant`, and the `permission.asked` event carries the
-  saved patterns.
+- **Shell approvals do not widen the deny rules.** A session grant clears only the dynamic ask
+  (`askKind=dynamic`); `deny`, `approvalPaths`, find-mutations and a dynamic `cd` stay in force. The
+  grant is issued by directory (`external_directory: "<dir>/*" = allow`), never as a command-wide
+  template; for `mutation`/`protected`/`cwd` — and whenever the reason is unknown — no rule is written
+  at all and only the one-time approval is issued. The grant is audited with `scope=permission`,
+  `action=grant`, together with the directories.
 - **Auth boundary.** A single fail-closed gate `app.use('/api/v2/*', requireAuth)` with a
   method+path allowlist of public routes (`packages/backend/src/app/public-routes.ts`): a router
   mounted without a guard does not become anonymous. A route-access census test fails when a router
@@ -140,6 +229,21 @@ Work in progress towards `0.13.7` (the development line ran through `0.13.5` →
   constant-time.
 - **0.13.4 audit P0.** Findings F3–F13 are closed (the auth gate, the API-key default and the route
   census above are part of it).
+- **Secrets stay out of the output.** The instance key is not printed into the systemd journal or the
+  CLI output, `synth config show` redacts secrets by default, and the secret-scan allowlist was
+  extended with dummy SSH-key fixtures only (tests only).
+- **The 0.13.8 internal security audit was carried out, and both findings of this wave are closed in
+  code before the release** (not accepted as a risk). A grant on an approval restored after an
+  instance restart was wider than what was approved — a command like `rm -rf /srv/data` turned into
+  the rule `rm *`, including mutation operations where a grant is forbidden; the restored branch now
+  computes the grant by the same plan as a live one, and with no snapshot of the reason a shell
+  command gets no grant at all (fail-closed). And the overall tool output limit could be disabled by
+  a flag the tool set itself (`metadata.outputBounded`), letting a plugin tool carry hundreds of
+  kilobytes into the context; the limit is now computed from the actual output size and forged
+  counters are overwritten. The audit record is attached to the release and is finalized by the gate
+  at tagging time; the residual accepted exceptions of the previous wave are tracked in that record.
+
+Full notes: [docs/releases/0.13.8.md](./docs/releases/0.13.8.md)
 
 ## [0.13.4] — 2026-11-04
 
