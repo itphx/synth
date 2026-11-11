@@ -5,6 +5,7 @@ import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { formatDateTime } from '@/lib/formatDate'
+import { reloadAppShell } from '@/lib/appShell'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/Toggle'
@@ -75,7 +76,9 @@ export function UpdatesCard({
 
   const reloadPage = useCallback(() => {
     if (onReload) onReload()
-    else window.location.reload()
+    // Сброс кэшей шелла + метка «перезагрузились ради обновления»: иначе
+    // PwaUpdatePrompt на новой странице найдёт waiting-SW и перезагрузит ещё раз.
+    else void reloadAppShell()
   }, [onReload])
 
   const [settings, setSettings] = useState<UpdatesSettings | null>(null)

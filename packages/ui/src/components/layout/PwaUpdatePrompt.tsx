@@ -6,6 +6,12 @@ import { synthApi } from '@/lib/api/synthApi'
 import { BUILD_ID } from '@/lib/build-info'
 import { useAuthStore } from '@/stores/authStore'
 import { useTransportStore } from '@/stores/transportStore'
+import {
+  acknowledgeBuild,
+  clearShellCaches,
+  consumeShellReloadMarker,
+  isBuildAcknowledged,
+} from '@/lib/appShell'
 
 /** Уникальный ключ конкретного ожидающего воркера (для «Позже» без «залипания»). */
 const workerKeys = new WeakMap<ServiceWorker, string>()
@@ -69,22 +75,6 @@ function writeAutoReload(record: AutoReloadRecord): void {
     window.sessionStorage.setItem(AUTO_RELOAD_STORAGE_KEY, JSON.stringify(record))
   } catch {
     // приватный режим/квота — авто-обновление работает без защиты от цикла
-  }
-}
-
-/**
- * Сброс кэшей шелла перед обновлением: при повторном деплое той же semver
- * старый SW мог сохранить `index.html`/карту чанков, из-за чего новые хэши
- * ассетов дают 404. `caches` есть не во всех окружениях (и может быть
- * запрещён) — тогда просто идём дальше.
- */
-async function clearShellCaches(): Promise<void> {
-  if (typeof caches === 'undefined') return
-  try {
-    const keys = await caches.keys()
-    await Promise.all(keys.map((key) => caches.delete(key)))
-  } catch {
-    // кэш недоступен — обновление всё равно продолжится
   }
 }
 
@@ -231,6 +221,11 @@ export function PwaUpdatePrompt() {
     let versionMismatch = false
     let buildMismatch = false
     let lastActivityAt = Date.now()
+    // Страницу только что перезагрузили ради обновления (блок «Обновления» или
+    // прошлая авто-перезагрузка): до первого ответа `/health` этой загрузки
+    // авто-применение не запускаем — иначе waiting-SW успеет перезагрузить
+    // страницу второй раз.
+    let shellReloadGrace = consumeShellReloadMarker()
     const removeListeners: Array<() => void> = []
     const watchedWorkers = new WeakSet<ServiceWorker>()
 
@@ -252,6 +247,16 @@ export function PwaUpdatePrompt() {
       const swKey = waiting && navigator.serviceWorker.controller ? workerKey(waiting) : null
       const buildKey = buildMismatch && latestBuild.current ? `build:${latestBuild.current}` : null
       const verKey = versionMismatch && latestVersion.current ? `ver:${latestVersion.current}` : null
+
+      // Перезагрузка уже была ради этой сборки (блок «Обновления») — не делаем
+      // вторую: ожидающий воркер принимаем молча, авто-применение не запускаем.
+      if (shellReloadGrace) {
+        if (waiting) waiting.postMessage({ type: 'SKIP_WAITING' })
+        const graceKeys = [swKey, buildKey, verKey].filter((key): key is string => Boolean(key))
+        for (const key of graceKeys) autoAttempted.current.add(key)
+        setUpdateReady(false)
+        return
+      }
 
       // Расхождение build id — самый сильный сигнал (waiting SW может быть
       // старой сборки): сброс кэшей → update SW → reload.
@@ -300,10 +305,27 @@ export function PwaUpdatePrompt() {
         if (cancelled) return
         const serverBuild = health.build ?? ''
         const buildKnown = Boolean(serverBuild) && Boolean(BUILD_ID)
-        buildMismatch = buildKnown && serverBuild !== BUILD_ID
+        buildMismatch = buildKnown && serverBuild !== BUILD_ID && !isBuildAcknowledged(serverBuild)
         versionMismatch = !buildKnown && health.version !== SYNTH_VERSION
         latestBuild.current = buildMismatch ? serverBuild : null
         latestVersion.current = versionMismatch ? health.version : null
+        if (shellReloadGrace) {
+          // Первый health после перезагрузки ради обновления: shell уже новый,
+          // второй reload не нужен. Несовпадение build id запоминаем как
+          // согласованное (иначе PWA перезагружал бы страницу на каждой проверке,
+          // когда `SYNTH_BUILD_ID` остался от образа, а пакет обновлён из npm).
+          shellReloadGrace = false
+          if (buildMismatch) acknowledgeBuild(serverBuild)
+          buildMismatch = false
+          versionMismatch = false
+          latestBuild.current = null
+          latestVersion.current = null
+          const waiting = registration?.waiting
+          if (waiting) {
+            waiting.postMessage({ type: 'SKIP_WAITING' })
+            autoAttempted.current.add(workerKey(waiting))
+          }
+        }
         recompute()
       } catch {
         // health недоступен — оставляем прежнее состояние, не мешаем работе

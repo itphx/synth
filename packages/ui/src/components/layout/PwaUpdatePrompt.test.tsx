@@ -190,6 +190,23 @@ describe('PwaUpdatePrompt', () => {
     expect(readAutoReload()).toEqual({ key: 'ver:9.9.9', count: 1 })
   })
 
+  it('после перезагрузки из блока «Обновления» не перезагружает второй раз', async () => {
+    container.controller = {}
+    container.registration = new MockRegistration(null)
+    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
+    // Метку ставит reloadAppShell перед перезагрузкой (UpdatesCard).
+    window.sessionStorage.setItem('synth.appShell.reloadedAt', String(Date.now()))
+
+    const host = await mountPrompt()
+
+    // Расхождение версий есть, но перезагрузку уже сделали ради обновления.
+    expect(reloadSpy).not.toHaveBeenCalled()
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expect(window.sessionStorage.getItem('synth.appShell.reloadedAt')).toBeNull()
+    // Авто-попытка не расходуется — ключ погашен на этой загрузке.
+    expect(readAutoReload()).toBeNull()
+  })
+
   it('смена ключа обновления сбрасывает счётчик авто-попыток', async () => {
     container.controller = {}
     container.registration = new MockRegistration(null)

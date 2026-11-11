@@ -4,6 +4,7 @@ import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { formatDateTime } from '@/lib/formatDate'
+import { reloadAppShell } from '@/lib/appShell'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Icon } from '../icon/Icon'
@@ -109,7 +110,9 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
 
   const reloadPage = useCallback(() => {
     if (onReload) onReload()
-    else window.location.reload()
+    // После рестарта пакет мог обновиться: сброс кэшей + метка, чтобы
+    // PwaUpdatePrompt не перезагрузил страницу второй раз из-за нового SW.
+    else void reloadAppShell()
   }, [onReload])
 
   const [status, setStatus] = useState<MaintenanceStatus | null>(null)
