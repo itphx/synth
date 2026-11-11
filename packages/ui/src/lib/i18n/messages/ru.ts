@@ -1668,7 +1668,9 @@ export const dict = {
   'permission.bar.timeoutTitle': 'Время до авто-отклонения запроса',
   'permission.bar.grantedForSession': 'Инструмент {tool} разрешён для сессии',
   'permission.bar.grantedShell': 'Shell разрешён в сессии: {patterns}',
+  'permission.bar.grantedShellDirectories': 'Shell разрешён в сессии, каталог: {dirs}',
   'permission.bar.savePatterns': 'Будет разрешено в сессии: {patterns}',
+  'permission.bar.saveDirectories': 'Будет разрешён каталог: {dirs}',
   'permission.bar.saveUnavailable': 'Паттерн команды не выводится — можно разрешить только один раз',
   'permission.bar.saveUnavailableShort': 'Только один раз',
   'permission.bar.replyFailed': 'Не удалось отправить ответ — запрос остался открытым',
@@ -1677,8 +1679,7 @@ export const dict = {
   'permission.bar.restored': 'Инстанс был перезапущен — подтверждение применится как разрешение в сессии',
 
   // Человеческое объяснение ask'а по структурному триггеру (`trigger`):
-  // вместо LLM-текста причины человек видит, ЧТО вызвало вопрос.
-  'permission.bar.cause': 'Что вызвало вопрос',
+  // вместо LLM-текста причины человек видит, что именно потребовало прав.
   'permission.bar.cause.protected': 'Защищённый путь: {path}',
   'permission.bar.cause.dynamicPath': 'Не удалось проверить путь {path} — значение вычисляется в рантайме',
   'permission.bar.cause.mutation': 'Изменение вне рабочего каталога: {path}',
@@ -1691,8 +1692,8 @@ export const dict = {
   'permission.bar.technicalRule': 'Правило: {rule}',
   'permission.bar.technicalMessage': 'Сообщение: {message}',
   'permission.bar.suspicious': 'Подозрительный участок: {token}',
-  'permission.bar.highlightHint': 'Подсвечен участок, вызвавший подозрение',
   'permission.bar.command': 'Команда',
+  'permission.bar.commands': 'Команды',
 
   // Вопросы пользователю (этап 1 roadmap 0.13 — блок 1.3): док над вводом.
   'question.dock.title': 'Агент задал вопрос',

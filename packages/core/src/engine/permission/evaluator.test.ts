@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { join } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { PermissionEvaluator, extractPaths, isInsideWorkingDir } from './evaluator.js';
 import { deriveSubagentPermission } from './derive.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
@@ -1109,5 +1111,77 @@ describe('PermissionEvaluator — структурная причина ask\'а'
     expect(d.action).toBe('ask');
     expect(d.matchedRule).toBe('external_directory.default');
     expect(d.params?.path).toBe('/etc/passwd');
+  });
+});
+
+/**
+ * Снятие динамического ask'а **каталогом** (ADR-029, как `cd`-цели в opencode):
+ * явное правило `external_directory` с `allow` на каталог снимает ask, если все
+ * фактические совпадения glob'а (`askPaths`) внутри разрешённого каталога.
+ * Дефолт (`ask`) и `deny` снятием не считаются; `protected` не снимается.
+ */
+describe('PermissionEvaluator — снятие dynamic-ask каталогом (external_directory)', () => {
+  let workspace: string;
+  let outside: string;
+
+  beforeAll(async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'synth-perm-ws-'));
+    outside = await mkdtemp(join(tmpdir(), 'synth-perm-out-'));
+    await writeFile(join(outside, 'a.js'), 'x');
+  });
+
+  afterAll(async () => {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const check = (config: PermissionConfig, command: string) => new PermissionEvaluator(config).check({
+    toolName: 'execute_shell',
+    params: { command },
+    workingDir: workspace,
+    sessionMode: 'act',
+    planMode: 'auto',
+    planApproved: false,
+    shellPolicy: SHELL_POLICY,
+  });
+
+  const globCommand = (): string => `ls ${outside}/*.js`;
+
+  it('без правила — ask (dynamic)', () => {
+    const d = check({ rules: {}, askTimeoutMs: 30_000 }, globCommand());
+    expect(d.action).toBe('ask');
+    expect(d.askKind).toBe('dynamic');
+  });
+
+  it('явный allow каталога в external_directory снимает ask', () => {
+    const cfg: PermissionConfig = {
+      rules: { external_directory: { [`${outside}/*`]: 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(check(cfg, globCommand()).action).toBe('allow');
+  });
+
+  it('deny и правило на другой каталог ask не снимают', () => {
+    const denied: PermissionConfig = {
+      rules: { external_directory: { [`${outside}/*`]: 'deny' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(check(denied, globCommand()).action).toBe('ask');
+
+    const other: PermissionConfig = {
+      rules: { external_directory: { '/somewhere/else/*': 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(check(other, globCommand()).action).toBe('ask');
+  });
+
+  it('protected-ask каталогом не снимается', () => {
+    const cfg: PermissionConfig = {
+      rules: { external_directory: { '*': 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    const d = check(cfg, 'cat ~/.ssh/config');
+    expect(d.action).toBe('ask');
+    expect(d.askKind).toBe('protected');
   });
 });

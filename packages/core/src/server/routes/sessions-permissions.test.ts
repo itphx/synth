@@ -165,7 +165,24 @@ describe('HTTP: восстановление ожиданий подтвержд
     expect(dto.save).toEqual(['ls *']);
   });
 
-  it('preview/save отсутствуют, если их нет в запросе (аддитивно)', async () => {
+  it('commands/saveDirectories гранта попадают в DTO (аддитивно)', async () => {
+    const world = createApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    ask(world, session.id, {
+      approvalId: 'ap-grant-dirs',
+      save: [],
+      commands: ['cd /x', 'grep -l x *.js', 'head -20'],
+      saveDirectories: ['/x'],
+    });
+
+    const res = await world.app.request(`/api/v2/sessions/${session.id}/permissions`);
+    const body = (await res.json()) as { permissions: Array<Record<string, unknown>> };
+    expect(body.permissions[0]!.save).toEqual([]);
+    expect(body.permissions[0]!.commands).toEqual(['cd /x', 'grep -l x *.js', 'head -20']);
+    expect(body.permissions[0]!.saveDirectories).toEqual(['/x']);
+  });
+
+  it('preview/save/commands/saveDirectories отсутствуют, если их нет в запросе (аддитивно)', async () => {
     const world = createApp(tmpDir);
     const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
     ask(world, session.id, { approvalId: 'ap-2' });
@@ -175,6 +192,8 @@ describe('HTTP: восстановление ожиданий подтвержд
     expect(body.permissions).toHaveLength(1);
     expect('preview' in body.permissions[0]!).toBe(false);
     expect('save' in body.permissions[0]!).toBe(false);
+    expect('commands' in body.permissions[0]!).toBe(false);
+    expect('saveDirectories' in body.permissions[0]!).toBe(false);
   });
 
   it('trigger (структурная причина ask\'а) переживает перезагрузку страницы', async () => {

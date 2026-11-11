@@ -5,6 +5,7 @@ import type { AutoTitleConfig } from '@itphx/synth-shared/config';
 import { autoTitleConfigSchema } from '@itphx/synth-shared/config';
 import { autoTitleSession } from '../sessions/auto-title.js';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
+import { resolvePath } from './tools/path-utils.js';
 import { mkdir, stat } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
@@ -112,7 +113,7 @@ import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
-import { shellSavePatterns } from './security/shell-guard.js';
+import { shellGrantPlan, shellSavePatterns } from './security/shell-guard.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
@@ -453,13 +454,15 @@ export interface OrchestratorOptions {
    */
   analytics?: AnalyticsRecorder;
   /**
-   * Аудит выдачи сессионных shell-грантов (паттерны команд). Вызывается
-   * fire-and-forget; ошибка не влияет на ход.
+   * Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги
+   * `external_directory`). Вызывается fire-and-forget; ошибка не влияет на ход.
    */
   onPermissionGrant?: (entry: {
     sessionId: string;
     actor: string;
     patterns: string[];
+    /** Каталоги, разрешённые правилом `external_directory` (`<dir>/*`). */
+    directories: string[];
     command: string;
   }) => void | Promise<void>;
   contextBuilder: ContextBuilder;
@@ -6075,13 +6078,24 @@ export class ChatOrchestrator {
             // запись и должен видеть, ЧТО именно изменится. Не посчиталось →
             // превью нет, запрос подтверждения работает как прежде.
             const preview = await this._buildPermissionPreview(toolName, toolArgs, workingDir, session.id);
-            // Shell-паттерны, которые будут разрешены кнопкой «Разрешить в сессии».
-            // Для `execute_shell` поле `save` передаётся всегда: пустой массив —
-            // сигнал «в сессии сохранить нельзя» (паттерн не выводится, кнопка
-            // «Разрешить в сессии» не показывается).
+            // План сессионного shell-гранта. Для `execute_shell` поля `save`/
+            // `saveDirectories` передаются всегда: пустые массивы — сигнал
+            // «в сессии сохранить нельзя» (кнопка «Разрешить в сессии» не
+            // показывается). Грант строится по сегменту-виновнику: для
+            // непроверяемой динамики командный паттерн не выдаётся, вместо него
+            // — каталог (`external_directory`); `protected`/`mutation`/`cwd` не
+            // снимаются грантом вовсе.
             const isShellTool = toolName === 'execute_shell';
-            const shellSave = isShellTool && typeof toolArgs.command === 'string'
-              ? shellSavePatterns(toolArgs.command)
+            // База для каталогов гранта — то же, что `shellCwd` shell-policy:
+            // `cwd` тула (относительно рабочего каталога) или рабочий каталог.
+            const grantCwd = typeof toolArgs.cwd === 'string' && toolArgs.cwd.trim() !== ''
+              ? resolvePath(toolArgs.cwd, workingDir)
+              : workingDir;
+            const grantPlan = isShellTool && typeof toolArgs.command === 'string'
+              ? shellGrantPlan(toolArgs.command, {
+                params: permissionDecision.params,
+                askKind: permissionDecision.askKind,
+              }, { cwd: grantCwd })
               : null;
             approvalRequest = {
               approvalId: `approval_${tcId}`,
@@ -6101,8 +6115,17 @@ export class ChatOrchestrator {
               ...(bindingTarget ? { target: bindingTarget } : {}),
               // ADR-029: превью изменений (дифф по файлам).
               ...(preview ? { preview } : {}),
-              // Паттерны shell-гранта для полосы подтверждения.
-              ...(isShellTool ? { save: shellSave ?? [] } : {}),
+              // Паттерны/каталоги shell-гранта и точные сегменты — для полосы
+              // подтверждения. Для неcнимаемых ask'ов оба массива пусты.
+              ...(isShellTool
+                ? {
+                  save: grantPlan?.patterns ?? [],
+                  commands: grantPlan?.commands ?? [],
+                  ...(grantPlan && grantPlan.directories.length > 0
+                    ? { saveDirectories: grantPlan.directories }
+                    : {}),
+                }
+                : {}),
               // Структурная причина ask'а («виновник»): id сообщения +
               // параметры + вид ask'а — UI показывает, ЧТО вызвало вопрос.
               trigger: {
@@ -6897,6 +6920,10 @@ export class ChatOrchestrator {
                   plan.toolName,
                   plan.toolArgs,
                   workingDir,
+                  {
+                    params: plan.permissionDecision.params,
+                    askKind: plan.permissionDecision.askKind,
+                  },
                 );
                 permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
                   authorityShadow: this._authorityShadow,
@@ -8213,34 +8240,98 @@ export class ChatOrchestrator {
   }
 
   /**
+   * Грант каталогом (`permission.rules.external_directory`): `'<dir>/*' → allow'`.
+   *
+   * Строковый `allow` уже разрешает всё — не понижаем; строковый `deny` грантом
+   * не перебивается. Существующие ключи объекта сохраняются, строковый `ask`
+   * переносится в catch-all `'*': 'ask'` (как у shell-гранта), чтобы
+   * неодобренные внешние пути продолжали спрашиваться.
+   */
+  private _applyDirectoryAllow(
+    cfg: PermissionConfig | undefined,
+    directories: readonly string[],
+  ): PermissionConfig {
+    const base = cfg ?? {
+      rules: { ...this._permissionConfig.rules },
+      askTimeoutMs: this._permissionConfig.askTimeoutMs,
+    };
+    const rules = { ...base.rules };
+    const current = rules.external_directory;
+    if (directories.length > 0 && current !== 'allow' && current !== 'deny') {
+      const existing = (typeof current === 'object' && current)
+        ? { ...(current as Record<string, string>) }
+        : {};
+      if (current === 'ask') existing['*'] = 'ask';
+      for (const dir of directories) {
+        const normalized = normalize(dir);
+        const pattern = normalized.endsWith('/') ? `${normalized}*` : `${normalized}/*`;
+        existing[pattern] = 'allow';
+      }
+      rules.external_directory = existing as PermissionRule;
+    }
+    return { ...base, rules };
+  }
+
+  /**
    * ADR-029: «Разрешить в сессии» (once:false). Если у вызова есть файловые
    * параметры — одобряет КОНКРЕТНЫЕ абсолютные пути (правило-объект
    * `rules[tool] = { path: 'allow' }`), иначе (shell/task/mcp) — весь тул.
    * Если тул уже разрешён полностью ('allow') — не понижает до пути.
+   *
+   * Для shell-гранта `trigger` (вид ask'а + параметры виновника) задаётся
+   * вызывающим, у которого есть решение permission-слоя:
+   *  - `dynamic` — грант **каталогом** (`external_directory`, `<dir>/*`);
+   *  - `protected`/`mutation`/`cwd` — жёсткий слой выше правил (ADR-029),
+   *    грант не выдаётся вообще (`save: []`, без каталогов);
+   *  - без `trigger` (восстановленное после рестарта ожидание / старый путь)
+   *    — прежнее поведение (паттерны `shellSavePatterns`).
    */
   private async _grantSessionToolAllow(
     session: Session,
     toolName: string,
     toolArgs: Record<string, unknown>,
     workingDir: string,
+    trigger?: { params?: Record<string, string>; askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' },
   ): Promise<PermissionConfig> {
     const paths = extractPaths(toolName, toolArgs, workingDir);
     const shellCommand = toolName === 'execute_shell' && typeof toolArgs.command === 'string'
       ? toolArgs.command
       : null;
-    const shellPatterns = shellCommand !== null ? shellSavePatterns(shellCommand) : null;
-    // Shell-грант выдаётся ТОЛЬКО паттернами: если команда нерезолвима (`null`,
-    // например `C='cat /etc/shadow'; $C`) или паттернов нет, `execute_shell: 'allow'`
-    // выдавать нельзя — это шире одобренного. Текущий вызов уже одобрен один раз,
-    // будущие спросят снова; конфиг не меняем и зря не сохраняем/паблишим.
-    if (shellCommand !== null && (shellPatterns === null || shellPatterns.length === 0)) {
+    // База для каталогов гранта — то же, что `shellCwd` shell-policy: `cwd`
+    // тула (относительно рабочего каталога) или рабочий каталог сессии.
+    const grantCwd = typeof toolArgs.cwd === 'string' && toolArgs.cwd.trim() !== ''
+      ? resolvePath(toolArgs.cwd, workingDir)
+      : workingDir;
+    // С trigger — план по сегменту-виновнику (динамика → каталог); без него —
+    // legacy-паттерны всей команды (совместимость восстановленных ожиданий).
+    const grantPlan = shellCommand !== null
+      ? shellGrantPlan(shellCommand, trigger, { cwd: grantCwd })
+      : null;
+    const shellPatterns = shellCommand !== null
+      ? (trigger === undefined
+        ? shellSavePatterns(shellCommand)
+        : (grantPlan && grantPlan.patterns.length > 0 ? grantPlan.patterns : null))
+      : null;
+    const shellDirectories = grantPlan?.directories ?? [];
+    // Shell-грант выдаётся ТОЛЬКО паттернами/каталогами: если команда
+    // нерезолвима (`null`) или ни паттернов, ни каталогов нет,
+    // `execute_shell: 'allow'` выдавать нельзя — это шире одобренного. Текущий
+    // вызов уже одобрен один раз, будущие спросят снова; конфиг не меняем и
+    // зря не сохраняем/паблишим.
+    if (shellCommand !== null
+      && (shellPatterns === null || shellPatterns.length === 0)
+      && shellDirectories.length === 0) {
       return session.settings.permission ?? this._permissionConfig;
     }
-    const apply = (cfg: PermissionConfig | undefined): PermissionConfig => (
-      shellPatterns !== null
-        ? this._applyShellAllow(cfg, shellPatterns)
-        : this._applyToolAllow(cfg, toolName, paths)
-    );
+    const apply = (cfg: PermissionConfig | undefined): PermissionConfig => {
+      if (shellCommand === null) return this._applyToolAllow(cfg, toolName, paths);
+      let next = cfg;
+      if (shellPatterns !== null && shellPatterns.length > 0) {
+        next = this._applyShellAllow(next, shellPatterns);
+      }
+      if (shellDirectories.length > 0) next = this._applyDirectoryAllow(next, shellDirectories);
+      return next ?? this._permissionConfig;
+    };
     const next = apply(session.settings.permission);
 
     await this._sessionManager.withLock(session.id, async (s) => {
@@ -8253,11 +8344,13 @@ export class ChatOrchestrator {
     });
 
     // Аудит выдачи shell-гранта — fire-and-forget, ход не блокирует.
-    if (shellPatterns !== null && shellPatterns.length > 0 && this._onPermissionGrant && shellCommand !== null) {
+    if (shellCommand !== null && this._onPermissionGrant
+      && ((shellPatterns !== null && shellPatterns.length > 0) || shellDirectories.length > 0)) {
       void Promise.resolve(this._onPermissionGrant({
         sessionId: session.id,
         actor: session.ownerId ?? 'local',
-        patterns: shellPatterns,
+        patterns: shellPatterns ?? [],
+        directories: shellDirectories,
         command: shellCommand,
       })).catch(() => {});
     }

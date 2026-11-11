@@ -68,6 +68,18 @@ export interface ApprovalRequest {
    */
   save?: string[];
   /**
+   * Точные исполняемые сегменты команды (аддитивно) — для показа человеку
+   * («Команды» в полосе подтверждения). Заполняется shell-guard'ом.
+   */
+  commands?: string[];
+  /**
+   * Каталоги (аддитивно), которые разрешит «Разрешить в сессии» правилом
+   * `permission.rules.external_directory` (`<dir>/*` → `allow`). Для
+   * непроверяемой динамики (`askKind: 'dynamic'`) командный паттерн не
+   * выдаётся — виновник покрывается каталогом (ADR-029).
+   */
+  saveDirectories?: string[];
+  /**
    * Структурная причина ask'а: id security-сообщения + параметры.
    *
    * «Виновник» в машиночитаемом виде — UI может показать, ЧТО именно
@@ -814,6 +826,9 @@ export class PermissionApprovalManager {
       ...(request.preview ? { preview: request.preview } : {}),
       // Shell-грант: какие паттерны будут разрешены в сессии.
       ...(request.save ? { save: request.save } : {}),
+      // Точные сегменты команды и каталоги гранта (аддитивно, ADR-029).
+      ...(request.commands ? { commands: request.commands } : {}),
+      ...(request.saveDirectories ? { saveDirectories: request.saveDirectories } : {}),
       // Структурная причина ask'а («виновник») — machine-readable.
       ...(request.trigger ? { trigger: request.trigger } : {}),
     });

@@ -198,6 +198,8 @@ function toPendingPermissionDto(pending: PendingApproval): Record<string, unknow
     held: pending.held,
     ...(request.preview ? { preview: request.preview } : {}),
     ...(request.save ? { save: request.save } : {}),
+    ...(request.commands ? { commands: request.commands } : {}),
+    ...(request.saveDirectories ? { saveDirectories: request.saveDirectories } : {}),
     ...(request.trigger ? { trigger: request.trigger } : {}),
     // ADR-029: ожидание, восстановленное после рестарта инстанса: отвечающего
     // waiter'а уже нет, поэтому ответ применяется как **грант в сессии**, а не

@@ -2698,6 +2698,18 @@ export function createDispatcher(): EventDispatcher {
         const save = Array.isArray(payload.save)
           ? payload.save.filter((item): item is string => typeof item === 'string')
           : undefined
+        // Точные исполняемые сегменты команды (аддитивно, ADR-029): человек
+        // должен видеть, что именно выполнится.
+        const commands = Array.isArray(payload.commands)
+          ? payload.commands.filter((item): item is string => typeof item === 'string')
+          : undefined
+        // Каталоги гранта (аддитивно): ядро отдаёт `saveDirectories` (camelCase
+        // — исключение из snake_case payload), snake_case принимаем для
+        // устойчивости.
+        const rawSaveDirectories = payload.saveDirectories ?? payload.save_directories
+        const saveDirectories = Array.isArray(rawSaveDirectories)
+          ? rawSaveDirectories.filter((item): item is string => typeof item === 'string')
+          : undefined
         // Структурная причина ask'а («виновник») — аддитивно: без него UI
         // показывает прежний текст причины.
         const trigger = parsePermissionTrigger(payload.trigger)
@@ -2711,6 +2723,8 @@ export function createDispatcher(): EventDispatcher {
           timeoutMs,
           ...(preview ? { preview } : {}),
           ...(save ? { save } : {}),
+          ...(commands ? { commands } : {}),
+          ...(saveDirectories ? { saveDirectories } : {}),
           ...(trigger ? { trigger } : {}),
         })
         break

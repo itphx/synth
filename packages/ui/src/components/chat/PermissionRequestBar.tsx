@@ -70,10 +70,10 @@ function formatParamValue(value: unknown): string {
  * Ask-полоса подтверждений над полем ввода (ADR-029).
  * Показывает текущий запрос permission.asked, при ответе — следующий.
  *
- * Человеку показывается **причина** («Что вызвало вопрос»), собранная из
- * структурного триггера ядра: путь/код/команда, ради которых спросили, и
- * подсветка подозрительного участка. LLM-текст причины (`reason`) спрятан
- * в свёрнутый блок «Технические детали» — он адресован модели, а не человеку.
+ * Человеку сразу показывается **причина**, собранная из структурного триггера
+ * ядра: путь/код/команда, ради которых спросили, и подсветка подозрительного
+ * участка. LLM-текст причины (`reason`) спрятан в свёрнутый блок «Технические
+ * детали» — он адресован модели, а не человеку.
  */
 export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   const { t } = useI18n()
@@ -114,7 +114,7 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   const cause = describePermissionCause(trigger)
   // Восстановленное после рестарта инстанса ожидание (ADR-029): живого
   // waiter'а нет, ответ применяется как разрешение в сессии. Пометка —
-  // короткая, карточка и блок «Что вызвало вопрос» — как обычно.
+  // короткая, сама карточка и подсветка — как обычно.
   const isRestored = current.restored === true
   // Токен-виновник: путь/код/команда, ради которых спросили.
   const culpritToken = cause?.token
@@ -130,11 +130,19 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   // Превью изменений: дифф по файлам, которые тул собирается изменить.
   const previewFiles = current.preview?.files ?? []
   const savePatterns = current.save ?? []
-  // Shell без выводимых паттернов (`save: []`): сессионный грант выдать нельзя —
-  // иначе он был бы шире одобренного. Остаётся только разовое разрешение.
+  // Точные исполняемые сегменты команды (аддитивно, ADR-029) — по ним человек
+  // видит, ЧТО именно выполнится, без раскрытия «Параметров».
+  const shellCommands = current.toolName === 'execute_shell' ? (current.commands ?? []) : []
+  // Каталоги, которые разрешит «Разрешить в сессии» (грант `external_directory`).
+  const saveDirectories = current.saveDirectories ?? []
+  // Shell без выводимых паттернов И без каталогов: сессионный грант выдать
+  // нельзя — иначе он был бы шире одобренного. Остаётся только разовое
+  // разрешение. Старый сервер поля `save` не присылает — поведение прежнее
+  // (кнопка есть).
   const sessionGrantUnavailable = current.toolName === 'execute_shell'
     && Array.isArray(current.save)
     && current.save.length === 0
+    && saveDirectories.length === 0
 
   // Параметры вызова: `command` (для shell) — отдельным блоком, остальные
   // ключи — списком «ключ: значение».
@@ -166,9 +174,15 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
     }
     usePermissionStore.getState().removeRequest(sessionId, current.approvalId)
     if (approved && once === false) {
+      // Тост о выдаче гранта. Dynamic-ask выдаёт каталог (паттерна нет) —
+      // показываем именно его, иначе пользователь не поймёт, что разрешено.
       const text = current.toolName === 'execute_shell' && savePatterns.length > 0
         ? t('permission.bar.grantedShell', { patterns: savePatterns.map((p) => `\`${p}\``).join(', ') })
-        : t('permission.bar.grantedForSession', { tool: toolDisplayName })
+        : current.toolName === 'execute_shell' && saveDirectories.length > 0
+          ? t('permission.bar.grantedShellDirectories', {
+            dirs: saveDirectories.map((dir) => `\`${dir}\``).join(', '),
+          })
+          : t('permission.bar.grantedForSession', { tool: toolDisplayName })
       notify({
         text,
         type: 'success',
@@ -301,6 +315,29 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
         </div>
       )}
 
+      {/* Исполняемые сегменты команды (ADR-029): видны всегда, а не только в
+          «Параметрах» — человек должен видеть, ЧТО именно выполнится.
+          Подсветка токена-виновника ищется по каждому сегменту отдельно. */}
+      {shellCommands.length > 0 && (
+        <div className="px-3 pb-1.5" data-testid="permission-commands">
+          <div className="text-[0.6875rem] font-medium text-muted-foreground mb-0.5">
+            {t('permission.bar.commands')}
+          </div>
+          <pre className="text-[0.6875rem] text-muted-foreground whitespace-pre-wrap break-all overflow-x-auto font-mono leading-relaxed">
+            {shellCommands.map((segment, index) => (
+              <span key={index} className="block" data-testid="permission-command-segment">
+                <HighlightedText
+                  text={segment}
+                  token={culpritToken && findTokenRange(segment, culpritToken) !== null
+                    ? culpritToken
+                    : undefined}
+                />
+              </span>
+            ))}
+          </pre>
+        </div>
+      )}
+
       {savePatterns.length > 0 && (
         <div
           className="px-3 pb-1.5 text-[0.6875rem] text-muted-foreground"
@@ -312,13 +349,24 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
         </div>
       )}
 
-      {/* Человеческая причина: что именно вызвало вопрос. Видна всегда —
-          это главное, ради чего человек смотрит в полосу. */}
+      {/* Грант каталогом (ADR-029): dynamic-ask — командный паттерн не
+          выдаётся, «Разрешить в сессии» пишет `<dir>/*` в external_directory. */}
+      {saveDirectories.length > 0 && (
+        <div
+          className="px-3 pb-1.5 text-[0.6875rem] text-muted-foreground"
+          data-testid="permission-save-directories"
+        >
+          {t('permission.bar.saveDirectories', {
+            dirs: saveDirectories.map((dir) => `\`${dir}\``).join(', '),
+          })}
+        </div>
+      )}
+
+      {/* Человеческая причина: что именно потребовало подтверждения. Видна
+          всегда — это главное, ради чего человек смотрит в полосу. Текст
+          выводится сам по себе, без подписи-префикса. */}
       {(cause || current.reason) && (
         <div className="px-3 pb-1.5 text-xs" data-testid="permission-cause">
-          <span className="font-medium text-foreground/80">
-            {cause ? t('permission.bar.cause') : t('permission.bar.reason')}:{' '}
-          </span>
           {cause ? (
             <span className="text-foreground/90">
               <HighlightedText text={causeText} token={causeShowsToken ? culpritToken : undefined} />
@@ -331,11 +379,6 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           {cause && culpritToken && !causeShowsToken && (
             <div className="mt-0.5 text-[0.6875rem] text-muted-foreground" data-testid="permission-suspicious">
               {t('permission.bar.suspicious', { token: culpritToken })}
-            </div>
-          )}
-          {cause && causeShowsToken && (
-            <div className="mt-0.5 text-[0.625rem] text-muted-foreground/80">
-              {t('permission.bar.highlightHint')}
             </div>
           )}
         </div>

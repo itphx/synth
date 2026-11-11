@@ -1424,7 +1424,8 @@ export async function createStandaloneDeps(
     executionPort,
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
-    // Аудит выдачи сессионных shell-грантов (паттерны команд).
+    // Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги
+    // правила `external_directory`).
     onPermissionGrant: (entry) => {
       if (!securityAudit) return;
       void securityAudit.append({
@@ -1435,7 +1436,12 @@ export async function createStandaloneDeps(
         action: 'grant',
         source: 'runtime',
         before: null,
-        after: { sessionId: entry.sessionId, patterns: entry.patterns, command: entry.command },
+        after: {
+          sessionId: entry.sessionId,
+          patterns: entry.patterns,
+          directories: entry.directories,
+          command: entry.command,
+        },
         version: 1,
       }).catch((err: unknown) => {
         console.warn(`[permission] аудит гранта не записан: ${err instanceof Error ? err.message : String(err)}`);

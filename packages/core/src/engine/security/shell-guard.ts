@@ -75,6 +75,14 @@ export interface ShellCheckResult {
    * `dynamic`; `protected`/`mutation`/`cwd` — никогда.
    */
   askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+  /**
+   * Аддитивно (ADR-029): абсолютные пути **фактических совпадений** glob'а,
+   * из-за которых динамику не удалось проверить безопасно. По ним решается,
+   * снимается ли `ask` явным правилом `permission.rules.external_directory`
+   * (грант на каталог, как `cd`-цели в opencode). Не заполняется, если
+   * совпадений нет/каталог не читается («слишком много записей» и т.п.).
+   */
+  askPaths?: string[];
 }
 
 /** Пустая политика — fallback, если файлы не найдены или невалидны. */
@@ -1359,7 +1367,7 @@ function evaluateWorkspaceGlob(
     const real = resolveRealPath(path);
     if (real === null || !isInsideRoots(path, roots)) {
       // Симлинк наружу/неразрешимый путь: bare-glob нельзя молча пропускать.
-      if (bare) return { kind: 'result', result: askForDynamic(token) };
+      if (bare) return { kind: 'result', result: askForDynamic(token, 'dynamic', [path]) };
       uncertain = true;
       continue;
     }
@@ -1371,6 +1379,41 @@ function evaluateWorkspaceGlob(
   if (uncertain) return { kind: 'skip' };
   if (approval) return { kind: 'result', result: approval };
   return { kind: 'safe' };
+}
+
+/**
+ * Абсолютные пути фактических совпадений glob-токена — для `askPaths`.
+ *
+ * Нужны, когда `evaluateWorkspaceGlob` не смог безопасно проверить шаблон
+ * (`skip`: каталог вне периметра, `..`, нелитеральный каталог): совпадения
+ * позволяют оценить снятие `ask` явным правилом
+ * `permission.rules.external_directory` на каталог. `undefined` — совпадения
+ * не определить (динамика в токене, нечитаемый каталог, слишком много записей
+ * или совпадений нет).
+ */
+function globMatchPaths(token: string, cwd: string, env?: PathResolveEnv): string[] | undefined {
+  if (/[$`]/.test(token)) return undefined;
+  if (token.search(GLOB_CHARS_RE) === -1) return undefined;
+  if (token.split('/').includes('..')) return undefined;
+  const lastSlash = token.lastIndexOf('/');
+  let dir: string;
+  let pattern: string;
+  if (lastSlash === -1) {
+    dir = cwd;
+    pattern = token;
+  } else {
+    const dirToken = lastSlash === 0 ? '/' : token.slice(0, lastSlash);
+    const resolved = tryResolvePath(dirToken, cwd, env);
+    if (!resolved || resolved.source !== 'literal') return undefined;
+    dir = resolved.path;
+    pattern = token.slice(lastSlash + 1);
+  }
+  if (pattern === '') return undefined;
+  const names = readDirLimited(dir, GLOB_READDIR_LIMIT);
+  if (names === 'too-many' || names === null) return undefined;
+  const matches = names.filter((name) => globMatch(pattern, name));
+  if (matches.length === 0) return undefined;
+  return matches.map((name) => join(dir, name));
 }
 
 
@@ -1402,6 +1445,7 @@ function isSinglePathValue(value: string): boolean {
 function askForDynamic(
   token: string,
   askKind: NonNullable<ShellCheckResult['askKind']> = 'dynamic',
+  paths?: readonly string[],
 ): ShellCheckResult {
   return {
     action: 'ask',
@@ -1411,6 +1455,7 @@ function askForDynamic(
     messageId: 'ask-protected-path',
     params: { path: token },
     askKind,
+    ...(paths && paths.length > 0 ? { askPaths: [...paths] } : {}),
   };
 }
 
@@ -2280,7 +2325,9 @@ function checkShellSegment(
     }
     if (glob.kind === 'safe') continue;
     if (!isPathLikeTarget(token)) continue;
-    asks.push(askForDynamic(token));
+    // Glob, не проверенный безопасно: несём фактические совпадения — по ним
+    // сессионный грант каталога (`external_directory`) снимет ask.
+    asks.push(isGlob ? askForDynamic(token, 'dynamic', globMatchPaths(token, cwd, env)) : askForDynamic(token));
   }
 
   if (asks.length > 0) return asks[0]!;
@@ -2467,6 +2514,116 @@ export function isShellCommandGranted(
     if (!grantedSegment(segment, 0)) return false;
   }
   return checked;
+}
+
+/**
+ * План сессионного гранта по `ask`'у shell-guard (ADR-029).
+ *
+ * Грант строится **только по сегменту-виновнику**: командный паттерн (`cmd *`)
+ * шире конкретной команды и для непроверяемой динамики не выдаётся — вместо
+ * него предлагается грант на каталог (`external_directory`, как `cd`-цели в
+ * opencode). `protected`/`mutation`/`cwd` — жёсткий слой выше правил, для них
+ * грант не предлагается вовсе.
+ */
+export interface ShellGrantPlan {
+  /** Точные исполняемые сегменты команды — для показа человеку. */
+  commands: string[];
+  /** Паттерны правила `execute_shell` (только для снимаемых ask'ов). */
+  patterns: string[];
+  /** Каталоги для правила `external_directory` (`<dir>/*`). */
+  directories: string[];
+}
+
+/** Снимает окружающие кавычки с токена-виновника. */
+function stripTokenQuotes(token: string): string {
+  let out = token;
+  while (out.length >= 2
+    && ((out.startsWith('\'') && out.endsWith('\'')) || (out.startsWith('"') && out.endsWith('"')))) {
+    out = out.slice(1, -1);
+  }
+  return out;
+}
+
+/**
+ * Каталог гранта по токену-виновнику; `null` — каталог не определить.
+ *
+ * Токен без `/` (bare glob `*.js`) — каталог сегмента (`cwd`); токен с `/` —
+ * его часть-каталог, только литеральная (`$VAR`/`$(...)`/backtick → `null`).
+ */
+function grantDirectoryForToken(token: string, cwd: string): string | null {
+  const cleaned = stripTokenQuotes(token);
+  if (cleaned === '') return null;
+  if (/[$`]/.test(cleaned)) return null;
+  const slash = cleaned.lastIndexOf('/');
+  if (slash === -1) return normalize(cwd);
+  const dirToken = slash === 0 ? '/' : cleaned.slice(0, slash);
+  const resolved = tryResolvePath(dirToken, cwd);
+  if (!resolved || resolved.source !== 'literal') return null;
+  return normalize(resolved.path);
+}
+
+/**
+ * План сессионного гранта по команде и причине `ask`'а.
+ *
+ * - `commands` — все исполняемые сегменты (тот же разбор, что у
+ *   `shellSavePatterns`), текст как в команде (trim);
+ * - без `trigger` или при `askKind !== 'dynamic'` — грант не предлагается
+ *   (`patterns: []`, `directories: []`);
+ * - `dynamic` — `patterns: []` (никогда), `directories` — каталоги сегментов-
+ *   виновников (по токену из `trigger.params`), дедуп, порядок появления.
+ *
+ * `options.cwd` — рабочий каталог сессии (тот же, что у shell-policy проверки):
+ * от него отсчитываются относительные токены и bare-glob. Не задан — cwd
+ * процесса (совместимость старых вызовов).
+ */
+export function shellGrantPlan(
+  command: string,
+  trigger?: { params?: Record<string, string>; askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' },
+  options?: { cwd?: string },
+): ShellGrantPlan {
+  const analyzed = stripHeredocBodies(command);
+  const delimiters = heredocDelimiters(command);
+  const commands = splitShellSegments(analyzed)
+    .map((segment) => segment.trim())
+    .filter((segment) => !isNonCommandSegment(segment, delimiters));
+
+  if (!trigger || trigger.askKind !== 'dynamic') {
+    return { commands, patterns: [], directories: [] };
+  }
+
+  // Виновник ask'а — токен проверки (путь/код/команда). Сегменты-виновники —
+  // те, в токенах которых он есть; не нашли — legacy-фоллбек (все сегменты).
+  const accused = stripTokenQuotes(
+    trigger.params?.path || trigger.params?.code || trigger.params?.command || '',
+  );
+  const accusedSegments = accused === ''
+    ? commands
+    : commands.filter((segment) =>
+        tokenizeCommand(segment).some((token) => stripTokenQuotes(token) === accused));
+  const accusedSet = new Set(accusedSegments);
+
+  const bindings = collectBindings(command);
+  const directories: string[] = [];
+  const seen = new Set<string>();
+  // cwd сегментов проводим так же, как `checkShellCommand` (`cd`/`pushd`) —
+  // иначе bare-glob (`*.js`) не превратить в абсолютный каталог. База —
+  // рабочий каталог сессии (или `cwd` тула), а не каталог процесса core.
+  let currentCwd = options?.cwd ?? process.cwd();
+  for (const segment of commands) {
+    if (accused !== '' && accusedSet.has(segment)) {
+      const dir = grantDirectoryForToken(accused, currentCwd);
+      if (dir !== null && !seen.has(dir)) {
+        seen.add(dir);
+        directories.push(dir);
+      }
+    }
+    const nextCwd = resolveCdCwd(segment, currentCwd, undefined, bindings);
+    if (nextCwd !== null && 'cwd' in nextCwd) currentCwd = nextCwd.cwd;
+  }
+
+  // Командный паттерн для `dynamic`-ask не выдаётся никогда (шире команды);
+  // виновник покрывается каталогом через `external_directory`.
+  return { commands, patterns: [], directories };
 }
 
 /**

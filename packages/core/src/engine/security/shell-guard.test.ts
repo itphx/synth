@@ -14,6 +14,7 @@ import {
   clearShellPolicyCache,
   matchShellCommandPattern,
   shellSavePatterns,
+  shellGrantPlan,
   isShellCommandGranted,
 } from './shell-guard.js';
 import type { ShellPolicy } from './shell-guard.js';
@@ -1540,5 +1541,99 @@ describe('ask-dynamic-code: чистая подстановка как код/а
     expect(r.messageId).toBe('ask-dynamic-code');
     expect(r.askKind).toBe('dynamic');
     expect(r.params?.code).toContain('$(cat');
+  });
+});
+
+/**
+ * shellGrantPlan: грант строится по сегменту-виновнику. Для непроверяемой
+ * динамики командный паттерн (`cmd *`) не выдаётся — вместо него каталог
+ * (`external_directory`), как `cd`-цели в opencode. `protected`/`mutation`/`cwd`
+ * грантом не снимаются вовсе.
+ */
+describe('shellGrantPlan — грант по виновнику', () => {
+  it('cd /x; grep … *.js | head — паттернов нет, каталог = cwd виновника', () => {
+    const plan = shellGrantPlan('cd /x; grep -l "н" *.js | head -20', {
+      askKind: 'dynamic',
+      params: { path: '*.js' },
+    });
+    expect(plan.patterns).toEqual([]);
+    // Виновник — только сегмент grep; его cwd после `cd /x`.
+    expect(plan.directories).toEqual(['/x']);
+    expect(plan.commands).toEqual(['cd /x', 'grep -l "н" *.js', 'head -20']);
+  });
+
+  it('относительный каталог токена: dir/*.js → абсолютный dir', () => {
+    const plan = shellGrantPlan('grep -l x dir/*.js', {
+      askKind: 'dynamic',
+      params: { path: 'dir/*.js' },
+    });
+    expect(plan.patterns).toEqual([]);
+    expect(plan.directories).toEqual([join(process.cwd(), 'dir')]);
+  });
+
+  it('bare-glob без cd: каталог = рабочий каталог сессии (options.cwd)', () => {
+    const plan = shellGrantPlan('grep -l "н" *.js', {
+      askKind: 'dynamic',
+      params: { path: '*.js' },
+    }, { cwd: '/work/project' });
+    expect(plan.patterns).toEqual([]);
+    expect(plan.directories).toEqual(['/work/project']);
+  });
+
+  it('cd sub: каталог виновника отсчитывается от рабочего каталога сессии', () => {
+    const plan = shellGrantPlan('cd sub; grep -l "н" *.js', {
+      askKind: 'dynamic',
+      params: { path: '*.js' },
+    }, { cwd: '/work/project' });
+    expect(plan.directories).toEqual(['/work/project/sub']);
+  });
+
+  it('динамика в токене-виновнике: каталог не определяется', () => {
+    const plan = shellGrantPlan('cd $D; ls', { askKind: 'dynamic', params: { path: '$D' } });
+    expect(plan.patterns).toEqual([]);
+    expect(plan.directories).toEqual([]);
+  });
+
+  it('protected/mutation/cwd — грант не предлагается', () => {
+    for (const askKind of ['protected', 'mutation', 'cwd'] as const) {
+      const plan = shellGrantPlan('cat ~/.ssh/config', { askKind, params: { path: '~/.ssh/config' } });
+      expect(plan.patterns).toEqual([]);
+      expect(plan.directories).toEqual([]);
+      expect(plan.commands).toEqual(['cat ~/.ssh/config']);
+    }
+  });
+
+  it('без trigger: командных паттернов/каталогов нет, команды показаны', () => {
+    const plan = shellGrantPlan('cd /x; ls -la');
+    expect(plan.patterns).toEqual([]);
+    expect(plan.directories).toEqual([]);
+    expect(plan.commands).toEqual(['cd /x', 'ls -la']);
+  });
+
+  it('glob внутри периметра: askPaths не появляется, allow сохранён', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'synth-grant-'));
+    try {
+      await writeFile(join(root, 'a.js'), 'x');
+      const r = checkShellCommand('ls *.js', root, TEST_POLICY);
+      expect(r.action).toBe('allow');
+      expect(r.askPaths).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('glob вне периметра: ask несёт askPaths (абсолютные совпадения)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'synth-grant-ws-'));
+    const outside = await mkdtemp(join(tmpdir(), 'synth-grant-out-'));
+    try {
+      await writeFile(join(outside, 'a.js'), 'x');
+      const r = checkShellCommand(`ls ${outside}/*.js`, root, TEST_POLICY);
+      expect(r.action).toBe('ask');
+      expect(r.askKind).toBe('dynamic');
+      expect(r.askPaths).toEqual([join(outside, 'a.js')]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 });

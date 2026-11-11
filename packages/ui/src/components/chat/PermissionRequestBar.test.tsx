@@ -96,6 +96,36 @@ function addRestoredRequest(): void {
   })
 }
 
+/**
+ * Shell-запрос с точными сегментами команды и каталогами гранта (ADR-029).
+ *
+ * `dynamic`-ask: командный паттерн не выдаётся (`save: []`), вместо него —
+ * каталог (`saveDirectories`); `protected` — гранта нет вовсе.
+ */
+function addShellGrantRequest(overrides: {
+  approvalId?: string
+  commands?: string[]
+  save?: string[]
+  saveDirectories?: string[]
+  trigger?: PermissionTrigger
+  command?: string
+} = {}): void {
+  usePermissionStore.getState().addRequest(SESSION_ID, {
+    approvalId: overrides.approvalId ?? 'approval_shell_grant',
+    toolName: 'execute_shell',
+    params: { command: overrides.command ?? 'cd /x && grep -l "н" *.js | head -20' },
+    reason: 'правило shell.* → ask',
+    askedAt: new Date().toISOString(),
+    timeoutMs: 30_000,
+    ...(overrides.save !== undefined ? { save: overrides.save } : {}),
+    ...(overrides.saveDirectories !== undefined
+      ? { saveDirectories: overrides.saveDirectories }
+      : {}),
+    ...(overrides.commands !== undefined ? { commands: overrides.commands } : {}),
+    ...(overrides.trigger !== undefined ? { trigger: overrides.trigger } : {}),
+  })
+}
+
 /** Клик по кнопке «Подробнее» (шапка полосы). */
 async function expandBar(container: HTMLElement): Promise<void> {
   const toggle = container.querySelector('button[title="Подробнее"]')
@@ -281,9 +311,14 @@ describe('PermissionRequestBar — человеческая причина (trig
     const container = await renderBar()
 
     const cause = container.querySelector('[data-testid="permission-cause"]')!
-    expect(cause.textContent).toContain('Что вызвало вопрос')
+    // Причина выводится сразу, без подписи-префикса.
     expect(cause.textContent).toContain('Защищённый путь')
     expect(cause.textContent).toContain('/home/rdv/.ssh/config')
+    expect(cause.textContent!.startsWith('Защищённый путь')).toBe(true)
+    expect(container.textContent).not.toContain('Что вызвало вопрос')
+
+    // Подсказки о подсветке нет — подсветка и так видна.
+    expect(container.textContent).not.toContain('Подсвечен участок, вызвавший подозрение')
 
     // Токен-виновник подсвечен.
     const hl = cause.querySelectorAll('[data-testid="permission-highlight"]')
@@ -409,8 +444,8 @@ describe('PermissionRequestBar — человеческая причина (trig
     })
     const container = await renderBar()
 
-    expect(container.textContent).toContain('Причина')
-    expect(container.textContent).toContain('protected-paths policy.')
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('protected-paths policy.')
     // Без trigger блока «Технические детали» нет — прятать нечего.
     expect(container.querySelector('[data-testid="permission-technical-toggle"]')).toBeNull()
   })
@@ -506,8 +541,8 @@ describe('PermissionRequestBar — подсветка подозрительно
  * ADR-029: восстановленное после рестарта инстанса ожидание.
  *
  * Живой waiter'а после рестарта нет — ответ применяется как разрешение в
- * сессии. Карточка помечается короткой пометкой; сама карточка, блок «Что
- * вызвало вопрос» и подсветка — как обычно.
+ * сессии. Карточка помечается короткой пометкой; сама карточка, причина и
+ * подсветка — как обычно.
  */
 describe('PermissionRequestBar — восстановленное ожидание (после рестарта)', () => {
   beforeAll(() => {
@@ -549,5 +584,148 @@ describe('PermissionRequestBar — восстановленное ожидани
     })
 
     expect(reply).toHaveBeenCalledWith(SESSION_ID, 'approval_restored', false, undefined)
+  })
+})
+
+/**
+ * ADR-029: сессионный shell-грант строится по **сегменту-виновнику**.
+ *
+ * Для `askKind: 'dynamic'` командный паттерн не выдаётся (`save: []`) —
+ * вместо него предлагается каталог (`saveDirectories`, правило
+ * `external_directory: '<dir>/*'`). Точные исполняемые сегменты команды видны
+ * всегда: человек должен понимать, что именно выполнится.
+ */
+describe('PermissionRequestBar — сегменты команды и грант каталогом', () => {
+  beforeAll(() => {
+    useI18nStore.setState({ locale: 'ru', dictionary: ruDict, loadingLocale: null })
+  })
+
+  const COMMANDS = ['cd /x', 'grep -l "н" *.js', 'head -20']
+
+  it('dynamic: команды видны всегда (без раскрытия), каталог в строке гранта', async () => {
+    addShellGrantRequest({
+      commands: COMMANDS,
+      save: [],
+      saveDirectories: ['/x'],
+      trigger: {
+        messageId: 'ask-protected-path',
+        params: { path: '*.js' },
+        askKind: 'dynamic',
+      },
+    })
+    const container = await renderBar()
+
+    // Блок команд виден без «Подробнее» и содержит все три сегмента.
+    const commands = container.querySelector('[data-testid="permission-commands"]')
+    expect(commands).not.toBeNull()
+    const segments = [...commands!.querySelectorAll('[data-testid="permission-command-segment"]')]
+    expect(segments.map((s) => s.textContent)).toEqual(COMMANDS)
+
+    // Каталог, который разрешит «Разрешить в сессии», показан отдельно.
+    const dirs = container.querySelector('[data-testid="permission-save-directories"]')
+    expect(dirs).not.toBeNull()
+    expect(dirs!.textContent).toContain('Будет разрешён каталог')
+    expect(dirs!.textContent).toContain('/x')
+
+    // Паттернов нет — строки «Будет разрешено в сессии» не рендерим.
+    expect(container.querySelector('[data-testid="permission-save-patterns"]')).toBeNull()
+
+    // Грант возможен: кнопка есть, подсказки «Только один раз» нет.
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toContain('Разрешить в сессии')
+    expect(container.querySelector('[data-testid="permission-save-unavailable"]')).toBeNull()
+  })
+
+  it('dynamic: токен-виновник подсвечен в сегменте grep … *.js', async () => {
+    addShellGrantRequest({
+      commands: COMMANDS,
+      save: [],
+      saveDirectories: ['/x'],
+      trigger: {
+        messageId: 'ask-protected-path',
+        params: { path: '*.js' },
+        askKind: 'dynamic',
+      },
+    })
+    const container = await renderBar()
+
+    const segments = [...container.querySelectorAll('[data-testid="permission-command-segment"]')]
+    const grepSegment = segments.find((s) => s.textContent?.includes('grep'))!
+    const hits = [...grepSegment.querySelectorAll('[data-testid="permission-highlight"]')]
+    expect(hits.map((h) => h.textContent)).toContain('*.js')
+  })
+
+  it('dynamic: тост «Разрешить в сессии» называет разрешённый каталог', async () => {
+    addShellGrantRequest({
+      commands: COMMANDS,
+      save: [],
+      saveDirectories: ['/x'],
+      trigger: {
+        messageId: 'ask-protected-path',
+        params: { path: '*.js' },
+        askKind: 'dynamic',
+      },
+    })
+    const reply = vi
+      .spyOn(useTransportStore.getState(), 'sendPermissionReply')
+      .mockResolvedValue(true)
+    const container = await renderBar()
+
+    const button = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Разрешить в сессии',
+    )!
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(reply).toHaveBeenCalledWith(SESSION_ID, 'approval_shell_grant', true, false)
+    const toast = mocks.notify.mock.calls[0]![0] as { text: string }
+    expect(toast.text).toContain('/x')
+  })
+
+  it('protected (save: [], без каталогов) — «Только один раз», блока каталога нет', async () => {
+    addShellGrantRequest({
+      commands: COMMANDS,
+      save: [],
+      trigger: {
+        messageId: 'ask-protected-path',
+        params: { path: '/home/rdv/.ssh/config' },
+        askKind: 'protected',
+      },
+    })
+    const container = await renderBar()
+
+    // Команды всё равно видны — это не часть гранта.
+    expect(container.querySelector('[data-testid="permission-commands"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="permission-save-directories"]')).toBeNull()
+
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).not.toContain('Разрешить в сессии')
+    expect(container.querySelector('[data-testid="permission-save-unavailable"]')).not.toBeNull()
+    expect(container.textContent).toContain('Только один раз')
+  })
+
+  it('старый сервер (без commands/saveDirectories) — поведение прежнее', async () => {
+    addShellGrantRequest({ save: ['grep *'] })
+    const container = await renderBar()
+
+    expect(container.querySelector('[data-testid="permission-commands"]')).toBeNull()
+    expect(container.querySelector('[data-testid="permission-save-directories"]')).toBeNull()
+
+    const patterns = container.querySelector('[data-testid="permission-save-patterns"]')
+    expect(patterns).not.toBeNull()
+    expect(patterns!.textContent).toContain('grep *')
+
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toContain('Разрешить в сессии')
+  })
+
+  it('старый сервер без save — кнопка «Разрешить в сессии» на месте (как раньше)', async () => {
+    addShellGrantRequest({})
+    const container = await renderBar()
+
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toContain('Разрешить в сессии')
+    expect(container.querySelector('[data-testid="permission-save-unavailable"]')).toBeNull()
   })
 })

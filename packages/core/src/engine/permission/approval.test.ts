@@ -98,6 +98,37 @@ describe('PermissionApprovalManager — ask flow', () => {
 
     // Пустой массив — явный сигнал «в сессии сохранить нельзя» (а не отсутствие поля).
     expect(asked.at(-1)?.save).toEqual([]);
+    // Неcнимаемый ask: каталогов гранта нет вовсе.
+    expect(asked.at(-1)).not.toHaveProperty('saveDirectories');
+
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      action: 'allow',
+      once: true,
+    });
+    await pending;
+  });
+
+  it('commands/saveDirectories уходят в permission.asked (аддитивно)', async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe('s1', (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const pending = manager.waitForDecision('s1', {
+      ...request,
+      toolName: 'execute_shell',
+      arguments: { command: 'cd /x; grep -l x *.js | head -20' },
+      save: [],
+      commands: ['cd /x', 'grep -l x *.js', 'head -20'],
+      saveDirectories: ['/x'],
+    }, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(asked.at(-1)?.save).toEqual([]);
+    expect(asked.at(-1)?.commands).toEqual(['cd /x', 'grep -l x *.js', 'head -20']);
+    expect(asked.at(-1)?.saveDirectories).toEqual(['/x']);
 
     bus.publish('s1', 'permission.replied', {
       approval_id: 'approval_1',

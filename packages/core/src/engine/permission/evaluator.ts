@@ -539,16 +539,29 @@ export class PermissionEvaluator {
     // Денлист shell-политики: критичный deny/ask поверх конфига (как
     // plan-рестрикция). ApprovalPaths → ask, всё остальное из политики → deny.
     if (shellCommand !== undefined && shellPolicy) {
+      const roots = perimeterRoots(workingDir, input.allowedRoots);
       const sc = checkShellCommand(shellCommand, shellCwd, shellPolicy, {
-        allowedRoots: perimeterRoots(workingDir, input.allowedRoots),
+        allowedRoots: roots,
       });
       if (sc.action !== 'allow') {
         // Сессионный shell-грант (набор паттернов команд) снимает только
         // динамический `ask` (непроверяемая динамика); `protected`/`mutation`/
         // `cwd` и `deny` не снимаются никогда.
-        const liftedByGrant = sc.action === 'ask' && sc.askKind === 'dynamic'
+        const liftedByCommandGrant = sc.action === 'ask' && sc.askKind === 'dynamic'
           && isShellCommandGranted(shellCommand, this._rules);
-        if (!liftedByGrant) {
+        // Грант **каталогом** (ADR-029, как `cd`-цели в opencode): явное
+        // правило `external_directory` с `allow` на каталог снимает
+        // dynamic-ask, если ВСЕ фактические совпадения glob'а (`askPaths`)
+        // внутри разрешённого каталога (или внутри периметра). Дефолт
+        // `external_directory` (`ask`) снятием не считается — только явный
+        // `allow`. `protected`/`mutation`/`cwd` эта ветка не расширяет.
+        const extRule = this._rules['external_directory'];
+        const liftedByDirectoryGrant = sc.action === 'ask' && sc.askKind === 'dynamic'
+          && (sc.askPaths?.length ?? 0) > 0
+          && extRule !== undefined
+          && sc.askPaths!.every((p) => isInsideAnyRoot(p, roots)
+            || this._resolveRule('external_directory', extRule, [p], workingDir)?.action === 'allow');
+        if (!liftedByCommandGrant && !liftedByDirectoryGrant) {
           return {
             action: sc.action,
             reason: sc.reason,

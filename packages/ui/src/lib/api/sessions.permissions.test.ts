@@ -118,6 +118,50 @@ describe('sessionsApi — ожидающие подтверждения прав
     expect(request!.preview?.files?.[0]?.path).toBe('a.txt')
   })
 
+  it('commands и saveDirectories переносятся в запись (грант каталогом)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        permissions: [
+          {
+            approval_id: 'apr_1',
+            tool: 'execute_shell',
+            asked_at: '2026-01-01T12:00:00.000Z',
+            ask_timeout_ms: 30_000,
+            save: [],
+            commands: ['cd /x', 'grep -l "н" *.js', 'head -20'],
+            saveDirectories: ['/x'],
+          },
+        ],
+      }),
+    )
+
+    const [request] = await sessionsApi.listPendingPermissions('s1')
+
+    expect(request!.save).toEqual([])
+    expect(request!.commands).toEqual(['cd /x', 'grep -l "н" *.js', 'head -20'])
+    expect(request!.saveDirectories).toEqual(['/x'])
+  })
+
+  it('save_directories (snake_case) тоже принимается', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        permissions: [
+          {
+            approval_id: 'apr_1',
+            tool: 'execute_shell',
+            asked_at: '2026-01-01T12:00:00.000Z',
+            ask_timeout_ms: 30_000,
+            save_directories: ['/y'],
+          },
+        ],
+      }),
+    )
+
+    const [request] = await sessionsApi.listPendingPermissions('s1')
+
+    expect(request!.saveDirectories).toEqual(['/y'])
+  })
+
   it('trigger (структурная причина ask\'а) переносится в запись', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({

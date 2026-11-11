@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ChatOrchestrator } from './orchestrator.js';
 import { PermissionEvaluator } from './permission/evaluator.js';
 import { shellSavePatterns } from './security/shell-guard.js';
@@ -9,13 +12,23 @@ import type { ShellPolicy } from './security/shell-guard.js';
  * Точечные тесты выдачи сессионного shell-гранта: форма правила
  * `execute_shell` (паттерны) и снятие динамического ask следующим check.
  */
+type ShellTrigger = {
+  params?: Record<string, string>;
+  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+};
+
 const proto = ChatOrchestrator.prototype as unknown as {
   _applyShellAllow: (cfg: PermissionConfig | undefined, patterns: string[]) => PermissionConfig;
+  _applyDirectoryAllow: (
+    cfg: PermissionConfig | undefined,
+    directories: readonly string[],
+  ) => PermissionConfig;
   _grantSessionToolAllow: (
     session: unknown,
     toolName: string,
     toolArgs: Record<string, unknown>,
     workingDir: string,
+    trigger?: ShellTrigger,
   ) => Promise<PermissionConfig>;
 };
 
@@ -135,7 +148,13 @@ describe('shell-грант сессии (оркестратор)', () => {
       settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
     };
     const saved: PermissionConfig[] = [];
-    const granted: Array<{ sessionId: string; actor: string; patterns: string[]; command: string }> = [];
+    const granted: Array<{
+      sessionId: string;
+      actor: string;
+      patterns: string[];
+      directories: string[];
+      command: string;
+    }> = [];
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
       _sessionManager: {
@@ -143,7 +162,13 @@ describe('shell-грант сессии (оркестратор)', () => {
         saveSession: async () => {},
       },
       _eventBus: { publish: () => {} },
-      _onPermissionGrant: (entry: { sessionId: string; actor: string; patterns: string[]; command: string }) => {
+      _onPermissionGrant: (entry: {
+        sessionId: string;
+        actor: string;
+        patterns: string[];
+        directories: string[];
+        command: string;
+      }) => {
         granted.push(entry);
       },
       _applyShellAllow: proto._applyShellAllow,
@@ -162,6 +187,7 @@ describe('shell-грант сессии (оркестратор)', () => {
       sessionId: 's1',
       actor: 'user1',
       patterns: ['git status *'],
+      directories: [],
       command: 'git status --porcelain',
     }]);
 
@@ -200,5 +226,182 @@ describe('shell-грант сессии (оркестратор)', () => {
     }).action;
     expect(decision(command)).toBe('allow');
     expect(decision('rm -rf x')).toBe('ask');
+  });
+});
+
+/**
+ * Грант по сегменту-виновнику: для непроверяемой динамики командный паттерн не
+ * выдаётся, вместо него — каталог (`external_directory`). `protected` грантом
+ * не снимается (жёсткий слой выше правил, ADR-029).
+ */
+describe('shell-грант сессии: каталог вместо паттерна', () => {
+  const baseSession = () => ({
+    id: 's1',
+    ownerId: 'user1',
+    parentId: undefined as string | undefined,
+    settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
+  });
+
+  it('_applyDirectoryAllow: объект правила, строки allow/deny не понижаются', () => {
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+    };
+    const merged = proto._applyDirectoryAllow.call(ctx, undefined, ['/x']);
+    expect(merged.rules.external_directory).toEqual({ '/x/*': 'allow' });
+
+    const keep = proto._applyDirectoryAllow.call(ctx, {
+      rules: { external_directory: 'allow' },
+      askTimeoutMs: 30_000,
+    }, ['/x']);
+    expect(keep.rules.external_directory).toBe('allow');
+
+    const mergedIntoObject = proto._applyDirectoryAllow.call(ctx, {
+      rules: { external_directory: { '/other/*': 'deny' } },
+      askTimeoutMs: 30_000,
+    }, ['/x']);
+    // Существующие ключи сохраняются, добавляется ключ каталога.
+    expect(mergedIntoObject.rules.external_directory).toEqual({
+      '/other/*': 'deny',
+      '/x/*': 'allow',
+    });
+  });
+
+  it('dynamic-ask: пишется external_directory на каталог, execute_shell не пишется', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'synth-grant-'));
+    try {
+      await writeFile(join(root, 'a.js'), 'x');
+      const session = baseSession();
+      const published: string[] = [];
+      const granted: Array<{
+        sessionId: string;
+        actor: string;
+        patterns: string[];
+        directories: string[];
+        command: string;
+      }> = [];
+      const ctx = {
+        _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+        _sessionManager: {
+          withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
+          saveSession: async () => {},
+        },
+        _eventBus: { publish: (_s: string, type: string) => { published.push(type); } },
+        _onPermissionGrant: (entry: {
+          sessionId: string;
+          actor: string;
+          patterns: string[];
+          directories: string[];
+          command: string;
+        }) => {
+          granted.push(entry);
+        },
+        _applyShellAllow: proto._applyShellAllow,
+        _applyDirectoryAllow: proto._applyDirectoryAllow,
+        _applyToolAllow: vi.fn(),
+      };
+
+      const command = `cd ${root}; grep -l "н" *.js | head -20`;
+      const config = await proto._grantSessionToolAllow.call(
+        ctx,
+        session,
+        'execute_shell',
+        { command },
+        '/workspace/project',
+        { params: { path: '*.js' }, askKind: 'dynamic' },
+      );
+
+      // Командный паттерн не выдан, каталог — выдан.
+      expect(config.rules.execute_shell).toBeUndefined();
+      expect(config.rules.external_directory).toEqual({ [`${root}/*`]: 'allow' });
+      expect(published).toEqual(['session.updated']);
+      expect(granted).toEqual([{
+        sessionId: 's1',
+        actor: 'user1',
+        patterns: [],
+        directories: [root],
+        command,
+      }]);
+
+      // Следующий такой же ask снят каталогом (совпадения внутри разрешённого).
+      const decision = new PermissionEvaluator(config).check({
+        toolName: 'execute_shell',
+        params: { command: `grep -l x ${root}/*.js` },
+        workingDir: '/workspace/project',
+        sessionMode: 'act',
+        planMode: 'auto',
+        planApproved: false,
+        shellPolicy: SHELL_POLICY,
+      });
+      expect(decision.action).toBe('allow');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('каталог гранта считается от рабочего каталога + cwd тула', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'synth-grant-cwd-'));
+    try {
+      const session = baseSession();
+      const granted: Array<{ directories: string[] }> = [];
+      const ctx = {
+        _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+        _sessionManager: {
+          withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
+          saveSession: async () => {},
+        },
+        _eventBus: { publish: () => {} },
+        _onPermissionGrant: (entry: { directories: string[] }) => { granted.push(entry); },
+        _applyShellAllow: proto._applyShellAllow,
+        _applyDirectoryAllow: proto._applyDirectoryAllow,
+        _applyToolAllow: vi.fn(),
+      };
+
+      // `cwd: 'sub'` тула — относительно рабочего каталога, не каталога процесса.
+      const config = await proto._grantSessionToolAllow.call(
+        ctx,
+        session,
+        'execute_shell',
+        { command: 'grep -l "н" *.js', cwd: 'sub' },
+        root,
+        { params: { path: '*.js' }, askKind: 'dynamic' },
+      );
+      expect(config.rules.external_directory).toEqual({ [`${join(root, 'sub')}/*`]: 'allow' });
+      expect(granted[0]?.directories).toEqual([join(root, 'sub')]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('protected-ask: грант не выдаётся (конфиг не меняется, аудита нет)', async () => {
+    const session = baseSession();
+    const saveSession = vi.fn(async () => {});
+    const publish = vi.fn();
+    const granted: unknown[] = [];
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+      _sessionManager: {
+        withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
+        saveSession,
+      },
+      _eventBus: { publish },
+      _onPermissionGrant: (entry: unknown) => { granted.push(entry); },
+      _applyShellAllow: proto._applyShellAllow,
+      _applyDirectoryAllow: proto._applyDirectoryAllow,
+      _applyToolAllow: vi.fn(),
+    };
+
+    const config = await proto._grantSessionToolAllow.call(
+      ctx,
+      session,
+      'execute_shell',
+      { command: 'cat ~/.ssh/config' },
+      '/workspace/project',
+      { params: { path: '~/.ssh/config' }, askKind: 'protected' },
+    );
+
+    expect(config).toBe(session.settings.permission);
+    expect(saveSession).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(granted).toHaveLength(0);
   });
 });

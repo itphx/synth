@@ -221,6 +221,17 @@ export interface PendingPermissionDto {
   preview?: unknown
   /** Паттерны shell-гранта, которые будут разрешены в сессии (аддитивно). */
   save?: string[] | null
+  /** Точные исполняемые сегменты команды (аддитивно, ADR-029). */
+  commands?: string[] | null
+  /**
+   * Каталоги, которые разрешит «Разрешить в сессии» (аддитивно, ADR-029).
+   *
+   * ⚠️ Ядро отдаёт это поле **в camelCase** (`saveDirectories`) — исключение
+   * из snake_case-контракта DTO события (так же в `permission.asked`). Для
+   * устойчивости принимаем и snake_case-вариант `save_directories`.
+   */
+  saveDirectories?: string[] | null
+  save_directories?: string[] | null
   /**
    * Структурная причина ask'а («виновник», аддитивно) — разбирается
    * `parsePermissionTrigger`. ⚠️ Это НЕ аргументы тула: аргументы — в
@@ -249,6 +260,13 @@ function toPermissionRequest(dto: PendingPermissionDto): PermissionRequest | nul
   const save = Array.isArray(dto.save)
     ? dto.save.filter((item): item is string => typeof item === 'string')
     : undefined
+  const commands = Array.isArray(dto.commands)
+    ? dto.commands.filter((item): item is string => typeof item === 'string')
+    : undefined
+  const rawSaveDirectories = dto.saveDirectories ?? dto.save_directories
+  const saveDirectories = Array.isArray(rawSaveDirectories)
+    ? rawSaveDirectories.filter((item): item is string => typeof item === 'string')
+    : undefined
   const trigger = parsePermissionTrigger(dto.trigger)
   const args = dto.arguments && typeof dto.arguments === 'object' ? dto.arguments : {}
 
@@ -266,6 +284,8 @@ function toPermissionRequest(dto: PendingPermissionDto): PermissionRequest | nul
     ...(dto.held ? { held: true } : {}),
     ...(preview ? { preview } : {}),
     ...(save ? { save } : {}),
+    ...(commands ? { commands } : {}),
+    ...(saveDirectories ? { saveDirectories } : {}),
     ...(trigger ? { trigger } : {}),
     // Восстановленное после рестарта инстанса ожидание (ADR-029): живого
     // waiter'а больше нет, ответ применяется как разрешение в сессии.
