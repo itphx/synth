@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/Toggle'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
-import { SelectField, SettingsSection } from '../ui/settings'
+import { FieldTooltip, SelectField, SettingsSection } from '../ui/settings'
 import { synthApi, type RestartStatus } from '@/lib/api/synthApi'
 import {
   isUpdateUnsupported,
@@ -405,7 +405,7 @@ export function UpdatesCard({
     <SettingsSection
       id="dashboard-updates"
       title={t('admin.updates.title')}
-      description={t('admin.updates.description')}
+      tooltip={t('admin.updates.description')}
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -460,7 +460,6 @@ export function UpdatesCard({
 
       <SelectField
         label={t('admin.updates.channel')}
-        description={t('admin.updates.channel.betaHint')}
         value={channel}
         onValueChange={(value) => {
           const next = asChannel(value)
@@ -485,21 +484,15 @@ export function UpdatesCard({
         </SelectContent>
       </SelectField>
 
-      {channel === 'auto' && (
-        <p className="text-xs text-muted-foreground break-words">
-          {t('admin.updates.channel.autoHint')}
-        </p>
-      )}
-
       <div data-testid="updates-auto-check">
         <div className="flex items-start justify-between gap-3 min-w-0">
           <div className="min-w-0">
-            <div className="text-sm font-medium text-foreground break-words">
-              {t('admin.updates.autoCheck')}
+            <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+              <span className="text-sm font-medium text-foreground break-words">
+                {t('admin.updates.autoCheck')}
+              </span>
+              <FieldTooltip text={t('admin.updates.autoCheckHint')} />
             </div>
-            <p className="text-xs text-muted-foreground break-words">
-              {t('admin.updates.autoCheckHint')}
-            </p>
             {envLocked && (
               <p
                 className="text-xs text-status-warning break-words"

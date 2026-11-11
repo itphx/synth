@@ -5,6 +5,7 @@ import {
   skillsSystemSettingsSchema,
   sessionSkillUpdateSchema,
   projectSkillUpdateSchema,
+  ToolCapability,
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { SkillService } from '../../engine/skills/service.js';
@@ -38,6 +39,13 @@ export interface SkillScopeRoutesDeps {
   permissionConfig?: PermissionConfig;
   /** Резолв рабочего каталога проекта по id (project-скиллы). */
   resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>;
+  /**
+   * Capabilities агента сессии для capability-гейта эффективного списка
+   * (ADR-046 §6.3). Не задан — гейт не применяется (как в рантайме без
+   * контекста агента); реестр/проектный список передают полный набор
+   * `ToolCapability` — «доступен» = инстанс в принципе поддерживает.
+   */
+  resolveAgentCapabilities?: (role?: string) => readonly string[] | undefined;
   /**
    * ADR-046/ADR-069: `config.yaml` `skills.trustedProjectDirs` — дефолт
    * project-trust гейта; runtime-значение (`settings.json`/PG) приоритетнее.
@@ -89,6 +97,8 @@ interface EffectiveSkill {
   trusted: boolean;
   available: boolean;
   unavailableReason?: string;
+  /** Какие именно capability не хватает (`unavailableReason: 'capabilities'`). */
+  missingCapabilities?: string[];
   enabled: boolean;
   disabled: boolean;
   disabledReason?: 'system' | 'project' | 'session';
@@ -106,10 +116,15 @@ async function listEffectiveSkills(
     defaultOn?: string[];
     /** Effective permission-конфиг (session.settings.permission ?? global). */
     permissionConfig?: PermissionConfig;
+    /** Capabilities агента (capability-гейт, ADR-046 §6.3); undefined — без гейта. */
+    capabilities?: readonly string[];
   },
 ): Promise<EffectiveSkill[]> {
   if (!deps.skillService) return [];
-  const { skills } = await deps.skillService.listSummaries({ projectWorkspace: opts.projectWorkspace });
+  const { skills } = await deps.skillService.listSummaries({
+    projectWorkspace: opts.projectWorkspace,
+    capabilities: opts.capabilities,
+  });
   const systemDisabled = await deps.settingsStore?.getSkillsDisabled();
   const scope: SkillScopeOptions = {
     systemDisabled,
@@ -136,6 +151,7 @@ async function listEffectiveSkills(
         trusted: s.trusted,
         available: s.available,
         ...(s.unavailableReason ? { unavailableReason: s.unavailableReason } : {}),
+        ...(s.missingCapabilities?.length ? { missingCapabilities: s.missingCapabilities } : {}),
         enabled: availability.enabled,
         disabled: !availability.enabled,
         ...(availability.reason ? { disabledReason: availability.reason } : {}),
@@ -206,6 +222,8 @@ export function createSessionSkillScopeRoutes(
       projectEnabled: project?.skills ? project.skills.enabled : undefined,
       defaultOn: session.settings.skillsDefaultOn,
       permissionConfig: session.settings.permission ?? deps.permissionConfig,
+      // «Как в рантайме»: capability-гейт считается по агенту сессии.
+      capabilities: deps.resolveAgentCapabilities?.(session.settings.agentRole),
     });
     return c.json({
       session_id: id,
@@ -321,6 +339,9 @@ export function createProjectSkillScopeRoutes(
       projectEnabled: project.skills ? project.skills.enabled : undefined,
       defaultOn: project.skills ? project.skills.defaultOn : undefined,
       permissionConfig: deps.permissionConfig,
+      // У проекта нет агента — «доступен» = инстанс в принципе поддерживает
+      // capability (проектная страница не должна быть серой).
+      capabilities: Object.values(ToolCapability),
     });
     return c.json({
       project_id: id,

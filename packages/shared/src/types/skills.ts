@@ -136,6 +136,12 @@ export interface SkillSummary {
    */
   available: boolean;
   unavailableReason?: 'capabilities';
+  /**
+   * Каких именно capabilities не хватает (`available: false`, причина
+   * `capabilities`). Аддитивно: используется UI для подсказки «Не хватает
+   * возможностей: …»; при доступном скилле поля нет.
+   */
+  missingCapabilities?: string[];
 }
 
 /** Детали скилла (тело + supporting-файлы). */

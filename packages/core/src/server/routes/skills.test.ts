@@ -66,6 +66,35 @@ describe('/api/v2/skills (ADR-046 §9.1)', () => {
     expect(body.skills[2].requiresCapabilities).toEqual([]);
   });
 
+  it('GET / — capability-aware: реестр считает скиллы доступными для инстанса', async () => {
+    const { app } = makeApp();
+    const body = (await (await app.request('/api/v2/skills')).json()) as {
+      skills: Array<{
+        name: string;
+        requiresCapabilities: string[];
+        available: boolean;
+        unavailableReason?: string;
+        missingCapabilities?: string[];
+      }>;
+    };
+    const creator = body.skills.find((s) => s.name === 'skill-creator');
+    expect(creator).toBeDefined();
+    expect(creator!.requiresCapabilities.length).toBeGreaterThan(0);
+    // Реестр/админ-просмотр передаёт полный набор ToolCapability: скилл не
+    // «серый» только из-за отсутствия capability-контекста агента.
+    expect(creator!.available).toBe(true);
+    expect(creator!.unavailableReason).toBeUndefined();
+    expect(creator!.missingCapabilities).toBeUndefined();
+
+    // Деталь скилла — та же семантика (админ-просмотр не «серый»).
+    const detail = (await (await app.request('/api/v2/skills/skill-creator')).json()) as {
+      available: boolean;
+      missingCapabilities?: string[];
+    };
+    expect(detail.available).toBe(true);
+    expect(detail.missingCapabilities).toBeUndefined();
+  });
+
   it('POST / создаёт instance-скилл; GET /:name отдаёт деталь', async () => {
     const { app } = makeApp();
     const created = await post(app, '/api/v2/skills', {

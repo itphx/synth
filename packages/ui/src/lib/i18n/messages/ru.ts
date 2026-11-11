@@ -381,6 +381,7 @@ export const dict = {
   'skills.empty': 'Доступных скиллов нет',
   'skills.untrusted': 'Недоверенный',
   'skills.unavailable': 'Недоступен',
+  'skills.unavailable.hint': 'Не хватает возможностей агента: {capabilities}',
   'skills.untrustedHint': 'Проектный скилл недоверенный: показаны только метаданные, тело и supporting-файлы скрыты до выдачи доверия каталогу проекта.',
   'skills.error.load': 'Не удалось загрузить реестр скиллов',
   'skills.error.loadDetail': 'Не удалось загрузить скилл',
@@ -2189,9 +2190,6 @@ export const dict = {
   'admin.updates.channel.auto': 'Авто',
   'admin.updates.channel.stable': 'stable',
   'admin.updates.channel.beta': 'beta',
-  'admin.updates.channel.betaHint': 'beta — пре-релизы из Gitea',
-  'admin.updates.channel.autoHint':
-    'Канал «Авто» определяется установленной версией: бета-сборка проверяет бета-канал, стабильная — stable.',
   'admin.updates.autoCheck': 'Проверять обновления автоматически',
   'admin.updates.autoCheckHint':
     'Сервер проверяет реестр по расписанию. Обновления не устанавливаются автоматически.',

@@ -47,6 +47,20 @@ describe('computeInvocation / matchesBinding / missingCapabilities', () => {
     expect(missingCapabilities({ requiresCapabilities: ['shell', 'file_write'] }, ['shell']))
       .toEqual(['file_write']);
   });
+
+  it('toSkillSummary — missingCapabilities аддитивно (только при недоступности)', () => {
+    const skill = mk('p', { requiresCapabilities: ['pipeline'] });
+    const available = toSkillSummary(skill, { capabilities: ['pipeline'] });
+    expect(available.available).toBe(true);
+    expect(available.unavailableReason).toBeUndefined();
+    expect(available.missingCapabilities).toBeUndefined();
+
+    // Без capability-контекста все требования считаются отсутствующими.
+    const missing = toSkillSummary(skill);
+    expect(missing.available).toBe(false);
+    expect(missing.unavailableReason).toBe('capabilities');
+    expect(missing.missingCapabilities).toEqual(['pipeline']);
+  });
 });
 
 describe('buildSkillCatalog (ADR-046 §4.5/§5/§6)', () => {

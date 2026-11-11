@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
-import { skillCreateSchema, skillFileWriteSchema, skillUpdateSchema, SKILL_NAME_MAX, SKILL_NAME_REGEX } from '@itphx/synth-shared';
+import { skillCreateSchema, skillFileWriteSchema, skillUpdateSchema, SKILL_NAME_MAX, SKILL_NAME_REGEX, ToolCapability } from '@itphx/synth-shared';
 import type { SkillDetail } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
 import type { SkillService } from '../../engine/skills/service.js';
@@ -93,7 +93,13 @@ export function createSkillRoutes(
   app.get('/', auth.requireAuth, async (c) => {
     const projectWorkspace = await resolveWorkspace(c);
     const withDiagnostics = c.req.query('diagnostics') === '1';
-    const { skills, diagnostics } = await deps.skillService.listSummaries({ projectWorkspace });
+    // Реестр/админ-просмотр: «доступен» = инстанс в принципе поддерживает
+    // capability скилла. Без `capabilities` любой скилл с `requiresCapabilities`
+    // помечался бы недоступным (missingCapabilities возвращал бы все требования).
+    const { skills, diagnostics } = await deps.skillService.listSummaries({
+      projectWorkspace,
+      capabilities: Object.values(ToolCapability),
+    });
     return c.json({
       skills,
       ...(projectWorkspace ? { workspace: projectWorkspace } : {}),
@@ -179,6 +185,9 @@ export function createSkillRoutes(
     if (!isValidSkillName(name)) return notFound(c);
     const detail: SkillDetail | undefined = await deps.skillService.detail(name, {
       projectWorkspace: await resolveWorkspace(c),
+      // Та же семантика, что у реестра: деталь не должна быть «серой» из-за
+      // отсутствия capability-контекста агента (реестр/админ-просмотр).
+      capabilities: Object.values(ToolCapability),
     });
     if (!detail) return notFound(c);
     return c.json(detail);

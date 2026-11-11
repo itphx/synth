@@ -65,7 +65,9 @@ export function toSkillSummary(
     requiresCapabilities: meta.requiresCapabilities ?? [],
     trusted: skill.trusted,
     available: missing.length === 0,
-    ...(missing.length > 0 ? { unavailableReason: 'capabilities' as const } : {}),
+    ...(missing.length > 0
+      ? { unavailableReason: 'capabilities' as const, missingCapabilities: missing }
+      : {}),
   };
 }
 

@@ -386,6 +386,7 @@ export const dict = {
   'skills.empty': 'No skills available',
   'skills.untrusted': 'Untrusted',
   'skills.unavailable': 'Unavailable',
+  'skills.unavailable.hint': 'Agent is missing capabilities: {capabilities}',
   'skills.untrustedHint': 'This project skill is untrusted: only metadata is shown, the body and supporting files are hidden until the project directory is trusted.',
   'skills.error.load': 'Failed to load the skills registry',
   'skills.error.loadDetail': 'Failed to load the skill',
@@ -2209,9 +2210,6 @@ export const dict = {
   'admin.updates.channel.auto': 'Auto',
   'admin.updates.channel.stable': 'stable',
   'admin.updates.channel.beta': 'beta',
-  'admin.updates.channel.betaHint': 'beta — pre-releases from Gitea',
-  'admin.updates.channel.autoHint':
-    'Auto follows the installed version: a beta build checks the beta channel, a stable build checks stable.',
   'admin.updates.autoCheck': 'Check for updates automatically',
   'admin.updates.autoCheckHint':
     'The server checks the registry on a schedule. Updates are never installed automatically.',

@@ -109,12 +109,34 @@ describe('SkillsUserSettings — пользовательский просмот
 
   it('показывает бейдж недоступности для unavailable-скилла', async () => {
     mocks.getSkills.mockResolvedValue({
+      skills: [
+        summary('shell-only', {
+          available: false,
+          unavailableReason: 'capabilities',
+          missingCapabilities: ['pipeline', 'schedule'],
+        }),
+      ],
+    })
+
+    const container = await renderSettings()
+
+    const badge = container.querySelector('[data-testid="skills-badge-unavailable"]')
+    expect(badge).not.toBeNull()
+    expect(badge?.getAttribute('title')).toBe(
+      'Agent is missing capabilities: pipeline, schedule',
+    )
+  })
+
+  it('недоступный без списка capability — бейдж без подсказки', async () => {
+    mocks.getSkills.mockResolvedValue({
       skills: [summary('shell-only', { available: false, unavailableReason: 'capabilities' })],
     })
 
     const container = await renderSettings()
 
-    expect(container.querySelector('[data-testid="skills-badge-unavailable"]')).not.toBeNull()
+    const badge = container.querySelector('[data-testid="skills-badge-unavailable"]')
+    expect(badge).not.toBeNull()
+    expect(badge?.hasAttribute('title')).toBe(false)
   })
 
   it('деталь показывает тело SKILL.md и supporting-файлы (read-only)', async () => {

@@ -61,7 +61,7 @@ function skillsEffective(overrides: Record<string, unknown> = {}) {
     session_id: 's1',
     skills: [
       { name: 'api-review', description: 'Review API', level: 'system', scope: 'instance', trusted: true, available: true, enabled: true, disabled: false },
-      { name: 'db-migration', description: 'Migrations', level: 'project', scope: 'project', trusted: true, available: false, unavailableReason: 'capabilities', enabled: false, disabled: false },
+      { name: 'db-migration', description: 'Migrations', level: 'project', scope: 'project', trusted: true, available: false, unavailableReason: 'capabilities', missingCapabilities: ['pipeline'], enabled: false, disabled: false },
       { name: 'blocked', description: 'Blocked skill', level: 'system', scope: 'instance', trusted: true, available: true, enabled: false, disabled: true, disabledReason: 'system' },
     ],
     enabled: ['api-review'],
@@ -143,6 +143,9 @@ describe('SessionSettingsTab — скиллы сессии (ADR-046 §4.5)', () 
 
     const dbRow = container.querySelector('[data-testid="session-skill-db-migration"]')!
     expect(dbRow.textContent).toContain('Unavailable')
+    // Причина недоступности — подсказкой бейджа (недостающие capability).
+    const badge = dbRow.querySelector('[data-testid="session-skill-badge-unavailable"]')
+    expect(badge?.getAttribute('title')).toBe('Agent is missing capabilities: pipeline')
 
     const blockedRow = container.querySelector('[data-testid="session-skill-blocked"]')!
     const blockedToggle = blockedRow.querySelector('button[role="switch"]') as HTMLButtonElement
@@ -184,7 +187,7 @@ describe('SessionSettingsTab — скиллы сессии (ADR-046 §4.5)', () 
     mocks.updateSessionSkills.mockResolvedValue(skillsEffective({
       skills: [
         { name: 'api-review', description: 'Review API', level: 'system', scope: 'instance', trusted: true, available: true, enabled: true, disabled: false },
-        { name: 'db-migration', description: 'Migrations', level: 'session', scope: 'project', trusted: true, available: false, unavailableReason: 'capabilities', enabled: true, disabled: false },
+        { name: 'db-migration', description: 'Migrations', level: 'session', scope: 'project', trusted: true, available: false, unavailableReason: 'capabilities', missingCapabilities: ['pipeline'], enabled: true, disabled: false },
       ],
       enabled: ['api-review', 'db-migration'],
     }))

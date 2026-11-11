@@ -134,6 +134,30 @@ function parseMaxTokens(raw: string): number | null {
 }
 
 /**
+ * ADR-046 §6.3: бейдж «недоступен» с подсказкой о недостающих capability агента.
+ * Списка нет (старый сервер) — прежний вид без подсказки.
+ */
+function SkillUnavailableBadge({ missingCapabilities }: { missingCapabilities?: string[] }) {
+  const { t } = useI18n()
+  const hint =
+    missingCapabilities && missingCapabilities.length > 0
+      ? t('skills.unavailable.hint', { capabilities: missingCapabilities.join(', ') })
+      : undefined
+  const badge = (
+    <span data-testid="session-skill-badge-unavailable" title={hint} className="inline-flex">
+      <RowBadge tone="muted">{t('skills.unavailable')}</RowBadge>
+    </span>
+  )
+  if (!hint) return badge
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
  * Нормализация «Лимита ответа» для сравнения «есть ли изменения»: пустая строка
  * приравнивается к 0 (авто), невалидный ввод — к серверному значению (он не
  * сохраняется, поэтому и изменением не считается — иначе автосейв зацикливался бы).
@@ -1345,7 +1369,9 @@ export function SessionSettingsTab() {
                         <RowBadge tone="neutral">{t(`skills.scope.${skill.scope}`)}</RowBadge>
                         <RowBadge tone="neutral">{t(`skills.level.${skill.level}`)}</RowBadge>
                         {!skill.trusted && <RowBadge tone="danger">{t('skills.untrusted')}</RowBadge>}
-                        {!skill.available && <RowBadge tone="muted">{t('skills.unavailable')}</RowBadge>}
+                        {!skill.available && (
+                          <SkillUnavailableBadge missingCapabilities={skill.missingCapabilities} />
+                        )}
                       </>
                     }
                     aside={

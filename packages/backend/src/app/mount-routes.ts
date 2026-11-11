@@ -9,6 +9,7 @@ import type { Hono } from 'hono';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, SYNTH_VERSION, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword } from '@itphx/synth-shared';
 import {
   DEFAULT_AGENT_ID, RateLimiter,
+  resolveAgentRoleAlias,
   getPublicOpenApiDocument,
   createFsRoutes, createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes,
@@ -1169,6 +1170,12 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     sessionManager, skillService, settingsStore, projectStore,
     permissionConfig: config.synth.permission,
     resolveProjectWorkspace: resolveSkillWorkspace,
+    // ADR-046 §6.3: capability-гейт сессии — по capabilities её агента
+    // (legacy-роль резолвится алиасом, как в рантайме оркестратора).
+    resolveAgentCapabilities: (role) => {
+      const resolved = role ? (resolveAgentRoleAlias(role) ?? role) : undefined;
+      return resolved ? agentRegistry.get(resolved)?.capabilities : undefined;
+    },
   }, {
     writeGuard: auth.requireAuth,
     resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',

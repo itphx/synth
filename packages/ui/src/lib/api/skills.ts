@@ -45,6 +45,8 @@ export interface EffectiveSkillEntry {
   trusted: boolean
   available: boolean
   unavailableReason?: string
+  /** Какие именно capabilities не хватает (при `unavailableReason: 'capabilities'`). */
+  missingCapabilities?: string[]
   enabled: boolean
   disabled: boolean
   disabledReason?: 'session' | 'system' | 'project'

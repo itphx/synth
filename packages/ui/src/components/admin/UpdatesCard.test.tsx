@@ -14,6 +14,7 @@ vi.mock('@/hooks/useNotification', () => ({
 vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { synthApi } from '@/lib/api/synthApi'
 import {
@@ -87,7 +88,9 @@ async function renderCard(onReload: () => void = () => undefined): Promise<HTMLE
   await act(async () => {
     root.render(
       <I18nProvider>
-        <UpdatesCard onReload={onReload} pollIntervalMs={1} restartTimeoutMs={200} />
+        <TooltipProvider>
+          <UpdatesCard onReload={onReload} pollIntervalMs={1} restartTimeoutMs={200} />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })
@@ -183,6 +186,31 @@ describe('UpdatesCard (ADR-133)', () => {
     expect(toggle).not.toBeNull()
     expect(toggle!.getAttribute('aria-checked')).toBe('false')
     expect(toggle!.hasAttribute('disabled')).toBe(false)
+  })
+
+  it('описания секции/автопроверки — в подсказках ⓘ, удалённые тексты не рендерятся', async () => {
+    const container = await renderCard()
+
+    const tooltips = Array.from(
+      container.querySelectorAll('[data-testid="settings-field-tooltip"]'),
+    ).map((el) => el.getAttribute('aria-label'))
+    expect(tooltips).toContain(
+      'Update channel, automatic checks and installing a new version.',
+    )
+    expect(tooltips).toContain(
+      'The server checks the registry on a schedule. Updates are never installed automatically.',
+    )
+
+    // Описания больше не выводятся простым текстом — только в подсказке.
+    expect(container.textContent).not.toContain(
+      'Update channel, automatic checks and installing a new version.',
+    )
+    expect(container.textContent).not.toContain(
+      'The server checks the registry on a schedule.',
+    )
+    // Удалённые подсказки канала (beta/auto) не показываются.
+    expect(container.textContent).not.toContain('beta — pre-releases from Gitea')
+    expect(container.textContent).not.toContain('Auto follows the installed version')
   })
 
   it('тумблер автопроверки сохраняет значение через PUT и показывает тост', async () => {

@@ -13,6 +13,7 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { DashboardPanel } from './DashboardPanel'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -28,7 +29,9 @@ async function renderPanel(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <DashboardPanel />
+        <TooltipProvider>
+          <DashboardPanel />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

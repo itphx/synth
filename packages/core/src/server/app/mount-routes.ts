@@ -10,6 +10,7 @@ import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelC
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
   KeyRateLimiter, DEFAULT_AGENT_ID,
+  resolveAgentRoleAlias,
   createSessionRoutes, createProjectRoutes,
   createProjectPlanRoutes, createProjectLogRoutes,
   createProviderRoutes, createModelRoutes, createAgentRoutes, createFsRoutes,
@@ -1162,6 +1163,12 @@ export function mountStandaloneRoutes(
     sessionManager, skillService, settingsStore, projectStore,
     permissionConfig: config.permissionConfig,
     resolveProjectWorkspace: resolveSkillWorkspace,
+    // ADR-046 §6.3: capability-гейт сессии — по capabilities её агента
+    // (legacy-роль резолвится алиасом, как в рантайме оркестратора).
+    resolveAgentCapabilities: (role) => {
+      const resolved = role ? (resolveAgentRoleAlias(role) ?? role) : undefined;
+      return resolved ? agentRegistry.get(resolved)?.capabilities : undefined;
+    },
   }, {
     localOwnerResolver: deps.localOwnerResolver,
   }));

@@ -15,6 +15,7 @@ import { ProjectStore } from '../../storage/project-store.js';
 import { RuntimeSettingsStore } from '../../storage/runtime-settings.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { Project, Session } from '@itphx/synth-shared';
+import { resolveAgentRoleAlias } from '../../engine/agents/migrations.js';
 import type { SkillScopeRoutesOptions } from './skill-scope.js';
 
 function createMockAuth(): AuthKit {
@@ -33,6 +34,15 @@ interface SkillsSettingsBody {
   trustedProjectDirsDefaults: string[];
   trustedProjectDirsSource: 'runtime' | 'config' | 'default';
   restartRequired: boolean;
+}
+
+/** Ответ scope-API: доступность скилла (capability-гейт, ADR-046 §6.3). */
+interface EffectiveSkillsBody {
+  skills: Array<{
+    available: boolean;
+    unavailableReason?: string;
+    missingCapabilities?: string[];
+  }>;
 }
 
 let tmpDir: string;
@@ -149,7 +159,7 @@ describe('scope-API скиллов (ADR-046 §4.5)', () => {
       permissionConfig: { rules: { skill: { denied: 'deny' } }, askTimeoutMs: 30_000 },
     });
     const session = await sessionManager.createSession({});
-    const body: any = await (await app.request(`/api/v2/sessions/${session.id}/skills`)).json();
+    const body = (await (await app.request(`/api/v2/sessions/${session.id}/skills`)).json()) as EffectiveSkillsBody;
     const names = body.skills.map((s: any) => s.name);
     expect(names).toContain('allowed');
     expect(names).not.toContain('denied');
@@ -272,6 +282,78 @@ describe('scope-API скиллов (ADR-046 §4.5)', () => {
     const body = (await (await app.request('/api/v2/settings/skills')).json()) as SkillsSettingsBody;
     expect(body.trustedProjectDirs).toEqual(['/rt']);
     expect(body.trustedProjectDirsSource).toBe('runtime');
+  });
+});
+
+describe('scope-API — capability-гейт по агенту (ADR-046 §6.3)', () => {
+  /** Сводка `synth-pipelines`; `missing` зависит от переданных capabilities. */
+  const summary = (missing: string[]) => ({
+    name: 'synth-pipelines', description: '', scope: 'instance', level: 'system',
+    dir: '/skills/synth-pipelines', invocation: 'both', userInvocable: true,
+    modelInvocable: true, tags: [], agents: [], groups: [],
+    requiresCapabilities: ['pipeline'], trusted: true,
+    available: missing.length === 0,
+    ...(missing.length ? { unavailableReason: 'capabilities', missingCapabilities: missing } : {}),
+  });
+  const skillService = {
+    listSummaries: async (opts?: { capabilities?: readonly string[] }) => {
+      const have = new Set(opts?.capabilities ?? []);
+      return {
+        skills: [summary(have.has('pipeline') ? [] : ['pipeline'])],
+        diagnostics: [],
+      };
+    },
+  };
+
+  it('сессия без pipeline у агента — available:false + missingCapabilities', async () => {
+    const app = makeApp({
+      skillService,
+      resolveAgentCapabilities: (role?: string) =>
+        role === 'fixer' ? ['file_read', 'pipeline'] : ['file_read'],
+    });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'assistant' } });
+    const body = (await (await app.request(`/api/v2/sessions/${session.id}/skills`)).json()) as EffectiveSkillsBody;
+    expect(body.skills[0]!.available).toBe(false);
+    expect(body.skills[0]!.unavailableReason).toBe('capabilities');
+    expect(body.skills[0]!.missingCapabilities).toEqual(['pipeline']);
+  });
+
+  it('сессия с pipeline у агента — available:true, без missingCapabilities', async () => {
+    const app = makeApp({
+      skillService,
+      resolveAgentCapabilities: (role?: string) =>
+        role === 'fixer' ? ['file_read', 'pipeline'] : ['file_read'],
+    });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'fixer' } });
+    const body = (await (await app.request(`/api/v2/sessions/${session.id}/skills`)).json()) as EffectiveSkillsBody;
+    expect(body.skills[0]!.available).toBe(true);
+    expect(body.skills[0]!.missingCapabilities).toBeUndefined();
+  });
+
+  it('legacy-роль pm резолвится алиасом в leader (capabilities лидера)', async () => {
+    const app = makeApp({
+      skillService,
+      resolveAgentCapabilities: (role?: string) => {
+        const resolved = role ? (resolveAgentRoleAlias(role) ?? role) : undefined;
+        return resolved === 'leader' ? ['pipeline'] : ['file_read'];
+      },
+    });
+    const session = await sessionManager.createSession({ settings: { agentRole: 'pm' } });
+    const body = (await (await app.request(`/api/v2/sessions/${session.id}/skills`)).json()) as EffectiveSkillsBody;
+    expect(body.skills[0]!.available).toBe(true);
+    expect(body.skills[0]!.missingCapabilities).toBeUndefined();
+  });
+
+  it('проектный список — не «серый»: полный набор ToolCapability', async () => {
+    const app = makeApp({ skillService });
+    const project: Project = {
+      id: 'p-cap', name: 'P', ownerId: 'u', members: {}, description: '', currentTask: '',
+      invariants: '', statusMessages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    await projectStore.save(project);
+    const body = (await (await app.request('/api/v2/projects/p-cap/skills')).json()) as EffectiveSkillsBody;
+    expect(body.skills[0]!.available).toBe(true);
+    expect(body.skills[0]!.missingCapabilities).toBeUndefined();
   });
 });
 

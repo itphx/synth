@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { SettingsPanel, SettingsSection } from '../ui/settings'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 
 /** Цвета бейджей уровня/scope/trust/доступности (только токены темы). */
 const SCOPE_BADGE: Record<string, string> = {
@@ -211,8 +212,26 @@ function SkillListItem({
   )
 }
 
-function ScopeBadges({ skill }: { skill: Pick<SkillSummary, 'scope' | 'level' | 'trusted' | 'available'> }) {
+function ScopeBadges({
+  skill,
+}: {
+  skill: Pick<SkillSummary, 'scope' | 'level' | 'trusted' | 'available' | 'missingCapabilities'>
+}) {
   const { t } = useI18n()
+  const missing = skill.missingCapabilities ?? []
+  const unavailableHint =
+    !skill.available && missing.length > 0
+      ? t('skills.unavailable.hint', { capabilities: missing.join(', ') })
+      : undefined
+  const unavailableBadge = (
+    <span
+      data-testid="skills-badge-unavailable"
+      title={unavailableHint}
+      className="rounded px-1.5 py-0.5 text-[0.625rem] font-medium bg-muted text-muted-foreground"
+    >
+      {t('skills.unavailable')}
+    </span>
+  )
   return (
     <>
       <span
@@ -240,12 +259,14 @@ function ScopeBadges({ skill }: { skill: Pick<SkillSummary, 'scope' | 'level' | 
         </span>
       )}
       {!skill.available && (
-        <span
-          data-testid="skills-badge-unavailable"
-          className="rounded px-1.5 py-0.5 text-[0.625rem] font-medium bg-muted text-muted-foreground"
-        >
-          {t('skills.unavailable')}
-        </span>
+        unavailableHint ? (
+          <Tooltip>
+            <TooltipTrigger asChild>{unavailableBadge}</TooltipTrigger>
+            <TooltipContent>{unavailableHint}</TooltipContent>
+          </Tooltip>
+        ) : (
+          unavailableBadge
+        )
       )}
     </>
   )
