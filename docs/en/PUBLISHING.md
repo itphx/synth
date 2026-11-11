@@ -180,7 +180,7 @@ Full addresses: `git.itphx.ru/itphx/synth-backend:<version>-core`, `git.itphx.ru
 
 ### Secret
 
-Publishing to the Gitea registry uses the **`GV_GITEA_TOKEN`** secret (login `itphx`); locally and in `synth-deploy` it is the `GITEA_TOKEN` environment variable. If the secret is missing, publishing **fails** with a clear message (fail-closed) instead of being silently skipped: `scripts/docker-auth-gitea.sh` prepares the `config.json` for kaniko/CLI.
+Publishing **flavor images to the Gitea registry** (the `publish-images-gitea` job in `release.yaml`) uses the **`GT_TOKEN`** secret (login `itphx`); locally and in `synth-deploy` it is the `GITEA_TOKEN` environment variable. Publishing **beta packages to the Gitea npm registry** (`beta.yaml`) uses the **`GV_GITEA_TOKEN`** secret (it needs the `package:write` permission). If the secret is missing, publishing **fails** with a clear message (fail-closed) instead of being silently skipped: `scripts/docker-auth-gitea.sh` prepares the `config.json` for kaniko/CLI.
 
 ### Build and publish
 
@@ -477,7 +477,8 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 |--------|------------|
 | `NPM_TOKEN` | Publishing to npmjs.org |
 | `GV_TOKEN` | Single GitVerse token (API, Docker Registry, npm registry, git push from the bot) |
-| `GV_GITEA_TOKEN` | Gitea token (`git.itphx.ru`) with container-registry rights — publishing flavor images and executor images (login `itphx`) |
+| `GT_TOKEN` | Gitea token (`git.itphx.ru`) with container-registry rights — publishing flavor images and executor images in `release.yaml` (login `itphx`) |
+| `GV_GITEA_TOKEN` | Gitea token (`git.itphx.ru`) for the Gitea npm registry — publishing beta packages in `beta.yaml` (needs the `package:write` permission) |
 | `GH_TOKEN` | GitHub mirror: push refs, GitHub Release, publishing the base images to GHCR (classic PAT, scopes `repo` + `write:packages`) |
 | `GHCR_USER` | Optional: the login of the `GH_TOKEN` owner for `ghcr.io` (default `itphx`) |
 | `GV_SYNTH_URL` | Base API v2 URL of the Synth instance that receives the release event (e.g. `https://synth.k3s.itphx.loc/api/v2`) |

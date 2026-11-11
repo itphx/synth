@@ -23,7 +23,7 @@ set -euo pipefail
 
 if [[ -z "${GITEA_TOKEN:-}" ]]; then
   echo "docker-auth-gitea.sh: GITEA_TOKEN не задан — публикация в реестр Gitea невозможна" >&2
-  echo "  в CI: секрет GV_GITEA_TOKEN; локально: переменная GITEA_TOKEN" >&2
+  echo "  в CI: секрет GT_TOKEN; локально: переменная GITEA_TOKEN" >&2
   exit 1
 fi
 

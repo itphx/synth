@@ -638,8 +638,12 @@ jobs:
   # Ограничение GitVerse/GHCR (~500 МБ на репозиторий) к Gitea-реестру не
   # относится, но политика тегов — общая для всех реестров.
   #
-  # Секрет — `GV_GITEA_TOKEN` (логин `itphx`). Если секрета нет — шаг падает
+  # Секрет — `GT_TOKEN` (логин `itphx`). Если секрета нет — шаг падает
   # (fail-closed, scripts/docker-auth-gitea.sh), а не публикует «молча».
+  #
+  # Секрет адресуется напрямую, одним именем: GitVerse не вычисляет
+  # `secrets.A || secrets.B` (выражение резолвится в пусто) — цепочек через
+  # `||` в workflow-файлах нет.
   #
   # flavor-стадии содержат RUN с установкой пакетов, поэтому `--platform` в них
   # не задаётся: flavor'ы публикуются для архитектуры раннера (amd64).
@@ -669,15 +673,16 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
           GITEA_USER: itphx
-          GITEA_TOKEN: ${{ secrets.GV_GITEA_TOKEN || secrets.GITEA_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.GT_TOKEN }}
         run: bash scripts/docker-auth-gitea.sh
 
       # Flavor-образы и slim собирает scripts/publish-images.sh: docker + BuildKit,
       # последовательный push с ретраями (DNS Gitea-реестра не любит параллель),
-      # вход в реестр — по GV_GITEA_TOKEN. kaniko на synth-ci недоступен (см. выше).
+      # вход в реестр — по переменной окружения `GV_GITEA_TOKEN` (её значение —
+      # секрет `GT_TOKEN`). kaniko на synth-ci недоступен (см. выше).
       - name: Публикация flavor-образов (docker → Gitea)
         env:
-          GV_GITEA_TOKEN: ${{ secrets.GV_GITEA_TOKEN || secrets.GITEA_TOKEN }}
+          GV_GITEA_TOKEN: ${{ secrets.GT_TOKEN }}
           GITEA_USER: itphx
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: |

@@ -181,7 +181,7 @@ gitverse.ru/itphx/synth:<version>
 
 ### Секрет
 
-Публикация в Gitea-реестр — по секрету **`GV_GITEA_TOKEN`** (логин `itphx`); локально и в `synth-deploy` — переменная `GITEA_TOKEN`. Если секрет не задан, публикация **падает** с понятным сообщением (fail-closed), а не пропускается молча: `scripts/docker-auth-gitea.sh` готовит `config.json` для kaniko/CLI.
+Публикация **flavor-образов в Gitea-реестр** (джоба `publish-images-gitea` в `release.yaml`) — по секрету **`GT_TOKEN`** (логин `itphx`); локально и в `synth-deploy` — переменная `GITEA_TOKEN`. Публикация **бета-пакетов в npm-реестр Gitea** (`beta.yaml`) — по секрету **`GV_GITEA_TOKEN`** (нужно право `package:write`). Если секрет не задан, публикация **падает** с понятным сообщением (fail-closed), а не пропускается молча: `scripts/docker-auth-gitea.sh` готовит `config.json` для kaniko/CLI.
 
 ### Сборка и публикация
 
@@ -489,7 +489,8 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 |--------|------------|
 | `NPM_TOKEN` | Публикация в npmjs.org |
 | `GV_TOKEN` | Единый токен GitVerse (API, Docker Registry, npm registry, git push от бота) |
-| `GV_GITEA_TOKEN` | Токен Gitea (`git.itphx.ru`) с правом на container registry — публикация flavor-образов и образов исполнителей (логин `itphx`) |
+| `GT_TOKEN` | Токен Gitea (`git.itphx.ru`) с правом на container registry — публикация flavor-образов и образов исполнителей в `release.yaml` (логин `itphx`) |
+| `GV_GITEA_TOKEN` | Токен Gitea (`git.itphx.ru`) для npm-реестра Gitea — публикация бета-пакетов в `beta.yaml` (нужно право `package:write`) |
 | `GH_TOKEN` | GitHub-зеркало: push refs, GitHub Release, публикация базовых образов в GHCR (classic PAT, scope `repo` + `write:packages`) |
 | `GHCR_USER` | Необязательно: логин владельца `GH_TOKEN` для `ghcr.io` (по умолчанию `itphx`) |
 | `GV_SYNTH_URL` | База API v2 инстанса Synth для события релиза (например `https://synth.k3s.itphx.loc/api/v2`) |

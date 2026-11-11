@@ -19,8 +19,10 @@
 # Реестр и креды:
 #
 #   * реестр  — `git.itphx.ru` (по умолчанию), namespace `itphx`;
-#   * токен   — `GV_GITEA_TOKEN` (секрет GitVerse CI) или `GITEA_TOKEN` (локально
-#               и в `synth-deploy`); логин — `itphx` (или `GITEA_USER`);
+#   * токен   — env `GV_GITEA_TOKEN` или `GITEA_TOKEN`; в CI значение берётся
+#               из секрета `GT_TOKEN` (секрет GitVerse CI для flavor-образов);
+#               локально и в `synth-deploy` — переменная `GITEA_TOKEN`;
+#               логин — `itphx` (или `GITEA_USER`);
 #   * если токен не задан, а пуш требуется — **fail-closed** с понятным
 #     сообщением (как для `GH_TOKEN` в `release.yaml`), а не молчаливый пропуск.
 #
@@ -93,7 +95,8 @@ usage() {
   -h, --help             Эта справка.
 
 Переменные окружения:
-  GV_GITEA_TOKEN / GITEA_TOKEN — токен Gitea (container registry).
+  GV_GITEA_TOKEN / GITEA_TOKEN — токен Gitea (container registry); в CI —
+                                  значение из секрета GT_TOKEN.
   GITEA_USER                   — логин Gitea (по умолчанию: itphx).
 EOF
 }
@@ -198,7 +201,7 @@ resolve_token
 GITEA_LOGIN="${GITEA_USER:-itphx}"
 
 if [[ "$SKIP_PUSH" == "0" && "$DRY_RUN" == "0" && -z "$TOKEN" ]]; then
-  die "токен Gitea не задан: задайте GV_GITEA_TOKEN (секрет CI) или GITEA_TOKEN (локально) — публикация без токена невозможна"
+  die "токен Gitea не задан: задайте GV_GITEA_TOKEN (в CI — из секрета GT_TOKEN) или GITEA_TOKEN (локально) — публикация без токена невозможна"
 fi
 
 if [[ "$SKIP_PUSH" == "0" && -n "$TOKEN" ]]; then
