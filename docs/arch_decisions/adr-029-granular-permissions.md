@@ -54,3 +54,36 @@ permission:
 **Саб-агенты:** проходят permission-check; `ask` публикуется в родительскую сессию (`permission.asked`), ответ пользователя применяется к дочерней сессии.
 
 **MCP-инструменты:** доступность по режимам plan/act — `SessionSettings.mcpToolSettings[server].default|tools[tool] = { plan, act }` (настройки в UI). В текущем режиме недоступный тул → deny.
+
+> **Обновлено 2026-11-11. Сессионный shell-грант строится по сегменту-виновнику (сверка с opencode и hermes-agent).**
+> «Разрешить в сессии» для `execute_shell` больше не предлагает командный паттерн «на всю команду»:
+> грант считается по **сегменту-виновнику** (`shellGrantPlan` в `engine/security/shell-guard.ts`).
+>
+> - **План гранта.** `shellGrantPlan(command, trigger, { cwd })` → `{ commands, patterns, directories }`:
+>   `commands` — все исполняемые сегменты команды (тот же разбор `splitShellSegments`, что у
+>   `shellSavePatterns`; trim, служебные строки heredoc/комментарии/shebang отброшены) — они
+>   показываются человеку; `patterns` — паттерны правила `execute_shell: { "<cmd> *": "allow" }`;
+>   `directories` — каталоги для правила `external_directory: "<dir>/*"`.
+> - **`askKind: 'dynamic'`** (непроверяемый glob/динамика) — командный паттерн **не выдаётся никогда**
+>   (`patterns: []`): он шире конкретной команды. Вместо него предлагается каталог виновника
+>   (`grantDirectoryForToken`: токен с `/` → его каталог-часть; bare-glob (`*.js`) → `cwd` сегмента;
+>   `$VAR`/`$(...)`/backtick → каталог не определяется). Снятие ask требует, чтобы **все** фактические
+>   совпадения glob'а (`ShellCheckResult.askPaths`, абсолютные пути реальных совпадений из `checkShellCommand`)
+>   были внутри периметра или под **явным** `allow` правила `external_directory` (`evaluator.ts`,
+>   ветка `liftedByDirectoryGrant`); дефолтный `external_directory: ask` снятием не считается.
+> - **`protected`/`mutation`/`cwd`/`deny`** — жёсткий слой выше правил: не снимаются ни командным
+>   паттерном, ни каталогом (`save: []`, `saveDirectories` пуст). Карточка показывает «Только один раз».
+> - **Провод.** `permission.asked` и DTO `GET /api/v2/sessions/:id/permissions` несут аддитивные
+>   `commands?: string[]` (точные сегменты), `save?: string[]` (паттерны; `[]` — грант не предлагается)
+>   и `saveDirectories?: string[]` (каталоги; в payload — camelCase, как исторически). Выдача гранта
+>   пишется в аудит (`scope:'permission'`, `action:'grant'`) через `OrchestratorOptions.onPermissionGrant`;
+>   `_grantSessionToolAllow` без `trigger` (восстановленное после рестарта ожидание) идёт legacy-путём
+>   `shellSavePatterns`.
+> - **Сверка с opencode.** `packages/core/src/shell/parse.ts` (`ARITY`/`prefix`) разбирает команду на
+>   сегменты так же, как наш `splitShellSegments`; в `session-permission-dock.tsx` показываются
+>   `resources` запроса (аналог наших `commands`); `cd`-цели в `file-access.ts` трактуются как
+>   `external_directory` — отсюда форма гранта каталогом (`<dir>/*`), а не «разрешить весь shell».
+> - **Сверка с hermes-agent.** `tools/approval.py` выдаёт гранты **по классам опасности**, а
+>   `tools/approval_floors.py` явно **не** применяет `command_allowlist` к составным командам —
+>   подтверждение нашего правила «составная команда не получает командный паттерн целиком; динамика
+>   покрывается только каталогом/точечным подтверждением».

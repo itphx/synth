@@ -141,13 +141,25 @@
 - Permissions и режимы — только через `PermissionEvaluator`
   (`engine/permission/evaluator.ts`): `plan`/`act`/`yolo`,
   `allow`/`deny`/`ask`; не хардкодить проверки в тулах (ADR-025/028/029).
-- **Сессионный shell-грант паттернами (ADR-029).** `shellSavePatterns(command)`
-  (`engine/security/shell-guard.ts`) даёт паттерны правила
-  `execute_shell: { "<cmd> *": "allow" }` (`null` — динамика нерезолвима, грант не выдаётся;
-  дедуп, порядок появления, ≤ 20); `isShellCommandGranted` снимает **только** `ask` с
-  `askKind: 'dynamic'` (`protected`/`mutation`/`cwd`/`deny` — никогда); `permission.asked`
-  несёт аддитивное `save`, а выдача пишется в аудит (`scope:'permission'`, `action:'grant'`)
-  через шов `OrchestratorOptions.onPermissionGrant`.
+- **Сессионный shell-грант по сегменту-виновнику (ADR-029).** `shellGrantPlan(command, trigger, {cwd})`
+  (`engine/security/shell-guard.ts`) — единственный расчёт гранта: `commands` (все исполняемые
+  сегменты — то же разбиение `splitShellSegments`, trim; для показа человеку), `patterns` (паттерны
+  правила `execute_shell: { "<cmd> *": "allow" }`) и `directories` (каталоги для
+  `external_directory: "<dir>/*"`). Семантика: `askKind: 'dynamic'` (непроверяемый glob/динамика) —
+  командный паттерн **не выдаётся** (`patterns: []`), грант идёт каталогом виновника
+  (`grantDirectoryForToken`: каталог-часть токена; bare-glob → `cwd` сегмента; `$VAR`/`$(...)` —
+  каталога нет); `protected`/`mutation`/`cwd` — ни паттернов, ни каталогов (жёсткий слой выше
+  правил, карточка предлагает только разовое разрешение). Снятие ask проверяется в
+  `engine/permission/evaluator.ts`: `isShellCommandGranted` (паттерны) **или** ветка
+  `liftedByDirectoryGrant` — dynamic-ask снимается, только если **все** фактические совпадения
+  glob'а (`ShellCheckResult.askPaths` — абсолютные пути реальных совпадений из `checkShellCommand`)
+  внутри периметра или под **явным** `allow` правила `external_directory` (дефолт
+  `external_directory: ask` снятием не считается); `protected`/`mutation`/`cwd`/`deny` не снимаются
+  никогда. `permission.asked` и DTO `GET /:id/permissions` несут аддитивные `commands`,
+  `save` (`[]` — грант не предлагается) и `saveDirectories` (в payload — camelCase); выдача
+  пишется в аудит (`scope:'permission'`, `action:'grant'`) через шов
+  `OrchestratorOptions.onPermissionGrant`. Без `trigger` (восстановленное после рестарта ожидание)
+  `_grantSessionToolAllow` идёт legacy-путём `shellSavePatterns`.
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
