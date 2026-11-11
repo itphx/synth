@@ -86,7 +86,7 @@ export const dict = {
   'app.leftPanel': 'Left panel',
   'app.rightPanel': 'Right panel',
   'app.title': 'Synth',
-  'app.subtitle': 'Agentic AI Platform for Dev Teams',
+  'app.subtitle': 'Agentic AI Platform for Teamwork',
 
   // Header
   'header.showLeftPanel': 'Show left panel',

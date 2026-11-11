@@ -1,7 +1,7 @@
 {
   "name": "Synth",
   "short_name": "Synth",
-  "description": "Agentic AI Platform for Dev Teams",
+  "description": "Agentic AI Platform for Teamwork",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
