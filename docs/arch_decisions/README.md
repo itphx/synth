@@ -127,6 +127,7 @@
 | PROP-126 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | 🧩 Предложение | [prop-126-input-surface-mentions-snippets.md](./prop-126-input-surface-mentions-snippets.md) |
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
 | PROP-132 | Встроенный терминал в UI | 🧩 Предложение | [prop-132-ui-terminal.md](./prop-132-ui-terminal.md) |
+| PROP-133 | Доступ к проекту — участники, группы и видимость | 🧩 Предложение | [prop-133-project-access-sharing.md](./prop-133-project-access-sharing.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -175,5 +176,5 @@
 
 ---
 
-Всего документов: 114 (Решения: 58, Частично: 24, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 115 (Решения: 58, Частично: 24, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 21 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
