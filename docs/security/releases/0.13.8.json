@@ -1,0 +1,103 @@
+{
+  "schema": "synth.security.audit/v1",
+  "version": "0.13.8",
+  "commit": "faafa3e3a456e420882336852f36e06f70c72cf5",
+  "date": "2026-11-11",
+  "auditor": {
+    "name": "opencode (аудит-агент, роль AUDITOR), режим read-only",
+    "role": "AUDITOR",
+    "mode": "read-only"
+  },
+  "status": "approved_with_exceptions",
+  "summary": "Внутренний аудит 0.13.8 (диапазон v0.13.4..HEAD, 123 коммита) выполнен по чек-листу §0-§6 и пройден с исключениями: машинные проверки зелёные — secret-scan дерева/истории/blob-ов чист (0 находок, 93 подавления — только тестовые фикстуры; узость нового allowlist-блока ADR-124 проверена пробой на изолированной копии), негативная матрица авторизации 109/109 + перепись маршрутов 36/36, ратчет зависимостей critical 0 / high 0 (--prod 0/0/0/0, прямых уязвимых 0). Две находки аудита закрыты в коммите линии релиза faafa3e3a456e420882336852f36e06f70c72cf5 и потому не числятся принятым риском: MEDIUM restored-approval-grant-widening (ветка восстановленного ожидания выдавала грант командным паттерном вместо каталога виновника) и LOW tool-output-cap-bypass-via-metadata (тул мог отменить общий предел вывода маркером metadata.outputBounded). Фиксы: packages/core/src/server/routes/sessions.ts (передача snapshot триггера в grantSessionToolAllow), packages/core/src/engine/orchestrator.ts (legacy-путь shellSavePatterns удалён, для execute_shell без trigger — fail-closed), packages/core/src/index.ts (экспорт PermissionGrantTrigger), packages/core/src/engine/tools/tool-execution.ts (предел вывода считается по фактическому размеру, поддельные счётчики перезаписываются). Проверка фиксов: целевые тесты 54 passed / 0 failed (sessions-permissions, orchestrator-shell-grant, orchestrator-pending-approvals, tool-execution.output-bound), полный core — 606 файлов с единственным падением git-proxy-env.test.ts (env-флейк no_proxy; с env -u no_proxy зелёный), полный pnpm test у фиксера — 0 failed (shared 1043, core 10187, ui 3935, backend 842, executor 247, plugin-memory 191, storage-postgres 114), typecheck чистый, lint 0 errors; проба на пересобранном core: поддельный outputBounded + 600001 байт → 612 байт при truncated=true, функциональный вызов shellSavePatterns в сборке отсутствует. CI на коммите линии релиза зелёный: ci.yaml run 2070903 (index 278) — 14/14 джоб success (первый запуск упал на инфраструктуре — клон actions/checkout в джобе тестов shared; перезапуск через API зелёный), ci-docs.yaml run 2070902 (index 277) — success, включая шаг проверки записей внутреннего аудита; локальная сверка docs-link-check на дереве faafa3e3 — 68 файлов, 1128 ссылки, 0 ошибок. Остаточные риски оформлены шестью исключениями (git-containment-toctou, summarization-gateway-disabled-no-guard, chunked-upload-quota-best-effort, historical-test-fixture-allowlists, dev-only-advisories, hono-node-server-major-2) с owner и dueRelease 0.13.9. Не проверено: полный pnpm test локально от аудитора (прогонялись целевые наборы по затронутым подсистемам), живой PostgreSQL-контрактный suite локально (в CI он зелёный на faafa3e3), e2e MCP-транспорта на @hono/node-server 2.x, распределённая блокировка квот chunked-загрузки. Аудит проводился на зафиксированном дереве коммита 83ba5729 (secret-scan по git archive), фиксы находок проверены отдельно и включены коммитом faafa3e3, на котором прогнан CI.",
+  "checks": {
+    "secret-scan": {
+      "status": "pass",
+      "command": "node scripts/secret-scan.mjs --mode worktree,commits,blobs --report tmp/security/secret-scan-0.13.8.json && node scripts/secret-scan.mjs --list-allowlists",
+      "result": "ЧИСТО — находок нет: worktree=3177, commits=1063703, blobs=20467, правил 15, allowlist-блоков 16, подавлено 93 (только тестовые фикстуры: dummy-маркеры ключей 25, внешних доступов и ротации 8+9, SSH/ADR-124 10, PEM-прокси 2, TLS-самоподписанный 1, bearer-метрик 1, dummy-креды в URL 14, env-имена 6, inline-PEM 6+2, исторические фикстуры исполнителя 2+5+2). Новый блок allowlist 3.0 (ADR-124, 7 путей x 4 dummy-маркера, коммит 2c3d2f9b) проверен пробой на изолированной копии дерева в tmp/security/probe: реальный токен в allowlisted-файле остаётся находкой HIGH github-token, тот же dummy-маркер в файле вне allowlist — находкой MEDIUM generic-credential-literal; подавление узкое (путь И маркер, не файл целиком). Повторный прогон на дереве именно коммита 83ba5729 (git archive в tmp/security/probe/head83): worktree=3176, подавлено 54, находок нет.",
+      "date": "2026-11-11"
+    },
+    "auth-matrix": {
+      "status": "pass",
+      "command": "pnpm --filter @itphx/synth-backend exec vitest run src/routes/sessions-access.test.ts src/routes/session-idor-matrix.test.ts && pnpm --filter @itphx/synth-backend exec vitest run src/app/route-access-census.test.ts src/routes/worktree-access-matrix.test.ts src/routes/processes-access.test.ts",
+      "result": "Файлы матрицы из policy.authMatrix.files на месте (маркер IDOR в обоих): 2 файла, 109 тестов, 109 passed / 0 failed. Сверх них — перепись доступа 3 файла, 36 тестов, 36 passed / 0 failed. Перепись по смонтированному createBackendApp(): каждый маршрут /api/v2/* без креды -> 401 UNAUTHORIZED; реестр DECLARED_PARAM_ROUTES совпадает с фактически смонтированными маршрутами в обе стороны; чужой USER (user-key-456) на каждый :id-маршрут -> не 2xx и не 500; публичный allowlist — ровно 5 путей (GET /api/v2/health, /api/v2/meta, /api/v2/i18n/current, /api/v2/i18n/translations/ru, /api/v2/i18n/translations/en) + OPTIONS; мутация публичного пути и неизвестный путь -> 401. Перенесённые в core роуты (createMcpRegistryRoutes, /logs/*, /audit*, /gateway/patterns, /context/files*, /admin/debug/config, POST /providers/fetch-icon) присутствуют в реестре с правилами доступа и guard'ами (ADMIN / ADMIN|AUDITOR / владелец|ADMIN), отдельной копии в backend нет.",
+      "date": "2026-11-11"
+    },
+    "ci-baseline": {
+      "status": "pass",
+      "command": "CI GitVerse: ci.yaml run 2070903 (index 278) на коммите faafa3e3 + ci-docs run 2070902",
+      "result": "ЗЕЛЁНЫЙ на коммите линии релиза faafa3e3a456e420882336852f36e06f70c72cf5: ci.yaml run 2070903 (index 278), 2026-11-11T11:28:08Z → 12:07:15Z, status success — 14/14 джоб success: Линтинг + Typecheck; Тесты @itphx/synth-shared; Тесты @itphx/synth-core; Тесты @itphx/synth-executor; Тесты @itphx/synth-storage-postgres; Контрактный suite на живой PostgreSQL (ADR-097); Тесты @itphx/synth-backend; Тесты @itphx/synth-sdk; Тесты @itphx/synth-ui; Тесты @itphx/synth-plugin-memory; Secret-scan (дерево + история); Аудит зависимостей (report-only); Helm-чарт (lint + template); Образы (сборка + smoke). Первый запуск того же прогона упал на инфраструктуре — джоба «Тесты @itphx/synth-shared» зависла на клоне actions/checkout и была убита; после перезапуска через API прогон завершился зелёным (14/14). ci-docs.yaml run 2070902 (index 277), 2026-11-11T10:58:39Z → 10:58:53Z, status success: джоба «Документация (AD-индекс + ссылки)» — все шаги success (Проверка индекса и целостности AD, Проверка относительных ссылок в документации, Проверка записей внутреннего аудита). Локальная сверка на дереве коммита faafa3e3 (git archive в tmp/security/probe/faafa): node scripts/docs-link-check.mjs — OK, файлов: 68, ссылок: 1128, ошибок: 0 (прежняя красная ссылка docs/en/PUBLISHING.md:123 -> ./MAINTENANCE.md исправлена в этом коммите); node scripts/adr-check.mjs — OK, документов: 115, ошибок: 0, предупреждений: 27.",
+      "date": "2026-11-11"
+    },
+    "dependencies": {
+      "status": "pass_with_exceptions",
+      "command": "pnpm audit --json && pnpm audit --prod --json && node scripts/security-gate.mjs --only dependencies --skip-tests",
+      "counts": {
+        "critical": 0,
+        "high": 0
+      },
+      "result": "Профиль ратчета «post-upgrade» (baseline critical 0 / high 0). pnpm audit --json (full): critical 0, high 0, moderate 1, low 1; pnpm audit --prod --json: 0/0/0/0; прямых уязвимых модулей 0 (critical/high в runtime-зависимостях воркспейса). Остаток — dev-only: minimatch <11 (moderate, цепочка eslint/typescript-eslint/@redocly) и esbuild 0.27.7 (low, tsup) — в поставляемые арфакты не входят. Гейт: node scripts/security-gate.mjs --only dependencies --skip-tests -> «1 pass, 0 fail — гейт ПРОЙДЕН», critical 0/0, high 0/0, moderate 1, low 1. counts записи {critical:0, high:0} совпадают с baseline. @hono/node-server в мажоре 2.x (^2.1.3) — e2e MCP-транспорта на 2.x в этом релизе не прогонялся.",
+      "date": "2026-11-11"
+    },
+    "security-review": {
+      "status": "pass_with_exceptions",
+      "command": "docs/security/AUDIT-CHECKLIST.md §3 (обзор изменений релиза) + git log --oneline v0.13.4..HEAD + git diff --stat v0.13.4..HEAD -- packages/*/src + код-ревью затронутых подсистем",
+      "result": "(1) Новые внешние входы: self-help тулы ADR-131 (synth_info/synth_mcp_list|test — capability instance, read; synth_mcp_add|update|remove|enable|reconnect — write, заблокированы в plan-режиме через INSTANCE_WRITE_TOOLS в evaluator.isPlanBlockedTool; MCP-реестр и ответы не содержат headers/env, plaintext-секретные заголовки отвергаются кодом MCP_SECRET_HEADER_FORBIDDEN), каналы обновлений ADR-133 (/api/v2/updates/check|apply — read/write Guard ADMIN в managed, selfUpdateSupport admission-гейт -> 409 UPDATE_UNSUPPORTED вне standalone), регистрация userspace-сервиса ADR-134 (synth service install|status|..., только systemd --user, --system не поддержан), SSH-тулы ADR-124 (ssh_exec/ssh_copy/ssh_tunnel). Установка пакета: только версия из списка версий канала реестра (--to вне списка -> отказ), реестр переопределяется лишь явным --registry. Ключи/секреты в журналы и argv не попадают: unit-файл пишется 0644 и содержит только несекретные переменные, env-файл 0600 без секретов, journalctl вызывается с --user -u synth. (2) Авторизация/IDOR: матрица 109/109, перепись 36/36; перенос роутов в core (d01baa4e) не оставил их вне fail-closed гейта — публичный allowlist живёт в core (packages/core/src/server/app/public-routes.ts), backend — тонкий реэкспорт; /meta features.users объявляется сервером (managed true, core standalone false, core в гибриде — по подключённому backend), отсутствие признака трактуется как «фичи нет». (3) Containment: git-роуты (realpath-проверка resolveOperationalRepoPath + повторная проверка перед деструктивной операцией) — симлинк наружу не проходит; остаточное окно TOCTOU без openat-семантики (исключение git-containment-toctou). (4) SSRF/egress: favicon провайдера и web-тулы идут через fetchWithEgressGuard/checkEgressUrl (ADR-099/PROP-100), plugin remote-клиент — loopback-only (127.0.0.1/::1/localhost, http), TLS — единый слой. (5) Секреты/ключи: secret-scan чист; master-ключ и SSH-ключи at-rest шифрованы, reveal() только через гейт engine/ssh/access.ts. (6) Supply-chain: см. проверку dependencies (0/0, prod 0/0/0/0, прямых 0); образы и Helm-чарт в релизе не менялись по существу (docker/init.sh, Dockerfile.* — правки запуска и прав, секреты/дев-ключи в образы не попадают). (7) Доки vs факт: на 83ba5729 расхождение было — docs-link-check красный (docs/en/PUBLISHING.md:123 -> ./MAINTENANCE.md), тогда как обещание «ссылки зелёные» в записи 0.13.4 относилось к 4999ed11; правка включена в коммит линии релиза faafa3e3, на его дереве node scripts/docs-link-check.mjs — OK, файлов: 68, ссылок: 1128, ошибок: 0, и ci-docs run 2070902 на том же коммите зелёный (шаг «Проверка относительных ссылок в документации» — success) — расхождение закрыто; фактические утверждения записи (секреты, аудит, ратчет) совпадают с пайплайном: джоба Secret-scan (дерево + история) и «Аудит зависимостей (report-only)» в ci.yaml run 2070903 отработали success. ФИКСЫ НАХОДОК (после аудита, включены в коммит линии релиза faafa3e3a456e420882336852f36e06f70c72cf5): (a) restored-approval-grant-widening закрыт — ветка восстановленного ожидания передаёт snapshot триггера в грант (packages/core/src/server/routes/sessions.ts:2891-2899 — orchestrator.grantSessionToolAllow(session, record.toolName, record.arguments ?? {}, trigger), где trigger = { params: record.trigger?.params, askKind: record.trigger?.askKind }), legacy-путь shellSavePatterns удалён из выдачи гранта (в packages/core/src/engine/orchestrator.js функциональных вызовов shellSavePatterns нет — осталась только ссылка в комментарии, строка 8312 исходника), а для execute_shell без trigger грант не выдаётся вовсе (fail-closed в packages/core/src/engine/orchestrator.ts:_grantSessionToolAllow, комментарий «Без trigger грант для execute_shell не выдаётся»); сигнатура grantSessionToolAllow расширена параметром trigger, тип PermissionGrantTrigger экспортирован из packages/core/src/index.ts. Проба на пересобранном core: shellGrantPlan('rm -rf /srv/data', {askKind:'mutation'}) → patterns [] / directories [], функциональный вызов shellSavePatterns в сборке отсутствует. (b) tool-output-cap-bypass-via-metadata закрыт — ранний return по metadata.outputBounded убран из applyOutputLimit (packages/core/src/engine/tools/tool-execution.ts:180-205): предел теперь считается по фактическому размеру вывода, а truncated/outputBounded перезаписываются фактическими значениями (поддельные счётчики тула не остаются). Проба на пересобранном core: тул с поддельным metadata.outputBounded и 600001 байтом → длина контента 612, truncated=true, outputBounded={shownLines:1,totalLines:2} — предел применяется (до фикса было 600001 байт при truncated=false). Целевые прогоны после фиксов: pnpm --filter @itphx/synth-core exec vitest run src/server/routes/sessions-permissions.test.ts src/engine/orchestrator-shell-grant.test.ts src/engine/orchestrator-pending-approvals.test.ts src/engine/tools/tool-execution.output-bound.test.ts — 4 файла, 54 теста, 54 passed / 0 failed; полный core — 606 файлов, единственное падение git-proxy-env.test.ts (env-флейк no_proxy, с env -u no_proxy зелёный); полный pnpm test у фиксера — shared 1043, core 10187, ui 3935, backend 842, executor 247, plugin-memory 191, storage-postgres 114, 0 failed, typecheck чистый, lint 0 errors. ADR-029/API_V2/core AGENTS обновлены под новое поведение.",
+      "date": "2026-11-11"
+    }
+  },
+  "exceptions": [
+    {
+      "id": "git-containment-toctou",
+      "scope": "resolveOperationalRepoPath возвращает лексический путь; деструктивные операции (removeLocal, mkdir в initRepo, clone/rename, tmpPath) выполняются по разрешённому пути с повторной проверкой непосредственно перед операцией, но окно между проверкой и syscall остаётся (packages/core/src/git/git-service.ts:199-202 — прямо указано, что гонка не закрыта без openat/O_NOFOLLOW-семантики). Подмена компонента пути симлинком в этом окне теоретически выводит операцию за workspace.",
+      "justification": "Статический класс закрыт (симлинк до вызова -> PATH_TRAVERSAL, внешние данные целы); окно гонки требует прав редактирования проекта и активной подмены, остаётся принципиально не закрытым без openat-семантики. Риск снижен повторной проверкой и работой по realpath-разрешённому пути.",
+      "followUp": "Перевести деструктивные операции на openat/O_NOFOLLOW-семантику через порт исполнения; добавить детерминированный тест на подмену (инъекция fs) при появлении такой возможности.",
+      "owner": "владелец подсистемы git/workspace (core)",
+      "dueRelease": "0.13.9"
+    },
+    {
+      "id": "summarization-gateway-disabled-no-guard",
+      "scope": "Суммаризация/компакция всегда проходит через GatewayProvider (packages/core/src/engine/context/optimizer.ts:1630-1645), но при llmGateway.enabled=false (дефолт standalone) guard/обфускация — no-op (общая семантика ADR-036/090), а провайдер суммаризации может быть задан отдельно (summarization.provider/model) и получает полный транскрипт.",
+      "justification": "Соответствует глобальной политике gateway: при выключенном gateway не маскируется и обычный ход. Вызов учитывается метриками и фильтрами при включённом gateway; поведение задокументировано в ADR-119 §5. Принятый риск, не дефект реализации.",
+      "followUp": "Рассмотреть обязательную обфускацию для точки суммаризации либо запрет отдельного провайдера без включённого gateway; e2e-проверка фильтров при enabled:true.",
+      "owner": "владелец контекстной подсистемы (core)",
+      "dueRelease": "0.13.9"
+    },
+    {
+      "id": "chunked-upload-quota-best-effort",
+      "scope": "Квоты chunked-загрузки проверяются read-then-act без распределённой блокировки: параллельные create/append (в т.ч. на разных репликах) могут кратковременно превысить лимит; staging-контур без байтовой квоты (верхняя граница maxActiveUploads x maxBytesPerFile ≈ 25 ГиБ при дефолтах maxActiveUploads=256, maxBytesPerSession=1 ГиБ), документировано в API_V2/CONFIGURATION.",
+      "justification": "Целевой сценарий (удержание диска незавершёнными загрузками) закрыт: квота сессии, лимиты числа сессий, TTL, уборка. Строгая атомарность требует распределённой блокировки (PROP-105) и для релиза не требуется.",
+      "followUp": "Агрегатная байтовая квота для staging, тест параллельного create, метрика активных upload-сессий, при необходимости — блокировка на томе/БД.",
+      "owner": "владелец подсистемы вложений (core)",
+      "dueRelease": "0.13.9"
+    },
+    {
+      "id": "historical-test-fixture-allowlists",
+      "scope": "Allowlist-блоки .gitleaks.toml (16 блоков): исторические фикстуры 193be2ab/996c776b/a7c84ca0, path-only блоки .key-фикстур ADR-099 (packages/core/src/security/__fixtures__/tls-test-selfsigned.key, tls-test-proxy.key, tls-test-proxy-client.key) и путь .gitverse/workflows/release.yaml. В 0.13.8 добавлен блок 3.0 (ADR-124: 7 путей x 4 dummy-маркера, коммит 2c3d2f9b) — подавление узкое (путь И конкретный маркер), проверено пробой на изолированной копии дерева.",
+      "justification": "История master неизменяема и публична (зеркало GitHub); подавление узкое (путь + конкретное dummy-тело), новые фикстуры — заглушки, а не креды. Просрочено (dueRelease был 0.12.5).",
+      "followUp": "Подтвердить актуальность path-only блоков .key-фикстур (каталог __fixtures__ содержит только материал фикстур) или удалить вместе с переездом истории; новые фикстуры — генерируемые в рантайме, path-only не расширять.",
+      "owner": "владелец контура безопасности инстанса",
+      "dueRelease": "0.13.9"
+    },
+    {
+      "id": "dev-only-advisories",
+      "scope": "Остаток pnpm audit (профиль post-upgrade): minimatch <11 (moderate; eslint/typescript-eslint/@redocly — патч только в мажоре 11) и esbuild 0.27.7 (low; tsup). В поставляемые артефакты не входят. Факт записи 0.13.8: full 0/0/1/1, --prod 0/0/0/0, прямых уязвимых 0.",
+      "justification": "devDependencies инструментария сборки; semver-safe патча нет, мажорный апгрейд eslint-цепочки — отдельная волна. Рантайм-аудит (--prod) чист.",
+      "followUp": "Плановая волна апгрейдов dev-инструментария (eslint 10 / minimatch 11 / tsup), пересчёт baseline.",
+      "owner": "владелец задачи апгрейда зависимостей",
+      "dueRelease": "0.13.9"
+    },
+    {
+      "id": "hono-node-server-major-2",
+      "scope": "Мажорный апгрейд транзитивного runtime-пакета @hono/node-server 1.19.x -> 2.x (в пакетах ^2.1.3; прямых импортов в src нет — сервер на node:http, статика своя; влияние — транспорт @modelcontextprotocol/sdk). E2E MCP-транспорта (stdio/HTTP) на 2.x в релизе 0.13.8 не прогонялся.",
+      "justification": "Unit-тесты серверных слоёв и backend зелёные (матрица 109/109, перепись 36/36, целевые наборы 463 и 111 passed). Риск низкий, но требует отдельной e2e-проверки.",
+      "followUp": "Прогон MCP-транспорта (stdio/HTTP) на 2.x в CI/e2e; при регрессе — пин SDK на совместимую версию.",
+      "owner": "владелец задачи апгрейда зависимостей",
+      "dueRelease": "0.13.9"
+    }
+  ],
+  "artifacts": {
+    "evidence": "tmp/security/evidence-0.13.8.json, tmp/security/secret-scan-0.13.8.json, tmp/security/probe/{probeA,probeB,probeC,head83,faafa,grant-asymmetry.mjs,output-cap.mjs,ci158d}",
+    "ci_run": "GitVerse run 2070903 (ci.yaml, index 278, commit faafa3e3a456e420882336852f36e06f70c72cf5) — success, 14/14 джоб; ci-docs run 2070902 — success. Первый запуск упал на инфраструктуре (clone actions/checkout), перезапуск зелёный."
+  }
+}
