@@ -1738,7 +1738,7 @@ export function createDispatcher(): EventDispatcher {
       return
     }
 
-    // ADR-114 §6: инвентарь worktree'ов проекта изменился. Событие идёт в
+    // ADR-114 §6: инвентарь worktree проекта изменился. Событие идёт в
     // каналы сессий проекта, поэтому проект берём из payload (не из `sid`).
     // Разбираем ДО проверки `sid`: событие — сигнал «перечитай инвентарь».
     if (type === 'worktree.updated') {
@@ -2990,7 +2990,7 @@ export function createDispatcher(): EventDispatcher {
         }
         useFilesStore.getState().scheduleRefresh(projectId, { scope, paths, workspaceChanged, op })
         scheduleGitRefresh(projectId)
-        // ADR-114: изменение структуры каталогов (worktree'и) — тот же проект.
+        // ADR-114: изменение структуры каталогов (worktree) — тот же проект.
         useWorktreesStore.getState().applyEvent('fs.changed', { ...payload, project_id: projectId })
         break
       }

@@ -390,7 +390,7 @@ describe('контрактные тесты файловых реализаци�
     repo: new FileBackgroundRunStore({ dataDir: await tmp() }),
   }));
 
-  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов (`worktrees.json`).
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree (`worktrees.json`).
   describeWorktreeRepository('FileWorktreeStore → WorktreeRepository', async () => ({
     repo: new FileWorktreeStore({ dataDir: await tmp() }),
   }));
@@ -403,7 +403,7 @@ describe('контрактные тесты файловых реализаци�
   );
 
   // Файловая деталь (ADR-005/ADR-114): повреждённый JSON — **понятная ошибка**,
-  // а не тихий пустой список (иначе «все worktree'ы потеряны» выглядели бы как
+  // а не тихий пустой список (иначе «все worktree потеряны» выглядели бы как
   // пустой инвентарь).
   it('повреждённый worktrees.json — понятная ошибка, а не пустой репозиторий', async () => {
     const dir = await tmp();

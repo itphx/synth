@@ -38,7 +38,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 vi.mock('@/hooks/useDevice', () => ({
   useDevice: () => ({ deviceType: mocks.deviceType, isTouch: false }),
 }))
-// Тяжёлые соседи шапки — заглушки: тест про индикатор worktree'а.
+// Тяжёлые соседи шапки — заглушки: тест про индикатор worktree.
 vi.mock('../auth/QuickSettingsPopup', () => ({ QuickSettingsPopup: () => null }))
 vi.mock('./AnalyticsButton', () => ({ AnalyticsButton: () => null }))
 vi.mock('./NotificationPopup', () => ({ NotificationPopup: () => null }))
@@ -89,7 +89,7 @@ async function renderHeader(): Promise<HTMLElement> {
   return container
 }
 
-/** Сессия с привязкой к worktree'у. */
+/** Сессия с привязкой к worktree. */
 function sessionWithWorktree(worktreeId: string | null, directory = '/ws/.worktrees/p1/feature-x') {
   return {
     id: 's1',

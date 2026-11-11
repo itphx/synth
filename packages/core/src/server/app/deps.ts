@@ -56,7 +56,7 @@ import {
   // ADR-115 × ADR-077: уборка временных каталогов медиа-раннера
   // (`{workspacesRoot}/.synth-media/*`) — после жёсткого kill они остаются.
   startMediaTempPruner,
-  // ADR-114: сервис worktree'ов (per-session рабочий каталог) + публикация
+  // ADR-114: сервис worktree (per-session рабочий каталог) + публикация
   // `worktree.updated` в каналы сессий проекта.
   WorktreeService,
   publishWorktreeUpdated,
@@ -1176,7 +1176,7 @@ export async function createStandaloneDeps(
       })
     : undefined;
 
-  // ADR-114: сервис worktree'ов (per-session рабочий каталог).
+  // ADR-114: сервис worktree (per-session рабочий каталог).
   //
   // Один инстанс на процесс: его получают HTTP-роуты проектов
   // (`/projects/:id/worktrees*`), тулы `git_worktree_*` и привязка сессии
@@ -1206,7 +1206,7 @@ export async function createStandaloneDeps(
         },
       });
 
-  // ADR-114 §7.4: sweep осиротевших записей worktree'ов при старте процесса
+  // ADR-114 §7.4: sweep осиротевших записей worktree при старте процесса
   // (записи без каталога — их чистит и prune проекта, §7.3). Фоново: старт
   // **не блокируется**, ошибка — в лог, процесс продолжает жить. В деградированном
   // режиме хранилища сервиса нет — вычищать нечего.
@@ -1602,7 +1602,7 @@ export async function createStandaloneDeps(
     // `tools` (дефолт) — ключ в окружение команд не попадает; `agent` — ключи
     // роли агента выдаются вызову `execute_shell` (эфемерный `ssh-agent`).
     getSshMode: () => sshModeSettings.getMode(),
-    // ADR-114: сервис worktree'ов — тулы `git_worktree_*` (инвентарь
+    // ADR-114: сервис worktree — тулы `git_worktree_*` (инвентарь
     // per-session рабочих каталогов проекта).
     ...(worktreeService ? { worktreeService } : {}),
     backgroundEnabled: config.backgroundConfig?.enabled ?? true,
@@ -2260,7 +2260,7 @@ export async function createStandaloneDeps(
     stickyNotesLimitsSettings,
     // PROP-124: режим инстанса для SSH-ключей (live, админ-API).
     sshModeSettings,
-    // ADR-114: сервис worktree'ов — HTTP-контур проектов и привязка сессии.
+    // ADR-114: сервис worktree — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhooksConfig,
     // Egress: живой резолвер политики + журналы безопасности.

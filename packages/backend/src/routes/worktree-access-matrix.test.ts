@@ -1,5 +1,5 @@
 /**
- * Матрица доступа к контуру worktree'ов проекта (ADR-114, managed-контур).
+ * Матрица доступа к контуру worktree проекта (ADR-114, managed-контур).
  *
  * Ресурс — не сессия, а **проект** (`/api/v2/projects/:id/worktrees*`), поэтому
  * матрица сессий (`session-idor-matrix.test.ts`) здесь неприменима: своя
@@ -18,7 +18,7 @@
  *
  * Проверяется **production-модуль** `routes/projects.ts` (тот же, что монтирует
  * `mount-routes.ts`) — не «фабрика позвали». Тест-перепись снимает перечень
- * маршрутов worktree'ов со **реально смонтированного** backend-приложения
+ * маршрутов worktree со **реально смонтированного** backend-приложения
  * (`createBackendApp`) и сравнивает его с матрицей: появился маршрут — тест
  * красный.
  */
@@ -132,7 +132,7 @@ function declaredRoutes(): string[] {
   return MATRIX.map((r) => `${r.method} ${r.path}`).sort();
 }
 
-/** Маршруты worktree'ов со смонтированного приложения. */
+/** Маршруты worktree со смонтированного приложения. */
 function worktreeRoutes(app: Hono): string[] {
   const routes = (app as unknown as { routes: Array<{ method: string; path: string }> }).routes;
   const set = new Set<string>();

@@ -1439,7 +1439,7 @@ describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)'
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  /** Приложение с сервисом worktree'ов (memory-порт + временный репозиторий). */
+  /** Приложение с сервисом worktree (memory-порт + временный репозиторий). */
   function makeApp() {
     const app = new Hono();
     const fileStore = new FileStore({ dataDir: tmpDir });

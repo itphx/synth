@@ -25,7 +25,7 @@
  *   - `buildBackgroundRunPorts(deps)` → `backgroundRuns` (этап 1 roadmap 0.13,
  *     блок 1.2 — фоновые саб-агенты и шелл-процессы);
  *   - `buildWorktreePorts(deps)`   → `worktrees` (ADR-114 — инвентарь
- *     git-worktree'ов; generic-таблица `documents`, `kind='worktree'`).
+ *     git-worktree; generic-таблица `documents`, `kind='worktree'`).
  *   - `buildBlobRefPorts(deps)`    → `blobRefs` (ADR-115/ADR-116 — учёт ссылок
  *     на объекты blob-хранилища; таблица `blob_refs`).
  *   - `buildPackPorts(deps)`       → `packs` (ADR-086 §5 — реестр установок
@@ -241,7 +241,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // реестр фоновых прогонов (таблица `background_runs`) — миграция 021.
     ...buildQuestionPorts(deps),
     ...buildBackgroundRunPorts(deps),
-    // ADR-114: инвентарь git-worktree'ов — generic-таблица `documents`
+    // ADR-114: инвентарь git-worktree — generic-таблица `documents`
     // (`kind='worktree'`), без новой миграции.
     ...buildWorktreePorts(deps),
     // ADR-029: ожидания подтверждения прав — отдельная таблица

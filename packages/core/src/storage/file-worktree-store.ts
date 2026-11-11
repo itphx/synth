@@ -13,7 +13,7 @@ export interface FileWorktreeStoreConfig {
 const WORKTREES_KEY = 'worktrees';
 
 /**
- * Файловая реализация порта инвентаря worktree'ов (ADR-096 — слой хранения;
+ * Файловая реализация порта инвентаря worktree (ADR-096 — слой хранения;
  * ADR-005 — JSON + атомарная запись tmp→rename; ADR-114 — worktrees).
  *
  * Физическое расположение: `{dataDir}/worktrees.json`.
@@ -21,7 +21,7 @@ const WORKTREES_KEY = 'worktrees';
  * Каталог создаётся при первой записи; отсутствие файла — пустой репозиторий
  * (не ошибка). Повреждённый JSON — понятная ошибка, а не тихий пустой список
  * (`readCollectionFile`): молчаливая пустая коллекция выглядела бы как
- * «все worktree'ы потеряны».
+ * «все worktree потеряны».
  *
  * Семантика повторяет in-memory реализацию (`MemoryWorktreeRepository`):
  * upsert по `id` (`createdAt` сохраняется, `updatedAt` — метка вызывающего),

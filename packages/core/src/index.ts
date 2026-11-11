@@ -796,13 +796,13 @@ export { FileQuestionStore } from './storage/file-question-store.js';
 export type { FileQuestionStoreConfig } from './storage/file-question-store.js';
 export { FileBackgroundRunStore } from './storage/file-background-run-store.js';
 export type { FileBackgroundRunStoreConfig } from './storage/file-background-run-store.js';
-// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree (ADR-114).
 export { FileWorktreeStore } from './storage/file-worktree-store.js';
 export type { FileWorktreeStoreConfig } from './storage/file-worktree-store.js';
 // ADR-029: ожидания подтверждения прав — отдельный стор (`pending-approvals.json`).
 export { FilePendingApprovalStore } from './storage/file-pending-approval-store.js';
 export type { FilePendingApprovalStoreConfig } from './storage/file-pending-approval-store.js';
-// Этап 1 roadmap 0.13 (блок 1.4.1b): сервис worktree'ов (ADR-114) — git-операции,
+// Этап 1 roadmap 0.13 (блок 1.4.1b): сервис worktree (ADR-114) — git-операции,
 // lifecycle инвентаря, детект secondary worktree.
 export {
   WorktreeService,
@@ -839,7 +839,7 @@ export type {
   WorktreeEventDeps,
   WorktreeEventSessionSource,
 } from './engine/worktree/index.js';
-// ADR-114 §7.4: стартовый sweep осиротевших записей worktree'ов (фоново,
+// ADR-114 §7.4: стартовый sweep осиротевших записей worktree (фоново,
 // без падения старта) — общий хук для core и backend.
 export { startWorktreeSweeper } from './engine/worktree/index.js';
 export type { WorktreeSweeperTarget } from './engine/worktree/index.js';
@@ -941,7 +941,7 @@ export type {
   // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
   QuestionRepository,
   BackgroundRunRepository,
-  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree (ADR-114).
   WorktreeRepository,
   // ADR-029: ожидания подтверждения прав (отдельный стор — не документ сессии).
   PendingApprovalRepository,
@@ -1002,7 +1002,7 @@ export {
   // Этап 1 roadmap 0.13: вопросы пользователю и реестр фоновых прогонов.
   MemoryQuestionRepository,
   MemoryBackgroundRunRepository,
-  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree (ADR-114).
   MemoryWorktreeRepository,
   // ADR-029: ожидания подтверждения прав (отдельный стор).
   MemoryPendingApprovalRepository,

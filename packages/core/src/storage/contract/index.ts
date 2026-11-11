@@ -81,7 +81,7 @@ export { describeMemoryFactRepository, describeMemoryIndexRepository } from './m
 export { describeQuestionRepository } from './question-repository.contract.js';
 export { describeBackgroundRunRepository } from './background-run-repository.contract.js';
 
-// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree (ADR-114).
 export { describeWorktreeRepository } from './worktree-repository.contract.js';
 
 // ADR-029: ожидания подтверждения прав (отдельный стор).

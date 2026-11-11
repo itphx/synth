@@ -1473,7 +1473,7 @@ export function SessionSettingsTab() {
 
 /**
  * ADR-114 §9: селектор рабочего каталога сессии — каталог проекта или один из
- * worktree'ов проекта.
+ * worktree проекта.
  *
  * Привязка меняется через `PATCH /api/v2/sessions/:id { worktreeId }` (null —
  * снять привязку). Ответ PATCH — обновлённая сессия, стор обновляет снимок

@@ -118,17 +118,17 @@ export interface ProjectRoutesOptions {
   /** Менеджер сессий. Задан — регистрируется `GET /:id/stats`. */
   sessionManager?: ProjectStatsSource;
   /**
-   * ADR-114: сервис worktree'ов проекта.
+   * ADR-114: сервис worktree проекта.
    *
    * Задан — регистрируется контур `/id/worktrees*` (список/создание/удаление/
    * prune). Не задан — роутов нет (поведение прежнее). Сервис создаётся в
    * composition root (`server/app/deps.ts`, `backend/app/deps.ts`) и
-   * передаётся готовым: он знает корень worktree'ов, порт инвентаря и хук
+   * передаётся готовым: он знает корень worktree, порт инвентаря и хук
    * `onUpdated` (публикация `worktree.updated`).
    */
   worktrees?: WorktreeService;
   /**
-   * ADR-114: уведомление «инвентарь worktree'ов проекта изменился».
+   * ADR-114: уведомление «инвентарь worktree проекта изменился».
    *
    * Хук сервиса (`WorktreeService.onUpdated`) уже публикует событие шины,
    * поэтому этот колбэк — только для вызывающих, которым нужно **дополнительное**
@@ -628,7 +628,7 @@ export function createProjectRoutes(
     return c.body(null, 204);
   });
 
-  // ADR-114: контур worktree'ов проекта (инвентарь, создание, удаление, prune).
+  // ADR-114: контур worktree проекта (инвентарь, создание, удаление, prune).
   // Права — по правилам проекта (инвариант 21): чтение — право чтения,
   // мутации — право изменения содержимого (`VIEWER` читает, но не мутирует).
   if (opts.worktrees) {
@@ -659,9 +659,9 @@ export function createProjectRoutes(
     };
 
     /**
-     * Гибрид (ADR-042): worktree'ы удалённого проекта исполняет сервер (в
+     * Гибрид (ADR-042): worktree удалённого проекта исполняет сервер (в
      * managed backend — тот же `WorktreeService`). `id` проекта снимается до
-     * локального, id worktree'а уходит как есть (он скоупится проектом).
+     * локального, id worktree уходит как есть (он скоупится проектом).
      */
     const remoteWorktreeClient = (c: Context): RemoteBackendClient | Response => {
       const remoteClient = resolveClient();
@@ -671,7 +671,7 @@ export function createProjectRoutes(
       return remoteClient;
     };
 
-    // Список worktree'ов проекта.
+    // Список worktree проекта.
     app.get('/:id/worktrees', auth.requireAuth, async (c) => {
       const wtProjectId = c.req.param('id');
       if (isRemoteRef(wtProjectId)) {
@@ -694,7 +694,7 @@ export function createProjectRoutes(
       return c.json({ worktrees: summaries });
     });
 
-    // Создание worktree'а. Статический сегмент `prune` объявлен ниже, но
+    // Создание worktree. Статический сегмент `prune` объявлен ниже, но
     // пути различаются по методу — конфликта нет.
     app.post('/:id/worktrees', auth.requireAuth, async (c) => {
       const wtProjectId = c.req.param('id');
@@ -783,7 +783,7 @@ export function createProjectRoutes(
       }
     });
 
-    // Удаление worktree'а: `?force=true` — снимать и с незакоммиченными
+    // Удаление worktree: `?force=true` — снимать и с незакоммиченными
     // изменениями; `?force` без значения тоже трактуется как true.
     app.delete('/:id/worktrees/:wid', auth.requireAuth, async (c) => {
       const wtProjectId = c.req.param('id');
@@ -793,7 +793,7 @@ export function createProjectRoutes(
         const remoteClient = remoteWorktreeClient(c);
         if (remoteClient instanceof Response) return remoteClient;
         try {
-          // id worktree'а — как есть: он адресуется внутри удалённого проекта.
+          // id worktree — как есть: он адресуется внутри удалённого проекта.
           await remoteClient.removeProjectWorktree(
             toLocalId(wtProjectId),
             c.req.param('wid'),

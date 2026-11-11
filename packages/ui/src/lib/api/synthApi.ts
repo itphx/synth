@@ -452,7 +452,7 @@ export type {
   ProcessResponse,
   ProcessStopResponse,
 } from './processes'
-// ADR-114: инвентарь git-worktree'ов проекта (per-session рабочий каталог).
+// ADR-114: инвентарь git-worktree проекта (per-session рабочий каталог).
 export type {
   WorktreeRecord,
   WorktreeStrategy,
@@ -521,7 +521,7 @@ export const synthApi = {
   ...memoryApi,
   ...sessionMemoryApi,
   ...questionsApi,
-  // ADR-114: worktree'ы — имена домена уникальны (`list`/`get` уже заняты).
+  // ADR-114: worktree — имена домена уникальны (`list`/`get` уже заняты).
   ...worktreesApi,
   // PROP-096/097: реестр фоновых прогонов. Короткие имена домена (`list`,
   // `get`) в barrel уже заняты (вопросы, метрики) — домен раскладывается

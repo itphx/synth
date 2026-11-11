@@ -265,7 +265,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
     // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
     deps.questionService,
-    // ADR-114: сервис worktree'ов — привязка сессии к worktree
+    // ADR-114: сервис worktree — привязка сессии к worktree
     // (`PATCH /api/v2/sessions/:id { worktreeId }`).
     deps.worktreeService,
     // ADR-115: вложения сообщений — blob-порт, учёт ссылок; лимиты читаются

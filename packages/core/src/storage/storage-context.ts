@@ -127,7 +127,7 @@ import { FileMemoryIndexStore } from './file-memory-index-store.js';
 // фоновых прогонов (блок 1.2).
 import { FileQuestionStore } from './file-question-store.js';
 import { FileBackgroundRunStore } from './file-background-run-store.js';
-// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов (ADR-114).
+// Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree (ADR-114).
 import { FileWorktreeStore } from './file-worktree-store.js';
 // ADR-029: ожидания подтверждения прав — отдельный стор (документ сессии не
 // трогается: гонка lost update с точечной записью истории, ADR-118 §4).
@@ -444,7 +444,7 @@ export interface StorageContext {
    */
   backgroundRuns: BackgroundRunRepository;
   /**
-   * Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree'ов — per-session
+   * Этап 1 roadmap 0.13 (блок 1.4): инвентарь git-worktree — per-session
    * рабочий каталог (ADR-114). Реализовано файловым
    * (`{dataDir}/worktrees.json`), in-memory и драйвером PostgreSQL
    * (`documents`, `kind='worktree'` — без новой миграции).
@@ -742,7 +742,7 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // реестр фоновых прогонов (`processes/registry.json`).
     questions: new FileQuestionStore({ dataDir }),
     backgroundRuns: new FileBackgroundRunStore({ dataDir }),
-    // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов
+    // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree
     // (`worktrees.json`).
     worktrees: new FileWorktreeStore({ dataDir }),
     // ADR-029: ожидания подтверждения прав (`pending-approvals.json`) —
@@ -811,7 +811,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     // прогонов.
     questions: new MemoryQuestionRepository(),
     backgroundRuns: new MemoryBackgroundRunRepository(),
-    // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов.
+    // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree.
     worktrees: new MemoryWorktreeRepository(),
     // ADR-029: ожидания подтверждения прав (отдельный стор).
     pendingApprovals: new MemoryPendingApprovalRepository(),

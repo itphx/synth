@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { worktreesApi } from './worktrees'
 
 /**
- * Домен `worktrees` (`lib/api/worktrees.ts`, ADR-114): инвентарь git-worktree'ов
+ * Домен `worktrees` (`lib/api/worktrees.ts`, ADR-114): инвентарь git-worktree
  * проекта. Ценно — пути и методы, тело мутаций, `?force=true` при снятии
- * грязного worktree'а и разбор `409 WORKTREE_DIRTY` (`forceRequired`).
+ * грязного worktree и разбор `409 WORKTREE_DIRTY` (`forceRequired`).
  */
 
 function jsonResponse(body: unknown, status = 200): Response {

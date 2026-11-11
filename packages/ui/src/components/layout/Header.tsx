@@ -45,7 +45,7 @@ const EMPTY_SELECTED_IDS: Set<string> = new Set()
 const NON_EDITABLE_FILE_KINDS: readonly FileKind[] = ['image', 'video', 'audio', 'pdf', 'binary']
 
 /**
- * Имя каталога из абсолютного пути — фолбэк для индикатора worktree'а,
+ * Имя каталога из абсолютного пути — фолбэк для индикатора worktree,
  * когда записи ещё нет в инвентаре проекта (список не загружен).
  */
 function pathBasename(path: string): string {
@@ -126,7 +126,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   // `≈` — окно модели не задано, используется оценка (фоллбэк 200k).
   const contextTitle = `${contextInputTokens.toLocaleString()} / ${contextEstimated ? '≈' : ''}${contextWindowTokens.toLocaleString()} (${windowPercent}%)`
 
-  // ADR-114 §9: индикатор привязки сессии к worktree'у. Имя — из инвентаря
+  // ADR-114 §9: индикатор привязки сессии к worktree. Имя — из инвентаря
   // проекта (по `worktree_id`), фолбэк — имя каталога на диске.
   const worktreesByProject = useWorktreesStore((s) => s.byProject)
   const sessionWorktree = activeSession?.worktree ?? null

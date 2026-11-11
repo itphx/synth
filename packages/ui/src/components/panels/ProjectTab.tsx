@@ -573,7 +573,7 @@ export function ProjectTab() {
         onSelect={(path) => setWorkspaceDraft(path)}
       />
 
-      {/* ADR-114 §9: инвентарь worktree'ов проекта (per-session рабочий каталог). */}
+      {/* ADR-114 §9: инвентарь worktree проекта (per-session рабочий каталог). */}
       {project && session && (
         <Section title={t('worktrees.title')}>
           <WorktreesBlock projectId={project.id} sessionId={session.id} />
@@ -659,7 +659,7 @@ function isForceRequired(err: unknown): boolean {
 }
 
 /**
- * ADR-114 §9: инвентарь worktree'ов проекта — список записей с действиями
+ * ADR-114 §9: инвентарь worktree проекта — список записей с действиями
  * (создать/привязать/удалить/очистить).
  *
  * Источник истины — сервер (`GET /api/v2/projects/:id/worktrees`), live-обновление

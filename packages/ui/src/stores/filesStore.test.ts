@@ -546,7 +546,7 @@ describe('filesStore — каталог .worktrees скрыт всегда (ADR-
 
     await useFilesStore.getState().loadFileTree('p1')
 
-    // Скрытые файлы запрошены (сервер их отдал), но каталог worktree'ов отфильтрован.
+    // Скрытые файлы запрошены (сервер их отдал), но каталог worktree отфильтрован.
     expect(mocks.listDirectory).toHaveBeenCalledWith('p1', '', true)
     const names = useFilesStore.getState().treesByProject.p1!.map((e) => e.name)
     expect(names).toEqual(['src'])

@@ -176,7 +176,7 @@ export function mountStandaloneRoutes(
       // ADR-111 §detach: «Стоп» останавливает и живые дочерние прогоны
       // (фоновые саб-агенты и их процессы) — решение 2026-10-28.
       ...(deps.backgroundService ? { backgroundService: deps.backgroundService } : {}),
-      // ADR-114: сервис worktree'ов — привязка сессии к worktree
+      // ADR-114: сервис worktree — привязка сессии к worktree
       // (`PATCH /api/v2/sessions/:id { worktreeId }`).
       ...(deps.worktreeService ? { worktreeService: deps.worktreeService } : {}),
       // ADR-107: вкладка «Память» — агрегаты памяти сессии.
@@ -262,7 +262,7 @@ export function mountStandaloneRoutes(
     // ADR-075: автосоздание/нормализация workspace локальных проектов.
     getWorkspacesRoot: () => config.workspacesRoot ?? join(dataDir, 'workspaces'),
     getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
-    // ADR-114: контур worktree'ов проекта (список/создание/удаление/prune).
+    // ADR-114: контур worktree проекта (список/создание/удаление/prune).
     ...(deps.worktreeService ? { worktrees: deps.worktreeService } : {}),
     // ADR-118 §4: изменение/удаление проекта — событие в канал каждой сессии
     // проекта (контейнер — ресурс проекта, ADR-014). Удаление — до delete,

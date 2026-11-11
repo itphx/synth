@@ -1,5 +1,5 @@
 /**
- * PG-реализация порта **инвентаря git-worktree'ов** (ADR-114, ADR-097).
+ * PG-реализация порта **инвентаря git-worktree** (ADR-114, ADR-097).
  *
  * Хранение — **существующий** generic-слой `documents(kind, key, value jsonb)`
  * (миграция `001-init`): `kind = 'worktree'`, ключ документа — `id` записи,
@@ -32,7 +32,7 @@ export type WorktreePorts = Pick<StorageContext, 'worktrees'>;
 /** `kind` generic-таблицы `documents` для записей worktree. */
 const WORKTREE_KIND = 'worktree';
 
-/** Порт инвентаря worktree'ов поверх таблицы `documents`. */
+/** Порт инвентаря worktree поверх таблицы `documents`. */
 export class PgWorktreeRepository implements WorktreeRepository {
   constructor(private readonly _deps: PortDeps) {}
 
@@ -98,7 +98,7 @@ function byCreatedAtDesc(a: WorktreeRecord, b: WorktreeRecord): number {
   return a.id.localeCompare(b.id);
 }
 
-/** Собрать порт инвентаря worktree'ов (ADR-114). */
+/** Собрать порт инвентаря worktree (ADR-114). */
 export function buildWorktreePorts(deps: PortDeps): WorktreePorts {
   return {
     worktrees: new PgWorktreeRepository(deps),

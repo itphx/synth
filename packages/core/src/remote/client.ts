@@ -913,7 +913,7 @@ export class RemoteBackendClient {
     return this.request<unknown>('PUT', `/api/v2/projects/${encodeURIComponent(id)}/skills`, body);
   }
 
-  // Worktree'ы удалённого проекта (ADR-114): операции исполняются сервером
+  // Worktree удалённого проекта (ADR-114): операции исполняются сервером
   // (в managed backend — тот же `WorktreeService`).
   listProjectWorktrees(id: string): Promise<unknown> {
     return this.request<unknown>('GET', `/api/v2/projects/${encodeURIComponent(id)}/worktrees`);

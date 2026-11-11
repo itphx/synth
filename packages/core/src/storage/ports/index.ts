@@ -176,7 +176,7 @@ export type {
 export type { QuestionRepository } from './question-repository.js';
 // Этап 1 roadmap 0.13 (блок 1.2): порт единого реестра фоновых прогонов.
 export type { BackgroundRunRepository } from './background-run-repository.js';
-// Этап 1 roadmap 0.13 (блок 1.4): порт инвентаря git-worktree'ов (ADR-114).
+// Этап 1 roadmap 0.13 (блок 1.4): порт инвентаря git-worktree (ADR-114).
 export type { WorktreeRepository } from './worktree-repository.js';
 // ADR-029: порт ожиданий подтверждения прав (отдельный стор — документ
 // сессии не трогается: гонка lost update с точечной записью истории).

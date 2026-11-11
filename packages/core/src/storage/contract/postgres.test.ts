@@ -283,7 +283,7 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   // `background_runs`).
   describeBackgroundRunRepository('PG → BackgroundRunRepository', () => makePort('backgroundRuns'));
 
-  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов (ADR-114; generic
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree (ADR-114; generic
   // таблица `documents`, `kind='worktree'` — без новой миграции).
   describeWorktreeRepository('PG → WorktreeRepository', () => makePort('worktrees'));
 

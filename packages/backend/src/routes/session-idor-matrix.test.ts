@@ -464,7 +464,7 @@ async function buildWorld(tmpDir: string): Promise<World> {
     undefined,
     // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю.
     questionService,
-    // ADR-114: сервис worktree'ов в песочнице не задан.
+    // ADR-114: сервис worktree в песочнице не задан.
     undefined,
     // ADR-115: вложения — тот же контур, что в production (`POST/GET :id/attachments`).
     {

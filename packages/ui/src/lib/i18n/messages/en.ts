@@ -5079,7 +5079,7 @@ export const dict = {
   'authority.agents.source': 'Source',
   'authority.loadError': 'Failed to load authority data: {error}',
   'authority.forbidden': 'Reading the package registry requires administrator rights',
-  // ADR-114: инвентарь git-worktree'ов (per-session рабочий каталог).
+  // ADR-114: инвентарь git-worktree (per-session рабочий каталог).
   'worktrees.title': 'Worktrees',
   'worktrees.description': 'Secondary working copies of the repository — a session can work in its own directory.',
   'worktrees.loading': 'Loading worktrees...',

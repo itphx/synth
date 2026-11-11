@@ -110,7 +110,7 @@ export interface SessionWorktree {
 }
 
 /**
- * Что именно изменилось в инвентаре worktree'ов (ADR-114 §6) — значение
+ * Что именно изменилось в инвентаре worktree (ADR-114 §6) — значение
  * `action` события `worktree.updated`.
  *
  * - `created` — создана запись (каталог + ветка);

@@ -5667,7 +5667,7 @@ export const dict = {
   'authority.agents.source': 'Источник',
   'authority.loadError': 'Не удалось загрузить данные полномочий: {error}',
   'authority.forbidden': 'Чтение реестра пакетов требует прав администратора',
-  // ADR-114: инвентарь git-worktree'ов (per-session рабочий каталог).
+  // ADR-114: инвентарь git-worktree (per-session рабочий каталог).
   'worktrees.title': 'Worktree',
   'worktrees.description': 'Вторичные рабочие копии репозитория — сессия может работать в своём каталоге.',
   'worktrees.loading': 'Загрузка worktree...',

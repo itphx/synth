@@ -1,4 +1,4 @@
-// worktreesStore: инвентарь git-worktree'ов проекта (ADR-114).
+// worktreesStore: инвентарь git-worktree проекта (ADR-114).
 //
 // Источник истины — сервер (`GET /api/v2/projects/:id/worktrees`, ADR-114 §5):
 // записи живут в порте `WorktreeRepository` и переживают рестарт. Список

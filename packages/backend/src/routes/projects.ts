@@ -5,7 +5,7 @@ import type {
   SettingsRepository, McpRegistryRepository, EventBus,
 } from '@itphx/synth-core';
 import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
-// ADR-114: сервис worktree'ов — контур `/projects/:id/worktrees*`.
+// ADR-114: сервис worktree — контур `/projects/:id/worktrees*`.
 import type { WorktreeService } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
 import { ProjectRole } from '@itphx/synth-shared';
@@ -60,7 +60,7 @@ export function createProjectRoutes(
   settingsStore?: SettingsRepository,
   mcpRegistryStore?: McpRegistryRepository,
   /**
-   * ADR-114: сервис worktree'ов проекта — контур `/projects/:id/worktrees*`
+   * ADR-114: сервис worktree проекта — контур `/projects/:id/worktrees*`
    * (список/создание/удаление/prune). Не задан — роутов нет.
    */
   worktreeService?: WorktreeService,
@@ -125,7 +125,7 @@ export function createProjectRoutes(
       sessionManager,
       getWorkspacesRoot: () => workspacesRoot,
       getOutsideRootPolicy: () => 'deny',
-      // ADR-114: контур worktree'ов проекта.
+      // ADR-114: контур worktree проекта.
       ...(worktreeService ? { worktrees: worktreeService } : {}),
       // ADR-118 §4: изменение/удаление проекта — в канал каждой сессии проекта.
       ...(eventBus

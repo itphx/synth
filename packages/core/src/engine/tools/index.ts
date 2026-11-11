@@ -87,7 +87,7 @@ import {
   processStopTool,
   processDeleteTool,
 } from './processes.js';
-// ADR-114: инвентарь git-worktree'ов проекта (per-session рабочий каталог).
+// ADR-114: инвентарь git-worktree проекта (per-session рабочий каталог).
 import {
   gitWorktreeListTool,
   gitWorktreeCreateTool,

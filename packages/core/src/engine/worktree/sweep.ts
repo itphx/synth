@@ -1,5 +1,5 @@
 /**
- * Sweep осиротевших записей worktree'ов при старте процесса (ADR-114 §7.4).
+ * Sweep осиротевших записей worktree при старте процесса (ADR-114 §7.4).
  *
  * Запись инвентаря переживает исчезновение каталога: пользователь мог удалить
  * каталог руками, а `git worktree prune` — убрать метаданные. Такая запись
@@ -28,12 +28,12 @@ export interface WorktreeSweeperTarget {
 }
 
 /**
- * Запустить sweep осиротевших записей worktree'ов (фоново, без падения).
+ * Запустить sweep осиротевших записей worktree (фоново, без падения).
  *
  * Вызывается при старте процесса (core `server/app/deps.ts` и backend
- * `app/deps.ts`) — после сборки сервиса worktree'ов и порта инвентаря.
+ * `app/deps.ts`) — после сборки сервиса worktree и порта инвентаря.
  *
- * @param service Сервис worktree'ов (или любой объект с `sweepOrphans`).
+ * @param service Сервис worktree (или любой объект с `sweepOrphans`).
  */
 export function startWorktreeSweeper(service: WorktreeSweeperTarget): void {
   void service

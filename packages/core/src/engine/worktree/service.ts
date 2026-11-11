@@ -1,5 +1,5 @@
 /**
- * Сервис worktree'ов (ADR-114, этап 1 roadmap 0.13 — блок 1.4.1b).
+ * Сервис worktree (ADR-114, этап 1 roadmap 0.13 — блок 1.4.1b).
  *
  * Сервис владеет **поведением** вокруг записи worktree:
  *
@@ -52,7 +52,7 @@ import {
   WorktreePathExistsError,
 } from './errors.js';
 
-/** Каталог worktree'ов внутри корня workspace (ADR-114 §1). */
+/** Каталог worktree внутри корня workspace (ADR-114 §1). */
 const WORKTREES_DIRNAME = '.worktrees';
 
 /**
@@ -78,10 +78,10 @@ const DEFAULT_BRANCH_PREFIX = 'worktree/';
 /** Имя каталога по умолчанию, когда не заданы ни имя, ни ветка. */
 const DEFAULT_NAME_PREFIX = 'wt-';
 
-/** Опции сервиса worktree'ов. */
+/** Опции сервиса worktree. */
 export interface WorktreeServiceOptions {
-  /** Порт инвентаря worktree'ов (ADR-096) — единственный способ записи и чтения. */
-  repository: WorktreeRepository;  /** Корень workspace инстанса; worktree'ы лежат в `<root>/.worktrees/<projectId>`. */
+  /** Порт инвентаря worktree (ADR-096) — единственный способ записи и чтения. */
+  repository: WorktreeRepository;  /** Корень workspace инстанса; worktree лежат в `<root>/.worktrees/<projectId>`. */
   workspacesRoot: string;
   /** Порт исполнения команд (ADR-077); не задан — inline (локально). */
   execution?: ExecutionPort;
@@ -100,7 +100,7 @@ export interface WorktreeServiceOptions {
 }
 
 /**
- * Детали изменения инвентаря worktree'ов — для события `worktree.updated`
+ * Детали изменения инвентаря worktree — для события `worktree.updated`
  * (ADR-114 §6).
  */
 export interface WorktreeUpdateDetail {
@@ -159,7 +159,7 @@ export interface WorktreeSecondaryInfo {
 }
 
 /**
- * Сервис worktree'ов: git-операции, lifecycle инвентаря, детект secondary.
+ * Сервис worktree: git-операции, lifecycle инвентаря, детект secondary.
  */
 export class WorktreeService {
   private readonly _repository: WorktreeRepository;
@@ -181,7 +181,7 @@ export class WorktreeService {
   }
 
   /**
-   * Корень worktree'ов проекта: `{workspacesRoot}/.worktrees/<projectId>`.
+   * Корень worktree проекта: `{workspacesRoot}/.worktrees/<projectId>`.
    *
    * Каталог внутри корня workspace — иначе каталог сессии вышел бы за
    * containment исполнителя (ADR-077) и за политику workspace (ADR-075).
@@ -191,7 +191,7 @@ export class WorktreeService {
   }
 
   /**
-   * Список worktree'ов проекта с вычисленными полями: `exists`, `dirty`,
+   * Список worktree проекта с вычисленными полями: `exists`, `dirty`,
    * `attachedSessionId`.
    *
    * Недоступный каталог **не** роняет список: запись без каталога показывается
@@ -570,7 +570,7 @@ export class WorktreeService {
    * Startup-скрипт проекта (ADR-114 §7.6): один раз на запись, через порт
    * исполнения (в remote-режиме — на исполнителе).
    *
-   * Окружение: `SYNTH_WORKTREE_BASE` — корень worktree'ов проекта,
+   * Окружение: `SYNTH_WORKTREE_BASE` — корень worktree проекта,
    * `SYNTH_WORKTREE_PATH` — каталог нового worktree. Рабочий каталог — сам
    * worktree. Таймаут — 5 минут.
    */

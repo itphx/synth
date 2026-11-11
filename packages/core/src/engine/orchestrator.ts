@@ -929,7 +929,7 @@ export interface OrchestratorOptions {
    */
   blobRefs?: BlobRefRepository;
   /**
-   * ADR-114: сервис worktree'ов — тулы `git_worktree_*`.
+   * ADR-114: сервис worktree — тулы `git_worktree_*`.
    *
    * Не задан — тулы worktree недоступны (`worktree.tool.deps_unavailable`).
    */
@@ -1226,7 +1226,7 @@ export class ChatOrchestrator {
    */
   private _attachmentBlobs: BlobStore | null = null;
   /**
-   * ADR-114: сервис worktree'ов (null — не задан: тулы `git_worktree_*`
+   * ADR-114: сервис worktree (null — не задан: тулы `git_worktree_*`
    * недоступны).
    */
   private readonly _worktreeService: WorktreeService | null;
@@ -1640,7 +1640,7 @@ export class ChatOrchestrator {
     this._subagentDepth = options.subagentDepth ?? DEFAULT_SUBAGENT_DEPTH;
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
     this._processService = options.processService ?? null;
-    // ADR-114: сервис worktree'ов (тулы `git_worktree_*`).
+    // ADR-114: сервис worktree (тулы `git_worktree_*`).
     this._worktreeService = options.worktreeService ?? null;
     // ADR-115: порт ссылок на blob-объекты (инъекция вложений тулов).
     this._blobRefs = options.blobRefs ?? null;
@@ -6385,7 +6385,7 @@ export class ChatOrchestrator {
                   // валидация явной пары `task({provider, model})` (TaskExtra).
                   listModels: this._listModels ?? undefined,
                   blobRefs: this._blobRefs ?? undefined,
-                  // ADR-114: сервис worktree'ов — тулы `git_worktree_*`.
+                  // ADR-114: сервис worktree — тулы `git_worktree_*`.
                   worktreeService: this._worktreeService ?? undefined,
                   // Регистрация cancel-токена фонового прогона: `POST
                   // /sessions/<child>/abort` останавливает фонового ребёнка

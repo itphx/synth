@@ -1,5 +1,5 @@
 /**
- * Тулы `git_worktree_*` — инвентарь git-worktree'ов проекта (ADR-114 §5,
+ * Тулы `git_worktree_*` — инвентарь git-worktree проекта (ADR-114 §5,
  * `docs/WORKTREES.md`).
  *
  * ## Границы
@@ -38,7 +38,7 @@ import { argErrorResult } from './arg-error.js';
 /**
  * Зависимости тулов из `ToolContext.extra` (упаковка — оркестратор).
  *
- * - `worktreeService` — сервис worktree'ов (ADR-114). Не задан — тулы
+ * - `worktreeService` — сервис worktree (ADR-114). Не задан — тулы
  *   недоступны (`worktree.tool.deps_unavailable`).
  * - `projectStore` — порт проектов: по `ctx.projectId` читается проект
  *   (и его `workspace` — корень репозитория для `git worktree add`).
@@ -189,7 +189,7 @@ const worktreePruneParamsSchema = z.object({}).strict();
 // ── Тулы ─────────────────────────────────────────────────────────────────────
 
 /**
- * `git_worktree_list` — инвентарь worktree'ов проекта сессии.
+ * `git_worktree_list` — инвентарь worktree проекта сессии.
  *
  * Читающий тул (группа `git_read`): в plan-режиме доступен.
  */

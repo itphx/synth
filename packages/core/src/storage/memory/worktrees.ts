@@ -1,5 +1,5 @@
 /**
- * In-memory реализация порта **инвентаря worktree'ов** (ADR-096, второй
+ * In-memory реализация порта **инвентаря worktree** (ADR-096, второй
  * backend за единым слоем хранения; ADR-114 — worktrees).
  *
  * Чистая реализация без модулей ФС (`fs`/`path`): состояние — в `Map`
@@ -18,7 +18,7 @@ import type { WorktreeRepository } from '../ports/worktree-repository.js';
 import { resolveCreatedAt } from '../record-timestamps.js';
 
 /**
- * Порт инвентаря worktree'ов поверх `Map` (реализация — `FileWorktreeStore`).
+ * Порт инвентаря worktree поверх `Map` (реализация — `FileWorktreeStore`).
  */
 export class MemoryWorktreeRepository implements WorktreeRepository {
   private readonly _worktrees = new Map<string, WorktreeRecord>();

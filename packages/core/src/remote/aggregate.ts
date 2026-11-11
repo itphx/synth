@@ -205,9 +205,9 @@ export function toRemotePipelineRunDetail<T extends object>(dto: T): T {
 }
 
 /**
- * Запись worktree'а удалённого проекта (ADR-114).
+ * Запись worktree удалённого проекта (ADR-114).
  *
- * **id worktree'а НЕ префиксуется**: он адресуется только внутри проекта
+ * **id worktree НЕ префиксуется**: он адресуется только внутри проекта
  * (`/projects/remote:<pid>/worktrees/<wid>`), а сервер ждёт исходный id —
  * поэтому префикс сделал бы `DELETE` невыполнимым. Ссылки на сущности мира
  * (`projectId`, `attachedSessionId`) — префиксуются: по ним UI сопоставляет
@@ -220,7 +220,7 @@ export function toRemoteWorktree<T extends object>(worktree: T): T {
   return out as T;
 }
 
-/** Список worktree'ов удалённого проекта (`{worktrees: [...]}`). */
+/** Список worktree удалённого проекта (`{worktrees: [...]}`). */
 export function toRemoteWorktreeList<T extends object>(payload: T): T {
   const out: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
   if (Array.isArray(out.worktrees)) {

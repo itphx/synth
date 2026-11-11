@@ -1,5 +1,5 @@
 /**
- * HTTP-контур worktree'ов проекта (ADR-114 §5–§7, этап 1 roadmap 0.13 —
+ * HTTP-контур worktree проекта (ADR-114 §5–§7, этап 1 roadmap 0.13 —
  * блок 1.4.2b).
  *
  * Проверяется фабрика `createProjectRoutes` (core) с **настоящим**

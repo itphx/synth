@@ -1,4 +1,4 @@
-// worktrees: домен API v2 (ADR-114) — инвентарь git-worktree'ов проекта.
+// worktrees: домен API v2 (ADR-114) — инвентарь git-worktree проекта.
 //
 // Серверный контракт (core, `server/routes/projects.ts` + `server/routes/sessions.ts`):
 //   GET    /api/v2/projects/:id/worktrees               → { worktrees: WorktreeSummary[] }
@@ -64,13 +64,13 @@ export interface WorktreePruneResult {
   gitPruned: boolean
 }
 
-/** Ответ списка worktree'ов проекта. */
+/** Ответ списка worktree проекта. */
 export interface WorktreeListResponse {
   worktrees: WorktreeSummary[]
 }
 
 export const worktreesApi = {
-  /** GET /projects/:id/worktrees — инвентарь worktree'ов проекта. */
+  /** GET /projects/:id/worktrees — инвентарь worktree проекта. */
   async listWorktrees(projectId: string): Promise<WorktreeSummary[]> {
     const response = await fetchJSON<WorktreeListResponse>(
       `${BASE_URL}/projects/${encodeURIComponent(projectId)}/worktrees`,

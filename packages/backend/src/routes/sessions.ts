@@ -40,7 +40,7 @@ import type { AttachmentThumbnailProvider } from '@itphx/synth-core';
 import type { AttachmentsConfig, StickyNotesLimits } from '@itphx/synth-shared';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» (`ask_user`).
 import type { QuestionService } from '@itphx/synth-core';
-// ADR-114: сервис worktree'ов — привязка сессии к worktree.
+// ADR-114: сервис worktree — привязка сессии к worktree.
 import type { WorktreeService } from '@itphx/synth-core';
 // ADR-111/ADR-113: реестр фоновых прогонов — «Стоп» останавливает и детей
 // (решение 2026-10-28).
@@ -115,7 +115,7 @@ export function createSessionRoutes(
    */
   questionService?: QuestionService,
   /**
-   * ADR-114: сервис worktree'ов — привязка сессии к worktree
+   * ADR-114: сервис worktree — привязка сессии к worktree
    * (`PATCH /api/v2/sessions/:id { worktreeId }`).
    *
    * Не задан — поле `worktreeId` в PATCH игнорируется (привязка недоступна).

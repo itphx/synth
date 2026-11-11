@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 /**
- * `stores/worktreesStore.ts` (ADR-114 §9): инвентарь worktree'ов проекта.
+ * `stores/worktreesStore.ts` (ADR-114 §9): инвентарь worktree проекта.
  *
  * Стор работает через `synthApi` (мок), обновляется по событию
  * `worktree.updated` и по `fs.changed` (дерево Files перечитывается).

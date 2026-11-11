@@ -36,7 +36,7 @@ const GIT_WRITE_TOOLS = [
   'project_repo_clone',
   'project_repo_init',
   'project_repo_fetch',
-  // ADR-114: мутации инвентаря git-worktree'ов (создание/удаление/prune) —
+  // ADR-114: мутации инвентаря git-worktree (создание/удаление/prune) —
   // группа `git_write`, поэтому plan-режим их блокирует (ADR-029/ADR-025).
   'git_worktree_create',
   'git_worktree_remove',

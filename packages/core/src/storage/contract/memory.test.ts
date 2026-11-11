@@ -315,7 +315,7 @@ describe('контрактные тесты in-memory реализаций по�
     async () => ({ repo: new MemoryBackgroundRunRepository() }),
   );
 
-  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree'ов.
+  // Этап 1 roadmap 0.13 (блок 1.4): инвентарь worktree.
   describeWorktreeRepository('MemoryWorktreeRepository → WorktreeRepository', async () => ({
     repo: new MemoryWorktreeRepository(),
   }));

@@ -269,7 +269,7 @@ export interface SessionRoutesDeps {
    */
   backgroundService?: BackgroundRunService;
   /**
-   * ADR-114: сервис worktree'ов — привязка сессии к worktree
+   * ADR-114: сервис worktree — привязка сессии к worktree
    * (`PATCH /api/v2/sessions/:id { worktreeId }`).
    *
    * Не задан — поле `worktreeId` в PATCH игнорируется (привязка недоступна).
