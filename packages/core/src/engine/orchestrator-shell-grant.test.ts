@@ -14,7 +14,8 @@ import type { ShellPolicy } from './security/shell-guard.js';
  */
 type ShellTrigger = {
   params?: Record<string, string>;
-  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' | 'external';
+  paths?: string[];
 };
 
 const proto = ChatOrchestrator.prototype as unknown as {
@@ -188,11 +189,39 @@ describe('shell-грант сессии (оркестратор)', () => {
     expect((ctx._applyToolAllow as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
   });
 
-  it('сценарий: одобрение `cd "$HOME" && ls -la` → повтор разрешён, чужая команда — ask', () => {
+  it('сценарий: `cd "$HOME" && ls -la` — командный паттерн external-ask НЕ снимает', () => {
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
     };
     const command = 'cd "$HOME" && ls -la';
+    const patterns = shellSavePatterns(command);
+    expect(patterns).toEqual(['cd *', 'ls *']);
+    const merged = proto._applyShellAllow.call(ctx, {
+      rules: { execute_shell: 'ask' },
+      askTimeoutMs: 30_000,
+    }, patterns ?? []);
+    const decision = (cmd: string) => new PermissionEvaluator(merged).check({
+      toolName: 'execute_shell',
+      params: { command: cmd },
+      workingDir: '/workspace/project',
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+      shellPolicy: SHELL_POLICY,
+    });
+    // `cd $HOME` — реальный доступ вне периметра: снимается только правилом
+    // `external_directory` на каталог (грант каталогом), не паттерном команды.
+    const d = decision(command);
+    expect(d.action).toBe('ask');
+    expect(d.askKind).toBe('external');
+    expect(decision('rm -rf x').action).toBe('ask');
+  });
+
+  it('сценарий: грант паттернами для команд внутри периметра — повтор разрешён', () => {
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+    };
+    const command = 'cd sub && ls -la';
     const patterns = shellSavePatterns(command);
     expect(patterns).toEqual(['cd *', 'ls *']);
     const merged = proto._applyShellAllow.call(ctx, {
@@ -321,6 +350,62 @@ describe('shell-грант сессии: каталог вместо патте�
       expect(decision.action).toBe('allow');
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('external-ask: грант — каталог из askPaths, execute_shell не пишется', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'synth-grant-ext-'));
+    const outside = await mkdtemp(join(tmpdir(), 'synth-grant-ext-out-'));
+    try {
+      const outsideFile = join(outside, 'a.txt');
+      await writeFile(outsideFile, 'x');
+      const session = baseSession();
+      const granted: Array<{ patterns: string[]; directories: string[] }> = [];
+      const ctx = {
+        _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+        _sessionManager: {
+          withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
+          saveSession: async () => {},
+        },
+        _eventBus: { publish: () => {} },
+        _onPermissionGrant: (entry: { patterns: string[]; directories: string[] }) => {
+          granted.push(entry);
+        },
+        _applyShellAllow: proto._applyShellAllow,
+        _applyDirectoryAllow: proto._applyDirectoryAllow,
+        _applyToolAllow: vi.fn(),
+      };
+
+      const command = `cat ${outsideFile}`;
+      const config = await proto._grantSessionToolAllow.call(
+        ctx,
+        session,
+        'execute_shell',
+        { command },
+        root,
+        { params: { path: outsideFile }, askKind: 'external', paths: [outsideFile] },
+      );
+
+      // Командный паттерн не выдан: грант — каталогом внешнего файла.
+      expect(config.rules.execute_shell).toBeUndefined();
+      expect(config.rules.external_directory).toEqual({ [`${outside}/*`]: 'allow' });
+      expect(granted[0]?.patterns).toEqual([]);
+      expect(granted[0]?.directories).toEqual([outside]);
+
+      // Повтор той же команды снят правилом external_directory.
+      const decision = new PermissionEvaluator(config).check({
+        toolName: 'execute_shell',
+        params: { command },
+        workingDir: root,
+        sessionMode: 'act',
+        planMode: 'auto',
+        planApproved: false,
+        shellPolicy: SHELL_POLICY,
+      });
+      expect(decision.action).toBe('allow');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
     }
   });
 

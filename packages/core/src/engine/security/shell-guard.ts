@@ -20,8 +20,8 @@
  * override `{dataDir}/context/shell-policy.json`, полностью заменяющий
  * системный (аналогично loadSystemAgentDefinitions / контекстным файлам).
  */
-import { readFileSync, existsSync, opendirSync, type Dir } from 'node:fs';
-import { join, dirname, resolve, normalize, sep } from 'node:path';
+import { readFileSync, existsSync, opendirSync, statSync, type Dir } from 'node:fs';
+import { join, dirname, resolve, normalize, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { globMatch, type PermissionRule } from '@itphx/synth-shared';
@@ -71,10 +71,16 @@ export interface ShellCheckResult {
   /** Параметры подстановки в сообщение ({{path}}, {{dir}}, {{command}}). */
   params?: Record<string, string>;
   /**
-   * Причина `ask` (для снятия сессионным shell-грантом). Снимается только
-   * `dynamic`; `protected`/`mutation`/`cwd` — никогда.
+   * Причина `ask` (для снятия сессионным shell-грантом).
+   *
+   * - `dynamic` — непроверяемая динамика; снимается грантом каталога
+   *   (`askPaths`), командные паттерны не выдаются;
+   * - `external` — реальный доступ вне периметра (`workingDir` + `allowedRoots`):
+   *   снимается правилом `permission.rules.external_directory` по путям
+   *   `askPaths` (дефолт — вопрос, в plan/strict — запрет);
+   * - `protected`/`mutation`/`cwd` — жёсткий слой, грантом не снимаются.
    */
-  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' | 'external';
   /**
    * Аддитивно (ADR-029): абсолютные пути **фактических совпадений** glob'а,
    * из-за которых динамику не удалось проверить безопасно. По ним решается,
@@ -1098,6 +1104,9 @@ export function checkShellCommand(
   policy: ShellPolicy,
   options?: { allowedRoots?: readonly string[]; depth?: number; bindings?: ReadonlyMap<string, ShellBinding> },
 ): ShellCheckResult {
+  // Кэш realpath/readdir — на вызов: верхний уровень начинает новую проверку.
+  if ((options?.depth ?? 0) === 0) resetShellCheckCaches();
+
   // Точное совпадение всей команды (например форк-бомба с разделителями внутри).
   for (const prefix of policy.deniedCommandPrefixes) {
     if (normalizeSpace(prefix) === normalizeSpace(command)) {
@@ -1141,8 +1150,19 @@ export function checkShellCommand(
     }
     const nextCwd = resolveCdCwd(segment, currentCwd, env, bindings);
     if (nextCwd !== null) {
-      if ('cwd' in nextCwd) currentCwd = nextCwd.cwd;
-      else ask ??= askForDynamic(nextCwd.target, 'cwd');
+      if ('cwd' in nextCwd) {
+        currentCwd = nextCwd.cwd;
+        // Цель `cd`/`pushd` — тоже реальный доступ: защищённый путь → deny,
+        // вне периметра → external-ask (исключения периметра не спрашиваем).
+        const access = classifyAccess(
+          normalize(nextCwd.cwd), deniedPaths, approvalPaths, deniedPrefixes, roots,
+        );
+        if (access.kind === 'deny') return access.result;
+        if (access.kind === 'ask') ask ??= access.result;
+        else if (access.kind === 'external') ask ??= askForExternal([access.path]);
+      } else {
+        ask ??= askForDynamic(nextCwd.target, 'cwd');
+      }
     }
   }
   if (ask) return ask;
@@ -1219,7 +1239,7 @@ function isUnderDeniedPrefix(norm: string, prefixEntry: string): boolean {
  */
 function pathVariants(norm: string): string[] {
   const variants: string[] = [];
-  const real = resolveRealPath(norm);
+  const real = cachedRealPath(norm);
   if (real !== null && real !== norm) variants.push(norm, real);
   else variants.push(norm);
   // `/proc/<pid|self>/root/<path>` и `/cwd/<path>` — тот же файл, что `<path>`
@@ -1231,6 +1251,90 @@ function pathVariants(norm: string): string[] {
 
 /** Пустой набор биндингов (когда команда их не задаёт). */
 const EMPTY_BINDINGS: ReadonlyMap<string, ShellBinding> = new Map();
+
+/**
+ * Исключения периметра — псевдофайлы, доступ к которым **не** является
+ * реальным доступом к файловой системе (потоки/дескрипторы). Спрашивать за них
+ * нельзя: `echo hi > /dev/null`, `cat /dev/fd/0` — рутина любого скрипта.
+ * `/tmp` сюда **не** входит (решение владельца: он спрашивается).
+ */
+const PERIMETER_EXEMPT_EXACT: ReadonlySet<string> = new Set([
+  '/dev/null',
+  '/dev/stdin',
+  '/dev/stdout',
+  '/dev/stderr',
+  '/dev/tty',
+]);
+const PERIMETER_EXEMPT_PATTERNS: readonly RegExp[] = [
+  /^\/dev\/fd\/\d+$/,
+  /^\/proc\/self\/fd\/\d+$/,
+];
+
+/** Является ли нормализованный путь исключением периметра (см. выше). */
+export function isPerimeterExempt(path: string): boolean {
+  const norm = normalize(path);
+  if (PERIMETER_EXEMPT_EXACT.has(norm)) return true;
+  return PERIMETER_EXEMPT_PATTERNS.some((re) => re.test(norm));
+}
+
+/**
+ * Кэш `realpath`/`readdir` на **один** вызов `checkShellCommand` (верхний
+ * уровень): проверка `find /` с большим каталогом делает realpath на каждое
+ * совпадение, повторные пути считаются один раз. Сбрасывается в начале
+ * верхнеуровневой проверки (вложенные `checkShellCommand` — рекурсия по
+ * обёрткам — живут в том же кэше).
+ */
+let realPathCache: Map<string, string | null> = new Map();
+let readDirCache: Map<string, string[] | 'too-many' | null> = new Map();
+
+function resetShellCheckCaches(): void {
+  realPathCache = new Map();
+  readDirCache = new Map();
+}
+
+/** `resolveRealPath` с кэшем на вызов проверки. */
+function cachedRealPath(path: string): string | null {
+  if (realPathCache.has(path)) return realPathCache.get(path)!;
+  const value = resolveRealPath(path);
+  realPathCache.set(path, value);
+  return value;
+}
+
+/** Результат классификации доступа к пути (литерал/совпадение glob'а). */
+type AccessClassification =
+  | { kind: 'deny'; result: ShellCheckResult }
+  | { kind: 'ask'; result: ShellCheckResult }
+  | { kind: 'external'; path: string }
+  | { kind: 'safe' };
+
+/**
+ * Единая классификация доступа к пути:
+ *
+ * 1. защищённые пути политики (deny по точному пути/префиксу, ask по
+ *    `approvalPaths`) — `pathVariants` с realpath, как раньше;
+ * 2. исключения периметра (`/dev/null`, `/dev/fd/<n>`, …) → `safe`;
+ * 3. внутри периметра (`isInsideRootsLexicalFallback`: лексически, realpath —
+ *    если путь существует) → `safe`;
+ * 4. иначе — реальный доступ **вне** периметра → `external` (`ask`, снимается
+ *    правилом `external_directory`).
+ */
+function classifyAccess(
+  norm: string,
+  deniedPaths: readonly string[],
+  approvalPaths: readonly string[],
+  deniedPrefixes: readonly string[],
+  roots: readonly string[],
+): AccessClassification {
+  const classified = classifyResolvedPath(norm, deniedPaths, approvalPaths, deniedPrefixes);
+  if (classified) {
+    return classified.kind === 'deny'
+      ? { kind: 'deny', result: classified.result }
+      : { kind: 'ask', result: classified.result };
+  }
+  if (isPerimeterExempt(norm)) return { kind: 'safe' };
+  if (isInsideRootsLexicalFallback(norm, roots)) return { kind: 'safe' };
+  return { kind: 'external', path: norm };
+}
 
 /** Результат классификации разрешённого пути. */
 type PathClassification =
@@ -1270,19 +1374,26 @@ const GLOB_READDIR_LIMIT = 2000;
  * синхронно). Больше `limit` записей — `null` (дальше обычный `ask`).
  */
 function readDirLimited(dir: string, limit: number): string[] | 'too-many' | null {
+  const key = `${limit}\0${dir}`;
+  const cached = readDirCache.get(key);
+  if (cached !== undefined) return cached;
+  let result: string[] | 'too-many' | null;
   let handle: Dir | undefined;
   try {
     handle = opendirSync(dir);
     const names: string[] = [];
+    result = names;
     for (;;) {
       const entry = handle.readSync();
       if (entry === null) break;
       names.push(entry.name);
-      if (names.length > limit) return 'too-many';
+      if (names.length > limit) {
+        result = 'too-many';
+        break;
+      }
     }
-    return names;
   } catch {
-    return null;
+    result = null;
   } finally {
     try {
       handle?.closeSync();
@@ -1290,34 +1401,28 @@ function readDirLimited(dir: string, limit: number): string[] | 'too-many' | nul
       // каталог уже закрыт/недоступен — не влияет на вердикт
     }
   }
+  readDirCache.set(key, result);
+  return result;
 }
 
 /** Результат оценки workspace-glob в шаге 6. */
 type WorkspaceGlobEvaluation =
-  | { kind: 'skip' }   // не однокомпонентный glob в периметре — обычный `ask`
+  | { kind: 'skip' }   // glob не удалось безопасно разобрать — обычный `ask`
   | { kind: 'safe' }   // все совпадения безопасны — подтверждение не нужно
+  | { kind: 'external'; paths: string[] } // совпадения вне периметра — external-ask
   | { kind: 'result'; result: ShellCheckResult };
-
-/** Путь внутри корней: лексически и (если существует) после разыменования. */
-function isInsideRoots(path: string, roots: readonly string[]): boolean {
-  const real = resolveRealPath(path);
-  return roots.some((root) => {
-    if (!isLexicallyInside(root, path)) return false;
-    if (real === null) return false; // не разрешается — fail-closed
-    const realRoot = resolveRealPath(root);
-    return realRoot !== null && isLexicallyInside(realRoot, real);
-  });
-}
 
 /**
  * Оценивает glob-токен по фактическим совпадениям (шаг 6).
  *
- * Разрешается только glob в **последнем** компоненте (`dir/*.srl`): каталог
- * обязан быть литеральным, внутри периметра (лексически и после realpath), а
- * каждое совпадение проверяется как путь — deny/approval и realpath внутри
- * периметра. Симлинк из workspace наружу (`leakdir/*.key`) и многокомпонентный
- * glob (`<dir>/<glob>/file`) — `skip` (дальше обычный `ask`). Ошибка чтения
- * каталога или отсутствие совпадений — тоже `skip`.
+ * Раскрывается только glob в **последнем** компоненте (`dir/*.srl`, `*.ts`);
+ * литеральный каталог может быть **и вне** периметра — тогда совпадения
+ * проверяются как пути: защищённое совпадение → `deny`, совпадение вне
+ * периметра → список `external` (правило `external_directory` решает, спрашивать
+ * или разрешать). Многокомпонентный glob (`<dir>/<glob>/file`) — `skip`
+ * (дальше обычный `ask`). Ошибка чтения каталога и превышение лимита записей —
+ * fail-closed `ask`; для bare-glob (`*` в cwd) нечитаемый каталог считается
+ * безопасным (совпадений не определить, но и доступа к файлам нет).
  */
 function evaluateWorkspaceGlob(
   token: string,
@@ -1341,43 +1446,47 @@ function evaluateWorkspaceGlob(
   } else {
     // Только glob в последнем компоненте (`dir/*.srl`).
     if (token.search(GLOB_CHARS_RE) < lastSlash) return { kind: 'skip' };
-    if (token.split('/').includes('..')) return { kind: 'skip' };
     const dirToken = lastSlash === 0 ? '/' : token.slice(0, lastSlash);
     const resolved = tryResolvePath(dirToken, cwd, env);
     if (!resolved || resolved.source !== 'literal') return { kind: 'skip' };
     dir = resolved.path;
-    // Литеральный каталог обязан быть внутри периметра (realpath обязателен).
-    if (resolveRealPath(dir) === null || !isInsideRoots(dir, roots)) return { kind: 'skip' };
     pattern = token.slice(lastSlash + 1);
   }
   if (pattern === '') return { kind: 'skip' };
 
   const names = readDirLimited(dir, GLOB_READDIR_LIMIT);
   if (names === 'too-many') return { kind: 'result', result: askForDynamic(token) };
-  if (names === null) return bare ? { kind: 'safe' } : { kind: 'skip' };
-  if (names.length === 0) return bare ? { kind: 'safe' } : { kind: 'skip' };
+  if (names === null) return bare ? { kind: 'safe' } : { kind: 'result', result: askForDynamic(token) };
   const matches = names.filter((name) => globMatch(pattern, name));
   if (matches.length === 0) return bare ? { kind: 'safe' } : { kind: 'skip' };
 
-  // Deny приоритетнее ask: сначала все deny и проверка периметра, затем approval.
-  let uncertain = false;
+  // Deny приоритетнее ask: сначала все deny, затем approval, затем external.
+  // Точное совпадение с `deniedPaths` приоритетнее запрета по префиксу — в
+  // карточке подтверждения виден конкретный защищённый файл.
   let approval: ShellCheckResult | null = null;
+  let deniedPath: ShellCheckResult | null = null;
+  let deniedDir: ShellCheckResult | null = null;
+  const external: string[] = [];
   for (const name of matches) {
     const path = join(dir, name);
-    const real = resolveRealPath(path);
-    if (real === null || !isInsideRoots(path, roots)) {
-      // Симлинк наружу/неразрешимый путь: bare-glob нельзя молча пропускать.
-      if (bare) return { kind: 'result', result: askForDynamic(token, 'dynamic', [path]) };
-      uncertain = true;
+    const access = classifyAccess(normalize(path), deniedPaths, approvalPaths, deniedPrefixes, roots);
+    if (access.kind === 'deny') {
+      if (access.result.params && typeof access.result.params.dir === 'string') {
+        deniedDir ??= access.result;
+      } else {
+        deniedPath ??= access.result;
+      }
       continue;
     }
-    const classified = classifyResolvedPath(normalize(path), deniedPaths, approvalPaths, deniedPrefixes);
-    if (!classified) continue;
-    if (classified.kind === 'deny') return { kind: 'result', result: classified.result };
-    approval ??= classified.result;
+    if (access.kind === 'ask') {
+      approval ??= access.result;
+      continue;
+    }
+    if (access.kind === 'external') external.push(access.path);
   }
-  if (uncertain) return { kind: 'skip' };
+  if (deniedPath || deniedDir) return { kind: 'result', result: (deniedPath ?? deniedDir)! };
   if (approval) return { kind: 'result', result: approval };
+  if (external.length > 0) return { kind: 'external', paths: [...new Set(external)] };
   return { kind: 'safe' };
 }
 
@@ -1459,6 +1568,26 @@ function askForDynamic(
   };
 }
 
+/**
+ * ask на реальный доступ **вне** периметра (`external_directory`-семантика:
+ * правило `allow`/`deny`/`ask`, дефолт — вопрос; в plan/strict — запрет,
+ * режим применяет permission-слой). `askPaths` — конкретные внешние пути: по
+ * ним резолвится правило и считается грант каталогом.
+ */
+function askForExternal(paths: readonly string[]): ShellCheckResult {
+  const first = paths[0] ?? '';
+  return {
+    action: 'ask',
+    reason: sm('shellguard.ask_external', { path: first }),
+    matchedRule: 'external_directory.default',
+    deniedPath: first,
+    messageId: 'ask-external-directory',
+    params: { path: first },
+    askKind: 'external',
+    askPaths: [...paths],
+  };
+}
+
 /** ask: чистая динамическая подстановка передаётся как код/аргумент. */
 function askForDynamicCode(code: string): ShellCheckResult {
   return {
@@ -1487,11 +1616,11 @@ function askForStdinCode(): ShellCheckResult {
 
 /** Вхождение в периметр: realpath — если путь существует, иначе лексически. */
 function isInsideRootsLexicalFallback(path: string, roots: readonly string[]): boolean {
-  const real = resolveRealPath(path);
+  const real = cachedRealPath(path);
   return roots.some((root) => {
     if (!isLexicallyInside(root, path)) return false;
     if (real === null) return true;
-    const realRoot = resolveRealPath(root);
+    const realRoot = cachedRealPath(root);
     return realRoot !== null && isLexicallyInside(realRoot, real);
   });
 }
@@ -2211,7 +2340,11 @@ function checkShellSegment(
 
   // 3. Литеральные аргументы: deny (точный путь/префикс) приоритетнее ask;
   // approvalPaths — исключение из deniedPrefixes (`~/.ssh/config` → ask).
+  // Реальный доступ вне периметра (рабочий каталог + allowedRoots) — external
+  // ask: правило `external_directory` решает, спрашивать или разрешать.
   const asks: ShellCheckResult[] = [];
+  const externalPaths: string[] = [];
+  const dynamicAsks: ShellCheckResult[] = [];
   const findStarts = checkFindMutationStarts(
     tokens, cwd, env, roots, deniedPaths, approvalPaths, deniedPrefixes,
   );
@@ -2221,12 +2354,12 @@ function checkShellSegment(
   }
   for (const { resolved } of extracted) {
     if (resolved.source !== 'literal') continue;
-    const classified = classifyResolvedPath(
-      normalize(resolved.path), deniedPaths, approvalPaths, deniedPrefixes,
+    const access = classifyAccess(
+      normalize(resolved.path), deniedPaths, approvalPaths, deniedPrefixes, roots,
     );
-    if (!classified) continue;
-    if (classified.kind === 'deny') return classified.result;
-    asks.push(classified.result);
+    if (access.kind === 'deny') return access.result;
+    if (access.kind === 'ask') asks.push(access.result);
+    else if (access.kind === 'external') externalPaths.push(access.path);
   }
 
   // 4. Присваивания и `for`-циклы: если динамический токен раскрывается в
@@ -2259,12 +2392,12 @@ function checkShellSegment(
     resolvedDynamic.add(i);
   }
   for (const path of expanded) {
-    const classified = classifyResolvedPath(
-      normalize(path), deniedPaths, approvalPaths, deniedPrefixes,
+    const access = classifyAccess(
+      normalize(path), deniedPaths, approvalPaths, deniedPrefixes, roots,
     );
-    if (!classified) continue;
-    if (classified.kind === 'deny') return classified.result;
-    asks.push(classified.result);
+    if (access.kind === 'deny') return access.result;
+    if (access.kind === 'ask') asks.push(access.result);
+    else if (access.kind === 'external') externalPaths.push(access.path);
   }
 
   // 5. После всех deny — ask (approvalPaths литералов и раскрытых значений).
@@ -2323,7 +2456,7 @@ function checkShellSegment(
     // Слитное перенаправление: сам оператор не путь — цель добавлена операндом.
     if (parseRedirectToken(token) !== null) continue;
     if (unsupportedBraces.has(token)) {
-      asks.push(askForDynamic(token));
+      dynamicAsks.push(askForDynamic(token));
       continue;
     }
     const isGlob = GLOB_CHARS_RE.test(token);
@@ -2333,17 +2466,29 @@ function checkShellSegment(
     );
     if (glob.kind === 'result') {
       if (glob.result.action === 'deny') return glob.result;
-      asks.push(glob.result);
+      if (glob.result.askKind === 'dynamic') dynamicAsks.push(glob.result);
+      else asks.push(glob.result);
+      continue;
+    }
+    if (glob.kind === 'external') {
+      externalPaths.push(...glob.paths);
       continue;
     }
     if (glob.kind === 'safe') continue;
     if (!isPathLikeTarget(token)) continue;
     // Glob, не проверенный безопасно: несём фактические совпадения — по ним
     // сессионный грант каталога (`external_directory`) снимет ask.
-    asks.push(isGlob ? askForDynamic(token, 'dynamic', globMatchPaths(token, cwd, env)) : askForDynamic(token));
+    dynamicAsks.push(
+      isGlob ? askForDynamic(token, 'dynamic', globMatchPaths(token, cwd, env)) : askForDynamic(token),
+    );
   }
 
+  // Приоритет ask'ов: жёсткие/защищённые → внешний доступ → непроверяемая
+  // динамика → отложенный ask вложенной команды.
   if (asks.length > 0) return asks[0]!;
+  if (deferredAsk && deferredAsk.askKind !== 'dynamic') return deferredAsk;
+  if (externalPaths.length > 0) return askForExternal(externalPaths);
+  if (dynamicAsks.length > 0) return dynamicAsks[0]!;
   if (deferredAsk) return deferredAsk;
   return null;
 }
@@ -2576,14 +2721,35 @@ function grantDirectoryForToken(token: string, cwd: string): string | null {
 }
 
 /**
+ * Каталог гранта для **внешнего** пути: каталог → он сам, файл → `dirname`
+ * (несуществующий путь трактуется как файл). Относительный/динамический токен
+ * каталога не даёт (`null`).
+ */
+function grantDirectoryForExternalPath(path: string): string | null {
+  const cleaned = stripTokenQuotes(path);
+  if (cleaned === '' || /[$`]/.test(cleaned)) return null;
+  if (!isAbsolute(cleaned)) return null;
+  const norm = normalize(cleaned);
+  try {
+    return statSync(norm).isDirectory() ? norm : dirname(norm);
+  } catch {
+    return dirname(norm);
+  }
+}
+
+/**
  * План сессионного гранта по команде и причине `ask`'а.
  *
  * - `commands` — все исполняемые сегменты (тот же разбор, что у
  *   `shellSavePatterns`), текст как в команде (trim);
- * - без `trigger` или при `askKind !== 'dynamic'` — грант не предлагается
- *   (`patterns: []`, `directories: []`);
+ * - без `trigger` или при `askKind` из жёсткого слоя
+ *   (`protected`/`mutation`/`cwd`) — грант не предлагается (`patterns: []`,
+ *   `directories: []`);
  * - `dynamic` — `patterns: []` (никогда), `directories` — каталоги сегментов-
- *   виновников (по токену из `trigger.params`), дедуп, порядок появления.
+ *   виновников (по токену из `trigger.params`), дедуп, порядок появления;
+ * - `external` — `patterns: []`, `directories` — каталоги конкретных внешних
+ *   путей `trigger.paths` (`askPaths` проверки: файл → `dirname`, каталог → он
+ *   сам), fallback — каталог токена-виновника.
  *
  * `options.cwd` — рабочий каталог сессии (тот же, что у shell-policy проверки):
  * от него отсчитываются относительные токены и bare-glob. Не задан — cwd
@@ -2591,7 +2757,12 @@ function grantDirectoryForToken(token: string, cwd: string): string | null {
  */
 export function shellGrantPlan(
   command: string,
-  trigger?: { params?: Record<string, string>; askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' },
+  trigger?: {
+    params?: Record<string, string>;
+    askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' | 'external';
+    /** Внешние пути проверки (`ShellCheckResult.askPaths`) — для `external`. */
+    paths?: readonly string[];
+  },
   options?: { cwd?: string },
 ): ShellGrantPlan {
   const analyzed = stripHeredocBodies(command);
@@ -2600,8 +2771,28 @@ export function shellGrantPlan(
     .map((segment) => segment.trim())
     .filter((segment) => !isNonCommandSegment(segment, delimiters));
 
-  if (!trigger || trigger.askKind !== 'dynamic') {
+  if (!trigger || (trigger.askKind !== 'dynamic' && trigger.askKind !== 'external')) {
     return { commands, patterns: [], directories: [] };
+  }
+
+  // `external`: виновник известен по конкретным путям — грант каталогом.
+  if (trigger.askKind === 'external') {
+    const directories: string[] = [];
+    const seen = new Set<string>();
+    const push = (dir: string | null): void => {
+      if (dir === null || seen.has(dir)) return;
+      seen.add(dir);
+      directories.push(dir);
+    };
+    for (const path of trigger.paths ?? []) push(grantDirectoryForExternalPath(path));
+    if (directories.length === 0) {
+      const accused = stripTokenQuotes(trigger.params?.path ?? '');
+      push(grantDirectoryForExternalPath(accused));
+      if (directories.length === 0) {
+        push(grantDirectoryForToken(accused, options?.cwd ?? process.cwd()));
+      }
+    }
+    return { commands, patterns: [], directories };
   }
 
   // Виновник ask'а — токен проверки (путь/код/команда). Сегменты-виновники —

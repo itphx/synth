@@ -35,7 +35,7 @@ export interface PendingApprovalRecord {
     messageId?: string;
     params?: Record<string, string>;
     matchedRule?: string;
-    askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+    askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' | 'external';
   };
   /** ISO-8601 момент публикации запроса. */
   askedAt: string;

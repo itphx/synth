@@ -765,6 +765,10 @@ Workspace проекта (`project.workspace`, [ADR-075](./arch_decisions/adr-07
 
 - **FS-роуты** (`createFsRoutes`) — HTTP-API работы с файлами проекта; это API, а не исполнение
   команды; backend остаётся точкой доступа.
+- **Агентские файловые тулы** (`read_file`/`write_file`/`edit_file`/`patch`/`delete_file`/
+  `create_directory`/`list_directory`, `node:fs`) — тоже остаются в control plane, а не только
+  HTTP FS-роуты: они пишут и читают тот же рабочий каталог. Следствие для split-режима —
+  общий RWX-том workspace обязателен и для них (контракт «один каталог у backend и пула»).
 - **Provisioning workspace** — владелец путей и политик — backend (ADR-075).
 - **Git-реестр** (`project.repos`) — состояние проекта, а не исполнение.
 - **Хранилище** — сессии/история/проекты ([ADR-096](./arch_decisions/adr-096-storage-layer.md)).

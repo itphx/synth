@@ -21,8 +21,8 @@ export interface PermissionTrigger {
   params?: Record<string, string>
   /** Ключ правила, которое сработало (например `shell-policy.approve`). */
   matchedRule?: string
-  /** Вид ask'а от shell-guard: dynamic/protected/mutation/cwd. */
-  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd'
+  /** Вид ask'а от shell-guard: dynamic/protected/mutation/cwd/external. */
+  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' | 'external'
 }
 
 export interface PermissionRequest {
@@ -68,8 +68,14 @@ export interface PermissionRequest {
   restored?: boolean
 }
 
-/** Виды ask'а, которые различает ядро. */
-const PERMISSION_ASK_KINDS = new Set(['dynamic', 'protected', 'mutation', 'cwd'])
+/**
+ * Виды ask'а, которые различает ядро.
+ *
+ * `external` — реальный доступ вне периметра (`workingDir` + `project.workspace`):
+ * решение принимает правило `permission.rules.external_directory`, грант —
+ * каталогом (`<dir>/*`).
+ */
+const PERMISSION_ASK_KINDS = new Set(['dynamic', 'protected', 'mutation', 'cwd', 'external'])
 
 /**
  * Разбор `trigger` из payload'а события / DTO восстановления.

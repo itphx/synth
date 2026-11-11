@@ -636,6 +636,42 @@ describe('PermissionRequestBar — сегменты команды и грант
     expect(container.querySelector('[data-testid="permission-save-unavailable"]')).toBeNull()
   })
 
+  /**
+   * `askKind: 'external'` (ADR-029): реальный доступ вне периметра —
+   * `workingDir` + `project.workspace`. Причина — «доступ вне рабочего каталога»,
+   * а не «не удалось проверить путь»; грант выдаётся каталогом виновника
+   * (`permission.rules.external_directory: '<dir>/*'`).
+   */
+  it('external: причина про рабочий каталог, каталог `/etc`, кнопка гранта', async () => {
+    addShellGrantRequest({
+      commands: ['ls -al /etc'],
+      save: [],
+      saveDirectories: ['/etc'],
+      trigger: {
+        messageId: 'ask-external-directory',
+        params: { path: '/etc' },
+        matchedRule: 'external_directory.default',
+        askKind: 'external',
+      },
+    })
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')
+    expect(cause).not.toBeNull()
+    expect(cause!.textContent).toContain('Доступ вне рабочего каталога: /etc')
+    // Не «не удалось проверить путь» и не «вычисляется в рантайме».
+    expect(cause!.textContent).not.toContain('путь')
+    expect(cause!.textContent).not.toContain('вычисляется в рантайме')
+
+    const dirs = container.querySelector('[data-testid="permission-save-directories"]')
+    expect(dirs).not.toBeNull()
+    expect(dirs!.textContent).toContain('Будет разрешён каталог: `/etc`')
+
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toContain('Разрешить в сессии')
+    expect(container.querySelector('[data-testid="permission-save-unavailable"]')).toBeNull()
+  })
+
   it('dynamic: токен-виновник подсвечен в сегменте grep … *.js', async () => {
     addShellGrantRequest({
       commands: COMMANDS,

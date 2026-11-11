@@ -735,6 +735,26 @@ describe('HTTP: восстановленное ожидание — грант �
     expect(await world.repository.list()).toEqual([]);
   });
 
+  it('shell-ask (external): грант — каталог внешнего пути, execute_shell не пишется', async () => {
+    const world = createRealApp(tmpDir);
+    const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });
+    await seedRestored(world, session.id, 'ap-shell-external', {
+      toolName: 'execute_shell',
+      arguments: { command: `ls -al ${tmpDir}` },
+      // Восстановленная запись несёт только params/askKind (без askPaths):
+      // каталог восстанавливается по пути-виновнику.
+      trigger: { askKind: 'external', params: { path: tmpDir } },
+    });
+
+    const res = await reply(world, session.id, 'ap-shell-external');
+    expect(res.status).toBe(200);
+
+    const after = (await world.sessionManager.getSession(session.id))!;
+    expect(after.settings.permission?.rules?.execute_shell).toBeUndefined();
+    expect(after.settings.permission?.rules?.external_directory).toEqual({ [`${tmpDir}/*`]: 'allow' });
+    expect(await world.repository.list()).toEqual([]);
+  });
+
   it('shell-ask БЕЗ trigger (старая запись): гранта нет (fail-closed), ожидание снято', async () => {
     const world = createRealApp(tmpDir);
     const session = await world.sessionManager.createSession({ title: 'S', userId: 'local' });

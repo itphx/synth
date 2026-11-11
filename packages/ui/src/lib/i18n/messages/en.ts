@@ -1713,6 +1713,7 @@ export const dict = {
   'permission.bar.cause.code': 'Code is passed from a variable — verification required: {code}',
   'permission.bar.cause.command': 'The command name is computed dynamically: {command}',
   'permission.bar.cause.stdinCode': 'Code is passed to an interpreter via stdin — approval required',
+  'permission.bar.cause.external': 'Access outside the working directory: {path}',
   'permission.bar.cause.rule': 'Rule {rule} matched',
   'permission.bar.cause.generic': 'The tool requires permission approval',
   'permission.bar.technical': 'Technical details',
@@ -5019,6 +5020,10 @@ export const dict = {
   'pipelines.validateFailed': 'The specification has problems — fix them before saving',
   'pipelines.problems': 'Problems',
   'pipelines.saveBlocked': 'The specification is invalid — it was not sent',
+
+  // --- Shell policy (engine key, ADR-041; ADR-029 external_directory perimeter) ---
+  'shellguard.ask_external':
+    'Access to "{path}" is outside the working directory — requires approval (permission.rules.external_directory)',
 
   // --- PWA ---
   'pwa.updateAvailable': 'A new app version is available',

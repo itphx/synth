@@ -34,4 +34,33 @@ describe('describePermissionCause', () => {
     expect(cause!.key).toBe('permission.bar.cause.dynamicPath')
     expect(cause!.token).toBe('$HOME/.ssh/config')
   })
+
+  /**
+   * Реальный доступ вне периметра (`workingDir` + `project.workspace`):
+   * ядро присылает `askKind: 'external'` и первый внешний путь в `params.path`.
+   * Причина — не «не удалось проверить путь», а «доступ вне рабочего каталога»:
+   * решение принимает правило `permission.rules.external_directory`.
+   */
+  it('ask-external-directory: доступ вне рабочего каталога, токен — внешний путь', () => {
+    const cause = describePermissionCause({
+      messageId: 'ask-external-directory',
+      params: { path: '/etc' },
+      matchedRule: 'external_directory.default',
+      askKind: 'external',
+    })
+    expect(cause!.key).toBe('permission.bar.cause.external')
+    expect(cause!.params).toEqual({ path: '/etc' })
+    expect(cause!.token).toBe('/etc')
+  })
+
+  it('askKind: external без messageId (старый сервер) — та же причина', () => {
+    const cause = describePermissionCause({
+      params: { path: '/etc' },
+      matchedRule: 'external_directory.default',
+      askKind: 'external',
+    })
+    expect(cause!.key).toBe('permission.bar.cause.external')
+    expect(cause!.params).toEqual({ path: '/etc' })
+    expect(cause!.token).toBe('/etc')
+  })
 })

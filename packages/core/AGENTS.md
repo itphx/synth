@@ -167,6 +167,20 @@
   не-shell тулов поведение прежнее (грант по путям). Восстановленная ветка HTTP-роута
   (`POST /:id/permissions/:approvalId`) передаёт `resolution.record.trigger` (только
   `params`/`askKind`) — тот же план `shellGrantPlan`, что и в живой ветке.
+- **Периметр shell — по реальным путям (ADR-029).** shell-guard классифицирует
+  литералы/`~`/`..`/редиректы/`cd`-цели и **совпадения глобов** не по строке, а по файловой
+  системе (`realpath`; лимит 2000 совпадений на токен): защищённое совпадение → `deny`
+  (`messageId: 'deny-protected-path'`, `params.path` — конкретный файл, а не маска), внутри
+  периметра (`workingDir` + `project.workspace`) → `allow`, снаружи → `ask` с
+  `askKind: 'external'`, `messageId: 'ask-external-directory'` и `askPaths` (абсолютные пути
+  **всех** внешних совпадений; наружу не публикуется — в `permission.asked`/DTO идут
+  `commands`/`save`/`saveDirectories`). Решение по внешнему доступу принимает **правило**
+  `permission.rules.external_directory` (дефолт `ask`, в `plan`/`strict` — `deny`), а не сам
+  shell-guard; грант «Разрешить в сессии» — каталогом `<dir>/*` (каталоги из `askPaths`).
+  Исключения периметра: `/dev/null`, `/dev/stdin|stdout|stderr|tty`, `/dev/fd/N`,
+  `/proc/self/fd/N`. `shell-policy` при этом остаётся **deny-списком** опасных префиксов/путей
+  и fail-closed на неразрешимой динамике (`ask-dynamic-*`, `ask-stdin-code`) — это не вторая
+  граница доступа: что считать «снаружи», решают реальные пути и `external_directory`.
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.

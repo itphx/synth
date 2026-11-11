@@ -95,8 +95,8 @@ export interface ApprovalRequest {
     params?: Record<string, string>;
     /** Ключ правила, которое сработало. */
     matchedRule?: string;
-    /** Вид ask'а от shell-guard: dynamic/protected/mutation/cwd. */
-    askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+    /** Вид ask'а от shell-guard: dynamic/protected/mutation/cwd/external. */
+    askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' | 'external';
   };
 }
 

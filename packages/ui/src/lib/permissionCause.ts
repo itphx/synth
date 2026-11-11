@@ -29,6 +29,11 @@ export function describePermissionCause(trigger: PermissionTrigger | undefined):
   const command = params.command ?? ''
 
   switch (trigger.messageId) {
+    case 'ask-external-directory':
+      // Реальный доступ вне периметра (`workingDir` + `project.workspace`):
+      // решение принимает правило `permission.rules.external_directory`
+      // (дефолт — вопрос, в plan/strict — запрет), грант выдаётся каталогом.
+      return { key: 'permission.bar.cause.external', params: { path }, token: path }
     case 'ask-protected-path': {
       // Вид ask'а: protected (путь из approvalPaths) / dynamic (нерезолвимый
       // токен) / mutation (мутация вне периметра) / cwd (неразрешённый cd).
@@ -53,6 +58,12 @@ export function describePermissionCause(trigger: PermissionTrigger | undefined):
       return { key: 'permission.bar.cause.stdinCode', params: {} }
     default:
       break
+  }
+
+  // Старый сервер: `askKind: 'external'` без id сообщения — та же причина,
+  // если известен внешний путь (первый из `askPaths`).
+  if (trigger.askKind === 'external' && path) {
+    return { key: 'permission.bar.cause.external', params: { path }, token: path }
   }
 
   if (trigger.matchedRule) {

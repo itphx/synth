@@ -302,7 +302,10 @@ describe('checkShellCommand', () => {
   });
 
   it('deniedCommandPrefixes: префикс по токенам не срабатывает на другие пути', () => {
-    expect(check('rm -rf /home/user/project/x').action).toBe('allow');
+    // Путь внутри периметра — не префикс команды; путь вне периметра —
+    // external-ask (не deny по префиксу).
+    expect(check(`rm -rf ${CWD}/x`).action).toBe('allow');
+    expect(check('rm -rf /home/user/project/x').action).toBe('ask');
     expect(check('rm -rf').action).toBe('allow');
   });
 
@@ -385,9 +388,13 @@ describe('checkShellCommand', () => {
     expect(check('PATH=$PATH:/opt/bin ls').action).toBe('allow');
   });
 
-  it('пустая политика — всё allow', () => {
+  it('пустая политика — защищённых путей нет, периметр всё равно действует', () => {
     const empty: ShellPolicy = { deniedPaths: [], deniedPrefixes: [], approvalPaths: [], deniedCommandPrefixes: [] };
-    expect(check('cat ~/.ssh/id_rsa', CWD, empty).action).toBe('allow');
+    expect(check('cat ./file', CWD, empty).action).toBe('allow');
+    // Политика защищённых путей пуста, но реальный доступ вне периметра —
+    // по-прежнему внешний (`external_directory`).
+    expect(check('cat ~/.ssh/id_rsa', CWD, empty).action).toBe('ask');
+    expect(check('cat ~/.ssh/id_rsa', CWD, empty).askKind).toBe('external');
   });
 });
 
@@ -495,8 +502,11 @@ describe('checkShellCommand — fail-closed динамика + {dataDir}/secrets
     expect(check('cat README.md').action).toBe('allow');
     expect(check('ls -la').action).toBe('allow');
     expect(check('git commit -m "fix: typo"').action).toBe('allow');
-    expect(check(`cat ${DATA_DIR}/settings.json`).action).toBe('allow');
-    expect(check(`ls ${DATA_DIR}/sessions`).action).toBe('allow');
+    // Вне периметра (`{dataDir}`) — external-ask, а не deny: защищённых
+    // путей эти файлы не касаются.
+    expect(check(`cat ${DATA_DIR}/settings.json`).action).toBe('ask');
+    expect(check(`ls ${DATA_DIR}/sessions`).action).toBe('ask');
+    expect(check(`cat ${DATA_DIR}/settings.json`).askKind).toBe('external');
   });
 
   it('регресс: защищённые пути из динамики по-прежнему deny/ask', () => {
@@ -702,8 +712,9 @@ describe('checkShellCommand — паттерны аргументов, workspace
     };
     expect(check('find /etc -path /etc/shadow -delete').action).toBe('deny');
     expect(check(`find ${DATA} -path ${DATA}/secrets/master.key -delete`, CWD, policy).action).toBe('deny');
-    // `-path` матчит полный путь: относительный glob тоже проверяется (ask)
-    expect(check("find /etc -ipath '/etc/pass*' -delete").action).toBe('ask');
+    // `-path` матчит полный путь: glob с защищённым совпадением → deny
+    // (`/etc/pass*` раскрывается в `/etc/passwd` из deniedPaths).
+    expect(check("find /etc -ipath '/etc/pass*' -delete").action).toBe('deny');
     expect(check(`find ${DATA} -path '*/*.key' -delete`, CWD, policy).action).toBe('ask');
     expect(check("find . -path '*/.git/*'").action).toBe('ask');
     // шаблон без `/` путём не считается
@@ -751,15 +762,18 @@ describe('checkShellCommand — паттерны аргументов, workspace
     expect(check('H=~/.ss; H+=h; cat $H/id_rsa').action).toBe('deny');
   });
 
-  it('for-цикл из литеральных слов — allow', () => {
+  it('for-цикл из литеральных слов — allow; /dev/tcp — external-ask', () => {
     expect(check('for r in ansible/itphx.loc k3s/keycloak; do git -C "$r" status; done').action).toBe('allow');
+    // `/dev/tcp/<host>/<port>` — сетевой псевдофайл bash; в список исключений
+    // периметра не входит → внешний доступ (решение владельца).
     expect(check(
       'for hp in 10.0.0.1:22 10.0.0.2:22; do h=${hp%:*}; p=${hp#*:}; timeout 3 bash -c "</dev/tcp/$h/$p"; done',
-    ).action).toBe('allow');
+    ).action).toBe('ask');
   });
 
-  it('присваивание литерала раскрывается: путь проверяется (deny сохраняется)', () => {
-    expect(check('TLS=../../k3s/certs/tls; cat $TLS/client-ca.crt').action).toBe('allow');
+  it('присваивание литерала раскрывается: путь проверяется', () => {
+    // `../../…` выводит за периметр — внешний доступ.
+    expect(check('TLS=../../k3s/certs/tls; cat $TLS/client-ca.crt').action).toBe('ask');
     expect(check('TLS=~/.ssh; cat $TLS/id_rsa').action).toBe('deny');
     expect(check('for f in ~/.ssh/id_rsa; do cat "$f"; done').action).toBe('deny');
   });
@@ -942,14 +956,15 @@ describe('checkShellCommand — обход через симлинк', () => {
     expect(r.action).toBe('allow');
   });
 
-  it('workspace-glob через симлинк наружу → ask (realpath вне периметра)', () => {
+  it('workspace-glob через симлинк наружу → deny (совпадение — защищённый путь)', () => {
     const r = checkShellCommand('ls leakdir/*.key', ws, policy);
-    expect(r.action).toBe('ask');
+    expect(r.action).toBe('deny');
   });
 
-  it('многокомпонентный glob через симлинк → ask', () => {
+  it('многокомпонентный glob — ask; glob через симлинк в защищённое — deny', () => {
     expect(checkShellCommand('cat ./*/*.key', ws, policy).action).toBe('ask');
-    expect(checkShellCommand('cat ./leakdir/*', ws, policy).action).toBe('ask');
+    // Единственное совпадение `leakdir/*` — защищённый `master.key`.
+    expect(checkShellCommand('cat ./leakdir/*', ws, policy).action).toBe('deny');
   });
 
   it('workspace-glob по безопасному каталогу → allow', async () => {
@@ -1088,7 +1103,7 @@ describe('H4: find -delete/-exec вне периметра', () => {
 });
 
 describe('H5: bare-glob и симлинк', () => {
-  it('симлинк наружу в cwd → ask, обычные файлы → allow', async () => {
+  it('симлинк наружу в cwd → deny (защищённое совпадение), обычные файлы → allow', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'synth-shell-bareglob-'));
     try {
       const ws = join(dir, 'ws');
@@ -1104,7 +1119,8 @@ describe('H5: bare-glob и симлинк', () => {
         approvalPaths: [],
         deniedCommandPrefixes: [],
       };
-      expect(checkShellCommand('cat *', ws, policy, { allowedRoots: [ws] }).action).toBe('ask');
+      // Защищённое совпадение (симлинк на master.key) → deny; обычные файлы — allow.
+      expect(checkShellCommand('cat *', ws, policy, { allowedRoots: [ws] }).action).toBe('deny');
       expect(checkShellCommand('ls *.ts', ws, policy, { allowedRoots: [ws] }).action).toBe('allow');
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -1131,7 +1147,8 @@ describe('H7: /proc/<pid>/root/<path>', () => {
 
   it('алиас проверяется как путь', () => {
     expect(check('cat /proc/1/root/etc/shadow').action).toBe('deny');
-    expect(check('cat /proc/1/root/etc/hosts').action).toBe('allow');
+    // `/etc/hosts` не защищён, но и не в периметре → external-ask.
+    expect(check('cat /proc/1/root/etc/hosts').action).toBe('ask');
     expect(check('cat /proc/self/root/etc/passwd').action).toBe('deny');
   });
 });
@@ -1201,22 +1218,36 @@ describe('F: EMBEDDED_EXECUTORS — строка-команда/код пров�
       'node -e "console.log(1)"',
       "awk '{print $1}' file",
       'find . -exec cat {} ;',
-      'npm test > /tmp/out 2>&1',
       'timeout 30 pnpm test',
       'env NODE_ENV=test pnpm test',
       "find . -name '*.ts' -print",
-      "awk -F: '{print $1}' /etc/hosts",
       'watch -n2 date',
       "nice -n 10 timeout 60 bash -c 'echo hi'",
       'command git status',
+      // Явные исключения периметра — без вопросов.
       'exec 3>/dev/null',
-      'flock /tmp/l npm test',
-      "echo 'a > b' > /tmp/f",
-      "curl 'https://x/?a=1&b=2' > /tmp/o",
+      'cat /dev/null',
       "grep -E 'a|b' file",
       "awk -F'|' '{print $2}' file",
     ];
     for (const cmd of cases) expect(check(cmd).action).toBe('allow');
+  });
+
+  it('легитимные команды с внешними путями — external-ask (не deny)', () => {
+    // Реальный доступ вне периметра (`/tmp`, `/etc/hosts`, lock-файл) —
+    // вопрос, а не молчаливый allow: решение владельца, `/tmp` спрашивается.
+    const external = [
+      'npm test > /tmp/out 2>&1',
+      "awk -F: '{print $1}' /etc/hosts",
+      'flock /tmp/l npm test',
+      "echo 'a > b' > /tmp/f",
+      "curl 'https://x/?a=1&b=2' > /tmp/o",
+    ];
+    for (const cmd of external) {
+      const r = check(cmd);
+      expect(r.action, cmd).toBe('ask');
+      expect(r.askKind, cmd).toBe('external');
+    }
   });
 });
 
@@ -1238,7 +1269,8 @@ describe('F: точечные фиксы (nice/flock/find/proc/позицион�
     expect(check("flock /tmp/l -c 'cat /etc/shadow'").action).toBe('deny');
     expect(check("flock /tmp/l --command 'cat /etc/shadow'").action).toBe('deny');
     expect(check("flock /etc/shadow -c 'ls'").action).toBe('deny');
-    expect(check('flock /tmp/l npm test').action).toBe('allow');
+    // Lock-файл вне периметра — внешний доступ (вопрос), не allow.
+    expect(check('flock /tmp/l npm test').action).toBe('ask');
   });
 
   it('find: динамический стартовый путь → ask', () => {
@@ -1250,7 +1282,8 @@ describe('F: точечные фиксы (nice/flock/find/proc/позицион�
   it('/proc/<pid>/cwd/<path> — алиас пути', () => {
     expect(check('cat /proc/1/cwd/etc/shadow').action).toBe('deny');
     expect(check('cat /proc/self/cwd/etc/passwd').action).toBe('deny');
-    expect(check('cat /proc/1/cwd/etc/hosts').action).toBe('allow');
+    // `/etc/hosts` не защищён, но вне периметра → external-ask.
+    expect(check('cat /proc/1/cwd/etc/hosts').action).toBe('ask');
     // `..` после root/cwd не съедается лексической нормализацией
     expect(check('cat /proc/self/root/../../etc/shadow').action).toBe('deny');
     expect(check('cat /proc/1/root/../etc/shadow').action).toBe('deny');
@@ -1289,7 +1322,9 @@ describe('A: shell-префиксы перед командой', () => {
   it('легитимные префиксы не ломаются', () => {
     expect(check('time ls').action).toBe('allow');
     expect(check('{ ls; }').action).toBe('allow');
-    expect(check('( cd /tmp && ls )').action).toBe('allow');
+    // `cd /tmp` — внешний каталог: cd-цель сама даёт external-ask.
+    expect(check('( cd /tmp && ls )').action).toBe('ask');
+    expect(check('( cd /tmp && ls )').askKind).toBe('external');
     expect(check('if true; then ls; fi').action).toBe('allow');
   });
 });
@@ -1345,7 +1380,8 @@ describe('D: периметр cd/pushd/env -C/chroot', () => {
     expect(check('cd ~ && cat .ssh/id_rsa').action).toBe('deny');
     expect(check('cd / && cat etc/shadow').action).toBe('deny');
     expect(check(`cd ${DATA} && cat secrets/master.key`).action).toBe('deny');
-    expect(check('cd /tmp && cat /etc/hosts').action).toBe('allow');
+    // `/etc/hosts` не защищён, но cd и чтение — вне периметра → external-ask.
+    expect(check('cd /tmp && cat /etc/hosts').action).toBe('ask');
     expect(check('( cd /; cat etc/shadow )').action).toBe('deny');
   });
 
@@ -1359,7 +1395,8 @@ describe('D: периметр cd/pushd/env -C/chroot', () => {
 
   it('динамический cd: bindings раскрываются, нерезолвимое — ask', () => {
     expect(check(`D=${DATA}; cd $D && cat secrets/master.key`).action).toBe('deny');
-    expect(check('D=/tmp; cd $D && ls').action).toBe('allow');
+    // `cd /tmp` — внешний каталог: external-ask даже для read-only `ls`.
+    expect(check('D=/tmp; cd $D && ls').action).toBe('ask');
     expect(check(`cd $(echo ${DATA}) && cat secrets/master.key`).action).not.toBe('allow');
     expect(check(`pushd $(echo ${DATA}) && cat secrets/master.key`).action).not.toBe('allow');
     expect(check('cd $(echo /tmp)').action).toBe('ask');
@@ -1372,10 +1409,13 @@ describe('D: периметр cd/pushd/env -C/chroot', () => {
 describe('D2: cd с переменной окружения — цель резолвится, неразрешимое — ask', () => {
   const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
 
-  it('известные переменные ($HOME/${HOME}/$PWD) → allow', () => {
-    expect(check('cd $HOME').action).toBe('allow');
-    expect(check('cd "$HOME"').action).toBe('allow');
-    expect(check('cd ${HOME}').action).toBe('allow');
+  it('известные переменные ($HOME/${HOME}) резолвятся, но внешний каталог — ask', () => {
+    // `cd $HOME` — реальный переход в каталог вне периметра → external-ask;
+    // `$PWD` — тот же рабочий каталог, вопрос не нужен.
+    expect(check('cd $HOME').action).toBe('ask');
+    expect(check('cd $HOME').askKind).toBe('external');
+    expect(check('cd "$HOME"').action).toBe('ask');
+    expect(check('cd ${HOME}').action).toBe('ask');
     expect(check('cd $PWD').action).toBe('allow');
   });
 
@@ -1435,7 +1475,10 @@ describe('stdin-код: heredoc/herestring для shell/интерпретато
   });
 
   it('heredoc/herestring для обычных команд не трогаем', () => {
-    expect(check('cat <<EOF > /tmp/f').action).toBe('allow');
+    // Тело heredoc — данные, не код; цель перенаправления вне периметра —
+    // обычный внешний доступ (вопрос), а не stdin-код.
+    expect(check('cat <<EOF > /tmp/f').action).toBe('ask');
+    expect(check('cat <<EOF > /tmp/f').askKind).toBe('external');
     expect(check("cat <<< 'hello'").action).toBe('allow');
     expect(check('grep <<< "$x"').action).toBe('allow');
   });
@@ -1562,6 +1605,84 @@ describe('ask-dynamic-code: чистая подстановка как код/а
  * (`external_directory`), как `cd`-цели в opencode. `protected`/`mutation`/`cwd`
  * грантом не снимаются вовсе.
  */
+/**
+ * Периметр shell-доступа: реальный доступ к путям вне `workingDir` +
+ * `allowedRoots` — `external`-ask (`external_directory`-семантика), исключения —
+ * только псевдофайлы `/dev/null`, `/dev/fd/<n>`, `/proc/self/fd/<n>` и т.п.
+ */
+describe('периметр shell: external-ask вне рабочего каталога', () => {
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, TEST_POLICY);
+
+  it('литеральный внешний каталог → ask external с askPaths', () => {
+    const r = check('ls -al /etc');
+    expect(r.action).toBe('ask');
+    expect(r.askKind).toBe('external');
+    expect(r.askPaths).toEqual(['/etc']);
+    expect(r.messageId).toBe('ask-external-directory');
+    expect(r.matchedRule).toBe('external_directory.default');
+    expect(r.params?.path).toBe('/etc');
+  });
+
+  it('glob вне периметра: защищённое совпадение → deny с конкретным путём', () => {
+    // `/etc/*` содержит `/etc/passwd` (deniedPaths): точный денлист
+    // приоритетнее префиксного `/etc/sudoers.d`.
+    const r = check('ls -al /etc/* | head');
+    expect(r.action).toBe('deny');
+    expect(r.params?.path).toBe('/etc/passwd');
+  });
+
+  it('внешний файл вне периметра → ask external', () => {
+    const r = check('tail /etc/manjaro-version');
+    expect(r.action).toBe('ask');
+    expect(r.askKind).toBe('external');
+    expect(r.askPaths).toEqual(['/etc/manjaro-version']);
+  });
+
+  it('домашние/системные пути вне периметра → ask external', () => {
+    for (const cmd of [
+      'cat /home/someuser/.bashrc',
+      'ls /root',
+      'cat /tmp/x',
+      "find /home -name '*.ts'",
+    ]) {
+      const r = check(cmd);
+      expect(r.action, cmd).toBe('ask');
+      expect(r.askKind, cmd).toBe('external');
+    }
+    expect(check("find /home -name '*.ts'").askPaths).toEqual(['/home']);
+  });
+
+  it('пути внутри рабочего каталога и несуществующие — allow (лексический периметр)', () => {
+    expect(check('cat ./file').action).toBe('allow');
+    expect(check('cat missing.txt').action).toBe('allow');
+    expect(check('cat sub/../file').action).toBe('allow');
+  });
+
+  it('исключения периметра — без вопросов', () => {
+    expect(check('cat /dev/null').action).toBe('allow');
+    expect(check('echo hi > /dev/null').action).toBe('allow');
+    expect(check('cat /dev/fd/0').action).toBe('allow');
+    expect(check('cat /proc/self/fd/3').action).toBe('allow');
+  });
+
+  it('cd вне периметра → ask external; защищённая цель после cd → deny', () => {
+    const r = check('cd /etc');
+    expect(r.action).toBe('ask');
+    expect(r.askKind).toBe('external');
+    expect(r.askPaths).toEqual(['/etc']);
+
+    const denied = check('cd /etc && cat passwd');
+    expect(denied.action).toBe('deny');
+    expect(denied.params?.path).toBe('/etc/passwd');
+  });
+
+  it('stdin-код интерпретатора по-прежнему ask-stdin-code', () => {
+    const r = check("python3 - <<'EOF'\nprint(1)\nEOF");
+    expect(r.action).toBe('ask');
+    expect(r.messageId).toBe('ask-stdin-code');
+  });
+});
+
 describe('shellGrantPlan — грант по виновнику', () => {
   it('cd /x; grep … *.js | head — паттернов нет, каталог = cwd виновника', () => {
     const plan = shellGrantPlan('cd /x; grep -l "н" *.js | head -20', {
@@ -1652,7 +1773,8 @@ describe('shellGrantPlan — грант по виновнику', () => {
       await writeFile(join(outside, 'a.js'), 'x');
       const r = checkShellCommand(`ls ${outside}/*.js`, root, TEST_POLICY);
       expect(r.action).toBe('ask');
-      expect(r.askKind).toBe('dynamic');
+      expect(r.askKind).toBe('external');
+      expect(r.messageId).toBe('ask-external-directory');
       expect(r.askPaths).toEqual([join(outside, 'a.js')]);
     } finally {
       await rm(root, { recursive: true, force: true });

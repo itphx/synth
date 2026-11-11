@@ -445,7 +445,9 @@ export type PermissionGrantTrigger = {
   /** Параметры подстановки виновника (`{ path }`/`{ code }`/`{ command }`). */
   params?: Record<string, string>;
   /** Вид ask'а от shell-guard. */
-  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd';
+  askKind?: 'dynamic' | 'protected' | 'mutation' | 'cwd' | 'external';
+  /** Внешние пути проверки (`ShellCheckResult.askPaths`) — для `external`. */
+  paths?: string[];
 };
 
 export interface ModelPricing {
@@ -6119,6 +6121,7 @@ export class ChatOrchestrator {
               ? shellGrantPlan(toolArgs.command, {
                 params: permissionDecision.params,
                 askKind: permissionDecision.askKind,
+                ...(permissionDecision.askPaths ? { paths: permissionDecision.askPaths } : {}),
               }, { cwd: grantCwd })
               : null;
             approvalRequest = {
@@ -6947,6 +6950,9 @@ export class ChatOrchestrator {
                   {
                     params: plan.permissionDecision.params,
                     askKind: plan.permissionDecision.askKind,
+                    ...(plan.permissionDecision.askPaths
+                      ? { paths: plan.permissionDecision.askPaths }
+                      : {}),
                   },
                 );
                 permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {

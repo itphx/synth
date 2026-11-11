@@ -398,6 +398,8 @@ export const SYSTEM_MESSAGES = {
   'shellguard.deny_prefix': 'Command denied by shell policy: prefix "{prefix}"',
   'shellguard.deny_path': 'Access denied by shell policy: path "{path}" is protected',
   'shellguard.ask_path': 'Path "{path}" requires approval per shell policy',
+  'shellguard.ask_external':
+    'Access to "{path}" is outside the working directory — requires approval (permission.rules.external_directory)',
   'shellguard.ask_command': 'Command "{command}" is resolved dynamically and requires approval per shell policy',
   'shellguard.ask_code': 'Dynamic substitution "{code}" is passed as code/argument and cannot be verified in advance',
   'shellguard.ask_stdin_code': 'Code is passed to an interpreter via stdin — approval required per shell policy',
