@@ -749,6 +749,26 @@ html.pointer-coarse .question-dock button[data-question-dot] {
   min-height: 1.75rem;
 }
 
+/* Композерная зона на телефоне: полоса подтверждений и док вопроса занимают
+   ширину экрана минус отступы (w-4/5 оставлял ~20% пустого места и при
+   длинных подписях кнопки уезжали за край). */
+html.device-phone .permission-bar,
+html.device-phone .question-dock {
+  width: calc(100% - 1rem);
+}
+html.device-tablet .permission-bar,
+html.device-tablet .question-dock {
+  width: calc(100% - 2rem);
+}
+/* Действия полосы — отдельной строкой под заголовком, переносятся, таргеты ≥40px. */
+html.device-phone .permission-bar [data-permission-title] { flex-basis: 100%; }
+html.device-phone .permission-bar [data-permission-actions] { width: 100%; justify-content: flex-end; row-gap: 0.25rem; }
+html.pointer-coarse .permission-bar [data-permission-actions] button,
+html.device-phone .permission-bar [data-permission-actions] button,
+html.device-tablet .permission-bar [data-permission-actions] button {
+  min-height: var(--control-height-touch);
+}
+
 /* Компактные подписи индикаторов на телефоне и при узкой центральной колонке
    (остаётся точка/иконка) */
 .device-hide-label {

@@ -47,6 +47,10 @@ export function describePermissionCause(trigger: PermissionTrigger | undefined):
       return { key: 'permission.bar.cause.code', params: { code }, token: code }
     case 'ask-dynamic-command':
       return { key: 'permission.bar.cause.command', params: { command }, token: command }
+    case 'ask-stdin-code':
+      // Код передан интерпретатору через stdin (heredoc/herestring): токена-пути
+      // нет, показываем отдельную формулировку вместо «Не удалось проверить путь».
+      return { key: 'permission.bar.cause.stdinCode', params: {} }
     default:
       break
   }

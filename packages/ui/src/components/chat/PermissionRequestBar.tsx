@@ -221,18 +221,22 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   return (
     // `mt-2` — зазор сверху: висящее предупреждение и полоса отделяются
     // так же, как полоса и область ввода (`mt-2` у `ChatInput`).
-    <div className="shrink-0 mx-auto mt-2 w-4/5 rounded-lg border border-primary/30 bg-primary/5">
-      <div className="flex items-center gap-2 px-3 py-1.5">
-        <Icon
-          name={getToolIcon(current.toolName)}
-          className="size-3.5 text-primary shrink-0"
-        />
+    <div className="permission-bar shrink-0 mx-auto mt-2 w-4/5 min-w-0 rounded-lg border border-primary/30 bg-primary/5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5">
+        {/* Иконка — внутри кнопки-заголовка: на телефоне заголовок занимает
+            отдельную строку целиком (`flex-basis: 100%`), и вынесенная наружу
+            иконка оставалась бы одна на своей строке. */}
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1.5 text-xs text-foreground/90 hover:text-foreground transition-colors min-w-0"
+          data-permission-title
+          className="flex items-center gap-1.5 text-xs text-foreground/90 hover:text-foreground transition-colors min-w-0 flex-1"
           title={hasDetails ? (expanded ? t('permission.bar.hide') : t('permission.bar.details')) : undefined}
         >
-          <span className="truncate">
+          <Icon
+            name={getToolIcon(current.toolName)}
+            className="size-3.5 text-primary shrink-0"
+          />
+          <span className="truncate min-w-0">
             {t('permission.bar.request', { tool: toolDisplayName })}
           </span>
           {waitingCount > 0 && (
@@ -248,16 +252,19 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           )}
         </button>
 
-        <div className="flex items-center gap-1 ml-auto shrink-0">
+        <div
+          data-permission-actions
+          className="flex flex-wrap items-center justify-end gap-1 ml-auto min-w-0"
+        >
           {current.held || current.timeoutMs <= 0 ? (
-            <span className="flex items-center gap-1 px-2 py-0.5 text-[0.625rem] text-muted-foreground">
+            <span className="flex items-center gap-1 px-2 py-0.5 text-[0.625rem] text-muted-foreground whitespace-nowrap">
               <Icon name="time" className="size-3 shrink-0" />
               {t('permission.bar.noTimeout')}
             </span>
           ) : (
             <>
               <span
-                className="flex items-center gap-1 px-2 py-0.5 text-[0.625rem] tabular-nums text-muted-foreground"
+                className="flex items-center gap-1 px-2 py-0.5 text-[0.625rem] tabular-nums text-muted-foreground whitespace-nowrap"
                 title={t('permission.bar.timeoutTitle')}
               >
                 <Icon name="time" className="size-3 shrink-0" />
@@ -265,7 +272,7 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
               </span>
               <button
                 onClick={handleHold}
-                className="flex items-center gap-1 rounded px-2 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+                className="flex items-center gap-1 rounded px-2 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors whitespace-nowrap"
                 title={t('permission.bar.stopTimerHint')}
               >
                 <Icon name="stop" className="size-3 shrink-0" />
@@ -277,14 +284,14 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
             <span
               data-testid="permission-save-unavailable"
               title={t('permission.bar.saveUnavailable')}
-              className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground cursor-help"
+              className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground cursor-help whitespace-nowrap"
             >
               {t('permission.bar.saveUnavailableShort')}
             </span>
           ) : (
             <button
               onClick={() => handleAction(true, false)}
-              className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+              className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors whitespace-nowrap"
               title={t('permission.bar.allowSessionHint')}
             >
               {t('permission.bar.allowSession')}
@@ -292,14 +299,14 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           )}
           <button
             onClick={() => handleAction(true, true)}
-            className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+            className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors whitespace-nowrap"
             title={t('permission.bar.allowOnceHint')}
           >
             {t('permission.bar.allowOnce')}
           </button>
           <button
             onClick={() => handleAction(false)}
-            className="rounded px-2 py-0.5 text-[0.6875rem] text-destructive hover:bg-destructive/10 transition-colors"
+            className="rounded px-2 py-0.5 text-[0.6875rem] text-destructive hover:bg-destructive/10 transition-colors whitespace-nowrap"
           >
             {t('permission.bar.deny')}
           </button>
@@ -323,7 +330,7 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           <div className="text-[0.6875rem] font-medium text-muted-foreground mb-0.5">
             {t('permission.bar.commands')}
           </div>
-          <pre className="text-[0.6875rem] text-muted-foreground whitespace-pre-wrap break-all overflow-x-auto font-mono leading-relaxed">
+          <pre className="max-h-40 overflow-y-auto overflow-x-auto text-[0.6875rem] text-muted-foreground whitespace-pre-wrap break-all font-mono leading-relaxed">
             {shellCommands.map((segment, index) => (
               <span key={index} className="block" data-testid="permission-command-segment">
                 <HighlightedText
@@ -366,7 +373,7 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           всегда — это главное, ради чего человек смотрит в полосу. Текст
           выводится сам по себе, без подписи-префикса. */}
       {(cause || current.reason) && (
-        <div className="px-3 pb-1.5 text-xs" data-testid="permission-cause">
+        <div className="px-3 pb-1.5 text-xs break-all" data-testid="permission-cause">
           {cause ? (
             <span className="text-foreground/90">
               <HighlightedText text={causeText} token={causeShowsToken ? culpritToken : undefined} />

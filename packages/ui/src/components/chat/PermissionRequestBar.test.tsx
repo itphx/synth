@@ -729,3 +729,67 @@ describe('PermissionRequestBar — сегменты команды и грант
     expect(container.querySelector('[data-testid="permission-save-unavailable"]')).toBeNull()
   })
 })
+
+/**
+ * Мобильная раскладка: полоса — flex-wrap, шапка разделена на заголовок и
+ * группу действий (якоря `data-permission-*` для CSS мобильных зон), блок
+ * команд прокручивается внутри себя и не раздувает карточку heredoc-скриптом.
+ */
+describe('PermissionRequestBar — раскладка шапки и блока команд', () => {
+  beforeAll(() => {
+    useI18nStore.setState({ locale: 'ru', dictionary: ruDict, loadingLocale: null })
+  })
+
+  it('корень имеет класс permission-bar, шапка — заголовок и группа действий', async () => {
+    addShellGrantRequest({ commands: ['python3 - <<EOF'], save: [], saveDirectories: ['/x'] })
+    const container = await renderBar()
+
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toContain('permission-bar')
+
+    const title = root.querySelector('[data-permission-title]')
+    expect(title).not.toBeNull()
+    expect(title!.className).toContain('flex-1')
+    expect(title!.className).toContain('min-w-0')
+
+    const actions = root.querySelector('[data-permission-actions]')
+    expect(actions).not.toBeNull()
+    expect(actions!.className).toContain('flex-wrap')
+    // Кнопки ответа не переносят текст внутри себя.
+    const labels = [...actions!.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toContain('Разрешить один раз')
+    expect(labels).toContain('Запретить')
+    for (const btn of actions!.querySelectorAll('button')) {
+      expect(btn.className).toContain('whitespace-nowrap')
+    }
+  })
+
+  it('блок «Команды» ограничен по высоте и прокручивается внутри', async () => {
+    addShellGrantRequest({ commands: ['python3 - <<EOF', 'print(1)', 'EOF'], save: [] })
+    const container = await renderBar()
+
+    const commands = container.querySelector('[data-testid="permission-commands"]')!
+    const pre = commands.querySelector('pre')!
+    expect(pre.className).toContain('max-h-40')
+    expect(pre.className).toContain('overflow-y-auto')
+    // Переносы и разбивка длинных токенов сохранены.
+    expect(pre.className).toContain('whitespace-pre-wrap')
+    expect(pre.className).toContain('break-all')
+  })
+
+  it('причина для кода на stdin — без слова «путь» и без токена', async () => {
+    addTriggerRequest(
+      { messageId: 'ask-stdin-code', params: {}, matchedRule: 'shell-policy.approve', askKind: 'dynamic' },
+      { params: { command: "python3 - <<'EOF'", cwd: '/x' } },
+    )
+    const container = await renderBar()
+
+    const cause = container.querySelector('[data-testid="permission-cause"]')!
+    expect(cause.textContent).toContain('Код передаётся в интерпретатор через stdin')
+    expect(cause.textContent).not.toContain('путь')
+    expect(cause.textContent).not.toContain('<<')
+    // Подсветки нет — токена-виновника не существует.
+    expect(cause.querySelectorAll('[data-testid="permission-highlight"]').length).toBe(0)
+    expect(container.querySelector('[data-testid="permission-suspicious"]')).toBeNull()
+  })
+})

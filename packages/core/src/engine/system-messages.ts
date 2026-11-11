@@ -400,6 +400,7 @@ export const SYSTEM_MESSAGES = {
   'shellguard.ask_path': 'Path "{path}" requires approval per shell policy',
   'shellguard.ask_command': 'Command "{command}" is resolved dynamically and requires approval per shell policy',
   'shellguard.ask_code': 'Dynamic substitution "{code}" is passed as code/argument and cannot be verified in advance',
+  'shellguard.ask_stdin_code': 'Code is passed to an interpreter via stdin — approval required per shell policy',
   'shellguard.deny_dir': 'Access denied by shell policy: path "{path}" is in protected directory "{dir}"',
 
   // --- Защищённые пути (protected-paths) ---

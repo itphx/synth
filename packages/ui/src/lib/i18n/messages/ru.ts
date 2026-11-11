@@ -1686,6 +1686,7 @@ export const dict = {
   'permission.bar.cause.cwd': 'Не удалось проверить рабочий каталог: {path}',
   'permission.bar.cause.code': 'Код передаётся из переменной — требуется проверка: {code}',
   'permission.bar.cause.command': 'Имя команды вычисляется динамически: {command}',
+  'permission.bar.cause.stdinCode': 'Код передаётся в интерпретатор через stdin — требуется проверка',
   'permission.bar.cause.rule': 'Сработало правило {rule}',
   'permission.bar.cause.generic': 'Инструмент требует подтверждения прав',
   'permission.bar.technical': 'Технические детали',
@@ -3518,6 +3519,7 @@ export const dict = {
   'shellguard.ask_path': 'Путь «{path}» требует подтверждения согласно shell-политике',
   'shellguard.ask_command': 'Имя команды «{command}» вычисляется динамически и требует подтверждения согласно shell-политике',
   'shellguard.ask_code': 'Динамическая подстановка «{code}» передаётся как код/аргумент и не может быть проверена заранее',
+  'shellguard.ask_stdin_code': 'Код передаётся в интерпретатор через stdin — требуется подтверждение согласно shell-политике',
   'shellguard.deny_dir': 'Доступ запрещён shell-политикой: путь «{path}» находится в защищённом каталоге «{dir}»',
 
   // --- Защищённые пути (protected-paths) ---

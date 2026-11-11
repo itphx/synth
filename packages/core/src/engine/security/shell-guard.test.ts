@@ -1422,6 +1422,18 @@ describe('stdin-код: heredoc/herestring для shell/интерпретато
     expect(check('sh <<-EOF\ncat /etc/shadow\nEOF').action).toBe('ask');
   });
 
+  it('причина ask\'а — отдельное сообщение (не «путь <<»)', () => {
+    const r = check("python3 - <<'EOF'\nprint(1)\nEOF");
+    expect(r.action).toBe('ask');
+    expect(r.messageId).toBe('ask-stdin-code');
+    // Токена-пути нет: UI не должен показывать «Не удалось проверить путь <<».
+    expect(r.params).toEqual({});
+    expect(r.reason).toContain('stdin');
+    // Поведение снятия гранта не меняем: askKind остаётся `dynamic`.
+    expect(r.askKind).toBe('dynamic');
+    expect(r.matchedRule).toBe('shell-policy.approve');
+  });
+
   it('heredoc/herestring для обычных команд не трогаем', () => {
     expect(check('cat <<EOF > /tmp/f').action).toBe('allow');
     expect(check("cat <<< 'hello'").action).toBe('allow');
@@ -1592,6 +1604,17 @@ describe('shellGrantPlan — грант по виновнику', () => {
     const plan = shellGrantPlan('cd $D; ls', { askKind: 'dynamic', params: { path: '$D' } });
     expect(plan.patterns).toEqual([]);
     expect(plan.directories).toEqual([]);
+  });
+
+  it('код на stdin (heredoc): паттернов и каталогов нет — только разовое разрешение', () => {
+    // Trigger приходит из `checkShellCommand` без токена-пути (`params: {}`):
+    // каталог для гранта не выводится, карточка предлагает «Только один раз».
+    const result = checkShellCommand("python3 - <<'EOF'\nprint(1)\nEOF", CWD, TEST_POLICY);
+    expect(result.messageId).toBe('ask-stdin-code');
+    const plan = shellGrantPlan("python3 - <<'EOF'\nprint(1)\nEOF", result);
+    expect(plan.patterns).toEqual([]);
+    expect(plan.directories).toEqual([]);
+    expect(plan.commands).toEqual(["python3 - <<'EOF'"]);
   });
 
   it('protected/mutation/cwd — грант не предлагается', () => {

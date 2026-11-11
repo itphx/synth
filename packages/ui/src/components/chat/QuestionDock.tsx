@@ -66,6 +66,12 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
   const [collapsed, setCollapsed] = useState(false)
   /** Текущий шаг дока: ответы или итоговая проверка. */
   const [phase, setPhase] = useState<DockPhase>('answer')
+  /**
+   * Была ли попытка продолжить/отправить, не ответив на все вопросы.
+   * Подсказку «Ответьте на каждый вопрос» показываем только после неё:
+   * при первом показе вопроса это читается как ошибка под кнопками.
+   */
+  const [attempted, setAttempted] = useState(false)
   /** Текущее время — основа обратного отсчёта до истечения вопроса. */
   const [now, setNow] = useState(() => Date.now())
 
@@ -92,6 +98,7 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
     // Новая запись — док раскрыт и снова на шаге ответов.
     setCollapsed(false)
     setPhase('answer')
+    setAttempted(false)
   }, [recordId])
 
   // Обратный отсчёт до истечения вопроса: тик раз в секунду. Без срока
@@ -133,6 +140,12 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
   )
 
   const allAnswered = total > 0 && answeredCount === total
+
+  /** Отвечен ли текущий вопрос: как только да — подсказка-причина не нужна. */
+  const currentStepAnswered = answerFor(step).length > 0
+  useEffect(() => {
+    if (currentStepAnswered) setAttempted(false)
+  }, [currentStepAnswered])
 
   const toggleOption = (index: number, value: string, multiple: boolean) => {
     setSelected((prev) => {
@@ -203,8 +216,30 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
     }
   }, [record, busy, sessionId, notify, t])
 
-  /** Открыть шаг итоговой проверки (перед отправкой ответов). */
-  const openReview = useCallback(() => setPhase('reviewing'), [])
+  /**
+   * Переход к другому вопросу (точки/«Назад»/«Изменить») сбрасывает «попытку»:
+   * подсказка-причина не должна висеть при обычной навигации.
+   */
+  const goToStep = useCallback((next: number) => {
+    setAttempted(false)
+    setStep(next)
+  }, [])
+
+  /**
+   * Открыть шаг итоговой проверки (перед отправкой ответов). Без ответов
+   * переходим как раньше, но фиксируем попытку — причина недоступной
+   * кнопки «Отправить» будет видна.
+   */
+  const openReview = useCallback(() => {
+    if (!allAnswered) setAttempted(true)
+    setPhase('reviewing')
+  }, [allAnswered])
+
+  /** «Далее»: переходим даже без ответа, но фиксируем попытку (показываем причину). */
+  const handleNext = useCallback(() => {
+    if (!allAnswered) setAttempted(true)
+    setStep((s) => Math.min(total - 1, s + 1))
+  }, [allAnswered, total])
 
   /**
    * Основное действие текущего шага.
@@ -214,11 +249,13 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
    */
   const handlePrimary = useCallback(async () => {
     if (phase === 'reviewing' || total === 1) {
+      // Ctrl/Cmd+Enter без ответа — тоже попытка (кнопка может быть disabled).
+      if (!allAnswered) setAttempted(true)
       await handleSubmit()
       return
     }
     openReview()
-  }, [phase, total, handleSubmit, openReview])
+  }, [phase, total, allAnswered, handleSubmit, openReview])
 
   // Горячие клавиши работают по актуальным обработчикам ( refs ).
   const submitRef = useRef(handleSubmit)
@@ -340,7 +377,7 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
                   data-question-dot={index}
                   aria-label={t('question.dock.dots.aria', { n: index + 1 })}
                   aria-current={isActive ? 'step' : undefined}
-                  onClick={() => setStep(index)}
+                  onClick={() => goToStep(index)}
                   className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-interactive-hover"
                 >
                   <span
@@ -436,7 +473,7 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
                     <button
                       type="button"
                       onClick={() => {
-                        setStep(index)
+                        goToStep(index)
                         setPhase('answer')
                       }}
                       className="shrink-0 rounded px-1.5 py-1 text-[0.6875rem] text-primary transition-colors hover:bg-primary/10"
@@ -452,7 +489,7 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
               <button
                 type="button"
                 onClick={() => {
-                  setStep(total - 1)
+                  goToStep(total - 1)
                   setPhase('answer')
                 }}
                 disabled={busy}
@@ -557,7 +594,7 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
               {total > 1 && (
                 <button
                   type="button"
-                  onClick={() => setStep((s) => Math.max(0, s - 1))}
+                  onClick={() => goToStep(Math.max(0, step - 1))}
                   disabled={step === 0 || busy}
                   className="rounded px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
                 >
@@ -579,6 +616,7 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
                     type="button"
                     onClick={() => void handleSubmit()}
                     disabled={!allAnswered || busy}
+                    title={!allAnswered ? t('question.dock.required') : undefined}
                     className={primaryButtonClass}
                   >
                     {busy && <Icon name="loader-2" className="size-3 animate-spin" />}
@@ -587,8 +625,9 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
                 ) : step < total - 1 ? (
                   <button
                     type="button"
-                    onClick={() => setStep((s) => Math.min(total - 1, s + 1))}
+                    onClick={handleNext}
                     disabled={busy}
+                    title={!allAnswered ? t('question.dock.required') : undefined}
                     className={primaryButtonClass}
                   >
                     {t('question.dock.next')}
@@ -598,6 +637,7 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
                     type="button"
                     onClick={openReview}
                     disabled={busy}
+                    title={!allAnswered ? t('question.dock.required') : undefined}
                     className={primaryButtonClass}
                   >
                     {t('question.dock.review.open')}
@@ -605,11 +645,20 @@ export function QuestionDock({ sessionId }: QuestionDockProps) {
                 )}
               </div>
             </div>
-
-            {!allAnswered && (
-              <div className="text-[0.625rem] text-muted-foreground">{t('question.dock.required')}</div>
-            )}
           </>
+        )}
+
+        {/* Причина недоступного основного действия — только после попытки
+            продолжить/отправить без ответов: при первом показе вопроса это
+            читается как ошибка под кнопками (вопрос один — «Ответить» просто
+            disabled). */}
+        {attempted && !allAnswered && (
+          <div
+            className="text-[0.625rem] text-muted-foreground"
+            data-question-required="true"
+          >
+            {t('question.dock.required')}
+          </div>
         )}
       </div>
     </div>

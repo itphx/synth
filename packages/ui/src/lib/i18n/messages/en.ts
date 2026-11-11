@@ -1712,6 +1712,7 @@ export const dict = {
   'permission.bar.cause.cwd': 'Could not verify the working directory: {path}',
   'permission.bar.cause.code': 'Code is passed from a variable — verification required: {code}',
   'permission.bar.cause.command': 'The command name is computed dynamically: {command}',
+  'permission.bar.cause.stdinCode': 'Code is passed to an interpreter via stdin — approval required',
   'permission.bar.cause.rule': 'Rule {rule} matched',
   'permission.bar.cause.generic': 'The tool requires permission approval',
   'permission.bar.technical': 'Technical details',

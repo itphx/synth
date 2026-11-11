@@ -132,6 +132,15 @@ describe('QuestionDock (док вопросов агента над вводом
     expect(container.textContent).toContain('Вариант A')
   })
 
+  it('корень дока — CSS-хук question-dock (мобильная ширина/тач-таргеты)', async () => {
+    mocks.list.mockResolvedValue({ questions: [makeRecord()] })
+    const container = await renderDock()
+
+    const root = container.querySelector('[data-question-dock]') as HTMLElement
+    expect(root).not.toBeNull()
+    expect(root.className).toContain('question-dock')
+  })
+
   it('вопрос, пришедший событием во время загрузки, не теряется', async () => {
     // Сервер ещё не отдаёт вопрос (событие `user_question.asked` уже в сторе).
     useQuestionStore.getState().setAll(SESSION_ID, [makeRecord()])
@@ -175,13 +184,40 @@ describe('QuestionDock (док вопросов агента над вводом
     expect(useQuestionStore.getState().bySession[SESSION_ID]).toBeUndefined()
   })
 
-  it('кнопка «Ответить» заблокирована, пока нет ответа', async () => {
+  it('кнопка «Ответить» заблокирована, пока нет ответа (причина — в title)', async () => {
     setupQuestions()
     const container = await renderDock()
 
     const submit = findButton(container, 'Ответить')
     expect(submit!.disabled).toBe(true)
-    expect(container.textContent).toContain('Ответьте на каждый вопрос')
+    // Причина недоступности доступна через title, но текст-подсказка ещё не
+    // показана: до попытки ответить она читается как ошибка под кнопками.
+    expect(submit!.getAttribute('title')).toBe('Ответьте на каждый вопрос')
+    expect(container.textContent).not.toContain('Ответьте на каждый вопрос')
+  })
+
+  it('подсказка «Ответьте на каждый вопрос» — только после попытки', async () => {
+    setupQuestions()
+    const container = await renderDock()
+
+    const hint = () => container.querySelector('[data-question-required]')
+
+    // Первый рендер: вопроса ещё не касались — подсказки нет.
+    expect(hint()).toBeNull()
+
+    // Ctrl+Enter без ответа — попытка отправить неполный ответ.
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }))
+    })
+    expect(hint()).not.toBeNull()
+    expect(hint()!.textContent).toBe('Ответьте на каждый вопрос')
+
+    // Выбор варианта — причина исчезает.
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+    expect(hint()).toBeNull()
+    expect(findButton(container, 'Ответить')!.disabled).toBe(false)
   })
 
   it('«Свой ответ» — текст уходит ответом и снимает выбор варианта', async () => {
@@ -308,6 +344,73 @@ describe('QuestionDock (док вопросов агента над вводом
       prev!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(container.textContent).toContain('Первый вопрос?')
+  })
+
+  it('«Далее» без ответа: подсказка появляется; ответ снимает её', async () => {
+    setupQuestions([
+      makeRecord({
+        questions: [
+          { question: 'Первый?', header: 'Первый', options: [{ value: 'a', label: 'A' }] },
+          { question: 'Второй?', header: 'Второй', options: [{ value: 'b', label: 'B' }] },
+        ],
+      }),
+    ])
+    const container = await renderDock()
+
+    const hint = () => container.querySelector('[data-question-required]')
+    const next = findButton(container, 'Далее')!
+    // Пока попытки не было — подсказки нет, причина только в title.
+    expect(hint()).toBeNull()
+    expect(next.getAttribute('title')).toBe('Ответьте на каждый вопрос')
+
+    await act(async () => {
+      next.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    // Переход состоялся (как раньше), но причина теперь показана.
+    expect(container.textContent).toContain('Второй?')
+    expect(hint()).not.toBeNull()
+
+    // Ответ на текущий вопрос убирает подсказку.
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+    expect(hint()).toBeNull()
+  })
+
+  it('«Проверить» без ответа: причина видна на экране проверки', async () => {
+    setupQuestions([
+      makeRecord({
+        questions: [
+          { question: 'Первый?', header: 'Первый', options: [{ value: 'a', label: 'A' }] },
+          { question: 'Второй?', header: 'Второй', options: [{ value: 'b', label: 'B' }] },
+        ],
+      }),
+    ])
+    const container = await renderDock()
+
+    await act(async () => {
+      ;(container.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click()
+    })
+    // Переход на второй вопрос точкой — обычная навигация (попытки ещё нет).
+    await act(async () => {
+      ;(container.querySelectorAll('[data-question-dot]')[1] as HTMLButtonElement)
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    const review = findButton(container, 'Проверить')!
+    expect(container.querySelector('[data-question-required]')).toBeNull()
+    expect(review.getAttribute('title')).toBe('Ответьте на каждый вопрос')
+
+    await act(async () => {
+      review.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    // Экран проверки открылся, «Отправить» недоступна, причина под кнопками.
+    expect(container.querySelector('[data-question-review]')).not.toBeNull()
+    expect(findButton(container, 'Отправить')!.disabled).toBe(true)
+    expect(container.querySelector('[data-question-required]')!.textContent)
+      .toBe('Ответьте на каждый вопрос')
   })
 
   it('точки-сегменты: клик переключает вопрос, активная помечена aria-current', async () => {

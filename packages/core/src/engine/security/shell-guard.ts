@@ -1472,6 +1472,19 @@ function askForDynamicCode(code: string): ShellCheckResult {
   };
 }
 
+/** ask: код передаётся интерпретатору через stdin (heredoc/herestring). */
+function askForStdinCode(): ShellCheckResult {
+  return {
+    action: 'ask',
+    reason: sm('shellguard.ask_stdin_code'),
+    matchedRule: 'shell-policy.approve',
+    deniedPath: '<<',
+    messageId: 'ask-stdin-code',
+    params: {},
+    askKind: 'dynamic',
+  };
+}
+
 /** Вхождение в периметр: realpath — если путь существует, иначе лексически. */
 function isInsideRootsLexicalFallback(path: string, roots: readonly string[]): boolean {
   const real = resolveRealPath(path);
@@ -2123,7 +2136,7 @@ function checkShellSegment(
   const hasHeredoc = segment.includes('<<');
   const heredocBase = hasHeredoc ? baseCommandForStdin(segment, tokens) : '';
   const heredocCode = hasHeredoc && heredocBase !== '' && isStdinCodeExecutor(heredocBase);
-  if (heredocCode) return askForDynamic('<<');
+  if (heredocCode) return askForStdinCode();
   const heredocData = hasHeredoc && !heredocCode;
   const inner = extractWrappedCommand(segment, tokens);
   if (inner !== null) {
