@@ -15,6 +15,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { defaultConfig, resolveExecutionConfig } from '@itphx/synth-shared';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import {
@@ -23,7 +26,7 @@ import {
   ExecutionProfileUnavailableError,
 } from './router.js';
 import type { ExecutionPoolKey } from './pool-provider.js';
-import { poolKeyString } from './pool-provider.js';
+import { ExecutionPoolProviderError, poolKeyString } from './pool-provider.js';
 import type { ExecutionPort } from './ports/index.js';
 
 /** Порт-заглушка: идентифицируется именем, чтобы сравнивать объекты. */
@@ -565,6 +568,348 @@ describe('PROP-135 Ф4b-1: роутер с провайдером пулов htt
     expect(router.portFor({ sessionId: 'ses_1', class: 'sandbox' })).toBe(
       router.portFor({ sessionId: 'ses_1' }),
     );
+  });
+});
+
+/**
+ * PROP-135 слайз 5b-1: **браузерный пул — один на проект** (решение
+ * владельца: изоляция cookies между проектами, но не между сессиями одного
+ * проекта). Даже при `pooling: 'session'` класс `browser` даёт проектный ключ.
+ */
+describe('PROP-135 слайз 5b-1: браузерный пул — project scope', () => {
+  /** Провайдер-заглушка: запоминает запрошенные ключи. */
+  function keyCollector() {
+    const keys: ExecutionPoolKey[] = [];
+    return {
+      keys,
+      provider: {
+        ensure: async (key: ExecutionPoolKey) => {
+          keys.push(key);
+          return { url: `http://pool/${key.class}` };
+        },
+      },
+    };
+  }
+
+  it('pooling=session + class=browser → ключ `project:<projectId>:browser:<profile>`', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const browser = router.portFor({
+      sessionId: 'ses_1',
+      projectId: 'prj_a',
+      class: 'browser',
+    });
+    await browser
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
+      'project:prj_a:browser:default',
+    ]);
+  });
+
+  it('две сессии одного проекта → один и тот же браузерный пул', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const first = router.portFor({ sessionId: 'ses_1', projectId: 'prj_a', class: 'browser' });
+    const second = router.portFor({ sessionId: 'ses_2', projectId: 'prj_a', class: 'browser' });
+    // Один пул на проект: cookies и браузер общие между сессиями проекта.
+    expect(second).toBe(first);
+
+    // Разные проекты — разные пулы (изоляция cookies между проектами).
+    const other = router.portFor({ sessionId: 'ses_1', projectId: 'prj_b', class: 'browser' });
+    expect(other).not.toBe(first);
+  });
+
+  it('pooling=project + class=browser → тот же проектный ключ', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const browser = router.portFor({ projectId: 'prj_a', class: 'browser' });
+    await browser
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
+      'project:prj_a:browser:default',
+    ]);
+  });
+
+  it('браузер без projectId → идентификатором служит sessionId', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const browser = router.portFor({ sessionId: 'ses_1', class: 'browser' });
+    await browser
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
+      'project:ses_1:browser:default',
+    ]);
+  });
+
+  it('браузер без projectId и sessionId → fallback: instance (instance-порт)', async () => {
+    const pools = keyCollector();
+    const instance = fakePort('instance');
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        fallback: 'instance',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+      instancePort: instance,
+    });
+
+    expect(router.portFor({ class: 'browser' })).toBe(instance);
+  });
+
+  it('браузер без projectId и sessionId при fallback=fail → ExecutionProfileUnavailableError', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        fallback: 'fail',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    expect(() => router.portFor({ class: 'browser' })).toThrow(ExecutionProfileUnavailableError);
+  });
+
+  it('класс exec при pooling=session остаётся сессионным (browser не ломает exec)', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const plain = router.portFor({ sessionId: 'ses_1' });
+    await plain
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
+      'session:ses_1:exec:default',
+    ]);
+  });
+});
+
+/**
+ * PROP-135 слайз 5b-1: `poolRefFor` — ссылка на пул (адреса + токен) для
+ * MCP-хоста. Проверяется контракт: ключ пула, кэш (60 с) и ошибки.
+ */
+describe('PROP-135 слайз 5b-1: poolRefFor() роутера', () => {
+  /** Провайдер-заглушка: считает вызовы `ensure`. */
+  function countingProvider(url = 'http://pool:5100', token = 'pool-token') {
+    const calls: ExecutionPoolKey[] = [];
+    return {
+      calls,
+      provider: {
+        ensure: async (key: ExecutionPoolKey) => {
+          calls.push(key);
+          return { url, token };
+        },
+      },
+    };
+  }
+
+  it('provider=http → адрес и токен из ensure (ключ — проектный для browser)', async () => {
+    const pools = countingProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const ref = await router.poolRefFor?.({ projectId: 'prj_a', class: 'browser' });
+    expect(ref).toEqual({ urls: ['http://pool:5100'], token: 'pool-token' });
+    expect(pools.calls.map((key) => poolKeyString(key))).toEqual([
+      'project:prj_a:browser:default',
+    ]);
+  });
+
+  it('provider=http → тот же ключ, что у portFor (ссылка указывает на пул порта)', async () => {
+    const pools = countingProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const port = router.portFor({ projectId: 'prj_a', class: 'browser' });
+    await port.execute({ command: { kind: 'shell', command: 'echo hi' } }).catch(() => undefined);
+    await router.poolRefFor?.({ projectId: 'prj_a', class: 'browser' });
+
+    const keys = pools.calls.map((key) => poolKeyString(key));
+    expect(keys[0]).toBe('project:prj_a:browser:default');
+    expect(keys[1]).toBe('project:prj_a:browser:default');
+  });
+
+  it('кэш: повторный вызов не ходит в провайдер (TTL 60 с)', async () => {
+    const pools = countingProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const first = await router.poolRefFor?.({ projectId: 'prj_a' });
+    const second = await router.poolRefFor?.({ projectId: 'prj_a' });
+    expect(second).toEqual(first);
+    expect(pools.calls).toHaveLength(1);
+  });
+
+  it('provider=http без адреса в ответе → ExecutionPoolProviderError', async () => {
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: { ensure: async () => ({ url: '' }) },
+    });
+
+    await expect(router.poolRefFor?.({ projectId: 'prj_a' })).rejects.toBeInstanceOf(
+      ExecutionPoolProviderError,
+    );
+  });
+
+  it('provider=static → профильный адрес и токен секции', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-pool-ref-'));
+    const tokenPath = join(dir, 'executor-token');
+    await writeFile(tokenPath, 'file-token\n', 'utf-8');
+    try {
+      const config = makeConfig({
+        provider: 'static',
+        pooling: 'project',
+        defaultProfile: 'a',
+        profiles: { a: { url: ['http://a:8080'] } },
+      });
+      // Секция без `tokenSecret` — подставим путь к файлу токена.
+      config.remote.tokenSecret = tokenPath;
+      const router = await createExecutionRouter({
+        config,
+        createPort: fakeFactory().createPort,
+      });
+
+      const ref = await router.poolRefFor?.({ projectId: 'prj_a', profile: 'a' });
+      expect(ref).toEqual({ urls: ['http://a:8080'], token: 'file-token' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider=static без читаемого токена → ExecutionProfileUnavailableError', async () => {
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'static',
+        pooling: 'project',
+        defaultProfile: 'a',
+        profiles: { a: { url: ['http://a:8080'] } },
+      }),
+      createPort: fakeFactory().createPort,
+    });
+
+    await expect(router.poolRefFor?.({ projectId: 'prj_a', profile: 'a' })).rejects.toBeInstanceOf(
+      ExecutionProfileUnavailableError,
+    );
+  });
+
+  it('provider=static: профиль без адреса → ExecutionProfileUnavailableError', async () => {
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'static',
+        pooling: 'project',
+        defaultProfile: 'broken',
+        url: [],
+        profiles: { broken: {} },
+      }),
+      createPort: fakeFactory().createPort,
+    });
+
+    await expect(router.poolRefFor?.({ projectId: 'prj_a' })).rejects.toBeInstanceOf(
+      ExecutionProfileUnavailableError,
+    );
+  });
+
+  it('pooling=instance → адреса секции (пул вне инстанса нет)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-pool-ref-'));
+    const tokenPath = join(dir, 'executor-token');
+    await writeFile(tokenPath, 'file-token\n', 'utf-8');
+    try {
+      const config = makeConfig({
+        provider: 'static',
+        pooling: 'instance',
+        url: ['http://common:8080'],
+      });
+      config.remote.tokenSecret = tokenPath;
+      const router = await createExecutionRouter({
+        config,
+        createPort: fakeFactory().createPort,
+      });
+
+      const ref = await router.poolRefFor?.({});
+      expect(ref).toEqual({ urls: ['http://common:8080'], token: 'file-token' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('inline → ссылки нет (пула вне инстанса нет)', async () => {
+    const router = await createExecutionRouter({
+      config: makeConfig({ mode: 'inline' }),
+      instancePort: fakePort('inline'),
+    });
+
+    expect(await router.poolRefFor?.({ projectId: 'prj_a' })).toBeUndefined();
   });
 });
 

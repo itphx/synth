@@ -237,7 +237,8 @@ session:ses_1:sandbox:default
 статические `execution.remote.url` и `execution.remote.tokenSecret` **не нужны** (адрес и токен
 пула выдаёт provisioner) — проверка режима на старте этого не требует.
 
-**Остаток PROP-135:** **браузерный класс** пулов и MCP динамического пула (слайс 5b), UI/admin-API
+**Остаток PROP-135:** **MCP-хост** динамического пула (слайс 5b-2; сам браузерный класс пулов,
+профиль с MCP-серверами и `poolRefFor` — сделаны в 5b-1, см. ниже), UI/admin-API
 выбора профиля пулов (6b), зеркальная проверка внешнего чекера в control plane и запись вердикта в
 аудит — **сделано** в PROP-136b-2a (§9.2; проверка на исполнителе — §9.2, аудит исполнений — §9.1). `sandbox_exec` — сделан
 (слайс 5a, см. ниже); binding профиля — Ф6a (см. выше). Матрица «что уезжает в
@@ -255,6 +256,61 @@ protected-paths `execute_shell` **не применяются** (команда 
 `cwd` — лексический (реальный — на исполнителе). Аудит исполнений песочного профиля — PROP-136a
 (§9.1, общий журнал control plane); внешний чекер команд — 136b (проверка на исполнителе — §9.2,
 зеркало в control plane — §9.2, сделано в 136b-2a).
+
+**Браузерный пул — один на проект (слайс 5b-1).** Класс `browser` — **проектный** пул
+при любом `pooling` (решение владельца): изоляция cookies **между проектами**, но не между
+сессиями одного проекта. Поэтому `pooling: session` **не** делает браузер сессионным:
+
+| Что | Значение |
+|---|---|
+| Ключ пула | `project:<projectId>:browser:<profile>` |
+| Идентификатор области | `projectId`; при его отсутствии — `sessionId` (сессия без проекта) |
+| Дальше | фоллбэк `execution.remote.fallback` (`instance` — общий порт инстанса, `fail` — fail-closed) |
+| `provider: static` | класс игнорируется (адрес — по профилю), как у `exec`/`sandbox` |
+
+Роутер (`packages/core/src/execution/router.ts`) строит ключ одинаково для `portFor` и
+`poolRefFor` — ссылка всегда указывает на **тот же** пул, что и порт.
+
+**MCP-серверы пула (`mcpServers` профиля, слайс 5b-1).** Профиль provisioner'а может
+объявить MCP-серверы, которые исполнитель пула хостит у себя (например, Playwright MCP в
+flavor'е `browser`):
+
+```yaml
+provisioner:
+  profiles:
+    browser:
+      image: git.itphx.ru/itphx/synth-executor:0.13.8-browser
+      mcpServers:
+        - name: playwright
+          command: playwright-mcp
+          args: ["--headless", "--no-sandbox", "--executable-path", "/opt/synth/browser/chrome"]
+```
+
+Состав уходит в env пода `SYNTH_EXECUTOR_MCP_SERVERS` (JSON, формат исполнителя —
+ADR-077 шаг B1). Разбор профиля **строгий** (fail-closed на старте provisioner'а): `name`/`command`
+непустые, `args`/`env` — строки, неизвестные поля запрещены, имена MCP-серверов уникальны
+(исполнитель такой состав не поднял бы). Пустой список — переменная **не** выставляется:
+дефолт образа (у flavor'ов с браузером — Playwright MCP) остаётся в силе. Значения `env`
+серверов кладутся в spec пода **как есть** и видны в `kubectl describe pod` — секреты туда
+не кладут. Смена состава пересоздаёт под (env пода неизменяем): состав входит в аннотацию
+` synth.io/mcp-servers`.
+
+**Ссылка на пул (`ExecutionRouter.poolRefFor`, слайз 5b-1).** Адреса и токен пула — для
+MCP-хоста (он говорит с исполнителем по HTTP сам). Контракт:
+
+```ts
+poolRefFor?(target: { profile?; projectId?; sessionId?; class? }): Promise<{ urls: string[]; token: string } | undefined>;
+```
+
+`provider: http` — `ensure` у provisioner'а (тот же ключ пула, что у `portFor`); `static` —
+профильный адрес и токен секции (`execution.remote.tokenSecret`); `pooling: instance`/`inline` —
+адреса секции (`undefined`, если адресов нет). Результат кэшируется на 60 с по ключу пула.
+Ошибки **не глотаются**: `ExecutionProfileUnavailableError` (профиль без адреса, `fallback: fail`)
+либо `ExecutionPoolProviderError` (provisioner недоступен или не выдал адрес).
+
+**Остаток слайса 5b — MCP-хост (5b-2):** сам MCP-хост (поднятие MCP-серверов пула, discovery
+и вызов их инструментов через HTTP к исполнителю) — **следующий слайс**; в 5b-1 сделаны только
+пул браузера (project scope), профиль с MCP-серверами и `poolRefFor` — шивы для хоста.
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта

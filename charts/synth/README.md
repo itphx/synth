@@ -204,7 +204,7 @@ ingress:
 | `provisioner.service.port` / `.targetPort` | `5200` / `5200` | Service provisioner'а (адрес → `SYNTH_EXECUTION_PROVISIONER_URL`) |
 | `provisioner.token.existingSecret` / `.secretKey` | `""` / `SYNTH_PROVISIONER_TOKEN` | Secret с токеном (пусто → `secrets.existingSecret`): provisioner — значение в env, backend — файл `/etc/synth/provisioner-token/token` |
 | `provisioner.serviceAccount.create` / `.name` | `true` / `""` | ServiceAccount provisioner'а (пусто → `<fullname>`); ему выдаётся Role на поды/секреты в namespace релиза |
-| `provisioner.profiles` | `{}` | Профили исполнения: `{имя: {image, url, network, resources, …}}` → env `SYNTH_PROVISIONER_PROFILES` (JSON). `static` — обязателен `url`, `kubernetes` — `image`; `network` — класс сети пула (`none`\|`restricted`\|`full`, дефолт `full`), см. §«Сетевые классы пулов» |
+| `provisioner.profiles` | `{}` | Профили исполнения: `{имя: {image, url, network, resources, mcpServers, …}}` → env `SYNTH_PROVISIONER_PROFILES` (JSON). `static` — обязателен `url`, `kubernetes` — `image`; `network` — класс сети пула (`none`\|`restricted`\|`full`, дефолт `full`), см. §«Сетевые классы пулов»; `mcpServers` — MCP-серверы пула (`SYNTH_EXECUTOR_MCP_SERVERS` в поде), см. §«Браузерный профиль с MCP» |
 | `provisioner.staticPools` | `{}` | Точные пулы (static): ключ пула → адрес исполнителя → env `SYNTH_PROVISIONER_STATIC_POOLS` |
 | `provisioner.kubernetes.workspacePvc` | `""` | PVC с рабочими каталогами проектов (обязателен при `provider: kubernetes`) |
 | `provisioner.kubernetes.workspaceMount` | `/var/synth/data/workspaces` | Точка монтирования PVC в поде пула (должна совпадать с `executor.workspace.mountPath`) |
@@ -1949,6 +1949,51 @@ provisioner:
     enabled: true
     apiServerCidrs: ["10.43.0.1/32"]         # Service CIDR / IP API-сервера
 ```
+
+### Браузерный профиль с MCP (Playwright)
+
+Браузерный пул — **один на проект** (PROP-135 слайз 5b-1, решение владельца):
+изоляция cookies между проектами, но не между сессиями одного проекта. Ключ пула —
+`project:<projectId>:browser:<profile>`, поэтому профилю нужен **образ с браузером**
+(flavor `browser`/`full`) и, при необходимости, явный состав MCP-серверов:
+
+```yaml
+provisioner:
+  enabled: true
+  provider: kubernetes
+  token:
+    existingSecret: synth-provisioner-token
+  profiles:
+    default:
+      image: git.itphx.ru/itphx/synth-executor:0.13.8-core
+    browser:
+      image: git.itphx.ru/itphx/synth-executor:0.13.8-browser
+      network: full                       # браузеру нужен egress
+      resources:
+        requests: {cpu: 500m, memory: 2Gi}
+        limits: {cpu: 2, memory: 4Gi}
+      # MCP-серверы, которые исполнитель пула хостит у себя
+      # (PROP-135 слайз 5b-1) → env пода SYNTH_EXECUTOR_MCP_SERVERS (JSON).
+      mcpServers:
+        - name: playwright
+          command: playwright-mcp
+          args:
+            - --headless
+            - --no-sandbox
+            - --executable-path
+            - /opt/synth/browser/chrome
+```
+
+- `mcpServers[].name`/`command` — непустые, `args`/`env` — строки, имена
+  уникальны; нарушение — **ошибка старта** provisioner'а (fail-closed), а не
+  «под не поднялся».
+- Пустой `mcpServers` (нет ключа) — переменная **не** выставляется: дефолт
+  образа (у flavor'ов с браузером — Playwright MCP) остаётся в силе.
+- ⚠️ значения `mcpServers[].env` попадают в **spec пода** и видны в
+  `kubectl describe pod` — секреты туда не кладут (значение токена в логах
+  provisioner'а не появляется).
+- Смена состава MCP-серверов **пересоздаёт** под (env пода неизменяем) —
+  отпечаток состава в аннотации `synth.io/mcp-servers`.
 
 ### ⚠️ Workspace, `subPath` и `workspaceOutsideRoot=deny`
 

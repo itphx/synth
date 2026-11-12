@@ -288,8 +288,124 @@ describe('provisioner: конфигурация из env', () => {
     });
   });
 
-  it('kubernetes: неизвестное поле resources — ошибка (fail-closed)', () => {
+  /**
+   * PROP-135 слайз 5b-1: MCP-серверы профиля (`mcpServers`) — состав
+   * MCP-серверов, которые исполнитель пула хостит у себя (Playwright MCP в
+   * flavor'е `browser`). Разбор строгий: пустое имя/команда, не-строки в
+   * `args`/`env`, неизвестные поля и дубли имён — ошибка (fail-closed).
+   */
+  it('kubernetes: профиль с mcpServers разбирается', () => {
+    const config = resolveProvisionerConfig(
+      KUBERNETES_ENV({
+        [PROVISIONER_ENV.profiles]: JSON.stringify({
+          default: {
+            image: 'synth-executor:1-browser',
+            mcpServers: [
+              {
+                name: 'playwright',
+                command: 'playwright-mcp',
+                args: ['--headless', '--no-sandbox'],
+                env: { MCP_TOKEN: 'placeholder' },
+              },
+            ],
+          },
+        }),
+      }),
+      { readFile: () => '' },
+    );
+    expect(config.profiles.default?.mcpServers).toEqual([
+      {
+        name: 'playwright',
+        command: 'playwright-mcp',
+        args: ['--headless', '--no-sandbox'],
+        env: { MCP_TOKEN: 'placeholder' },
+      },
+    ]);
+  });
+
+  it('mcpServers: пустое имя/команда — ошибка (fail-closed)', () => {
+    for (const server of [
+      { name: '', command: 'playwright-mcp' },
+      { name: 'playwright', command: '  ' },
+      { name: 'playwright' },
+    ]) {
+      expect(() =>
+        resolveProvisionerConfig(
+          KUBERNETES_ENV({
+            [PROVISIONER_ENV.profiles]: JSON.stringify({
+              default: { image: 'synth-executor:1', mcpServers: [server] },
+            }),
+          }),
+          { readFile: () => '' },
+        ),
+      ).toThrow(/SYNTH_PROVISIONER_PROFILES/);
+    }
+  });
+
+  it('mcpServers: не-строки в args/env и неизвестные поля — ошибка (fail-closed)', () => {
     expect(() =>
+      resolveProvisionerConfig(
+        KUBERNETES_ENV({
+          [PROVISIONER_ENV.profiles]: JSON.stringify({
+            default: {
+              image: 'synth-executor:1',
+              mcpServers: [{ name: 'p', command: 'c', args: [1] }],
+            },
+          }),
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_PROFILES/);
+
+    expect(() =>
+      resolveProvisionerConfig(
+        KUBERNETES_ENV({
+          [PROVISIONER_ENV.profiles]: JSON.stringify({
+            default: {
+              image: 'synth-executor:1',
+              mcpServers: [{ name: 'p', command: 'c', env: { K: 5 } }],
+            },
+          }),
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_PROFILES/);
+
+    expect(() =>
+      resolveProvisionerConfig(
+        KUBERNETES_ENV({
+          [PROVISIONER_ENV.profiles]: JSON.stringify({
+            default: {
+              image: 'synth-executor:1',
+              mcpServers: [{ name: 'p', command: 'c', unknown: true }],
+            },
+          }),
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_PROFILES/);
+  });
+
+  it('mcpServers: дубли имён — ошибка (исполнитель такой состав не поднимет)', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        KUBERNETES_ENV({
+          [PROVISIONER_ENV.profiles]: JSON.stringify({
+            default: {
+              image: 'synth-executor:1',
+              mcpServers: [
+                { name: 'playwright', command: 'playwright-mcp' },
+                { name: 'playwright', command: 'playwright-mcp' },
+              ],
+            },
+          }),
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_PROFILES/);
+  });
+
+  it('kubernetes: неизвестное поле resources — ошибка (fail-closed)', () => {    expect(() =>
       resolveProvisionerConfig(
         KUBERNETES_ENV({
           [PROVISIONER_ENV.profiles]: JSON.stringify({

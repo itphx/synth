@@ -37,6 +37,7 @@ import {
   POOL_PROFILE_LABEL,
   buildPoolPodManifest,
   commandPolicyFingerprint,
+  mcpServersFingerprint,
   poolHash,
   poolObjectName,
   sanitizeLabelValue,
@@ -391,8 +392,79 @@ describe('provisioner: kubernetes-провайдер', () => {
     });
   });
 
-  it('read-only корневая ФС по умолчанию даёт emptyDir на /tmp и HOME', () => {
+  /**
+   * PROP-135 слайз 5b-1: MCP-серверы профиля → env `SYNTH_EXECUTOR_MCP_SERVERS`
+   * (JSON, формат исполнителя). Пустой состав — переменной нет (дефолт образа
+   * остаётся в силе).
+   */
+  it('pod spec: mcpServers профиля → env SYNTH_EXECUTOR_MCP_SERVERS (JSON)', () => {
     const manifest = buildPoolPodManifest({
+      key: 'project:p1:browser:browser',
+      hash: poolHash('project:p1:browser:browser'),
+      profileName: 'browser',
+      profile: {
+        image: 'registry.example/synth-executor:0.13.8-browser',
+        mcpServers: [
+          {
+            name: 'playwright',
+            command: 'playwright-mcp',
+            args: ['--headless', '--no-sandbox'],
+            env: { MCP_HOSTING_TOKEN: 'placeholder' },
+          },
+        ],
+      },
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+    });
+    const spec = manifest.spec as {
+      containers: Array<{ env: Array<{ name: string; value?: string }> }>;
+    };
+    const item = spec.containers[0]!.env.find((e) => e.name === 'SYNTH_EXECUTOR_MCP_SERVERS');
+    expect(item).toBeDefined();
+    expect(JSON.parse(item!.value ?? '[]')).toEqual([
+      {
+        name: 'playwright',
+        command: 'playwright-mcp',
+        args: ['--headless', '--no-sandbox'],
+        env: { MCP_HOSTING_TOKEN: 'placeholder' },
+      },
+    ]);
+  });
+
+  it('pod spec: без mcpServers переменной нет (дефолт образа остаётся)', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:default',
+      hash: poolHash('project:p1:exec:default'),
+      profileName: 'default',
+      profile: PROFILES.default!,
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+    });
+    const spec = manifest.spec as {
+      containers: Array<{ env: Array<{ name: string }> }>;
+    };
+    expect(
+      spec.containers[0]!.env.find((e) => e.name === 'SYNTH_EXECUTOR_MCP_SERVERS'),
+    ).toBeUndefined();
+  });
+
+  it('отпечаток состава MCP-серверов: пусто → off, состав → хеш', () => {
+    expect(mcpServersFingerprint(PROFILES.default!)).toBe('off');
+    const withServers = mcpServersFingerprint({
+      image: 'x',
+      mcpServers: [{ name: 'playwright', command: 'playwright-mcp' }],
+    });
+    expect(withServers).toMatch(/^v1:[0-9a-f]{16}$/);
+    // Смена состава — смена отпечатка (под пересоздаётся: env пода неизменяем).
+    expect(
+      mcpServersFingerprint({
+        image: 'x',
+        mcpServers: [{ name: 'playwright', command: 'playwright-mcp', args: ['--headless'] }],
+      }),
+    ).not.toBe(withServers);
+  });
+
+  it('read-only корневая ФС по умолчанию даёт emptyDir на /tmp и HOME', () => {    const manifest = buildPoolPodManifest({
       key: 'project:p1:exec:default',
       hash: poolHash('project:p1:exec:default'),
       profileName: 'default',
@@ -733,8 +805,34 @@ describe('provisioner: kubernetes-провайдер', () => {
     expect(secret?.data?.[COMMAND_POLICY_TOKEN_KEY]).toBeDefined();
   });
 
-  it('adopt: старый Secret без ключа чекера пересоздаётся (update прав нет)', async () => {
+  /**
+   * PROP-135 слайз 5b-1: env пода неизменяем — смена состава MCP-серверов
+   * профиля требует пересоздания пода (иначе под остался бы со старым
+   * `SYNTH_EXECUTOR_MCP_SERVERS`).
+   */
+  it('adopt: смена состава MCP-серверов пересоздаёт под', async () => {
     const client = new FakeKubernetesClient();
+    const { provider: before } = makeProvider(client);
+    await before.ensure(request());
+
+    const { provider: after } = makeProvider(client, {
+      profiles: {
+        ...PROFILES,
+        default: {
+          image: PROFILES.default!.image,
+          mcpServers: [{ name: 'playwright', command: 'playwright-mcp' }],
+        },
+      },
+    });
+    const pool = await after.ensure(request());
+    expect(pool.token).not.toBe('');
+    expect(client.createdPods).toHaveLength(2);
+    expect(client.deletedPods.map((item) => item.name)).toContain(
+      poolObjectName(poolHash('project:p1:exec:default')),
+    );
+  });
+
+  it('adopt: старый Secret без ключа чекера пересоздаётся (update прав нет)', async () => {    const client = new FakeKubernetesClient();
     const secretName = poolObjectName(poolHash('project:p1:exec:default'));
     const { provider } = makeProvider(client, { commandPolicy: policy({ token: 'policy-token' }) });
     // Секрет прошлого пула: токен есть, ключа чекера нет.

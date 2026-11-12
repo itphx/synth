@@ -214,6 +214,49 @@ const kubernetesNameSchema = z
     message: 'ожидается DNS-1123 имя Kubernetes-объекта',
   });
 
+/**
+ * Описание MCP-сервера профиля (PROP-135 слайз 5b-1).
+ *
+ * Формат — как у исполнителя (`SYNTH_EXECUTOR_MCP_SERVERS`, ADR-077 шаг B1):
+ * `{name, command, args?, env?}`. Значения `env` — как есть (это могут быть
+ * токены хостингов): provisioner их **не логирует** и не пишет в диагностику,
+ * но они попадают в spec пода (см. README чарта — `kubectl describe pod` их
+ * покажет).
+ */
+const mcpServerSchema = z
+  .object({
+    /** Имя MCP-сервера (уникально в профиле). */
+    name: z.string().trim().min(1).max(256),
+    /** Команда запуска сервера. */
+    command: z.string().trim().min(1).max(1024),
+    /** Аргументы команды. */
+    args: z.array(z.string().max(1024)).optional(),
+    /** Переменные окружения сервера (значения — как есть). */
+    env: z.record(z.string().trim().min(1).max(256), z.string()).optional(),
+  })
+  .strict();
+
+/**
+ * Список MCP-серверов профиля.
+ *
+ * Имена должны быть уникальны: исполнитель разбирает `SYNTH_EXECUTOR_MCP_SERVERS`
+ * **строго** и падает при дубле — лучше отказать на старте provisioner'а
+ * (fail-closed у оператора), чем поднимать под, который не стартует.
+ */
+const mcpServersSchema = z.array(mcpServerSchema).superRefine((servers, ctx) => {
+  const seen = new Set<string>();
+  servers.forEach((server, index) => {
+    if (seen.has(server.name)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `дубликат имени MCP-сервера "${server.name}"`,
+        path: [index, 'name'],
+      });
+    }
+    seen.add(server.name);
+  });
+});
+
 /** Описание профиля исполнения. */
 export const profileSchema = z
   .object({
@@ -231,6 +274,13 @@ export const profileSchema = z
     readOnlyRootFilesystem: z.boolean().optional(),
     /** Дополнительные переменные окружения контейнера pools. */
     env: z.record(z.string().trim().min(1).max(256), z.string()).optional(),
+    /**
+     * MCP-серверы, которые исполнитель пула хостит у себя (PROP-135 слайс 5b-1):
+     * уходят в env пода `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто/не задано —
+     * переменная не выставляется (дефолт образа: у flavor'ов с браузером —
+     * Playwright MCP).
+     */
+    mcpServers: mcpServersSchema.optional(),
   })
   .strict();
 

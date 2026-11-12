@@ -64,6 +64,15 @@ export const POOL_KEY_ANNOTATION = 'synth.io/pool-key';
 /** Annotation с отпечатком конфигурации чекера команд (смена → пересоздание пода). */
 export const COMMAND_POLICY_ANNOTATION = 'synth.io/command-policy';
 
+/**
+ * Annotation с отпечатком состава MCP-серверов профиля (PROP-135 слайз 5b-1).
+ *
+ * Env пода неизменяем: под, созданный с прежним составом MCP-серверов, не
+ * получит новый `SYNTH_EXECUTOR_MCP_SERVERS` без пересоздания — поэтому
+ * состав входит в отпечаток (как политика команд).
+ */
+export const MCP_SERVERS_ANNOTATION = 'synth.io/mcp-servers';
+
 /** Ключ токена чекера в Secret пула (`data.<key>`). */
 export const COMMAND_POLICY_TOKEN_KEY = 'command-policy-token';
 /** Каталог, куда монтируется файл токена чекера в поде. */
@@ -217,6 +226,40 @@ export function commandPolicyFingerprint(
   return `v1:${createHash('sha256').update(material).digest('hex').slice(0, 16)}`;
 }
 
+/**
+ * Отпечаток состава MCP-серверов профиля (PROP-135 слайз 5b-1).
+ *
+ * `off` — серверов нет: переменная `SYNTH_EXECUTOR_MCP_SERVERS` в поде не
+ * выставляется (дефолт образа), и поды, созданные до появления аннотации,
+ * совместимы. Непустой состав — хеш: смена состава требует пересоздания
+ * пода (env пода неизменяем).
+ */
+export function mcpServersFingerprint(profile: ProvisionerProfile): string {
+  const servers = profile.mcpServers ?? [];
+  if (servers.length === 0) return 'off';
+  return `v1:${createHash('sha256').update(JSON.stringify(servers)).digest('hex').slice(0, 16)}`;
+}
+
+/**
+ * Описания MCP-серверов для env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON).
+ *
+ * Формат — как разбирает исполнитель (ADR-077 шаг B1): `{name, command, args,
+ * env}`. Значения `env` — **как есть** (там могут быть токены хостингов):
+ * provisioner их не логирует и не показывает в диагностике, но они попадают
+ * в spec пода (см. README чарта).
+ */
+export function buildMcpServersEnvValue(profile: ProvisionerProfile): string {
+  const servers = profile.mcpServers ?? [];
+  return JSON.stringify(
+    servers.map((server) => ({
+      name: server.name,
+      command: server.command,
+      args: server.args ?? [],
+      env: server.env ?? {},
+    })),
+  );
+}
+
 /** Ресурсы контейнера без `undefined`-полей. */
 function buildResources(profile: ProvisionerProfile): Record<string, unknown> | undefined {
   const resources = profile.resources;
@@ -266,6 +309,14 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
   const profileEnv = profile.env ?? {};
   for (const name of Object.keys(profileEnv).sort()) {
     env.push({ name, value: profileEnv[name] ?? '' });
+  }
+
+  // PROP-135 слайз 5b-1: MCP-серверы профиля → env `SYNTH_EXECUTOR_MCP_SERVERS`
+  // (JSON). Пустой список — переменная **не** выставляется: дефолт образа
+  // (у flavor'ов с браузером — Playwright MCP) остаётся в силе.
+  const mcpServers = profile.mcpServers ?? [];
+  if (mcpServers.length > 0) {
+    env.push({ name: 'SYNTH_EXECUTOR_MCP_SERVERS', value: buildMcpServersEnvValue(profile) });
   }
 
   // Внешний чекер команд (PROP-136b-2b): env — только при включённой политике;
@@ -348,6 +399,7 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
       annotations: {
         [POOL_KEY_ANNOTATION]: opts.key,
         [COMMAND_POLICY_ANNOTATION]: commandPolicyFingerprint(policy),
+        [MCP_SERVERS_ANNOTATION]: mcpServersFingerprint(profile),
       },
     },
     spec: {
@@ -517,13 +569,23 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
         expectedPolicy === 'off'
           ? foundPolicy === undefined || foundPolicy === 'off'
           : foundPolicy === expectedPolicy;
+      // PROP-135 слайз 5b-1: состав MCP-серверов — тоже env пода, поэтому
+      // смена состава требует пересоздания (иначе под остался бы со старым
+      // `SYNTH_EXECUTOR_MCP_SERVERS`).
+      const expectedMcp = mcpServersFingerprint(profile);
+      const foundMcp = found.metadata.annotations?.[MCP_SERVERS_ANNOTATION];
+      const mcpCompatible =
+        expectedMcp === 'off'
+          ? foundMcp === undefined || foundMcp === 'off'
+          : foundMcp === expectedMcp;
       if (
         !policyCompatible ||
+        !mcpCompatible ||
         (foundProfile !== undefined && foundProfile !== expectedProfile)
       ) {
-        // Под этого ключа поднят с другим профилем/политикой (переименование
-        // профиля, смена чекера или коллизия хеша): ресурс не тот — снимаем
-        // пару и создаём заново.
+        // Под этого ключа поднят с другим профилем/политикой/MCP-составом
+        // (переименование профиля, смена чекера, смена MCP-серверов или
+        // коллизия хеша): ресурс не тот — снимаем пару и создаём заново.
         await this._deletePodQuietly(foundName, 0);
         await this._deleteSecretQuietly(secretName);
         await this._waitForPodGone(foundName);

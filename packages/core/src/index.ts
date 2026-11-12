@@ -584,9 +584,12 @@ export {
   isExecutionRouter,
   executionProfileCatalog,
   ExecutionProfileUnavailableError,
+  POOL_REF_TTL_MS,
 } from './execution/router.js';
 export type {
   ExecutionPortTarget,
+  ExecutionPoolRefInfo,
+  ExecutionPoolRefTarget,
   ExecutionRouter,
   ExecutionRouterOptions,
 } from './execution/router.js';

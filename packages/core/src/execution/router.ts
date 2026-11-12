@@ -57,6 +57,22 @@
  * у ленивых портов (список/`drain`/`release` видят один реестр пулов); при
  * `static`/`inline` — `undefined` (пулов с жизненным циклом нет).
  *
+ * **Браузер — всегда проектный пул** (PROP-135 слайз 5b-1, решение владельца):
+ * `class: 'browser'` скоупится **проектом**, даже при `pooling: 'session'` —
+ * изоляция cookies между проектами (между сессиями одного проекта браузер
+ * общий). Идентификатор области — `projectId`, при его отсутствии `sessionId`
+ * (сессия без проекта); дальше — фоллбэк `fallback` (`instance`/`fail`), как
+ * у остальных классов.
+ *
+ * ## Ссылка на пул (`poolRefFor`, PROP-135 слайз 5b-1)
+ *
+ * `poolRefFor(target)` — **адреса и токен** пула для цели: тот же пул, к
+ * которому адресует `portFor`, но без порта (нужно MCP-хосту, который сам
+ * говорит с исполнителем по HTTP). Провайдер `http` — `ensure` у
+ * provisioner'а, `static` — профильный адрес + токен секции; результат
+ * кэшируется на 60 с (Map по ключу пула): `ensure` идемпотентен, но MCP-вызов
+ * идёт на каждый вызов.
+ *
  * ## Чего роутер НЕ делает
  *
  * - не provisioner'ит поды (это следующий слайс Ф4 — сам сервис provisioner);
@@ -72,11 +88,14 @@ import type { ExecutionProfileCatalog } from './profile-binding.js';
 import { createExecutionPortForConfig, defaultPooledPortFactory } from './factory.js';
 import {
   createExecutionPoolProvider,
+  ExecutionPoolProviderError,
   poolKeyString,
+  type ExecutionPoolClass,
   type ExecutionPoolKey,
   type ExecutionPoolProvider,
 } from './pool-provider.js';
 import { createPooledExecutionPort } from './pooled-port.js';
+import { readExecutorToken } from './remote.js';
 import type { ExecutionMetricsSink, ExecutionPort } from './ports/index.js';
 
 /**
@@ -99,6 +118,12 @@ export interface ExecutionPortTarget {
    * (`poolKeyString`), поэтому `sandbox_exec` обращается к **своему** пулу, а
    * не к обычному пулу области. При `provider: static` класс игнорируется:
    * статический провайдер адресует пул по профилю (isolations пулов нет).
+   *
+   * **`browser` — всегда проектный пул** (PROP-135 слайз 5b-1, решение
+   * владельца): изоляция cookies между проектами, но не между сессиями
+   * одного проекта. Поэтому `pooling: 'session'` **не** делает браузер
+   * сессионным — область всегда `project` (идентификатор — `projectId`, при
+   * его отсутствии `sessionId`).
    */
   class?: 'exec' | 'browser' | 'sandbox';
   /**
@@ -109,6 +134,38 @@ export interface ExecutionPortTarget {
    * Не задан — монтируется корень тома.
    */
   workspaceSubPath?: string;
+}
+
+/**
+ * Цель ссылки на пул исполнения (PROP-135 слайз 5b-1).
+ *
+ * Тот же контракт, что у `ExecutionPortTarget`, но без `workspaceSubPath`:
+ * ссылка на пул — это адреса и токен, а монтирование workspace определяет
+ * provisioner по телу `POST /v1/pools`.
+ */
+export interface ExecutionPoolRefTarget {
+  /** Профиль исполнения (`session.settings.executorProfile`). */
+  profile?: string;
+  /** Идентификатор проекта — для ключа проектного пула. */
+  projectId?: string;
+  /** Идентификатор сессии — для ключа сессионного пула. */
+  sessionId?: string;
+  /** Класс пула (`exec` по умолчанию, `browser`, `sandbox`). */
+  class?: 'exec' | 'browser' | 'sandbox';
+}
+
+/**
+ * Ссылка на пул исполнения (PROP-135 слайз 5b-1): адреса и токен доступа.
+ *
+ * Токен — **значение** (не путь): его читает провайдер пулов в момент
+ * обращения. Наружу (в API/логи) ссылка не отдаётся — это внутренний контракт
+ * между роутером и MCP-хостом.
+ */
+export interface ExecutionPoolRefInfo {
+  /** Адреса пула (`http://…`). */
+  urls: string[];
+  /** Токен доступа к пулу (пустой — пул без токена). */
+  token: string;
 }
 
 /**
@@ -150,6 +207,24 @@ export interface ExecutionRouter {
    * (`static` — адресация по профилю, `inline` — исполнение в процессе).
    */
   poolProvider?(): ExecutionPoolProvider | undefined;
+  /**
+   * PROP-135 слайз 5b-1: **ссылка на пул** для цели — адреса и токен пула,
+   * к которому адресует `portFor` с той же целью.
+   *
+   * Нужна MCP-хосту (следующий слайс 5b-2): он говорит с исполнителем по
+   * HTTP сам (discovery/call MCP-серверов), поэтому ему нужен адрес пула и
+   * токен, а не порт исполнения.
+   *
+   * Провайдер `http` — адрес и токен приходят из `ensure` у provisioner'а;
+   * `static` — профильный адрес и токен секции; `pooling: instance`/`inline` —
+   * адреса секции (`undefined`, если адресов нет). Результат кэшируется на
+   * 60 с по ключу пула.
+   *
+   * Ошибки **не глотаются**: `ExecutionProfileUnavailableError` (нет
+   * пригодного профиля/адреса) либо `ExecutionPoolProviderError`
+   * (provisioner недоступен или не выдал адрес).
+   */
+  poolRefFor?(target: ExecutionPoolRefTarget): Promise<ExecutionPoolRefInfo | undefined>;
 }
 
 /**
@@ -183,8 +258,8 @@ export function isExecutionRouter(value: unknown): value is ExecutionRouter {
  * недоступен» (ADR-077, как `RemoteExecutionUnavailableError`).
  */
 export class ExecutionProfileUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = 'ExecutionProfileUnavailableError';
   }
 }
@@ -251,9 +326,13 @@ export async function createExecutionRouter(
     // пулы. `static`/`inline` пулов с жизненным циклом не имеют.
     if (config && config.mode !== 'inline' && config.remote.provider === 'http') {
       const provider = opts.poolProvider ?? createExecutionPoolProvider(config.remote);
-      return { portFor: () => port, poolProvider: () => provider };
+      return {
+        portFor: () => port,
+        poolProvider: () => provider,
+        poolRefFor: createPoolRefResolver(config, provider),
+      };
     }
-    return { portFor: () => port };
+    return { portFor: () => port, poolRefFor: createPoolRefResolver(config, undefined) };
   }
   const remote = config.remote;
 
@@ -325,6 +404,8 @@ export async function createExecutionRouter(
     // и проверки `executor.profile`/`executor_profile` в роутах и `task`.
     profiles: () => [...plans.keys()],
     defaultProfile: () => defaultName,
+    // PROP-135 слайз 5b-1: ссылка на пул (адреса + токен) для MCP-хоста.
+    poolRefFor: createPoolRefResolver(config, undefined),
   };
 }
 
@@ -357,21 +438,16 @@ function createHttpProviderRouter(
 
   return {
     portFor(target?: ExecutionPortTarget): ExecutionPort {
-      const requested = (target?.profile ?? '').trim();
-      // Неизвестный профиль → профиль по умолчанию (как в статическом пути).
-      const known =
-        requested !== '' && (remote.profiles[requested] !== undefined || requested === defaultName);
-      const profile = known ? requested : defaultName;
-      const scope = remote.pooling;
-      const id = scope === 'project' ? target?.projectId : target?.sessionId;
+      const profile = resolveProfileName(remote, target?.profile);
+      const resolved = resolvePoolTarget(remote, target);
 
-      if (!id || id.trim() === '') {
+      if (resolved === null) {
         // Идентификатора области нет — пул не адресуем. `fallback: instance` —
         // общий порт инстанса; `fallback: fail` — fail-closed.
         if (remote.fallback === 'fail') {
           throw new ExecutionProfileUnavailableError(
-            `execution pool scope "${scope}" requires an id ` +
-              `(${scope === 'project' ? 'projectId' : 'sessionId'}) ` +
+            `execution pool scope "${poolScopeLabel(remote, target)}" requires an id ` +
+              `(${poolIdHint(remote, target)}) ` +
               `and execution.remote.fallback=fail`,
           );
         }
@@ -381,16 +457,16 @@ function createHttpProviderRouter(
       // входит (кэш прокси по ключу: один порт на проект/сессию), его получает
       // первый `ensure` этого пула.
       //
-      // PROP-135 слайс 5a: класс пула входит в ключ — `sandbox_exec` берёт
+      // PROP-135 слайз 5a: класс пула входит в ключ — `sandbox_exec` берёт
       // **отдельный** пул (свой образ/профиль), а не порт обычного пула
       // области. Неизвестное/пустое значение — `exec` (поведение прежнее).
-      const poolClass = target?.class === 'sandbox' || target?.class === 'browser'
-        ? target.class
-        : 'exec';
+      //
+      // PROP-135 слайз 5b-1: `class: 'browser'` — **проектный** пул при любом
+      // `pooling` (решение владельца: изоляция cookies между проектами).
       const key: ExecutionPoolKey = {
-        scope,
-        id: id.trim(),
-        class: poolClass,
+        scope: resolved.scope,
+        id: resolved.id,
+        class: resolved.class,
         profile,
         ...(target?.workspaceSubPath ? { workspaceSubPath: target.workspaceSubPath } : {}),
       };
@@ -417,6 +493,8 @@ function createHttpProviderRouter(
     // PROP-135 Ф6b-1: админ-диагностика пулов у provisioner'а (`list`) и
     // операции `drain`/`release` — тот же провайдер, что у ленивых портов.
     poolProvider: () => provider,
+    // PROP-135 слайз 5b-1: ссылка на пул (адреса + токен) для MCP-хоста.
+    poolRefFor: createPoolRefResolver(config, provider),
   };
 }
 
@@ -425,6 +503,79 @@ function knownProfiles(remote: ResolvedExecutionRemoteConfig): string[] {
   const names = new Set(Object.keys(remote.profiles));
   names.add(remote.defaultProfile);
   return [...names];
+}
+
+/**
+ * Имя профиля цели: неизвестный профиль → профиль по умолчанию (как в Ф4a).
+ */
+function resolveProfileName(
+  remote: ResolvedExecutionRemoteConfig,
+  requested: string | undefined,
+): string {
+  const name = (requested ?? '').trim();
+  const known =
+    name !== '' && (remote.profiles[name] !== undefined || name === remote.defaultProfile);
+  return known ? name : remote.defaultProfile;
+}
+
+/**
+ * Класс пула цели: неизвестное/пустое значение — `exec` (поведение прежнее).
+ */
+function resolvePoolClass(
+  target: { class?: 'exec' | 'browser' | 'sandbox' } | undefined,
+): ExecutionPoolClass {
+  return target?.class === 'sandbox' || target?.class === 'browser' ? target.class : 'exec';
+}
+
+/**
+ * Область пула и её идентификатор для цели (PROP-135 слайз 5b-1).
+ *
+ * - `browser` — **всегда проектный** пул (решение владельца): изоляция cookies
+ *   между проектами, но не между сессиями одного проекта. Идентификатор —
+ *   `projectId`, при его отсутствии `sessionId` (сессия без проекта);
+ * - `exec`/`sandbox` — область как в `execution.remote.pooling`;
+ * - `instance` — пул инстанса (один на процесс; класс цели область не меняет).
+ *
+ * `null` — идентификатора области нет: пул не адресуем (решает `fallback`).
+ */
+function resolvePoolTarget(
+  remote: ResolvedExecutionRemoteConfig,
+  target: ExecutionPortTarget | undefined,
+): { scope: 'instance' | 'project' | 'session'; id?: string; class: ExecutionPoolClass } | null {
+  if (remote.pooling === 'instance') {
+    // Instance-пул: один на инстанс (тот же, что у instance-порта роутера).
+    return { scope: 'instance', class: 'exec' };
+  }
+  const poolClass = resolvePoolClass(target);
+  if (poolClass === 'browser') {
+    const id = (target?.projectId ?? '').trim() || (target?.sessionId ?? '').trim();
+    if (id === '') return null;
+    return { scope: 'project', id, class: poolClass };
+  }
+  const scope = remote.pooling;
+  const raw = scope === 'project' ? target?.projectId : target?.sessionId;
+  const id = (raw ?? '').trim();
+  if (id === '') return null;
+  return { scope, id, class: poolClass };
+}
+
+/** Область пула для текста ошибки. */
+function poolScopeLabel(
+  remote: ResolvedExecutionRemoteConfig,
+  target: ExecutionPortTarget | undefined,
+): string {
+  if (remote.pooling === 'instance') return 'instance';
+  if (resolvePoolClass(target) === 'browser') return 'project';
+  return remote.pooling;
+}
+
+/** Подсказка «какой идентификатор нужен» для текста ошибки. */
+function poolIdHint(
+  remote: ResolvedExecutionRemoteConfig,
+  target: ExecutionPortTarget | undefined,
+): string {
+  if (resolvePoolClass(target) === 'browser') return 'projectId (или sessionId для браузера)';
+  return remote.pooling === 'project' ? 'projectId' : 'sessionId';
 }
 
 /**
@@ -494,4 +645,160 @@ function profileConfig(
       provisioner: remote.provisioner,
     },
   };
+}
+
+/**
+ * TTL кэша ссылок на пулы (PROP-135 слайз 5b-1), мс.
+ *
+ * `ensure` у provisioner'а идемпотентен, но MCP-вызов идёт на каждый вызов —
+ * без кэша каждый вызов ходил бы в provisioner. 60 с — как TTL инвентаря
+ * возможностей исполнителя (ADR-077 шаг A): адрес пула меняется редко, а
+ * устаревшая ссылка на 60 с не ломает работу (пул пересоздастся по
+ * `ensure`).
+ */
+export const POOL_REF_TTL_MS = 60_000;
+
+/**
+ * Сборка резолвера ссылок на пулы (PROP-135 слайз 5b-1).
+ *
+ * ## Правила
+ *
+ * - `provider: http` — `ensure` у provisioner'а: адрес и токен приходят из
+ *   ответа (тот же ключ пула, что у `portFor` — ссылка всегда указывает на
+ *   **тот же** пул, что и порт);
+ * - `provider: static` — профильный адрес (первый — как у
+ *   `StaticExecutionPoolProvider.ensure`) и токен секции
+ *   (`execution.remote.tokenSecret`);
+ * - `pooling: instance`/`inline` — адреса секции (`undefined`, если адресов
+ *   нет: пула вне инстанса нет).
+ *
+ * ## Ошибки
+ *
+ * Не глотаются: `ExecutionProfileUnavailableError` (профиль без адреса,
+ * `fallback: fail`) либо `ExecutionPoolProviderError` (provisioner
+ * недоступен/не выдал адрес). Значение токена в текст ошибки не попадает.
+ */
+function createPoolRefResolver(
+  config: ResolvedExecutionConfig | undefined,
+  provider: ExecutionPoolProvider | undefined,
+): (target: ExecutionPoolRefTarget) => Promise<ExecutionPoolRefInfo | undefined> {
+  const remote = config?.remote;
+  // `inline` — исполнение в процессе: удалённого пула нет, адресовать некого.
+  if (!remote || config?.mode === 'inline') return async () => undefined;
+
+  /** Кэш ссылок по ключу пула (TTL — `POOL_REF_TTL_MS`). */
+  const cache = new Map<string, { info: ExecutionPoolRefInfo; at: number }>();
+
+  /** Ссылка на пул инстанса (адреса секции или instance-пул у provisioner'а). */
+  const instanceRef = async (): Promise<ExecutionPoolRefInfo | undefined> => {
+    if (remote.provider === 'http') {
+      // Instance-пул у provisioner'а — тот же, что у instance-порта роутера
+      // (ключ `instance:exec:<профиль по умолчанию>`).
+      const ref = await ensurePool(provider, {
+        scope: 'instance',
+        class: 'exec',
+        profile: remote.defaultProfile,
+      });
+      return { urls: [ref.url], token: ref.token };
+    }
+    const url = remote.url.map((item) => item.trim()).find((item) => item !== '');
+    if (url === undefined) return undefined;
+    return { urls: [url], token: await readPoolToken(remote.tokenSecret) };
+  };
+
+  return async (target: ExecutionPoolRefTarget): Promise<ExecutionPoolRefInfo | undefined> => {
+    const profile = resolveProfileName(remote, target.profile);
+    const resolved = resolvePoolTarget(remote, target);
+    if (resolved === null) {
+      // Идентификатора области нет — как в `portFor`: `fallback: fail` —
+      // fail-closed, иначе — ссылка на пул инстанса.
+      if (remote.fallback === 'fail') {
+        throw new ExecutionProfileUnavailableError(
+          `execution pool scope "${poolScopeLabel(remote, target)}" requires an id ` +
+            `(${poolIdHint(remote, target)}) ` +
+            `and execution.remote.fallback=fail`,
+        );
+      }
+      return instanceRef();
+    }
+    if (resolved.scope === 'instance') return instanceRef();
+
+    const key: ExecutionPoolKey = {
+      scope: resolved.scope,
+      id: resolved.id,
+      class: resolved.class,
+      profile,
+    };
+    const keyString = poolKeyString(key);
+    const cached = cache.get(keyString);
+    if (cached !== undefined && Date.now() - cached.at < POOL_REF_TTL_MS) {
+      return cached.info;
+    }
+
+    let info: ExecutionPoolRefInfo;
+    if (remote.provider === 'http') {
+      const ref = await ensurePool(provider, key);
+      info = { urls: [ref.url], token: ref.token };
+    } else {
+      // Статический провайдер: адрес профиля (первый — как у `ensure`) и токен
+      // секции (`execution.remote.tokenSecret`).
+      const url = resolveProfileParams(remote, profile)
+        .url.map((item) => item.trim())
+        .find((item) => item !== '');
+      if (url === undefined) {
+        throw new ExecutionProfileUnavailableError(
+          `execution profile "${profile}" has no executor address ` +
+            `(execution.remote.profiles.${profile}.url / execution.remote.url)`,
+        );
+      }
+      info = { urls: [url], token: await readPoolToken(remote.tokenSecret) };
+    }
+    cache.set(keyString, { info, at: Date.now() });
+    return info;
+  };
+}
+
+/**
+ * `ensure` у провайдера пулов с проверкой ответа (PROP-135 слайз 5b-1).
+ *
+ * Провайдер не задан (тестовая заглушка/вырожденный роутер) или не выдал
+ * адрес — `ExecutionPoolProviderError` (ошибку **не глотаем**: вызывающий
+ * решает, что делать — MCP-вызов без пула бессмыслен).
+ */
+async function ensurePool(
+  provider: ExecutionPoolProvider | undefined,
+  key: ExecutionPoolKey,
+): Promise<{ url: string; token: string }> {
+  if (provider === undefined) {
+    throw new ExecutionPoolProviderError(
+      'execution pool provider is not available (execution.remote.provider=http)',
+    );
+  }
+  const ref = await provider.ensure(key);
+  const url = (ref.url ?? '').trim();
+  if (url === '') {
+    throw new ExecutionPoolProviderError(
+      `execution pool provider returned no pool address for key "${poolKeyString(key)}"`,
+    );
+  }
+  return { url, token: (ref.token ?? '').trim() };
+}
+
+/**
+ * Значение токена исполнителя (`execution.remote.tokenSecret`) для ссылки на
+ * пул (PROP-135 слайз 5b-1).
+ *
+ * `tokenSecret` — **путь** (инвариант 13): значение читается из файла в
+ * момент обращения и в текст ошибки не попадает (в текст идёт только путь).
+ */
+async function readPoolToken(tokenSecret: string): Promise<string> {
+  try {
+    return await readExecutorToken(tokenSecret);
+  } catch (err) {
+    throw new ExecutionProfileUnavailableError(
+      'execution pool reference could not read the executor token ' +
+        '(execution.remote.tokenSecret)',
+      { cause: err },
+    );
+  }
 }
