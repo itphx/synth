@@ -218,6 +218,67 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if and $pse.fsGroup (gt (int $pse.fsGroup) 0) -}}0440{{- else -}}0444{{- end -}}
 {{- end -}}
 
+{{- /* PROP-135 Ф4b-2b: provisioner пулов исполнения — отдельный процесс
+       (Deployment/Service), который по запросу control plane выдаёт адрес и
+       токен пула. Своей конфигурации у него нет: только env. */ -}}
+{{- define "synth.provisioner.fullname" -}}
+{{- if .Values.provisioner.fullnameOverride }}
+{{- .Values.provisioner.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- default "synth-provisioner" .Values.provisioner.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+
+{{- define "synth.provisioner.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "synth.name" . }}
+app.kubernetes.io/component: provisioner
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- /* Адрес Service provisioner'а (control plane ходит сюда). */ -}}
+{{- define "synth.provisioner.serviceUrl" -}}
+{{- printf "http://%s:%d" (include "synth.provisioner.fullname" .) (.Values.provisioner.service.port | int64) -}}
+{{- end }}
+
+{{- /* Провайдер пулов (неизвестное значение → ошибка рендера, fail-closed). */ -}}
+{{- define "synth.provisioner.provider" -}}
+{{- $p := (((.Values.provisioner | default dict).provider) | default "static") | toString -}}
+{{- if not (has $p (list "static" "kubernetes")) -}}
+{{- fail (printf "provisioner.provider: ожидается \"static\" или \"kubernetes\", получено %q" $p) -}}
+{{- end -}}
+{{- $p -}}
+{{- end }}
+
+{{- /* Secret с токеном provisioner'а (значение в values не хранится, инвариант 13). */ -}}
+{{- define "synth.provisioner.tokenSecretName" -}}
+{{- $t := .Values.provisioner.token | default dict -}}
+{{- $t.existingSecret | default .Values.secrets.existingSecret -}}
+{{- end }}
+
+{{- /* Ключ токена внутри Secret. */ -}}
+{{- define "synth.provisioner.tokenKey" -}}
+{{- $t := .Values.provisioner.token | default dict -}}
+{{- $t.secretKey | default "SYNTH_PROVISIONER_TOKEN" -}}
+{{- end }}
+
+{{- /* Каталог монтирования Secret с токеном в backend. */ -}}
+{{- define "synth.provisioner.tokenMountDir" -}}
+/etc/synth/provisioner-token
+{{- end }}
+
+{{- /* Путь к файлу токена (control plane читает токен из файла — значение
+       в env/ConfigMap не попадает, инвариант 13). */ -}}
+{{- define "synth.provisioner.tokenFilePath" -}}
+{{- include "synth.provisioner.tokenMountDir" . }}/token
+{{- end }}
+
+{{- /* ServiceAccount provisioner'а (ему нужен доступ к API Kubernetes —
+       поды/секреты пулов в namespace релиза). */ -}}
+{{- define "synth.provisioner.serviceAccountName" -}}
+{{- $sa := .Values.provisioner.serviceAccount | default dict -}}
+{{- $sa.name | default (include "synth.provisioner.fullname" .) -}}
+{{- end }}
+
 {{- define "synth.envName" -}}
 {{- .name | upper | replace "-" "_" }}
 {{- end }}

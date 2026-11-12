@@ -1,0 +1,91 @@
+# Образ synth-provisioner — сервис пулов исполнения (PROP-135 Ф4b-2b).
+#
+# Отдельный процесс рядом с control plane (backend) и исполнителем: по запросу
+# `POST /v1/pools` выдаёт адрес и токен пула. Провайдеры:
+#   * `static`     — адреса из конфигурации (env SYNTH_PROVISIONER_PROFILES /
+#                    SYNTH_PROVISIONER_STATIC_POOLS);
+#   * `kubernetes` — под с образом профиля + Secret с токеном пула в namespace;
+#                    нужен доступ к API кластера (RBAC выдаёт чарт).
+#
+# В образе НЕТ секретов (инвариант 13): токен control plane приходит ТОЛЬКО
+# env-переменной `SYNTH_PROVISIONER_TOKEN` в рантайме (fail-closed — без него
+# процесс не стартует, см. packages/provisioner/src/config.ts), доступ к API
+# Kubernetes — токен ServiceAccount, смонтированный kubelet'ом.
+#
+# Стадии:
+#   build   — сборка пакета на платформе билдера (`$BUILDPLATFORM`);
+#   runtime — минимальный образ: dist + hono/zod, uid 1000, корневая ФС
+#             доступна только на чтение (`readOnlyRootFilesystem: true` в чарте).
+#
+# multi-arch: `RUN` выполняются только в build-стадии (на платформе билдера),
+# runtime — `COPY`/`ENV`/`USER`, поэтому arm64-сборка не требует QEMU
+# (как у образов backend/UI, PROP-082).
+
+ARG BUILDPLATFORM
+
+FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
+
+# corepack скачивает бинарь pnpm при первом вызове `pnpm` — materialize его в
+# кэшируемом слое (см. docker/Dockerfile.executor). Версия совпадает с
+# `packageManager` в package.json репозитория (pnpm@12.14.0).
+RUN corepack enable && corepack prepare pnpm@12.14.0 --activate && pnpm --version
+
+WORKDIR /repo
+
+# Весь монорепо: нужен workspace-манифест и lockfile (`--frozen-lockfile`-семантика
+# обеспечивается `pnpm install` с готовым lockfile в контексте).
+COPY . .
+
+# У provisioner'а нет workspace-зависимостей (только внешние hono/zod) —
+# ставим и собираем ровно его.
+RUN pnpm install --filter @itphx/synth-provisioner... \
+    && pnpm --filter @itphx/synth-provisioner build
+
+# `pnpm deploy` создаёт самодостаточный каталог: `dist` + реальные node_modules
+# (без симлинков в пакеты workspace). Права чиним на платформе билдера: файлы
+# pnpm deploy имеют mode 770 (root) и под uid 1000 недоступны; COPY переносит
+# режимы как есть, а чинить их в runtime-стадии (RUN) сломало бы arm64-сборку
+# без эмуляции.
+RUN mkdir -p /out \
+    && pnpm --filter @itphx/synth-provisioner deploy --prod --legacy /out/app \
+    && chmod -R a+rX /out/app
+
+# ------------------------------------------------------------------------------
+# runtime
+# ------------------------------------------------------------------------------
+FROM node:22-alpine AS runtime
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Provisioner"
+LABEL org.opencontainers.image.description="Synth provisioner: выдача пулов исполнения (static/kubernetes) по HTTP-контракту PROP-135."
+
+ENV NODE_ENV=production
+# Адрес/порт — дефолты пакета (packages/provisioner/src/config.ts). Токен НЕ
+# задаётся: он обязателен и передаётся в рантайме (fail-closed).
+ENV SYNTH_PROVISIONER_HOST=0.0.0.0
+ENV SYNTH_PROVISIONER_PORT=5200
+
+# HOME пользователя uid 1000 (в node:22-alpine это `node`): provisioner ничего
+# не пишет на диск, но утилиты/диагностика не должны спотыкаться о /root.
+RUN set -eux; \
+    mkdir -p /home/synth; \
+    chown -R 1000:1000 /home/synth
+
+ENV HOME=/home/synth
+
+COPY --from=build /out/app /app
+
+WORKDIR /app
+
+USER 1000
+
+EXPOSE 5200
+
+# Эндпоинт живости (без авторизации, packages/provisioner/src/server.ts).
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:5200/health || exit 1
+
+# PID 1 — сам Node: provisioner не порождает дочерних процессов, а SIGTERM
+# обрабатывает `main.ts` (останавливает reaper, закрывает сервер, exit 0).
+CMD ["node", "dist/main.js"]

@@ -1,0 +1,44 @@
+{{- /* PROP-135 Ф4b-2b: права provisioner'а пулов.
+       kubernetes-провайдер создаёт/читает/удаляет поды пулов и секреты с их
+       токенами — в namespace релиза и только там (мультиnamespace не
+       поддерживается: `SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` = namespace
+       релиза, Role в другом namespace не выдаётся).
+       static-провайдер API кластера не использует; Role рендерится вместе с
+       объектами provisioner'а, чтобы набор манифестов не зависел от режима
+       (права выданы одному ServiceAccount'у и только в его namespace). */ -}}
+{{- if .Values.provisioner.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "synth.provisioner.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: provisioner
+rules:
+  {{- /* Поды пулов: создание, чтение (adopt/wait), наблюдение, удаление
+         (drain/release). update/patch не нужны — провайдер не правит поды. */}}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  {{- /* Секреты с токенами пулов: создание, чтение (adopt при 409), удаление
+         (release). Список/watch не нужны. */}}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "synth.provisioner.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "synth.provisioner.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "synth.provisioner.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

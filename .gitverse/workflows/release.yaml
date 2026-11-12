@@ -68,7 +68,7 @@ jobs:
       - name: Обновить package.json
         run: |
           NEW="${{ steps.bump.outputs.new_version }}"
-          for pkg_dir in packages/shared packages/core packages/executor packages/storage-postgres packages/backend packages/ui packages/sdk packages/synth; do
+          for pkg_dir in packages/shared packages/core packages/executor packages/storage-postgres packages/provisioner packages/backend packages/ui packages/sdk packages/synth; do
             node -e "
               const fs = require('fs');
               const p = require('./$pkg_dir/package.json');
@@ -260,6 +260,7 @@ jobs:
           pnpm --filter @itphx/synth-core build
           pnpm --filter @itphx/synth-executor build
           pnpm --filter @itphx/synth-storage-postgres build
+          pnpm --filter @itphx/synth-provisioner build
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-sdk build
@@ -372,6 +373,7 @@ jobs:
           pnpm --filter @itphx/synth-core build
           pnpm --filter @itphx/synth-executor build
           pnpm --filter @itphx/synth-storage-postgres build
+          pnpm --filter @itphx/synth-provisioner build
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-sdk build
@@ -410,6 +412,7 @@ jobs:
           pnpm --filter @itphx/synth-core build
           pnpm --filter @itphx/synth-executor build
           pnpm --filter @itphx/synth-storage-postgres build
+          pnpm --filter @itphx/synth-provisioner build
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-sdk build
@@ -630,6 +633,8 @@ jobs:
   #   synth-backend:<v>-<flavor>    all-in-one: control plane + toolchain
   #   synth-backend:<v>             slim: control plane без toolchain'а
   #   synth-executor:<v>-<flavor>   образы исполнителей (worker'ы)
+  #   synth-provisioner:<v>         provisioner пулов исполнения (PROP-135 Ф4b-2b;
+  #                                 один образ без flavor'ов)
   #
   #   flavor'ы: core | dev | devops | browser | full
   #
@@ -688,6 +693,18 @@ jobs:
         run: |
           mkdir -p "$DOCKER_CONFIG"
           bash scripts/publish-images.sh --tag-base "${{ steps.image_tags.outputs.version }}"
+
+      # Provisioner пулов (PROP-135 Ф4b-2b) — один образ без flavor'ов.
+      # Отдельный вызов: дефолтная матрица publish-images.sh (backend/executor ×
+      # flavor'ы) его не содержит; публикация — явным `--only provisioner`.
+      - name: Публикация образа provisioner (docker → Gitea)
+        env:
+          GV_GITEA_TOKEN: ${{ secrets.GT_TOKEN }}
+          GITEA_USER: itphx
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+        run: |
+          mkdir -p "$DOCKER_CONFIG"
+          bash scripts/publish-images.sh --only provisioner --tag-base "${{ steps.image_tags.outputs.version }}"
 
   # --- Offline-образы для закрытого контура ---
   #

@@ -1,0 +1,20 @@
+{{- /* PROP-135 Ф4b-2b: Service provisioner'а пулов. Control plane ходит по
+       этому адресу (`SYNTH_EXECUTION_PROVISIONER_URL`). */ -}}
+{{- if .Values.provisioner.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "synth.provisioner.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: provisioner
+spec:
+  type: {{ .Values.provisioner.service.type }}
+  ports:
+    - port: {{ .Values.provisioner.service.port }}
+      targetPort: {{ .Values.provisioner.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "synth.provisioner.selectorLabels" . | nindent 4 }}
+{{- end }}

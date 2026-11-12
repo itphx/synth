@@ -1,0 +1,153 @@
+{{- /* PROP-135 Ф4b-2b: provisioner пулов исполнения — отдельный процесс
+       (`Service`/Deployment). По запросу control plane выдаёт адрес и токен
+       пула исполнителя: `static` — адреса из конфигурации, `kubernetes` — под
+       с образом профиля + Secret с токеном в namespace релиза.
+
+       Конфигурация provisioner'а — ТОЛЬКО env (у него нет каталога данных
+       инстанса). Токен control plane — значением из Secret (provisioner сам
+       его проверяет); backend получает путь к файлу (см. backend-deployment). */ -}}
+{{- if .Values.provisioner.enabled }}
+{{- $provider := include "synth.provisioner.provider" . }}
+{{- $k8s := .Values.provisioner.kubernetes | default dict }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "synth.provisioner.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: provisioner
+spec:
+  replicas: {{ .Values.provisioner.replicaCount | default 1 }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "synth.provisioner.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "synth.provisioner.selectorLabels" . | nindent 8 }}
+      annotations:
+        synth.io/build: {{ .Chart.Version | quote }}
+    spec:
+      {{- with .Values.provisioner.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "synth.provisioner.serviceAccountName" . }}
+      {{- /* kubernetes-провайдеру нужен токен ServiceAccount (API кластера);
+             static-провайдеру — нет: токен не монтируем. */}}
+      automountServiceAccountToken: {{ eq $provider "kubernetes" }}
+      {{- with .Values.provisioner.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: provisioner
+          image: "{{ .Values.provisioner.image.repository }}:{{ .Values.provisioner.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.provisioner.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.provisioner.service.targetPort }}
+              protocol: TCP
+          env:
+            {{- /* Токен control plane — значение из Secret (инвариант 13);
+                   provisioner вычитывает его при старте и вычищает из
+                   process.env (scrubProvisionerToken). */}}
+            - name: SYNTH_PROVISIONER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "synth.provisioner.tokenSecretName" . }}
+                  key: {{ include "synth.provisioner.tokenKey" . }}
+                  optional: false
+            - name: SYNTH_PROVISIONER_HOST
+              value: "0.0.0.0"
+            - name: SYNTH_PROVISIONER_PORT
+              value: {{ .Values.provisioner.service.targetPort | int64 | quote }}
+            - name: SYNTH_PROVISIONER_PROVIDER
+              value: {{ $provider | quote }}
+            {{- /* Профили исполнения: JSON-объект (имя → {image, url, ...}). */}}
+            - name: SYNTH_PROVISIONER_PROFILES
+              value: {{ .Values.provisioner.profiles | default dict | toJson | quote }}
+            {{- /* Точные пулы (static): ключ → адрес исполнителя. */}}
+            {{- if .Values.provisioner.staticPools }}
+            - name: SYNTH_PROVISIONER_STATIC_POOLS
+              value: {{ .Values.provisioner.staticPools | toJson | quote }}
+            {{- end }}
+            {{- /* Kubernetes-провайдер: namespace подов/секретов — namespace
+                   релиза (Role выдаётся только в нём, см. provisioner-rbac). */}}
+            {{- if eq $provider "kubernetes" }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_WORKSPACE_PVC
+              value: {{ required "provisioner.kubernetes.workspacePvc обязателен при provisioner.provider: kubernetes (PVC с рабочими каталогами проектов)" $k8s.workspacePvc | quote }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_WORKSPACE_MOUNT
+              value: {{ $k8s.workspaceMount | default "/var/synth/data/workspaces" | quote }}
+            {{- with $k8s.serviceAccount }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_SERVICE_ACCOUNT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $k8s.imagePullSecrets }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_IMAGE_PULL_SECRETS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_API_SERVER
+              value: {{ $k8s.apiServer | default "https://kubernetes.default.svc" | quote }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_START_TIMEOUT_MS
+              value: {{ $k8s.startTimeoutMs | default 120000 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_POLL_INTERVAL_MS
+              value: {{ $k8s.pollIntervalMs | default 1000 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_EXECUTOR_PORT
+              value: {{ $k8s.executorPort | default 5100 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS
+              value: {{ $k8s.terminationGraceSeconds | default 30 | int64 | quote }}
+            {{- end }}
+            {{- /* Жизненный цикл пулов. */}}
+            - name: SYNTH_PROVISIONER_IDLE_TIMEOUT_MS
+              value: {{ .Values.provisioner.idleTimeoutMs | default 900000 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_SESSION_IDLE_TIMEOUT_MS
+              value: {{ .Values.provisioner.sessionIdleTimeoutMs | default 300000 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_MAX_LIFETIME_MS
+              value: {{ .Values.provisioner.maxLifetimeMs | default 43200000 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_DRAIN_GRACE_MS
+              value: {{ .Values.provisioner.drainGraceMs | default 30000 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_MAX_POOLS
+              value: {{ .Values.provisioner.maxPools | default 50 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_REAPER_INTERVAL_MS
+              value: {{ .Values.provisioner.reaperIntervalMs | default 30000 | int64 | quote }}
+          {{- with .Values.provisioner.probes.liveness }}
+          livenessProbe:
+            httpGet:
+              path: {{ .path }}
+              port: {{ $.Values.provisioner.service.targetPort }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+          {{- end }}
+          {{- with .Values.provisioner.probes.readiness }}
+          readinessProbe:
+            httpGet:
+              path: {{ .path }}
+              port: {{ $.Values.provisioner.service.targetPort }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+          {{- end }}
+          {{- with .Values.provisioner.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.provisioner.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.provisioner.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.provisioner.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.provisioner.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

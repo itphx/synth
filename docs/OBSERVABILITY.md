@@ -345,6 +345,42 @@ ADR-094 п. 4); без bearer-токена исполнителя — `401`. И�
 (адресов, id команд, имён MCP-серверов) в лейблах нет: число MCP-серверов —
 это **счётчик по состоянию**, а не список имён.
 
+### Provisioner пулов (PROP-135 Ф4b-2b)
+
+Собственный `/metrics` процесса `synth-provisioner`
+(`packages/provisioner/src/metrics.ts`, свой мини-реестр — процесс не зависит
+от core). Exposition 0.0.4, `Cache-Control: no-store`; эндпоинт **требует
+bearer-токен provisioner'а** (как и `/v1/*`; публичен только `/health`).
+Выключателя нет: сервис либо развёрнут (`provisioner.enabled: true`), либо нет.
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_provisioner_pools` | gauge | `profile`, `state` (`ready`/`draining`) | Живые пулы по профилю и состоянию; пересчёт **на скрейпе** из реестра сервиса |
+| `synth_provisioner_provision_total` | counter | `outcome` (`ok`/`error`/`capacity`) | Запросы обеспечения пула |
+| `synth_provisioner_release_total` | counter | `outcome` (`ok`/`idle`/`lifetime`/`error`) | Удаления пулов (в т.ч. уборщиком) |
+| `synth_provisioner_idle_terminations_total` | counter | — | Пулы, снятые по idle-таймауту |
+| `synth_provisioner_errors_total` | counter | `reason` (`invalid_request`/`unauthorized`/`pool_not_found`/`capacity`/`internal_error`/`not_found`) | Ошибки HTTP-слоя |
+| `synth_provisioner_ensure_seconds` | histogram | `provider` (`static`/`kubernetes`) | Время обеспечения пула у провайдера (корзины 0.05…120 с) |
+| `synth_provisioner_provider_errors_total` | counter | `reason` (`create`/`lookup`/`wait`/`delete`) | Ошибки провайдера ресурсов (Kubernetes) |
+
+Кардинальность ограничена: ключей пулов, адресов и id проектов в лейблах
+**нет** (только имя профиля из конфигурации и закрытые наборы значений).
+Лейблы `profile`/`state`/`reason` — аддитивное расширение закрытого набора
+ADR-094 для серий отдельного процесса (как `action`/`effect` Authority-слоя).
+Скрейп — **отдельный job** (`synth-provisioner`), не смешивать с backend и
+executor: это третий процесс со своими счётчиками. Токен — из того же Secret,
+что и у control plane (`provisioner.token.existingSecret`, ключ
+`provisioner.token.secretKey`).
+
+```yaml
+# prometheus.yml (фрагмент)
+- job_name: synth-provisioner
+  authorization:
+    credentials_file: /etc/prometheus/provisioner-token
+  static_configs:
+    - targets: ["synth-provisioner:5200"]
+```
+
 ### Authority-слой (ADR-106)
 
 Решения Authority-слоя (ADR-106 Ф1). Лейблы — `action`/`effect`/`source` (аддитивное

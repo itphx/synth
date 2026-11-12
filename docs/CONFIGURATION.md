@@ -835,6 +835,83 @@ execution:
         timeoutMs: 60000            # параметры профиля — «поверх» общих
 ```
 
+### Provisioner пулов (`SYNTH_PROVISIONER_*`, values `provisioner.*`)
+
+Отдельный процесс `@itphx/synth-provisioner` (PROP-135 Ф4b-2b): выдаёт control
+plane адрес и токен пула (`POST /v1/pools`). Включается в чарте
+`provisioner.enabled: true` **вместе** с `execution.mode: remote` (провайдер
+пулов backend'а — `execution.remote.provider: http`, поля `execution.remote.provisioner.*`
+выше). Конфигурация provisioner'а — **только env** (у него нет каталога данных
+инстанса); значения чарта транслируются в env. Значение токена в values и в
+`config.yaml` не хранится (инвариант 13).
+
+**Env процесса provisioner'а:**
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `SYNTH_PROVISIONER_TOKEN` | — (**обязательна**) | Bearer-токен control plane; без него процесс не стартует (fail-closed) |
+| `SYNTH_PROVISIONER_HOST` | `0.0.0.0` | Адрес прослушивания |
+| `SYNTH_PROVISIONER_PORT` | `5200` | Порт |
+| `SYNTH_PROVISIONER_PROVIDER` | `static` | Провайдер пулов: `static` \| `kubernetes` (иное — ошибка старта) |
+| `SYNTH_PROVISIONER_PROFILES` | `{}` | JSON-каталог профилей: `{"<profile>":{"image","url","network","resources","runtimeClass","readOnlyRootFilesystem","env"}}`; `static` требует `url`, `kubernetes` — `image` |
+| `SYNTH_PROVISIONER_STATIC_POOLS` | `{}` | JSON точных пулов: `{"<poolKey>":"http://…"}` (только `static`) |
+| `SYNTH_PROVISIONER_IDLE_TIMEOUT_MS` | `900000` | Idle-таймаут проектного/инстансного пула |
+| `SYNTH_PROVISIONER_SESSION_IDLE_TIMEOUT_MS` | `300000` | Idle-таймаут сессионного пула |
+| `SYNTH_PROVISIONER_MAX_LIFETIME_MS` | `43200000` | Предельное время жизни пула |
+| `SYNTH_PROVISIONER_DRAIN_GRACE_MS` | `30000` | Пауза между drain и release |
+| `SYNTH_PROVISIONER_MAX_POOLS` | `50` | Лимит живых пулов (сверх — `429`) |
+| `SYNTH_PROVISIONER_REAPER_INTERVAL_MS` | `30000` | Период уборщика |
+
+**Kubernetes-провайдер** (действуют при `provider: kubernetes`):
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` | namespace ServiceAccount, иначе `synth` | Namespace подов/секретов (в чарте — namespace релиза) |
+| `SYNTH_PROVISIONER_KUBERNETES_WORKSPACE_PVC` | — (**обязательна**) | PVC с рабочими каталогами проектов (RWX) |
+| `SYNTH_PROVISIONER_KUBERNETES_WORKSPACE_MOUNT` | `/var/synth/data/workspaces` | Точка монтирования PVC (должна совпадать с `executor.workspace.mountPath` и `storage.workspacesRoot`) |
+| `SYNTH_PROVISIONER_KUBERNETES_SERVICE_ACCOUNT` | — | ServiceAccount **подов пулов** (без прав на API) |
+| `SYNTH_PROVISIONER_KUBERNETES_IMAGE_PULL_SECRETS` | — | csv имён imagePullSecret'ов подов пулов |
+| `SYNTH_PROVISIONER_KUBERNETES_API_SERVER` | `https://kubernetes.default.svc` | Адрес API Kubernetes |
+| `SYNTH_PROVISIONER_KUBERNETES_TOKEN_FILE` | `/var/run/secrets/kubernetes.io/serviceaccount/token` | Токен provisioner'а к API (том ServiceAccount) |
+| `SYNTH_PROVISIONER_KUBERNETES_CA_FILE` | `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt` | CA API-сервера |
+| `SYNTH_PROVISIONER_KUBERNETES_START_TIMEOUT_MS` | `120000` | Ожидание Running/Ready пода пула |
+| `SYNTH_PROVISIONER_KUBERNETES_POLL_INTERVAL_MS` | `1000` | Период опроса пода |
+| `SYNTH_PROVISIONER_KUBERNETES_EXECUTOR_PORT` | `5100` | Порт исполнителя в поде пула |
+| `SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS` | `30` | Grace-период удаления пода |
+
+**Values чарта** (`provisioner.*`; подробно — README чарта, §«Provisioner пулов»):
+
+| Ключ | По умолчанию | Env / смысл |
+|---|---|---|
+| `provisioner.enabled` | `false` | Deployment + Service + RBAC; backend получает `SYNTH_EXECUTION_PROVIDER=http` |
+| `provisioner.provider` | `static` | `SYNTH_PROVISIONER_PROVIDER` |
+| `provisioner.image.repository` / `.tag` / `.pullPolicy` | `git.itphx.ru/itphx/synth-provisioner` / `""` / `IfNotPresent` | Образ (пусто → `.Chart.AppVersion`) |
+| `provisioner.replicaCount` | `1` | Реплики (распределённой блокировки нет) |
+| `provisioner.service.port` / `.targetPort` | `5200` / `5200` | Service; адрес → `SYNTH_EXECUTION_PROVISIONER_URL` |
+| `provisioner.token.existingSecret` / `.secretKey` | `""` / `SYNTH_PROVISIONER_TOKEN` | Secret токена (пусто → `secrets.existingSecret`); provisioner — значение, backend — путь к файлу |
+| `provisioner.profiles` | `{}` | `SYNTH_PROVISIONER_PROFILES` (JSON) |
+| `provisioner.staticPools` | `{}` | `SYNTH_PROVISIONER_STATIC_POOLS` (JSON) |
+| `provisioner.kubernetes.workspacePvc` | `""` | `…_WORKSPACE_PVC` (обязателен при `provider: kubernetes`) |
+| `provisioner.kubernetes.workspaceMount` | `/var/synth/data/workspaces` | `…_WORKSPACE_MOUNT` |
+| `provisioner.kubernetes.serviceAccount` | `""` | `…_SERVICE_ACCOUNT` (SA подов пулов) |
+| `provisioner.kubernetes.imagePullSecrets` | `[]` | `…_IMAGE_PULL_SECRETS` (csv) |
+| `provisioner.kubernetes.apiServer` | `https://kubernetes.default.svc` | `…_API_SERVER` |
+| `provisioner.kubernetes.startTimeoutMs` / `.pollIntervalMs` | `120000` / `1000` | `…_START_TIMEOUT_MS` / `…_POLL_INTERVAL_MS` |
+| `provisioner.kubernetes.executorPort` / `.terminationGraceSeconds` | `5100` / `30` | `…_EXECUTOR_PORT` / `…_TERMINATION_GRACE_SECONDS` |
+| `provisioner.idleTimeoutMs` / `.sessionIdleTimeoutMs` / `.maxLifetimeMs` | `900000` / `300000` / `43200000` | `SYNTH_PROVISIONER_*_TIMEOUT_MS` |
+| `provisioner.drainGraceMs` / `.maxPools` / `.reaperIntervalMs` | `30000` / `50` / `30000` | `SYNTH_PROVISIONER_*` |
+| `provisioner.timeoutMs` | `10000` | Таймаут backend'а → `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS` |
+| `provisioner.serviceAccount.create` / `.name` | `true` / `""` | ServiceAccount provisioner'а (Role — поды/секреты в namespace) |
+| `provisioner.networkPolicy.enabled` / `.apiServerCidrs` | `false` / `[]` | NetworkPolicy: ingress только от backend; egress DNS + API (CIDR'ы обязательны для `kubernetes`) |
+
+Fail-closed-сообщения provisioner'а: отсутствие токена, битый JSON,
+неизвестный `provider`, профиль без `url` (`static`) или без `image`
+(`kubernetes`), отсутствие PVC, нечисловые значения, невалидные имена
+Kubernetes-объектов — процесс **не стартует** (явная настройка оператора не
+превращается в дефолт). Ошибки рендера чарта: неизвестный
+`provisioner.provider`, пустой `workspacePvc` при `kubernetes`, включённая
+NetworkPolicy при `kubernetes` без `apiServerCidrs`.
+
 ### Доверие TLS и mTLS исходящих соединений (`security.tls`, ADR-099)
 
 Единый источник доверия TLS/CA для **всех** исходящих соединений Synth (провайдеры LLM, MCP HTTP,

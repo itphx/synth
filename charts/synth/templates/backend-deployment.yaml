@@ -35,12 +35,17 @@
        и ПУТЬ к файлу с токеном (значение токена в env/ConfigMap не попадает,
        инвариант 13). */ -}}
 {{- $executionRemote := include "synth.execution.isRemote" . -}}
+{{- /* PROP-135 Ф4b-2b: provisioner пулов — провайдер `http` (адрес и токен
+       пула выдаёт provisioner). Адрес Service и путь к токену — env; значение
+       токена — только в Secret (инвариант 13). */ -}}
+{{- $provisioner := .Values.provisioner | default dict -}}
+{{- $provisionerEnabled := $provisioner.enabled | default false -}}
 {{- /* Общий том workspace смонтирован в control plane (тот же, что у пула). */ -}}
 {{- $sharedWorkspace := and ((.Values.executor | default dict).enabled) (include "synth.executor.workspaceEnabled" .) -}}
 {{- /* PROP-090 Ф5в: env секции plugins (deploy-каталог/доверие/управляемость). */ -}}
 {{- $plugins := (.Values.backend.plugins | default dict) -}}
 {{- $pluginsVolume := ($plugins.deployVolume | default dict) -}}
-{{- $needEnv := or .Values.backend.oidc.enabled $authApiKey.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode .Values.metrics.enabled (include "synth.execution.isRemote" .) $sharedWorkspace (include "synth.plugins.envNeeded" .) -}}
+{{- $needEnv := or .Values.backend.oidc.enabled $authApiKey.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode .Values.metrics.enabled (include "synth.execution.isRemote" .) $sharedWorkspace (include "synth.plugins.envNeeded" .) $provisionerEnabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -169,14 +174,31 @@ spec:
             {{- /* ADR-077: split-режим (execution.mode=remote). Адреса
                    исполнителей — список через запятую; пусто + executor.enabled
                    → адрес Service пула. Токен — путь к файлу (Secret смонтирован
-                   ниже), не значение. */}}
+                   ниже), не значение.
+
+                   PROP-135 Ф4b-2b: при включённом provisioner'е статические
+                   адреса и токен исполнителя не нужны — пул выдаёт provisioner
+                   (env SYNTH_EXECUTION_PROVIDER=http, адрес и путь к токену
+                   provisioner'а). */}}
+            {{- if $provisionerEnabled }}
+            - name: SYNTH_EXECUTION_PROVIDER
+              value: "http"
+            - name: SYNTH_EXECUTION_PROVISIONER_URL
+              value: {{ include "synth.provisioner.serviceUrl" . | quote }}
+            - name: SYNTH_EXECUTION_PROVISIONER_TOKEN
+              value: {{ include "synth.provisioner.tokenFilePath" . | quote }}
+            - name: SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS
+              value: {{ $provisioner.timeoutMs | default 10000 | int64 | quote }}
+            {{- end }}
             {{- if $executionRemote }}
             - name: SYNTH_EXECUTION_MODE
               value: "remote"
+            {{- if not $provisionerEnabled }}
             - name: SYNTH_EXECUTION_REMOTE_URL
               value: {{ include "synth.execution.remoteUrls" . | quote }}
             - name: SYNTH_EXECUTION_TOKEN
               value: {{ include "synth.execution.tokenFilePath" . | quote }}
+            {{- end }}
             - name: SYNTH_EXECUTION_TIMEOUT_MS
               value: {{ ((.Values.execution | default dict).remote | default dict).timeoutMs | default 30000 | int64 | quote }}
             {{- with ((.Values.execution | default dict).remote | default dict).concurrency }}
@@ -253,6 +275,14 @@ spec:
             {{- if $executionRemote }}
             - name: executor-token
               mountPath: {{ include "synth.execution.tokenMountDir" . }}
+              readOnly: true
+            {{- end }}
+            {{- /* PROP-135 Ф4b-2b: токен provisioner'а — файлом
+                   (/etc/synth/provisioner-token/token); в env backend'а идёт
+                   путь, не значение (инвариант 13). */}}
+            {{- if $provisionerEnabled }}
+            - name: provisioner-token
+              mountPath: {{ include "synth.provisioner.tokenMountDir" . }}
               readOnly: true
             {{- end }}
             {{- /* PROP-090 Ф5в: каталог deploy-плагинов из PVC (обновление
@@ -348,6 +378,20 @@ spec:
             defaultMode: {{ include "synth.secretVolumeMode" .Values.backend.podSecurityContext }}
             items:
               - key: {{ include "synth.execution.tokenKey" . }}
+                path: token
+        {{- end }}
+        {{- /* PROP-135 Ф4b-2b: Secret с токеном provisioner'а — ключ
+               спроецирован в файл `token`; backend читает токен по пути
+               `/etc/synth/provisioner-token/token` (инвариант 13). Режим —
+               как у прочих Secret-томов: 0440 при заданном fsGroup, иначе
+               0444 (см. «Права файлов в Secret-томах» в README чарта). */}}
+        {{- if $provisionerEnabled }}
+        - name: provisioner-token
+          secret:
+            secretName: {{ include "synth.provisioner.tokenSecretName" . }}
+            defaultMode: {{ include "synth.secretVolumeMode" .Values.backend.podSecurityContext }}
+            items:
+              - key: {{ include "synth.provisioner.tokenKey" . }}
                 path: token
         {{- end }}
         {{- /* PROP-090 Ф5в: PVC с deploy-плагинами. Claim обязателен: чарт не

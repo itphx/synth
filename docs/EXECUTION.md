@@ -247,6 +247,97 @@ core подключает пакет `@itphx/synth-executor` **динамиче�
 а не значение (инвариант 13): значение читается из файла и не попадает ни в логи, ни в
 текст ошибок.
 
+### Ф4b-2b: provisioner пулов — сервис, контракт, развёртывание
+
+> **Ф4b-2b (PROP-135, реализовано):** сервис `@itphx/synth-provisioner`
+> (`packages/provisioner`, `private: true`), провайдеры `static`/`kubernetes`,
+> жизненный цикл пулов, метрики, Helm-шаблоны `provisioner-*.yaml`,
+> `docker/Dockerfile.provisioner`. Публикация образа — `scripts/publish-images.sh
+> --only provisioner` (в дефолтной релизной матрице — отдельный шаг CI).
+> Реальный e2e на кластере (поды, RBAC, NetworkPolicy) — **не выполнялся**
+> (развёртывание — за оркестратором).
+
+**Роль.** Provisioner — отдельный процесс рядом с control plane: по запросу
+backend'а выдаёт адрес и токен пула исполнителей. Ни сессий, ни хранилища, ни
+LLM он не знает; конфигурация — **только env** (каталога данных инстанса у него
+нет). Без токена и без профилей/пулов процесс **не стартует** (fail-closed).
+
+**Контракт** (клиент — `HttpExecutionPoolProvider` в core, `packages/core/src/execution/pool-provider.ts`;
+сервер — `packages/provisioner/src/server.ts`):
+
+| Метод | Путь | Тело / ответ | Смысл |
+|---|---|---|---|
+| `POST` | `/v1/pools` | `{key, scope, id?, class, profile, workspaceSubPath?}` → `{url, token?}` | Создать/получить пул; `workspaceSubPath` — подкаталог PVC для пода пула |
+| `POST` | `/v1/pools/{key}/touch` | — | Продлить жизнь пула (best-effort) |
+| `POST` | `/v1/pools/{key}/drain` | — | Слить пул: удалить под с grace, секрет оставить |
+| `DELETE` | `/v1/pools/{key}` | — | Удалить пул: под (grace 0) и секрет |
+| `GET` | `/v1/capabilities` | → `{provider, profiles, protocol, limits}` | Диагностика |
+| `GET` | `/health` | → `{ok, provider}` | Проба (без авторизации) |
+| `GET` | `/metrics` | exposition 0.0.4 | Метрики (серии — [OBSERVABILITY.md](./OBSERVABILITY.md)) |
+
+Все `/v1/*` — с `Authorization: Bearer <токен>` (сравнение постоянное по
+времени, `packages/provisioner/src/auth.ts`); `{key}` — URL-encoded
+канонический ключ пула (`poolKeyString`). Сверх лимита живых пулов —
+`429` с причиной `capacity`; битый запрос — `400` (`invalid_request`).
+
+**Жизненный цикл** (`packages/provisioner/src/pool-service.ts`):
+
+- `ensure` идемпотентен: ключ → запись пула; повторный запрос возвращает тот же
+  адрес/токен, `ensure` у провайдера вызывается, пока пул не выдан;
+- `touch` обновляет `lastUsedAt` (idle-таймер);
+- уборщик (`reaperIntervalMs`, таймер `unref`) снимает пул по `idleTimeoutMs`
+  (проектный/инстансный) или `sessionIdleTimeoutMs` (сессионный), а также по
+  `maxLifetimeMs`; между `drain` и `release` — пауза `drainGraceMs`;
+- `maxPools` — лимит одновременных живых пулов (сверх — `429`);
+- после рестарта provisioner'а состояние **не теряется**: провайдер `kubernetes`
+  находит под по label `synth.io/pool-hash` и **усыновляет** его (adopt), секрет
+  с токеном переиспользуется; под без секрета или с чужим профилем снимается.
+
+**Провайдеры** (`packages/provisioner/src/provider-static.ts`,
+`kubernetes-provider.ts`):
+
+| Провайдер | Пул | Изоляция | Зависимости |
+|---|---|---|---|
+| `static` | адрес из `profiles[].url` (первый) или `staticPools[key]` | нет — ключ пула игнорируется | нет |
+| `kubernetes` | `Pod` с образом профиля + `Secret` (`token`) в namespace | есть — под на ключ пула | PVC workspace (RWX), RBAC, ServiceAccount |
+
+Под пула: `restartPolicy: Never`, `runAsNonRoot`/`uid 1000`/`fsGroup 1000`,
+`seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`,
+`capabilities.drop: [ALL]`, `readOnlyRootFilesystem` по профилю (по умолчанию
+`true`) с `emptyDir` для `/tmp` и `/home/synth`; монтирование workspace —
+`workspacePvc` + **`subPath`** (`workspaceSubPath`), то есть в под попадает
+каталог проекта/worktree, а не весь том. Labels пода: `app.kubernetes.io/name:
+synth-executor`, `app.kubernetes.io/managed-by: synth-provisioner`,
+`synth.io/pool-hash`, `synth.io/profile`, `synth.io/network`; ключ пула —
+аннотация `synth.io/pool-key`.
+
+**Развёртывание (чарт).** `provisioner.enabled: true` рендерит
+Deployment (1 реплика), Service (5200), ServiceAccount + Role/RoleBinding,
+опционально NetworkPolicy; backend получает env `SYNTH_EXECUTION_PROVIDER=http`,
+`SYNTH_EXECUTION_PROVISIONER_URL=http://<fullname>-provisioner:5200`,
+`SYNTH_EXECUTION_PROVISIONER_TOKEN=/etc/synth/provisioner-token/token` (путь,
+не значение) и `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS`. Токен — один Secret на
+обе стороны. Значения и примеры — README чарта, §«Provisioner пулов»;
+`docs/CONFIGURATION.md` §«Provisioner пулов»; образ —
+`docker/Dockerfile.provisioner` (multi-stage, uid 1000, read-only root FS,
+healthcheck `/health`, секретов в образе нет).
+
+**Ограничения (осознанные):**
+
+1. **Один namespace** — поды и секреты только в namespace релиза (Role там же,
+   `SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` = `.Release.Namespace`).
+2. **Нет прогрева (`minWarm`)** — пул создаётся по первому запросу; холодный
+   старт ограничен `startTimeoutMs`.
+3. **`replicaCount: 1`** — распределённой блокировки выдачи пула нет.
+4. **Политика сети — по label, не по DNS**: NetworkPolicy не умеет выбирать API
+   по имени, поэтому для `kubernetes` нужны `apiServerCidrs` (иначе рендер
+   падает fail-closed).
+5. **`executorMcp` динамического пула** не собирается (ленивый порт его не
+   выставляет).
+6. **`workspaceOutsideRoot`**: при `deny` (managed) проект вне `workspacesRoot`
+   не получит каталога, а без `subPath` под монтирует весь PVC — проект нужно
+   держать под корнем workspace.
+
 ---
 
 ## 3. Контракт порта исполнения

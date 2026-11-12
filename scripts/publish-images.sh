@@ -8,6 +8,9 @@
 #   synth-backend:<v>-<flavor>     all-in-one: control plane + toolchain
 #   synth-backend:<v>              slim: control plane без toolchain'а
 #   synth-executor:<v>-<flavor>    образы исполнителей (worker'ы)
+#   synth-provisioner:<v>          provisioner пулов исполнения (PROP-135 Ф4b-2b,
+#                                  один образ без flavor'ов; публикуется только
+#                                  по явному --only provisioner)
 #
 #   flavor'ы: core | dev | devops | browser | full
 #
@@ -86,7 +89,7 @@ usage() {
   --registry <host>      Реестр (по умолчанию: git.itphx.ru).
   --namespace <ns>       Namespace в реестре (по умолчанию: itphx).
   --flavor <list|all>    Flavor'ы через запятую (по умолчанию: all).
-  --only <backend|executor|both>  Только один образ (по умолчанию: оба).
+  --only <backend|executor|provisioner|both>  Только один образ (по умолчанию: оба).
   --skip-push            Только собрать локально (без публикации).
   --no-slim              Не собирать slim-базу synth-backend.
   --push-retries <n>     Попыток пуша (по умолчанию: 3).
@@ -129,8 +132,8 @@ fi
 [[ "$FLAVORS" == "all" ]] && FLAVORS="core dev devops browser full"
 case "$ONLY" in
   ""|both) IMAGES="backend executor" ;;
-  backend|executor) IMAGES="$ONLY" ;;
-  *) die "--only: ожидается backend | executor | both (получено: $ONLY)" ;;
+  backend|executor|provisioner) IMAGES="$ONLY" ;;
+  *) die "--only: ожидается backend | executor | provisioner | both (получено: $ONLY)" ;;
 esac
 
 # --- утилиты -----------------------------------------------------------------
@@ -176,6 +179,7 @@ dockerfile_for() {
   case "$1" in
     backend)  printf '%s\n' "$REPO_ROOT/docker/Dockerfile.backend" ;;
     executor) printf '%s\n' "$REPO_ROOT/docker/Dockerfile.executor" ;;
+    provisioner) printf '%s\n' "$REPO_ROOT/docker/Dockerfile.provisioner" ;;
     *) die "неизвестный образ: $1" ;;
   esac
 }
@@ -285,6 +289,19 @@ for image in $IMAGES; do
   dockerfile=$(dockerfile_for "$image")
   if [[ ! -f "$dockerfile" ]]; then
     die "Dockerfile не найден: $dockerfile — образ '$image' собрать нечем (PROP-082, шаг 5)"
+  fi
+
+  # provisioner пулов (PROP-135 Ф4b-2b) — один образ без flavor'ов: тег без
+  # суффикса, `--target` не нужен. В дефолтную матрицу релиза не входит
+  # (публикация — по явному `--only provisioner`), пока образ не добавлен в
+  # release-джобу.
+  if [[ "$image" == "provisioner" ]]; then
+    repo=$(repo_for "$image")
+    tag="${repo}:${TAG_BASE}"
+    build_image "$image" "single" "" "$tag" "$dockerfile"
+    push_image "$tag"
+    SUMMARY+=("$image|-|$tag|$(image_size_mb "$tag")|$(image_digest "$tag")")
+    continue
   fi
 
   for flavor in $FLAVORS; do

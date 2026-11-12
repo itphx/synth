@@ -531,6 +531,182 @@ executor:
     caKey: ca.pem
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Provisioner пулов исполнения (PROP-135 Ф4b-2b).
+#
+# Отдельный процесс `@itphx/synth-provisioner`: по запросу control plane
+# (`POST /v1/pools`) выдаёт адрес и токен пула. Провайдеры:
+#   * `static`     — адреса из конфигурации (`profiles[].url`/`staticPools`),
+#                    изоляции пулов нет (поведение static-пулов core);
+#   * `kubernetes` — под с образом профиля + Secret с токеном пула в namespace
+#                    релиза (нужны RBAC и PVC workspace — см. ниже).
+#
+# Включается `provisioner.enabled: true` ВМЕСТЕ с `execution.mode: remote`
+# (иначе backend продолжит работать по `execution.*`, а provisioner останется
+# неиспользованным). Backend получает env `SYNTH_EXECUTION_PROVIDER=http`,
+# адрес Service provisioner'а и ПУТЬ к файлу токена (значение — только в Secret,
+# инвариант 13).
+#
+# ⚠️ `storage.workspaceOutsideRoot` в managed-контуре — `deny`: поды пулов
+# монтируют PVC workspace с `subPath` = каталог проекта; каталог обязан лежать
+# внутри `workspacesRoot` (`executor.workspace.mountPath`), иначе проектные
+# workspace'ы не создадутся (см. README чарта, §«Provisioner пулов»).
+# ─────────────────────────────────────────────────────────────────────────────
+provisioner:
+  enabled: false
+  nameOverride: ""
+  fullnameOverride: ""
+  # Реплик — 1: состояние пулов выводится из labels подов/секретов (adopt после
+  # рестарта), но одновременная выдача одним ключом из двух реплик не
+  # сериализуется. Масштабирование — после появления общей блокировки.
+  replicaCount: 1
+
+  image:
+    repository: git.itphx.ru/itphx/synth-provisioner
+    # Пустой tag → .Chart.AppVersion (как у backend'а/UI/executor).
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # Секреты для приватного реестра (kubernetes.io/dockerconfigjson).
+  imagePullSecrets: []
+
+  # ServiceAccount provisioner'а. Отличается от `kubernetes.serviceAccount`
+  # (это ServiceAccount ПОДОВ пулов, без прав на API): provisioner'у нужен
+  # доступ к API — Role в namespace релиза выдаёт `provisioner-rbac.yaml`.
+  serviceAccount:
+    # false — использовать существующий ServiceAccount (`name`).
+    create: true
+    # Пусто → `<fullname>` (по умолчанию `synth-provisioner`).
+    name: ""
+
+  service:
+    type: ClusterIP
+    port: 5200
+    targetPort: 5200
+
+  token:
+    # Secret с токеном control plane. Пусто → secrets.existingSecret.
+    # Значение токена в values НЕ хранится (инвариант 13) — только ссылка.
+    # Backend получает токен ФАЙЛОМ (/etc/synth/provisioner-token/token →
+    # env SYNTH_EXECUTION_PROVISIONER_TOKEN=путь), provisioner — значением в env
+    # SYNTH_PROVISIONER_TOKEN (secretKeyRef). Один Secret на обе стороны.
+    existingSecret: ""
+    secretKey: SYNTH_PROVISIONER_TOKEN
+
+  # static | kubernetes (неизвестное значение → ошибка рендера, fail-closed).
+  # ⚠️ static без `profiles`/`staticPools` и kubernetes без `profiles` — процесс
+  # не стартует (fail-closed): чарт дефолтных профилей не подставляет.
+  provider: static
+
+  # Каталог профилей исполнения: имя → {image, url, network, resources,
+  # runtimeClass, readOnlyRootFilesystem, env}. JSON уходит в env
+  # SYNTH_PROVISIONER_PROFILES.
+  #   static:     профилю обязателен url (адрес исполнителя);
+  #   kubernetes: профилю обязателен image (образ пода пула).
+  # Пример:
+  #   profiles:
+  #     default:
+  #       image: git.itphx.ru/itphx/synth-executor:0.13.8-core
+  #       resources:
+  #         requests: {cpu: 500m, memory: 1Gi}
+  #         limits: {cpu: 2, memory: 4Gi}
+  profiles: {}
+
+  # Точные пулы (static): канонический ключ пула → адрес исполнителя.
+  # Ключ должен совпадать с тем, что строит control plane
+  # (`instance:exec:default`, `project:<id>:exec:default`, …).
+  staticPools: {}
+
+  # Kubernetes-провайдер (действует при provider: kubernetes).
+  kubernetes:
+    # PVC с рабочими каталогами проектов — **обязателен**. Под пула монтирует
+    # его с `subPath` = каталог проекта (PROP-135, `workspaceSubPath`).
+    # Должен совпадать с общим томом control plane (`executor.workspace.*`).
+    workspacePvc: ""
+    # Точка монтирования PVC внутри пода пула.
+    workspaceMount: /var/synth/data/workspaces
+    # ServiceAccount подов пулов (без прав на API; пусто — дефолтный SA).
+    serviceAccount: ""
+    # imagePullSecret'и подов пулов (имена в namespace релиза).
+    imagePullSecrets: []
+    # Адрес API Kubernetes (для in-cluster — дефолт).
+    apiServer: https://kubernetes.default.svc
+    # Ожидание Running/Ready пода пула и период опроса.
+    startTimeoutMs: 120000
+    pollIntervalMs: 1000
+    # Порт исполнителя в поде пула.
+    executorPort: 5100
+    # Grace-период удаления пода пула, с.
+    terminationGraceSeconds: 30
+
+  # Жизненный цикл пулов (env SYNTH_PROVISIONER_*_TIMEOUT_MS/_MAX_POOLS).
+  # Idle-таймаут проектного/инстансного пула — 15 мин.
+  idleTimeoutMs: 900000
+  # Idle-таймаут сессионного пула — 5 мин.
+  sessionIdleTimeoutMs: 300000
+  # Предельное время жизни пула — 12 ч.
+  maxLifetimeMs: 43200000
+  # Пауза между drain и release.
+  drainGraceMs: 30000
+  # Лимит живых пулов (сверх — 429 от provisioner'а).
+  maxPools: 50
+  # Период уборщика простаивающих пулов.
+  reaperIntervalMs: 30000
+
+  # Таймаут обращения backend'а к provisioner'у, мс (env
+  # SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS; отдельно от таймаута exec-вызова).
+  timeoutMs: 10000
+
+  # Provisioner — лёгкий процесс: пулы он не исполняет, только создаёт объекты.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+  # Изоляция процесса (PROP-137): non-root uid 1000, без capabilities,
+  # корневая ФС только на чтение (provisioner ничего не пишет на диск).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 30
+    readiness:
+      path: /health
+      initialDelaySeconds: 3
+      periodSeconds: 10
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  networkPolicy:
+    # NetworkPolicy provisioner'а: ingress — только от backend-подов, egress —
+    # DNS (+ API Kubernetes при provider: kubernetes).
+    # ⚠️ Для provider: kubernetes политика требует `apiServerCidrs`: выбрать
+    # API по DNS-имени NetworkPolicy не умеет, без CIDR'ов рендер падает.
+    enabled: false
+    # CIDR'ы API-сервера (Service CIDR кластера или IP/host-CIDR API), порт 443.
+    apiServerCidrs: []
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Доверие TLS/CA исходящих соединений Synth (ADR-099, конфиг `security.tls`).
 # Пусто (дефолт) → системное доверие Node; манифесты не меняются.
 #
