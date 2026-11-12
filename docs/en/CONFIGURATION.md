@@ -1492,7 +1492,7 @@ de-identified string. For `sandbox_exec` the command is `commands.join(" && ")`.
 
 Read — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
 `requireAuth`); metrics — `synth_command_audit_*` (see `docs/OBSERVABILITY.md`).
-The external command checker is a separate slice (136b, not implemented).
+Command policy checker is enforced **on the executor** before spawn (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, `http-json`/`opa` contracts, fail modes and cache — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Control-plane mirror and verdict audit — 136b-2.
 
 ### Tool policies (`tools.policy` / `mcp.policy`)
 

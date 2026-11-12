@@ -68,12 +68,33 @@ export {
   EXECUTOR_ENV,
   EXECUTOR_DEFAULTS,
   resolveExecutorConfig,
+  resolveCommandPolicyConfig,
   resolveTlsCaFile,
   parseMcpServerSpecs,
   scrubExecutorToken,
   scrubExecutorMcpServers,
 } from './config.js';
-export type { ExecutorConfig } from './config.js';
+export type {
+  CommandPolicyConfig,
+  CommandPolicyFailMode,
+  CommandPolicyProviderName,
+  ExecutorConfig,
+} from './config.js';
+
+// Внешний чекер команд (PROP-136b).
+export {
+  createCommandPolicyGuard,
+  commandPolicyCommandText,
+  COMMAND_POLICY_CACHE_MAX_ENTRIES,
+  COMMAND_POLICY_UNAVAILABLE_REASON,
+  COMMAND_POLICY_UNAVAILABLE_OPEN_REASON,
+} from './command-policy.js';
+export type {
+  CommandPolicyGuard,
+  CommandPolicyGuardDeps,
+  CommandPolicyInput,
+  CommandPolicyVerdict,
+} from './command-policy.js';
 
 // Аутентификация.
 export { AUTH_HEADER, BEARER_PREFIX, extractBearerToken, isAuthorized, timingSafeEqualStrings } from './auth.js';

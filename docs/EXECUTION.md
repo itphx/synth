@@ -238,8 +238,8 @@ session:ses_1:sandbox:default
 пула выдаёт provisioner) — проверка режима на старте этого не требует.
 
 **Остаток PROP-135:** **браузерный класс** пулов и MCP динамического пула (слайс 5b), UI/admin-API
-выбора профиля пулов (6b), внешний чекер команд (PROP-136 Ф2 / слайс 136b; аудит исполнений сделан —
-§9.1). `sandbox_exec` — сделан
+выбора профиля пулов (6b), зеркальная проверка внешнего чекера в control plane и запись вердикта в
+аудит (PROP-136b-2; проверка на исполнителе — §9.2, аудит исполнений — §9.1). `sandbox_exec` — сделан
 (слайс 5a, см. ниже); binding профиля — Ф6a (см. выше). Матрица «что уезжает в
 исполнитель» (§ ниже) на Ф4b-1 не меняется.
 
@@ -253,7 +253,8 @@ session:ses_1:sandbox:default
 best-effort (остаток). Границы: группа прав `shell`, plan-режим блокирует целиком, shell-guard/
 protected-paths `execute_shell` **не применяются** (команда идёт в другой образ/пул), containment
 `cwd` — лексический (реальный — на исполнителе). Аудит исполнений песочного профиля — PROP-136a
-(§9.1, общий журнал control plane); внешний чекер команд — 136b (**не реализован**).
+(§9.1, общий журнал control plane); внешний чекер команд — 136b (проверка на исполнителе — §9.2,
+зеркало в control plane — остаток 136b-2).
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта
@@ -1199,8 +1200,58 @@ UX, а не граница безопасности. Поэтому вместо
   ([OBSERVABILITY.md](./OBSERVABILITY.md) §«Аудит исполнений shell»).
 - **Различие топологий нет:** журнал ведёт control plane — и в `inline`, и в `remote` (команда
   исполняется на исполнителе, факт запуска и результат известны control plane).
-- **Внешний чекер команд (136b) не реализован** — отдельный слайс (PROP-136 Ф2): проверка
-  политики до `spawn` на исполнителе + зеркально в control plane.
+- **Внешний чекер команд (136b)** — реализована **проверка на исполнителе** (слайс 136b-1, §9.2);
+  зеркальная проверка в control plane и запись вердикта в аудит — остаток 136b-2.
+
+### 9.2. Внешний чекер команд (PROP-136b)
+
+Shell считается произвольным кодом, поэтому решение `allow`/`deny` может принимать **внешняя
+политика**. Точка принуждения — **исполнитель**: проверка идёт синхронно **до `spawn`** (и до
+подготовки секретов вызова) — единственное место, где команда реально запускается. `ask` чекер
+не возвращает: человеческое подтверждение остаётся в permission-слое (ADR-029). Чекер судит
+**только по тексту команды** и не видит ФС, сеть и окружение — это ограничение, а не защита.
+
+- **Область:** синхронный `POST /exec` и фоновый `POST /exec/spawn` (в фоне — до создания
+  процесса и журналов).
+- **Порядок:** containment `cwd` → лимит (команд/фоновых процессов) → чекер → секреты → запуск.
+  Отказ политики → `403` с причиной `policy_denied` и кодом `EPOLICY`; команда **не запускается**.
+- **Причина на проводе:** `policy_denied` — причина **порта** core (`ExecutionError.reason`), а не
+  `spawn_failed`: клиент переносит её как есть, а вызывающий отличает решение политики от сбоя
+  исполнения. Текст отказа (`reason` политики) видит модель.
+- **Контракт `http-json`:**
+  `POST {url}/v1/check` `{ command, cwd, timeout_ms, background }` →
+  `{ action: "allow" | "deny", reason?, rule_id?, ttl_ms? }`; `Authorization: Bearer <token>`,
+  если задан файл токена.
+- **Контракт `opa`:** `POST {url}{opaPath}` (по умолчанию `/v1/data/synth/exec/decision`)
+  `{ input: { command, cwd, timeout_ms, background } }` →
+  `{ result: { allow: boolean, reason?, rule_id? } }`.
+- **Текст команды:** shell-форма — строка как есть; `argv` — `file` + аргументы через пробел.
+- **Ошибки и `failMode`:** таймаут (обязателен, по умолчанию 2 с), сбой сети, не-2xx и
+  невалидный ответ — «чекер недоступен»: `closed` (дефолт) → `deny` с причиной
+  `command policy unavailable`, `open` → `allow` с причиной `command policy unavailable (fail-open)`
+  и предупреждением в лог. Недоступность **не кэшируется**.
+- **Кэш:** ключ `sha256(command + "\0" + cwd + "\0" + background)`, TTL — `ttl_ms` ответа
+  (приоритетнее) либо `cacheTtlMs` конфига; `deny` кэшируется наравне с `allow`, кэшированный
+  ответ помечается `cached: true`; `cacheTtlMs: 0` — кэш выключен.
+- **Токен:** только файл (`SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE`) — читается при старте,
+  живёт в памяти guard'а; в `process.env`/конфиге значения нет, в логи и тексты ошибок оно не
+  попадает. Заданный, но нечитаемый файл — **ошибка старта** (fail-closed).
+- **Метрики:** `synth_executor_command_policy_total{outcome,provider}` (`allow`/`deny`/`unavailable`)
+  и `synth_executor_command_policy_seconds{provider}` — на исполнителе.
+- **Env исполнителя** (у воркера нет `config.yaml`, поэтому только env):
+
+| Переменная | Дефолт | Смысл |
+|---|---|---|
+| `SYNTH_EXECUTOR_COMMAND_POLICY_PROVIDER` | `off` | `off` \| `http` \| `opa`; `off` — проверки нет |
+| `SYNTH_EXECUTOR_COMMAND_POLICY_URL` | — | адрес чекера (обязателен при `http`/`opa`, иначе fail-closed старт) |
+| `SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE` | — | файл bearer-токена; пусто — без авторизации |
+| `SYNTH_EXECUTOR_COMMAND_POLICY_FAIL_MODE` | `closed` | `closed` \| `open` |
+| `SYNTH_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS` | `2000` | таймаут запроса к чекеру |
+| `SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS` | `60000` | TTL кэша вердиктов (`0` — без кэша) |
+| `SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH` | `/v1/data/synth/exec/decision` | путь OPA-решения |
+
+**Остаток (136b-2):** зеркальная проверка в control plane (ранний отказ и UX) и запись вердикта
+в аудит исполнений (связь `execution_id` с `decision`/`decidedBy: "policy"`).
 
 
 ---

@@ -51,6 +51,7 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
 import type { BackgroundProcessStatus, ExecutorErrorReason } from './protocol.js';
+import { commandPolicyCommandText, type CommandPolicyGuard } from './command-policy.js';
 import { materializeSecrets } from './secrets.js';
 import { resolveContainedCwd } from './workspace.js';
 
@@ -212,6 +213,11 @@ export interface BackgroundExecServiceOptions {
   maxLogBytes?: number;
   /** Каталог журналов (по умолчанию — `<tmp>/synth-exec-bg`). */
   logDir?: string;
+  /**
+   * Внешний чекер команд (PROP-136b): `allow`/`deny` **до** `spawn`.
+   * Не задан (или `off`) — проверки нет, поведение прежнее.
+   */
+  policyGuard?: CommandPolicyGuard;
   /** Источник времени (для тестов). */
   now?: () => number;
 }
@@ -330,6 +336,7 @@ export class BackgroundExecService {
   private readonly _maxLogBytes: number;
   private readonly _logDir: string;
   private readonly _now: () => number;
+  private readonly _policyGuard: CommandPolicyGuard | undefined;
   private readonly _entries = new Map<string, BackgroundEntry>();
   /** Зарезервированные, но ещё не зарегистрированные слоты (гонка spawn). */
   private _reserved = 0;
@@ -342,6 +349,7 @@ export class BackgroundExecService {
     this._maxLogBytes = Math.max(1, opts.maxLogBytes ?? DEFAULT_BACKGROUND_MAX_LOG_BYTES);
     this._logDir = opts.logDir ?? DEFAULT_BACKGROUND_LOG_DIR;
     this._now = opts.now ?? ((): number => Date.now());
+    this._policyGuard = opts.policyGuard;
     this._pruneTimer = setInterval(() => {
       void this.prune().catch(() => undefined);
     }, BACKGROUND_PRUNE_INTERVAL_MS);
@@ -368,10 +376,10 @@ export class BackgroundExecService {
   /**
    * Запустить фоновый процесс.
    *
-   * Порядок: containment `cwd` → лимит живых процессов → очистка реестра →
-   * запуск. Отказ возвращается **результатом**, а не исключением: причины
-   * штатные (`cwd` вне workspace, лимит процессов) и HTTP-слой отдаёт их
-   * соответствующим кодом.
+   * Порядок: containment `cwd` → лимит живых процессов → внешний чекер команд
+   * (PROP-136b) → очистка реестра → запуск. Отказ возвращается **результатом**,
+   * а не исключением: причины штатные (`cwd` вне workspace, лимит процессов,
+   * запрет политики) и HTTP-слой отдаёт их соответствующим кодом.
    */
   async spawn(input: BackgroundSpawnInput): Promise<BackgroundSpawnOutcome> {
     if (this._disposed) {
@@ -401,6 +409,26 @@ export class BackgroundExecService {
         message: `превышен лимит фоновых процессов исполнителя (${this._maxProcesses})`,
         code: 'ELIMIT',
       };
+    }
+
+    // PROP-136b: внешний чекер команд — **до** `spawn` и до подготовки
+    // материала секретов: запрещённый процесс не должен ни стартовать, ни
+    // оставлять после себя временный ключ/агент.
+    if (this._policyGuard) {
+      const verdict = await this._policyGuard.check({
+        command: commandPolicyCommandText(input.command),
+        cwd: cwd.path,
+        background: true,
+        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      });
+      if (verdict.action === 'deny') {
+        return {
+          ok: false,
+          reason: 'policy_denied',
+          message: verdict.reason ?? 'command denied by policy',
+          code: 'EPOLICY',
+        };
+      }
     }
 
     // Слот резервируем **синхронно**: между проверкой и регистрацией есть

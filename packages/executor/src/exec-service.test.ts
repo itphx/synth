@@ -10,10 +10,12 @@
  * исполнителя материала быть не должно.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ExecutionPort } from '@itphx/synth-core';
+import { type CommandPolicyGuard } from './command-policy.js';
 import { ExecService } from './exec-service.js';
 
 const CA_FILE = '/etc/synth/tls/ca.pem';
@@ -177,5 +179,110 @@ describe('исполнитель: потолок таймаута final', () => 
     });
     expect(service.timeoutLimitMs).toBe(600_000);
     expect(service.outputLimitBytes).toBe(32 * 1024 * 1024);
+  });
+});
+
+/**
+ * PROP-136b: принуждение внешнего чекера команд.
+ *
+ * Проверка идёт **после** containment'а и лимита, но **до** подготовки
+ * секретов и запуска: отказ политики означает, что команда не исполняется
+ * вовсе (порт исполнения не вызывается).
+ */
+describe('исполнитель: внешний чекер команд (PROP-136b)', () => {
+  let workspace: string;
+
+  beforeEach(async () => {
+    workspace = await realpath(await mkdtemp(join(tmpdir(), 'synth-exec-policy-')));
+  });
+
+  afterEach(async () => {
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  /** Порт-заглушка: фиксирует вызов, ничего не исполняет. */
+  function fakePort(stdout = 'executed'): {
+    port: ExecutionPort;
+    execute: ReturnType<typeof vi.fn>;
+  } {
+    const execute = vi.fn(async () => ({
+      stdout,
+      stderr: '',
+      exitCode: 0,
+      truncated: false,
+      durationMs: 1,
+    }));
+    return { port: { execute } as unknown as ExecutionPort, execute };
+  }
+
+  function makeService(policyGuard?: CommandPolicyGuard, port?: ExecutionPort): ExecService {
+    return new ExecService({
+      workspaceRoot: workspace,
+      maxConcurrency: 2,
+      maxTimeoutMs: 10_000,
+      maxOutputBytes: 1024 * 1024,
+      ...(port ? { executionPort: port } : {}),
+      ...(policyGuard ? { policyGuard } : {}),
+    });
+  }
+
+  it('deny — 403 policy_denied, команда не запускается', async () => {
+    const { port, execute } = fakePort();
+    const guard: CommandPolicyGuard = {
+      provider: 'http',
+      check: async () => ({ action: 'deny', reason: 'команда запрещена политикой' }),
+    };
+    const service = makeService(guard, port);
+    const outcome = await service.execute({ command: { kind: 'shell', command: 'rm -rf /' } });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.status).toBe(403);
+    expect(outcome.error.reason).toBe('policy_denied');
+    expect(outcome.error.code).toBe('EPOLICY');
+    expect(outcome.error.message).toBe('команда запрещена политикой');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('deny без reason — дефолтный текст отказа', async () => {
+    const { port } = fakePort();
+    const guard: CommandPolicyGuard = {
+      provider: 'opa',
+      check: async () => ({ action: 'deny' }),
+    };
+    const service = makeService(guard, port);
+    const outcome = await service.execute({ command: { kind: 'shell', command: 'ls' } });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error.reason).toBe('policy_denied');
+    expect(outcome.error.message).toBe('command denied by policy');
+  });
+
+  it('allow — команда исполняется, чекер видит текст и cwd', async () => {
+    const { port, execute } = fakePort();
+    const seen: Array<{ command: string; cwd: string }> = [];
+    const guard: CommandPolicyGuard = {
+      provider: 'http',
+      check: async (input) => {
+        seen.push({ command: input.command, cwd: input.cwd });
+        return { action: 'allow' };
+      },
+    };
+    const service = makeService(guard, port);
+    const outcome = await service.execute({
+      command: { kind: 'argv', file: 'git', args: ['status', '--short'] },
+    });
+    expect(outcome.ok).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([{ command: 'git status --short', cwd: workspace }]);
+  });
+
+  it('guard не задан — прежнее поведение (проверки нет)', async () => {
+    const service = makeService(undefined, undefined);
+    const outcome = await service.execute({
+      command: { kind: 'shell', command: 'printf ok' },
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.result.stdout).toBe('ok');
   });
 });

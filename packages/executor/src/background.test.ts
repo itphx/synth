@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { access, mkdtemp, realpath, rm, stat } from 'node:fs/promises';
+import { access, mkdtemp, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -7,6 +7,7 @@ import {
   type BackgroundProcessRecord,
   type BackgroundExecServiceOptions,
 } from './background.js';
+import type { CommandPolicyGuard } from './command-policy.js';
 
 // Фикстура: PEM собирается в рантайме, чтобы в исходниках не было литерала
 // заголовка приватного ключа (secret-scan); тело — заведомая заглушка.
@@ -420,5 +421,48 @@ describe('фоновые процессы: журнал и очистка рее
       svc.stop(running.processId);
       await waitTerminal(svc, running.processId);
     }
+  });
+});
+
+/**
+ * PROP-136b: внешний чекер команд в фоновом запуске.
+ *
+ * Проверка идёт до `spawn` и до подготовки материала секретов: запрещённый
+ * процесс не создаётся и журналов не оставляет.
+ */
+describe('фоновые процессы: внешний чекер команд (PROP-136b)', () => {
+  it('deny — отказ policy_denied, процесс и журналы не создаются', async () => {
+    const seen: Array<{ command: string; cwd: string; background?: boolean }> = [];
+    const guard: CommandPolicyGuard = {
+      provider: 'http',
+      check: async (input) => {
+        seen.push({ command: input.command, cwd: input.cwd, background: input.background });
+        return { action: 'deny', reason: 'фоновый запуск запрещён' };
+      },
+    };
+    const svc = makeService({ policyGuard: guard });
+    const outcome = await svc.spawn({ command: { kind: 'shell', command: 'npm run watch' } });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.reason).toBe('policy_denied');
+    expect(outcome.code).toBe('EPOLICY');
+    expect(outcome.message).toBe('фоновый запуск запрещён');
+    expect(svc.runningCount).toBe(0);
+    expect(await readdir(logDir)).toEqual([]);
+    expect(seen).toEqual([{ command: 'npm run watch', cwd: workspace, background: true }]);
+  });
+
+  it('allow — процесс запускается и завершается', async () => {
+    const guard: CommandPolicyGuard = {
+      provider: 'opa',
+      check: async () => ({ action: 'allow' }),
+    };
+    const svc = makeService({ policyGuard: guard });
+    const outcome = await svc.spawn({ command: { kind: 'shell', command: 'printf hi' } });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const record = await waitTerminal(svc, outcome.processId);
+    expect(record.status).toBe('exited');
+    expect(record.exitCode).toBe(0);
   });
 });

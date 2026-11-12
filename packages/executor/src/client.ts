@@ -306,7 +306,8 @@ async function buildExecutionError(init: {
     | 'spawn_failed'
     | 'nonzero_exit'
     | 'max_output'
-    | 'dependency_missing';
+    | 'dependency_missing'
+    | 'policy_denied';
   message: string;
   code?: string | number | null;
   stdout?: string;
@@ -326,6 +327,9 @@ const PROTOCOL_REASON_CODE: Record<string, string> = {
   cwd_outside_workspace: 'EWORKSPACE',
   unauthorized: 'EAUTH',
   too_many_requests: 'ELIMIT',
+  // PROP-136b: отказ внешнего чекера команд — отдельный код, чтобы вызывающий
+  // отличал политику от прочих протокольных отказов.
+  policy_denied: 'EPOLICY',
   internal_error: 'EINTERNAL',
 };
 

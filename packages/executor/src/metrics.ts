@@ -11,7 +11,11 @@
  * - `synth_executor_inflight` — gauge: выполняющихся сейчас команд;
  * - `synth_executor_exec_duration_seconds` — histogram: длительность исполнения;
  * - `synth_executor_mcp_servers{status}` — gauge: MCP-серверы по состоянию
- *   (`idle`/`up`/`down`).
+ *   (`idle`/`up`/`down`);
+ * - `synth_executor_command_policy_total{outcome,provider}` — counter: решения
+ *   внешнего чекера команд (`allow`/`deny`/`unavailable`);
+ * - `synth_executor_command_policy_seconds{provider}` — histogram: длительность
+ *   проверки политики (PROP-136b).
  *
  * ## Контракт ADR-094
  *
@@ -43,6 +47,22 @@ export type ExecutorCommandOutcome = 'ok' | 'error' | 'timeout' | 'cancelled';
 /** Состояние MCP-сервера у исполнителя (лейбл `status`). */
 export type ExecutorMcpStatus = 'idle' | 'up' | 'down';
 
+/** Исход проверки внешнего чекера команд (лейбл `outcome`, PROP-136b). */
+export type CommandPolicyOutcome = 'allow' | 'deny' | 'unavailable';
+
+/** Провайдер внешнего чекера команд (лейбл `provider`, PROP-136b). */
+export type CommandPolicyProvider = 'http' | 'opa';
+
+/**
+ * Корзины длительности проверки политики (секунды).
+ *
+ * Политика вызывается **до** запуска каждой команды, поэтому её задержка —
+ * часть задержки тула: сетка от миллисекунд до нескольких секунд.
+ */
+export const COMMAND_POLICY_DURATION_BUCKETS: readonly number[] = [
+  0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5,
+];
+
 /** Причина неудачи порта → исход команды (ADR-094). */
 export type ExecutorFailureReason =
   | 'timeout'
@@ -67,6 +87,26 @@ export const EXECUTOR_EXEC_DURATION_BUCKETS: readonly number[] = [
 
 /** Состояния MCP-серверов — закрытый набор (лейбл `status`). */
 const MCP_STATUSES: readonly ExecutorMcpStatus[] = ['idle', 'up', 'down'];
+
+/** Исходы проверки политики — закрытый набор (лейбл `outcome`). */
+const COMMAND_POLICY_OUTCOMES: readonly CommandPolicyOutcome[] = ['allow', 'deny', 'unavailable'];
+
+/** Провайдеры чекера политики — закрытый набор (лейбл `provider`). */
+const COMMAND_POLICY_PROVIDERS: readonly CommandPolicyProvider[] = ['http', 'opa'];
+
+/** Приведение исхода проверки политики к конечному набору (неизвестное → `unavailable`). */
+export function normalizeCommandPolicyOutcome(value: string | undefined): CommandPolicyOutcome {
+  if (!value) return 'unavailable';
+  return (COMMAND_POLICY_OUTCOMES as readonly string[]).includes(value)
+    ? (value as CommandPolicyOutcome)
+    : 'unavailable';
+}
+
+/** Приведение провайдера политики к конечному набору (неизвестное → `http`). */
+export function normalizeCommandPolicyProvider(value: string | undefined): CommandPolicyProvider {
+  if (value === 'opa') return 'opa';
+  return COMMAND_POLICY_PROVIDERS[0] as CommandPolicyProvider;
+}
 
 /** Исходы команд — закрытый набор (лейбл `outcome`). */
 const OUTCOMES: readonly string[] = ['ok', 'error', 'timeout', 'cancelled'];
@@ -108,6 +148,8 @@ export class ExecutorMetrics {
   private readonly _inflight: GaugeMetric;
   private readonly _duration: HistogramMetric;
   private readonly _mcpServers: GaugeMetric;
+  private readonly _policyTotal: CounterMetric;
+  private readonly _policyDuration: HistogramMetric;
   private _mcpSource: ExecutorMcpStatusSource | undefined;
   private _inflightCount = 0;
 
@@ -132,6 +174,20 @@ export class ExecutorMetrics {
       'synth_executor_mcp_servers',
       'Number of MCP servers hosted by the executor, by status.',
       ['status'],
+    );
+    // PROP-136b: решения внешнего чекера команд (до запуска команды) и его
+    // задержка. `provider` — `http`/`opa` (закрытый набор), `outcome` —
+    // `allow`/`deny`/`unavailable`; иных значений в лейблах быть не может.
+    this._policyTotal = this.registry.counter(
+      'synth_executor_command_policy_total',
+      'Total number of command policy checks on the executor, by outcome and provider.',
+      ['outcome', 'provider'],
+    );
+    this._policyDuration = this.registry.histogram(
+      'synth_executor_command_policy_seconds',
+      'Duration of command policy checks in seconds, by provider.',
+      ['provider'],
+      COMMAND_POLICY_DURATION_BUCKETS,
     );
     this._mcpSource = opts.mcpServers;
     // Состояние MCP-серверов пересчитывается **перед рендером**: список
@@ -177,6 +233,40 @@ export class ExecutorMetrics {
   /** Отрендерить метрики (текст exposition 0.0.4). */
   render(): { text: string; series: number } {
     return this.registry.render();
+  }
+
+  /**
+   * Проверка внешнего чекера команд завершена (PROP-136b).
+   *
+   * Считаются **все** решения — включая взятые из кэша вердиктов, — поэтому
+   * счётчик отвечает на вопрос «сколько раз политика решала судьбу команды»,
+   * а не «сколько было сетевых вызовов».
+   *
+   * @param outcome `allow`/`deny` (недоступность чекера — `unavailable`)
+   * @param provider провайдер (`http`/`opa`)
+   */
+  commandPolicyChecked(outcome: string, provider: string): void {
+    try {
+      this._policyTotal.inc({
+        outcome: normalizeCommandPolicyOutcome(outcome),
+        provider: normalizeCommandPolicyProvider(provider),
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Длительность сетевой проверки политики (кэш-попадания не меряются). */
+  commandPolicyDuration(provider: string, durationMs: number): void {
+    try {
+      if (!Number.isFinite(durationMs) || durationMs < 0) return;
+      this._policyDuration.observe(
+        { provider: normalizeCommandPolicyProvider(provider) },
+        durationMs / 1000,
+      );
+    } catch {
+      // ignore
+    }
   }
 
   /**

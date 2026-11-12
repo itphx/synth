@@ -21,6 +21,13 @@
  * | `SYNTH_EXECUTOR_BACKGROUND_LOG_DIR` | нет | `<tmp>/synth-exec-bg` | каталог журналов фоновых процессов |
  * | `SYNTH_EXECUTOR_METRICS_ENABLED` | нет | `false` | экспорт метрик исполнителя (`GET /metrics`) |
  * | `SYNTH_EXECUTOR_TLS_CA_FILE` | нет | — | файл CA доверия git (`http.sslCAInfo`); путь в окружении исполнителя |
+ * | `SYNTH_EXECUTOR_COMMAND_POLICY_PROVIDER` | нет | `off` | внешний чекер команд (PROP-136b): `off`\|`http`\|`opa` |
+ * | `SYNTH_EXECUTOR_COMMAND_POLICY_URL` | при `http`/`opa` | — | адрес чекера (`http(s)://…`), без завершающего слэша |
+ * | `SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE` | нет | — | файл bearer-токена чекера; пусто — без авторизации |
+ * | `SYNTH_EXECUTOR_COMMAND_POLICY_FAIL_MODE` | нет | `closed` | поведение при недоступном чекере: `closed`\|`open` |
+ * | `SYNTH_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS` | нет | `2000` | таймаут запроса к чекеру, мс (обязателен) |
+ * | `SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS` | нет | `60000` | TTL кэша вердиктов, мс (`0` — без кэша) |
+ * | `SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH` | нет | `/v1/data/synth/exec/decision` | путь OPA-решения при `provider: opa` |
  *
  * **Fail-closed**: без токена или без корня workspace процесс не стартует —
  * исполнитель без аутентификации или без границы рабочего каталога опаснее,
@@ -42,6 +49,13 @@
  * и утечёт в текст команды, который видит модель. Так же вычищается
  * `SYNTH_EXECUTOR_MCP_SERVERS` (в нём могут быть токены MCP-серверов) —
  * см. `scrubExecutorMcpServers`.
+ *
+ * **Внешний чекер команд (PROP-136b).** `SYNTH_EXECUTOR_COMMAND_POLICY_*` —
+ * конфигурация чекера, который решает `allow`/`deny` **до** запуска команды.
+ * Значение токена в env/конфиге не хранится: `..._TOKEN_FILE` — только путь,
+ * сам токен читает `createCommandPolicyGuard` при старте (`command-policy.ts`)
+ * и держит в памяти процесса; путь задан, но файл не читается — **ошибка
+ * старта** (fail-closed: иначе проверка молча шла бы без авторизации).
  */
 
 import { accessSync, constants } from 'node:fs';
@@ -63,6 +77,13 @@ export const EXECUTOR_ENV = {
   backgroundLogDir: 'SYNTH_EXECUTOR_BACKGROUND_LOG_DIR',
   metricsEnabled: 'SYNTH_EXECUTOR_METRICS_ENABLED',
   tlsCaFile: 'SYNTH_EXECUTOR_TLS_CA_FILE',
+  commandPolicyProvider: 'SYNTH_EXECUTOR_COMMAND_POLICY_PROVIDER',
+  commandPolicyUrl: 'SYNTH_EXECUTOR_COMMAND_POLICY_URL',
+  commandPolicyTokenFile: 'SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE',
+  commandPolicyFailMode: 'SYNTH_EXECUTOR_COMMAND_POLICY_FAIL_MODE',
+  commandPolicyTimeoutMs: 'SYNTH_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS',
+  commandPolicyCacheTtlMs: 'SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS',
+  commandPolicyOpaPath: 'SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH',
 } as const;
 
 /** Дефолты исполнителя. */
@@ -76,7 +97,43 @@ export const EXECUTOR_DEFAULTS = {
   backgroundLogMaxBytes: 10 * 1024 * 1024,
   /** ADR-094: метрики исполнителя выключены по умолчанию (`/metrics` → 404). */
   metricsEnabled: false,
+  /** PROP-136b: чекер команд по умолчанию выключен (enforcement'а нет). */
+  commandPolicyProvider: 'off',
+  /** PROP-136b: недоступен чекер — команда **не** исполняется (fail-closed). */
+  commandPolicyFailMode: 'closed',
+  commandPolicyTimeoutMs: 2_000,
+  commandPolicyCacheTtlMs: 60_000,
+  commandPolicyOpaPath: '/v1/data/synth/exec/decision',
 } as const;
+
+/** Провайдер внешнего чекера команд (PROP-136b). */
+export type CommandPolicyProviderName = 'off' | 'http' | 'opa';
+
+/** Поведение при недоступном чекере команд. */
+export type CommandPolicyFailMode = 'closed' | 'open';
+
+/**
+ * Конфигурация внешнего чекера команд (PROP-136b).
+ *
+ * Значение bearer-токена здесь **не** хранится: только путь к файлу
+ * (`tokenFile`); сам токен читает `createCommandPolicyGuard` при старте.
+ */
+export interface CommandPolicyConfig {
+  /** Провайдер: `off` — проверка не выполняется, guard не создаётся. */
+  provider: CommandPolicyProviderName;
+  /** Адрес чекера (обязателен при `http`/`opa`). */
+  url?: string;
+  /** Файл bearer-токена чекера (путь; необязателен). */
+  tokenFile?: string;
+  /** `closed` — недоступность чекера значит `deny`; `open` — `allow`. */
+  failMode: CommandPolicyFailMode;
+  /** Таймаут запроса к чекеру, мс. */
+  timeoutMs: number;
+  /** TTL кэша вердиктов, мс (`0` — без кэша). */
+  cacheTtlMs: number;
+  /** Путь OPA-решения (`provider: opa`). */
+  opaPath: string;
+}
 
 /** Эффективная конфигурация исполнителя. */
 export interface ExecutorConfig {
@@ -112,6 +169,11 @@ export interface ExecutorConfig {
    * Задан → исполнитель добавляет его в окружение вызова (ADR-077/ADR-099).
    */
   tlsCaFile?: string;
+  /**
+   * Внешний чекер команд (PROP-136b): `allow`/`deny` **до** запуска команды.
+   * `provider: 'off'` — проверка выключена.
+   */
+  commandPolicy: CommandPolicyConfig;
 }
 
 function requireEnvString(env: NodeJS.ProcessEnv, name: string): string {
@@ -189,6 +251,147 @@ export function resolveBooleanEnv(
 }
 
 /**
+ * Разбор строкового значения из закрытого набора (строгий).
+ *
+ * Невалидное **явное** значение — ошибка старта: опечатка в режиме чекера
+ * политик не должна молча превращаться в дефолт (`off` — «проверки нет»,
+ * `open` — «пропускать при сбое»), иначе оператор считал бы защиту включённой.
+ */
+function resolveChoiceEnv<T extends string>(
+  raw: string | undefined,
+  envName: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  if (raw === undefined) return fallback;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return fallback;
+  if ((allowed as readonly string[]).includes(trimmed)) return trimmed as T;
+  throw new Error(
+    `[executor] невалидное значение ${envName}="${raw}" — ожидается одно из: ${allowed.join(', ')}`,
+  );
+}
+
+/** Неотрицательное целое из env (0 допустим — «выключено»). */
+function resolveNonNegativeInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw.trim());
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(
+      `[executor] невалидное значение ${name}="${raw}" — ожидается целое число >= 0`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Проверить, что файл читается (fail-closed на старте).
+ *
+ * @param path путь (пустая строка — «не задан»)
+ * @param envName имя переменной (для понятного текста ошибки)
+ * @param purpose назначение файла (для текста ошибки; без значения)
+ */
+function requireReadableFile(path: string, envName: string, purpose: string): string {
+  try {
+    accessSync(path, constants.R_OK);
+  } catch {
+    throw new Error(
+      `[executor] ${envName}="${path}" — файл ${purpose} недоступен для чтения (исполнитель не стартует, fail-closed)`,
+    );
+  }
+  return path;
+}
+
+/**
+ * Разбор конфигурации внешнего чекера команд (PROP-136b).
+ *
+ * Правила:
+ *
+ * - `provider: off` — проверка выключена; прочие ключи игнорируются;
+ * - `http`/`opa` требуют **адрес** (`..._URL`): без него чекер некуда звать —
+ *   явная настройка провайдера без адреса опаснее выключенного чекера
+ *   (оператор считал бы, что политика применяется) ⇒ ошибка старта;
+ * - `failMode` — строго `closed`/`open` (дефолт `closed`: недоступность
+ *   чекера означает запрет);
+ * - таймаут обязателен (положительный), TTL кэша `0` — кэш выключен;
+ * - `tokenFile` — только путь: значение токена читает guard при старте,
+ *   в конфиг и env оно не попадает; нечитаемый файл — ошибка старта.
+ */
+export function resolveCommandPolicyConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): CommandPolicyConfig {
+  const provider = resolveChoiceEnv(
+    env[EXECUTOR_ENV.commandPolicyProvider],
+    EXECUTOR_ENV.commandPolicyProvider,
+    ['off', 'http', 'opa'] as const,
+    EXECUTOR_DEFAULTS.commandPolicyProvider,
+  );
+  const failMode = resolveChoiceEnv(
+    env[EXECUTOR_ENV.commandPolicyFailMode],
+    EXECUTOR_ENV.commandPolicyFailMode,
+    ['closed', 'open'] as const,
+    EXECUTOR_DEFAULTS.commandPolicyFailMode,
+  );
+  const timeoutMs = requirePositiveInt(
+    env,
+    EXECUTOR_ENV.commandPolicyTimeoutMs,
+    EXECUTOR_DEFAULTS.commandPolicyTimeoutMs,
+  );
+  const cacheTtlMs = resolveNonNegativeInt(
+    env,
+    EXECUTOR_ENV.commandPolicyCacheTtlMs,
+    EXECUTOR_DEFAULTS.commandPolicyCacheTtlMs,
+  );
+  const rawOpaPath =
+    env[EXECUTOR_ENV.commandPolicyOpaPath]?.trim() || EXECUTOR_DEFAULTS.commandPolicyOpaPath;
+  if (!rawOpaPath.startsWith('/')) {
+    throw new Error(
+      `[executor] невалидное значение ${EXECUTOR_ENV.commandPolicyOpaPath}="${rawOpaPath}" — путь должен начинаться с "/"`,
+    );
+  }
+  const config: CommandPolicyConfig = {
+    provider,
+    failMode,
+    timeoutMs,
+    cacheTtlMs,
+    opaPath: rawOpaPath,
+  };
+  if (provider === 'off') return config;
+
+  const rawUrl = env[EXECUTOR_ENV.commandPolicyUrl]?.trim();
+  if (rawUrl === undefined || rawUrl.length === 0) {
+    throw new Error(
+      `[executor] ${EXECUTOR_ENV.commandPolicyProvider}="${provider}" требует адрес чекера (${EXECUTOR_ENV.commandPolicyUrl}) — исполнитель не стартует (fail-closed)`,
+    );
+  }
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawUrl);
+  } catch {
+    throw new Error(
+      `[executor] невалидное значение ${EXECUTOR_ENV.commandPolicyUrl}="${rawUrl}" — ожидается http(s)-адрес`,
+    );
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    throw new Error(
+      `[executor] невалидное значение ${EXECUTOR_ENV.commandPolicyUrl}="${rawUrl}" — поддерживаются только http/https`,
+    );
+  }
+  config.url = rawUrl.replace(/\/+$/, '');
+
+  const tokenFile = env[EXECUTOR_ENV.commandPolicyTokenFile]?.trim();
+  if (tokenFile !== undefined && tokenFile.length > 0) {
+    config.tokenFile = requireReadableFile(
+      tokenFile,
+      EXECUTOR_ENV.commandPolicyTokenFile,
+      'токена чекера команд',
+    );
+  }
+  return config;
+}
+
+/**
  * Разбор конфигурации исполнителя из env.
  *
  * @throws Error при отсутствии обязательных переменных или невалидных значениях.
@@ -237,6 +440,8 @@ export function resolveExecutorConfig(env: NodeJS.ProcessEnv = process.env): Exe
     ),
     mcpServers: parseMcpServerSpecs(env[EXECUTOR_ENV.mcpServers], EXECUTOR_ENV.mcpServers),
     tlsCaFile: resolveTlsCaFile(env[EXECUTOR_ENV.tlsCaFile], EXECUTOR_ENV.tlsCaFile),
+    // PROP-136b: внешний чекер команд (до spawn). `off` — проверки нет.
+    commandPolicy: resolveCommandPolicyConfig(env),
   };
 }
 

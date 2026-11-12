@@ -35,7 +35,7 @@
  * `reason` — либо одна из причин порта (`timeout` | `aborted` | `spawn_failed` |
  * `nonzero_exit` | `max_output`), либо протокольная причина
  * (`invalid_request` | `cwd_outside_workspace` | `unauthorized` | `not_found` |
- * `too_many_requests` | `internal_error`).
+ * `too_many_requests` | `policy_denied` | `internal_error`).
  *
  * ## MCP-эндпоинты (протокол 2)
  *
@@ -219,6 +219,13 @@ export type ExecutorErrorReason =
   | 'payload_too_large'
   /** Превышен лимит одновременных команд. */
   | 'too_many_requests'
+  /**
+   * Внешний чекер команд запретил запуск (PROP-136b).
+   *
+   * Отдельная причина: команда **не запускалась вовсе** (отказ до `spawn`), и
+   * вызывающий должен отличать это от неудачи исполнения. HTTP-код — `403`.
+   */
+  | 'policy_denied'
   /** Прочие ошибки сервера. */
   | 'internal_error';
 
@@ -463,7 +470,8 @@ export function parseMcpCallRequestBody(
  * - `400` — некорректный запрос, `cwd` вне workspace, путь не каталог или
  *   не разрешается;
  * - `401` — нет/неверный токен;
- * - `403` — нет доступа к пути (FS-операция, протокол 7);
+ * - `403` — нет доступа к пути (FS-операция, протокол 7) либо запуск запрещён
+ *   внешним чекером команд (`policy_denied`, PROP-136b);
  * - `404` — запрошенный ресурс не найден (неизвестный MCP-сервер/инструмент,
  *   отсутствующий путь);
  * - `409` — цель уже существует (публикация байтов, протокол 7);
@@ -485,6 +493,8 @@ export const EXEC_ERROR_STATUS: Record<ExecutorErrorReason, ExecErrorStatus> = {
   exists: 409,
   payload_too_large: 413,
   too_many_requests: 429,
+  // PROP-136b: отказ внешнего чекера команд — команда не запускается.
+  policy_denied: 403,
   timeout: 500,
   aborted: 500,
   spawn_failed: 500,
@@ -500,6 +510,9 @@ export const PORT_FAILURE_REASONS = [
   'spawn_failed',
   'nonzero_exit',
   'max_output',
+  // PROP-136b: решение внешнего чекера — причина порта core (не `spawn_failed`),
+  // иначе отказ политики выглядел бы как сбой запуска.
+  'policy_denied',
 ] as const;
 
 export type PortFailureReason = (typeof PORT_FAILURE_REASONS)[number];

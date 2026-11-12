@@ -64,6 +64,7 @@ import {
   type BackgroundLogsOptions,
 } from './background.js';
 import { ExecService } from './exec-service.js';
+import type { CommandPolicyGuard } from './command-policy.js';
 import { ExecutorFsError, ExecutorFsService } from './fs-service.js';
 import type { ExecutorMetrics } from './metrics.js';
 import {
@@ -153,6 +154,11 @@ export interface ExecutorAppOptions {
    * Задан → в окружение вызова добавляется `http.sslCAInfo` (env-канал).
    */
   tlsCaFile?: string;
+  /**
+   * Внешний чекер команд (PROP-136b): `allow`/`deny` до запуска команды.
+   * Создаётся в `main.ts` из `commandPolicy` конфигурации; `off` → не создан.
+   */
+  policyGuard?: CommandPolicyGuard;
 }
 
 /** Дефолты лимитов исполнителя (совпадают с `EXECUTOR_DEFAULTS`). */
@@ -297,6 +303,7 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     ...(opts.executionPort ? { executionPort: opts.executionPort } : {}),
     ...(opts.tlsCaFile ? { tlsCaFile: opts.tlsCaFile } : {}),
     ...(opts.metrics ? { metrics: opts.metrics } : {}),
+    ...(opts.policyGuard ? { policyGuard: opts.policyGuard } : {}),
   });
   // Реестр фоновых процессов исполнителя (ADR-077, шаг 7c). Готовый сервис
   // передаётся из `startExecutorServer` — иначе он не смог бы остановить
@@ -308,6 +315,7 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       maxProcesses: opts.maxBackgroundProcesses ?? DEFAULT_MAX_BACKGROUND_PROCESSES,
       maxLogBytes: opts.backgroundLogMaxBytes ?? DEFAULT_BACKGROUND_MAX_LOG_BYTES,
       logDir: opts.backgroundLogDir ?? DEFAULT_BACKGROUND_LOG_DIR,
+      ...(opts.policyGuard ? { policyGuard: opts.policyGuard } : {}),
     });
   const startedAt = opts.startedAt ?? Date.now();
   const token = opts.token;
@@ -1082,6 +1090,7 @@ export async function startExecutorServer(opts: ExecutorServerOptions): Promise<
       maxProcesses: opts.maxBackgroundProcesses ?? DEFAULT_MAX_BACKGROUND_PROCESSES,
       maxLogBytes: opts.backgroundLogMaxBytes ?? DEFAULT_BACKGROUND_MAX_LOG_BYTES,
       logDir: opts.backgroundLogDir ?? DEFAULT_BACKGROUND_LOG_DIR,
+      ...(opts.policyGuard ? { policyGuard: opts.policyGuard } : {}),
     });
   const app = createExecutorApp({ ...opts, toolchain, mcpHost, backgroundService: background, ...(metrics ? { metrics } : {}) });
   const server = createExecutorHttpServer(app);

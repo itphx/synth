@@ -13,7 +13,9 @@
  *    MCP-серверов (`scrubExecutorMcpServers`) — иначе они попали бы в
  *    окружение дочерних процессов и в текст команды, который видит модель;
  * 3. поднимается HTTP-сервер (`startExecutorServer`), в лог уходят адрес и
- *    порт (токен — никогда);
+ *    порт (токен — никогда); до этого создаётся внешний чекер команд
+ *    (PROP-136b): `off` — guard не создаётся, `http`/`opa` — токен читается из
+ *    файла и живёт только в памяти guard'а;
  * 4. graceful shutdown по `SIGINT`/`SIGTERM`: сервер закрывается, фоновые
  *    процессы останавливаются (`SIGTERM` → `SIGKILL`), процесс завершается
  *    с кодом `0`.
@@ -27,6 +29,8 @@ import {
   scrubExecutorMcpServers,
   scrubExecutorToken,
 } from './config.js';
+import { createCommandPolicyGuard } from './command-policy.js';
+import type { ExecutorMetrics } from './metrics.js';
 import { sweepStaleSshDirs, startSshSweep } from './secrets.js';
 import { startExecutorServer } from './server.js';
 
@@ -57,6 +61,18 @@ export async function main(): Promise<void> {
   // Стартовая уборка уже выполнена выше — таймер начинает с periodic-тика.
   const stopSshSweep = await startSshSweep({ immediate: false }).catch(() => (): void => {});
 
+  // ADR-094: реестр метрик создаётся **здесь**, а не в сервере, только когда
+  // метрики включены: тот же экземпляр нужен чекеру команд (PROP-136b) и
+  // серверу; выключенные метрики по-прежнему не тянут реестр в процесс.
+  const metrics: ExecutorMetrics | undefined = config.metricsEnabled
+    ? (await import('./metrics.js')).createExecutorMetrics()
+    : undefined;
+
+  // PROP-136b: внешний чекер команд (enforcement до spawn). `off` → `null`.
+  // Токен читается из файла здесь (при старте) и живёт только в guard'е;
+  // нечитаемый файл — ошибка старта (fail-closed).
+  const policyGuard = createCommandPolicyGuard(config, metrics ? { metrics } : {});
+
   const handle = await startExecutorServer({
     token: config.token,
     workspaceRoot: config.workspaceRoot,
@@ -67,6 +83,8 @@ export async function main(): Promise<void> {
     backgroundLogMaxBytes: config.backgroundLogMaxBytes,
     ...(config.backgroundLogDir ? { backgroundLogDir: config.backgroundLogDir } : {}),
     ...(config.tlsCaFile ? { tlsCaFile: config.tlsCaFile } : {}),
+    ...(policyGuard ? { policyGuard } : {}),
+    ...(metrics ? { metrics } : {}),
     mcpServers: config.mcpServers,
     host: config.host,
     port: config.port,
@@ -82,6 +100,11 @@ export async function main(): Promise<void> {
       `MCP-серверов: ${config.mcpServers.length}; ` +
       `метрики: ${config.metricsEnabled ? 'включены' : 'выключены'}; ` +
       `CA доверия: ${config.tlsCaFile ? 'задан' : 'не задан'}; ` +
+      `чекер команд: ${
+        config.commandPolicy.provider === 'off'
+          ? 'выключен'
+          : `${config.commandPolicy.provider} (failMode: ${config.commandPolicy.failMode})`
+      }; ` +
       `удалено старых каталогов SSH: ${swept})`,
   );
 

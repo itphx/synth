@@ -26,6 +26,7 @@ import {
   type ExecutorErrorReason,
   isPortFailureReason,
 } from './protocol.js';
+import { commandPolicyCommandText, type CommandPolicyGuard } from './command-policy.js';
 import { outcomeFromFailureReason, type ExecutorMetrics } from './metrics.js';
 import { materializeSecrets } from './secrets.js';
 import { resolveContainedCwd } from './workspace.js';
@@ -58,6 +59,11 @@ export interface ExecServiceOptions {
    * исполнителе (свои `/metrics`). Не заданы — счётчики не ведутся.
    */
   metrics?: ExecutorMetrics;
+  /**
+   * Внешний чекер команд (PROP-136b): `allow`/`deny` **до** запуска команды.
+   * Не задан (или `off`) — проверки нет, поведение прежнее.
+   */
+  policyGuard?: CommandPolicyGuard;
 }
 
 /** Ленивая загрузка inline-порта core (runtime-импорт — точечный). */
@@ -104,6 +110,7 @@ export class ExecService {
   private readonly _executionPort: ExecutionPort | undefined;
   private readonly _tlsCaFile: string | undefined;
   private readonly _metrics: ExecutorMetrics | undefined;
+  private readonly _policyGuard: CommandPolicyGuard | undefined;
   private _active = 0;
 
   constructor(opts: ExecServiceOptions) {
@@ -114,6 +121,7 @@ export class ExecService {
     this._executionPort = opts.executionPort;
     this._tlsCaFile = opts.tlsCaFile;
     this._metrics = opts.metrics;
+    this._policyGuard = opts.policyGuard;
   }
 
   /** Число выполняющихся сейчас команд. */
@@ -164,6 +172,14 @@ export class ExecService {
         ),
       };
     }
+
+    // PROP-136b: внешний чекер команд — **до** подготовки секретов и запуска.
+    // Отказ политики означает, что команда не исполняется вовсе (никаких
+    // побочных эффектов: ни файлов секретов, ни процесса).
+    const policyDenied = await this._checkPolicy(req, cwd.path, {
+      timeoutMs: Math.min(req.timeoutMs ?? this._maxTimeoutMs, this._maxTimeoutMs),
+    });
+    if (policyDenied !== undefined) return policyDenied;
 
     // Секреты вызова (протокол 4) материализуются **до** запуска команды и
     // удаляются в `finally` — при успехе, ошибке, таймауте и отмене.
@@ -244,6 +260,38 @@ export class ExecService {
       this._active -= 1;
       await materialized?.cleanup().catch(() => {});
     }
+  }
+
+  /**
+   * Проверка команды внешним чекером (PROP-136b).
+   *
+   * `undefined` — запуск разрешён (или чекер выключен); иначе — готовый отказ
+   * `403 policy_denied` с текстом политики (его видит модель).
+   *
+   * Текст команды для политики — та же форма, что уходит на исполнение:
+   * shell-строка как есть, `argv` — через пробел (`commandPolicyCommandText`).
+   */
+  private async _checkPolicy(
+    req: ExecRequestBody,
+    cwd: string,
+    extra: { timeoutMs?: number; background?: boolean } = {},
+  ): Promise<ExecOutcome | undefined> {
+    const guard = this._policyGuard;
+    if (!guard) return undefined;
+    const verdict = await guard.check({
+      command: commandPolicyCommandText(req.command),
+      cwd,
+      ...(extra.timeoutMs !== undefined ? { timeoutMs: extra.timeoutMs } : {}),
+      ...(extra.background !== undefined ? { background: extra.background } : {}),
+    });
+    if (verdict.action !== 'deny') return undefined;
+    return {
+      ok: false,
+      status: 403,
+      error: toErrorBody('policy_denied', verdict.reason ?? 'command denied by policy', {
+        code: 'EPOLICY',
+      }),
+    };
   }
 
   /**

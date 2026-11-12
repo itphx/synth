@@ -1867,3 +1867,35 @@ describe('клиент удалённого порта: FS-операции', ()
     await expect(port.fs!.hash('/tmp/x')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
   });
 });
+
+/**
+ * PROP-136b: отказ внешнего чекера команд на проводе.
+ *
+ * Причина `policy_denied` — **причина порта core**, а не `spawn_failed`:
+ * клиент переносит её как есть (команда не запускалась), а код `EPOLICY`
+ * отличает решение политики от прочих протокольных отказов.
+ */
+describe('клиент удалённого порта: отказ внешнего чекера команд (PROP-136b)', () => {
+  it('wire policy_denied → ExecutionError reason policy_denied', async () => {
+    const handle = await startExecutorServer({
+      token: TOKEN,
+      workspaceRoot: workspace,
+      host: '127.0.0.1',
+      port: 0,
+      toolchain: {},
+      policyGuard: {
+        provider: 'http',
+        check: async () => ({ action: 'deny', reason: 'blocked by policy' }),
+      },
+    });
+    handles.push(handle);
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+    const err = await port
+      .execute({ command: { kind: 'shell', command: 'printf hi' } })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).reason).toBe('policy_denied');
+    expect((err as ExecutionError).code).toBe('EPOLICY');
+    expect((err as ExecutionError).message).toBe('blocked by policy');
+  });
+});

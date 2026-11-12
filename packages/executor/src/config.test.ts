@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   EXECUTOR_DEFAULTS,
   EXECUTOR_ENV,
@@ -177,5 +180,113 @@ describe('конфигурация исполнителя: MCP-серверы', 
     const env = { [EXECUTOR_ENV.mcpServers]: '[{"name":"x","command":"y"}]' } as NodeJS.ProcessEnv;
     scrubExecutorMcpServers(env);
     expect(env[EXECUTOR_ENV.mcpServers]).toBeUndefined();
+  });
+});
+
+/**
+ * PROP-136b: внешний чекер команд — конфигурация из env.
+ *
+ * Проверяется fail-closed разбор: провайдер без адреса, невалидный `failMode`
+ * и нечитаемый файл токена — ошибка старта. Значение токена в конфиг **не**
+ * попадает: хранится только путь к файлу.
+ */
+describe('конфигурация исполнителя: внешний чекер команд (PROP-136b)', () => {
+  const base = {
+    [EXECUTOR_ENV.token]: 'secret',
+    [EXECUTOR_ENV.workspace]: '/workspace',
+  } as NodeJS.ProcessEnv;
+
+  it('дефолты — off / closed / 2000 мс / 60000 мс / путь OPA', () => {
+    const config = resolveExecutorConfig(base);
+    expect(config.commandPolicy.provider).toBe('off');
+    expect(config.commandPolicy.failMode).toBe('closed');
+    expect(config.commandPolicy.timeoutMs).toBe(2_000);
+    expect(config.commandPolicy.cacheTtlMs).toBe(60_000);
+    expect(config.commandPolicy.opaPath).toBe('/v1/data/synth/exec/decision');
+    expect(config.commandPolicy.url).toBeUndefined();
+    expect(EXECUTOR_DEFAULTS.commandPolicyProvider).toBe('off');
+  });
+
+  it('http/opa без URL — ошибка старта (fail-closed)', () => {
+    for (const provider of ['http', 'opa']) {
+      expect(() =>
+        resolveExecutorConfig({ ...base, [EXECUTOR_ENV.commandPolicyProvider]: provider }),
+      ).toThrow(/SYNTH_EXECUTOR_COMMAND_POLICY_URL/);
+    }
+  });
+
+  it('невалидный провайдер или failMode — ошибка старта', () => {
+    expect(() =>
+      resolveExecutorConfig({ ...base, [EXECUTOR_ENV.commandPolicyProvider]: 'cel' }),
+    ).toThrow(/SYNTH_EXECUTOR_COMMAND_POLICY_PROVIDER/);
+    expect(() =>
+      resolveExecutorConfig({
+        ...base,
+        [EXECUTOR_ENV.commandPolicyProvider]: 'http',
+        [EXECUTOR_ENV.commandPolicyUrl]: 'http://policy.local',
+        [EXECUTOR_ENV.commandPolicyFailMode]: 'silent',
+      }),
+    ).toThrow(/SYNTH_EXECUTOR_COMMAND_POLICY_FAIL_MODE/);
+  });
+
+  it('явные значения и нормализация адреса', () => {
+    const config = resolveExecutorConfig({
+      ...base,
+      [EXECUTOR_ENV.commandPolicyProvider]: 'opa',
+      [EXECUTOR_ENV.commandPolicyUrl]: 'http://policy.local:8181/',
+      [EXECUTOR_ENV.commandPolicyFailMode]: 'open',
+      [EXECUTOR_ENV.commandPolicyTimeoutMs]: '500',
+      [EXECUTOR_ENV.commandPolicyCacheTtlMs]: '0',
+      [EXECUTOR_ENV.commandPolicyOpaPath]: '/v1/data/custom/decision',
+    });
+    expect(config.commandPolicy).toMatchObject({
+      provider: 'opa',
+      url: 'http://policy.local:8181',
+      failMode: 'open',
+      timeoutMs: 500,
+      cacheTtlMs: 0,
+      opaPath: '/v1/data/custom/decision',
+    });
+  });
+
+  it('невалидный адрес чекера — ошибка старта', () => {
+    expect(() =>
+      resolveExecutorConfig({
+        ...base,
+        [EXECUTOR_ENV.commandPolicyProvider]: 'http',
+        [EXECUTOR_ENV.commandPolicyUrl]: 'ftp://policy.local',
+      }),
+    ).toThrow(/SYNTH_EXECUTOR_COMMAND_POLICY_URL/);
+  });
+
+  it('токен из файла: в конфиге только путь, значения нет', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-exec-policy-cfg-'));
+    try {
+      const tokenFile = join(dir, 'token');
+      const tokenValue = 'policy-token-value-1234567890';
+      await writeFile(tokenFile, `${tokenValue}\n`, 'utf8');
+      const config = resolveExecutorConfig({
+        ...base,
+        [EXECUTOR_ENV.commandPolicyProvider]: 'http',
+        [EXECUTOR_ENV.commandPolicyUrl]: 'http://policy.local',
+        [EXECUTOR_ENV.commandPolicyTokenFile]: tokenFile,
+      });
+      expect(config.commandPolicy.tokenFile).toBe(tokenFile);
+      // Значение токена не хранится в конфиге (и не попадает в его сериализацию).
+      expect(JSON.stringify(config)).not.toContain(tokenValue);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('нечитаемый файл токена — ошибка старта (fail-closed)', () => {
+    expect(() =>
+      resolveExecutorConfig({
+        ...base,
+        [EXECUTOR_ENV.commandPolicyProvider]: 'http',
+        [EXECUTOR_ENV.commandPolicyUrl]: 'http://policy.local',
+        [EXECUTOR_ENV.commandPolicyTokenFile]: '/nonexistent/synth-policy-token',
+      }),
+    ).toThrow(/SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE/);
   });
 });

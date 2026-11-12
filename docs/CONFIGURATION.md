@@ -1501,7 +1501,7 @@ Append-only журнал **фактов исполнения** команд `exe
 
 Чтение — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
 `requireAuth`); метрики — `synth_command_audit_*` (см. `docs/OBSERVABILITY.md`).
-Внешний чекер команд — отдельный слайс (136b, не реализован).
+Внешний чекер команд — проверка **на исполнителе** до `spawn` (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, контракты `http-json`/`opa`, fail modes и кэш — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Зеркальная проверка в control plane и запись вердикта в аудит — 136b-2.
 
 ### Политики инструментов (`tools.policy` / `mcp.policy`)
 
