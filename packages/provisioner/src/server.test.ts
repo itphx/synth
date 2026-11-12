@@ -209,6 +209,21 @@ describe('provisioner: ensure', () => {
     expect((await readError(res)).message).toContain('id');
   });
 
+  it('workspaceSubPath: относительный путь принимается, небезопасный — 400', async () => {
+    const { app } = makeHarness();
+    const ok = await request(app, 'POST', '/v1/pools', {
+      body: ensureBody({ workspaceSubPath: 'proj-slug/.worktrees/x' }),
+    });
+    expect(ok.status).toBe(200);
+    for (const workspaceSubPath of ['../x', '/abs', 'a//b']) {
+      const res = await request(app, 'POST', '/v1/pools', {
+        body: ensureBody({ key: 'project:p2:exec:default', id: 'p2', workspaceSubPath }),
+      });
+      expect(res.status).toBe(400);
+      expect((await readError(res)).reason).toBe('invalid_request');
+    }
+  });
+
   it('невалидный JSON — 400', async () => {
     const { app } = makeHarness();
     const res = await request(app, 'POST', '/v1/pools', { raw: '__not_json__' });

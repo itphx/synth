@@ -44,8 +44,8 @@ export async function main(): Promise<void> {
   // Токен больше не нужен в окружении процесса — убираем.
   scrubProvisionerToken();
 
-  const provider = createPoolProvisioner(config);
   const metrics = createProvisionerMetrics({ profiles: Object.keys(config.profiles) });
+  const provider = createPoolProvisioner(config, { metrics });
   const service = new PoolService({
     provider,
     metrics,
@@ -84,6 +84,15 @@ export async function main(): Promise<void> {
       `maxLifetime: ${config.maxLifetimeMs} мс; drain grace: ${config.drainGraceMs} мс; ` +
       `reaper: ${config.reaperIntervalMs} мс)`,
   );
+  if (config.kubernetes !== undefined) {
+    // Ни имени токена, ни его значения: только параметры размещения.
+    console.log(
+      `[provisioner] kubernetes: namespace ${config.kubernetes.namespace}, ` +
+        `PVC ${config.kubernetes.workspacePvc} → ${config.kubernetes.workspaceMount}, ` +
+        `API ${config.kubernetes.apiServer}, порт пула ${config.kubernetes.executorPort}, ` +
+        `ожидание пула ${config.kubernetes.startTimeoutMs} мс`,
+    );
+  }
 
   let stopping = false;
   const shutdown = (signal: NodeJS.Signals): void => {

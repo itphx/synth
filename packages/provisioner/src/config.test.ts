@@ -1,18 +1,20 @@
 /**
  * Конфигурация provisioner'а: env-парсинг и fail-closed.
  *
- * Проверяется контракт PROP-135 §4b-2a:
+ * Проверяется контракт PROP-135 §4b-2a/4b-2b:
  * - дефолты (порт 5200, idle 15/5 мин, maxLifetime 12 ч, drain grace 30 с,
  *   лимит 50 пулов, период reaper 30 с);
  * - без токена процесс не стартует; токен не попадает в текст ошибок;
- * - неизвестный/нереализованный provider — ошибка (kubernetes → 4b-2b);
- * - битый JSON, профиль без url, нечисловые значения — ошибка;
+ * - неизвестный provider — ошибка; kubernetes требует PVC и image профиля;
+ * - битый JSON, профиль без url/image, нечисловые значения — ошибка;
  * - `scrubProvisionerToken` убирает токен из окружения.
  */
 import { describe, expect, it } from 'vitest';
 import {
+  KUBERNETES_DEFAULTS,
   PROVISIONER_DEFAULTS,
   PROVISIONER_ENV,
+  PROVISIONER_KUBERNETES_ENV,
   parseJsonEnv,
   profilesSchema,
   resolveProvisionerConfig,
@@ -33,6 +35,16 @@ function makeEnv(overrides: Record<string, string | undefined> = {}): NodeJS.Pro
     else env[name] = value;
   }
   return env;
+}
+
+/** Валидный env Kubernetes-провайдера (`undefined` — удалить переменную). */
+function KUBERNETES_ENV(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
+  return makeEnv({
+    [PROVISIONER_ENV.provider]: 'kubernetes',
+    [PROVISIONER_ENV.profiles]: JSON.stringify({ default: { image: 'synth-executor:0.13.8' } }),
+    [PROVISIONER_KUBERNETES_ENV.workspacePvc]: 'synth-workspace',
+    ...overrides,
+  });
 }
 
 describe('provisioner: конфигурация из env', () => {
@@ -91,10 +103,199 @@ describe('provisioner: конфигурация из env', () => {
     );
   });
 
-  it('kubernetes не реализован в 4b-2a — ошибка с объяснением', () => {
+  it('kubernetes без WORKSPACE_PVC — ошибка fail-closed', () => {
     expect(() =>
-      resolveProvisionerConfig(makeEnv({ [PROVISIONER_ENV.provider]: 'kubernetes' })),
-    ).toThrow(/kubernetes.*не реализован в 4b-2a/s);
+      resolveProvisionerConfig(
+        makeEnv({
+          [PROVISIONER_ENV.provider]: 'kubernetes',
+          [PROVISIONER_ENV.profiles]: JSON.stringify({ default: { image: 'synth-executor:1' } }),
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_KUBERNETES_WORKSPACE_PVC.*fail-closed/s);
+  });
+
+  it('kubernetes: профиль без image — ошибка', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({
+          [PROVISIONER_ENV.provider]: 'kubernetes',
+          [PROVISIONER_KUBERNETES_ENV.workspacePvc]: 'synth-workspace',
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/профиль "default" без image/);
+  });
+
+  it('kubernetes: без профилей — ошибка', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({
+          [PROVISIONER_ENV.provider]: 'kubernetes',
+          [PROVISIONER_ENV.profiles]: '{}',
+          [PROVISIONER_KUBERNETES_ENV.workspacePvc]: 'synth-workspace',
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/хотя бы один профиль с образом/);
+  });
+
+  it('kubernetes: статические пулы несовместимы с провайдером', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({
+          [PROVISIONER_ENV.provider]: 'kubernetes',
+          [PROVISIONER_ENV.profiles]: JSON.stringify({ default: { image: 'synth-executor:1' } }),
+          [PROVISIONER_ENV.staticPools]: JSON.stringify({
+            'project:p1:exec:default': 'http://executor-p1:5100',
+          }),
+          [PROVISIONER_KUBERNETES_ENV.workspacePvc]: 'synth-workspace',
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_STATIC_POOLS.*kubernetes/s);
+  });
+
+  it('kubernetes: минимальный env даёт дефолты и namespace из файла ServiceAccount', () => {
+    const config = resolveProvisionerConfig(KUBERNETES_ENV(), {
+      readFile: (path) => (path === KUBERNETES_DEFAULTS.namespaceFile ? 'synth-test\n' : ''),
+    });
+    expect(config.provider).toBe('kubernetes');
+    const kubernetes = config.kubernetes;
+    expect(kubernetes).toBeDefined();
+    expect(kubernetes?.namespace).toBe('synth-test');
+    expect(kubernetes?.workspacePvc).toBe('synth-workspace');
+    expect(kubernetes?.workspaceMount).toBe(KUBERNETES_DEFAULTS.workspaceMount);
+    expect(kubernetes?.apiServer).toBe(KUBERNETES_DEFAULTS.apiServer);
+    expect(kubernetes?.tokenFile).toBe(KUBERNETES_DEFAULTS.tokenFile);
+    expect(kubernetes?.caFile).toBe(KUBERNETES_DEFAULTS.caFile);
+    expect(kubernetes?.startTimeoutMs).toBe(120_000);
+    expect(kubernetes?.pollIntervalMs).toBe(1_000);
+    expect(kubernetes?.executorPort).toBe(5100);
+    expect(kubernetes?.terminationGraceSeconds).toBe(30);
+    expect(kubernetes?.serviceAccount).toBeUndefined();
+    expect(kubernetes?.imagePullSecrets).toEqual([]);
+    expect(config.staticPools).toEqual({});
+  });
+
+  it('kubernetes: namespace — файл ServiceAccount, иначе synth', () => {
+    const fromFallback = resolveProvisionerConfig(KUBERNETES_ENV(), {
+      readFile: () => {
+        throw new Error('ENOENT');
+      },
+    });
+    expect(fromFallback.kubernetes?.namespace).toBe(KUBERNETES_DEFAULTS.namespace);
+    expect(KUBERNETES_DEFAULTS.namespace).toBe('synth');
+  });
+
+  it('kubernetes: env важнее файла namespace', () => {
+    const config = resolveProvisionerConfig(
+      KUBERNETES_ENV({ [PROVISIONER_KUBERNETES_ENV.namespace]: 'synth-prod' }),
+      { readFile: () => 'from-file' },
+    );
+    expect(config.kubernetes?.namespace).toBe('synth-prod');
+  });
+
+  it('kubernetes: переопределения env применяются', () => {
+    const config = resolveProvisionerConfig(
+      KUBERNETES_ENV({
+        [PROVISIONER_KUBERNETES_ENV.workspaceMount]: '/workspaces',
+        [PROVISIONER_KUBERNETES_ENV.serviceAccount]: 'synth-executor',
+        [PROVISIONER_KUBERNETES_ENV.imagePullSecrets]: 'regcred, mirror-cred',
+        [PROVISIONER_KUBERNETES_ENV.apiServer]: 'https://k8s.example:6443',
+        [PROVISIONER_KUBERNETES_ENV.tokenFile]: '/var/run/token',
+        [PROVISIONER_KUBERNETES_ENV.caFile]: '/var/run/ca.crt',
+        [PROVISIONER_KUBERNETES_ENV.startTimeoutMs]: '5000',
+        [PROVISIONER_KUBERNETES_ENV.pollIntervalMs]: '250',
+        [PROVISIONER_KUBERNETES_ENV.executorPort]: '5200',
+        [PROVISIONER_KUBERNETES_ENV.terminationGraceSeconds]: '5',
+      }),
+      { readFile: () => '' },
+    );
+    expect(config.kubernetes).toMatchObject({
+      workspaceMount: '/workspaces',
+      serviceAccount: 'synth-executor',
+      imagePullSecrets: ['regcred', 'mirror-cred'],
+      apiServer: 'https://k8s.example:6443',
+      tokenFile: '/var/run/token',
+      caFile: '/var/run/ca.crt',
+      startTimeoutMs: 5000,
+      pollIntervalMs: 250,
+      executorPort: 5200,
+      terminationGraceSeconds: 5,
+    });
+  });
+
+  it('kubernetes: невалидное имя PVC — ошибка', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        KUBERNETES_ENV({ [PROVISIONER_KUBERNETES_ENV.workspacePvc]: 'Synth Workspace' }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_KUBERNETES_WORKSPACE_PVC/);
+  });
+
+  it('kubernetes: относительный workspaceMount — ошибка', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        KUBERNETES_ENV({ [PROVISIONER_KUBERNETES_ENV.workspaceMount]: 'workspaces' }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/WORKSPACE_MOUNT.*абсолютным/s);
+  });
+
+  it('kubernetes: нечисловой таймаут — ошибка, а не дефолт', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        KUBERNETES_ENV({ [PROVISIONER_KUBERNETES_ENV.startTimeoutMs]: 'soon' }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_KUBERNETES_START_TIMEOUT_MS="soon"/);
+  });
+
+  it('kubernetes: профиль с ресурсами, runtimeClass и env разбирается', () => {
+    const config = resolveProvisionerConfig(
+      KUBERNETES_ENV({
+        [PROVISIONER_ENV.profiles]: JSON.stringify({
+          default: {
+            image: 'synth-executor:1',
+            network: 'restricted',
+            runtimeClass: 'gvisor',
+            readOnlyRootFilesystem: false,
+            resources: {
+              requests: { cpu: '250m', memory: '512Mi' },
+              limits: { cpu: '2', memory: '4Gi' },
+            },
+            env: { SYNTH_EXECUTOR_MAX_CONCURRENCY: '2' },
+          },
+        }),
+      }),
+      { readFile: () => '' },
+    );
+    expect(config.profiles.default).toMatchObject({
+      image: 'synth-executor:1',
+      network: 'restricted',
+      runtimeClass: 'gvisor',
+      readOnlyRootFilesystem: false,
+      resources: {
+        requests: { cpu: '250m', memory: '512Mi' },
+        limits: { cpu: '2', memory: '4Gi' },
+      },
+      env: { SYNTH_EXECUTOR_MAX_CONCURRENCY: '2' },
+    });
+  });
+
+  it('kubernetes: неизвестное поле resources — ошибка (fail-closed)', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        KUBERNETES_ENV({
+          [PROVISIONER_ENV.profiles]: JSON.stringify({
+            default: { image: 'synth-executor:1', resources: { cpu: '1' } },
+          }),
+        }),
+        { readFile: () => '' },
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_PROFILES/);
   });
 
   it('неизвестный provider — ошибка', () => {

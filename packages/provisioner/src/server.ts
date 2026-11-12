@@ -73,7 +73,9 @@ function fail(
 
 /** Текст ошибки провайдера → причина HTTP-слоя. */
 function providerReason(reason: PoolProviderErrorReason): ProvisionerErrorReason {
-  return reason === 'pool_not_found' ? 'pool_not_found' : 'internal_error';
+  if (reason === 'pool_not_found') return 'pool_not_found';
+  if (reason === 'invalid_request') return 'invalid_request';
+  return 'internal_error';
 }
 
 /**

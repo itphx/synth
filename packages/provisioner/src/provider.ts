@@ -1,13 +1,15 @@
 /**
- * Провайдеры пулов provisioner'а (PROP-135, Ф4b-2a).
+ * Провайдеры пулов provisioner'а (PROP-135, Ф4b-2a/4b-2b).
  *
  * Контракт `PoolProvisioner` — то, что provisioner умеет делать с ресурсом
  * пула: обеспечить (`ensure`), подготовить к удалению (`drain`) и удалить
- * (`release`). В 4b-2a реализован только `static`: адрес пула известен
- * заранее (точный ключ либо профиль), ресурсов не создаётся.
+ * (`release`). Реализации:
  *
- * Kubernetes-провайдер (под на проект/сессию, namespace, ServiceAccount —
- * PROP-135 §4b-2b) подключается позже; контракт уже учитывает его форму:
+ * - `static` (4b-2a) — адрес пула известен заранее (точный ключ либо профиль),
+ *   ресурсов не создаётся;
+ * - `kubernetes` (4b-2b) — под исполнителя и секрет с токеном в своём
+ *   namespace (`kubernetes-provider.ts`).
+ *
  * `drain` отделён от `release` (сначала «попросить» исполнителя завершиться,
  * потом удалить ресурс), `capabilities` отдаёт профили.
  *
@@ -19,33 +21,25 @@
  * контракта (реальный исполнитель проверяет свой токен сам).
  */
 
-import { randomBytes } from 'node:crypto';
 import type { ProvisionerConfig, ProvisionerProfiles } from './config.js';
+import { PoolProvisionerError } from './errors.js';
+import { HttpKubernetesClient, type KubernetesClient } from './kubernetes.js';
+import { KubernetesPoolProvisioner } from './kubernetes-provider.js';
+import type { ProvisionerMetrics } from './metrics.js';
 import type { EnsurePoolRequest, EnsurePoolResponse } from './protocol.js';
+import { generatePoolToken } from './token.js';
 
-/** Причина отказа провайдера пулов. */
-export type PoolProviderErrorReason = 'pool_not_found' | 'provider_error';
-
-/**
- * Ошибка провайдера пулов: вызывающий отличает «пул не найден» (`404`) от
- * «провайдер не смог» (`500`).
- */
-export class PoolProvisionerError extends Error {
-  readonly reason: PoolProviderErrorReason;
-
-  constructor(reason: PoolProviderErrorReason, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'PoolProvisionerError';
-    this.reason = reason;
-  }
-}
+export { PoolProvisionerError } from './errors.js';
+export type { PoolProviderErrorReason } from './errors.js';
+export { generatePoolToken } from './token.js';
 
 /**
  * Источник пулов исполнения.
  *
  * `ensure` — идемпотентный по контракту (повторный запрос того же ключа
- * возвращает тот же ресурс; кэш держит `PoolService`). `drain`/`release` —
- * операции над уже существующим ресурсом; неизвестный ключ — no-op.
+ * возвращает тот же ресурс; кэш держит `PoolService`, а Kubernetes-провайдер
+ * дополнительно усыновляет под по label). `drain`/`release` — операции над
+ * уже существующим ресурсом; неизвестный ключ — no-op.
  */
 export interface PoolProvisioner {
   /** Обеспечить пул: адрес и токен исполнителя. */
@@ -56,16 +50,6 @@ export interface PoolProvisioner {
   release(key: string): Promise<void>;
   /** Диагностика: имя провайдера и известные профили. */
   capabilities(): Promise<{ provider: string; profiles: string[] }>;
-}
-
-/**
- * Случайный токен пула (значение, не секрет provisioner'а).
- *
- * 32 байта CSPRNG → base64url: достаточно для bearer-токена исполнителя и
- * безопасно как символ пути/заголовка.
- */
-export function generatePoolToken(): string {
-  return randomBytes(32).toString('base64url');
 }
 
 /**
@@ -126,15 +110,45 @@ export class StaticPoolProvisioner implements PoolProvisioner {
 /**
  * Собрать провайдера пулов по эффективной конфигурации.
  *
- * `kubernetes` отсекается ещё разбором env (fail-closed) — здесь страховка
- * на случай прямого вызова фабрики из кода.
+ * `kubernetes` требует секции `config.kubernetes` (её отсутствие — ошибка
+ * конфигурации, а не молчаливый фоллбек на `static`); статические пулы
+ * Kubernetes-провайдер не использует.
+ *
+ * @param config эффективная конфигурация
+ * @param opts швы: метрики и клиент Kubernetes API (тесты/повторное использование)
+ * @throws PoolProvisionerError если конфигурация не соответствует провайдеру
  */
-export function createPoolProvisioner(config: ProvisionerConfig): PoolProvisioner {
+export function createPoolProvisioner(
+  config: ProvisionerConfig,
+  opts: { metrics?: ProvisionerMetrics; client?: KubernetesClient } = {},
+): PoolProvisioner {
   if (config.provider === 'static') {
     return new StaticPoolProvisioner(config.staticPools, config.profiles);
   }
+  if (config.provider === 'kubernetes') {
+    const kubernetes = config.kubernetes;
+    if (kubernetes === undefined) {
+      throw new PoolProvisionerError(
+        'provider_error',
+        'провайдер "kubernetes" выбран, но секция kubernetes не разобрана из env',
+      );
+    }
+    return new KubernetesPoolProvisioner({
+      client:
+        opts.client ??
+        new HttpKubernetesClient({
+          apiServer: kubernetes.apiServer,
+          namespace: kubernetes.namespace,
+          tokenFile: kubernetes.tokenFile,
+          caFile: kubernetes.caFile,
+        }),
+      kubernetes,
+      profiles: config.profiles,
+      ...(opts.metrics !== undefined ? { metrics: opts.metrics } : {}),
+    });
+  }
   throw new PoolProvisionerError(
     'provider_error',
-    `провайдер пулов "${String(config.provider)}" не реализован в 4b-2a`,
+    `провайдер пулов "${String(config.provider)}" не реализован`,
   );
 }

@@ -41,6 +41,40 @@ import { z } from 'zod';
 /** Версия wire-протокола provisioner'а (аддитивные изменения — увеличивают). */
 export const PROVISIONER_PROTOCOL_VERSION = 1;
 
+/**
+ * Максимальная длина `workspaceSubPath` (относительный путь внутри PVC).
+ *
+ * Ограничение не из Kubernetes API (там лимит на длину пути больше), а
+ * защитное: проект — это один-два сегмента (`proj-slug`, `proj-slug/.worktrees/x`).
+ */
+export const MAX_WORKSPACE_SUB_PATH_LENGTH = 512;
+
+/**
+ * Проверить `workspaceSubPath` — путь **внутри** PVC, а не произвольный путь.
+ *
+ * Разрешено: относительный путь из непустых сегментов (`proj-slug`,
+ * `proj-slug/.worktrees/x`). Запрещено: абсолютный путь (`/…`), выход наверх
+ * (`..`), текущий каталог (`.`), пустые сегменты (`a//b`, `a/`), обратный
+ * слэш и управляющие символы — `subPath` монтирует каталог внутри тома, и
+ * `..`/абсолютный путь вывели бы пул за границу проекта.
+ *
+ * @param value значение из запроса (уже обрезанное по краям)
+ * @returns `true` — путь допустим как `subPath`
+ */
+export function isValidWorkspaceSubPath(value: string): boolean {
+  if (value.length === 0 || value.length > MAX_WORKSPACE_SUB_PATH_LENGTH) return false;
+  if (value.startsWith('/')) return false;
+  // Обратный слэш в Linux-пути — не разделитель, а подозрительный символ
+  // (в Windows-семантике он позволил бы `..\`); отклоняем целиком.
+  if (value.includes('\\')) return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(value)) return false;
+  for (const segment of value.split('/')) {
+    if (segment === '' || segment === '.' || segment === '..') return false;
+  }
+  return true;
+}
+
 /** Область пула: общий пул инстанса, проектный или сессионный. */
 export type PoolScope = 'instance' | 'project' | 'session';
 
@@ -70,6 +104,15 @@ export interface EnsurePoolRequest {
   class: PoolClass;
   /** Имя профиля исполнения. */
   profile: string;
+  /**
+   * Относительный путь внутри PVC workspace (`proj-slug`,
+   * `proj-slug/.worktrees/x`), который монтируется в пул как рабочее дерево.
+   *
+   * Не задан — монтируется корень тома (совместимо с `static`-провайдером,
+   * который это поле игнорирует). Абсолютный путь, `..` и пустые сегменты —
+   * `invalid_request` (`400`).
+   */
+  workspaceSubPath?: string;
 }
 
 /** Ответ обеспечения пула: адрес и токен доступа к исполнителю. */
@@ -143,6 +186,17 @@ export const ensurePoolRequestSchema = z
     id: z.string().trim().min(1).max(512).optional(),
     class: z.enum(['exec', 'browser']),
     profile: z.string().trim().min(1).max(128),
+    workspaceSubPath: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MAX_WORKSPACE_SUB_PATH_LENGTH)
+      .refine(isValidWorkspaceSubPath, {
+        message:
+          'workspaceSubPath должен быть относительным путём внутри PVC: без «/» в начале, ' +
+          'без «..», «.» и пустых сегментов',
+      })
+      .optional(),
   })
   .strict()
   .refine((value) => value.scope === 'instance' || value.id !== undefined, {

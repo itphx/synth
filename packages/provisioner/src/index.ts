@@ -20,10 +20,12 @@
 // Wire-протокол.
 export {
   PROVISIONER_PROTOCOL_VERSION,
+  MAX_WORKSPACE_SUB_PATH_LENGTH,
   ERROR_STATUS,
   ensurePoolRequestSchema,
   errorResponse,
   formatIssues,
+  isValidWorkspaceSubPath,
 } from './protocol.js';
 export type {
   EnsurePoolRequest,
@@ -46,7 +48,11 @@ export type {
 // Конфигурация (env).
 export {
   PROVISIONER_ENV,
+  PROVISIONER_KUBERNETES_ENV,
   PROVISIONER_DEFAULTS,
+  PROVISIONER_PROVIDERS,
+  KUBERNETES_DEFAULTS,
+  SERVICE_ACCOUNT_DIR,
   profileSchema,
   profilesSchema,
   staticPoolsSchema,
@@ -54,7 +60,19 @@ export {
   parseJsonEnv,
   scrubProvisionerToken,
 } from './config.js';
-export type { ProvisionerConfig, ProvisionerProfile, ProvisionerProfiles } from './config.js';
+export type {
+  ConfigFileReader,
+  ProvisionerConfig,
+  ProvisionerKubernetesConfig,
+  ProvisionerProfile,
+  ProvisionerProfiles,
+  ProvisionerProviderName,
+  ResolveConfigOptions,
+} from './config.js';
+
+// Ошибки провайдеров.
+export { PoolProvisionerError } from './errors.js';
+export type { PoolProviderErrorReason } from './errors.js';
 
 // Аутентификация.
 export {
@@ -65,14 +83,46 @@ export {
   timingSafeEqualStrings,
 } from './auth.js';
 
+// Kubernetes API (клиент и провайдер пулов).
+export {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  HttpKubernetesClient,
+} from './kubernetes.js';
+export type {
+  HttpKubernetesClientOptions,
+  KubernetesClient,
+  KubernetesContainerStatus,
+  KubernetesManifest,
+  KubernetesPod,
+  KubernetesPodCondition,
+  KubernetesPodList,
+  KubernetesSecret,
+} from './kubernetes.js';
+export {
+  KUBERNETES_PROVIDER_NAME,
+  KubernetesPoolProvisioner,
+  POOL_HASH_LABEL,
+  POOL_KEY_ANNOTATION,
+  POOL_NETWORK_LABEL,
+  POOL_PROFILE_LABEL,
+  buildPoolPodManifest,
+  isPodReady,
+  poolHash,
+  poolObjectName,
+  sanitizeLabelValue,
+} from './kubernetes-provider.js';
+export type {
+  KubernetesPoolProvisionerOptions,
+  PoolPodManifestOptions,
+} from './kubernetes-provider.js';
+
 // Провайдеры пулов.
 export {
   StaticPoolProvisioner,
-  PoolProvisionerError,
   createPoolProvisioner,
   generatePoolToken,
 } from './provider.js';
-export type { PoolProvisioner, PoolProviderErrorReason } from './provider.js';
+export type { PoolProvisioner } from './provider.js';
 
 // Реестр и жизненный цикл.
 export {
@@ -91,6 +141,7 @@ export {
   escapeLabelValue,
   formatNumber,
   MAX_SERIES_PER_METRIC,
+  ENSURE_SECONDS_BUCKETS,
 } from './metrics.js';
 export type {
   MetricLabels,
@@ -99,6 +150,7 @@ export type {
   MetricType,
   PoolMetricRecord,
   PoolMetricSource,
+  ProviderErrorMetricReason,
   ProvisionOutcome,
   ProvisionerErrorMetricReason,
   ReleaseOutcome,
