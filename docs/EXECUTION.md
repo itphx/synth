@@ -114,6 +114,10 @@
 | `execution.remote.concurrency` | число | число CPU backend'а | Лимит одновременных exec-вызовов на backend; превышение → очередь с ожиданием (см. `synth_executor_wait_seconds`). |
 | `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | Поведение при недоступном исполнителе. **`fail` — fail-closed**: инструмент недоступен с явной причиной (`unavailable(dependency)`-подобный статус), fallback на локальное исполнение — только явной настройкой. |
 | `execution.remote.tokenSecret` | путь/ссылка на токен | — | **Путь/ссылка, не значение** (инвариант 13): путь к файлу с токеном или `existingSecret`/`tokenKey` (как у `security.tls` в чарте). Сам токен — `synth_exec_…` (формат по образцу service-key, `packages/core/src/storage/service-api-key-store.ts`). |
+| `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | Режим пула (PROP-135 Ф4a): `instance` — общий порт на процесс (прежнее поведение, профили игнорируются); `project`/`session` — порт на профиль сессии. |
+| `execution.remote.defaultProfile` | строка | `default` | Имя профиля по умолчанию (каталог профилей задаёт ADMIN). |
+| `execution.remote.profiles` | карта профилей | `{}` | Каталог профилей (PROP-135 Ф4a): `имя → { url, timeoutMs, concurrency, failMode }`; профиль **поверх** общих параметров секции (пустой `url` наследует `remote.url`). Только `config.yaml`. |
+| `execution.remote.fallback` | `instance` \| `fail` | `instance` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — instance-порт; `fail` — fail-closed на старте. |
 
 Фактические дефолты (как в `packages/shared/src/config/defaults.ts`): `mode: inline`,
 `remote.url: []`, `remote.timeoutMs: 30000`, `remote.concurrency` — число CPU процесса
@@ -122,8 +126,32 @@
 Env-имена (по одному на поле; **зафиксированы и реализованы**): `SYNTH_EXECUTION_MODE`,
 `SYNTH_EXECUTION_REMOTE_URL` (список через запятую), `SYNTH_EXECUTION_TOKEN` (путь/ссылка на
 токен, НЕ значение — инвариант 13), `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`,
-`SYNTH_EXECUTION_FAIL_MODE`. Приоритет — CLI-флаг > env > `config.yaml` > дефолт
-([ADR-023](./arch_decisions/adr-023-configuration.md)).
+`SYNTH_EXECUTION_FAIL_MODE`, а также (PROP-135 Ф4a) `SYNTH_EXECUTION_POOLING`,
+`SYNTH_EXECUTION_DEFAULT_PROFILE`, `SYNTH_EXECUTION_FALLBACK`. Приоритет — CLI-флаг > env >
+`config.yaml` > дефолт ([ADR-023](./arch_decisions/adr-023-configuration.md)).
+
+**Пулы и профили — роутер (PROP-135 Ф4a, реализовано).** Роутер портов
+(`packages/core/src/execution/router.ts`) решает, **какой порт** достаётся сессии:
+
+- `pooling: instance` — единственный порт на процесс (общий пул исполнителей), профили
+  игнорируются — поведение как до Ф4a;
+- `pooling: project` / `session` — **порт на профиль**: адреса/таймаут/лимит/`failMode` профиля
+  поверх общих параметров секции; порты создаются **на старте** (секция `execution` — параметр
+  запуска, инвариант 24), поэтому `portFor(profile)` синхронен; кэш — по имени профиля;
+- профиль сессии — `session.settings.executorProfile` (не задан — профиль по умолчанию);
+  неизвестное имя → профиль по умолчанию;
+- профиль без адреса → `fallback: instance` (instance-порт) либо `fallback: fail` (fail-closed на
+  старте).
+
+Шов в оркестраторе: `OrchestratorOptions.executionRouter` → `extra.executionPort` тула
+(`packages/core/src/engine/orchestrator.ts`). Instance-level потребление порта (inline-shell,
+медиа-раннер, worktree/process/MCP, детект зависимостей) остаётся на общем порте — это остаток
+следующих слайсов.
+
+**Остаток PROP-135:** provisioner пулов и монтирование (per-project), полный binding профиля
+(`task.executor_profile` → `agentDefinition.executorProfile` → `project.executor.profile`),
+`sandbox_exec` и браузерный класс пулов. Матрица «что уезжает в исполнитель» (§ ниже) на Ф4a не
+меняется.
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта

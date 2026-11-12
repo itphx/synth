@@ -145,6 +145,16 @@ export interface SessionSettings {
   debugEnabled: boolean;
   streamEnabled: boolean;
   agentRole?: string;
+  /**
+   * PROP-135 Ф4a: имя профиля исполнения сессии (`execution.remote.profiles`).
+   *
+   * Порт тулов сессии выбирает роутер по этому имени (см.
+   * `packages/core/src/execution/router.ts`). Не задан — профиль по умолчанию
+   * (`execution.remote.defaultProfile`). Полный binding профиля
+   * (`task.executor_profile` → `agentDefinition.executorProfile` →
+   * `project.executor.profile`) — Ф6; на этом шаге поле только в типах.
+   */
+  executorProfile?: string;
   /** ADR-071 §2.4: явно включённые в сессии серверы (session level). */
   mcpServers?: string[];
   /**

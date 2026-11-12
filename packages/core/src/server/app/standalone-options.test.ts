@@ -13,7 +13,18 @@ import { buildStandaloneOptions } from './standalone-options.js';
 
 const EXECUTION: ResolvedExecutionConfig = {
   mode: 'inline',
-  remote: { url: [], timeoutMs: 30_000, concurrency: 2, failMode: 'fail', tokenSecret: '' },
+  remote: {
+    url: [],
+    timeoutMs: 30_000,
+    concurrency: 2,
+    failMode: 'fail',
+    tokenSecret: '',
+    // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
+    pooling: 'instance',
+    defaultProfile: 'default',
+    profiles: {},
+    fallback: 'instance',
+  },
 };
 
 /** Конфиг с «заполненными» секциями: каждое значение узнаваемо в ассертах. */

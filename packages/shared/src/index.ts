@@ -296,6 +296,9 @@ export {
   parseExecutionUrlList,
   isExecutionMode,
   isExecutionFailMode,
+  // PROP-135 Ф4a: пулы и профили исполнения.
+  isExecutionPooling,
+  isExecutionFallback,
   EXECUTION_ENV,
   EXECUTION_MODE_CLI_FLAG,
 } from './config/index.js';
@@ -304,8 +307,12 @@ export type {
   ExecutionRemoteConfig,
   ExecutionMode,
   ExecutionFailMode,
+  // PROP-135 Ф4a: пулы и профили исполнения.
+  ExecutionPooling,
+  ExecutionFallback,
   ResolvedExecutionConfig,
   ResolvedExecutionRemoteConfig,
+  ResolvedExecutionProfile,
   ExecutionCliOverride,
 } from './config/index.js';
 // ADR-099: резолверы доверия TLS/CA (`security.tls`).

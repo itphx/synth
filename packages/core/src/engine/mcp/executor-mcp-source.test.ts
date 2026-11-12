@@ -487,6 +487,11 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
         concurrency: 2,
         failMode: 'fail' as const,
         tokenSecret: '',
+        // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
+        pooling: 'instance' as const,
+        defaultProfile: 'default',
+        profiles: {},
+        fallback: 'instance' as const,
       },
     };
   }
@@ -494,7 +499,18 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
   it('inline → источник не создаётся', async () => {
     const source = await createExecutorMcpSourceFromConfig({
       mode: 'inline',
-      remote: { url: ['http://a:5100'], timeoutMs: 1, concurrency: 1, failMode: 'fail', tokenSecret: '' },
+      remote: {
+        url: ['http://a:5100'],
+        timeoutMs: 1,
+        concurrency: 1,
+        failMode: 'fail',
+        tokenSecret: '',
+        // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
+        pooling: 'instance',
+        defaultProfile: 'default',
+        profiles: {},
+        fallback: 'instance',
+      },
     });
     expect(source).toBeNull();
   });
@@ -511,7 +527,18 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
     };
     const source = await attachExecutorMcpSource(manager, {
       mode: 'inline',
-      remote: { url: ['http://a:5100'], timeoutMs: 1, concurrency: 1, failMode: 'fail', tokenSecret: '' },
+      remote: {
+        url: ['http://a:5100'],
+        timeoutMs: 1,
+        concurrency: 1,
+        failMode: 'fail',
+        tokenSecret: '',
+        // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
+        pooling: 'instance',
+        defaultProfile: 'default',
+        profiles: {},
+        fallback: 'instance',
+      },
     });
     expect(source).toBeNull();
     expect(manager.setExecutorMcpSource).not.toHaveBeenCalled();
@@ -537,6 +564,11 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
             concurrency: 1,
             failMode: 'fail',
             tokenSecret: tokenPath,
+            // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
+            pooling: 'instance',
+            defaultProfile: 'default',
+            profiles: {},
+            fallback: 'instance',
           },
         },
         { fetchImpl: () => Promise.resolve(json([{ name: 'playwright-mcp', status: 'up', toolCount: 1 }])) },

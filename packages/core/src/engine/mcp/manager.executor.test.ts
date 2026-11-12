@@ -305,7 +305,18 @@ describe('McpManager: inline-режим не изменился', () => {
 
     const source = await attachExecutorMcpSource(manager, {
       mode: 'inline',
-      remote: { url: ['http://exec-a:5100'], timeoutMs: 1000, concurrency: 1, failMode: 'fail', tokenSecret: '' },
+      remote: {
+        url: ['http://exec-a:5100'],
+        timeoutMs: 1000,
+        concurrency: 1,
+        failMode: 'fail',
+        tokenSecret: '',
+        // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
+        pooling: 'instance',
+        defaultProfile: 'default',
+        profiles: {},
+        fallback: 'instance',
+      },
     });
 
     expect(source).toBeNull();

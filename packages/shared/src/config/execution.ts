@@ -10,17 +10,28 @@
  * `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`,
  * `SYNTH_EXECUTION_FAIL_MODE`.
  *
+ * PROP-135 Ф4a (пулы и профили) добавляет ещё три:
+ * `SYNTH_EXECUTION_POOLING`, `SYNTH_EXECUTION_DEFAULT_PROFILE`,
+ * `SYNTH_EXECUTION_FALLBACK`. Каталог профилей (`execution.remote.profiles`)
+ * задаётся **только** в `config.yaml` — env-переопределение профилей на этом
+ * шаге не заводим.
+ *
  * Fail-closed (как `storage.backend`): неизвестное **явное** значение `mode`
- * (опечатка `inlne`) или `failMode` — ошибка, а не тихий выбор дефолта.
+ * (опечатка `inlne`), `failMode`, `pooling` или `fallback` — ошибка, а не
+ * тихий выбор дефолта.
  */
 import { availableParallelism, cpus } from 'node:os';
 import type { SynthConfig } from './types.js';
 import {
   DEFAULT_EXECUTION_TIMEOUT_MS,
   EXECUTION_FAIL_MODES,
+  EXECUTION_FALLBACKS,
   EXECUTION_MODES,
+  EXECUTION_POOLINGS,
   type ExecutionFailMode,
+  type ExecutionFallback,
   type ExecutionMode,
+  type ExecutionPooling,
 } from './types.js';
 
 /** Env-имена секции `execution` (ADR-077). */
@@ -31,6 +42,12 @@ export const EXECUTION_ENV = {
   timeoutMs: 'SYNTH_EXECUTION_TIMEOUT_MS',
   concurrency: 'SYNTH_EXECUTION_CONCURRENCY',
   failMode: 'SYNTH_EXECUTION_FAIL_MODE',
+  /** PROP-135 Ф4a: режим пула (`instance`|`project`|`session`). */
+  pooling: 'SYNTH_EXECUTION_POOLING',
+  /** PROP-135 Ф4a: имя профиля по умолчанию. */
+  defaultProfile: 'SYNTH_EXECUTION_DEFAULT_PROFILE',
+  /** PROP-135 Ф4a: поведение при непригодном профиле (`instance`|`fail`). */
+  fallback: 'SYNTH_EXECUTION_FALLBACK',
 } as const;
 
 /** Имя CLI-флага переключателя топологии (`synth serve --execution-mode`). */
@@ -47,6 +64,25 @@ export function defaultExecutionConcurrency(): number {
   return Math.max(1, n);
 }
 
+/**
+ * Эффективные параметры **профиля** исполнения (PROP-135 Ф4a).
+ *
+ * Профиль — «поверх» общих параметров секции: незаданное поле наследует
+ * общее (`execution.remote.*`). Пустой `url` профиля наследует общий
+ * `execution.remote.url`; если и он пуст — профиль непригоден (решает
+ * `execution.remote.fallback`).
+ */
+export interface ResolvedExecutionProfile {
+  /** Адреса исполнителей профиля (пусто — непригоден). */
+  url: string[];
+  /** Таймаут exec-вызова, мс. */
+  timeoutMs: number;
+  /** Лимит одновременных exec-вызовов. */
+  concurrency: number;
+  /** Поведение при недоступном исполнителе. */
+  failMode: ExecutionFailMode;
+}
+
 /** Эффективные параметры удалённого исполнителя. */
 export interface ResolvedExecutionRemoteConfig {
   /** Список адресов исполнителей (пусто — при `remote` fail-closed на старте). */
@@ -59,6 +95,14 @@ export interface ResolvedExecutionRemoteConfig {
   failMode: ExecutionFailMode;
   /** Путь/ссылка на токен исполнителя (НЕ значение — инвариант 13). */
   tokenSecret: string;
+  /** Режим пула исполнителей (PROP-135 Ф4a). */
+  pooling: ExecutionPooling;
+  /** Имя профиля по умолчанию (PROP-135 Ф4a). */
+  defaultProfile: string;
+  /** Эффективные параметры профилей (PROP-135 Ф4a) — по имени профиля. */
+  profiles: Record<string, ResolvedExecutionProfile>;
+  /** Поведение при непригодном профиле (PROP-135 Ф4a). */
+  fallback: ExecutionFallback;
 }
 
 /** Эффективная секция `execution`. */
@@ -80,6 +124,20 @@ export function isExecutionMode(value: unknown): value is ExecutionMode {
 export function isExecutionFailMode(value: unknown): value is ExecutionFailMode {
   return (
     typeof value === 'string' && (EXECUTION_FAIL_MODES as readonly string[]).includes(value)
+  );
+}
+
+/** Предикат режима пула (PROP-135 Ф4a). */
+export function isExecutionPooling(value: unknown): value is ExecutionPooling {
+  return (
+    typeof value === 'string' && (EXECUTION_POOLINGS as readonly string[]).includes(value)
+  );
+}
+
+/** Предикат поведения при непригодном профиле (PROP-135 Ф4a). */
+export function isExecutionFallback(value: unknown): value is ExecutionFallback {
+  return (
+    typeof value === 'string' && (EXECUTION_FALLBACKS as readonly string[]).includes(value)
   );
 }
 
@@ -105,6 +163,20 @@ function invalidFailModeMessage(source: string, value: string): string {
   return (
     `[config] невалидное значение ${source}="${value}": ` +
     `ожидается одно из ${EXECUTION_FAIL_MODES.map((m) => `'${m}'`).join(', ')}`
+  );
+}
+
+function invalidPoolingMessage(source: string, value: string): string {
+  return (
+    `[config] невалидное значение ${source}="${value}": ` +
+    `ожидается одно из ${EXECUTION_POOLINGS.map((m) => `'${m}'`).join(', ')}`
+  );
+}
+
+function invalidFallbackMessage(source: string, value: string): string {
+  return (
+    `[config] невалидное значение ${source}="${value}": ` +
+    `ожидается одно из ${EXECUTION_FALLBACKS.map((m) => `'${m}'`).join(', ')}`
   );
 }
 
@@ -190,10 +262,135 @@ export function resolveExecutionConfig(
   const tokenSecret =
     tokenEnv !== undefined && tokenEnv !== '' ? tokenEnv : (remoteCfg.tokenSecret ?? '');
 
+  // PROP-135 Ф4a: режим пула, профиль по умолчанию, каталог профилей и
+  // поведение при непригодном профиле. Приоритет — как у прочих полей
+  // секции: env > config.yaml > дефолт (ADR-023); неизвестное **явное**
+  // значение — fail-closed (как `mode`/`failMode`).
+  const pooling = resolvePooling(remoteCfg.pooling, env);
+  const defaultProfile = resolveDefaultProfile(remoteCfg.defaultProfile, env);
+  const profiles = resolveExecutionProfiles(remoteCfg.profiles, {
+    url,
+    timeoutMs,
+    concurrency,
+    failMode,
+  });
+  const fallback = resolveFallback(remoteCfg.fallback, env);
+
   return {
     mode,
-    remote: { url, timeoutMs, concurrency, failMode, tokenSecret },
+    remote: {
+      url,
+      timeoutMs,
+      concurrency,
+      failMode,
+      tokenSecret,
+      pooling,
+      defaultProfile,
+      profiles,
+      fallback,
+    },
   };
+}
+
+/**
+ * Режим пула: env > config.yaml > `instance`.
+ * Неизвестное явное значение — **fail-closed** (опечатка не должна молча
+ * оставить инстанс в instance-пуле).
+ */
+function resolvePooling(
+  cfgValue: ExecutionPooling | undefined,
+  env: NodeJS.ProcessEnv,
+): ExecutionPooling {
+  const raw = env[EXECUTION_ENV.pooling];
+  if (raw !== undefined && raw !== '') {
+    const trimmed = raw.trim();
+    if (isExecutionPooling(trimmed)) return trimmed;
+    throw new Error(invalidPoolingMessage(EXECUTION_ENV.pooling, raw));
+  }
+  if (cfgValue !== undefined) {
+    if (isExecutionPooling(cfgValue)) return cfgValue;
+    throw new Error(invalidPoolingMessage('execution.remote.pooling', String(cfgValue)));
+  }
+  return 'instance';
+}
+
+/**
+ * Поведение при непригодном профиле: env > config.yaml > `instance`.
+ * Неизвестное явное значение — **fail-closed**.
+ */
+function resolveFallback(
+  cfgValue: ExecutionFallback | undefined,
+  env: NodeJS.ProcessEnv,
+): ExecutionFallback {
+  const raw = env[EXECUTION_ENV.fallback];
+  if (raw !== undefined && raw !== '') {
+    const trimmed = raw.trim();
+    if (isExecutionFallback(trimmed)) return trimmed;
+    throw new Error(invalidFallbackMessage(EXECUTION_ENV.fallback, raw));
+  }
+  if (cfgValue !== undefined) {
+    if (isExecutionFallback(cfgValue)) return cfgValue;
+    throw new Error(invalidFallbackMessage('execution.remote.fallback', String(cfgValue)));
+  }
+  return 'instance';
+}
+
+/**
+ * Имя профиля по умолчанию: env > config.yaml > `default`.
+ *
+ * Пустое значение (env или config) — «не задано»: берётся следующий
+ * источник, иначе `default`. Имя профиля — обычная строка (каталог задаёт
+ * ADMIN), поэтому проверяется только непустота.
+ */
+function resolveDefaultProfile(
+  cfgValue: string | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
+  const raw = env[EXECUTION_ENV.defaultProfile];
+  if (raw !== undefined && raw.trim() !== '') return raw.trim();
+  const cfgTrimmed = (cfgValue ?? '').trim();
+  if (cfgTrimmed !== '') return cfgTrimmed;
+  return 'default';
+}
+
+/**
+ * Эффективные параметры профилей (PROP-135 Ф4a): профиль **поверх** общих
+ * параметров секции.
+ *
+ * - `url` профиля пуст → наследует общий `execution.remote.url`;
+ * - `timeoutMs`/`concurrency`/`failMode` не заданы → наследуют общие.
+ *
+ * Профили задаются **только** в `config.yaml` (env-переопределение каталога
+ * профилей на этом шаге не заводим).
+ */
+function resolveExecutionProfiles(
+  cfgProfiles: Record<
+    string,
+    {
+      url?: string[];
+      timeoutMs?: number;
+      concurrency?: number;
+      failMode?: ExecutionFailMode;
+    }
+  > | undefined,
+  common: {
+    url: string[];
+    timeoutMs: number;
+    concurrency: number;
+    failMode: ExecutionFailMode;
+  },
+): Record<string, ResolvedExecutionProfile> {
+  const out: Record<string, ResolvedExecutionProfile> = {};
+  for (const [name, profile] of Object.entries(cfgProfiles ?? {})) {
+    const profileUrl = (profile.url ?? []).map((u) => u.trim()).filter((u) => u.length > 0);
+    out[name] = {
+      url: profileUrl.length > 0 ? profileUrl : [...common.url],
+      timeoutMs: profile.timeoutMs ?? common.timeoutMs,
+      concurrency: profile.concurrency ?? common.concurrency,
+      failMode: profile.failMode ?? common.failMode,
+    };
+  }
+  return out;
 }
 
 function resolveFailMode(

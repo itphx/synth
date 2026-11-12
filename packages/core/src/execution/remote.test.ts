@@ -38,6 +38,11 @@ function execution(overrides: { mode?: 'inline' | 'remote'; url?: string[]; toke
           concurrency: 2,
           failMode: 'fail',
           tokenSecret: overrides.tokenSecret ?? '',
+          // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
+          pooling: 'instance',
+          defaultProfile: 'default',
+          profiles: {},
+          fallback: 'instance',
         },
       },
     },

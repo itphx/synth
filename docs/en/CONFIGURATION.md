@@ -687,18 +687,41 @@ setting: switching the mode requires a process restart (invariant 24). The speci
 | `execution.remote.concurrency` | number | process CPU count | `SYNTH_EXECUTION_CONCURRENCY` | Limit of concurrent exec calls on the backend; exceeding it queues the call |
 | `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | `SYNTH_EXECUTION_FAIL_MODE` | Behaviour when the executor is unavailable: `fail` — fail-closed (the tool is unavailable with an explicit reason); `inline-fallback` — the backend runs the command itself (**only with an explicit setting**) |
 | `execution.remote.tokenSecret` | path/reference | — | `SYNTH_EXECUTION_TOKEN` | **A path/reference to the token, NOT the value** (invariant 13). The token itself is `synth_exec_…` and lives in a Secret/file |
+| `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Pool mode (PROP-135 F4a): `instance` — **one shared** port per process (the previous behaviour, profiles are ignored); `project`/`session` — a port per profile of the session |
+| `execution.remote.defaultProfile` | string | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Name of the default profile (the profile catalogue is set by ADMIN) |
+| `execution.remote.profiles` | map of profiles | `{}` | — (`config.yaml` only) | Profile catalogue: `name → { url, timeoutMs, concurrency, failMode }`. A profile is **on top of** the common parameters: an empty `url` inherits `execution.remote.url`, unset `timeoutMs`/`concurrency`/`failMode` inherit the section values |
+| `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Behaviour for an unusable profile (no address in the profile nor in the common `url`): `instance` — fall back to the instance port; `fail` — fail-closed (the startup is aborted) |
 
 **Priority** ([ADR-023](../arch_decisions/adr-023-configuration.md)): CLI flag `--execution-mode inline|remote` >
 env `SYNTH_EXECUTION_*` > `config.yaml` > default. Resolver — `resolveExecutionConfig`
 (`@itphx/synth-shared/config`).
 
-**Fail-closed** (as for `storage.backend`): an unknown **explicit** `mode` value (a typo such as `inlne`) or
-`failMode` — a configuration error, not a silent fallback to the default:
+**Fail-closed** (as for `storage.backend`): an unknown **explicit** `mode` value (a typo such as `inlne`),
+`failMode`, `pooling` or `fallback` — a configuration error, not a silent fallback to the default:
 
 ```text
 [config] невалидное значение SYNTH_EXECUTION_MODE="inlne": ожидается одно из 'inline', 'remote'
 [config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
+[config] невалидное значение SYNTH_EXECUTION_POOLING="projekt": ожидается одно из 'instance', 'project', 'session'
+[config] невалидное значение SYNTH_EXECUTION_FALLBACK="silent": ожидается одно из 'instance', 'fail'
 ```
+
+**Pools and profiles (PROP-135, F4a).** The pool and the profile decide **which port** a session
+gets:
+
+- `pooling: instance` — a single port per process (the shared executor pool); profiles are
+  ignored, the behaviour is the previous one;
+- `pooling: project` / `session` — **a port per profile**: the addresses/timeout/limit/`failMode`
+  of the profile on top of the common section parameters; the ports are created **at startup**
+  (the `execution` section is a startup parameter, invariant 24), so the port choice is synchronous;
+- the profile of a session is `session.settings.executorProfile` (unset — the default profile); an
+  unknown profile name falls back to the default profile;
+- a profile without an address (and an empty common `remote.url`) → `fallback: instance` (the
+  instance port) or `fallback: fail` (**fail-closed at startup**).
+
+Profiles are set **only** in `config.yaml` — there is no env override for the profile catalogue.
+The full profile binding (`task.executor_profile` → `agentDefinition.executorProfile` →
+`project.executor.profile`) and the pool provisioner are the next PROP-135 slices.
 
 **Current implementation state (steps 3 and 7b of the ADR-077 plan).** The `inline` mode — the
 previous behaviour, nothing changes. The `remote` mode is implemented in **step 7b**: core loads the
@@ -723,6 +746,15 @@ execution:
     concurrency: 8                 # SYNTH_EXECUTION_CONCURRENCY (default — process CPU count)
     failMode: "fail"               # fail (fail-closed) | inline-fallback; SYNTH_EXECUTION_FAIL_MODE
     tokenSecret: ""                # path/reference to the executor token (NOT a value!); SYNTH_EXECUTION_TOKEN
+    pooling: "instance"            # instance (shared port) | project | session; SYNTH_EXECUTION_POOLING
+    defaultProfile: "default"      # default profile name; SYNTH_EXECUTION_DEFAULT_PROFILE
+    fallback: "instance"           # instance (fall back to the instance port) | fail (fail-closed); SYNTH_EXECUTION_FALLBACK
+    profiles:                      # profile catalogue (config.yaml only)
+      devops:
+        url: ["http://synth-executor-devops:8080"]   # empty → inherits remote.url
+        timeoutMs: 60000            # unset → inherits remote.timeoutMs
+        concurrency: 4              # unset → inherits remote.concurrency
+        failMode: "fail"            # unset → inherits remote.failMode
 ```
 
 ### TLS and mTLS trust for outbound connections (`security.tls`, ADR-099)

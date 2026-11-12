@@ -701,18 +701,40 @@ remote:                           # гибридный режим: локаль�
 | `execution.remote.concurrency` | число | число CPU процесса | `SYNTH_EXECUTION_CONCURRENCY` | Лимит одновременных exec-вызовов на backend; превышение → очередь |
 | `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | `SYNTH_EXECUTION_FAIL_MODE` | Поведение при недоступном исполнителе: `fail` — fail-closed (инструмент недоступен с явной причиной); `inline-fallback` — backend исполняет команду сам (**только явной настройкой**) |
 | `execution.remote.tokenSecret` | путь/ссылка | — | `SYNTH_EXECUTION_TOKEN` | **Путь/ссылка на токен, НЕ значение** (инвариант 13). Сам токен — `synth_exec_…`, живёт в Secret/файле |
+| `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Режим пула (PROP-135 Ф4a): `instance` — **общий** порт на процесс (прежнее поведение, профили игнорируются); `project`/`session` — порт на профиль сессии |
+| `execution.remote.defaultProfile` | строка | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Имя профиля по умолчанию (каталог профилей задаёт ADMIN) |
+| `execution.remote.profiles` | карта профилей | `{}` | — (только `config.yaml`) | Каталог профилей: `имя → { url, timeoutMs, concurrency, failMode }`. Профиль **поверх** общих параметров: пустой `url` наследует `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` — общие значения секции |
+| `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — откат на instance-порт; `fail` — fail-closed (старт прерывается) |
 
 **Приоритет** ([ADR-023](./arch_decisions/adr-023-configuration.md)): CLI-флаг `--execution-mode inline|remote` >
 env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `resolveExecutionConfig`
 (`@itphx/synth-shared/config`).
 
-**Fail-closed** (как `storage.backend`): неизвестное **явное** значение `mode` (опечатка `inlne`) или
-`failMode` — ошибка конфигурации, а не тихий выбор дефолта:
+**Fail-closed** (как `storage.backend`): неизвестное **явное** значение `mode` (опечатка `inlne`),
+`failMode`, `pooling` или `fallback` — ошибка конфигурации, а не тихий выбор дефолта:
 
 ```text
 [config] невалидное значение SYNTH_EXECUTION_MODE="inlne": ожидается одно из 'inline', 'remote'
 [config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
+[config] невалидное значение SYNTH_EXECUTION_POOLING="projekt": ожидается одно из 'instance', 'project', 'session'
+[config] невалидное значение SYNTH_EXECUTION_FALLBACK="silent": ожидается одно из 'instance', 'fail'
 ```
+
+**Пулы и профили (PROP-135, Ф4a).** Пул и профиль решают, **какой порт** достаётся сессии:
+
+- `pooling: instance` — единственный порт на процесс (общий пул исполнителей); профили
+  игнорируются, поведение прежнее;
+- `pooling: project` / `session` — **порт на профиль**: адреса/таймаут/лимит/`failMode` профиля
+  поверх общих параметров секции; порты создаются **на старте** процесса (секция `execution` —
+  параметр запуска, инвариант 24), поэтому выбор порта синхронен;
+- профиль сессии — `session.settings.executorProfile` (не задан — профиль по умолчанию);
+  неизвестное имя профиля → профиль по умолчанию;
+- профиль без адреса (и общий `remote.url` пуст) → `fallback: instance` (instance-порт) либо
+  `fallback: fail` (**fail-closed на старте**).
+
+Профили задаются **только** в `config.yaml` — env-переопределение каталога профилей не
+заводится. Полный binding профиля (`task.executor_profile` → `agentDefinition.executorProfile` →
+`project.executor.profile`) и provisioner пулов — следующие слайсы PROP-135.
 
 **Текущее состояние реализации (шаги 3 и 7b плана ADR-077).** Режим `inline` — прежнее
 поведение, ничего не меняется. Режим `remote` реализован **шагом 7b**: core подключает пакет
@@ -737,6 +759,15 @@ execution:
     concurrency: 8                 # SYNTH_EXECUTION_CONCURRENCY (дефолт — число CPU процесса)
     failMode: "fail"               # fail (fail-closed) | inline-fallback; SYNTH_EXECUTION_FAIL_MODE
     tokenSecret: ""                # путь/ссылка на токен исполнителя (НЕ значение!); SYNTH_EXECUTION_TOKEN
+    pooling: "instance"            # instance (общий порт) | project | session; SYNTH_EXECUTION_POOLING
+    defaultProfile: "default"      # имя профиля по умолчанию; SYNTH_EXECUTION_DEFAULT_PROFILE
+    fallback: "instance"           # instance (откат на instance-порт) | fail (fail-closed); SYNTH_EXECUTION_FALLBACK
+    profiles:                      # каталог профилей (только config.yaml)
+      devops:
+        url: ["http://synth-executor-devops:8080"]   # пусто → наследует remote.url
+        timeoutMs: 60000            # не задано → наследует remote.timeoutMs
+        concurrency: 4              # не задано → наследует remote.concurrency
+        failMode: "fail"            # не задано → наследует remote.failMode
 ```
 
 ### Доверие TLS и mTLS исходящих соединений (`security.tls`, ADR-099)

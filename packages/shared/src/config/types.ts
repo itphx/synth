@@ -175,6 +175,29 @@ export const EXECUTION_FAIL_MODES = ['fail', 'inline-fallback'] as const;
 export type ExecutionFailMode = (typeof EXECUTION_FAIL_MODES)[number];
 
 /**
+ * Режим пула исполнителей (PROP-135, Ф4a).
+ *
+ * - `instance` (дефолт) — **общий** пул инстанса: один порт на процесс,
+ *   поведение как сейчас (ADR-077);
+ * - `project` — порт на профиль для проекта (проектный пул);
+ * - `session` — порт на профиль для сессии (эксклюзивный под).
+ *
+ * Значение — **fail-closed**: неизвестное явное значение (опечатка `projekt`)
+ * валит старт, а не молча выбирает дефолт (как `mode`/`failMode`).
+ */
+export const EXECUTION_POOLINGS = ['instance', 'project', 'session'] as const;
+export type ExecutionPooling = (typeof EXECUTION_POOLINGS)[number];
+
+/**
+ * Поведение роутера исполнения, когда профиль непригоден (PROP-135, Ф4a):
+ *
+ * - `instance` (дефолт) — откат на **instance-порт** (общий пул инстанса);
+ * - `fail` — fail-closed: старт прерывается с понятной причиной.
+ */
+export const EXECUTION_FALLBACKS = ['instance', 'fail'] as const;
+export type ExecutionFallback = (typeof EXECUTION_FALLBACKS)[number];
+
+/**
  * Таймаут exec-вызова по умолчанию (30 с — как у нынешних тулов: shell/search/git).
  * Больший лимит для shell (до 120 с) — свойство тула, не конфига.
  */
@@ -200,6 +223,35 @@ export const executionRemoteConfigSchema = z.object({
   failMode: z.enum(EXECUTION_FAIL_MODES).default('fail'),
   /** Путь/ссылка на токен исполнителя (НЕ значение — инвариант 13). */
   tokenSecret: z.string().default(''),
+  /**
+   * PROP-135 Ф4a: режим пула исполнителей. `instance` — общий порт на
+   * процесс (прежнее поведение); `project`/`session` — порт на профиль.
+   */
+  pooling: z.enum(EXECUTION_POOLINGS).default('instance'),
+  /** Имя профиля по умолчанию (каталог профилей задаёт ADMIN). */
+  defaultProfile: z.string().default('default'),
+  /**
+   * Каталог профилей исполнения (PROP-135 Ф4a): имя → параметры профиля.
+   * Профиль **поверх** общих параметров: пустой `url` наследует
+   * `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` —
+   * общие значения секции.
+   */
+  profiles: z
+    .record(
+      z.string(),
+      z.object({
+        url: z.array(z.string()).default([]),
+        timeoutMs: z.number().int().min(1).optional(),
+        concurrency: z.number().int().min(1).optional(),
+        failMode: z.enum(EXECUTION_FAIL_MODES).optional(),
+      }),
+    )
+    .default({}),
+  /**
+   * Поведение роутера при непригодном профиле: `instance` — откат на
+   * instance-порт; `fail` — fail-closed (старт прерывается).
+   */
+  fallback: z.enum(EXECUTION_FALLBACKS).default('instance'),
 });
 
 /** ADR-077: секция `execution` — топология исполнения (параметр запуска). */

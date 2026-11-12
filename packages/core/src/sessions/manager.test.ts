@@ -180,6 +180,19 @@ describe('SessionManager', () => {
     expect(bare.settings.reasoningLevel).toBeUndefined();
   });
 
+  it('PROP-135 Ф4a: createSession сохраняет профиль исполнения (executorProfile)', async () => {
+    const session = await manager.createSession({ settings: { executorProfile: 'devops' } });
+    expect(session.settings.executorProfile).toBe('devops');
+
+    // Переживает перезагрузку из хранилища.
+    const reloaded = await manager.getSession(session.id);
+    expect(reloaded!.settings.executorProfile).toBe('devops');
+
+    // Не задано — undefined (профиль по умолчанию решает роутер), без подмены.
+    const bare = await manager.createSession({});
+    expect(bare.settings.executorProfile).toBeUndefined();
+  });
+
   it('createSession сохраняет effort (xhigh/max не выводятся из reasoningLevel)', async () => {
     const session = await manager.createSession({ settings: { effort: 'xhigh' } });
     expect(session.settings.effort).toBe('xhigh');

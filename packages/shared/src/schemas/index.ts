@@ -180,6 +180,12 @@ export const sessionSettingsSchema = z.object({
   debugEnabled: z.boolean().default(true),
   streamEnabled: z.boolean().default(true),
   agentRole: z.string().optional(),
+  /**
+   * PROP-135 Ф4a: имя профиля исполнения сессии (`execution.remote.profiles`).
+   * Порт тулов сессии выбирает роутер по этому имени; не задан — профиль по
+   * умолчанию (`execution.remote.defaultProfile`).
+   */
+  executorProfile: z.string().optional(),
   // ADR-071 §2.4: сессионный скоуп MCP (явно включённые / opt-out).
   mcpServers: z.array(z.string()).optional(),
   mcpDisabledServers: z.array(z.string()).optional(),

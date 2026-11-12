@@ -282,6 +282,27 @@ describe('patchObjectSchema — патч не заполняет отсутст�
   });
 });
 
+describe('sessionSettingsSchema: профиль исполнения (PROP-135 Ф4a)', () => {
+  it('принимает и отдаёт executorProfile', () => {
+    const parsed = sessionSettingsSchema.parse({ executorProfile: 'devops' });
+    expect(parsed.executorProfile).toBe('devops');
+  });
+
+  it('поле опционально: без профиля — undefined (профиль по умолчанию)', () => {
+    const parsed = sessionSettingsSchema.parse({});
+    expect(parsed.executorProfile).toBeUndefined();
+  });
+
+  it('не-строка отвергается (400 на невалидное значение)', () => {
+    expect(sessionSettingsSchema.safeParse({ executorProfile: 42 }).success).toBe(false);
+  });
+
+  it('PATCH сессии: профиль проходит патч-схему', () => {
+    const parsed = sessionUpdateSchema.parse({ settings: { executorProfile: 'devops' } });
+    expect(parsed.settings?.executorProfile).toBe('devops');
+  });
+});
+
 describe('иконки/цвета проектов и сессий', () => {
   it('канонические списки непустые, уникальные и без дублей', () => {
     expect(PROJECT_ICON_KEYS.length).toBeGreaterThanOrEqual(19 + 18);

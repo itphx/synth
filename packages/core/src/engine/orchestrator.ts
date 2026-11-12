@@ -109,6 +109,7 @@ import type { BlobRefRepository } from '../storage/ports/blob-ref-repository.js'
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, isFfmpegAvailable, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
 import type { ExecutionPort } from '../execution/ports/index.js';
+import type { ExecutionRouter } from '../execution/router.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
@@ -823,6 +824,16 @@ export interface OrchestratorOptions {
    */
   executionPort?: ExecutionPort;
   /**
+   * PROP-135 Ф4a: роутер портов исполнения (профиль сессии → порт).
+   *
+   * Не задан — порт сессии равен instance-порту (`executionPort`), поведение
+   * прежнее. Задан — порт тулов выбирается по профилю сессии
+   * (`session.settings.executorProfile`); instance-level потребление порта
+   * (inline-shell, медиа-раннер, worktree/process/MCP, детект зависимостей)
+   * остаётся на общем порте — это остаток следующих слайсов.
+   */
+  executionRouter?: ExecutionRouter;
+  /**
    * ADR-071 §2.6: chars-per-token модели из runtime-настроек (калибровка).
    * Не задан/нет значения — дефолт `DEFAULT_CHARS_PER_TOKEN`.
    */
@@ -1172,6 +1183,15 @@ export class ChatOrchestrator {
    * задаётся при сборке приложения и не переинициализируется на лету.
    */
   private readonly _executionPort: ExecutionPort;
+  /**
+   * PROP-135 Ф4a: роутер портов исполнения (профиль сессии → порт).
+   *
+   * Не задан — роутер отдаёт instance-порт (`_executionPort`), поведение
+   * прежнее. Instance-level потребление порта (inline-shell, медиа-раннер,
+   * worktree/process/MCP, детект зависимостей) остаётся на `_executionPort` —
+   * профильный порт получают только тулы хода.
+   */
+  private readonly _executionRouter: ExecutionRouter;
   /** ADR-071 §2.6: загрузчик chars-per-token модели (калибровка). */
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
   /** ADR-071 §2.6: сохранение калибровки chars-per-token после ответа. */
@@ -1566,6 +1586,9 @@ export class ChatOrchestrator {
     // Собирается до git-сервиса: GitService исполняет git через тот же порт
     // (в remote-режиме — на исполнителе, ADR-077).
     this._executionPort = options.executionPort ?? new InlineExecutionPort();
+    // PROP-135 Ф4a: роутер портов — профиль сессии выбирает порт тулов.
+    // Без роутера — instance-порт (прежнее поведение).
+    this._executionRouter = options.executionRouter ?? { portFor: () => this._executionPort };
     // ADR-075/ADR-076: git-сервис и режим/политика workspace для тулов управления
     // проектом. gitService по умолчанию — над тем же workspacesRoot и портом.
     this._gitService =
@@ -6466,7 +6489,12 @@ export class ChatOrchestrator {
                   runtimeDeps: this._runtimeDeps,
                   // ADR-077: порт исполнения команд — тулы (shell/rg/git)
                   // ходят в него вместо прямого `execFile`.
-                  executionPort: this._executionPort,
+                  // PROP-135 Ф4a: порт выбирает роутер по профилю сессии
+                  // (`session.settings.executorProfile`); без роутера —
+                  // instance-порт.
+                  executionPort: this._executionRouter.portFor({
+                    profile: session.settings.executorProfile,
+                  }),
                   // ADR-075: гейт `workspace` наследуется саб-агентом —
                   // его permission-слой не даёт обойти отсутствие рабочего каталога.
                   workspaceReady,

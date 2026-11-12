@@ -138,6 +138,7 @@ import {
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
 import { createExecutionPortForConfig } from '../../execution/factory.js';
+import { createExecutionRouter } from '../../execution/router.js';
 import { attachExecutorMcpSource } from '../../engine/mcp/executor-mcp-source.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
@@ -1160,6 +1161,16 @@ export async function createStandaloneDeps(
     executorMetrics ? { metricsSink: executorMetrics } : undefined,
   );
 
+  // PROP-135 Ф4a: роутер портов исполнения (пулы/профили). Порты профилей
+  // создаются **на старте** (инвариант 24: `execution.*` — параметр запуска),
+  // поэтому роутер синхронен: `portFor(profile)` отдаёт порт профиля.
+  // Instance-порт переиспользуется (второй клиент удалённого пула не нужен).
+  const executionRouter = await createExecutionRouter({
+    config: config.executionConfig,
+    ...(executorMetrics ? { metricsSink: executorMetrics } : {}),
+    instancePort: executionPort,
+  });
+
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
   //
   // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
@@ -1422,6 +1433,9 @@ export async function createStandaloneDeps(
     // детект внешних зависимостей (ниже) — иначе они смотрели бы в разные
     // места окружения.
     executionPort,
+    // PROP-135 Ф4a: роутер портов — порт тулов выбирается по профилю
+    // сессии (`session.settings.executorProfile`).
+    executionRouter,
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     // Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги

@@ -4,12 +4,19 @@ import {
   EXECUTION_ENV,
   defaultExecutionConcurrency,
   isExecutionFailMode,
+  isExecutionFallback,
   isExecutionMode,
+  isExecutionPooling,
   parseExecutionUrlList,
   resolveExecutionConfig,
   resolveExecutionMode,
 } from './execution.js';
-import { DEFAULT_EXECUTION_TIMEOUT_MS, type SynthConfig } from './types.js';
+import {
+  DEFAULT_EXECUTION_TIMEOUT_MS,
+  EXECUTION_FALLBACKS,
+  EXECUTION_POOLINGS,
+  type SynthConfig,
+} from './types.js';
 
 const cfg: SynthConfig = defaultConfig;
 
@@ -208,5 +215,134 @@ describe('предикаты режимов (ADR-077)', () => {
     expect(isExecutionFailMode('fail')).toBe(true);
     expect(isExecutionFailMode('inline-fallback')).toBe(true);
     expect(isExecutionFailMode('fallback')).toBe(false);
+  });
+});
+
+/**
+ * PROP-135 Ф4a: пулы и профили исполнения — конфигурация роутера.
+ */
+describe('пулы и профили (PROP-135 Ф4a)', () => {
+  it('дефолты: pooling=instance, defaultProfile=default, profiles={}, fallback=instance', () => {
+    const resolved = resolveExecutionConfig(cfg, {});
+    expect(resolved.remote.pooling).toBe('instance');
+    expect(resolved.remote.defaultProfile).toBe('default');
+    expect(resolved.remote.profiles).toEqual({});
+    expect(resolved.remote.fallback).toBe('instance');
+  });
+
+  it('pooling: env важнее config.yaml', () => {
+    const c = withExecution({ remote: { ...cfg.execution.remote, pooling: 'project' } });
+    expect(resolveExecutionConfig(c, {}).remote.pooling).toBe('project');
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.pooling]: 'session' }).remote.pooling,
+    ).toBe('session');
+  });
+
+  it('pooling: fail-closed на неизвестном значении (env и config)', () => {
+    expect(() => resolveExecutionConfig(cfg, { [EXECUTION_ENV.pooling]: 'projekt' })).toThrow(
+      /SYNTH_EXECUTION_POOLING="projekt"/,
+    );
+    const c = withExecution({ remote: { ...cfg.execution.remote, pooling: 'projekt' as never } });
+    expect(() => resolveExecutionConfig(c, {})).toThrow(/execution\.remote\.pooling="projekt"/);
+  });
+
+  it('defaultProfile: env важнее config.yaml; пустое значение → дефолт', () => {
+    const c = withExecution({ remote: { ...cfg.execution.remote, defaultProfile: 'from-cfg' } });
+    expect(resolveExecutionConfig(c, {}).remote.defaultProfile).toBe('from-cfg');
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.defaultProfile]: 'from-env' }).remote
+        .defaultProfile,
+    ).toBe('from-env');
+    // Пустое env-значение — «не задано» → берётся config.
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.defaultProfile]: '' }).remote.defaultProfile,
+    ).toBe('from-cfg');
+    // Пустое в config — тоже «не задано» → дефолт.
+    const empty = withExecution({ remote: { ...cfg.execution.remote, defaultProfile: '' } });
+    expect(resolveExecutionConfig(empty, {}).remote.defaultProfile).toBe('default');
+  });
+
+  it('fallback: env важнее config.yaml', () => {
+    const c = withExecution({ remote: { ...cfg.execution.remote, fallback: 'fail' } });
+    expect(resolveExecutionConfig(c, {}).remote.fallback).toBe('fail');
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.fallback]: 'instance' }).remote.fallback,
+    ).toBe('instance');
+  });
+
+  it('fallback: fail-closed на неизвестном значении (env и config)', () => {
+    expect(() => resolveExecutionConfig(cfg, { [EXECUTION_ENV.fallback]: 'silent' })).toThrow(
+      /SYNTH_EXECUTION_FALLBACK="silent"/,
+    );
+    const c = withExecution({ remote: { ...cfg.execution.remote, fallback: 'silent' as never } });
+    expect(() => resolveExecutionConfig(c, {})).toThrow(/execution\.remote\.fallback="silent"/);
+  });
+
+  it('профиль наследует общие параметры секции', () => {
+    const c = withExecution({
+      remote: {
+        ...cfg.execution.remote,
+        url: ['http://common:8080'],
+        timeoutMs: 11_000,
+        concurrency: 5,
+        failMode: 'inline-fallback',
+        profiles: {
+          inherits: {},
+          own: { url: ['http://own:8080'], timeoutMs: 22_000 },
+        },
+      },
+    });
+    const resolved = resolveExecutionConfig(c, {});
+
+    // Пустой url профиля наследует общий; незаданные поля — общие.
+    expect(resolved.remote.profiles.inherits).toEqual({
+      url: ['http://common:8080'],
+      timeoutMs: 11_000,
+      concurrency: 5,
+      failMode: 'inline-fallback',
+    });
+    // Свой url профиля — поверх общего; timeoutMs — свой, остальное — общее.
+    expect(resolved.remote.profiles.own).toEqual({
+      url: ['http://own:8080'],
+      timeoutMs: 22_000,
+      concurrency: 5,
+      failMode: 'inline-fallback',
+    });
+  });
+
+  it('профиль без адресов при пустом общем url → непригоден (url пуст)', () => {
+    const c = withExecution({
+      remote: {
+        ...cfg.execution.remote,
+        url: [],
+        profiles: { broken: {} },
+      },
+    });
+    const resolved = resolveExecutionConfig(c, {});
+    expect(resolved.remote.profiles.broken?.url).toEqual([]);
+  });
+
+  it('каталог профилей не переопределяется env (только config.yaml)', () => {
+    const c = withExecution({
+      remote: {
+        ...cfg.execution.remote,
+        profiles: { a: { url: ['http://a:8080'] } },
+      },
+    });
+    const resolved = resolveExecutionConfig(c, {
+      [EXECUTION_ENV.pooling]: 'project',
+      [EXECUTION_ENV.defaultProfile]: 'a',
+    });
+    expect(Object.keys(resolved.remote.profiles)).toEqual(['a']);
+    expect(resolved.remote.profiles.a?.url).toEqual(['http://a:8080']);
+  });
+
+  it('предикаты пулов и фоллбэков', () => {
+    expect(EXECUTION_POOLINGS).toEqual(['instance', 'project', 'session']);
+    expect(EXECUTION_FALLBACKS).toEqual(['instance', 'fail']);
+    expect(isExecutionPooling('project')).toBe(true);
+    expect(isExecutionPooling('projekt')).toBe(false);
+    expect(isExecutionFallback('fail')).toBe(true);
+    expect(isExecutionFallback('silent')).toBe(false);
   });
 });

@@ -141,6 +141,8 @@ import {
   ProviderFactory,
   // ADR-077: порт исполнения команд (inline/remote).
   createExecutionPortForConfig,
+  // PROP-135 Ф4a: роутер портов исполнения (пулы/профили).
+  createExecutionRouter,
   // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр
   // блоков промпта (композер + фасад плагинов) и рантайм плагинов.
   PromptBlockRegistry,
@@ -1093,6 +1095,16 @@ export async function createBackendDeps(
     executorMetrics ? { metricsSink: executorMetrics } : undefined,
   );
 
+  // PROP-135 Ф4a: роутер портов исполнения (пулы/профили). Порты профилей
+  // создаются **на старте** (инвариант 24: `execution.*` — параметр запуска),
+  // поэтому роутер синхронен: `portFor(profile)` отдаёт порт профиля.
+  // Instance-порт переиспользуется (второй клиент удалённого пула не нужен).
+  const executionRouter = await createExecutionRouter({
+    config: execution,
+    ...(executorMetrics ? { metricsSink: executorMetrics } : {}),
+    instancePort: executionPort,
+  });
+
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов (паритет с standalone).
   //
   // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
@@ -1336,6 +1348,9 @@ export async function createBackendDeps(
     ...(storageDegraded ? {} : { pendingApprovalRepository: storageContext.pendingApprovals }),
     // ADR-077: порт исполнения команд (inline — исполнение в процессе).
     executionPort,
+    // PROP-135 Ф4a: роутер портов — порт тулов выбирается по профилю
+    // сессии (`session.settings.executorProfile`).
+    executionRouter,
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     // Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги

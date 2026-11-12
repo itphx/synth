@@ -50,6 +50,13 @@ export const defaultConfig: SynthConfig = {
       failMode: 'fail',
       // Путь/ссылка на токен исполнителя (НЕ значение — инвариант 13).
       tokenSecret: '',
+      // PROP-135 Ф4a: пулы и профили. `instance` — общий порт на процесс
+      // (прежнее поведение); `project`/`session` — порт на профиль.
+      pooling: 'instance',
+      defaultProfile: 'default',
+      profiles: {},
+      // Непригодный профиль → откат на instance-порт; `fail` — fail-closed.
+      fallback: 'instance',
     },
   },
   auth: {

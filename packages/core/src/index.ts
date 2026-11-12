@@ -541,6 +541,14 @@ export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.
 // (`inline` → InlineExecutionPort, `remote` → удалённый порт из пакета
 // `@itphx/synth-executor`, динамический `import()`, fail-closed).
 export { createExecutionPortForConfig } from './execution/factory.js';
+// PROP-135 Ф4a: роутер портов исполнения (пулы/профили) — порт по профилю
+// сессии; порты профилей создаются на старте, роутер синхронен.
+export {
+  createExecutionRouter,
+  isExecutionRouter,
+  ExecutionProfileUnavailableError,
+} from './execution/router.js';
+export type { ExecutionRouter, ExecutionRouterOptions } from './execution/router.js';
 export {
   createRemoteExecutionPortFromConfig,
   isExecutorPackageAvailable,

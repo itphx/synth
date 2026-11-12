@@ -83,6 +83,11 @@ function execution(overrides: {
           concurrency: overrides.concurrency ?? 4,
           failMode: overrides.failMode ?? 'fail',
           tokenSecret: overrides.tokenSecret ?? '',
+          // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
+          pooling: 'instance',
+          defaultProfile: 'default',
+          profiles: {},
+          fallback: 'instance',
         },
       },
     },

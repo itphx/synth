@@ -28,6 +28,7 @@ import { ProjectInstructionsResolver } from '../engine/context/instructions.js';
 import { t as sm } from '../engine/system-messages.js';
 import { ExecutionError, DEFAULT_MAX_OUTPUT_BYTES, type ExecRequest, type ExecResult, type ExecutionPort } from './ports/index.js';
 import { InlineExecutionPort } from './inline-execution-port.js';
+import { resolveExecutionPort } from './tool-port.js';
 
 /** Порт-заглушка: пишет запросы и отдаёт заданный результат/ошибку. */
 class RecordingPort implements ExecutionPort {
@@ -454,6 +455,38 @@ describe('ADR-077: не-туловые точки исполнения испо�
     expect(req.command).toEqual({ kind: 'argv', file: 'git', args: ['rev-parse', '--show-toplevel'] });
     expect(req.cwd).toBe(tmpDir);
     expect(req.timeoutMs).toBe(30_000);
+  });
+});
+
+/**
+ * PROP-135 (Ф4a): шов «порт в `extra`» — порт, который положил оркестратор
+ * (роутер по профилю сессии), важнее inline-фоллбэка.
+ */
+describe('PROP-135 Ф4a: шов порта в extra тула', () => {
+  it('resolveExecutionPort отдаёт порт из extra (порт роутера)', () => {
+    const port = new RecordingPort();
+    const ctx: ToolContext = {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: '/tmp',
+      extra: { executionPort: port },
+    };
+    expect(resolveExecutionPort(ctx)).toBe(port);
+  });
+
+  it('невалидное значение в extra → inline-фоллбэк (прежнее поведение)', () => {
+    const ctx: ToolContext = {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: '/tmp',
+      extra: { executionPort: { notAPort: true } },
+    };
+    expect(resolveExecutionPort(ctx)).toBeInstanceOf(InlineExecutionPort);
+  });
+
+  it('без порта в extra → inline-фоллбэк (прежнее поведение)', () => {
+    const ctx: ToolContext = { sessionId: 's1', messageId: 'm1', workingDir: '/tmp' };
+    expect(resolveExecutionPort(ctx)).toBeInstanceOf(InlineExecutionPort);
   });
 });
 
