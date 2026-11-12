@@ -152,6 +152,9 @@ import {
   createInstanceExecutionPort,
   // PROP-135 Ф4a: роутер портов исполнения (пулы/профили).
   createExecutionRouter,
+  // PROP-135 слайс 5b-2: резолвер проектного (браузерного) пула для вызовов
+  // MCP-инструментов исполнителя.
+  createExecutorMcpPoolResolver,
   // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр
   // блоков промпта (композер + фасад плагинов) и рантайм плагинов.
   PromptBlockRegistry,
@@ -1143,6 +1146,12 @@ export async function createBackendDeps(
     instancePort: executionPort,
   });
 
+  // PROP-135 слайс 5b-2: резолвер **проектного** (браузерного) пула для
+  // вызовов MCP-инструментов исполнителя (`project:<id>:browser:<profile>`).
+  // Роутер не умеет отдавать ссылку (`poolRefFor` нет — `inline`/вырожденный
+  // роутер) → резолвера нет: вызовы идут с инстанс-пула (прежнее поведение).
+  const executorMcpResolvePool = createExecutorMcpPoolResolver(executionRouter);
+
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов (паритет с standalone).
   //
   // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
@@ -1389,6 +1398,12 @@ export async function createBackendDeps(
     // PROP-135 Ф4a: роутер портов — порт тулов выбирается по профилю
     // сессии (`session.settings.executorProfile`).
     executionRouter,
+    // PROP-135 слайс 5b-2: резолвер **проектного** (браузерного) пула для
+    // вызовов MCP-инструментов исполнителя: по `projectId` цели — адреса и
+    // токен пула `project:<id>:browser:<profile>`. Роутер не умеет отдавать
+    // ссылку (`poolRefFor` нет) → резолвера нет, вызовы идут с инстанс-пула
+    // (прежнее поведение).
+    ...(executorMcpResolvePool ? { executorMcpResolvePool } : {}),
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     // Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги

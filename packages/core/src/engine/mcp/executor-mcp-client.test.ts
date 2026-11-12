@@ -6,7 +6,7 @@
  * сохранение `isError`, коды 404/500, таймаут, failover по пулу адресов,
  * усечение результата и отсутствие токена в текстах ошибок.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   ExecutorMcpClient,
   ExecutorMcpPool,
@@ -218,6 +218,154 @@ describe('ExecutorMcpClient: вызов через /mcp/call', () => {
     expect(result.isError).toBe(false);
     expect(result.content).toContain('усечено');
     expect(result.content.length).toBeLessThan(long.length);
+  });
+});
+
+describe('ExecutorMcpPool: резолв проектного пула (PROP-135 слайс 5b-2)', () => {
+  const PROJECT_TOKEN = 'project-pool-token';
+
+  /** Адреса и bearer-заголовки всех запросов. */
+  function trackingFetch(): { fetch: ExecutorFetch; calls: Array<{ url: string; auth: string }> } {
+    const calls: Array<{ url: string; auth: string }> = [];
+    const fetch: ExecutorFetch = (url, init) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      calls.push({ url, auth: String(headers.authorization ?? '') });
+      if (url.endsWith('/mcp/tools')) return Promise.resolve(json([]));
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(json([{ name: 'playwright-mcp', status: 'up', toolCount: 1 }]));
+      }
+      return Promise.resolve(json({ content: 'ok', isError: false }));
+    };
+    return { fetch, calls };
+  }
+
+  it('вызов с target.projectId уходит на адрес и токен резолвленного пула', async () => {
+    const { fetch, calls } = trackingFetch();
+    const resolved: Array<{ projectId?: string }> = [];
+    const pool = new ExecutorMcpPool({
+      urls: ['http://instance:5100'],
+      token: TOKEN,
+      fetchImpl: fetch,
+      resolve: async (target) => {
+        resolved.push({ ...target });
+        return { urls: ['http://project-pool:5100'], token: PROJECT_TOKEN };
+      },
+    });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    const result = await client.callTool('browser_navigate', { url: 'https://example.com' }, undefined, {
+      projectId: 'proj-1',
+    });
+
+    expect(result).toEqual({ content: 'ok', isError: false });
+    // Резолв вызван с проектом цели.
+    expect(resolved).toEqual([{ projectId: 'proj-1' }]);
+    // Вызов ушёл на адрес проектного пула с его токеном.
+    const call = calls.find((item) => item.url.endsWith('/mcp/call'));
+    expect(call?.url).toBe('http://project-pool:5100/mcp/call');
+    expect(call?.auth).toBe(`Bearer ${PROJECT_TOKEN}`);
+  });
+
+  it('без target вызов идёт с инстанс-пула, резолвер не зовётся', async () => {
+    const { fetch, calls } = trackingFetch();
+    const resolve = vi.fn(async () => ({ urls: ['http://project-pool:5100'], token: PROJECT_TOKEN }));
+    const pool = new ExecutorMcpPool({
+      urls: ['http://instance:5100'],
+      token: TOKEN,
+      fetchImpl: fetch,
+      resolve,
+    });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    await client.callTool('browser_navigate', {});
+
+    expect(resolve).not.toHaveBeenCalled();
+    const call = calls.find((item) => item.url.endsWith('/mcp/call'));
+    expect(call?.url).toBe('http://instance:5100/mcp/call');
+    expect(call?.auth).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('резолв кэшируется: повторный вызов того же проекта не ходит к резолверу', async () => {
+    const { fetch } = trackingFetch();
+    const resolve = vi.fn(async () => ({ urls: ['http://project-pool:5100'], token: PROJECT_TOKEN }));
+    const pool = new ExecutorMcpPool({
+      urls: ['http://instance:5100'],
+      token: TOKEN,
+      fetchImpl: fetch,
+      resolve,
+    });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    await client.callTool('browser_navigate', {}, undefined, { projectId: 'proj-1' });
+    await client.callTool('browser_navigate', {}, undefined, { projectId: 'proj-1' });
+
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('ошибка резолва → ошибка вызова, без отката на инстанс-пул', async () => {
+    const { fetch, calls } = trackingFetch();
+    const pool = new ExecutorMcpPool({
+      urls: ['http://instance:5100'],
+      token: TOKEN,
+      fetchImpl: fetch,
+      resolve: async () => {
+        throw new Error('provisioner недоступен');
+      },
+    });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    const result = await client.callTool('browser_navigate', {}, undefined, { projectId: 'proj-1' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('пул исполнителя для проекта "proj-1"');
+    // Отката на инстанс-пул не было: вызов туда не уходил.
+    expect(calls.some((item) => item.url.endsWith('/mcp/call'))).toBe(false);
+  });
+
+  it('пул не выдан (undefined) → ошибка вызова, без отката на инстанс-пул', async () => {
+    const { fetch, calls } = trackingFetch();
+    const pool = new ExecutorMcpPool({
+      urls: ['http://instance:5100'],
+      token: TOKEN,
+      fetchImpl: fetch,
+      resolve: async () => undefined,
+    });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    const result = await client.callTool('browser_navigate', {}, undefined, { projectId: 'proj-1' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('адрес не выдан');
+    expect(calls.some((item) => item.url.endsWith('/mcp/call'))).toBe(false);
+  });
+
+  it('токен проектного пула не попадает в текст ошибки', async () => {
+    const fetchImpl = makeFetch((url) => {
+      if (url.endsWith('/mcp/tools')) return json([]);
+      if (url.endsWith('/mcp/servers')) {
+        return json([{ name: 'playwright-mcp', status: 'up', toolCount: 1 }]);
+      }
+      return json({ error: { message: `нет связи, token=${PROJECT_TOKEN}` } }, 502);
+    });
+    const pool = new ExecutorMcpPool({
+      urls: ['http://instance:5100'],
+      token: TOKEN,
+      fetchImpl,
+      resolve: async () => ({ urls: ['http://project-pool:5100'], token: PROJECT_TOKEN }),
+    });
+    const client = new ExecutorMcpClient('playwright-mcp', pool);
+    await client.connect();
+
+    const result = await client.callTool('browser_navigate', {}, undefined, { projectId: 'proj-1' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain(PROJECT_TOKEN);
+    expect(result.content).toContain('***');
   });
 });
 

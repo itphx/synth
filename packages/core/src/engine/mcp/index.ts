@@ -35,12 +35,14 @@ export type {
   ExecutorMcpServerStatus,
   ExecutorMcpToolInfo,
   ExecutorFetch,
+  ExecutorMcpPoolResolver,
 } from './executor-mcp-client.js';
 export {
   ExecutorMcpSource,
   createExecutorMcpSourceFromConfig,
   attachExecutorMcpSource,
   attachExecutorMcpFromDescriptor,
+  createExecutorMcpPoolResolver,
   EXECUTOR_MCP_SOURCE_TTL_MS,
   EXECUTOR_MCP_DISCOVERY_TIMEOUT_MS,
 } from './executor-mcp-source.js';

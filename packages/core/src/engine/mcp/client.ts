@@ -112,6 +112,15 @@ export interface McpClientLike {
     name: string,
     args: Record<string, unknown>,
     meta?: Record<string, unknown>,
+    /**
+     * Цель вызова (PROP-135 слайс 5b-2): проект сессии.
+     *
+     * Нужен транспорту, который адресует **проектный** пул (браузерный):
+     * `ExecutorMcpClient` по `projectId` резолвит адрес и токен пула.
+     * Остальные транспорты (локальный MCP, серверный MCP гибрида) параметр
+     * игнорируют.
+     */
+    target?: { projectId?: string },
   ): Promise<McpToolResult>;
 }
 

@@ -147,7 +147,10 @@ import {
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
 import { createInstanceExecutionPort } from '../../execution/factory.js';
 import { createExecutionRouter } from '../../execution/router.js';
-import { attachExecutorMcpSource } from '../../engine/mcp/executor-mcp-source.js';
+import {
+  attachExecutorMcpSource,
+  createExecutorMcpPoolResolver,
+} from '../../engine/mcp/executor-mcp-source.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
@@ -1215,6 +1218,13 @@ export async function createStandaloneDeps(
     instancePort: executionPort,
   });
 
+  // PROP-135 слайс 5b-2: резолвер **проектного** (браузерного) пула для
+  // вызовов MCP-инструментов исполнителя: по `projectId` цели — адреса и
+  // токен пула `project:<id>:browser:<profile>`. Роутер не умеет отдавать
+  // ссылку (`poolRefFor` нет — `inline`/вырожденный роутер) → резолвера нет,
+  // вызовы идут с инстанс-пула (прежнее поведение).
+  const executorMcpResolvePool = createExecutorMcpPoolResolver(executionRouter);
+
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
   //
   // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
@@ -1272,7 +1282,13 @@ export async function createStandaloneDeps(
   // по HTTP API исполнителя. Только `mode=remote`: в `inline` источник не
   // создаётся, поведение прежнее. Ошибки discovery не валят старт (fail-closed
   // режима уже проверен сборкой порта исполнения выше).
-  const executorMcpSource = await attachExecutorMcpSource(mcpManager, config.executionConfig);
+  //
+  // PROP-135 слайс 5b-2: состав читается с **инстанс-пула**, а вызовы
+  // инструментов уходят в **проектный** (браузерный) пул — резолвер
+  // `executorMcpResolvePool` (см. выше).
+  const executorMcpSource = await attachExecutorMcpSource(mcpManager, config.executionConfig, {
+    ...(executorMcpResolvePool ? { resolvePool: executorMcpResolvePool } : {}),
+  });
 
   // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
   // старте, fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы
@@ -1480,6 +1496,11 @@ export async function createStandaloneDeps(
     // PROP-135 Ф4a: роутер портов — порт тулов выбирается по профилю
     // сессии (`session.settings.executorProfile`).
     executionRouter,
+    // PROP-135 слайс 5b-2: резолвер проектного (браузерного) пула для вызовов
+    // MCP-инструментов исполнителя (в этом слайсе MCP-источник поднимается
+    // выше по `attachExecutorMcpSource`; оркестратор поднимет свой, если
+    // источник ещё не подключён).
+    ...(executorMcpResolvePool ? { executorMcpResolvePool } : {}),
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     // Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги

@@ -670,6 +670,9 @@ export {
   mappedIpv4,
 } from './engine/mcp/index.js';
 export type { McpNetworkCheckResult, HostResolver } from './engine/mcp/index.js';
+// PROP-135 слайс 5b-2: MCP-вызовы исполнителя — по проекту (браузерный пул).
+export { createExecutorMcpPoolResolver } from './engine/mcp/index.js';
+export type { ExecutorMcpPoolResolver } from './engine/mcp/index.js';
 
 // ADR-105 (Ф2/Ф3): OAuth-клиент, сервис слоя доступов, реестр провайдеров.
 export {

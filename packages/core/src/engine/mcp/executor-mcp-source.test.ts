@@ -14,6 +14,7 @@ import {
   createExecutorMcpSourceFromConfig,
   attachExecutorMcpSource,
   attachExecutorMcpFromDescriptor,
+  createExecutorMcpPoolResolver,
   EXECUTOR_MCP_SOURCE_RETRY_MS,
   EXECUTOR_MCP_SOURCE_TTL_MS,
   type ExecutorMcpManagerLike,
@@ -643,5 +644,81 @@ describe('ExecutorMcpSource: дескриптор порта исполнени�
     const manager = fakeManager(true);
     expect(attachExecutorMcpFromDescriptor(manager, { urls: ['http://a:5100'], token: TOKEN })).toBeNull();
     expect(manager.setExecutorMcpSource).not.toHaveBeenCalled();
+  });
+});
+
+describe('ExecutorMcpSource: проектный пул для вызовов (PROP-135 слайс 5b-2)', () => {
+  it('resolvePool прокидывается в клиент: вызов уходит на адрес проекта', async () => {
+    const callUrls: string[] = [];
+    const fetchImpl: ExecutorFetch = (url) => {
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(json([{ name: 'playwright-mcp', status: 'up', toolCount: 1 }]));
+      }
+      if (url.endsWith('/mcp/tools')) {
+        return Promise.resolve(
+          json([
+            {
+              server: 'playwright-mcp',
+              name: 'browser_navigate',
+              description: '',
+              inputSchema: { type: 'object' },
+            },
+          ]),
+        );
+      }
+      callUrls.push(url);
+      return Promise.resolve(json({ content: 'ok', isError: false }));
+    };
+    const source = new ExecutorMcpSource({
+      urls: ['http://instance-pool:5100'],
+      token: TOKEN,
+      fetchImpl,
+      resolvePool: async () => ({ urls: ['http://project-pool:5100'], token: 'project-token' }),
+    });
+
+    const client = source.createClient('playwright-mcp');
+    await client.connect();
+    const result = await client.callTool('browser_navigate', {}, undefined, { projectId: 'proj-1' });
+
+    expect(result).toEqual({ content: 'ok', isError: false });
+    expect(callUrls).toEqual(['http://project-pool:5100/mcp/call']);
+  });
+
+  it('attachExecutorMcpFromDescriptor: resolvePool доходит до источника', async () => {
+    const manager = {
+      setExecutorMcpSource: vi.fn<(source: ExecutorMcpSource | null) => void>(),
+      refreshExecutorServers: vi.fn<() => Promise<void>>(async () => {}),
+      hasExecutorMcpSource: () => false,
+    } satisfies ExecutorMcpManagerLike;
+    const source = attachExecutorMcpFromDescriptor(
+      manager,
+      { urls: ['http://instance-pool:5100'], token: TOKEN },
+      { resolvePool: async () => ({ urls: ['http://project-pool:5100'], token: 'project-token' }) },
+    );
+    expect(source).toBeInstanceOf(ExecutorMcpSource);
+  });
+});
+
+describe('createExecutorMcpPoolResolver: резолвер из роутера исполнения', () => {
+  it('роутер со ссылкой на пул → резолвер зовёт poolRefFor с классом browser', async () => {
+    const targets: Array<Record<string, unknown>> = [];
+    const resolver = createExecutorMcpPoolResolver({
+      portFor: () => ({}) as never,
+      poolRefFor: async (target) => {
+        targets.push({ ...target });
+        return { urls: ['http://project-pool:5100'], token: 'project-token' };
+      },
+    });
+
+    expect(resolver).toBeDefined();
+    const ref = await resolver!({ projectId: 'proj-1' });
+
+    expect(ref).toEqual({ urls: ['http://project-pool:5100'], token: 'project-token' });
+    expect(targets).toEqual([{ projectId: 'proj-1', class: 'browser' }]);
+  });
+
+  it('роутер без ссылки на пул → резолвера нет (вызовы с инстанс-пула)', () => {
+    expect(createExecutorMcpPoolResolver({ portFor: () => ({}) as never })).toBeUndefined();
+    expect(createExecutorMcpPoolResolver(undefined)).toBeUndefined();
   });
 });

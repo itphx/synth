@@ -267,6 +267,160 @@ describe('McpManager: серверы исполнителя (ADR-077 шаг B2)'
   });
 });
 
+describe('McpManager: MCP-вызов исполнителя — по проекту (PROP-135 слайс 5b-2)', () => {
+  it('registerTools передаёт target (projectId) в вызов клиента', async () => {
+    // Фейковый клиент фиксирует цель вызова: контракт менеджера — аддитивный
+    // 4-й параметр `callTool` (проект сессии).
+    const targets: Array<{ projectId?: string } | undefined> = [];
+    const manager = new McpManager({
+      createClient: (name) => ({
+        name,
+        isConnected: true,
+        tools: [{ name: 'tool1', description: '', inputSchema: {} }],
+        connect: async () => {},
+        disconnect: async () => {},
+        callTool: async (_name, _args, _meta, target) => {
+          targets.push(target);
+          return { content: 'ok', isError: false };
+        },
+      }),
+    });
+    manager.setConfig({ 'local-server': { type: 'stdio', command: 'node' } });
+    const registry = makeMockToolRegistry();
+    await manager.ensureToolsLoaded(['local-server'], registry);
+
+    const tool = registry.get('local-server_tool1');
+    expect(tool).toBeDefined();
+    await tool!.execute({}, { sessionId: 'sess-1', projectId: 'proj-9' } as unknown as ToolContext);
+
+    expect(targets).toEqual([{ projectId: 'proj-9' }]);
+  });
+
+  it('сессия без проекта → цель вызова не задаётся', async () => {
+    const targets: Array<{ projectId?: string } | undefined> = [];
+    const manager = new McpManager({
+      createClient: (name) => ({
+        name,
+        isConnected: true,
+        tools: [{ name: 'tool1', description: '', inputSchema: {} }],
+        connect: async () => {},
+        disconnect: async () => {},
+        callTool: async (_name, _args, _meta, target) => {
+          targets.push(target);
+          return { content: 'ok', isError: false };
+        },
+      }),
+    });
+    manager.setConfig({ 'local-server': { type: 'stdio', command: 'node' } });
+    const registry = makeMockToolRegistry();
+    await manager.ensureToolsLoaded(['local-server'], registry);
+
+    const tool = registry.get('local-server_tool1');
+    await tool!.execute({}, { sessionId: 'sess-1' } as unknown as ToolContext);
+
+    expect(targets).toEqual([undefined]);
+  });
+
+  it('registerTools передаёт projectId из ctx в вызов executor-тула', async () => {
+    const resolvedTargets: Array<{ projectId?: string }> = [];
+    const callUrls: string[] = [];
+    const fetchImpl: ExecutorFetch = (url) => {
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(json([{ name: 'playwright-mcp', status: 'up', toolCount: 1 }]));
+      }
+      if (url.endsWith('/mcp/tools')) {
+        return Promise.resolve(
+          json([
+            {
+              server: 'playwright-mcp',
+              name: 'browser_navigate',
+              description: 'Открыть URL',
+              inputSchema: { type: 'object' },
+            },
+          ]),
+        );
+      }
+      callUrls.push(url);
+      return Promise.resolve(json({ content: 'navigated', isError: false }));
+    };
+    const manager = new McpManager();
+    manager.setExecutorMcpSource(
+      new ExecutorMcpSource({
+        urls: ['http://instance-pool:5100'],
+        token: TOKEN,
+        fetchImpl,
+        resolvePool: async (target) => {
+          resolvedTargets.push({ ...target });
+          return { urls: ['http://project-pool:5100'], token: 'project-token' };
+        },
+      }),
+    );
+    const registry = makeMockToolRegistry();
+    await manager.refreshExecutorServers();
+    await manager.ensureToolsLoaded(['playwright-mcp'], registry);
+
+    const tool = registry.get('playwright-mcp_browser_navigate');
+    expect(tool).toBeDefined();
+
+    const result = await tool!.execute(
+      { url: 'https://example.com' },
+      { sessionId: 'sess-1', projectId: 'proj-1' } as unknown as ToolContext,
+    );
+
+    expect(result).toEqual({ content: 'navigated', isError: false });
+    // Цель вызова — проект сессии.
+    expect(resolvedTargets).toEqual([{ projectId: 'proj-1' }]);
+    // Вызов ушёл в пул проекта, а не в инстанс-пул.
+    expect(callUrls).toEqual(['http://project-pool:5100/mcp/call']);
+  });
+
+  it('сессия без проекта → вызов идёт с инстанс-пула (резолвер не зовётся)', async () => {
+    const resolvedTargets: Array<{ projectId?: string }> = [];
+    const callUrls: string[] = [];
+    const fetchImpl: ExecutorFetch = (url) => {
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(json([{ name: 'playwright-mcp', status: 'up', toolCount: 1 }]));
+      }
+      if (url.endsWith('/mcp/tools')) {
+        return Promise.resolve(
+          json([
+            {
+              server: 'playwright-mcp',
+              name: 'browser_navigate',
+              description: 'Открыть URL',
+              inputSchema: { type: 'object' },
+            },
+          ]),
+        );
+      }
+      callUrls.push(url);
+      return Promise.resolve(json({ content: 'navigated', isError: false }));
+    };
+    const manager = new McpManager();
+    manager.setExecutorMcpSource(
+      new ExecutorMcpSource({
+        urls: ['http://instance-pool:5100'],
+        token: TOKEN,
+        fetchImpl,
+        resolvePool: async (target) => {
+          resolvedTargets.push({ ...target });
+          return { urls: ['http://project-pool:5100'], token: 'project-token' };
+        },
+      }),
+    );
+    const registry = makeMockToolRegistry();
+    await manager.refreshExecutorServers();
+    await manager.ensureToolsLoaded(['playwright-mcp'], registry);
+
+    const tool = registry.get('playwright-mcp_browser_navigate');
+    const result = await tool!.execute({}, { sessionId: 'sess-1' } as unknown as ToolContext);
+
+    expect(result).toEqual({ content: 'navigated', isError: false });
+    expect(resolvedTargets).toEqual([]);
+    expect(callUrls).toEqual(['http://instance-pool:5100/mcp/call']);
+  });
+});
+
 describe('McpManager: inline-режим не изменился', () => {
   it('без источника работает инъектированная фабрика клиента (прежний путь)', async () => {
     const connect = vi.fn(async () => {});
@@ -295,7 +449,7 @@ describe('McpManager: inline-режим не изменился', () => {
     expect(tool!.source).toBe('mcp');
     const result = await tool!.execute({}, { sessionId: 's' } as unknown as ToolContext);
     expect(result).toEqual({ content: 'local-ok', isError: false });
-    expect(callTool).toHaveBeenCalledWith('tool1', {}, { 'synth/session_id': 's' });
+    expect(callTool).toHaveBeenCalledWith('tool1', {}, { 'synth/session_id': 's' }, undefined);
   });
 
   it('attachExecutorMcpSource при execution.mode=inline не меняет конфиг', async () => {

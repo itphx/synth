@@ -26,16 +26,31 @@
  * персистятся в реестр `McpRegistryStore`, не редактируются пользователем и
  * видны как system-level (ADR-071). Запись в `McpManager` делает
  * `attachExecutorMcpSource` (см. ниже).
+ *
+ * ## Discovery — инстанс-пул, вызовы — проектный (PROP-135 слайс 5b-2)
+ *
+ * Состав серверов (`GET /mcp/servers`, `/mcp/tools`) читается **с
+ * инстанс-пула** — как раньше. Вызов инструмента (`POST /mcp/call`) уходит в
+ * **проектный** (браузерный) пул: адреса и токен резолвит `resolvePool`
+ * (`ExecutionRouter.poolRefFor`, слайс 5b-1) по `projectId` цели. Без
+ * `projectId` (сессия без проекта) — инстанс-пул, как раньше.
+ *
+ * Ограничение (остаток): браузерные тулы появляются, только если их
+ * объявляет **инстанс-пул** — состав берётся оттуда. Динамический пул без
+ * инстанс-пула (браузерный MCP-сервер только в проектном пуле) тулов не
+ * даёт — это остаток discovery'а.
  */
 
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { readExecutorToken } from '../../execution/remote.js';
+import type { ExecutionRouter } from '../../execution/router.js';
 import { info, warning } from '../../logger.js';
 import {
   EXECUTOR_MCP_CONNECT_TIMEOUT_MS,
   ExecutorMcpClient,
   ExecutorMcpPool,
   type ExecutorFetch,
+  type ExecutorMcpPoolResolver,
   type ExecutorMcpServerStatus,
   type ExecutorMcpToolInfo,
 } from './executor-mcp-client.js';
@@ -86,6 +101,15 @@ export interface ExecutorMcpSourceOptions {
   /** Таймауты клиента сервера (пробрасываются в `ExecutorMcpClient`). */
   connectTimeoutMs?: number;
   toolTimeoutMs?: number;
+  /**
+   * Резолв **проектного** пула для вызовов (PROP-135 слайс 5b-2).
+   *
+   * По `projectId` отдаёт адреса и токен браузерного пула
+   * (`project:<id>:browser:<profile>`). Не задан — вызовы идут с инстанс-пула
+   * (прежнее поведение). Резолв не удался → **ошибка вызова**, без отката на
+   * инстанс-пул.
+   */
+  resolvePool?: ExecutorMcpPoolResolver;
 }
 
 /**
@@ -113,6 +137,7 @@ export class ExecutorMcpSource {
       urls: opts.urls,
       token: opts.token,
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+      ...(opts.resolvePool ? { resolve: opts.resolvePool } : {}),
     });
     this._ttlMs = opts.ttlMs ?? EXECUTOR_MCP_SOURCE_TTL_MS;
     this._retryMs = opts.retryMs ?? EXECUTOR_MCP_SOURCE_RETRY_MS;
@@ -394,6 +419,24 @@ export interface ExecutorMcpDescriptorLike {
 }
 
 /**
+ * Резолвер проектного (браузерного) пула из роутера исполнения
+ * (PROP-135 слайс 5b-2).
+ *
+ * Роутер умеет отдавать ссылку на пул (`poolRefFor`, слайс 5b-1); класс пула
+ * — `browser`, то есть область всегда **проект** (`project:<id>:browser:<profile>`).
+ *
+ * `undefined` — роутер не умеет отдавать ссылку (`inline`/вырожденный
+ * тестовый): вызовы идут с инстанс-пула (прежнее поведение).
+ */
+export function createExecutorMcpPoolResolver(
+  router: ExecutionRouter | undefined,
+): ExecutorMcpPoolResolver | undefined {
+  const poolRefFor = router?.poolRefFor;
+  if (!poolRefFor) return undefined;
+  return (target) => poolRefFor.call(router, { projectId: target.projectId, class: 'browser' });
+}
+
+/**
  * Подключить источник по дескриптору порта исполнения (идемпотентно).
  *
  * Нужен managed-backend'у: оркестратор получает удалённый порт из общей
@@ -404,12 +447,17 @@ export interface ExecutorMcpDescriptorLike {
 export function attachExecutorMcpFromDescriptor(
   manager: ExecutorMcpManagerLike,
   descriptor: ExecutorMcpDescriptorLike | undefined,
+  opts: { resolvePool?: ExecutorMcpPoolResolver } = {},
 ): ExecutorMcpSource | null {
   if (!descriptor) return null;
   const urls = descriptor.urls.map((url) => url.trim()).filter((url) => url.length > 0);
   if (urls.length === 0) return null;
   if (manager.hasExecutorMcpSource?.() === true) return null;
-  const source = new ExecutorMcpSource({ urls, token: descriptor.token });
+  const source = new ExecutorMcpSource({
+    urls,
+    token: descriptor.token,
+    ...(opts.resolvePool ? { resolvePool: opts.resolvePool } : {}),
+  });
   manager.setExecutorMcpSource(source);
   // Discovery — фоном: первый ход не должен ждать исполнителя (сам старт режима
   // уже проверен fail-closed сборкой порта). Ошибки — warning внутри refresh.
@@ -433,6 +481,7 @@ export async function createExecutorMcpSourceFromConfig(
     requestTimeoutMs?: number;
     connectTimeoutMs?: number;
     toolTimeoutMs?: number;
+    resolvePool?: ExecutorMcpPoolResolver;
   } = {},
 ): Promise<ExecutorMcpSource | null> {
   if (!config || config.mode !== 'remote') return null;
@@ -462,6 +511,7 @@ export async function attachExecutorMcpSource(
     requestTimeoutMs?: number;
     connectTimeoutMs?: number;
     toolTimeoutMs?: number;
+    resolvePool?: ExecutorMcpPoolResolver;
   } = {},
 ): Promise<ExecutorMcpSource | null> {
   const source = await createExecutorMcpSourceFromConfig(config, opts);

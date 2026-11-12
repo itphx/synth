@@ -34,6 +34,22 @@
  * Bearer-токен исполнителя не логируется и вычищается из текстов ошибок
  * (сервер мог его отразить в теле).
  *
+ * ## Пул под цель вызова (PROP-135 слайс 5b-2)
+ *
+ * Discovery (`/mcp/tools`, `/mcp/servers`) идёт **с инстанс-пула** — как
+ * раньше. А **вызов** инструмента (`/mcp/call`) может идти с **проектного**
+ * пула: у пула есть резолвер (`resolve`), который по `projectId` отдаёт
+ * адреса и токен другого пула (браузерный пул — `project:<id>:browser:<profile>`,
+ * ADR-077 шаг B2 + PROP-135 слайс 5b-1). Резолв кэшируется на 60 с.
+ *
+ * Правила:
+ *
+ * - `target.projectId` не задан → адреса/токен **инстанс-пула** (прежнее
+ *   поведение);
+ * - задан → резолв; **тихого фоллбэка на инстанс-пул нет**: нет пула —
+ *   ошибка вызова (`isError`), а не вызов чужого пула;
+ * - ошибка резолва не ломает discovery: discovery всегда идёт с инстанс-пула.
+ *
  * ## Вложения (ADR-115, протокол 5)
  *
  * Исполнитель отдаёт нетекстовые блоки MCP-результата (`image`/`audio`/
@@ -59,6 +75,35 @@ export const EXECUTOR_MCP_TOOL_TIMEOUT_MS = 120_000;
 
 /** Транспорт запросов (тесты подменяют, боевой путь — `egressFetch`). */
 export type ExecutorFetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Резолв адресов/токена пула под цель вызова (PROP-135 слайс 5b-2).
+ *
+ * Вызывается только при заданном `target.projectId`: возвращает адреса и
+ * токен **проектного** пула (браузерный — `project:<id>:browser:<profile>`).
+ * `undefined` — пула нет (инстанс без удалённого пула): вызов падает с
+ * ошибкой, **без** тихого фоллбэка на инстанс-пул.
+ */
+export type ExecutorMcpPoolResolver = (
+  target: { projectId?: string },
+) => Promise<{ urls: string[]; token: string } | undefined>;
+
+/**
+ * TTL кэша резолва пула, мс.
+ *
+ * Столько же, сколь у `POOL_REF_TTL_MS` роутера (PROP-135 слайс 5b-1): адрес
+ * пула меняется редко, а устаревшая ссылка на минуту не ломает вызов (пул
+ * пересоздастся у provisioner'а).
+ */
+export const EXECUTOR_MCP_POOL_RESOLVE_TTL_MS = 60_000;
+
+/** Ошибка резолва пула под цель вызова (нет пула/адреса). */
+export class ExecutorMcpPoolResolveError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'ExecutorMcpPoolResolveError';
+  }
+}
 
 /** Ошибка недоступности пула исполнителей (все адреса не ответили). */
 export class ExecutorMcpUnavailableError extends Error {
@@ -87,6 +132,14 @@ export interface ExecutorMcpPoolOptions {
   token: string;
   /** Транспорт (по умолчанию `egressFetch`, ADR-099). */
   fetchImpl?: ExecutorFetch;
+  /**
+   * Резолв пула под цель вызова (PROP-135 слайс 5b-2): по `projectId` —
+   * адреса и токен **проектного** пула (браузерного).
+   *
+   * Не задан — вызовы идут с инстанс-пула (прежнее поведение). Задан, но
+   * резолв не удался → **ошибка вызова**, без отката на инстанс-пул.
+   */
+  resolve?: ExecutorMcpPoolResolver;
 }
 
 /** Статус MCP-сервера у исполнителя (`GET /mcp/servers`). */
@@ -148,12 +201,17 @@ export class ExecutorMcpPool {
   private readonly _urls: string[];
   private readonly _token: string;
   private readonly _fetch: ExecutorFetch;
+  /** Резолв проектного пула (PROP-135 слайс 5b-2); не задан — инстанс-пул. */
+  private readonly _resolve: ExecutorMcpPoolResolver | undefined;
+  /** Кэш резолва по `projectId` (TTL — `EXECUTOR_MCP_POOL_RESOLVE_TTL_MS`). */
+  private readonly _resolved = new Map<string, { urls: string[]; token: string; at: number }>();
   private _cursor = 0;
 
   constructor(opts: ExecutorMcpPoolOptions) {
     this._urls = opts.urls.map((url) => url.trim().replace(/\/+$/, '')).filter((url) => url.length > 0);
     this._token = opts.token;
     this._fetch = opts.fetchImpl ?? egressFetch;
+    this._resolve = opts.resolve;
   }
 
   /** Настроенные адреса (без токена). */
@@ -162,11 +220,11 @@ export class ExecutorMcpPool {
   }
 
   /** Порядок адресов для запроса: очередной первым (round-robin). */
-  rotation(): string[] {
-    if (this._urls.length === 0) return [];
-    const start = this._cursor % this._urls.length;
-    this._cursor = (this._cursor + 1) % Math.max(1, this._urls.length);
-    return [...this._urls.slice(start), ...this._urls.slice(0, start)];
+  rotation(urls: string[] = this._urls): string[] {
+    if (urls.length === 0) return [];
+    const start = this._cursor % urls.length;
+    this._cursor = (this._cursor + 1) % Math.max(1, urls.length);
+    return [...urls.slice(start), ...urls.slice(0, start)];
   }
 
   /** Запрос к **конкретному** адресу; ошибки не переадресуются. */
@@ -175,7 +233,9 @@ export class ExecutorMcpPool {
     path: string,
     init: { method?: string; body?: string } | undefined,
     timeoutMs: number,
+    token?: string,
   ): Promise<T> {
+    const authToken = token ?? this._token;
     const url = `${baseUrl.replace(/\/+$/, '')}${path}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -185,7 +245,7 @@ export class ExecutorMcpPool {
       response = await this._fetch(url, {
         method: init?.method ?? 'GET',
         headers: {
-          authorization: `Bearer ${this._token}`,
+          authorization: `Bearer ${authToken}`,
           accept: 'application/json',
           ...(init?.body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
@@ -197,7 +257,7 @@ export class ExecutorMcpPool {
       throw new ExecutorMcpUnavailableError(
         aborted
           ? `таймаут запроса к исполнителю (${baseUrl}, ${timeoutMs} мс)`
-          : this.redact(`исполнитель ${baseUrl} недоступен: ${describeError(err)}`),
+          : this.redact(`исполнитель ${baseUrl} недоступен: ${describeError(err)}`, authToken),
       );
     } finally {
       clearTimeout(timer);
@@ -209,6 +269,7 @@ export class ExecutorMcpPool {
         response.status,
         this.redact(
           `исполнитель ${baseUrl} ответил ${response.status}${extractServerMessage(text)}`,
+          authToken,
         ),
       );
     }
@@ -216,7 +277,7 @@ export class ExecutorMcpPool {
       return (text.length > 0 ? JSON.parse(text) : undefined) as T;
     } catch {
       throw new ExecutorMcpUnavailableError(
-        this.redact(`исполнитель ${baseUrl} вернул не-JSON ответ (${path})`),
+        this.redact(`исполнитель ${baseUrl} вернул не-JSON ответ (${path})`, authToken),
       );
     }
   }
@@ -224,15 +285,24 @@ export class ExecutorMcpPool {
   /**
    * Запрос с failover по пулу: не более одной попытки на адрес.
    *
+   * `target` (PROP-135 слайс 5b-2) — цель вызова: при заданном `projectId`
+   * адреса и токен берутся у **резолвера** (проектный пул), иначе — у
+   * инстанс-пула (прежнее поведение).
+   *
    * @throws ExecutorMcpUnavailableError — не ответил ни один адрес;
-   * @throws ExecutorMcpHttpError — исполнитель ответил 4xx (повтор не поможет).
+   * @throws ExecutorMcpHttpError — исполнитель ответил 4xx (повтор не поможет);
+   * @throws ExecutorMcpPoolResolveError — не удалось получить пул цели.
    */
   async request<T>(
     path: string,
     init: { method?: string; body?: string } | undefined,
     timeoutMs: number,
+    target?: { projectId?: string },
   ): Promise<T> {
-    const order = this.rotation();
+    const resolved = await this._resolveTarget(target);
+    const urls = resolved.urls;
+    const token = resolved.token;
+    const order = this.rotation(urls);
     if (order.length === 0) {
       throw new ExecutorMcpUnavailableError(
         'пул исполнителей не настроен: нет ни одного адреса (execution.remote.url)',
@@ -241,7 +311,7 @@ export class ExecutorMcpPool {
     const failures: string[] = [];
     for (const baseUrl of order) {
       try {
-        return await this.requestAt<T>(baseUrl, path, init, timeoutMs);
+        return await this.requestAt<T>(baseUrl, path, init, timeoutMs, token);
       } catch (err) {
         if (err instanceof ExecutorMcpHttpError && !isRetryableStatus(err.status)) {
           throw err;
@@ -253,14 +323,66 @@ export class ExecutorMcpPool {
       this.redact(
         `ни один исполнитель пула не ответил (${failures.length} из ${order.length}): ` +
           failures.join('; '),
+        token,
       ),
     );
   }
 
-  /** Вычистить значение токена из текста (сервер мог его отразить). */
-  redact(text: string): string {
-    if (this._token.length < 4) return text;
-    return text.split(this._token).join('***');
+  /**
+   * Адреса и токен пула под цель вызова (PROP-135 слайс 5b-2).
+   *
+   * Без `target.projectId` (или без резолвера) — инстанс-пул. С `projectId` —
+   * резолв (с кэшем на 60 с). Резолв не удался → **ошибка**: тихого отката
+   * на инстанс-пул нет (иначе вызов браузерного тула ушёл бы в чужой пул).
+   */
+  private async _resolveTarget(target?: { projectId?: string }): Promise<{ urls: string[]; token: string }> {
+    const projectId = (target?.projectId ?? '').trim();
+    const resolver = this._resolve;
+    if (!resolver || projectId === '') {
+      return { urls: this._urls, token: this._token };
+    }
+    const cached = this._resolved.get(projectId);
+    if (cached !== undefined && Date.now() - cached.at < EXECUTOR_MCP_POOL_RESOLVE_TTL_MS) {
+      return { urls: cached.urls, token: cached.token };
+    }
+    let ref: { urls: string[]; token: string } | undefined;
+    try {
+      ref = await resolver({ projectId });
+    } catch (err) {
+      throw new ExecutorMcpPoolResolveError(
+        `не удалось получить пул исполнителя для проекта "${projectId}": ` +
+          describeError(err),
+        { cause: err },
+      );
+    }
+    const urls = (ref?.urls ?? [])
+      .map((url) => url.trim().replace(/\/+$/, ''))
+      .filter((url) => url.length > 0);
+    if (urls.length === 0) {
+      throw new ExecutorMcpPoolResolveError(
+        `пул исполнителя для проекта "${projectId}" недоступен: адрес не выдан`,
+      );
+    }
+    const info = { urls, token: ref?.token ?? '', at: Date.now() };
+    this._resolved.set(projectId, info);
+    return { urls: info.urls, token: info.token };
+  }
+
+  /**
+   * Вычистить значение токена из текста (сервер мог его отразить).
+   *
+   * Вычищаются **все** известные пулу токены: инстанс-пула и уже зарезолвленных
+   * проектных пулов (их токены выдаёт provisioner'а — они тоже секреты).
+   */
+  redact(text: string, token?: string): string {
+    const tokens = [token ?? this._token];
+    for (const entry of this._resolved.values()) tokens.push(entry.token);
+    let out = text;
+    for (const value of tokens) {
+      if (!value || value.length < 4) continue;
+      out = out.split(value).join('***');
+    }
+    return out;
   }
 }
 
@@ -396,6 +518,7 @@ export class ExecutorMcpClient implements McpClientLike {
     name: string,
     args: Record<string, unknown>,
     meta?: Record<string, unknown>,
+    target?: { projectId?: string },
   ): Promise<McpToolResult> {
     // API исполнителя не принимает `_meta` — параметр оставлен для совместимости
     // поверхности `McpClient` (см. докстринг класса).
@@ -406,6 +529,8 @@ export class ExecutorMcpClient implements McpClientLike {
     }
 
     try {
+      // PROP-135 слайс 5b-2: с `projectId` вызов уходит в **проектный**
+      // (браузерный) пул; без него — в инстанс-пул (прежнее поведение).
       const result = await this._pool.request<ExecutorMcpCallResult>(
         '/mcp/call',
         {
@@ -413,6 +538,7 @@ export class ExecutorMcpClient implements McpClientLike {
           body: JSON.stringify({ server: this._name, tool: name, arguments: args }),
         },
         this._toolTimeoutMs,
+        target,
       );
 
       const raw = typeof result?.content === 'string' ? result.content : '';

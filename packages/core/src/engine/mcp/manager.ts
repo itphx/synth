@@ -696,15 +696,19 @@ export class McpManager {
           // Контекст Synth-сессии для внешнего MCP-сервера: `_meta['synth/session_id']`
           // (не путать с transport session id Streamable HTTP). Без сессии — без `_meta`.
           const meta = ctx.sessionId ? { 'synth/session_id': ctx.sessionId } : undefined;
+          // PROP-135 слайс 5b-2: цель вызова — проект сессии. Транспорт
+          // исполнителя по нему резолвит **проектный** (браузерный) пул; остальные
+          // транспорты параметр игнорируют.
+          const target = ctx.projectId ? { projectId: ctx.projectId } : undefined;
           // ADR-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧
           const sessionManager = ctx.extra?.sessionManager as SessionManager | undefined;
           if (sessionManager) {
             const store = new ObfuscationMapStore(sessionManager);
             const restored = await store.restoreForArgs(ctx.sessionId, args);
-            const result = await client.callTool(tool.name, restored as Record<string, unknown>, meta);
+            const result = await client.callTool(tool.name, restored as Record<string, unknown>, meta, target);
             return this._withAttachments(result, ctx, fullName);
           }
-          const result = await client.callTool(tool.name, args, meta);
+          const result = await client.callTool(tool.name, args, meta, target);
           return this._withAttachments(result, ctx, fullName);
         },
         jsonSchema: tool.inputSchema,

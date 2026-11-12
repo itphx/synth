@@ -45,6 +45,7 @@ import type { RemoteBackendClient } from '../remote/client.js';
 import type { McpRegistryRepository } from '../storage/ports/mcp-registry-repository.js';
 import type { InstanceRuntimeMeta } from './instance/meta.js';
 import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
+import type { ExecutorMcpPoolResolver } from './mcp/executor-mcp-client.js';
 import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
 import { info, warning } from '../logger.js';
 import { ModelRouter } from './router/router.js';
@@ -936,6 +937,16 @@ export interface OrchestratorOptions {
    */
   executionRouter?: ExecutionRouter;
   /**
+   * PROP-135 слайс 5b-2: резолвер **проектного** (браузерного) пула для
+   * вызовов MCP-инструментов исполнителя.
+   *
+   * Передаётся в MCP-источник, который оркестратор поднимает по дескриптору
+   * удалённого порта (managed-backend). Не задан — вызовы идут с инстанс-пула
+   * (прежнее поведение). Резолвер строит сборка приложения из роутера
+   * (`createExecutorMcpPoolResolver`).
+   */
+  executorMcpResolvePool?: ExecutorMcpPoolResolver;
+  /**
    * ADR-071 §2.6: chars-per-token модели из runtime-настроек (калибровка).
    * Не задан/нет значения — дефолт `DEFAULT_CHARS_PER_TOKEN`.
    */
@@ -1304,6 +1315,11 @@ export class ChatOrchestrator {
    * профильный порт получают только тулы хода.
    */
   private readonly _executionRouter: ExecutionRouter;
+  /**
+   * PROP-135 слайс 5b-2: резолвер проектного (браузерного) пула для вызовов
+   * MCP-инструментов исполнителя. `undefined` — вызовы идут с инстанс-пула.
+   */
+  private readonly _executorMcpResolvePool: ExecutorMcpPoolResolver | undefined;
   /**
    * PROP-135 Ф6a: каталог профилей исполнения (снимок `execution.remote` на
    * старте). `undefined` — роутер не знает каталога (`inline`/instance-пул):
@@ -1797,6 +1813,9 @@ export class ChatOrchestrator {
     // PROP-135 Ф4a: роутер портов — профиль сессии выбирает порт тулов.
     // Без роутера — instance-порт (прежнее поведение).
     this._executionRouter = options.executionRouter ?? { portFor: () => this._executionPort };
+    // PROP-135 слайс 5b-2: резоллер проектного (браузерного) пула для вызовов
+    // MCP-инструментов исполнителя (задаётся сборкой приложения).
+    this._executorMcpResolvePool = options.executorMcpResolvePool;
     // PROP-135 Ф6a: снимок каталога профилей — его читают binding профиля и
     // тул `task` (проверка `executor_profile` до создания дочерней сессии).
     this._executionProfileCatalog = executionProfileCatalog(this._executionRouter);
@@ -1876,8 +1895,14 @@ export class ChatOrchestrator {
     // удалённый порт несёт дескриптор пула. Оркестратор поднимает источник —
     // так managed-backend получает это без отдельной проводки в своей сборке
     // `McpManager` (идемпотентно: если источник уже подключён — no-op).
+    //
+    // PROP-135 слайс 5b-2: источнику передаётся резолвер проектного
+    // (браузерного) пула — вызовы MCP-инструментов идут в пул проекта, а
+    // discovery остаётся с инстанс-пула.
     if (this._mcpManager) {
-      attachExecutorMcpFromDescriptor(this._mcpManager, this._executionPort.executorMcp);
+      attachExecutorMcpFromDescriptor(this._mcpManager, this._executionPort.executorMcp, {
+        ...(this._executorMcpResolvePool ? { resolvePool: this._executorMcpResolvePool } : {}),
+      });
     }
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
