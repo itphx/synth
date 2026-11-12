@@ -21,7 +21,13 @@
  *   MCP-серверы исполнителя через него не подключаются;
  * - `isRemote = true` — команды уходят за пределы процесса control plane
  *   (ADR-077), значит локальная конфигурация окружения (CA, ключи) к ним
- *   неприменима.
+ *   неприменима;
+ * - после **любой** активности (`execute` — и при успехе, и при ошибке;
+ *   успешный `spawnBackground` — долгий процесс тоже активность) пул
+ *   «трогается» (`provider.touch`) **fire-and-forget**: иначе provisioner
+ *   снял бы пул по idle, хотя им пользуются. Задержки в горячий путь это не
+ *   добавляет, ошибки `touch` игнорируются. `ensure` уже обновляет
+ *   `lastUsedAt` — там `touch` не нужен.
  */
 
 import { ExecutionError, ExecutionFsUnavailableError, EXECUTION_BACKGROUND_UNSUPPORTED_CODE } from './ports/index.js';
@@ -43,6 +49,11 @@ export interface PooledExecutionPortOptions {
   /** Провайдер пулов (адрес и токен пула). */
   provider: {
     ensure(key: ExecutionPoolKey): Promise<ExecutionPoolRef>;
+    /**
+     * Продлить жизнь пула (PROP-135): вызывается после активности порта.
+     * Best-effort, fire-and-forget — не задан, активность не сообщается.
+     */
+    touch?(key: ExecutionPoolKey): Promise<void>;
   };
   /** Приёмник метрик исполнения (ADR-094) — достаётся до клиента порта. */
   metricsSink?: ExecutionMetricsSink;
@@ -80,6 +91,24 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
   const fs = createPooledFs(resolve);
 
+  /**
+   * Сообщить провайдеру об активности пула (PROP-135).
+   *
+   * Fire-and-forget: результат/латентность вызова не зависят от `touch`
+   * (горячий путь — исполнение команды), ошибки проглатываются —
+   * `touch` best-effort по контракту провайдера. `ensure` уже обновляет
+   * `lastUsedAt`, поэтому при сборке порта `touch` не нужен.
+   */
+  const markActive = (): void => {
+    if (!provider.touch) return;
+    try {
+      void provider.touch(key).catch(() => {});
+    } catch {
+      // Провайдер может бросить синхронно — активность всё равно сообщена
+      // не будет, но ход ломать нечем.
+    }
+  };
+
   return {
     // Пул динамический — команды уходят за пределы control plane (ADR-077).
     isRemote: true,
@@ -87,7 +116,13 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
     async execute(req: ExecRequest): Promise<ExecResult> {
       const port = await resolve();
-      return port.execute(req);
+      try {
+        return await port.execute(req);
+      } finally {
+        // Активность была в любом исходе: успех и ошибка команды одинаково
+        // означают, что пул использовался.
+        markActive();
+      }
     },
 
     async spawnBackground(req: ExecRequest): Promise<ExecBackgroundProcess> {
@@ -101,7 +136,11 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
           reason: 'spawn_failed',
         });
       }
-      return port.spawnBackground(req);
+      const process = await port.spawnBackground(req);
+      // Долгий фоновый процесс — тоже активность пула (пул живёт, пока
+      // процесс работает).
+      markActive();
+      return process;
     },
 
     async probe(bin: string, args?: string[]): Promise<boolean> {

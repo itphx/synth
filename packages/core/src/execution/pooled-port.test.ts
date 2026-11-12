@@ -8,7 +8,10 @@
  *   порту после разрешения пула;
  * - ошибка `ensure` **не кэшируется**: следующий вызов повторяет попытку;
  * - FS делегирует; реального порта без `fs` → `ExecutionFsUnavailableError`;
- * - порт удалённый (`isRemote`), `executorMcp` не выставляется.
+ * - порт удалённый (`isRemote`), `executorMcp` не выставляется;
+ * - после активности (`execute` — успех и ошибка, успешный `spawnBackground`)
+ *   провайдер получает `touch`; это fire-and-forget (результат и латентность
+ *   не зависят от него), провайдер без `touch` — no-op.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -171,5 +174,138 @@ describe('PROP-135 Ф4b-1: ленивый порт на пул', () => {
     });
     await expect(port.fs?.realpath('/a')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
     await expect(port.fs?.readText('/a')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+  });
+});
+
+describe('PROP-135: touch — сообщение provisioner\'у об активности пула', () => {
+  /** Провайдер с учётом `touch`. */
+  function touchProvider(): {
+    provider: {
+      ensure: (key: ExecutionPoolKey) => Promise<ExecutionPoolRef>;
+      touch: (key: ExecutionPoolKey) => Promise<void>;
+    };
+    ensure: ReturnType<typeof vi.fn>;
+    touch: ReturnType<typeof vi.fn>;
+  } {
+    const ensure = vi.fn(async (_key: ExecutionPoolKey): Promise<ExecutionPoolRef> => ({
+      url: 'http://pool:8080',
+    }));
+    const touch = vi.fn(async (_key: ExecutionPoolKey): Promise<void> => {});
+    return { provider: { ensure, touch }, ensure, touch };
+  }
+
+  it('execute (успех) → touch один раз с ключом пула', async () => {
+    const { provider, touch } = touchProvider();
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider,
+      createPort: async () => fakePort(),
+    });
+
+    expect(touch).not.toHaveBeenCalled();
+    await port.execute({ command: { kind: 'shell', command: 'echo hi' } });
+    // Fire-and-forget: даём микрозадаче промиса `touch` выполниться.
+    await Promise.resolve();
+
+    expect(touch).toHaveBeenCalledTimes(1);
+    expect(touch).toHaveBeenCalledWith(KEY);
+  });
+
+  it('execute (ошибка команды) → touch один раз (активность была)', async () => {
+    const { provider, touch } = touchProvider();
+    const inner = fakePort({
+      execute: async () => {
+        throw new Error('command failed');
+      },
+    });
+    const port = createPooledExecutionPort({ key: KEY, provider, createPort: async () => inner });
+
+    await expect(
+      port.execute({ command: { kind: 'shell', command: 'false' } }),
+    ).rejects.toThrow(/command failed/);
+    await Promise.resolve();
+
+    expect(touch).toHaveBeenCalledTimes(1);
+  });
+
+  it('spawnBackground (успех) → touch один раз', async () => {
+    const { provider, touch } = touchProvider();
+    const inner = fakePort({
+      spawnBackground: async () => ({
+        processId: 'proc_1',
+        output: (async function* () {})(),
+        exited: Promise.resolve({ exitCode: 0, signal: null, durationMs: 1 }),
+        stop: () => {},
+      }),
+    });
+    const port = createPooledExecutionPort({ key: KEY, provider, createPort: async () => inner });
+
+    const process = await port.spawnBackground?.({
+      command: { kind: 'shell', command: 'sleep 1' },
+    });
+    await Promise.resolve();
+
+    expect(process?.processId).toBe('proc_1');
+    expect(touch).toHaveBeenCalledTimes(1);
+  });
+
+  it('spawnBackground без поддержки → touch не вызывается (активности не было)', async () => {
+    const { provider, touch } = touchProvider();
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider,
+      createPort: async () => fakePort(),
+    });
+
+    await expect(
+      port.spawnBackground?.({ command: { kind: 'shell', command: 'sleep 1' } }),
+    ).rejects.toThrow(/background/);
+    await Promise.resolve();
+
+    expect(touch).not.toHaveBeenCalled();
+  });
+
+  it('touch не влияет на результат и латентность (промис не ждём)', async () => {
+    const { provider } = touchProvider();
+    // `touch` «завис» — если бы порт его ждал, вызов execute не завершился бы.
+    provider.touch = () => new Promise<void>(() => {});
+
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider,
+      createPort: async () => fakePort(),
+    });
+
+    const result = await port.execute({ command: { kind: 'shell', command: 'echo hi' } });
+    expect(result.stdout).toBe('ok');
+  });
+
+  it('ошибка touch не влияет на execute (best-effort)', async () => {
+    const { provider } = touchProvider();
+    provider.touch = async () => {
+      throw new Error('provisioner down');
+    };
+
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider,
+      createPort: async () => fakePort(),
+    });
+
+    const result = await port.execute({ command: { kind: 'shell', command: 'echo hi' } });
+    // Даём отклонённому промису `touch` отработать: необработанных отказов нет.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(result.stdout).toBe('ok');
+  });
+
+  it('провайдер без touch — no-op (execute работает как раньше)', async () => {
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider: { ensure: async () => ({ url: 'http://pool:8080' }) },
+      createPort: async () => fakePort(),
+    });
+
+    const result = await port.execute({ command: { kind: 'shell', command: 'echo hi' } });
+    expect(result.stdout).toBe('ok');
   });
 });
